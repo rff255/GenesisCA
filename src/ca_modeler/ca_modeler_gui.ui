@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>CAModeler</class>
- <widget class="QMainWindow" name="CAModeler">
+ <class>CAModelerGUI</class>
+ <widget class="QMainWindow" name="CAModelerGUI">
   <property name="geometry">
    <rect>
     <x>0</x>
@@ -11,7 +11,7 @@
    </rect>
   </property>
   <property name="windowTitle">
-   <string>MainWindow</string>
+   <string>GenesisCA Modeler</string>
   </property>
   <widget class="QWidget" name="centralwidget">
    <property name="styleSheet">
@@ -48,7 +48,7 @@ QGroupBox::title {
      <number>0</number>
     </property>
     <item row="0" column="0">
-     <widget class="QTabWidget" name="tabWidget">
+     <widget class="QTabWidget" name="tabs">
       <property name="styleSheet">
        <string notr="true">QTabWidget::pane { 
 margin: 0px,0px,0px,0px;
@@ -62,7 +62,7 @@ background: rgb(240, 240, 240);
        <enum>QTabWidget::Rounded</enum>
       </property>
       <property name="currentIndex">
-       <number>0</number>
+       <number>2</number>
       </property>
       <property name="movable">
        <bool>true</bool>
@@ -91,7 +91,7 @@ background: rgb(240, 240, 240);
          <number>0</number>
         </property>
         <item row="0" column="2">
-         <widget class="QFrame" name="frame">
+         <widget class="QFrame" name="fr_rule_tools">
           <property name="minimumSize">
            <size>
             <width>160</width>
@@ -252,7 +252,7 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
             </widget>
            </item>
            <item>
-            <widget class="QGroupBox" name="groupBox_2">
+            <widget class="QGroupBox" name="gb_edit_node">
              <property name="title">
               <string>Edit Node</string>
              </property>
@@ -342,7 +342,7 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
          </widget>
         </item>
         <item row="0" column="3">
-         <widget class="QFrame" name="frame_2">
+         <widget class="QFrame" name="fr_rule_graph_view">
           <property name="frameShape">
            <enum>QFrame::StyledPanel</enum>
           </property>
@@ -461,7 +461,7 @@ p, li { white-space: pre-wrap; }
          <number>0</number>
         </property>
         <item>
-         <widget class="QWidget" name="widget" native="true">
+         <widget class="QFrame" name="fr_properties">
           <layout class="QVBoxLayout" name="verticalLayout_3">
            <property name="leftMargin">
             <number>0</number>
@@ -476,12 +476,12 @@ p, li { white-space: pre-wrap; }
             <number>0</number>
            </property>
            <item>
-            <widget class="QGroupBox" name="groupBox_5">
+            <widget class="QGroupBox" name="gb_common_properties">
              <property name="enabled">
               <bool>true</bool>
              </property>
              <property name="title">
-              <string>General</string>
+              <string>Common properties</string>
              </property>
              <layout class="QFormLayout" name="formLayout">
               <property name="fieldGrowthPolicy">
@@ -550,12 +550,12 @@ p, li { white-space: pre-wrap; }
             </widget>
            </item>
            <item>
-            <widget class="QGroupBox" name="groupBox_6">
+            <widget class="QGroupBox" name="gb_list_properties">
              <property name="enabled">
               <bool>false</bool>
              </property>
              <property name="title">
-              <string>List specific</string>
+              <string>List properties</string>
              </property>
              <layout class="QGridLayout" name="gridLayout_8">
               <item row="0" column="0">
@@ -598,12 +598,12 @@ p, li { white-space: pre-wrap; }
             </widget>
            </item>
            <item>
-            <widget class="QGroupBox" name="groupBox_7">
+            <widget class="QGroupBox" name="gb_user_defined_properties">
              <property name="enabled">
               <bool>false</bool>
              </property>
              <property name="title">
-              <string>User Defined specific</string>
+              <string>User Defined properties</string>
              </property>
              <layout class="QGridLayout" name="gridLayout_22">
               <item row="0" column="0">
@@ -655,7 +655,7 @@ p, li { white-space: pre-wrap; }
          </widget>
         </item>
         <item>
-         <widget class="QGroupBox" name="groupBox">
+         <widget class="QGroupBox" name="gb_cell_attributes">
           <property name="minimumSize">
            <size>
             <width>200</width>
@@ -711,7 +711,7 @@ p, li { white-space: pre-wrap; }
          </widget>
         </item>
         <item>
-         <widget class="QGroupBox" name="groupBox_4">
+         <widget class="QGroupBox" name="gb_global_attributes">
           <property name="minimumSize">
            <size>
             <width>200</width>
@@ -768,7 +768,7 @@ p, li { white-space: pre-wrap; }
         </item>
        </layout>
       </widget>
-      <widget class="QWidget" name="tab_neighborhood_forms">
+      <widget class="QWidget" name="tab_vicinities">
        <attribute name="title">
         <string>Vicinities (Neighborhood/ Partition)</string>
        </attribute>
@@ -789,7 +789,7 @@ p, li { white-space: pre-wrap; }
          <number>0</number>
         </property>
         <item>
-         <widget class="QFrame" name="frame_4">
+         <widget class="QFrame" name="fr_vicinities_items">
           <property name="minimumSize">
            <size>
             <width>200</width>
@@ -898,7 +898,7 @@ p, li { white-space: pre-wrap; }
          </widget>
         </item>
         <item>
-         <widget class="QFrame" name="frame_5">
+         <widget class="QFrame" name="fr_vicinitie_view">
           <property name="frameShape">
            <enum>QFrame::StyledPanel</enum>
           </property>
@@ -970,21 +970,7 @@ p, li { white-space: pre-wrap; }
                <number>0</number>
               </property>
               <item row="0" column="0">
-               <widget class="QPlainTextEdit" name="plainTextEdit_2">
-                <property name="plainText">
-                 <string>You probably want to have some sort of icon:
-@menu-&gt;menuAction()-&gt;setIcon(myIcon);@
-Make the necessary connections for the actions in your menu, and don't forget to connect the menuAction()'s triggered, toggled or whatever signal to your desired default action.[/quote]
-
-So I see that this works too. (At least it renders the same on Windows 7...)
-
-What is the actual difference between Volker's solution and Franzk's solution?
-
-Is there some kind of automatic stuff happening in one vs. the other? Just trying to understand how Qt designed and meant to be used.
-
-Thank you.</string>
-                </property>
-               </widget>
+               <widget class="QPlainTextEdit" name="plainTextEdit_2"/>
               </item>
              </layout>
             </widget>
@@ -993,7 +979,7 @@ Thank you.</string>
          </widget>
         </item>
         <item>
-         <widget class="QGroupBox" name="groupBox_8">
+         <widget class="QGroupBox" name="gb_tagged_neighborhood">
           <property name="minimumSize">
            <size>
             <width>150</width>
@@ -1065,7 +1051,7 @@ Thank you.</string>
          <number>0</number>
         </property>
         <item>
-         <widget class="QGroupBox" name="groupBox_13">
+         <widget class="QGroupBox" name="gb_presentation">
           <property name="sizePolicy">
            <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
             <horstretch>0</horstretch>
@@ -1157,7 +1143,7 @@ Thank you.</string>
          </widget>
         </item>
         <item>
-         <widget class="QFrame" name="frame_6">
+         <widget class="QFrame" name="fr_structury_execution">
           <property name="minimumSize">
            <size>
             <width>500</width>
@@ -1184,7 +1170,7 @@ Thank you.</string>
             <number>0</number>
            </property>
            <item row="0" column="0">
-            <widget class="QGroupBox" name="groupBox_14">
+            <widget class="QGroupBox" name="gb_structury">
              <property name="sizePolicy">
               <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
                <horstretch>0</horstretch>
@@ -1215,6 +1201,9 @@ Thank you.</string>
               </property>
               <item row="0" column="1">
                <widget class="QComboBox" name="comboBox_3">
+                <property name="currentText">
+                 <string>Squares</string>
+                </property>
                 <property name="currentIndex">
                  <number>1</number>
                 </property>
@@ -1225,7 +1214,7 @@ Thank you.</string>
                 </item>
                 <item>
                  <property name="text">
-                  <string>Quadrangles</string>
+                  <string>Squares</string>
                  </property>
                 </item>
                 <item>
@@ -1346,13 +1335,13 @@ Thank you.</string>
             </widget>
            </item>
            <item row="1" column="0">
-            <widget class="QGroupBox" name="groupBox_15">
+            <widget class="QGroupBox" name="gb_execution">
              <property name="title">
               <string>Execution</string>
              </property>
              <layout class="QGridLayout" name="gridLayout_32">
               <item row="0" column="0">
-               <widget class="QGroupBox" name="groupBox_16">
+               <widget class="QGroupBox" name="gb_initial_configuration">
                 <property name="minimumSize">
                  <size>
                   <width>230</width>
@@ -1396,7 +1385,7 @@ Thank you.</string>
                </widget>
               </item>
               <item row="0" column="1">
-               <widget class="QGroupBox" name="groupBox_17">
+               <widget class="QGroupBox" name="gb_stop_conditions">
                 <property name="minimumSize">
                  <size>
                   <width>230</width>
@@ -1514,7 +1503,7 @@ Thank you.</string>
          <number>0</number>
         </property>
         <item>
-         <widget class="QFrame" name="frame_3">
+         <widget class="QFrame" name="fr_mapping_tools">
           <property name="minimumSize">
            <size>
             <width>160</width>
@@ -1758,7 +1747,7 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
          </widget>
         </item>
         <item>
-         <widget class="QFrame" name="frame_7">
+         <widget class="QFrame" name="fr_mapping_graph_view">
           <property name="frameShape">
            <enum>QFrame::StyledPanel</enum>
           </property>
@@ -1822,21 +1811,7 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
 &lt;html&gt;&lt;head&gt;&lt;meta name=&quot;qrichtext&quot; content=&quot;1&quot; /&gt;&lt;style type=&quot;text/css&quot;&gt;
 p, li { white-space: pre-wrap; }
 &lt;/style&gt;&lt;/head&gt;&lt;body style=&quot; font-family:'MS Shell Dlg 2'; font-size:8.25pt; font-weight:400; font-style:normal;&quot;&gt;
-&lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;[quote author=&amp;quot;Franzk&amp;quot; date=&amp;quot;1303415395&amp;quot;]Absolutely possible. You should have a tool bar available somewhere. Then you create a menu:&lt;/span&gt;&lt;/p&gt;
-&lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;@QMenu *menu = new QMenu(tr(&amp;quot;My Menu&amp;quot;));@&lt;/span&gt;&lt;/p&gt;
-&lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;You should then add some actions to that menu. Then you want to add the menu to the tool bar:&lt;/span&gt;&lt;/p&gt;
-&lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;@theTargetToolBar-&amp;gt;addAction(menu-&amp;gt;menuAction());@&lt;/span&gt;&lt;/p&gt;
-&lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;You probably want to have some sort of icon:&lt;/span&gt;&lt;/p&gt;
-&lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;@menu-&amp;gt;menuAction()-&amp;gt;setIcon(myIcon);@&lt;/span&gt;&lt;/p&gt;
-&lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;Make the necessary connections for the actions in your menu, and don't forget to connect the menuAction()'s triggered, toggled or whatever signal to your desired default action.[/quote]&lt;/span&gt;&lt;/p&gt;
-&lt;p style=&quot;-qt-paragraph-type:empty; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px; font-size:8pt;&quot;&gt;&lt;br /&gt;&lt;/p&gt;
-&lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;So I see that this works too. (At least it renders the same on Windows 7...)&lt;/span&gt;&lt;/p&gt;
-&lt;p style=&quot;-qt-paragraph-type:empty; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px; font-size:8pt;&quot;&gt;&lt;br /&gt;&lt;/p&gt;
-&lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;What is the actual difference between Volker's solution and Franzk's solution?&lt;/span&gt;&lt;/p&gt;
-&lt;p style=&quot;-qt-paragraph-type:empty; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px; font-size:8pt;&quot;&gt;&lt;br /&gt;&lt;/p&gt;
-&lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;Is there some kind of automatic stuff happening in one vs. the other? Just trying to understand how Qt designed and meant to be used.&lt;/span&gt;&lt;/p&gt;
-&lt;p style=&quot;-qt-paragraph-type:empty; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px; font-size:8pt;&quot;&gt;&lt;br /&gt;&lt;/p&gt;
-&lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt;Thank you.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+&lt;p style=&quot;-qt-paragraph-type:empty; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;br /&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                 </property>
                 <property name="openExternalLinks">
                  <bool>true</bool>
@@ -2001,7 +1976,7 @@ p, li { white-space: pre-wrap; }
     </item>
    </layout>
   </widget>
-  <widget class="QMenuBar" name="menubar">
+  <widget class="QMenuBar" name="menu">
    <property name="geometry">
     <rect>
      <x>0</x>
@@ -2010,91 +1985,91 @@ p, li { white-space: pre-wrap; }
      <height>21</height>
     </rect>
    </property>
-   <widget class="QMenu" name="menuFile">
+   <widget class="QMenu" name="menu_file">
     <property name="title">
      <string>File</string>
     </property>
-    <addaction name="actionNew"/>
-    <addaction name="actionOpen"/>
+    <addaction name="act_new"/>
+    <addaction name="act_open"/>
     <addaction name="separator"/>
-    <addaction name="actionSave"/>
-    <addaction name="actionSave_as"/>
+    <addaction name="act_save"/>
+    <addaction name="act_saveas"/>
     <addaction name="separator"/>
-    <addaction name="actionImport"/>
-    <addaction name="actionExport"/>
+    <addaction name="act_import"/>
+    <addaction name="act_export"/>
     <addaction name="separator"/>
-    <addaction name="actionQuit"/>
+    <addaction name="act_quit"/>
    </widget>
-   <widget class="QMenu" name="menuSettings">
+   <widget class="QMenu" name="menu_settings">
     <property name="title">
      <string>Settings</string>
     </property>
-    <addaction name="actionPreferences"/>
+    <addaction name="act_preferences"/>
    </widget>
-   <widget class="QMenu" name="menuBuild">
+   <widget class="QMenu" name="menu_build">
     <property name="title">
      <string>Build</string>
     </property>
-    <widget class="QMenu" name="menuExport_Code">
+    <widget class="QMenu" name="menu_export_code">
      <property name="title">
       <string>Export Code</string>
      </property>
-     <addaction name="actionExport_CA_as_C_Code"/>
-     <addaction name="actionExport_Model_as_Python_Code"/>
-     <addaction name="actionExport_Model_as_JS_Code"/>
+     <addaction name="act_export_c_code"/>
+     <addaction name="act_export_python_code"/>
+     <addaction name="act_export_js_code"/>
     </widget>
-    <widget class="QMenu" name="menuExport_Library">
+    <widget class="QMenu" name="menu_export_library">
      <property name="title">
       <string>Export Library</string>
      </property>
-     <addaction name="actionExport_DLL"/>
-     <addaction name="actionExport_Python_Module"/>
+     <addaction name="act_export_dll"/>
+     <addaction name="act_export_python_module"/>
     </widget>
-    <addaction name="actionRun_2"/>
+    <addaction name="act_run"/>
     <addaction name="separator"/>
-    <addaction name="actionGenerate_Standalone_Viewer"/>
+    <addaction name="act_generate_standalone_viewer"/>
     <addaction name="separator"/>
-    <addaction name="menuExport_Code"/>
-    <addaction name="menuExport_Library"/>
+    <addaction name="menu_export_code"/>
+    <addaction name="menu_export_library"/>
     <addaction name="separator"/>
-    <addaction name="actionCreate_model_summary"/>
+    <addaction name="act_create_model_summary"/>
    </widget>
-   <widget class="QMenu" name="menuHelp">
+   <widget class="QMenu" name="menu_help">
     <property name="title">
      <string>Help</string>
     </property>
-    <addaction name="actionPresenting_Genesis"/>
+    <addaction name="act_presenting_genesis"/>
     <addaction name="separator"/>
-    <addaction name="actionAbout_Genesis"/>
-    <addaction name="actionQuick_Tutorial_2"/>
+    <addaction name="act_about_genesis"/>
+    <addaction name="act_quick_tutorial"/>
    </widget>
-   <addaction name="menuFile"/>
-   <addaction name="menuSettings"/>
-   <addaction name="menuBuild"/>
-   <addaction name="menuHelp"/>
+   <addaction name="menu_file"/>
+   <addaction name="menu_settings"/>
+   <addaction name="menu_build"/>
+   <addaction name="menu_help"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
-  <action name="actionNew">
+  <action name="act_new">
    <property name="text">
     <string>New...</string>
    </property>
   </action>
-  <action name="actionOpen">
+  <action name="act_open">
    <property name="text">
     <string>Open...</string>
    </property>
   </action>
-  <action name="actionSave">
+  <action name="act_save">
    <property name="text">
     <string>Save</string>
    </property>
   </action>
-  <action name="actionSave_as">
+  <action name="act_saveas">
    <property name="text">
     <string>Save As...</string>
    </property>
   </action>
-  <action name="actionImport">
+  <action name="act_import">
    <property name="checkable">
     <bool>false</bool>
    </property>
@@ -2105,7 +2080,7 @@ p, li { white-space: pre-wrap; }
     <string>Import...</string>
    </property>
   </action>
-  <action name="actionExport">
+  <action name="act_export">
    <property name="enabled">
     <bool>false</bool>
    </property>
@@ -2113,7 +2088,7 @@ p, li { white-space: pre-wrap; }
     <string>Export...</string>
    </property>
   </action>
-  <action name="actionQuit">
+  <action name="act_quit">
    <property name="text">
     <string>Quit</string>
    </property>
@@ -2179,7 +2154,7 @@ p, li { white-space: pre-wrap; }
     <string>Group Selection</string>
    </property>
   </action>
-  <action name="actionPreferences">
+  <action name="act_preferences">
    <property name="text">
     <string>Preferences...</string>
    </property>
@@ -2189,17 +2164,17 @@ p, li { white-space: pre-wrap; }
     <string>Run</string>
    </property>
   </action>
-  <action name="actionRun_2">
+  <action name="act_run">
    <property name="text">
     <string>Run...</string>
    </property>
   </action>
-  <action name="actionGenerate_Standalone_Viewer">
+  <action name="act_generate_standalone_viewer">
    <property name="text">
     <string>Generate Standalone Viewer</string>
    </property>
   </action>
-  <action name="actionCreate_model_summary">
+  <action name="act_create_model_summary">
    <property name="text">
     <string>Create Model Summary</string>
    </property>
@@ -2209,27 +2184,27 @@ p, li { white-space: pre-wrap; }
     <string>Quick Tutorial</string>
    </property>
   </action>
-  <action name="actionPresenting_Genesis">
+  <action name="act_presenting_genesis">
    <property name="text">
     <string>What is a Cellular Automata?</string>
    </property>
   </action>
-  <action name="actionQuick_Tutorial_2">
+  <action name="act_quick_tutorial">
    <property name="text">
     <string>Quick Tutorial</string>
    </property>
   </action>
-  <action name="actionAbout_Genesis">
+  <action name="act_about_genesis">
    <property name="text">
     <string>About Genesis</string>
    </property>
   </action>
-  <action name="actionExport_CA_as_C_Code">
+  <action name="act_export_c_code">
    <property name="text">
     <string>Export C++ Code...</string>
    </property>
   </action>
-  <action name="actionExport_Model_as_Python_Code">
+  <action name="act_export_python_code">
    <property name="enabled">
     <bool>false</bool>
    </property>
@@ -2237,7 +2212,7 @@ p, li { white-space: pre-wrap; }
     <string>Export Python Code...</string>
    </property>
   </action>
-  <action name="actionExport_Model_as_JS_Code">
+  <action name="act_export_js_code">
    <property name="enabled">
     <bool>false</bool>
    </property>
@@ -2245,12 +2220,12 @@ p, li { white-space: pre-wrap; }
     <string>Export JS Code...</string>
    </property>
   </action>
-  <action name="actionExport_DLL">
+  <action name="act_export_dll">
    <property name="text">
     <string>Export DLL...</string>
    </property>
   </action>
-  <action name="actionExport_Python_Module">
+  <action name="act_export_python_module">
    <property name="enabled">
     <bool>false</bool>
    </property>
@@ -2259,6 +2234,24 @@ p, li { white-space: pre-wrap; }
    </property>
   </action>
  </widget>
+ <layoutdefault spacing="6" margin="11"/>
  <resources/>
- <connections/>
+ <connections>
+  <connection>
+   <sender>pushButton_4</sender>
+   <signal>released()</signal>
+   <receiver>CAModelerGUI</receiver>
+   <slot>close()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>52</x>
+     <y>565</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>-5</x>
+     <y>431</y>
+    </hint>
+   </hints>
+  </connection>
+ </connections>
 </ui>

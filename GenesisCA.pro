@@ -4,9 +4,7 @@
 #
 #-------------------------------------------------
 
-QT       += core gui
-
-greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
+QT       += core gui widgets
 
 TARGET = GenesisCA
 TEMPLATE = app
@@ -23,9 +21,16 @@ DEFINES += QT_DEPRECATED_WARNINGS
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
 
-SOURCES += main.cpp\
-        ca_modeler.cpp
+SOURCES += \
+    src/main.cpp \
+    src/ca_modeler/ca_modeler_gui.cpp \
+    src/ca_modeler/ca_modeler_manager.cpp \
+    src/ca_model/ca_model.cpp
 
-HEADERS  += ca_modeler.h
+HEADERS  += \
+    src/ca_modeler/ca_modeler_gui.h \
+    src/ca_modeler/ca_modeler_manager.h \
+    src/ca_model/ca_model.h
 
-FORMS    += ca_modeler.ui
+FORMS    += \
+    src/ca_modeler/ca_modeler_gui.ui
