@@ -16,6 +16,7 @@
   <widget class="QWidget" name="centralwidget">
    <property name="styleSheet">
     <string notr="true">QTabWidget::pane {background-color: rgb(240, 240, 240);}
+
 /*
 QGroupBox {
     background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
@@ -664,7 +665,7 @@ background: rgb(240, 240, 240);
             <number>0</number>
            </property>
            <property name="bottomMargin">
-            <number>0</number>
+            <number>9</number>
            </property>
            <item>
             <widget class="QGroupBox" name="gb_common_properties">
@@ -701,6 +702,9 @@ background: rgb(240, 240, 240);
               </item>
               <item row="2" column="1">
                <widget class="QComboBox" name="cb_attribute_type">
+                <property name="currentIndex">
+                 <number>0</number>
+                </property>
                 <item>
                  <property name="text">
                   <string>Bool</string>
@@ -780,6 +784,11 @@ background: rgb(240, 240, 240);
                 </item>
                 <item>
                  <property name="text">
+                  <string>List</string>
+                 </property>
+                </item>
+                <item>
+                 <property name="text">
                   <string>User Defined</string>
                  </property>
                 </item>
@@ -797,6 +806,9 @@ background: rgb(240, 240, 240);
               <string>User Defined properties</string>
              </property>
              <layout class="QGridLayout" name="gridLayout_22">
+              <item row="1" column="0" colspan="4">
+               <widget class="QListWidget" name="lw_allowed_values"/>
+              </item>
               <item row="0" column="0">
                <widget class="QLabel" name="lbl_allowed_values">
                 <property name="text">
@@ -836,10 +848,14 @@ background: rgb(240, 240, 240);
                 </property>
                </widget>
               </item>
-              <item row="1" column="0" colspan="3">
-               <widget class="QListWidget" name="lw_allowed_values"/>
-              </item>
              </layout>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="pb_atribute_save_modifications">
+             <property name="text">
+              <string>Save Modifications</string>
+             </property>
             </widget>
            </item>
           </layout>
@@ -1213,8 +1229,8 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
                   <rect>
                    <x>0</x>
                    <y>0</y>
-                   <width>180</width>
-                   <height>192</height>
+                   <width>100</width>
+                   <height>30</height>
                   </rect>
                  </property>
                  <attribute name="label">
@@ -1227,8 +1243,8 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
                   <rect>
                    <x>0</x>
                    <y>0</y>
-                   <width>180</width>
-                   <height>192</height>
+                   <width>100</width>
+                   <height>30</height>
                   </rect>
                  </property>
                  <attribute name="label">
@@ -1240,8 +1256,8 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
                   <rect>
                    <x>0</x>
                    <y>0</y>
-                   <width>180</width>
-                   <height>192</height>
+                   <width>100</width>
+                   <height>30</height>
                   </rect>
                  </property>
                  <attribute name="label">
@@ -1253,8 +1269,8 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
                   <rect>
                    <x>0</x>
                    <y>0</y>
-                   <width>180</width>
-                   <height>192</height>
+                   <width>100</width>
+                   <height>30</height>
                   </rect>
                  </property>
                  <attribute name="label">
@@ -1266,8 +1282,8 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
                   <rect>
                    <x>0</x>
                    <y>0</y>
-                   <width>180</width>
-                   <height>192</height>
+                   <width>100</width>
+                   <height>30</height>
                   </rect>
                  </property>
                  <attribute name="label">
@@ -1279,8 +1295,8 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
                   <rect>
                    <x>0</x>
                    <y>0</y>
-                   <width>180</width>
-                   <height>192</height>
+                   <width>100</width>
+                   <height>30</height>
                   </rect>
                  </property>
                  <attribute name="label">
@@ -1813,8 +1829,8 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
                   <rect>
                    <x>0</x>
                    <y>0</y>
-                   <width>178</width>
-                   <height>218</height>
+                   <width>100</width>
+                   <height>30</height>
                   </rect>
                  </property>
                  <attribute name="label">
@@ -1827,8 +1843,8 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
                   <rect>
                    <x>0</x>
                    <y>0</y>
-                   <width>178</width>
-                   <height>218</height>
+                   <width>100</width>
+                   <height>30</height>
                   </rect>
                  </property>
                  <attribute name="label">
@@ -1840,8 +1856,8 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
                   <rect>
                    <x>0</x>
                    <y>0</y>
-                   <width>178</width>
-                   <height>218</height>
+                   <width>100</width>
+                   <height>30</height>
                   </rect>
                  </property>
                  <attribute name="label">
@@ -1853,8 +1869,8 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
                   <rect>
                    <x>0</x>
                    <y>0</y>
-                   <width>178</width>
-                   <height>218</height>
+                   <width>100</width>
+                   <height>30</height>
                   </rect>
                  </property>
                  <attribute name="label">
@@ -1866,8 +1882,8 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
                   <rect>
                    <x>0</x>
                    <y>0</y>
-                   <width>178</width>
-                   <height>218</height>
+                   <width>100</width>
+                   <height>30</height>
                   </rect>
                  </property>
                  <attribute name="label">

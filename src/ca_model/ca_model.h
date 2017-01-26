@@ -1,11 +1,36 @@
 #ifndef CA_MODEL_H
 #define CA_MODEL_H
 
+#include "model_properties.h"
+#include "graph_node.h"
+#include "attribute.h"
+#include "neighborhood.h"
+#include "partition.h"
+#include "breakcase.h"
 
-class CAModel
-{
+#include <vector>
+#include <algorithm>
+
+class CAModel {
 public:
-    CAModel();
+  CAModel();
+
+  void AppendCellAttribute(Attribute* new_attribute) { m_cell_attributes.push_back(new_attribute); }
+  void RemoveCellAttribute(Attribute* target_attribute) {
+    auto target_ite = std::find(m_cell_attributes.begin(), m_cell_attributes.end(), target_attribute);
+    delete *target_ite;
+    m_cell_attributes.erase(target_ite);
+  }
+
+private:
+  ModelProperties*           m_model_properties;
+  std::vector<Attribute*>    m_cell_attributes;
+  std::vector<Attribute*>    m_model_attributes;
+  std::vector<Neighborhood*> m_neighborhoods;
+  std::vector<Partition*>    m_partitions;
+  std::vector<GraphNode*>    m_update_rules;
+  std::vector<GraphNode*>    m_mappings;
+
 };
 
 #endif // CA_MODEL_H
