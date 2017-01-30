@@ -63,7 +63,7 @@ background: rgb(240, 240, 240);
        <enum>QTabWidget::Rounded</enum>
       </property>
       <property name="currentIndex">
-       <number>1</number>
+       <number>2</number>
       </property>
       <property name="movable">
        <bool>true</bool>
@@ -863,6 +863,16 @@ background: rgb(240, 240, 240);
            </item>
           </layout>
          </widget>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="tab_attribute_handler">
+       <attribute name="title">
+        <string>(widget) Attributes</string>
+       </attribute>
+       <layout class="QGridLayout" name="gridLayout_33">
+        <item row="0" column="0">
+         <widget class="AttributeHandlerWidget" name="wgt_attribute_handler" native="true"/>
         </item>
        </layout>
       </widget>
@@ -2266,6 +2276,14 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
   </action>
  </widget>
  <layoutdefault spacing="6" margin="11"/>
+ <customwidgets>
+  <customwidget>
+   <class>AttributeHandlerWidget</class>
+   <extends>QWidget</extends>
+   <header>attribute_handler_widget.h</header>
+   <container>1</container>
+  </customwidget>
+ </customwidgets>
  <resources/>
  <connections>
   <connection>

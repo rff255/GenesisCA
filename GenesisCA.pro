@@ -20,6 +20,8 @@ DEFINES += QT_DEPRECATED_WARNINGS
 # You can also select to disable deprecated APIs only up to a certain version of Qt.
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
+INCLUDEPATH += \
+ src/ca_modeler/AttributeHandler/
 
 SOURCES += \
   src/main.cpp \
@@ -30,7 +32,8 @@ SOURCES += \
     src/ca_model/model_properties.cpp \
     src/ca_model/neighborhood.cpp \
     src/ca_model/partition.cpp \
-    src/ca_model/breakcase.cpp
+    src/ca_model/breakcase.cpp \
+    src/ca_modeler/AttributeHandler/attribute_handler_widget.cpp
 
 HEADERS  += \
   src/ca_modeler/ca_modeler_gui.h \
@@ -41,7 +44,9 @@ HEADERS  += \
     src/ca_model/attribute.h \
     src/ca_model/neighborhood.h \
     src/ca_model/partition.h \
-    src/ca_model/breakcase.h
+    src/ca_model/breakcase.h \
+    src/ca_modeler/AttributeHandler/attribute_handler_widget.h
 
 FORMS    += \
-  src/ca_modeler/ca_modeler_gui.ui
+  src/ca_modeler/ca_modeler_gui.ui \
+    src/ca_modeler/AttributeHandler/attribute_handler_widget.ui
