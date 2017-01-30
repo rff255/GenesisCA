@@ -17,7 +17,10 @@ public:
   explicit CAModelerGUI(QWidget *parent = 0);
   ~CAModelerGUI();
 
+  void SetupWidgets();
+
   void LoadAttributesProperties(QListWidgetItem* curr_item);
+  void ResetAttributesProperties();
 
 public slots:
 
@@ -41,6 +44,10 @@ private slots:
   void on_pb_delete_model_attribute_released();
 
   void on_lw_model_attributes_itemClicked(QListWidgetItem *item);
+
+  void on_pb_add_value_released();
+
+  void on_pb_remove_value_released();
 
 private:
   Ui::CAModelerGUI *ui;

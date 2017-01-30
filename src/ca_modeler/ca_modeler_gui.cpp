@@ -6,6 +6,12 @@ CAModelerGUI::CAModelerGUI(QWidget *parent) :
   ui(new Ui::CAModelerGUI),
   m_modeler_manager(new CAModelerManager()) {
     ui->setupUi(this);
+
+    // Initialize control members
+    m_curr_lw_attribute = ui->lw_cell_attributes;
+
+    // Setup widgets
+    SetupWidgets();
 }
 
 CAModelerGUI::~CAModelerGUI() {
@@ -13,11 +19,18 @@ CAModelerGUI::~CAModelerGUI() {
   delete m_modeler_manager;
 }
 
+void CAModelerGUI::SetupWidgets() {
+  // Attributes tab
+  ResetAttributesProperties();
+}
+
 void CAModelerGUI::LoadAttributesProperties(QListWidgetItem* curr_item) {
+  ResetAttributesProperties();
+
   Attribute* curr_attribute = m_modeler_manager->GetAttribute(curr_item);
 
   ui->txt_attribute_name->setText(QString::fromStdString(curr_attribute->m_name));
-  ui->cb_attribute_type->setCurrentIndex(curr_attribute->m_type);  // TODO(figueiredo): Define combo_box values from enum values
+  ui->cb_attribute_type->setCurrentIndex((int) curr_attribute->m_type);  // TODO(figueiredo): Define combo_box values from enum values
   ui->txt_attribute_description->setPlainText(QString::fromStdString(curr_attribute->m_description));
   ui->sb_list_length->setValue(curr_attribute->m_list_length);
   ui->cb_list_type->setCurrentIndex(curr_attribute->m_list_type);
@@ -26,6 +39,19 @@ void CAModelerGUI::LoadAttributesProperties(QListWidgetItem* curr_item) {
   for (int i=0; i < curr_attribute->m_user_defined_values.size(); ++i) {
     ui->lw_allowed_values->addItem(QString::fromStdString(curr_attribute->m_user_defined_values[i]));
   }
+
+  ui->fr_attributes_properties->setEnabled(true);
+}
+
+void CAModelerGUI::ResetAttributesProperties() {
+  ui->txt_attribute_name->setText(QString::fromStdString(""));
+  ui->cb_attribute_type->setCurrentIndex(0);
+  ui->txt_attribute_description->setPlainText(QString::fromStdString(""));
+  ui->sb_list_length->setValue(0);
+  ui->cb_list_type->setCurrentIndex(0);
+  ui->lw_allowed_values->clear();
+
+  ui->fr_attributes_properties->setEnabled(false);
 }
 
 void CAModelerGUI::on_act_quit_triggered() {
@@ -82,6 +108,7 @@ void CAModelerGUI::on_pb_delete_cell_attribute_released()
   if(curr_item) {
     m_modeler_manager->RemoveAttribute(curr_item, true);
     delete curr_item;
+    ResetAttributesProperties();
   }
 }
 
@@ -91,6 +118,7 @@ void CAModelerGUI::on_pb_delete_model_attribute_released()
   if(curr_item) {
     m_modeler_manager->RemoveAttribute(curr_item, false);
     delete curr_item;
+    ResetAttributesProperties();
   }
 }
 
@@ -113,11 +141,27 @@ void CAModelerGUI::on_pb_atribute_save_modifications_released()
 void CAModelerGUI::on_lw_cell_attributes_itemClicked(QListWidgetItem *item)
 {
   m_curr_lw_attribute = ui->lw_cell_attributes;
+  ui->lw_model_attributes->clearSelection();
   LoadAttributesProperties(item);
 }
 
 void CAModelerGUI::on_lw_model_attributes_itemClicked(QListWidgetItem *item)
 {
   m_curr_lw_attribute = ui->lw_model_attributes;
+  ui->lw_cell_attributes->clearSelection();
   LoadAttributesProperties(item);
+}
+
+void CAModelerGUI::on_pb_add_value_released()
+{
+    ui->lw_allowed_values->addItem(ui->txt_new_allowed_value->text());
+    ui->txt_new_allowed_value->setText(QString::fromStdString(""));
+}
+
+void CAModelerGUI::on_pb_remove_value_released()
+{
+  QListWidgetItem* curr_item_value = ui->lw_allowed_values->currentItem();
+  if(curr_item_value) {
+    delete curr_item_value;
+  }
 }

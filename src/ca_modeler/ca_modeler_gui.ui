@@ -653,7 +653,7 @@ background: rgb(240, 240, 240);
          </widget>
         </item>
         <item>
-         <widget class="QFrame" name="fr_properties">
+         <widget class="QFrame" name="fr_attributes_properties">
           <layout class="QVBoxLayout" name="verticalLayout_3">
            <property name="leftMargin">
             <number>0</number>
@@ -806,7 +806,7 @@ background: rgb(240, 240, 240);
               <string>User Defined properties</string>
              </property>
              <layout class="QGridLayout" name="gridLayout_22">
-              <item row="1" column="0" colspan="4">
+              <item row="1" column="0" colspan="5">
                <widget class="QListWidget" name="lw_allowed_values"/>
               </item>
               <item row="0" column="0">
@@ -816,8 +816,8 @@ background: rgb(240, 240, 240);
                 </property>
                </widget>
               </item>
-              <item row="0" column="1">
-               <widget class="QPushButton" name="pb_new_value">
+              <item row="0" column="2">
+               <widget class="QPushButton" name="pb_add_value">
                 <property name="sizePolicy">
                  <sizepolicy hsizetype="Maximum" vsizetype="Fixed">
                   <horstretch>0</horstretch>
@@ -825,11 +825,11 @@ background: rgb(240, 240, 240);
                  </sizepolicy>
                 </property>
                 <property name="text">
-                 <string>New Value</string>
+                 <string>Add Value</string>
                 </property>
                </widget>
               </item>
-              <item row="0" column="2">
+              <item row="0" column="3">
                <widget class="QPushButton" name="pb_remove_value">
                 <property name="sizePolicy">
                  <sizepolicy hsizetype="Maximum" vsizetype="Fixed">
@@ -847,6 +847,9 @@ background: rgb(240, 240, 240);
                  <string>Remove Value</string>
                 </property>
                </widget>
+              </item>
+              <item row="0" column="1">
+               <widget class="QLineEdit" name="txt_new_allowed_value"/>
               </item>
              </layout>
             </widget>
@@ -2264,5 +2267,22 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
  </widget>
  <layoutdefault spacing="6" margin="11"/>
  <resources/>
- <connections/>
+ <connections>
+  <connection>
+   <sender>txt_new_allowed_value</sender>
+   <signal>returnPressed()</signal>
+   <receiver>pb_add_value</receiver>
+   <slot>click()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>604</x>
+     <y>397</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>646</x>
+     <y>399</y>
+    </hint>
+   </hints>
+  </connection>
+ </connections>
 </ui>

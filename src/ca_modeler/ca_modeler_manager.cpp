@@ -26,6 +26,10 @@ void CAModelerManager::AddAttribute(QListWidgetItem* corresponding_item, bool is
   // Create new attribute
   Attribute* new_attrubute = new Attribute;
   new_attrubute->m_name = corresponding_item->text().toStdString();
+  new_attrubute->m_type = attribute_type::kBool;
+  new_attrubute->m_description = "";
+  new_attrubute->m_list_length = 0;
+  new_attrubute->m_list_type = attribute_type::kBool;
 
   // Append to ca_model, and refresh manager [item->attribute] hash
   if (isCellAttribute)
