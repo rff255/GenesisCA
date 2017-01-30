@@ -2264,22 +2264,5 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
  </widget>
  <layoutdefault spacing="6" margin="11"/>
  <resources/>
- <connections>
-  <connection>
-   <sender>pb_rule_hide</sender>
-   <signal>released()</signal>
-   <receiver>CAModelerGUI</receiver>
-   <slot>close()</slot>
-   <hints>
-    <hint type="sourcelabel">
-     <x>52</x>
-     <y>565</y>
-    </hint>
-    <hint type="destinationlabel">
-     <x>-5</x>
-     <y>431</y>
-    </hint>
-   </hints>
-  </connection>
- </connections>
+ <connections/>
 </ui>

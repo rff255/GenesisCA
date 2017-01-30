@@ -15,12 +15,22 @@ class CAModel {
 public:
   CAModel();
 
+  // Attributes
+  // - cell attributes
   void AppendCellAttribute(Attribute* new_attribute) { m_cell_attributes.push_back(new_attribute); }
   void RemoveCellAttribute(Attribute* target_attribute) {
     auto target_ite = std::find(m_cell_attributes.begin(), m_cell_attributes.end(), target_attribute);
     delete *target_ite;
     m_cell_attributes.erase(target_ite);
   }
+  // - model attributes
+  void AppendModelAttribute(Attribute* new_attribute) { m_model_attributes.push_back(new_attribute); }
+  void RemoveModelAttribute(Attribute* target_attribute) {
+    auto target_ite = std::find(m_model_attributes.begin(), m_model_attributes.end(), target_attribute);
+    delete *target_ite;
+    m_model_attributes.erase(target_ite);
+  }
+
 
 private:
   ModelProperties*           m_model_properties;

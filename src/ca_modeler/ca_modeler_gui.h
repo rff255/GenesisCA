@@ -36,9 +36,18 @@ private slots:
 
   void on_lw_cell_attributes_itemClicked(QListWidgetItem *item);
 
+  void on_pb_add_model_attribute_released();
+
+  void on_pb_delete_model_attribute_released();
+
+  void on_lw_model_attributes_itemClicked(QListWidgetItem *item);
+
 private:
   Ui::CAModelerGUI *ui;
   CAModelerManager *m_modeler_manager;
+
+  // Control members
+  QListWidget* m_curr_lw_attribute;
 };
 
 #endif // CA_MODELER_GUI_H

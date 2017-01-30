@@ -22,27 +22,35 @@ attribute_type CAModelerManager::AttrTypeFromStr(std::string string_type) {
   }
 }
 
-void CAModelerManager::AddCellAttribute(QListWidgetItem* corresponding_item) {
+void CAModelerManager::AddAttribute(QListWidgetItem* corresponding_item, bool isCellAttribute) {
   // Create new attribute
   Attribute* new_attrubute = new Attribute;
   new_attrubute->m_name = corresponding_item->text().toStdString();
 
   // Append to ca_model, and refresh manager [item->attribute] hash
-  m_ca_model->AppendCellAttribute(new_attrubute);
-  m_cell_attributes.insert(corresponding_item, new_attrubute);
+  if (isCellAttribute)
+    m_ca_model->AppendCellAttribute(new_attrubute);
+  else
+    m_ca_model->AppendModelAttribute(new_attrubute);
+
+  m_attributes_hash.insert(corresponding_item, new_attrubute);
 }
 
-void CAModelerManager::RemoveCellAttribute(QListWidgetItem *target_item) {
-  Attribute* target_attribute = m_cell_attributes.value(target_item);
-  m_ca_model->RemoveCellAttribute(target_attribute);
-  m_cell_attributes.remove(target_item);
+void CAModelerManager::RemoveAttribute(QListWidgetItem *target_item, bool isCellAttribute) {
+  Attribute* target_attribute = m_attributes_hash.value(target_item);
+  if (isCellAttribute)
+    m_ca_model->RemoveCellAttribute(target_attribute);
+  else
+    m_ca_model->RemoveModelAttribute(target_attribute);
+
+  m_attributes_hash.remove(target_item);
 }
 
-void CAModelerManager::ModifyCellAttribute(QListWidgetItem* target_item,
+void CAModelerManager::ModifyAttribute(QListWidgetItem* target_item,
                     const std::string &name, const std::string &type, const std::string &description,
                     int list_length, const std::string &list_type,
                     const QListWidget* user_defined_values) {
-  Attribute* target_attrubute = m_cell_attributes.value(target_item);
+  Attribute* target_attrubute = m_attributes_hash.value(target_item);
   target_attrubute->m_name = name;
   target_attrubute->m_type = AttrTypeFromStr(type);
   target_attrubute->m_description = description;
