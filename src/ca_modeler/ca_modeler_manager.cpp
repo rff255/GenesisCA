@@ -49,10 +49,10 @@ void CAModelerManager::ModifyCellAttribute(QListWidgetItem* target_item,
   target_attrubute->m_list_length = list_length;
   target_attrubute->m_list_type = AttrTypeFromStr(list_type);
 
-  std::vector<std::string> allowed_values;
-  foreach(QListWidgetItem *item, user_defined_values)
-    allowed_values.push_back(item->text());
-
-  target_attrubute->m_user_defined_values = allowed_values;
+  target_attrubute->m_user_defined_values.clear();
+  for(int i = 0; i < user_defined_values->count(); ++i) {
+      QListWidgetItem* item = user_defined_values->item(i);
+      target_attrubute->m_user_defined_values.push_back(item->text().toStdString());
+  }
 }
 

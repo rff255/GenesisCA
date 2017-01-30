@@ -17,7 +17,7 @@ public:
   explicit CAModelerGUI(QWidget *parent = 0);
   ~CAModelerGUI();
 
-  void RefreshAttributesProperties(QListWidgetItem* curr_item);
+  void LoadAttributesProperties(QListWidgetItem* curr_item);
 
 public slots:
 

@@ -13,18 +13,19 @@ CAModelerGUI::~CAModelerGUI() {
   delete m_modeler_manager;
 }
 
-void CAModelerGUI::RefreshAttributesProperties(QListWidgetItem* curr_item) {
+void CAModelerGUI::LoadAttributesProperties(QListWidgetItem* curr_item) {
   Attribute* curr_attribute = m_modeler_manager->GetCellAttribute(curr_item);
 
-  ui->txt_attribute_name->setText(Qstring(curr_attribute->m_name));
+  ui->txt_attribute_name->setText(QString::fromStdString(curr_attribute->m_name));
   ui->cb_attribute_type->setCurrentIndex(curr_attribute->m_type);  // TODO(figueiredo): Define combo_box values from enum values
-  ui->txt_attribute_description->setText(Qstring(curr_attribute->m_description));
+  ui->txt_attribute_description->setPlainText(QString::fromStdString(curr_attribute->m_description));
   ui->sb_list_length->setValue(curr_attribute->m_list_length);
   ui->cb_list_type->setCurrentIndex(curr_attribute->m_list_type);
 
   ui->lw_allowed_values->clear();
-//  foreach(std::string value, curr_attribute->m_user_defined_values)
-//    ui->lw_allowed_values->addItem(value);
+  for (int i=0; i < curr_attribute->m_user_defined_values.size(); ++i) {
+    ui->lw_allowed_values->addItem(QString::fromStdString(curr_attribute->m_user_defined_values[i]));
+  }
 }
 
 void CAModelerGUI::on_act_quit_triggered() {
@@ -73,6 +74,7 @@ void CAModelerGUI::on_pb_delete_cell_attribute_released()
   QListWidgetItem* curr_item = ui->lw_cell_attributes->currentItem();
   if(curr_item) {
     m_modeler_manager->RemoveCellAttribute(curr_item);
+    delete curr_item;
   }
 }
 
@@ -80,18 +82,19 @@ void CAModelerGUI::on_pb_atribute_save_modifications_released()
 {
   QListWidgetItem* curr_item = ui->lw_cell_attributes->currentItem();
   if(curr_item) {
-
+    curr_item->setText(ui->txt_attribute_name->text());
     m_modeler_manager->ModifyCellAttribute(curr_item,
-                                           ui->txt_attribute_name,
+                                           ui->txt_attribute_name->text().toStdString(),
                                            ui->cb_attribute_type->currentText().toStdString(),
-                                           ui->txt_attribute_description->toPlainText().split("\n"),
+                                           ui->txt_attribute_description->toPlainText().toStdString(),
                                            ui->sb_list_length->value(),
                                            ui->cb_list_type->currentText().toStdString(),
                                            ui->lw_allowed_values);
+
   }
 }
 
 void CAModelerGUI::on_lw_cell_attributes_itemClicked(QListWidgetItem *item)
 {
-  RefreshAttributesProperties(item);
+  LoadAttributesProperties(item);
 }

@@ -23,7 +23,6 @@ struct Attribute {
 
   // User Ddefined properties
   std::vector<std::string> m_user_defined_values;
-
 };
 
 #endif // ATTRIBUTE_H
