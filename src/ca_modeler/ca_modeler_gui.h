@@ -18,43 +18,17 @@ public:
   ~CAModelerGUI();
 
   void SetupWidgets();
-
-  void LoadAttributesProperties(QListWidgetItem* curr_item);
-  void ResetAttributesProperties();
+  void PassManager();
 
 public slots:
 
 private slots:
   void on_act_quit_triggered();
 
-  void on_cb_attribute_type_currentIndexChanged(const QString &arg1);
-
-  void on_cb_list_type_currentIndexChanged(const QString &arg1);
-
-  void on_pb_add_cell_attribute_released();
-
-  void on_pb_delete_cell_attribute_released();
-
-  void on_pb_atribute_save_modifications_released();
-
-  void on_lw_cell_attributes_itemClicked(QListWidgetItem *item);
-
-  void on_pb_add_model_attribute_released();
-
-  void on_pb_delete_model_attribute_released();
-
-  void on_lw_model_attributes_itemClicked(QListWidgetItem *item);
-
-  void on_pb_add_value_released();
-
-  void on_pb_remove_value_released();
-
 private:
   Ui::CAModelerGUI *ui;
   CAModelerManager *m_modeler_manager;
 
-  // Control members
-  QListWidget* m_curr_lw_attribute;
 };
 
 #endif // CA_MODELER_GUI_H

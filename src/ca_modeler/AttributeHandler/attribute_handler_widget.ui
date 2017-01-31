@@ -353,5 +353,22 @@
   </layout>
  </widget>
  <resources/>
- <connections/>
+ <connections>
+  <connection>
+   <sender>txt_new_allowed_value</sender>
+   <signal>returnPressed()</signal>
+   <receiver>pb_add_value</receiver>
+   <slot>click()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>629</x>
+     <y>341</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>743</x>
+     <y>341</y>
+    </hint>
+   </hints>
+  </connection>
+ </connections>
 </ui>

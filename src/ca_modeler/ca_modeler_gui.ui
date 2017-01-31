@@ -63,7 +63,7 @@ background: rgb(240, 240, 240);
        <enum>QTabWidget::Rounded</enum>
       </property>
       <property name="currentIndex">
-       <number>2</number>
+       <number>1</number>
       </property>
       <property name="movable">
        <bool>true</bool>
@@ -520,19 +520,16 @@ background: rgb(240, 240, 240);
         </item>
        </layout>
       </widget>
-      <widget class="QWidget" name="tab_attributes">
+      <widget class="QWidget" name="tab_attribute_handler">
        <attribute name="title">
         <string>Attributes (Cell/ Model)</string>
        </attribute>
-       <attribute name="toolTip">
-        <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Groups all attributes inherent of each cell that can be changed along CA evolution according to Update Rules, as well as Global Attributes (commonly used to set up CA execution)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-       </attribute>
-       <layout class="QHBoxLayout" name="horizontalLayout_4">
+       <layout class="QGridLayout" name="gridLayout_33">
         <property name="leftMargin">
          <number>0</number>
         </property>
         <property name="topMargin">
-         <number>5</number>
+         <number>0</number>
         </property>
         <property name="rightMargin">
          <number>0</number>
@@ -540,337 +537,9 @@ background: rgb(240, 240, 240);
         <property name="bottomMargin">
          <number>0</number>
         </property>
-        <item>
-         <widget class="QGroupBox" name="gb_cell_attributes">
-          <property name="minimumSize">
-           <size>
-            <width>200</width>
-            <height>0</height>
-           </size>
-          </property>
-          <property name="maximumSize">
-           <size>
-            <width>200</width>
-            <height>16777215</height>
-           </size>
-          </property>
-          <property name="title">
-           <string>Cell Attributes</string>
-          </property>
-          <layout class="QGridLayout" name="gridLayout_9">
-           <item row="1" column="1">
-            <widget class="QPushButton" name="pb_delete_cell_attribute">
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Maximum" vsizetype="Fixed">
-               <horstretch>0</horstretch>
-               <verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
-             <property name="text">
-              <string>Delete</string>
-             </property>
-            </widget>
-           </item>
-           <item row="1" column="0">
-            <widget class="QPushButton" name="pb_add_cell_attribute">
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
-               <horstretch>0</horstretch>
-               <verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
-             <property name="minimumSize">
-              <size>
-               <width>100</width>
-               <height>0</height>
-              </size>
-             </property>
-             <property name="text">
-              <string>Add Cell Attribute</string>
-             </property>
-            </widget>
-           </item>
-           <item row="0" column="0" colspan="2">
-            <widget class="QListWidget" name="lw_cell_attributes"/>
-           </item>
-          </layout>
-         </widget>
-        </item>
-        <item>
-         <widget class="QGroupBox" name="gb_model_attributes">
-          <property name="minimumSize">
-           <size>
-            <width>200</width>
-            <height>0</height>
-           </size>
-          </property>
-          <property name="maximumSize">
-           <size>
-            <width>200</width>
-            <height>16777215</height>
-           </size>
-          </property>
-          <property name="title">
-           <string>Model Attributes</string>
-          </property>
-          <layout class="QGridLayout" name="gridLayout_10">
-           <item row="1" column="1">
-            <widget class="QPushButton" name="pb_delete_model_attribute">
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Ignored" vsizetype="Fixed">
-               <horstretch>0</horstretch>
-               <verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
-             <property name="text">
-              <string>Delete</string>
-             </property>
-            </widget>
-           </item>
-           <item row="1" column="0">
-            <widget class="QPushButton" name="pb_add_model_attribute">
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
-               <horstretch>0</horstretch>
-               <verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
-             <property name="minimumSize">
-              <size>
-               <width>110</width>
-               <height>0</height>
-              </size>
-             </property>
-             <property name="text">
-              <string>Add Model Attribute</string>
-             </property>
-            </widget>
-           </item>
-           <item row="0" column="0" colspan="2">
-            <widget class="QListWidget" name="lw_model_attributes"/>
-           </item>
-          </layout>
-         </widget>
-        </item>
-        <item>
-         <widget class="QFrame" name="fr_attributes_properties">
-          <layout class="QVBoxLayout" name="verticalLayout_3">
-           <property name="leftMargin">
-            <number>0</number>
-           </property>
-           <property name="topMargin">
-            <number>0</number>
-           </property>
-           <property name="rightMargin">
-            <number>0</number>
-           </property>
-           <property name="bottomMargin">
-            <number>9</number>
-           </property>
-           <item>
-            <widget class="QGroupBox" name="gb_common_properties">
-             <property name="enabled">
-              <bool>true</bool>
-             </property>
-             <property name="title">
-              <string>Common properties</string>
-             </property>
-             <layout class="QFormLayout" name="formLayout">
-              <property name="fieldGrowthPolicy">
-               <enum>QFormLayout::ExpandingFieldsGrow</enum>
-              </property>
-              <item row="0" column="0">
-               <widget class="QLabel" name="lbl_attribute_name">
-                <property name="text">
-                 <string>Name:</string>
-                </property>
-               </widget>
-              </item>
-              <item row="0" column="1">
-               <widget class="QLineEdit" name="txt_attribute_name">
-                <property name="text">
-                 <string/>
-                </property>
-               </widget>
-              </item>
-              <item row="2" column="0">
-               <widget class="QLabel" name="lbl_attribute_type">
-                <property name="text">
-                 <string>Type:</string>
-                </property>
-               </widget>
-              </item>
-              <item row="2" column="1">
-               <widget class="QComboBox" name="cb_attribute_type">
-                <property name="currentIndex">
-                 <number>0</number>
-                </property>
-                <item>
-                 <property name="text">
-                  <string>Bool</string>
-                 </property>
-                </item>
-                <item>
-                 <property name="text">
-                  <string>Numerical</string>
-                 </property>
-                </item>
-                <item>
-                 <property name="text">
-                  <string>List</string>
-                 </property>
-                </item>
-                <item>
-                 <property name="text">
-                  <string>User Defined</string>
-                 </property>
-                </item>
-               </widget>
-              </item>
-              <item row="4" column="0" colspan="2">
-               <widget class="QLabel" name="lbl__attribute_description">
-                <property name="text">
-                 <string>Description:</string>
-                </property>
-               </widget>
-              </item>
-              <item row="5" column="0" colspan="2">
-               <widget class="QPlainTextEdit" name="txt_attribute_description">
-                <property name="plainText">
-                 <string/>
-                </property>
-               </widget>
-              </item>
-             </layout>
-            </widget>
-           </item>
-           <item>
-            <widget class="QGroupBox" name="gb_list_properties">
-             <property name="enabled">
-              <bool>false</bool>
-             </property>
-             <property name="title">
-              <string>List properties</string>
-             </property>
-             <layout class="QGridLayout" name="gridLayout_8">
-              <item row="0" column="1">
-               <widget class="QSpinBox" name="sb_list_length"/>
-              </item>
-              <item row="0" column="0">
-               <widget class="QLabel" name="lbl_list_length">
-                <property name="text">
-                 <string>List length:</string>
-                </property>
-               </widget>
-              </item>
-              <item row="1" column="0">
-               <widget class="QLabel" name="lbl_list_type">
-                <property name="text">
-                 <string>List type:</string>
-                </property>
-               </widget>
-              </item>
-              <item row="1" column="1">
-               <widget class="QComboBox" name="cb_list_type">
-                <item>
-                 <property name="text">
-                  <string>Bool</string>
-                 </property>
-                </item>
-                <item>
-                 <property name="text">
-                  <string>Numerical</string>
-                 </property>
-                </item>
-                <item>
-                 <property name="text">
-                  <string>List</string>
-                 </property>
-                </item>
-                <item>
-                 <property name="text">
-                  <string>User Defined</string>
-                 </property>
-                </item>
-               </widget>
-              </item>
-             </layout>
-            </widget>
-           </item>
-           <item>
-            <widget class="QGroupBox" name="gb_user_defined_properties">
-             <property name="enabled">
-              <bool>false</bool>
-             </property>
-             <property name="title">
-              <string>User Defined properties</string>
-             </property>
-             <layout class="QGridLayout" name="gridLayout_22">
-              <item row="1" column="0" colspan="5">
-               <widget class="QListWidget" name="lw_allowed_values"/>
-              </item>
-              <item row="0" column="0">
-               <widget class="QLabel" name="lbl_allowed_values">
-                <property name="text">
-                 <string>Allowed Values:</string>
-                </property>
-               </widget>
-              </item>
-              <item row="0" column="2">
-               <widget class="QPushButton" name="pb_add_value">
-                <property name="sizePolicy">
-                 <sizepolicy hsizetype="Maximum" vsizetype="Fixed">
-                  <horstretch>0</horstretch>
-                  <verstretch>0</verstretch>
-                 </sizepolicy>
-                </property>
-                <property name="text">
-                 <string>Add Value</string>
-                </property>
-               </widget>
-              </item>
-              <item row="0" column="3">
-               <widget class="QPushButton" name="pb_remove_value">
-                <property name="sizePolicy">
-                 <sizepolicy hsizetype="Maximum" vsizetype="Fixed">
-                  <horstretch>0</horstretch>
-                  <verstretch>0</verstretch>
-                 </sizepolicy>
-                </property>
-                <property name="minimumSize">
-                 <size>
-                  <width>80</width>
-                  <height>0</height>
-                 </size>
-                </property>
-                <property name="text">
-                 <string>Remove Value</string>
-                </property>
-               </widget>
-              </item>
-              <item row="0" column="1">
-               <widget class="QLineEdit" name="txt_new_allowed_value"/>
-              </item>
-             </layout>
-            </widget>
-           </item>
-           <item>
-            <widget class="QPushButton" name="pb_atribute_save_modifications">
-             <property name="text">
-              <string>Save Modifications</string>
-             </property>
-            </widget>
-           </item>
-          </layout>
-         </widget>
-        </item>
-       </layout>
-      </widget>
-      <widget class="QWidget" name="tab_attribute_handler">
-       <attribute name="title">
-        <string>(widget) Attributes</string>
-       </attribute>
-       <layout class="QGridLayout" name="gridLayout_33">
+        <property name="spacing">
+         <number>0</number>
+        </property>
         <item row="0" column="0">
          <widget class="AttributeHandlerWidget" name="wgt_attribute_handler" native="true"/>
         </item>
@@ -2285,22 +1954,5 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
   </customwidget>
  </customwidgets>
  <resources/>
- <connections>
-  <connection>
-   <sender>txt_new_allowed_value</sender>
-   <signal>returnPressed()</signal>
-   <receiver>pb_add_value</receiver>
-   <slot>click()</slot>
-   <hints>
-    <hint type="sourcelabel">
-     <x>604</x>
-     <y>397</y>
-    </hint>
-    <hint type="destinationlabel">
-     <x>646</x>
-     <y>399</y>
-    </hint>
-   </hints>
-  </connection>
- </connections>
+ <connections/>
 </ui>
