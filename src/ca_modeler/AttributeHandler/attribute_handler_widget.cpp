@@ -148,14 +148,20 @@ void AttributeHandlerWidget::on_pb_remove_value_released()
 
 void AttributeHandlerWidget::on_lw_cell_attributes_itemSelectionChanged()
 {
-  m_curr_lw_attribute = ui->lw_cell_attributes;
-  ui->lw_model_attributes->clearSelection();
-  LoadAttributesProperties(ui->lw_cell_attributes->currentItem());
+  QListWidgetItem *curr_item = ui->lw_cell_attributes->currentItem();
+  if (curr_item){
+    m_curr_lw_attribute = ui->lw_cell_attributes;
+    ui->lw_model_attributes->clearSelection();
+    LoadAttributesProperties(curr_item);
+  }
 }
 
 void AttributeHandlerWidget::on_lw_model_attributes_itemSelectionChanged()
 {
-  m_curr_lw_attribute = ui->lw_model_attributes;
-  ui->lw_cell_attributes->clearSelection();
-  LoadAttributesProperties(ui->lw_model_attributes->currentItem());
+  QListWidgetItem *curr_item = ui->lw_model_attributes->currentItem();
+  if (curr_item){
+    m_curr_lw_attribute = ui->lw_model_attributes;
+    ui->lw_cell_attributes->clearSelection();
+    LoadAttributesProperties(curr_item);
+  }
 }
