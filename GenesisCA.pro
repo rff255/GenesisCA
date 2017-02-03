@@ -21,7 +21,8 @@ DEFINES += QT_DEPRECATED_WARNINGS
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
 INCLUDEPATH += \
- src/ca_modeler/AttributeHandler/
+ src/ca_modeler/AttributeHandler/ \
+ src/ca_modeler/GlobalPropertiesHandler/
 
 SOURCES += \
   src/main.cpp \
@@ -33,7 +34,8 @@ SOURCES += \
     src/ca_model/neighborhood.cpp \
     src/ca_model/partition.cpp \
     src/ca_model/breakcase.cpp \
-    src/ca_modeler/AttributeHandler/attribute_handler_widget.cpp
+    src/ca_modeler/AttributeHandler/attribute_handler_widget.cpp \
+    src/ca_modeler/GlobalPropertiesHandler/global_properties_handler_widget.cpp
 
 HEADERS  += \
   src/ca_modeler/ca_modeler_gui.h \
@@ -45,8 +47,10 @@ HEADERS  += \
     src/ca_model/neighborhood.h \
     src/ca_model/partition.h \
     src/ca_model/breakcase.h \
-    src/ca_modeler/AttributeHandler/attribute_handler_widget.h
+    src/ca_modeler/AttributeHandler/attribute_handler_widget.h \
+    src/ca_modeler/GlobalPropertiesHandler/global_properties_handler_widget.h
 
 FORMS    += \
   src/ca_modeler/ca_modeler_gui.ui \
-    src/ca_modeler/AttributeHandler/attribute_handler_widget.ui
+    src/ca_modeler/AttributeHandler/attribute_handler_widget.ui \
+    src/ca_modeler/GlobalPropertiesHandler/global_properties_handler_widget.ui

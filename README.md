@@ -1,1 +1,11 @@
-# GenesisCA
+# GenesisCA 
+- Interface to aid the study and creation of Cellular Automata (CA)
+- Focused on creation of new CA models, by experimentation
+- Based on Visual Programing Language (VPL)
+- Supporting:
+  - *Different cell attributes:* Bool, Numerical, User Defined
+  - *Different neighborhoods:* user defines the shape and the number of neighborhoods
+  - *Different Partitions:* especially useful to Block CAs
+  - *Arbitrary rule definitions:* user design your own algorithm that defines the way attributes are updated, using VPL
+  - *Arbitrary input mapping:* defines ways to give a input to your model, as random, mapping the values of an image, etc...
+  - *Arbitrary output mapping:* user is able to creates different modes of visualization, mapping attributes into colors
