@@ -22,6 +22,7 @@ CAModelerGUI::~CAModelerGUI() {
 
 void CAModelerGUI::SetupWidgets() {
   // Attributes tab
+  ui->wgt_attribute_handler->ConfigureCB();
   ui->wgt_attribute_handler->ResetAttributesProperties();
 }
 

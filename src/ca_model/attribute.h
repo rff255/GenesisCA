@@ -4,22 +4,17 @@
 #include <string>
 #include <vector>
 
-enum attribute_type {
-  kBool,
-  kNumerical,
-  kList,
-  kUserDefined
-};
+static const std::vector<std::string> cb_attribute_type_values = {"Bool", "Numerical", "List", "User Defined"};
 
 struct Attribute {
   // Common properties
-  std::string     m_name;
-  attribute_type  m_type;
-  std::string     m_description;
+  std::string m_name;
+  std::string m_type;
+  std::string m_description;
 
   // List properties
-  int             m_list_length;
-  attribute_type  m_list_type;
+  int         m_list_length;
+  std::string m_list_type;
 
   // User Ddefined properties
   std::vector<std::string> m_user_defined_values;

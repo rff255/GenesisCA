@@ -189,28 +189,8 @@
          <item row="2" column="1">
           <widget class="QComboBox" name="cb_attribute_type">
            <property name="currentIndex">
-            <number>0</number>
+            <number>-1</number>
            </property>
-           <item>
-            <property name="text">
-             <string>Bool</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>Numerical</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>List</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>User Defined</string>
-            </property>
-           </item>
           </widget>
          </item>
          <item row="4" column="0" colspan="2">
@@ -257,28 +237,7 @@
           </widget>
          </item>
          <item row="1" column="1">
-          <widget class="QComboBox" name="cb_list_type">
-           <item>
-            <property name="text">
-             <string>Bool</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>Numerical</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>List</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>User Defined</string>
-            </property>
-           </item>
-          </widget>
+          <widget class="QComboBox" name="cb_list_type"/>
          </item>
         </layout>
        </widget>

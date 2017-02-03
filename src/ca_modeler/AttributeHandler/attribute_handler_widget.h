@@ -22,6 +22,7 @@ public:
   void SetupWidgets();
   void LoadAttributesProperties(QListWidgetItem* curr_item);
   void ResetAttributesProperties();
+  void ConfigureCB();
 
 public slots:
 

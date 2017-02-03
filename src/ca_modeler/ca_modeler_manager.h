@@ -16,7 +16,6 @@ public:
   CAModelerManager();
 
   // Attributes
-  attribute_type AttrTypeFromStr(std::string string_type);
   void AddAttribute(QListWidgetItem* corresponding_item, bool isCellAttribute);
   void RemoveAttribute(QListWidgetItem* target_item, bool isCellAttribute);
   void ModifyAttribute(QListWidgetItem* target_item,

@@ -29,10 +29,11 @@ void AttributeHandlerWidget::LoadAttributesProperties(QListWidgetItem* curr_item
   Attribute* curr_attribute = m_modeler_manager->GetAttribute(curr_item);
 
   ui->txt_attribute_name->setText(QString::fromStdString(curr_attribute->m_name));
-  ui->cb_attribute_type->setCurrentIndex((int) curr_attribute->m_type);  // TODO(figueiredo): Define combo_box values from enum values
+
+  ui->cb_attribute_type->setCurrentIndex(ui->cb_attribute_type->findText(QString::fromStdString(curr_attribute->m_type)));
   ui->txt_attribute_description->setPlainText(QString::fromStdString(curr_attribute->m_description));
   ui->sb_list_length->setValue(curr_attribute->m_list_length);
-  ui->cb_list_type->setCurrentIndex(curr_attribute->m_list_type);
+  ui->cb_list_type->setCurrentIndex(ui->cb_list_type->findText(QString::fromStdString(curr_attribute->m_list_type)));
 
   ui->lw_allowed_values->clear();
   for (int i=0; i < curr_attribute->m_user_defined_values.size(); ++i) {
@@ -51,6 +52,14 @@ void AttributeHandlerWidget::ResetAttributesProperties() {
   ui->lw_allowed_values->clear();
 
   ui->fr_attributes_properties->setEnabled(false);
+}
+
+void AttributeHandlerWidget::ConfigureCB()
+{
+  for (int i = 0; i < cb_attribute_type_values.size(); ++i) {
+    ui->cb_attribute_type->addItem(QString::fromStdString(cb_attribute_type_values[i]));
+    ui->cb_list_type->addItem(QString::fromStdString(cb_attribute_type_values[i]));
+  }
 }
 
 void AttributeHandlerWidget::on_cb_attribute_type_currentIndexChanged(const QString &arg1) {
@@ -87,6 +96,7 @@ void AttributeHandlerWidget::on_pb_add_cell_attribute_released()
   ui->lw_cell_attributes->addItem("New cell attribute");
   QListWidgetItem* new_item = ui->lw_cell_attributes->item(ui->lw_cell_attributes->count() - 1);
   m_modeler_manager->AddAttribute(new_item, true);
+  ui->lw_cell_attributes->setCurrentRow(ui->lw_cell_attributes->count()-1);
 }
 
 void AttributeHandlerWidget::on_pb_add_model_attribute_released()
@@ -94,6 +104,7 @@ void AttributeHandlerWidget::on_pb_add_model_attribute_released()
   ui->lw_model_attributes->addItem("New model attribute");
   QListWidgetItem* new_item = ui->lw_model_attributes->item(ui->lw_model_attributes->count() - 1);
   m_modeler_manager->AddAttribute(new_item, false);
+  ui->lw_model_attributes->setCurrentRow(ui->lw_model_attributes->count()-1);
 }
 
 void AttributeHandlerWidget::on_pb_delete_cell_attribute_released()
@@ -134,8 +145,11 @@ void AttributeHandlerWidget::on_pb_atribute_save_modifications_released()
 
 void AttributeHandlerWidget::on_pb_add_value_released()
 {
-    ui->lw_allowed_values->addItem(ui->txt_new_allowed_value->text());
+  QString new_value = ui->txt_new_allowed_value->text();
+  if(new_value.toStdString() != "") {
+    ui->lw_allowed_values->addItem(new_value);
     ui->txt_new_allowed_value->setText(QString::fromStdString(""));
+  }
 }
 
 void AttributeHandlerWidget::on_pb_remove_value_released()
