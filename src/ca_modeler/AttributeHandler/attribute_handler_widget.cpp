@@ -58,7 +58,10 @@ void AttributeHandlerWidget::ConfigureCB()
 {
   for (int i = 0; i < cb_attribute_type_values.size(); ++i) {
     ui->cb_attribute_type->addItem(QString::fromStdString(cb_attribute_type_values[i]));
-    ui->cb_list_type->addItem(QString::fromStdString(cb_attribute_type_values[i]));
+  }
+
+  for (int i = 0; i < cb_attribute_list_type_values.size(); ++i) {
+    ui->cb_list_type->addItem(QString::fromStdString(cb_attribute_list_type_values[i]));
   }
 }
 

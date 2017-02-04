@@ -4,7 +4,8 @@
 #include <string>
 #include <vector>
 
-static const std::vector<std::string> cb_attribute_type_values = {"Bool", "Numerical", "List", "User Defined"};
+static const std::vector<std::string> cb_attribute_type_values = {"Bool", "Integer", "Float", "List", "User Defined"};
+static const std::vector<std::string> cb_attribute_list_type_values = {"Bool", "Integer", "Float", "User Defined"};
 
 struct Attribute {
   // Common properties

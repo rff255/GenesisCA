@@ -11,7 +11,7 @@ void CAModelerManager::AddAttribute(QListWidgetItem* corresponding_item, bool is
   new_attrubute->m_type = cb_attribute_type_values[0];
   new_attrubute->m_description = "";
   new_attrubute->m_list_length = 0;
-  new_attrubute->m_list_type = cb_attribute_type_values[0];
+  new_attrubute->m_list_type = cb_attribute_list_type_values[0];
 
   // Append to ca_model, and refresh manager [item->attribute] hash
   if (isCellAttribute)

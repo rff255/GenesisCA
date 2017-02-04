@@ -331,12 +331,15 @@
             <bool>true</bool>
            </property>
            <layout class="QGridLayout" name="gridLayout_19">
-            <item row="0" column="0">
-             <widget class="QLabel" name="lbl_cell_attribute_initialization">
+            <item row="3" column="0">
+             <widget class="QLabel" name="lbl_model_attribute_initialization">
               <property name="text">
-               <string>Cell Attribute initialization mapping:</string>
+               <string>Model Attribute initialization values:</string>
               </property>
              </widget>
+            </item>
+            <item row="5" column="0">
+             <widget class="QListWidget" name="lw_model_attributes_2"/>
             </item>
             <item row="1" column="0">
              <widget class="QComboBox" name="cb_cell_attribute_initialization">
@@ -347,15 +350,22 @@
               </item>
              </widget>
             </item>
-            <item row="2" column="0">
-             <widget class="QLabel" name="lbl_model_attribute_initialization">
+            <item row="0" column="0">
+             <widget class="QLabel" name="lbl_cell_attribute_initialization">
               <property name="text">
-               <string>Model Attribute initialization values:</string>
+               <string>Cell Attribute initialization mapping:</string>
               </property>
              </widget>
             </item>
-            <item row="3" column="0">
-             <widget class="QListWidget" name="lw_model_attributes_2"/>
+            <item row="2" column="0">
+             <widget class="Line" name="line">
+              <property name="frameShadow">
+               <enum>QFrame::Raised</enum>
+              </property>
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+             </widget>
             </item>
            </layout>
           </widget>
