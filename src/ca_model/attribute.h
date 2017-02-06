@@ -19,6 +19,9 @@ struct Attribute {
 
   // User Ddefined properties
   std::vector<std::string> m_user_defined_values;
+
+  // Model Attributes properties
+  std::string m_init_value;
 };
 
 #endif // ATTRIBUTE_H

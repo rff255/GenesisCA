@@ -28,6 +28,7 @@ void CAModelerGUI::SetupWidgets() {
 
 void CAModelerGUI::PassManager() {
   ui->wgt_attribute_handler->set_m_modeler_manager(m_modeler_manager);
+  ui->wgt_global_properties_handler->set_m_modeler_manager(m_modeler_manager);
 }
 
 // Slots:

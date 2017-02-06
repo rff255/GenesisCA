@@ -89,7 +89,7 @@ background: rgb(240, 240, 240);
          <number>0</number>
         </property>
         <item>
-         <widget class="GlobalPropertiesHandlerWidget" name="widget" native="true"/>
+         <widget class="GlobalPropertiesHandlerWidget" name="wgt_global_properties_handler" native="true"/>
         </item>
        </layout>
       </widget>

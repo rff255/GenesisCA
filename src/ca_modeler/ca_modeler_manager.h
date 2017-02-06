@@ -26,6 +26,8 @@ public:
     return m_attributes_hash.value(target_item);
   }
 
+  const std::vector<Attribute*> GetModelAttributeList() {return m_ca_model->get_m_model_attributes();}
+
 private:
   CAModel *m_ca_model;
 

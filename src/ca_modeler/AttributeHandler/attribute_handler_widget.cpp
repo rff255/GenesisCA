@@ -12,6 +12,10 @@ AttributeHandlerWidget::AttributeHandlerWidget(QWidget *parent) :
 
   // Setup widgets
   SetupWidgets();
+
+  // Connect Signals and Slots
+  connect(ui->pb_add_cell_attribute, SIGNAL(released()), this, SIGNAL(AttributeChanged()));
+  //TODO(figueiredo): connect all attribute change to signal attribute changed
 }
 
 AttributeHandlerWidget::~AttributeHandlerWidget()
@@ -54,8 +58,7 @@ void AttributeHandlerWidget::ResetAttributesProperties() {
   ui->fr_attributes_properties->setEnabled(false);
 }
 
-void AttributeHandlerWidget::ConfigureCB()
-{
+void AttributeHandlerWidget::ConfigureCB() {
   for (int i = 0; i < cb_attribute_type_values.size(); ++i) {
     ui->cb_attribute_type->addItem(QString::fromStdString(cb_attribute_type_values[i]));
   }
@@ -99,6 +102,7 @@ void AttributeHandlerWidget::on_pb_add_cell_attribute_released()
   ui->lw_cell_attributes->addItem("New cell attribute");
   QListWidgetItem* new_item = ui->lw_cell_attributes->item(ui->lw_cell_attributes->count() - 1);
   m_modeler_manager->AddAttribute(new_item, true);
+
   ui->lw_cell_attributes->setCurrentRow(ui->lw_cell_attributes->count()-1);
 }
 

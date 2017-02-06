@@ -35,7 +35,8 @@ SOURCES += \
     src/ca_model/partition.cpp \
     src/ca_model/breakcase.cpp \
     src/ca_modeler/AttributeHandler/attribute_handler_widget.cpp \
-    src/ca_modeler/GlobalPropertiesHandler/global_properties_handler_widget.cpp
+    src/ca_modeler/GlobalPropertiesHandler/global_properties_handler_widget.cpp \
+    src/ca_modeler/GlobalPropertiesHandler/model_attr_init_value.cpp
 
 HEADERS  += \
   src/ca_modeler/ca_modeler_gui.h \
@@ -48,9 +49,11 @@ HEADERS  += \
     src/ca_model/partition.h \
     src/ca_model/breakcase.h \
     src/ca_modeler/AttributeHandler/attribute_handler_widget.h \
-    src/ca_modeler/GlobalPropertiesHandler/global_properties_handler_widget.h
+    src/ca_modeler/GlobalPropertiesHandler/global_properties_handler_widget.h \
+    src/ca_modeler/GlobalPropertiesHandler/model_attr_init_value.h
 
 FORMS    += \
   src/ca_modeler/ca_modeler_gui.ui \
     src/ca_modeler/AttributeHandler/attribute_handler_widget.ui \
-    src/ca_modeler/GlobalPropertiesHandler/global_properties_handler_widget.ui
+    src/ca_modeler/GlobalPropertiesHandler/global_properties_handler_widget.ui \
+    src/ca_modeler/GlobalPropertiesHandler/model_attr_init_value.ui

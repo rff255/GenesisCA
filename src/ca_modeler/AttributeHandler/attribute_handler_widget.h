@@ -49,6 +49,9 @@ private slots:
 
   void on_lw_model_attributes_itemSelectionChanged();
 
+signals:
+  void AttributeChanged();
+
 private:
   Ui::AttributeHandlerWidget *ui;
   CAModelerManager* m_modeler_manager;

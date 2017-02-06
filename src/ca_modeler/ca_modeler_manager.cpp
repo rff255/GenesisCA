@@ -16,8 +16,9 @@ void CAModelerManager::AddAttribute(QListWidgetItem* corresponding_item, bool is
   // Append to ca_model, and refresh manager [item->attribute] hash
   if (isCellAttribute)
     m_ca_model->AppendCellAttribute(new_attrubute);
-  else
+  else {
     m_ca_model->AppendModelAttribute(new_attrubute);
+  }
 
   m_attributes_hash.insert(corresponding_item, new_attrubute);
 }

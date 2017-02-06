@@ -32,6 +32,9 @@ public:
   }
 
 
+  const std::vector<Attribute*> get_m_model_attributes() {return m_model_attributes;}
+
+
 private:
   ModelProperties*           m_model_properties;
   std::vector<Attribute*>    m_cell_attributes;
