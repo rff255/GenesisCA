@@ -13,6 +13,10 @@ CAModelerGUI::CAModelerGUI(QWidget *parent) :
 
     // Pass manager reference to promoted widgets
     PassManager();
+
+    // Connect Signals and Slots
+    // Attribute change results in refresh general properties attr model initialize list
+    connect(ui->wgt_attribute_handler, SIGNAL(AttributeChanged()), ui->wgt_global_properties_handler, SLOT(RefreshModelAttributesInitList()));
 }
 
 CAModelerGUI::~CAModelerGUI() {

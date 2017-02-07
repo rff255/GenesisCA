@@ -32,7 +32,6 @@ private:
   CAModel *m_ca_model;
 
   QHash<QListWidgetItem*, Attribute*>    m_attributes_hash;
-  QHash<QListWidgetItem*, Attribute*>    m_model_attributes;
   QHash<QListWidgetItem*, Neighborhood*> m_neighborhoods;
   QHash<QListWidgetItem*, Partition*>    m_partitions;
   QHash<QListWidgetItem*, GraphNode*>    m_update_rules;

@@ -15,7 +15,10 @@ AttributeHandlerWidget::AttributeHandlerWidget(QWidget *parent) :
 
   // Connect Signals and Slots
   connect(ui->pb_add_cell_attribute, SIGNAL(released()), this, SIGNAL(AttributeChanged()));
-  //TODO(figueiredo): connect all attribute change to signal attribute changed
+  connect(ui->pb_add_model_attribute, SIGNAL(released()), this, SIGNAL(AttributeChanged()));
+  connect(ui->pb_delete_cell_attribute, SIGNAL(released()), this, SIGNAL(AttributeChanged()));
+  connect(ui->pb_delete_model_attribute, SIGNAL(released()), this, SIGNAL(AttributeChanged()));
+  connect(ui->pb_atribute_save_modifications, SIGNAL(released()), this, SIGNAL(AttributeChanged()));
 }
 
 AttributeHandlerWidget::~AttributeHandlerWidget()
@@ -73,8 +76,12 @@ void AttributeHandlerWidget::on_cb_attribute_type_currentIndexChanged(const QStr
 
   if(option == "List") {
     ui->gb_list_properties->setEnabled(true);
-    bool user_defined = (ui->cb_list_type->currentText().toStdString() == "User Defined");
-    ui->gb_user_defined_properties->setEnabled(user_defined);
+    if(ui->cb_list_type->currentText().toStdString() == "User Defined")
+      ui->gb_user_defined_properties->setEnabled(true);
+    else {
+      ui->gb_user_defined_properties->setEnabled(true);
+      ui->lw_allowed_values->clear();
+    }
 
   } else if (option == "User Defined"){
     ui->gb_list_properties->setEnabled(false);
@@ -83,6 +90,7 @@ void AttributeHandlerWidget::on_cb_attribute_type_currentIndexChanged(const QStr
   } else {
     ui->gb_list_properties->setEnabled(false);
     ui->gb_user_defined_properties->setEnabled(false);
+    ui->lw_allowed_values->clear();
   }
 }
 

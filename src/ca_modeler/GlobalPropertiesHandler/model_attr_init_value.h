@@ -1,6 +1,8 @@
 #ifndef MODEL_ATTR_INIT_VALUE_H
 #define MODEL_ATTR_INIT_VALUE_H
 
+#include "../../ca_model/attribute.h"
+
 #include <QWidget>
 
 #include <string>
@@ -18,7 +20,7 @@ public:
   ~ModelAttrInitValue();
 
   void SetAttrName(std::string new_name);
-  void SetupWidgetType(std::string attr_type);
+  void SetWidgetDetails(Attribute* corresponding_attribute);
 
 private slots:
 
