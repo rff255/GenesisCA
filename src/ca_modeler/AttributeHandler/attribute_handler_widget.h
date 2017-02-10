@@ -17,16 +17,21 @@ public:
   explicit AttributeHandlerWidget(QWidget *parent = 0);
   ~AttributeHandlerWidget();
 
+  void SetupWidgets();
+  void ConfigureCB();
+  void ResetAttributesProperties();
+
   void set_m_modeler_manager(CAModelerManager* modeler_manager) {m_modeler_manager = modeler_manager;}
 
-  void SetupWidgets();
+private:
   void LoadAttributesProperties(QListWidgetItem* curr_item);
-  void ResetAttributesProperties();
-  void ConfigureCB();
 
 public slots:
 
 private slots:
+
+  void SaveAttributeModifications();
+
   void on_cb_attribute_type_currentIndexChanged(const QString &arg1);
 
   void on_cb_list_type_currentIndexChanged(const QString &arg1);
@@ -34,8 +39,6 @@ private slots:
   void on_pb_add_cell_attribute_released();
 
   void on_pb_delete_cell_attribute_released();
-
-  void on_pb_atribute_save_modifications_released();
 
   void on_pb_add_model_attribute_released();
 
@@ -58,6 +61,7 @@ private:
 
   // Control members
   QListWidget* m_curr_lw_attribute;
+  bool m_is_loading;
 };
 
 #endif // ATTRIBUTE_HANDLER_WIDGET_H

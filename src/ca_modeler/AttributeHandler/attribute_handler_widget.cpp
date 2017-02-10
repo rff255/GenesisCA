@@ -3,8 +3,9 @@
 
 AttributeHandlerWidget::AttributeHandlerWidget(QWidget *parent) :
   QWidget(parent),
-  ui(new Ui::AttributeHandlerWidget)
-{
+  ui(new Ui::AttributeHandlerWidget),
+  m_is_loading(true) {
+
   ui->setupUi(this);
 
   // Initialize control members
@@ -14,11 +15,13 @@ AttributeHandlerWidget::AttributeHandlerWidget(QWidget *parent) :
   SetupWidgets();
 
   // Connect Signals and Slots
-  connect(ui->pb_add_cell_attribute, SIGNAL(released()), this, SIGNAL(AttributeChanged()));
-  connect(ui->pb_add_model_attribute, SIGNAL(released()), this, SIGNAL(AttributeChanged()));
-  connect(ui->pb_delete_cell_attribute, SIGNAL(released()), this, SIGNAL(AttributeChanged()));
-  connect(ui->pb_delete_model_attribute, SIGNAL(released()), this, SIGNAL(AttributeChanged()));
-  connect(ui->pb_atribute_save_modifications, SIGNAL(released()), this, SIGNAL(AttributeChanged()));
+  connect(ui->txt_attribute_name, SIGNAL(editingFinished()), this, SLOT(SaveAttributeModifications()));
+  connect(ui->cb_attribute_type, SIGNAL(activated(int)), this, SLOT(SaveAttributeModifications()));
+  connect(ui->txt_attribute_description, SIGNAL(textChanged()), this, SLOT(SaveAttributeModifications()));
+  connect(ui->sb_list_length, SIGNAL(valueChanged(int)), this, SLOT(SaveAttributeModifications()));
+  connect(ui->cb_list_type, SIGNAL(activated(int)), this, SLOT(SaveAttributeModifications()));
+  connect(ui->lw_allowed_values->model(), SIGNAL(rowsInserted(QModelIndex,int,int)), this, SLOT(SaveAttributeModifications()));
+  connect(ui->lw_allowed_values->model(), SIGNAL(rowsRemoved(QModelIndex,int,int)), this, SLOT(SaveAttributeModifications()));
 }
 
 AttributeHandlerWidget::~AttributeHandlerWidget()
@@ -31,7 +34,8 @@ void AttributeHandlerWidget::SetupWidgets() {
 }
 
 void AttributeHandlerWidget::LoadAttributesProperties(QListWidgetItem* curr_item) {
-  ResetAttributesProperties();
+  m_is_loading = true;
+  //ResetAttributesProperties();
 
   Attribute* curr_attribute = m_modeler_manager->GetAttribute(curr_item);
 
@@ -48,9 +52,31 @@ void AttributeHandlerWidget::LoadAttributesProperties(QListWidgetItem* curr_item
   }
 
   ui->fr_attributes_properties->setEnabled(true);
+  m_is_loading = false;
+}
+
+void AttributeHandlerWidget::SaveAttributeModifications()
+{
+  if(m_is_loading)
+    return;
+  QListWidgetItem* curr_item = m_curr_lw_attribute->currentItem();
+  if(curr_item) {
+    curr_item->setText(ui->txt_attribute_name->text());
+    m_modeler_manager->ModifyAttribute(curr_item,
+                                       ui->txt_attribute_name->text().toStdString(),
+                                       ui->cb_attribute_type->currentText().toStdString(),
+                                       ui->txt_attribute_description->toPlainText().toStdString(),
+                                       ui->sb_list_length->value(),
+                                       ui->cb_list_type->currentText().toStdString(),
+                                       ui->lw_allowed_values);
+    emit AttributeChanged();
+  }
 }
 
 void AttributeHandlerWidget::ResetAttributesProperties() {
+  ui->lw_cell_attributes->clearSelection();
+  ui->lw_model_attributes->clearSelection();
+
   ui->txt_attribute_name->setText(QString::fromStdString(""));
   ui->cb_attribute_type->setCurrentIndex(0);
   ui->txt_attribute_description->setPlainText(QString::fromStdString(""));
@@ -76,10 +102,11 @@ void AttributeHandlerWidget::on_cb_attribute_type_currentIndexChanged(const QStr
 
   if(option == "List") {
     ui->gb_list_properties->setEnabled(true);
+
     if(ui->cb_list_type->currentText().toStdString() == "User Defined")
       ui->gb_user_defined_properties->setEnabled(true);
     else {
-      ui->gb_user_defined_properties->setEnabled(true);
+      ui->gb_user_defined_properties->setEnabled(false);
       ui->lw_allowed_values->clear();
     }
 
@@ -100,26 +127,29 @@ void AttributeHandlerWidget::on_cb_list_type_currentIndexChanged(const QString &
   if (option == "User Defined"){
     ui->gb_user_defined_properties->setEnabled(true);
 
-  } else {
+  } else if (ui->cb_attribute_type->currentText().toStdString() != "User Defined"){
     ui->gb_user_defined_properties->setEnabled(false);
   }
 }
 
-void AttributeHandlerWidget::on_pb_add_cell_attribute_released()
-{
+void AttributeHandlerWidget::on_pb_add_cell_attribute_released() {
   ui->lw_cell_attributes->addItem("New cell attribute");
   QListWidgetItem* new_item = ui->lw_cell_attributes->item(ui->lw_cell_attributes->count() - 1);
   m_modeler_manager->AddAttribute(new_item, true);
 
   ui->lw_cell_attributes->setCurrentRow(ui->lw_cell_attributes->count()-1);
+
+  emit AttributeChanged();
 }
 
-void AttributeHandlerWidget::on_pb_add_model_attribute_released()
-{
+void AttributeHandlerWidget::on_pb_add_model_attribute_released() {
   ui->lw_model_attributes->addItem("New model attribute");
   QListWidgetItem* new_item = ui->lw_model_attributes->item(ui->lw_model_attributes->count() - 1);
   m_modeler_manager->AddAttribute(new_item, false);
+
   ui->lw_model_attributes->setCurrentRow(ui->lw_model_attributes->count()-1);
+
+  emit AttributeChanged();
 }
 
 void AttributeHandlerWidget::on_pb_delete_cell_attribute_released()
@@ -129,6 +159,8 @@ void AttributeHandlerWidget::on_pb_delete_cell_attribute_released()
     m_modeler_manager->RemoveAttribute(curr_item, true);
     delete curr_item;
     ResetAttributesProperties();
+
+    emit AttributeChanged();
   }
 }
 
@@ -139,22 +171,8 @@ void AttributeHandlerWidget::on_pb_delete_model_attribute_released()
     m_modeler_manager->RemoveAttribute(curr_item, false);
     delete curr_item;
     ResetAttributesProperties();
-  }
-}
 
-void AttributeHandlerWidget::on_pb_atribute_save_modifications_released()
-{
-  QListWidgetItem* curr_item = m_curr_lw_attribute->currentItem();
-  if(curr_item) {
-    curr_item->setText(ui->txt_attribute_name->text());
-    m_modeler_manager->ModifyAttribute(curr_item,
-                                       ui->txt_attribute_name->text().toStdString(),
-                                       ui->cb_attribute_type->currentText().toStdString(),
-                                       ui->txt_attribute_description->toPlainText().toStdString(),
-                                       ui->sb_list_length->value(),
-                                       ui->cb_list_type->currentText().toStdString(),
-                                       ui->lw_allowed_values);
-
+    emit AttributeChanged();
   }
 }
 
@@ -188,7 +206,8 @@ void AttributeHandlerWidget::on_lw_cell_attributes_itemSelectionChanged()
 void AttributeHandlerWidget::on_lw_model_attributes_itemSelectionChanged()
 {
   QListWidgetItem *curr_item = ui->lw_model_attributes->currentItem();
-  if (curr_item){
+  if (curr_item) {
+    m_is_loading = true;
     m_curr_lw_attribute = ui->lw_model_attributes;
     ui->lw_cell_attributes->clearSelection();
     LoadAttributesProperties(curr_item);
