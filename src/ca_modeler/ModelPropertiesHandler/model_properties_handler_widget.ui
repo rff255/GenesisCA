@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>GlobalPropertiesHandlerWidget</class>
- <widget class="QWidget" name="GlobalPropertiesHandlerWidget">
+ <class>ModelPropertiesHandlerWidget</class>
+ <widget class="QWidget" name="ModelPropertiesHandlerWidget">
   <property name="geometry">
    <rect>
     <x>0</x>
@@ -54,21 +54,21 @@
      </property>
      <layout class="QGridLayout" name="gridLayout_31">
       <item row="0" column="0">
-       <widget class="QLabel" name="lbl_model_name">
+       <widget class="QLabel" name="lbl_name">
         <property name="text">
          <string>Name:</string>
         </property>
        </widget>
       </item>
       <item row="0" column="1">
-       <widget class="QLineEdit" name="txt_model_name">
+       <widget class="QLineEdit" name="txt_name">
         <property name="text">
          <string/>
         </property>
        </widget>
       </item>
       <item row="1" column="0">
-       <widget class="QLabel" name="lbl_model_author">
+       <widget class="QLabel" name="lbl_author">
         <property name="text">
          <string>Author:</string>
         </property>
@@ -82,7 +82,7 @@
        </widget>
       </item>
       <item row="2" column="0">
-       <widget class="QLabel" name="lbl_model_goal">
+       <widget class="QLabel" name="lbl_goal">
         <property name="text">
          <string>Goal:</string>
         </property>
@@ -96,14 +96,14 @@
        </widget>
       </item>
       <item row="4" column="0" colspan="2">
-       <widget class="QLabel" name="lbl_model_description">
+       <widget class="QLabel" name="lbl_description">
         <property name="text">
          <string>Description:</string>
         </property>
        </widget>
       </item>
       <item row="5" column="0" colspan="2">
-       <widget class="QPlainTextEdit" name="txt_model_description">
+       <widget class="QPlainTextEdit" name="txt_description">
         <property name="minimumSize">
          <size>
           <width>0</width>
@@ -178,26 +178,11 @@
          <item row="0" column="1">
           <widget class="QComboBox" name="cb_topology">
            <property name="currentText">
-            <string>Squares</string>
+            <string/>
            </property>
            <property name="currentIndex">
-            <number>1</number>
+            <number>-1</number>
            </property>
-           <item>
-            <property name="text">
-             <string>Triangles</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>Squares</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>Hexagons</string>
-            </property>
-           </item>
           </widget>
          </item>
          <item row="0" column="0">
@@ -210,25 +195,15 @@
          <item row="1" column="0">
           <widget class="QLabel" name="lbl_border_treatment">
            <property name="text">
-            <string>Border Treatment:</string>
+            <string>Boundary Treatment:</string>
            </property>
           </widget>
          </item>
          <item row="1" column="1">
-          <widget class="QComboBox" name="cb_border_treatment">
+          <widget class="QComboBox" name="cb_boundary_treatment">
            <property name="currentIndex">
-            <number>0</number>
+            <number>-1</number>
            </property>
-           <item>
-            <property name="text">
-             <string>Constant</string>
-            </property>
-           </item>
-           <item>
-            <property name="text">
-             <string>Torus</string>
-            </property>
-           </item>
           </widget>
          </item>
          <item row="0" column="2" rowspan="2">
@@ -332,7 +307,7 @@
            </property>
            <layout class="QGridLayout" name="gridLayout_19">
             <item row="3" column="0">
-             <widget class="QLabel" name="lbl_model_attribute_initialization">
+             <widget class="QLabel" name="lbl_model_attr_init">
               <property name="text">
                <string>Model Attribute initialization values:</string>
               </property>
@@ -342,16 +317,10 @@
              <widget class="QListWidget" name="lw_init_model_attributes"/>
             </item>
             <item row="1" column="0">
-             <widget class="QComboBox" name="cb_cell_attribute_initialization">
-              <item>
-               <property name="text">
-                <string>[default] attributes with type defaults</string>
-               </property>
-              </item>
-             </widget>
+             <widget class="QComboBox" name="cb_cell_attr_init"/>
             </item>
             <item row="0" column="0">
-             <widget class="QLabel" name="lbl_cell_attribute_initialization">
+             <widget class="QLabel" name="lbl_cell_attr_init">
               <property name="text">
                <string>Cell Attribute initialization mapping:</string>
               </property>
@@ -386,7 +355,7 @@
            </property>
            <layout class="QGridLayout" name="gridLayout_20">
             <item row="0" column="0" colspan="2">
-             <widget class="QGroupBox" name="gb_max_interations">
+             <widget class="QGroupBox" name="gb_max_iterations">
               <property name="title">
                <string>Max of iterations</string>
               </property>
@@ -408,7 +377,7 @@
                 </widget>
                </item>
                <item row="0" column="1">
-                <widget class="QSpinBox" name="sb_limit">
+                <widget class="QSpinBox" name="sb_max_iterations">
                  <property name="minimum">
                   <number>1</number>
                  </property>

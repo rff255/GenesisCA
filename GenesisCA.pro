@@ -22,7 +22,7 @@ DEFINES += QT_DEPRECATED_WARNINGS
 
 INCLUDEPATH += \
  src/ca_modeler/AttributeHandler/ \
- src/ca_modeler/GlobalPropertiesHandler/
+ src/ca_modeler/ModelPropertiesHandler/
 
 SOURCES += \
   src/main.cpp \
@@ -30,13 +30,11 @@ SOURCES += \
   src/ca_modeler/ca_modeler_manager.cpp \
   src/ca_model/ca_model.cpp \
     src/ca_model/graph_node.cpp \
-    src/ca_model/model_properties.cpp \
     src/ca_model/neighborhood.cpp \
     src/ca_model/partition.cpp \
-    src/ca_model/breakcase.cpp \
     src/ca_modeler/AttributeHandler/attribute_handler_widget.cpp \
-    src/ca_modeler/GlobalPropertiesHandler/global_properties_handler_widget.cpp \
-    src/ca_modeler/GlobalPropertiesHandler/model_attr_init_value.cpp
+    src/ca_modeler/ModelPropertiesHandler/model_properties_handler_widget.cpp \
+    src/ca_modeler/ModelPropertiesHandler/model_attr_init_value.cpp
 
 HEADERS  += \
   src/ca_modeler/ca_modeler_gui.h \
@@ -47,13 +45,13 @@ HEADERS  += \
     src/ca_model/attribute.h \
     src/ca_model/neighborhood.h \
     src/ca_model/partition.h \
-    src/ca_model/breakcase.h \
     src/ca_modeler/AttributeHandler/attribute_handler_widget.h \
-    src/ca_modeler/GlobalPropertiesHandler/global_properties_handler_widget.h \
-    src/ca_modeler/GlobalPropertiesHandler/model_attr_init_value.h
+    src/ca_modeler/ModelPropertiesHandler/model_properties_handler_widget.h \
+    src/ca_modeler/ModelPropertiesHandler/model_attr_init_value.h \
+    src/ca_model/break_case.h
 
 FORMS    += \
   src/ca_modeler/ca_modeler_gui.ui \
     src/ca_modeler/AttributeHandler/attribute_handler_widget.ui \
-    src/ca_modeler/GlobalPropertiesHandler/global_properties_handler_widget.ui \
-    src/ca_modeler/GlobalPropertiesHandler/model_attr_init_value.ui
+    src/ca_modeler/ModelPropertiesHandler/model_attr_init_value.ui \
+    src/ca_modeler/ModelPropertiesHandler/model_properties_handler_widget.ui

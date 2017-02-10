@@ -68,7 +68,7 @@ background: rgb(240, 240, 240);
       <property name="movable">
        <bool>true</bool>
       </property>
-      <widget class="QWidget" name="tab_global_properties">
+      <widget class="QWidget" name="tab_model_properties">
        <attribute name="title">
         <string>Model Properties</string>
        </attribute>
@@ -89,7 +89,7 @@ background: rgb(240, 240, 240);
          <number>0</number>
         </property>
         <item>
-         <widget class="GlobalPropertiesHandlerWidget" name="wgt_global_properties_handler" native="true"/>
+         <widget class="ModelPropertiesHandlerWidget" name="wgt_model_properties_handler" native="true"/>
         </item>
        </layout>
       </widget>
@@ -1526,9 +1526,9 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
    <container>1</container>
   </customwidget>
   <customwidget>
-   <class>GlobalPropertiesHandlerWidget</class>
+   <class>ModelPropertiesHandlerWidget</class>
    <extends>QWidget</extends>
-   <header>global_properties_handler_widget.h</header>
+   <header>model_properties_handler_widget.h</header>
    <container>1</container>
   </customwidget>
  </customwidgets>

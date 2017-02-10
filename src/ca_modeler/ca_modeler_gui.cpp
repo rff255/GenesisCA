@@ -16,7 +16,7 @@ CAModelerGUI::CAModelerGUI(QWidget *parent) :
 
     // Connect Signals and Slots
     // Attribute change results in refresh general properties attr model initialize list
-    connect(ui->wgt_attribute_handler, SIGNAL(AttributeChanged()), ui->wgt_global_properties_handler, SLOT(RefreshModelAttributesInitList()));
+    connect(ui->wgt_attribute_handler, SIGNAL(AttributeChanged()), ui->wgt_model_properties_handler, SLOT(RefreshModelAttributesInitList()));
 }
 
 CAModelerGUI::~CAModelerGUI() {
@@ -28,11 +28,14 @@ void CAModelerGUI::SetupWidgets() {
   // Attributes tab
   ui->wgt_attribute_handler->ConfigureCB();
   ui->wgt_attribute_handler->ResetAttributesProperties();
+
+  // Model Properties tab
+  ui->wgt_model_properties_handler->ConfigureCB();
 }
 
 void CAModelerGUI::PassManager() {
   ui->wgt_attribute_handler->set_m_modeler_manager(m_modeler_manager);
-  ui->wgt_global_properties_handler->set_m_modeler_manager(m_modeler_manager);
+  ui->wgt_model_properties_handler->set_m_modeler_manager(m_modeler_manager);
 }
 
 // Slots:

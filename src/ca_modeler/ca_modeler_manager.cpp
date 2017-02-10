@@ -51,3 +51,14 @@ void CAModelerManager::ModifyAttribute(QListWidgetItem* target_item,
   }
 }
 
+void CAModelerManager::ModifyModelProperties(
+    const std::string &name, const std::string &author, const std::string &goal, const std::string &description,
+    const std::string &topology, const std::string &boundary_treatment, bool is_fixed_size, int size_width, int size_height,
+    const std::string &cell_attribute_initialization, bool has_max_iterations, int max_iterations) {
+
+  m_ca_model->ModifyModelProperties(name, author, goal, description, topology, boundary_treatment,
+                                    is_fixed_size, size_width, size_height, cell_attribute_initialization,
+                                    has_max_iterations, max_iterations);
+  // TODO(figueiredo): add Break cases into scheme
+}
+

@@ -15,13 +15,13 @@ AttributeHandlerWidget::AttributeHandlerWidget(QWidget *parent) :
   SetupWidgets();
 
   // Connect Signals and Slots
-  connect(ui->txt_attribute_name, SIGNAL(editingFinished()), this, SLOT(SaveAttributeModifications()));
-  connect(ui->cb_attribute_type, SIGNAL(activated(int)), this, SLOT(SaveAttributeModifications()));
-  connect(ui->txt_attribute_description, SIGNAL(textChanged()), this, SLOT(SaveAttributeModifications()));
-  connect(ui->sb_list_length, SIGNAL(valueChanged(int)), this, SLOT(SaveAttributeModifications()));
-  connect(ui->cb_list_type, SIGNAL(activated(int)), this, SLOT(SaveAttributeModifications()));
-  connect(ui->lw_allowed_values->model(), SIGNAL(rowsInserted(QModelIndex,int,int)), this, SLOT(SaveAttributeModifications()));
-  connect(ui->lw_allowed_values->model(), SIGNAL(rowsRemoved(QModelIndex,int,int)), this, SLOT(SaveAttributeModifications()));
+  connect(ui->txt_attribute_name,         SIGNAL(editingFinished()),                  this, SLOT(SaveAttributeModifications()));
+  connect(ui->cb_attribute_type,          SIGNAL(activated(int)),                     this, SLOT(SaveAttributeModifications()));
+  connect(ui->txt_attribute_description,  SIGNAL(textChanged()),                      this, SLOT(SaveAttributeModifications()));
+  connect(ui->sb_list_length,             SIGNAL(valueChanged(int)),                  this, SLOT(SaveAttributeModifications()));
+  connect(ui->cb_list_type,               SIGNAL(activated(int)),                     this, SLOT(SaveAttributeModifications()));
+  connect(ui->lw_allowed_values->model(), SIGNAL(rowsInserted(QModelIndex,int,int)),  this, SLOT(SaveAttributeModifications()));
+  connect(ui->lw_allowed_values->model(), SIGNAL(rowsRemoved(QModelIndex,int,int)),   this, SLOT(SaveAttributeModifications()));
 }
 
 AttributeHandlerWidget::~AttributeHandlerWidget()
@@ -207,7 +207,6 @@ void AttributeHandlerWidget::on_lw_model_attributes_itemSelectionChanged()
 {
   QListWidgetItem *curr_item = ui->lw_model_attributes->currentItem();
   if (curr_item) {
-    m_is_loading = true;
     m_curr_lw_attribute = ui->lw_model_attributes;
     ui->lw_cell_attributes->clearSelection();
     LoadAttributesProperties(curr_item);

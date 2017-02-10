@@ -15,6 +15,15 @@ class CAModelerManager
 public:
   CAModelerManager();
 
+  // General
+
+  // Model Properties
+  void ModifyModelProperties(const std::string &name, const std::string &author, const std::string &goal,
+                             const std::string &description, const std::string &topology,
+                             const std::string &boundary_treatment, bool is_fixed_size, int size_width,
+                             int size_height, const std::string &cell_attribute_initialization,
+                             bool has_max_iterations, int max_iterations);
+
   // Attributes
   void AddAttribute(QListWidgetItem* corresponding_item, bool isCellAttribute);
   void RemoveAttribute(QListWidgetItem* target_item, bool isCellAttribute);
@@ -26,7 +35,7 @@ public:
     return m_attributes_hash.value(target_item);
   }
 
-  const std::vector<Attribute*> GetModelAttributeList() {return m_ca_model->get_m_model_attributes();}
+  const std::vector<Attribute*> GetModelAttributeList() {return m_ca_model->get_m_model_attributes();}  
 
 private:
   CAModel *m_ca_model;
