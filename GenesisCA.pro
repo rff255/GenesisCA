@@ -34,7 +34,8 @@ SOURCES += \
     src/ca_model/partition.cpp \
     src/ca_modeler/AttributeHandler/attribute_handler_widget.cpp \
     src/ca_modeler/ModelPropertiesHandler/model_properties_handler_widget.cpp \
-    src/ca_modeler/ModelPropertiesHandler/model_attr_init_value.cpp
+    src/ca_modeler/ModelPropertiesHandler/model_attr_init_value.cpp \
+    src/ca_modeler/ModelPropertiesHandler/break_case_instance.cpp
 
 HEADERS  += \
   src/ca_modeler/ca_modeler_gui.h \
@@ -48,10 +49,12 @@ HEADERS  += \
     src/ca_modeler/AttributeHandler/attribute_handler_widget.h \
     src/ca_modeler/ModelPropertiesHandler/model_properties_handler_widget.h \
     src/ca_modeler/ModelPropertiesHandler/model_attr_init_value.h \
-    src/ca_model/break_case.h
+    src/ca_model/break_case.h \
+    src/ca_modeler/ModelPropertiesHandler/break_case_instance.h
 
 FORMS    += \
   src/ca_modeler/ca_modeler_gui.ui \
     src/ca_modeler/AttributeHandler/attribute_handler_widget.ui \
     src/ca_modeler/ModelPropertiesHandler/model_attr_init_value.ui \
-    src/ca_modeler/ModelPropertiesHandler/model_properties_handler_widget.ui
+    src/ca_modeler/ModelPropertiesHandler/model_properties_handler_widget.ui \
+    src/ca_modeler/ModelPropertiesHandler/break_case_instance.ui
