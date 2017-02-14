@@ -48,7 +48,7 @@
     <number>0</number>
    </property>
    <item row="0" column="0">
-    <widget class="QFrame" name="frame">
+    <widget class="QFrame" name="fr_name">
      <property name="frameShape">
       <enum>QFrame::Panel</enum>
      </property>
@@ -69,14 +69,14 @@
        <number>0</number>
       </property>
       <item>
-       <widget class="QLabel" name="lbl_value_4">
+       <widget class="QLabel" name="lbl_name">
         <property name="text">
          <string>Name:</string>
         </property>
        </widget>
       </item>
       <item>
-       <widget class="QLineEdit" name="lineEdit">
+       <widget class="QLineEdit" name="txt_name">
         <property name="styleSheet">
          <string notr="true">background-color: rgb(255, 95, 95)</string>
         </property>
@@ -126,7 +126,7 @@
        </widget>
       </item>
       <item row="1" column="2" colspan="2">
-       <widget class="QComboBox" name="comboBox">
+       <widget class="QComboBox" name="cb_amount_cells">
         <item>
          <property name="text">
           <string>Absolute</string>
@@ -140,24 +140,24 @@
        </widget>
       </item>
       <item row="0" column="3" colspan="2">
-       <widget class="QComboBox" name="comboBox_2"/>
+       <widget class="QComboBox" name="cb_selected_attribute"/>
       </item>
       <item row="0" column="0" colspan="3">
-       <widget class="QLabel" name="lbl_value_3">
+       <widget class="QLabel" name="lbl_selected_attribute">
         <property name="text">
          <string>Considered attribute:</string>
         </property>
        </widget>
       </item>
       <item row="1" column="0" colspan="2">
-       <widget class="QLabel" name="lbl_value_2">
+       <widget class="QLabel" name="lbl_amount_cells">
         <property name="text">
          <string>Amount of cells:</string>
         </property>
        </widget>
       </item>
       <item row="2" column="0" colspan="5">
-       <widget class="QGroupBox" name="groupBox">
+       <widget class="QGroupBox" name="gb_statement">
         <property name="title">
          <string>Statement</string>
         </property>
@@ -178,7 +178,7 @@
           <number>0</number>
          </property>
          <item>
-          <widget class="QStackedWidget" name="stk_type_pages">
+          <widget class="QStackedWidget" name="stk_statement_types">
            <property name="enabled">
             <bool>true</bool>
            </property>
@@ -252,7 +252,7 @@ QCheckBox#check_value::checked {
               <number>0</number>
              </property>
              <item>
-              <widget class="QComboBox" name="comboBox_3">
+              <widget class="QComboBox" name="cb_integer_check">
                <property name="sizePolicy">
                 <sizepolicy hsizetype="MinimumExpanding" vsizetype="Fixed">
                  <horstretch>0</horstretch>
@@ -277,7 +277,7 @@ QCheckBox#check_value::checked {
               </widget>
              </item>
              <item>
-              <widget class="QSpinBox" name="sb_value">
+              <widget class="QSpinBox" name="sb_integer_value">
                <property name="sizePolicy">
                 <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
                  <horstretch>0</horstretch>
@@ -312,7 +312,7 @@ QCheckBox#check_value::checked {
               <number>0</number>
              </property>
              <item>
-              <widget class="QComboBox" name="comboBox_4">
+              <widget class="QComboBox" name="cb_float_check">
                <item>
                 <property name="text">
                  <string>Equals to</string>
@@ -331,7 +331,7 @@ QCheckBox#check_value::checked {
               </widget>
              </item>
              <item>
-              <widget class="QDoubleSpinBox" name="doubleSpinBox">
+              <widget class="QDoubleSpinBox" name="sb_float_value">
                <property name="sizePolicy">
                 <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
                  <horstretch>0</horstretch>
@@ -379,7 +379,7 @@ QCheckBox#check_value::checked {
               </widget>
              </item>
              <item>
-              <widget class="QComboBox" name="cb_value"/>
+              <widget class="QComboBox" name="cb_user_defined_value"/>
              </item>
             </layout>
            </widget>
@@ -418,13 +418,12 @@ QCheckBox#check_value::checked {
        </widget>
       </item>
      </layout>
-     <zorder>groupBox</zorder>
-     <zorder>lbl_name</zorder>
-     <zorder>lbl_value_2</zorder>
-     <zorder>comboBox</zorder>
+     <zorder>gb_statement</zorder>
+     <zorder>lbl_amount_cells</zorder>
+     <zorder>cb_amount_cells</zorder>
      <zorder>spinBox</zorder>
-     <zorder>lbl_value_3</zorder>
-     <zorder>comboBox_2</zorder>
+     <zorder>lbl_selected_attribute</zorder>
+     <zorder>cb_selected_attribute</zorder>
     </widget>
    </item>
   </layout>
