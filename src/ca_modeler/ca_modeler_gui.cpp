@@ -5,14 +5,14 @@
 CAModelerGUI::CAModelerGUI(QWidget *parent) :
   QMainWindow(parent),
   ui(new Ui::CAModelerGUI),
-  m_modeler_manager(new CAModelerManager()) {
+  m_ca_model(new CAModel()) {
     ui->setupUi(this);
 
     // Setup widgets
     SetupWidgets();
 
-    // Pass manager reference to promoted widgets
-    PassManager();
+    // Pass model reference to promoted widgets
+    PassModel();
 
     // Connect Signals and Slots
     // Attribute change results in refresh general properties attr model initialize list
@@ -21,7 +21,6 @@ CAModelerGUI::CAModelerGUI(QWidget *parent) :
 
 CAModelerGUI::~CAModelerGUI() {
   delete ui;
-  delete m_modeler_manager;
 }
 
 void CAModelerGUI::SetupWidgets() {
@@ -33,9 +32,9 @@ void CAModelerGUI::SetupWidgets() {
   ui->wgt_model_properties_handler->ConfigureCB();
 }
 
-void CAModelerGUI::PassManager() {
-  ui->wgt_attribute_handler->set_m_modeler_manager(m_modeler_manager);
-  ui->wgt_model_properties_handler->set_m_modeler_manager(m_modeler_manager);
+void CAModelerGUI::PassModel() {
+  ui->wgt_attribute_handler->set_m_ca_model(m_ca_model);
+  //ui->wgt_model_properties_handler->set_m_ca_model(m_ca_model);
 }
 
 // Slots:

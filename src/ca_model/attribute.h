@@ -8,8 +8,20 @@ static const std::vector<std::string> cb_attribute_type_values = {"Bool", "Integ
 static const std::vector<std::string> cb_attribute_list_type_values = {"Bool", "Integer", "Float", "User Defined"};
 
 struct Attribute {
+  Attribute (std::string id_name, std::string type, std::string description, int list_length,
+             std::string list_type, std::vector<std::string> user_defined_values, std::string init_value) {
+    m_id_name = id_name;
+    m_type = type;
+    m_description = description;
+
+    m_list_length = list_length;
+    m_list_type   = list_type;
+
+    m_user_defined_values = user_defined_values;
+  }
+
   // Common properties
-  std::string m_name;
+  std::string m_id_name;
   std::string m_type;
   std::string m_description;
 

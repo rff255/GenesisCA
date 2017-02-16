@@ -1,13 +1,56 @@
 #include "ca_model.h"
 
-CAModel::CAModel():
-m_model_properties(new ModelProperties) {
-
+CAModel::CAModel() {
 }
 
 CAModel::~CAModel() {
-  delete m_model_properties;
 }
+
+string CAModel::AddCellAttribute(Attribute *new_attr) {
+  string base_id_name = new_attr->m_id_name;
+  int disambiguity_number = 1;
+  while(m_cell_attributes.find(std::string(new_attr->m_id_name)) == m_cell_attributes.end()) {
+    new_attr->m_id_name = base_id_name + std::to_string(disambiguity_number);
+  }
+
+  m_cell_attributes[new_attr->m_id_name] = new_attr;
+  return new_attr->m_id_name;
+}
+
+bool CAModel::DelCellAttribute(std::string id_name) {
+  auto entry = m_cell_attributes.find(id_name);
+
+  if(entry == m_cell_attributes.end())
+    return false;
+
+  delete m_cell_attributes[id_name];
+  m_cell_attributes.erase(entry);
+  return true;
+
+}
+
+std::string CAModel::ModifyCellAttribute(std::string id_name, Attribute *modified_attr) {
+  delete m_cell_attributes[id_name];
+
+  if(id_name == modified_attr->m_id_name) {
+    m_cell_attributes[id_name] = modified_attr;
+    return id_name;
+  }
+
+  else {
+    DelCellAttribute(id_name);
+    return AddCellAttribute(modified_attr);
+  }
+
+}
+
+const Attribute *CAModel::GetCellAttribute(std::string id_name) {
+  if(m_cell_attributes.find(id_name) == m_cell_attributes.end())
+    return nullptr;
+  else
+    return m_cell_attributes[id_name];
+}
+
 
 void CAModel::ModifyModelProperties(
     const std::string &name, const std::string &author, const std::string &goal,
@@ -15,18 +58,18 @@ void CAModel::ModifyModelProperties(
     bool is_fixed_size, int size_width, int size_height, const std::string &cell_attribute_initialization,
     bool has_max_iterations, int max_iterations) {
 
-  m_model_properties->m_name = name;
-  m_model_properties->m_author = author;
-  m_model_properties->m_goal = goal;
-  m_model_properties->m_description = description;
+//  m_model_properties->m_name = name;
+//  m_model_properties->m_author = author;
+//  m_model_properties->m_goal = goal;
+//  m_model_properties->m_description = description;
 
-  m_model_properties->m_topology = topology;
-  m_model_properties->m_boundary_treatment = boundary_treatment;
-  m_model_properties->m_is_fixed_size = is_fixed_size;
-  m_model_properties->m_size_width = size_width;
-  m_model_properties->m_size_height = size_height;
+//  m_model_properties->m_topology = topology;
+//  m_model_properties->m_boundary_treatment = boundary_treatment;
+//  m_model_properties->m_is_fixed_size = is_fixed_size;
+//  m_model_properties->m_size_width = size_width;
+//  m_model_properties->m_size_height = size_height;
 
-  m_model_properties->m_cell_attributes_initialization = cell_attribute_initialization;
-  m_model_properties->m_has_max_iterations = has_max_iterations;
-  m_model_properties->m_max_iterations = max_iterations;
+//  m_model_properties->m_cell_attributes_initialization = cell_attribute_initialization;
+//  m_model_properties->m_has_max_iterations = has_max_iterations;
+//  m_model_properties->m_max_iterations = max_iterations;
 }

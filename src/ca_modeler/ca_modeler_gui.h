@@ -1,7 +1,7 @@
 #ifndef CA_MODELER_GUI_H
 #define CA_MODELER_GUI_H
 
-#include "ca_modeler_manager.h"
+#include "../ca_model/ca_model.h"
 
 #include <QMainWindow>
 
@@ -18,7 +18,7 @@ public:
   ~CAModelerGUI();
 
   void SetupWidgets();
-  void PassManager();
+  void PassModel();
 
 public slots:
 
@@ -27,7 +27,7 @@ private slots:
 
 private:
   Ui::CAModelerGUI *ui;
-  CAModelerManager *m_modeler_manager;
+  CAModel *m_ca_model;
 
 };
 

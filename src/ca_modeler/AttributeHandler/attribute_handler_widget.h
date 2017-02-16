@@ -2,8 +2,9 @@
 #define ATTRIBUTE_HANDLER_WIDGET_H
 
 #include <QWidget>
+#include <QListWidgetItem>
 
-#include "../ca_modeler_manager.h"
+#include "../../ca_model/ca_model.h"
 
 namespace Ui {
 class AttributeHandlerWidget;
@@ -21,7 +22,7 @@ public:
   void ConfigureCB();
   void ResetAttributesProperties();
 
-  void set_m_modeler_manager(CAModelerManager* modeler_manager) {m_modeler_manager = modeler_manager;}
+  void set_m_ca_model(CAModel* model) {m_ca_model = m_ca_model;}
 
 private:
   void LoadAttributesProperties(QListWidgetItem* curr_item);
@@ -57,7 +58,7 @@ signals:
 
 private:
   Ui::AttributeHandlerWidget *ui;
-  CAModelerManager* m_modeler_manager;
+  CAModel* m_ca_model;
 
   // Control members
   QListWidget* m_curr_lw_attribute;
