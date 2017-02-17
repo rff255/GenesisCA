@@ -9,7 +9,7 @@ static const std::vector<std::string> cb_attribute_list_type_values = {"Bool", "
 
 struct Attribute {
   Attribute (std::string id_name, std::string type, std::string description, int list_length,
-             std::string list_type, std::vector<std::string> user_defined_values, std::string init_value) {
+             std::string list_type, std::vector<std::string>* user_defined_values, std::string init_value) {
     m_id_name = id_name;
     m_type = type;
     m_description = description;
@@ -19,6 +19,8 @@ struct Attribute {
 
     m_user_defined_values = user_defined_values;
   }
+
+  ~Attribute() { delete m_user_defined_values; }
 
   // Common properties
   std::string m_id_name;
@@ -30,7 +32,7 @@ struct Attribute {
   std::string m_list_type;
 
   // User Ddefined properties
-  std::vector<std::string> m_user_defined_values;
+  std::vector<std::string>* m_user_defined_values;
 
   // Model Attributes properties
   std::string m_init_value;

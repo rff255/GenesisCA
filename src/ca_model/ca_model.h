@@ -8,7 +8,7 @@
 #include "neighborhood.h"
 #include "partition.h"
 
-#include <map>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -34,8 +34,7 @@ public:
                              const string &cell_attribute_initialization, bool has_max_iterations, int max_iterations);
 
 private:
-  std::map<std::string, Attribute*> m_cell_attributes;
-
+  std::unordered_map<string, Attribute*> m_cell_attributes;
 };
 
 #endif // CA_MODEL_H

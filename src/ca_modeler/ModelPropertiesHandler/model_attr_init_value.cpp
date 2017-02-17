@@ -39,10 +39,10 @@ void ModelAttrInitValue::SetWidgetDetails(Attribute* corresponding_attribute) {
     ui->stk_type_pages->setCurrentWidget(ui->page_user_defined);
 
     // Add allowed values
-    ui->cb_value->clear();
-    for (int i=0; i < corresponding_attribute->m_user_defined_values.size(); ++i) {
-      ui->cb_value->addItem(QString::fromStdString(corresponding_attribute->m_user_defined_values[i]));
-    }
-    ui->cb_value->setCurrentIndex(0);
+//    ui->cb_value->clear();
+//    for (int i=0; i < corresponding_attribute->m_user_defined_values->size(); ++i) {
+//      ui->cb_value->addItem(QString::fromStdString(corresponding_attribute->m_user_defined_values[i]));
+//    }
+//    ui->cb_value->setCurrentIndex(0);
   }
 }

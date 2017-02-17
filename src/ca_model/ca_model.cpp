@@ -6,11 +6,12 @@ CAModel::CAModel() {
 CAModel::~CAModel() {
 }
 
-string CAModel::AddCellAttribute(Attribute *new_attr) {
+string CAModel::AddCellAttribute(Attribute* new_attr) {
   string base_id_name = new_attr->m_id_name;
   int disambiguity_number = 1;
-  while(m_cell_attributes.find(std::string(new_attr->m_id_name)) == m_cell_attributes.end()) {
+  while(m_cell_attributes.count(new_attr->m_id_name) > 0) {
     new_attr->m_id_name = base_id_name + std::to_string(disambiguity_number);
+    disambiguity_number++;
   }
 
   m_cell_attributes[new_attr->m_id_name] = new_attr;
@@ -23,22 +24,19 @@ bool CAModel::DelCellAttribute(std::string id_name) {
   if(entry == m_cell_attributes.end())
     return false;
 
-  delete m_cell_attributes[id_name];
   m_cell_attributes.erase(entry);
-  return true;
 
+  return true;
 }
 
-std::string CAModel::ModifyCellAttribute(std::string id_name, Attribute *modified_attr) {
-  delete m_cell_attributes[id_name];
-
-  if(id_name == modified_attr->m_id_name) {
-    m_cell_attributes[id_name] = modified_attr;
-    return id_name;
+std::string CAModel::ModifyCellAttribute(std::string prev_id_name, Attribute *modified_attr) {
+  if(prev_id_name == modified_attr->m_id_name) {
+    m_cell_attributes[prev_id_name] = modified_attr;
+    return prev_id_name;
   }
 
   else {
-    DelCellAttribute(id_name);
+    DelCellAttribute(prev_id_name);
     return AddCellAttribute(modified_attr);
   }
 

@@ -22,7 +22,7 @@ public:
   void ConfigureCB();
   void ResetAttributesProperties();
 
-  void set_m_ca_model(CAModel* model) {m_ca_model = m_ca_model;}
+  void set_m_ca_model(CAModel* model) {m_ca_model = model;}
 
 private:
   void LoadAttributesProperties(QListWidgetItem* curr_item);
