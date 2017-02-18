@@ -19,16 +19,16 @@ public:
   CAModel();
   ~CAModel();
 
-  // Attributes
-  string           AddAttribute(Attribute* new_attr);
-  bool             DelAttribute(string id_name);
-  string           ModifyAttribute(string id_name, Attribute* modified_attr);
-  const Attribute* GetAttribute(string id_name);
-
   // Model Properties
   void ModifyModelProperties(const string &name, const string &author, const string &goal, const string &description,
                              const string &topology, const string &boundary_treatment, bool is_fixed_size, int size_width, int size_height,
                              const string &cell_attribute_initialization, bool has_max_iterations, int max_iterations);
+
+  // Attributes
+  string           AddAttribute(Attribute* new_attr);
+  bool             DelAttribute(string id_name);
+  string           ModifyAttribute(string id_name, Attribute* modified_attr);
+  Attribute*       GetAttribute(string id_name);
 
 private:
   std::unordered_map<string, Attribute*> m_attributes;

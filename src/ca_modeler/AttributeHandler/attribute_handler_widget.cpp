@@ -1,6 +1,7 @@
 #include "attribute_handler_widget.h"
 #include "ui_attribute_handler_widget.h"
 
+
 AttributeHandlerWidget::AttributeHandlerWidget(QWidget *parent) :
   QWidget(parent),
   ui(new Ui::AttributeHandlerWidget),
@@ -156,9 +157,9 @@ void AttributeHandlerWidget::on_cb_list_type_currentIndexChanged(const QString &
 
 void AttributeHandlerWidget::on_pb_add_cell_attribute_released() {
   std::string name_id = m_ca_model->AddAttribute(new Attribute("New cell attribute",
-                                                                   cb_attribute_type_values[0], "", 0,
-                                                                   cb_attribute_list_type_values[0],
-                                                                   nullptr, "", false));
+                                                               cb_attribute_type_values[0], "", 0,
+                                                               cb_attribute_list_type_values[0],
+                                                               nullptr, "", false));
   ui->lw_cell_attributes->addItem(QString::fromStdString(name_id));
   ui->lw_cell_attributes->setCurrentRow(ui->lw_cell_attributes->count()-1);
 
@@ -167,9 +168,9 @@ void AttributeHandlerWidget::on_pb_add_cell_attribute_released() {
 
 void AttributeHandlerWidget::on_pb_add_model_attribute_released() {
   std::string name_id = m_ca_model->AddAttribute(new Attribute("New model attribute",
-                                                                   cb_attribute_type_values[0], "", 0,
-                                                                   cb_attribute_list_type_values[0],
-                                                                   nullptr, "", true));
+                                                               cb_attribute_type_values[0], "", 0,
+                                                               cb_attribute_list_type_values[0],
+                                                               nullptr, "", true));
   ui->lw_model_attributes->addItem(QString::fromStdString(name_id));
   ui->lw_model_attributes->setCurrentRow(ui->lw_model_attributes->count()-1);
 

@@ -24,6 +24,7 @@ bool CAModel::DelAttribute(std::string id_name) {
   if(entry == m_attributes.end())
     return false;
 
+  delete m_attributes[id_name];
   m_attributes.erase(entry);
 
   return true;
@@ -41,7 +42,7 @@ std::string CAModel::ModifyAttribute(std::string prev_id_name, Attribute *modifi
   }
 }
 
-const Attribute *CAModel::GetAttribute(std::string id_name) {
+Attribute *CAModel::GetAttribute(std::string id_name) {
   if(m_attributes.find(id_name) == m_attributes.end())
     return nullptr;
   else
