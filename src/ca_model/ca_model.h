@@ -20,13 +20,10 @@ public:
   ~CAModel();
 
   // Attributes
-  // - cell attributes
-  string AddCellAttribute(Attribute* new_attr);
-  bool DelCellAttribute(string id_name);
-  string ModifyCellAttribute(string id_name, Attribute* modified_attr);
-  const Attribute *GetCellAttribute(string id_name);
-
-  // - model attributes
+  string           AddAttribute(Attribute* new_attr);
+  bool             DelAttribute(string id_name);
+  string           ModifyAttribute(string id_name, Attribute* modified_attr);
+  const Attribute* GetAttribute(string id_name);
 
   // Model Properties
   void ModifyModelProperties(const string &name, const string &author, const string &goal, const string &description,
@@ -34,7 +31,7 @@ public:
                              const string &cell_attribute_initialization, bool has_max_iterations, int max_iterations);
 
 private:
-  std::unordered_map<string, Attribute*> m_cell_attributes;
+  std::unordered_map<string, Attribute*> m_attributes;
 };
 
 #endif // CA_MODEL_H

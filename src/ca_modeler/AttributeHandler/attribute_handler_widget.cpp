@@ -39,7 +39,7 @@ void AttributeHandlerWidget::LoadAttributesProperties(QListWidgetItem* curr_item
 
   m_is_loading = true;
 
-  const Attribute* curr_attribute = m_ca_model->GetCellAttribute(curr_item->text().toStdString());
+  const Attribute* curr_attribute = m_ca_model->GetAttribute(curr_item->text().toStdString());
 
   ui->txt_attribute_name->setText(QString::fromStdString(curr_attribute->m_id_name));
 
@@ -69,6 +69,11 @@ void AttributeHandlerWidget::SaveAttributeModifications()
     for(int i = 0; i < ui->lw_allowed_values->count(); ++i)
         user_defined_values->push_back(ui->lw_allowed_values->item(i)->text().toStdString());
 
+    // For model attributes
+    bool is_model_attr = false;
+    if(m_curr_lw_attribute == ui->lw_model_attributes)
+      is_model_attr = true;
+
     Attribute* modified_attr = new Attribute(
                                  ui->txt_attribute_name->text().toStdString(),
                                  ui->cb_attribute_type->currentText().toStdString(),
@@ -76,14 +81,16 @@ void AttributeHandlerWidget::SaveAttributeModifications()
                                  ui->sb_list_length->value(),
                                  ui->cb_list_type->currentText().toStdString(),
                                  user_defined_values,
-                                 "");
+                                 "",
+                                 is_model_attr);
 
-    string saved_attr_id_name = m_ca_model->ModifyCellAttribute(curr_item->text().toStdString(),
-                                                                modified_attr);
+    string saved_attr_id_name = m_ca_model->ModifyAttribute(curr_item->text().toStdString(), modified_attr);
     ui->txt_attribute_name->setText(QString::fromStdString(saved_attr_id_name));
+
+    emit AttributeChanged(curr_item->text().toStdString(), saved_attr_id_name);
+
     curr_item->setText(QString::fromStdString(saved_attr_id_name));
 
-    emit AttributeChanged();
   }
 }
 
@@ -148,45 +155,53 @@ void AttributeHandlerWidget::on_cb_list_type_currentIndexChanged(const QString &
 }
 
 void AttributeHandlerWidget::on_pb_add_cell_attribute_released() {
-  std::string name_id = m_ca_model->AddCellAttribute(new Attribute("New cell attribute",
+  std::string name_id = m_ca_model->AddAttribute(new Attribute("New cell attribute",
                                                                    cb_attribute_type_values[0], "", 0,
                                                                    cb_attribute_list_type_values[0],
-                                                                   nullptr, ""));
+                                                                   nullptr, "", false));
   ui->lw_cell_attributes->addItem(QString::fromStdString(name_id));
   ui->lw_cell_attributes->setCurrentRow(ui->lw_cell_attributes->count()-1);
 
-  emit AttributeChanged();
+  emit AttributeAdded(name_id);
 }
 
 void AttributeHandlerWidget::on_pb_add_model_attribute_released() {
+  std::string name_id = m_ca_model->AddAttribute(new Attribute("New model attribute",
+                                                                   cb_attribute_type_values[0], "", 0,
+                                                                   cb_attribute_list_type_values[0],
+                                                                   nullptr, "", true));
+  ui->lw_model_attributes->addItem(QString::fromStdString(name_id));
+  ui->lw_model_attributes->setCurrentRow(ui->lw_model_attributes->count()-1);
 
+  emit AttributeAdded(name_id);
 }
 
 void AttributeHandlerWidget::on_pb_delete_cell_attribute_released() {
   QListWidgetItem* curr_item = ui->lw_cell_attributes->currentItem();
   if(curr_item) {
-    m_ca_model->DelCellAttribute(curr_item->text().toStdString());
+    std::string id_name = curr_item->text().toStdString();
+    m_ca_model->DelAttribute(id_name);
     delete curr_item;
     ResetAttributesProperties();
     LoadAttributesProperties(ui->lw_cell_attributes->currentItem());
-    emit AttributeChanged();
+    emit AttributeRemoved(id_name);
   }
 }
 
 void AttributeHandlerWidget::on_pb_delete_model_attribute_released()
 {
-//  QListWidgetItem* curr_item = ui->lw_model_attributes->currentItem();
-//  if(curr_item) {
-//    m_modeler_manager->RemoveAttribute(curr_item, false);
-//    delete curr_item;
-//    ResetAttributesProperties();
-
-//    emit AttributeChanged();
-//  }
+  QListWidgetItem* curr_item = ui->lw_model_attributes->currentItem();
+  if(curr_item) {
+    std::string id_name = curr_item->text().toStdString();
+    m_ca_model->DelAttribute(id_name);
+    delete curr_item;
+    ResetAttributesProperties();
+    LoadAttributesProperties(ui->lw_model_attributes->currentItem());
+    emit AttributeRemoved(id_name);
+  }
 }
 
-void AttributeHandlerWidget::on_pb_add_value_released()
-{
+void AttributeHandlerWidget::on_pb_add_value_released() {
   QString new_value = ui->txt_new_allowed_value->text();
   if(new_value.toStdString() != "") {
     ui->lw_allowed_values->addItem(new_value);
@@ -194,20 +209,19 @@ void AttributeHandlerWidget::on_pb_add_value_released()
   }
 }
 
-void AttributeHandlerWidget::on_pb_remove_value_released()
-{
+void AttributeHandlerWidget::on_pb_remove_value_released() {
   QListWidgetItem* curr_item_value = ui->lw_allowed_values->currentItem();
   if(curr_item_value) {
     delete curr_item_value;
   }
 }
 
-void AttributeHandlerWidget::on_lw_cell_attributes_itemSelectionChanged()
-{
+void AttributeHandlerWidget::on_lw_cell_attributes_itemSelectionChanged() {
   QListWidgetItem *curr_item = ui->lw_cell_attributes->currentItem();
   if (curr_item){
     m_curr_lw_attribute = ui->lw_cell_attributes;
     ui->lw_model_attributes->clearSelection();
+    ui->lw_model_attributes->setCurrentItem(nullptr);
     LoadAttributesProperties(curr_item);
   }
 }
@@ -217,6 +231,7 @@ void AttributeHandlerWidget::on_lw_model_attributes_itemSelectionChanged() {
   if (curr_item) {
     m_curr_lw_attribute = ui->lw_model_attributes;
     ui->lw_cell_attributes->clearSelection();
+    ui->lw_cell_attributes->setCurrentItem(nullptr);
     LoadAttributesProperties(curr_item);
   }
 }
