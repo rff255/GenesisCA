@@ -119,25 +119,14 @@
        <number>2</number>
       </property>
       <item row="1" column="4">
-       <widget class="QSpinBox" name="spinBox">
+       <widget class="QSpinBox" name="sb_amount_cells">
         <property name="maximum">
          <number>9999</number>
         </property>
        </widget>
       </item>
       <item row="1" column="2" colspan="2">
-       <widget class="QComboBox" name="cb_amount_cells">
-        <item>
-         <property name="text">
-          <string>Absolute</string>
-         </property>
-        </item>
-        <item>
-         <property name="text">
-          <string>Percentage</string>
-         </property>
-        </item>
-       </widget>
+       <widget class="QComboBox" name="cb_amount_cells"/>
       </item>
       <item row="0" column="3" colspan="2">
        <widget class="QComboBox" name="cb_selected_attribute"/>
@@ -183,7 +172,7 @@
             <bool>true</bool>
            </property>
            <property name="currentIndex">
-            <number>1</number>
+            <number>3</number>
            </property>
            <widget class="QWidget" name="page_bool">
             <layout class="QHBoxLayout" name="horizontalLayout_4">
@@ -259,21 +248,6 @@ QCheckBox#check_value::checked {
                  <verstretch>0</verstretch>
                 </sizepolicy>
                </property>
-               <item>
-                <property name="text">
-                 <string>Equals to</string>
-                </property>
-               </item>
-               <item>
-                <property name="text">
-                 <string>Greater than</string>
-                </property>
-               </item>
-               <item>
-                <property name="text">
-                 <string>Lesser than</string>
-                </property>
-               </item>
               </widget>
              </item>
              <item>
@@ -312,23 +286,7 @@ QCheckBox#check_value::checked {
               <number>0</number>
              </property>
              <item>
-              <widget class="QComboBox" name="cb_float_check">
-               <item>
-                <property name="text">
-                 <string>Equals to</string>
-                </property>
-               </item>
-               <item>
-                <property name="text">
-                 <string>Greater than</string>
-                </property>
-               </item>
-               <item>
-                <property name="text">
-                 <string>Lesser than</string>
-                </property>
-               </item>
-              </widget>
+              <widget class="QComboBox" name="cb_float_check"/>
              </item>
              <item>
               <widget class="QDoubleSpinBox" name="sb_float_value">
@@ -403,7 +361,7 @@ QCheckBox#check_value::checked {
                 <string notr="true">background-color: rgb(255, 255, 0);</string>
                </property>
                <property name="text">
-                <string>Not Allowed</string>
+                <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p align=&quot;center&quot;&gt;(Select a valid attribute)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                </property>
                <property name="alignment">
                 <set>Qt::AlignCenter</set>
@@ -421,7 +379,7 @@ QCheckBox#check_value::checked {
      <zorder>gb_statement</zorder>
      <zorder>lbl_amount_cells</zorder>
      <zorder>cb_amount_cells</zorder>
-     <zorder>spinBox</zorder>
+     <zorder>sb_amount_cells</zorder>
      <zorder>lbl_selected_attribute</zorder>
      <zorder>cb_selected_attribute</zorder>
     </widget>

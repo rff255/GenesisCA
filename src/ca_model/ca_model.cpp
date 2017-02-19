@@ -1,7 +1,7 @@
 #include "ca_model.h"
 
 CAModel::CAModel():
-m_model_properties(new ModelProperties()){
+m_model_properties(new ModelProperties()) {
 }
 
 CAModel::~CAModel() {
@@ -49,6 +49,57 @@ Attribute *CAModel::GetAttribute(std::string id_name) {
     return nullptr;
   else
     return m_attributes[id_name];
+}
+
+std::vector<std::string> CAModel::GetAtributesList() {
+  std::vector<std::string> attr_id_name_list;
+  for(auto kv : m_attributes)
+      attr_id_name_list.push_back(kv.first);
+
+  return attr_id_name_list;
+}
+
+std::string CAModel::AddBreakCase(BreakCase *new_bc) {
+  string base_id_name = new_bc->m_id_name;
+  int disambiguity_number = 1;
+  while(m_break_cases.count(new_bc->m_id_name) > 0) {
+    new_bc->m_id_name = base_id_name + std::to_string(disambiguity_number);
+    disambiguity_number++;
+  }
+
+  m_break_cases[new_bc->m_id_name] = new_bc;
+  return new_bc->m_id_name;
+}
+
+bool CAModel::DelBreakCase(std::string id_name) {
+  auto entry = m_break_cases.find(id_name);
+
+  if(entry == m_break_cases.end())
+    return false;
+
+  delete m_break_cases[id_name];
+  m_break_cases.erase(entry);
+
+  return true;
+}
+
+std::string CAModel::ModifyBreakCase(std::string prev_id_name, BreakCase *modified_bc) {
+  if(prev_id_name == modified_bc->m_id_name) {
+    m_break_cases[prev_id_name] = modified_bc;
+    return prev_id_name;
+  }
+
+  else {
+    DelBreakCase(prev_id_name);
+    return AddBreakCase(modified_bc);
+  }
+}
+
+BreakCase *CAModel::GetBreakCase(std::string id_name) {
+  if(m_break_cases.find(id_name) == m_break_cases.end())
+    return nullptr;
+  else
+    return m_break_cases[id_name];
 }
 
 void CAModel::ModifyModelProperties(

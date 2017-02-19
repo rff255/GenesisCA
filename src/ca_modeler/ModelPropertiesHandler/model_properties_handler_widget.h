@@ -3,6 +3,7 @@
 
 #include "../../ca_model/ca_model.h"
 #include "../../ca_model/model_properties.h"
+#include "../../ca_model/break_case.h"
 
 #include <unordered_map>
 #include <string>
@@ -34,6 +35,8 @@ private slots:
   void SaveModelPropertiesModifications();
   void RefreshModelAttrInitValue(std::string id_name, std::string new_value);
 
+  void on_pb_add_break_case_released();
+
 signals:
   void ModelPropertiesChanged();
 
@@ -42,6 +45,7 @@ private:
   CAModel* m_ca_model;
 
   std::unordered_map <std::string, QListWidgetItem*> m_model_attributes_hash;
+  std::unordered_map <std::string, QListWidgetItem*> m_break_cases_hash;
 
   // Control members
   bool m_is_loading;

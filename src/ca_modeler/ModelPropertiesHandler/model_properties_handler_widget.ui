@@ -295,7 +295,7 @@
           <widget class="QGroupBox" name="gb_initial_configuration">
            <property name="minimumSize">
             <size>
-             <width>230</width>
+             <width>200</width>
              <height>0</height>
             </size>
            </property>
@@ -314,7 +314,17 @@
              </widget>
             </item>
             <item row="5" column="0">
-             <widget class="QListWidget" name="lw_init_model_attributes"/>
+             <widget class="QListWidget" name="lw_init_model_attributes">
+              <property name="verticalScrollBarPolicy">
+               <enum>Qt::ScrollBarAlwaysOn</enum>
+              </property>
+              <property name="verticalScrollMode">
+               <enum>QAbstractItemView::ScrollPerPixel</enum>
+              </property>
+              <property name="horizontalScrollMode">
+               <enum>QAbstractItemView::ScrollPerPixel</enum>
+              </property>
+             </widget>
             </item>
             <item row="1" column="0">
              <widget class="QComboBox" name="cb_cell_attr_init"/>
@@ -343,7 +353,7 @@
           <widget class="QGroupBox" name="gb_stop_conditions">
            <property name="minimumSize">
             <size>
-             <width>230</width>
+             <width>270</width>
              <height>0</height>
             </size>
            </property>
@@ -397,10 +407,25 @@
                 <height>0</height>
                </size>
               </property>
+              <property name="verticalScrollBarPolicy">
+               <enum>Qt::ScrollBarAlwaysOn</enum>
+              </property>
+              <property name="verticalScrollMode">
+               <enum>QAbstractItemView::ScrollPerPixel</enum>
+              </property>
+              <property name="horizontalScrollMode">
+               <enum>QAbstractItemView::ScrollPerPixel</enum>
+              </property>
              </widget>
             </item>
             <item row="3" column="0">
              <widget class="QPushButton" name="pb_add_break_case">
+              <property name="sizePolicy">
+               <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                <horstretch>0</horstretch>
+                <verstretch>0</verstretch>
+               </sizepolicy>
+              </property>
               <property name="text">
                <string>Add Break Case</string>
               </property>
@@ -409,7 +434,7 @@
             <item row="3" column="1">
              <widget class="QPushButton" name="pb_delete_break_case">
               <property name="sizePolicy">
-               <sizepolicy hsizetype="Maximum" vsizetype="Fixed">
+               <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
                 <horstretch>0</horstretch>
                 <verstretch>0</verstretch>
                </sizepolicy>

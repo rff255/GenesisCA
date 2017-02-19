@@ -26,13 +26,17 @@ public:
   ModelProperties* GetGlobalProperties() { return m_model_properties; }
 
   // Break Cases
-
+  string           AddBreakCase(BreakCase* new_bc);
+  bool             DelBreakCase(string id_name);
+  string           ModifyBreakCase(string prev_id_name, BreakCase* modified_bc);
+  BreakCase*       GetBreakCase(string id_name);
 
   // Attributes
   string           AddAttribute(Attribute* new_attr);
   bool             DelAttribute(string id_name);
-  string           ModifyAttribute(string id_name, Attribute* modified_attr);
+  string           ModifyAttribute(string prev_id_name, Attribute* modified_attr);
   Attribute*       GetAttribute(string id_name);
+  std::vector<std::string> GetAtributesList();
 
 private:
   ModelProperties* m_model_properties;

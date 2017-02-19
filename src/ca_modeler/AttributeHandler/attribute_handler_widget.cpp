@@ -111,13 +111,11 @@ void AttributeHandlerWidget::ResetAttributesProperties() {
 }
 
 void AttributeHandlerWidget::ConfigureCB() {
-  for (int i = 0; i < cb_attribute_type_values.size(); ++i) {
+  for (int i = 0; i < cb_attribute_type_values.size(); ++i)
     ui->cb_attribute_type->addItem(QString::fromStdString(cb_attribute_type_values[i]));
-  }
 
-  for (int i = 0; i < cb_attribute_list_type_values.size(); ++i) {
+  for (int i = 0; i < cb_attribute_list_type_values.size(); ++i)
     ui->cb_list_type->addItem(QString::fromStdString(cb_attribute_list_type_values[i]));
-  }
 }
 
 void AttributeHandlerWidget::on_cb_attribute_type_currentIndexChanged(const QString &arg1) {
