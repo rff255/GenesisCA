@@ -80,26 +80,21 @@ void ModelPropertiesHandlerWidget::ChangeModelAttributesInitItem(std::string old
 }
 
 void ModelPropertiesHandlerWidget::SaveModelPropertiesModifications() {
-//  if(m_is_loading)
-//    return;
+  if(m_is_loading)
+    return;
 
-//  m_modeler_manager->ModifyModelProperties(
-//        ui->txt_name->text().toStdString(), ui->txt_author->text().toStdString(),
-//        ui->txt_goal->toPlainText().toStdString(), ui->txt_description->toPlainText().toStdString(),
-//        ui->cb_topology->currentText().toStdString(), ui->cb_boundary_treatment->currentText().toStdString(),
-//        ui->gb_fixed_size->isEnabled(), ui->sb_width->value(), ui->sb_height->value(),
-//        ui->cb_cell_attr_init->currentText().toStdString(),
-//        ui->gb_max_iterations->isEnabled(), ui->sb_max_iterations->value());
-//  // TODO(figueiredo): add Break cases into scheme
+  m_ca_model->ModifyModelProperties(
+        ui->txt_name->text().toStdString(), ui->txt_author->text().toStdString(),
+        ui->txt_goal->toPlainText().toStdString(), ui->txt_description->toPlainText().toStdString(),
+        ui->cb_topology->currentText().toStdString(), ui->cb_boundary_treatment->currentText().toStdString(),
+        ui->gb_fixed_size->isEnabled(), ui->sb_width->value(), ui->sb_height->value(),
+        ui->cb_cell_attr_init->currentText().toStdString(),
+        ui->gb_max_iterations->isEnabled(), ui->sb_max_iterations->value());
+  // TODO(figueiredo): add Break cases into scheme
 
-  //  emit ModelPropertiesChanged();
+    emit ModelPropertiesChanged();
 }
 
 void ModelPropertiesHandlerWidget::RefreshModelAttrInitValue(std::string id_name, std::string new_value) {
   m_ca_model->GetAttribute(id_name)->m_init_value = new_value;
-}
-
-void ModelPropertiesHandlerWidget::on_pb_add_break_case_released() {
-  ModelAttrInitValue* curr = (ModelAttrInitValue*) ui->lw_init_model_attributes->itemWidget(ui->lw_init_model_attributes->currentItem());
-  ui->lw_break_cases->addItem(QString::fromStdString(m_ca_model->GetAttribute(curr->GetAttrName())->m_init_value));
 }

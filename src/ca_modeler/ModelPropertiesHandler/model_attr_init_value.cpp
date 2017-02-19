@@ -89,6 +89,8 @@ std::string ModelAttrInitValue::GetInitValue() {
 
   else if(ui->stk_type_pages->currentWidget() == ui->page_user_defined)
     return ui->cb_value->currentText().toStdString();
+  else
+    return "GetInitValue is wrong";
 }
 
 void ModelAttrInitValue::EmitValueChanged() {

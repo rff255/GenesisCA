@@ -27,7 +27,6 @@ INCLUDEPATH += \
 SOURCES += \
   src/main.cpp \
   src/ca_modeler/ca_modeler_gui.cpp \
-  src/ca_modeler/ca_modeler_manager.cpp \
   src/ca_model/ca_model.cpp \
     src/ca_model/graph_node.cpp \
     src/ca_model/neighborhood.cpp \
@@ -39,7 +38,6 @@ SOURCES += \
 
 HEADERS  += \
   src/ca_modeler/ca_modeler_gui.h \
-  src/ca_modeler/ca_modeler_manager.h \
   src/ca_model/ca_model.h \
     src/ca_model/graph_node.h \
     src/ca_model/model_properties.h \

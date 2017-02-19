@@ -23,6 +23,10 @@ public:
   void ModifyModelProperties(const string &name, const string &author, const string &goal, const string &description,
                              const string &topology, const string &boundary_treatment, bool is_fixed_size, int size_width, int size_height,
                              const string &cell_attribute_initialization, bool has_max_iterations, int max_iterations);
+  ModelProperties* GetGlobalProperties() { return m_model_properties; }
+
+  // Break Cases
+
 
   // Attributes
   string           AddAttribute(Attribute* new_attr);
@@ -31,7 +35,9 @@ public:
   Attribute*       GetAttribute(string id_name);
 
 private:
+  ModelProperties* m_model_properties;
   std::unordered_map<string, Attribute*> m_attributes;
+  std::unordered_map<string, BreakCase*> m_break_cases;
 };
 
 #endif // CA_MODEL_H
