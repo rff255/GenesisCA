@@ -34,8 +34,12 @@ public slots:
 private slots:
   void SaveModelPropertiesModifications();
   void RefreshModelAttrInitValue(std::string id_name, std::string new_value);
+  void RefreshBreakCaseHash(std::string old_id_name, std::string new_id_name);
+  void RefreshBreakCasesOptions();
 
   void on_pb_add_break_case_released();
+
+  void on_pb_delete_break_case_released();
 
 signals:
   void ModelPropertiesChanged();

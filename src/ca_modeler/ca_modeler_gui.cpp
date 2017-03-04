@@ -15,10 +15,15 @@ CAModelerGUI::CAModelerGUI(QWidget *parent) :
     PassModel();
 
     // Connect Signals and Slots
-    // Attribute change results in refresh general properties attr model initialize list
+    // Attribute change results in refresh model properties
     connect(ui->wgt_attribute_handler, SIGNAL(AttributeAdded(std::string)), ui->wgt_model_properties_handler, SLOT(AddModelAttributesInitItem(std::string)));
     connect(ui->wgt_attribute_handler, SIGNAL(AttributeRemoved(std::string)), ui->wgt_model_properties_handler, SLOT(DelModelAttributesInitItem(std::string)));
     connect(ui->wgt_attribute_handler, SIGNAL(AttributeChanged(std::string, std::string)), ui->wgt_model_properties_handler, SLOT(ChangeModelAttributesInitItem(std::string,std::string)));
+
+    // Update BreakCases options after attributes change
+    connect(ui->wgt_attribute_handler, SIGNAL(AttributeAdded(std::string)), ui->wgt_model_properties_handler, SLOT(RefreshBreakCasesOptions()));
+    connect(ui->wgt_attribute_handler, SIGNAL(AttributeRemoved(std::string)), ui->wgt_model_properties_handler, SLOT(RefreshBreakCasesOptions()));
+    connect(ui->wgt_attribute_handler, SIGNAL(AttributeChanged(std::string, std::string)), ui->wgt_model_properties_handler, SLOT(RefreshBreakCasesOptions()));
 }
 
 CAModelerGUI::~CAModelerGUI() {

@@ -18,18 +18,22 @@ public:
   ~BreakCaseInstance();
 
   void SetCAModel(CAModel* ca_model) {m_ca_model = ca_model;}
+  void SetBreakCase(BreakCase* break_case) {m_break_case = break_case;}
 
   void ConfigureCB();
-  void SetBCName(std::string new_name);
-  void SetStatementType(BreakCase *break_case);
-  void SetupWidget(BreakCase* break_case);
-
-  std::string GetBCName();
+  std::string GetBCName() {return m_break_case->m_id_name;}
+  void SetupStatementType(BreakCase *break_case);
+  std::string GetStatementType();
+  std::string GetStatementValue();
+  void SetupWidget();
 
 private slots:
   void SaveBCModifications();
 
   void on_cb_selected_attribute_currentIndexChanged(const QString &arg1);
+
+signals:
+  void BreakCaseChanged(std::string old_id_name, std::string new_id_name);
 
 private:
   Ui::BreakCaseInstance *ui;
@@ -37,6 +41,8 @@ private:
   CAModel*    m_ca_model;
   BreakCase*  m_break_case;
   QWidget*    m_curr_page;
+
+  bool m_is_loading;
 };
 
 #endif // BREAK_CASE_INSTANCE_H

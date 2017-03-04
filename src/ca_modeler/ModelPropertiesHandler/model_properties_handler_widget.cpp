@@ -17,6 +17,8 @@ ModelPropertiesHandlerWidget::ModelPropertiesHandlerWidget(QWidget *parent) :
   ui->setupUi(this);
 
   // Connect Signals and Slots
+
+  // Update model with model properties fields change
   connect(ui->txt_name,               SIGNAL(editingFinished()),  this, SLOT(SaveModelPropertiesModifications()));
   connect(ui->txt_author,             SIGNAL(editingFinished()),  this, SLOT(SaveModelPropertiesModifications()));
   connect(ui->txt_goal,               SIGNAL(textChanged()),      this, SLOT(SaveModelPropertiesModifications()));
@@ -103,16 +105,30 @@ void ModelPropertiesHandlerWidget::RefreshModelAttrInitValue(std::string id_name
   m_ca_model->GetAttribute(id_name)->m_init_value = new_value;
 }
 
+void ModelPropertiesHandlerWidget::RefreshBreakCaseHash(std::string old_id_name, std::string new_id_name) {
+  if(old_id_name == new_id_name)
+    return;
+
+  m_break_cases_hash[new_id_name] = m_break_cases_hash[old_id_name];
+  m_break_cases_hash.erase(old_id_name);
+}
+
+void ModelPropertiesHandlerWidget::RefreshBreakCasesOptions() {
+  for (std::pair<std::string, QListWidgetItem*> kv : m_break_cases_hash)
+    dynamic_cast<BreakCaseInstance*> (ui->lw_break_cases->itemWidget(kv.second))->SetupWidget();
+}
+
 void ModelPropertiesHandlerWidget::on_pb_add_break_case_released() {
   BreakCase* new_bc = new BreakCase("New break case", "", cb_break_case_amount_unit[0], 0, "", "");
-  std::string name_id = m_ca_model->AddBreakCase(new_bc);
+  std::string new_bc_name_id = m_ca_model->AddBreakCase(new_bc);
+  new_bc->m_id_name = new_bc_name_id;
 
   // Creates a new widget
   BreakCaseInstance* new_break_case_instance = new BreakCaseInstance();
   new_break_case_instance->SetCAModel(m_ca_model);
-  //connect(new_model_attr_init_value, SIGNAL(InitValueChanged(std::string, std::string)), this, SLOT(RefreshModelAttrInitValue(std::string, std::string)));
-  new_break_case_instance->SetBCName(name_id);
-  new_break_case_instance->SetupWidget(new_bc);
+  new_break_case_instance->SetBreakCase(new_bc);
+  new_break_case_instance->SetupWidget();
+  connect(new_break_case_instance, SIGNAL(BreakCaseChanged(std::string, std::string)), this, SLOT(RefreshBreakCaseHash(std::string, std::string)));
 
   // Creates a new listItem
   QListWidgetItem* new_item = new QListWidgetItem();
@@ -123,8 +139,20 @@ void ModelPropertiesHandlerWidget::on_pb_add_break_case_released() {
   new_item->setSizeHint(new_break_case_instance->size());
 
   // Refresh the hash item->model_attr
-  m_break_cases_hash[name_id] = new_item;
+  m_break_cases_hash[new_bc_name_id] = new_item;
 
 
-  //emit BreakCaseAdded(name_id);
+  //emit BreakCaseAdded(name_id); // TODO: ADD SIGNAL TO BREAKCASE MANIPULATION
+}
+
+void ModelPropertiesHandlerWidget::on_pb_delete_break_case_released() {
+  QListWidgetItem* curr_bc_item = ui->lw_break_cases->currentItem();
+  if(curr_bc_item == nullptr)
+    return;
+
+  BreakCaseInstance* curr_bc_widget = dynamic_cast<BreakCaseInstance*>(ui->lw_break_cases->itemWidget(curr_bc_item));
+  std::string bc_name = curr_bc_widget->GetBCName();
+  m_ca_model->DelBreakCase(bc_name);
+  m_break_cases_hash.erase(bc_name);
+  delete curr_bc_item;
 }
