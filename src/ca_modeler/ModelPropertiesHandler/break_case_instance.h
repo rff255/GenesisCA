@@ -43,6 +43,7 @@ private:
   QWidget*    m_curr_page;
 
   bool m_is_loading;
+  bool m_is_updating_attr_options;
 };
 
 #endif // BREAK_CASE_INSTANCE_H

@@ -114,14 +114,14 @@ void ModelPropertiesHandlerWidget::RefreshBreakCaseHash(std::string old_id_name,
 }
 
 void ModelPropertiesHandlerWidget::RefreshBreakCasesOptions() {
-  for (std::pair<std::string, QListWidgetItem*> kv : m_break_cases_hash)
+  for (auto kv : m_break_cases_hash) {
     dynamic_cast<BreakCaseInstance*> (ui->lw_break_cases->itemWidget(kv.second))->SetupWidget();
+  }
 }
 
 void ModelPropertiesHandlerWidget::on_pb_add_break_case_released() {
   BreakCase* new_bc = new BreakCase("New break case", "", cb_break_case_amount_unit[0], 0, "", "");
   std::string new_bc_name_id = m_ca_model->AddBreakCase(new_bc);
-  new_bc->m_id_name = new_bc_name_id;
 
   // Creates a new widget
   BreakCaseInstance* new_break_case_instance = new BreakCaseInstance();

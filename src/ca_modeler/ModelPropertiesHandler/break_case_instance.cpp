@@ -4,7 +4,9 @@
 BreakCaseInstance::BreakCaseInstance(QWidget *parent) :
   QWidget(parent),
   ui(new Ui::BreakCaseInstance),
-  m_is_loading(true){
+  m_is_loading(true),
+  m_is_updating_attr_options(true)
+{
   ui->setupUi(this);
 
   // Configure Combo boxes
@@ -12,7 +14,7 @@ BreakCaseInstance::BreakCaseInstance(QWidget *parent) :
 
   // Connections
   connect(ui->txt_name,               SIGNAL(editingFinished()),    this, SLOT(SaveBCModifications()));
-  connect(ui->cb_selected_attribute,  SIGNAL(activated(int)),       this, SLOT(SaveBCModifications()));
+  //Does not need //connect(ui->cb_selected_attribute,  SIGNAL(activated(int)),       this, SLOT(SaveBCModifications()));
   connect(ui->cb_amount_cells,        SIGNAL(activated(int)),       this, SLOT(SaveBCModifications()));
   connect(ui->sb_amount_cells,        SIGNAL(valueChanged(int)),    this, SLOT(SaveBCModifications()));
   connect(ui->sb_integer_value,       SIGNAL(valueChanged(int)),    this, SLOT(SaveBCModifications()));
@@ -138,28 +140,31 @@ void BreakCaseInstance::SetupWidget() {
   ui->txt_name->setText(QString::fromStdString(m_break_case->m_id_name));
 
   // Add Attributes options
+  m_is_updating_attr_options = true;
   std::vector<std::string> attributes = m_ca_model->GetAtributesList();
   ui->cb_selected_attribute->clear();
   for (int i = 0; i < attributes.size(); ++i)
     if(m_ca_model->GetAttribute(attributes[i])->m_is_model_attribute == false)
       ui->cb_selected_attribute->addItem(QString::fromStdString(attributes[i]));
-  if(m_ca_model->GetAttribute(m_break_case->m_considered_attr))
-    ui->cb_selected_attribute->setCurrentText(QString::fromStdString(m_break_case->m_considered_attr));
+  m_is_updating_attr_options = false;
 
-  if(m_ca_model->GetAttribute(m_break_case->m_considered_attr) != nullptr)
+  if(m_ca_model->GetAttribute(m_break_case->m_considered_attr) != nullptr) {
     ui->cb_selected_attribute->setCurrentText(QString::fromStdString(m_break_case->m_considered_attr));
-  else {
-    m_break_case->m_considered_attr = "";
-    ui->cb_selected_attribute->setCurrentText(QString::fromStdString(""));
+    m_break_case->m_considered_attr = ui->cb_selected_attribute->currentText().toStdString();
   }
+  else {
+    ui->cb_selected_attribute->setCurrentText(ui->cb_selected_attribute->itemText(0));
+    m_break_case->m_considered_attr = ui->cb_selected_attribute->currentText().toStdString();
+  }
+
   ui->cb_amount_cells->setCurrentText(QString::fromStdString(m_break_case->m_ammount_unit));
   ui->sb_amount_cells->setValue(m_break_case->m_ammount);
 
-  SetupStatementType(m_break_case);
-
   m_is_loading = false;
 
-  //SaveBCModifications();
+  SetupStatementType(m_break_case);
+
+  SaveBCModifications();
 }
 
 void BreakCaseInstance::SaveBCModifications() {
@@ -179,6 +184,15 @@ void BreakCaseInstance::SaveBCModifications() {
 }
 
 void BreakCaseInstance::on_cb_selected_attribute_currentIndexChanged(const QString &arg1) {
+  if(m_is_updating_attr_options)
+    return;
+
+  m_is_loading = true;
+
   m_break_case->m_considered_attr = arg1.toStdString();
+  m_break_case->m_statement_value = "";
   SetupStatementType(m_break_case);
+
+  m_is_loading = false;
+  SaveBCModifications();
 }
