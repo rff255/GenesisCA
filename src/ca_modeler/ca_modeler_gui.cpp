@@ -1,6 +1,7 @@
 #include "ca_modeler_gui.h"
 #include "ui_ca_modeler_gui.h"
 #include "attribute_handler_widget.h"
+#include "vicinity_handler_widget.h"
 
 CAModelerGUI::CAModelerGUI(QWidget *parent) :
   QMainWindow(parent),
@@ -42,6 +43,7 @@ void CAModelerGUI::SetupWidgets() {
 void CAModelerGUI::PassModel() {
   ui->wgt_attribute_handler->set_m_ca_model(m_ca_model);
   ui->wgt_model_properties_handler->set_m_ca_model(m_ca_model);
+  ui->wgt_vicinities_handler->set_m_ca_model(m_ca_model);
 }
 
 // Slots:

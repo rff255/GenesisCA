@@ -58,8 +58,7 @@ void AttributeHandlerWidget::LoadAttributesProperties(QListWidgetItem* curr_item
   m_is_loading = false;
 }
 
-void AttributeHandlerWidget::SaveAttributeModifications()
-{
+void AttributeHandlerWidget::SaveAttributeModifications() {
   if(m_is_loading)
     return;
 
