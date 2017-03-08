@@ -125,3 +125,46 @@ void CAModel::ModifyModelProperties(
 
   // TODO(figueiredo): add Break cases into scheme
 }
+
+string CAModel::AddNeighborhood(Neighborhood* new_neigh) {
+  string base_id_name = new_neigh->m_id_name;
+  int disambiguity_number = 1;
+  while(m_neighborhoods.count(new_neigh->m_id_name) > 0) {
+    new_neigh->m_id_name = base_id_name + std::to_string(disambiguity_number);
+    disambiguity_number++;
+  }
+
+  m_neighborhoods[new_neigh->m_id_name] = new_neigh;
+  return new_neigh->m_id_name;
+}
+
+bool CAModel::DelNeighborhood(std::string id_name) {
+  auto entry = m_neighborhoods.find(id_name);
+
+  if(entry == m_neighborhoods.end())
+    return false;
+
+  delete m_neighborhoods[id_name];
+  m_neighborhoods.erase(entry);
+
+  return true;
+}
+
+std::string CAModel::ModifyNeighborhood(std::string prev_id_name, Neighborhood* modified_neigh) {
+  if(prev_id_name == modified_neigh->m_id_name) {
+    m_neighborhoods[prev_id_name] = modified_neigh;
+    return prev_id_name;
+  }
+
+  else {
+    DelNeighborhood(prev_id_name);
+    return AddNeighborhood(modified_neigh);
+  }
+}
+
+Neighborhood *CAModel::GetNeighborhood(std::string id_name) {
+  if(m_neighborhoods.find(id_name) == m_neighborhoods.end())
+    return nullptr;
+  else
+    return m_neighborhoods[id_name];
+}

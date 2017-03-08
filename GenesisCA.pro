@@ -31,7 +31,6 @@ SOURCES += \
   src/ca_modeler/ca_modeler_gui.cpp \
   src/ca_model/ca_model.cpp \
     src/ca_model/graph_node.cpp \
-    src/ca_model/neighborhood.cpp \
     src/ca_model/partition.cpp \
     src/ca_modeler/AttributeHandler/attribute_handler_widget.cpp \
     src/ca_modeler/ModelPropertiesHandler/model_properties_handler_widget.cpp \

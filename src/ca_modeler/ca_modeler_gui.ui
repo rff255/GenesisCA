@@ -139,7 +139,7 @@ background: rgb(240, 240, 240);
          <number>0</number>
         </property>
         <item>
-         <widget class="VicinityHandlerWidget" name="widget" native="true"/>
+         <widget class="VicinityHandlerWidget" name="wgt_vicinities_handler" native="true"/>
         </item>
        </layout>
       </widget>

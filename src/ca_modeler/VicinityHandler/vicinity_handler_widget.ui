@@ -187,13 +187,13 @@
         </property>
         <layout class="QGridLayout" name="gridLayout_17">
          <item row="0" column="0">
-          <widget class="QGraphicsView" name="vicinity_layout"/>
+          <layout class="QGridLayout" name="grid_layout"/>
          </item>
         </layout>
        </widget>
       </item>
       <item>
-       <widget class="QGroupBox" name="gb_vicinity_description">
+       <widget class="QGroupBox" name="gb_vicinity_details">
         <property name="minimumSize">
          <size>
           <width>0</width>
@@ -217,7 +217,7 @@
           <number>2</number>
          </property>
          <item row="0" column="1">
-          <widget class="QLineEdit" name="txt_name"/>
+          <widget class="QLineEdit" name="txt_neighborhood_name"/>
          </item>
          <item row="1" column="1" rowspan="2">
           <widget class="QPlainTextEdit" name="txt_description"/>
@@ -271,7 +271,7 @@
        </widget>
       </item>
       <item>
-       <widget class="QLineEdit" name="txt_name_2"/>
+       <widget class="QLineEdit" name="txt_tag_neighbor_name"/>
       </item>
       <item>
        <widget class="QListWidget" name="lw_tagged_neighbors"/>

@@ -38,10 +38,18 @@ public:
   Attribute*       GetAttribute(string id_name);
   std::vector<std::string> GetAtributesList();
 
+  // Neighborhoods
+  string           AddNeighborhood(Neighborhood* new_neigh);
+  bool             DelNeighborhood(string id_name);
+  string           ModifyNeighborhood(string prev_id_name, Neighborhood* modified_neigh);
+  Neighborhood*    GetNeighborhood(string id_name);
+  //std::vector<std::string> GetAtributesList();
+
 private:
   ModelProperties* m_model_properties;
-  std::unordered_map<string, Attribute*> m_attributes;
-  std::unordered_map<string, BreakCase*> m_break_cases;
+  std::unordered_map<string, BreakCase*>    m_break_cases;
+  std::unordered_map<string, Attribute*>    m_attributes;
+  std::unordered_map<string, Neighborhood*> m_neighborhoods;
 };
 
 #endif // CA_MODEL_H
