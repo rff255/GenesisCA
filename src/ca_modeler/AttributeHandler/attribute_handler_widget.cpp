@@ -1,6 +1,7 @@
 #include "attribute_handler_widget.h"
 #include "ui_attribute_handler_widget.h"
 
+// TODO(rodrigo.figueiredo): There is a unknow bug on cell attribute manipulation, renaming, and changing focus, or selected attr. I dont know
 
 AttributeHandlerWidget::AttributeHandlerWidget(QWidget *parent) :
   QWidget(parent),
