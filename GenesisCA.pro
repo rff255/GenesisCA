@@ -4,7 +4,7 @@
 #
 #-------------------------------------------------
 
-QT       += core gui widgets
+QT       += core gui widgets opengl
 
 TARGET = GenesisCA
 TEMPLATE = app
@@ -23,7 +23,11 @@ DEFINES += QT_DEPRECATED_WARNINGS
 INCLUDEPATH += \
  src/ca_modeler/AttributeHandler/ \
  src/ca_modeler/ModelPropertiesHandler/ \
- src/ca_modeler/VicinityHandler/
+ src/ca_modeler/VicinityHandler/ \
+ src/ca_modeler/UpdateRulesHandler/ \
+ src/imgui/ \
+ src/imgui/glfw/ \
+
 
 
 SOURCES += \
@@ -36,11 +40,17 @@ SOURCES += \
     src/ca_modeler/ModelPropertiesHandler/model_properties_handler_widget.cpp \
     src/ca_modeler/ModelPropertiesHandler/model_attr_init_value.cpp \
     src/ca_modeler/ModelPropertiesHandler/break_case_instance.cpp \
-    src/ca_modeler/VicinityHandler/vicinity_handler_widget.cpp
+    src/ca_modeler/VicinityHandler/vicinity_handler_widget.cpp \
+    src/ca_modeler/UpdateRulesHandler/gl_widget.cpp \
+    src/imgui/imgui.cpp \
+    src/imgui/imgui_impl_glfw.cpp \
+    src/imgui/main_imgui.cpp \
+    src/imgui/imgui_demo.cpp \
+    src/imgui/imgui_draw.cpp
 
 HEADERS  += \
-  src/ca_modeler/ca_modeler_gui.h \
-  src/ca_model/ca_model.h \
+    src/ca_modeler/ca_modeler_gui.h \
+    src/ca_model/ca_model.h \
     src/ca_model/graph_node.h \
     src/ca_model/model_properties.h \
     src/ca_model/attribute.h \
@@ -51,12 +61,24 @@ HEADERS  += \
     src/ca_modeler/ModelPropertiesHandler/model_attr_init_value.h \
     src/ca_model/break_case.h \
     src/ca_modeler/ModelPropertiesHandler/break_case_instance.h \
-    src/ca_modeler/VicinityHandler/vicinity_handler_widget.h
+    src/ca_modeler/VicinityHandler/vicinity_handler_widget.h \
+    src/ca_modeler/UpdateRulesHandler/gl_widget.h \
+    src/imgui/imgui.h \
+    src/imgui/imgui_impl_glfw.h \
+    src/imgui/imconfig.h \
+    src/imgui/imgui_internal.h \
+    src/imgui/glfw/glfw3native.h \
+    src/imgui/stb_textedit.h \
+    src/imgui/stb_rect_pack.h \
+    src/imgui/stb_truetype.h
 
 FORMS    += \
-  src/ca_modeler/ca_modeler_gui.ui \
+    src/ca_modeler/ca_modeler_gui.ui \
     src/ca_modeler/AttributeHandler/attribute_handler_widget.ui \
     src/ca_modeler/ModelPropertiesHandler/model_attr_init_value.ui \
     src/ca_modeler/ModelPropertiesHandler/model_properties_handler_widget.ui \
     src/ca_modeler/ModelPropertiesHandler/break_case_instance.ui \
     src/ca_modeler/VicinityHandler/vicinity_handler_widget.ui
+
+LIBS += -L$$PWD/src/imgui/glfw -lglfw3dll
+DEPENDPATH += $$PWD/src/imgui/glfw

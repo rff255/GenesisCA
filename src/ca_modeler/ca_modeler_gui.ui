@@ -63,7 +63,7 @@ background: rgb(240, 240, 240);
        <enum>QTabWidget::Rounded</enum>
       </property>
       <property name="currentIndex">
-       <number>2</number>
+       <number>3</number>
       </property>
       <property name="movable">
        <bool>true</bool>
@@ -499,14 +499,7 @@ p, li { white-space: pre-wrap; }
              </property>
              <layout class="QGridLayout" name="gridLayout_21">
               <item row="0" column="0">
-               <widget class="QGraphicsView" name="graph_editor">
-                <property name="minimumSize">
-                 <size>
-                  <width>300</width>
-                  <height>0</height>
-                 </size>
-                </property>
-               </widget>
+               <widget class="GLWidget" name="widget" native="true"/>
               </item>
              </layout>
             </widget>
@@ -901,8 +894,8 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
                   <rect>
                    <x>0</x>
                    <y>0</y>
-                   <width>178</width>
-                   <height>218</height>
+                   <width>100</width>
+                   <height>30</height>
                   </rect>
                  </property>
                  <attribute name="label">
@@ -1286,6 +1279,12 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
    <class>VicinityHandlerWidget</class>
    <extends>QWidget</extends>
    <header>vicinity_handler_widget.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>GLWidget</class>
+   <extends>QWidget</extends>
+   <header>gl_widget.h</header>
    <container>1</container>
   </customwidget>
  </customwidgets>
