@@ -46,7 +46,8 @@ SOURCES += \
     src/imgui/main_imgui.cpp \
     src/imgui/imgui_demo.cpp \
     src/imgui/imgui_draw.cpp \
-    src/ca_modeler/UpdateRulesHandler/update_rules_handler.cpp
+    src/ca_modeler/UpdateRulesHandler/update_rules_handler.cpp \
+    src/imgui/imguinodegrapheditor.cpp
 
 HEADERS  += \
     src/ca_modeler/ca_modeler_gui.h \
@@ -70,7 +71,9 @@ HEADERS  += \
     src/imgui/stb_textedit.h \
     src/imgui/stb_rect_pack.h \
     src/imgui/stb_truetype.h \
-    src/ca_modeler/UpdateRulesHandler/update_rules_handler.h
+    src/ca_modeler/UpdateRulesHandler/update_rules_handler.h \
+    src/imgui/imguinodegrapheditor.h \
+    src/imgui/node_graph_instance.h
 
 FORMS    += \
     src/ca_modeler/ca_modeler_gui.ui \

@@ -15,6 +15,9 @@ public:
   explicit UpdateRulesHandler(QWidget *parent = 0);
   ~UpdateRulesHandler();
 
+private slots:
+  void on_pbtn_open_node_graph_editor_released();
+
 private:
   Ui::UpdateRulesHandler *ui;
 };

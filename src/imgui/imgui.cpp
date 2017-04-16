@@ -2127,6 +2127,12 @@ void ImGui::NewFrame()
     ImGuiContext& g = *GImGui;
 
     // Check user data
+    if (g.IO.DeltaTime <= 0.0) {
+       // Delta-T should *never* be negative, but there seem to be bugs in SDL_GetTicks
+       // (or the underlying platform implementation) which can lead to this happening.
+       // In that case, just assume 60 FPS.
+       g.IO.DeltaTime = 1.0f/60.0f;
+     }
     IM_ASSERT(g.IO.DeltaTime >= 0.0f);               // Need a positive DeltaTime (zero is tolerated but will cause some timing issues)
     IM_ASSERT(g.IO.DisplaySize.x >= 0.0f && g.IO.DisplaySize.y >= 0.0f);
     IM_ASSERT(g.IO.Fonts->Fonts.Size > 0);           // Font Atlas not created. Did you call io.Fonts->GetTexDataAsRGBA32 / GetTexDataAsAlpha8 ?
