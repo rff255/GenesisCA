@@ -41,12 +41,12 @@ SOURCES += \
     src/ca_modeler/ModelPropertiesHandler/model_attr_init_value.cpp \
     src/ca_modeler/ModelPropertiesHandler/break_case_instance.cpp \
     src/ca_modeler/VicinityHandler/vicinity_handler_widget.cpp \
-    src/ca_modeler/UpdateRulesHandler/gl_widget.cpp \
     src/imgui/imgui.cpp \
     src/imgui/imgui_impl_glfw.cpp \
     src/imgui/main_imgui.cpp \
     src/imgui/imgui_demo.cpp \
-    src/imgui/imgui_draw.cpp
+    src/imgui/imgui_draw.cpp \
+    src/ca_modeler/UpdateRulesHandler/update_rules_handler.cpp
 
 HEADERS  += \
     src/ca_modeler/ca_modeler_gui.h \
@@ -62,7 +62,6 @@ HEADERS  += \
     src/ca_model/break_case.h \
     src/ca_modeler/ModelPropertiesHandler/break_case_instance.h \
     src/ca_modeler/VicinityHandler/vicinity_handler_widget.h \
-    src/ca_modeler/UpdateRulesHandler/gl_widget.h \
     src/imgui/imgui.h \
     src/imgui/imgui_impl_glfw.h \
     src/imgui/imconfig.h \
@@ -70,7 +69,8 @@ HEADERS  += \
     src/imgui/glfw/glfw3native.h \
     src/imgui/stb_textedit.h \
     src/imgui/stb_rect_pack.h \
-    src/imgui/stb_truetype.h
+    src/imgui/stb_truetype.h \
+    src/ca_modeler/UpdateRulesHandler/update_rules_handler.h
 
 FORMS    += \
     src/ca_modeler/ca_modeler_gui.ui \
@@ -78,7 +78,8 @@ FORMS    += \
     src/ca_modeler/ModelPropertiesHandler/model_attr_init_value.ui \
     src/ca_modeler/ModelPropertiesHandler/model_properties_handler_widget.ui \
     src/ca_modeler/ModelPropertiesHandler/break_case_instance.ui \
-    src/ca_modeler/VicinityHandler/vicinity_handler_widget.ui
+    src/ca_modeler/VicinityHandler/vicinity_handler_widget.ui \
+    src/ca_modeler/UpdateRulesHandler/update_rules_handler.ui
 
 LIBS += -L$$PWD/src/imgui/glfw -lglfw3dll
 DEPENDPATH += $$PWD/src/imgui/glfw

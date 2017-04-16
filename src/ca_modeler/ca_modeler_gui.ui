@@ -235,8 +235,8 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
                   <rect>
                    <x>0</x>
                    <y>0</y>
-                   <width>100</width>
-                   <height>30</height>
+                   <width>180</width>
+                   <height>192</height>
                   </rect>
                  </property>
                  <attribute name="label">
@@ -249,8 +249,8 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
                   <rect>
                    <x>0</x>
                    <y>0</y>
-                   <width>100</width>
-                   <height>30</height>
+                   <width>180</width>
+                   <height>192</height>
                   </rect>
                  </property>
                  <attribute name="label">
@@ -262,8 +262,8 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
                   <rect>
                    <x>0</x>
                    <y>0</y>
-                   <width>100</width>
-                   <height>30</height>
+                   <width>180</width>
+                   <height>192</height>
                   </rect>
                  </property>
                  <attribute name="label">
@@ -275,8 +275,8 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
                   <rect>
                    <x>0</x>
                    <y>0</y>
-                   <width>100</width>
-                   <height>30</height>
+                   <width>180</width>
+                   <height>192</height>
                   </rect>
                  </property>
                  <attribute name="label">
@@ -288,8 +288,8 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
                   <rect>
                    <x>0</x>
                    <y>0</y>
-                   <width>100</width>
-                   <height>30</height>
+                   <width>180</width>
+                   <height>192</height>
                   </rect>
                  </property>
                  <attribute name="label">
@@ -301,8 +301,8 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
                   <rect>
                    <x>0</x>
                    <y>0</y>
-                   <width>100</width>
-                   <height>30</height>
+                   <width>180</width>
+                   <height>192</height>
                   </rect>
                  </property>
                  <attribute name="label">
@@ -499,7 +499,7 @@ p, li { white-space: pre-wrap; }
              </property>
              <layout class="QGridLayout" name="gridLayout_21">
               <item row="0" column="0">
-               <widget class="GLWidget" name="widget" native="true"/>
+               <widget class="QWidget" name="widget" native="true"/>
               </item>
              </layout>
             </widget>
@@ -894,8 +894,8 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
                   <rect>
                    <x>0</x>
                    <y>0</y>
-                   <width>100</width>
-                   <height>30</height>
+                   <width>121</width>
+                   <height>16</height>
                   </rect>
                  </property>
                  <attribute name="label">
@@ -1279,12 +1279,6 @@ QToolBox QScrollArea&gt;QWidget&gt;QWidget
    <class>VicinityHandlerWidget</class>
    <extends>QWidget</extends>
    <header>vicinity_handler_widget.h</header>
-   <container>1</container>
-  </customwidget>
-  <customwidget>
-   <class>GLWidget</class>
-   <extends>QWidget</extends>
-   <header>gl_widget.h</header>
    <container>1</container>
   </customwidget>
  </customwidgets>
