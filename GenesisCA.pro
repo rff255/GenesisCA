@@ -73,7 +73,7 @@ HEADERS  += \
     src/imgui/stb_truetype.h \
     src/ca_modeler/UpdateRulesHandler/update_rules_handler.h \
     src/imgui/imguinodegrapheditor.h \
-    src/imgui/node_graph_instance.h
+    src/ca_modeler/UpdateRulesHandler/node_graph_instance.h
 
 FORMS    += \
     src/ca_modeler/ca_modeler_gui.ui \

@@ -3,6 +3,8 @@
 
 #include <QWidget>
 
+#include <GLFW/glfw3.h>
+
 namespace Ui {
 class UpdateRulesHandler;
 }
@@ -20,6 +22,12 @@ private slots:
 
 private:
   Ui::UpdateRulesHandler *ui;
+
+  // Retain the state of editor window: open or closed
+  bool mIsEditorOpen;
+
+  // Reference to node graph editor (NGE) window
+  GLFWwindow* mNGEWindow;
 };
 
 #endif // UPDATE_RULES_HANDLER_H

@@ -4,15 +4,11 @@
 #include <string.h>     //strcpy
 #include "imguinodegrapheditor.h"
 
-//#define NO_DYNAMIC_CAST     // More portable, but makes code more intrusive
-#ifndef NO_DYNAMIC_CAST
 class ITestEnum {
 public:
   virtual int& getSelectedItem() = 0;
   virtual ~ITestEnum() {}
 };
-#endif //NO_DYNAMIC_CAST
-
 
 #ifndef IM_PLACEMENT_NEW
 struct ImPlacementNewDummy {};
@@ -127,10 +123,7 @@ namespace ImGui {
     inline static const ThisClass* Cast(const Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
 
   };
-  class ColorEnumUserNode : public Node
-#ifndef NO_DYNAMIC_CAST
-    , public ITestEnum
-#endif //NO_DYNAMIC_CAST
+  class ColorEnumUserNode : public Node, public ITestEnum
   {
   protected:
     typedef Node Base;  //Base Class
@@ -179,25 +172,6 @@ namespace ImGui {
 
   };
 
-  //void bla(char* buf)
-  //{
-  //  const int itemIndex = TestEnumNamesInsert(buf);
-  //  if (itemIndex >= 0)  {
-  //    buf[0] = '\0';
-  //    selectedEnumIndex = itemIndex;
-  //    nodeEdited = true;
-  //    //Now we must correct all the "selectedItem>=itemPlacement" in all the NodeGraphEditor
-  //    ImGui::NodeGraphEditor& nge = getNodeGraphEditor();
-  //    for (int i = 0, iSz = nge.getNumNodes(); i < iSz; i++)    {
-  //      ITestEnum* n = dynamic_cast<ITestEnum*>(nge.getNode(i));
-  //      if (n)  {
-  //        int& selectedIndexEnum = n->getSelectedItem();
-  //        if (selectedIndexEnum >= itemIndex) ++selectedIndexEnum;
-  //      }
-  //    }
-  //  }
-  //}
-
   bool CustomEnumEditorNode::render(float nodeWidth) // should return "true" if the node has been edited and its values modified (to fire "edited callbacks")
   {
     bool nodeEdited = false;
@@ -210,7 +184,6 @@ namespace ImGui {
           nodeEdited = true;
           //Now we must correct all the "selectedItem>=itemPlacement" in all the NodeGraphEditor
           ImGui::NodeGraphEditor& nge = getNodeGraphEditor();
-#               ifndef NO_DYNAMIC_CAST
           for (int i = 0, iSz = nge.getNumNodes(); i < iSz; i++)    {
             ITestEnum* n = dynamic_cast<ITestEnum*>(nge.getNode(i));
             if (n)  {
@@ -218,15 +191,6 @@ namespace ImGui {
               if (selectedIndexEnum >= itemIndex) ++selectedIndexEnum;
             }
           }
-#               else //NO_DYNAMIC_CAST
-          ImVector<ImGui::Node*> nodes;
-          // Similiar lines must be repeated for every new Node class definition that uses the dynamic enum
-          nge.getAllNodesOfType(ImGui::TNT_CUSTOM_ENUM_USER_NODE, &nodes);
-          for (int i = 0, iSz = nodes.size(); i<iSz; i++)    {
-            ImGui::ColorEnumUserNode& n = *ImGui::ColorEnumUserNode::Cast(nodes[i]);
-            if (n.selectedEnumIndex >= itemIndex) ++n.selectedEnumIndex;
-          }
-#               endif //NO_DYNAMIC_CAST
         }
       }
     }
@@ -238,7 +202,6 @@ namespace ImGui {
 
         //Now we must correct all the "selectedItem>=selectedEnumIndex" in all the NodeGraphEditor
         ImGui::NodeGraphEditor& nge = getNodeGraphEditor();
-#           ifndef NO_DYNAMIC_CAST
         for (int i = 0, iSz = nge.getNumNodes(); i<iSz; i++)    {
           ITestEnum* n = dynamic_cast<ITestEnum*>(nge.getNode(i));
           if (n)  {
@@ -246,15 +209,6 @@ namespace ImGui {
             if (selectedIndexEnum >= selectedEnumIndex) --selectedIndexEnum;
           }
         }
-#           else //NO_DYNAMIC_CAST
-        ImVector<ImGui::Node*> nodes;
-        // Similiar lines must be repeated for every new Node class definition that uses the dynamic enum
-        nge.getAllNodesOfType(ImGui::TNT_CUSTOM_ENUM_USER_NODE, &nodes);
-        for (int i = 0, iSz = nodes.size(); i<iSz; i++)    {
-          ImGui::ColorEnumUserNode& n = *ImGui::ColorEnumUserNode::Cast(nodes[i]);
-          if (n.selectedEnumIndex >= selectedEnumIndex) --n.selectedEnumIndex;
-        }
-#           endif //NO_DYNAMIC_CAST
         if (--selectedEnumIndex<0) selectedEnumIndex = 0;
       }
     }
@@ -274,45 +228,6 @@ namespace ImGui {
 
 } // namespace ImGui
 // END NODE DEFINITIONS ============================================================
-
-
-// Optional methods to load/save "TestEnumNames"
-#if (defined(IMGUIHELPER_H_) && !defined(NO_IMGUIHELPER_SERIALIZATION))
-#ifndef NO_IMGUIHELPER_SERIALIZATION_SAVE
-bool TestEnumNamesSave(ImGuiHelper::Serializer& s)  {
-  const int size = TestEnumNames.size();
-  s.save(&size, "num_text_line_items");
-  s.saveTextLines(size, ImGui::CustomEnumEditorNode::GetTextFromEnumIndex, (void*)&TestEnumNames, "text_line_items");
-  return true;
-}
-inline bool TestEnumNamesSave(const char* filename) {
-  ImGuiHelper::Serializer s(filename);
-  return TestEnumNamesSave(s);
-}
-#endif //NO_IMGUIHELPER_SERIALIZATION_SAVE
-#ifndef NO_IMGUIHELPER_SERIALIZATION_LOAD
-static bool TestEnumNamesTypeLoadCallback(ImGuiHelper::FieldType ft, int numArrayElements, void* pValue, const char* name, void* userPtr)    {
-  TestEnumNamesType* vec = (TestEnumNamesType*)userPtr;
-  if (strcmp(name, "num_text_line_items") == 0)   { vec->resize(*((int*)pValue)); for (int i = 0; i<vec->size(); i++) (*vec)[i][0] = '\0'; }
-  else if (ft == ImGui::FT_TEXTLINE && strcmp(name, "text_line_items") == 0)   {
-    IM_ASSERT(numArrayElements<vec->size());
-    strcpy(&(*vec)[numArrayElements][0], (char*)pValue);
-    if (numArrayElements == vec->size() - 1) return true;
-  }
-  return false;
-}
-bool TestEnumNamesLoad(ImGuiHelper::Deserializer& d, const char ** pOptionalBufferStart = NULL)    {
-  const char* amount = pOptionalBufferStart ? (*pOptionalBufferStart) : 0;
-  d.parse(TestEnumNamesTypeLoadCallback, (void*)&TestEnumNames, amount);
-  if (pOptionalBufferStart) *pOptionalBufferStart = amount;
-  return true;
-}
-bool TestEnumNamesLoad(const char* filename) {
-  ImGuiHelper::Deserializer d(filename);
-  return TestEnumNamesLoad(d);
-}
-#endif //NO_IMGUIHELPER_SERIALIZATION_LOAD
-#endif //NO_IMGUIHELPER_SERIALIZATION
 
 const char* TestEnumNamesSavePath = "testEnumNames.txt";
 

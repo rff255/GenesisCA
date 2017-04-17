@@ -15,6 +15,7 @@
 
 UpdateRulesHandler::UpdateRulesHandler(QWidget *parent) :
   QWidget(parent),
+  mIsEditorOpen(false),
   ui(new Ui::UpdateRulesHandler)
 {
   ui->setupUi(this);
@@ -22,6 +23,11 @@ UpdateRulesHandler::UpdateRulesHandler(QWidget *parent) :
 
 UpdateRulesHandler::~UpdateRulesHandler()
 {
+//  if(mIsEditorOpen){
+//    ImGui_ImplGlfw_Shutdown();
+//    glfwTerminate();
+//    glfwDestroyWindow(mNGEWindow);
+//  }
   delete ui;
 }
 static void error_callback(int error, const char* description)
@@ -31,17 +37,25 @@ static void error_callback(int error, const char* description)
 
 void UpdateRulesHandler::on_pbtn_open_node_graph_editor_released()
 {
+  // Check if the editor is already open
+  if(mIsEditorOpen)
+    return;
+
+  mIsEditorOpen = true;
+
   // Setup window
   glfwSetErrorCallback(error_callback);
 
   if (!glfwInit())
       qDebug()<< stderr << "GLFW nao conseguiu inicializar, e agora jose?";
 
-  GLFWwindow* window = glfwCreateWindow(1280, 720, "ImGui OpenGL2 example", NULL, NULL);
-  glfwMakeContextCurrent(window);
+  int width  = ui->gridLayout->geometry().width();
+  int height = ui->gridLayout->geometry().height();
+  mNGEWindow = glfwCreateWindow(width, height, "Update Rules Graph Editor", NULL, NULL);
+  glfwMakeContextCurrent(mNGEWindow);
 
   // Setup ImGui binding
-  ImGui_ImplGlfw_Init(window, true);
+  ImGui_ImplGlfw_Init(mNGEWindow, true);
 
   // Load Fonts
   // (there is a default font, this is only if you want to change it. see extra_fonts/README.txt for more details)
@@ -53,11 +67,6 @@ void UpdateRulesHandler::on_pbtn_open_node_graph_editor_released()
   //io.Fonts->AddFontFromFileTTF("../../extra_fonts/ProggyTiny.ttf", 10.0f);
   //io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf", 18.0f, NULL, io.Fonts->GetGlyphRangesJapanese());
 
-  bool show_test_window = true;
-  bool show_another_window = false;
-  bool basicNodeGraph = false;
-  bool dinamicEnumNodeGraph = false;
-  float numero = 10;
   char novoAttr[MAX_ENUM_NAME_LENGTH];
   novoAttr[0] = '\0';
   char addedAttr[MAX_ENUM_NAME_LENGTH];
@@ -68,84 +77,43 @@ void UpdateRulesHandler::on_pbtn_open_node_graph_editor_released()
   // Initialize Node graph editor nge (add initial nodes conections and so on)
   InitNGE();
 
+  int resized_width;
+  int resized_height;
   // Main loop
-  while (!glfwWindowShouldClose(window))
+  while (!glfwWindowShouldClose(mNGEWindow))
   {
       glfwPollEvents();
       ImGui_ImplGlfw_NewFrame();
 
-      // 1. Show a simple window
-      // Tip: if we don't call ImGui::Begin()/ImGui::End() the widgets appears in a window automatically called "Debug"
-      {
-          static float f = 0.0f;
-          ImGui::Text("Hello, world!");
-          ImGui::SliderFloat("float", &f, 0.0f, 1.0f);
-          ImGui::ColorEdit3("clear color", (float*)&clear_color);
-          if (ImGui::Button("Test Window")) show_test_window ^= 1;
-          if (ImGui::Button("Another Window")) show_another_window ^= 1;
-          if (ImGui::Button("Node Graph Editor")) basicNodeGraph ^= 1;
-          if (ImGui::Button("Dinamic bla bla Graph Editor")) dinamicEnumNodeGraph ^= 1;
-          ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
-      }
-
-      if (basicNodeGraph) {
-        ImGui::SetNextWindowSize(ImVec2(500, 300), ImGuiSetCond_FirstUseEver);
-        ImGui::Begin("Node Graph Editor do sucesso", &basicNodeGraph);
 
 
-        if (ImGui::InputText("New item", novoAttr, MAX_ENUM_NAME_LENGTH, ImGuiInputTextFlags_EnterReturnsTrue)){
-          TestEnumNamesInsert(novoAttr);
-          strncpy(addedAttr, novoAttr, MAX_ENUM_NAME_LENGTH);
-        }
-        ImGui::Text("Novo Atributo = %s", addedAttr);
-        //ImGui::TestNodeGraphEditor();
-        ImGui::End();
-      }
-
-      if (dinamicEnumNodeGraph) {
-        ImGui::SetNextWindowSize(ImVec2(500, 300), ImGuiSetCond_FirstUseEver);
-        ImGui::Begin("Beringela", &dinamicEnumNodeGraph);
-        //ImGui::Text("DELICIA DE ABACAXI");
-        nge.render();
-        ImGui::End();
-      }
-
-      // 2. Show another simple window, this time using an explicit Begin/End pair
-      if (show_another_window)
-      {
-        //ImGui::TestNodeGraphEditor();   // see its code for further info
-        //static bool open = true;
-        //if (ImGui::Begin("Node Graph Editor", &open, ImVec2(1190, 710), 0.85f, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings))
-
-        //ImGui::SetNextWindowSize(ImVec2(500, 300));
-        //ImGui::Begin("Beringela", &show_another_window);
-        //nge.render();
-        //ImGui::End();
-
-          ImGui::SetNextWindowSize(ImVec2(200,100), ImGuiSetCond_FirstUseEver);
-          ImGui::Begin("Another Window", &show_another_window);
-          ImGui::Text("Hello");
-          ImGui::End();
-      }
-
-      // 3. Show the ImGui test window. Most of the sample code is in ImGui::ShowTestWindow()
-      if (show_test_window)
-      {
-          ImGui::SetNextWindowPos(ImVec2(650, 20), ImGuiSetCond_FirstUseEver);
-          ImGui::ShowTestWindow(&show_test_window);
-      }
+      glfwGetWindowSize(mNGEWindow,&resized_width, &resized_height);
+      ImGui::SetNextWindowSize(ImVec2(resized_width, resized_height), ImGuiSetCond_Always);
+      //ImGui::SetNextWindowPos(ImVec2(0,0));
+      //ImGui::SetNextWindowSizeConstraints(ImVec2(resized_width, resized_height), ImVec2(resized_width, resized_height));
+      ImGui::Begin("Beringela", nullptr, ImGuiWindowFlags_NoResize |
+                                         ImGuiWindowFlags_NoMove |
+                                         ImGuiWindowFlags_NoCollapse |
+                                         ImGuiWindowFlags_NoTitleBar);
+                                         //ImGuiWindowFlags_ShowBorders |
+                                         //ImGuiWindowFlags_NoSavedSettings |
+      //ImGui::Text("DELICIA DE ABACAXI");
+      nge.render();
+      ImGui::End();
 
       // Rendering
       int display_w, display_h;
-      glfwGetFramebufferSize(window, &display_w, &display_h);
+      glfwGetFramebufferSize(mNGEWindow, &display_w, &display_h);
       glViewport(0, 0, display_w, display_h);
       glClearColor(clear_color.x, clear_color.y, clear_color.z, clear_color.w);
       glClear(GL_COLOR_BUFFER_BIT);
       ImGui::Render();
-      glfwSwapBuffers(window);
+      glfwSwapBuffers(mNGEWindow);
   }
 
   // Cleanup
   ImGui_ImplGlfw_Shutdown();
   glfwTerminate();
+
+  mIsEditorOpen = false;
 }
