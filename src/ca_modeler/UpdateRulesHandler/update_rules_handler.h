@@ -1,6 +1,8 @@
 #ifndef UPDATE_RULES_HANDLER_H
 #define UPDATE_RULES_HANDLER_H
 
+#include "../ca_model/ca_model.h"
+
 #include <QWidget>
 
 #include <GLFW/glfw3.h>
@@ -17,11 +19,16 @@ public:
   explicit UpdateRulesHandler(QWidget *parent = 0);
   ~UpdateRulesHandler();
 
+  void set_m_ca_model(CAModel* model) {m_ca_model = model;}
+
 private slots:
   void on_pbtn_open_node_graph_editor_released();
 
 private:
   Ui::UpdateRulesHandler *ui;
+
+  // Reference to CAModel serve to update the options of attributes and neighborhoods at editor
+  CAModel* m_ca_model;
 
   // Retain the state of editor window: open or closed
   bool mIsEditorOpen;

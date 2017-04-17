@@ -78,7 +78,7 @@
       <item>
        <widget class="QLineEdit" name="txt_name">
         <property name="styleSheet">
-         <string notr="true">background-color: rgb(255, 95, 95)</string>
+         <string notr="true"/>
         </property>
         <property name="text">
          <string>Break Case Name</string>

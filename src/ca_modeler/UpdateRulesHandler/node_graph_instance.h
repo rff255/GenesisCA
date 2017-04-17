@@ -1,7 +1,9 @@
 #ifndef NODE_GRAPH_INSTANCE_H
 #define NODE_GRAPH_INSTANCE_H
 
-#include <string.h>     //strcpy
+//#include <string.h>     //strcpy
+#include <vector>
+#include <string>
 #include "imguinodegrapheditor.h"
 
 class ITestEnum {
@@ -22,6 +24,7 @@ inline void operator delete(void*, ImPlacementNewDummy, void*) {}
 #define MAX_ENUM_NAME_LENGTH    84                                  // in bytes
 typedef ImVector<char[MAX_ENUM_NAME_LENGTH]> TestEnumNamesType;    // so that it works without STL (std::vector<std::string> will be easier to implement)
 TestEnumNamesType TestEnumNames;
+//std::vector<std::string> TestEnumNames;
 int TestEnumNamesInsert(const char* name) {
   if (!name) return -1;
   const int len = strlen(name);
@@ -53,6 +56,9 @@ bool TestEnumNamesDelete(int itemIndex) {
   return true;
 }
 
+void TestEnumNamesClear() {
+  TestEnumNames.clear();
+}
 
 // NODE DEFINITIONS ================================================================
 namespace ImGui {

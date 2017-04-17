@@ -167,7 +167,7 @@ background: rgb(240, 240, 240);
          <number>0</number>
         </property>
         <item row="0" column="0">
-         <widget class="UpdateRulesHandler" name="widget" native="true"/>
+         <widget class="UpdateRulesHandler" name="wgt_update_rules_handler" native="true"/>
         </item>
        </layout>
       </widget>

@@ -44,6 +44,7 @@ void CAModelerGUI::PassModel() {
   ui->wgt_attribute_handler->set_m_ca_model(m_ca_model);
   ui->wgt_model_properties_handler->set_m_ca_model(m_ca_model);
   ui->wgt_vicinities_handler->set_m_ca_model(m_ca_model);
+  ui->wgt_update_rules_handler->set_m_ca_model(m_ca_model);
 }
 
 // Slots:
