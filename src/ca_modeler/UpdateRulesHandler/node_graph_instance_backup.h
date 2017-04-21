@@ -6,13 +6,6 @@
 #include <string>
 #include "imguinodegrapheditor.h"
 
-// ############
-// #--Warning
-// #--This file contains the definitions of Update Rules Editor,
-// #-- but the instantiable class is UpdateRulesEditor (at update_rules_editor.h)
-// ############
-
-
 class ITestEnum {
 public:
   virtual int& getSelectedItem() = 0;
@@ -244,9 +237,9 @@ static Node* TestNodeFactory(int nt, const ImVec2& pos) {
 
 const char* TestEnumNamesSavePath = "testEnumNames.txt";
 
-//ImGui::NodeGraphEditor nge;
+ImGui::NodeGraphEditor nge;
 // Mandatory methods
-void InitNGE(ImGui::NodeGraphEditor &nge) {
+void InitNGE() {
   if (nge.isInited())	{
     // We should load "TestEnumNames" from a file here. Instead we do:
 #       if (defined(IMGUIHELPER_H_) && !defined(NO_IMGUIHELPER_SERIALIZATION) && !defined(NO_IMGUIHELPER_SERIALIZATION_LOAD))

@@ -8,8 +8,9 @@
 #include <stdio.h>
 #include <GLFW/glfw3.h>
 #include "imguinodegrapheditor.h"   // intellisense only
-#include "node_graph_instance.h"
 #include <string>     //strcpy
+
+#include "update_rules_editor.h"
 
 #define MAX_ENUM_NAME_LENGTH    84
 
@@ -19,6 +20,7 @@ UpdateRulesHandler::UpdateRulesHandler(QWidget *parent) :
   ui(new Ui::UpdateRulesHandler)
 {
   ui->setupUi(this);
+  mGraphEditor = UpdateRulesEditor();
 }
 
 UpdateRulesHandler::~UpdateRulesHandler()
@@ -75,26 +77,25 @@ void UpdateRulesHandler::on_pbtn_open_node_graph_editor_released()
   ImVec4 clear_color = ImColor(114, 144, 154);
 
   // Initialize Node graph editor nge (add initial nodes conections and so on)
-  InitNGE();
-
+  mGraphEditor.Init();
 
   int resized_width;
   int resized_height;
   // Main loop
   while (!glfwWindowShouldClose(mNGEWindow))
   {
-    // Test to refresh the options of combox
-    TestEnumNamesClear();
-    std::vector<std::string> attrNameList = m_ca_model->GetAtributesList();
-    for(std::string attrName :   attrNameList)
-      TestEnumNamesInsert(attrName.c_str());
+//    // Test to refresh the options of combox
+//    TestEnumNamesClear();
+//    std::vector<std::string> attrNameList = m_ca_model->GetAtributesList();
+//    for(std::string attrName :   attrNameList)
+//      TestEnumNamesInsert(attrName.c_str());
 
       glfwPollEvents();
       ImGui_ImplGlfw_NewFrame();
 
       glfwGetWindowSize(mNGEWindow,&resized_width, &resized_height);
       ImGui::SetNextWindowSize(ImVec2(resized_width, resized_height), ImGuiSetCond_Always);
-      //ImGui::SetNextWindowPos(ImVec2(0,0));
+      ImGui::SetNextWindowPos(ImVec2(0,0), ImGuiSetCond_Once);
       //ImGui::SetNextWindowSizeConstraints(ImVec2(resized_width, resized_height), ImVec2(resized_width, resized_height));
       ImGui::Begin("Beringela", nullptr, ImGuiWindowFlags_NoResize |
                                          ImGuiWindowFlags_NoMove |
@@ -103,7 +104,8 @@ void UpdateRulesHandler::on_pbtn_open_node_graph_editor_released()
                                          //ImGuiWindowFlags_ShowBorders |
                                          //ImGuiWindowFlags_NoSavedSettings |
       //ImGui::Text("DELICIA DE ABACAXI");
-      nge.render();
+      mGraphEditor.Render();
+      //nge.render();
       ImGui::End();
 
       // Rendering

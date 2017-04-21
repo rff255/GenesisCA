@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-static const std::vector<std::string> cb_topology_values = {"Triangles", "Squares", "Hexagons"};
+static const std::vector<std::string> cb_topology_values = {"Squares", "Triangles", "Hexagons"};
 static const std::vector<std::string> cb_boundary_values = {"Constant", "Torus"};
 
 struct ModelProperties {

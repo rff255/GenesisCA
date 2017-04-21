@@ -3,6 +3,8 @@
 
 #include "../ca_model/ca_model.h"
 
+#include "update_rules_editor.h"
+
 #include <QWidget>
 
 #include <GLFW/glfw3.h>
@@ -35,6 +37,9 @@ private:
 
   // Reference to node graph editor (NGE) window
   GLFWwindow* mNGEWindow;
+
+  // The Editor instance
+  UpdateRulesEditor mGraphEditor;
 };
 
 #endif // UPDATE_RULES_HANDLER_H
