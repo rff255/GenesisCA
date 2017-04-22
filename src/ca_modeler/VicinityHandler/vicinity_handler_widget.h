@@ -41,6 +41,7 @@ private slots:
 
 signals:
   void LayoutChanged();
+  void NeighborhoodListChanged();
 
 private:
   Ui::VicinityHandlerWidget *ui;

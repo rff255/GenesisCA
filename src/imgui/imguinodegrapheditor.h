@@ -396,41 +396,41 @@ public:
     ImU32 color_mouse_rectangular_selection;
     ImU32 color_mouse_rectangular_selection_frame;
     Style() {
-      color_background =          ImColor(60,60,70,200);
-      color_grid =                ImColor(200,200,200,40);
+      color_background =          ImColor(50,50,50,255);
+      color_grid =                ImColor(30,30,30,130);
       grid_line_width =           1.f;
-      grid_size =                 64.f;
+      grid_size =                 20.f;
 
-      color_node =                ImColor(60,60,60);
-      color_node_frame =          ImColor(100,100,100);
-      color_node_selected =       ImColor(75,75,85);
-      color_node_active =         ImColor(85,85,65);
-      color_node_frame_selected = ImColor(115,115,115);
-      color_node_frame_active =   ImColor(125,125,105);
-      color_node_hovered =        ImColor(85,85,85);
-      color_node_frame_hovered =  ImColor(125,125,125);
-      node_rounding =             4.f;
-      node_window_padding =       ImVec2(8.f,8.f);
+      color_node =                ImColor(60,60,60,200);
+      color_node_frame =          ImColor(20,20,20);
+      color_node_selected =       ImColor(60,60,60);
+      color_node_active =         ImColor(60,60,60);
+      color_node_frame_selected = ImColor(0,0,80);
+      color_node_frame_active =   ImColor(0,0,140);
+      color_node_hovered =        ImColor(60,60,60);
+      color_node_frame_hovered =  ImColor(0,0,0);
+      node_rounding =             10.f;
+      node_window_padding =       ImVec2(7.f,6.f);
 
-      color_node_input_slots =    ImColor(150,150,150,150);
-      color_node_output_slots =   ImColor(150,150,150,150);
-      node_slots_radius =         5.f;
+      color_node_input_slots =    ImColor(255,255,0,200);
+      color_node_output_slots =   ImColor(255,255,0,200);
+      node_slots_radius =         4.f;
 
-      color_link =                ImColor(200,200,100);
-      link_line_width =           3.f;
-      link_control_point_distance = 50.f;
-      link_num_segments =         0;
+      color_link =                ImColor(255,255,20, 200);
+      link_line_width =           1.5f;
+      link_control_point_distance = 60.f;
+      link_num_segments =         20;
 
-      color_node_title = ImGui::GetStyle().Colors[ImGuiCol_Text];
-      color_node_title_background = 0;//ImGui::ColorConvertFloat4ToU32(ImGui::GetStyle().Colors[ImGuiCol_TitleBgActive]);
-      color_node_title_background_gradient = 0.f;   // in [0,0.5f] used only if available (performance is better when 0)
-      color_node_input_slots_names = ImGui::GetStyle().Colors[ImGuiCol_Text];color_node_input_slots_names.w=0.75f;
-      color_node_output_slots_names = ImGui::GetStyle().Colors[ImGuiCol_Text];color_node_output_slots_names.w=0.75f;
+      color_node_title = ImColor(0,0,0, 255);//ImGui::GetStyle().Colors[ImGuiCol_Text];
+      color_node_title_background = ImColor(100,100,100, 80);;//ImGui::ColorConvertFloat4ToU32(ImGui::GetStyle().Colors[ImGuiCol_TitleBgActive]);
+      color_node_title_background_gradient = 0.3f;   // in [0,0.5f] used only if available (performance is better when 0)
+      color_node_input_slots_names = ImColor(230,230,230, 150);  //ImGui::GetStyle().Colors[ImGuiCol_Text];color_node_input_slots_names.w=0.75f;
+      color_node_output_slots_names = ImColor(230,230,230, 150); //ImGui::GetStyle().Colors[ImGuiCol_Text];color_node_output_slots_names.w=0.75f;
 
-      color_mouse_rectangular_selection =         ImColor(255,0,0,45);
-      color_mouse_rectangular_selection_frame =   ImColor(45,0,0,175);
+      color_mouse_rectangular_selection =         ImColor(150,150,150,30);
+      color_mouse_rectangular_selection_frame =   ImColor(255,255,255,40);
 
-      color_node_input_slots_border = color_node_output_slots_border = ImColor(60,60,60,0);
+      color_node_input_slots_border = color_node_output_slots_border = ImColor(0,0,0,255);
       node_slots_num_segments = 12;
     }
 

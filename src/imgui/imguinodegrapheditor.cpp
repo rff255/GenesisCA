@@ -921,49 +921,49 @@ void NodeGraphEditor::render()
     const bool canCopy = node->canBeCopied();
     static const ImVec4 transparentColor(1,1,1,0);
     const ImVec2 nodeTitleBarButtonsStartCursor = node->isOpen ? ImGui::GetCursorPos() : ImVec2(0,0);
-    if (!node->isOpen && !node->isInEditingMode)    {
-      ImGui::SameLine();
-      //== Actual code to draw buttons (same code is copied below) =====================
-      ImGui::PushStyleColor(ImGuiCol_Button,transparentColor);
-      ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(0.75,0.75,0.75,0.5));
-      ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(0.75,0.75,0.75,0.77));
-      ImGui::PushStyleColor(ImGuiCol_Text,titleTextColor);
-      ImGui::PushID("NodeButtons");
-      if (show_node_copy_paste_buttons)   {
-        static const ImVec2 vec2zero(0,0);
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,vec2zero);
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing,vec2zero);
-        if (canPaste) {
-          if (ImGui::SmallButton(NodeGraphEditor::CloseCopyPasteChars[2])) {
-            node_to_paste_from_copy_source = node_hovered_in_scene = node;
-          }
-          if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s","Paste");
-          ImGui::SameLine(0);
-        }
-        if (canCopy)	{
-          if (ImGui::SmallButton(NodeGraphEditor::CloseCopyPasteChars[1])) {
-            node_hovered_in_scene = node;
-            copyNode(node);
-          }
-          if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s","Copy");
-          ImGui::SameLine(0);
-        }
-      }
-      if (ImGui::SmallButton(NodeGraphEditor::CloseCopyPasteChars[0])) {
-        node_hovered_in_scene = node;
-        if (!hasLinks(node))  {menuNode = node;mustDeleteANodeSoon=true;}
-        else {
-          menuNode = node;
-          open_delete_only_context_menu = true;  // will ask to delete node later
-        }
-      }
-      if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s","Delete");
-      if (show_node_copy_paste_buttons) ImGui::PopStyleVar(2);
-      ImGui::PopID();
-      ImGui::PopStyleColor(4);
-      //== End actual code to draw buttons (same code is copied below) ====================
-    }
-    //=================================================================
+//    if (!node->isOpen && !node->isInEditingMode)    {
+//      ImGui::SameLine();
+//      //== Actual code to draw buttons (same code is copied below) =====================
+//      ImGui::PushStyleColor(ImGuiCol_Button,transparentColor);
+//      ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(0.75,0.75,0.75,0.5));
+//      ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(0.75,0.75,0.75,0.77));
+//      ImGui::PushStyleColor(ImGuiCol_Text,titleTextColor);
+//      ImGui::PushID("NodeButtons");
+//      if (show_node_copy_paste_buttons)   {
+//        static const ImVec2 vec2zero(0,0);
+//        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,vec2zero);
+//        ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing,vec2zero);
+//        if (canPaste) {
+//          if (ImGui::SmallButton(NodeGraphEditor::CloseCopyPasteChars[2])) {
+//            node_to_paste_from_copy_source = node_hovered_in_scene = node;
+//          }
+//          if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s","Paste");
+//          ImGui::SameLine(0);
+//        }
+//        if (canCopy)	{
+//          if (ImGui::SmallButton(NodeGraphEditor::CloseCopyPasteChars[1])) {
+//            node_hovered_in_scene = node;
+//            copyNode(node);
+//          }
+//          if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s","Copy");
+//          ImGui::SameLine(0);
+//        }
+//      }
+//      if (ImGui::SmallButton(NodeGraphEditor::CloseCopyPasteChars[0])) {
+//        node_hovered_in_scene = node;
+//        if (!hasLinks(node))  {menuNode = node;mustDeleteANodeSoon=true;}
+//        else {
+//          menuNode = node;
+//          open_delete_only_context_menu = true;  // will ask to delete node later
+//        }
+//      }
+//      if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s","Delete");
+//      if (show_node_copy_paste_buttons) ImGui::PopStyleVar(2);
+//      ImGui::PopID();
+//      ImGui::PopStyleColor(4);
+//      //== End actual code to draw buttons (same code is copied below) ====================
+//    }
+//    //=================================================================
 
     ImGui::Spacing();
 
@@ -993,63 +993,63 @@ void NodeGraphEditor::render()
     node->Size = ImGui::GetItemRectSize() + NODE_WINDOW_PADDING + NODE_WINDOW_PADDING;
     ImVec2 node_rect_max = node_rect_min + node->Size;
 
-    // Go backwards and display title bar buttons if node->isOpen
-    // BUTTONS ========================================================
-    if (node->Size.x!=0 && !node->isInEditingMode)    {
-      const ImVec2 cursorPosToRestore = ImGui::GetCursorPos();
-      ImGui::SetCursorPos(nodeTitleBarButtonsStartCursor);
-      //--------------------------------------------
-      ImGui::SameLine(-effectiveScrolling.x+nodePos.x+node->Size.x-textSizeButtonX-10
-                      -(show_node_copy_paste_buttons ?
-                          (
-                            (canCopy?(textSizeButtonCopy+2):0) +
-                            (canPaste?(textSizeButtonPaste+2):0)
-                            )
-                        : 0)
-                      ,0);
-      //== Actual code to draw buttons (same code is copied below) =====================
-      ImGui::PushStyleColor(ImGuiCol_Button,transparentColor);
-      ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(0.75,0.75,0.75,0.5));
-      ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(0.75,0.75,0.75,0.77));
-      ImGui::PushStyleColor(ImGuiCol_Text,titleTextColor);
-      ImGui::PushID("NodeButtons");
-      if (show_node_copy_paste_buttons)   {
-        static const ImVec2 vec2zero(0,0);
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,vec2zero);
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing,vec2zero);
-        if (canPaste) {
-          if (ImGui::SmallButton(NodeGraphEditor::CloseCopyPasteChars[2])) {
-            node_to_paste_from_copy_source = node_hovered_in_scene = node;
-          }
-          if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s","Paste");
-          ImGui::SameLine(0);
-        }
-        if (canCopy)	{
-          if (ImGui::SmallButton(NodeGraphEditor::CloseCopyPasteChars[1])) {
-            node_hovered_in_scene = node;
-            copyNode(node);
-          }
-          if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s","Copy");
-          ImGui::SameLine(0);
-        }
-      }
-      if (ImGui::SmallButton(NodeGraphEditor::CloseCopyPasteChars[0])) {
-        node_hovered_in_scene = node;
-        if (!hasLinks(node))  {menuNode = node;mustDeleteANodeSoon=true;}
-        else {
-          menuNode = node;
-          open_delete_only_context_menu = true;  // will ask to delete node later
-        }
-      }
-      if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s","Delete");
-      if (show_node_copy_paste_buttons) ImGui::PopStyleVar(2);
-      ImGui::PopID();
-      ImGui::PopStyleColor(4);
-      //== End actual code to draw buttons (same code is copied below) ====================
-      //-----------------------------------------------------------
-      ImGui::SetCursorPos(cursorPosToRestore);
-    }
-    //=================================================================
+//    // Go backwards and display title bar buttons if node->isOpen
+//    // BUTTONS ========================================================
+//    if (node->Size.x!=0 && !node->isInEditingMode)    {
+//      const ImVec2 cursorPosToRestore = ImGui::GetCursorPos();
+//      ImGui::SetCursorPos(nodeTitleBarButtonsStartCursor);
+//      //--------------------------------------------
+//      ImGui::SameLine(-effectiveScrolling.x+nodePos.x+node->Size.x-textSizeButtonX-10
+//                      -(show_node_copy_paste_buttons ?
+//                          (
+//                            (canCopy?(textSizeButtonCopy+2):0) +
+//                            (canPaste?(textSizeButtonPaste+2):0)
+//                            )
+//                        : 0)
+//                      ,0);
+//      //== Actual code to draw buttons (same code is copied below) =====================
+//      ImGui::PushStyleColor(ImGuiCol_Button,transparentColor);
+//      ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(0.75,0.75,0.75,0.5));
+//      ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(0.75,0.75,0.75,0.77));
+//      ImGui::PushStyleColor(ImGuiCol_Text,titleTextColor);
+//      ImGui::PushID("NodeButtons");
+//      if (show_node_copy_paste_buttons)   {
+//        static const ImVec2 vec2zero(0,0);
+//        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,vec2zero);
+//        ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing,vec2zero);
+//        if (canPaste) {
+//          if (ImGui::SmallButton(NodeGraphEditor::CloseCopyPasteChars[2])) {
+//            node_to_paste_from_copy_source = node_hovered_in_scene = node;
+//          }
+//          if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s","Paste");
+//          ImGui::SameLine(0);
+//        }
+//        if (canCopy)	{
+//          if (ImGui::SmallButton(NodeGraphEditor::CloseCopyPasteChars[1])) {
+//            node_hovered_in_scene = node;
+//            copyNode(node);
+//          }
+//          if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s","Copy");
+//          ImGui::SameLine(0);
+//        }
+//      }
+//      if (ImGui::SmallButton(NodeGraphEditor::CloseCopyPasteChars[0])) {
+//        node_hovered_in_scene = node;
+//        if (!hasLinks(node))  {menuNode = node;mustDeleteANodeSoon=true;}
+//        else {
+//          menuNode = node;
+//          open_delete_only_context_menu = true;  // will ask to delete node later
+//        }
+//      }
+//      if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s","Delete");
+//      if (show_node_copy_paste_buttons) ImGui::PopStyleVar(2);
+//      ImGui::PopID();
+//      ImGui::PopStyleColor(4);
+//      //== End actual code to draw buttons (same code is copied below) ====================
+//      //-----------------------------------------------------------
+//      ImGui::SetCursorPos(cursorPosToRestore);
+//    }
+//    //=================================================================
 
 
     // Display node box

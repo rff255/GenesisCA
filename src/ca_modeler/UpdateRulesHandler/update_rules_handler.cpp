@@ -25,12 +25,15 @@ UpdateRulesHandler::UpdateRulesHandler(QWidget *parent) :
 
 UpdateRulesHandler::~UpdateRulesHandler()
 {
-//  if(mIsEditorOpen){
-//    ImGui_ImplGlfw_Shutdown();
-//    glfwTerminate();
-//    glfwDestroyWindow(mNGEWindow);
-//  }
+  // TODO: check if is possible to close the ImGui window if Genesis window is closed first
   delete ui;
+}
+
+void UpdateRulesHandler::UpdateEditorComboBoxes()
+{
+  mGraphEditor.UpdateComboBoxes(m_ca_model->GetCellAtributesList(),
+                                m_ca_model->GetModelAtributesList(),
+                                m_ca_model->GetNeighborhoodList());
 }
 static void error_callback(int error, const char* description)
 {
@@ -78,6 +81,7 @@ void UpdateRulesHandler::on_pbtn_open_node_graph_editor_released()
 
   // Initialize Node graph editor nge (add initial nodes conections and so on)
   mGraphEditor.Init();
+  UpdateEditorComboBoxes(); // Synchonize model with editor combo boxes options
 
   int resized_width;
   int resized_height;

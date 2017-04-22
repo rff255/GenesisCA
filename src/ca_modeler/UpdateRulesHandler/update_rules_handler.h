@@ -24,6 +24,8 @@ public:
   void set_m_ca_model(CAModel* model) {m_ca_model = model;}
 
 private slots:
+  void UpdateEditorComboBoxes();
+
   void on_pbtn_open_node_graph_editor_released();
 
 private:
@@ -32,14 +34,14 @@ private:
   // Reference to CAModel serve to update the options of attributes and neighborhoods at editor
   CAModel* m_ca_model;
 
-  // Retain the state of editor window: open or closed
-  bool mIsEditorOpen;
-
   // Reference to node graph editor (NGE) window
   GLFWwindow* mNGEWindow;
 
   // The Editor instance
   UpdateRulesEditor mGraphEditor;
+
+  // Retain the state of editor window: open or closed
+  bool mIsEditorOpen;
 };
 
 #endif // UPDATE_RULES_HANDLER_H

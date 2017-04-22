@@ -59,6 +59,26 @@ std::vector<std::string> CAModel::GetAtributesList() {
   return attr_id_name_list;
 }
 
+std::vector<std::string> CAModel::GetCellAtributesList()
+{
+  std::vector<std::string> attr_id_name_list;
+  for(auto kv : m_attributes)
+      if(!GetAttribute(kv.first)->m_is_model_attribute)
+        attr_id_name_list.push_back(kv.first);
+
+  return attr_id_name_list;
+}
+
+std::vector<std::string> CAModel::GetModelAtributesList()
+{
+  std::vector<std::string> attr_id_name_list;
+  for(auto kv : m_attributes)
+      if(GetAttribute(kv.first)->m_is_model_attribute)
+        attr_id_name_list.push_back(kv.first);
+
+  return attr_id_name_list;
+}
+
 std::string CAModel::AddBreakCase(BreakCase *new_bc) {
   string base_id_name = new_bc->m_id_name;
   int disambiguity_number = 1;
@@ -167,4 +187,12 @@ Neighborhood *CAModel::GetNeighborhood(std::string id_name) {
     return nullptr;
   else
     return m_neighborhoods[id_name];
+}
+
+std::vector<std::string> CAModel::GetNeighborhoodList() {
+  std::vector<std::string> neigh_id_name_list;
+  for(auto kv : m_neighborhoods)
+      neigh_id_name_list.push_back(kv.first);
+
+  return neigh_id_name_list;
 }

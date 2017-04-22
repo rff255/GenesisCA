@@ -134,6 +134,8 @@ void VicinityHandlerWidget::SaveNeighborhoodModification() {
   //emit NeighborhoodChanged(curr_item->text().toStdString(), saved_neigh_id_name);
 
   curr_item->setText(QString::fromStdString(saved_neigh_id_name));
+
+  emit NeighborhoodListChanged();
 }
 
 void VicinityHandlerWidget::on_pb_add_tag_released() {
@@ -161,7 +163,7 @@ void VicinityHandlerWidget::on_pb_add_neighborhood_released() {
   ui->lw_neighborhoods->addItem(QString::fromStdString(name_id));
   ui->lw_neighborhoods->setCurrentRow(ui->lw_neighborhoods->count()-1);
 
-  //emit NeighborhoodAdded(name_id);
+  emit NeighborhoodListChanged();
 }
 
 void VicinityHandlerWidget::on_pb_delete_neighborhood_released() {
@@ -172,7 +174,8 @@ void VicinityHandlerWidget::on_pb_delete_neighborhood_released() {
     delete curr_item;
     ResetNeighborhood();
     LoadNeighborhood(ui->lw_neighborhoods->currentItem());
-    //emit AttributeRemoved(id_name);
+
+    emit NeighborhoodListChanged();
   }
 }
 

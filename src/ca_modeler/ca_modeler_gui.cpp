@@ -22,9 +22,11 @@ CAModelerGUI::CAModelerGUI(QWidget *parent) :
     connect(ui->wgt_attribute_handler, SIGNAL(AttributeChanged(std::string, std::string)), ui->wgt_model_properties_handler, SLOT(ChangeModelAttributesInitItem(std::string,std::string)));
 
     // Update BreakCases options after attributes change
-    connect(ui->wgt_attribute_handler, SIGNAL(AttributeAdded(std::string)), ui->wgt_model_properties_handler, SLOT(RefreshBreakCasesOptions()));
-    connect(ui->wgt_attribute_handler, SIGNAL(AttributeRemoved(std::string)), ui->wgt_model_properties_handler, SLOT(RefreshBreakCasesOptions()));
-    connect(ui->wgt_attribute_handler, SIGNAL(AttributeChanged(std::string, std::string)), ui->wgt_model_properties_handler, SLOT(RefreshBreakCasesOptions()));
+    connect(ui->wgt_attribute_handler, SIGNAL(AttributeListChanged()),     ui->wgt_model_properties_handler, SLOT(RefreshBreakCasesOptions()));
+
+    // Update GraphEditor after list of attributes change
+    connect(ui->wgt_attribute_handler,  SIGNAL(AttributeListChanged()),    ui->wgt_update_rules_handler, SLOT(UpdateEditorComboBoxes()));
+    connect(ui->wgt_vicinities_handler, SIGNAL(NeighborhoodListChanged()), ui->wgt_update_rules_handler, SLOT(UpdateEditorComboBoxes()));
 }
 
 CAModelerGUI::~CAModelerGUI() {

@@ -24,6 +24,11 @@ AttributeHandlerWidget::AttributeHandlerWidget(QWidget *parent) :
   connect(ui->cb_list_type,               SIGNAL(activated(int)),                     this, SLOT(SaveAttributeModifications()));
   connect(ui->lw_allowed_values->model(), SIGNAL(rowsInserted(QModelIndex,int,int)),  this, SLOT(SaveAttributeModifications()));
   connect(ui->lw_allowed_values->model(), SIGNAL(rowsRemoved(QModelIndex,int,int)),   this, SLOT(SaveAttributeModifications()));
+
+  // Emit generic signal AttributeListChanged
+  connect(this, SIGNAL(AttributeAdded(std::string)),                this, SIGNAL(AttributeListChanged()));
+  connect(this, SIGNAL(AttributeRemoved(std::string)),              this, SIGNAL(AttributeListChanged()));
+  connect(this, SIGNAL(AttributeChanged(std::string,std::string)),  this, SIGNAL(AttributeListChanged()));
 }
 
 AttributeHandlerWidget::~AttributeHandlerWidget()

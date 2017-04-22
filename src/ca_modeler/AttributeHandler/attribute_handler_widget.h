@@ -57,6 +57,7 @@ signals:
   void AttributeAdded(std::string id_name);
   void AttributeRemoved(std::string id_name);
   void AttributeChanged(std::string old_id_name, std::string new_id_name);
+  void AttributeListChanged();
 
 private:
   Ui::AttributeHandlerWidget *ui;

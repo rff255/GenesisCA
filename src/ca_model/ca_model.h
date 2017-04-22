@@ -37,13 +37,15 @@ public:
   string           ModifyAttribute(string prev_id_name, Attribute* modified_attr);
   Attribute*       GetAttribute(string id_name);
   std::vector<std::string> GetAtributesList();
+  std::vector<std::string> GetCellAtributesList();
+  std::vector<std::string> GetModelAtributesList();
 
   // Neighborhoods
   string           AddNeighborhood(Neighborhood* new_neigh);
   bool             DelNeighborhood(string id_name);
   string           ModifyNeighborhood(string prev_id_name, Neighborhood* modified_neigh);
   Neighborhood*    GetNeighborhood(string id_name);
-  //std::vector<std::string> GetAtributesList();
+  std::vector<std::string> GetNeighborhoodList();
 
 private:
   ModelProperties* m_model_properties;
