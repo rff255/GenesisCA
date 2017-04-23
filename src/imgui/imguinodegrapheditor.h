@@ -224,6 +224,8 @@ public:
   virtual ~Node() {}
   mutable void* user_ptr;
   mutable int userID;
+  mutable int mNumFlowPortsOut;
+  mutable int mNumFlowPortsIn;
   inline const char* getName() const {return Name;}
   inline int getType() const {return typeID;}
   inline int getNumInputSlots() const {return InputsCount;}
@@ -285,7 +287,7 @@ protected:
   float overrideTitleBgColorGradient;                 //-1 -> don't override
   bool isInEditingMode;
 
-  Node() : Pos(0,0),Size(0,0),isSelected(false),baseWidthOverride(-1),mustOverrideName(false),mustOverrideInputSlots(false),mustOverrideOutputSlots(false),overrideTitleTextColor(0),overrideTitleBgColor(0),overrideTitleBgColorGradient(-1.f),isInEditingMode(false),parentNodeGraphEditor(NULL) {}
+  Node() : mNumFlowPortsOut(0), mNumFlowPortsIn(0), Pos(0,0),Size(0,0),isSelected(false),baseWidthOverride(-1),mustOverrideName(false),mustOverrideInputSlots(false),mustOverrideOutputSlots(false),overrideTitleTextColor(0),overrideTitleBgColor(0),overrideTitleBgColorGradient(-1.f),isInEditingMode(false),parentNodeGraphEditor(NULL) {}
   void init(const char* name, const ImVec2& pos,const char* inputSlotNamesSeparatedBySemicolons=NULL,const char* outputSlotNamesSeparatedBySemicolons=NULL,int _nodeTypeID=0/*,float currentWindowFontScale=-1.f*/);
 
   inline ImVec2 GetInputSlotPos(int slot_no,float currentFontWindowScale=1.f) const   { return ImVec2(Pos.x*currentFontWindowScale,           Pos.y*currentFontWindowScale + Size.y * ((float)slot_no+1) / ((float)InputsCount+1)); }
@@ -379,13 +381,17 @@ public:
     float node_rounding;
     ImVec2 node_window_padding;
     ImU32 color_node_input_slots;
+    ImU32 color_node_input_slots_flow;
     ImU32 color_node_input_slots_border;
     ImU32 color_node_output_slots;
+    ImU32 color_node_output_slots_flow;
     ImU32 color_node_output_slots_border;
     float node_slots_radius;
     int node_slots_num_segments;
     ImU32 color_link;
+    ImU32 color_link_flow;
     float link_line_width;
+    float link_line_width_flow_factor;
     float link_control_point_distance;
     int link_num_segments;  // in AddBezierCurve(...)
     ImVec4 color_node_title;
@@ -413,11 +419,15 @@ public:
       node_window_padding =       ImVec2(7.f,6.f);
 
       color_node_input_slots =    ImColor(255,255,0,200);
+      color_node_input_slots_flow  = ImColor(0,255,0,255);
       color_node_output_slots =   ImColor(255,255,0,200);
+      color_node_output_slots_flow = ImColor(0,255,0,255);
       node_slots_radius =         4.f;
 
-      color_link =                ImColor(255,255,20, 200);
+      color_link =                ImColor(255,255,255, 200);
+      color_link_flow =           ImColor(0,255,0, 200);
       link_line_width =           1.5f;
+      link_line_width_flow_factor = 2.5f;
       link_control_point_distance = 60.f;
       link_num_segments =         20;
 

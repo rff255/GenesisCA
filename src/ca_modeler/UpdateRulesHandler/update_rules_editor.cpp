@@ -13,7 +13,7 @@ UpdateRulesEditor::UpdateRulesEditor(){
 void UpdateRulesEditor::Init(){
   mEditor.show_node_copy_paste_buttons = false;
   mEditor.show_style_editor = true;
-  mEditor.show_top_pane = false;
+  mEditor.show_top_pane = true;
 
   InitNGE(mEditor);
 }
