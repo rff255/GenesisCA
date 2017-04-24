@@ -12,6 +12,7 @@
 // #-- but the instantiable class is UpdateRulesEditor (at update_rules_editor.h)
 // ############
 
+using std::string;
 
 class ITestEnum {
 public:
@@ -158,11 +159,36 @@ public:
     // 1) allocation
    ThisClass* node = (ThisClass*)ImGui::MemAlloc(sizeof(ThisClass)); IM_PLACEMENT_NEW(node) ThisClass();
 
-    node->init("  Step =>", pos, NULL, "DO", TYPE);
+    node->init("__Step__", pos, NULL, "DO", TYPE);
     node->setOpen(false);
     node->mNumFlowPortsOut = 1;
 
     return node;
+  }
+
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+    Node* outNode = nge.getOutputNodeForNodeAndSlot(this, 0);
+
+    //-------------------------------------------------------------
+    // Check if there is a node connected to it
+    if (outNode) {
+     code +=
+         ind+ "void Step(){\n" +
+         ind+ outNode->Eval(nge, indentLevel+1) +
+         ind+ "}\n"
+         ;
+    }
+
+    return code;
   }
 
 protected:
@@ -218,6 +244,28 @@ protected:
     return false;
   }
 
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+
+    //-------------------------------------------------------------
+    // Check if there is a valid attribute
+    if (NGEModelAttrNames.size()>=mSelectedAttrIndex) {
+      string varNewValue = "out_" +this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) + "_" + std::to_string(0);
+
+      code += ind+ varNewValue + " = this->CAModel->attr_"+ NGEModelAttrNames[mSelectedAttrIndex] +";\n";
+    }
+
+    return code;
+  }
+
   // casts:
   inline static ThisClass* Cast(Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
   inline static const ThisClass* Cast(const Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
@@ -267,6 +315,28 @@ protected:
     ImGui::Text("Attribute:");
     fields[0].render(nodeWidth);
     return false;
+  }
+
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+
+    //-------------------------------------------------------------
+    // Check if there is a valid attribute
+    if (NGECellAttrNames.size()>=mSelectedAttrIndex) {
+      string varNewValue = "out_" +this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) + "_" + std::to_string(0);
+
+      code += ind+ varNewValue + " = this->attr_"+ NGECellAttrNames[mSelectedAttrIndex] +";\n";
+    }
+
+    return code;
   }
 
   // casts:
@@ -359,6 +429,26 @@ public:
     strcpy(node->mValue, "");
 
     return node;
+  }
+
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+
+    //-------------------------------------------------------------
+    // Check if there is a node connected to it
+    string varConstant = "out_" +this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) + "_" + std::to_string(0);
+
+    code += ind+ varConstant +" = " +mValue+ ";\n";
+
+    return code;
   }
 
   // casts:
@@ -573,6 +663,32 @@ protected:
     return false;
   }
 
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+    int inValuePort;
+    Node* inValue = nge.getInputNodeForNodeAndSlot(this, 1, &inValuePort);
+
+    //-------------------------------------------------------------
+    // Check if there is a node connected to it
+    if (inValue && NGECellAttrNames.size()>=mSelectedAttrIndex) {  // Check if there is a valid attribute
+      string varNewValue = "out_" +inValue->getNameOutSlot(inValuePort)+ "_" + std::to_string(inValue->mNodeId) + "_" + std::to_string(inValuePort);
+
+      code +=
+          inValue->Eval(nge, indentLevel) + // Here the variable out_portName_nodeID_port must be set
+          ind+ "this->attr_"+ NGECellAttrNames[mSelectedAttrIndex] +" = " +varNewValue+ ";\n";
+    }
+
+    return code;
+  }
+
   // casts:
   inline static ThisClass* Cast(Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
   inline static const ThisClass* Cast(const Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
@@ -615,6 +731,44 @@ public:
     strncpy(node->mExplanation,txtWrapped,TextBufferSize);
 
     return node;
+  }
+
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+    int inIfPort;
+    Node* inIf    = nge.getInputNodeForNodeAndSlot(this, 1, &inIfPort);
+    Node* outThen = nge.getOutputNodeForNodeAndSlot(this, 0);
+    Node* outElse = nge.getOutputNodeForNodeAndSlot(this, 1);
+
+    //-------------------------------------------------------------
+    // Check if there is a node connected to it
+    if (inIf) {
+      string varCondition = "out_" +inIf->getNameOutSlot(inIfPort)+ "_" + std::to_string(inIf->mNodeId) + "_" + std::to_string(inIfPort);
+
+      code +=
+          inIf->Eval(nge, indentLevel) + // Here the variable out_portName_nodeID_port must be set
+          ind+ "if(" +varCondition+ "){\n";
+
+      if(outThen) // If there is a link for THEN
+        code += outThen->Eval(nge, indentLevel+1);
+
+      code += ind+ "} else {\n";
+
+      if(outElse) // If there is a link for ELSE
+        code += outElse->Eval(nge, indentLevel+1);
+
+      code += ind+ "}\n";
+    }
+
+    return code;
   }
 
   // casts:
@@ -661,6 +815,38 @@ public:
     return node;
   }
 
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+    int inRepeatPort;
+    Node* inRepeat = nge.getInputNodeForNodeAndSlot(this, 1, &inRepeatPort);
+    Node* outDo    = nge.getOutputNodeForNodeAndSlot(this, 0);
+
+    //-------------------------------------------------------------
+    // Check if there is a node connected to it
+    if (inRepeat) {
+      string varRepeatNumber = "out_" +inRepeat->getNameOutSlot(inRepeatPort)+ "_" + std::to_string(inRepeat->mNodeId) + "_" + std::to_string(inRepeatPort);
+
+      code +=
+          inRepeat->Eval(nge, indentLevel) + // Here the variable out_portName_nodeID_port must be set
+          ind+ "for(int i=0; i<" +varRepeatNumber+ ";++i){\n";
+
+      if(outDo) // If there is a link for DO
+        code += outDo->Eval(nge, indentLevel+1);
+
+      code += ind+ "}\n";
+    }
+
+    return code;
+  }
+
   // casts:
   inline static ThisClass* Cast(Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
   inline static const ThisClass* Cast(const Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
@@ -695,6 +881,33 @@ public:
     node->mNumFlowPortsOut = 2;
 
     return node;
+  }
+
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+    Node* outFirst = nge.getOutputNodeForNodeAndSlot(this, 0);
+    Node* outThen = nge.getOutputNodeForNodeAndSlot(this, 1);
+
+    //-------------------------------------------------------------
+    if (outFirst)    // If there is a link for FIRST
+      code += outFirst->Eval(nge, indentLevel);
+
+
+    if (outThen) {   // If there is a link for THEN
+      if (outFirst)
+        code += "\n";  // Extra breakline to increase readability
+      code += outThen->Eval(nge, indentLevel);
+    }
+
+    return code;
   }
 
 protected:

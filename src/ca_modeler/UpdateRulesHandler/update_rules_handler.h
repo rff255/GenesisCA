@@ -3,6 +3,8 @@
 
 #include "../ca_model/ca_model.h"
 
+#include <string>
+
 #include "update_rules_editor.h"
 
 #include <QWidget>
@@ -22,6 +24,7 @@ public:
   ~UpdateRulesHandler();
 
   void set_m_ca_model(CAModel* model) {m_ca_model = model;}
+  std::string GenerateCode() {return mGraphEditor.EvalGraphEditor();}
 
 private slots:
   void UpdateEditorComboBoxes();

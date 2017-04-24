@@ -3,6 +3,8 @@
 #include "attribute_handler_widget.h"
 #include "vicinity_handler_widget.h"
 
+#include <QDebug>
+
 CAModelerGUI::CAModelerGUI(QWidget *parent) :
   QMainWindow(parent),
   ui(new Ui::CAModelerGUI),
@@ -54,4 +56,12 @@ void CAModelerGUI::PassModel() {
 void CAModelerGUI::on_act_quit_triggered() {
   // TODO(figueiredo): check for unsaved changes and open dialog asking for confirmation
   QApplication::quit();
+}
+
+void CAModelerGUI::on_act_export_c_code_triggered()
+{
+  std::string toBePrinted = "// Generated code below marks: \n####\n" +
+                            ui->wgt_update_rules_handler->GenerateCode() +
+                            "####\n";
+  qDebug(toBePrinted.c_str());
 }

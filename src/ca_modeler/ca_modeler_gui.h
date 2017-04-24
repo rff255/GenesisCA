@@ -25,6 +25,8 @@ public slots:
 private slots:
   void on_act_quit_triggered();
 
+  void on_act_export_c_code_triggered();
+
 private:
   Ui::CAModelerGUI *ui;
   CAModel *m_ca_model;

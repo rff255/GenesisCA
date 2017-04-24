@@ -5,6 +5,8 @@
 #ifndef IMGUINODEGRAPHEDITOR_H_
 #define IMGUINODEGRAPHEDITOR_H_
 
+#include <string>
+
 #ifndef IMGUI_API
 #include <imgui.h>
 #endif //IMGUI_API
@@ -222,6 +224,8 @@ class Node
 {
 public:
   virtual ~Node() {}
+  static int NEXT_ID;
+  int mNodeId;
   mutable void* user_ptr;
   mutable int userID;
   mutable int mNumFlowPortsOut;
@@ -230,7 +234,11 @@ public:
   inline int getType() const {return typeID;}
   inline int getNumInputSlots() const {return InputsCount;}
   inline int getNumOutputSlots() const {return OutputsCount;}
+  inline const std::string getNameOutSlot(int port) const {return this->OutputNames[port];}
   inline void setOpen(bool flag) {isOpen=flag;}
+
+  // Returns the code of this node in format of string (way more complex for the specific nodes)
+  virtual std::string Eval(const struct NodeGraphEditor& nge, int indentLevel);
 
 protected:
   FieldInfoVector fields; // I guess you can just skip these at all and implement virtual methods... but it was supposed to be useful...
@@ -287,7 +295,11 @@ protected:
   float overrideTitleBgColorGradient;                 //-1 -> don't override
   bool isInEditingMode;
 
-  Node() : mNumFlowPortsOut(0), mNumFlowPortsIn(0), Pos(0,0),Size(0,0),isSelected(false),baseWidthOverride(-1),mustOverrideName(false),mustOverrideInputSlots(false),mustOverrideOutputSlots(false),overrideTitleTextColor(0),overrideTitleBgColor(0),overrideTitleBgColorGradient(-1.f),isInEditingMode(false),parentNodeGraphEditor(NULL) {}
+  Node() : mNumFlowPortsOut(0), mNumFlowPortsIn(0), Pos(0,0),Size(0,0),isSelected(false),baseWidthOverride(-1),mustOverrideName(false),mustOverrideInputSlots(false),mustOverrideOutputSlots(false),overrideTitleTextColor(0),overrideTitleBgColor(0),overrideTitleBgColorGradient(-1.f),isInEditingMode(false),parentNodeGraphEditor(NULL)
+  {
+    mNodeId = NEXT_ID;
+    NEXT_ID += 1;
+  }
   void init(const char* name, const ImVec2& pos,const char* inputSlotNamesSeparatedBySemicolons=NULL,const char* outputSlotNamesSeparatedBySemicolons=NULL,int _nodeTypeID=0/*,float currentWindowFontScale=-1.f*/);
 
   inline ImVec2 GetInputSlotPos(int slot_no,float currentFontWindowScale=1.f) const   { return ImVec2(Pos.x*currentFontWindowScale,           Pos.y*currentFontWindowScale + Size.y * ((float)slot_no+1) / ((float)InputsCount+1)); }
@@ -618,6 +630,7 @@ public:
   void getInputNodesForNodeAndSlot(const Node* node,int input_slot,ImVector<Node*>& returnValueOut,ImVector<int>* pOptionalReturnValueOutputSlotOut=NULL) const;
   // if allowOnlyOneLinkPerInputSlot == true:
   Node* getInputNodeForNodeAndSlot(const Node* node,int input_slot,int* pOptionalReturnValueOutputSlotOut=NULL) const;
+  Node* getOutputNodeForNodeAndSlot(const Node* node,int output_slot) const;
   bool isNodeReachableFrom(const Node *node1, int slot1, bool goBackward,const Node* nodeToFind,int* pOptionalNodeToFindSlotOut=NULL) const;
   bool isNodeReachableFrom(const Node *node1, bool goBackward,const Node* nodeToFind,int* pOptionalNode1SlotOut=NULL,int* pOptionalNodeToFindSlotOut=NULL) const;
   bool hasLinks(Node* node) const;

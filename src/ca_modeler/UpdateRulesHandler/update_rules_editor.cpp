@@ -18,6 +18,15 @@ void UpdateRulesEditor::Init(){
   InitNGE(mEditor);
 }
 
+std::string UpdateRulesEditor::EvalGraphEditor() {
+  // Get the step node, for initiate the code generation
+  ImVector<ImGui::Node*> stepNodes = ImVector<ImGui::Node*>(); // There is only one step node, but the function is generic
+  mEditor.getAllNodesOfType(ImGui::NodeTypes::kStepNode, &stepNodes);
+
+  // By calling the step Eval(), all the reachable nodes will be also called recursively
+  return stepNodes[0]->Eval(mEditor, 0);
+}
+
 void UpdateRulesEditor::UpdateComboBoxes(std::vector<std::string> cellAttrNames,
                                          std::vector<std::string> modelAttrNames,
                                          std::vector<std::string> neighborhoodNames) {
