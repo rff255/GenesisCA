@@ -7,6 +7,7 @@
 #include "model_properties.h"
 #include "neighborhood.h"
 #include "partition.h"
+#include "mapping.h"
 
 #include <unordered_map>
 #include <string>
@@ -36,9 +37,9 @@ public:
   bool             DelAttribute(string id_name);
   string           ModifyAttribute(string prev_id_name, Attribute* modified_attr);
   Attribute*       GetAttribute(string id_name);
-  std::vector<std::string> GetAtributesList();
-  std::vector<std::string> GetCellAtributesList();
-  std::vector<std::string> GetModelAtributesList();
+  std::vector<std::string> GetAttributesList();
+  std::vector<std::string> GetCellAttributesList();
+  std::vector<std::string> GetModelAttributesList();
 
   // Neighborhoods
   string           AddNeighborhood(Neighborhood* new_neigh);
@@ -47,11 +48,21 @@ public:
   Neighborhood*    GetNeighborhood(string id_name);
   std::vector<std::string> GetNeighborhoodList();
 
+  // Mappings
+  string           AddMapping(Mapping* new_attr);
+  bool             DelMapping(string id_name);
+  string           ModifyMapping(string prev_id_name, Mapping* modified_attr);
+  Mapping*         GetMapping(string id_name);
+  std::vector<std::string> GetMappingsList();
+  std::vector<std::string> GetColAttrMappingsList();
+  std::vector<std::string> GetAttrColMappingsList();
+
 private:
   ModelProperties* m_model_properties;
   std::unordered_map<string, BreakCase*>    m_break_cases;
   std::unordered_map<string, Attribute*>    m_attributes;
   std::unordered_map<string, Neighborhood*> m_neighborhoods;
+  std::unordered_map<string, Mapping*>      m_mappings;
 };
 
 #endif // CA_MODEL_H

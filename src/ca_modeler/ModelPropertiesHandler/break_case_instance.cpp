@@ -141,7 +141,7 @@ void BreakCaseInstance::SetupWidget() {
 
   // Add Attributes options
   m_is_updating_attr_options = true;
-  std::vector<std::string> attributes = m_ca_model->GetAtributesList();
+  std::vector<std::string> attributes = m_ca_model->GetAttributesList();
   ui->cb_selected_attribute->clear();
   for (int i = 0; i < attributes.size(); ++i)
     if(m_ca_model->GetAttribute(attributes[i])->m_is_model_attribute == false)

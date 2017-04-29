@@ -10,6 +10,8 @@ struct BreakCase {
   BreakCase(std::string id_name, std::string considered_attr, std::string ammount_unit,
             int ammount,  std::string statement_type, std::string statement_value) {
     m_id_name         = id_name;
+    std::replace(m_id_name.begin(), m_id_name.end(), ' ', '_');
+
     m_considered_attr = considered_attr;
     m_ammount_unit    = ammount_unit;
     m_ammount         = ammount;

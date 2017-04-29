@@ -3,6 +3,7 @@
 
 #include <string>
 #include <vector>
+#include <algorithm>
 
 static const std::vector<std::string> cb_attribute_type_values = {"Bool", "Integer", "Float", "List", "User Defined"};
 static const std::vector<std::string> cb_attribute_list_type_values = {"Bool", "Integer", "Float", "User Defined"};
@@ -12,6 +13,8 @@ struct Attribute {
              std::string list_type, std::vector<std::string>* user_defined_values,
              std::string init_value, bool is_model_attribute) {
     m_id_name = id_name;
+    std::replace(m_id_name.begin(), m_id_name.end(), ' ', '_');
+
     m_type = type;
     m_description = description;
 

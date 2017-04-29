@@ -12,7 +12,7 @@ UpdateRulesEditor::UpdateRulesEditor(){
 
 void UpdateRulesEditor::Init(){
   mEditor.show_node_copy_paste_buttons = false;
-  mEditor.show_style_editor = true;
+  mEditor.show_style_editor = false;
   mEditor.show_top_pane = true;
 
   InitNGE(mEditor);
@@ -29,10 +29,14 @@ std::string UpdateRulesEditor::EvalGraphEditor() {
 
 void UpdateRulesEditor::UpdateComboBoxes(std::vector<std::string> cellAttrNames,
                                          std::vector<std::string> modelAttrNames,
-                                         std::vector<std::string> neighborhoodNames) {
+                                         std::vector<std::string> neighborhoodNames,
+                                         std::vector<std::string> colAttrMappingNames,
+                                         std::vector<std::string> attrColMappingNames) {
   gCellAttrNames     = cellAttrNames;
   gModelAttrNames    = modelAttrNames;
   gNeighborhoodNames = neighborhoodNames;
+  gColAttrMappingsNames = colAttrMappingNames;
+  gAttrColMappingsNames = attrColMappingNames;
 
   UpdateEnumNames();
 }

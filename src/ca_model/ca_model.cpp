@@ -8,6 +8,7 @@ CAModel::~CAModel() {
   delete m_model_properties;
 }
 
+// Attributes
 string CAModel::AddAttribute(Attribute* new_attr) {
   string base_id_name = new_attr->m_id_name;
   int disambiguity_number = 1;
@@ -51,7 +52,7 @@ Attribute *CAModel::GetAttribute(std::string id_name) {
     return m_attributes[id_name];
 }
 
-std::vector<std::string> CAModel::GetAtributesList() {
+std::vector<std::string> CAModel::GetAttributesList() {
   std::vector<std::string> attr_id_name_list;
   for(auto kv : m_attributes)
       attr_id_name_list.push_back(kv.first);
@@ -59,7 +60,7 @@ std::vector<std::string> CAModel::GetAtributesList() {
   return attr_id_name_list;
 }
 
-std::vector<std::string> CAModel::GetCellAtributesList()
+std::vector<std::string> CAModel::GetCellAttributesList()
 {
   std::vector<std::string> attr_id_name_list;
   for(auto kv : m_attributes)
@@ -69,7 +70,7 @@ std::vector<std::string> CAModel::GetCellAtributesList()
   return attr_id_name_list;
 }
 
-std::vector<std::string> CAModel::GetModelAtributesList()
+std::vector<std::string> CAModel::GetModelAttributesList()
 {
   std::vector<std::string> attr_id_name_list;
   for(auto kv : m_attributes)
@@ -79,6 +80,7 @@ std::vector<std::string> CAModel::GetModelAtributesList()
   return attr_id_name_list;
 }
 
+// BreakCases
 std::string CAModel::AddBreakCase(BreakCase *new_bc) {
   string base_id_name = new_bc->m_id_name;
   int disambiguity_number = 1;
@@ -122,6 +124,7 @@ BreakCase *CAModel::GetBreakCase(std::string id_name) {
     return m_break_cases[id_name];
 }
 
+// Model Properties
 void CAModel::ModifyModelProperties(
     const std::string &name, const std::string &author, const std::string &goal,
     const std::string &description, const std::string &topology, const std::string &boundary_treatment,
@@ -146,6 +149,7 @@ void CAModel::ModifyModelProperties(
   // TODO(figueiredo): add Break cases into scheme
 }
 
+// Neighborhoods
 string CAModel::AddNeighborhood(Neighborhood* new_neigh) {
   string base_id_name = new_neigh->m_id_name;
   int disambiguity_number = 1;
@@ -195,4 +199,76 @@ std::vector<std::string> CAModel::GetNeighborhoodList() {
       neigh_id_name_list.push_back(kv.first);
 
   return neigh_id_name_list;
+}
+
+// Mappings
+string CAModel::AddMapping(Mapping* new_map) {
+  string base_id_name = new_map->m_id_name;
+  int disambiguity_number = 1;
+  while(m_mappings.count(new_map->m_id_name) > 0) {
+    new_map->m_id_name = base_id_name + std::to_string(disambiguity_number);
+    disambiguity_number++;
+  }
+
+  m_mappings[new_map->m_id_name] = new_map;
+  return new_map->m_id_name;
+}
+
+bool CAModel::DelMapping(std::string id_name) {
+  auto entry = m_mappings.find(id_name);
+
+  if(entry == m_mappings.end())
+    return false;
+
+  delete m_mappings[id_name];
+  m_mappings.erase(entry);
+
+  return true;
+}
+
+std::string CAModel::ModifyMapping(std::string prev_id_name, Mapping *modified_map) {
+  if(prev_id_name == modified_map->m_id_name) {
+    m_mappings[prev_id_name] = modified_map;
+    return prev_id_name;
+  }
+
+  else {
+    DelMapping(prev_id_name);
+    return AddMapping(modified_map);
+  }
+}
+
+Mapping *CAModel::GetMapping(std::string id_name) {
+  if(m_mappings.find(id_name) == m_mappings.end())
+    return nullptr;
+  else
+    return m_mappings[id_name];
+}
+
+std::vector<std::string> CAModel::GetMappingsList() {
+  std::vector<std::string> map_id_name_list;
+  for(auto kv : m_mappings)
+      map_id_name_list.push_back(kv.first);
+
+  return map_id_name_list;
+}
+
+std::vector<std::string> CAModel::GetColAttrMappingsList()
+{
+  std::vector<std::string> map_id_name_list;
+  for(auto kv : m_mappings)
+      if(!GetMapping(kv.first)->m_is_attr_color)
+        map_id_name_list.push_back(kv.first);
+
+  return map_id_name_list;
+}
+
+std::vector<std::string> CAModel::GetAttrColMappingsList()
+{
+  std::vector<std::string> map_id_name_list;
+  for(auto kv : m_mappings)
+      if(GetMapping(kv.first)->m_is_attr_color)
+        map_id_name_list.push_back(kv.first);
+
+  return map_id_name_list;
 }

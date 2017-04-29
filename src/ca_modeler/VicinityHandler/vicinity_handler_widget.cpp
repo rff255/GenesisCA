@@ -9,6 +9,8 @@ VicinityHandlerWidget::VicinityHandlerWidget(QWidget *parent) :
   ui(new Ui::VicinityHandlerWidget),
   m_is_loading(true) {
   ui->setupUi(this);
+
+  // Setup Widgets
   SetupNeighborLayout();
 
   // Connections

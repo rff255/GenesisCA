@@ -25,6 +25,7 @@ INCLUDEPATH += \
  src/ca_modeler/ModelPropertiesHandler/ \
  src/ca_modeler/VicinityHandler/ \
  src/ca_modeler/UpdateRulesHandler/ \
+ src/ca_modeler/ColorMappingsHandler/ \
  src/imgui/ \
  src/imgui/glfw/ \
 
@@ -48,7 +49,8 @@ SOURCES += \
     src/imgui/imgui_draw.cpp \
     src/ca_modeler/UpdateRulesHandler/update_rules_handler.cpp \
     src/imgui/imguinodegrapheditor.cpp \
-    src/ca_modeler/UpdateRulesHandler/update_rules_editor.cpp
+    src/ca_modeler/UpdateRulesHandler/update_rules_editor.cpp \
+    src/ca_modeler/ColorMappingsHandler/color_mappings_handler_widget.cpp
 
 HEADERS  += \
     src/ca_modeler/ca_modeler_gui.h \
@@ -75,7 +77,9 @@ HEADERS  += \
     src/ca_modeler/UpdateRulesHandler/update_rules_handler.h \
     src/imgui/imguinodegrapheditor.h \
     src/ca_modeler/UpdateRulesHandler/node_graph_instance.h \
-    src/ca_modeler/UpdateRulesHandler/update_rules_editor.h
+    src/ca_modeler/UpdateRulesHandler/update_rules_editor.h \
+    src/ca_model/mapping.h \
+    src/ca_modeler/ColorMappingsHandler/color_mappings_handler_widget.h
 
 FORMS    += \
     src/ca_modeler/ca_modeler_gui.ui \
@@ -84,7 +88,8 @@ FORMS    += \
     src/ca_modeler/ModelPropertiesHandler/model_properties_handler_widget.ui \
     src/ca_modeler/ModelPropertiesHandler/break_case_instance.ui \
     src/ca_modeler/VicinityHandler/vicinity_handler_widget.ui \
-    src/ca_modeler/UpdateRulesHandler/update_rules_handler.ui
+    src/ca_modeler/UpdateRulesHandler/update_rules_handler.ui \
+    src/ca_modeler/ColorMappingsHandler/color_mappings_handler_widget.ui
 
 LIBS += -L$$PWD/src/imgui/glfw -lglfw3dll
 DEPENDPATH += $$PWD/src/imgui/glfw

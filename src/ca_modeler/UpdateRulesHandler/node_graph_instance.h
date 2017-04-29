@@ -34,11 +34,15 @@ typedef ImVector<char[MAX_ENUM_NAME_LENGTH]> TestEnumNamesType;    // so that it
 TestEnumNamesType NGECellAttrNames;
 TestEnumNamesType NGEModelAttrNames;
 TestEnumNamesType NGENeighborhoodNames;
+TestEnumNamesType NGEColAttrMappingNames;
+TestEnumNamesType NGEAttrColMappingNames;
 
 // The interface change this, and call UpdateEnumNames
 std::vector<std::string> gCellAttrNames;
 std::vector<std::string> gModelAttrNames;
 std::vector<std::string> gNeighborhoodNames;
+std::vector<std::string> gColAttrMappingsNames;
+std::vector<std::string> gAttrColMappingsNames;
 
 // Some style options
 namespace ImGui {
@@ -71,19 +75,34 @@ void UpdateEnumNames(){
   NGECellAttrNames.clear();
   NGEModelAttrNames.clear();
   NGENeighborhoodNames.clear();
+  NGEColAttrMappingNames.clear();
+  NGEAttrColMappingNames.clear();
 
   // Paste from vectors
+  //--Cell Attributes
   NGECellAttrNames.resize(gCellAttrNames.size());
   for(int i=0; i<gCellAttrNames.size(); ++i)
     strcpy(&NGECellAttrNames[i][0], gCellAttrNames[i].c_str());
 
+  //--Model Attributes
   NGEModelAttrNames.resize(gModelAttrNames.size());
   for(int i=0; i<gModelAttrNames.size(); ++i)
     strcpy(&NGEModelAttrNames[i][0], gModelAttrNames[i].c_str());
 
+  //--Neighborhoods
   NGENeighborhoodNames.resize(gNeighborhoodNames.size());
   for(int i=0; i<gNeighborhoodNames.size(); ++i)
     strcpy(&NGENeighborhoodNames[i][0], gNeighborhoodNames[i].c_str());
+
+  //--Color_Attribute Mappings
+  NGEColAttrMappingNames.resize(gColAttrMappingsNames.size());
+  for(int i=0; i<gColAttrMappingsNames.size(); ++i)
+    strcpy(&NGEColAttrMappingNames[i][0], gColAttrMappingsNames[i].c_str());
+
+  //--Attribute_Color Mappings
+  NGEAttrColMappingNames.resize(gAttrColMappingsNames.size());
+  for(int i=0; i<gAttrColMappingsNames.size(); ++i)
+    strcpy(&NGEAttrColMappingNames[i][0], gAttrColMappingsNames[i].c_str());
 }
 
 // NODE DEFINITIONS ================================================================
@@ -105,25 +124,35 @@ enum NodeTypes {
   kGroupStatementNode,
   kGroupOperatorNode,
   kGroupCountingNode,
+  kInitByColorNode,
+  kSetColorViewerNode,
+  kDefaultInitializationNode,
+  kGetColorViewerNode,
+  kGetColorConstantNode,
   kNumNodesTypes
 };
 
-static const char* NodeTypeNames[kNumNodesTypes] = { "Step",
-                                                     "Get Model Attribute",
-                                                     "Get Cell Attribute",
-                                                     "Get Neighbors Attribute",
-                                                     "Get Constant",
-                                                     "Get Random Number",
-                                                     "Statement",
-                                                     "Boolean Operator",
-                                                     "Set Attribute",
-                                                     "Conditional",
-                                                     "Loop",
-                                                     "Sequence",
-                                                     "Arithmetic Operator",
-                                                     "Group Statement",
-                                                     "Group Operator",
-                                                     "Group Counting"
+static const char* NodeTypeNames[kNumNodesTypes] = {"CONTROL   | Step",
+                                                    "DATA      | Get Model Attribute",
+                                                    "DATA      | Get Cell Attribute",
+                                                    "DATA      | Get Neighbors Attribute",
+                                                    "DATA      | Get Constant",
+                                                    "DATA      | Get Random Number",
+                                                    "LOGIC     | Statement",
+                                                    "OPERATION | Boolean Operator",
+                                                    "CONTROL   | Set Attribute",
+                                                    "CONTROL   | Conditional",
+                                                    "CONTROL   | Loop",
+                                                    "CONTROL   | Sequence",
+                                                    "OPERATION | Arithmetic Operator",
+                                                    "LOGIC     | Group Statement",
+                                                    "OPERATION | Group Operator",
+                                                    "OPERATION | Group Counting",
+                                                    "CONTROL   | Init by Color",
+                                                    "CONTROL   | Set color viewer",
+                                                    "CONTROL   | Default Initialization",
+                                                    "DATA      | Get color viewer",
+                                                    "DATA      | Get Color Constant"
                                                    };
 
 static bool GetTextFromEnumIndex(void* data, int value, const char** pTxt) {
@@ -180,13 +209,10 @@ public:
 
     //-------------------------------------------------------------
     // Check if there is a node connected to it
-    if (outNode) {
-     code +=
-         ind+ "void Step(){\n" +
-         ind+ outNode->Eval(nge, indentLevel+1) +
-         ind+ "}\n"
-         ;
-    }
+    code += ind+ "void Step(){\n";
+        if (outNode)
+          code += ind+ outNode->Eval(nge, indentLevel+1);
+    code += ind+ "}\n";
 
     return code;
   }
@@ -1126,6 +1152,256 @@ protected:
   inline static ThisClass* Cast(Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
   inline static const ThisClass* Cast(const Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
 };
+
+class InitByColorNode : public Node
+{
+protected:
+  typedef Node Base;  //Base Class
+  typedef InitByColorNode ThisClass;
+  InitByColorNode() : Base() {}
+  static const int TYPE = kInitByColorNode;
+
+  int mSelectedMapping;
+
+  virtual const char* getTooltip() const { return "This node mark the start of the control when a color is used as input to the cell."; }
+  virtual const char* getInfo() const { return "This node mark the start of the control when a color is used as input to the cell. \n It allow an intialization by image of CA. Where what each color represents is up to user.\n Be aware of the types of data. The output is three integers."; }
+  virtual void getDefaultTitleBarColors(ImU32& defaultTitleTextColorOut,ImU32& defaultTitleBgColorOut,float& defaultTitleBgColorGradientOut) const {
+    // [Optional Override] customize Node Title Colors [default values: 0,0,-1.f => do not override == use default values from the Style()]
+    defaultTitleTextColorOut = gMainStyle.TitleTextColorOut_FLOW;defaultTitleBgColorOut = gMainStyle.TitleBgColorOut_FLOW;defaultTitleBgColorGradientOut = gMainStyle.TitleBgColorGradientOut_FLOW;
+    }
+
+public:
+  // create:
+  static ThisClass* Create(const ImVec2& pos) {
+    // 1) allocation
+   ThisClass* node = (ThisClass*)ImGui::MemAlloc(sizeof(ThisClass)); IM_PLACEMENT_NEW(node) ThisClass();
+
+    node->init("Init By Color", pos, NULL, "DO;r;g;b", TYPE);
+
+    // 3) init fields ( this uses the node->fields variable; otherwise we should have overridden other virtual methods (to render and serialize) )
+    node->fields.addFieldEnum(&node->mSelectedMapping, &GetNumEnumItems, &GetTextFromEnumIndex, "", "select which mapping must be considered", &NGEColAttrMappingNames);
+
+    node->mSelectedMapping = 0;
+
+    node->mNumFlowPortsOut = 1;
+
+    return node;
+  }
+
+protected:
+  virtual bool render(float nodeWidth){
+    ImGui::Text("Mapping:");
+    fields[0].render(nodeWidth);
+    ImGui::Text("Inputted colors /");
+    return false;
+  }
+
+  // casts:
+  inline static ThisClass* Cast(Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
+  inline static const ThisClass* Cast(const Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
+};
+
+class SetColorViewerNode : public Node
+{
+protected:
+  typedef Node Base;  //Base Class
+  typedef SetColorViewerNode ThisClass;
+  SetColorViewerNode() : Base() {}
+  static const int TYPE = kSetColorViewerNode;
+
+  int mSelectedMapping;
+  ImVec4 defaultColor;
+
+  virtual const char* getTooltip() const { return "This node set the color of the cell for a specified mapping."; }
+  virtual const char* getInfo() const { return "This node set the color of the cell for a specified mapping. \nIt allow the user to create different forms of visualization of the CA execution. \n Be aware of the types of data. The output is three integers."; }
+  virtual void getDefaultTitleBarColors(ImU32& defaultTitleTextColorOut,ImU32& defaultTitleBgColorOut,float& defaultTitleBgColorGradientOut) const {
+    // [Optional Override] customize Node Title Colors [default values: 0,0,-1.f => do not override == use default values from the Style()]
+    defaultTitleTextColorOut = gMainStyle.TitleTextColorOut_FLOW;defaultTitleBgColorOut = gMainStyle.TitleBgColorOut_FLOW;defaultTitleBgColorGradientOut = gMainStyle.TitleBgColorGradientOut_FLOW;
+    }
+
+public:
+  // create:
+  static ThisClass* Create(const ImVec2& pos) {
+    // 1) allocation
+   ThisClass* node = (ThisClass*)ImGui::MemAlloc(sizeof(ThisClass)); IM_PLACEMENT_NEW(node) ThisClass();
+
+    node->init("Set Color Viewer", pos, "DO;r;g;b", NULL, TYPE);
+
+    // 3) init fields ( this uses the node->fields variable; otherwise we should have overridden other virtual methods (to render and serialize) )
+    node->fields.addFieldEnum(&node->mSelectedMapping, &GetNumEnumItems, &GetTextFromEnumIndex, "", "select which mapping must be considered", &NGEAttrColMappingNames);
+    node->fields.addFieldColor(&node->defaultColor.x,false,"","Select the default channel values");
+
+    node->mSelectedMapping = 0;
+
+    node->mNumFlowPortsIn = 1;
+
+    return node;
+  }
+
+protected:
+  virtual bool render(float nodeWidth){
+    ImGui::Text("Mapping:");
+    fields[0].render(nodeWidth);
+    ImGui::Text("Default values:");
+    fields[1].render(nodeWidth);
+    return false;
+  }
+
+  // casts:
+  inline static ThisClass* Cast(Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
+  inline static const ThisClass* Cast(const Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
+};
+
+class DefaultInitializationNode : public Node
+{
+protected:
+  typedef Node Base;  //Base Class
+  typedef DefaultInitializationNode ThisClass;
+  DefaultInitializationNode() : Base() {}
+  static const int TYPE = kDefaultInitializationNode;
+
+  virtual const char* getTooltip() const { return "This node mark the start of cell default initialization (called before first step)."; }
+  virtual const char* getInfo() const { return "This node mark the start of cell default initialization (called before first step).\nBasically defines the the control flow begin of init processing."; }
+  virtual void getDefaultTitleBarColors(ImU32& defaultTitleTextColorOut,ImU32& defaultTitleBgColorOut,float& defaultTitleBgColorGradientOut) const {
+    // [Optional Override] customize Node Title Colors [default values: 0,0,-1.f => do not override == use default values from the Style()]
+    defaultTitleTextColorOut = gMainStyle.TitleTextColorOut_FLOW;defaultTitleBgColorOut = gMainStyle.TitleBgColorOut_FLOW;defaultTitleBgColorGradientOut = gMainStyle.TitleBgColorGradientOut_FLOW;
+    }
+
+public:
+  // create:
+  static ThisClass* Create(const ImVec2& pos) {
+    // 1) allocation
+   ThisClass* node = (ThisClass*)ImGui::MemAlloc(sizeof(ThisClass)); IM_PLACEMENT_NEW(node) ThisClass();
+
+    node->init("Default Initialization", pos, NULL, "DO", TYPE);
+    node->setOpen(false);
+    node->mNumFlowPortsOut = 1;
+
+    return node;
+  }
+
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+    Node* outNode = nge.getOutputNodeForNodeAndSlot(this, 0);
+
+    //-------------------------------------------------------------
+    // Check if there is a node connected to it
+    code += ind+ "void DefaultInit(){\n";
+        if (outNode)
+          code += ind+ outNode->Eval(nge, indentLevel+1);
+    code += ind+ "}\n";
+
+    return code;
+  }
+
+protected:
+  virtual bool render(float nodeWidth){
+    ImGui::Text("Starts the control Flow");
+    return false;
+  }
+
+  // casts:
+  inline static ThisClass* Cast(Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
+  inline static const ThisClass* Cast(const Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
+};
+
+class GetColorViewerNode : public Node
+{
+protected:
+  typedef Node Base;  //Base Class
+  typedef GetColorViewerNode ThisClass;
+  GetColorViewerNode() : Base() {}
+  static const int TYPE = kGetColorViewerNode;
+
+  int mSelectedMapping;
+
+  virtual const char* getTooltip() const { return "Returns the current colors of the selected attribute color mapping i.e. the viewer mode."; }
+  virtual const char* getInfo() const { return "Returns the current colors of the selected attribute color mapping i.e. the viewer mode. \n Could be used to change the current color acoordingly to previous color, or channel...\n Be aware of the types of data. The output is three integers."; }
+  virtual void getDefaultTitleBarColors(ImU32& defaultTitleTextColorOut,ImU32& defaultTitleBgColorOut,float& defaultTitleBgColorGradientOut) const {
+    // [Optional Override] customize Node Title Colors [default values: 0,0,-1.f => do not override == use default values from the Style()]
+    defaultTitleTextColorOut = gMainStyle.TitleTextColorOut_DATA;defaultTitleBgColorOut = gMainStyle.TitleBgColorOut_DATA;defaultTitleBgColorGradientOut = gMainStyle.TitleBgColorGradientOut_DATA;
+    }
+
+public:
+  // create:
+  static ThisClass* Create(const ImVec2& pos) {
+    // 1) allocation
+   ThisClass* node = (ThisClass*)ImGui::MemAlloc(sizeof(ThisClass)); IM_PLACEMENT_NEW(node) ThisClass();
+
+    node->init("Get Color Viewer", pos, NULL, "r;g;b", TYPE);
+
+    // 3) init fields ( this uses the node->fields variable; otherwise we should have overridden other virtual methods (to render and serialize) )
+    node->fields.addFieldEnum(&node->mSelectedMapping, &GetNumEnumItems, &GetTextFromEnumIndex, "", "select which mapping must be considered", &NGEColAttrMappingNames);
+
+    node->mSelectedMapping = 0;
+
+    return node;
+  }
+
+protected:
+  virtual bool render(float nodeWidth){
+    ImGui::Text("Mapping:");
+    fields[0].render(nodeWidth);
+    ImGui::Text("Retrieved colors /");
+    return false;
+  }
+
+  // casts:
+  inline static ThisClass* Cast(Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
+  inline static const ThisClass* Cast(const Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
+};
+
+class GetColorConstantNode : public Node
+{
+protected:
+  typedef Node Base;  //Base Class
+  typedef GetColorConstantNode ThisClass;
+  GetColorConstantNode() : Base() {}
+  static const int TYPE = kGetColorConstantNode;
+
+  ImVec4 defaultColor;
+
+  virtual const char* getTooltip() const { return "This node returns the three color channels of a selected color."; }
+  virtual const char* getInfo() const { return "This node returns the three color channels of a selected color. \nIt could be used to set more easily the color for a given cell configuration. \n Be aware of the types of data. The output is three integers."; }
+  virtual void getDefaultTitleBarColors(ImU32& defaultTitleTextColorOut,ImU32& defaultTitleBgColorOut,float& defaultTitleBgColorGradientOut) const {
+    // [Optional Override] customize Node Title Colors [default values: 0,0,-1.f => do not override == use default values from the Style()]
+    defaultTitleTextColorOut = gMainStyle.TitleTextColorOut_DATA;defaultTitleBgColorOut = gMainStyle.TitleBgColorOut_DATA;defaultTitleBgColorGradientOut = gMainStyle.TitleBgColorGradientOut_DATA;
+    }
+
+public:
+  // create:
+  static ThisClass* Create(const ImVec2& pos) {
+    // 1) allocation
+   ThisClass* node = (ThisClass*)ImGui::MemAlloc(sizeof(ThisClass)); IM_PLACEMENT_NEW(node) ThisClass();
+
+    node->init("Get Color Constant", pos, NULL, "r;g;b", TYPE);
+
+    // 3) init fields ( this uses the node->fields variable; otherwise we should have overridden other virtual methods (to render and serialize) )
+    node->fields.addFieldColor(&node->defaultColor.x,false,"","Select the desired color");
+
+    return node;
+  }
+
+protected:
+  virtual bool render(float nodeWidth){
+    ImGui::Text("Color:");
+    fields[0].render(nodeWidth);
+    return false;
+  }
+
+  // casts:
+  inline static ThisClass* Cast(Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
+  inline static const ThisClass* Cast(const Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
+};
+
 //------- End of nodes classes-------
 
 static Node* TestNodeFactory(int nt, const ImVec2& pos) {
@@ -1146,6 +1422,12 @@ static Node* TestNodeFactory(int nt, const ImVec2& pos) {
   case kGroupStatementNode: return GroupStatementNode::Create(pos);
   case kGroupOperatorNode: return GroupOperatorNode::Create(pos);
   case kGroupCountingNode: return GroupCountingNode::Create(pos);
+  case kInitByColorNode: return InitByColorNode::Create(pos);
+  case kSetColorViewerNode: return SetColorViewerNode::Create(pos);
+  case kDefaultInitializationNode: return DefaultInitializationNode::Create(pos);
+  case kGetColorViewerNode: return GetColorViewerNode::Create(pos);
+  case kGetColorConstantNode: return GetColorConstantNode::Create(pos);
+
   default:
     IM_ASSERT(true);    // Missing node type creation
     return NULL;
@@ -1164,22 +1446,28 @@ void InitNGE(ImGui::NodeGraphEditor &nge) {
     nge.registerNodeTypeMaxAllowedInstances(ImGui::kStepNode, 1); // Here we set the max number of allowed instances of the node (1)
 
     // Optional: starting nodes and links (load from file instead):-----------
-    nge.addNode(ImGui::kStepNode, ImVec2(-80, 110));
-    nge.addNode(ImGui::kGetModelAttributeNode, ImVec2(20, 20));
-    nge.addNode(ImGui::kGetCellAttributeNode, ImVec2(200, 20)); // optionally use e.g.: ImGui::ColorEnumUserNode::Cast(colorEnumUserNode1)->...;
-    nge.addNode(ImGui::kGetNeighborsAttributeNode, ImVec2(400, 20));
-    nge.addNode(ImGui::kGetConstantNode, ImVec2(20, 120));
-    nge.addNode(ImGui::kStatementNode, ImVec2(200, 120));
-    nge.addNode(ImGui::kBooleanOperatorNode, ImVec2(400, 120));
-    nge.addNode(ImGui::kConditionalNode, ImVec2(20, 220));
-    nge.addNode(ImGui::kSetAttributeNode, ImVec2(200, 220));
-    nge.addNode(ImGui::kLoopNode, ImVec2(400, 220));
-    nge.addNode(ImGui::kSequenceNode, ImVec2(20, 320));
-    nge.addNode(ImGui::kGetRandomNumber, ImVec2(200, 320));
-    nge.addNode(ImGui::kArithmeticOperatorNode, ImVec2(400, 320));
-    nge.addNode(ImGui::kGroupStatementNode, ImVec2(20, 420));
-    nge.addNode(ImGui::kGroupOperatorNode, ImVec2(200, 450));
-    nge.addNode(ImGui::kGroupCountingNode, ImVec2(400, 420));
+//    nge.addNode(ImGui::kStepNode, ImVec2(-80, 110));
+//    nge.addNode(ImGui::kGetModelAttributeNode, ImVec2(20, 20));
+//    nge.addNode(ImGui::kGetCellAttributeNode, ImVec2(200, 20)); // optionally use e.g.: ImGui::ColorEnumUserNode::Cast(colorEnumUserNode1)->...;
+//    nge.addNode(ImGui::kGetNeighborsAttributeNode, ImVec2(400, 20));
+//    nge.addNode(ImGui::kGetConstantNode, ImVec2(20, 120));
+//    nge.addNode(ImGui::kStatementNode, ImVec2(200, 120));
+//    nge.addNode(ImGui::kBooleanOperatorNode, ImVec2(400, 120));
+//    nge.addNode(ImGui::kConditionalNode, ImVec2(20, 220));
+//    nge.addNode(ImGui::kSetAttributeNode, ImVec2(200, 220));
+//    nge.addNode(ImGui::kLoopNode, ImVec2(400, 220));
+//    nge.addNode(ImGui::kSequenceNode, ImVec2(20, 320));
+//    nge.addNode(ImGui::kGetRandomNumber, ImVec2(200, 320));
+//    nge.addNode(ImGui::kArithmeticOperatorNode, ImVec2(400, 320));
+//    nge.addNode(ImGui::kGroupStatementNode, ImVec2(20, 420));
+//    nge.addNode(ImGui::kGroupOperatorNode, ImVec2(200, 450));
+//    nge.addNode(ImGui::kGroupCountingNode, ImVec2(400, 420));
+
+    nge.addNode(ImGui::kInitByColorNode, ImVec2(-80, 520));
+    nge.addNode(ImGui::kSetColorViewerNode, ImVec2(20,  520));
+    nge.addNode(ImGui::kDefaultInitializationNode, ImVec2(200, 520));
+    nge.addNode(ImGui::kGetColorViewerNode, ImVec2(400, 520));
+    nge.addNode(ImGui::kGetColorConstantNode, ImVec2(600, 520));
 
 //    nge.addLink(colorEnumUserNode1, 0, colorEnumUserNode2, 0);
 //    nge.addLink(colorEnumUserNode1, 1, colorEnumUserNode2, 1);

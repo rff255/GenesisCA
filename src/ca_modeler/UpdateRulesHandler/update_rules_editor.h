@@ -20,7 +20,9 @@ public:
 
   void UpdateComboBoxes(std::vector<std::string> cellAttrNames,
                         std::vector<std::string> modelAttrNames,
-                        std::vector<std::string> neighborhoodNames);
+                        std::vector<std::string> neighborhoodNames,
+                        std::vector<std::string> colAttrMappingNames,
+                        std::vector<std::string> attrColMappingNames);
 
 private:
   ImGui::NodeGraphEditor mEditor;

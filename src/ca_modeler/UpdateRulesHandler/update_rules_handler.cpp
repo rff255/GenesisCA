@@ -31,9 +31,11 @@ UpdateRulesHandler::~UpdateRulesHandler()
 
 void UpdateRulesHandler::UpdateEditorComboBoxes()
 {
-  mGraphEditor.UpdateComboBoxes(m_ca_model->GetCellAtributesList(),
-                                m_ca_model->GetModelAtributesList(),
-                                m_ca_model->GetNeighborhoodList());
+  mGraphEditor.UpdateComboBoxes(m_ca_model->GetCellAttributesList(),
+                                m_ca_model->GetModelAttributesList(),
+                                m_ca_model->GetNeighborhoodList(),
+                                m_ca_model->GetColAttrMappingsList(),
+                                m_ca_model->GetAttrColMappingsList());
 }
 static void error_callback(int error, const char* description)
 {
@@ -90,7 +92,7 @@ void UpdateRulesHandler::on_pbtn_open_node_graph_editor_released()
   {
 //    // Test to refresh the options of combox
 //    TestEnumNamesClear();
-//    std::vector<std::string> attrNameList = m_ca_model->GetAtributesList();
+//    std::vector<std::string> attrNameList = m_ca_model->GetAttributesList();
 //    for(std::string attrName :   attrNameList)
 //      TestEnumNamesInsert(attrName.c_str());
 

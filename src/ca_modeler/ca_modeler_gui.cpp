@@ -27,8 +27,9 @@ CAModelerGUI::CAModelerGUI(QWidget *parent) :
     connect(ui->wgt_attribute_handler, SIGNAL(AttributeListChanged()),     ui->wgt_model_properties_handler, SLOT(RefreshBreakCasesOptions()));
 
     // Update GraphEditor after list of attributes change
-    connect(ui->wgt_attribute_handler,  SIGNAL(AttributeListChanged()),    ui->wgt_update_rules_handler, SLOT(UpdateEditorComboBoxes()));
-    connect(ui->wgt_vicinities_handler, SIGNAL(NeighborhoodListChanged()), ui->wgt_update_rules_handler, SLOT(UpdateEditorComboBoxes()));
+    connect(ui->wgt_attribute_handler,      SIGNAL(AttributeListChanged()),    ui->wgt_update_rules_handler, SLOT(UpdateEditorComboBoxes()));
+    connect(ui->wgt_vicinities_handler,     SIGNAL(NeighborhoodListChanged()), ui->wgt_update_rules_handler, SLOT(UpdateEditorComboBoxes()));
+    connect(ui->wgt_color_mappings_handler, SIGNAL(MappingListChanged()),      ui->wgt_update_rules_handler, SLOT(UpdateEditorComboBoxes()));
 }
 
 CAModelerGUI::~CAModelerGUI() {
@@ -38,7 +39,6 @@ CAModelerGUI::~CAModelerGUI() {
 void CAModelerGUI::SetupWidgets() {
   // Attributes tab
   ui->wgt_attribute_handler->ConfigureCB();
-  //ui->wgt_attribute_handler->ResetAttributesProperties();
 
   // Model Properties tab
   ui->wgt_model_properties_handler->ConfigureCB();
@@ -49,6 +49,7 @@ void CAModelerGUI::PassModel() {
   ui->wgt_model_properties_handler->set_m_ca_model(m_ca_model);
   ui->wgt_vicinities_handler->set_m_ca_model(m_ca_model);
   ui->wgt_update_rules_handler->set_m_ca_model(m_ca_model);
+  ui->wgt_color_mappings_handler->set_m_ca_model(m_ca_model);
 }
 
 // Slots:
