@@ -1,11 +1,11 @@
 # GenesisCA 
-- Interface to aid the study and creation of Cellular Automata (CA)
-- Focused on creation of new CA models, by experimentation
-- Based on Visual Programing Language (VPL)
-- Supporting (planned to):
-  - *Allow cell attributes:* Bool, Numerical, User Defined
-  - *Allow neighborhoods:* user defines the shape and the number of neighborhoods
-  - *Allow Partitions:* especially useful to Block CAs
-  - *Rule definitions:* user design your own algorithm that defines the way attributes are updated, using VPL
-  - *Allow input mapping:* defines ways to give a input to your model, as random, mapping the values of an image, etc...
-  - *Allow output mapping:* user is able to creates different modes of visualization, mapping attributes into colors
+- IDE of modeling and simulation of Cellular Automata (CA)
+- Focused on creation and evaluation of new CA models, by experimentation
+- Based on Visual Programming Language (VPL) to define the rules
+- First version will contain support to define CA models with:
+  - *Cell attributes types:* [Bool, Integer, Float] Cell attributes define the informations each cell is holding.
+  - *Model attributes types:* [Bool, Integer, Float] Model attributes define the parameters of CA model used on cell update rules that can be tuned when used the exported CA model.
+  - *Neighborhood:* user is free to define the number of neighborhoods, and it's layout
+  - *Rule definitions:* user design your own algorithm using VPL, to defines the way attributes updated, input colors are interpreted, and output colors are modified.
+  - *Color input mapping:* user can create mappings for define what to do with the cell attributes given a color. This can be used to allow image initializations, as well as interactions at simulation time.
+  - *Color output mapping:* user is able to creates different modes of visualization, mapping the cell attribute configurations into colors. This could be userful for debugging, presenting, or artistic purposes.
