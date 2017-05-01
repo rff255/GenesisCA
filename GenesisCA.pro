@@ -91,5 +91,6 @@ FORMS    += \
     src/ca_modeler/UpdateRulesHandler/update_rules_handler.ui \
     src/ca_modeler/ColorMappingsHandler/color_mappings_handler_widget.ui
 
+LIBS += -lOpenGL32
 LIBS += -L$$PWD/src/imgui/glfw -lglfw3dll
 DEPENDPATH += $$PWD/src/imgui/glfw

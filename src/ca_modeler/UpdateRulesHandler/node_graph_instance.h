@@ -113,7 +113,7 @@ enum NodeTypes {
   kGetCellAttributeNode,
   kGetNeighborsAttributeNode,
   kGetConstantNode,
-  kGetRandomNumber,
+  kGetRandomNode,
   kStatementNode,
   kBooleanOperatorNode,
   kSetAttributeNode,
@@ -137,7 +137,7 @@ static const char* NodeTypeNames[kNumNodesTypes] = {"CONTROL   | Step",
                                                     "DATA      | Get Cell Attribute",
                                                     "DATA      | Get Neighbors Attribute",
                                                     "DATA      | Get Constant",
-                                                    "DATA      | Get Random Number",
+                                                    "DATA      | Get Random",
                                                     "LOGIC     | Statement",
                                                     "OPERATION | Boolean Operator",
                                                     "CONTROL   | Set Attribute",
@@ -210,6 +210,7 @@ public:
     //-------------------------------------------------------------
     // Check if there is a node connected to it
     code += ind+ "void Step(){\n";
+    code += ind+ "  CopyPrevCellConfig();\n";
         if (outNode)
           code += ind+ outNode->Eval(nge, indentLevel+1);
     code += ind+ "}\n";
@@ -282,11 +283,18 @@ protected:
     // Get the information about nodes and so on
 
     //-------------------------------------------------------------
-    // Check if there is a valid attribute
-    if (NGEModelAttrNames.size()>=mSelectedAttrIndex) {
-      string varNewValue = "out_" +this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) + "_" + std::to_string(0);
+    /*
+     attrName+"_TYPE" outValueName = this->CAModel->attrName;
+     typedef attrName+"_TYPE" outValueName+ "_TYPE";
+     */
 
-      code += ind+ varNewValue + " = this->CAModel->attr_"+ NGEModelAttrNames[mSelectedAttrIndex] +";\n";
+    // Check if there is a valid attribute
+    if (NGEModelAttrNames.size()>0 && NGEModelAttrNames.size()>mSelectedAttrIndex) {
+      string attrName     = string(NGEModelAttrNames[mSelectedAttrIndex]);
+      string outValueName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
+
+      code += ind+ attrName +"_TYPE "+ outValueName +" = this->CAModel->ATTR_"+ attrName +";\n";
+      code += ind+ "typedef "+ attrName+"_TYPE " + outValueName + "_TYPE;\n";
     }
 
     return code;
@@ -355,11 +363,18 @@ protected:
     // Get the information about nodes and so on
 
     //-------------------------------------------------------------
-    // Check if there is a valid attribute
-    if (NGECellAttrNames.size()>=mSelectedAttrIndex) {
-      string varNewValue = "out_" +this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) + "_" + std::to_string(0);
+    /*
+     attrName+"_TYPE" outValueName = this->attrName;
+     typedef attrName+"_TYPE" outValueName+ "_TYPE";
+     */
 
-      code += ind+ varNewValue + " = this->attr_"+ NGECellAttrNames[mSelectedAttrIndex] +";\n";
+    // Check if there is a valid attribute
+    if (NGECellAttrNames.size()>0 && NGECellAttrNames.size()>mSelectedAttrIndex) {
+      string attrName     = string(NGECellAttrNames[mSelectedAttrIndex]);
+      string outValueName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
+
+      code += ind+ attrName +"_TYPE "+ outValueName +" = this->ATTR_"+ attrName +";\n";
+      code += ind+ "typedef "+ attrName+"_TYPE " + outValueName + "_TYPE;\n";
     }
 
     return code;
@@ -415,6 +430,44 @@ protected:
     return false;
   }
 
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+    //-------------------------------------------------------------
+    /*
+     vector<attrName+"_TYPE"> outValuesName;
+     for(auto attr: this->neighName)
+      outValuesName.push_back(attr->attrName)
+
+     typedef attrName+"_TYPE" outValuesName+ "_TYPE";
+     */
+
+    // Check if there is a node connected to value port
+    if (NGECellAttrNames.size() > 0 && NGECellAttrNames.size() > mSelectedAttrIndex &&
+        NGENeighborhoodNames.size() > 0 && NGENeighborhoodNames.size() > mSelectedNeighborhoodIndex) {
+      string attrName      = string(NGECellAttrNames[mSelectedAttrIndex]);
+      string neighName     = string(NGENeighborhoodNames[mSelectedNeighborhoodIndex]);
+      string outValuesName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
+
+      code += ind+ "vector<" + attrName+"_TYPE> " + outValuesName +";\n";
+      code += ind+ "for(auto attr: this->NEIGHBORS_"+ neighName +")\n";
+      code += ind+ "  "+ outValuesName +".push_back(attr->ATTR_"+ attrName+");\n";
+
+      code += ind+ "typedef vector<" + attrName+"_TYPE> " + outValuesName + "_TYPE;\n";
+      code += ind+ "typedef "+ attrName+"_TYPE " + outValuesName + "_ELEMENT_TYPE;\n";
+
+    }
+
+    return code;
+  }
+
   // casts:
   inline static ThisClass* Cast(Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
   inline static const ThisClass* Cast(const Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
@@ -427,6 +480,7 @@ protected:
   typedef GetConstant ThisClass;
   GetConstant() : Base() {}
   static const int TYPE = kGetConstantNode;
+  int mValueType;
   static const int TextBufferSize = 128;
 
   // Fields
@@ -456,6 +510,15 @@ public:
 
     return node;
   }
+protected:
+
+  virtual bool render(float nodeWidth){
+    ImGui::RadioButton("Bool", &mValueType, 0); ImGui::SameLine();
+    ImGui::RadioButton("Int", &mValueType, 1); ImGui::SameLine();
+    ImGui::RadioButton("Float", &mValueType, 2);
+    fields[0].render(nodeWidth);
+    return false;
+  }
 
   // Evaluate this node returning the code generated
   virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
@@ -469,10 +532,24 @@ public:
     // Get the information about nodes and so on
 
     //-------------------------------------------------------------
-    // Check if there is a node connected to it
-    string varConstant = "out_" +this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) + "_" + std::to_string(0);
+    /*
+     outValueNameType outValueName = mValue;
 
-    code += ind+ varConstant +" = " +mValue+ ";\n";
+     typedef outValueNameType outValueName+ "_TYPE;"
+     */
+
+    // Check if there is a node connected to it
+    string outValueName = "out_" +this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) + "_0";
+    string outValueNameType;
+    if(mValueType == 0)
+      outValueNameType = "bool ";
+    else if (mValueType == 1)
+      outValueNameType = "int ";
+    else
+      outValueNameType = "float ";
+
+    code += ind+ outValueNameType+ outValueName +" = " +mValue+ ";\n";
+    code += ind+ "typedef "+ outValueNameType + outValueName+ "_TYPE;\n";  // Actually this is temporary. The correct is offer different Get Constant Nodes for each type
 
     return code;
   }
@@ -482,16 +559,18 @@ public:
   inline static const ThisClass* Cast(const Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
 };
 
-class GetRandomNumber : public Node
+class GetRandomNode : public Node
 {
 protected:
   typedef Node Base;  //Base Class
-  typedef GetRandomNumber ThisClass;
-  GetRandomNumber() : Base() {}
-  static const int TYPE = kGetRandomNumber;
+  typedef GetRandomNode ThisClass;
+  GetRandomNode() : Base() {}
+  static const int TYPE = kGetRandomNode;
 
-  // Fields
-  bool  mIsInteger;
+  int  mValueType;
+  bool mUseModelAttr;
+  int mSelectedAttrIndex;
+  float mProbability;
 
   int mFirstNumberI;
   int mSecondNumberI;
@@ -512,9 +591,14 @@ public:
   static ThisClass* Create(const ImVec2& pos) {
     ThisClass* node = (ThisClass*)ImGui::MemAlloc(sizeof(ThisClass)); IM_PLACEMENT_NEW(node) ThisClass();
 
-    node->init("Get Random Number", pos, NULL, "value", TYPE);
+    node->init("Get Random", pos, NULL, "value", TYPE);
 
-    node->mIsInteger = false;
+    node->fields.addFieldEnum(&node->mSelectedAttrIndex, &GetNumEnumItems, &GetTextFromEnumIndex, "", "select which attribute must be considered", &NGEModelAttrNames);
+
+    node->mValueType = 0;
+    node->mUseModelAttr = false;
+    node->mSelectedAttrIndex = 0;
+
     node->mFirstNumberI = 0;
     node->mSecondNumberI = 0;
 
@@ -526,22 +610,99 @@ public:
 
 protected:
   virtual bool render(float nodeWidth){
-    ImGui::Checkbox("Integer", &mIsInteger);
-    if(mIsInteger)
-    {
+    ImGui::RadioButton("Bool", &mValueType, 0); ImGui::SameLine();
+    ImGui::RadioButton("Int", &mValueType, 1); ImGui::SameLine();
+    ImGui::RadioButton("Float", &mValueType, 2);
+    if(mValueType == 0) { // Bool
+      ImGui::Checkbox("Use model attr", &mUseModelAttr);
+      ImGui::Text("Probability:");
+      if(mUseModelAttr)
+        fields[0].render(nodeWidth);
+      else
+        ImGui::SliderFloat("##Probability", &mProbability, 0.0f, 1.0f, "%.2f");
+    } else if(mValueType == 1) {
       ImGui::Text("From:");
       ImGui::InputInt("##FromInt", &mFirstNumberI);
       ImGui::Text("To:");
       ImGui::InputInt("##ToInt:", &mSecondNumberI);
-    }
-    else
-    {
+    } else {
       ImGui::Text("From:");
       ImGui::InputFloat("##FromFloat", &mFirstNumberF);
       ImGui::Text("To:");
       ImGui::InputFloat("##ToFloat", &mSecondNumberF);
     }
     return false;
+  }
+
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+    //-------------------------------------------------------------
+    /*
+      std::srand(time(NULL));
+      if(BOOL) {
+        bool outValueName = rand() <
+        if(USEMODELATTR)
+          probability * ((double)RAND_MAX + 1.0);
+        else
+          mProbability * ((double)RAND_MAX + 1.0);
+
+        typedef bool outValuesName+ "_TYPE;\n";
+
+      } else if(INTEGER) {
+        int min = mFirstNumberI;
+        int max = mSecondNumberI;
+        int outValueName = rand()%(max-min + 1) + min;
+        typedef int outValuesName+ "_TYPE;\n";
+
+      } else {
+        float min = mFirstNumberF;
+        float max = mSecondNumberF;
+        float outValueName = min + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(max-min)));
+        typedef float outValuesName+ "_TYPE;\n";
+      }
+     */
+
+    // Check if there is a node connected to value port
+    string outValueName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
+    string attrName     = string(NGEModelAttrNames[mSelectedAttrIndex]);
+
+    code += ind+ "std::srand(time(NULL));\n";
+    if(mValueType == 0) {  // BOOL
+      code += ind+ "bool "+ outValueName +" = rand() < ";
+      if(mUseModelAttr) {
+        if (NGEModelAttrNames.size()>0 && NGEModelAttrNames.size()>mSelectedAttrIndex)
+          code += "this->CAModel->ATTR_"+ attrName + " * ((double)RAND_MAX + 1.0);\n";
+        else
+          code += "0 * ((double)RAND_MAX + 1.0);\n";
+
+      }else
+          code += std::to_string(mProbability)+ " * ((double)RAND_MAX + 1.0);\n";
+
+      code += ind+ "typedef bool "+ outValueName+ "_TYPE;\n";
+    } else if(mValueType == 1){  // INTEGER
+      code +=
+      ind+ "int min = " + std::to_string(mFirstNumberI) + ";\n" +
+      ind+ "int max = " + std::to_string(mSecondNumberI) + ";\n" +
+      ind+ "int " +outValueName+ " = rand()%(max-min + 1) + min;\n" +
+      ind+ "typedef int " +outValueName+ "_TYPE;\n";
+
+    } else {  // FLOAT
+      code +=
+      ind+ "float min = " + std::to_string(mFirstNumberF) + ";\n" +
+      ind+ "float max = " + std::to_string(mSecondNumberF) + ";\n" +
+      ind+ "float " + outValueName+ " = min + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(max-min)));\n" +
+      ind+ "typedef float " +outValueName+ "_TYPE;\n";
+    }
+
+    return code;
   }
 
   // casts:
@@ -567,7 +728,6 @@ protected:
     }
 
 public:
-
   int& getSelectedItem() { return mSelectedOperationIndex; }  // ITestEnum
 
   // create:
@@ -590,6 +750,46 @@ protected:
     ImGui::Text("Operation:");
     fields[0].render(nodeWidth);
     return false;
+  }
+
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+    int inXPort;
+    int inYPort;
+    Node* inX = nge.getInputNodeForNodeAndSlot(this, 0, &inXPort);
+    Node* inY = nge.getInputNodeForNodeAndSlot(this, 1, &inYPort);
+    //-------------------------------------------------------------
+    /*
+     Eval(inX);
+     Eval(inY);
+     bool outValueName = (varInX + this->operation[mSelectedOperationIndex] + varInY);
+
+     typedef bool + outValueName+ "_TYPE";
+     */
+
+    // Check if there is two nodes connected to value ports
+    if (inX && inY) {
+      string varInX = "out_" +inX->getNameOutSlot(inXPort)+ "_" + std::to_string(inX->mNodeId) + "_" + std::to_string(inXPort);
+      string varInY = "out_" +inY->getNameOutSlot(inYPort)+ "_" + std::to_string(inY->mNodeId) + "_" + std::to_string(inYPort);
+      string outValueName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
+      static const char* operations[6] = {" == ", " != ", " > ", " < ", " >= ", " <= "};
+
+      code +=
+          inX->Eval(nge, indentLevel) +
+          inY->Eval(nge, indentLevel) +
+          ind+ "bool "+ outValueName +" = ("+ varInX +string(operations[mSelectedOperationIndex])+ varInY + ");\n" +
+          ind+ "typedef bool " + outValueName+ "_TYPE; \n";
+    }
+
+    return code;
   }
 
   // casts:
@@ -626,8 +826,8 @@ public:
     node->init("Logic Operator", pos, "A;B", "result", TYPE);
 
     // 3) init fields ( this uses the node->fields variable; otherwise we should have overridden other virtual methods (to render and serialize) )
-    static const char* operations[7] = {"AND", "OR", "NOT", "NAND", "NOR", "XOR", "XNOR"};
-    node->fields.addFieldEnum(&node->mSelectedOperationIndex, 7, operations, "", "select the boolean operator to be used");
+    static const char* operations[4] = {"AND", "OR", "XOR", "NOT"};
+    node->fields.addFieldEnum(&node->mSelectedOperationIndex, 4, operations, "", "select the boolean operator to be used");
 
     node->mSelectedOperationIndex = 0;
 
@@ -640,6 +840,56 @@ protected:
     fields[0].render(nodeWidth);
     return false;
   }
+
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+    int inXPort;
+    int inYPort;
+    Node* inX = nge.getInputNodeForNodeAndSlot(this, 0, &inXPort);
+    Node* inY = nge.getInputNodeForNodeAndSlot(this, 1, &inYPort);
+    //-------------------------------------------------------------
+    /*
+     Eval(inX);
+     Eval(inY);
+     bool outValueName = (varInX + this->operation[mSelectedOperationIndex] + varInY);
+
+     typedef bool + outValueName+ "_TYPE";
+     */
+
+    if (inX) {
+      string varInX = "out_" +inX->getNameOutSlot(inXPort)+ "_" + std::to_string(inX->mNodeId) + "_" + std::to_string(inXPort);
+      string outValueName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
+      static const char* operations[4] = {" && ", " || ", " ^ ", "!"};
+
+      // For NOT case
+      if(mSelectedOperationIndex == 3)
+        code +=
+            inX->Eval(nge, indentLevel) +
+            ind+ "bool "+ outValueName +" = (!"+ varInX +");\n" +
+            ind+ "typedef bool " + outValueName+ "_TYPE; \n";
+
+      // For AND, OR and XOR
+      else if(inY) {
+        string varInY = "out_" +inY->getNameOutSlot(inYPort)+ "_" + std::to_string(inY->mNodeId) + "_" + std::to_string(inYPort);
+        code +=
+            inX->Eval(nge, indentLevel) +
+            inY->Eval(nge, indentLevel) +
+            ind+ "bool "+ outValueName +" = ("+ varInX +string(operations[mSelectedOperationIndex])+ varInY + ");\n" +
+            ind+ "typedef bool " + outValueName+ "_TYPE; \n";
+      }
+    }
+
+    return code;
+  }
+
 
   // casts:
   inline static ThisClass* Cast(Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
@@ -709,7 +959,7 @@ protected:
 
       code +=
           inValue->Eval(nge, indentLevel) + // Here the variable out_portName_nodeID_port must be set
-          ind+ "this->attr_"+ NGECellAttrNames[mSelectedAttrIndex] +" = " +varNewValue+ ";\n";
+          ind+ "this->ATTR_"+ NGECellAttrNames[mSelectedAttrIndex] +" = " +varNewValue+ ";\n";
     }
 
     return code;
@@ -976,8 +1226,8 @@ public:
     node->init("Arithmetic Operator", pos, "X;Y", "result", TYPE);
 
     // 3) init fields ( this uses the node->fields variable; otherwise we should have overridden other virtual methods (to render and serialize) )
-    static const char* operations[8] = {"SUM", "SUB", "MUL", "MEAN", "POW", "SQRT", "MAX", "MIN"};
-    node->fields.addFieldEnum(&node->mSelectedOperationIndex, 8, operations, "", "select the arithmetic operator to be used");
+    static const char* operations[9] = {"SUM", "SUB", "MUL", "DIV", "SQRT", "POW", "MAX", "MIN", "MEAN"};
+    node->fields.addFieldEnum(&node->mSelectedOperationIndex, 9, operations, "", "select the arithmetic operator to be used");
 
     node->mSelectedOperationIndex = 0;
 
@@ -989,6 +1239,62 @@ protected:
     ImGui::Text("Operation:");
     fields[0].render(nodeWidth);
     return false;
+  }
+
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+    int inXPort;
+    int inYPort;
+    Node* inX = nge.getInputNodeForNodeAndSlot(this, 0, &inXPort);
+    Node* inY = nge.getInputNodeForNodeAndSlot(this, 1, &inYPort);
+    //-------------------------------------------------------------
+    /*
+     Eval(inX);
+     Eval(inY);
+     varInX+"_TYPE" outValueName = (varInX + this->operation[mSelectedOperationIndex] + varInY);
+
+     typedef varInX+"_TYPE" + outValueName+ "_TYPE";
+     */
+
+    if (inX && inY) {
+      string varInX = "out_" +inX->getNameOutSlot(inXPort)+ "_" + std::to_string(inX->mNodeId) + "_" + std::to_string(inXPort);
+      string varInY = "out_" +inY->getNameOutSlot(inYPort)+ "_" + std::to_string(inY->mNodeId) + "_" + std::to_string(inYPort);
+      string outValueName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
+      static const char* operations[9] = {" + ", " - ", " * ", " / ", "sqrt", "pow", "max", "min", "MEAN"};
+
+      code +=
+          inX->Eval(nge, indentLevel) +
+          inY->Eval(nge, indentLevel) +
+          ind+ varInX+ "_TYPE " +outValueName+ " = ";  // Part of declaration
+
+      // For SUM, SUB, MUL, DIV
+      if(mSelectedOperationIndex < 4)
+        code += "(" + varInX +string(operations[mSelectedOperationIndex])+ varInY + ");\n";
+
+      // For SQRT
+      else if(mSelectedOperationIndex == 4)
+        code += "std::sqrt("+ varInX +");\n";
+
+      // For POW, MAX, MIN
+      else if(mSelectedOperationIndex < 8)
+        code += "std::"+ string(operations[mSelectedOperationIndex]) +"(" + varInX +", "+ varInY + ");\n";
+
+      // For MEAN
+      else
+        code += "(" + varInX +" + "+ varInY + ")/2;\n";
+
+      code += ind+ "typedef "+ varInX+ "_TYPE " + outValueName+ "_TYPE; \n";
+    }
+
+    return code;
   }
 
   // casts:
@@ -1039,6 +1345,91 @@ protected:
     return false;
   }
 
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+    int inValuesPort;
+    int inXPort;
+    Node* inValues = nge.getInputNodeForNodeAndSlot(this, 0, &inValuesPort);
+    Node* inX = nge.getInputNodeForNodeAndSlot(this, 1, &inXPort);
+    //-------------------------------------------------------------
+    /*
+     Eval(inValues);
+     Eval(inX);
+     int numEquals;
+     int numGreater;
+     int numLesser;
+     bool outValueName;
+     for(inValues+"_ELEMENT_TYPE" elem: varInValues) {
+       if(elem == varInX)
+         numEquals++;
+       else if(elem > varInX)
+         numGreater++;
+       else(elem < varInX)
+         numLesser++;
+     }
+     outValueName =
+     // Different analyse for each operation
+     // ALL IS
+     (numEquals == varInValues->size());
+
+     // None is
+     (numEquals == 0);
+
+     ...
+
+     typedef bool + outValueName+ "_TYPE";
+     */
+
+    if (inValues && inX) {
+      string varInValues  = "out_" +inValues->getNameOutSlot(inValuesPort)+ "_" + std::to_string(inValues->mNodeId) + "_" + std::to_string(inValuesPort);
+      string varInX       = "out_" +inX->getNameOutSlot(inXPort)+ "_" + std::to_string(inX->mNodeId) + "_" + std::to_string(inXPort);
+      string outValueName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
+      //static const char* operations[7] = {"ALL IS", "NONE IS", "HAS A", "ALL GREATER THAN", "ALL LESSER THAN", "ANY GREATER THAN", "ANY LESSER THAN"};
+
+      code +=
+          inValues->Eval(nge, indentLevel) +
+          inX->Eval(nge, indentLevel)  +
+          ind+ "int numEquals = 0;\n"  +
+          ind+ "int numGreater = 0;\n" +
+          ind+ "int numLesser = 0;\n"  +
+          ind+ "bool "+ outValueName+ ";\n" +
+          ind+ "for("+ varInValues+"_ELEMENT_TYPE "+ "elem: "+ varInValues+ ") {\n" +
+          ind+ "  if(elem == "+ varInX +")\n" +
+          ind+ "    numEquals++;\n" +
+          ind+ "  else if(elem > "+ varInX +")\n" +
+          ind+ "    numGreater++;\n" +
+          ind+ "  else(elem < "+ varInX +")\n" +
+          ind+ "    numLesser++;\n" +
+          ind+ "  "+ outValueName+ " = ";
+
+      // Different analyse for each operation
+      switch (this->mSelectedOperationIndex) {
+      case 0: code += "(numEquals == "+ varInValues +".size());\n";  break; // ALL IS
+      case 1: code += "(numEquals == 0);\n";                          break; // NONE IS
+      case 2: code += "(numEquals > 0);\n";                           break; // HAS A
+      case 3: code += "(numGreater == "+ varInValues +".size());\n"; break; // ALL GREATER THAN
+      case 4: code += "(numLesser == "+ varInValues +".size());\n";  break; // ALL LESSER THAN
+      case 5: code += "(numGreater > 0);\n";                          break; // ANY GREATER THAN
+      case 6: code += "(numLesser > 0);\n";                           break; // ANY LESSER THAN
+
+      default:
+        code += ind+ "false;\n";                                        // Whatever
+      }
+      code += ind+ "}\n";
+      code += ind+ "typedef bool "+ outValueName+ "_TYPE;\n";
+    }
+
+    return code;
+  }
+
   // casts:
   inline static ThisClass* Cast(Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
   inline static const ThisClass* Cast(const Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
@@ -1057,7 +1448,7 @@ protected:
   int mBoolOperIndex;
 
   virtual const char* getTooltip() const { return "This Node offers arithmetic and boolean operations for a list of elements."; }
-  virtual const char* getInfo() const { return "This Node offers arithmetic and boolean operations for a list of elements. \nYou can mark the 'Boolean Type' option to switch for ooolean operations. \nBe aware of the types involved in the operations!"; }
+  virtual const char* getInfo() const { return "This Node offers arithmetic and boolean operations for a list of elements. \nYou can mark the 'Boolean Type' option to switch for boolean operations. \nBe aware of the types involved in the operations!"; }
   virtual void getDefaultTitleBarColors(ImU32& defaultTitleTextColorOut,ImU32& defaultTitleBgColorOut,float& defaultTitleBgColorGradientOut) const {
     // [Optional Override] customize Node Title Colors [default values: 0,0,-1.f => do not override == use default values from the Style()]
     defaultTitleTextColorOut = gMainStyle.TitleTextColorOut_OPERATE;defaultTitleBgColorOut = gMainStyle.TitleBgColorOut_OPERATE;defaultTitleBgColorGradientOut = gMainStyle.TitleBgColorGradientOut_OPERATE;
@@ -1075,11 +1466,11 @@ public:
     node->init("Group Operator", pos, "values", "result", TYPE);
 
     // 3) init fields ( this uses the node->fields variable; otherwise we should have overridden other virtual methods (to render and serialize) )
-    static const char* BoolOperations[5] = {"AND", "OR", "MAJORITY", "MONORITY", "PICK RANDOM"};
+    static const char* BoolOperations[5] = {"AND", "OR", "NAND", "NOR", "PICK RANDOM"};
     node->fields.addFieldEnum(&node->mBoolOperIndex, 5, BoolOperations, "", "select the boolean operator to be used");
 
-    static const char* ArithOperations[9] = {"SUM", "MUL", "MEAN", "MAX", "MIN", "MEDIAN", "STD", "VAR", "PICK RANDOM"};
-    node->fields.addFieldEnum(&node->mArithOperIndex, 9, ArithOperations, "", "select the arithmetic operator to be used");
+    static const char* ArithOperations[7] = {"SUM", "MUL", "MAX", "MIN", "MEAN", "MEDIAN", "PICK RANDOM"};
+    node->fields.addFieldEnum(&node->mArithOperIndex, 7, ArithOperations, "", "select the arithmetic operator to be used");
 
     node->mBooleanType = false;
     node->mArithOperIndex = 0;
@@ -1097,6 +1488,114 @@ protected:
     else
       fields[1].render(nodeWidth);
     return false;
+  }
+
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+    int inValuesPort;
+    Node* inValues = nge.getInputNodeForNodeAndSlot(this, 0, &inValuesPort);
+    //-------------------------------------------------------------
+    /*
+     Eval(inValues);
+     if(mBooleanType) {
+       if(this->mBoolOperIndex < 2)
+         bool result  = varInValues[0];
+       else
+         bool result = !varInValues[0];
+
+       if(mBoolOperIndex < 5) // AND, OR, NAND, NOR
+          for(varInValues+"_ELEMENT_TYPE" elem: varInValues) {
+            switch (this->mBoolOperIndex) {
+            case 0: return = return && elem ;\n";  break; // AND
+            case 1: return = return || elem ;\n";  break; // OR
+            case 2: return = return && !elem ;\n";  break; // NAND
+            case 3: return = return || !elem ;\n";  break; // NOR
+          }
+       else // PICK RANDOM
+        return = inValues[(rand() % inValues->size())]; // PICK RANDOM
+     } else {
+
+     }
+
+     typedef varInValues+"_ELEMENT_TYPE" + outValueName+ "_TYPE";
+     */
+
+    if (inValues) {
+      string varInValues  = "out_" +inValues->getNameOutSlot(inValuesPort)+ "_" + std::to_string(inValues->mNodeId) + "_" + std::to_string(inValuesPort);
+      string outValueName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
+      //static const char* BoolOperations[5] = {"AND", "OR", "NAND", "NOR", "PICK RANDOM"};
+      //static const char* ArithOperations[7] = {"SUM", "MUL", "MAX", "MIN", "MEAN", "MEDIAN", "PICK RANDOM"};
+
+      code += inValues->Eval(nge, indentLevel);
+      if(mBooleanType) {  // Boolean Operation
+        if(this->mBoolOperIndex < 2)
+          code += ind+ varInValues+"_ELEMENT_TYPE "+ outValueName + " = "+ varInValues+"[0];\n";
+        else
+          code += ind+ varInValues+"_ELEMENT_TYPE "+ outValueName + " = !"+ varInValues+"[0];\n";
+
+        if(mBoolOperIndex < 4) {  // AND, OR, NAND, NOR
+          code+= ind+ "for("+ varInValues+"_ELEMENT_TYPE elem: "+ varInValues+")\n";
+          switch (this->mBoolOperIndex) {
+            case 0: code += ind+ "  "+ outValueName +" = "+ outValueName +" && elem;\n";  break; // AND
+            case 1: code += ind+ "  "+ outValueName +" = "+ outValueName +" || elem;\n";  break; // OR
+            case 2: code += ind+ "  "+ outValueName +" = "+ outValueName +" && !elem;\n"; break; // NAND
+            case 3: code += ind+ "  "+ outValueName +" = "+ outValueName +" || !elem;\n"; break; // NOR
+            default: code += ind+ "  "+ outValueName +" = false;\n";
+          }
+        } else // PICK RANDOM
+          code+= ind+ outValueName +" = "+ varInValues + "[(rand() % ("+ varInValues+ ".size())];\n"; // PICK RANDOM
+
+      } else {  // Arithmetic Operation
+        if(mArithOperIndex == 0 || mArithOperIndex == 4) // SUM or MEAN
+          code += ind+ varInValues+"_ELEMENT_TYPE "+ outValueName +" = 0;\n";
+
+        if(mArithOperIndex == 1) // MUL
+          code += ind+ varInValues+"_ELEMENT_TYPE "+ outValueName +" = 1;\n";
+
+        if(mArithOperIndex == 2 || mArithOperIndex == 3) // MAX or MIN
+          code += ind+ varInValues+"_ELEMENT_TYPE "+ outValueName +" = "+ varInValues +"[0];\n";
+
+        // SUM, MUL, MAX, MIN, MEAN
+        if(mArithOperIndex < 5) {
+          code+= ind+ "for("+ varInValues+"_ELEMENT_TYPE elem: "+ varInValues+")\n";
+          switch (this->mArithOperIndex) {
+            case 0: code += ind+ "  "+ outValueName +" = "+ outValueName +" + elem;\n";  break; // SUM
+            case 1: code += ind+ "  "+ outValueName +" = "+ outValueName +" * elem;\n";  break; // MUL
+            case 2: code += ind+ "  "+ outValueName +" = std::max("+ outValueName +", elem);\n"; break; // MAX
+            case 3: code += ind+ "  "+ outValueName +" = std::min("+ outValueName +", elem);\n"; break; // MIN
+            case 4: code += ind+ "  "+ outValueName +" = "+ outValueName +" + elem;\n"; break; // MEAN
+            default: code += ind+ "  "+ outValueName +" = 0;\n"; // Whatever, should be never reached
+          }
+          if(mArithOperIndex == 4)  // Finish MEAN
+            code += ind+ outValueName +" = "+ outValueName +"/"+ varInValues +".size();\n";
+
+        // MEDIAN
+        } else if(mArithOperIndex == 5) {
+          code += ind+ "int size = " + varInValues+ ".size();\n";
+          code += ind+ "sort("+ varInValues+ ".begin(), "+ varInValues+ ".end());\n";
+          code += ind+ "if((size % 2) == 0){\n"+
+                  ind+ "  "+ outValueName+ " = ("+ varInValues+ "[size/2-1] + "+ varInValues+ "[size/2])/2;\n";
+          code += ind+ "} else {\n" +
+                  ind+ "  "+ outValueName+ " = "+ varInValues+ "[size/2];\n";
+          code += ind+ "}\n";
+
+        // PICK RANDOM
+        } else
+          code+= ind+ outValueName +" = "+ varInValues + "[(rand() % ("+ varInValues+ ".size())];\n"; // PICK RANDOM
+      }
+
+      code+= ind+ "typedef "+ varInValues+"_ELEMENT_TYPE " + outValueName+ "_TYPE;\n";
+
+      return code;
+    }
   }
 
   // casts:
@@ -1146,6 +1645,54 @@ protected:
     ImGui::Text("Operation:");
     fields[0].render(nodeWidth);
     return false;
+  }
+
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+    int inValuesPort;
+    int inXPort;
+    Node* inValues = nge.getInputNodeForNodeAndSlot(this, 0, &inValuesPort);
+    Node* inX = nge.getInputNodeForNodeAndSlot(this, 1, &inXPort);
+    //-------------------------------------------------------------
+    /*
+     Eval(inValues);
+     Eval(inX);
+     int outValueName;
+     for(inValues+"_ELEMENT_TYPE" elem: varInValues) {
+       // Different analyse for each operation
+       if(elem operations[mSelectedOperationIndex] varInX)
+         outValueName++;
+     }
+
+     typedef int + outValueName+ "_TYPE";
+     */
+
+    if (inValues && inX) {
+      string varInValues  = "out_" +inValues->getNameOutSlot(inValuesPort)+ "_" + std::to_string(inValues->mNodeId) + "_" + std::to_string(inValuesPort);
+      string varInX       = "out_" +inX->getNameOutSlot(inXPort)+ "_" + std::to_string(inX->mNodeId) + "_" + std::to_string(inXPort);
+      string outValueName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
+      static const char* operations[4] = {" == ", " != ", " > ", " < "};
+
+      code +=
+          inValues->Eval(nge, indentLevel) +
+          inX->Eval(nge, indentLevel)  +
+          ind+ "int "+ outValueName+ " = 0;\n" +
+          ind+ "for("+ varInValues+"_ELEMENT_TYPE "+ "elem: "+ varInValues+ ") {\n" +
+          ind+ "  if(elem"+ string(operations[mSelectedOperationIndex]) + varInX +")\n" +
+          ind+ "    "+ outValueName +"++;\n";
+      code += ind+ "}\n";
+      code += ind+ "typedef int "+ outValueName+ "_TYPE;\n";
+    }
+
+    return code;
   }
 
   // casts:
@@ -1411,7 +1958,7 @@ static Node* TestNodeFactory(int nt, const ImVec2& pos) {
   case kGetCellAttributeNode: return GetCellAttributeNode::Create(pos);
   case kGetNeighborsAttributeNode: return GetNeighborsAttributeNode::Create(pos);
   case kGetConstantNode: return GetConstant::Create(pos);
-  case kGetRandomNumber: return GetRandomNumber::Create(pos);
+  case kGetRandomNode: return GetRandomNode::Create(pos);
   case kStatementNode: return StatementNode::Create(pos);
   case kBooleanOperatorNode: return BooleanOperatorNode::Create(pos);
   case kSetAttributeNode: return SetAttributeNode::Create(pos);
@@ -1446,7 +1993,7 @@ void InitNGE(ImGui::NodeGraphEditor &nge) {
     nge.registerNodeTypeMaxAllowedInstances(ImGui::kStepNode, 1); // Here we set the max number of allowed instances of the node (1)
 
     // Optional: starting nodes and links (load from file instead):-----------
-//    nge.addNode(ImGui::kStepNode, ImVec2(-80, 110));
+    nge.addNode(ImGui::kStepNode, ImVec2(0, 310));
 //    nge.addNode(ImGui::kGetModelAttributeNode, ImVec2(20, 20));
 //    nge.addNode(ImGui::kGetCellAttributeNode, ImVec2(200, 20)); // optionally use e.g.: ImGui::ColorEnumUserNode::Cast(colorEnumUserNode1)->...;
 //    nge.addNode(ImGui::kGetNeighborsAttributeNode, ImVec2(400, 20));
@@ -1463,11 +2010,11 @@ void InitNGE(ImGui::NodeGraphEditor &nge) {
 //    nge.addNode(ImGui::kGroupOperatorNode, ImVec2(200, 450));
 //    nge.addNode(ImGui::kGroupCountingNode, ImVec2(400, 420));
 
-    nge.addNode(ImGui::kInitByColorNode, ImVec2(-80, 520));
-    nge.addNode(ImGui::kSetColorViewerNode, ImVec2(20,  520));
-    nge.addNode(ImGui::kDefaultInitializationNode, ImVec2(200, 520));
-    nge.addNode(ImGui::kGetColorViewerNode, ImVec2(400, 520));
-    nge.addNode(ImGui::kGetColorConstantNode, ImVec2(600, 520));
+//    nge.addNode(ImGui::kInitByColorNode, ImVec2(-80, 520));
+//    nge.addNode(ImGui::kSetColorViewerNode, ImVec2(20,  520));
+//    nge.addNode(ImGui::kDefaultInitializationNode, ImVec2(200, 520));
+//    nge.addNode(ImGui::kGetColorViewerNode, ImVec2(400, 520));
+//    nge.addNode(ImGui::kGetColorConstantNode, ImVec2(600, 520));
 
 //    nge.addLink(colorEnumUserNode1, 0, colorEnumUserNode2, 0);
 //    nge.addLink(colorEnumUserNode1, 1, colorEnumUserNode2, 1);
