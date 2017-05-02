@@ -1905,7 +1905,7 @@ bool NodeGraphEditor::overrideNodeOutputSlots(Node* n,const char *slotNamesSepar
 char NodeGraphEditor::CloseCopyPasteChars[3][5] = {"x","^","v"};
 
 int Node::NEXT_ID = 0;
-std::string Node::Eval(const NodeGraphEditor& nge, int indentLevel)
+std::string Node::Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort)
 {
   std::string ind = std::string(indentLevel*2, ' ');
   return ind + "// Code of node _"+ this->Name + "_" + std::to_string(this->mNodeId)+ "\n";

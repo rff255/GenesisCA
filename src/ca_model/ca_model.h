@@ -8,12 +8,14 @@
 #include "neighborhood.h"
 #include "partition.h"
 #include "mapping.h"
+#include "update_rules_editor.h"
 
 #include <unordered_map>
 #include <string>
 #include <vector>
 
 using std::string;
+using std::vector;
 
 class CAModel {
 public:
@@ -37,25 +39,35 @@ public:
   bool             DelAttribute(string id_name);
   string           ModifyAttribute(string prev_id_name, Attribute* modified_attr);
   Attribute*       GetAttribute(string id_name);
-  std::vector<std::string> GetAttributesList();
-  std::vector<std::string> GetCellAttributesList();
-  std::vector<std::string> GetModelAttributesList();
+  vector<string> GetAttributesList();
+  vector<string> GetCellAttributesList();
+  vector<string> GetModelAttributesList();
 
   // Neighborhoods
   string           AddNeighborhood(Neighborhood* new_neigh);
   bool             DelNeighborhood(string id_name);
   string           ModifyNeighborhood(string prev_id_name, Neighborhood* modified_neigh);
   Neighborhood*    GetNeighborhood(string id_name);
-  std::vector<std::string> GetNeighborhoodList();
+  vector<string> GetNeighborhoodList();
 
   // Mappings
   string           AddMapping(Mapping* new_attr);
   bool             DelMapping(string id_name);
   string           ModifyMapping(string prev_id_name, Mapping* modified_attr);
   Mapping*         GetMapping(string id_name);
-  std::vector<std::string> GetMappingsList();
-  std::vector<std::string> GetColAttrMappingsList();
-  std::vector<std::string> GetAttrColMappingsList();
+  vector<string> GetMappingsList();
+  vector<string> GetColAttrMappingsList();
+  vector<string> GetAttrColMappingsList();
+
+  // Nodes Graph Editor
+  UpdateRulesEditor* GetGraphEditor() {return mGraphEditor;}
+
+  string GenerateHCode();
+  string GenerateCPPCode();
+  string GenerateCACellDeclaration();
+  string GenerateCACellDefinition();
+  string GenerateCAModelDeclaration();
+  string GenerateCAModelDefinition();
 
 private:
   ModelProperties* m_model_properties;
@@ -63,6 +75,9 @@ private:
   std::unordered_map<string, Attribute*>    m_attributes;
   std::unordered_map<string, Neighborhood*> m_neighborhoods;
   std::unordered_map<string, Mapping*>      m_mappings;
+
+  // The Editor instance
+  UpdateRulesEditor* mGraphEditor;
 };
 
 #endif // CA_MODEL_H

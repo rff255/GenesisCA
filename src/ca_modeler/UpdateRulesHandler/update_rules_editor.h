@@ -16,7 +16,9 @@ public:
   // Public interest methods
   void Init();// Called once to setup the initial configuration of editor
   void Render() { mEditor.render(); } // Called to refresh graphicals
-  std::string EvalGraphEditor();
+  std::string EvalGraphEditorStep();
+  std::string EvalGraphEditorDefaultInit();
+  std::string EvalGraphEditorInputColorNodes();
 
   void UpdateComboBoxes(std::vector<std::string> cellAttrNames,
                         std::vector<std::string> modelAttrNames,

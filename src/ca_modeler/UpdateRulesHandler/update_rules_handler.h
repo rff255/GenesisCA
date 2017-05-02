@@ -5,8 +5,6 @@
 
 #include <string>
 
-#include "update_rules_editor.h"
-
 #include <QWidget>
 
 #include <GLFW/glfw3.h>
@@ -24,7 +22,6 @@ public:
   ~UpdateRulesHandler();
 
   void set_m_ca_model(CAModel* model) {m_ca_model = model;}
-  std::string GenerateCode() {return mGraphEditor.EvalGraphEditor();}
 
 private slots:
   void UpdateEditorComboBoxes();
@@ -39,9 +36,6 @@ private:
 
   // Reference to node graph editor (NGE) window
   GLFWwindow* mNGEWindow;
-
-  // The Editor instance
-  UpdateRulesEditor mGraphEditor;
 
   // Retain the state of editor window: open or closed
   bool mIsEditorOpen;

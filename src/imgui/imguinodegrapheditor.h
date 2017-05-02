@@ -238,7 +238,7 @@ public:
   inline void setOpen(bool flag) {isOpen=flag;}
 
   // Returns the code of this node in format of string (way more complex for the specific nodes)
-  virtual std::string Eval(const struct NodeGraphEditor& nge, int indentLevel);
+  virtual std::string Eval(const struct NodeGraphEditor& nge, int indentLevel, int evalPort = 0);
 
 protected:
   FieldInfoVector fields; // I guess you can just skip these at all and implement virtual methods... but it was supposed to be useful...

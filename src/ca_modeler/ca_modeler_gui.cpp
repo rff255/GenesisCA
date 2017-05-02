@@ -61,8 +61,11 @@ void CAModelerGUI::on_act_quit_triggered() {
 
 void CAModelerGUI::on_act_export_c_code_triggered()
 {
-  std::string toBePrinted = "// Generated code below marks: \n####\n" +
-                            ui->wgt_update_rules_handler->GenerateCode() +
-                            "####\n";
+  std::string toBePrinted = "//#### Generated Header: ####\n" +
+                            m_ca_model->GenerateHCode() +
+                            "//#### Generated Implementation: ####\n" +
+                            m_ca_model->GenerateCPPCode() +
+                            "//####\n";
+
   qDebug(toBePrinted.c_str());
 }

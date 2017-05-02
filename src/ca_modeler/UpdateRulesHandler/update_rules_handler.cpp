@@ -20,7 +20,6 @@ UpdateRulesHandler::UpdateRulesHandler(QWidget *parent) :
   ui(new Ui::UpdateRulesHandler)
 {
   ui->setupUi(this);
-  mGraphEditor = UpdateRulesEditor();
 }
 
 UpdateRulesHandler::~UpdateRulesHandler()
@@ -31,7 +30,7 @@ UpdateRulesHandler::~UpdateRulesHandler()
 
 void UpdateRulesHandler::UpdateEditorComboBoxes()
 {
-  mGraphEditor.UpdateComboBoxes(m_ca_model->GetCellAttributesList(),
+  m_ca_model->GetGraphEditor()->UpdateComboBoxes(m_ca_model->GetCellAttributesList(),
                                 m_ca_model->GetModelAttributesList(),
                                 m_ca_model->GetNeighborhoodList(),
                                 m_ca_model->GetColAttrMappingsList(),
@@ -82,7 +81,7 @@ void UpdateRulesHandler::on_pbtn_open_node_graph_editor_released()
   ImVec4 clear_color = ImColor(114, 144, 154);
 
   // Initialize Node graph editor nge (add initial nodes conections and so on)
-  mGraphEditor.Init();
+  m_ca_model->GetGraphEditor()->Init();
   UpdateEditorComboBoxes(); // Synchonize model with editor combo boxes options
 
   int resized_width;
@@ -110,7 +109,7 @@ void UpdateRulesHandler::on_pbtn_open_node_graph_editor_released()
                                          //ImGuiWindowFlags_ShowBorders |
                                          //ImGuiWindowFlags_NoSavedSettings |
       //ImGui::Text("DELICIA DE ABACAXI");
-      mGraphEditor.Render();
+      m_ca_model->GetGraphEditor()->Render();
       //nge.render();
       ImGui::End();
 

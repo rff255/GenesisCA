@@ -28,8 +28,6 @@ struct ModelProperties {
   bool                   m_has_max_iterations;
   int                    m_max_iterations;
   std::vector<BreakCase> m_break_cases;
-
-
 };
 
 #endif // MODEL_PROPERTIES_H

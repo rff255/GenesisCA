@@ -115,7 +115,7 @@ enum NodeTypes {
   kGetConstantNode,
   kGetRandomNode,
   kStatementNode,
-  kBooleanOperatorNode,
+  kLogicOperatorNode,
   kSetAttributeNode,
   kConditionalNode,
   kLoopNode,
@@ -124,7 +124,7 @@ enum NodeTypes {
   kGroupStatementNode,
   kGroupOperatorNode,
   kGroupCountingNode,
-  kInitByColorNode,
+  kInputColorNode,
   kSetColorViewerNode,
   kDefaultInitializationNode,
   kGetColorViewerNode,
@@ -139,7 +139,7 @@ static const char* NodeTypeNames[kNumNodesTypes] = {"CONTROL   | Step",
                                                     "DATA      | Get Constant",
                                                     "DATA      | Get Random",
                                                     "LOGIC     | Statement",
-                                                    "OPERATION | Boolean Operator",
+                                                    "OPERATION | Logic Operator",
                                                     "CONTROL   | Set Attribute",
                                                     "CONTROL   | Conditional",
                                                     "CONTROL   | Loop",
@@ -195,8 +195,14 @@ public:
     return node;
   }
 
+protected:
+  virtual bool render(float nodeWidth){
+    ImGui::Text("Starts the control Flow");
+    return false;
+  }
+
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
@@ -209,19 +215,13 @@ public:
 
     //-------------------------------------------------------------
     // Check if there is a node connected to it
-    code += ind+ "void Step(){\n";
+    code += ind+ "void CACell::Step(){\n";
     code += ind+ "  CopyPrevCellConfig();\n";
         if (outNode)
           code += ind+ outNode->Eval(nge, indentLevel+1);
     code += ind+ "}\n";
 
     return code;
-  }
-
-protected:
-  virtual bool render(float nodeWidth){
-    ImGui::Text("Starts the control Flow");
-    return false;
   }
 
   // casts:
@@ -272,7 +272,7 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
@@ -352,7 +352,7 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
@@ -431,7 +431,7 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
@@ -506,6 +506,7 @@ public:
     node->fields.addFieldTextEdit(&node->mValue[0], TextBufferSize, "Value:", "Type the value you want for this constant", ImGuiInputTextFlags_EnterReturnsTrue);
 
     //4) Init values
+    node->mValueType = 1;
     strcpy(node->mValue, "");
 
     return node;
@@ -521,7 +522,7 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
@@ -595,6 +596,7 @@ public:
 
     node->fields.addFieldEnum(&node->mSelectedAttrIndex, &GetNumEnumItems, &GetTextFromEnumIndex, "", "select which attribute must be considered", &NGEModelAttrNames);
 
+    node->mProbability = 0;
     node->mValueType = 0;
     node->mUseModelAttr = false;
     node->mSelectedAttrIndex = 0;
@@ -635,7 +637,7 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
@@ -672,12 +674,12 @@ protected:
 
     // Check if there is a node connected to value port
     string outValueName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
-    string attrName     = string(NGEModelAttrNames[mSelectedAttrIndex]);
 
     code += ind+ "std::srand(time(NULL));\n";
     if(mValueType == 0) {  // BOOL
       code += ind+ "bool "+ outValueName +" = rand() < ";
       if(mUseModelAttr) {
+        string attrName     = string(NGEModelAttrNames[mSelectedAttrIndex]);
         if (NGEModelAttrNames.size()>0 && NGEModelAttrNames.size()>mSelectedAttrIndex)
           code += "this->CAModel->ATTR_"+ attrName + " * ((double)RAND_MAX + 1.0);\n";
         else
@@ -689,16 +691,12 @@ protected:
       code += ind+ "typedef bool "+ outValueName+ "_TYPE;\n";
     } else if(mValueType == 1){  // INTEGER
       code +=
-      ind+ "int min = " + std::to_string(mFirstNumberI) + ";\n" +
-      ind+ "int max = " + std::to_string(mSecondNumberI) + ";\n" +
-      ind+ "int " +outValueName+ " = rand()%(max-min + 1) + min;\n" +
+      ind+ "int " +outValueName+ " = rand()%("+std::to_string(mSecondNumberI)+"-"+std::to_string(mFirstNumberI)+" + 1) + "+std::to_string(mFirstNumberI)+";\n" +
       ind+ "typedef int " +outValueName+ "_TYPE;\n";
 
     } else {  // FLOAT
       code +=
-      ind+ "float min = " + std::to_string(mFirstNumberF) + ";\n" +
-      ind+ "float max = " + std::to_string(mSecondNumberF) + ";\n" +
-      ind+ "float " + outValueName+ " = min + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(max-min)));\n" +
+      ind+ "float " + outValueName+ " = "+std::to_string(mFirstNumberF)+" + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/("+std::to_string(mSecondNumberF)+"-"+std::to_string(mFirstNumberF)+")));\n" +
       ind+ "typedef float " +outValueName+ "_TYPE;\n";
     }
 
@@ -753,7 +751,7 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
@@ -783,8 +781,8 @@ protected:
       static const char* operations[6] = {" == ", " != ", " > ", " < ", " >= ", " <= "};
 
       code +=
-          inX->Eval(nge, indentLevel) +
-          inY->Eval(nge, indentLevel) +
+          inX->Eval(nge, indentLevel, inXPort) +
+          inY->Eval(nge, indentLevel, inYPort) +
           ind+ "bool "+ outValueName +" = ("+ varInX +string(operations[mSelectedOperationIndex])+ varInY + ");\n" +
           ind+ "typedef bool " + outValueName+ "_TYPE; \n";
     }
@@ -797,13 +795,13 @@ protected:
   inline static const ThisClass* Cast(const Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
 };
 
-class BooleanOperatorNode : public Node, public ITestEnum
+class LogicOperatorNode : public Node, public ITestEnum
 {
 protected:
   typedef Node Base;  //Base Class
-  typedef BooleanOperatorNode ThisClass;
-  BooleanOperatorNode() : Base() {}
-  static const int TYPE = kBooleanOperatorNode;
+  typedef LogicOperatorNode ThisClass;
+  LogicOperatorNode() : Base() {}
+  static const int TYPE = kLogicOperatorNode;
 
   int mSelectedOperationIndex;       // field
 
@@ -842,7 +840,7 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
@@ -872,7 +870,7 @@ protected:
       // For NOT case
       if(mSelectedOperationIndex == 3)
         code +=
-            inX->Eval(nge, indentLevel) +
+            inX->Eval(nge, indentLevel, inXPort) +
             ind+ "bool "+ outValueName +" = (!"+ varInX +");\n" +
             ind+ "typedef bool " + outValueName+ "_TYPE; \n";
 
@@ -880,8 +878,8 @@ protected:
       else if(inY) {
         string varInY = "out_" +inY->getNameOutSlot(inYPort)+ "_" + std::to_string(inY->mNodeId) + "_" + std::to_string(inYPort);
         code +=
-            inX->Eval(nge, indentLevel) +
-            inY->Eval(nge, indentLevel) +
+            inX->Eval(nge, indentLevel, inXPort) +
+            inY->Eval(nge, indentLevel, inYPort) +
             ind+ "bool "+ outValueName +" = ("+ varInX +string(operations[mSelectedOperationIndex])+ varInY + ");\n" +
             ind+ "typedef bool " + outValueName+ "_TYPE; \n";
       }
@@ -940,7 +938,7 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
@@ -958,7 +956,7 @@ protected:
       string varNewValue = "out_" +inValue->getNameOutSlot(inValuePort)+ "_" + std::to_string(inValue->mNodeId) + "_" + std::to_string(inValuePort);
 
       code +=
-          inValue->Eval(nge, indentLevel) + // Here the variable out_portName_nodeID_port must be set
+          inValue->Eval(nge, indentLevel, inValuePort) + // Here the variable out_portName_nodeID_port must be set
           ind+ "this->ATTR_"+ NGECellAttrNames[mSelectedAttrIndex] +" = " +varNewValue+ ";\n";
     }
 
@@ -1010,7 +1008,7 @@ public:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
@@ -1030,7 +1028,7 @@ public:
       string varCondition = "out_" +inIf->getNameOutSlot(inIfPort)+ "_" + std::to_string(inIf->mNodeId) + "_" + std::to_string(inIfPort);
 
       code +=
-          inIf->Eval(nge, indentLevel) + // Here the variable out_portName_nodeID_port must be set
+          inIf->Eval(nge, indentLevel, inIfPort) + // Here the variable out_portName_nodeID_port must be set
           ind+ "if(" +varCondition+ "){\n";
 
       if(outThen) // If there is a link for THEN
@@ -1092,7 +1090,7 @@ public:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
@@ -1111,7 +1109,7 @@ public:
       string varRepeatNumber = "out_" +inRepeat->getNameOutSlot(inRepeatPort)+ "_" + std::to_string(inRepeat->mNodeId) + "_" + std::to_string(inRepeatPort);
 
       code +=
-          inRepeat->Eval(nge, indentLevel) + // Here the variable out_portName_nodeID_port must be set
+          inRepeat->Eval(nge, indentLevel, inRepeatPort) + // Here the variable out_portName_nodeID_port must be set
           ind+ "for(int i=0; i<" +varRepeatNumber+ ";++i){\n";
 
       if(outDo) // If there is a link for DO
@@ -1160,7 +1158,7 @@ public:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
@@ -1242,7 +1240,7 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
@@ -1271,8 +1269,8 @@ protected:
       static const char* operations[9] = {" + ", " - ", " * ", " / ", "sqrt", "pow", "max", "min", "MEAN"};
 
       code +=
-          inX->Eval(nge, indentLevel) +
-          inY->Eval(nge, indentLevel) +
+          inX->Eval(nge, indentLevel, inXPort) +
+          inY->Eval(nge, indentLevel, inYPort) +
           ind+ varInX+ "_TYPE " +outValueName+ " = ";  // Part of declaration
 
       // For SUM, SUB, MUL, DIV
@@ -1346,7 +1344,7 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
@@ -1395,8 +1393,8 @@ protected:
       //static const char* operations[7] = {"ALL IS", "NONE IS", "HAS A", "ALL GREATER THAN", "ALL LESSER THAN", "ANY GREATER THAN", "ANY LESSER THAN"};
 
       code +=
-          inValues->Eval(nge, indentLevel) +
-          inX->Eval(nge, indentLevel)  +
+          inValues->Eval(nge, indentLevel, inValuesPort) +
+          inX->Eval(nge, indentLevel, inXPort)  +
           ind+ "int numEquals = 0;\n"  +
           ind+ "int numGreater = 0;\n" +
           ind+ "int numLesser = 0;\n"  +
@@ -1491,7 +1489,7 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
@@ -1648,7 +1646,7 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
@@ -1682,8 +1680,8 @@ protected:
       static const char* operations[4] = {" == ", " != ", " > ", " < "};
 
       code +=
-          inValues->Eval(nge, indentLevel) +
-          inX->Eval(nge, indentLevel)  +
+          inValues->Eval(nge, indentLevel, inValuesPort) +
+          inX->Eval(nge, indentLevel, inXPort)  +
           ind+ "int "+ outValueName+ " = 0;\n" +
           ind+ "for("+ varInValues+"_ELEMENT_TYPE "+ "elem: "+ varInValues+ ") {\n" +
           ind+ "  if(elem"+ string(operations[mSelectedOperationIndex]) + varInX +")\n" +
@@ -1700,15 +1698,16 @@ protected:
   inline static const ThisClass* Cast(const Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
 };
 
-class InitByColorNode : public Node
+class InputColorNode : public Node
 {
 protected:
   typedef Node Base;  //Base Class
-  typedef InitByColorNode ThisClass;
-  InitByColorNode() : Base() {}
-  static const int TYPE = kInitByColorNode;
+  typedef InputColorNode ThisClass;
+  InputColorNode() : Base() {}
+  static const int TYPE = kInputColorNode;
 
   int mSelectedMapping;
+  bool mIsProcessing;
 
   virtual const char* getTooltip() const { return "This node mark the start of the control when a color is used as input to the cell."; }
   virtual const char* getInfo() const { return "This node mark the start of the control when a color is used as input to the cell. \n It allow an intialization by image of CA. Where what each color represents is up to user.\n Be aware of the types of data. The output is three integers."; }
@@ -1723,12 +1722,13 @@ public:
     // 1) allocation
    ThisClass* node = (ThisClass*)ImGui::MemAlloc(sizeof(ThisClass)); IM_PLACEMENT_NEW(node) ThisClass();
 
-    node->init("Init By Color", pos, NULL, "DO;r;g;b", TYPE);
+    node->init("Input Color", pos, NULL, "DO;r;g;b", TYPE);
 
     // 3) init fields ( this uses the node->fields variable; otherwise we should have overridden other virtual methods (to render and serialize) )
     node->fields.addFieldEnum(&node->mSelectedMapping, &GetNumEnumItems, &GetTextFromEnumIndex, "", "select which mapping must be considered", &NGEColAttrMappingNames);
 
     node->mSelectedMapping = 0;
+    node->mIsProcessing = false;
 
     node->mNumFlowPortsOut = 1;
 
@@ -1741,6 +1741,47 @@ protected:
     fields[0].render(nodeWidth);
     ImGui::Text("Inputted colors /");
     return false;
+  }
+
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+    Node* outNode = nge.getOutputNodeForNodeAndSlot(this, 0);
+
+    //-------------------------------------------------------------
+    // Check if there is a output node linked at, and a valid mapping selected
+    if(!this->mIsProcessing) {
+      if (outNode && NGEColAttrMappingNames.size()>0 && NGEColAttrMappingNames.size()>mSelectedMapping) {
+        this->mIsProcessing = true;
+        string outRName = "out_" + this->getNameOutSlot(1)+ "_" + std::to_string(this->mNodeId) +"_1";
+        string outGName = "out_" + this->getNameOutSlot(2)+ "_" + std::to_string(this->mNodeId) +"_2";
+        string outBName = "out_" + this->getNameOutSlot(3)+ "_" + std::to_string(this->mNodeId) +"_3";
+
+        code += ind+ "void CACell::InputColor_"+ string(NGEColAttrMappingNames[mSelectedMapping]) +"(int red, int green, int blue){\n";
+        code += ind+ "  int "+ outRName +" = red;\n";
+        code += ind+ "  int "+ outGName +" = green;\n";
+        code += ind+ "  int "+ outBName +" = blue;\n";
+
+        code += ind+ "  typedef int " + outRName + "_TYPE;\n";
+        code += ind+ "  typedef int " + outGName + "_TYPE;\n";
+        code += ind+ "  typedef int " + outBName + "_TYPE;\n";
+
+        code += ind+ outNode->Eval(nge, indentLevel+1);
+        code += ind+ "}\n";
+        this->mIsProcessing = false;
+      }
+    } else {
+      return "";
+    }
+    //-------------------------------------------------------------
+    return code;
   }
 
   // casts:
@@ -1756,8 +1797,9 @@ protected:
   SetColorViewerNode() : Base() {}
   static const int TYPE = kSetColorViewerNode;
 
+  bool mUseDefaultColor;
   int mSelectedMapping;
-  ImVec4 defaultColor;
+  ImVec4 mDefaultColor;
 
   virtual const char* getTooltip() const { return "This node set the color of the cell for a specified mapping."; }
   virtual const char* getInfo() const { return "This node set the color of the cell for a specified mapping. \nIt allow the user to create different forms of visualization of the CA execution. \n Be aware of the types of data. The output is three integers."; }
@@ -1776,9 +1818,10 @@ public:
 
     // 3) init fields ( this uses the node->fields variable; otherwise we should have overridden other virtual methods (to render and serialize) )
     node->fields.addFieldEnum(&node->mSelectedMapping, &GetNumEnumItems, &GetTextFromEnumIndex, "", "select which mapping must be considered", &NGEAttrColMappingNames);
-    node->fields.addFieldColor(&node->defaultColor.x,false,"","Select the default channel values");
+    node->fields.addFieldColor(&node->mDefaultColor.x,false,"","Select the default channel values");
 
     node->mSelectedMapping = 0;
+    node->mUseDefaultColor = true;
 
     node->mNumFlowPortsIn = 1;
 
@@ -1789,9 +1832,64 @@ protected:
   virtual bool render(float nodeWidth){
     ImGui::Text("Mapping:");
     fields[0].render(nodeWidth);
-    ImGui::Text("Default values:");
-    fields[1].render(nodeWidth);
+    ImGui::Checkbox("Use default color", &mUseDefaultColor);
+    if(mUseDefaultColor) {
+      ImGui::Text("Default values:");
+      fields[1].render(nodeWidth);
+    }
     return false;
+  }
+
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+    int inRPort;
+    int inGPort;
+    int inBPort;
+    Node* inR = nge.getInputNodeForNodeAndSlot(this, 1, &inRPort);
+    Node* inG = nge.getInputNodeForNodeAndSlot(this, 2, &inGPort);
+    Node* inB = nge.getInputNodeForNodeAndSlot(this, 3, &inBPort);
+    //-------------------------------------------------------------
+    // Check if there is a node connected to it
+    // Set to default colors values
+
+    if(NGEAttrColMappingNames.size() > 0 && NGEAttrColMappingNames.size() > mSelectedMapping){
+      if(mUseDefaultColor) {
+        code += ind+ "this->VIEWER_"+ string(NGEAttrColMappingNames[mSelectedMapping]) +"[0] = " +std::to_string(static_cast<int>(mDefaultColor.x*255))+ ";\n";
+        code += ind+ "this->VIEWER_"+ string(NGEAttrColMappingNames[mSelectedMapping]) +"[1] = " +std::to_string(static_cast<int>(mDefaultColor.y*255))+ ";\n";
+        code += ind+ "this->VIEWER_"+ string(NGEAttrColMappingNames[mSelectedMapping]) +"[2] = " +std::to_string(static_cast<int>(mDefaultColor.z*255))+ ";\n";
+      }
+
+      // Has a node linked at R port
+      if (inR) {
+        string varInR = "out_" +inR->getNameOutSlot(inRPort)+ "_" + std::to_string(inR->mNodeId) + "_" + std::to_string(inRPort);
+        code +=
+            inR->Eval(nge, indentLevel, inRPort) +
+            ind+ "this->VIEWER_"+ string(NGEAttrColMappingNames[mSelectedMapping]) +"[0] = " +varInR+ ";\n";
+      }
+
+      if (inG) {
+        string varInG = "out_" +inG->getNameOutSlot(inGPort)+ "_" + std::to_string(inG->mNodeId) + "_" + std::to_string(inGPort);
+        code +=
+            inG->Eval(nge, indentLevel, inGPort) +
+            ind+ "this->VIEWER_"+ string(NGEAttrColMappingNames[mSelectedMapping]) +"[1] = " +varInG+ ";\n";
+      }
+
+      if (inB) {
+        string varInB = "out_" +inB->getNameOutSlot(inBPort)+ "_" + std::to_string(inB->mNodeId) + "_" + std::to_string(inBPort);
+        code +=
+            inB->Eval(nge, indentLevel, inBPort) +
+            ind+ "this->VIEWER_"+ string(NGEAttrColMappingNames[mSelectedMapping]) +"[2] = " +varInB+ ";\n";
+      }
+    }
+    return code;
   }
 
   // casts:
@@ -1827,8 +1925,14 @@ public:
     return node;
   }
 
+protected:
+  virtual bool render(float nodeWidth){
+    ImGui::Text("Starts the control Flow");
+    return false;
+  }
+
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
@@ -1841,18 +1945,12 @@ public:
 
     //-------------------------------------------------------------
     // Check if there is a node connected to it
-    code += ind+ "void DefaultInit(){\n";
+    code += ind+ "void CACell::DefaultInit(){\n";
         if (outNode)
           code += ind+ outNode->Eval(nge, indentLevel+1);
     code += ind+ "}\n";
 
     return code;
-  }
-
-protected:
-  virtual bool render(float nodeWidth){
-    ImGui::Text("Starts the control Flow");
-    return false;
   }
 
   // casts:
@@ -1886,7 +1984,7 @@ public:
     node->init("Get Color Viewer", pos, NULL, "r;g;b", TYPE);
 
     // 3) init fields ( this uses the node->fields variable; otherwise we should have overridden other virtual methods (to render and serialize) )
-    node->fields.addFieldEnum(&node->mSelectedMapping, &GetNumEnumItems, &GetTextFromEnumIndex, "", "select which mapping must be considered", &NGEColAttrMappingNames);
+    node->fields.addFieldEnum(&node->mSelectedMapping, &GetNumEnumItems, &GetTextFromEnumIndex, "", "select which mapping must be considered", &NGEAttrColMappingNames);
 
     node->mSelectedMapping = 0;
 
@@ -1899,6 +1997,43 @@ protected:
     fields[0].render(nodeWidth);
     ImGui::Text("Retrieved colors /");
     return false;
+  }
+
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+
+    //-------------------------------------------------------------
+    /*
+     */
+
+    // Check if there is a valid attribute
+    if (NGEAttrColMappingNames.size()>0 && NGEAttrColMappingNames.size()>mSelectedMapping) {
+      string viewerName     = string(NGEAttrColMappingNames[mSelectedMapping]);
+      if(evalPort == 0) {
+        string outRName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
+        code += ind+ "int "+ outRName +" = this->VIEWER_"+ viewerName +"[0];\n";
+        code += ind+ "typedef int " + outRName + "_TYPE;\n";
+      } else if(evalPort == 1) {
+        string outGName = "out_" + this->getNameOutSlot(1)+ "_" + std::to_string(this->mNodeId) +"_1";
+        code += ind+ "int "+ outGName +" = this->VIEWER_"+ viewerName +"[1];\n";
+        code += ind+ "typedef int " + outGName + "_TYPE;\n";
+
+      } else {
+        string outBName = "out_" + this->getNameOutSlot(2)+ "_" + std::to_string(this->mNodeId) +"_2";
+        code += ind+ "int "+ outBName +" = this->VIEWER_"+ viewerName +"[2];\n";
+        code += ind+ "typedef int " + outBName + "_TYPE;\n";
+      }
+    }
+
+    return code;
   }
 
   // casts:
@@ -1914,7 +2049,7 @@ protected:
   GetColorConstantNode() : Base() {}
   static const int TYPE = kGetColorConstantNode;
 
-  ImVec4 defaultColor;
+  ImVec4 chosenColor;
 
   virtual const char* getTooltip() const { return "This node returns the three color channels of a selected color."; }
   virtual const char* getInfo() const { return "This node returns the three color channels of a selected color. \nIt could be used to set more easily the color for a given cell configuration. \n Be aware of the types of data. The output is three integers."; }
@@ -1932,7 +2067,7 @@ public:
     node->init("Get Color Constant", pos, NULL, "r;g;b", TYPE);
 
     // 3) init fields ( this uses the node->fields variable; otherwise we should have overridden other virtual methods (to render and serialize) )
-    node->fields.addFieldColor(&node->defaultColor.x,false,"","Select the desired color");
+    node->fields.addFieldColor(&node->chosenColor.x,false,"","Select the desired color");
 
     return node;
   }
@@ -1942,6 +2077,39 @@ protected:
     ImGui::Text("Color:");
     fields[0].render(nodeWidth);
     return false;
+  }
+
+  // Evaluate this node returning the code generated
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+    // Begin with the parent eval (a comment indicating the node called)
+    string code = Node::Eval(nge, indentLevel);
+
+    // Define the actual level of indentation
+    string ind = string(indentLevel*2, ' ');
+    //-------------------------------------------------------------
+
+    // Get the information about nodes and so on
+
+    //-------------------------------------------------------------
+    /*
+     */
+    if(evalPort == 0) {
+      string outRName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
+      code += ind+ "int "+ outRName +" = "+ std::to_string(static_cast<int>(chosenColor.x*255)) +";\n";
+      code += ind+ "typedef int " + outRName + "_TYPE;\n";
+
+    } else if(evalPort == 1) {
+      string outGName = "out_" + this->getNameOutSlot(1)+ "_" + std::to_string(this->mNodeId) +"_1";
+      code += ind+ "int "+ outGName +" = "+ std::to_string(static_cast<int>(chosenColor.y*255)) +";\n";
+      code += ind+ "typedef int " + outGName + "_TYPE;\n";
+
+    } else {
+      string outBName = "out_" + this->getNameOutSlot(2)+ "_" + std::to_string(this->mNodeId) +"_2";
+      code += ind+ "int "+ outBName +" = "+ std::to_string(static_cast<int>(chosenColor.z*255)) +";\n";
+      code += ind+ "typedef int " + outBName + "_TYPE;\n";
+    }
+
+    return code;
   }
 
   // casts:
@@ -1960,7 +2128,7 @@ static Node* TestNodeFactory(int nt, const ImVec2& pos) {
   case kGetConstantNode: return GetConstant::Create(pos);
   case kGetRandomNode: return GetRandomNode::Create(pos);
   case kStatementNode: return StatementNode::Create(pos);
-  case kBooleanOperatorNode: return BooleanOperatorNode::Create(pos);
+  case kLogicOperatorNode: return LogicOperatorNode::Create(pos);
   case kSetAttributeNode: return SetAttributeNode::Create(pos);
   case kConditionalNode: return ConditionalNode::Create(pos);
   case kLoopNode: return LoopNode::Create(pos);
@@ -1969,7 +2137,7 @@ static Node* TestNodeFactory(int nt, const ImVec2& pos) {
   case kGroupStatementNode: return GroupStatementNode::Create(pos);
   case kGroupOperatorNode: return GroupOperatorNode::Create(pos);
   case kGroupCountingNode: return GroupCountingNode::Create(pos);
-  case kInitByColorNode: return InitByColorNode::Create(pos);
+  case kInputColorNode: return InputColorNode::Create(pos);
   case kSetColorViewerNode: return SetColorViewerNode::Create(pos);
   case kDefaultInitializationNode: return DefaultInitializationNode::Create(pos);
   case kGetColorViewerNode: return GetColorViewerNode::Create(pos);
@@ -1991,6 +2159,7 @@ void InitNGE(ImGui::NodeGraphEditor &nge) {
     // This adds entries to the "add node" context menu
     nge.registerNodeTypes(ImGui::NodeTypeNames, ImGui::kNumNodesTypes, ImGui::TestNodeFactory, NULL, -1); // last 2 args can be used to add only a subset of nodes (or to sort their order inside the context menu)
     nge.registerNodeTypeMaxAllowedInstances(ImGui::kStepNode, 1); // Here we set the max number of allowed instances of the node (1)
+    nge.registerNodeTypeMaxAllowedInstances(ImGui::kDefaultInitializationNode, 1);
 
     // Optional: starting nodes and links (load from file instead):-----------
     nge.addNode(ImGui::kStepNode, ImVec2(0, 310));
