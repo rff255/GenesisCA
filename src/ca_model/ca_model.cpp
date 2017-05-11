@@ -285,16 +285,24 @@ std::string CAModel::GenerateHCode()
   string code = "";
 
   // Namespaces, includes and typedefs
-  code += "#pragma once\n";
+  code += "#pragma once\n\n";
+  code += GenerateIncludesList() + "\n";
   code += "namespace Genesis {\n";
-  code += "namespace CA_"+ m_model_properties->m_name +" {\n";
+  code += "namespace CA_"+ m_model_properties->m_name +" {\n\n";
+  code += GenerateTypedefList() + "\n";
 
+  // Forward declaration
+  code += "class CACell;\n";
+  code += "class CAModel;\n";
+
+  code += "// Cell Declaration\n";
   code += GenerateCACellDeclaration();
+  code += "\n// Model Declaration\n";
   code += GenerateCAModelDeclaration();
 
   // End of namespaces
-  code += "}  // namespace_Genesis {\n";
-  code += "}  // namespace_CA_"+ m_model_properties->m_name +" {\n";
+  code += "\n}  // namespace_Genesis\n";
+  code += "}  // namespace_CA_"+ m_model_properties->m_name +"\n";
 
   return code;
 }
@@ -304,29 +312,96 @@ std::string CAModel::GenerateCPPCode()
   string code = "";
 
   // Namespaces, includes and typedefs
-  code += "namespace Genesis {\n";
-  code += "namespace CA_"+ m_model_properties->m_name +" {\n";
-
   code += "#include <ca_"+ m_model_properties->m_name +".h>\n\n";
 
+  code += GenerateIncludesList()+ "\n";
+  code += "namespace Genesis {\n";
+  code += "namespace CA_"+ m_model_properties->m_name +" {\n\n";
+  code += GenerateTypedefList() + "\n";
+
+  code += "// ### Cell Definitions\n";
   code += GenerateCACellDefinition();
+
+  code += "// ### Model Definitions\n";
   code += GenerateCAModelDefinition();
 
   // End of namespaces
-  code += "}  // namespace_Genesis {\n";
-  code += "}  // namespace_CA_"+ m_model_properties->m_name +" {\n";
+  code += "}  // namespace_Genesis\n";
+  code += "}  // namespace_CA_"+ m_model_properties->m_name +"\n";
 
   return code;
 }
 
 string CAModel::GenerateCACellDeclaration()
 {
-  return "";
+  string code = "";
+  code += "class CACell {\n";
+  code += " public:\n";
+
+  // Constructor and destructor
+  code += "CACell():";
+  vector<string> attrList = GetCellAttributesList();
+  for(int i=0; i<attrList.size(); ++i){
+    if(i != 0)
+      code += ", ";
+    code += "ATTR_"+attrList[i]+"(0)";
+  }
+  code += "{}\n";
+  code += "~CACell(){}\n";
+
+  // Copy previous configuration function
+  code += "void CopyPrevCellConfig();\n";
+
+  // Default initialization function
+  code += "void DefaultInit();\n";
+
+  // Color initializations
+  for(string inputMapping: GetColAttrMappingsList())
+    code += "void InputColor_"+ inputMapping +"(int red, int green, int blue);\n";
+
+  // Step function
+  code += "void Step();\n";
+
+  // Accessors (Attributes and Viewers)
+  code += "\n";
+  for(string attr: GetCellAttributesList())
+    code += attr+"_TYPE Get"+ attr + "() {return this->ATTR_"+attr+";}\n";
+
+  for(string viewer: GetAttrColMappingsList())
+    code += "void Get"+ viewer + "(int* outColor) {outColor[0] = VIEWER_"+viewer+"[0]; outColor[1] = VIEWER_"+viewer+"[1]; outColor[2] = VIEWER_"+viewer+"[2];}\n";
+
+  // Mutators (Attributes)
+  for(string attr: GetCellAttributesList())
+    code += "void Set"+ attr + "("+attr+"_TYPE val) {this->ATTR_"+attr+" = val;}\n";
+
+  // Members (PrevCell, CAModel, Attributes, neighborhoods, viewers)
+  code += "\n";
+  code += "CACell* prevCell;\n";
+  code += "CAModel* CAModel;\n";
+  for(string attr: GetCellAttributesList())
+    code += attr+"_TYPE ATTR_"+ attr + ";\n";
+
+  for(string neighborhood: GetNeighborhoodList())
+    code += "vector<CACell*> NEIGHBORS_"+ neighborhood + ";\n";
+
+  for(string viewer: GetAttrColMappingsList())
+    code += "int VIEWER_"+ viewer + "[3];\n";
+
+  code += "};\n";
+  return code;
 }
 
 string CAModel::GenerateCACellDefinition()
 {
   string code = "";
+  // Copy previous configuration function
+  code += "void CACell::CopyPrevCellConfig(){\n";
+  for(string attr: GetCellAttributesList())
+    code += "  ATTR_"+attr+" = prevCell->ATTR_"+ attr + ";\n";
+  for(string viewer: GetAttrColMappingsList())
+    code += "  prevCell->Get"+ viewer + "(VIEWER_"+viewer+");\n";
+  code += "}\n\n";
+
   code += mGraphEditor->EvalGraphEditorDefaultInit()+ "\n";
   code += mGraphEditor->EvalGraphEditorInputColorNodes()+ "\n";
   code += mGraphEditor->EvalGraphEditorStep()+ "\n";
@@ -335,10 +410,89 @@ string CAModel::GenerateCACellDefinition()
 
 string CAModel::GenerateCAModelDeclaration()
 {
-  return "";
+  string code = "";
+  code += "class CAModel {\n";
+  code += " public:\n";
+
+  // Constructor and destructor
+  code += "CAModel():";
+  vector<string> modelAttrList = GetModelAttributesList();
+  for(int i=0; i<modelAttrList.size(); ++i){
+    if(i != 0)
+      code += ", ";
+    code += "ATTR_"+modelAttrList[i]+"("+ GetAttribute(modelAttrList[i])->m_init_value +")";
+  }
+  code += "{}\n";
+  code += "~CAModel(){}\n";
+
+//  // Copy previous configuration function
+//  code += "void CopyPrevCellConfig();\n";
+
+//  // Default initialization function
+//  code += "void DefaultInit();\n";
+
+//  // Color initializations
+//  for(string inputMapping: GetColAttrMappingsList())
+//    code += "void InputColor_"+ inputMapping +"(int red, int green, int blue);\n";
+
+//  // Step function
+//  code += "void Step();\n";
+
+//  // Accessors (Attributes and Viewers)
+//  code += "\n";
+//  for(string attr: GetCellAttributesList())
+//    code += attr+"_TYPE Get"+ attr + "() {return this->ATTR_"+attr+";}\n";
+
+//  for(string viewer: GetAttrColMappingsList())
+//    code += "void Get"+ viewer + "(int* outColor) {outColor[0] = VIEWER_"+viewer+"[0]; outColor[1] = VIEWER_"+viewer+"[1]; outColor[2] = VIEWER_"+viewer+"[2];}\n";
+
+//  // Mutators (Attributes)
+//  for(string attr: GetCellAttributesList())
+//    code += "void Set"+ attr + "("+attr+"_TYPE val) {this->ATTR_"+attr+" = val;}\n";
+
+//  // Members (PrevCell, CAModel, Attributes, neighborhoods, viewers)
+//  code += "\n";
+//  code += "CACell* prevCell;\n";
+//  code += "CAModel* CAModel;\n";
+//  for(string attr: GetCellAttributesList())
+//    code += attr+"_TYPE ATTR_"+ attr + ";\n";
+
+//  for(string neighborhood: GetNeighborhoodList())
+//    code += "vector<CACell*> NEIGHBORS_"+ neighborhood + ";\n";
+
+//  for(string viewer: GetAttrColMappingsList())
+//    code += "int VIEWER_"+ viewer + "[3];\n";
+
+  code += "};\n";
+  return code;
 }
 
-string CAModel::GenerateCAModelDefinition()
-{
-  return "";
+string CAModel::GenerateCAModelDefinition() {
+  return "//Nothing here (yet)";
+}
+
+std::string CAModel::GenerateTypedefList() {
+  string code = "";
+  code += "// Typedefs mapping attribute types into C++ types\n";
+  // Mapping attribute types into C++ types
+  for(int i=0;i<cb_attribute_type_values.size(); ++i)
+    code += "typedef " + attribute_type_cpp_equivalent[i]+ " "+ cb_attribute_type_values[i] + ";\n";
+
+  code += "\n";
+  // Mapping each attribute types macro into it respectively type
+  for(string attr: GetAttributesList())
+    code += "typedef " +GetAttribute(attr)->m_type+ " "+ attr + "_TYPE;\n";
+
+  return code;
+}
+
+std::string CAModel::GenerateIncludesList() {
+  string code = "";
+  code += "#include <algorithm>\n";
+  code += "#include <math>\n";
+  code += "#include <random>\n";
+  code += "#include <time.h>\n";
+  code += "#include <vector>\n\n";
+  code += "using std::vector;\n";
+ return code;
 }

@@ -28,6 +28,8 @@ private slots:
   void on_act_export_c_code_triggered();
 
 private:
+  void ExportCodeFiles();
+
   Ui::CAModelerGUI *ui;
   CAModel *m_ca_model;
 

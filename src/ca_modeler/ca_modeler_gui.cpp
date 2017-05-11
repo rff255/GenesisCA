@@ -5,6 +5,8 @@
 
 #include <QDebug>
 
+#include <fstream>
+
 CAModelerGUI::CAModelerGUI(QWidget *parent) :
   QMainWindow(parent),
   ui(new Ui::CAModelerGUI),
@@ -61,11 +63,26 @@ void CAModelerGUI::on_act_quit_triggered() {
 
 void CAModelerGUI::on_act_export_c_code_triggered()
 {
-  std::string toBePrinted = "//#### Generated Header: ####\n" +
-                            m_ca_model->GenerateHCode() +
-                            "//#### Generated Implementation: ####\n" +
-                            m_ca_model->GenerateCPPCode() +
-                            "//####\n";
+  ExportCodeFiles();
+//  std::string toBePrinted = "//#### Generated Header: ####\n" +
+//                            m_ca_model->GenerateHCode() +
+//                            "//#### Generated Implementation: ####\n" +
+//                            m_ca_model->GenerateCPPCode() +
+//                            "//####\n";
 
-  qDebug(toBePrinted.c_str());
+//  qDebug(toBePrinted.c_str());
+}
+
+void CAModelerGUI::ExportCodeFiles() {
+  // H file
+  std::ofstream hFile;
+  hFile.open ("ca_"+ m_ca_model->GetModelProperties()->m_name +".h");
+  hFile << m_ca_model->GenerateHCode();
+  hFile.close();
+
+  // CPP file
+  std::ofstream cppFile;
+  cppFile.open ("ca_"+ m_ca_model->GetModelProperties()->m_name +".cpp");
+  cppFile << m_ca_model->GenerateCPPCode();
+  cppFile.close();
 }

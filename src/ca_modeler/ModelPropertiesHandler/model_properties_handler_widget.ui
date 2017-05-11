@@ -212,7 +212,7 @@
          <item row="0" column="2" rowspan="2">
           <widget class="QGroupBox" name="gb_fixed_size">
            <property name="enabled">
-            <bool>true</bool>
+            <bool>false</bool>
            </property>
            <property name="title">
             <string>Fixed Size</string>
@@ -330,10 +330,17 @@
              </widget>
             </item>
             <item row="1" column="0">
-             <widget class="QComboBox" name="cb_cell_attr_init"/>
+             <widget class="QComboBox" name="cb_cell_attr_init">
+              <property name="enabled">
+               <bool>false</bool>
+              </property>
+             </widget>
             </item>
             <item row="0" column="0">
              <widget class="QLabel" name="lbl_cell_attr_init">
+              <property name="enabled">
+               <bool>false</bool>
+              </property>
               <property name="text">
                <string>Cell Attribute initialization mapping:</string>
               </property>
@@ -354,6 +361,9 @@
          </item>
          <item row="0" column="1">
           <widget class="QGroupBox" name="gb_stop_conditions">
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
            <property name="minimumSize">
             <size>
              <width>270</width>
@@ -369,6 +379,9 @@
            <layout class="QGridLayout" name="gridLayout_20">
             <item row="0" column="0" colspan="2">
              <widget class="QGroupBox" name="gb_max_iterations">
+              <property name="enabled">
+               <bool>false</bool>
+              </property>
               <property name="title">
                <string>Max of iterations</string>
               </property>

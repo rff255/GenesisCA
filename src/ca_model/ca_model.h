@@ -26,7 +26,7 @@ public:
   void ModifyModelProperties(const string &name, const string &author, const string &goal, const string &description,
                              const string &topology, const string &boundary_treatment, bool is_fixed_size, int size_width, int size_height,
                              const string &cell_attribute_initialization, bool has_max_iterations, int max_iterations);
-  ModelProperties* GetGlobalProperties() { return m_model_properties; }
+  ModelProperties* GetModelProperties() { return m_model_properties; }
 
   // Break Cases
   string           AddBreakCase(BreakCase* new_bc);
@@ -64,20 +64,22 @@ public:
 
   string GenerateHCode();
   string GenerateCPPCode();
+
+private:
   string GenerateCACellDeclaration();
   string GenerateCACellDefinition();
   string GenerateCAModelDeclaration();
   string GenerateCAModelDefinition();
+  string GenerateTypedefList();
+  string GenerateIncludesList();
 
-private:
+  // The data model itself
   ModelProperties* m_model_properties;
   std::unordered_map<string, BreakCase*>    m_break_cases;
   std::unordered_map<string, Attribute*>    m_attributes;
   std::unordered_map<string, Neighborhood*> m_neighborhoods;
   std::unordered_map<string, Mapping*>      m_mappings;
-
-  // The Editor instance
-  UpdateRulesEditor* mGraphEditor;
+  UpdateRulesEditor* mGraphEditor;  // The Editor instance
 };
 
 #endif // CA_MODEL_H
