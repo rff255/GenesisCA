@@ -675,7 +675,6 @@ protected:
     // Check if there is a node connected to value port
     string outValueName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
 
-    code += ind+ "std::srand(time(NULL));\n";
     if(mValueType == 0) {  // BOOL
       code += ind+ "bool "+ outValueName +" = rand() < ";
       if(mUseModelAttr) {
@@ -1567,7 +1566,7 @@ protected:
           switch (this->mArithOperIndex) {
             case 0: code += ind+ "  "+ outValueName +" = "+ outValueName +" + elem;\n";  break; // SUM
             case 1: code += ind+ "  "+ outValueName +" = "+ outValueName +" * elem;\n";  break; // MUL
-            case 2: code += ind+ "  "+ outValueName +" = std::max("+ outValueName +", elem);\n"; break; // MAX
+            case 2: code += ind+ "  "+ outValueName +" = std::max<float>("+ outValueName +", elem);\n"; break; // MAX
             case 3: code += ind+ "  "+ outValueName +" = std::min("+ outValueName +", elem);\n"; break; // MIN
             case 4: code += ind+ "  "+ outValueName +" = "+ outValueName +" + elem;\n"; break; // MEAN
             default: code += ind+ "  "+ outValueName +" = 0;\n"; // Whatever, should be never reached

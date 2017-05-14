@@ -312,7 +312,7 @@ std::string CAModel::GenerateCPPCode()
   string code = "";
 
   // Namespaces, includes and typedefs
-  code += "#include <ca_"+ m_model_properties->m_name +".h>\n\n";
+  code += "#include \"ca_"+ m_model_properties->m_name +".h\n\n";
 
   code += GenerateIncludesList()+ "\n";
   code += "namespace Genesis {\n";
@@ -339,15 +339,19 @@ string CAModel::GenerateCACellDeclaration()
   code += " public:\n";
 
   // Constructor and destructor
-  code += "CACell():";
-  vector<string> attrList = GetCellAttributesList();
-  for(int i=0; i<attrList.size(); ++i){
-    if(i != 0)
-      code += ", ";
-    code += "ATTR_"+attrList[i]+"(0)";
-  }
-  code += "{}\n";
+  code += "CACell(){\n  Clear();\n}\n";
   code += "~CACell(){}\n";
+
+  // Clear function (returns to default values, calling DefaultInit execution if there is one)
+  code += "void Clear(){\n";
+  for(string attr: GetCellAttributesList())
+    code += "  ATTR_"+attr+ " = 0;\n";
+  for(string viewer: GetAttrColMappingsList()){
+    code += "  VIEWER_"+viewer+ "[0] = 0;\n";
+    code += "  VIEWER_"+viewer+ "[1] = 0;\n";
+    code += "  VIEWER_"+viewer+ "[2] = 0;\n";
+  }
+  code += "}\n";
 
   // Copy previous configuration function
   code += "void CopyPrevCellConfig();\n";
@@ -368,7 +372,7 @@ string CAModel::GenerateCACellDeclaration()
     code += attr+"_TYPE Get"+ attr + "() {return this->ATTR_"+attr+";}\n";
 
   for(string viewer: GetAttrColMappingsList())
-    code += "void Get"+ viewer + "(int* outColor) {outColor[0] = VIEWER_"+viewer+"[0]; outColor[1] = VIEWER_"+viewer+"[1]; outColor[2] = VIEWER_"+viewer+"[2];}\n";
+    code += "void GetViewer"+ viewer + "(int* outColor) {outColor[0] = VIEWER_"+viewer+"[0]; outColor[1] = VIEWER_"+viewer+"[1]; outColor[2] = VIEWER_"+viewer+"[2];}\n";
 
   // Mutators (Attributes)
   for(string attr: GetCellAttributesList())
@@ -399,7 +403,7 @@ string CAModel::GenerateCACellDefinition()
   for(string attr: GetCellAttributesList())
     code += "  ATTR_"+attr+" = prevCell->ATTR_"+ attr + ";\n";
   for(string viewer: GetAttrColMappingsList())
-    code += "  prevCell->Get"+ viewer + "(VIEWER_"+viewer+");\n";
+    code += "  prevCell->GetViewer"+ viewer + "(VIEWER_"+viewer+");\n";
   code += "}\n\n";
 
   code += mGraphEditor->EvalGraphEditorDefaultInit()+ "\n";
@@ -413,62 +417,258 @@ string CAModel::GenerateCAModelDeclaration()
   string code = "";
   code += "class CAModel {\n";
   code += " public:\n";
+  code += "  CAModel();\n";
+  code += "  ~CAModel();\n\n";
 
-  // Constructor and destructor
-  code += "CAModel():";
-  vector<string> modelAttrList = GetModelAttributesList();
-  for(int i=0; i<modelAttrList.size(); ++i){
-    if(i != 0)
-      code += ", ";
-    code += "ATTR_"+modelAttrList[i]+"("+ GetAttribute(modelAttrList[i])->m_init_value +")";
-  }
-  code += "{}\n";
-  code += "~CAModel(){}\n";
+  code += "  // Init (defines the dimensions of grid, allocate memory and initiate the cells)\n";
+  code += "  void Init(int width, int height);\n";
 
-//  // Copy previous configuration function
-//  code += "void CopyPrevCellConfig();\n";
+  code += "\n  // Get for each Attribute\n";
+  for(string attr: GetCellAttributesList())
+    code += "  void Get"+attr+"("+attr+"_TYPE** outValues);\n";
 
-//  // Default initialization function
-//  code += "void DefaultInit();\n";
+  code += "\n  // Set for each Attribute\n";
+  for(string attr: GetCellAttributesList())
+    code += "  void Set"+attr+"("+attr+"_TYPE** values);\n";
 
-//  // Color initializations
-//  for(string inputMapping: GetColAttrMappingsList())
-//    code += "void InputColor_"+ inputMapping +"(int red, int green, int blue);\n";
+  code += "\n  // Get for each Viewer\n";
+  for(string viewer: GetAttrColMappingsList())
+    code += "  void GetViewer"+viewer+"(int*** outValues);\n";
 
-//  // Step function
-//  code += "void Step();\n";
+  code += "\n  // Load color in one cell for each input color mapping\n";
+  for(string inputCol: GetColAttrMappingsList())
+    code += "  void LoadColorCell"+inputCol+"(int row, int col, int red, int green, int blue);\n";
 
-//  // Accessors (Attributes and Viewers)
-//  code += "\n";
-//  for(string attr: GetCellAttributesList())
-//    code += attr+"_TYPE Get"+ attr + "() {return this->ATTR_"+attr+";}\n";
+  code += "\n  // Load color image for each input color mapping\n";
+  for(string inputCol: GetColAttrMappingsList())
+    code += "  void LoadColorImageMappX"+inputCol+"(int** red, int** green, int** blue);\n";
 
-//  for(string viewer: GetAttrColMappingsList())
-//    code += "void Get"+ viewer + "(int* outColor) {outColor[0] = VIEWER_"+viewer+"[0]; outColor[1] = VIEWER_"+viewer+"[1]; outColor[2] = VIEWER_"+viewer+"[2];}\n";
+  code += "\n  // Clear\n";
+  code += "  void Clear();\n";
 
-//  // Mutators (Attributes)
-//  for(string attr: GetCellAttributesList())
-//    code += "void Set"+ attr + "("+attr+"_TYPE val) {this->ATTR_"+attr+" = val;}\n";
+  code += "\n  // Break cases check - test stop conditions\n";
+  code += "  bool BreakCasesCheck() {return true;}\n";
 
-//  // Members (PrevCell, CAModel, Attributes, neighborhoods, viewers)
-//  code += "\n";
-//  code += "CACell* prevCell;\n";
-//  code += "CAModel* CAModel;\n";
-//  for(string attr: GetCellAttributesList())
-//    code += attr+"_TYPE ATTR_"+ attr + ";\n";
+  code += "\n  // Precompute the neighbors references of each cell\n";
+  code += "  void PreComputeNeighbors();\n";
 
-//  for(string neighborhood: GetNeighborhoodList())
-//    code += "vector<CACell*> NEIGHBORS_"+ neighborhood + ";\n";
+  code += "  void StepForth(); // One iteration\n";
+  code += "  void StepBy(int num); // @num iterations\n";
+  code += "  void StepToEnd(); // Until reach the end\n";
 
-//  for(string viewer: GetAttrColMappingsList())
-//    code += "int VIEWER_"+ viewer + "[3];\n";
+  code += "\n  // Simulation variables\n";
+  code += "  CACell*** currBoard;\n";
+  code += "  CACell*** prevBoard;\n";
+  code += "  CACell* defaultCell;\n";
+  code += "  int CAWidth;\n";
+  code += "  int CAHeight;\n";
+
+  code += "\n  // Model Properties\n";
+  code += "  string name;\n";
+  code += "  string author;\n";
+  code += "  string goal;\n";
+  code += "  string description;\n";
+  code += "  string boundaryType;\n";
+
+  code += "\n  // Model Attributes\n";
+  for(string modelAttr: GetModelAttributesList())
+    code += "  "+modelAttr+"_TYPE ATTR_"+ modelAttr+ ";\n";
+
+  code += "\n  // Neighborhood types\n";
+  for(string neighborhood: GetNeighborhoodList())
+    code += "  vector<pair<int,int>> NEIGHBORHOOD_"+neighborhood+";\n";
 
   code += "};\n";
   return code;
 }
 
 string CAModel::GenerateCAModelDefinition() {
-  return "//Nothing here (yet)";
+  string code = "";
+  string ind  = "  ";
+  code += "CAModel::CAModel() {\n";
+  code += ind+ "std::srand(time(NULL));\n";
+  code += ind+ "this->name = \""+GetModelProperties()->m_name+"\";\n";
+  code += ind+ "this->author = \""+GetModelProperties()->m_author+"\";\n";
+  code += ind+ "this->goal = \""+GetModelProperties()->m_goal+"\";\n";
+  code += ind+ "this->description = \""+GetModelProperties()->m_description+"\";\n";
+  code += ind+ "this->boundaryType = \""+GetModelProperties()->m_boundary_treatment+"\";\n";
+  code += "\n";
+  for(string modelAttr: GetModelAttributesList())
+    code += ind+"this->ATTR_"+modelAttr+" = "+ GetAttribute(modelAttr)->m_init_value+ ";\n";
+  code += "\n";
+  for(string neighborhood: GetNeighborhoodList()){
+    code += ind+"// "+neighborhood+"\n";
+    Neighborhood* currNeighborhood = GetNeighborhood(neighborhood);
+    for(int i=0; i< currNeighborhood->m_neighbor_coords->size(); ++i)
+      code += ind+"this->NEIGHBORHOOD_"+neighborhood+".push_back(pair<int,int>("+ std::to_string((*currNeighborhood->m_neighbor_coords)[i].first)+ ", "+std::to_string((*currNeighborhood->m_neighbor_coords)[i].second)+"));\n";
+  }
+  code += "\n";
+  code += ind+"this->defaultCell = new CACell();\n";
+  code += ind+"this->defaultCell->DefaultInit();\n";
+  code += ind+"CAWidth = 0;\n";
+  code += ind+"CAHeight = 0;\n";
+  code += "}\n";
+
+  code += "\nCAModel::~CAModel() {\n";
+  code += ind+"delete this->defaultCell;\n";
+  code += ind+"for (int i = 0; i < CAHeight; ++i){\n";
+  code += ind+ind+"delete [] currBoard[i];\n";
+  code += ind+ind+"delete [] prevBoard[i];\n";
+  code += ind+"}\n";
+  code += ind+"delete [] currBoard;\n";
+  code += ind+"delete [] prevBoard;\n";
+  code += "}\n";
+
+  code += "void CAModel::Init(int width, int height) {\n" +
+    ind+ "CAWidth  = width;\n" +
+    ind+ "CAHeight = height;\n" +
+
+    ind+ "// First allocate the boards cells\n" +
+    ind+ "this->currBoard = new CACell**[CAHeight];\n" +
+    ind+ "for (int i = 0; i < CAHeight; ++i)\n" +
+    ind+ "    currBoard[i] = new CACell*[CAWidth];\n" +
+    "\n" +
+    ind+ "this->prevBoard = new CACell**[CAHeight];\n" +
+    ind+ "for (int i = 0; i < CAHeight; ++i)\n" +
+    ind+ "    prevBoard[i] = new CACell*[CAWidth];\n" +
+    "\n" +
+    ind+ "// Then create each cell\n" +
+    ind+ "for (int i = 0; i < CAHeight; ++i)\n" +
+    ind+ "  for (int j = 0; j < CAWidth; ++j) {\n" +
+    ind+ "    currBoard[i][j] = new CACell();\n" +
+    ind+ "    prevBoard[i][j] = new CACell();\n" +
+    ind+ "  }\n" +
+    "\n" +
+    ind+ "// Finally, compute the neighborhood references for each cell, and call the default init\n" +
+    ind+ "PreComputeNeighbors();\n" +
+    ind+ "for (int i = 0; i < CAHeight; ++i)\n" +
+    ind+ "  for (int j = 0; j < CAWidth; ++j) {\n" +
+    ind+ "    currBoard[i][j]->DefaultInit();\n" +
+    ind+ "    prevBoard[i][j]->DefaultInit();\n" +
+    ind+ "  }\n" +
+  "}\n";
+
+  code += "\n";
+  for(string attr: GetCellAttributesList()) {
+    code +=
+    "void CAModel::Get"+attr+"("+attr+"_TYPE** outValues) {\n"+
+    ind+ "for (int i = 0; i < CAHeight; ++i)\n" +
+    ind+ "  for (int j = 0; j < CAWidth; ++j) {\n" +
+    ind+ "    outValues[i][j] = prevBoard[i][j]->Get"+attr+"();\n" +
+    ind+ "  }\n" +
+    "}\n";
+  }
+  code += "\n";
+  for(string attr: GetCellAttributesList()) {
+    code +=
+    "void CAModel::Set"+attr+"("+attr+"_TYPE** values) {\n"+
+    ind+ "for (int i = 0; i < CAHeight; ++i)\n" +
+    ind+ "  for (int j = 0; j < CAWidth; ++j) {\n" +
+    ind+ "    currBoard[i][j]->Set"+attr+"(values[i][j]);\n" +
+    ind+ "    prevBoard[i][j]->Set"+attr+"(values[i][j]);\n" +
+    ind+ "  }\n" +
+    "}\n";
+  }
+  code += "\n";
+  for(string viewer: GetAttrColMappingsList()) {
+    code +=
+    "void CAModel::GetViewer"+viewer+"(int*** outValues) {\n"+
+    ind+ "for (int i = 0; i < CAHeight; ++i)\n" +
+    ind+ "  for (int j = 0; j < CAWidth; ++j)\n" +
+    ind+ "    prevBoard[i][j]->GetViewer"+viewer+"(outValues[i][j]);\n" +
+    "}\n";
+  }
+  code += "\n";
+  for(string mapping: GetColAttrMappingsList()) {
+    code +=
+    "void CAModel::LoadColorCell"+mapping+"(int row, int col, int red, int green, int blue) {\n"+
+    "  currBoard[row][col]->InputColor_"+mapping+"(red, green, blue);\n" +
+    "  prevBoard[row][col]->InputColor_"+mapping+"(red, green, blue);\n" +
+    "}\n";
+  }
+  code += "\n";
+  for(string mapping: GetColAttrMappingsList()) {
+    code +=
+    "void CAModel::LoadColorImage"+mapping+"(int** red, int** green, int** blue) {\n"+
+    ind+ "for (int i = 0; i < CAHeight; ++i)\n" +
+    ind+ "  for (int j = 0; j < CAWidth; ++j) {\n" +
+    ind+ "    currBoard[i][j]->InputColor_"+mapping+"(red[i][j], green[i][j], blue[i][j]);\n" +
+    ind+ "    prevBoard[i][j]->InputColor_"+mapping+"(red[i][j], green[i][j], blue[i][j]);\n" +
+    ind+ "  }\n" +
+    "}\n";
+  }
+  code += "\n";
+  code += "void CAModel::Clear() {\n"+
+    ind+"for (int i = 0; i < CAHeight; ++i)\n"+
+    ind+"  for (int j = 0; j < CAWidth; ++j) {\n"+
+    ind+"    currBoard[i][j]->Clear();\n"+
+    ind+"    prevBoard[i][j]->Clear();\n"+
+    ind+"    currBoard[i][j]->DefaultInit();\n"+
+    ind+"    prevBoard[i][j]->DefaultInit();\n"+
+    ind+"  }\n"+
+  "}\n";
+  code += "\n";
+
+  code += "void CAModel::PreComputeNeighbors() {\n"+
+    ind+"for (int i = 0; i < CAHeight; ++i)\n" +
+    ind+"  for (int j = 0; j < CAWidth; ++j) {\n" +
+    ind+"    currBoard[i][j]->prevCell = prevBoard[i][j];\n" +
+    ind+"    prevBoard[i][j]->prevCell = currBoard[i][j];\n" +
+    ind+"    currBoard[i][j]->CAModel  = this;\n" +
+    ind+"    prevBoard[i][j]->CAModel  = this;\n" +
+    "\n";
+
+    for(string neighborhood: GetNeighborhoodList()){
+      code += ind+"    // "+neighborhood+" user-defined neighborhood\n" +
+    ind+"    for(int n=0; n < NEIGHBORHOOD_"+neighborhood+".size(); ++n) {\n" +
+    ind+"       int rowIndex = (i + NEIGHBORHOOD_"+neighborhood+"[n].second);\n" +
+    ind+"       int colIndex = (j + NEIGHBORHOOD_"+neighborhood+"[n].first);\n" +
+    ind+"       // Border treatment\n" +
+    ind+"       if(rowIndex < 0 || rowIndex >= CAHeight || colIndex < 0 || colIndex >= CAWidth) {\n" +
+    ind+"         if(this->boundaryType == \"Torus\") {\n" +
+    ind+"           rowIndex = rowIndex<0 ? CAHeight+rowIndex%CAHeight : rowIndex%CAHeight;\n" +
+    ind+"           colIndex = colIndex<0 ? CAWidth+colIndex%CAWidth : colIndex%CAWidth;\n" +
+    ind+"           currBoard[i][j]->NEIGHBORS_"+neighborhood+".push_back(prevBoard[rowIndex][colIndex]);\n" +
+    ind+"           prevBoard[i][j]->NEIGHBORS_"+neighborhood+".push_back(currBoard[rowIndex][colIndex]);\n" +
+    ind+"         } else {\n" +
+    ind+"           prevBoard[i][j]->NEIGHBORS_"+neighborhood+".push_back(this->defaultCell);\n" +
+    ind+"           currBoard[i][j]->NEIGHBORS_"+neighborhood+".push_back(this->defaultCell);\n" +
+    ind+"         }\n" +
+    ind+"       } else {\n" +
+    ind+"         currBoard[i][j]->NEIGHBORS_"+neighborhood+".push_back(prevBoard[rowIndex][colIndex]);\n" +
+    ind+"         prevBoard[i][j]->NEIGHBORS_"+neighborhood+".push_back(currBoard[rowIndex][colIndex]);\n" +
+    ind+"       }\n" +
+    ind+"    }\n";
+    }
+
+  code+=ind+"  }\n" +
+  "}\n";
+  code += "\n";
+
+  code +="void CAModel::StepForth() {\n" +
+  ind+"for (int i = 0; i < CAHeight; ++i)\n" +
+  ind+"  for (int j = 0; j < CAWidth; ++j) {\n" +
+  ind+"    currBoard[i][j]->Step();\n" +
+  ind+"  }\n" +
+  "\n" +
+  ind+"// Switch the boards -just like the double buffer opengl drawing\n" +
+  ind+"std::swap(currBoard, prevBoard);\n" +
+  "}\n";
+  code += "\n";
+
+  code +="void CAModel::StepBy(int num){\n" +
+  ind+"for(int i=0; i<num; ++i)\n" +
+  ind+"  StepForth();\n" +
+  "}\n";
+  code += "\n";
+
+  code +="void CAModel::StepToEnd() {\n" +
+  ind+"while(this->BreakCasesCheck())\n" +
+  ind+"  StepForth();\n" +
+  "}\n";
+
+  code += "\n";
+  return code;
 }
 
 std::string CAModel::GenerateTypedefList() {
@@ -489,10 +689,12 @@ std::string CAModel::GenerateTypedefList() {
 std::string CAModel::GenerateIncludesList() {
   string code = "";
   code += "#include <algorithm>\n";
-  code += "#include <math>\n";
+  code += "#include <math.h>\n";
   code += "#include <random>\n";
   code += "#include <time.h>\n";
   code += "#include <vector>\n\n";
   code += "using std::vector;\n";
+  code += "using std::string;\n";
+  code += "using std::pair;\n";
  return code;
 }

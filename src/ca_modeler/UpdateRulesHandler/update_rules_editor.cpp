@@ -38,7 +38,9 @@ std::string UpdateRulesEditor::EvalGraphEditorDefaultInit()
   // By calling the step Eval(), all the reachable nodes will be also called recursively
   if(defaultInitNodes.size() > 0)
     return defaultInitNodes[0]->Eval(mEditor, 0);
-  return "\n";
+  else { // No default has been defined. The function does nothing.
+    return "void CACell::DefaultInit(){}\n";
+  }
 }
 
 std::string UpdateRulesEditor::EvalGraphEditorInputColorNodes()
