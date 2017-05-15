@@ -30,11 +30,21 @@ UpdateRulesHandler::~UpdateRulesHandler()
 
 void UpdateRulesHandler::UpdateEditorComboBoxes()
 {
+  std::vector<int> neighborhoodSizes;
+  for(auto neighborhood: m_ca_model->GetNeighborhoodList()) {
+    Neighborhood* neigh = m_ca_model->GetNeighborhood(neighborhood);
+    int size = 0;
+    if(neigh->m_neighbor_coords)
+      size = neigh->m_neighbor_coords->size();
+    neighborhoodSizes.push_back(size);
+  }
+
   m_ca_model->GetGraphEditor()->UpdateComboBoxes(m_ca_model->GetCellAttributesList(),
                                 m_ca_model->GetModelAttributesList(),
                                 m_ca_model->GetNeighborhoodList(),
                                 m_ca_model->GetColAttrMappingsList(),
-                                m_ca_model->GetAttrColMappingsList());
+                                m_ca_model->GetAttrColMappingsList(),
+                                neighborhoodSizes);
 }
 static void error_callback(int error, const char* description)
 {

@@ -312,7 +312,7 @@ std::string CAModel::GenerateCPPCode()
   string code = "";
 
   // Namespaces, includes and typedefs
-  code += "#include \"ca_"+ m_model_properties->m_name +".h\n\n";
+  code += "#include \"ca_"+ m_model_properties->m_name +".h\"\n\n";
 
   code += GenerateIncludesList()+ "\n";
   code += "namespace Genesis {\n";

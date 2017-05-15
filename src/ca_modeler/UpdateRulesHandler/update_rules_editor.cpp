@@ -61,12 +61,14 @@ void UpdateRulesEditor::UpdateComboBoxes(std::vector<std::string> cellAttrNames,
                                          std::vector<std::string> modelAttrNames,
                                          std::vector<std::string> neighborhoodNames,
                                          std::vector<std::string> colAttrMappingNames,
-                                         std::vector<std::string> attrColMappingNames) {
+                                         std::vector<std::string> attrColMappingNames,
+                                         std::vector<int> neighborhoodSizes) {
   gCellAttrNames     = cellAttrNames;
   gModelAttrNames    = modelAttrNames;
   gNeighborhoodNames = neighborhoodNames;
   gColAttrMappingsNames = colAttrMappingNames;
   gAttrColMappingsNames = attrColMappingNames;
+  gNeighborhoodSizes    = neighborhoodSizes;
 
   UpdateEnumNames();
 }

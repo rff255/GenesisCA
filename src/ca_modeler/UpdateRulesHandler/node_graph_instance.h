@@ -43,6 +43,7 @@ std::vector<std::string> gModelAttrNames;
 std::vector<std::string> gNeighborhoodNames;
 std::vector<std::string> gColAttrMappingsNames;
 std::vector<std::string> gAttrColMappingsNames;
+std::vector<int>         gNeighborhoodSizes;
 
 // Some style options
 namespace ImGui {
@@ -456,12 +457,13 @@ protected:
       string neighName     = string(NGENeighborhoodNames[mSelectedNeighborhoodIndex]);
       string outValuesName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
 
-      code += ind+ "vector<" + attrName+"_TYPE> " + outValuesName +";\n";
-      code += ind+ "for(auto attr: this->NEIGHBORS_"+ neighName +")\n";
-      code += ind+ "  "+ outValuesName +".push_back(attr->ATTR_"+ attrName+");\n";
+      code += ind+ attrName+"_TYPE " + outValuesName +"["+std::to_string(gNeighborhoodSizes[mSelectedNeighborhoodIndex])+"];\n";
+      code += ind+ "for(int n=0; n<"+std::to_string(gNeighborhoodSizes[mSelectedNeighborhoodIndex])+"; ++n)\n";
+      code += ind+ "  "+ outValuesName +"[n] = this->NEIGHBORS_"+neighName+"[n]->ATTR_"+ attrName+";\n";
 
-      code += ind+ "typedef vector<" + attrName+"_TYPE> " + outValuesName + "_TYPE;\n";
+      code += ind+ "typedef " + attrName+"_TYPE* " + outValuesName + "_TYPE;\n";
       code += ind+ "typedef "+ attrName+"_TYPE " + outValuesName + "_ELEMENT_TYPE;\n";
+      code += ind+ "int "+ outValuesName+"_SIZE = "+std::to_string(gNeighborhoodSizes[mSelectedNeighborhoodIndex])+";\n";
 
     }
 
@@ -1409,11 +1411,11 @@ protected:
 
       // Different analyse for each operation
       switch (this->mSelectedOperationIndex) {
-      case 0: code += "(numEquals == "+ varInValues +".size());\n";  break; // ALL IS
+      case 0: code += "(numEquals == "+ varInValues +"_SIZE);\n";  break; // ALL IS
       case 1: code += "(numEquals == 0);\n";                          break; // NONE IS
       case 2: code += "(numEquals > 0);\n";                           break; // HAS A
-      case 3: code += "(numGreater == "+ varInValues +".size());\n"; break; // ALL GREATER THAN
-      case 4: code += "(numLesser == "+ varInValues +".size());\n";  break; // ALL LESSER THAN
+      case 3: code += "(numGreater == "+ varInValues +"_SIZE);\n"; break; // ALL GREATER THAN
+      case 4: code += "(numLesser == "+ varInValues +"_SIZE);\n";  break; // ALL LESSER THAN
       case 5: code += "(numGreater > 0);\n";                          break; // ANY GREATER THAN
       case 6: code += "(numLesser > 0);\n";                           break; // ANY LESSER THAN
 
@@ -1548,7 +1550,7 @@ protected:
             default: code += ind+ "  "+ outValueName +" = false;\n";
           }
         } else // PICK RANDOM
-          code+= ind+ outValueName +" = "+ varInValues + "[(rand() % ("+ varInValues+ ".size())];\n"; // PICK RANDOM
+          code+= ind+ outValueName +" = "+ varInValues + "[(rand() % ("+ varInValues+ "_SIZE)];\n"; // PICK RANDOM
 
       } else {  // Arithmetic Operation
         if(mArithOperIndex == 0 || mArithOperIndex == 4) // SUM or MEAN
@@ -1572,21 +1574,22 @@ protected:
             default: code += ind+ "  "+ outValueName +" = 0;\n"; // Whatever, should be never reached
           }
           if(mArithOperIndex == 4)  // Finish MEAN
-            code += ind+ outValueName +" = "+ outValueName +"/"+ varInValues +".size();\n";
+            code += ind+ outValueName +" = "+ outValueName +"/"+ varInValues +"_SIZE;\n";
 
         // MEDIAN
         } else if(mArithOperIndex == 5) {
-          code += ind+ "int size = " + varInValues+ ".size();\n";
+          string sizeLocalVar = "size_" + std::to_string(this->mNodeId);
+          code += ind+ "int "+sizeLocalVar+" = " + varInValues+ "_SIZE;\n";
           code += ind+ "sort("+ varInValues+ ".begin(), "+ varInValues+ ".end());\n";
-          code += ind+ "if((size % 2) == 0){\n"+
-                  ind+ "  "+ outValueName+ " = ("+ varInValues+ "[size/2-1] + "+ varInValues+ "[size/2])/2;\n";
+          code += ind+ "if(("+sizeLocalVar+" % 2) == 0){\n"+
+                  ind+ "  "+ outValueName+ " = ("+ varInValues+ "["+sizeLocalVar+"/2-1] + "+ varInValues+ "["+sizeLocalVar+"/2])/2;\n";
           code += ind+ "} else {\n" +
-                  ind+ "  "+ outValueName+ " = "+ varInValues+ "[size/2];\n";
+                  ind+ "  "+ outValueName+ " = "+ varInValues+ "["+sizeLocalVar+"/2];\n";
           code += ind+ "}\n";
 
         // PICK RANDOM
         } else
-          code+= ind+ outValueName +" = "+ varInValues + "[(rand() % ("+ varInValues+ ".size())];\n"; // PICK RANDOM
+          code+= ind+ outValueName +" = "+ varInValues + "[(rand() % ("+ varInValues+ "_SIZE)];\n"; // PICK RANDOM
       }
 
       code+= ind+ "typedef "+ varInValues+"_ELEMENT_TYPE " + outValueName+ "_TYPE;\n";

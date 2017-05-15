@@ -24,7 +24,8 @@ public:
                         std::vector<std::string> modelAttrNames,
                         std::vector<std::string> neighborhoodNames,
                         std::vector<std::string> colAttrMappingNames,
-                        std::vector<std::string> attrColMappingNames);
+                        std::vector<std::string> attrColMappingNames,
+                        std::vector<int>         neighborhoodSizes);
 
 private:
   ImGui::NodeGraphEditor mEditor;
