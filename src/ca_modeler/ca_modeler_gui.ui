@@ -243,6 +243,9 @@ background: rgb(240, 240, 240);
      <addaction name="act_export_js_code"/>
     </widget>
     <widget class="QMenu" name="menu_export_library">
+     <property name="enabled">
+      <bool>false</bool>
+     </property>
      <property name="title">
       <string>Export Library</string>
      </property>

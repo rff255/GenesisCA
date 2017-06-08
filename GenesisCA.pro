@@ -44,7 +44,6 @@ SOURCES += \
     src/ca_modeler/VicinityHandler/vicinity_handler_widget.cpp \
     src/imgui/imgui.cpp \
     src/imgui/imgui_impl_glfw.cpp \
-    src/imgui/main_imgui.cpp \
     src/imgui/imgui_demo.cpp \
     src/imgui/imgui_draw.cpp \
     src/ca_modeler/UpdateRulesHandler/update_rules_handler.cpp \

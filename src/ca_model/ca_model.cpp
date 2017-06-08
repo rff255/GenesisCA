@@ -280,6 +280,69 @@ vector<string> CAModel::GetAttrColMappingsList()
 }
 
 // Nodes Graph Editor (##Code Generation## )
+std::string CAModel::GenerateHDLLCode()
+{
+  string code = "";
+
+  // Namespaces, includes and typedefs
+  code += "#pragma once\n\n";
+
+  code += "#define CA_DLL\n";
+
+  code += "#ifdef CA_DLL\n";
+  code += "#define CA_DLL_API __declspec(dllexport)\n";
+  code += "#else\n";
+  code += "#define CA_DLL_API __declspec(dllimport)\n";
+  code += "#endif\n\n";
+
+  code += GenerateIncludesList() + "\n";
+  code += "namespace Genesis {\n";
+  code += GenerateTypedefList() + "\n";
+
+  // Forward declaration
+  code += "class CACell;\n";
+  code += "class CAModel;\n";
+
+  code += "// Cell Declaration\n";
+  code += GenerateCACellDeclaration(true);
+  code += "\n// Model Declaration\n";
+  code += GenerateCAModelDeclaration(true);
+
+  // End of namespaces
+  code += "\n}  // namespace_Genesis\n";
+
+  return code;
+}
+
+std::string CAModel::GenerateCPPDLLCode()
+{
+  string code = "";
+
+  // Namespaces, includes and typedefs
+  code += "#include \"ca_dll.h\"\n\n";
+
+  code += GenerateIncludesList()+ "\n";
+  code += "#define CAINDEX1C(i, j) ((i)*(CAWidth) + (j))\n";
+  code += "#define CAINDEX3C(i, j) ((i)*(CAWidth)*3 + (j*3))\n";
+
+  code += "namespace Genesis {\n";
+  code += GenerateTypedefList() + "\n";
+
+  code += "// ### Cell Definitions\n";
+  code += GenerateCACellDefinition();
+
+  code += "// ### Model Definitions\n";
+  code += GenerateCAModelDefinition();
+
+  // End of namespaces
+  code += "}  // namespace_Genesis\n";
+
+  code += "#undef CAINDEX1C\n";
+  code += "#undef CAINDEX3C\n";
+
+  return code;
+}
+
 std::string CAModel::GenerateHCode()
 {
   string code = "";
@@ -315,6 +378,9 @@ std::string CAModel::GenerateCPPCode()
   code += "#include \"ca_"+ m_model_properties->m_name +".h\"\n\n";
 
   code += GenerateIncludesList()+ "\n";
+  code += "#define CAINDEX1C(i, j) ((i)*(CAWidth) + (j))\n";
+  code += "#define CAINDEX3C(i, j) ((i)*(CAWidth)*3 + (j*3))\n";
+
   code += "namespace Genesis {\n";
   code += "namespace CA_"+ m_model_properties->m_name +" {\n\n";
   code += GenerateTypedefList() + "\n";
@@ -329,13 +395,19 @@ std::string CAModel::GenerateCPPCode()
   code += "}  // namespace_Genesis\n";
   code += "}  // namespace_CA_"+ m_model_properties->m_name +"\n";
 
+  code += "#undef CAINDEX1C\n";
+  code += "#undef CAINDEX3C\n";
+
   return code;
 }
 
-string CAModel::GenerateCACellDeclaration()
+string CAModel::GenerateCACellDeclaration(bool toDLL)
 {
   string code = "";
-  code += "class CACell {\n";
+  if(toDLL)
+    code += "class CA_DLL_API CACell {\n";
+  else
+    code += "class CACell {\n";
   code += " public:\n";
 
   // Constructor and destructor
@@ -412,10 +484,13 @@ string CAModel::GenerateCACellDefinition()
   return code;
 }
 
-string CAModel::GenerateCAModelDeclaration()
+string CAModel::GenerateCAModelDeclaration(bool toDLL)
 {
   string code = "";
-  code += "class CAModel {\n";
+  if(toDLL)
+    code += "class CA_DLL_API CAModel {\n";
+  else
+    code += "class CAModel {\n";
   code += " public:\n";
   code += "  CAModel();\n";
   code += "  ~CAModel();\n\n";
@@ -423,17 +498,25 @@ string CAModel::GenerateCAModelDeclaration()
   code += "  // Init (defines the dimensions of grid, allocate memory and initiate the cells)\n";
   code += "  void Init(int width, int height);\n";
 
-  code += "\n  // Get for each Attribute\n";
+  code += "\n  // Get for each Cell Attribute\n";
   for(string attr: GetCellAttributesList())
-    code += "  void Get"+attr+"("+attr+"_TYPE** outValues);\n";
+    code += "  void Get"+attr+"("+attr+"_TYPE* outValues);\n";
 
-  code += "\n  // Set for each Attribute\n";
+  code += "\n  // Set for each Cell Attribute\n";
   for(string attr: GetCellAttributesList())
-    code += "  void Set"+attr+"("+attr+"_TYPE** values);\n";
+    code += "  void Set"+attr+"("+attr+"_TYPE* values);\n";
+
+  code += "\n  // Get for each Model Attribute\n";
+  for(string attr: GetModelAttributesList())
+    code += "  "+attr+"_TYPE Get"+attr+"();\n";
+
+  code += "\n  // Set for each Model Attribute\n";
+  for(string attr: GetModelAttributesList())
+    code += "  void Set"+attr+"("+attr+"_TYPE value);\n";
 
   code += "\n  // Get for each Viewer\n";
   for(string viewer: GetAttrColMappingsList())
-    code += "  void GetViewer"+viewer+"(int*** outValues);\n";
+    code += "  void GetViewer"+viewer+"(int* outValues);\n";
 
   code += "\n  // Load color in one cell for each input color mapping\n";
   for(string inputCol: GetColAttrMappingsList())
@@ -441,7 +524,7 @@ string CAModel::GenerateCAModelDeclaration()
 
   code += "\n  // Load color image for each input color mapping\n";
   for(string inputCol: GetColAttrMappingsList())
-    code += "  void LoadColorImageMappX"+inputCol+"(int** red, int** green, int** blue);\n";
+    code += "  void LoadColorImage"+inputCol+"(int* rgbMatrix);\n";
 
   code += "\n  // Clear\n";
   code += "  void Clear();\n";
@@ -455,6 +538,16 @@ string CAModel::GenerateCAModelDeclaration()
   code += "  void StepForth(); // One iteration\n";
   code += "  void StepBy(int num); // @num iterations\n";
   code += "  void StepToEnd(); // Until reach the end\n";
+
+  code += "  vector<string> GetModelAttributeNames();\n";
+  code += "  vector<string> GetInputMappingNames();\n";
+  code += "  vector<string> GetOutputMappingNames();\n";
+
+  code += "  string GetModelAttributeByName(string attrName);\n";
+  code += "  bool SetModelAttributeByName(string attrName, string value);\n";
+  code += "  bool GetViewerByName(string viewerName, int* rgbMatrix);\n";
+  code += "  bool LoadColorImageByName(string initColorName, int* rgbMatrix);\n";
+  code += "  bool LoadColorCellByName(string initColorName, int row, int col, int r, int g, int b);\n";
 
   code += "\n  // Simulation variables\n";
   code += "  CACell*** currBoard;\n";
@@ -485,6 +578,8 @@ string CAModel::GenerateCAModelDeclaration()
 string CAModel::GenerateCAModelDefinition() {
   string code = "";
   string ind  = "  ";
+
+  // ## Constructor
   code += "CAModel::CAModel() {\n";
   code += ind+ "std::srand(time(NULL));\n";
   code += ind+ "this->name = \""+GetModelProperties()->m_name+"\";\n";
@@ -504,11 +599,13 @@ string CAModel::GenerateCAModelDefinition() {
   }
   code += "\n";
   code += ind+"this->defaultCell = new CACell();\n";
+  code += ind+"this->defaultCell->CAModel = this;\n";
   code += ind+"this->defaultCell->DefaultInit();\n";
   code += ind+"CAWidth = 0;\n";
   code += ind+"CAHeight = 0;\n";
   code += "}\n";
 
+  // ## Destructor
   code += "\nCAModel::~CAModel() {\n";
   code += ind+"delete this->defaultCell;\n";
   code += ind+"for (int i = 0; i < CAHeight; ++i){\n";
@@ -519,6 +616,7 @@ string CAModel::GenerateCAModelDefinition() {
   code += ind+"delete [] prevBoard;\n";
   code += "}\n";
 
+  // ## Init
   code += "void CAModel::Init(int width, int height) {\n" +
     ind+ "CAWidth  = width;\n" +
     ind+ "CAHeight = height;\n" +
@@ -548,34 +646,49 @@ string CAModel::GenerateCAModelDefinition() {
     ind+ "  }\n" +
   "}\n";
 
+  // ## Gets and Sets of Cell and Model attributes
   code += "\n";
   for(string attr: GetCellAttributesList()) {
     code +=
-    "void CAModel::Get"+attr+"("+attr+"_TYPE** outValues) {\n"+
+    "void CAModel::Get"+attr+"("+attr+"_TYPE* outValues) {\n"+
     ind+ "for (int i = 0; i < CAHeight; ++i)\n" +
     ind+ "  for (int j = 0; j < CAWidth; ++j) {\n" +
-    ind+ "    outValues[i][j] = prevBoard[i][j]->Get"+attr+"();\n" +
+    ind+ "    outValues[CAINDEX1C(i, j)] = prevBoard[i][j]->Get"+attr+"();\n" +
     ind+ "  }\n" +
     "}\n";
   }
   code += "\n";
   for(string attr: GetCellAttributesList()) {
     code +=
-    "void CAModel::Set"+attr+"("+attr+"_TYPE** values) {\n"+
+    "void CAModel::Set"+attr+"("+attr+"_TYPE* values) {\n"+
     ind+ "for (int i = 0; i < CAHeight; ++i)\n" +
     ind+ "  for (int j = 0; j < CAWidth; ++j) {\n" +
-    ind+ "    currBoard[i][j]->Set"+attr+"(values[i][j]);\n" +
-    ind+ "    prevBoard[i][j]->Set"+attr+"(values[i][j]);\n" +
+    ind+ "    currBoard[i][j]->Set"+attr+"(values[CAINDEX1C(i, j)]);\n" +
+    ind+ "    prevBoard[i][j]->Set"+attr+"(values[CAINDEX1C(i, j)]);\n" +
     ind+ "  }\n" +
     "}\n";
   }
+
+  code += "\n";
+  for(string attr: GetModelAttributesList()) {
+    code +=
+      attr+"_TYPE CAModel::Get"+attr+"() {\n  return this->ATTR_"+attr+";\n}\n";
+  }
+
+  code += "\n";
+  for(string attr: GetModelAttributesList()) {
+    code +=
+      "void CAModel::Set"+attr+"("+attr+"_TYPE value) {\n  this->ATTR_"+attr+" = value;\n}\n";
+  }
+
+  // ## Gets and Sets of Mappings
   code += "\n";
   for(string viewer: GetAttrColMappingsList()) {
     code +=
-    "void CAModel::GetViewer"+viewer+"(int*** outValues) {\n"+
+    "void CAModel::GetViewer"+viewer+"(int* outValues) {\n"+
     ind+ "for (int i = 0; i < CAHeight; ++i)\n" +
     ind+ "  for (int j = 0; j < CAWidth; ++j)\n" +
-    ind+ "    prevBoard[i][j]->GetViewer"+viewer+"(outValues[i][j]);\n" +
+    ind+ "    prevBoard[i][j]->GetViewer"+viewer+"(&outValues[CAINDEX3C(i,j)]);\n" +
     "}\n";
   }
   code += "\n";
@@ -589,11 +702,11 @@ string CAModel::GenerateCAModelDefinition() {
   code += "\n";
   for(string mapping: GetColAttrMappingsList()) {
     code +=
-    "void CAModel::LoadColorImage"+mapping+"(int** red, int** green, int** blue) {\n"+
+    "void CAModel::LoadColorImage"+mapping+"(int* rgbMatrix) {\n"+
     ind+ "for (int i = 0; i < CAHeight; ++i)\n" +
     ind+ "  for (int j = 0; j < CAWidth; ++j) {\n" +
-    ind+ "    currBoard[i][j]->InputColor_"+mapping+"(red[i][j], green[i][j], blue[i][j]);\n" +
-    ind+ "    prevBoard[i][j]->InputColor_"+mapping+"(red[i][j], green[i][j], blue[i][j]);\n" +
+    ind+ "    currBoard[i][j]->InputColor_"+mapping+"(rgbMatrix[CAINDEX3C(i, j)+0], rgbMatrix[CAINDEX3C(i, j)+1], rgbMatrix[CAINDEX3C(i, j)+2]);\n" +
+    ind+ "    prevBoard[i][j]->InputColor_"+mapping+"(rgbMatrix[CAINDEX3C(i, j)+0], rgbMatrix[CAINDEX3C(i, j)+1], rgbMatrix[CAINDEX3C(i, j)+2]);\n" +
     ind+ "  }\n" +
     "}\n";
   }
@@ -645,6 +758,91 @@ string CAModel::GenerateCAModelDefinition() {
   "}\n";
   code += "\n";
 
+  code += "vector<string> CAModel::GetModelAttributeNames(){\n";
+  code += ind+"vector<string> modelAttrNames;\n";
+    for(string attrName: GetAttributesList())
+      if(GetAttribute(attrName)->m_is_model_attribute)
+        code += ind+"modelAttrNames.push_back(\""+attrName+"\");\n";
+    code += ind+ "\nreturn modelAttrNames;\n";
+  code += "}\n";
+  code += "\n";
+
+  code += "vector<string> CAModel::GetInputMappingNames(){\n";
+  code += ind+"vector<string> inputMappingNames;\n";
+    for(string mapName: GetColAttrMappingsList())
+      code += ind+"inputMappingNames.push_back(\""+mapName+"\");\n";
+    code += ind+ "\nreturn inputMappingNames;\n";
+  code += "}\n";
+  code += "\n";
+
+  code += "vector<string> CAModel::GetOutputMappingNames(){\n";
+  code += ind+"vector<string> outputMappingNames;\n";
+    for(string mapName: GetAttrColMappingsList())
+      code += ind+"outputMappingNames.push_back(\""+mapName+"\");\n";
+    code += ind+ "\nreturn outputMappingNames;\n";
+  code += "}\n";
+  code += "\n";
+
+  // ##  Generic function (by names)
+  code += "\n";
+  code += "string CAModel::GetModelAttributeByName(string attribute){\n";
+    for(string attrName: GetModelAttributesList()){
+      code += ind+ "if(attribute == \""+attrName+"\")\n";
+      code += ind+ "  return std::to_string(this->ATTR_"+attrName+");\n";
+    }
+    code += ind + "return \"\";\n";
+  code += "}\n";
+  code += "\n";
+
+  code += "bool CAModel::SetModelAttributeByName(string attrName, string value){\n";
+    for(string attrName: GetModelAttributesList()){
+      code += ind+ "if(attrName == \""+attrName+"\"){\n";
+      if(GetAttribute(attrName)->m_type == "Bool")
+        code += ind+ "  this->ATTR_"+attrName+" = std::stoi(value);\n";
+      else if(GetAttribute(attrName)->m_type == "Integer")
+        code += ind+ "  this->ATTR_"+attrName+" = std::stoi(value);\n";
+      else if(GetAttribute(attrName)->m_type == "Float")
+        code += ind+ "  this->ATTR_"+attrName+" = std::stof(value);\n";
+      code += ind+ "  return true;\n";
+      code += ind+ "}\n";
+    }
+    code += ind + "return false;\n";
+  code += "}\n";
+  code += "\n";
+
+  code += "bool CAModel::GetViewerByName(string viewerName, int* rgbMatrix){\n";
+    for(string mapName: GetAttrColMappingsList()){
+      code += ind+ "if(viewerName == \""+mapName+"\"){\n";
+      code += ind+ "  GetViewer"+mapName+"(rgbMatrix);\n";
+      code += ind+ "  return true;\n";
+      code += ind+ "}\n";
+    }
+    code += ind + "return false;\n";
+  code += "}\n";
+  code += "\n";
+
+  code += "bool CAModel::LoadColorImageByName(string initColorName, int* rgbMatrix){\n";
+    for(string mapName: GetColAttrMappingsList()){
+      code += ind+ "if(initColorName == \""+mapName+"\"){\n";
+      code += ind+ "  LoadColorImage"+mapName+"(rgbMatrix);\n";
+      code += ind+ "  return true;\n";
+      code += ind+ "}\n";
+    }
+    code += ind + "return false;\n";
+  code += "}\n";
+  code += "\n";
+
+  code += "bool CAModel::LoadColorCellByName(string initColorName, int row, int col, int r, int g, int b){\n";
+    for(string mapName: GetColAttrMappingsList()){
+      code += ind+ "if(initColorName == \""+mapName+"\"){\n";
+      code += ind+ "  LoadColorCell"+mapName+"(row, col, r, g, b);\n";
+      code += ind+ "  return true;\n";
+      code += ind+ "}\n";
+    }
+    code += ind + "return false;\n";
+  code += "}\n";
+  code += "\n";
+
   code +="void CAModel::StepForth() {\n" +
   ind+"for (int i = 0; i < CAHeight; ++i)\n" +
   ind+"  for (int j = 0; j < CAWidth; ++j) {\n" +
@@ -692,7 +890,8 @@ std::string CAModel::GenerateIncludesList() {
   code += "#include <math.h>\n";
   code += "#include <random>\n";
   code += "#include <time.h>\n";
-  code += "#include <vector>\n\n";
+  code += "#include <vector>\n";
+  code += "#include <string>\n\n";
   code += "using std::vector;\n";
   code += "using std::string;\n";
   code += "using std::pair;\n";

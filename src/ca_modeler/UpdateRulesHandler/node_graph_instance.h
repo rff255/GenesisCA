@@ -1152,6 +1152,7 @@ public:
     node->init("Sequence", pos, "DO", "FIRST;THEN", TYPE);
 
     // 4) set (or load) field values
+    node->setOpen(false);
     node->mNumFlowPortsIn = 1;
     node->mNumFlowPortsOut = 2;
 
@@ -1371,7 +1372,7 @@ protected:
          numEquals++;
        else if(elem > varInX)
          numGreater++;
-       else(elem < varInX)
+       else
          numLesser++;
      }
      outValueName =
@@ -1405,7 +1406,7 @@ protected:
           ind+ "    numEquals++;\n" +
           ind+ "  else if(elem > "+ varInX +")\n" +
           ind+ "    numGreater++;\n" +
-          ind+ "  else(elem < "+ varInX +")\n" +
+          ind+ "  else\n" +
           ind+ "    numLesser++;\n" +
           ind+ "  "+ outValueName+ " = ";
 
@@ -1874,21 +1875,21 @@ protected:
         string varInR = "out_" +inR->getNameOutSlot(inRPort)+ "_" + std::to_string(inR->mNodeId) + "_" + std::to_string(inRPort);
         code +=
             inR->Eval(nge, indentLevel, inRPort) +
-            ind+ "this->VIEWER_"+ string(NGEAttrColMappingNames[mSelectedMapping]) +"[0] = " +varInR+ ";\n";
+            ind+ "this->VIEWER_"+ string(NGEAttrColMappingNames[mSelectedMapping]) +"[0] = static_cast<int>(" +varInR+ ");\n";
       }
 
       if (inG) {
         string varInG = "out_" +inG->getNameOutSlot(inGPort)+ "_" + std::to_string(inG->mNodeId) + "_" + std::to_string(inGPort);
         code +=
             inG->Eval(nge, indentLevel, inGPort) +
-            ind+ "this->VIEWER_"+ string(NGEAttrColMappingNames[mSelectedMapping]) +"[1] = " +varInG+ ";\n";
+            ind+ "this->VIEWER_"+ string(NGEAttrColMappingNames[mSelectedMapping]) +"[1] = static_cast<int>(" +varInG+ ");\n";
       }
 
       if (inB) {
         string varInB = "out_" +inB->getNameOutSlot(inBPort)+ "_" + std::to_string(inB->mNodeId) + "_" + std::to_string(inBPort);
         code +=
             inB->Eval(nge, indentLevel, inBPort) +
-            ind+ "this->VIEWER_"+ string(NGEAttrColMappingNames[mSelectedMapping]) +"[2] = " +varInB+ ";\n";
+            ind+ "this->VIEWER_"+ string(NGEAttrColMappingNames[mSelectedMapping]) +"[2] = static_cast<int>(" +varInB+ ");\n";
       }
     }
     return code;

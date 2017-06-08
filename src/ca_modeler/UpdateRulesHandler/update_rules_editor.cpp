@@ -26,7 +26,7 @@ std::string UpdateRulesEditor::EvalGraphEditorStep() {
   // By calling the step Eval(), all the reachable nodes will be also called recursively
   if(stepNodes.size() > 0)
     return stepNodes[0]->Eval(mEditor, 0);
-  return "\n";
+  return "void CACell::Step(){}\n";
 }
 
 std::string UpdateRulesEditor::EvalGraphEditorDefaultInit()

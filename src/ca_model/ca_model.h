@@ -62,13 +62,15 @@ public:
   // Nodes Graph Editor
   UpdateRulesEditor* GetGraphEditor() {return mGraphEditor;}
 
+  string GenerateHDLLCode();
+  string GenerateCPPDLLCode();
   string GenerateHCode();
   string GenerateCPPCode();
 
 private:
-  string GenerateCACellDeclaration();
+  string GenerateCACellDeclaration(bool toDLL = false);
   string GenerateCACellDefinition();
-  string GenerateCAModelDeclaration();
+  string GenerateCAModelDeclaration(bool toDLL = false);
   string GenerateCAModelDefinition();
   string GenerateTypedefList();
   string GenerateIncludesList();

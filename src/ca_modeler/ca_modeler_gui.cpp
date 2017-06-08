@@ -3,9 +3,13 @@
 #include "attribute_handler_widget.h"
 #include "vicinity_handler_widget.h"
 
+#include <QMessageBox>
+#include <QFileDialog>
 #include <QDebug>
+#include <QDir>
 
 #include <fstream>
+#include <stdlib.h>
 
 CAModelerGUI::CAModelerGUI(QWidget *parent) :
   QMainWindow(parent),
@@ -73,16 +77,99 @@ void CAModelerGUI::on_act_export_c_code_triggered()
 //  qDebug(toBePrinted.c_str());
 }
 
+void CAModelerGUI::on_act_generate_standalone_viewer_triggered()
+{
+  // Select a directory to export
+  QString OutputPath = QFileDialog::getExistingDirectory (this, "Export Standalone Application Directory");
+  if ( OutputPath.isNull())
+  {
+    QMessageBox::information(this, "Invalid Path", "Model not exported. Select a valid path.");
+    return;
+  }
+
+  // Get the "working directory" where (the party begins) files are generated and compiled
+  std::string SAfolder = QApplication::applicationDirPath().toStdString() + "/StandaloneApplication/";
+  QDir dir(QApplication::applicationDirPath() + "SAfolder");
+  if (!dir.exists()) {
+      dir.mkpath(".");
+  }
+
+  // H DLL file
+  std::ofstream hDllFile;
+  hDllFile.open ((SAfolder + "ca_dll.h").c_str());
+  hDllFile << m_ca_model->GenerateHDLLCode();
+  hDllFile.close();
+
+  // CPP DLL file
+  std::ofstream cppDllFile;
+  cppDllFile.open ((SAfolder + "ca_dll.cpp").c_str());
+  cppDllFile << m_ca_model->GenerateCPPDLLCode();
+  cppDllFile.close();
+
+  // Generate model DLL
+  //system(("cl /DCA_DLL "+dllfolder+"/ca_dll.cpp /LD /Fo"+dllfolder+"/ca_dll.dll").c_str());
+
+  // Generate standalone application
+  system(("cl /I "+SAfolder+" "+SAfolder+"*.cpp glfw3dll.lib opengl32.lib "+" /link /OUT:"+SAfolder+"/StandaloneApplication.exe /incremental:no /LIBPATH:"+ SAfolder).c_str());
+
+  // To overwrite
+  if (QFile::exists((OutputPath.toStdString()+"/StandaloneApplication.exe").c_str()))
+      QFile::remove((OutputPath.toStdString()+"/StandaloneApplication.exe").c_str());
+
+  if (QFile::exists((OutputPath.toStdString()+"/glfw3.dll").c_str()))
+      QFile::remove((OutputPath.toStdString()+"/glfw3.dll").c_str());
+
+  // Get the useful files
+  QFile::copy(QString((SAfolder+"StandaloneApplication.exe").c_str()), QString((OutputPath.toStdString()+"/StandaloneApplication.exe").c_str()));
+  QFile::copy(QString((SAfolder+"glfw3.dll").c_str()), QString((OutputPath.toStdString()+"/glfw3.dll").c_str()));
+
+  // Clear unnecessary files
+  QFile::remove(QString((SAfolder + "ca_dll.h").c_str()));
+  QFile::remove(QString((SAfolder + "ca_dll.cpp").c_str()));
+  QFile::remove(QString((SAfolder+"StandaloneApplication.exe").c_str()));
+  QFile::remove(QString((SAfolder+"StandaloneApplication.exp").c_str()));
+  QFile::remove(QString((SAfolder+"StandaloneApplication.lib").c_str()));
+
+  QMessageBox::information(this, "Standalone Application Successfully Exported!  ", "Hurray!.");
+}
+
 void CAModelerGUI::ExportCodeFiles() {
+  // Get the "working directory" where files are compiled
+  QString OutputPath = QFileDialog::getExistingDirectory (this, "Export Code Directory");
+  if ( OutputPath.isNull())
+  {
+    QMessageBox::information(this, "Invalid Path", "Code not exported. Select a valid path.");
+    return;
+  }
+
+  // Get the "working directory" where files are generated
+  std::string SAfolder = QApplication::applicationDirPath().toStdString() + "/StandaloneApplication/";
+  QDir dir(QApplication::applicationDirPath() + "SAfolder");
+  if (!dir.exists()) {
+      dir.mkpath(".");
+  }
+
+  std::string modelName = "ca_"+m_ca_model->GetModelProperties()->m_name;
+
   // H file
   std::ofstream hFile;
-  hFile.open ("ca_"+ m_ca_model->GetModelProperties()->m_name +".h");
+  hFile.open ((SAfolder + modelName +".h").c_str());
   hFile << m_ca_model->GenerateHCode();
   hFile.close();
 
   // CPP file
   std::ofstream cppFile;
-  cppFile.open ("ca_"+ m_ca_model->GetModelProperties()->m_name +".cpp");
+  cppFile.open ((SAfolder + modelName +".cpp").c_str());
   cppFile << m_ca_model->GenerateCPPCode();
   cppFile.close();
+
+  // Get the useful files
+  QFile::copy(QString((SAfolder+ modelName+".h").c_str()), QString((OutputPath.toStdString()+"/"+modelName+".h").c_str()));
+  QFile::copy(QString((SAfolder+ modelName+".cpp").c_str()), QString((OutputPath.toStdString()+"/"+modelName+".cpp").c_str()));
+
+  // Clear unnecessary files
+  QFile::remove(QString((SAfolder+modelName+".h").c_str()));
+  QFile::remove(QString((SAfolder+modelName+".cpp").c_str()));
+
+  QMessageBox::information(this, "Code Successfully Exported!  ", "Nothing to say.");
 }
