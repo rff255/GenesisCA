@@ -212,13 +212,15 @@ protected:
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
-    Node* outNode = nge.getOutputNodeForNodeAndSlot(this, 0);
+    ImVector<Node*> outputNodes = ImVector<Node*>();
+    nge.getOutputNodesForNodeAndSlot(this, 0, outputNodes);
 
     //-------------------------------------------------------------
     // Check if there is a node connected to it
     code += ind+ "void CACell::Step(){\n";
     code += ind+ "  CopyPrevCellConfig();\n";
-        if (outNode)
+      if (outputNodes.size() > 0)
+        for(Node* outNode:outputNodes)
           code += ind+ outNode->Eval(nge, indentLevel+1);
     code += ind+ "}\n";
 
@@ -1020,9 +1022,10 @@ public:
     // Get the information about nodes and so on
     int inIfPort;
     Node* inIf    = nge.getInputNodeForNodeAndSlot(this, 1, &inIfPort);
-    Node* outThen = nge.getOutputNodeForNodeAndSlot(this, 0);
-    Node* outElse = nge.getOutputNodeForNodeAndSlot(this, 1);
-
+    ImVector<Node*> outputThenNodes = ImVector<Node*>();
+    nge.getOutputNodesForNodeAndSlot(this, 0, outputThenNodes);
+    ImVector<Node*> outputElseNodes = ImVector<Node*>();
+    nge.getOutputNodesForNodeAndSlot(this, 1, outputElseNodes);
     //-------------------------------------------------------------
     // Check if there is a node connected to it
     if (inIf) {
@@ -1032,13 +1035,15 @@ public:
           inIf->Eval(nge, indentLevel, inIfPort) + // Here the variable out_portName_nodeID_port must be set
           ind+ "if(" +varCondition+ "){\n";
 
-      if(outThen) // If there is a link for THEN
-        code += outThen->Eval(nge, indentLevel+1);
+      if (outputThenNodes.size() > 0) // If there is a link for THEN
+        for(Node* outThen:outputThenNodes)
+          code += ind+ outThen->Eval(nge, indentLevel+1);
 
       code += ind+ "} else {\n";
 
-      if(outElse) // If there is a link for ELSE
-        code += outElse->Eval(nge, indentLevel+1);
+      if (outputElseNodes.size() > 0) // If there is a link for ELSE
+        for(Node* outElse:outputElseNodes)
+          code += ind+ outElse->Eval(nge, indentLevel+1);
 
       code += ind+ "}\n";
     }
@@ -1102,7 +1107,8 @@ public:
     // Get the information about nodes and so on
     int inRepeatPort;
     Node* inRepeat = nge.getInputNodeForNodeAndSlot(this, 1, &inRepeatPort);
-    Node* outDo    = nge.getOutputNodeForNodeAndSlot(this, 0);
+    ImVector<Node*> outputNodes = ImVector<Node*>();
+    nge.getOutputNodesForNodeAndSlot(this, 0, outputNodes);
 
     //-------------------------------------------------------------
     // Check if there is a node connected to it
@@ -1113,8 +1119,9 @@ public:
           inRepeat->Eval(nge, indentLevel, inRepeatPort) + // Here the variable out_portName_nodeID_port must be set
           ind+ "for(int i=0; i<" +varRepeatNumber+ ";++i){\n";
 
-      if(outDo) // If there is a link for DO
-        code += outDo->Eval(nge, indentLevel+1);
+      if(outputNodes.size()>0) // If there is a link for DO
+        for(Node* outDo:outputNodes)
+          code += ind+ outDo->Eval(nge, indentLevel+1);
 
       code += ind+ "}\n";
     }
@@ -1169,18 +1176,21 @@ public:
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
-    Node* outFirst = nge.getOutputNodeForNodeAndSlot(this, 0);
-    Node* outThen = nge.getOutputNodeForNodeAndSlot(this, 1);
+    ImVector<Node*> outputFirstNodes = ImVector<Node*>();
+    nge.getOutputNodesForNodeAndSlot(this, 0, outputFirstNodes);
+    ImVector<Node*> outputThenNodes = ImVector<Node*>();
+    nge.getOutputNodesForNodeAndSlot(this, 1, outputThenNodes);
 
     //-------------------------------------------------------------
-    if (outFirst)    // If there is a link for FIRST
-      code += outFirst->Eval(nge, indentLevel);
+    if (outputFirstNodes.size()>0)    // If there is a link for FIRST
+      for(Node* outFirst:outputFirstNodes)
+        code += ind+ outFirst->Eval(nge, indentLevel);
 
-
-    if (outThen) {   // If there is a link for THEN
-      if (outFirst)
+    if (outputThenNodes.size()>0){    // If there is a link for FIRST
+      if (outputFirstNodes.size()>0)
         code += "\n";  // Extra breakline to increase readability
-      code += outThen->Eval(nge, indentLevel);
+      for(Node* outThen:outputThenNodes)
+        code += ind+ outThen->Eval(nge, indentLevel);
     }
 
     return code;
@@ -1394,31 +1404,35 @@ protected:
       string outValueName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
       //static const char* operations[7] = {"ALL IS", "NONE IS", "HAS A", "ALL GREATER THAN", "ALL LESSER THAN", "ANY GREATER THAN", "ANY LESSER THAN"};
 
+      string numEquals  = "numEquals_"  + std::to_string(this->mNodeId);
+      string numGreater = "numGreater_" + std::to_string(this->mNodeId);
+      string numLesser  = "numLesser_"  + std::to_string(this->mNodeId);
+
       code +=
           inValues->Eval(nge, indentLevel, inValuesPort) +
           inX->Eval(nge, indentLevel, inXPort)  +
-          ind+ "int numEquals = 0;\n"  +
-          ind+ "int numGreater = 0;\n" +
-          ind+ "int numLesser = 0;\n"  +
+          ind+ "int "+numEquals+" = 0;\n"  +
+          ind+ "int "+numGreater+" = 0;\n" +
+          ind+ "int "+numLesser+" = 0;\n"  +
           ind+ "bool "+ outValueName+ ";\n" +
           ind+ "for("+ varInValues+"_ELEMENT_TYPE "+ "elem: "+ varInValues+ ") {\n" +
           ind+ "  if(elem == "+ varInX +")\n" +
-          ind+ "    numEquals++;\n" +
+          ind+ "    "+numEquals+"++;\n" +
           ind+ "  else if(elem > "+ varInX +")\n" +
-          ind+ "    numGreater++;\n" +
+          ind+ "    "+numGreater+"++;\n" +
           ind+ "  else\n" +
-          ind+ "    numLesser++;\n" +
+          ind+ "    "+numLesser+"++;\n" +
           ind+ "  "+ outValueName+ " = ";
 
       // Different analyse for each operation
       switch (this->mSelectedOperationIndex) {
-      case 0: code += "(numEquals == "+ varInValues +"_SIZE);\n";  break; // ALL IS
-      case 1: code += "(numEquals == 0);\n";                          break; // NONE IS
-      case 2: code += "(numEquals > 0);\n";                           break; // HAS A
-      case 3: code += "(numGreater == "+ varInValues +"_SIZE);\n"; break; // ALL GREATER THAN
-      case 4: code += "(numLesser == "+ varInValues +"_SIZE);\n";  break; // ALL LESSER THAN
-      case 5: code += "(numGreater > 0);\n";                          break; // ANY GREATER THAN
-      case 6: code += "(numLesser > 0);\n";                           break; // ANY LESSER THAN
+      case 0: code += "("+numEquals+" == "+ varInValues +"_SIZE);\n";  break; // ALL IS
+      case 1: code += "("+numEquals+" == 0);\n";                          break; // NONE IS
+      case 2: code += "("+numEquals+" > 0);\n";                           break; // HAS A
+      case 3: code += "("+numGreater+" == "+ varInValues +"_SIZE);\n"; break; // ALL GREATER THAN
+      case 4: code += "("+numLesser+" == "+ varInValues +"_SIZE);\n";  break; // ALL LESSER THAN
+      case 5: code += "("+numGreater+" > 0);\n";                          break; // ANY GREATER THAN
+      case 6: code += "("+numLesser+" > 0);\n";                           break; // ANY LESSER THAN
 
       default:
         code += ind+ "false;\n";                                        // Whatever
@@ -1756,12 +1770,13 @@ protected:
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
-    Node* outNode = nge.getOutputNodeForNodeAndSlot(this, 0);
+    ImVector<Node*> outputNodes = ImVector<Node*>();
+    nge.getOutputNodesForNodeAndSlot(this, 0, outputNodes);
 
     //-------------------------------------------------------------
     // Check if there is a output node linked at, and a valid mapping selected
     if(!this->mIsProcessing) {
-      if (outNode && NGEColAttrMappingNames.size()>0 && NGEColAttrMappingNames.size()>mSelectedMapping) {
+      if (outputNodes.size() > 0 && NGEColAttrMappingNames.size()>0 && NGEColAttrMappingNames.size()>mSelectedMapping) {
         this->mIsProcessing = true;
         string outRName = "out_" + this->getNameOutSlot(1)+ "_" + std::to_string(this->mNodeId) +"_1";
         string outGName = "out_" + this->getNameOutSlot(2)+ "_" + std::to_string(this->mNodeId) +"_2";
@@ -1776,7 +1791,8 @@ protected:
         code += ind+ "  typedef int " + outGName + "_TYPE;\n";
         code += ind+ "  typedef int " + outBName + "_TYPE;\n";
 
-        code += ind+ outNode->Eval(nge, indentLevel+1);
+        for(Node* outNode:outputNodes)
+          code += ind+ outNode->Eval(nge, indentLevel+1);
         code += ind+ "}\n";
         this->mIsProcessing = false;
       }
@@ -1944,12 +1960,15 @@ protected:
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
-    Node* outNode = nge.getOutputNodeForNodeAndSlot(this, 0);
+    ImVector<Node*> outputNodes = ImVector<Node*>();
+    nge.getOutputNodesForNodeAndSlot(this, 0, outputNodes);
 
     //-------------------------------------------------------------
     // Check if there is a node connected to it
     code += ind+ "void CACell::DefaultInit(){\n";
-        if (outNode)
+    code += ind+ "  CopyPrevCellConfig();\n";
+      if (outputNodes.size() > 0)
+        for(Node* outNode:outputNodes)
           code += ind+ outNode->Eval(nge, indentLevel+1);
     code += ind+ "}\n";
 

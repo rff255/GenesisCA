@@ -734,8 +734,8 @@ string CAModel::GenerateCAModelDefinition() {
     for(string neighborhood: GetNeighborhoodList()){
       code += ind+"    // "+neighborhood+" user-defined neighborhood\n" +
     ind+"    for(int n=0; n < NEIGHBORHOOD_"+neighborhood+".size(); ++n) {\n" +
-    ind+"       int rowIndex = (i + NEIGHBORHOOD_"+neighborhood+"[n].second);\n" +
-    ind+"       int colIndex = (j + NEIGHBORHOOD_"+neighborhood+"[n].first);\n" +
+    ind+"       int rowIndex = (i + NEIGHBORHOOD_"+neighborhood+"[n].first);\n" +
+    ind+"       int colIndex = (j + NEIGHBORHOOD_"+neighborhood+"[n].second);\n" +
     ind+"       // Border treatment\n" +
     ind+"       if(rowIndex < 0 || rowIndex >= CAHeight || colIndex < 0 || colIndex >= CAWidth) {\n" +
     ind+"         if(this->boundaryType == \"Torus\") {\n" +
