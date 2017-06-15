@@ -25,8 +25,10 @@ public slots:
 private slots:
   void on_act_quit_triggered();
 
-  void on_act_export_c_code_triggered();
+  void on_act_run_triggered();
   void on_act_generate_standalone_viewer_triggered();
+  void on_act_export_c_code_triggered();
+  void on_act_export_dll_triggered();
 
 private:
   void ExportCodeFiles();

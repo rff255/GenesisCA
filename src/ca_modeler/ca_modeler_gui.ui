@@ -11,7 +11,7 @@
    </rect>
   </property>
   <property name="windowTitle">
-   <string>GenesisCA Modeler</string>
+   <string>Genesis</string>
   </property>
   <widget class="QWidget" name="centralwidget">
    <property name="styleSheet">
@@ -229,6 +229,7 @@ background: rgb(240, 240, 240);
      <string>Settings</string>
     </property>
     <addaction name="act_preferences"/>
+    <addaction name="action_DEV_Use_Preexisting_Code"/>
    </widget>
    <widget class="QMenu" name="menu_build">
     <property name="title">
@@ -244,7 +245,7 @@ background: rgb(240, 240, 240);
     </widget>
     <widget class="QMenu" name="menu_export_library">
      <property name="enabled">
-      <bool>false</bool>
+      <bool>true</bool>
      </property>
      <property name="title">
       <string>Export Library</string>
@@ -382,6 +383,9 @@ background: rgb(240, 240, 240);
    </property>
   </action>
   <action name="act_preferences">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
    <property name="text">
     <string>Preferences...</string>
    </property>
@@ -458,6 +462,20 @@ background: rgb(240, 240, 240);
    </property>
    <property name="text">
     <string>Export Python Module...</string>
+   </property>
+  </action>
+  <action name="action_DEV_Use_Preexisting_Code">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>false</bool>
+   </property>
+   <property name="enabled">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>[DEV] Use Preexisting Code</string>
    </property>
   </action>
  </widget>

@@ -6,7 +6,7 @@
 
 #include <imgui.h>
 #include "imgui_impl_glfw.h"
-#include <GLFW/glfw3.h>
+#include <glfw3.h>
 #include <string.h>     //strcpy
 #include "bitmap_image.hpp"
 

@@ -39,25 +39,25 @@ public:
   bool             DelAttribute(string id_name);
   string           ModifyAttribute(string prev_id_name, Attribute* modified_attr);
   Attribute*       GetAttribute(string id_name);
-  vector<string> GetAttributesList();
-  vector<string> GetCellAttributesList();
-  vector<string> GetModelAttributesList();
+  vector<string>   GetAttributesList();
+  vector<string>   GetCellAttributesList();
+  vector<string>   GetModelAttributesList();
 
   // Neighborhoods
   string           AddNeighborhood(Neighborhood* new_neigh);
   bool             DelNeighborhood(string id_name);
   string           ModifyNeighborhood(string prev_id_name, Neighborhood* modified_neigh);
   Neighborhood*    GetNeighborhood(string id_name);
-  vector<string> GetNeighborhoodList();
+  vector<string>   GetNeighborhoodList();
 
   // Mappings
   string           AddMapping(Mapping* new_attr);
   bool             DelMapping(string id_name);
   string           ModifyMapping(string prev_id_name, Mapping* modified_attr);
   Mapping*         GetMapping(string id_name);
-  vector<string> GetMappingsList();
-  vector<string> GetColAttrMappingsList();
-  vector<string> GetAttrColMappingsList();
+  vector<string>   GetMappingsList();
+  vector<string>   GetColAttrMappingsList();
+  vector<string>   GetAttrColMappingsList();
 
   // Nodes Graph Editor
   UpdateRulesEditor* GetGraphEditor() {return mGraphEditor;}
@@ -81,7 +81,7 @@ private:
   std::unordered_map<string, Attribute*>    m_attributes;
   std::unordered_map<string, Neighborhood*> m_neighborhoods;
   std::unordered_map<string, Mapping*>      m_mappings;
-  UpdateRulesEditor* mGraphEditor;  // The Editor instance
+  UpdateRulesEditor* mGraphEditor;
 };
 
 #endif // CA_MODEL_H

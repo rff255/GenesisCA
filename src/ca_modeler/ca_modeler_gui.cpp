@@ -77,6 +77,69 @@ void CAModelerGUI::on_act_export_c_code_triggered()
 //  qDebug(toBePrinted.c_str());
 }
 
+void CAModelerGUI::on_act_run_triggered()
+{
+  // Get the "working directory" where (the party begins) files are generated and compiled
+  std::string SAfolder = QApplication::applicationDirPath().toStdString() + "/StandaloneApplication/";
+// THIS FOLDER MUST EXIST, so, doesnt make sense to create one
+//  QDir dir(QApplication::applicationDirPath() + "/StandaloneApplication/");
+//  if (!dir.exists()) {
+//      dir.mkpath(".");
+//  }
+
+  // Get the "run directory" where will be created the .exe
+  std::string runPath = QApplication::applicationDirPath().toStdString() + "/StandaloneApplication/runDir";
+  QDir runDir(QApplication::applicationDirPath() + "/StandaloneApplication/runDir");
+  if (!runDir.exists()) {
+      runDir.mkpath(".");
+  }
+
+  if(ui->action_DEV_Use_Preexisting_Code->isChecked())
+  {
+    printf("using preexisting code...\n");
+  }
+  else
+  {
+    // H DLL file
+    std::ofstream hDllFile;
+    hDllFile.open ((SAfolder + "ca_dll.h").c_str());
+    hDllFile << m_ca_model->GenerateHDLLCode();
+    hDllFile.close();
+
+    // CPP DLL file
+    std::ofstream cppDllFile;
+    cppDllFile.open ((SAfolder + "ca_dll.cpp").c_str());
+    cppDllFile << m_ca_model->GenerateCPPDLLCode();
+    cppDllFile.close();
+  }
+
+  // Generate standalone application
+  system(("cl /GL /O2 /Oi /I "+SAfolder+" "+SAfolder+"*.cpp glfw3dll.lib opengl32.lib "+" /link /LTCG /OPT:REF /OPT:ICF /OUT:"+SAfolder+"/StandaloneApplication.exe /incremental:no /LIBPATH:"+ SAfolder).c_str());
+
+  // To overwrite
+  if (QFile::exists((runPath +"/StandaloneApplication.exe").c_str()))
+      QFile::remove((runPath +"/StandaloneApplication.exe").c_str());
+
+  if (QFile::exists((runPath +"/glfw3.dll").c_str()))
+      QFile::remove((runPath +"/glfw3.dll").c_str());
+
+  // Get the useful files
+  QFile::copy(QString((SAfolder+"StandaloneApplication.exe").c_str()), QString((runPath +"/StandaloneApplication.exe").c_str()));
+  QFile::copy(QString((SAfolder+"glfw3.dll").c_str()), QString((runPath +"/glfw3.dll").c_str()));
+
+  // Clear unnecessary files
+  if(!ui->action_DEV_Use_Preexisting_Code->isChecked()) {
+    QFile::remove(QString((SAfolder + "ca_dll.h").c_str()));
+    QFile::remove(QString((SAfolder + "ca_dll.cpp").c_str()));
+  }
+  QFile::remove(QString((SAfolder+"StandaloneApplication.exe").c_str()));
+  QFile::remove(QString((SAfolder+"StandaloneApplication.exp").c_str()));
+  QFile::remove(QString((SAfolder+"StandaloneApplication.lib").c_str()));
+
+  // Run generated standalone Application
+  system((runPath +"/StandaloneApplication.exe").c_str());
+}
+
 void CAModelerGUI::on_act_generate_standalone_viewer_triggered()
 {
   // Select a directory to export
@@ -89,28 +152,34 @@ void CAModelerGUI::on_act_generate_standalone_viewer_triggered()
 
   // Get the "working directory" where (the party begins) files are generated and compiled
   std::string SAfolder = QApplication::applicationDirPath().toStdString() + "/StandaloneApplication/";
-  QDir dir(QApplication::applicationDirPath() + "SAfolder");
-  if (!dir.exists()) {
-      dir.mkpath(".");
+
+// THIS FOLDER MUST EXIST, so, doesnt make sense to create one
+//  QDir dir(QApplication::applicationDirPath() + "/StandaloneApplication/");
+//  if (!dir.exists()) {
+//      dir.mkpath(".");
+//  }
+
+  if(ui->action_DEV_Use_Preexisting_Code->isChecked())
+  {
+    printf("using preexisting code...\n");
+  }
+  else
+  {
+    // H DLL file
+    std::ofstream hDllFile;
+    hDllFile.open ((SAfolder + "ca_dll.h").c_str());
+    hDllFile << m_ca_model->GenerateHDLLCode();
+    hDllFile.close();
+
+    // CPP DLL file
+    std::ofstream cppDllFile;
+    cppDllFile.open ((SAfolder + "ca_dll.cpp").c_str());
+    cppDllFile << m_ca_model->GenerateCPPDLLCode();
+    cppDllFile.close();
   }
 
-  // H DLL file
-  std::ofstream hDllFile;
-  hDllFile.open ((SAfolder + "ca_dll.h").c_str());
-  hDllFile << m_ca_model->GenerateHDLLCode();
-  hDllFile.close();
-
-  // CPP DLL file
-  std::ofstream cppDllFile;
-  cppDllFile.open ((SAfolder + "ca_dll.cpp").c_str());
-  cppDllFile << m_ca_model->GenerateCPPDLLCode();
-  cppDllFile.close();
-
-  // Generate model DLL
-  //system(("cl /DCA_DLL "+dllfolder+"/ca_dll.cpp /LD /Fo"+dllfolder+"/ca_dll.dll").c_str());
-
   // Generate standalone application
-  system(("cl /I "+SAfolder+" "+SAfolder+"*.cpp glfw3dll.lib opengl32.lib "+" /link /OUT:"+SAfolder+"/StandaloneApplication.exe /incremental:no /LIBPATH:"+ SAfolder).c_str());
+  system(("cl /GL /O2 /Oi /I "+SAfolder+" "+SAfolder+"*.cpp glfw3dll.lib opengl32.lib "+" /link /LTCG /OPT:REF /OPT:ICF /OUT:"+SAfolder+"/StandaloneApplication.exe /incremental:no /LIBPATH:"+ SAfolder).c_str());
 
   // To overwrite
   if (QFile::exists((OutputPath.toStdString()+"/StandaloneApplication.exe").c_str()))
@@ -124,8 +193,10 @@ void CAModelerGUI::on_act_generate_standalone_viewer_triggered()
   QFile::copy(QString((SAfolder+"glfw3.dll").c_str()), QString((OutputPath.toStdString()+"/glfw3.dll").c_str()));
 
   // Clear unnecessary files
-  QFile::remove(QString((SAfolder + "ca_dll.h").c_str()));
-  QFile::remove(QString((SAfolder + "ca_dll.cpp").c_str()));
+  if(!ui->action_DEV_Use_Preexisting_Code->isChecked()) {
+    QFile::remove(QString((SAfolder + "ca_dll.h").c_str()));
+    QFile::remove(QString((SAfolder + "ca_dll.cpp").c_str()));
+  }
   QFile::remove(QString((SAfolder+"StandaloneApplication.exe").c_str()));
   QFile::remove(QString((SAfolder+"StandaloneApplication.exp").c_str()));
   QFile::remove(QString((SAfolder+"StandaloneApplication.lib").c_str()));
@@ -151,6 +222,13 @@ void CAModelerGUI::ExportCodeFiles() {
 
   std::string modelName = "ca_"+m_ca_model->GetModelProperties()->m_name;
 
+  // To overwrite
+  if (QFile::exists((OutputPath.toStdString()+modelName+".h").c_str()))
+      QFile::remove((OutputPath.toStdString()+modelName+".h").c_str());
+
+  if (QFile::exists((OutputPath.toStdString()+modelName+".cpp").c_str()))
+      QFile::remove((OutputPath.toStdString()+modelName+".cpp").c_str());
+
   // H file
   std::ofstream hFile;
   hFile.open ((SAfolder + modelName +".h").c_str());
@@ -172,4 +250,49 @@ void CAModelerGUI::ExportCodeFiles() {
   QFile::remove(QString((SAfolder+modelName+".cpp").c_str()));
 
   QMessageBox::information(this, "Code Successfully Exported!  ", "Nothing to say.");
+}
+
+void CAModelerGUI::on_act_export_dll_triggered()
+{
+  // Select a directory to export
+  QString OutputPath = QFileDialog::getExistingDirectory (this, "Export DLL Directory");
+  if ( OutputPath.isNull())
+  {
+    QMessageBox::information(this, "Invalid Path", "DLL not exported. Select a valid path.");
+    return;
+  }
+
+  // Get the "working directory" where (the party begins) files are generated and compiled
+  std::string SAfolder = QApplication::applicationDirPath().toStdString() + "/StandaloneApplication/";
+
+// THIS FOLDER MUST EXIST, so, doesnt make sense to create one
+//  QDir dir(QApplication::applicationDirPath() + "/StandaloneApplication/");
+//  if (!dir.exists()) {
+//      dir.mkpath(".");
+//  }
+
+  // H DLL file
+  std::ofstream hDllFile;
+  hDllFile.open ((SAfolder + "ca_dll.h").c_str());
+  hDllFile << m_ca_model->GenerateHDLLCode();
+  hDllFile.close();
+
+  // CPP DLL file
+  std::ofstream cppDllFile;
+  cppDllFile.open ((SAfolder + "ca_dll.cpp").c_str());
+  cppDllFile << m_ca_model->GenerateCPPDLLCode();
+  cppDllFile.close();
+
+  // To overwrite
+  if (QFile::exists((OutputPath.toStdString()+"/ca_dll.dll").c_str()))
+      QFile::remove((OutputPath.toStdString()+"/ca_dll.dll").c_str());
+
+  // Generate model DLL
+  system(("cl /DCA_DLL "+SAfolder+"/ca_dll.cpp /LD /Fo"+OutputPath.toStdString()+"/ca_dll.dll").c_str());
+
+  // Clear unnecessary files
+  QFile::remove(QString((SAfolder + "ca_dll.h").c_str()));
+  QFile::remove(QString((SAfolder + "ca_dll.cpp").c_str()));
+
+  QMessageBox::information(this, "DLL Successfully Exported!  ", "Hurray!.");
 }

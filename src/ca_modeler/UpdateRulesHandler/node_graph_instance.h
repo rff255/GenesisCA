@@ -1551,7 +1551,7 @@ protected:
             default: code += ind+ "  "+ outValueName +" = false;\n";
           }
         } else // PICK RANDOM
-          code+= ind+ outValueName +" = "+ varInValues + "[(rand() % ("+ varInValues+ "_SIZE)];\n"; // PICK RANDOM
+          code+= ind+ outValueName +" = "+ varInValues + "[rand() % ("+ varInValues+ "_SIZE)];\n"; // PICK RANDOM
 
       } else {  // Arithmetic Operation
         if(mArithOperIndex == 0 || mArithOperIndex == 4) // SUM or MEAN
@@ -1590,7 +1590,7 @@ protected:
 
         // PICK RANDOM
         } else
-          code+= ind+ outValueName +" = "+ varInValues + "[(rand() % ("+ varInValues+ "_SIZE)];\n"; // PICK RANDOM
+          code+= ind+ outValueName +" = "+ varInValues + "[rand() % ("+ varInValues+ "_SIZE)];\n"; // PICK RANDOM
       }
 
       code+= ind+ "typedef "+ varInValues+"_ELEMENT_TYPE " + outValueName+ "_TYPE;\n";
@@ -2119,7 +2119,6 @@ protected:
   inline static ThisClass* Cast(Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
   inline static const ThisClass* Cast(const Node* n) { return Node::Cast<ThisClass>(n, TYPE); }
 };
-
 //------- End of nodes classes-------
 
 static Node* TestNodeFactory(int nt, const ImVec2& pos) {
