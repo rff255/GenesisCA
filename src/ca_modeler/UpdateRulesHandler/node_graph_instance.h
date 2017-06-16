@@ -6,6 +6,8 @@
 #include <string>
 #include "imguinodegrapheditor.h"
 
+#include <QDebug>
+
 // ############
 // #--Warning
 // #--This file contains the definitions of Update Rules Editor,
@@ -106,6 +108,16 @@ void UpdateEnumNames(){
     strcpy(&NGEAttrColMappingNames[i][0], gAttrColMappingsNames[i].c_str());
 }
 
+bool MustValidate(string nodeHighestScope, string scopeStack){
+  std::size_t found = scopeStack.find(nodeHighestScope);
+  if(nodeHighestScope == "")
+    return true;
+  else if (found!=std::string::npos)
+    return false;
+  else
+    return true;
+}
+
 // NODE DEFINITIONS ================================================================
 namespace ImGui {
 enum NodeTypes {
@@ -203,12 +215,14 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    this->mScope = "S"+std::to_string(this->mNodeId)+"S";
+    qDebug()<<"Eval scope = " << QString::fromStdString(this->mScope)<< "\n";
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -221,7 +235,7 @@ protected:
     code += ind+ "  CopyPrevCellConfig();\n";
       if (outputNodes.size() > 0)
         for(Node* outNode:outputNodes)
-          code += ind+ outNode->Eval(nge, indentLevel+1);
+          code += ind+ outNode->Eval(nge, indentLevel+1, 0, this->mScope + "S"+std::to_string(outNode->mNodeId)+"S");
     code += ind+ "}\n";
 
     return code;
@@ -275,12 +289,13 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    mScope = scope;
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -355,12 +370,14 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    mScope = scope;
+    qDebug()<<"CellAttrNode scope = " << QString::fromStdString(this->mScope)<< "\n";
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -434,12 +451,13 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    mScope = scope;
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -526,12 +544,13 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    mScope = scope;
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -641,12 +660,13 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    mScope = scope;
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -754,12 +774,13 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    this->mScope = scope;
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -783,11 +804,13 @@ protected:
       string outValueName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
       static const char* operations[6] = {" == ", " != ", " > ", " < ", " >= ", " <= "};
 
-      code +=
-          inX->Eval(nge, indentLevel, inXPort) +
-          inY->Eval(nge, indentLevel, inYPort) +
-          ind+ "bool "+ outValueName +" = ("+ varInX +string(operations[mSelectedOperationIndex])+ varInY + ");\n" +
-          ind+ "typedef bool " + outValueName+ "_TYPE; \n";
+      if(MustValidate(inX->mScope, scope))
+        code += inX->Eval(nge, indentLevel, inXPort, scope);
+      if(MustValidate(inY->mScope, scope))
+        code += inY->Eval(nge, indentLevel, inYPort, scope);
+
+      code += ind+ "bool "+ outValueName +" = ("+ varInX +string(operations[mSelectedOperationIndex])+ varInY + ");\n";
+      code += ind+ "typedef bool " + outValueName+ "_TYPE; \n";
     }
 
     return code;
@@ -843,12 +866,13 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    mScope = scope;
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -871,20 +895,22 @@ protected:
       static const char* operations[4] = {" && ", " || ", " ^ ", "!"};
 
       // For NOT case
-      if(mSelectedOperationIndex == 3)
-        code +=
-            inX->Eval(nge, indentLevel, inXPort) +
-            ind+ "bool "+ outValueName +" = (!"+ varInX +");\n" +
-            ind+ "typedef bool " + outValueName+ "_TYPE; \n";
+      if(mSelectedOperationIndex == 3){
+        if(MustValidate(inX->mScope, scope))
+          code += inX->Eval(nge, indentLevel, inXPort, scope);
+        code += ind+ "bool "+ outValueName +" = (!"+ varInX +");\n";
+        code += ind+ "typedef bool " + outValueName+ "_TYPE; \n";
 
       // For AND, OR and XOR
-      else if(inY) {
+      }else if(inY) {
         string varInY = "out_" +inY->getNameOutSlot(inYPort)+ "_" + std::to_string(inY->mNodeId) + "_" + std::to_string(inYPort);
-        code +=
-            inX->Eval(nge, indentLevel, inXPort) +
-            inY->Eval(nge, indentLevel, inYPort) +
-            ind+ "bool "+ outValueName +" = ("+ varInX +string(operations[mSelectedOperationIndex])+ varInY + ");\n" +
-            ind+ "typedef bool " + outValueName+ "_TYPE; \n";
+        if(MustValidate(inX->mScope, scope))
+          code += inX->Eval(nge, indentLevel, inXPort, scope);
+        if(MustValidate(inY->mScope, scope))
+          code+= inY->Eval(nge, indentLevel, inYPort, scope);
+
+        code += ind+ "bool "+ outValueName +" = ("+ varInX +string(operations[mSelectedOperationIndex])+ varInY + ");\n";
+        code += ind+ "typedef bool " + outValueName+ "_TYPE; \n";
       }
     }
 
@@ -941,12 +967,14 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    mScope = scope;
+    qDebug()<<"SetAttrNode scope = " << QString::fromStdString(this->mScope)<< "\n";
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -958,9 +986,9 @@ protected:
     if (inValue && NGECellAttrNames.size()>=mSelectedAttrIndex) {  // Check if there is a valid attribute
       string varNewValue = "out_" +inValue->getNameOutSlot(inValuePort)+ "_" + std::to_string(inValue->mNodeId) + "_" + std::to_string(inValuePort);
 
-      code +=
-          inValue->Eval(nge, indentLevel, inValuePort) + // Here the variable out_portName_nodeID_port must be set
-          ind+ "this->ATTR_"+ NGECellAttrNames[mSelectedAttrIndex] +" = " +varNewValue+ ";\n";
+      if(MustValidate(inValue->mScope, scope))
+        code += inValue->Eval(nge, indentLevel, inValuePort, scope); // Here the variable out_portName_nodeID_port must be set
+      code += ind+ "this->ATTR_"+ NGECellAttrNames[mSelectedAttrIndex] +" = " +varNewValue+ ";\n";
     }
 
     return code;
@@ -1011,12 +1039,14 @@ public:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    mScope = scope;
+    qDebug()<<"Conditional scope = " << QString::fromStdString(this->mScope)<< "\n";
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -1031,19 +1061,20 @@ public:
     if (inIf) {
       string varCondition = "out_" +inIf->getNameOutSlot(inIfPort)+ "_" + std::to_string(inIf->mNodeId) + "_" + std::to_string(inIfPort);
 
-      code +=
-          inIf->Eval(nge, indentLevel, inIfPort) + // Here the variable out_portName_nodeID_port must be set
-          ind+ "if(" +varCondition+ "){\n";
+      if(MustValidate(inIf->mScope, scope))
+        code += inIf->Eval(nge, indentLevel, inIfPort, scope); // Here the variable out_portName_nodeID_port must be set
+
+      code += ind+ "if(" +varCondition+ "){\n";
 
       if (outputThenNodes.size() > 0) // If there is a link for THEN
         for(Node* outThen:outputThenNodes)
-          code += ind+ outThen->Eval(nge, indentLevel+1);
+          code += ind+ outThen->Eval(nge, indentLevel+1, 0, this->mScope + "S"+std::to_string(outThen->mNodeId)+"S");
 
       code += ind+ "} else {\n";
 
       if (outputElseNodes.size() > 0) // If there is a link for ELSE
         for(Node* outElse:outputElseNodes)
-          code += ind+ outElse->Eval(nge, indentLevel+1);
+          code += ind+ outElse->Eval(nge, indentLevel+1, 0, this->mScope + "S"+std::to_string(outElse->mNodeId)+"S");
 
       code += ind+ "}\n";
     }
@@ -1096,12 +1127,13 @@ public:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    mScope = scope;
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -1115,13 +1147,14 @@ public:
     if (inRepeat) {
       string varRepeatNumber = "out_" +inRepeat->getNameOutSlot(inRepeatPort)+ "_" + std::to_string(inRepeat->mNodeId) + "_" + std::to_string(inRepeatPort);
 
-      code +=
-          inRepeat->Eval(nge, indentLevel, inRepeatPort) + // Here the variable out_portName_nodeID_port must be set
-          ind+ "for(int i=0; i<" +varRepeatNumber+ ";++i){\n";
+      if(MustValidate(inRepeat->mScope, scope))
+        code += inRepeat->Eval(nge, indentLevel, inRepeatPort, scope); // Here the variable out_portName_nodeID_port must be set
+
+      code += ind+ "for(int i=0; i<" +varRepeatNumber+ ";++i){\n";
 
       if(outputNodes.size()>0) // If there is a link for DO
         for(Node* outDo:outputNodes)
-          code += ind+ outDo->Eval(nge, indentLevel+1);
+            code += ind+ outDo->Eval(nge, indentLevel+1, 0, this->mScope + "S"+std::to_string(outDo->mNodeId)+"S");
 
       code += ind+ "}\n";
     }
@@ -1167,12 +1200,13 @@ public:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    mScope = scope;
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -1184,13 +1218,13 @@ public:
     //-------------------------------------------------------------
     if (outputFirstNodes.size()>0)    // If there is a link for FIRST
       for(Node* outFirst:outputFirstNodes)
-        code += ind+ outFirst->Eval(nge, indentLevel);
+        code += ind+ outFirst->Eval(nge, indentLevel, 0, scope);
 
     if (outputThenNodes.size()>0){    // If there is a link for FIRST
       if (outputFirstNodes.size()>0)
         code += "\n";  // Extra breakline to increase readability
       for(Node* outThen:outputThenNodes)
-        code += ind+ outThen->Eval(nge, indentLevel);
+        code += ind+ outThen->Eval(nge, indentLevel, 0, scope);
     }
 
     return code;
@@ -1252,12 +1286,13 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    mScope = scope;
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -1280,10 +1315,12 @@ protected:
       string outValueName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
       static const char* operations[9] = {" + ", " - ", " * ", " / ", "sqrt", "pow", "max", "min", "MEAN"};
 
-      code +=
-          inX->Eval(nge, indentLevel, inXPort) +
-          inY->Eval(nge, indentLevel, inYPort) +
-          ind+ varInX+ "_TYPE " +outValueName+ " = ";  // Part of declaration
+      if(MustValidate(inX->mScope, scope))
+        code += inX->Eval(nge, indentLevel, inXPort, scope);
+      if(MustValidate(inY->mScope, scope))
+        code += inY->Eval(nge, indentLevel, inYPort, scope);
+
+      code += ind+ varInX+ "_TYPE " +outValueName+ " = ";  // Part of declaration
 
       // For SUM, SUB, MUL, DIV
       if(mSelectedOperationIndex < 4)
@@ -1356,12 +1393,13 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    mScope = scope;
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -1408,10 +1446,12 @@ protected:
       string numGreater = "numGreater_" + std::to_string(this->mNodeId);
       string numLesser  = "numLesser_"  + std::to_string(this->mNodeId);
 
-      code +=
-          inValues->Eval(nge, indentLevel, inValuesPort) +
-          inX->Eval(nge, indentLevel, inXPort)  +
-          ind+ "int "+numEquals+" = 0;\n"  +
+      if(MustValidate(inValues->mScope, scope))
+        code += inValues->Eval(nge, indentLevel, inValuesPort, scope);
+      if(MustValidate(inX->mScope, scope))
+        code += inX->Eval(nge, indentLevel, inXPort, scope);
+
+      code += ind+ "int "+numEquals+" = 0;\n" +
           ind+ "int "+numGreater+" = 0;\n" +
           ind+ "int "+numLesser+" = 0;\n"  +
           ind+ "bool "+ outValueName+ ";\n" +
@@ -1505,12 +1545,13 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    mScope = scope;
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -1548,7 +1589,8 @@ protected:
       //static const char* BoolOperations[5] = {"AND", "OR", "NAND", "NOR", "PICK RANDOM"};
       //static const char* ArithOperations[7] = {"SUM", "MUL", "MAX", "MIN", "MEAN", "MEDIAN", "PICK RANDOM"};
 
-      code += inValues->Eval(nge, indentLevel);
+      if(MustValidate(inValues->mScope, scope))
+        code += inValues->Eval(nge, indentLevel, inValuesPort, scope);
       if(mBooleanType) {  // Boolean Operation
         if(this->mBoolOperIndex < 2)
           code += ind+ varInValues+"_ELEMENT_TYPE "+ outValueName + " = "+ varInValues+"[0];\n";
@@ -1663,12 +1705,13 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    mScope = scope;
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -1696,10 +1739,12 @@ protected:
       string outValueName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
       static const char* operations[4] = {" == ", " != ", " > ", " < "};
 
-      code +=
-          inValues->Eval(nge, indentLevel, inValuesPort) +
-          inX->Eval(nge, indentLevel, inXPort)  +
-          ind+ "int "+ outValueName+ " = 0;\n" +
+      if(MustValidate(inValues->mScope, scope))
+        code += inValues->Eval(nge, indentLevel, inValuesPort, scope);
+      if(MustValidate(inX->mScope, scope))
+      code += inX->Eval(nge, indentLevel, inXPort, scope);
+
+      code += ind+ "int "+ outValueName+ " = 0;\n" +
           ind+ "for("+ varInValues+"_ELEMENT_TYPE "+ "elem: "+ varInValues+ ") {\n" +
           ind+ "  if(elem"+ string(operations[mSelectedOperationIndex]) + varInX +")\n" +
           ind+ "    "+ outValueName +"++;\n";
@@ -1761,12 +1806,13 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    this->mScope = "S"+std::to_string(this->mNodeId)+"S";
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -1792,7 +1838,7 @@ protected:
         code += ind+ "  typedef int " + outBName + "_TYPE;\n";
 
         for(Node* outNode:outputNodes)
-          code += ind+ outNode->Eval(nge, indentLevel+1);
+          code += ind+ outNode->Eval(nge, indentLevel+1, 0, this->mScope + "S"+std::to_string(outNode->mNodeId)+"S");
         code += ind+ "}\n";
         this->mIsProcessing = false;
       }
@@ -1860,12 +1906,13 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    mScope = scope;
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -1889,23 +1936,23 @@ protected:
       // Has a node linked at R port
       if (inR) {
         string varInR = "out_" +inR->getNameOutSlot(inRPort)+ "_" + std::to_string(inR->mNodeId) + "_" + std::to_string(inRPort);
-        code +=
-            inR->Eval(nge, indentLevel, inRPort) +
-            ind+ "this->VIEWER_"+ string(NGEAttrColMappingNames[mSelectedMapping]) +"[0] = static_cast<int>(" +varInR+ ");\n";
+        if(MustValidate(inR->mScope, scope))
+          code += inR->Eval(nge, indentLevel, inRPort, scope);
+        code += ind+ "this->VIEWER_"+ string(NGEAttrColMappingNames[mSelectedMapping]) +"[0] = static_cast<int>(" +varInR+ ");\n";
       }
 
       if (inG) {
         string varInG = "out_" +inG->getNameOutSlot(inGPort)+ "_" + std::to_string(inG->mNodeId) + "_" + std::to_string(inGPort);
-        code +=
-            inG->Eval(nge, indentLevel, inGPort) +
-            ind+ "this->VIEWER_"+ string(NGEAttrColMappingNames[mSelectedMapping]) +"[1] = static_cast<int>(" +varInG+ ");\n";
+        if(MustValidate(inG->mScope, scope))
+          code += inG->Eval(nge, indentLevel, inGPort, scope);
+        code += ind+ "this->VIEWER_"+ string(NGEAttrColMappingNames[mSelectedMapping]) +"[1] = static_cast<int>(" +varInG+ ");\n";
       }
 
       if (inB) {
         string varInB = "out_" +inB->getNameOutSlot(inBPort)+ "_" + std::to_string(inB->mNodeId) + "_" + std::to_string(inBPort);
-        code +=
-            inB->Eval(nge, indentLevel, inBPort) +
-            ind+ "this->VIEWER_"+ string(NGEAttrColMappingNames[mSelectedMapping]) +"[2] = static_cast<int>(" +varInB+ ");\n";
+        if(MustValidate(inB->mScope, scope))
+          code += inB->Eval(nge, indentLevel, inBPort, scope);
+        code += ind+ "this->VIEWER_"+ string(NGEAttrColMappingNames[mSelectedMapping]) +"[2] = static_cast<int>(" +varInB+ ");\n";
       }
     }
     return code;
@@ -1951,12 +1998,13 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    mScope = scope;
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -1969,7 +2017,7 @@ protected:
     code += ind+ "  CopyPrevCellConfig();\n";
       if (outputNodes.size() > 0)
         for(Node* outNode:outputNodes)
-          code += ind+ outNode->Eval(nge, indentLevel+1);
+          code += ind+ outNode->Eval(nge, indentLevel+1, 0, this->mScope + "S"+std::to_string(outNode->mNodeId)+"S");
     code += ind+ "}\n";
 
     return code;
@@ -2022,12 +2070,13 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    mScope = scope;
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -2038,7 +2087,7 @@ protected:
 
     // Check if there is a valid attribute
     if (NGEAttrColMappingNames.size()>0 && NGEAttrColMappingNames.size()>mSelectedMapping) {
-      string viewerName     = string(NGEAttrColMappingNames[mSelectedMapping]);
+      string viewerName = string(NGEAttrColMappingNames[mSelectedMapping]);
       if(evalPort == 0) {
         string outRName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
         code += ind+ "int "+ outRName +" = this->VIEWER_"+ viewerName +"[0];\n";
@@ -2102,12 +2151,13 @@ protected:
   }
 
   // Evaluate this node returning the code generated
-  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0){
+  virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
     string code = Node::Eval(nge, indentLevel);
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
+    mScope = scope;
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on

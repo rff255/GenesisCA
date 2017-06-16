@@ -20,6 +20,8 @@ public:
   std::string EvalGraphEditorDefaultInit();
   std::string EvalGraphEditorInputColorNodes();
 
+  void ClearScopeInformation(){mEditor.ClearScopeInformation();}
+
   void UpdateComboBoxes(std::vector<std::string> cellAttrNames,
                         std::vector<std::string> modelAttrNames,
                         std::vector<std::string> neighborhoodNames,

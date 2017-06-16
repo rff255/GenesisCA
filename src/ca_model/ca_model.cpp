@@ -316,6 +316,7 @@ std::string CAModel::GenerateHDLLCode()
 
 std::string CAModel::GenerateCPPDLLCode()
 {
+  this->mGraphEditor->ClearScopeInformation();
   string code = "";
 
   // Namespaces, includes and typedefs
@@ -372,6 +373,7 @@ std::string CAModel::GenerateHCode()
 
 std::string CAModel::GenerateCPPCode()
 {
+  this->mGraphEditor->ClearScopeInformation();
   string code = "";
 
   // Namespaces, includes and typedefs

@@ -226,6 +226,7 @@ public:
   virtual ~Node() {}
   static int NEXT_ID;
   int mNodeId;
+  std::string mScope;
   mutable void* user_ptr;
   mutable int userID;
   mutable int mNumFlowPortsOut;
@@ -238,7 +239,7 @@ public:
   inline void setOpen(bool flag) {isOpen=flag;}
 
   // Returns the code of this node in format of string (way more complex for the specific nodes)
-  virtual std::string Eval(const struct NodeGraphEditor& nge, int indentLevel, int evalPort = 0);
+  virtual std::string Eval(const struct NodeGraphEditor& nge, int indentLevel, int evalPort = 0, std::string scope = "");
 
 protected:
   FieldInfoVector fields; // I guess you can just skip these at all and implement virtual methods... but it was supposed to be useful...
@@ -299,6 +300,7 @@ protected:
   {
     mNodeId = NEXT_ID;
     NEXT_ID += 1;
+    mScope = "";
   }
   void init(const char* name, const ImVec2& pos,const char* inputSlotNamesSeparatedBySemicolons=NULL,const char* outputSlotNamesSeparatedBySemicolons=NULL,int _nodeTypeID=0/*,float currentWindowFontScale=-1.f*/);
 
@@ -342,6 +344,8 @@ public:
   typedef Node* (*NodeFactoryDelegate)(int nodeType,const ImVec2& pos);
   enum NodeState {NS_ADDED,NS_DELETED,NS_EDITED};
   enum LinkState {LS_ADDED,LS_DELETED};
+
+  void ClearScopeInformation(){for(Node* node:this->nodes)node->mScope = "";}
 
 protected:
   ImVector<Node*> nodes;          // used as a garbage collector too
