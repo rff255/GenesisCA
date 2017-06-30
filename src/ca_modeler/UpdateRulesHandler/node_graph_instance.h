@@ -5,8 +5,7 @@
 #include <vector>
 #include <string>
 #include "imguinodegrapheditor.h"
-
-#include <QDebug>
+//#include "qDebug.h"
 
 // ############
 // #--Warning
@@ -222,7 +221,6 @@ protected:
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
     this->mScope = "S"+std::to_string(this->mNodeId)+"S";
-    qDebug()<<"Eval scope = " << QString::fromStdString(this->mScope)<< "\n";
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -235,7 +233,7 @@ protected:
     code += ind+ "  CopyPrevCellConfig();\n";
       if (outputNodes.size() > 0)
         for(Node* outNode:outputNodes)
-          code += ind+ outNode->Eval(nge, indentLevel+1, 0, this->mScope + "S"+std::to_string(outNode->mNodeId)+"S");
+          code += ind+ outNode->Eval(nge, indentLevel+1, 0, this->mScope);
     code += ind+ "}\n";
 
     return code;
@@ -377,7 +375,6 @@ protected:
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
     mScope = scope;
-    qDebug()<<"CellAttrNode scope = " << QString::fromStdString(this->mScope)<< "\n";
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -974,7 +971,6 @@ protected:
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
     mScope = scope;
-    qDebug()<<"SetAttrNode scope = " << QString::fromStdString(this->mScope)<< "\n";
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -1046,7 +1042,6 @@ public:
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
     mScope = scope;
-    qDebug()<<"Conditional scope = " << QString::fromStdString(this->mScope)<< "\n";
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -1838,7 +1833,7 @@ protected:
         code += ind+ "  typedef int " + outBName + "_TYPE;\n";
 
         for(Node* outNode:outputNodes)
-          code += ind+ outNode->Eval(nge, indentLevel+1, 0, this->mScope + "S"+std::to_string(outNode->mNodeId)+"S");
+          code += ind+ outNode->Eval(nge, indentLevel+1, 0, this->mScope);
         code += ind+ "}\n";
         this->mIsProcessing = false;
       }
@@ -1935,6 +1930,8 @@ protected:
 
       // Has a node linked at R port
       if (inR) {
+        //string toBePrinted = "scopesR = " + inR->mScope+ ", " + scope;
+        //qDebug(toBePrinted.c_str());
         string varInR = "out_" +inR->getNameOutSlot(inRPort)+ "_" + std::to_string(inR->mNodeId) + "_" + std::to_string(inRPort);
         if(MustValidate(inR->mScope, scope))
           code += inR->Eval(nge, indentLevel, inRPort, scope);
@@ -2004,7 +2001,7 @@ protected:
 
     // Define the actual level of indentation
     string ind = string(indentLevel*2, ' ');
-    mScope = scope;
+    mScope = "S"+std::to_string(this->mNodeId)+"S";
     //-------------------------------------------------------------
 
     // Get the information about nodes and so on
@@ -2017,7 +2014,7 @@ protected:
     code += ind+ "  CopyPrevCellConfig();\n";
       if (outputNodes.size() > 0)
         for(Node* outNode:outputNodes)
-          code += ind+ outNode->Eval(nge, indentLevel+1, 0, this->mScope + "S"+std::to_string(outNode->mNodeId)+"S");
+          code += ind+ outNode->Eval(nge, indentLevel+1, 0, this->mScope);
     code += ind+ "}\n";
 
     return code;
@@ -2088,20 +2085,17 @@ protected:
     // Check if there is a valid attribute
     if (NGEAttrColMappingNames.size()>0 && NGEAttrColMappingNames.size()>mSelectedMapping) {
       string viewerName = string(NGEAttrColMappingNames[mSelectedMapping]);
-      if(evalPort == 0) {
-        string outRName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
-        code += ind+ "int "+ outRName +" = this->VIEWER_"+ viewerName +"[0];\n";
-        code += ind+ "typedef int " + outRName + "_TYPE;\n";
-      } else if(evalPort == 1) {
-        string outGName = "out_" + this->getNameOutSlot(1)+ "_" + std::to_string(this->mNodeId) +"_1";
-        code += ind+ "int "+ outGName +" = this->VIEWER_"+ viewerName +"[1];\n";
-        code += ind+ "typedef int " + outGName + "_TYPE;\n";
+      string outRName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
+      code += ind+ "int "+ outRName +" = this->VIEWER_"+ viewerName +"[0];\n";
+      code += ind+ "typedef int " + outRName + "_TYPE;\n";
 
-      } else {
-        string outBName = "out_" + this->getNameOutSlot(2)+ "_" + std::to_string(this->mNodeId) +"_2";
-        code += ind+ "int "+ outBName +" = this->VIEWER_"+ viewerName +"[2];\n";
-        code += ind+ "typedef int " + outBName + "_TYPE;\n";
-      }
+      string outGName = "out_" + this->getNameOutSlot(1)+ "_" + std::to_string(this->mNodeId) +"_1";
+      code += ind+ "int "+ outGName +" = this->VIEWER_"+ viewerName +"[1];\n";
+      code += ind+ "typedef int " + outGName + "_TYPE;\n";
+
+      string outBName = "out_" + this->getNameOutSlot(2)+ "_" + std::to_string(this->mNodeId) +"_2";
+      code += ind+ "int "+ outBName +" = this->VIEWER_"+ viewerName +"[2];\n";
+      code += ind+ "typedef int " + outBName + "_TYPE;\n";
     }
 
     return code;
