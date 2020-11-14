@@ -86,73 +86,17 @@ vector<string> CAModel::GetModelAttributesList()
   return attr_id_name_list;
 }
 
-// BreakCases
-string CAModel::AddBreakCase(BreakCase *new_bc) {
-  string base_id_name = new_bc->m_id_name;
-  int disambiguity_number = 1;
-  while(m_break_cases.count(new_bc->m_id_name) > 0) {
-    new_bc->m_id_name = base_id_name + std::to_string(disambiguity_number);
-    disambiguity_number++;
-  }
-
-  m_break_cases[new_bc->m_id_name] = new_bc;
-  return new_bc->m_id_name;
-}
-
-bool CAModel::DelBreakCase(string id_name) {
-  auto entry = m_break_cases.find(id_name);
-
-  if(entry == m_break_cases.end())
-    return false;
-
-  delete m_break_cases[id_name];
-  m_break_cases.erase(entry);
-
-  return true;
-}
-
-string CAModel::ModifyBreakCase(string prev_id_name, BreakCase *modified_bc) {
-  if(prev_id_name == modified_bc->m_id_name) {
-    m_break_cases[prev_id_name] = modified_bc;
-    return prev_id_name;
-  }
-
-  else {
-    DelBreakCase(prev_id_name);
-    return AddBreakCase(modified_bc);
-  }
-}
-
-BreakCase *CAModel::GetBreakCase(string id_name) {
-  if(m_break_cases.find(id_name) == m_break_cases.end())
-    return nullptr;
-  else
-    return m_break_cases[id_name];
-}
-
 // Model Properties
 void CAModel::ModifyModelProperties(
     const string &name, const string &author, const string &goal,
-    const string &description, const string &topology, const string &boundary_treatment,
-    bool is_fixed_size, int size_width, int size_height, const string &cell_attribute_initialization,
-    bool has_max_iterations, int max_iterations) {
+    const string &description, const string &boundary_treatment) {
 
   m_model_properties->m_name = name;
   m_model_properties->m_author = author;
   m_model_properties->m_goal = goal;
   m_model_properties->m_description = description;
 
-  m_model_properties->m_topology = topology;
   m_model_properties->m_boundary_treatment = boundary_treatment;
-  m_model_properties->m_is_fixed_size = is_fixed_size;
-  m_model_properties->m_size_width = size_width;
-  m_model_properties->m_size_height = size_height;
-
-  m_model_properties->m_cell_attributes_initialization = cell_attribute_initialization;
-  m_model_properties->m_has_max_iterations = has_max_iterations;
-  m_model_properties->m_max_iterations = max_iterations;
-
-  // TODO(figueiredo): add Break cases into scheme
 }
 
 // Neighborhoods
@@ -531,9 +475,6 @@ string CAModel::GenerateCAModelDeclaration(bool toDLL)
   code += "\n  // Clear\n";
   code += "  void Clear();\n";
 
-  code += "\n  // Break cases check - test stop conditions\n";
-  code += "  bool BreakCasesCheck() {return true;}\n";
-
   code += "\n  // Precompute the neighbors references of each cell\n";
   code += "  void PreComputeNeighbors();\n";
 
@@ -863,7 +804,7 @@ string CAModel::GenerateCAModelDefinition() {
   code += "\n";
 
   code +="void CAModel::StepToEnd() {\n" +
-  ind+"while(this->BreakCasesCheck())\n" +
+  ind+"while(true)\n" +
   ind+"  StepForth();\n" +
   "}\n";
 

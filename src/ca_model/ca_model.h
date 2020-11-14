@@ -2,7 +2,6 @@
 #define CA_MODEL_H
 
 #include "attribute.h"
-#include "break_case.h"
 #include "graph_node.h"
 #include "model_properties.h"
 #include "neighborhood.h"
@@ -24,15 +23,8 @@ public:
 
   // Model Properties
   void ModifyModelProperties(const string &name, const string &author, const string &goal, const string &description,
-                             const string &topology, const string &boundary_treatment, bool is_fixed_size, int size_width, int size_height,
-                             const string &cell_attribute_initialization, bool has_max_iterations, int max_iterations);
+                             const string &boundary_treatment);
   ModelProperties* GetModelProperties() { return m_model_properties; }
-
-  // Break Cases
-  string           AddBreakCase(BreakCase* new_bc);
-  bool             DelBreakCase(string id_name);
-  string           ModifyBreakCase(string prev_id_name, BreakCase* modified_bc);
-  BreakCase*       GetBreakCase(string id_name);
 
   // Attributes
   string           AddAttribute(Attribute* new_attr);
@@ -77,7 +69,6 @@ private:
 
   // The data model itself
   ModelProperties* m_model_properties;
-  std::unordered_map<string, BreakCase*>    m_break_cases;
   std::unordered_map<string, Attribute*>    m_attributes;
   std::unordered_map<string, Neighborhood*> m_neighborhoods;
   std::unordered_map<string, Mapping*>      m_mappings;
