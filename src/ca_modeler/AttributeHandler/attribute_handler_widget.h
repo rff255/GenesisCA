@@ -33,10 +33,6 @@ private slots:
 
   void SaveAttributeModifications();
 
-  void on_cb_attribute_type_currentIndexChanged(const QString &arg1);
-
-  void on_cb_list_type_currentIndexChanged(const QString &arg1);
-
   void on_pb_add_cell_attribute_released();
 
   void on_pb_delete_cell_attribute_released();
@@ -44,10 +40,6 @@ private slots:
   void on_pb_add_model_attribute_released();
 
   void on_pb_delete_model_attribute_released();
-
-  void on_pb_add_value_released();
-
-  void on_pb_remove_value_released();
 
   void on_lw_cell_attributes_itemSelectionChanged();
 

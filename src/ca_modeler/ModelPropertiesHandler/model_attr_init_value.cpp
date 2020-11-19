@@ -35,39 +35,6 @@ void ModelAttrInitValue::SetWidgetDetails(Attribute* corresponding_attribute) {
   else if (attr_type == "Float")
     ui->stk_type_pages->setCurrentWidget(ui->page_float);
 
-  else if (attr_type == "List") {
-    std::string list_type = corresponding_attribute->m_list_type;
-
-    if (list_type == "Bool")
-      ui->stk_type_pages->setCurrentWidget(ui->page_bool);
-
-    else if (list_type == "Integer")
-      ui->stk_type_pages->setCurrentWidget(ui->page_integer);
-
-    else if (list_type == "Float")
-      ui->stk_type_pages->setCurrentWidget(ui->page_float);
-
-    else if (list_type == "User Defined")
-      ui->stk_type_pages->setCurrentWidget(ui->page_user_defined);
-
-      // Add allowed values
-      ui->cb_value->clear();
-      if(corresponding_attribute->m_user_defined_values != nullptr)
-        for (int i=0; i < corresponding_attribute->m_user_defined_values->size(); ++i)
-          ui->cb_value->addItem(QString::fromStdString((*corresponding_attribute->m_user_defined_values)[i]));
-      ui->cb_value->setCurrentIndex(0);
-
-  } else if (attr_type == "User Defined") {
-    ui->stk_type_pages->setCurrentWidget(ui->page_user_defined);
-
-    // Add allowed values
-    ui->cb_value->clear();
-    if(corresponding_attribute->m_user_defined_values != nullptr)
-      for (int i=0; i < corresponding_attribute->m_user_defined_values->size(); ++i)
-        ui->cb_value->addItem(QString::fromStdString((*corresponding_attribute->m_user_defined_values)[i]));
-    ui->cb_value->setCurrentIndex(0);
-  }
-
   m_curr_page = ui->stk_type_pages->currentWidget();
   EmitValueChanged();
 }
