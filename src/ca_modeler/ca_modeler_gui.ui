@@ -63,7 +63,7 @@ background: rgb(240, 240, 240);
        <enum>QTabWidget::Rounded</enum>
       </property>
       <property name="currentIndex">
-       <number>2</number>
+       <number>0</number>
       </property>
       <property name="movable">
        <bool>true</bool>
@@ -200,6 +200,7 @@ background: rgb(240, 240, 240);
     </item>
    </layout>
   </widget>
+  <widget class="QStatusBar" name="statusbar"/>
   <widget class="QMenuBar" name="menu">
    <property name="geometry">
     <rect>
@@ -223,13 +224,6 @@ background: rgb(240, 240, 240);
     <addaction name="act_export"/>
     <addaction name="separator"/>
     <addaction name="act_quit"/>
-   </widget>
-   <widget class="QMenu" name="menu_settings">
-    <property name="title">
-     <string>Settings</string>
-    </property>
-    <addaction name="act_preferences"/>
-    <addaction name="action_DEV_Use_Preexisting_Code"/>
    </widget>
    <widget class="QMenu" name="menu_build">
     <property name="title">
@@ -272,27 +266,37 @@ background: rgb(240, 240, 240);
     <addaction name="act_quick_tutorial"/>
    </widget>
    <addaction name="menu_file"/>
-   <addaction name="menu_settings"/>
    <addaction name="menu_build"/>
    <addaction name="menu_help"/>
   </widget>
-  <widget class="QStatusBar" name="statusbar"/>
   <action name="act_new">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
    <property name="text">
     <string>New...</string>
    </property>
   </action>
   <action name="act_open">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
    <property name="text">
     <string>Open...</string>
    </property>
   </action>
   <action name="act_save">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
    <property name="text">
     <string>Save</string>
    </property>
   </action>
   <action name="act_saveas">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
    <property name="text">
     <string>Save As...</string>
    </property>
@@ -406,6 +410,9 @@ background: rgb(240, 240, 240);
    </property>
   </action>
   <action name="act_create_model_summary">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
    <property name="text">
     <string>Create Model Summary</string>
    </property>
@@ -416,16 +423,25 @@ background: rgb(240, 240, 240);
    </property>
   </action>
   <action name="act_what_is_a_cellular_automata">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
    <property name="text">
     <string>What is a Cellular Automata?</string>
    </property>
   </action>
   <action name="act_quick_tutorial">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
    <property name="text">
     <string>Quick Tutorial</string>
    </property>
   </action>
   <action name="act_about_genesis">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
    <property name="text">
     <string>About Genesis</string>
    </property>
