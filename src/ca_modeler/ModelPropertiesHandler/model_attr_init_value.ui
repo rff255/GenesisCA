@@ -103,7 +103,7 @@
          <bool>true</bool>
         </property>
         <property name="currentIndex">
-         <number>2</number>
+         <number>0</number>
         </property>
         <widget class="QWidget" name="page_bool">
          <layout class="QHBoxLayout" name="horizontalLayout_4">
@@ -189,6 +189,9 @@ QCheckBox#check_value::checked {
           </property>
           <item>
            <widget class="QDoubleSpinBox" name="dsb_value">
+            <property name="decimals">
+             <number>10</number>
+            </property>
             <property name="minimum">
              <double>-99999.990000000005239</double>
             </property>
