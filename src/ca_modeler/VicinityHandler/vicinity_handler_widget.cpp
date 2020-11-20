@@ -140,11 +140,6 @@ void VicinityHandlerWidget::SaveNeighborhoodModification() {
   emit NeighborhoodListChanged();
 }
 
-void VicinityHandlerWidget::on_pb_add_tag_released() {
-  QMessageBox msgBox;
-  msgBox.setText("Select a valid neighbor.");
-  msgBox.exec();
-}
 
 std::vector<std::pair<int, int>>* VicinityHandlerWidget::GetCurrentNeighborhood() {
   std::vector<std::pair<int, int>>* neighbor_coords = new std::vector<std::pair<int,int>>();

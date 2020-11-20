@@ -63,7 +63,7 @@ background: rgb(240, 240, 240);
        <enum>QTabWidget::Rounded</enum>
       </property>
       <property name="currentIndex">
-       <number>0</number>
+       <number>2</number>
       </property>
       <property name="movable">
        <bool>true</bool>
@@ -120,7 +120,7 @@ background: rgb(240, 240, 240);
       </widget>
       <widget class="QWidget" name="tab_vicinities">
        <attribute name="title">
-        <string>Vicinities (Neighborhood/ Partition)</string>
+        <string>Vicinities (Neighborhood)</string>
        </attribute>
        <attribute name="toolTip">
         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Group the different neighborhoods used by the Update Rules, as well as different partitions (userful to block CAs)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>

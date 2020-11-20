@@ -31,8 +31,6 @@ private slots:
   void SaveNeighborhoodModification();
   std::vector<std::pair<int, int>>* GetCurrentNeighborhood();
 
-  void on_pb_add_tag_released();
-
   void on_pb_add_neighborhood_released();
 
   void on_pb_delete_neighborhood_released();
