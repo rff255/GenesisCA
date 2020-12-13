@@ -28,24 +28,14 @@ UpdateRulesHandler::~UpdateRulesHandler()
   delete ui;
 }
 
-void UpdateRulesHandler::UpdateEditorComboBoxes()
-{
-  std::vector<int> neighborhoodSizes;
-  for(auto neighborhood: m_ca_model->GetNeighborhoodList()) {
-    Neighborhood* neigh = m_ca_model->GetNeighborhood(neighborhood);
-    int size = 0;
-    if(neigh->m_neighbor_coords)
-      size = neigh->m_neighbor_coords->size();
-    neighborhoodSizes.push_back(size);
-  }
-
-  m_ca_model->GetGraphEditor()->UpdateComboBoxes(m_ca_model->GetCellAttributesList(),
-                                m_ca_model->GetModelAttributesList(),
-                                m_ca_model->GetNeighborhoodList(),
-                                m_ca_model->GetColAttrMappingsList(),
-                                m_ca_model->GetAttrColMappingsList(),
-                                neighborhoodSizes);
+void UpdateRulesHandler::set_m_ca_model(CAModel* model) {
+  m_ca_model = model;
 }
+
+void UpdateRulesHandler::UpdateEditorComboBoxes() {
+  m_ca_model->UpdateComboBoxes();
+}
+
 static void error_callback(int error, const char* description)
 {
     qDebug()<< stderr << "Error %d: %s\n" << error << description;
@@ -73,16 +63,6 @@ void UpdateRulesHandler::on_pbtn_open_node_graph_editor_released()
   // Setup ImGui binding
   ImGui_ImplGlfw_Init(mNGEWindow, true);
 
-  // Load Fonts
-  // (there is a default font, this is only if you want to change it. see extra_fonts/README.txt for more details)
-  //ImGuiIO& io = ImGui::GetIO();
-  //io.Fonts->AddFontDefault();
-  //io.Fonts->AddFontFromFileTTF("../../extra_fonts/Cousine-Regular.ttf", 15.0f);
-  //io.Fonts->AddFontFromFileTTF("../../extra_fonts/DroidSans.ttf", 16.0f);
-  //io.Fonts->AddFontFromFileTTF("../../extra_fonts/ProggyClean.ttf", 13.0f);
-  //io.Fonts->AddFontFromFileTTF("../../extra_fonts/ProggyTiny.ttf", 10.0f);
-  //io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf", 18.0f, NULL, io.Fonts->GetGlyphRangesJapanese());
-
   char novoAttr[MAX_ENUM_NAME_LENGTH];
   novoAttr[0] = '\0';
   char addedAttr[MAX_ENUM_NAME_LENGTH];
@@ -90,35 +70,21 @@ void UpdateRulesHandler::on_pbtn_open_node_graph_editor_released()
 
   ImVec4 clear_color = ImColor(114, 144, 154);
 
-  // Initialize Node graph editor nge (add initial nodes conections and so on)
-  m_ca_model->GetGraphEditor()->Init();
-  UpdateEditorComboBoxes(); // Synchonize model with editor combo boxes options
-
   int resized_width;
   int resized_height;
   // Main loop
   while (!glfwWindowShouldClose(mNGEWindow))
   {
-//    // Test to refresh the options of combox
-//    TestEnumNamesClear();
-//    std::vector<std::string> attrNameList = m_ca_model->GetAttributesList();
-//    for(std::string attrName :   attrNameList)
-//      TestEnumNamesInsert(attrName.c_str());
-
       glfwPollEvents();
       ImGui_ImplGlfw_NewFrame();
 
       glfwGetWindowSize(mNGEWindow,&resized_width, &resized_height);
       ImGui::SetNextWindowSize(ImVec2(resized_width, resized_height), ImGuiSetCond_Always);
       ImGui::SetNextWindowPos(ImVec2(0,0), ImGuiSetCond_Once);
-      //ImGui::SetNextWindowSizeConstraints(ImVec2(resized_width, resized_height), ImVec2(resized_width, resized_height));
-      ImGui::Begin("Beringela", nullptr, ImGuiWindowFlags_NoResize |
+      ImGui::Begin("BeginName", nullptr, ImGuiWindowFlags_NoResize |
                                          ImGuiWindowFlags_NoMove |
                                          ImGuiWindowFlags_NoCollapse |
                                          ImGuiWindowFlags_NoTitleBar);
-                                         //ImGuiWindowFlags_ShowBorders |
-                                         //ImGuiWindowFlags_NoSavedSettings |
-      //ImGui::Text("DELICIA DE ABACAXI");
       m_ca_model->GetGraphEditor()->Render();
       //nge.render();
       ImGui::End();

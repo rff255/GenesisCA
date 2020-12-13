@@ -146,7 +146,7 @@
        <number>0</number>
       </property>
       <item row="0" column="0">
-       <widget class="QGroupBox" name="gb_structury">
+       <widget class="QGroupBox" name="gb_topology">
         <property name="sizePolicy">
          <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
           <horstretch>0</horstretch>
@@ -163,7 +163,7 @@
          <string notr="true"/>
         </property>
         <property name="title">
-         <string>Structury</string>
+         <string>Topology</string>
         </property>
         <property name="flat">
          <bool>false</bool>

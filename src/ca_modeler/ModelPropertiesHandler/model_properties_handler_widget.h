@@ -22,8 +22,10 @@ public:
   ~ModelPropertiesHandlerWidget();
 
   void ConfigureCB();
+  // Read model properties and setup ui accordingly.
+  void SyncUIWithModel();
 
-  void set_m_ca_model(CAModel* model) {m_ca_model = model;}
+  void set_m_ca_model(CAModel* model);
 
 public slots:
   void AddModelAttributesInitItem(std::string id_name);

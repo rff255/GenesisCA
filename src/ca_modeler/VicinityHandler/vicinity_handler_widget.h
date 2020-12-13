@@ -25,11 +25,12 @@ public:
   void ResetNeighborhood();
   void LoadNeighborhood(QListWidgetItem* curr_item);
 
-  void set_m_ca_model(CAModel* model) {m_ca_model = model;}
+  void SyncUIWithModel();
+  void set_m_ca_model(CAModel* model);
 
 private slots:
   void SaveNeighborhoodModification();
-  std::vector<std::pair<int, int>>* GetCurrentNeighborhood();
+  std::vector<std::pair<int, int>> GetCurrentNeighborhood();
 
   void on_pb_add_neighborhood_released();
 

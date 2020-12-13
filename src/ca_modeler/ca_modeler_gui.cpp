@@ -3,6 +3,8 @@
 #include "attribute_handler_widget.h"
 #include "vicinity_handler_widget.h"
 
+#include "../JSON_nlohmann/json.hpp"
+
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QDebug>
@@ -11,6 +13,7 @@
 #include <fstream>
 #include <stdlib.h>
 
+using json = nlohmann::json;
 CAModelerGUI::CAModelerGUI(QWidget *parent) :
   QMainWindow(parent),
   ui(new Ui::CAModelerGUI),
@@ -48,14 +51,92 @@ void CAModelerGUI::SetupWidgets() {
 }
 
 void CAModelerGUI::PassModel() {
-  ui->wgt_attribute_handler->set_m_ca_model(m_ca_model);
   ui->wgt_model_properties_handler->set_m_ca_model(m_ca_model);
+  ui->wgt_attribute_handler->set_m_ca_model(m_ca_model);
   ui->wgt_vicinities_handler->set_m_ca_model(m_ca_model);
   ui->wgt_update_rules_handler->set_m_ca_model(m_ca_model);
   ui->wgt_color_mappings_handler->set_m_ca_model(m_ca_model);
 }
 
 // Slots:
+void CAModelerGUI::on_act_open_triggered() {
+  QFileDialog open(this, tr("Open..."), "", tr("GenesisCA Project (*.gcaproj)"));
+  open.setFileMode(QFileDialog::ExistingFile);
+  open.setAcceptMode(QFileDialog::AcceptOpen);
+
+  json deserialized_data;
+  if(open.exec()) {
+    QString filename = open.selectedFiles().first();
+
+    //QFile file(filename);
+    //if (file.open(QFile::ReadOnly | QFile::Text)) {
+      std::ifstream stream(filename.toStdString());
+      deserialized_data << stream;
+      stream.close();
+
+      // Replace current model by the deserialized one.
+      auto old_ca_model = m_ca_model;
+      m_ca_model = new CAModel();
+      m_ca_model->InitFromSerializedData(deserialized_data);
+      this->PassModel();
+      delete old_ca_model;
+
+      QMessageBox::information(this, "Project Open", "Project successfully opened.");
+    //} else {
+    //  qDebug() << "file open error";
+    //}
+  }
+
+
+
+//  // DELETE ME (just testing how the gui reacts if the model is not empty when the screens are being initialized)
+//  auto old_ca_model = m_ca_model;
+//  m_ca_model = new CAModel();
+//  m_ca_model->ModifyModelProperties("jujubas", "Jubileu", "Be happy and test if widgets sync", "nothing here", "Torus");
+//  m_ca_model->AddAttribute(new Attribute("brush_probability", cb_attribute_type_values[2], "Controls the probability of set to alive", "0.31415", true));
+//  m_ca_model->AddAttribute(new Attribute("born_probability", cb_attribute_type_values[2], "bla", "0.5", true));
+//  m_ca_model->AddAttribute(new Attribute("alive", cb_attribute_type_values[0], "Stores if the cell is alive", "false", false));
+//  std::vector<std::pair<int, int>> neighbor_coords;
+
+//  neighbor_coords.push_back(std::pair<int,int>(-1, 0));
+//  neighbor_coords.push_back(std::pair<int,int>(2, 0));
+//  neighbor_coords.push_back(std::pair<int,int>(0, -3));
+//  neighbor_coords.push_back(std::pair<int,int>(0, 4));
+//  m_ca_model->AddNeighborhood(new Neighborhood("skewed_cross", "Up, down, left and right", neighbor_coords));
+
+//  m_ca_model->AddMapping(new Mapping("show_alive", "show which cells are alive in black", "nothing special", "idem", "idem", true));
+//  m_ca_model->AddMapping(new Mapping("set_alive", "Set cells as alive or dead", "if > 0 then set the cell as 'alive' otherwise set as 'dead'", "does nothing", "does nothing", false));
+
+//  nlohmann::json default_rules = nlohmann::json::parse("{\"editor_setup\":null,\"links\":[{\"link_in_node\":2,\"link_in_port\":0,\"link_out_node\":11,\"link_out_port\":0},{\"link_in_node\":11,\"link_in_port\":0,\"link_out_node\":12,\"link_out_port\":0},{\"link_in_node\":6,\"link_in_port\":0,\"link_out_node\":4,\"link_out_port\":0},{\"link_in_node\":7,\"link_in_port\":0,\"link_out_node\":4,\"link_out_port\":1},{\"link_in_node\":5,\"link_in_port\":0,\"link_out_node\":12,\"link_out_port\":1},{\"link_in_node\":12,\"link_in_port\":0,\"link_out_node\":1,\"link_out_port\":0},{\"link_in_node\":3,\"link_in_port\":0,\"link_out_node\":1,\"link_out_port\":1},{\"link_in_node\":9,\"link_in_port\":0,\"link_out_node\":13,\"link_out_port\":1},{\"link_in_node\":12,\"link_in_port\":1,\"link_out_node\":13,\"link_out_port\":0},{\"link_in_node\":10,\"link_in_port\":0,\"link_out_node\":8,\"link_out_port\":0},{\"link_in_node\":10,\"link_in_port\":1,\"link_out_node\":0,\"link_out_port\":0},{\"link_in_node\":11,\"link_in_port\":1,\"link_out_node\":10,\"link_out_port\":0},{\"link_in_node\":5,\"link_in_port\":0,\"link_out_node\":10,\"link_out_port\":1}],\"nodes\":[{\"node_data\":\"{\\\"mFirstNumberF\\\":0.0,\\\"mFirstNumberI\\\":0,\\\"mProbability\\\":0.0,\\\"mSecondNumberF\\\":0.0,\\\"mSecondNumberI\\\":0,\\\"mSelectedAttrIndex\\\":0,\\\"mUseModelAttr\\\":true,\\\"mValueType\\\":0}\",\"node_id\":7,\"node_pos\":[-43.0,-13.5],\"node_type\":5},{\"node_data\":\"{\\\"mSelectedAttrIndex\\\":0}\",\"node_id\":1,\"node_pos\":[596.0,169.5],\"node_type\":8},{\"node_data\":\"\",\"node_id\":2,\"node_pos\":[-501.0,184.0],\"node_type\":0},{\"node_data\":\"{\\\"mFirstNumberF\\\":0.0,\\\"mFirstNumberI\\\":0,\\\"mProbability\\\":0.0,\\\"mSecondNumberF\\\":0.0,\\\"mSecondNumberI\\\":0,\\\"mSelectedAttrIndex\\\":1,\\\"mUseModelAttr\\\":true,\\\"mValueType\\\":0}\",\"node_id\":9,\"node_pos\":[-23.0,368.5],\"node_type\":5},{\"node_data\":\"{\\\"mSelectedAttrIndex\\\":0}\",\"node_id\":4,\"node_pos\":[174.0,-55.5],\"node_type\":8},{\"node_data\":\"{\\\"mSelectedAttrIndex\\\":0}\",\"node_id\":5,\"node_pos\":[-221.0,219.5],\"node_type\":2},{\"node_data\":\"{\\\"mSelectedMapping\\\":0}\",\"node_id\":6,\"node_pos\":[-228.0,-51.5],\"node_type\":16},{\"node_data\":\"{\\\"mFirstNumberF\\\":0.0,\\\"mFirstNumberI\\\":0,\\\"mProbability\\\":0.9099999666213989,\\\"mSecondNumberF\\\":0.0,\\\"mSecondNumberI\\\":0,\\\"mSelectedAttrIndex\\\":0,\\\"mUseModelAttr\\\":false,\\\"mValueType\\\":0}\",\"node_id\":3,\"node_pos\":[374.0,207.5],\"node_type\":5},{\"node_data\":\"{\\\"mDefaultColor\\\":[0.019607843831181526,0.03921568766236305,0.0784313753247261],\\\"mSelectedMapping\\\":0,\\\"mUseDefaultColor\\\":true}\",\"node_id\":8,\"node_pos\":[-234.0,365.5],\"node_type\":17},{\"node_data\":\"{\\\"mDefaultColor\\\":[1.0,0.9607843160629272,0.9215686321258545],\\\"mSelectedMapping\\\":0,\\\"mUseDefaultColor\\\":true}\",\"node_id\":0,\"node_pos\":[-228.0,525.5],\"node_type\":17},{\"node_data\":\"\",\"node_id\":10,\"node_pos\":[-417.0,367.5],\"node_type\":9},{\"node_data\":\"\",\"node_id\":11,\"node_pos\":[-355.0,187.5],\"node_type\":11},{\"node_data\":\"\",\"node_id\":12,\"node_pos\":[-14.0,174.0],\"node_type\":9},{\"node_data\":\"{\\\"mSelectedAttrIndex\\\":0}\",\"node_id\":13,\"node_pos\":[197.0,325.5],\"node_type\":8}]}");
+
+//  m_ca_model->SetGraphEditor(default_rules);
+
+//  this->PassModel();
+//  delete old_ca_model;
+//  // DELETE ME (just testing how the gui reacts if the model is not empty when the screens are being initialized)
+}
+
+void CAModelerGUI::on_act_saveas_triggered() {
+  QFileDialog save_as(this, tr("Save As..."), "", tr("GenesisCA Project (*.gcaproj)"));
+  save_as.setFileMode(QFileDialog::AnyFile);
+  save_as.setAcceptMode(QFileDialog::AcceptSave);
+  save_as.setDefaultSuffix(".gcaproj");
+
+  if(save_as.exec()) {
+    QString filename = save_as.selectedFiles().first();
+
+    //QFile file(filename);
+    //if (file.open(QIODevice::WriteOnly)) {
+      std::ofstream stream(filename.toStdString());
+      stream << m_ca_model->GetSerializedData().dump() << std::endl;
+      stream.close();
+
+      QMessageBox::information(this, "Project Saved", "Project successfully saved.");
+    //} else {
+    //  qDebug() << "file open error";
+    //}
+  }
+}
 
 void CAModelerGUI::on_act_quit_triggered() {
   // TODO(figueiredo): check for unsaved changes and open dialog asking for confirmation

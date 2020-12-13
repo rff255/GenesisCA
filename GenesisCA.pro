@@ -75,6 +75,7 @@ HEADERS  += \
     src/ca_modeler/UpdateRulesHandler/update_rules_editor.h \
     src/ca_model/mapping.h \
     src/ca_modeler/ColorMappingsHandler/color_mappings_handler_widget.h
+    src/JSON_nlohmann/json.hpp
 
 FORMS    += \
     src/ca_modeler/ca_modeler_gui.ui \

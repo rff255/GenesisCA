@@ -107,14 +107,29 @@ void VicinityHandlerWidget::LoadNeighborhood(QListWidgetItem *curr_item) {
   ui->txt_description->setPlainText(QString::fromStdString(m_ca_model->GetNeighborhood(curr_item->text().toStdString())->m_description));
 
   // Board
-  std::vector<std::pair<int,int>>* neighbor_coords = m_ca_model->GetNeighborhood(curr_item->text().toStdString())->m_neighbor_coords;
-  if(neighbor_coords != nullptr)
-    for(int i=0; i<neighbor_coords->size(); ++i)
-      dynamic_cast<QToolButton*>(ui->grid_layout->itemAtPosition((*neighbor_coords)[i].first + m_neighbors_margin_size, (*neighbor_coords)[i].second + m_neighbors_margin_size)->widget())->setChecked(true);
+  std::vector<std::pair<int,int>> neighbor_coords = m_ca_model->GetNeighborhood(curr_item->text().toStdString())->m_neighbor_coords;
+  for(int i=0; i<neighbor_coords.size(); ++i)
+    dynamic_cast<QToolButton*>(ui->grid_layout->itemAtPosition(neighbor_coords[i].first + m_neighbors_margin_size, neighbor_coords[i].second + m_neighbors_margin_size)->widget())->setChecked(true);
   m_is_loading = false;
 
   ui->gb_vicinity_layout->setEnabled(true);
   ui->gb_vicinity_details->setEnabled(true);
+}
+
+void VicinityHandlerWidget::SyncUIWithModel() {
+  ui->lw_neighborhoods->blockSignals(true);
+  this->ResetNeighborhood();
+  // Sync model neighborhood list
+  ui->lw_neighborhoods->clear();
+  for (string neighborhood_name : m_ca_model->GetNeighborhoodList()) {
+    ui->lw_neighborhoods->addItem(QString::fromStdString(neighborhood_name));
+  }
+  ui->lw_neighborhoods->blockSignals(false);
+}
+
+void VicinityHandlerWidget::set_m_ca_model(CAModel* model) {
+  m_ca_model = model;
+  SyncUIWithModel();
 }
 
 void VicinityHandlerWidget::SaveNeighborhoodModification() {
@@ -125,7 +140,7 @@ void VicinityHandlerWidget::SaveNeighborhoodModification() {
   if(curr_item == nullptr)
     return;
 
-  std::vector<std::pair<int,int>>* curr_neighbor_coords = GetCurrentNeighborhood();
+  std::vector<std::pair<int,int>> curr_neighbor_coords = GetCurrentNeighborhood();
   Neighborhood* modified_neighborhood = new Neighborhood(ui->txt_neighborhood_name->text().toStdString(),
                                                          ui->txt_description->toPlainText().toStdString(),
                                                          curr_neighbor_coords);
@@ -141,14 +156,14 @@ void VicinityHandlerWidget::SaveNeighborhoodModification() {
 }
 
 
-std::vector<std::pair<int, int>>* VicinityHandlerWidget::GetCurrentNeighborhood() {
-  std::vector<std::pair<int, int>>* neighbor_coords = new std::vector<std::pair<int,int>>();
+std::vector<std::pair<int, int>> VicinityHandlerWidget::GetCurrentNeighborhood() {
+  std::vector<std::pair<int, int>> neighbor_coords;
 
   int span = 2*m_neighbors_margin_size + 1;
   for(int i=0; i<span; ++i) {
     for (int j=0; j<span; ++j) {
       if(dynamic_cast<QToolButton*>(ui->grid_layout->itemAtPosition(i, j)->widget())->isChecked())
-        neighbor_coords->push_back(std::pair<int,int>(i-m_neighbors_margin_size, j-m_neighbors_margin_size));
+        neighbor_coords.push_back(std::pair<int,int>(i-m_neighbors_margin_size, j-m_neighbors_margin_size));
     }
   }
 
@@ -156,7 +171,7 @@ std::vector<std::pair<int, int>>* VicinityHandlerWidget::GetCurrentNeighborhood(
 }
 
 void VicinityHandlerWidget::on_pb_add_neighborhood_released() {
-  std::string name_id = m_ca_model->AddNeighborhood(new Neighborhood("New neighborhood", "", nullptr));
+  std::string name_id = m_ca_model->AddNeighborhood(new Neighborhood("New neighborhood", "", {}));
   ui->lw_neighborhoods->addItem(QString::fromStdString(name_id));
   ui->lw_neighborhoods->setCurrentRow(ui->lw_neighborhoods->count()-1);
 

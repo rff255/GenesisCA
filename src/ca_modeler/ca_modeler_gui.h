@@ -23,6 +23,8 @@ public:
 public slots:
 
 private slots:
+  void on_act_open_triggered();
+  void on_act_saveas_triggered();
   void on_act_quit_triggered();
 
   void on_act_run_triggered();

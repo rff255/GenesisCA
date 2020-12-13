@@ -98,6 +98,31 @@ void AttributeHandlerWidget::ConfigureCB() {
     ui->cb_attribute_type->addItem(QString::fromStdString(cb_attribute_type_values[i]));
 }
 
+void AttributeHandlerWidget::SyncUIWithModel() {
+  this->ResetAttributesProperties();
+
+  // Sync list of attributes
+  ui->lw_model_attributes->blockSignals(true);
+  ui->lw_cell_attributes->blockSignals(true);
+  ui->lw_model_attributes->clear();
+  ui->lw_cell_attributes->clear();
+  for(string attribute_name : m_ca_model->GetAttributesList()) {
+    const Attribute* attribute = m_ca_model->GetAttribute(attribute_name);
+    if(attribute->m_is_model_attribute) {
+      ui->lw_model_attributes->addItem(QString::fromStdString(attribute_name));
+    } else {
+      ui->lw_cell_attributes->addItem(QString::fromStdString(attribute_name));
+    }
+  }
+  ui->lw_model_attributes->blockSignals(false);
+  ui->lw_cell_attributes->blockSignals(false);
+}
+
+void AttributeHandlerWidget::set_m_ca_model(CAModel* model) {
+  m_ca_model = model;
+  this->SyncUIWithModel();
+}
+
 void AttributeHandlerWidget::on_pb_add_cell_attribute_released() {
   std::string name_id = m_ca_model->AddAttribute(new Attribute("New cell attribute",
                                                                cb_attribute_type_values[0], "", "", false));

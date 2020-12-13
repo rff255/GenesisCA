@@ -21,8 +21,8 @@ public:
   void SetupWidgets();
   void ResetMappingsProperties();
 
-  void set_m_ca_model(CAModel* model) {m_ca_model = model;}
-
+  void SyncUIWithModel() ;
+  void set_m_ca_model(CAModel* model);
 private:
   void LoadMappingsProperties(QListWidgetItem* curr_item);
 

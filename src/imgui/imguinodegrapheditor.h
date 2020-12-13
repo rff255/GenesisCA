@@ -240,6 +240,8 @@ public:
 
   // Returns the code of this node in format of string (way more complex for the specific nodes)
   virtual std::string Eval(const struct NodeGraphEditor& nge, int indentLevel, int evalPort = 0, std::string scope = "");
+  virtual std::string GetSerializedData() const {return "";}
+  virtual void SetupFromSerializedData(std::string serialized_data) {}
 
 protected:
   FieldInfoVector fields; // I guess you can just skip these at all and implement virtual methods... but it was supposed to be useful...
@@ -306,7 +308,10 @@ protected:
 
   inline ImVec2 GetInputSlotPos(int slot_no,float currentFontWindowScale=1.f) const   { return ImVec2(Pos.x*currentFontWindowScale,           Pos.y*currentFontWindowScale + Size.y * ((float)slot_no+1) / ((float)InputsCount+1)); }
   inline ImVec2 GetOutputSlotPos(int slot_no,float currentFontWindowScale=1.f) const  { return ImVec2(Pos.x*currentFontWindowScale + Size.x,  Pos.y*currentFontWindowScale + Size.y * ((float)slot_no+1) / ((float)OutputsCount+1)); }
+
+  public:
   inline const ImVec2 GetPos(float currentFontWindowScale=1.f) const {return ImVec2(Pos.x*currentFontWindowScale,Pos.y*currentFontWindowScale);}
+  protected:
 
   friend struct NodeLink;
   friend struct NodeGraphEditor;
@@ -552,7 +557,7 @@ public:
     nodeListFilterComboIndex = 0;
   }
 
-  bool isInited() const {return !inited;}
+  bool isInited() const {return inited;}
 
   bool isEmpty() const {return nodes.size()==0;}
 
@@ -642,6 +647,14 @@ public:
   int getAllNodesOfType(int typeID,ImVector<const Node*>* pNodesOut=NULL,bool clearNodesOutBeforeUsage=true) const;
   int getNumNodes() const {return nodes.size();}
   Node* getNode(int index) {return (index>=0 && index<nodes.size()) ? nodes[index] : NULL;}
+  Node* getNodeById(int id) {
+    for (int i=0;i<nodes.size();i++)    {
+      Node* n = nodes[i];
+      if (n->mNodeId==id) return n;
+    }
+    return NULL;}
+  int getNumLinks() const {return links.size();}
+  NodeLink* getLink(int index){return (index>=0 && index<links.size()) ? &links[index] : NULL;}
 
   // It should be better not to add/delete node/links in the callbacks... (but all is untested here)
   void setNodeCallback(NodeCallback cb) {nodeCallback=cb;}

@@ -9,6 +9,8 @@
 #include "mapping.h"
 #include "update_rules_editor.h"
 
+#include "../JSON_nlohmann/json.hpp"
+
 #include <unordered_map>
 #include <string>
 #include <vector>
@@ -21,10 +23,14 @@ public:
   CAModel();
   ~CAModel();
 
+  nlohmann::json GetSerializedData();
+  // Assumes this is a new instance, thus no prior "clear" is performed.
+  void InitFromSerializedData(nlohmann::json data);
+
   // Model Properties
   void ModifyModelProperties(const string &name, const string &author, const string &goal, const string &description,
                              const string &boundary_treatment);
-  ModelProperties* GetModelProperties() { return m_model_properties; }
+  const ModelProperties* GetModelProperties() { return m_model_properties; }
 
   // Attributes
   string           AddAttribute(Attribute* new_attr);
@@ -52,7 +58,9 @@ public:
   vector<string>   GetAttrColMappingsList();
 
   // Nodes Graph Editor
-  UpdateRulesEditor* GetGraphEditor() {return mGraphEditor;}
+  UpdateRulesEditor* GetGraphEditor() {return m_rules_editor;}
+  void SetGraphEditor(nlohmann::json graph_editor);
+  void UpdateComboBoxes();
 
   string GenerateHDLLCode();
   string GenerateCPPDLLCode();
@@ -72,7 +80,8 @@ private:
   std::unordered_map<string, Attribute*>    m_attributes;
   std::unordered_map<string, Neighborhood*> m_neighborhoods;
   std::unordered_map<string, Mapping*>      m_mappings;
-  UpdateRulesEditor* mGraphEditor;
+  // TODO: This member has to change to a tree-based or any syntax representation, rather than the whole editor
+  UpdateRulesEditor* m_rules_editor;
 };
 
 #endif // CA_MODEL_H

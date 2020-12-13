@@ -21,7 +21,7 @@ public:
   explicit UpdateRulesHandler(QWidget *parent = 0);
   ~UpdateRulesHandler();
 
-  void set_m_ca_model(CAModel* model) {m_ca_model = model;}
+  void set_m_ca_model(CAModel* model);
 
 private slots:
   void UpdateEditorComboBoxes();

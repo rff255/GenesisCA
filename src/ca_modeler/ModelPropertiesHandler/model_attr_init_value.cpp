@@ -25,15 +25,22 @@ void ModelAttrInitValue::SetAttrName(std::string new_name) {
 
 void ModelAttrInitValue::SetWidgetDetails(Attribute* corresponding_attribute) {
   std::string attr_type = corresponding_attribute->m_type;
+  std::string init_value = corresponding_attribute->m_init_value;
 
-  if (attr_type == "Bool")
+  if (attr_type == "Bool") {
     ui->stk_type_pages->setCurrentWidget(ui->page_bool);
+    ui->check_value->setChecked(init_value == "true");
+  }
 
-  else if (attr_type == "Integer")
+  else if (attr_type == "Integer") {
     ui->stk_type_pages->setCurrentWidget(ui->page_integer);
+    ui->sb_value->setValue(std::atoi(init_value.c_str()));
+  }
 
-  else if (attr_type == "Float")
+  else if (attr_type == "Float") {
     ui->stk_type_pages->setCurrentWidget(ui->page_float);
+    ui->dsb_value->setValue(std::atof(init_value.c_str()));
+  }
 
   m_curr_page = ui->stk_type_pages->currentWidget();
   EmitValueChanged();

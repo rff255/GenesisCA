@@ -5,7 +5,7 @@
 #include <vector>
 
 struct Neighborhood {
-  Neighborhood (std::string id_name, std::string description, std::vector<std::pair<int,int>>* neighbor_coords) {
+  Neighborhood (std::string id_name, std::string description, std::vector<std::pair<int,int>> neighbor_coords) {
     m_id_name = id_name;
     std::replace(m_id_name.begin(), m_id_name.end(), ' ', '_');
 
@@ -14,11 +14,12 @@ struct Neighborhood {
     m_neighbor_coords = neighbor_coords;
   }
 
-  ~Neighborhood() { delete m_neighbor_coords; }
+  ~Neighborhood() {}
 
   std::string                              m_id_name;
   std::string                              m_description;
-  std::vector<std::pair<int,int>>*         m_neighbor_coords;
+  // Coordinates in the form (row, col). i.e. the northeast cell is (-1, 1)
+  std::vector<std::pair<int,int>>          m_neighbor_coords;
 };
 
 #endif // NEIGHBORHOOD_H

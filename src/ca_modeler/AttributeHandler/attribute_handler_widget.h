@@ -21,8 +21,8 @@ public:
   void SetupWidgets();
   void ConfigureCB();
   void ResetAttributesProperties();
-
-  void set_m_ca_model(CAModel* model) {m_ca_model = model;}
+  void SyncUIWithModel();
+  void set_m_ca_model(CAModel* model);
 
 private:
   void LoadAttributesProperties(QListWidgetItem* curr_item);

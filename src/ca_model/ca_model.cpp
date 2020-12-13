@@ -4,14 +4,107 @@
 
 using std::string;
 using std::vector;
+using nlohmann::json;
 
 CAModel::CAModel():
 m_model_properties(new ModelProperties()),
-mGraphEditor(new UpdateRulesEditor()) {}
+m_rules_editor(new UpdateRulesEditor()) {}
 
 CAModel::~CAModel() {
   delete m_model_properties;
-  delete mGraphEditor;
+  m_attributes.clear();
+  m_neighborhoods.clear();
+  m_mappings.clear();
+  delete m_rules_editor;
+}
+
+json CAModel::GetSerializedData() {
+  // Model Properties
+  json model_properties;
+  model_properties["m_name"] = m_model_properties->m_name;
+  model_properties["m_author"] = m_model_properties->m_author;
+  model_properties["m_goal"] = m_model_properties->m_goal;
+  model_properties["m_description"] = m_model_properties->m_description;
+  model_properties["m_boundary_treatment"] = m_model_properties->m_boundary_treatment;
+
+  // Attributes
+  json attributes;
+  for(auto kv : m_attributes) {
+    Attribute* attr = kv.second;
+    attributes.push_back({{"m_id_name", attr->m_id_name},
+                                {"m_type", attr->m_type},
+                                {"m_description", attr->m_description},
+                                {"m_is_model_attribute", attr->m_is_model_attribute},
+                                {"m_init_value", attr->m_init_value}});
+  }
+
+  // Neighborhoods
+  json neighborhoods;
+  for(auto kv : m_neighborhoods) {
+    Neighborhood* neigh = kv.second;
+    neighborhoods.push_back({{"m_id_name", neigh->m_id_name},
+                             {"m_description", neigh->m_description},
+                             {"m_neighbor_coords", neigh->m_neighbor_coords}});
+  }
+
+  // Color Mappings
+  json color_mappings;
+  for(auto kv : m_mappings) {
+    Mapping* mapping = kv.second;
+    color_mappings.push_back({{"m_id_name", mapping->m_id_name},
+                              {"m_description", mapping->m_description},
+                              {"m_is_attr_color", mapping->m_is_attr_color},
+                              {"m_red_description", mapping->m_red_description},
+                              {"m_green_description", mapping->m_green_description},
+                              {"m_blue_description", mapping->m_blue_description}});
+  }
+
+  // Update Rules
+  json update_rules = m_rules_editor->GetSerializedData();
+
+  // Join everything
+  json data = {{"model_properties", model_properties},
+               {"attributes", attributes},
+               {"neighborhoods", neighborhoods},
+               {"color_mappings", color_mappings},
+               {"update_rules", update_rules}};
+
+  return data;
+}
+
+void CAModel::InitFromSerializedData(json data) {
+  // Model Properties
+  json model_properties = data["model_properties"];
+  this->ModifyModelProperties(model_properties["m_name"], model_properties["m_author"],
+                              model_properties["m_goal"], model_properties["m_description"],
+                              model_properties["m_boundary_treatment"]);
+
+  // Attributes
+  json attributes = data["attributes"];
+  for (auto& attr_json : attributes) {
+    this->AddAttribute(new Attribute(attr_json["m_id_name"], attr_json["m_type"],
+                                     attr_json["m_description"], attr_json["m_init_value"],
+                                     attr_json["m_is_model_attribute"]));
+  }
+
+  // Neighborhoods
+  json neighborhoods = data["neighborhoods"];
+  for (auto& neigh_json : neighborhoods) {
+    this->AddNeighborhood(new Neighborhood(neigh_json["m_id_name"], neigh_json["m_description"],
+                                           neigh_json["m_neighbor_coords"]));
+  }
+
+  // Color Mappings
+  json color_mappings = data["color_mappings"];
+  for (auto& mapping_json : color_mappings) {
+    this->AddMapping(new Mapping(mapping_json["m_id_name"], mapping_json["m_description"],
+                                 mapping_json["m_red_description"],mapping_json["m_green_description"],
+                                 mapping_json["m_blue_description"], mapping_json["m_is_attr_color"]));
+  }
+
+  // Update Rules
+  json update_rules  = data["update_rules"];
+  this->SetGraphEditor(update_rules);
 }
 
 // Attributes
@@ -51,7 +144,7 @@ string CAModel::ModifyAttribute(string prev_id_name, Attribute *modified_attr) {
   }
 }
 
-Attribute *CAModel::GetAttribute(string id_name) {
+Attribute* CAModel::GetAttribute(string id_name) {
   if(m_attributes.find(id_name) == m_attributes.end())
     return nullptr;
   else
@@ -223,6 +316,27 @@ vector<string> CAModel::GetAttrColMappingsList()
   return map_id_name_list;
 }
 
+void CAModel::SetGraphEditor(nlohmann::json graph_editor) {
+  m_rules_editor->InitFromSerializedData(graph_editor);
+  this->UpdateComboBoxes();
+}
+
+void CAModel::UpdateComboBoxes() {
+  std::vector<int> neighborhoodSizes;
+  for(auto neighborhood: this->GetNeighborhoodList()) {
+    Neighborhood* neigh = this->GetNeighborhood(neighborhood);
+    int size = neigh->m_neighbor_coords.size();
+    neighborhoodSizes.push_back(size);
+  }
+
+  m_rules_editor->UpdateComboBoxes(this->GetCellAttributesList(),
+                                 this->GetModelAttributesList(),
+                                 this->GetNeighborhoodList(),
+                                 this->GetColAttrMappingsList(),
+                                 this->GetAttrColMappingsList(),
+                                 neighborhoodSizes);
+}
+
 // Nodes Graph Editor (##Code Generation## )
 std::string CAModel::GenerateHDLLCode()
 {
@@ -260,7 +374,7 @@ std::string CAModel::GenerateHDLLCode()
 
 std::string CAModel::GenerateCPPDLLCode()
 {
-  this->mGraphEditor->ClearScopeInformation();
+  this->m_rules_editor->ClearScopeInformation();
   string code = "";
 
   // Namespaces, includes and typedefs
@@ -317,7 +431,7 @@ std::string CAModel::GenerateHCode()
 
 std::string CAModel::GenerateCPPCode()
 {
-  this->mGraphEditor->ClearScopeInformation();
+  this->m_rules_editor->ClearScopeInformation();
   string code = "";
 
   // Namespaces, includes and typedefs
@@ -424,9 +538,9 @@ string CAModel::GenerateCACellDefinition()
     code += "  prevCell->GetViewer"+ viewer + "(VIEWER_"+viewer+");\n";
   code += "}\n\n";
 
-  code += mGraphEditor->EvalGraphEditorDefaultInit()+ "\n";
-  code += mGraphEditor->EvalGraphEditorInputColorNodes()+ "\n";
-  code += mGraphEditor->EvalGraphEditorStep()+ "\n";
+  code += m_rules_editor->EvalGraphEditorDefaultInit()+ "\n";
+  code += m_rules_editor->EvalGraphEditorInputColorNodes()+ "\n";
+  code += m_rules_editor->EvalGraphEditorStep()+ "\n";
   return code;
 }
 
@@ -537,8 +651,8 @@ string CAModel::GenerateCAModelDefinition() {
   for(string neighborhood: GetNeighborhoodList()){
     code += ind+"// "+neighborhood+"\n";
     Neighborhood* currNeighborhood = GetNeighborhood(neighborhood);
-    for(int i=0; i< currNeighborhood->m_neighbor_coords->size(); ++i)
-      code += ind+"this->NEIGHBORHOOD_"+neighborhood+".push_back(pair<int,int>("+ std::to_string((*currNeighborhood->m_neighbor_coords)[i].first)+ ", "+std::to_string((*currNeighborhood->m_neighbor_coords)[i].second)+"));\n";
+    for(int i=0; i< currNeighborhood->m_neighbor_coords.size(); ++i)
+      code += ind+"this->NEIGHBORHOOD_"+neighborhood+".push_back(pair<int,int>("+ std::to_string(currNeighborhood->m_neighbor_coords[i].first)+ ", "+std::to_string(currNeighborhood->m_neighbor_coords[i].second)+"));\n";
   }
   code += "\n";
   code += ind+"this->defaultCell = new CACell();\n";

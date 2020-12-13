@@ -5,7 +5,10 @@
 #include <vector>
 #include <string>
 #include "imguinodegrapheditor.h"
-//#include "qDebug.h"
+
+#include "../JSON_nlohmann/json.hpp"
+
+using json = nlohmann::json;
 
 // ############
 // #--Warning
@@ -279,6 +282,16 @@ public:
     return node;
   }
 
+  string GetSerializedData() const override {
+    json data = {{"mSelectedAttrIndex", mSelectedAttrIndex}};
+    return data.dump();
+  }
+
+  void SetupFromSerializedData(string serialized_data) override {
+    json data = json::parse(serialized_data);
+    mSelectedAttrIndex = data["mSelectedAttrIndex"];
+  }
+
 protected:
   virtual bool render(float nodeWidth){
     ImGui::Text("Attribute:");
@@ -360,6 +373,16 @@ public:
     return node;
   }
 
+  string GetSerializedData() const override {
+    json data = {{"mSelectedAttrIndex", mSelectedAttrIndex}};
+    return data.dump();
+  }
+
+  void SetupFromSerializedData(string serialized_data) override {
+    json data = json::parse(serialized_data);
+    mSelectedAttrIndex = data["mSelectedAttrIndex"];
+  }
+
 protected:
   virtual bool render(float nodeWidth){
     ImGui::Text("Attribute:");
@@ -436,6 +459,18 @@ public:
     node->fields.addFieldEnum(&node->mSelectedAttrIndex, &GetNumEnumItems, &GetTextFromEnumIndex, "", "select which attribute must be considered", &NGECellAttrNames);
 
     return node;
+  }
+
+  string GetSerializedData() const override {
+    json data = {{"mSelectedNeighborhoodIndex", mSelectedNeighborhoodIndex},
+                {"mSelectedAttrIndex", mSelectedAttrIndex}};
+    return data.dump();
+  }
+
+  void SetupFromSerializedData(string serialized_data) override {
+    json data = json::parse(serialized_data);
+    mSelectedNeighborhoodIndex = data["mSelectedNeighborhoodIndex"];
+    mSelectedAttrIndex = data["mSelectedAttrIndex"];
   }
 
 protected:
@@ -530,6 +565,19 @@ public:
 
     return node;
   }
+
+  string GetSerializedData() const override {
+    json data = {{"mValueType", mValueType},
+                {"mValue", string(mValue)}};
+    return data.dump();
+  }
+
+  void SetupFromSerializedData(string serialized_data) override {
+    json data = json::parse(serialized_data);
+    mValueType = data["mValueType"];
+    strcpy(mValue, string(data["mValue"]).c_str());
+  }
+
 protected:
 
   virtual bool render(float nodeWidth){
@@ -628,6 +676,30 @@ public:
     node->mSecondNumberF = 0.f;
 
     return node;
+  }
+
+  string GetSerializedData() const override {
+    json data = {{"mProbability", mProbability},
+                 {"mValueType", mValueType},
+                 {"mUseModelAttr", mUseModelAttr},
+                 {"mSelectedAttrIndex", mSelectedAttrIndex},
+                 {"mFirstNumberI", mFirstNumberI},
+                 {"mSecondNumberI", mSecondNumberI},
+                 {"mFirstNumberF", mFirstNumberF},
+                 {"mSecondNumberF", mSecondNumberF}};
+    return data.dump();
+  }
+
+  void SetupFromSerializedData(string serialized_data) override {
+    json data = json::parse(serialized_data);
+    mProbability = data["mProbability"];
+    mValueType = data["mValueType"];
+    mUseModelAttr = data["mUseModelAttr"];
+    mSelectedAttrIndex = data["mSelectedAttrIndex"];
+    mFirstNumberI = data["mFirstNumberI"];
+    mSecondNumberI = data["mSecondNumberI"];
+    mFirstNumberF = data["mFirstNumberF"];
+    mSecondNumberF = data["mSecondNumberF"];
   }
 
 protected:
@@ -763,6 +835,16 @@ public:
     return node;
   }
 
+  string GetSerializedData() const override {
+    json data = {{"mSelectedOperationIndex", mSelectedOperationIndex}};
+    return data.dump();
+  }
+
+  void SetupFromSerializedData(string serialized_data) override {
+    json data = json::parse(serialized_data);
+    mSelectedOperationIndex = data["mSelectedOperationIndex"];
+  }
+
 protected:
   virtual bool render(float nodeWidth){
     ImGui::Text("Operation:");
@@ -854,6 +936,17 @@ public:
 
     return node;
   }
+
+  string GetSerializedData() const override {
+    json data = {{"mSelectedOperationIndex", mSelectedOperationIndex}};
+    return data.dump();
+  }
+
+  void SetupFromSerializedData(string serialized_data) override {
+    json data = json::parse(serialized_data);
+    mSelectedOperationIndex = data["mSelectedOperationIndex"];
+  }
+
 
 protected:
   virtual bool render(float nodeWidth){
@@ -956,6 +1049,16 @@ public:
     return node;
   }
 
+  string GetSerializedData() const override {
+    json data = {{"mSelectedAttrIndex", mSelectedAttrIndex}};
+    return data.dump();
+  }
+
+  void SetupFromSerializedData(string serialized_data) override {
+    json data = json::parse(serialized_data);
+    mSelectedAttrIndex = data["mSelectedAttrIndex"];
+  }
+
 protected:
   virtual bool render(float nodeWidth){
     ImGui::Text("Attribute:");
@@ -1034,6 +1137,7 @@ public:
     return node;
   }
 
+protected:
   // Evaluate this node returning the code generated
   virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
@@ -1194,6 +1298,7 @@ public:
     return node;
   }
 
+protected:
   // Evaluate this node returning the code generated
   virtual string Eval(const NodeGraphEditor& nge, int indentLevel, int evalPort = 0, string scope = ""){
     // Begin with the parent eval (a comment indicating the node called)
@@ -1271,6 +1376,16 @@ public:
     node->mSelectedOperationIndex = 0;
 
     return node;
+  }
+
+  string GetSerializedData() const override {
+    json data = {{"mSelectedOperationIndex", mSelectedOperationIndex}};
+    return data.dump();
+  }
+
+  void SetupFromSerializedData(string serialized_data) override {
+    json data = json::parse(serialized_data);
+    mSelectedOperationIndex = data["mSelectedOperationIndex"];
   }
 
 protected:
@@ -1378,6 +1493,16 @@ public:
 
     node->mSelectedOperationIndex = 0;
     return node;
+  }
+
+  string GetSerializedData() const override {
+    json data = {{"mSelectedOperationIndex", mSelectedOperationIndex}};
+    return data.dump();
+  }
+
+  void SetupFromSerializedData(string serialized_data) override {
+    json data = json::parse(serialized_data);
+    mSelectedOperationIndex = data["mSelectedOperationIndex"];
   }
 
 protected:
@@ -1526,6 +1651,20 @@ public:
     node->mBoolOperIndex = 0;
 
     return node;
+  }
+
+  string GetSerializedData() const override {
+    json data = {{"mBooleanType", mBooleanType},
+                {"mArithOperIndex", mArithOperIndex},
+                {"mBoolOperIndex", mBoolOperIndex}};
+    return data.dump();
+  }
+
+  void SetupFromSerializedData(string serialized_data) override {
+    json data = json::parse(serialized_data);
+    mBooleanType = data["mBooleanType"];
+    mArithOperIndex = data["mArithOperIndex"];
+    mBoolOperIndex = data["mBoolOperIndex"];
   }
 
 protected:
@@ -1692,6 +1831,17 @@ public:
     return node;
   }
 
+  string GetSerializedData() const override {
+    json data = {{"mSelectedOperationIndex", mSelectedOperationIndex}};
+    return data.dump();
+  }
+
+  void SetupFromSerializedData(string serialized_data) override {
+    json data = json::parse(serialized_data);
+    mSelectedOperationIndex = data["mSelectedOperationIndex"];
+  }
+
+
 protected:
   virtual bool render(float nodeWidth){
     ImGui::Text("Operation:");
@@ -1792,6 +1942,16 @@ public:
     return node;
   }
 
+  string GetSerializedData() const override {
+    json data = {{"mSelectedMapping", mSelectedMapping},};
+    return data.dump();
+  }
+
+  void SetupFromSerializedData(string serialized_data) override {
+    json data = json::parse(serialized_data);
+    mSelectedMapping = data["mSelectedMapping"];
+  }
+
 protected:
   virtual bool render(float nodeWidth){
     ImGui::Text("Mapping:");
@@ -1886,6 +2046,23 @@ public:
     node->mNumFlowPortsIn = 1;
 
     return node;
+  }
+
+  string GetSerializedData() const override {
+    json data = {{"mSelectedMapping", mSelectedMapping},
+                 {"mUseDefaultColor", mUseDefaultColor},
+                 {"mDefaultColor", {mDefaultColor.x, mDefaultColor.y, mDefaultColor.z}}
+                };
+    return data.dump();
+  }
+
+  void SetupFromSerializedData(string serialized_data) override {
+    json data = json::parse(serialized_data);
+    mSelectedMapping = data["mSelectedMapping"];
+    mUseDefaultColor = data["mUseDefaultColor"];
+    mDefaultColor.x = data["mDefaultColor"][0];
+    mDefaultColor.y = data["mDefaultColor"][1];
+    mDefaultColor.z = data["mDefaultColor"][2];
   }
 
 protected:
@@ -2058,6 +2235,16 @@ public:
     return node;
   }
 
+  string GetSerializedData() const override {
+    json data = {{"mSelectedMapping", mSelectedMapping},};
+    return data.dump();
+  }
+
+  void SetupFromSerializedData(string serialized_data) override {
+    json data = json::parse(serialized_data);
+    mSelectedMapping = data["mSelectedMapping"];
+  }
+
 protected:
   virtual bool render(float nodeWidth){
     ImGui::Text("Mapping:");
@@ -2114,7 +2301,7 @@ protected:
   GetColorConstantNode() : Base() {}
   static const int TYPE = kGetColorConstantNode;
 
-  ImVec4 chosenColor;
+  ImVec4 mChosenColor;
 
   virtual const char* getTooltip() const { return "This node returns the three color channels of a selected color."; }
   virtual const char* getInfo() const { return "This node returns the three color channels of a selected color. \nIt could be used to set more easily the color for a given cell configuration. \n Be aware of the types of data. The output is three integers."; }
@@ -2132,9 +2319,21 @@ public:
     node->init("Get Color Constant", pos, NULL, "r;g;b", TYPE);
 
     // 3) init fields ( this uses the node->fields variable; otherwise we should have overridden other virtual methods (to render and serialize) )
-    node->fields.addFieldColor(&node->chosenColor.x,false,"","Select the desired color");
+    node->fields.addFieldColor(&node->mChosenColor.x,false,"","Select the desired color");
 
     return node;
+  }
+
+  string GetSerializedData() const override {
+    json data = {{"mChosenColor", {mChosenColor.x, mChosenColor.y, mChosenColor.z}}};
+    return data.dump();
+  }
+
+  void SetupFromSerializedData(string serialized_data) override {
+    json data = json::parse(serialized_data);
+    mChosenColor.x = data["mChosenColor"][0];
+    mChosenColor.y = data["mChosenColor"][1];
+    mChosenColor.z = data["mChosenColor"][2];
   }
 
 protected:
@@ -2161,17 +2360,17 @@ protected:
      */
     if(evalPort == 0) {
       string outRName = "out_" + this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) +"_0";
-      code += ind+ "int "+ outRName +" = "+ std::to_string(static_cast<int>(chosenColor.x*255)) +";\n";
+      code += ind+ "int "+ outRName +" = "+ std::to_string(static_cast<int>(mChosenColor.x*255)) +";\n";
       code += ind+ "typedef int " + outRName + "_TYPE;\n";
 
     } else if(evalPort == 1) {
       string outGName = "out_" + this->getNameOutSlot(1)+ "_" + std::to_string(this->mNodeId) +"_1";
-      code += ind+ "int "+ outGName +" = "+ std::to_string(static_cast<int>(chosenColor.y*255)) +";\n";
+      code += ind+ "int "+ outGName +" = "+ std::to_string(static_cast<int>(mChosenColor.y*255)) +";\n";
       code += ind+ "typedef int " + outGName + "_TYPE;\n";
 
     } else {
       string outBName = "out_" + this->getNameOutSlot(2)+ "_" + std::to_string(this->mNodeId) +"_2";
-      code += ind+ "int "+ outBName +" = "+ std::to_string(static_cast<int>(chosenColor.z*255)) +";\n";
+      code += ind+ "int "+ outBName +" = "+ std::to_string(static_cast<int>(mChosenColor.z*255)) +";\n";
       code += ind+ "typedef int " + outBName + "_TYPE;\n";
     }
 
@@ -2220,14 +2419,14 @@ static Node* TestNodeFactory(int nt, const ImVec2& pos) {
 
 // Mandatory methods
 void InitNGE(ImGui::NodeGraphEditor &nge) {
-  if (nge.isInited())	{
+  if (!nge.isInited())	{
     // This adds entries to the "add node" context menu
     nge.registerNodeTypes(ImGui::NodeTypeNames, ImGui::kNumNodesTypes, ImGui::TestNodeFactory, NULL, -1); // last 2 args can be used to add only a subset of nodes (or to sort their order inside the context menu)
     nge.registerNodeTypeMaxAllowedInstances(ImGui::kStepNode, 1); // Here we set the max number of allowed instances of the node (1)
     nge.registerNodeTypeMaxAllowedInstances(ImGui::kDefaultInitializationNode, 1);
 
     // Optional: starting nodes and links (load from file instead):-----------
-    nge.addNode(ImGui::kStepNode, ImVec2(0, 310));
+//    nge.addNode(ImGui::kStepNode, ImVec2(0, 310));
 //    nge.addNode(ImGui::kGetModelAttributeNode, ImVec2(20, 20));
 //    nge.addNode(ImGui::kGetCellAttributeNode, ImVec2(200, 20)); // optionally use e.g.: ImGui::ColorEnumUserNode::Cast(colorEnumUserNode1)->...;
 //    nge.addNode(ImGui::kGetNeighborsAttributeNode, ImVec2(400, 20));

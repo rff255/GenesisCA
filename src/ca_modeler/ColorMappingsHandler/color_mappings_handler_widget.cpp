@@ -49,6 +49,29 @@ void ColorMappingsHandlerWidget::ResetMappingsProperties()
   m_is_loading = false;
 }
 
+void ColorMappingsHandlerWidget::SyncUIWithModel() {
+  this->ResetMappingsProperties();
+  // Sync attributes-to-color and color-to-attribute mapping lists
+  ui->lw_attr_col_mappings->blockSignals(true);
+  ui->lw_col_attr_mappings->blockSignals(true);
+  ui->lw_attr_col_mappings->clear();
+  ui->lw_col_attr_mappings->clear();
+  for (string color_mapping : m_ca_model->GetMappingsList()) {
+    if(m_ca_model->GetMapping(color_mapping)->m_is_attr_color) {
+      ui->lw_attr_col_mappings->addItem(QString::fromStdString(color_mapping));
+    } else {
+      ui->lw_col_attr_mappings->addItem(QString::fromStdString(color_mapping));
+    }
+  }
+  ui->lw_attr_col_mappings->blockSignals(false);
+  ui->lw_col_attr_mappings->blockSignals(false);
+}
+
+void ColorMappingsHandlerWidget::set_m_ca_model(CAModel* model) {
+  m_ca_model = model;
+  this->SyncUIWithModel();
+}
+
 void ColorMappingsHandlerWidget::LoadMappingsProperties(QListWidgetItem *curr_item)
 {
   if (curr_item == nullptr)
