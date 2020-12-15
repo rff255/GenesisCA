@@ -782,11 +782,15 @@ protected:
 
       code += ind+ "typedef bool "+ outValueName+ "_TYPE;\n";
     } else if(mValueType == 1){  // INTEGER
+      code += ind+ "std::random_device rd_"+std::to_string(this->mNodeId)+";\n";
+      code += ind+ "std::mt19937 gen_"+std::to_string(this->mNodeId)+"(rd_"+std::to_string(this->mNodeId)+"());\n";
+      code += ind+ "std::uniform_int_distribution<> distr_"+std::to_string(this->mNodeId)+"("+std::to_string(mFirstNumberI)+", "+std::to_string(mSecondNumberI)+");\n";
       code +=
-      ind+ "int " +outValueName+ " = rand()%("+std::to_string(mSecondNumberI)+"-"+std::to_string(mFirstNumberI)+" + 1) + "+std::to_string(mFirstNumberI)+";\n" +
+      ind+ "int " +outValueName+ " = distr_"+std::to_string(this->mNodeId)+"(gen_"+std::to_string(this->mNodeId)+");\n" +
       ind+ "typedef int " +outValueName+ "_TYPE;\n";
 
     } else {  // FLOAT
+      code += ind+ "std::srand(time(NULL));\n";
       code +=
       ind+ "float " + outValueName+ " = "+std::to_string(mFirstNumberF)+" + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/("+std::to_string(mSecondNumberF)+"-"+std::to_string(mFirstNumberF)+")));\n" +
       ind+ "typedef float " +outValueName+ "_TYPE;\n";
