@@ -2428,36 +2428,6 @@ void InitNGE(ImGui::NodeGraphEditor &nge) {
     nge.registerNodeTypes(ImGui::NodeTypeNames, ImGui::kNumNodesTypes, ImGui::TestNodeFactory, NULL, -1); // last 2 args can be used to add only a subset of nodes (or to sort their order inside the context menu)
     nge.registerNodeTypeMaxAllowedInstances(ImGui::kStepNode, 1); // Here we set the max number of allowed instances of the node (1)
     nge.registerNodeTypeMaxAllowedInstances(ImGui::kDefaultInitializationNode, 1);
-
-    // Optional: starting nodes and links (load from file instead):-----------
-//    nge.addNode(ImGui::kStepNode, ImVec2(0, 310));
-//    nge.addNode(ImGui::kGetModelAttributeNode, ImVec2(20, 20));
-//    nge.addNode(ImGui::kGetCellAttributeNode, ImVec2(200, 20)); // optionally use e.g.: ImGui::ColorEnumUserNode::Cast(colorEnumUserNode1)->...;
-//    nge.addNode(ImGui::kGetNeighborsAttributeNode, ImVec2(400, 20));
-//    nge.addNode(ImGui::kGetConstantNode, ImVec2(20, 120));
-//    nge.addNode(ImGui::kStatementNode, ImVec2(200, 120));
-//    nge.addNode(ImGui::kBooleanOperatorNode, ImVec2(400, 120));
-//    nge.addNode(ImGui::kConditionalNode, ImVec2(20, 220));
-//    nge.addNode(ImGui::kSetAttributeNode, ImVec2(200, 220));
-//    nge.addNode(ImGui::kLoopNode, ImVec2(400, 220));
-//    nge.addNode(ImGui::kSequenceNode, ImVec2(20, 320));
-//    nge.addNode(ImGui::kGetRandomNumber, ImVec2(200, 320));
-//    nge.addNode(ImGui::kArithmeticOperatorNode, ImVec2(400, 320));
-//    nge.addNode(ImGui::kGroupStatementNode, ImVec2(20, 420));
-//    nge.addNode(ImGui::kGroupOperatorNode, ImVec2(200, 450));
-//    nge.addNode(ImGui::kGroupCountingNode, ImVec2(400, 420));
-
-//    nge.addNode(ImGui::kInitByColorNode, ImVec2(-80, 520));
-//    nge.addNode(ImGui::kSetColorViewerNode, ImVec2(20,  520));
-//    nge.addNode(ImGui::kDefaultInitializationNode, ImVec2(200, 520));
-//    nge.addNode(ImGui::kGetColorViewerNode, ImVec2(400, 520));
-//    nge.addNode(ImGui::kGetColorConstantNode, ImVec2(600, 520));
-
-//    nge.addLink(colorEnumUserNode1, 0, colorEnumUserNode2, 0);
-//    nge.addLink(colorEnumUserNode1, 1, colorEnumUserNode2, 1);
-//    nge.addLink(colorEnumUserNode2, 0, colorEnumUserNode3, 0);
-//    nge.addLink(colorEnumUserNode2, 1, colorEnumUserNode3, 1);
-
   }
 }
 

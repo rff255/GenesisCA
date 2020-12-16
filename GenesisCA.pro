@@ -34,8 +34,6 @@ SOURCES += \
   src/main.cpp \
   src/ca_modeler/ca_modeler_gui.cpp \
   src/ca_model/ca_model.cpp \
-    src/ca_model/graph_node.cpp \
-    src/ca_model/partition.cpp \
     src/ca_modeler/AttributeHandler/attribute_handler_widget.cpp \
     src/ca_modeler/ModelPropertiesHandler/model_properties_handler_widget.cpp \
     src/ca_modeler/ModelPropertiesHandler/model_attr_init_value.cpp \
@@ -52,11 +50,9 @@ SOURCES += \
 HEADERS  += \
     src/ca_modeler/ca_modeler_gui.h \
     src/ca_model/ca_model.h \
-    src/ca_model/graph_node.h \
     src/ca_model/model_properties.h \
     src/ca_model/attribute.h \
     src/ca_model/neighborhood.h \
-    src/ca_model/partition.h \
     src/ca_modeler/AttributeHandler/attribute_handler_widget.h \
     src/ca_modeler/ModelPropertiesHandler/model_properties_handler_widget.h \
     src/ca_modeler/ModelPropertiesHandler/model_attr_init_value.h \

@@ -29,7 +29,6 @@ void VicinityHandlerWidget::SetupNeighborLayout() {
   for(int i=0; i<span; ++i) {
     for (int j=0; j<span; ++j) {
       QToolButton* btn_neighbor = new QToolButton(this);
-     // btn_neighbor->setText(QString::fromStdString(std::to_string(i-neighbors_margin_size) + "," + std::to_string(j-neighbors_margin_size)));
       btn_neighbor->setCheckable(true);
 
       btn_neighbor->setStyleSheet(QString::fromStdString("QToolButton:hover { \
