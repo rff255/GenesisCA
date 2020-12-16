@@ -10,9 +10,6 @@
     <height>602</height>
    </rect>
   </property>
-  <property name="windowTitle">
-   <string>Genesis</string>
-  </property>
   <widget class="QWidget" name="centralwidget">
    <property name="styleSheet">
     <string notr="true">QTabWidget::pane {background-color: rgb(240, 240, 240);}
@@ -220,9 +217,6 @@ background: rgb(240, 240, 240);
     <addaction name="act_save"/>
     <addaction name="act_saveas"/>
     <addaction name="separator"/>
-    <addaction name="act_import"/>
-    <addaction name="act_export"/>
-    <addaction name="separator"/>
     <addaction name="act_quit"/>
    </widget>
    <widget class="QMenu" name="menu_build">
@@ -262,8 +256,8 @@ background: rgb(240, 240, 240);
     </property>
     <addaction name="act_what_is_a_cellular_automata"/>
     <addaction name="separator"/>
-    <addaction name="act_about_genesis"/>
     <addaction name="act_quick_tutorial"/>
+    <addaction name="act_about_genesis"/>
    </widget>
    <addaction name="menu_file"/>
    <addaction name="menu_build"/>
@@ -440,10 +434,10 @@ background: rgb(240, 240, 240);
   </action>
   <action name="act_about_genesis">
    <property name="enabled">
-    <bool>false</bool>
+    <bool>true</bool>
    </property>
    <property name="text">
-    <string>About Genesis</string>
+    <string>About GenesisCA...</string>
    </property>
   </action>
   <action name="act_export_c_code">
@@ -478,20 +472,6 @@ background: rgb(240, 240, 240);
    </property>
    <property name="text">
     <string>Export Python Module...</string>
-   </property>
-  </action>
-  <action name="action_DEV_Use_Preexisting_Code">
-   <property name="checkable">
-    <bool>true</bool>
-   </property>
-   <property name="checked">
-    <bool>false</bool>
-   </property>
-   <property name="enabled">
-    <bool>true</bool>
-   </property>
-   <property name="text">
-    <string>[DEV] Use Preexisting Code</string>
    </property>
   </action>
  </widget>
