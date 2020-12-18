@@ -6,6 +6,7 @@
 #define IMGUINODEGRAPHEDITOR_H_
 
 #include <string>
+#include "../JSON_nlohmann/json.hpp"
 
 #ifndef IMGUI_API
 #include <imgui.h>
@@ -242,6 +243,18 @@ public:
   virtual std::string Eval(const struct NodeGraphEditor& nge, int indentLevel, int evalPort = 0, std::string scope = "");
   virtual std::string GetSerializedData() const {return "";}
   virtual void SetupFromSerializedData(std::string serialized_data) {}
+
+  nlohmann::json GetSerializedMetaData() const {
+    nlohmann::json data  = {{"is_open", this->isOpen},
+                           {"title", std::string(this->Name)}};
+    return data;
+
+  }
+
+  void SetupFromSerializedMetaData(nlohmann::json serialized_meta_data) {
+    this->isOpen = serialized_meta_data["is_open"];
+    strcpy(this->Name, std::string(serialized_meta_data["title"]).c_str());
+  }
 
 protected:
   FieldInfoVector fields; // I guess you can just skip these at all and implement virtual methods... but it was supposed to be useful...

@@ -15,6 +15,7 @@ const std::string kNodeId = "node_id";
 const std::string kNodeType = "node_type";
 const std::string kNodePos = "node_pos";
 const std::string kNodeData = "node_data";
+const std::string kNodeMetaData = "node_meta_data";
 
 const std::string kLinksList = "links";
 const std::string kLinkInNode = "link_in_node";

@@ -31,9 +31,11 @@ void UpdateRulesEditor::InitFromSerializedData(json rules_editor) {
     const float node_pos[2] = {node_json[serialization_tags::kNodePos][0],
                               node_json[serialization_tags::kNodePos][1]};
     const string node_data = node_json[serialization_tags::kNodeData];
+    const json node_meta_data = node_json[serialization_tags::kNodeMetaData];
 
     auto new_node = mEditor.addNode(node_type, ImVec2(node_pos[0], node_pos[1]));
     if(node_data.size()>0) new_node->SetupFromSerializedData(node_data);
+    if(node_meta_data.size()>0) new_node->SetupFromSerializedMetaData(node_meta_data);
 
     const int new_id = new_node->mNodeId;
     old_to_new_node_id[node_old_id] = new_id;
@@ -81,11 +83,13 @@ json UpdateRulesEditor::GetSerializedData() {
     const int node_type = node->getType();
     const float node_pos[2] = {node->GetPos().x, node->GetPos().y};
     const string node_data = node->GetSerializedData();
+    const json node_meta_data = node->GetSerializedMetaData();
 
     nodes_list.push_back({{serialization_tags::kNodeId, node_id},
                          {serialization_tags::kNodeType, node_type},
                          {serialization_tags::kNodePos, node_pos},
-                         {serialization_tags::kNodeData, node_data}});
+                         {serialization_tags::kNodeData, node_data},
+                         {serialization_tags::kNodeMetaData, node_meta_data}});
   }
 
   // Get links data
