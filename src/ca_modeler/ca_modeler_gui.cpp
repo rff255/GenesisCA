@@ -5,6 +5,7 @@
 
 #include "../JSON_nlohmann/json.hpp"
 
+#include <QTemporaryDir>
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QCloseEvent>
@@ -170,46 +171,31 @@ void CAModelerGUI::on_act_run_triggered()
   // Get the "working directory" where (the party begins) files are generated and compiled
   std::string SAfolder = QApplication::applicationDirPath().toStdString() + "/StandaloneApplication/";
 
-  // Get the "run directory" where will be created the .exe
-  std::string runPath = QApplication::applicationDirPath().toStdString() + "/StandaloneApplication/runDir";
-  QDir runDir(QApplication::applicationDirPath() + "/StandaloneApplication/runDir");
-  if (!runDir.exists()) {
-      runDir.mkpath(".");
-  } else {
-    // H DLL file
-    std::ofstream hDllFile;
-    hDllFile.open ((SAfolder + "ca_dll.h").c_str());
-    hDllFile << m_ca_model->GenerateHDLLCode();
-    hDllFile.close();
+  // Compile .h file from CA model.
+  std::ofstream hDllFile;
+  hDllFile.open ((SAfolder + "ca_dll.h").c_str());
+  hDllFile << m_ca_model->GenerateHDLLCode();
+  hDllFile.close();
 
-    // CPP DLL file
-    std::ofstream cppDllFile;
-    cppDllFile.open ((SAfolder + "ca_dll.cpp").c_str());
-    cppDllFile << m_ca_model->GenerateCPPDLLCode();
-    cppDllFile.close();
+  // Compile .cpp file from CA model.
+  std::ofstream cppDllFile;
+  cppDllFile.open ((SAfolder + "ca_dll.cpp").c_str());
+  cppDllFile << m_ca_model->GenerateCPPDLLCode();
+  cppDllFile.close();
+
+  QTemporaryDir out_dir;
+  if (!out_dir.isValid()) {
+    QMessageBox::warning(this, "Run Failed", "Unable to create temporary folder in order to run compiled CA model. Please try again.");
+    return;
   }
+  std::string compiled_file_path = (out_dir.path()+"/StandaloneApplication.exe").toStdString();
 
-  // Generate standalone application
-  system(("cl /GL /O2 /Oi /I "+SAfolder+" "+SAfolder+"*.cpp glfw3dll.lib opengl32.lib "+" /link /LTCG /OPT:REF /OPT:ICF /OUT:"+SAfolder+"/StandaloneApplication.exe /incremental:no /LIBPATH:"+ SAfolder).c_str());
-
-  // To overwrite
-  if (QFile::exists((runPath +"/StandaloneApplication.exe").c_str()))
-      QFile::remove((runPath +"/StandaloneApplication.exe").c_str());
-
-  if (QFile::exists((runPath +"/glfw3.dll").c_str()))
-      QFile::remove((runPath +"/glfw3.dll").c_str());
-
-  // Get the useful files
-  QFile::copy(QString((SAfolder+"StandaloneApplication.exe").c_str()), QString((runPath +"/StandaloneApplication.exe").c_str()));
-  QFile::copy(QString((SAfolder+"glfw3.dll").c_str()), QString((runPath +"/glfw3.dll").c_str()));
-
-  // Clear unnecessary files
-  QFile::remove(QString((SAfolder+"StandaloneApplication.exe").c_str()));
-  QFile::remove(QString((SAfolder+"StandaloneApplication.exp").c_str()));
-  QFile::remove(QString((SAfolder+"StandaloneApplication.lib").c_str()));
+  // Compile binary standalone application from C++ generated files.
+  system(("cl /GL /O2 /Oi /I "+SAfolder+" "+SAfolder+"*.cpp glfw3dll.lib opengl32.lib "+" /link /LTCG /OPT:REF /OPT:ICF "
+          "/OUT:"+compiled_file_path+" /incremental:no /LIBPATH:"+ SAfolder).c_str());
 
   // Run generated standalone Application
-  system((runPath +"/StandaloneApplication.exe").c_str());
+  system(compiled_file_path.c_str());
 }
 
 void CAModelerGUI::on_act_generate_standalone_viewer_triggered()

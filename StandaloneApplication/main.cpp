@@ -10,6 +10,8 @@
 #include <string.h>     //strcpy
 #include "bitmap_image.hpp"
 
+#include <Windows.h>
+
 #define MAX_ENUM_NAME_LENGTH    84
 #define  INDEX(i, j) ((i)*(ca_width)*3 + (j*3))
 
@@ -19,6 +21,7 @@ static void error_callback(int error, const char* description) {
 
 int main(int, char**)
 {
+	ShowWindow(GetConsoleWindow(), SW_HIDE);
     Genesis::CAModel TESTCAModel;
 
     // Setup window

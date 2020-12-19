@@ -85,3 +85,13 @@ FORMS    += \
 LIBS += -lOpenGL32
 LIBS += -L$$PWD/src/imgui/glfw -lglfw3dll
 DEPENDPATH += $$PWD/src/imgui/glfw
+
+# Copies the standalone folder so that the compilation of CA models has the required files
+CONFIG += file_copies
+COPIES += standalone_files
+standalone_files.files = $$files(StandaloneApplication/*)
+CONFIG(debug, debug|release) {
+  standalone_files.path = $$OUT_PWD/debug/StandaloneApplication
+} else {
+  standalone_files.path = $$OUT_PWD/release/StandaloneApplication
+}
