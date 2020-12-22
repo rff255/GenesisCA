@@ -46,7 +46,7 @@ private:
   Ui::VicinityHandlerWidget *ui;
   CAModel* m_ca_model;
 
-  static const int m_neighbors_margin_size = 7;
+  static const int m_neighbors_margin_size = 20;
   bool m_is_loading;
 };
 

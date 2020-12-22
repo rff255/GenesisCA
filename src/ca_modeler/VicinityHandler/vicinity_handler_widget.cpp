@@ -3,6 +3,7 @@
 
 #include <QMessageBox>
 #include <QToolButton>
+#include <QScrollBar>
 
 VicinityHandlerWidget::VicinityHandlerWidget(QWidget *parent) :
   QWidget(parent),
@@ -63,7 +64,7 @@ void VicinityHandlerWidget::SetupNeighborLayout() {
   }
 
   QToolButton* central_cell = dynamic_cast<QToolButton*> (ui->grid_layout->itemAtPosition(m_neighbors_margin_size, m_neighbors_margin_size)->widget());
-  central_cell->setStyleSheet(QString::fromStdString("background-color: rgb(187, 187, 187); \
+  central_cell->setStyleSheet(QString::fromStdString("background-color: rgb(50, 250, 0); \
                                                      border-width: 1px; \
                                                      border-top: 1px solid grey; \
                                                      border-left: 1px solid grey; \
