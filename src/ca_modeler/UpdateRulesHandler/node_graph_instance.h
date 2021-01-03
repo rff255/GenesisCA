@@ -1171,13 +1171,13 @@ protected:
 
       if (outputThenNodes.size() > 0) // If there is a link for THEN
         for(Node* outThen:outputThenNodes)
-          code += ind+ outThen->Eval(nge, indentLevel+1, 0, this->mScope + "S"+std::to_string(outThen->mNodeId)+"S");
+          code += ind+ outThen->Eval(nge, indentLevel+1, 0, this->mScope + "S"+std::to_string(this->mNodeId)+"_THEN_S");
 
       code += ind+ "} else {\n";
 
       if (outputElseNodes.size() > 0) // If there is a link for ELSE
         for(Node* outElse:outputElseNodes)
-          code += ind+ outElse->Eval(nge, indentLevel+1, 0, this->mScope + "S"+std::to_string(outElse->mNodeId)+"S");
+          code += ind+ outElse->Eval(nge, indentLevel+1, 0, this->mScope + "S"+std::to_string(this->mNodeId)+"_ELSE_S");
 
       code += ind+ "}\n";
     }
@@ -1257,7 +1257,7 @@ public:
 
       if(outputNodes.size()>0) // If there is a link for DO
         for(Node* outDo:outputNodes)
-            code += ind+ outDo->Eval(nge, indentLevel+1, 0, this->mScope + "S"+std::to_string(outDo->mNodeId)+"S");
+            code += ind+ outDo->Eval(nge, indentLevel+1, 0, this->mScope + "S"+std::to_string(this->mNodeId)+"_DO_S");
 
       code += ind+ "}\n";
     }
