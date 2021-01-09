@@ -534,11 +534,11 @@ protected:
   typedef GetConstant ThisClass;
   GetConstant() : Base() {}
   static const int TYPE = kGetConstantNode;
-  int mValueType;
+  int mValueType = 1;
+  int mBoolValue = true;
+  int mIntValue = 0;
+  float mFloatValue = .0;
   static const int TextBufferSize = 128;
-
-  // Fields
-  char mValue[TextBufferSize];
 
   virtual const char* getTooltip() const { return "This Node returns a constant value given by user"; }
   virtual const char* getInfo() const { return "This Node returns a constant value given by user.\nBe aware of the types involved in the operations!"; }
@@ -554,28 +554,35 @@ public:
     ThisClass* node = (ThisClass*)ImGui::MemAlloc(sizeof(ThisClass)); IM_PLACEMENT_NEW(node) ThisClass();
 
     node->init("Get Constant", pos, NULL, "value", TYPE);
-    //node->baseWidthOverride = 200.f;    // (optional) default base node width is 120.f;
-
-    // 3) init fields ( this uses the node->fields variable; otherwise we should have overridden other virtual methods (to render and serialize) )
-    node->fields.addFieldTextEdit(&node->mValue[0], TextBufferSize, "Value:", "Type the value you want for this constant", ImGuiInputTextFlags_EnterReturnsTrue);
-
-    //4) Init values
-    node->mValueType = 1;
-    strcpy(node->mValue, "");
 
     return node;
   }
 
   string GetSerializedData() const override {
     json data = {{"mValueType", mValueType},
-                {"mValue", string(mValue)}};
+                {"mBoolValue", mBoolValue},
+                {"mIntValue", mIntValue},
+                {"mFloatValue", mFloatValue}};
     return data.dump();
   }
 
   void SetupFromSerializedData(string serialized_data) override {
     json data = json::parse(serialized_data);
     mValueType = data["mValueType"];
-    strcpy(mValue, string(data["mValue"]).c_str());
+
+    if(data.contains("mBoolValue")) {  // Back-compatibility check
+    mBoolValue = data["mBoolValue"];
+    mIntValue = data["mIntValue"];
+    mFloatValue = data["mFloatValue"];
+
+    } else {
+      auto deprecated_value = data["mValue"];
+      auto str_deprecated_value = string(deprecated_value);
+      mBoolValue = deprecated_value == "true" ? true : false;
+      mIntValue = !str_deprecated_value.empty() && std::all_of(str_deprecated_value.begin(), str_deprecated_value.end(), ::isdigit) ?
+                    std::stoi(str_deprecated_value) : 0;
+      mFloatValue = 0;
+    }
   }
 
 protected:
@@ -584,7 +591,15 @@ protected:
     ImGui::RadioButton("Bool", &mValueType, 0); ImGui::SameLine();
     ImGui::RadioButton("Int", &mValueType, 1); ImGui::SameLine();
     ImGui::RadioButton("Float", &mValueType, 2);
-    fields[0].render(nodeWidth);
+
+    if(mValueType == 0) { // Bool
+      ImGui::RadioButton("False", &mBoolValue, 0); ImGui::SameLine();
+      ImGui::RadioButton("True", &mBoolValue, 1);
+    } else if(mValueType == 1) {
+      ImGui::InputInt("Value", &mIntValue);
+    } else if(mValueType == 2) {
+      ImGui::InputFloat("Value", &mFloatValue);
+    }
     return false;
   }
 
@@ -610,14 +625,21 @@ protected:
     // Check if there is a node connected to it
     string outValueName = "out_" +this->getNameOutSlot(0)+ "_" + std::to_string(this->mNodeId) + "_0";
     string outValueNameType;
-    if(mValueType == 0)
+    string outValue;
+    if(mValueType == 0) {
       outValueNameType = "bool ";
-    else if (mValueType == 1)
+      outValue = mBoolValue ? "true" : "false";
+    }
+    else if (mValueType == 1) {
       outValueNameType = "int ";
-    else
+      outValue = std::to_string(mIntValue);
+    }
+    else if (mValueType == 2) {
       outValueNameType = "float ";
+      outValue = std::to_string(mFloatValue);
+    }
 
-    code += ind+ outValueNameType+ outValueName +" = " +mValue+ ";\n";
+    code += ind+ outValueNameType+ outValueName +" = " +outValue+ ";\n";
     code += ind+ "typedef "+ outValueNameType + outValueName+ "_TYPE;\n";  // Actually this is temporary. The correct is offer different Get Constant Nodes for each type
 
     return code;
