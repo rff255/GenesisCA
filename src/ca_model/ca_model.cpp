@@ -6,6 +6,18 @@ using std::string;
 using std::vector;
 using nlohmann::json;
 
+namespace  {
+void replaceAll(std::string& str, const std::string& from, const std::string& to) {
+    if(from.empty())
+        return;
+    size_t start_pos = 0;
+    while((start_pos = str.find(from, start_pos)) != std::string::npos) {
+        str.replace(start_pos, from.length(), to);
+        start_pos += to.length(); // In case 'to' contains 'from', like replacing 'x' with 'yx'
+    }
+}
+}
+
 CAModel::CAModel():
 m_model_properties(new ModelProperties()),
 m_rules_editor(new UpdateRulesEditor()) {}
@@ -636,13 +648,18 @@ string CAModel::GenerateCAModelDefinition() {
   string code = "";
   string ind  = "  ";
 
-  // ## Constructor
+  string trimemd_goal = GetModelProperties()->m_goal;
+  replaceAll(trimemd_goal, "\n", "\"\n\"");
+  string trimemd_description = GetModelProperties()->m_description;
+  replaceAll(trimemd_description, "\n", "\"\n\"");
+
+// ## Constructor
   code += "CAModel::CAModel() {\n";
   code += ind+ "std::srand(time(NULL));\n";
   code += ind+ "this->name = \""+GetModelProperties()->m_name+"\";\n";
   code += ind+ "this->author = \""+GetModelProperties()->m_author+"\";\n";
-  code += ind+ "this->goal = \""+GetModelProperties()->m_goal+"\";\n";
-  code += ind+ "this->description = \""+GetModelProperties()->m_description+"\";\n";
+  code += ind+ "this->goal = \""+trimemd_goal+"\";\n";
+  code += ind+ "this->description = \""+trimemd_description+"\";\n";
   code += ind+ "this->boundaryType = \""+GetModelProperties()->m_boundary_treatment+"\";\n";
   code += "\n";
   for(string modelAttr: GetModelAttributesList())
