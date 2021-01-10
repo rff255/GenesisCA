@@ -2214,7 +2214,6 @@ protected:
     //-------------------------------------------------------------
     // Check if there is a node connected to it
     code += ind+ "void CACell::DefaultInit(){\n";
-    code += ind+ "  CopyPrevCellConfig();\n";
       if (outputNodes.size() > 0)
         for(Node* outNode:outputNodes)
           code += ind+ outNode->Eval(nge, indentLevel+1, 0, this->mScope);
