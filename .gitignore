@@ -4,3 +4,5 @@
 /src/imgui/glfw/glfw3dll.lib
 /src/imgui/glfw/glfw3native.h
 /src/imgui/glfw/COPYING.txt
+/.qmake.stash
+/Makefile

@@ -1,0 +1,513 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>CAModelerGUI</class>
+ <widget class="QMainWindow" name="CAModelerGUI">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>792</width>
+    <height>602</height>
+   </rect>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <property name="styleSheet">
+    <string notr="true">QTabWidget::pane {background-color: rgb(240, 240, 240);}
+
+/*
+QGroupBox {
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                                      stop: 0 #E0E0E0, stop: 1 #FFFFFF);
+    border: 2px solid gray;
+    border-radius: 5px;
+    margin-top: 1ex; 
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top center;
+    padding: 0 3px;
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                                      stop: 0 #FFOECE, stop: 1 #FFFFFF);
+}
+*/</string>
+   </property>
+   <layout class="QGridLayout" name="gridLayout">
+    <property name="leftMargin">
+     <number>0</number>
+    </property>
+    <property name="topMargin">
+     <number>0</number>
+    </property>
+    <property name="rightMargin">
+     <number>0</number>
+    </property>
+    <property name="bottomMargin">
+     <number>0</number>
+    </property>
+    <item row="0" column="0">
+     <widget class="QTabWidget" name="tabs">
+      <property name="styleSheet">
+       <string notr="true">QTabWidget::pane { 
+margin: 0px,0px,0px,0px;
+border: 0px solid rgb(240, 240, 240);
+/*border-radius: 7px;
+padding: 1px;*/
+background: rgb(240, 240, 240);
+}</string>
+      </property>
+      <property name="tabShape">
+       <enum>QTabWidget::Rounded</enum>
+      </property>
+      <property name="currentIndex">
+       <number>0</number>
+      </property>
+      <property name="movable">
+       <bool>true</bool>
+      </property>
+      <widget class="QWidget" name="tab_model_properties">
+       <attribute name="title">
+        <string>Model Properties</string>
+       </attribute>
+       <attribute name="toolTip">
+        <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Defines the properties of the Cellular Automata model, such as: border treatment, initial configuration and stop conditions&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+       </attribute>
+       <layout class="QHBoxLayout" name="horizontalLayout_2">
+        <property name="leftMargin">
+         <number>0</number>
+        </property>
+        <property name="topMargin">
+         <number>5</number>
+        </property>
+        <property name="rightMargin">
+         <number>0</number>
+        </property>
+        <property name="bottomMargin">
+         <number>0</number>
+        </property>
+        <item>
+         <widget class="ModelPropertiesHandlerWidget" name="wgt_model_properties_handler" native="true"/>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="tab_attribute_handler">
+       <attribute name="title">
+        <string>Attributes (Cell/ Model)</string>
+       </attribute>
+       <layout class="QGridLayout" name="gridLayout_33">
+        <property name="leftMargin">
+         <number>0</number>
+        </property>
+        <property name="topMargin">
+         <number>5</number>
+        </property>
+        <property name="rightMargin">
+         <number>0</number>
+        </property>
+        <property name="bottomMargin">
+         <number>0</number>
+        </property>
+        <property name="spacing">
+         <number>0</number>
+        </property>
+        <item row="0" column="0">
+         <widget class="AttributeHandlerWidget" name="wgt_attribute_handler" native="true"/>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="tab_vicinities">
+       <attribute name="title">
+        <string>Vicinities (Neighborhood)</string>
+       </attribute>
+       <attribute name="toolTip">
+        <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Group the different neighborhoods used by the Update Rules, as well as different partitions (userful to block CAs)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+       </attribute>
+       <layout class="QHBoxLayout" name="horizontalLayout">
+        <property name="leftMargin">
+         <number>0</number>
+        </property>
+        <property name="topMargin">
+         <number>5</number>
+        </property>
+        <property name="rightMargin">
+         <number>0</number>
+        </property>
+        <property name="bottomMargin">
+         <number>0</number>
+        </property>
+        <item>
+         <widget class="VicinityHandlerWidget" name="wgt_vicinities_handler" native="true"/>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="tab_update_rules">
+       <property name="styleSheet">
+        <string notr="true"/>
+       </property>
+       <attribute name="title">
+        <string>Update Rules</string>
+       </attribute>
+       <attribute name="toolTip">
+        <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Defines the way cells attributes must be updated, considering the state (all attributes value) of cell and it's neighbors&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+       </attribute>
+       <layout class="QGridLayout" name="gridLayout_2">
+        <property name="leftMargin">
+         <number>0</number>
+        </property>
+        <property name="topMargin">
+         <number>5</number>
+        </property>
+        <property name="rightMargin">
+         <number>0</number>
+        </property>
+        <property name="bottomMargin">
+         <number>0</number>
+        </property>
+        <item row="0" column="0">
+         <widget class="UpdateRulesHandler" name="wgt_update_rules_handler" native="true"/>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="tab_attribute_color_mapping">
+       <attribute name="title">
+        <string>Mappings (Initialization/ Viewer)</string>
+       </attribute>
+       <attribute name="toolTip">
+        <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Defines the way in which colors (an input image) are mapped into attribute values, and vice versa (to visualization purposes)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+       </attribute>
+       <layout class="QHBoxLayout" name="horizontalLayout_5">
+        <property name="leftMargin">
+         <number>0</number>
+        </property>
+        <property name="topMargin">
+         <number>5</number>
+        </property>
+        <property name="rightMargin">
+         <number>0</number>
+        </property>
+        <property name="bottomMargin">
+         <number>0</number>
+        </property>
+        <item>
+         <widget class="ColorMappingsHandlerWidget" name="wgt_color_mappings_handler" native="true"/>
+        </item>
+       </layout>
+      </widget>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QStatusBar" name="statusbar"/>
+  <widget class="QMenuBar" name="menu">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>792</width>
+     <height>21</height>
+    </rect>
+   </property>
+   <widget class="QMenu" name="menu_file">
+    <property name="title">
+     <string>File</string>
+    </property>
+    <addaction name="act_new"/>
+    <addaction name="act_open"/>
+    <addaction name="separator"/>
+    <addaction name="act_save"/>
+    <addaction name="act_saveas"/>
+    <addaction name="separator"/>
+    <addaction name="act_quit"/>
+   </widget>
+   <widget class="QMenu" name="menu_build">
+    <property name="title">
+     <string>Build</string>
+    </property>
+    <widget class="QMenu" name="menu_export_code">
+     <property name="title">
+      <string>Export Code</string>
+     </property>
+     <addaction name="act_export_c_code"/>
+     <addaction name="act_export_python_code"/>
+     <addaction name="act_export_js_code"/>
+    </widget>
+    <widget class="QMenu" name="menu_export_library">
+     <property name="enabled">
+      <bool>true</bool>
+     </property>
+     <property name="title">
+      <string>Export Library</string>
+     </property>
+     <addaction name="act_export_dll"/>
+     <addaction name="act_export_python_module"/>
+    </widget>
+    <addaction name="act_run"/>
+    <addaction name="separator"/>
+    <addaction name="act_generate_standalone_viewer"/>
+    <addaction name="separator"/>
+    <addaction name="menu_export_code"/>
+    <addaction name="menu_export_library"/>
+    <addaction name="separator"/>
+    <addaction name="act_create_model_summary"/>
+   </widget>
+   <widget class="QMenu" name="menu_help">
+    <property name="title">
+     <string>Help</string>
+    </property>
+    <addaction name="act_what_is_a_cellular_automata"/>
+    <addaction name="separator"/>
+    <addaction name="act_quick_tutorial"/>
+    <addaction name="act_about_genesis"/>
+   </widget>
+   <addaction name="menu_file"/>
+   <addaction name="menu_build"/>
+   <addaction name="menu_help"/>
+  </widget>
+  <action name="act_new">
+   <property name="enabled">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>New...</string>
+   </property>
+  </action>
+  <action name="act_open">
+   <property name="enabled">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Open...</string>
+   </property>
+  </action>
+  <action name="act_save">
+   <property name="enabled">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Save</string>
+   </property>
+  </action>
+  <action name="act_saveas">
+   <property name="enabled">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Save As...</string>
+   </property>
+  </action>
+  <action name="act_import">
+   <property name="checkable">
+    <bool>false</bool>
+   </property>
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Import...</string>
+   </property>
+  </action>
+  <action name="act_export">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Export...</string>
+   </property>
+  </action>
+  <action name="act_quit">
+   <property name="text">
+    <string>Quit</string>
+   </property>
+  </action>
+  <action name="actionUndo">
+   <property name="text">
+    <string>Undo</string>
+   </property>
+  </action>
+  <action name="actionRedo">
+   <property name="text">
+    <string>Redo</string>
+   </property>
+  </action>
+  <action name="actionCut">
+   <property name="text">
+    <string>Cut</string>
+   </property>
+  </action>
+  <action name="actionCopy">
+   <property name="text">
+    <string>Copy</string>
+   </property>
+  </action>
+  <action name="actionPast">
+   <property name="text">
+    <string>Paste</string>
+   </property>
+  </action>
+  <action name="actionSelect_all">
+   <property name="text">
+    <string>Duplicate</string>
+   </property>
+  </action>
+  <action name="actionAgrupar">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Select All</string>
+   </property>
+  </action>
+  <action name="actionCopy_2">
+   <property name="text">
+    <string>Copy</string>
+   </property>
+  </action>
+  <action name="actionPaste">
+   <property name="text">
+    <string>Paste</string>
+   </property>
+  </action>
+  <action name="actionDuplicate">
+   <property name="text">
+    <string>Duplicate</string>
+   </property>
+  </action>
+  <action name="actionGroup_Selection">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Group Selection</string>
+   </property>
+  </action>
+  <action name="act_preferences">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Preferences...</string>
+   </property>
+  </action>
+  <action name="actionRun">
+   <property name="text">
+    <string>Run</string>
+   </property>
+  </action>
+  <action name="act_run">
+   <property name="text">
+    <string>Run...</string>
+   </property>
+  </action>
+  <action name="act_generate_standalone_viewer">
+   <property name="text">
+    <string>Generate Standalone Viewer</string>
+   </property>
+  </action>
+  <action name="act_create_model_summary">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Create Model Summary</string>
+   </property>
+  </action>
+  <action name="actionQuick_Tutorial">
+   <property name="text">
+    <string>Quick Tutorial</string>
+   </property>
+  </action>
+  <action name="act_what_is_a_cellular_automata">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>What is a Cellular Automata?</string>
+   </property>
+  </action>
+  <action name="act_quick_tutorial">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Quick Tutorial</string>
+   </property>
+  </action>
+  <action name="act_about_genesis">
+   <property name="enabled">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>About GenesisCA...</string>
+   </property>
+  </action>
+  <action name="act_export_c_code">
+   <property name="text">
+    <string>Export C++ Code...</string>
+   </property>
+  </action>
+  <action name="act_export_python_code">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Export Python Code...</string>
+   </property>
+  </action>
+  <action name="act_export_js_code">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Export JS Code...</string>
+   </property>
+  </action>
+  <action name="act_export_dll">
+   <property name="text">
+    <string>Export DLL...</string>
+   </property>
+  </action>
+  <action name="act_export_python_module">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Export Python Module...</string>
+   </property>
+  </action>
+ </widget>
+ <layoutdefault spacing="6" margin="11"/>
+ <customwidgets>
+  <customwidget>
+   <class>AttributeHandlerWidget</class>
+   <extends>QWidget</extends>
+   <header>AttributeHandler/attribute_handler_widget.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>ModelPropertiesHandlerWidget</class>
+   <extends>QWidget</extends>
+   <header>ModelPropertiesHandler/model_properties_handler_widget.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>VicinityHandlerWidget</class>
+   <extends>QWidget</extends>
+   <header>VicinityHandler/vicinity_handler_widget.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>UpdateRulesHandler</class>
+   <extends>QWidget</extends>
+   <header>UpdateRulesHandler/update_rules_handler.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>ColorMappingsHandlerWidget</class>
+   <extends>QWidget</extends>
+   <header>ColorMappingsHandler/color_mappings_handler_widget.h</header>
+   <container>1</container>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
+</ui>
