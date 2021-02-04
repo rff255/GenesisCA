@@ -7,7 +7,7 @@
 
 #include <QWidget>
 
-#include "imgui/glfw/glfw3.h"
+#include "glfw/glfw3.h"
 
 namespace Ui {
 class UpdateRulesHandler;

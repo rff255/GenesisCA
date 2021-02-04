@@ -6,7 +6,7 @@
 
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_glfw.h"
-#include "imgui/glfw/glfw3.h"
+#include "glfw/glfw3.h"
 #include <string.h>     //strcpy
 #include "bitmap_image.hpp"
 
@@ -45,7 +45,7 @@ int main(int, char**)
     float ratioPixelCell = 2;
     char img_path[MAX_ENUM_NAME_LENGTH];
     img_path[0] = '\0';
-    strcpy(img_path, "C:/Users/Rodrigo/Desktop/diffusion_img_test2.bmp");
+    strcpy(img_path, "C:/MyImage.bmp");
 
     char save_img_path[MAX_ENUM_NAME_LENGTH];
     save_img_path[0] = '\0';

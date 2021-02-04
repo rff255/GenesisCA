@@ -1,7 +1,7 @@
 #ifndef UPDATE_RULES_EDITOR_H
 #define UPDATE_RULES_EDITOR_H
 
-#include "imgui/imguinodegrapheditor.h"
+#include "nodes_editor/imguinodegrapheditor.h"
 #include "JSON_nlohmann/json.hpp"
 
 #include <vector>

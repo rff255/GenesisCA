@@ -231,22 +231,12 @@ background: rgb(240, 240, 240);
      <addaction name="act_export_python_code"/>
      <addaction name="act_export_js_code"/>
     </widget>
-    <widget class="QMenu" name="menu_export_library">
-     <property name="enabled">
-      <bool>true</bool>
-     </property>
-     <property name="title">
-      <string>Export Library</string>
-     </property>
-     <addaction name="act_export_dll"/>
-     <addaction name="act_export_python_module"/>
-    </widget>
     <addaction name="act_run"/>
+    <addaction name="act_select_gcc_compiler"/>
     <addaction name="separator"/>
     <addaction name="act_generate_standalone_viewer"/>
     <addaction name="separator"/>
     <addaction name="menu_export_code"/>
-    <addaction name="menu_export_library"/>
     <addaction name="separator"/>
     <addaction name="act_create_model_summary"/>
    </widget>
@@ -472,6 +462,11 @@ background: rgb(240, 240, 240);
    </property>
    <property name="text">
     <string>Export Python Module...</string>
+   </property>
+  </action>
+  <action name="act_select_gcc_compiler">
+   <property name="text">
+    <string>Select g++ compiler...</string>
    </property>
   </action>
  </widget>

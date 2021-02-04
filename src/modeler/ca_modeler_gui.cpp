@@ -18,6 +18,11 @@
 
 const QString kBaseWindowTitle = "GenesisCA";
 
+namespace serialization_tags{
+const std::string kCompilerPath = "compiler_path";
+const std::string kCompilerPathCacheFilename = "LastCompilerUsed";
+}
+
 using json = nlohmann::json;
 CAModelerGUI::CAModelerGUI(QWidget *parent) :
   QMainWindow(parent),
@@ -25,6 +30,17 @@ CAModelerGUI::CAModelerGUI(QWidget *parent) :
   m_ca_model(new CAModel()) {
     ui->setupUi(this);
     this->UpdateWindowTitle();
+
+    // Fetch last used compiler path (if any)
+    string compiler_path_cache = QCoreApplication::applicationDirPath().toStdString() + "/" + serialization_tags::kCompilerPathCacheFilename;
+    std::ifstream stream(compiler_path_cache);
+    if (stream.is_open()) {
+      json deserialized_data;
+      stream >> deserialized_data;
+      stream.close();
+
+      m_compiler_file_path = deserialized_data[serialization_tags::kCompilerPath];
+    }
 
     // Setup widgets
     SetupWidgets();
@@ -114,7 +130,7 @@ void CAModelerGUI::on_act_open_triggered() {
 
     std::ifstream stream(filename.toStdString());
     if (stream.is_open()) {
-      deserialized_data << stream;
+      stream >> deserialized_data;
       stream.close();
 
       // Replace current model by the deserialized one.
@@ -169,125 +185,45 @@ void CAModelerGUI::on_act_export_c_code_triggered()
 
 void CAModelerGUI::on_act_run_triggered()
 {
-  // Get the "working directory" where (the party begins) files are generated and compiled
-  std::string SAfolder = QApplication::applicationDirPath().toStdString() + "/StandaloneApplication/";
-
-  // Compile .h file from CA model.
-  std::ofstream hDllFile;
-  hDllFile.open ((SAfolder + "ca_dll.h").c_str());
-  hDllFile << m_ca_model->GenerateHDLLCode();
-  hDllFile.close();
-
-  // Compile .cpp file from CA model.
-  std::ofstream cppDllFile;
-  cppDllFile.open ((SAfolder + "ca_dll.cpp").c_str());
-  cppDllFile << m_ca_model->GenerateCPPDLLCode();
-  cppDllFile.close();
-
   QTemporaryDir out_dir;
   if (!out_dir.isValid()) {
     QMessageBox::warning(this, "Run Failed", "Unable to create temporary folder in order to run compiled CA model. Please try again.");
     return;
   }
-  std::string compiled_file_path = (out_dir.path()+"/StandaloneApplication.exe").toStdString();
 
-  // Compile binary standalone application from C++ generated files.
-  system(("cl /GL /O2 /Oi /I "+SAfolder+" "+SAfolder+"*.cpp glfw3dll.lib opengl32.lib "+" /link /LTCG /OPT:REF /OPT:ICF "
-          "/OUT:"+compiled_file_path+" /incremental:no /LIBPATH:"+ SAfolder).c_str());
+  string output = out_dir.path().toStdString() + "/" + "StandaloneApplication.exe";
+  bool successfully_exported = this->ExportStandaloneApplication(output);
+  if(successfully_exported) {
+    // Run generated standalone Application
+    system(output.c_str());
+  }
+}
 
-  // Run generated standalone Application
-  system(compiled_file_path.c_str());
+void CAModelerGUI::on_act_select_gcc_compiler_triggered() {
+  GetSelectedCompilerPath(true);
 }
 
 void CAModelerGUI::on_act_generate_standalone_viewer_triggered()
 {
-  // Select a directory to export
-  QString OutputPath = QFileDialog::getExistingDirectory (this, "Export Standalone Application Directory");
-  if ( OutputPath.isNull())
-  {
-    QMessageBox::information(this, "Invalid Path", "Model not exported. Select a valid path.");
-    return;
+  QFileDialog save_as(this, tr("Export Standalone Application..."), "");
+  save_as.setFileMode(QFileDialog::AnyFile);
+  save_as.setAcceptMode(QFileDialog::AcceptSave);
+  save_as.setDefaultSuffix(".exe");
+
+  if(save_as.exec()) {
+    string output = save_as.selectedFiles().first().toStdString();
+    bool successfully_exported = this->ExportStandaloneApplication(output);
+    if(successfully_exported) {
+      QMessageBox::information(this, "Standalone Application Successfully Exported!  ", "Hurray!.");
+    }
   }
 
-  // Get the "working directory" where (the party begins) files are generated and compiled
-  std::string SAfolder = QApplication::applicationDirPath().toStdString() + "/StandaloneApplication/";
-  // H DLL file
-  std::ofstream hDllFile;
-  hDllFile.open ((SAfolder + "ca_dll.h").c_str());
-  hDllFile << m_ca_model->GenerateHDLLCode();
-  hDllFile.close();
-
-  // CPP DLL file
-  std::ofstream cppDllFile;
-  cppDllFile.open ((SAfolder + "ca_dll.cpp").c_str());
-  cppDllFile << m_ca_model->GenerateCPPDLLCode();
-  cppDllFile.close();
-
-  // Generate standalone application
-  system(("cl /GL /O2 /Oi /I "+SAfolder+" "+SAfolder+"*.cpp glfw3dll.lib opengl32.lib "+" /link /LTCG /OPT:REF /OPT:ICF /OUT:"+SAfolder+"/StandaloneApplication.exe /incremental:no /LIBPATH:"+ SAfolder).c_str());
-
-  // To overwrite
-  if (QFile::exists((OutputPath.toStdString()+"/StandaloneApplication.exe").c_str()))
-      QFile::remove((OutputPath.toStdString()+"/StandaloneApplication.exe").c_str());
-
-  if (QFile::exists((OutputPath.toStdString()+"/glfw3.dll").c_str()))
-      QFile::remove((OutputPath.toStdString()+"/glfw3.dll").c_str());
-
-  // Get the useful files
-  QFile::copy(QString((SAfolder+"StandaloneApplication.exe").c_str()), QString((OutputPath.toStdString()+"/StandaloneApplication.exe").c_str()));
-  QFile::copy(QString((SAfolder+"glfw3.dll").c_str()), QString((OutputPath.toStdString()+"/glfw3.dll").c_str()));
-
-  // Clear unnecessary files
-  QFile::remove(QString((SAfolder+"StandaloneApplication.exe").c_str()));
-  QFile::remove(QString((SAfolder+"StandaloneApplication.exp").c_str()));
-  QFile::remove(QString((SAfolder+"StandaloneApplication.lib").c_str()));
-
-  QMessageBox::information(this, "Standalone Application Successfully Exported!  ", "Hurray!.");
-}
-
-void CAModelerGUI::on_act_export_dll_triggered()
-{
-  // Select a directory to export
-  QString OutputPath = QFileDialog::getExistingDirectory (this, "Export DLL Directory");
-  if ( OutputPath.isNull())
-  {
-    QMessageBox::information(this, "Invalid Path", "DLL not exported. Select a valid path.");
-    return;
-  }
-
-  // Get the "working directory" where (the party begins) files are generated and compiled
-  std::string SAfolder = QApplication::applicationDirPath().toStdString() + "/StandaloneApplication/";
-
-  // H DLL file
-  std::ofstream hDllFile;
-  hDllFile.open ((SAfolder + "ca_dll.h").c_str());
-  hDllFile << m_ca_model->GenerateHDLLCode();
-  hDllFile.close();
-
-  // CPP DLL file
-  std::ofstream cppDllFile;
-  cppDllFile.open ((SAfolder + "ca_dll.cpp").c_str());
-  cppDllFile << m_ca_model->GenerateCPPDLLCode();
-  cppDllFile.close();
-
-  // To overwrite
-  if (QFile::exists((OutputPath.toStdString()+"/ca_dll.dll").c_str()))
-      QFile::remove((OutputPath.toStdString()+"/ca_dll.dll").c_str());
-
-  // Generate model DLL
-  system(("cl /DCA_DLL "+SAfolder+"/ca_dll.cpp /LD /Fo"+OutputPath.toStdString()+"/ca_dll.dll").c_str());
-
-  // Clear unnecessary files
-  QFile::remove(QString((SAfolder + "ca_dll.h").c_str()));
-  QFile::remove(QString((SAfolder + "ca_dll.cpp").c_str()));
-
-  QMessageBox::information(this, "DLL Successfully Exported!  ", "Hurray!.");
 }
 
 void CAModelerGUI::on_act_about_genesis_triggered()
 {
   QMessageBox::about(this, "About GenesisCA", "<h1>GenesisCA</h1><br>"
-                     "<b>Author:</b> Rodrigo F. Figueiredo, in honor of professor Clylton.<br><br>"
+                     "<b>Author:</b> Rodrigo F. Figueiredo, in honor of professor Clylton Galamba.<br><br>"
                      "<b>Creation Date:</b> Winter of 2017<br><br>"
                      "<b>Description:</b> GenesisCA is an open source platform for creation and simulation of Cellular Automata (CA)."
                      " It allows the creation of rich models, with cells able to hold multiple internal attributes of different types; capability"
@@ -316,6 +252,77 @@ void CAModelerGUI::on_act_save_triggered() {
   }
 }
 
+string CAModelerGUI::GetSelectedCompilerPath(bool force_popup) {
+  if(force_popup || m_compiler_file_path == "") {
+    QFileDialog open(this, tr("Select g++ compiler (usually C:/Qt/Qt[ver]/Tools/mingw[ver]/bin)"), "", tr("G++ compiler (g++.exe)"));
+    open.setFileMode(QFileDialog::ExistingFile);
+    open.setAcceptMode(QFileDialog::AcceptOpen);
+
+    if(open.exec()) {
+      m_compiler_file_path = open.selectedFiles().first().toStdString();
+      // Save selected compiler path on file for further reference.
+      string compiler_path_cache = QCoreApplication::applicationDirPath().toStdString() + "/" + serialization_tags::kCompilerPathCacheFilename;
+      std::ofstream stream(compiler_path_cache);
+      if (stream.is_open()) {
+        json serialized_data;
+        serialized_data[serialization_tags::kCompilerPath] = m_compiler_file_path;
+        stream << serialized_data << std::endl;
+        stream.close();
+      }
+
+      return m_compiler_file_path;
+    } else {  // Canceled
+      return "";
+    }
+  }
+  return m_compiler_file_path;
+}
+
+bool CAModelerGUI::ExportStandaloneApplication(std::string output) {
+  // Get the "working directory" where (the party begins) files are generated and compiled
+  std::string SAfolder = QApplication::applicationDirPath().toStdString() + "/StandaloneApplication/";
+
+  // Compile .h file from CA model.
+  std::ofstream hDllFile;
+  hDllFile.open ((SAfolder + "ca_dll.h").c_str());
+  hDllFile << m_ca_model->GenerateHDLLCode();
+  hDllFile.close();
+
+  // Compile .cpp file from CA model.
+  std::ofstream cppDllFile;
+  cppDllFile.open ((SAfolder + "ca_dll.cpp").c_str());
+  cppDllFile << m_ca_model->GenerateCPPDLLCode();
+  cppDllFile.close();
+
+  // Get gcc path in order to compile Cellular Automata generated code of the model.
+  QString gcc_path = QString::fromStdString(GetSelectedCompilerPath(false));
+  if(gcc_path != "") {
+    QString output_standalone_file_path = QString::fromStdString(output);
+    QString SAfolder_quote = QString::fromStdString(SAfolder);
+    QString SAfolder_cpp = QString::fromStdString(SAfolder + "*.cpp");
+    QString SAfolder_imgui_cpp = QString::fromStdString(SAfolder + "imgui/*.cpp");
+    QString SAfolder_glfw = QString::fromStdString(SAfolder + "glfw/");
+
+    // TODO: Fix command not working if there are whitespaces.
+    // Compile binary standalone application from C++ generated files.
+    QString command = gcc_path + " -o " + output_standalone_file_path + " " + SAfolder_cpp + " " + SAfolder_imgui_cpp +
+                     " -I " + SAfolder_quote + " -L " + SAfolder_glfw + " -lglfw3 -lopengl32 -lgdi32 -O2";
+    qDebug() << "Compile command: " << command;
+    system(command.toStdString().c_str());
+
+    // Check if application was successfully compiled and warn user otherwise.
+    if(QFile(output_standalone_file_path).exists()) {
+      return true;
+    } else {
+      QMessageBox::warning(this, "Unable to compile", "It was not able to compile using the selected g++ compiler."
+                           " Please try another option (notice that the distribution must include glfw and gdi libs).");
+    }
+  } else {
+    return false;  // Canceled
+  }
+
+  return true;
+}
 
 void CAModelerGUI::ExportCodeFiles() {
   // Get the "working directory" where files are compiled
@@ -333,34 +340,35 @@ void CAModelerGUI::ExportCodeFiles() {
       dir.mkpath(".");
   }
 
-  std::string modelName = "ca_"+m_ca_model->GetModelProperties()->m_name;
+  string simplified_name = m_ca_model->GetModelProperties()->m_name;
+  std::replace(simplified_name.begin(), simplified_name.end(), ' ', '_');
 
   // To overwrite
-  if (QFile::exists((OutputPath.toStdString()+modelName+".h").c_str()))
-      QFile::remove((OutputPath.toStdString()+modelName+".h").c_str());
+  if (QFile::exists((OutputPath.toStdString()+simplified_name+".h").c_str()))
+      QFile::remove((OutputPath.toStdString()+simplified_name+".h").c_str());
 
-  if (QFile::exists((OutputPath.toStdString()+modelName+".cpp").c_str()))
-      QFile::remove((OutputPath.toStdString()+modelName+".cpp").c_str());
+  if (QFile::exists((OutputPath.toStdString()+simplified_name+".cpp").c_str()))
+      QFile::remove((OutputPath.toStdString()+simplified_name+".cpp").c_str());
 
   // H file
   std::ofstream hFile;
-  hFile.open ((SAfolder + modelName +".h").c_str());
-  hFile << m_ca_model->GenerateHCode();
+  hFile.open ((SAfolder + simplified_name +".h").c_str());
+  hFile << m_ca_model->GenerateHCode(simplified_name);
   hFile.close();
 
   // CPP file
   std::ofstream cppFile;
-  cppFile.open ((SAfolder + modelName +".cpp").c_str());
-  cppFile << m_ca_model->GenerateCPPCode();
+  cppFile.open ((SAfolder + simplified_name +".cpp").c_str());
+  cppFile << m_ca_model->GenerateCPPCode(simplified_name);
   cppFile.close();
 
   // Get the useful files
-  QFile::copy(QString((SAfolder+ modelName+".h").c_str()), QString((OutputPath.toStdString()+"/"+modelName+".h").c_str()));
-  QFile::copy(QString((SAfolder+ modelName+".cpp").c_str()), QString((OutputPath.toStdString()+"/"+modelName+".cpp").c_str()));
+  QFile::copy(QString((SAfolder+ simplified_name+".h").c_str()), QString((OutputPath.toStdString()+"/"+simplified_name+".h").c_str()));
+  QFile::copy(QString((SAfolder+ simplified_name+".cpp").c_str()), QString((OutputPath.toStdString()+"/"+simplified_name+".cpp").c_str()));
 
   // Clear unnecessary files
-  QFile::remove(QString((SAfolder+modelName+".h").c_str()));
-  QFile::remove(QString((SAfolder+modelName+".cpp").c_str()));
+  QFile::remove(QString((SAfolder+simplified_name+".h").c_str()));
+  QFile::remove(QString((SAfolder+simplified_name+".cpp").c_str()));
 
   QMessageBox::information(this, "Code Successfully Exported!  ", "Nothing to say.");
 }

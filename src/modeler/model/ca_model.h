@@ -62,8 +62,8 @@ public:
 
   string GenerateHDLLCode();
   string GenerateCPPDLLCode();
-  string GenerateHCode();
-  string GenerateCPPCode();
+  string GenerateHCode(string class_name);
+  string GenerateCPPCode(string class_name);
 
 private:
   string GenerateCACellDeclaration(bool toDLL = false);

@@ -1,3 +1,4 @@
+# TODO: Simplify this file removing unnecessary INCLUDEPATH/HEADERS and so on
 QT       += core gui widgets opengl
 
 TARGET = modeler
@@ -6,8 +7,6 @@ CONFIG += console
 
 INCLUDEPATH += $$PWD/modeler/ \
                $$PWD/../../third-party/
-               $$PWD/../../third-party/imgui
-               $$PWD/../../third-party/imgui/glfw
 
 HEADERS  += \
     ca_modeler_gui.h \
@@ -28,11 +27,11 @@ HEADERS  += \
     $$PWD/../../third-party/imgui/imgui_impl_glfw.h \
     $$PWD/../../third-party/imgui/imconfig.h \
     $$PWD/../../third-party/imgui/imgui_internal.h \
-    $$PWD/../../third-party/imgui/glfw/glfw3native.h \
+    $$PWD/../../third-party/glfw/glfw3native.h \
     $$PWD/../../third-party/imgui/stb_textedit.h \
     $$PWD/../../third-party/imgui/stb_rect_pack.h \
     $$PWD/../../third-party/imgui/stb_truetype.h \
-    $$PWD/../../third-party/imgui/imguinodegrapheditor.h
+    $$PWD/../../third-party/nodes_editor/imguinodegrapheditor.h
 
 SOURCES += \
   main.cpp \
@@ -48,7 +47,7 @@ SOURCES += \
   $$PWD/../../third-party/imgui/imgui.cpp \
   $$PWD/../../third-party/imgui/imgui_impl_glfw.cpp \
   $$PWD/../../third-party/imgui/imgui_draw.cpp \
-  $$PWD/../../third-party/imgui/imguinodegrapheditor.cpp
+  $$PWD/../../third-party/nodes_editor/imguinodegrapheditor.cpp
 
 FORMS    += \
     ca_modeler_gui.ui \
@@ -59,21 +58,34 @@ FORMS    += \
     UpdateRulesHandler/update_rules_handler.ui \
     ColorMappingsHandler/color_mappings_handler_widget.ui
 
-LIBS += -lOpenGL32
-LIBS += "-L$$PWD/../../third-party/imgui/glfw" -lglfw3dll
-DEPENDPATH += "$$PWD/../../third-party/imgui/glfw"
+LIBS += -L"$$PWD/../../third-party/glfw/" -lglfw3 -lopengl32 -lgdi32
 
-# Copies the standalone folder so that the compilation of CA models has the required files
+# Copies files necessary for compilation of generated c++ code produced by Genesis models.
 CONFIG += file_copies
-COPIES += standalone_files
-# The following commands copies some unnecessary files but that's negligible.
-standalone_files.files = $$files($$PWD/../../third-party/imgui/*.h) # imgui .h
-standalone_files.files += $$files($$PWD/../../third-party/imgui/*.cpp) # imgui .cpp
-standalone_files.files += $$files($$PWD/../../third-party/imgui/glfw/*) # glfw
-standalone_files.files += $$files($$PWD/../simulator/main.cpp) # simulator main
-standalone_files.files += $$files($$PWD/../simulator/bitmap_image.hpp) # bitmap exporter
+COPIES += simulator_files
+simulator_files.files += $$files($$PWD/../simulator/main.cpp) # simulator main
+simulator_files.files += $$files($$PWD/../simulator/bitmap_image.hpp) # bitmap exporter
 CONFIG(debug, debug|release) {
-  standalone_files.path = $$OUT_PWD/debug/StandaloneApplication
+  simulator_files.path = $$OUT_PWD/debug/StandaloneApplication
 } else {
-  standalone_files.path = $$OUT_PWD/release/StandaloneApplication
+  simulator_files.path = $$OUT_PWD/release/StandaloneApplication
+}
+
+# imgui
+COPIES += imgui
+imgui.files = $$files($$PWD/../../third-party/imgui/*.h) # imgui .h
+imgui.files += $$files($$PWD/../../third-party/imgui/*.cpp) # imgui .cpp
+CONFIG(debug, debug|release) {
+  imgui.path = $$OUT_PWD/debug/StandaloneApplication/imgui
+} else {
+  imgui.path = $$OUT_PWD/release/StandaloneApplication/imgui
+}
+
+# GlFW
+COPIES += glfw
+glfw.files += $$files($$PWD/../../third-party/glfw/*) # glfw
+CONFIG(debug, debug|release) {
+  glfw.path = $$OUT_PWD/debug/StandaloneApplication/glfw
+} else {
+  glfw.path = $$OUT_PWD/release/StandaloneApplication/glfw
 }

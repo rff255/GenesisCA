@@ -78,7 +78,7 @@ json CAModel::GetSerializedData() {
                {"attributes", attributes},
                {"neighborhoods", neighborhoods},
                {"color_mappings", color_mappings},
-               /*{"update_rules", update_rules}*/};
+               {"update_rules", update_rules}};
 
   return data;
 }
@@ -413,7 +413,7 @@ std::string CAModel::GenerateCPPDLLCode()
   return code;
 }
 
-std::string CAModel::GenerateHCode()
+std::string CAModel::GenerateHCode(string class_name)
 {
   string code = "";
 
@@ -421,7 +421,7 @@ std::string CAModel::GenerateHCode()
   code += "#pragma once\n\n";
   code += GenerateIncludesList() + "\n";
   code += "namespace Genesis {\n";
-  code += "namespace CA_"+ m_model_properties->m_name +" {\n\n";
+  code += "namespace CA_"+ class_name +" {\n\n";
   code += GenerateTypedefList() + "\n";
 
   // Forward declaration
@@ -435,25 +435,26 @@ std::string CAModel::GenerateHCode()
 
   // End of namespaces
   code += "\n}  // namespace_Genesis\n";
-  code += "}  // namespace_CA_"+ m_model_properties->m_name +"\n";
+  code += "}  // namespace_CA_"+ class_name +"\n";
 
   return code;
 }
 
-std::string CAModel::GenerateCPPCode()
+std::string CAModel::GenerateCPPCode(string class_name)
 {
   this->m_rules_editor->ClearScopeInformation();
+
   string code = "";
 
   // Namespaces, includes and typedefs
-  code += "#include \"ca_"+ m_model_properties->m_name +".h\"\n\n";
+  code += "#include \"ca_"+ class_name +".h\"\n\n";
 
   code += GenerateIncludesList()+ "\n";
   code += "#define CAINDEX1C(i, j) ((i)*(CAWidth) + (j))\n";
   code += "#define CAINDEX3C(i, j) ((i)*(CAWidth)*3 + (j*3))\n";
 
   code += "namespace Genesis {\n";
-  code += "namespace CA_"+ m_model_properties->m_name +" {\n\n";
+  code += "namespace CA_"+ class_name +" {\n\n";
   code += GenerateTypedefList() + "\n";
 
   code += "// ### Cell Definitions\n";
@@ -464,7 +465,7 @@ std::string CAModel::GenerateCPPCode()
 
   // End of namespaces
   code += "}  // namespace_Genesis\n";
-  code += "}  // namespace_CA_"+ m_model_properties->m_name +"\n";
+  code += "}  // namespace_CA_"+ class_name +"\n";
 
   code += "#undef CAINDEX1C\n";
   code += "#undef CAINDEX3C\n";
