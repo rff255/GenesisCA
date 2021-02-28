@@ -1,6 +1,7 @@
 #include "ca_model.h"
 #include <string>
 #include <vector>
+#include <algorithm>
 
 using std::string;
 using std::vector;
@@ -40,8 +41,7 @@ json CAModel::GetSerializedData() {
 
   // Attributes
   json attributes;
-  for(auto kv : m_attributes) {
-    Attribute* attr = kv.second;
+  for(Attribute* attr : m_attributes) {
     attributes.push_back({{"m_id_name", attr->m_id_name},
                                 {"m_type", attr->m_type},
                                 {"m_description", attr->m_description},
@@ -51,8 +51,7 @@ json CAModel::GetSerializedData() {
 
   // Neighborhoods
   json neighborhoods;
-  for(auto kv : m_neighborhoods) {
-    Neighborhood* neigh = kv.second;
+  for(Neighborhood* neigh : m_neighborhoods) {
     neighborhoods.push_back({{"m_id_name", neigh->m_id_name},
                              {"m_description", neigh->m_description},
                              {"m_neighbor_coords", neigh->m_neighbor_coords}});
@@ -60,8 +59,7 @@ json CAModel::GetSerializedData() {
 
   // Color Mappings
   json color_mappings;
-  for(auto kv : m_mappings) {
-    Mapping* mapping = kv.second;
+  for(Mapping* mapping : m_mappings) {
     color_mappings.push_back({{"m_id_name", mapping->m_id_name},
                               {"m_description", mapping->m_description},
                               {"m_is_attr_color", mapping->m_is_attr_color},
@@ -122,30 +120,34 @@ void CAModel::InitFromSerializedData(json data) {
 string CAModel::AddAttribute(Attribute* new_attr) {
   string base_id_name = new_attr->m_id_name;
   int disambiguity_number = 1;
-  while(m_attributes.count(new_attr->m_id_name) > 0) {
+  while(find_if(m_attributes.begin(), m_attributes.end(), [new_attr](const Attribute* attr){
+                return attr->m_id_name == new_attr->m_id_name;}) != m_attributes.end()) {
     new_attr->m_id_name = base_id_name + std::to_string(disambiguity_number);
     disambiguity_number++;
   }
 
-  m_attributes[new_attr->m_id_name] = new_attr;
+  m_attributes.push_back(new_attr);
   return new_attr->m_id_name;
 }
 
 bool CAModel::DelAttribute(string id_name) {
-  auto entry = m_attributes.find(id_name);
+  auto entry = find_if(m_attributes.begin(), m_attributes.end(), [id_name](const Attribute* attr){
+    return attr->m_id_name == id_name;});
 
   if(entry == m_attributes.end())
     return false;
 
-  delete m_attributes[id_name];
+  delete *entry;
   m_attributes.erase(entry);
 
   return true;
 }
 
 string CAModel::ModifyAttribute(string prev_id_name, Attribute *modified_attr) {
+  // TODO: Delete replaced value?
   if(prev_id_name == modified_attr->m_id_name) {
-    m_attributes[prev_id_name] = modified_attr;
+    std::replace_if(m_attributes.begin(), m_attributes.end(), [prev_id_name](const Attribute* attr){
+      return attr->m_id_name == prev_id_name;}, modified_attr);
     return prev_id_name;
   }
 
@@ -156,16 +158,18 @@ string CAModel::ModifyAttribute(string prev_id_name, Attribute *modified_attr) {
 }
 
 Attribute* CAModel::GetAttribute(string id_name) {
-  if(m_attributes.find(id_name) == m_attributes.end())
+  auto entry = find_if(m_attributes.begin(), m_attributes.end(), [id_name](const Attribute* attr){
+    return attr->m_id_name == id_name;});
+  if(entry == m_attributes.end())
     return nullptr;
   else
-    return m_attributes[id_name];
+    return *entry;
 }
 
 vector<string> CAModel::GetAttributesList() {
   vector<string> attr_id_name_list;
   for(auto kv : m_attributes)
-      attr_id_name_list.push_back(kv.first);
+      attr_id_name_list.push_back(kv->m_id_name);
 
   return attr_id_name_list;
 }
@@ -174,8 +178,8 @@ vector<string> CAModel::GetCellAttributesList()
 {
   vector<string> attr_id_name_list;
   for(auto kv : m_attributes)
-      if(!GetAttribute(kv.first)->m_is_model_attribute)
-        attr_id_name_list.push_back(kv.first);
+      if(!GetAttribute(kv->m_id_name)->m_is_model_attribute)
+        attr_id_name_list.push_back(kv->m_id_name);
 
   return attr_id_name_list;
 }
@@ -183,9 +187,9 @@ vector<string> CAModel::GetCellAttributesList()
 vector<string> CAModel::GetModelAttributesList()
 {
   vector<string> attr_id_name_list;
-  for(auto kv : m_attributes)
-      if(GetAttribute(kv.first)->m_is_model_attribute)
-        attr_id_name_list.push_back(kv.first);
+  for(auto attr : m_attributes)
+      if(attr->m_is_model_attribute)
+        attr_id_name_list.push_back(attr->m_id_name);
 
   return attr_id_name_list;
 }
@@ -207,30 +211,34 @@ void CAModel::ModifyModelProperties(
 string CAModel::AddNeighborhood(Neighborhood* new_neigh) {
   string base_id_name = new_neigh->m_id_name;
   int disambiguity_number = 1;
-  while(m_neighborhoods.count(new_neigh->m_id_name) > 0) {
+  while(find_if(m_neighborhoods.begin(), m_neighborhoods.end(), [new_neigh](const Neighborhood* neigh){
+                return neigh->m_id_name == new_neigh->m_id_name;}) != m_neighborhoods.end()) {
     new_neigh->m_id_name = base_id_name + std::to_string(disambiguity_number);
     disambiguity_number++;
   }
 
-  m_neighborhoods[new_neigh->m_id_name] = new_neigh;
+  m_neighborhoods.push_back(new_neigh);
   return new_neigh->m_id_name;
 }
 
 bool CAModel::DelNeighborhood(string id_name) {
-  auto entry = m_neighborhoods.find(id_name);
+  auto entry = find_if(m_neighborhoods.begin(), m_neighborhoods.end(), [id_name](const Neighborhood* neigh){
+    return neigh->m_id_name == id_name;});
 
   if(entry == m_neighborhoods.end())
     return false;
 
-  delete m_neighborhoods[id_name];
+  delete *entry;
   m_neighborhoods.erase(entry);
 
   return true;
 }
 
 string CAModel::ModifyNeighborhood(string prev_id_name, Neighborhood* modified_neigh) {
+  // TODO: Delete replaced value?
   if(prev_id_name == modified_neigh->m_id_name) {
-    m_neighborhoods[prev_id_name] = modified_neigh;
+    std::replace_if(m_neighborhoods.begin(), m_neighborhoods.end(), [prev_id_name](const Neighborhood* neigh){
+      return neigh->m_id_name == prev_id_name;}, modified_neigh);
     return prev_id_name;
   }
 
@@ -241,16 +249,18 @@ string CAModel::ModifyNeighborhood(string prev_id_name, Neighborhood* modified_n
 }
 
 Neighborhood *CAModel::GetNeighborhood(string id_name) {
-  if(m_neighborhoods.find(id_name) == m_neighborhoods.end())
+  auto entry = find_if(m_neighborhoods.begin(), m_neighborhoods.end(), [id_name](const Neighborhood* neigh){
+    return neigh->m_id_name == id_name;});
+  if(entry == m_neighborhoods.end())
     return nullptr;
   else
-    return m_neighborhoods[id_name];
+    return *entry;
 }
 
 vector<string> CAModel::GetNeighborhoodList() {
   vector<string> neigh_id_name_list;
-  for(auto kv : m_neighborhoods)
-      neigh_id_name_list.push_back(kv.first);
+  for(auto neighborhood : m_neighborhoods)
+      neigh_id_name_list.push_back(neighborhood->m_id_name);
 
   return neigh_id_name_list;
 }
@@ -259,30 +269,34 @@ vector<string> CAModel::GetNeighborhoodList() {
 string CAModel::AddMapping(Mapping* new_map) {
   string base_id_name = new_map->m_id_name;
   int disambiguity_number = 1;
-  while(m_mappings.count(new_map->m_id_name) > 0) {
+  while(find_if(m_mappings.begin(), m_mappings.end(), [new_map](const Mapping* map){
+                return map->m_id_name == new_map->m_id_name;}) != m_mappings.end()) {
     new_map->m_id_name = base_id_name + std::to_string(disambiguity_number);
     disambiguity_number++;
   }
 
-  m_mappings[new_map->m_id_name] = new_map;
+  m_mappings.push_back(new_map);
   return new_map->m_id_name;
 }
 
 bool CAModel::DelMapping(string id_name) {
-  auto entry = m_mappings.find(id_name);
+  auto entry = find_if(m_mappings.begin(), m_mappings.end(), [id_name](const Mapping* map){
+    return map->m_id_name == id_name;});
 
   if(entry == m_mappings.end())
     return false;
 
-  delete m_mappings[id_name];
+  delete *entry;
   m_mappings.erase(entry);
 
   return true;
 }
 
 string CAModel::ModifyMapping(string prev_id_name, Mapping *modified_map) {
+  // TODO: Delete replaced value?
   if(prev_id_name == modified_map->m_id_name) {
-    m_mappings[prev_id_name] = modified_map;
+    std::replace_if(m_mappings.begin(), m_mappings.end(), [prev_id_name](const Mapping* mapping){
+      return mapping->m_id_name == prev_id_name;}, modified_map);
     return prev_id_name;
   }
 
@@ -293,36 +307,36 @@ string CAModel::ModifyMapping(string prev_id_name, Mapping *modified_map) {
 }
 
 Mapping *CAModel::GetMapping(string id_name) {
-  if(m_mappings.find(id_name) == m_mappings.end())
+  auto entry = find_if(m_mappings.begin(), m_mappings.end(), [id_name](const Mapping* mapping){
+    return mapping->m_id_name == id_name;});
+  if(entry == m_mappings.end())
     return nullptr;
   else
-    return m_mappings[id_name];
+    return *entry;
 }
 
 vector<string> CAModel::GetMappingsList() {
   vector<string> map_id_name_list;
-  for(auto kv : m_mappings)
-      map_id_name_list.push_back(kv.first);
+  for(auto mapping : m_mappings)
+      map_id_name_list.push_back(mapping->m_id_name);
 
   return map_id_name_list;
 }
 
-vector<string> CAModel::GetColAttrMappingsList()
-{
+vector<string> CAModel::GetColAttrMappingsList() {
   vector<string> map_id_name_list;
-  for(auto kv : m_mappings)
-      if(!GetMapping(kv.first)->m_is_attr_color)
-        map_id_name_list.push_back(kv.first);
+  for(auto mapping : m_mappings)
+      if(!mapping->m_is_attr_color)
+        map_id_name_list.push_back(mapping->m_id_name);
 
   return map_id_name_list;
 }
 
-vector<string> CAModel::GetAttrColMappingsList()
-{
+vector<string> CAModel::GetAttrColMappingsList() {
   vector<string> map_id_name_list;
-  for(auto kv : m_mappings)
-      if(GetMapping(kv.first)->m_is_attr_color)
-        map_id_name_list.push_back(kv.first);
+  for(auto mapping : m_mappings)
+      if(mapping->m_is_attr_color)
+        map_id_name_list.push_back(mapping->m_id_name);
 
   return map_id_name_list;
 }

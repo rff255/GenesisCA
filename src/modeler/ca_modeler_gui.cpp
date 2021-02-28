@@ -306,7 +306,7 @@ bool CAModelerGUI::ExportStandaloneApplication(std::string output) {
     // TODO: Fix command not working if there are whitespaces.
     // Compile binary standalone application from C++ generated files.
     QString command = gcc_path + " -o " + output_standalone_file_path + " " + SAfolder_cpp + " " + SAfolder_imgui_cpp +
-                     " -I " + SAfolder_quote + " -L " + SAfolder_glfw + " -lglfw3 -lopengl32 -lgdi32 -O2";
+                     " -I " + SAfolder_quote + " -L " + SAfolder_glfw + " -lglfw3 -lopengl32 -lgdi32 -static-libgcc -static-libstdc++ -static -lstdc++ -lwinpthread -lpthread -O2";
     qDebug() << "Compile command: " << command;
     system(command.toStdString().c_str());
 

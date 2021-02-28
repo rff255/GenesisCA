@@ -75,9 +75,9 @@ private:
 
   // The data model itself
   ModelProperties* m_model_properties;
-  std::unordered_map<string, Attribute*>    m_attributes;
-  std::unordered_map<string, Neighborhood*> m_neighborhoods;
-  std::unordered_map<string, Mapping*>      m_mappings;
+  std::vector<Attribute*>    m_attributes;
+  std::vector<Neighborhood*> m_neighborhoods;
+  std::vector<Mapping*>      m_mappings;
   UpdateRulesEditor* m_rules_editor;
 };
 
