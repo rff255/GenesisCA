@@ -212,12 +212,23 @@ void CAModelerGUI::on_act_generate_standalone_viewer_triggered()
 
   if(save_as.exec()) {
     string output = save_as.selectedFiles().first().toStdString();
-    bool successfully_exported = this->ExportStandaloneApplication(output);
+    QTemporaryDir temp_out_dir;
+    if (!temp_out_dir.isValid()) {
+      QMessageBox::warning(this, "Export Failed", "Unable to create temporary folder in order to export compiled CA model. Please try again.");
+      return;
+    }
+
+    string temp_output = temp_out_dir.path().toStdString() + "/" + "StandaloneApplication.exe";
+    bool successfully_exported = this->ExportStandaloneApplication(temp_output);
     if(successfully_exported) {
-      QMessageBox::information(this, "Standalone Application Successfully Exported!  ", "Hurray!.");
+      successfully_exported = QFile::copy(QString::fromStdString(temp_output), QString::fromStdString(output));
+      if(successfully_exported) {
+        QMessageBox::information(this, "Standalone Application Successfully Exported!  ", "Hurray!.");
+        return;
+      }
     }
   }
-
+  QMessageBox::warning(this, "Export Failed", "Unable to export a standalone application of the CA model. Please try again.");
 }
 
 void CAModelerGUI::on_act_about_genesis_triggered()
