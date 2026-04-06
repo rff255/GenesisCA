@@ -175,35 +175,43 @@ function buildNeighborIndices(): void {
 // Step
 // ---------------------------------------------------------------------------
 
-/** Build the static args array (everything shared across all cells). idx is set per-cell. */
-function buildStaticArgs(): unknown[] {
-  const args: unknown[] = [0]; // idx placeholder at [0]
+let activeViewer = '';
+
+/** Build args for the loop-wrapped step function (called once per step, not per cell) */
+function buildLoopArgs(): unknown[] {
+  const args: unknown[] = [total];
   for (const attr of cellAttrs) args.push(readAttrs[attr.id]);
   for (const attr of cellAttrs) args.push(writeAttrs[attr.id]);
   for (const nbr of neighborhoods) {
-    args.push(nbrIndices[nbr.id]);       // full Int32Array
-    args.push(nbr.coords.length);        // neighborhood size
+    args.push(nbrIndices[nbr.id]);
+    args.push(nbr.coords.length);
   }
   args.push(cachedModelAttrs, colors, activeViewer);
   return args;
 }
 
-let activeViewer = '';
+/** Build args for a per-cell function (InputColor) */
+function buildCellArgs(idx: number): unknown[] {
+  const args: unknown[] = [idx];
+  for (const attr of cellAttrs) args.push(readAttrs[attr.id]);
+  for (const attr of cellAttrs) args.push(writeAttrs[attr.id]);
+  for (const nbr of neighborhoods) {
+    args.push(nbrIndices[nbr.id]);
+    args.push(nbr.coords.length);
+  }
+  args.push(cachedModelAttrs, colors, activeViewer);
+  return args;
+}
 
 function runStep(): void {
   const fn = stepFn!;
-  const args = buildStaticArgs();
-
-  for (let idx = 0; idx < total; idx++) {
-    args[0] = idx;
-    fn(...args);
-  }
+  // ONE call per step — the loop is inside the compiled function
+  fn(...buildLoopArgs());
 
   // Swap buffers
   const tmp = readAttrs;
   readAttrs = writeAttrs;
   writeAttrs = tmp;
-  // Update args references for next step (buffers swapped)
   generation++;
 }
 
@@ -331,9 +339,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         if (icEntry?.fn) {
           // InputColor writes to writeAttrs (via w_<attr>[idx])
           // We need to also update readAttrs so the next step sees the change
-          const args = buildStaticArgs();
-          args[0] = idx;
-          icEntry.fn(c.r, c.g, c.b, ...args);
+          icEntry.fn(c.r, c.g, c.b, ...buildCellArgs(idx));
           // Copy written values back to read buffer so step() sees them
           for (const attr of cellAttrs) {
             readAttrs[attr.id]![idx] = writeAttrs[attr.id]![idx]!;

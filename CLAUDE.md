@@ -213,11 +213,15 @@ The app is functional with these major systems:
 - Multi-output nodes (InputColor, GetColorConstant) use `_v${nodeId}_${portId}` naming
 - Multi-root support: Step (per-generation) and InputColor (brush interaction) compile separately
 
-### Simulation Engine
-- `src/simulator/engine/sim.worker.ts` — Web Worker that owns grid state
-- Grid never leaves the worker — only RGBA color buffer is transferred (zero-copy via Transferable)
-- Double-buffered grids, cached neighbor arrays, pre-allocated output objects
-- `src/simulator/SimulatorView.tsx` — Canvas rendering via ImageData + zoom/pan
+### Simulation Engine (SoA Architecture)
+- `src/simulator/engine/sim.worker.ts` — Web Worker owns grid as Structure of Arrays
+- Grid storage: one typed array per attribute (`Uint8Array` bool, `Int32Array` int, `Float64Array` float), double-buffered
+- Neighbor access: pre-computed `Int32Array` index tables (built at init, handles torus/constant boundary once)
+- Compiled function signature: `(idx, r_<attrs>..., w_<attrs>..., nIdx_<nbrs>..., nSz_<nbrs>..., modelAttrs, colors, activeViewer)`
+- Color output: SetColorViewer writes directly to RGBA buffer, checks `activeViewer` param for multi-viewer support
+- Bool constants use `1`/`0` (not `true`/`false`) for typed array compatibility
+- Paint: after InputColor writes to writeAttrs, copy back to readAttrs before runStep()
+- `src/simulator/SimulatorView.tsx` — Canvas rendering via ImageData + zoom/pan, RMB=brush/LMB=pan
 
 ### Key Patterns
 - Graph state sync: single debounced sync (100ms) via refs — never use multiple setTimeout callbacks

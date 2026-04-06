@@ -181,6 +181,36 @@
   line-height: 1.4;
 }
 
+.checkRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.7rem;
+  color: #8090a0;
+  cursor: pointer;
+}
+
+.checkRow input[type="checkbox"] {
+  accent-color: #4cc9f0;
+}
+
+.overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(13, 17, 23, 0.85);
+  border: 1px solid #2d4059;
+  border-radius: 8px;
+  padding: 20px 28px;
+  color: #8090a0;
+  font-size: 0.8rem;
+  text-align: center;
+  max-width: 300px;
+  line-height: 1.5;
+  pointer-events: none;
+}
+
 .codePanel {
   position: relative;
 }

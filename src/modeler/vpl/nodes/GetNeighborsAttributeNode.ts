@@ -12,10 +12,11 @@ export const GetNeighborsAttributeNode: NodeTypeDef = {
   compile: (nodeId, config) => {
     const nbrId = config.neighborhoodId as string || '_undef';
     const attr = config.attributeId as string || '_undef';
-    // Compute base offset into the full neighbor index array, read neighbor values
+    // Fill pre-declared scratch array (declared before the loop by compiler)
+    // _scr_<nodeId> is declared in the function preamble
     return [
       `const _nb${nodeId} = idx * nSz_${nbrId};`,
-      `const _v${nodeId} = new Array(nSz_${nbrId}); for (let _n = 0; _n < nSz_${nbrId}; _n++) _v${nodeId}[_n] = r_${attr}[nIdx_${nbrId}[_nb${nodeId} + _n]];`,
+      `for (let _n = 0; _n < nSz_${nbrId}; _n++) _scr_${nodeId}[_n] = r_${attr}[nIdx_${nbrId}[_nb${nodeId} + _n]];`,
     ].join(' ') + '\n';
   },
 };

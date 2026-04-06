@@ -7,13 +7,14 @@ export function SimulatorView() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { model } = useModel();
   const workerRef = useRef<Worker | null>(null);
-  const rafRef = useRef<number>(0);
   const pendingStep = useRef(false);
 
   const [generation, setGeneration] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [targetFps, setTargetFps] = useState(30);
+  const [unlimitedFps, setUnlimitedFps] = useState(false);
   const [gensPerFrame, setGensPerFrame] = useState(1);
+  const [unlimitedGens, setUnlimitedGens] = useState(false);
   const [compileError, setCompileError] = useState('');
   const [activeViewer, setActiveViewer] = useState('');
   const [showCode, setShowCode] = useState(false);
@@ -102,16 +103,33 @@ export function SimulatorView() {
 
     ctx.drawImage(srcCanvasRef.current, ox, oy, scaledW, scaledH);
 
-    // FPS + Gens/s tracking
     fpsFrames.current++;
-    const now = performance.now();
-    if (now - fpsLastTime.current >= 1000) {
-      setActualFps(fpsFrames.current);
-      setActualGps(gpsGens.current);
-      fpsFrames.current = 0;
-      gpsGens.current = 0;
-      fpsLastTime.current = now;
-    }
+  }, []);
+
+  // Track playing state in ref so worker message handler can access it
+  const playingRef = useRef(false);
+  const gensPerFrameRef = useRef(1);
+  const targetFpsRef = useRef(30);
+  const lastStepSentTime = useRef(0);
+  const lastDrawTime = useRef(0);
+  const nextStepTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const unlimitedFpsRef = useRef(false);
+  const unlimitedGensRef = useRef(false);
+  useEffect(() => { playingRef.current = playing; }, [playing]);
+  useEffect(() => { gensPerFrameRef.current = unlimitedGens ? 100 : gensPerFrame; }, [gensPerFrame, unlimitedGens]);
+  useEffect(() => { targetFpsRef.current = unlimitedFps ? 999999 : targetFps; }, [targetFps, unlimitedFps]);
+  useEffect(() => { unlimitedFpsRef.current = unlimitedFps; }, [unlimitedFps]);
+  useEffect(() => { unlimitedGensRef.current = unlimitedGens; }, [unlimitedGens]);
+
+  const sendNextStep = useCallback(() => {
+    if (!playingRef.current || pendingStep.current) return;
+    pendingStep.current = true;
+    lastStepSentTime.current = performance.now();
+    workerRef.current?.postMessage({
+      type: 'step',
+      count: gensPerFrameRef.current,
+      activeViewer: activeViewerRef.current,
+    });
   }, []);
 
   // Handle messages from worker
@@ -123,9 +141,45 @@ export function SimulatorView() {
       const gen = msg.generation as number;
       gpsGens.current += gen - lastGenForGps.current;
       lastGenForGps.current = gen;
-      setGeneration(gen);
+
       pendingStep.current = false;
-      draw();
+
+      // Update metrics (runs on every result, even without drawing)
+      const now = performance.now();
+      if (now - fpsLastTime.current >= 1000) {
+        setActualFps(fpsFrames.current);
+        setActualGps(gpsGens.current);
+        fpsFrames.current = 0;
+        gpsGens.current = 0;
+        fpsLastTime.current = now;
+      }
+
+      if (unlimitedGensRef.current && playingRef.current) {
+        // Unlimited gens: skip drawing, update generation counter periodically
+        if (now - lastDrawTime.current >= 500) {
+          lastDrawTime.current = now;
+          setGeneration(gen);
+        }
+        sendNextStep();
+      } else {
+        // Normal: draw every result
+        setGeneration(gen);
+        draw();
+
+        // Schedule next step to maintain targetFps rate
+        if (playingRef.current) {
+          const msPerFrame = 1000 / targetFpsRef.current;
+          const elapsed = performance.now() - lastStepSentTime.current;
+          const delay = Math.max(0, msPerFrame - elapsed);
+
+          if (delay <= 1) {
+            sendNextStep();
+          } else {
+            if (nextStepTimer.current) clearTimeout(nextStepTimer.current);
+            nextStepTimer.current = setTimeout(sendNextStep, delay);
+          }
+        }
+      }
     } else if (msg.type === 'error') {
       setCompileError(msg.message as string);
       pendingStep.current = false;
@@ -319,38 +373,16 @@ export function SimulatorView() {
     };
   }, [draw, paintAt]);
 
-  // Play loop
+  // Play: kick-start the step pipeline (worker message handler chains subsequent steps)
   useEffect(() => {
-    if (!playing) return;
+    if (playing) {
+      sendNextStep();
+    } else {
+      // Stop: cancel any pending timer
+      if (nextStepTimer.current) { clearTimeout(nextStepTimer.current); nextStepTimer.current = null; }
+    }
+  }, [playing, sendNextStep]);
 
-    let lastFrameTime = 0;
-    const msPerFrame = 1000 / targetFps;
-
-    const loop = (time: number) => {
-      if (!lastFrameTime) lastFrameTime = time;
-      const elapsed = time - lastFrameTime;
-
-      if (elapsed >= msPerFrame && !pendingStep.current) {
-        lastFrameTime = time;
-        pendingStep.current = true;
-        workerRef.current?.postMessage({
-          type: 'step',
-          count: gensPerFrame,
-          activeViewer,
-        });
-      }
-
-      rafRef.current = requestAnimationFrame(loop);
-    };
-
-    rafRef.current = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [playing, targetFps, gensPerFrame, activeViewer]);
-
-  // Cleanup
-  useEffect(() => {
-    return () => cancelAnimationFrame(rafRef.current);
-  }, []);
 
   const handleStep = () => {
     if (pendingStep.current) return;
@@ -445,29 +477,39 @@ export function SimulatorView() {
 
         <div className={styles.stat}>
           <span className={styles.statLabel}>Target FPS</span>
-          <span className={styles.statValue}>{targetFps}</span>
+          <span className={styles.statValue}>{unlimitedFps ? '\u221E' : targetFps}</span>
         </div>
         <input
           className={styles.speedInput}
           type="range"
           min={1}
-          max={60}
+          max={200}
           value={targetFps}
+          disabled={unlimitedFps}
           onChange={e => setTargetFps(Number(e.target.value))}
         />
+        <label className={styles.checkRow}>
+          <input type="checkbox" checked={unlimitedFps} onChange={e => setUnlimitedFps(e.target.checked)} />
+          Unlimited
+        </label>
 
         <div className={styles.stat}>
           <span className={styles.statLabel}>Gens / Frame</span>
-          <span className={styles.statValue}>{gensPerFrame}</span>
+          <span className={styles.statValue}>{unlimitedGens ? '\u221E' : gensPerFrame}</span>
         </div>
         <input
           className={styles.speedInput}
           type="range"
           min={1}
-          max={100}
+          max={200}
           value={gensPerFrame}
+          disabled={unlimitedGens}
           onChange={e => setGensPerFrame(Number(e.target.value))}
         />
+        <label className={styles.checkRow}>
+          <input type="checkbox" checked={unlimitedGens} onChange={e => setUnlimitedGens(e.target.checked)} />
+          Unlimited
+        </label>
 
         <hr className={styles.divider} />
 
@@ -580,6 +622,11 @@ export function SimulatorView() {
 
       <div className={styles.canvasArea}>
         <canvas ref={canvasRef} className={styles.canvas} />
+        {playing && unlimitedGens && (
+          <div className={styles.overlay}>
+            Processing without displaying. Change &lsquo;Gens/Frame&rsquo; value to see evolution of the cell states.
+          </div>
+        )}
       </div>
     </div>
   );

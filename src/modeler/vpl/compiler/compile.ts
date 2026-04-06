@@ -37,10 +37,17 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
 }
 
 // ---------------------------------------------------------------------------
-// Compile a single root's subgraph
+// Compile a single root's subgraph (per-cell body)
 // ---------------------------------------------------------------------------
 
 const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'getColorConstant']);
+
+interface RootCompileResult {
+  valueLines: string[];
+  flowLines: string[];
+  /** Node IDs that need scratch array declarations (GetNeighborsAttribute nodes) */
+  scratchNodes: Array<{ nodeId: string; nbrId: string }>;
+}
 
 function compileRoot(
   rootNode: GraphNode,
@@ -48,14 +55,19 @@ function compileRoot(
   nodeMap: Map<string, GraphNode>,
   inputToSource: Map<string, { nodeId: string; portId: string }>,
   flowOutputToTargets: Map<string, Array<{ nodeId: string; portId: string }>>,
-): string[] {
+): RootCompileResult {
   const compiled = new Set<string>();
   const valueLines: string[] = [];
+  const scratchNodes: Array<{ nodeId: string; nbrId: string }> = [];
 
   function varName(sourceNodeId: string, sourcePortId: string): string {
     const sourceNode = nodeMap.get(sourceNodeId);
     if (sourceNode && MULTI_OUTPUT_TYPES.has(sourceNode.data.nodeType)) {
       return `_v${sourceNodeId}_${sourcePortId}`;
+    }
+    // GetNeighborsAttribute uses _scr_ prefix for its scratch array
+    if (sourceNode?.data.nodeType === 'getNeighborsAttribute') {
+      return `_scr_${sourceNodeId}`;
     }
     return `_v${sourceNodeId}`;
   }
@@ -73,6 +85,12 @@ function compileRoot(
       return `_v${nodeId}`;
     }
 
+    // Track GetNeighborsAttribute nodes for scratch declaration
+    if (node.data.nodeType === 'getNeighborsAttribute') {
+      const nbrId = node.data.config.neighborhoodId as string || '_undef';
+      scratchNodes.push({ nodeId, nbrId });
+    }
+
     const inputVars: Record<string, string> = {};
     for (const port of def.ports) {
       if (port.kind !== 'input' || port.category !== 'value') continue;
@@ -84,7 +102,7 @@ function compileRoot(
     }
 
     const code = def.compile(nodeId, node.data.config, inputVars);
-    if (code) valueLines.push('  ' + code.trimEnd());
+    if (code) valueLines.push('      ' + code.trimEnd());
 
     return `_v${nodeId}`;
   }
@@ -159,16 +177,16 @@ function compileRoot(
     }
   }
 
-  compileFlowChain(rootNode.id, rootFlowPort, '  ');
+  compileFlowChain(rootNode.id, rootFlowPort, '      ');
 
-  return [...valueLines, '', ...flowLines];
+  return { valueLines, flowLines, scratchNodes };
 }
 
 // ---------------------------------------------------------------------------
-// Build parameter lists from model
+// Build parameter lists from model (without idx — loop is inside)
 // ---------------------------------------------------------------------------
 
-function buildParamList(model: CAModel): {
+function buildLoopParams(model: CAModel): {
   params: string;
   cellAttrs: Array<{ id: string; type: string }>;
   neighborhoods: Array<{ id: string }>;
@@ -178,14 +196,26 @@ function buildParamList(model: CAModel): {
     .map(a => ({ id: a.id, type: a.type }));
   const neighborhoods = model.neighborhoods.map(n => ({ id: n.id }));
 
-  // Parameters: idx, read attrs, write attrs, full neighbor index arrays + sizes, modelAttrs, colors, activeViewer
-  const parts: string[] = ['idx'];
+  // Parameters: total, read attrs, write attrs, full neighbor index arrays + sizes, modelAttrs, colors, activeViewer
+  const parts: string[] = ['total'];
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
   parts.push('modelAttrs', 'colors', 'activeViewer');
 
   return { params: parts.join(', '), cellAttrs, neighborhoods };
+}
+
+/** Per-cell params (for InputColor which is called per-cell) */
+function buildCellParams(model: CAModel): string {
+  const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
+  const neighborhoods = model.neighborhoods;
+  const parts: string[] = ['idx'];
+  for (const a of cellAttrs) parts.push(`r_${a.id}`);
+  for (const a of cellAttrs) parts.push(`w_${a.id}`);
+  for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
+  parts.push('modelAttrs', 'colors', 'activeViewer');
+  return parts.join(', ');
 }
 
 // ---------------------------------------------------------------------------
@@ -212,42 +242,59 @@ export function compileGraph(
   }
 
   const { nodeMap, inputToSource, flowOutputToTargets } = buildAdjacency(graphNodes, graphEdges);
-  const { params, cellAttrs } = buildParamList(model);
+  const { params: loopParams, cellAttrs } = buildLoopParams(model);
+  const cellParams = buildCellParams(model);
 
   // Generate attribute copy lines (previous → next generation)
-  const copyLines = cellAttrs.map(a => `  w_${a.id}[idx] = r_${a.id}[idx];`);
+  const copyLines = cellAttrs.map(a => `      w_${a.id}[idx] = r_${a.id}[idx];`);
 
-  // --- Compile Step function ---
+  // --- Compile Step function (loop-wrapped) ---
   const stepNode = graphNodes.find(n => n.data.nodeType === 'step');
   let stepCode = '';
   if (stepNode) {
-    const lines = compileRoot(stepNode, 'do', nodeMap, inputToSource, flowOutputToTargets);
+    const { valueLines, flowLines, scratchNodes } = compileRoot(
+      stepNode, 'do', nodeMap, inputToSource, flowOutputToTargets,
+    );
+
+    // Scratch array declarations (before the loop)
+    const scratchDecls = scratchNodes.map(
+      s => `  const _scr_${s.nodeId} = new Array(nSz_${s.nbrId});`,
+    );
+
     stepCode = [
-      `(function(${params}) {`,
-      '  const colorIdx = idx * 4;',
-      '  // Copy previous state',
+      `(function(${loopParams}) {`,
+      ...scratchDecls,
+      '  for (let idx = 0; idx < total; idx++) {',
+      '    const colorIdx = idx * 4;',
       ...copyLines,
+      ...valueLines,
       '',
-      ...lines,
+      ...flowLines,
+      '  }',
       '})',
     ].join('\n');
   }
 
-  // --- Compile InputColor functions ---
+  // --- Compile InputColor functions (per-cell, not loop-wrapped) ---
   const inputColorNodes = graphNodes.filter(n => n.data.nodeType === 'inputColor');
   const inputColorCodes: Array<{ mappingId: string; code: string }> = [];
 
   for (const icNode of inputColorNodes) {
     const mappingId = icNode.data.config.mappingId as string || '';
-    const lines = compileRoot(icNode, 'do', nodeMap, inputToSource, flowOutputToTargets);
+    const { valueLines, flowLines } = compileRoot(
+      icNode, 'do', nodeMap, inputToSource, flowOutputToTargets,
+    );
+    // InputColor is called per-cell (for painted cells only), keep per-cell signature
+    const icCopyLines = cellAttrs.map(a => `  w_${a.id}[idx] = r_${a.id}[idx];`);
     const code = [
-      `(function(_r, _g, _b, ${params}) {`,
+      `(function(_r, _g, _b, ${cellParams}) {`,
       '  const colorIdx = idx * 4;',
-      '  // Copy previous state',
-      ...copyLines,
+      ...icCopyLines,
       `  const _v${icNode.id}_r = _r; const _v${icNode.id}_g = _g; const _v${icNode.id}_b = _b;`,
       '',
-      ...lines,
+      ...valueLines,
+      '',
+      ...flowLines,
       '})',
     ].join('\n');
     inputColorCodes.push({ mappingId, code });
