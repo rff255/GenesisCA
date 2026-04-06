@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { ModelProvider } from './model/ModelContext';
+import { FileMenu } from './components/FileMenu';
 import { ModelerView } from './modeler/ModelerView';
 import { SimulatorView } from './simulator/SimulatorView';
 import styles from './App.module.css';
@@ -9,6 +11,7 @@ export function App() {
   const [mode, setMode] = useState<AppMode>('modeler');
 
   return (
+    <ModelProvider>
     <div className={styles.app}>
       <nav className={styles.navbar}>
         <span className={styles.title}>GenesisCA</span>
@@ -26,10 +29,12 @@ export function App() {
             Simulator
           </button>
         </div>
+        <FileMenu />
       </nav>
       <main className={styles.content}>
         {mode === 'modeler' ? <ModelerView /> : <SimulatorView />}
       </main>
     </div>
+    </ModelProvider>
   );
 }

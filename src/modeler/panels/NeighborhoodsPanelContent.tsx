@@ -1,51 +1,50 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
+import { useModel } from '../../model/ModelContext';
 import styles from './PanelContent.module.css';
-
-interface MockNeighborhood {
-  id: string;
-  name: string;
-  margin: number;
-  active: Set<string>;
-}
 
 function coordKey(row: number, col: number): string {
   return `${row},${col}`;
 }
 
-function createMooreNeighborhood(): MockNeighborhood {
-  const active = new Set<string>();
-  for (let r = -1; r <= 1; r++) {
-    for (let c = -1; c <= 1; c++) {
-      if (r !== 0 || c !== 0) active.add(coordKey(r, c));
-    }
-  }
-  return { id: 'moore', name: 'Moore', margin: 2, active };
-}
-
 export function NeighborhoodsPanelContent() {
-  const [neighborhoods] = useState<MockNeighborhood[]>(() => [createMooreNeighborhood()]);
+  const { model, addNeighborhood, removeNeighborhood, updateNeighborhood } =
+    useModel();
   const [selectedIdx, setSelectedIdx] = useState(0);
-  const [gridState, setGridState] = useState<Set<string>>(() => new Set(neighborhoods[0]!.active));
   const [margin, setMargin] = useState(2);
 
+  const neighborhoods = model.neighborhoods;
   const selected = neighborhoods[selectedIdx];
   const gridSize = 2 * margin + 1;
 
-  const handleCellClick = useCallback((row: number, col: number) => {
-    if (row === 0 && col === 0) return; // center cell not toggleable
-    const key = coordKey(row, col);
-    setGridState(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
-      return next;
-    });
-  }, []);
+  const activeCoords = useMemo(() => {
+    if (!selected) return new Set<string>();
+    return new Set(selected.coords.map(([r, c]) => coordKey(r, c)));
+  }, [selected]);
 
-  const activeCount = gridState.size;
+  const handleCellClick = useCallback(
+    (row: number, col: number) => {
+      if (!selected) return;
+      if (row === 0 && col === 0) return;
+      const key = coordKey(row, col);
+      let newCoords: Array<[number, number]>;
+      if (activeCoords.has(key)) {
+        newCoords = selected.coords.filter(
+          ([r, c]) => !(r === row && c === col),
+        );
+      } else {
+        newCoords = [...selected.coords, [row, col]];
+      }
+      updateNeighborhood(selected.id, { coords: newCoords });
+    },
+    [selected, activeCoords, updateNeighborhood],
+  );
+
+  const handleDelete = () => {
+    if (selected) {
+      removeNeighborhood(selected.id);
+      setSelectedIdx(prev => Math.max(0, prev - 1));
+    }
+  };
 
   return (
     <>
@@ -59,13 +58,19 @@ export function NeighborhoodsPanelContent() {
               onClick={() => setSelectedIdx(i)}
             >
               <span className={styles.listItemName}>{n.name}</span>
-              <span className={styles.listItemBadge}>{activeCount} neighbors</span>
+              <span className={styles.listItemBadge}>
+                {n.coords.length} neighbors
+              </span>
             </div>
           ))}
         </div>
         <div className={styles.buttonRow}>
-          <button className={styles.addButton}>+ Add Neighborhood</button>
-          <button className={styles.deleteButton}>Delete</button>
+          <button className={styles.addButton} onClick={() => addNeighborhood()}>
+            + Add Neighborhood
+          </button>
+          <button className={styles.deleteButton} onClick={handleDelete}>
+            Delete
+          </button>
         </div>
       </div>
 
@@ -74,11 +79,26 @@ export function NeighborhoodsPanelContent() {
           <div className={styles.fieldGroup}>
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Name</label>
-              <input className={styles.textInput} defaultValue={selected.name} />
+              <input
+                className={styles.textInput}
+                value={selected.name}
+                onChange={e =>
+                  updateNeighborhood(selected.id, { name: e.target.value })
+                }
+              />
             </div>
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Description</label>
-              <textarea className={styles.textArea} rows={2} defaultValue="All 8 surrounding cells" />
+              <textarea
+                className={styles.textArea}
+                rows={2}
+                value={selected.description}
+                onChange={e =>
+                  updateNeighborhood(selected.id, {
+                    description: e.target.value,
+                  })
+                }
+              />
             </div>
           </div>
 
@@ -91,7 +111,11 @@ export function NeighborhoodsPanelContent() {
                 value={margin}
                 min={1}
                 max={6}
-                onChange={e => setMargin(Math.max(1, Math.min(6, Number(e.target.value))))}
+                onChange={e =>
+                  setMargin(
+                    Math.max(1, Math.min(6, Number(e.target.value))),
+                  )
+                }
               />
               <span style={{ fontSize: '0.7rem', color: '#6080a0' }}>
                 ({gridSize} x {gridSize} grid)
@@ -107,7 +131,7 @@ export function NeighborhoodsPanelContent() {
                 return Array.from({ length: gridSize }, (_, colIdx) => {
                   const col = colIdx - margin;
                   const isCenter = row === 0 && col === 0;
-                  const isActive = gridState.has(coordKey(row, col));
+                  const isActive = activeCoords.has(coordKey(row, col));
 
                   let cellClass = styles.gridCell + ' ';
                   if (isCenter) {
@@ -123,7 +147,9 @@ export function NeighborhoodsPanelContent() {
                       key={coordKey(row, col)}
                       className={cellClass}
                       onClick={() => handleCellClick(row, col)}
-                      title={isCenter ? 'Center cell' : `(${row}, ${col})`}
+                      title={
+                        isCenter ? 'Center cell' : `(${row}, ${col})`
+                      }
                     />
                   );
                 });

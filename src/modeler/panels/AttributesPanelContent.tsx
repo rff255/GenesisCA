@@ -1,25 +1,22 @@
 import { useState } from 'react';
+import { useModel } from '../../model/ModelContext';
+import type { AttributeType } from '../../model/types';
 import styles from './PanelContent.module.css';
 
-interface MockAttribute {
-  id: string;
-  name: string;
-  type: string;
-  isModel: boolean;
-  description: string;
-}
-
-const MOCK_ATTRIBUTES: MockAttribute[] = [
-  { id: 'alive', name: 'alive', type: 'Bool', isModel: false, description: 'Whether the cell is alive or dead' },
-  { id: 'age', name: 'age', type: 'Integer', isModel: false, description: 'How many generations the cell has been alive' },
-];
-
 export function AttributesPanelContent() {
+  const { model, addAttribute, removeAttribute, updateAttribute } = useModel();
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const cellAttrs = MOCK_ATTRIBUTES.filter(a => !a.isModel);
-  const modelAttrs = MOCK_ATTRIBUTES.filter(a => a.isModel);
-  const selected = MOCK_ATTRIBUTES.find(a => a.id === selectedId);
+  const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
+  const modelAttrs = model.attributes.filter(a => a.isModelAttribute);
+  const selected = model.attributes.find(a => a.id === selectedId);
+
+  const handleDelete = () => {
+    if (selectedId) {
+      removeAttribute(selectedId);
+      setSelectedId(null);
+    }
+  };
 
   return (
     <>
@@ -38,8 +35,15 @@ export function AttributesPanelContent() {
           ))}
         </div>
         <div className={styles.buttonRow}>
-          <button className={styles.addButton}>+ Add Cell Attribute</button>
-          <button className={styles.deleteButton}>Delete</button>
+          <button
+            className={styles.addButton}
+            onClick={() => addAttribute(false)}
+          >
+            + Add Cell Attribute
+          </button>
+          <button className={styles.deleteButton} onClick={handleDelete}>
+            Delete
+          </button>
         </div>
       </div>
 
@@ -47,7 +51,14 @@ export function AttributesPanelContent() {
         <div className={styles.sectionTitle}>Model Attributes</div>
         <div className={styles.list}>
           {modelAttrs.length === 0 && (
-            <p style={{ fontSize: '0.75rem', color: '#6080a0', fontStyle: 'italic', padding: '4px 0' }}>
+            <p
+              style={{
+                fontSize: '0.75rem',
+                color: '#6080a0',
+                fontStyle: 'italic',
+                padding: '4px 0',
+              }}
+            >
               No model attributes defined.
             </p>
           )}
@@ -63,8 +74,15 @@ export function AttributesPanelContent() {
           ))}
         </div>
         <div className={styles.buttonRow}>
-          <button className={styles.addButton}>+ Add Model Attribute</button>
-          <button className={styles.deleteButton}>Delete</button>
+          <button
+            className={styles.addButton}
+            onClick={() => addAttribute(true)}
+          >
+            + Add Model Attribute
+          </button>
+          <button className={styles.deleteButton} onClick={handleDelete}>
+            Delete
+          </button>
         </div>
       </div>
 
@@ -74,21 +92,56 @@ export function AttributesPanelContent() {
           <div className={styles.fieldGroup}>
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Name</label>
-              <input className={styles.textInput} defaultValue={selected.name} />
+              <input
+                className={styles.textInput}
+                value={selected.name}
+                onChange={e =>
+                  updateAttribute(selected.id, { name: e.target.value })
+                }
+              />
             </div>
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Type</label>
-              <select className={styles.selectInput} defaultValue={selected.type}>
-                <option value="Bool">Bool</option>
-                <option value="Integer">Integer</option>
-                <option value="Float">Float</option>
-                <option value="List">List</option>
-                <option value="Tag">Tag</option>
+              <select
+                className={styles.selectInput}
+                value={selected.type}
+                onChange={e =>
+                  updateAttribute(selected.id, {
+                    type: e.target.value as AttributeType,
+                  })
+                }
+              >
+                <option value="bool">Bool</option>
+                <option value="integer">Integer</option>
+                <option value="float">Float</option>
+                <option value="list">List</option>
+                <option value="tag">Tag</option>
               </select>
             </div>
             <div className={styles.field}>
+              <label className={styles.fieldLabel}>Default Value</label>
+              <input
+                className={styles.textInput}
+                value={selected.defaultValue}
+                onChange={e =>
+                  updateAttribute(selected.id, {
+                    defaultValue: e.target.value,
+                  })
+                }
+              />
+            </div>
+            <div className={styles.field}>
               <label className={styles.fieldLabel}>Description</label>
-              <textarea className={styles.textArea} rows={3} defaultValue={selected.description} />
+              <textarea
+                className={styles.textArea}
+                rows={3}
+                value={selected.description}
+                onChange={e =>
+                  updateAttribute(selected.id, {
+                    description: e.target.value,
+                  })
+                }
+              />
             </div>
           </div>
         </div>

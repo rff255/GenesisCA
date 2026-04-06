@@ -1,48 +1,28 @@
 import { useState } from 'react';
+import { useModel } from '../../model/ModelContext';
 import styles from './PanelContent.module.css';
 
-interface MockMapping {
-  id: string;
-  name: string;
-  isAttrToColor: boolean;
-  description: string;
-  red: string;
-  green: string;
-  blue: string;
-}
-
-const MOCK_MAPPINGS: MockMapping[] = [
-  {
-    id: 'default-viz',
-    name: 'Default Visualization',
-    isAttrToColor: true,
-    description: 'Maps alive state to cell color',
-    red: 'alive ? 76 : 13',
-    green: 'alive ? 201 : 27',
-    blue: 'alive ? 240 : 43',
-  },
-  {
-    id: 'paint',
-    name: 'Paint Interaction',
-    isAttrToColor: false,
-    description: 'Allows painting alive cells on the grid',
-    red: 'ignored',
-    green: 'ignored',
-    blue: 'brightness > 128 → alive = true',
-  },
-];
-
 export function MappingsPanelContent() {
+  const { model, addMapping, removeMapping, updateMapping } = useModel();
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const attrToColor = MOCK_MAPPINGS.filter(m => m.isAttrToColor);
-  const colorToAttr = MOCK_MAPPINGS.filter(m => !m.isAttrToColor);
-  const selected = MOCK_MAPPINGS.find(m => m.id === selectedId);
+  const attrToColor = model.mappings.filter(m => m.isAttributeToColor);
+  const colorToAttr = model.mappings.filter(m => !m.isAttributeToColor);
+  const selected = model.mappings.find(m => m.id === selectedId);
+
+  const handleDelete = () => {
+    if (selectedId) {
+      removeMapping(selectedId);
+      setSelectedId(null);
+    }
+  };
 
   return (
     <>
       <div className={styles.section}>
-        <div className={styles.sectionTitle}>Attribute &rarr; Color (Output)</div>
+        <div className={styles.sectionTitle}>
+          Attribute &rarr; Color (Output)
+        </div>
         <div className={styles.list}>
           {attrToColor.map(m => (
             <div
@@ -56,13 +36,22 @@ export function MappingsPanelContent() {
           ))}
         </div>
         <div className={styles.buttonRow}>
-          <button className={styles.addButton}>+ Add A&rarr;C Mapping</button>
-          <button className={styles.deleteButton}>Delete</button>
+          <button
+            className={styles.addButton}
+            onClick={() => addMapping(true)}
+          >
+            + Add A&rarr;C Mapping
+          </button>
+          <button className={styles.deleteButton} onClick={handleDelete}>
+            Delete
+          </button>
         </div>
       </div>
 
       <div className={styles.section}>
-        <div className={styles.sectionTitle}>Color &rarr; Attribute (Input)</div>
+        <div className={styles.sectionTitle}>
+          Color &rarr; Attribute (Input)
+        </div>
         <div className={styles.list}>
           {colorToAttr.map(m => (
             <div
@@ -76,8 +65,15 @@ export function MappingsPanelContent() {
           ))}
         </div>
         <div className={styles.buttonRow}>
-          <button className={styles.addButton}>+ Add C&rarr;A Mapping</button>
-          <button className={styles.deleteButton}>Delete</button>
+          <button
+            className={styles.addButton}
+            onClick={() => addMapping(false)}
+          >
+            + Add C&rarr;A Mapping
+          </button>
+          <button className={styles.deleteButton} onClick={handleDelete}>
+            Delete
+          </button>
         </div>
       </div>
 
@@ -87,23 +83,75 @@ export function MappingsPanelContent() {
           <div className={styles.fieldGroup}>
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Name</label>
-              <input className={styles.textInput} defaultValue={selected.name} />
+              <input
+                className={styles.textInput}
+                value={selected.name}
+                onChange={e =>
+                  updateMapping(selected.id, { name: e.target.value })
+                }
+              />
             </div>
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Description</label>
-              <textarea className={styles.textArea} rows={2} defaultValue={selected.description} />
+              <textarea
+                className={styles.textArea}
+                rows={2}
+                value={selected.description}
+                onChange={e =>
+                  updateMapping(selected.id, { description: e.target.value })
+                }
+              />
             </div>
             <div className={styles.field}>
-              <span className={`${styles.colorLabel} ${styles.colorLabelRed}`}>Red Channel</span>
-              <textarea className={styles.textArea} rows={2} defaultValue={selected.red} />
+              <span
+                className={`${styles.colorLabel} ${styles.colorLabelRed}`}
+              >
+                Red Channel
+              </span>
+              <textarea
+                className={styles.textArea}
+                rows={2}
+                value={selected.redDescription}
+                onChange={e =>
+                  updateMapping(selected.id, {
+                    redDescription: e.target.value,
+                  })
+                }
+              />
             </div>
             <div className={styles.field}>
-              <span className={`${styles.colorLabel} ${styles.colorLabelGreen}`}>Green Channel</span>
-              <textarea className={styles.textArea} rows={2} defaultValue={selected.green} />
+              <span
+                className={`${styles.colorLabel} ${styles.colorLabelGreen}`}
+              >
+                Green Channel
+              </span>
+              <textarea
+                className={styles.textArea}
+                rows={2}
+                value={selected.greenDescription}
+                onChange={e =>
+                  updateMapping(selected.id, {
+                    greenDescription: e.target.value,
+                  })
+                }
+              />
             </div>
             <div className={styles.field}>
-              <span className={`${styles.colorLabel} ${styles.colorLabelBlue}`}>Blue Channel</span>
-              <textarea className={styles.textArea} rows={2} defaultValue={selected.blue} />
+              <span
+                className={`${styles.colorLabel} ${styles.colorLabelBlue}`}
+              >
+                Blue Channel
+              </span>
+              <textarea
+                className={styles.textArea}
+                rows={2}
+                value={selected.blueDescription}
+                onChange={e =>
+                  updateMapping(selected.id, {
+                    blueDescription: e.target.value,
+                  })
+                }
+              />
             </div>
           </div>
         </div>
