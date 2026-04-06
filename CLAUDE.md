@@ -10,6 +10,14 @@ The old implementation in `legacy_qt_cpp_solution` serves as architectural refer
 
 ---
 
+## Commands
+
+- `npm run dev` — Start Vite dev server (http://localhost:5173)
+- `npm run build` — TypeScript check + production build to `dist/`
+- `npm run preview` — Preview production build locally
+
+---
+
 ## What GenesisCA Is
 
 GenesisCA is an IDE for modeling and simulating Cellular Automata (CA). It uses a Visual Programming Language (VPL) — a node-based graph editor — so users can design arbitrarily complex CA models without writing code. The goals are **accessibility** (no programming required) and **performance** (grids up to 5000×5000+).
@@ -98,19 +106,28 @@ Each node type defines a `compile()` method that emits a JS code snippet. The co
 3. Stitches snippets into a flat function body with intermediate variables
 4. Creates an executable function via `new Function(...)`
 
-Example — a Game of Life graph compiles to:
+Example — a Game of Life graph compiles to a loop-wrapped step function (called ONCE per step, not per cell):
 ```js
-(cell, neighbors, modelAttrs) => {
-  const _v0 = neighbors.reduce((s, n) => s + n.alive, 0);
-  const _v1 = (_v0 === 3);
-  const _v2 = (_v0 === 2);
-  const _v3 = (cell.alive && _v2);
-  const _v4 = (_v1 || _v3);
-  return { alive: _v4 };
-}
+(function(total, r_alive, w_alive, nIdx_moore, nSz_moore, modelAttrs, colors, activeViewer) {
+  const _scr_n1 = new Array(nSz_moore); // scratch array (reused per cell)
+  for (let idx = 0; idx < total; idx++) {
+    const colorIdx = idx * 4;
+    w_alive[idx] = r_alive[idx]; // copy prev state
+    const _nb = idx * nSz_moore;
+    for (let _n = 0; _n < nSz_moore; _n++) _scr_n1[_n] = r_alive[nIdx_moore[_nb + _n]];
+    let _count = 0;
+    for (let _n = 0; _n < _scr_n1.length; _n++) if (_scr_n1[_n] === 1) _count++;
+    const _alive = (_count === 3 || (r_alive[idx] && _count === 2)) ? 1 : 0;
+    w_alive[idx] = _alive;
+    if (activeViewer === "default-viz") {
+      colors[colorIdx] = _alive ? 76 : 13; colors[colorIdx+1] = _alive ? 201 : 27;
+      colors[colorIdx+2] = _alive ? 240 : 43; colors[colorIdx+3] = 255;
+    }
+  }
+})
 ```
 
-This mirrors exactly how the old Genesis worked — each node's `Eval()` produced C++ code, stitched into `.h`/`.cpp`, compiled by gcc into `.dll`/`.exe`. The only difference: the target language is JS instead of C++, and compilation is instant (no external toolchain).
+This mirrors how the old Genesis worked — each node's `Eval()` produced C++ code, stitched into `.h`/`.cpp`, compiled by gcc into `.dll`/`.exe`. The only difference: the target language is JS instead of C++, and compilation is instant (no external toolchain). Grid uses Structure of Arrays (typed arrays per attribute) for cache-friendly access.
 
 **Why not interpret the graph at runtime:** At 25M cells, even ~2μs overhead per cell = ~50 seconds per generation. Compiled JS with JIT optimization targets ~10-50ns per cell = ~0.25-1.25s per generation.
 
@@ -118,7 +135,7 @@ A "debug/step mode" that interprets the graph slowly with visual feedback (highl
 
 ### Model File Format
 
-Models are saved as `.genesis.json` files with a versioned schema. The JSON contains:
+Models are saved as `.gcaproj` files with a versioned schema. The JSON contains:
 - Schema version (for future migration)
 - All model properties, attributes, neighborhoods, color mappings
 - The full node graph (nodes, connections, positions) as serialized React Flow state
@@ -136,31 +153,44 @@ A "presentation" export bundles the Simulator + a compiled model into a **single
 
 ```
 genesis-ca/
-├── CLAUDE.md              # This file
+├── CLAUDE.md
 ├── package.json
-├── tsconfig.json
+├── tsconfig.json / tsconfig.app.json / tsconfig.node.json
 ├── vite.config.ts
 ├── index.html
 ├── public/
 ├── src/
 │   ├── App.tsx
-│   ├── modeler/           # Model editing UI
-│   │   ├── PropertiesPanel.tsx
-│   │   ├── AttributesPanel.tsx
-│   │   ├── NeighborhoodsPanel.tsx
-│   │   ├── MappingsPanel.tsx
-│   │   └── vpl/           # Visual Programming Language editor
-│   │       ├── nodes/     # One file per node type (Add, IfThenElse, GetAttribute, NeighborhoodSum, etc.)
-│   │       ├── compiler/  # Graph → JS compilation logic
-│   │       └── GraphEditor.tsx
+│   ├── components/
+│   │   └── FileMenu.tsx              # New/Save/Load buttons
+│   ├── modeler/
+│   │   ├── ActivityBar.tsx           # Icon sidebar for panel switching
+│   │   ├── PanelShell.tsx            # Panel wrapper (header + scrollable body)
+│   │   ├── ModelerView.tsx
+│   │   ├── panels/                   # Panel content components
+│   │   │   ├── PropertiesPanelContent.tsx
+│   │   │   ├── AttributesPanelContent.tsx
+│   │   │   ├── NeighborhoodsPanelContent.tsx
+│   │   │   └── MappingsPanelContent.tsx
+│   │   └── vpl/                      # Visual Programming Language editor
+│   │       ├── CaNode.tsx            # Custom React Flow node component
+│   │       ├── types.ts              # Port/node type definitions
+│   │       ├── GraphEditor.tsx
+│   │       ├── nodes/                # 19 node types (one file each)
+│   │       └── compiler/
+│   │           └── compile.ts        # Two-pass compiler (hoisted values + flow)
 │   ├── simulator/
-│   │   ├── engine/        # Web Worker: simulation loop, grid state management
-│   │   ├── renderer/      # Canvas2D rendering (later WebGPU)
-│   │   └── SimulatorView.tsx
+│   │   ├── SimulatorView.tsx         # Canvas rendering, zoom/pan, brush tool
+│   │   └── engine/
+│   │       ├── SimEngine.ts          # Fallback engine (reference only)
+│   │       └── sim.worker.ts         # Web Worker — owns grid, runs steps
 │   ├── model/
-│   │   ├── schema.ts      # Model JSON schema definition + version migrations
-│   │   └── types.ts       # TypeScript type definitions for the model
-│   └── export/            # Presentation .html builder
+│   │   ├── ModelContext.tsx           # React Context + useReducer
+│   │   ├── defaultModel.ts           # Default Game of Life model
+│   │   ├── fileOperations.ts         # .gcaproj save/load/download
+│   │   ├── schema.ts
+│   │   └── types.ts                  # TypeScript types for CAModel
+│   └── export/                       # Presentation .html builder (planned)
 ```
 
 ---
@@ -217,7 +247,11 @@ The app is functional with these major systems:
 - `src/simulator/engine/sim.worker.ts` — Web Worker owns grid as Structure of Arrays
 - Grid storage: one typed array per attribute (`Uint8Array` bool, `Int32Array` int, `Float64Array` float), double-buffered
 - Neighbor access: pre-computed `Int32Array` index tables (built at init, handles torus/constant boundary once)
-- Compiled function signature: `(idx, r_<attrs>..., w_<attrs>..., nIdx_<nbrs>..., nSz_<nbrs>..., modelAttrs, colors, activeViewer)`
+- Step function is LOOP-WRAPPED: `(total, r_<attrs>..., w_<attrs>..., nIdx_<nbrs>..., nSz_<nbrs>..., modelAttrs, colors, activeViewer)` — contains the for-loop, called ONCE per step
+- InputColor functions remain per-cell: `(_r, _g, _b, idx, r_<attrs>..., ...)`
+- GetNeighborsAttribute uses `_scr_<nodeId>` scratch arrays declared before the loop — never allocate in hot path
+- NEVER use `fn(...args)` in per-cell loops — V8 megamorphic spread kills performance
+- Play pipeline chains from worker message handler (not rAF): receive result → draw → send next step
 - Color output: SetColorViewer writes directly to RGBA buffer, checks `activeViewer` param for multi-viewer support
 - Bool constants use `1`/`0` (not `true`/`false`) for typed array compatibility
 - Paint: after InputColor writes to writeAttrs, copy back to readAttrs before runStep()
