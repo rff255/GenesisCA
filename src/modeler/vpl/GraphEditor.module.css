@@ -66,6 +66,53 @@
   flex-shrink: 0;
 }
 
+/* Breadcrumb */
+
+.breadcrumb {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 10px;
+  background: rgba(22, 33, 62, 0.9);
+  border: 1px solid #2d4059;
+  border-radius: 4px;
+  font-size: 0.7rem;
+}
+
+.breadcrumbSep {
+  color: #4a6080;
+  margin: 0 4px;
+}
+
+.breadcrumbItem {
+  background: transparent;
+  border: none;
+  color: #6080a0;
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.breadcrumbItem:hover {
+  color: #4cc9f0;
+  background: rgba(76, 201, 240, 0.1);
+}
+
+.breadcrumbActive {
+  color: #e0e0e0;
+  cursor: default;
+}
+
+.breadcrumbActive:hover {
+  color: #e0e0e0;
+  background: transparent;
+}
+
 /* Override React Flow dark theme */
 
 :global(.react-flow) {

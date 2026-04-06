@@ -12,6 +12,7 @@ import type {
   CAModel,
   GraphEdge,
   GraphNode,
+  MacroDef,
   Mapping,
   ModelProperties,
   Neighborhood,
@@ -52,6 +53,9 @@ type ModelAction =
   | { type: 'REMOVE_MAPPING'; id: string }
   | { type: 'UPDATE_MAPPING'; id: string; changes: Partial<Mapping> }
   | { type: 'SET_GRAPH'; nodes: GraphNode[]; edges: GraphEdge[] }
+  | { type: 'ADD_MACRO'; macro: MacroDef }
+  | { type: 'UPDATE_MACRO'; id: string; changes: Partial<MacroDef> }
+  | { type: 'REMOVE_MACRO'; id: string }
   | { type: 'NEW_MODEL' }
   | { type: 'LOAD_MODEL'; model: CAModel }
   | { type: 'MARK_SAVED' };
@@ -207,6 +211,38 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         },
       };
 
+    case 'ADD_MACRO':
+      return {
+        ...state,
+        isDirty: true,
+        model: {
+          ...state.model,
+          macroDefs: [...(state.model.macroDefs || []), action.macro],
+        },
+      };
+
+    case 'UPDATE_MACRO':
+      return {
+        ...state,
+        isDirty: true,
+        model: {
+          ...state.model,
+          macroDefs: (state.model.macroDefs || []).map(m =>
+            m.id === action.id ? { ...m, ...action.changes } : m,
+          ),
+        },
+      };
+
+    case 'REMOVE_MACRO':
+      return {
+        ...state,
+        isDirty: true,
+        model: {
+          ...state.model,
+          macroDefs: (state.model.macroDefs || []).filter(m => m.id !== action.id),
+        },
+      };
+
     case 'NEW_MODEL':
       return { model: DEFAULT_MODEL, isDirty: false };
 
@@ -236,6 +272,9 @@ export interface ModelContextValue {
   removeMapping: (id: string) => void;
   updateMapping: (id: string, changes: Partial<Mapping>) => void;
   setGraph: (nodes: GraphNode[], edges: GraphEdge[]) => void;
+  addMacro: (macro: MacroDef) => void;
+  updateMacro: (id: string, changes: Partial<MacroDef>) => void;
+  removeMacro: (id: string) => void;
   newModel: () => void;
   loadModel: (model: CAModel) => void;
   markSaved: () => void;
@@ -256,6 +295,7 @@ function createInitialState(): ModelState {
         // Ensure new fields exist for older saved models
         if (!model.graphNodes) model.graphNodes = [];
         if (!model.graphEdges) model.graphEdges = [];
+        if (!model.macroDefs) model.macroDefs = [];
         return { model, isDirty: false };
       }
     }
@@ -328,6 +368,19 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'SET_GRAPH', nodes, edges }),
     [],
   );
+  const addMacro = useCallback(
+    (macro: MacroDef) => dispatch({ type: 'ADD_MACRO', macro }),
+    [],
+  );
+  const updateMacro = useCallback(
+    (id: string, changes: Partial<MacroDef>) =>
+      dispatch({ type: 'UPDATE_MACRO', id, changes }),
+    [],
+  );
+  const removeMacro = useCallback(
+    (id: string) => dispatch({ type: 'REMOVE_MACRO', id }),
+    [],
+  );
   const newModel = useCallback(() => {
     dispatch({ type: 'NEW_MODEL' });
     try { localStorage.removeItem('genesisca_autosave'); } catch { /* ok */ }
@@ -356,6 +409,9 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       removeMapping,
       updateMapping,
       setGraph,
+      addMacro,
+      updateMacro,
+      removeMacro,
       newModel,
       loadModel,
       markSaved,
@@ -374,6 +430,9 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       removeMapping,
       updateMapping,
       setGraph,
+      addMacro,
+      updateMacro,
+      removeMacro,
       newModel,
       loadModel,
       markSaved,

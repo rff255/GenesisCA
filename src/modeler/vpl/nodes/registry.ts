@@ -18,6 +18,7 @@ import { LoopNode } from './LoopNode';
 import { SetAttributeNode } from './SetAttributeNode';
 import { SetColorViewerNode } from './SetColorViewerNode';
 import { InputColorNode } from './InputColorNode';
+import { MacroNode } from './MacroNode';
 
 const ALL_NODES: NodeTypeDef[] = [
   // Flow
@@ -45,6 +46,8 @@ const ALL_NODES: NodeTypeDef[] = [
   InputColorNode,
   SetColorViewerNode,
   GetColorConstantNode,
+  // Macro
+  MacroNode,
 ];
 
 const registry = new Map<string, NodeTypeDef>();

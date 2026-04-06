@@ -63,6 +63,26 @@ export interface GraphEdge {
   targetHandle: string;
 }
 
+/** An exposed port on a macro — maps to an internal node's port */
+export interface MacroPort {
+  portId: string;
+  label: string;
+  dataType: string;
+  category: 'value' | 'flow';
+  internalNodeId: string;    // which internal node this maps to
+  internalPortId: string;    // which handle on that internal node
+}
+
+/** A reusable macro (subgraph) definition */
+export interface MacroDef {
+  id: string;
+  name: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  exposedInputs: MacroPort[];
+  exposedOutputs: MacroPort[];
+}
+
 /** Complete CA model definition */
 export interface CAModel {
   schemaVersion: number;
@@ -72,4 +92,5 @@ export interface CAModel {
   mappings: Mapping[];
   graphNodes: GraphNode[];
   graphEdges: GraphEdge[];
+  macroDefs: MacroDef[];
 }

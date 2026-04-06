@@ -67,4 +67,5 @@ export const DEFAULT_MODEL: CAModel = {
   ],
   graphNodes: [],
   graphEdges: [],
+  macroDefs: [],
 };

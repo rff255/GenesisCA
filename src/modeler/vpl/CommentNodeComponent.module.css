@@ -1,0 +1,26 @@
+.comment {
+  min-width: 150px;
+  max-width: 300px;
+  background: rgba(45, 64, 89, 0.6);
+  border: 1px dashed #4a6080;
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.textArea {
+  width: 100%;
+  min-height: 40px;
+  background: transparent;
+  border: none;
+  color: #a0b0c0;
+  font-size: 0.75rem;
+  font-family: inherit;
+  font-style: italic;
+  resize: both;
+  outline: none;
+  line-height: 1.4;
+}
+
+.textArea::placeholder {
+  color: #506070;
+}

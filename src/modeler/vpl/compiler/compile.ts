@@ -55,6 +55,7 @@ function compileRoot(
   nodeMap: Map<string, GraphNode>,
   inputToSource: Map<string, { nodeId: string; portId: string }>,
   flowOutputToTargets: Map<string, Array<{ nodeId: string; portId: string }>>,
+  model?: CAModel,
 ): RootCompileResult {
   const compiled = new Set<string>();
   const valueLines: string[] = [];
@@ -83,6 +84,82 @@ function compileRoot(
 
     if (node.data.nodeType === 'inputColor') {
       return `_v${nodeId}`;
+    }
+
+    // Handle MacroNode — inline the subgraph
+    if (node.data.nodeType === 'macro' && model) {
+      const macroDefId = (node.data.config as Record<string, unknown>).macroDefId as string;
+      const macroDef = (model.macroDefs || []).find(m => m.id === macroDefId);
+      if (macroDef) {
+        // Resolve inputs from outer graph to macro's exposed input ports
+        for (const inp of macroDef.exposedInputs) {
+          const outerSource = inputToSource.get(`${nodeId}:${inp.portId}`);
+          if (outerSource) {
+            compileValueNode(outerSource.nodeId);
+            const outerVar = varName(outerSource.nodeId, outerSource.portId);
+            // Alias: map internal node's expected variable to the outer variable
+            valueLines.push(`      const _v_m${nodeId}_${inp.internalNodeId}_${inp.internalPortId} = ${outerVar};`);
+          }
+        }
+
+        // Build adjacency for the macro's internal subgraph
+        const macroAdj = buildAdjacency(macroDef.nodes, macroDef.edges);
+
+        // Compile internal value nodes with prefixed IDs
+        const internalCompiled = new Set<string>();
+        function compileMacroValueNode(internalId: string): string {
+          const prefixed = `_m${nodeId}_${internalId}`;
+          if (internalCompiled.has(internalId)) return `_v${prefixed}`;
+          internalCompiled.add(internalId);
+
+          const internalNode = macroAdj.nodeMap.get(internalId);
+          if (!internalNode) return 'undefined';
+          const internalDef = getNodeDef(internalNode.data.nodeType);
+          if (!internalDef) return 'undefined';
+
+          const internalInputVars: Record<string, string> = {};
+          for (const port of internalDef.ports) {
+            if (port.kind !== 'input' || port.category !== 'value') continue;
+            const src = macroAdj.inputToSource.get(`${internalId}:${port.id}`);
+            if (src) {
+              // Check if this source is an exposed input (aliased from outer)
+              const md = macroDef!;
+              const isExposedInput = md.exposedInputs.some(
+                p => p.internalNodeId === internalId && p.internalPortId === port.id,
+              );
+              if (isExposedInput) {
+                const expPort = md.exposedInputs.find(
+                  p => p.internalNodeId === internalId && p.internalPortId === port.id,
+                );
+                if (expPort) {
+                  internalInputVars[port.id] = `_v_m${nodeId}_${internalId}_${port.id}`;
+                  continue;
+                }
+              }
+              compileMacroValueNode(src.nodeId);
+              internalInputVars[port.id] = `_v_m${nodeId}_${src.nodeId}`;
+            }
+          }
+
+          const code = internalDef.compile(prefixed, internalNode.data.config, internalInputVars);
+          if (code) valueLines.push('      ' + code.trimEnd());
+          return `_v${prefixed}`;
+        }
+
+        // Compile the internal nodes that produce exposed outputs
+        for (const outp of macroDef.exposedOutputs) {
+          compileMacroValueNode(outp.internalNodeId);
+          // Alias the macro node's output variable to the internal source
+          valueLines.push(`      const _v${nodeId}_${outp.portId} = _v_m${nodeId}_${outp.internalNodeId};`);
+        }
+
+        // If macro has a single output, alias it directly
+        if (macroDef.exposedOutputs.length === 1) {
+          valueLines.push(`      const _v${nodeId} = _v${nodeId}_${macroDef.exposedOutputs[0]!.portId};`);
+        }
+
+        return `_v${nodeId}`;
+      }
     }
 
     // Track GetNeighborsAttribute nodes for scratch declaration
@@ -253,7 +330,7 @@ export function compileGraph(
   let stepCode = '';
   if (stepNode) {
     const { valueLines, flowLines, scratchNodes } = compileRoot(
-      stepNode, 'do', nodeMap, inputToSource, flowOutputToTargets,
+      stepNode, 'do', nodeMap, inputToSource, flowOutputToTargets, model,
     );
 
     // Scratch array declarations (before the loop)
@@ -282,7 +359,7 @@ export function compileGraph(
   for (const icNode of inputColorNodes) {
     const mappingId = icNode.data.config.mappingId as string || '';
     const { valueLines, flowLines } = compileRoot(
-      icNode, 'do', nodeMap, inputToSource, flowOutputToTargets,
+      icNode, 'do', nodeMap, inputToSource, flowOutputToTargets, model,
     );
     // InputColor is called per-cell (for painted cells only), keep per-cell signature
     const icCopyLines = cellAttrs.map(a => `  w_${a.id}[idx] = r_${a.id}[idx];`);

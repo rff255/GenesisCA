@@ -35,7 +35,7 @@ export interface NodeTypeDef {
 }
 
 /** Handle ID encoding: combine port kind, category, and port id */
-export function handleId(port: PortDef): string {
+export function handleId(port: Pick<PortDef, 'id' | 'kind' | 'category'>): string {
   return `${port.kind}_${port.category}_${port.id}`;
 }
 

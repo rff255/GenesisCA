@@ -37,11 +37,38 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
   if (!def) return <div className={styles.node}>Unknown node type</div>;
 
-  const inputPorts = def.ports.filter(p => p.kind === 'input');
-  const outputPorts = def.ports.filter(p => p.kind === 'output');
+  // Dynamic port generation for macro nodes
+  let inputPorts = def.ports.filter(p => p.kind === 'input');
+  let outputPorts = def.ports.filter(p => p.kind === 'output');
+
+  if (nodeData.nodeType === 'macro') {
+    const macroDefId = nodeData.config.macroDefId as string;
+    const macroDef = (model.macroDefs || []).find(m => m.id === macroDefId);
+    if (macroDef) {
+      inputPorts = macroDef.exposedInputs.map(p => ({
+        id: p.portId,
+        label: p.label,
+        kind: 'input' as const,
+        category: p.category || 'value' as const,
+        dataType: (p.dataType || 'any') as 'any',
+      }));
+      outputPorts = macroDef.exposedOutputs.map(p => ({
+        id: p.portId,
+        label: p.label,
+        kind: 'output' as const,
+        category: p.category || 'value' as const,
+        dataType: (p.dataType || 'any') as 'any',
+      }));
+    }
+  }
+
+  const userLabel = nodeData.label as string | undefined;
 
   return (
     <div className={styles.node} style={{ borderColor: def.color }}>
+      {userLabel && (
+        <div className={styles.userLabel}>{userLabel}</div>
+      )}
       <div className={styles.header} style={{ background: def.color }}>
         {def.label}
       </div>
@@ -317,6 +344,19 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <option value="and">AND (all)</option>
             <option value="or">OR (any)</option>
             <option value="random">Pick Random</option>
+          </select>
+        )}
+
+        {nodeData.nodeType === 'macro' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.macroDefId as string) || ''}
+            onChange={e => updateConfig('macroDefId', e.target.value)}
+          >
+            <option value="">Select Macro...</option>
+            {(model.macroDefs || []).map(m => (
+              <option key={m.id} value={m.id}>{m.name}</option>
+            ))}
           </select>
         )}
       </div>

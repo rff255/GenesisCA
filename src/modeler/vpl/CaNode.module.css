@@ -8,6 +8,18 @@
   position: relative;
 }
 
+.userLabel {
+  padding: 3px 10px;
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: #c0c8d0;
+  text-align: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .header {
   padding: 5px 10px;
   font-weight: 600;
