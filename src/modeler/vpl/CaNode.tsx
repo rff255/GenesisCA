@@ -22,6 +22,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
   const updateConfig = useCallback(
     (key: string, value: string | number | boolean) => {
       const newConfig = { ...nodeData.config, [key]: value };
+      // Reset constValue when constType changes to prevent stale values
+      if (key === 'constType') {
+        switch (value) {
+          case 'bool':    newConfig.constValue = 'false'; break;
+          case 'integer': newConfig.constValue = '0'; break;
+          case 'float':   newConfig.constValue = '0'; break;
+        }
+      }
       updateNodeData(id, { ...nodeData, config: newConfig });
     },
     [id, nodeData, updateNodeData],
@@ -95,7 +103,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             {nodeData.config.constType === 'bool' ? (
               <select
                 className={styles.select}
-                value={(nodeData.config.constValue as string) || 'false'}
+                value={String(nodeData.config.constValue) === 'true' ? 'true' : 'false'}
                 onChange={e => updateConfig('constValue', e.target.value)}
               >
                 <option value="true">true</option>

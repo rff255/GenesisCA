@@ -83,3 +83,14 @@
   background: #2d4059 !important;
   color: #e0e0e0 !important;
 }
+
+:global(.react-flow__edge.selected .react-flow__edge-path) {
+  stroke: #ff6b6b !important;
+  stroke-width: 3 !important;
+}
+
+:global(.react-flow__node.selected) {
+  outline: 2px solid #ff6b6b;
+  outline-offset: 2px;
+  border-radius: 6px;
+}

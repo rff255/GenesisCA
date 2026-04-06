@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -12,7 +12,8 @@ import type { Connection, Edge, Node, NodeTypes, ReactFlowInstance } from '@xyfl
 import '@xyflow/react/dist/style.css';
 import { CaNode } from './CaNode';
 import { useModel } from '../../model/ModelContext';
-import { getAllNodeDefs, getNodeDefsByCategory } from './nodes/registry';
+import { getNodeDefsByCategory } from './nodes/registry';
+import { getNodeDef } from './nodes/registry';
 import type { GraphNode, GraphEdge } from '../../model/types';
 import styles from './GraphEditor.module.css';
 
@@ -20,12 +21,23 @@ const nodeTypes: NodeTypes = {
   caNode: CaNode,
 };
 
-let nodeIdCounter = 1;
-function nextNodeId(): string {
-  return `n${nodeIdCounter++}`;
+// ---------------------------------------------------------------------------
+// ID generation — reads existing IDs to avoid collisions
+// ---------------------------------------------------------------------------
+
+function generateNodeId(existingNodes: Node[]): string {
+  const existingIds = new Set(existingNodes.map(n => n.id));
+  let id = `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+  while (existingIds.has(id)) {
+    id = `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+  }
+  return id;
 }
 
-/** Convert model graph nodes → React Flow nodes */
+// ---------------------------------------------------------------------------
+// Conversion helpers
+// ---------------------------------------------------------------------------
+
 function toRFNodes(graphNodes: GraphNode[]): Node[] {
   return graphNodes.map(n => ({
     id: n.id,
@@ -35,7 +47,6 @@ function toRFNodes(graphNodes: GraphNode[]): Node[] {
   }));
 }
 
-/** Convert model graph edges → React Flow edges */
 function toRFEdges(graphEdges: GraphEdge[]): Edge[] {
   return graphEdges.map(e => ({
     id: e.id,
@@ -48,7 +59,6 @@ function toRFEdges(graphEdges: GraphEdge[]): Edge[] {
   }));
 }
 
-/** Convert React Flow nodes → model graph nodes */
 function toGraphNodes(rfNodes: Node[]): GraphNode[] {
   return rfNodes.map(n => ({
     id: n.id,
@@ -58,7 +68,6 @@ function toGraphNodes(rfNodes: Node[]): GraphNode[] {
   }));
 }
 
-/** Convert React Flow edges → model graph edges */
 function toGraphEdges(rfEdges: Edge[]): GraphEdge[] {
   return rfEdges.map(e => ({
     id: e.id,
@@ -69,12 +78,20 @@ function toGraphEdges(rfEdges: Edge[]): GraphEdge[] {
   }));
 }
 
+// ---------------------------------------------------------------------------
+// Context menu state
+// ---------------------------------------------------------------------------
+
 interface ContextMenuState {
   x: number;
   y: number;
   flowX: number;
   flowY: number;
 }
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
 
 function GraphEditorInner() {
   const { model, setGraph } = useModel();
@@ -83,78 +100,74 @@ function GraphEditorInner() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const rfInstance = useRef<ReactFlowInstance | null>(null);
 
-  // Sync to model context on changes
-  const syncToModel = useCallback(
-    (newNodes: Node[], newEdges: Edge[]) => {
-      setGraph(toGraphNodes(newNodes), toGraphEdges(newEdges));
-    },
-    [setGraph],
-  );
+  // Refs to track latest state for debounced sync
+  const nodesRef = useRef(nodes);
+  const edgesRef = useRef(edges);
+  const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Keep refs in sync with state
+  useEffect(() => { nodesRef.current = nodes; }, [nodes]);
+  useEffect(() => { edgesRef.current = edges; }, [edges]);
+
+  // Single debounced sync — waits for all React Flow changes to settle
+  const scheduleSync = useCallback(() => {
+    if (syncTimer.current) clearTimeout(syncTimer.current);
+    syncTimer.current = setTimeout(() => {
+      setGraph(toGraphNodes(nodesRef.current), toGraphEdges(edgesRef.current));
+    }, 100);
+  }, [setGraph]);
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => { if (syncTimer.current) clearTimeout(syncTimer.current); };
+  }, []);
+
+  // --- Event handlers ---
 
   const onConnect = useCallback(
     (connection: Connection) => {
       setEdges(eds => {
-        const newEdges = addEdge(
+        // Value inputs accept only one connection — remove existing
+        const isValueInput = connection.targetHandle?.includes('_value_');
+        let filtered = eds;
+        if (isValueInput) {
+          filtered = eds.filter(
+            e => !(e.target === connection.target && e.targetHandle === connection.targetHandle),
+          );
+        }
+        return addEdge(
           {
             ...connection,
             style: { stroke: '#4cc9f0', strokeWidth: 2 },
             animated: connection.sourceHandle?.includes('flow') ?? false,
           },
-          eds,
+          filtered,
         );
-        // Defer sync so state has settled
-        setTimeout(() => {
-          setNodes(nds => {
-            syncToModel(nds, newEdges);
-            return nds;
-          });
-        }, 0);
-        return newEdges;
       });
+      scheduleSync();
     },
-    [setEdges, setNodes, syncToModel],
+    [setEdges, scheduleSync],
   );
 
-  const onNodesChangeWrapped = useCallback(
+  const handleNodesChange = useCallback(
     (changes: Parameters<typeof onNodesChange>[0]) => {
       onNodesChange(changes);
-      // Sync after position changes (drag end)
-      const hasDrag = changes.some(
-        c => c.type === 'position' && !('dragging' in c && c.dragging),
+      // Sync on meaningful changes (not just selection)
+      const needsSync = changes.some(
+        c => c.type === 'remove' ||
+             (c.type === 'position' && 'dragging' in c && !c.dragging),
       );
-      const hasRemove = changes.some(c => c.type === 'remove');
-      if (hasDrag || hasRemove) {
-        setTimeout(() => {
-          setNodes(nds => {
-            setEdges(eds => {
-              syncToModel(nds, eds);
-              return eds;
-            });
-            return nds;
-          });
-        }, 0);
-      }
+      if (needsSync) scheduleSync();
     },
-    [onNodesChange, setNodes, setEdges, syncToModel],
+    [onNodesChange, scheduleSync],
   );
 
-  const onEdgesChangeWrapped = useCallback(
+  const handleEdgesChange = useCallback(
     (changes: Parameters<typeof onEdgesChange>[0]) => {
       onEdgesChange(changes);
-      const hasRemove = changes.some(c => c.type === 'remove');
-      if (hasRemove) {
-        setTimeout(() => {
-          setNodes(nds => {
-            setEdges(eds => {
-              syncToModel(nds, eds);
-              return eds;
-            });
-            return nds;
-          });
-        }, 0);
-      }
+      if (changes.some(c => c.type === 'remove')) scheduleSync();
     },
-    [onEdgesChange, setNodes, setEdges, syncToModel],
+    [onEdgesChange, scheduleSync],
   );
 
   // Right-click → context menu
@@ -178,40 +191,28 @@ function GraphEditorInner() {
   const addNode = useCallback(
     (nodeType: string) => {
       if (!contextMenu) return;
-      const def = getAllNodeDefs().find(d => d.type === nodeType);
+      const def = getNodeDef(nodeType);
       if (!def) return;
-      const id = nextNodeId();
-      const newNode: Node = {
-        id,
-        type: 'caNode',
-        position: { x: contextMenu.flowX, y: contextMenu.flowY },
-        data: { nodeType: def.type, config: { ...def.defaultConfig } },
-      };
       setNodes(nds => {
-        const updated = [...nds, newNode];
-        setEdges(eds => {
-          syncToModel(updated, eds);
-          return eds;
-        });
-        return updated;
+        const id = generateNodeId(nds);
+        const newNode: Node = {
+          id,
+          type: 'caNode',
+          position: { x: contextMenu.flowX, y: contextMenu.flowY },
+          data: { nodeType: def.type, config: { ...def.defaultConfig } },
+        };
+        return [...nds, newNode];
       });
+      scheduleSync();
       setContextMenu(null);
     },
-    [contextMenu, setNodes, setEdges, syncToModel],
+    [contextMenu, setNodes, scheduleSync],
   );
 
-  // Also sync when node data changes (config edits inside nodes)
+  // Sync when node config changes (dropdown selections inside nodes)
   const onNodeDataChange = useCallback(() => {
-    setTimeout(() => {
-      setNodes(nds => {
-        setEdges(eds => {
-          syncToModel(nds, eds);
-          return eds;
-        });
-        return nds;
-      });
-    }, 50);
-  }, [setNodes, setEdges, syncToModel]);
+    scheduleSync();
+  }, [scheduleSync]);
 
   const categories = getNodeDefsByCategory();
 
@@ -220,14 +221,18 @@ function GraphEditorInner() {
       <ReactFlow
         nodes={nodes}
         edges={edges}
-        onNodesChange={onNodesChangeWrapped}
-        onEdgesChange={onEdgesChangeWrapped}
+        onNodesChange={handleNodesChange}
+        onEdgesChange={handleEdgesChange}
         onConnect={onConnect}
         onInit={instance => { rfInstance.current = instance; }}
         onPaneContextMenu={onPaneContextMenu}
         nodeTypes={nodeTypes}
         fitView
-        deleteKeyCode="Delete"
+        deleteKeyCode={['Delete', 'Backspace']}
+        defaultEdgeOptions={{
+          style: { stroke: '#4cc9f0', strokeWidth: 2 },
+          interactionWidth: 15,
+        }}
         proOptions={{ hideAttribution: true }}
       >
         <Background color="#1a2538" gap={20} />

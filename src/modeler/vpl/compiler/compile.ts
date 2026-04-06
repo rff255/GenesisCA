@@ -137,10 +137,13 @@ export function compileGraph(
         const condSource = inputToSource.get(`${node.id}:condition`);
         const condVar = condSource ? `_v${condSource.nodeId}` : 'false';
 
+        const hasElse = flowOutputToTargets.has(`${node.id}:else`);
         flowLines.push(`${indent}if (${condVar}) {`);
         compileFlowChain(node.id, 'then', indent + '  ');
-        flowLines.push(`${indent}} else {`);
-        compileFlowChain(node.id, 'else', indent + '  ');
+        if (hasElse) {
+          flowLines.push(`${indent}} else {`);
+          compileFlowChain(node.id, 'else', indent + '  ');
+        }
         flowLines.push(`${indent}}`);
       } else {
         // Output node (setAttribute, setColorViewer, etc.)
