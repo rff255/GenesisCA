@@ -1,120 +1,267 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useModel } from '../model/ModelContext';
-import { SimEngine } from './engine/SimEngine';
+import { compileGraph } from '../modeler/vpl/compiler/compile';
 import styles from './SimulatorView.module.css';
 
 export function SimulatorView() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { model } = useModel();
-  const engineRef = useRef<SimEngine | null>(null);
+  const workerRef = useRef<Worker | null>(null);
   const rafRef = useRef<number>(0);
-  const generationRef = useRef(0);
+  const pendingStep = useRef(false);
+
   const [generation, setGeneration] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState(10);
+  const [targetFps, setTargetFps] = useState(30);
+  const [gensPerFrame, setGensPerFrame] = useState(1);
   const [compileError, setCompileError] = useState('');
   const [activeViewer, setActiveViewer] = useState('');
   const [showCode, setShowCode] = useState(false);
   const [compiledCode, setCompiledCode] = useState('');
+  const [actualFps, setActualFps] = useState(0);
+  const [actualGps, setActualGps] = useState(0);
 
-  // Initialize engine from model
-  useEffect(() => {
-    const engine = new SimEngine(model);
-    engineRef.current = engine;
-    setCompileError(engine.compileError);
-    setCompiledCode(engine.compiledCode);
-    setGeneration(0);
-    generationRef.current = 0;
-    const firstViewer = model.mappings.find(m => m.isAttributeToColor);
-    setActiveViewer(firstViewer?.id ?? '');
-  }, [model]);
+  // Colors buffer + grid dimensions
+  const colorsRef = useRef<Uint8ClampedArray | null>(null);
+  const gridWidth = useRef(0);
+  const gridHeight = useRef(0);
 
-  // Draw using ImageData for performance
+  // Zoom/Pan state (refs to avoid re-renders on every mouse move)
+  const zoomRef = useRef(1);
+  const panRef = useRef({ x: 0, y: 0 });
+  const isPanning = useRef(false);
+  const lastMouse = useRef({ x: 0, y: 0 });
+
+  // FPS + Gens/s tracking
+  const fpsFrames = useRef(0);
+  const fpsLastTime = useRef(performance.now());
+  const gpsGens = useRef(0);
+  const lastGenForGps = useRef(0);
+
+  // 1:1 pixel source canvas (reused across draws)
+  const srcCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Compile graph
+  const compileModel = useCallback(() => {
+    const result = compileGraph(model.graphNodes, model.graphEdges);
+    setCompiledCode(result.code);
+    setCompileError(result.error ?? '');
+    return result;
+  }, [model.graphNodes, model.graphEdges]);
+
+  // Draw using ImageData + zoom/pan transform
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
-    const engine = engineRef.current;
-    if (!canvas || !engine) return;
+    const colors = colorsRef.current;
+    const w = gridWidth.current;
+    const h = gridHeight.current;
+    if (!canvas || !colors || !w || !h) return;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const { width, height, colors } = engine.state;
+    // Canvas fills available space
     const parentW = canvas.parentElement?.clientWidth ?? 500;
     const parentH = canvas.parentElement?.clientHeight ?? 500;
-    const maxSize = Math.min(parentW, parentH) - 32;
-    const cellSize = Math.max(1, Math.floor(maxSize / Math.max(width, height)));
+    canvas.width = parentW;
+    canvas.height = parentH;
 
-    // Render at 1:1 pixel ratio into an offscreen canvas, then scale up
-    const canvasW = cellSize * width;
-    const canvasH = cellSize * height;
-    canvas.width = canvasW;
-    canvas.height = canvasH;
+    // Build 1:1 pixel source from RGBA buffer
+    if (!srcCanvasRef.current || srcCanvasRef.current.width !== w || srcCanvasRef.current.height !== h) {
+      srcCanvasRef.current = document.createElement('canvas');
+      srcCanvasRef.current.width = w;
+      srcCanvasRef.current.height = h;
+    }
+    const srcCtx = srcCanvasRef.current.getContext('2d')!;
+    const imageData = new ImageData(
+      new Uint8ClampedArray(colors.buffer, colors.byteOffset, w * h * 4),
+      w, h,
+    );
+    srcCtx.putImageData(imageData, 0, 0);
 
-    if (cellSize === 1) {
-      // Direct ImageData — fastest path
-      const imageData = new ImageData(
-        new Uint8ClampedArray(colors.buffer, colors.byteOffset, width * height * 4),
-        width,
-        height,
-      );
-      ctx.putImageData(imageData, 0, 0);
-    } else {
-      // Draw 1:1 ImageData to a temp canvas, then scale up
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = width;
-      tempCanvas.height = height;
-      const tempCtx = tempCanvas.getContext('2d')!;
-      const imageData = new ImageData(
-        new Uint8ClampedArray(colors.buffer, colors.byteOffset, width * height * 4),
-        width,
-        height,
-      );
-      tempCtx.putImageData(imageData, 0, 0);
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(tempCanvas, 0, 0, canvasW, canvasH);
+    // Clear and apply zoom/pan
+    ctx.clearRect(0, 0, parentW, parentH);
+    ctx.imageSmoothingEnabled = false;
+
+    const zoom = zoomRef.current;
+    const pan = panRef.current;
+
+    // Default scale: fit grid in canvas
+    const baseScale = Math.min(parentW / w, parentH / h);
+    const scale = baseScale * zoom;
+    const scaledW = w * scale;
+    const scaledH = h * scale;
+
+    // Center the grid + apply pan offset
+    const ox = (parentW - scaledW) / 2 + pan.x;
+    const oy = (parentH - scaledH) / 2 + pan.y;
+
+    ctx.drawImage(srcCanvasRef.current, ox, oy, scaledW, scaledH);
+
+    // FPS + Gens/s tracking
+    fpsFrames.current++;
+    const now = performance.now();
+    if (now - fpsLastTime.current >= 1000) {
+      setActualFps(fpsFrames.current);
+      setActualGps(gpsGens.current);
+      fpsFrames.current = 0;
+      gpsGens.current = 0;
+      fpsLastTime.current = now;
     }
   }, []);
 
-  // Redraw when generation or viewer changes
-  useEffect(() => {
-    draw();
-  }, [generation, draw, activeViewer]);
+  // Handle messages from worker
+  const onWorkerMessageRef = useRef<(e: MessageEvent) => void>(() => {});
+  onWorkerMessageRef.current = (e: MessageEvent) => {
+    const msg = e.data;
+    if (msg.type === 'stepped') {
+      colorsRef.current = msg.colors as Uint8ClampedArray;
+      const gen = msg.generation as number;
+      gpsGens.current += gen - lastGenForGps.current;
+      lastGenForGps.current = gen;
+      setGeneration(gen);
+      pendingStep.current = false;
+      draw();
+    } else if (msg.type === 'error') {
+      setCompileError(msg.message as string);
+      pendingStep.current = false;
+    } else if (msg.type === 'ready') {
+      pendingStep.current = false;
+    }
+  };
 
-  // Redraw on resize
+  // Initialize worker when model changes
+  useEffect(() => {
+    workerRef.current?.terminate();
+    const { code, error } = compileModel();
+    const firstViewer = model.mappings.find(m => m.isAttributeToColor);
+    const viewer = firstViewer?.id ?? '';
+    setActiveViewer(viewer);
+    if (error) setCompileError(error);
+
+    gridWidth.current = model.properties.gridWidth;
+    gridHeight.current = model.properties.gridHeight;
+    zoomRef.current = 1;
+    panRef.current = { x: 0, y: 0 };
+
+    const worker = new Worker(
+      new URL('./engine/sim.worker.ts', import.meta.url),
+      { type: 'module' },
+    );
+    worker.onmessage = (e) => onWorkerMessageRef.current(e);
+    worker.postMessage({
+      type: 'init',
+      width: model.properties.gridWidth,
+      height: model.properties.gridHeight,
+      attributes: model.attributes.map(a => ({
+        id: a.id, type: a.type,
+        isModelAttribute: a.isModelAttribute, defaultValue: a.defaultValue,
+      })),
+      neighborhoods: model.neighborhoods.map(n => ({ id: n.id, coords: n.coords })),
+      boundaryTreatment: model.properties.boundaryTreatment,
+      compiledCode: code,
+      activeViewer: viewer,
+    });
+    workerRef.current = worker;
+    setGeneration(0);
+    setPlaying(false);
+    pendingStep.current = false;
+    lastGenForGps.current = 0;
+    gpsGens.current = 0;
+
+    return () => worker.terminate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model, compileModel]);
+
+  // Resize handler
   useEffect(() => {
     window.addEventListener('resize', draw);
     return () => window.removeEventListener('resize', draw);
   }, [draw]);
 
-  // Play loop using requestAnimationFrame
+  // Zoom/Pan event handlers on canvas area
+  useEffect(() => {
+    const container = canvasRef.current?.parentElement;
+    if (!container) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+      const oldZoom = zoomRef.current;
+      const newZoom = Math.max(0.1, Math.min(50, oldZoom * zoomFactor));
+
+      // Zoom toward mouse position
+      const rect = container.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const cx = rect.width / 2;
+      const cy = rect.height / 2;
+
+      panRef.current = {
+        x: panRef.current.x - (mx - cx - panRef.current.x) * (newZoom / oldZoom - 1),
+        y: panRef.current.y - (my - cy - panRef.current.y) * (newZoom / oldZoom - 1),
+      };
+      zoomRef.current = newZoom;
+      draw();
+    };
+
+    const handleMouseDown = (e: MouseEvent) => {
+      if (e.button === 0 || e.button === 1) { // left or middle click
+        isPanning.current = true;
+        lastMouse.current = { x: e.clientX, y: e.clientY };
+        container.style.cursor = 'grabbing';
+      }
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isPanning.current) return;
+      const dx = e.clientX - lastMouse.current.x;
+      const dy = e.clientY - lastMouse.current.y;
+      lastMouse.current = { x: e.clientX, y: e.clientY };
+      panRef.current = {
+        x: panRef.current.x + dx,
+        y: panRef.current.y + dy,
+      };
+      draw();
+    };
+
+    const handleMouseUp = () => {
+      isPanning.current = false;
+      container.style.cursor = '';
+    };
+
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    container.addEventListener('mousedown', handleMouseDown);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      container.removeEventListener('wheel', handleWheel);
+      container.removeEventListener('mousedown', handleMouseDown);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [draw]);
+
+  // Play loop
   useEffect(() => {
     if (!playing) return;
 
-    let lastTime = 0;
-    const msPerStep = Math.max(1, 1000 / speed);
+    let lastFrameTime = 0;
+    const msPerFrame = 1000 / targetFps;
 
     const loop = (time: number) => {
-      const engine = engineRef.current;
-      if (!engine) return;
+      if (!lastFrameTime) lastFrameTime = time;
+      const elapsed = time - lastFrameTime;
 
-      if (!lastTime) lastTime = time;
-      const elapsed = time - lastTime;
-
-      // Run as many steps as needed to keep up with desired speed
-      const stepsToRun = Math.min(Math.floor(elapsed / msPerStep), 10); // cap at 10 per frame
-      if (stepsToRun > 0) {
-        lastTime += stepsToRun * msPerStep;
-        for (let i = 0; i < stepsToRun; i++) {
-          const ok = engine.step();
-          if (!ok) {
-            setPlaying(false);
-            return;
-          }
-        }
-        generationRef.current = engine.state.generation;
-        draw();
-        // Update React state sparingly (every frame, not every step)
-        setGeneration(engine.state.generation);
+      if (elapsed >= msPerFrame && !pendingStep.current) {
+        lastFrameTime = time;
+        pendingStep.current = true;
+        workerRef.current?.postMessage({
+          type: 'step',
+          count: gensPerFrame,
+          activeViewer,
+        });
       }
 
       rafRef.current = requestAnimationFrame(loop);
@@ -122,58 +269,44 @@ export function SimulatorView() {
 
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [playing, speed, draw]);
+  }, [playing, targetFps, gensPerFrame, activeViewer]);
+
+  // Cleanup
+  useEffect(() => {
+    return () => cancelAnimationFrame(rafRef.current);
+  }, []);
 
   const handleStep = () => {
-    const engine = engineRef.current;
-    if (!engine) return;
-    engine.step();
-    generationRef.current = engine.state.generation;
-    setGeneration(engine.state.generation);
+    if (pendingStep.current) return;
+    pendingStep.current = true;
+    workerRef.current?.postMessage({ type: 'step', count: 1, activeViewer });
   };
 
   const handleReset = () => {
-    const engine = engineRef.current;
-    if (!engine) return;
-    engine.reset();
-    generationRef.current = 0;
-    setGeneration(0);
     setPlaying(false);
-    draw();
+    pendingStep.current = true;
+    workerRef.current?.postMessage({ type: 'reset', activeViewer });
   };
 
   const handleRandomize = () => {
-    const engine = engineRef.current;
-    if (!engine) return;
-    engine.randomize();
-    generationRef.current = 0;
-    setGeneration(0);
     setPlaying(false);
-    draw();
+    pendingStep.current = true;
+    workerRef.current?.postMessage({ type: 'randomize', activeViewer });
   };
 
   const handleRecompile = () => {
-    const engine = engineRef.current;
-    if (!engine) return;
-    engine.updateModel(model);
-    setCompileError(engine.compileError);
-    setCompiledCode(engine.compiledCode);
+    const { code } = compileModel();
+    workerRef.current?.postMessage({ type: 'recompile', compiledCode: code });
   };
 
   const handleCopyCode = () => {
-    navigator.clipboard.writeText(compiledCode).catch(() => {
-      // Fallback: select text in the code block
-    });
+    navigator.clipboard.writeText(compiledCode).catch(() => {});
   };
 
-  const handleViewerChange = (viewerId: string) => {
-    setActiveViewer(viewerId);
-    const engine = engineRef.current;
-    if (engine) {
-      engine.state.activeViewer = viewerId;
-      // Re-run colors if we have a step function — for now just redraw
-      draw();
-    }
+  const handleResetView = () => {
+    zoomRef.current = 1;
+    panRef.current = { x: 0, y: 0 };
+    draw();
   };
 
   const attrToColorMappings = model.mappings.filter(m => m.isAttributeToColor);
@@ -192,6 +325,14 @@ export function SimulatorView() {
           <span className={styles.statValue}>
             {model.properties.gridWidth} x {model.properties.gridHeight}
           </span>
+        </div>
+        <div className={styles.stat}>
+          <span className={styles.statLabel}>FPS</span>
+          <span className={styles.statValue}>{actualFps}</span>
+        </div>
+        <div className={styles.stat}>
+          <span className={styles.statLabel}>Gens/s</span>
+          <span className={styles.statValue}>{actualGps}</span>
         </div>
 
         <div className={styles.buttonGroup}>
@@ -219,27 +360,47 @@ export function SimulatorView() {
           </button>
         </div>
 
+        <hr className={styles.divider} />
+
         <div className={styles.stat}>
-          <span className={styles.statLabel}>Speed</span>
-          <input
-            className={styles.speedInput}
-            type="range"
-            min={1}
-            max={60}
-            value={speed}
-            onChange={e => setSpeed(Number(e.target.value))}
-          />
-          <span className={styles.statValue}>{speed}/s</span>
+          <span className={styles.statLabel}>Target FPS</span>
+          <span className={styles.statValue}>{targetFps}</span>
         </div>
+        <input
+          className={styles.speedInput}
+          type="range"
+          min={1}
+          max={60}
+          value={targetFps}
+          onChange={e => setTargetFps(Number(e.target.value))}
+        />
+
+        <div className={styles.stat}>
+          <span className={styles.statLabel}>Gens / Frame</span>
+          <span className={styles.statValue}>{gensPerFrame}</span>
+        </div>
+        <input
+          className={styles.speedInput}
+          type="range"
+          min={1}
+          max={100}
+          value={gensPerFrame}
+          onChange={e => setGensPerFrame(Number(e.target.value))}
+        />
 
         <hr className={styles.divider} />
 
         <button className={styles.controlButtonAccent} onClick={handleRandomize}>
           Randomize
         </button>
-        <button className={styles.controlButton} onClick={handleRecompile}>
-          Recompile
-        </button>
+        <div className={styles.buttonGroup}>
+          <button className={styles.controlButton} onClick={handleRecompile}>
+            Recompile
+          </button>
+          <button className={styles.controlButton} onClick={handleResetView}>
+            Fit
+          </button>
+        </div>
 
         {attrToColorMappings.length > 0 && (
           <>
@@ -250,7 +411,7 @@ export function SimulatorView() {
             <select
               className={styles.viewerSelect}
               value={activeViewer}
-              onChange={e => handleViewerChange(e.target.value)}
+              onChange={e => setActiveViewer(e.target.value)}
             >
               {attrToColorMappings.map(m => (
                 <option key={m.id} value={m.id}>{m.name}</option>

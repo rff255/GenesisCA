@@ -178,24 +178,16 @@ export class SimEngine {
         out.viewers = {};
         fn(cell, neighbors, modelAttrs, out);
 
-        // Write RGBA into the color buffer
+        // Only update colors if SetColorViewer was called for the active viewer.
+        // Otherwise preserve previous frame's colors (buffer persists across steps).
         const viewer = out.viewers[activeViewer];
-        const pxIdx = idx * 4;
         if (viewer) {
+          const pxIdx = idx * 4;
           colors[pxIdx] = viewer.r;
           colors[pxIdx + 1] = viewer.g;
           colors[pxIdx + 2] = viewer.b;
-        } else {
-          // Fallback: check if any bool attribute is true
-          let alive = false;
-          for (const k in out.state) {
-            if (out.state[k] === true) { alive = true; break; }
-          }
-          colors[pxIdx] = alive ? 76 : 13;
-          colors[pxIdx + 1] = alive ? 201 : 27;
-          colors[pxIdx + 2] = alive ? 240 : 43;
+          colors[pxIdx + 3] = 255;
         }
-        colors[pxIdx + 3] = 255;
       }
     }
 
