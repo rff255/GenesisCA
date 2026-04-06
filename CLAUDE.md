@@ -192,3 +192,37 @@ genesis-ca/
 - No external compilation toolchains. The graph compiles to JS inside the browser instantly.
 - Do not modify the `legacy_qt_cpp_solution` branch. It is frozen as historical reference.
 - All new work goes on `repo_overhaul` (to be merged into `master` when ready).
+
+---
+
+## Current Implementation Status
+
+The app is functional with these major systems:
+
+### State Management
+- `src/model/ModelContext.tsx` — React Context + useReducer holding entire CAModel
+- `src/model/defaultModel.ts` — Default Game of Life model
+- `src/model/fileOperations.ts` — Save (.gcaproj) / Load / Download utilities
+- localStorage auto-save with migration guards for new fields
+
+### Visual Programming Language (VPL)
+- `src/modeler/vpl/GraphEditor.tsx` — React Flow-based node graph editor
+- `src/modeler/vpl/CaNode.tsx` — Custom node component with per-type config UI
+- `src/modeler/vpl/nodes/` — 19 node types, each in its own file with `compile()` method
+- `src/modeler/vpl/compiler/compile.ts` — Two-pass compiler: hoists values, then emits flow
+- Multi-output nodes (InputColor, GetColorConstant) use `_v${nodeId}_${portId}` naming
+- Multi-root support: Step (per-generation) and InputColor (brush interaction) compile separately
+
+### Simulation Engine
+- `src/simulator/engine/sim.worker.ts` — Web Worker that owns grid state
+- Grid never leaves the worker — only RGBA color buffer is transferred (zero-copy via Transferable)
+- Double-buffered grids, cached neighbor arrays, pre-allocated output objects
+- `src/simulator/SimulatorView.tsx` — Canvas rendering via ImageData + zoom/pan
+
+### Key Patterns
+- Graph state sync: single debounced sync (100ms) via refs — never use multiple setTimeout callbacks
+- When adding new fields to CAModel type, always add migration guards in ModelContext's `createInitialState`
+- Node config UI: when a config field changes type (e.g., constType), reset dependent fields to prevent stale values
+- Compiler: all value declarations hoisted to function scope (Pass 1) before control flow (Pass 2) to avoid block-scoping issues
+- Web Worker in Vite: `new Worker(new URL('./file.ts', import.meta.url), { type: 'module' })` — no config needed
+- Worker postMessage with transfer: use `{ transfer: [buffer] }` options format (not positional arg)
