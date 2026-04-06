@@ -64,8 +64,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
   const userLabel = nodeData.label as string | undefined;
 
+  // Dynamic height to fit all ports
+  const maxPorts = Math.max(inputPorts.length, outputPorts.length);
+  const nodeMinHeight = Math.max(50, 30 + maxPorts * 22 + 10);
+
   return (
-    <div className={styles.node} style={{ borderColor: def.color }}>
+    <div className={styles.node} style={{ borderColor: def.color, minHeight: nodeMinHeight }}>
       {userLabel && (
         <div className={styles.userLabel}>{userLabel}</div>
       )}
@@ -348,16 +352,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
         )}
 
         {nodeData.nodeType === 'macro' && (
-          <select
-            className={styles.select}
-            value={(nodeData.config.macroDefId as string) || ''}
-            onChange={e => updateConfig('macroDefId', e.target.value)}
-          >
-            <option value="">Select Macro...</option>
-            {(model.macroDefs || []).map(m => (
-              <option key={m.id} value={m.id}>{m.name}</option>
-            ))}
-          </select>
+          <span style={{ fontSize: '0.6rem', color: '#8060c0', fontStyle: 'italic' }}>
+            Double-click to edit
+          </span>
         )}
       </div>
 

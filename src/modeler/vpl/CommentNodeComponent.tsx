@@ -1,9 +1,9 @@
 import { memo, useCallback } from 'react';
-import { useReactFlow } from '@xyflow/react';
+import { NodeResizer, useReactFlow } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import styles from './CommentNodeComponent.module.css';
 
-function CommentNodeInner({ id, data }: NodeProps) {
+function CommentNodeInner({ id, data, selected }: NodeProps) {
   const { updateNodeData } = useReactFlow();
   const text = (data as Record<string, unknown>).text as string || '';
 
@@ -16,12 +16,18 @@ function CommentNodeInner({ id, data }: NodeProps) {
 
   return (
     <div className={styles.comment}>
+      <NodeResizer
+        isVisible={!!selected}
+        minWidth={120}
+        minHeight={50}
+        lineStyle={{ borderColor: '#4a6080' }}
+        handleStyle={{ width: 6, height: 6, background: '#4a6080', borderRadius: 2 }}
+      />
       <textarea
         className={styles.textArea}
         value={text}
         onChange={handleChange}
         placeholder="Add a comment..."
-        rows={3}
       />
     </div>
   );

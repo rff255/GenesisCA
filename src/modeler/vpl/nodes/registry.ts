@@ -63,10 +63,14 @@ export function getAllNodeDefs(): NodeTypeDef[] {
   return ALL_NODES;
 }
 
+/** Node types hidden from the "Add Node" menu (created programmatically) */
+const HIDDEN_FROM_MENU = new Set(['macro']);
+
 /** Grouped by category for the "Add Node" menu */
 export function getNodeDefsByCategory(): Map<string, NodeTypeDef[]> {
   const grouped = new Map<string, NodeTypeDef[]>();
   for (const def of ALL_NODES) {
+    if (HIDDEN_FROM_MENU.has(def.type)) continue;
     const list = grouped.get(def.category) ?? [];
     list.push(def);
     grouped.set(def.category, list);

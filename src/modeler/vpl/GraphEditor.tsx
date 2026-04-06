@@ -201,6 +201,82 @@ function GraphEditorInner() {
   const handleNodesChange = useCallback(
     (changes: Parameters<typeof onNodesChange>[0]) => {
       onNodesChange(changes);
+
+      // Auto-resize groups to always cover all children (all 4 sides)
+      const hasPositionEnd = changes.some(
+        c => c.type === 'position' && 'dragging' in c && !c.dragging,
+      );
+      if (hasPositionEnd) {
+        setNodes(nds => {
+          const groups = nds.filter(n => n.type === 'groupNode');
+          if (groups.length === 0) return nds;
+          let changed = false;
+          const nodeW = 200; // approximate node width
+          const nodeH = 100; // approximate node height
+          const pad = 30;
+          const topPad = 40; // extra for group header
+
+          const updated = nds.map(n => {
+            if (n.type !== 'groupNode') return n;
+            const children = nds.filter(c => c.parentId === n.id);
+            if (children.length === 0) return n;
+
+            // Bounding box of children in parent-relative coords
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const c of children) {
+              minX = Math.min(minX, c.position.x);
+              minY = Math.min(minY, c.position.y);
+              maxX = Math.max(maxX, c.position.x + nodeW);
+              maxY = Math.max(maxY, c.position.y + nodeH);
+            }
+
+            // If any child is outside the group bounds, adjust
+            const needsLeft = minX < pad;
+            const needsTop = minY < topPad;
+            const curStyle = n.style as Record<string, number> | undefined;
+            const curW = curStyle?.width || 300;
+            const curH = curStyle?.height || 200;
+            const needsRight = maxX + pad > curW;
+            const needsBottom = maxY + pad > curH;
+
+            if (!needsLeft && !needsTop && !needsRight && !needsBottom) return n;
+            changed = true;
+
+            // Shift amount for left/top expansion
+            const shiftX = needsLeft ? pad - minX : 0;
+            const shiftY = needsTop ? topPad - minY : 0;
+
+            const newW = Math.max(curW, maxX + pad) + shiftX;
+            const newH = Math.max(curH, maxY + pad) + shiftY;
+
+            return {
+              ...n,
+              // Move group origin to accommodate left/top spill
+              position: {
+                x: n.position.x - shiftX,
+                y: n.position.y - shiftY,
+              },
+              style: { ...n.style, width: newW, height: newH },
+            };
+          });
+
+          // Also shift children's positions if group moved
+          if (changed) {
+            return updated.map(n => {
+              if (!n.parentId) return n;
+              const parentBefore = nds.find(p => p.id === n.parentId);
+              const parentAfter = updated.find(p => p.id === n.parentId);
+              if (!parentBefore || !parentAfter) return n;
+              const dx = parentBefore.position.x - parentAfter.position.x;
+              const dy = parentBefore.position.y - parentAfter.position.y;
+              if (dx === 0 && dy === 0) return n;
+              return { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } };
+            });
+          }
+          return nds;
+        });
+      }
+
       const needsSync = changes.some(
         c => c.type === 'remove' ||
              (c.type === 'position' && 'dragging' in c && !c.dragging) ||
@@ -208,7 +284,7 @@ function GraphEditorInner() {
       );
       if (needsSync) scheduleSync();
     },
-    [onNodesChange, scheduleSync],
+    [onNodesChange, setNodes, scheduleSync],
   );
 
   const handleEdgesChange = useCallback(

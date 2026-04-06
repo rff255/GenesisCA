@@ -131,6 +131,11 @@
   color: #e0e0e0 !important;
 }
 
+/* Hide the persistent selection indicator rectangle after box select */
+:global(.react-flow__nodesselection-rect) {
+  display: none !important;
+}
+
 :global(.react-flow__edge.selected .react-flow__edge-path) {
   stroke: #ff6b6b !important;
   stroke-width: 3 !important;

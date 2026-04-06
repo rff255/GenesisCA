@@ -7,6 +7,7 @@ function GroupNodeInner({ id, data, selected }: NodeProps) {
   const { updateNodeData } = useReactFlow();
   const nodeData = data as Record<string, unknown>;
   const label = (nodeData.label as string) || 'Group';
+  const color = (nodeData.groupColor as string) || '#2d4059';
 
   const handleLabelChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -15,21 +16,38 @@ function GroupNodeInner({ id, data, selected }: NodeProps) {
     [id, data, updateNodeData],
   );
 
+  const handleColorChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      updateNodeData(id, { ...data, groupColor: e.target.value });
+    },
+    [id, data, updateNodeData],
+  );
+
   return (
-    <div className={styles.group}>
+    <div className={styles.group} style={{ borderColor: color, background: `${color}20` }}>
       <NodeResizer
         isVisible={!!selected}
         minWidth={100}
         minHeight={60}
-        lineStyle={{ borderColor: '#4a6080' }}
-        handleStyle={{ width: 8, height: 8, background: '#4a6080', borderRadius: 2 }}
+        lineStyle={{ borderColor: color }}
+        handleStyle={{ width: 8, height: 8, background: color, borderRadius: 2 }}
       />
-      <input
-        className={styles.label}
-        value={label}
-        onChange={handleLabelChange}
-        onClick={e => e.stopPropagation()}
-      />
+      <div className={styles.header}>
+        <input
+          className={styles.label}
+          value={label}
+          onChange={handleLabelChange}
+          onClick={e => e.stopPropagation()}
+        />
+        <input
+          type="color"
+          className={styles.colorPicker}
+          value={color}
+          onChange={handleColorChange}
+          onClick={e => e.stopPropagation()}
+          title="Group color"
+        />
+      </div>
     </div>
   );
 }
