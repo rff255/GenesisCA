@@ -259,6 +259,43 @@ The app is functional with these major systems:
 
 ### Key Patterns
 - Graph state sync: single debounced sync (100ms) via refs — never use multiple setTimeout callbacks
+- Graph editor mouse: RMB click=context menu, RMB drag=pan (`panOnDrag={[2]}`), LMB click=select, LMB drag=box select (`selectionOnDrag`)
+- Hide React Flow's persistent selection rect: CSS `:global(.react-flow__nodesselection-rect) { display: none !important; }`
+- Groups use React Flow's native `parentId` — auto-resize requires manual bounding box computation in `handleNodesChange`
+- Use `NodeResizer` component for resizable nodes (comments, groups) — CSS `resize: both` conflicts with React Flow drag
+- MacroNode is created only via "Create Macro from Selection" — hidden from Add Node menu via `HIDDEN_FROM_MENU` set in registry
+- Macro compilation currently a safe no-op — needs MacroInput/MacroOutput special nodes before inlining works
+
+---
+
+## Macro System — Current Status & Next Steps
+
+### What exists (working):
+- Create Macro from Selection: extracts selected nodes into MacroDef, creates MacroNode with dynamic ports
+- External edges reconnect to MacroNode's exposed ports automatically
+- MacroDef stores exposedInputs/exposedOutputs with `MacroPort` type (includes `internalNodeId`, `internalPortId`, `category`)
+- Double-click macro → enters subgraph scope (breadcrumb navigation, scope-aware sync)
+- Undo Macro → restores subgraph inline, reconnects edges
+- Groups: visual containers with color picker, auto-resize on child movement
+
+### What's broken / incomplete:
+1. **Macro compilation is disabled** — `compileValueNode` returns a no-op for MacroNodes. The previous recursive inlining attempt was buggy (didn't handle flow chains, variable scoping issues)
+2. **No MacroInput/MacroOutput nodes** — the user wants Unreal-style explicit input/output nodes inside the macro subgraph (not auto-detected from external edges). These should:
+   - Be special node types that only exist inside macro scopes
+   - Have an "Add Port" button on their body to define named ports
+   - Cannot be deleted (always present when editing a macro)
+   - Replace the current auto-detection of exposed ports from external edges
+3. **No copy/paste** — needed for duplicating selections and reusing macro instances
+4. **Macro dropdown removed** — each macro instance is unique, no switching between definitions
+5. **Selection highlight inconsistency** — clicking nodes doesn't always show selection highlight reliably
+
+### Design direction for MacroInput/MacroOutput:
+- When "Create Macro" runs, auto-create MacroInput + MacroOutput nodes inside the subgraph
+- MacroInput: one output port per external input edge (user can add/remove/rename ports)
+- MacroOutput: one input port per external output edge (user can add/remove/rename ports)
+- These nodes define the macro's external interface — the MacroNode's handles mirror them
+- Compiler: MacroInput ports → alias to upstream variables; MacroOutput ports → produce the macro's output values
+- When entering a macro scope, these nodes are always visible and undeletable
 - When adding new fields to CAModel type, always add migration guards in ModelContext's `createInitialState`
 - Node config UI: when a config field changes type (e.g., constType), reset dependent fields to prevent stale values
 - Compiler: all value declarations hoisted to function scope (Pass 1) before control flow (Pass 2) to avoid block-scoping issues
