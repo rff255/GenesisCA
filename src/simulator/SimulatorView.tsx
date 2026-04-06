@@ -20,6 +20,10 @@ export function SimulatorView() {
   const [compiledCode, setCompiledCode] = useState('');
   const [actualFps, setActualFps] = useState(0);
   const [actualGps, setActualGps] = useState(0);
+  const [brushColor, setBrushColor] = useState('#4cc9f0');
+  const [brushW, setBrushW] = useState(1);
+  const [brushH, setBrushH] = useState(1);
+  const [brushMapping, setBrushMapping] = useState('');
 
   // Colors buffer + grid dimensions
   const colorsRef = useRef<Uint8ClampedArray | null>(null);
@@ -44,7 +48,7 @@ export function SimulatorView() {
   // Compile graph
   const compileModel = useCallback(() => {
     const result = compileGraph(model.graphNodes, model.graphEdges);
-    setCompiledCode(result.code);
+    setCompiledCode(result.stepCode);
     setCompileError(result.error ?? '');
     return result;
   }, [model.graphNodes, model.graphEdges]);
@@ -133,11 +137,13 @@ export function SimulatorView() {
   // Initialize worker when model changes
   useEffect(() => {
     workerRef.current?.terminate();
-    const { code, error } = compileModel();
+    const result = compileModel();
     const firstViewer = model.mappings.find(m => m.isAttributeToColor);
     const viewer = firstViewer?.id ?? '';
     setActiveViewer(viewer);
-    if (error) setCompileError(error);
+    const firstInput = model.mappings.find(m => !m.isAttributeToColor);
+    setBrushMapping(firstInput?.id ?? '');
+    if (result.error) setCompileError(result.error);
 
     gridWidth.current = model.properties.gridWidth;
     gridHeight.current = model.properties.gridHeight;
@@ -159,7 +165,8 @@ export function SimulatorView() {
       })),
       neighborhoods: model.neighborhoods.map(n => ({ id: n.id, coords: n.coords })),
       boundaryTreatment: model.properties.boundaryTreatment,
-      compiledCode: code,
+      stepCode: result.stepCode,
+      inputColorCodes: result.inputColorCodes,
       activeViewer: viewer,
     });
     workerRef.current = worker;
@@ -179,7 +186,62 @@ export function SimulatorView() {
     return () => window.removeEventListener('resize', draw);
   }, [draw]);
 
-  // Zoom/Pan event handlers on canvas area
+  // Brush refs (so event handlers don't need to re-register)
+  const brushColorRef = useRef('#4cc9f0');
+  const brushWRef = useRef(1);
+  const brushHRef = useRef(1);
+  const activeViewerRef = useRef('');
+  const brushMappingRef = useRef('');
+  useEffect(() => { brushColorRef.current = brushColor; }, [brushColor]);
+  useEffect(() => { brushWRef.current = brushW; }, [brushW]);
+  useEffect(() => { brushHRef.current = brushH; }, [brushH]);
+  useEffect(() => { activeViewerRef.current = activeViewer; }, [activeViewer]);
+  useEffect(() => { brushMappingRef.current = brushMapping; }, [brushMapping]);
+
+  /** Convert screen coords to grid cell coords */
+  const screenToGrid = useCallback((clientX: number, clientY: number): { row: number; col: number } | null => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.parentElement!.getBoundingClientRect();
+    const w = gridWidth.current;
+    const h = gridHeight.current;
+    const parentW = rect.width;
+    const parentH = rect.height;
+    const baseScale = Math.min(parentW / w, parentH / h);
+    const scale = baseScale * zoomRef.current;
+    const ox = (parentW - w * scale) / 2 + panRef.current.x;
+    const oy = (parentH - h * scale) / 2 + panRef.current.y;
+    const col = Math.floor((clientX - rect.left - ox) / scale);
+    const row = Math.floor((clientY - rect.top - oy) / scale);
+    if (col < 0 || col >= w || row < 0 || row >= h) return null;
+    return { row, col };
+  }, []);
+
+  /** Parse hex color to RGB */
+  const hexToRgb = (hex: string) => {
+    const n = parseInt(hex.replace('#', ''), 16);
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  };
+
+  /** Send paint message for cells in brush rect around center */
+  const paintAt = useCallback((clientX: number, clientY: number) => {
+    const center = screenToGrid(clientX, clientY);
+    if (!center) return;
+    const bw = brushWRef.current;
+    const bh = brushHRef.current;
+    const { r, g, b } = hexToRgb(brushColorRef.current);
+    const cells: Array<{ row: number; col: number; r: number; g: number; b: number }> = [];
+    const halfW = Math.floor((bw - 1) / 2);
+    const halfH = Math.floor((bh - 1) / 2);
+    for (let dr = -halfH; dr <= halfH + ((bh - 1) % 2); dr++) {
+      for (let dc = -halfW; dc <= halfW + ((bw - 1) % 2); dc++) {
+        cells.push({ row: center.row + dr, col: center.col + dc, r, g, b });
+      }
+    }
+    workerRef.current?.postMessage({ type: 'paint', cells, mappingId: brushMappingRef.current, activeViewer: activeViewerRef.current });
+  }, [screenToGrid]);
+
+  // Zoom/Pan/Brush event handlers
   useEffect(() => {
     const container = canvasRef.current?.parentElement;
     if (!container) return;
@@ -189,14 +251,11 @@ export function SimulatorView() {
       const zoomFactor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
       const oldZoom = zoomRef.current;
       const newZoom = Math.max(0.1, Math.min(50, oldZoom * zoomFactor));
-
-      // Zoom toward mouse position
       const rect = container.getBoundingClientRect();
       const mx = e.clientX - rect.left;
       const my = e.clientY - rect.top;
       const cx = rect.width / 2;
       const cy = rect.height / 2;
-
       panRef.current = {
         x: panRef.current.x - (mx - cx - panRef.current.x) * (newZoom / oldZoom - 1),
         y: panRef.current.y - (my - cy - panRef.current.y) * (newZoom / oldZoom - 1),
@@ -206,14 +265,24 @@ export function SimulatorView() {
     };
 
     const handleMouseDown = (e: MouseEvent) => {
-      if (e.button === 0 || e.button === 1) { // left or middle click
+      if (e.button === 0) {
+        // LMB = pan
         isPanning.current = true;
         lastMouse.current = { x: e.clientX, y: e.clientY };
         container.style.cursor = 'grabbing';
+      } else if (e.button === 2) {
+        // RMB = brush
+        e.preventDefault();
+        paintAt(e.clientX, e.clientY);
       }
     };
 
     const handleMouseMove = (e: MouseEvent) => {
+      if (e.buttons & 2) {
+        // RMB held = brush drag
+        paintAt(e.clientX, e.clientY);
+        return;
+      }
       if (!isPanning.current) return;
       const dx = e.clientX - lastMouse.current.x;
       const dy = e.clientY - lastMouse.current.y;
@@ -230,18 +299,25 @@ export function SimulatorView() {
       container.style.cursor = '';
     };
 
+    // Suppress browser context menu on canvas area
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+    };
+
     container.addEventListener('wheel', handleWheel, { passive: false });
     container.addEventListener('mousedown', handleMouseDown);
+    container.addEventListener('contextmenu', handleContextMenu);
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
 
     return () => {
       container.removeEventListener('wheel', handleWheel);
       container.removeEventListener('mousedown', handleMouseDown);
+      container.removeEventListener('contextmenu', handleContextMenu);
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [draw]);
+  }, [draw, paintAt]);
 
   // Play loop
   useEffect(() => {
@@ -295,8 +371,12 @@ export function SimulatorView() {
   };
 
   const handleRecompile = () => {
-    const { code } = compileModel();
-    workerRef.current?.postMessage({ type: 'recompile', compiledCode: code });
+    const result = compileModel();
+    workerRef.current?.postMessage({
+      type: 'recompile',
+      stepCode: result.stepCode,
+      inputColorCodes: result.inputColorCodes,
+    });
   };
 
   const handleCopyCode = () => {
@@ -310,6 +390,7 @@ export function SimulatorView() {
   };
 
   const attrToColorMappings = model.mappings.filter(m => m.isAttributeToColor);
+  const colorToAttrMappings = model.mappings.filter(m => !m.isAttributeToColor);
 
   return (
     <div className={styles.simulatorLayout}>
@@ -401,6 +482,57 @@ export function SimulatorView() {
             Fit
           </button>
         </div>
+
+        <hr className={styles.divider} />
+
+        <div className={styles.sectionTitle}>Brush (Right-click)</div>
+        <div className={styles.fieldRow}>
+          <span className={styles.statLabel}>Color</span>
+          <input
+            type="color"
+            className={styles.colorPicker}
+            value={brushColor}
+            onChange={e => setBrushColor(e.target.value)}
+          />
+        </div>
+        <div className={styles.fieldRow}>
+          <span className={styles.statLabel}>W</span>
+          <input
+            className={styles.brushInput}
+            type="number"
+            min={1}
+            max={50}
+            value={brushW}
+            onChange={e => setBrushW(Math.max(1, Number(e.target.value) || 1))}
+          />
+          <span className={styles.statLabel}>H</span>
+          <input
+            className={styles.brushInput}
+            type="number"
+            min={1}
+            max={50}
+            value={brushH}
+            onChange={e => setBrushH(Math.max(1, Number(e.target.value) || 1))}
+          />
+        </div>
+        {colorToAttrMappings.length > 0 && (
+          <>
+            <div className={styles.stat}>
+              <span className={styles.statLabel}>Input Mapping</span>
+            </div>
+            <select
+              className={styles.viewerSelect}
+              value={brushMapping}
+              onChange={e => setBrushMapping(e.target.value)}
+            >
+              <option value="">(fallback)</option>
+              {colorToAttrMappings.map(m => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+            </select>
+          </>
+        )}
+        <div className={styles.hint}>LMB: pan / scroll: zoom / RMB: brush</div>
 
         {attrToColorMappings.length > 0 && (
           <>

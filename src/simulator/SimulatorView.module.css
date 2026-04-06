@@ -136,6 +136,51 @@
   word-break: break-word;
 }
 
+.sectionTitle {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #4cc9f0;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.fieldRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+}
+
+.colorPicker {
+  width: 40px;
+  height: 28px;
+  border: 1px solid #2d4059;
+  border-radius: 4px;
+  background: #0d1117;
+  cursor: pointer;
+  padding: 2px;
+  margin-left: auto;
+}
+
+.brushInput {
+  width: 48px;
+  padding: 4px 6px;
+  background: #0d1117;
+  border: 1px solid #2d4059;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 0.75rem;
+  font-family: inherit;
+  text-align: center;
+}
+
+.hint {
+  font-size: 0.6rem;
+  color: #506070;
+  font-style: italic;
+  line-height: 1.4;
+}
+
 .codePanel {
   position: relative;
 }

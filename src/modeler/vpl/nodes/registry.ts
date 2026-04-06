@@ -3,24 +3,48 @@ import { StepNode } from './StepNode';
 import { GetCellAttributeNode } from './GetCellAttributeNode';
 import { GetNeighborsAttributeNode } from './GetNeighborsAttributeNode';
 import { GetConstantNode } from './GetConstantNode';
+import { GetModelAttributeNode } from './GetModelAttributeNode';
+import { GetRandomNode } from './GetRandomNode';
+import { GetColorConstantNode } from './GetColorConstantNode';
+import { ArithmeticOperatorNode } from './ArithmeticOperatorNode';
 import { GroupCountingNode } from './GroupCountingNode';
+import { GroupStatementNode } from './GroupStatementNode';
+import { GroupOperatorNode } from './GroupOperatorNode';
 import { StatementNode } from './StatementNode';
 import { LogicOperatorNode } from './LogicOperatorNode';
 import { ConditionalNode } from './ConditionalNode';
+import { SequenceNode } from './SequenceNode';
+import { LoopNode } from './LoopNode';
 import { SetAttributeNode } from './SetAttributeNode';
 import { SetColorViewerNode } from './SetColorViewerNode';
+import { InputColorNode } from './InputColorNode';
 
 const ALL_NODES: NodeTypeDef[] = [
+  // Flow
   StepNode,
+  ConditionalNode,
+  SequenceNode,
+  LoopNode,
+  // Data
   GetCellAttributeNode,
+  GetModelAttributeNode,
   GetNeighborsAttributeNode,
   GetConstantNode,
-  GroupCountingNode,
+  GetRandomNode,
+  // Arithmetic & Logic
+  ArithmeticOperatorNode,
   StatementNode,
   LogicOperatorNode,
-  ConditionalNode,
+  // Aggregation
+  GroupCountingNode,
+  GroupStatementNode,
+  GroupOperatorNode,
+  // Output
   SetAttributeNode,
+  // Color
+  InputColorNode,
   SetColorViewerNode,
+  GetColorConstantNode,
 ];
 
 const registry = new Map<string, NodeTypeDef>();

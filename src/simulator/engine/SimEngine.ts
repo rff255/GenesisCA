@@ -124,8 +124,8 @@ export class SimEngine {
 
   compile(): void {
     const result = compileAndBuild(this.model.graphNodes, this.model.graphEdges);
-    this.stepFn = result.fn as StepFn | null;
-    this.compiledCode = result.code;
+    this.stepFn = result.stepFn as StepFn | null;
+    this.compiledCode = result.stepCode;
     this.compileError = result.error ?? '';
   }
 

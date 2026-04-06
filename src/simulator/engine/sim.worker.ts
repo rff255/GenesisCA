@@ -24,6 +24,12 @@ interface NeighborhoodDef {
   coords: Array<[number, number]>;
 }
 
+type InputColorFn = (
+  r: number, g: number, b: number,
+  cell: CellState, modelAttrs: CellState,
+  out: { state: CellState; viewers: ViewerColors },
+) => { state: CellState; viewers: ViewerColors };
+
 interface InitMsg {
   type: 'init';
   width: number;
@@ -31,7 +37,8 @@ interface InitMsg {
   attributes: AttrDef[];
   neighborhoods: NeighborhoodDef[];
   boundaryTreatment: string;
-  compiledCode: string;
+  stepCode: string;
+  inputColorCodes: Array<{ mappingId: string; code: string }>;
   activeViewer: string;
 }
 
@@ -41,11 +48,18 @@ interface StepMsg {
   activeViewer: string;
 }
 
+interface PaintMsg {
+  type: 'paint';
+  cells: Array<{ row: number; col: number; r: number; g: number; b: number }>;
+  mappingId: string;
+  activeViewer: string;
+}
+
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; compiledCode: string }
+interface RecompileMsg { type: 'recompile'; stepCode: string; inputColorCodes: Array<{ mappingId: string; code: string }> }
 
-type WorkerMsg = InitMsg | StepMsg | RandomizeMsg | ResetMsg | RecompileMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -65,6 +79,7 @@ let useA = true;
 
 let colors: Uint8ClampedArray = new Uint8ClampedArray(0);
 let stepFn: StepFn | null = null;
+let inputColorFns: Array<{ mappingId: string; fn: InputColorFn }> = [];
 
 let defaultCell: CellState = {};
 let cachedModelAttrs: CellState = {};
@@ -226,6 +241,23 @@ function resetGrid(activeViewer: string): void {
   writeColors(activeViewer);
 }
 
+function compileFns(stepCode: string, icCodes: Array<{ mappingId: string; code: string }>): void {
+  try {
+    // eslint-disable-next-line no-eval
+    stepFn = stepCode ? (eval(stepCode) as StepFn) : null;
+  } catch {
+    stepFn = null;
+  }
+  inputColorFns = [];
+  for (const ic of icCodes) {
+    try {
+      // eslint-disable-next-line no-eval
+      const fn = eval(ic.code) as InputColorFn;
+      inputColorFns.push({ mappingId: ic.mappingId, fn });
+    } catch { /* skip invalid */ }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Message handler
 // ---------------------------------------------------------------------------
@@ -242,14 +274,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       boundaryTreatment = msg.boundaryTreatment;
       buildCaches();
       initGrid();
-      try {
-        // eslint-disable-next-line no-eval
-        stepFn = eval(msg.compiledCode) as StepFn;
-      } catch {
-        stepFn = null;
-      }
+      compileFns(msg.stepCode, msg.inputColorCodes);
       writeColors(msg.activeViewer);
-      // Send initial colors (copy, since we keep our buffer)
       const copy = new Uint8ClampedArray(colors);
       self.postMessage(
         { type: 'stepped', generation, colors: copy },
@@ -294,14 +320,64 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       break;
     }
 
-    case 'recompile': {
-      try {
-        // eslint-disable-next-line no-eval
-        stepFn = msg.compiledCode ? (eval(msg.compiledCode) as StepFn) : null;
-        self.postMessage({ type: 'ready' });
-      } catch (err) {
-        self.postMessage({ type: 'error', message: String(err) });
+    case 'paint': {
+      // Find InputColor function matching the requested mapping
+      const icEntry = msg.mappingId
+        ? inputColorFns.find(f => f.mappingId === msg.mappingId)
+        : inputColorFns[0];
+      const icFn = icEntry?.fn;
+
+      const ma = cachedModelAttrs;
+      const out = cellOut;
+
+      for (const c of msg.cells) {
+        if (c.row < 0 || c.row >= height || c.col < 0 || c.col >= width) continue;
+        const idx = c.row * width + c.col;
+
+        if (icFn) {
+          // Use InputColor graph function to set cell attributes from color
+          out.state = currentGrid[idx]!;
+          out.viewers = {};
+          icFn(c.r, c.g, c.b, currentGrid[idx]!, ma, out);
+        } else {
+          // Fallback: set first bool attribute to true
+          const cell = currentGrid[idx]!;
+          for (const attr of attributes) {
+            if (!attr.isModelAttribute && attr.type === 'bool') {
+              cell[attr.id] = true;
+              break;
+            }
+          }
+        }
       }
+
+      // Run one Step so SetColorViewer in the main graph updates the display
+      if (stepFn) {
+        runStep(msg.activeViewer);
+      } else {
+        // No step function — just paint the brush color directly
+        for (const c of msg.cells) {
+          if (c.row < 0 || c.row >= height || c.col < 0 || c.col >= width) continue;
+          const idx = c.row * width + c.col;
+          const px = idx * 4;
+          colors[px] = c.r;
+          colors[px + 1] = c.g;
+          colors[px + 2] = c.b;
+          colors[px + 3] = 255;
+        }
+      }
+
+      const copy = new Uint8ClampedArray(colors);
+      self.postMessage(
+        { type: 'stepped', generation, colors: copy },
+        { transfer: [copy.buffer] },
+      );
+      break;
+    }
+
+    case 'recompile': {
+      compileFns(msg.stepCode, msg.inputColorCodes);
+      self.postMessage({ type: 'ready' });
       break;
     }
   }

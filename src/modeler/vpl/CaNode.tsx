@@ -190,6 +190,135 @@ function CaNodeComponent({ id, data }: NodeProps) {
               ))}
           </select>
         )}
+
+        {nodeData.nodeType === 'inputColor' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.mappingId as string) || ''}
+            onChange={e => updateConfig('mappingId', e.target.value)}
+          >
+            <option value="">Select Mapping...</option>
+            {model.mappings
+              .filter(m => !m.isAttributeToColor)
+              .map(m => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+          </select>
+        )}
+
+        {nodeData.nodeType === 'getModelAttribute' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.attributeId as string) || ''}
+            onChange={e => updateConfig('attributeId', e.target.value)}
+          >
+            <option value="">Select...</option>
+            {model.attributes
+              .filter(a => a.isModelAttribute)
+              .map(a => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+          </select>
+        )}
+
+        {nodeData.nodeType === 'getRandom' && (
+          <>
+            <select
+              className={styles.select}
+              value={(nodeData.config.randomType as string) || 'float'}
+              onChange={e => updateConfig('randomType', e.target.value)}
+            >
+              <option value="bool">Bool</option>
+              <option value="integer">Integer</option>
+              <option value="float">Float</option>
+            </select>
+            {nodeData.config.randomType !== 'bool' && (
+              <>
+                <input
+                  className={styles.input}
+                  type="number"
+                  placeholder="min"
+                  value={(nodeData.config.min as string) || '0'}
+                  onChange={e => updateConfig('min', e.target.value)}
+                />
+                <input
+                  className={styles.input}
+                  type="number"
+                  placeholder="max"
+                  value={(nodeData.config.max as string) || '1'}
+                  onChange={e => updateConfig('max', e.target.value)}
+                />
+              </>
+            )}
+          </>
+        )}
+
+        {nodeData.nodeType === 'getColorConstant' && (
+          <>
+            <input className={styles.input} type="number" placeholder="R" min={0} max={255}
+              value={(nodeData.config.r as string) || '128'}
+              onChange={e => updateConfig('r', e.target.value)} />
+            <input className={styles.input} type="number" placeholder="G" min={0} max={255}
+              value={(nodeData.config.g as string) || '128'}
+              onChange={e => updateConfig('g', e.target.value)} />
+            <input className={styles.input} type="number" placeholder="B" min={0} max={255}
+              value={(nodeData.config.b as string) || '128'}
+              onChange={e => updateConfig('b', e.target.value)} />
+          </>
+        )}
+
+        {nodeData.nodeType === 'arithmeticOperator' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.operation as string) || '+'}
+            onChange={e => updateConfig('operation', e.target.value)}
+          >
+            <option value="+">+ Add</option>
+            <option value="-">- Subtract</option>
+            <option value="*">* Multiply</option>
+            <option value="/">/ Divide</option>
+            <option value="%">% Modulo</option>
+            <option value="sqrt">Sqrt</option>
+            <option value="pow">Power</option>
+            <option value="abs">Abs</option>
+            <option value="max">Max</option>
+            <option value="min">Min</option>
+            <option value="mean">Mean</option>
+          </select>
+        )}
+
+        {nodeData.nodeType === 'groupStatement' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.operation as string) || 'allIs'}
+            onChange={e => updateConfig('operation', e.target.value)}
+          >
+            <option value="allIs">All Is</option>
+            <option value="noneIs">None Is</option>
+            <option value="hasA">Has A</option>
+            <option value="allGreater">All Greater</option>
+            <option value="allLesser">All Lesser</option>
+            <option value="anyGreater">Any Greater</option>
+            <option value="anyLesser">Any Lesser</option>
+          </select>
+        )}
+
+        {nodeData.nodeType === 'groupOperator' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.operation as string) || 'sum'}
+            onChange={e => updateConfig('operation', e.target.value)}
+          >
+            <option value="sum">Sum</option>
+            <option value="mul">Multiply</option>
+            <option value="max">Max</option>
+            <option value="min">Min</option>
+            <option value="mean">Mean</option>
+            <option value="and">AND (all)</option>
+            <option value="or">OR (any)</option>
+            <option value="random">Pick Random</option>
+          </select>
+        )}
       </div>
 
       {/* Input handles (left side) */}
