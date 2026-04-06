@@ -1,3 +1,42 @@
+# GenesisCA
+
+An IDE for modeling and simulating Cellular Automata, built as a browser application.
+
+## Getting Started
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) 18+ (22 LTS recommended)
+- npm 9+ (comes with Node.js)
+
+### Setup
+
+```bash
+git clone https://github.com/rff255/GenesisCA.git
+cd GenesisCA
+npm install
+npm run dev
+```
+
+The app opens at **http://localhost:5173**.
+
+### Available Scripts
+
+| Command | What it does |
+|---------|--------------|
+| `npm run dev` | Start development server with hot reload |
+| `npm run build` | Type-check and build for production |
+| `npm run preview` | Preview the production build locally |
+
+### Tech Stack
+
+- **TypeScript + React** — UI framework
+- **Vite** — build tool and dev server
+- **Canvas2D** — grid rendering
+- **CSS Modules** — scoped component styling
+
+---
+
 ## What GenesisCA Is
 
 GenesisCA is an IDE for modeling and simulating Cellular Automata (CA). It uses a Visual Programming Language (VPL) — a node-based graph editor — so users can design arbitrarily complex CA models without writing code. The goals are **accessibility** (no programming required) and **performance** (grids up to 5000×5000+).

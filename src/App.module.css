@@ -1,0 +1,56 @@
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.navbar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 0 16px;
+  height: 48px;
+  min-height: 48px;
+  background: #16213e;
+  border-bottom: 1px solid #2d4059;
+}
+
+.title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #4cc9f0;
+  letter-spacing: 0.02em;
+}
+
+.navTabs {
+  display: flex;
+  gap: 4px;
+}
+
+.navButton {
+  padding: 6px 16px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #8090a0;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.navButton:hover {
+  color: #c0c8d0;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.navButtonActive {
+  color: #e0e0e0;
+  background: rgba(76, 201, 240, 0.1);
+  border-color: #4cc9f0;
+}
+
+.content {
+  flex: 1;
+  overflow: hidden;
+}

@@ -1,0 +1,93 @@
+.editor {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.gridBackground {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+.mockGraph {
+  position: absolute;
+  inset: 0;
+}
+
+.mockNode {
+  position: absolute;
+  width: 140px;
+  background: #1e2a3a;
+  border: 1px solid #2d4059;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.mockNodeHeader {
+  background: #2d4059;
+  padding: 6px 10px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #4cc9f0;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.mockNodeBody {
+  padding: 8px 10px;
+  font-size: 0.75rem;
+  color: #a0b0c0;
+}
+
+.mockPortIn,
+.mockPortOut {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: #4cc9f0;
+  border-radius: 50%;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.mockPortIn {
+  left: -4px;
+}
+
+.mockPortOut {
+  right: -4px;
+}
+
+.mockConnection {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.watermark {
+  position: absolute;
+  bottom: 24px;
+  right: 24px;
+  text-align: right;
+  pointer-events: none;
+}
+
+.watermarkTitle {
+  font-size: 1rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.15);
+}
+
+.watermarkSub {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.08);
+  margin-top: 4px;
+}

@@ -1,0 +1,11 @@
+.modelerLayout {
+  display: flex;
+  height: 100%;
+}
+
+.graphArea {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: #0d1117;
+}
