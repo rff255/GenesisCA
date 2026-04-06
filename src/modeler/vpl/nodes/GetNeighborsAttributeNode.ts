@@ -12,6 +12,8 @@ export const GetNeighborsAttributeNode: NodeTypeDef = {
   compile: (nodeId, config) => {
     const nbrId = config.neighborhoodId as string || '';
     const attr = config.attributeId as string || 'undefined';
-    return `const _v${nodeId} = neighbors[${JSON.stringify(nbrId)}].map(n => n[${JSON.stringify(attr)}]);\n`;
+    const nbrVar = `neighbors[${JSON.stringify(nbrId)}]`;
+    const attrStr = JSON.stringify(attr);
+    return `const _v${nodeId} = new Array(${nbrVar}.length); for (let _i = 0; _i < ${nbrVar}.length; _i++) _v${nodeId}[_i] = ${nbrVar}[_i][${attrStr}];\n`;
   },
 };

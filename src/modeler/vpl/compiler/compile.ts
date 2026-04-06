@@ -166,9 +166,9 @@ export function compileGraph(
   // ---------- Assemble ----------
 
   const body = [
-    '(function(cell, neighbors, modelAttrs) {',
-    '  const result = { ...cell };',
-    '  const viewers = {};',
+    '(function(cell, neighbors, modelAttrs, _out) {',
+    '  const result = _out.state; for (const _k in cell) result[_k] = cell[_k];',
+    '  const viewers = _out.viewers;',
     '',
     '  // Value computations (hoisted)',
     ...valueLines,
@@ -190,7 +190,7 @@ export function compileAndBuild(
   graphNodes: GraphNode[],
   graphEdges: GraphEdge[],
 ): {
-  fn: ((cell: Record<string, unknown>, neighbors: Record<string, Record<string, unknown>[]>, modelAttrs: Record<string, unknown>) => { state: Record<string, unknown>; viewers: Record<string, { r: number; g: number; b: number }> }) | null;
+  fn: ((cell: Record<string, unknown>, neighbors: Record<string, Record<string, unknown>[]>, modelAttrs: Record<string, unknown>, out: { state: Record<string, unknown>; viewers: Record<string, { r: number; g: number; b: number }> }) => { state: Record<string, unknown>; viewers: Record<string, { r: number; g: number; b: number }> }) | null;
   code: string;
   error?: string;
 } {

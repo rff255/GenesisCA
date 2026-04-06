@@ -3,30 +3,33 @@ import { useModel } from '../model/ModelContext';
 import { SimEngine } from './engine/SimEngine';
 import styles from './SimulatorView.module.css';
 
-const DEFAULT_CELL_COLOR = { r: 13, g: 27, b: 43 };
-
 export function SimulatorView() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { model } = useModel();
   const engineRef = useRef<SimEngine | null>(null);
-  const animFrameRef = useRef<number>(0);
+  const rafRef = useRef<number>(0);
+  const generationRef = useRef(0);
   const [generation, setGeneration] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState(10); // generations per second
+  const [speed, setSpeed] = useState(10);
   const [compileError, setCompileError] = useState('');
   const [activeViewer, setActiveViewer] = useState('');
+  const [showCode, setShowCode] = useState(false);
+  const [compiledCode, setCompiledCode] = useState('');
 
   // Initialize engine from model
   useEffect(() => {
     const engine = new SimEngine(model);
     engineRef.current = engine;
     setCompileError(engine.compileError);
+    setCompiledCode(engine.compiledCode);
     setGeneration(0);
+    generationRef.current = 0;
     const firstViewer = model.mappings.find(m => m.isAttributeToColor);
     setActiveViewer(firstViewer?.id ?? '');
   }, [model]);
 
-  // Draw the grid
+  // Draw using ImageData for performance
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     const engine = engineRef.current;
@@ -35,60 +38,44 @@ export function SimulatorView() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const { width, height, grid, colors } = engine.state;
+    const { width, height, colors } = engine.state;
     const parentW = canvas.parentElement?.clientWidth ?? 500;
     const parentH = canvas.parentElement?.clientHeight ?? 500;
     const maxSize = Math.min(parentW, parentH) - 32;
     const cellSize = Math.max(1, Math.floor(maxSize / Math.max(width, height)));
+
+    // Render at 1:1 pixel ratio into an offscreen canvas, then scale up
     const canvasW = cellSize * width;
     const canvasH = cellSize * height;
     canvas.width = canvasW;
     canvas.height = canvasH;
 
-    const viewer = activeViewer;
-
-    for (let row = 0; row < height; row++) {
-      for (let col = 0; col < width; col++) {
-        const idx = row * width + col;
-        const cellColors = colors[idx];
-        const c = cellColors?.[viewer] ?? DEFAULT_CELL_COLOR;
-
-        // Fallback: if no viewer colors, use a simple alive-based coloring
-        if (!cellColors?.[viewer]) {
-          const cell = grid[idx];
-          const isAlive = cell && Object.values(cell).some(v => v === true);
-          if (isAlive) {
-            ctx.fillStyle = '#4cc9f0';
-          } else {
-            ctx.fillStyle = `rgb(${DEFAULT_CELL_COLOR.r},${DEFAULT_CELL_COLOR.g},${DEFAULT_CELL_COLOR.b})`;
-          }
-        } else {
-          ctx.fillStyle = `rgb(${c.r},${c.g},${c.b})`;
-        }
-        ctx.fillRect(col * cellSize, row * cellSize, cellSize, cellSize);
-      }
+    if (cellSize === 1) {
+      // Direct ImageData — fastest path
+      const imageData = new ImageData(
+        new Uint8ClampedArray(colors.buffer, colors.byteOffset, width * height * 4),
+        width,
+        height,
+      );
+      ctx.putImageData(imageData, 0, 0);
+    } else {
+      // Draw 1:1 ImageData to a temp canvas, then scale up
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = width;
+      tempCanvas.height = height;
+      const tempCtx = tempCanvas.getContext('2d')!;
+      const imageData = new ImageData(
+        new Uint8ClampedArray(colors.buffer, colors.byteOffset, width * height * 4),
+        width,
+        height,
+      );
+      tempCtx.putImageData(imageData, 0, 0);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(tempCanvas, 0, 0, canvasW, canvasH);
     }
+  }, []);
 
-    // Grid lines (only if cells are large enough)
-    if (cellSize > 3) {
-      ctx.strokeStyle = 'rgba(22, 33, 62, 0.5)';
-      ctx.lineWidth = 0.5;
-      for (let i = 0; i <= width; i++) {
-        ctx.beginPath();
-        ctx.moveTo(i * cellSize, 0);
-        ctx.lineTo(i * cellSize, canvasH);
-        ctx.stroke();
-      }
-      for (let i = 0; i <= height; i++) {
-        ctx.beginPath();
-        ctx.moveTo(0, i * cellSize);
-        ctx.lineTo(canvasW, i * cellSize);
-        ctx.stroke();
-      }
-    }
-  }, [activeViewer]);
-
-  // Redraw when generation changes
+  // Redraw when generation or viewer changes
   useEffect(() => {
     draw();
   }, [generation, draw, activeViewer]);
@@ -99,32 +86,49 @@ export function SimulatorView() {
     return () => window.removeEventListener('resize', draw);
   }, [draw]);
 
-  // Play loop
+  // Play loop using requestAnimationFrame
   useEffect(() => {
     if (!playing) return;
-    const interval = Math.max(16, Math.round(1000 / speed));
-    const timer = setInterval(() => {
+
+    let lastTime = 0;
+    const msPerStep = Math.max(1, 1000 / speed);
+
+    const loop = (time: number) => {
       const engine = engineRef.current;
       if (!engine) return;
-      const ok = engine.step();
-      if (ok) {
-        setGeneration(engine.state.generation);
-      } else {
-        setPlaying(false);
-      }
-    }, interval);
-    return () => clearInterval(timer);
-  }, [playing, speed]);
 
-  // Cleanup animation frame
-  useEffect(() => {
-    return () => cancelAnimationFrame(animFrameRef.current);
-  }, []);
+      if (!lastTime) lastTime = time;
+      const elapsed = time - lastTime;
+
+      // Run as many steps as needed to keep up with desired speed
+      const stepsToRun = Math.min(Math.floor(elapsed / msPerStep), 10); // cap at 10 per frame
+      if (stepsToRun > 0) {
+        lastTime += stepsToRun * msPerStep;
+        for (let i = 0; i < stepsToRun; i++) {
+          const ok = engine.step();
+          if (!ok) {
+            setPlaying(false);
+            return;
+          }
+        }
+        generationRef.current = engine.state.generation;
+        draw();
+        // Update React state sparingly (every frame, not every step)
+        setGeneration(engine.state.generation);
+      }
+
+      rafRef.current = requestAnimationFrame(loop);
+    };
+
+    rafRef.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [playing, speed, draw]);
 
   const handleStep = () => {
     const engine = engineRef.current;
     if (!engine) return;
     engine.step();
+    generationRef.current = engine.state.generation;
     setGeneration(engine.state.generation);
   };
 
@@ -132,14 +136,17 @@ export function SimulatorView() {
     const engine = engineRef.current;
     if (!engine) return;
     engine.reset();
+    generationRef.current = 0;
     setGeneration(0);
     setPlaying(false);
+    draw();
   };
 
   const handleRandomize = () => {
     const engine = engineRef.current;
     if (!engine) return;
     engine.randomize();
+    generationRef.current = 0;
     setGeneration(0);
     setPlaying(false);
     draw();
@@ -150,6 +157,23 @@ export function SimulatorView() {
     if (!engine) return;
     engine.updateModel(model);
     setCompileError(engine.compileError);
+    setCompiledCode(engine.compiledCode);
+  };
+
+  const handleCopyCode = () => {
+    navigator.clipboard.writeText(compiledCode).catch(() => {
+      // Fallback: select text in the code block
+    });
+  };
+
+  const handleViewerChange = (viewerId: string) => {
+    setActiveViewer(viewerId);
+    const engine = engineRef.current;
+    if (engine) {
+      engine.state.activeViewer = viewerId;
+      // Re-run colors if we have a step function — for now just redraw
+      draw();
+    }
   };
 
   const attrToColorMappings = model.mappings.filter(m => m.isAttributeToColor);
@@ -217,7 +241,7 @@ export function SimulatorView() {
           Recompile
         </button>
 
-        {attrToColorMappings.length > 1 && (
+        {attrToColorMappings.length > 0 && (
           <>
             <hr className={styles.divider} />
             <div className={styles.stat}>
@@ -226,7 +250,7 @@ export function SimulatorView() {
             <select
               className={styles.viewerSelect}
               value={activeViewer}
-              onChange={e => setActiveViewer(e.target.value)}
+              onChange={e => handleViewerChange(e.target.value)}
             >
               {attrToColorMappings.map(m => (
                 <option key={m.id} value={m.id}>{m.name}</option>
@@ -240,6 +264,24 @@ export function SimulatorView() {
             <hr className={styles.divider} />
             <div className={styles.error}>{compileError}</div>
           </>
+        )}
+
+        <hr className={styles.divider} />
+        <button
+          className={styles.controlButton}
+          onClick={() => setShowCode(!showCode)}
+        >
+          {showCode ? 'Hide' : 'Show'} Generated Code
+        </button>
+        {showCode && (
+          <div className={styles.codePanel}>
+            <button className={styles.copyButton} onClick={handleCopyCode}>
+              Copy
+            </button>
+            <pre className={styles.codeBlock}>
+              {compiledCode || '(no compiled code)'}
+            </pre>
+          </div>
         )}
       </div>
 

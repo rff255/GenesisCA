@@ -4,14 +4,15 @@
 }
 
 .controls {
-  width: 200px;
-  min-width: 200px;
+  width: 220px;
+  min-width: 220px;
   background: #16213e;
   padding: 16px;
   display: flex;
   flex-direction: column;
   gap: 12px;
   border-right: 1px solid #2d4059;
+  overflow-y: auto;
 }
 
 .controlsTitle {
@@ -133,4 +134,42 @@
   font-size: 0.7rem;
   line-height: 1.4;
   word-break: break-word;
+}
+
+.codePanel {
+  position: relative;
+}
+
+.copyButton {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  padding: 2px 8px;
+  background: #2d4059;
+  border: 1px solid #4cc9f0;
+  border-radius: 3px;
+  color: #4cc9f0;
+  font-size: 0.6rem;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.copyButton:hover {
+  background: #3d5069;
+}
+
+.codeBlock {
+  margin: 0;
+  padding: 8px;
+  background: #0d1117;
+  border: 1px solid #2d4059;
+  border-radius: 4px;
+  color: #a0c0e0;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 0.55rem;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+  max-height: 300px;
+  overflow-y: auto;
 }

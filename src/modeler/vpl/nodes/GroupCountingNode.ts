@@ -22,6 +22,6 @@ export const GroupCountingNode: NodeTypeDef = {
       case 'lesser':    cond = `v < ${compareVar}`; break;
       default:          cond = `v === ${compareVar}`; break;
     }
-    return `const _v${nodeId} = ${valuesVar}.filter(v => ${cond}).length;\n`;
+    return `let _v${nodeId} = 0; for (let _i = 0; _i < ${valuesVar}.length; _i++) { const v = ${valuesVar}[_i]; if (${cond}) _v${nodeId}++; }\n`;
   },
 };
