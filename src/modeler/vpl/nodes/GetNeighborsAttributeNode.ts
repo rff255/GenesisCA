@@ -10,10 +10,12 @@ export const GetNeighborsAttributeNode: NodeTypeDef = {
   ],
   defaultConfig: { neighborhoodId: '', attributeId: '' },
   compile: (nodeId, config) => {
-    const nbrId = config.neighborhoodId as string || '';
-    const attr = config.attributeId as string || 'undefined';
-    const nbrVar = `neighbors[${JSON.stringify(nbrId)}]`;
-    const attrStr = JSON.stringify(attr);
-    return `const _v${nodeId} = new Array(${nbrVar}.length); for (let _i = 0; _i < ${nbrVar}.length; _i++) _v${nodeId}[_i] = ${nbrVar}[_i][${attrStr}];\n`;
+    const nbrId = config.neighborhoodId as string || '_undef';
+    const attr = config.attributeId as string || '_undef';
+    // Compute base offset into the full neighbor index array, read neighbor values
+    return [
+      `const _nb${nodeId} = idx * nSz_${nbrId};`,
+      `const _v${nodeId} = new Array(nSz_${nbrId}); for (let _n = 0; _n < nSz_${nbrId}; _n++) _v${nodeId}[_n] = r_${attr}[nIdx_${nbrId}[_nb${nodeId} + _n]];`,
+    ].join(' ') + '\n';
   },
 };

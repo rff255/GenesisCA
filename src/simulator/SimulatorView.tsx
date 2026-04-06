@@ -47,7 +47,7 @@ export function SimulatorView() {
 
   // Compile graph
   const compileModel = useCallback(() => {
-    const result = compileGraph(model.graphNodes, model.graphEdges);
+    const result = compileGraph(model.graphNodes, model.graphEdges, model);
     setCompiledCode(result.stepCode);
     setCompileError(result.error ?? '');
     return result;

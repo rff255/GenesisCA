@@ -11,9 +11,9 @@ export const SetAttributeNode: NodeTypeDef = {
   ],
   defaultConfig: { attributeId: '' },
   compile: (nodeId, config, inputs) => {
-    const attr = config.attributeId as string || 'undefined';
-    const value = inputs['value'] || 'undefined';
-    void nodeId; // not used — setAttribute doesn't produce an output variable
-    return `result[${JSON.stringify(attr)}] = ${value};\n`;
+    const attr = config.attributeId as string || '_undef';
+    const value = inputs['value'] || '0';
+    void nodeId;
+    return `w_${attr}[idx] = ${value};\n`;
   },
 };

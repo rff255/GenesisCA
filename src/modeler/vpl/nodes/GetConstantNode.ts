@@ -14,7 +14,8 @@ export const GetConstantNode: NodeTypeDef = {
     const raw = config.constValue as string;
     let value: string;
     if (type === 'bool') {
-      value = raw === 'true' ? 'true' : 'false';
+      // Use 1/0 for typed array compatibility (Uint8Array stores 0/1)
+      value = raw === 'true' ? '1' : '0';
     } else if (type === 'float') {
       value = String(parseFloat(raw) || 0);
     } else {

@@ -18,6 +18,7 @@ export const SetColorViewerNode: NodeTypeDef = {
     const g = inputs['g'] || '0';
     const b = inputs['b'] || '0';
     void nodeId;
-    return `viewers[${JSON.stringify(mappingId)}] = { r: Math.round(${r}), g: Math.round(${g}), b: Math.round(${b}) };\n`;
+    // Only write colors if this viewer is the active one
+    return `if (activeViewer === ${JSON.stringify(mappingId)}) { colors[colorIdx] = ${r}; colors[colorIdx+1] = ${g}; colors[colorIdx+2] = ${b}; colors[colorIdx+3] = 255; }\n`;
   },
 };

@@ -10,7 +10,7 @@ export const GetCellAttributeNode: NodeTypeDef = {
   ],
   defaultConfig: { attributeId: '' },
   compile: (nodeId, config) => {
-    const attr = config.attributeId as string || 'undefined';
-    return `const _v${nodeId} = cell[${JSON.stringify(attr)}];\n`;
+    const attr = config.attributeId as string || '_undef';
+    return `const _v${nodeId} = r_${attr}[idx];\n`;
   },
 };

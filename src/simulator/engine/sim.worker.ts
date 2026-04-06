@@ -1,16 +1,8 @@
 /**
  * Web Worker for GenesisCA simulation.
- * Owns the grid state — main thread only receives RGBA color buffers.
+ * Uses Structure of Arrays (SoA) for grid state — one typed array per attribute.
+ * Pre-computes neighbor index tables for zero-cost boundary handling.
  */
-
-type CellState = Record<string, unknown>;
-type ViewerColors = Record<string, { r: number; g: number; b: number }>;
-type StepFn = (
-  cell: CellState,
-  neighbors: Record<string, CellState[]>,
-  modelAttrs: CellState,
-  out: { state: CellState; viewers: ViewerColors },
-) => { state: CellState; viewers: ViewerColors };
 
 interface AttrDef {
   id: string;
@@ -24,12 +16,6 @@ interface NeighborhoodDef {
   coords: Array<[number, number]>;
 }
 
-type InputColorFn = (
-  r: number, g: number, b: number,
-  cell: CellState, modelAttrs: CellState,
-  out: { state: CellState; viewers: ViewerColors },
-) => { state: CellState; viewers: ViewerColors };
-
 interface InitMsg {
   type: 'init';
   width: number;
@@ -42,19 +28,13 @@ interface InitMsg {
   activeViewer: string;
 }
 
-interface StepMsg {
-  type: 'step';
-  count: number;
-  activeViewer: string;
-}
-
+interface StepMsg { type: 'step'; count: number; activeViewer: string }
 interface PaintMsg {
   type: 'paint';
   cells: Array<{ row: number; col: number; r: number; g: number; b: number }>;
   mappingId: string;
   activeViewer: string;
 }
-
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
 interface RecompileMsg { type: 'recompile'; stepCode: string; inputColorCodes: Array<{ mappingId: string; code: string }> }
@@ -67,195 +47,233 @@ type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | Recomp
 
 let width = 0;
 let height = 0;
-let attributes: AttrDef[] = [];
+let total = 0;
+let cellAttrs: AttrDef[] = [];
 let neighborhoods: NeighborhoodDef[] = [];
 let boundaryTreatment = 'torus';
 let generation = 0;
 
-let gridA: CellState[] = [];
-let gridB: CellState[] = [];
-let currentGrid: CellState[] = [];
-let useA = true;
+// SoA: one typed array per attribute, double-buffered (A = read, B = write)
+let attrsA: Record<string, ArrayLike<number> & { [i: number]: number; length: number }> = {};
+let attrsB: Record<string, ArrayLike<number> & { [i: number]: number; length: number }> = {};
+let readAttrs = attrsA;
+let writeAttrs = attrsB;
+
+// Pre-computed neighbor indices: nbrIndices[nbrId][cellIdx * nbrSize + n] = neighbor flat index
+let nbrIndices: Record<string, Int32Array> = {};
 
 let colors: Uint8ClampedArray = new Uint8ClampedArray(0);
-let stepFn: StepFn | null = null;
-let inputColorFns: Array<{ mappingId: string; fn: InputColorFn }> = [];
+let stepFn: Function | null = null;
+let inputColorFns: Array<{ mappingId: string; fn: Function }> = [];
 
-let defaultCell: CellState = {};
-let cachedModelAttrs: CellState = {};
-let neighborBuffers: Record<string, CellState[]> = {};
-const cellOut: { state: CellState; viewers: ViewerColors } = { state: {}, viewers: {} };
+// Cached model attributes
+let cachedModelAttrs: Record<string, unknown> = {};
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Typed array creation by attribute type
 // ---------------------------------------------------------------------------
 
-function buildCaches(): void {
-  defaultCell = {};
-  cachedModelAttrs = {};
-  for (const attr of attributes) {
-    if (attr.isModelAttribute) {
-      switch (attr.type) {
-        case 'bool': cachedModelAttrs[attr.id] = attr.defaultValue === 'true'; break;
-        case 'integer': cachedModelAttrs[attr.id] = parseInt(attr.defaultValue, 10) || 0; break;
-        case 'float': cachedModelAttrs[attr.id] = parseFloat(attr.defaultValue) || 0; break;
-        default: cachedModelAttrs[attr.id] = attr.defaultValue;
-      }
-    } else {
-      defaultCell[attr.id] = attr.type === 'bool' ? false : 0;
-    }
-  }
-  neighborBuffers = {};
-  for (const nbr of neighborhoods) {
-    neighborBuffers[nbr.id] = new Array<CellState>(nbr.coords.length);
+function createTypedArray(type: string, size: number): Float64Array | Int32Array | Uint8Array {
+  switch (type) {
+    case 'bool': return new Uint8Array(size);
+    case 'integer': return new Int32Array(size);
+    case 'float': return new Float64Array(size);
+    default: return new Float64Array(size);
   }
 }
 
-function createCell(): CellState {
-  const cell: CellState = {};
-  for (const attr of attributes) {
-    if (attr.isModelAttribute) continue;
-    switch (attr.type) {
-      case 'bool': cell[attr.id] = attr.defaultValue === 'true'; break;
-      case 'integer': cell[attr.id] = parseInt(attr.defaultValue, 10) || 0; break;
-      case 'float': cell[attr.id] = parseFloat(attr.defaultValue) || 0; break;
-      default: cell[attr.id] = attr.defaultValue;
-    }
+function defaultValue(attr: AttrDef): number {
+  switch (attr.type) {
+    case 'bool': return attr.defaultValue === 'true' ? 1 : 0;
+    case 'integer': return parseInt(attr.defaultValue, 10) || 0;
+    case 'float': return parseFloat(attr.defaultValue) || 0;
+    default: return 0;
   }
-  return cell;
 }
+
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
 
 function initGrid(): void {
-  const total = width * height;
-  gridA = new Array<CellState>(total);
-  gridB = new Array<CellState>(total);
-  for (let i = 0; i < total; i++) {
-    gridA[i] = createCell();
-    gridB[i] = createCell();
+  total = width * height;
+  attrsA = {};
+  attrsB = {};
+
+  for (const attr of cellAttrs) {
+    const arrA = createTypedArray(attr.type, total);
+    const arrB = createTypedArray(attr.type, total);
+    const dv = defaultValue(attr);
+    if (dv !== 0) { arrA.fill(dv); arrB.fill(dv); }
+    attrsA[attr.id] = arrA;
+    attrsB[attr.id] = arrB;
   }
-  useA = true;
-  currentGrid = gridA;
+
+  readAttrs = attrsA;
+  writeAttrs = attrsB;
   colors = new Uint8ClampedArray(total * 4);
   generation = 0;
 }
 
-function fillNeighbors(row: number, col: number): Record<string, CellState[]> {
+function buildNeighborIndices(): void {
+  nbrIndices = {};
   for (const nbr of neighborhoods) {
-    const buf = neighborBuffers[nbr.id]!;
-    for (let i = 0; i < nbr.coords.length; i++) {
-      const [dr, dc] = nbr.coords[i]!;
-      let r = row + dr;
-      let c = col + dc;
-      if (r < 0 || r >= height || c < 0 || c >= width) {
-        if (boundaryTreatment === 'torus') {
-          r = ((r % height) + height) % height;
-          c = ((c % width) + width) % width;
-        } else {
-          buf[i] = defaultCell;
-          continue;
+    const nbrSize = nbr.coords.length;
+    const indices = new Int32Array(total * nbrSize);
+
+    for (let row = 0; row < height; row++) {
+      for (let col = 0; col < width; col++) {
+        const cellIdx = row * width + col;
+        for (let n = 0; n < nbrSize; n++) {
+          const [dr, dc] = nbr.coords[n]!;
+          let nRow = row + dr;
+          let nCol = col + dc;
+
+          if (nRow < 0 || nRow >= height || nCol < 0 || nCol >= width) {
+            if (boundaryTreatment === 'torus') {
+              nRow = ((nRow % height) + height) % height;
+              nCol = ((nCol % width) + width) % width;
+            } else {
+              // Constant: point to cell 0 (will be filled with defaults)
+              // We use a sentinel approach: index -1 means "use default"
+              // But typed arrays can't store -1, so we use total as sentinel
+              indices[cellIdx * nbrSize + n] = total; // sentinel
+              continue;
+            }
+          }
+
+          indices[cellIdx * nbrSize + n] = nRow * width + nCol;
         }
       }
-      buf[i] = currentGrid[r * width + c]!;
     }
+
+    nbrIndices[nbr.id] = indices;
   }
-  return neighborBuffers;
+
+  // For constant boundary: ensure read attrs have a sentinel cell at index `total`
+  // We extend each array by 1 with the default value
+  if (boundaryTreatment !== 'torus') {
+    for (const attr of cellAttrs) {
+      const oldA = attrsA[attr.id]!;
+      const oldB = attrsB[attr.id]!;
+      const newA = createTypedArray(attr.type, total + 1);
+      const newB = createTypedArray(attr.type, total + 1);
+      (newA as Uint8Array).set(oldA as Uint8Array);
+      (newB as Uint8Array).set(oldB as Uint8Array);
+      newA[total] = defaultValue(attr);
+      newB[total] = defaultValue(attr);
+      attrsA[attr.id] = newA;
+      attrsB[attr.id] = newB;
+    }
+    readAttrs = attrsA;
+    writeAttrs = attrsB;
+  }
 }
 
-function runStep(activeViewer: string): void {
-  const nextGrid = useA ? gridB : gridA;
+
+// ---------------------------------------------------------------------------
+// Step
+// ---------------------------------------------------------------------------
+
+/** Build the static args array (everything shared across all cells). idx is set per-cell. */
+function buildStaticArgs(): unknown[] {
+  const args: unknown[] = [0]; // idx placeholder at [0]
+  for (const attr of cellAttrs) args.push(readAttrs[attr.id]);
+  for (const attr of cellAttrs) args.push(writeAttrs[attr.id]);
+  for (const nbr of neighborhoods) {
+    args.push(nbrIndices[nbr.id]);       // full Int32Array
+    args.push(nbr.coords.length);        // neighborhood size
+  }
+  args.push(cachedModelAttrs, colors, activeViewer);
+  return args;
+}
+
+let activeViewer = '';
+
+function runStep(): void {
   const fn = stepFn!;
-  const ma = cachedModelAttrs;
-  const out = cellOut;
+  const args = buildStaticArgs();
 
-  for (let row = 0; row < height; row++) {
-    for (let col = 0; col < width; col++) {
-      const idx = row * width + col;
-      const cell = currentGrid[idx]!;
-      const neighbors = fillNeighbors(row, col);
-
-      out.state = nextGrid[idx]!;
-      out.viewers = {};
-      fn(cell, neighbors, ma, out);
-
-      // Only update colors for the active viewer if SetColorViewer was called.
-      // Otherwise preserve the previous frame's colors (colors buffer persists).
-      const viewer = out.viewers[activeViewer];
-      if (viewer) {
-        const px = idx * 4;
-        colors[px] = viewer.r;
-        colors[px + 1] = viewer.g;
-        colors[px + 2] = viewer.b;
-        colors[px + 3] = 255;
-      }
-    }
+  for (let idx = 0; idx < total; idx++) {
+    args[0] = idx;
+    fn(...args);
   }
 
-  useA = !useA;
-  currentGrid = nextGrid;
+  // Swap buffers
+  const tmp = readAttrs;
+  readAttrs = writeAttrs;
+  writeAttrs = tmp;
+  // Update args references for next step (buffers swapped)
   generation++;
 }
 
-function writeColors(activeViewer: string): void {
-  // Write RGBA from current grid state (without stepping)
-  for (let i = 0; i < width * height; i++) {
-    const cell = currentGrid[i]!;
-    let alive = false;
-    for (const k in cell) { if (cell[k] === true) { alive = true; break; } }
+function writeDefaultColors(): void {
+  // Fallback coloring: first bool attr determines color
+  const firstBool = cellAttrs.find(a => a.type === 'bool');
+  if (!firstBool) {
+    colors.fill(0);
+    for (let i = 3; i < colors.length; i += 4) colors[i] = 255;
+    return;
+  }
+  const arr = readAttrs[firstBool.id]!;
+  for (let i = 0; i < total; i++) {
     const px = i * 4;
-    colors[px] = alive ? 76 : 13;
-    colors[px + 1] = alive ? 201 : 27;
-    colors[px + 2] = alive ? 240 : 43;
+    if (arr[i]) {
+      colors[px] = 76; colors[px + 1] = 201; colors[px + 2] = 240;
+    } else {
+      colors[px] = 13; colors[px + 1] = 27; colors[px + 2] = 43;
+    }
     colors[px + 3] = 255;
   }
-  void activeViewer;
 }
 
-function randomizeGrid(activeViewer: string): void {
-  for (let i = 0; i < width * height; i++) {
-    const cell = currentGrid[i]!;
-    for (const attr of attributes) {
-      if (attr.isModelAttribute) continue;
-      if (attr.type === 'bool') cell[attr.id] = Math.random() > 0.7;
-      else if (attr.type === 'integer') cell[attr.id] = Math.floor(Math.random() * 10);
-      else if (attr.type === 'float') cell[attr.id] = Math.random();
+function randomizeGrid(): void {
+  for (const attr of cellAttrs) {
+    const arr = readAttrs[attr.id]!;
+    for (let i = 0; i < total; i++) {
+      if (attr.type === 'bool') arr[i] = Math.random() > 0.7 ? 1 : 0;
+      else if (attr.type === 'integer') arr[i] = Math.floor(Math.random() * 10);
+      else if (attr.type === 'float') arr[i] = Math.random();
     }
+    // Copy to write buffer too
+    const wArr = writeAttrs[attr.id]!;
+    (wArr as Uint8Array).set(arr as Uint8Array);
   }
   generation = 0;
-  writeColors(activeViewer);
+  writeDefaultColors();
 }
 
-function resetGrid(activeViewer: string): void {
-  for (let i = 0; i < width * height; i++) {
-    const cell = currentGrid[i]!;
-    for (const attr of attributes) {
-      if (attr.isModelAttribute) continue;
-      switch (attr.type) {
-        case 'bool': cell[attr.id] = attr.defaultValue === 'true'; break;
-        case 'integer': cell[attr.id] = parseInt(attr.defaultValue, 10) || 0; break;
-        case 'float': cell[attr.id] = parseFloat(attr.defaultValue) || 0; break;
-        default: cell[attr.id] = attr.defaultValue;
-      }
-    }
+function resetGrid(): void {
+  for (const attr of cellAttrs) {
+    const dv = defaultValue(attr);
+    const arr = readAttrs[attr.id]!;
+    const wArr = writeAttrs[attr.id]!;
+    for (let i = 0; i < total; i++) { arr[i] = dv; wArr[i] = dv; }
   }
   generation = 0;
-  writeColors(activeViewer);
+  writeDefaultColors();
 }
 
 function compileFns(stepCode: string, icCodes: Array<{ mappingId: string; code: string }>): void {
   try {
     // eslint-disable-next-line no-eval
-    stepFn = stepCode ? (eval(stepCode) as StepFn) : null;
-  } catch {
-    stepFn = null;
-  }
+    stepFn = stepCode ? (eval(stepCode) as Function) : null;
+  } catch { stepFn = null; }
   inputColorFns = [];
   for (const ic of icCodes) {
     try {
       // eslint-disable-next-line no-eval
-      const fn = eval(ic.code) as InputColorFn;
-      inputColorFns.push({ mappingId: ic.mappingId, fn });
-    } catch { /* skip invalid */ }
+      inputColorFns.push({ mappingId: ic.mappingId, fn: eval(ic.code) as Function });
+    } catch { /* skip */ }
   }
+}
+
+function sendColors(): void {
+  const copy = new Uint8ClampedArray(colors);
+  self.postMessage(
+    { type: 'stepped', generation, colors: copy },
+    { transfer: [copy.buffer] },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -269,18 +287,23 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'init': {
       width = msg.width;
       height = msg.height;
-      attributes = msg.attributes;
+      cellAttrs = msg.attributes.filter(a => !a.isModelAttribute);
       neighborhoods = msg.neighborhoods;
       boundaryTreatment = msg.boundaryTreatment;
-      buildCaches();
+
+      // Cache model attributes
+      cachedModelAttrs = {};
+      for (const attr of msg.attributes) {
+        if (!attr.isModelAttribute) continue;
+        cachedModelAttrs[attr.id] = defaultValue(attr);
+      }
+
+      activeViewer = msg.activeViewer;
       initGrid();
+      buildNeighborIndices();
       compileFns(msg.stepCode, msg.inputColorCodes);
-      writeColors(msg.activeViewer);
-      const copy = new Uint8ClampedArray(colors);
-      self.postMessage(
-        { type: 'stepped', generation, colors: copy },
-        { transfer: [copy.buffer] },
-      );
+      writeDefaultColors();
+      sendColors();
       break;
     }
 
@@ -289,89 +312,61 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         self.postMessage({ type: 'error', message: 'No compiled step function.' });
         return;
       }
-      for (let i = 0; i < msg.count; i++) {
-        runStep(msg.activeViewer);
-      }
-      const copy = new Uint8ClampedArray(colors);
-      self.postMessage(
-        { type: 'stepped', generation, colors: copy },
-        { transfer: [copy.buffer] },
-      );
-      break;
-    }
-
-    case 'randomize': {
-      randomizeGrid(msg.activeViewer);
-      const copy = new Uint8ClampedArray(colors);
-      self.postMessage(
-        { type: 'stepped', generation, colors: copy },
-        { transfer: [copy.buffer] },
-      );
-      break;
-    }
-
-    case 'reset': {
-      resetGrid(msg.activeViewer);
-      const copy = new Uint8ClampedArray(colors);
-      self.postMessage(
-        { type: 'stepped', generation, colors: copy },
-        { transfer: [copy.buffer] },
-      );
+      activeViewer = msg.activeViewer;
+      for (let i = 0; i < msg.count; i++) runStep();
+      sendColors();
       break;
     }
 
     case 'paint': {
-      // Find InputColor function matching the requested mapping
+      activeViewer = msg.activeViewer;
       const icEntry = msg.mappingId
         ? inputColorFns.find(f => f.mappingId === msg.mappingId)
         : inputColorFns[0];
-      const icFn = icEntry?.fn;
-
-      const ma = cachedModelAttrs;
-      const out = cellOut;
 
       for (const c of msg.cells) {
         if (c.row < 0 || c.row >= height || c.col < 0 || c.col >= width) continue;
         const idx = c.row * width + c.col;
 
-        if (icFn) {
-          // Use InputColor graph function to set cell attributes from color
-          out.state = currentGrid[idx]!;
-          out.viewers = {};
-          icFn(c.r, c.g, c.b, currentGrid[idx]!, ma, out);
+        if (icEntry?.fn) {
+          // InputColor writes to writeAttrs (via w_<attr>[idx])
+          // We need to also update readAttrs so the next step sees the change
+          const args = buildStaticArgs();
+          args[0] = idx;
+          icEntry.fn(c.r, c.g, c.b, ...args);
+          // Copy written values back to read buffer so step() sees them
+          for (const attr of cellAttrs) {
+            readAttrs[attr.id]![idx] = writeAttrs[attr.id]![idx]!;
+          }
         } else {
-          // Fallback: set first bool attribute to true
-          const cell = currentGrid[idx]!;
-          for (const attr of attributes) {
-            if (!attr.isModelAttribute && attr.type === 'bool') {
-              cell[attr.id] = true;
-              break;
-            }
+          // Fallback: set first bool attribute in BOTH buffers
+          const firstBool = cellAttrs.find(a => a.type === 'bool');
+          if (firstBool) {
+            readAttrs[firstBool.id]![idx] = 1;
+            writeAttrs[firstBool.id]![idx] = 1;
           }
         }
       }
 
-      // Run one Step so SetColorViewer in the main graph updates the display
+      // Run one step so color viewers update the display
       if (stepFn) {
-        runStep(msg.activeViewer);
+        runStep();
       } else {
-        // No step function — just paint the brush color directly
-        for (const c of msg.cells) {
-          if (c.row < 0 || c.row >= height || c.col < 0 || c.col >= width) continue;
-          const idx = c.row * width + c.col;
-          const px = idx * 4;
-          colors[px] = c.r;
-          colors[px + 1] = c.g;
-          colors[px + 2] = c.b;
-          colors[px + 3] = 255;
-        }
+        writeDefaultColors();
       }
+      sendColors();
+      break;
+    }
 
-      const copy = new Uint8ClampedArray(colors);
-      self.postMessage(
-        { type: 'stepped', generation, colors: copy },
-        { transfer: [copy.buffer] },
-      );
+    case 'randomize': {
+      randomizeGrid();
+      sendColors();
+      break;
+    }
+
+    case 'reset': {
+      resetGrid();
+      sendColors();
       break;
     }
 

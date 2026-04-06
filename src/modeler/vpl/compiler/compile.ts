@@ -1,4 +1,4 @@
-import type { GraphNode, GraphEdge } from '../../../model/types';
+import type { GraphNode, GraphEdge, CAModel } from '../../../model/types';
 import { getNodeDef } from '../nodes/registry';
 import { parseHandleId } from '../types';
 
@@ -10,9 +10,7 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
   const nodeMap = new Map<string, GraphNode>();
   for (const n of graphNodes) nodeMap.set(n.id, n);
 
-  // Target value input → source output
   const inputToSource = new Map<string, { nodeId: string; portId: string }>();
-  // Source flow output → target flow inputs
   const flowOutputToTargets = new Map<string, Array<{ nodeId: string; portId: string }>>();
 
   for (const edge of graphEdges) {
@@ -42,6 +40,8 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
 // Compile a single root's subgraph
 // ---------------------------------------------------------------------------
 
+const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'getColorConstant']);
+
 function compileRoot(
   rootNode: GraphNode,
   rootFlowPort: string,
@@ -49,11 +49,9 @@ function compileRoot(
   inputToSource: Map<string, { nodeId: string; portId: string }>,
   flowOutputToTargets: Map<string, Array<{ nodeId: string; portId: string }>>,
 ): string[] {
-  const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'getColorConstant']);
   const compiled = new Set<string>();
   const valueLines: string[] = [];
 
-  /** Get the variable name for a source node+port, handling multi-output nodes */
   function varName(sourceNodeId: string, sourcePortId: string): string {
     const sourceNode = nodeMap.get(sourceNodeId);
     if (sourceNode && MULTI_OUTPUT_TYPES.has(sourceNode.data.nodeType)) {
@@ -62,7 +60,6 @@ function compileRoot(
     return `_v${sourceNodeId}`;
   }
 
-  /** Recursively compile a value node and return its variable name */
   function compileValueNode(nodeId: string): string {
     if (compiled.has(nodeId)) return `_v${nodeId}`;
     compiled.add(nodeId);
@@ -72,7 +69,6 @@ function compileRoot(
     const def = getNodeDef(node.data.nodeType);
     if (!def) return 'undefined';
 
-    // InputColor root: r/g/b are function parameters, declared in the function header
     if (node.data.nodeType === 'inputColor') {
       return `_v${nodeId}`;
     }
@@ -82,7 +78,7 @@ function compileRoot(
       if (port.kind !== 'input' || port.category !== 'value') continue;
       const source = inputToSource.get(`${nodeId}:${port.id}`);
       if (source) {
-        compileValueNode(source.nodeId); // ensure dependency is compiled
+        compileValueNode(source.nodeId);
         inputVars[port.id] = varName(source.nodeId, source.portId);
       }
     }
@@ -93,7 +89,6 @@ function compileRoot(
     return `_v${nodeId}`;
   }
 
-  /** Walk flow graph collecting all value dependencies */
   function collectValueDeps(nodeId: string): void {
     const node = nodeMap.get(nodeId);
     if (!node) return;
@@ -117,7 +112,6 @@ function compileRoot(
 
   collectValueDeps(rootNode.id);
 
-  // --- Pass 2: Flow graph ---
   const flowLines: string[] = [];
 
   function compileFlowChain(sourceNodeId: string, sourcePortId: string, indent: string): void {
@@ -151,7 +145,6 @@ function compileRoot(
         compileFlowChain(node.id, 'body', indent + '  ');
         flowLines.push(`${indent}}`);
       } else {
-        // Regular output node (setAttribute, setColorViewer, etc.)
         const inputVars: Record<string, string> = {};
         for (const port of def.ports) {
           if (port.kind !== 'input' || port.category !== 'value') continue;
@@ -171,6 +164,29 @@ function compileRoot(
   return [...valueLines, '', ...flowLines];
 }
 
+// ---------------------------------------------------------------------------
+// Build parameter lists from model
+// ---------------------------------------------------------------------------
+
+function buildParamList(model: CAModel): {
+  params: string;
+  cellAttrs: Array<{ id: string; type: string }>;
+  neighborhoods: Array<{ id: string }>;
+} {
+  const cellAttrs = model.attributes
+    .filter(a => !a.isModelAttribute)
+    .map(a => ({ id: a.id, type: a.type }));
+  const neighborhoods = model.neighborhoods.map(n => ({ id: n.id }));
+
+  // Parameters: idx, read attrs, write attrs, full neighbor index arrays + sizes, modelAttrs, colors, activeViewer
+  const parts: string[] = ['idx'];
+  for (const a of cellAttrs) parts.push(`r_${a.id}`);
+  for (const a of cellAttrs) parts.push(`w_${a.id}`);
+  for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
+  parts.push('modelAttrs', 'colors', 'activeViewer');
+
+  return { params: parts.join(', '), cellAttrs, neighborhoods };
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -182,32 +198,37 @@ export interface CompileResult {
   error?: string;
 }
 
-/**
- * Compile a node graph into JavaScript function strings.
- * Returns separate functions for Step and each InputColor root.
- */
 export function compileGraph(
   graphNodes: GraphNode[],
   graphEdges: GraphEdge[],
+  model?: CAModel,
 ): CompileResult {
   if (graphNodes.length === 0) {
     return { stepCode: '', inputColorCodes: [], error: 'No nodes in graph.' };
   }
 
+  if (!model) {
+    return { stepCode: '', inputColorCodes: [], error: 'Model required for SoA compilation.' };
+  }
+
   const { nodeMap, inputToSource, flowOutputToTargets } = buildAdjacency(graphNodes, graphEdges);
+  const { params, cellAttrs } = buildParamList(model);
+
+  // Generate attribute copy lines (previous → next generation)
+  const copyLines = cellAttrs.map(a => `  w_${a.id}[idx] = r_${a.id}[idx];`);
+
   // --- Compile Step function ---
   const stepNode = graphNodes.find(n => n.data.nodeType === 'step');
   let stepCode = '';
   if (stepNode) {
     const lines = compileRoot(stepNode, 'do', nodeMap, inputToSource, flowOutputToTargets);
     stepCode = [
-      '(function(cell, neighbors, modelAttrs, _out) {',
-      '  const result = _out.state; for (const _k in cell) result[_k] = cell[_k];',
-      '  const viewers = _out.viewers;',
+      `(function(${params}) {`,
+      '  const colorIdx = idx * 4;',
+      '  // Copy previous state',
+      ...copyLines,
       '',
       ...lines,
-      '',
-      '  return { state: result, viewers };',
       '})',
     ].join('\n');
   }
@@ -220,14 +241,13 @@ export function compileGraph(
     const mappingId = icNode.data.config.mappingId as string || '';
     const lines = compileRoot(icNode, 'do', nodeMap, inputToSource, flowOutputToTargets);
     const code = [
-      '(function(_r, _g, _b, cell, modelAttrs, _out) {',
-      '  const result = _out.state; for (const _k in cell) result[_k] = cell[_k];',
-      '  const viewers = _out.viewers;',
+      `(function(_r, _g, _b, ${params}) {`,
+      '  const colorIdx = idx * 4;',
+      '  // Copy previous state',
+      ...copyLines,
       `  const _v${icNode.id}_r = _r; const _v${icNode.id}_g = _g; const _v${icNode.id}_b = _b;`,
       '',
       ...lines,
-      '',
-      '  return { state: result, viewers };',
       '})',
     ].join('\n');
     inputColorCodes.push({ mappingId, code });
@@ -244,6 +264,7 @@ export function compileGraph(
 export function compileAndBuild(
   graphNodes: GraphNode[],
   graphEdges: GraphEdge[],
+  model?: CAModel,
 ): {
   stepFn: Function | null;
   inputColorFns: Array<{ mappingId: string; fn: Function }>;
@@ -251,7 +272,7 @@ export function compileAndBuild(
   inputColorCodes: Array<{ mappingId: string; code: string }>;
   error?: string;
 } {
-  const result = compileGraph(graphNodes, graphEdges);
+  const result = compileGraph(graphNodes, graphEdges, model);
 
   let stepFn: Function | null = null;
   if (result.stepCode) {
@@ -260,10 +281,8 @@ export function compileAndBuild(
       stepFn = eval(result.stepCode) as Function;
     } catch (e) {
       return {
-        stepFn: null,
-        inputColorFns: [],
-        stepCode: result.stepCode,
-        inputColorCodes: result.inputColorCodes,
+        stepFn: null, inputColorFns: [],
+        stepCode: result.stepCode, inputColorCodes: result.inputColorCodes,
         error: `Step compilation error: ${e instanceof Error ? e.message : String(e)}`,
       };
     }
@@ -277,20 +296,12 @@ export function compileAndBuild(
       inputColorFns.push({ mappingId: ic.mappingId, fn });
     } catch (e) {
       return {
-        stepFn: null,
-        inputColorFns: [],
-        stepCode: result.stepCode,
-        inputColorCodes: result.inputColorCodes,
+        stepFn: null, inputColorFns: [],
+        stepCode: result.stepCode, inputColorCodes: result.inputColorCodes,
         error: `InputColor compilation error: ${e instanceof Error ? e.message : String(e)}`,
       };
     }
   }
 
-  return {
-    stepFn,
-    inputColorFns,
-    stepCode: result.stepCode,
-    inputColorCodes: result.inputColorCodes,
-    error: result.error,
-  };
+  return { stepFn, inputColorFns, stepCode: result.stepCode, inputColorCodes: result.inputColorCodes, error: result.error };
 }
