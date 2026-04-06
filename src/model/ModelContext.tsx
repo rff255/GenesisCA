@@ -10,6 +10,8 @@ import type { ReactNode } from 'react';
 import type {
   Attribute,
   CAModel,
+  GraphEdge,
+  GraphNode,
   Mapping,
   ModelProperties,
   Neighborhood,
@@ -49,6 +51,7 @@ type ModelAction =
   | { type: 'ADD_MAPPING'; isAttributeToColor: boolean }
   | { type: 'REMOVE_MAPPING'; id: string }
   | { type: 'UPDATE_MAPPING'; id: string; changes: Partial<Mapping> }
+  | { type: 'SET_GRAPH'; nodes: GraphNode[]; edges: GraphEdge[] }
   | { type: 'NEW_MODEL' }
   | { type: 'LOAD_MODEL'; model: CAModel }
   | { type: 'MARK_SAVED' };
@@ -193,6 +196,17 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         },
       };
 
+    case 'SET_GRAPH':
+      return {
+        ...state,
+        isDirty: true,
+        model: {
+          ...state.model,
+          graphNodes: action.nodes,
+          graphEdges: action.edges,
+        },
+      };
+
     case 'NEW_MODEL':
       return { model: DEFAULT_MODEL, isDirty: false };
 
@@ -221,6 +235,7 @@ export interface ModelContextValue {
   addMapping: (isAttributeToColor: boolean) => void;
   removeMapping: (id: string) => void;
   updateMapping: (id: string, changes: Partial<Mapping>) => void;
+  setGraph: (nodes: GraphNode[], edges: GraphEdge[]) => void;
   newModel: () => void;
   loadModel: (model: CAModel) => void;
   markSaved: () => void;
@@ -238,6 +253,9 @@ function createInitialState(): ModelState {
     if (saved) {
       const model = JSON.parse(saved) as CAModel;
       if (model.schemaVersion && model.properties && model.attributes) {
+        // Ensure new fields exist for older saved models
+        if (!model.graphNodes) model.graphNodes = [];
+        if (!model.graphEdges) model.graphEdges = [];
         return { model, isDirty: false };
       }
     }
@@ -305,6 +323,11 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'UPDATE_MAPPING', id, changes }),
     [],
   );
+  const setGraph = useCallback(
+    (nodes: GraphNode[], edges: GraphEdge[]) =>
+      dispatch({ type: 'SET_GRAPH', nodes, edges }),
+    [],
+  );
   const newModel = useCallback(() => {
     dispatch({ type: 'NEW_MODEL' });
     try { localStorage.removeItem('genesisca_autosave'); } catch { /* ok */ }
@@ -332,6 +355,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       addMapping,
       removeMapping,
       updateMapping,
+      setGraph,
       newModel,
       loadModel,
       markSaved,
@@ -349,6 +373,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       addMapping,
       removeMapping,
       updateMapping,
+      setGraph,
       newModel,
       loadModel,
       markSaved,

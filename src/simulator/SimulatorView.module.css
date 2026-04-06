@@ -95,3 +95,42 @@
   border: 1px solid #2d4059;
   border-radius: 4px;
 }
+
+.controlButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.controlButton:disabled:hover {
+  background: transparent;
+  border-color: #2d4059;
+}
+
+.speedInput {
+  flex: 1;
+  accent-color: #4cc9f0;
+  cursor: pointer;
+}
+
+.viewerSelect {
+  width: 100%;
+  padding: 4px 6px;
+  background: #0d1117;
+  border: 1px solid #2d4059;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 0.7rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.error {
+  padding: 8px;
+  background: rgba(200, 50, 50, 0.15);
+  border: 1px solid rgba(200, 50, 50, 0.3);
+  border-radius: 4px;
+  color: #e08080;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  word-break: break-word;
+}

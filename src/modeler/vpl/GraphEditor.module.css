@@ -1,93 +1,85 @@
 .editor {
-  position: relative;
   width: 100%;
   height: 100%;
-  overflow: hidden;
+  position: relative;
 }
 
-.gridBackground {
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
-  background-size: 20px 20px;
-}
+/* Context menu */
 
-.mockGraph {
+.contextMenu {
   position: absolute;
-  inset: 0;
-}
-
-.mockNode {
-  position: absolute;
-  width: 140px;
   background: #1e2a3a;
   border: 1px solid #2d4059;
   border-radius: 6px;
-  overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  padding: 6px 0;
+  min-width: 180px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  z-index: 100;
+  max-height: 400px;
+  overflow-y: auto;
 }
 
-.mockNodeHeader {
-  background: #2d4059;
-  padding: 6px 10px;
+.contextTitle {
+  padding: 6px 12px;
   font-size: 0.7rem;
   font-weight: 600;
   color: #4cc9f0;
   text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid #2d4059;
+  margin-bottom: 4px;
+}
+
+.contextCategory {
+  padding: 4px 12px 2px;
+  font-size: 0.6rem;
+  font-weight: 600;
+  color: #6080a0;
+  text-transform: uppercase;
   letter-spacing: 0.05em;
+  margin-top: 4px;
 }
 
-.mockNodeBody {
-  padding: 8px 10px;
-  font-size: 0.75rem;
-  color: #a0b0c0;
+.contextItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 12px;
+  background: transparent;
+  border: none;
+  color: #c0c8d0;
+  font-size: 0.72rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s;
 }
 
-.mockPortIn,
-.mockPortOut {
-  position: absolute;
+.contextItem:hover {
+  background: rgba(76, 201, 240, 0.1);
+}
+
+.contextDot {
   width: 8px;
   height: 8px;
-  background: #4cc9f0;
   border-radius: 50%;
-  top: 50%;
-  transform: translateY(-50%);
+  flex-shrink: 0;
 }
 
-.mockPortIn {
-  left: -4px;
+/* Override React Flow dark theme */
+
+:global(.react-flow) {
+  --xy-background-color: #0d1117;
+  --xy-node-background-color: transparent;
+  --xy-node-border-color: transparent;
+  --xy-edge-stroke: #4cc9f0;
+  --xy-controls-button-background-color: #1e2a3a;
+  --xy-controls-button-color: #8090a0;
+  --xy-controls-button-border-color: #2d4059;
+  --xy-minimap-background-color: #0d1117;
 }
 
-.mockPortOut {
-  right: -4px;
-}
-
-.mockConnection {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-}
-
-.watermark {
-  position: absolute;
-  bottom: 24px;
-  right: 24px;
-  text-align: right;
-  pointer-events: none;
-}
-
-.watermarkTitle {
-  font-size: 1rem;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.15);
-}
-
-.watermarkSub {
-  font-size: 0.75rem;
-  color: rgba(255, 255, 255, 0.08);
-  margin-top: 4px;
+:global(.react-flow__controls button:hover) {
+  background: #2d4059 !important;
+  color: #e0e0e0 !important;
 }

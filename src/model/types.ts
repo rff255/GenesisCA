@@ -46,6 +46,23 @@ export interface ModelProperties {
   maxIterations: number;
 }
 
+/** A serialized node in the update rules graph */
+export interface GraphNode {
+  id: string;
+  type: string;
+  position: { x: number; y: number };
+  data: { nodeType: string; config: Record<string, string | number | boolean> };
+}
+
+/** A serialized edge in the update rules graph */
+export interface GraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  sourceHandle: string;
+  targetHandle: string;
+}
+
 /** Complete CA model definition */
 export interface CAModel {
   schemaVersion: number;
@@ -53,4 +70,6 @@ export interface CAModel {
   attributes: Attribute[];
   neighborhoods: Neighborhood[];
   mappings: Mapping[];
+  graphNodes: GraphNode[];
+  graphEdges: GraphEdge[];
 }

@@ -1,0 +1,93 @@
+.node {
+  min-width: 150px;
+  background: #1e2a3a;
+  border: 2px solid #2d4059;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  position: relative;
+}
+
+.header {
+  padding: 5px 10px;
+  font-weight: 600;
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.6rem;
+  border-radius: 4px 4px 0 0;
+}
+
+.body {
+  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.select,
+.input {
+  width: 100%;
+  padding: 3px 5px;
+  background: #0d1117;
+  border: 1px solid #2d4059;
+  border-radius: 3px;
+  color: #e0e0e0;
+  font-size: 0.65rem;
+  font-family: inherit;
+  outline: none;
+}
+
+.select:focus,
+.input:focus {
+  border-color: #4cc9f0;
+}
+
+.handleFlow {
+  width: 10px !important;
+  height: 10px !important;
+  background: #4caf50 !important;
+  border: 2px solid #1b5e20 !important;
+}
+
+.handleValue {
+  width: 8px !important;
+  height: 8px !important;
+  background: #4cc9f0 !important;
+  border: 2px solid #0d47a1 !important;
+}
+
+.portLabels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: flex;
+  justify-content: space-between;
+  padding-top: 24px;
+}
+
+.inputLabels,
+.outputLabels {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.inputLabels {
+  padding-left: 14px;
+}
+
+.outputLabels {
+  padding-right: 14px;
+  text-align: right;
+}
+
+.portLabel {
+  font-size: 0.55rem;
+  color: #6080a0;
+  height: 14px;
+  line-height: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}

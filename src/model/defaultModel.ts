@@ -65,4 +65,6 @@ export const DEFAULT_MODEL: CAModel = {
       blueDescription: 'brightness > 128 → alive = true',
     },
   ],
+  graphNodes: [],
+  graphEdges: [],
 };
