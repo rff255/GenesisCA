@@ -1,23 +1,106 @@
-# GenesisCA 
-- IDE for modeling and simulation of Cellular Automata (CA)
-- Focused on creation and evaluation of new CA models, by experimentation
-- Based on Visual Programming Language (VPL) to define the rules
-- First version will contain support to define CA models with:
-  - **Cell attributes types:** [Bool, Integer, Float]  
-	> Cell attributes define the informations each cell is holding.
-  - **Model attributes types:** [Bool, Integer, Float] 
-	> Model attributes define the parameters of CA model used on cell update rules that can be tuned when used the exported CA model.
-  - **Neighborhood:** 
-	> User is free to define the number of neighborhoods, and it's layout
-  - **Rule definitions:** 
-	> User design your own algorithm using VPL, to defines the way attributes updated, input colors are interpreted, and output colors are modified.
-  - **Color input mapping:**
-	> User can create mappings for define what to do with the cell attributes given a color. This can be used to allow image initializations, as well as interactions at simulation time.
-  - **Color output mapping:**
-	> User is able to creates different modes of visualization, mapping the cell attribute configurations into colors. This could be userful for debugging, presenting, or artistic purposes.
+# GenesisCA
+
+An IDE for modeling and simulating Cellular Automata, built as a browser application.
+
+## Getting Started
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) 18+ (22 LTS recommended)
+- npm 9+ (comes with Node.js)
+
+### Setup
+
+```bash
+git clone https://github.com/rff255/GenesisCA.git
+cd GenesisCA
+npm install
+npm run dev
+```
+
+The app opens at **http://localhost:5173**.
+
+### Available Scripts
+
+| Command | What it does |
+|---------|--------------|
+| `npm run dev` | Start development server with hot reload |
+| `npm run build` | Type-check and build for production |
+| `npm run preview` | Preview the production build locally |
+
+### Tech Stack
+
+- **TypeScript + React** — UI framework
+- **Vite** — build tool and dev server
+- **Canvas2D** — grid rendering
+- **CSS Modules** — scoped component styling
+
+---
+
+## What GenesisCA Is
+
+GenesisCA is an IDE for modeling and simulating Cellular Automata (CA). It uses a Visual Programming Language (VPL) — a node-based graph editor — so users can design arbitrarily complex CA models without writing code. The goals are **accessibility** (no programming required) and **performance** (grids up to 5000×5000+).
+
+---
+
+## The GenesisCA Model Definition
+
+### Six Fundamentals
+
+Every GenesisCA model satisfies these theoretical properties:
+
+1. Cells have unlimited computing power
+2. Cells have N internal attributes (of multiple data types), whose snapshot of values at a given generation is called its "state"
+3. Cells are limited to only access (read) the states of cells in one of the neighborhoods defined in the CA model
+4. Cells can only make changes to itself, never to the environment around (other cells)
+5. Space and Time are discrete (cells arranged in n-dimensional grid)
+6. All cells update their states simultaneously (synchronously) each passing generation
+
+### Simulation Essentials (Color Mappings)
+
+Beyond the six fundamentals, two types of mappings enable visualization and interaction:
+
+1. **Attribute-Color Mappings** — N ways to map cell state → colors (for visualization)
+2. **Color-Attribute Mappings** — N ways to map colors → cell state (for user interaction and image-based initialization)
+
+### Model Structure
+
+A complete GenesisCA model definition consists of:
+
+1. **Model Properties**
+   - 1.1. Presentation (Name, Author, Goal, Description...)
+   - 1.2. Structure (Topology, Boundary Treatment, Grid Size...)
+   - 1.3. Execution
+     - 1.3.1. Initial Configuration (Attribute Initialization Mapping, Default Attribute Values)
+     - 1.3.2. Stop Conditions (Max of Iterations, Break Cases)
+
+2. **Attributes** — each has a name, type (bool, integer, float, list, tag), description, and type-specific properties (integer range, list size, tag options...)
+   - 2.1. Cell Attributes (per-cell state)
+   - 2.2. Model Attributes (global read-only parameters that all cells can access but not write; can be changed during simulation externally)
+
+3. **Neighborhoods** — a list of neighborhoods, each being a list of N indexes relative to the central cell, a name, a description, and optionally tags for specific indexes (for easy reference in Update Rules)
+
+4. **Color Mappings** — each mapping has a Name, Description, per-channel descriptions (R, G, B)
+   - 4.1. Color-Attribute Mappings (input: for initialization and real-time interaction)
+   - 4.2. Attribute-Color Mappings (output: for visualization modes)
+
+5. **Update Rules** — a node graph defining what each cell computes per generation. The graph handles multiple event types:
+   - Each Attribute Initialization Mapping event
+   - New generation (the main update step)
+   - Each Color-to-Attribute interaction event
+   - When/how to update each Attribute-to-Color mapping
+
+---
+
+## Repository Context
+
+This repository originally contained a Qt/C++ desktop application built in 2017 as an undergrad final project (Universidade Federal de Pernambuco). **The current work is a complete rewrite.** The legacy Qt/C++ code has been preserved in the `legacy_qt_cpp_solution` branch, frozen as historical reference — a qmake project with `src/modeler` and `src/simulator` subdirectories, DearImGui-based node editor, and C++ code generation for model export.
+
+The old implementation in `legacy_qt_cpp_solution` serves as architectural reference. Key file for understanding the old compilation approach: `src/modeler/UpdateRulesHandler/node_graph_instance.h` — each node had an `Eval()` method that emitted C++ code snippets, stitched together into `.h`/`.cpp` files, then compiled to `.dll`/`.exe`. The new version follows the same pattern but targets JavaScript instead of C++.
+
 -------------
   
-Some WIP images:
+Some **LEGACY** WIP images (of the application in `legacy_qt_cpp_solution`):
 -------------
 
   The current set of nodes:

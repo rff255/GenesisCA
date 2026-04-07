@@ -1,0 +1,250 @@
+.simulatorLayout {
+  display: flex;
+  height: 100%;
+}
+
+.controls {
+  width: 220px;
+  min-width: 220px;
+  background: #16213e;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-right: 1px solid #2d4059;
+  overflow-y: auto;
+}
+
+.controlsTitle {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #4cc9f0;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.stat {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+}
+
+.statLabel {
+  color: #8090a0;
+}
+
+.statValue {
+  color: #e0e0e0;
+  font-weight: 500;
+}
+
+.buttonGroup {
+  display: flex;
+  gap: 6px;
+}
+
+.controlButton {
+  flex: 1;
+  padding: 6px 0;
+  background: transparent;
+  border: 1px solid #2d4059;
+  border-radius: 4px;
+  color: #c0c8d0;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.controlButton:hover {
+  background: #1e2a3a;
+  border-color: #4cc9f0;
+}
+
+.controlButtonAccent {
+  padding: 8px 0;
+  background: rgba(76, 201, 240, 0.1);
+  border: 1px solid #4cc9f0;
+  border-radius: 4px;
+  color: #4cc9f0;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.controlButtonAccent:hover {
+  background: rgba(76, 201, 240, 0.2);
+}
+
+.divider {
+  border: none;
+  border-top: 1px solid #2d4059;
+  margin: 4px 0;
+}
+
+.canvasArea {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: #0d1117;
+  cursor: grab;
+}
+
+.canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.controlButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.controlButton:disabled:hover {
+  background: transparent;
+  border-color: #2d4059;
+}
+
+.speedInput {
+  flex: 1;
+  accent-color: #4cc9f0;
+  cursor: pointer;
+}
+
+.viewerSelect {
+  width: 100%;
+  padding: 4px 6px;
+  background: #0d1117;
+  border: 1px solid #2d4059;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 0.7rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.error {
+  padding: 8px;
+  background: rgba(200, 50, 50, 0.15);
+  border: 1px solid rgba(200, 50, 50, 0.3);
+  border-radius: 4px;
+  color: #e08080;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.sectionTitle {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #4cc9f0;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.fieldRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+}
+
+.colorPicker {
+  width: 40px;
+  height: 28px;
+  border: 1px solid #2d4059;
+  border-radius: 4px;
+  background: #0d1117;
+  cursor: pointer;
+  padding: 2px;
+  margin-left: auto;
+}
+
+.brushInput {
+  width: 48px;
+  padding: 4px 6px;
+  background: #0d1117;
+  border: 1px solid #2d4059;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 0.75rem;
+  font-family: inherit;
+  text-align: center;
+}
+
+.hint {
+  font-size: 0.6rem;
+  color: #506070;
+  font-style: italic;
+  line-height: 1.4;
+}
+
+.checkRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.7rem;
+  color: #8090a0;
+  cursor: pointer;
+}
+
+.checkRow input[type="checkbox"] {
+  accent-color: #4cc9f0;
+}
+
+.overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(13, 17, 23, 0.85);
+  border: 1px solid #2d4059;
+  border-radius: 8px;
+  padding: 20px 28px;
+  color: #8090a0;
+  font-size: 0.8rem;
+  text-align: center;
+  max-width: 300px;
+  line-height: 1.5;
+  pointer-events: none;
+}
+
+.codePanel {
+  position: relative;
+}
+
+.copyButton {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  padding: 2px 8px;
+  background: #2d4059;
+  border: 1px solid #4cc9f0;
+  border-radius: 3px;
+  color: #4cc9f0;
+  font-size: 0.6rem;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.copyButton:hover {
+  background: #3d5069;
+}
+
+.codeBlock {
+  margin: 0;
+  padding: 8px;
+  background: #0d1117;
+  border: 1px solid #2d4059;
+  border-radius: 4px;
+  color: #a0c0e0;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 0.55rem;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+  max-height: 300px;
+  overflow-y: auto;
+}

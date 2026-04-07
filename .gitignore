@@ -1,8 +1,28 @@
-*.pro.user
-/src/imgui/glfw/glfw3.dll
-/src/imgui/glfw/glfw3.h
-/src/imgui/glfw/glfw3dll.lib
-/src/imgui/glfw/glfw3native.h
-/src/imgui/glfw/COPYING.txt
-/.qmake.stash
-/Makefile
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Vite
+.vite/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Editor
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Auto-generated library index (created by Vite plugin at dev/build time)
+public/models/index.json
