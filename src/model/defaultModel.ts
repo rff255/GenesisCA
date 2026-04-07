@@ -14,6 +14,7 @@ export const DEFAULT_MODEL: CAModel = {
     gridWidth: 100,
     gridHeight: 100,
     maxIterations: 1000,
+    tags: ['classic', '2-state', 'totalistic'],
   },
   attributes: [
     {

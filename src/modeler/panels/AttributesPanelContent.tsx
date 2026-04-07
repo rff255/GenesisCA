@@ -105,11 +105,16 @@ export function AttributesPanelContent() {
               <select
                 className={styles.selectInput}
                 value={selected.type}
-                onChange={e =>
+                onChange={e => {
+                  const newType = e.target.value as AttributeType;
+                  const resetDefaults: Record<string, string> = {
+                    bool: 'false', integer: '0', float: '0', list: '', tag: '',
+                  };
                   updateAttribute(selected.id, {
-                    type: e.target.value as AttributeType,
-                  })
-                }
+                    type: newType,
+                    defaultValue: resetDefaults[newType] ?? '',
+                  });
+                }}
               >
                 <option value="bool">Bool</option>
                 <option value="integer">Integer</option>
@@ -120,15 +125,48 @@ export function AttributesPanelContent() {
             </div>
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Default Value</label>
-              <input
-                className={styles.textInput}
-                value={selected.defaultValue}
-                onChange={e =>
-                  updateAttribute(selected.id, {
-                    defaultValue: e.target.value,
-                  })
-                }
-              />
+              {selected.type === 'bool' ? (
+                <select
+                  className={styles.selectInput}
+                  value={selected.defaultValue === 'true' ? 'true' : 'false'}
+                  onChange={e =>
+                    updateAttribute(selected.id, { defaultValue: e.target.value })
+                  }
+                >
+                  <option value="false">false</option>
+                  <option value="true">true</option>
+                </select>
+              ) : selected.type === 'integer' ? (
+                <input
+                  className={styles.numberInput}
+                  type="number"
+                  step={1}
+                  value={selected.defaultValue}
+                  onChange={e =>
+                    updateAttribute(selected.id, {
+                      defaultValue: String(Math.round(Number(e.target.value) || 0)),
+                    })
+                  }
+                />
+              ) : selected.type === 'float' ? (
+                <input
+                  className={styles.numberInput}
+                  type="number"
+                  step="any"
+                  value={selected.defaultValue}
+                  onChange={e =>
+                    updateAttribute(selected.id, { defaultValue: e.target.value })
+                  }
+                />
+              ) : (
+                <input
+                  className={styles.textInput}
+                  value={selected.defaultValue}
+                  onChange={e =>
+                    updateAttribute(selected.id, { defaultValue: e.target.value })
+                  }
+                />
+              )}
             </div>
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Description</label>

@@ -26,6 +26,18 @@ export function SimulatorView() {
   const [brushH, setBrushH] = useState(1);
   const [brushMapping, setBrushMapping] = useState('');
 
+  // F3: Runtime model attribute values
+  const [runtimeModelAttrs, setRuntimeModelAttrs] = useState<Record<string, number>>({});
+
+  // F5: Simulator dimension overrides
+  const [simWidth, setSimWidth] = useState(100);
+  const [simHeight, setSimHeight] = useState(100);
+
+  // F6: Image import pending state
+  const pendingImageImport = useRef<Uint8ClampedArray | null>(null);
+  const pendingImageMapping = useRef<string>('');
+  const imageInputRef = useRef<HTMLInputElement>(null);
+
   // Colors buffer + grid dimensions
   const colorsRef = useRef<Uint8ClampedArray | null>(null);
   const gridWidth = useRef(0);
@@ -186,10 +198,25 @@ export function SimulatorView() {
     } else if (msg.type === 'ready') {
       pendingStep.current = false;
     }
+
+    // F6: If there's a pending image import and we just got the first stepped (init done), send it
+    if (msg.type === 'stepped' && pendingImageImport.current) {
+      const pixels = pendingImageImport.current;
+      pendingImageImport.current = null;
+      workerRef.current?.postMessage(
+        {
+          type: 'importImage',
+          pixels,
+          mappingId: pendingImageMapping.current,
+          activeViewer: activeViewerRef.current,
+        },
+        { transfer: [pixels.buffer] },
+      );
+    }
   };
 
-  // Initialize worker when model changes
-  useEffect(() => {
+  // Reusable worker initializer (used by useEffect and dimension/image apply)
+  const initWorkerWithDimensions = useCallback((w: number, h: number) => {
     workerRef.current?.terminate();
     const result = compileModel();
     const firstViewer = model.mappings.find(m => m.isAttributeToColor);
@@ -199,10 +226,25 @@ export function SimulatorView() {
     setBrushMapping(firstInput?.id ?? '');
     if (result.error) setCompileError(result.error);
 
-    gridWidth.current = model.properties.gridWidth;
-    gridHeight.current = model.properties.gridHeight;
+    gridWidth.current = w;
+    gridHeight.current = h;
+    setSimWidth(w);
+    setSimHeight(h);
     zoomRef.current = 1;
     panRef.current = { x: 0, y: 0 };
+
+    // Initialize runtime model attrs from defaults
+    const mAttrs: Record<string, number> = {};
+    for (const a of model.attributes) {
+      if (!a.isModelAttribute) continue;
+      switch (a.type) {
+        case 'bool': mAttrs[a.id] = a.defaultValue === 'true' ? 1 : 0; break;
+        case 'integer': mAttrs[a.id] = parseInt(a.defaultValue, 10) || 0; break;
+        case 'float': mAttrs[a.id] = parseFloat(a.defaultValue) || 0; break;
+        default: mAttrs[a.id] = 0;
+      }
+    }
+    setRuntimeModelAttrs(mAttrs);
 
     const worker = new Worker(
       new URL('./engine/sim.worker.ts', import.meta.url),
@@ -211,8 +253,8 @@ export function SimulatorView() {
     worker.onmessage = (e) => onWorkerMessageRef.current(e);
     worker.postMessage({
       type: 'init',
-      width: model.properties.gridWidth,
-      height: model.properties.gridHeight,
+      width: w,
+      height: h,
       attributes: model.attributes.map(a => ({
         id: a.id, type: a.type,
         isModelAttribute: a.isModelAttribute, defaultValue: a.defaultValue,
@@ -229,8 +271,13 @@ export function SimulatorView() {
     pendingStep.current = false;
     lastGenForGps.current = 0;
     gpsGens.current = 0;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model, compileModel]);
 
-    return () => worker.terminate();
+  // Initialize worker when model changes
+  useEffect(() => {
+    initWorkerWithDimensions(model.properties.gridWidth, model.properties.gridHeight);
+    return () => workerRef.current?.terminate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, compileModel]);
 
@@ -421,6 +468,59 @@ export function SimulatorView() {
     draw();
   };
 
+  // F3: Update model attribute at runtime
+  const handleModelAttrChange = (attrId: string, value: number) => {
+    setRuntimeModelAttrs(prev => ({ ...prev, [attrId]: value }));
+    workerRef.current?.postMessage({ type: 'updateModelAttrs', attrs: { [attrId]: value } });
+  };
+
+  // F4: Screenshot export
+  const handleScreenshot = () => {
+    const src = srcCanvasRef.current;
+    if (!src) return;
+    src.toBlob(blob => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const name = model.properties.name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '') || 'genesis';
+      a.href = url;
+      a.download = `${name}_gen${generation}.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }, 'image/png');
+  };
+
+  // F5: Apply dimension override
+  const handleApplyDimensions = () => {
+    const w = Math.max(1, simWidth);
+    const h = Math.max(1, simHeight);
+    initWorkerWithDimensions(w, h);
+  };
+
+  // F6: Import image as starting point
+  const handleImageImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    const img = new Image();
+    img.onload = () => {
+      const tmpCanvas = document.createElement('canvas');
+      tmpCanvas.width = img.width;
+      tmpCanvas.height = img.height;
+      const ctx = tmpCanvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0);
+      const imageData = ctx.getImageData(0, 0, img.width, img.height);
+      const pixels = new Uint8ClampedArray(imageData.data);
+      // Store pixels for after worker reinit
+      pendingImageImport.current = pixels;
+      pendingImageMapping.current = brushMappingRef.current;
+      // Reinit worker with image dimensions (1 pixel = 1 cell)
+      initWorkerWithDimensions(img.width, img.height);
+    };
+    img.src = URL.createObjectURL(file);
+  };
+
+  const modelAttrs = model.attributes.filter(a => a.isModelAttribute);
   const attrToColorMappings = model.mappings.filter(m => m.isAttributeToColor);
   const colorToAttrMappings = model.mappings.filter(m => !m.isAttributeToColor);
 
@@ -436,7 +536,7 @@ export function SimulatorView() {
         <div className={styles.stat}>
           <span className={styles.statLabel}>Grid Size</span>
           <span className={styles.statValue}>
-            {model.properties.gridWidth} x {model.properties.gridHeight}
+            {gridWidth.current || simWidth} x {gridHeight.current || simHeight}
           </span>
         </div>
         <div className={styles.stat}>
@@ -524,6 +624,82 @@ export function SimulatorView() {
             Fit
           </button>
         </div>
+        <div className={styles.buttonGroup}>
+          <button
+            className={styles.controlButton}
+            onClick={handleScreenshot}
+            disabled={!colorsRef.current}
+          >
+            Screenshot
+          </button>
+          {colorToAttrMappings.length > 0 && (
+            <button
+              className={styles.controlButton}
+              onClick={() => imageInputRef.current?.click()}
+            >
+              Import Image
+            </button>
+          )}
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept=".png,.bmp,.jpg,.jpeg"
+            style={{ display: 'none' }}
+            onChange={handleImageImport}
+          />
+        </div>
+
+        <hr className={styles.divider} />
+
+        <div className={styles.sectionTitle}>Grid Dimensions</div>
+        <div className={styles.fieldRow}>
+          <span className={styles.statLabel}>W</span>
+          <input
+            className={styles.brushInput}
+            type="number"
+            min={1}
+            value={simWidth}
+            onChange={e => setSimWidth(Math.max(1, Number(e.target.value) || 1))}
+          />
+          <span className={styles.statLabel}>H</span>
+          <input
+            className={styles.brushInput}
+            type="number"
+            min={1}
+            value={simHeight}
+            onChange={e => setSimHeight(Math.max(1, Number(e.target.value) || 1))}
+          />
+        </div>
+        <button className={styles.controlButton} onClick={handleApplyDimensions}>
+          Apply Dimensions
+        </button>
+
+        {modelAttrs.length > 0 && (
+          <>
+            <hr className={styles.divider} />
+            <div className={styles.sectionTitle}>Model Attributes</div>
+            {modelAttrs.map(a => (
+              <div key={a.id} className={styles.fieldRow}>
+                <span className={styles.statLabel} style={{ flex: 1 }}>{a.name}</span>
+                {a.type === 'bool' ? (
+                  <input
+                    type="checkbox"
+                    checked={(runtimeModelAttrs[a.id] ?? 0) === 1}
+                    onChange={e => handleModelAttrChange(a.id, e.target.checked ? 1 : 0)}
+                  />
+                ) : (
+                  <input
+                    className={styles.brushInput}
+                    type="number"
+                    step={a.type === 'integer' ? 1 : 'any'}
+                    value={runtimeModelAttrs[a.id] ?? 0}
+                    onChange={e => handleModelAttrChange(a.id, Number(e.target.value) || 0)}
+                  />
+                )}
+              </div>
+            ))}
+          </>
+        )}
 
         <hr className={styles.divider} />
 

@@ -52,14 +52,15 @@ function CaNodeComponent({ id, data }: NodeProps) {
     if (!macroDefForBoundary || !macroDefIdForBoundary) return;
     const field = isMacroInput ? 'exposedInputs' : 'exposedOutputs';
     const existing = macroDefForBoundary[field];
-    const idx = existing.length;
+    const prefix = isMacroInput ? 'in' : 'out';
+    const uid = `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
     const newPort: MacroPort = {
-      portId: `${isMacroInput ? 'in' : 'out'}_${idx}`,
-      label: `${isMacroInput ? 'Input' : 'Output'} ${idx + 1}`,
+      portId: uid,
+      label: `${isMacroInput ? 'Input' : 'Output'} ${existing.length + 1}`,
       dataType: 'any',
       category: 'value',
       internalNodeId: id,
-      internalPortId: `${isMacroInput ? 'in' : 'out'}_${idx}`,
+      internalPortId: uid,
     };
     updateMacro(macroDefIdForBoundary, { [field]: [...existing, newPort] });
   }, [macroDefForBoundary, macroDefIdForBoundary, isMacroInput, id, updateMacro]);

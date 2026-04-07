@@ -23,3 +23,6 @@ Thumbs.db
 
 # TypeScript build info
 *.tsbuildinfo
+
+# Auto-generated library index (created by Vite plugin at dev/build time)
+public/models/index.json

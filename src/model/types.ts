@@ -44,6 +44,7 @@ export interface ModelProperties {
   gridWidth: number;
   gridHeight: number;
   maxIterations: number;
+  tags: string[];
 }
 
 /** A serialized node in the update rules graph */

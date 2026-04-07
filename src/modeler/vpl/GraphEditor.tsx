@@ -496,10 +496,11 @@ function GraphEditorInner() {
       };
     });
 
+    const pasteTs = Date.now().toString(36);
     const pastedRFEdges: Edge[] = clipboard.edges
       .filter(e => idMap.has(e.source) && idMap.has(e.target))
-      .map(e => ({
-        id: `e_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
+      .map((e, i) => ({
+        id: `e_${pasteTs}_${i}_${Math.random().toString(36).slice(2, 5)}`,
         source: idMap.get(e.source)!,
         target: idMap.get(e.target)!,
         sourceHandle: e.sourceHandle,

@@ -38,8 +38,10 @@ interface PaintMsg {
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
 interface RecompileMsg { type: 'recompile'; stepCode: string; inputColorCodes: Array<{ mappingId: string; code: string }> }
+interface UpdateModelAttrsMsg { type: 'updateModelAttrs'; attrs: Record<string, number> }
+interface ImportImageMsg { type: 'importImage'; pixels: Uint8ClampedArray; mappingId: string; activeViewer: string }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | ImportImageMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -248,7 +250,8 @@ function randomizeGrid(): void {
     (wArr as Uint8Array).set(arr as Uint8Array);
   }
   generation = 0;
-  writeDefaultColors();
+  // Run one step so the model's color mappings define the visualization
+  if (stepFn) runStep(); else writeDefaultColors();
 }
 
 function resetGrid(): void {
@@ -259,7 +262,8 @@ function resetGrid(): void {
     for (let i = 0; i < total; i++) { arr[i] = dv; wArr[i] = dv; }
   }
   generation = 0;
-  writeDefaultColors();
+  // Run one step so the model's color mappings define the visualization
+  if (stepFn) runStep(); else writeDefaultColors();
 }
 
 function compileFns(stepCode: string, icCodes: Array<{ mappingId: string; code: string }>): void {
@@ -379,6 +383,36 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'recompile': {
       compileFns(msg.stepCode, msg.inputColorCodes);
       self.postMessage({ type: 'ready' });
+      break;
+    }
+
+    case 'updateModelAttrs': {
+      for (const [key, val] of Object.entries(msg.attrs as Record<string, number>)) {
+        cachedModelAttrs[key] = val;
+      }
+      break;
+    }
+
+    case 'importImage': {
+      activeViewer = msg.activeViewer;
+      const icEntry = msg.mappingId
+        ? inputColorFns.find(f => f.mappingId === msg.mappingId)
+        : inputColorFns[0];
+      if (!icEntry?.fn) break;
+      const pixels = msg.pixels as Uint8ClampedArray;
+      for (let idx = 0; idx < total; idx++) {
+        const r = pixels[idx * 4]!;
+        const g = pixels[idx * 4 + 1]!;
+        const b = pixels[idx * 4 + 2]!;
+        icEntry.fn(r, g, b, ...buildCellArgs(idx));
+        // Copy write→read so state is visible on next step
+        for (const attr of cellAttrs) {
+          readAttrs[attr.id]![idx] = writeAttrs[attr.id]![idx]!;
+        }
+      }
+      // Run one step for color viewer update
+      if (stepFn) runStep(); else writeDefaultColors();
+      sendColors();
       break;
     }
   }

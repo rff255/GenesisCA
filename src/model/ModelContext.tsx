@@ -23,13 +23,12 @@ import { DEFAULT_MODEL } from './defaultModel';
 // ID generation
 // ---------------------------------------------------------------------------
 
-let nextId = 1;
 function generateId(prefix: string): string {
   const base = prefix
     .toLowerCase()
     .replace(/\s+/g, '_')
     .replace(/[^a-z0-9_]/g, '');
-  return `${base || 'item'}_${nextId++}`;
+  return `${base || 'item'}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -296,6 +295,7 @@ function createInitialState(): ModelState {
         if (!model.graphNodes) model.graphNodes = [];
         if (!model.graphEdges) model.graphEdges = [];
         if (!model.macroDefs) model.macroDefs = [];
+        if (!model.properties.tags) model.properties.tags = [];
         return { model, isDirty: false };
       }
     }

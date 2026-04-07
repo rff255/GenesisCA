@@ -203,6 +203,7 @@ genesis-ca/
 - Prefer modular, readable code. Each node type is its own file. The compiler is separate from the editor.
 - Do not assume file structure beyond what's documented here — ask if uncertain
 - When building new node types, follow the established pattern of existing nodes (compile method, port definitions, UI component)
+- **Documentation consistency:** When changing features, update all three sources of truth: the code, `src/help/HelpView.tsx` (in-app Help tab), and the root `README.md`. These must remain consistent with each other.
 
 ---
 

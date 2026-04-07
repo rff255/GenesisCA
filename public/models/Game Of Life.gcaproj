@@ -1,0 +1,1204 @@
+{
+  "schemaVersion": 1,
+  "properties": {
+    "name": "Game of Life",
+    "author": "John Conway",
+    "goal": "Classic cellular automaton demonstrating emergent behavior",
+    "description": "A zero-player game where evolution is determined by the initial state. Each cell is either alive or dead, and its next state depends on the number of alive neighbors.",
+    "topology": "2d-grid",
+    "boundaryTreatment": "torus",
+    "gridWidth": 500,
+    "gridHeight": 200,
+    "maxIterations": 1000,
+    "tags": [
+      "classic",
+      "2-state",
+      "totalistic"
+    ]
+  },
+  "attributes": [
+    {
+      "id": "alive",
+      "name": "alive",
+      "type": "bool",
+      "description": "Whether the cell is alive or dead",
+      "isModelAttribute": false,
+      "defaultValue": "false"
+    },
+    {
+      "id": "new_attribute_4",
+      "name": "Random Paint Probability",
+      "type": "float",
+      "description": "",
+      "isModelAttribute": true,
+      "defaultValue": "0.5"
+    },
+    {
+      "id": "new_attribute_2",
+      "name": "Trace",
+      "type": "integer",
+      "description": "",
+      "isModelAttribute": false,
+      "defaultValue": "false"
+    }
+  ],
+  "neighborhoods": [
+    {
+      "id": "moore",
+      "name": "Moore",
+      "description": "All 8 surrounding cells",
+      "coords": [
+        [
+          -1,
+          -1
+        ],
+        [
+          -1,
+          0
+        ],
+        [
+          -1,
+          1
+        ],
+        [
+          0,
+          -1
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          -1
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          1
+        ]
+      ]
+    }
+  ],
+  "mappings": [
+    {
+      "id": "paint",
+      "name": "SetAlive",
+      "description": "Allows painting alive cells on the grid",
+      "isAttributeToColor": false,
+      "redDescription": ">0",
+      "greenDescription": "",
+      "blueDescription": ""
+    },
+    {
+      "id": "new_mapping_2",
+      "name": "Random",
+      "description": "random",
+      "isAttributeToColor": false,
+      "redDescription": "",
+      "greenDescription": "",
+      "blueDescription": ""
+    },
+    {
+      "id": "new_mapping_6",
+      "name": "Trace",
+      "description": "Displays the cells alive as white dots on a black background, and when a cell dies, it leaves a purple trace that slowly decays.",
+      "isAttributeToColor": true,
+      "redDescription": "",
+      "greenDescription": "",
+      "blueDescription": ""
+    }
+  ],
+  "graphNodes": [
+    {
+      "id": "nmno07ikvob0",
+      "type": "groupNode",
+      "position": {
+        "x": -870,
+        "y": 180
+      },
+      "data": {
+        "label": "Update Color Output",
+        "width": 740,
+        "height": 405,
+        "nodeType": "group",
+        "config": {},
+        "groupColor": "#9c55aa"
+      }
+    },
+    {
+      "id": "nmno04wj3pc6",
+      "type": "groupNode",
+      "position": {
+        "x": -90,
+        "y": 300
+      },
+      "data": {
+        "label": "Trace of live cells",
+        "width": 820,
+        "height": 572.9326512439673,
+        "nodeType": "group",
+        "config": {},
+        "groupColor": "#819744"
+      }
+    },
+    {
+      "id": "nmno03hqnw4f",
+      "type": "groupNode",
+      "position": {
+        "x": -340,
+        "y": -720
+      },
+      "data": {
+        "label": "Color Input effect (manual brush or image load)",
+        "width": 692.1230707425473,
+        "height": 770,
+        "nodeType": "group",
+        "config": {}
+      }
+    },
+    {
+      "id": "n4",
+      "type": "caNode",
+      "position": {
+        "x": -820,
+        "y": 40
+      },
+      "data": {
+        "nodeType": "step",
+        "config": {}
+      }
+    },
+    {
+      "id": "n5",
+      "type": "caNode",
+      "position": {
+        "x": 880,
+        "y": 160
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive"
+        }
+      }
+    },
+    {
+      "id": "n6",
+      "type": "caNode",
+      "position": {
+        "x": 81.83515404435137,
+        "y": 47.21700913282251
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {}
+      }
+    },
+    {
+      "id": "n7",
+      "type": "caNode",
+      "position": {
+        "x": -120,
+        "y": 100
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "alive"
+        }
+      }
+    },
+    {
+      "id": "n8",
+      "type": "caNode",
+      "position": {
+        "x": 520,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {}
+      }
+    },
+    {
+      "id": "n9",
+      "type": "caNode",
+      "position": {
+        "x": 520,
+        "y": 160
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {}
+      }
+    },
+    {
+      "id": "n14",
+      "type": "caNode",
+      "position": {
+        "x": 700,
+        "y": 220
+      },
+      "data": {
+        "nodeType": "getConstant",
+        "config": {
+          "constType": "bool",
+          "constValue": "true"
+        }
+      }
+    },
+    {
+      "id": "n20",
+      "type": "caNode",
+      "position": {
+        "x": 880,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive"
+        }
+      }
+    },
+    {
+      "id": "n21",
+      "type": "caNode",
+      "position": {
+        "x": 700,
+        "y": 60
+      },
+      "data": {
+        "nodeType": "getConstant",
+        "config": {
+          "constType": "bool",
+          "constValue": "false"
+        }
+      }
+    },
+    {
+      "id": "nmnn6ml8mgcs",
+      "type": "caNode",
+      "position": {
+        "x": 40,
+        "y": 40
+      },
+      "data": {
+        "nodeType": "inputColor",
+        "config": {
+          "mappingId": "paint"
+        },
+        "parentId": "nmno03hqnw4f"
+      }
+    },
+    {
+      "id": "nmnn6niv353r",
+      "type": "caNode",
+      "position": {
+        "x": 233.03100024947162,
+        "y": 147.33550225570912
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": ">"
+        },
+        "parentId": "nmno03hqnw4f"
+      }
+    },
+    {
+      "id": "nmnn6o46hyho",
+      "type": "caNode",
+      "position": {
+        "x": 80,
+        "y": 540
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "randomType": "float",
+          "min": "0",
+          "max": "1"
+        },
+        "parentId": "nmno03hqnw4f"
+      }
+    },
+    {
+      "id": "nmnn6pdd7osw",
+      "type": "caNode",
+      "position": {
+        "x": 40,
+        "y": 187.97712308379084
+      },
+      "data": {
+        "nodeType": "getConstant",
+        "config": {
+          "constType": "integer",
+          "constValue": "0"
+        },
+        "parentId": "nmno03hqnw4f"
+      }
+    },
+    {
+      "id": "nmnn6pqqzgsc",
+      "type": "caNode",
+      "position": {
+        "x": 412.7335237586544,
+        "y": 60
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive"
+        },
+        "parentId": "nmno03hqnw4f"
+      }
+    },
+    {
+      "id": "nmnn6qcryjvd",
+      "type": "caNode",
+      "position": {
+        "x": 72.12307074254721,
+        "y": 326.31200399284046
+      },
+      "data": {
+        "nodeType": "inputColor",
+        "config": {
+          "mappingId": "new_mapping_2"
+        },
+        "parentId": "nmno03hqnw4f"
+      }
+    },
+    {
+      "id": "nmnn6qulnxrx",
+      "type": "caNode",
+      "position": {
+        "x": 452.1230707425472,
+        "y": 326.31200399284046
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive"
+        },
+        "parentId": "nmno03hqnw4f"
+      }
+    },
+    {
+      "id": "nmnnb8mx6q0v",
+      "type": "caNode",
+      "position": {
+        "x": 239.25891934636195,
+        "y": 64.17703631160799
+      },
+      "data": {
+        "nodeType": "getConstant",
+        "config": {
+          "constType": "integer",
+          "constValue": "200"
+        },
+        "parentId": "nmno04wj3pc6"
+      }
+    },
+    {
+      "id": "nmnnb8qcry9i",
+      "type": "caNode",
+      "position": {
+        "x": 590,
+        "y": 40
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "new_attribute_2"
+        },
+        "parentId": "nmno04wj3pc6"
+      }
+    },
+    {
+      "id": "nmnnbaxs9dv5",
+      "type": "caNode",
+      "position": {
+        "x": 590,
+        "y": 200
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "new_attribute_2"
+        },
+        "parentId": "nmno04wj3pc6"
+      }
+    },
+    {
+      "id": "nmnnbdeay51o",
+      "type": "caNode",
+      "position": {
+        "x": 38.30712352184321,
+        "y": 196.13910139512632
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "new_attribute_2"
+        },
+        "parentId": "nmno04wj3pc6"
+      }
+    },
+    {
+      "id": "nmnnbdiqxonq",
+      "type": "caNode",
+      "position": {
+        "x": 240.02052822405187,
+        "y": 228.93802898898127
+      },
+      "data": {
+        "nodeType": "arithmeticOperator",
+        "config": {
+          "operation": "-"
+        },
+        "parentId": "nmno04wj3pc6"
+      }
+    },
+    {
+      "id": "nmnnbdtkhyq6",
+      "type": "caNode",
+      "position": {
+        "x": 30,
+        "y": 300
+      },
+      "data": {
+        "nodeType": "getConstant",
+        "config": {
+          "constType": "integer",
+          "constValue": "5"
+        },
+        "parentId": "nmno04wj3pc6"
+      }
+    },
+    {
+      "id": "nmnnbdzlxupr",
+      "type": "caNode",
+      "position": {
+        "x": 410,
+        "y": 240
+      },
+      "data": {
+        "nodeType": "arithmeticOperator",
+        "config": {
+          "operation": "max"
+        },
+        "parentId": "nmno04wj3pc6"
+      }
+    },
+    {
+      "id": "nmnnbe8sqv9o",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 320
+      },
+      "data": {
+        "nodeType": "getConstant",
+        "config": {
+          "constType": "integer",
+          "constValue": "0"
+        },
+        "parentId": "nmno04wj3pc6"
+      }
+    },
+    {
+      "id": "nmnnbfh7s6xj",
+      "type": "caNode",
+      "position": {
+        "x": -566,
+        "y": 44
+      },
+      "data": {
+        "nodeType": "sequence",
+        "config": {},
+        "label": "Update State then Color Output"
+      }
+    },
+    {
+      "id": "nmnnbgx6s4jf",
+      "type": "caNode",
+      "position": {
+        "x": 490,
+        "y": 220
+      },
+      "data": {
+        "nodeType": "setColorViewer",
+        "config": {
+          "mappingId": "new_mapping_6"
+        },
+        "parentId": "nmno07ikvob0"
+      }
+    },
+    {
+      "id": "nmnnbh86pr7v",
+      "type": "caNode",
+      "position": {
+        "x": 301,
+        "y": 265
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "new_attribute_2"
+        },
+        "parentId": "nmno07ikvob0"
+      }
+    },
+    {
+      "id": "nmnncdpy7jkk",
+      "type": "caNode",
+      "position": {
+        "x": 217,
+        "y": 61
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {},
+        "parentId": "nmno07ikvob0"
+      }
+    },
+    {
+      "id": "nmnnce6dqlfi",
+      "type": "caNode",
+      "position": {
+        "x": 490,
+        "y": 60
+      },
+      "data": {
+        "nodeType": "setColorViewer",
+        "config": {
+          "mappingId": "new_mapping_6"
+        },
+        "parentId": "nmno07ikvob0"
+      }
+    },
+    {
+      "id": "nmnncecbk5u3",
+      "type": "caNode",
+      "position": {
+        "x": 290,
+        "y": 160
+      },
+      "data": {
+        "nodeType": "getConstant",
+        "config": {
+          "constType": "integer",
+          "constValue": "200"
+        },
+        "parentId": "nmno07ikvob0"
+      }
+    },
+    {
+      "id": "nmnncgefih9c",
+      "type": "caNode",
+      "position": {
+        "x": 30,
+        "y": 62
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "alive"
+        },
+        "parentId": "nmno07ikvob0"
+      }
+    },
+    {
+      "id": "nmno02hwohy7",
+      "type": "caNode",
+      "position": {
+        "x": 272.1230707425472,
+        "y": 386.31200399284046
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": ">="
+        },
+        "parentId": "nmno03hqnw4f"
+      }
+    },
+    {
+      "id": "nmno02q10ml6",
+      "type": "caNode",
+      "position": {
+        "x": 60,
+        "y": 460
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "new_attribute_4"
+        },
+        "parentId": "nmno03hqnw4f"
+      }
+    },
+    {
+      "id": "nmno12xxa9g2",
+      "type": "caNode",
+      "position": {
+        "x": 340,
+        "y": 80
+      },
+      "data": {
+        "nodeType": "macro",
+        "config": {
+          "macroDefId": "macro_mno12xxa"
+        },
+        "label": "Decide Life State"
+      }
+    }
+  ],
+  "graphEdges": [
+    {
+      "id": "xy-edge__n7output_value_value-n6input_value_condition",
+      "source": "n7",
+      "target": "n6",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "xy-edge__n6output_flow_else-n9input_flow_check",
+      "source": "n6",
+      "target": "n9",
+      "sourceHandle": "output_flow_else",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "xy-edge__n9output_flow_then-n5input_flow_do",
+      "source": "n9",
+      "target": "n5",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__n14output_value_value-n5input_value_value",
+      "source": "n14",
+      "target": "n5",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "xy-edge__n6output_flow_then-n8input_flow_check",
+      "source": "n6",
+      "target": "n8",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "xy-edge__n21output_value_value-n20input_value_value",
+      "source": "n21",
+      "target": "n20",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "xy-edge__n8output_flow_then-n20input_flow_do",
+      "source": "n8",
+      "target": "n20",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmnn6ml8mgcsoutput_value_r-nmnn6niv353rinput_value_x",
+      "source": "nmnn6ml8mgcs",
+      "target": "nmnn6niv353r",
+      "sourceHandle": "output_value_r",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "xy-edge__nmnn6pdd7oswoutput_value_value-nmnn6niv353rinput_value_y",
+      "source": "nmnn6pdd7osw",
+      "target": "nmnn6niv353r",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "xy-edge__nmnn6ml8mgcsoutput_flow_do-nmnn6pqqzgscinput_flow_do",
+      "source": "nmnn6ml8mgcs",
+      "target": "nmnn6pqqzgsc",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmnn6niv353routput_value_result-nmnn6pqqzgscinput_value_value",
+      "source": "nmnn6niv353r",
+      "target": "nmnn6pqqzgsc",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "xy-edge__nmnn6qcryjvdoutput_flow_do-nmnn6qulnxrxinput_flow_do",
+      "source": "nmnn6qcryjvd",
+      "target": "nmnn6qulnxrx",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmnnb8mx6q0voutput_value_value-nmnnb8qcry9iinput_value_value",
+      "source": "nmnnb8mx6q0v",
+      "target": "nmnnb8qcry9i",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "xy-edge__n6output_flow_then-nmnnb8qcry9iinput_flow_do",
+      "source": "n6",
+      "target": "nmnnb8qcry9i",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__n6output_flow_else-nmnnbaxs9dv5input_flow_do",
+      "source": "n6",
+      "target": "nmnnbaxs9dv5",
+      "sourceHandle": "output_flow_else",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmnnbdeay51ooutput_value_value-nmnnbdiqxonqinput_value_x",
+      "source": "nmnnbdeay51o",
+      "target": "nmnnbdiqxonq",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "xy-edge__nmnnbdtkhyq6output_value_value-nmnnbdiqxonqinput_value_y",
+      "source": "nmnnbdtkhyq6",
+      "target": "nmnnbdiqxonq",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "xy-edge__nmnnbdiqxonqoutput_value_result-nmnnbdzlxuprinput_value_x",
+      "source": "nmnnbdiqxonq",
+      "target": "nmnnbdzlxupr",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "xy-edge__nmnnbe8sqv9ooutput_value_value-nmnnbdzlxuprinput_value_y",
+      "source": "nmnnbe8sqv9o",
+      "target": "nmnnbdzlxupr",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "xy-edge__nmnnbdzlxuproutput_value_result-nmnnbaxs9dv5input_value_value",
+      "source": "nmnnbdzlxupr",
+      "target": "nmnnbaxs9dv5",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "xy-edge__n4output_flow_do-nmnnbfh7s6xjinput_flow_do",
+      "source": "n4",
+      "target": "nmnnbfh7s6xj",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmnnbfh7s6xjoutput_flow_first-n6input_flow_check",
+      "source": "nmnnbfh7s6xj",
+      "target": "n6",
+      "sourceHandle": "output_flow_first",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "xy-edge__nmnnbh86pr7voutput_value_value-nmnnbgx6s4jfinput_value_r",
+      "source": "nmnnbh86pr7v",
+      "target": "nmnnbgx6s4jf",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_r"
+    },
+    {
+      "id": "xy-edge__nmnnbh86pr7voutput_value_value-nmnnbgx6s4jfinput_value_b",
+      "source": "nmnnbh86pr7v",
+      "target": "nmnnbgx6s4jf",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "xy-edge__nmnnbfh7s6xjoutput_flow_then-nmnncdpy7jkkinput_flow_check",
+      "source": "nmnnbfh7s6xj",
+      "target": "nmnncdpy7jkk",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "xy-edge__nmnncdpy7jkkoutput_flow_then-nmnnce6dqlfiinput_flow_do",
+      "source": "nmnncdpy7jkk",
+      "target": "nmnnce6dqlfi",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmnncecbk5u3output_value_value-nmnnce6dqlfiinput_value_r",
+      "source": "nmnncecbk5u3",
+      "target": "nmnnce6dqlfi",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_r"
+    },
+    {
+      "id": "xy-edge__nmnncecbk5u3output_value_value-nmnnce6dqlfiinput_value_b",
+      "source": "nmnncecbk5u3",
+      "target": "nmnnce6dqlfi",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "xy-edge__nmnncecbk5u3output_value_value-nmnnce6dqlfiinput_value_g",
+      "source": "nmnncecbk5u3",
+      "target": "nmnnce6dqlfi",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_g"
+    },
+    {
+      "id": "xy-edge__nmnncdpy7jkkoutput_flow_else-nmnnbgx6s4jfinput_flow_do",
+      "source": "nmnncdpy7jkk",
+      "target": "nmnnbgx6s4jf",
+      "sourceHandle": "output_flow_else",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmnncgefih9coutput_value_value-nmnncdpy7jkkinput_value_condition",
+      "source": "nmnncgefih9c",
+      "target": "nmnncdpy7jkk",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "xy-edge__nmno02hwohy7output_value_result-nmnn6qulnxrxinput_value_value",
+      "source": "nmno02hwohy7",
+      "target": "nmnn6qulnxrx",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "xy-edge__nmno12xxa9g2output_value_out_0-n8input_value_condition",
+      "source": "nmno12xxa9g2",
+      "target": "n8",
+      "sourceHandle": "output_value_out_0",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "xy-edge__nmno12xxa9g2output_value_out_1-n9input_value_condition",
+      "source": "nmno12xxa9g2",
+      "target": "n9",
+      "sourceHandle": "output_value_out_1",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "xy-edge__nmnn6o46hyhooutput_value_value-nmno02hwohy7input_value_y",
+      "source": "nmnn6o46hyho",
+      "target": "nmno02hwohy7",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "xy-edge__nmno02q10ml6output_value_value-nmno02hwohy7input_value_x",
+      "source": "nmno02q10ml6",
+      "target": "nmno02hwohy7",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    }
+  ],
+  "macroDefs": [
+    {
+      "id": "macro_mno12xxa",
+      "name": "Decide Life State",
+      "nodes": [
+        {
+          "id": "n12",
+          "type": "caNode",
+          "position": {
+            "x": 920,
+            "y": 240
+          },
+          "data": {
+            "nodeType": "getConstant",
+            "config": {
+              "constType": "integer",
+              "constValue": "3"
+            }
+          }
+        },
+        {
+          "id": "nmnn2k5xb14d",
+          "type": "caNode",
+          "position": {
+            "x": 1100,
+            "y": 180
+          },
+          "data": {
+            "nodeType": "statement",
+            "config": {
+              "operation": "=="
+            }
+          }
+        },
+        {
+          "id": "n13",
+          "type": "caNode",
+          "position": {
+            "x": 540,
+            "y": 260
+          },
+          "data": {
+            "nodeType": "getNeighborsAttribute",
+            "config": {
+              "neighborhoodId": "moore",
+              "attributeId": "alive"
+            }
+          }
+        },
+        {
+          "id": "n15",
+          "type": "caNode",
+          "position": {
+            "x": 752,
+            "y": 314
+          },
+          "data": {
+            "nodeType": "groupCounting",
+            "config": {
+              "operation": "equals"
+            }
+          }
+        },
+        {
+          "id": "n16",
+          "type": "caNode",
+          "position": {
+            "x": 548,
+            "y": 369
+          },
+          "data": {
+            "nodeType": "getConstant",
+            "config": {
+              "constType": "bool",
+              "constValue": "true"
+            }
+          }
+        },
+        {
+          "id": "n17",
+          "type": "caNode",
+          "position": {
+            "x": 1300,
+            "y": 440
+          },
+          "data": {
+            "nodeType": "logicOperator",
+            "config": {
+              "operation": "OR"
+            }
+          }
+        },
+        {
+          "id": "n19",
+          "type": "caNode",
+          "position": {
+            "x": 920,
+            "y": 520
+          },
+          "data": {
+            "nodeType": "getConstant",
+            "config": {
+              "constType": "integer",
+              "constValue": "3"
+            }
+          }
+        },
+        {
+          "id": "nmnn2j2c6nl2",
+          "type": "caNode",
+          "position": {
+            "x": 1100,
+            "y": 380
+          },
+          "data": {
+            "nodeType": "statement",
+            "config": {
+              "operation": "<"
+            },
+            "label": "Underpopulation"
+          }
+        },
+        {
+          "id": "nmnn2j7ugi7l",
+          "type": "caNode",
+          "position": {
+            "x": 1100,
+            "y": 500
+          },
+          "data": {
+            "nodeType": "statement",
+            "config": {
+              "operation": ">"
+            },
+            "label": "Overpopulation"
+          }
+        },
+        {
+          "id": "nmnn2jj7vpky",
+          "type": "caNode",
+          "position": {
+            "x": 900,
+            "y": 400
+          },
+          "data": {
+            "nodeType": "getConstant",
+            "config": {
+              "constType": "integer",
+              "constValue": "2"
+            }
+          }
+        },
+        {
+          "id": "mi_macro_mno12xxa",
+          "type": "caNode",
+          "position": {
+            "x": 320,
+            "y": 340
+          },
+          "data": {
+            "nodeType": "macroInput",
+            "config": {
+              "macroDefId": "macro_mno12xxa"
+            }
+          }
+        },
+        {
+          "id": "mo_macro_mno12xxa",
+          "type": "caNode",
+          "position": {
+            "x": 1520,
+            "y": 320
+          },
+          "data": {
+            "nodeType": "macroOutput",
+            "config": {
+              "macroDefId": "macro_mno12xxa"
+            }
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "xy-edge__n12output_value_value-nmnn2k5xb14dinput_value_y",
+          "source": "n12",
+          "target": "nmnn2k5xb14d",
+          "sourceHandle": "output_value_value",
+          "targetHandle": "input_value_y"
+        },
+        {
+          "id": "xy-edge__n13output_value_values-n15input_value_values",
+          "source": "n13",
+          "target": "n15",
+          "sourceHandle": "output_value_values",
+          "targetHandle": "input_value_values"
+        },
+        {
+          "id": "xy-edge__n16output_value_value-n15input_value_compare",
+          "source": "n16",
+          "target": "n15",
+          "sourceHandle": "output_value_value",
+          "targetHandle": "input_value_compare"
+        },
+        {
+          "id": "xy-edge__n15output_value_count-nmnn2j7ugi7linput_value_x",
+          "source": "n15",
+          "target": "nmnn2j7ugi7l",
+          "sourceHandle": "output_value_count",
+          "targetHandle": "input_value_x"
+        },
+        {
+          "id": "xy-edge__n19output_value_value-nmnn2j7ugi7linput_value_y",
+          "source": "n19",
+          "target": "nmnn2j7ugi7l",
+          "sourceHandle": "output_value_value",
+          "targetHandle": "input_value_y"
+        },
+        {
+          "id": "xy-edge__n15output_value_count-nmnn2j2c6nl2input_value_x",
+          "source": "n15",
+          "target": "nmnn2j2c6nl2",
+          "sourceHandle": "output_value_count",
+          "targetHandle": "input_value_x"
+        },
+        {
+          "id": "xy-edge__nmnn2jj7vpkyoutput_value_value-nmnn2j2c6nl2input_value_y",
+          "source": "nmnn2jj7vpky",
+          "target": "nmnn2j2c6nl2",
+          "sourceHandle": "output_value_value",
+          "targetHandle": "input_value_y"
+        },
+        {
+          "id": "xy-edge__nmnn2j2c6nl2output_value_result-n17input_value_a",
+          "source": "nmnn2j2c6nl2",
+          "target": "n17",
+          "sourceHandle": "output_value_result",
+          "targetHandle": "input_value_a"
+        },
+        {
+          "id": "xy-edge__nmnn2j7ugi7loutput_value_result-n17input_value_b",
+          "source": "nmnn2j7ugi7l",
+          "target": "n17",
+          "sourceHandle": "output_value_result",
+          "targetHandle": "input_value_b"
+        },
+        {
+          "id": "restored_xy-edge__nmno0kmwvvjgoutput_value_out_mno0kzhr6og-nmnn2k5xb14dinput_value_x",
+          "source": "n15",
+          "target": "nmnn2k5xb14d",
+          "sourceHandle": "output_value_count",
+          "targetHandle": "input_value_x"
+        },
+        {
+          "id": "xy-edge__nmnn2k5xb14doutput_value_result-mo_macro_mno12xxainput_value_out_1",
+          "source": "nmnn2k5xb14d",
+          "target": "mo_macro_mno12xxa",
+          "sourceHandle": "output_value_result",
+          "targetHandle": "input_value_out_1"
+        },
+        {
+          "id": "xy-edge__n17output_value_result-mo_macro_mno12xxainput_value_out_0",
+          "source": "n17",
+          "target": "mo_macro_mno12xxa",
+          "sourceHandle": "output_value_result",
+          "targetHandle": "input_value_out_0"
+        }
+      ],
+      "exposedInputs": [],
+      "exposedOutputs": [
+        {
+          "portId": "out_0",
+          "label": "Must Die",
+          "dataType": "any",
+          "category": "value",
+          "internalNodeId": "mo_macro_mno12xxa",
+          "internalPortId": "out_0"
+        },
+        {
+          "portId": "out_1",
+          "label": "Must be Born",
+          "dataType": "any",
+          "category": "value",
+          "internalNodeId": "mo_macro_mno12xxa",
+          "internalPortId": "out_1"
+        }
+      ]
+    }
+  ]
+}

@@ -1,11 +1,23 @@
+import { useState } from 'react';
 import { useModel } from '../../model/ModelContext';
 import type { BoundaryTreatment } from '../../model/types';
 import styles from './PanelContent.module.css';
 
 export function PropertiesPanelContent() {
-  const { model, updateProperties, updateAttribute } = useModel();
+  const { model, updateProperties } = useModel();
   const { properties } = model;
-  const modelAttrs = model.attributes.filter(a => a.isModelAttribute);
+  const [tagInput, setTagInput] = useState('');
+
+  const addTag = () => {
+    const tag = tagInput.trim().toLowerCase();
+    if (!tag || (properties.tags || []).includes(tag)) return;
+    updateProperties({ tags: [...(properties.tags || []), tag] });
+    setTagInput('');
+  };
+
+  const removeTag = (tag: string) => {
+    updateProperties({ tags: (properties.tags || []).filter(t => t !== tag) });
+  };
 
   return (
     <div className={styles.fieldGroup}>
@@ -44,6 +56,44 @@ export function PropertiesPanelContent() {
               value={properties.description}
               onChange={e => updateProperties({ description: e.target.value })}
             />
+          </div>
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>Tags</label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 4 }}>
+              {(properties.tags || []).map(tag => (
+                <span
+                  key={tag}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 3,
+                    padding: '1px 8px', background: 'rgba(76,201,240,0.12)',
+                    border: '1px solid rgba(76,201,240,0.25)', borderRadius: 10,
+                    fontSize: '0.68rem', color: '#4cc9f0',
+                  }}
+                >
+                  {tag}
+                  <button
+                    onClick={() => removeTag(tag)}
+                    style={{
+                      background: 'none', border: 'none', color: '#f44336',
+                      cursor: 'pointer', fontSize: '0.7rem', padding: 0, lineHeight: 1,
+                    }}
+                  >
+                    x
+                  </button>
+                </span>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <input
+                className={styles.textInput}
+                style={{ flex: 1 }}
+                placeholder="Add tag..."
+                value={tagInput}
+                onChange={e => setTagInput(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTag(); } }}
+              />
+              <button className={styles.addButton} style={{ padding: '2px 8px' }} onClick={addTag}>+</button>
+            </div>
           </div>
         </div>
       </div>
@@ -95,54 +145,9 @@ export function PropertiesPanelContent() {
         </div>
       </div>
 
-      <div className={styles.section}>
-        <div className={styles.sectionTitle}>Execution</div>
-        <div className={styles.fieldGroup}>
-          <div className={styles.field}>
-            <label className={styles.fieldLabel}>Max Iterations</label>
-            <input
-              className={styles.numberInput}
-              type="number"
-              value={properties.maxIterations}
-              min={0}
-              onChange={e =>
-                updateProperties({ maxIterations: Number(e.target.value) || 0 })
-              }
-            />
-          </div>
-        </div>
-      </div>
-
-      <div className={styles.section}>
-        <div className={styles.sectionTitle}>Model Attribute Defaults</div>
-        <div className={styles.fieldGroup}>
-          {modelAttrs.length === 0 ? (
-            <p
-              style={{
-                fontSize: '0.75rem',
-                color: '#6080a0',
-                fontStyle: 'italic',
-              }}
-            >
-              No model attributes defined. Add model attributes in the
-              Attributes panel.
-            </p>
-          ) : (
-            modelAttrs.map(attr => (
-              <div key={attr.id} className={styles.field}>
-                <label className={styles.fieldLabel}>{attr.name}</label>
-                <input
-                  className={styles.textInput}
-                  value={attr.defaultValue}
-                  onChange={e =>
-                    updateAttribute(attr.id, { defaultValue: e.target.value })
-                  }
-                />
-              </div>
-            ))
-          )}
-        </div>
-      </div>
+      {/* Max Iterations and Model Attribute Defaults removed:
+         - Max Iterations is not enforced by the simulator
+         - Model Attribute defaults are set in the Attributes panel */}
     </div>
   );
 }

@@ -110,10 +110,10 @@ export function NeighborhoodsPanelContent() {
                 type="number"
                 value={margin}
                 min={1}
-                max={6}
+                max={20}
                 onChange={e =>
                   setMargin(
-                    Math.max(1, Math.min(6, Number(e.target.value))),
+                    Math.max(1, Math.min(20, Number(e.target.value))),
                   )
                 }
               />

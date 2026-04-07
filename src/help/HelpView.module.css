@@ -1,0 +1,143 @@
+.helpLayout {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+.toc {
+  width: 220px;
+  min-width: 220px;
+  background: #0d1117;
+  border-right: 1px solid #2d4059;
+  padding: 16px 0;
+  overflow-y: auto;
+}
+
+.tocTitle {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #4cc9f0;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0 16px 8px;
+}
+
+.tocItem {
+  display: block;
+  width: 100%;
+  padding: 6px 16px;
+  background: none;
+  border: none;
+  color: #8899aa;
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.tocItem:hover {
+  color: #e0e0e0;
+  background: rgba(76, 201, 240, 0.08);
+}
+
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 32px 48px;
+  max-width: 800px;
+}
+
+.section {
+  margin-bottom: 40px;
+}
+
+.h1 {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #4cc9f0;
+  margin: 0 0 8px;
+}
+
+.h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #e0e0e0;
+  margin: 32px 0 12px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #2d4059;
+}
+
+.h3 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #c0c8d0;
+  margin: 20px 0 8px;
+}
+
+.p {
+  font-size: 0.82rem;
+  color: #a0b0c0;
+  line-height: 1.65;
+  margin: 8px 0;
+}
+
+.list {
+  font-size: 0.82rem;
+  color: #a0b0c0;
+  line-height: 1.65;
+  margin: 8px 0 8px 20px;
+  padding: 0;
+}
+
+.list li {
+  margin-bottom: 4px;
+}
+
+.kbd {
+  background: #1a2538;
+  border: 1px solid #2d4059;
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-family: monospace;
+  font-size: 0.75rem;
+  color: #e0e0e0;
+}
+
+.nodeCategory {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #fff;
+  margin-right: 6px;
+  text-transform: uppercase;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  margin: 12px 0;
+}
+
+.table th {
+  text-align: left;
+  color: #c0c8d0;
+  border-bottom: 1px solid #2d4059;
+  padding: 6px 10px;
+  font-weight: 600;
+}
+
+.table td {
+  color: #a0b0c0;
+  border-bottom: 1px solid rgba(45, 64, 89, 0.4);
+  padding: 5px 10px;
+}
+
+.subtitle {
+  font-size: 0.9rem;
+  color: #8899aa;
+  margin: 0 0 24px;
+  font-style: italic;
+}
