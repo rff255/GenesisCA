@@ -24,5 +24,8 @@ Thumbs.db
 # TypeScript build info
 *.tsbuildinfo
 
+# Claude Code local config
+.claude/
+
 # Auto-generated library index (created by Vite plugin at dev/build time)
 public/models/index.json

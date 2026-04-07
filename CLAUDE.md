@@ -33,7 +33,7 @@ Every GenesisCA model satisfies these theoretical properties:
 1. Cells have unlimited computing power
 2. Cells have N internal attributes (of multiple data types), whose snapshot of values at a given generation is called its "state"
 3. Cells are limited to only access (read) the states of cells in one of the neighborhoods defined in the CA model
-4. Cells can only make changes to itself, never to the environment around (other cells)
+4. Cells can only make changes to themselves, never to the environment around (other cells)
 5. Space and Time are discrete (cells arranged in n-dimensional grid)
 6. All cells update their states simultaneously (synchronously) each passing generation
 
