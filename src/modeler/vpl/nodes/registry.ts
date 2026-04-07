@@ -19,6 +19,8 @@ import { SetAttributeNode } from './SetAttributeNode';
 import { SetColorViewerNode } from './SetColorViewerNode';
 import { InputColorNode } from './InputColorNode';
 import { MacroNode } from './MacroNode';
+import { MacroInputNode } from './MacroInputNode';
+import { MacroOutputNode } from './MacroOutputNode';
 
 const ALL_NODES: NodeTypeDef[] = [
   // Flow
@@ -48,6 +50,8 @@ const ALL_NODES: NodeTypeDef[] = [
   GetColorConstantNode,
   // Macro
   MacroNode,
+  MacroInputNode,
+  MacroOutputNode,
 ];
 
 const registry = new Map<string, NodeTypeDef>();
@@ -64,7 +68,7 @@ export function getAllNodeDefs(): NodeTypeDef[] {
 }
 
 /** Node types hidden from the "Add Node" menu (created programmatically) */
-const HIDDEN_FROM_MENU = new Set(['macro']);
+const HIDDEN_FROM_MENU = new Set(['macro', 'macroInput', 'macroOutput']);
 
 /** Grouped by category for the "Add Node" menu */
 export function getNodeDefsByCategory(): Map<string, NodeTypeDef[]> {

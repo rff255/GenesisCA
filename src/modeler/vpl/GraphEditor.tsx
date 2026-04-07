@@ -29,6 +29,12 @@ const nodeTypes: NodeTypes = {
 };
 
 // ---------------------------------------------------------------------------
+// Clipboard for copy/paste (module-level, persists across re-renders)
+// ---------------------------------------------------------------------------
+
+let clipboard: { nodes: GraphNode[]; edges: GraphEdge[] } | null = null;
+
+// ---------------------------------------------------------------------------
 // ID generation
 // ---------------------------------------------------------------------------
 
@@ -200,6 +206,17 @@ function GraphEditorInner() {
 
   const handleNodesChange = useCallback(
     (changes: Parameters<typeof onNodesChange>[0]) => {
+      // Block deletion of MacroInput/MacroOutput boundary nodes inside macro scope
+      if (currentScopeRef.current.length > 1) {
+        changes = changes.filter(c => {
+          if (c.type === 'remove') {
+            const node = nodesRef.current.find(n => n.id === c.id);
+            const nt = (node?.data as Record<string, unknown> | undefined)?.nodeType;
+            return nt !== 'macroInput' && nt !== 'macroOutput';
+          }
+          return true;
+        });
+      }
       onNodesChange(changes);
 
       // Auto-resize groups to always cover all children (all 4 sides)
@@ -404,6 +421,13 @@ function GraphEditorInner() {
     } else if (contextMenu.target.type === 'node') {
       nodeIds = [contextMenu.target.nodeId];
     }
+    // Filter out undeletable MacroInput/MacroOutput boundary nodes
+    nodeIds = nodeIds.filter(nid => {
+      const node = nodes.find(n => n.id === nid);
+      const nt = (node?.data as Record<string, unknown> | undefined)?.nodeType;
+      return nt !== 'macroInput' && nt !== 'macroOutput';
+    });
+    if (nodeIds.length === 0) { setContextMenu(null); return; }
     if (nodeIds.length > 1) {
       if (!window.confirm(`Delete ${nodeIds.length} selected elements?`)) {
         setContextMenu(null);
@@ -413,7 +437,121 @@ function GraphEditorInner() {
     deleteElements({ nodes: nodeIds.map(id => ({ id })) });
     scheduleSync();
     setContextMenu(null);
-  }, [contextMenu, deleteElements, scheduleSync]);
+  }, [contextMenu, nodes, deleteElements, scheduleSync]);
+
+  // --- Copy / Paste / Cut ---
+
+  const handleCopy = useCallback(() => {
+    const selected = nodes.filter(n => n.selected);
+    if (selected.length === 0) return;
+    const selectedIds = new Set(selected.map(n => n.id));
+    // Strip macroInput/macroOutput from clipboard (they are auto-generated)
+    const copyNodes = toGraphNodes(
+      selected.filter(n => {
+        const nt = (n.data as Record<string, unknown>)?.nodeType;
+        return nt !== 'macroInput' && nt !== 'macroOutput';
+      }),
+    );
+    const copyEdges = toGraphEdges(
+      edges.filter(e => selectedIds.has(e.source) && selectedIds.has(e.target)),
+    );
+    clipboard = { nodes: copyNodes, edges: copyEdges };
+  }, [nodes, edges]);
+
+  const handlePaste = useCallback(() => {
+    if (!clipboard || clipboard.nodes.length === 0) return;
+    // Build old → new ID mapping
+    const idMap = new Map<string, string>();
+    const existingIds = new Set(nodes.map(n => n.id));
+    for (const n of clipboard.nodes) {
+      let newId = `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+      while (existingIds.has(newId) || idMap.has(newId)) {
+        newId = `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+      }
+      idMap.set(n.id, newId);
+      existingIds.add(newId);
+    }
+
+    const pastedRFNodes: Node[] = clipboard.nodes.map(n => {
+      const clonedData = JSON.parse(JSON.stringify(n.data)) as Record<string, unknown>;
+      // Remap parentId to the new group ID
+      const oldParentId = clonedData.parentId as string | undefined;
+      const newParentId = oldParentId ? idMap.get(oldParentId) : undefined;
+      if (newParentId) {
+        clonedData.parentId = newParentId;
+      } else {
+        delete clonedData.parentId;
+      }
+      return {
+        id: idMap.get(n.id)!,
+        type: n.type === 'groupNode' ? 'groupNode' : n.type === 'commentNode' ? 'commentNode' : 'caNode',
+        // Only offset top-level nodes; children keep their relative position inside the group
+        position: newParentId
+          ? { x: n.position.x, y: n.position.y }
+          : { x: n.position.x + 30, y: n.position.y + 30 },
+        data: clonedData,
+        selected: true,
+        ...(newParentId ? { parentId: newParentId } : {}),
+        ...(n.type === 'groupNode' ? { style: { width: (clonedData.width as number) || 300, height: (clonedData.height as number) || 200 }, zIndex: -1 } : {}),
+      };
+    });
+
+    const pastedRFEdges: Edge[] = clipboard.edges
+      .filter(e => idMap.has(e.source) && idMap.has(e.target))
+      .map(e => ({
+        id: `e_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
+        source: idMap.get(e.source)!,
+        target: idMap.get(e.target)!,
+        sourceHandle: e.sourceHandle,
+        targetHandle: e.targetHandle,
+        style: { stroke: '#4cc9f0', strokeWidth: 2 },
+        animated: e.sourceHandle.includes('flow'),
+      }));
+
+    // Sort so group nodes come before their children (React Flow requires parent first)
+    pastedRFNodes.sort((a, b) => {
+      if (a.type === 'groupNode' && b.parentId === a.id) return -1;
+      if (b.type === 'groupNode' && a.parentId === b.id) return 1;
+      return 0;
+    });
+
+    // Deselect existing, add pasted
+    setNodes(nds => [...nds.map(n => ({ ...n, selected: false })), ...pastedRFNodes]);
+    setEdges(eds => [...eds, ...pastedRFEdges]);
+    scheduleSync();
+  }, [nodes, setNodes, setEdges, scheduleSync]);
+
+  const handleCut = useCallback(() => {
+    handleCopy();
+    // Delete selected (but not macroInput/macroOutput)
+    const selected = nodes.filter(n => n.selected);
+    const deletableIds = selected
+      .filter(n => {
+        const nt = (n.data as Record<string, unknown>)?.nodeType;
+        return nt !== 'macroInput' && nt !== 'macroOutput';
+      })
+      .map(n => n.id);
+    if (deletableIds.length > 0) {
+      deleteElements({ nodes: deletableIds.map(id => ({ id })) });
+      scheduleSync();
+    }
+  }, [handleCopy, nodes, deleteElements, scheduleSync]);
+
+  // Keyboard shortcuts for copy/paste
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Skip if user is typing in an input
+      const tag = (document.activeElement as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key === 'c') { handleCopy(); e.preventDefault(); }
+      if (mod && e.key === 'v') { handlePaste(); e.preventDefault(); }
+      if (mod && e.key === 'x') { handleCut(); e.preventDefault(); }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [handleCopy, handlePaste, handleCut]);
 
   const renameNode = useCallback(() => {
     if (!contextMenu || contextMenu.target.type !== 'node') return;
@@ -541,7 +679,18 @@ function GraphEditorInner() {
 
     const macroId = `macro_${Date.now().toString(36)}`;
 
-    // Build exposed ports with internal mapping info
+    // Compute bounding box of selected nodes for MacroInput/MacroOutput positioning
+    const selXs = selectedNodes.map(n => n.position.x);
+    const selYs = selectedNodes.map(n => n.position.y);
+    const minX = Math.min(...selXs);
+    const maxX = Math.max(...selXs);
+    const midY = (Math.min(...selYs) + Math.max(...selYs)) / 2;
+
+    // Create MacroInput and MacroOutput boundary node IDs
+    const macroInputNodeId = `mi_${macroId}`;
+    const macroOutputNodeId = `mo_${macroId}`;
+
+    // Build exposed ports — internalNodeId/PortId point to the boundary nodes
     const exposedInputs: MacroPort[] = externalInputEdges.map((e, i) => {
       const parsed = parseHandleId(e.targetHandle ?? '');
       return {
@@ -549,8 +698,8 @@ function GraphEditorInner() {
         label: `Input ${i + 1}`,
         dataType: 'any',
         category: (parsed?.category || 'value') as 'value' | 'flow',
-        internalNodeId: e.target,
-        internalPortId: parsed?.portId || '',
+        internalNodeId: macroInputNodeId,
+        internalPortId: `in_${i}`,
       };
     });
     const exposedOutputs: MacroPort[] = externalOutputEdges.map((e, i) => {
@@ -560,15 +709,47 @@ function GraphEditorInner() {
         label: `Output ${i + 1}`,
         dataType: 'any',
         category: (parsed?.category || 'value') as 'value' | 'flow',
-        internalNodeId: e.source,
-        internalPortId: parsed?.portId || '',
+        internalNodeId: macroOutputNodeId,
+        internalPortId: `out_${i}`,
       };
     });
 
+    // Build bridging edges: MacroInput outputs -> original internal targets
+    const bridgingInputEdges: GraphEdge[] = externalInputEdges.map((e, i) => ({
+      id: `bridge_in_${macroId}_${i}`,
+      source: macroInputNodeId,
+      sourceHandle: handleId({ id: `in_${i}`, kind: 'output', category: exposedInputs[i]!.category }),
+      target: e.target,
+      targetHandle: e.targetHandle ?? '',
+    }));
+
+    // Build bridging edges: original internal sources -> MacroOutput inputs
+    const bridgingOutputEdges: GraphEdge[] = externalOutputEdges.map((e, i) => ({
+      id: `bridge_out_${macroId}_${i}`,
+      source: e.source,
+      sourceHandle: e.sourceHandle ?? '',
+      target: macroOutputNodeId,
+      targetHandle: handleId({ id: `out_${i}`, kind: 'input', category: exposedOutputs[i]!.category }),
+    }));
+
+    // MacroInput/MacroOutput boundary nodes
+    const macroInputGraphNode: GraphNode = {
+      id: macroInputNodeId,
+      type: 'caNode',
+      position: { x: minX - 250, y: midY },
+      data: { nodeType: 'macroInput', config: { macroDefId: macroId } },
+    };
+    const macroOutputGraphNode: GraphNode = {
+      id: macroOutputNodeId,
+      type: 'caNode',
+      position: { x: maxX + 100, y: midY },
+      data: { nodeType: 'macroOutput', config: { macroDefId: macroId } },
+    };
+
     addMacro({
       id: macroId, name,
-      nodes: toGraphNodes(selectedNodes),
-      edges: toGraphEdges(internalEdges),
+      nodes: [...toGraphNodes(selectedNodes), macroInputGraphNode, macroOutputGraphNode],
+      edges: [...toGraphEdges(internalEdges), ...bridgingInputEdges, ...bridgingOutputEdges],
       exposedInputs, exposedOutputs,
     });
 
@@ -642,26 +823,44 @@ function GraphEditorInner() {
     const macroDef = (model.macroDefs || []).find(m => m.id === macroDefId);
     if (!macroDef) { setContextMenu(null); return; }
 
-    // Restore subgraph nodes at macro node's position
+    // Identify boundary nodes
+    const boundaryNodeIds = new Set(
+      macroDef.nodes
+        .filter(n => {
+          const nt = (n.data as Record<string, unknown>).nodeType;
+          return nt === 'macroInput' || nt === 'macroOutput';
+        })
+        .map(n => n.id),
+    );
+
+    // Restore subgraph nodes at macro node's position (excluding boundary nodes)
     const offsetX = macroNode.position.x;
     const offsetY = macroNode.position.y;
-    const restoredRFNodes: Node[] = macroDef.nodes.map(n => ({
-      id: n.id,
-      type: n.type === 'groupNode' ? 'groupNode' : n.type === 'commentNode' ? 'commentNode' : 'caNode',
-      position: { x: n.position.x + offsetX, y: n.position.y + offsetY },
-      data: n.data,
-    }));
-    const restoredRFEdges: Edge[] = macroDef.edges.map(e => ({
-      id: e.id,
-      source: e.source,
-      target: e.target,
-      sourceHandle: e.sourceHandle,
-      targetHandle: e.targetHandle,
-      style: { stroke: '#4cc9f0', strokeWidth: 2 },
-      animated: e.sourceHandle.includes('flow'),
-    }));
+    const restoredRFNodes: Node[] = macroDef.nodes
+      .filter(n => !boundaryNodeIds.has(n.id))
+      .map(n => ({
+        id: n.id,
+        type: n.type === 'groupNode' ? 'groupNode' : n.type === 'commentNode' ? 'commentNode' : 'caNode',
+        position: { x: n.position.x + offsetX, y: n.position.y + offsetY },
+        data: n.data,
+      }));
 
-    // Reconnect external edges back to internal nodes
+    // Restore only internal edges (exclude bridging edges touching boundary nodes)
+    const restoredRFEdges: Edge[] = macroDef.edges
+      .filter(e => !boundaryNodeIds.has(e.source) && !boundaryNodeIds.has(e.target))
+      .map(e => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        sourceHandle: e.sourceHandle,
+        targetHandle: e.targetHandle,
+        style: { stroke: '#4cc9f0', strokeWidth: 2 },
+        animated: e.sourceHandle.includes('flow'),
+      }));
+
+    // Reconnect external edges: trace through boundary nodes to find actual internal targets.
+    // For inputs: MacroNode input port -> MacroInput output port -> bridging edge -> actual internal node
+    // For outputs: actual internal node -> bridging edge -> MacroOutput input port -> MacroNode output port
     const edgesToMacro = edges.filter(e => e.target === macroNodeId);
     const edgesFromMacro = edges.filter(e => e.source === macroNodeId);
 
@@ -670,12 +869,20 @@ function GraphEditorInner() {
       const portId = parsed?.portId || '';
       const exposedPort = macroDef.exposedInputs.find(p => p.portId === portId);
       if (!exposedPort) return null;
-      return {
-        ...e,
-        id: `restored_${e.id}`,
-        target: exposedPort.internalNodeId,
-        targetHandle: handleId({ id: exposedPort.internalPortId, kind: 'input', category: exposedPort.category }),
-      };
+      // Trace: find the bridging edge from the MacroInput port to the actual internal node
+      const bridgeHandle = handleId({ id: exposedPort.portId, kind: 'output', category: exposedPort.category });
+      const bridgingEdge = macroDef.edges.find(
+        be => be.source === exposedPort.internalNodeId && be.sourceHandle === bridgeHandle,
+      );
+      if (bridgingEdge) {
+        return {
+          ...e,
+          id: `restored_${e.id}`,
+          target: bridgingEdge.target,
+          targetHandle: bridgingEdge.targetHandle,
+        };
+      }
+      return null;
     }).filter(Boolean) as Edge[];
 
     const reconnectedOutputEdges: Edge[] = edgesFromMacro.map(e => {
@@ -683,12 +890,20 @@ function GraphEditorInner() {
       const portId = parsed?.portId || '';
       const exposedPort = macroDef.exposedOutputs.find(p => p.portId === portId);
       if (!exposedPort) return null;
-      return {
-        ...e,
-        id: `restored_${e.id}`,
-        source: exposedPort.internalNodeId,
-        sourceHandle: handleId({ id: exposedPort.internalPortId, kind: 'output', category: exposedPort.category }),
-      };
+      // Trace: find the bridging edge from actual internal node to the MacroOutput port
+      const bridgeHandle = handleId({ id: exposedPort.portId, kind: 'input', category: exposedPort.category });
+      const bridgingEdge = macroDef.edges.find(
+        be => be.target === exposedPort.internalNodeId && be.targetHandle === bridgeHandle,
+      );
+      if (bridgingEdge) {
+        return {
+          ...e,
+          id: `restored_${e.id}`,
+          source: bridgingEdge.source,
+          sourceHandle: bridgingEdge.sourceHandle,
+        };
+      }
+      return null;
     }).filter(Boolean) as Edge[];
 
     // Remove macro node and its edges, add restored subgraph
@@ -798,6 +1013,12 @@ function GraphEditorInner() {
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); addCommentNode(); }}>
                 Add Comment
               </button>
+              {clipboard && clipboard.nodes.length > 0 && (
+                <>
+                  <hr style={{ border: 'none', borderTop: '1px solid #2d4059', margin: '4px 0' }} />
+                  <button className={styles.contextItem} onClick={e => { e.stopPropagation(); handlePaste(); setContextMenu(null); }}>Paste</button>
+                </>
+              )}
             </>
           )}
 
@@ -837,6 +1058,10 @@ function GraphEditorInner() {
           {contextMenu.target.type === 'selection' && (
             <>
               <div className={styles.contextTitle}>Selection ({contextMenu.target.nodeIds.length})</div>
+              <button className={styles.contextItem} onClick={e => { e.stopPropagation(); handleCopy(); setContextMenu(null); }}>Copy</button>
+              <button className={styles.contextItem} onClick={e => { e.stopPropagation(); handleCut(); setContextMenu(null); }}>Cut</button>
+              <button className={styles.contextItem} onClick={e => { e.stopPropagation(); handlePaste(); setContextMenu(null); }}>Paste</button>
+              <hr style={{ border: 'none', borderTop: '1px solid #2d4059', margin: '4px 0' }} />
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); createMacroFromSelection(); }}>Create Macro</button>
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); createGroup(); }}>Create Group</button>
               <button className={styles.contextItem} style={{ color: '#e05050' }} onClick={e => { e.stopPropagation(); deleteSelection(); }}>

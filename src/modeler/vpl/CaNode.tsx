@@ -4,6 +4,7 @@ import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
 import { handleId } from './types';
 import type { NodeConfig } from './types';
+import type { MacroPort } from '../../model/types';
 import { useModel } from '../../model/ModelContext';
 import styles from './CaNode.module.css';
 
@@ -16,7 +17,7 @@ interface CaNodeData {
 function CaNodeComponent({ id, data }: NodeProps) {
   const nodeData = data as CaNodeData;
   const def = getNodeDef(nodeData.nodeType);
-  const { model } = useModel();
+  const { model, updateMacro } = useModel();
   const { updateNodeData } = useReactFlow();
 
   const updateConfig = useCallback(
@@ -34,6 +35,62 @@ function CaNodeComponent({ id, data }: NodeProps) {
     },
     [id, nodeData, updateNodeData],
   );
+
+  // --- Port editing callbacks for MacroInput/MacroOutput ---
+  const macroDefIdForBoundary =
+    (nodeData.nodeType === 'macroInput' || nodeData.nodeType === 'macroOutput')
+      ? (nodeData.config.macroDefId as string)
+      : '';
+  const macroDefForBoundary = macroDefIdForBoundary
+    ? (model.macroDefs || []).find(m => m.id === macroDefIdForBoundary)
+    : undefined;
+
+  const isMacroInput = nodeData.nodeType === 'macroInput';
+  const isMacroOutput = nodeData.nodeType === 'macroOutput';
+
+  const addPort = useCallback(() => {
+    if (!macroDefForBoundary || !macroDefIdForBoundary) return;
+    const field = isMacroInput ? 'exposedInputs' : 'exposedOutputs';
+    const existing = macroDefForBoundary[field];
+    const idx = existing.length;
+    const newPort: MacroPort = {
+      portId: `${isMacroInput ? 'in' : 'out'}_${idx}`,
+      label: `${isMacroInput ? 'Input' : 'Output'} ${idx + 1}`,
+      dataType: 'any',
+      category: 'value',
+      internalNodeId: id,
+      internalPortId: `${isMacroInput ? 'in' : 'out'}_${idx}`,
+    };
+    updateMacro(macroDefIdForBoundary, { [field]: [...existing, newPort] });
+  }, [macroDefForBoundary, macroDefIdForBoundary, isMacroInput, id, updateMacro]);
+
+  const removePort = useCallback((portId: string) => {
+    if (!macroDefForBoundary || !macroDefIdForBoundary) return;
+    const field = isMacroInput ? 'exposedInputs' : 'exposedOutputs';
+    updateMacro(macroDefIdForBoundary, {
+      [field]: macroDefForBoundary[field].filter(p => p.portId !== portId),
+    });
+  }, [macroDefForBoundary, macroDefIdForBoundary, isMacroInput, updateMacro]);
+
+  const renamePort = useCallback((portId: string, newLabel: string) => {
+    if (!macroDefForBoundary || !macroDefIdForBoundary) return;
+    const field = isMacroInput ? 'exposedInputs' : 'exposedOutputs';
+    updateMacro(macroDefIdForBoundary, {
+      [field]: macroDefForBoundary[field].map(p =>
+        p.portId === portId ? { ...p, label: newLabel } : p,
+      ),
+    });
+  }, [macroDefForBoundary, macroDefIdForBoundary, isMacroInput, updateMacro]);
+
+  const changePortCategory = useCallback((portId: string, cat: 'value' | 'flow') => {
+    if (!macroDefForBoundary || !macroDefIdForBoundary) return;
+    const field = isMacroInput ? 'exposedInputs' : 'exposedOutputs';
+    updateMacro(macroDefIdForBoundary, {
+      [field]: macroDefForBoundary[field].map(p =>
+        p.portId === portId ? { ...p, category: cat } : p,
+      ),
+    });
+  }, [macroDefForBoundary, macroDefIdForBoundary, isMacroInput, updateMacro]);
 
   if (!def) return <div className={styles.node}>Unknown node type</div>;
 
@@ -59,6 +116,38 @@ function CaNodeComponent({ id, data }: NodeProps) {
         category: p.category || 'value' as const,
         dataType: (p.dataType || 'any') as 'any',
       }));
+    }
+  }
+
+  // MacroInput: output ports from exposedInputs (data flows into subgraph)
+  if (nodeData.nodeType === 'macroInput') {
+    const macroDefId = nodeData.config.macroDefId as string;
+    const macroDef = (model.macroDefs || []).find(m => m.id === macroDefId);
+    if (macroDef) {
+      inputPorts = [];
+      outputPorts = macroDef.exposedInputs.map(p => ({
+        id: p.portId,
+        label: p.label,
+        kind: 'output' as const,
+        category: p.category || 'value' as const,
+        dataType: (p.dataType || 'any') as 'any',
+      }));
+    }
+  }
+
+  // MacroOutput: input ports from exposedOutputs (data flows out of subgraph)
+  if (nodeData.nodeType === 'macroOutput') {
+    const macroDefId = nodeData.config.macroDefId as string;
+    const macroDef = (model.macroDefs || []).find(m => m.id === macroDefId);
+    if (macroDef) {
+      inputPorts = macroDef.exposedOutputs.map(p => ({
+        id: p.portId,
+        label: p.label,
+        kind: 'input' as const,
+        category: p.category || 'value' as const,
+        dataType: (p.dataType || 'any') as 'any',
+      }));
+      outputPorts = [];
     }
   }
 
@@ -356,6 +445,54 @@ function CaNodeComponent({ id, data }: NodeProps) {
             Double-click to edit
           </span>
         )}
+
+        {(isMacroInput || isMacroOutput) && macroDefForBoundary && (() => {
+          const ports = isMacroInput
+            ? macroDefForBoundary.exposedInputs
+            : macroDefForBoundary.exposedOutputs;
+          return (
+            <>
+              {ports.map(p => (
+                <div key={p.portId} style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                  <input
+                    className={styles.input}
+                    style={{ flex: 1 }}
+                    value={p.label}
+                    onChange={e => renamePort(p.portId, e.target.value)}
+                    title="Port name"
+                  />
+                  <select
+                    className={styles.select}
+                    style={{ width: 52 }}
+                    value={p.category}
+                    onChange={e => changePortCategory(p.portId, e.target.value as 'value' | 'flow')}
+                    title="Port category"
+                  >
+                    <option value="value">Val</option>
+                    <option value="flow">Flow</option>
+                  </select>
+                  <button
+                    style={{
+                      background: 'none', border: 'none', color: '#f44336',
+                      cursor: 'pointer', fontSize: '0.7rem', padding: '0 2px',
+                    }}
+                    onClick={() => removePort(p.portId)}
+                    title="Remove port"
+                  >
+                    x
+                  </button>
+                </div>
+              ))}
+              <button
+                className={styles.select}
+                style={{ cursor: 'pointer', textAlign: 'center' }}
+                onClick={addPort}
+              >
+                + Add Port
+              </button>
+            </>
+          );
+        })()}
       </div>
 
       {/* Input handles (left side) */}

@@ -238,9 +238,9 @@ The app is functional with these major systems:
 ### Visual Programming Language (VPL)
 - `src/modeler/vpl/GraphEditor.tsx` — React Flow-based node graph editor
 - `src/modeler/vpl/CaNode.tsx` — Custom node component with per-type config UI
-- `src/modeler/vpl/nodes/` — 19 node types, each in its own file with `compile()` method
+- `src/modeler/vpl/nodes/` — 21 node types, each in its own file with `compile()` method
 - `src/modeler/vpl/compiler/compile.ts` — Two-pass compiler: hoists values, then emits flow
-- Multi-output nodes (InputColor, GetColorConstant) use `_v${nodeId}_${portId}` naming
+- Multi-output nodes (InputColor, GetColorConstant, MacroNode) use `_v${nodeId}_${portId}` naming
 - Multi-root support: Step (per-generation) and InputColor (brush interaction) compile separately
 
 ### Simulation Engine (SoA Architecture)
@@ -263,39 +263,47 @@ The app is functional with these major systems:
 - Hide React Flow's persistent selection rect: CSS `:global(.react-flow__nodesselection-rect) { display: none !important; }`
 - Groups use React Flow's native `parentId` — auto-resize requires manual bounding box computation in `handleNodesChange`
 - Use `NodeResizer` component for resizable nodes (comments, groups) — CSS `resize: both` conflicts with React Flow drag
-- MacroNode is created only via "Create Macro from Selection" — hidden from Add Node menu via `HIDDEN_FROM_MENU` set in registry
-- Macro compilation currently a safe no-op — needs MacroInput/MacroOutput special nodes before inlining works
+- MacroNode, MacroInputNode, MacroOutputNode are hidden from Add Node menu via `HIDDEN_FROM_MENU` set
+- Copy/paste: Ctrl+C/V/X + context menu. Module-level `clipboard` variable, strips macroInput/macroOutput, remaps IDs
+- Group paste: parentId must be remapped to new IDs, children keep relative positions, groups sorted before children
 
 ---
 
-## Macro System — Current Status & Next Steps
+## Macro System (Implemented)
 
-### What exists (working):
-- Create Macro from Selection: extracts selected nodes into MacroDef, creates MacroNode with dynamic ports
-- External edges reconnect to MacroNode's exposed ports automatically
-- MacroDef stores exposedInputs/exposedOutputs with `MacroPort` type (includes `internalNodeId`, `internalPortId`, `category`)
-- Double-click macro → enters subgraph scope (breadcrumb navigation, scope-aware sync)
-- Undo Macro → restores subgraph inline, reconnects edges
-- Groups: visual containers with color picker, auto-resize on child movement
+### Architecture:
+- MacroInput/MacroOutput are boundary nodes inside macro subgraphs (teal, `#00897b`)
+- MacroInput has OUTPUT ports (data flows into subgraph); MacroOutput has INPUT ports (data flows out)
+- Ports are dynamic — derived from `MacroDef.exposedInputs`/`exposedOutputs` at render time
+- Port editing UI on boundary nodes: add/remove/rename ports, value/flow category selector
+- Changes propagate automatically — MacroNode's external handles re-derive from the same MacroDef arrays
+- Boundary nodes cannot be deleted (filtered in `handleNodesChange` and `deleteSelection`)
 
-### What's broken / incomplete:
-1. **Macro compilation is disabled** — `compileValueNode` returns a no-op for MacroNodes. The previous recursive inlining attempt was buggy (didn't handle flow chains, variable scoping issues)
-2. **No MacroInput/MacroOutput nodes** — the user wants Unreal-style explicit input/output nodes inside the macro subgraph (not auto-detected from external edges). These should:
-   - Be special node types that only exist inside macro scopes
-   - Have an "Add Port" button on their body to define named ports
-   - Cannot be deleted (always present when editing a macro)
-   - Replace the current auto-detection of exposed ports from external edges
-3. **No copy/paste** — needed for duplicating selections and reusing macro instances
-4. **Macro dropdown removed** — each macro instance is unique, no switching between definitions
-5. **Selection highlight inconsistency** — clicking nodes doesn't always show selection highlight reliably
+### Create Macro from Selection:
+- Auto-creates MacroInput (left of bbox) + MacroOutput (right of bbox) inside the subgraph
+- `exposedInputs[i].internalNodeId` points to MacroInput node ID (not the actual internal target)
+- Bridging edges connect MacroInput output ports → original internal targets
+- Bridging edges connect original internal sources → MacroOutput input ports
 
-### Design direction for MacroInput/MacroOutput:
-- When "Create Macro" runs, auto-create MacroInput + MacroOutput nodes inside the subgraph
-- MacroInput: one output port per external input edge (user can add/remove/rename ports)
-- MacroOutput: one input port per external output edge (user can add/remove/rename ports)
-- These nodes define the macro's external interface — the MacroNode's handles mirror them
-- Compiler: MacroInput ports → alias to upstream variables; MacroOutput ports → produce the macro's output values
-- When entering a macro scope, these nodes are always visible and undeletable
+### Undo Macro:
+- Filters out boundary nodes and bridging edges when restoring
+- Traces through bridging edges to find actual internal nodes for edge reconnection
+
+### Macro Compilation (compile.ts):
+- `inlineMacroValues()`: inlines value subgraph with `_m${macroNodeId}_` variable prefix
+- `inlineMacroFlow()`: inlines flow chains, resolves control structures inside macros
+- MacroInput ports → alias to outer upstream variables (no code emitted)
+- MacroOutput inputs → `const _v${macroNodeId}_${portId} = <innerVar>;`
+- Nested macros: `inlineNestedMacroValues()` chains prefixes (`_m${outer}_m${inner}_v${node}`)
+- Recursion guard: tracks expanding MacroDef IDs in a Set, depth limit of 20
+- Scoped scratch arrays: `_m${macroNodeId}_scr_${nodeId}` for GetNeighborsAttribute inside macros
+- `scratchNodes` uses `{ scratchVarName, nbrId }` (not `{ nodeId, nbrId }`)
+
+### Remaining:
+- Each macro instance is unique — no switching between definitions (macro dropdown removed)
+- Selection highlight inconsistency — clicking nodes doesn't always show selection highlight reliably
+
+### Key Patterns:
 - When adding new fields to CAModel type, always add migration guards in ModelContext's `createInitialState`
 - Node config UI: when a config field changes type (e.g., constType), reset dependent fields to prevent stale values
 - Compiler: all value declarations hoisted to function scope (Pass 1) before control flow (Pass 2) to avoid block-scoping issues
