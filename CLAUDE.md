@@ -214,6 +214,7 @@ genesis-ca/
 - Do not assume file structure beyond what's documented here — ask if uncertain
 - When building new node types, follow the established pattern of existing nodes (compile method, port definitions, UI component)
 - **Documentation consistency:** When changing features, update all three sources of truth: the code, `src/help/HelpView.tsx` (in-app Help tab), and the root `README.md`. These must remain consistent with each other.
+- **Pre-commit type check:** Vite dev server does NOT type-check — always run `npx tsc --noEmit` before committing to catch TypeScript errors that will fail the CI build (`tsc -b`).
 
 ---
 

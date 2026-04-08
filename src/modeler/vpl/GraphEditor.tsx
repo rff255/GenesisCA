@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
+  BackgroundVariant,
   Controls,
   MiniMap,
   addEdge,
@@ -10,7 +11,7 @@ import {
   useReactFlow,
   ReactFlowProvider,
 } from '@xyflow/react';
-import type { Connection, Edge, Node, NodeTypes, ReactFlowInstance, SelectionMode } from '@xyflow/react';
+import type { Connection, Edge, Node, NodeTypes, ReactFlowInstance, SelectionMode, IsValidConnection, OnConnectStart } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { CaNode } from './CaNode';
 import { CommentNodeComponent } from './CommentNodeComponent';
@@ -533,7 +534,6 @@ export function GraphEditorInner() {
       // Ctrl+V: use viewport center
       const rf = rfInstance.current;
       if (rf) {
-        const vp = rf.getViewport();
         const bounds = document.querySelector('.react-flow')?.getBoundingClientRect();
         if (bounds) {
           target = rf.screenToFlowPosition({ x: bounds.width / 2, y: bounds.height / 2 });
@@ -963,7 +963,7 @@ export function GraphEditorInner() {
 
   // Track whether a connection is being dragged (for hover-to-uncollapse)
   const isConnecting = useRef(false);
-  const onConnectStart = useCallback((_event: React.MouseEvent | TouchEvent, params: { nodeId: string | null; handleId: string | null }) => {
+  const onConnectStart: OnConnectStart = useCallback((_event, params) => {
     isConnecting.current = true;
     setIsConnecting(true);
     if (params.handleId) {
@@ -1148,7 +1148,7 @@ export function GraphEditorInner() {
         onConnect={onConnect}
         onConnectStart={onConnectStart}
         onConnectEnd={onConnectEnd}
-        isValidConnection={isValidConnection}
+        isValidConnection={isValidConnection as IsValidConnection}
         onInit={instance => { rfInstance.current = instance; }}
         onPaneContextMenu={onPaneContextMenu}
         onNodeContextMenu={onNodeContextMenu}
@@ -1169,7 +1169,7 @@ export function GraphEditorInner() {
         }}
         proOptions={{ hideAttribution: true }}
       >
-        {showGrid && <Background color="#1a2538" gap={20} variant={'lines' as 'lines'} />}
+        {showGrid && <Background color="#1a2538" gap={20} variant={BackgroundVariant.Lines} />}
         <Controls showInteractive={false} />
         {/* Canvas toggle buttons */}
         <div className={styles.canvasToggles}>
