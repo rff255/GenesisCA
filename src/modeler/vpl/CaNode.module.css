@@ -103,3 +103,72 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+
+/* --- Inline port widgets (Unreal Blueprint style, outside node to the left) --- */
+
+.inlineWidgetWrapper {
+  position: absolute;
+  right: 100%;
+  transform: translateY(-50%);
+  margin-right: 6px;
+  pointer-events: auto;
+  z-index: 1;
+}
+
+.inlineWidget {
+  width: 52px;
+  padding: 1px 3px;
+  background: #0d1117;
+  border: 1px solid #2d4059;
+  border-radius: 3px;
+  color: #e0e0e0;
+  font-size: 0.55rem;
+  font-family: inherit;
+  outline: none;
+}
+
+.inlineWidget:focus {
+  border-color: #4cc9f0;
+}
+
+/* --- Collapsed node styles --- */
+
+.collapsed {
+  min-width: auto !important;
+  min-height: auto !important;
+}
+
+.collapsedHeader {
+  padding: 4px 12px;
+  font-weight: 600;
+  color: #fff;
+  font-size: 0.6rem;
+  letter-spacing: 0.04em;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.collapsedConstant {
+  min-width: auto !important;
+  min-height: auto !important;
+  border-radius: 12px;
+}
+
+.collapsedColorSwatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 10px;
+}
+
+.portCountIndicator {
+  position: absolute;
+  top: -6px;
+  font-size: 0.5rem;
+  font-weight: 700;
+  color: #4cc9f0;
+  background: #0d1117;
+  border: 1px solid #2d4059;
+  border-radius: 6px;
+  padding: 0 3px;
+  line-height: 12px;
+}

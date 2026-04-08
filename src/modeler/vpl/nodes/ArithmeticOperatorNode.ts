@@ -6,8 +6,8 @@ export const ArithmeticOperatorNode: NodeTypeDef = {
   category: 'logic',
   color: '#b8860b',
   ports: [
-    { id: 'x', label: 'X', kind: 'input', category: 'value', dataType: 'any' },
-    { id: 'y', label: 'Y', kind: 'input', category: 'value', dataType: 'any' },
+    { id: 'x', label: 'X', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '0' },
+    { id: 'y', label: 'Y', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '0' },
     { id: 'result', label: 'Result', kind: 'output', category: 'value', dataType: 'any' },
   ],
   defaultConfig: { operation: '+' },

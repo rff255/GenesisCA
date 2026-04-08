@@ -7,7 +7,7 @@ export const SetAttributeNode: NodeTypeDef = {
   color: '#4a148c',
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
-    { id: 'value', label: 'Value', kind: 'input', category: 'value', dataType: 'any' },
+    { id: 'value', label: 'Value', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '0' },
   ],
   defaultConfig: { attributeId: '' },
   compile: (nodeId, config, inputs) => {

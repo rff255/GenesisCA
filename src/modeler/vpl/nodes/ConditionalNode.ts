@@ -7,7 +7,7 @@ export const ConditionalNode: NodeTypeDef = {
   color: '#1b5e20',
   ports: [
     { id: 'check', label: 'CHECK', kind: 'input', category: 'flow' },
-    { id: 'condition', label: 'IF', kind: 'input', category: 'value', dataType: 'bool' },
+    { id: 'condition', label: 'IF', kind: 'input', category: 'value', dataType: 'bool', inlineWidget: 'bool', defaultValue: 'false' },
     { id: 'then', label: 'THEN', kind: 'output', category: 'flow' },
     { id: 'else', label: 'ELSE', kind: 'output', category: 'flow' },
   ],

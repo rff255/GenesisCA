@@ -1,11 +1,12 @@
-import { memo, useCallback } from 'react';
-import { Handle, Position, useReactFlow } from '@xyflow/react';
+import { memo, useCallback, useState, useMemo } from 'react';
+import { Handle, Position, useReactFlow, useStore } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
 import { handleId } from './types';
 import type { NodeConfig } from './types';
 import type { MacroPort } from '../../model/types';
 import { useModel } from '../../model/ModelContext';
+import { isConnectingGlobal } from './graphState';
 import styles from './CaNode.module.css';
 
 interface CaNodeData {
@@ -152,14 +153,127 @@ function CaNodeComponent({ id, data }: NodeProps) {
     }
   }
 
+  // Detect which input ports are connected (for inline widget visibility)
+  const connectedInputHandles = useStore(
+    useCallback(
+      (state: { edges: Array<{ target: string; targetHandle?: string | null }> }) =>
+        new Set(
+          state.edges
+            .filter(e => e.target === id)
+            .map(e => e.targetHandle ?? ''),
+        ),
+      [id],
+    ),
+  );
+
+  // Build a map of all port definitions for inline widget lookup
+  const allInputPortDefs = useMemo(() => {
+    if (!def) return new Map<string, typeof inputPorts[0]>();
+    return new Map(def.ports.filter(p => p.kind === 'input').map(p => [p.id, p]));
+  }, [def]);
+
   const userLabel = nodeData.label as string | undefined;
+  const isCollapsed = !!nodeData.isCollapsed;
+
+  // Hover-to-uncollapse: temporarily expand when a connection is being dragged over
+  const [hoverExpand, setHoverExpand] = useState(false);
+  const onMouseEnter = useCallback(() => {
+    if (isCollapsed && isConnectingGlobal) setHoverExpand(true);
+  }, [isCollapsed]);
+  const onMouseLeave = useCallback(() => {
+    if (hoverExpand) setHoverExpand(false);
+  }, [hoverExpand]);
+
+  const showExpanded = !isCollapsed || hoverExpand;
 
   // Dynamic height to fit all ports
   const maxPorts = Math.max(inputPorts.length, outputPorts.length);
-  const nodeMinHeight = Math.max(50, 30 + maxPorts * 22 + 10);
+  const nodeMinHeight = showExpanded ? Math.max(50, 30 + maxPorts * 22 + 10) : undefined;
+
+  // --- Collapsed rendering ---
+  if (!showExpanded) {
+    const isConstant = nodeData.nodeType === 'getConstant';
+    const isColorConstant = nodeData.nodeType === 'getColorConstant';
+    const totalInputs = inputPorts.length;
+    const totalOutputs = outputPorts.length;
+
+    // Display text for collapsed node
+    let collapsedLabel: string;
+    if (isConstant) {
+      const cType = nodeData.config.constType as string;
+      const cVal = nodeData.config.constValue as string;
+      if (cType === 'bool') collapsedLabel = cVal === 'true' ? 'True' : 'False';
+      else collapsedLabel = cVal || '0';
+    } else {
+      collapsedLabel = userLabel || def.label;
+    }
+
+    // Color swatch for collapsed color constant
+    const colorSwatchHex = isColorConstant
+      ? `rgb(${nodeData.config.r || 128},${nodeData.config.g || 128},${nodeData.config.b || 128})`
+      : undefined;
+
+    return (
+      <div
+        className={`${styles.node} ${isConstant || isColorConstant ? styles.collapsedConstant : styles.collapsed}`}
+        style={{ borderColor: def.color }}
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={onMouseLeave}
+      >
+        {isColorConstant ? (
+          <div className={styles.collapsedColorSwatch} style={{ background: colorSwatchHex }} />
+        ) : (
+          <div className={styles.collapsedHeader} style={{ background: def.color }}>
+            {collapsedLabel}
+          </div>
+        )}
+
+        {/* Handles at center — still needed for edges */}
+        {inputPorts.map(port => (
+          <Handle
+            key={handleId(port)}
+            type="target"
+            position={Position.Left}
+            id={handleId(port)}
+            className={port.category === 'flow' ? styles.handleFlow : styles.handleValue}
+            style={{ top: '50%' }}
+            title={port.label}
+          />
+        ))}
+        {outputPorts.map(port => (
+          <Handle
+            key={handleId(port)}
+            type="source"
+            position={Position.Right}
+            id={handleId(port)}
+            className={port.category === 'flow' ? styles.handleFlow : styles.handleValue}
+            style={{ top: '50%' }}
+            title={port.label}
+          />
+        ))}
+
+        {/* Port count indicators */}
+        {totalInputs > 1 && (
+          <div className={styles.portCountIndicator} style={{ left: -2 }}>
+            {totalInputs}
+          </div>
+        )}
+        {totalOutputs > 1 && (
+          <div className={styles.portCountIndicator} style={{ right: -2 }}>
+            {totalOutputs}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
-    <div className={styles.node} style={{ borderColor: def.color, minHeight: nodeMinHeight }}>
+    <div
+      className={styles.node}
+      style={{ borderColor: def.color, minHeight: nodeMinHeight }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
       {userLabel && (
         <div className={styles.userLabel}>{userLabel}</div>
       )}
@@ -297,20 +411,46 @@ function CaNodeComponent({ id, data }: NodeProps) {
           </select>
         )}
 
-        {nodeData.nodeType === 'setColorViewer' && (
-          <select
-            className={styles.select}
-            value={(nodeData.config.mappingId as string) || ''}
-            onChange={e => updateConfig('mappingId', e.target.value)}
-          >
-            <option value="">Select Mapping...</option>
-            {model.mappings
-              .filter(m => m.isAttributeToColor)
-              .map(m => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
-          </select>
-        )}
+        {nodeData.nodeType === 'setColorViewer' && (() => {
+          const pr = parseInt(String(nodeData.config._port_r ?? '0'), 10) || 0;
+          const pg = parseInt(String(nodeData.config._port_g ?? '0'), 10) || 0;
+          const pb = parseInt(String(nodeData.config._port_b ?? '0'), 10) || 0;
+          const hex = `#${Math.min(255, Math.max(0, pr)).toString(16).padStart(2, '0')}${Math.min(255, Math.max(0, pg)).toString(16).padStart(2, '0')}${Math.min(255, Math.max(0, pb)).toString(16).padStart(2, '0')}`;
+          return (
+            <>
+              <select
+                className={styles.select}
+                value={(nodeData.config.mappingId as string) || ''}
+                onChange={e => updateConfig('mappingId', e.target.value)}
+              >
+                <option value="">Select Mapping...</option>
+                {model.mappings
+                  .filter(m => m.isAttributeToColor)
+                  .map(m => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+              </select>
+              <input
+                type="color"
+                className={styles.input}
+                style={{ height: 24, padding: 1, cursor: 'pointer' }}
+                value={hex}
+                onChange={e => {
+                  const h = e.target.value;
+                  const nr = parseInt(h.slice(1, 3), 16);
+                  const ng = parseInt(h.slice(3, 5), 16);
+                  const nb = parseInt(h.slice(5, 7), 16);
+                  updateNodeData(id, {
+                    ...nodeData,
+                    config: { ...nodeData.config, _port_r: String(nr), _port_g: String(ng), _port_b: String(nb) },
+                  });
+                }}
+                onClick={e => e.stopPropagation()}
+                title="Default color (overridden per-channel by connections)"
+              />
+            </>
+          );
+        })()}
 
         {nodeData.nodeType === 'inputColor' && (
           <select
@@ -374,19 +514,43 @@ function CaNodeComponent({ id, data }: NodeProps) {
           </>
         )}
 
-        {nodeData.nodeType === 'getColorConstant' && (
-          <>
-            <input className={styles.input} type="number" placeholder="R" min={0} max={255}
-              value={(nodeData.config.r as string) || '128'}
-              onChange={e => updateConfig('r', e.target.value)} />
-            <input className={styles.input} type="number" placeholder="G" min={0} max={255}
-              value={(nodeData.config.g as string) || '128'}
-              onChange={e => updateConfig('g', e.target.value)} />
-            <input className={styles.input} type="number" placeholder="B" min={0} max={255}
-              value={(nodeData.config.b as string) || '128'}
-              onChange={e => updateConfig('b', e.target.value)} />
-          </>
-        )}
+        {nodeData.nodeType === 'getColorConstant' && (() => {
+          const r = parseInt(String(nodeData.config.r ?? '128'), 10) || 0;
+          const g = parseInt(String(nodeData.config.g ?? '128'), 10) || 0;
+          const b = parseInt(String(nodeData.config.b ?? '128'), 10) || 0;
+          const hex = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+          return (
+            <>
+              <input
+                type="color"
+                className={styles.input}
+                style={{ height: 24, padding: 1, cursor: 'pointer' }}
+                value={hex}
+                onChange={e => {
+                  const h = e.target.value;
+                  const nr = parseInt(h.slice(1, 3), 16);
+                  const ng = parseInt(h.slice(3, 5), 16);
+                  const nb = parseInt(h.slice(5, 7), 16);
+                  // Batch update r, g, b
+                  updateNodeData(id, {
+                    ...nodeData,
+                    config: { ...nodeData.config, r: String(nr), g: String(ng), b: String(nb) },
+                  });
+                }}
+                onClick={e => e.stopPropagation()}
+              />
+              <input className={styles.input} type="number" placeholder="R" min={0} max={255}
+                value={(nodeData.config.r as string) || '128'}
+                onChange={e => updateConfig('r', e.target.value)} />
+              <input className={styles.input} type="number" placeholder="G" min={0} max={255}
+                value={(nodeData.config.g as string) || '128'}
+                onChange={e => updateConfig('g', e.target.value)} />
+              <input className={styles.input} type="number" placeholder="B" min={0} max={255}
+                value={(nodeData.config.b as string) || '128'}
+                onChange={e => updateConfig('b', e.target.value)} />
+            </>
+          );
+        })()}
 
         {nodeData.nodeType === 'arithmeticOperator' && (
           <select
@@ -496,18 +660,69 @@ function CaNodeComponent({ id, data }: NodeProps) {
         })()}
       </div>
 
-      {/* Input handles (left side) */}
-      {inputPorts.map((port, i) => (
-        <Handle
-          key={handleId(port)}
-          type="target"
-          position={Position.Left}
-          id={handleId(port)}
-          className={port.category === 'flow' ? styles.handleFlow : styles.handleValue}
-          style={{ top: `${30 + i * 22}px` }}
-          title={port.label}
-        />
-      ))}
+      {/* Input handles (left side) + external inline widgets */}
+      {inputPorts.map((port, i) => {
+        const portDef = allInputPortDefs.get(port.id) ?? port;
+        const hid = handleId(port);
+        const isConnected = connectedInputHandles.has(hid);
+        const topPx = 30 + i * 22;
+
+        // Determine effective widget type (dynamic for attribute-dependent nodes)
+        let effectiveWidget = portDef.inlineWidget;
+        if (effectiveWidget && (nodeData.nodeType === 'setAttribute') && port.id === 'value') {
+          const attrId = nodeData.config.attributeId as string;
+          const attr = attrId ? model.attributes.find(a => a.id === attrId) : undefined;
+          if (!attr) {
+            effectiveWidget = undefined; // No attribute selected → no widget
+          } else if (attr.type === 'bool') {
+            effectiveWidget = 'bool';
+          } else if (attr.type === 'integer' || attr.type === 'float') {
+            effectiveWidget = 'number';
+          } else {
+            effectiveWidget = undefined; // list/tag → too complex
+          }
+        }
+
+        const showWidget = effectiveWidget && !isConnected && port.category === 'value';
+        const configKey = `_port_${port.id}`;
+        const val = (nodeData.config[configKey] as string) ?? portDef.defaultValue ?? '';
+
+        return (
+          <div key={hid}>
+            <Handle
+              type="target"
+              position={Position.Left}
+              id={hid}
+              className={port.category === 'flow' ? styles.handleFlow : styles.handleValue}
+              style={{ top: `${topPx}px` }}
+              title={port.label}
+            />
+            {showWidget && (
+              <div className={styles.inlineWidgetWrapper} style={{ top: `${topPx}px` }}>
+                {effectiveWidget === 'bool' ? (
+                  <select
+                    className={styles.inlineWidget}
+                    value={val === 'true' ? 'true' : 'false'}
+                    onChange={e => updateConfig(configKey, e.target.value)}
+                    onClick={e => e.stopPropagation()}
+                  >
+                    <option value="true">True</option>
+                    <option value="false">False</option>
+                  </select>
+                ) : (
+                  <input
+                    className={styles.inlineWidget}
+                    type="number"
+                    value={val}
+                    onChange={e => updateConfig(configKey, e.target.value)}
+                    onClick={e => e.stopPropagation()}
+                  />
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
 
       {/* Output handles (right side) */}
       {outputPorts.map((port, i) => (
@@ -525,9 +740,21 @@ function CaNodeComponent({ id, data }: NodeProps) {
       {/* Port labels */}
       <div className={styles.portLabels}>
         <div className={styles.inputLabels}>
-          {inputPorts.map(p => (
-            <div key={p.id} className={styles.portLabel}>{p.label}</div>
-          ))}
+          {inputPorts.map(p => {
+            const hid = handleId(p);
+            const isConnected = connectedInputHandles.has(hid);
+            const portDef = allInputPortDefs.get(p.id) ?? p;
+            // Determine if inline widget is showing (same logic as above)
+            let ew = portDef.inlineWidget;
+            if (ew && nodeData.nodeType === 'setAttribute' && p.id === 'value') {
+              const attrId = nodeData.config.attributeId as string;
+              const attr = attrId ? model.attributes.find(a => a.id === attrId) : undefined;
+              if (!attr || (attr.type !== 'bool' && attr.type !== 'integer' && attr.type !== 'float')) ew = undefined;
+            }
+            const hasWidget = ew && !isConnected && p.category === 'value';
+            // Hide label when inline widget is shown (widget is outside the node)
+            return <div key={p.id} className={styles.portLabel}>{hasWidget ? '' : p.label}</div>;
+          })}
         </div>
         <div className={styles.outputLabels}>
           {outputPorts.map(p => (

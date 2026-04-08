@@ -64,11 +64,7 @@ export function FileMenu() {
         style={{ display: 'none' }}
         onChange={handleFileChange}
       />
-      {isDirty && (
-        <span className={styles.dirtyIndicator} title="Unsaved changes">
-          *
-        </span>
-      )}
+      {/* Dirty indicator moved to model name in navbar */}
     </div>
   );
 }

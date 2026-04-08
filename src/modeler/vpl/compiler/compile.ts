@@ -1,6 +1,26 @@
 import type { GraphNode, GraphEdge, CAModel } from '../../../model/types';
 import { getNodeDef } from '../nodes/registry';
 import { parseHandleId } from '../types';
+import type { PortDef } from '../types';
+
+/**
+ * Get the inline widget value for an unconnected port.
+ * Returns the literal string if the port has an inline widget and a value is set in config,
+ * otherwise returns undefined.
+ */
+function getInlineValue(port: PortDef, config: Record<string, string | number | boolean>): string | undefined {
+  if (!port.inlineWidget) return undefined;
+  const configKey = `_port_${port.id}`;
+  const val = config[configKey];
+  if (val === undefined || val === '') {
+    return port.defaultValue;
+  }
+  const s = String(val);
+  if (port.inlineWidget === 'bool') {
+    return s === 'true' ? '1' : '0';
+  }
+  return s;
+}
 
 // ---------------------------------------------------------------------------
 // Graph adjacency helpers
@@ -182,6 +202,12 @@ function compileRoot(
         if (src) {
           compileInnerValueNode(src.nodeId);
           iInputVars[port.id] = innerVarName(src.nodeId, src.portId);
+        } else {
+          const iNode2 = inner.nodeMap.get(innerNodeId);
+          if (iNode2) {
+            const inlineVal = getInlineValue(port, iNode2.data.config);
+            if (inlineVal !== undefined) iInputVars[port.id] = inlineVal;
+          }
         }
       }
 
@@ -311,6 +337,12 @@ function compileRoot(
         if (src) {
           compileNestedNode(src.nodeId);
           iInputVars[port.id] = nestedVarName(src.nodeId, src.portId);
+        } else {
+          const nNode = nestedInner.nodeMap.get(nid);
+          if (nNode) {
+            const inlineVal = getInlineValue(port, nNode.data.config);
+            if (inlineVal !== undefined) iInputVars[port.id] = inlineVal;
+          }
         }
       }
       const code = iDef.compile(nid, iNode.data.config, iInputVars);
@@ -380,6 +412,9 @@ function compileRoot(
       if (source) {
         compileValueNode(source.nodeId);
         inputVars[port.id] = varName(source.nodeId, source.portId);
+      } else {
+        const inlineVal = getInlineValue(port, node.data.config);
+        if (inlineVal !== undefined) inputVars[port.id] = inlineVal;
       }
     }
 
@@ -502,7 +537,14 @@ function compileRoot(
 
         if (nt === 'conditional') {
           const condSrc = inner.inputToSource.get(`${iNode.id}:condition`);
-          const condVar = condSrc ? innerFlowVarName(condSrc.nodeId, condSrc.portId) : 'false';
+          let condVar: string;
+          if (condSrc) {
+            condVar = innerFlowVarName(condSrc.nodeId, condSrc.portId);
+          } else {
+            const condPort = iDef.ports.find(p => p.id === 'condition');
+            const inlineVal = condPort ? getInlineValue(condPort, iNode.data.config) : undefined;
+            condVar = inlineVal ?? 'false';
+          }
           const hasElse = inner.flowOutputToTargets.has(`${iNode.id}:else`);
           flowLines.push(`${ind}if (${condVar}) {`);
           compileInnerFlow(iNode.id, 'then', ind + '  ');
@@ -516,7 +558,14 @@ function compileRoot(
           compileInnerFlow(iNode.id, 'then', ind);
         } else if (nt === 'loop') {
           const countSrc = inner.inputToSource.get(`${iNode.id}:count`);
-          const countVar = countSrc ? innerFlowVarName(countSrc.nodeId, countSrc.portId) : '0';
+          let countVar: string;
+          if (countSrc) {
+            countVar = innerFlowVarName(countSrc.nodeId, countSrc.portId);
+          } else {
+            const countPort = iDef.ports.find(p => p.id === 'count');
+            const inlineVal = countPort ? getInlineValue(countPort, iNode.data.config) : undefined;
+            countVar = inlineVal ?? '0';
+          }
           const loopVar = `${prefix}_li${iNode.id}`;
           flowLines.push(`${ind}for (let ${loopVar} = 0; ${loopVar} < ${countVar}; ${loopVar}++) {`);
           compileInnerFlow(iNode.id, 'body', ind + '  ');
@@ -529,6 +578,9 @@ function compileRoot(
             const src = inner.inputToSource.get(`${iNode.id}:${port.id}`);
             if (src) {
               iInputVars[port.id] = innerFlowVarName(src.nodeId, src.portId);
+            } else {
+              const inlineVal = getInlineValue(port, iNode.data.config);
+              if (inlineVal !== undefined) iInputVars[port.id] = inlineVal;
             }
           }
           const code = iDef.compile(iNode.id, iNode.data.config, iInputVars);
@@ -569,7 +621,14 @@ function compileRoot(
 
       if (node.data.nodeType === 'conditional') {
         const condSource = inputToSource.get(`${node.id}:condition`);
-        const condVar = condSource ? varName(condSource.nodeId, condSource.portId) : 'false';
+        let condVar: string;
+        if (condSource) {
+          condVar = varName(condSource.nodeId, condSource.portId);
+        } else {
+          const condPort = def.ports.find(p => p.id === 'condition');
+          const inlineVal = condPort ? getInlineValue(condPort, node.data.config) : undefined;
+          condVar = inlineVal ?? 'false';
+        }
         const hasElse = flowOutputToTargets.has(`${node.id}:else`);
         flowLines.push(`${indent}if (${condVar}) {`);
         compileFlowChain(node.id, 'then', indent + '  ');
@@ -583,7 +642,14 @@ function compileRoot(
         compileFlowChain(node.id, 'then', indent);
       } else if (node.data.nodeType === 'loop') {
         const countSource = inputToSource.get(`${node.id}:count`);
-        const countVar = countSource ? varName(countSource.nodeId, countSource.portId) : '0';
+        let countVar: string;
+        if (countSource) {
+          countVar = varName(countSource.nodeId, countSource.portId);
+        } else {
+          const countPort = def.ports.find(p => p.id === 'count');
+          const inlineVal = countPort ? getInlineValue(countPort, node.data.config) : undefined;
+          countVar = inlineVal ?? '0';
+        }
         flowLines.push(`${indent}for (let _li${node.id} = 0; _li${node.id} < ${countVar}; _li${node.id}++) {`);
         compileFlowChain(node.id, 'body', indent + '  ');
         flowLines.push(`${indent}}`);
@@ -599,6 +665,9 @@ function compileRoot(
           const source = inputToSource.get(`${node.id}:${port.id}`);
           if (source) {
             inputVars[port.id] = varName(source.nodeId, source.portId);
+          } else {
+            const inlineVal = getInlineValue(port, node.data.config);
+            if (inlineVal !== undefined) inputVars[port.id] = inlineVal;
           }
         }
         const code = def.compile(node.id, node.data.config, inputVars);

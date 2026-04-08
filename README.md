@@ -65,10 +65,13 @@ A complete GenesisCA model definition consists of:
 - **Attributes Panel** — cell and model attributes with type-specific default value controls
 - **Neighborhoods Panel** — interactive grid editor for defining spatial neighborhoods
 - **Mappings Panel** — Attribute-to-Color and Color-to-Attribute mapping definitions
-- **Graph Editor** — 21 node types across 6 categories (flow, data, logic, aggregation, output, color)
+- **Graph Editor** — 21 node types across 6 categories (flow, data, logic, aggregation, output, color), with RMB pan, scroll zoom, and snap-to-grid
+- **Inline Port Widgets** — input ports show small value editors (number/bool) when unconnected, eliminating the need for constant nodes in simple cases
+- **Node Collapse/Expand** — double-click any node to collapse it; constants show their value; collapsed nodes temporarily expand when connecting edges
+- **Color Pickers** — Color Constant and Set Color Viewer nodes include hex color pickers with per-channel R/G/B controls
 - **Macro System** — encapsulate node groups into reusable subgraphs with MacroInput/MacroOutput boundary nodes
-- **Copy/Paste** — Ctrl+C/V/X and context menu with full ID remapping
-- **Groups & Comments** — visual organization tools
+- **Copy/Paste/Duplicate** — Ctrl+C/V/X/D, context menu on single nodes and selections, paste at right-click location
+- **Groups & Comments** — visual organization tools; Undo Group dissolves a group and selects all contained nodes
 
 ### The Simulator
 - **Play/Pause/Step/Reset** with FPS and Gens/Frame sliders (+ unlimited modes)
@@ -82,6 +85,8 @@ A complete GenesisCA model definition consists of:
 ### Help & Library
 - **Comprehensive Help tab** — 8 sections covering all features with sidebar navigation
 - **Models Library** — pre-made models loaded from the repository, no manual index required
+- **First launch** — automatically loads Game of Life as a demo; "New" creates a blank model
+- **GitHub link** — accessible from the navbar and Help page
 
 ---
 
@@ -95,6 +100,9 @@ A complete GenesisCA model definition consists of:
 
 **Models Library** — Pre-made models to explore and learn from:
 ![Library](docs/screenshots/2026%2004%2007%20-%20Library.png)
+
+**Other Images**
+![Coagulation](docs/screenshots/2026_04_07-Coagulation.png)
 
 ---
 

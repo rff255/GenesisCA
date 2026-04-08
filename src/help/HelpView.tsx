@@ -52,6 +52,17 @@ export function HelpView() {
             de Pernambuco (UFPE, Brazil) in 2017, the application has been rewritten from
             scratch as a modern web application.
           </p>
+          <p className={styles.p}>
+            The source code is available on{' '}
+            <a
+              href="https://github.com/rff255/GenesisCA"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#4cc9f0' }}
+            >
+              GitHub
+            </a>.
+          </p>
         </section>
 
         {/* ============================================================ */}
@@ -140,8 +151,45 @@ export function HelpView() {
           </p>
           <p className={styles.p}>
             <strong>Value ports</strong> (blue circles) carry data. <strong>Flow
-            ports</strong> (green circles) control execution order. Right-click on the
-            canvas to add nodes, or on nodes/selections for more options.
+            ports</strong> (green circles) control execution order.
+          </p>
+
+          <h3 className={styles.h3}>Canvas Controls</h3>
+          <ul className={styles.list}>
+            <li><strong>Right-click drag</strong> &mdash; Pan the canvas.</li>
+            <li><strong>Scroll wheel</strong> &mdash; Zoom in/out.</li>
+            <li><strong>Left-click drag</strong> (on empty area) &mdash; Box select nodes.</li>
+            <li><strong>Left-click drag</strong> (on node) &mdash; Move node.</li>
+            <li><strong>Ctrl + click</strong> &mdash; Add/remove from selection.</li>
+            <li><strong>Right-click</strong> (on canvas) &mdash; Context menu: Paste, Add Comment, Add Node submenu.</li>
+            <li><strong>Right-click</strong> (on node) &mdash; Node options: Rename, Duplicate, Copy, Cut, Delete. Macros also show Enter Macro and Undo Macro.</li>
+            <li><strong>Right-click</strong> (on selection) &mdash; Selection options: Duplicate, Copy, Cut, Paste, Create Macro, Create Group.</li>
+            <li><strong>Right-click</strong> (on group) &mdash; Group options: Rename, Undo Group, Delete.</li>
+          </ul>
+
+          <h3 className={styles.h3}>Node Collapse &amp; Expand</h3>
+          <p className={styles.p}>
+            <strong>Double-click</strong> any non-macro node to collapse it into a compact
+            form showing only its title (or value for constants). Double-click again to expand.
+            Edges remain connected to collapsed nodes. When dragging a new connection near
+            a collapsed node, it temporarily expands to reveal its ports.
+          </p>
+
+          <h3 className={styles.h3}>Inline Port Widgets</h3>
+          <p className={styles.p}>
+            Input ports on many nodes (Math, Compare, Logic, Loop, Set Attribute, Set Color
+            Viewer) have small inline value editors that appear to the left of the port when
+            it is not connected. This lets you set constant values directly without needing
+            a separate Constant node. When you connect a wire to the port, the inline widget
+            disappears and the connected value takes over.
+          </p>
+
+          <h3 className={styles.h3}>Groups</h3>
+          <p className={styles.p}>
+            Select 2+ nodes and right-click &rarr; &quot;Create Group&quot; to visually
+            organize them. Groups have a draggable header with a label and color picker.
+            Right-click a group and choose &quot;Undo Group&quot; to dissolve it (all
+            contained nodes are selected for easy repositioning).
           </p>
         </section>
 
@@ -257,7 +305,8 @@ export function HelpView() {
           <h3 className={styles.h3}>Undoing a Macro</h3>
           <p className={styles.p}>
             Right-click a Macro node and choose &quot;Undo Macro&quot; to inline its
-            contents back into the parent graph.
+            contents back into the parent graph. All restored nodes are automatically
+            selected for easy repositioning.
           </p>
         </section>
 
@@ -317,13 +366,17 @@ export function HelpView() {
             <thead><tr><th>Shortcut</th><th>Action</th></tr></thead>
             <tbody>
               <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>C</kbd></td><td>Copy selected nodes</td></tr>
-              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>V</kbd></td><td>Paste</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>V</kbd></td><td>Paste (at viewport center)</td></tr>
               <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>X</kbd></td><td>Cut selected nodes</td></tr>
-              <tr><td><kbd className={styles.kbd}>Delete</kbd></td><td>Delete selected nodes</td></tr>
-              <tr><td>Right-click (canvas)</td><td>Add Node menu</td></tr>
-              <tr><td>Right-click (node)</td><td>Node options (rename, duplicate, delete)</td></tr>
-              <tr><td>Right-click (selection)</td><td>Selection options (copy, cut, create macro/group)</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>D</kbd></td><td>Duplicate selected nodes</td></tr>
+              <tr><td><kbd className={styles.kbd}>Delete</kbd> / <kbd className={styles.kbd}>Backspace</kbd></td><td>Delete selected nodes</td></tr>
+              <tr><td>Right-click drag</td><td>Pan the canvas</td></tr>
+              <tr><td>Scroll wheel</td><td>Zoom in/out</td></tr>
+              <tr><td>Double-click (node)</td><td>Collapse / expand node</td></tr>
               <tr><td>Double-click (macro)</td><td>Enter macro subgraph</td></tr>
+              <tr><td>Right-click (canvas)</td><td>Context menu: Paste, Add Comment, Add Node</td></tr>
+              <tr><td>Right-click (node)</td><td>Rename, Duplicate, Copy, Cut, Delete</td></tr>
+              <tr><td>Right-click (selection)</td><td>Duplicate, Copy, Cut, Create Macro/Group</td></tr>
             </tbody>
           </table>
 

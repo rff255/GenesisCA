@@ -15,8 +15,6 @@
   min-width: 180px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
   z-index: 100;
-  max-height: 400px;
-  overflow-y: auto;
 }
 
 .contextTitle {
@@ -64,6 +62,30 @@
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+.contextSubmenuTrigger {
+  position: relative;
+}
+
+.contextSubmenu {
+  display: none;
+  position: absolute;
+  left: 100%;
+  top: 0;
+  background: #1e2a3a;
+  border: 1px solid #2d4059;
+  border-radius: 6px;
+  padding: 6px 0;
+  min-width: 180px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  z-index: 101;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.contextSubmenuTrigger:hover > .contextSubmenu {
+  display: block;
 }
 
 /* Breadcrumb */
@@ -145,4 +167,13 @@
   outline: 2px solid #ff6b6b;
   outline-offset: 2px;
   border-radius: 6px;
+}
+
+/* Let RMB drag pass through group node body to canvas for panning */
+:global(.react-flow__node-groupNode) {
+  pointer-events: none !important;
+}
+:global(.react-flow__node-groupNode) [data-drag-handle],
+:global(.react-flow__node-groupNode) .react-flow__resize-control {
+  pointer-events: auto !important;
 }

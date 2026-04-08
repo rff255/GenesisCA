@@ -34,6 +34,8 @@ const nodeTypes: NodeTypes = {
 
 let clipboard: { nodes: GraphNode[]; edges: GraphEdge[] } | null = null;
 
+import { setIsConnecting } from './graphState';
+
 // ---------------------------------------------------------------------------
 // ID generation
 // ---------------------------------------------------------------------------
@@ -64,6 +66,7 @@ function toRFNodes(graphNodes: GraphNode[]): Node[] {
     if (n.type === 'groupNode') {
       rfNode.style = { width: (d.width as number) || 300, height: (d.height as number) || 200 };
       rfNode.zIndex = -1;
+      rfNode.dragHandle = '[data-drag-handle]';
     }
     return rfNode;
   });
@@ -124,13 +127,16 @@ interface ContextMenuState {
 // ---------------------------------------------------------------------------
 
 function GraphEditorInner() {
-  const { model, setGraph, addMacro, updateMacro, removeMacro } = useModel();
+  const { model, modelVersion, setGraph, addMacro, updateMacro, removeMacro } = useModel();
   const [nodes, setNodes, onNodesChange] = useNodesState(toRFNodes(model.graphNodes));
   const [edges, setEdges, onEdgesChange] = useEdgesState(toRFEdges(model.graphEdges));
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [currentScope, setCurrentScope] = useState<string[]>(['root']);
   const rfInstance = useRef<ReactFlowInstance | null>(null);
-  const { deleteElements, getNodes } = useReactFlow();
+  const { deleteElements, getNodes, updateNodeData } = useReactFlow();
+
+  // Ref for paste position (flow coords of last right-click or viewport center for Ctrl+V)
+  const pasteFlowPos = useRef<{ x: number; y: number } | null>(null);
 
   // Refs for debounced sync
   const nodesRef = useRef(nodes);
@@ -177,7 +183,7 @@ function GraphEditorInner() {
     // Fit view after scope change
     setTimeout(() => rfInstance.current?.fitView(), 50);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentScope]);
+  }, [currentScope, modelVersion]);
 
   // --- Connection handler ---
   const onConnect = useCallback(
@@ -348,6 +354,7 @@ function GraphEditorInner() {
         target = { type: 'pane' };
       }
 
+      pasteFlowPos.current = { x: position.x, y: position.y };
       setContextMenu({
         x: event.clientX - bounds.left,
         y: event.clientY - bounds.top,
@@ -460,6 +467,48 @@ function GraphEditorInner() {
 
   const handlePaste = useCallback(() => {
     if (!clipboard || clipboard.nodes.length === 0) return;
+
+    // Compute clipboard bounding-box center (top-level nodes only)
+    const topLevel = clipboard.nodes.filter(n => {
+      const d = n.data as Record<string, unknown>;
+      return !d.parentId;
+    });
+    let cx = 0, cy = 0;
+    if (topLevel.length > 0) {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const n of topLevel) {
+        minX = Math.min(minX, n.position.x);
+        minY = Math.min(minY, n.position.y);
+        maxX = Math.max(maxX, n.position.x + 200);
+        maxY = Math.max(maxY, n.position.y + 100);
+      }
+      cx = (minX + maxX) / 2;
+      cy = (minY + maxY) / 2;
+    }
+
+    // Determine paste target position
+    let target: { x: number; y: number };
+    if (pasteFlowPos.current) {
+      target = pasteFlowPos.current;
+      pasteFlowPos.current = null;
+    } else {
+      // Ctrl+V: use viewport center
+      const rf = rfInstance.current;
+      if (rf) {
+        const vp = rf.getViewport();
+        const bounds = document.querySelector('.react-flow')?.getBoundingClientRect();
+        if (bounds) {
+          target = rf.screenToFlowPosition({ x: bounds.width / 2, y: bounds.height / 2 });
+        } else {
+          target = { x: cx + 30, y: cy + 30 };
+        }
+      } else {
+        target = { x: cx + 30, y: cy + 30 };
+      }
+    }
+    const offsetX = target.x - cx;
+    const offsetY = target.y - cy;
+
     // Build old → new ID mapping
     const idMap = new Map<string, string>();
     const existingIds = new Set(nodes.map(n => n.id));
@@ -474,7 +523,6 @@ function GraphEditorInner() {
 
     const pastedRFNodes: Node[] = clipboard.nodes.map(n => {
       const clonedData = JSON.parse(JSON.stringify(n.data)) as Record<string, unknown>;
-      // Remap parentId to the new group ID
       const oldParentId = clonedData.parentId as string | undefined;
       const newParentId = oldParentId ? idMap.get(oldParentId) : undefined;
       if (newParentId) {
@@ -485,14 +533,13 @@ function GraphEditorInner() {
       return {
         id: idMap.get(n.id)!,
         type: n.type === 'groupNode' ? 'groupNode' : n.type === 'commentNode' ? 'commentNode' : 'caNode',
-        // Only offset top-level nodes; children keep their relative position inside the group
         position: newParentId
           ? { x: n.position.x, y: n.position.y }
-          : { x: n.position.x + 30, y: n.position.y + 30 },
+          : { x: n.position.x + offsetX, y: n.position.y + offsetY },
         data: clonedData,
         selected: true,
         ...(newParentId ? { parentId: newParentId } : {}),
-        ...(n.type === 'groupNode' ? { style: { width: (clonedData.width as number) || 300, height: (clonedData.height as number) || 200 }, zIndex: -1 } : {}),
+        ...(n.type === 'groupNode' ? { style: { width: (clonedData.width as number) || 300, height: (clonedData.height as number) || 200 }, zIndex: -1, dragHandle: '[data-drag-handle]' } : {}),
       };
     });
 
@@ -522,6 +569,74 @@ function GraphEditorInner() {
     scheduleSync();
   }, [nodes, setNodes, setEdges, scheduleSync]);
 
+  const duplicateSelection = useCallback(() => {
+    const selected = nodes.filter(n => n.selected);
+    if (selected.length === 0) return;
+    const selectedIds = new Set(selected.map(n => n.id));
+    const srcNodes = toGraphNodes(
+      selected.filter(n => {
+        const nt = (n.data as Record<string, unknown>)?.nodeType;
+        return nt !== 'macroInput' && nt !== 'macroOutput';
+      }),
+    );
+    const srcEdges = toGraphEdges(
+      edges.filter(e => selectedIds.has(e.source) && selectedIds.has(e.target)),
+    );
+    if (srcNodes.length === 0) return;
+
+    const idMap = new Map<string, string>();
+    const existingIds = new Set(nodes.map(n => n.id));
+    for (const n of srcNodes) {
+      let newId = `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+      while (existingIds.has(newId) || idMap.has(newId)) {
+        newId = `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+      }
+      idMap.set(n.id, newId);
+      existingIds.add(newId);
+    }
+
+    const dupeNodes: Node[] = srcNodes.map(n => {
+      const clonedData = JSON.parse(JSON.stringify(n.data)) as Record<string, unknown>;
+      const oldParentId = clonedData.parentId as string | undefined;
+      const newParentId = oldParentId ? idMap.get(oldParentId) : undefined;
+      if (newParentId) { clonedData.parentId = newParentId; } else { delete clonedData.parentId; }
+      return {
+        id: idMap.get(n.id)!,
+        type: n.type === 'groupNode' ? 'groupNode' : n.type === 'commentNode' ? 'commentNode' : 'caNode',
+        position: newParentId
+          ? { x: n.position.x, y: n.position.y }
+          : { x: n.position.x + 30, y: n.position.y + 30 },
+        data: clonedData,
+        selected: true,
+        ...(newParentId ? { parentId: newParentId } : {}),
+        ...(n.type === 'groupNode' ? { style: { width: (clonedData.width as number) || 300, height: (clonedData.height as number) || 200 }, zIndex: -1, dragHandle: '[data-drag-handle]' } : {}),
+      };
+    });
+
+    const ts = Date.now().toString(36);
+    const dupeEdges: Edge[] = srcEdges
+      .filter(e => idMap.has(e.source) && idMap.has(e.target))
+      .map((e, i) => ({
+        id: `e_${ts}_${i}_${Math.random().toString(36).slice(2, 5)}`,
+        source: idMap.get(e.source)!,
+        target: idMap.get(e.target)!,
+        sourceHandle: e.sourceHandle,
+        targetHandle: e.targetHandle,
+        style: { stroke: '#4cc9f0', strokeWidth: 2 },
+        animated: e.sourceHandle.includes('flow'),
+      }));
+
+    dupeNodes.sort((a, b) => {
+      if (a.type === 'groupNode' && b.parentId === a.id) return -1;
+      if (b.type === 'groupNode' && a.parentId === b.id) return 1;
+      return 0;
+    });
+
+    setNodes(nds => [...nds.map(n => ({ ...n, selected: false })), ...dupeNodes]);
+    setEdges(eds => [...eds, ...dupeEdges]);
+    scheduleSync();
+  }, [nodes, edges, setNodes, setEdges, scheduleSync]);
+
   const handleCut = useCallback(() => {
     handleCopy();
     // Delete selected (but not macroInput/macroOutput)
@@ -549,10 +664,11 @@ function GraphEditorInner() {
       if (mod && e.key === 'c') { handleCopy(); e.preventDefault(); }
       if (mod && e.key === 'v') { handlePaste(); e.preventDefault(); }
       if (mod && e.key === 'x') { handleCut(); e.preventDefault(); }
+      if (mod && e.key === 'd') { duplicateSelection(); e.preventDefault(); }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [handleCopy, handlePaste, handleCut]);
+  }, [handleCopy, handlePaste, handleCut, duplicateSelection]);
 
   const renameNode = useCallback(() => {
     if (!contextMenu || contextMenu.target.type !== 'node') return;
@@ -610,6 +726,7 @@ function GraphEditorInner() {
         data: { label: name, width: maxX - minX + pad * 2, height: maxY - minY + pad * 2 + 20, nodeType: 'group', config: {} },
         style: { width: maxX - minX + pad * 2, height: maxY - minY + pad * 2 + 20 },
         zIndex: -1,
+        dragHandle: '[data-drag-handle]',
       };
       // Reparent selected nodes
       const updated = nds.map(n => {
@@ -634,31 +751,38 @@ function GraphEditorInner() {
   const dismissGroup = useCallback(() => {
     if (!contextMenu || contextMenu.target.type !== 'node' || !contextMenu.target.isGroup) return;
     const groupId = contextMenu.target.nodeId;
-    const groupNode = nodes.find(n => n.id === groupId);
+    // Use getNodes() for fresh positions (avoids stale closure after auto-resize)
+    const freshNodes = getNodes();
+    const groupNode = freshNodes.find(n => n.id === groupId);
     if (!groupNode) return;
 
     setNodes(nds => {
-      // Convert child positions back to absolute
+      // Convert child positions back to absolute, select ungrouped children
+      // Use fresh child positions from getNodes() for accuracy
+      const freshMap = new Map(freshNodes.map(n => [n.id, n]));
       const updated = nds
         .filter(n => n.id !== groupId)
         .map(n => {
           if (n.parentId === groupId) {
+            const fresh = freshMap.get(n.id);
+            const childPos = fresh?.position ?? n.position;
             return {
               ...n,
               parentId: undefined,
+              selected: true,
               position: {
-                x: n.position.x + groupNode.position.x,
-                y: n.position.y + groupNode.position.y,
+                x: childPos.x + groupNode.position.x,
+                y: childPos.y + groupNode.position.y,
               },
             };
           }
-          return n;
+          return { ...n, selected: false };
         });
       return updated;
     });
     scheduleSync();
     setContextMenu(null);
-  }, [contextMenu, nodes, setNodes, scheduleSync]);
+  }, [contextMenu, getNodes, setNodes, scheduleSync]);
 
   // --- Macro actions ---
 
@@ -799,14 +923,22 @@ function GraphEditorInner() {
     setContextMenu(null);
   }, [contextMenu, nodes, edges, addMacro, setNodes, setEdges, scheduleSync]);
 
-  // Double-click macro to enter
+  // Track whether a connection is being dragged (for hover-to-uncollapse)
+  const isConnecting = useRef(false);
+  const onConnectStart = useCallback(() => { isConnecting.current = true; setIsConnecting(true); }, []);
+  const onConnectEnd = useCallback(() => { isConnecting.current = false; setIsConnecting(false); }, []);
+
+  // Double-click: enter macro or toggle collapse
   const onNodeDoubleClick = useCallback((_event: React.MouseEvent, node: Node) => {
     const nodeData = node.data as Record<string, unknown>;
     if (nodeData.nodeType === 'macro') {
       const macroDefId = (nodeData.config as Record<string, unknown>)?.macroDefId as string;
       if (macroDefId) setCurrentScope(prev => [...prev, macroDefId]);
+    } else if (node.type === 'caNode') {
+      updateNodeData(node.id, { ...node.data, isCollapsed: !nodeData.isCollapsed });
+      scheduleSync();
     }
-  }, []);
+  }, [updateNodeData, scheduleSync]);
 
   const navigateToScope = useCallback((index: number) => {
     setCurrentScope(prev => prev.slice(0, index + 1));
@@ -816,7 +948,9 @@ function GraphEditorInner() {
   const undoMacro = useCallback(() => {
     if (!contextMenu || contextMenu.target.type !== 'node' || !contextMenu.target.isMacro) return;
     const macroNodeId = contextMenu.target.nodeId;
-    const macroNode = nodes.find(n => n.id === macroNodeId);
+    // Use getNodes() for fresh positions (avoids stale closure)
+    const freshNodes = getNodes();
+    const macroNode = freshNodes.find(n => n.id === macroNodeId);
     if (!macroNode) { setContextMenu(null); return; }
 
     const nodeData = macroNode.data as Record<string, unknown>;
@@ -844,6 +978,7 @@ function GraphEditorInner() {
         type: n.type === 'groupNode' ? 'groupNode' : n.type === 'commentNode' ? 'commentNode' : 'caNode',
         position: { x: n.position.x + offsetX, y: n.position.y + offsetY },
         data: n.data,
+        selected: true,
       }));
 
     // Restore only internal edges (exclude bridging edges touching boundary nodes)
@@ -907,8 +1042,11 @@ function GraphEditorInner() {
       return null;
     }).filter(Boolean) as Edge[];
 
-    // Remove macro node and its edges, add restored subgraph
-    setNodes(nds => [...nds.filter(n => n.id !== macroNodeId), ...restoredRFNodes]);
+    // Remove macro node and its edges, add restored subgraph (select restored, deselect others)
+    setNodes(nds => [
+      ...nds.filter(n => n.id !== macroNodeId).map(n => ({ ...n, selected: false })),
+      ...restoredRFNodes,
+    ]);
     setEdges(eds => [
       ...eds.filter(e => e.source !== macroNodeId && e.target !== macroNodeId),
       ...restoredRFEdges,
@@ -920,7 +1058,7 @@ function GraphEditorInner() {
     removeMacro(macroDefId);
     scheduleSync();
     setContextMenu(null);
-  }, [contextMenu, nodes, edges, model.macroDefs, removeMacro, setNodes, setEdges, scheduleSync]);
+  }, [contextMenu, getNodes, edges, model.macroDefs, removeMacro, setNodes, setEdges, scheduleSync]);
 
   // Sync on node data changes
   const onNodeDataChange = useCallback(() => {
@@ -957,6 +1095,8 @@ function GraphEditorInner() {
         onNodesChange={handleNodesChange}
         onEdgesChange={handleEdgesChange}
         onConnect={onConnect}
+        onConnectStart={onConnectStart}
+        onConnectEnd={onConnectEnd}
         onInit={instance => { rfInstance.current = instance; }}
         onPaneContextMenu={onPaneContextMenu}
         onNodeContextMenu={onNodeContextMenu}
@@ -991,35 +1131,39 @@ function GraphEditorInner() {
           className={styles.contextMenu}
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
-          {/* PANE: Add Node */}
+          {/* PANE context menu */}
           {contextMenu.target.type === 'pane' && (
             <>
-              <div className={styles.contextTitle}>Add Node</div>
-              {Array.from(categories.entries()).map(([cat, defs]) => (
-                <div key={cat}>
-                  <div className={styles.contextCategory}>{cat}</div>
-                  {defs.map(def => (
-                    <button
-                      key={def.type}
-                      className={styles.contextItem}
-                      onClick={e => { e.stopPropagation(); addNode(def.type); }}
-                    >
-                      <span className={styles.contextDot} style={{ background: def.color }} />
-                      {def.label}
-                    </button>
-                  ))}
-                </div>
-              ))}
-              <div className={styles.contextCategory}>other</div>
+              {clipboard && clipboard.nodes.length > 0 && (
+                <button className={styles.contextItem} onClick={e => { e.stopPropagation(); handlePaste(); setContextMenu(null); }}>Paste</button>
+              )}
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); addCommentNode(); }}>
                 Add Comment
               </button>
-              {clipboard && clipboard.nodes.length > 0 && (
-                <>
-                  <hr style={{ border: 'none', borderTop: '1px solid #2d4059', margin: '4px 0' }} />
-                  <button className={styles.contextItem} onClick={e => { e.stopPropagation(); handlePaste(); setContextMenu(null); }}>Paste</button>
-                </>
-              )}
+              <hr style={{ border: 'none', borderTop: '1px solid #2d4059', margin: '4px 0' }} />
+              <div className={styles.contextSubmenuTrigger}>
+                <button className={styles.contextItem}>
+                  Add Node
+                  <span style={{ marginLeft: 'auto', fontSize: '0.6rem', color: '#6080a0' }}>&rsaquo;</span>
+                </button>
+                <div className={styles.contextSubmenu}>
+                  {Array.from(categories.entries()).map(([cat, defs]) => (
+                    <div key={cat}>
+                      <div className={styles.contextCategory}>{cat}</div>
+                      {defs.map(def => (
+                        <button
+                          key={def.type}
+                          className={styles.contextItem}
+                          onClick={e => { e.stopPropagation(); addNode(def.type); }}
+                        >
+                          <span className={styles.contextDot} style={{ background: def.color }} />
+                          {def.label}
+                        </button>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
             </>
           )}
 
@@ -1029,6 +1173,19 @@ function GraphEditorInner() {
               <div className={styles.contextTitle}>Node</div>
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); renameNode(); }}>Rename</button>
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); duplicateNode(); }}>Duplicate</button>
+              <button className={styles.contextItem} onClick={e => {
+                e.stopPropagation();
+                // Select this node then copy
+                const nid = (contextMenu.target as { nodeId: string }).nodeId;
+                setNodes(nds => nds.map(n => ({ ...n, selected: n.id === nid })));
+                setTimeout(() => { handleCopy(); setContextMenu(null); }, 0);
+              }}>Copy</button>
+              <button className={styles.contextItem} onClick={e => {
+                e.stopPropagation();
+                const nid = (contextMenu.target as { nodeId: string }).nodeId;
+                setNodes(nds => nds.map(n => ({ ...n, selected: n.id === nid })));
+                setTimeout(() => { handleCut(); setContextMenu(null); }, 0);
+              }}>Cut</button>
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); addCommentNode(); }}>Add Comment</button>
               {contextMenu.target.isMacro && (
                 <>
@@ -1050,7 +1207,7 @@ function GraphEditorInner() {
             <>
               <div className={styles.contextTitle}>Group</div>
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); renameNode(); }}>Rename</button>
-              <button className={styles.contextItem} onClick={e => { e.stopPropagation(); dismissGroup(); }}>Dismiss Group</button>
+              <button className={styles.contextItem} onClick={e => { e.stopPropagation(); dismissGroup(); }}>Undo Group</button>
               <button className={styles.contextItem} style={{ color: '#e05050' }} onClick={e => { e.stopPropagation(); deleteSelection(); }}>Delete</button>
             </>
           )}
@@ -1059,6 +1216,7 @@ function GraphEditorInner() {
           {contextMenu.target.type === 'selection' && (
             <>
               <div className={styles.contextTitle}>Selection ({contextMenu.target.nodeIds.length})</div>
+              <button className={styles.contextItem} onClick={e => { e.stopPropagation(); duplicateSelection(); setContextMenu(null); }}>Duplicate</button>
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); handleCopy(); setContextMenu(null); }}>Copy</button>
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); handleCut(); setContextMenu(null); }}>Cut</button>
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); handlePaste(); setContextMenu(null); }}>Paste</button>

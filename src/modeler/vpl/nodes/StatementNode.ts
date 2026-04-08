@@ -6,8 +6,8 @@ export const StatementNode: NodeTypeDef = {
   category: 'logic',
   color: '#1a237e',
   ports: [
-    { id: 'x', label: 'X', kind: 'input', category: 'value', dataType: 'any' },
-    { id: 'y', label: 'Y', kind: 'input', category: 'value', dataType: 'any' },
+    { id: 'x', label: 'X', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '0' },
+    { id: 'y', label: 'Y', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '0' },
     { id: 'result', label: 'Result', kind: 'output', category: 'value', dataType: 'bool' },
   ],
   defaultConfig: { operation: '==' },

@@ -17,7 +17,8 @@ import type {
   ModelProperties,
   Neighborhood,
 } from './types';
-import { DEFAULT_MODEL } from './defaultModel';
+import { DEFAULT_MODEL, EMPTY_MODEL } from './defaultModel';
+import { readModelFile } from './fileOperations';
 
 // ---------------------------------------------------------------------------
 // ID generation
@@ -38,6 +39,7 @@ function generateId(prefix: string): string {
 interface ModelState {
   model: CAModel;
   isDirty: boolean;
+  modelVersion: number;
 }
 
 type ModelAction =
@@ -243,10 +245,10 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       };
 
     case 'NEW_MODEL':
-      return { model: DEFAULT_MODEL, isDirty: false };
+      return { model: EMPTY_MODEL, isDirty: false, modelVersion: state.modelVersion + 1 };
 
     case 'LOAD_MODEL':
-      return { model: action.model, isDirty: false };
+      return { model: action.model, isDirty: false, modelVersion: state.modelVersion + 1 };
 
     case 'MARK_SAVED':
       return { ...state, isDirty: false };
@@ -260,6 +262,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
 export interface ModelContextValue {
   model: CAModel;
   isDirty: boolean;
+  modelVersion: number;
   updateProperties: (changes: Partial<ModelProperties>) => void;
   addAttribute: (isModelAttribute: boolean) => void;
   removeAttribute: (id: string) => void;
@@ -296,17 +299,45 @@ function createInitialState(): ModelState {
         if (!model.graphEdges) model.graphEdges = [];
         if (!model.macroDefs) model.macroDefs = [];
         if (!model.properties.tags) model.properties.tags = [];
-        return { model, isDirty: false };
+        return { model, isDirty: false, modelVersion: 0 };
       }
     }
   } catch {
     // ignore parse errors — fall through to default
   }
-  return { model: DEFAULT_MODEL, isDirty: false };
+  return { model: DEFAULT_MODEL, isDirty: false, modelVersion: 0 };
 }
+
+const FIRST_LAUNCH_KEY = 'genesisca_has_launched';
 
 export function ModelProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(modelReducer, undefined, createInitialState);
+
+  // On first-ever launch (no autosave), load Game of Life from public/models/
+  useEffect(() => {
+    const hasAutosave = localStorage.getItem('genesisca_autosave');
+    const hasLaunched = localStorage.getItem(FIRST_LAUNCH_KEY);
+    if (hasAutosave || hasLaunched) {
+      // Not first launch — mark and skip
+      if (!hasLaunched) localStorage.setItem(FIRST_LAUNCH_KEY, '1');
+      return;
+    }
+    localStorage.setItem(FIRST_LAUNCH_KEY, '1');
+
+    // Fetch Game of Life .gcaproj
+    const base = import.meta.env.BASE_URL;
+    fetch(`${base}models/Game Of Life.gcaproj`)
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.blob();
+      })
+      .then(blob => readModelFile(new File([blob], 'Game Of Life.gcaproj')))
+      .then(model => dispatch({ type: 'LOAD_MODEL', model }))
+      .catch(() => {
+        // Silently fall back to the empty default if fetch fails
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Auto-save to localStorage
   useEffect(() => {
@@ -398,6 +429,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     () => ({
       model: state.model,
       isDirty: state.isDirty,
+      modelVersion: state.modelVersion,
       updateProperties,
       addAttribute,
       removeAttribute,
@@ -419,6 +451,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     [
       state.model,
       state.isDirty,
+      state.modelVersion,
       updateProperties,
       addAttribute,
       removeAttribute,
