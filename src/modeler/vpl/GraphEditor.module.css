@@ -15,8 +15,6 @@
   min-width: 180px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
   z-index: 100;
-  max-height: 400px;
-  overflow-y: auto;
 }
 
 .contextTitle {
@@ -64,6 +62,30 @@
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+.contextSubmenuTrigger {
+  position: relative;
+}
+
+.contextSubmenu {
+  display: none;
+  position: absolute;
+  left: 100%;
+  top: 0;
+  background: #1e2a3a;
+  border: 1px solid #2d4059;
+  border-radius: 6px;
+  padding: 6px 0;
+  min-width: 180px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  z-index: 101;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.contextSubmenuTrigger:hover > .contextSubmenu {
+  display: block;
 }
 
 /* Breadcrumb */
@@ -145,4 +167,51 @@
   outline: 2px solid #ff6b6b;
   outline-offset: 2px;
   border-radius: 6px;
+}
+
+/* Canvas toggle buttons (below React Flow Controls) */
+
+.canvasToggles {
+  position: absolute;
+  bottom: 10px;
+  left: 50px;
+  z-index: 5;
+  display: flex;
+  gap: 2px;
+}
+
+.toggleButton {
+  width: 28px;
+  height: 28px;
+  background: #1e2a3a;
+  border: 1px solid #2d4059;
+  border-radius: 4px;
+  color: #6080a0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.toggleButton:hover {
+  background: #2d4059;
+  color: #e0e0e0;
+}
+
+.toggleActive {
+  background: rgba(76, 201, 240, 0.15);
+  color: #4cc9f0;
+  border-color: #4cc9f0;
+}
+
+/* Let RMB drag pass through group node body to canvas for panning */
+:global(.react-flow__node-groupNode) {
+  pointer-events: none !important;
+}
+:global(.react-flow__node-groupNode) [data-drag-handle],
+:global(.react-flow__node-groupNode) .react-flow__resize-control {
+  pointer-events: auto !important;
 }

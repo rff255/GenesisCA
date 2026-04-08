@@ -9,3 +9,33 @@
   overflow: hidden;
   background: #0d1117;
 }
+
+.explorerToggle {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  width: 28px;
+  height: 28px;
+  background: rgba(30, 42, 58, 0.9);
+  border: 1px solid #2d4059;
+  border-radius: 4px;
+  color: #6080a0;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.explorerToggle:hover {
+  background: #2d4059;
+  color: #e0e0e0;
+}
+
+.explorerToggleActive {
+  background: rgba(76, 201, 240, 0.15);
+  color: #4cc9f0;
+  border-color: #4cc9f0;
+}

@@ -52,6 +52,17 @@ export function HelpView() {
             de Pernambuco (UFPE, Brazil) in 2017, the application has been rewritten from
             scratch as a modern web application.
           </p>
+          <p className={styles.p}>
+            The source code is available on{' '}
+            <a
+              href="https://github.com/rff255/GenesisCA"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#4cc9f0' }}
+            >
+              GitHub
+            </a>.
+          </p>
         </section>
 
         {/* ============================================================ */}
@@ -140,8 +151,45 @@ export function HelpView() {
           </p>
           <p className={styles.p}>
             <strong>Value ports</strong> (blue circles) carry data. <strong>Flow
-            ports</strong> (green circles) control execution order. Right-click on the
-            canvas to add nodes, or on nodes/selections for more options.
+            ports</strong> (green circles) control execution order.
+          </p>
+
+          <h3 className={styles.h3}>Canvas Controls</h3>
+          <ul className={styles.list}>
+            <li><strong>Right-click drag</strong> &mdash; Pan the canvas.</li>
+            <li><strong>Scroll wheel</strong> &mdash; Zoom in/out.</li>
+            <li><strong>Left-click drag</strong> (on empty area) &mdash; Box select nodes.</li>
+            <li><strong>Left-click drag</strong> (on node) &mdash; Move node.</li>
+            <li><strong>Ctrl + click</strong> &mdash; Add/remove from selection.</li>
+            <li><strong>Right-click</strong> (on canvas) &mdash; Context menu: Paste, Add Comment, Add Node submenu.</li>
+            <li><strong>Right-click</strong> (on node) &mdash; Node options: Rename, Duplicate, Copy, Cut, Delete. Macros also show Enter Macro and Undo Macro.</li>
+            <li><strong>Right-click</strong> (on selection) &mdash; Selection options: Duplicate, Copy, Cut, Paste, Create Macro, Create Group.</li>
+            <li><strong>Right-click</strong> (on group) &mdash; Group options: Rename, Undo Group, Delete.</li>
+          </ul>
+
+          <h3 className={styles.h3}>Node Collapse &amp; Expand</h3>
+          <p className={styles.p}>
+            <strong>Double-click</strong> any non-macro node to collapse it into a compact
+            form showing only its title (or value for constants). Double-click again to expand.
+            Edges remain connected to collapsed nodes. When dragging a new connection near
+            a collapsed node, it temporarily expands to reveal its ports.
+          </p>
+
+          <h3 className={styles.h3}>Inline Port Widgets</h3>
+          <p className={styles.p}>
+            Input ports on many nodes (Math, Compare, Logic, Loop, Set Attribute, Set Color
+            Viewer) have small inline value editors that appear to the left of the port when
+            it is not connected. This lets you set constant values directly without needing
+            a separate Constant node. When you connect a wire to the port, the inline widget
+            disappears and the connected value takes over.
+          </p>
+
+          <h3 className={styles.h3}>Groups</h3>
+          <p className={styles.p}>
+            Select 2+ nodes and right-click &rarr; &quot;Create Group&quot; to visually
+            organize them. Groups have a draggable header with a label and color picker.
+            Right-click a group and choose &quot;Undo Group&quot; to dissolve it (all
+            contained nodes are selected for easy repositioning).
           </p>
         </section>
 
@@ -257,7 +305,8 @@ export function HelpView() {
           <h3 className={styles.h3}>Undoing a Macro</h3>
           <p className={styles.p}>
             Right-click a Macro node and choose &quot;Undo Macro&quot; to inline its
-            contents back into the parent graph.
+            contents back into the parent graph. All restored nodes are automatically
+            selected for easy repositioning.
           </p>
         </section>
 
@@ -268,43 +317,61 @@ export function HelpView() {
             The Simulator runs your compiled model and visualizes the results in real time.
           </p>
 
-          <h3 className={styles.h3}>Controls</h3>
+          <h3 className={styles.h3}>Layout</h3>
+          <p className={styles.p}>
+            The simulator has a <strong>bottom transport bar</strong> with playback
+            controls (Play/Pause/Step/Reset) and speed sliders (Target FPS, Gens/Frame),
+            a <strong>top viewer bar</strong> for switching between visualization
+            mappings, a collapsible <strong>left panel</strong> for settings (actions,
+            grid dimensions, model attributes), and a collapsible <strong>right
+            panel</strong> for brush settings.
+          </p>
+
+          <h3 className={styles.h3}>Canvas Controls</h3>
           <ul className={styles.list}>
-            <li><strong>Play / Pause / Step / Reset</strong> &mdash; Control simulation playback.</li>
-            <li><strong>Target FPS</strong> &mdash; Limit how fast the visualization updates.</li>
-            <li><strong>Gens / Frame</strong> &mdash; Run multiple generations per visual update for speed.</li>
-            <li><strong>Unlimited</strong> checkboxes &mdash; Remove caps on FPS or generations per frame.</li>
-            <li><strong>Randomize</strong> &mdash; Fill the grid with random values.</li>
-            <li><strong>Recompile</strong> &mdash; Recompile the graph (useful after editing in the modeler).</li>
-            <li><strong>Screenshot</strong> &mdash; Save the current grid as a PNG image.</li>
-            <li><strong>Import Image</strong> &mdash; Load a PNG/BMP/JPG as the initial grid state.</li>
+            <li><strong>Left-click drag</strong> &mdash; Paint with the brush tool.</li>
+            <li><strong>Right-click drag</strong> &mdash; Pan the grid view.</li>
+            <li><strong>Scroll wheel</strong> &mdash; Zoom in/out.</li>
+            <li><strong>Ctrl + left-click drag</strong> &mdash; Resize brush (horizontal = width, vertical = height).</li>
+            <li><strong>Zoom buttons</strong> (+/&minus;/fit) &mdash; Bottom-left of the canvas.</li>
           </ul>
 
-          <h3 className={styles.h3}>Grid Dimensions</h3>
-          <p className={styles.p}>
-            Override the model&apos;s default grid size directly in the simulator.
-            Enter new width/height and click &quot;Apply Dimensions&quot; to reinitialize.
-            This does not modify the model itself.
-          </p>
-
-          <h3 className={styles.h3}>Model Attributes</h3>
-          <p className={styles.p}>
-            If your model has global (model) attributes, they appear as live controls
-            in the simulator sidebar. Change values in real time to experiment with
-            different parameters without recompiling.
-          </p>
+          <h3 className={styles.h3}>Playback</h3>
+          <ul className={styles.list}>
+            <li><strong>Play / Pause</strong> &mdash; Start or stop continuous simulation.</li>
+            <li><strong>Step</strong> &mdash; Advance one generation (also pauses if running).</li>
+            <li><strong>Reset</strong> &mdash; Clear the grid back to initial state.</li>
+            <li><strong>Randomize</strong> &mdash; Fill the grid with random values.</li>
+            <li><strong>Recompile</strong> &mdash; Recompile the graph after editing in the modeler.</li>
+          </ul>
 
           <h3 className={styles.h3}>Brush Tool</h3>
           <p className={styles.p}>
-            Right-click on the canvas to paint cells. Choose a color, brush width/height,
-            and input mapping. The brush uses Color-to-Attribute mappings to convert
-            your chosen color into cell state changes.
+            Left-click on the canvas to paint cells. Open the right panel to configure
+            brush color, width/height, and input mapping. A brush cursor rectangle
+            shows which cells will be affected (toggle in the brush panel).
+            Use <strong>Ctrl + left-click drag</strong> to resize the brush interactively.
+            Use <strong>Open Image</strong> in the brush panel to import a PNG/BMP/JPG
+            as the starting grid state.
           </p>
 
           <h3 className={styles.h3}>Viewer</h3>
           <p className={styles.p}>
-            Switch between Attribute-to-Color mappings to visualize different aspects
-            of cell state.
+            The top bar shows available Attribute-to-Color mappings as clickable tabs.
+            Click a tab to switch the visualization mode.
+          </p>
+
+          <h3 className={styles.h3}>Settings (Left Panel)</h3>
+          <ul className={styles.list}>
+            <li><strong>Grid Dimensions</strong> &mdash; Override the model&apos;s default size. Click &quot;Apply&quot; to reinitialize.</li>
+            <li><strong>Model Attributes</strong> &mdash; Adjust global parameters in real time without recompiling.</li>
+            <li><strong>Screenshot</strong> &mdash; Save the current grid as a PNG image.</li>
+            <li><strong>Show Code</strong> &mdash; View the compiled JavaScript function.</li>
+          </ul>
+
+          <p className={styles.p}>
+            All simulator settings (speed, brush, viewer) are automatically saved and
+            restored between sessions.
           </p>
         </section>
 
@@ -317,13 +384,19 @@ export function HelpView() {
             <thead><tr><th>Shortcut</th><th>Action</th></tr></thead>
             <tbody>
               <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>C</kbd></td><td>Copy selected nodes</td></tr>
-              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>V</kbd></td><td>Paste</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>V</kbd></td><td>Paste (at viewport center)</td></tr>
               <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>X</kbd></td><td>Cut selected nodes</td></tr>
-              <tr><td><kbd className={styles.kbd}>Delete</kbd></td><td>Delete selected nodes</td></tr>
-              <tr><td>Right-click (canvas)</td><td>Add Node menu</td></tr>
-              <tr><td>Right-click (node)</td><td>Node options (rename, duplicate, delete)</td></tr>
-              <tr><td>Right-click (selection)</td><td>Selection options (copy, cut, create macro/group)</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>D</kbd></td><td>Duplicate selected nodes</td></tr>
+              <tr><td><kbd className={styles.kbd}>Delete</kbd> / <kbd className={styles.kbd}>Backspace</kbd></td><td>Delete selected nodes</td></tr>
+              <tr><td>Right-click drag</td><td>Pan the canvas</td></tr>
+              <tr><td>Scroll wheel</td><td>Zoom in/out</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>F</kbd></td><td>Open Node Explorer (search &amp; focus)</td></tr>
+              <tr><td>Double-click (node)</td><td>Collapse / expand node</td></tr>
               <tr><td>Double-click (macro)</td><td>Enter macro subgraph</td></tr>
+              <tr><td>Double-click (edge)</td><td>Delete edge</td></tr>
+              <tr><td>Right-click (canvas)</td><td>Context menu: Paste, Add Comment, Add Node</td></tr>
+              <tr><td>Right-click (node)</td><td>Rename, Duplicate, Copy, Cut, Delete</td></tr>
+              <tr><td>Right-click (selection)</td><td>Duplicate, Copy, Cut, Create Macro/Group</td></tr>
             </tbody>
           </table>
 
@@ -331,9 +404,13 @@ export function HelpView() {
           <table className={styles.table}>
             <thead><tr><th>Input</th><th>Action</th></tr></thead>
             <tbody>
-              <tr><td>Left mouse button drag</td><td>Pan the grid view</td></tr>
+              <tr><td>Left-click drag</td><td>Paint with brush tool</td></tr>
+              <tr><td>Right-click drag</td><td>Pan the grid view</td></tr>
               <tr><td>Scroll wheel</td><td>Zoom in/out</td></tr>
-              <tr><td>Right mouse button</td><td>Paint with brush tool</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd> + left-click drag</td><td>Resize brush (horizontal = W, vertical = H)</td></tr>
+              <tr><td><kbd className={styles.kbd}>Space</kbd></td><td>Step (one generation; pauses if running)</td></tr>
+              <tr><td><kbd className={styles.kbd}>Enter</kbd></td><td>Play / Pause</td></tr>
+              <tr><td><kbd className={styles.kbd}>Esc</kbd></td><td>Reset</td></tr>
             </tbody>
           </table>
         </section>

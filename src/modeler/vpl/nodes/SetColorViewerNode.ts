@@ -7,9 +7,9 @@ export const SetColorViewerNode: NodeTypeDef = {
   color: '#006064',
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
-    { id: 'r', label: 'R', kind: 'input', category: 'value', dataType: 'integer' },
-    { id: 'g', label: 'G', kind: 'input', category: 'value', dataType: 'integer' },
-    { id: 'b', label: 'B', kind: 'input', category: 'value', dataType: 'integer' },
+    { id: 'r', label: 'R', kind: 'input', category: 'value', dataType: 'integer', inlineWidget: 'number', defaultValue: '0' },
+    { id: 'g', label: 'G', kind: 'input', category: 'value', dataType: 'integer', inlineWidget: 'number', defaultValue: '0' },
+    { id: 'b', label: 'B', kind: 'input', category: 'value', dataType: 'integer', inlineWidget: 'number', defaultValue: '0' },
   ],
   defaultConfig: { mappingId: '' },
   compile: (nodeId, config, inputs) => {

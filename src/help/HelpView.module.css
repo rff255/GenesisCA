@@ -44,7 +44,6 @@
   flex: 1;
   overflow-y: auto;
   padding: 32px 48px;
-  max-width: 800px;
 }
 
 .section {
@@ -133,6 +132,13 @@
   color: #a0b0c0;
   border-bottom: 1px solid rgba(45, 64, 89, 0.4);
   padding: 5px 10px;
+  vertical-align: top;
+}
+
+.table td:first-child,
+.table th:first-child {
+  white-space: nowrap;
+  width: 1%;
 }
 
 .subtitle {

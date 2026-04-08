@@ -32,7 +32,7 @@ function GroupNodeInner({ id, data, selected }: NodeProps) {
         lineStyle={{ borderColor: color }}
         handleStyle={{ width: 8, height: 8, background: color, borderRadius: 2 }}
       />
-      <div className={styles.header}>
+      <div className={styles.header} data-drag-handle>
         <input
           className={styles.label}
           value={label}

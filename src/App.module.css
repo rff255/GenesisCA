@@ -57,6 +57,34 @@
   border-color: #4cc9f0;
 }
 
+.githubLink {
+  color: #6080a0;
+  display: flex;
+  align-items: center;
+  transition: color 0.15s;
+}
+
+.githubLink:hover {
+  color: #e0e0e0;
+}
+
+.modelName {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: #8899aa;
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 300px;
+}
+
+.dirtyIndicator {
+  color: #4cc9f0;
+  font-weight: 700;
+  font-style: normal;
+}
+
 .content {
   flex: 1;
   overflow: hidden;

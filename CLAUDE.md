@@ -176,6 +176,8 @@ genesis-ca/
 │   │       ├── CaNode.tsx            # Custom React Flow node component
 │   │       ├── types.ts              # Port/node type definitions
 │   │       ├── GraphEditor.tsx
+│   │       ├── graphState.ts          # Shared mutable state (avoids circular imports between GraphEditor/CaNode)
+│   │       ├── NodeExplorer.tsx        # Right-side searchable node list panel
 │   │       ├── nodes/                # 21 node types (one file each)
 │   │       └── compiler/
 │   │           └── compile.ts        # Two-pass compiler (hoisted values + flow)
@@ -190,7 +192,7 @@ genesis-ca/
 │   │   └── ModelsLibrary.tsx         # Models Library tab (fetches from public/models/)
 │   ├── model/
 │   │   ├── ModelContext.tsx           # React Context + useReducer
-│   │   ├── defaultModel.ts           # Default Game of Life model
+│   │   ├── defaultModel.ts           # EMPTY_MODEL (for New) + first-launch Game of Life auto-load
 │   │   ├── fileOperations.ts         # .gcaproj save/load/download
 │   │   ├── schema.ts
 │   │   └── types.ts                  # TypeScript types for CAModel
@@ -230,7 +232,7 @@ genesis-ca/
 - No paid hosting dependencies. GitHub Pages or equivalent free static hosting.
 - No external compilation toolchains. The graph compiles to JS inside the browser instantly.
 - Do not modify the `legacy_qt_cpp_solution` branch. It is frozen as historical reference.
-- All new work goes on `repo_overhaul` (to be merged into `master` when ready).
+- All new work goes on feature branches off `master` (e.g., `ux_improvements`).
 
 ---
 
@@ -264,11 +266,24 @@ The app is functional with these major systems:
 - Color output: SetColorViewer writes directly to RGBA buffer, checks `activeViewer` param for multi-viewer support
 - Bool constants use `1`/`0` (not `true`/`false`) for typed array compatibility
 - Paint: after InputColor writes to writeAttrs, copy back to readAttrs before runStep()
-- `src/simulator/SimulatorView.tsx` — Canvas rendering via ImageData + zoom/pan, RMB=brush/LMB=pan
+- `src/simulator/SimulatorView.tsx` — Canvas rendering via ImageData + zoom/pan, LMB=brush/RMB=pan
+- Simulator settings persisted to localStorage (`genesisca_sim_settings`)
+- Bottom transport bar: playback + speed sliders; top viewer bar: mapping tabs; collapsible side panels
+- Keyboard shortcuts: Space=step (also pauses), Enter=play/pause, Esc=reset
+- Brush cursor rectangle drawn on canvas; Ctrl+LMB drag to resize brush
 
 ### Key Patterns
 - Graph state sync: single debounced sync (100ms) via refs — never use multiple setTimeout callbacks
-- Graph editor mouse: RMB click=context menu, RMB drag=pan (`panOnDrag={[2]}`), LMB click=select, LMB drag=box select (`selectionOnDrag`)
+- Graph editor mouse: RMB click=context menu, RMB drag=pan (`panOnDrag={[2]}`), LMB click=select, LMB drag=box select (`selectionOnDrag`); simulator: LMB=brush, RMB=pan
+- Shared mutable state: `graphState.ts` holds module-level variables (`isConnectingGlobal`, `showPortLabelsGlobal`, `connectingFrom`) to avoid circular imports between GraphEditor↔CaNode
+- Connection validation: `isValidConnection` on ReactFlow prevents flow↔value, self-connections, occupied value inputs, and cycles (BFS from target)
+- Port labels render outside nodes (absolute positioned left/right of handles); controlled by `showPortLabelsGlobal` toggle
+- Inline port widgets: stored in node config as `_port_${portId}` keys; compiler reads via `getInlineValue()` helper
+- Node collapse: `isCollapsed` flag in node data; collapsed nodes render all handles at `top: 50%`; `isConnectingGlobal` triggers hover-to-uncollapse
+- Group node RMB passthrough: CSS `:global(.react-flow__node-groupNode) { pointer-events: none !important; }` with `[data-drag-handle]` re-enabled
+- Context menu: pane menu uses hover submenu (`.contextSubmenuTrigger` > `.contextSubmenu`); paste uses `pasteFlowPos` ref for right-click position
+- ReactFlowProvider lifted to ModelerView (not inside GraphEditor) so NodeExplorer can access useReactFlow/useStore
+- Simulator overlay interaction: `data-sim-overlay` attribute on overlays; mouse handlers check `target.closest('[data-sim-overlay]')` to skip pan/zoom
 - Hide React Flow's persistent selection rect: CSS `:global(.react-flow__nodesselection-rect) { display: none !important; }`
 - Groups use React Flow's native `parentId` — auto-resize requires manual bounding box computation in `handleNodesChange`
 - Use `NodeResizer` component for resizable nodes (comments, groups) — CSS `resize: both` conflicts with React Flow drag

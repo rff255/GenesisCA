@@ -3,28 +3,54 @@ import { useModel } from '../model/ModelContext';
 import { compileGraph } from '../modeler/vpl/compiler/compile';
 import styles from './SimulatorView.module.css';
 
+const SIM_SETTINGS_KEY = 'genesisca_sim_settings';
+
+function loadSimSettings(): Record<string, unknown> {
+  try {
+    const raw = localStorage.getItem(SIM_SETTINGS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch { /* ignore */ }
+  return {};
+}
+
 export function SimulatorView() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { model } = useModel();
   const workerRef = useRef<Worker | null>(null);
   const pendingStep = useRef(false);
 
+  const saved = useRef(loadSimSettings());
+
   const [generation, setGeneration] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [targetFps, setTargetFps] = useState(30);
-  const [unlimitedFps, setUnlimitedFps] = useState(false);
-  const [gensPerFrame, setGensPerFrame] = useState(1);
-  const [unlimitedGens, setUnlimitedGens] = useState(false);
+  const [targetFps, setTargetFps] = useState((saved.current.targetFps as number) ?? 30);
+  const [unlimitedFps, setUnlimitedFps] = useState((saved.current.unlimitedFps as boolean) ?? false);
+  const [gensPerFrame, setGensPerFrame] = useState((saved.current.gensPerFrame as number) ?? 1);
+  const [unlimitedGens, setUnlimitedGens] = useState((saved.current.unlimitedGens as boolean) ?? false);
   const [compileError, setCompileError] = useState('');
-  const [activeViewer, setActiveViewer] = useState('');
+  const [activeViewer, setActiveViewer] = useState((saved.current.activeViewer as string) ?? '');
   const [showCode, setShowCode] = useState(false);
   const [compiledCode, setCompiledCode] = useState('');
   const [actualFps, setActualFps] = useState(0);
   const [actualGps, setActualGps] = useState(0);
-  const [brushColor, setBrushColor] = useState('#4cc9f0');
-  const [brushW, setBrushW] = useState(1);
-  const [brushH, setBrushH] = useState(1);
-  const [brushMapping, setBrushMapping] = useState('');
+  const [brushColor, setBrushColor] = useState((saved.current.brushColor as string) ?? '#4cc9f0');
+  const [brushW, setBrushW] = useState((saved.current.brushW as number) ?? 1);
+  const [brushH, setBrushH] = useState((saved.current.brushH as number) ?? 1);
+  const [brushMapping, setBrushMapping] = useState((saved.current.brushMapping as string) ?? '');
+  const [showBrushCursor, setShowBrushCursor] = useState((saved.current.showBrushCursor as boolean) ?? true);
+
+  // Persist simulator settings
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem(SIM_SETTINGS_KEY, JSON.stringify({
+          targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
+          activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor,
+        }));
+      } catch { /* localStorage full */ }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor]);
 
   // F3: Runtime model attribute values
   const [runtimeModelAttrs, setRuntimeModelAttrs] = useState<Record<string, number>>({});
@@ -48,6 +74,7 @@ export function SimulatorView() {
   const panRef = useRef({ x: 0, y: 0 });
   const isPanning = useRef(false);
   const lastMouse = useRef({ x: 0, y: 0 });
+  const cursorGrid = useRef<{ row: number; col: number } | null>(null);
 
   // FPS + Gens/s tracking
   const fpsFrames = useRef(0);
@@ -114,6 +141,20 @@ export function SimulatorView() {
     const oy = (parentH - scaledH) / 2 + pan.y;
 
     ctx.drawImage(srcCanvasRef.current, ox, oy, scaledW, scaledH);
+
+    // Draw brush cursor rectangle
+    const cursor = cursorGrid.current;
+    if (cursor && showBrushCursorRef.current) {
+      const bw = brushWRef.current;
+      const bh = brushHRef.current;
+      const halfW = Math.floor((bw - 1) / 2);
+      const halfH = Math.floor((bh - 1) / 2);
+      const bx = ox + (cursor.col - halfW) * scale;
+      const by = oy + (cursor.row - halfH) * scale;
+      ctx.strokeStyle = 'rgba(76, 201, 240, 0.7)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx, by, bw * scale, bh * scale);
+    }
 
     fpsFrames.current++;
   }, []);
@@ -297,6 +338,8 @@ export function SimulatorView() {
   useEffect(() => { brushWRef.current = brushW; }, [brushW]);
   useEffect(() => { brushHRef.current = brushH; }, [brushH]);
   useEffect(() => { activeViewerRef.current = activeViewer; }, [activeViewer]);
+  const showBrushCursorRef = useRef(true);
+  useEffect(() => { showBrushCursorRef.current = showBrushCursor; }, [showBrushCursor]);
   useEffect(() => { brushMappingRef.current = brushMapping; }, [brushMapping]);
 
   /** Convert screen coords to grid cell coords */
@@ -348,6 +391,7 @@ export function SimulatorView() {
     if (!container) return;
 
     const handleWheel = (e: WheelEvent) => {
+      if ((e.target as HTMLElement).closest('[data-sim-overlay]')) return;
       e.preventDefault();
       const zoomFactor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
       const oldZoom = zoomRef.current;
@@ -365,23 +409,56 @@ export function SimulatorView() {
       draw();
     };
 
+    const isResizingBrush = { active: false, startX: 0, startY: 0, startW: 0, startH: 0 };
+
     const handleMouseDown = (e: MouseEvent) => {
-      if (e.button === 0) {
-        // LMB = pan
+      // Ignore events from overlay controls (transport bar, viewer bar, etc.)
+      const target = e.target as HTMLElement;
+      if (target.closest('[data-sim-overlay]')) return;
+
+      if (e.button === 0 && e.ctrlKey) {
+        // Ctrl+LMB = resize brush
+        e.preventDefault();
+        isResizingBrush.active = true;
+        isResizingBrush.startX = e.clientX;
+        isResizingBrush.startY = e.clientY;
+        isResizingBrush.startW = brushWRef.current;
+        isResizingBrush.startH = brushHRef.current;
+        container.style.cursor = 'nwse-resize';
+      } else if (e.button === 0) {
+        // LMB = brush
+        paintAt(e.clientX, e.clientY);
+      } else if (e.button === 2) {
+        // RMB = pan
+        e.preventDefault();
         isPanning.current = true;
         lastMouse.current = { x: e.clientX, y: e.clientY };
         container.style.cursor = 'grabbing';
-      } else if (e.button === 2) {
-        // RMB = brush
-        e.preventDefault();
-        paintAt(e.clientX, e.clientY);
       }
     };
 
     const handleMouseMove = (e: MouseEvent) => {
-      if (e.buttons & 2) {
-        // RMB held = brush drag
-        paintAt(e.clientX, e.clientY);
+      // Update brush cursor position
+      const gridPos = screenToGrid(e.clientX, e.clientY);
+      cursorGrid.current = gridPos;
+      if (!isPanning.current && !(e.buttons & 1) && !isResizingBrush.active) draw();
+
+      // Ctrl+LMB drag = resize brush
+      if (isResizingBrush.active) {
+        const dx = e.clientX - isResizingBrush.startX;
+        const dy = e.clientY - isResizingBrush.startY;
+        const maxW = gridWidth.current || simWidth;
+        const maxH = gridHeight.current || simHeight;
+        const newW = Math.max(1, Math.min(maxW, isResizingBrush.startW + Math.round(dx / 5)));
+        const newH = Math.max(1, Math.min(maxH, isResizingBrush.startH - Math.round(dy / 5)));
+        setBrushW(newW);
+        setBrushH(newH);
+        draw();
+        return;
+      }
+      if (e.buttons & 1) {
+        // LMB held = brush drag
+        if (!e.ctrlKey) paintAt(e.clientX, e.clientY);
         return;
       }
       if (!isPanning.current) return;
@@ -397,6 +474,7 @@ export function SimulatorView() {
 
     const handleMouseUp = () => {
       isPanning.current = false;
+      isResizingBrush.active = false;
       container.style.cursor = '';
     };
 
@@ -405,9 +483,12 @@ export function SimulatorView() {
       e.preventDefault();
     };
 
+    const handleMouseLeave = () => { cursorGrid.current = null; draw(); };
+
     container.addEventListener('wheel', handleWheel, { passive: false });
     container.addEventListener('mousedown', handleMouseDown);
     container.addEventListener('contextmenu', handleContextMenu);
+    container.addEventListener('mouseleave', handleMouseLeave);
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
 
@@ -415,10 +496,11 @@ export function SimulatorView() {
       container.removeEventListener('wheel', handleWheel);
       container.removeEventListener('mousedown', handleMouseDown);
       container.removeEventListener('contextmenu', handleContextMenu);
+      container.removeEventListener('mouseleave', handleMouseLeave);
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [draw, paintAt]);
+  }, [draw, paintAt, screenToGrid]);
 
   // Play: kick-start the step pipeline (worker message handler chains subsequent steps)
   useEffect(() => {
@@ -432,6 +514,7 @@ export function SimulatorView() {
 
 
   const handleStep = () => {
+    if (playing) { setPlaying(false); return; }
     if (pendingStep.current) return;
     pendingStep.current = true;
     workerRef.current?.postMessage({ type: 'step', count: 1, activeViewer });
@@ -467,6 +550,19 @@ export function SimulatorView() {
     panRef.current = { x: 0, y: 0 };
     draw();
   };
+
+  // Simulator keyboard shortcuts (Space=step, Enter=play/pause, Esc=reset)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (document.activeElement as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === ' ') { e.preventDefault(); handleStep(); }
+      else if (e.key === 'Enter') { e.preventDefault(); setPlaying(p => !p); }
+      else if (e.key === 'Escape') { handleReset(); }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  });
 
   // F3: Update model attribute at runtime
   const handleModelAttrChange = (attrId: string, value: number) => {
@@ -520,290 +616,207 @@ export function SimulatorView() {
     img.src = URL.createObjectURL(file);
   };
 
+  const [leftPanelOpen, setLeftPanelOpen] = useState(true);
+  const [rightPanelOpen, setRightPanelOpen] = useState(false);
+
   const modelAttrs = model.attributes.filter(a => a.isModelAttribute);
   const attrToColorMappings = model.mappings.filter(m => m.isAttributeToColor);
   const colorToAttrMappings = model.mappings.filter(m => !m.isAttributeToColor);
 
   return (
     <div className={styles.simulatorLayout}>
-      <div className={styles.controls}>
-        <h3 className={styles.controlsTitle}>Simulation</h3>
+      {/* === Left Panel (collapsible) === */}
+      {leftPanelOpen && (
+        <div className={styles.sidePanel}>
+          <div className={styles.panelHeader}>
+            <span className={styles.panelTitle}>Settings</span>
+            <button className={styles.panelCollapseBtn} onClick={() => setLeftPanelOpen(false)}>&lsaquo;</button>
+          </div>
 
-        <div className={styles.stat}>
-          <span className={styles.statLabel}>Generation</span>
-          <span className={styles.statValue}>{generation}</span>
-        </div>
-        <div className={styles.stat}>
-          <span className={styles.statLabel}>Grid Size</span>
-          <span className={styles.statValue}>
-            {gridWidth.current || simWidth} x {gridHeight.current || simHeight}
-          </span>
-        </div>
-        <div className={styles.stat}>
-          <span className={styles.statLabel}>FPS</span>
-          <span className={styles.statValue}>{actualFps}</span>
-        </div>
-        <div className={styles.stat}>
-          <span className={styles.statLabel}>Gens/s</span>
-          <span className={styles.statValue}>{actualGps}</span>
-        </div>
+          <div className={styles.sectionTitle}>Actions</div>
+          <button className={styles.controlButtonAccent} onClick={handleRandomize}>Randomize</button>
+          <div className={styles.buttonGroup}>
+            <button className={styles.controlButton} onClick={handleRecompile}>Recompile</button>
+            <button className={styles.controlButton} onClick={handleScreenshot} disabled={!colorsRef.current}>Screenshot</button>
+          </div>
 
-        <div className={styles.buttonGroup}>
-          <button
-            className={styles.controlButton}
-            onClick={() => setPlaying(true)}
-            disabled={playing}
-          >
-            Play
-          </button>
-          <button
-            className={styles.controlButton}
-            onClick={() => setPlaying(false)}
-            disabled={!playing}
-          >
-            Pause
-          </button>
-        </div>
-        <div className={styles.buttonGroup}>
-          <button className={styles.controlButton} onClick={handleStep} disabled={playing}>
-            Step
-          </button>
-          <button className={styles.controlButton} onClick={handleReset}>
-            Reset
-          </button>
-        </div>
+          <hr className={styles.divider} />
+          <div className={styles.sectionTitle}>Grid Dimensions</div>
+          <div className={styles.fieldRow}>
+            <span className={styles.statLabel}>W</span>
+            <input className={styles.brushInput} type="number" min={1} value={simWidth}
+              onChange={e => setSimWidth(Math.max(1, Number(e.target.value) || 1))} />
+            <span className={styles.statLabel}>H</span>
+            <input className={styles.brushInput} type="number" min={1} value={simHeight}
+              onChange={e => setSimHeight(Math.max(1, Number(e.target.value) || 1))} />
+          </div>
+          <button className={styles.controlButton} onClick={handleApplyDimensions}>Apply</button>
 
-        <hr className={styles.divider} />
-
-        <div className={styles.stat}>
-          <span className={styles.statLabel}>Target FPS</span>
-          <span className={styles.statValue}>{unlimitedFps ? '\u221E' : targetFps}</span>
-        </div>
-        <input
-          className={styles.speedInput}
-          type="range"
-          min={1}
-          max={200}
-          value={targetFps}
-          disabled={unlimitedFps}
-          onChange={e => setTargetFps(Number(e.target.value))}
-        />
-        <label className={styles.checkRow}>
-          <input type="checkbox" checked={unlimitedFps} onChange={e => setUnlimitedFps(e.target.checked)} />
-          Unlimited
-        </label>
-
-        <div className={styles.stat}>
-          <span className={styles.statLabel}>Gens / Frame</span>
-          <span className={styles.statValue}>{unlimitedGens ? '\u221E' : gensPerFrame}</span>
-        </div>
-        <input
-          className={styles.speedInput}
-          type="range"
-          min={1}
-          max={200}
-          value={gensPerFrame}
-          disabled={unlimitedGens}
-          onChange={e => setGensPerFrame(Number(e.target.value))}
-        />
-        <label className={styles.checkRow}>
-          <input type="checkbox" checked={unlimitedGens} onChange={e => setUnlimitedGens(e.target.checked)} />
-          Unlimited
-        </label>
-
-        <hr className={styles.divider} />
-
-        <button className={styles.controlButtonAccent} onClick={handleRandomize}>
-          Randomize
-        </button>
-        <div className={styles.buttonGroup}>
-          <button className={styles.controlButton} onClick={handleRecompile}>
-            Recompile
-          </button>
-          <button className={styles.controlButton} onClick={handleResetView}>
-            Fit
-          </button>
-        </div>
-        <div className={styles.buttonGroup}>
-          <button
-            className={styles.controlButton}
-            onClick={handleScreenshot}
-            disabled={!colorsRef.current}
-          >
-            Screenshot
-          </button>
-          {colorToAttrMappings.length > 0 && (
-            <button
-              className={styles.controlButton}
-              onClick={() => imageInputRef.current?.click()}
-            >
-              Import Image
-            </button>
+          {modelAttrs.length > 0 && (
+            <>
+              <hr className={styles.divider} />
+              <div className={styles.sectionTitle}>Model Attributes</div>
+              {modelAttrs.map(a => (
+                <div key={a.id} className={styles.fieldRow}>
+                  <span className={styles.statLabel} style={{ flex: 1 }}>{a.name}</span>
+                  {a.type === 'bool' ? (
+                    <input type="checkbox" checked={(runtimeModelAttrs[a.id] ?? 0) === 1}
+                      onChange={e => handleModelAttrChange(a.id, e.target.checked ? 1 : 0)} />
+                  ) : (
+                    <input className={styles.brushInput} type="number" step={a.type === 'integer' ? 1 : 'any'}
+                      value={runtimeModelAttrs[a.id] ?? 0}
+                      onChange={e => handleModelAttrChange(a.id, Number(e.target.value) || 0)} />
+                  )}
+                </div>
+              ))}
+            </>
           )}
-          <input
-            ref={imageInputRef}
-            type="file"
-            accept=".png,.bmp,.jpg,.jpeg"
-            style={{ display: 'none' }}
-            onChange={handleImageImport}
-          />
+
+          {compileError && (
+            <>
+              <hr className={styles.divider} />
+              <div className={styles.error}>{compileError}</div>
+            </>
+          )}
+
+          <hr className={styles.divider} />
+          <button className={styles.controlButton} onClick={() => setShowCode(!showCode)}>
+            {showCode ? 'Hide' : 'Show'} Code
+          </button>
+          {showCode && (
+            <div className={styles.codePanel}>
+              <button className={styles.copyButton} onClick={handleCopyCode}>Copy</button>
+              <pre className={styles.codeBlock}>{compiledCode || '(no compiled code)'}</pre>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* === Canvas Area === */}
+      <div className={styles.canvasArea}>
+        {!leftPanelOpen && (
+          <button className={styles.panelExpandBtn} style={{ left: 0 }} onClick={() => setLeftPanelOpen(true)} title="Open settings">&rsaquo;</button>
+        )}
+        <canvas ref={canvasRef} className={styles.canvas} />
+
+        {/* Top-left stats (discreet, no background) */}
+        <div className={styles.statsOverlay}>
+          <span>Gen {generation}</span>
+          <span>{gridWidth.current || simWidth}&times;{gridHeight.current || simHeight}</span>
+          <span>{actualFps} FPS</span>
+          <span>{actualGps} g/s</span>
         </div>
 
-        <hr className={styles.divider} />
-
-        <div className={styles.sectionTitle}>Grid Dimensions</div>
-        <div className={styles.fieldRow}>
-          <span className={styles.statLabel}>W</span>
-          <input
-            className={styles.brushInput}
-            type="number"
-            min={1}
-            value={simWidth}
-            onChange={e => setSimWidth(Math.max(1, Number(e.target.value) || 1))}
-          />
-          <span className={styles.statLabel}>H</span>
-          <input
-            className={styles.brushInput}
-            type="number"
-            min={1}
-            value={simHeight}
-            onChange={e => setSimHeight(Math.max(1, Number(e.target.value) || 1))}
-          />
-        </div>
-        <button className={styles.controlButton} onClick={handleApplyDimensions}>
-          Apply Dimensions
-        </button>
-
-        {modelAttrs.length > 0 && (
-          <>
-            <hr className={styles.divider} />
-            <div className={styles.sectionTitle}>Model Attributes</div>
-            {modelAttrs.map(a => (
-              <div key={a.id} className={styles.fieldRow}>
-                <span className={styles.statLabel} style={{ flex: 1 }}>{a.name}</span>
-                {a.type === 'bool' ? (
-                  <input
-                    type="checkbox"
-                    checked={(runtimeModelAttrs[a.id] ?? 0) === 1}
-                    onChange={e => handleModelAttrChange(a.id, e.target.checked ? 1 : 0)}
-                  />
-                ) : (
-                  <input
-                    className={styles.brushInput}
-                    type="number"
-                    step={a.type === 'integer' ? 1 : 'any'}
-                    value={runtimeModelAttrs[a.id] ?? 0}
-                    onChange={e => handleModelAttrChange(a.id, Number(e.target.value) || 0)}
-                  />
-                )}
-              </div>
+        {/* Top overlay: Viewer tabs */}
+        {attrToColorMappings.length > 1 && (
+          <div className={styles.viewerBar} data-sim-overlay>
+            {attrToColorMappings.map(m => (
+              <button
+                key={m.id}
+                className={`${styles.viewerTab} ${activeViewer === m.id ? styles.viewerTabActive : ''}`}
+                onClick={() => setActiveViewer(m.id)}
+              >
+                {m.name}
+              </button>
             ))}
-          </>
-        )}
-
-        <hr className={styles.divider} />
-
-        <div className={styles.sectionTitle}>Brush (Right-click)</div>
-        <div className={styles.fieldRow}>
-          <span className={styles.statLabel}>Color</span>
-          <input
-            type="color"
-            className={styles.colorPicker}
-            value={brushColor}
-            onChange={e => setBrushColor(e.target.value)}
-          />
-        </div>
-        <div className={styles.fieldRow}>
-          <span className={styles.statLabel}>W</span>
-          <input
-            className={styles.brushInput}
-            type="number"
-            min={1}
-            max={50}
-            value={brushW}
-            onChange={e => setBrushW(Math.max(1, Number(e.target.value) || 1))}
-          />
-          <span className={styles.statLabel}>H</span>
-          <input
-            className={styles.brushInput}
-            type="number"
-            min={1}
-            max={50}
-            value={brushH}
-            onChange={e => setBrushH(Math.max(1, Number(e.target.value) || 1))}
-          />
-        </div>
-        {colorToAttrMappings.length > 0 && (
-          <>
-            <div className={styles.stat}>
-              <span className={styles.statLabel}>Input Mapping</span>
-            </div>
-            <select
-              className={styles.viewerSelect}
-              value={brushMapping}
-              onChange={e => setBrushMapping(e.target.value)}
-            >
-              <option value="">(fallback)</option>
-              {colorToAttrMappings.map(m => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
-            </select>
-          </>
-        )}
-        <div className={styles.hint}>LMB: pan / scroll: zoom / RMB: brush</div>
-
-        {attrToColorMappings.length > 0 && (
-          <>
-            <hr className={styles.divider} />
-            <div className={styles.stat}>
-              <span className={styles.statLabel}>Viewer</span>
-            </div>
-            <select
-              className={styles.viewerSelect}
-              value={activeViewer}
-              onChange={e => setActiveViewer(e.target.value)}
-            >
-              {attrToColorMappings.map(m => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
-            </select>
-          </>
-        )}
-
-        {compileError && (
-          <>
-            <hr className={styles.divider} />
-            <div className={styles.error}>{compileError}</div>
-          </>
-        )}
-
-        <hr className={styles.divider} />
-        <button
-          className={styles.controlButton}
-          onClick={() => setShowCode(!showCode)}
-        >
-          {showCode ? 'Hide' : 'Show'} Generated Code
-        </button>
-        {showCode && (
-          <div className={styles.codePanel}>
-            <button className={styles.copyButton} onClick={handleCopyCode}>
-              Copy
-            </button>
-            <pre className={styles.codeBlock}>
-              {compiledCode || '(no compiled code)'}
-            </pre>
           </div>
         )}
-      </div>
 
-      <div className={styles.canvasArea}>
-        <canvas ref={canvasRef} className={styles.canvas} />
+        {/* Bottom overlay: Transport controls + speed + stats */}
+        <div className={styles.transportBar} data-sim-overlay>
+          {/* Speed controls (left side) */}
+          <div className={styles.transportSpeed}>
+            <span className={styles.transportSpeedLabel}>FPS {unlimitedFps ? '\u221E' : targetFps}</span>
+            <input className={styles.transportSlider} type="range" min={1} max={200} value={targetFps}
+              disabled={unlimitedFps} onChange={e => setTargetFps(Number(e.target.value))} />
+            <label className={styles.transportCheck}>
+              <input type="checkbox" checked={unlimitedFps} onChange={e => setUnlimitedFps(e.target.checked)} />&infin;
+            </label>
+          </div>
+          <div className={styles.transportDivider} />
+
+          {/* Playback controls (center) */}
+          <button className={styles.transportBtn} onClick={() => setPlaying(true)} disabled={playing} title="Play (Enter)">&#9654;</button>
+          <button className={styles.transportBtn} onClick={() => setPlaying(false)} disabled={!playing} title="Pause (Enter)">&#9646;&#9646;</button>
+          <button className={styles.transportBtn} onClick={handleStep} title="Step (Space)">&#9654;|</button>
+          <button className={styles.transportBtn} onClick={handleReset} title="Reset (Esc)">&#9632;</button>
+          <div className={styles.transportDivider} />
+
+          {/* Gens/frame (right side) */}
+          <div className={styles.transportSpeed}>
+            <span className={styles.transportSpeedLabel}>G/F {unlimitedGens ? '\u221E' : gensPerFrame}</span>
+            <input className={styles.transportSlider} type="range" min={1} max={200} value={gensPerFrame}
+              disabled={unlimitedGens} onChange={e => setGensPerFrame(Number(e.target.value))} />
+            <label className={styles.transportCheck}>
+              <input type="checkbox" checked={unlimitedGens} onChange={e => setUnlimitedGens(e.target.checked)} />&infin;
+            </label>
+          </div>
+        </div>
+
         {playing && unlimitedGens && (
           <div className={styles.overlay}>
-            Processing without displaying. Change &lsquo;Gens/Frame&rsquo; value to see evolution of the cell states.
+            Processing without displaying. Change Gens/Frame to see evolution.
           </div>
         )}
+
+        {/* Zoom controls (bottom-left, like modeler) */}
+        <div className={styles.zoomControls} data-sim-overlay>
+          <button className={styles.zoomBtn} onClick={() => { zoomRef.current = Math.min(50, zoomRef.current * 1.3); draw(); }} title="Zoom in">+</button>
+          <button className={styles.zoomBtn} onClick={() => { zoomRef.current = Math.max(0.1, zoomRef.current / 1.3); draw(); }} title="Zoom out">&minus;</button>
+          <button className={styles.zoomBtn} onClick={handleResetView} title="Fit view">&#x2922;</button>
+        </div>
+
+        {!rightPanelOpen && (
+          <button className={styles.panelExpandBtnRight}
+            onClick={() => setRightPanelOpen(true)} title="Open brush">&#9998;</button>
+        )}
       </div>
+
+      {/* === Right Panel (collapsible — Brush) === */}
+      {rightPanelOpen && (
+        <div className={styles.sidePanel}>
+          <div className={styles.panelHeader}>
+            <span className={styles.panelTitle}>Brush</span>
+            <button className={styles.panelCollapseBtn} onClick={() => setRightPanelOpen(false)}>&rsaquo;</button>
+          </div>
+          {colorToAttrMappings.length > 0 && (
+            <div className={styles.mappingTabs}>
+              {colorToAttrMappings.map(m => (
+                <button
+                  key={m.id}
+                  className={`${styles.mappingTab} ${brushMapping === m.id ? styles.mappingTabActive : ''}`}
+                  onClick={() => setBrushMapping(m.id)}
+                >
+                  {m.name}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className={styles.fieldRow}>
+            <span className={styles.statLabel}>Color</span>
+            <input type="color" className={styles.colorPicker} value={brushColor}
+              onChange={e => setBrushColor(e.target.value)} />
+          </div>
+          <div className={styles.fieldRow}>
+            <span className={styles.statLabel}>W</span>
+            <input className={styles.brushInput} type="number" min={1} max={gridWidth.current || simWidth} value={brushW}
+              onChange={e => setBrushW(Math.max(1, Number(e.target.value) || 1))} />
+            <span className={styles.statLabel}>H</span>
+            <input className={styles.brushInput} type="number" min={1} max={gridHeight.current || simHeight} value={brushH}
+              onChange={e => setBrushH(Math.max(1, Number(e.target.value) || 1))} />
+          </div>
+          <hr className={styles.divider} />
+          <button className={styles.controlButton} onClick={() => imageInputRef.current?.click()}>
+            Open Image
+          </button>
+          <input ref={imageInputRef} type="file" accept=".png,.bmp,.jpg,.jpeg" style={{ display: 'none' }} onChange={handleImageImport} />
+          <label className={styles.checkRow}>
+            <input type="checkbox" checked={showBrushCursor} onChange={e => setShowBrushCursor(e.target.checked)} />
+            Show brush cursor
+          </label>
+          <div className={styles.hint}>LMB: paint / RMB: pan / Ctrl+LMB drag: resize brush</div>
+        </div>
+      )}
     </div>
   );
 }

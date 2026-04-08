@@ -6,8 +6,8 @@ export const LogicOperatorNode: NodeTypeDef = {
   category: 'logic',
   color: '#1a237e',
   ports: [
-    { id: 'a', label: 'A', kind: 'input', category: 'value', dataType: 'bool' },
-    { id: 'b', label: 'B', kind: 'input', category: 'value', dataType: 'bool' },
+    { id: 'a', label: 'A', kind: 'input', category: 'value', dataType: 'bool', inlineWidget: 'bool', defaultValue: 'false' },
+    { id: 'b', label: 'B', kind: 'input', category: 'value', dataType: 'bool', inlineWidget: 'bool', defaultValue: 'false' },
     { id: 'result', label: 'Result', kind: 'output', category: 'value', dataType: 'bool' },
   ],
   defaultConfig: { operation: 'OR' },
