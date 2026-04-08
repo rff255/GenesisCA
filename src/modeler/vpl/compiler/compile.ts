@@ -62,6 +62,13 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
 
 const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'getColorConstant', 'macro']);
 
+/** Check if a node's data uses multi-output variable naming */
+function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
+  if (MULTI_OUTPUT_TYPES.has(data.nodeType)) return true;
+  if (data.nodeType === 'getModelAttribute' && data.config.isColorAttr) return true;
+  return false;
+}
+
 interface RootCompileResult {
   valueLines: string[];
   flowLines: string[];
@@ -84,7 +91,7 @@ function compileRoot(
 
   function varName(sourceNodeId: string, sourcePortId: string): string {
     const sourceNode = nodeMap.get(sourceNodeId);
-    if (sourceNode && MULTI_OUTPUT_TYPES.has(sourceNode.data.nodeType)) {
+    if (sourceNode && isMultiOutput(sourceNode.data)) {
       return `_v${sourceNodeId}_${sourcePortId}`;
     }
     // GetNeighborsAttribute uses _scr_ prefix for its scratch array
@@ -156,7 +163,7 @@ function compileRoot(
         return inputAliases.get(srcPortId) || 'undefined';
       }
       const srcNode = inner.nodeMap.get(srcNodeId);
-      if (srcNode && MULTI_OUTPUT_TYPES.has(srcNode.data.nodeType)) {
+      if (srcNode && isMultiOutput(srcNode.data)) {
         return `${prefix}_v${srcNodeId}_${srcPortId}`;
       }
       if (srcNode?.data.nodeType === 'getNeighborsAttribute') {
@@ -286,7 +293,7 @@ function compileRoot(
           if (srcNode && srcNode.data.nodeType === 'macroInput') {
             // It's the parent's MacroInput — handled by parent's alias chain
             nestedAliases.set(ep.portId, `${parentPrefix}_v${src.nodeId}_${src.portId}`);
-          } else if (srcNode && MULTI_OUTPUT_TYPES.has(srcNode.data.nodeType)) {
+          } else if (srcNode && isMultiOutput(srcNode.data)) {
             nestedAliases.set(ep.portId, `${parentPrefix}_v${src.nodeId}_${src.portId}`);
           } else if (srcNode?.data.nodeType === 'getNeighborsAttribute') {
             nestedAliases.set(ep.portId, `${parentPrefix}_scr_${src.nodeId}`);
@@ -302,7 +309,7 @@ function compileRoot(
         return nestedAliases.get(srcPortId) || 'undefined';
       }
       const srcNode = nestedInner.nodeMap.get(srcNodeId);
-      if (srcNode && MULTI_OUTPUT_TYPES.has(srcNode.data.nodeType)) {
+      if (srcNode && isMultiOutput(srcNode.data)) {
         return `${nestedPrefix}_v${srcNodeId}_${srcPortId}`;
       }
       if (srcNode?.data.nodeType === 'getNeighborsAttribute') {
@@ -363,7 +370,7 @@ function compileRoot(
           const innerVar = nestedVarName(src.nodeId, src.portId);
           // Use parent prefix for the inner macro node's output variables
           const parentNode = parentAdjacency.nodeMap.get(innerMacroNodeId);
-          if (parentNode && MULTI_OUTPUT_TYPES.has(parentNode.data.nodeType)) {
+          if (parentNode && isMultiOutput(parentNode.data)) {
             valueLines.push(`      const ${parentPrefix}_v${innerMacroNodeId}_${ep.portId} = ${innerVar};`);
           } else {
             valueLines.push(`      const ${parentPrefix}_v${innerMacroNodeId} = ${innerVar};`);
@@ -510,7 +517,7 @@ function compileRoot(
         return 'undefined';
       }
       const srcNode = inner.nodeMap.get(srcNodeId);
-      if (srcNode && MULTI_OUTPUT_TYPES.has(srcNode.data.nodeType)) {
+      if (srcNode && isMultiOutput(srcNode.data)) {
         return `${prefix}_v${srcNodeId}_${srcPortId}`;
       }
       if (srcNode?.data.nodeType === 'getNeighborsAttribute') {
@@ -685,20 +692,29 @@ function compileRoot(
 // Build parameter lists from model (without idx — loop is inside)
 // ---------------------------------------------------------------------------
 
+/** Push param names for an attribute (expands list attrs into K entries) */
+function pushAttrParams(parts: string[], prefix: string, a: { id: string; type: string; listSize?: number }): void {
+  if (a.type === 'list') {
+    const sz = a.listSize ?? 4;
+    for (let k = 0; k < sz; k++) parts.push(`${prefix}_${a.id}_${k}`);
+  } else {
+    parts.push(`${prefix}_${a.id}`);
+  }
+}
+
 function buildLoopParams(model: CAModel): {
   params: string;
-  cellAttrs: Array<{ id: string; type: string }>;
+  cellAttrs: Array<{ id: string; type: string; listSize?: number; listElementType?: string }>;
   neighborhoods: Array<{ id: string }>;
 } {
   const cellAttrs = model.attributes
     .filter(a => !a.isModelAttribute)
-    .map(a => ({ id: a.id, type: a.type }));
+    .map(a => ({ id: a.id, type: a.type, listSize: a.listSize, listElementType: a.listElementType }));
   const neighborhoods = model.neighborhoods.map(n => ({ id: n.id }));
 
-  // Parameters: total, read attrs, write attrs, full neighbor index arrays + sizes, modelAttrs, colors, activeViewer
   const parts: string[] = ['total'];
-  for (const a of cellAttrs) parts.push(`r_${a.id}`);
-  for (const a of cellAttrs) parts.push(`w_${a.id}`);
+  for (const a of cellAttrs) pushAttrParams(parts, 'r', a);
+  for (const a of cellAttrs) pushAttrParams(parts, 'w', a);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
   parts.push('modelAttrs', 'colors', 'activeViewer');
 
@@ -710,8 +726,8 @@ function buildCellParams(model: CAModel): string {
   const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
   const neighborhoods = model.neighborhoods;
   const parts: string[] = ['idx'];
-  for (const a of cellAttrs) parts.push(`r_${a.id}`);
-  for (const a of cellAttrs) parts.push(`w_${a.id}`);
+  for (const a of cellAttrs) pushAttrParams(parts, 'r', a);
+  for (const a of cellAttrs) pushAttrParams(parts, 'w', a);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
   parts.push('modelAttrs', 'colors', 'activeViewer');
   return parts.join(', ');
@@ -745,7 +761,15 @@ export function compileGraph(
   const cellParams = buildCellParams(model);
 
   // Generate attribute copy lines (previous → next generation)
-  const copyLines = cellAttrs.map(a => `      w_${a.id}[idx] = r_${a.id}[idx];`);
+  const copyLines: string[] = [];
+  for (const a of cellAttrs) {
+    if (a.type === 'list') {
+      const sz = a.listSize ?? 4;
+      for (let k = 0; k < sz; k++) copyLines.push(`      w_${a.id}_${k}[idx] = r_${a.id}_${k}[idx];`);
+    } else {
+      copyLines.push(`      w_${a.id}[idx] = r_${a.id}[idx];`);
+    }
+  }
 
   // --- Compile Step function (loop-wrapped) ---
   const stepNode = graphNodes.find(n => n.data.nodeType === 'step');
@@ -784,7 +808,15 @@ export function compileGraph(
       icNode, 'do', nodeMap, inputToSource, flowOutputToTargets, model,
     );
     // InputColor is called per-cell (for painted cells only), keep per-cell signature
-    const icCopyLines = cellAttrs.map(a => `  w_${a.id}[idx] = r_${a.id}[idx];`);
+    const icCopyLines: string[] = [];
+    for (const a of cellAttrs) {
+      if (a.type === 'list') {
+        const sz = a.listSize ?? 4;
+        for (let k = 0; k < sz; k++) icCopyLines.push(`  w_${a.id}_${k}[idx] = r_${a.id}_${k}[idx];`);
+      } else {
+        icCopyLines.push(`  w_${a.id}[idx] = r_${a.id}[idx];`);
+      }
+    }
     const code = [
       `(function(_r, _g, _b, ${cellParams}) {`,
       '  const colorIdx = idx * 4;',

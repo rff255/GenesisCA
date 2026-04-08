@@ -250,14 +250,17 @@ The app is functional with these major systems:
 ### Visual Programming Language (VPL)
 - `src/modeler/vpl/GraphEditor.tsx` — React Flow-based node graph editor
 - `src/modeler/vpl/CaNode.tsx` — Custom node component with per-type config UI
-- `src/modeler/vpl/nodes/` — 21 node types, each in its own file with `compile()` method
+- `src/modeler/vpl/nodes/` — 24 node types, each in its own file with `compile()` method
 - `src/modeler/vpl/compiler/compile.ts` — Two-pass compiler: hoists values, then emits flow
 - Multi-output nodes (InputColor, GetColorConstant, MacroNode) use `_v${nodeId}_${portId}` naming
 - Multi-root support: Step (per-generation) and InputColor (brush interaction) compile separately
 
 ### Simulation Engine (SoA Architecture)
 - `src/simulator/engine/sim.worker.ts` — Web Worker owns grid as Structure of Arrays
-- Grid storage: one typed array per attribute (`Uint8Array` bool, `Int32Array` int, `Float64Array` float), double-buffered
+- Grid storage: one typed array per attribute (`Uint8Array` bool, `Int32Array` int/tag, `Float64Array` float), double-buffered
+- List attributes: stored as K separate typed arrays (`attrId_0`, `attrId_1`, ...) — K = list size. Expanded in buildLoopArgs/buildCellArgs and compiler buildLoopParams/buildCellParams.
+- Tag attributes: `Int32Array`, value = index into `tagOptions` string array
+- Color model attributes: stored as 3 entries (`attrId_r`, `attrId_g`, `attrId_b`) in cachedModelAttrs
 - Neighbor access: pre-computed `Int32Array` index tables (built at init, handles torus/constant boundary once)
 - Step function is LOOP-WRAPPED: `(total, r_<attrs>..., w_<attrs>..., nIdx_<nbrs>..., nSz_<nbrs>..., modelAttrs, colors, activeViewer)` — contains the for-loop, called ONCE per step
 - InputColor functions remain per-cell: `(_r, _g, _b, idx, r_<attrs>..., ...)`
@@ -272,6 +275,9 @@ The app is functional with these major systems:
 - Bottom transport bar: playback + speed sliders; top viewer bar: mapping tabs; collapsible side panels
 - Keyboard shortcuts: Space=step (also pauses), Enter=play/pause, Esc=reset
 - Brush cursor rectangle drawn on canvas; Ctrl+LMB drag to resize brush
+- GIF recording: `gifenc` library, frame capture from srcCanvas in worker message handler, max 512px downscale
+- Screenshot exports at display canvas resolution (not grid resolution) with nearest-neighbor upscale
+- Recompile optimization: structural changes reinit worker, graph-only changes send `recompile` message (preserves grid state)
 
 ### Key Patterns
 - Graph state sync: single debounced sync (100ms) via refs — never use multiple setTimeout callbacks
@@ -289,6 +295,8 @@ The app is functional with these major systems:
 - Groups use React Flow's native `parentId` — auto-resize requires manual bounding box computation in `handleNodesChange`
 - Use `NodeResizer` component for resizable nodes (comments, groups) — CSS `resize: both` conflicts with React Flow drag
 - MacroNode, MacroInputNode, MacroOutputNode are hidden from Add Node menu via `HIDDEN_FROM_MENU` set
+- Undo/redo: `graphHistory.ts` module-level undo/redo stacks (max 50 snapshots). Ctrl+Z undo, Ctrl+Shift+Z / Ctrl+Y redo. Snapshot pushed BEFORE each mutation. History cleared on scope change.
+- `isMultiOutput()` helper in compile.ts replaces raw `MULTI_OUTPUT_TYPES.has()` — also checks `getModelAttribute` with `isColorAttr` config
 - Copy/paste: Ctrl+C/V/X + context menu. Module-level `clipboard` variable, strips macroInput/macroOutput, remaps IDs
 - Group paste: parentId must be remapped to new IDs, children keep relative positions, groups sorted before children
 

@@ -9,6 +9,9 @@ interface AttrDef {
   type: string;
   isModelAttribute: boolean;
   defaultValue: string;
+  tagOptions?: string[];
+  listSize?: number;
+  listElementType?: string;
 }
 
 interface NeighborhoodDef {
@@ -80,6 +83,7 @@ function createTypedArray(type: string, size: number): Float64Array | Int32Array
     case 'bool': return new Uint8Array(size);
     case 'integer': return new Int32Array(size);
     case 'float': return new Float64Array(size);
+    case 'tag': return new Int32Array(size);
     default: return new Float64Array(size);
   }
 }
@@ -89,6 +93,7 @@ function defaultValue(attr: AttrDef): number {
     case 'bool': return attr.defaultValue === 'true' ? 1 : 0;
     case 'integer': return parseInt(attr.defaultValue, 10) || 0;
     case 'float': return parseFloat(attr.defaultValue) || 0;
+    case 'tag': return parseInt(attr.defaultValue, 10) || 0;
     default: return 0;
   }
 }
@@ -103,12 +108,22 @@ function initGrid(): void {
   attrsB = {};
 
   for (const attr of cellAttrs) {
-    const arrA = createTypedArray(attr.type, total);
-    const arrB = createTypedArray(attr.type, total);
-    const dv = defaultValue(attr);
-    if (dv !== 0) { arrA.fill(dv); arrB.fill(dv); }
-    attrsA[attr.id] = arrA;
-    attrsB[attr.id] = arrB;
+    if (attr.type === 'list') {
+      const sz = attr.listSize ?? 4;
+      const elemType = attr.listElementType ?? 'integer';
+      for (let k = 0; k < sz; k++) {
+        const key = `${attr.id}_${k}`;
+        attrsA[key] = createTypedArray(elemType, total);
+        attrsB[key] = createTypedArray(elemType, total);
+      }
+    } else {
+      const arrA = createTypedArray(attr.type, total);
+      const arrB = createTypedArray(attr.type, total);
+      const dv = defaultValue(attr);
+      if (dv !== 0) { arrA.fill(dv); arrB.fill(dv); }
+      attrsA[attr.id] = arrA;
+      attrsB[attr.id] = arrB;
+    }
   }
 
   readAttrs = attrsA;
@@ -179,11 +194,21 @@ function buildNeighborIndices(): void {
 
 let activeViewer = '';
 
+/** Push attr arrays for a single attr (expands list attrs into K entries) */
+function pushAttrArrays(args: unknown[], attrs: Record<string, ArrayLike<number> & { [i: number]: number }>, attr: AttrDef): void {
+  if (attr.type === 'list') {
+    const sz = attr.listSize ?? 4;
+    for (let k = 0; k < sz; k++) args.push(attrs[`${attr.id}_${k}`]);
+  } else {
+    args.push(attrs[attr.id]);
+  }
+}
+
 /** Build args for the loop-wrapped step function (called once per step, not per cell) */
 function buildLoopArgs(): unknown[] {
   const args: unknown[] = [total];
-  for (const attr of cellAttrs) args.push(readAttrs[attr.id]);
-  for (const attr of cellAttrs) args.push(writeAttrs[attr.id]);
+  for (const attr of cellAttrs) pushAttrArrays(args, readAttrs, attr);
+  for (const attr of cellAttrs) pushAttrArrays(args, writeAttrs, attr);
   for (const nbr of neighborhoods) {
     args.push(nbrIndices[nbr.id]);
     args.push(nbr.coords.length);
@@ -195,8 +220,8 @@ function buildLoopArgs(): unknown[] {
 /** Build args for a per-cell function (InputColor) */
 function buildCellArgs(idx: number): unknown[] {
   const args: unknown[] = [idx];
-  for (const attr of cellAttrs) args.push(readAttrs[attr.id]);
-  for (const attr of cellAttrs) args.push(writeAttrs[attr.id]);
+  for (const attr of cellAttrs) pushAttrArrays(args, readAttrs, attr);
+  for (const attr of cellAttrs) pushAttrArrays(args, writeAttrs, attr);
   for (const nbr of neighborhoods) {
     args.push(nbrIndices[nbr.id]);
     args.push(nbr.coords.length);
@@ -239,30 +264,55 @@ function writeDefaultColors(): void {
 
 function randomizeGrid(): void {
   for (const attr of cellAttrs) {
-    const arr = readAttrs[attr.id]!;
-    for (let i = 0; i < total; i++) {
-      if (attr.type === 'bool') arr[i] = Math.random() > 0.7 ? 1 : 0;
-      else if (attr.type === 'integer') arr[i] = Math.floor(Math.random() * 10);
-      else if (attr.type === 'float') arr[i] = Math.random();
+    if (attr.type === 'list') {
+      const sz = attr.listSize ?? 4;
+      const elemType = attr.listElementType ?? 'integer';
+      for (let k = 0; k < sz; k++) {
+        const key = `${attr.id}_${k}`;
+        const arr = readAttrs[key]!;
+        for (let i = 0; i < total; i++) {
+          if (elemType === 'bool') arr[i] = Math.random() > 0.7 ? 1 : 0;
+          else if (elemType === 'integer') arr[i] = Math.floor(Math.random() * 10);
+          else if (elemType === 'float') arr[i] = Math.random();
+          else if (elemType === 'tag') arr[i] = Math.floor(Math.random() * Math.max(1, attr.tagOptions?.length ?? 1));
+        }
+        const wArr = writeAttrs[key]!;
+        (wArr as Uint8Array).set(arr as Uint8Array);
+      }
+    } else {
+      const arr = readAttrs[attr.id]!;
+      for (let i = 0; i < total; i++) {
+        if (attr.type === 'bool') arr[i] = Math.random() > 0.7 ? 1 : 0;
+        else if (attr.type === 'integer') arr[i] = Math.floor(Math.random() * 10);
+        else if (attr.type === 'float') arr[i] = Math.random();
+        else if (attr.type === 'tag') arr[i] = Math.floor(Math.random() * Math.max(1, attr.tagOptions?.length ?? 1));
+      }
+      const wArr = writeAttrs[attr.id]!;
+      (wArr as Uint8Array).set(arr as Uint8Array);
     }
-    // Copy to write buffer too
-    const wArr = writeAttrs[attr.id]!;
-    (wArr as Uint8Array).set(arr as Uint8Array);
   }
   generation = 0;
-  // Run one step so the model's color mappings define the visualization
   if (stepFn) runStep(); else writeDefaultColors();
 }
 
 function resetGrid(): void {
   for (const attr of cellAttrs) {
-    const dv = defaultValue(attr);
-    const arr = readAttrs[attr.id]!;
-    const wArr = writeAttrs[attr.id]!;
-    for (let i = 0; i < total; i++) { arr[i] = dv; wArr[i] = dv; }
+    if (attr.type === 'list') {
+      const sz = attr.listSize ?? 4;
+      for (let k = 0; k < sz; k++) {
+        const key = `${attr.id}_${k}`;
+        const arr = readAttrs[key]!;
+        const wArr = writeAttrs[key]!;
+        for (let i = 0; i < total; i++) { arr[i] = 0; wArr[i] = 0; }
+      }
+    } else {
+      const dv = defaultValue(attr);
+      const arr = readAttrs[attr.id]!;
+      const wArr = writeAttrs[attr.id]!;
+      for (let i = 0; i < total; i++) { arr[i] = dv; wArr[i] = dv; }
+    }
   }
   generation = 0;
-  // Run one step so the model's color mappings define the visualization
   if (stepFn) runStep(); else writeDefaultColors();
 }
 
@@ -307,7 +357,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       cachedModelAttrs = {};
       for (const attr of msg.attributes) {
         if (!attr.isModelAttribute) continue;
-        cachedModelAttrs[attr.id] = defaultValue(attr);
+        if (attr.type === 'color') {
+          const hex = attr.defaultValue || '#808080';
+          cachedModelAttrs[attr.id + '_r'] = parseInt(hex.slice(1, 3), 16) || 0;
+          cachedModelAttrs[attr.id + '_g'] = parseInt(hex.slice(3, 5), 16) || 0;
+          cachedModelAttrs[attr.id + '_b'] = parseInt(hex.slice(5, 7), 16) || 0;
+        } else {
+          cachedModelAttrs[attr.id] = defaultValue(attr);
+        }
       }
 
       activeViewer = msg.activeViewer;

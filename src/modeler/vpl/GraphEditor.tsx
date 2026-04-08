@@ -36,6 +36,7 @@ const nodeTypes: NodeTypes = {
 let clipboard: { nodes: GraphNode[]; edges: GraphEdge[] } | null = null;
 
 import { setIsConnecting, setConnectingFrom, setShowPortLabels } from './graphState';
+import { pushSnapshot, undo, redo, pushToRedo, pushToUndo, clearHistory } from './graphHistory';
 
 // ---------------------------------------------------------------------------
 // ID generation
@@ -80,7 +81,7 @@ function toRFEdges(graphEdges: GraphEdge[]): Edge[] {
     target: e.target,
     sourceHandle: e.sourceHandle,
     targetHandle: e.targetHandle,
-    style: { stroke: '#4cc9f0', strokeWidth: 2 },
+    style: { stroke: e.sourceHandle.includes('flow') ? '#66bb6a' : '#4cc9f0', strokeWidth: 2 },
     animated: e.sourceHandle.includes('flow'),
   }));
 }
@@ -171,6 +172,39 @@ export function GraphEditorInner() {
     return () => { if (syncTimer.current) clearTimeout(syncTimer.current); };
   }, []);
 
+  // --- Undo / Redo ---
+  const lastSnapshotTime = useRef(0);
+
+  const pushCurrentSnapshot = useCallback(() => {
+    pushSnapshot(toGraphNodes(nodesRef.current), toGraphEdges(edgesRef.current));
+    lastSnapshotTime.current = Date.now();
+  }, []);
+
+  /** Push snapshot only if enough time has passed (for debounced config changes) */
+  const pushDebouncedSnapshot = useCallback(() => {
+    if (Date.now() - lastSnapshotTime.current > 300) {
+      pushCurrentSnapshot();
+    }
+  }, [pushCurrentSnapshot]);
+
+  const handleUndo = useCallback(() => {
+    const snapshot = undo();
+    if (!snapshot) return;
+    pushToRedo(toGraphNodes(nodesRef.current), toGraphEdges(edgesRef.current));
+    setNodes(toRFNodes(snapshot.nodes));
+    setEdges(toRFEdges(snapshot.edges));
+    scheduleSync();
+  }, [setNodes, setEdges, scheduleSync]);
+
+  const handleRedo = useCallback(() => {
+    const snapshot = redo();
+    if (!snapshot) return;
+    pushToUndo(toGraphNodes(nodesRef.current), toGraphEdges(edgesRef.current));
+    setNodes(toRFNodes(snapshot.nodes));
+    setEdges(toRFEdges(snapshot.edges));
+    scheduleSync();
+  }, [setNodes, setEdges, scheduleSync]);
+
   // Switch displayed graph when scope changes
   useEffect(() => {
     const scopeId = currentScope[currentScope.length - 1];
@@ -184,7 +218,8 @@ export function GraphEditorInner() {
         setEdges(toRFEdges(macroDef.edges));
       }
     }
-    // Fit view after scope change
+    // Fit view after scope change + reset history for new scope
+    clearHistory();
     setTimeout(() => rfInstance.current?.fitView(), 50);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentScope, modelVersion]);
@@ -236,10 +271,11 @@ export function GraphEditorInner() {
   // --- Connection handler (no stealing — isValidConnection handles all checks) ---
   const onConnect = useCallback(
     (connection: Connection) => {
+      pushCurrentSnapshot();
       setEdges(eds => addEdge(
         {
           ...connection,
-          style: { stroke: '#4cc9f0', strokeWidth: 2 },
+          style: { stroke: (connection.sourceHandle?.includes('flow') ? '#66bb6a' : '#4cc9f0'), strokeWidth: 2 },
           animated: connection.sourceHandle?.includes('flow') ?? false,
         },
         eds,
@@ -262,6 +298,16 @@ export function GraphEditorInner() {
           return true;
         });
       }
+
+      // Push undo snapshot for significant changes (before applying)
+      const hasPositionEndChange = changes.some(
+        c => c.type === 'position' && 'dragging' in c && !c.dragging,
+      );
+      const hasRemove = changes.some(c => c.type === 'remove');
+      if (hasPositionEndChange || hasRemove) {
+        pushCurrentSnapshot();
+      }
+
       onNodesChange(changes);
 
       // Auto-resize groups to always cover all children (all 4 sides)
@@ -351,10 +397,11 @@ export function GraphEditorInner() {
 
   const handleEdgesChange = useCallback(
     (changes: Parameters<typeof onEdgesChange>[0]) => {
+      if (changes.some(c => c.type === 'remove')) pushCurrentSnapshot();
       onEdgesChange(changes);
       if (changes.some(c => c.type === 'remove')) scheduleSync();
     },
-    [onEdgesChange, scheduleSync],
+    [onEdgesChange, scheduleSync, pushCurrentSnapshot],
   );
 
   // --- Unified context menu ---
@@ -425,6 +472,7 @@ export function GraphEditorInner() {
       if (!contextMenu) return;
       const def = getNodeDef(nodeType);
       if (!def) return;
+      pushCurrentSnapshot();
       setNodes(nds => {
         const id = generateNodeId(nds);
         const newNode: Node = {
@@ -446,6 +494,7 @@ export function GraphEditorInner() {
     const targetNodeId = contextMenu.target.type === 'node' ? contextMenu.target.nodeId : '';
     const sourceNode = nodes.find(n => n.id === targetNodeId);
     if (!sourceNode) return;
+    pushCurrentSnapshot();
     setNodes(nds => {
       const id = generateNodeId(nds);
       return [...nds, {
@@ -480,6 +529,7 @@ export function GraphEditorInner() {
         return;
       }
     }
+    pushCurrentSnapshot();
     deleteElements({ nodes: nodeIds.map(id => ({ id })) });
     scheduleSync();
     setContextMenu(null);
@@ -506,6 +556,7 @@ export function GraphEditorInner() {
 
   const handlePaste = useCallback(() => {
     if (!clipboard || clipboard.nodes.length === 0) return;
+    pushCurrentSnapshot();
 
     // Compute clipboard bounding-box center (top-level nodes only)
     const topLevel = clipboard.nodes.filter(n => {
@@ -590,7 +641,7 @@ export function GraphEditorInner() {
         target: idMap.get(e.target)!,
         sourceHandle: e.sourceHandle,
         targetHandle: e.targetHandle,
-        style: { stroke: '#4cc9f0', strokeWidth: 2 },
+        style: { stroke: e.sourceHandle.includes('flow') ? '#66bb6a' : '#4cc9f0', strokeWidth: 2 },
         animated: e.sourceHandle.includes('flow'),
       }));
 
@@ -610,6 +661,7 @@ export function GraphEditorInner() {
   const duplicateSelection = useCallback(() => {
     const selected = nodes.filter(n => n.selected);
     if (selected.length === 0) return;
+    pushCurrentSnapshot();
     const selectedIds = new Set(selected.map(n => n.id));
     const srcNodes = toGraphNodes(
       selected.filter(n => {
@@ -660,7 +712,7 @@ export function GraphEditorInner() {
         target: idMap.get(e.target)!,
         sourceHandle: e.sourceHandle,
         targetHandle: e.targetHandle,
-        style: { stroke: '#4cc9f0', strokeWidth: 2 },
+        style: { stroke: e.sourceHandle.includes('flow') ? '#66bb6a' : '#4cc9f0', strokeWidth: 2 },
         animated: e.sourceHandle.includes('flow'),
       }));
 
@@ -677,6 +729,7 @@ export function GraphEditorInner() {
 
   const handleCut = useCallback(() => {
     handleCopy();
+    pushCurrentSnapshot();
     // Delete selected (but not macroInput/macroOutput)
     const selected = nodes.filter(n => n.selected);
     const deletableIds = selected
@@ -699,6 +752,9 @@ export function GraphEditorInner() {
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
       const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key === 'z' && !e.shiftKey) { handleUndo(); e.preventDefault(); return; }
+      if (mod && e.key === 'z' && e.shiftKey) { handleRedo(); e.preventDefault(); return; }
+      if (mod && e.key === 'y') { handleRedo(); e.preventDefault(); return; }
       if (mod && e.key === 'c') { handleCopy(); e.preventDefault(); }
       if (mod && e.key === 'v') { handlePaste(); e.preventDefault(); }
       if (mod && e.key === 'x') { handleCut(); e.preventDefault(); }
@@ -706,13 +762,14 @@ export function GraphEditorInner() {
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [handleCopy, handlePaste, handleCut, duplicateSelection]);
+  }, [handleCopy, handlePaste, handleCut, duplicateSelection, handleUndo, handleRedo]);
 
   const renameNode = useCallback(() => {
     if (!contextMenu || contextMenu.target.type !== 'node') return;
     const nodeId = contextMenu.target.nodeId;
     const name = window.prompt('Node name:', '');
     if (name === null) { setContextMenu(null); return; }
+    pushCurrentSnapshot();
     setNodes(nds => nds.map(n =>
       n.id === nodeId ? { ...n, data: { ...n.data, label: name || undefined } } : n,
     ));
@@ -722,6 +779,7 @@ export function GraphEditorInner() {
 
   const addCommentNode = useCallback(() => {
     if (!contextMenu) return;
+    pushCurrentSnapshot();
     setNodes(nds => {
       const id = generateNodeId(nds);
       return [...nds, {
@@ -741,6 +799,7 @@ export function GraphEditorInner() {
     if (!contextMenu || contextMenu.target.type !== 'selection') return;
     const name = window.prompt('Group name:', 'Group');
     if (!name) { setContextMenu(null); return; }
+    pushCurrentSnapshot();
     const selectedIds = new Set(contextMenu.target.nodeIds);
     const selectedNodes = nodes.filter(n => selectedIds.has(n.id));
     if (selectedNodes.length < 2) return;
@@ -788,6 +847,7 @@ export function GraphEditorInner() {
 
   const dismissGroup = useCallback(() => {
     if (!contextMenu || contextMenu.target.type !== 'node' || !contextMenu.target.isGroup) return;
+    pushCurrentSnapshot();
     const groupId = contextMenu.target.nodeId;
     // Use getNodes() for fresh positions (avoids stale closure after auto-resize)
     const freshNodes = getNodes();
@@ -826,6 +886,7 @@ export function GraphEditorInner() {
 
   const createMacroFromSelection = useCallback(() => {
     if (!contextMenu || contextMenu.target.type !== 'selection') return;
+    pushCurrentSnapshot();
     const selectedIds = new Set(contextMenu.target.nodeIds);
     const selectedNodes = nodes.filter(n => selectedIds.has(n.id) && n.type !== 'commentNode' && n.type !== 'groupNode');
     if (selectedNodes.length < 2) {
@@ -930,7 +991,7 @@ export function GraphEditorInner() {
         sourceHandle: e.sourceHandle,
         target: macroNodeId,
         targetHandle: handleId({ id: `in_${i}`, kind: 'input', category: exposedInputs[i]!.category }),
-        style: { stroke: '#4cc9f0', strokeWidth: 2 },
+        style: { stroke: exposedInputs[i]!.category === 'flow' ? '#66bb6a' : '#4cc9f0', strokeWidth: 2 },
         animated: exposedInputs[i]!.category === 'flow',
       })),
       ...externalOutputEdges.map((e, i) => ({
@@ -939,7 +1000,7 @@ export function GraphEditorInner() {
         sourceHandle: handleId({ id: `out_${i}`, kind: 'output', category: exposedOutputs[i]!.category }),
         target: e.target,
         targetHandle: e.targetHandle,
-        style: { stroke: '#4cc9f0', strokeWidth: 2 },
+        style: { stroke: exposedOutputs[i]!.category === 'flow' ? '#66bb6a' : '#4cc9f0', strokeWidth: 2 },
         animated: exposedOutputs[i]!.category === 'flow',
       })),
     ];
@@ -969,7 +1030,7 @@ export function GraphEditorInner() {
     if (params.handleId) {
       const parsed = parseHandleId(params.handleId);
       if (parsed && params.nodeId) {
-        setConnectingFrom({ category: parsed.category, nodeId: params.nodeId });
+        setConnectingFrom({ category: parsed.category, kind: parsed.kind, nodeId: params.nodeId });
       }
     }
   }, []);
@@ -998,6 +1059,7 @@ export function GraphEditorInner() {
   // Undo Macro — restore subgraph inline
   const undoMacro = useCallback(() => {
     if (!contextMenu || contextMenu.target.type !== 'node' || !contextMenu.target.isMacro) return;
+    pushCurrentSnapshot();
     const macroNodeId = contextMenu.target.nodeId;
     // Use getNodes() for fresh positions (avoids stale closure)
     const freshNodes = getNodes();
@@ -1041,7 +1103,7 @@ export function GraphEditorInner() {
         target: e.target,
         sourceHandle: e.sourceHandle,
         targetHandle: e.targetHandle,
-        style: { stroke: '#4cc9f0', strokeWidth: 2 },
+        style: { stroke: e.sourceHandle.includes('flow') ? '#66bb6a' : '#4cc9f0', strokeWidth: 2 },
         animated: e.sourceHandle.includes('flow'),
       }));
 
@@ -1111,10 +1173,11 @@ export function GraphEditorInner() {
     setContextMenu(null);
   }, [contextMenu, getNodes, edges, model.macroDefs, removeMacro, setNodes, setEdges, scheduleSync]);
 
-  // Sync on node data changes
+  // Sync on node data changes (config edits via inline widgets)
   const onNodeDataChange = useCallback(() => {
+    pushDebouncedSnapshot();
     scheduleSync();
-  }, [scheduleSync]);
+  }, [scheduleSync, pushDebouncedSnapshot]);
 
   const categories = getNodeDefsByCategory();
 

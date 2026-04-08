@@ -16,7 +16,7 @@ export interface PortDef {
   dataType?: PortDataType;  // only for value ports
   isArray?: boolean;        // true for array-typed value ports (e.g., neighbor values)
   /** Inline widget type for unconnected input ports (Unreal Blueprint style) */
-  inlineWidget?: 'number' | 'bool' | 'color';
+  inlineWidget?: 'number' | 'bool' | 'color' | 'tag';
   /** Default value for inline widget when port is unconnected */
   defaultValue?: string;
 }

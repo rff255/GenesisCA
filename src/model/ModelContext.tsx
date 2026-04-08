@@ -48,6 +48,7 @@ type ModelAction =
   | { type: 'REMOVE_ATTRIBUTE'; id: string }
   | { type: 'UPDATE_ATTRIBUTE'; id: string; changes: Partial<Attribute> }
   | { type: 'ADD_NEIGHBORHOOD' }
+  | { type: 'DUPLICATE_NEIGHBORHOOD'; sourceId: string }
   | { type: 'REMOVE_NEIGHBORHOOD'; id: string }
   | { type: 'UPDATE_NEIGHBORHOOD'; id: string; changes: Partial<Neighborhood> }
   | { type: 'ADD_MAPPING'; isAttributeToColor: boolean }
@@ -124,6 +125,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         name: 'new_neighborhood',
         description: '',
         coords: [],
+        margin: 2,
       };
       return {
         ...state,
@@ -131,6 +133,26 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         model: {
           ...state.model,
           neighborhoods: [...state.model.neighborhoods, newNbr],
+        },
+      };
+    }
+
+    case 'DUPLICATE_NEIGHBORHOOD': {
+      const source = state.model.neighborhoods.find(n => n.id === action.sourceId);
+      if (!source) return state;
+      const dup: Neighborhood = {
+        id: generateId(source.name + '_copy'),
+        name: source.name + ' (copy)',
+        description: source.description,
+        coords: source.coords.map(([r, c]) => [r, c] as [number, number]),
+        margin: source.margin,
+      };
+      return {
+        ...state,
+        isDirty: true,
+        model: {
+          ...state.model,
+          neighborhoods: [...state.model.neighborhoods, dup],
         },
       };
     }
@@ -268,6 +290,7 @@ export interface ModelContextValue {
   removeAttribute: (id: string) => void;
   updateAttribute: (id: string, changes: Partial<Attribute>) => void;
   addNeighborhood: () => void;
+  duplicateNeighborhood: (sourceId: string) => void;
   removeNeighborhood: (id: string) => void;
   updateNeighborhood: (id: string, changes: Partial<Neighborhood>) => void;
   addMapping: (isAttributeToColor: boolean) => void;
@@ -299,6 +322,11 @@ function createInitialState(): ModelState {
         if (!model.graphEdges) model.graphEdges = [];
         if (!model.macroDefs) model.macroDefs = [];
         if (!model.properties.tags) model.properties.tags = [];
+        for (const n of model.neighborhoods) { n.margin ??= 2; }
+        for (const a of model.attributes) {
+          if (a.type === 'tag' && !a.tagOptions) a.tagOptions = [];
+          if (a.type === 'list') { a.listSize ??= 4; a.listElementType ??= 'integer'; }
+        }
         return { model, isDirty: false, modelVersion: 0 };
       }
     }
@@ -371,6 +399,10 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     () => dispatch({ type: 'ADD_NEIGHBORHOOD' }),
     [],
   );
+  const duplicateNeighborhood = useCallback(
+    (sourceId: string) => dispatch({ type: 'DUPLICATE_NEIGHBORHOOD', sourceId }),
+    [],
+  );
   const removeNeighborhood = useCallback(
     (id: string) => dispatch({ type: 'REMOVE_NEIGHBORHOOD', id }),
     [],
@@ -435,6 +467,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       removeAttribute,
       updateAttribute,
       addNeighborhood,
+      duplicateNeighborhood,
       removeNeighborhood,
       updateNeighborhood,
       addMapping,
@@ -457,6 +490,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       removeAttribute,
       updateAttribute,
       addNeighborhood,
+      duplicateNeighborhood,
       removeNeighborhood,
       updateNeighborhood,
       addMapping,
