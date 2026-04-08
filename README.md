@@ -66,21 +66,29 @@ A complete GenesisCA model definition consists of:
 - **Neighborhoods Panel** — interactive grid editor for defining spatial neighborhoods
 - **Mappings Panel** — Attribute-to-Color and Color-to-Attribute mapping definitions
 - **Graph Editor** — 21 node types across 6 categories (flow, data, logic, aggregation, output, color), with RMB pan, scroll zoom, and snap-to-grid
+- **Connection validation** — prevents incompatible connections (flow/value), cycles, and duplicate inputs; compatible ports highlight during drag
 - **Inline Port Widgets** — input ports show small value editors (number/bool) when unconnected, eliminating the need for constant nodes in simple cases
 - **Node Collapse/Expand** — double-click any node to collapse it; constants show their value; collapsed nodes temporarily expand when connecting edges
 - **Color Pickers** — Color Constant and Set Color Viewer nodes include hex color pickers with per-channel R/G/B controls
+- **Node Explorer** — searchable right-side panel (Ctrl+F) listing all nodes with click-to-focus
+- **Canvas toggles** — toggle port labels, grid lines, and snap-to-grid from buttons below zoom controls
 - **Macro System** — encapsulate node groups into reusable subgraphs with MacroInput/MacroOutput boundary nodes
 - **Copy/Paste/Duplicate** — Ctrl+C/V/X/D, context menu on single nodes and selections, paste at right-click location
 - **Groups & Comments** — visual organization tools; Undo Group dissolves a group and selects all contained nodes
+- **Edge management** — double-click any edge to delete it
 
 ### The Simulator
-- **Play/Pause/Step/Reset** with FPS and Gens/Frame sliders (+ unlimited modes)
-- **Zoom/Pan** (scroll + LMB drag) and **Brush tool** (RMB)
+- **Transport bar** — Play/Pause/Step/Reset with FPS and Gens/Frame sliders, keyboard shortcuts (Space=step, Enter=play/pause, Esc=reset)
+- **Canvas controls** — LMB=brush, RMB=pan, scroll=zoom, Ctrl+LMB drag=resize brush
+- **Brush tool** — configurable color, width/height, input mapping; visual brush cursor; Ctrl+drag interactive resize
+- **Viewer tabs** — horizontal bar at the top to switch between Attribute-to-Color visualization modes
+- **Collapsible panels** — left panel for settings (actions, grid dimensions, model attributes), right panel for brush
+- **Zoom controls** — +/−/fit buttons on the canvas, matching the modeler
 - **Live model attribute controls** — change global parameters without recompiling
 - **Grid dimension overrides** — experiment with different sizes
 - **PNG screenshot export** — pixel-perfect grid capture
-- **Image import** — load PNG/BMP/JPG as starting point (1 pixel = 1 cell)
-- **Viewer selector** — switch between color mappings
+- **Open Image** — load PNG/BMP/JPG as starting point via the brush panel
+- **Persistent settings** — speed, brush, viewer settings saved across sessions
 
 ### Help & Library
 - **Comprehensive Help tab** — 8 sections covering all features with sidebar navigation

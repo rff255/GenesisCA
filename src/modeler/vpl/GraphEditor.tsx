@@ -34,7 +34,7 @@ const nodeTypes: NodeTypes = {
 
 let clipboard: { nodes: GraphNode[]; edges: GraphEdge[] } | null = null;
 
-import { setIsConnecting } from './graphState';
+import { setIsConnecting, setConnectingFrom, setShowPortLabels } from './graphState';
 
 // ---------------------------------------------------------------------------
 // ID generation
@@ -126,12 +126,15 @@ interface ContextMenuState {
 // Main component
 // ---------------------------------------------------------------------------
 
-function GraphEditorInner() {
+export function GraphEditorInner() {
   const { model, modelVersion, setGraph, addMacro, updateMacro, removeMacro } = useModel();
   const [nodes, setNodes, onNodesChange] = useNodesState(toRFNodes(model.graphNodes));
   const [edges, setEdges, onEdgesChange] = useEdgesState(toRFEdges(model.graphEdges));
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [currentScope, setCurrentScope] = useState<string[]>(['root']);
+  const [showGrid, setShowGrid] = useState(true);
+  const [snapEnabled, setSnapEnabled] = useState(true);
+  const [portLabelsVisible, setPortLabelsVisible] = useState(true);
   const rfInstance = useRef<ReactFlowInstance | null>(null);
   const { deleteElements, getNodes, updateNodeData } = useReactFlow();
 
@@ -185,26 +188,61 @@ function GraphEditorInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentScope, modelVersion]);
 
-  // --- Connection handler ---
+  // --- Connection validation ---
+  const isValidConnection = useCallback(
+    (connection: Connection) => {
+      // Prevent self-connections
+      if (connection.source === connection.target) return false;
+
+      // Parse handle categories
+      const srcParsed = parseHandleId(connection.sourceHandle ?? '');
+      const tgtParsed = parseHandleId(connection.targetHandle ?? '');
+      if (!srcParsed || !tgtParsed) return false;
+
+      // Prevent flow↔value cross-category connections
+      if (srcParsed.category !== tgtParsed.category) return false;
+
+      // Prevent connecting to an already-connected value input
+      if (tgtParsed.category === 'value') {
+        const currentEdges = edgesRef.current;
+        const alreadyConnected = currentEdges.some(
+          e => e.target === connection.target && e.targetHandle === connection.targetHandle,
+        );
+        if (alreadyConnected) return false;
+      }
+
+      // Cycle detection: BFS from target to see if it can reach source
+      const currentEdges = edgesRef.current;
+      const visited = new Set<string>();
+      const queue = [connection.target!];
+      while (queue.length > 0) {
+        const nodeId = queue.shift()!;
+        if (nodeId === connection.source) return false; // cycle!
+        if (visited.has(nodeId)) continue;
+        visited.add(nodeId);
+        for (const e of currentEdges) {
+          if (e.source === nodeId && !visited.has(e.target)) {
+            queue.push(e.target);
+          }
+        }
+      }
+
+      return true;
+    },
+    [],
+  );
+
+  // --- Connection handler (no stealing — isValidConnection handles all checks) ---
   const onConnect = useCallback(
     (connection: Connection) => {
-      setEdges(eds => {
-        const isValueInput = connection.targetHandle?.includes('_value_');
-        let filtered = eds;
-        if (isValueInput) {
-          filtered = eds.filter(
-            e => !(e.target === connection.target && e.targetHandle === connection.targetHandle),
-          );
-        }
-        return addEdge(
-          {
-            ...connection,
-            style: { stroke: '#4cc9f0', strokeWidth: 2 },
-            animated: connection.sourceHandle?.includes('flow') ?? false,
-          },
-          filtered,
-        );
-      });
+      setEdges(eds => addEdge(
+        {
+          ...connection,
+          style: { stroke: '#4cc9f0', strokeWidth: 2 },
+          animated: connection.sourceHandle?.includes('flow') ?? false,
+        },
+        eds,
+      ));
       scheduleSync();
     },
     [setEdges, scheduleSync],
@@ -925,8 +963,21 @@ function GraphEditorInner() {
 
   // Track whether a connection is being dragged (for hover-to-uncollapse)
   const isConnecting = useRef(false);
-  const onConnectStart = useCallback(() => { isConnecting.current = true; setIsConnecting(true); }, []);
-  const onConnectEnd = useCallback(() => { isConnecting.current = false; setIsConnecting(false); }, []);
+  const onConnectStart = useCallback((_event: React.MouseEvent | TouchEvent, params: { nodeId: string | null; handleId: string | null }) => {
+    isConnecting.current = true;
+    setIsConnecting(true);
+    if (params.handleId) {
+      const parsed = parseHandleId(params.handleId);
+      if (parsed && params.nodeId) {
+        setConnectingFrom({ category: parsed.category, nodeId: params.nodeId });
+      }
+    }
+  }, []);
+  const onConnectEnd = useCallback(() => {
+    isConnecting.current = false;
+    setIsConnecting(false);
+    setConnectingFrom(null);
+  }, []);
 
   // Double-click: enter macro or toggle collapse
   const onNodeDoubleClick = useCallback((_event: React.MouseEvent, node: Node) => {
@@ -1097,14 +1148,16 @@ function GraphEditorInner() {
         onConnect={onConnect}
         onConnectStart={onConnectStart}
         onConnectEnd={onConnectEnd}
+        isValidConnection={isValidConnection}
         onInit={instance => { rfInstance.current = instance; }}
         onPaneContextMenu={onPaneContextMenu}
         onNodeContextMenu={onNodeContextMenu}
         onNodeDoubleClick={onNodeDoubleClick}
+        onEdgeDoubleClick={(_event, edge) => { setEdges(eds => eds.filter(e => e.id !== edge.id)); scheduleSync(); }}
         nodeTypes={nodeTypes}
         fitView
         deleteKeyCode={['Delete', 'Backspace']}
-        snapToGrid
+        snapToGrid={snapEnabled}
         snapGrid={[20, 20]}
         panOnDrag={[2]}
         selectionOnDrag
@@ -1116,8 +1169,32 @@ function GraphEditorInner() {
         }}
         proOptions={{ hideAttribution: true }}
       >
-        <Background color="#1a2538" gap={20} />
+        {showGrid && <Background color="#1a2538" gap={20} variant={'lines' as 'lines'} />}
         <Controls showInteractive={false} />
+        {/* Canvas toggle buttons */}
+        <div className={styles.canvasToggles}>
+          <button
+            className={`${styles.toggleButton} ${portLabelsVisible ? styles.toggleActive : ''}`}
+            onClick={() => { setPortLabelsVisible(v => !v); setShowPortLabels(!portLabelsVisible); }}
+            title="Toggle port labels"
+          >
+            Aa
+          </button>
+          <button
+            className={`${styles.toggleButton} ${showGrid ? styles.toggleActive : ''}`}
+            onClick={() => setShowGrid(v => !v)}
+            title="Toggle grid"
+          >
+            #
+          </button>
+          <button
+            className={`${styles.toggleButton} ${snapEnabled ? styles.toggleActive : ''}`}
+            onClick={() => setSnapEnabled(v => !v)}
+            title="Toggle snap to grid"
+          >
+            &loz;
+          </button>
+        </div>
         <MiniMap
           nodeColor={n => n.type === 'groupNode' ? 'rgba(45,64,89,0.5)' : '#2d4059'}
           maskColor="rgba(0, 0, 0, 0.7)"

@@ -1,0 +1,85 @@
+.explorer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.search {
+  width: 100%;
+  padding: 6px 10px;
+  background: #0d1117;
+  border: 1px solid #2d4059;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 0.72rem;
+  font-family: inherit;
+  outline: none;
+  margin-bottom: 8px;
+}
+
+.search:focus {
+  border-color: #4cc9f0;
+}
+
+.list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.sectionLabel {
+  font-size: 0.6rem;
+  font-weight: 600;
+  color: #4cc9f0;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 6px 0 4px;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 6px;
+  background: transparent;
+  border: none;
+  color: #c0c8d0;
+  font-size: 0.68rem;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 0.1s;
+}
+
+.item:hover {
+  background: rgba(76, 201, 240, 0.1);
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.itemLabel {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.itemType {
+  font-size: 0.55rem;
+  color: #6080a0;
+  flex-shrink: 0;
+}
+
+.empty {
+  font-size: 0.68rem;
+  color: #6080a0;
+  text-align: center;
+  padding: 16px 0;
+  font-style: italic;
+}

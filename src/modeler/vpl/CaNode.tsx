@@ -6,7 +6,7 @@ import { handleId } from './types';
 import type { NodeConfig } from './types';
 import type { MacroPort } from '../../model/types';
 import { useModel } from '../../model/ModelContext';
-import { isConnectingGlobal } from './graphState';
+import { isConnectingGlobal, showPortLabelsGlobal, connectingFrom } from './graphState';
 import styles from './CaNode.module.css';
 
 interface CaNodeData {
@@ -660,7 +660,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         })()}
       </div>
 
-      {/* Input handles (left side) + external inline widgets */}
+      {/* Input handles (left side) + external inline widgets + external labels */}
       {inputPorts.map((port, i) => {
         const portDef = allInputPortDefs.get(port.id) ?? port;
         const hid = handleId(port);
@@ -673,13 +673,13 @@ function CaNodeComponent({ id, data }: NodeProps) {
           const attrId = nodeData.config.attributeId as string;
           const attr = attrId ? model.attributes.find(a => a.id === attrId) : undefined;
           if (!attr) {
-            effectiveWidget = undefined; // No attribute selected → no widget
+            effectiveWidget = undefined;
           } else if (attr.type === 'bool') {
             effectiveWidget = 'bool';
           } else if (attr.type === 'integer' || attr.type === 'float') {
             effectiveWidget = 'number';
           } else {
-            effectiveWidget = undefined; // list/tag → too complex
+            effectiveWidget = undefined;
           }
         }
 
@@ -687,13 +687,24 @@ function CaNodeComponent({ id, data }: NodeProps) {
         const configKey = `_port_${port.id}`;
         const val = (nodeData.config[configKey] as string) ?? portDef.defaultValue ?? '';
 
+        // Port compatibility highlighting (also dim already-connected value inputs)
+        const cf = connectingFrom;
+        const categoryMatch = cf ? port.category === cf.category && id !== cf.nodeId : null;
+        const alreadyOccupied = isConnected && port.category === 'value';
+        const isCompatible = cf ? (categoryMatch && !alreadyOccupied) : null;
+        const handleClass = [
+          port.category === 'flow' ? styles.handleFlow : styles.handleValue,
+          cf && isCompatible ? styles.handleCompatible : '',
+          cf && !isCompatible ? styles.handleIncompatible : '',
+        ].filter(Boolean).join(' ');
+
         return (
           <div key={hid}>
             <Handle
               type="target"
               position={Position.Left}
               id={hid}
-              className={port.category === 'flow' ? styles.handleFlow : styles.handleValue}
+              className={handleClass}
               style={{ top: `${topPx}px` }}
               title={port.label}
             />
@@ -720,48 +731,45 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 )}
               </div>
             )}
+            {showPortLabelsGlobal && !showWidget && (
+              <div className={styles.portLabelLeft} style={{ top: `${topPx}px` }}>
+                {port.label}
+              </div>
+            )}
           </div>
         );
       })}
 
-      {/* Output handles (right side) */}
-      {outputPorts.map((port, i) => (
-        <Handle
-          key={handleId(port)}
-          type="source"
-          position={Position.Right}
-          id={handleId(port)}
-          className={port.category === 'flow' ? styles.handleFlow : styles.handleValue}
-          style={{ top: `${30 + i * 22}px` }}
-          title={port.label}
-        />
-      ))}
+      {/* Output handles (right side) + external labels */}
+      {outputPorts.map((port, i) => {
+        const hid = handleId(port);
+        const topPx = 30 + i * 22;
+        const cf = connectingFrom;
+        const isCompatible = cf ? (port.category === cf.category && id !== cf.nodeId) : null;
+        const handleClass = [
+          port.category === 'flow' ? styles.handleFlow : styles.handleValue,
+          cf && isCompatible ? styles.handleCompatible : '',
+          cf && !isCompatible ? styles.handleIncompatible : '',
+        ].filter(Boolean).join(' ');
 
-      {/* Port labels */}
-      <div className={styles.portLabels}>
-        <div className={styles.inputLabels}>
-          {inputPorts.map(p => {
-            const hid = handleId(p);
-            const isConnected = connectedInputHandles.has(hid);
-            const portDef = allInputPortDefs.get(p.id) ?? p;
-            // Determine if inline widget is showing (same logic as above)
-            let ew = portDef.inlineWidget;
-            if (ew && nodeData.nodeType === 'setAttribute' && p.id === 'value') {
-              const attrId = nodeData.config.attributeId as string;
-              const attr = attrId ? model.attributes.find(a => a.id === attrId) : undefined;
-              if (!attr || (attr.type !== 'bool' && attr.type !== 'integer' && attr.type !== 'float')) ew = undefined;
-            }
-            const hasWidget = ew && !isConnected && p.category === 'value';
-            // Hide label when inline widget is shown (widget is outside the node)
-            return <div key={p.id} className={styles.portLabel}>{hasWidget ? '' : p.label}</div>;
-          })}
-        </div>
-        <div className={styles.outputLabels}>
-          {outputPorts.map(p => (
-            <div key={p.id} className={styles.portLabel}>{p.label}</div>
-          ))}
-        </div>
-      </div>
+        return (
+          <div key={hid}>
+            <Handle
+              type="source"
+              position={Position.Right}
+              id={hid}
+              className={handleClass}
+              style={{ top: `${topPx}px` }}
+              title={port.label}
+            />
+            {showPortLabelsGlobal && (
+              <div className={styles.portLabelRight} style={{ top: `${topPx}px` }}>
+                {port.label}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
