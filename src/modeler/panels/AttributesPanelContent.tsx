@@ -108,7 +108,7 @@ export function AttributesPanelContent() {
                 onChange={e => {
                   const newType = e.target.value as AttributeType;
                   const resetDefaults: Record<string, string> = {
-                    bool: 'false', integer: '0', float: '0', list: '', tag: '',
+                    bool: 'false', integer: '0', float: '0', list: '', tag: '', color: '#808080',
                   };
                   updateAttribute(selected.id, {
                     type: newType,
@@ -119,8 +119,8 @@ export function AttributesPanelContent() {
                 <option value="bool">Bool</option>
                 <option value="integer">Integer</option>
                 <option value="float">Float</option>
-                <option value="list">List</option>
                 <option value="tag">Tag</option>
+                {selected.isModelAttribute && <option value="color">Color</option>}
               </select>
             </div>
             <div className={styles.field}>
@@ -158,6 +158,30 @@ export function AttributesPanelContent() {
                     updateAttribute(selected.id, { defaultValue: e.target.value })
                   }
                 />
+              ) : selected.type === 'color' ? (
+                <input
+                  type="color"
+                  value={selected.defaultValue || '#808080'}
+                  onChange={e =>
+                    updateAttribute(selected.id, { defaultValue: e.target.value })
+                  }
+                  style={{ width: '100%', height: 30, border: 'none', cursor: 'pointer' }}
+                />
+              ) : selected.type === 'tag' ? (
+                <select
+                  className={styles.selectInput}
+                  value={selected.defaultValue || '0'}
+                  onChange={e =>
+                    updateAttribute(selected.id, { defaultValue: e.target.value })
+                  }
+                >
+                  {(selected.tagOptions || []).map((tag, i) => (
+                    <option key={i} value={String(i)}>{tag}</option>
+                  ))}
+                  {(!selected.tagOptions || selected.tagOptions.length === 0) && (
+                    <option value="0">(no tags defined)</option>
+                  )}
+                </select>
               ) : (
                 <input
                   className={styles.textInput}
@@ -168,6 +192,50 @@ export function AttributesPanelContent() {
                 />
               )}
             </div>
+
+            {selected.type === 'tag' && (
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>Tag Options</label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {(selected.tagOptions || []).map((tag, i) => (
+                    <div key={i} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.7rem', color: '#6080a0', width: 16 }}>{i}</span>
+                      <input
+                        className={styles.textInput}
+                        value={tag}
+                        onChange={e => {
+                          const opts = [...(selected.tagOptions || [])];
+                          opts[i] = e.target.value;
+                          updateAttribute(selected.id, { tagOptions: opts });
+                        }}
+                        style={{ flex: 1 }}
+                      />
+                      <button
+                        className={styles.deleteButton}
+                        style={{ padding: '2px 6px', fontSize: '0.7rem' }}
+                        onClick={() => {
+                          const opts = (selected.tagOptions || []).filter((_, j) => j !== i);
+                          updateAttribute(selected.id, { tagOptions: opts });
+                        }}
+                      >
+                        &times;
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    className={styles.addButton}
+                    style={{ fontSize: '0.75rem', padding: '2px 8px' }}
+                    onClick={() => {
+                      const opts = [...(selected.tagOptions || []), `tag_${(selected.tagOptions || []).length}`];
+                      updateAttribute(selected.id, { tagOptions: opts });
+                    }}
+                  >
+                    + Add Tag
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Description</label>
               <textarea

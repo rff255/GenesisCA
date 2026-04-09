@@ -30,6 +30,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
           case 'bool':    newConfig.constValue = 'false'; break;
           case 'integer': newConfig.constValue = '0'; break;
           case 'float':   newConfig.constValue = '0'; break;
+          case 'tag':     newConfig.constValue = '0'; newConfig.tagAttributeId = ''; break;
         }
       }
       updateNodeData(id, { ...nodeData, config: newConfig });
@@ -153,6 +154,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
     }
   }
 
+  // GetModelAttribute: show R/G/B ports for color attrs, Value port for others
+  if (nodeData.nodeType === 'getModelAttribute') {
+    const isColor = nodeData.config.isColorAttr;
+    outputPorts = outputPorts.filter(p =>
+      isColor ? (p.id === 'r' || p.id === 'g' || p.id === 'b') : p.id === 'value',
+    );
+  }
+
   // Detect which input ports are connected (for inline widget visibility)
   const connectedInputHandles = useStore(
     useCallback(
@@ -197,15 +206,38 @@ function CaNodeComponent({ id, data }: NodeProps) {
     const totalInputs = inputPorts.length;
     const totalOutputs = outputPorts.length;
 
-    // Display text for collapsed node
+    // Display text for collapsed node — user label always takes priority
     let collapsedLabel: string;
-    if (isConstant) {
+    if (userLabel) {
+      collapsedLabel = userLabel;
+    } else if (isConstant) {
       const cType = nodeData.config.constType as string;
       const cVal = nodeData.config.constValue as string;
       if (cType === 'bool') collapsedLabel = cVal === 'true' ? 'True' : 'False';
+      else if (cType === 'tag') {
+        const tagAttr = model.attributes.find(a => a.id === nodeData.config.tagAttributeId);
+        const tagIdx = parseInt(cVal, 10) || 0;
+        collapsedLabel = tagAttr?.tagOptions?.[tagIdx] ?? (cVal || '0');
+      }
       else collapsedLabel = cVal || '0';
+    } else if (nodeData.nodeType === 'getCellAttribute') {
+      const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
+      collapsedLabel = attr ? `Cell - ${attr.name}` : def.label;
+    } else if (nodeData.nodeType === 'getModelAttribute') {
+      const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
+      collapsedLabel = attr ? `Model - ${attr.name}` : def.label;
+    } else if (nodeData.nodeType === 'setAttribute') {
+      const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
+      collapsedLabel = attr ? `Set - ${attr.name}` : def.label;
+    } else if (nodeData.nodeType === 'getNeighborsAttribute') {
+      const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
+      const nbr = model.neighborhoods.find(n => n.id === nodeData.config.neighborhoodId);
+      collapsedLabel = attr && nbr ? `${nbr.name}[${attr.name}]` : def.label;
+    } else if (nodeData.nodeType === 'setColorViewer') {
+      const mapping = model.mappings.find(m => m.id === nodeData.config.mappingId);
+      collapsedLabel = mapping ? `Set A\u2192C - ${mapping.name}` : def.label;
     } else {
-      collapsedLabel = userLabel || def.label;
+      collapsedLabel = def.label;
     }
 
     // Color swatch for collapsed color constant
@@ -334,6 +366,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               <option value="bool">Bool</option>
               <option value="integer">Integer</option>
               <option value="float">Float</option>
+              <option value="tag">Tag</option>
             </select>
             {nodeData.config.constType === 'bool' ? (
               <select
@@ -344,6 +377,37 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 <option value="true">true</option>
                 <option value="false">false</option>
               </select>
+            ) : nodeData.config.constType === 'tag' ? (
+              <>
+                <select
+                  className={styles.select}
+                  value={(nodeData.config.tagAttributeId as string) || ''}
+                  onChange={e => {
+                    const newConfig = { ...nodeData.config, tagAttributeId: e.target.value, constValue: '0' };
+                    updateNodeData(id, { ...nodeData, config: newConfig });
+                  }}
+                >
+                  <option value="">Tag attr...</option>
+                  {model.attributes
+                    .filter(a => a.type === 'tag')
+                    .map(a => (
+                      <option key={a.id} value={a.id}>{a.name}</option>
+                    ))}
+                </select>
+                {(() => {
+                  const tagAttr = model.attributes.find(a => a.id === nodeData.config.tagAttributeId);
+                  const opts = tagAttr?.tagOptions || [];
+                  return opts.length > 0 ? (
+                    <select
+                      className={styles.select}
+                      value={(nodeData.config.constValue as string) || '0'}
+                      onChange={e => updateConfig('constValue', e.target.value)}
+                    >
+                      {opts.map((t, i) => <option key={i} value={String(i)}>{t}</option>)}
+                    </select>
+                  ) : null;
+                })()}
+              </>
             ) : (
               <input
                 className={styles.input}
@@ -412,6 +476,10 @@ function CaNodeComponent({ id, data }: NodeProps) {
         )}
 
         {nodeData.nodeType === 'setColorViewer' && (() => {
+          const allRgbConnected =
+            connectedInputHandles.has(handleId({ id: 'r', kind: 'input', category: 'value' })) &&
+            connectedInputHandles.has(handleId({ id: 'g', kind: 'input', category: 'value' })) &&
+            connectedInputHandles.has(handleId({ id: 'b', kind: 'input', category: 'value' }));
           const pr = parseInt(String(nodeData.config._port_r ?? '0'), 10) || 0;
           const pg = parseInt(String(nodeData.config._port_g ?? '0'), 10) || 0;
           const pb = parseInt(String(nodeData.config._port_b ?? '0'), 10) || 0;
@@ -430,24 +498,26 @@ function CaNodeComponent({ id, data }: NodeProps) {
                     <option key={m.id} value={m.id}>{m.name}</option>
                   ))}
               </select>
-              <input
-                type="color"
-                className={styles.input}
-                style={{ height: 24, padding: 1, cursor: 'pointer' }}
-                value={hex}
-                onChange={e => {
-                  const h = e.target.value;
-                  const nr = parseInt(h.slice(1, 3), 16);
-                  const ng = parseInt(h.slice(3, 5), 16);
-                  const nb = parseInt(h.slice(5, 7), 16);
-                  updateNodeData(id, {
-                    ...nodeData,
-                    config: { ...nodeData.config, _port_r: String(nr), _port_g: String(ng), _port_b: String(nb) },
-                  });
-                }}
-                onClick={e => e.stopPropagation()}
-                title="Default color (overridden per-channel by connections)"
-              />
+              {!allRgbConnected && (
+                <input
+                  type="color"
+                  className={styles.input}
+                  style={{ height: 24, padding: 1, cursor: 'pointer' }}
+                  value={hex}
+                  onChange={e => {
+                    const h = e.target.value;
+                    const nr = parseInt(h.slice(1, 3), 16);
+                    const ng = parseInt(h.slice(3, 5), 16);
+                    const nb = parseInt(h.slice(5, 7), 16);
+                    updateNodeData(id, {
+                      ...nodeData,
+                      config: { ...nodeData.config, _port_r: String(nr), _port_g: String(ng), _port_b: String(nb) },
+                    });
+                  }}
+                  onClick={e => e.stopPropagation()}
+                  title="Default color (overridden per-channel by connections)"
+                />
+              )}
             </>
           );
         })()}
@@ -471,7 +541,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
           <select
             className={styles.select}
             value={(nodeData.config.attributeId as string) || ''}
-            onChange={e => updateConfig('attributeId', e.target.value)}
+            onChange={e => {
+              const attrId = e.target.value;
+              const attr = model.attributes.find(a => a.id === attrId);
+              const newConfig = { ...nodeData.config, attributeId: attrId, isColorAttr: attr?.type === 'color' };
+              updateNodeData(id, { ...nodeData, config: newConfig });
+            }}
           >
             <option value="">Select...</option>
             {model.attributes
@@ -480,6 +555,36 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 <option key={a.id} value={a.id}>{a.name}</option>
               ))}
           </select>
+        )}
+
+        {nodeData.nodeType === 'tagConstant' && (
+          <>
+            <select
+              className={styles.select}
+              value={(nodeData.config.attributeId as string) || ''}
+              onChange={e => updateConfig('attributeId', e.target.value)}
+            >
+              <option value="">Attr...</option>
+              {model.attributes
+                .filter(a => a.type === 'tag')
+                .map(a => (
+                  <option key={a.id} value={a.id}>{a.name}</option>
+                ))}
+            </select>
+            {(() => {
+              const tagAttr = model.attributes.find(a => a.id === nodeData.config.attributeId);
+              const opts = tagAttr?.tagOptions || [];
+              return opts.length > 0 ? (
+                <select
+                  className={styles.select}
+                  value={String(nodeData.config.tagIndex ?? 0)}
+                  onChange={e => updateConfig('tagIndex', Number(e.target.value))}
+                >
+                  {opts.map((t, i) => <option key={i} value={String(i)}>{t}</option>)}
+                </select>
+              ) : null;
+            })()}
+          </>
         )}
 
         {nodeData.nodeType === 'getRandom' && (
@@ -669,15 +774,18 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
         // Determine effective widget type (dynamic for attribute-dependent nodes)
         let effectiveWidget = portDef.inlineWidget;
+        const setAttrId = nodeData.config.attributeId as string;
+        const setAttr = setAttrId ? model.attributes.find(a => a.id === setAttrId) : undefined;
         if (effectiveWidget && (nodeData.nodeType === 'setAttribute') && port.id === 'value') {
-          const attrId = nodeData.config.attributeId as string;
-          const attr = attrId ? model.attributes.find(a => a.id === attrId) : undefined;
+          const attr = setAttr;
           if (!attr) {
             effectiveWidget = undefined;
           } else if (attr.type === 'bool') {
             effectiveWidget = 'bool';
           } else if (attr.type === 'integer' || attr.type === 'float') {
             effectiveWidget = 'number';
+          } else if (attr.type === 'tag') {
+            effectiveWidget = 'tag';
           } else {
             effectiveWidget = undefined;
           }
@@ -689,9 +797,10 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
         // Port compatibility highlighting (also dim already-connected value inputs)
         const cf = connectingFrom;
+        const directionMatch = cf ? cf.kind !== 'input' : false; // input ports match when dragging from output
         const categoryMatch = cf ? port.category === cf.category && id !== cf.nodeId : null;
         const alreadyOccupied = isConnected && port.category === 'value';
-        const isCompatible = cf ? (categoryMatch && !alreadyOccupied) : null;
+        const isCompatible = cf ? (directionMatch && categoryMatch && !alreadyOccupied) : null;
         const handleClass = [
           port.category === 'flow' ? styles.handleFlow : styles.handleValue,
           cf && isCompatible ? styles.handleCompatible : '',
@@ -720,6 +829,18 @@ function CaNodeComponent({ id, data }: NodeProps) {
                     <option value="true">True</option>
                     <option value="false">False</option>
                   </select>
+                ) : effectiveWidget === 'tag' ? (
+                  <select
+                    className={styles.inlineWidget}
+                    value={val || '0'}
+                    onChange={e => updateConfig(configKey, e.target.value)}
+                    onClick={e => e.stopPropagation()}
+                  >
+                    {(setAttr?.tagOptions || []).map((t, ti) => (
+                      <option key={ti} value={String(ti)}>{t}</option>
+                    ))}
+                    {(!setAttr?.tagOptions || setAttr.tagOptions.length === 0) && <option value="0">(no tags)</option>}
+                  </select>
                 ) : (
                   <input
                     className={styles.inlineWidget}
@@ -745,7 +866,8 @@ function CaNodeComponent({ id, data }: NodeProps) {
         const hid = handleId(port);
         const topPx = 30 + i * 22;
         const cf = connectingFrom;
-        const isCompatible = cf ? (port.category === cf.category && id !== cf.nodeId) : null;
+        const directionOk = cf ? cf.kind !== 'output' : false; // output ports match when dragging from input
+        const isCompatible = cf ? (directionOk && port.category === cf.category && id !== cf.nodeId) : null;
         const handleClass = [
           port.category === 'flow' ? styles.handleFlow : styles.handleValue,
           cf && isCompatible ? styles.handleCompatible : '',

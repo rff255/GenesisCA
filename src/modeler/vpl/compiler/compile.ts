@@ -62,6 +62,13 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
 
 const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'getColorConstant', 'macro']);
 
+/** Check if a node's data uses multi-output variable naming */
+function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
+  if (MULTI_OUTPUT_TYPES.has(data.nodeType)) return true;
+  if (data.nodeType === 'getModelAttribute' && data.config.isColorAttr) return true;
+  return false;
+}
+
 interface RootCompileResult {
   valueLines: string[];
   flowLines: string[];
@@ -84,7 +91,7 @@ function compileRoot(
 
   function varName(sourceNodeId: string, sourcePortId: string): string {
     const sourceNode = nodeMap.get(sourceNodeId);
-    if (sourceNode && MULTI_OUTPUT_TYPES.has(sourceNode.data.nodeType)) {
+    if (sourceNode && isMultiOutput(sourceNode.data)) {
       return `_v${sourceNodeId}_${sourcePortId}`;
     }
     // GetNeighborsAttribute uses _scr_ prefix for its scratch array
@@ -156,7 +163,7 @@ function compileRoot(
         return inputAliases.get(srcPortId) || 'undefined';
       }
       const srcNode = inner.nodeMap.get(srcNodeId);
-      if (srcNode && MULTI_OUTPUT_TYPES.has(srcNode.data.nodeType)) {
+      if (srcNode && isMultiOutput(srcNode.data)) {
         return `${prefix}_v${srcNodeId}_${srcPortId}`;
       }
       if (srcNode?.data.nodeType === 'getNeighborsAttribute') {
@@ -286,7 +293,7 @@ function compileRoot(
           if (srcNode && srcNode.data.nodeType === 'macroInput') {
             // It's the parent's MacroInput — handled by parent's alias chain
             nestedAliases.set(ep.portId, `${parentPrefix}_v${src.nodeId}_${src.portId}`);
-          } else if (srcNode && MULTI_OUTPUT_TYPES.has(srcNode.data.nodeType)) {
+          } else if (srcNode && isMultiOutput(srcNode.data)) {
             nestedAliases.set(ep.portId, `${parentPrefix}_v${src.nodeId}_${src.portId}`);
           } else if (srcNode?.data.nodeType === 'getNeighborsAttribute') {
             nestedAliases.set(ep.portId, `${parentPrefix}_scr_${src.nodeId}`);
@@ -302,7 +309,7 @@ function compileRoot(
         return nestedAliases.get(srcPortId) || 'undefined';
       }
       const srcNode = nestedInner.nodeMap.get(srcNodeId);
-      if (srcNode && MULTI_OUTPUT_TYPES.has(srcNode.data.nodeType)) {
+      if (srcNode && isMultiOutput(srcNode.data)) {
         return `${nestedPrefix}_v${srcNodeId}_${srcPortId}`;
       }
       if (srcNode?.data.nodeType === 'getNeighborsAttribute') {
@@ -363,7 +370,7 @@ function compileRoot(
           const innerVar = nestedVarName(src.nodeId, src.portId);
           // Use parent prefix for the inner macro node's output variables
           const parentNode = parentAdjacency.nodeMap.get(innerMacroNodeId);
-          if (parentNode && MULTI_OUTPUT_TYPES.has(parentNode.data.nodeType)) {
+          if (parentNode && isMultiOutput(parentNode.data)) {
             valueLines.push(`      const ${parentPrefix}_v${innerMacroNodeId}_${ep.portId} = ${innerVar};`);
           } else {
             valueLines.push(`      const ${parentPrefix}_v${innerMacroNodeId} = ${innerVar};`);
@@ -510,7 +517,7 @@ function compileRoot(
         return 'undefined';
       }
       const srcNode = inner.nodeMap.get(srcNodeId);
-      if (srcNode && MULTI_OUTPUT_TYPES.has(srcNode.data.nodeType)) {
+      if (srcNode && isMultiOutput(srcNode.data)) {
         return `${prefix}_v${srcNodeId}_${srcPortId}`;
       }
       if (srcNode?.data.nodeType === 'getNeighborsAttribute') {
@@ -695,7 +702,6 @@ function buildLoopParams(model: CAModel): {
     .map(a => ({ id: a.id, type: a.type }));
   const neighborhoods = model.neighborhoods.map(n => ({ id: n.id }));
 
-  // Parameters: total, read attrs, write attrs, full neighbor index arrays + sizes, modelAttrs, colors, activeViewer
   const parts: string[] = ['total'];
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);

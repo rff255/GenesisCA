@@ -62,10 +62,10 @@ A complete GenesisCA model definition consists of:
 
 ### The Modeler
 - **Properties Panel** — model metadata, grid dimensions, boundary treatment (torus/constant), tags
-- **Attributes Panel** — cell and model attributes with type-specific default value controls
-- **Neighborhoods Panel** — interactive grid editor for defining spatial neighborhoods
+- **Attributes Panel** — cell and model attributes with type-specific default value controls (bool, integer, float, tag, list, color)
+- **Neighborhoods Panel** — interactive grid editor with per-neighborhood margin, and a Duplicate button for quick variations
 - **Mappings Panel** — Attribute-to-Color and Color-to-Attribute mapping definitions
-- **Graph Editor** — 21 node types across 6 categories (flow, data, logic, aggregation, output, color), with RMB pan, scroll zoom, and snap-to-grid
+- **Graph Editor** — 22 node types across 6 categories (flow, data, logic, aggregation, output, color), with RMB pan, scroll zoom, and snap-to-grid
 - **Connection validation** — prevents incompatible connections (flow/value), cycles, and duplicate inputs; compatible ports highlight during drag
 - **Inline Port Widgets** — input ports show small value editors (number/bool) when unconnected, eliminating the need for constant nodes in simple cases
 - **Node Collapse/Expand** — double-click any node to collapse it; constants show their value; collapsed nodes temporarily expand when connecting edges
@@ -73,6 +73,7 @@ A complete GenesisCA model definition consists of:
 - **Node Explorer** — searchable right-side panel (Ctrl+F) listing all nodes with click-to-focus
 - **Canvas toggles** — toggle port labels, grid lines, and snap-to-grid from buttons below zoom controls
 - **Macro System** — encapsulate node groups into reusable subgraphs with MacroInput/MacroOutput boundary nodes
+- **Undo/Redo** — Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) for node/edge operations, moves, paste, config changes
 - **Copy/Paste/Duplicate** — Ctrl+C/V/X/D, context menu on single nodes and selections, paste at right-click location
 - **Groups & Comments** — visual organization tools; Undo Group dissolves a group and selects all contained nodes
 - **Edge management** — double-click any edge to delete it
@@ -86,7 +87,8 @@ A complete GenesisCA model definition consists of:
 - **Zoom controls** — +/−/fit buttons on the canvas, matching the modeler
 - **Live model attribute controls** — change global parameters without recompiling
 - **Grid dimension overrides** — experiment with different sizes
-- **PNG screenshot export** — pixel-perfect grid capture
+- **PNG screenshot export** — captures the display view with current zoom/pan (nearest-neighbor upscale for crisp pixels)
+- **GIF recording** — record simulation frames and export as animated GIF (auto-downscale for large grids)
 - **Open Image** — load PNG/BMP/JPG as starting point via the brush panel
 - **Persistent settings** — speed, brush, viewer settings saved across sessions
 

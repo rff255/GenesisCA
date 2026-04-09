@@ -123,15 +123,22 @@ export function HelpView() {
             per-cell (e.g., &quot;alive&quot;, &quot;age&quot;).{' '}
             <strong>Model Attributes</strong> are global parameters all cells can read
             but not write (e.g., &quot;birth threshold&quot;). Each attribute has a type
-            (bool, integer, float), a default value, and a description.
+            (bool, integer, float, tag, list, color), a default value, and a description.
           </p>
+          <ul className={styles.list}>
+            <li><strong>Tag</strong> &mdash; An integer with named values (picklist). Define tag options in the editor, and use the Tag Constant node to reference them by name.</li>
+            <li><strong>List</strong> &mdash; A fixed-size array of elements of one basic type. Access elements via List Get Element and List Set Element nodes.</li>
+            <li><strong>Color</strong> (model attributes only) &mdash; An RGB color value. Accessed via Get Model Attribute with separate R, G, B output ports. Adjustable live in the simulator.</li>
+          </ul>
 
           <h3 className={styles.h3}>Neighborhoods Panel (N)</h3>
           <p className={styles.p}>
             Define spatial neighborhoods &mdash; the set of relative cell positions a cell
             can &quot;see.&quot; Common patterns include Moore (8 surrounding cells) and
             Von Neumann (4 cardinal neighbors). Use the interactive grid to toggle neighbor
-            positions. Adjust the margin slider to access cells farther away (up to 20).
+            positions. Each neighborhood has its own margin setting (up to 20) that controls
+            the grid editor size. Use the <strong>Duplicate</strong> button to clone an
+            existing neighborhood for quick variations.
           </p>
 
           <h3 className={styles.h3}>Mappings Panel (M)</h3>
@@ -365,7 +372,8 @@ export function HelpView() {
           <ul className={styles.list}>
             <li><strong>Grid Dimensions</strong> &mdash; Override the model&apos;s default size. Click &quot;Apply&quot; to reinitialize.</li>
             <li><strong>Model Attributes</strong> &mdash; Adjust global parameters in real time without recompiling.</li>
-            <li><strong>Screenshot</strong> &mdash; Save the current grid as a PNG image.</li>
+            <li><strong>Screenshot</strong> &mdash; Save the current view as a PNG image (matches display resolution with zoom/pan).</li>
+            <li><strong>Record GIF</strong> &mdash; Click the red record button in the transport bar, play the simulation, then click stop to encode and download an animated GIF.</li>
             <li><strong>Show Code</strong> &mdash; View the compiled JavaScript function.</li>
           </ul>
 
@@ -383,6 +391,9 @@ export function HelpView() {
           <table className={styles.table}>
             <thead><tr><th>Shortcut</th><th>Action</th></tr></thead>
             <tbody>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>Z</kbd></td><td>Undo</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>Shift</kbd>+<kbd className={styles.kbd}>Z</kbd></td><td>Redo</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>Y</kbd></td><td>Redo (alternative)</td></tr>
               <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>C</kbd></td><td>Copy selected nodes</td></tr>
               <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>V</kbd></td><td>Paste (at viewport center)</td></tr>
               <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>X</kbd></td><td>Cut selected nodes</td></tr>

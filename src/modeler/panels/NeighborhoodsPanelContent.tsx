@@ -7,13 +7,13 @@ function coordKey(row: number, col: number): string {
 }
 
 export function NeighborhoodsPanelContent() {
-  const { model, addNeighborhood, removeNeighborhood, updateNeighborhood } =
+  const { model, addNeighborhood, duplicateNeighborhood, removeNeighborhood, updateNeighborhood } =
     useModel();
   const [selectedIdx, setSelectedIdx] = useState(0);
-  const [margin, setMargin] = useState(2);
 
   const neighborhoods = model.neighborhoods;
   const selected = neighborhoods[selectedIdx];
+  const margin = selected?.margin ?? 2;
   const gridSize = 2 * margin + 1;
 
   const activeCoords = useMemo(() => {
@@ -46,6 +46,13 @@ export function NeighborhoodsPanelContent() {
     }
   };
 
+  const handleDuplicate = () => {
+    if (selected) {
+      duplicateNeighborhood(selected.id);
+      setSelectedIdx(neighborhoods.length); // select the new copy
+    }
+  };
+
   return (
     <>
       <div className={styles.section}>
@@ -67,6 +74,9 @@ export function NeighborhoodsPanelContent() {
         <div className={styles.buttonRow}>
           <button className={styles.addButton} onClick={() => addNeighborhood()}>
             + Add Neighborhood
+          </button>
+          <button className={styles.addButton} onClick={handleDuplicate} disabled={!selected}>
+            Duplicate
           </button>
           <button className={styles.deleteButton} onClick={handleDelete}>
             Delete
@@ -112,9 +122,9 @@ export function NeighborhoodsPanelContent() {
                 min={1}
                 max={20}
                 onChange={e =>
-                  setMargin(
-                    Math.max(1, Math.min(20, Number(e.target.value))),
-                  )
+                  updateNeighborhood(selected.id, {
+                    margin: Math.max(1, Math.min(20, Number(e.target.value))),
+                  })
                 }
               />
               <span style={{ fontSize: '0.7rem', color: '#6080a0' }}>

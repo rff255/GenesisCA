@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useModel } from '../model/ModelContext';
 import { compileGraph } from '../modeler/vpl/compiler/compile';
+import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import styles from './SimulatorView.module.css';
 
 const SIM_SETTINGS_KEY = 'genesisca_sim_settings';
@@ -38,6 +39,13 @@ export function SimulatorView() {
   const [brushH, setBrushH] = useState((saved.current.brushH as number) ?? 1);
   const [brushMapping, setBrushMapping] = useState((saved.current.brushMapping as string) ?? '');
   const [showBrushCursor, setShowBrushCursor] = useState((saved.current.showBrushCursor as boolean) ?? true);
+
+  // GIF recording state
+  const [recording, setRecording] = useState(false);
+  const recordingRef = useRef(false);
+  const recordedFrames = useRef<ImageData[]>([]);
+  const [recordFrameCount, setRecordFrameCount] = useState(0);
+  useEffect(() => { recordingRef.current = recording; }, [recording]);
 
   // Persist simulator settings
   useEffect(() => {
@@ -219,6 +227,16 @@ export function SimulatorView() {
         setGeneration(gen);
         draw();
 
+        // GIF frame capture
+        if (recordingRef.current && srcCanvasRef.current) {
+          const src = srcCanvasRef.current;
+          const sctx = src.getContext('2d');
+          if (sctx) {
+            recordedFrames.current.push(sctx.getImageData(0, 0, src.width, src.height));
+            setRecordFrameCount(c => c + 1);
+          }
+        }
+
         // Schedule next step to maintain targetFps rate
         if (playingRef.current) {
           const msPerFrame = 1000 / targetFpsRef.current;
@@ -256,7 +274,7 @@ export function SimulatorView() {
     }
   };
 
-  // Reusable worker initializer (used by useEffect and dimension/image apply)
+  // Reusable worker initializer (used by structural effect and dimension/image apply)
   const initWorkerWithDimensions = useCallback((w: number, h: number) => {
     workerRef.current?.terminate();
     const result = compileModel();
@@ -282,6 +300,13 @@ export function SimulatorView() {
         case 'bool': mAttrs[a.id] = a.defaultValue === 'true' ? 1 : 0; break;
         case 'integer': mAttrs[a.id] = parseInt(a.defaultValue, 10) || 0; break;
         case 'float': mAttrs[a.id] = parseFloat(a.defaultValue) || 0; break;
+        case 'color': {
+          const hex = a.defaultValue || '#808080';
+          mAttrs[a.id + '_r'] = parseInt(hex.slice(1, 3), 16) || 0;
+          mAttrs[a.id + '_g'] = parseInt(hex.slice(3, 5), 16) || 0;
+          mAttrs[a.id + '_b'] = parseInt(hex.slice(5, 7), 16) || 0;
+          break;
+        }
         default: mAttrs[a.id] = 0;
       }
     }
@@ -299,6 +324,7 @@ export function SimulatorView() {
       attributes: model.attributes.map(a => ({
         id: a.id, type: a.type,
         isModelAttribute: a.isModelAttribute, defaultValue: a.defaultValue,
+        tagOptions: a.tagOptions,
       })),
       neighborhoods: model.neighborhoods.map(n => ({ id: n.id, coords: n.coords })),
       boundaryTreatment: model.properties.boundaryTreatment,
@@ -315,7 +341,9 @@ export function SimulatorView() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, compileModel]);
 
-  // Initialize worker when model changes
+  // Full worker init on mount (tab switch) and whenever model changes while on Simulator tab.
+  // SimulatorView is conditionally rendered — unmounted when on other tabs — so this only
+  // fires when the user is actually looking at the simulator.
   useEffect(() => {
     initWorkerWithDimensions(model.properties.gridWidth, model.properties.gridHeight);
     return () => workerRef.current?.terminate();
@@ -410,11 +438,12 @@ export function SimulatorView() {
     };
 
     const isResizingBrush = { active: false, startX: 0, startY: 0, startW: 0, startH: 0 };
+    let canvasBrushActive = false; // true only when LMB started on canvas, not overlay
 
     const handleMouseDown = (e: MouseEvent) => {
       // Ignore events from overlay controls (transport bar, viewer bar, etc.)
       const target = e.target as HTMLElement;
-      if (target.closest('[data-sim-overlay]')) return;
+      if (target.closest('[data-sim-overlay]')) { canvasBrushActive = false; return; }
 
       if (e.button === 0 && e.ctrlKey) {
         // Ctrl+LMB = resize brush
@@ -427,6 +456,7 @@ export function SimulatorView() {
         container.style.cursor = 'nwse-resize';
       } else if (e.button === 0) {
         // LMB = brush
+        canvasBrushActive = true;
         paintAt(e.clientX, e.clientY);
       } else if (e.button === 2) {
         // RMB = pan
@@ -456,8 +486,8 @@ export function SimulatorView() {
         draw();
         return;
       }
-      if (e.buttons & 1) {
-        // LMB held = brush drag
+      if (e.buttons & 1 && canvasBrushActive) {
+        // LMB held = brush drag (only if mousedown was on canvas, not overlay)
         if (!e.ctrlKey) paintAt(e.clientX, e.clientY);
         return;
       }
@@ -475,6 +505,7 @@ export function SimulatorView() {
     const handleMouseUp = () => {
       isPanning.current = false;
       isResizingBrush.active = false;
+      canvasBrushActive = false;
       container.style.cursor = '';
     };
 
@@ -532,8 +563,73 @@ export function SimulatorView() {
     workerRef.current?.postMessage({ type: 'randomize', activeViewer });
   };
 
+  const startRecording = () => {
+    recordedFrames.current = [];
+    setRecordFrameCount(0);
+    setRecording(true);
+  };
+
+  const stopRecording = () => {
+    setRecording(false);
+    const frames = recordedFrames.current;
+    if (frames.length === 0) return;
+    const fw = frames[0]!.width;
+    const fh = frames[0]!.height;
+    // Downscale large grids to max 512px
+    const maxDim = 512;
+    let outW = fw, outH = fh;
+    if (fw > maxDim || fh > maxDim) {
+      const s = maxDim / Math.max(fw, fh);
+      outW = Math.round(fw * s);
+      outH = Math.round(fh * s);
+    }
+    const gif = GIFEncoder();
+    const delay = Math.round(1000 / (targetFpsRef.current || 30));
+    const needsScale = outW !== fw || outH !== fh;
+    let scaleCanvas: HTMLCanvasElement | null = null;
+    let scaleCtx: CanvasRenderingContext2D | null = null;
+    let srcCanvas: HTMLCanvasElement | null = null;
+    let srcCtx: CanvasRenderingContext2D | null = null;
+    if (needsScale) {
+      scaleCanvas = document.createElement('canvas');
+      scaleCanvas.width = outW; scaleCanvas.height = outH;
+      scaleCtx = scaleCanvas.getContext('2d')!;
+      scaleCtx.imageSmoothingEnabled = false;
+      srcCanvas = document.createElement('canvas');
+      srcCanvas.width = fw; srcCanvas.height = fh;
+      srcCtx = srcCanvas.getContext('2d')!;
+    }
+    for (const frame of frames) {
+      let rgba: Uint8ClampedArray;
+      if (needsScale && scaleCtx && scaleCanvas && srcCtx && srcCanvas) {
+        srcCtx.putImageData(frame, 0, 0);
+        scaleCtx.drawImage(srcCanvas, 0, 0, outW, outH);
+        rgba = scaleCtx.getImageData(0, 0, outW, outH).data;
+      } else {
+        rgba = frame.data;
+      }
+      const palette = quantize(rgba, 256);
+      const indexed = applyPalette(rgba, palette);
+      gif.writeFrame(indexed, outW, outH, { palette, delay });
+    }
+    gif.finish();
+    const blob = new Blob([gif.bytes()], { type: 'image/gif' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const fname = model.properties.name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '') || 'genesis';
+    a.href = url;
+    a.download = `${fname}_recording.gif`;
+    a.click();
+    URL.revokeObjectURL(url);
+    recordedFrames.current = [];
+    setRecordFrameCount(0);
+  };
+
   const handleRecompile = () => {
     const result = compileModel();
+    if (result.error) { setCompileError(result.error); return; }
+    setCompileError('');
+    setCompiledCode(result.stepCode);
     workerRef.current?.postMessage({
       type: 'recompile',
       stepCode: result.stepCode,
@@ -570,7 +666,7 @@ export function SimulatorView() {
     workerRef.current?.postMessage({ type: 'updateModelAttrs', attrs: { [attrId]: value } });
   };
 
-  // F4: Screenshot export
+  // F4: Screenshot export — 1:1 pixel-perfect from source canvas (no scaling)
   const handleScreenshot = () => {
     const src = srcCanvasRef.current;
     if (!src) return;
@@ -635,22 +731,18 @@ export function SimulatorView() {
 
           <div className={styles.sectionTitle}>Actions</div>
           <button className={styles.controlButtonAccent} onClick={handleRandomize}>Randomize</button>
-          <div className={styles.buttonGroup}>
-            <button className={styles.controlButton} onClick={handleRecompile}>Recompile</button>
-            <button className={styles.controlButton} onClick={handleScreenshot} disabled={!colorsRef.current}>Screenshot</button>
-          </div>
 
           <hr className={styles.divider} />
           <div className={styles.sectionTitle}>Grid Dimensions</div>
           <div className={styles.fieldRow}>
             <span className={styles.statLabel}>W</span>
-            <input className={styles.brushInput} type="number" min={1} value={simWidth}
+            <input className={styles.brushInput} style={{ flex: 1, width: 0, minWidth: 0 }} type="number" min={1} value={simWidth}
               onChange={e => setSimWidth(Math.max(1, Number(e.target.value) || 1))} />
             <span className={styles.statLabel}>H</span>
-            <input className={styles.brushInput} type="number" min={1} value={simHeight}
+            <input className={styles.brushInput} style={{ flex: 1, width: 0, minWidth: 0 }} type="number" min={1} value={simHeight}
               onChange={e => setSimHeight(Math.max(1, Number(e.target.value) || 1))} />
           </div>
-          <button className={styles.controlButton} onClick={handleApplyDimensions}>Apply</button>
+          <button className={styles.controlButton} onClick={handleApplyDimensions}>Resize</button>
 
           {modelAttrs.length > 0 && (
             <>
@@ -662,8 +754,40 @@ export function SimulatorView() {
                   {a.type === 'bool' ? (
                     <input type="checkbox" checked={(runtimeModelAttrs[a.id] ?? 0) === 1}
                       onChange={e => handleModelAttrChange(a.id, e.target.checked ? 1 : 0)} />
+                  ) : a.type === 'integer' ? (
+                    <input className={styles.brushInput} type="number" step={1}
+                      value={runtimeModelAttrs[a.id] ?? 0}
+                      onChange={e => handleModelAttrChange(a.id, Math.round(Number(e.target.value) || 0))} />
+                  ) : a.type === 'float' ? (
+                    <input className={styles.brushInput} type="number" step="any"
+                      value={runtimeModelAttrs[a.id] ?? 0}
+                      onChange={e => handleModelAttrChange(a.id, Number(e.target.value) || 0)} />
+                  ) : a.type === 'tag' ? (
+                    <select className={styles.brushInput} style={{ width: 'auto' }}
+                      value={runtimeModelAttrs[a.id] ?? 0}
+                      onChange={e => handleModelAttrChange(a.id, Number(e.target.value))}>
+                      {(a.tagOptions || []).map((t, i) => (
+                        <option key={i} value={i}>{t}</option>
+                      ))}
+                      {(!a.tagOptions || a.tagOptions.length === 0) && <option value={0}>(no tags)</option>}
+                    </select>
+                  ) : a.type === 'color' ? (
+                    <input type="color"
+                      value={'#' + [
+                        (runtimeModelAttrs[a.id + '_r'] ?? 128).toString(16).padStart(2, '0'),
+                        (runtimeModelAttrs[a.id + '_g'] ?? 128).toString(16).padStart(2, '0'),
+                        (runtimeModelAttrs[a.id + '_b'] ?? 128).toString(16).padStart(2, '0'),
+                      ].join('')}
+                      onChange={e => {
+                        const hex = e.target.value;
+                        handleModelAttrChange(a.id + '_r', parseInt(hex.slice(1, 3), 16));
+                        handleModelAttrChange(a.id + '_g', parseInt(hex.slice(3, 5), 16));
+                        handleModelAttrChange(a.id + '_b', parseInt(hex.slice(5, 7), 16));
+                      }}
+                      style={{ width: 50, height: 24, border: 'none', cursor: 'pointer' }}
+                    />
                   ) : (
-                    <input className={styles.brushInput} type="number" step={a.type === 'integer' ? 1 : 'any'}
+                    <input className={styles.brushInput} type="number" step="any"
                       value={runtimeModelAttrs[a.id] ?? 0}
                       onChange={e => handleModelAttrChange(a.id, Number(e.target.value) || 0)} />
                   )}
@@ -695,21 +819,23 @@ export function SimulatorView() {
       {/* === Canvas Area === */}
       <div className={styles.canvasArea}>
         {!leftPanelOpen && (
-          <button className={styles.panelExpandBtn} style={{ left: 0 }} onClick={() => setLeftPanelOpen(true)} title="Open settings">&rsaquo;</button>
+          <button className={styles.panelExpandBtn} style={{ left: 0 }} onClick={() => setLeftPanelOpen(true)} title="Open settings" data-sim-overlay>&rsaquo;</button>
         )}
         <canvas ref={canvasRef} className={styles.canvas} />
 
         {/* Top-left stats (discreet, no background) */}
-        <div className={styles.statsOverlay}>
+        <div className={styles.statsOverlay} data-sim-overlay>
           <span>Gen {generation}</span>
           <span>{gridWidth.current || simWidth}&times;{gridHeight.current || simHeight}</span>
           <span>{actualFps} FPS</span>
           <span>{actualGps} g/s</span>
+          {recording && <span style={{ color: '#e05050' }}>{'\u23FA'} REC {recordFrameCount}f</span>}
         </div>
 
         {/* Top overlay: Viewer tabs */}
-        {attrToColorMappings.length > 1 && (
+        {attrToColorMappings.length > 0 && (
           <div className={styles.viewerBar} data-sim-overlay>
+            <span style={{ fontSize: '0.65rem', color: '#6080a0', marginRight: 4, whiteSpace: 'nowrap' }}>Output Mapping (A{'\u2192'}C):</span>
             {attrToColorMappings.map(m => (
               <button
                 key={m.id}
@@ -740,6 +866,12 @@ export function SimulatorView() {
           <button className={styles.transportBtn} onClick={() => setPlaying(false)} disabled={!playing} title="Pause (Enter)">&#9646;&#9646;</button>
           <button className={styles.transportBtn} onClick={handleStep} title="Step (Space)">&#9654;|</button>
           <button className={styles.transportBtn} onClick={handleReset} title="Reset (Esc)">&#9632;</button>
+          <button className={styles.transportBtn} onClick={handleScreenshot} title="Screenshot (PNG)">{'\uD83D\uDCF7'}</button>
+          {!recording ? (
+            <button className={styles.transportBtn} onClick={startRecording} title="Record GIF" style={{ color: '#e05050' }}>{'\u23FA'}</button>
+          ) : (
+            <button className={styles.transportBtn} onClick={stopRecording} title="Stop & Save GIF" style={{ color: '#e05050' }}>{'\u23F9'} {recordFrameCount}</button>
+          )}
           <div className={styles.transportDivider} />
 
           {/* Gens/frame (right side) */}
@@ -767,7 +899,7 @@ export function SimulatorView() {
         </div>
 
         {!rightPanelOpen && (
-          <button className={styles.panelExpandBtnRight}
+          <button className={styles.panelExpandBtnRight} data-sim-overlay
             onClick={() => setRightPanelOpen(true)} title="Open brush">&#9998;</button>
         )}
       </div>
@@ -776,7 +908,7 @@ export function SimulatorView() {
       {rightPanelOpen && (
         <div className={styles.sidePanel}>
           <div className={styles.panelHeader}>
-            <span className={styles.panelTitle}>Brush</span>
+            <span className={styles.panelTitle}>Input Mapping (C{'\u2192'}A)</span>
             <button className={styles.panelCollapseBtn} onClick={() => setRightPanelOpen(false)}>&rsaquo;</button>
           </div>
           {colorToAttrMappings.length > 0 && (

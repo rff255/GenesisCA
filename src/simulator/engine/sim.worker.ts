@@ -9,6 +9,7 @@ interface AttrDef {
   type: string;
   isModelAttribute: boolean;
   defaultValue: string;
+  tagOptions?: string[];
 }
 
 interface NeighborhoodDef {
@@ -80,6 +81,7 @@ function createTypedArray(type: string, size: number): Float64Array | Int32Array
     case 'bool': return new Uint8Array(size);
     case 'integer': return new Int32Array(size);
     case 'float': return new Float64Array(size);
+    case 'tag': return new Int32Array(size);
     default: return new Float64Array(size);
   }
 }
@@ -89,6 +91,7 @@ function defaultValue(attr: AttrDef): number {
     case 'bool': return attr.defaultValue === 'true' ? 1 : 0;
     case 'integer': return parseInt(attr.defaultValue, 10) || 0;
     case 'float': return parseFloat(attr.defaultValue) || 0;
+    case 'tag': return parseInt(attr.defaultValue, 10) || 0;
     default: return 0;
   }
 }
@@ -244,13 +247,12 @@ function randomizeGrid(): void {
       if (attr.type === 'bool') arr[i] = Math.random() > 0.7 ? 1 : 0;
       else if (attr.type === 'integer') arr[i] = Math.floor(Math.random() * 10);
       else if (attr.type === 'float') arr[i] = Math.random();
+      else if (attr.type === 'tag') arr[i] = Math.floor(Math.random() * Math.max(1, attr.tagOptions?.length ?? 1));
     }
-    // Copy to write buffer too
     const wArr = writeAttrs[attr.id]!;
     (wArr as Uint8Array).set(arr as Uint8Array);
   }
   generation = 0;
-  // Run one step so the model's color mappings define the visualization
   if (stepFn) runStep(); else writeDefaultColors();
 }
 
@@ -262,7 +264,6 @@ function resetGrid(): void {
     for (let i = 0; i < total; i++) { arr[i] = dv; wArr[i] = dv; }
   }
   generation = 0;
-  // Run one step so the model's color mappings define the visualization
   if (stepFn) runStep(); else writeDefaultColors();
 }
 
@@ -307,7 +308,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       cachedModelAttrs = {};
       for (const attr of msg.attributes) {
         if (!attr.isModelAttribute) continue;
-        cachedModelAttrs[attr.id] = defaultValue(attr);
+        if (attr.type === 'color') {
+          const hex = attr.defaultValue || '#808080';
+          cachedModelAttrs[attr.id + '_r'] = parseInt(hex.slice(1, 3), 16) || 0;
+          cachedModelAttrs[attr.id + '_g'] = parseInt(hex.slice(3, 5), 16) || 0;
+          cachedModelAttrs[attr.id + '_b'] = parseInt(hex.slice(5, 7), 16) || 0;
+        } else {
+          cachedModelAttrs[attr.id] = defaultValue(attr);
+        }
       }
 
       activeViewer = msg.activeViewer;

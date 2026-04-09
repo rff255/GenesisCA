@@ -15,7 +15,7 @@ export function setShowPortLabels(val: boolean) {
 }
 
 /** Info about the handle being dragged for connection (for port compatibility highlighting) */
-export let connectingFrom: { category: string; dataType?: string; nodeId: string } | null = null;
+export let connectingFrom: { category: string; kind: string; dataType?: string; nodeId: string } | null = null;
 
 export function setConnectingFrom(val: typeof connectingFrom) {
   connectingFrom = val;

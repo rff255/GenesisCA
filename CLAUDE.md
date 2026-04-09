@@ -55,7 +55,7 @@ A complete GenesisCA model definition consists of:
      - 1.3.1. Initial Configuration (Attribute Initialization Mapping, Default Attribute Values)
      - 1.3.2. Stop Conditions (Max of Iterations, Break Cases)
 
-2. **Attributes** — each has a name, type (bool, integer, float, list, tag), description, and type-specific properties (integer range, list size, tag options...)
+2. **Attributes** — each has a name, type (bool, integer, float, tag, color), description, and type-specific properties (integer range, tag options...)
    - 2.1. Cell Attributes (per-cell state)
    - 2.2. Model Attributes (global read-only parameters that all cells can access but not write; can be changed during simulation externally)
 
@@ -250,14 +250,16 @@ The app is functional with these major systems:
 ### Visual Programming Language (VPL)
 - `src/modeler/vpl/GraphEditor.tsx` — React Flow-based node graph editor
 - `src/modeler/vpl/CaNode.tsx` — Custom node component with per-type config UI
-- `src/modeler/vpl/nodes/` — 21 node types, each in its own file with `compile()` method
+- `src/modeler/vpl/nodes/` — 22 node types, each in its own file with `compile()` method
 - `src/modeler/vpl/compiler/compile.ts` — Two-pass compiler: hoists values, then emits flow
 - Multi-output nodes (InputColor, GetColorConstant, MacroNode) use `_v${nodeId}_${portId}` naming
 - Multi-root support: Step (per-generation) and InputColor (brush interaction) compile separately
 
 ### Simulation Engine (SoA Architecture)
 - `src/simulator/engine/sim.worker.ts` — Web Worker owns grid as Structure of Arrays
-- Grid storage: one typed array per attribute (`Uint8Array` bool, `Int32Array` int, `Float64Array` float), double-buffered
+- Grid storage: one typed array per attribute (`Uint8Array` bool, `Int32Array` int/tag, `Float64Array` float), double-buffered
+- Tag attributes: `Int32Array`, value = index into `tagOptions` string array
+- Color model attributes: stored as 3 entries (`attrId_r`, `attrId_g`, `attrId_b`) in cachedModelAttrs
 - Neighbor access: pre-computed `Int32Array` index tables (built at init, handles torus/constant boundary once)
 - Step function is LOOP-WRAPPED: `(total, r_<attrs>..., w_<attrs>..., nIdx_<nbrs>..., nSz_<nbrs>..., modelAttrs, colors, activeViewer)` — contains the for-loop, called ONCE per step
 - InputColor functions remain per-cell: `(_r, _g, _b, idx, r_<attrs>..., ...)`
@@ -272,23 +274,33 @@ The app is functional with these major systems:
 - Bottom transport bar: playback + speed sliders; top viewer bar: mapping tabs; collapsible side panels
 - Keyboard shortcuts: Space=step (also pauses), Enter=play/pause, Esc=reset
 - Brush cursor rectangle drawn on canvas; Ctrl+LMB drag to resize brush
+- GIF recording: `gifenc` library, frame capture from srcCanvas in worker message handler, max 512px downscale
+- Screenshot exports at display canvas resolution (not grid resolution) with nearest-neighbor upscale
+- Recompile optimization: structural changes reinit worker, graph-only changes send `recompile` message (preserves grid state)
 
 ### Key Patterns
 - Graph state sync: single debounced sync (100ms) via refs — never use multiple setTimeout callbacks
 - Graph editor mouse: RMB click=context menu, RMB drag=pan (`panOnDrag={[2]}`), LMB click=select, LMB drag=box select (`selectionOnDrag`); simulator: LMB=brush, RMB=pan
 - Shared mutable state: `graphState.ts` holds module-level variables (`isConnectingGlobal`, `showPortLabelsGlobal`, `connectingFrom`) to avoid circular imports between GraphEditor↔CaNode
 - Connection validation: `isValidConnection` on ReactFlow prevents flow↔value, self-connections, occupied value inputs, and cycles (BFS from target)
+- Connection highlighting: `connectingFrom` in graphState stores `{ category, kind, nodeId }`. CaNode checks BOTH category match AND opposite direction (`kind !== 'input'` for input ports, `kind !== 'output'` for output ports).
 - Port labels render outside nodes (absolute positioned left/right of handles); controlled by `showPortLabelsGlobal` toggle
 - Inline port widgets: stored in node config as `_port_${portId}` keys; compiler reads via `getInlineValue()` helper
 - Node collapse: `isCollapsed` flag in node data; collapsed nodes render all handles at `top: 50%`; `isConnectingGlobal` triggers hover-to-uncollapse
 - Group node RMB passthrough: CSS `:global(.react-flow__node-groupNode) { pointer-events: none !important; }` with `[data-drag-handle]` re-enabled
 - Context menu: pane menu uses hover submenu (`.contextSubmenuTrigger` > `.contextSubmenu`); paste uses `pasteFlowPos` ref for right-click position
 - ReactFlowProvider lifted to ModelerView (not inside GraphEditor) so NodeExplorer can access useReactFlow/useStore
-- Simulator overlay interaction: `data-sim-overlay` attribute on overlays; mouse handlers check `target.closest('[data-sim-overlay]')` to skip pan/zoom
+- Simulator overlays: ALL overlay elements on the canvas (stats, transport bar, viewer bar, zoom controls, panel expand buttons) MUST have `data-sim-overlay` attribute. Mousedown handler sets `canvasBrushActive` flag; mousemove brush painting checks this flag to prevent accidental painting when interacting with overlays.
 - Hide React Flow's persistent selection rect: CSS `:global(.react-flow__nodesselection-rect) { display: none !important; }`
 - Groups use React Flow's native `parentId` — auto-resize requires manual bounding box computation in `handleNodesChange`
 - Use `NodeResizer` component for resizable nodes (comments, groups) — CSS `resize: both` conflicts with React Flow drag
 - MacroNode, MacroInputNode, MacroOutputNode are hidden from Add Node menu via `HIDDEN_FROM_MENU` set
+- Undo/redo: `graphHistory.ts` module-level undo/redo stacks (max 50 snapshots). Ctrl+Z undo, Ctrl+Shift+Z / Ctrl+Y redo. Snapshot pushed BEFORE each mutation. History cleared on scope change.
+- `isMultiOutput()` helper in compile.ts replaces raw `MULTI_OUTPUT_TYPES.has()` — also checks `getModelAttribute` with `isColorAttr` config
+- CaNode config: NEVER call `updateConfig()` twice in sequence — second call uses stale `nodeData.config`, losing the first update. Instead, build the merged config object and call `updateNodeData(id, { ...nodeData, config: newConfig })` once.
+- CSS gotcha: `flex: 1` on buttons inside flex-column containers causes them to stretch vertically. Remove `flex: 1` from buttons that should have fixed height.
+- Nullish coalescing: never mix `??` with `||` or comparison operators without explicit parens — Babel/esbuild will warn or error.
+- Simulator recompile: SimulatorView is conditionally rendered (unmounted on other tabs). Compilation happens automatically on mount via `useEffect([model, compileModel])`. No separate recompile effect needed — graph edits in Modeler are picked up when user switches to Simulator tab.
 - Copy/paste: Ctrl+C/V/X + context menu. Module-level `clipboard` variable, strips macroInput/macroOutput, remaps IDs
 - Group paste: parentId must be remapped to new IDs, children keep relative positions, groups sorted before children
 
@@ -339,3 +351,20 @@ The app is functional with these major systems:
 - Vite base path: `base` must be conditional — `command === 'build' ? '/GenesisCA/' : '/'` — otherwise dev server fetches fail
 - Randomize/Reset must run one step via compiled stepFn so model-defined color mappings apply (not hardcoded fallback)
 - Models Library: Vite plugin in vite.config.ts auto-generates `models/index.json` from `public/models/*.gcaproj` — no manual manifest; card metadata comes from `ModelProperties`
+
+---
+
+## Future Work: List Attribute Type
+
+List attributes (fixed-size arrays of a basic type per cell) were prototyped and removed. When re-implementing, watch for these pitfalls:
+
+1. **SoA storage**: Each list attr with size K needs K separate typed arrays (`attrId_0` .. `attrId_K-1`). Every code path that iterates `cellAttrs` and accesses `readAttrs[attr.id]` / `writeAttrs[attr.id]` must expand list attrs into their sub-keys. Known locations:
+   - `initGrid()` — create K arrays instead of 1
+   - `randomizeGrid()` / `resetGrid()` — iterate sub-arrays
+   - `buildLoopArgs()` / `buildCellArgs()` — push K arrays per list attr
+   - **Paint handler** (`case 'paint'`) — copy-back loop after `icEntry.fn()` must copy each sub-key
+   - **importImage handler** — same copy-back issue
+   - **Constant boundary sentinel** (`buildNeighborIndices`) — must extend each sub-array by 1 for the sentinel cell
+2. **Compiler**: `buildLoopParams` / `buildCellParams` must emit K params per list attr. `copyLines` / `icCopyLines` must copy each sub-array.
+3. **Dynamic index access**: Emitting `[arr0,arr1,...][indexExpr]` works but the fallback for out-of-bounds must use `?? arr0` (nullish coalescing), NOT `|| [arr0]` which wraps the typed array in a JS array.
+4. **Node types needed**: ListGetElement (value node) and ListSetElement (flow node) with attribute selector + index input. Store `listSize` in node config so the compiler knows expansion width.
