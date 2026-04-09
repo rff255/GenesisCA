@@ -236,43 +236,6 @@ export function AttributesPanelContent() {
               </div>
             )}
 
-            {selected.type === 'list' && (
-              <>
-                <div className={styles.field}>
-                  <label className={styles.fieldLabel}>List Size</label>
-                  <input
-                    className={styles.numberInput}
-                    type="number"
-                    min={1}
-                    max={64}
-                    value={selected.listSize ?? 4}
-                    onChange={e =>
-                      updateAttribute(selected.id, {
-                        listSize: Math.max(1, Math.min(64, Number(e.target.value) || 1)),
-                      })
-                    }
-                  />
-                </div>
-                <div className={styles.field}>
-                  <label className={styles.fieldLabel}>Element Type</label>
-                  <select
-                    className={styles.selectInput}
-                    value={selected.listElementType ?? 'integer'}
-                    onChange={e =>
-                      updateAttribute(selected.id, {
-                        listElementType: e.target.value as 'bool' | 'integer' | 'float' | 'tag',
-                      })
-                    }
-                  >
-                    <option value="bool">Bool</option>
-                    <option value="integer">Integer</option>
-                    <option value="float">Float</option>
-                    <option value="tag">Tag</option>
-                  </select>
-                </div>
-              </>
-            )}
-
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Description</label>
               <textarea

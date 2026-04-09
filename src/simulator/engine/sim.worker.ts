@@ -10,8 +10,6 @@ interface AttrDef {
   isModelAttribute: boolean;
   defaultValue: string;
   tagOptions?: string[];
-  listSize?: number;
-  listElementType?: string;
 }
 
 interface NeighborhoodDef {
@@ -108,22 +106,12 @@ function initGrid(): void {
   attrsB = {};
 
   for (const attr of cellAttrs) {
-    if (attr.type === 'list') {
-      const sz = attr.listSize ?? 4;
-      const elemType = attr.listElementType ?? 'integer';
-      for (let k = 0; k < sz; k++) {
-        const key = `${attr.id}_${k}`;
-        attrsA[key] = createTypedArray(elemType, total);
-        attrsB[key] = createTypedArray(elemType, total);
-      }
-    } else {
-      const arrA = createTypedArray(attr.type, total);
-      const arrB = createTypedArray(attr.type, total);
-      const dv = defaultValue(attr);
-      if (dv !== 0) { arrA.fill(dv); arrB.fill(dv); }
-      attrsA[attr.id] = arrA;
-      attrsB[attr.id] = arrB;
-    }
+    const arrA = createTypedArray(attr.type, total);
+    const arrB = createTypedArray(attr.type, total);
+    const dv = defaultValue(attr);
+    if (dv !== 0) { arrA.fill(dv); arrB.fill(dv); }
+    attrsA[attr.id] = arrA;
+    attrsB[attr.id] = arrB;
   }
 
   readAttrs = attrsA;
@@ -194,21 +182,11 @@ function buildNeighborIndices(): void {
 
 let activeViewer = '';
 
-/** Push attr arrays for a single attr (expands list attrs into K entries) */
-function pushAttrArrays(args: unknown[], attrs: Record<string, ArrayLike<number> & { [i: number]: number }>, attr: AttrDef): void {
-  if (attr.type === 'list') {
-    const sz = attr.listSize ?? 4;
-    for (let k = 0; k < sz; k++) args.push(attrs[`${attr.id}_${k}`]);
-  } else {
-    args.push(attrs[attr.id]);
-  }
-}
-
 /** Build args for the loop-wrapped step function (called once per step, not per cell) */
 function buildLoopArgs(): unknown[] {
   const args: unknown[] = [total];
-  for (const attr of cellAttrs) pushAttrArrays(args, readAttrs, attr);
-  for (const attr of cellAttrs) pushAttrArrays(args, writeAttrs, attr);
+  for (const attr of cellAttrs) args.push(readAttrs[attr.id]);
+  for (const attr of cellAttrs) args.push(writeAttrs[attr.id]);
   for (const nbr of neighborhoods) {
     args.push(nbrIndices[nbr.id]);
     args.push(nbr.coords.length);
@@ -220,8 +198,8 @@ function buildLoopArgs(): unknown[] {
 /** Build args for a per-cell function (InputColor) */
 function buildCellArgs(idx: number): unknown[] {
   const args: unknown[] = [idx];
-  for (const attr of cellAttrs) pushAttrArrays(args, readAttrs, attr);
-  for (const attr of cellAttrs) pushAttrArrays(args, writeAttrs, attr);
+  for (const attr of cellAttrs) args.push(readAttrs[attr.id]);
+  for (const attr of cellAttrs) args.push(writeAttrs[attr.id]);
   for (const nbr of neighborhoods) {
     args.push(nbrIndices[nbr.id]);
     args.push(nbr.coords.length);
@@ -264,32 +242,15 @@ function writeDefaultColors(): void {
 
 function randomizeGrid(): void {
   for (const attr of cellAttrs) {
-    if (attr.type === 'list') {
-      const sz = attr.listSize ?? 4;
-      const elemType = attr.listElementType ?? 'integer';
-      for (let k = 0; k < sz; k++) {
-        const key = `${attr.id}_${k}`;
-        const arr = readAttrs[key]!;
-        for (let i = 0; i < total; i++) {
-          if (elemType === 'bool') arr[i] = Math.random() > 0.7 ? 1 : 0;
-          else if (elemType === 'integer') arr[i] = Math.floor(Math.random() * 10);
-          else if (elemType === 'float') arr[i] = Math.random();
-          else if (elemType === 'tag') arr[i] = Math.floor(Math.random() * Math.max(1, attr.tagOptions?.length ?? 1));
-        }
-        const wArr = writeAttrs[key]!;
-        (wArr as Uint8Array).set(arr as Uint8Array);
-      }
-    } else {
-      const arr = readAttrs[attr.id]!;
-      for (let i = 0; i < total; i++) {
-        if (attr.type === 'bool') arr[i] = Math.random() > 0.7 ? 1 : 0;
-        else if (attr.type === 'integer') arr[i] = Math.floor(Math.random() * 10);
-        else if (attr.type === 'float') arr[i] = Math.random();
-        else if (attr.type === 'tag') arr[i] = Math.floor(Math.random() * Math.max(1, attr.tagOptions?.length ?? 1));
-      }
-      const wArr = writeAttrs[attr.id]!;
-      (wArr as Uint8Array).set(arr as Uint8Array);
+    const arr = readAttrs[attr.id]!;
+    for (let i = 0; i < total; i++) {
+      if (attr.type === 'bool') arr[i] = Math.random() > 0.7 ? 1 : 0;
+      else if (attr.type === 'integer') arr[i] = Math.floor(Math.random() * 10);
+      else if (attr.type === 'float') arr[i] = Math.random();
+      else if (attr.type === 'tag') arr[i] = Math.floor(Math.random() * Math.max(1, attr.tagOptions?.length ?? 1));
     }
+    const wArr = writeAttrs[attr.id]!;
+    (wArr as Uint8Array).set(arr as Uint8Array);
   }
   generation = 0;
   if (stepFn) runStep(); else writeDefaultColors();
@@ -297,20 +258,10 @@ function randomizeGrid(): void {
 
 function resetGrid(): void {
   for (const attr of cellAttrs) {
-    if (attr.type === 'list') {
-      const sz = attr.listSize ?? 4;
-      for (let k = 0; k < sz; k++) {
-        const key = `${attr.id}_${k}`;
-        const arr = readAttrs[key]!;
-        const wArr = writeAttrs[key]!;
-        for (let i = 0; i < total; i++) { arr[i] = 0; wArr[i] = 0; }
-      }
-    } else {
-      const dv = defaultValue(attr);
-      const arr = readAttrs[attr.id]!;
-      const wArr = writeAttrs[attr.id]!;
-      for (let i = 0; i < total; i++) { arr[i] = dv; wArr[i] = dv; }
-    }
+    const dv = defaultValue(attr);
+    const arr = readAttrs[attr.id]!;
+    const wArr = writeAttrs[attr.id]!;
+    for (let i = 0; i < total; i++) { arr[i] = dv; wArr[i] = dv; }
   }
   generation = 0;
   if (stepFn) runStep(); else writeDefaultColors();

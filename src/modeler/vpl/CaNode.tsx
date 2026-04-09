@@ -587,26 +587,6 @@ function CaNodeComponent({ id, data }: NodeProps) {
           </>
         )}
 
-        {(nodeData.nodeType === 'listGetElement' || nodeData.nodeType === 'listSetElement') && (
-          <select
-            className={styles.select}
-            value={(nodeData.config.attributeId as string) || ''}
-            onChange={e => {
-              const attrId = e.target.value;
-              const attr = model.attributes.find(a => a.id === attrId);
-              const newConfig = { ...nodeData.config, attributeId: attrId, listSize: attr?.listSize ?? 4 };
-              updateNodeData(id, { ...nodeData, config: newConfig });
-            }}
-          >
-            <option value="">Attr...</option>
-            {model.attributes
-              .filter(a => a.type === 'list' && !a.isModelAttribute)
-              .map(a => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
-          </select>
-        )}
-
         {nodeData.nodeType === 'getRandom' && (
           <>
             <select

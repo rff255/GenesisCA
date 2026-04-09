@@ -55,7 +55,7 @@ A complete GenesisCA model definition consists of:
      - 1.3.1. Initial Configuration (Attribute Initialization Mapping, Default Attribute Values)
      - 1.3.2. Stop Conditions (Max of Iterations, Break Cases)
 
-2. **Attributes** — each has a name, type (bool, integer, float, list, tag), description, and type-specific properties (integer range, list size, tag options...)
+2. **Attributes** — each has a name, type (bool, integer, float, tag, color), description, and type-specific properties (integer range, tag options...)
    - 2.1. Cell Attributes (per-cell state)
    - 2.2. Model Attributes (global read-only parameters that all cells can access but not write; can be changed during simulation externally)
 
@@ -250,7 +250,7 @@ The app is functional with these major systems:
 ### Visual Programming Language (VPL)
 - `src/modeler/vpl/GraphEditor.tsx` — React Flow-based node graph editor
 - `src/modeler/vpl/CaNode.tsx` — Custom node component with per-type config UI
-- `src/modeler/vpl/nodes/` — 24 node types, each in its own file with `compile()` method
+- `src/modeler/vpl/nodes/` — 22 node types, each in its own file with `compile()` method
 - `src/modeler/vpl/compiler/compile.ts` — Two-pass compiler: hoists values, then emits flow
 - Multi-output nodes (InputColor, GetColorConstant, MacroNode) use `_v${nodeId}_${portId}` naming
 - Multi-root support: Step (per-generation) and InputColor (brush interaction) compile separately
@@ -258,7 +258,6 @@ The app is functional with these major systems:
 ### Simulation Engine (SoA Architecture)
 - `src/simulator/engine/sim.worker.ts` — Web Worker owns grid as Structure of Arrays
 - Grid storage: one typed array per attribute (`Uint8Array` bool, `Int32Array` int/tag, `Float64Array` float), double-buffered
-- List attributes: stored as K separate typed arrays (`attrId_0`, `attrId_1`, ...) — K = list size. Expanded in buildLoopArgs/buildCellArgs and compiler buildLoopParams/buildCellParams.
 - Tag attributes: `Int32Array`, value = index into `tagOptions` string array
 - Color model attributes: stored as 3 entries (`attrId_r`, `attrId_g`, `attrId_b`) in cachedModelAttrs
 - Neighbor access: pre-computed `Int32Array` index tables (built at init, handles torus/constant boundary once)
@@ -347,3 +346,20 @@ The app is functional with these major systems:
 - Vite base path: `base` must be conditional — `command === 'build' ? '/GenesisCA/' : '/'` — otherwise dev server fetches fail
 - Randomize/Reset must run one step via compiled stepFn so model-defined color mappings apply (not hardcoded fallback)
 - Models Library: Vite plugin in vite.config.ts auto-generates `models/index.json` from `public/models/*.gcaproj` — no manual manifest; card metadata comes from `ModelProperties`
+
+---
+
+## Future Work: List Attribute Type
+
+List attributes (fixed-size arrays of a basic type per cell) were prototyped and removed. When re-implementing, watch for these pitfalls:
+
+1. **SoA storage**: Each list attr with size K needs K separate typed arrays (`attrId_0` .. `attrId_K-1`). Every code path that iterates `cellAttrs` and accesses `readAttrs[attr.id]` / `writeAttrs[attr.id]` must expand list attrs into their sub-keys. Known locations:
+   - `initGrid()` — create K arrays instead of 1
+   - `randomizeGrid()` / `resetGrid()` — iterate sub-arrays
+   - `buildLoopArgs()` / `buildCellArgs()` — push K arrays per list attr
+   - **Paint handler** (`case 'paint'`) — copy-back loop after `icEntry.fn()` must copy each sub-key
+   - **importImage handler** — same copy-back issue
+   - **Constant boundary sentinel** (`buildNeighborIndices`) — must extend each sub-array by 1 for the sentinel cell
+2. **Compiler**: `buildLoopParams` / `buildCellParams` must emit K params per list attr. `copyLines` / `icCopyLines` must copy each sub-array.
+3. **Dynamic index access**: Emitting `[arr0,arr1,...][indexExpr]` works but the fallback for out-of-bounds must use `?? arr0` (nullish coalescing), NOT `|| [arr0]` which wraps the typed array in a JS array.
+4. **Node types needed**: ListGetElement (value node) and ListSetElement (flow node) with attribute selector + index input. Store `listSize` in node config so the compiler knows expansion width.

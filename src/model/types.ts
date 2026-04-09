@@ -1,5 +1,5 @@
 /** Attribute data types supported by GenesisCA */
-export type AttributeType = 'bool' | 'integer' | 'float' | 'list' | 'tag' | 'color';
+export type AttributeType = 'bool' | 'integer' | 'float' | 'tag' | 'color';
 
 /** A single attribute definition (per-cell or global model attribute) */
 export interface Attribute {
@@ -11,10 +11,6 @@ export interface Attribute {
   defaultValue: string;
   /** Tag type: named values (value = index into this array) */
   tagOptions?: string[];
-  /** List type: number of elements */
-  listSize?: number;
-  /** List type: element type */
-  listElementType?: 'bool' | 'integer' | 'float' | 'tag';
 }
 
 /** A neighborhood definition — list of relative offsets from the central cell */

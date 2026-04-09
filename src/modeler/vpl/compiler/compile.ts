@@ -692,29 +692,19 @@ function compileRoot(
 // Build parameter lists from model (without idx — loop is inside)
 // ---------------------------------------------------------------------------
 
-/** Push param names for an attribute (expands list attrs into K entries) */
-function pushAttrParams(parts: string[], prefix: string, a: { id: string; type: string; listSize?: number }): void {
-  if (a.type === 'list') {
-    const sz = a.listSize ?? 4;
-    for (let k = 0; k < sz; k++) parts.push(`${prefix}_${a.id}_${k}`);
-  } else {
-    parts.push(`${prefix}_${a.id}`);
-  }
-}
-
 function buildLoopParams(model: CAModel): {
   params: string;
-  cellAttrs: Array<{ id: string; type: string; listSize?: number; listElementType?: string }>;
+  cellAttrs: Array<{ id: string; type: string }>;
   neighborhoods: Array<{ id: string }>;
 } {
   const cellAttrs = model.attributes
     .filter(a => !a.isModelAttribute)
-    .map(a => ({ id: a.id, type: a.type, listSize: a.listSize, listElementType: a.listElementType }));
+    .map(a => ({ id: a.id, type: a.type }));
   const neighborhoods = model.neighborhoods.map(n => ({ id: n.id }));
 
   const parts: string[] = ['total'];
-  for (const a of cellAttrs) pushAttrParams(parts, 'r', a);
-  for (const a of cellAttrs) pushAttrParams(parts, 'w', a);
+  for (const a of cellAttrs) parts.push(`r_${a.id}`);
+  for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
   parts.push('modelAttrs', 'colors', 'activeViewer');
 
@@ -726,8 +716,8 @@ function buildCellParams(model: CAModel): string {
   const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
   const neighborhoods = model.neighborhoods;
   const parts: string[] = ['idx'];
-  for (const a of cellAttrs) pushAttrParams(parts, 'r', a);
-  for (const a of cellAttrs) pushAttrParams(parts, 'w', a);
+  for (const a of cellAttrs) parts.push(`r_${a.id}`);
+  for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
   parts.push('modelAttrs', 'colors', 'activeViewer');
   return parts.join(', ');
@@ -761,15 +751,7 @@ export function compileGraph(
   const cellParams = buildCellParams(model);
 
   // Generate attribute copy lines (previous → next generation)
-  const copyLines: string[] = [];
-  for (const a of cellAttrs) {
-    if (a.type === 'list') {
-      const sz = a.listSize ?? 4;
-      for (let k = 0; k < sz; k++) copyLines.push(`      w_${a.id}_${k}[idx] = r_${a.id}_${k}[idx];`);
-    } else {
-      copyLines.push(`      w_${a.id}[idx] = r_${a.id}[idx];`);
-    }
-  }
+  const copyLines = cellAttrs.map(a => `      w_${a.id}[idx] = r_${a.id}[idx];`);
 
   // --- Compile Step function (loop-wrapped) ---
   const stepNode = graphNodes.find(n => n.data.nodeType === 'step');
@@ -808,15 +790,7 @@ export function compileGraph(
       icNode, 'do', nodeMap, inputToSource, flowOutputToTargets, model,
     );
     // InputColor is called per-cell (for painted cells only), keep per-cell signature
-    const icCopyLines: string[] = [];
-    for (const a of cellAttrs) {
-      if (a.type === 'list') {
-        const sz = a.listSize ?? 4;
-        for (let k = 0; k < sz; k++) icCopyLines.push(`  w_${a.id}_${k}[idx] = r_${a.id}_${k}[idx];`);
-      } else {
-        icCopyLines.push(`  w_${a.id}[idx] = r_${a.id}[idx];`);
-      }
-    }
+    const icCopyLines = cellAttrs.map(a => `  w_${a.id}[idx] = r_${a.id}[idx];`);
     const code = [
       `(function(_r, _g, _b, ${cellParams}) {`,
       '  const colorIdx = idx * 4;',

@@ -325,7 +325,6 @@ function createInitialState(): ModelState {
         for (const n of model.neighborhoods) { n.margin ??= 2; }
         for (const a of model.attributes) {
           if (a.type === 'tag' && !a.tagOptions) a.tagOptions = [];
-          if (a.type === 'list') { a.listSize ??= 4; a.listElementType ??= 'integer'; }
         }
         return { model, isDirty: false, modelVersion: 0 };
       }

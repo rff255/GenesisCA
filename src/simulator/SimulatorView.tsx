@@ -324,7 +324,7 @@ export function SimulatorView() {
       attributes: model.attributes.map(a => ({
         id: a.id, type: a.type,
         isModelAttribute: a.isModelAttribute, defaultValue: a.defaultValue,
-        tagOptions: a.tagOptions, listSize: a.listSize, listElementType: a.listElementType,
+        tagOptions: a.tagOptions,
       })),
       neighborhoods: model.neighborhoods.map(n => ({ id: n.id, coords: n.coords })),
       boundaryTreatment: model.properties.boundaryTreatment,
