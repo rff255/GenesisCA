@@ -625,17 +625,6 @@ export function SimulatorView() {
     setRecordFrameCount(0);
   };
 
-  const handleRecompile = () => {
-    const result = compileModel();
-    if (result.error) { setCompileError(result.error); return; }
-    setCompileError('');
-    setCompiledCode(result.stepCode);
-    workerRef.current?.postMessage({
-      type: 'recompile',
-      stepCode: result.stepCode,
-      inputColorCodes: result.inputColorCodes,
-    });
-  };
 
   const handleCopyCode = () => {
     navigator.clipboard.writeText(compiledCode).catch(() => {});
