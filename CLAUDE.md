@@ -283,19 +283,24 @@ The app is functional with these major systems:
 - Graph editor mouse: RMB click=context menu, RMB drag=pan (`panOnDrag={[2]}`), LMB click=select, LMB drag=box select (`selectionOnDrag`); simulator: LMB=brush, RMB=pan
 - Shared mutable state: `graphState.ts` holds module-level variables (`isConnectingGlobal`, `showPortLabelsGlobal`, `connectingFrom`) to avoid circular imports between GraphEditor↔CaNode
 - Connection validation: `isValidConnection` on ReactFlow prevents flow↔value, self-connections, occupied value inputs, and cycles (BFS from target)
+- Connection highlighting: `connectingFrom` in graphState stores `{ category, kind, nodeId }`. CaNode checks BOTH category match AND opposite direction (`kind !== 'input'` for input ports, `kind !== 'output'` for output ports).
 - Port labels render outside nodes (absolute positioned left/right of handles); controlled by `showPortLabelsGlobal` toggle
 - Inline port widgets: stored in node config as `_port_${portId}` keys; compiler reads via `getInlineValue()` helper
 - Node collapse: `isCollapsed` flag in node data; collapsed nodes render all handles at `top: 50%`; `isConnectingGlobal` triggers hover-to-uncollapse
 - Group node RMB passthrough: CSS `:global(.react-flow__node-groupNode) { pointer-events: none !important; }` with `[data-drag-handle]` re-enabled
 - Context menu: pane menu uses hover submenu (`.contextSubmenuTrigger` > `.contextSubmenu`); paste uses `pasteFlowPos` ref for right-click position
 - ReactFlowProvider lifted to ModelerView (not inside GraphEditor) so NodeExplorer can access useReactFlow/useStore
-- Simulator overlay interaction: `data-sim-overlay` attribute on overlays; mouse handlers check `target.closest('[data-sim-overlay]')` to skip pan/zoom
+- Simulator overlays: ALL overlay elements on the canvas (stats, transport bar, viewer bar, zoom controls, panel expand buttons) MUST have `data-sim-overlay` attribute. Mousedown handler sets `canvasBrushActive` flag; mousemove brush painting checks this flag to prevent accidental painting when interacting with overlays.
 - Hide React Flow's persistent selection rect: CSS `:global(.react-flow__nodesselection-rect) { display: none !important; }`
 - Groups use React Flow's native `parentId` — auto-resize requires manual bounding box computation in `handleNodesChange`
 - Use `NodeResizer` component for resizable nodes (comments, groups) — CSS `resize: both` conflicts with React Flow drag
 - MacroNode, MacroInputNode, MacroOutputNode are hidden from Add Node menu via `HIDDEN_FROM_MENU` set
 - Undo/redo: `graphHistory.ts` module-level undo/redo stacks (max 50 snapshots). Ctrl+Z undo, Ctrl+Shift+Z / Ctrl+Y redo. Snapshot pushed BEFORE each mutation. History cleared on scope change.
 - `isMultiOutput()` helper in compile.ts replaces raw `MULTI_OUTPUT_TYPES.has()` — also checks `getModelAttribute` with `isColorAttr` config
+- CaNode config: NEVER call `updateConfig()` twice in sequence — second call uses stale `nodeData.config`, losing the first update. Instead, build the merged config object and call `updateNodeData(id, { ...nodeData, config: newConfig })` once.
+- CSS gotcha: `flex: 1` on buttons inside flex-column containers causes them to stretch vertically. Remove `flex: 1` from buttons that should have fixed height.
+- Nullish coalescing: never mix `??` with `||` or comparison operators without explicit parens — Babel/esbuild will warn or error.
+- Simulator recompile: SimulatorView is conditionally rendered (unmounted on other tabs). Compilation happens automatically on mount via `useEffect([model, compileModel])`. No separate recompile effect needed — graph edits in Modeler are picked up when user switches to Simulator tab.
 - Copy/paste: Ctrl+C/V/X + context menu. Module-level `clipboard` variable, strips macroInput/macroOutput, remaps IDs
 - Group paste: parentId must be remapped to new IDs, children keep relative positions, groups sorted before children
 
