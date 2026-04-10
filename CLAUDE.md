@@ -216,6 +216,8 @@ genesis-ca/
 - When building new node types, follow the established pattern of existing nodes (compile method, port definitions, UI component)
 - **Documentation consistency:** When changing features, update all three sources of truth: the code, `src/help/HelpView.tsx` (in-app Help tab), and the root `README.md`. These must remain consistent with each other.
 - **Pre-commit type check:** Vite dev server does NOT type-check — always run `npx tsc -b` before committing to catch TypeScript errors that will fail the CI build. Note: `npx tsc --noEmit` (without `-b`) silently checks nothing because the root tsconfig has `"files": []` and only project references.
+- **Version display:** When bumping version in `package.json`, also update the hardcoded version string in `src/App.tsx` header (`v1.X.0`).
+- **PR descriptions:** Never include "Built with Claude Code" or similar Claude/Anthropic attribution lines. User handles all attribution decisions.
 
 ---
 
@@ -311,6 +313,9 @@ The app is functional with these major systems:
 - Simulator recompile: SimulatorView is conditionally rendered (unmounted on other tabs). Compilation happens automatically on mount via `useEffect([model, compileModel])`. No separate recompile effect needed — graph edits in Modeler are picked up when user switches to Simulator tab.
 - Copy/paste: Ctrl+C/V/X + context menu. Module-level `clipboard` variable, strips macroInput/macroOutput, remaps IDs
 - Group paste: parentId must be remapped to new IDs, children keep relative positions, groups sorted before children
+- React StrictMode double-mount: effects run mount→cleanup→mount in dev. When terminating resources (Web Workers), always null out the ref (`workerRef.current = null`) after `.terminate()` so the second mount detects it needs a fresh init instead of reusing a dead reference.
+- Indicator values use a ref (`indicatorValuesRef`) not React state — avoids extra re-renders on every worker step message. The existing `setGeneration` re-render reads the ref naturally.
+- Linked indicator aggregation is always post-loop (not in-loop) to avoid async mode single-buffer corruption where mid-loop reads see a mix of old and new cell values.
 
 ---
 
