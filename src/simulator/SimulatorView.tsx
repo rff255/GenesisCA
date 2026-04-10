@@ -506,8 +506,8 @@ export function SimulatorView() {
       if (isResizingBrush.active) {
         const dx = e.clientX - isResizingBrush.startX;
         const dy = e.clientY - isResizingBrush.startY;
-        const maxW = gridWidth.current || simWidth;
-        const maxH = gridHeight.current || simHeight;
+        const maxW = (gridWidth.current || simWidth) * 2;
+        const maxH = (gridHeight.current || simHeight) * 2;
         const newW = Math.max(1, Math.min(maxW, isResizingBrush.startW + Math.round(dx / 5)));
         const newH = Math.max(1, Math.min(maxH, isResizingBrush.startH - Math.round(dy / 5)));
         setBrushW(newW);
@@ -954,10 +954,10 @@ export function SimulatorView() {
           </div>
           <div className={styles.fieldRow}>
             <span className={styles.statLabel}>W</span>
-            <input className={styles.brushInput} type="number" min={1} max={gridWidth.current || simWidth} value={brushW}
+            <input className={styles.brushInput} type="number" min={1} max={(gridWidth.current || simWidth) * 2} value={brushW}
               onChange={e => setBrushW(Math.max(1, Number(e.target.value) || 1))} />
             <span className={styles.statLabel}>H</span>
-            <input className={styles.brushInput} type="number" min={1} max={gridHeight.current || simHeight} value={brushH}
+            <input className={styles.brushInput} type="number" min={1} max={(gridHeight.current || simHeight) * 2} value={brushH}
               onChange={e => setBrushH(Math.max(1, Number(e.target.value) || 1))} />
           </div>
           <hr className={styles.divider} />
