@@ -66,15 +66,18 @@ const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'getColorConstant', 'macro']);
 function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
   if (MULTI_OUTPUT_TYPES.has(data.nodeType)) return true;
   if (data.nodeType === 'getModelAttribute' && data.config.isColorAttr) return true;
+  if (data.nodeType === 'groupStatement' || data.nodeType === 'groupCounting'
+    || data.nodeType === 'groupOperator') return true;
   return false;
 }
 
 interface RootCompileResult {
   valueLines: string[];
   flowLines: string[];
-  /** Node IDs that need scratch array declarations (GetNeighborsAttribute nodes).
-   *  scratchVarName is the full variable name (e.g., _scr_n123 or _mnABC_scr_n123). */
-  scratchNodes: Array<{ scratchVarName: string; nbrId: string }>;
+  /** Nodes that need pre-loop declarations.
+   *  nbrId: sized array for neighborhood scratch (GetNeighborsAttribute).
+   *  initExpr: literal init expression for reusable scratch (e.g., '[]'). */
+  scratchNodes: Array<{ scratchVarName: string; nbrId?: string; initExpr?: string }>;
 }
 
 function compileRoot(
@@ -87,7 +90,7 @@ function compileRoot(
 ): RootCompileResult {
   const compiled = new Set<string>();
   const valueLines: string[] = [];
-  const scratchNodes: Array<{ scratchVarName: string; nbrId: string }> = [];
+  const scratchNodes: Array<{ scratchVarName: string; nbrId?: string; initExpr?: string }> = [];
 
   function varName(sourceNodeId: string, sourcePortId: string): string {
     const sourceNode = nodeMap.get(sourceNodeId);
@@ -97,6 +100,10 @@ function compileRoot(
     // GetNeighborsAttribute uses _scr_ prefix for its scratch array
     if (sourceNode?.data.nodeType === 'getNeighborsAttribute') {
       return `_scr_${sourceNodeId}`;
+    }
+    // GetNeighborsAttrByIndexes uses _v{id}_vals scratch array
+    if (sourceNode?.data.nodeType === 'getNeighborsAttrByIndexes') {
+      return `_v${sourceNodeId}_vals`;
     }
     return `_v${sourceNodeId}`;
   }
@@ -410,6 +417,13 @@ function compileRoot(
     if (node.data.nodeType === 'getNeighborsAttribute') {
       const nbrId = node.data.config.neighborhoodId as string || '_undef';
       scratchNodes.push({ scratchVarName: `_scr_${nodeId}`, nbrId });
+    }
+    // Track aggregation nodes that need reusable scratch arrays
+    if (node.data.nodeType === 'groupStatement' || node.data.nodeType === 'groupCounting') {
+      scratchNodes.push({ scratchVarName: `_v${nodeId}_indexes`, initExpr: '[]' });
+    }
+    if (node.data.nodeType === 'getNeighborsAttrByIndexes') {
+      scratchNodes.push({ scratchVarName: `_v${nodeId}_vals`, initExpr: '[]' });
     }
 
     const inputVars: Record<string, string> = {};
@@ -784,7 +798,9 @@ export function compileGraph(
 
     // Scratch array declarations (before the loop)
     const scratchDecls = scratchNodes.map(
-      s => `  const ${s.scratchVarName} = new Array(nSz_${s.nbrId});`,
+      s => s.nbrId
+        ? `  const ${s.scratchVarName} = new Array(nSz_${s.nbrId});`
+        : `  const ${s.scratchVarName} = ${s.initExpr ?? '[]'};`,
     );
 
     if (isAsync) {
@@ -863,7 +879,9 @@ export function compileGraph(
       omNode, 'do', nodeMap, inputToSource, flowOutputToTargets, model,
     );
     const scratchDecls = scratchNodes.map(
-      s => `  const ${s.scratchVarName} = new Array(nSz_${s.nbrId});`,
+      s => s.nbrId
+        ? `  const ${s.scratchVarName} = new Array(nSz_${s.nbrId});`
+        : `  const ${s.scratchVarName} = ${s.initExpr ?? '[]'};`,
     );
     const code = [
       `(function(${omParams}) {`,

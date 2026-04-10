@@ -234,7 +234,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
     } else if (nodeData.nodeType === 'setAttribute') {
       const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
       collapsedLabel = attr ? `Set - ${attr.name}` : def.label;
-    } else if (nodeData.nodeType === 'getNeighborsAttribute' || nodeData.nodeType === 'getNeighborAttributeByIndex') {
+    } else if (nodeData.nodeType === 'getNeighborsAttribute' || nodeData.nodeType === 'getNeighborAttributeByIndex' || nodeData.nodeType === 'getNeighborsAttrByIndexes') {
       const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
       const nbr = model.neighborhoods.find(n => n.id === nodeData.config.neighborhoodId);
       collapsedLabel = attr && nbr ? `${nbr.name}[${attr.name}]` : def.label;
@@ -348,6 +348,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
         {(nodeData.nodeType === 'getNeighborsAttribute'
           || nodeData.nodeType === 'getNeighborAttributeByIndex'
+          || nodeData.nodeType === 'getNeighborsAttrByIndexes'
           || nodeData.nodeType === 'setNeighborhoodAttribute'
           || nodeData.nodeType === 'setNeighborAttributeByIndex') && (
           <>

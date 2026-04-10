@@ -26,6 +26,7 @@ import { SetNeighborhoodAttributeNode } from './SetNeighborhoodAttributeNode';
 import { GetNeighborAttributeByIndexNode } from './GetNeighborAttributeByIndexNode';
 import { SetNeighborAttributeByIndexNode } from './SetNeighborAttributeByIndexNode';
 import { OutputMappingNode } from './OutputMappingNode';
+import { GetNeighborsAttrByIndexesNode } from './GetNeighborsAttrByIndexesNode';
 
 const ALL_NODES: NodeTypeDef[] = [
   // Event (entry points)
@@ -41,6 +42,7 @@ const ALL_NODES: NodeTypeDef[] = [
   GetModelAttributeNode,
   GetNeighborsAttributeNode,
   GetNeighborAttributeByIndexNode,
+  GetNeighborsAttrByIndexesNode,
   GetConstantNode,
   GetRandomNode,
   TagConstantNode,
