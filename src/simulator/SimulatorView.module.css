@@ -446,6 +446,12 @@
   border-color: #4cc9f0;
 }
 
+.zoomBtnActive {
+  color: #4cc9f0;
+  border-color: #4cc9f0;
+  background: rgba(76, 201, 240, 0.12);
+}
+
 /* --- Input mapping tabs (in brush panel) --- */
 
 .mappingTabs {

@@ -8,6 +8,10 @@
   position: relative;
 }
 
+.compactNode {
+  min-width: 80px;
+}
+
 .userLabel {
   padding: 3px 10px;
   font-size: 0.65rem;

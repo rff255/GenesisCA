@@ -238,17 +238,24 @@ export function GraphEditorInner() {
       // Prevent flow↔value cross-category connections
       if (srcParsed.category !== tgtParsed.category) return false;
 
+      const currentEdges = edgesRef.current;
+
       // Prevent connecting to an already-connected value input
       if (tgtParsed.category === 'value') {
-        const currentEdges = edgesRef.current;
         const alreadyConnected = currentEdges.some(
           e => e.target === connection.target && e.targetHandle === connection.targetHandle,
         );
         if (alreadyConnected) return false;
       }
 
+      // Prevent duplicate connections (same source+target+handles)
+      const hasDuplicate = currentEdges.some(
+        e => e.source === connection.source && e.sourceHandle === connection.sourceHandle
+          && e.target === connection.target && e.targetHandle === connection.targetHandle,
+      );
+      if (hasDuplicate) return false;
+
       // Cycle detection: BFS from target to see if it can reach source
-      const currentEdges = edgesRef.current;
       const visited = new Set<string>();
       const queue = [connection.target!];
       while (queue.length > 0) {
@@ -472,6 +479,13 @@ export function GraphEditorInner() {
       if (!contextMenu) return;
       const def = getNodeDef(nodeType);
       if (!def) return;
+      // Singleton: only one Step node allowed
+      if (nodeType === 'step') {
+        const hasStep = nodesRef.current.some(
+          n => (n.data as Record<string, unknown>)?.nodeType === 'step',
+        );
+        if (hasStep) { setContextMenu(null); return; }
+      }
       pushCurrentSnapshot();
       setNodes(nds => {
         const id = generateNodeId(nds);
@@ -494,6 +508,9 @@ export function GraphEditorInner() {
     const targetNodeId = contextMenu.target.type === 'node' ? contextMenu.target.nodeId : '';
     const sourceNode = nodes.find(n => n.id === targetNodeId);
     if (!sourceNode) return;
+    // Singleton: don't duplicate Step nodes
+    const srcType = (sourceNode.data as Record<string, unknown>)?.nodeType;
+    if (srcType === 'step') { setContextMenu(null); return; }
     pushCurrentSnapshot();
     setNodes(nds => {
       const id = generateNodeId(nds);
@@ -556,6 +573,17 @@ export function GraphEditorInner() {
 
   const handlePaste = useCallback(() => {
     if (!clipboard || clipboard.nodes.length === 0) return;
+    // Singleton: filter out Step nodes if one already exists in the graph
+    const hasStepInGraph = nodesRef.current.some(
+      n => (n.data as Record<string, unknown>)?.nodeType === 'step',
+    );
+    if (hasStepInGraph) {
+      clipboard = {
+        nodes: clipboard.nodes.filter(n => (n.data as Record<string, unknown>)?.nodeType !== 'step'),
+        edges: clipboard.edges,
+      };
+      if (clipboard.nodes.length === 0) return;
+    }
     pushCurrentSnapshot();
 
     // Compute clipboard bounding-box center (top-level nodes only)

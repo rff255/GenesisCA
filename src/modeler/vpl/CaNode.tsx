@@ -162,6 +162,11 @@ function CaNodeComponent({ id, data }: NodeProps) {
     );
   }
 
+  // LogicOperator: hide port B when operation is NOT (unary)
+  if (nodeData.nodeType === 'logicOperator' && nodeData.config.operation === 'NOT') {
+    inputPorts = inputPorts.filter(p => p.id !== 'b');
+  }
+
   // Detect which input ports are connected (for inline widget visibility)
   const connectedInputHandles = useStore(
     useCallback(
@@ -309,9 +314,11 @@ function CaNodeComponent({ id, data }: NodeProps) {
     );
   }
 
+  const isCompact = nodeData.nodeType === 'step';
+
   return (
     <div
-      className={styles.node}
+      className={`${styles.node} ${isCompact ? styles.compactNode : ''}`}
       style={{ borderColor: def.color, minHeight: nodeMinHeight }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}

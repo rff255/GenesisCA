@@ -39,6 +39,7 @@ export function SimulatorView() {
   const [brushH, setBrushH] = useState((saved.current.brushH as number) ?? 1);
   const [brushMapping, setBrushMapping] = useState((saved.current.brushMapping as string) ?? '');
   const [showBrushCursor, setShowBrushCursor] = useState((saved.current.showBrushCursor as boolean) ?? true);
+  const [showGridlines, setShowGridlines] = useState((saved.current.showGridlines as boolean) ?? false);
 
   // GIF recording state
   const [recording, setRecording] = useState(false);
@@ -53,12 +54,12 @@ export function SimulatorView() {
       try {
         localStorage.setItem(SIM_SETTINGS_KEY, JSON.stringify({
           targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
-          activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor,
+          activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines,
         }));
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines]);
 
   // F3: Runtime model attribute values
   const [runtimeModelAttrs, setRuntimeModelAttrs] = useState<Record<string, number>>({});
@@ -149,6 +150,28 @@ export function SimulatorView() {
     const oy = (parentH - scaledH) / 2 + pan.y;
 
     ctx.drawImage(srcCanvasRef.current, ox, oy, scaledW, scaledH);
+
+    // Draw gridlines when zoomed in enough (cells >= 4px)
+    if (showGridlinesRef.current && scale >= 4) {
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+      ctx.lineWidth = 0.5;
+      ctx.beginPath();
+      for (let col = 0; col <= w; col++) {
+        const x = ox + col * scale;
+        if (x >= 0 && x <= parentW) {
+          ctx.moveTo(x, Math.max(0, oy));
+          ctx.lineTo(x, Math.min(parentH, oy + scaledH));
+        }
+      }
+      for (let row = 0; row <= h; row++) {
+        const y = oy + row * scale;
+        if (y >= 0 && y <= parentH) {
+          ctx.moveTo(Math.max(0, ox), y);
+          ctx.lineTo(Math.min(parentW, ox + scaledW), y);
+        }
+      }
+      ctx.stroke();
+    }
 
     // Draw brush cursor rectangle
     const cursor = cursorGrid.current;
@@ -372,6 +395,8 @@ export function SimulatorView() {
   useEffect(() => { activeViewerRef.current = activeViewer; }, [activeViewer]);
   const showBrushCursorRef = useRef(true);
   useEffect(() => { showBrushCursorRef.current = showBrushCursor; }, [showBrushCursor]);
+  const showGridlinesRef = useRef(false);
+  useEffect(() => { showGridlinesRef.current = showGridlines; }, [showGridlines]);
   useEffect(() => { brushMappingRef.current = brushMapping; }, [brushMapping]);
 
   /** Convert screen coords to grid cell coords */
@@ -889,6 +914,11 @@ export function SimulatorView() {
           <button className={styles.zoomBtn} onClick={() => { zoomRef.current = Math.min(50, zoomRef.current * 1.3); draw(); }} title="Zoom in">+</button>
           <button className={styles.zoomBtn} onClick={() => { zoomRef.current = Math.max(0.1, zoomRef.current / 1.3); draw(); }} title="Zoom out">&minus;</button>
           <button className={styles.zoomBtn} onClick={handleResetView} title="Fit view">&#x2922;</button>
+          <button
+            className={`${styles.zoomBtn} ${showGridlines ? styles.zoomBtnActive : ''}`}
+            onClick={() => { setShowGridlines(v => !v); draw(); }}
+            title="Toggle gridlines"
+          >#</button>
         </div>
 
         {!rightPanelOpen && (

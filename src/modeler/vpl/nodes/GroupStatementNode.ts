@@ -7,7 +7,7 @@ export const GroupStatementNode: NodeTypeDef = {
   color: '#e65100',
   ports: [
     { id: 'values', label: 'Values', kind: 'input', category: 'value', dataType: 'any', isArray: true },
-    { id: 'x', label: 'X', kind: 'input', category: 'value', dataType: 'any' },
+    { id: 'x', label: 'X', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '0' },
     { id: 'result', label: 'Result', kind: 'output', category: 'value', dataType: 'bool' },
   ],
   defaultConfig: { operation: 'allIs' },

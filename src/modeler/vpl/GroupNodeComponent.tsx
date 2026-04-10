@@ -29,8 +29,8 @@ function GroupNodeInner({ id, data, selected }: NodeProps) {
         isVisible={!!selected}
         minWidth={100}
         minHeight={60}
-        lineStyle={{ borderColor: color }}
-        handleStyle={{ width: 8, height: 8, background: color, borderRadius: 2 }}
+        lineStyle={{ borderColor: color, pointerEvents: 'auto' }}
+        handleStyle={{ width: 8, height: 8, background: color, borderRadius: 2, pointerEvents: 'auto' }}
       />
       <div className={styles.header} data-drag-handle>
         <input
