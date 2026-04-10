@@ -152,6 +152,35 @@ export function HelpView() {
             colors into cell state changes.
           </p>
 
+          <h3 className={styles.h3}>Indicators (Properties Panel)</h3>
+          <p className={styles.p}>
+            Indicators are quantitative variables that monitor CA evolution beyond visual
+            feedback. They are defined in the <strong>Properties</strong> panel under the
+            &quot;Indicators&quot; section. Two kinds exist:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Standalone</strong> &mdash; Typed scalar values (bool, integer, float,
+            or tag) that can be read and written by graph nodes (Get Indicator, Set Indicator,
+            Update Indicator). They act as accumulators inside the step loop.</li>
+            <li><strong>Linked</strong> &mdash; Automatically computed from an existing cell
+            attribute after each step. The aggregation mode depends on the attribute type:
+            Bool and Tag support Frequency (count per value); Integer and Float support
+            Total (sum) or Frequency.</li>
+          </ul>
+          <p className={styles.p}>
+            Each indicator has an <strong>Accumulation Mode</strong>: &quot;Per
+            Generation&quot; resets every step, while &quot;Accumulated&quot; keeps a running
+            total across generations (reset on simulator reset).
+          </p>
+          <p className={styles.p}>
+            In the Simulator, the <strong>eye icon</strong> on linked indicators toggles
+            whether the aggregation is computed. Unwatching a linked indicator removes its
+            computation from the step loop, saving performance. For <strong>Accumulated</strong>
+            linked indicators, unwatching means those generations are skipped in the running
+            total. Standalone indicator eye icons are always active (disabled) because their
+            computation is part of the user-defined update graph and cannot be separated.
+          </p>
+
           <h3 className={styles.h3}>The Graph Editor</h3>
           <p className={styles.p}>
             The central area is a node-based visual programming editor. You connect nodes
@@ -300,6 +329,18 @@ export function HelpView() {
             <tbody>
               <tr><td>Set Color Viewer</td><td>Write RGB values for an Attribute-to-Color visualization.</td></tr>
               <tr><td>Get Color Constant</td><td>Output fixed R, G, B values.</td></tr>
+            </tbody>
+          </table>
+
+          <h3 className={styles.h3}>
+            Indicators
+          </h3>
+          <table className={styles.table}>
+            <thead><tr><th>Node</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td>Get Indicator</td><td>Read the current value of a standalone indicator.</td></tr>
+              <tr><td>Set Indicator</td><td>Set a standalone indicator to a specific value.</td></tr>
+              <tr><td>Update Indicator</td><td>Modify a standalone indicator based on its current value and an input (increment, decrement, max, min, toggle, OR, AND, next, previous).</td></tr>
             </tbody>
           </table>
         </section>

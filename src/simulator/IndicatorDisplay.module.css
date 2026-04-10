@@ -1,0 +1,167 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.indicator {
+  background: rgba(13, 17, 23, 0.5);
+  border: 1px solid #2d4059;
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.eyeBtn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.7rem;
+  padding: 0;
+  line-height: 1;
+  color: #8090a0;
+  width: 16px;
+  text-align: center;
+}
+
+.eyeActive {
+  color: #4cc9f0;
+}
+
+.eyeDisabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.chartBtn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.5rem;
+  padding: 0;
+  line-height: 1;
+  color: #6080a0;
+  width: 14px;
+  text-align: center;
+  transition: color 0.15s;
+}
+
+.chartBtn:hover {
+  color: #4cc9f0;
+}
+
+.chartBtnActive {
+  color: #4cc9f0;
+}
+
+.name {
+  font-size: 0.7rem;
+  color: #e0e0e0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge {
+  font-size: 0.55rem;
+  font-weight: 700;
+  color: #0d1117;
+  background: #4cc9f0;
+  border-radius: 3px;
+  padding: 0 3px;
+  line-height: 1.4;
+}
+
+.scalarValue {
+  font-size: 0.75rem;
+  color: #4cc9f0;
+  font-weight: 600;
+  margin-top: 2px;
+  padding-left: 20px;
+  font-family: monospace;
+}
+
+.sparklineWrap {
+  margin-top: 4px;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.freqTable {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.freqRow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.65rem;
+  padding: 1px 4px 1px 20px;
+}
+
+/* Histogram bar row */
+.freqBarRow {
+  display: flex;
+  align-items: center;
+  font-size: 0.65rem;
+  padding: 1px 4px 1px 4px;
+  gap: 4px;
+}
+
+.freqBarRow .freqKey {
+  width: 40px;
+  min-width: 40px;
+  flex: none;
+}
+
+.freqBarTrack {
+  flex: 1;
+  height: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.freqBar {
+  height: 100%;
+  background: rgba(76, 201, 240, 0.45);
+  border-radius: 2px;
+  min-width: 1px;
+  transition: width 0.1s ease-out;
+}
+
+.freqBarRow .freqCount {
+  width: 36px;
+  min-width: 36px;
+  flex: none;
+  text-align: right;
+}
+
+.freqKey {
+  color: #b0b8c0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.freqCount {
+  color: #4cc9f0;
+  font-family: monospace;
+  font-size: 0.6rem;
+  margin-left: 8px;
+  flex-shrink: 0;
+}

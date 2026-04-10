@@ -91,6 +91,31 @@ export interface MacroDef {
   exposedOutputs: MacroPort[];
 }
 
+// ---------------------------------------------------------------------------
+// Indicators
+// ---------------------------------------------------------------------------
+
+export type IndicatorKind = 'standalone' | 'linked';
+export type LinkedAggregation = 'frequency' | 'total';
+export type AccumulationMode = 'per-generation' | 'accumulated';
+
+/** An indicator definition — monitors CA evolution quantitatively */
+export interface Indicator {
+  id: string;
+  name: string;
+  kind: IndicatorKind;
+  dataType: AttributeType;              // standalone: user-chosen; linked: derived from linked attr (excludes 'color')
+  defaultValue: string;                 // standalone: initial/reset value (same format as Attribute.defaultValue)
+  accumulationMode: AccumulationMode;
+  tagOptions?: string[];                // standalone tag type: named values (like Attribute.tagOptions)
+  // Linked-only fields:
+  linkedAttributeId?: string;
+  linkedAggregation?: LinkedAggregation;
+  binCount?: number;                    // float + frequency: number of histogram bins (default 10)
+  // Display:
+  watched: boolean;                     // eye toggle — controls display in simulator
+}
+
 /** Complete CA model definition */
 export interface CAModel {
   schemaVersion: number;
@@ -98,6 +123,7 @@ export interface CAModel {
   attributes: Attribute[];
   neighborhoods: Neighborhood[];
   mappings: Mapping[];
+  indicators: Indicator[];
   graphNodes: GraphNode[];
   graphEdges: GraphEdge[];
   macroDefs: MacroDef[];

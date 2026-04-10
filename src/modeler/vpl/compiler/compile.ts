@@ -66,15 +66,18 @@ const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'getColorConstant', 'macro']);
 function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
   if (MULTI_OUTPUT_TYPES.has(data.nodeType)) return true;
   if (data.nodeType === 'getModelAttribute' && data.config.isColorAttr) return true;
+  if (data.nodeType === 'groupStatement' || data.nodeType === 'groupCounting'
+    || data.nodeType === 'groupOperator') return true;
   return false;
 }
 
 interface RootCompileResult {
   valueLines: string[];
   flowLines: string[];
-  /** Node IDs that need scratch array declarations (GetNeighborsAttribute nodes).
-   *  scratchVarName is the full variable name (e.g., _scr_n123 or _mnABC_scr_n123). */
-  scratchNodes: Array<{ scratchVarName: string; nbrId: string }>;
+  /** Nodes that need pre-loop declarations.
+   *  nbrId: sized array for neighborhood scratch (GetNeighborsAttribute).
+   *  initExpr: literal init expression for reusable scratch (e.g., '[]'). */
+  scratchNodes: Array<{ scratchVarName: string; nbrId?: string; initExpr?: string }>;
 }
 
 function compileRoot(
@@ -87,7 +90,7 @@ function compileRoot(
 ): RootCompileResult {
   const compiled = new Set<string>();
   const valueLines: string[] = [];
-  const scratchNodes: Array<{ scratchVarName: string; nbrId: string }> = [];
+  const scratchNodes: Array<{ scratchVarName: string; nbrId?: string; initExpr?: string }> = [];
 
   function varName(sourceNodeId: string, sourcePortId: string): string {
     const sourceNode = nodeMap.get(sourceNodeId);
@@ -97,6 +100,10 @@ function compileRoot(
     // GetNeighborsAttribute uses _scr_ prefix for its scratch array
     if (sourceNode?.data.nodeType === 'getNeighborsAttribute') {
       return `_scr_${sourceNodeId}`;
+    }
+    // GetNeighborsAttrByIndexes uses _v{id}_vals scratch array
+    if (sourceNode?.data.nodeType === 'getNeighborsAttrByIndexes') {
+      return `_v${sourceNodeId}_vals`;
     }
     return `_v${sourceNodeId}`;
   }
@@ -200,6 +207,12 @@ function compileRoot(
         const nbrId = iNode.data.config.neighborhoodId as string || '_undef';
         scratchNodes.push({ scratchVarName: `${prefix}_scr_${innerNodeId}`, nbrId });
       }
+      if (nt === 'groupStatement' || nt === 'groupCounting') {
+        scratchNodes.push({ scratchVarName: `${prefix}_v${innerNodeId}_indexes`, initExpr: '[]' });
+      }
+      if (nt === 'getNeighborsAttrByIndexes') {
+        scratchNodes.push({ scratchVarName: `${prefix}_v${innerNodeId}_vals`, initExpr: '[]' });
+      }
 
       // Resolve inputs
       const iInputVars: Record<string, string> = {};
@@ -221,7 +234,12 @@ function compileRoot(
       const code = iDef.compile(innerNodeId, iNode.data.config, iInputVars);
       if (code) {
         // Rewrite variable names in emitted code to use scoped prefix
+        // Note: multi-output vars use _v{id}_{port} — the trailing _ breaks \b, so we
+        // also replace _v{id}_ (with trailing underscore) before the word-boundary version.
         const scopedCode = code.replace(
+          new RegExp(`\\b_v${innerNodeId}_`, 'g'),
+          `${prefix}_v${innerNodeId}_`,
+        ).replace(
           new RegExp(`\\b_v${innerNodeId}\\b`, 'g'),
           `${prefix}_v${innerNodeId}`,
         ).replace(
@@ -337,6 +355,12 @@ function compileRoot(
         const nbrId = iNode.data.config.neighborhoodId as string || '_undef';
         scratchNodes.push({ scratchVarName: `${nestedPrefix}_scr_${nid}`, nbrId });
       }
+      if (nt === 'groupStatement' || nt === 'groupCounting') {
+        scratchNodes.push({ scratchVarName: `${nestedPrefix}_v${nid}_indexes`, initExpr: '[]' });
+      }
+      if (nt === 'getNeighborsAttrByIndexes') {
+        scratchNodes.push({ scratchVarName: `${nestedPrefix}_v${nid}_vals`, initExpr: '[]' });
+      }
       const iInputVars: Record<string, string> = {};
       for (const port of iDef.ports) {
         if (port.kind !== 'input' || port.category !== 'value') continue;
@@ -355,6 +379,7 @@ function compileRoot(
       const code = iDef.compile(nid, iNode.data.config, iInputVars);
       if (code) {
         const scopedCode = code
+          .replace(new RegExp(`\\b_v${nid}_`, 'g'), `${nestedPrefix}_v${nid}_`)
           .replace(new RegExp(`\\b_v${nid}\\b`, 'g'), `${nestedPrefix}_v${nid}`)
           .replace(new RegExp(`\\b_scr_${nid}\\b`, 'g'), `${nestedPrefix}_scr_${nid}`)
           .replace(new RegExp(`\\b_nb${nid}\\b`, 'g'), `${nestedPrefix}_nb${nid}`);
@@ -411,6 +436,20 @@ function compileRoot(
       const nbrId = node.data.config.neighborhoodId as string || '_undef';
       scratchNodes.push({ scratchVarName: `_scr_${nodeId}`, nbrId });
     }
+    // Track aggregation nodes that need reusable scratch arrays (only when indexes output is connected)
+    let needsIndexes = false;
+    if (node.data.nodeType === 'groupStatement' || node.data.nodeType === 'groupCounting') {
+      // Check if any downstream node reads the indexes output
+      for (const [, src] of inputToSource) {
+        if (src.nodeId === nodeId && src.portId === 'indexes') { needsIndexes = true; break; }
+      }
+    }
+    if (needsIndexes) {
+      scratchNodes.push({ scratchVarName: `_v${nodeId}_indexes`, initExpr: '[]' });
+    }
+    if (node.data.nodeType === 'getNeighborsAttrByIndexes') {
+      scratchNodes.push({ scratchVarName: `_v${nodeId}_vals`, initExpr: '[]' });
+    }
 
     const inputVars: Record<string, string> = {};
     for (const port of def.ports) {
@@ -425,7 +464,11 @@ function compileRoot(
       }
     }
 
-    const code = def.compile(nodeId, node.data.config, inputVars);
+    // For aggregation nodes, pass whether indexes output is connected (for optimization)
+    const compileConfig = (node.data.nodeType === 'groupStatement' || node.data.nodeType === 'groupCounting')
+      ? { ...node.data.config, _indexesConnected: needsIndexes }
+      : node.data.config;
+    const code = def.compile(nodeId, compileConfig, inputVars);
     if (code) valueLines.push('      ' + code.trimEnd());
 
     return `_v${nodeId}`;
@@ -707,7 +750,7 @@ function buildLoopParams(model: CAModel): {
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
-  parts.push('modelAttrs', 'colors', 'activeViewer');
+  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults');
   if (isAsync) parts.push('order');
 
   return { params: parts.join(', '), cellAttrs, neighborhoods };
@@ -721,8 +764,81 @@ function buildCellParams(model: CAModel): string {
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
-  parts.push('modelAttrs', 'colors', 'activeViewer');
+  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults');
   return parts.join(', ');
+}
+
+// ---------------------------------------------------------------------------
+// Linked indicator code generation (injected into step function)
+// ---------------------------------------------------------------------------
+
+function buildLinkedIndicatorCode(model: CAModel): {
+  preLoopDecls: string[];
+  inLoopLines: string[];
+  postLoopLines: string[];
+} {
+  const postLoopLines: string[] = [];
+
+  const watched = (model.indicators || []).filter(
+    i => i.kind === 'linked' && i.watched && i.linkedAttributeId,
+  );
+  if (watched.length === 0) return { preLoopDecls: [], inLoopLines: [], postLoopLines };
+
+  // All linked indicators are computed as post-loop passes over the final buffer.
+  // This is correct for both sync mode (w_ has new values after loop) and async mode
+  // (single buffer is fully updated). A separate pass over a typed array is fast
+  // (sequential memory scan, perfect cache locality) and avoids the async-mode bug
+  // where mid-loop aggregation sees a mix of old and new values.
+  for (const ind of watched) {
+    const attr = model.attributes.find(a => a.id === ind.linkedAttributeId);
+    if (!attr || attr.isModelAttribute) continue;
+    const wVar = `w_${attr.id}`;
+    const key = JSON.stringify(ind.id);
+
+    if (ind.linkedAggregation === 'total') {
+      postLoopLines.push(
+        `  { let _s = 0; for (let _i = 0; _i < total; _i++) _s += ${wVar}[_i];` +
+        ` _linkedResults[${key}] = _s; }`,
+      );
+    } else if (attr.type === 'bool') {
+      postLoopLines.push(
+        `  { let _t = 0; for (let _i = 0; _i < total; _i++) if (${wVar}[_i]) _t++;` +
+        ` _linkedResults[${key}] = { 'true': _t, 'false': total - _t }; }`,
+      );
+    } else if (attr.type === 'tag') {
+      const tagLen = attr.tagOptions?.length || 1;
+      const tagNames = JSON.stringify(attr.tagOptions || []);
+      postLoopLines.push(
+        `  { const _c = new Int32Array(${tagLen});` +
+        ` for (let _i = 0; _i < total; _i++) _c[${wVar}[_i]]++;` +
+        ` const _tn = ${tagNames}; const _f = {};` +
+        ` for (let _ti = 0; _ti < ${tagLen}; _ti++) _f[_tn[_ti]] = _c[_ti];` +
+        ` _linkedResults[${key}] = _f; }`,
+      );
+    } else if (attr.type === 'integer') {
+      postLoopLines.push(
+        `  { const _f = {};` +
+        ` for (let _i = 0; _i < total; _i++) { const _k = ${wVar}[_i]; _f[_k] = (_f[_k] || 0) + 1; }` +
+        ` _linkedResults[${key}] = _f; }`,
+      );
+    } else if (attr.type === 'float') {
+      const bc = ind.binCount || 10;
+      postLoopLines.push(
+        `  { let _mn = Infinity, _mx = -Infinity;` +
+        ` for (let _i = 0; _i < total; _i++) { const _v = ${wVar}[_i]; if (_v < _mn) _mn = _v; if (_v > _mx) _mx = _v; }` +
+        ` if (_mn === _mx) _mx = _mn + 1;` +
+        ` const _bw = (_mx - _mn) / ${bc}; const _bins = new Int32Array(${bc});` +
+        ` for (let _i = 0; _i < total; _i++) { let _b = (${wVar}[_i] - _mn) / _bw | 0; if (_b >= ${bc}) _b = ${bc - 1}; _bins[_b]++; }` +
+        ` const _f = {};` +
+        ` for (let _bi = 0; _bi < ${bc}; _bi++)` +
+        ` { const _lo = (_mn + _bi * _bw).toFixed(2); const _hi = (_mn + (_bi + 1) * _bw).toFixed(2);` +
+        ` _f[_lo + '\\u2013' + _hi] = _bins[_bi]; }` +
+        ` _linkedResults[${key}] = _f; }`,
+      );
+    }
+  }
+
+  return { preLoopDecls: [], inLoopLines: [], postLoopLines };
 }
 
 // ---------------------------------------------------------------------------
@@ -784,14 +900,20 @@ export function compileGraph(
 
     // Scratch array declarations (before the loop)
     const scratchDecls = scratchNodes.map(
-      s => `  const ${s.scratchVarName} = new Array(nSz_${s.nbrId});`,
+      s => s.nbrId
+        ? `  const ${s.scratchVarName} = new Array(nSz_${s.nbrId});`
+        : `  const ${s.scratchVarName} = ${s.initExpr ?? '[]'};`,
     );
+
+    // Build linked indicator aggregation code (injected into the loop)
+    const linked = buildLinkedIndicatorCode(model);
 
     if (isAsync) {
       // Async mode: iterate cells via shuffled order array
       stepCode = [
         `(function(${loopParams}) {`,
         ...scratchDecls,
+        ...linked.preLoopDecls,
         '  for (let _i = 0; _i < total; _i++) {',
         '    const idx = order[_i];',
         '    const colorIdx = idx * 4;',
@@ -799,21 +921,26 @@ export function compileGraph(
         ...valueLines,
         '',
         ...flowLines,
+        ...linked.inLoopLines,
         '  }',
+        ...linked.postLoopLines,
         '})',
       ].join('\n');
     } else {
-      // Sync mode: sequential iteration (unchanged)
+      // Sync mode: sequential iteration
       stepCode = [
         `(function(${loopParams}) {`,
         ...scratchDecls,
+        ...linked.preLoopDecls,
         '  for (let idx = 0; idx < total; idx++) {',
         '    const colorIdx = idx * 4;',
         ...copyLines,
         ...valueLines,
         '',
         ...flowLines,
+        ...linked.inLoopLines,
         '  }',
+        ...linked.postLoopLines,
         '})',
       ].join('\n');
     }
@@ -854,7 +981,7 @@ export function compileGraph(
   for (const a of cellAttrs) omParamParts.push(`w_${a.id}`);
   const neighborhoods = model.neighborhoods.map(n => ({ id: n.id }));
   for (const n of neighborhoods) { omParamParts.push(`nIdx_${n.id}`); omParamParts.push(`nSz_${n.id}`); }
-  omParamParts.push('modelAttrs', 'colors', 'activeViewer');
+  omParamParts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults');
   const omParams = omParamParts.join(', ');
 
   for (const omNode of outputMappingNodes) {
@@ -863,7 +990,9 @@ export function compileGraph(
       omNode, 'do', nodeMap, inputToSource, flowOutputToTargets, model,
     );
     const scratchDecls = scratchNodes.map(
-      s => `  const ${s.scratchVarName} = new Array(nSz_${s.nbrId});`,
+      s => s.nbrId
+        ? `  const ${s.scratchVarName} = new Array(nSz_${s.nbrId});`
+        : `  const ${s.scratchVarName} = ${s.initExpr ?? '[]'};`,
     );
     const code = [
       `(function(${omParams}) {`,

@@ -12,6 +12,8 @@ import type {
   CAModel,
   GraphEdge,
   GraphNode,
+  Indicator,
+  IndicatorKind,
   MacroDef,
   Mapping,
   ModelProperties,
@@ -58,6 +60,9 @@ type ModelAction =
   | { type: 'ADD_MACRO'; macro: MacroDef }
   | { type: 'UPDATE_MACRO'; id: string; changes: Partial<MacroDef> }
   | { type: 'REMOVE_MACRO'; id: string }
+  | { type: 'ADD_INDICATOR'; kind: IndicatorKind }
+  | { type: 'REMOVE_INDICATOR'; id: string }
+  | { type: 'UPDATE_INDICATOR'; id: string; changes: Partial<Indicator> }
   | { type: 'NEW_MODEL' }
   | { type: 'LOAD_MODEL'; model: CAModel }
   | { type: 'MARK_SAVED' };
@@ -266,6 +271,48 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         },
       };
 
+    case 'ADD_INDICATOR': {
+      const newInd: Indicator = {
+        id: generateId('indicator'),
+        name: 'new_indicator',
+        kind: action.kind,
+        dataType: 'integer',
+        defaultValue: '0',
+        accumulationMode: 'per-generation',
+        watched: true,
+      };
+      return {
+        ...state,
+        isDirty: true,
+        model: {
+          ...state.model,
+          indicators: [...(state.model.indicators || []), newInd],
+        },
+      };
+    }
+
+    case 'REMOVE_INDICATOR':
+      return {
+        ...state,
+        isDirty: true,
+        model: {
+          ...state.model,
+          indicators: (state.model.indicators || []).filter(i => i.id !== action.id),
+        },
+      };
+
+    case 'UPDATE_INDICATOR':
+      return {
+        ...state,
+        isDirty: true,
+        model: {
+          ...state.model,
+          indicators: (state.model.indicators || []).map(i =>
+            i.id === action.id ? { ...i, ...action.changes } : i,
+          ),
+        },
+      };
+
     case 'NEW_MODEL':
       return { model: EMPTY_MODEL, isDirty: false, modelVersion: state.modelVersion + 1 };
 
@@ -275,6 +322,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       if (!m.graphNodes) m.graphNodes = [];
       if (!m.graphEdges) m.graphEdges = [];
       if (!m.macroDefs) m.macroDefs = [];
+      if (!m.indicators) m.indicators = [];
       if (!m.properties.tags) m.properties.tags = [];
       if (!m.properties.updateMode) m.properties.updateMode = 'synchronous';
       if (!m.properties.asyncScheme) m.properties.asyncScheme = 'random-order';
@@ -313,6 +361,9 @@ export interface ModelContextValue {
   addMacro: (macro: MacroDef) => void;
   updateMacro: (id: string, changes: Partial<MacroDef>) => void;
   removeMacro: (id: string) => void;
+  addIndicator: (kind: IndicatorKind) => void;
+  removeIndicator: (id: string) => void;
+  updateIndicator: (id: string, changes: Partial<Indicator>) => void;
   newModel: () => void;
   loadModel: (model: CAModel) => void;
   markSaved: () => void;
@@ -334,6 +385,7 @@ function createInitialState(): ModelState {
         if (!model.graphNodes) model.graphNodes = [];
         if (!model.graphEdges) model.graphEdges = [];
         if (!model.macroDefs) model.macroDefs = [];
+        if (!model.indicators) model.indicators = [];
         if (!model.properties.tags) model.properties.tags = [];
         if (!model.properties.updateMode) model.properties.updateMode = 'synchronous';
         if (!model.properties.asyncScheme) model.properties.asyncScheme = 'random-order';
@@ -458,6 +510,19 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     (id: string) => dispatch({ type: 'REMOVE_MACRO', id }),
     [],
   );
+  const addIndicator = useCallback(
+    (kind: IndicatorKind) => dispatch({ type: 'ADD_INDICATOR', kind }),
+    [],
+  );
+  const removeIndicator = useCallback(
+    (id: string) => dispatch({ type: 'REMOVE_INDICATOR', id }),
+    [],
+  );
+  const updateIndicator = useCallback(
+    (id: string, changes: Partial<Indicator>) =>
+      dispatch({ type: 'UPDATE_INDICATOR', id, changes }),
+    [],
+  );
   const newModel = useCallback(() => {
     dispatch({ type: 'NEW_MODEL' });
     try { localStorage.removeItem('genesisca_autosave'); } catch { /* ok */ }
@@ -491,6 +556,9 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       addMacro,
       updateMacro,
       removeMacro,
+      addIndicator,
+      removeIndicator,
+      updateIndicator,
       newModel,
       loadModel,
       markSaved,
@@ -514,6 +582,9 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       addMacro,
       updateMacro,
       removeMacro,
+      addIndicator,
+      removeIndicator,
+      updateIndicator,
       newModel,
       loadModel,
       markSaved,

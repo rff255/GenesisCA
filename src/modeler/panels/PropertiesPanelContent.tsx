@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useModel } from '../../model/ModelContext';
 import type { BoundaryTreatment, UpdateMode, AsyncScheme } from '../../model/types';
+import { IndicatorsPanelSection } from './IndicatorsPanelSection';
 import styles from './PanelContent.module.css';
 
 export function PropertiesPanelContent() {
@@ -213,6 +214,8 @@ export function PropertiesPanelContent() {
           )}
         </div>
       </div>
+
+      <IndicatorsPanelSection />
     </div>
   );
 }

@@ -54,7 +54,9 @@ A complete GenesisCA model definition consists of:
    - 4.1. Color-Attribute Mappings (input: for initialization, brush tool, and image import)
    - 4.2. Attribute-Color Mappings (output: for visualization modes)
 
-5. **Update Rules** — a node graph defining what each cell computes per generation, compiled into optimized JavaScript at edit time
+5. **Indicators** — quantitative monitoring variables, either standalone (read/write from graph) or linked to cell attributes (auto-computed aggregations: frequency, total)
+
+6. **Update Rules** — a node graph defining what each cell computes per generation, compiled into optimized JavaScript at edit time
 
 ---
 
@@ -65,7 +67,8 @@ A complete GenesisCA model definition consists of:
 - **Attributes Panel** — cell and model attributes with type-specific default value controls (bool, integer, float, tag, color)
 - **Neighborhoods Panel** — interactive grid editor with per-neighborhood margin, and a Duplicate button for quick variations
 - **Mappings Panel** — Attribute-to-Color and Color-to-Attribute mapping definitions
-- **Graph Editor** — 26 node types across 7 categories (event, flow, data, logic, aggregation, output, color), with RMB pan, scroll zoom, and snap-to-grid
+- **Indicators** — standalone (typed scalar, graph-writable) or linked (auto-aggregated from cell attributes: frequency, total), with per-generation or accumulated modes
+- **Graph Editor** — 29 node types across 7 categories (event, flow, data, logic, aggregation, output, color), with RMB pan, scroll zoom, and snap-to-grid
 - **Connection validation** — prevents incompatible connections (flow/value), cycles, and duplicate inputs; compatible ports highlight during drag
 - **Inline Port Widgets** — input ports show small value editors (number/bool) when unconnected, eliminating the need for constant nodes in simple cases
 - **Node Collapse/Expand** — double-click any node to collapse it; constants show their value; collapsed nodes temporarily expand when connecting edges
