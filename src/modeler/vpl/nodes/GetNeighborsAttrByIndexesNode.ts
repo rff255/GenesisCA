@@ -15,10 +15,11 @@ export const GetNeighborsAttrByIndexesNode: NodeTypeDef = {
     const attr = config.attributeId as string || '_undef';
     const indexes = inputs['indexes'] || '[]';
     const ni = `_ni${nodeId}`;
+    const vl = `_v${nodeId}_valsLen`;
     return [
-      `_v${nodeId}_vals.length = 0;`,
+      `_v${nodeId}_vals.length = 0; let ${vl} = 0;`,
       `for (let ${ni} = 0; ${ni} < ${indexes}.length; ${ni}++) {`,
-      `  _v${nodeId}_vals.push(r_${attr}[nIdx_${nbrId}[idx * nSz_${nbrId} + ((${indexes}[${ni}]) | 0)]]);`,
+      `  _v${nodeId}_vals[${vl}++] = r_${attr}[nIdx_${nbrId}[idx * nSz_${nbrId} + ((${indexes}[${ni}]) | 0)]];`,
       `}`,
     ].join(' ') + '\n';
   },

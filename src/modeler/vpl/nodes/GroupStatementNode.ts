@@ -34,8 +34,8 @@ export const GroupStatementNode: NodeTypeDef = {
         ? `_v${nodeId}_indexes.length === ${values}.length`
         : `_v${nodeId}_indexes.length > 0`;
       return [
-        `_v${nodeId}_indexes.length = 0;`,
-        `for (let ${gi} = 0; ${gi} < ${values}.length; ${gi}++) { if (${cond}) _v${nodeId}_indexes.push(${gi}); }`,
+        `_v${nodeId}_indexes.length = 0; let _v${nodeId}_indexesLen = 0;`,
+        `for (let ${gi} = 0; ${gi} < ${values}.length; ${gi}++) { if (${cond}) _v${nodeId}_indexes[_v${nodeId}_indexesLen++] = ${gi}; }`,
         `const _v${nodeId}_result = ${resultExpr};`,
       ].join(' ') + '\n';
     }

@@ -777,79 +777,68 @@ function buildLinkedIndicatorCode(model: CAModel): {
   inLoopLines: string[];
   postLoopLines: string[];
 } {
-  const preLoopDecls: string[] = [];
-  const inLoopLines: string[] = [];
   const postLoopLines: string[] = [];
 
   const watched = (model.indicators || []).filter(
     i => i.kind === 'linked' && i.watched && i.linkedAttributeId,
   );
-  if (watched.length === 0) return { preLoopDecls, inLoopLines, postLoopLines };
+  if (watched.length === 0) return { preLoopDecls: [], inLoopLines: [], postLoopLines };
 
+  // All linked indicators are computed as post-loop passes over the final buffer.
+  // This is correct for both sync mode (w_ has new values after loop) and async mode
+  // (single buffer is fully updated). A separate pass over a typed array is fast
+  // (sequential memory scan, perfect cache locality) and avoids the async-mode bug
+  // where mid-loop aggregation sees a mix of old and new values.
   for (const ind of watched) {
     const attr = model.attributes.find(a => a.id === ind.linkedAttributeId);
     if (!attr || attr.isModelAttribute) continue;
-
-    const safe = ind.id.replace(/[^a-zA-Z0-9_]/g, '_');
-    const wVar = `w_${attr.id}`;  // read from write buffer (post-update values)
+    const wVar = `w_${attr.id}`;
     const key = JSON.stringify(ind.id);
 
     if (ind.linkedAggregation === 'total') {
-      // Sum all cell values
-      preLoopDecls.push(`  let _lnk_${safe} = 0;`);
-      inLoopLines.push(`      _lnk_${safe} += ${wVar}[idx];`);
-      postLoopLines.push(`  _linkedResults[${key}] = _lnk_${safe};`);
-
+      postLoopLines.push(
+        `  { let _s = 0; for (let _i = 0; _i < total; _i++) _s += ${wVar}[_i];` +
+        ` _linkedResults[${key}] = _s; }`,
+      );
     } else if (attr.type === 'bool') {
-      // Count true values; false = total - true
-      preLoopDecls.push(`  let _lnk_${safe}_t = 0;`);
-      inLoopLines.push(`      if (${wVar}[idx]) _lnk_${safe}_t++;`);
-      postLoopLines.push(`  _linkedResults[${key}] = { 'true': _lnk_${safe}_t, 'false': total - _lnk_${safe}_t };`);
-
+      postLoopLines.push(
+        `  { let _t = 0; for (let _i = 0; _i < total; _i++) if (${wVar}[_i]) _t++;` +
+        ` _linkedResults[${key}] = { 'true': _t, 'false': total - _t }; }`,
+      );
     } else if (attr.type === 'tag') {
       const tagLen = attr.tagOptions?.length || 1;
       const tagNames = JSON.stringify(attr.tagOptions || []);
-      preLoopDecls.push(`  const _lnk_${safe} = new Int32Array(${tagLen});`);
-      inLoopLines.push(`      _lnk_${safe}[${wVar}[idx]]++;`);
       postLoopLines.push(
-        `  { const _tn = ${tagNames}; const _f = {};` +
-        ` for (let _ti = 0; _ti < ${tagLen}; _ti++) _f[_tn[_ti]] = _lnk_${safe}[_ti];` +
+        `  { const _c = new Int32Array(${tagLen});` +
+        ` for (let _i = 0; _i < total; _i++) _c[${wVar}[_i]]++;` +
+        ` const _tn = ${tagNames}; const _f = {};` +
+        ` for (let _ti = 0; _ti < ${tagLen}; _ti++) _f[_tn[_ti]] = _c[_ti];` +
         ` _linkedResults[${key}] = _f; }`,
       );
-
     } else if (attr.type === 'integer') {
-      // Count per distinct value
-      preLoopDecls.push(`  const _lnk_${safe} = {};`);
-      inLoopLines.push(`      { const _k = ${wVar}[idx]; _lnk_${safe}[_k] = (_lnk_${safe}[_k] || 0) + 1; }`);
-      postLoopLines.push(`  _linkedResults[${key}] = _lnk_${safe};`);
-
-    } else if (attr.type === 'float') {
-      // Single-pass min/max in main loop, second pass for binning after loop
-      const bc = ind.binCount || 10;
-      preLoopDecls.push(`  let _lnk_${safe}_min = Infinity, _lnk_${safe}_max = -Infinity;`);
-      inLoopLines.push(
-        `      { const _v = ${wVar}[idx];` +
-        ` if (_v < _lnk_${safe}_min) _lnk_${safe}_min = _v;` +
-        ` if (_v > _lnk_${safe}_max) _lnk_${safe}_max = _v; }`,
-      );
       postLoopLines.push(
-        `  { const _bc = ${bc};` +
-        ` if (_lnk_${safe}_min === _lnk_${safe}_max) _lnk_${safe}_max = _lnk_${safe}_min + 1;` +
-        ` const _bw = (_lnk_${safe}_max - _lnk_${safe}_min) / _bc;` +
-        ` const _bins = new Int32Array(_bc);` +
-        ` for (let _bi = 0; _bi < total; _bi++)` +
-        ` { let _b = (${wVar}[_bi] - _lnk_${safe}_min) / _bw | 0; if (_b >= _bc) _b = _bc - 1; _bins[_b]++; }` +
+        `  { const _f = {};` +
+        ` for (let _i = 0; _i < total; _i++) { const _k = ${wVar}[_i]; _f[_k] = (_f[_k] || 0) + 1; }` +
+        ` _linkedResults[${key}] = _f; }`,
+      );
+    } else if (attr.type === 'float') {
+      const bc = ind.binCount || 10;
+      postLoopLines.push(
+        `  { let _mn = Infinity, _mx = -Infinity;` +
+        ` for (let _i = 0; _i < total; _i++) { const _v = ${wVar}[_i]; if (_v < _mn) _mn = _v; if (_v > _mx) _mx = _v; }` +
+        ` if (_mn === _mx) _mx = _mn + 1;` +
+        ` const _bw = (_mx - _mn) / ${bc}; const _bins = new Int32Array(${bc});` +
+        ` for (let _i = 0; _i < total; _i++) { let _b = (${wVar}[_i] - _mn) / _bw | 0; if (_b >= ${bc}) _b = ${bc - 1}; _bins[_b]++; }` +
         ` const _f = {};` +
-        ` for (let _bi = 0; _bi < _bc; _bi++)` +
-        ` { const _lo = (_lnk_${safe}_min + _bi * _bw).toFixed(2);` +
-        ` const _hi = (_lnk_${safe}_min + (_bi + 1) * _bw).toFixed(2);` +
+        ` for (let _bi = 0; _bi < ${bc}; _bi++)` +
+        ` { const _lo = (_mn + _bi * _bw).toFixed(2); const _hi = (_mn + (_bi + 1) * _bw).toFixed(2);` +
         ` _f[_lo + '\\u2013' + _hi] = _bins[_bi]; }` +
         ` _linkedResults[${key}] = _f; }`,
       );
     }
   }
 
-  return { preLoopDecls, inLoopLines, postLoopLines };
+  return { preLoopDecls: [], inLoopLines: [], postLoopLines };
 }
 
 // ---------------------------------------------------------------------------

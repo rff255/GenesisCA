@@ -30,8 +30,8 @@ export const GroupCountingNode: NodeTypeDef = {
     if (needsIndexes) {
       // Full loop: collect matching indexes (when indexes output is connected)
       return [
-        `_v${nodeId}_indexes.length = 0;`,
-        `for (let ${gi} = 0; ${gi} < ${valuesVar}.length; ${gi}++) { if (${cond}) _v${nodeId}_indexes.push(${gi}); }`,
+        `_v${nodeId}_indexes.length = 0; let _v${nodeId}_indexesLen = 0;`,
+        `for (let ${gi} = 0; ${gi} < ${valuesVar}.length; ${gi}++) { if (${cond}) _v${nodeId}_indexes[_v${nodeId}_indexesLen++] = ${gi}; }`,
         `const _v${nodeId}_count = _v${nodeId}_indexes.length;`,
       ].join(' ') + '\n';
     }
