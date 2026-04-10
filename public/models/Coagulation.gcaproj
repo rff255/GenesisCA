@@ -12,10 +12,10 @@
     "maxIterations": 1000,
     "tags": [
       "2-state",
-      "totalistic",
       "experimental",
       "customizable params",
-      "alternative neighborhoods"
+      "alternative neighborhoods",
+      "outer totalistic"
     ]
   },
   "attributes": [
