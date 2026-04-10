@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useModel } from '../../model/ModelContext';
-import type { BoundaryTreatment } from '../../model/types';
+import type { BoundaryTreatment, UpdateMode, AsyncScheme } from '../../model/types';
 import styles from './PanelContent.module.css';
 
 export function PropertiesPanelContent() {
@@ -145,9 +145,74 @@ export function PropertiesPanelContent() {
         </div>
       </div>
 
-      {/* Max Iterations and Model Attribute Defaults removed:
-         - Max Iterations is not enforced by the simulator
-         - Model Attribute defaults are set in the Attributes panel */}
+      <div className={styles.section}>
+        <div className={styles.sectionTitle}>Execution</div>
+        <div className={styles.fieldGroup}>
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>Update Mode</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 2 }}>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
+                <input
+                  type="radio"
+                  name="updateMode"
+                  value="synchronous"
+                  checked={properties.updateMode !== 'asynchronous'}
+                  onChange={() => updateProperties({ updateMode: 'synchronous' as UpdateMode })}
+                  style={{ marginTop: 2 }}
+                />
+                <span>
+                  <strong>Synchronous</strong>
+                  <br />
+                  <span style={{ color: '#888', fontSize: '0.66rem' }}>
+                    All cells read from the previous generation and write to the next simultaneously. Classic CA behavior.
+                  </span>
+                </span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
+                <input
+                  type="radio"
+                  name="updateMode"
+                  value="asynchronous"
+                  checked={properties.updateMode === 'asynchronous'}
+                  onChange={() => updateProperties({ updateMode: 'asynchronous' as UpdateMode })}
+                  style={{ marginTop: 2 }}
+                />
+                <span>
+                  <strong>Asynchronous</strong>
+                  <br />
+                  <span style={{ color: '#888', fontSize: '0.66rem' }}>
+                    Cells update one at a time using a single buffer. Each cell sees previous updates within the same generation. Enables number-conserving models.
+                  </span>
+                </span>
+              </label>
+            </div>
+          </div>
+          {properties.updateMode === 'asynchronous' && (
+            <div className={styles.field}>
+              <label className={styles.fieldLabel}>Asynchronous Update Scheme</label>
+              <select
+                className={styles.selectInput}
+                value={properties.asyncScheme || 'random-order'}
+                onChange={e =>
+                  updateProperties({ asyncScheme: e.target.value as AsyncScheme })
+                }
+              >
+                <option value="random-order">Random Order</option>
+                <option value="random-independent">Random Independent</option>
+                <option value="cyclic">Cyclic</option>
+              </select>
+              <span style={{ color: '#888', fontSize: '0.62rem', marginTop: 2, display: 'block' }}>
+                {(properties.asyncScheme || 'random-order') === 'random-order' &&
+                  'All cells update once per generation in random order (Fisher-Yates shuffle).'}
+                {properties.asyncScheme === 'random-independent' &&
+                  'N random cell picks with replacement per generation. Some cells may update 0 or 2+ times.'}
+                {properties.asyncScheme === 'cyclic' &&
+                  'A fixed random order decided at initialization, reused every generation. Fastest option.'}
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

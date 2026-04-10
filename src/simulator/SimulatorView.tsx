@@ -190,6 +190,7 @@ export function SimulatorView() {
       type: 'step',
       count: gensPerFrameRef.current,
       activeViewer: activeViewerRef.current,
+      skipColorPass: unlimitedGensRef.current,
     });
   }, []);
 
@@ -328,8 +329,11 @@ export function SimulatorView() {
       })),
       neighborhoods: model.neighborhoods.map(n => ({ id: n.id, coords: n.coords })),
       boundaryTreatment: model.properties.boundaryTreatment,
+      updateMode: model.properties.updateMode || 'synchronous',
+      asyncScheme: model.properties.asyncScheme || 'random-order',
       stepCode: result.stepCode,
       inputColorCodes: result.inputColorCodes,
+      outputMappingCodes: result.outputMappingCodes,
       activeViewer: viewer,
     });
     workerRef.current = worker;

@@ -35,6 +35,8 @@ export interface Mapping {
 
 export type BoundaryTreatment = 'constant' | 'torus';
 export type Topology = '2d-grid';
+export type UpdateMode = 'synchronous' | 'asynchronous';
+export type AsyncScheme = 'random-order' | 'random-independent' | 'cyclic';
 
 /** Top-level model properties */
 export interface ModelProperties {
@@ -44,6 +46,8 @@ export interface ModelProperties {
   description: string;
   topology: Topology;
   boundaryTreatment: BoundaryTreatment;
+  updateMode: UpdateMode;
+  asyncScheme: AsyncScheme;
   gridWidth: number;
   gridHeight: number;
   maxIterations: number;

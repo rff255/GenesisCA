@@ -25,9 +25,9 @@ Every GenesisCA model satisfies these theoretical properties:
 1. Cells have unlimited computing power
 2. Cells have N internal attributes (of multiple data types), whose snapshot of values at a given generation is called its "state"
 3. Cells are limited to only access (read) the states of cells in one of the neighborhoods defined in the CA model
-4. Cells can only make changes to themselves, never to the environment around (other cells)
+4. **Writability** — In synchronous (classic) mode, cells can only modify their own attributes. In asynchronous mode, cells can also directly modify the attributes of neighboring cells, enabling movement and mass-conservation rules.
 5. Space and Time are discrete (cells arranged in n-dimensional grid)
-6. All cells update their states simultaneously (synchronously) each passing generation
+6. **Synchronicity** — Model can be either synchronous (all cells update simultaneously — classic CA) or asynchronous (cells update sequentially, enabling number-conserving models)
 
 ### Simulation Essentials (Color Mappings)
 
@@ -61,11 +61,11 @@ A complete GenesisCA model definition consists of:
 ## Features
 
 ### The Modeler
-- **Properties Panel** — model metadata, grid dimensions, boundary treatment (torus/constant), tags
-- **Attributes Panel** — cell and model attributes with type-specific default value controls (bool, integer, float, tag, list, color)
+- **Properties Panel** — model metadata, grid dimensions, boundary treatment (torus/constant), update mode (synchronous/asynchronous), tags
+- **Attributes Panel** — cell and model attributes with type-specific default value controls (bool, integer, float, tag, color)
 - **Neighborhoods Panel** — interactive grid editor with per-neighborhood margin, and a Duplicate button for quick variations
 - **Mappings Panel** — Attribute-to-Color and Color-to-Attribute mapping definitions
-- **Graph Editor** — 22 node types across 6 categories (flow, data, logic, aggregation, output, color), with RMB pan, scroll zoom, and snap-to-grid
+- **Graph Editor** — 26 node types across 7 categories (event, flow, data, logic, aggregation, output, color), with RMB pan, scroll zoom, and snap-to-grid
 - **Connection validation** — prevents incompatible connections (flow/value), cycles, and duplicate inputs; compatible ports highlight during drag
 - **Inline Port Widgets** — input ports show small value editors (number/bool) when unconnected, eliminating the need for constant nodes in simple cases
 - **Node Collapse/Expand** — double-click any node to collapse it; constants show their value; collapsed nodes temporarily expand when connecting edges
@@ -77,6 +77,11 @@ A complete GenesisCA model definition consists of:
 - **Copy/Paste/Duplicate** — Ctrl+C/V/X/D, context menu on single nodes and selections, paste at right-click location
 - **Groups & Comments** — visual organization tools; Undo Group dissolves a group and selects all contained nodes
 - **Edge management** — double-click any edge to delete it
+
+### Asynchronous Mode
+- **Update Mode** — choose Synchronous (classic CA) or Asynchronous (sequential updates with single buffer) in Model Properties
+- **Update Schemes** — Random Order, Random Independent, or Cyclic — balancing accuracy vs. performance
+- **Async-only nodes** — Set Neighborhood Attribute, Set Neighbor Attr By Index for number-conserving movement patterns. Get Neighbor Attr By Index works in both modes.
 
 ### The Simulator
 - **Transport bar** — Play/Pause/Step/Reset with FPS and Gens/Frame sliders, keyboard shortcuts (Space=step, Enter=play/pause, Esc=reset)

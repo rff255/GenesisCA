@@ -2,9 +2,9 @@ import type { NodeTypeDef } from '../types';
 
 export const InputColorNode: NodeTypeDef = {
   type: 'inputColor',
-  label: 'Input Color',
-  category: 'color',
-  color: '#006064',
+  label: 'Input Mapping (C\u2192A)',
+  category: 'event',
+  color: '#2e7d32',
   ports: [
     { id: 'do', label: 'DO', kind: 'output', category: 'flow' },
     { id: 'r', label: 'R', kind: 'output', category: 'value', dataType: 'integer' },

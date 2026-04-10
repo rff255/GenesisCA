@@ -697,6 +697,7 @@ function buildLoopParams(model: CAModel): {
   cellAttrs: Array<{ id: string; type: string }>;
   neighborhoods: Array<{ id: string }>;
 } {
+  const isAsync = model.properties.updateMode === 'asynchronous';
   const cellAttrs = model.attributes
     .filter(a => !a.isModelAttribute)
     .map(a => ({ id: a.id, type: a.type }));
@@ -707,6 +708,7 @@ function buildLoopParams(model: CAModel): {
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
   parts.push('modelAttrs', 'colors', 'activeViewer');
+  if (isAsync) parts.push('order');
 
   return { params: parts.join(', '), cellAttrs, neighborhoods };
 }
@@ -730,6 +732,7 @@ function buildCellParams(model: CAModel): string {
 export interface CompileResult {
   stepCode: string;
   inputColorCodes: Array<{ mappingId: string; code: string }>;
+  outputMappingCodes: Array<{ mappingId: string; code: string }>;
   error?: string;
 }
 
@@ -739,11 +742,26 @@ export function compileGraph(
   model?: CAModel,
 ): CompileResult {
   if (graphNodes.length === 0) {
-    return { stepCode: '', inputColorCodes: [], error: 'No nodes in graph.' };
+    return { stepCode: '', inputColorCodes: [], outputMappingCodes: [], error: 'No nodes in graph.' };
   }
 
   if (!model) {
-    return { stepCode: '', inputColorCodes: [], error: 'Model required for SoA compilation.' };
+    return { stepCode: '', inputColorCodes: [], outputMappingCodes: [], error: 'Model required for SoA compilation.' };
+  }
+
+  const isAsync = model.properties.updateMode === 'asynchronous';
+
+  // --- Validate async-only nodes in sync mode ---
+  // getNeighborAttributeByIndex is read-only so it works in both sync and async modes
+  const ASYNC_ONLY_TYPES = new Set(['setNeighborhoodAttribute', 'setNeighborAttributeByIndex']);
+  let asyncValidationError: string | undefined;
+  if (!isAsync) {
+    const offending = graphNodes.find(n => ASYNC_ONLY_TYPES.has(n.data.nodeType));
+    if (offending) {
+      const label = offending.data.nodeType === 'setNeighborhoodAttribute'
+        ? 'Set Neighborhood Attribute' : 'Set Neighbor Attr By Index';
+      asyncValidationError = `Node "${label}" requires Asynchronous update mode. Change in Model Properties > Execution.`;
+    }
   }
 
   const { nodeMap, inputToSource, flowOutputToTargets } = buildAdjacency(graphNodes, graphEdges);
@@ -751,7 +769,10 @@ export function compileGraph(
   const cellParams = buildCellParams(model);
 
   // Generate attribute copy lines (previous → next generation)
-  const copyLines = cellAttrs.map(a => `      w_${a.id}[idx] = r_${a.id}[idx];`);
+  // In async mode, r_ and w_ are the same buffer so copy lines are skipped
+  const copyLines = isAsync
+    ? []
+    : cellAttrs.map(a => `      w_${a.id}[idx] = r_${a.id}[idx];`);
 
   // --- Compile Step function (loop-wrapped) ---
   const stepNode = graphNodes.find(n => n.data.nodeType === 'step');
@@ -766,18 +787,36 @@ export function compileGraph(
       s => `  const ${s.scratchVarName} = new Array(nSz_${s.nbrId});`,
     );
 
-    stepCode = [
-      `(function(${loopParams}) {`,
-      ...scratchDecls,
-      '  for (let idx = 0; idx < total; idx++) {',
-      '    const colorIdx = idx * 4;',
-      ...copyLines,
-      ...valueLines,
-      '',
-      ...flowLines,
-      '  }',
-      '})',
-    ].join('\n');
+    if (isAsync) {
+      // Async mode: iterate cells via shuffled order array
+      stepCode = [
+        `(function(${loopParams}) {`,
+        ...scratchDecls,
+        '  for (let _i = 0; _i < total; _i++) {',
+        '    const idx = order[_i];',
+        '    const colorIdx = idx * 4;',
+        ...copyLines,
+        ...valueLines,
+        '',
+        ...flowLines,
+        '  }',
+        '})',
+      ].join('\n');
+    } else {
+      // Sync mode: sequential iteration (unchanged)
+      stepCode = [
+        `(function(${loopParams}) {`,
+        ...scratchDecls,
+        '  for (let idx = 0; idx < total; idx++) {',
+        '    const colorIdx = idx * 4;',
+        ...copyLines,
+        ...valueLines,
+        '',
+        ...flowLines,
+        '  }',
+        '})',
+      ].join('\n');
+    }
   }
 
   // --- Compile InputColor functions (per-cell, not loop-wrapped) ---
@@ -805,9 +844,45 @@ export function compileGraph(
     inputColorCodes.push({ mappingId, code });
   }
 
-  const error = !stepNode ? 'No Step node found. Add a Step node as the entry point.' : undefined;
+  // --- Compile Output Mapping functions (loop-wrapped, always sequential, no copy lines) ---
+  const outputMappingNodes = graphNodes.filter(n => n.data.nodeType === 'outputMapping');
+  const outputMappingCodes: Array<{ mappingId: string; code: string }> = [];
 
-  return { stepCode, inputColorCodes, error };
+  // Output mapping uses sync-style loop params (no order) regardless of updateMode
+  const omParamParts: string[] = ['total'];
+  for (const a of cellAttrs) omParamParts.push(`r_${a.id}`);
+  for (const a of cellAttrs) omParamParts.push(`w_${a.id}`);
+  const neighborhoods = model.neighborhoods.map(n => ({ id: n.id }));
+  for (const n of neighborhoods) { omParamParts.push(`nIdx_${n.id}`); omParamParts.push(`nSz_${n.id}`); }
+  omParamParts.push('modelAttrs', 'colors', 'activeViewer');
+  const omParams = omParamParts.join(', ');
+
+  for (const omNode of outputMappingNodes) {
+    const mappingId = omNode.data.config.mappingId as string || '';
+    const { valueLines, flowLines, scratchNodes } = compileRoot(
+      omNode, 'do', nodeMap, inputToSource, flowOutputToTargets, model,
+    );
+    const scratchDecls = scratchNodes.map(
+      s => `  const ${s.scratchVarName} = new Array(nSz_${s.nbrId});`,
+    );
+    const code = [
+      `(function(${omParams}) {`,
+      ...scratchDecls,
+      '  for (let idx = 0; idx < total; idx++) {',
+      '    const colorIdx = idx * 4;',
+      ...valueLines,
+      '',
+      ...flowLines,
+      '  }',
+      '})',
+    ].join('\n');
+    outputMappingCodes.push({ mappingId, code });
+  }
+
+  const error = asyncValidationError
+    ?? (!stepNode ? 'No Step node found. Add a Step node as the entry point.' : undefined);
+
+  return { stepCode, inputColorCodes, outputMappingCodes, error };
 }
 
 /**
@@ -822,6 +897,7 @@ export function compileAndBuild(
   inputColorFns: Array<{ mappingId: string; fn: Function }>;
   stepCode: string;
   inputColorCodes: Array<{ mappingId: string; code: string }>;
+  outputMappingCodes: Array<{ mappingId: string; code: string }>;
   error?: string;
 } {
   const result = compileGraph(graphNodes, graphEdges, model);
@@ -835,6 +911,7 @@ export function compileAndBuild(
       return {
         stepFn: null, inputColorFns: [],
         stepCode: result.stepCode, inputColorCodes: result.inputColorCodes,
+        outputMappingCodes: result.outputMappingCodes,
         error: `Step compilation error: ${e instanceof Error ? e.message : String(e)}`,
       };
     }
@@ -850,10 +927,15 @@ export function compileAndBuild(
       return {
         stepFn: null, inputColorFns: [],
         stepCode: result.stepCode, inputColorCodes: result.inputColorCodes,
+        outputMappingCodes: result.outputMappingCodes,
         error: `InputColor compilation error: ${e instanceof Error ? e.message : String(e)}`,
       };
     }
   }
 
-  return { stepFn, inputColorFns, stepCode: result.stepCode, inputColorCodes: result.inputColorCodes, error: result.error };
+  return {
+    stepFn, inputColorFns,
+    stepCode: result.stepCode, inputColorCodes: result.inputColorCodes,
+    outputMappingCodes: result.outputMappingCodes, error: result.error,
+  };
 }

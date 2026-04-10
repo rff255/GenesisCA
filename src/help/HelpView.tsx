@@ -67,9 +67,9 @@ export function HelpView() {
 
         {/* ============================================================ */}
         <section id="help-fundamentals" className={styles.section}>
-          <h2 className={styles.h2}>The 6 Fundamentals of Cellular Automata</h2>
+          <h2 className={styles.h2}>The 6 Fundamentals of GenesisCA Cellular Automata</h2>
           <p className={styles.p}>
-            Every GenesisCA model satisfies these theoretical properties:
+            Every GenesisCA model is built on these theoretical properties:
           </p>
           <ol className={styles.list}>
             <li>
@@ -87,16 +87,20 @@ export function HelpView() {
               or custom patterns).
             </li>
             <li>
-              <strong>Self-modification only</strong> &mdash; A cell can only change its
-              own state, never the state of other cells.
+              <strong>Writability</strong> &mdash; In synchronous (classic) mode, a cell
+              can only modify its own attributes. In asynchronous mode, cells can also
+              directly modify the attributes of neighboring cells, enabling movement
+              and mass-conservation rules.
             </li>
             <li>
               <strong>Discrete space and time</strong> &mdash; Cells are arranged in a
               grid, and time advances in discrete generations.
             </li>
             <li>
-              <strong>Synchronous updates</strong> &mdash; All cells update their states
-              simultaneously each generation.
+              <strong>Synchronicity</strong> &mdash; The model can be either synchronous
+              (all cells update simultaneously each generation &mdash; classic CA) or
+              asynchronous (cells update sequentially, enabling number-conserving models).
+              See the <em>Asynchronous Mode</em> section below for details.
             </li>
           </ol>
         </section>
@@ -123,11 +127,10 @@ export function HelpView() {
             per-cell (e.g., &quot;alive&quot;, &quot;age&quot;).{' '}
             <strong>Model Attributes</strong> are global parameters all cells can read
             but not write (e.g., &quot;birth threshold&quot;). Each attribute has a type
-            (bool, integer, float, tag, list, color), a default value, and a description.
+            (bool, integer, float, tag, color), a default value, and a description.
           </p>
           <ul className={styles.list}>
             <li><strong>Tag</strong> &mdash; An integer with named values (picklist). Define tag options in the editor, and use the Tag Constant node to reference them by name.</li>
-            <li><strong>List</strong> &mdash; A fixed-size array of elements of one basic type. Access elements via List Get Element and List Set Element nodes.</li>
             <li><strong>Color</strong> (model attributes only) &mdash; An RGB color value. Accessed via Get Model Attribute with separate R, G, B output ports. Adjustable live in the simulator.</li>
           </ul>
 
@@ -204,8 +207,21 @@ export function HelpView() {
         <section id="help-nodes" className={styles.section}>
           <h2 className={styles.h2}>Node Types Reference</h2>
           <p className={styles.p}>
-            GenesisCA provides 21 node types organized into categories:
+            GenesisCA provides 26 node types organized into categories:
           </p>
+
+          <h3 className={styles.h3}>
+            <span className={styles.nodeCategory} style={{ background: '#2e7d32' }}>Event</span>
+            Event Entry Points
+          </h3>
+          <table className={styles.table}>
+            <thead><tr><th>Node</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td>Generation Step</td><td>Entry point for per-generation cell update logic. Connect &quot;DO&quot; to start the flow chain.</td></tr>
+              <tr><td>Input Mapping (C&rarr;A)</td><td>Entry point for Color-to-Attribute mapping (brush/image import). Outputs R, G, B values.</td></tr>
+              <tr><td>Output Mapping (A&rarr;C)</td><td>Entry point for Attribute-to-Color visualization. Runs as a separate sequential pass after the Generation Step, ensuring colors reflect the final cell state.</td></tr>
+            </tbody>
+          </table>
 
           <h3 className={styles.h3}>
             <span className={styles.nodeCategory} style={{ background: '#1b5e20' }}>Flow</span>
@@ -214,7 +230,6 @@ export function HelpView() {
           <table className={styles.table}>
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
-              <tr><td>Step</td><td>Entry point for per-generation logic. Connect &quot;DO&quot; to start the flow chain.</td></tr>
               <tr><td>Conditional</td><td>If/else branching based on a boolean condition.</td></tr>
               <tr><td>Sequence</td><td>Execute &quot;First&quot; then &quot;Then&quot; sequentially.</td></tr>
               <tr><td>Loop</td><td>Repeat &quot;Body&quot; a given number of times.</td></tr>
@@ -270,6 +285,9 @@ export function HelpView() {
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
               <tr><td>Set Attribute</td><td>Write a value to the current cell&apos;s attribute for the next generation.</td></tr>
+              <tr><td>Set Neighborhood Attribute</td><td><strong>(Async only)</strong> Set a cell attribute for ALL cells in a neighborhood to a given value.</td></tr>
+              <tr><td>Set Neighbor Attr By Index</td><td><strong>(Async only)</strong> Set a cell attribute for ONE specific neighbor (by index 0..N&minus;1) to a given value.</td></tr>
+              <tr><td>Get Neighbor Attr By Index</td><td>Read a cell attribute from ONE specific neighbor by index. Works in both sync and async modes.</td></tr>
             </tbody>
           </table>
 
@@ -280,7 +298,6 @@ export function HelpView() {
           <table className={styles.table}>
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
-              <tr><td>Input Color</td><td>Entry point for Color-to-Attribute mapping (brush/image import).</td></tr>
               <tr><td>Set Color Viewer</td><td>Write RGB values for an Attribute-to-Color visualization.</td></tr>
               <tr><td>Get Color Constant</td><td>Output fixed R, G, B values.</td></tr>
             </tbody>
@@ -314,6 +331,54 @@ export function HelpView() {
             Right-click a Macro node and choose &quot;Undo Macro&quot; to inline its
             contents back into the parent graph. All restored nodes are automatically
             selected for easy repositioning.
+          </p>
+        </section>
+
+        {/* ============================================================ */}
+        <section id="help-async" className={styles.section}>
+          <h2 className={styles.h2}>Asynchronous Mode</h2>
+          <p className={styles.p}>
+            As described in the <em>Synchronicity</em> fundamental, GenesisCA supports
+            both synchronous (classic) and asynchronous update modes.
+          </p>
+          <p className={styles.p}>
+            <strong>Asynchronous mode</strong> (set in Model Properties &gt; Execution) updates
+            cells one at a time using a single buffer, so each cell sees previous
+            updates within the same generation. Combined with the expanded <em>Writability</em> rules
+            (cells can modify neighbor attributes directly), this enables <em>number-conserving</em> models
+            where elements move across the grid without being created or destroyed.
+          </p>
+
+          <h3 className={styles.h3}>Update Schemes</h3>
+          <ul className={styles.ul}>
+            <li><strong>Random Order</strong> &mdash; Every cell updates exactly once per generation in a
+              random permutation (Fisher-Yates shuffle).</li>
+            <li><strong>Random Independent</strong> &mdash; N random cell picks with replacement per generation.
+              Some cells may update 0 or 2+ times.</li>
+            <li><strong>Cyclic</strong> &mdash; A fixed random order decided at initialization, reused every
+              generation. Fastest option with zero per-step shuffle cost.</li>
+          </ul>
+
+          <h3 className={styles.h3}>Async-Only Nodes</h3>
+          <p className={styles.p}>
+            Two node types are exclusive to asynchronous mode. Using them in synchronous
+            mode will produce a compiler error.
+          </p>
+          <ul className={styles.ul}>
+            <li><strong>Set Neighborhood Attribute</strong> &mdash; Sets a cell attribute for all cells in a
+              selected neighborhood.</li>
+            <li><strong>Set Neighbor Attr By Index</strong> &mdash; Sets a cell attribute for one specific
+              neighbor (by index 0..N&minus;1).</li>
+          </ul>
+          <p className={styles.p}>
+            <strong>Get Neighbor Attr By Index</strong> is a read-only node that works in both
+            sync and async modes, and is typically used alongside the async-only write nodes.
+          </p>
+          <p className={styles.p}>
+            <strong>Typical movement pattern:</strong> pick a random neighbor index &rarr;
+            read that neighbor&apos;s attribute (Get Neighbor Attr By Index) &rarr;
+            if empty, set that neighbor (Set Neighbor Attr By Index) and clear self
+            (Set Attribute).
           </p>
         </section>
 
