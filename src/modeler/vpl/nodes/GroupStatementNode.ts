@@ -16,23 +16,42 @@ export const GroupStatementNode: NodeTypeDef = {
     const values = inputs['values'] || '[]';
     const x = inputs['x'] || '0';
     const op = config.operation as string;
-    const gi = `_gi${nodeId}`;
-    const elem = `${values}[${gi}]`;
-    let cond: string;
-    switch (op) {
-      case 'noneIs':                        cond = `${elem} !== ${x}`; break;
-      case 'allGreater': case 'anyGreater': cond = `${elem} > ${x}`; break;
-      case 'allLesser':  case 'anyLesser':  cond = `${elem} < ${x}`; break;
-      default:                              cond = `${elem} === ${x}`; break; // allIs, hasA
-    }
     const isAll = op === 'allIs' || op === 'noneIs' || op === 'allGreater' || op === 'allLesser';
-    const resultExpr = isAll
-      ? `_v${nodeId}_indexes.length === ${values}.length`
-      : `_v${nodeId}_indexes.length > 0`;
-    return [
-      `_v${nodeId}_indexes.length = 0;`,
-      `for (let ${gi} = 0; ${gi} < ${values}.length; ${gi}++) { if (${cond}) _v${nodeId}_indexes.push(${gi}); }`,
-      `const _v${nodeId}_result = ${resultExpr};`,
-    ].join(' ') + '\n';
+    const needsIndexes = !!config._indexesConnected;
+
+    if (needsIndexes) {
+      // Full loop: collect matching indexes (when indexes output is connected)
+      const gi = `_gi${nodeId}`;
+      const elem = `${values}[${gi}]`;
+      let cond: string;
+      switch (op) {
+        case 'noneIs':                        cond = `${elem} !== ${x}`; break;
+        case 'allGreater': case 'anyGreater': cond = `${elem} > ${x}`; break;
+        case 'allLesser':  case 'anyLesser':  cond = `${elem} < ${x}`; break;
+        default:                              cond = `${elem} === ${x}`; break;
+      }
+      const resultExpr = isAll
+        ? `_v${nodeId}_indexes.length === ${values}.length`
+        : `_v${nodeId}_indexes.length > 0`;
+      return [
+        `_v${nodeId}_indexes.length = 0;`,
+        `for (let ${gi} = 0; ${gi} < ${values}.length; ${gi}++) { if (${cond}) _v${nodeId}_indexes.push(${gi}); }`,
+        `const _v${nodeId}_result = ${resultExpr};`,
+      ].join(' ') + '\n';
+    }
+
+    // Fast path: short-circuit evaluation (no index tracking needed)
+    let expr: string;
+    switch (op) {
+      case 'allIs':      expr = `${values}.every(v => v === ${x})`; break;
+      case 'noneIs':     expr = `${values}.every(v => v !== ${x})`; break;
+      case 'hasA':       expr = `${values}.some(v => v === ${x})`; break;
+      case 'allGreater': expr = `${values}.every(v => v > ${x})`; break;
+      case 'anyGreater': expr = `${values}.some(v => v > ${x})`; break;
+      case 'allLesser':  expr = `${values}.every(v => v < ${x})`; break;
+      case 'anyLesser':  expr = `${values}.some(v => v < ${x})`; break;
+      default:           expr = `${values}.every(v => v === ${x})`; break;
+    }
+    return `const _v${nodeId}_result = ${expr};\n`;
   },
 };

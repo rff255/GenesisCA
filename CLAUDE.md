@@ -183,6 +183,7 @@ genesis-ca/
 │   │           └── compile.ts        # Two-pass compiler (hoisted values + flow)
 │   ├── simulator/
 │   │   ├── SimulatorView.tsx         # Canvas rendering, zoom/pan, brush tool
+│   │   ├── IndicatorDisplay.tsx      # Indicator values display in simulator
 │   │   └── engine/
 │   │       ├── SimEngine.ts          # Fallback engine (reference only)
 │   │       └── sim.worker.ts         # Web Worker — owns grid, runs steps
@@ -310,6 +311,47 @@ The app is functional with these major systems:
 - Simulator recompile: SimulatorView is conditionally rendered (unmounted on other tabs). Compilation happens automatically on mount via `useEffect([model, compileModel])`. No separate recompile effect needed — graph edits in Modeler are picked up when user switches to Simulator tab.
 - Copy/paste: Ctrl+C/V/X + context menu. Module-level `clipboard` variable, strips macroInput/macroOutput, remaps IDs
 - Group paste: parentId must be remapped to new IDs, children keep relative positions, groups sorted before children
+
+---
+
+## Indicators (Implemented)
+
+### Architecture:
+- Two kinds: **Standalone** (typed scalar, graph-writable) and **Linked** (auto-computed from cell attributes)
+- Standalone indicators support all types: bool, integer, float, tag — stored as JS numbers in `_indicators` object
+- Linked indicators aggregate cell attribute arrays: Frequency (count per value) or Total (sum)
+- Both kinds have Accumulation Mode: per-generation (reset each step) or accumulated (running total, reset on simulator reset)
+
+### Standalone Indicator Nodes:
+- `GetIndicatorNode` (value, `'data'`): reads `_indicators[indicatorId]`
+- `SetIndicatorNode` (flow, `'output'`): writes `_indicators[indicatorId] = value`
+- `UpdateIndicatorNode` (flow, `'output'`): modifies based on type — Bool: toggle/or/and; Int/Float: increment/decrement/max/min; Tag: next/previous
+- All three have teal color `#00695c`
+
+### Compiler Integration:
+- `_indicators` parameter added after `activeViewer`, before optional `order` in `buildLoopParams`, `buildCellParams`, and output mapping params
+- Step function loop-wrapped: `_indicators` is a shared object across all cell iterations within a single step — enables accumulation patterns
+
+### Worker Integration:
+- `cachedIndicators: Record<string, number>` — mutable during step function execution
+- `standalonePerGenIds` — per-generation indicators reset to defaults before each step
+- `computeLinkedIndicators()` — iterates typed arrays after each step (frequency, total, with float binning)
+- `linkedAccumulators` — running state for accumulated linked indicators
+- Indicator values included in `stepped` message as `indicators: Record<string, number | Record<string, number>>`
+- `initIndicators()` called on init, `resetIndicators()` on reset/randomize
+- `updateIndicators` message rebuilds indicator state when definitions change
+
+### Modeler UI:
+- `IndicatorsPanelSection` component rendered inside `PropertiesPanelContent`
+- Standalone: type selector, default value (type-specific), tag options editor
+- Linked: attribute dropdown (cell attrs only), aggregation (type-dependent), bin count (float + frequency only)
+- Both: accumulation mode radio, watched toggle, delete button
+
+### Simulator UI:
+- `IndicatorDisplay` component in right panel below brush controls
+- Scalar values (standalone, linked total): single numeric display
+- Frequency maps (linked frequency): compact table with value→count rows
+- Eye icon per indicator toggles `watched` state
 
 ---
 

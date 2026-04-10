@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useModel } from '../model/ModelContext';
 import { compileGraph } from '../modeler/vpl/compiler/compile';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
+import { IndicatorDisplay } from './IndicatorDisplay';
 import styles from './SimulatorView.module.css';
 
 const SIM_SETTINGS_KEY = 'genesisca_sim_settings';
@@ -16,7 +17,7 @@ function loadSimSettings(): Record<string, unknown> {
 
 export function SimulatorView() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { model } = useModel();
+  const { model, updateIndicator } = useModel();
   const workerRef = useRef<Worker | null>(null);
   const pendingStep = useRef(false);
 
@@ -40,6 +41,11 @@ export function SimulatorView() {
   const [brushMapping, setBrushMapping] = useState((saved.current.brushMapping as string) ?? '');
   const [showBrushCursor, setShowBrushCursor] = useState((saved.current.showBrushCursor as boolean) ?? true);
   const [showGridlines, setShowGridlines] = useState((saved.current.showGridlines as boolean) ?? false);
+
+  // Indicator values from worker
+  // Indicator values stored in ref (not state) to avoid extra re-renders on every step.
+  // The component already re-renders from setGeneration, so ref values are read during that render.
+  const indicatorValuesRef = useRef<Record<string, number | Record<string, number>>>({});
 
   // GIF recording state
   const [recording, setRecording] = useState(false);
@@ -94,13 +100,14 @@ export function SimulatorView() {
   // 1:1 pixel source canvas (reused across draws)
   const srcCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Compile graph
+  // Compile graph (deps include indicator watched state since it affects compiled code)
   const compileModel = useCallback(() => {
     const result = compileGraph(model.graphNodes, model.graphEdges, model);
     setCompiledCode(result.stepCode);
     setCompileError(result.error ?? '');
     return result;
-  }, [model.graphNodes, model.graphEdges]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model.graphNodes, model.graphEdges, model.indicators]);
 
   // Draw using ImageData + zoom/pan transform
   const draw = useCallback(() => {
@@ -223,6 +230,7 @@ export function SimulatorView() {
     const msg = e.data;
     if (msg.type === 'stepped') {
       colorsRef.current = msg.colors as Uint8ClampedArray;
+      if (msg.indicators) indicatorValuesRef.current = msg.indicators;
       const gen = msg.generation as number;
       gpsGens.current += gen - lastGenForGps.current;
       lastGenForGps.current = gen;
@@ -358,22 +366,69 @@ export function SimulatorView() {
       inputColorCodes: result.inputColorCodes,
       outputMappingCodes: result.outputMappingCodes,
       activeViewer: viewer,
+      indicators: (model.indicators || []).map(i => ({
+        id: i.id, kind: i.kind, dataType: i.dataType,
+        defaultValue: i.defaultValue, accumulationMode: i.accumulationMode,
+        tagOptions: i.tagOptions,
+        linkedAttributeId: i.linkedAttributeId,
+        linkedAggregation: i.linkedAggregation,
+        binCount: i.binCount, watched: i.watched,
+      })),
     });
     workerRef.current = worker;
     setGeneration(0);
     setPlaying(false);
+    indicatorValuesRef.current = {};
     pendingStep.current = false;
     lastGenForGps.current = 0;
     gpsGens.current = 0;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, compileModel]);
 
-  // Full worker init on mount (tab switch) and whenever model changes while on Simulator tab.
-  // SimulatorView is conditionally rendered — unmounted when on other tabs — so this only
-  // fires when the user is actually looking at the simulator.
+  // Terminate worker on unmount only (not on re-renders)
   useEffect(() => {
-    initWorkerWithDimensions(model.properties.gridWidth, model.properties.gridHeight);
-    return () => workerRef.current?.terminate();
+    return () => {
+      workerRef.current?.terminate();
+      workerRef.current = null;
+    };
+  }, []);
+
+  // Smart init vs recompile: compare previous model to decide.
+  // Full reinit for structural changes (grid size, attributes, neighborhoods, mappings, update mode).
+  // Soft recompile for graph or indicator watch changes (preserves grid state).
+  const prevModelRef = useRef<typeof model | null>(null);
+  useEffect(() => {
+    const prev = prevModelRef.current;
+    prevModelRef.current = model;
+
+    const needsFullInit = !prev || !workerRef.current
+      || prev.properties.gridWidth !== model.properties.gridWidth
+      || prev.properties.gridHeight !== model.properties.gridHeight
+      || prev.properties.boundaryTreatment !== model.properties.boundaryTreatment
+      || prev.properties.updateMode !== model.properties.updateMode
+      || prev.properties.asyncScheme !== model.properties.asyncScheme
+      || prev.attributes !== model.attributes
+      || prev.neighborhoods !== model.neighborhoods
+      || prev.mappings !== model.mappings;
+
+    if (needsFullInit) {
+      workerRef.current?.terminate();
+      workerRef.current = null;
+      initWorkerWithDimensions(model.properties.gridWidth, model.properties.gridHeight);
+    } else {
+      // Graph or indicator watch change only → soft recompile (preserves grid)
+      const result = compileGraph(model.graphNodes, model.graphEdges, model);
+      setCompiledCode(result.stepCode);
+      setCompileError(result.error ?? '');
+      workerRef.current?.postMessage({
+        type: 'recompile',
+        stepCode: result.stepCode,
+        inputColorCodes: result.inputColorCodes,
+        outputMappingCodes: result.outputMappingCodes || [],
+        updateMode: model.properties.updateMode,
+        asyncScheme: model.properties.asyncScheme,
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, compileModel]);
 
@@ -731,7 +786,8 @@ export function SimulatorView() {
   };
 
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
-  const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [brushPanelOpen, setBrushPanelOpen] = useState(false);
+  const [indicatorsPanelOpen, setIndicatorsPanelOpen] = useState(true);
 
   const modelAttrs = model.attributes.filter(a => a.isModelAttribute);
   const attrToColorMappings = model.mappings.filter(m => m.isAttributeToColor);
@@ -921,55 +977,80 @@ export function SimulatorView() {
           >#</button>
         </div>
 
-        {!rightPanelOpen && (
-          <button className={styles.panelExpandBtnRight} data-sim-overlay
-            onClick={() => setRightPanelOpen(true)} title="Open brush">&#9998;</button>
-        )}
+        {/* Right-side expand buttons (stacked vertically) */}
+        <div className={styles.rightExpandBtns} data-sim-overlay>
+          {!brushPanelOpen && (
+            <button className={styles.panelExpandBtnRight} onClick={() => setBrushPanelOpen(true)} title="Open brush">&#9998;</button>
+          )}
+          {!indicatorsPanelOpen && (model.indicators || []).length > 0 && (
+            <button className={styles.panelExpandBtnRight} onClick={() => setIndicatorsPanelOpen(true)} title="Open indicators">&#x1D4D8;</button>
+          )}
+        </div>
       </div>
 
-      {/* === Right Panel (collapsible — Brush) === */}
-      {rightPanelOpen && (
-        <div className={styles.sidePanel}>
-          <div className={styles.panelHeader}>
-            <span className={styles.panelTitle}>Input Mapping (C{'\u2192'}A)</span>
-            <button className={styles.panelCollapseBtn} onClick={() => setRightPanelOpen(false)}>&rsaquo;</button>
-          </div>
-          {colorToAttrMappings.length > 0 && (
-            <div className={styles.mappingTabs}>
-              {colorToAttrMappings.map(m => (
-                <button
-                  key={m.id}
-                  className={`${styles.mappingTab} ${brushMapping === m.id ? styles.mappingTabActive : ''}`}
-                  onClick={() => setBrushMapping(m.id)}
-                >
-                  {m.name}
-                </button>
-              ))}
+      {/* === Right Column (two stacked panels with proper flex sizing) === */}
+      {(brushPanelOpen || (indicatorsPanelOpen && (model.indicators || []).length > 0)) && (
+        <div className={styles.rightColumn}>
+          {/* Brush Panel (top, shrink-to-fit when indicators open) */}
+          {brushPanelOpen && (
+            <div className={`${styles.rightSubPanel} ${indicatorsPanelOpen && (model.indicators || []).length > 0 ? styles.rightSubPanelShrink : ''}`}>
+              <div className={styles.panelHeader}>
+                <span className={styles.panelTitle}>Input Mapping (C{'\u2192'}A)</span>
+                <button className={styles.panelCollapseBtn} onClick={() => setBrushPanelOpen(false)}>&rsaquo;</button>
+              </div>
+              {colorToAttrMappings.length > 0 && (
+                <div className={styles.mappingTabs}>
+                  {colorToAttrMappings.map(m => (
+                    <button
+                      key={m.id}
+                      className={`${styles.mappingTab} ${brushMapping === m.id ? styles.mappingTabActive : ''}`}
+                      onClick={() => setBrushMapping(m.id)}
+                    >
+                      {m.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className={styles.fieldRow}>
+                <span className={styles.statLabel}>Color</span>
+                <input type="color" className={styles.colorPicker} value={brushColor}
+                  onChange={e => setBrushColor(e.target.value)} />
+              </div>
+              <div className={styles.fieldRow}>
+                <span className={styles.statLabel}>W</span>
+                <input className={styles.brushInput} type="number" min={1} max={(gridWidth.current || simWidth) * 2} value={brushW}
+                  onChange={e => setBrushW(Math.max(1, Number(e.target.value) || 1))} />
+                <span className={styles.statLabel}>H</span>
+                <input className={styles.brushInput} type="number" min={1} max={(gridHeight.current || simHeight) * 2} value={brushH}
+                  onChange={e => setBrushH(Math.max(1, Number(e.target.value) || 1))} />
+              </div>
+              <hr className={styles.divider} />
+              <button className={styles.controlButton} onClick={() => imageInputRef.current?.click()}>
+                Open Image
+              </button>
+              <input ref={imageInputRef} type="file" accept=".png,.bmp,.jpg,.jpeg" style={{ display: 'none' }} onChange={handleImageImport} />
+              <label className={styles.checkRow}>
+                <input type="checkbox" checked={showBrushCursor} onChange={e => setShowBrushCursor(e.target.checked)} />
+                Show brush cursor
+              </label>
+              <div className={styles.hint}>LMB: paint / RMB: pan / Ctrl+LMB drag: resize brush</div>
             </div>
           )}
-          <div className={styles.fieldRow}>
-            <span className={styles.statLabel}>Color</span>
-            <input type="color" className={styles.colorPicker} value={brushColor}
-              onChange={e => setBrushColor(e.target.value)} />
-          </div>
-          <div className={styles.fieldRow}>
-            <span className={styles.statLabel}>W</span>
-            <input className={styles.brushInput} type="number" min={1} max={(gridWidth.current || simWidth) * 2} value={brushW}
-              onChange={e => setBrushW(Math.max(1, Number(e.target.value) || 1))} />
-            <span className={styles.statLabel}>H</span>
-            <input className={styles.brushInput} type="number" min={1} max={(gridHeight.current || simHeight) * 2} value={brushH}
-              onChange={e => setBrushH(Math.max(1, Number(e.target.value) || 1))} />
-          </div>
-          <hr className={styles.divider} />
-          <button className={styles.controlButton} onClick={() => imageInputRef.current?.click()}>
-            Open Image
-          </button>
-          <input ref={imageInputRef} type="file" accept=".png,.bmp,.jpg,.jpeg" style={{ display: 'none' }} onChange={handleImageImport} />
-          <label className={styles.checkRow}>
-            <input type="checkbox" checked={showBrushCursor} onChange={e => setShowBrushCursor(e.target.checked)} />
-            Show brush cursor
-          </label>
-          <div className={styles.hint}>LMB: paint / RMB: pan / Ctrl+LMB drag: resize brush</div>
+
+          {/* Indicators Panel (bottom, grows to fill remaining space) */}
+          {indicatorsPanelOpen && (model.indicators || []).length > 0 && (
+            <div className={`${styles.rightSubPanel} ${styles.rightSubPanelGrow}`}>
+              <div className={styles.panelHeader}>
+                <span className={styles.panelTitle}>Indicators</span>
+                <button className={styles.panelCollapseBtn} onClick={() => setIndicatorsPanelOpen(false)}>&rsaquo;</button>
+              </div>
+              <IndicatorDisplay
+                indicators={model.indicators || []}
+                values={indicatorValuesRef.current}
+                onToggleWatch={(id, watched) => updateIndicator(id, { watched })}
+              />
+            </div>
+          )}
         </div>
       )}
     </div>

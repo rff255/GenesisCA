@@ -21,6 +21,7 @@ export const EMPTY_MODEL: CAModel = {
   attributes: [],
   neighborhoods: [],
   mappings: [],
+  indicators: [],
   graphNodes: [],
   graphEdges: [],
   macroDefs: [],

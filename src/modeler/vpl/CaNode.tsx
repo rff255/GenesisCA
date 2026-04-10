@@ -251,6 +251,15 @@ function CaNodeComponent({ id, data }: NodeProps) {
     } else if (nodeData.nodeType === 'outputMapping') {
       const mapping = model.mappings.find(m => m.id === nodeData.config.mappingId);
       collapsedLabel = mapping ? `A\u2192C: ${mapping.name}` : def.label;
+    } else if (nodeData.nodeType === 'getIndicator') {
+      const ind = (model.indicators || []).find(i => i.id === nodeData.config.indicatorId);
+      collapsedLabel = ind ? `Ind - ${ind.name}` : def.label;
+    } else if (nodeData.nodeType === 'setIndicator') {
+      const ind = (model.indicators || []).find(i => i.id === nodeData.config.indicatorId);
+      collapsedLabel = ind ? `Set Ind - ${ind.name}` : def.label;
+    } else if (nodeData.nodeType === 'updateIndicator') {
+      const ind = (model.indicators || []).find(i => i.id === nodeData.config.indicatorId);
+      collapsedLabel = ind ? `Upd Ind - ${ind.name}` : def.label;
     } else {
       collapsedLabel = def.label;
     }
@@ -495,6 +504,67 @@ function CaNodeComponent({ id, data }: NodeProps) {
               ))}
           </select>
         )}
+
+        {(nodeData.nodeType === 'getIndicator' || nodeData.nodeType === 'setIndicator') && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.indicatorId as string) || ''}
+            onChange={e => updateConfig('indicatorId', e.target.value)}
+          >
+            <option value="">Select...</option>
+            {(model.indicators || [])
+              .filter(i => i.kind === 'standalone')
+              .map(i => (
+                <option key={i.id} value={i.id}>{i.name}</option>
+              ))}
+          </select>
+        )}
+
+        {nodeData.nodeType === 'updateIndicator' && (() => {
+          const selInd = (model.indicators || []).find(i => i.id === nodeData.config.indicatorId);
+          const dt = selInd?.dataType || 'integer';
+          const opsByType: Record<string, Array<{ value: string; label: string }>> = {
+            bool: [{ value: 'toggle', label: 'Toggle' }, { value: 'or', label: 'OR' }, { value: 'and', label: 'AND' }],
+            integer: [{ value: 'increment', label: 'Increment (+)' }, { value: 'decrement', label: 'Decrement (-)' }, { value: 'max', label: 'Max' }, { value: 'min', label: 'Min' }],
+            float: [{ value: 'increment', label: 'Increment (+)' }, { value: 'decrement', label: 'Decrement (-)' }, { value: 'max', label: 'Max' }, { value: 'min', label: 'Min' }],
+            tag: [{ value: 'next', label: 'Next' }, { value: 'previous', label: 'Previous' }],
+          };
+          const ops = opsByType[dt] ?? opsByType.integer!;
+          return (
+            <>
+              <select
+                className={styles.select}
+                value={(nodeData.config.indicatorId as string) || ''}
+                onChange={e => {
+                  const ind = (model.indicators || []).find(i => i.id === e.target.value);
+                  const newDt = ind?.dataType || 'integer';
+                  const firstOp = (opsByType[newDt] ?? opsByType.integer)![0]!.value;
+                  const newConfig: NodeConfig = { ...nodeData.config, indicatorId: e.target.value, operation: firstOp };
+                  if (newDt === 'tag' && ind?.tagOptions) {
+                    newConfig._tagLen = ind.tagOptions.length;
+                  }
+                  updateNodeData(id, { ...nodeData, config: newConfig });
+                }}
+              >
+                <option value="">Select...</option>
+                {(model.indicators || [])
+                  .filter(i => i.kind === 'standalone')
+                  .map(i => (
+                    <option key={i.id} value={i.id}>{i.name}</option>
+                  ))}
+              </select>
+              <select
+                className={styles.select}
+                value={(nodeData.config.operation as string) || ops![0]!.value}
+                onChange={e => updateConfig('operation', e.target.value)}
+              >
+                {ops!.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </>
+          );
+        })()}
 
         {nodeData.nodeType === 'setColorViewer' && (() => {
           const allRgbConnected =

@@ -30,6 +30,7 @@ interface InitMsg {
   inputColorCodes: Array<{ mappingId: string; code: string }>;
   outputMappingCodes: Array<{ mappingId: string; code: string }>;
   activeViewer: string;
+  indicators?: IndicatorDef[];
 }
 
 interface StepMsg { type: 'step'; count: number; activeViewer: string; skipColorPass?: boolean }
@@ -45,7 +46,21 @@ interface RecompileMsg { type: 'recompile'; stepCode: string; inputColorCodes: A
 interface UpdateModelAttrsMsg { type: 'updateModelAttrs'; attrs: Record<string, number> }
 interface ImportImageMsg { type: 'importImage'; pixels: Uint8ClampedArray; mappingId: string; activeViewer: string }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | ImportImageMsg;
+interface IndicatorDef {
+  id: string;
+  kind: string;
+  dataType: string;
+  defaultValue: string;
+  accumulationMode: string;
+  tagOptions?: string[];
+  linkedAttributeId?: string;
+  linkedAggregation?: string;
+  binCount?: number;
+  watched: boolean;
+}
+
+interface UpdateIndicatorsMsg { type: 'updateIndicators'; indicators: IndicatorDef[]; attributes: AttrDef[] }
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | ImportImageMsg | UpdateIndicatorsMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -78,6 +93,16 @@ let outputMappingFns: Array<{ mappingId: string; fn: Function }> = [];
 
 // Cached model attributes
 let cachedModelAttrs: Record<string, unknown> = {};
+
+// Indicators
+let cachedIndicators: Record<string, number> = {};
+let standaloneDefaults: Record<string, number> = {};
+let standalonePerGenIds: string[] = [];
+let linkedDefs: Array<{
+  id: string; accumulationMode: string;
+}> = [];
+let linkedAccumulators: Record<string, number | Record<string, number>> = {};
+let linkedResults: Record<string, number | Record<string, number>> = {};
 
 // ---------------------------------------------------------------------------
 // Typed array creation by attribute type
@@ -228,7 +253,7 @@ function buildLoopArgs(): unknown[] {
     args.push(nbrIndices[nbr.id]);
     args.push(nbr.coords.length);
   }
-  args.push(cachedModelAttrs, colors, activeViewer);
+  args.push(cachedModelAttrs, colors, activeViewer, cachedIndicators, linkedResults);
   if (updateMode === 'asynchronous' && orderArray) args.push(orderArray);
   return args;
 }
@@ -242,12 +267,20 @@ function buildCellArgs(idx: number): unknown[] {
     args.push(nbrIndices[nbr.id]);
     args.push(nbr.coords.length);
   }
-  args.push(cachedModelAttrs, colors, activeViewer);
+  args.push(cachedModelAttrs, colors, activeViewer, cachedIndicators, linkedResults);
   return args;
 }
 
 function runStep(): void {
   const fn = stepFn!;
+
+  // Reset per-generation standalone indicators to defaults
+  if (standalonePerGenIds.length > 0) {
+    for (const id of standalonePerGenIds) cachedIndicators[id] = standaloneDefaults[id] ?? 0;
+  }
+
+  // Clear linked results (compiled step function will populate them)
+  if (linkedDefs.length > 0) linkedResults = {};
 
   // Async mode: shuffle/populate order array before each step
   if (updateMode === 'asynchronous' && orderArray) {
@@ -268,6 +301,26 @@ function runStep(): void {
 
   // ONE call per step — the loop is inside the compiled function
   fn(...buildLoopArgs());
+
+  // Handle linked indicator accumulation (skip when no linked indicators)
+  for (let _li = 0; _li < linkedDefs.length; _li++) {
+    const def = linkedDefs[_li]!;
+    if (!(def.id in linkedResults)) continue;
+    if (def.accumulationMode === 'accumulated') {
+      const cur = linkedResults[def.id]!;
+      if (typeof cur === 'number') {
+        linkedAccumulators[def.id] = ((linkedAccumulators[def.id] as number) || 0) + cur;
+        linkedResults[def.id] = linkedAccumulators[def.id] as number;
+      } else {
+        const prev = (linkedAccumulators[def.id] as Record<string, number>) || {};
+        for (const [k, v] of Object.entries(cur)) {
+          prev[k] = (prev[k] || 0) + v;
+        }
+        linkedAccumulators[def.id] = prev;
+        linkedResults[def.id] = { ...prev };
+      }
+    }
+  }
 
   // Swap buffers (sync mode only — async uses single buffer)
   if (updateMode !== 'asynchronous') {
@@ -310,6 +363,7 @@ function randomizeGrid(): void {
     const wArr = writeAttrs[attr.id]!;
     (wArr as Uint8Array).set(arr as Uint8Array);
   }
+  resetIndicators();
   generation = 0;
   // Prefer Output Mapping color pass (no generation advance) over runStep fallback
   const hasColorPassR = outputMappingFns.some(f => f.mappingId === activeViewer);
@@ -323,6 +377,7 @@ function resetGrid(): void {
     const wArr = writeAttrs[attr.id]!;
     for (let i = 0; i < total; i++) { arr[i] = dv; wArr[i] = dv; }
   }
+  resetIndicators();
   generation = 0;
   const hasColorPassRs = outputMappingFns.some(f => f.mappingId === activeViewer);
   if (hasColorPassRs) { runColorPass(); } else if (stepFn) { runStep(); } else { writeDefaultColors(); }
@@ -359,10 +414,57 @@ function runColorPass(): void {
   if (omFn) omFn.fn(...buildLoopArgs());
 }
 
+function initIndicators(defs: IndicatorDef[]): void {
+  cachedIndicators = {};
+  standaloneDefaults = {};
+  standalonePerGenIds = [];
+  linkedDefs = [];
+  linkedAccumulators = {};
+
+  for (const ind of defs) {
+    if (ind.kind === 'standalone') {
+      const dv = ind.dataType === 'bool'
+        ? (ind.defaultValue === 'true' ? 1 : 0)
+        : (parseFloat(ind.defaultValue) || 0);
+      cachedIndicators[ind.id] = dv;
+      standaloneDefaults[ind.id] = dv;
+      if (ind.accumulationMode === 'per-generation') {
+        standalonePerGenIds.push(ind.id);
+      }
+    } else if (ind.kind === 'linked') {
+      linkedDefs.push({
+        id: ind.id,
+        accumulationMode: ind.accumulationMode,
+      });
+    }
+  }
+}
+
+function resetIndicators(): void {
+  for (const id of Object.keys(cachedIndicators)) {
+    cachedIndicators[id] = standaloneDefaults[id] ?? 0;
+  }
+  linkedAccumulators = {};
+  linkedResults = {};
+}
+
 function sendColors(): void {
   const copy = new Uint8ClampedArray(colors);
+  // Only build indicators payload when there are entries (avoids overhead when no indicators)
+  const hasStandalone = standalonePerGenIds.length > 0 || Object.keys(standaloneDefaults).length > 0;
+  const hasLinked = linkedDefs.length > 0;
+  let indicators: Record<string, number | Record<string, number>> | undefined;
+  if (hasStandalone || hasLinked) {
+    indicators = {};
+    for (const id of Object.keys(cachedIndicators)) {
+      indicators[id] = cachedIndicators[id]!;
+    }
+    for (const id of Object.keys(linkedResults)) {
+      indicators[id] = linkedResults[id]!;
+    }
+  }
   self.postMessage(
-    { type: 'stepped', generation, colors: copy },
+    { type: 'stepped', generation, colors: copy, indicators },
     { transfer: [copy.buffer] },
   );
 }
@@ -399,6 +501,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       }
 
       activeViewer = msg.activeViewer;
+      initIndicators(msg.indicators || []);
       initGrid();
       buildNeighborIndices();
       compileFns(msg.stepCode, msg.inputColorCodes, msg.outputMappingCodes || []);
@@ -489,6 +592,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       }
       break;
     }
+
+    case 'updateIndicators': {
+      initIndicators(msg.indicators);
+      break;
+    }
+
 
     case 'importImage': {
       activeViewer = msg.activeViewer;

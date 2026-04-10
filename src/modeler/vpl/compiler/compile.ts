@@ -436,8 +436,15 @@ function compileRoot(
       const nbrId = node.data.config.neighborhoodId as string || '_undef';
       scratchNodes.push({ scratchVarName: `_scr_${nodeId}`, nbrId });
     }
-    // Track aggregation nodes that need reusable scratch arrays
+    // Track aggregation nodes that need reusable scratch arrays (only when indexes output is connected)
+    let needsIndexes = false;
     if (node.data.nodeType === 'groupStatement' || node.data.nodeType === 'groupCounting') {
+      // Check if any downstream node reads the indexes output
+      for (const [, src] of inputToSource) {
+        if (src.nodeId === nodeId && src.portId === 'indexes') { needsIndexes = true; break; }
+      }
+    }
+    if (needsIndexes) {
       scratchNodes.push({ scratchVarName: `_v${nodeId}_indexes`, initExpr: '[]' });
     }
     if (node.data.nodeType === 'getNeighborsAttrByIndexes') {
@@ -457,7 +464,11 @@ function compileRoot(
       }
     }
 
-    const code = def.compile(nodeId, node.data.config, inputVars);
+    // For aggregation nodes, pass whether indexes output is connected (for optimization)
+    const compileConfig = (node.data.nodeType === 'groupStatement' || node.data.nodeType === 'groupCounting')
+      ? { ...node.data.config, _indexesConnected: needsIndexes }
+      : node.data.config;
+    const code = def.compile(nodeId, compileConfig, inputVars);
     if (code) valueLines.push('      ' + code.trimEnd());
 
     return `_v${nodeId}`;
@@ -739,7 +750,7 @@ function buildLoopParams(model: CAModel): {
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
-  parts.push('modelAttrs', 'colors', 'activeViewer');
+  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults');
   if (isAsync) parts.push('order');
 
   return { params: parts.join(', '), cellAttrs, neighborhoods };
@@ -753,8 +764,92 @@ function buildCellParams(model: CAModel): string {
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
-  parts.push('modelAttrs', 'colors', 'activeViewer');
+  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults');
   return parts.join(', ');
+}
+
+// ---------------------------------------------------------------------------
+// Linked indicator code generation (injected into step function)
+// ---------------------------------------------------------------------------
+
+function buildLinkedIndicatorCode(model: CAModel): {
+  preLoopDecls: string[];
+  inLoopLines: string[];
+  postLoopLines: string[];
+} {
+  const preLoopDecls: string[] = [];
+  const inLoopLines: string[] = [];
+  const postLoopLines: string[] = [];
+
+  const watched = (model.indicators || []).filter(
+    i => i.kind === 'linked' && i.watched && i.linkedAttributeId,
+  );
+  if (watched.length === 0) return { preLoopDecls, inLoopLines, postLoopLines };
+
+  for (const ind of watched) {
+    const attr = model.attributes.find(a => a.id === ind.linkedAttributeId);
+    if (!attr || attr.isModelAttribute) continue;
+
+    const safe = ind.id.replace(/[^a-zA-Z0-9_]/g, '_');
+    const wVar = `w_${attr.id}`;  // read from write buffer (post-update values)
+    const key = JSON.stringify(ind.id);
+
+    if (ind.linkedAggregation === 'total') {
+      // Sum all cell values
+      preLoopDecls.push(`  let _lnk_${safe} = 0;`);
+      inLoopLines.push(`      _lnk_${safe} += ${wVar}[idx];`);
+      postLoopLines.push(`  _linkedResults[${key}] = _lnk_${safe};`);
+
+    } else if (attr.type === 'bool') {
+      // Count true values; false = total - true
+      preLoopDecls.push(`  let _lnk_${safe}_t = 0;`);
+      inLoopLines.push(`      if (${wVar}[idx]) _lnk_${safe}_t++;`);
+      postLoopLines.push(`  _linkedResults[${key}] = { 'true': _lnk_${safe}_t, 'false': total - _lnk_${safe}_t };`);
+
+    } else if (attr.type === 'tag') {
+      const tagLen = attr.tagOptions?.length || 1;
+      const tagNames = JSON.stringify(attr.tagOptions || []);
+      preLoopDecls.push(`  const _lnk_${safe} = new Int32Array(${tagLen});`);
+      inLoopLines.push(`      _lnk_${safe}[${wVar}[idx]]++;`);
+      postLoopLines.push(
+        `  { const _tn = ${tagNames}; const _f = {};` +
+        ` for (let _ti = 0; _ti < ${tagLen}; _ti++) _f[_tn[_ti]] = _lnk_${safe}[_ti];` +
+        ` _linkedResults[${key}] = _f; }`,
+      );
+
+    } else if (attr.type === 'integer') {
+      // Count per distinct value
+      preLoopDecls.push(`  const _lnk_${safe} = {};`);
+      inLoopLines.push(`      { const _k = ${wVar}[idx]; _lnk_${safe}[_k] = (_lnk_${safe}[_k] || 0) + 1; }`);
+      postLoopLines.push(`  _linkedResults[${key}] = _lnk_${safe};`);
+
+    } else if (attr.type === 'float') {
+      // Single-pass min/max in main loop, second pass for binning after loop
+      const bc = ind.binCount || 10;
+      preLoopDecls.push(`  let _lnk_${safe}_min = Infinity, _lnk_${safe}_max = -Infinity;`);
+      inLoopLines.push(
+        `      { const _v = ${wVar}[idx];` +
+        ` if (_v < _lnk_${safe}_min) _lnk_${safe}_min = _v;` +
+        ` if (_v > _lnk_${safe}_max) _lnk_${safe}_max = _v; }`,
+      );
+      postLoopLines.push(
+        `  { const _bc = ${bc};` +
+        ` if (_lnk_${safe}_min === _lnk_${safe}_max) _lnk_${safe}_max = _lnk_${safe}_min + 1;` +
+        ` const _bw = (_lnk_${safe}_max - _lnk_${safe}_min) / _bc;` +
+        ` const _bins = new Int32Array(_bc);` +
+        ` for (let _bi = 0; _bi < total; _bi++)` +
+        ` { let _b = (${wVar}[_bi] - _lnk_${safe}_min) / _bw | 0; if (_b >= _bc) _b = _bc - 1; _bins[_b]++; }` +
+        ` const _f = {};` +
+        ` for (let _bi = 0; _bi < _bc; _bi++)` +
+        ` { const _lo = (_lnk_${safe}_min + _bi * _bw).toFixed(2);` +
+        ` const _hi = (_lnk_${safe}_min + (_bi + 1) * _bw).toFixed(2);` +
+        ` _f[_lo + '\\u2013' + _hi] = _bins[_bi]; }` +
+        ` _linkedResults[${key}] = _f; }`,
+      );
+    }
+  }
+
+  return { preLoopDecls, inLoopLines, postLoopLines };
 }
 
 // ---------------------------------------------------------------------------
@@ -821,11 +916,15 @@ export function compileGraph(
         : `  const ${s.scratchVarName} = ${s.initExpr ?? '[]'};`,
     );
 
+    // Build linked indicator aggregation code (injected into the loop)
+    const linked = buildLinkedIndicatorCode(model);
+
     if (isAsync) {
       // Async mode: iterate cells via shuffled order array
       stepCode = [
         `(function(${loopParams}) {`,
         ...scratchDecls,
+        ...linked.preLoopDecls,
         '  for (let _i = 0; _i < total; _i++) {',
         '    const idx = order[_i];',
         '    const colorIdx = idx * 4;',
@@ -833,21 +932,26 @@ export function compileGraph(
         ...valueLines,
         '',
         ...flowLines,
+        ...linked.inLoopLines,
         '  }',
+        ...linked.postLoopLines,
         '})',
       ].join('\n');
     } else {
-      // Sync mode: sequential iteration (unchanged)
+      // Sync mode: sequential iteration
       stepCode = [
         `(function(${loopParams}) {`,
         ...scratchDecls,
+        ...linked.preLoopDecls,
         '  for (let idx = 0; idx < total; idx++) {',
         '    const colorIdx = idx * 4;',
         ...copyLines,
         ...valueLines,
         '',
         ...flowLines,
+        ...linked.inLoopLines,
         '  }',
+        ...linked.postLoopLines,
         '})',
       ].join('\n');
     }
@@ -888,7 +992,7 @@ export function compileGraph(
   for (const a of cellAttrs) omParamParts.push(`w_${a.id}`);
   const neighborhoods = model.neighborhoods.map(n => ({ id: n.id }));
   for (const n of neighborhoods) { omParamParts.push(`nIdx_${n.id}`); omParamParts.push(`nSz_${n.id}`); }
-  omParamParts.push('modelAttrs', 'colors', 'activeViewer');
+  omParamParts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults');
   const omParams = omParamParts.join(', ');
 
   for (const omNode of outputMappingNodes) {

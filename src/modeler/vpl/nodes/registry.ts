@@ -27,6 +27,9 @@ import { GetNeighborAttributeByIndexNode } from './GetNeighborAttributeByIndexNo
 import { SetNeighborAttributeByIndexNode } from './SetNeighborAttributeByIndexNode';
 import { OutputMappingNode } from './OutputMappingNode';
 import { GetNeighborsAttrByIndexesNode } from './GetNeighborsAttrByIndexesNode';
+import { GetIndicatorNode } from './GetIndicatorNode';
+import { SetIndicatorNode } from './SetIndicatorNode';
+import { UpdateIndicatorNode } from './UpdateIndicatorNode';
 
 const ALL_NODES: NodeTypeDef[] = [
   // Event (entry points)
@@ -61,6 +64,10 @@ const ALL_NODES: NodeTypeDef[] = [
   // Color
   SetColorViewerNode,
   GetColorConstantNode,
+  // Indicators
+  GetIndicatorNode,
+  SetIndicatorNode,
+  UpdateIndicatorNode,
   // Macro
   MacroNode,
   MacroInputNode,
