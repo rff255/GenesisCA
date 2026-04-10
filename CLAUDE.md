@@ -33,9 +33,9 @@ Every GenesisCA model satisfies these theoretical properties:
 1. Cells have unlimited computing power
 2. Cells have N internal attributes (of multiple data types), whose snapshot of values at a given generation is called its "state"
 3. Cells are limited to only access (read) the states of cells in one of the neighborhoods defined in the CA model
-4. Cells can only make changes to themselves, never to the environment around (other cells)
+4. **Writability** — In synchronous (classic) mode, cells can only modify their own attributes. In asynchronous mode, cells can also directly modify the attributes of neighboring cells, enabling movement and mass-conservation rules.
 5. Space and Time are discrete (cells arranged in n-dimensional grid)
-6. All cells update their states simultaneously (synchronously) each passing generation
+6. **Synchronicity** — The model can be either synchronous (all cells update simultaneously each generation — classic CA) or asynchronous (cells update sequentially using a single buffer, enabling number-conserving models where elements move across the grid without being created or destroyed). Async supports three update schemes: Random Order (Fisher-Yates), Random Independent (with replacement), Cyclic (fixed order from init).
 
 ### Simulation Essentials (Color Mappings)
 
@@ -250,18 +250,20 @@ The app is functional with these major systems:
 ### Visual Programming Language (VPL)
 - `src/modeler/vpl/GraphEditor.tsx` — React Flow-based node graph editor
 - `src/modeler/vpl/CaNode.tsx` — Custom node component with per-type config UI
-- `src/modeler/vpl/nodes/` — 22 node types, each in its own file with `compile()` method
+- `src/modeler/vpl/nodes/` — 25 node types, each in its own file with `compile()` method (3 are async-only: SetNeighborhoodAttribute, GetNeighborAttributeByIndex, SetNeighborAttributeByIndex)
 - `src/modeler/vpl/compiler/compile.ts` — Two-pass compiler: hoists values, then emits flow
 - Multi-output nodes (InputColor, GetColorConstant, MacroNode) use `_v${nodeId}_${portId}` naming
 - Multi-root support: Step (per-generation) and InputColor (brush interaction) compile separately
 
 ### Simulation Engine (SoA Architecture)
 - `src/simulator/engine/sim.worker.ts` — Web Worker owns grid as Structure of Arrays
-- Grid storage: one typed array per attribute (`Uint8Array` bool, `Int32Array` int/tag, `Float64Array` float), double-buffered
+- Grid storage: one typed array per attribute (`Uint8Array` bool, `Int32Array` int/tag, `Float64Array` float), double-buffered (sync) or single-buffer (async)
 - Tag attributes: `Int32Array`, value = index into `tagOptions` string array
 - Color model attributes: stored as 3 entries (`attrId_r`, `attrId_g`, `attrId_b`) in cachedModelAttrs
 - Neighbor access: pre-computed `Int32Array` index tables (built at init, handles torus/constant boundary once)
-- Step function is LOOP-WRAPPED: `(total, r_<attrs>..., w_<attrs>..., nIdx_<nbrs>..., nSz_<nbrs>..., modelAttrs, colors, activeViewer)` — contains the for-loop, called ONCE per step
+- Step function is LOOP-WRAPPED: `(total, r_<attrs>..., w_<attrs>..., nIdx_<nbrs>..., nSz_<nbrs>..., modelAttrs, colors, activeViewer[, order])` — contains the for-loop, called ONCE per step
+- Async mode: `order` param is an Int32Array of shuffled/random cell indices; loop uses `idx = order[_i]` instead of `idx = _i`; r_ and w_ params point to same typed arrays (single buffer); copy lines are skipped; buffer swap is skipped after step
+- Async schemes: `random-order` (Fisher-Yates shuffle per step), `random-independent` (N random picks with replacement), `cyclic` (one-time shuffle at init)
 - InputColor functions remain per-cell: `(_r, _g, _b, idx, r_<attrs>..., ...)`
 - GetNeighborsAttribute uses `_scr_<nodeId>` scratch arrays declared before the loop — never allocate in hot path
 - NEVER use `fn(...args)` in per-cell loops — V8 megamorphic spread kills performance
@@ -279,6 +281,8 @@ The app is functional with these major systems:
 - Recompile optimization: structural changes reinit worker, graph-only changes send `recompile` message (preserves grid state)
 
 ### Key Patterns
+- Async-only nodes (`ASYNC_ONLY_TYPES` in compile.ts): `setNeighborhoodAttribute`, `setNeighborAttributeByIndex`, `getNeighborAttributeByIndex` — compiler emits error if used in sync mode because copy lines overwrite neighbor writes
+- Neighbor-write nodes use `if (_ni < total)` guard to protect constant-boundary sentinel from corruption
 - Graph state sync: single debounced sync (100ms) via refs — never use multiple setTimeout callbacks
 - Graph editor mouse: RMB click=context menu, RMB drag=pan (`panOnDrag={[2]}`), LMB click=select, LMB drag=box select (`selectionOnDrag`); simulator: LMB=brush, RMB=pan
 - Shared mutable state: `graphState.ts` holds module-level variables (`isConnectingGlobal`, `showPortLabelsGlobal`, `connectingFrom`) to avoid circular imports between GraphEditor↔CaNode

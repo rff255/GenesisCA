@@ -269,8 +269,21 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
     case 'NEW_MODEL':
       return { model: EMPTY_MODEL, isDirty: false, modelVersion: state.modelVersion + 1 };
 
-    case 'LOAD_MODEL':
-      return { model: action.model, isDirty: false, modelVersion: state.modelVersion + 1 };
+    case 'LOAD_MODEL': {
+      const m = action.model;
+      // Migration guards for loaded files (same as localStorage)
+      if (!m.graphNodes) m.graphNodes = [];
+      if (!m.graphEdges) m.graphEdges = [];
+      if (!m.macroDefs) m.macroDefs = [];
+      if (!m.properties.tags) m.properties.tags = [];
+      if (!m.properties.updateMode) m.properties.updateMode = 'synchronous';
+      if (!m.properties.asyncScheme) m.properties.asyncScheme = 'random-order';
+      for (const n of m.neighborhoods) { n.margin ??= 2; }
+      for (const a of m.attributes) {
+        if (a.type === 'tag' && !a.tagOptions) a.tagOptions = [];
+      }
+      return { model: m, isDirty: false, modelVersion: state.modelVersion + 1 };
+    }
 
     case 'MARK_SAVED':
       return { ...state, isDirty: false };
@@ -322,6 +335,8 @@ function createInitialState(): ModelState {
         if (!model.graphEdges) model.graphEdges = [];
         if (!model.macroDefs) model.macroDefs = [];
         if (!model.properties.tags) model.properties.tags = [];
+        if (!model.properties.updateMode) model.properties.updateMode = 'synchronous';
+        if (!model.properties.asyncScheme) model.properties.asyncScheme = 'random-order';
         for (const n of model.neighborhoods) { n.margin ??= 2; }
         for (const a of model.attributes) {
           if (a.type === 'tag' && !a.tagOptions) a.tagOptions = [];

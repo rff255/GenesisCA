@@ -11,6 +11,8 @@ export const EMPTY_MODEL: CAModel = {
     description: '',
     topology: '2d-grid',
     boundaryTreatment: 'torus',
+    updateMode: 'synchronous',
+    asyncScheme: 'random-order',
     gridWidth: 100,
     gridHeight: 100,
     maxIterations: 1000,

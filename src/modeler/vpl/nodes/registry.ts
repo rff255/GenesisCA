@@ -22,6 +22,9 @@ import { MacroNode } from './MacroNode';
 import { MacroInputNode } from './MacroInputNode';
 import { MacroOutputNode } from './MacroOutputNode';
 import { TagConstantNode } from './TagConstantNode';
+import { SetNeighborhoodAttributeNode } from './SetNeighborhoodAttributeNode';
+import { GetNeighborAttributeByIndexNode } from './GetNeighborAttributeByIndexNode';
+import { SetNeighborAttributeByIndexNode } from './SetNeighborAttributeByIndexNode';
 
 const ALL_NODES: NodeTypeDef[] = [
   // Flow
@@ -33,6 +36,7 @@ const ALL_NODES: NodeTypeDef[] = [
   GetCellAttributeNode,
   GetModelAttributeNode,
   GetNeighborsAttributeNode,
+  GetNeighborAttributeByIndexNode,
   GetConstantNode,
   GetRandomNode,
   TagConstantNode,
@@ -46,6 +50,8 @@ const ALL_NODES: NodeTypeDef[] = [
   GroupOperatorNode,
   // Output
   SetAttributeNode,
+  SetNeighborhoodAttributeNode,
+  SetNeighborAttributeByIndexNode,
   // Color
   InputColorNode,
   SetColorViewerNode,

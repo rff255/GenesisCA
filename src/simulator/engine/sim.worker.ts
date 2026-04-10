@@ -24,6 +24,8 @@ interface InitMsg {
   attributes: AttrDef[];
   neighborhoods: NeighborhoodDef[];
   boundaryTreatment: string;
+  updateMode: string;
+  asyncScheme: string;
   stepCode: string;
   inputColorCodes: Array<{ mappingId: string; code: string }>;
   activeViewer: string;
@@ -38,7 +40,7 @@ interface PaintMsg {
 }
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; inputColorCodes: Array<{ mappingId: string; code: string }> }
+interface RecompileMsg { type: 'recompile'; stepCode: string; inputColorCodes: Array<{ mappingId: string; code: string }>; updateMode: string; asyncScheme: string }
 interface UpdateModelAttrsMsg { type: 'updateModelAttrs'; attrs: Record<string, number> }
 interface ImportImageMsg { type: 'importImage'; pixels: Uint8ClampedArray; mappingId: string; activeViewer: string }
 
@@ -54,6 +56,8 @@ let total = 0;
 let cellAttrs: AttrDef[] = [];
 let neighborhoods: NeighborhoodDef[] = [];
 let boundaryTreatment = 'torus';
+let updateMode = 'synchronous';
+let asyncScheme = 'random-order';
 let generation = 0;
 
 // SoA: one typed array per attribute, double-buffered (A = read, B = write)
@@ -66,6 +70,7 @@ let writeAttrs = attrsB;
 let nbrIndices: Record<string, Int32Array> = {};
 
 let colors: Uint8ClampedArray = new Uint8ClampedArray(0);
+let orderArray: Int32Array | null = null;
 let stepFn: Function | null = null;
 let inputColorFns: Array<{ mappingId: string; fn: Function }> = [];
 
@@ -104,20 +109,43 @@ function initGrid(): void {
   total = width * height;
   attrsA = {};
   attrsB = {};
+  const isAsync = updateMode === 'asynchronous';
 
   for (const attr of cellAttrs) {
     const arrA = createTypedArray(attr.type, total);
-    const arrB = createTypedArray(attr.type, total);
     const dv = defaultValue(attr);
-    if (dv !== 0) { arrA.fill(dv); arrB.fill(dv); }
+    if (dv !== 0) arrA.fill(dv);
     attrsA[attr.id] = arrA;
-    attrsB[attr.id] = arrB;
+
+    if (isAsync) {
+      // Async: single buffer — both read and write point to the same arrays
+      attrsB[attr.id] = arrA;
+    } else {
+      const arrB = createTypedArray(attr.type, total);
+      if (dv !== 0) arrB.fill(dv);
+      attrsB[attr.id] = arrB;
+    }
   }
 
   readAttrs = attrsA;
-  writeAttrs = attrsB;
+  writeAttrs = isAsync ? attrsA : attrsB;
   colors = new Uint8ClampedArray(total * 4);
   generation = 0;
+
+  // Order array for async mode
+  if (isAsync) {
+    orderArray = new Int32Array(total);
+    for (let i = 0; i < total; i++) orderArray[i] = i;
+    // For cyclic scheme, shuffle once at init and reuse
+    if (asyncScheme === 'cyclic') {
+      for (let i = total - 1; i > 0; i--) {
+        const j = (Math.random() * (i + 1)) | 0;
+        const tmp = orderArray[i]!; orderArray[i] = orderArray[j]!; orderArray[j] = tmp;
+      }
+    }
+  } else {
+    orderArray = null;
+  }
 }
 
 function buildNeighborIndices(): void {
@@ -157,21 +185,28 @@ function buildNeighborIndices(): void {
 
   // For constant boundary: ensure read attrs have a sentinel cell at index `total`
   // We extend each array by 1 with the default value
+  const isAsync = updateMode === 'asynchronous';
   if (boundaryTreatment !== 'torus') {
     for (const attr of cellAttrs) {
       const oldA = attrsA[attr.id]!;
-      const oldB = attrsB[attr.id]!;
       const newA = createTypedArray(attr.type, total + 1);
-      const newB = createTypedArray(attr.type, total + 1);
       (newA as Uint8Array).set(oldA as Uint8Array);
-      (newB as Uint8Array).set(oldB as Uint8Array);
       newA[total] = defaultValue(attr);
-      newB[total] = defaultValue(attr);
       attrsA[attr.id] = newA;
-      attrsB[attr.id] = newB;
+
+      if (isAsync) {
+        // Async: single buffer — both point to same array
+        attrsB[attr.id] = newA;
+      } else {
+        const oldB = attrsB[attr.id]!;
+        const newB = createTypedArray(attr.type, total + 1);
+        (newB as Uint8Array).set(oldB as Uint8Array);
+        newB[total] = defaultValue(attr);
+        attrsB[attr.id] = newB;
+      }
     }
     readAttrs = attrsA;
-    writeAttrs = attrsB;
+    writeAttrs = isAsync ? attrsA : attrsB;
   }
 }
 
@@ -192,6 +227,7 @@ function buildLoopArgs(): unknown[] {
     args.push(nbr.coords.length);
   }
   args.push(cachedModelAttrs, colors, activeViewer);
+  if (updateMode === 'asynchronous' && orderArray) args.push(orderArray);
   return args;
 }
 
@@ -210,13 +246,33 @@ function buildCellArgs(idx: number): unknown[] {
 
 function runStep(): void {
   const fn = stepFn!;
+
+  // Async mode: shuffle/populate order array before each step
+  if (updateMode === 'asynchronous' && orderArray) {
+    if (asyncScheme === 'random-order') {
+      // Fisher-Yates shuffle — every cell updates exactly once in random order
+      for (let i = total - 1; i > 0; i--) {
+        const j = (Math.random() * (i + 1)) | 0;
+        const tmp = orderArray[i]!; orderArray[i] = orderArray[j]!; orderArray[j] = tmp;
+      }
+    } else if (asyncScheme === 'random-independent') {
+      // N=total random picks with replacement
+      for (let i = 0; i < total; i++) {
+        orderArray[i] = (Math.random() * total) | 0;
+      }
+    }
+    // 'cyclic': orderArray stays as shuffled at init — no per-step work
+  }
+
   // ONE call per step — the loop is inside the compiled function
   fn(...buildLoopArgs());
 
-  // Swap buffers
-  const tmp = readAttrs;
-  readAttrs = writeAttrs;
-  writeAttrs = tmp;
+  // Swap buffers (sync mode only — async uses single buffer)
+  if (updateMode !== 'asynchronous') {
+    const tmp = readAttrs;
+    readAttrs = writeAttrs;
+    writeAttrs = tmp;
+  }
   generation++;
 }
 
@@ -303,6 +359,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       cellAttrs = msg.attributes.filter(a => !a.isModelAttribute);
       neighborhoods = msg.neighborhoods;
       boundaryTreatment = msg.boundaryTreatment;
+      updateMode = msg.updateMode || 'synchronous';
+      asyncScheme = msg.asyncScheme || 'random-order';
 
       // Cache model attributes
       cachedModelAttrs = {};
@@ -389,6 +447,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
 
     case 'recompile': {
+      updateMode = msg.updateMode || updateMode;
+      asyncScheme = msg.asyncScheme || asyncScheme;
       compileFns(msg.stepCode, msg.inputColorCodes);
       self.postMessage({ type: 'ready' });
       break;
