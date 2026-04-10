@@ -207,6 +207,12 @@ function compileRoot(
         const nbrId = iNode.data.config.neighborhoodId as string || '_undef';
         scratchNodes.push({ scratchVarName: `${prefix}_scr_${innerNodeId}`, nbrId });
       }
+      if (nt === 'groupStatement' || nt === 'groupCounting') {
+        scratchNodes.push({ scratchVarName: `${prefix}_v${innerNodeId}_indexes`, initExpr: '[]' });
+      }
+      if (nt === 'getNeighborsAttrByIndexes') {
+        scratchNodes.push({ scratchVarName: `${prefix}_v${innerNodeId}_vals`, initExpr: '[]' });
+      }
 
       // Resolve inputs
       const iInputVars: Record<string, string> = {};
@@ -228,7 +234,12 @@ function compileRoot(
       const code = iDef.compile(innerNodeId, iNode.data.config, iInputVars);
       if (code) {
         // Rewrite variable names in emitted code to use scoped prefix
+        // Note: multi-output vars use _v{id}_{port} — the trailing _ breaks \b, so we
+        // also replace _v{id}_ (with trailing underscore) before the word-boundary version.
         const scopedCode = code.replace(
+          new RegExp(`\\b_v${innerNodeId}_`, 'g'),
+          `${prefix}_v${innerNodeId}_`,
+        ).replace(
           new RegExp(`\\b_v${innerNodeId}\\b`, 'g'),
           `${prefix}_v${innerNodeId}`,
         ).replace(
@@ -344,6 +355,12 @@ function compileRoot(
         const nbrId = iNode.data.config.neighborhoodId as string || '_undef';
         scratchNodes.push({ scratchVarName: `${nestedPrefix}_scr_${nid}`, nbrId });
       }
+      if (nt === 'groupStatement' || nt === 'groupCounting') {
+        scratchNodes.push({ scratchVarName: `${nestedPrefix}_v${nid}_indexes`, initExpr: '[]' });
+      }
+      if (nt === 'getNeighborsAttrByIndexes') {
+        scratchNodes.push({ scratchVarName: `${nestedPrefix}_v${nid}_vals`, initExpr: '[]' });
+      }
       const iInputVars: Record<string, string> = {};
       for (const port of iDef.ports) {
         if (port.kind !== 'input' || port.category !== 'value') continue;
@@ -362,6 +379,7 @@ function compileRoot(
       const code = iDef.compile(nid, iNode.data.config, iInputVars);
       if (code) {
         const scopedCode = code
+          .replace(new RegExp(`\\b_v${nid}_`, 'g'), `${nestedPrefix}_v${nid}_`)
           .replace(new RegExp(`\\b_v${nid}\\b`, 'g'), `${nestedPrefix}_v${nid}`)
           .replace(new RegExp(`\\b_scr_${nid}\\b`, 'g'), `${nestedPrefix}_scr_${nid}`)
           .replace(new RegExp(`\\b_nb${nid}\\b`, 'g'), `${nestedPrefix}_nb${nid}`);
