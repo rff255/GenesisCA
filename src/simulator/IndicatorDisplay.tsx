@@ -59,14 +59,15 @@ export function IndicatorDisplay({ indicators, values, history, generation, onTo
         return (
           <div key={ind.id} className={styles.indicator}>
             <div className={styles.header}>
-              <button
-                className={`${styles.eyeBtn} ${isWatched ? styles.eyeActive : ''} ${isStandalone ? styles.eyeDisabled : ''}`}
-                onClick={isStandalone ? undefined : () => onToggleWatch(ind.id, !isWatched)}
-                title={isStandalone ? 'Always active (computed by update graph)' : isWatched ? 'Unwatch (stop computing)' : 'Watch (start computing)'}
-                disabled={isStandalone}
-              >
-                {isWatched ? '\u{1F441}' : '\u25CB'}
-              </button>
+              {!isStandalone && (
+                <button
+                  className={`${styles.eyeBtn} ${isWatched ? styles.eyeActive : ''}`}
+                  onClick={() => onToggleWatch(ind.id, !isWatched)}
+                  title={isWatched ? 'Unwatch (stop computing)' : 'Watch (start computing)'}
+                >
+                  {isWatched ? '\u{1F441}' : '\u25CB'}
+                </button>
+              )}
               {isWatched && val !== undefined && (
                 <button
                   className={`${styles.chartBtn} ${isExpanded ? styles.chartBtnActive : ''}`}
