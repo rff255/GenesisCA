@@ -46,6 +46,8 @@ export function SimulatorView() {
   // Indicator values stored in ref (not state) to avoid extra re-renders on every step.
   // The component already re-renders from setGeneration, so ref values are read during that render.
   const indicatorValuesRef = useRef<Record<string, number | Record<string, number>>>({});
+  const indicatorHistoryRef = useRef<Record<string, number[]>>({});
+  const chartExpandedRef = useRef<Set<string>>(new Set());
 
   // GIF recording state
   const [recording, setRecording] = useState(false);
@@ -230,7 +232,23 @@ export function SimulatorView() {
     const msg = e.data;
     if (msg.type === 'stepped') {
       colorsRef.current = msg.colors as Uint8ClampedArray;
-      if (msg.indicators) indicatorValuesRef.current = msg.indicators;
+      if (msg.indicators) {
+        indicatorValuesRef.current = msg.indicators;
+        // Collect history for indicators with expanded charts (scalar values only)
+        const expanded = chartExpandedRef.current;
+        if (expanded.size > 0) {
+          const hist = indicatorHistoryRef.current;
+          for (const id of expanded) {
+            const v = msg.indicators[id];
+            if (typeof v === 'number') {
+              let arr = hist[id];
+              if (!arr) { arr = []; hist[id] = arr; }
+              arr.push(v);
+              if (arr.length > 500) arr.shift();
+            }
+          }
+        }
+      }
       const gen = msg.generation as number;
       gpsGens.current += gen - lastGenForGps.current;
       lastGenForGps.current = gen;
@@ -379,6 +397,7 @@ export function SimulatorView() {
     setGeneration(0);
     setPlaying(false);
     indicatorValuesRef.current = {};
+    indicatorHistoryRef.current = {};
     pendingStep.current = false;
     lastGenForGps.current = 0;
     gpsGens.current = 0;
@@ -786,8 +805,8 @@ export function SimulatorView() {
   };
 
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
-  const [brushPanelOpen, setBrushPanelOpen] = useState(false);
-  const [indicatorsPanelOpen, setIndicatorsPanelOpen] = useState(true);
+  const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const rightPanelRef = useRef<HTMLDivElement>(null);
 
   const modelAttrs = model.attributes.filter(a => a.isModelAttribute);
   const attrToColorMappings = model.mappings.filter(m => m.isAttributeToColor);
@@ -977,77 +996,104 @@ export function SimulatorView() {
           >#</button>
         </div>
 
-        {/* Right-side expand buttons (stacked vertically) */}
-        <div className={styles.rightExpandBtns} data-sim-overlay>
-          {!brushPanelOpen && (
-            <button className={styles.panelExpandBtnRight} onClick={() => setBrushPanelOpen(true)} title="Open brush">&#9998;</button>
-          )}
-          {!indicatorsPanelOpen && (model.indicators || []).length > 0 && (
-            <button className={styles.panelExpandBtnRight} onClick={() => setIndicatorsPanelOpen(true)} title="Open indicators">&#x1D4D8;</button>
-          )}
-        </div>
+        {/* Right panel expand button */}
+        {!rightPanelOpen && (
+          <button className={styles.panelExpandBtnRight} data-sim-overlay
+            onClick={() => setRightPanelOpen(true)} title="Open side panel">&lsaquo;</button>
+        )}
       </div>
 
-      {/* === Right Column (two stacked panels with proper flex sizing) === */}
-      {(brushPanelOpen || (indicatorsPanelOpen && (model.indicators || []).length > 0)) && (
-        <div className={styles.rightColumn}>
-          {/* Brush Panel (top, shrink-to-fit when indicators open) */}
-          {brushPanelOpen && (
-            <div className={`${styles.rightSubPanel} ${indicatorsPanelOpen && (model.indicators || []).length > 0 ? styles.rightSubPanelShrink : ''}`}>
-              <div className={styles.panelHeader}>
-                <span className={styles.panelTitle}>Input Mapping (C{'\u2192'}A)</span>
-                <button className={styles.panelCollapseBtn} onClick={() => setBrushPanelOpen(false)}>&rsaquo;</button>
-              </div>
-              {colorToAttrMappings.length > 0 && (
-                <div className={styles.mappingTabs}>
-                  {colorToAttrMappings.map(m => (
-                    <button
-                      key={m.id}
-                      className={`${styles.mappingTab} ${brushMapping === m.id ? styles.mappingTabActive : ''}`}
-                      onClick={() => setBrushMapping(m.id)}
-                    >
-                      {m.name}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <div className={styles.fieldRow}>
-                <span className={styles.statLabel}>Color</span>
-                <input type="color" className={styles.colorPicker} value={brushColor}
-                  onChange={e => setBrushColor(e.target.value)} />
-              </div>
-              <div className={styles.fieldRow}>
-                <span className={styles.statLabel}>W</span>
-                <input className={styles.brushInput} type="number" min={1} max={(gridWidth.current || simWidth) * 2} value={brushW}
-                  onChange={e => setBrushW(Math.max(1, Number(e.target.value) || 1))} />
-                <span className={styles.statLabel}>H</span>
-                <input className={styles.brushInput} type="number" min={1} max={(gridHeight.current || simHeight) * 2} value={brushH}
-                  onChange={e => setBrushH(Math.max(1, Number(e.target.value) || 1))} />
-              </div>
-              <hr className={styles.divider} />
-              <button className={styles.controlButton} onClick={() => imageInputRef.current?.click()}>
-                Open Image
-              </button>
-              <input ref={imageInputRef} type="file" accept=".png,.bmp,.jpg,.jpeg" style={{ display: 'none' }} onChange={handleImageImport} />
-              <label className={styles.checkRow}>
-                <input type="checkbox" checked={showBrushCursor} onChange={e => setShowBrushCursor(e.target.checked)} />
-                Show brush cursor
-              </label>
-              <div className={styles.hint}>LMB: paint / RMB: pan / Ctrl+LMB drag: resize brush</div>
-            </div>
-          )}
+      {/* === Right Panel (single shared panel, resizable via left border drag) === */}
+      {rightPanelOpen && (
+        <div className={styles.rightPanel} ref={rightPanelRef}>
+          {/* Collapse button outside panel (left edge tab) */}
+          <button
+            className={styles.rightPanelCollapseTab}
+            onClick={() => setRightPanelOpen(false)}
+            title="Close side panel"
+          >&rsaquo;</button>
 
-          {/* Indicators Panel (bottom, grows to fill remaining space) */}
-          {indicatorsPanelOpen && (model.indicators || []).length > 0 && (
-            <div className={`${styles.rightSubPanel} ${styles.rightSubPanelGrow}`}>
+          {/* Drag handle on full left border */}
+          <div
+            className={styles.rightPanelResizeHandle}
+            onMouseDown={e => {
+              e.preventDefault();
+              const panel = rightPanelRef.current;
+              if (!panel) return;
+              const startX = e.clientX;
+              const startW = panel.offsetWidth;
+              const onMove = (ev: MouseEvent) => {
+                const newW = Math.max(160, startW - (ev.clientX - startX));
+                panel.style.width = newW + 'px';
+              };
+              const onUp = () => {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+              };
+              document.addEventListener('mousemove', onMove);
+              document.addEventListener('mouseup', onUp);
+            }}
+          />
+
+          {/* Brush Section (top, shrinks to content) */}
+          <div className={`${styles.rightPanelSection} ${styles.rightSectionBrush}`}>
+            <div className={styles.panelHeader}>
+              <span className={styles.panelTitle}>Input Mapping (C{'\u2192'}A)</span>
+            </div>
+            {colorToAttrMappings.length > 0 && (
+              <div className={styles.mappingTabs}>
+                {colorToAttrMappings.map(m => (
+                  <button
+                    key={m.id}
+                    className={`${styles.mappingTab} ${brushMapping === m.id ? styles.mappingTabActive : ''}`}
+                    onClick={() => setBrushMapping(m.id)}
+                  >
+                    {m.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className={styles.fieldRow}>
+              <span className={styles.statLabel}>Color</span>
+              <input type="color" className={styles.colorPicker} value={brushColor}
+                onChange={e => setBrushColor(e.target.value)} />
+            </div>
+            <div className={styles.fieldRow}>
+              <span className={styles.statLabel}>W</span>
+              <input className={styles.brushInput} type="number" min={1} max={(gridWidth.current || simWidth) * 2} value={brushW}
+                onChange={e => setBrushW(Math.max(1, Number(e.target.value) || 1))} />
+              <span className={styles.statLabel}>H</span>
+              <input className={styles.brushInput} type="number" min={1} max={(gridHeight.current || simHeight) * 2} value={brushH}
+                onChange={e => setBrushH(Math.max(1, Number(e.target.value) || 1))} />
+            </div>
+            <hr className={styles.divider} />
+            <button className={styles.controlButton} onClick={() => imageInputRef.current?.click()}>
+              Open Image
+            </button>
+            <input ref={imageInputRef} type="file" accept=".png,.bmp,.jpg,.jpeg" style={{ display: 'none' }} onChange={handleImageImport} />
+            <label className={styles.checkRow}>
+              <input type="checkbox" checked={showBrushCursor} onChange={e => setShowBrushCursor(e.target.checked)} />
+              Show brush cursor
+            </label>
+            <div className={styles.hint}>LMB: paint / RMB: pan / Ctrl+LMB drag: resize brush</div>
+          </div>
+
+          {/* Indicators Section (bottom, fills remaining space) */}
+          {(model.indicators || []).length > 0 && (
+            <div className={`${styles.rightPanelSection} ${styles.rightSectionIndicators}`}>
               <div className={styles.panelHeader}>
                 <span className={styles.panelTitle}>Indicators</span>
-                <button className={styles.panelCollapseBtn} onClick={() => setIndicatorsPanelOpen(false)}>&rsaquo;</button>
               </div>
               <IndicatorDisplay
                 indicators={model.indicators || []}
                 values={indicatorValuesRef.current}
+                history={indicatorHistoryRef.current}
+                generation={generation}
                 onToggleWatch={(id, watched) => updateIndicator(id, { watched })}
+                onChartToggle={(id, expanded) => {
+                  if (expanded) chartExpandedRef.current.add(id);
+                  else chartExpandedRef.current.delete(id);
+                }}
               />
             </div>
           )}

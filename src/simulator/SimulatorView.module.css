@@ -18,37 +18,98 @@
   overflow-y: auto;
 }
 
-.rightColumn {
-  width: 200px;
-  min-width: 200px;
+/* --- Right side panel (shared, resizable via left border drag) --- */
+
+.rightPanel {
+  background: #16213e;
+  width: 220px;
+  min-width: 160px;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid #2d4059;
-  background: #16213e;
+  position: relative;
+  overflow: visible;
 }
 
-.rightSubPanel {
-  padding: 12px;
+.rightPanelCollapseTab {
+  position: absolute;
+  top: 8px;
+  left: -18px;
+  z-index: 6;
+  background: rgba(30, 42, 58, 0.9);
+  border: 1px solid #2d4059;
+  border-right: none;
+  border-radius: 4px 0 0 4px;
+  color: #6080a0;
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: 12px 4px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.rightPanelCollapseTab:hover {
+  color: #4cc9f0;
+}
+
+.rightPanelResizeHandle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 4px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 5;
+  background: #2d4059;
+  transition: background 0.15s;
+}
+
+.rightPanelResizeHandle:hover,
+.rightPanelResizeHandle:active {
+  background: #4cc9f0;
+}
+
+.rightPanelSection {
+  padding: 10px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   overflow-y: auto;
 }
 
-.rightSubPanel + .rightSubPanel {
+.rightPanelSection + .rightPanelSection {
   border-top: 1px solid #2d4059;
 }
 
-/* When indicators panel is also open, brush panel shrinks to content */
-.rightSubPanelShrink {
+/* Brush section: shrink to content */
+.rightSectionBrush {
   flex: 0 0 auto;
-  max-height: 35%;
 }
 
-/* Indicators panel grows to fill remaining space */
-.rightSubPanelGrow {
+/* Indicators section: fill remaining space */
+.rightSectionIndicators {
   flex: 1 1 0;
   min-height: 0;
+}
+
+.panelExpandBtnRight {
+  position: absolute;
+  top: 8px;
+  right: 0;
+  z-index: 10;
+  background: rgba(30, 42, 58, 0.9);
+  border: 1px solid #2d4059;
+  border-right: none;
+  border-radius: 4px 0 0 4px;
+  color: #6080a0;
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: 12px 4px;
+  transition: color 0.15s;
+  line-height: 1;
+}
+
+.panelExpandBtnRight:hover {
+  color: #4cc9f0;
 }
 
 .panelHeader {
@@ -105,31 +166,6 @@
   color: #4cc9f0;
 }
 
-.rightExpandBtns {
-  position: absolute;
-  top: 8px;
-  right: 0;
-  z-index: 10;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.panelExpandBtnRight {
-  background: rgba(30, 42, 58, 0.9);
-  border: 1px solid #2d4059;
-  border-right: none;
-  border-radius: 4px 0 0 4px;
-  color: #6080a0;
-  font-size: 0.9rem;
-  cursor: pointer;
-  padding: 12px 4px;
-  transition: color 0.15s;
-}
-
-.panelExpandBtnRight:hover {
-  color: #4cc9f0;
-}
 
 /* --- Stat & control reusables --- */
 

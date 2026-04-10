@@ -41,6 +41,27 @@
   cursor: default;
 }
 
+.chartBtn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.5rem;
+  padding: 0;
+  line-height: 1;
+  color: #6080a0;
+  width: 14px;
+  text-align: center;
+  transition: color 0.15s;
+}
+
+.chartBtn:hover {
+  color: #4cc9f0;
+}
+
+.chartBtnActive {
+  color: #4cc9f0;
+}
+
 .name {
   font-size: 0.7rem;
   color: #e0e0e0;
@@ -69,12 +90,18 @@
   font-family: monospace;
 }
 
+.sparklineWrap {
+  margin-top: 4px;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
 .freqTable {
   margin-top: 4px;
   display: flex;
   flex-direction: column;
   gap: 1px;
-  max-height: 120px;
+  max-height: 160px;
   overflow-y: auto;
 }
 
@@ -83,6 +110,44 @@
   justify-content: space-between;
   font-size: 0.65rem;
   padding: 1px 4px 1px 20px;
+}
+
+/* Histogram bar row */
+.freqBarRow {
+  display: flex;
+  align-items: center;
+  font-size: 0.65rem;
+  padding: 1px 4px 1px 4px;
+  gap: 4px;
+}
+
+.freqBarRow .freqKey {
+  width: 40px;
+  min-width: 40px;
+  flex: none;
+}
+
+.freqBarTrack {
+  flex: 1;
+  height: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.freqBar {
+  height: 100%;
+  background: rgba(76, 201, 240, 0.45);
+  border-radius: 2px;
+  min-width: 1px;
+  transition: width 0.1s ease-out;
+}
+
+.freqBarRow .freqCount {
+  width: 36px;
+  min-width: 36px;
+  flex: none;
+  text-align: right;
 }
 
 .freqKey {
@@ -96,6 +161,7 @@
 .freqCount {
   color: #4cc9f0;
   font-family: monospace;
+  font-size: 0.6rem;
   margin-left: 8px;
   flex-shrink: 0;
 }
