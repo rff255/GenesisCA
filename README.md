@@ -62,10 +62,10 @@ A complete GenesisCA model definition consists of:
 
 ### The Modeler
 - **Properties Panel** — model metadata, grid dimensions, boundary treatment (torus/constant), update mode (synchronous/asynchronous), tags
-- **Attributes Panel** — cell and model attributes with type-specific default value controls (bool, integer, float, tag, list, color)
+- **Attributes Panel** — cell and model attributes with type-specific default value controls (bool, integer, float, tag, color)
 - **Neighborhoods Panel** — interactive grid editor with per-neighborhood margin, and a Duplicate button for quick variations
 - **Mappings Panel** — Attribute-to-Color and Color-to-Attribute mapping definitions
-- **Graph Editor** — 25 node types across 6 categories (flow, data, logic, aggregation, output, color), with RMB pan, scroll zoom, and snap-to-grid
+- **Graph Editor** — 26 node types across 7 categories (event, flow, data, logic, aggregation, output, color), with RMB pan, scroll zoom, and snap-to-grid
 - **Connection validation** — prevents incompatible connections (flow/value), cycles, and duplicate inputs; compatible ports highlight during drag
 - **Inline Port Widgets** — input ports show small value editors (number/bool) when unconnected, eliminating the need for constant nodes in simple cases
 - **Node Collapse/Expand** — double-click any node to collapse it; constants show their value; collapsed nodes temporarily expand when connecting edges
@@ -81,7 +81,7 @@ A complete GenesisCA model definition consists of:
 ### Asynchronous Mode
 - **Update Mode** — choose Synchronous (classic CA) or Asynchronous (sequential updates with single buffer) in Model Properties
 - **Update Schemes** — Random Order, Random Independent, or Cyclic — balancing accuracy vs. performance
-- **Async-only nodes** — Set Neighborhood Attribute, Set/Get Neighbor Attr By Index for number-conserving movement patterns
+- **Async-only nodes** — Set Neighborhood Attribute, Set Neighbor Attr By Index for number-conserving movement patterns. Get Neighbor Attr By Index works in both modes.
 
 ### The Simulator
 - **Transport bar** — Play/Pause/Step/Reset with FPS and Gens/Frame sliders, keyboard shortcuts (Space=step, Enter=play/pause, Esc=reset)

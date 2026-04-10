@@ -16,7 +16,9 @@
       "customizable params",
       "alternative neighborhoods",
       "outer totalistic"
-    ]
+    ],
+    "updateMode": "synchronous",
+    "asyncScheme": "random-order"
   },
   "attributes": [
     {
@@ -138,7 +140,8 @@
           3,
           1
         ]
-      ]
+      ],
+      "margin": 2
     },
     {
       "id": "new_neighborhood_mnozpfe0xnf",
@@ -201,7 +204,8 @@
           1,
           -2
         ]
-      ]
+      ],
+      "margin": 2
     },
     {
       "id": "new_neighborhood_mnozq335pox",
@@ -264,7 +268,8 @@
           2,
           2
         ]
-      ]
+      ],
+      "margin": 2
     }
   ],
   "mappings": [
@@ -316,72 +321,74 @@
   ],
   "graphNodes": [
     {
-      "id": "nmnp0zrcdp9q",
+      "id": "nmnscap1v4i2",
       "type": "groupNode",
       "position": {
-        "x": -1340,
-        "y": 800
-      },
-      "data": {
-        "label": "Update Output Color Domain View",
-        "width": 1360,
-        "height": 580,
-        "nodeType": "group",
-        "config": {}
-      }
-    },
-    {
-      "id": "nmnp0z7vhu0w",
-      "type": "groupNode",
-      "position": {
-        "x": -860,
-        "y": 120
-      },
-      "data": {
-        "label": "Update Output Color Trace/Binary",
-        "width": 750,
-        "height": 600,
-        "nodeType": "group",
-        "config": {}
-      }
-    },
-    {
-      "id": "nmno04wj3pc6",
-      "type": "groupNode",
-      "position": {
-        "x": -90,
-        "y": 300
-      },
-      "data": {
-        "label": "Trace of live cells",
-        "width": 820,
-        "height": 572.9326512439673,
-        "nodeType": "group",
-        "config": {},
-        "groupColor": "#819744"
-      }
-    },
-    {
-      "id": "nmno03hqnw4f",
-      "type": "groupNode",
-      "position": {
-        "x": -320,
-        "y": -980
+        "x": -200,
+        "y": -900
       },
       "data": {
         "label": "Color Input effect (manual brush or image load)",
         "width": 692.1230707425473,
-        "height": 770,
+        "height": 700,
         "nodeType": "group",
         "config": {}
+      }
+    },
+    {
+      "id": "nmnsc93u3yrr",
+      "type": "groupNode",
+      "position": {
+        "x": -100,
+        "y": 620
+      },
+      "data": {
+        "label": "Update Output Color Domain View",
+        "width": 1400,
+        "height": 600,
+        "nodeType": "group",
+        "config": {},
+        "groupColor": "#ab4444"
+      }
+    },
+    {
+      "id": "nmnsc8dextu9",
+      "type": "groupNode",
+      "position": {
+        "x": -1020,
+        "y": 140
+      },
+      "data": {
+        "label": "Update Output Color Trace/Binary",
+        "width": 870,
+        "height": 600,
+        "nodeType": "group",
+        "config": {},
+        "groupColor": "#80722d"
+      }
+    },
+    {
+      "id": "nmnsc7n8fqs6",
+      "type": "groupNode",
+      "position": {
+        "x": 0,
+        "y": 160
+      },
+      "data": {
+        "label": "Trace of Living cells",
+        "width": 790,
+        "height": 360,
+        "nodeType": "group",
+        "config": {},
+        "groupColor": "#32856c"
       }
     },
     {
       "id": "n4",
       "type": "caNode",
       "position": {
-        "x": -820,
-        "y": -60
+        "x": -440,
+        "y": -80
       },
       "data": {
         "nodeType": "step",
@@ -392,13 +399,14 @@
       "id": "n5",
       "type": "caNode",
       "position": {
-        "x": 880,
-        "y": 200
+        "x": 780,
+        "y": 60
       },
       "data": {
         "nodeType": "setAttribute",
         "config": {
-          "attributeId": "alive"
+          "attributeId": "alive",
+          "_port_value": "true"
         }
       }
     },
@@ -406,8 +414,8 @@
       "id": "n6",
       "type": "caNode",
       "position": {
-        "x": 81.83515404435137,
-        "y": 47.21700913282251
+        "x": 72,
+        "y": -33
       },
       "data": {
         "nodeType": "conditional",
@@ -418,8 +426,8 @@
       "id": "n7",
       "type": "caNode",
       "position": {
-        "x": -120,
-        "y": 100
+        "x": -130,
+        "y": 20
       },
       "data": {
         "nodeType": "getCellAttribute",
@@ -432,8 +440,8 @@
       "id": "n8",
       "type": "caNode",
       "position": {
-        "x": 520,
-        "y": 0
+        "x": 510,
+        "y": -120
       },
       "data": {
         "nodeType": "conditional",
@@ -444,8 +452,8 @@
       "id": "n9",
       "type": "caNode",
       "position": {
-        "x": 520,
-        "y": 160
+        "x": 510,
+        "y": 40
       },
       "data": {
         "nodeType": "conditional",
@@ -453,26 +461,11 @@
       }
     },
     {
-      "id": "n14",
-      "type": "caNode",
-      "position": {
-        "x": 700,
-        "y": 220
-      },
-      "data": {
-        "nodeType": "getConstant",
-        "config": {
-          "constType": "bool",
-          "constValue": "true"
-        }
-      }
-    },
-    {
       "id": "n20",
       "type": "caNode",
       "position": {
-        "x": 880,
-        "y": 0
+        "x": 780,
+        "y": -140
       },
       "data": {
         "nodeType": "setAttribute",
@@ -486,14 +479,15 @@
       "type": "caNode",
       "position": {
         "x": 700,
-        "y": 60
+        "y": -60
       },
       "data": {
         "nodeType": "getConstant",
         "config": {
           "constType": "bool",
           "constValue": "false"
-        }
+        },
+        "isCollapsed": true
       }
     },
     {
@@ -501,14 +495,14 @@
       "type": "caNode",
       "position": {
         "x": 40,
-        "y": 40
+        "y": 60
       },
       "data": {
         "nodeType": "inputColor",
         "config": {
           "mappingId": "paint"
         },
-        "parentId": "nmno03hqnw4f"
+        "parentId": "nmnscap1v4i2"
       }
     },
     {
@@ -516,14 +510,14 @@
       "type": "caNode",
       "position": {
         "x": 233.03100024947162,
-        "y": 147.33550225570912
+        "y": 167.33550225570912
       },
       "data": {
         "nodeType": "statement",
         "config": {
           "operation": ">"
         },
-        "parentId": "nmno03hqnw4f"
+        "parentId": "nmnscap1v4i2"
       }
     },
     {
@@ -531,7 +525,7 @@
       "type": "caNode",
       "position": {
         "x": 80,
-        "y": 540
+        "y": 560
       },
       "data": {
         "nodeType": "getRandom",
@@ -540,23 +534,7 @@
           "min": "0",
           "max": "1"
         },
-        "parentId": "nmno03hqnw4f"
-      }
-    },
-    {
-      "id": "nmnn6pdd7osw",
-      "type": "caNode",
-      "position": {
-        "x": 40,
-        "y": 187.97712308379084
-      },
-      "data": {
-        "nodeType": "getConstant",
-        "config": {
-          "constType": "integer",
-          "constValue": "0"
-        },
-        "parentId": "nmno03hqnw4f"
+        "parentId": "nmnscap1v4i2"
       }
     },
     {
@@ -564,14 +542,14 @@
       "type": "caNode",
       "position": {
         "x": 412.7335237586544,
-        "y": 60
+        "y": 80
       },
       "data": {
         "nodeType": "setAttribute",
         "config": {
           "attributeId": "alive"
         },
-        "parentId": "nmno03hqnw4f"
+        "parentId": "nmnscap1v4i2"
       }
     },
     {
@@ -579,14 +557,14 @@
       "type": "caNode",
       "position": {
         "x": 72.12307074254721,
-        "y": 326.31200399284046
+        "y": 346.31200399284046
       },
       "data": {
         "nodeType": "inputColor",
         "config": {
           "mappingId": "new_mapping_2"
         },
-        "parentId": "nmno03hqnw4f"
+        "parentId": "nmnscap1v4i2"
       }
     },
     {
@@ -594,157 +572,100 @@
       "type": "caNode",
       "position": {
         "x": 452.1230707425472,
-        "y": 326.31200399284046
+        "y": 346.31200399284046
       },
       "data": {
         "nodeType": "setAttribute",
         "config": {
           "attributeId": "alive"
         },
-        "parentId": "nmno03hqnw4f"
-      }
-    },
-    {
-      "id": "nmnnb8mx6q0v",
-      "type": "caNode",
-      "position": {
-        "x": 239.25891934636195,
-        "y": 64.17703631160799
-      },
-      "data": {
-        "nodeType": "getConstant",
-        "config": {
-          "constType": "integer",
-          "constValue": "200"
-        },
-        "parentId": "nmno04wj3pc6"
+        "parentId": "nmnscap1v4i2"
       }
     },
     {
       "id": "nmnnb8qcry9i",
       "type": "caNode",
       "position": {
-        "x": 590,
-        "y": 40
+        "x": 550,
+        "y": 60
       },
       "data": {
         "nodeType": "setAttribute",
         "config": {
-          "attributeId": "new_attribute_2"
+          "attributeId": "new_attribute_2",
+          "_port_value": "200"
         },
-        "parentId": "nmno04wj3pc6"
+        "parentId": "nmnsc7n8fqs6"
       }
     },
     {
       "id": "nmnnbaxs9dv5",
       "type": "caNode",
       "position": {
-        "x": 590,
-        "y": 200
+        "x": 540,
+        "y": 160
       },
       "data": {
         "nodeType": "setAttribute",
         "config": {
           "attributeId": "new_attribute_2"
         },
-        "parentId": "nmno04wj3pc6"
+        "parentId": "nmnsc7n8fqs6"
       }
     },
     {
       "id": "nmnnbdeay51o",
       "type": "caNode",
       "position": {
-        "x": 38.30712352184321,
-        "y": 196.13910139512632
+        "x": 40,
+        "y": 200
       },
       "data": {
         "nodeType": "getCellAttribute",
         "config": {
           "attributeId": "new_attribute_2"
         },
-        "parentId": "nmno04wj3pc6"
+        "parentId": "nmnsc7n8fqs6",
+        "isCollapsed": true
       }
     },
     {
       "id": "nmnnbdiqxonq",
       "type": "caNode",
       "position": {
-        "x": 240.02052822405187,
-        "y": 228.93802898898127
+        "x": 180,
+        "y": 180
       },
       "data": {
         "nodeType": "arithmeticOperator",
         "config": {
-          "operation": "-"
+          "operation": "-",
+          "_port_y": "5"
         },
-        "parentId": "nmno04wj3pc6"
-      }
-    },
-    {
-      "id": "nmnnbdtkhyq6",
-      "type": "caNode",
-      "position": {
-        "x": 30,
-        "y": 300
-      },
-      "data": {
-        "nodeType": "getConstant",
-        "config": {
-          "constType": "integer",
-          "constValue": "5"
-        },
-        "parentId": "nmno04wj3pc6"
+        "parentId": "nmnsc7n8fqs6",
+        "isCollapsed": false
       }
     },
     {
       "id": "nmnnbdzlxupr",
       "type": "caNode",
       "position": {
-        "x": 410,
-        "y": 240
+        "x": 360,
+        "y": 220
       },
       "data": {
         "nodeType": "arithmeticOperator",
         "config": {
           "operation": "max"
         },
-        "parentId": "nmno04wj3pc6"
-      }
-    },
-    {
-      "id": "nmnnbe8sqv9o",
-      "type": "caNode",
-      "position": {
-        "x": 230,
-        "y": 320
-      },
-      "data": {
-        "nodeType": "getConstant",
-        "config": {
-          "constType": "integer",
-          "constValue": "0"
-        },
-        "parentId": "nmno04wj3pc6"
-      }
-    },
-    {
-      "id": "nmnnbfh7s6xj",
-      "type": "caNode",
-      "position": {
-        "x": -566,
-        "y": 44
-      },
-      "data": {
-        "nodeType": "sequence",
-        "config": {},
-        "label": "Update State then Color Output"
+        "parentId": "nmnsc7n8fqs6"
       }
     },
     {
       "id": "nmnnbgx6s4jf",
       "type": "caNode",
       "position": {
-        "x": 510,
+        "x": 630,
         "y": 340
       },
       "data": {
@@ -752,81 +673,70 @@
         "config": {
           "mappingId": "new_mapping_6"
         },
-        "parentId": "nmnp0z7vhu0w"
+        "parentId": "nmnsc8dextu9"
       }
     },
     {
       "id": "nmnnbh86pr7v",
       "type": "caNode",
       "position": {
-        "x": 311,
-        "y": 345
+        "x": 480,
+        "y": 380
       },
       "data": {
         "nodeType": "getCellAttribute",
         "config": {
           "attributeId": "new_attribute_2"
         },
-        "parentId": "nmnp0z7vhu0w"
+        "parentId": "nmnsc8dextu9",
+        "isCollapsed": true
       }
     },
     {
       "id": "nmnncdpy7jkk",
       "type": "caNode",
       "position": {
-        "x": 227,
+        "x": 347,
         "y": 141
       },
       "data": {
         "nodeType": "conditional",
         "config": {},
-        "parentId": "nmnp0z7vhu0w"
+        "parentId": "nmnsc8dextu9"
       }
     },
     {
       "id": "nmnnce6dqlfi",
       "type": "caNode",
       "position": {
-        "x": 510,
+        "x": 630,
         "y": 200
       },
       "data": {
         "nodeType": "setColorViewer",
         "config": {
-          "mappingId": "new_mapping_6"
+          "mappingId": "new_mapping_6",
+          "_port_r": "200",
+          "_port_g": "200",
+          "_port_b": "200"
         },
-        "parentId": "nmnp0z7vhu0w"
-      }
-    },
-    {
-      "id": "nmnncecbk5u3",
-      "type": "caNode",
-      "position": {
-        "x": 300,
-        "y": 240
-      },
-      "data": {
-        "nodeType": "getConstant",
-        "config": {
-          "constType": "integer",
-          "constValue": "200"
-        },
-        "parentId": "nmnp0z7vhu0w"
+        "parentId": "nmnsc8dextu9"
       }
     },
     {
       "id": "nmnncgefih9c",
       "type": "caNode",
       "position": {
-        "x": 40,
-        "y": 142
+        "x": 260,
+        "y": 180
       },
       "data": {
         "nodeType": "getCellAttribute",
         "config": {
           "attributeId": "alive"
         },
-        "parentId": "nmnp0z7vhu0w"
+        "parentId": "nmnsc8dextu9",
+        "isCollapsed": true
       }
     },
     {
@@ -834,14 +744,14 @@
       "type": "caNode",
       "position": {
         "x": 272.1230707425472,
-        "y": 386.31200399284046
+        "y": 406.31200399284046
       },
       "data": {
         "nodeType": "statement",
         "config": {
           "operation": ">="
         },
-        "parentId": "nmno03hqnw4f"
+        "parentId": "nmnscap1v4i2"
       }
     },
     {
@@ -849,22 +759,22 @@
       "type": "caNode",
       "position": {
         "x": 60,
-        "y": 460
+        "y": 480
       },
       "data": {
         "nodeType": "getModelAttribute",
         "config": {
           "attributeId": "new_attribute_4"
         },
-        "parentId": "nmno03hqnw4f"
+        "parentId": "nmnscap1v4i2"
       }
     },
     {
       "id": "nmno12xxa9g2",
       "type": "caNode",
       "position": {
-        "x": 340,
-        "y": 80
+        "x": 330,
+        "y": -40
       },
       "data": {
         "nodeType": "macro",
@@ -878,36 +788,37 @@
       "id": "nmnp006skwrv",
       "type": "caNode",
       "position": {
-        "x": 200,
-        "y": 180
+        "x": 340,
+        "y": 200
       },
       "data": {
         "nodeType": "conditional",
         "config": {},
-        "parentId": "nmnp0zrcdp9q"
+        "parentId": "nmnsc93u3yrr"
       }
     },
     {
       "id": "nmnp00d2rbux",
       "type": "caNode",
       "position": {
-        "x": 40,
-        "y": 200
+        "x": 220,
+        "y": 240
       },
       "data": {
         "nodeType": "getCellAttribute",
         "config": {
           "attributeId": "new_attribute_mnozx9w25wi"
         },
-        "parentId": "nmnp0zrcdp9q"
+        "parentId": "nmnsc93u3yrr",
+        "isCollapsed": true
       }
     },
     {
       "id": "nmnp039iefxc",
       "type": "caNode",
       "position": {
-        "x": 880,
-        "y": 100
+        "x": 780,
+        "y": -40
       },
       "data": {
         "nodeType": "setAttribute",
@@ -920,22 +831,25 @@
       "id": "nmnp0aclxggq",
       "type": "caNode",
       "position": {
-        "x": 510,
+        "x": 630,
         "y": 60
       },
       "data": {
         "nodeType": "setColorViewer",
         "config": {
-          "mappingId": "new_mapping_mnozs1m8oh2"
+          "mappingId": "new_mapping_mnozs1m8oh2",
+          "_port_r": "200",
+          "_port_g": "200",
+          "_port_b": "200"
         },
-        "parentId": "nmnp0z7vhu0w"
+        "parentId": "nmnsc8dextu9"
       }
     },
     {
       "id": "nmnp0c4sj7fx",
       "type": "caNode",
       "position": {
-        "x": 510,
+        "x": 630,
         "y": 460
       },
       "data": {
@@ -943,60 +857,46 @@
         "config": {
           "mappingId": "new_mapping_mnozs1m8oh2"
         },
-        "parentId": "nmnp0z7vhu0w"
+        "parentId": "nmnsc8dextu9"
       }
     },
     {
       "id": "nmnp0dn8xez5",
       "type": "caNode",
       "position": {
-        "x": 380,
-        "y": 260
+        "x": 520,
+        "y": 280
       },
       "data": {
         "nodeType": "setColorViewer",
         "config": {
-          "mappingId": "new_mapping_mnozsm1bunm"
+          "mappingId": "new_mapping_mnozsm1bunm",
+          "_port_r": "200",
+          "_port_g": "200",
+          "_port_b": "200"
         },
-        "parentId": "nmnp0zrcdp9q"
-      }
-    },
-    {
-      "id": "nmnp0dvhuz6y",
-      "type": "caNode",
-      "position": {
-        "x": 200,
-        "y": 280
-      },
-      "data": {
-        "nodeType": "getColorConstant",
-        "config": {
-          "r": "200",
-          "g": "200",
-          "b": "200"
-        },
-        "parentId": "nmnp0zrcdp9q"
+        "parentId": "nmnsc93u3yrr"
       }
     },
     {
       "id": "nmnp0esjct5l",
       "type": "caNode",
       "position": {
-        "x": 580,
-        "y": 180
+        "x": 720,
+        "y": 200
       },
       "data": {
         "nodeType": "conditional",
         "config": {},
         "label": "Horizontal pattern",
-        "parentId": "nmnp0zrcdp9q"
+        "parentId": "nmnsc93u3yrr"
       }
     },
     {
       "id": "nmnp0f94juy2",
       "type": "caNode",
       "position": {
-        "x": 360,
+        "x": 500,
         "y": 60
       },
       "data": {
@@ -1005,15 +905,15 @@
           "neighborhoodId": "new_neighborhood_mnozq335pox",
           "attributeId": "alive"
         },
-        "parentId": "nmnp0zrcdp9q"
+        "parentId": "nmnsc93u3yrr"
       }
     },
     {
       "id": "nmnp0qf1athz",
       "type": "caNode",
       "position": {
-        "x": 380,
-        "y": 140
+        "x": 520,
+        "y": 160
       },
       "data": {
         "nodeType": "macro",
@@ -1021,29 +921,29 @@
           "macroDefId": "macro_mnp0qf19"
         },
         "label": "Test pattern",
-        "parentId": "nmnp0zrcdp9q"
+        "parentId": "nmnsc93u3yrr"
       }
     },
     {
       "id": "nmnp0tma79m0",
       "type": "caNode",
       "position": {
-        "x": 780,
-        "y": 360
+        "x": 920,
+        "y": 380
       },
       "data": {
         "nodeType": "conditional",
         "config": {},
         "label": "Vertical Pattern",
-        "parentId": "nmnp0zrcdp9q"
+        "parentId": "nmnsc93u3yrr"
       }
     },
     {
       "id": "nmnp0tyv7zim",
       "type": "caNode",
       "position": {
-        "x": 600,
-        "y": 400
+        "x": 740,
+        "y": 420
       },
       "data": {
         "nodeType": "macro",
@@ -1051,15 +951,15 @@
           "macroDefId": "macro_mnp0qf19"
         },
         "label": "Test pattern",
-        "parentId": "nmnp0zrcdp9q"
+        "parentId": "nmnsc93u3yrr"
       }
     },
     {
       "id": "nmnp0uax6utd",
       "type": "caNode",
       "position": {
-        "x": 580,
-        "y": 300
+        "x": 720,
+        "y": 320
       },
       "data": {
         "nodeType": "getNeighborsAttribute",
@@ -1067,99 +967,72 @@
           "neighborhoodId": "new_neighborhood_mnozpfe0xnf",
           "attributeId": "alive"
         },
-        "parentId": "nmnp0zrcdp9q"
+        "parentId": "nmnsc93u3yrr"
       }
     },
     {
       "id": "nmnp0vey25o7",
       "type": "caNode",
       "position": {
-        "x": 940,
-        "y": 120
+        "x": 1160,
+        "y": 160
       },
       "data": {
         "nodeType": "setColorViewer",
         "config": {
-          "mappingId": "new_mapping_mnozsm1bunm"
+          "mappingId": "new_mapping_mnozsm1bunm",
+          "_port_r": "105",
+          "_port_g": "65",
+          "_port_b": "15"
         },
-        "parentId": "nmnp0zrcdp9q"
+        "parentId": "nmnsc93u3yrr"
       }
     },
     {
       "id": "nmnp0vnst383",
       "type": "caNode",
       "position": {
-        "x": 960,
-        "y": 440
+        "x": 1160,
+        "y": 460
       },
       "data": {
         "nodeType": "setColorViewer",
         "config": {
           "mappingId": "new_mapping_mnozsm1bunm"
         },
-        "parentId": "nmnp0zrcdp9q"
+        "parentId": "nmnsc93u3yrr"
       }
     },
     {
       "id": "nmnp0vxupvy8",
       "type": "caNode",
       "position": {
-        "x": 1120,
-        "y": 280
+        "x": 1160,
+        "y": 320
       },
       "data": {
         "nodeType": "setColorViewer",
         "config": {
-          "mappingId": "new_mapping_mnozsm1bunm"
+          "mappingId": "new_mapping_mnozsm1bunm",
+          "_port_r": "182",
+          "_port_g": "40",
+          "_port_b": "9"
         },
-        "parentId": "nmnp0zrcdp9q"
-      }
-    },
-    {
-      "id": "nmnp0w414apl",
-      "type": "caNode",
-      "position": {
-        "x": 960,
-        "y": 300
-      },
-      "data": {
-        "nodeType": "getColorConstant",
-        "config": {
-          "r": "182",
-          "g": "40",
-          "b": "9"
-        },
-        "parentId": "nmnp0zrcdp9q"
-      }
-    },
-    {
-      "id": "nmnp0xw33v5g",
-      "type": "caNode",
-      "position": {
-        "x": 780,
-        "y": 140
-      },
-      "data": {
-        "nodeType": "getColorConstant",
-        "config": {
-          "r": "105",
-          "g": "65",
-          "b": "15"
-        },
-        "parentId": "nmnp0zrcdp9q"
+        "parentId": "nmnsc93u3yrr"
       }
     },
     {
       "id": "nmnp195v0b2o",
       "type": "caNode",
       "position": {
-        "x": -220,
-        "y": -60
+        "x": 80,
+        "y": -120
       },
       "data": {
         "nodeType": "setAttribute",
         "config": {
-          "attributeId": "new_attribute_mnozx9w25wi"
+          "attributeId": "new_attribute_mnozx9w25wi",
+          "_port_value": "true"
         }
       }
     },
@@ -1167,8 +1040,8 @@
       "id": "nmnp19vq3i7j",
       "type": "caNode",
       "position": {
-        "x": -560,
-        "y": -60
+        "x": -200,
+        "y": -80
       },
       "data": {
         "nodeType": "sequence",
@@ -1176,18 +1049,48 @@
       }
     },
     {
-      "id": "nmnp1abrkvxc",
+      "id": "nmnsbw1v4bsf",
       "type": "caNode",
       "position": {
-        "x": -380,
-        "y": -20
+        "x": 40,
+        "y": 140
       },
       "data": {
-        "nodeType": "getConstant",
+        "nodeType": "outputMapping",
         "config": {
-          "constType": "bool",
-          "constValue": "true"
-        }
+          "mappingId": "new_mapping_6"
+        },
+        "parentId": "nmnsc8dextu9"
+      }
+    },
+    {
+      "id": "nmnsbw4uxcvx",
+      "type": "caNode",
+      "position": {
+        "x": 40,
+        "y": 60
+      },
+      "data": {
+        "nodeType": "outputMapping",
+        "config": {
+          "mappingId": "new_mapping_mnozs1m8oh2"
+        },
+        "parentId": "nmnsc8dextu9"
+      }
+    },
+    {
+      "id": "nmnsbwpywakk",
+      "type": "caNode",
+      "position": {
+        "x": 40,
+        "y": 180
+      },
+      "data": {
+        "nodeType": "outputMapping",
+        "config": {
+          "mappingId": "new_mapping_mnozsm1bunm"
+        },
+        "parentId": "nmnsc93u3yrr"
       }
     }
   ],
@@ -1212,13 +1115,6 @@
       "target": "n5",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "xy-edge__n14output_value_value-n5input_value_value",
-      "source": "n14",
-      "target": "n5",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_value"
     },
     {
       "id": "xy-edge__n6output_flow_then-n8input_flow_check",
@@ -1249,13 +1145,6 @@
       "targetHandle": "input_value_x"
     },
     {
-      "id": "xy-edge__nmnn6pdd7oswoutput_value_value-nmnn6niv353rinput_value_y",
-      "source": "nmnn6pdd7osw",
-      "target": "nmnn6niv353r",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
       "id": "xy-edge__nmnn6ml8mgcsoutput_flow_do-nmnn6pqqzgscinput_flow_do",
       "source": "nmnn6ml8mgcs",
       "target": "nmnn6pqqzgsc",
@@ -1275,13 +1164,6 @@
       "target": "nmnn6qulnxrx",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "xy-edge__nmnnb8mx6q0voutput_value_value-nmnnb8qcry9iinput_value_value",
-      "source": "nmnnb8mx6q0v",
-      "target": "nmnnb8qcry9i",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_value"
     },
     {
       "id": "xy-edge__n6output_flow_then-nmnnb8qcry9iinput_flow_do",
@@ -1305,25 +1187,11 @@
       "targetHandle": "input_value_x"
     },
     {
-      "id": "xy-edge__nmnnbdtkhyq6output_value_value-nmnnbdiqxonqinput_value_y",
-      "source": "nmnnbdtkhyq6",
-      "target": "nmnnbdiqxonq",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
       "id": "xy-edge__nmnnbdiqxonqoutput_value_result-nmnnbdzlxuprinput_value_x",
       "source": "nmnnbdiqxonq",
       "target": "nmnnbdzlxupr",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_x"
-    },
-    {
-      "id": "xy-edge__nmnnbe8sqv9ooutput_value_value-nmnnbdzlxuprinput_value_y",
-      "source": "nmnnbe8sqv9o",
-      "target": "nmnnbdzlxupr",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
     },
     {
       "id": "xy-edge__nmnnbdzlxuproutput_value_result-nmnnbaxs9dv5input_value_value",
@@ -1333,13 +1201,6 @@
       "targetHandle": "input_value_value"
     },
     {
-      "id": "xy-edge__nmnnbfh7s6xjoutput_flow_first-n6input_flow_check",
-      "source": "nmnnbfh7s6xj",
-      "target": "n6",
-      "sourceHandle": "output_flow_first",
-      "targetHandle": "input_flow_check"
-    },
-    {
       "id": "xy-edge__nmnnbh86pr7voutput_value_value-nmnnbgx6s4jfinput_value_r",
       "source": "nmnnbh86pr7v",
       "target": "nmnnbgx6s4jf",
@@ -1347,39 +1208,11 @@
       "targetHandle": "input_value_r"
     },
     {
-      "id": "xy-edge__nmnnbfh7s6xjoutput_flow_then-nmnncdpy7jkkinput_flow_check",
-      "source": "nmnnbfh7s6xj",
-      "target": "nmnncdpy7jkk",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_check"
-    },
-    {
       "id": "xy-edge__nmnncdpy7jkkoutput_flow_then-nmnnce6dqlfiinput_flow_do",
       "source": "nmnncdpy7jkk",
       "target": "nmnnce6dqlfi",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "xy-edge__nmnncecbk5u3output_value_value-nmnnce6dqlfiinput_value_r",
-      "source": "nmnncecbk5u3",
-      "target": "nmnnce6dqlfi",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_r"
-    },
-    {
-      "id": "xy-edge__nmnncecbk5u3output_value_value-nmnnce6dqlfiinput_value_b",
-      "source": "nmnncecbk5u3",
-      "target": "nmnnce6dqlfi",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_b"
-    },
-    {
-      "id": "xy-edge__nmnncecbk5u3output_value_value-nmnnce6dqlfiinput_value_g",
-      "source": "nmnncecbk5u3",
-      "target": "nmnnce6dqlfi",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_g"
     },
     {
       "id": "xy-edge__nmnncdpy7jkkoutput_flow_else-nmnnbgx6s4jfinput_flow_do",
@@ -1431,13 +1264,6 @@
       "targetHandle": "input_value_x"
     },
     {
-      "id": "xy-edge__nmnnbfh7s6xjoutput_flow_then-nmnp006skwrvinput_flow_check",
-      "source": "nmnnbfh7s6xj",
-      "target": "nmnp006skwrv",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_check"
-    },
-    {
       "id": "xy-edge__nmnp00d2rbuxoutput_value_value-nmnp006skwrvinput_value_condition",
       "source": "nmnp00d2rbux",
       "target": "nmnp006skwrv",
@@ -1473,27 +1299,6 @@
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "xy-edge__nmnncecbk5u3output_value_value-nmnp0aclxggqinput_value_r",
-      "source": "nmnncecbk5u3",
-      "target": "nmnp0aclxggq",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_r"
-    },
-    {
-      "id": "xy-edge__nmnncecbk5u3output_value_value-nmnp0aclxggqinput_value_g",
-      "source": "nmnncecbk5u3",
-      "target": "nmnp0aclxggq",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_g"
-    },
-    {
-      "id": "xy-edge__nmnncecbk5u3output_value_value-nmnp0aclxggqinput_value_b",
-      "source": "nmnncecbk5u3",
-      "target": "nmnp0aclxggq",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_b"
-    },
-    {
       "id": "xy-edge__nmnncdpy7jkkoutput_flow_else-nmnp0c4sj7fxinput_flow_do",
       "source": "nmnncdpy7jkk",
       "target": "nmnp0c4sj7fx",
@@ -1506,27 +1311,6 @@
       "target": "nmnp0dn8xez5",
       "sourceHandle": "output_flow_else",
       "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "xy-edge__nmnp0dvhuz6youtput_value_r-nmnp0dn8xez5input_value_r",
-      "source": "nmnp0dvhuz6y",
-      "target": "nmnp0dn8xez5",
-      "sourceHandle": "output_value_r",
-      "targetHandle": "input_value_r"
-    },
-    {
-      "id": "xy-edge__nmnp0dvhuz6youtput_value_g-nmnp0dn8xez5input_value_g",
-      "source": "nmnp0dvhuz6y",
-      "target": "nmnp0dn8xez5",
-      "sourceHandle": "output_value_g",
-      "targetHandle": "input_value_g"
-    },
-    {
-      "id": "xy-edge__nmnp0dvhuz6youtput_value_b-nmnp0dn8xez5input_value_b",
-      "source": "nmnp0dvhuz6y",
-      "target": "nmnp0dn8xez5",
-      "sourceHandle": "output_value_b",
-      "targetHandle": "input_value_b"
     },
     {
       "id": "xy-edge__nmnp006skwrvoutput_flow_then-nmnp0esjct5linput_flow_check",
@@ -1599,48 +1383,6 @@
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "xy-edge__nmnp0w414aploutput_value_b-nmnp0vxupvy8input_value_b",
-      "source": "nmnp0w414apl",
-      "target": "nmnp0vxupvy8",
-      "sourceHandle": "output_value_b",
-      "targetHandle": "input_value_b"
-    },
-    {
-      "id": "xy-edge__nmnp0w414aploutput_value_g-nmnp0vxupvy8input_value_g",
-      "source": "nmnp0w414apl",
-      "target": "nmnp0vxupvy8",
-      "sourceHandle": "output_value_g",
-      "targetHandle": "input_value_g"
-    },
-    {
-      "id": "xy-edge__nmnp0w414aploutput_value_r-nmnp0vxupvy8input_value_r",
-      "source": "nmnp0w414apl",
-      "target": "nmnp0vxupvy8",
-      "sourceHandle": "output_value_r",
-      "targetHandle": "input_value_r"
-    },
-    {
-      "id": "xy-edge__nmnp0xw33v5goutput_value_r-nmnp0vey25o7input_value_r",
-      "source": "nmnp0xw33v5g",
-      "target": "nmnp0vey25o7",
-      "sourceHandle": "output_value_r",
-      "targetHandle": "input_value_r"
-    },
-    {
-      "id": "xy-edge__nmnp0xw33v5goutput_value_g-nmnp0vey25o7input_value_g",
-      "source": "nmnp0xw33v5g",
-      "target": "nmnp0vey25o7",
-      "sourceHandle": "output_value_g",
-      "targetHandle": "input_value_g"
-    },
-    {
-      "id": "xy-edge__nmnp0xw33v5goutput_value_b-nmnp0vey25o7input_value_b",
-      "source": "nmnp0xw33v5g",
-      "target": "nmnp0vey25o7",
-      "sourceHandle": "output_value_b",
-      "targetHandle": "input_value_b"
-    },
-    {
       "id": "xy-edge__n4output_flow_do-nmnp19vq3i7jinput_flow_do",
       "source": "n4",
       "target": "nmnp19vq3i7j",
@@ -1655,18 +1397,32 @@
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "xy-edge__nmnp19vq3i7joutput_flow_then-nmnnbfh7s6xjinput_flow_do",
-      "source": "nmnp19vq3i7j",
-      "target": "nmnnbfh7s6xj",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_do"
+      "id": "xy-edge__nmnsbw4uxcvxoutput_flow_do-nmnncdpy7jkkinput_flow_check",
+      "source": "nmnsbw4uxcvx",
+      "target": "nmnncdpy7jkk",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_check"
     },
     {
-      "id": "xy-edge__nmnp1abrkvxcoutput_value_value-nmnp195v0b2oinput_value_value",
-      "source": "nmnp1abrkvxc",
-      "target": "nmnp195v0b2o",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_value"
+      "id": "xy-edge__nmnsbw1v4bsfoutput_flow_do-nmnncdpy7jkkinput_flow_check",
+      "source": "nmnsbw1v4bsf",
+      "target": "nmnncdpy7jkk",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "xy-edge__nmnp19vq3i7joutput_flow_then-n6input_flow_check",
+      "source": "nmnp19vq3i7j",
+      "target": "n6",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "xy-edge__nmnsbwpywakkoutput_flow_do-nmnp006skwrvinput_flow_check",
+      "source": "nmnsbwpywakk",
+      "target": "nmnp006skwrv",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_check"
     }
   ],
   "macroDefs": [

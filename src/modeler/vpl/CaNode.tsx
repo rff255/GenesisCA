@@ -240,6 +240,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
     } else if (nodeData.nodeType === 'setColorViewer') {
       const mapping = model.mappings.find(m => m.id === nodeData.config.mappingId);
       collapsedLabel = mapping ? `Set A\u2192C - ${mapping.name}` : def.label;
+    } else if (nodeData.nodeType === 'inputColor') {
+      const mapping = model.mappings.find(m => m.id === nodeData.config.mappingId);
+      collapsedLabel = mapping ? `C\u2192A: ${mapping.name}` : def.label;
+    } else if (nodeData.nodeType === 'outputMapping') {
+      const mapping = model.mappings.find(m => m.id === nodeData.config.mappingId);
+      collapsedLabel = mapping ? `A\u2192C: ${mapping.name}` : def.label;
     } else {
       collapsedLabel = def.label;
     }
@@ -538,6 +544,21 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <option value="">Select Mapping...</option>
             {model.mappings
               .filter(m => !m.isAttributeToColor)
+              .map(m => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+          </select>
+        )}
+
+        {nodeData.nodeType === 'outputMapping' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.mappingId as string) || ''}
+            onChange={e => updateConfig('mappingId', e.target.value)}
+          >
+            <option value="">Select Mapping...</option>
+            {model.mappings
+              .filter(m => m.isAttributeToColor)
               .map(m => (
                 <option key={m.id} value={m.id}>{m.name}</option>
               ))}

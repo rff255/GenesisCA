@@ -67,7 +67,7 @@ export function HelpView() {
 
         {/* ============================================================ */}
         <section id="help-fundamentals" className={styles.section}>
-          <h2 className={styles.h2}>The 6 Fundamentals of Cellular Automata</h2>
+          <h2 className={styles.h2}>The 6 Fundamentals of GenesisCA Cellular Automata</h2>
           <p className={styles.p}>
             Every GenesisCA model is built on these theoretical properties:
           </p>
@@ -127,11 +127,10 @@ export function HelpView() {
             per-cell (e.g., &quot;alive&quot;, &quot;age&quot;).{' '}
             <strong>Model Attributes</strong> are global parameters all cells can read
             but not write (e.g., &quot;birth threshold&quot;). Each attribute has a type
-            (bool, integer, float, tag, list, color), a default value, and a description.
+            (bool, integer, float, tag, color), a default value, and a description.
           </p>
           <ul className={styles.list}>
             <li><strong>Tag</strong> &mdash; An integer with named values (picklist). Define tag options in the editor, and use the Tag Constant node to reference them by name.</li>
-            <li><strong>List</strong> &mdash; A fixed-size array of elements of one basic type. Access elements via List Get Element and List Set Element nodes.</li>
             <li><strong>Color</strong> (model attributes only) &mdash; An RGB color value. Accessed via Get Model Attribute with separate R, G, B output ports. Adjustable live in the simulator.</li>
           </ul>
 
@@ -208,8 +207,21 @@ export function HelpView() {
         <section id="help-nodes" className={styles.section}>
           <h2 className={styles.h2}>Node Types Reference</h2>
           <p className={styles.p}>
-            GenesisCA provides 24 node types organized into categories:
+            GenesisCA provides 26 node types organized into categories:
           </p>
+
+          <h3 className={styles.h3}>
+            <span className={styles.nodeCategory} style={{ background: '#2e7d32' }}>Event</span>
+            Event Entry Points
+          </h3>
+          <table className={styles.table}>
+            <thead><tr><th>Node</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td>Generation Step</td><td>Entry point for per-generation cell update logic. Connect &quot;DO&quot; to start the flow chain.</td></tr>
+              <tr><td>Input Mapping (C&rarr;A)</td><td>Entry point for Color-to-Attribute mapping (brush/image import). Outputs R, G, B values.</td></tr>
+              <tr><td>Output Mapping (A&rarr;C)</td><td>Entry point for Attribute-to-Color visualization. Runs as a separate sequential pass after the Generation Step, ensuring colors reflect the final cell state.</td></tr>
+            </tbody>
+          </table>
 
           <h3 className={styles.h3}>
             <span className={styles.nodeCategory} style={{ background: '#1b5e20' }}>Flow</span>
@@ -218,7 +230,6 @@ export function HelpView() {
           <table className={styles.table}>
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
-              <tr><td>Step</td><td>Entry point for per-generation logic. Connect &quot;DO&quot; to start the flow chain.</td></tr>
               <tr><td>Conditional</td><td>If/else branching based on a boolean condition.</td></tr>
               <tr><td>Sequence</td><td>Execute &quot;First&quot; then &quot;Then&quot; sequentially.</td></tr>
               <tr><td>Loop</td><td>Repeat &quot;Body&quot; a given number of times.</td></tr>
@@ -276,7 +287,7 @@ export function HelpView() {
               <tr><td>Set Attribute</td><td>Write a value to the current cell&apos;s attribute for the next generation.</td></tr>
               <tr><td>Set Neighborhood Attribute</td><td><strong>(Async only)</strong> Set a cell attribute for ALL cells in a neighborhood to a given value.</td></tr>
               <tr><td>Set Neighbor Attr By Index</td><td><strong>(Async only)</strong> Set a cell attribute for ONE specific neighbor (by index 0..N&minus;1) to a given value.</td></tr>
-              <tr><td>Get Neighbor Attr By Index</td><td><strong>(Async only)</strong> Read a cell attribute from ONE specific neighbor by index.</td></tr>
+              <tr><td>Get Neighbor Attr By Index</td><td>Read a cell attribute from ONE specific neighbor by index. Works in both sync and async modes.</td></tr>
             </tbody>
           </table>
 
@@ -287,7 +298,6 @@ export function HelpView() {
           <table className={styles.table}>
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
-              <tr><td>Input Color</td><td>Entry point for Color-to-Attribute mapping (brush/image import).</td></tr>
               <tr><td>Set Color Viewer</td><td>Write RGB values for an Attribute-to-Color visualization.</td></tr>
               <tr><td>Get Color Constant</td><td>Output fixed R, G, B values.</td></tr>
             </tbody>
@@ -351,7 +361,7 @@ export function HelpView() {
 
           <h3 className={styles.h3}>Async-Only Nodes</h3>
           <p className={styles.p}>
-            Three node types are exclusive to asynchronous mode. Using them in synchronous
+            Two node types are exclusive to asynchronous mode. Using them in synchronous
             mode will produce a compiler error.
           </p>
           <ul className={styles.ul}>
@@ -359,9 +369,11 @@ export function HelpView() {
               selected neighborhood.</li>
             <li><strong>Set Neighbor Attr By Index</strong> &mdash; Sets a cell attribute for one specific
               neighbor (by index 0..N&minus;1).</li>
-            <li><strong>Get Neighbor Attr By Index</strong> &mdash; Reads a cell attribute from one specific
-              neighbor by index.</li>
           </ul>
+          <p className={styles.p}>
+            <strong>Get Neighbor Attr By Index</strong> is a read-only node that works in both
+            sync and async modes, and is typically used alongside the async-only write nodes.
+          </p>
           <p className={styles.p}>
             <strong>Typical movement pattern:</strong> pick a random neighbor index &rarr;
             read that neighbor&apos;s attribute (Get Neighbor Attr By Index) &rarr;

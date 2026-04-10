@@ -25,10 +25,14 @@ import { TagConstantNode } from './TagConstantNode';
 import { SetNeighborhoodAttributeNode } from './SetNeighborhoodAttributeNode';
 import { GetNeighborAttributeByIndexNode } from './GetNeighborAttributeByIndexNode';
 import { SetNeighborAttributeByIndexNode } from './SetNeighborAttributeByIndexNode';
+import { OutputMappingNode } from './OutputMappingNode';
 
 const ALL_NODES: NodeTypeDef[] = [
-  // Flow
+  // Event (entry points)
   StepNode,
+  InputColorNode,
+  OutputMappingNode,
+  // Flow
   ConditionalNode,
   SequenceNode,
   LoopNode,
@@ -53,7 +57,6 @@ const ALL_NODES: NodeTypeDef[] = [
   SetNeighborhoodAttributeNode,
   SetNeighborAttributeByIndexNode,
   // Color
-  InputColorNode,
   SetColorViewerNode,
   GetColorConstantNode,
   // Macro

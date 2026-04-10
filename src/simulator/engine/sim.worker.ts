@@ -28,10 +28,11 @@ interface InitMsg {
   asyncScheme: string;
   stepCode: string;
   inputColorCodes: Array<{ mappingId: string; code: string }>;
+  outputMappingCodes: Array<{ mappingId: string; code: string }>;
   activeViewer: string;
 }
 
-interface StepMsg { type: 'step'; count: number; activeViewer: string }
+interface StepMsg { type: 'step'; count: number; activeViewer: string; skipColorPass?: boolean }
 interface PaintMsg {
   type: 'paint';
   cells: Array<{ row: number; col: number; r: number; g: number; b: number }>;
@@ -40,7 +41,7 @@ interface PaintMsg {
 }
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; inputColorCodes: Array<{ mappingId: string; code: string }>; updateMode: string; asyncScheme: string }
+interface RecompileMsg { type: 'recompile'; stepCode: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; updateMode: string; asyncScheme: string }
 interface UpdateModelAttrsMsg { type: 'updateModelAttrs'; attrs: Record<string, number> }
 interface ImportImageMsg { type: 'importImage'; pixels: Uint8ClampedArray; mappingId: string; activeViewer: string }
 
@@ -73,6 +74,7 @@ let colors: Uint8ClampedArray = new Uint8ClampedArray(0);
 let orderArray: Int32Array | null = null;
 let stepFn: Function | null = null;
 let inputColorFns: Array<{ mappingId: string; fn: Function }> = [];
+let outputMappingFns: Array<{ mappingId: string; fn: Function }> = [];
 
 // Cached model attributes
 let cachedModelAttrs: Record<string, unknown> = {};
@@ -309,7 +311,9 @@ function randomizeGrid(): void {
     (wArr as Uint8Array).set(arr as Uint8Array);
   }
   generation = 0;
-  if (stepFn) runStep(); else writeDefaultColors();
+  // Prefer Output Mapping color pass (no generation advance) over runStep fallback
+  const hasColorPassR = outputMappingFns.some(f => f.mappingId === activeViewer);
+  if (hasColorPassR) { runColorPass(); } else if (stepFn) { runStep(); } else { writeDefaultColors(); }
 }
 
 function resetGrid(): void {
@@ -320,10 +324,15 @@ function resetGrid(): void {
     for (let i = 0; i < total; i++) { arr[i] = dv; wArr[i] = dv; }
   }
   generation = 0;
-  if (stepFn) runStep(); else writeDefaultColors();
+  const hasColorPassRs = outputMappingFns.some(f => f.mappingId === activeViewer);
+  if (hasColorPassRs) { runColorPass(); } else if (stepFn) { runStep(); } else { writeDefaultColors(); }
 }
 
-function compileFns(stepCode: string, icCodes: Array<{ mappingId: string; code: string }>): void {
+function compileFns(
+  stepCode: string,
+  icCodes: Array<{ mappingId: string; code: string }>,
+  omCodes: Array<{ mappingId: string; code: string }> = [],
+): void {
   try {
     // eslint-disable-next-line no-eval
     stepFn = stepCode ? (eval(stepCode) as Function) : null;
@@ -335,6 +344,19 @@ function compileFns(stepCode: string, icCodes: Array<{ mappingId: string; code: 
       inputColorFns.push({ mappingId: ic.mappingId, fn: eval(ic.code) as Function });
     } catch { /* skip */ }
   }
+  outputMappingFns = [];
+  for (const om of omCodes) {
+    try {
+      // eslint-disable-next-line no-eval
+      outputMappingFns.push({ mappingId: om.mappingId, fn: eval(om.code) as Function });
+    } catch { /* skip */ }
+  }
+}
+
+/** Run the Output Mapping color pass for the active viewer (if available) */
+function runColorPass(): void {
+  const omFn = outputMappingFns.find(f => f.mappingId === activeViewer);
+  if (omFn) omFn.fn(...buildLoopArgs());
 }
 
 function sendColors(): void {
@@ -379,7 +401,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       activeViewer = msg.activeViewer;
       initGrid();
       buildNeighborIndices();
-      compileFns(msg.stepCode, msg.inputColorCodes);
+      compileFns(msg.stepCode, msg.inputColorCodes, msg.outputMappingCodes || []);
       writeDefaultColors();
       sendColors();
       break;
@@ -392,6 +414,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       }
       activeViewer = msg.activeViewer;
       for (let i = 0; i < msg.count; i++) runStep();
+      if (!msg.skipColorPass) runColorPass();
       sendColors();
       break;
     }
@@ -424,8 +447,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         }
       }
 
-      // Run one step so color viewers update the display
-      if (stepFn) {
+      // Update display: prefer Output Mapping color pass (no generation advance)
+      // over legacy runStep fallback
+      const hasColorPass = outputMappingFns.some(f => f.mappingId === activeViewer);
+      if (hasColorPass) {
+        runColorPass();
+      } else if (stepFn) {
         runStep();
       } else {
         writeDefaultColors();
@@ -435,12 +462,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
 
     case 'randomize': {
+      activeViewer = msg.activeViewer;
       randomizeGrid();
       sendColors();
       break;
     }
 
     case 'reset': {
+      activeViewer = msg.activeViewer;
       resetGrid();
       sendColors();
       break;
@@ -449,7 +478,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'recompile': {
       updateMode = msg.updateMode || updateMode;
       asyncScheme = msg.asyncScheme || asyncScheme;
-      compileFns(msg.stepCode, msg.inputColorCodes);
+      compileFns(msg.stepCode, msg.inputColorCodes, (msg as RecompileMsg).outputMappingCodes || []);
       self.postMessage({ type: 'ready' });
       break;
     }
@@ -478,8 +507,15 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           readAttrs[attr.id]![idx] = writeAttrs[attr.id]![idx]!;
         }
       }
-      // Run one step for color viewer update
-      if (stepFn) runStep(); else writeDefaultColors();
+      // Update display: prefer Output Mapping color pass (no generation advance)
+      const hasColorPassImg = outputMappingFns.some(f => f.mappingId === activeViewer);
+      if (hasColorPassImg) {
+        runColorPass();
+      } else if (stepFn) {
+        runStep();
+      } else {
+        writeDefaultColors();
+      }
       sendColors();
       break;
     }

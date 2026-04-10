@@ -30,7 +30,7 @@ export interface NodeConfig {
 export interface NodeTypeDef {
   type: string;
   label: string;
-  category: 'data' | 'logic' | 'aggregation' | 'flow' | 'output' | 'color';
+  category: 'event' | 'data' | 'logic' | 'aggregation' | 'flow' | 'output' | 'color';
   color: string;
   ports: PortDef[];
   defaultConfig: NodeConfig;

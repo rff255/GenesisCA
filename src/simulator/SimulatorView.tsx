@@ -190,6 +190,7 @@ export function SimulatorView() {
       type: 'step',
       count: gensPerFrameRef.current,
       activeViewer: activeViewerRef.current,
+      skipColorPass: unlimitedGensRef.current,
     });
   }, []);
 
@@ -332,6 +333,7 @@ export function SimulatorView() {
       asyncScheme: model.properties.asyncScheme || 'random-order',
       stepCode: result.stepCode,
       inputColorCodes: result.inputColorCodes,
+      outputMappingCodes: result.outputMappingCodes,
       activeViewer: viewer,
     });
     workerRef.current = worker;

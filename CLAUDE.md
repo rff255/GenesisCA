@@ -178,7 +178,7 @@ genesis-ca/
 │   │       ├── GraphEditor.tsx
 │   │       ├── graphState.ts          # Shared mutable state (avoids circular imports between GraphEditor/CaNode)
 │   │       ├── NodeExplorer.tsx        # Right-side searchable node list panel
-│   │       ├── nodes/                # 21 node types (one file each)
+│   │       ├── nodes/                # 26 node types (one file each)
 │   │       └── compiler/
 │   │           └── compile.ts        # Two-pass compiler (hoisted values + flow)
 │   ├── simulator/
@@ -250,10 +250,13 @@ The app is functional with these major systems:
 ### Visual Programming Language (VPL)
 - `src/modeler/vpl/GraphEditor.tsx` — React Flow-based node graph editor
 - `src/modeler/vpl/CaNode.tsx` — Custom node component with per-type config UI
-- `src/modeler/vpl/nodes/` — 25 node types, each in its own file with `compile()` method (3 are async-only: SetNeighborhoodAttribute, GetNeighborAttributeByIndex, SetNeighborAttributeByIndex)
+- `src/modeler/vpl/nodes/` — 26 node types, each in its own file with `compile()` method (2 are async-only: SetNeighborhoodAttribute, SetNeighborAttributeByIndex)
+- Three "event" entry-point nodes: GenerationStep (per-gen logic), InputMapping C→A (brush), OutputMapping A→C (color pass)
 - `src/modeler/vpl/compiler/compile.ts` — Two-pass compiler: hoists values, then emits flow
 - Multi-output nodes (InputColor, GetColorConstant, MacroNode) use `_v${nodeId}_${portId}` naming
-- Multi-root support: Step (per-generation) and InputColor (brush interaction) compile separately
+- Multi-root support: Step (per-generation), InputColor (brush interaction), and OutputMapping (color pass) compile separately
+- OutputMapping functions: loop-wrapped, always sequential (no shuffle), no copy lines; run once after all generation steps complete; skipped in unlimited gens mode via `skipColorPass` flag
+- Paint with OutputMapping: prefers `runColorPass()` over `runStep()` so painting doesn't advance the simulation
 
 ### Simulation Engine (SoA Architecture)
 - `src/simulator/engine/sim.worker.ts` — Web Worker owns grid as Structure of Arrays
@@ -281,7 +284,7 @@ The app is functional with these major systems:
 - Recompile optimization: structural changes reinit worker, graph-only changes send `recompile` message (preserves grid state)
 
 ### Key Patterns
-- Async-only nodes (`ASYNC_ONLY_TYPES` in compile.ts): `setNeighborhoodAttribute`, `setNeighborAttributeByIndex`, `getNeighborAttributeByIndex` — compiler emits error if used in sync mode because copy lines overwrite neighbor writes
+- Async-only nodes (`ASYNC_ONLY_TYPES` in compile.ts): `setNeighborhoodAttribute`, `setNeighborAttributeByIndex` — compiler emits error if used in sync mode because copy lines overwrite neighbor writes. `getNeighborAttributeByIndex` is read-only and works in both modes.
 - Neighbor-write nodes use `if (_ni < total)` guard to protect constant-boundary sentinel from corruption
 - Graph state sync: single debounced sync (100ms) via refs — never use multiple setTimeout callbacks
 - Graph editor mouse: RMB click=context menu, RMB drag=pan (`panOnDrag={[2]}`), LMB click=select, LMB drag=box select (`selectionOnDrag`); simulator: LMB=brush, RMB=pan
