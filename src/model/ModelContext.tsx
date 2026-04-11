@@ -18,6 +18,7 @@ import type {
   Mapping,
   ModelProperties,
   Neighborhood,
+  SimulationState,
 } from './types';
 import { DEFAULT_MODEL, EMPTY_MODEL } from './defaultModel';
 import { readModelFile } from './fileOperations';
@@ -65,7 +66,8 @@ type ModelAction =
   | { type: 'UPDATE_INDICATOR'; id: string; changes: Partial<Indicator> }
   | { type: 'NEW_MODEL' }
   | { type: 'LOAD_MODEL'; model: CAModel }
-  | { type: 'MARK_SAVED' };
+  | { type: 'MARK_SAVED' }
+  | { type: 'SET_SIMULATION_STATE'; state: SimulationState | undefined };
 
 // ---------------------------------------------------------------------------
 // Reducer
@@ -335,6 +337,12 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
 
     case 'MARK_SAVED':
       return { ...state, isDirty: false };
+
+    case 'SET_SIMULATION_STATE':
+      return {
+        ...state,
+        model: { ...state.model, simulationState: action.state },
+      };
   }
 }
 
@@ -367,6 +375,7 @@ export interface ModelContextValue {
   newModel: () => void;
   loadModel: (model: CAModel) => void;
   markSaved: () => void;
+  setSimulationState: (state: SimulationState | undefined) => void;
 }
 
 const ModelContext = createContext<ModelContextValue | null>(null);
@@ -433,10 +442,11 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto-save to localStorage
+  // Auto-save to localStorage (strip simulationState to avoid exceeding quota on large grids)
   useEffect(() => {
     try {
-      localStorage.setItem('genesisca_autosave', JSON.stringify(state.model));
+      const { simulationState: _drop, ...modelWithoutState } = state.model;
+      localStorage.setItem('genesisca_autosave', JSON.stringify(modelWithoutState));
     } catch {
       // localStorage full or unavailable
     }
@@ -535,6 +545,11 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     () => dispatch({ type: 'MARK_SAVED' }),
     [],
   );
+  const setSimulationState = useCallback(
+    (simState: SimulationState | undefined) =>
+      dispatch({ type: 'SET_SIMULATION_STATE', state: simState }),
+    [],
+  );
 
   const value = useMemo<ModelContextValue>(
     () => ({
@@ -562,6 +577,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       newModel,
       loadModel,
       markSaved,
+      setSimulationState,
     }),
     [
       state.model,
@@ -588,6 +604,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       newModel,
       loadModel,
       markSaved,
+      setSimulationState,
     ],
   );
 

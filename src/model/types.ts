@@ -116,6 +116,39 @@ export interface Indicator {
   watched: boolean;                     // eye toggle — controls display in simulator
 }
 
+// ---------------------------------------------------------------------------
+// Simulation State (Save/Load)
+// ---------------------------------------------------------------------------
+
+/** Serialized typed array entry (base64-encoded) */
+export interface SerializedTypedArray {
+  type: 'uint8' | 'int32' | 'float64';
+  data: string;
+}
+
+/** Complete simulation state snapshot for .gcastate files */
+export interface SimulationState {
+  generation: number;
+  width: number;
+  height: number;
+  attributes: Record<string, SerializedTypedArray>;
+  modelAttrs: Record<string, number>;
+  indicators: Record<string, number>;
+  linkedAccumulators: Record<string, number | Record<string, number>>;
+  colors: string;
+  orderArray?: string;
+  // UI settings
+  activeViewer: string;
+  brushColor: string;
+  brushW: number;
+  brushH: number;
+  brushMapping: string;
+  targetFps: number;
+  unlimitedFps: boolean;
+  gensPerFrame: number;
+  unlimitedGens: boolean;
+}
+
 /** Complete CA model definition */
 export interface CAModel {
   schemaVersion: number;
@@ -127,4 +160,5 @@ export interface CAModel {
   graphNodes: GraphNode[];
   graphEdges: GraphEdge[];
   macroDefs: MacroDef[];
+  simulationState?: SimulationState;
 }

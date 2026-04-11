@@ -3,6 +3,8 @@ import { useModel } from '../model/ModelContext';
 import { compileGraph } from '../modeler/vpl/compiler/compile';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { IndicatorDisplay } from './IndicatorDisplay';
+import { serializeSimState, downloadStateFile, readStateFile, base64ToArrayBuffer, deserializeTypedArray } from '../model/fileOperations';
+import type { SimulationState } from '../model/types';
 import styles from './SimulatorView.module.css';
 
 const SIM_SETTINGS_KEY = 'genesisca_sim_settings';
@@ -17,7 +19,7 @@ function loadSimSettings(): Record<string, unknown> {
 
 export function SimulatorView() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { model, updateIndicator } = useModel();
+  const { model, updateIndicator, setSimulationState } = useModel();
   const workerRef = useRef<Worker | null>(null);
   const pendingStep = useRef(false);
 
@@ -80,6 +82,11 @@ export function SimulatorView() {
   const pendingImageImport = useRef<Uint8ClampedArray | null>(null);
   const pendingImageMapping = useRef<string>('');
   const imageInputRef = useRef<HTMLInputElement>(null);
+
+  // Save/Load state refs
+  const pendingStateSave = useRef<((state: Record<string, unknown>) => void) | null>(null);
+  const stateFileInputRef = useRef<HTMLInputElement>(null);
+  const pendingSimStateRestore = useRef<SimulationState | null>(null);
 
   // Colors buffer + grid dimensions
   const colorsRef = useRef<Uint8ClampedArray | null>(null);
@@ -306,6 +313,11 @@ export function SimulatorView() {
       pendingStep.current = false;
     } else if (msg.type === 'ready') {
       pendingStep.current = false;
+    } else if (msg.type === 'state') {
+      if (pendingStateSave.current) {
+        pendingStateSave.current(msg);
+        pendingStateSave.current = null;
+      }
     }
 
     // F6: If there's a pending image import and we just got the first stepped (init done), send it
@@ -321,6 +333,13 @@ export function SimulatorView() {
         },
         { transfer: [pixels.buffer] },
       );
+    }
+
+    // Restore simulation state from loaded .gcaproj (after worker init completes)
+    if (msg.type === 'stepped' && pendingSimStateRestore.current) {
+      const state = pendingSimStateRestore.current;
+      pendingSimStateRestore.current = null;
+      applySimulationState(state);
     }
   };
 
@@ -401,6 +420,11 @@ export function SimulatorView() {
     pendingStep.current = false;
     lastGenForGps.current = 0;
     gpsGens.current = 0;
+
+    // Queue simulation state restoration if present in loaded model
+    if (model.simulationState) {
+      pendingSimStateRestore.current = model.simulationState;
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, compileModel]);
 
@@ -774,6 +798,100 @@ export function SimulatorView() {
     }, 'image/png');
   };
 
+  // Save simulation state
+  const handleSaveState = () => {
+    if (!workerRef.current) return;
+    pendingStateSave.current = (workerState) => {
+      const state = serializeSimState(
+        workerState as Parameters<typeof serializeSimState>[0],
+        {
+          activeViewer,
+          brushColor,
+          brushW,
+          brushH,
+          brushMapping,
+          targetFps,
+          unlimitedFps,
+          gensPerFrame,
+          unlimitedGens,
+        },
+      );
+      // Also store in model context so next .gcaproj save includes it
+      setSimulationState(state);
+      const name = model.properties.name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '') || 'genesis';
+      downloadStateFile(state, `${name}_gen${generation}.gcastate`);
+    };
+    workerRef.current.postMessage({ type: 'getState' });
+  };
+
+  // Load simulation state from .gcastate file
+  const handleLoadState = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    try {
+      const state = await readStateFile(file);
+      applySimulationState(state);
+    } catch (err) {
+      setCompileError(String(err));
+    }
+  };
+
+  const applySimulationState = useCallback((state: SimulationState) => {
+    if (!workerRef.current) return;
+
+    // Validate dimensions match the current grid
+    if (state.width !== gridWidth.current || state.height !== gridHeight.current) {
+      setCompileError(
+        `State dimensions (${state.width}\u00D7${state.height}) do not match current grid (${gridWidth.current}\u00D7${gridHeight.current}). Resize the grid first or load a matching state file.`,
+      );
+      return;
+    }
+
+    // Restore UI settings
+    setActiveViewer(state.activeViewer);
+    setBrushColor(state.brushColor);
+    setBrushW(state.brushW);
+    setBrushH(state.brushH);
+    setBrushMapping(state.brushMapping);
+    setTargetFps(state.targetFps);
+    setUnlimitedFps(state.unlimitedFps);
+    setGensPerFrame(state.gensPerFrame);
+    setUnlimitedGens(state.unlimitedGens);
+
+    // Update generation display
+    setGeneration(state.generation);
+
+    // Convert serialized attributes back to ArrayBuffers for worker
+    const attrBuffers: Record<string, { type: string; buffer: ArrayBuffer }> = {};
+    const total = state.width * state.height;
+    for (const [id, entry] of Object.entries(state.attributes)) {
+      const arr = deserializeTypedArray(entry, total);
+      const typeMap: Record<string, string> = { uint8: 'bool', int32: 'integer', float64: 'float' };
+      attrBuffers[id] = { type: typeMap[entry.type] || 'float', buffer: arr.buffer };
+    }
+
+    const colorsBuffer = base64ToArrayBuffer(state.colors);
+    const loadMsg: Record<string, unknown> = {
+      type: 'loadState',
+      generation: state.generation,
+      width: state.width,
+      height: state.height,
+      attributes: attrBuffers,
+      modelAttrs: state.modelAttrs,
+      indicators: state.indicators,
+      linkedAccumulators: state.linkedAccumulators,
+      colors: colorsBuffer,
+      activeViewer: state.activeViewer,
+    };
+
+    if (state.orderArray) {
+      loadMsg.orderArray = base64ToArrayBuffer(state.orderArray);
+    }
+
+    workerRef.current.postMessage(loadMsg);
+  }, []);
+
   // F5: Apply dimension override
   const handleApplyDimensions = () => {
     const w = Math.max(1, simWidth);
@@ -943,6 +1061,22 @@ export function SimulatorView() {
 
         {/* Bottom overlay: Transport controls + speed + stats */}
         <div className={styles.transportBar} data-sim-overlay>
+          {/* Save/Load state */}
+          <button className={styles.transportBtn} onClick={handleSaveState} title="Save State (.gcastate)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+              <polyline points="17 21 17 13 7 13 7 21"/>
+              <polyline points="7 3 7 8 15 8"/>
+            </svg>
+          </button>
+          <button className={styles.transportBtn} onClick={() => stateFileInputRef.current?.click()} title="Load State (.gcastate)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            </svg>
+          </button>
+          <input ref={stateFileInputRef} type="file" accept=".gcastate" style={{ display: 'none' }} onChange={handleLoadState} />
+          <div className={styles.transportDivider} />
+
           {/* Speed controls (left side) */}
           <div className={styles.transportSpeed}>
             <span className={styles.transportSpeedLabel}>FPS {unlimitedFps ? '\u221E' : targetFps}</span>

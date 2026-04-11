@@ -167,6 +167,11 @@ function CaNodeComponent({ id, data }: NodeProps) {
     inputPorts = inputPorts.filter(p => p.id !== 'b');
   }
 
+  // GetRandom: show probability port only when randomType is 'bool'
+  if (nodeData.nodeType === 'getRandom' && nodeData.config.randomType !== 'bool') {
+    inputPorts = inputPorts.filter(p => p.id !== 'probability');
+  }
+
   // Detect which input ports are connected (for inline widget visibility)
   const connectedInputHandles = useStore(
     useCallback(

@@ -276,7 +276,7 @@ export function HelpView() {
               <tr><td>Get Model Attribute</td><td>Read a global model parameter.</td></tr>
               <tr><td>Get Neighbors Attribute</td><td>Collect an attribute from all neighbors as an array.</td></tr>
               <tr><td>Get Constant</td><td>A fixed value (bool, integer, or float).</td></tr>
-              <tr><td>Get Random</td><td>Generate a random value (bool, integer, or float).</td></tr>
+              <tr><td>Get Random</td><td>Generate a random value (bool, integer, or float). In Bool mode, an input port &quot;P&quot; (probability 0&ndash;1) controls the chance of producing 1 (default 0.5 = 50%).</td></tr>
             </tbody>
           </table>
 
@@ -483,6 +483,27 @@ export function HelpView() {
             <li><strong>Show Code</strong> &mdash; View the compiled JavaScript function.</li>
           </ul>
 
+          <h3 className={styles.h3}>Save &amp; Load State</h3>
+          <p className={styles.p}>
+            The transport bar includes <strong>Save State</strong> (floppy disk icon) and{' '}
+            <strong>Load State</strong> (folder icon) buttons at its left side.
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Save State</strong> &mdash; Downloads a <code>.gcastate</code> file
+              capturing the full simulation snapshot: current generation, all cell
+              attribute values, model attribute values, colors, indicator state, and
+              simulator settings (viewer, brush, FPS, gens/frame).</li>
+            <li><strong>Load State</strong> &mdash; Opens a <code>.gcastate</code> file and
+              restores the simulation to that exact point. The grid dimensions in the
+              state file must match the current grid &mdash; resize first if needed.</li>
+          </ul>
+          <p className={styles.p}>
+            This enables experiment repeatability: save a specific configuration, run the
+            simulation, then reload the same starting point to try different parameters.
+            Saving state also embeds it in the model, so the next <code>.gcaproj</code>{' '}
+            save will include the simulation snapshot.
+          </p>
+
           <p className={styles.p}>
             All simulator settings (speed, brush, viewer) are automatically saved and
             restored between sessions.
@@ -547,11 +568,21 @@ export function HelpView() {
             <li><strong>mappings</strong> &mdash; Color mapping definitions for visualization and interaction.</li>
             <li><strong>graphNodes / graphEdges</strong> &mdash; The VPL node graph (positions, connections, config).</li>
             <li><strong>macroDefs</strong> &mdash; Macro subgraph definitions.</li>
+            <li><strong>simulationState</strong> (optional) &mdash; Embedded simulation snapshot, included automatically if you used Save State in the simulator before saving the project.</li>
           </ul>
           <p className={styles.p}>
             Use <strong>Save</strong> to download a <code>.gcaproj</code> file, and{' '}
             <strong>Load</strong> to import one. You can also load models from the{' '}
             <strong>Library</strong> tab.
+          </p>
+
+          <h3 className={styles.h3}>State Files (.gcastate)</h3>
+          <p className={styles.p}>
+            State files are standalone snapshots of the simulation at a specific
+            generation. They contain all cell attribute arrays (base64-encoded typed
+            arrays), model attribute values, indicator state, color buffer, and
+            simulator UI settings. Use these to save and restore specific
+            configurations for reproducible experiments.
           </p>
         </section>
       </div>

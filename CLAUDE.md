@@ -140,8 +140,22 @@ Models are saved as `.gcaproj` files with a versioned schema. The JSON contains:
 - All model properties, attributes, neighborhoods, color mappings
 - The full node graph (nodes, connections, positions) as serialized React Flow state
 - The compiled JS function string (optional, can be recompiled from graph)
+- Optional `simulationState` — embedded simulation snapshot (included when user saves state in the simulator before saving the project)
 
 Users can save/load these files locally (browser download/upload). No cloud storage.
+
+### Simulation State Files (.gcastate)
+
+Standalone simulation snapshots saved from the simulator transport bar. JSON containing:
+- Generation, grid dimensions, all cell attribute arrays (base64-encoded typed arrays)
+- Model attribute values, indicator state (standalone + linked accumulators), color buffer
+- Simulator UI settings (activeViewer, brush, FPS, gens/frame)
+
+Serialization: `fileOperations.ts` — `serializeSimState()`, `readStateFile()`, `arrayBufferToBase64()` / `base64ToArrayBuffer()`, `deserializeTypedArray()`
+
+Worker messages: `getState` (worker copies and transfers all typed arrays), `loadState` (worker restores arrays and rebuilds neighbor indices). Dimension validation in `applySimulationState()` rejects mismatched state files.
+
+Auto-save to localStorage strips `simulationState` to avoid exceeding quota on large grids.
 
 ### Presentation Export
 
@@ -194,7 +208,7 @@ genesis-ca/
 │   ├── model/
 │   │   ├── ModelContext.tsx           # React Context + useReducer
 │   │   ├── defaultModel.ts           # EMPTY_MODEL (for New) + first-launch Game of Life auto-load
-│   │   ├── fileOperations.ts         # .gcaproj save/load/download
+│   │   ├── fileOperations.ts         # .gcaproj save/load/download + .gcastate serialization
 │   │   ├── schema.ts
 │   │   └── types.ts                  # TypeScript types for CAModel
 │   └── export/                       # Presentation .html builder (planned)
@@ -271,6 +285,7 @@ The app is functional with these major systems:
 - Async mode: `order` param is an Int32Array of shuffled/random cell indices; loop uses `idx = order[_i]` instead of `idx = _i`; r_ and w_ params point to same typed arrays (single buffer); copy lines are skipped; buffer swap is skipped after step
 - Async schemes: `random-order` (Fisher-Yates shuffle per step), `random-independent` (N random picks with replacement), `cyclic` (one-time shuffle at init)
 - InputColor functions remain per-cell: `(_r, _g, _b, idx, r_<attrs>..., ...)`
+- GetRandom in Bool mode: has a `probability` input port (inline number widget, default 0.5). CaNode.tsx filters it out when `randomType !== 'bool'`. Compiles to `Math.random() < prob ? 1 : 0`.
 - GetNeighborsAttribute uses `_scr_<nodeId>` scratch arrays declared before the loop — never allocate in hot path
 - NEVER use `fn(...args)` in per-cell loops — V8 megamorphic spread kills performance
 - Play pipeline chains from worker message handler (not rAF): receive result → draw → send next step
@@ -285,6 +300,7 @@ The app is functional with these major systems:
 - GIF recording: `gifenc` library, frame capture from srcCanvas in worker message handler, max 512px downscale
 - Screenshot exports at display canvas resolution (not grid resolution) with nearest-neighbor upscale
 - Recompile optimization: structural changes reinit worker, graph-only changes send `recompile` message (preserves grid state)
+- Save/Load State: transport bar buttons (left side) save `.gcastate` / load `.gcastate`. Worker `getState` copies all typed arrays via `.slice()` and transfers them. Worker `loadState` restores arrays and rebuilds neighbor indices. `applySimulationState()` validates grid dimensions match before loading. Auto-save strips `simulationState` from localStorage to avoid quota overflow. Saving state also stores it in model context so next `.gcaproj` save includes it. On `.gcaproj` load, `pendingSimStateRestore` ref triggers restore after first worker `stepped` message.
 
 ### Key Patterns
 - Async-only nodes (`ASYNC_ONLY_TYPES` in compile.ts): `setNeighborhoodAttribute`, `setNeighborAttributeByIndex` — compiler emits error if used in sync mode because copy lines overwrite neighbor writes. `getNeighborAttributeByIndex` is read-only and works in both modes.
