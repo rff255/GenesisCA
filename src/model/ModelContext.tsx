@@ -36,6 +36,52 @@ function generateId(prefix: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Node config cleanup helpers — keep graph nodes in sync with model changes
+// ---------------------------------------------------------------------------
+
+/** Patch configs of graph nodes matching a predicate */
+function patchNodes(
+  nodes: GraphNode[],
+  pred: (cfg: Record<string, string | number | boolean>, nodeType: string) => boolean,
+  patch: (cfg: Record<string, string | number | boolean>, nodeType: string) => Record<string, string | number | boolean>,
+): GraphNode[] {
+  let changed = false;
+  const result = nodes.map(n => {
+    if (pred(n.data.config, n.data.nodeType)) {
+      changed = true;
+      return { ...n, data: { ...n.data, config: patch({ ...n.data.config }, n.data.nodeType) } };
+    }
+    return n;
+  });
+  return changed ? result : nodes;
+}
+
+/** Apply patchNodes to both graphNodes and all macroDef subgraphs */
+function patchAllNodes(
+  model: CAModel,
+  pred: (cfg: Record<string, string | number | boolean>, nodeType: string) => boolean,
+  patch: (cfg: Record<string, string | number | boolean>, nodeType: string) => Record<string, string | number | boolean>,
+): { graphNodes: GraphNode[]; macroDefs: MacroDef[] } {
+  const graphNodes = patchNodes(model.graphNodes, pred, patch);
+  let macrosChanged = false;
+  const macroDefs = (model.macroDefs || []).map(m => {
+    const patched = patchNodes(m.nodes, pred, patch);
+    if (patched !== m.nodes) { macrosChanged = true; return { ...m, nodes: patched }; }
+    return m;
+  });
+  return { graphNodes, macroDefs: macrosChanged ? macroDefs : (model.macroDefs || []) };
+}
+
+/** Clear a config field to '' if it matches a deleted ID */
+function clearDeletedId(model: CAModel, field: string, deletedId: string) {
+  return patchAllNodes(
+    model,
+    cfg => cfg[field] === deletedId,
+    cfg => { cfg[field] = ''; return cfg; },
+  );
+}
+
+// ---------------------------------------------------------------------------
 // State & actions
 // ---------------------------------------------------------------------------
 
@@ -104,27 +150,81 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       };
     }
 
-    case 'REMOVE_ATTRIBUTE':
+    case 'REMOVE_ATTRIBUTE': {
+      const modelAfterFilter = {
+        ...state.model,
+        attributes: state.model.attributes.filter(a => a.id !== action.id),
+      };
+      // Clear stale attributeId and tagAttributeId references in node configs
+      const a1 = clearDeletedId(modelAfterFilter, 'attributeId', action.id);
+      const a2 = patchAllNodes(
+        { ...modelAfterFilter, graphNodes: a1.graphNodes, macroDefs: a1.macroDefs },
+        cfg => cfg.tagAttributeId === action.id,
+        cfg => { cfg.tagAttributeId = ''; return cfg; },
+      );
       return {
         ...state,
         isDirty: true,
-        model: {
-          ...state.model,
-          attributes: state.model.attributes.filter(a => a.id !== action.id),
-        },
+        model: { ...modelAfterFilter, graphNodes: a2.graphNodes, macroDefs: a2.macroDefs },
+      };
+    }
+
+    case 'UPDATE_ATTRIBUTE': {
+      const oldAttr = state.model.attributes.find(a => a.id === action.id);
+      const updatedModel = {
+        ...state.model,
+        attributes: state.model.attributes.map(a =>
+          a.id === action.id ? { ...a, ...action.changes } : a,
+        ),
       };
 
-    case 'UPDATE_ATTRIBUTE':
-      return {
-        ...state,
-        isDirty: true,
-        model: {
-          ...state.model,
-          attributes: state.model.attributes.map(a =>
-            a.id === action.id ? { ...a, ...action.changes } : a,
-          ),
-        },
-      };
+      // If tagOptions changed, remap tag indices in node configs
+      if (oldAttr && action.changes.tagOptions && oldAttr.tagOptions) {
+        const oldOpts = oldAttr.tagOptions;
+        const newOpts = action.changes.tagOptions;
+        // Build mapping: old index → new index (or 0 if deleted)
+        const indexMap = new Map<number, number>();
+        for (let oi = 0; oi < oldOpts.length; oi++) {
+          const ni = newOpts.indexOf(oldOpts[oi]!);
+          indexMap.set(oi, ni >= 0 ? ni : 0);
+        }
+        const remap = (val: string | number | boolean | undefined): string => {
+          const oldIdx = Number(val) || 0;
+          return String(indexMap.get(oldIdx) ?? 0);
+        };
+        const attrId = action.id;
+        const patched = patchAllNodes(
+          updatedModel,
+          (cfg, nt) => {
+            if ((nt === 'getConstant' && cfg.constType === 'tag' && cfg.tagAttributeId === attrId) ||
+                (nt === 'tagConstant' && cfg.attributeId === attrId) ||
+                (nt === 'switch' && cfg.tagAttributeId === attrId && cfg.valueType === 'tag')) return true;
+            // setAttribute/setNeighborhood/setNeighborByIndex with this tag attr
+            if ((nt === 'setAttribute' || nt === 'setNeighborhoodAttribute' || nt === 'setNeighborAttributeByIndex')
+                && cfg.attributeId === attrId) return true;
+            return false;
+          },
+          (cfg, nt) => {
+            if (nt === 'getConstant') cfg.constValue = remap(cfg.constValue);
+            if (nt === 'tagConstant') cfg.tagIndex = Number(remap(cfg.tagIndex));
+            if (nt === 'switch') {
+              const cc = Number(cfg.caseCount) || 0;
+              for (let i = 0; i < cc; i++) cfg[`case_${i}_value`] = remap(cfg[`case_${i}_value`]);
+            }
+            if (nt === 'setAttribute' || nt === 'setNeighborhoodAttribute' || nt === 'setNeighborAttributeByIndex') {
+              if (cfg._port_value !== undefined) cfg._port_value = remap(cfg._port_value);
+            }
+            return cfg;
+          },
+        );
+        return {
+          ...state, isDirty: true,
+          model: { ...updatedModel, graphNodes: patched.graphNodes, macroDefs: patched.macroDefs },
+        };
+      }
+
+      return { ...state, isDirty: true, model: updatedModel };
+    }
 
     case 'ADD_NEIGHBORHOOD': {
       const newNbr: Neighborhood = {
@@ -164,17 +264,17 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       };
     }
 
-    case 'REMOVE_NEIGHBORHOOD':
-      return {
-        ...state,
-        isDirty: true,
-        model: {
-          ...state.model,
-          neighborhoods: state.model.neighborhoods.filter(
-            n => n.id !== action.id,
-          ),
-        },
+    case 'REMOVE_NEIGHBORHOOD': {
+      const mAfterNbr = {
+        ...state.model,
+        neighborhoods: state.model.neighborhoods.filter(n => n.id !== action.id),
       };
+      const nbrPatch = clearDeletedId(mAfterNbr, 'neighborhoodId', action.id);
+      return {
+        ...state, isDirty: true,
+        model: { ...mAfterNbr, graphNodes: nbrPatch.graphNodes, macroDefs: nbrPatch.macroDefs },
+      };
+    }
 
     case 'UPDATE_NEIGHBORHOOD':
       return {
@@ -208,15 +308,17 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       };
     }
 
-    case 'REMOVE_MAPPING':
-      return {
-        ...state,
-        isDirty: true,
-        model: {
-          ...state.model,
-          mappings: state.model.mappings.filter(m => m.id !== action.id),
-        },
+    case 'REMOVE_MAPPING': {
+      const mAfterMap = {
+        ...state.model,
+        mappings: state.model.mappings.filter(m => m.id !== action.id),
       };
+      const mapPatch = clearDeletedId(mAfterMap, 'mappingId', action.id);
+      return {
+        ...state, isDirty: true,
+        model: { ...mAfterMap, graphNodes: mapPatch.graphNodes, macroDefs: mapPatch.macroDefs },
+      };
+    }
 
     case 'UPDATE_MAPPING':
       return {
@@ -293,15 +395,17 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       };
     }
 
-    case 'REMOVE_INDICATOR':
-      return {
-        ...state,
-        isDirty: true,
-        model: {
-          ...state.model,
-          indicators: (state.model.indicators || []).filter(i => i.id !== action.id),
-        },
+    case 'REMOVE_INDICATOR': {
+      const mAfterInd = {
+        ...state.model,
+        indicators: (state.model.indicators || []).filter(i => i.id !== action.id),
       };
+      const indPatch = clearDeletedId(mAfterInd, 'indicatorId', action.id);
+      return {
+        ...state, isDirty: true,
+        model: { ...mAfterInd, graphNodes: indPatch.graphNodes, macroDefs: indPatch.macroDefs },
+      };
+    }
 
     case 'UPDATE_INDICATOR':
       return {

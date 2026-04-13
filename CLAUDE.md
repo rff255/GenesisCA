@@ -343,7 +343,12 @@ The app is functional with these major systems:
 - Context menu: clamped to viewport bounds via `useLayoutEffect` + ref measurement after render. Initial render with `visibility: hidden`.
 - Modeler PanelShell: resizable via drag handle on right edge (200-600px range). Pattern matches simulator right panel.
 - Group shrink-to-fit: `resizeGroupsToFit(nds, allowShrink)` runs on graph load with `allowShrink=true`. Prevents stale bloated groups.
-- Input drag fix: `onMouseDown={stopDrag}` on the node body div prevents all config inputs from initiating node drags. Inline widgets also have per-element handlers.
+- Input drag fix: `stopDrag` callback checks `e.button === 0` (LMB only) to allow RMB pan through nodes. `stopAll` stops all buttons (for double-click). Body div uses `onDoubleClick={stopAll}` to prevent collapse; inline widgets use both `onMouseDown={stopDrag}` and `onDoubleClick={stopAll}`.
+- Compiler: in `compileFlowChain`, EVERY `varName()` call MUST be preceded by `compileValueNode(source.nodeId)` to ensure the value variable is declared. This applies to ALL flow node handlers (conditional, loop, switch, regular). Missing this causes undefined variables at runtime.
+- Model element cleanup: `ModelContext.tsx` reducer uses `patchAllNodes()` / `clearDeletedId()` helpers to update node configs when attributes/neighborhoods/mappings/indicators are deleted. Tag option deletion remaps indices in getConstant, tagConstant, switch, and setAttribute nodes. Always scan both `graphNodes` and `macroDefs[*].nodes`.
+- Switch node: two modes (`conditions` = user-wired bool inputs per case; `value` = comparison ops per case with int/float/tag types). `firstMatchOnly` toggle: true = if/else-if chain, false = independent if blocks with `_sw{id}` guard variable. Tag mode uses equality against tag index; int/float mode uses configurable comparison op (==,!=,>,<,>=,<=).
+- PanelShell `side` prop: `'left'` (default) puts resize handle on right edge; `'right'` puts it on left edge with inverted drag math. NodeExplorer uses `side="right"`. Simulator left panel has its own resize handle (`.leftPanelResizeHandle`).
+- Show Code: `buildFullCode()` in SimulatorView concatenates step + all inputColor + all outputMapping functions with section headers. Uses mapping names for readability.
 
 ---
 

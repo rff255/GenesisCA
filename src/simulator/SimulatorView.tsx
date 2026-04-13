@@ -109,14 +109,31 @@ export function SimulatorView() {
   // 1:1 pixel source canvas (reused across draws)
   const srcCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
+  // Build full code display from all compiled functions
+  const buildFullCode = useCallback((result: ReturnType<typeof compileGraph>) => {
+    const parts: string[] = [];
+    if (result.stepCode) {
+      parts.push('// === Step Function ===\n' + result.stepCode);
+    }
+    for (const ic of result.inputColorCodes) {
+      const m = model.mappings.find(mp => mp.id === ic.mappingId);
+      parts.push(`// === Input Mapping: ${m?.name || ic.mappingId} ===\n${ic.code}`);
+    }
+    for (const om of result.outputMappingCodes) {
+      const m = model.mappings.find(mp => mp.id === om.mappingId);
+      parts.push(`// === Output Mapping: ${m?.name || om.mappingId} ===\n${om.code}`);
+    }
+    return parts.join('\n\n');
+  }, [model.mappings]);
+
   // Compile graph (deps include indicator watched state since it affects compiled code)
   const compileModel = useCallback(() => {
     const result = compileGraph(model.graphNodes, model.graphEdges, model);
-    setCompiledCode(result.stepCode);
+    setCompiledCode(buildFullCode(result));
     setCompileError(result.error ?? '');
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model.graphNodes, model.graphEdges, model.indicators]);
+  }, [model.graphNodes, model.graphEdges, model.indicators, buildFullCode]);
 
   // Draw using ImageData + zoom/pan transform
   const draw = useCallback(() => {
@@ -461,7 +478,7 @@ export function SimulatorView() {
     } else {
       // Graph or indicator watch change only → soft recompile (preserves grid)
       const result = compileGraph(model.graphNodes, model.graphEdges, model);
-      setCompiledCode(result.stepCode);
+      setCompiledCode(buildFullCode(result));
       setCompileError(result.error ?? '');
       workerRef.current?.postMessage({
         type: 'recompile',

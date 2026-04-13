@@ -273,6 +273,16 @@
   opacity: 0.9;
 }
 
+.gridCellTagged {
+  background: #26a69a;
+  opacity: 0.85;
+  position: relative;
+}
+
+.gridCellTagged:hover {
+  opacity: 1;
+}
+
 .gridCellCenter {
   background: #e8a838;
   cursor: default;

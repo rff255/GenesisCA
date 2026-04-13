@@ -155,12 +155,15 @@ export function NeighborhoodsPanelContent() {
                   const col = colIdx - margin;
                   const isCenter = row === 0 && col === 0;
                   const isActive = activeCoords.has(coordKey(row, col));
+                  // Find tag for this cell (if any)
+                  const coordIdx = selected.coords.findIndex(([r, c]) => r === row && c === col);
+                  const tagName = coordIdx >= 0 ? selected.tags?.[coordIdx] : undefined;
 
                   let cellClass = styles.gridCell + ' ';
                   if (isCenter) {
                     cellClass += styles.gridCellCenter;
                   } else if (isActive) {
-                    cellClass += styles.gridCellActive;
+                    cellClass += tagName ? styles.gridCellTagged : styles.gridCellActive;
                   } else {
                     cellClass += styles.gridCellEmpty;
                   }
@@ -170,43 +173,83 @@ export function NeighborhoodsPanelContent() {
                       key={coordKey(row, col)}
                       className={cellClass}
                       onClick={() => handleCellClick(row, col)}
+                      onContextMenu={e => {
+                        e.preventDefault();
+                        if (!isActive || isCenter || coordIdx < 0) return;
+                        // Right-click on active cell → add a tag for it
+                        if (!tagName) {
+                          const newTags = { ...(selected.tags || {}) };
+                          newTags[coordIdx] = `${row},${col}`;
+                          updateNeighborhood(selected.id, { tags: newTags });
+                        }
+                      }}
                       title={
-                        isCenter ? 'Center cell' : `(${row}, ${col})`
+                        isCenter ? 'Center cell'
+                        : tagName ? `[${row},${col}] tag: "${tagName}" (right-click to add tag)`
+                        : isActive ? `(${row}, ${col}) — right-click to tag`
+                        : `(${row}, ${col})`
                       }
-                    />
+                      style={tagName ? { position: 'relative', overflow: 'hidden' } : undefined}
+                    >
+                      {tagName && (
+                        <span style={{
+                          position: 'absolute', inset: 0,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: '0.45rem', fontWeight: 600, color: '#0d1117',
+                          lineHeight: 1, textOverflow: 'ellipsis', overflow: 'hidden',
+                          pointerEvents: 'none',
+                        }}>
+                          {tagName}
+                        </span>
+                      )}
+                    </button>
                   );
                 });
               })}
             </div>
           </div>
 
-          {selected.coords.length > 0 && (
-            <div className={styles.fieldGroup} style={{ marginTop: 8 }}>
-              <div className={styles.fieldLabel}>Cell Tags (optional)</div>
-              {selected.coords.map(([r, c], i) => (
-                <div key={i} style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 2 }}>
-                  <span style={{ fontSize: '0.7rem', color: '#6080a0', width: 50, flexShrink: 0 }}>
-                    [{r},{c}]
-                  </span>
-                  <input
-                    className={styles.textInput}
-                    style={{ flex: 1 }}
-                    placeholder="tag name"
-                    value={selected.tags?.[i] || ''}
-                    onChange={e => {
-                      const newTags = { ...(selected.tags || {}) };
-                      if (e.target.value) {
-                        newTags[i] = e.target.value;
-                      } else {
-                        delete newTags[i];
-                      }
-                      updateNeighborhood(selected.id, { tags: newTags });
-                    }}
-                  />
-                </div>
-              ))}
-            </div>
-          )}
+          {/* Cell Tags */}
+          <div className={styles.fieldGroup} style={{ marginTop: 8 }}>
+            <div className={styles.fieldLabel}>Cell Tags</div>
+            <span style={{ color: '#888', fontSize: '0.66rem', lineHeight: 1.3, display: 'block', marginBottom: 4 }}>
+              Right-click an active neighbor cell in the grid above to give it a named tag. Tagged cells can be referenced by name in the graph editor.
+            </span>
+              {Object.entries(selected.tags || {}).map(([idxStr, tagVal]) => {
+                const idx = Number(idxStr);
+                const coord = selected.coords[idx];
+                if (!coord) return null;
+                return (
+                  <div key={idxStr} style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 2 }}>
+                    <span style={{ fontSize: '0.65rem', color: '#6080a0', width: 36, flexShrink: 0 }}>
+                      [{coord[0]},{coord[1]}]
+                    </span>
+                    <input
+                      className={styles.textInput}
+                      style={{ flex: 1 }}
+                      value={tagVal}
+                      onChange={e => {
+                        const newTags = { ...(selected.tags || {}) };
+                        newTags[idx] = e.target.value;
+                        updateNeighborhood(selected.id, { tags: newTags });
+                      }}
+                    />
+                    <button
+                      className={styles.deleteButton}
+                      style={{ padding: '2px 6px', fontSize: '0.7rem' }}
+                      onClick={() => {
+                        const newTags = { ...(selected.tags || {}) };
+                        delete newTags[idx];
+                        updateNeighborhood(selected.id, { tags: newTags });
+                      }}
+                      title="Remove tag"
+                    >
+                      &times;
+                    </button>
+                  </div>
+                );
+              })}
+          </div>
         </div>
       )}
     </>

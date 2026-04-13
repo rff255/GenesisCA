@@ -684,6 +684,7 @@ function compileRoot(
         const condSource = inputToSource.get(`${node.id}:condition`);
         let condVar: string;
         if (condSource) {
+          compileValueNode(condSource.nodeId);
           condVar = varName(condSource.nodeId, condSource.portId);
         } else {
           const condPort = def.ports.find(p => p.id === 'condition');
@@ -705,6 +706,7 @@ function compileRoot(
         const countSource = inputToSource.get(`${node.id}:count`);
         let countVar: string;
         if (countSource) {
+          compileValueNode(countSource.nodeId);
           countVar = varName(countSource.nodeId, countSource.portId);
         } else {
           const countPort = def.ports.find(p => p.id === 'count');
@@ -731,6 +733,7 @@ function compileRoot(
               // Read bool condition input
               const condSource = inputToSource.get(`${node.id}:case_${ci}_cond`);
               if (condSource) {
+                compileValueNode(condSource.nodeId);
                 caseConditions.push(varName(condSource.nodeId, condSource.portId));
               } else {
                 const condVal = (node.data.config[`_port_case_${ci}_cond`] as string);
@@ -741,6 +744,7 @@ function compileRoot(
               const valSource = inputToSource.get(`${node.id}:value`);
               let valVar: string;
               if (valSource) {
+                compileValueNode(valSource.nodeId);
                 valVar = varName(valSource.nodeId, valSource.portId);
               } else {
                 const valPort = def.ports.find(p => p.id === 'value');
@@ -758,6 +762,7 @@ function compileRoot(
                 const caseValSource = inputToSource.get(`${node.id}:case_${ci}_val`);
                 let caseValVar: string;
                 if (caseValSource) {
+                  compileValueNode(caseValSource.nodeId);
                   caseValVar = varName(caseValSource.nodeId, caseValSource.portId);
                 } else {
                   caseValVar = (node.data.config[`_port_case_${ci}_val`] as string)
@@ -806,6 +811,7 @@ function compileRoot(
           if (port.kind !== 'input' || port.category !== 'value') continue;
           const source = inputToSource.get(`${node.id}:${port.id}`);
           if (source) {
+            compileValueNode(source.nodeId);
             inputVars[port.id] = varName(source.nodeId, source.portId);
           } else {
             const inlineVal = getInlineValue(port, node.data.config);
