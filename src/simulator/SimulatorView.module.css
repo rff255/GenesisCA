@@ -17,6 +17,7 @@
   border-right: 1px solid #2d4059;
   border-left: 1px solid #2d4059;
   overflow-y: auto;
+  overflow-x: hidden;
   position: relative;
 }
 
