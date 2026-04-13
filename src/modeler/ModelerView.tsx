@@ -78,7 +78,7 @@ export function ModelerView() {
           </button>
         </div>
         {explorerOpen && (
-          <PanelShell title="Node Explorer" onClose={() => setExplorerOpen(false)}>
+          <PanelShell title="Node Explorer" onClose={() => setExplorerOpen(false)} side="right">
             <NodeExplorer ref={explorerRef} />
           </PanelShell>
         )}

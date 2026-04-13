@@ -4,7 +4,7 @@ export const GetIndicatorNode: NodeTypeDef = {
   type: 'getIndicator',
   label: 'Get Indicator',
   category: 'data',
-  color: '#00695c',
+  color: '#b71c1c',
   ports: [
     { id: 'value', label: 'Value', kind: 'output', category: 'value', dataType: 'any' },
   ],

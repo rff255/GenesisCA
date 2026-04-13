@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
 import type { AttributeType, LinkedAggregation } from '../../model/types';
 import styles from './PanelContent.module.css';
@@ -7,6 +7,21 @@ export function IndicatorsPanelSection() {
   const { model, addIndicator, removeIndicator, updateIndicator } = useModel();
   const indicators = model.indicators || [];
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Auto-select & scroll to newly added indicators
+  const prevCount = useRef(indicators.length);
+  useEffect(() => {
+    if (indicators.length > prevCount.current) {
+      const newItem = indicators[indicators.length - 1];
+      if (newItem) {
+        setSelectedId(newItem.id);
+        setTimeout(() => {
+          document.getElementById(`ind-${newItem.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }, 50);
+      }
+    }
+    prevCount.current = indicators.length;
+  }, [indicators]);
   const selected = indicators.find(i => i.id === selectedId);
 
   const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
@@ -37,6 +52,7 @@ export function IndicatorsPanelSection() {
         {indicators.map(ind => (
           <div
             key={ind.id}
+            id={`ind-${ind.id}`}
             className={`${styles.listItem} ${ind.id === selectedId ? styles.listItemSelected : ''}`}
             onClick={() => setSelectedId(ind.id === selectedId ? null : ind.id)}
           >

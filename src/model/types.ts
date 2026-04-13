@@ -20,6 +20,8 @@ export interface Neighborhood {
   description: string;
   coords: Array<[number, number]>;
   margin?: number;
+  /** Optional tags for individual cells: coord index → tag name */
+  tags?: Record<number, string>;
 }
 
 /** A color mapping (attribute-to-color for visualization, or color-to-attribute for interaction) */

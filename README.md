@@ -1,4 +1,4 @@
-# GenesisCA <sup>v1.4.0</sup>
+# GenesisCA <sup>v1.5.0</sup>
 
 An IDE for modeling and simulating Cellular Automata, built as a self-contained browser application.
 
@@ -65,10 +65,10 @@ A complete GenesisCA model definition consists of:
 ### The Modeler
 - **Properties Panel** — model metadata, grid dimensions, boundary treatment (torus/constant), update mode (synchronous/asynchronous), tags
 - **Attributes Panel** — cell and model attributes with type-specific default value controls (bool, integer, float, tag, color)
-- **Neighborhoods Panel** — interactive grid editor with per-neighborhood margin, and a Duplicate button for quick variations
+- **Neighborhoods Panel** — interactive grid editor with per-neighborhood margin, optional per-cell tags for named access, and a Duplicate button for quick variations
 - **Mappings Panel** — Attribute-to-Color and Color-to-Attribute mapping definitions
 - **Indicators** — standalone (typed scalar, graph-writable) or linked (auto-aggregated from cell attributes: frequency, total), with per-generation or accumulated modes
-- **Graph Editor** — 29 node types across 7 categories (event, flow, data, logic, aggregation, output, color), with RMB pan, scroll zoom, and snap-to-grid.
+- **Graph Editor** — 36 node types across 8 categories (event, flow, data, logic, aggregation, output, color, indicators), with RMB pan, scroll zoom, and snap-to-grid. Includes Switch (flow routing by conditions or value), Proportion Map, Interpolation, Color Interpolation, Aggregate (multi-input math), and neighborhood tag-based access nodes.
 - **Connection validation** — prevents incompatible connections (flow/value), cycles, and duplicate inputs; compatible ports highlight during drag
 - **Inline Port Widgets** — input ports show small value editors (number/bool) when unconnected, eliminating the need for constant nodes in simple cases
 - **Node Collapse/Expand** — double-click any node to collapse it; constants show their value; collapsed nodes temporarily expand when connecting edges

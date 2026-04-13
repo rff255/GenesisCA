@@ -7,7 +7,8 @@
 
 .sidePanel {
   width: 200px;
-  min-width: 200px;
+  min-width: 150px;
+  max-width: 400px;
   background: #16213e;
   padding: 12px;
   display: flex;
@@ -16,6 +17,21 @@
   border-right: 1px solid #2d4059;
   border-left: 1px solid #2d4059;
   overflow-y: auto;
+  position: relative;
+}
+
+.leftPanelResizeHandle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
+}
+
+.leftPanelResizeHandle:hover {
+  background: rgba(76, 201, 240, 0.3);
 }
 
 /* --- Right side panel (shared, resizable via left border drag) --- */

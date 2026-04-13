@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
 import type { AttributeType } from '../../model/types';
 import styles from './PanelContent.module.css';
@@ -9,6 +9,21 @@ export function AttributesPanelContent() {
 
   const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
   const modelAttrs = model.attributes.filter(a => a.isModelAttribute);
+
+  // Auto-select & scroll to newly added items
+  const prevAttrCount = useRef(model.attributes.length);
+  useEffect(() => {
+    if (model.attributes.length > prevAttrCount.current) {
+      const newItem = model.attributes[model.attributes.length - 1];
+      if (newItem) {
+        setSelectedId(newItem.id);
+        setTimeout(() => {
+          document.getElementById(`attr-${newItem.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }, 50);
+      }
+    }
+    prevAttrCount.current = model.attributes.length;
+  }, [model.attributes]);
   const selected = model.attributes.find(a => a.id === selectedId);
 
   const handleDelete = () => {
@@ -26,6 +41,7 @@ export function AttributesPanelContent() {
           {cellAttrs.map(attr => (
             <div
               key={attr.id}
+              id={`attr-${attr.id}`}
               className={`${styles.listItem} ${selectedId === attr.id ? styles.listItemSelected : ''}`}
               onClick={() => setSelectedId(attr.id)}
             >
@@ -65,6 +81,7 @@ export function AttributesPanelContent() {
           {modelAttrs.map(attr => (
             <div
               key={attr.id}
+              id={`attr-${attr.id}`}
               className={`${styles.listItem} ${selectedId === attr.id ? styles.listItemSelected : ''}`}
               onClick={() => setSelectedId(attr.id)}
             >

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -109,6 +109,46 @@ function toGraphEdges(rfEdges: Edge[]): GraphEdge[] {
   }));
 }
 
+/** Recalculate group dimensions to fit children. allowShrink=true on load. */
+function resizeGroupsToFit(nds: Node[], allowShrink: boolean): Node[] {
+  const groups = nds.filter(n => n.type === 'groupNode');
+  if (groups.length === 0) return nds;
+  const nodeW = 200, nodeH = 100, pad = 30, topPad = 40;
+  let changed = false;
+
+  const updated = nds.map(n => {
+    if (n.type !== 'groupNode') return n;
+    const children = nds.filter(c => c.parentId === n.id);
+    if (children.length === 0) return n;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const c of children) {
+      minX = Math.min(minX, c.position.x);
+      minY = Math.min(minY, c.position.y);
+      maxX = Math.max(maxX, c.position.x + nodeW);
+      maxY = Math.max(maxY, c.position.y + nodeH);
+    }
+
+    const curStyle = n.style as Record<string, number> | undefined;
+    const curW = curStyle?.width || 300;
+    const curH = curStyle?.height || 200;
+
+    const shiftX = minX < pad ? pad - minX : 0;
+    const shiftY = minY < topPad ? topPad - minY : 0;
+    const idealW = maxX + pad + shiftX;
+    const idealH = maxY + pad + shiftY;
+
+    const newW = allowShrink ? idealW : Math.max(curW, idealW);
+    const newH = allowShrink ? idealH : Math.max(curH, idealH);
+
+    if (Math.abs(newW - curW) < 1 && Math.abs(newH - curH) < 1) return n;
+    changed = true;
+    return { ...n, style: { ...n.style, width: newW, height: newH } };
+  });
+
+  return changed ? updated : nds;
+}
+
 // ---------------------------------------------------------------------------
 // Context menu types
 // ---------------------------------------------------------------------------
@@ -138,6 +178,8 @@ export function GraphEditorInner() {
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [portLabelsVisible, setPortLabelsVisible] = useState(true);
   const rfInstance = useRef<ReactFlowInstance | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const { deleteElements, getNodes, updateNodeData } = useReactFlow();
 
   // Ref for paste position (flow coords of last right-click or viewport center for Ctrl+V)
@@ -218,9 +260,12 @@ export function GraphEditorInner() {
         setEdges(toRFEdges(macroDef.edges));
       }
     }
-    // Fit view after scope change + reset history for new scope
+    // Shrink-to-fit groups on load, then fit view + reset history
     clearHistory();
-    setTimeout(() => rfInstance.current?.fitView(), 50);
+    setTimeout(() => {
+      setNodes(nds => resizeGroupsToFit(nds, true));
+      rfInstance.current?.fitView();
+    }, 50);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentScope, modelVersion]);
 
@@ -240,12 +285,19 @@ export function GraphEditorInner() {
 
       const currentEdges = edgesRef.current;
 
-      // Prevent connecting to an already-connected value input
+      // Prevent connecting to an already-connected value input (unless port is isArray)
       if (tgtParsed.category === 'value') {
-        const alreadyConnected = currentEdges.some(
-          e => e.target === connection.target && e.targetHandle === connection.targetHandle,
-        );
-        if (alreadyConnected) return false;
+        const targetNode = nodesRef.current.find(n => n.id === connection.target);
+        const targetNodeType = (targetNode?.data as Record<string, unknown> | undefined)?.nodeType as string | undefined;
+        const targetDef = targetNodeType ? getNodeDef(targetNodeType) : undefined;
+        const targetPort = targetDef?.ports.find(p => p.id === tgtParsed.portId);
+        const isArrayPort = targetPort?.isArray;
+        if (!isArrayPort) {
+          const alreadyConnected = currentEdges.some(
+            e => e.target === connection.target && e.targetHandle === connection.targetHandle,
+          );
+          if (alreadyConnected) return false;
+        }
       }
 
       // Prevent duplicate connections (same source+target+handles)
@@ -317,79 +369,12 @@ export function GraphEditorInner() {
 
       onNodesChange(changes);
 
-      // Auto-resize groups to always cover all children (all 4 sides)
+      // Auto-resize groups to fit children (shrink + expand) on drag end
       const hasPositionEnd = changes.some(
         c => c.type === 'position' && 'dragging' in c && !c.dragging,
       );
       if (hasPositionEnd) {
-        setNodes(nds => {
-          const groups = nds.filter(n => n.type === 'groupNode');
-          if (groups.length === 0) return nds;
-          let changed = false;
-          const nodeW = 200; // approximate node width
-          const nodeH = 100; // approximate node height
-          const pad = 30;
-          const topPad = 40; // extra for group header
-
-          const updated = nds.map(n => {
-            if (n.type !== 'groupNode') return n;
-            const children = nds.filter(c => c.parentId === n.id);
-            if (children.length === 0) return n;
-
-            // Bounding box of children in parent-relative coords
-            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-            for (const c of children) {
-              minX = Math.min(minX, c.position.x);
-              minY = Math.min(minY, c.position.y);
-              maxX = Math.max(maxX, c.position.x + nodeW);
-              maxY = Math.max(maxY, c.position.y + nodeH);
-            }
-
-            // If any child is outside the group bounds, adjust
-            const needsLeft = minX < pad;
-            const needsTop = minY < topPad;
-            const curStyle = n.style as Record<string, number> | undefined;
-            const curW = curStyle?.width || 300;
-            const curH = curStyle?.height || 200;
-            const needsRight = maxX + pad > curW;
-            const needsBottom = maxY + pad > curH;
-
-            if (!needsLeft && !needsTop && !needsRight && !needsBottom) return n;
-            changed = true;
-
-            // Shift amount for left/top expansion
-            const shiftX = needsLeft ? pad - minX : 0;
-            const shiftY = needsTop ? topPad - minY : 0;
-
-            const newW = Math.max(curW, maxX + pad) + shiftX;
-            const newH = Math.max(curH, maxY + pad) + shiftY;
-
-            return {
-              ...n,
-              // Move group origin to accommodate left/top spill
-              position: {
-                x: n.position.x - shiftX,
-                y: n.position.y - shiftY,
-              },
-              style: { ...n.style, width: newW, height: newH },
-            };
-          });
-
-          // Also shift children's positions if group moved
-          if (changed) {
-            return updated.map(n => {
-              if (!n.parentId) return n;
-              const parentBefore = nds.find(p => p.id === n.parentId);
-              const parentAfter = updated.find(p => p.id === n.parentId);
-              if (!parentBefore || !parentAfter) return n;
-              const dx = parentBefore.position.x - parentAfter.position.x;
-              const dy = parentBefore.position.y - parentAfter.position.y;
-              if (dx === 0 && dy === 0) return n;
-              return { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } };
-            });
-          }
-          return nds;
-        });
+        setNodes(nds => resizeGroupsToFit(nds, true));
       }
 
       const needsSync = changes.some(
@@ -472,6 +457,35 @@ export function GraphEditorInner() {
     [openContextMenu],
   );
 
+  // --- Clamp context menu to viewport bounds + submenu direction ---
+  useLayoutEffect(() => {
+    if (!contextMenu || !contextMenuRef.current) { setMenuPos(null); return; }
+    const el = contextMenuRef.current;
+    const parent = el.parentElement;
+    if (!parent) return;
+    const pw = parent.clientWidth;
+    const ph = parent.clientHeight;
+    const mw = el.offsetWidth;
+    const mh = el.offsetHeight;
+    let x = contextMenu.x;
+    let y = contextMenu.y;
+    if (x + mw > pw) x = Math.max(0, pw - mw - 4);
+    if (y + mh > ph) y = Math.max(0, ph - mh - 4);
+    // Signal submenu to flip direction if main menu is near edge
+    const submenuWidth = 190; // min-width + border
+    if (x + mw + submenuWidth > pw) {
+      el.setAttribute('data-submenu-left', '');
+    } else {
+      el.removeAttribute('data-submenu-left');
+    }
+    if (y + 400 > ph) { // 400 = submenu max-height
+      el.setAttribute('data-submenu-up', '');
+    } else {
+      el.removeAttribute('data-submenu-up');
+    }
+    setMenuPos({ x, y });
+  }, [contextMenu]);
+
   // --- Context menu actions ---
 
   const addNode = useCallback(
@@ -514,12 +528,23 @@ export function GraphEditorInner() {
     pushCurrentSnapshot();
     setNodes(nds => {
       const id = generateNodeId(nds);
-      return [...nds, {
+      const newNode: Node = {
         id,
         type: sourceNode.type,
         position: { x: sourceNode.position.x + 30, y: sourceNode.position.y + 30 },
         data: JSON.parse(JSON.stringify(sourceNode.data)),
-      }];
+      };
+      // Preserve parent relationship (keep position relative to group)
+      if (sourceNode.parentId) {
+        newNode.parentId = sourceNode.parentId;
+      }
+      if (sourceNode.type === 'groupNode') {
+        const d = sourceNode.data as Record<string, unknown>;
+        newNode.style = { width: (d.width as number) || 300, height: (d.height as number) || 200 };
+        newNode.zIndex = -1;
+        newNode.dragHandle = '[data-drag-handle]';
+      }
+      return [...nds, newNode];
     });
     scheduleSync();
     setContextMenu(null);
@@ -718,12 +743,27 @@ export function GraphEditorInner() {
       const oldParentId = clonedData.parentId as string | undefined;
       const newParentId = oldParentId ? idMap.get(oldParentId) : undefined;
       if (newParentId) { clonedData.parentId = newParentId; } else { delete clonedData.parentId; }
+
+      // Calculate position: convert parent-relative to absolute if orphaning
+      let position: { x: number; y: number };
+      if (newParentId) {
+        // Parent is also duplicated — keep relative position
+        position = { x: n.position.x, y: n.position.y };
+      } else if (oldParentId && !newParentId) {
+        // Orphaned from parent not in selection — convert to absolute
+        const parentNode = nodes.find(p => p.id === oldParentId);
+        position = {
+          x: (parentNode?.position.x ?? 0) + n.position.x + 30,
+          y: (parentNode?.position.y ?? 0) + n.position.y + 30,
+        };
+      } else {
+        position = { x: n.position.x + 30, y: n.position.y + 30 };
+      }
+
       return {
         id: idMap.get(n.id)!,
         type: n.type === 'groupNode' ? 'groupNode' : n.type === 'commentNode' ? 'commentNode' : 'caNode',
-        position: newParentId
-          ? { x: n.position.x, y: n.position.y }
-          : { x: n.position.x + 30, y: n.position.y + 30 },
+        position,
         data: clonedData,
         selected: true,
         ...(newParentId ? { parentId: newParentId } : {}),
@@ -1296,8 +1336,13 @@ export function GraphEditorInner() {
       {/* Unified context menu */}
       {contextMenu && (
         <div
+          ref={contextMenuRef}
           className={styles.contextMenu}
-          style={{ left: contextMenu.x, top: contextMenu.y }}
+          style={{
+            left: (menuPos ?? contextMenu).x,
+            top: (menuPos ?? contextMenu).y,
+            visibility: menuPos ? 'visible' : 'hidden',
+          }}
         >
           {/* PANE context menu */}
           {contextMenu.target.type === 'pane' && (

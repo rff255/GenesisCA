@@ -924,6 +924,7 @@ export function SimulatorView() {
 
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const leftPanelRef = useRef<HTMLDivElement>(null);
   const rightPanelRef = useRef<HTMLDivElement>(null);
 
   const modelAttrs = model.attributes.filter(a => a.isModelAttribute);
@@ -934,11 +935,32 @@ export function SimulatorView() {
     <div className={styles.simulatorLayout}>
       {/* === Left Panel (collapsible) === */}
       {leftPanelOpen && (
-        <div className={styles.sidePanel}>
+        <div className={styles.sidePanel} ref={leftPanelRef}>
           <div className={styles.panelHeader}>
             <span className={styles.panelTitle}>Settings</span>
             <button className={styles.panelCollapseBtn} onClick={() => setLeftPanelOpen(false)}>&lsaquo;</button>
           </div>
+          <div
+            className={styles.leftPanelResizeHandle}
+            onMouseDown={e => {
+              e.preventDefault();
+              const panel = leftPanelRef.current;
+              if (!panel) return;
+              const startX = e.clientX;
+              const startW = panel.offsetWidth;
+              const onMove = (ev: MouseEvent) => {
+                const newW = Math.max(150, Math.min(400, startW + (ev.clientX - startX)));
+                panel.style.width = newW + 'px';
+                panel.style.minWidth = newW + 'px';
+              };
+              const onUp = () => {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+              };
+              document.addEventListener('mousemove', onMove);
+              document.addEventListener('mouseup', onUp);
+            }}
+          />
 
           <div className={styles.sectionTitle}>Actions</div>
           <button className={styles.controlButtonAccent} onClick={handleRandomize}>Randomize</button>
@@ -961,7 +983,7 @@ export function SimulatorView() {
               <div className={styles.sectionTitle}>Model Attributes</div>
               {modelAttrs.map(a => (
                 <div key={a.id} className={styles.fieldRow}>
-                  <span className={styles.statLabel} style={{ flex: 1 }}>{a.name}</span>
+                  <span className={styles.statLabel} style={{ flex: 1 }} title={a.description || a.name}>{a.name}</span>
                   {a.type === 'bool' ? (
                     <input type="checkbox" checked={(runtimeModelAttrs[a.id] ?? 0) === 1}
                       onChange={e => handleModelAttrChange(a.id, e.target.checked ? 1 : 0)} />

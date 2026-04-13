@@ -1,11 +1,13 @@
 .panelShell {
   width: 350px;
-  min-width: 350px;
+  min-width: 200px;
+  max-width: 600px;
   height: 100%;
   display: flex;
   flex-direction: column;
   background: #16213e;
   border-right: 1px solid #2d4059;
+  position: relative;
 }
 
 .header {
@@ -49,4 +51,32 @@
   flex: 1;
   overflow-y: auto;
   padding: 12px;
+}
+
+.resizeHandle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
+}
+
+.resizeHandle:hover {
+  background: rgba(76, 201, 240, 0.3);
+}
+
+.resizeHandleLeft {
+  position: absolute;
+  top: 0;
+  left: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
+}
+
+.resizeHandleLeft:hover {
+  background: rgba(76, 201, 240, 0.3);
 }

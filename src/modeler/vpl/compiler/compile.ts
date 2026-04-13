@@ -31,6 +31,7 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
   for (const n of graphNodes) nodeMap.set(n.id, n);
 
   const inputToSource = new Map<string, { nodeId: string; portId: string }>();
+  const inputToSources = new Map<string, Array<{ nodeId: string; portId: string }>>();
   const flowOutputToTargets = new Map<string, Array<{ nodeId: string; portId: string }>>();
 
   for (const edge of graphEdges) {
@@ -39,10 +40,12 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
     if (!sourceHandle || !targetHandle) continue;
 
     if (targetHandle.category === 'value') {
-      inputToSource.set(
-        `${edge.target}:${targetHandle.portId}`,
-        { nodeId: edge.source, portId: sourceHandle.portId },
-      );
+      const key = `${edge.target}:${targetHandle.portId}`;
+      inputToSource.set(key, { nodeId: edge.source, portId: sourceHandle.portId });
+      // Also collect ALL sources for multi-input ports (e.g., aggregate)
+      const arr = inputToSources.get(key) ?? [];
+      arr.push({ nodeId: edge.source, portId: sourceHandle.portId });
+      inputToSources.set(key, arr);
     }
 
     if (sourceHandle.category === 'flow') {
@@ -53,14 +56,14 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
     }
   }
 
-  return { nodeMap, inputToSource, flowOutputToTargets };
+  return { nodeMap, inputToSource, inputToSources, flowOutputToTargets };
 }
 
 // ---------------------------------------------------------------------------
 // Compile a single root's subgraph (per-cell body)
 // ---------------------------------------------------------------------------
 
-const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'getColorConstant', 'macro']);
+const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'getColorConstant', 'macro', 'colorInterpolation']);
 
 /** Check if a node's data uses multi-output variable naming */
 function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
@@ -85,6 +88,7 @@ function compileRoot(
   rootFlowPort: string,
   nodeMap: Map<string, GraphNode>,
   inputToSource: Map<string, { nodeId: string; portId: string }>,
+  inputToSources: Map<string, Array<{ nodeId: string; portId: string }>>,
   flowOutputToTargets: Map<string, Array<{ nodeId: string; portId: string }>>,
   _model?: CAModel,
 ): RootCompileResult {
@@ -454,13 +458,20 @@ function compileRoot(
     const inputVars: Record<string, string> = {};
     for (const port of def.ports) {
       if (port.kind !== 'input' || port.category !== 'value') continue;
-      const source = inputToSource.get(`${nodeId}:${port.id}`);
-      if (source) {
-        compileValueNode(source.nodeId);
-        inputVars[port.id] = varName(source.nodeId, source.portId);
+      // Multi-input support for isArray ports (e.g., Aggregate node)
+      const sources = inputToSources.get(`${nodeId}:${port.id}`);
+      if (port.isArray && sources && sources.length > 1) {
+        for (const s of sources) compileValueNode(s.nodeId);
+        inputVars[port.id] = `[${sources.map(s => varName(s.nodeId, s.portId)).join(', ')}]`;
       } else {
-        const inlineVal = getInlineValue(port, node.data.config);
-        if (inlineVal !== undefined) inputVars[port.id] = inlineVal;
+        const source = inputToSource.get(`${nodeId}:${port.id}`);
+        if (source) {
+          compileValueNode(source.nodeId);
+          inputVars[port.id] = varName(source.nodeId, source.portId);
+        } else {
+          const inlineVal = getInlineValue(port, node.data.config);
+          if (inlineVal !== undefined) inputVars[port.id] = inlineVal;
+        }
       }
     }
 
@@ -703,6 +714,87 @@ function compileRoot(
         flowLines.push(`${indent}for (let _li${node.id} = 0; _li${node.id} < ${countVar}; _li${node.id}++) {`);
         compileFlowChain(node.id, 'body', indent + '  ');
         flowLines.push(`${indent}}`);
+      } else if (node.data.nodeType === 'switch') {
+        const switchMode = (node.data.config.mode as string) || 'conditions';
+        const firstMatchOnly = node.data.config.firstMatchOnly !== false;
+        const valType = (node.data.config.valueType as string) || 'integer';
+        const caseCount = Number(node.data.config.caseCount) || 0;
+        const hasDefault = flowOutputToTargets.has(`${node.id}:default`);
+
+        if (caseCount === 0) {
+          compileFlowChain(node.id, 'default', indent);
+        } else {
+          // Build condition expressions for each case
+          const caseConditions: string[] = [];
+          for (let ci = 0; ci < caseCount; ci++) {
+            if (switchMode === 'conditions') {
+              // Read bool condition input
+              const condSource = inputToSource.get(`${node.id}:case_${ci}_cond`);
+              if (condSource) {
+                caseConditions.push(varName(condSource.nodeId, condSource.portId));
+              } else {
+                const condVal = (node.data.config[`_port_case_${ci}_cond`] as string);
+                caseConditions.push(condVal === 'true' ? '1' : '0');
+              }
+            } else {
+              // "by value" mode — resolve value input and build comparison
+              const valSource = inputToSource.get(`${node.id}:value`);
+              let valVar: string;
+              if (valSource) {
+                valVar = varName(valSource.nodeId, valSource.portId);
+              } else {
+                const valPort = def.ports.find(p => p.id === 'value');
+                const inlineVal = valPort ? getInlineValue(valPort, node.data.config) : undefined;
+                valVar = inlineVal ?? '0';
+              }
+              if (valType === 'tag') {
+                // Tag: equality against tag index
+                const tagIdx = (node.data.config[`case_${ci}_value`] as string) || '0';
+                caseConditions.push(`(${valVar} === ${tagIdx})`);
+              } else {
+                // Int/Float: configurable comparison op
+                const op = (node.data.config[`case_${ci}_op`] as string) || '==';
+                const jsOp = op === '==' ? '===' : op === '!=' ? '!==' : op;
+                const caseValSource = inputToSource.get(`${node.id}:case_${ci}_val`);
+                let caseValVar: string;
+                if (caseValSource) {
+                  caseValVar = varName(caseValSource.nodeId, caseValSource.portId);
+                } else {
+                  caseValVar = (node.data.config[`_port_case_${ci}_val`] as string)
+                    ?? (node.data.config[`case_${ci}_value`] as string) ?? '0';
+                }
+                caseConditions.push(`(${valVar} ${jsOp} ${caseValVar})`);
+              }
+            }
+          }
+
+          if (firstMatchOnly) {
+            // if / else-if chain
+            for (let ci = 0; ci < caseCount; ci++) {
+              const prefix = ci === 0 ? 'if' : '} else if';
+              flowLines.push(`${indent}${prefix} (${caseConditions[ci]}) {`);
+              compileFlowChain(node.id, `case_${ci}`, indent + '  ');
+            }
+            if (hasDefault) {
+              flowLines.push(`${indent}} else {`);
+              compileFlowChain(node.id, 'default', indent + '  ');
+            }
+            flowLines.push(`${indent}}`);
+          } else {
+            // All matches: independent if blocks + default guard
+            flowLines.push(`${indent}let _sw${node.id} = false;`);
+            for (let ci = 0; ci < caseCount; ci++) {
+              flowLines.push(`${indent}if (${caseConditions[ci]}) { _sw${node.id} = true;`);
+              compileFlowChain(node.id, `case_${ci}`, indent + '  ');
+              flowLines.push(`${indent}}`);
+            }
+            if (hasDefault) {
+              flowLines.push(`${indent}if (!_sw${node.id}) {`);
+              compileFlowChain(node.id, 'default', indent + '  ');
+              flowLines.push(`${indent}}`);
+            }
+          }
+        }
       } else if (node.data.nodeType === 'macro') {
         // Inline macro flow chain
         inlineMacroFlow(node.id, node, indent);
@@ -880,7 +972,34 @@ export function compileGraph(
     }
   }
 
-  const { nodeMap, inputToSource, flowOutputToTargets } = buildAdjacency(graphNodes, graphEdges);
+  const { nodeMap, inputToSource, inputToSources, flowOutputToTargets } = buildAdjacency(graphNodes, graphEdges);
+
+  // Pre-resolve neighborhood tag names to indices for GetNeighborAttributeByTag nodes
+  for (const node of graphNodes) {
+    if (node.data.nodeType === 'getNeighborAttributeByTag') {
+      const nbrId = node.data.config.neighborhoodId as string;
+      const nbr = model.neighborhoods.find(n => n.id === nbrId);
+      const tagName = node.data.config.tagName as string;
+      const tagEntry = nbr?.tags
+        ? Object.entries(nbr.tags).find(([, name]) => name === tagName)
+        : undefined;
+      node.data.config._resolvedTagIndex = tagEntry !== undefined ? Number(tagEntry[0]) : 0;
+    }
+    if (node.data.nodeType === 'getNeighborIndexesByTags') {
+      const nbrId = node.data.config.neighborhoodId as string;
+      const nbr = model.neighborhoods.find(n => n.id === nbrId);
+      const tagCount = Number(node.data.config.tagCount) || 0;
+      const indices: number[] = [];
+      for (let i = 0; i < tagCount; i++) {
+        const tagName = node.data.config[`tag_${i}_name`] as string;
+        const tagEntry = nbr?.tags
+          ? Object.entries(nbr.tags).find(([, name]) => name === tagName)
+          : undefined;
+        indices.push(tagEntry !== undefined ? Number(tagEntry[0]) : 0);
+      }
+      node.data.config._resolvedTagIndexes = JSON.stringify(indices);
+    }
+  }
   const { params: loopParams, cellAttrs } = buildLoopParams(model);
   const cellParams = buildCellParams(model);
 
@@ -895,7 +1014,7 @@ export function compileGraph(
   let stepCode = '';
   if (stepNode) {
     const { valueLines, flowLines, scratchNodes } = compileRoot(
-      stepNode, 'do', nodeMap, inputToSource, flowOutputToTargets, model,
+      stepNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, model,
     );
 
     // Scratch array declarations (before the loop)
@@ -953,7 +1072,7 @@ export function compileGraph(
   for (const icNode of inputColorNodes) {
     const mappingId = icNode.data.config.mappingId as string || '';
     const { valueLines, flowLines } = compileRoot(
-      icNode, 'do', nodeMap, inputToSource, flowOutputToTargets, model,
+      icNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, model,
     );
     // InputColor is called per-cell (for painted cells only), keep per-cell signature
     const icCopyLines = cellAttrs.map(a => `  w_${a.id}[idx] = r_${a.id}[idx];`);
@@ -987,7 +1106,7 @@ export function compileGraph(
   for (const omNode of outputMappingNodes) {
     const mappingId = omNode.data.config.mappingId as string || '';
     const { valueLines, flowLines, scratchNodes } = compileRoot(
-      omNode, 'do', nodeMap, inputToSource, flowOutputToTargets, model,
+      omNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, model,
     );
     const scratchDecls = scratchNodes.map(
       s => s.nbrId

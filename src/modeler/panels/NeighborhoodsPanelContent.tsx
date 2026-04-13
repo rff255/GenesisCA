@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
 import styles from './PanelContent.module.css';
 
@@ -12,6 +12,18 @@ export function NeighborhoodsPanelContent() {
   const [selectedIdx, setSelectedIdx] = useState(0);
 
   const neighborhoods = model.neighborhoods;
+
+  // Auto-select newly added neighborhood
+  const prevCount = useRef(neighborhoods.length);
+  useEffect(() => {
+    if (neighborhoods.length > prevCount.current) {
+      setSelectedIdx(neighborhoods.length - 1);
+      setTimeout(() => {
+        document.getElementById(`nbr-${neighborhoods.length - 1}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }, 50);
+    }
+    prevCount.current = neighborhoods.length;
+  }, [neighborhoods]);
   const selected = neighborhoods[selectedIdx];
   const margin = selected?.margin ?? 2;
   const gridSize = 2 * margin + 1;
@@ -61,6 +73,7 @@ export function NeighborhoodsPanelContent() {
           {neighborhoods.map((n, i) => (
             <div
               key={n.id}
+              id={`nbr-${i}`}
               className={`${styles.listItem} ${selectedIdx === i ? styles.listItemSelected : ''}`}
               onClick={() => setSelectedIdx(i)}
             >
@@ -166,6 +179,34 @@ export function NeighborhoodsPanelContent() {
               })}
             </div>
           </div>
+
+          {selected.coords.length > 0 && (
+            <div className={styles.fieldGroup} style={{ marginTop: 8 }}>
+              <div className={styles.fieldLabel}>Cell Tags (optional)</div>
+              {selected.coords.map(([r, c], i) => (
+                <div key={i} style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 2 }}>
+                  <span style={{ fontSize: '0.7rem', color: '#6080a0', width: 50, flexShrink: 0 }}>
+                    [{r},{c}]
+                  </span>
+                  <input
+                    className={styles.textInput}
+                    style={{ flex: 1 }}
+                    placeholder="tag name"
+                    value={selected.tags?.[i] || ''}
+                    onChange={e => {
+                      const newTags = { ...(selected.tags || {}) };
+                      if (e.target.value) {
+                        newTags[i] = e.target.value;
+                      } else {
+                        delete newTags[i];
+                      }
+                      updateNeighborhood(selected.id, { tags: newTags });
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </>
