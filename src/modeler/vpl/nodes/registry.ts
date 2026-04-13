@@ -30,6 +30,13 @@ import { GetNeighborsAttrByIndexesNode } from './GetNeighborsAttrByIndexesNode';
 import { GetIndicatorNode } from './GetIndicatorNode';
 import { SetIndicatorNode } from './SetIndicatorNode';
 import { UpdateIndicatorNode } from './UpdateIndicatorNode';
+import { ProportionMapNode } from './ProportionMapNode';
+import { InterpolationNode } from './InterpolationNode';
+import { ColorInterpolationNode } from './ColorInterpolationNode';
+import { SwitchNode } from './SwitchNode';
+import { AggregateNode } from './AggregateNode';
+import { GetNeighborAttributeByTagNode } from './GetNeighborAttributeByTagNode';
+import { GetNeighborIndexesByTagsNode } from './GetNeighborIndexesByTagsNode';
 
 const ALL_NODES: NodeTypeDef[] = [
   // Event (entry points)
@@ -40,23 +47,29 @@ const ALL_NODES: NodeTypeDef[] = [
   ConditionalNode,
   SequenceNode,
   LoopNode,
+  SwitchNode,
   // Data
   GetCellAttributeNode,
   GetModelAttributeNode,
   GetNeighborsAttributeNode,
   GetNeighborAttributeByIndexNode,
+  GetNeighborAttributeByTagNode,
+  GetNeighborIndexesByTagsNode,
   GetNeighborsAttrByIndexesNode,
   GetConstantNode,
   GetRandomNode,
   TagConstantNode,
   // Arithmetic & Logic
   ArithmeticOperatorNode,
+  ProportionMapNode,
+  InterpolationNode,
   StatementNode,
   LogicOperatorNode,
   // Aggregation
   GroupCountingNode,
   GroupStatementNode,
   GroupOperatorNode,
+  AggregateNode,
   // Output
   SetAttributeNode,
   SetNeighborhoodAttributeNode,
@@ -64,6 +77,7 @@ const ALL_NODES: NodeTypeDef[] = [
   // Color
   SetColorViewerNode,
   GetColorConstantNode,
+  ColorInterpolationNode,
   // Indicators
   GetIndicatorNode,
   SetIndicatorNode,

@@ -154,6 +154,62 @@ function CaNodeComponent({ id, data }: NodeProps) {
     }
   }
 
+  // Switch: dynamic ports based on mode + caseCount
+  if (nodeData.nodeType === 'switch') {
+    const switchMode = (nodeData.config.mode as string) || 'conditions';
+    const valType = (nodeData.config.valueType as string) || 'integer';
+    const caseCount = Number(nodeData.config.caseCount) || 0;
+
+    if (switchMode === 'conditions') {
+      // No value input in conditions mode
+      inputPorts = inputPorts.filter(p => p.id !== 'value');
+      for (let i = 0; i < caseCount; i++) {
+        inputPorts.push({
+          id: `case_${i}_cond`, label: `Case ${i}`,
+          kind: 'input' as const, category: 'value' as const,
+          dataType: 'bool' as const, inlineWidget: 'bool', defaultValue: 'false',
+        });
+        outputPorts.push({
+          id: `case_${i}`, label: `Case ${i}`,
+          kind: 'output' as const, category: 'flow' as const,
+        });
+      }
+    } else {
+      // "by value" mode
+      if (valType === 'tag') {
+        // Tag mode: value input uses tag inline widget, cases are tag option selects (no input port)
+        const tagAttrId = nodeData.config.tagAttributeId as string;
+        const tagAttr = model.attributes.find(a => a.id === tagAttrId);
+        const tagOpts = tagAttr?.tagOptions || [];
+        // Override the value port's inline widget to tag
+        inputPorts = inputPorts.map(p => p.id === 'value'
+          ? { ...p, inlineWidget: 'tag' as const, dataType: 'any' as const }
+          : p);
+        for (let i = 0; i < caseCount; i++) {
+          const tagIdx = Number(nodeData.config[`case_${i}_value`]) || 0;
+          const tagName = tagOpts[tagIdx] ?? `#${tagIdx}`;
+          outputPorts.push({
+            id: `case_${i}`, label: tagName,
+            kind: 'output' as const, category: 'flow' as const,
+          });
+        }
+      } else {
+        // Integer/Float mode: per-case comparison op + value input port
+        for (let i = 0; i < caseCount; i++) {
+          inputPorts.push({
+            id: `case_${i}_val`, label: `Case ${i}`,
+            kind: 'input' as const, category: 'value' as const,
+            dataType: 'any' as const, inlineWidget: 'number', defaultValue: '0',
+          });
+          outputPorts.push({
+            id: `case_${i}`, label: `Case ${i}`,
+            kind: 'output' as const, category: 'flow' as const,
+          });
+        }
+      }
+    }
+  }
+
   // GetModelAttribute: show R/G/B ports for color attrs, Value port for others
   if (nodeData.nodeType === 'getModelAttribute') {
     const isColor = nodeData.config.isColorAttr;
@@ -165,6 +221,11 @@ function CaNodeComponent({ id, data }: NodeProps) {
   // LogicOperator: hide port B when operation is NOT (unary)
   if (nodeData.nodeType === 'logicOperator' && nodeData.config.operation === 'NOT') {
     inputPorts = inputPorts.filter(p => p.id !== 'b');
+  }
+
+  // GetRandom: show probability port only when randomType is 'bool'
+  if (nodeData.nodeType === 'getRandom' && nodeData.config.randomType !== 'bool') {
+    inputPorts = inputPorts.filter(p => p.id !== 'probability');
   }
 
   // Detect which input ports are connected (for inline widget visibility)
@@ -197,6 +258,13 @@ function CaNodeComponent({ id, data }: NodeProps) {
   const onMouseLeave = useCallback(() => {
     if (hoverExpand) setHoverExpand(false);
   }, [hoverExpand]);
+
+  /** Prevent mouseDown on inputs/selects from initiating a node drag (LMB only, let RMB through for pan) */
+  const stopDrag = useCallback((e: React.MouseEvent) => {
+    if (e.button === 0) e.stopPropagation();
+  }, []);
+  /** Stop all propagation (for double-click, click handlers) */
+  const stopAll = useCallback((e: React.MouseEvent) => e.stopPropagation(), []);
 
   const showExpanded = !isCollapsed || hoverExpand;
 
@@ -233,7 +301,11 @@ function CaNodeComponent({ id, data }: NodeProps) {
       collapsedLabel = attr ? `Model - ${attr.name}` : def.label;
     } else if (nodeData.nodeType === 'setAttribute') {
       const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
-      collapsedLabel = attr ? `Set - ${attr.name}` : def.label;
+      if (attr) {
+        const valConnected = connectedInputHandles.has(handleId({ id: 'value', kind: 'input', category: 'value' }));
+        const inlineVal = nodeData.config._port_value as string | undefined;
+        collapsedLabel = (!valConnected && inlineVal !== undefined) ? `Set ${attr.name} = ${inlineVal}` : `Set - ${attr.name}`;
+      } else { collapsedLabel = def.label; }
     } else if (nodeData.nodeType === 'getNeighborsAttribute' || nodeData.nodeType === 'getNeighborAttributeByIndex' || nodeData.nodeType === 'getNeighborsAttrByIndexes') {
       const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
       const nbr = model.neighborhoods.find(n => n.id === nodeData.config.neighborhoodId);
@@ -260,6 +332,21 @@ function CaNodeComponent({ id, data }: NodeProps) {
     } else if (nodeData.nodeType === 'updateIndicator') {
       const ind = (model.indicators || []).find(i => i.id === nodeData.config.indicatorId);
       collapsedLabel = ind ? `Upd Ind - ${ind.name}` : def.label;
+    } else if (nodeData.nodeType === 'statement') {
+      const op = (nodeData.config.operation as string) || '==';
+      const xConn = connectedInputHandles.has(handleId({ id: 'x', kind: 'input', category: 'value' }));
+      const yConn = connectedInputHandles.has(handleId({ id: 'y', kind: 'input', category: 'value' }));
+      const xVal = xConn ? '?' : ((nodeData.config._port_x as string) ?? '0');
+      const yVal = yConn ? '?' : ((nodeData.config._port_y as string) ?? '0');
+      collapsedLabel = `${xVal} ${op} ${yVal}`;
+    } else if (nodeData.nodeType === 'arithmeticOperator') {
+      const op = (nodeData.config.operation as string) || '+';
+      const xConn = connectedInputHandles.has(handleId({ id: 'x', kind: 'input', category: 'value' }));
+      const yConn = connectedInputHandles.has(handleId({ id: 'y', kind: 'input', category: 'value' }));
+      const xVal = xConn ? '?' : ((nodeData.config._port_x as string) ?? '0');
+      const yVal = yConn ? '?' : ((nodeData.config._port_y as string) ?? '0');
+      const unary = op === 'sqrt' || op === 'abs';
+      collapsedLabel = unary ? `${op}(${xVal})` : `${xVal} ${op} ${yVal}`;
     } else {
       collapsedLabel = def.label;
     }
@@ -338,7 +425,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
       <div className={styles.header} style={{ background: def.color }}>
         {def.label}
       </div>
-      <div className={styles.body}>
+      <div className={styles.body} onDoubleClick={stopAll}>
         {/* Node-specific config UI */}
         {nodeData.nodeType === 'getCellAttribute' && (
           <select
@@ -763,6 +850,67 @@ function CaNodeComponent({ id, data }: NodeProps) {
           );
         })()}
 
+        {nodeData.nodeType === 'colorInterpolation' && (() => {
+          const fromConnected =
+            connectedInputHandles.has(handleId({ id: 'r1', kind: 'input', category: 'value' })) &&
+            connectedInputHandles.has(handleId({ id: 'g1', kind: 'input', category: 'value' })) &&
+            connectedInputHandles.has(handleId({ id: 'b1', kind: 'input', category: 'value' }));
+          const toConnected =
+            connectedInputHandles.has(handleId({ id: 'r2', kind: 'input', category: 'value' })) &&
+            connectedInputHandles.has(handleId({ id: 'g2', kind: 'input', category: 'value' })) &&
+            connectedInputHandles.has(handleId({ id: 'b2', kind: 'input', category: 'value' }));
+          const fr = parseInt(String(nodeData.config._port_r1 ?? '0'), 10) || 0;
+          const fg = parseInt(String(nodeData.config._port_g1 ?? '0'), 10) || 0;
+          const fb = parseInt(String(nodeData.config._port_b1 ?? '0'), 10) || 0;
+          const tr = parseInt(String(nodeData.config._port_r2 ?? '255'), 10) || 0;
+          const tg = parseInt(String(nodeData.config._port_g2 ?? '255'), 10) || 0;
+          const tb = parseInt(String(nodeData.config._port_b2 ?? '255'), 10) || 0;
+          const fromHex = `#${Math.min(255,Math.max(0,fr)).toString(16).padStart(2,'0')}${Math.min(255,Math.max(0,fg)).toString(16).padStart(2,'0')}${Math.min(255,Math.max(0,fb)).toString(16).padStart(2,'0')}`;
+          const toHex = `#${Math.min(255,Math.max(0,tr)).toString(16).padStart(2,'0')}${Math.min(255,Math.max(0,tg)).toString(16).padStart(2,'0')}${Math.min(255,Math.max(0,tb)).toString(16).padStart(2,'0')}`;
+          return (
+            <>
+              {!fromConnected && (
+                <>
+                  <span style={{ fontSize: '0.6rem', color: '#8090a0' }}>Color From</span>
+                  <input
+                    type="color" className={styles.input}
+                    style={{ height: 24, padding: 1, cursor: 'pointer' }}
+                    value={fromHex}
+                    onChange={e => {
+                      const h = e.target.value;
+                      updateNodeData(id, { ...nodeData, config: { ...nodeData.config,
+                        _port_r1: String(parseInt(h.slice(1,3),16)),
+                        _port_g1: String(parseInt(h.slice(3,5),16)),
+                        _port_b1: String(parseInt(h.slice(5,7),16)),
+                      }});
+                    }}
+                    onClick={e => e.stopPropagation()}
+                  />
+                </>
+              )}
+              {!toConnected && (
+                <>
+                  <span style={{ fontSize: '0.6rem', color: '#8090a0' }}>Color To</span>
+                  <input
+                    type="color" className={styles.input}
+                    style={{ height: 24, padding: 1, cursor: 'pointer' }}
+                    value={toHex}
+                    onChange={e => {
+                      const h = e.target.value;
+                      updateNodeData(id, { ...nodeData, config: { ...nodeData.config,
+                        _port_r2: String(parseInt(h.slice(1,3),16)),
+                        _port_g2: String(parseInt(h.slice(3,5),16)),
+                        _port_b2: String(parseInt(h.slice(5,7),16)),
+                      }});
+                    }}
+                    onClick={e => e.stopPropagation()}
+                  />
+                </>
+              )}
+            </>
+          );
+        })()}
+
         {nodeData.nodeType === 'arithmeticOperator' && (
           <select
             className={styles.select}
@@ -815,6 +963,292 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <option value="random">Pick Random</option>
           </select>
         )}
+
+        {nodeData.nodeType === 'aggregate' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.operation as string) || 'sum'}
+            onChange={e => updateConfig('operation', e.target.value)}
+          >
+            <option value="sum">Sum</option>
+            <option value="product">Product</option>
+            <option value="max">Max</option>
+            <option value="min">Min</option>
+            <option value="average">Average</option>
+            <option value="median">Median</option>
+          </select>
+        )}
+
+        {nodeData.nodeType === 'switch' && (() => {
+          const switchMode = (nodeData.config.mode as string) || 'conditions';
+          const valType = (nodeData.config.valueType as string) || 'integer';
+          const caseCount = Number(nodeData.config.caseCount) || 0;
+          const firstMatch = nodeData.config.firstMatchOnly !== false;
+          const tagAttrId = nodeData.config.tagAttributeId as string;
+          const tagAttr = model.attributes.find(a => a.id === tagAttrId);
+          const tagOpts = tagAttr?.tagOptions || [];
+
+          const removeCase = (i: number) => {
+            const newConfig = { ...nodeData.config };
+            for (let j = i; j < caseCount - 1; j++) {
+              newConfig[`case_${j}_op`] = newConfig[`case_${j + 1}_op`] ?? '==';
+              newConfig[`case_${j}_value`] = newConfig[`case_${j + 1}_value`] ?? '';
+            }
+            delete newConfig[`case_${caseCount - 1}_op`];
+            delete newConfig[`case_${caseCount - 1}_value`];
+            newConfig.caseCount = caseCount - 1;
+            updateNodeData(id, { ...nodeData, config: newConfig });
+          };
+
+          const addCase = () => {
+            const newConfig = { ...nodeData.config };
+            newConfig[`case_${caseCount}_op`] = '==';
+            newConfig[`case_${caseCount}_value`] = valType === 'tag' ? '0' : String(caseCount);
+            newConfig.caseCount = caseCount + 1;
+            updateNodeData(id, { ...nodeData, config: newConfig });
+          };
+
+          return (
+            <>
+              {/* Mode selector */}
+              <select
+                className={styles.select}
+                value={switchMode}
+                onChange={e => {
+                  const newConfig = { ...nodeData.config, mode: e.target.value, caseCount: 0 };
+                  updateNodeData(id, { ...nodeData, config: newConfig });
+                }}
+              >
+                <option value="conditions">By Conditions</option>
+                <option value="value">By Value</option>
+              </select>
+
+              {/* First match only toggle */}
+              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.68rem', color: '#a0b0c0', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={firstMatch}
+                  onChange={e => updateConfig('firstMatchOnly', e.target.checked)}
+                  style={{ cursor: 'pointer' }}
+                />
+                First match only
+              </label>
+
+              {/* Value mode: type selector */}
+              {switchMode === 'value' && (
+                <select
+                  className={styles.select}
+                  value={valType}
+                  onChange={e => {
+                    const newConfig = { ...nodeData.config, valueType: e.target.value, caseCount: 0 };
+                    updateNodeData(id, { ...nodeData, config: newConfig });
+                  }}
+                >
+                  <option value="integer">Integer</option>
+                  <option value="float">Float</option>
+                  <option value="tag">Tag</option>
+                </select>
+              )}
+
+              {/* Value+Tag: tag attribute selector */}
+              {switchMode === 'value' && valType === 'tag' && (
+                <select
+                  className={styles.select}
+                  value={tagAttrId || ''}
+                  onChange={e => {
+                    const newConfig = { ...nodeData.config, tagAttributeId: e.target.value, caseCount: 0 };
+                    updateNodeData(id, { ...nodeData, config: newConfig });
+                  }}
+                >
+                  <option value="">Tag attr...</option>
+                  {model.attributes
+                    .filter(a => a.type === 'tag')
+                    .map(a => (
+                      <option key={a.id} value={a.id}>{a.name}{a.isModelAttribute ? ' (model)' : ''}</option>
+                    ))}
+                </select>
+              )}
+
+              {/* Per-case rows */}
+              {Array.from({ length: caseCount }, (_, i) => (
+                <div key={i} style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                  {/* Case label for By Value mode */}
+                  {switchMode === 'value' && (
+                    <span style={{ fontSize: '0.62rem', color: '#8090a0', flexShrink: 0 }}>Case {i}</span>
+                  )}
+                  {/* By Value + int/float: comparison op */}
+                  {switchMode === 'value' && valType !== 'tag' && (
+                    <select
+                      className={styles.select}
+                      style={{ width: 42, flexShrink: 0 }}
+                      value={(nodeData.config[`case_${i}_op`] as string) || '=='}
+                      onChange={e => updateConfig(`case_${i}_op`, e.target.value)}
+                    >
+                      <option value="==">==</option>
+                      <option value="!=">!=</option>
+                      <option value=">">&gt;</option>
+                      <option value="<">&lt;</option>
+                      <option value=">=">&gt;=</option>
+                      <option value="<=">&lt;=</option>
+                    </select>
+                  )}
+                  {/* By Value + tag: tag option dropdown */}
+                  {switchMode === 'value' && valType === 'tag' && (
+                    <select
+                      className={styles.select}
+                      style={{ flex: 1 }}
+                      value={(nodeData.config[`case_${i}_value`] as string) || '0'}
+                      onChange={e => updateConfig(`case_${i}_value`, e.target.value)}
+                    >
+                      {tagOpts.map((t, ti) => (
+                        <option key={ti} value={String(ti)}>{t}</option>
+                      ))}
+                      {tagOpts.length === 0 && <option value="0">(no tags)</option>}
+                    </select>
+                  )}
+                  {/* By Conditions: just a label */}
+                  {switchMode === 'conditions' && (
+                    <span style={{ flex: 1, fontSize: '0.68rem', color: '#8090a0' }}>Case {i}</span>
+                  )}
+                  {/* Remove button */}
+                  <button
+                    style={{
+                      background: 'none', border: 'none', color: '#f44336',
+                      cursor: 'pointer', fontSize: '0.7rem', padding: '0 2px',
+                    }}
+                    onClick={() => removeCase(i)}
+                    title="Remove case"
+                  >
+                    x
+                  </button>
+                </div>
+              ))}
+              <button
+                className={styles.select}
+                style={{ cursor: 'pointer', textAlign: 'center' }}
+                onClick={addCase}
+              >
+                + Add Case
+              </button>
+            </>
+          );
+        })()}
+
+        {nodeData.nodeType === 'getNeighborAttributeByTag' && (() => {
+          const selNbr = model.neighborhoods.find(n => n.id === nodeData.config.neighborhoodId);
+          const tags = selNbr?.tags || {};
+          const tagNames = Object.values(tags);
+          return (
+            <>
+              <select
+                className={styles.select}
+                value={(nodeData.config.neighborhoodId as string) || ''}
+                onChange={e => updateConfig('neighborhoodId', e.target.value)}
+              >
+                <option value="">Neighborhood...</option>
+                {model.neighborhoods.map(n => (
+                  <option key={n.id} value={n.id}>{n.name}</option>
+                ))}
+              </select>
+              <select
+                className={styles.select}
+                value={(nodeData.config.attributeId as string) || ''}
+                onChange={e => updateConfig('attributeId', e.target.value)}
+              >
+                <option value="">Attribute...</option>
+                {model.attributes
+                  .filter(a => !a.isModelAttribute)
+                  .map(a => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+              </select>
+              <select
+                className={styles.select}
+                value={(nodeData.config.tagName as string) || ''}
+                onChange={e => updateConfig('tagName', e.target.value)}
+              >
+                <option value="">Tag...</option>
+                {tagNames.map(t => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+              {tagNames.length === 0 && selNbr && (
+                <span style={{ fontSize: '0.6rem', color: '#f44336', fontStyle: 'italic' }}>
+                  No tags on this neighborhood
+                </span>
+              )}
+            </>
+          );
+        })()}
+
+        {nodeData.nodeType === 'getNeighborIndexesByTags' && (() => {
+          const selNbr = model.neighborhoods.find(n => n.id === nodeData.config.neighborhoodId);
+          const tags = selNbr?.tags || {};
+          const tagNames = Object.values(tags);
+          const tagCount = Number(nodeData.config.tagCount) || 0;
+          return (
+            <>
+              <select
+                className={styles.select}
+                value={(nodeData.config.neighborhoodId as string) || ''}
+                onChange={e => {
+                  const newConfig = { ...nodeData.config, neighborhoodId: e.target.value, tagCount: 0 };
+                  updateNodeData(id, { ...nodeData, config: newConfig });
+                }}
+              >
+                <option value="">Neighborhood...</option>
+                {model.neighborhoods.map(n => (
+                  <option key={n.id} value={n.id}>{n.name}</option>
+                ))}
+              </select>
+              {Array.from({ length: tagCount }, (_, i) => (
+                <div key={i} style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                  <select
+                    className={styles.select}
+                    style={{ flex: 1 }}
+                    value={(nodeData.config[`tag_${i}_name`] as string) || ''}
+                    onChange={e => updateConfig(`tag_${i}_name`, e.target.value)}
+                  >
+                    <option value="">Tag...</option>
+                    {tagNames.map(t => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                  <button
+                    style={{
+                      background: 'none', border: 'none', color: '#f44336',
+                      cursor: 'pointer', fontSize: '0.7rem', padding: '0 2px',
+                    }}
+                    onClick={() => {
+                      const newConfig = { ...nodeData.config };
+                      for (let j = i; j < tagCount - 1; j++) {
+                        newConfig[`tag_${j}_name`] = newConfig[`tag_${j + 1}_name`] ?? '';
+                      }
+                      delete newConfig[`tag_${tagCount - 1}_name`];
+                      newConfig.tagCount = tagCount - 1;
+                      updateNodeData(id, { ...nodeData, config: newConfig });
+                    }}
+                    title="Remove tag"
+                  >
+                    x
+                  </button>
+                </div>
+              ))}
+              <button
+                className={styles.select}
+                style={{ cursor: 'pointer', textAlign: 'center' }}
+                onClick={() => {
+                  const newConfig = { ...nodeData.config };
+                  newConfig[`tag_${tagCount}_name`] = tagNames[0] || '';
+                  newConfig.tagCount = tagCount + 1;
+                  updateNodeData(id, { ...nodeData, config: newConfig });
+                }}
+              >
+                + Add Tag
+              </button>
+            </>
+          );
+        })()}
 
         {nodeData.nodeType === 'macro' && (
           <span style={{ fontSize: '0.6rem', color: '#8060c0', fontStyle: 'italic' }}>
@@ -901,14 +1335,16 @@ function CaNodeComponent({ id, data }: NodeProps) {
         const configKey = `_port_${port.id}`;
         const val = (nodeData.config[configKey] as string) ?? portDef.defaultValue ?? '';
 
-        // Port compatibility highlighting (also dim already-connected value inputs)
+        // Port compatibility highlighting (also dim already-connected value inputs, except isArray)
         const cf = connectingFrom;
         const directionMatch = cf ? cf.kind !== 'input' : false; // input ports match when dragging from output
         const categoryMatch = cf ? port.category === cf.category && id !== cf.nodeId : null;
-        const alreadyOccupied = isConnected && port.category === 'value';
+        const isArrayPort = !!portDef.isArray;
+        const alreadyOccupied = isConnected && port.category === 'value' && !isArrayPort;
         const isCompatible = cf ? (directionMatch && categoryMatch && !alreadyOccupied) : null;
         const handleClass = [
           port.category === 'flow' ? styles.handleFlow : styles.handleValue,
+          !isConnected && port.category === 'value' ? styles.handleUnconnected : '',
           cf && isCompatible ? styles.handleCompatible : '',
           cf && !isCompatible ? styles.handleIncompatible : '',
         ].filter(Boolean).join(' ');
@@ -924,13 +1360,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
               title={port.label}
             />
             {showWidget && (
-              <div className={styles.inlineWidgetWrapper} style={{ top: `${topPx}px` }}>
+              <div className={styles.inlineWidgetWrapper} style={{ top: `${topPx}px` }} onMouseDown={stopDrag} onDoubleClick={stopAll}>
                 {effectiveWidget === 'bool' ? (
                   <select
                     className={styles.inlineWidget}
                     value={val === 'true' ? 'true' : 'false'}
                     onChange={e => updateConfig(configKey, e.target.value)}
                     onClick={e => e.stopPropagation()}
+                    onMouseDown={stopDrag}
                   >
                     <option value="true">True</option>
                     <option value="false">False</option>
@@ -941,6 +1378,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                     value={val || '0'}
                     onChange={e => updateConfig(configKey, e.target.value)}
                     onClick={e => e.stopPropagation()}
+                    onMouseDown={stopDrag}
                   >
                     {(setAttr?.tagOptions || []).map((t, ti) => (
                       <option key={ti} value={String(ti)}>{t}</option>
@@ -954,6 +1392,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                     value={val}
                     onChange={e => updateConfig(configKey, e.target.value)}
                     onClick={e => e.stopPropagation()}
+                    onMouseDown={stopDrag}
                   />
                 )}
               </div>

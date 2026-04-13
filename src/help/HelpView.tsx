@@ -236,7 +236,7 @@ export function HelpView() {
         <section id="help-nodes" className={styles.section}>
           <h2 className={styles.h2}>Node Types Reference</h2>
           <p className={styles.p}>
-            GenesisCA provides 26 node types organized into categories:
+            GenesisCA provides 36 node types organized into categories:
           </p>
 
           <h3 className={styles.h3}>
@@ -262,6 +262,7 @@ export function HelpView() {
               <tr><td>Conditional</td><td>If/else branching based on a boolean condition.</td></tr>
               <tr><td>Sequence</td><td>Execute &quot;First&quot; then &quot;Then&quot; sequentially.</td></tr>
               <tr><td>Loop</td><td>Repeat &quot;Body&quot; a given number of times.</td></tr>
+              <tr><td>Switch</td><td>Route flow to multiple cases. Two modes: <strong>By Conditions</strong> (wire boolean inputs per case) or <strong>By Value</strong> (compare a value against per-case thresholds with ==, !=, &gt;, &lt;, &gt;=, &lt;= operators, or match tag options). A &quot;First match only&quot; toggle controls whether only the first matching case fires or all matches execute.</td></tr>
             </tbody>
           </table>
 
@@ -275,8 +276,12 @@ export function HelpView() {
               <tr><td>Get Cell Attribute</td><td>Read the current cell&apos;s attribute value (e.g., &quot;alive&quot;).</td></tr>
               <tr><td>Get Model Attribute</td><td>Read a global model parameter.</td></tr>
               <tr><td>Get Neighbors Attribute</td><td>Collect an attribute from all neighbors as an array.</td></tr>
+              <tr><td>Get Neighbor Attr By Index</td><td>Read a cell attribute from ONE specific neighbor by index. Works in both sync and async modes.</td></tr>
+              <tr><td>Get Neighbor Attr By Tag</td><td>Read a cell attribute from a specific neighbor identified by a named tag (defined in the Neighborhoods panel). The tag is resolved to an index at compile time.</td></tr>
+              <tr><td>Get Neighbor Indexes By Tags</td><td>Select multiple neighborhood cells by their tag names and output an array of indices. Use with &quot;Get Neighbors Attr By Indexes&quot; for tag-based multi-neighbor access.</td></tr>
+              <tr><td>Get Neighbors Attr By Indexes</td><td>Read attributes from a subset of neighbors specified by an array of indices.</td></tr>
               <tr><td>Get Constant</td><td>A fixed value (bool, integer, or float).</td></tr>
-              <tr><td>Get Random</td><td>Generate a random value (bool, integer, or float).</td></tr>
+              <tr><td>Get Random</td><td>Generate a random value (bool, integer, or float). In Bool mode, an input port &quot;P&quot; (probability 0&ndash;1) controls the chance of producing 1 (default 0.5 = 50%).</td></tr>
             </tbody>
           </table>
 
@@ -287,8 +292,10 @@ export function HelpView() {
           <table className={styles.table}>
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
-              <tr><td>Arithmetic Operator</td><td>+, -, *, /, %, sqrt, pow, abs, max, min, mean.</td></tr>
-              <tr><td>Statement</td><td>Comparison operators: ==, !=, &gt;, &lt;, &gt;=, &lt;=.</td></tr>
+              <tr><td>Arithmetic Operator (Math)</td><td>+, -, *, /, %, sqrt, pow, abs, max, min, mean.</td></tr>
+              <tr><td>Proportion Map</td><td>Remap a value from one range to another: output = outMin + (x - inMin) * (outMax - outMin) / (inMax - inMin). Has 5 inputs: X, In Min, In Max, Out Min, Out Max.</td></tr>
+              <tr><td>Interpolate</td><td>Linear interpolation: output = min + t * (max - min). Inputs: T (0&ndash;1), Min, Max.</td></tr>
+              <tr><td>Compare (Statement)</td><td>Comparison operators: ==, !=, &gt;, &lt;, &gt;=, &lt;=.</td></tr>
               <tr><td>Logic Operator</td><td>AND, OR, XOR, NOT on boolean values.</td></tr>
             </tbody>
           </table>
@@ -303,6 +310,7 @@ export function HelpView() {
               <tr><td>Group Counting</td><td>Count neighbors matching a condition (equals, not equals, greater, lesser).</td></tr>
               <tr><td>Group Statement</td><td>Check if all/none/any neighbors satisfy a condition.</td></tr>
               <tr><td>Group Operator</td><td>Sum, multiply, max, min, mean, AND, OR, or pick random from neighbor values.</td></tr>
+              <tr><td>Aggregate</td><td>Accepts multiple value connections on a single input port. Operations: Sum, Product, Max, Min, Average, Median. Use to combine values from different sources without needing arrays.</td></tr>
             </tbody>
           </table>
 
@@ -316,7 +324,6 @@ export function HelpView() {
               <tr><td>Set Attribute</td><td>Write a value to the current cell&apos;s attribute for the next generation.</td></tr>
               <tr><td>Set Neighborhood Attribute</td><td><strong>(Async only)</strong> Set a cell attribute for ALL cells in a neighborhood to a given value.</td></tr>
               <tr><td>Set Neighbor Attr By Index</td><td><strong>(Async only)</strong> Set a cell attribute for ONE specific neighbor (by index 0..N&minus;1) to a given value.</td></tr>
-              <tr><td>Get Neighbor Attr By Index</td><td>Read a cell attribute from ONE specific neighbor by index. Works in both sync and async modes.</td></tr>
             </tbody>
           </table>
 
@@ -329,6 +336,7 @@ export function HelpView() {
             <tbody>
               <tr><td>Set Color Viewer</td><td>Write RGB values for an Attribute-to-Color visualization.</td></tr>
               <tr><td>Get Color Constant</td><td>Output fixed R, G, B values.</td></tr>
+              <tr><td>Color Interpolate</td><td>Linearly interpolate between two colors. Inputs: interpolation point T (0&ndash;1), From R/G/B, To R/G/B. Outputs: R, G, B. Includes color picker widgets for &quot;Color From&quot; and &quot;Color To&quot; when the per-channel ports are not connected.</td></tr>
             </tbody>
           </table>
 
@@ -483,6 +491,27 @@ export function HelpView() {
             <li><strong>Show Code</strong> &mdash; View the compiled JavaScript function.</li>
           </ul>
 
+          <h3 className={styles.h3}>Save &amp; Load State</h3>
+          <p className={styles.p}>
+            The transport bar includes <strong>Save State</strong> (floppy disk icon) and{' '}
+            <strong>Load State</strong> (folder icon) buttons at its left side.
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Save State</strong> &mdash; Downloads a <code>.gcastate</code> file
+              capturing the full simulation snapshot: current generation, all cell
+              attribute values, model attribute values, colors, indicator state, and
+              simulator settings (viewer, brush, FPS, gens/frame).</li>
+            <li><strong>Load State</strong> &mdash; Opens a <code>.gcastate</code> file and
+              restores the simulation to that exact point. The grid dimensions in the
+              state file must match the current grid &mdash; resize first if needed.</li>
+          </ul>
+          <p className={styles.p}>
+            This enables experiment repeatability: save a specific configuration, run the
+            simulation, then reload the same starting point to try different parameters.
+            Saving state also embeds it in the model, so the next <code>.gcaproj</code>{' '}
+            save will include the simulation snapshot.
+          </p>
+
           <p className={styles.p}>
             All simulator settings (speed, brush, viewer) are automatically saved and
             restored between sessions.
@@ -547,11 +576,21 @@ export function HelpView() {
             <li><strong>mappings</strong> &mdash; Color mapping definitions for visualization and interaction.</li>
             <li><strong>graphNodes / graphEdges</strong> &mdash; The VPL node graph (positions, connections, config).</li>
             <li><strong>macroDefs</strong> &mdash; Macro subgraph definitions.</li>
+            <li><strong>simulationState</strong> (optional) &mdash; Embedded simulation snapshot, included automatically if you used Save State in the simulator before saving the project.</li>
           </ul>
           <p className={styles.p}>
             Use <strong>Save</strong> to download a <code>.gcaproj</code> file, and{' '}
             <strong>Load</strong> to import one. You can also load models from the{' '}
             <strong>Library</strong> tab.
+          </p>
+
+          <h3 className={styles.h3}>State Files (.gcastate)</h3>
+          <p className={styles.p}>
+            State files are standalone snapshots of the simulation at a specific
+            generation. They contain all cell attribute arrays (base64-encoded typed
+            arrays), model attribute values, indicator state, color buffer, and
+            simulator UI settings. Use these to save and restore specific
+            configurations for reproducible experiments.
           </p>
         </section>
       </div>

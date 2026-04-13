@@ -88,6 +88,18 @@
   display: block;
 }
 
+/* Flip submenu to the left when near the right edge */
+:global([data-submenu-left]) .contextSubmenu {
+  left: auto;
+  right: 100%;
+}
+
+/* Flip submenu upward when near the bottom edge */
+:global([data-submenu-up]) .contextSubmenu {
+  top: auto;
+  bottom: 0;
+}
+
 /* Breadcrumb */
 
 .breadcrumb {

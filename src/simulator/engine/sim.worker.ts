@@ -60,7 +60,21 @@ interface IndicatorDef {
 }
 
 interface UpdateIndicatorsMsg { type: 'updateIndicators'; indicators: IndicatorDef[]; attributes: AttrDef[] }
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | ImportImageMsg | UpdateIndicatorsMsg;
+interface GetStateMsg { type: 'getState' }
+interface LoadStateMsg {
+  type: 'loadState';
+  generation: number;
+  width: number;
+  height: number;
+  attributes: Record<string, { type: string; buffer: ArrayBuffer }>;
+  modelAttrs: Record<string, number>;
+  indicators: Record<string, number>;
+  linkedAccumulators: Record<string, number | Record<string, number>>;
+  colors: ArrayBuffer;
+  orderArray?: ArrayBuffer;
+  activeViewer: string;
+}
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -625,6 +639,91 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       } else {
         writeDefaultColors();
       }
+      sendColors();
+      break;
+    }
+
+    case 'getState': {
+      // Build transferable copies of all attribute arrays
+      const attrBuffers: Record<string, { type: string; buffer: ArrayBuffer }> = {};
+      const transfers: ArrayBuffer[] = [];
+      for (const attr of cellAttrs) {
+        const arr = readAttrs[attr.id]!;
+        const copy = (arr as Uint8Array).slice();
+        attrBuffers[attr.id] = { type: attr.type, buffer: copy.buffer };
+        transfers.push(copy.buffer);
+      }
+      const colorsCopy = colors.slice();
+      transfers.push(colorsCopy.buffer);
+      const response: Record<string, unknown> = {
+        type: 'state',
+        generation,
+        width,
+        height,
+        attributes: attrBuffers,
+        modelAttrs: { ...cachedModelAttrs },
+        indicators: { ...cachedIndicators },
+        linkedAccumulators: JSON.parse(JSON.stringify(linkedAccumulators)),
+        colors: colorsCopy.buffer,
+      };
+      if (orderArray) {
+        const orderCopy = orderArray.slice();
+        response.orderArray = orderCopy.buffer;
+        transfers.push(orderCopy.buffer);
+      }
+      self.postMessage(response, { transfer: transfers });
+      break;
+    }
+
+    case 'loadState': {
+      generation = msg.generation;
+      activeViewer = msg.activeViewer;
+
+      // Restore cell attribute arrays
+      const isAsyncLoad = updateMode === 'asynchronous';
+      for (const attr of cellAttrs) {
+        const entry = msg.attributes[attr.id];
+        if (!entry) continue;
+        const src = createTypedArray(attr.type, total);
+        const srcView = new (src.constructor as { new(b: ArrayBuffer): typeof src })(entry.buffer);
+        const copyLen = Math.min(src.length, srcView.length);
+        for (let i = 0; i < copyLen; i++) src[i] = srcView[i]!;
+        attrsA[attr.id] = src;
+        if (isAsyncLoad) {
+          attrsB[attr.id] = src;
+        } else {
+          const clone = createTypedArray(attr.type, total);
+          for (let i = 0; i < copyLen; i++) clone[i] = srcView[i]!;
+          attrsB[attr.id] = clone;
+        }
+      }
+      readAttrs = attrsA;
+      writeAttrs = isAsyncLoad ? attrsA : attrsB;
+
+      // Restore colors
+      const loadedColors = new Uint8ClampedArray(msg.colors);
+      const colorLen = Math.min(colors.length, loadedColors.length);
+      for (let i = 0; i < colorLen; i++) colors[i] = loadedColors[i]!;
+
+      // Restore model attributes
+      for (const [key, val] of Object.entries(msg.modelAttrs)) {
+        cachedModelAttrs[key] = val;
+      }
+
+      // Restore standalone indicators
+      for (const [key, val] of Object.entries(msg.indicators)) {
+        cachedIndicators[key] = val;
+      }
+      linkedAccumulators = msg.linkedAccumulators;
+
+      // Restore order array
+      if (msg.orderArray) {
+        orderArray = new Int32Array(msg.orderArray);
+      }
+
+      // Rebuild neighbor indices for constant boundary sentinel
+      buildNeighborIndices();
+
       sendColors();
       break;
     }

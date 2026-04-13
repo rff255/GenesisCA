@@ -1,5 +1,5 @@
 import { SCHEMA_VERSION } from './schema';
-import type { CAModel } from './types';
+import type { CAModel, SimulationState, SerializedTypedArray } from './types';
 
 export function serializeModel(model: CAModel): string {
   return JSON.stringify(model, null, 2);
@@ -50,6 +50,124 @@ export function readModelFile(file: File): Promise<CAModel> {
         resolve(model);
       } catch {
         reject(new Error('Failed to parse file. Is it valid JSON?'));
+      }
+    };
+    reader.onerror = () => reject(new Error('Failed to read file.'));
+    reader.readAsText(file);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Simulation State (.gcastate) serialization
+// ---------------------------------------------------------------------------
+
+export function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]!);
+  }
+  return btoa(binary);
+}
+
+export function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
+export function deserializeTypedArray(
+  entry: SerializedTypedArray,
+  size: number,
+): Float64Array | Int32Array | Uint8Array {
+  const buffer = base64ToArrayBuffer(entry.data);
+  switch (entry.type) {
+    case 'uint8': return new Uint8Array(buffer).slice(0, size);
+    case 'int32': return new Int32Array(buffer).slice(0, size);
+    case 'float64': return new Float64Array(buffer).slice(0, size);
+    default: return new Float64Array(buffer).slice(0, size);
+  }
+}
+
+const ATTR_TYPE_MAP: Record<string, 'uint8' | 'int32' | 'float64'> = {
+  bool: 'uint8', integer: 'int32', float: 'float64', tag: 'int32',
+};
+
+export function serializeSimState(
+  workerState: {
+    generation: number;
+    width: number;
+    height: number;
+    attributes: Record<string, { type: string; buffer: ArrayBuffer }>;
+    modelAttrs: Record<string, number>;
+    indicators: Record<string, number>;
+    linkedAccumulators: Record<string, number | Record<string, number>>;
+    colors: ArrayBuffer;
+    orderArray?: ArrayBuffer;
+  },
+  uiSettings: {
+    activeViewer: string;
+    brushColor: string;
+    brushW: number;
+    brushH: number;
+    brushMapping: string;
+    targetFps: number;
+    unlimitedFps: boolean;
+    gensPerFrame: number;
+    unlimitedGens: boolean;
+  },
+): SimulationState {
+  const serialized: SimulationState = {
+    generation: workerState.generation,
+    width: workerState.width,
+    height: workerState.height,
+    attributes: {},
+    modelAttrs: workerState.modelAttrs,
+    indicators: workerState.indicators,
+    linkedAccumulators: workerState.linkedAccumulators,
+    colors: arrayBufferToBase64(workerState.colors),
+    ...uiSettings,
+  };
+  for (const [id, entry] of Object.entries(workerState.attributes)) {
+    serialized.attributes[id] = {
+      type: ATTR_TYPE_MAP[entry.type] || 'float64',
+      data: arrayBufferToBase64(entry.buffer),
+    };
+  }
+  if (workerState.orderArray) {
+    serialized.orderArray = arrayBufferToBase64(workerState.orderArray);
+  }
+  return serialized;
+}
+
+export function downloadStateFile(state: SimulationState, filename: string): void {
+  const blob = new Blob([JSON.stringify(state)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export function readStateFile(file: File): Promise<SimulationState> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const state = JSON.parse(reader.result as string) as SimulationState;
+        if (!state.width || !state.height || !state.attributes) {
+          reject(new Error('Invalid state file: missing required fields.'));
+          return;
+        }
+        resolve(state);
+      } catch {
+        reject(new Error('Failed to parse state file. Is it valid JSON?'));
       }
     };
     reader.onerror = () => reject(new Error('Failed to read file.'));

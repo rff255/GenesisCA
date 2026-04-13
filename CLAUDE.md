@@ -140,8 +140,22 @@ Models are saved as `.gcaproj` files with a versioned schema. The JSON contains:
 - All model properties, attributes, neighborhoods, color mappings
 - The full node graph (nodes, connections, positions) as serialized React Flow state
 - The compiled JS function string (optional, can be recompiled from graph)
+- Optional `simulationState` — embedded simulation snapshot (included when user saves state in the simulator before saving the project)
 
 Users can save/load these files locally (browser download/upload). No cloud storage.
+
+### Simulation State Files (.gcastate)
+
+Standalone simulation snapshots saved from the simulator transport bar. JSON containing:
+- Generation, grid dimensions, all cell attribute arrays (base64-encoded typed arrays)
+- Model attribute values, indicator state (standalone + linked accumulators), color buffer
+- Simulator UI settings (activeViewer, brush, FPS, gens/frame)
+
+Serialization: `fileOperations.ts` — `serializeSimState()`, `readStateFile()`, `arrayBufferToBase64()` / `base64ToArrayBuffer()`, `deserializeTypedArray()`
+
+Worker messages: `getState` (worker copies and transfers all typed arrays), `loadState` (worker restores arrays and rebuilds neighbor indices). Dimension validation in `applySimulationState()` rejects mismatched state files.
+
+Auto-save to localStorage strips `simulationState` to avoid exceeding quota on large grids.
 
 ### Presentation Export
 
@@ -178,7 +192,7 @@ genesis-ca/
 │   │       ├── GraphEditor.tsx
 │   │       ├── graphState.ts          # Shared mutable state (avoids circular imports between GraphEditor/CaNode)
 │   │       ├── NodeExplorer.tsx        # Right-side searchable node list panel
-│   │       ├── nodes/                # 26 node types (one file each)
+│   │       ├── nodes/                # 36 node types (one file each)
 │   │       └── compiler/
 │   │           └── compile.ts        # Two-pass compiler (hoisted values + flow)
 │   ├── simulator/
@@ -194,7 +208,7 @@ genesis-ca/
 │   ├── model/
 │   │   ├── ModelContext.tsx           # React Context + useReducer
 │   │   ├── defaultModel.ts           # EMPTY_MODEL (for New) + first-launch Game of Life auto-load
-│   │   ├── fileOperations.ts         # .gcaproj save/load/download
+│   │   ├── fileOperations.ts         # .gcaproj save/load/download + .gcastate serialization
 │   │   ├── schema.ts
 │   │   └── types.ts                  # TypeScript types for CAModel
 │   └── export/                       # Presentation .html builder (planned)
@@ -253,10 +267,14 @@ The app is functional with these major systems:
 ### Visual Programming Language (VPL)
 - `src/modeler/vpl/GraphEditor.tsx` — React Flow-based node graph editor
 - `src/modeler/vpl/CaNode.tsx` — Custom node component with per-type config UI
-- `src/modeler/vpl/nodes/` — 26 node types, each in its own file with `compile()` method (2 are async-only: SetNeighborhoodAttribute, SetNeighborAttributeByIndex)
+- `src/modeler/vpl/nodes/` — 36 node types, each in its own file with `compile()` method (2 are async-only: SetNeighborhoodAttribute, SetNeighborAttributeByIndex)
 - Three "event" entry-point nodes: GenerationStep (per-gen logic), InputMapping C→A (brush), OutputMapping A→C (color pass)
 - `src/modeler/vpl/compiler/compile.ts` — Two-pass compiler: hoists values, then emits flow
-- Multi-output nodes (InputColor, GetColorConstant, MacroNode) use `_v${nodeId}_${portId}` naming
+- Multi-output nodes (InputColor, GetColorConstant, MacroNode, ColorInterpolation) use `_v${nodeId}_${portId}` naming
+- Switch node: flow control with dynamic case ports, compiler emits if/else-if chain
+- Aggregate node: accepts multiple connections on one isArray input port, operations: Sum/Product/Max/Min/Average/Median
+- ProportionMap, Interpolation, ColorInterpolation: math/color utility nodes
+- GetNeighborAttributeByTag: resolves neighborhood cell tags to indices at compile time
 - Multi-root support: Step (per-generation), InputColor (brush interaction), and OutputMapping (color pass) compile separately
 - OutputMapping functions: loop-wrapped, always sequential (no shuffle), no copy lines; run once after all generation steps complete; skipped in unlimited gens mode via `skipColorPass` flag
 - Paint with OutputMapping: prefers `runColorPass()` over `runStep()` so painting doesn't advance the simulation
@@ -271,6 +289,7 @@ The app is functional with these major systems:
 - Async mode: `order` param is an Int32Array of shuffled/random cell indices; loop uses `idx = order[_i]` instead of `idx = _i`; r_ and w_ params point to same typed arrays (single buffer); copy lines are skipped; buffer swap is skipped after step
 - Async schemes: `random-order` (Fisher-Yates shuffle per step), `random-independent` (N random picks with replacement), `cyclic` (one-time shuffle at init)
 - InputColor functions remain per-cell: `(_r, _g, _b, idx, r_<attrs>..., ...)`
+- GetRandom in Bool mode: has a `probability` input port (inline number widget, default 0.5). CaNode.tsx filters it out when `randomType !== 'bool'`. Compiles to `Math.random() < prob ? 1 : 0`.
 - GetNeighborsAttribute uses `_scr_<nodeId>` scratch arrays declared before the loop — never allocate in hot path
 - NEVER use `fn(...args)` in per-cell loops — V8 megamorphic spread kills performance
 - Play pipeline chains from worker message handler (not rAF): receive result → draw → send next step
@@ -285,6 +304,7 @@ The app is functional with these major systems:
 - GIF recording: `gifenc` library, frame capture from srcCanvas in worker message handler, max 512px downscale
 - Screenshot exports at display canvas resolution (not grid resolution) with nearest-neighbor upscale
 - Recompile optimization: structural changes reinit worker, graph-only changes send `recompile` message (preserves grid state)
+- Save/Load State: transport bar buttons (left side) save `.gcastate` / load `.gcastate`. Worker `getState` copies all typed arrays via `.slice()` and transfers them. Worker `loadState` restores arrays and rebuilds neighbor indices. `applySimulationState()` validates grid dimensions match before loading. Auto-save strips `simulationState` from localStorage to avoid quota overflow. Saving state also stores it in model context so next `.gcaproj` save includes it. On `.gcaproj` load, `pendingSimStateRestore` ref triggers restore after first worker `stepped` message.
 
 ### Key Patterns
 - Async-only nodes (`ASYNC_ONLY_TYPES` in compile.ts): `setNeighborhoodAttribute`, `setNeighborAttributeByIndex` — compiler emits error if used in sync mode because copy lines overwrite neighbor writes. `getNeighborAttributeByIndex` is read-only and works in both modes.
@@ -316,6 +336,14 @@ The app is functional with these major systems:
 - React StrictMode double-mount: effects run mount→cleanup→mount in dev. When terminating resources (Web Workers), always null out the ref (`workerRef.current = null`) after `.terminate()` so the second mount detects it needs a fresh init instead of reusing a dead reference.
 - Indicator values use a ref (`indicatorValuesRef`) not React state — avoids extra re-renders on every worker step message. The existing `setGeneration` re-render reads the ref naturally.
 - Linked indicator aggregation is always post-loop (not in-loop) to avoid async mode single-buffer corruption where mid-loop reads see a mix of old and new cell values.
+- Neighborhood tags: `Neighborhood.tags?: Record<number, string>` maps coord index to tag name. Tags are optional per-cell labels for neighbor positions.
+- `inputToSources` (plural) map in compile.ts: collects ALL edges targeting the same value port. Used for multi-connection `isArray` ports on Aggregate node.
+- Connection validation: `isValidConnection` allows multiple edges to the same target handle when the target port has `isArray: true`.
+- Switch node dynamic ports: case output ports generated from `caseCount` + `case_N_value` config keys, similar to macro dynamic ports.
+- Context menu: clamped to viewport bounds via `useLayoutEffect` + ref measurement after render. Initial render with `visibility: hidden`.
+- Modeler PanelShell: resizable via drag handle on right edge (200-600px range). Pattern matches simulator right panel.
+- Group shrink-to-fit: `resizeGroupsToFit(nds, allowShrink)` runs on graph load with `allowShrink=true`. Prevents stale bloated groups.
+- Input drag fix: `onMouseDown={stopDrag}` on the node body div prevents all config inputs from initiating node drags. Inline widgets also have per-element handlers.
 
 ---
 

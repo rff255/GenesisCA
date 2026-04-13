@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
 import styles from './PanelContent.module.css';
 
@@ -8,6 +8,21 @@ export function MappingsPanelContent() {
 
   const attrToColor = model.mappings.filter(m => m.isAttributeToColor);
   const colorToAttr = model.mappings.filter(m => !m.isAttributeToColor);
+
+  // Auto-select & scroll to newly added mappings
+  const prevCount = useRef(model.mappings.length);
+  useEffect(() => {
+    if (model.mappings.length > prevCount.current) {
+      const newItem = model.mappings[model.mappings.length - 1];
+      if (newItem) {
+        setSelectedId(newItem.id);
+        setTimeout(() => {
+          document.getElementById(`mapping-${newItem.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }, 50);
+      }
+    }
+    prevCount.current = model.mappings.length;
+  }, [model.mappings]);
   const selected = model.mappings.find(m => m.id === selectedId);
 
   const handleDelete = () => {
@@ -27,6 +42,7 @@ export function MappingsPanelContent() {
           {attrToColor.map(m => (
             <div
               key={m.id}
+              id={`mapping-${m.id}`}
               className={`${styles.listItem} ${selectedId === m.id ? styles.listItemSelected : ''}`}
               onClick={() => setSelectedId(m.id)}
             >
@@ -56,6 +72,7 @@ export function MappingsPanelContent() {
           {colorToAttr.map(m => (
             <div
               key={m.id}
+              id={`mapping-${m.id}`}
               className={`${styles.listItem} ${selectedId === m.id ? styles.listItemSelected : ''}`}
               onClick={() => setSelectedId(m.id)}
             >
