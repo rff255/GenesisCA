@@ -4,7 +4,7 @@ export const StepNode: NodeTypeDef = {
   type: 'step',
   label: 'Generation Step',
   category: 'event',
-  color: '#2e7d32',
+  color: '#ffffff',
   ports: [
     { id: 'do', label: 'DO', kind: 'output', category: 'flow' },
   ],

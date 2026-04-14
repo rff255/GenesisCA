@@ -11,6 +11,12 @@ export interface Attribute {
   defaultValue: string;
   /** Tag type: named values (value = index into this array) */
   tagOptions?: string[];
+  /** Whether numerical bounds are enabled (integer/float model attributes only) */
+  hasBounds?: boolean;
+  /** Lower bound when hasBounds is true */
+  min?: number;
+  /** Upper bound when hasBounds is true */
+  max?: number;
 }
 
 /** A neighborhood definition — list of relative offsets from the central cell */

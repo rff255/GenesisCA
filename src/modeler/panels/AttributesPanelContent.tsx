@@ -266,6 +266,51 @@ export function AttributesPanelContent() {
                 }
               />
             </div>
+
+            {selected.isModelAttribute && (selected.type === 'integer' || selected.type === 'float') && (
+              <div className={styles.field}>
+                <label className={styles.fieldLabel} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={selected.hasBounds ?? false}
+                    onChange={e => updateAttribute(selected.id, {
+                      hasBounds: e.target.checked,
+                      min: selected.min ?? 0,
+                      max: selected.max ?? (selected.type === 'integer' ? 100 : 1),
+                    })}
+                  />
+                  Enable Bounds
+                </label>
+                {selected.hasBounds && (
+                  <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                    <div style={{ flex: 1 }}>
+                      <label className={styles.fieldLabel}>Min</label>
+                      <input
+                        className={styles.numberInput}
+                        type="number"
+                        step={selected.type === 'integer' ? 1 : 'any'}
+                        value={selected.min ?? 0}
+                        onChange={e => updateAttribute(selected.id, {
+                          min: selected.type === 'integer' ? Math.round(Number(e.target.value) || 0) : Number(e.target.value) || 0,
+                        })}
+                      />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label className={styles.fieldLabel}>Max</label>
+                      <input
+                        className={styles.numberInput}
+                        type="number"
+                        step={selected.type === 'integer' ? 1 : 'any'}
+                        value={selected.max ?? (selected.type === 'integer' ? 100 : 1)}
+                        onChange={e => updateAttribute(selected.id, {
+                          max: selected.type === 'integer' ? Math.round(Number(e.target.value) || 0) : Number(e.target.value) || 0,
+                        })}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

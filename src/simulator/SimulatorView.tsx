@@ -17,7 +17,7 @@ function loadSimSettings(): Record<string, unknown> {
   return {};
 }
 
-export function SimulatorView() {
+export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { model, updateIndicator, setSimulationState } = useModel();
   const workerRef = useRef<Worker | null>(null);
@@ -99,6 +99,7 @@ export function SimulatorView() {
   const isPanning = useRef(false);
   const lastMouse = useRef({ x: 0, y: 0 });
   const cursorGrid = useRef<{ row: number; col: number } | null>(null);
+  const lastPaintGrid = useRef<{ row: number; col: number } | null>(null);
 
   // FPS + Gens/s tracking
   const fpsFrames = useRef(0);
@@ -453,6 +454,37 @@ export function SimulatorView() {
     };
   }, []);
 
+  // Listen for project-save events to auto-capture simulation state
+  useEffect(() => {
+    const captureState = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { resolve?: () => void } | undefined;
+      const resolve = detail?.resolve;
+      if (!workerRef.current) { resolve?.(); return; }
+      pendingStateSave.current = (workerState) => {
+        const state = serializeSimState(
+          workerState as Parameters<typeof serializeSimState>[0],
+          {
+            activeViewer,
+            brushColor,
+            brushW,
+            brushH,
+            brushMapping,
+            targetFps,
+            unlimitedFps,
+            gensPerFrame,
+            unlimitedGens,
+          },
+        );
+        setSimulationState(state);
+        // Signal FileMenu that state capture is complete
+        resolve?.();
+      };
+      workerRef.current.postMessage({ type: 'getState' });
+    };
+    window.addEventListener('genesis-capture-sim-state', captureState);
+    return () => window.removeEventListener('genesis-capture-sim-state', captureState);
+  }, [activeViewer, brushColor, brushW, brushH, brushMapping, targetFps, unlimitedFps, gensPerFrame, unlimitedGens, setSimulationState]);
+
   // Smart init vs recompile: compare previous model to decide.
   // Full reinit for structural changes (grid size, attributes, neighborhoods, mappings, update mode).
   // Soft recompile for graph or indicator watch changes (preserves grid state).
@@ -488,6 +520,25 @@ export function SimulatorView() {
         updateMode: model.properties.updateMode,
         asyncScheme: model.properties.asyncScheme,
       });
+      // Sync indicator definitions when they change (not included in recompile message)
+      if (prev && prev.indicators !== model.indicators) {
+        workerRef.current?.postMessage({
+          type: 'updateIndicators',
+          indicators: (model.indicators || []).map(i => ({
+            id: i.id, kind: i.kind, dataType: i.dataType,
+            defaultValue: i.defaultValue, accumulationMode: i.accumulationMode,
+            tagOptions: i.tagOptions,
+            linkedAttributeId: i.linkedAttributeId,
+            linkedAggregation: i.linkedAggregation,
+            binCount: i.binCount, watched: i.watched,
+          })),
+          attributes: model.attributes.map(a => ({
+            id: a.id, type: a.type,
+            isModelAttribute: a.isModelAttribute, defaultValue: a.defaultValue,
+            tagOptions: a.tagOptions,
+          })),
+        });
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, compileModel]);
@@ -497,6 +548,15 @@ export function SimulatorView() {
     window.addEventListener('resize', draw);
     return () => window.removeEventListener('resize', draw);
   }, [draw]);
+
+  // Pause simulation when leaving tab, redraw when coming back
+  useEffect(() => {
+    if (visible) {
+      requestAnimationFrame(() => draw());
+    } else if (playing) {
+      setPlaying(false);
+    }
+  }, [visible, draw, playing]);
 
   // Brush refs (so event handlers don't need to re-register)
   const brushColorRef = useRef('#4cc9f0');
@@ -539,23 +599,50 @@ export function SimulatorView() {
     return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
   };
 
-  /** Send paint message for cells in brush rect around center */
-  const paintAt = useCallback((clientX: number, clientY: number) => {
-    const center = screenToGrid(clientX, clientY);
-    if (!center) return;
+  /** Collect brush-rect cells around a grid center (no message sent) */
+  const brushCellsAt = useCallback((row: number, col: number, r: number, g: number, b: number) => {
     const bw = brushWRef.current;
     const bh = brushHRef.current;
-    const { r, g, b } = hexToRgb(brushColorRef.current);
     const cells: Array<{ row: number; col: number; r: number; g: number; b: number }> = [];
     const halfW = Math.floor((bw - 1) / 2);
     const halfH = Math.floor((bh - 1) / 2);
     for (let dr = -halfH; dr <= halfH + ((bh - 1) % 2); dr++) {
       for (let dc = -halfW; dc <= halfW + ((bw - 1) % 2); dc++) {
-        cells.push({ row: center.row + dr, col: center.col + dc, r, g, b });
+        cells.push({ row: row + dr, col: col + dc, r, g, b });
       }
     }
-    workerRef.current?.postMessage({ type: 'paint', cells, mappingId: brushMappingRef.current, activeViewer: activeViewerRef.current });
-  }, [screenToGrid]);
+    return cells;
+  }, []);
+
+  /** Paint with Bresenham interpolation from last painted position to current */
+  const paintAt = useCallback((clientX: number, clientY: number) => {
+    const center = screenToGrid(clientX, clientY);
+    if (!center) return;
+    const { r, g, b } = hexToRgb(brushColorRef.current);
+    let allCells: Array<{ row: number; col: number; r: number; g: number; b: number }> = [];
+    const prev = lastPaintGrid.current;
+    if (prev && (prev.row !== center.row || prev.col !== center.col)) {
+      // Bresenham line from prev to center
+      let r0 = prev.row, c0 = prev.col;
+      const r1 = center.row, c1 = center.col;
+      let dr = Math.abs(r1 - r0), dc = Math.abs(c1 - c0);
+      const sr = r0 < r1 ? 1 : -1, sc = c0 < c1 ? 1 : -1;
+      let err = dc - dr;
+      // Skip first point (already painted on previous call)
+      while (r0 !== r1 || c0 !== c1) {
+        const e2 = 2 * err;
+        if (e2 > -dr) { err -= dr; c0 += sc; }
+        if (e2 < dc) { err += dc; r0 += sr; }
+        allCells = allCells.concat(brushCellsAt(r0, c0, r, g, b));
+      }
+    } else {
+      allCells = brushCellsAt(center.row, center.col, r, g, b);
+    }
+    lastPaintGrid.current = center;
+    if (allCells.length > 0) {
+      workerRef.current?.postMessage({ type: 'paint', cells: allCells, mappingId: brushMappingRef.current, activeViewer: activeViewerRef.current });
+    }
+  }, [screenToGrid, brushCellsAt]);
 
   // Zoom/Pan/Brush event handlers
   useEffect(() => {
@@ -599,8 +686,9 @@ export function SimulatorView() {
         isResizingBrush.startH = brushHRef.current;
         container.style.cursor = 'nwse-resize';
       } else if (e.button === 0) {
-        // LMB = brush
+        // LMB = brush — set initial paint position for Bresenham interpolation
         canvasBrushActive = true;
+        lastPaintGrid.current = null; // first paint call sets it
         paintAt(e.clientX, e.clientY);
       } else if (e.button === 2) {
         // RMB = pan
@@ -650,6 +738,7 @@ export function SimulatorView() {
       isPanning.current = false;
       isResizingBrush.active = false;
       canvasBrushActive = false;
+      lastPaintGrid.current = null;
       container.style.cursor = '';
     };
 
@@ -705,6 +794,13 @@ export function SimulatorView() {
     setPlaying(false);
     pendingStep.current = true;
     workerRef.current?.postMessage({ type: 'randomize', activeViewer });
+  };
+
+  const handleRecompile = () => {
+    setPlaying(false);
+    workerRef.current?.terminate();
+    workerRef.current = null;
+    initWorkerWithDimensions(model.properties.gridWidth, model.properties.gridHeight);
   };
 
   const startRecording = () => {
@@ -981,6 +1077,7 @@ export function SimulatorView() {
 
           <div className={styles.sectionTitle}>Actions</div>
           <button className={styles.controlButtonAccent} onClick={handleRandomize}>Randomize</button>
+          <button className={styles.controlButton} onClick={handleRecompile}>Recompile</button>
 
           <hr className={styles.divider} />
           <div className={styles.sectionTitle}>Grid Dimensions</div>
@@ -1005,13 +1102,41 @@ export function SimulatorView() {
                     <input type="checkbox" checked={(runtimeModelAttrs[a.id] ?? 0) === 1}
                       onChange={e => handleModelAttrChange(a.id, e.target.checked ? 1 : 0)} />
                   ) : a.type === 'integer' ? (
-                    <input className={styles.brushInput} type="number" step={1}
-                      value={runtimeModelAttrs[a.id] ?? 0}
-                      onChange={e => handleModelAttrChange(a.id, Math.round(Number(e.target.value) || 0))} />
+                    <div style={{ display: 'flex', gap: 4, alignItems: 'center', flex: 1 }}>
+                      {a.hasBounds && a.min != null && a.max != null && (
+                        <input type="range" min={a.min} max={a.max} step={1}
+                          value={runtimeModelAttrs[a.id] ?? 0}
+                          onChange={e => handleModelAttrChange(a.id, Math.round(Number(e.target.value)))}
+                          style={{ flex: 1, minWidth: 40 }} />
+                      )}
+                      <input className={styles.brushInput} type="number" step={1}
+                        min={a.hasBounds ? a.min : undefined} max={a.hasBounds ? a.max : undefined}
+                        value={runtimeModelAttrs[a.id] ?? 0}
+                        onChange={e => {
+                          let v = Math.round(Number(e.target.value) || 0);
+                          if (a.hasBounds && a.min != null) v = Math.max(a.min, v);
+                          if (a.hasBounds && a.max != null) v = Math.min(a.max, v);
+                          handleModelAttrChange(a.id, v);
+                        }} />
+                    </div>
                   ) : a.type === 'float' ? (
-                    <input className={styles.brushInput} type="number" step="any"
-                      value={runtimeModelAttrs[a.id] ?? 0}
-                      onChange={e => handleModelAttrChange(a.id, Number(e.target.value) || 0)} />
+                    <div style={{ display: 'flex', gap: 4, alignItems: 'center', flex: 1 }}>
+                      {a.hasBounds && a.min != null && a.max != null && (
+                        <input type="range" min={a.min} max={a.max} step={(a.max - a.min) / 100}
+                          value={runtimeModelAttrs[a.id] ?? 0}
+                          onChange={e => handleModelAttrChange(a.id, Number(e.target.value))}
+                          style={{ flex: 1, minWidth: 40 }} />
+                      )}
+                      <input className={styles.brushInput} type="number" step="any"
+                        min={a.hasBounds ? a.min : undefined} max={a.hasBounds ? a.max : undefined}
+                        value={runtimeModelAttrs[a.id] ?? 0}
+                        onChange={e => {
+                          let v = Number(e.target.value) || 0;
+                          if (a.hasBounds && a.min != null) v = Math.max(a.min, v);
+                          if (a.hasBounds && a.max != null) v = Math.min(a.max, v);
+                          handleModelAttrChange(a.id, v);
+                        }} />
+                    </div>
                   ) : a.type === 'tag' ? (
                     <select className={styles.brushInput} style={{ width: 'auto' }}
                       value={runtimeModelAttrs[a.id] ?? 0}
@@ -1068,6 +1193,11 @@ export function SimulatorView() {
 
       {/* === Canvas Area === */}
       <div className={styles.canvasArea}>
+        {compileError && (
+          <div className={styles.errorBanner} data-sim-overlay>
+            {compileError}
+          </div>
+        )}
         {!leftPanelOpen && (
           <button className={styles.panelExpandBtn} style={{ left: 0 }} onClick={() => setLeftPanelOpen(true)} title="Open settings" data-sim-overlay>&rsaquo;</button>
         )}

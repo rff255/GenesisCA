@@ -16,6 +16,7 @@ import { ConditionalNode } from './ConditionalNode';
 import { SequenceNode } from './SequenceNode';
 import { LoopNode } from './LoopNode';
 import { SetAttributeNode } from './SetAttributeNode';
+import { UpdateAttributeNode } from './UpdateAttributeNode';
 import { SetColorViewerNode } from './SetColorViewerNode';
 import { InputColorNode } from './InputColorNode';
 import { MacroNode } from './MacroNode';
@@ -37,6 +38,8 @@ import { SwitchNode } from './SwitchNode';
 import { AggregateNode } from './AggregateNode';
 import { GetNeighborAttributeByTagNode } from './GetNeighborAttributeByTagNode';
 import { GetNeighborIndexesByTagsNode } from './GetNeighborIndexesByTagsNode';
+import { FilterNeighborsNode } from './FilterNeighborsNode';
+import { JoinNeighborsNode } from './JoinNeighborsNode';
 
 const ALL_NODES: NodeTypeDef[] = [
   // Event (entry points)
@@ -70,8 +73,11 @@ const ALL_NODES: NodeTypeDef[] = [
   GroupStatementNode,
   GroupOperatorNode,
   AggregateNode,
+  FilterNeighborsNode,
+  JoinNeighborsNode,
   // Output
   SetAttributeNode,
+  UpdateAttributeNode,
   SetNeighborhoodAttributeNode,
   SetNeighborAttributeByIndexNode,
   // Color

@@ -192,7 +192,7 @@ genesis-ca/
 │   │       ├── GraphEditor.tsx
 │   │       ├── graphState.ts          # Shared mutable state (avoids circular imports between GraphEditor/CaNode)
 │   │       ├── NodeExplorer.tsx        # Right-side searchable node list panel
-│   │       ├── nodes/                # 36 node types (one file each)
+│   │       ├── nodes/                # 39 node types (one file each)
 │   │       └── compiler/
 │   │           └── compile.ts        # Two-pass compiler (hoisted values + flow)
 │   ├── simulator/
@@ -267,7 +267,7 @@ The app is functional with these major systems:
 ### Visual Programming Language (VPL)
 - `src/modeler/vpl/GraphEditor.tsx` — React Flow-based node graph editor
 - `src/modeler/vpl/CaNode.tsx` — Custom node component with per-type config UI
-- `src/modeler/vpl/nodes/` — 36 node types, each in its own file with `compile()` method (2 are async-only: SetNeighborhoodAttribute, SetNeighborAttributeByIndex)
+- `src/modeler/vpl/nodes/` — 39 node types, each in its own file with `compile()` method (2 are async-only: SetNeighborhoodAttribute, SetNeighborAttributeByIndex)
 - Three "event" entry-point nodes: GenerationStep (per-gen logic), InputMapping C→A (brush), OutputMapping A→C (color pass)
 - `src/modeler/vpl/compiler/compile.ts` — Two-pass compiler: hoists values, then emits flow
 - Multi-output nodes (InputColor, GetColorConstant, MacroNode, ColorInterpolation) use `_v${nodeId}_${portId}` naming
@@ -283,6 +283,7 @@ The app is functional with these major systems:
 - `src/simulator/engine/sim.worker.ts` — Web Worker owns grid as Structure of Arrays
 - Grid storage: one typed array per attribute (`Uint8Array` bool, `Int32Array` int/tag, `Float64Array` float), double-buffered (sync) or single-buffer (async)
 - Tag attributes: `Int32Array`, value = index into `tagOptions` string array
+- Model attribute bounds: optional `hasBounds`, `min`, `max` fields on `Attribute` type (integer/float model attrs only). When both min & max set, simulator shows range slider alongside spinbox. Values clamped at UI level, no worker enforcement.
 - Color model attributes: stored as 3 entries (`attrId_r`, `attrId_g`, `attrId_b`) in cachedModelAttrs
 - Neighbor access: pre-computed `Int32Array` index tables (built at init, handles torus/constant boundary once)
 - Step function is LOOP-WRAPPED: `(total, r_<attrs>..., w_<attrs>..., nIdx_<nbrs>..., nSz_<nbrs>..., modelAttrs, colors, activeViewer[, order])` — contains the for-loop, called ONCE per step
@@ -291,6 +292,7 @@ The app is functional with these major systems:
 - InputColor functions remain per-cell: `(_r, _g, _b, idx, r_<attrs>..., ...)`
 - GetRandom in Bool mode: has a `probability` input port (inline number widget, default 0.5). CaNode.tsx filters it out when `randomType !== 'bool'`. Compiles to `Math.random() < prob ? 1 : 0`.
 - GetNeighborsAttribute uses `_scr_<nodeId>` scratch arrays declared before the loop — never allocate in hot path
+- **varName() registration**: Any node whose `compile()` emits a non-default output variable (e.g., `_v${id}_result`, `_v${id}_vals`, `_scr_${id}`) MUST have a matching special case in `varName()` in compile.ts. Without this, downstream nodes reference the wrong (undeclared) variable. Also register scratch arrays in all three locations: main pass, macro inline, nested macro inline.
 - NEVER use `fn(...args)` in per-cell loops — V8 megamorphic spread kills performance
 - Play pipeline chains from worker message handler (not rAF): receive result → draw → send next step
 - Color output: SetColorViewer writes directly to RGBA buffer, checks `activeViewer` param for multi-viewer support
@@ -330,7 +332,8 @@ The app is functional with these major systems:
 - CaNode config: NEVER call `updateConfig()` twice in sequence — second call uses stale `nodeData.config`, losing the first update. Instead, build the merged config object and call `updateNodeData(id, { ...nodeData, config: newConfig })` once.
 - CSS gotcha: `flex: 1` on buttons inside flex-column containers causes them to stretch vertically. Remove `flex: 1` from buttons that should have fixed height.
 - Nullish coalescing: never mix `??` with `||` or comparison operators without explicit parens — Babel/esbuild will warn or error.
-- Simulator recompile: SimulatorView is conditionally rendered (unmounted on other tabs). Compilation happens automatically on mount via `useEffect([model, compileModel])`. No separate recompile effect needed — graph edits in Modeler are picked up when user switches to Simulator tab.
+- Simulator lifecycle: SimulatorView is always-mounted (wrapped in `display:none` div when not visible). Simulation auto-pauses when leaving the tab. Canvas redraws via `requestAnimationFrame` when `visible` transitions to true. The `useEffect([model, compileModel])` fires on every model change (even while hidden), handling full reinit or soft recompile as appropriate. When `model.indicators` changes during soft recompile, an `updateIndicators` message is sent to the worker alongside the `recompile` message.
+- Simulator save integration: FileMenu dispatches `genesis-capture-sim-state` CustomEvent with `detail.resolve` callback. SimulatorView captures worker state via `getState` and calls `resolve()` after `setSimulationState()`. FileMenu `await`s the Promise before serializing. 5-second safety timeout.
 - Copy/paste: Ctrl+C/V/X + context menu. Module-level `clipboard` variable, strips macroInput/macroOutput, remaps IDs
 - Group paste: parentId must be remapped to new IDs, children keep relative positions, groups sorted before children
 - React StrictMode double-mount: effects run mount→cleanup→mount in dev. When terminating resources (Web Workers), always null out the ref (`workerRef.current = null`) after `.terminate()` so the second mount detects it needs a fresh init instead of reusing a dead reference.
@@ -426,6 +429,12 @@ The app is functional with these major systems:
 ### Remaining:
 - Each macro instance is unique — no switching between definitions (macro dropdown removed)
 - Selection highlight inconsistency — clicking nodes doesn't always show selection highlight reliably
+
+### UpdateAttribute Node
+- Complements SetAttribute: in-place modify via increment/decrement/max/min (int/float), toggle/or/and (bool), next/previous (tag)
+- Unary operations (toggle, next, previous) hide the `value` input port via `inputPorts.filter()` in CaNode.tsx
+- Uses `w_${attr}[idx]` for read-modify-write (reads current write-buffer value, not read-buffer)
+- Tag operations store `_tagLen` in node config for modulo wrap; updated when attribute selection changes
 
 ### Key Patterns:
 - When adding new fields to CAModel type, always add migration guards in ModelContext's `createInitialState`

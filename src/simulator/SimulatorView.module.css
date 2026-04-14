@@ -343,6 +343,22 @@
   word-break: break-word;
 }
 
+.errorBanner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  padding: 8px 16px;
+  background: rgba(200, 40, 40, 0.92);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-align: center;
+  pointer-events: auto;
+  word-break: break-word;
+}
+
 /* --- Canvas area --- */
 
 .canvasArea {

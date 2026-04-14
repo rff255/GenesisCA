@@ -11,6 +11,9 @@ import styles from './FileMenu.module.css';
 export function FileMenu() {
   const { model, isDirty, newModel, loadModel, markSaved } = useModel();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Keep a ref to the latest model so async save always gets the freshest version
+  const modelRef = useRef(model);
+  modelRef.current = model;
 
   const handleNew = () => {
     if (isDirty && !window.confirm('You have unsaved changes. Create a new model?')) {
@@ -19,9 +22,22 @@ export function FileMenu() {
     newModel();
   };
 
-  const handleSave = () => {
-    const json = serializeModel(model);
-    const filename = modelFilename(model);
+  const handleSave = async () => {
+    // Ask simulator to capture current state into model context, then wait for it
+    const captured = await new Promise<boolean>(resolve => {
+      const timeout = setTimeout(() => resolve(false), 5000); // safety fallback
+      window.dispatchEvent(new CustomEvent('genesis-capture-sim-state', {
+        detail: {
+          resolve: () => { clearTimeout(timeout); resolve(true); },
+        },
+      }));
+    });
+    void captured; // state is now in model context (or timed out)
+    // Use ref to get the freshest model after React state update
+    await new Promise(r => requestAnimationFrame(r));
+    const latest = modelRef.current;
+    const json = serializeModel(latest);
+    const filename = modelFilename(latest);
     downloadJSON(json, filename);
     markSaved();
   };

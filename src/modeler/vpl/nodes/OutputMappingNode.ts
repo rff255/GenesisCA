@@ -4,7 +4,7 @@ export const OutputMappingNode: NodeTypeDef = {
   type: 'outputMapping',
   label: 'Output Mapping (A\u2192C)',
   category: 'event',
-  color: '#2e7d32',
+  color: '#ffffff',
   ports: [
     { id: 'do', label: 'DO', kind: 'output', category: 'flow' },
   ],
