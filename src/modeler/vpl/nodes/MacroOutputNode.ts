@@ -13,6 +13,7 @@ import type { NodeTypeDef } from '../types';
 export const MacroOutputNode: NodeTypeDef = {
   type: 'macroOutput',
   label: 'Macro Output',
+  description: 'Boundary node inside a macro. Collects the sub-graph\u2019s outputs for the macro\u2019s external ports.',
   category: 'flow',
   color: '#00897b',
   ports: [], // Dynamic — derived from MacroDef.exposedOutputs at render time

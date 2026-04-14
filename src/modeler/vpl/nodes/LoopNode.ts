@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const LoopNode: NodeTypeDef = {
   type: 'loop',
   label: 'Loop',
+  description: 'Repeats the BODY flow N times.',
   category: 'flow',
   color: '#1b5e20',
   ports: [

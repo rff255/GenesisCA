@@ -74,7 +74,25 @@ interface LoadStateMsg {
   orderArray?: ArrayBuffer;
   activeViewer: string;
 }
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg;
+
+// --- Region clipboard messages (for Ctrl+C/V/X on the simulator) ---
+interface ReadRegionMsg {
+  type: 'readRegion';
+  row: number; col: number; w: number; h: number;
+}
+interface WriteRegionMsg {
+  type: 'writeRegion';
+  row: number; col: number; w: number; h: number;
+  attributes: Record<string, { type: string; buffer: ArrayBuffer }>;
+  activeViewer: string;
+}
+interface ClearRegionMsg {
+  type: 'clearRegion';
+  row: number; col: number; w: number; h: number;
+  activeViewer: string;
+}
+
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -724,6 +742,91 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // Rebuild neighbor indices for constant boundary sentinel
       buildNeighborIndices();
 
+      sendColors();
+      break;
+    }
+
+    case 'readRegion': {
+      // Snapshot every cell attribute over the (row, col, w, h) rectangle.
+      // Cells outside [0, width) × [0, height) are replaced by the attribute's default value.
+      const attrBuffers: Record<string, { type: string; buffer: ArrayBuffer }> = {};
+      const transfers: ArrayBuffer[] = [];
+      const size = msg.w * msg.h;
+      for (const attr of cellAttrs) {
+        const out = createTypedArray(attr.type, size);
+        const dv = defaultValue(attr);
+        if (dv !== 0) out.fill(dv);
+        const src = readAttrs[attr.id]!;
+        for (let dr = 0; dr < msg.h; dr++) {
+          const srcRow = msg.row + dr;
+          if (srcRow < 0 || srcRow >= height) continue;
+          for (let dc = 0; dc < msg.w; dc++) {
+            const srcCol = msg.col + dc;
+            if (srcCol < 0 || srcCol >= width) continue;
+            out[dr * msg.w + dc] = src[srcRow * width + srcCol]!;
+          }
+        }
+        attrBuffers[attr.id] = { type: attr.type, buffer: out.buffer };
+        transfers.push(out.buffer);
+      }
+      self.postMessage({ type: 'regionData', w: msg.w, h: msg.h, attributes: attrBuffers }, { transfer: transfers });
+      break;
+    }
+
+    case 'writeRegion': {
+      activeViewer = msg.activeViewer;
+      const isAsync = updateMode === 'asynchronous';
+      for (const attr of cellAttrs) {
+        const entry = msg.attributes[attr.id];
+        if (!entry) continue;
+        // Rebuild typed view over the transferred buffer
+        const Ctor = (createTypedArray(attr.type, 0).constructor as { new(b: ArrayBuffer): Float64Array | Int32Array | Uint8Array });
+        const src = new Ctor(entry.buffer);
+        const dst = readAttrs[attr.id]!;
+        const dstB = writeAttrs[attr.id]!;
+        for (let dr = 0; dr < msg.h; dr++) {
+          const dstRow = msg.row + dr;
+          if (dstRow < 0 || dstRow >= height) continue;
+          for (let dc = 0; dc < msg.w; dc++) {
+            const dstCol = msg.col + dc;
+            if (dstCol < 0 || dstCol >= width) continue;
+            const i = dstRow * width + dstCol;
+            const v = src[dr * msg.w + dc]!;
+            dst[i] = v;
+            if (!isAsync) dstB[i] = v;
+          }
+        }
+      }
+      // Update display via the Output Mapping if one exists, else leave colors as-is.
+      if (outputMappingFns.some(f => f.mappingId === activeViewer)) {
+        runColorPass();
+      }
+      sendColors();
+      break;
+    }
+
+    case 'clearRegion': {
+      activeViewer = msg.activeViewer;
+      const isAsync = updateMode === 'asynchronous';
+      for (const attr of cellAttrs) {
+        const dv = defaultValue(attr);
+        const dst = readAttrs[attr.id]!;
+        const dstB = writeAttrs[attr.id]!;
+        for (let dr = 0; dr < msg.h; dr++) {
+          const dstRow = msg.row + dr;
+          if (dstRow < 0 || dstRow >= height) continue;
+          for (let dc = 0; dc < msg.w; dc++) {
+            const dstCol = msg.col + dc;
+            if (dstCol < 0 || dstCol >= width) continue;
+            const i = dstRow * width + dstCol;
+            dst[i] = dv;
+            if (!isAsync) dstB[i] = dv;
+          }
+        }
+      }
+      if (outputMappingFns.some(f => f.mappingId === activeViewer)) {
+        runColorPass();
+      }
       sendColors();
       break;
     }

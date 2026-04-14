@@ -122,9 +122,12 @@
 }
 
 .freqBarRow .freqKey {
-  width: 40px;
-  min-width: 40px;
-  flex: none;
+  min-width: 56px;
+  max-width: 120px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .freqBarTrack {

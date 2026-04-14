@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const JoinNeighborsNode: NodeTypeDef = {
   type: 'joinNeighbors',
   label: 'Join Neighbors',
+  description: 'Combines two neighbor index arrays via intersection or union.',
   category: 'aggregation',
   color: '#e65100',
   ports: [

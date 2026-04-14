@@ -32,6 +32,8 @@ export interface NodeTypeDef {
   label: string;
   category: 'event' | 'data' | 'logic' | 'aggregation' | 'flow' | 'output' | 'color';
   color: string;
+  /** Short one-sentence tooltip for the Add-Node menu and explorer. */
+  description?: string;
   ports: PortDef[];
   defaultConfig: NodeConfig;
   /** Emit JS code for this node. Returns code string. */

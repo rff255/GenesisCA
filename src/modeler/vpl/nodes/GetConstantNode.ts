@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const GetConstantNode: NodeTypeDef = {
   type: 'getConstant',
   label: 'Get Constant',
+  description: 'Emits a fixed bool, integer, or float value.',
   category: 'data',
   color: '#b71c1c',
   ports: [

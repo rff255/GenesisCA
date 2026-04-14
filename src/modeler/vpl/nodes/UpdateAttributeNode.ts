@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const UpdateAttributeNode: NodeTypeDef = {
   type: 'updateAttribute',
   label: 'Update Attribute',
+  description: 'Modifies a cell attribute in place: increment, decrement, toggle, min/max, next/previous tag.',
   category: 'output',
   color: '#4a148c',
   ports: [

@@ -1,0 +1,99 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.dialog {
+  width: 420px;
+  max-width: calc(100vw - 32px);
+  background: #131a24;
+  border: 1px solid #2d4059;
+  border-radius: 6px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  color: #c0c8d0;
+  font-size: 0.78rem;
+}
+
+.title {
+  padding: 10px 14px;
+  border-bottom: 1px solid #2d4059;
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #e0e8f0;
+}
+
+.body {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.row input[type='checkbox'] {
+  margin-top: 3px;
+  flex: none;
+}
+
+.rowLabel {
+  color: #e0e8f0;
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+.rowHint {
+  color: #8090a0;
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid #2d4059;
+}
+
+.btnPrimary,
+.btnSecondary {
+  padding: 6px 14px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.btnPrimary {
+  background: #4cc9f0;
+  border: 1px solid #4cc9f0;
+  color: #0d1117;
+}
+
+.btnPrimary:hover {
+  background: #66d9ff;
+  border-color: #66d9ff;
+}
+
+.btnSecondary {
+  background: transparent;
+  border: 1px solid #2d4059;
+  color: #8090a0;
+}
+
+.btnSecondary:hover {
+  color: #c0c8d0;
+  border-color: #4a6080;
+}

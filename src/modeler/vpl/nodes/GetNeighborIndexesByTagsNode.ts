@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const GetNeighborIndexesByTagsNode: NodeTypeDef = {
   type: 'getNeighborIndexesByTags',
   label: 'Get Neighbor Indexes By Tags',
+  description: 'Returns the neighborhood indices that match the given tag names.',
   category: 'data',
   color: '#b71c1c',
   ports: [

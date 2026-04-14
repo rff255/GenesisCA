@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const InterpolationNode: NodeTypeDef = {
   type: 'interpolation',
   label: 'Interpolate',
+  description: 'Linearly interpolates between Min and Max using T in [0, 1].',
   category: 'logic',
   color: '#b8860b',
   ports: [

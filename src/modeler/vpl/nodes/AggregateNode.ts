@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const AggregateNode: NodeTypeDef = {
   type: 'aggregate',
   label: 'Aggregate',
+  description: 'Combines multiple connections into one (sum, product, max, min, average, median, AND, OR).',
   category: 'aggregation',
   color: '#e65100',
   ports: [

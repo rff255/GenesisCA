@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const TagConstantNode: NodeTypeDef = {
   type: 'tagConstant',
   label: 'Tag Constant',
+  description: 'Emits a fixed tag value (stored as its index).',
   category: 'data',
   color: '#6a1b9a',
   ports: [

@@ -1,4 +1,4 @@
-import { memo, useCallback, useState, useMemo } from 'react';
+import { memo, useCallback, useState, useMemo, useSyncExternalStore } from 'react';
 import { Handle, Position, useReactFlow, useStore } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
@@ -6,7 +6,7 @@ import { handleId } from './types';
 import type { NodeConfig } from './types';
 import type { MacroPort } from '../../model/types';
 import { useModel } from '../../model/ModelContext';
-import { isConnectingGlobal, showPortLabelsGlobal, connectingFrom } from './graphState';
+import { isConnectingGlobal, showPortLabelsGlobal, subscribeShowPortLabels, connectingFrom } from './graphState';
 import styles from './CaNode.module.css';
 
 /** Returns dark text for light backgrounds, white text for dark backgrounds */
@@ -40,6 +40,8 @@ function CaNodeComponent({ id, data }: NodeProps) {
   const def = getNodeDef(nodeData.nodeType);
   const { model, updateMacro } = useModel();
   const { updateNodeData } = useReactFlow();
+  // Subscribe to port-label toggle so memoized CaNodes re-render when it changes
+  const showPortLabels = useSyncExternalStore(subscribeShowPortLabels, () => showPortLabelsGlobal);
 
   const updateConfig = useCallback(
     (key: string, value: string | number | boolean) => {
@@ -1590,7 +1592,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 )}
               </div>
             )}
-            {showPortLabelsGlobal && !showWidget && (
+            {showPortLabels && !showWidget && (
               <div className={styles.portLabelLeft} style={{ top: `${topPx}px` }}>
                 {port.label}
               </div>
@@ -1622,7 +1624,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               style={{ top: `${topPx}px` }}
               title={port.label}
             />
-            {showPortLabelsGlobal && (
+            {showPortLabels && (
               <div className={styles.portLabelRight} style={{ top: `${topPx}px` }}>
                 {port.label}
               </div>

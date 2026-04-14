@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const GroupOperatorNode: NodeTypeDef = {
   type: 'groupOperator',
   label: 'Group Reduce',
+  description: 'Reduces an array to a single value (sum, product, mean, min, max, AND, OR, random pick).',
   category: 'aggregation',
   color: '#e65100',
   ports: [

@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const ConditionalNode: NodeTypeDef = {
   type: 'conditional',
   label: 'If / Then / Else',
+  description: 'Branches the flow into THEN or ELSE based on a boolean condition.',
   category: 'flow',
   color: '#1b5e20',
   ports: [

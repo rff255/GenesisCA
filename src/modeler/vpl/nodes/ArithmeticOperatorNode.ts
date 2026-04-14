@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const ArithmeticOperatorNode: NodeTypeDef = {
   type: 'arithmeticOperator',
   label: 'Math',
+  description: 'Performs arithmetic: +, -, *, /, %, sqrt, pow, abs, max, min, mean.',
   category: 'logic',
   color: '#b8860b',
   ports: [

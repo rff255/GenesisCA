@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const SwitchNode: NodeTypeDef = {
   type: 'switch',
   label: 'Switch',
+  description: 'Multi-way branch. Picks an output case based on a compared value or per-case conditions.',
   category: 'flow',
   color: '#1b5e20',
   ports: [

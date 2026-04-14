@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const FilterNeighborsNode: NodeTypeDef = {
   type: 'filterNeighbors',
   label: 'Filter Neighbors',
+  description: 'Keeps neighbor indices whose attribute passes the comparison.',
   category: 'aggregation',
   color: '#e65100',
   ports: [

@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const SequenceNode: NodeTypeDef = {
   type: 'sequence',
   label: 'Sequence',
+  description: 'Runs two flows in order: FIRST, then THEN.',
   category: 'flow',
   color: '#1b5e20',
   ports: [

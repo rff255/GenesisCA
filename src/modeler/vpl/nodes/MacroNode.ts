@@ -9,6 +9,7 @@ import type { NodeTypeDef } from '../types';
 export const MacroNode: NodeTypeDef = {
   type: 'macro',
   label: 'Macro',
+  description: 'A reusable sub-graph. Input and output ports come from the macro definition.',
   category: 'flow',
   color: '#7b1fa2',
   ports: [], // Dynamic — filled at runtime by CaNode based on macroDefId

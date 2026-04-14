@@ -38,7 +38,7 @@ export function ModelerView() {
     setActivePanel(null);
   }, []);
 
-  // Ctrl+F opens Node Explorer and focuses search
+  // Ctrl+F opens Node Explorer and focuses search; Esc closes it
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
@@ -47,11 +47,16 @@ export function ModelerView() {
         e.preventDefault();
         setExplorerOpen(true);
         setTimeout(() => explorerRef.current?.focusSearch(), 50);
+      } else if (e.key === 'Escape' && explorerOpen) {
+        // Don't steal Esc from fields (e.g. clearing the search input first)
+        const tag = (document.activeElement as HTMLElement)?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        setExplorerOpen(false);
       }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, []);
+  }, [explorerOpen]);
 
   const PanelContent = activePanel ? panelComponents[activePanel] : null;
 

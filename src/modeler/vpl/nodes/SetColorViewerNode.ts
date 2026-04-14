@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const SetColorViewerNode: NodeTypeDef = {
   type: 'setColorViewer',
   label: 'Set Color Viewer',
+  description: 'Writes the current cell\u2019s R, G, B values when the named Output Mapping is active.',
   category: 'color',
   color: '#006064',
   ports: [

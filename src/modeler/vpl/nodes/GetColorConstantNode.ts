@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const GetColorConstantNode: NodeTypeDef = {
   type: 'getColorConstant',
   label: 'Color Constant',
+  description: 'Emits a fixed RGB color as three integer channels.',
   category: 'color',
   color: '#006064',
   ports: [

@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const GetNeighborsAttrByIndexesNode: NodeTypeDef = {
   type: 'getNeighborsAttrByIndexes',
   label: 'Get Neighbors Attr By Indexes',
+  description: 'Reads neighbor attribute values for a provided list of indices.',
   category: 'data',
   color: '#b71c1c',
   ports: [

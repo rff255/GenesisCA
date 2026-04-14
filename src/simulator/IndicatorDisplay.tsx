@@ -44,14 +44,17 @@ export function IndicatorDisplay({ indicators, values, history, generation, onTo
     };
   }, []);
 
-  // Notify parent of all initially-expanded indicators (for history collection)
+  // Notify parent of all initially-expanded indicators (for history collection).
+  // Do this synchronously during render (via a ref-compare) so the parent's chartExpandedRef
+  // is populated before the first worker step — otherwise sparklines start blank on mount.
   const indicatorIds = indicators.map(i => i.id).join(',');
-  useEffect(() => {
+  const lastNotifiedIds = useRef('');
+  if (lastNotifiedIds.current !== indicatorIds) {
+    lastNotifiedIds.current = indicatorIds;
     for (const ind of indicators) {
       if (!collapsedCharts.has(ind.id)) onChartToggle(ind.id, true);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [indicatorIds]);
+  }
 
   const toggleChart = useCallback((id: string) => {
     setCollapsedCharts(prev => {
@@ -87,7 +90,7 @@ export function IndicatorDisplay({ indicators, values, history, generation, onTo
                   {isWatched ? '\u{1F441}' : '\u25CB'}
                 </button>
               )}
-              {isWatched && val !== undefined && (
+              {isWatched && (
                 <button
                   className={`${styles.chartBtn} ${isExpanded ? styles.chartBtnActive : ''}`}
                   onClick={() => toggleChart(ind.id)}
@@ -123,7 +126,7 @@ export function IndicatorDisplay({ indicators, values, history, generation, onTo
               <div className={styles.freqTable}>
                 {Object.entries(val as Record<string, number>).map(([k, count]) => (
                   <div key={k} className={styles.freqRow}>
-                    <span className={styles.freqKey}>{k}</span>
+                    <span className={styles.freqKey} title={k}>{k}</span>
                     <span className={styles.freqCount}>{count}</span>
                   </div>
                 ))}
@@ -139,7 +142,7 @@ export function IndicatorDisplay({ indicators, values, history, generation, onTo
                 <div className={styles.freqTable} style={h != null ? { maxHeight: h, height: h } : undefined}>
                   {entries.map(([k, count]) => (
                     <div key={k} className={styles.freqBarRow}>
-                      <span className={styles.freqKey}>{k}</span>
+                      <span className={styles.freqKey} title={k}>{k}</span>
                       <div className={styles.freqBarTrack}>
                         <div
                           className={styles.freqBar}

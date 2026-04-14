@@ -46,6 +46,7 @@ export const NodeExplorer = forwardRef<NodeExplorerHandle>(function NodeExplorer
           id: n.id,
           typeLabel: def?.label || nodeType,
           color: def?.color || '#2d4059',
+          description: def?.description,
           userLabel,
           isMacro: nodeType === 'macro',
         };
@@ -68,13 +69,26 @@ export const NodeExplorer = forwardRef<NodeExplorerHandle>(function NodeExplorer
         placeholder="Search nodes..."
         value={search}
         onChange={e => setSearch(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === 'Escape') {
+            if (search) {
+              // First Esc: clear the search (blur so a second Esc reaches ModelerView and closes the panel)
+              setSearch('');
+              e.currentTarget.blur();
+              e.stopPropagation();
+            } else {
+              // Empty: blur so ModelerView's keydown handler gets the Esc
+              e.currentTarget.blur();
+            }
+          }
+        }}
       />
       <div className={styles.list}>
         {macros.length > 0 && (
           <>
             <div className={styles.sectionLabel}>Macros</div>
             {macros.map(n => (
-              <button key={n.id} className={styles.item} onClick={() => handleFocus(n.id)}>
+              <button key={n.id} className={styles.item} title={n.description} onClick={() => handleFocus(n.id)}>
                 <span className={styles.dot} style={{ background: n.color }} />
                 <span className={styles.itemLabel}>{n.userLabel || n.typeLabel}</span>
                 <span className={styles.itemType}>{n.typeLabel}</span>
@@ -86,7 +100,7 @@ export const NodeExplorer = forwardRef<NodeExplorerHandle>(function NodeExplorer
           <>
             {macros.length > 0 && <div className={styles.sectionLabel}>Nodes</div>}
             {regular.map(n => (
-              <button key={n.id} className={styles.item} onClick={() => handleFocus(n.id)}>
+              <button key={n.id} className={styles.item} title={n.description} onClick={() => handleFocus(n.id)}>
                 <span className={styles.dot} style={{ background: n.color }} />
                 <span className={styles.itemLabel}>{n.userLabel || n.typeLabel}</span>
                 {n.userLabel && <span className={styles.itemType}>{n.typeLabel}</span>}

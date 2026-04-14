@@ -35,7 +35,7 @@ const nodeTypes: NodeTypes = {
 
 let clipboard: { nodes: GraphNode[]; edges: GraphEdge[] } | null = null;
 
-import { setIsConnecting, setConnectingFrom, setShowPortLabels } from './graphState';
+import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal } from './graphState';
 import { pushSnapshot, undo, redo, pushToRedo, pushToUndo, clearHistory } from './graphHistory';
 
 // ---------------------------------------------------------------------------
@@ -69,6 +69,8 @@ function toRFNodes(graphNodes: GraphNode[]): Node[] {
       rfNode.style = { width: (d.width as number) || 300, height: (d.height as number) || 200 };
       rfNode.zIndex = -1;
       rfNode.dragHandle = '[data-drag-handle]';
+    } else if (n.type === 'commentNode') {
+      rfNode.style = { width: (d.width as number) || 200, height: (d.height as number) || 80 };
     }
     return rfNode;
   });
@@ -94,7 +96,9 @@ function toGraphNodes(rfNodes: Node[]): GraphNode[] {
     data: {
       ...(n.data as GraphNode['data']),
       ...(n.parentId ? { parentId: n.parentId } : {}),
-      ...(n.type === 'groupNode' && n.style ? { width: (n.style as Record<string, number>).width, height: (n.style as Record<string, number>).height } : {}),
+      ...((n.type === 'groupNode' || n.type === 'commentNode') && n.style
+        ? { width: (n.style as Record<string, number>).width, height: (n.style as Record<string, number>).height }
+        : {}),
     },
   }));
 }
@@ -176,7 +180,8 @@ export function GraphEditorInner() {
   const [currentScope, setCurrentScope] = useState<string[]>(['root']);
   const [showGrid, setShowGrid] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
-  const [portLabelsVisible, setPortLabelsVisible] = useState(true);
+  // Seed from the module global so the toggle's visual state survives modeler remounts (tab switches)
+  const [portLabelsVisible, setPortLabelsVisible] = useState(showPortLabelsGlobal);
   const rfInstance = useRef<ReactFlowInstance | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -1367,6 +1372,7 @@ export function GraphEditorInner() {
                         <button
                           key={def.type}
                           className={styles.contextItem}
+                          title={def.description}
                           onClick={e => { e.stopPropagation(); addNode(def.type); }}
                         >
                           <span className={styles.contextDot} style={{ background: def.color }} />
