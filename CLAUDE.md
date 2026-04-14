@@ -228,8 +228,10 @@ genesis-ca/
 - Prefer modular, readable code. Each node type is its own file. The compiler is separate from the editor.
 - Do not assume file structure beyond what's documented here — ask if uncertain
 - When building new node types, follow the established pattern of existing nodes (compile method, port definitions, UI component)
+- `NodeTypeDef` includes optional `description` (one-line summary of what the node does). Include it in new node definitions for Add Node menu tooltips.
 - **Documentation consistency:** When changing features, update all three sources of truth: the code, `src/help/HelpView.tsx` (in-app Help tab), and the root `README.md`. These must remain consistent with each other.
 - **Pre-commit type check:** Vite dev server does NOT type-check — always run `npx tsc -b` before committing to catch TypeScript errors that will fail the CI build. Note: `npx tsc --noEmit` (without `-b`) silently checks nothing because the root tsconfig has `"files": []` and only project references.
+- **Debugging blank-screen React crashes:** When the app whites out (React unmounts on uncaught error), console usually only shows generic "error in `<X>` component" warnings without stack traces. Install a `window.onerror` handler via preview_eval BEFORE reproducing, then read captured errors after — this surfaces the real stack trace.
 - **Version display:** When bumping version in `package.json`, also update the hardcoded version string in `src/App.tsx` header (`v1.X.0`).
 - **PR descriptions:** Never include "Built with Claude Code" or similar Claude/Anthropic attribution lines. User handles all attribution decisions.
 
@@ -352,6 +354,7 @@ The app is functional with these major systems:
 - Input drag fix: `stopDrag` callback checks `e.button === 0` (LMB only) to allow RMB pan through nodes. `stopAll` stops all buttons (for double-click). Body div uses `onDoubleClick={stopAll}` to prevent collapse; inline widgets use both `onMouseDown={stopDrag}` and `onDoubleClick={stopAll}`.
 - Compiler: in `compileFlowChain`, EVERY `varName()` call MUST be preceded by `compileValueNode(source.nodeId)` to ensure the value variable is declared. This applies to ALL flow node handlers (conditional, loop, switch, regular). Missing this causes undefined variables at runtime.
 - Model element cleanup: `ModelContext.tsx` reducer uses `patchAllNodes()` / `clearDeletedId()` helpers to update node configs when attributes/neighborhoods/mappings/indicators are deleted. Tag option deletion remaps indices in getConstant, tagConstant, switch, and setAttribute nodes. Always scan both `graphNodes` and `macroDefs[*].nodes`.
+- Graph nodes are heterogeneous: comment nodes (`type: 'commentNode'`) have `data: { text }` and group nodes have `data: { label, width, height, nodeType: 'group', config: {} }`. Any code iterating `model.graphNodes` must guard against `n.data.config` being undefined (e.g., `patchNodes` in ModelContext).
 - Switch node: two modes (`conditions` = user-wired bool inputs per case; `value` = comparison ops per case with int/float/tag types). `firstMatchOnly` toggle: true = if/else-if chain, false = independent if blocks with `_sw{id}` guard variable. Tag mode uses equality against tag index; int/float mode uses configurable comparison op (==,!=,>,<,>=,<=).
 - PanelShell `side` prop: `'left'` (default) puts resize handle on right edge; `'right'` puts it on left edge with inverted drag math. NodeExplorer uses `side="right"`. Simulator left panel has its own resize handle (`.leftPanelResizeHandle`).
 - Show Code: `buildFullCode()` in SimulatorView concatenates step + all inputColor + all outputMapping functions with section headers. Uses mapping names for readability.
