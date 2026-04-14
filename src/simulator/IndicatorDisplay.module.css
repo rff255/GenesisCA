@@ -122,9 +122,12 @@
 }
 
 .freqBarRow .freqKey {
-  width: 40px;
-  min-width: 40px;
-  flex: none;
+  min-width: 56px;
+  max-width: 120px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .freqBarTrack {
@@ -164,4 +167,33 @@
   font-size: 0.6rem;
   margin-left: 8px;
   flex-shrink: 0;
+}
+
+.resizeHandle {
+  height: 5px;
+  margin-top: 2px;
+  cursor: ns-resize;
+  border-radius: 0 0 3px 3px;
+  background: transparent;
+  transition: background 0.15s;
+  position: relative;
+}
+
+.resizeHandle::after {
+  content: '';
+  position: absolute;
+  left: 25%;
+  right: 25%;
+  top: 2px;
+  height: 1px;
+  background: #3d5070;
+  border-radius: 1px;
+}
+
+.resizeHandle:hover {
+  background: rgba(76, 201, 240, 0.1);
+}
+
+.resizeHandle:hover::after {
+  background: #4cc9f0;
 }

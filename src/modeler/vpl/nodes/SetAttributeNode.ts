@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const SetAttributeNode: NodeTypeDef = {
   type: 'setAttribute',
   label: 'Set Attribute',
+  description: 'Writes a value to an attribute of the current cell.',
   category: 'output',
   color: '#4a148c',
   ports: [

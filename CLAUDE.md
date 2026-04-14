@@ -192,7 +192,7 @@ genesis-ca/
 │   │       ├── GraphEditor.tsx
 │   │       ├── graphState.ts          # Shared mutable state (avoids circular imports between GraphEditor/CaNode)
 │   │       ├── NodeExplorer.tsx        # Right-side searchable node list panel
-│   │       ├── nodes/                # 36 node types (one file each)
+│   │       ├── nodes/                # 39 node types (one file each)
 │   │       └── compiler/
 │   │           └── compile.ts        # Two-pass compiler (hoisted values + flow)
 │   ├── simulator/
@@ -228,8 +228,10 @@ genesis-ca/
 - Prefer modular, readable code. Each node type is its own file. The compiler is separate from the editor.
 - Do not assume file structure beyond what's documented here — ask if uncertain
 - When building new node types, follow the established pattern of existing nodes (compile method, port definitions, UI component)
+- `NodeTypeDef` includes optional `description` (one-line summary of what the node does). Include it in new node definitions for Add Node menu tooltips.
 - **Documentation consistency:** When changing features, update all three sources of truth: the code, `src/help/HelpView.tsx` (in-app Help tab), and the root `README.md`. These must remain consistent with each other.
 - **Pre-commit type check:** Vite dev server does NOT type-check — always run `npx tsc -b` before committing to catch TypeScript errors that will fail the CI build. Note: `npx tsc --noEmit` (without `-b`) silently checks nothing because the root tsconfig has `"files": []` and only project references.
+- **Debugging blank-screen React crashes:** When the app whites out (React unmounts on uncaught error), console usually only shows generic "error in `<X>` component" warnings without stack traces. Install a `window.onerror` handler via preview_eval BEFORE reproducing, then read captured errors after — this surfaces the real stack trace.
 - **Version display:** When bumping version in `package.json`, also update the hardcoded version string in `src/App.tsx` header (`v1.X.0`).
 - **PR descriptions:** Never include "Built with Claude Code" or similar Claude/Anthropic attribution lines. User handles all attribution decisions.
 
@@ -267,7 +269,7 @@ The app is functional with these major systems:
 ### Visual Programming Language (VPL)
 - `src/modeler/vpl/GraphEditor.tsx` — React Flow-based node graph editor
 - `src/modeler/vpl/CaNode.tsx` — Custom node component with per-type config UI
-- `src/modeler/vpl/nodes/` — 36 node types, each in its own file with `compile()` method (2 are async-only: SetNeighborhoodAttribute, SetNeighborAttributeByIndex)
+- `src/modeler/vpl/nodes/` — 39 node types, each in its own file with `compile()` method (2 are async-only: SetNeighborhoodAttribute, SetNeighborAttributeByIndex)
 - Three "event" entry-point nodes: GenerationStep (per-gen logic), InputMapping C→A (brush), OutputMapping A→C (color pass)
 - `src/modeler/vpl/compiler/compile.ts` — Two-pass compiler: hoists values, then emits flow
 - Multi-output nodes (InputColor, GetColorConstant, MacroNode, ColorInterpolation) use `_v${nodeId}_${portId}` naming
@@ -283,6 +285,7 @@ The app is functional with these major systems:
 - `src/simulator/engine/sim.worker.ts` — Web Worker owns grid as Structure of Arrays
 - Grid storage: one typed array per attribute (`Uint8Array` bool, `Int32Array` int/tag, `Float64Array` float), double-buffered (sync) or single-buffer (async)
 - Tag attributes: `Int32Array`, value = index into `tagOptions` string array
+- Model attribute bounds: optional `hasBounds`, `min`, `max` fields on `Attribute` type (integer/float model attrs only). When both min & max set, simulator shows range slider alongside spinbox. Values clamped at UI level, no worker enforcement.
 - Color model attributes: stored as 3 entries (`attrId_r`, `attrId_g`, `attrId_b`) in cachedModelAttrs
 - Neighbor access: pre-computed `Int32Array` index tables (built at init, handles torus/constant boundary once)
 - Step function is LOOP-WRAPPED: `(total, r_<attrs>..., w_<attrs>..., nIdx_<nbrs>..., nSz_<nbrs>..., modelAttrs, colors, activeViewer[, order])` — contains the for-loop, called ONCE per step
@@ -291,11 +294,13 @@ The app is functional with these major systems:
 - InputColor functions remain per-cell: `(_r, _g, _b, idx, r_<attrs>..., ...)`
 - GetRandom in Bool mode: has a `probability` input port (inline number widget, default 0.5). CaNode.tsx filters it out when `randomType !== 'bool'`. Compiles to `Math.random() < prob ? 1 : 0`.
 - GetNeighborsAttribute uses `_scr_<nodeId>` scratch arrays declared before the loop — never allocate in hot path
+- **varName() registration**: Any node whose `compile()` emits a non-default output variable (e.g., `_v${id}_result`, `_v${id}_vals`, `_scr_${id}`) MUST have a matching special case in `varName()` in compile.ts. Without this, downstream nodes reference the wrong (undeclared) variable. Also register scratch arrays in all three locations: main pass, macro inline, nested macro inline.
 - NEVER use `fn(...args)` in per-cell loops — V8 megamorphic spread kills performance
 - Play pipeline chains from worker message handler (not rAF): receive result → draw → send next step
 - Color output: SetColorViewer writes directly to RGBA buffer, checks `activeViewer` param for multi-viewer support
 - Bool constants use `1`/`0` (not `true`/`false`) for typed array compatibility
 - Paint: after InputColor writes to writeAttrs, copy back to readAttrs before runStep()
+- Worker mutation handlers (paint, importImage, randomize, reset, writeRegion, clearRegion): after mutating cell attributes, refresh the display via `if (hasColorPass) runColorPass(); else if (stepFn) runStep(); else writeDefaultColors(); sendColors();`. Without the fallback, users without an Output Mapping see no visual feedback.
 - `src/simulator/SimulatorView.tsx` — Canvas rendering via ImageData + zoom/pan, LMB=brush/RMB=pan
 - Simulator settings persisted to localStorage (`genesisca_sim_settings`)
 - Bottom transport bar: playback + speed sliders; top viewer bar: mapping tabs; collapsible side panels
@@ -305,6 +310,7 @@ The app is functional with these major systems:
 - Screenshot exports at display canvas resolution (not grid resolution) with nearest-neighbor upscale
 - Recompile optimization: structural changes reinit worker, graph-only changes send `recompile` message (preserves grid state)
 - Save/Load State: transport bar buttons (left side) save `.gcastate` / load `.gcastate`. Worker `getState` copies all typed arrays via `.slice()` and transfers them. Worker `loadState` restores arrays and rebuilds neighbor indices. `applySimulationState()` validates grid dimensions match before loading. Auto-save strips `simulationState` from localStorage to avoid quota overflow. Saving state also stores it in model context so next `.gcaproj` save includes it. On `.gcaproj` load, `pendingSimStateRestore` ref triggers restore after first worker `stepped` message.
+- Save Project options: `genesis-capture-sim-state` CustomEvent carries `detail.include = { grid?: boolean; controls?: boolean }` (defaults to both true). SimulatorView resolves immediately when neither is wanted, or skips the worker round-trip for controls-only. All `SimulationState` fields are optional; `applySimulationState` restores grid and controls independently. When making new shared-serialized fields optional, also audit `readStateFile` validation and every consumer that reads them unconditionally.
 
 ### Key Patterns
 - Async-only nodes (`ASYNC_ONLY_TYPES` in compile.ts): `setNeighborhoodAttribute`, `setNeighborAttributeByIndex` — compiler emits error if used in sync mode because copy lines overwrite neighbor writes. `getNeighborAttributeByIndex` is read-only and works in both modes.
@@ -312,6 +318,7 @@ The app is functional with these major systems:
 - Graph state sync: single debounced sync (100ms) via refs — never use multiple setTimeout callbacks
 - Graph editor mouse: RMB click=context menu, RMB drag=pan (`panOnDrag={[2]}`), LMB click=select, LMB drag=box select (`selectionOnDrag`); simulator: LMB=brush, RMB=pan
 - Shared mutable state: `graphState.ts` holds module-level variables (`isConnectingGlobal`, `showPortLabelsGlobal`, `connectingFrom`) to avoid circular imports between GraphEditor↔CaNode
+- Module globals that drive memoized React components (e.g. `showPortLabelsGlobal` → CaNode): wire them through `useSyncExternalStore(subscribe, snapshot)` with a `Set<() => void>` listener list; setters must notify listeners. Without pub/sub, memoized consumers don't re-render on toggle and the global can drift out of sync with local React state across remounts.
 - Connection validation: `isValidConnection` on ReactFlow prevents flow↔value, self-connections, occupied value inputs, and cycles (BFS from target)
 - Connection highlighting: `connectingFrom` in graphState stores `{ category, kind, nodeId }`. CaNode checks BOTH category match AND opposite direction (`kind !== 'input'` for input ports, `kind !== 'output'` for output ports).
 - Port labels render outside nodes (absolute positioned left/right of handles); controlled by `showPortLabelsGlobal` toggle
@@ -323,14 +330,15 @@ The app is functional with these major systems:
 - Simulator overlays: ALL overlay elements on the canvas (stats, transport bar, viewer bar, zoom controls, panel expand buttons) MUST have `data-sim-overlay` attribute. Mousedown handler sets `canvasBrushActive` flag; mousemove brush painting checks this flag to prevent accidental painting when interacting with overlays.
 - Hide React Flow's persistent selection rect: CSS `:global(.react-flow__nodesselection-rect) { display: none !important; }`
 - Groups use React Flow's native `parentId` — auto-resize requires manual bounding box computation in `handleNodesChange`
-- Use `NodeResizer` component for resizable nodes (comments, groups) — CSS `resize: both` conflicts with React Flow drag
+- Use `NodeResizer` component for resizable nodes (comments, groups) — CSS `resize: both` conflicts with React Flow drag. To persist size across save/load: extend `toRFNodes` to set `rfNode.style = { width, height }` from `data`, and `toGraphNodes` to copy those back into `data`. Without both halves, the dimensions are lost on reload.
 - MacroNode, MacroInputNode, MacroOutputNode are hidden from Add Node menu via `HIDDEN_FROM_MENU` set
 - Undo/redo: `graphHistory.ts` module-level undo/redo stacks (max 50 snapshots). Ctrl+Z undo, Ctrl+Shift+Z / Ctrl+Y redo. Snapshot pushed BEFORE each mutation. History cleared on scope change.
 - `isMultiOutput()` helper in compile.ts replaces raw `MULTI_OUTPUT_TYPES.has()` — also checks `getModelAttribute` with `isColorAttr` config
 - CaNode config: NEVER call `updateConfig()` twice in sequence — second call uses stale `nodeData.config`, losing the first update. Instead, build the merged config object and call `updateNodeData(id, { ...nodeData, config: newConfig })` once.
 - CSS gotcha: `flex: 1` on buttons inside flex-column containers causes them to stretch vertically. Remove `flex: 1` from buttons that should have fixed height.
 - Nullish coalescing: never mix `??` with `||` or comparison operators without explicit parens — Babel/esbuild will warn or error.
-- Simulator recompile: SimulatorView is conditionally rendered (unmounted on other tabs). Compilation happens automatically on mount via `useEffect([model, compileModel])`. No separate recompile effect needed — graph edits in Modeler are picked up when user switches to Simulator tab.
+- Simulator lifecycle: SimulatorView is always-mounted (wrapped in `display:none` div when not visible). Simulation auto-pauses when leaving the tab. Canvas redraws via `requestAnimationFrame` when `visible` transitions to true. The `useEffect([model, compileModel])` fires on every model change (even while hidden), handling full reinit or soft recompile as appropriate. When `model.indicators` changes during soft recompile, an `updateIndicators` message is sent to the worker alongside the `recompile` message.
+- Simulator save integration: FileMenu dispatches `genesis-capture-sim-state` CustomEvent with `detail.resolve` callback. SimulatorView captures worker state via `getState` and calls `resolve()` after `setSimulationState()`. FileMenu `await`s the Promise before serializing. 5-second safety timeout.
 - Copy/paste: Ctrl+C/V/X + context menu. Module-level `clipboard` variable, strips macroInput/macroOutput, remaps IDs
 - Group paste: parentId must be remapped to new IDs, children keep relative positions, groups sorted before children
 - React StrictMode double-mount: effects run mount→cleanup→mount in dev. When terminating resources (Web Workers), always null out the ref (`workerRef.current = null`) after `.terminate()` so the second mount detects it needs a fresh init instead of reusing a dead reference.
@@ -346,6 +354,7 @@ The app is functional with these major systems:
 - Input drag fix: `stopDrag` callback checks `e.button === 0` (LMB only) to allow RMB pan through nodes. `stopAll` stops all buttons (for double-click). Body div uses `onDoubleClick={stopAll}` to prevent collapse; inline widgets use both `onMouseDown={stopDrag}` and `onDoubleClick={stopAll}`.
 - Compiler: in `compileFlowChain`, EVERY `varName()` call MUST be preceded by `compileValueNode(source.nodeId)` to ensure the value variable is declared. This applies to ALL flow node handlers (conditional, loop, switch, regular). Missing this causes undefined variables at runtime.
 - Model element cleanup: `ModelContext.tsx` reducer uses `patchAllNodes()` / `clearDeletedId()` helpers to update node configs when attributes/neighborhoods/mappings/indicators are deleted. Tag option deletion remaps indices in getConstant, tagConstant, switch, and setAttribute nodes. Always scan both `graphNodes` and `macroDefs[*].nodes`.
+- Graph nodes are heterogeneous: comment nodes (`type: 'commentNode'`) have `data: { text }` and group nodes have `data: { label, width, height, nodeType: 'group', config: {} }`. Any code iterating `model.graphNodes` must guard against `n.data.config` being undefined (e.g., `patchNodes` in ModelContext).
 - Switch node: two modes (`conditions` = user-wired bool inputs per case; `value` = comparison ops per case with int/float/tag types). `firstMatchOnly` toggle: true = if/else-if chain, false = independent if blocks with `_sw{id}` guard variable. Tag mode uses equality against tag index; int/float mode uses configurable comparison op (==,!=,>,<,>=,<=).
 - PanelShell `side` prop: `'left'` (default) puts resize handle on right edge; `'right'` puts it on left edge with inverted drag math. NodeExplorer uses `side="right"`. Simulator left panel has its own resize handle (`.leftPanelResizeHandle`).
 - Show Code: `buildFullCode()` in SimulatorView concatenates step + all inputColor + all outputMapping functions with section headers. Uses mapping names for readability.
@@ -426,6 +435,12 @@ The app is functional with these major systems:
 ### Remaining:
 - Each macro instance is unique — no switching between definitions (macro dropdown removed)
 - Selection highlight inconsistency — clicking nodes doesn't always show selection highlight reliably
+
+### UpdateAttribute Node
+- Complements SetAttribute: in-place modify via increment/decrement/max/min (int/float), toggle/or/and (bool), next/previous (tag)
+- Unary operations (toggle, next, previous) hide the `value` input port via `inputPorts.filter()` in CaNode.tsx
+- Uses `w_${attr}[idx]` for read-modify-write (reads current write-buffer value, not read-buffer)
+- Tag operations store `_tagLen` in node config for modulo wrap; updated when attribute selection changes
 
 ### Key Patterns:
 - When adding new fields to CAModel type, always add migration guards in ModelContext's `createInitialState`

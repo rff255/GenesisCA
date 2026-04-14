@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const ColorInterpolationNode: NodeTypeDef = {
   type: 'colorInterpolation',
   label: 'Color Interpolate',
+  description: 'Linearly interpolates between two RGB colors using T in [0, 1].',
   category: 'color',
   color: '#006064',
   ports: [

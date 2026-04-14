@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type { Indicator } from '../model/types';
 import { IndicatorSparkline } from './IndicatorSparkline';
 import styles from './IndicatorDisplay.module.css';
@@ -24,15 +24,37 @@ function formatValue(val: number, ind: Indicator): string {
 export function IndicatorDisplay({ indicators, values, history, generation, onToggleWatch, onChartToggle }: Props) {
   // Track *collapsed* IDs — everything is expanded by default
   const [collapsedCharts, setCollapsedCharts] = useState<Set<string>>(new Set());
+  // Per-indicator custom content height (drag-to-resize)
+  const [heights, setHeights] = useState<Record<string, number>>({});
+  const resizing = useRef<{ id: string; startY: number; startH: number } | null>(null);
 
-  // Notify parent of all initially-expanded indicators (for history collection)
-  const indicatorIds = indicators.map(i => i.id).join(',');
   useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!resizing.current) return;
+      const delta = e.clientY - resizing.current.startY;
+      const newH = Math.max(30, resizing.current.startH + delta);
+      setHeights(prev => ({ ...prev, [resizing.current!.id]: newH }));
+    };
+    const onUp = () => { resizing.current = null; };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, []);
+
+  // Notify parent of all initially-expanded indicators (for history collection).
+  // Do this synchronously during render (via a ref-compare) so the parent's chartExpandedRef
+  // is populated before the first worker step — otherwise sparklines start blank on mount.
+  const indicatorIds = indicators.map(i => i.id).join(',');
+  const lastNotifiedIds = useRef('');
+  if (lastNotifiedIds.current !== indicatorIds) {
+    lastNotifiedIds.current = indicatorIds;
     for (const ind of indicators) {
       if (!collapsedCharts.has(ind.id)) onChartToggle(ind.id, true);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [indicatorIds]);
+  }
 
   const toggleChart = useCallback((id: string) => {
     setCollapsedCharts(prev => {
@@ -68,7 +90,7 @@ export function IndicatorDisplay({ indicators, values, history, generation, onTo
                   {isWatched ? '\u{1F441}' : '\u25CB'}
                 </button>
               )}
-              {isWatched && val !== undefined && (
+              {isWatched && (
                 <button
                   className={`${styles.chartBtn} ${isExpanded ? styles.chartBtnActive : ''}`}
                   onClick={() => toggleChart(ind.id)}
@@ -87,21 +109,24 @@ export function IndicatorDisplay({ indicators, values, history, generation, onTo
               <div className={styles.scalarValue}>{formatValue(val as number, ind)}</div>
             )}
 
-            {isWatched && isScalar && isExpanded && (
-              <div className={styles.sparklineWrap}>
-                <IndicatorSparkline
-                  data={history[ind.id] || []}
-                  generation={generation}
-                  height={60}
-                />
-              </div>
-            )}
+            {isWatched && isScalar && isExpanded && (() => {
+              const h = heights[ind.id] ?? 60;
+              return (
+                <div className={styles.sparklineWrap} style={{ height: h }}>
+                  <IndicatorSparkline
+                    data={history[ind.id] || []}
+                    generation={generation}
+                    height={h}
+                  />
+                </div>
+              );
+            })()}
 
             {isWatched && isFreq && !isExpanded && (
               <div className={styles.freqTable}>
                 {Object.entries(val as Record<string, number>).map(([k, count]) => (
                   <div key={k} className={styles.freqRow}>
-                    <span className={styles.freqKey}>{k}</span>
+                    <span className={styles.freqKey} title={k}>{k}</span>
                     <span className={styles.freqCount}>{count}</span>
                   </div>
                 ))}
@@ -112,11 +137,12 @@ export function IndicatorDisplay({ indicators, values, history, generation, onTo
               const freqMap = val as Record<string, number>;
               const entries = Object.entries(freqMap);
               const maxCount = Math.max(...entries.map(([, c]) => c), 1);
+              const h = heights[ind.id];
               return (
-                <div className={styles.freqTable}>
+                <div className={styles.freqTable} style={h != null ? { maxHeight: h, height: h } : undefined}>
                   {entries.map(([k, count]) => (
                     <div key={k} className={styles.freqBarRow}>
-                      <span className={styles.freqKey}>{k}</span>
+                      <span className={styles.freqKey} title={k}>{k}</span>
                       <div className={styles.freqBarTrack}>
                         <div
                           className={styles.freqBar}
@@ -129,6 +155,17 @@ export function IndicatorDisplay({ indicators, values, history, generation, onTo
                 </div>
               );
             })()}
+
+            {isWatched && isExpanded && val !== undefined && (
+              <div
+                className={styles.resizeHandle}
+                onMouseDown={e => {
+                  e.preventDefault();
+                  const currentH = heights[ind.id] ?? (isScalar ? 60 : 160);
+                  resizing.current = { id: ind.id, startY: e.clientY, startH: currentH };
+                }}
+              />
+            )}
           </div>
         );
       })}

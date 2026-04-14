@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const SetNeighborAttributeByIndexNode: NodeTypeDef = {
   type: 'setNeighborAttributeByIndex',
   label: 'Set Neighbor Attr By Index',
+  description: 'Writes a value to one neighbor\u2019s attribute at the given index. Async-only.',
   category: 'output',
   color: '#4a148c',
   ports: [

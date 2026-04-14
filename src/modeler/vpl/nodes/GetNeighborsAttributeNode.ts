@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const GetNeighborsAttributeNode: NodeTypeDef = {
   type: 'getNeighborsAttribute',
   label: 'Get Neighbors Attribute',
+  description: 'Reads one attribute from every neighbor in a neighborhood, as an array.',
   category: 'data',
   color: '#b71c1c',
   ports: [

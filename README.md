@@ -1,4 +1,4 @@
-# GenesisCA <sup>v1.5.0</sup>
+# GenesisCA <sup>v1.7.0</sup>
 
 An IDE for modeling and simulating Cellular Automata, built as a self-contained browser application.
 
@@ -73,12 +73,13 @@ A complete GenesisCA model definition consists of:
 - **Inline Port Widgets** — input ports show small value editors (number/bool) when unconnected, eliminating the need for constant nodes in simple cases
 - **Node Collapse/Expand** — double-click any node to collapse it; constants show their value; collapsed nodes temporarily expand when connecting edges
 - **Color Pickers** — Color Constant and Set Color Viewer nodes include hex color pickers with per-channel R/G/B controls
-- **Node Explorer** — searchable right-side panel (Ctrl+F) listing all nodes with click-to-focus
+- **Node Explorer** — searchable right-side panel (Ctrl+F to open, Esc to close) listing all nodes with click-to-focus
+- **Add-Node tooltips** — hover any entry in the Add Node context menu to see a short description of what it does
 - **Canvas toggles** — toggle port labels, grid lines, and snap-to-grid from buttons below zoom controls
 - **Macro System** — encapsulate node groups into reusable subgraphs with MacroInput/MacroOutput boundary nodes
 - **Undo/Redo** — Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) for node/edge operations, moves, paste, config changes
 - **Copy/Paste/Duplicate** — Ctrl+C/V/X/D, context menu on single nodes and selections, paste at right-click location
-- **Groups & Comments** — visual organization tools; Undo Group dissolves a group and selects all contained nodes
+- **Groups & Comments** — visual organization tools; comment background color is customizable and the resized size persists; Undo Group dissolves a group and selects all contained nodes
 - **Edge management** — double-click any edge to delete it
 
 ### Asynchronous Mode
@@ -88,9 +89,11 @@ A complete GenesisCA model definition consists of:
 
 ### The Simulator
 - **Transport bar** — Play/Pause/Step/Reset with FPS and Gens/Frame sliders, keyboard shortcuts (Space=step, Enter=play/pause, Esc=reset)
+- **Save Project dialog** — checkboxes to include simulator controls (speed, brush, mapping, model-attribute values) and/or the full board state; choices persist across sessions
 - **Save / Load State** — save the full simulation snapshot (`.gcastate`) for experiment repeatability; load to restore a previous state. State is also embedded in `.gcaproj` for project-level persistence.
-- **Canvas controls** — LMB=brush, RMB=pan, scroll=zoom, Ctrl+LMB drag=resize brush
-- **Brush tool** — configurable color, width/height, input mapping; visual brush cursor; Ctrl+drag interactive resize
+- **Canvas controls** — LMB=brush, RMB=pan, scroll=zoom, Ctrl+LMB drag=resize brush, Ctrl+wheel=cycle input mappings, Shift+RMB=open in-page color picker at the cursor
+- **Brush tool** — configurable color (with live R/G/B channel inputs beside the picker), width/height, input mapping; visual brush cursor; Ctrl+drag interactive resize
+- **Region clipboard** — Ctrl+C/V/X on the simulator copy/paste/cut all cell attributes within the brush rectangle; paste anchors to the brush's top-left corner
 - **Viewer tabs** — horizontal bar at the top to switch between Attribute-to-Color visualization modes
 - **Collapsible panels** — left panel for settings (actions, grid dimensions, model attributes), right panel for brush
 - **Zoom controls** — +/−/fit buttons on the canvas, matching the modeler

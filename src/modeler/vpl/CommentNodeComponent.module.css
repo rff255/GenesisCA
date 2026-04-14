@@ -7,6 +7,32 @@
   border: 1px dashed #4a6080;
   border-radius: 6px;
   padding: 8px;
+  position: relative;
+}
+
+.colorSwatch {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 14px;
+  height: 14px;
+  border: 1px solid #4a6080;
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 0;
+  z-index: 2;
+}
+
+.colorSwatch:hover {
+  transform: scale(1.1);
+}
+
+.hiddenColorInput {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .textArea {

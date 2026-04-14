@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const GetNeighborAttributeByIndexNode: NodeTypeDef = {
   type: 'getNeighborAttributeByIndex',
   label: 'Get Neighbor Attr By Index',
+  description: 'Reads one neighbor\u2019s attribute given its index in the neighborhood.',
   category: 'data',
   color: '#b71c1c',
   ports: [

@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const GroupStatementNode: NodeTypeDef = {
   type: 'groupStatement',
   label: 'Group Assert',
+  description: 'Tests an assertion across an array: all equal, none equal, any greater, all lesser, etc.',
   category: 'aggregation',
   color: '#e65100',
   ports: [

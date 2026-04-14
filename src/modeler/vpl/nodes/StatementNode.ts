@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const StatementNode: NodeTypeDef = {
   type: 'statement',
   label: 'Compare',
+  description: 'Compares two values with ==, !=, >, <, >=, <=.',
   category: 'logic',
   color: '#1a237e',
   ports: [

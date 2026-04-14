@@ -109,6 +109,15 @@ function compileRoot(
     if (sourceNode?.data.nodeType === 'getNeighborsAttrByIndexes') {
       return `_v${sourceNodeId}_vals`;
     }
+    // FilterNeighbors uses _v{id}_result scratch array
+    if (sourceNode?.data.nodeType === 'filterNeighbors') {
+      return `_v${sourceNodeId}_result`;
+    }
+    // JoinNeighbors intersection uses _v{id}_result scratch array; union uses _v{id} (default)
+    if (sourceNode?.data.nodeType === 'joinNeighbors'
+      && ((sourceNode.data.config.operation as string) || 'intersection') === 'intersection') {
+      return `_v${sourceNodeId}_result`;
+    }
     return `_v${sourceNodeId}`;
   }
 
@@ -216,6 +225,12 @@ function compileRoot(
       }
       if (nt === 'getNeighborsAttrByIndexes') {
         scratchNodes.push({ scratchVarName: `${prefix}_v${innerNodeId}_vals`, initExpr: '[]' });
+      }
+      if (nt === 'filterNeighbors') {
+        scratchNodes.push({ scratchVarName: `${prefix}_v${innerNodeId}_result`, initExpr: '[]' });
+      }
+      if (nt === 'joinNeighbors' && (iNode.data.config.operation as string || 'intersection') === 'intersection') {
+        scratchNodes.push({ scratchVarName: `${prefix}_v${innerNodeId}_result`, initExpr: '[]' });
       }
 
       // Resolve inputs
@@ -365,6 +380,12 @@ function compileRoot(
       if (nt === 'getNeighborsAttrByIndexes') {
         scratchNodes.push({ scratchVarName: `${nestedPrefix}_v${nid}_vals`, initExpr: '[]' });
       }
+      if (nt === 'filterNeighbors') {
+        scratchNodes.push({ scratchVarName: `${nestedPrefix}_v${nid}_result`, initExpr: '[]' });
+      }
+      if (nt === 'joinNeighbors' && (iNode.data.config.operation as string || 'intersection') === 'intersection') {
+        scratchNodes.push({ scratchVarName: `${nestedPrefix}_v${nid}_result`, initExpr: '[]' });
+      }
       const iInputVars: Record<string, string> = {};
       for (const port of iDef.ports) {
         if (port.kind !== 'input' || port.category !== 'value') continue;
@@ -453,6 +474,12 @@ function compileRoot(
     }
     if (node.data.nodeType === 'getNeighborsAttrByIndexes') {
       scratchNodes.push({ scratchVarName: `_v${nodeId}_vals`, initExpr: '[]' });
+    }
+    if (node.data.nodeType === 'filterNeighbors') {
+      scratchNodes.push({ scratchVarName: `_v${nodeId}_result`, initExpr: '[]' });
+    }
+    if (node.data.nodeType === 'joinNeighbors' && (node.data.config.operation as string || 'intersection') === 'intersection') {
+      scratchNodes.push({ scratchVarName: `_v${nodeId}_result`, initExpr: '[]' });
     }
 
     const inputVars: Record<string, string> = {};

@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const LogicOperatorNode: NodeTypeDef = {
   type: 'logicOperator',
   label: 'Logic',
+  description: 'Boolean logic: AND, OR, XOR, NOT.',
   category: 'logic',
   color: '#1a237e',
   ports: [

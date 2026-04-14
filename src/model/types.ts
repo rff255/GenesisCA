@@ -11,6 +11,12 @@ export interface Attribute {
   defaultValue: string;
   /** Tag type: named values (value = index into this array) */
   tagOptions?: string[];
+  /** Whether numerical bounds are enabled (integer/float model attributes only) */
+  hasBounds?: boolean;
+  /** Lower bound when hasBounds is true */
+  min?: number;
+  /** Upper bound when hasBounds is true */
+  max?: number;
 }
 
 /** A neighborhood definition — list of relative offsets from the central cell */
@@ -128,27 +134,30 @@ export interface SerializedTypedArray {
   data: string;
 }
 
-/** Complete simulation state snapshot for .gcastate files */
+/** Complete simulation state snapshot for .gcastate files.
+ *  All fields are optional so the Save Project dialog can include just the grid
+ *  state, just the simulator UI controls, both, or neither. */
 export interface SimulationState {
-  generation: number;
-  width: number;
-  height: number;
-  attributes: Record<string, SerializedTypedArray>;
-  modelAttrs: Record<string, number>;
-  indicators: Record<string, number>;
-  linkedAccumulators: Record<string, number | Record<string, number>>;
-  colors: string;
+  // Grid state
+  generation?: number;
+  width?: number;
+  height?: number;
+  attributes?: Record<string, SerializedTypedArray>;
+  indicators?: Record<string, number>;
+  linkedAccumulators?: Record<string, number | Record<string, number>>;
+  colors?: string;
   orderArray?: string;
-  // UI settings
-  activeViewer: string;
-  brushColor: string;
-  brushW: number;
-  brushH: number;
-  brushMapping: string;
-  targetFps: number;
-  unlimitedFps: boolean;
-  gensPerFrame: number;
-  unlimitedGens: boolean;
+  // Simulator controls (runtime model-attribute values + UI)
+  modelAttrs?: Record<string, number>;
+  activeViewer?: string;
+  brushColor?: string;
+  brushW?: number;
+  brushH?: number;
+  brushMapping?: string;
+  targetFps?: number;
+  unlimitedFps?: boolean;
+  gensPerFrame?: number;
+  unlimitedGens?: boolean;
 }
 
 /** Complete CA model definition */

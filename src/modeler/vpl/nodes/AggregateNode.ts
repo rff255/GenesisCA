@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const AggregateNode: NodeTypeDef = {
   type: 'aggregate',
   label: 'Aggregate',
+  description: 'Combines multiple connections into one (sum, product, max, min, average, median, AND, OR).',
   category: 'aggregation',
   color: '#e65100',
   ports: [
@@ -26,6 +27,8 @@ export const AggregateNode: NodeTypeDef = {
           `  : _agg${nodeId}[Math.floor(_agg${nodeId}.length/2)];`,
         ].join(' ') + '\n';
       }
+      case 'and':     return `const _v${nodeId} = ${values}.every(Boolean) ? 1 : 0;\n`;
+      case 'or':      return `const _v${nodeId} = ${values}.some(Boolean) ? 1 : 0;\n`;
       default: return `const _v${nodeId} = ${values}.reduce(function(s,v){return s+v},0);\n`; // sum
     }
   },

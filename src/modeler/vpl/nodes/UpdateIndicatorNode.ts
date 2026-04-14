@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const UpdateIndicatorNode: NodeTypeDef = {
   type: 'updateIndicator',
   label: 'Update Indicator',
+  description: 'Modifies an indicator in place: increment, decrement, toggle, min/max, next/previous tag.',
   category: 'output',
   color: '#00695c',
   ports: [

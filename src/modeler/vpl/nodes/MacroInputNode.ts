@@ -13,6 +13,7 @@ import type { NodeTypeDef } from '../types';
 export const MacroInputNode: NodeTypeDef = {
   type: 'macroInput',
   label: 'Macro Input',
+  description: 'Boundary node inside a macro. Exposes the macro\u2019s external inputs to the sub-graph.',
   category: 'flow',
   color: '#00897b',
   ports: [], // Dynamic — derived from MacroDef.exposedInputs at render time

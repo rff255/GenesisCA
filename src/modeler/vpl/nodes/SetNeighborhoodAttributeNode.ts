@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const SetNeighborhoodAttributeNode: NodeTypeDef = {
   type: 'setNeighborhoodAttribute',
   label: 'Set Neighborhood Attribute',
+  description: 'Writes a value to the same attribute of every neighbor in the neighborhood. Async-only.',
   category: 'output',
   color: '#4a148c',
   ports: [

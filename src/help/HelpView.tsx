@@ -200,7 +200,7 @@ export function HelpView() {
             <li><strong>Left-click drag</strong> (on empty area) &mdash; Box select nodes.</li>
             <li><strong>Left-click drag</strong> (on node) &mdash; Move node.</li>
             <li><strong>Ctrl + click</strong> &mdash; Add/remove from selection.</li>
-            <li><strong>Right-click</strong> (on canvas) &mdash; Context menu: Paste, Add Comment, Add Node submenu.</li>
+            <li><strong>Right-click</strong> (on canvas) &mdash; Context menu: Paste, Add Comment, Add Node submenu. Hover over any Add Node entry to see a short description of what it does.</li>
             <li><strong>Right-click</strong> (on node) &mdash; Node options: Rename, Duplicate, Copy, Cut, Delete. Macros also show Enter Macro and Undo Macro.</li>
             <li><strong>Right-click</strong> (on selection) &mdash; Selection options: Duplicate, Copy, Cut, Paste, Create Macro, Create Group.</li>
             <li><strong>Right-click</strong> (on group) &mdash; Group options: Rename, Undo Group, Delete.</li>
@@ -212,6 +212,14 @@ export function HelpView() {
             form showing only its title (or value for constants). Double-click again to expand.
             Edges remain connected to collapsed nodes. When dragging a new connection near
             a collapsed node, it temporarily expands to reveal its ports.
+          </p>
+
+          <h3 className={styles.h3}>Comment Nodes</h3>
+          <p className={styles.p}>
+            Add free-floating comments to document parts of the graph via the right-click
+            <strong> Add Comment</strong> action. When a comment is selected you can drag
+            its corner to resize it (the size persists across saves) and click the color
+            swatch in the top-right corner to change its background color.
           </p>
 
           <h3 className={styles.h3}>Inline Port Widgets</h3>
@@ -469,11 +477,31 @@ export function HelpView() {
           <h3 className={styles.h3}>Brush Tool</h3>
           <p className={styles.p}>
             Left-click on the canvas to paint cells. Open the right panel to configure
-            brush color, width/height, and input mapping. A brush cursor rectangle
-            shows which cells will be affected (toggle in the brush panel).
-            Use <strong>Ctrl + left-click drag</strong> to resize the brush interactively.
-            Use <strong>Open Image</strong> in the brush panel to import a PNG/BMP/JPG
-            as the starting grid state.
+            brush color, width/height, and input mapping. The color picker is accompanied
+            by three <strong>R/G/B</strong> numeric inputs so you can set or read exact
+            channel values &mdash; useful when your Input Mapping logic depends on
+            specific channel numbers. A brush cursor rectangle shows which cells will be
+            affected (toggle in the brush panel). Use <strong>Ctrl + left-click drag</strong> to
+            resize the brush interactively; <strong>Ctrl + scroll wheel</strong> cycles
+            through the available Input Mappings; <strong>Shift + right-click</strong>{' '}
+            opens an in-page color picker at the cursor (with R/G/B inputs plus a
+            &quot;Full picker&quot; row for the native OS color dialog). Use{' '}
+            <strong>Open Image</strong> in the brush panel to import a PNG/BMP/JPG as
+            the starting grid state.
+          </p>
+
+          <h3 className={styles.h3}>Copy, Paste, Cut (Cell Regions)</h3>
+          <p className={styles.p}>
+            With the cursor over the grid, press <kbd className={styles.kbd}>Ctrl</kbd>+
+            <kbd className={styles.kbd}>C</kbd> to copy all cell attributes inside the
+            current brush rectangle. Move the cursor and press{' '}
+            <kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>V</kbd> to
+            paste &mdash; the clipboard keeps its copy-time width and height, and its
+            top-left aligns with the top-left of the current brush rectangle so the
+            brush outline shows exactly where the paste will land.{' '}
+            <kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>X</kbd>{' '}
+            copies and then resets the source region to each attribute&apos;s default
+            value. Out-of-grid cells are silently skipped.
           </p>
 
           <h3 className={styles.h3}>Viewer</h3>
@@ -537,6 +565,7 @@ export function HelpView() {
               <tr><td>Right-click drag</td><td>Pan the canvas</td></tr>
               <tr><td>Scroll wheel</td><td>Zoom in/out</td></tr>
               <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>F</kbd></td><td>Open Node Explorer (search &amp; focus)</td></tr>
+              <tr><td><kbd className={styles.kbd}>Esc</kbd></td><td>Close Node Explorer (if open; first press clears the search field)</td></tr>
               <tr><td>Double-click (node)</td><td>Collapse / expand node</td></tr>
               <tr><td>Double-click (macro)</td><td>Enter macro subgraph</td></tr>
               <tr><td>Double-click (edge)</td><td>Delete edge</td></tr>
@@ -554,6 +583,11 @@ export function HelpView() {
               <tr><td>Right-click drag</td><td>Pan the grid view</td></tr>
               <tr><td>Scroll wheel</td><td>Zoom in/out</td></tr>
               <tr><td><kbd className={styles.kbd}>Ctrl</kbd> + left-click drag</td><td>Resize brush (horizontal = W, vertical = H)</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd> + scroll wheel</td><td>Cycle through Input Mappings</td></tr>
+              <tr><td><kbd className={styles.kbd}>Shift</kbd> + right-click</td><td>Open in-page brush color picker at the cursor</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>C</kbd></td><td>Copy cell attributes under the brush</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>V</kbd></td><td>Paste clipboard, top-left aligned to the brush rectangle</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>X</kbd></td><td>Copy, then reset the source region to default attribute values</td></tr>
               <tr><td><kbd className={styles.kbd}>Space</kbd></td><td>Step (one generation; pauses if running)</td></tr>
               <tr><td><kbd className={styles.kbd}>Enter</kbd></td><td>Play / Pause</td></tr>
               <tr><td><kbd className={styles.kbd}>Esc</kbd></td><td>Reset</td></tr>
@@ -576,7 +610,13 @@ export function HelpView() {
             <li><strong>mappings</strong> &mdash; Color mapping definitions for visualization and interaction.</li>
             <li><strong>graphNodes / graphEdges</strong> &mdash; The VPL node graph (positions, connections, config).</li>
             <li><strong>macroDefs</strong> &mdash; Macro subgraph definitions.</li>
-            <li><strong>simulationState</strong> (optional) &mdash; Embedded simulation snapshot, included automatically if you used Save State in the simulator before saving the project.</li>
+            <li><strong>simulationState</strong> (optional) &mdash; Embedded simulation snapshot. Clicking <strong>Save</strong> opens a small dialog with two checkboxes:
+              <ul>
+                <li><em>Include simulator controls</em> &mdash; playback speed, brush size/color, selected input/output mapping, runtime model-attribute values.</li>
+                <li><em>Include board state</em> &mdash; full cell grid snapshot: attributes, generation counter, indicator values, colors.</li>
+              </ul>
+              Both are checked by default. Unchecking both still saves a valid <code>.gcaproj</code> &mdash; it just contains only the model definition. Your last choices are remembered across sessions.
+            </li>
           </ul>
           <p className={styles.p}>
             Use <strong>Save</strong> to download a <code>.gcaproj</code> file, and{' '}

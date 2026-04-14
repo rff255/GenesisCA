@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const GroupCountingNode: NodeTypeDef = {
   type: 'groupCounting',
   label: 'Count Matching',
+  description: 'Counts how many values in an array match a comparison against X.',
   category: 'aggregation',
   color: '#e65100',
   ports: [

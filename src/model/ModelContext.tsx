@@ -47,7 +47,7 @@ function patchNodes(
 ): GraphNode[] {
   let changed = false;
   const result = nodes.map(n => {
-    if (pred(n.data.config, n.data.nodeType)) {
+    if (n.data.config && pred(n.data.config, n.data.nodeType)) {
       changed = true;
       return { ...n, data: { ...n.data, config: patch({ ...n.data.config }, n.data.nodeType) } };
     }

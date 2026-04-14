@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const GetCellAttributeNode: NodeTypeDef = {
   type: 'getCellAttribute',
   label: 'Get Cell Attribute',
+  description: 'Reads an attribute value from the current cell.',
   category: 'data',
   color: '#b71c1c',
   ports: [

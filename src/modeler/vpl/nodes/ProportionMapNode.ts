@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const ProportionMapNode: NodeTypeDef = {
   type: 'proportionMap',
   label: 'Proportion Map',
+  description: 'Linearly maps X from one range to another (inMin\u2013inMax \u2192 outMin\u2013outMax).',
   category: 'logic',
   color: '#b8860b',
   ports: [

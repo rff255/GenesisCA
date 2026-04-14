@@ -119,26 +119,40 @@ export function serializeSimState(
     gensPerFrame: number;
     unlimitedGens: boolean;
   },
+  include: { grid?: boolean; controls?: boolean } = { grid: true, controls: true },
 ): SimulationState {
-  const serialized: SimulationState = {
-    generation: workerState.generation,
-    width: workerState.width,
-    height: workerState.height,
-    attributes: {},
-    modelAttrs: workerState.modelAttrs,
-    indicators: workerState.indicators,
-    linkedAccumulators: workerState.linkedAccumulators,
-    colors: arrayBufferToBase64(workerState.colors),
-    ...uiSettings,
-  };
-  for (const [id, entry] of Object.entries(workerState.attributes)) {
-    serialized.attributes[id] = {
-      type: ATTR_TYPE_MAP[entry.type] || 'float64',
-      data: arrayBufferToBase64(entry.buffer),
-    };
+  const wantGrid = include.grid !== false;
+  const wantControls = include.controls !== false;
+  const serialized: SimulationState = {};
+  if (wantGrid) {
+    serialized.generation = workerState.generation;
+    serialized.width = workerState.width;
+    serialized.height = workerState.height;
+    serialized.attributes = {};
+    serialized.indicators = workerState.indicators;
+    serialized.linkedAccumulators = workerState.linkedAccumulators;
+    serialized.colors = arrayBufferToBase64(workerState.colors);
+    for (const [id, entry] of Object.entries(workerState.attributes)) {
+      serialized.attributes[id] = {
+        type: ATTR_TYPE_MAP[entry.type] || 'float64',
+        data: arrayBufferToBase64(entry.buffer),
+      };
+    }
+    if (workerState.orderArray) {
+      serialized.orderArray = arrayBufferToBase64(workerState.orderArray);
+    }
   }
-  if (workerState.orderArray) {
-    serialized.orderArray = arrayBufferToBase64(workerState.orderArray);
+  if (wantControls) {
+    serialized.modelAttrs = workerState.modelAttrs;
+    serialized.activeViewer = uiSettings.activeViewer;
+    serialized.brushColor = uiSettings.brushColor;
+    serialized.brushW = uiSettings.brushW;
+    serialized.brushH = uiSettings.brushH;
+    serialized.brushMapping = uiSettings.brushMapping;
+    serialized.targetFps = uiSettings.targetFps;
+    serialized.unlimitedFps = uiSettings.unlimitedFps;
+    serialized.gensPerFrame = uiSettings.gensPerFrame;
+    serialized.unlimitedGens = uiSettings.unlimitedGens;
   }
   return serialized;
 }

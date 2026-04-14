@@ -3,6 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const GetIndicatorNode: NodeTypeDef = {
   type: 'getIndicator',
   label: 'Get Indicator',
+  description: 'Reads the current value of a standalone indicator.',
   category: 'data',
   color: '#b71c1c',
   ports: [

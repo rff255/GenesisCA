@@ -1,4 +1,4 @@
-import { memo, useCallback, useState, useMemo } from 'react';
+import { memo, useCallback, useState, useMemo, useSyncExternalStore } from 'react';
 import { Handle, Position, useReactFlow, useStore } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
@@ -6,8 +6,28 @@ import { handleId } from './types';
 import type { NodeConfig } from './types';
 import type { MacroPort } from '../../model/types';
 import { useModel } from '../../model/ModelContext';
-import { isConnectingGlobal, showPortLabelsGlobal, connectingFrom } from './graphState';
+import { isConnectingGlobal, showPortLabelsGlobal, subscribeShowPortLabels, connectingFrom } from './graphState';
 import styles from './CaNode.module.css';
+
+/** Returns dark text for light backgrounds, white text for dark backgrounds */
+function textColorForBg(bgHex: string): string {
+  const hex = bgHex.replace('#', '');
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.6 ? '#1e2a3a' : '#ffffff';
+}
+
+/** Light-colored node backgrounds need a visible border instead of the bg color */
+function borderColorFor(bgHex: string): string {
+  const hex = bgHex.replace('#', '');
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.6 ? '#b0b8c0' : bgHex;
+}
 
 interface CaNodeData {
   nodeType: string;
@@ -20,6 +40,8 @@ function CaNodeComponent({ id, data }: NodeProps) {
   const def = getNodeDef(nodeData.nodeType);
   const { model, updateMacro } = useModel();
   const { updateNodeData } = useReactFlow();
+  // Subscribe to port-label toggle so memoized CaNodes re-render when it changes
+  const showPortLabels = useSyncExternalStore(subscribeShowPortLabels, () => showPortLabelsGlobal);
 
   const updateConfig = useCallback(
     (key: string, value: string | number | boolean) => {
@@ -223,6 +245,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
     inputPorts = inputPorts.filter(p => p.id !== 'b');
   }
 
+  // UpdateAttribute: hide value port for unary operations (toggle, next, previous)
+  if (nodeData.nodeType === 'updateAttribute') {
+    const op = nodeData.config.operation as string;
+    if (op === 'toggle' || op === 'next' || op === 'previous') {
+      inputPorts = inputPorts.filter(p => p.id !== 'value');
+    }
+  }
+
   // GetRandom: show probability port only when randomType is 'bool'
   if (nodeData.nodeType === 'getRandom' && nodeData.config.randomType !== 'bool') {
     inputPorts = inputPorts.filter(p => p.id !== 'probability');
@@ -268,9 +298,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
   const showExpanded = !isCollapsed || hoverExpand;
 
-  // Dynamic height to fit all ports
+  const isCompact = nodeData.nodeType === 'step'
+    || nodeData.nodeType === 'conditional'
+    || nodeData.nodeType === 'sequence';
+
+  // Dynamic height to fit all ports (compact flow nodes use tighter spacing)
   const maxPorts = Math.max(inputPorts.length, outputPorts.length);
-  const nodeMinHeight = showExpanded ? Math.max(50, 30 + maxPorts * 22 + 10) : undefined;
+  const portSpacing = isCompact ? 16 : 22;
+  const nodeMinHeight = showExpanded ? Math.max(50, 24 + maxPorts * portSpacing + 6) : undefined;
 
   // --- Collapsed rendering ---
   if (!showExpanded) {
@@ -304,8 +339,28 @@ function CaNodeComponent({ id, data }: NodeProps) {
       if (attr) {
         const valConnected = connectedInputHandles.has(handleId({ id: 'value', kind: 'input', category: 'value' }));
         const inlineVal = nodeData.config._port_value as string | undefined;
-        collapsedLabel = (!valConnected && inlineVal !== undefined) ? `Set ${attr.name} = ${inlineVal}` : `Set - ${attr.name}`;
+        if (!valConnected && inlineVal !== undefined) {
+          let displayVal: string = inlineVal;
+          if (attr.type === 'tag') {
+            const tagIdx = parseInt(inlineVal, 10) || 0;
+            displayVal = attr.tagOptions?.[tagIdx] ?? inlineVal;
+          } else if (attr.type === 'bool') {
+            displayVal = inlineVal === 'true' || inlineVal === '1' ? 'True' : 'False';
+          }
+          collapsedLabel = `Set ${attr.name} = ${displayVal}`;
+        } else {
+          collapsedLabel = `Set - ${attr.name}`;
+        }
       } else { collapsedLabel = def.label; }
+    } else if (nodeData.nodeType === 'updateAttribute') {
+      const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
+      const op = (nodeData.config.operation as string) || 'increment';
+      const opLabels: Record<string, string> = {
+        increment: '+', decrement: '-', max: 'Max', min: 'Min',
+        toggle: 'Toggle', or: 'OR', and: 'AND',
+        next: 'Next', previous: 'Prev',
+      };
+      collapsedLabel = attr ? `${opLabels[op] ?? op} ${attr.name}` : def.label;
     } else if (nodeData.nodeType === 'getNeighborsAttribute' || nodeData.nodeType === 'getNeighborAttributeByIndex' || nodeData.nodeType === 'getNeighborsAttrByIndexes') {
       const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
       const nbr = model.neighborhoods.find(n => n.id === nodeData.config.neighborhoodId);
@@ -347,6 +402,52 @@ function CaNodeComponent({ id, data }: NodeProps) {
       const yVal = yConn ? '?' : ((nodeData.config._port_y as string) ?? '0');
       const unary = op === 'sqrt' || op === 'abs';
       collapsedLabel = unary ? `${op}(${xVal})` : `${xVal} ${op} ${yVal}`;
+    } else if (nodeData.nodeType === 'logicOperator') {
+      collapsedLabel = (nodeData.config.operation as string) || 'OR';
+    } else if (nodeData.nodeType === 'groupStatement') {
+      const op = (nodeData.config.operation as string) || 'allIs';
+      const opLabels: Record<string, string> = {
+        allIs: 'All Is', noneIs: 'None Is', hasA: 'Has A',
+        allGreater: 'All >', allLesser: 'All <',
+        anyGreater: 'Any >', anyLesser: 'Any <',
+      };
+      const xConn = connectedInputHandles.has(handleId({ id: 'x', kind: 'input', category: 'value' }));
+      const xVal = xConn ? '?' : ((nodeData.config._port_x as string) ?? '0');
+      collapsedLabel = `${opLabels[op] ?? op} ${xVal}`;
+    } else if (nodeData.nodeType === 'groupCounting') {
+      const op = (nodeData.config.operation as string) || 'equals';
+      const opLabels: Record<string, string> = {
+        equals: '==', notEquals: '!=', greater: '>', lesser: '<',
+      };
+      const cmpConn = connectedInputHandles.has(handleId({ id: 'compare', kind: 'input', category: 'value' }));
+      const cmpVal = cmpConn ? '?' : ((nodeData.config._port_compare as string) ?? '0');
+      collapsedLabel = `Count ${opLabels[op] ?? op} ${cmpVal}`;
+    } else if (nodeData.nodeType === 'groupOperator') {
+      const op = (nodeData.config.operation as string) || 'sum';
+      const opLabels: Record<string, string> = {
+        sum: 'Sum', mul: 'Product', max: 'Max', min: 'Min',
+        mean: 'Mean', and: 'AND', or: 'OR', random: 'Random',
+      };
+      collapsedLabel = opLabels[op] ?? op;
+    } else if (nodeData.nodeType === 'aggregate') {
+      const op = (nodeData.config.operation as string) || 'sum';
+      const opLabels: Record<string, string> = {
+        sum: 'Sum', product: 'Product', max: 'Max', min: 'Min',
+        average: 'Average', median: 'Median', and: 'AND', or: 'OR',
+      };
+      collapsedLabel = opLabels[op] ?? op;
+    } else if (nodeData.nodeType === 'filterNeighbors') {
+      const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
+      const nbr = model.neighborhoods.find(n => n.id === nodeData.config.neighborhoodId);
+      const op = (nodeData.config.operation as string) || 'equals';
+      const opSymbols: Record<string, string> = {
+        equals: '==', notEquals: '!=', greater: '>', lesser: '<',
+        greaterEqual: '>=', lesserEqual: '<=',
+      };
+      collapsedLabel = attr && nbr ? `Filter ${nbr.name}[${attr.name}] ${opSymbols[op] ?? op}` : def.label;
+    } else if (nodeData.nodeType === 'joinNeighbors') {
+      const op = (nodeData.config.operation as string) || 'intersection';
+      collapsedLabel = op === 'union' ? 'Join (OR)' : 'Join (AND)';
     } else {
       collapsedLabel = def.label;
     }
@@ -356,18 +457,39 @@ function CaNodeComponent({ id, data }: NodeProps) {
       ? `rgb(${nodeData.config.r || 128},${nodeData.config.g || 128},${nodeData.config.b || 128})`
       : undefined;
 
+    // Color preview dot for nodes with unconnected color inline inputs
+    let collapsedColorPreview: string | undefined;
+    if (nodeData.nodeType === 'setColorViewer' || nodeData.nodeType === 'colorInterpolation') {
+      // Check common port IDs for color channels
+      const portIds = nodeData.nodeType === 'colorInterpolation'
+        ? { r: 'r1', g: 'g1', b: 'b1' }
+        : { r: 'r', g: 'g', b: 'b' };
+      const rConn = connectedInputHandles.has(handleId({ id: portIds.r, kind: 'input', category: 'value' }));
+      const gConn = connectedInputHandles.has(handleId({ id: portIds.g, kind: 'input', category: 'value' }));
+      const bConn = connectedInputHandles.has(handleId({ id: portIds.b, kind: 'input', category: 'value' }));
+      if (!rConn && !gConn && !bConn) {
+        const pr = parseInt(String(nodeData.config[`_port_${portIds.r}`] ?? '0'), 10);
+        const pg = parseInt(String(nodeData.config[`_port_${portIds.g}`] ?? '0'), 10);
+        const pb = parseInt(String(nodeData.config[`_port_${portIds.b}`] ?? '0'), 10);
+        collapsedColorPreview = `rgb(${pr},${pg},${pb})`;
+      }
+    }
+
     return (
       <div
         className={`${styles.node} ${isConstant || isColorConstant ? styles.collapsedConstant : styles.collapsed}`}
-        style={{ borderColor: def.color }}
+        style={{ borderColor: borderColorFor(def.color) }}
         onMouseEnter={onMouseEnter}
         onMouseLeave={onMouseLeave}
       >
         {isColorConstant ? (
           <div className={styles.collapsedColorSwatch} style={{ background: colorSwatchHex }} />
         ) : (
-          <div className={styles.collapsedHeader} style={{ background: def.color }}>
+          <div className={styles.collapsedHeader} style={{ background: def.color, color: textColorForBg(def.color) }}>
             {collapsedLabel}
+            {collapsedColorPreview && (
+              <span className={styles.collapsedColorDot} style={{ background: collapsedColorPreview }} />
+            )}
           </div>
         )}
 
@@ -410,19 +532,17 @@ function CaNodeComponent({ id, data }: NodeProps) {
     );
   }
 
-  const isCompact = nodeData.nodeType === 'step';
-
   return (
     <div
       className={`${styles.node} ${isCompact ? styles.compactNode : ''}`}
-      style={{ borderColor: def.color, minHeight: nodeMinHeight }}
+      style={{ borderColor: borderColorFor(def.color), minHeight: nodeMinHeight }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
       {userLabel && (
         <div className={styles.userLabel}>{userLabel}</div>
       )}
-      <div className={styles.header} style={{ background: def.color }}>
+      <div className={styles.header} style={{ background: def.color, color: textColorForBg(def.color) }}>
         {def.label}
       </div>
       <div className={styles.body} onDoubleClick={stopAll}>
@@ -446,7 +566,8 @@ function CaNodeComponent({ id, data }: NodeProps) {
           || nodeData.nodeType === 'getNeighborAttributeByIndex'
           || nodeData.nodeType === 'getNeighborsAttrByIndexes'
           || nodeData.nodeType === 'setNeighborhoodAttribute'
-          || nodeData.nodeType === 'setNeighborAttributeByIndex') && (
+          || nodeData.nodeType === 'setNeighborAttributeByIndex'
+          || nodeData.nodeType === 'filterNeighbors') && (
           <>
             <select
               className={styles.select}
@@ -471,6 +592,32 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 ))}
             </select>
           </>
+        )}
+
+        {nodeData.nodeType === 'filterNeighbors' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.operation as string) || 'equals'}
+            onChange={e => updateConfig('operation', e.target.value)}
+          >
+            <option value="equals">==</option>
+            <option value="notEquals">!=</option>
+            <option value="greater">&gt;</option>
+            <option value="lesser">&lt;</option>
+            <option value="greaterEqual">&gt;=</option>
+            <option value="lesserEqual">&lt;=</option>
+          </select>
+        )}
+
+        {nodeData.nodeType === 'joinNeighbors' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.operation as string) || 'intersection'}
+            onChange={e => updateConfig('operation', e.target.value)}
+          >
+            <option value="intersection">Intersection (AND)</option>
+            <option value="union">Union (OR)</option>
+          </select>
         )}
 
         {nodeData.nodeType === 'getConstant' && (
@@ -591,6 +738,52 @@ function CaNodeComponent({ id, data }: NodeProps) {
               ))}
           </select>
         )}
+
+        {nodeData.nodeType === 'updateAttribute' && (() => {
+          const selAttr = model.attributes.find(a => a.id === nodeData.config.attributeId);
+          const dt = selAttr?.type || 'integer';
+          const opsByType: Record<string, Array<{ value: string; label: string }>> = {
+            bool: [{ value: 'toggle', label: 'Toggle' }, { value: 'or', label: 'OR' }, { value: 'and', label: 'AND' }],
+            integer: [{ value: 'increment', label: 'Increment (+)' }, { value: 'decrement', label: 'Decrement (-)' }, { value: 'max', label: 'Max' }, { value: 'min', label: 'Min' }],
+            float: [{ value: 'increment', label: 'Increment (+)' }, { value: 'decrement', label: 'Decrement (-)' }, { value: 'max', label: 'Max' }, { value: 'min', label: 'Min' }],
+            tag: [{ value: 'next', label: 'Next' }, { value: 'previous', label: 'Previous' }],
+          };
+          const ops = opsByType[dt] ?? opsByType.integer!;
+          return (
+            <>
+              <select
+                className={styles.select}
+                value={(nodeData.config.attributeId as string) || ''}
+                onChange={e => {
+                  const attr = model.attributes.find(a => a.id === e.target.value);
+                  const newDt = attr?.type || 'integer';
+                  const firstOp = (opsByType[newDt] ?? opsByType.integer)![0]!.value;
+                  const newConfig: NodeConfig = { ...nodeData.config, attributeId: e.target.value, operation: firstOp };
+                  if (newDt === 'tag' && attr?.tagOptions) {
+                    newConfig._tagLen = attr.tagOptions.length;
+                  }
+                  updateNodeData(id, { ...nodeData, config: newConfig });
+                }}
+              >
+                <option value="">Select...</option>
+                {model.attributes
+                  .filter(a => !a.isModelAttribute)
+                  .map(a => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+              </select>
+              <select
+                className={styles.select}
+                value={(nodeData.config.operation as string) || ops![0]!.value}
+                onChange={e => updateConfig('operation', e.target.value)}
+              >
+                {ops!.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </>
+          );
+        })()}
 
         {(nodeData.nodeType === 'getIndicator' || nodeData.nodeType === 'setIndicator') && (
           <select
@@ -976,6 +1169,8 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <option value="min">Min</option>
             <option value="average">Average</option>
             <option value="median">Median</option>
+            <option value="and">AND (all true)</option>
+            <option value="or">OR (any true)</option>
           </select>
         )}
 
@@ -1310,13 +1505,13 @@ function CaNodeComponent({ id, data }: NodeProps) {
         const portDef = allInputPortDefs.get(port.id) ?? port;
         const hid = handleId(port);
         const isConnected = connectedInputHandles.has(hid);
-        const topPx = 30 + i * 22;
+        const topPx = (isCompact ? 24 : 30) + i * portSpacing;
 
         // Determine effective widget type (dynamic for attribute-dependent nodes)
         let effectiveWidget = portDef.inlineWidget;
         const setAttrId = nodeData.config.attributeId as string;
         const setAttr = setAttrId ? model.attributes.find(a => a.id === setAttrId) : undefined;
-        if (effectiveWidget && (nodeData.nodeType === 'setAttribute' || nodeData.nodeType === 'setNeighborhoodAttribute' || nodeData.nodeType === 'setNeighborAttributeByIndex') && port.id === 'value') {
+        if (effectiveWidget && (nodeData.nodeType === 'setAttribute' || nodeData.nodeType === 'updateAttribute' || nodeData.nodeType === 'setNeighborhoodAttribute' || nodeData.nodeType === 'setNeighborAttributeByIndex') && port.id === 'value') {
           const attr = setAttr;
           if (!attr) {
             effectiveWidget = undefined;
@@ -1397,7 +1592,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 )}
               </div>
             )}
-            {showPortLabelsGlobal && !showWidget && (
+            {showPortLabels && !showWidget && (
               <div className={styles.portLabelLeft} style={{ top: `${topPx}px` }}>
                 {port.label}
               </div>
@@ -1409,7 +1604,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
       {/* Output handles (right side) + external labels */}
       {outputPorts.map((port, i) => {
         const hid = handleId(port);
-        const topPx = 30 + i * 22;
+        const topPx = (isCompact ? 24 : 30) + i * portSpacing;
         const cf = connectingFrom;
         const directionOk = cf ? cf.kind !== 'output' : false; // output ports match when dragging from input
         const isCompatible = cf ? (directionOk && port.category === cf.category && id !== cf.nodeId) : null;
@@ -1429,7 +1624,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               style={{ top: `${topPx}px` }}
               title={port.label}
             />
-            {showPortLabelsGlobal && (
+            {showPortLabels && (
               <div className={styles.portLabelRight} style={{ top: `${topPx}px` }}>
                 {port.label}
               </div>
