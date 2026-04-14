@@ -298,6 +298,7 @@ The app is functional with these major systems:
 - Color output: SetColorViewer writes directly to RGBA buffer, checks `activeViewer` param for multi-viewer support
 - Bool constants use `1`/`0` (not `true`/`false`) for typed array compatibility
 - Paint: after InputColor writes to writeAttrs, copy back to readAttrs before runStep()
+- Worker mutation handlers (paint, importImage, randomize, reset, writeRegion, clearRegion): after mutating cell attributes, refresh the display via `if (hasColorPass) runColorPass(); else if (stepFn) runStep(); else writeDefaultColors(); sendColors();`. Without the fallback, users without an Output Mapping see no visual feedback.
 - `src/simulator/SimulatorView.tsx` — Canvas rendering via ImageData + zoom/pan, LMB=brush/RMB=pan
 - Simulator settings persisted to localStorage (`genesisca_sim_settings`)
 - Bottom transport bar: playback + speed sliders; top viewer bar: mapping tabs; collapsible side panels
@@ -307,6 +308,7 @@ The app is functional with these major systems:
 - Screenshot exports at display canvas resolution (not grid resolution) with nearest-neighbor upscale
 - Recompile optimization: structural changes reinit worker, graph-only changes send `recompile` message (preserves grid state)
 - Save/Load State: transport bar buttons (left side) save `.gcastate` / load `.gcastate`. Worker `getState` copies all typed arrays via `.slice()` and transfers them. Worker `loadState` restores arrays and rebuilds neighbor indices. `applySimulationState()` validates grid dimensions match before loading. Auto-save strips `simulationState` from localStorage to avoid quota overflow. Saving state also stores it in model context so next `.gcaproj` save includes it. On `.gcaproj` load, `pendingSimStateRestore` ref triggers restore after first worker `stepped` message.
+- Save Project options: `genesis-capture-sim-state` CustomEvent carries `detail.include = { grid?: boolean; controls?: boolean }` (defaults to both true). SimulatorView resolves immediately when neither is wanted, or skips the worker round-trip for controls-only. All `SimulationState` fields are optional; `applySimulationState` restores grid and controls independently. When making new shared-serialized fields optional, also audit `readStateFile` validation and every consumer that reads them unconditionally.
 
 ### Key Patterns
 - Async-only nodes (`ASYNC_ONLY_TYPES` in compile.ts): `setNeighborhoodAttribute`, `setNeighborAttributeByIndex` — compiler emits error if used in sync mode because copy lines overwrite neighbor writes. `getNeighborAttributeByIndex` is read-only and works in both modes.
@@ -314,6 +316,7 @@ The app is functional with these major systems:
 - Graph state sync: single debounced sync (100ms) via refs — never use multiple setTimeout callbacks
 - Graph editor mouse: RMB click=context menu, RMB drag=pan (`panOnDrag={[2]}`), LMB click=select, LMB drag=box select (`selectionOnDrag`); simulator: LMB=brush, RMB=pan
 - Shared mutable state: `graphState.ts` holds module-level variables (`isConnectingGlobal`, `showPortLabelsGlobal`, `connectingFrom`) to avoid circular imports between GraphEditor↔CaNode
+- Module globals that drive memoized React components (e.g. `showPortLabelsGlobal` → CaNode): wire them through `useSyncExternalStore(subscribe, snapshot)` with a `Set<() => void>` listener list; setters must notify listeners. Without pub/sub, memoized consumers don't re-render on toggle and the global can drift out of sync with local React state across remounts.
 - Connection validation: `isValidConnection` on ReactFlow prevents flow↔value, self-connections, occupied value inputs, and cycles (BFS from target)
 - Connection highlighting: `connectingFrom` in graphState stores `{ category, kind, nodeId }`. CaNode checks BOTH category match AND opposite direction (`kind !== 'input'` for input ports, `kind !== 'output'` for output ports).
 - Port labels render outside nodes (absolute positioned left/right of handles); controlled by `showPortLabelsGlobal` toggle
@@ -325,7 +328,7 @@ The app is functional with these major systems:
 - Simulator overlays: ALL overlay elements on the canvas (stats, transport bar, viewer bar, zoom controls, panel expand buttons) MUST have `data-sim-overlay` attribute. Mousedown handler sets `canvasBrushActive` flag; mousemove brush painting checks this flag to prevent accidental painting when interacting with overlays.
 - Hide React Flow's persistent selection rect: CSS `:global(.react-flow__nodesselection-rect) { display: none !important; }`
 - Groups use React Flow's native `parentId` — auto-resize requires manual bounding box computation in `handleNodesChange`
-- Use `NodeResizer` component for resizable nodes (comments, groups) — CSS `resize: both` conflicts with React Flow drag
+- Use `NodeResizer` component for resizable nodes (comments, groups) — CSS `resize: both` conflicts with React Flow drag. To persist size across save/load: extend `toRFNodes` to set `rfNode.style = { width, height }` from `data`, and `toGraphNodes` to copy those back into `data`. Without both halves, the dimensions are lost on reload.
 - MacroNode, MacroInputNode, MacroOutputNode are hidden from Add Node menu via `HIDDEN_FROM_MENU` set
 - Undo/redo: `graphHistory.ts` module-level undo/redo stacks (max 50 snapshots). Ctrl+Z undo, Ctrl+Shift+Z / Ctrl+Y redo. Snapshot pushed BEFORE each mutation. History cleared on scope change.
 - `isMultiOutput()` helper in compile.ts replaces raw `MULTI_OUTPUT_TYPES.has()` — also checks `getModelAttribute` with `isColorAttr` config
