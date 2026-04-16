@@ -35,7 +35,7 @@ const nodeTypes: NodeTypes = {
 
 let clipboard: { nodes: GraphNode[]; edges: GraphEdge[] } | null = null;
 
-import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal } from './graphState';
+import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, setConnectedHandlesFromEdges } from './graphState';
 import { pushSnapshot, undo, redo, pushToRedo, pushToUndo, clearHistory } from './graphHistory';
 
 // ---------------------------------------------------------------------------
@@ -173,7 +173,7 @@ interface ContextMenuState {
 // ---------------------------------------------------------------------------
 
 export function GraphEditorInner() {
-  const { model, modelVersion, setGraph, addMacro, updateMacro, removeMacro } = useModel();
+  const { model, modelVersion, setGraph, addMacro, importMacro, updateMacro, removeMacro } = useModel();
   const [nodes, setNodes, onNodesChange] = useNodesState(toRFNodes(model.graphNodes));
   const [edges, setEdges, onEdgesChange] = useEdgesState(toRFEdges(model.graphEdges));
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -197,6 +197,13 @@ export function GraphEditorInner() {
 
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
+
+  // Perf: maintain a graph-level map of connected input handles per node so each CaNode can
+  // subscribe once via useSyncExternalStore instead of scanning all edges on every store event.
+  // useLayoutEffect runs before paint so CaNodes reading the map never observe a stale frame.
+  useLayoutEffect(() => {
+    setConnectedHandlesFromEdges(edges);
+  }, [edges]);
 
   const currentScopeRef = useRef(currentScope);
   useEffect(() => { currentScopeRef.current = currentScope; }, [currentScope]);
@@ -493,34 +500,158 @@ export function GraphEditorInner() {
 
   // --- Context menu actions ---
 
-  const addNode = useCallback(
-    (nodeType: string) => {
-      if (!contextMenu) return;
+  /** Core helper: insert a new node of `nodeType` at the given flow position.
+   *  Config overrides are merged with the node type's defaultConfig.
+   *  Optional `label` is shown above the header (matches the userLabel pattern used by
+   *  Create-Macro-from-Selection). Returns true if added; false if blocked (e.g., Step singleton).
+   *  Shared between the "Add Node" context menu and palette drag-drop. */
+  const addNodeAtPosition = useCallback(
+    (
+      nodeType: string,
+      position: { x: number; y: number },
+      configOverrides?: Record<string, string | number | boolean>,
+      label?: string,
+    ): boolean => {
       const def = getNodeDef(nodeType);
-      if (!def) return;
+      if (!def) return false;
       // Singleton: only one Step node allowed
       if (nodeType === 'step') {
         const hasStep = nodesRef.current.some(
           n => (n.data as Record<string, unknown>)?.nodeType === 'step',
         );
-        if (hasStep) { setContextMenu(null); return; }
+        if (hasStep) return false;
       }
       pushCurrentSnapshot();
       setNodes(nds => {
         const id = generateNodeId(nds);
+        const data: Record<string, unknown> = {
+          nodeType: def.type,
+          config: { ...def.defaultConfig, ...(configOverrides || {}) },
+        };
+        if (label) data.label = label;
         const newNode: Node = {
           id,
           type: 'caNode',
-          position: { x: contextMenu.flowX, y: contextMenu.flowY },
-          data: { nodeType: def.type, config: { ...def.defaultConfig } },
+          position,
+          data,
         };
         return [...nds, newNode];
       });
       scheduleSync();
+      return true;
+    },
+    [setNodes, scheduleSync],
+  );
+
+  const addNode = useCallback(
+    (nodeType: string) => {
+      if (!contextMenu) return;
+      addNodeAtPosition(nodeType, { x: contextMenu.flowX, y: contextMenu.flowY });
       setContextMenu(null);
     },
-    [contextMenu, setNodes, scheduleSync],
+    [contextMenu, addNodeAtPosition],
   );
+
+  // --- Palette drag-drop handlers ---
+
+  const onPaletteDragOver = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('application/genesisca-palette')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  }, []);
+
+  const onPaletteDrop = useCallback((e: React.DragEvent) => {
+    const raw = e.dataTransfer.getData('application/genesisca-palette');
+    if (!raw) return;
+    e.preventDefault();
+    let payload: { kind: string; [k: string]: unknown };
+    try { payload = JSON.parse(raw); } catch { return; }
+
+    const pos = rfInstance.current?.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+    if (!pos) return;
+
+    if (payload.kind === 'node' && typeof payload.nodeType === 'string') {
+      addNodeAtPosition(payload.nodeType, pos);
+    } else if (payload.kind === 'macro-project' && typeof payload.macroDefId === 'string') {
+      const def = (model.macroDefs || []).find(m => m.id === payload.macroDefId);
+      addNodeAtPosition('macro', pos, { macroDefId: payload.macroDefId }, def?.name);
+    } else if (
+      payload.kind === 'macro-default'
+      && typeof payload.file === 'string'
+    ) {
+      const base = (import.meta.env.BASE_URL || '/');
+      const file = payload.file;
+      fetch(`${base}macros/${file}`)
+        .then(r => (r.ok ? r.json() : null))
+        .then(parsed => {
+          if (!parsed?.macroDef) return;
+          const newId = importMacro(parsed.macroDef);
+          addNodeAtPosition('macro', pos, { macroDefId: newId }, parsed.macroDef.name);
+        })
+        .catch(() => { /* swallow — network/parse failure */ });
+    }
+  }, [addNodeAtPosition, importMacro, model.macroDefs]);
+
+  // --- Macro export / import ---
+
+  /** Export the macro referenced by the right-clicked macro node as a .gcamacro file. */
+  const exportMacro = useCallback(() => {
+    if (!contextMenu || contextMenu.target.type !== 'node' || !contextMenu.target.isMacro) return;
+    const node = nodesRef.current.find(n => n.id === (contextMenu.target as { nodeId: string }).nodeId);
+    const cfg = (node?.data as { config?: Record<string, unknown> } | undefined)?.config;
+    const macroDefId = cfg?.macroDefId as string | undefined;
+    const def = (model.macroDefs || []).find(m => m.id === macroDefId);
+    if (!def) { setContextMenu(null); return; }
+
+    const payload = {
+      schemaVersion: 1,
+      name: def.name,
+      description: '',
+      macroDef: def,
+    };
+    const safeName = def.name.trim().replace(/[^a-z0-9-_ ]+/gi, '').replace(/\s+/g, '-').toLowerCase() || 'macro';
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${safeName}.gcamacro`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setContextMenu(null);
+  }, [contextMenu, model.macroDefs]);
+
+  /** Hidden file input that the "Import Macro..." menu item triggers. */
+  const importMacroInputRef = useRef<HTMLInputElement>(null);
+  const pendingImportPos = useRef<{ x: number; y: number } | null>(null);
+
+  const triggerImportMacro = useCallback(() => {
+    if (!contextMenu) return;
+    pendingImportPos.current = { x: contextMenu.flowX, y: contextMenu.flowY };
+    setContextMenu(null);
+    // Defer click so the context menu state finishes resetting first
+    setTimeout(() => importMacroInputRef.current?.click(), 0);
+  }, [contextMenu]);
+
+  const handleMacroFileSelected = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const finalPos = pendingImportPos.current ?? { x: 0, y: 0 };
+    pendingImportPos.current = null;
+    file.text().then(text => {
+      let parsed: { macroDef?: unknown };
+      try { parsed = JSON.parse(text); } catch { alert('Invalid .gcamacro file: not valid JSON'); return; }
+      if (!parsed?.macroDef || typeof parsed.macroDef !== 'object') {
+        alert('Invalid .gcamacro file: missing or invalid macroDef field');
+        return;
+      }
+      const macroDef = parsed.macroDef as Parameters<typeof importMacro>[0];
+      const newId = importMacro(macroDef);
+      addNodeAtPosition('macro', finalPos, { macroDefId: newId }, macroDef.name);
+    });
+  }, [importMacro, addNodeAtPosition]);
 
   const duplicateNode = useCallback(() => {
     if (!contextMenu || contextMenu.target.type !== 'node') return;
@@ -971,8 +1102,54 @@ export function GraphEditorInner() {
     if (!name) { setContextMenu(null); return; }
 
     const internalEdges = edges.filter(e => selectedIds.has(e.source) && selectedIds.has(e.target));
-    const externalInputEdges = edges.filter(e => !selectedIds.has(e.source) && selectedIds.has(e.target));
-    const externalOutputEdges = edges.filter(e => selectedIds.has(e.source) && !selectedIds.has(e.target));
+    const externalInputEdgesRaw = edges.filter(e => !selectedIds.has(e.source) && selectedIds.has(e.target));
+    const externalOutputEdgesRaw = edges.filter(e => selectedIds.has(e.source) && !selectedIds.has(e.target));
+
+    // --- Sort exposed-port order to match the vertical layout of the connected internal ports.
+    // Without this the order is whatever the React Flow edges array happens to contain, which
+    // produces apparently-arbitrary port orderings and unnecessary edge crossings on the new
+    // MacroInput/MacroOutput boundary nodes.
+    const portSortKey = (
+      internalNodeId: string,
+      handleStr: string,
+      kind: 'input' | 'output',
+    ): number => {
+      const node = nodes.find(n => n.id === internalNodeId);
+      if (!node) return 0;
+      const parsed = parseHandleId(handleStr);
+      const nodeData = node.data as Record<string, unknown>;
+      const nodeType = nodeData?.nodeType as string;
+      let portIdx = 0;
+      if (parsed) {
+        const def = getNodeDef(nodeType);
+        if (def && def.ports.length > 0) {
+          const ports = def.ports.filter(p => p.kind === kind);
+          const idx = ports.findIndex(p => p.id === parsed.portId);
+          if (idx >= 0) portIdx = idx;
+        } else if (nodeType === 'macro') {
+          // Dynamic-port nodes: look up the MacroDef's exposed-port order
+          const cfg = nodeData.config as Record<string, unknown> | undefined;
+          const macroDefId = cfg?.macroDefId as string | undefined;
+          const md = (model.macroDefs || []).find(m => m.id === macroDefId);
+          if (md) {
+            const ports = kind === 'input' ? md.exposedInputs : md.exposedOutputs;
+            const idx = ports.findIndex(p => p.portId === parsed.portId);
+            if (idx >= 0) portIdx = idx;
+          }
+        }
+      }
+      // Node Y dominates; port index within the node breaks ties.
+      return node.position.y * 1000 + portIdx;
+    };
+
+    const externalInputEdges = [...externalInputEdgesRaw].sort((a, b) =>
+      portSortKey(a.target, a.targetHandle ?? '', 'input') -
+      portSortKey(b.target, b.targetHandle ?? '', 'input'),
+    );
+    const externalOutputEdges = [...externalOutputEdgesRaw].sort((a, b) =>
+      portSortKey(a.source, a.sourceHandle ?? '', 'output') -
+      portSortKey(b.source, b.sourceHandle ?? '', 'output'),
+    );
 
     const macroId = `macro_${Date.now().toString(36)}`;
 
@@ -1255,7 +1432,21 @@ export function GraphEditorInner() {
   const categories = getNodeDefsByCategory();
 
   return (
-    <div className={styles.editor} onClick={() => setContextMenu(null)} onChangeCapture={onNodeDataChange}>
+    <div
+      className={styles.editor}
+      onClick={() => setContextMenu(null)}
+      onChangeCapture={onNodeDataChange}
+      onDragOver={onPaletteDragOver}
+      onDrop={onPaletteDrop}
+    >
+      {/* Hidden file input triggered by the "Import Macro..." menu item */}
+      <input
+        ref={importMacroInputRef}
+        type="file"
+        accept=".gcamacro,application/json"
+        style={{ display: 'none' }}
+        onChange={handleMacroFileSelected}
+      />
       {currentScope.length > 1 && (
         <div className={styles.breadcrumb}>
           {currentScope.map((scopeId, i) => {
@@ -1358,6 +1549,13 @@ export function GraphEditorInner() {
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); addCommentNode(); }}>
                 Add Comment
               </button>
+              <button
+                className={styles.contextItem}
+                title="Load a macro from a .gcamacro file and add it at this position"
+                onClick={e => { e.stopPropagation(); triggerImportMacro(); }}
+              >
+                Import Macro&hellip;
+              </button>
               <hr style={{ border: 'none', borderTop: '1px solid #2d4059', margin: '4px 0' }} />
               <div className={styles.contextSubmenuTrigger}>
                 <button className={styles.contextItem}>
@@ -1414,6 +1612,7 @@ export function GraphEditorInner() {
                     if (mId) setCurrentScope(prev => [...prev, mId]);
                     setContextMenu(null);
                   }}>Enter Macro</button>
+                  <button className={styles.contextItem} onClick={e => { e.stopPropagation(); exportMacro(); }}>Export Macro&hellip;</button>
                   <button className={styles.contextItem} onClick={e => { e.stopPropagation(); undoMacro(); }}>Undo Macro</button>
                 </>
               )}

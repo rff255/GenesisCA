@@ -1,12 +1,20 @@
 import { memo, useCallback, useState, useMemo, useSyncExternalStore } from 'react';
-import { Handle, Position, useReactFlow, useStore } from '@xyflow/react';
+import { Handle, Position, useReactFlow } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
+import { detectMissingConfig } from './nodes/nodeValidation';
 import { handleId } from './types';
 import type { NodeConfig } from './types';
 import type { MacroPort } from '../../model/types';
 import { useModel } from '../../model/ModelContext';
-import { isConnectingGlobal, showPortLabelsGlobal, subscribeShowPortLabels, connectingFrom } from './graphState';
+import {
+  isConnectingGlobal,
+  showPortLabelsGlobal,
+  subscribeShowPortLabels,
+  connectingFrom,
+  subscribeConnectedHandles,
+  getConnectedHandlesForNode,
+} from './graphState';
 import styles from './CaNode.module.css';
 
 /** Returns dark text for light backgrounds, white text for dark backgrounds */
@@ -258,17 +266,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
     inputPorts = inputPorts.filter(p => p.id !== 'probability');
   }
 
-  // Detect which input ports are connected (for inline widget visibility)
-  const connectedInputHandles = useStore(
-    useCallback(
-      (state: { edges: Array<{ target: string; targetHandle?: string | null }> }) =>
-        new Set(
-          state.edges
-            .filter(e => e.target === id)
-            .map(e => e.targetHandle ?? ''),
-        ),
-      [id],
-    ),
+  // Detect which input ports are connected (for inline widget visibility).
+  // Uses a graph-level pub/sub in graphState.ts instead of useStore(edges) so this node only
+  // re-renders when *its* connected handles actually change (not on every pan/zoom/store event).
+  const connectedInputHandles = useSyncExternalStore(
+    subscribeConnectedHandles,
+    () => getConnectedHandlesForNode(id),
   );
 
   // Build a map of all port definitions for inline widget lookup
@@ -276,6 +279,20 @@ function CaNodeComponent({ id, data }: NodeProps) {
     if (!def) return new Map<string, typeof inputPorts[0]>();
     return new Map(def.ports.filter(p => p.kind === 'input').map(p => [p.id, p]));
   }, [def]);
+
+  // Detect missing required config (shown as a warning badge in the node header)
+  const configIssues = useMemo(
+    () => detectMissingConfig(nodeData.nodeType, nodeData.config, model),
+    [
+      nodeData.nodeType,
+      nodeData.config,
+      model.attributes,
+      model.neighborhoods,
+      model.mappings,
+      model.indicators,
+      model.macroDefs,
+    ],
+  );
 
   const userLabel = nodeData.label as string | undefined;
   const isCollapsed = !!nodeData.isCollapsed;
@@ -492,6 +509,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
             )}
           </div>
         )}
+        {configIssues.length > 0 && (
+          <div className={styles.warningBadge} title={configIssues.join('\n')}>!</div>
+        )}
 
         {/* Handles at center — still needed for edges */}
         {inputPorts.map(port => (
@@ -545,6 +565,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
       <div className={styles.header} style={{ background: def.color, color: textColorForBg(def.color) }}>
         {def.label}
       </div>
+      {configIssues.length > 0 && (
+        <div className={styles.warningBadge} title={configIssues.join('\n')}>!</div>
+      )}
       <div className={styles.body} onDoubleClick={stopAll}>
         {/* Node-specific config UI */}
         {nodeData.nodeType === 'getCellAttribute' && (
@@ -1636,4 +1659,16 @@ function CaNodeComponent({ id, data }: NodeProps) {
   );
 }
 
-export const CaNode = memo(CaNodeComponent);
+// Custom comparator: React Flow's updateNodeData replaces only the mutated node's `data`
+// reference, so reference-equality on `data` correctly skips re-renders for untouched nodes.
+// useModel() context changes still trigger re-renders regardless (as needed for boundary nodes).
+export const CaNode = memo(CaNodeComponent, (prev, next) => {
+  if (prev.id !== next.id) return false;
+  if (prev.selected !== next.selected) return false;
+  if (prev.dragging !== next.dragging) return false;
+  const prevParent = (prev as NodeProps & { parentId?: string }).parentId;
+  const nextParent = (next as NodeProps & { parentId?: string }).parentId;
+  if (prevParent !== nextParent) return false;
+  if (prev.data !== next.data) return false;
+  return true;
+});

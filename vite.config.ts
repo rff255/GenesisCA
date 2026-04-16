@@ -57,8 +57,50 @@ function modelsLibraryPlugin(): Plugin {
   };
 }
 
+/**
+ * Vite plugin that scans public/macros/*.gcamacro at build time and generates
+ * macros/index.json with metadata for the Modeler palette's Default Macros section.
+ * Each .gcamacro file is JSON: { schemaVersion, name, description?, macroDef }.
+ */
+function macrosLibraryPlugin(): Plugin {
+  const macrosDir = resolve(__dirname, 'public/macros');
+
+  function generateIndex(outDir: string): void {
+    if (!existsSync(macrosDir)) return;
+    const files = readdirSync(macrosDir).filter((f: string) => f.endsWith('.gcamacro'));
+    const entries = files.map((file: string) => {
+      try {
+        const raw = readFileSync(join(macrosDir, file), 'utf-8');
+        const parsed = JSON.parse(raw);
+        return {
+          key: file.replace('.gcamacro', ''),
+          name: parsed.name || file,
+          description: parsed.description || '',
+          file,
+        };
+      } catch {
+        return null;
+      }
+    }).filter(Boolean);
+
+    const outMacrosDir = join(outDir, 'macros');
+    if (!existsSync(outMacrosDir)) mkdirSync(outMacrosDir, { recursive: true });
+    writeFileSync(join(outMacrosDir, 'index.json'), JSON.stringify(entries, null, 2));
+  }
+
+  return {
+    name: 'macros-library-index',
+    configureServer() {
+      generateIndex(resolve(__dirname, 'public'));
+    },
+    closeBundle() {
+      generateIndex(resolve(__dirname, 'dist'));
+    },
+  };
+}
+
 export default defineConfig(({ command }) => ({
-  plugins: [react(), modelsLibraryPlugin()],
+  plugins: [react(), modelsLibraryPlugin(), macrosLibraryPlugin()],
   // base path only for production (GitHub Pages); dev uses root '/'
   base: command === 'build' ? '/GenesisCA/' : '/',
 }))

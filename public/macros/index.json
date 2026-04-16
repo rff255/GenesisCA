@@ -1,0 +1,8 @@
+[
+  {
+    "key": "count-matching-neighbors",
+    "name": "Count Matching Neighbors",
+    "description": "Counts how many values in a neighbor-values array equal the given Compare-To value.",
+    "file": "count-matching-neighbors.gcamacro"
+  }
+]

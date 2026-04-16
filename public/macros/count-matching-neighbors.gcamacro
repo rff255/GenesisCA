@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "name": "Count Matching Neighbors",
+  "description": "Counts how many values in a neighbor-values array equal the given Compare-To value.",
+  "macroDef": {
+    "id": "default_count_matching",
+    "name": "Count Matching Neighbors",
+    "nodes": [
+      {
+        "id": "mi_count_matching",
+        "type": "caNode",
+        "position": { "x": 40, "y": 60 },
+        "data": {
+          "nodeType": "macroInput",
+          "config": { "macroDefId": "default_count_matching" }
+        }
+      },
+      {
+        "id": "gc_count_matching",
+        "type": "caNode",
+        "position": { "x": 320, "y": 60 },
+        "data": {
+          "nodeType": "groupCounting",
+          "config": { "operation": "equals" }
+        }
+      },
+      {
+        "id": "mo_count_matching",
+        "type": "caNode",
+        "position": { "x": 620, "y": 60 },
+        "data": {
+          "nodeType": "macroOutput",
+          "config": { "macroDefId": "default_count_matching" }
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e_values",
+        "source": "mi_count_matching",
+        "target": "gc_count_matching",
+        "sourceHandle": "output_value_values",
+        "targetHandle": "input_value_values"
+      },
+      {
+        "id": "e_compare",
+        "source": "mi_count_matching",
+        "target": "gc_count_matching",
+        "sourceHandle": "output_value_compareTo",
+        "targetHandle": "input_value_compare"
+      },
+      {
+        "id": "e_count",
+        "source": "gc_count_matching",
+        "target": "mo_count_matching",
+        "sourceHandle": "output_value_count",
+        "targetHandle": "input_value_count"
+      }
+    ],
+    "exposedInputs": [
+      {
+        "portId": "values",
+        "label": "Values",
+        "dataType": "any",
+        "category": "value",
+        "internalNodeId": "mi_count_matching",
+        "internalPortId": "values"
+      },
+      {
+        "portId": "compareTo",
+        "label": "Compare To",
+        "dataType": "any",
+        "category": "value",
+        "internalNodeId": "mi_count_matching",
+        "internalPortId": "compareTo"
+      }
+    ],
+    "exposedOutputs": [
+      {
+        "portId": "count",
+        "label": "Count",
+        "dataType": "integer",
+        "category": "value",
+        "internalNodeId": "mo_count_matching",
+        "internalPortId": "count"
+      }
+    ]
+  }
+}

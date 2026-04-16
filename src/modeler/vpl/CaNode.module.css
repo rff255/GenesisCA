@@ -198,3 +198,25 @@
   padding: 0 3px;
   line-height: 12px;
 }
+
+/* Warning badge for nodes with unconfigured required parameters */
+.warningBadge {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 16px;
+  height: 16px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  color: #1e2a3a;
+  background: #ffb74d;
+  border: 1px solid #f57c00;
+  border-radius: 50%;
+  box-shadow: 0 0 4px rgba(255, 167, 38, 0.7);
+  cursor: help;
+  pointer-events: auto;
+  z-index: 2;
+  user-select: none;
+}
