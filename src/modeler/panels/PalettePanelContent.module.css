@@ -1,0 +1,159 @@
+.palette {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  gap: 4px;
+}
+
+.search {
+  width: 100%;
+  padding: 6px 10px;
+  background: #0d1117;
+  border: 1px solid #2d4059;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 0.72rem;
+  font-family: inherit;
+  outline: none;
+  margin-bottom: 6px;
+}
+
+.search:focus {
+  border-color: #4cc9f0;
+}
+
+.list {
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.section {
+  margin-bottom: 6px;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 4px 0;
+  background: transparent;
+  border: none;
+  color: #4cc9f0;
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sectionHeader:hover {
+  color: #6fe3ff;
+}
+
+.sectionChevron {
+  font-size: 0.55rem;
+  width: 10px;
+  display: inline-block;
+  transition: transform 0.15s;
+}
+
+.sectionChevronCollapsed {
+  transform: rotate(-90deg);
+}
+
+.sectionCount {
+  color: #6080a0;
+  font-weight: 400;
+  margin-left: auto;
+}
+
+.subSectionLabel {
+  padding: 6px 4px 2px;
+  font-size: 0.55rem;
+  font-weight: 600;
+  color: #8ba5c0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 4px 6px;
+  background: transparent;
+  border: none;
+  color: #c0c8d0;
+  font-size: 0.68rem;
+  text-align: left;
+  border-radius: 3px;
+  transition: background 0.1s, border-color 0.1s;
+  user-select: none;
+  cursor: grab;
+  border: 1px solid transparent;
+}
+
+.item:hover {
+  background: rgba(76, 201, 240, 0.08);
+  border-color: rgba(76, 201, 240, 0.3);
+}
+
+.item:active {
+  cursor: grabbing;
+}
+
+.item:focus-visible {
+  outline: 1px solid #4cc9f0;
+  outline-offset: 0;
+}
+
+.itemDragging {
+  opacity: 0.55;
+}
+
+.itemDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.itemBody {
+  flex: 1;
+  min-width: 0;
+}
+
+.itemLabel {
+  font-weight: 500;
+  color: #e0e0e0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.itemDescription {
+  font-size: 0.58rem;
+  color: #7a8a99;
+  line-height: 1.3;
+  margin-top: 1px;
+}
+
+.empty {
+  font-size: 0.65rem;
+  color: #6080a0;
+  text-align: center;
+  padding: 8px 0;
+  font-style: italic;
+}
+
+.hint {
+  font-size: 0.58rem;
+  color: #6080a0;
+  padding: 4px 2px 2px;
+  line-height: 1.35;
+}

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { ActivityBar, type PanelId } from './ActivityBar';
+import { RightActivityBar, type RightPanelId } from './RightActivityBar';
 import { PanelShell } from './PanelShell';
 import { PropertiesPanelContent } from './panels/PropertiesPanelContent';
 import { AttributesPanelContent } from './panels/AttributesPanelContent';
 import { NeighborhoodsPanelContent } from './panels/NeighborhoodsPanelContent';
 import { MappingsPanelContent } from './panels/MappingsPanelContent';
+import { PalettePanelContent } from './panels/PalettePanelContent';
 import { GraphEditorInner } from './vpl/GraphEditor';
 import { NodeExplorer } from './vpl/NodeExplorer';
 import type { NodeExplorerHandle } from './vpl/NodeExplorer';
@@ -25,9 +27,17 @@ const panelComponents: Record<PanelId, React.ComponentType> = {
   mappings: MappingsPanelContent,
 };
 
+const rightPanelTitles: Record<RightPanelId, string> = {
+  explorer: 'Node Explorer',
+  palette: 'Palette',
+};
+
 export function ModelerView() {
   const [activePanel, setActivePanel] = useState<PanelId | null>('properties');
-  const [explorerOpen, setExplorerOpen] = useState(false);
+  const [activeRightPanel, setActiveRightPanel] = useState<RightPanelId | null>(null);
+  // Remembered last-opened right panel — used by the floating graph-area toggle to reopen
+  // whatever the user had open before closing it. Defaults to 'palette'.
+  const [lastRightPanel, setLastRightPanel] = useState<RightPanelId>('palette');
   const explorerRef = useRef<NodeExplorerHandle>(null);
 
   const handleTogglePanel = useCallback((panel: PanelId) => {
@@ -38,6 +48,19 @@ export function ModelerView() {
     setActivePanel(null);
   }, []);
 
+  const handleToggleRightPanel = useCallback((panel: RightPanelId) => {
+    setActiveRightPanel(prev => (prev === panel ? null : panel));
+    setLastRightPanel(panel);
+  }, []);
+
+  const handleCloseRightPanel = useCallback(() => {
+    setActiveRightPanel(null);
+  }, []);
+
+  const handleOpenLastRightPanel = useCallback(() => {
+    setActiveRightPanel(lastRightPanel);
+  }, [lastRightPanel]);
+
   // Ctrl+F opens Node Explorer and focuses search; Esc closes it
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -45,18 +68,18 @@ export function ModelerView() {
         const tag = (document.activeElement as HTMLElement)?.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
         e.preventDefault();
-        setExplorerOpen(true);
+        setActiveRightPanel('explorer');
         setTimeout(() => explorerRef.current?.focusSearch(), 50);
-      } else if (e.key === 'Escape' && explorerOpen) {
+      } else if (e.key === 'Escape' && activeRightPanel) {
         // Don't steal Esc from fields (e.g. clearing the search input first)
         const tag = (document.activeElement as HTMLElement)?.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-        setExplorerOpen(false);
+        setActiveRightPanel(null);
       }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [explorerOpen]);
+  }, [activeRightPanel]);
 
   const PanelContent = activePanel ? panelComponents[activePanel] : null;
 
@@ -71,22 +94,30 @@ export function ModelerView() {
         )}
         <div className={styles.graphArea}>
           <GraphEditorInner />
-          <button
-            className={`${styles.explorerToggle} ${explorerOpen ? styles.explorerToggleActive : ''}`}
-            onClick={() => setExplorerOpen(v => !v)}
-            title="Node Explorer"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8"/>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-            </svg>
-          </button>
+          {!activeRightPanel && (
+            <button
+              className={styles.rightPanelExpandBtn}
+              onClick={handleOpenLastRightPanel}
+              title={`Open ${rightPanelTitles[lastRightPanel]}`}
+            >
+              &lsaquo;
+            </button>
+          )}
         </div>
-        {explorerOpen && (
-          <PanelShell title="Node Explorer" onClose={() => setExplorerOpen(false)} side="right">
-            <NodeExplorer ref={explorerRef} />
+        {activeRightPanel && (
+          <PanelShell
+            title={rightPanelTitles[activeRightPanel]}
+            onClose={handleCloseRightPanel}
+            side="right"
+          >
+            {activeRightPanel === 'explorer' ? (
+              <NodeExplorer ref={explorerRef} />
+            ) : (
+              <PalettePanelContent />
+            )}
           </PanelShell>
         )}
+        <RightActivityBar activePanel={activeRightPanel} onTogglePanel={handleToggleRightPanel} />
       </div>
     </ReactFlowProvider>
   );

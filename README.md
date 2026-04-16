@@ -73,8 +73,10 @@ A complete GenesisCA model definition consists of:
 - **Inline Port Widgets** — input ports show small value editors (number/bool) when unconnected, eliminating the need for constant nodes in simple cases
 - **Node Collapse/Expand** — double-click any node to collapse it; constants show their value; collapsed nodes temporarily expand when connecting edges
 - **Color Pickers** — Color Constant and Set Color Viewer nodes include hex color pickers with per-channel R/G/B controls
-- **Node Explorer** — searchable right-side panel (Ctrl+F to open, Esc to close) listing all nodes with click-to-focus
+- **Palette** — right-side panel with a drag-and-drop list of every node type (grouped by category), default macros shipped with the app (from `public/macros/*.gcamacro`), and the current project's macros
+- **Node Explorer** — searchable right-side panel (Ctrl+F to open, Esc to close) listing all placed nodes with click-to-focus
 - **Add-Node tooltips** — hover any entry in the Add Node context menu to see a short description of what it does
+- **Incomplete-config warnings** — nodes with unset required parameters (e.g., an unselected attribute/neighborhood/mapping) show an amber warning badge in the header so you can spot them at a glance
 - **Canvas toggles** — toggle port labels, grid lines, and snap-to-grid from buttons below zoom controls
 - **Macro System** — encapsulate node groups into reusable subgraphs with MacroInput/MacroOutput boundary nodes
 - **Undo/Redo** — Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) for node/edge operations, moves, paste, config changes

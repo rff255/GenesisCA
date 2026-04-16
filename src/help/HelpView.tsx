@@ -204,7 +204,27 @@ export function HelpView() {
             <li><strong>Right-click</strong> (on node) &mdash; Node options: Rename, Duplicate, Copy, Cut, Delete. Macros also show Enter Macro and Undo Macro.</li>
             <li><strong>Right-click</strong> (on selection) &mdash; Selection options: Duplicate, Copy, Cut, Paste, Create Macro, Create Group.</li>
             <li><strong>Right-click</strong> (on group) &mdash; Group options: Rename, Undo Group, Delete.</li>
+            <li><strong>Drag from Palette</strong> &mdash; Drop a node or macro from the right-side Palette tab onto the canvas to add it at the drop position.</li>
           </ul>
+
+          <h3 className={styles.h3}>Palette &amp; Node Explorer</h3>
+          <p className={styles.p}>
+            Open the right sidebar icons:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Palette</strong> &mdash; Browse all node types (grouped by category) plus
+              default macros shipped with the app (from <code>public/macros/*.gcamacro</code>) and
+              the current project's macros. Drag any item onto the canvas to add it.</li>
+            <li><strong>Node Explorer</strong> (<kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>F</kbd>) &mdash; Search and jump to nodes
+              already placed in your graph.</li>
+          </ul>
+
+          <h3 className={styles.h3}>Incomplete Node Warnings</h3>
+          <p className={styles.p}>
+            Nodes with required parameters that are not yet set (e.g., a <em>Set Attribute</em>
+            node without an attribute selected) show a small amber <strong>!</strong> badge in their
+            top-right corner. Hover it to see exactly what needs configuration.
+          </p>
 
           <h3 className={styles.h3}>Node Collapse &amp; Expand</h3>
           <p className={styles.p}>

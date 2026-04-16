@@ -46,3 +46,16 @@
   background: #4cc9f0;
   border-radius: 0 1px 1px 0;
 }
+
+/* Mirrored variant for the right-side activity bar: line on the right edge */
+.buttonActiveRight::before {
+  content: '';
+  position: absolute;
+  right: 0;
+  left: auto;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: #4cc9f0;
+  border-radius: 1px 0 0 1px;
+}

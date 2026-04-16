@@ -47,12 +47,15 @@ export function IndicatorDisplay({ indicators, values, history, generation, onTo
   // Notify parent of all initially-expanded indicators (for history collection).
   // Do this synchronously during render (via a ref-compare) so the parent's chartExpandedRef
   // is populated before the first worker step — otherwise sparklines start blank on mount.
+  // Also reset collapsedCharts when the indicator set changes (e.g., loading a new project)
+  // so charts default to expanded for the new model.
   const indicatorIds = indicators.map(i => i.id).join(',');
   const lastNotifiedIds = useRef('');
   if (lastNotifiedIds.current !== indicatorIds) {
     lastNotifiedIds.current = indicatorIds;
+    if (collapsedCharts.size > 0) setCollapsedCharts(new Set());
     for (const ind of indicators) {
-      if (!collapsedCharts.has(ind.id)) onChartToggle(ind.id, true);
+      onChartToggle(ind.id, true);
     }
   }
 

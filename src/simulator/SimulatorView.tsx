@@ -464,6 +464,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     setPlaying(false);
     indicatorValuesRef.current = {};
     indicatorHistoryRef.current = {};
+    chartExpandedRef.current = new Set();
     pendingStep.current = false;
     lastGenForGps.current = 0;
     gpsGens.current = 0;
@@ -1223,17 +1224,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               <div className={styles.sectionTitle}>Model Attributes</div>
               {modelAttrs.map(a => (
                 <div key={a.id} className={styles.fieldRow}>
-                  <span className={styles.statLabel} style={{ flex: 1 }} title={a.description || a.name}>{a.name}</span>
+                  <span className={styles.statLabel} style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={a.description || a.name}>{a.name}</span>
                   {a.type === 'bool' ? (
                     <input type="checkbox" checked={(runtimeModelAttrs[a.id] ?? 0) === 1}
                       onChange={e => handleModelAttrChange(a.id, e.target.checked ? 1 : 0)} />
                   ) : a.type === 'integer' ? (
-                    <div style={{ display: 'flex', gap: 4, alignItems: 'center', flex: 1 }}>
+                    <div style={{ display: 'flex', gap: 4, alignItems: 'center', flex: 2, minWidth: 0 }}>
                       {a.hasBounds && a.min != null && a.max != null && (
                         <input type="range" min={a.min} max={a.max} step={1}
                           value={runtimeModelAttrs[a.id] ?? 0}
                           onChange={e => handleModelAttrChange(a.id, Math.round(Number(e.target.value)))}
-                          style={{ flex: 1, minWidth: 40 }} />
+                          style={{ flex: 1, minWidth: 0, width: '100%' }} />
                       )}
                       <input className={styles.brushInput} type="number" step={1}
                         min={a.hasBounds ? a.min : undefined} max={a.hasBounds ? a.max : undefined}
@@ -1246,12 +1247,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                         }} />
                     </div>
                   ) : a.type === 'float' ? (
-                    <div style={{ display: 'flex', gap: 4, alignItems: 'center', flex: 1 }}>
+                    <div style={{ display: 'flex', gap: 4, alignItems: 'center', flex: 2, minWidth: 0 }}>
                       {a.hasBounds && a.min != null && a.max != null && (
                         <input type="range" min={a.min} max={a.max} step={(a.max - a.min) / 100}
                           value={runtimeModelAttrs[a.id] ?? 0}
                           onChange={e => handleModelAttrChange(a.id, Number(e.target.value))}
-                          style={{ flex: 1, minWidth: 40 }} />
+                          style={{ flex: 1, minWidth: 0, width: '100%' }} />
                       )}
                       <input className={styles.brushInput} type="number" step="any"
                         min={a.hasBounds ? a.min : undefined} max={a.hasBounds ? a.max : undefined}

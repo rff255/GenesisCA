@@ -22,6 +22,7 @@ import type {
 } from './types';
 import { DEFAULT_MODEL, EMPTY_MODEL } from './defaultModel';
 import { readModelFile } from './fileOperations';
+import { cloneMacroWithFreshIds } from './macroImport';
 
 // ---------------------------------------------------------------------------
 // ID generation
@@ -471,6 +472,9 @@ export interface ModelContextValue {
   updateMapping: (id: string, changes: Partial<Mapping>) => void;
   setGraph: (nodes: GraphNode[], edges: GraphEdge[]) => void;
   addMacro: (macro: MacroDef) => void;
+  /** Deep-clones a MacroDef with fresh IDs and adds it to the project.
+   *  Returns the new macroDef id (for referencing from a MacroNode). */
+  importMacro: (raw: MacroDef) => string;
   updateMacro: (id: string, changes: Partial<MacroDef>) => void;
   removeMacro: (id: string) => void;
   addIndicator: (kind: IndicatorKind) => void;
@@ -615,6 +619,14 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     (macro: MacroDef) => dispatch({ type: 'ADD_MACRO', macro }),
     [],
   );
+  const importMacro = useCallback(
+    (raw: MacroDef): string => {
+      const fresh = cloneMacroWithFreshIds(raw);
+      dispatch({ type: 'ADD_MACRO', macro: fresh });
+      return fresh.id;
+    },
+    [],
+  );
   const updateMacro = useCallback(
     (id: string, changes: Partial<MacroDef>) =>
       dispatch({ type: 'UPDATE_MACRO', id, changes }),
@@ -673,6 +685,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       updateMapping,
       setGraph,
       addMacro,
+      importMacro,
       updateMacro,
       removeMacro,
       addIndicator,
@@ -700,6 +713,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       updateMapping,
       setGraph,
       addMacro,
+      importMacro,
       updateMacro,
       removeMacro,
       addIndicator,
