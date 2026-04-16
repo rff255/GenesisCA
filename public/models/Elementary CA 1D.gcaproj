@@ -1,0 +1,1884 @@
+{
+  "schemaVersion": 1,
+  "properties": {
+    "name": "Elementary 1D CA",
+    "author": "Rodrigo Figueiredo",
+    "goal": "Showcase 1D Elementary CA in a 2D space",
+    "description": "Demonstrating the simulation of 1D Elementary CA in a 2D space in a simple manner. Use the rule you want. By default rule 30 ( 00011110 )",
+    "topology": "2d-grid",
+    "boundaryTreatment": "constant",
+    "gridWidth": 500,
+    "gridHeight": 500,
+    "maxIterations": 1000,
+    "tags": [
+      "1d elementary",
+      "classic",
+      "rule 30"
+    ],
+    "updateMode": "synchronous",
+    "asyncScheme": "random-order"
+  },
+  "attributes": [
+    {
+      "id": "alive",
+      "name": "alive",
+      "type": "bool",
+      "description": "Whether the cell is alive or dead",
+      "isModelAttribute": false,
+      "defaultValue": "false"
+    },
+    {
+      "id": "new_attribute_4",
+      "name": "Random Paint Probability",
+      "type": "float",
+      "description": "",
+      "isModelAttribute": true,
+      "defaultValue": "0.5"
+    },
+    {
+      "id": "new_attribute_mo1ib4j3gdv",
+      "name": "Solved",
+      "type": "bool",
+      "description": "",
+      "isModelAttribute": false,
+      "defaultValue": "false"
+    },
+    {
+      "id": "new_attribute_mo1icrgjcd0",
+      "name": "Case 111",
+      "type": "bool",
+      "description": "should case where left, current, and right are alive result in alive or dead?",
+      "isModelAttribute": true,
+      "defaultValue": "false"
+    },
+    {
+      "id": "new_attribute_mo1ie7giaxt",
+      "name": "Case 110",
+      "type": "bool",
+      "description": "should case where left, and current are alive result in alive or dead?",
+      "isModelAttribute": true,
+      "defaultValue": "false"
+    },
+    {
+      "id": "new_attribute_mo1iedl3wwy",
+      "name": "Case 101",
+      "type": "bool",
+      "description": "should case where left, and right are alive result in alive or dead?",
+      "isModelAttribute": true,
+      "defaultValue": "false"
+    },
+    {
+      "id": "new_attribute_mo1iefwem9s",
+      "name": "Case 100",
+      "type": "bool",
+      "description": "should case where left only are alive result in alive or dead?",
+      "isModelAttribute": true,
+      "defaultValue": "true"
+    },
+    {
+      "id": "new_attribute_mo1ieh4xnqw",
+      "name": "Case 011",
+      "type": "bool",
+      "description": "should case where current, and right are alive result in alive or dead?",
+      "isModelAttribute": true,
+      "defaultValue": "true"
+    },
+    {
+      "id": "new_attribute_mo1iei9di1o",
+      "name": "Case 010",
+      "type": "bool",
+      "description": "should case where only current is alive result in alive or dead?",
+      "isModelAttribute": true,
+      "defaultValue": "true"
+    },
+    {
+      "id": "new_attribute_mo1iekha1io",
+      "name": "Case 001",
+      "type": "bool",
+      "description": "should case where only right are alive result in alive or dead?",
+      "isModelAttribute": true,
+      "defaultValue": "true"
+    },
+    {
+      "id": "new_attribute_mo1if9vff5b",
+      "name": "Case 000",
+      "type": "bool",
+      "description": "should case where no one is alive result in alive or dead?",
+      "isModelAttribute": true,
+      "defaultValue": "false"
+    }
+  ],
+  "neighborhoods": [
+    {
+      "id": "moore",
+      "name": "1D Elementary CA Case",
+      "description": "Simulating a 1D CA evolving by checking the previous row",
+      "coords": [
+        [
+          -1,
+          -1
+        ],
+        [
+          -1,
+          0
+        ],
+        [
+          -1,
+          1
+        ]
+      ],
+      "margin": 2,
+      "tags": {
+        "0": "Left",
+        "1": "Current",
+        "2": "Right"
+      }
+    }
+  ],
+  "mappings": [
+    {
+      "id": "paint",
+      "name": "Set Alive",
+      "description": "Allows painting alive cells on the grid",
+      "isAttributeToColor": false,
+      "redDescription": "",
+      "greenDescription": "",
+      "blueDescription": ""
+    },
+    {
+      "id": "new_mapping_2",
+      "name": "Random",
+      "description": "random",
+      "isAttributeToColor": false,
+      "redDescription": "",
+      "greenDescription": "",
+      "blueDescription": ""
+    },
+    {
+      "id": "new_mapping_mo1i175y8e4",
+      "name": "Default",
+      "description": "",
+      "isAttributeToColor": true,
+      "redDescription": "",
+      "greenDescription": "",
+      "blueDescription": ""
+    },
+    {
+      "id": "new_mapping_mo1jl742sio",
+      "name": "ClearAlive",
+      "description": "",
+      "isAttributeToColor": false,
+      "redDescription": "",
+      "greenDescription": "",
+      "blueDescription": ""
+    }
+  ],
+  "graphNodes": [
+    {
+      "id": "nmo1jrz42scv",
+      "type": "groupNode",
+      "position": {
+        "x": -560,
+        "y": 100
+      },
+      "data": {
+        "label": "Input Mappings",
+        "width": 590,
+        "height": 350,
+        "nodeType": "group",
+        "config": {}
+      }
+    },
+    {
+      "id": "n4",
+      "type": "caNode",
+      "position": {
+        "x": -1000,
+        "y": -420
+      },
+      "data": {
+        "nodeType": "step",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmnn6ml8mgcs",
+      "type": "caNode",
+      "position": {
+        "x": 40,
+        "y": 80
+      },
+      "data": {
+        "nodeType": "inputColor",
+        "config": {
+          "mappingId": "paint"
+        },
+        "parentId": "nmo1jrz42scv",
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmnn6pqqzgsc",
+      "type": "caNode",
+      "position": {
+        "x": 180,
+        "y": 80
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive",
+          "_port_value": "true"
+        },
+        "parentId": "nmo1jrz42scv",
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmnn6qcryjvd",
+      "type": "caNode",
+      "position": {
+        "x": 40,
+        "y": 160
+      },
+      "data": {
+        "nodeType": "inputColor",
+        "config": {
+          "mappingId": "new_mapping_2"
+        },
+        "parentId": "nmo1jrz42scv",
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmnn6qulnxrx",
+      "type": "caNode",
+      "position": {
+        "x": 360,
+        "y": 160
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive"
+        },
+        "parentId": "nmo1jrz42scv",
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmnncdpy7jkk",
+      "type": "caNode",
+      "position": {
+        "x": -1020,
+        "y": 160
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {},
+        "parentId": "nmno07ikvob0"
+      }
+    },
+    {
+      "id": "nmnncgefih9c",
+      "type": "caNode",
+      "position": {
+        "x": -1120,
+        "y": 240
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "alive"
+        },
+        "parentId": "nmno07ikvob0",
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmno02q10ml6",
+      "type": "caNode",
+      "position": {
+        "x": 40,
+        "y": 200
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "new_attribute_4"
+        },
+        "parentId": "nmo1jrz42scv",
+        "isCollapsed": false
+      }
+    },
+    {
+      "id": "nmo1i1jryksk",
+      "type": "caNode",
+      "position": {
+        "x": -1200,
+        "y": 160
+      },
+      "data": {
+        "nodeType": "outputMapping",
+        "config": {
+          "mappingId": "new_mapping_mo1i175y8e4"
+        }
+      }
+    },
+    {
+      "id": "nmo1i2sa91t8",
+      "type": "caNode",
+      "position": {
+        "x": -740,
+        "y": 160
+      },
+      "data": {
+        "nodeType": "setColorViewer",
+        "config": {
+          "mappingId": "new_mapping_mo1i175y8e4"
+        },
+        "parentId": "nmno07ikvob0",
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1i2yr4wcw",
+      "type": "caNode",
+      "position": {
+        "x": -740,
+        "y": 200
+      },
+      "data": {
+        "nodeType": "setColorViewer",
+        "config": {
+          "mappingId": "new_mapping_mo1i175y8e4",
+          "_port_r": "166",
+          "_port_g": "166",
+          "_port_b": "166"
+        },
+        "parentId": "nmno07ikvob0",
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1ia8me036",
+      "type": "caNode",
+      "position": {
+        "x": -980,
+        "y": -360
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "new_attribute_mo1ib4j3gdv"
+        },
+        "parentId": "nmno07ikvob0",
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1io6i7t3c",
+      "type": "caNode",
+      "position": {
+        "x": -1060,
+        "y": -200
+      },
+      "data": {
+        "nodeType": "getNeighborAttributeByTag",
+        "config": {
+          "neighborhoodId": "moore",
+          "attributeId": "alive",
+          "tagName": "Left",
+          "_resolvedTagIndex": 0
+        },
+        "isCollapsed": true,
+        "label": "Left"
+      }
+    },
+    {
+      "id": "nmo1ipbfmj39",
+      "type": "caNode",
+      "position": {
+        "x": -1060,
+        "y": -160
+      },
+      "data": {
+        "nodeType": "getNeighborAttributeByTag",
+        "config": {
+          "neighborhoodId": "moore",
+          "attributeId": "alive",
+          "tagName": "Current",
+          "_resolvedTagIndex": 1
+        },
+        "label": "Current",
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1ipdo7g84",
+      "type": "caNode",
+      "position": {
+        "x": -1060,
+        "y": -120
+      },
+      "data": {
+        "nodeType": "getNeighborAttributeByTag",
+        "config": {
+          "neighborhoodId": "moore",
+          "attributeId": "alive",
+          "tagName": "Right",
+          "_resolvedTagIndex": 2
+        },
+        "label": "Right",
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1iqmtbtxf",
+      "type": "caNode",
+      "position": {
+        "x": -920,
+        "y": -200
+      },
+      "data": {
+        "nodeType": "logicOperator",
+        "config": {
+          "operation": "NOT"
+        },
+        "isCollapsed": true,
+        "label": "Not Left"
+      }
+    },
+    {
+      "id": "nmo1irtflhbi",
+      "type": "caNode",
+      "position": {
+        "x": -360,
+        "y": -280
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "new_attribute_mo1icrgjcd0",
+          "isColorAttr": false
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1itpkuxe0",
+      "type": "caNode",
+      "position": {
+        "x": -920,
+        "y": -160
+      },
+      "data": {
+        "nodeType": "logicOperator",
+        "config": {
+          "operation": "NOT"
+        },
+        "isCollapsed": true,
+        "label": "Not Current"
+      }
+    },
+    {
+      "id": "nmo1itryaelq",
+      "type": "caNode",
+      "position": {
+        "x": -920,
+        "y": -120
+      },
+      "data": {
+        "nodeType": "logicOperator",
+        "config": {
+          "operation": "NOT"
+        },
+        "isCollapsed": true,
+        "label": "Not Right"
+      }
+    },
+    {
+      "id": "nmo1ix0fsdv8",
+      "type": "caNode",
+      "position": {
+        "x": -720,
+        "y": -280
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "and"
+        },
+        "isCollapsed": true,
+        "label": "Case 111"
+      }
+    },
+    {
+      "id": "nmo1iyso5qew",
+      "type": "caNode",
+      "position": {
+        "x": -720,
+        "y": -240
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "and"
+        },
+        "isCollapsed": true,
+        "label": "Case 110"
+      }
+    },
+    {
+      "id": "nmo1iyub92ji",
+      "type": "caNode",
+      "position": {
+        "x": -720,
+        "y": -200
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "and"
+        },
+        "isCollapsed": true,
+        "label": "Case 101"
+      }
+    },
+    {
+      "id": "nmo1iyub94gy",
+      "type": "caNode",
+      "position": {
+        "x": -720,
+        "y": -160
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "and"
+        },
+        "isCollapsed": true,
+        "label": "Case 100"
+      }
+    },
+    {
+      "id": "nmo1iyw79jt2",
+      "type": "caNode",
+      "position": {
+        "x": -720,
+        "y": -120
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "and"
+        },
+        "isCollapsed": true,
+        "label": "Case 011"
+      }
+    },
+    {
+      "id": "nmo1iyw79j2w",
+      "type": "caNode",
+      "position": {
+        "x": -720,
+        "y": -80
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "and"
+        },
+        "isCollapsed": true,
+        "label": "Case 010"
+      }
+    },
+    {
+      "id": "nmo1iyw797u5",
+      "type": "caNode",
+      "position": {
+        "x": -720,
+        "y": -40
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "and"
+        },
+        "isCollapsed": true,
+        "label": "Case 001"
+      }
+    },
+    {
+      "id": "nmo1iyw796b9",
+      "type": "caNode",
+      "position": {
+        "x": -720,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "and"
+        },
+        "isCollapsed": true,
+        "label": "Case 000"
+      }
+    },
+    {
+      "id": "nmo1j1kdwryv",
+      "type": "caNode",
+      "position": {
+        "x": -580,
+        "y": -280
+      },
+      "data": {
+        "nodeType": "switch",
+        "config": {
+          "mode": "conditions",
+          "firstMatchOnly": true,
+          "caseCount": 8,
+          "valueType": "integer",
+          "case_0_op": "==",
+          "case_0_value": "0",
+          "case_1_op": "==",
+          "case_1_value": "1",
+          "case_2_op": "==",
+          "case_2_value": "2",
+          "case_3_op": "==",
+          "case_3_value": "3",
+          "case_4_op": "==",
+          "case_4_value": "4",
+          "case_5_op": "==",
+          "case_5_value": "5",
+          "case_6_op": "==",
+          "case_6_value": "6",
+          "case_7_op": "==",
+          "case_7_value": "7"
+        }
+      }
+    },
+    {
+      "id": "nmo1j317v913",
+      "type": "caNode",
+      "position": {
+        "x": -240,
+        "y": -280
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive"
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1j3fqusyr",
+      "type": "caNode",
+      "position": {
+        "x": -360,
+        "y": -240
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "new_attribute_mo1ie7giaxt",
+          "isColorAttr": false
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1j3fqu887",
+      "type": "caNode",
+      "position": {
+        "x": -240,
+        "y": -240
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive"
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1j3j5h1z8",
+      "type": "caNode",
+      "position": {
+        "x": -360,
+        "y": -200
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "new_attribute_mo1iedl3wwy",
+          "isColorAttr": false
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1j3j5hlmj",
+      "type": "caNode",
+      "position": {
+        "x": -240,
+        "y": -200
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive"
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1j3j5h757",
+      "type": "caNode",
+      "position": {
+        "x": -360,
+        "y": -160
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "new_attribute_mo1iefwem9s",
+          "isColorAttr": false
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1j3j5hubu",
+      "type": "caNode",
+      "position": {
+        "x": -240,
+        "y": -160
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive"
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1j3mphvm0",
+      "type": "caNode",
+      "position": {
+        "x": -360,
+        "y": -120
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "new_attribute_mo1ieh4xnqw",
+          "isColorAttr": false
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1j3mphmi6",
+      "type": "caNode",
+      "position": {
+        "x": -240,
+        "y": -120
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive"
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1j3mphcr0",
+      "type": "caNode",
+      "position": {
+        "x": -360,
+        "y": -80
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "new_attribute_mo1iei9di1o",
+          "isColorAttr": false
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1j3mphebt",
+      "type": "caNode",
+      "position": {
+        "x": -240,
+        "y": -80
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive"
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1j3mphsv7",
+      "type": "caNode",
+      "position": {
+        "x": -360,
+        "y": -40
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "new_attribute_mo1iekha1io",
+          "isColorAttr": false
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1j3mphtd0",
+      "type": "caNode",
+      "position": {
+        "x": -240,
+        "y": -40
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive"
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1j3mphcku",
+      "type": "caNode",
+      "position": {
+        "x": -360,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "new_attribute_mo1if9vff5b",
+          "isColorAttr": false
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1j3mphd7l",
+      "type": "caNode",
+      "position": {
+        "x": -240,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive"
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1jkxqh2z6",
+      "type": "caNode",
+      "position": {
+        "x": 40,
+        "y": 120
+      },
+      "data": {
+        "nodeType": "inputColor",
+        "config": {
+          "mappingId": "new_mapping_mo1jl742sio"
+        },
+        "parentId": "nmo1jrz42scv",
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1jl0gf88b",
+      "type": "caNode",
+      "position": {
+        "x": 180,
+        "y": 120
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive",
+          "_port_value": "false"
+        },
+        "parentId": "nmo1jrz42scv",
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1jn6fr53o",
+      "type": "caNode",
+      "position": {
+        "x": 240,
+        "y": 220
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "randomType": "bool",
+          "min": "0",
+          "max": "1"
+        },
+        "isCollapsed": true,
+        "parentId": "nmo1jrz42scv"
+      }
+    },
+    {
+      "id": "nmo1jugobclz",
+      "type": "caNode",
+      "position": {
+        "x": -740,
+        "y": 240
+      },
+      "data": {
+        "nodeType": "setColorViewer",
+        "config": {
+          "mappingId": "new_mapping_mo1i175y8e4",
+          "_port_r": "90",
+          "_port_g": "87",
+          "_port_b": "63"
+        },
+        "parentId": "nmno07ikvob0",
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1jwfdjupt",
+      "type": "caNode",
+      "position": {
+        "x": -880,
+        "y": 200
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {},
+        "parentId": "nmno07ikvob0"
+      }
+    },
+    {
+      "id": "nmo1jwk0v0fh",
+      "type": "caNode",
+      "position": {
+        "x": -1000,
+        "y": 240
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "new_attribute_mo1ib4j3gdv"
+        },
+        "parentId": "nmno07ikvob0",
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1kk8qf014",
+      "type": "caNode",
+      "position": {
+        "x": -580,
+        "y": -360
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "new_attribute_mo1ib4j3gdv",
+          "_port_value": "true"
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1ksqumpm7",
+      "type": "caNode",
+      "position": {
+        "x": -1040,
+        "y": -320
+      },
+      "data": {
+        "nodeType": "getNeighborsAttribute",
+        "config": {
+          "neighborhoodId": "moore",
+          "attributeId": "new_attribute_mo1ib4j3gdv"
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1ktfchlap",
+      "type": "caNode",
+      "position": {
+        "x": -720,
+        "y": -400
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmo1kupygl4i",
+      "type": "caNode",
+      "position": {
+        "x": -840,
+        "y": -320
+      },
+      "data": {
+        "nodeType": "groupOperator",
+        "config": {
+          "operation": "or"
+        },
+        "isCollapsed": true,
+        "label": "OR (Any)"
+      }
+    },
+    {
+      "id": "nmo1l51cdgvy",
+      "type": "caNode",
+      "position": {
+        "x": 180,
+        "y": 40
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "new_attribute_mo1ib4j3gdv",
+          "_port_value": "true"
+        },
+        "parentId": "nmo1jrz42scv",
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmo1l9bagzcv",
+      "type": "caNode",
+      "position": {
+        "x": -860,
+        "y": -400
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {}
+      }
+    }
+  ],
+  "graphEdges": [
+    {
+      "id": "xy-edge__nmnn6ml8mgcsoutput_flow_do-nmnn6pqqzgscinput_flow_do",
+      "source": "nmnn6ml8mgcs",
+      "target": "nmnn6pqqzgsc",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmnn6qcryjvdoutput_flow_do-nmnn6qulnxrxinput_flow_do",
+      "source": "nmnn6qcryjvd",
+      "target": "nmnn6qulnxrx",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmo1io6i7t3coutput_value_value-nmo1iqmtbtxfinput_value_a",
+      "source": "nmo1io6i7t3c",
+      "target": "nmo1iqmtbtxf",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "xy-edge__nmo1ipbfmj39output_value_value-nmo1itpkuxe0input_value_a",
+      "source": "nmo1ipbfmj39",
+      "target": "nmo1itpkuxe0",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "xy-edge__nmo1ipdo7g84output_value_value-nmo1itryaelqinput_value_a",
+      "source": "nmo1ipdo7g84",
+      "target": "nmo1itryaelq",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "xy-edge__nmo1io6i7t3coutput_value_value-nmo1ix0fsdv8input_value_values",
+      "source": "nmo1io6i7t3c",
+      "target": "nmo1ix0fsdv8",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1ipbfmj39output_value_value-nmo1ix0fsdv8input_value_values",
+      "source": "nmo1ipbfmj39",
+      "target": "nmo1ix0fsdv8",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1ipdo7g84output_value_value-nmo1ix0fsdv8input_value_values",
+      "source": "nmo1ipdo7g84",
+      "target": "nmo1ix0fsdv8",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1ix0fsdv8output_value_result-nmo1j1kdwryvinput_value_case_0_cond",
+      "source": "nmo1ix0fsdv8",
+      "target": "nmo1j1kdwryv",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_case_0_cond"
+    },
+    {
+      "id": "xy-edge__nmo1iyso5qewoutput_value_result-nmo1j1kdwryvinput_value_case_1_cond",
+      "source": "nmo1iyso5qew",
+      "target": "nmo1j1kdwryv",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_case_1_cond"
+    },
+    {
+      "id": "xy-edge__nmo1iyub92jioutput_value_result-nmo1j1kdwryvinput_value_case_2_cond",
+      "source": "nmo1iyub92ji",
+      "target": "nmo1j1kdwryv",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_case_2_cond"
+    },
+    {
+      "id": "xy-edge__nmo1iyub94gyoutput_value_result-nmo1j1kdwryvinput_value_case_3_cond",
+      "source": "nmo1iyub94gy",
+      "target": "nmo1j1kdwryv",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_case_3_cond"
+    },
+    {
+      "id": "xy-edge__nmo1iyw79jt2output_value_result-nmo1j1kdwryvinput_value_case_4_cond",
+      "source": "nmo1iyw79jt2",
+      "target": "nmo1j1kdwryv",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_case_4_cond"
+    },
+    {
+      "id": "xy-edge__nmo1iyw79j2woutput_value_result-nmo1j1kdwryvinput_value_case_5_cond",
+      "source": "nmo1iyw79j2w",
+      "target": "nmo1j1kdwryv",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_case_5_cond"
+    },
+    {
+      "id": "xy-edge__nmo1iyw797u5output_value_result-nmo1j1kdwryvinput_value_case_6_cond",
+      "source": "nmo1iyw797u5",
+      "target": "nmo1j1kdwryv",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_case_6_cond"
+    },
+    {
+      "id": "xy-edge__nmo1iyw796b9output_value_result-nmo1j1kdwryvinput_value_case_7_cond",
+      "source": "nmo1iyw796b9",
+      "target": "nmo1j1kdwryv",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_case_7_cond"
+    },
+    {
+      "id": "xy-edge__nmo1j1kdwryvoutput_flow_case_0-nmo1j317v913input_flow_do",
+      "source": "nmo1j1kdwryv",
+      "target": "nmo1j317v913",
+      "sourceHandle": "output_flow_case_0",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmo1irtflhbioutput_value_value-nmo1j317v913input_value_value",
+      "source": "nmo1irtflhbi",
+      "target": "nmo1j317v913",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "e_mo1j3fqu_0_m6k",
+      "source": "nmo1j3fqusyr",
+      "target": "nmo1j3fqu887",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "e_mo1j3j5h_0_anu",
+      "source": "nmo1j3j5h1z8",
+      "target": "nmo1j3j5hlmj",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "e_mo1j3j5h_1_r5w",
+      "source": "nmo1j3j5h757",
+      "target": "nmo1j3j5hubu",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "e_mo1j3mph_0_54s",
+      "source": "nmo1j3mphvm0",
+      "target": "nmo1j3mphmi6",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "e_mo1j3mph_1_aoc",
+      "source": "nmo1j3mphcr0",
+      "target": "nmo1j3mphebt",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "e_mo1j3mph_2_dur",
+      "source": "nmo1j3mphsv7",
+      "target": "nmo1j3mphtd0",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "e_mo1j3mph_3_0cj",
+      "source": "nmo1j3mphcku",
+      "target": "nmo1j3mphd7l",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "xy-edge__nmo1j1kdwryvoutput_flow_case_1-nmo1j3fqu887input_flow_do",
+      "source": "nmo1j1kdwryv",
+      "target": "nmo1j3fqu887",
+      "sourceHandle": "output_flow_case_1",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmo1j1kdwryvoutput_flow_case_2-nmo1j3j5hlmjinput_flow_do",
+      "source": "nmo1j1kdwryv",
+      "target": "nmo1j3j5hlmj",
+      "sourceHandle": "output_flow_case_2",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmo1j1kdwryvoutput_flow_case_3-nmo1j3j5hubuinput_flow_do",
+      "source": "nmo1j1kdwryv",
+      "target": "nmo1j3j5hubu",
+      "sourceHandle": "output_flow_case_3",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmo1j1kdwryvoutput_flow_case_4-nmo1j3mphmi6input_flow_do",
+      "source": "nmo1j1kdwryv",
+      "target": "nmo1j3mphmi6",
+      "sourceHandle": "output_flow_case_4",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmo1j1kdwryvoutput_flow_case_5-nmo1j3mphebtinput_flow_do",
+      "source": "nmo1j1kdwryv",
+      "target": "nmo1j3mphebt",
+      "sourceHandle": "output_flow_case_5",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmo1j1kdwryvoutput_flow_case_6-nmo1j3mphtd0input_flow_do",
+      "source": "nmo1j1kdwryv",
+      "target": "nmo1j3mphtd0",
+      "sourceHandle": "output_flow_case_6",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmo1j1kdwryvoutput_flow_case_7-nmo1j3mphd7linput_flow_do",
+      "source": "nmo1j1kdwryv",
+      "target": "nmo1j3mphd7l",
+      "sourceHandle": "output_flow_case_7",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmo1io6i7t3coutput_value_value-nmo1iyso5qewinput_value_values",
+      "source": "nmo1io6i7t3c",
+      "target": "nmo1iyso5qew",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1io6i7t3coutput_value_value-nmo1iyub92jiinput_value_values",
+      "source": "nmo1io6i7t3c",
+      "target": "nmo1iyub92ji",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1io6i7t3coutput_value_value-nmo1iyub94gyinput_value_values",
+      "source": "nmo1io6i7t3c",
+      "target": "nmo1iyub94gy",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1ipbfmj39output_value_value-nmo1iyso5qewinput_value_values",
+      "source": "nmo1ipbfmj39",
+      "target": "nmo1iyso5qew",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1ipbfmj39output_value_value-nmo1iyw79jt2input_value_values",
+      "source": "nmo1ipbfmj39",
+      "target": "nmo1iyw79jt2",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1ipbfmj39output_value_value-nmo1iyw79j2winput_value_values",
+      "source": "nmo1ipbfmj39",
+      "target": "nmo1iyw79j2w",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1ipdo7g84output_value_value-nmo1iyub92jiinput_value_values",
+      "source": "nmo1ipdo7g84",
+      "target": "nmo1iyub92ji",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1ipdo7g84output_value_value-nmo1iyw79jt2input_value_values",
+      "source": "nmo1ipdo7g84",
+      "target": "nmo1iyw79jt2",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1ipdo7g84output_value_value-nmo1iyw797u5input_value_values",
+      "source": "nmo1ipdo7g84",
+      "target": "nmo1iyw797u5",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1iqmtbtxfoutput_value_result-nmo1iyw79jt2input_value_values",
+      "source": "nmo1iqmtbtxf",
+      "target": "nmo1iyw79jt2",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1iqmtbtxfoutput_value_result-nmo1iyw79j2winput_value_values",
+      "source": "nmo1iqmtbtxf",
+      "target": "nmo1iyw79j2w",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1iqmtbtxfoutput_value_result-nmo1iyw797u5input_value_values",
+      "source": "nmo1iqmtbtxf",
+      "target": "nmo1iyw797u5",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1iqmtbtxfoutput_value_result-nmo1iyw796b9input_value_values",
+      "source": "nmo1iqmtbtxf",
+      "target": "nmo1iyw796b9",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1itpkuxe0output_value_result-nmo1iyub92jiinput_value_values",
+      "source": "nmo1itpkuxe0",
+      "target": "nmo1iyub92ji",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1itpkuxe0output_value_result-nmo1iyub94gyinput_value_values",
+      "source": "nmo1itpkuxe0",
+      "target": "nmo1iyub94gy",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1itpkuxe0output_value_result-nmo1iyw797u5input_value_values",
+      "source": "nmo1itpkuxe0",
+      "target": "nmo1iyw797u5",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1itpkuxe0output_value_result-nmo1iyw796b9input_value_values",
+      "source": "nmo1itpkuxe0",
+      "target": "nmo1iyw796b9",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1itryaelqoutput_value_result-nmo1iyso5qewinput_value_values",
+      "source": "nmo1itryaelq",
+      "target": "nmo1iyso5qew",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1itryaelqoutput_value_result-nmo1iyub94gyinput_value_values",
+      "source": "nmo1itryaelq",
+      "target": "nmo1iyub94gy",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1itryaelqoutput_value_result-nmo1iyw79j2winput_value_values",
+      "source": "nmo1itryaelq",
+      "target": "nmo1iyw79j2w",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1itryaelqoutput_value_result-nmo1iyw796b9input_value_values",
+      "source": "nmo1itryaelq",
+      "target": "nmo1iyw796b9",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1jkxqh2z6output_flow_do-nmo1jl0gf88binput_flow_do",
+      "source": "nmo1jkxqh2z6",
+      "target": "nmo1jl0gf88b",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmno02q10ml6output_value_value-nmo1jn6fr53oinput_value_probability",
+      "source": "nmno02q10ml6",
+      "target": "nmo1jn6fr53o",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_probability"
+    },
+    {
+      "id": "xy-edge__nmo1jn6fr53ooutput_value_value-nmnn6qulnxrxinput_value_value",
+      "source": "nmo1jn6fr53o",
+      "target": "nmnn6qulnxrx",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "xy-edge__nmo1jwk0v0fhoutput_value_value-nmo1jwfdjuptinput_value_condition",
+      "source": "nmo1jwk0v0fh",
+      "target": "nmo1jwfdjupt",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "xy-edge__nmo1jwfdjuptoutput_flow_else-nmo1jugobclzinput_flow_do",
+      "source": "nmo1jwfdjupt",
+      "target": "nmo1jugobclz",
+      "sourceHandle": "output_flow_else",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmo1i1jrykskoutput_flow_do-nmnncdpy7jkkinput_flow_check",
+      "source": "nmo1i1jryksk",
+      "target": "nmnncdpy7jkk",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "xy-edge__nmnncgefih9coutput_value_value-nmnncdpy7jkkinput_value_condition",
+      "source": "nmnncgefih9c",
+      "target": "nmnncdpy7jkk",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "xy-edge__nmnncdpy7jkkoutput_flow_else-nmo1jwfdjuptinput_flow_check",
+      "source": "nmnncdpy7jkk",
+      "target": "nmo1jwfdjupt",
+      "sourceHandle": "output_flow_else",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "xy-edge__nmo1ksqumpm7output_value_values-nmo1kupygl4iinput_value_values",
+      "source": "nmo1ksqumpm7",
+      "target": "nmo1kupygl4i",
+      "sourceHandle": "output_value_values",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "xy-edge__nmo1ktfchlapoutput_flow_then-nmo1kk8qf014input_flow_do",
+      "source": "nmo1ktfchlap",
+      "target": "nmo1kk8qf014",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmo1ktfchlapoutput_flow_then-nmo1j1kdwryvinput_flow_check",
+      "source": "nmo1ktfchlap",
+      "target": "nmo1j1kdwryv",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "xy-edge__nmnn6ml8mgcsoutput_flow_do-nmo1l51cdgvyinput_flow_do",
+      "source": "nmnn6ml8mgcs",
+      "target": "nmo1l51cdgvy",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmo1jkxqh2z6output_flow_do-nmo1l51cdgvyinput_flow_do",
+      "source": "nmo1jkxqh2z6",
+      "target": "nmo1l51cdgvy",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmnn6qcryjvdoutput_flow_do-nmo1l51cdgvyinput_flow_do",
+      "source": "nmnn6qcryjvd",
+      "target": "nmo1l51cdgvy",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__n4output_flow_do-nmo1l9bagzcvinput_flow_check",
+      "source": "n4",
+      "target": "nmo1l9bagzcv",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "xy-edge__nmo1ia8me036output_value_value-nmo1l9bagzcvinput_value_condition",
+      "source": "nmo1ia8me036",
+      "target": "nmo1l9bagzcv",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "xy-edge__nmo1l9bagzcvoutput_flow_else-nmo1ktfchlapinput_flow_check",
+      "source": "nmo1l9bagzcv",
+      "target": "nmo1ktfchlap",
+      "sourceHandle": "output_flow_else",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "xy-edge__nmo1kupygl4ioutput_value_result-nmo1ktfchlapinput_value_condition",
+      "source": "nmo1kupygl4i",
+      "target": "nmo1ktfchlap",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "xy-edge__nmnncdpy7jkkoutput_flow_then-nmo1i2sa91t8input_flow_do",
+      "source": "nmnncdpy7jkk",
+      "target": "nmo1i2sa91t8",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmo1jwfdjuptoutput_flow_then-nmo1i2yr4wcwinput_flow_do",
+      "source": "nmo1jwfdjupt",
+      "target": "nmo1i2yr4wcw",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    }
+  ],
+  "macroDefs": [
+    {
+      "id": "macro_mno12xxa",
+      "name": "Decide Life State",
+      "nodes": [
+        {
+          "id": "n12",
+          "type": "caNode",
+          "position": {
+            "x": 920,
+            "y": 240
+          },
+          "data": {
+            "nodeType": "getConstant",
+            "config": {
+              "constType": "integer",
+              "constValue": "3"
+            }
+          }
+        },
+        {
+          "id": "nmnn2k5xb14d",
+          "type": "caNode",
+          "position": {
+            "x": 1100,
+            "y": 180
+          },
+          "data": {
+            "nodeType": "statement",
+            "config": {
+              "operation": "=="
+            }
+          }
+        },
+        {
+          "id": "n13",
+          "type": "caNode",
+          "position": {
+            "x": 540,
+            "y": 260
+          },
+          "data": {
+            "nodeType": "getNeighborsAttribute",
+            "config": {
+              "neighborhoodId": "moore",
+              "attributeId": "alive"
+            }
+          }
+        },
+        {
+          "id": "n15",
+          "type": "caNode",
+          "position": {
+            "x": 752,
+            "y": 314
+          },
+          "data": {
+            "nodeType": "groupCounting",
+            "config": {
+              "operation": "equals"
+            }
+          }
+        },
+        {
+          "id": "n16",
+          "type": "caNode",
+          "position": {
+            "x": 548,
+            "y": 369
+          },
+          "data": {
+            "nodeType": "getConstant",
+            "config": {
+              "constType": "bool",
+              "constValue": "true"
+            }
+          }
+        },
+        {
+          "id": "n17",
+          "type": "caNode",
+          "position": {
+            "x": 1300,
+            "y": 440
+          },
+          "data": {
+            "nodeType": "logicOperator",
+            "config": {
+              "operation": "OR"
+            }
+          }
+        },
+        {
+          "id": "n19",
+          "type": "caNode",
+          "position": {
+            "x": 920,
+            "y": 520
+          },
+          "data": {
+            "nodeType": "getConstant",
+            "config": {
+              "constType": "integer",
+              "constValue": "3"
+            }
+          }
+        },
+        {
+          "id": "nmnn2j2c6nl2",
+          "type": "caNode",
+          "position": {
+            "x": 1100,
+            "y": 380
+          },
+          "data": {
+            "nodeType": "statement",
+            "config": {
+              "operation": "<"
+            },
+            "label": "Underpopulation"
+          }
+        },
+        {
+          "id": "nmnn2j7ugi7l",
+          "type": "caNode",
+          "position": {
+            "x": 1100,
+            "y": 500
+          },
+          "data": {
+            "nodeType": "statement",
+            "config": {
+              "operation": ">"
+            },
+            "label": "Overpopulation"
+          }
+        },
+        {
+          "id": "nmnn2jj7vpky",
+          "type": "caNode",
+          "position": {
+            "x": 900,
+            "y": 400
+          },
+          "data": {
+            "nodeType": "getConstant",
+            "config": {
+              "constType": "integer",
+              "constValue": "2"
+            }
+          }
+        },
+        {
+          "id": "mi_macro_mno12xxa",
+          "type": "caNode",
+          "position": {
+            "x": 320,
+            "y": 340
+          },
+          "data": {
+            "nodeType": "macroInput",
+            "config": {
+              "macroDefId": "macro_mno12xxa"
+            }
+          }
+        },
+        {
+          "id": "mo_macro_mno12xxa",
+          "type": "caNode",
+          "position": {
+            "x": 1520,
+            "y": 320
+          },
+          "data": {
+            "nodeType": "macroOutput",
+            "config": {
+              "macroDefId": "macro_mno12xxa"
+            }
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "xy-edge__n12output_value_value-nmnn2k5xb14dinput_value_y",
+          "source": "n12",
+          "target": "nmnn2k5xb14d",
+          "sourceHandle": "output_value_value",
+          "targetHandle": "input_value_y"
+        },
+        {
+          "id": "xy-edge__n13output_value_values-n15input_value_values",
+          "source": "n13",
+          "target": "n15",
+          "sourceHandle": "output_value_values",
+          "targetHandle": "input_value_values"
+        },
+        {
+          "id": "xy-edge__n16output_value_value-n15input_value_compare",
+          "source": "n16",
+          "target": "n15",
+          "sourceHandle": "output_value_value",
+          "targetHandle": "input_value_compare"
+        },
+        {
+          "id": "xy-edge__n15output_value_count-nmnn2j7ugi7linput_value_x",
+          "source": "n15",
+          "target": "nmnn2j7ugi7l",
+          "sourceHandle": "output_value_count",
+          "targetHandle": "input_value_x"
+        },
+        {
+          "id": "xy-edge__n19output_value_value-nmnn2j7ugi7linput_value_y",
+          "source": "n19",
+          "target": "nmnn2j7ugi7l",
+          "sourceHandle": "output_value_value",
+          "targetHandle": "input_value_y"
+        },
+        {
+          "id": "xy-edge__n15output_value_count-nmnn2j2c6nl2input_value_x",
+          "source": "n15",
+          "target": "nmnn2j2c6nl2",
+          "sourceHandle": "output_value_count",
+          "targetHandle": "input_value_x"
+        },
+        {
+          "id": "xy-edge__nmnn2jj7vpkyoutput_value_value-nmnn2j2c6nl2input_value_y",
+          "source": "nmnn2jj7vpky",
+          "target": "nmnn2j2c6nl2",
+          "sourceHandle": "output_value_value",
+          "targetHandle": "input_value_y"
+        },
+        {
+          "id": "xy-edge__nmnn2j2c6nl2output_value_result-n17input_value_a",
+          "source": "nmnn2j2c6nl2",
+          "target": "n17",
+          "sourceHandle": "output_value_result",
+          "targetHandle": "input_value_a"
+        },
+        {
+          "id": "xy-edge__nmnn2j7ugi7loutput_value_result-n17input_value_b",
+          "source": "nmnn2j7ugi7l",
+          "target": "n17",
+          "sourceHandle": "output_value_result",
+          "targetHandle": "input_value_b"
+        },
+        {
+          "id": "restored_xy-edge__nmno0kmwvvjgoutput_value_out_mno0kzhr6og-nmnn2k5xb14dinput_value_x",
+          "source": "n15",
+          "target": "nmnn2k5xb14d",
+          "sourceHandle": "output_value_count",
+          "targetHandle": "input_value_x"
+        },
+        {
+          "id": "xy-edge__nmnn2k5xb14doutput_value_result-mo_macro_mno12xxainput_value_out_1",
+          "source": "nmnn2k5xb14d",
+          "target": "mo_macro_mno12xxa",
+          "sourceHandle": "output_value_result",
+          "targetHandle": "input_value_out_1"
+        },
+        {
+          "id": "xy-edge__n17output_value_result-mo_macro_mno12xxainput_value_out_0",
+          "source": "n17",
+          "target": "mo_macro_mno12xxa",
+          "sourceHandle": "output_value_result",
+          "targetHandle": "input_value_out_0"
+        }
+      ],
+      "exposedInputs": [],
+      "exposedOutputs": [
+        {
+          "portId": "out_0",
+          "label": "Must Die",
+          "dataType": "any",
+          "category": "value",
+          "internalNodeId": "mo_macro_mno12xxa",
+          "internalPortId": "out_0"
+        },
+        {
+          "portId": "out_1",
+          "label": "Must be Born",
+          "dataType": "any",
+          "category": "value",
+          "internalNodeId": "mo_macro_mno12xxa",
+          "internalPortId": "out_1"
+        }
+      ]
+    }
+  ],
+  "indicators": []
+}

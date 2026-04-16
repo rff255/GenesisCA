@@ -56,6 +56,7 @@ function generateNodeId(existingNodes: Node[]): string {
 // ---------------------------------------------------------------------------
 
 function toRFNodes(graphNodes: GraphNode[]): Node[] {
+  const existingIds = new Set(graphNodes.map(n => n.id));
   return graphNodes.map(n => {
     const rfNode: Node = {
       id: n.id,
@@ -64,7 +65,8 @@ function toRFNodes(graphNodes: GraphNode[]): Node[] {
       data: n.data,
     };
     const d = n.data as Record<string, unknown>;
-    if (d.parentId) rfNode.parentId = d.parentId as string;
+    // Heal orphan parentId refs from older/corrupt files — drop if parent no longer exists
+    if (d.parentId && existingIds.has(d.parentId as string)) rfNode.parentId = d.parentId as string;
     if (n.type === 'groupNode') {
       rfNode.style = { width: (d.width as number) || 300, height: (d.height as number) || 200 };
       rfNode.zIndex = -1;
@@ -89,13 +91,15 @@ function toRFEdges(graphEdges: GraphEdge[]): Edge[] {
 }
 
 function toGraphNodes(rfNodes: Node[]): GraphNode[] {
+  const existingIds = new Set(rfNodes.map(n => n.id));
   return rfNodes.map(n => ({
     id: n.id,
     type: n.type ?? 'caNode',
     position: n.position,
     data: {
       ...(n.data as GraphNode['data']),
-      ...(n.parentId ? { parentId: n.parentId } : {}),
+      // Never serialize orphan parentId refs — belt-and-suspenders against cascade-delete gaps
+      ...(n.parentId && existingIds.has(n.parentId) ? { parentId: n.parentId } : {}),
       ...((n.type === 'groupNode' || n.type === 'commentNode') && n.style
         ? { width: (n.style as Record<string, number>).width, height: (n.style as Record<string, number>).height }
         : {}),
@@ -368,6 +372,38 @@ export function GraphEditorInner() {
           }
           return true;
         });
+      }
+
+      // Cascade-delete descendants when a group (or any parent node) is removed.
+      // Prevents orphaned parentId refs in saved models.
+      const removeIds = new Set<string>();
+      for (const c of changes) {
+        if (c.type === 'remove') removeIds.add(c.id);
+      }
+      if (removeIds.size > 0) {
+        const cascadeAdditions: string[] = [];
+        let frontier = Array.from(removeIds);
+        while (frontier.length > 0) {
+          const next: string[] = [];
+          for (const parentId of frontier) {
+            for (const n of nodesRef.current) {
+              if (n.parentId !== parentId || removeIds.has(n.id)) continue;
+              const nt = (n.data as Record<string, unknown> | undefined)?.nodeType;
+              // Never cascade to macro boundary nodes
+              if (nt === 'macroInput' || nt === 'macroOutput') continue;
+              removeIds.add(n.id);
+              cascadeAdditions.push(n.id);
+              next.push(n.id);
+            }
+          }
+          frontier = next;
+        }
+        if (cascadeAdditions.length > 0) {
+          changes = [
+            ...changes,
+            ...cascadeAdditions.map(id => ({ type: 'remove' as const, id })),
+          ];
+        }
       }
 
       // Push undo snapshot for significant changes (before applying)
