@@ -1200,6 +1200,15 @@ export function compileGraphWasm(
   layout: MemoryLayout,
   viewerIds: Record<string, number>,
 ): WasmCompileResult {
+  // Pre-pass: inline all macro instances. After this the orchestrator never
+  // sees a `macro` / `macroInput` / `macroOutput` node.
+  const expanded = expandMacros(graphNodes, graphEdges, model);
+  if (expanded.error) {
+    return { bytes: new Uint8Array(), minMemoryPages: 1, error: expanded.error, viewerIds };
+  }
+  graphNodes = expanded.nodes;
+  graphEdges = expanded.edges;
+
   // Build adjacency
   const nodeMap = new Map<string, GraphNode>();
   for (const n of graphNodes) nodeMap.set(n.id, n);
@@ -1330,6 +1339,139 @@ export function compileGraphWasm(
 // ---------------------------------------------------------------------------
 // Misc
 // ---------------------------------------------------------------------------
+
+/**
+ * Recursively inline all `macro` nodes by expanding each instance's internal
+ * subgraph into the outer graph. After expansion the orchestrator never sees
+ * `macro` / `macroInput` / `macroOutput` nodes.
+ *
+ * For each macro instance:
+ *  - Internal non-boundary nodes are copied with a prefixed id (`m{instanceId}_*`)
+ *    so multiple instances of the same macro don't collide.
+ *  - Internal edges touching the boundary nodes are dissolved:
+ *      * Edges originating at MacroInput become edges originating at the
+ *        EXTERNAL source connected to the macro instance's matching input port.
+ *      * Edges arriving at MacroOutput become "anchors" for the macro's
+ *        external consumers: each external edge from the macro instance's
+ *        output port gets rewritten to source from the corresponding internal
+ *        node + port.
+ *  - Internal edges that don't touch boundary nodes are copied with prefixed ids.
+ *  - Pre-existing edges that touch the macro instance itself are dropped (they
+ *    were the bridges and have been replaced).
+ *
+ * Nested macros: re-runs until no `macro` nodes remain (with a depth cap).
+ */
+function expandMacros(
+  graphNodes: GraphNode[],
+  graphEdges: GraphEdge[],
+  model: CAModel,
+  depth = 0,
+): { nodes: GraphNode[]; edges: GraphEdge[]; error?: string } {
+  if (depth > 20) return { nodes: graphNodes, edges: graphEdges, error: 'macro recursion depth > 20' };
+  const macroInstances = graphNodes.filter(n => n.data.nodeType === 'macro');
+  if (macroInstances.length === 0) return { nodes: graphNodes, edges: graphEdges };
+
+  const macroDefs = model.macroDefs ?? [];
+
+  // Index outer edges by source/target for fast bridge lookup
+  const edgesByTarget = new Map<string, GraphEdge[]>();
+  const edgesBySource = new Map<string, GraphEdge[]>();
+  for (const e of graphEdges) {
+    const t = edgesByTarget.get(e.target); if (t) t.push(e); else edgesByTarget.set(e.target, [e]);
+    const s = edgesBySource.get(e.source); if (s) s.push(e); else edgesBySource.set(e.source, [e]);
+  }
+
+  const removedNodeIds = new Set(macroInstances.map(m => m.id));
+  const newNodes: GraphNode[] = [];
+  const newEdges: GraphEdge[] = [];
+
+  // Carry over all non-macro outer nodes
+  for (const n of graphNodes) if (!removedNodeIds.has(n.id)) newNodes.push(n);
+  // Carry over outer edges that don't touch any macro instance
+  for (const e of graphEdges) {
+    if (!removedNodeIds.has(e.source) && !removedNodeIds.has(e.target)) newEdges.push(e);
+  }
+
+  for (const m of macroInstances) {
+    const def = macroDefs.find(d => d.id === m.data.config.macroDefId);
+    if (!def) continue;
+    const prefix = `m${m.id}_`;
+
+    // (boundary nodes identified inline by data.nodeType in the edge loop below)
+
+    // Map external sources for each input port (via outer edges arriving at macro instance)
+    const extInMap = new Map<string, { source: string; sourceHandle: string }>();
+    const extInArr = edgesByTarget.get(m.id) ?? [];
+    for (const e of extInArr) extInMap.set(e.targetHandle, { source: e.source, sourceHandle: e.sourceHandle });
+
+    // Outer edges consuming the macro instance's output ports
+    const extOutArr = edgesBySource.get(m.id) ?? [];
+
+    // Copy internal non-boundary nodes with prefixed ids
+    for (const inner of def.nodes) {
+      if (inner.data.nodeType === 'macroInput' || inner.data.nodeType === 'macroOutput') continue;
+      newNodes.push({ ...inner, id: prefix + inner.id });
+    }
+
+    // Copy internal edges, rewriting endpoints
+    for (const e of def.edges) {
+      const srcInner = def.nodes.find(n => n.id === e.source);
+      const tgtInner = def.nodes.find(n => n.id === e.target);
+      const srcIsBoundary = srcInner?.data.nodeType === 'macroInput' || srcInner?.data.nodeType === 'macroOutput';
+      const tgtIsBoundary = tgtInner?.data.nodeType === 'macroInput' || tgtInner?.data.nodeType === 'macroOutput';
+      if (srcIsBoundary && tgtIsBoundary) continue; // pure boundary-to-boundary — no work
+
+      if (srcInner?.data.nodeType === 'macroInput') {
+        // Rewire to external source (e.sourceHandle == macroInput's port == macro's exposed input portId)
+        const ep = parseHandle(e.sourceHandle);
+        const epPortId = ep?.portId ?? e.sourceHandle;
+        // External edges target the macro instance with targetHandle matching this port id
+        // (handle format `input_<value|flow>_<portId>` so we look it up by exact targetHandle).
+        let ext: { source: string; sourceHandle: string } | undefined;
+        for (const [th, src] of extInMap) {
+          const parsed = parseHandle(th);
+          if (parsed?.portId === epPortId) { ext = src; break; }
+        }
+        if (!ext) continue; // unconnected — drop this internal edge
+        newEdges.push({
+          ...e,
+          id: prefix + e.id,
+          source: ext.source,
+          sourceHandle: ext.sourceHandle,
+          target: prefix + e.target,
+        });
+        continue;
+      }
+
+      if (tgtInner?.data.nodeType === 'macroOutput') {
+        // We don't emit this internal edge directly — instead we rewrite the
+        // macro instance's external output edges to source from this internal node.
+        const epPortId = parseHandle(e.targetHandle)?.portId ?? e.targetHandle;
+        for (const eOut of extOutArr) {
+          const epExt = parseHandle(eOut.sourceHandle);
+          if (epExt?.portId !== epPortId) continue;
+          newEdges.push({
+            ...eOut,
+            source: prefix + e.source,
+            sourceHandle: e.sourceHandle,
+          });
+        }
+        continue;
+      }
+
+      // Internal-to-internal: just prefix endpoints
+      newEdges.push({
+        ...e,
+        id: prefix + e.id,
+        source: prefix + e.source,
+        target: prefix + e.target,
+      });
+    }
+  }
+
+  // Recurse — nested macros will appear as `macro` nodes in newNodes
+  return expandMacros(newNodes, newEdges, model, depth + 1);
+}
 
 function parseHandle(handleId: string | undefined): { category: 'value' | 'flow'; portId: string } | null {
   if (!handleId) return null;
