@@ -4,18 +4,7 @@
  * Pre-computes neighbor index tables for zero-cost boundary handling.
  */
 
-import { selfTestAdd, selfTestMemorySum } from '../../modeler/vpl/compiler/wasm/encoder';
-import { compileGraphWasm, instantiateWasmStep } from '../../modeler/vpl/compiler/wasm/compile';
-
-// Phase 2A bring-up smoke tests — verify the hand-written WASM encoder
-// produces valid modules end-to-end (computation + memory imports).
-// Removed once Wave 2 wires the encoder into the actual compile pipeline.
-if (import.meta.env?.DEV) {
-  Promise.all([selfTestAdd(), selfTestMemorySum()]).then(
-    ([a, m]) => console.log('[wasm encoder] selfTestAdd =', a, 'selfTestMemorySum =', m),
-    e => console.error('[wasm encoder] FAILED:', e),
-  );
-}
+import { instantiateWasmStep } from '../../modeler/vpl/compiler/wasm/compile';
 
 interface AttrDef {
   id: string;
@@ -44,6 +33,11 @@ interface InitMsg {
   outputMappingCodes: Array<{ mappingId: string; code: string }>;
   activeViewer: string;
   indicators?: IndicatorDef[];
+  /** Wave 2: optional pre-compiled WASM step bytes (compiled on main thread). */
+  wasmStepBytes?: Uint8Array;
+  wasmStepError?: string;
+  /** Default useWasm flag (from model properties); user can flip via setUseWasm later. */
+  useWasm?: boolean;
 }
 
 interface StepMsg { type: 'step'; count: number; activeViewer: string; skipColorPass?: boolean }
@@ -55,7 +49,7 @@ interface PaintMsg {
 }
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; updateMode: string; asyncScheme: string }
+interface RecompileMsg { type: 'recompile'; stepCode: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string }
 interface UpdateModelAttrsMsg { type: 'updateModelAttrs'; attrs: Record<string, number> }
 interface ImportImageMsg { type: 'importImage'; pixels: Uint8ClampedArray; mappingId: string; activeViewer: string }
 
@@ -433,27 +427,15 @@ function buildCellArgs(idx: number): unknown[] {
   return args;
 }
 
-/** Compile the current graph to a WASM module and instantiate it against the
- *  current wasmMemory. Stores the result in wasmStepFn. Posts any error back
- *  to the main thread so it surfaces in the console. */
-function tryCompileWasmStep(): void {
-  if (!wasmMemory || !wasmLayout) { wasmStepFn = null; return; }
-  const layoutInfo = {
-    cellAttrs: cellAttrs.map(a => ({
-      id: a.id,
-      type: a.type,
-      readOffset: wasmLayout!.attrReadOffset[a.id]!,
-      writeOffset: wasmLayout!.attrWriteOffset[a.id]!,
-      itemBytes: wasmLayout!.attrTypeBytes[a.id]!,
-    })),
-    isAsync: updateMode === 'asynchronous',
-  };
-  const result = compileGraphWasm(layoutInfo);
-  instantiateWasmStep(result, wasmMemory).then(
+/** Instantiate WASM bytes (compiled on main thread) against the current memory.
+ *  Stores the resulting step function in wasmStepFn. */
+function tryInstantiateWasmStep(bytes: Uint8Array | undefined): void {
+  if (!bytes || bytes.length === 0 || !wasmMemory) { wasmStepFn = null; return; }
+  instantiateWasmStep({ bytes, minMemoryPages: 1, viewerIds: {} }, wasmMemory).then(
     inst => { wasmStepFn = inst.step; },
     err => {
       wasmStepFn = null;
-      self.postMessage({ type: 'error', message: '[wasm] step compile/instantiate failed: ' + (err?.message || err) });
+      self.postMessage({ type: 'error', message: '[wasm] instantiate failed: ' + (err?.message || err) });
     },
   );
 }
@@ -704,7 +686,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       initGrid();
       buildNeighborIndices();
       compileFns(msg.stepCode, msg.inputColorCodes, msg.outputMappingCodes || []);
-      tryCompileWasmStep();
+      useWasm = !!msg.useWasm && !!msg.wasmStepBytes && !msg.wasmStepError;
+      tryInstantiateWasmStep(msg.wasmStepBytes);
+      if (msg.wasmStepError && msg.useWasm) {
+        self.postMessage({ type: 'error', message: '[wasm] compile failed, falling back to JS: ' + msg.wasmStepError });
+      }
       writeDefaultColors();
       sendColors();
       break;
@@ -782,7 +768,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       updateMode = msg.updateMode || updateMode;
       asyncScheme = msg.asyncScheme || asyncScheme;
       compileFns(msg.stepCode, msg.inputColorCodes, (msg as RecompileMsg).outputMappingCodes || []);
-      tryCompileWasmStep();
+      tryInstantiateWasmStep((msg as RecompileMsg).wasmStepBytes);
+      if ((msg as RecompileMsg).wasmStepError) {
+        self.postMessage({ type: 'error', message: '[wasm] recompile failed, falling back to JS: ' + (msg as RecompileMsg).wasmStepError });
+      }
       self.postMessage({ type: 'ready' });
       break;
     }

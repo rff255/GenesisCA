@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useModel } from '../model/ModelContext';
 import { compileGraph } from '../modeler/vpl/compiler/compile';
+import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
+import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { IndicatorDisplay } from './IndicatorDisplay';
 import { BrushColorPopover } from './BrushColorPopover';
@@ -437,6 +439,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       { type: 'module' },
     );
     worker.onmessage = (e) => onWorkerMessageRef.current(e);
+    // Wave 2: try to compile a WASM step alongside the JS one. If anything
+    // fails (unsupported node, etc.) we still ship the JS bytes; the worker
+    // falls back automatically when wasmStepBytes is missing/empty.
+    const wasmResult = (() => {
+      try {
+        const layout = computeLayoutFromModel(model);
+        const viewerIds = buildViewerIds(model);
+        return compileGraphWasm(model.graphNodes, model.graphEdges, model, layout, viewerIds);
+      } catch (e) {
+        return { bytes: new Uint8Array(), minMemoryPages: 1, error: String((e as Error)?.message || e), viewerIds: {} };
+      }
+    })();
     worker.postMessage({
       type: 'init',
       width: w,
@@ -462,6 +476,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         linkedAggregation: i.linkedAggregation,
         binCount: i.binCount, watched: i.watched,
       })),
+      wasmStepBytes: wasmResult.error ? undefined : wasmResult.bytes,
+      wasmStepError: wasmResult.error,
+      useWasm: !!model.properties.useWasm,
     });
     workerRef.current = worker;
     if (import.meta.env?.DEV) (window as unknown as { __simWorker?: Worker }).__simWorker = worker;
@@ -556,6 +573,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       || prev.properties.boundaryTreatment !== model.properties.boundaryTreatment
       || prev.properties.updateMode !== model.properties.updateMode
       || prev.properties.asyncScheme !== model.properties.asyncScheme
+      || prev.properties.useWasm !== model.properties.useWasm
       || prev.attributes !== model.attributes
       || prev.neighborhoods !== model.neighborhoods
       || prev.mappings !== model.mappings;
@@ -569,6 +587,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const result = compileGraph(model.graphNodes, model.graphEdges, model);
       setCompiledCode(buildFullCode(result));
       setCompileError(result.error ?? '');
+      const wasmResult = (() => {
+        try {
+          const layout = computeLayoutFromModel(model);
+          const viewerIds = buildViewerIds(model);
+          return compileGraphWasm(model.graphNodes, model.graphEdges, model, layout, viewerIds);
+        } catch (e) {
+          return { bytes: new Uint8Array(), minMemoryPages: 1, error: String((e as Error)?.message || e), viewerIds: {} };
+        }
+      })();
       workerRef.current?.postMessage({
         type: 'recompile',
         stepCode: result.stepCode,
@@ -576,6 +603,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         outputMappingCodes: result.outputMappingCodes || [],
         updateMode: model.properties.updateMode,
         asyncScheme: model.properties.asyncScheme,
+        wasmStepBytes: wasmResult.error ? undefined : wasmResult.bytes,
+        wasmStepError: wasmResult.error,
+      });
+      // If user has the model toggle on, ensure useWasm is set (recompile doesn't carry useWasm by default)
+      workerRef.current?.postMessage({
+        type: 'setUseWasm',
+        enabled: !!model.properties.useWasm && !wasmResult.error,
       });
       // Sync indicator definitions when they change (not included in recompile message)
       if (prev && prev.indicators !== model.indicators) {

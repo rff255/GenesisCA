@@ -60,6 +60,11 @@ export interface ModelProperties {
   gridHeight: number;
   maxIterations: number;
   tags: string[];
+  /** Wave 2: when true, the simulator runs the WASM-compiled step instead of
+   *  the JS-compiled step. Off by default. The WASM compiler falls back to JS
+   *  silently if the graph references a node type whose WASM emit is not yet
+   *  implemented; the user can flip this off at any time to force JS. */
+  useWasm?: boolean;
 }
 
 /** A serialized node in the update rules graph */
