@@ -5,6 +5,7 @@
  */
 
 import { instantiateWasmStep } from '../../modeler/vpl/compiler/wasm/compile';
+import { computeMemoryLayout, type MemoryLayout } from '../../modeler/vpl/compiler/wasm/layout';
 
 interface AttrDef {
   id: string;
@@ -36,6 +37,8 @@ interface InitMsg {
   /** Wave 2: optional pre-compiled WASM step bytes (compiled on main thread). */
   wasmStepBytes?: Uint8Array;
   wasmStepError?: string;
+  /** Compile-time viewer id -> int mapping (matches the WASM module's setColorViewer constants). */
+  viewerIds?: Record<string, number>;
   /** Default useWasm flag (from model properties); user can flip via setUseWasm later. */
   useWasm?: boolean;
 }
@@ -49,7 +52,7 @@ interface PaintMsg {
 }
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string }
+interface RecompileMsg { type: 'recompile'; stepCode: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; viewerIds?: Record<string, number> }
 interface UpdateModelAttrsMsg { type: 'updateModelAttrs'; attrs: Record<string, number> }
 interface ImportImageMsg { type: 'importImage'; pixels: Uint8ClampedArray; mappingId: string; activeViewer: string }
 
@@ -113,6 +116,8 @@ let width = 0;
 let height = 0;
 let total = 0;
 let cellAttrs: AttrDef[] = [];
+let modelAttrsList: AttrDef[] = [];
+let indicatorsList: IndicatorDef[] = [];
 let neighborhoods: NeighborhoodDef[] = [];
 let boundaryTreatment = 'torus';
 let updateMode = 'synchronous';
@@ -143,69 +148,29 @@ let orderArray: Int32Array | null = null;
 // Reinit on grid resize creates a fresh Memory; reinit on recompile reuses it.
 let wasmMemory: WebAssembly.Memory | null = null;
 let wasmLayout: MemoryLayout | null = null;
+/** Compile-time mapping of viewer-mapping id -> integer (built on main thread,
+ *  passed in init/recompile). Worker writes the matching int into wasmMemory at
+ *  layout.activeViewerOffset whenever the active viewer changes. */
+let viewerIdMap: Record<string, number> = {};
 
-interface MemoryLayout {
-  totalBytes: number;
-  pages: number;
-  attrReadOffset: Record<string, number>;
-  attrWriteOffset: Record<string, number>;
-  attrTypeBytes: Record<string, number>;
-  colorsOffset: number;
-  colorsBytes: number;
+/** Sync activeViewer (string) to wasmMemory as an i32 so the WASM step's
+ *  setColorViewer comparisons work. Called whenever activeViewer changes. */
+function syncActiveViewerToMemory(): void {
+  if (!wasmMemory || !wasmLayout) return;
+  const view = new Int32Array(wasmMemory.buffer, wasmLayout.activeViewerOffset, 1);
+  view[0] = viewerIdMap[activeViewer] ?? -1;
 }
 
-function bytesPerType(t: string): number {
-  switch (t) {
-    case 'bool': return 1;
-    case 'integer': return 4;
-    case 'tag': return 4;
-    case 'float': return 8;
-    default: return 8;
+/** Sync model-attr values (Record<string, unknown>) to wasmMemory as f64s so
+ *  WASM emitters that read getModelAttribute see the current values. */
+function syncModelAttrsToMemory(): void {
+  if (!wasmMemory || !wasmLayout) return;
+  const buf = wasmMemory.buffer;
+  for (const [key, off] of Object.entries(wasmLayout.modelAttrOffset)) {
+    const v = cachedModelAttrs[key];
+    const num = typeof v === 'number' ? v : Number(v) || 0;
+    new Float64Array(buf, off, 1)[0] = num;
   }
-}
-
-/** Round `off` up to the next multiple of `align`. Used to keep typed-array
- *  views correctly aligned (Float64Array offset must be 8-byte aligned). */
-function alignOffset(off: number, align: number): number {
-  return Math.ceil(off / align) * align;
-}
-
-function computeMemoryLayout(attrs: AttrDef[], totalCells: number, isAsync: boolean): MemoryLayout {
-  const attrReadOffset: Record<string, number> = {};
-  const attrWriteOffset: Record<string, number> = {};
-  const attrTypeBytes: Record<string, number> = {};
-  let off = 0;
-
-  // Read region (always)
-  for (const attr of attrs) {
-    const ib = bytesPerType(attr.type);
-    attrTypeBytes[attr.id] = ib;
-    off = alignOffset(off, 8);
-    attrReadOffset[attr.id] = off;
-    off += totalCells * ib;
-  }
-
-  // Write region — separate in sync, shared with read in async
-  if (!isAsync) {
-    for (const attr of attrs) {
-      const ib = attrTypeBytes[attr.id]!;
-      off = alignOffset(off, 8);
-      attrWriteOffset[attr.id] = off;
-      off += totalCells * ib;
-    }
-  } else {
-    for (const attr of attrs) attrWriteOffset[attr.id] = attrReadOffset[attr.id]!;
-  }
-
-  // Colors region
-  off = alignOffset(off, 8);
-  const colorsOffset = off;
-  const colorsBytes = totalCells * 4;
-  off += colorsBytes;
-
-  const totalBytes = off;
-  const pages = Math.max(1, Math.ceil(totalBytes / 65536));
-  return { totalBytes, pages, attrReadOffset, attrWriteOffset, attrTypeBytes, colorsOffset, colorsBytes };
 }
 // xorshift32 state shared across all compiled functions. Persists across steps so
 // the random stream advances as the user expects. Seeded once with a non-zero value.
@@ -287,10 +252,16 @@ function initGrid(): void {
   attrsB = {};
   const isAsync = updateMode === 'asynchronous';
 
-  // Allocate WASM linear memory and create typed-array views over it for
-  // every cell attribute (read+write regions) and the color buffer. This is
-  // the data the future WASM step function will address directly via load/store.
-  wasmLayout = computeMemoryLayout(cellAttrs, total, isAsync);
+  // Allocate WASM linear memory and create typed-array views over EVERY region
+  // the WASM step might address: cell attrs, color buffer, neighbor index
+  // tables, model attrs, indicators, RNG state, active viewer ID, and async
+  // order array. JS-side variables (attrsA/B, nbrIndices, orderArray, etc.)
+  // become typed-array views over wasmMemory at the layout offsets — single
+  // source of truth shared between JS step and WASM step.
+  wasmLayout = computeMemoryLayout(
+    cellAttrs, modelAttrsList, neighborhoods, indicatorsList,
+    total, isAsync, boundaryTreatment,
+  );
   wasmMemory = new WebAssembly.Memory({ initial: wasmLayout.pages });
   const buf = wasmMemory.buffer;
 
@@ -315,9 +286,15 @@ function initGrid(): void {
   colors = new Uint8ClampedArray(buf, wasmLayout.colorsOffset, wasmLayout.colorsBytes);
   generation = 0;
 
-  // Order array for async mode
+  // RNG state lives in memory at layout.rngStateOffset (Uint32Array of length 1).
+  // Sync the existing seed into memory so WASM and JS share the same starting state.
+  const rngView = new Uint32Array(buf, wasmLayout.rngStateOffset, 1);
+  rngView[0] = rngState[0]!;
+
+  // Order array — view over memory in BOTH modes (offset is reserved either way).
+  // Async mode populates it (sequential then maybe shuffled); sync mode leaves it 0.
   if (isAsync) {
-    orderArray = new Int32Array(total);
+    orderArray = new Int32Array(buf, wasmLayout.orderOffset, total);
     for (let i = 0; i < total; i++) orderArray[i] = i;
     // For cyclic scheme, shuffle once at init and reuse
     if (asyncScheme === 'cyclic') {
@@ -333,9 +310,12 @@ function initGrid(): void {
 
 function buildNeighborIndices(): void {
   nbrIndices = {};
+  if (!wasmMemory || !wasmLayout) return;
+  const buf = wasmMemory.buffer;
   for (const nbr of neighborhoods) {
     const nbrSize = nbr.coords.length;
-    const indices = new Int32Array(total * nbrSize);
+    // Index table is a view over wasmMemory at the layout offset — shared with WASM step.
+    const indices = new Int32Array(buf, wasmLayout.nbrIndexOffset[nbr.id]!, total * nbrSize);
 
     for (let row = 0; row < height; row++) {
       for (let col = 0; col < width; col++) {
@@ -595,7 +575,16 @@ function runColorPass(): void {
 }
 
 function initIndicators(defs: IndicatorDef[]): void {
-  cachedIndicators = new Float64Array(defs.length);
+  // cachedIndicators is a view over wasmMemory at layout.indicatorOffset[indId].
+  // For N>0 indicators, the offsets are consecutive 8-byte slots; we view the
+  // whole region as a Float64Array of length N.
+  if (wasmMemory && wasmLayout && defs.length > 0) {
+    const firstId = wasmLayout.indicatorIds[0]!;
+    const baseOffset = wasmLayout.indicatorOffset[firstId]!;
+    cachedIndicators = new Float64Array(wasmMemory.buffer, baseOffset, defs.length);
+  } else {
+    cachedIndicators = new Float64Array(defs.length);
+  }
   standaloneDefaults = new Float64Array(defs.length);
   standalonePerGenIdx = [];
   standaloneIds = [];
@@ -662,6 +651,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       width = msg.width;
       height = msg.height;
       cellAttrs = msg.attributes.filter(a => !a.isModelAttribute);
+      modelAttrsList = msg.attributes.filter(a => a.isModelAttribute);
+      indicatorsList = msg.indicators || [];
       neighborhoods = msg.neighborhoods;
       boundaryTreatment = msg.boundaryTreatment;
       updateMode = msg.updateMode || 'synchronous';
@@ -681,10 +672,17 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         }
       }
 
-      activeViewer = msg.activeViewer;
-      initIndicators(msg.indicators || []);
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
+      viewerIdMap = msg.viewerIds || {};
+      // initGrid first because it allocates wasmMemory + computes layout that
+      // initIndicators / buildNeighborIndices need to create their views over.
       initGrid();
       buildNeighborIndices();
+      initIndicators(msg.indicators || []);
+      // After memory is allocated, sync model attrs + active viewer ID into it
+      // so WASM emitters that read those regions see meaningful values.
+      syncModelAttrsToMemory();
+      syncActiveViewerToMemory();
       compileFns(msg.stepCode, msg.inputColorCodes, msg.outputMappingCodes || []);
       useWasm = !!msg.useWasm && !!msg.wasmStepBytes && !msg.wasmStepError;
       tryInstantiateWasmStep(msg.wasmStepBytes);
@@ -701,7 +699,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         self.postMessage({ type: 'error', message: 'No compiled step function.' });
         return;
       }
-      activeViewer = msg.activeViewer;
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       for (let i = 0; i < msg.count; i++) runStep();
       if (!msg.skipColorPass) runColorPass();
       sendColors();
@@ -709,7 +707,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
 
     case 'paint': {
-      activeViewer = msg.activeViewer;
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       const icEntry = msg.mappingId
         ? inputColorFns.find(f => f.mappingId === msg.mappingId)
         : inputColorFns[0];
@@ -751,14 +749,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
 
     case 'randomize': {
-      activeViewer = msg.activeViewer;
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       randomizeGrid();
       sendColors();
       break;
     }
 
     case 'reset': {
-      activeViewer = msg.activeViewer;
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       resetGrid();
       sendColors();
       break;
@@ -767,6 +765,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'recompile': {
       updateMode = msg.updateMode || updateMode;
       asyncScheme = msg.asyncScheme || asyncScheme;
+      if ((msg as RecompileMsg).viewerIds) {
+        viewerIdMap = (msg as RecompileMsg).viewerIds!;
+        syncActiveViewerToMemory();
+      }
       compileFns(msg.stepCode, msg.inputColorCodes, (msg as RecompileMsg).outputMappingCodes || []);
       tryInstantiateWasmStep((msg as RecompileMsg).wasmStepBytes);
       if ((msg as RecompileMsg).wasmStepError) {
@@ -786,6 +788,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       for (const [key, val] of Object.entries(msg.attrs as Record<string, number>)) {
         cachedModelAttrs[key] = val;
       }
+      syncModelAttrsToMemory();
       break;
     }
 
@@ -796,7 +799,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
 
 
     case 'importImage': {
-      activeViewer = msg.activeViewer;
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       const icEntry = msg.mappingId
         ? inputColorFns.find(f => f.mappingId === msg.mappingId)
         : inputColorFns[0];
@@ -861,7 +864,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
 
     case 'loadState': {
       generation = msg.generation;
-      activeViewer = msg.activeViewer;
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
 
       // Restore cell attribute arrays — COPY INTO the existing views over WASM
       // memory rather than replacing them (replacement would orphan them from
@@ -942,7 +945,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
 
     case 'writeRegion': {
-      activeViewer = msg.activeViewer;
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       const isAsync = updateMode === 'asynchronous';
       for (const attr of cellAttrs) {
         const entry = msg.attributes[attr.id];
@@ -974,7 +977,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
 
     case 'clearRegion': {
-      activeViewer = msg.activeViewer;
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       const isAsync = updateMode === 'asynchronous';
       for (const attr of cellAttrs) {
         const dv = defaultValue(attr);

@@ -478,6 +478,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       })),
       wasmStepBytes: wasmResult.error ? undefined : wasmResult.bytes,
       wasmStepError: wasmResult.error,
+      viewerIds: wasmResult.viewerIds,
       useWasm: !!model.properties.useWasm,
     });
     workerRef.current = worker;
@@ -605,6 +606,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         asyncScheme: model.properties.asyncScheme,
         wasmStepBytes: wasmResult.error ? undefined : wasmResult.bytes,
         wasmStepError: wasmResult.error,
+        viewerIds: wasmResult.viewerIds,
       });
       // If user has the model toggle on, ensure useWasm is set (recompile doesn't carry useWasm by default)
       workerRef.current?.postMessage({
