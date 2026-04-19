@@ -157,6 +157,45 @@ export function serializeSimState(
   return serialized;
 }
 
+/** Serialize a preset snapshot. Always includes model-attribute values; includes
+ *  grid state only when opts.includeGrid is true. UI controls (brush, viewer,
+ *  FPS) are never captured — those are user preferences, not model setup. */
+export function serializePreset(
+  workerState: {
+    generation: number;
+    width: number;
+    height: number;
+    attributes: Record<string, { type: string; buffer: ArrayBuffer }>;
+    modelAttrs: Record<string, number>;
+    indicators: Record<string, number>;
+    linkedAccumulators: Record<string, number | Record<string, number>>;
+    colors: ArrayBuffer;
+    orderArray?: ArrayBuffer;
+  },
+  opts: { includeGrid: boolean },
+): SimulationState {
+  const out: SimulationState = { modelAttrs: { ...workerState.modelAttrs } };
+  if (opts.includeGrid) {
+    out.generation = workerState.generation;
+    out.width = workerState.width;
+    out.height = workerState.height;
+    out.attributes = {};
+    out.indicators = { ...workerState.indicators };
+    out.linkedAccumulators = JSON.parse(JSON.stringify(workerState.linkedAccumulators));
+    out.colors = arrayBufferToBase64(workerState.colors);
+    for (const [id, entry] of Object.entries(workerState.attributes)) {
+      out.attributes[id] = {
+        type: ATTR_TYPE_MAP[entry.type] || 'float64',
+        data: arrayBufferToBase64(entry.buffer),
+      };
+    }
+    if (workerState.orderArray) {
+      out.orderArray = arrayBufferToBase64(workerState.orderArray);
+    }
+  }
+  return out;
+}
+
 export function downloadStateFile(state: SimulationState, filename: string): void {
   const blob = new Blob([JSON.stringify(state)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);

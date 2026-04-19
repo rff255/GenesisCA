@@ -4,8 +4,9 @@ import { compileGraph } from '../modeler/vpl/compiler/compile';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { IndicatorDisplay } from './IndicatorDisplay';
 import { BrushColorPopover } from './BrushColorPopover';
-import { serializeSimState, downloadStateFile, readStateFile, base64ToArrayBuffer, deserializeTypedArray } from '../model/fileOperations';
-import type { SimulationState } from '../model/types';
+import { PresetSaveDialog } from './PresetSaveDialog';
+import { serializeSimState, serializePreset, downloadStateFile, readStateFile, base64ToArrayBuffer, deserializeTypedArray } from '../model/fileOperations';
+import type { Preset, SimulationState } from '../model/types';
 import styles from './SimulatorView.module.css';
 
 const SIM_SETTINGS_KEY = 'genesisca_sim_settings';
@@ -20,7 +21,7 @@ function loadSimSettings(): Record<string, unknown> {
 
 export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { model, updateIndicator, setSimulationState } = useModel();
+  const { model, updateIndicator, setSimulationState, addPreset, deletePreset } = useModel();
   const workerRef = useRef<Worker | null>(null);
   const pendingStep = useRef(false);
 
@@ -88,6 +89,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const pendingStateSave = useRef<((state: Record<string, unknown>) => void) | null>(null);
   const stateFileInputRef = useRef<HTMLInputElement>(null);
   const pendingSimStateRestore = useRef<SimulationState | null>(null);
+
+  // Preset-save dialog
+  const [presetDialogOpen, setPresetDialogOpen] = useState(false);
 
   // Clipboard for Ctrl+C / Ctrl+V / Ctrl+X (cell-attribute region copy)
   const clipboardRef = useRef<{
@@ -1065,6 +1069,33 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
   };
 
+  // Save current state as a named preset (captures modelAttrs always, grid optionally)
+  const handleCreatePreset = (name: string, description: string, includeGrid: boolean) => {
+    if (!workerRef.current) return;
+    pendingStateSave.current = (workerState) => {
+      const state = serializePreset(
+        workerState as Parameters<typeof serializePreset>[0],
+        { includeGrid },
+      );
+      const id = 'preset_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+      const preset: Preset = { id, name, state, createdAt: Date.now() };
+      if (description.trim()) preset.description = description.trim();
+      addPreset(preset);
+    };
+    workerRef.current.postMessage({ type: 'getState' });
+  };
+
+  const handleLoadPreset = (p: Preset) => {
+    if (playing) setPlaying(false);
+    applySimulationState(p.state);
+  };
+
+  const handleDeletePreset = (p: Preset) => {
+    if (window.confirm(`Delete preset "${p.name}"?`)) {
+      deletePreset(p.id);
+    }
+  };
+
   const applySimulationState = useCallback((state: SimulationState) => {
     if (!workerRef.current) return;
 
@@ -1082,10 +1113,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (state.unlimitedFps != null) setUnlimitedFps(state.unlimitedFps);
       if (state.gensPerFrame != null) setGensPerFrame(state.gensPerFrame);
       if (state.unlimitedGens != null) setUnlimitedGens(state.unlimitedGens);
-      if (state.modelAttrs) {
-        setRuntimeModelAttrs(prev => ({ ...prev, ...state.modelAttrs }));
-        workerRef.current?.postMessage({ type: 'updateModelAttrs', attrs: state.modelAttrs });
-      }
+    }
+
+    // Restore model-attribute values independently — presets may carry these
+    // without any UI controls, so gating on hasControls would silently skip them.
+    if (state.modelAttrs) {
+      setRuntimeModelAttrs(prev => ({ ...prev, ...state.modelAttrs }));
+      workerRef.current?.postMessage({ type: 'updateModelAttrs', attrs: state.modelAttrs });
     }
 
     // Restore grid state if present
@@ -1217,6 +1251,29 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               onChange={e => setSimHeight(Math.max(1, Number(e.target.value) || 1))} />
           </div>
           <button className={styles.controlButton} onClick={handleApplyDimensions}>Resize</button>
+
+          <hr className={styles.divider} />
+          <div className={styles.sectionTitle}>Presets</div>
+          {(model.presets || []).length === 0 && (
+            <div style={{ fontSize: 11, color: '#888', padding: '4px 0 6px' }}>
+              No presets yet. Tune the model attributes below and save a snapshot.
+            </div>
+          )}
+          {(model.presets || []).map(p => {
+            const hasGrid = p.state.width != null;
+            return (
+              <div key={p.id} className={styles.fieldRow} title={p.description || (hasGrid ? `Includes grid (${p.state.width}\u00D7${p.state.height})` : 'Parameters only')}>
+                <span className={styles.statLabel} style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {p.name}{hasGrid ? ' \u25C9' : ''}
+                </span>
+                <button className={styles.controlButton} style={{ padding: '2px 8px', flex: 'none' }} onClick={() => handleLoadPreset(p)}>Load</button>
+                <button className={styles.controlButton} style={{ padding: '2px 6px', flex: 'none' }} title="Delete preset" onClick={() => handleDeletePreset(p)}>&times;</button>
+              </div>
+            );
+          })}
+          <button className={styles.controlButton} onClick={() => setPresetDialogOpen(true)}>
+            + Save Current as Preset&hellip;
+          </button>
 
           {modelAttrs.length > 0 && (
             <>
@@ -1554,6 +1611,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           color={brushColor}
           onChange={setBrushColor}
           onClose={() => setColorPopover(null)}
+        />
+      )}
+      {presetDialogOpen && (
+        <PresetSaveDialog
+          onConfirm={(name, description, includeGrid) => {
+            setPresetDialogOpen(false);
+            handleCreatePreset(name, description, includeGrid);
+          }}
+          onCancel={() => setPresetDialogOpen(false)}
         />
       )}
     </div>

@@ -4,6 +4,7 @@ import styles from './SaveProjectDialog.module.css';
 export interface SaveOptions {
   includeControls: boolean;
   includeGrid: boolean;
+  includePresets: boolean;
 }
 
 interface Props {
@@ -27,7 +28,8 @@ function SaveProjectDialogInner({ initial, onConfirm, onCancel }: Props) {
       if (e.key === 'Enter') {
         const c = (document.getElementById('save-opt-controls') as HTMLInputElement | null)?.checked ?? initial.includeControls;
         const g = (document.getElementById('save-opt-grid') as HTMLInputElement | null)?.checked ?? initial.includeGrid;
-        onConfirm({ includeControls: c, includeGrid: g });
+        const p = (document.getElementById('save-opt-presets') as HTMLInputElement | null)?.checked ?? initial.includePresets;
+        onConfirm({ includeControls: c, includeGrid: g, includePresets: p });
       }
     };
     window.addEventListener('keydown', h);
@@ -37,7 +39,8 @@ function SaveProjectDialogInner({ initial, onConfirm, onCancel }: Props) {
   const handleSave = () => {
     const c = (document.getElementById('save-opt-controls') as HTMLInputElement).checked;
     const g = (document.getElementById('save-opt-grid') as HTMLInputElement).checked;
-    onConfirm({ includeControls: c, includeGrid: g });
+    const p = (document.getElementById('save-opt-presets') as HTMLInputElement).checked;
+    onConfirm({ includeControls: c, includeGrid: g, includePresets: p });
   };
 
   return (
@@ -57,6 +60,13 @@ function SaveProjectDialogInner({ initial, onConfirm, onCancel }: Props) {
             <div>
               <div className={styles.rowLabel}>Include board state</div>
               <div className={styles.rowHint}>Full cell grid snapshot: attributes, generation counter, indicator values, colors.</div>
+            </div>
+          </label>
+          <label className={styles.row}>
+            <input id="save-opt-presets" type="checkbox" defaultChecked={initial.includePresets} />
+            <div>
+              <div className={styles.rowLabel}>Include model presets</div>
+              <div className={styles.rowHint}>Saved parameter (and optional grid) snapshots users can switch between in the Simulator.</div>
             </div>
           </label>
         </div>

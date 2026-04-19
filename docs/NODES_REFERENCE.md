@@ -114,14 +114,14 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 | 20 | `arithmeticOperator` | Math | `+ − × ÷ % sqrt pow abs max min mean`. | `I: X` `I: Y` (num) / `O: Result` | Unary ops (`sqrt`, `abs`) ignore `Y` |
 | 21 | `proportionMap` | Proportion Map | Linear remap `X ∈ [inMin..inMax] → [outMin..outMax]`. | `I: X`, `I: inMin`, `I: inMax`, `I: outMin`, `I: outMax` / `O: Result` | |
 | 22 | `interpolation` | Interpolate | `T ∈ [0,1] → [Min..Max]`. | `I: T`, `I: Min`, `I: Max` / `O: Result` | |
-| 23 | `statement` | Compare | `== != > < >= <=` on two scalars. | `I: X` `I: Y` / `O: Result` (bool) | Name collision risk with `groupStatement` |
+| 23 | `statement` | Compare | `== != > < >= <=` on two scalars, or `Between` / `Not Between` (range check with configurable low/high sides). | `I: X` `I: Y` `I: Y₂` (between-family only) / `O: Result` (bool) | Name collision risk with `groupStatement` |
 | 24 | `logicOperator` | Logic | `AND OR XOR NOT` on bools. | `I: A` `I: B` (hidden for NOT) / `O: Result` (bool) | |
 
 ### 3.5 Aggregation — `aggregation`
 
 | # | Type | Label | Description | Ports | Notes |
 |---|---|---|---|---|---|
-| 25 | `groupCounting` | Count Matching | Count array values matching a comparison vs X. | `I: Values` (arr) `I: Compare` / `O: Count` (int) `O: Indexes` (arr) | Configurable op |
+| 25 | `groupCounting` | Count Matching | Count array values matching a comparison vs X, or falling inside/outside an interval (`Between` / `Not Between`). | `I: Values` (arr) `I: Compare` `I: Compare High` (between-family only) / `O: Count` (int) `O: Indexes` (arr) | Configurable op |
 | 26 | `groupStatement` | Group Assert | Assertion across array (all/none/any, greater/lesser). | `I: Values` (arr) `I: X` (opt) / `O: Result` (bool) `O: Indexes` (arr) | 7 operations in one dropdown |
 | 27 | `groupOperator` | Group Reduce | `Sum Product Min Max Mean AND OR Random` on an array. | `I: Values` (arr) / `O: Result` `O: Index` (for min/max/random) | |
 | 28 | `aggregate` | Aggregate | Combine **multiple connections** into one value. | `I: Values` (arr, multi-connect) / `O: Result` | Unlike `groupOperator` which takes an array, this takes N scalar edges |
