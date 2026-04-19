@@ -133,6 +133,22 @@ function getInlineValue(port: PortDef, config: Record<string, string | number | 
   return s;
 }
 
+/**
+ * Parse an inline-widget string into a numeric value. Handles the same coercions
+ * the JS compiler gets for free by emitting raw expressions: 'true' / 'false'
+ * become 1 / 0 (the SetAttribute number widget can carry these strings if the
+ * underlying attribute is bool), numeric strings parse via parseFloat, anything
+ * else falls back to 0. Used everywhere an inline port value is materialised
+ * into a constant for WASM emission.
+ */
+function parseInlineNum(raw: string | undefined, fallback: number = 0): number {
+  if (raw === undefined) return fallback;
+  if (raw === 'true') return 1;
+  if (raw === 'false') return 0;
+  const n = parseFloat(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function attrValType(t: string): ValType {
   return t === 'float' ? F64 : I32;
 }
@@ -200,8 +216,15 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
 
   getConstant: ({ node, ctx }) => {
     const t = (node.data.config.constType as string) || 'integer';
-    const raw = node.data.config.value;
-    const num = typeof raw === 'number' ? raw : parseFloat(String(raw ?? '0')) || 0;
+    const raw = node.data.config.constValue;
+    let num: number;
+    if (t === 'bool') {
+      num = (raw === 'true' || raw === true || raw === 1) ? 1 : 0;
+    } else if (t === 'float') {
+      num = typeof raw === 'number' ? raw : (parseFloat(String(raw ?? '0')) || 0);
+    } else {
+      num = typeof raw === 'number' ? raw : (parseInt(String(raw ?? '0'), 10) || 0);
+    }
     if (t === 'float') {
       ctx.emitter.f64Const(num);
       return storeResult(ctx.emitter, F64);
@@ -212,9 +235,8 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
   },
 
   tagConstant: ({ node, ctx }) => {
-    const raw = node.data.config.value;
-    const num = typeof raw === 'number' ? raw : parseInt(String(raw ?? '0'), 10) || 0;
-    ctx.emitter.i32Const(num);
+    const idx = Number(node.data.config.tagIndex) || 0;
+    ctx.emitter.i32Const(idx);
     return storeResult(ctx.emitter, I32);
   },
 
@@ -628,14 +650,16 @@ function emitAggregateOrCount(
   else { ctx.errors.push(`aggregate: unsupported op ${op}`); return null; }
   ctx.emitter.localSet(accLocal);
 
-  // For count mode: get target value (the node's "value" config or input)
-  let targetValue: ValueRef | null = null;
+  // For count mode: target value(s) come from `compare` (and `compareHigh` for
+  // between/notBetween). Operation: equals/notEquals/greater/lesser/between/notBetween.
+  let countCmpOp: string = 'equals';
+  let cmpRef: ValueRef | null = null;
+  let cmpHighRef: ValueRef | null = null;
   if (mode === 'count') {
-    // groupCounting node has a "value" input (what to count occurrences of)
-    targetValue = inputs['value'] ?? null;
-    if (!targetValue) {
-      // Inline default: usually no inline; default to 1
-      targetValue = { inline: true, value: 1, valtype: elemValtype };
+    countCmpOp = (node.data.config.operation as string) || 'equals';
+    cmpRef = inputs['compare'] ?? { inline: true, value: 1, valtype: elemValtype };
+    if (countCmpOp === 'between' || countCmpOp === 'notBetween') {
+      cmpHighRef = inputs['compareHigh'] ?? { inline: true, value: 1, valtype: elemValtype };
     }
   }
 
@@ -672,13 +696,36 @@ function emitAggregateOrCount(
 
       // Combine into accumulator
       if (mode === 'count') {
-        // (loadedValue === targetValue) ? acc++ : noop
         // Stack: [loadedValue]
-        // Push targetValue, compare
-        pushValueAs(ctx.emitter, targetValue!, elemValtype);
-        if (elemValtype === F64) ctx.emitter.op(OP_F64_EQ);
-        else ctx.emitter.op(OP_I32_EQ);
-        // if (eq) acc++
+        // Stash to a fresh local so we can re-push for between's two compares.
+        const elemLocal = ctx.emitter.allocLocal(elemValtype);
+        ctx.emitter.localSet(elemLocal);
+        const lo = (node.data.config.lowOp as string) === '>' ? '>' : '>=';
+        const hi = (node.data.config.highOp as string) === '<' ? '<' : '<=';
+        const emitCmp = (op: string, ref: ValueRef) => {
+          ctx.emitter.localGet(elemLocal);
+          pushValueAs(ctx.emitter, ref, elemValtype);
+          if (elemValtype === F64) ctx.emitter.op(cmpToF64Op(op));
+          else ctx.emitter.op(cmpToI32Op(op));
+        };
+        switch (countCmpOp) {
+          case 'notEquals': emitCmp('!=', cmpRef!); break;
+          case 'greater':   emitCmp('>',  cmpRef!); break;
+          case 'lesser':    emitCmp('<',  cmpRef!); break;
+          case 'between':
+            emitCmp(lo, cmpRef!);
+            emitCmp(hi, cmpHighRef!);
+            ctx.emitter.op(OP_I32_AND);
+            break;
+          case 'notBetween':
+            emitCmp(lo, cmpRef!);
+            emitCmp(hi, cmpHighRef!);
+            ctx.emitter.op(OP_I32_AND);
+            ctx.emitter.op(OP_I32_EQZ);
+            break;
+          default: emitCmp('==', cmpRef!); break;
+        }
+        // if (matched) acc++
         ctx.emitter.ifThen(() => {
           ctx.emitter.localGet(accLocal);
           ctx.emitter.i32Const(1);
@@ -958,9 +1005,9 @@ function compileValueNode(nodeId: string, ctx: WasmCompileCtx): LocalRef | null 
     } else {
       const inlineVal = getInlineValue(port, node.data.config);
       if (inlineVal !== undefined) {
-        const num = parseFloat(inlineVal);
+        const num = parseInlineNum(inlineVal);
         const isFloat = port.dataType === 'float';
-        inputs[port.id] = { inline: true, value: Number.isFinite(num) ? num : 0, valtype: isFloat ? F64 : I32 };
+        inputs[port.id] = { inline: true, value: num, valtype: isFloat ? F64 : I32 };
       }
     }
   }
@@ -969,6 +1016,71 @@ function compileValueNode(nodeId: string, ctx: WasmCompileCtx): LocalRef | null 
   if (!result) return null;
   ctx.valueLocals.set(nodeId, result);
   return result;
+}
+
+/**
+ * Walk the flow chain reachable from `stepNode:do` and emit every value node
+ * those branches reference. Value emit calls hit `compileValueNode` which
+ * recursively materialises dependencies and caches each result in `valueLocals`.
+ * After this pre-pass, the actual flow-chain emission only needs `localGet`s.
+ *
+ * Why this is required: emitting a value lazily at first reference puts the
+ * computation inside whichever branch happened to ask first. The cached local
+ * is then a function-level slot, but it's only WRITTEN inside that branch — a
+ * sibling branch reading it sees stale data from the previous iteration's
+ * unrelated computation. Hoisting all computations to the top of the cell
+ * loop makes every cached local well-defined for every branch.
+ */
+function preEmitValueNodes(ctx: WasmCompileCtx, stepNode: GraphNode): void {
+  const visited = new Set<string>();
+  const visitValue = (nodeId: string) => {
+    if (visited.has(nodeId)) return;
+    visited.add(nodeId);
+    compileValueNode(nodeId, ctx);
+  };
+  const visitFlow = (srcId: string, portId: string, seen: Set<string>) => {
+    const targets = ctx.flowOutputToTargets.get(`${srcId}:${portId}`) ?? [];
+    for (const t of targets) {
+      const node = ctx.nodeMap.get(t.nodeId);
+      if (!node) continue;
+      const def = getNodeDef(node.data.nodeType);
+      if (!def) continue;
+      // Visit value inputs of this flow node (single + multi-source)
+      for (const port of def.ports) {
+        if (port.kind !== 'input' || port.category !== 'value') continue;
+        const src = ctx.inputToSource.get(`${t.nodeId}:${port.id}`);
+        if (src) visitValue(src.nodeId);
+        const srcs = ctx.inputToSources.get(`${t.nodeId}:${port.id}`);
+        if (srcs) for (const s of srcs) visitValue(s.nodeId);
+      }
+      // Recurse into flow children
+      const flowKey = `${t.nodeId}:`;
+      if (seen.has(flowKey)) continue; // cycle guard
+      seen.add(flowKey);
+      switch (node.data.nodeType) {
+        case 'conditional':
+          visitFlow(t.nodeId, 'then', seen);
+          visitFlow(t.nodeId, 'else', seen);
+          break;
+        case 'sequence':
+          visitFlow(t.nodeId, 'first', seen);
+          visitFlow(t.nodeId, 'then', seen);
+          break;
+        case 'loop':
+          visitFlow(t.nodeId, 'body', seen);
+          break;
+        case 'switch': {
+          const caseCount = Number(node.data.config.caseCount) || 0;
+          for (let ci = 0; ci < caseCount; ci++) {
+            visitFlow(t.nodeId, `case_${ci}`, seen);
+          }
+          visitFlow(t.nodeId, 'default', seen);
+          break;
+        }
+      }
+    }
+  };
+  visitFlow(stepNode.id, 'do', new Set());
 }
 
 function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmCompileCtx): boolean {
@@ -988,8 +1100,7 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
       } else {
         const condPort = def.ports.find(p => p.id === 'condition');
         const inlineVal = condPort ? getInlineValue(condPort, node.data.config) : undefined;
-        const num = parseFloat(inlineVal ?? '0');
-        condRef = { inline: true, value: Number.isFinite(num) ? num : 0, valtype: I32 };
+        condRef = { inline: true, value: parseInlineNum(inlineVal, 0), valtype: I32 };
       }
       pushValueAs(ctx.emitter, condRef, I32);
       const hasElse = ctx.flowOutputToTargets.has(`${node.id}:else`);
@@ -1015,8 +1126,7 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
       } else {
         const port = def.ports.find(p => p.id === 'count');
         const inlineVal = port ? getInlineValue(port, node.data.config) : undefined;
-        const num = parseFloat(inlineVal ?? '1');
-        countRef = { inline: true, value: Number.isFinite(num) ? num : 1, valtype: I32 };
+        countRef = { inline: true, value: parseInlineNum(inlineVal, 1), valtype: I32 };
       }
       // Allocate loop counter local + bound local
       const li = ctx.emitter.allocLocal(I32);
@@ -1067,8 +1177,7 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
         } else {
           const port = def.ports.find(p => p.id === 'value');
           const inlineVal = port ? getInlineValue(port, node.data.config) : undefined;
-          const num = parseFloat(inlineVal ?? '0');
-          valueRef = { inline: true, value: Number.isFinite(num) ? num : 0, valtype: valType === 'float' ? F64 : I32 };
+          valueRef = { inline: true, value: parseInlineNum(inlineVal, 0), valtype: valType === 'float' ? F64 : I32 };
         }
       }
 
@@ -1171,9 +1280,9 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
         } else {
           const inlineVal = getInlineValue(port, node.data.config);
           if (inlineVal !== undefined) {
-            const num = parseFloat(inlineVal);
+            const num = parseInlineNum(inlineVal);
             const isFloat = port.dataType === 'float';
-            inputs[port.id] = { inline: true, value: Number.isFinite(num) ? num : 0, valtype: isFloat ? F64 : I32 };
+            inputs[port.id] = { inline: true, value: num, valtype: isFloat ? F64 : I32 };
           }
         }
       }
@@ -1302,6 +1411,15 @@ export function compileGraphWasm(
           }
         }
       }
+
+      // Two-pass within the cell loop: first hoist all value computations
+      // reachable from the flow chain (so each result lives in a function-level
+      // local visible to every conditional branch), then emit the flow chain
+      // itself. Without this hoist, a value emitted lazily inside one branch
+      // (e.g. n6.then) is not recomputed when re-referenced from a sibling
+      // branch (n6.else) — the cached local reads stale data from the previous
+      // iteration's branch. Mirrors the JS compiler's two-pass strategy.
+      preEmitValueNodes(ctx, stepNode);
 
       // Flow chain from Step's "do" output (matches JS's rootFlowPort = 'do')
       compileFlowChain(stepNode.id, 'do', ctx);

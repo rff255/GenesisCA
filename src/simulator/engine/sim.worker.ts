@@ -421,12 +421,9 @@ function tryInstantiateWasmStep(bytes: Uint8Array | undefined): void {
 }
 
 function runStep(): void {
-  // Phase 2B.2: when WASM mode is on AND the WASM step has been built, call
-  // it instead of the JS step. The current emitted WASM step is a no-op
-  // skeleton so this is only safe with a no-op model — used for end-to-end
-  // wiring verification, not correctness.
   const fn = (useWasm && wasmStepFn) ? wasmStepFn : stepFn!;
   const callWasm = useWasm && wasmStepFn !== null;
+  const isSync = updateMode !== 'asynchronous';
 
   // Reset per-generation standalone indicators to defaults
   if (standalonePerGenIdx.length > 0) {
@@ -435,6 +432,17 @@ function runStep(): void {
 
   // Clear linked results (compiled step function will populate them)
   if (linkedDefs.length > 0) linkedResults = {};
+
+  // Pre-step (WASM, sync mode): WASM uses baked-in attrReadOffset/attrWriteOffset
+  // so it must always read from attrsA. JS-mode swap may have left readAttrs
+  // pointing at attrsB — sync the latest data back into attrsA before running.
+  if (callWasm && isSync && readAttrs !== attrsA) {
+    for (const attr of cellAttrs) {
+      (attrsA[attr.id] as Uint8Array).set(readAttrs[attr.id] as Uint8Array);
+    }
+    readAttrs = attrsA;
+    writeAttrs = attrsB;
+  }
 
   // Async mode: shuffle/populate order array before each step
   if (updateMode === 'asynchronous' && orderArray) {
@@ -482,11 +490,22 @@ function runStep(): void {
     }
   }
 
-  // Swap buffers (sync mode only — async uses single buffer)
-  if (updateMode !== 'asynchronous') {
-    const tmp = readAttrs;
-    readAttrs = writeAttrs;
-    writeAttrs = tmp;
+  // Post-step buffer management (sync mode only — async uses single buffer)
+  if (isSync) {
+    if (callWasm) {
+      // WASM wrote new gen to attrWriteOffset (= attrsB). Bulk-copy w → r so
+      // the next step (whichever mode) sees the new gen at readAttrs = attrsA.
+      // We cannot use the JS ref-swap trick because WASM's offsets are baked.
+      for (const attr of cellAttrs) {
+        (attrsA[attr.id] as Uint8Array).set(attrsB[attr.id] as Uint8Array);
+      }
+      // Refs stay canonical (readAttrs = attrsA, writeAttrs = attrsB).
+    } else {
+      // JS step uses positional r/w args so ref swap suffices (no copy).
+      const tmp = readAttrs;
+      readAttrs = writeAttrs;
+      writeAttrs = tmp;
+    }
   }
   generation++;
 }
