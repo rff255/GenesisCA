@@ -464,6 +464,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       })),
     });
     workerRef.current = worker;
+    if (import.meta.env?.DEV) (window as unknown as { __simWorker?: Worker }).__simWorker = worker;
     setGeneration(0);
     setPlaying(false);
     indicatorValuesRef.current = {};

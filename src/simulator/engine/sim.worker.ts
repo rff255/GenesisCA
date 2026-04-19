@@ -4,6 +4,19 @@
  * Pre-computes neighbor index tables for zero-cost boundary handling.
  */
 
+import { selfTestAdd, selfTestMemorySum } from '../../modeler/vpl/compiler/wasm/encoder';
+import { compileGraphWasm, instantiateWasmStep } from '../../modeler/vpl/compiler/wasm/compile';
+
+// Phase 2A bring-up smoke tests — verify the hand-written WASM encoder
+// produces valid modules end-to-end (computation + memory imports).
+// Removed once Wave 2 wires the encoder into the actual compile pipeline.
+if (import.meta.env?.DEV) {
+  Promise.all([selfTestAdd(), selfTestMemorySum()]).then(
+    ([a, m]) => console.log('[wasm encoder] selfTestAdd =', a, 'selfTestMemorySum =', m),
+    e => console.error('[wasm encoder] FAILED:', e),
+  );
+}
+
 interface AttrDef {
   id: string;
   type: string;
@@ -91,8 +104,12 @@ interface ClearRegionMsg {
   row: number; col: number; w: number; h: number;
   activeViewer: string;
 }
+interface SetUseWasmMsg {
+  type: 'setUseWasm';
+  enabled: boolean;
+}
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -119,6 +136,83 @@ let nbrIndices: Record<string, Int32Array> = {};
 
 let colors: Uint8ClampedArray = new Uint8ClampedArray(0);
 let orderArray: Int32Array | null = null;
+
+// WASM linear memory backs cell attributes and the color buffer so the future
+// WASM step function can address them directly. JS still uses typed-array views
+// over the same memory for paint, save/load, the legacy JS step, etc. — the
+// views and the WASM module see the exact same bytes.
+//
+// Memory layout (computed by computeMemoryLayout):
+//   [attr0_read][attr1_read]...[attr0_write][attr1_write]...[colors][padding to page]
+// Async mode collapses read/write into a single shared region per attribute.
+//
+// Reinit on grid resize creates a fresh Memory; reinit on recompile reuses it.
+let wasmMemory: WebAssembly.Memory | null = null;
+let wasmLayout: MemoryLayout | null = null;
+
+interface MemoryLayout {
+  totalBytes: number;
+  pages: number;
+  attrReadOffset: Record<string, number>;
+  attrWriteOffset: Record<string, number>;
+  attrTypeBytes: Record<string, number>;
+  colorsOffset: number;
+  colorsBytes: number;
+}
+
+function bytesPerType(t: string): number {
+  switch (t) {
+    case 'bool': return 1;
+    case 'integer': return 4;
+    case 'tag': return 4;
+    case 'float': return 8;
+    default: return 8;
+  }
+}
+
+/** Round `off` up to the next multiple of `align`. Used to keep typed-array
+ *  views correctly aligned (Float64Array offset must be 8-byte aligned). */
+function alignOffset(off: number, align: number): number {
+  return Math.ceil(off / align) * align;
+}
+
+function computeMemoryLayout(attrs: AttrDef[], totalCells: number, isAsync: boolean): MemoryLayout {
+  const attrReadOffset: Record<string, number> = {};
+  const attrWriteOffset: Record<string, number> = {};
+  const attrTypeBytes: Record<string, number> = {};
+  let off = 0;
+
+  // Read region (always)
+  for (const attr of attrs) {
+    const ib = bytesPerType(attr.type);
+    attrTypeBytes[attr.id] = ib;
+    off = alignOffset(off, 8);
+    attrReadOffset[attr.id] = off;
+    off += totalCells * ib;
+  }
+
+  // Write region — separate in sync, shared with read in async
+  if (!isAsync) {
+    for (const attr of attrs) {
+      const ib = attrTypeBytes[attr.id]!;
+      off = alignOffset(off, 8);
+      attrWriteOffset[attr.id] = off;
+      off += totalCells * ib;
+    }
+  } else {
+    for (const attr of attrs) attrWriteOffset[attr.id] = attrReadOffset[attr.id]!;
+  }
+
+  // Colors region
+  off = alignOffset(off, 8);
+  const colorsOffset = off;
+  const colorsBytes = totalCells * 4;
+  off += colorsBytes;
+
+  const totalBytes = off;
+  const pages = Math.max(1, Math.ceil(totalBytes / 65536));
+  return { totalBytes, pages, attrReadOffset, attrWriteOffset, attrTypeBytes, colorsOffset, colorsBytes };
+}
 // xorshift32 state shared across all compiled functions. Persists across steps so
 // the random stream advances as the user expects. Seeded once with a non-zero value.
 const rngState = new Uint32Array(1);
@@ -126,6 +220,13 @@ rngState[0] = (Date.now() * 0x9e3779b9) >>> 0 || 0x12345678;
 let stepFn: Function | null = null;
 let inputColorFns: Array<{ mappingId: string; fn: Function }> = [];
 let outputMappingFns: Array<{ mappingId: string; fn: Function }> = [];
+
+// WASM step (Wave 2) — when useWasm is true, runStep() calls this instead of
+// the JS stepFn. Default false; flipped via the 'setUseWasm' message. The WASM
+// module is rebuilt on every init/recompile because it imports the linear
+// memory and assumes the current attribute layout.
+let wasmStepFn: ((total: number) => void) | null = null;
+let useWasm = false;
 
 // Cached model attributes
 let cachedModelAttrs: Record<string, unknown> = {};
@@ -160,6 +261,18 @@ function createTypedArray(type: string, size: number): Float64Array | Int32Array
   }
 }
 
+/** Construct a typed-array view (matching the attribute's type) over a given
+ *  WebAssembly memory buffer at the given byte offset. */
+function viewOver(type: string, buf: ArrayBuffer, byteOffset: number, length: number): Float64Array | Int32Array | Uint8Array {
+  switch (type) {
+    case 'bool': return new Uint8Array(buf, byteOffset, length);
+    case 'integer': return new Int32Array(buf, byteOffset, length);
+    case 'tag': return new Int32Array(buf, byteOffset, length);
+    case 'float': return new Float64Array(buf, byteOffset, length);
+    default: return new Float64Array(buf, byteOffset, length);
+  }
+}
+
 function defaultValue(attr: AttrDef): number {
   switch (attr.type) {
     case 'bool': return attr.defaultValue === 'true' ? 1 : 0;
@@ -180,17 +293,24 @@ function initGrid(): void {
   attrsB = {};
   const isAsync = updateMode === 'asynchronous';
 
+  // Allocate WASM linear memory and create typed-array views over it for
+  // every cell attribute (read+write regions) and the color buffer. This is
+  // the data the future WASM step function will address directly via load/store.
+  wasmLayout = computeMemoryLayout(cellAttrs, total, isAsync);
+  wasmMemory = new WebAssembly.Memory({ initial: wasmLayout.pages });
+  const buf = wasmMemory.buffer;
+
   for (const attr of cellAttrs) {
-    const arrA = createTypedArray(attr.type, total);
     const dv = defaultValue(attr);
+    const arrA = viewOver(attr.type, buf, wasmLayout.attrReadOffset[attr.id]!, total);
     if (dv !== 0) arrA.fill(dv);
     attrsA[attr.id] = arrA;
 
     if (isAsync) {
-      // Async: single buffer — both read and write point to the same arrays
+      // Async: single buffer — both read and write point to the same view (same offset)
       attrsB[attr.id] = arrA;
     } else {
-      const arrB = createTypedArray(attr.type, total);
+      const arrB = viewOver(attr.type, buf, wasmLayout.attrWriteOffset[attr.id]!, total);
       if (dv !== 0) arrB.fill(dv);
       attrsB[attr.id] = arrB;
     }
@@ -198,7 +318,7 @@ function initGrid(): void {
 
   readAttrs = attrsA;
   writeAttrs = isAsync ? attrsA : attrsB;
-  colors = new Uint8ClampedArray(total * 4);
+  colors = new Uint8ClampedArray(buf, wasmLayout.colorsOffset, wasmLayout.colorsBytes);
   generation = 0;
 
   // Order array for async mode
@@ -313,8 +433,38 @@ function buildCellArgs(idx: number): unknown[] {
   return args;
 }
 
+/** Compile the current graph to a WASM module and instantiate it against the
+ *  current wasmMemory. Stores the result in wasmStepFn. Posts any error back
+ *  to the main thread so it surfaces in the console. */
+function tryCompileWasmStep(): void {
+  if (!wasmMemory || !wasmLayout) { wasmStepFn = null; return; }
+  const layoutInfo = {
+    cellAttrs: cellAttrs.map(a => ({
+      id: a.id,
+      type: a.type,
+      readOffset: wasmLayout!.attrReadOffset[a.id]!,
+      writeOffset: wasmLayout!.attrWriteOffset[a.id]!,
+      itemBytes: wasmLayout!.attrTypeBytes[a.id]!,
+    })),
+    isAsync: updateMode === 'asynchronous',
+  };
+  const result = compileGraphWasm(layoutInfo);
+  instantiateWasmStep(result, wasmMemory).then(
+    inst => { wasmStepFn = inst.step; },
+    err => {
+      wasmStepFn = null;
+      self.postMessage({ type: 'error', message: '[wasm] step compile/instantiate failed: ' + (err?.message || err) });
+    },
+  );
+}
+
 function runStep(): void {
-  const fn = stepFn!;
+  // Phase 2B.2: when WASM mode is on AND the WASM step has been built, call
+  // it instead of the JS step. The current emitted WASM step is a no-op
+  // skeleton so this is only safe with a no-op model — used for end-to-end
+  // wiring verification, not correctness.
+  const fn = (useWasm && wasmStepFn) ? wasmStepFn : stepFn!;
+  const callWasm = useWasm && wasmStepFn !== null;
 
   // Reset per-generation standalone indicators to defaults
   if (standalonePerGenIdx.length > 0) {
@@ -341,8 +491,14 @@ function runStep(): void {
     // 'cyclic': orderArray stays as shuffled at init — no per-step work
   }
 
-  // ONE call per step — the loop is inside the compiled function
-  fn(...buildLoopArgs());
+  // ONE call per step — the loop is inside the compiled function.
+  // WASM step has a different signature (just `total`) since attrs/colors
+  // live in the imported memory and offsets are baked into the module.
+  if (callWasm) {
+    (fn as (t: number) => void)(total);
+  } else {
+    fn(...buildLoopArgs());
+  }
 
   // Handle linked indicator accumulation (skip when no linked indicators)
   for (let _li = 0; _li < linkedDefs.length; _li++) {
@@ -548,6 +704,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       initGrid();
       buildNeighborIndices();
       compileFns(msg.stepCode, msg.inputColorCodes, msg.outputMappingCodes || []);
+      tryCompileWasmStep();
       writeDefaultColors();
       sendColors();
       break;
@@ -625,7 +782,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       updateMode = msg.updateMode || updateMode;
       asyncScheme = msg.asyncScheme || asyncScheme;
       compileFns(msg.stepCode, msg.inputColorCodes, (msg as RecompileMsg).outputMappingCodes || []);
+      tryCompileWasmStep();
       self.postMessage({ type: 'ready' });
+      break;
+    }
+
+    case 'setUseWasm': {
+      useWasm = !!msg.enabled;
+      self.postMessage({ type: 'useWasmStatus', enabled: useWasm, ready: wasmStepFn !== null });
       break;
     }
 
@@ -710,22 +874,21 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       generation = msg.generation;
       activeViewer = msg.activeViewer;
 
-      // Restore cell attribute arrays
+      // Restore cell attribute arrays — COPY INTO the existing views over WASM
+      // memory rather than replacing them (replacement would orphan them from
+      // the WASM module that addresses memory by offset).
       const isAsyncLoad = updateMode === 'asynchronous';
       for (const attr of cellAttrs) {
         const entry = msg.attributes[attr.id];
         if (!entry) continue;
-        const src = createTypedArray(attr.type, total);
-        const srcView = new (src.constructor as { new(b: ArrayBuffer): typeof src })(entry.buffer);
-        const copyLen = Math.min(src.length, srcView.length);
-        for (let i = 0; i < copyLen; i++) src[i] = srcView[i]!;
-        attrsA[attr.id] = src;
-        if (isAsyncLoad) {
-          attrsB[attr.id] = src;
-        } else {
-          const clone = createTypedArray(attr.type, total);
-          for (let i = 0; i < copyLen; i++) clone[i] = srcView[i]!;
-          attrsB[attr.id] = clone;
+        const Ctor = createTypedArray(attr.type, 0).constructor as { new (b: ArrayBuffer): Float64Array | Int32Array | Uint8Array };
+        const srcView = new Ctor(entry.buffer);
+        const dstA = attrsA[attr.id]!;
+        const copyLen = Math.min(dstA.length, srcView.length);
+        for (let i = 0; i < copyLen; i++) (dstA as Uint8Array)[i] = srcView[i]!;
+        if (!isAsyncLoad) {
+          const dstB = attrsB[attr.id]!;
+          for (let i = 0; i < copyLen; i++) (dstB as Uint8Array)[i] = srcView[i]!;
         }
       }
       readAttrs = attrsA;
