@@ -79,8 +79,38 @@ interface RootCompileResult {
   flowLines: string[];
   /** Nodes that need pre-loop declarations.
    *  nbrId: sized array for neighborhood scratch (GetNeighborsAttribute).
+   *  attrId: source attribute id — used to pick a typed-array constructor for the scratch.
    *  initExpr: literal init expression for reusable scratch (e.g., '[]'). */
-  scratchNodes: Array<{ scratchVarName: string; nbrId?: string; initExpr?: string }>;
+  scratchNodes: Array<{ scratchVarName: string; nbrId?: string; attrId?: string; initExpr?: string }>;
+}
+
+/** Pick a typed-array constructor name for a scratch buffer that mirrors a cell attribute.
+ *  Falls back to '' (untyped Array) for unknown/color types so behaviour is preserved. */
+function scratchCtorForAttr(attrId: string | undefined, model: CAModel | undefined): string {
+  if (!attrId || !model) return '';
+  const attr = model.attributes.find(a => a.id === attrId);
+  if (!attr) return '';
+  switch (attr.type) {
+    case 'bool': return 'Uint8Array';
+    case 'integer': return 'Int32Array';
+    case 'tag': return 'Int32Array';
+    case 'float': return 'Float64Array';
+    default: return '';
+  }
+}
+
+/** Build the scratch declaration line for a single scratchNodes entry. */
+function buildScratchDecl(
+  s: { scratchVarName: string; nbrId?: string; attrId?: string; initExpr?: string },
+  model: CAModel | undefined,
+): string {
+  if (s.nbrId) {
+    const ctor = scratchCtorForAttr(s.attrId, model);
+    return ctor
+      ? `  const ${s.scratchVarName} = new ${ctor}(nSz_${s.nbrId});`
+      : `  const ${s.scratchVarName} = new Array(nSz_${s.nbrId});`;
+  }
+  return `  const ${s.scratchVarName} = ${s.initExpr ?? '[]'};`;
 }
 
 function compileRoot(
@@ -94,7 +124,7 @@ function compileRoot(
 ): RootCompileResult {
   const compiled = new Set<string>();
   const valueLines: string[] = [];
-  const scratchNodes: Array<{ scratchVarName: string; nbrId?: string; initExpr?: string }> = [];
+  const scratchNodes: Array<{ scratchVarName: string; nbrId?: string; attrId?: string; initExpr?: string }> = [];
 
   function varName(sourceNodeId: string, sourcePortId: string): string {
     const sourceNode = nodeMap.get(sourceNodeId);
@@ -218,7 +248,8 @@ function compileRoot(
       // Track scratch arrays
       if (nt === 'getNeighborsAttribute') {
         const nbrId = iNode.data.config.neighborhoodId as string || '_undef';
-        scratchNodes.push({ scratchVarName: `${prefix}_scr_${innerNodeId}`, nbrId });
+        const attrId = iNode.data.config.attributeId as string || undefined;
+        scratchNodes.push({ scratchVarName: `${prefix}_scr_${innerNodeId}`, nbrId, attrId });
       }
       if (nt === 'groupStatement' || nt === 'groupCounting') {
         scratchNodes.push({ scratchVarName: `${prefix}_v${innerNodeId}_indexes`, initExpr: '[]' });
@@ -372,7 +403,8 @@ function compileRoot(
       if (!iDef) return;
       if (nt === 'getNeighborsAttribute') {
         const nbrId = iNode.data.config.neighborhoodId as string || '_undef';
-        scratchNodes.push({ scratchVarName: `${nestedPrefix}_scr_${nid}`, nbrId });
+        const attrId = iNode.data.config.attributeId as string || undefined;
+        scratchNodes.push({ scratchVarName: `${nestedPrefix}_scr_${nid}`, nbrId, attrId });
       }
       if (nt === 'groupStatement' || nt === 'groupCounting') {
         scratchNodes.push({ scratchVarName: `${nestedPrefix}_v${nid}_indexes`, initExpr: '[]' });
@@ -459,7 +491,8 @@ function compileRoot(
     // Track GetNeighborsAttribute nodes for scratch declaration
     if (node.data.nodeType === 'getNeighborsAttribute') {
       const nbrId = node.data.config.neighborhoodId as string || '_undef';
-      scratchNodes.push({ scratchVarName: `_scr_${nodeId}`, nbrId });
+      const attrId = node.data.config.attributeId as string || undefined;
+      scratchNodes.push({ scratchVarName: `_scr_${nodeId}`, nbrId, attrId });
     }
     // Track aggregation nodes that need reusable scratch arrays (only when indexes output is connected)
     let needsIndexes = false;
@@ -875,7 +908,7 @@ function buildLoopParams(model: CAModel): {
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
-  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults');
+  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState');
   if (isAsync) parts.push('order');
 
   return { params: parts.join(', '), cellAttrs, neighborhoods };
@@ -889,7 +922,7 @@ function buildCellParams(model: CAModel): string {
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
-  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults');
+  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState');
   return parts.join(', ');
 }
 
@@ -1033,6 +1066,24 @@ export function compileGraph(
       node.data.config._resolvedTagIndexes = JSON.stringify(indices);
     }
   }
+
+  // Pre-resolve indicator IDs to numeric indices so the per-cell hot path can
+  // do typed-array index access (_indicators[3]) instead of string-keyed object
+  // access (_indicators["abc123"]). Worker mirrors the same id->index mapping
+  // from model.indicators array order. -1 signals unresolved (stale config).
+  const indicatorIdxMap = new Map((model.indicators || []).map((ind, i) => [ind.id, i] as const));
+  function preResolveIndicators(nodes: GraphNode[]): void {
+    for (const node of nodes) {
+      const t = node.data.nodeType;
+      if (t === 'getIndicator' || t === 'setIndicator' || t === 'updateIndicator') {
+        const indId = node.data.config.indicatorId as string;
+        const idx = indicatorIdxMap.get(indId);
+        node.data.config._indicatorIdx = idx !== undefined ? idx : -1;
+      }
+    }
+  }
+  preResolveIndicators(graphNodes);
+  for (const def of (model.macroDefs || [])) preResolveIndicators(def.nodes);
   const { params: loopParams, cellAttrs } = buildLoopParams(model);
   const cellParams = buildCellParams(model);
 
@@ -1051,11 +1102,7 @@ export function compileGraph(
     );
 
     // Scratch array declarations (before the loop)
-    const scratchDecls = scratchNodes.map(
-      s => s.nbrId
-        ? `  const ${s.scratchVarName} = new Array(nSz_${s.nbrId});`
-        : `  const ${s.scratchVarName} = ${s.initExpr ?? '[]'};`,
-    );
+    const scratchDecls = scratchNodes.map(s => buildScratchDecl(s, model));
 
     // Build linked indicator aggregation code (injected into the loop)
     const linked = buildLinkedIndicatorCode(model);
@@ -1066,6 +1113,7 @@ export function compileGraph(
         `(function(${loopParams}) {`,
         ...scratchDecls,
         ...linked.preLoopDecls,
+        '  let _rs = _rngState[0] || 0x12345678;',
         '  for (let _i = 0; _i < total; _i++) {',
         '    const idx = order[_i];',
         '    const colorIdx = idx * 4;',
@@ -1075,6 +1123,7 @@ export function compileGraph(
         ...flowLines,
         ...linked.inLoopLines,
         '  }',
+        '  _rngState[0] = _rs;',
         ...linked.postLoopLines,
         '})',
       ].join('\n');
@@ -1084,6 +1133,7 @@ export function compileGraph(
         `(function(${loopParams}) {`,
         ...scratchDecls,
         ...linked.preLoopDecls,
+        '  let _rs = _rngState[0] || 0x12345678;',
         '  for (let idx = 0; idx < total; idx++) {',
         '    const colorIdx = idx * 4;',
         ...copyLines,
@@ -1092,6 +1142,7 @@ export function compileGraph(
         ...flowLines,
         ...linked.inLoopLines,
         '  }',
+        '  _rngState[0] = _rs;',
         ...linked.postLoopLines,
         '})',
       ].join('\n');
@@ -1114,10 +1165,12 @@ export function compileGraph(
       '  const colorIdx = idx * 4;',
       ...icCopyLines,
       `  const _v${icNode.id}_r = _r; const _v${icNode.id}_g = _g; const _v${icNode.id}_b = _b;`,
+      '  let _rs = _rngState[0] || 0x12345678;',
       '',
       ...valueLines,
       '',
       ...flowLines,
+      '  _rngState[0] = _rs;',
       '})',
     ].join('\n');
     inputColorCodes.push({ mappingId, code });
@@ -1133,7 +1186,7 @@ export function compileGraph(
   for (const a of cellAttrs) omParamParts.push(`w_${a.id}`);
   const neighborhoods = model.neighborhoods.map(n => ({ id: n.id }));
   for (const n of neighborhoods) { omParamParts.push(`nIdx_${n.id}`); omParamParts.push(`nSz_${n.id}`); }
-  omParamParts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults');
+  omParamParts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState');
   const omParams = omParamParts.join(', ');
 
   for (const omNode of outputMappingNodes) {
@@ -1141,20 +1194,18 @@ export function compileGraph(
     const { valueLines, flowLines, scratchNodes } = compileRoot(
       omNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, model,
     );
-    const scratchDecls = scratchNodes.map(
-      s => s.nbrId
-        ? `  const ${s.scratchVarName} = new Array(nSz_${s.nbrId});`
-        : `  const ${s.scratchVarName} = ${s.initExpr ?? '[]'};`,
-    );
+    const scratchDecls = scratchNodes.map(s => buildScratchDecl(s, model));
     const code = [
       `(function(${omParams}) {`,
       ...scratchDecls,
+      '  let _rs = _rngState[0] || 0x12345678;',
       '  for (let idx = 0; idx < total; idx++) {',
       '    const colorIdx = idx * 4;',
       ...valueLines,
       '',
       ...flowLines,
       '  }',
+      '  _rngState[0] = _rs;',
       '})',
     ].join('\n');
     outputMappingCodes.push({ mappingId, code });

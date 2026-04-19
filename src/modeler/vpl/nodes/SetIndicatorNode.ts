@@ -12,9 +12,9 @@ export const SetIndicatorNode: NodeTypeDef = {
   ],
   defaultConfig: { indicatorId: '' },
   compile: (nodeId, config, inputs) => {
-    const indId = config.indicatorId as string || '_undef';
+    const idx = Number(config._indicatorIdx ?? -1);
     const value = inputs['value'] || '0';
     void nodeId;
-    return `_indicators[${JSON.stringify(indId)}] = ${value};\n`;
+    return `_indicators[${idx}] = ${value};\n`;
   },
 };

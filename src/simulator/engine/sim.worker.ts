@@ -119,6 +119,10 @@ let nbrIndices: Record<string, Int32Array> = {};
 
 let colors: Uint8ClampedArray = new Uint8ClampedArray(0);
 let orderArray: Int32Array | null = null;
+// xorshift32 state shared across all compiled functions. Persists across steps so
+// the random stream advances as the user expects. Seeded once with a non-zero value.
+const rngState = new Uint32Array(1);
+rngState[0] = (Date.now() * 0x9e3779b9) >>> 0 || 0x12345678;
 let stepFn: Function | null = null;
 let inputColorFns: Array<{ mappingId: string; fn: Function }> = [];
 let outputMappingFns: Array<{ mappingId: string; fn: Function }> = [];
@@ -126,10 +130,16 @@ let outputMappingFns: Array<{ mappingId: string; fn: Function }> = [];
 // Cached model attributes
 let cachedModelAttrs: Record<string, unknown> = {};
 
-// Indicators
-let cachedIndicators: Record<string, number> = {};
-let standaloneDefaults: Record<string, number> = {};
-let standalonePerGenIds: string[] = [];
+// Indicators — typed-array-backed so the per-cell hot path uses _indicators[idx]
+// (typed-array index access) instead of _indicators["abc"] (object hash lookup).
+// The index space is parallel to model.indicators array order; compiler pre-resolves
+// each indicator node's _indicatorIdx via the same mapping.
+let cachedIndicators: Float64Array = new Float64Array(0);
+let standaloneDefaults: Float64Array = new Float64Array(0);
+let standalonePerGenIdx: number[] = [];
+// (idx, id) pairs for the standalone indicators only — used to build the outgoing
+// id-keyed payload that the UI consumes. Linked indicators come via linkedResults.
+let standaloneIds: Array<{ idx: number; id: string }> = [];
 let linkedDefs: Array<{
   id: string; accumulationMode: string;
 }> = [];
@@ -285,7 +295,7 @@ function buildLoopArgs(): unknown[] {
     args.push(nbrIndices[nbr.id]);
     args.push(nbr.coords.length);
   }
-  args.push(cachedModelAttrs, colors, activeViewer, cachedIndicators, linkedResults);
+  args.push(cachedModelAttrs, colors, activeViewer, cachedIndicators, linkedResults, rngState);
   if (updateMode === 'asynchronous' && orderArray) args.push(orderArray);
   return args;
 }
@@ -299,7 +309,7 @@ function buildCellArgs(idx: number): unknown[] {
     args.push(nbrIndices[nbr.id]);
     args.push(nbr.coords.length);
   }
-  args.push(cachedModelAttrs, colors, activeViewer, cachedIndicators, linkedResults);
+  args.push(cachedModelAttrs, colors, activeViewer, cachedIndicators, linkedResults, rngState);
   return args;
 }
 
@@ -307,8 +317,8 @@ function runStep(): void {
   const fn = stepFn!;
 
   // Reset per-generation standalone indicators to defaults
-  if (standalonePerGenIds.length > 0) {
-    for (const id of standalonePerGenIds) cachedIndicators[id] = standaloneDefaults[id] ?? 0;
+  if (standalonePerGenIdx.length > 0) {
+    for (const i of standalonePerGenIdx) cachedIndicators[i] = standaloneDefaults[i]!;
   }
 
   // Clear linked results (compiled step function will populate them)
@@ -447,21 +457,24 @@ function runColorPass(): void {
 }
 
 function initIndicators(defs: IndicatorDef[]): void {
-  cachedIndicators = {};
-  standaloneDefaults = {};
-  standalonePerGenIds = [];
+  cachedIndicators = new Float64Array(defs.length);
+  standaloneDefaults = new Float64Array(defs.length);
+  standalonePerGenIdx = [];
+  standaloneIds = [];
   linkedDefs = [];
   linkedAccumulators = {};
 
-  for (const ind of defs) {
+  for (let i = 0; i < defs.length; i++) {
+    const ind = defs[i]!;
     if (ind.kind === 'standalone') {
       const dv = ind.dataType === 'bool'
         ? (ind.defaultValue === 'true' ? 1 : 0)
         : (parseFloat(ind.defaultValue) || 0);
-      cachedIndicators[ind.id] = dv;
-      standaloneDefaults[ind.id] = dv;
+      cachedIndicators[i] = dv;
+      standaloneDefaults[i] = dv;
+      standaloneIds.push({ idx: i, id: ind.id });
       if (ind.accumulationMode === 'per-generation') {
-        standalonePerGenIds.push(ind.id);
+        standalonePerGenIdx.push(i);
       }
     } else if (ind.kind === 'linked') {
       linkedDefs.push({
@@ -473,9 +486,7 @@ function initIndicators(defs: IndicatorDef[]): void {
 }
 
 function resetIndicators(): void {
-  for (const id of Object.keys(cachedIndicators)) {
-    cachedIndicators[id] = standaloneDefaults[id] ?? 0;
-  }
+  cachedIndicators.set(standaloneDefaults);
   linkedAccumulators = {};
   linkedResults = {};
 }
@@ -483,13 +494,13 @@ function resetIndicators(): void {
 function sendColors(): void {
   const copy = new Uint8ClampedArray(colors);
   // Only build indicators payload when there are entries (avoids overhead when no indicators)
-  const hasStandalone = standalonePerGenIds.length > 0 || Object.keys(standaloneDefaults).length > 0;
+  const hasStandalone = standaloneIds.length > 0;
   const hasLinked = linkedDefs.length > 0;
   let indicators: Record<string, number | Record<string, number>> | undefined;
   if (hasStandalone || hasLinked) {
     indicators = {};
-    for (const id of Object.keys(cachedIndicators)) {
-      indicators[id] = cachedIndicators[id]!;
+    for (const { idx, id } of standaloneIds) {
+      indicators[id] = cachedIndicators[idx]!;
     }
     for (const id of Object.keys(linkedResults)) {
       indicators[id] = linkedResults[id]!;
@@ -673,6 +684,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       }
       const colorsCopy = colors.slice();
       transfers.push(colorsCopy.buffer);
+      const indicatorsSnapshot: Record<string, number> = {};
+      for (const { idx, id } of standaloneIds) indicatorsSnapshot[id] = cachedIndicators[idx]!;
       const response: Record<string, unknown> = {
         type: 'state',
         generation,
@@ -680,7 +693,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         height,
         attributes: attrBuffers,
         modelAttrs: { ...cachedModelAttrs },
-        indicators: { ...cachedIndicators },
+        indicators: indicatorsSnapshot,
         linkedAccumulators: JSON.parse(JSON.stringify(linkedAccumulators)),
         colors: colorsCopy.buffer,
       };
@@ -728,9 +741,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         cachedModelAttrs[key] = val;
       }
 
-      // Restore standalone indicators
+      // Restore standalone indicators (resolve id -> idx via current standaloneIds map;
+      // unknown ids in the loaded state are silently skipped, matching pre-typed-array behaviour)
+      const idToIdx = new Map(standaloneIds.map(s => [s.id, s.idx] as const));
       for (const [key, val] of Object.entries(msg.indicators)) {
-        cachedIndicators[key] = val;
+        const idx = idToIdx.get(key);
+        if (idx !== undefined) cachedIndicators[idx] = val;
       }
       linkedAccumulators = msg.linkedAccumulators;
 

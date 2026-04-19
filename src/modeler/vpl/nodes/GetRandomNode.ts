@@ -15,13 +15,19 @@ export const GetRandomNode: NodeTypeDef = {
     const type = config.randomType as string;
     const min = config.min as string || '0';
     const max = config.max as string || '1';
+    // Inlined xorshift32 (Marsaglia constants 13/17/5, period 2^32 - 1).
+    // _rs is a uint32 declared once per compiled function; the >>> 0 normalises
+    // after << overflow so the final divide by 2^32 lands in [0, 1).
+    const advance = '_rs = (_rs ^ (_rs << 13)) >>> 0;'
+      + ' _rs = (_rs ^ (_rs >>> 17)) >>> 0;'
+      + ' _rs = (_rs ^ (_rs << 5)) >>> 0;';
     if (type === 'bool') {
       const prob = inputVars.probability ?? '0.5';
-      return `const _v${nodeId} = Math.random() < ${prob} ? 1 : 0;\n`;
+      return `${advance} const _v${nodeId} = (_rs / 4294967296) < ${prob} ? 1 : 0;\n`;
     } else if (type === 'integer') {
-      return `const _v${nodeId} = Math.floor(Math.random() * (${max} - ${min} + 1)) + ${min};\n`;
+      return `${advance} const _v${nodeId} = Math.floor((_rs / 4294967296) * (${max} - ${min} + 1)) + ${min};\n`;
     } else {
-      return `const _v${nodeId} = Math.random() * (${max} - ${min}) + ${min};\n`;
+      return `${advance} const _v${nodeId} = (_rs / 4294967296) * (${max} - ${min}) + ${min};\n`;
     }
   },
 };
