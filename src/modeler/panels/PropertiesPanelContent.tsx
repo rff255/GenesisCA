@@ -223,9 +223,11 @@ export function PropertiesPanelContent() {
               <span style={{ fontSize: '0.78rem' }}>Use WebAssembly (experimental)</span>
             </label>
             <span style={{ color: '#888', fontSize: '0.62rem', marginTop: 2, display: 'block' }}>
-              When on, the simulator runs the graph as a hand-compiled WASM module instead of JavaScript. Falls
-              back to JS automatically when the graph uses a node type whose WASM emit is not yet implemented.
-              Toggle off if you suspect a WASM-mode behaviour difference; the simulator restarts on change.
+              Experimental optimization. When on, the simulator runs the graph as a hand-compiled WASM module
+              instead of JavaScript — typically several times faster on dense neighborhoods. Falls back to JS
+              automatically when the graph uses a node type whose WASM emit is not yet implemented. Some node
+              combinations are not yet bit-exact between the two backends, so toggle off if you observe a
+              behaviour difference; the simulator restarts on change.
             </span>
           </div>
         </div>
