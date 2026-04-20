@@ -247,6 +247,13 @@ export const OP_F64_LT = byte(0x63);
 export const OP_F64_GT = byte(0x64);
 export const OP_F64_LE = byte(0x65);
 export const OP_F64_GE = byte(0x66);
+export const OP_F64_ABS = byte(0x99);
+export const OP_F64_NEG = byte(0x9a);
+export const OP_F64_TRUNC = byte(0x9b);
+export const OP_F64_FLOOR = byte(0x9c);
+export const OP_F64_CEIL = byte(0x9d);
+export const OP_F64_NEAREST = byte(0x9e);
+export const OP_F64_SQRT = byte(0x9f);
 export const OP_F64_ADD = byte(0xa0);
 export const OP_F64_SUB = byte(0xa1);
 export const OP_F64_MUL = byte(0xa2);
@@ -257,6 +264,10 @@ export const OP_F64_MAX = byte(0xa5);
 // Conversions
 export const OP_I32_TRUNC_F64_S = byte(0xaa);
 export const OP_F64_CONVERT_I32_S = byte(0xb7);
+export const OP_F64_CONVERT_I32_U = byte(0xb8);
+
+// Select (i32-cond, picks val1 if cond non-zero, val2 otherwise)
+export const OP_SELECT = byte(0x1b);
 
 // Memory limits descriptor (no max): 0x00 ++ leb128u(min)
 export function memLimits(minPages: number): Uint8Array {
@@ -278,6 +289,11 @@ export function importEntry(moduleName: string, importName: string, kindAndDesc:
 /** Memory import descriptor: kind 0x02 + limits. */
 export function importMemoryDesc(minPages: number): Uint8Array {
   return concat(byte(IMPORT_MEMORY), memLimits(minPages));
+}
+
+/** Func import descriptor: kind 0x00 + leb128u(typeIdx). */
+export function importFuncDesc(typeIdx: number): Uint8Array {
+  return concat(byte(IMPORT_FUNC), leb128u(typeIdx));
 }
 
 // ---------------------------------------------------------------------------

@@ -126,6 +126,23 @@ export function isInline(v: ValueRef | undefined): v is InlineRef {
   return !!v && (v as InlineRef).inline === true;
 }
 
+/**
+ * A reference to an array materialised in linear memory's per-cell scratch
+ * region. `offsetLocal` and `lenLocal` are i32 locals; `offsetLocal` holds the
+ * byte offset (an absolute address into wasmMemory) where the first element
+ * lives, and `lenLocal` holds the element count. Element addressing:
+ *   element[i] = load <elemBytes> at (offsetLocal + i * elemBytes)
+ * Producer responsibilities: bump the per-cell scratch top before writing,
+ * advance scratchTop past the elements after writing.
+ */
+export interface ArrayRef {
+  kind: 'array';
+  offsetLocal: number;
+  lenLocal: number;
+  elemValtype: ValType;
+  elemBytes: number;
+}
+
 /** Push a value onto the WASM stack (load from local, or push constant). */
 export function pushValue(em: WasmEmitter, v: ValueRef): void {
   if (isInline(v)) {

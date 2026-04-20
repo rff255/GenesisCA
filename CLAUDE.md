@@ -482,6 +482,21 @@ The app is functional with these major systems:
 
 ---
 
+## WASM Compile Target (Wave 2)
+
+- 4-file structure under `src/modeler/vpl/compiler/wasm/`: `encoder.ts` (hand-rolled WASM binary encoder, no wabt.js), `layout.ts` (memory layout: attrs/colors/nbrs/modelAttrs/indicators/rngState/activeViewer/order/scratch), `emitter.ts` (`WasmEmitter` class + `ValueRef`/`ArrayRef` types), `compile.ts` (orchestrator + per-node emitters)
+- One module exports all entry points: `step`, `inputColor_<sanitisedMappingId>`, `outputMapping_<sanitisedMappingId>`. `Math.pow` is imported as funcIdx 0 (JS provides via `env.pow`); sqrt/abs/floor use native f64 intrinsics
+- Multi-output value cache: `valueLocals: Map<nodeId, Map<portId, LocalRef>>`. Single-output nodes get the named port aliased to `'value'` automatically; multi-output emitters call `setCachedPort` for each named port
+- Array-producing nodes (`getNeighborIndexesByTags`, `filterNeighbors`, `joinNeighbors`, `getNeighborsAttrByIndexes`, `groupCounting` hybrid) live in a separate `ARRAY_NODE_EMITTERS` table. They allocate via per-cell scratch (bump-pointer reset at top of every cell iteration). Array consumers (aggregate/groupCounting/groupStatement) dispatch through `isArrayProducer` to the array path
+- Entry-point nodes (inputColor/step/outputMapping) have NO `VALUE_NODE_EMITTERS` entry. InputColor's r/g/b outputs resolve via `paramRefs` map (function param indices 1/2/3); skipping them in `preEmitValueNodes` is required
+- Skip `port.isArray` during scalar input resolution in `compileValueNode` / `compileArrayNode` / `compileFlowChain` — array consumers fetch sources via `inputToSources` + the array dispatch path; trying to value-emit an array source hits "no value emitter" errors
+- Sync mode WASM↔JS interop: WASM uses baked-in `attrReadOffset`/`attrWriteOffset` so worker `runStep()` does pre-step `readAttrs→attrsA` normalize + post-step bulk `attrsB→attrsA` copy. JS-mode swap path is untouched. Same normalization needed in `paint`/`importImage`/`runColorPass` when WASM is active
+- WASM compiler is self-sufficient — does its own `_resolvedTagIndexes` and `_indicatorIdx` pre-resolve (mirrors JS compiler). Don't assume the JS compiler ran first
+- `window.__simWorker` is exposed in DEV (`SimulatorView.tsx`) for direct postMessage testing — far more reliable than standalone parity harnesses, which have subtle setup mismatches with the worker (activeViewer string vs i32, indicators Float64Array vs wasmMemory region, etc.)
+- Big WASM-emitter refactors: implement EVERY emitter first, do a static review pass over the whole compiler, THEN run a single end-to-end test sweep. Iterative implement-test-fix-test cycles thrash because each new node type tested exposes structural issues (config-key mismatches, value-hoist scoping, sync-mode buffer swap, sentinel handling). One focused pass converges much faster
+
+---
+
 ## Future Work: List Attribute Type
 
 List attributes (fixed-size arrays of a basic type per cell) were prototyped and removed. When re-implementing, watch for these pitfalls:

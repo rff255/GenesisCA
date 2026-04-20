@@ -448,7 +448,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         const viewerIds = buildViewerIds(model);
         return compileGraphWasm(model.graphNodes, model.graphEdges, model, layout, viewerIds);
       } catch (e) {
-        return { bytes: new Uint8Array(), minMemoryPages: 1, error: String((e as Error)?.message || e), viewerIds: {} };
+        return { bytes: new Uint8Array(), minMemoryPages: 1, error: String((e as Error)?.message || e), viewerIds: {}, exports: [] };
       }
     })();
     worker.postMessage({
@@ -478,6 +478,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       })),
       wasmStepBytes: wasmResult.error ? undefined : wasmResult.bytes,
       wasmStepError: wasmResult.error,
+      wasmExports: wasmResult.exports,
       viewerIds: wasmResult.viewerIds,
       useWasm: !!model.properties.useWasm,
     });
@@ -594,7 +595,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           const viewerIds = buildViewerIds(model);
           return compileGraphWasm(model.graphNodes, model.graphEdges, model, layout, viewerIds);
         } catch (e) {
-          return { bytes: new Uint8Array(), minMemoryPages: 1, error: String((e as Error)?.message || e), viewerIds: {} };
+          return { bytes: new Uint8Array(), minMemoryPages: 1, error: String((e as Error)?.message || e), viewerIds: {}, exports: [] };
         }
       })();
       workerRef.current?.postMessage({
@@ -606,6 +607,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         asyncScheme: model.properties.asyncScheme,
         wasmStepBytes: wasmResult.error ? undefined : wasmResult.bytes,
         wasmStepError: wasmResult.error,
+        wasmExports: wasmResult.exports,
         viewerIds: wasmResult.viewerIds,
       });
       // If user has the model toggle on, ensure useWasm is set (recompile doesn't carry useWasm by default)

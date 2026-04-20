@@ -69,6 +69,15 @@ export interface MemoryLayout {
   activeViewerOffset: number;
   orderOffset: number;
 
+  /** Per-cell-iteration scratch region (bump-pointer allocator).
+   *  Used by array-producing emitters (filterNeighbors, joinNeighbors,
+   *  getNeighborIndexesByTags, getNeighborsAttrByIndexes) to materialise
+   *  intermediate arrays without leaving the WASM module. The bump pointer
+   *  resets at the top of every cell iteration, so the size needs to fit the
+   *  PEAK concurrent allocation within one cell, not across cells. */
+  scratchOffset: number;
+  scratchBytes: number;
+
   /** Sentinel cell index used by constant boundary (-1 if torus). */
   sentinelIndex: number;
 }
@@ -185,6 +194,18 @@ export function computeMemoryLayout(
   const orderOffset = off;
   off += total * 4;
 
+  // Scratch region for per-cell array allocation (bump-pointer reset per
+  // iteration). Sized for: max neighborhood size × 8 bytes (worst-case f64
+  // element) × 32 concurrent arrays. With a floor of 4 KB so trivial graphs
+  // still get a usable scratch region. Bump-pointer resets per cell, so this
+  // bounds PEAK simultaneous arrays within one iteration, not lifetime.
+  off = alignTo(off, 8);
+  const scratchOffset = off;
+  let maxNbrSize = 0;
+  for (const n of neighborhoods) if (n.coords.length > maxNbrSize) maxNbrSize = n.coords.length;
+  const scratchBytes = Math.max(4096, maxNbrSize * 8 * 32);
+  off += scratchBytes;
+
   const sentinelIndex = boundaryTreatment === 'constant' ? total : -1;
 
   const totalBytes = off;
@@ -197,6 +218,7 @@ export function computeMemoryLayout(
     modelAttrOffset,
     indicatorOffset, indicatorIds,
     rngStateOffset, activeViewerOffset, orderOffset,
+    scratchOffset, scratchBytes,
     sentinelIndex,
   };
 }

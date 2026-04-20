@@ -4,7 +4,7 @@
  * Pre-computes neighbor index tables for zero-cost boundary handling.
  */
 
-import { instantiateWasmStep } from '../../modeler/vpl/compiler/wasm/compile';
+import { instantiateWasmModule } from '../../modeler/vpl/compiler/wasm/compile';
 import { computeMemoryLayout, type MemoryLayout } from '../../modeler/vpl/compiler/wasm/layout';
 
 interface AttrDef {
@@ -37,6 +37,9 @@ interface InitMsg {
   /** Wave 2: optional pre-compiled WASM step bytes (compiled on main thread). */
   wasmStepBytes?: Uint8Array;
   wasmStepError?: string;
+  /** Names of every exported function in the WASM module — `step`,
+   *  `inputColor_<sanitisedMappingId>`, `outputMapping_<sanitisedMappingId>`. */
+  wasmExports?: string[];
   /** Compile-time viewer id -> int mapping (matches the WASM module's setColorViewer constants). */
   viewerIds?: Record<string, number>;
   /** Default useWasm flag (from model properties); user can flip via setUseWasm later. */
@@ -52,7 +55,7 @@ interface PaintMsg {
 }
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; viewerIds?: Record<string, number> }
+interface RecompileMsg { type: 'recompile'; stepCode: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number> }
 interface UpdateModelAttrsMsg { type: 'updateModelAttrs'; attrs: Record<string, number> }
 interface ImportImageMsg { type: 'importImage'; pixels: Uint8ClampedArray; mappingId: string; activeViewer: string }
 
@@ -185,7 +188,18 @@ let outputMappingFns: Array<{ mappingId: string; fn: Function }> = [];
 // module is rebuilt on every init/recompile because it imports the linear
 // memory and assumes the current attribute layout.
 let wasmStepFn: ((total: number) => void) | null = null;
+// Per-mapping WASM exports. Keys are SANITISED mapping ids (matching the
+// `inputColor_<id>` / `outputMapping_<id>` export names the compiler emits).
+let wasmInputColorFns: Record<string, (idx: number, r: number, g: number, b: number) => void> = {};
+let wasmOutputMappingFns: Record<string, (total: number) => void> = {};
 let useWasm = false;
+
+/** Mirror of the compiler's sanitiseExportName: drop everything except
+ *  [A-Za-z0-9_] so the export name is a valid JS identifier and we can match
+ *  it back to the mapping id at lookup time. */
+function sanitiseExportName(s: string): string {
+  return s.replace(/[^A-Za-z0-9_]/g, '_');
+}
 
 // Cached model attributes
 let cachedModelAttrs: Record<string, unknown> = {};
@@ -399,13 +413,32 @@ function buildCellArgs(idx: number): unknown[] {
 }
 
 /** Instantiate WASM bytes (compiled on main thread) against the current memory.
- *  Stores the resulting step function in wasmStepFn. */
-function tryInstantiateWasmStep(bytes: Uint8Array | undefined): void {
-  if (!bytes || bytes.length === 0 || !wasmMemory) { wasmStepFn = null; return; }
-  instantiateWasmStep({ bytes, minMemoryPages: 1, viewerIds: {} }, wasmMemory).then(
-    inst => { wasmStepFn = inst.step; },
+ *  Splits the resulting exports into wasmStepFn / wasmInputColorFns / wasmOutputMappingFns. */
+function tryInstantiateWasmModule(bytes: Uint8Array | undefined, exportNames: string[] | undefined): void {
+  wasmStepFn = null;
+  wasmInputColorFns = {};
+  wasmOutputMappingFns = {};
+  if (!bytes || bytes.length === 0 || !wasmMemory) return;
+  const names = exportNames ?? [];
+  instantiateWasmModule({ bytes, minMemoryPages: 1, viewerIds: {}, exports: names }, wasmMemory).then(
+    inst => {
+      const stepExp = inst.exports['step'];
+      if (typeof stepExp === 'function') wasmStepFn = stepExp as (t: number) => void;
+      for (const [name, fn] of Object.entries(inst.exports)) {
+        if (name === 'step') continue;
+        if (name.startsWith('inputColor_')) {
+          const sanitised = name.slice('inputColor_'.length);
+          wasmInputColorFns[sanitised] = fn as (idx: number, r: number, g: number, b: number) => void;
+        } else if (name.startsWith('outputMapping_')) {
+          const sanitised = name.slice('outputMapping_'.length);
+          wasmOutputMappingFns[sanitised] = fn as (t: number) => void;
+        }
+      }
+    },
     err => {
       wasmStepFn = null;
+      wasmInputColorFns = {};
+      wasmOutputMappingFns = {};
       self.postMessage({ type: 'error', message: '[wasm] instantiate failed: ' + (err?.message || err) });
     },
   );
@@ -578,8 +611,23 @@ function compileFns(
   }
 }
 
-/** Run the Output Mapping color pass for the active viewer (if available) */
+/** Run the Output Mapping color pass for the active viewer (if available).
+ *  WASM mode: uses wasmOutputMappingFns. Sync mode + WASM also requires the
+ *  same readAttrs->attrsA pre-step normalisation as runStep does, because the
+ *  output mapping reads from the baked-in attrReadOffset. */
 function runColorPass(): void {
+  const sanitised = sanitiseExportName(activeViewer);
+  if (useWasm && wasmOutputMappingFns[sanitised]) {
+    if (updateMode !== 'asynchronous' && readAttrs !== attrsA) {
+      for (const attr of cellAttrs) {
+        (attrsA[attr.id] as Uint8Array).set(readAttrs[attr.id] as Uint8Array);
+      }
+      readAttrs = attrsA;
+      writeAttrs = attrsB;
+    }
+    wasmOutputMappingFns[sanitised]!(total);
+    return;
+  }
   const omFn = outputMappingFns.find(f => f.mappingId === activeViewer);
   if (omFn) omFn.fn(...buildLoopArgs());
 }
@@ -695,7 +743,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       syncActiveViewerToMemory();
       compileFns(msg.stepCode, msg.inputColorCodes, msg.outputMappingCodes || []);
       useWasm = !!msg.useWasm && !!msg.wasmStepBytes && !msg.wasmStepError;
-      tryInstantiateWasmStep(msg.wasmStepBytes);
+      tryInstantiateWasmModule(msg.wasmStepBytes, msg.wasmExports);
       if (msg.wasmStepError && msg.useWasm) {
         self.postMessage({ type: 'error', message: '[wasm] compile failed, falling back to JS: ' + msg.wasmStepError });
       }
@@ -721,12 +769,34 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       const icEntry = msg.mappingId
         ? inputColorFns.find(f => f.mappingId === msg.mappingId)
         : inputColorFns[0];
+      const wasmIcKey = msg.mappingId ? sanitiseExportName(msg.mappingId) : '';
+      const wasmIcFn = (useWasm && wasmIcKey && wasmInputColorFns[wasmIcKey]) || null;
+      // Pre-paint normalisation for WASM (sync mode): InputColor compiles the
+      // same copy-line preamble as step, but it reads from attrReadOffset.
+      const isSync = updateMode !== 'asynchronous';
+      if (wasmIcFn && isSync && readAttrs !== attrsA) {
+        for (const attr of cellAttrs) {
+          (attrsA[attr.id] as Uint8Array).set(readAttrs[attr.id] as Uint8Array);
+        }
+        readAttrs = attrsA;
+        writeAttrs = attrsB;
+      }
 
       for (const c of msg.cells) {
         if (c.row < 0 || c.row >= height || c.col < 0 || c.col >= width) continue;
         const idx = c.row * width + c.col;
 
-        if (icEntry?.fn) {
+        if (wasmIcFn) {
+          // WASM InputColor writes via baked-in attrWriteOffset.
+          wasmIcFn(idx, c.r, c.g, c.b);
+          if (isSync) {
+            // Sync mode: also copy the per-cell write back to read so the next
+            // paint / step sees it. (Async shares one buffer so this is a no-op.)
+            for (const attr of cellAttrs) {
+              readAttrs[attr.id]![idx] = writeAttrs[attr.id]![idx]!;
+            }
+          }
+        } else if (icEntry?.fn) {
           // InputColor writes to writeAttrs (via w_<attr>[idx])
           // We need to also update readAttrs so the next step sees the change
           icEntry.fn(c.r, c.g, c.b, ...buildCellArgs(idx));
@@ -780,7 +850,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         syncActiveViewerToMemory();
       }
       compileFns(msg.stepCode, msg.inputColorCodes, (msg as RecompileMsg).outputMappingCodes || []);
-      tryInstantiateWasmStep((msg as RecompileMsg).wasmStepBytes);
+      tryInstantiateWasmModule((msg as RecompileMsg).wasmStepBytes, (msg as RecompileMsg).wasmExports);
       if ((msg as RecompileMsg).wasmStepError) {
         self.postMessage({ type: 'error', message: '[wasm] recompile failed, falling back to JS: ' + (msg as RecompileMsg).wasmStepError });
       }
@@ -814,16 +884,35 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       const icEntry = msg.mappingId
         ? inputColorFns.find(f => f.mappingId === msg.mappingId)
         : inputColorFns[0];
-      if (!icEntry?.fn) break;
+      const wasmIcKey = msg.mappingId ? sanitiseExportName(msg.mappingId) : '';
+      const wasmIcFn = (useWasm && wasmIcKey && wasmInputColorFns[wasmIcKey]) || null;
+      if (!wasmIcFn && !icEntry?.fn) break;
+      const isSync = updateMode !== 'asynchronous';
+      if (wasmIcFn && isSync && readAttrs !== attrsA) {
+        for (const attr of cellAttrs) {
+          (attrsA[attr.id] as Uint8Array).set(readAttrs[attr.id] as Uint8Array);
+        }
+        readAttrs = attrsA;
+        writeAttrs = attrsB;
+      }
       const pixels = msg.pixels as Uint8ClampedArray;
       for (let idx = 0; idx < total; idx++) {
         const r = pixels[idx * 4]!;
         const g = pixels[idx * 4 + 1]!;
         const b = pixels[idx * 4 + 2]!;
-        icEntry.fn(r, g, b, ...buildCellArgs(idx));
-        // Copy write→read so state is visible on next step
-        for (const attr of cellAttrs) {
-          readAttrs[attr.id]![idx] = writeAttrs[attr.id]![idx]!;
+        if (wasmIcFn) {
+          wasmIcFn(idx, r, g, b);
+          if (isSync) {
+            for (const attr of cellAttrs) {
+              readAttrs[attr.id]![idx] = writeAttrs[attr.id]![idx]!;
+            }
+          }
+        } else if (icEntry?.fn) {
+          icEntry.fn(r, g, b, ...buildCellArgs(idx));
+          // Copy write→read so state is visible on next step
+          for (const attr of cellAttrs) {
+            readAttrs[attr.id]![idx] = writeAttrs[attr.id]![idx]!;
+          }
         }
       }
       // Update display: prefer Output Mapping color pass (no generation advance)
