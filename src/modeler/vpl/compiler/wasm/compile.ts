@@ -35,6 +35,7 @@ import {
   WasmEmitter, ArrayRef, LocalRef, ValueRef, pushValueAs,
 } from './emitter';
 import type { MemoryLayout } from './layout';
+import { classifyLoopInvariant } from '../loopInvariant';
 
 export interface WasmCompileResult {
   bytes: Uint8Array;
@@ -150,6 +151,16 @@ interface WasmCompileCtx {
    *  outputs), it's recorded here so consumers see the param value directly
    *  without going through compileValueNode. */
   paramRefs: Map<string, Map<string, LocalRef>>;
+  /** Set of value nodes classified as loop-invariant (their result doesn't
+   *  depend on the cell index). Their emit code is hoisted to a single emission
+   *  before the cell loop, with the resulting LocalRef preserved across cells.
+   *  Shared classifier with the JS compiler in `compiler/loopInvariant.ts`. */
+  loopInvariant: Set<string>;
+  /** Per-step viewer-active i32 locals: mappingId → local idx holding
+   *  `activeViewer == viewerIds[mappingId] ? 1 : 0`. Computed ONCE in the
+   *  function preamble and reused by every SetColorViewer per cell. Mirrors
+   *  the JS compiler's `_isV_<safeId>` constants. */
+  viewerLocals: Map<string, number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -2403,11 +2414,18 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
       // Viewer not in our compile-time map — skip silently (as if "if (active === unknown)" is false)
       return true;
     }
-    // if (activeViewer == viewerInt) { write rgba }
-    ctx.emitter.i32Const(0);
-    ctx.emitter.i32Load(ctx.layout.activeViewerOffset, 2);
-    ctx.emitter.i32Const(viewerInt);
-    ctx.emitter.op(OP_I32_EQ);
+    // Per-step hoist: viewerLocals[viewerId] holds (activeViewer == viewerInt).
+    // Falls back to inline load+compare if no cached local exists (e.g. a
+    // viewer id not pre-hoisted), so this stays safe under any compile path.
+    const cachedLocal = ctx.viewerLocals.get(viewerId);
+    if (cachedLocal !== undefined) {
+      ctx.emitter.localGet(cachedLocal);
+    } else {
+      ctx.emitter.i32Const(0);
+      ctx.emitter.i32Load(ctx.layout.activeViewerOffset, 2);
+      ctx.emitter.i32Const(viewerInt);
+      ctx.emitter.op(OP_I32_EQ);
+    }
     ctx.emitter.ifThen(() => {
       // Address base for color writes: i*4 + colorsOffset
       const colorByte = ctx.emitter.allocLocal(I32);
@@ -3185,6 +3203,7 @@ function compileEntry(
   inputToSource: Map<string, { nodeId: string; portId: string }>,
   inputToSources: Map<string, Array<{ nodeId: string; portId: string }>>,
   flowOutputToTargets: Map<string, Array<{ nodeId: string; portId: string }>>,
+  loopInvariant: Set<string>,
 ): { body: Uint8Array; errors: string[] } {
   const emitter = new WasmEmitter(opts.numParams);
 
@@ -3228,7 +3247,15 @@ function compileEntry(
     errors: [],
     scratchTopLocal,
     paramRefs,
+    loopInvariant,
+    viewerLocals: new Map(),
   };
+
+  // Snapshot of value-local refs that are loop-invariant. Populated after the
+  // pre-loop emission pass. Per-cell emitBody clears valueLocals (cell-dependent
+  // refs would be stale) then restores these so subsequent compileValueNode
+  // calls hit the cache and skip re-emission.
+  const invariantSnapshot = new Map<string, Map<string, LocalRef>>();
 
   const emitBody = () => {
     // Reset per-cell caches and scratch pointer
@@ -3247,11 +3274,21 @@ function compileEntry(
       ctx.paramRefs.set(opts.entry.id, m);
     }
 
-    // Copy lines (sync mode only — async uses single buffer; only meaningful for step)
-    if (opts.emitCopyLines && !layout.isAsync) {
+    // Restore loop-invariant cache so consumers in this cell iteration hit the
+    // pre-loop-emitted locals instead of triggering fresh emission.
+    for (const [nodeId, ports] of invariantSnapshot) {
+      let m = ctx.valueLocals.get(nodeId);
+      if (!m) { m = new Map(); ctx.valueLocals.set(nodeId, m); }
+      for (const [pid, ref] of ports) m.set(pid, ref);
+    }
+
+    // Per-cell copy (sync mode only). For loop entries (Step), this is hoisted
+    // to a single bulk memory.copy before the loop — see emitBulkCopyLines below.
+    // For single-shot entries (InputColor), keep the per-cell copy: only one
+    // cell is touched per call, so a bulk copy of the whole grid would be wrong.
+    if (!opts.hasLoop && opts.emitCopyLines && !layout.isAsync) {
       for (const id of Object.keys(layout.attrType)) {
         const a = getAttr(layout, id)!;
-        // write[i] = read[i]
         pushCellByteOffset(ctx, a.itemBytes);  // store address
         pushCellByteOffset(ctx, a.itemBytes);  // load address
         if (a.type === 'bool') {
@@ -3271,7 +3308,132 @@ function compileEntry(
     compileFlowChain(opts.entry.id, 'do', ctx);
   };
 
+  // Bulk r→w copy for loop entries in sync mode. Replaces N per-cell load/store
+  // pairs with one memory.copy per attr (engine-level memcpy, often SIMD).
+  // Cellrules then overwrite specific bytes inside the loop; untouched cells
+  // retain the prior generation's value, matching the previous semantics exactly.
+  // The constant-boundary sentinel cell (at index `total`) is preserved because
+  // we copy `cellsPerAttr` elements including the sentinel slot.
+  const cellsPerAttr = layout.sentinelIndex >= 0 ? layout.total + 1 : layout.total;
+  const emitBulkCopyLines = () => {
+    for (const id of Object.keys(layout.attrType)) {
+      const a = getAttr(layout, id)!;
+      // memory.copy stack signature: [dst, src, n]
+      emitter.i32Const(a.writeOffset);
+      emitter.i32Const(a.readOffset);
+      emitter.i32Const(cellsPerAttr * a.itemBytes);
+      emitter.memoryCopy();
+    }
+  };
+
+  // Hoist loop-invariant value nodes to a single emission BEFORE the cell
+  // loop. Their LocalRefs are snapshotted into invariantSnapshot so per-cell
+  // emitBody can re-populate valueLocals after the cache clear. For non-loop
+  // entries (InputColor) this is a no-op since `emitBody` runs once anyway.
+  const emitInvariantValueNodes = () => {
+    const visited = new Set<string>();
+    const visitValue = (nodeId: string) => {
+      if (visited.has(nodeId)) return;
+      visited.add(nodeId);
+      const node = ctx.nodeMap.get(nodeId);
+      if (!node) return;
+      if (loopInvariant.has(nodeId)) {
+        const t = node.data.nodeType;
+        if (VALUE_NODE_EMITTERS[t]) compileValueNode(nodeId, ctx);
+      } else {
+        const def = getNodeDef(node.data.nodeType);
+        if (!def) return;
+        for (const port of def.ports) {
+          if (port.kind !== 'input' || port.category !== 'value') continue;
+          if (port.isArray) continue;
+          const src = ctx.inputToSource.get(`${nodeId}:${port.id}`);
+          if (src) visitValue(src.nodeId);
+          const srcs = ctx.inputToSources.get(`${nodeId}:${port.id}`);
+          if (srcs) for (const s of srcs) visitValue(s.nodeId);
+        }
+      }
+    };
+    const visitFlow = (srcId: string, portId: string, seen: Set<string>) => {
+      const targets = ctx.flowOutputToTargets.get(`${srcId}:${portId}`) ?? [];
+      for (const t of targets) {
+        const node = ctx.nodeMap.get(t.nodeId);
+        if (!node) continue;
+        const def = getNodeDef(node.data.nodeType);
+        if (!def) continue;
+        for (const port of def.ports) {
+          if (port.kind !== 'input' || port.category !== 'value') continue;
+          if (port.isArray) continue;
+          const src = ctx.inputToSource.get(`${t.nodeId}:${port.id}`);
+          if (src) visitValue(src.nodeId);
+          const srcs = ctx.inputToSources.get(`${t.nodeId}:${port.id}`);
+          if (srcs) for (const s of srcs) visitValue(s.nodeId);
+        }
+        const flowKey = `${t.nodeId}:`;
+        if (seen.has(flowKey)) continue;
+        seen.add(flowKey);
+        switch (node.data.nodeType) {
+          case 'conditional':
+            visitFlow(t.nodeId, 'then', seen);
+            visitFlow(t.nodeId, 'else', seen);
+            break;
+          case 'sequence':
+            visitFlow(t.nodeId, 'first', seen);
+            visitFlow(t.nodeId, 'then', seen);
+            break;
+          case 'loop':
+            visitFlow(t.nodeId, 'body', seen);
+            break;
+          case 'switch': {
+            const caseCount = Number(node.data.config.caseCount) || 0;
+            for (let ci = 0; ci < caseCount; ci++) {
+              visitFlow(t.nodeId, `case_${ci}`, seen);
+              const caseValSrc = ctx.inputToSource.get(`${t.nodeId}:case_${ci}_val`);
+              if (caseValSrc) visitValue(caseValSrc.nodeId);
+              const caseCondSrc = ctx.inputToSource.get(`${t.nodeId}:case_${ci}_cond`);
+              if (caseCondSrc) visitValue(caseCondSrc.nodeId);
+            }
+            visitFlow(t.nodeId, 'default', seen);
+            const valSrc = ctx.inputToSource.get(`${t.nodeId}:value`);
+            if (valSrc) visitValue(valSrc.nodeId);
+            break;
+          }
+        }
+      }
+    };
+    visitFlow(opts.entry.id, 'do', new Set());
+
+    // Snapshot every invariant entry currently in valueLocals so per-cell
+    // emitBody can restore them after its cache clear.
+    for (const [nodeId, ports] of ctx.valueLocals) {
+      if (!loopInvariant.has(nodeId)) continue;
+      const m = new Map<string, LocalRef>();
+      for (const [pid, ref] of ports) m.set(pid, ref);
+      invariantSnapshot.set(nodeId, m);
+    }
+  };
+
+  // Per-step hoist of activeViewer comparisons. Each attribute-to-color
+  // mapping gets one i32 local holding (activeViewer == viewerInt). SetColorViewer's
+  // emitter reads the cached local instead of re-loading + re-comparing per cell.
+  // Mirrors the JS compiler's `_isV_<safeId(mappingId)>` constants.
+  const emitViewerHoist = () => {
+    for (const [mappingId, viewerInt] of Object.entries(viewerIds)) {
+      const local = emitter.allocLocal(I32);
+      emitter.i32Const(0);
+      emitter.i32Load(layout.activeViewerOffset, 2);
+      emitter.i32Const(viewerInt);
+      emitter.op(OP_I32_EQ);
+      emitter.localSet(local);
+      ctx.viewerLocals.set(mappingId, local);
+    }
+  };
+
   if (opts.hasLoop) {
+    if (opts.emitCopyLines && !layout.isAsync) {
+      emitBulkCopyLines();
+    }
+    emitViewerHoist();
+    emitInvariantValueNodes();
     emitter.i32Const(0);
     emitter.localSet(outerCounter);
     emitter.block(() => {
@@ -3305,7 +3467,11 @@ function compileEntry(
       });
     });
   } else {
-    // Single-shot (InputColor): idx is param 0 directly.
+    // Single-shot (InputColor): idx is param 0 directly. Viewer hoist still
+    // emits in case the brush flow contains a SetColorViewer (uncommon but
+    // legal). Without it the per-cell SetColorViewer would fall back to the
+    // inline load+compare path.
+    emitViewerHoist();
     emitBody();
   }
 
@@ -3399,6 +3565,10 @@ export function compileGraphWasm(
     return { bytes: new Uint8Array(), minMemoryPages: 1, error: 'no Step node', viewerIds, exports: [] };
   }
 
+  // Loop-invariant classification — shared with the JS compiler so both
+  // targets agree on which value nodes can be hoisted out of the cell loop.
+  const loopInvariant = classifyLoopInvariant(graphNodes, inputToSource);
+
   // Build each entry function body
   const exportEntries: Array<{ name: string; typeIdx: number; body: Uint8Array }> = [];
   const allErrors: string[] = [];
@@ -3413,7 +3583,7 @@ export function compileGraphWasm(
       emitCopyLines: true,
       useOrderArrayInAsync: true,
     },
-    layout, viewerIds, model, nodeMap, inputToSource, inputToSources, flowOutputToTargets,
+    layout, viewerIds, model, nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant,
   );
   allErrors.push(...stepRes.errors);
   exportEntries.push({ name: 'step', typeIdx: TYPE_IDX_TOTAL, body: stepRes.body });
@@ -3430,7 +3600,7 @@ export function compileGraphWasm(
         emitCopyLines: false,
         useOrderArrayInAsync: false,
       },
-      layout, viewerIds, model, nodeMap, inputToSource, inputToSources, flowOutputToTargets,
+      layout, viewerIds, model, nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant,
     );
     allErrors.push(...omRes.errors);
     exportEntries.push({ name: `outputMapping_${sanitiseExportName(mappingId)}`, typeIdx: TYPE_IDX_TOTAL, body: omRes.body });
@@ -3451,7 +3621,7 @@ export function compileGraphWasm(
         // Param indexes match the function signature: 0=idx, 1=r, 2=g, 3=b.
         paramOutputs: { r: 1, g: 2, b: 3 },
       },
-      layout, viewerIds, model, nodeMap, inputToSource, inputToSources, flowOutputToTargets,
+      layout, viewerIds, model, nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant,
     );
     allErrors.push(...icRes.errors);
     exportEntries.push({ name: `inputColor_${sanitiseExportName(mappingId)}`, typeIdx: TYPE_IDX_IDX_RGB, body: icRes.body });

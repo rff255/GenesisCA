@@ -269,6 +269,14 @@ export const OP_F64_CONVERT_I32_U = byte(0xb8);
 // Select (i32-cond, picks val1 if cond non-zero, val2 otherwise)
 export const OP_SELECT = byte(0x1b);
 
+// Bulk memory: memory.copy. Stack: [dst, src, n] -> []. Copies n bytes from src
+// to dst within memory 0. Encoded as the 0xfc prefix + uleb128 op (10) + two
+// memory indices (both 0 for our single memory). Bulk-memory proposal is
+// broadly supported (V8 ≥ 75, Firefox ≥ 79, Safari ≥ 15).
+export function opMemoryCopy(): Uint8Array {
+  return concat(byte(0xfc), leb128u(10), byte(0x00), byte(0x00));
+}
+
 // Memory limits descriptor (no max): 0x00 ++ leb128u(min)
 export function memLimits(minPages: number): Uint8Array {
   return concat(byte(0x00), leb128u(minPages));

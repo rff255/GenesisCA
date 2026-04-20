@@ -15,7 +15,7 @@ import {
   buildFuncBody, byte, concat, leb128s, leb128u, localsRun,
   opBlock, opBr, opBrIf, opF64Const, opF64Load, opF64Store, opI32Const,
   opI32Load, opI32Load8U, opI32Store, opI32Store8, opIf, opLocalGet,
-  opLocalSet, opLocalTee, opLoop,
+  opLocalSet, opLocalTee, opLoop, opMemoryCopy,
   OP_ELSE, OP_END, OP_F64_CONVERT_I32_S, OP_I32_TRUNC_F64_S,
 } from './encoder';
 
@@ -105,6 +105,9 @@ export class WasmEmitter {
   i32ToF64(): void { this.emit(OP_F64_CONVERT_I32_S); }
   /** Convert top-of-stack f64 → i32 (signed truncation). */
   f64ToI32(): void { this.emit(OP_I32_TRUNC_F64_S); }
+
+  /** memory.copy — pops dst, src, n from the stack (in push order) and copies n bytes. */
+  memoryCopy(): void { this.emit(opMemoryCopy()); }
 }
 
 /** A reference to a value held in a local. */

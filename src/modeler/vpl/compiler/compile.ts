@@ -2,6 +2,9 @@ import type { GraphNode, GraphEdge, CAModel } from '../../../model/types';
 import { getNodeDef } from '../nodes/registry';
 import { parseHandleId } from '../types';
 import type { PortDef } from '../types';
+import { classifyLoopInvariant } from './loopInvariant';
+import { safeId } from './identifierSafe';
+import { detectFusableAggregates, type FusionResult } from './fusion';
 
 /**
  * Get the inline widget value for an unconnected port.
@@ -76,6 +79,11 @@ function isMultiOutput(data: { nodeType: string; config: Record<string, string |
 
 interface RootCompileResult {
   valueLines: string[];
+  /** Loop-invariant value lines emitted ABOVE the cell loop (one-time work per
+   *  step). Populated when a node is classified loop-invariant — typically
+   *  getModelAttribute reads and arithmetic over them. Saves N redundant per-cell
+   *  hash lookups per step where N = grid size. */
+  preLoopValueLines: string[];
   flowLines: string[];
   /** Nodes that need pre-loop declarations.
    *  nbrId: sized array for neighborhood scratch (GetNeighborsAttribute).
@@ -96,6 +104,40 @@ function scratchCtorForAttr(attrId: string | undefined, model: CAModel | undefin
     case 'tag': return 'Int32Array';
     case 'float': return 'Float64Array';
     default: return '';
+  }
+}
+
+/**
+ * Emit one fused gather+reduce loop for a `getNeighborsAttribute → aggregate`
+ * pair detected by the fusion pass. Replaces what would otherwise be two
+ * loops (gather into scratch, then reduce scratch) with one — for an N-neighbor
+ * aggregate this halves per-cell work and removes the scratch buffer entirely.
+ *
+ * The result is bound to `_v<aggId>` so any downstream consumer's `varName()`
+ * lookup resolves to the same identifier whether or not fusion happened.
+ */
+function buildFusedAggregateJS(aggId: string, op: string, nbrId: string, attrId: string): string {
+  const acc = `_v${aggId}`;
+  const i = `_v${aggId}_i`;
+  const nb = `_nb${aggId}`;
+  const sz = `nSz_${nbrId}`;
+  const head = `const ${nb} = idx * ${sz};`;
+  const elem = `r_${attrId}[nIdx_${nbrId}[${nb} + ${i}]]`;
+  switch (op) {
+    case 'product':
+      return `${head} let ${acc} = 1; for (let ${i} = 0; ${i} < ${sz}; ${i}++) ${acc} *= ${elem};`;
+    case 'max':
+      return `${head} let ${acc} = -Infinity; for (let ${i} = 0; ${i} < ${sz}; ${i}++) { const _v_${aggId}_e = ${elem}; if (_v_${aggId}_e > ${acc}) ${acc} = _v_${aggId}_e; }`;
+    case 'min':
+      return `${head} let ${acc} = Infinity; for (let ${i} = 0; ${i} < ${sz}; ${i}++) { const _v_${aggId}_e = ${elem}; if (_v_${aggId}_e < ${acc}) ${acc} = _v_${aggId}_e; }`;
+    case 'average':
+      return `${head} let _v${aggId}_s = 0; for (let ${i} = 0; ${i} < ${sz}; ${i}++) _v${aggId}_s += ${elem}; const ${acc} = ${sz} > 0 ? _v${aggId}_s / ${sz} : 0;`;
+    case 'and':
+      return `${head} let ${acc} = 1; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (!${elem}) { ${acc} = 0; break; }`;
+    case 'or':
+      return `${head} let ${acc} = 0; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (${elem}) { ${acc} = 1; break; }`;
+    default: // sum
+      return `${head} let ${acc} = 0; for (let ${i} = 0; ${i} < ${sz}; ${i}++) ${acc} += ${elem};`;
   }
 }
 
@@ -120,10 +162,13 @@ function compileRoot(
   inputToSource: Map<string, { nodeId: string; portId: string }>,
   inputToSources: Map<string, Array<{ nodeId: string; portId: string }>>,
   flowOutputToTargets: Map<string, Array<{ nodeId: string; portId: string }>>,
+  loopInvariant: Set<string>,
+  fusion: FusionResult,
   _model?: CAModel,
 ): RootCompileResult {
   const compiled = new Set<string>();
   const valueLines: string[] = [];
+  const preLoopValueLines: string[] = [];
   const scratchNodes: Array<{ scratchVarName: string; nbrId?: string; attrId?: string; initExpr?: string }> = [];
 
   function varName(sourceNodeId: string, sourcePortId: string): string {
@@ -488,6 +533,30 @@ function compileRoot(
       return `_v${nodeId}`;
     }
 
+    // Fused getNeighborsAttribute source: a single downstream aggregate has
+    // absorbed both the gather AND the reduce into one inlined loop. Skip
+    // scratch declaration and emit nothing here — the aggregate's emitter
+    // produces the fused code under its own variable name.
+    if (node.data.nodeType === 'getNeighborsAttribute' && fusion.skippedGather.has(nodeId)) {
+      return `_v${nodeId}`;
+    }
+
+    // Fused aggregate: emit one inlined loop that gathers + reduces in a
+    // single pass over the neighborhood. Bypasses the normal compile() path
+    // (which would consume `_scr_<srcId>` from the now-skipped gather).
+    if (node.data.nodeType === 'aggregate' && fusion.fusedAggregates.has(nodeId)) {
+      const srcId = fusion.fusedAggregates.get(nodeId)!;
+      const srcNode = nodeMap.get(srcId);
+      if (srcNode) {
+        const nbrId = (srcNode.data.config.neighborhoodId as string) || '_undef';
+        const attrId = (srcNode.data.config.attributeId as string) || '_undef';
+        const op = (node.data.config.operation as string) || 'sum';
+        const code = buildFusedAggregateJS(nodeId, op, nbrId, attrId);
+        valueLines.push('      ' + code.trimEnd());
+        return `_v${nodeId}`;
+      }
+    }
+
     // Track GetNeighborsAttribute nodes for scratch declaration
     if (node.data.nodeType === 'getNeighborsAttribute') {
       const nbrId = node.data.config.neighborhoodId as string || '_undef';
@@ -540,7 +609,14 @@ function compileRoot(
       ? { ...node.data.config, _indexesConnected: needsIndexes }
       : node.data.config;
     const code = def.compile(nodeId, compileConfig, inputVars);
-    if (code) valueLines.push('      ' + code.trimEnd());
+    if (code) {
+      // Loop-invariant nodes (e.g. modelAttrs reads + arithmetic over them)
+      // hoist out of the cell loop and emit once per step instead of per cell.
+      // Indentation for preLoopValueLines is two spaces because they live at
+      // function scope, not inside the four-space cell loop body.
+      if (loopInvariant.has(nodeId)) preLoopValueLines.push('  ' + code.trimEnd());
+      else valueLines.push('      ' + code.trimEnd());
+    }
 
     return `_v${nodeId}`;
   }
@@ -886,7 +962,7 @@ function compileRoot(
 
   compileFlowChain(rootNode.id, rootFlowPort, '      ');
 
-  return { valueLines, flowLines, scratchNodes };
+  return { valueLines, preLoopValueLines, flowLines, scratchNodes };
 }
 
 // ---------------------------------------------------------------------------
@@ -1084,21 +1160,62 @@ export function compileGraph(
   }
   preResolveIndicators(graphNodes);
   for (const def of (model.macroDefs || [])) preResolveIndicators(def.nodes);
+
+  // Loop-invariance classification: identifies value nodes whose result does
+  // not depend on the cell index (modelAttrs reads, getConstant, arithmetic
+  // over them). Their emissions hoist out of the cell loop, paying the cost
+  // once per step instead of once per cell. Shared with the WASM compiler so
+  // both targets agree on which nodes are hoistable.
+  const loopInvariant = classifyLoopInvariant(graphNodes, inputToSource);
+
+  // Single-consumer aggregate fusion: when a getNeighborsAttribute feeds
+  // exactly one downstream aggregate (sum/product/max/min/average/and/or),
+  // collapse the two-loop pattern (gather scratch + reduce) into one inlined
+  // loop. Halves work for the MNCA-style hot path (large neighborhoods).
+  // Shared with the WASM compiler.
+  const fusion = detectFusableAggregates(graphNodes, graphEdges, inputToSources);
+
   const { params: loopParams, cellAttrs } = buildLoopParams(model);
   const cellParams = buildCellParams(model);
 
-  // Generate attribute copy lines (previous → next generation)
-  // In async mode, r_ and w_ are the same buffer so copy lines are skipped
-  const copyLines = isAsync
+  // Sync mode: bulk-copy r→w ONCE before the loop (TypedArray.set dispatches to
+  // SIMD memcpy in V8). Replaces N per-cell stores with one engine call per attr.
+  // Cell rules then overwrite specific indices inside the loop; untouched cells
+  // retain the prior generation's value, matching the previous semantics exactly.
+  // Async mode: r_ and w_ are the same buffer so no copy needed.
+  const bulkCopyLines = isAsync
     ? []
-    : cellAttrs.map(a => `      w_${a.id}[idx] = r_${a.id}[idx];`);
+    : cellAttrs.map(a => `  w_${a.id}.set(r_${a.id});`);
+
+  // Per-step hoist of activeViewer comparisons. SetColorViewer compile() emits
+  // `if (_isV_<safeId(mappingId)>) { ... }`; the actual string compare happens
+  // ONCE here per mapping id, then per-cell branches do a cheap local read.
+  // We hoist for the union of (a) every mapping in the model and (b) every
+  // mapping id any setColorViewer node actually references — including inside
+  // macro defs — so a stale or non-model mapping id can't crash with an
+  // undefined identifier. The unused booleans cost one string compare per
+  // step — negligible.
+  const viewerIdsToHoist = new Set<string>();
+  for (const m of model.mappings || []) viewerIdsToHoist.add(m.id);
+  const collectViewerRefs = (nodes: GraphNode[]) => {
+    for (const n of nodes) {
+      if (n.data.nodeType === 'setColorViewer') {
+        viewerIdsToHoist.add((n.data.config.mappingId as string) || 'default');
+      }
+    }
+  };
+  collectViewerRefs(graphNodes);
+  for (const def of model.macroDefs || []) collectViewerRefs(def.nodes);
+  const viewerHoistLines = Array.from(viewerIdsToHoist).map(
+    id => `  const _isV_${safeId(id)} = activeViewer === ${JSON.stringify(id)};`,
+  );
 
   // --- Compile Step function (loop-wrapped) ---
   const stepNode = graphNodes.find(n => n.data.nodeType === 'step');
   let stepCode = '';
   if (stepNode) {
-    const { valueLines, flowLines, scratchNodes } = compileRoot(
-      stepNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, model,
+    const { valueLines, preLoopValueLines, flowLines, scratchNodes } = compileRoot(
+      stepNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, model,
     );
 
     // Scratch array declarations (before the loop)
@@ -1112,12 +1229,13 @@ export function compileGraph(
       stepCode = [
         `(function(${loopParams}) {`,
         ...scratchDecls,
+        ...viewerHoistLines,
+        ...preLoopValueLines,
         ...linked.preLoopDecls,
         '  let _rs = _rngState[0] || 0x12345678;',
         '  for (let _i = 0; _i < total; _i++) {',
         '    const idx = order[_i];',
         '    const colorIdx = idx * 4;',
-        ...copyLines,
         ...valueLines,
         '',
         ...flowLines,
@@ -1132,11 +1250,13 @@ export function compileGraph(
       stepCode = [
         `(function(${loopParams}) {`,
         ...scratchDecls,
+        ...bulkCopyLines,
+        ...viewerHoistLines,
+        ...preLoopValueLines,
         ...linked.preLoopDecls,
         '  let _rs = _rngState[0] || 0x12345678;',
         '  for (let idx = 0; idx < total; idx++) {',
         '    const colorIdx = idx * 4;',
-        ...copyLines,
         ...valueLines,
         '',
         ...flowLines,
@@ -1155,10 +1275,13 @@ export function compileGraph(
 
   for (const icNode of inputColorNodes) {
     const mappingId = icNode.data.config.mappingId as string || '';
-    const { valueLines, flowLines } = compileRoot(
-      icNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, model,
+    const { valueLines, preLoopValueLines, flowLines } = compileRoot(
+      icNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, model,
     );
-    // InputColor is called per-cell (for painted cells only), keep per-cell signature
+    // InputColor is called per-cell (for painted cells only), keep per-cell signature.
+    // preLoopValueLines (modelAttrs reads etc.) still go in the function preamble —
+    // they happen once per call, not per cell, but the same hoisting structure
+    // keeps the body free of redundant work.
     const icCopyLines = cellAttrs.map(a => `  w_${a.id}[idx] = r_${a.id}[idx];`);
     const code = [
       `(function(_r, _g, _b, ${cellParams}) {`,
@@ -1166,6 +1289,8 @@ export function compileGraph(
       ...icCopyLines,
       `  const _v${icNode.id}_r = _r; const _v${icNode.id}_g = _g; const _v${icNode.id}_b = _b;`,
       '  let _rs = _rngState[0] || 0x12345678;',
+      ...viewerHoistLines,
+      ...preLoopValueLines,
       '',
       ...valueLines,
       '',
@@ -1191,13 +1316,15 @@ export function compileGraph(
 
   for (const omNode of outputMappingNodes) {
     const mappingId = omNode.data.config.mappingId as string || '';
-    const { valueLines, flowLines, scratchNodes } = compileRoot(
-      omNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, model,
+    const { valueLines, preLoopValueLines, flowLines, scratchNodes } = compileRoot(
+      omNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, model,
     );
     const scratchDecls = scratchNodes.map(s => buildScratchDecl(s, model));
     const code = [
       `(function(${omParams}) {`,
       ...scratchDecls,
+      ...viewerHoistLines,
+      ...preLoopValueLines,
       '  let _rs = _rngState[0] || 0x12345678;',
       '  for (let idx = 0; idx < total; idx++) {',
       '    const colorIdx = idx * 4;',
