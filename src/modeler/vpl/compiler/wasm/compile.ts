@@ -1192,9 +1192,12 @@ function emitAggregateOrCount(
   let cmpHighRef: ValueRef | null = null;
   if (mode === 'count') {
     countCmpOp = (node.data.config.operation as string) || 'equals';
-    cmpRef = inputs['compare'] ?? { inline: true, value: 1, valtype: elemValtype };
+    // Default 0 matches the JS GroupCountingNode (inputs['compare'] || '0').
+    // Using 1 here was a long-standing parity bug — caused Wireworld and other
+    // models with unwired compare ports to count the wrong values.
+    cmpRef = inputs['compare'] ?? { inline: true, value: 0, valtype: elemValtype };
     if (countCmpOp === 'between' || countCmpOp === 'notBetween') {
-      cmpHighRef = inputs['compareHigh'] ?? { inline: true, value: 1, valtype: elemValtype };
+      cmpHighRef = inputs['compareHigh'] ?? { inline: true, value: 0, valtype: elemValtype };
     }
   }
 
@@ -1629,9 +1632,10 @@ function emitArrayAggregate(
   let cmpHighRef: ValueRef | null = null;
   if (mode === 'count') {
     countCmpOp = (node.data.config.operation as string) || 'equals';
-    cmpRef = inputs['compare'] ?? { inline: true, value: 1, valtype: elemValtype };
+    // Match JS GroupCountingNode default ('0' when compare is unwired).
+    cmpRef = inputs['compare'] ?? { inline: true, value: 0, valtype: elemValtype };
     if (countCmpOp === 'between' || countCmpOp === 'notBetween') {
-      cmpHighRef = inputs['compareHigh'] ?? { inline: true, value: 1, valtype: elemValtype };
+      cmpHighRef = inputs['compareHigh'] ?? { inline: true, value: 0, valtype: elemValtype };
     }
   }
 
