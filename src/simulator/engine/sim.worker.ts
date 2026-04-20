@@ -265,9 +265,14 @@ function initGrid(): void {
   wasmMemory = new WebAssembly.Memory({ initial: wasmLayout.pages });
   const buf = wasmMemory.buffer;
 
+  // Constant boundary needs a sentinel cell at index `total` that neighbour
+  // lookups for out-of-bounds positions point to. We always view total+1 cells
+  // for constant boundary so the sentinel slot lives in wasmMemory (shared
+  // with the WASM step), and total cells for torus.
+  const viewLen = boundaryTreatment === 'torus' ? total : (total + 1);
   for (const attr of cellAttrs) {
     const dv = defaultValue(attr);
-    const arrA = viewOver(attr.type, buf, wasmLayout.attrReadOffset[attr.id]!, total);
+    const arrA = viewOver(attr.type, buf, wasmLayout.attrReadOffset[attr.id]!, viewLen);
     if (dv !== 0) arrA.fill(dv);
     attrsA[attr.id] = arrA;
 
@@ -275,7 +280,7 @@ function initGrid(): void {
       // Async: single buffer — both read and write point to the same view (same offset)
       attrsB[attr.id] = arrA;
     } else {
-      const arrB = viewOver(attr.type, buf, wasmLayout.attrWriteOffset[attr.id]!, total);
+      const arrB = viewOver(attr.type, buf, wasmLayout.attrWriteOffset[attr.id]!, viewLen);
       if (dv !== 0) arrB.fill(dv);
       attrsB[attr.id] = arrB;
     }
@@ -346,30 +351,16 @@ function buildNeighborIndices(): void {
     nbrIndices[nbr.id] = indices;
   }
 
-  // For constant boundary: ensure read attrs have a sentinel cell at index `total`
-  // We extend each array by 1 with the default value
-  const isAsync = updateMode === 'asynchronous';
+  // Constant boundary: write the default value into the sentinel cell at
+  // index `total`. The +1 slot was already allocated as part of wasmMemory in
+  // initGrid (see viewLen), so we just need to set it; we don't replace the
+  // array (which would orphan the WASM module's view).
   if (boundaryTreatment !== 'torus') {
     for (const attr of cellAttrs) {
-      const oldA = attrsA[attr.id]!;
-      const newA = createTypedArray(attr.type, total + 1);
-      (newA as Uint8Array).set(oldA as Uint8Array);
-      newA[total] = defaultValue(attr);
-      attrsA[attr.id] = newA;
-
-      if (isAsync) {
-        // Async: single buffer — both point to same array
-        attrsB[attr.id] = newA;
-      } else {
-        const oldB = attrsB[attr.id]!;
-        const newB = createTypedArray(attr.type, total + 1);
-        (newB as Uint8Array).set(oldB as Uint8Array);
-        newB[total] = defaultValue(attr);
-        attrsB[attr.id] = newB;
-      }
+      const dv = defaultValue(attr);
+      attrsA[attr.id]![total] = dv;
+      if (attrsB[attr.id] !== attrsA[attr.id]) attrsB[attr.id]![total] = dv;
     }
-    readAttrs = attrsA;
-    writeAttrs = isAsync ? attrsA : attrsB;
   }
 }
 
@@ -802,6 +793,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       self.postMessage({ type: 'useWasmStatus', enabled: useWasm, ready: wasmStepFn !== null });
       break;
     }
+
 
     case 'updateModelAttrs': {
       for (const [key, val] of Object.entries(msg.attrs as Record<string, number>)) {

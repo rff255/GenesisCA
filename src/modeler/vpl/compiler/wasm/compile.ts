@@ -595,19 +595,27 @@ function emitAggregateOrCount(
   inputs: Record<string, ValueRef | undefined>,
   mode: 'aggregate' | 'count' | 'groupOperator',
 ): LocalRef | null {
-  // Find the source node feeding the input port
+  // Find the sources feeding the input port. Two shapes are supported:
+  //   1) Single getNeighborsAttribute → loop over the neighbor index table.
+  //   2) N scalar sources → each compiles to one value; combine sequentially.
+  // A getCellAttribute / getModelAttribute / etc. as a single source is the
+  // degenerate scalar case (loop iterates once).
   const portKey = `${node.id}:values`;
   const sources = ctx.inputToSources.get(portKey) ?? [];
-  if (sources.length !== 1) {
-    ctx.errors.push(`${mode}: only single-source supported in WASM (got ${sources.length})`);
+  if (sources.length === 0) {
+    ctx.errors.push(`${mode}: no sources connected to "values" port`);
     return null;
   }
-  const src = sources[0]!;
-  const srcNode = ctx.nodeMap.get(src.nodeId);
-  if (!srcNode || srcNode.data.nodeType !== 'getNeighborsAttribute') {
-    ctx.errors.push(`${mode}: WASM only supports getNeighborsAttribute as source`);
-    return null;
+  const firstSrc = sources[0]!;
+  const firstSrcNode = ctx.nodeMap.get(firstSrc.nodeId);
+  const isNbrPath = sources.length === 1
+    && firstSrcNode?.data.nodeType === 'getNeighborsAttribute';
+
+  if (!isNbrPath) {
+    return emitScalarAggregate(ctx, node, sources, mode);
   }
+
+  const srcNode = firstSrcNode!;
   const nbrId = srcNode.data.config.neighborhoodId as string;
   const attrId = srcNode.data.config.attributeId as string;
   const nbr = getNbr(ctx.layout, nbrId);
@@ -786,6 +794,182 @@ function emitAggregateOrCount(
   if (op === 'average') {
     ctx.emitter.localGet(accLocal);
     ctx.emitter.f64Const(nbr.size || 1);
+    ctx.emitter.op(OP_F64_DIV);
+    ctx.emitter.localSet(accLocal);
+  }
+
+  return { localIdx: accLocal, valtype: accValtype };
+}
+
+/**
+ * Multi-source aggregate: each source is a scalar value (or itself an array,
+ * but for now we only support scalars here — getNeighborsAttribute as one of
+ * many sources isn't yet flattened). Each scalar is computed via
+ * compileValueNode and combined into a single accumulator using the operation.
+ *
+ * Used when an aggregate / groupCounting / groupOperator node has multiple
+ * incoming edges on its `values` (isArray) port. The single-source path with
+ * a getNeighborsAttribute source keeps using the cell-loop optimisation in
+ * the main `emitAggregateOrCount`.
+ */
+function emitScalarAggregate(
+  ctx: WasmCompileCtx,
+  node: GraphNode,
+  sources: Array<{ nodeId: string; portId: string }>,
+  mode: 'aggregate' | 'count' | 'groupOperator',
+): LocalRef | null {
+  // Resolve each source up-front. compileValueNode caches in valueLocals so
+  // re-emitting is a no-op if the value was already hoisted.
+  const sourceRefs: LocalRef[] = [];
+  for (const s of sources) {
+    const r = compileValueNode(s.nodeId, ctx);
+    if (!r || r.localIdx < 0) {
+      ctx.errors.push(`${mode}: scalar source ${s.nodeId} did not produce a usable value`);
+      return null;
+    }
+    sourceRefs.push(r);
+  }
+
+  // Determine op
+  let op: string;
+  if (mode === 'count') {
+    op = 'count';
+  } else {
+    op = (node.data.config.operation as string) || 'sum';
+    if (op === 'mul') op = 'product';
+    if (op === 'mean') op = 'average';
+    if (op === 'random') {
+      ctx.errors.push('groupOperator random pick: not yet WASM-supported');
+      return null;
+    }
+  }
+
+  // Promote everything to f64 for arithmetic, i32 for and/or/count
+  const anyFloat = sourceRefs.some(r => r.valtype === F64);
+  const accValtype: ValType = (mode === 'count' || op === 'and' || op === 'or') ? I32 : (anyFloat ? F64 : F64);
+  const accLocal = ctx.emitter.allocLocal(accValtype);
+
+  // Initialise accumulator
+  if (mode === 'count') ctx.emitter.i32Const(0);
+  else if (op === 'sum' || op === 'average') ctx.emitter.f64Const(0);
+  else if (op === 'product') ctx.emitter.f64Const(1);
+  else if (op === 'min') ctx.emitter.f64Const(Infinity);
+  else if (op === 'max') ctx.emitter.f64Const(-Infinity);
+  else if (op === 'and') ctx.emitter.i32Const(1);
+  else if (op === 'or') ctx.emitter.i32Const(0);
+  else { ctx.errors.push(`scalarAggregate: unsupported op ${op}`); return null; }
+  ctx.emitter.localSet(accLocal);
+
+  // For count mode, build the comparison setup once
+  let countCmpOp = 'equals';
+  let cmpRef: ValueRef | null = null;
+  let cmpHighRef: ValueRef | null = null;
+  let elemValtype: ValType = anyFloat ? F64 : I32;
+  if (mode === 'count') {
+    countCmpOp = (node.data.config.operation as string) || 'equals';
+    cmpRef = ((): ValueRef => {
+      const e = (ctx.inputToSource.get(`${node.id}:compare`));
+      if (e) {
+        const r = compileValueNode(e.nodeId, ctx);
+        if (r) { elemValtype = r.valtype; return r; }
+      }
+      return { inline: true, value: 1, valtype: elemValtype };
+    })();
+    if (countCmpOp === 'between' || countCmpOp === 'notBetween') {
+      const e = ctx.inputToSource.get(`${node.id}:compareHigh`);
+      if (e) {
+        const r = compileValueNode(e.nodeId, ctx);
+        if (r) cmpHighRef = r;
+      }
+      if (!cmpHighRef) cmpHighRef = { inline: true, value: 1, valtype: elemValtype };
+    }
+  }
+  const lo = (node.data.config.lowOp as string) === '>' ? '>' : '>=';
+  const hi = (node.data.config.highOp as string) === '<' ? '<' : '<=';
+
+  // Combine each source
+  for (const ref of sourceRefs) {
+    if (mode === 'count') {
+      // Stash this source's value, compare, conditionally bump count
+      const elemLocal = ctx.emitter.allocLocal(elemValtype);
+      pushValueAs(ctx.emitter, ref, elemValtype);
+      ctx.emitter.localSet(elemLocal);
+      const emitCmp = (op2: string, ref2: ValueRef) => {
+        ctx.emitter.localGet(elemLocal);
+        pushValueAs(ctx.emitter, ref2, elemValtype);
+        if (elemValtype === F64) ctx.emitter.op(cmpToF64Op(op2));
+        else ctx.emitter.op(cmpToI32Op(op2));
+      };
+      switch (countCmpOp) {
+        case 'notEquals': emitCmp('!=', cmpRef!); break;
+        case 'greater':   emitCmp('>',  cmpRef!); break;
+        case 'lesser':    emitCmp('<',  cmpRef!); break;
+        case 'between':
+          emitCmp(lo, cmpRef!);
+          emitCmp(hi, cmpHighRef!);
+          ctx.emitter.op(OP_I32_AND);
+          break;
+        case 'notBetween':
+          emitCmp(lo, cmpRef!);
+          emitCmp(hi, cmpHighRef!);
+          ctx.emitter.op(OP_I32_AND);
+          ctx.emitter.op(OP_I32_EQZ);
+          break;
+        default: emitCmp('==', cmpRef!); break;
+      }
+      ctx.emitter.ifThen(() => {
+        ctx.emitter.localGet(accLocal);
+        ctx.emitter.i32Const(1);
+        ctx.emitter.op(OP_I32_ADD);
+        ctx.emitter.localSet(accLocal);
+      });
+    } else {
+      // Push the source value (as f64 for numeric ops, i32 for and/or)
+      pushValueAs(ctx.emitter, ref, accValtype);
+      // Combine with accumulator
+      switch (op) {
+        case 'sum':
+        case 'average':
+          ctx.emitter.localGet(accLocal);
+          ctx.emitter.op(OP_F64_ADD);
+          ctx.emitter.localSet(accLocal);
+          break;
+        case 'product':
+          ctx.emitter.localGet(accLocal);
+          ctx.emitter.op(OP_F64_MUL);
+          ctx.emitter.localSet(accLocal);
+          break;
+        case 'min':
+          ctx.emitter.localGet(accLocal);
+          ctx.emitter.op(OP_F64_MIN);
+          ctx.emitter.localSet(accLocal);
+          break;
+        case 'max':
+          ctx.emitter.localGet(accLocal);
+          ctx.emitter.op(OP_F64_MAX);
+          ctx.emitter.localSet(accLocal);
+          break;
+        case 'and':
+          ctx.emitter.localGet(accLocal);
+          ctx.emitter.op(OP_I32_AND);
+          ctx.emitter.localSet(accLocal);
+          break;
+        case 'or':
+          ctx.emitter.localGet(accLocal);
+          ctx.emitter.op(OP_I32_OR);
+          ctx.emitter.localSet(accLocal);
+          break;
+        default:
+          ctx.errors.push(`scalarAggregate: unsupported op ${op}`);
+          return null;
+      }
+    }
+  }
+
+  // Average: divide by count of sources
+  if (op === 'average') {
+    ctx.emitter.localGet(accLocal);
+    ctx.emitter.f64Const(sourceRefs.length || 1);
     ctx.emitter.op(OP_F64_DIV);
     ctx.emitter.localSet(accLocal);
   }

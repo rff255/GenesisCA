@@ -103,6 +103,13 @@ export function computeMemoryLayout(
   const attrTypeBytes: Record<string, number> = {};
   const attrType: Record<string, string> = {};
 
+  // For constant-boundary models we reserve one extra cell per attr — the
+  // sentinel cell at index `total` that constant-boundary neighbours point at.
+  // Allocating it inside wasmMemory keeps the JS-side typed-array views and
+  // the WASM module pointing at the same bytes (otherwise the worker's
+  // standalone +1 arrays would diverge from WASM's baked-in offsets).
+  const cellsPerAttr = boundaryTreatment === 'torus' ? total : (total + 1);
+
   // Cell attrs — read region
   for (const a of cellAttrs) {
     const ib = bytesPerType(a.type);
@@ -110,7 +117,7 @@ export function computeMemoryLayout(
     attrType[a.id] = a.type;
     off = alignTo(off, 8);
     attrReadOffset[a.id] = off;
-    off += total * ib;
+    off += cellsPerAttr * ib;
   }
   // Cell attrs — write region (sync only)
   if (!isAsync) {
@@ -118,7 +125,7 @@ export function computeMemoryLayout(
       const ib = attrTypeBytes[a.id]!;
       off = alignTo(off, 8);
       attrWriteOffset[a.id] = off;
-      off += total * ib;
+      off += cellsPerAttr * ib;
     }
   } else {
     for (const a of cellAttrs) attrWriteOffset[a.id] = attrReadOffset[a.id]!;
