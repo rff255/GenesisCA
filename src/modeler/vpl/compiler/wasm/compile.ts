@@ -580,7 +580,198 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
   groupOperator: ({ node, ctx, inputs }) => {
     return emitAggregateOrCount(ctx, node, inputs, 'groupOperator');
   },
+
+  // -- proportionMap: linear remap from [inMin, inMax] to [outMin, outMax].
+  //    Result = ((inMax - inMin) !== 0)
+  //      ? outMin + (x - inMin) * (outMax - outMin) / (inMax - inMin)
+  //      : outMin
+  //    All maths in f64 to match JS Number semantics.
+  proportionMap: ({ ctx, inputs }) => {
+    const x      = inputs['x']      ?? { inline: true, value: 0, valtype: F64 };
+    const inMin  = inputs['inMin']  ?? { inline: true, value: 0, valtype: F64 };
+    const inMax  = inputs['inMax']  ?? { inline: true, value: 1, valtype: F64 };
+    const outMin = inputs['outMin'] ?? { inline: true, value: 0, valtype: F64 };
+    const outMax = inputs['outMax'] ?? { inline: true, value: 1, valtype: F64 };
+    // Compute (inMax - inMin) into a local (used twice: zero-check + divisor).
+    const inSpan = ctx.emitter.allocLocal(F64);
+    pushValueAs(ctx.emitter, inMax, F64);
+    pushValueAs(ctx.emitter, inMin, F64);
+    ctx.emitter.op(OP_F64_SUB);
+    ctx.emitter.localSet(inSpan);
+    // Result local
+    const result = ctx.emitter.allocLocal(F64);
+    // if (inSpan != 0) result = outMin + (x - inMin) * (outMax - outMin) / inSpan
+    // else result = outMin
+    ctx.emitter.localGet(inSpan);
+    ctx.emitter.f64Const(0);
+    ctx.emitter.op(OP_F64_NE);
+    ctx.emitter.ifThenElse(
+      () => {
+        // (x - inMin)
+        pushValueAs(ctx.emitter, x, F64);
+        pushValueAs(ctx.emitter, inMin, F64);
+        ctx.emitter.op(OP_F64_SUB);
+        // * (outMax - outMin)
+        pushValueAs(ctx.emitter, outMax, F64);
+        pushValueAs(ctx.emitter, outMin, F64);
+        ctx.emitter.op(OP_F64_SUB);
+        ctx.emitter.op(OP_F64_MUL);
+        // / inSpan
+        ctx.emitter.localGet(inSpan);
+        ctx.emitter.op(OP_F64_DIV);
+        // + outMin
+        pushValueAs(ctx.emitter, outMin, F64);
+        ctx.emitter.op(OP_F64_ADD);
+        ctx.emitter.localSet(result);
+      },
+      () => {
+        pushValueAs(ctx.emitter, outMin, F64);
+        ctx.emitter.localSet(result);
+      },
+    );
+    return { localIdx: result, valtype: F64 };
+  },
+
+  // -- groupStatement: tests an assertion across an array (allIs / noneIs /
+  //    hasA / allGreater / anyGreater / allLesser / anyLesser). Result is bool.
+  //    Like groupCounting it prefers the single-source getNeighborsAttribute
+  //    path; multi-source scalar-only is also supported via the same loop
+  //    structure but with all-vs-any short-circuit.
+  groupStatement: ({ node, ctx, inputs }) => {
+    return emitGroupStatement(ctx, node, inputs);
+  },
 };
+
+/**
+ * groupStatement emit. Like groupCounting but the result is a bool and the
+ * operations are all/any across the source array.
+ *   allIs:        every value === x
+ *   noneIs:       every value !== x
+ *   hasA:         some  value === x
+ *   allGreater:   every value > x
+ *   anyGreater:   some  value > x
+ *   allLesser:    every value < x
+ *   anyLesser:    some  value < x
+ *
+ * Implementation pattern (matches the existing aggregate pattern):
+ *   - For getNeighborsAttribute source: loop over the neighbor index table.
+ *   - Otherwise: visit each scalar source via compileValueNode.
+ *
+ * For "all" ops the accumulator starts at 1 and gets ANDed with each match;
+ * for "any" ops it starts at 0 and gets ORed.
+ */
+function emitGroupStatement(
+  ctx: WasmCompileCtx,
+  node: GraphNode,
+  inputs: Record<string, ValueRef | undefined>,
+): LocalRef | null {
+  const op = (node.data.config.operation as string) || 'allIs';
+  const isAll = op === 'allIs' || op === 'noneIs' || op === 'allGreater' || op === 'allLesser';
+  const x = inputs['x'] ?? { inline: true, value: 0, valtype: F64 };
+
+  const portKey = `${node.id}:values`;
+  const sources = ctx.inputToSources.get(portKey) ?? [];
+  if (sources.length === 0) {
+    ctx.errors.push(`groupStatement: no sources connected to "values" port`);
+    return null;
+  }
+  const firstSrc = sources[0]!;
+  const firstSrcNode = ctx.nodeMap.get(firstSrc.nodeId);
+  const isNbrPath = sources.length === 1
+    && firstSrcNode?.data.nodeType === 'getNeighborsAttribute';
+
+  const cmpOp = (() => {
+    switch (op) {
+      case 'noneIs':                        return '!=';
+      case 'allGreater': case 'anyGreater': return '>';
+      case 'allLesser':  case 'anyLesser':  return '<';
+      default:                              return '==';
+    }
+  })();
+
+  const accLocal = ctx.emitter.allocLocal(I32);
+  ctx.emitter.i32Const(isAll ? 1 : 0);
+  ctx.emitter.localSet(accLocal);
+
+  const emitCmp = (loadValueOp: () => void, elemValtype: ValType) => {
+    loadValueOp();
+    pushValueAs(ctx.emitter, x, elemValtype);
+    if (elemValtype === F64) ctx.emitter.op(cmpToF64Op(cmpOp));
+    else ctx.emitter.op(cmpToI32Op(cmpOp));
+    // Stack: [match (i32 0/1)]
+    if (isAll) {
+      ctx.emitter.localGet(accLocal);
+      ctx.emitter.op(OP_I32_AND);
+    } else {
+      ctx.emitter.localGet(accLocal);
+      ctx.emitter.op(OP_I32_OR);
+    }
+    ctx.emitter.localSet(accLocal);
+  };
+
+  if (isNbrPath) {
+    const srcNode = firstSrcNode!;
+    const nbrId = srcNode.data.config.neighborhoodId as string;
+    const attrId = srcNode.data.config.attributeId as string;
+    const nbr = getNbr(ctx.layout, nbrId);
+    const attr = getAttr(ctx.layout, attrId);
+    if (!nbr || !attr) {
+      ctx.errors.push(`groupStatement: unknown nbr/attr (${nbrId}/${attrId})`);
+      return null;
+    }
+    const elemValtype: ValType = attrValType(attr.type);
+    const nLocal = ctx.emitter.allocLocal(I32);
+    ctx.emitter.i32Const(0);
+    ctx.emitter.localSet(nLocal);
+    ctx.emitter.block(() => {
+      ctx.emitter.loop(() => {
+        ctx.emitter.localGet(nLocal);
+        ctx.emitter.i32Const(nbr.size);
+        ctx.emitter.op(OP_I32_GE_S);
+        ctx.emitter.brIf(1);
+        const loadElem = () => {
+          ctx.emitter.localGet(ctx.iLocalIdx);
+          ctx.emitter.i32Const(nbr.size);
+          ctx.emitter.op(OP_I32_MUL);
+          ctx.emitter.localGet(nLocal);
+          ctx.emitter.op(OP_I32_ADD);
+          ctx.emitter.i32Const(4);
+          ctx.emitter.op(OP_I32_MUL);
+          ctx.emitter.i32Load(nbr.offset, 2);
+          ctx.emitter.i32Const(attr.itemBytes);
+          ctx.emitter.op(OP_I32_MUL);
+          if (attr.type === 'bool') ctx.emitter.i32Load8U(attr.readOffset, 0);
+          else if (attr.type === 'float') ctx.emitter.f64Load(attr.readOffset, 3);
+          else ctx.emitter.i32Load(attr.readOffset, 2);
+        };
+        emitCmp(loadElem, elemValtype);
+        ctx.emitter.localGet(nLocal);
+        ctx.emitter.i32Const(1);
+        ctx.emitter.op(OP_I32_ADD);
+        ctx.emitter.localSet(nLocal);
+        ctx.emitter.br(0);
+      });
+    });
+  } else {
+    // Multi-scalar path
+    let elemValtype: ValType = I32;
+    const refs: LocalRef[] = [];
+    for (const s of sources) {
+      const r = compileValueNode(s.nodeId, ctx);
+      if (!r || r.localIdx < 0) {
+        ctx.errors.push(`groupStatement: scalar source ${s.nodeId} not usable`);
+        return null;
+      }
+      if (r.valtype === F64) elemValtype = F64;
+      refs.push(r);
+    }
+    for (const ref of refs) {
+      emitCmp(() => pushValueAs(ctx.emitter, ref, elemValtype), elemValtype);
+    }
+  }
+
+  return { localIdx: accLocal, valtype: I32 };
+}
 
 // ---------------------------------------------------------------------------
 // Aggregate / GroupCounting shared implementation
@@ -1151,6 +1342,63 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
     if (attr.type === 'bool') ctx.emitter.i32Store8(attr.writeOffset, 0);
     else if (attr.type === 'float') ctx.emitter.f64Store(attr.writeOffset, 3);
     else ctx.emitter.i32Store(attr.writeOffset, 2);
+    return true;
+  },
+
+  // -- setNeighborAttributeByIndex (async-only): writes a value to a single
+  //    neighbour's attribute. Index input is treated as a SCALAR here (the JS
+  //    impl branches on Array.isArray to handle list-input cases, but those
+  //    only flow from filterNeighbors / getNeighborIndexesByTags / etc. which
+  //    aren't yet WASM-supported anyway). The constant-boundary sentinel
+  //    cell at index `total` is protected by the same `nIdx < total` guard
+  //    the JS impl uses.
+  setNeighborAttributeByIndex: ({ node, ctx, inputs }) => {
+    const nbrId = node.data.config.neighborhoodId as string;
+    const attrId = node.data.config.attributeId as string;
+    const nbr = getNbr(ctx.layout, nbrId);
+    const attr = getAttr(ctx.layout, attrId);
+    if (!nbr || !attr) {
+      ctx.errors.push(`setNeighborAttributeByIndex: unknown nbr/attr (${nbrId}/${attrId})`);
+      return false;
+    }
+    if (!ctx.layout.isAsync) {
+      // JS-side compiler accepts this in sync mode but the per-cell copy
+      // overwrites the neighbour write at the start of the next cell's
+      // iteration, so it never produces useful results — treat as an error.
+      ctx.errors.push(`setNeighborAttributeByIndex: requires asynchronous update mode`);
+      return false;
+    }
+    const indexRef = inputs['index'] ?? { inline: true, value: 0, valtype: I32 };
+    const valueRef = inputs['value'] ?? { inline: true, value: 0, valtype: F64 };
+    // Compute neighbour cell index: nIdx[i*nbrSize + index] from the table.
+    const nbrCellLocal = ctx.emitter.allocLocal(I32);
+    ctx.emitter.localGet(ctx.iLocalIdx);
+    ctx.emitter.i32Const(nbr.size);
+    ctx.emitter.op(OP_I32_MUL);
+    pushValueAs(ctx.emitter, indexRef, I32);
+    ctx.emitter.op(OP_I32_ADD);
+    ctx.emitter.i32Const(4);
+    ctx.emitter.op(OP_I32_MUL);
+    ctx.emitter.i32Load(nbr.offset, 2);
+    ctx.emitter.localSet(nbrCellLocal);
+    // Guard: only write when nbrCell < total (skip constant-boundary sentinel).
+    ctx.emitter.localGet(nbrCellLocal);
+    ctx.emitter.localGet(0); // total param
+    ctx.emitter.op(OP_I32_LT_S_OP);
+    ctx.emitter.ifThen(() => {
+      // address = nbrCell * itemBytes
+      ctx.emitter.localGet(nbrCellLocal);
+      if (attr.itemBytes !== 1) {
+        ctx.emitter.i32Const(attr.itemBytes);
+        ctx.emitter.op(OP_I32_MUL);
+      }
+      pushValueAs(ctx.emitter, valueRef, attrValType(attr.type));
+      // In async mode read/write share the same offset, but emitting as
+      // writeOffset keeps semantic clarity and works either way.
+      if (attr.type === 'bool') ctx.emitter.i32Store8(attr.writeOffset, 0);
+      else if (attr.type === 'float') ctx.emitter.f64Store(attr.writeOffset, 3);
+      else ctx.emitter.i32Store(attr.writeOffset, 2);
+    });
     return true;
   },
 };
