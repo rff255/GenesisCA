@@ -493,9 +493,22 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     lastGenForGps.current = 0;
     gpsGens.current = 0;
 
-    // Queue simulation state restoration if present in loaded model
+    // Queue simulation state restoration if present in loaded model — but
+    // only if its dimensions match the grid we just initialised. A grid resize
+    // invalidates the embedded snapshot; honor the resize and drop the stale
+    // state (also clear it from the model so subsequent saves don't re-carry
+    // the dead bytes). The user explicitly chose new dimensions; we'd rather
+    // start fresh than refuse the resize.
     if (model.simulationState) {
-      pendingSimStateRestore.current = model.simulationState;
+      const s = model.simulationState;
+      const dimsMatch = (s.width == null && s.height == null)
+        || (s.width === w && s.height === h);
+      if (dimsMatch) {
+        pendingSimStateRestore.current = model.simulationState;
+      } else {
+        pendingSimStateRestore.current = null;
+        setSimulationState(undefined);
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, compileModel]);
