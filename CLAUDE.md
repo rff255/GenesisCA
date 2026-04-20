@@ -239,7 +239,7 @@ genesis-ca/
 - **Documentation consistency:** When changing features, update all three sources of truth: the code, `src/help/HelpView.tsx` (in-app Help tab), and the root `README.md`. For node-system changes (port types, redundancies, new nodes) also update `docs/NODES_REFERENCE.md` (table + Mermaid diagrams). These must remain consistent with each other.
 - **Pre-commit type check:** Vite dev server does NOT type-check — always run `npx tsc -b` before committing to catch TypeScript errors that will fail the CI build. Note: `npx tsc --noEmit` (without `-b`) silently checks nothing because the root tsconfig has `"files": []` and only project references.
 - **Debugging blank-screen React crashes:** When the app whites out (React unmounts on uncaught error), console usually only shows generic "error in `<X>` component" warnings without stack traces. Install a `window.onerror` handler via preview_eval BEFORE reproducing, then read captured errors after — this surfaces the real stack trace.
-- **Version display:** When bumping version in `package.json`, also update the hardcoded version string in `src/App.tsx` header (`v1.X.0`).
+- **Version display:** When bumping version, update ALL FOUR places: `package.json`, `package-lock.json` (root + first `packages.""` entry), the hardcoded version string in `src/App.tsx` header (`v1.X.0`), and the badge in `README.md` (`<sup>v1.X.0</sup>`). Easy to miss; sweep with `grep -rn "v1\.[0-9]"` after bumping.
 - **PR descriptions:** Never include "Built with Claude Code" or similar Claude/Anthropic attribution lines. User handles all attribution decisions.
 
 ---
