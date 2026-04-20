@@ -1781,9 +1781,13 @@ export function compileGraphWasm(
   }
 
   // Function signature: step(total: i32) -> void
-  // Locals: index 0 = total (param), allocated dynamically thereafter
+  // Locals beyond the param:
+  //   1) outerCounter (`_i`) — sweeps 0..total
+  //   2) cellIdx (`i`) — equals _i in sync mode, equals orderArray[_i] in async
+  // The flow chain references `i` (the actual cell being processed), which is
+  // what async mode needs to read shuffled order. Sync mode just sets i := _i.
   const emitter = new WasmEmitter(/* numParams */ 1);
-  // Allocate the loop counter local (i32 i)
+  const outerCounter = emitter.allocLocal(I32);
   const iLocal = emitter.allocLocal(I32);
 
   const ctx: WasmCompileCtx = {
@@ -1802,29 +1806,43 @@ export function compileGraphWasm(
   };
 
   // Build function body:
-  //   i := 0
+  //   _i := 0
   //   block: loop:
-  //     if (i >= total) br block
+  //     if (_i >= total) br block
+  //     i := <_i  (sync)  |  orderArray[_i]  (async)>
   //     <copy lines>          (sync mode)
   //     <flow chain from Step>
-  //     i += 1
+  //     _i += 1
   //     br loop
   emitter.i32Const(0);
-  emitter.localSet(iLocal);
+  emitter.localSet(outerCounter);
   emitter.block(() => {
     emitter.loop(() => {
-      // i >= total -> exit
-      emitter.localGet(iLocal);
+      // _i >= total -> exit
+      emitter.localGet(outerCounter);
       emitter.localGet(0);
       emitter.op(OP_I32_GE_S);
       emitter.brIf(1);
+
+      // i := _i (sync) or i := orderArray[_i] (async)
+      if (layout.isAsync) {
+        // i := i32.load(orderOffset + _i*4)
+        emitter.localGet(outerCounter);
+        emitter.i32Const(4);
+        emitter.op(OP_I32_MUL);
+        emitter.i32Load(layout.orderOffset, 2);
+        emitter.localSet(iLocal);
+      } else {
+        emitter.localGet(outerCounter);
+        emitter.localSet(iLocal);
+      }
 
       // Reset per-cell cached byte offsets — they're recomputed per iteration
       // (the cached i*itemBytes locals get overwritten on each iteration's first use)
       ctx.byteOffsetLocals.clear();
       ctx.valueLocals.clear();
 
-      // Copy lines (sync mode)
+      // Copy lines (sync mode only — async uses single buffer)
       if (!layout.isAsync) {
         for (const id of Object.keys(layout.attrType)) {
           const a = getAttr(layout, id)!;
@@ -1856,11 +1874,11 @@ export function compileGraphWasm(
       // Flow chain from Step's "do" output (matches JS's rootFlowPort = 'do')
       compileFlowChain(stepNode.id, 'do', ctx);
 
-      // i += 1; continue
-      emitter.localGet(iLocal);
+      // _i += 1; continue
+      emitter.localGet(outerCounter);
       emitter.i32Const(1);
       emitter.op(OP_I32_ADD);
-      emitter.localSet(iLocal);
+      emitter.localSet(outerCounter);
       emitter.br(0);
     });
   });
