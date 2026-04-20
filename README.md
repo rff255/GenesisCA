@@ -1,4 +1,4 @@
-# GenesisCA <sup>v1.7.1</sup>
+# GenesisCA <sup>v1.8.0</sup>
 
 An IDE for modeling and simulating Cellular Automata, built as a self-contained browser application.
 
@@ -93,6 +93,7 @@ A complete GenesisCA model definition consists of:
 - **Transport bar** — Play/Pause/Step/Reset with FPS and Gens/Frame sliders, keyboard shortcuts (Space=step, Enter=play/pause, Esc=reset)
 - **Save Project dialog** — checkboxes to include simulator controls (speed, brush, mapping, model-attribute values) and/or the full board state; choices persist across sessions
 - **Save / Load State** — save the full simulation snapshot (`.gcastate`) for experiment repeatability; load to restore a previous state. State is also embedded in `.gcaproj` for project-level persistence.
+- **Model Presets** — embed named snapshots of model-attribute values (and optionally the cell grid) in the project, listed in the left panel above Model Attributes. One-click switching between behavioral variants — ideal for generic models like MNCA where the same rules produce wildly different emergent patterns per parameter set. Include/exclude from `.gcaproj` via the Save Project dialog.
 - **Canvas controls** — LMB=brush, RMB=pan, scroll=zoom, Ctrl+LMB drag=resize brush, Ctrl+wheel=cycle input mappings, Shift+RMB=open in-page color picker at the cursor
 - **Brush tool** — configurable color (with live R/G/B channel inputs beside the picker), width/height, input mapping; visual brush cursor; Ctrl+drag interactive resize
 - **Region clipboard** — Ctrl+C/V/X on the simulator copy/paste/cut all cell attributes within the brush rectangle; paste anchors to the brush's top-left corner

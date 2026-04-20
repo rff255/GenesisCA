@@ -2,6 +2,9 @@ import type { GraphNode, GraphEdge, CAModel } from '../../../model/types';
 import { getNodeDef } from '../nodes/registry';
 import { parseHandleId } from '../types';
 import type { PortDef } from '../types';
+import { classifyLoopInvariant } from './loopInvariant';
+import { safeId } from './identifierSafe';
+import { detectFusableConsumers, type FusionResult } from './fusion';
 
 /**
  * Get the inline widget value for an unconnected port.
@@ -76,11 +79,208 @@ function isMultiOutput(data: { nodeType: string; config: Record<string, string |
 
 interface RootCompileResult {
   valueLines: string[];
+  /** Loop-invariant value lines emitted ABOVE the cell loop (one-time work per
+   *  step). Populated when a node is classified loop-invariant — typically
+   *  getModelAttribute reads and arithmetic over them. Saves N redundant per-cell
+   *  hash lookups per step where N = grid size. */
+  preLoopValueLines: string[];
   flowLines: string[];
   /** Nodes that need pre-loop declarations.
    *  nbrId: sized array for neighborhood scratch (GetNeighborsAttribute).
+   *  attrId: source attribute id — used to pick a typed-array constructor for the scratch.
    *  initExpr: literal init expression for reusable scratch (e.g., '[]'). */
-  scratchNodes: Array<{ scratchVarName: string; nbrId?: string; initExpr?: string }>;
+  scratchNodes: Array<{ scratchVarName: string; nbrId?: string; attrId?: string; initExpr?: string }>;
+}
+
+/** Pick a typed-array constructor name for a scratch buffer that mirrors a cell attribute.
+ *  Falls back to '' (untyped Array) for unknown/color types so behaviour is preserved. */
+function scratchCtorForAttr(attrId: string | undefined, model: CAModel | undefined): string {
+  if (!attrId || !model) return '';
+  const attr = model.attributes.find(a => a.id === attrId);
+  if (!attr) return '';
+  switch (attr.type) {
+    case 'bool': return 'Uint8Array';
+    case 'integer': return 'Int32Array';
+    case 'tag': return 'Int32Array';
+    case 'float': return 'Float64Array';
+    default: return '';
+  }
+}
+
+/**
+ * Emit one fused gather+reduce loop for a `getNeighborsAttribute → aggregate`
+ * pair detected by the fusion pass. Replaces what would otherwise be two
+ * loops (gather into scratch, then reduce scratch) with one — for an N-neighbor
+ * aggregate this halves per-cell work and removes the scratch buffer entirely.
+ *
+ * The result is bound to `_v<aggId>` so any downstream consumer's `varName()`
+ * lookup resolves to the same identifier whether or not fusion happened.
+ */
+function buildFusedAggregateJS(aggId: string, op: string, nbrId: string, attrId: string): string {
+  const acc = `_v${aggId}`;
+  const i = `_v${aggId}_i`;
+  const nb = `_nb${aggId}`;
+  const sz = `nSz_${nbrId}`;
+  const head = `const ${nb} = idx * ${sz};`;
+  const elem = `r_${attrId}[nIdx_${nbrId}[${nb} + ${i}]]`;
+  switch (op) {
+    case 'product':
+      return `${head} let ${acc} = 1; for (let ${i} = 0; ${i} < ${sz}; ${i}++) ${acc} *= ${elem};`;
+    case 'max':
+      return `${head} let ${acc} = -Infinity; for (let ${i} = 0; ${i} < ${sz}; ${i}++) { const _v_${aggId}_e = ${elem}; if (_v_${aggId}_e > ${acc}) ${acc} = _v_${aggId}_e; }`;
+    case 'min':
+      return `${head} let ${acc} = Infinity; for (let ${i} = 0; ${i} < ${sz}; ${i}++) { const _v_${aggId}_e = ${elem}; if (_v_${aggId}_e < ${acc}) ${acc} = _v_${aggId}_e; }`;
+    case 'average':
+      return `${head} let _v${aggId}_s = 0; for (let ${i} = 0; ${i} < ${sz}; ${i}++) _v${aggId}_s += ${elem}; const ${acc} = ${sz} > 0 ? _v${aggId}_s / ${sz} : 0;`;
+    case 'and':
+      return `${head} let ${acc} = 1; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (!${elem}) { ${acc} = 0; break; }`;
+    case 'or':
+      return `${head} let ${acc} = 0; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (${elem}) { ${acc} = 1; break; }`;
+    default: // sum
+      return `${head} let ${acc} = 0; for (let ${i} = 0; ${i} < ${sz}; ${i}++) ${acc} += ${elem};`;
+  }
+}
+
+/**
+ * Fused emit for `groupOperator` (Group Reduce). Multi-output node — declares
+ * BOTH `_v<id>_result` and `_v<id>_index` to match the varName() contract for
+ * multi-output nodes. For sum/mul/mean/and/or: index is meaningless and set to
+ * -1 (matching the existing non-fused emit). For max/min: track running index
+ * alongside running value. For random: pick uniform index, then look up.
+ *
+ * Note: `and`/`or` here return JS booleans (true/false) to match the existing
+ * `arr.every(Boolean)` / `arr.some(Boolean)` semantics — this differs from
+ * `Aggregate`'s and/or which returns 0/1 numerics.
+ */
+function buildFusedGroupOperatorJS(nodeId: string, op: string, nbrId: string, attrId: string): string {
+  const sz = `nSz_${nbrId}`;
+  const nb = `_nb${nodeId}`;
+  const head = `const ${nb} = idx * ${sz};`;
+  const elemAt = (idxExpr: string) => `r_${attrId}[nIdx_${nbrId}[${nb} + ${idxExpr}]]`;
+  const result = `_v${nodeId}_result`;
+  const idx = `_v${nodeId}_index`;
+  const i = `_gi${nodeId}`;
+  const e = `_v_${nodeId}_e`;
+  switch (op) {
+    case 'mul':
+      return `${head} let ${result} = 1; for (let ${i} = 0; ${i} < ${sz}; ${i}++) ${result} *= ${elemAt(i)}; const ${idx} = -1;`;
+    case 'mean':
+      return `${head} let _v${nodeId}_s = 0; for (let ${i} = 0; ${i} < ${sz}; ${i}++) _v${nodeId}_s += ${elemAt(i)}; const ${result} = _v${nodeId}_s / (${sz} || 1); const ${idx} = -1;`;
+    case 'and':
+      return `${head} let ${result} = true; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (!${elemAt(i)}) { ${result} = false; break; } const ${idx} = -1;`;
+    case 'or':
+      return `${head} let ${result} = false; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (${elemAt(i)}) { ${result} = true; break; } const ${idx} = -1;`;
+    case 'max':
+      return `${head} let ${idx} = 0; let ${result} = ${elemAt('0')}; for (let ${i} = 1; ${i} < ${sz}; ${i}++) { const ${e} = ${elemAt(i)}; if (${e} > ${result}) { ${result} = ${e}; ${idx} = ${i}; } }`;
+    case 'min':
+      return `${head} let ${idx} = 0; let ${result} = ${elemAt('0')}; for (let ${i} = 1; ${i} < ${sz}; ${i}++) { const ${e} = ${elemAt(i)}; if (${e} < ${result}) { ${result} = ${e}; ${idx} = ${i}; } }`;
+    case 'random':
+      return `${head} const ${idx} = Math.floor(Math.random() * ${sz}); const ${result} = ${elemAt(idx)};`;
+    case 'sum':
+    default:
+      return `${head} let ${result} = 0; for (let ${i} = 0; ${i} < ${sz}; ${i}++) ${result} += ${elemAt(i)}; const ${idx} = -1;`;
+  }
+}
+
+/**
+ * Fused emit for `groupCounting` (Count Matching) on the count-only path.
+ * The detector already refused fusion when the `indexes` output is wired,
+ * so we never need to materialise indices here. Declares `_v<id>_count` to
+ * match the multi-output varName() contract.
+ *
+ * The compare condition (equals/notEquals/.../between/notBetween) reuses the
+ * same operator-to-JS-string logic as the existing GroupCountingNode emit.
+ */
+function buildFusedGroupCountingJS(
+  nodeId: string,
+  op: string,
+  nbrId: string,
+  attrId: string,
+  compareVar: string,
+  compareHighVar: string,
+  lowOp: string,
+  highOp: string,
+): string {
+  const sz = `nSz_${nbrId}`;
+  const nb = `_nb${nodeId}`;
+  const head = `const ${nb} = idx * ${sz};`;
+  const i = `_gi${nodeId}`;
+  const elem = `r_${attrId}[nIdx_${nbrId}[${nb} + ${i}]]`;
+  const count = `_v${nodeId}_count`;
+  let cond: string;
+  switch (op) {
+    case 'notEquals': cond = `${elem} !== ${compareVar}`; break;
+    case 'greater':   cond = `${elem} > ${compareVar}`; break;
+    case 'lesser':    cond = `${elem} < ${compareVar}`; break;
+    case 'between': {
+      const inside = `(${elem} ${lowOp} ${compareVar} && ${elem} ${highOp} ${compareHighVar})`;
+      cond = inside;
+      break;
+    }
+    case 'notBetween': {
+      const inside = `(${elem} ${lowOp} ${compareVar} && ${elem} ${highOp} ${compareHighVar})`;
+      cond = `!${inside}`;
+      break;
+    }
+    default: cond = `${elem} === ${compareVar}`; break; // equals
+  }
+  return `${head} let ${count} = 0; for (let ${i} = 0; ${i} < ${sz}; ${i}++) { if (${cond}) ${count}++; }`;
+}
+
+/**
+ * Fused emit for `groupStatement` (Group Assert) on the result-only path.
+ * The detector refused fusion when the `indexes` output is wired. Uses
+ * short-circuit loops (every-style with first-failure break, some-style with
+ * first-match break) to match the existing `arr.every(...)` / `arr.some(...)`
+ * semantics of the non-fused emit.
+ */
+function buildFusedGroupStatementJS(
+  nodeId: string,
+  op: string,
+  nbrId: string,
+  attrId: string,
+  xVar: string,
+): string {
+  const sz = `nSz_${nbrId}`;
+  const nb = `_nb${nodeId}`;
+  const head = `const ${nb} = idx * ${sz};`;
+  const i = `_gi${nodeId}`;
+  const elem = `r_${attrId}[nIdx_${nbrId}[${nb} + ${i}]]`;
+  const result = `_v${nodeId}_result`;
+  // every-style: start true, first failure → false + break
+  // some-style: start false, first match → true + break
+  switch (op) {
+    case 'allIs':
+      return `${head} let ${result} = true; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (${elem} !== ${xVar}) { ${result} = false; break; }`;
+    case 'noneIs':
+      return `${head} let ${result} = true; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (${elem} === ${xVar}) { ${result} = false; break; }`;
+    case 'hasA':
+      return `${head} let ${result} = false; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (${elem} === ${xVar}) { ${result} = true; break; }`;
+    case 'allGreater':
+      return `${head} let ${result} = true; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (!(${elem} > ${xVar})) { ${result} = false; break; }`;
+    case 'anyGreater':
+      return `${head} let ${result} = false; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (${elem} > ${xVar}) { ${result} = true; break; }`;
+    case 'allLesser':
+      return `${head} let ${result} = true; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (!(${elem} < ${xVar})) { ${result} = false; break; }`;
+    case 'anyLesser':
+      return `${head} let ${result} = false; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (${elem} < ${xVar}) { ${result} = true; break; }`;
+    default: // fallback to allIs
+      return `${head} let ${result} = true; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (${elem} !== ${xVar}) { ${result} = false; break; }`;
+  }
+}
+
+/** Build the scratch declaration line for a single scratchNodes entry. */
+function buildScratchDecl(
+  s: { scratchVarName: string; nbrId?: string; attrId?: string; initExpr?: string },
+  model: CAModel | undefined,
+): string {
+  if (s.nbrId) {
+    const ctor = scratchCtorForAttr(s.attrId, model);
+    return ctor
+      ? `  const ${s.scratchVarName} = new ${ctor}(nSz_${s.nbrId});`
+      : `  const ${s.scratchVarName} = new Array(nSz_${s.nbrId});`;
+  }
+  return `  const ${s.scratchVarName} = ${s.initExpr ?? '[]'};`;
 }
 
 function compileRoot(
@@ -90,11 +290,14 @@ function compileRoot(
   inputToSource: Map<string, { nodeId: string; portId: string }>,
   inputToSources: Map<string, Array<{ nodeId: string; portId: string }>>,
   flowOutputToTargets: Map<string, Array<{ nodeId: string; portId: string }>>,
+  loopInvariant: Set<string>,
+  fusion: FusionResult,
   _model?: CAModel,
 ): RootCompileResult {
   const compiled = new Set<string>();
   const valueLines: string[] = [];
-  const scratchNodes: Array<{ scratchVarName: string; nbrId?: string; initExpr?: string }> = [];
+  const preLoopValueLines: string[] = [];
+  const scratchNodes: Array<{ scratchVarName: string; nbrId?: string; attrId?: string; initExpr?: string }> = [];
 
   function varName(sourceNodeId: string, sourcePortId: string): string {
     const sourceNode = nodeMap.get(sourceNodeId);
@@ -218,7 +421,8 @@ function compileRoot(
       // Track scratch arrays
       if (nt === 'getNeighborsAttribute') {
         const nbrId = iNode.data.config.neighborhoodId as string || '_undef';
-        scratchNodes.push({ scratchVarName: `${prefix}_scr_${innerNodeId}`, nbrId });
+        const attrId = iNode.data.config.attributeId as string || undefined;
+        scratchNodes.push({ scratchVarName: `${prefix}_scr_${innerNodeId}`, nbrId, attrId });
       }
       if (nt === 'groupStatement' || nt === 'groupCounting') {
         scratchNodes.push({ scratchVarName: `${prefix}_v${innerNodeId}_indexes`, initExpr: '[]' });
@@ -372,7 +576,8 @@ function compileRoot(
       if (!iDef) return;
       if (nt === 'getNeighborsAttribute') {
         const nbrId = iNode.data.config.neighborhoodId as string || '_undef';
-        scratchNodes.push({ scratchVarName: `${nestedPrefix}_scr_${nid}`, nbrId });
+        const attrId = iNode.data.config.attributeId as string || undefined;
+        scratchNodes.push({ scratchVarName: `${nestedPrefix}_scr_${nid}`, nbrId, attrId });
       }
       if (nt === 'groupStatement' || nt === 'groupCounting') {
         scratchNodes.push({ scratchVarName: `${nestedPrefix}_v${nid}_indexes`, initExpr: '[]' });
@@ -456,10 +661,67 @@ function compileRoot(
       return `_v${nodeId}`;
     }
 
+    // Fused getNeighborsAttribute source: a single downstream aggregate has
+    // absorbed both the gather AND the reduce into one inlined loop. Skip
+    // scratch declaration and emit nothing here — the aggregate's emitter
+    // produces the fused code under its own variable name.
+    if (node.data.nodeType === 'getNeighborsAttribute' && fusion.skippedGather.has(nodeId)) {
+      return `_v${nodeId}`;
+    }
+
+    // Fused neighborhood consumer (aggregate / groupOperator / groupCounting /
+    // groupStatement): emit ONE inlined loop that gathers + reduces in a single
+    // pass over the neighborhood. Bypasses the normal compile() path (which
+    // would consume `_scr_<srcId>` from the now-skipped gather). The fusion
+    // detector (fusion.ts) decides which consumer types and ops are eligible
+    // and whether the indexes output is wired (refused for groupCounting/
+    // groupStatement). Per-type builders match the variable-naming contract
+    // varName() expects so downstream consumers find the same identifiers.
+    const fused = fusion.fusedConsumers.get(nodeId);
+    if (fused) {
+      const srcNode = nodeMap.get(fused.sourceId);
+      if (srcNode) {
+        const nbrId = (srcNode.data.config.neighborhoodId as string) || '_undef';
+        const attrId = (srcNode.data.config.attributeId as string) || '_undef';
+        // Helper to resolve a non-`values` scalar input (compare, compareHigh,
+        // x). Mirrors the resolution path the normal input loop uses below.
+        const resolveScalarInput = (portId: string): string | undefined => {
+          const source = inputToSource.get(`${nodeId}:${portId}`);
+          if (source) {
+            compileValueNode(source.nodeId);
+            return varName(source.nodeId, source.portId);
+          }
+          const port = def.ports.find(p => p.id === portId);
+          if (!port) return undefined;
+          return getInlineValue(port, node.data.config);
+        };
+        let code: string | undefined;
+        if (fused.consumerType === 'aggregate') {
+          code = buildFusedAggregateJS(nodeId, fused.op, nbrId, attrId);
+        } else if (fused.consumerType === 'groupOperator') {
+          code = buildFusedGroupOperatorJS(nodeId, fused.op, nbrId, attrId);
+        } else if (fused.consumerType === 'groupCounting') {
+          const compareVar = resolveScalarInput('compare') ?? '0';
+          const compareHighVar = resolveScalarInput('compareHigh') ?? '0';
+          const lowOp = (node.data.config.lowOp as string) === '>' ? '>' : '>=';
+          const highOp = (node.data.config.highOp as string) === '<' ? '<' : '<=';
+          code = buildFusedGroupCountingJS(nodeId, fused.op, nbrId, attrId, compareVar, compareHighVar, lowOp, highOp);
+        } else if (fused.consumerType === 'groupStatement') {
+          const xVar = resolveScalarInput('x') ?? '0';
+          code = buildFusedGroupStatementJS(nodeId, fused.op, nbrId, attrId, xVar);
+        }
+        if (code) {
+          valueLines.push('      ' + code.trimEnd());
+          return `_v${nodeId}`;
+        }
+      }
+    }
+
     // Track GetNeighborsAttribute nodes for scratch declaration
     if (node.data.nodeType === 'getNeighborsAttribute') {
       const nbrId = node.data.config.neighborhoodId as string || '_undef';
-      scratchNodes.push({ scratchVarName: `_scr_${nodeId}`, nbrId });
+      const attrId = node.data.config.attributeId as string || undefined;
+      scratchNodes.push({ scratchVarName: `_scr_${nodeId}`, nbrId, attrId });
     }
     // Track aggregation nodes that need reusable scratch arrays (only when indexes output is connected)
     let needsIndexes = false;
@@ -507,7 +769,14 @@ function compileRoot(
       ? { ...node.data.config, _indexesConnected: needsIndexes }
       : node.data.config;
     const code = def.compile(nodeId, compileConfig, inputVars);
-    if (code) valueLines.push('      ' + code.trimEnd());
+    if (code) {
+      // Loop-invariant nodes (e.g. modelAttrs reads + arithmetic over them)
+      // hoist out of the cell loop and emit once per step instead of per cell.
+      // Indentation for preLoopValueLines is two spaces because they live at
+      // function scope, not inside the four-space cell loop body.
+      if (loopInvariant.has(nodeId)) preLoopValueLines.push('  ' + code.trimEnd());
+      else valueLines.push('      ' + code.trimEnd());
+    }
 
     return `_v${nodeId}`;
   }
@@ -853,7 +1122,7 @@ function compileRoot(
 
   compileFlowChain(rootNode.id, rootFlowPort, '      ');
 
-  return { valueLines, flowLines, scratchNodes };
+  return { valueLines, preLoopValueLines, flowLines, scratchNodes };
 }
 
 // ---------------------------------------------------------------------------
@@ -875,7 +1144,7 @@ function buildLoopParams(model: CAModel): {
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
-  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults');
+  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState');
   if (isAsync) parts.push('order');
 
   return { params: parts.join(', '), cellAttrs, neighborhoods };
@@ -889,7 +1158,7 @@ function buildCellParams(model: CAModel): string {
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
-  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults');
+  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState');
   return parts.join(', ');
 }
 
@@ -1033,29 +1302,84 @@ export function compileGraph(
       node.data.config._resolvedTagIndexes = JSON.stringify(indices);
     }
   }
+
+  // Pre-resolve indicator IDs to numeric indices so the per-cell hot path can
+  // do typed-array index access (_indicators[3]) instead of string-keyed object
+  // access (_indicators["abc123"]). Worker mirrors the same id->index mapping
+  // from model.indicators array order. -1 signals unresolved (stale config).
+  const indicatorIdxMap = new Map((model.indicators || []).map((ind, i) => [ind.id, i] as const));
+  function preResolveIndicators(nodes: GraphNode[]): void {
+    for (const node of nodes) {
+      const t = node.data.nodeType;
+      if (t === 'getIndicator' || t === 'setIndicator' || t === 'updateIndicator') {
+        const indId = node.data.config.indicatorId as string;
+        const idx = indicatorIdxMap.get(indId);
+        node.data.config._indicatorIdx = idx !== undefined ? idx : -1;
+      }
+    }
+  }
+  preResolveIndicators(graphNodes);
+  for (const def of (model.macroDefs || [])) preResolveIndicators(def.nodes);
+
+  // Loop-invariance classification: identifies value nodes whose result does
+  // not depend on the cell index (modelAttrs reads, getConstant, arithmetic
+  // over them). Their emissions hoist out of the cell loop, paying the cost
+  // once per step instead of once per cell. Shared with the WASM compiler so
+  // both targets agree on which nodes are hoistable.
+  const loopInvariant = classifyLoopInvariant(graphNodes, inputToSource);
+
+  // Single-consumer aggregate fusion: when a getNeighborsAttribute feeds
+  // exactly one downstream aggregate (sum/product/max/min/average/and/or),
+  // collapse the two-loop pattern (gather scratch + reduce) into one inlined
+  // loop. Halves work for the MNCA-style hot path (large neighborhoods).
+  // Shared with the WASM compiler.
+  const fusion = detectFusableConsumers(graphNodes, graphEdges, inputToSources, inputToSource);
+
   const { params: loopParams, cellAttrs } = buildLoopParams(model);
   const cellParams = buildCellParams(model);
 
-  // Generate attribute copy lines (previous → next generation)
-  // In async mode, r_ and w_ are the same buffer so copy lines are skipped
-  const copyLines = isAsync
+  // Sync mode: bulk-copy r→w ONCE before the loop (TypedArray.set dispatches to
+  // SIMD memcpy in V8). Replaces N per-cell stores with one engine call per attr.
+  // Cell rules then overwrite specific indices inside the loop; untouched cells
+  // retain the prior generation's value, matching the previous semantics exactly.
+  // Async mode: r_ and w_ are the same buffer so no copy needed.
+  const bulkCopyLines = isAsync
     ? []
-    : cellAttrs.map(a => `      w_${a.id}[idx] = r_${a.id}[idx];`);
+    : cellAttrs.map(a => `  w_${a.id}.set(r_${a.id});`);
+
+  // Per-step hoist of activeViewer comparisons. SetColorViewer compile() emits
+  // `if (_isV_<safeId(mappingId)>) { ... }`; the actual string compare happens
+  // ONCE here per mapping id, then per-cell branches do a cheap local read.
+  // We hoist for the union of (a) every mapping in the model and (b) every
+  // mapping id any setColorViewer node actually references — including inside
+  // macro defs — so a stale or non-model mapping id can't crash with an
+  // undefined identifier. The unused booleans cost one string compare per
+  // step — negligible.
+  const viewerIdsToHoist = new Set<string>();
+  for (const m of model.mappings || []) viewerIdsToHoist.add(m.id);
+  const collectViewerRefs = (nodes: GraphNode[]) => {
+    for (const n of nodes) {
+      if (n.data.nodeType === 'setColorViewer') {
+        viewerIdsToHoist.add((n.data.config.mappingId as string) || 'default');
+      }
+    }
+  };
+  collectViewerRefs(graphNodes);
+  for (const def of model.macroDefs || []) collectViewerRefs(def.nodes);
+  const viewerHoistLines = Array.from(viewerIdsToHoist).map(
+    id => `  const _isV_${safeId(id)} = activeViewer === ${JSON.stringify(id)};`,
+  );
 
   // --- Compile Step function (loop-wrapped) ---
   const stepNode = graphNodes.find(n => n.data.nodeType === 'step');
   let stepCode = '';
   if (stepNode) {
-    const { valueLines, flowLines, scratchNodes } = compileRoot(
-      stepNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, model,
+    const { valueLines, preLoopValueLines, flowLines, scratchNodes } = compileRoot(
+      stepNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, model,
     );
 
     // Scratch array declarations (before the loop)
-    const scratchDecls = scratchNodes.map(
-      s => s.nbrId
-        ? `  const ${s.scratchVarName} = new Array(nSz_${s.nbrId});`
-        : `  const ${s.scratchVarName} = ${s.initExpr ?? '[]'};`,
-    );
+    const scratchDecls = scratchNodes.map(s => buildScratchDecl(s, model));
 
     // Build linked indicator aggregation code (injected into the loop)
     const linked = buildLinkedIndicatorCode(model);
@@ -1065,16 +1389,19 @@ export function compileGraph(
       stepCode = [
         `(function(${loopParams}) {`,
         ...scratchDecls,
+        ...viewerHoistLines,
+        ...preLoopValueLines,
         ...linked.preLoopDecls,
+        '  let _rs = _rngState[0] || 0x12345678;',
         '  for (let _i = 0; _i < total; _i++) {',
         '    const idx = order[_i];',
         '    const colorIdx = idx * 4;',
-        ...copyLines,
         ...valueLines,
         '',
         ...flowLines,
         ...linked.inLoopLines,
         '  }',
+        '  _rngState[0] = _rs;',
         ...linked.postLoopLines,
         '})',
       ].join('\n');
@@ -1083,15 +1410,19 @@ export function compileGraph(
       stepCode = [
         `(function(${loopParams}) {`,
         ...scratchDecls,
+        ...bulkCopyLines,
+        ...viewerHoistLines,
+        ...preLoopValueLines,
         ...linked.preLoopDecls,
+        '  let _rs = _rngState[0] || 0x12345678;',
         '  for (let idx = 0; idx < total; idx++) {',
         '    const colorIdx = idx * 4;',
-        ...copyLines,
         ...valueLines,
         '',
         ...flowLines,
         ...linked.inLoopLines,
         '  }',
+        '  _rngState[0] = _rs;',
         ...linked.postLoopLines,
         '})',
       ].join('\n');
@@ -1104,20 +1435,27 @@ export function compileGraph(
 
   for (const icNode of inputColorNodes) {
     const mappingId = icNode.data.config.mappingId as string || '';
-    const { valueLines, flowLines } = compileRoot(
-      icNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, model,
+    const { valueLines, preLoopValueLines, flowLines } = compileRoot(
+      icNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, model,
     );
-    // InputColor is called per-cell (for painted cells only), keep per-cell signature
+    // InputColor is called per-cell (for painted cells only), keep per-cell signature.
+    // preLoopValueLines (modelAttrs reads etc.) still go in the function preamble —
+    // they happen once per call, not per cell, but the same hoisting structure
+    // keeps the body free of redundant work.
     const icCopyLines = cellAttrs.map(a => `  w_${a.id}[idx] = r_${a.id}[idx];`);
     const code = [
       `(function(_r, _g, _b, ${cellParams}) {`,
       '  const colorIdx = idx * 4;',
       ...icCopyLines,
       `  const _v${icNode.id}_r = _r; const _v${icNode.id}_g = _g; const _v${icNode.id}_b = _b;`,
+      '  let _rs = _rngState[0] || 0x12345678;',
+      ...viewerHoistLines,
+      ...preLoopValueLines,
       '',
       ...valueLines,
       '',
       ...flowLines,
+      '  _rngState[0] = _rs;',
       '})',
     ].join('\n');
     inputColorCodes.push({ mappingId, code });
@@ -1133,28 +1471,28 @@ export function compileGraph(
   for (const a of cellAttrs) omParamParts.push(`w_${a.id}`);
   const neighborhoods = model.neighborhoods.map(n => ({ id: n.id }));
   for (const n of neighborhoods) { omParamParts.push(`nIdx_${n.id}`); omParamParts.push(`nSz_${n.id}`); }
-  omParamParts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults');
+  omParamParts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState');
   const omParams = omParamParts.join(', ');
 
   for (const omNode of outputMappingNodes) {
     const mappingId = omNode.data.config.mappingId as string || '';
-    const { valueLines, flowLines, scratchNodes } = compileRoot(
-      omNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, model,
+    const { valueLines, preLoopValueLines, flowLines, scratchNodes } = compileRoot(
+      omNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, model,
     );
-    const scratchDecls = scratchNodes.map(
-      s => s.nbrId
-        ? `  const ${s.scratchVarName} = new Array(nSz_${s.nbrId});`
-        : `  const ${s.scratchVarName} = ${s.initExpr ?? '[]'};`,
-    );
+    const scratchDecls = scratchNodes.map(s => buildScratchDecl(s, model));
     const code = [
       `(function(${omParams}) {`,
       ...scratchDecls,
+      ...viewerHoistLines,
+      ...preLoopValueLines,
+      '  let _rs = _rngState[0] || 0x12345678;',
       '  for (let idx = 0; idx < total; idx++) {',
       '    const colorIdx = idx * 4;',
       ...valueLines,
       '',
       ...flowLines,
       '  }',
+      '  _rngState[0] = _rs;',
       '})',
     ].join('\n');
     outputMappingCodes.push({ mappingId, code });

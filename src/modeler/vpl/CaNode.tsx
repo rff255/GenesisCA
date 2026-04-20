@@ -266,6 +266,22 @@ function CaNodeComponent({ id, data }: NodeProps) {
     inputPorts = inputPorts.filter(p => p.id !== 'probability');
   }
 
+  // Statement (Compare): hide y2 unless operation is a between-family op
+  if (nodeData.nodeType === 'statement') {
+    const stOp = nodeData.config.operation as string;
+    if (stOp !== 'between' && stOp !== 'notBetween') {
+      inputPorts = inputPorts.filter(p => p.id !== 'y2');
+    }
+  }
+
+  // GroupCounting (Count Matching): hide compareHigh unless operation is a between-family op
+  if (nodeData.nodeType === 'groupCounting') {
+    const gcOp = nodeData.config.operation as string;
+    if (gcOp !== 'between' && gcOp !== 'notBetween') {
+      inputPorts = inputPorts.filter(p => p.id !== 'compareHigh');
+    }
+  }
+
   // Detect which input ports are connected (for inline widget visibility).
   // Uses a graph-level pub/sub in graphState.ts instead of useStore(edges) so this node only
   // re-renders when *its* connected handles actually change (not on every pan/zoom/store event).
@@ -410,7 +426,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
       const yConn = connectedInputHandles.has(handleId({ id: 'y', kind: 'input', category: 'value' }));
       const xVal = xConn ? '?' : ((nodeData.config._port_x as string) ?? '0');
       const yVal = yConn ? '?' : ((nodeData.config._port_y as string) ?? '0');
-      collapsedLabel = `${xVal} ${op} ${yVal}`;
+      if (op === 'between' || op === 'notBetween') {
+        const y2Conn = connectedInputHandles.has(handleId({ id: 'y2', kind: 'input', category: 'value' }));
+        const y2Val = y2Conn ? '?' : ((nodeData.config._port_y2 as string) ?? '0');
+        const verb = op === 'notBetween' ? 'out' : 'in';
+        collapsedLabel = `${xVal} ${verb} [${yVal}..${y2Val}]`;
+      } else {
+        collapsedLabel = `${xVal} ${op} ${yVal}`;
+      }
     } else if (nodeData.nodeType === 'arithmeticOperator') {
       const op = (nodeData.config.operation as string) || '+';
       const xConn = connectedInputHandles.has(handleId({ id: 'x', kind: 'input', category: 'value' }));
@@ -438,7 +461,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
       };
       const cmpConn = connectedInputHandles.has(handleId({ id: 'compare', kind: 'input', category: 'value' }));
       const cmpVal = cmpConn ? '?' : ((nodeData.config._port_compare as string) ?? '0');
-      collapsedLabel = `Count ${opLabels[op] ?? op} ${cmpVal}`;
+      if (op === 'between' || op === 'notBetween') {
+        const highConn = connectedInputHandles.has(handleId({ id: 'compareHigh', kind: 'input', category: 'value' }));
+        const highVal = highConn ? '?' : ((nodeData.config._port_compareHigh as string) ?? '0');
+        const verb = op === 'notBetween' ? 'out' : 'in';
+        collapsedLabel = `Count ${verb} [${cmpVal}..${highVal}]`;
+      } else {
+        collapsedLabel = `Count ${opLabels[op] ?? op} ${cmpVal}`;
+      }
     } else if (nodeData.nodeType === 'groupOperator') {
       const op = (nodeData.config.operation as string) || 'sum';
       const opLabels: Record<string, string> = {
@@ -706,33 +736,93 @@ function CaNodeComponent({ id, data }: NodeProps) {
           </>
         )}
 
-        {nodeData.nodeType === 'groupCounting' && (
-          <select
-            className={styles.select}
-            value={(nodeData.config.operation as string) || 'equals'}
-            onChange={e => updateConfig('operation', e.target.value)}
-          >
-            <option value="equals">Equals</option>
-            <option value="notEquals">Not Equals</option>
-            <option value="greater">Greater Than</option>
-            <option value="lesser">Lesser Than</option>
-          </select>
-        )}
+        {nodeData.nodeType === 'groupCounting' && (() => {
+          const op = (nodeData.config.operation as string) || 'equals';
+          const isBetween = op === 'between' || op === 'notBetween';
+          return (
+            <>
+              <select
+                className={styles.select}
+                value={op}
+                onChange={e => updateConfig('operation', e.target.value)}
+              >
+                <option value="equals">==</option>
+                <option value="notEquals">!=</option>
+                <option value="greater">&gt;</option>
+                <option value="lesser">&lt;</option>
+                <option value="between">Between</option>
+                <option value="notBetween">Not Between</option>
+              </select>
+              {isBetween && (
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <select
+                    className={styles.select}
+                    style={{ flex: 1 }}
+                    value={(nodeData.config.lowOp as string) || '>='}
+                    onChange={e => updateConfig('lowOp', e.target.value)}
+                  >
+                    <option value=">=">&gt;=</option>
+                    <option value=">">&gt;</option>
+                  </select>
+                  <select
+                    className={styles.select}
+                    style={{ flex: 1 }}
+                    value={(nodeData.config.highOp as string) || '<='}
+                    onChange={e => updateConfig('highOp', e.target.value)}
+                  >
+                    <option value="<=">&lt;=</option>
+                    <option value="<">&lt;</option>
+                  </select>
+                </div>
+              )}
+            </>
+          );
+        })()}
 
-        {nodeData.nodeType === 'statement' && (
-          <select
-            className={styles.select}
-            value={(nodeData.config.operation as string) || '=='}
-            onChange={e => updateConfig('operation', e.target.value)}
-          >
-            <option value="==">==</option>
-            <option value="!=">!=</option>
-            <option value=">">&gt;</option>
-            <option value="<">&lt;</option>
-            <option value=">=">&gt;=</option>
-            <option value="<=">&lt;=</option>
-          </select>
-        )}
+        {nodeData.nodeType === 'statement' && (() => {
+          const op = (nodeData.config.operation as string) || '==';
+          const isBetween = op === 'between' || op === 'notBetween';
+          return (
+            <>
+              <select
+                className={styles.select}
+                value={op}
+                onChange={e => updateConfig('operation', e.target.value)}
+              >
+                <option value="==">==</option>
+                <option value="!=">!=</option>
+                <option value=">">&gt;</option>
+                <option value="<">&lt;</option>
+                <option value=">=">&gt;=</option>
+                <option value="<=">&lt;=</option>
+                <option value="between">Between</option>
+                <option value="notBetween">Not Between</option>
+              </select>
+              {isBetween && (
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <select
+                    className={styles.select}
+                    style={{ flex: 1 }}
+                    value={(nodeData.config.lowOp as string) || '>='}
+                    onChange={e => updateConfig('lowOp', e.target.value)}
+                  >
+                    <option value=">=">&gt;=</option>
+                    <option value=">">&gt;</option>
+                  </select>
+                  <select
+                    className={styles.select}
+                    style={{ flex: 1 }}
+                    value={(nodeData.config.highOp as string) || '<='}
+                    onChange={e => updateConfig('highOp', e.target.value)}
+                  >
+                    <option value="<=">&lt;=</option>
+                    <option value="<">&lt;</option>
+                  </select>
+                </div>
+              )}
+            </>
+          );
+        })()}
 
         {nodeData.nodeType === 'logicOperator' && (
           <select

@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useModel } from '../model/ModelContext';
 import { compileGraph } from '../modeler/vpl/compiler/compile';
+import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
+import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { IndicatorDisplay } from './IndicatorDisplay';
 import { BrushColorPopover } from './BrushColorPopover';
-import { serializeSimState, downloadStateFile, readStateFile, base64ToArrayBuffer, deserializeTypedArray } from '../model/fileOperations';
-import type { SimulationState } from '../model/types';
+import { PresetSaveDialog } from './PresetSaveDialog';
+import { serializeSimState, serializePreset, downloadStateFile, readStateFile, base64ToArrayBuffer, deserializeTypedArray } from '../model/fileOperations';
+import type { Preset, SimulationState } from '../model/types';
 import styles from './SimulatorView.module.css';
 
 const SIM_SETTINGS_KEY = 'genesisca_sim_settings';
@@ -20,7 +23,7 @@ function loadSimSettings(): Record<string, unknown> {
 
 export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { model, updateIndicator, setSimulationState } = useModel();
+  const { model, updateIndicator, setSimulationState, addPreset, deletePreset } = useModel();
   const workerRef = useRef<Worker | null>(null);
   const pendingStep = useRef(false);
 
@@ -88,6 +91,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const pendingStateSave = useRef<((state: Record<string, unknown>) => void) | null>(null);
   const stateFileInputRef = useRef<HTMLInputElement>(null);
   const pendingSimStateRestore = useRef<SimulationState | null>(null);
+
+  // Preset-save dialog
+  const [presetDialogOpen, setPresetDialogOpen] = useState(false);
 
   // Clipboard for Ctrl+C / Ctrl+V / Ctrl+X (cell-attribute region copy)
   const clipboardRef = useRef<{
@@ -433,6 +439,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       { type: 'module' },
     );
     worker.onmessage = (e) => onWorkerMessageRef.current(e);
+    // Wave 2: try to compile a WASM step alongside the JS one. If anything
+    // fails (unsupported node, etc.) we still ship the JS bytes; the worker
+    // falls back automatically when wasmStepBytes is missing/empty.
+    const wasmResult = (() => {
+      try {
+        const layout = computeLayoutFromModel(model);
+        const viewerIds = buildViewerIds(model);
+        return compileGraphWasm(model.graphNodes, model.graphEdges, model, layout, viewerIds);
+      } catch (e) {
+        return { bytes: new Uint8Array(), minMemoryPages: 1, error: String((e as Error)?.message || e), viewerIds: {}, exports: [] };
+      }
+    })();
     worker.postMessage({
       type: 'init',
       width: w,
@@ -458,8 +476,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         linkedAggregation: i.linkedAggregation,
         binCount: i.binCount, watched: i.watched,
       })),
+      wasmStepBytes: wasmResult.error ? undefined : wasmResult.bytes,
+      wasmStepError: wasmResult.error,
+      wasmExports: wasmResult.exports,
+      viewerIds: wasmResult.viewerIds,
+      useWasm: !!model.properties.useWasm,
     });
     workerRef.current = worker;
+    if (import.meta.env?.DEV) (window as unknown as { __simWorker?: Worker }).__simWorker = worker;
     setGeneration(0);
     setPlaying(false);
     indicatorValuesRef.current = {};
@@ -469,9 +493,22 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     lastGenForGps.current = 0;
     gpsGens.current = 0;
 
-    // Queue simulation state restoration if present in loaded model
+    // Queue simulation state restoration if present in loaded model — but
+    // only if its dimensions match the grid we just initialised. A grid resize
+    // invalidates the embedded snapshot; honor the resize and drop the stale
+    // state (also clear it from the model so subsequent saves don't re-carry
+    // the dead bytes). The user explicitly chose new dimensions; we'd rather
+    // start fresh than refuse the resize.
     if (model.simulationState) {
-      pendingSimStateRestore.current = model.simulationState;
+      const s = model.simulationState;
+      const dimsMatch = (s.width == null && s.height == null)
+        || (s.width === w && s.height === h);
+      if (dimsMatch) {
+        pendingSimStateRestore.current = model.simulationState;
+      } else {
+        pendingSimStateRestore.current = null;
+        setSimulationState(undefined);
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, compileModel]);
@@ -551,6 +588,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       || prev.properties.boundaryTreatment !== model.properties.boundaryTreatment
       || prev.properties.updateMode !== model.properties.updateMode
       || prev.properties.asyncScheme !== model.properties.asyncScheme
+      || prev.properties.useWasm !== model.properties.useWasm
       || prev.attributes !== model.attributes
       || prev.neighborhoods !== model.neighborhoods
       || prev.mappings !== model.mappings;
@@ -564,6 +602,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const result = compileGraph(model.graphNodes, model.graphEdges, model);
       setCompiledCode(buildFullCode(result));
       setCompileError(result.error ?? '');
+      const wasmResult = (() => {
+        try {
+          const layout = computeLayoutFromModel(model);
+          const viewerIds = buildViewerIds(model);
+          return compileGraphWasm(model.graphNodes, model.graphEdges, model, layout, viewerIds);
+        } catch (e) {
+          return { bytes: new Uint8Array(), minMemoryPages: 1, error: String((e as Error)?.message || e), viewerIds: {}, exports: [] };
+        }
+      })();
       workerRef.current?.postMessage({
         type: 'recompile',
         stepCode: result.stepCode,
@@ -571,6 +618,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         outputMappingCodes: result.outputMappingCodes || [],
         updateMode: model.properties.updateMode,
         asyncScheme: model.properties.asyncScheme,
+        wasmStepBytes: wasmResult.error ? undefined : wasmResult.bytes,
+        wasmStepError: wasmResult.error,
+        wasmExports: wasmResult.exports,
+        viewerIds: wasmResult.viewerIds,
+      });
+      // If user has the model toggle on, ensure useWasm is set (recompile doesn't carry useWasm by default)
+      workerRef.current?.postMessage({
+        type: 'setUseWasm',
+        enabled: !!model.properties.useWasm && !wasmResult.error,
       });
       // Sync indicator definitions when they change (not included in recompile message)
       if (prev && prev.indicators !== model.indicators) {
@@ -1065,6 +1121,33 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
   };
 
+  // Save current state as a named preset (captures modelAttrs always, grid optionally)
+  const handleCreatePreset = (name: string, description: string, includeGrid: boolean) => {
+    if (!workerRef.current) return;
+    pendingStateSave.current = (workerState) => {
+      const state = serializePreset(
+        workerState as Parameters<typeof serializePreset>[0],
+        { includeGrid },
+      );
+      const id = 'preset_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+      const preset: Preset = { id, name, state, createdAt: Date.now() };
+      if (description.trim()) preset.description = description.trim();
+      addPreset(preset);
+    };
+    workerRef.current.postMessage({ type: 'getState' });
+  };
+
+  const handleLoadPreset = (p: Preset) => {
+    if (playing) setPlaying(false);
+    applySimulationState(p.state);
+  };
+
+  const handleDeletePreset = (p: Preset) => {
+    if (window.confirm(`Delete preset "${p.name}"?`)) {
+      deletePreset(p.id);
+    }
+  };
+
   const applySimulationState = useCallback((state: SimulationState) => {
     if (!workerRef.current) return;
 
@@ -1082,10 +1165,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (state.unlimitedFps != null) setUnlimitedFps(state.unlimitedFps);
       if (state.gensPerFrame != null) setGensPerFrame(state.gensPerFrame);
       if (state.unlimitedGens != null) setUnlimitedGens(state.unlimitedGens);
-      if (state.modelAttrs) {
-        setRuntimeModelAttrs(prev => ({ ...prev, ...state.modelAttrs }));
-        workerRef.current?.postMessage({ type: 'updateModelAttrs', attrs: state.modelAttrs });
-      }
+    }
+
+    // Restore model-attribute values independently — presets may carry these
+    // without any UI controls, so gating on hasControls would silently skip them.
+    if (state.modelAttrs) {
+      setRuntimeModelAttrs(prev => ({ ...prev, ...state.modelAttrs }));
+      workerRef.current?.postMessage({ type: 'updateModelAttrs', attrs: state.modelAttrs });
     }
 
     // Restore grid state if present
@@ -1217,6 +1303,29 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               onChange={e => setSimHeight(Math.max(1, Number(e.target.value) || 1))} />
           </div>
           <button className={styles.controlButton} onClick={handleApplyDimensions}>Resize</button>
+
+          <hr className={styles.divider} />
+          <div className={styles.sectionTitle}>Presets</div>
+          {(model.presets || []).length === 0 && (
+            <div style={{ fontSize: 11, color: '#888', padding: '4px 0 6px' }}>
+              No presets yet. Tune the model attributes below and save a snapshot.
+            </div>
+          )}
+          {(model.presets || []).map(p => {
+            const hasGrid = p.state.width != null;
+            return (
+              <div key={p.id} className={styles.fieldRow} title={p.description || (hasGrid ? `Includes grid (${p.state.width}\u00D7${p.state.height})` : 'Parameters only')}>
+                <span className={styles.statLabel} style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {p.name}{hasGrid ? ' \u25C9' : ''}
+                </span>
+                <button className={styles.controlButton} style={{ padding: '2px 8px', flex: 'none' }} onClick={() => handleLoadPreset(p)}>Load</button>
+                <button className={styles.controlButton} style={{ padding: '2px 6px', flex: 'none' }} title="Delete preset" onClick={() => handleDeletePreset(p)}>&times;</button>
+              </div>
+            );
+          })}
+          <button className={styles.controlButton} onClick={() => setPresetDialogOpen(true)}>
+            + Save Current as Preset&hellip;
+          </button>
 
           {modelAttrs.length > 0 && (
             <>
@@ -1554,6 +1663,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           color={brushColor}
           onChange={setBrushColor}
           onClose={() => setColorPopover(null)}
+        />
+      )}
+      {presetDialogOpen && (
+        <PresetSaveDialog
+          onConfirm={(name, description, includeGrid) => {
+            setPresetDialogOpen(false);
+            handleCreatePreset(name, description, includeGrid);
+          }}
+          onCancel={() => setPresetDialogOpen(false)}
         />
       )}
     </div>

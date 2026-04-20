@@ -18,6 +18,7 @@ import type {
   Mapping,
   ModelProperties,
   Neighborhood,
+  Preset,
   SimulationState,
 } from './types';
 import { DEFAULT_MODEL, EMPTY_MODEL } from './defaultModel';
@@ -114,7 +115,10 @@ type ModelAction =
   | { type: 'NEW_MODEL' }
   | { type: 'LOAD_MODEL'; model: CAModel }
   | { type: 'MARK_SAVED' }
-  | { type: 'SET_SIMULATION_STATE'; state: SimulationState | undefined };
+  | { type: 'SET_SIMULATION_STATE'; state: SimulationState | undefined }
+  | { type: 'ADD_PRESET'; preset: Preset }
+  | { type: 'DELETE_PRESET'; id: string }
+  | { type: 'UPDATE_PRESET'; id: string; patch: Partial<Omit<Preset, 'id'>> };
 
 // ---------------------------------------------------------------------------
 // Reducer
@@ -448,6 +452,38 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         ...state,
         model: { ...state.model, simulationState: action.state },
       };
+
+    case 'ADD_PRESET':
+      return {
+        ...state,
+        isDirty: true,
+        model: {
+          ...state.model,
+          presets: [...(state.model.presets || []), action.preset],
+        },
+      };
+
+    case 'DELETE_PRESET':
+      return {
+        ...state,
+        isDirty: true,
+        model: {
+          ...state.model,
+          presets: (state.model.presets || []).filter(p => p.id !== action.id),
+        },
+      };
+
+    case 'UPDATE_PRESET':
+      return {
+        ...state,
+        isDirty: true,
+        model: {
+          ...state.model,
+          presets: (state.model.presets || []).map(p =>
+            p.id === action.id ? { ...p, ...action.patch } : p,
+          ),
+        },
+      };
   }
 }
 
@@ -484,6 +520,9 @@ export interface ModelContextValue {
   loadModel: (model: CAModel) => void;
   markSaved: () => void;
   setSimulationState: (state: SimulationState | undefined) => void;
+  addPreset: (preset: Preset) => void;
+  deletePreset: (id: string) => void;
+  updatePreset: (id: string, patch: Partial<Omit<Preset, 'id'>>) => void;
 }
 
 const ModelContext = createContext<ModelContextValue | null>(null);
@@ -550,10 +589,12 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto-save to localStorage (strip simulationState to avoid exceeding quota on large grids)
+  // Auto-save to localStorage (strip simulationState + presets to avoid exceeding
+  // quota on large grids; presets with embedded grid data can be tens of MB each)
   useEffect(() => {
     try {
-      const { simulationState: _drop, ...modelWithoutState } = state.model;
+      const { simulationState: _drop, presets: _dropP, ...modelWithoutState } = state.model;
+      void _drop; void _dropP;
       localStorage.setItem('genesisca_autosave', JSON.stringify(modelWithoutState));
     } catch {
       // localStorage full or unavailable
@@ -666,6 +707,19 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'SET_SIMULATION_STATE', state: simState }),
     [],
   );
+  const addPreset = useCallback(
+    (preset: Preset) => dispatch({ type: 'ADD_PRESET', preset }),
+    [],
+  );
+  const deletePreset = useCallback(
+    (id: string) => dispatch({ type: 'DELETE_PRESET', id }),
+    [],
+  );
+  const updatePreset = useCallback(
+    (id: string, patch: Partial<Omit<Preset, 'id'>>) =>
+      dispatch({ type: 'UPDATE_PRESET', id, patch }),
+    [],
+  );
 
   const value = useMemo<ModelContextValue>(
     () => ({
@@ -695,6 +749,9 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       loadModel,
       markSaved,
       setSimulationState,
+      addPreset,
+      deletePreset,
+      updatePreset,
     }),
     [
       state.model,
@@ -723,6 +780,9 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       loadModel,
       markSaved,
       setSimulationState,
+      addPreset,
+      deletePreset,
+      updatePreset,
     ],
   );
 

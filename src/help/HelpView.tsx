@@ -323,7 +323,7 @@ export function HelpView() {
               <tr><td>Arithmetic Operator (Math)</td><td>+, -, *, /, %, sqrt, pow, abs, max, min, mean.</td></tr>
               <tr><td>Proportion Map</td><td>Remap a value from one range to another: output = outMin + (x - inMin) * (outMax - outMin) / (inMax - inMin). Has 5 inputs: X, In Min, In Max, Out Min, Out Max.</td></tr>
               <tr><td>Interpolate</td><td>Linear interpolation: output = min + t * (max - min). Inputs: T (0&ndash;1), Min, Max.</td></tr>
-              <tr><td>Compare (Statement)</td><td>Comparison operators: ==, !=, &gt;, &lt;, &gt;=, &lt;=.</td></tr>
+              <tr><td>Compare (Statement)</td><td>Comparison operators: ==, !=, &gt;, &lt;, &gt;=, &lt;=, <strong>Between</strong>, and <strong>Not Between</strong>. The between-family ops reveal a Y&#8322; input and two picklists for the lower (&gt;= or &gt;) and upper (&lt;= or &lt;) interval sides; <em>Not Between</em> fires when the value is outside the interval. Replaces the common Compare + Compare + AND chain.</td></tr>
               <tr><td>Logic Operator</td><td>AND, OR, XOR, NOT on boolean values.</td></tr>
             </tbody>
           </table>
@@ -335,7 +335,7 @@ export function HelpView() {
           <table className={styles.table}>
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
-              <tr><td>Group Counting</td><td>Count neighbors matching a condition (equals, not equals, greater, lesser).</td></tr>
+              <tr><td>Group Counting</td><td>Count neighbors matching a condition (equals, not equals, greater, lesser). Also supports <strong>Between</strong> and <strong>Not Between</strong> for interval counts &mdash; reveals a Compare High input and two picklists for the interval sides; <em>Not Between</em> counts elements outside the interval.</td></tr>
               <tr><td>Group Statement</td><td>Check if all/none/any neighbors satisfy a condition.</td></tr>
               <tr><td>Group Operator</td><td>Sum, multiply, max, min, mean, AND, OR, or pick random from neighbor values.</td></tr>
               <tr><td>Aggregate</td><td>Accepts multiple value connections on a single input port. Operations: Sum, Product, Max, Min, Average, Median. Use to combine values from different sources without needing arrays.</td></tr>
@@ -558,6 +558,31 @@ export function HelpView() {
             simulation, then reload the same starting point to try different parameters.
             Saving state also embeds it in the model, so the next <code>.gcaproj</code>{' '}
             save will include the simulation snapshot.
+          </p>
+
+          <h3 className={styles.h3}>Model Presets</h3>
+          <p className={styles.p}>
+            The left panel includes a <strong>Presets</strong> section (right above Model
+            Attributes) for embedding named snapshots of model-attribute values in the
+            project. This is useful for generic models whose emergent behavior depends
+            heavily on parameter choices &mdash; e.g. an MNCA-style model can ship several
+            "interesting" threshold sets as one-click configurations.
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Save current as preset</strong> &mdash; Captures the current
+              model-attribute values. Optionally embeds the cell grid too (check "Include
+              cell grid state" in the dialog). UI controls (brush, viewer, FPS) are
+              <em> never </em> part of a preset.</li>
+            <li><strong>Load</strong> &mdash; Restores the preset's model-attribute values
+              (and grid, if included). Preset rows marked with <code>&#x25C9;</code> include
+              grid data. If a grid-carrying preset's dimensions don't match the current
+              grid, you'll see a dimension-mismatch error &mdash; resize first.</li>
+            <li><strong>Delete</strong> (&times;) &mdash; Removes the preset from the model.</li>
+          </ul>
+          <p className={styles.p}>
+            Presets are stored inside the <code>.gcaproj</code> file. The Save Project
+            dialog exposes an <strong>Include model presets</strong> checkbox (default on)
+            so you can omit them from a given save if needed.
           </p>
 
           <p className={styles.p}>

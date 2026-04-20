@@ -12,10 +12,10 @@ export const UpdateIndicatorNode: NodeTypeDef = {
   ],
   defaultConfig: { indicatorId: '', operation: 'increment' },
   compile: (nodeId, config, inputs) => {
-    const indId = config.indicatorId as string || '_undef';
+    const idx = Number(config._indicatorIdx ?? -1);
     const value = inputs['value'] || '0';
     const op = config.operation as string;
-    const key = JSON.stringify(indId);
+    const key = String(idx);
     void nodeId;
     switch (op) {
       // Bool operations

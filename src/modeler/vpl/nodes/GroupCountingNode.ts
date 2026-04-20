@@ -3,16 +3,17 @@ import type { NodeTypeDef } from '../types';
 export const GroupCountingNode: NodeTypeDef = {
   type: 'groupCounting',
   label: 'Count Matching',
-  description: 'Counts how many values in an array match a comparison against X.',
+  description: 'Counts how many values in an array match a comparison against X, or fall within (or outside) an interval.',
   category: 'aggregation',
   color: '#e65100',
   ports: [
     { id: 'values', label: 'Values', kind: 'input', category: 'value', dataType: 'any', isArray: true },
     { id: 'compare', label: 'Compare To', kind: 'input', category: 'value', dataType: 'any' },
+    { id: 'compareHigh', label: 'Compare High', kind: 'input', category: 'value', dataType: 'any' },
     { id: 'count', label: 'Count', kind: 'output', category: 'value', dataType: 'integer' },
     { id: 'indexes', label: 'Indexes', kind: 'output', category: 'value', dataType: 'any', isArray: true },
   ],
-  defaultConfig: { operation: 'equals' },
+  defaultConfig: { operation: 'equals', lowOp: '>=', highOp: '<=' },
   compile: (nodeId, config, inputs) => {
     const valuesVar = inputs['values'] || '[]';
     const compareVar = inputs['compare'] || '0';
@@ -24,6 +25,15 @@ export const GroupCountingNode: NodeTypeDef = {
       case 'notEquals': cond = `${elem} !== ${compareVar}`; break;
       case 'greater':   cond = `${elem} > ${compareVar}`; break;
       case 'lesser':    cond = `${elem} < ${compareVar}`; break;
+      case 'between':
+      case 'notBetween': {
+        const compareHighVar = inputs['compareHigh'] || '0';
+        const lo = config.lowOp === '>' ? '>' : '>=';
+        const hi = config.highOp === '<' ? '<' : '<=';
+        const inside = `(${elem} ${lo} ${compareVar} && ${elem} ${hi} ${compareHighVar})`;
+        cond = op === 'notBetween' ? `!${inside}` : inside;
+        break;
+      }
       default:          cond = `${elem} === ${compareVar}`; break;
     }
     const needsIndexes = !!config._indexesConnected;

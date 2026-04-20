@@ -19,10 +19,11 @@ function loadSaveOptions(): SaveOptions {
       return {
         includeControls: parsed.includeControls !== false,
         includeGrid: parsed.includeGrid !== false,
+        includePresets: parsed.includePresets !== false,
       };
     }
   } catch { /* ignore */ }
-  return { includeControls: true, includeGrid: true };
+  return { includeControls: true, includeGrid: true, includePresets: true };
 }
 
 export function FileMenu() {
@@ -64,9 +65,12 @@ export function FileMenu() {
     await new Promise(r => requestAnimationFrame(r));
     const latest = modelRef.current;
     // If user opted out of both, strip simulationState entirely regardless of what's in model
-    const toSerialize = (!opts.includeControls && !opts.includeGrid)
+    let toSerialize = (!opts.includeControls && !opts.includeGrid)
       ? { ...latest, simulationState: undefined }
       : latest;
+    if (!opts.includePresets) {
+      toSerialize = { ...toSerialize, presets: undefined };
+    }
     const json = serializeModel(toSerialize);
     const filename = modelFilename(latest);
     downloadJSON(json, filename);

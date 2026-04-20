@@ -11,7 +11,7 @@ export const GetIndicatorNode: NodeTypeDef = {
   ],
   defaultConfig: { indicatorId: '' },
   compile: (nodeId, config) => {
-    const indId = config.indicatorId as string || '_undef';
-    return `const _v${nodeId} = _indicators[${JSON.stringify(indId)}];\n`;
+    const idx = Number(config._indicatorIdx ?? -1);
+    return `const _v${nodeId} = _indicators[${idx}];\n`;
   },
 };

@@ -60,6 +60,11 @@ export interface ModelProperties {
   gridHeight: number;
   maxIterations: number;
   tags: string[];
+  /** Wave 2: when true, the simulator runs the WASM-compiled step instead of
+   *  the JS-compiled step. Off by default. The WASM compiler falls back to JS
+   *  silently if the graph references a node type whose WASM emit is not yet
+   *  implemented; the user can flip this off at any time to force JS. */
+  useWasm?: boolean;
 }
 
 /** A serialized node in the update rules graph */
@@ -160,6 +165,21 @@ export interface SimulationState {
   unlimitedGens?: boolean;
 }
 
+/** A named snapshot of model-attribute values (always) and optionally the cell
+ *  grid. Presets let one model ship many parameter variants the user can switch
+ *  between in the Simulator (e.g. MNCA threshold sets), without duplicating the
+ *  model into separate library entries. */
+export interface Preset {
+  id: string;
+  name: string;
+  description?: string;
+  /** Embedded SimulationState — always includes modelAttrs; includes grid fields
+   *  only when the user checked "Include cell grid state" at save time. Never
+   *  includes UI controls (brush, viewer, FPS). */
+  state: SimulationState;
+  createdAt: number;
+}
+
 /** Complete CA model definition */
 export interface CAModel {
   schemaVersion: number;
@@ -172,4 +192,5 @@ export interface CAModel {
   graphEdges: GraphEdge[];
   macroDefs: MacroDef[];
   simulationState?: SimulationState;
+  presets?: Preset[];
 }

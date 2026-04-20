@@ -239,7 +239,7 @@ genesis-ca/
 - **Documentation consistency:** When changing features, update all three sources of truth: the code, `src/help/HelpView.tsx` (in-app Help tab), and the root `README.md`. For node-system changes (port types, redundancies, new nodes) also update `docs/NODES_REFERENCE.md` (table + Mermaid diagrams). These must remain consistent with each other.
 - **Pre-commit type check:** Vite dev server does NOT type-check — always run `npx tsc -b` before committing to catch TypeScript errors that will fail the CI build. Note: `npx tsc --noEmit` (without `-b`) silently checks nothing because the root tsconfig has `"files": []` and only project references.
 - **Debugging blank-screen React crashes:** When the app whites out (React unmounts on uncaught error), console usually only shows generic "error in `<X>` component" warnings without stack traces. Install a `window.onerror` handler via preview_eval BEFORE reproducing, then read captured errors after — this surfaces the real stack trace.
-- **Version display:** When bumping version in `package.json`, also update the hardcoded version string in `src/App.tsx` header (`v1.X.0`).
+- **Version display:** When bumping version, update ALL FOUR places: `package.json`, `package-lock.json` (root + first `packages.""` entry), the hardcoded version string in `src/App.tsx` header (`v1.X.0`), and the badge in `README.md` (`<sup>v1.X.0</sup>`). Easy to miss; sweep with `grep -rn "v1\.[0-9]"` after bumping.
 - **PR descriptions:** Never include "Built with Claude Code" or similar Claude/Anthropic attribution lines. User handles all attribution decisions.
 
 ---
@@ -479,6 +479,21 @@ The app is functional with these major systems:
 - Vite base path: `base` must be conditional — `command === 'build' ? '/GenesisCA/' : '/'` — otherwise dev server fetches fail
 - Randomize/Reset must run one step via compiled stepFn so model-defined color mappings apply (not hardcoded fallback)
 - Models Library: Vite plugin in vite.config.ts auto-generates `models/index.json` from `public/models/*.gcaproj` — no manual manifest; card metadata comes from `ModelProperties`
+
+---
+
+## WASM Compile Target (Wave 2)
+
+- 4-file structure under `src/modeler/vpl/compiler/wasm/`: `encoder.ts` (hand-rolled WASM binary encoder, no wabt.js), `layout.ts` (memory layout: attrs/colors/nbrs/modelAttrs/indicators/rngState/activeViewer/order/scratch), `emitter.ts` (`WasmEmitter` class + `ValueRef`/`ArrayRef` types), `compile.ts` (orchestrator + per-node emitters)
+- One module exports all entry points: `step`, `inputColor_<sanitisedMappingId>`, `outputMapping_<sanitisedMappingId>`. `Math.pow` is imported as funcIdx 0 (JS provides via `env.pow`); sqrt/abs/floor use native f64 intrinsics
+- Multi-output value cache: `valueLocals: Map<nodeId, Map<portId, LocalRef>>`. Single-output nodes get the named port aliased to `'value'` automatically; multi-output emitters call `setCachedPort` for each named port
+- Array-producing nodes (`getNeighborIndexesByTags`, `filterNeighbors`, `joinNeighbors`, `getNeighborsAttrByIndexes`, `groupCounting` hybrid) live in a separate `ARRAY_NODE_EMITTERS` table. They allocate via per-cell scratch (bump-pointer reset at top of every cell iteration). Array consumers (aggregate/groupCounting/groupStatement) dispatch through `isArrayProducer` to the array path
+- Entry-point nodes (inputColor/step/outputMapping) have NO `VALUE_NODE_EMITTERS` entry. InputColor's r/g/b outputs resolve via `paramRefs` map (function param indices 1/2/3); skipping them in `preEmitValueNodes` is required
+- Skip `port.isArray` during scalar input resolution in `compileValueNode` / `compileArrayNode` / `compileFlowChain` — array consumers fetch sources via `inputToSources` + the array dispatch path; trying to value-emit an array source hits "no value emitter" errors
+- Sync mode WASM↔JS interop: WASM uses baked-in `attrReadOffset`/`attrWriteOffset` so worker `runStep()` does pre-step `readAttrs→attrsA` normalize + post-step bulk `attrsB→attrsA` copy. JS-mode swap path is untouched. Same normalization needed in `paint`/`importImage`/`runColorPass` when WASM is active
+- WASM compiler is self-sufficient — does its own `_resolvedTagIndexes` and `_indicatorIdx` pre-resolve (mirrors JS compiler). Don't assume the JS compiler ran first
+- `window.__simWorker` is exposed in DEV (`SimulatorView.tsx`) for direct postMessage testing — far more reliable than standalone parity harnesses, which have subtle setup mismatches with the worker (activeViewer string vs i32, indicators Float64Array vs wasmMemory region, etc.)
+- Big WASM-emitter refactors: implement EVERY emitter first, do a static review pass over the whole compiler, THEN run a single end-to-end test sweep. Iterative implement-test-fix-test cycles thrash because each new node type tested exposes structural issues (config-key mismatches, value-hoist scoping, sync-mode buffer swap, sentinel handling). One focused pass converges much faster
 
 ---
 
