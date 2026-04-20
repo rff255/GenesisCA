@@ -4,7 +4,7 @@ import { parseHandleId } from '../types';
 import type { PortDef } from '../types';
 import { classifyLoopInvariant } from './loopInvariant';
 import { safeId } from './identifierSafe';
-import { detectFusableAggregates, type FusionResult } from './fusion';
+import { detectFusableConsumers, type FusionResult } from './fusion';
 
 /**
  * Get the inline widget value for an unconnected port.
@@ -138,6 +138,134 @@ function buildFusedAggregateJS(aggId: string, op: string, nbrId: string, attrId:
       return `${head} let ${acc} = 0; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (${elem}) { ${acc} = 1; break; }`;
     default: // sum
       return `${head} let ${acc} = 0; for (let ${i} = 0; ${i} < ${sz}; ${i}++) ${acc} += ${elem};`;
+  }
+}
+
+/**
+ * Fused emit for `groupOperator` (Group Reduce). Multi-output node — declares
+ * BOTH `_v<id>_result` and `_v<id>_index` to match the varName() contract for
+ * multi-output nodes. For sum/mul/mean/and/or: index is meaningless and set to
+ * -1 (matching the existing non-fused emit). For max/min: track running index
+ * alongside running value. For random: pick uniform index, then look up.
+ *
+ * Note: `and`/`or` here return JS booleans (true/false) to match the existing
+ * `arr.every(Boolean)` / `arr.some(Boolean)` semantics — this differs from
+ * `Aggregate`'s and/or which returns 0/1 numerics.
+ */
+function buildFusedGroupOperatorJS(nodeId: string, op: string, nbrId: string, attrId: string): string {
+  const sz = `nSz_${nbrId}`;
+  const nb = `_nb${nodeId}`;
+  const head = `const ${nb} = idx * ${sz};`;
+  const elemAt = (idxExpr: string) => `r_${attrId}[nIdx_${nbrId}[${nb} + ${idxExpr}]]`;
+  const result = `_v${nodeId}_result`;
+  const idx = `_v${nodeId}_index`;
+  const i = `_gi${nodeId}`;
+  const e = `_v_${nodeId}_e`;
+  switch (op) {
+    case 'mul':
+      return `${head} let ${result} = 1; for (let ${i} = 0; ${i} < ${sz}; ${i}++) ${result} *= ${elemAt(i)}; const ${idx} = -1;`;
+    case 'mean':
+      return `${head} let _v${nodeId}_s = 0; for (let ${i} = 0; ${i} < ${sz}; ${i}++) _v${nodeId}_s += ${elemAt(i)}; const ${result} = _v${nodeId}_s / (${sz} || 1); const ${idx} = -1;`;
+    case 'and':
+      return `${head} let ${result} = true; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (!${elemAt(i)}) { ${result} = false; break; } const ${idx} = -1;`;
+    case 'or':
+      return `${head} let ${result} = false; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (${elemAt(i)}) { ${result} = true; break; } const ${idx} = -1;`;
+    case 'max':
+      return `${head} let ${idx} = 0; let ${result} = ${elemAt('0')}; for (let ${i} = 1; ${i} < ${sz}; ${i}++) { const ${e} = ${elemAt(i)}; if (${e} > ${result}) { ${result} = ${e}; ${idx} = ${i}; } }`;
+    case 'min':
+      return `${head} let ${idx} = 0; let ${result} = ${elemAt('0')}; for (let ${i} = 1; ${i} < ${sz}; ${i}++) { const ${e} = ${elemAt(i)}; if (${e} < ${result}) { ${result} = ${e}; ${idx} = ${i}; } }`;
+    case 'random':
+      return `${head} const ${idx} = Math.floor(Math.random() * ${sz}); const ${result} = ${elemAt(idx)};`;
+    case 'sum':
+    default:
+      return `${head} let ${result} = 0; for (let ${i} = 0; ${i} < ${sz}; ${i}++) ${result} += ${elemAt(i)}; const ${idx} = -1;`;
+  }
+}
+
+/**
+ * Fused emit for `groupCounting` (Count Matching) on the count-only path.
+ * The detector already refused fusion when the `indexes` output is wired,
+ * so we never need to materialise indices here. Declares `_v<id>_count` to
+ * match the multi-output varName() contract.
+ *
+ * The compare condition (equals/notEquals/.../between/notBetween) reuses the
+ * same operator-to-JS-string logic as the existing GroupCountingNode emit.
+ */
+function buildFusedGroupCountingJS(
+  nodeId: string,
+  op: string,
+  nbrId: string,
+  attrId: string,
+  compareVar: string,
+  compareHighVar: string,
+  lowOp: string,
+  highOp: string,
+): string {
+  const sz = `nSz_${nbrId}`;
+  const nb = `_nb${nodeId}`;
+  const head = `const ${nb} = idx * ${sz};`;
+  const i = `_gi${nodeId}`;
+  const elem = `r_${attrId}[nIdx_${nbrId}[${nb} + ${i}]]`;
+  const count = `_v${nodeId}_count`;
+  let cond: string;
+  switch (op) {
+    case 'notEquals': cond = `${elem} !== ${compareVar}`; break;
+    case 'greater':   cond = `${elem} > ${compareVar}`; break;
+    case 'lesser':    cond = `${elem} < ${compareVar}`; break;
+    case 'between': {
+      const inside = `(${elem} ${lowOp} ${compareVar} && ${elem} ${highOp} ${compareHighVar})`;
+      cond = inside;
+      break;
+    }
+    case 'notBetween': {
+      const inside = `(${elem} ${lowOp} ${compareVar} && ${elem} ${highOp} ${compareHighVar})`;
+      cond = `!${inside}`;
+      break;
+    }
+    default: cond = `${elem} === ${compareVar}`; break; // equals
+  }
+  return `${head} let ${count} = 0; for (let ${i} = 0; ${i} < ${sz}; ${i}++) { if (${cond}) ${count}++; }`;
+}
+
+/**
+ * Fused emit for `groupStatement` (Group Assert) on the result-only path.
+ * The detector refused fusion when the `indexes` output is wired. Uses
+ * short-circuit loops (every-style with first-failure break, some-style with
+ * first-match break) to match the existing `arr.every(...)` / `arr.some(...)`
+ * semantics of the non-fused emit.
+ */
+function buildFusedGroupStatementJS(
+  nodeId: string,
+  op: string,
+  nbrId: string,
+  attrId: string,
+  xVar: string,
+): string {
+  const sz = `nSz_${nbrId}`;
+  const nb = `_nb${nodeId}`;
+  const head = `const ${nb} = idx * ${sz};`;
+  const i = `_gi${nodeId}`;
+  const elem = `r_${attrId}[nIdx_${nbrId}[${nb} + ${i}]]`;
+  const result = `_v${nodeId}_result`;
+  // every-style: start true, first failure → false + break
+  // some-style: start false, first match → true + break
+  switch (op) {
+    case 'allIs':
+      return `${head} let ${result} = true; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (${elem} !== ${xVar}) { ${result} = false; break; }`;
+    case 'noneIs':
+      return `${head} let ${result} = true; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (${elem} === ${xVar}) { ${result} = false; break; }`;
+    case 'hasA':
+      return `${head} let ${result} = false; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (${elem} === ${xVar}) { ${result} = true; break; }`;
+    case 'allGreater':
+      return `${head} let ${result} = true; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (!(${elem} > ${xVar})) { ${result} = false; break; }`;
+    case 'anyGreater':
+      return `${head} let ${result} = false; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (${elem} > ${xVar}) { ${result} = true; break; }`;
+    case 'allLesser':
+      return `${head} let ${result} = true; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (!(${elem} < ${xVar})) { ${result} = false; break; }`;
+    case 'anyLesser':
+      return `${head} let ${result} = false; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (${elem} < ${xVar}) { ${result} = true; break; }`;
+    default: // fallback to allIs
+      return `${head} let ${result} = true; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (${elem} !== ${xVar}) { ${result} = false; break; }`;
   }
 }
 
@@ -541,19 +669,51 @@ function compileRoot(
       return `_v${nodeId}`;
     }
 
-    // Fused aggregate: emit one inlined loop that gathers + reduces in a
-    // single pass over the neighborhood. Bypasses the normal compile() path
-    // (which would consume `_scr_<srcId>` from the now-skipped gather).
-    if (node.data.nodeType === 'aggregate' && fusion.fusedAggregates.has(nodeId)) {
-      const srcId = fusion.fusedAggregates.get(nodeId)!;
-      const srcNode = nodeMap.get(srcId);
+    // Fused neighborhood consumer (aggregate / groupOperator / groupCounting /
+    // groupStatement): emit ONE inlined loop that gathers + reduces in a single
+    // pass over the neighborhood. Bypasses the normal compile() path (which
+    // would consume `_scr_<srcId>` from the now-skipped gather). The fusion
+    // detector (fusion.ts) decides which consumer types and ops are eligible
+    // and whether the indexes output is wired (refused for groupCounting/
+    // groupStatement). Per-type builders match the variable-naming contract
+    // varName() expects so downstream consumers find the same identifiers.
+    const fused = fusion.fusedConsumers.get(nodeId);
+    if (fused) {
+      const srcNode = nodeMap.get(fused.sourceId);
       if (srcNode) {
         const nbrId = (srcNode.data.config.neighborhoodId as string) || '_undef';
         const attrId = (srcNode.data.config.attributeId as string) || '_undef';
-        const op = (node.data.config.operation as string) || 'sum';
-        const code = buildFusedAggregateJS(nodeId, op, nbrId, attrId);
-        valueLines.push('      ' + code.trimEnd());
-        return `_v${nodeId}`;
+        // Helper to resolve a non-`values` scalar input (compare, compareHigh,
+        // x). Mirrors the resolution path the normal input loop uses below.
+        const resolveScalarInput = (portId: string): string | undefined => {
+          const source = inputToSource.get(`${nodeId}:${portId}`);
+          if (source) {
+            compileValueNode(source.nodeId);
+            return varName(source.nodeId, source.portId);
+          }
+          const port = def.ports.find(p => p.id === portId);
+          if (!port) return undefined;
+          return getInlineValue(port, node.data.config);
+        };
+        let code: string | undefined;
+        if (fused.consumerType === 'aggregate') {
+          code = buildFusedAggregateJS(nodeId, fused.op, nbrId, attrId);
+        } else if (fused.consumerType === 'groupOperator') {
+          code = buildFusedGroupOperatorJS(nodeId, fused.op, nbrId, attrId);
+        } else if (fused.consumerType === 'groupCounting') {
+          const compareVar = resolveScalarInput('compare') ?? '0';
+          const compareHighVar = resolveScalarInput('compareHigh') ?? '0';
+          const lowOp = (node.data.config.lowOp as string) === '>' ? '>' : '>=';
+          const highOp = (node.data.config.highOp as string) === '<' ? '<' : '<=';
+          code = buildFusedGroupCountingJS(nodeId, fused.op, nbrId, attrId, compareVar, compareHighVar, lowOp, highOp);
+        } else if (fused.consumerType === 'groupStatement') {
+          const xVar = resolveScalarInput('x') ?? '0';
+          code = buildFusedGroupStatementJS(nodeId, fused.op, nbrId, attrId, xVar);
+        }
+        if (code) {
+          valueLines.push('      ' + code.trimEnd());
+          return `_v${nodeId}`;
+        }
       }
     }
 
@@ -1173,7 +1333,7 @@ export function compileGraph(
   // collapse the two-loop pattern (gather scratch + reduce) into one inlined
   // loop. Halves work for the MNCA-style hot path (large neighborhoods).
   // Shared with the WASM compiler.
-  const fusion = detectFusableAggregates(graphNodes, graphEdges, inputToSources);
+  const fusion = detectFusableConsumers(graphNodes, graphEdges, inputToSources, inputToSource);
 
   const { params: loopParams, cellAttrs } = buildLoopParams(model);
   const cellParams = buildCellParams(model);
