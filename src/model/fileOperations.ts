@@ -1,8 +1,67 @@
 import { SCHEMA_VERSION } from './schema';
 import type { CAModel, SimulationState, SerializedTypedArray } from './types';
 
+/** Pretty-print JSON for .gcaproj files with targeted single-line inlining for
+ *  structurally-small, high-volume arrays that make default 2-space pretty-print
+ *  output unwieldy.
+ *
+ *  Inlined paths:
+ *   - `coords` (neighborhood coords: Array<[number, number]>) — whole array on
+ *     one line: `"coords": [[-1,-1], [-1,0], ...]`. A Moore neighborhood drops
+ *     from ~24 lines to 1; dense MNCA neighborhoods from thousands to one each.
+ *   - `graphEdges` and each macro's `edges` — one edge per line, each edge
+ *     fully inlined on its own line instead of spanning 5-7 lines.
+ *   - `graphNodes` and each macro's `nodes` — one node per line. Each node is
+ *     {id, type, position, data:{nodeType, config:{...}}} which pretty-prints
+ *     to 10-14 lines at indent=2; with many nodes this dominates the file.
+ *     Lines do get long for nodes with dense configs (e.g. Switch with many
+ *     cases), but the file stays valid JSON and diffs cleanly per-node.
+ *
+ *  Output is still valid JSON parseable by `JSON.parse` — only whitespace
+ *  inside specific subtrees is compacted. `readModelFile` is unchanged. */
+function stringifyCompact(value: unknown, indent = 2, level = 0, parentKey: string | null = null): string {
+  const pad = ' '.repeat(indent * level);
+  const childPad = ' '.repeat(indent * (level + 1));
+
+  // Native JSON.stringify handles null, number, string, bool, and also returns
+  // `undefined` (not the string) for `undefined` / functions / symbols. Our
+  // object path below filters those out before recursing, so reaching this
+  // branch with `undefined` would only happen on a top-level call — which
+  // never happens for a CAModel. Safe to defer.
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[]';
+    if (parentKey === 'coords') {
+      return '[' + value.map(c => JSON.stringify(c)).join(', ') + ']';
+    }
+    if (
+      parentKey === 'graphEdges' || parentKey === 'edges'
+      || parentKey === 'graphNodes' || parentKey === 'nodes'
+    ) {
+      const items = value.map(v => JSON.stringify(v));
+      return '[\n' + items.map(i => childPad + i).join(',\n') + '\n' + pad + ']';
+    }
+    // Arrays: replace undefined entries with null (matches native JSON.stringify
+    // behaviour — they can't be omitted without changing array length).
+    const items = value.map(v => v === undefined ? 'null' : stringifyCompact(v, indent, level + 1, null));
+    return '[\n' + items.map(i => childPad + i).join(',\n') + '\n' + pad + ']';
+  }
+
+  // Objects: skip keys whose value is undefined (or a function/symbol). This
+  // matches the behaviour of native `JSON.stringify(obj, null, 2)` — otherwise
+  // we emit `"foo": undefined` which is not valid JSON and breaks round-trip.
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined && typeof v !== 'function' && typeof v !== 'symbol');
+  if (entries.length === 0) return '{}';
+  const items = entries.map(([k, v]) =>
+    childPad + JSON.stringify(k) + ': ' + stringifyCompact(v, indent, level + 1, k),
+  );
+  return '{\n' + items.join(',\n') + '\n' + pad + '}';
+}
+
 export function serializeModel(model: CAModel): string {
-  return JSON.stringify(model, null, 2);
+  return stringifyCompact(model);
 }
 
 export function modelFilename(model: CAModel): string {
@@ -29,28 +88,75 @@ export function readModelFile(file: File): Promise<CAModel> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
+      const raw = reader.result as string;
+      // Strip a UTF-8 BOM if an editor added one. Leaving it in front of `{`
+      // makes JSON.parse throw "Unexpected token" at position 0 on files that
+      // look identical to the eye.
+      let text = raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw;
+      let model: CAModel;
       try {
-        const model = JSON.parse(reader.result as string) as CAModel;
-        if (!model.properties || !model.attributes) {
-          reject(new Error('Invalid file: missing required model fields.'));
+        model = JSON.parse(text) as CAModel;
+      } catch (err) {
+        // Recovery: older GenesisCA builds (pre-1.8.1) had a custom serializer
+        // bug that emitted `"<key>": undefined` when a top-level field was
+        // undefined. That's invalid JSON and blocks re-loading the file.
+        // Strip those keys so the rest of the file parses.
+        const msg0 = err instanceof Error ? err.message : String(err);
+        if (/undefined/i.test(msg0)) {
+          const cleaned = text
+            // `"key": undefined,` → remove entirely
+            .replace(/"[A-Za-z0-9_]+"\s*:\s*undefined\s*,?/g, '')
+            // Clean up a trailing comma that might now precede `}` or `]`
+            .replace(/,(\s*[}\]])/g, '$1');
+          try {
+            model = JSON.parse(cleaned) as CAModel;
+            text = cleaned; // for any downstream diagnostics
+          } catch (err2) {
+            const msg = err2 instanceof Error ? err2.message : String(err2);
+            const posMatch = msg.match(/position (\d+)/);
+            let snippet = '';
+            if (posMatch) {
+              const pos = Number(posMatch[1]);
+              const start = Math.max(0, pos - 40);
+              const end = Math.min(cleaned.length, pos + 40);
+              snippet = `\nNear: ...${cleaned.slice(start, end).replace(/\n/g, '\\n')}...`;
+            }
+            reject(new Error(`Failed to parse file: ${msg}${snippet}`));
+            return;
+          }
+        } else {
+          const msg = err instanceof Error ? err.message : String(err);
+          // Show the parser's position + a short window of file content around
+          // it so the user can see exactly what tripped it.
+          const posMatch = msg.match(/position (\d+)/);
+          let snippet = '';
+          if (posMatch) {
+            const pos = Number(posMatch[1]);
+            const start = Math.max(0, pos - 40);
+            const end = Math.min(text.length, pos + 40);
+            snippet = `\nNear: ...${text.slice(start, end).replace(/\n/g, '\\n')}...`;
+          }
+          reject(new Error(`Failed to parse file: ${msg}${snippet}`));
           return;
         }
-        if (
-          model.schemaVersion != null &&
-          model.schemaVersion > SCHEMA_VERSION
-        ) {
-          reject(
-            new Error(
-              `File uses schema version ${model.schemaVersion}, but this app supports up to version ${SCHEMA_VERSION}. Please update GenesisCA.`,
-            ),
-          );
-          return;
-        }
-        model.schemaVersion = SCHEMA_VERSION;
-        resolve(model);
-      } catch {
-        reject(new Error('Failed to parse file. Is it valid JSON?'));
       }
+      if (!model.properties || !model.attributes) {
+        reject(new Error('Invalid file: missing required model fields.'));
+        return;
+      }
+      if (
+        model.schemaVersion != null &&
+        model.schemaVersion > SCHEMA_VERSION
+      ) {
+        reject(
+          new Error(
+            `File uses schema version ${model.schemaVersion}, but this app supports up to version ${SCHEMA_VERSION}. Please update GenesisCA.`,
+          ),
+        );
+        return;
+      }
+      model.schemaVersion = SCHEMA_VERSION;
+      resolve(model);
     };
     reader.onerror = () => reject(new Error('Failed to read file.'));
     reader.readAsText(file);
@@ -125,12 +231,14 @@ export function serializeSimState(
   const wantControls = include.controls !== false;
   const serialized: SimulationState = {};
   if (wantGrid) {
-    serialized.generation = workerState.generation;
+    // Saved grid state is a starting configuration — NOT a run snapshot.
+    // We deliberately skip `generation`, `indicators`, and `linkedAccumulators`
+    // so a loaded state always begins from generation 0 with fresh indicator
+    // values. The fields remain optional in the type for back-compat with
+    // older files (loader ignores them).
     serialized.width = workerState.width;
     serialized.height = workerState.height;
     serialized.attributes = {};
-    serialized.indicators = workerState.indicators;
-    serialized.linkedAccumulators = workerState.linkedAccumulators;
     serialized.colors = arrayBufferToBase64(workerState.colors);
     for (const [id, entry] of Object.entries(workerState.attributes)) {
       serialized.attributes[id] = {
@@ -176,12 +284,11 @@ export function serializePreset(
 ): SimulationState {
   const out: SimulationState = { modelAttrs: { ...workerState.modelAttrs } };
   if (opts.includeGrid) {
-    out.generation = workerState.generation;
+    // Presets also store starting configurations — skip generation + indicators
+    // for the same reason as serializeSimState above.
     out.width = workerState.width;
     out.height = workerState.height;
     out.attributes = {};
-    out.indicators = { ...workerState.indicators };
-    out.linkedAccumulators = JSON.parse(JSON.stringify(workerState.linkedAccumulators));
     out.colors = arrayBufferToBase64(workerState.colors);
     for (const [id, entry] of Object.entries(workerState.attributes)) {
       out.attributes[id] = {

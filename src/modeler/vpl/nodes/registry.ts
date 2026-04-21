@@ -40,12 +40,14 @@ import { GetNeighborAttributeByTagNode } from './GetNeighborAttributeByTagNode';
 import { GetNeighborIndexesByTagsNode } from './GetNeighborIndexesByTagsNode';
 import { FilterNeighborsNode } from './FilterNeighborsNode';
 import { JoinNeighborsNode } from './JoinNeighborsNode';
+import { StopEventNode } from './StopEventNode';
 
 const ALL_NODES: NodeTypeDef[] = [
   // Event (entry points)
   StepNode,
   InputColorNode,
   OutputMappingNode,
+  StopEventNode,
   // Flow
   ConditionalNode,
   SequenceNode,

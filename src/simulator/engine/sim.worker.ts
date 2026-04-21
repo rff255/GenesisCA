@@ -12,6 +12,9 @@ interface AttrDef {
   type: string;
   isModelAttribute: boolean;
   defaultValue: string;
+  /** Cell attributes only: value held by out-of-grid cells when boundary
+   *  is "constant". When undefined/empty, boundary sentinel uses defaultValue. */
+  boundaryValue?: string;
   tagOptions?: string[];
 }
 
@@ -32,6 +35,8 @@ interface InitMsg {
   stepCode: string;
   inputColorCodes: Array<{ mappingId: string; code: string }>;
   outputMappingCodes: Array<{ mappingId: string; code: string }>;
+  /** Per-stop-event-node message, indexed by (_stopIdx - 1). */
+  stopMessages?: string[];
   activeViewer: string;
   indicators?: IndicatorDef[];
   /** Wave 2: optional pre-compiled WASM step bytes (compiled on main thread). */
@@ -55,7 +60,7 @@ interface PaintMsg {
 }
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number> }
+interface RecompileMsg { type: 'recompile'; stepCode: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number> }
 interface UpdateModelAttrsMsg { type: 'updateModelAttrs'; attrs: Record<string, number> }
 interface ImportImageMsg { type: 'importImage'; pixels: Uint8ClampedArray; mappingId: string; activeViewer: string }
 
@@ -76,13 +81,10 @@ interface UpdateIndicatorsMsg { type: 'updateIndicators'; indicators: IndicatorD
 interface GetStateMsg { type: 'getState' }
 interface LoadStateMsg {
   type: 'loadState';
-  generation: number;
   width: number;
   height: number;
   attributes: Record<string, { type: string; buffer: ArrayBuffer }>;
   modelAttrs: Record<string, number>;
-  indicators: Record<string, number>;
-  linkedAccumulators: Record<string, number | Record<string, number>>;
   colors: ArrayBuffer;
   orderArray?: ArrayBuffer;
   activeViewer: string;
@@ -215,10 +217,27 @@ let standalonePerGenIdx: number[] = [];
 // id-keyed payload that the UI consumes. Linked indicators come via linkedResults.
 let standaloneIds: Array<{ idx: number; id: string }> = [];
 let linkedDefs: Array<{
-  id: string; accumulationMode: string;
+  id: string;
+  accumulationMode: string;
+  /** Enough info to compute the aggregation directly from the grid buffer.
+   *  Used by the WASM-path fallback (computeLinkedIndicatorsFromBuffer) since
+   *  the WASM step doesn't emit the post-loop aggregation the JS step does. */
+  attrId?: string;
+  attrType?: string;
+  aggregation?: string;
+  binCount?: number;
+  tagOptions?: string[];
+  watched?: boolean;
 }> = [];
 let linkedAccumulators: Record<string, number | Record<string, number>> = {};
 let linkedResults: Record<string, number | Record<string, number>> = {};
+
+// Stop-event flag — compiled step writes a 1-based index into stopFlag[0] when
+// a Stop Event node's flow fires. Worker reads after each step/color/input pass
+// and surfaces the matching message from stopMessages. A Uint32Array view over
+// the layout.stopFlagOffset so JS and WASM share the same memory cell.
+let stopFlag: Uint32Array = new Uint32Array(1);
+let stopMessages: string[] = [];
 
 // ---------------------------------------------------------------------------
 // Typed array creation by attribute type
@@ -252,6 +271,20 @@ function defaultValue(attr: AttrDef): number {
     case 'integer': return parseInt(attr.defaultValue, 10) || 0;
     case 'float': return parseFloat(attr.defaultValue) || 0;
     case 'tag': return parseInt(attr.defaultValue, 10) || 0;
+    default: return 0;
+  }
+}
+
+/** Parsed value held by out-of-grid cells under constant boundary. Falls back
+ *  to defaultValue when boundaryValue is unset or an empty string. */
+function boundaryCellValue(attr: AttrDef): number {
+  const bv = attr.boundaryValue;
+  if (bv === undefined || bv === '') return defaultValue(attr);
+  switch (attr.type) {
+    case 'bool': return bv === 'true' ? 1 : 0;
+    case 'integer': return parseInt(bv, 10) || 0;
+    case 'float': return parseFloat(bv) || 0;
+    case 'tag': return parseInt(bv, 10) || 0;
     default: return 0;
   }
 }
@@ -310,6 +343,11 @@ function initGrid(): void {
   const rngView = new Uint32Array(buf, wasmLayout.rngStateOffset, 1);
   rngView[0] = rngState[0]!;
 
+  // Stop-event flag view — shared between JS step (writes via `_stopFlag[0]=idx`)
+  // and WASM step (i32.store at stopFlagOffset). Reset to 0 on init.
+  stopFlag = new Uint32Array(buf, wasmLayout.stopFlagOffset, 1);
+  stopFlag[0] = 0;
+
   // Order array — view over memory in BOTH modes (offset is reserved either way).
   // Async mode populates it (sequential then maybe shuffled); sync mode leaves it 0.
   if (isAsync) {
@@ -365,15 +403,16 @@ function buildNeighborIndices(): void {
     nbrIndices[nbr.id] = indices;
   }
 
-  // Constant boundary: write the default value into the sentinel cell at
-  // index `total`. The +1 slot was already allocated as part of wasmMemory in
-  // initGrid (see viewLen), so we just need to set it; we don't replace the
-  // array (which would orphan the WASM module's view).
+  // Constant boundary: write the boundary cell value (falls back to default
+  // when unset) into the sentinel cell at index `total`. The +1 slot was
+  // already allocated as part of wasmMemory in initGrid (see viewLen), so we
+  // just need to set it; we don't replace the array (which would orphan the
+  // WASM module's view).
   if (boundaryTreatment !== 'torus') {
     for (const attr of cellAttrs) {
-      const dv = defaultValue(attr);
-      attrsA[attr.id]![total] = dv;
-      if (attrsB[attr.id] !== attrsA[attr.id]) attrsB[attr.id]![total] = dv;
+      const bv = boundaryCellValue(attr);
+      attrsA[attr.id]![total] = bv;
+      if (attrsB[attr.id] !== attrsA[attr.id]) attrsB[attr.id]![total] = bv;
     }
   }
 }
@@ -394,7 +433,7 @@ function buildLoopArgs(): unknown[] {
     args.push(nbrIndices[nbr.id]);
     args.push(nbr.coords.length);
   }
-  args.push(cachedModelAttrs, colors, activeViewer, cachedIndicators, linkedResults, rngState);
+  args.push(cachedModelAttrs, colors, activeViewer, cachedIndicators, linkedResults, rngState, stopFlag);
   if (updateMode === 'asynchronous' && orderArray) args.push(orderArray);
   return args;
 }
@@ -408,7 +447,7 @@ function buildCellArgs(idx: number): unknown[] {
     args.push(nbrIndices[nbr.id]);
     args.push(nbr.coords.length);
   }
-  args.push(cachedModelAttrs, colors, activeViewer, cachedIndicators, linkedResults, rngState);
+  args.push(cachedModelAttrs, colors, activeViewer, cachedIndicators, linkedResults, rngState, stopFlag);
   return args;
 }
 
@@ -448,6 +487,11 @@ function runStep(): void {
   const fn = (useWasm && wasmStepFn) ? wasmStepFn : stepFn!;
   const callWasm = useWasm && wasmStepFn !== null;
   const isSync = updateMode !== 'asynchronous';
+
+  // Clear the stop-event flag before the step runs — otherwise a stop that
+  // fired during an internal runStep call (reset/randomize/paint visualisation)
+  // would persist and falsely pause the user's next Play.
+  if (stopFlag) stopFlag[0] = 0;
 
   // Reset per-generation standalone indicators to defaults
   if (standalonePerGenIdx.length > 0) {
@@ -490,6 +534,11 @@ function runStep(): void {
   // live in the imported memory and offsets are baked into the module.
   if (callWasm) {
     (fn as (t: number) => void)(total);
+    // WASM step doesn't emit the per-loop linked-indicator aggregation the
+    // JS step does. Compute it directly from the shared buffer so frequency /
+    // total linked indicators are populated and end conditions / charts work
+    // in WASM mode too.
+    if (linkedDefs.length > 0) computeLinkedIndicatorsFromBuffer();
   } else {
     fn(...buildLoopArgs());
   }
@@ -662,9 +711,17 @@ function initIndicators(defs: IndicatorDef[]): void {
         standalonePerGenIdx.push(i);
       }
     } else if (ind.kind === 'linked') {
+      const linkedAttr = cellAttrs.find(a => a.id === ind.linkedAttributeId)
+        || modelAttrsList.find(a => a.id === ind.linkedAttributeId);
       linkedDefs.push({
         id: ind.id,
         accumulationMode: ind.accumulationMode,
+        attrId: ind.linkedAttributeId,
+        attrType: linkedAttr?.type,
+        aggregation: ind.linkedAggregation,
+        binCount: ind.binCount,
+        tagOptions: linkedAttr?.tagOptions,
+        watched: ind.watched,
       });
     }
   }
@@ -674,6 +731,78 @@ function resetIndicators(): void {
   cachedIndicators.set(standaloneDefaults);
   linkedAccumulators = {};
   linkedResults = {};
+}
+
+/** WASM-path fallback. The JS-compiled step function contains injected
+ *  post-loop code that computes frequency/total for each watched linked
+ *  indicator and writes into `linkedResults`. The WASM step emits no such
+ *  code, so we replicate the aggregation here, reading directly from the
+ *  shared typed-array buffers. Mirrors `buildLinkedIndicatorCode` in
+ *  `compiler/compile.ts` — keep the two in sync when that logic changes. */
+function computeLinkedIndicatorsFromBuffer(): void {
+  for (const def of linkedDefs) {
+    if (!def.watched) continue;
+    const arr = readAttrs[def.attrId ?? ''];
+    if (!arr || !def.attrType || !def.aggregation) continue;
+    if (def.aggregation === 'total') {
+      let sum = 0;
+      for (let i = 0; i < total; i++) sum += arr[i] ?? 0;
+      linkedResults[def.id] = sum;
+      continue;
+    }
+    // frequency
+    if (def.attrType === 'bool') {
+      let t = 0;
+      for (let i = 0; i < total; i++) if (arr[i]) t++;
+      linkedResults[def.id] = { 'true': t, 'false': total - t };
+    } else if (def.attrType === 'tag') {
+      const opts = def.tagOptions || [];
+      const freq: Record<string, number> = {};
+      for (const name of opts) freq[name] = 0;
+      for (let i = 0; i < total; i++) {
+        const idx = arr[i] ?? 0;
+        const name = opts[idx];
+        if (name !== undefined) freq[name] = (freq[name] ?? 0) + 1;
+      }
+      linkedResults[def.id] = freq;
+    } else if (def.attrType === 'integer') {
+      const freq: Record<string, number> = {};
+      for (let i = 0; i < total; i++) {
+        const k = String(arr[i] ?? 0);
+        freq[k] = (freq[k] ?? 0) + 1;
+      }
+      linkedResults[def.id] = freq;
+    } else if (def.attrType === 'float') {
+      const bins = Math.max(1, def.binCount ?? 10);
+      let mn = Infinity, mx = -Infinity;
+      for (let i = 0; i < total; i++) {
+        const v = arr[i] ?? 0;
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+      }
+      if (!Number.isFinite(mn) || !Number.isFinite(mx) || mn === mx) {
+        linkedResults[def.id] = { [`${(mn || 0).toFixed(2)}\u2013${(mn || 0).toFixed(2)}`]: total };
+        continue;
+      }
+      const range = mx - mn;
+      const step = range / bins;
+      const counts: number[] = new Array(bins).fill(0);
+      for (let i = 0; i < total; i++) {
+        const v = arr[i] ?? 0;
+        let b = Math.floor(((v - mn) / range) * bins);
+        if (b >= bins) b = bins - 1;
+        if (b < 0) b = 0;
+        counts[b]! += 1;
+      }
+      const freq: Record<string, number> = {};
+      for (let b = 0; b < bins; b++) {
+        const lo = mn + b * step;
+        const hi = b === bins - 1 ? mx : mn + (b + 1) * step;
+        freq[`${lo.toFixed(2)}\u2013${hi.toFixed(2)}`] = counts[b]!;
+      }
+      linkedResults[def.id] = freq;
+    }
+  }
 }
 
 function sendColors(): void {
@@ -742,6 +871,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       syncModelAttrsToMemory();
       syncActiveViewerToMemory();
       compileFns(msg.stepCode, msg.inputColorCodes, msg.outputMappingCodes || []);
+      stopMessages = msg.stopMessages || [];
       useWasm = !!msg.useWasm && !!msg.wasmStepBytes && !msg.wasmStepError;
       tryInstantiateWasmModule(msg.wasmStepBytes, msg.wasmExports);
       if (msg.wasmStepError && msg.useWasm) {
@@ -758,9 +888,22 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         return;
       }
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
-      for (let i = 0; i < msg.count; i++) runStep();
+      let stoppedByEvent: string | null = null;
+      for (let i = 0; i < msg.count; i++) {
+        runStep();
+        const rawStop = stopFlag[0] ?? 0;
+        if (rawStop !== 0) {
+          const idx = rawStop - 1;
+          stoppedByEvent = stopMessages[idx] ?? `Stop event #${idx}`;
+          stopFlag[0] = 0;
+          break; // short-circuit the rest of the batch
+        }
+      }
       if (!msg.skipColorPass) runColorPass();
       sendColors();
+      if (stoppedByEvent !== null) {
+        self.postMessage({ type: 'stopEvent', message: stoppedByEvent });
+      }
       break;
     }
 
@@ -850,6 +993,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         syncActiveViewerToMemory();
       }
       compileFns(msg.stepCode, msg.inputColorCodes, (msg as RecompileMsg).outputMappingCodes || []);
+      stopMessages = (msg as RecompileMsg).stopMessages || [];
       tryInstantiateWasmModule((msg as RecompileMsg).wasmStepBytes, (msg as RecompileMsg).wasmExports);
       if ((msg as RecompileMsg).wasmStepError) {
         self.postMessage({ type: 'error', message: '[wasm] recompile failed, falling back to JS: ' + (msg as RecompileMsg).wasmStepError });
@@ -963,7 +1107,13 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
 
     case 'loadState': {
-      generation = msg.generation;
+      // State files restore the grid configuration, NOT the run history —
+      // generation counter and indicator values reset to their init defaults
+      // so the user can start fresh from a saved starting position.
+      generation = 0;
+      resetIndicators();
+      linkedAccumulators = {};
+      linkedResults = {};
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
 
       // Restore cell attribute arrays — COPY INTO the existing views over WASM
@@ -991,19 +1141,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       const colorLen = Math.min(colors.length, loadedColors.length);
       for (let i = 0; i < colorLen; i++) colors[i] = loadedColors[i]!;
 
-      // Restore model attributes
+      // Restore model attributes (these are parameter values, not run state,
+      // so they ARE restored)
       for (const [key, val] of Object.entries(msg.modelAttrs)) {
         cachedModelAttrs[key] = val;
       }
-
-      // Restore standalone indicators (resolve id -> idx via current standaloneIds map;
-      // unknown ids in the loaded state are silently skipped, matching pre-typed-array behaviour)
-      const idToIdx = new Map(standaloneIds.map(s => [s.id, s.idx] as const));
-      for (const [key, val] of Object.entries(msg.indicators)) {
-        const idx = idToIdx.get(key);
-        if (idx !== undefined) cachedIndicators[idx] = val;
-      }
-      linkedAccumulators = msg.linkedAccumulators;
 
       // Restore order array
       if (msg.orderArray) {

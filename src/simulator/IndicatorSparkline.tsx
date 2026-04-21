@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useLayoutEffect, useState } from 'react';
 
 interface SparklineProps {
   data: number[];
@@ -29,17 +29,33 @@ export function IndicatorSparkline({ data, generation, height }: SparklineProps)
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
 
-  // Measure container width
+  // Measure container width. ResizeObserver keeps `width` in sync as the
+  // element resizes AND when it transitions from display:none (0x0 content
+  // rect) to a rendered size — common here, since the simulator panel can be
+  // mounted while hidden.
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
     const ro = new ResizeObserver(entries => {
-      for (const entry of entries) setWidth(Math.floor(entry.contentRect.width));
+      for (const entry of entries) {
+        const w = Math.floor(entry.contentRect.width);
+        if (w > 0) setWidth(w);
+      }
     });
     ro.observe(el);
-    setWidth(Math.floor(el.clientWidth));
     return () => ro.disconnect();
   }, []);
+
+  // Belt-and-suspenders: if we've received data but width hasn't been measured
+  // yet (ResizeObserver can be lazy on some browsers when the element first
+  // becomes visible), pull the width directly after each render.
+  useLayoutEffect(() => {
+    if (width > 0) return;
+    const el = wrapRef.current;
+    if (!el) return;
+    const w = Math.floor(el.clientWidth);
+    if (w > 0) setWidth(w);
+  });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -123,11 +139,15 @@ export function IndicatorSparkline({ data, generation, height }: SparklineProps)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, data.length, data[data.length - 1], generation, width, height]);
 
-  if (data.length < 2) return null;
-
+  // Always mount the wrapper div so the ResizeObserver (set up in an empty-deps
+  // effect above) sees a real DOM node on first mount and can measure width.
+  // If we early-return null when `data.length < 2`, the wrapper never attaches,
+  // `width` stays at 0, and the canvas never renders — even after data grows —
+  // until the component unmounts and remounts (e.g. via a collapse/expand
+  // cycle). Gate the CANVAS, not the wrapper.
   return (
-    <div ref={wrapRef} style={{ width: '100%' }}>
-      {width > 0 && (
+    <div ref={wrapRef} style={{ width: '100%', height }}>
+      {data.length >= 2 && width > 0 && (
         <canvas
           ref={canvasRef}
           style={{ width, height, display: 'block' }}

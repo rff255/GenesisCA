@@ -1144,7 +1144,7 @@ function buildLoopParams(model: CAModel): {
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
-  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState');
+  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState', '_stopFlag');
   if (isAsync) parts.push('order');
 
   return { params: parts.join(', '), cellAttrs, neighborhoods };
@@ -1158,7 +1158,7 @@ function buildCellParams(model: CAModel): string {
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
-  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState');
+  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState', '_stopFlag');
   return parts.join(', ');
 }
 
@@ -1243,6 +1243,10 @@ export interface CompileResult {
   stepCode: string;
   inputColorCodes: Array<{ mappingId: string; code: string }>;
   outputMappingCodes: Array<{ mappingId: string; code: string }>;
+  /** Parallel to stop-event-node index. When `_stopFlag[0] === n+1`, the
+   *  simulator pauses and shows `stopMessages[n]`. Length = number of Stop
+   *  Event nodes in the graph (including those inside macro defs). */
+  stopMessages: string[];
   error?: string;
 }
 
@@ -1252,11 +1256,11 @@ export function compileGraph(
   model?: CAModel,
 ): CompileResult {
   if (graphNodes.length === 0) {
-    return { stepCode: '', inputColorCodes: [], outputMappingCodes: [], error: 'No nodes in graph.' };
+    return { stepCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'No nodes in graph.' };
   }
 
   if (!model) {
-    return { stepCode: '', inputColorCodes: [], outputMappingCodes: [], error: 'Model required for SoA compilation.' };
+    return { stepCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'Model required for SoA compilation.' };
   }
 
   const isAsync = model.properties.updateMode === 'asynchronous';
@@ -1320,6 +1324,23 @@ export function compileGraph(
   }
   preResolveIndicators(graphNodes);
   for (const def of (model.macroDefs || [])) preResolveIndicators(def.nodes);
+
+  // Pre-assign stop-event indices. Each StopEventNode gets a stable 1-based
+  // index (0 reserved for "no stop requested"); the emitted code writes that
+  // index into `_stopFlag[0]`. Worker reads the flag after each step call and
+  // uses (idx - 1) to look up the user's message from `stopMessages`.
+  // Scoped across main graph + all macro defs so IDs are globally unique.
+  const stopMessages: string[] = [];
+  function preResolveStopEvents(nodes: GraphNode[]): void {
+    for (const node of nodes) {
+      if (node.data.nodeType === 'stopEvent') {
+        stopMessages.push(String(node.data.config.message ?? 'Stop condition reached'));
+        node.data.config._stopIdx = stopMessages.length; // 1-based
+      }
+    }
+  }
+  preResolveStopEvents(graphNodes);
+  for (const def of (model.macroDefs || [])) preResolveStopEvents(def.nodes);
 
   // Loop-invariance classification: identifies value nodes whose result does
   // not depend on the cell index (modelAttrs reads, getConstant, arithmetic
@@ -1471,7 +1492,7 @@ export function compileGraph(
   for (const a of cellAttrs) omParamParts.push(`w_${a.id}`);
   const neighborhoods = model.neighborhoods.map(n => ({ id: n.id }));
   for (const n of neighborhoods) { omParamParts.push(`nIdx_${n.id}`); omParamParts.push(`nSz_${n.id}`); }
-  omParamParts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState');
+  omParamParts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState', '_stopFlag');
   const omParams = omParamParts.join(', ');
 
   for (const omNode of outputMappingNodes) {
@@ -1501,7 +1522,7 @@ export function compileGraph(
   const error = asyncValidationError
     ?? (!stepNode ? 'No Step node found. Add a Step node as the entry point.' : undefined);
 
-  return { stepCode, inputColorCodes, outputMappingCodes, error };
+  return { stepCode, inputColorCodes, outputMappingCodes, stopMessages, error };
 }
 
 /**

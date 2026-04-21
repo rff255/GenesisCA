@@ -8,6 +8,8 @@ This repository (https://github.com/rff255/GenesisCA) originally contained a Qt/
 
 The old implementation in `legacy_qt_cpp_solution` serves as architectural reference. Key file for understanding the old compilation approach: `src/modeler/UpdateRulesHandler/node_graph_instance.h` — each node had an `Eval()` method that emitted C++ code snippets, stitched together into `.h`/`.cpp` files, then compiled to `.dll`/`.exe`. The new version follows the same pattern but targets JavaScript instead of C++.
 
+Active development lives on feature branches off `master` (most recently `improvements`). The `repo_overhaul` branch mentioned in older history was an early-rewrite checkpoint and is no longer the working branch.
+
 ---
 
 ## Commands
@@ -49,11 +51,11 @@ Beyond the six fundamentals, two types of mappings enable visualization and inte
 A complete GenesisCA model definition consists of:
 
 1. **Model Properties**
-   - 1.1. Presentation (Name, Author, Goal, Description...)
+   - 1.1. Presentation (Name, Rule Author, GenesisCA Model Author, Description...)
    - 1.2. Structure (Topology, Boundary Treatment, Grid Size...)
    - 1.3. Execution
      - 1.3.1. Initial Configuration (Attribute Initialization Mapping, Default Attribute Values)
-     - 1.3.2. Stop Conditions (Max of Iterations, Break Cases)
+     - 1.3.2. End Conditions (optional max generations + indicator rules with category support for linked-frequency) + in-graph Stop Event nodes
 
 2. **Attributes** — each has a name, type (bool, integer, float, tag, color), description, and type-specific properties (integer range, tag options...)
    - 2.1. Cell Attributes (per-cell state)
@@ -194,7 +196,7 @@ genesis-ca/
 │   │       ├── GraphEditor.tsx
 │   │       ├── graphState.ts          # Shared mutable state (avoids circular imports between GraphEditor/CaNode)
 │   │       ├── NodeExplorer.tsx        # Right-side searchable node list panel
-│   │       ├── nodes/                # 39 node types (one file each)
+│   │       ├── nodes/                # 40 node types (one file each)
 │   │       │   └── nodeValidation.ts  # detectMissingConfig() — drives warning badges
 │   │       └── compiler/
 │   │           └── compile.ts        # Two-pass compiler (hoisted values + flow)
@@ -276,7 +278,7 @@ The app is functional with these major systems:
 ### Visual Programming Language (VPL)
 - `src/modeler/vpl/GraphEditor.tsx` — React Flow-based node graph editor
 - `src/modeler/vpl/CaNode.tsx` — Custom node component with per-type config UI
-- `src/modeler/vpl/nodes/` — 39 node types, each in its own file with `compile()` method (2 are async-only: SetNeighborhoodAttribute, SetNeighborAttributeByIndex)
+- `src/modeler/vpl/nodes/` — 40 node types, each in its own file with `compile()` method (2 are async-only: SetNeighborhoodAttribute, SetNeighborAttributeByIndex). Includes `StopEventNode` (flow input only, text widget for stop message — compiles to `if (_stopFlag[0] === 0) _stopFlag[0] = <1-based idx>;` first-match-wins; WASM emitter mirrors this via `i32.store` at `layout.stopFlagOffset`).
 - Three "event" entry-point nodes: GenerationStep (per-gen logic), InputMapping C→A (brush), OutputMapping A→C (color pass)
 - `src/modeler/vpl/compiler/compile.ts` — Two-pass compiler: hoists values, then emits flow
 - Multi-output nodes (InputColor, GetColorConstant, MacroNode, ColorInterpolation) use `_v${nodeId}_${portId}` naming
@@ -327,7 +329,9 @@ The app is functional with these major systems:
 - Node config validation: `src/modeler/vpl/nodes/nodeValidation.ts` exports `detectMissingConfig(nodeType, config, model)` returning issue strings. CaNode renders an amber `!` badge in the header when issues exist. New node types with required configs (attributeId, neighborhoodId, mappingId, indicatorId, tagName, etc.) MUST add a case to that switch — otherwise the compiler silently emits `_undef` placeholders.
 - Vite dev server picks up new `public/<subdir>/` directories ONLY at startup. Adding a new folder (e.g. `public/macros/`) and fetching `/<subdir>/index.json` will return the SPA index.html until you restart the dev server.
 - `window.confirm/prompt/alert` block `preview_eval` (the JS thread freezes; the eval times out and the page becomes unresponsive — even subsequent reload eval times out). Stub them BEFORE clicking buttons that trigger dialogs: `window.confirm = () => true; window.prompt = () => 'value'; window.alert = () => {};`. The "New" button in the navbar uses `window.confirm` for unsaved-changes prompts.
-- React Flow's `onPaneContextMenu` doesn't respond to plain `dispatchEvent('contextmenu')` because of internal pointer-event filtering. Tests that need to verify pane right-click menus should set state directly or rely on the source-level diff. Node right-click DOES work via dispatchEvent on the .react-flow__node element.
+- React Flow's `onPaneContextMenu` doesn't respond to plain `dispatchEvent('contextmenu')` because of internal pointer-event filtering. Tests that need to verify pane right-click menus should set state directly or rely on the source-level diff. Node right-click DOES work via dispatchEvent on the .react-flow__node element. Ctrl+click for multi-select and pointer-drag box-select ALSO don't fire via synthetic events — for tests that need multi-selection, mutate the nodes array directly (adding `selected: true`) or accept source-level review.
+- `fileOperations.ts` uses a custom `stringifyCompact` for .gcaproj output (coords, edges, and nodes are inlined per item). It MUST filter `undefined` object properties and map `undefined` array entries to `null` — matching native `JSON.stringify` — otherwise files emit `"key": undefined`, which is invalid JSON and breaks load. `readModelFile` has a recovery path that strips `"<key>": undefined` patterns for files saved by older buggy builds + strips a UTF-8 BOM + surfaces parse errors with `position N` and a 40-char snippet.
+- Canvas chart components (`IndicatorSparkline` / `IndicatorMultiLineChart` / `IndicatorStackedAreaChart`) ALWAYS mount the outer `<div ref={wrapRef}>`; only the inner `<canvas>` is gated on data availability. Early-returning `null` when `data.length < 2` leaves `wrapRef.current` null when the mount-time width-measurement effect runs, `width` stays at 0 forever, and the chart never appears even after data grows (remounting via collapse/expand is what "fixes" it). A `useLayoutEffect` fallback re-measures width on renders where `ResizeObserver` was lazy (common when parent transitions from `display:none`).
 - Async-only nodes (`ASYNC_ONLY_TYPES` in compile.ts): `setNeighborhoodAttribute`, `setNeighborAttributeByIndex` — compiler emits error if used in sync mode because copy lines overwrite neighbor writes. `getNeighborAttributeByIndex` is read-only and works in both modes. Both `setNeighborAttributeByIndex` and `getNeighborAttributeByIndex` accept an array index input (loops over all elements / takes element 0 respectively) — never coerce array→scalar via `(arr | 0)` because it silently returns 0 for any multi-element or empty array.
 - Neighbor-write nodes use `if (_ni < total)` guard to protect constant-boundary sentinel from corruption
 - Graph state sync: single debounced sync (100ms) via refs — never use multiple setTimeout callbacks
@@ -411,9 +415,17 @@ The app is functional with these major systems:
 
 ### Simulator UI:
 - `IndicatorDisplay` component in right panel below brush controls
-- Scalar values (standalone, linked total): single numeric display
-- Frequency maps (linked frequency): compact table with value→count rows
+- Scalar values (standalone, linked total): single numeric display + sparkline chart (always-mount-wrapper pattern — see Key Patterns)
+- Frequency maps (linked frequency): three viz modes cycled via a header button — **Bars** (`IndicatorDisplay` inline bar chart, current gen only), **Lines** (`IndicatorMultiLineChart`, one coloured line per category over time), **Stack** (`IndicatorStackedAreaChart`, cumulative-sum bands). Preference persists per indicator via `indicatorVizModes: Record<id, 'bars'|'multiline'|'stacked'>` inside `genesisca_sim_settings` localStorage.
+- History shape in `SimulatorView.indicatorHistoryRef` is polymorphic: `number[]` for scalars, `Record<category, number[]>` for frequency maps. Capped at 500 samples per series.
+- `chartExpandedRef` is populated by `IndicatorDisplay`'s render-phase ref-compare notification. Do NOT reset it in `initWorker`'s useEffect — that runs AFTER the child's render and wipes the populated set, so the first stepped messages collect no history (symptom: scalar sparklines stay blank until manual collapse/expand).
 - Eye icon per indicator toggles `watched` state
+
+### End Conditions & Stop Events:
+- `ModelProperties.endConditions?: { enabled, maxGenerations?, indicatorConditions? }` — optional auto-pause rules evaluated on the main thread in `SimulatorView.evalEndConditions` after each `stepped` message; pauses play and shows a blue info notice.
+- `IndicatorEndCondition.category?: string` — for linked-frequency indicators the comparison is `frequencyMap[category] <op> constant`. UI branches per linked attribute type: bool/tag → dropdown, integer → number input, float-binned → disabled with warning (bin keys aren't knowable at design time).
+- Stop Event node compiles to a write into a shared `_stopFlag` Uint32Array (+ `layout.stopFlagOffset` for WASM). Worker reads the flag after every `runStep`, clears it at the top of each step, surfaces the message via a `stopEvent` message. Main thread pauses + shows the same blue notice. `stopMessages: string[]` passed via init/recompile; Stop Event config.`_stopIdx` is 1-based so 0 means "no stop requested".
+- Saved state (.gcastate / embedded in .gcaproj) restores the grid configuration only. `generation` resets to 0 and indicators re-init on load — saved files represent starting configurations, not run snapshots. `serializeSimState` skips generation/indicators/linkedAccumulators on write; loader ignores them on read (back-compat with older files).
 
 ---
 
@@ -460,7 +472,6 @@ The app is functional with these major systems:
 
 ### Remaining:
 - Each macro instance is unique — no switching between definitions (macro dropdown removed)
-- Selection highlight inconsistency — clicking nodes doesn't always show selection highlight reliably
 
 ### UpdateAttribute Node
 - Complements SetAttribute: in-place modify via increment/decrement/max/min (int/float), toggle/or/and (bool), next/previous (tag)
@@ -470,6 +481,8 @@ The app is functional with these major systems:
 
 ### Key Patterns:
 - When adding new fields to CAModel type, always add migration guards in ModelContext's `createInitialState`
+- `Attribute.boundaryValue?: string` (cell attrs only, shown in UI only when `properties.boundaryTreatment === 'constant'`). Worker's `buildNeighborIndices` writes `boundaryCellValue(attr) ?? defaultValue(attr)` into the sentinel cell at index `total`. WASM reads the same memory — no compile-path change needed.
+- Align / Distribute submenu on the multi-selection context menu (`alignNodes(mode)` / `distributeNodes(axis)` in GraphEditor.tsx). Align modes: left/centerH/right, top/centerV/bottom. Distribute: sort by axis, fix first and last, equalize inter-node gaps. Uses the standard `pushCurrentSnapshot()` + `scheduleSync()` pattern.
 - Node config UI: when a config field changes type (e.g., constType), reset dependent fields to prevent stale values
 - Compiler: all value declarations hoisted to function scope (Pass 1) before control flow (Pass 2) to avoid block-scoping issues
 - Web Worker in Vite: `new Worker(new URL('./file.ts', import.meta.url), { type: 'module' })` — no config needed
@@ -494,6 +507,7 @@ The app is functional with these major systems:
 - WASM compiler is self-sufficient — does its own `_resolvedTagIndexes` and `_indicatorIdx` pre-resolve (mirrors JS compiler). Don't assume the JS compiler ran first
 - `window.__simWorker` is exposed in DEV (`SimulatorView.tsx`) for direct postMessage testing — far more reliable than standalone parity harnesses, which have subtle setup mismatches with the worker (activeViewer string vs i32, indicators Float64Array vs wasmMemory region, etc.)
 - Big WASM-emitter refactors: implement EVERY emitter first, do a static review pass over the whole compiler, THEN run a single end-to-end test sweep. Iterative implement-test-fix-test cycles thrash because each new node type tested exposes structural issues (config-key mismatches, value-hoist scoping, sync-mode buffer swap, sentinel handling). One focused pass converges much faster
+- Post-loop computation must stay in sync across JS and WASM targets. The JS-compiled step embeds post-loop aggregation (generated by `buildLinkedIndicatorCode` in `compiler/compile.ts`); the WASM step doesn't emit that code — instead the worker runs `computeLinkedIndicatorsFromBuffer()` after `wasmStepFn()` and replicates the aggregation against the shared typed-array buffer. Any new post-loop compute (new indicator kind, new metric, anything that reads the final-state buffer and writes to `linkedResults` / similar) needs both the JS-compile emit AND a matching branch in the worker-side fallback, or it'll silently work in JS mode and be empty in WASM mode.
 
 ---
 

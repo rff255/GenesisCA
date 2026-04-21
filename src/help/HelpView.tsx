@@ -116,9 +116,19 @@ export function HelpView() {
 
           <h3 className={styles.h3}>Properties Panel (P)</h3>
           <p className={styles.p}>
-            Configure the model&apos;s presentation (name, author, description), structure
-            (grid width/height, boundary treatment: torus or constant), and execution
-            parameters (max iterations).
+            Configure the model&apos;s presentation (name, <strong>Rule Author</strong>,
+            <strong>GenesisCA Model Author</strong>, description), structure (grid
+            width/height, boundary treatment: torus or constant), execution mode, and
+            optional <strong>End Conditions</strong> for the simulator.
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Rule Author</strong> &mdash; originator of the CA rule (domain expert/researcher).</li>
+            <li><strong>GenesisCA Model Author</strong> &mdash; who built this particular GenesisCA model file.</li>
+            <li><strong>End Conditions</strong> (optional) &mdash; auto-pause the simulator when a max generation count is reached or when any indicator satisfies a configured comparison (==, !=, &gt;, &lt;, &ge;, &le;). Scalar indicators compare against their value directly. For <strong>linked-frequency</strong> indicators (which produce a map of category &rarr; count) pick the specific category to monitor; the comparison then applies to the count of that category (e.g. bool <em>alive</em> &mdash; category <code>true</code>, <code>&ge;</code>, <code>100</code> pauses when at least 100 cells are alive). Float-binned frequency indicators can&apos;t be used in end conditions because their bin boundaries depend on runtime data &mdash; switch the aggregation to Total instead. For conditions that need graph-level logic add a <strong>Stop Event</strong> node inside the update graph &mdash; its DO flow input pauses the simulation with a user-defined message.</li>
+          </ul>
+
+          <p className={styles.p}>
+            <strong>Simulation state loading</strong> &mdash; Loading a saved state (either from an embedded project snapshot or a standalone <code>.gcastate</code> file) restores the grid <em>configuration</em> only: cell attributes, colors, model-attribute values, and simulator UI controls. The generation counter always resets to 0 and indicators re-initialise to their defaults. This way you can build a starting configuration over many generations, save it, and always start fresh from that state without inheriting the generation count you spent getting there.
           </p>
 
           <h3 className={styles.h3}>Attributes Panel (A)</h3>
@@ -132,6 +142,7 @@ export function HelpView() {
           <ul className={styles.list}>
             <li><strong>Tag</strong> &mdash; An integer with named values (picklist). Define tag options in the editor, and use the Tag Constant node to reference them by name.</li>
             <li><strong>Color</strong> (model attributes only) &mdash; An RGB color value. Accessed via Get Model Attribute with separate R, G, B output ports. Adjustable live in the simulator.</li>
+            <li><strong>Boundary Value</strong> (cell attributes only, constant boundary) &mdash; the value held by out-of-grid cells. Shown next to Default Value only when the model&apos;s boundary treatment is <em>constant</em>. Leave blank to inherit the default.</li>
           </ul>
 
           <h3 className={styles.h3}>Neighborhoods Panel (N)</h3>
@@ -180,6 +191,15 @@ export function HelpView() {
             total. Standalone indicator eye icons are always active (disabled) because their
             computation is part of the user-defined update graph and cannot be separated.
           </p>
+          <p className={styles.p}>
+            Linked-frequency indicators (one line per category value) offer three
+            visualisations &mdash; <strong>Bars</strong> (horizontal bar chart of the
+            current generation), <strong>Lines</strong> (one coloured line per category
+            showing each category&apos;s count over time), and <strong>Stack</strong>
+            (filled areas stacked on top of each other). A small viz button in the
+            indicator header cycles through the three; the preference is stored per
+            indicator and persists across sessions.
+          </p>
 
           <h3 className={styles.h3}>The Graph Editor</h3>
           <p className={styles.p}>
@@ -202,7 +222,7 @@ export function HelpView() {
             <li><strong>Ctrl + click</strong> &mdash; Add/remove from selection.</li>
             <li><strong>Right-click</strong> (on canvas) &mdash; Context menu: Paste, Add Comment, Add Node submenu. Hover over any Add Node entry to see a short description of what it does.</li>
             <li><strong>Right-click</strong> (on node) &mdash; Node options: Rename, Duplicate, Copy, Cut, Delete. Macros also show Enter Macro and Undo Macro.</li>
-            <li><strong>Right-click</strong> (on selection) &mdash; Selection options: Duplicate, Copy, Cut, Paste, Create Macro, Create Group.</li>
+            <li><strong>Right-click</strong> (on selection) &mdash; Selection options: Duplicate, Copy, Cut, Paste, Create Macro, Create Group, <strong>Align</strong> (horizontally: left/center/right; vertically: top/center/bottom) and <strong>Distribute</strong> (horizontally/vertically &mdash; keeps the leftmost/topmost in place and evens out the gaps).</li>
             <li><strong>Right-click</strong> (on group) &mdash; Group options: Rename, Undo Group, Delete.</li>
             <li><strong>Drag from Palette</strong> &mdash; Drop a node or macro from the right-side Palette tab onto the canvas to add it at the drop position.</li>
           </ul>
@@ -264,7 +284,7 @@ export function HelpView() {
         <section id="help-nodes" className={styles.section}>
           <h2 className={styles.h2}>Node Types Reference</h2>
           <p className={styles.p}>
-            GenesisCA provides 36 node types organized into categories:
+            GenesisCA provides 40 node types organized into categories:
           </p>
 
           <h3 className={styles.h3}>
@@ -277,6 +297,7 @@ export function HelpView() {
               <tr><td>Generation Step</td><td>Entry point for per-generation cell update logic. Connect &quot;DO&quot; to start the flow chain.</td></tr>
               <tr><td>Input Mapping (C&rarr;A)</td><td>Entry point for Color-to-Attribute mapping (brush/image import). Outputs R, G, B values.</td></tr>
               <tr><td>Output Mapping (A&rarr;C)</td><td>Entry point for Attribute-to-Color visualization. Runs as a separate sequential pass after the Generation Step, ensuring colors reflect the final cell state.</td></tr>
+              <tr><td>Stop Event</td><td>Terminates the simulation run with a user-defined message when its DO flow input fires. Use for end conditions that need graph-level logic (complex spatial patterns, multi-attribute combinations). The text widget on the node body holds the message. First triggered stop in a step wins.</td></tr>
             </tbody>
           </table>
 

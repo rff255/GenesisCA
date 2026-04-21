@@ -9,6 +9,10 @@ export interface Attribute {
   description: string;
   isModelAttribute: boolean;
   defaultValue: string;
+  /** Cell attributes only: value held by out-of-grid cells when boundary
+   *  treatment is "constant". When undefined/empty, falls back to defaultValue.
+   *  Hidden in the UI unless the model's boundary is set to constant. */
+  boundaryValue?: string;
   /** Tag type: named values (value = index into this array) */
   tagOptions?: string[];
   /** Whether numerical bounds are enabled (integer/float model attributes only) */
@@ -46,11 +50,48 @@ export type Topology = '2d-grid';
 export type UpdateMode = 'synchronous' | 'asynchronous';
 export type AsyncScheme = 'random-order' | 'random-independent' | 'cyclic';
 
+/** Comparison operator used in an indicator-based end condition. */
+export type EndConditionOp = '==' | '!=' | '>' | '<' | '>=' | '<=';
+
+/** A single indicator-based stop condition.
+ *
+ *  Scalar indicators: `<indicatorValue> <op> <value>`.
+ *
+ *  Linked-frequency indicators (value is `Record<category, count>`): the
+ *  `category` field names a specific bucket, and the comparison becomes
+ *  `frequencyMap[category] <op> <value>`. Example: bool indicator "Alive",
+ *  category `true`, op `>=`, value `100` → pause when ≥100 cells are alive. */
+export interface IndicatorEndCondition {
+  id: string;
+  indicatorId: string;
+  op: EndConditionOp;
+  /** Serialized as a string so int / float / tag / bool all fit one shape.
+   *  For scalar indicators: compared to the indicator's numeric value.
+   *  For linked-frequency indicators: the target count for `category`. */
+  value: string;
+  /** Linked-frequency indicators only: the map key to monitor (e.g. `'true'`,
+   *  a tag name, or `'42'` for integer frequencies). Absent on scalar conditions. */
+  category?: string;
+}
+
+/** Optional simulator end conditions. When `enabled` is true, the simulator
+ *  auto-pauses as soon as ANY of the configured conditions match. */
+export interface EndConditions {
+  enabled: boolean;
+  /** Max generations: pauses when `generation >= maxGenerations`. Ignored when
+   *  undefined or when <= 0. */
+  maxGenerations?: number;
+  /** Any indicator condition matching triggers the pause (OR semantics). */
+  indicatorConditions?: IndicatorEndCondition[];
+}
+
 /** Top-level model properties */
 export interface ModelProperties {
   name: string;
+  /** Author of the rule/model logic (the domain expert or researcher). */
   author: string;
-  goal: string;
+  /** Author of the GenesisCA model file itself (the person who built the graph). */
+  modelAuthor: string;
   description: string;
   topology: Topology;
   boundaryTreatment: BoundaryTreatment;
@@ -60,6 +101,8 @@ export interface ModelProperties {
   gridHeight: number;
   maxIterations: number;
   tags: string[];
+  /** Optional simulator auto-pause rules. Undefined = disabled. */
+  endConditions?: EndConditions;
   /** Wave 2: when true, the simulator runs the WASM-compiled step instead of
    *  the JS-compiled step. Off by default. The WASM compiler falls back to JS
    *  silently if the graph references a node type whose WASM emit is not yet

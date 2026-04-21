@@ -210,6 +210,69 @@ export function AttributesPanelContent() {
               )}
             </div>
 
+            {/* Boundary Value — cell attributes only, shown when boundary treatment is constant. */}
+            {!selected.isModelAttribute && model.properties.boundaryTreatment === 'constant' && (
+              <div className={styles.field}>
+                <label className={styles.fieldLabel} title="Value held by out-of-grid cells when boundary is constant. Blank = use Default Value.">
+                  Boundary Value
+                </label>
+                {selected.type === 'bool' ? (
+                  <select
+                    className={styles.selectInput}
+                    value={selected.boundaryValue ?? selected.defaultValue}
+                    onChange={e => updateAttribute(selected.id, { boundaryValue: e.target.value })}
+                  >
+                    <option value="false">false</option>
+                    <option value="true">true</option>
+                  </select>
+                ) : selected.type === 'integer' ? (
+                  <input
+                    className={styles.numberInput}
+                    type="number"
+                    step={1}
+                    value={selected.boundaryValue ?? ''}
+                    placeholder={`(default: ${selected.defaultValue})`}
+                    onChange={e => updateAttribute(selected.id, {
+                      boundaryValue: e.target.value === '' ? undefined : String(Math.round(Number(e.target.value) || 0)),
+                    })}
+                  />
+                ) : selected.type === 'float' ? (
+                  <input
+                    className={styles.numberInput}
+                    type="number"
+                    step="any"
+                    value={selected.boundaryValue ?? ''}
+                    placeholder={`(default: ${selected.defaultValue})`}
+                    onChange={e => updateAttribute(selected.id, {
+                      boundaryValue: e.target.value === '' ? undefined : e.target.value,
+                    })}
+                  />
+                ) : selected.type === 'tag' ? (
+                  <select
+                    className={styles.selectInput}
+                    value={selected.boundaryValue ?? selected.defaultValue ?? '0'}
+                    onChange={e => updateAttribute(selected.id, { boundaryValue: e.target.value })}
+                  >
+                    {(selected.tagOptions || []).map((tag, i) => (
+                      <option key={i} value={String(i)}>{tag}</option>
+                    ))}
+                    {(!selected.tagOptions || selected.tagOptions.length === 0) && (
+                      <option value="0">(no tags defined)</option>
+                    )}
+                  </select>
+                ) : (
+                  <input
+                    className={styles.textInput}
+                    value={selected.boundaryValue ?? ''}
+                    placeholder={`(default: ${selected.defaultValue})`}
+                    onChange={e => updateAttribute(selected.id, {
+                      boundaryValue: e.target.value === '' ? undefined : e.target.value,
+                    })}
+                  />
+                )}
+              </div>
+            )}
+
             {selected.type === 'tag' && (
               <div className={styles.field}>
                 <label className={styles.fieldLabel}>Tag Options</label>

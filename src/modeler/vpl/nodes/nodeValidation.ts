@@ -123,6 +123,14 @@ export function detectMissingConfig(
     case 'macro':
       if (!hasMacroDef(config.macroDefId)) issues.push('Macro definition not found');
       break;
+
+    case 'stopEvent': {
+      const msg = config.message;
+      if (typeof msg !== 'string' || msg.trim().length === 0) {
+        issues.push('Set a stop message');
+      }
+      break;
+    }
   }
 
   return issues;
