@@ -8,8 +8,8 @@ export const StopEventNode: NodeTypeDef = {
   type: 'stopEvent',
   label: 'Stop Event',
   description: 'Pauses the simulation with a user-defined message when its flow input fires.',
-  category: 'flow',
-  color: '#e05050',
+  category: 'event',
+  color: '#ffffff',
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
   ],

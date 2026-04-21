@@ -47,12 +47,12 @@ const ALL_NODES: NodeTypeDef[] = [
   StepNode,
   InputColorNode,
   OutputMappingNode,
+  StopEventNode,
   // Flow
   ConditionalNode,
   SequenceNode,
   LoopNode,
   SwitchNode,
-  StopEventNode,
   // Data
   GetCellAttributeNode,
   GetModelAttributeNode,
