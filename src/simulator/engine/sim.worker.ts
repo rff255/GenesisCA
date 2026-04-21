@@ -217,7 +217,17 @@ let standalonePerGenIdx: number[] = [];
 // id-keyed payload that the UI consumes. Linked indicators come via linkedResults.
 let standaloneIds: Array<{ idx: number; id: string }> = [];
 let linkedDefs: Array<{
-  id: string; accumulationMode: string;
+  id: string;
+  accumulationMode: string;
+  /** Enough info to compute the aggregation directly from the grid buffer.
+   *  Used by the WASM-path fallback (computeLinkedIndicatorsFromBuffer) since
+   *  the WASM step doesn't emit the post-loop aggregation the JS step does. */
+  attrId?: string;
+  attrType?: string;
+  aggregation?: string;
+  binCount?: number;
+  tagOptions?: string[];
+  watched?: boolean;
 }> = [];
 let linkedAccumulators: Record<string, number | Record<string, number>> = {};
 let linkedResults: Record<string, number | Record<string, number>> = {};
@@ -524,6 +534,11 @@ function runStep(): void {
   // live in the imported memory and offsets are baked into the module.
   if (callWasm) {
     (fn as (t: number) => void)(total);
+    // WASM step doesn't emit the per-loop linked-indicator aggregation the
+    // JS step does. Compute it directly from the shared buffer so frequency /
+    // total linked indicators are populated and end conditions / charts work
+    // in WASM mode too.
+    if (linkedDefs.length > 0) computeLinkedIndicatorsFromBuffer();
   } else {
     fn(...buildLoopArgs());
   }
@@ -696,9 +711,17 @@ function initIndicators(defs: IndicatorDef[]): void {
         standalonePerGenIdx.push(i);
       }
     } else if (ind.kind === 'linked') {
+      const linkedAttr = cellAttrs.find(a => a.id === ind.linkedAttributeId)
+        || modelAttrsList.find(a => a.id === ind.linkedAttributeId);
       linkedDefs.push({
         id: ind.id,
         accumulationMode: ind.accumulationMode,
+        attrId: ind.linkedAttributeId,
+        attrType: linkedAttr?.type,
+        aggregation: ind.linkedAggregation,
+        binCount: ind.binCount,
+        tagOptions: linkedAttr?.tagOptions,
+        watched: ind.watched,
       });
     }
   }
@@ -708,6 +731,78 @@ function resetIndicators(): void {
   cachedIndicators.set(standaloneDefaults);
   linkedAccumulators = {};
   linkedResults = {};
+}
+
+/** WASM-path fallback. The JS-compiled step function contains injected
+ *  post-loop code that computes frequency/total for each watched linked
+ *  indicator and writes into `linkedResults`. The WASM step emits no such
+ *  code, so we replicate the aggregation here, reading directly from the
+ *  shared typed-array buffers. Mirrors `buildLinkedIndicatorCode` in
+ *  `compiler/compile.ts` — keep the two in sync when that logic changes. */
+function computeLinkedIndicatorsFromBuffer(): void {
+  for (const def of linkedDefs) {
+    if (!def.watched) continue;
+    const arr = readAttrs[def.attrId ?? ''];
+    if (!arr || !def.attrType || !def.aggregation) continue;
+    if (def.aggregation === 'total') {
+      let sum = 0;
+      for (let i = 0; i < total; i++) sum += arr[i] ?? 0;
+      linkedResults[def.id] = sum;
+      continue;
+    }
+    // frequency
+    if (def.attrType === 'bool') {
+      let t = 0;
+      for (let i = 0; i < total; i++) if (arr[i]) t++;
+      linkedResults[def.id] = { 'true': t, 'false': total - t };
+    } else if (def.attrType === 'tag') {
+      const opts = def.tagOptions || [];
+      const freq: Record<string, number> = {};
+      for (const name of opts) freq[name] = 0;
+      for (let i = 0; i < total; i++) {
+        const idx = arr[i] ?? 0;
+        const name = opts[idx];
+        if (name !== undefined) freq[name] = (freq[name] ?? 0) + 1;
+      }
+      linkedResults[def.id] = freq;
+    } else if (def.attrType === 'integer') {
+      const freq: Record<string, number> = {};
+      for (let i = 0; i < total; i++) {
+        const k = String(arr[i] ?? 0);
+        freq[k] = (freq[k] ?? 0) + 1;
+      }
+      linkedResults[def.id] = freq;
+    } else if (def.attrType === 'float') {
+      const bins = Math.max(1, def.binCount ?? 10);
+      let mn = Infinity, mx = -Infinity;
+      for (let i = 0; i < total; i++) {
+        const v = arr[i] ?? 0;
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+      }
+      if (!Number.isFinite(mn) || !Number.isFinite(mx) || mn === mx) {
+        linkedResults[def.id] = { [`${(mn || 0).toFixed(2)}\u2013${(mn || 0).toFixed(2)}`]: total };
+        continue;
+      }
+      const range = mx - mn;
+      const step = range / bins;
+      const counts: number[] = new Array(bins).fill(0);
+      for (let i = 0; i < total; i++) {
+        const v = arr[i] ?? 0;
+        let b = Math.floor(((v - mn) / range) * bins);
+        if (b >= bins) b = bins - 1;
+        if (b < 0) b = 0;
+        counts[b]! += 1;
+      }
+      const freq: Record<string, number> = {};
+      for (let b = 0; b < bins; b++) {
+        const lo = mn + b * step;
+        const hi = b === bins - 1 ? mx : mn + (b + 1) * step;
+        freq[`${lo.toFixed(2)}\u2013${hi.toFixed(2)}`] = counts[b]!;
+      }
+      linkedResults[def.id] = freq;
+    }
+  }
 }
 
 function sendColors(): void {

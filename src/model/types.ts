@@ -53,15 +53,25 @@ export type AsyncScheme = 'random-order' | 'random-independent' | 'cyclic';
 /** Comparison operator used in an indicator-based end condition. */
 export type EndConditionOp = '==' | '!=' | '>' | '<' | '>=' | '<=';
 
-/** A single indicator-based stop condition. The simulator auto-pauses when
- *  the named indicator's value satisfies `<indicatorValue> <op> <value>`. */
+/** A single indicator-based stop condition.
+ *
+ *  Scalar indicators: `<indicatorValue> <op> <value>`.
+ *
+ *  Linked-frequency indicators (value is `Record<category, count>`): the
+ *  `category` field names a specific bucket, and the comparison becomes
+ *  `frequencyMap[category] <op> <value>`. Example: bool indicator "Alive",
+ *  category `true`, op `>=`, value `100` → pause when ≥100 cells are alive. */
 export interface IndicatorEndCondition {
   id: string;
   indicatorId: string;
   op: EndConditionOp;
   /** Serialized as a string so int / float / tag / bool all fit one shape.
-   *  Compared against the indicator's live numeric value. */
+   *  For scalar indicators: compared to the indicator's numeric value.
+   *  For linked-frequency indicators: the target count for `category`. */
   value: string;
+  /** Linked-frequency indicators only: the map key to monitor (e.g. `'true'`,
+   *  a tag name, or `'42'` for integer frequencies). Absent on scalar conditions. */
+  category?: string;
 }
 
 /** Optional simulator end conditions. When `enabled` is true, the simulator

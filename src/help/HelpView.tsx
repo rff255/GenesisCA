@@ -124,7 +124,7 @@ export function HelpView() {
           <ul className={styles.list}>
             <li><strong>Rule Author</strong> &mdash; originator of the CA rule (domain expert/researcher).</li>
             <li><strong>GenesisCA Model Author</strong> &mdash; who built this particular GenesisCA model file.</li>
-            <li><strong>End Conditions</strong> (optional) &mdash; auto-pause the simulator when a max generation count is reached or when any indicator satisfies a configured comparison (==, !=, &gt;, &lt;, &ge;, &le;). Any matching condition pauses the run. For conditions that need graph-level logic (complex spatial patterns, multi-attribute combinations, etc.) add a <strong>Stop Event</strong> node inside the update graph &mdash; its DO flow input pauses the simulation with a user-defined message.</li>
+            <li><strong>End Conditions</strong> (optional) &mdash; auto-pause the simulator when a max generation count is reached or when any indicator satisfies a configured comparison (==, !=, &gt;, &lt;, &ge;, &le;). Scalar indicators compare against their value directly. For <strong>linked-frequency</strong> indicators (which produce a map of category &rarr; count) pick the specific category to monitor; the comparison then applies to the count of that category (e.g. bool <em>alive</em> &mdash; category <code>true</code>, <code>&ge;</code>, <code>100</code> pauses when at least 100 cells are alive). Float-binned frequency indicators can&apos;t be used in end conditions because their bin boundaries depend on runtime data &mdash; switch the aggregation to Total instead. For conditions that need graph-level logic add a <strong>Stop Event</strong> node inside the update graph &mdash; its DO flow input pauses the simulation with a user-defined message.</li>
           </ul>
 
           <p className={styles.p}>
@@ -190,6 +190,15 @@ export function HelpView() {
             linked indicators, unwatching means those generations are skipped in the running
             total. Standalone indicator eye icons are always active (disabled) because their
             computation is part of the user-defined update graph and cannot be separated.
+          </p>
+          <p className={styles.p}>
+            Linked-frequency indicators (one line per category value) offer three
+            visualisations &mdash; <strong>Bars</strong> (horizontal bar chart of the
+            current generation), <strong>Lines</strong> (one coloured line per category
+            showing each category&apos;s count over time), and <strong>Stack</strong>
+            (filled areas stacked on top of each other). A small viz button in the
+            indicator header cycles through the three; the preference is stored per
+            indicator and persists across sessions.
           </p>
 
           <h3 className={styles.h3}>The Graph Editor</h3>

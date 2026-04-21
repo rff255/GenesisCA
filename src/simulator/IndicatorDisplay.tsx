@@ -1,15 +1,21 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { Indicator } from '../model/types';
 import { IndicatorSparkline } from './IndicatorSparkline';
+import { IndicatorMultiLineChart } from './IndicatorMultiLineChart';
+import { IndicatorStackedAreaChart } from './IndicatorStackedAreaChart';
 import styles from './IndicatorDisplay.module.css';
+
+export type IndicatorVizMode = 'bars' | 'multiline' | 'stacked';
 
 interface Props {
   indicators: Indicator[];
   values: Record<string, number | Record<string, number>>;
-  history: Record<string, number[]>;
+  history: Record<string, number[] | Record<string, number[]>>;
   generation: number;
+  vizModes: Record<string, IndicatorVizMode>;
   onToggleWatch: (id: string, watched: boolean) => void;
   onChartToggle: (id: string, expanded: boolean) => void;
+  onCycleVizMode: (id: string) => void;
 }
 
 function formatValue(val: number, ind: Indicator): string {
@@ -21,7 +27,7 @@ function formatValue(val: number, ind: Indicator): string {
   return String(val);
 }
 
-export function IndicatorDisplay({ indicators, values, history, generation, onToggleWatch, onChartToggle }: Props) {
+export function IndicatorDisplay({ indicators, values, history, generation, vizModes, onToggleWatch, onChartToggle, onCycleVizMode }: Props) {
   // Track *collapsed* IDs — everything is expanded by default
   const [collapsedCharts, setCollapsedCharts] = useState<Set<string>>(new Set());
   // Per-indicator custom content height (drag-to-resize)
@@ -102,6 +108,20 @@ export function IndicatorDisplay({ indicators, values, history, generation, onTo
                   {isExpanded ? '\u25B2' : '\u25BC'}
                 </button>
               )}
+              {isWatched && isFreq && isExpanded && (() => {
+                const mode = vizModes[ind.id] ?? 'bars';
+                const label = mode === 'bars' ? 'Bars' : mode === 'multiline' ? 'Lines' : 'Stack';
+                return (
+                  <button
+                    className={styles.chartBtn}
+                    onClick={() => onCycleVizMode(ind.id)}
+                    title={`Viz: ${label} \u2014 click to cycle (Bars \u2192 Lines \u2192 Stack)`}
+                    style={{ fontSize: '0.58rem', minWidth: 34 }}
+                  >
+                    {label}
+                  </button>
+                );
+              })()}
               <span className={styles.name}>{ind.name}</span>
               <span className={styles.badge}>
                 {ind.kind === 'standalone' ? 'S' : 'L'}
@@ -114,10 +134,12 @@ export function IndicatorDisplay({ indicators, values, history, generation, onTo
 
             {isWatched && isScalar && isExpanded && (() => {
               const h = heights[ind.id] ?? 60;
+              const hist = history[ind.id];
+              const scalarHist = Array.isArray(hist) ? hist : [];
               return (
                 <div className={styles.sparklineWrap} style={{ height: h }}>
                   <IndicatorSparkline
-                    data={history[ind.id] || []}
+                    data={scalarHist}
                     generation={generation}
                     height={h}
                   />
@@ -137,12 +159,31 @@ export function IndicatorDisplay({ indicators, values, history, generation, onTo
             )}
 
             {isWatched && isFreq && isExpanded && (() => {
+              const mode = vizModes[ind.id] ?? 'bars';
+              const h = heights[ind.id] ?? 160;
+              const hist = history[ind.id];
+              const catHist = (hist && !Array.isArray(hist)) ? (hist as Record<string, number[]>) : {};
+
+              if (mode === 'multiline') {
+                return (
+                  <div className={styles.sparklineWrap} style={{ height: h }}>
+                    <IndicatorMultiLineChart data={catHist} generation={generation} height={h} />
+                  </div>
+                );
+              }
+              if (mode === 'stacked') {
+                return (
+                  <div className={styles.sparklineWrap} style={{ height: h }}>
+                    <IndicatorStackedAreaChart data={catHist} generation={generation} height={h} />
+                  </div>
+                );
+              }
+              // bars (default)
               const freqMap = val as Record<string, number>;
               const entries = Object.entries(freqMap);
               const maxCount = Math.max(...entries.map(([, c]) => c), 1);
-              const h = heights[ind.id];
               return (
-                <div className={styles.freqTable} style={h != null ? { maxHeight: h, height: h } : undefined}>
+                <div className={styles.freqTable} style={{ maxHeight: h, height: h }}>
                   {entries.map(([k, count]) => (
                     <div key={k} className={styles.freqBarRow}>
                       <span className={styles.freqKey} title={k}>{k}</span>

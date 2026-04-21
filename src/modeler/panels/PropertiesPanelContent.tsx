@@ -31,11 +31,24 @@ export function PropertiesPanelContent() {
   const addIndicatorCondition = () => {
     const firstIndicator = (model.indicators || [])[0];
     if (!firstIndicator) return;
+    // For linked-frequency indicators, seed a sensible default category so the
+    // condition is immediately valid (not every user knows they need one).
+    let category: string | undefined;
+    let value = firstIndicator.defaultValue ?? '0';
+    if (firstIndicator.kind === 'linked' && firstIndicator.linkedAggregation === 'frequency') {
+      const linkedAttr = (model.attributes || []).find(a => a.id === firstIndicator.linkedAttributeId);
+      if (linkedAttr?.type === 'bool') category = 'true';
+      else if (linkedAttr?.type === 'tag') category = linkedAttr.tagOptions?.[0] ?? '';
+      else if (linkedAttr?.type === 'integer') category = '0';
+      // float: leave undefined — UI disables the row
+      value = '0'; // frequency count
+    }
     const cond: IndicatorEndCondition = {
       id: newCondId(),
       indicatorId: firstIndicator.id,
       op: '==',
-      value: firstIndicator.defaultValue ?? '0',
+      value,
+      ...(category !== undefined ? { category } : {}),
     };
     updateEndConditions({ indicatorConditions: [...(ec?.indicatorConditions || []), cond] });
   };
@@ -314,70 +327,131 @@ export function PropertiesPanelContent() {
                   )}
                   {(ec?.indicatorConditions || []).map(cond => {
                     const ind = (model.indicators || []).find(i => i.id === cond.indicatorId);
+                    const isFreq = ind?.kind === 'linked' && ind?.linkedAggregation === 'frequency';
+                    const linkedAttr = isFreq
+                      ? (model.attributes || []).find(a => a.id === ind.linkedAttributeId)
+                      : undefined;
+                    const freqKind = isFreq ? linkedAttr?.type : undefined; // 'bool'|'tag'|'integer'|'float'
+                    const floatFreqDisabled = freqKind === 'float';
                     return (
-                      <div key={cond.id} style={{ display: 'flex', gap: 4, alignItems: 'center', marginTop: 4 }}>
-                        <select
-                          className={styles.selectInput}
-                          style={{ flex: 1.4 }}
-                          value={cond.indicatorId}
-                          onChange={e => updateIndicatorCondition(cond.id, { indicatorId: e.target.value })}
-                        >
-                          {(model.indicators || []).map(i => (
-                            <option key={i.id} value={i.id}>{i.name}</option>
-                          ))}
-                        </select>
-                        <select
-                          className={styles.selectInput}
-                          style={{ width: 52 }}
-                          value={cond.op}
-                          onChange={e => updateIndicatorCondition(cond.id, { op: e.target.value as EndConditionOp })}
-                        >
-                          <option value="==">==</option>
-                          <option value="!=">!=</option>
-                          <option value=">">&gt;</option>
-                          <option value="<">&lt;</option>
-                          <option value=">=">&ge;</option>
-                          <option value="<=">&le;</option>
-                        </select>
-                        {ind?.dataType === 'bool' ? (
+                      <div key={cond.id} style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+                        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                           <select
                             className={styles.selectInput}
-                            style={{ flex: 1 }}
-                            value={cond.value === '1' || cond.value === 'true' ? 'true' : 'false'}
-                            onChange={e => updateIndicatorCondition(cond.id, { value: e.target.value })}
+                            style={{ flex: 1.4 }}
+                            value={cond.indicatorId}
+                            onChange={e => {
+                              // Clear category on indicator change — the old key may be meaningless for the new indicator.
+                              updateIndicatorCondition(cond.id, { indicatorId: e.target.value, category: undefined });
+                            }}
                           >
-                            <option value="false">false</option>
-                            <option value="true">true</option>
-                          </select>
-                        ) : ind?.dataType === 'tag' ? (
-                          <select
-                            className={styles.selectInput}
-                            style={{ flex: 1 }}
-                            value={cond.value}
-                            onChange={e => updateIndicatorCondition(cond.id, { value: e.target.value })}
-                          >
-                            {(ind.tagOptions || []).map((tag, i) => (
-                              <option key={i} value={String(i)}>{tag}</option>
+                            {(model.indicators || []).map(i => (
+                              <option key={i.id} value={i.id}>{i.name}</option>
                             ))}
                           </select>
-                        ) : (
-                          <input
-                            className={styles.numberInput}
-                            type="number"
-                            step={ind?.dataType === 'integer' ? 1 : 'any'}
-                            style={{ flex: 1 }}
-                            value={cond.value}
-                            onChange={e => updateIndicatorCondition(cond.id, { value: e.target.value })}
-                          />
+                          {/* Category widget (linked-frequency only) */}
+                          {isFreq && freqKind === 'bool' && (
+                            <select
+                              className={styles.selectInput}
+                              style={{ flex: 1 }}
+                              value={cond.category ?? 'true'}
+                              onChange={e => updateIndicatorCondition(cond.id, { category: e.target.value })}
+                              title="Category to monitor (count of cells with this value)"
+                            >
+                              <option value="true">true</option>
+                              <option value="false">false</option>
+                            </select>
+                          )}
+                          {isFreq && freqKind === 'tag' && (
+                            <select
+                              className={styles.selectInput}
+                              style={{ flex: 1 }}
+                              value={cond.category ?? (linkedAttr?.tagOptions?.[0] ?? '')}
+                              onChange={e => updateIndicatorCondition(cond.id, { category: e.target.value })}
+                              title="Tag to monitor (count of cells with this tag)"
+                            >
+                              {(linkedAttr?.tagOptions || []).map((tag, i) => (
+                                <option key={i} value={tag}>{tag}</option>
+                              ))}
+                            </select>
+                          )}
+                          {isFreq && freqKind === 'integer' && (
+                            <input
+                              className={styles.numberInput}
+                              type="number"
+                              step={1}
+                              style={{ flex: 1 }}
+                              placeholder="value"
+                              value={cond.category ?? ''}
+                              onChange={e => updateIndicatorCondition(cond.id, {
+                                category: e.target.value === '' ? undefined : String(Math.round(Number(e.target.value) || 0)),
+                              })}
+                              title="Integer value to monitor (count of cells with this value)"
+                            />
+                          )}
+                          <select
+                            className={styles.selectInput}
+                            style={{ width: 52 }}
+                            value={cond.op}
+                            disabled={floatFreqDisabled}
+                            onChange={e => updateIndicatorCondition(cond.id, { op: e.target.value as EndConditionOp })}
+                          >
+                            <option value="==">==</option>
+                            <option value="!=">!=</option>
+                            <option value=">">&gt;</option>
+                            <option value="<">&lt;</option>
+                            <option value=">=">&ge;</option>
+                            <option value="<=">&le;</option>
+                          </select>
+                          {/* Value widget: scalar branches when NOT a frequency indicator;
+                              count (number) when frequency (except float-binned, which is disabled) */}
+                          {!isFreq && ind?.dataType === 'bool' ? (
+                            <select
+                              className={styles.selectInput}
+                              style={{ flex: 1 }}
+                              value={cond.value === '1' || cond.value === 'true' ? 'true' : 'false'}
+                              onChange={e => updateIndicatorCondition(cond.id, { value: e.target.value })}
+                            >
+                              <option value="false">false</option>
+                              <option value="true">true</option>
+                            </select>
+                          ) : !isFreq && ind?.dataType === 'tag' ? (
+                            <select
+                              className={styles.selectInput}
+                              style={{ flex: 1 }}
+                              value={cond.value}
+                              onChange={e => updateIndicatorCondition(cond.id, { value: e.target.value })}
+                            >
+                              {(ind.tagOptions || []).map((tag, i) => (
+                                <option key={i} value={String(i)}>{tag}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              className={styles.numberInput}
+                              type="number"
+                              step={isFreq ? 1 : (ind?.dataType === 'integer' ? 1 : 'any')}
+                              style={{ flex: 1 }}
+                              value={cond.value}
+                              disabled={floatFreqDisabled}
+                              placeholder={isFreq ? 'count' : undefined}
+                              onChange={e => updateIndicatorCondition(cond.id, { value: e.target.value })}
+                            />
+                          )}
+                          <button
+                            className={styles.deleteButton}
+                            style={{ padding: '2px 6px', fontSize: '0.7rem' }}
+                            onClick={() => removeIndicatorCondition(cond.id)}
+                            title="Remove condition"
+                          >
+                            &times;
+                          </button>
+                        </div>
+                        {floatFreqDisabled && (
+                          <span style={{ color: '#e0a050', fontSize: '0.62rem', fontStyle: 'italic', paddingLeft: 4 }}>
+                            Float-binned frequency categories depend on runtime range. Change this indicator&apos;s aggregation to Total, or pick a different indicator.
+                          </span>
                         )}
-                        <button
-                          className={styles.deleteButton}
-                          style={{ padding: '2px 6px', fontSize: '0.7rem' }}
-                          onClick={() => removeIndicatorCondition(cond.id)}
-                          title="Remove condition"
-                        >
-                          &times;
-                        </button>
                       </div>
                     );
                   })}

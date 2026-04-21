@@ -52,8 +52,25 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // Indicator values stored in ref (not state) to avoid extra re-renders on every step.
   // The component already re-renders from setGeneration, so ref values are read during that render.
   const indicatorValuesRef = useRef<Record<string, number | Record<string, number>>>({});
-  const indicatorHistoryRef = useRef<Record<string, number[]>>({});
+  // For scalar indicators: number[] of samples over time.
+  // For linked-frequency indicators: Record<category, number[]> so each category
+  // gets its own time series (drives multi-line / stacked-area charts).
+  const indicatorHistoryRef = useRef<Record<string, number[] | Record<string, number[]>>>({});
   const chartExpandedRef = useRef<Set<string>>(new Set());
+  // Per-indicator viz mode for frequency indicators. Default = 'bars' when absent.
+  type VizMode = 'bars' | 'multiline' | 'stacked';
+  const [indicatorVizModes, setIndicatorVizModes] = useState<Record<string, VizMode>>(() => {
+    try {
+      const raw = localStorage.getItem(SIM_SETTINGS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed.indicatorVizModes && typeof parsed.indicatorVizModes === 'object') {
+          return parsed.indicatorVizModes as Record<string, VizMode>;
+        }
+      }
+    } catch { /* fall through */ }
+    return {};
+  });
 
   // GIF recording state
   const [recording, setRecording] = useState(false);
@@ -69,11 +86,20 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         localStorage.setItem(SIM_SETTINGS_KEY, JSON.stringify({
           targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines,
+          indicatorVizModes,
         }));
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, indicatorVizModes]);
+
+  const cycleIndicatorVizMode = useCallback((id: string) => {
+    setIndicatorVizModes(prev => {
+      const cur = prev[id] ?? 'bars';
+      const next: VizMode = cur === 'bars' ? 'multiline' : cur === 'multiline' ? 'stacked' : 'bars';
+      return { ...prev, [id]: next };
+    });
+  }, []);
 
   // F3: Runtime model attribute values
   const [runtimeModelAttrs, setRuntimeModelAttrs] = useState<Record<string, number>>({});
@@ -269,28 +295,49 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
     for (const cond of ec.indicatorConditions || []) {
       const raw = indicatorValues[cond.indicatorId];
-      if (typeof raw !== 'number') continue; // frequency maps not comparable
       const ind = (model.indicators || []).find(i => i.id === cond.indicatorId);
-      const target = ind?.dataType === 'bool'
+      if (!ind) continue;
+
+      // Resolve the numeric left-hand-side of the comparison, depending on
+      // whether this is a scalar indicator or a linked-frequency map.
+      let lhs: number | null = null;
+      let labelSuffix = '';
+      if (typeof raw === 'number') {
+        lhs = raw;
+      } else if (raw && typeof raw === 'object') {
+        // Linked-frequency value. Float-binned frequencies are disabled in the
+        // UI (no stable category key at design time) — skip them here as a
+        // safety net so a stale saved condition can't unexpectedly fire.
+        const cellAttr = (model.attributes || []).find(a => a.id === ind.linkedAttributeId);
+        if (cellAttr?.type === 'float') continue;
+        const category = cond.category;
+        if (category === undefined || category === '') continue;
+        lhs = (raw as Record<string, number>)[category] ?? 0;
+        labelSuffix = ` [${category}]`;
+      }
+      if (lhs === null) continue;
+
+      const target = ind.dataType === 'bool' && cond.category === undefined
         ? (cond.value === 'true' || cond.value === '1' ? 1 : 0)
         : Number(cond.value);
       if (!Number.isFinite(target)) continue;
+
       let match = false;
       switch (cond.op) {
-        case '==': match = raw === target; break;
-        case '!=': match = raw !== target; break;
-        case '>':  match = raw >  target; break;
-        case '<':  match = raw <  target; break;
-        case '>=': match = raw >= target; break;
-        case '<=': match = raw <= target; break;
+        case '==': match = lhs === target; break;
+        case '!=': match = lhs !== target; break;
+        case '>':  match = lhs >  target; break;
+        case '<':  match = lhs <  target; break;
+        case '>=': match = lhs >= target; break;
+        case '<=': match = lhs <= target; break;
       }
       if (match) {
-        const name = ind?.name || cond.indicatorId;
-        return `${name} ${cond.op} ${cond.value}`;
+        const name = ind.name || cond.indicatorId;
+        return `${name}${labelSuffix} ${cond.op} ${cond.value}`;
       }
     }
     return null;
-  }, [model.indicators]);
+  }, [model.indicators, model.attributes]);
 
   const sendNextStep = useCallback(() => {
     if (!playingRef.current || pendingStep.current) return;
@@ -312,7 +359,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       colorsRef.current = msg.colors as Uint8ClampedArray;
       if (msg.indicators) {
         indicatorValuesRef.current = msg.indicators;
-        // Collect history for indicators with expanded charts (scalar values only)
+        // Collect history for indicators with expanded charts. Scalars → number[];
+        // frequency maps → Record<category, number[]> so multi-line / stacked-area
+        // charts can draw one series per category.
         const expanded = chartExpandedRef.current;
         if (expanded.size > 0) {
           const hist = indicatorHistoryRef.current;
@@ -320,9 +369,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             const v = msg.indicators[id];
             if (typeof v === 'number') {
               let arr = hist[id];
-              if (!arr) { arr = []; hist[id] = arr; }
-              arr.push(v);
-              if (arr.length > 500) arr.shift();
+              if (!arr || !Array.isArray(arr)) { arr = []; hist[id] = arr; }
+              (arr as number[]).push(v);
+              if ((arr as number[]).length > 500) (arr as number[]).shift();
+            } else if (v && typeof v === 'object') {
+              let perCat = hist[id];
+              if (!perCat || Array.isArray(perCat)) { perCat = {}; hist[id] = perCat; }
+              for (const [cat, count] of Object.entries(v as Record<string, number>)) {
+                let series = (perCat as Record<string, number[]>)[cat];
+                if (!series) { series = []; (perCat as Record<string, number[]>)[cat] = series; }
+                series.push(count);
+                if (series.length > 500) series.shift();
+              }
             }
           }
         }
@@ -549,7 +607,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     setPlaying(false);
     indicatorValuesRef.current = {};
     indicatorHistoryRef.current = {};
-    chartExpandedRef.current = new Set();
+    // NOTE: don't reset chartExpandedRef here. IndicatorDisplay populates it
+    // during its render (via a ref-compare notification pattern tied to the
+    // indicator id list), and that render happens BEFORE this useEffect runs.
+    // Resetting it here wipes those entries, which means the FIRST few stepped
+    // messages arrive with an empty expanded set and never populate history —
+    // causing scalar sparklines to stay blank until a manual collapse/expand
+    // remounts IndicatorSparkline. IndicatorDisplay's own indicator-id-change
+    // detection handles the "new model" case by re-notifying as needed; stale
+    // entries for removed indicators are harmless (the collection loop skips
+    // ids whose value is missing from the incoming message).
     pendingStep.current = false;
     lastGenForGps.current = 0;
     gpsGens.current = 0;
@@ -1732,11 +1799,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 values={indicatorValuesRef.current}
                 history={indicatorHistoryRef.current}
                 generation={generation}
+                vizModes={indicatorVizModes}
                 onToggleWatch={(id, watched) => updateIndicator(id, { watched })}
                 onChartToggle={(id, expanded) => {
                   if (expanded) chartExpandedRef.current.add(id);
                   else chartExpandedRef.current.delete(id);
                 }}
+                onCycleVizMode={cycleIndicatorVizMode}
               />
             </div>
           )}
