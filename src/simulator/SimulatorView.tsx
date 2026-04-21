@@ -249,11 +249,48 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const nextStepTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unlimitedFpsRef = useRef(false);
   const unlimitedGensRef = useRef(false);
+  const endConditionsRef = useRef(model.properties.endConditions);
   useEffect(() => { playingRef.current = playing; }, [playing]);
   useEffect(() => { gensPerFrameRef.current = unlimitedGens ? 100 : gensPerFrame; }, [gensPerFrame, unlimitedGens]);
   useEffect(() => { targetFpsRef.current = unlimitedFps ? 999999 : targetFps; }, [targetFps, unlimitedFps]);
   useEffect(() => { unlimitedFpsRef.current = unlimitedFps; }, [unlimitedFps]);
   useEffect(() => { unlimitedGensRef.current = unlimitedGens; }, [unlimitedGens]);
+  useEffect(() => { endConditionsRef.current = model.properties.endConditions; }, [model.properties.endConditions]);
+
+  // End-condition evaluation: returns a non-empty reason string when the
+  // simulation should auto-pause. Evaluated after each `stepped` message.
+  const [endConditionNotice, setEndConditionNotice] = useState<string | null>(null);
+  const endNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const evalEndConditions = useCallback((gen: number, indicatorValues: Record<string, number | Record<string, number>>): string | null => {
+    const ec = endConditionsRef.current;
+    if (!ec || !ec.enabled) return null;
+    if (typeof ec.maxGenerations === 'number' && ec.maxGenerations > 0 && gen >= ec.maxGenerations) {
+      return `Max generations reached (${ec.maxGenerations})`;
+    }
+    for (const cond of ec.indicatorConditions || []) {
+      const raw = indicatorValues[cond.indicatorId];
+      if (typeof raw !== 'number') continue; // frequency maps not comparable
+      const ind = (model.indicators || []).find(i => i.id === cond.indicatorId);
+      const target = ind?.dataType === 'bool'
+        ? (cond.value === 'true' || cond.value === '1' ? 1 : 0)
+        : Number(cond.value);
+      if (!Number.isFinite(target)) continue;
+      let match = false;
+      switch (cond.op) {
+        case '==': match = raw === target; break;
+        case '!=': match = raw !== target; break;
+        case '>':  match = raw >  target; break;
+        case '<':  match = raw <  target; break;
+        case '>=': match = raw >= target; break;
+        case '<=': match = raw <= target; break;
+      }
+      if (match) {
+        const name = ind?.name || cond.indicatorId;
+        return `${name} ${cond.op} ${cond.value}`;
+      }
+    }
+    return null;
+  }, [model.indicators]);
 
   const sendNextStep = useCallback(() => {
     if (!playingRef.current || pendingStep.current) return;
@@ -295,6 +332,20 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       lastGenForGps.current = gen;
 
       pendingStep.current = false;
+
+      // End-condition check: pause and surface a notice when a configured rule
+      // matches. Only evaluated while playing to avoid re-pausing on each
+      // manual step after the condition is already met.
+      if (playingRef.current) {
+        const reason = evalEndConditions(gen, indicatorValuesRef.current);
+        if (reason) {
+          playingRef.current = false;
+          setPlaying(false);
+          setEndConditionNotice(reason);
+          if (endNoticeTimer.current) clearTimeout(endNoticeTimer.current);
+          endNoticeTimer.current = setTimeout(() => setEndConditionNotice(null), 4000);
+        }
+      }
 
       // Update metrics (runs on every result, even without drawing)
       const now = performance.now();
@@ -342,6 +393,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           }
         }
       }
+    } else if (msg.type === 'stopEvent') {
+      // Compiled Stop Event node fired in the worker. Pause and surface the
+      // user's message via the same blue notice used for end conditions.
+      playingRef.current = false;
+      setPlaying(false);
+      setEndConditionNotice(String(msg.message ?? 'Stop condition reached'));
+      if (endNoticeTimer.current) clearTimeout(endNoticeTimer.current);
+      endNoticeTimer.current = setTimeout(() => setEndConditionNotice(null), 4000);
     } else if (msg.type === 'error') {
       setCompileError(msg.message as string);
       pendingStep.current = false;
@@ -458,6 +517,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       attributes: model.attributes.map(a => ({
         id: a.id, type: a.type,
         isModelAttribute: a.isModelAttribute, defaultValue: a.defaultValue,
+        boundaryValue: a.boundaryValue,
         tagOptions: a.tagOptions,
       })),
       neighborhoods: model.neighborhoods.map(n => ({ id: n.id, coords: n.coords })),
@@ -467,6 +527,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       stepCode: result.stepCode,
       inputColorCodes: result.inputColorCodes,
       outputMappingCodes: result.outputMappingCodes,
+      stopMessages: result.stopMessages,
       activeViewer: viewer,
       indicators: (model.indicators || []).map(i => ({
         id: i.id, kind: i.kind, dataType: i.dataType,
@@ -616,6 +677,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         stepCode: result.stepCode,
         inputColorCodes: result.inputColorCodes,
         outputMappingCodes: result.outputMappingCodes || [],
+        stopMessages: result.stopMessages,
         updateMode: model.properties.updateMode,
         asyncScheme: model.properties.asyncScheme,
         wasmStepBytes: wasmResult.error ? undefined : wasmResult.bytes,
@@ -1185,8 +1247,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       return;
     }
 
-    // Update generation display
-    if (state.generation != null) setGeneration(state.generation);
+    // Reset generation counter — saved states restore the grid configuration,
+    // not the simulation history. Users building a starting configuration
+    // shouldn't inherit the generation count they spent getting there.
+    setGeneration(0);
+    indicatorValuesRef.current = {};
+    indicatorHistoryRef.current = {};
 
     // Convert serialized attributes back to ArrayBuffers for worker
     const attrBuffers: Record<string, { type: string; buffer: ArrayBuffer }> = {};
@@ -1198,15 +1264,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
 
     const colorsBuffer = base64ToArrayBuffer(state.colors!);
+    // NOTE: `generation`, `indicators`, `linkedAccumulators` are intentionally
+    // NOT forwarded — the worker resets them to defaults in its loadState
+    // handler so the user gets a clean run starting from the loaded grid state.
     const loadMsg: Record<string, unknown> = {
       type: 'loadState',
-      generation: state.generation ?? 0,
       width: state.width,
       height: state.height,
       attributes: attrBuffers,
       modelAttrs: state.modelAttrs || {},
-      indicators: state.indicators || {},
-      linkedAccumulators: state.linkedAccumulators || {},
       colors: colorsBuffer,
       activeViewer: state.activeViewer ?? activeViewerRef.current,
     };
@@ -1461,6 +1527,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 {m.name}
               </button>
             ))}
+          </div>
+        )}
+
+        {/* End-condition pause notice (informational, not an error) */}
+        {endConditionNotice && (
+          <div
+            data-sim-overlay
+            style={{
+              position: 'absolute', left: '50%', top: 54, transform: 'translateX(-50%)',
+              background: 'rgba(76, 201, 240, 0.95)', color: '#0d1117',
+              padding: '6px 14px', borderRadius: 6,
+              fontSize: '0.78rem', fontWeight: 500,
+              boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+              zIndex: 20, pointerEvents: 'none',
+              display: 'flex', alignItems: 'center', gap: 8,
+            }}
+            title="Simulation paused by a user-defined stop condition"
+          >
+            <span style={{ fontSize: '0.95rem' }}>&#9432;</span>
+            <span>Simulation paused by user-defined stop condition &mdash; {endConditionNotice}</span>
           </div>
         )}
 

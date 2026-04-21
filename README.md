@@ -41,8 +41,9 @@ Beyond the six fundamentals, two types of mappings enable visualization and inte
 A complete GenesisCA model definition consists of:
 
 1. **Model Properties**
-   - 1.1. Presentation (Name, Author, Goal, Description, Tags)
+   - 1.1. Presentation (Name, Rule Author, GenesisCA Model Author, Description, Tags)
    - 1.2. Structure (Topology, Boundary Treatment, Grid Size)
+   - 1.3. Execution (Update Mode, optional End Conditions: max generations + indicator rules)
 
 2. **Attributes** — each has a name, type (bool, integer, float), description, and a default value
    - 2.1. Cell Attributes (per-cell state)
@@ -63,12 +64,12 @@ A complete GenesisCA model definition consists of:
 ## Features
 
 ### The Modeler
-- **Properties Panel** — model metadata, grid dimensions, boundary treatment (torus/constant), update mode (synchronous/asynchronous), tags
-- **Attributes Panel** — cell and model attributes with type-specific default value controls (bool, integer, float, tag, color)
+- **Properties Panel** — model metadata (Rule Author + GenesisCA Model Author), grid dimensions, boundary treatment (torus/constant), update mode (synchronous/asynchronous), tags, optional End Conditions (max generations + indicator-based auto-pause rules)
+- **Attributes Panel** — cell and model attributes with type-specific default value controls (bool, integer, float, tag, color); cell attributes gain an optional **Boundary Value** field when boundary is set to constant
 - **Neighborhoods Panel** — interactive grid editor with per-neighborhood margin, optional per-cell tags for named access, and a Duplicate button for quick variations
 - **Mappings Panel** — Attribute-to-Color and Color-to-Attribute mapping definitions
 - **Indicators** — standalone (typed scalar, graph-writable) or linked (auto-aggregated from cell attributes: frequency, total), with per-generation or accumulated modes
-- **Graph Editor** — 36 node types across 8 categories (event, flow, data, logic, aggregation, output, color, indicators), with RMB pan, scroll zoom, and snap-to-grid. Includes Switch (flow routing by conditions or value), Proportion Map, Interpolation, Color Interpolation, Aggregate (multi-input math), and neighborhood tag-based access nodes.
+- **Graph Editor** — 37 node types across 8 categories (event, flow, data, logic, aggregation, output, color, indicators), with RMB pan, scroll zoom, and snap-to-grid. Includes Switch (flow routing by conditions or value), Proportion Map, Interpolation, Color Interpolation, Aggregate (multi-input math), neighborhood tag-based access nodes, and a **Stop Event** node that pauses the simulator with a user-defined message when its flow input fires.
 - **Connection validation** — prevents incompatible connections (flow/value), cycles, and duplicate inputs; compatible ports highlight during drag
 - **Inline Port Widgets** — input ports show small value editors (number/bool) when unconnected, eliminating the need for constant nodes in simple cases
 - **Node Collapse/Expand** — double-click any node to collapse it; constants show their value; collapsed nodes temporarily expand when connecting edges

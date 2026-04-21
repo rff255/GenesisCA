@@ -2475,6 +2475,25 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
     return true;
   },
 
+  // Stop Event: if stopFlag[0] === 0, write the compile-time stop index there.
+  // First triggered stop event in a step wins; worker reads the flag after the
+  // step completes and surfaces the user's message. Mirrors the JS compile in
+  // StopEventNode.ts exactly (same first-match semantics, same index).
+  stopEvent: ({ node, ctx }) => {
+    const stopIdx = Number(node.data.config._stopIdx ?? 0);
+    if (!stopIdx) return true; // unresolved — silently skip (matches JS)
+    const off = ctx.layout.stopFlagOffset;
+    ctx.emitter.i32Const(0);
+    ctx.emitter.i32Load(off, 2);
+    ctx.emitter.op(OP_I32_EQZ);
+    ctx.emitter.ifThen(() => {
+      ctx.emitter.i32Const(0);
+      ctx.emitter.i32Const(stopIdx);
+      ctx.emitter.i32Store(off, 2);
+    });
+    return true;
+  },
+
   updateIndicator: ({ node, ctx, inputs }) => {
     const idxRaw = node.data.config._indicatorIdx;
     const idx = Number(idxRaw ?? -1);

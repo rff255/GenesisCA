@@ -40,6 +40,7 @@ import { GetNeighborAttributeByTagNode } from './GetNeighborAttributeByTagNode';
 import { GetNeighborIndexesByTagsNode } from './GetNeighborIndexesByTagsNode';
 import { FilterNeighborsNode } from './FilterNeighborsNode';
 import { JoinNeighborsNode } from './JoinNeighborsNode';
+import { StopEventNode } from './StopEventNode';
 
 const ALL_NODES: NodeTypeDef[] = [
   // Event (entry points)
@@ -51,6 +52,7 @@ const ALL_NODES: NodeTypeDef[] = [
   SequenceNode,
   LoopNode,
   SwitchNode,
+  StopEventNode,
   // Data
   GetCellAttributeNode,
   GetModelAttributeNode,

@@ -500,9 +500,19 @@ export function GraphEditorInner() {
   const onNodeContextMenu = useCallback(
     (event: React.MouseEvent, node: Node) => {
       event.stopPropagation();
+      // React Flow's default RMB behaviour can collapse a multi-selection to
+      // just the clicked node before our context-menu code inspects state.
+      // Snapshot the selection synchronously and, if the clicked node is part
+      // of a multi-selection, re-assert it so the outline and the menu's
+      // "Selection (N)" target both stay consistent.
+      const preSelectedIds = getNodes().filter(n => n.selected).map(n => n.id);
+      if (preSelectedIds.length >= 2 && preSelectedIds.includes(node.id)) {
+        const keep = new Set(preSelectedIds);
+        setNodes(nds => nds.map(n => (keep.has(n.id) ? (n.selected ? n : { ...n, selected: true }) : (n.selected ? { ...n, selected: false } : n))));
+      }
       openContextMenu(event, node.id);
     },
-    [openContextMenu],
+    [openContextMenu, getNodes, setNodes],
   );
 
   // --- Clamp context menu to viewport bounds + submenu direction ---
@@ -560,9 +570,21 @@ export function GraphEditorInner() {
       pushCurrentSnapshot();
       setNodes(nds => {
         const id = generateNodeId(nds);
+        // Seed _port_<id> with each inline-widget port's defaultValue so the
+        // collapsed-node title renders the correct default from t=0 (instead of
+        // the hardcoded '0' fallback in CaNode.tsx). Compiler's getInlineValue
+        // already falls back to port.defaultValue, so this is display-only —
+        // but it also makes .gcaproj files self-contained.
+        const seededConfig: Record<string, string | number | boolean> = { ...def.defaultConfig };
+        for (const port of def.ports) {
+          if (port.inlineWidget && port.defaultValue !== undefined) {
+            const key = `_port_${port.id}`;
+            if (seededConfig[key] === undefined) seededConfig[key] = port.defaultValue;
+          }
+        }
         const data: Record<string, unknown> = {
           nodeType: def.type,
-          config: { ...def.defaultConfig, ...(configOverrides || {}) },
+          config: { ...seededConfig, ...(configOverrides || {}) },
         };
         if (label) data.label = label;
         const newNode: Node = {
@@ -1122,6 +1144,77 @@ export function GraphEditorInner() {
     setContextMenu(null);
   }, [contextMenu, getNodes, setNodes, scheduleSync]);
 
+  // --- Align / Distribute (multi-selection only) ---
+  // Node width/height approximation matches resizeGroupsToFit.
+  const NODE_W = 200;
+  const NODE_H = 100;
+
+  type AlignMode = 'left' | 'centerH' | 'right' | 'top' | 'centerV' | 'bottom';
+
+  const alignNodes = useCallback((mode: AlignMode) => {
+    if (!contextMenu || contextMenu.target.type !== 'selection') return;
+    const selectedIds = new Set(contextMenu.target.nodeIds);
+    const sel = nodes.filter(n => selectedIds.has(n.id));
+    if (sel.length < 2) { setContextMenu(null); return; }
+    pushCurrentSnapshot();
+    // Horizontal alignment uses x (left edge) or x + NODE_W/2 (center) or x + NODE_W (right).
+    // Vertical alignment uses y / y + NODE_H/2 / y + NODE_H.
+    let target = 0;
+    if (mode === 'left')    target = Math.min(...sel.map(n => n.position.x));
+    if (mode === 'right')   target = Math.max(...sel.map(n => n.position.x + NODE_W));
+    if (mode === 'centerH') target = sel.reduce((s, n) => s + (n.position.x + NODE_W / 2), 0) / sel.length;
+    if (mode === 'top')     target = Math.min(...sel.map(n => n.position.y));
+    if (mode === 'bottom')  target = Math.max(...sel.map(n => n.position.y + NODE_H));
+    if (mode === 'centerV') target = sel.reduce((s, n) => s + (n.position.y + NODE_H / 2), 0) / sel.length;
+
+    setNodes(nds => nds.map(n => {
+      if (!selectedIds.has(n.id)) return n;
+      if (mode === 'left')    return { ...n, position: { ...n.position, x: target } };
+      if (mode === 'right')   return { ...n, position: { ...n.position, x: target - NODE_W } };
+      if (mode === 'centerH') return { ...n, position: { ...n.position, x: target - NODE_W / 2 } };
+      if (mode === 'top')     return { ...n, position: { ...n.position, y: target } };
+      if (mode === 'bottom')  return { ...n, position: { ...n.position, y: target - NODE_H } };
+      if (mode === 'centerV') return { ...n, position: { ...n.position, y: target - NODE_H / 2 } };
+      return n;
+    }));
+    scheduleSync();
+    setContextMenu(null);
+  }, [contextMenu, nodes, setNodes, scheduleSync]);
+
+  const distributeNodes = useCallback((axis: 'h' | 'v') => {
+    if (!contextMenu || contextMenu.target.type !== 'selection') return;
+    const selectedIds = new Set(contextMenu.target.nodeIds);
+    const sel = nodes.filter(n => selectedIds.has(n.id));
+    if (sel.length < 3) { setContextMenu(null); return; }
+    pushCurrentSnapshot();
+    // Sort by axis position. Keep first (leftmost / topmost) and last (rightmost /
+    // bottommost) fixed; distribute the inner nodes so the inter-node gap between
+    // successive nodes' trailing/leading edges is equal.
+    const key = axis === 'h' ? 'x' : 'y';
+    const size = axis === 'h' ? NODE_W : NODE_H;
+    const sorted = [...sel].sort((a, b) => a.position[key] - b.position[key]);
+    const firstPos = sorted[0]!.position[key];
+    const lastPos = sorted[sorted.length - 1]!.position[key];
+    const totalSpan = (lastPos + size) - firstPos;
+    const sumSizes = sorted.length * size;
+    const gap = (totalSpan - sumSizes) / (sorted.length - 1);
+
+    const newPosByIdx = new Map<string, number>();
+    let cursor = firstPos;
+    for (let i = 0; i < sorted.length; i++) {
+      newPosByIdx.set(sorted[i]!.id, cursor);
+      cursor += size + gap;
+    }
+    setNodes(nds => nds.map(n => {
+      const np = newPosByIdx.get(n.id);
+      if (np === undefined) return n;
+      if (axis === 'h') return { ...n, position: { x: np, y: n.position.y } };
+      return { ...n, position: { x: n.position.x, y: np } };
+    }));
+    scheduleSync();
+    setContextMenu(null);
+  }, [contextMenu, nodes, setNodes, scheduleSync]);
+
   // --- Macro actions ---
 
   const createMacroFromSelection = useCallback(() => {
@@ -1677,6 +1770,34 @@ export function GraphEditorInner() {
               <hr style={{ border: 'none', borderTop: '1px solid #2d4059', margin: '4px 0' }} />
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); createMacroFromSelection(); }}>Create Macro</button>
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); createGroup(); }}>Create Group</button>
+              <hr style={{ border: 'none', borderTop: '1px solid #2d4059', margin: '4px 0' }} />
+              <div className={styles.contextSubmenuTrigger}>
+                <button className={styles.contextItem}>
+                  Align
+                  <span style={{ marginLeft: 'auto', fontSize: '0.6rem', color: '#6080a0' }}>&rsaquo;</span>
+                </button>
+                <div className={styles.contextSubmenu}>
+                  <div className={styles.contextCategory}>Horizontally</div>
+                  <button className={styles.contextItem} onClick={e => { e.stopPropagation(); alignNodes('left'); }}>Left</button>
+                  <button className={styles.contextItem} onClick={e => { e.stopPropagation(); alignNodes('centerH'); }}>Center</button>
+                  <button className={styles.contextItem} onClick={e => { e.stopPropagation(); alignNodes('right'); }}>Right</button>
+                  <div className={styles.contextCategory}>Vertically</div>
+                  <button className={styles.contextItem} onClick={e => { e.stopPropagation(); alignNodes('top'); }}>Top</button>
+                  <button className={styles.contextItem} onClick={e => { e.stopPropagation(); alignNodes('centerV'); }}>Center</button>
+                  <button className={styles.contextItem} onClick={e => { e.stopPropagation(); alignNodes('bottom'); }}>Bottom</button>
+                </div>
+              </div>
+              <div className={styles.contextSubmenuTrigger}>
+                <button className={styles.contextItem}>
+                  Distribute
+                  <span style={{ marginLeft: 'auto', fontSize: '0.6rem', color: '#6080a0' }}>&rsaquo;</span>
+                </button>
+                <div className={styles.contextSubmenu}>
+                  <button className={styles.contextItem} onClick={e => { e.stopPropagation(); distributeNodes('h'); }}>Horizontally</button>
+                  <button className={styles.contextItem} onClick={e => { e.stopPropagation(); distributeNodes('v'); }}>Vertically</button>
+                </div>
+              </div>
+              <hr style={{ border: 'none', borderTop: '1px solid #2d4059', margin: '4px 0' }} />
               <button className={styles.contextItem} style={{ color: '#e05050' }} onClick={e => { e.stopPropagation(); deleteSelection(); }}>
                 Delete Selection
               </button>

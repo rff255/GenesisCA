@@ -437,6 +437,9 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       if (!m.properties.tags) m.properties.tags = [];
       if (!m.properties.updateMode) m.properties.updateMode = 'synchronous';
       if (!m.properties.asyncScheme) m.properties.asyncScheme = 'random-order';
+      // v1.8: rename/add — silently drop legacy `goal`, default new `modelAuthor` to ''.
+      if ('goal' in m.properties) delete (m.properties as unknown as Record<string, unknown>).goal;
+      if (m.properties.modelAuthor === undefined) m.properties.modelAuthor = '';
       for (const n of m.neighborhoods) { n.margin ??= 2; }
       for (const a of m.attributes) {
         if (a.type === 'tag' && !a.tagOptions) a.tagOptions = [];
@@ -545,6 +548,8 @@ function createInitialState(): ModelState {
         if (!model.properties.tags) model.properties.tags = [];
         if (!model.properties.updateMode) model.properties.updateMode = 'synchronous';
         if (!model.properties.asyncScheme) model.properties.asyncScheme = 'random-order';
+        if ('goal' in model.properties) delete (model.properties as unknown as Record<string, unknown>).goal;
+        if (model.properties.modelAuthor === undefined) model.properties.modelAuthor = '';
         for (const n of model.neighborhoods) { n.margin ??= 2; }
         for (const a of model.attributes) {
           if (a.type === 'tag' && !a.tagOptions) a.tagOptions = [];

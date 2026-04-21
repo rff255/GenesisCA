@@ -69,6 +69,11 @@ export interface MemoryLayout {
   activeViewerOffset: number;
   orderOffset: number;
 
+  /** Byte offset of the stop-event flag (single i32). When the compiled step
+   *  writes a non-zero index there, the worker reads it post-step and pauses
+   *  the simulator, surfacing `stopMessages[idx-1]`. */
+  stopFlagOffset: number;
+
   /** Per-cell-iteration scratch region (bump-pointer allocator).
    *  Used by array-producing emitters (filterNeighbors, joinNeighbors,
    *  getNeighborIndexesByTags, getNeighborsAttrByIndexes) to materialise
@@ -194,6 +199,11 @@ export function computeMemoryLayout(
   const orderOffset = off;
   off += total * 4;
 
+  // Stop-event flag (single i32, padded to 8)
+  off = alignTo(off, 8);
+  const stopFlagOffset = off;
+  off += 8;
+
   // Scratch region for per-cell array allocation (bump-pointer reset per
   // iteration). Sized for: max neighborhood size × 8 bytes (worst-case f64
   // element) × 32 concurrent arrays. With a floor of 4 KB so trivial graphs
@@ -218,6 +228,7 @@ export function computeMemoryLayout(
     modelAttrOffset,
     indicatorOffset, indicatorIds,
     rngStateOffset, activeViewerOffset, orderOffset,
+    stopFlagOffset,
     scratchOffset, scratchBytes,
     sentinelIndex,
   };

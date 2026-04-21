@@ -4,7 +4,7 @@ This document catalogues every node in the GenesisCA Visual Programming Language
 describes the port type system, and flags redundancies or gaps. It is a working reference
 to inform future consolidation — it does **not** describe any committed refactoring.
 
-**Scope:** 39 visible node types across 7 categories, plus 2 hidden boundary nodes
+**Scope:** 40 visible node types across 7 categories, plus 2 hidden boundary nodes
 (`macroInput` / `macroOutput`).
 
 ---
@@ -90,6 +90,7 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 | 6 | `loop` | Loop | Repeat flow N times. | `I: DO` (flow) `I: COUNT` (int) / `O: BODY` (flow) | |
 | 7 | `switch` | Switch | Multi-way branch (by value or conditions). | `I: CHECK` (flow) `I: VALUE` (optional) / dynamic `O: CASE_N` + `O: DEFAULT` | 2 modes: `conditions` (per-case bool inputs) or `value` (compare to cases); optional `firstMatchOnly` |
 | 8 | `macro` | Macro | Reusable sub-graph. | dynamic — ports from `MacroDef.exposedInputs/Outputs` | Requires `macroDefId`; compiler inlines the subgraph |
+| 9 | `stopEvent` | Stop Event | Terminates the simulation run with a user-defined message when its flow input fires. | `I: DO` (flow) | Text widget on body holds the message; first triggered stop in a step wins |
 
 ### 3.3 Data readers — `data`
 

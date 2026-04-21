@@ -1056,6 +1056,18 @@ function CaNodeComponent({ id, data }: NodeProps) {
           </select>
         )}
 
+        {nodeData.nodeType === 'stopEvent' && (
+          <input
+            className={styles.input}
+            placeholder="Stop message..."
+            value={(nodeData.config.message as string) ?? ''}
+            onChange={e => updateConfig('message', e.target.value)}
+            onMouseDown={stopDrag}
+            onDoubleClick={stopAll}
+            title="Shown in the simulator when this flow fires and pauses the run."
+          />
+        )}
+
         {nodeData.nodeType === 'tagConstant' && (
           <>
             <select

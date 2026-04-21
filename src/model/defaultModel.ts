@@ -7,7 +7,7 @@ export const EMPTY_MODEL: CAModel = {
   properties: {
     name: 'Untitled Model',
     author: '',
-    goal: '',
+    modelAuthor: '',
     description: '',
     topology: '2d-grid',
     boundaryTreatment: 'torus',

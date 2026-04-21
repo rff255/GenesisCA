@@ -1,8 +1,48 @@
 import { SCHEMA_VERSION } from './schema';
 import type { CAModel, SimulationState, SerializedTypedArray } from './types';
 
+/** Pretty-print JSON for .gcaproj files with targeted single-line inlining for
+ *  structurally-small, high-volume arrays that make default 2-space pretty-print
+ *  output unwieldy.
+ *
+ *  Inlined paths:
+ *   - `coords` (neighborhood coords: Array<[number, number]>) — whole array on
+ *     one line: `"coords": [[-1,-1], [-1,0], ...]`. A Moore neighborhood drops
+ *     from ~24 lines to 1; dense MNCA neighborhoods from thousands to one each.
+ *   - `graphEdges` and each macro's `edges` — one edge per line, each edge
+ *     fully inlined on its own line instead of spanning 5-7 lines.
+ *
+ *  Output is still valid JSON parseable by `JSON.parse` — only whitespace
+ *  inside specific subtrees is compacted. `readModelFile` is unchanged. */
+function stringifyCompact(value: unknown, indent = 2, level = 0, parentKey: string | null = null): string {
+  const pad = ' '.repeat(indent * level);
+  const childPad = ' '.repeat(indent * (level + 1));
+
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[]';
+    if (parentKey === 'coords') {
+      return '[' + value.map(c => JSON.stringify(c)).join(', ') + ']';
+    }
+    if (parentKey === 'graphEdges' || parentKey === 'edges') {
+      const items = value.map(v => JSON.stringify(v));
+      return '[\n' + items.map(i => childPad + i).join(',\n') + '\n' + pad + ']';
+    }
+    const items = value.map(v => stringifyCompact(v, indent, level + 1, null));
+    return '[\n' + items.map(i => childPad + i).join(',\n') + '\n' + pad + ']';
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length === 0) return '{}';
+  const items = entries.map(([k, v]) =>
+    childPad + JSON.stringify(k) + ': ' + stringifyCompact(v, indent, level + 1, k),
+  );
+  return '{\n' + items.join(',\n') + '\n' + pad + '}';
+}
+
 export function serializeModel(model: CAModel): string {
-  return JSON.stringify(model, null, 2);
+  return stringifyCompact(model);
 }
 
 export function modelFilename(model: CAModel): string {
@@ -125,12 +165,14 @@ export function serializeSimState(
   const wantControls = include.controls !== false;
   const serialized: SimulationState = {};
   if (wantGrid) {
-    serialized.generation = workerState.generation;
+    // Saved grid state is a starting configuration — NOT a run snapshot.
+    // We deliberately skip `generation`, `indicators`, and `linkedAccumulators`
+    // so a loaded state always begins from generation 0 with fresh indicator
+    // values. The fields remain optional in the type for back-compat with
+    // older files (loader ignores them).
     serialized.width = workerState.width;
     serialized.height = workerState.height;
     serialized.attributes = {};
-    serialized.indicators = workerState.indicators;
-    serialized.linkedAccumulators = workerState.linkedAccumulators;
     serialized.colors = arrayBufferToBase64(workerState.colors);
     for (const [id, entry] of Object.entries(workerState.attributes)) {
       serialized.attributes[id] = {
@@ -176,12 +218,11 @@ export function serializePreset(
 ): SimulationState {
   const out: SimulationState = { modelAttrs: { ...workerState.modelAttrs } };
   if (opts.includeGrid) {
-    out.generation = workerState.generation;
+    // Presets also store starting configurations — skip generation + indicators
+    // for the same reason as serializeSimState above.
     out.width = workerState.width;
     out.height = workerState.height;
     out.attributes = {};
-    out.indicators = { ...workerState.indicators };
-    out.linkedAccumulators = JSON.parse(JSON.stringify(workerState.linkedAccumulators));
     out.colors = arrayBufferToBase64(workerState.colors);
     for (const [id, entry] of Object.entries(workerState.attributes)) {
       out.attributes[id] = {
