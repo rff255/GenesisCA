@@ -5,6 +5,7 @@ import type {
   EndConditions, EndConditionOp, IndicatorEndCondition,
 } from '../../model/types';
 import { IndicatorsPanelSection } from './IndicatorsPanelSection';
+import { useListReorder } from './useListReorder';
 import styles from './PanelContent.module.css';
 
 function newCondId(): string {
@@ -12,9 +13,13 @@ function newCondId(): string {
 }
 
 export function PropertiesPanelContent() {
-  const { model, updateProperties } = useModel();
+  const { model, updateProperties, reorderEndConditions } = useModel();
   const { properties } = model;
   const [tagInput, setTagInput] = useState('');
+  const ecReorder = useListReorder(
+    properties.endConditions?.indicatorConditions || [],
+    reorderEndConditions,
+  );
 
   const ec = properties.endConditions;
   const ecEnabled = !!ec?.enabled;
@@ -99,12 +104,12 @@ export function PropertiesPanelContent() {
             />
           </div>
           <div className={styles.field}>
-            <label className={styles.fieldLabel}>GenesisCA Model Author</label>
+            <label className={styles.fieldLabel}>GenesisCA Project Author</label>
             <input
               className={styles.textInput}
               value={properties.modelAuthor}
               onChange={e => updateProperties({ modelAuthor: e.target.value })}
-              placeholder="Who built this GenesisCA model"
+              placeholder="Who built this GenesisCA project"
             />
           </div>
           <div className={styles.field}>
@@ -325,7 +330,8 @@ export function PropertiesPanelContent() {
                       Define at least one indicator to add conditions.
                     </span>
                   )}
-                  {(ec?.indicatorConditions || []).map(cond => {
+                  <div data-reorder-list>
+                  {(ec?.indicatorConditions || []).map((cond, condIdx, condArr) => {
                     const ind = (model.indicators || []).find(i => i.id === cond.indicatorId);
                     const isFreq = ind?.kind === 'linked' && ind?.linkedAggregation === 'frequency';
                     const linkedAttr = isFreq
@@ -333,8 +339,17 @@ export function PropertiesPanelContent() {
                       : undefined;
                     const freqKind = isFreq ? linkedAttr?.type : undefined; // 'bool'|'tag'|'integer'|'float'
                     const floatFreqDisabled = freqKind === 'float';
+                    const isDragging = ecReorder.dragState?.id === cond.id;
+                    const srcIdx = ecReorder.dragState ? condArr.findIndex(c => c.id === ecReorder.dragState!.id) : -1;
+                    const showBefore = ecReorder.dragState?.overIdx === condIdx && srcIdx !== condIdx && srcIdx !== condIdx - 1;
+                    const showAfter = ecReorder.dragState?.overIdx === condArr.length && condIdx === condArr.length - 1 && srcIdx !== condIdx;
                     return (
-                      <div key={cond.id} style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+                      <div
+                        key={cond.id}
+                        data-reorder-row
+                        className={`${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                        style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}
+                      >
                         <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                           <select
                             className={styles.selectInput}
@@ -439,6 +454,12 @@ export function PropertiesPanelContent() {
                             />
                           )}
                           <button
+                            className={styles.dragHandle}
+                            title="Drag to reorder"
+                            onPointerDown={ecReorder.startDrag(cond.id)}
+                            onClick={e => e.stopPropagation()}
+                          >⋮⋮</button>
+                          <button
                             className={styles.deleteButton}
                             style={{ padding: '2px 6px', fontSize: '0.7rem' }}
                             onClick={() => removeIndicatorCondition(cond.id)}
@@ -455,6 +476,7 @@ export function PropertiesPanelContent() {
                       </div>
                     );
                   })}
+                  </div>
                   <button
                     className={styles.addButton}
                     style={{ fontSize: '0.72rem', padding: '2px 8px', marginTop: 4 }}

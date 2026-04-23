@@ -226,10 +226,15 @@ export function serializeSimState(
     unlimitedGens: boolean;
   },
   include: { grid?: boolean; controls?: boolean } = { grid: true, controls: true },
+  modelStructure?: { boundaryTreatment?: import('./types').BoundaryTreatment },
 ): SimulationState {
   const wantGrid = include.grid !== false;
   const wantControls = include.controls !== false;
   const serialized: SimulationState = {};
+  // Model structure (boundary + grid dims) is always useful context; save it whenever either side is wanted.
+  if (modelStructure?.boundaryTreatment) serialized.boundaryTreatment = modelStructure.boundaryTreatment;
+  serialized.gridWidth = workerState.width;
+  serialized.gridHeight = workerState.height;
   if (wantGrid) {
     // Saved grid state is a starting configuration — NOT a run snapshot.
     // We deliberately skip `generation`, `indicators`, and `linkedAccumulators`
@@ -281,8 +286,14 @@ export function serializePreset(
     orderArray?: ArrayBuffer;
   },
   opts: { includeGrid: boolean },
+  modelStructure?: { boundaryTreatment?: import('./types').BoundaryTreatment },
 ): SimulationState {
   const out: SimulationState = { modelAttrs: { ...workerState.modelAttrs } };
+  // Grid dimensions and boundary treatment are saved even for parameter-only presets so loading
+  // one can restore the model structure, not just the scalar parameters.
+  if (modelStructure?.boundaryTreatment) out.boundaryTreatment = modelStructure.boundaryTreatment;
+  out.gridWidth = workerState.width;
+  out.gridHeight = workerState.height;
   if (opts.includeGrid) {
     // Presets also store starting configurations — skip generation + indicators
     // for the same reason as serializeSimState above.

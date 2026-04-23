@@ -1,12 +1,14 @@
 import { useState, useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
 import type { AttributeType, LinkedAggregation } from '../../model/types';
+import { useListReorder } from './useListReorder';
 import styles from './PanelContent.module.css';
 
 export function IndicatorsPanelSection() {
-  const { model, addIndicator, removeIndicator, updateIndicator } = useModel();
+  const { model, addIndicator, removeIndicator, updateIndicator, reorderIndicators } = useModel();
   const indicators = model.indicators || [];
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const reorder = useListReorder(indicators, reorderIndicators);
 
   // Auto-select & scroll to newly added indicators
   const prevCount = useRef(indicators.length);
@@ -48,18 +50,28 @@ export function IndicatorsPanelSection() {
     <div className={styles.section}>
       <div className={styles.sectionTitle}>Indicators</div>
 
-      <div className={styles.list}>
-        {indicators.map(ind => (
-          <div
-            key={ind.id}
-            id={`ind-${ind.id}`}
-            className={`${styles.listItem} ${ind.id === selectedId ? styles.listItemSelected : ''}`}
-            onClick={() => setSelectedId(ind.id === selectedId ? null : ind.id)}
-          >
-            <span className={styles.listItemName}>{ind.name}</span>
-            <span className={styles.listItemBadge}>{ind.kind === 'standalone' ? 'Standalone' : 'Linked'}</span>
-          </div>
-        ))}
+      <div className={styles.list} data-reorder-list>
+        {indicators.map((ind, i) => {
+          const isDragging = reorder.dragState?.id === ind.id;
+          const srcIdx = reorder.dragState ? indicators.findIndex(x => x.id === reorder.dragState!.id) : -1;
+          const showBefore = reorder.dragState?.overIdx === i && srcIdx !== i && srcIdx !== i - 1;
+          const showAfter = reorder.dragState?.overIdx === indicators.length && i === indicators.length - 1 && srcIdx !== i;
+          return (
+            <div
+              key={ind.id}
+              id={`ind-${ind.id}`}
+              data-reorder-row
+              className={`${styles.listItem} ${ind.id === selectedId ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+              onClick={() => setSelectedId(ind.id === selectedId ? null : ind.id)}
+            >
+              <span className={styles.listItemName}>{ind.name}</span>
+              <span className={styles.listItemBadge}>{ind.kind === 'standalone' ? 'Standalone' : 'Linked'}</span>
+              <button className={styles.dragHandle} title="Drag to reorder"
+                onPointerDown={reorder.startDrag(ind.id)}
+                onClick={e => e.stopPropagation()}>⋮⋮</button>
+            </div>
+          );
+        })}
       </div>
 
       <div className={styles.buttonRow}>

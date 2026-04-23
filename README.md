@@ -1,4 +1,4 @@
-# GenesisCA <sup>v1.9.0</sup>
+# GenesisCA <sup>v1.10.0</sup>
 
 An IDE for modeling and simulating Cellular Automata, built as a self-contained browser application.
 
@@ -41,7 +41,7 @@ Beyond the six fundamentals, two types of mappings enable visualization and inte
 A complete GenesisCA model definition consists of:
 
 1. **Model Properties**
-   - 1.1. Presentation (Name, Rule Author, GenesisCA Model Author, Description, Tags)
+   - 1.1. Presentation (Name, Rule Author, GenesisCA Project Author, Description, Tags)
    - 1.2. Structure (Topology, Boundary Treatment, Grid Size)
    - 1.3. Execution (Update Mode, optional End Conditions: max generations + indicator rules)
 
@@ -64,7 +64,7 @@ A complete GenesisCA model definition consists of:
 ## Features
 
 ### The Modeler
-- **Properties Panel** — model metadata (Rule Author + GenesisCA Model Author), grid dimensions, boundary treatment (torus/constant), update mode (synchronous/asynchronous), tags, optional End Conditions (max generations + indicator-based auto-pause rules)
+- **Properties Panel** — model metadata (Rule Author + GenesisCA Project Author), grid dimensions, boundary treatment (torus/constant), update mode (synchronous/asynchronous), tags, optional End Conditions (max generations + indicator-based auto-pause rules)
 - **Attributes Panel** — cell and model attributes with type-specific default value controls (bool, integer, float, tag, color); cell attributes gain an optional **Boundary Value** field when boundary is set to constant
 - **Neighborhoods Panel** — interactive grid editor with per-neighborhood margin, optional per-cell tags for named access, and a Duplicate button for quick variations
 - **Mappings Panel** — Attribute-to-Color and Color-to-Attribute mapping definitions

@@ -118,7 +118,12 @@ type ModelAction =
   | { type: 'SET_SIMULATION_STATE'; state: SimulationState | undefined }
   | { type: 'ADD_PRESET'; preset: Preset }
   | { type: 'DELETE_PRESET'; id: string }
-  | { type: 'UPDATE_PRESET'; id: string; patch: Partial<Omit<Preset, 'id'>> };
+  | { type: 'UPDATE_PRESET'; id: string; patch: Partial<Omit<Preset, 'id'>> }
+  | { type: 'REORDER_ATTRIBUTES'; newOrder: string[] }
+  | { type: 'REORDER_NEIGHBORHOODS'; newOrder: string[] }
+  | { type: 'REORDER_MAPPINGS'; newOrder: string[] }
+  | { type: 'REORDER_INDICATORS'; newOrder: string[] }
+  | { type: 'REORDER_END_CONDITIONS'; newOrder: string[] };
 
 // ---------------------------------------------------------------------------
 // Reducer
@@ -487,7 +492,70 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
           ),
         },
       };
+
+    case 'REORDER_ATTRIBUTES':
+      return {
+        ...state,
+        isDirty: true,
+        model: { ...state.model, attributes: reorderById(state.model.attributes, action.newOrder) },
+      };
+
+    case 'REORDER_NEIGHBORHOODS':
+      return {
+        ...state,
+        isDirty: true,
+        model: { ...state.model, neighborhoods: reorderById(state.model.neighborhoods, action.newOrder) },
+      };
+
+    case 'REORDER_MAPPINGS':
+      return {
+        ...state,
+        isDirty: true,
+        model: { ...state.model, mappings: reorderById(state.model.mappings, action.newOrder) },
+      };
+
+    case 'REORDER_INDICATORS':
+      return {
+        ...state,
+        isDirty: true,
+        model: { ...state.model, indicators: reorderById(state.model.indicators, action.newOrder) },
+      };
+
+    case 'REORDER_END_CONDITIONS': {
+      const ec = state.model.properties.endConditions;
+      if (!ec?.indicatorConditions) return state;
+      return {
+        ...state,
+        isDirty: true,
+        model: {
+          ...state.model,
+          properties: {
+            ...state.model.properties,
+            endConditions: {
+              ...ec,
+              indicatorConditions: reorderById(ec.indicatorConditions, action.newOrder),
+            },
+          },
+        },
+      };
+    }
   }
+}
+
+/** Reorder an array of { id } items by the given ID list. Items not in newOrder
+ *  are appended at the end in their current order (defensive against drift). */
+function reorderById<T extends { id: string }>(items: T[], newOrder: string[]): T[] {
+  const byId = new Map(items.map(x => [x.id, x]));
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const id of newOrder) {
+    const item = byId.get(id);
+    if (item && !seen.has(id)) { out.push(item); seen.add(id); }
+  }
+  for (const item of items) {
+    if (!seen.has(item.id)) out.push(item);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -526,6 +594,11 @@ export interface ModelContextValue {
   addPreset: (preset: Preset) => void;
   deletePreset: (id: string) => void;
   updatePreset: (id: string, patch: Partial<Omit<Preset, 'id'>>) => void;
+  reorderAttributes: (newOrder: string[]) => void;
+  reorderNeighborhoods: (newOrder: string[]) => void;
+  reorderMappings: (newOrder: string[]) => void;
+  reorderIndicators: (newOrder: string[]) => void;
+  reorderEndConditions: (newOrder: string[]) => void;
 }
 
 const ModelContext = createContext<ModelContextValue | null>(null);
@@ -725,6 +798,26 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'UPDATE_PRESET', id, patch }),
     [],
   );
+  const reorderAttributes = useCallback(
+    (newOrder: string[]) => dispatch({ type: 'REORDER_ATTRIBUTES', newOrder }),
+    [],
+  );
+  const reorderNeighborhoods = useCallback(
+    (newOrder: string[]) => dispatch({ type: 'REORDER_NEIGHBORHOODS', newOrder }),
+    [],
+  );
+  const reorderMappings = useCallback(
+    (newOrder: string[]) => dispatch({ type: 'REORDER_MAPPINGS', newOrder }),
+    [],
+  );
+  const reorderIndicators = useCallback(
+    (newOrder: string[]) => dispatch({ type: 'REORDER_INDICATORS', newOrder }),
+    [],
+  );
+  const reorderEndConditions = useCallback(
+    (newOrder: string[]) => dispatch({ type: 'REORDER_END_CONDITIONS', newOrder }),
+    [],
+  );
 
   const value = useMemo<ModelContextValue>(
     () => ({
@@ -757,6 +850,11 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       addPreset,
       deletePreset,
       updatePreset,
+      reorderAttributes,
+      reorderNeighborhoods,
+      reorderMappings,
+      reorderIndicators,
+      reorderEndConditions,
     }),
     [
       state.model,
@@ -788,6 +886,11 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       addPreset,
       deletePreset,
       updatePreset,
+      reorderAttributes,
+      reorderNeighborhoods,
+      reorderMappings,
+      reorderIndicators,
+      reorderEndConditions,
     ],
   );
 

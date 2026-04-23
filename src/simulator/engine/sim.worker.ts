@@ -110,8 +110,9 @@ interface SetUseWasmMsg {
   type: 'setUseWasm';
   enabled: boolean;
 }
+interface ColorPassMsg { type: 'colorPass'; activeViewer: string }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | ColorPassMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -1065,6 +1066,18 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         runColorPass();
       } else if (stepFn) {
         runStep();
+      } else {
+        writeDefaultColors();
+      }
+      sendColors();
+      break;
+    }
+
+    case 'colorPass': {
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
+      const hasColorPassCp = outputMappingFns.some(f => f.mappingId === activeViewer);
+      if (hasColorPassCp) {
+        runColorPass();
       } else {
         writeDefaultColors();
       }

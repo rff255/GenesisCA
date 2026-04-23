@@ -51,7 +51,7 @@ Beyond the six fundamentals, two types of mappings enable visualization and inte
 A complete GenesisCA model definition consists of:
 
 1. **Model Properties**
-   - 1.1. Presentation (Name, Rule Author, GenesisCA Model Author, Description...)
+   - 1.1. Presentation (Name, Rule Author, GenesisCA Project Author, Description...)
    - 1.2. Structure (Topology, Boundary Treatment, Grid Size...)
    - 1.3. Execution
      - 1.3.1. Initial Configuration (Attribute Initialization Mapping, Default Attribute Values)

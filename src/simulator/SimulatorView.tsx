@@ -23,7 +23,7 @@ function loadSimSettings(): Record<string, unknown> {
 
 export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { model, updateIndicator, setSimulationState, addPreset, deletePreset } = useModel();
+  const { model, updateIndicator, setSimulationState, addPreset, deletePreset, updatePreset, updateProperties } = useModel();
   const workerRef = useRef<Worker | null>(null);
   const pendingStep = useRef(false);
 
@@ -120,6 +120,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
   // Preset-save dialog
   const [presetDialogOpen, setPresetDialogOpen] = useState(false);
+  const [presetOverwriteTarget, setPresetOverwriteTarget] = useState<Preset | null>(null);
 
   // Clipboard for Ctrl+C / Ctrl+V / Ctrl+X (cell-attribute region copy)
   const clipboardRef = useRef<{
@@ -627,7 +628,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // state (also clear it from the model so subsequent saves don't re-carry
     // the dead bytes). The user explicitly chose new dimensions; we'd rather
     // start fresh than refuse the resize.
-    if (model.simulationState) {
+    //
+    // NOTE: Don't clobber an already-pending restore. `applySimulationState`
+    // may have queued a preset's state BEFORE triggering this reinit (by
+    // dispatching updateProperties). Overwriting with `model.simulationState`
+    // here would drop the preset's modelAttrs, requiring a second click to
+    // restore them.
+    if (model.simulationState && !pendingSimStateRestore.current) {
       const s = model.simulationState;
       const dimsMatch = (s.width == null && s.height == null)
         || (s.width === w && s.height === h);
@@ -674,13 +681,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         // Controls only: no need to round-trip through the worker.
         const state = serializeSimState(
           {
-            // grid fields required by the signature but unused when include.grid is false
-            generation: 0, width: 0, height: 0, attributes: {},
+            generation: 0,
+            width: gridWidth.current,
+            height: gridHeight.current,
+            attributes: {},
             modelAttrs: {}, indicators: {}, linkedAccumulators: {},
             colors: new ArrayBuffer(0),
           },
           { activeViewer, brushColor, brushW, brushH, brushMapping, targetFps, unlimitedFps, gensPerFrame, unlimitedGens },
           { grid: false, controls: true },
+          { boundaryTreatment: model.properties.boundaryTreatment },
         );
         setSimulationState(state);
         resolve?.();
@@ -692,6 +702,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           workerState as Parameters<typeof serializeSimState>[0],
           { activeViewer, brushColor, brushW, brushH, brushMapping, targetFps, unlimitedFps, gensPerFrame, unlimitedGens },
           { grid: wantGrid, controls: wantControls },
+          { boundaryTreatment: model.properties.boundaryTreatment },
         );
         setSimulationState(state);
         resolve?.();
@@ -805,6 +816,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   useEffect(() => { brushWRef.current = brushW; }, [brushW]);
   useEffect(() => { brushHRef.current = brushH; }, [brushH]);
   useEffect(() => { activeViewerRef.current = activeViewer; }, [activeViewer]);
+  // When the user switches output-mapping tabs (e.g. while paused), fire one color pass so the
+  // grid reflects the new mapping immediately instead of waiting for the next step/paint/reset.
+  // Ref guard skips the initial mount — otherwise we'd fire before the worker has a step fn.
+  const viewerInitDoneRef = useRef(false);
+  useEffect(() => {
+    if (!viewerInitDoneRef.current) {
+      viewerInitDoneRef.current = true;
+      return;
+    }
+    if (!workerRef.current) return;
+    workerRef.current.postMessage({ type: 'colorPass', activeViewer });
+  }, [activeViewer]);
   const showBrushCursorRef = useRef(true);
   useEffect(() => { showBrushCursorRef.current = showBrushCursor; }, [showBrushCursor]);
   const showGridlinesRef = useRef(false);
@@ -1183,7 +1206,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
       if (e.key === ' ') { e.preventDefault(); handleStep(); }
       else if (e.key === 'Enter') { e.preventDefault(); setPlaying(p => !p); }
-      else if (e.key === 'Escape') { handleReset(); }
+      else if (e.key === 'Escape' || e.key === 'Backspace') { e.preventDefault(); handleReset(); }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
@@ -1228,6 +1251,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           gensPerFrame,
           unlimitedGens,
         },
+        { grid: true, controls: true },
+        { boundaryTreatment: model.properties.boundaryTreatment },
       );
       // Also store in model context so next .gcaproj save includes it
       setSimulationState(state);
@@ -1257,6 +1282,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const state = serializePreset(
         workerState as Parameters<typeof serializePreset>[0],
         { includeGrid },
+        { boundaryTreatment: model.properties.boundaryTreatment },
       );
       const id = 'preset_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
       const preset: Preset = { id, name, state, createdAt: Date.now() };
@@ -1277,11 +1303,55 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
   };
 
+  // Overwrite preset: same pipeline as create, but dispatches updatePreset instead of addPreset.
+  const handleOverwritePreset = (p: Preset) => {
+    if (!window.confirm(`Overwrite preset "${p.name}" with the current simulation state?`)) return;
+    setPresetOverwriteTarget(p);
+  };
+
+  const doOverwritePreset = (target: Preset, name: string, description: string, includeGrid: boolean) => {
+    if (!workerRef.current) return;
+    pendingStateSave.current = (workerState) => {
+      const state = serializePreset(
+        workerState as Parameters<typeof serializePreset>[0],
+        { includeGrid },
+        { boundaryTreatment: model.properties.boundaryTreatment },
+      );
+      const patch: Partial<Omit<Preset, 'id'>> = { name, state };
+      patch.description = description.trim() || undefined;
+      updatePreset(target.id, patch);
+    };
+    workerRef.current.postMessage({ type: 'getState' });
+  };
+
   const applySimulationState = useCallback((state: SimulationState) => {
     if (!workerRef.current) return;
 
     const hasGrid = state.width != null && state.height != null && state.attributes != null && state.colors != null;
     const hasControls = state.brushColor != null || state.targetFps != null || state.activeViewer != null;
+
+    // If the saved state has a different boundary treatment or different grid dimensions
+    // than the current model, apply those through the normal model-update path. The
+    // existing useEffect on [model] detects structural changes and triggers a full
+    // worker reinit; the pending-restore mechanism then applies the grid/control
+    // state after the new worker finishes its first step.
+    const boundaryChanged = state.boundaryTreatment && state.boundaryTreatment !== model.properties.boundaryTreatment;
+    const dimsFromState = state.gridWidth != null && state.gridHeight != null
+      ? { w: state.gridWidth, h: state.gridHeight }
+      : hasGrid ? { w: state.width!, h: state.height! } : null;
+    const dimsChanged = dimsFromState != null
+      && (dimsFromState.w !== gridWidth.current || dimsFromState.h !== gridHeight.current);
+    if (boundaryChanged || dimsChanged) {
+      pendingSimStateRestore.current = state;
+      const changes: Partial<import('../model/types').ModelProperties> = {};
+      if (boundaryChanged) changes.boundaryTreatment = state.boundaryTreatment!;
+      if (dimsChanged) {
+        changes.gridWidth = dimsFromState!.w;
+        changes.gridHeight = dimsFromState!.h;
+      }
+      updateProperties(changes);
+      return;
+    }
 
     // Restore UI controls (independent of grid)
     if (hasControls) {
@@ -1349,7 +1419,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
 
     workerRef.current.postMessage(loadMsg);
-  }, []);
+  }, [model.properties.boundaryTreatment, updateProperties]);
 
   // F5: Apply dimension override
   const handleApplyDimensions = () => {
@@ -1436,6 +1506,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               onChange={e => setSimHeight(Math.max(1, Number(e.target.value) || 1))} />
           </div>
           <button className={styles.controlButton} onClick={handleApplyDimensions}>Resize</button>
+          <div className={styles.fieldRow} style={{ marginTop: 6 }}>
+            <span className={styles.statLabel} style={{ flex: 1 }} title="How neighbors outside the grid are handled">Boundary</span>
+            <select
+              className={styles.brushInput}
+              style={{ flex: 1, width: 0, minWidth: 0 }}
+              value={model.properties.boundaryTreatment}
+              onChange={e => updateProperties({ boundaryTreatment: e.target.value as 'torus' | 'constant' })}
+            >
+              <option value="torus">Torus (wrap)</option>
+              <option value="constant">Constant</option>
+            </select>
+          </div>
 
           <hr className={styles.divider} />
           <div className={styles.sectionTitle}>Presets</div>
@@ -1452,6 +1534,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                   {p.name}{hasGrid ? ' \u25C9' : ''}
                 </span>
                 <button className={styles.controlButton} style={{ padding: '2px 8px', flex: 'none' }} onClick={() => handleLoadPreset(p)}>Load</button>
+                <button className={styles.controlButton} style={{ padding: '2px 6px', flex: 'none' }} title="Overwrite preset with current state" onClick={() => handleOverwritePreset(p)}>&#x1F4BE;</button>
                 <button className={styles.controlButton} style={{ padding: '2px 6px', flex: 'none' }} title="Delete preset" onClick={() => handleDeletePreset(p)}>&times;</button>
               </div>
             );
@@ -1827,6 +1910,20 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             handleCreatePreset(name, description, includeGrid);
           }}
           onCancel={() => setPresetDialogOpen(false)}
+        />
+      )}
+      {presetOverwriteTarget && (
+        <PresetSaveDialog
+          title={`Overwrite Preset "${presetOverwriteTarget.name}"`}
+          confirmLabel="Overwrite"
+          initialName={presetOverwriteTarget.name}
+          initialDescription={presetOverwriteTarget.description ?? ''}
+          onConfirm={(name, description, includeGrid) => {
+            const target = presetOverwriteTarget;
+            setPresetOverwriteTarget(null);
+            doOverwritePreset(target, name, description, includeGrid);
+          }}
+          onCancel={() => setPresetOverwriteTarget(null)}
         />
       )}
     </div>

@@ -6,6 +6,7 @@ interface LibraryEntry {
   id: string;
   name: string;
   author: string;
+  modelAuthor?: string;
   description: string;
   file: string;
   tags: string[];
@@ -68,7 +69,12 @@ export function ModelsLibrary({ onLoadModel }: Props) {
             onClick={() => handleClick(entry)}
           >
             <div className={styles.cardName}>{entry.name}</div>
-            <div className={styles.cardAuthor}>by {entry.author}</div>
+            {entry.author && (
+              <div className={styles.cardAuthor}>Rule by: {entry.author}</div>
+            )}
+            {entry.modelAuthor && (
+              <div className={styles.cardAuthor}>Project by: {entry.modelAuthor}</div>
+            )}
             <div className={styles.cardDesc}>{entry.description}</div>
             <div className={styles.cardMeta}>
               {entry.tags.map(tag => (

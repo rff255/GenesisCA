@@ -27,6 +27,7 @@ function modelsLibraryPlugin(): Plugin {
           id: file.replace('.gcaproj', ''),
           name: props.name || file,
           author: props.author || '',
+          modelAuthor: props.modelAuthor || '',
           description: props.description || '',
           file,
           tags: props.tags || [],

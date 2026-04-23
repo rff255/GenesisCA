@@ -56,6 +56,9 @@ function CommentNodeInner({ id, data, selected }: NodeProps) {
         minHeight={50}
         lineStyle={{ borderColor: border }}
         handleStyle={{ width: 6, height: 6, background: border, borderRadius: 2 }}
+        onResizeEnd={(_, params) =>
+          updateNodeData(id, { ...data, width: params.width, height: params.height })
+        }
       />
       {selected && (
         <>

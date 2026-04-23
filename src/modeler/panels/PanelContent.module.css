@@ -138,7 +138,7 @@
 .listItem {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px;
   padding: 6px 8px;
   background: rgba(255, 255, 255, 0.02);
   border-radius: 4px;
@@ -159,6 +159,11 @@
 
 .listItemName {
   font-weight: 500;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .listItemBadge {
@@ -167,6 +172,49 @@
   text-transform: uppercase;
   color: #4cc9f0;
   letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+/* Drag handle for reorderable list rows. Anchored at the far right. */
+.dragHandle {
+  flex-shrink: 0;
+  margin-left: 2px;
+  padding: 0 2px;
+  background: transparent;
+  border: none;
+  color: #4a6080;
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  transition: color 0.15s;
+  width: 14px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dragHandle:hover {
+  color: #4cc9f0;
+}
+
+.dragHandle:active {
+  cursor: grabbing;
+}
+
+/* Drop-indicator line drawn above a row during drag */
+.dropIndicatorBefore {
+  box-shadow: 0 -2px 0 0 #4cc9f0 inset;
+}
+
+.dropIndicatorAfter {
+  box-shadow: 0 2px 0 0 #4cc9f0 inset;
+}
+
+.draggingRow {
+  opacity: 0.4;
 }
 
 /* --- Buttons --- */
