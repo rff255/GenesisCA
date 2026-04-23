@@ -22,7 +22,6 @@ import type {
   SimulationState,
 } from './types';
 import { DEFAULT_MODEL, EMPTY_MODEL } from './defaultModel';
-import { readModelFile } from './fileOperations';
 import { cloneMacroWithFreshIds } from './macroImport';
 
 // ---------------------------------------------------------------------------
@@ -118,7 +117,12 @@ type ModelAction =
   | { type: 'SET_SIMULATION_STATE'; state: SimulationState | undefined }
   | { type: 'ADD_PRESET'; preset: Preset }
   | { type: 'DELETE_PRESET'; id: string }
-  | { type: 'UPDATE_PRESET'; id: string; patch: Partial<Omit<Preset, 'id'>> };
+  | { type: 'UPDATE_PRESET'; id: string; patch: Partial<Omit<Preset, 'id'>> }
+  | { type: 'REORDER_ATTRIBUTES'; newOrder: string[] }
+  | { type: 'REORDER_NEIGHBORHOODS'; newOrder: string[] }
+  | { type: 'REORDER_MAPPINGS'; newOrder: string[] }
+  | { type: 'REORDER_INDICATORS'; newOrder: string[] }
+  | { type: 'REORDER_END_CONDITIONS'; newOrder: string[] };
 
 // ---------------------------------------------------------------------------
 // Reducer
@@ -487,7 +491,70 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
           ),
         },
       };
+
+    case 'REORDER_ATTRIBUTES':
+      return {
+        ...state,
+        isDirty: true,
+        model: { ...state.model, attributes: reorderById(state.model.attributes, action.newOrder) },
+      };
+
+    case 'REORDER_NEIGHBORHOODS':
+      return {
+        ...state,
+        isDirty: true,
+        model: { ...state.model, neighborhoods: reorderById(state.model.neighborhoods, action.newOrder) },
+      };
+
+    case 'REORDER_MAPPINGS':
+      return {
+        ...state,
+        isDirty: true,
+        model: { ...state.model, mappings: reorderById(state.model.mappings, action.newOrder) },
+      };
+
+    case 'REORDER_INDICATORS':
+      return {
+        ...state,
+        isDirty: true,
+        model: { ...state.model, indicators: reorderById(state.model.indicators, action.newOrder) },
+      };
+
+    case 'REORDER_END_CONDITIONS': {
+      const ec = state.model.properties.endConditions;
+      if (!ec?.indicatorConditions) return state;
+      return {
+        ...state,
+        isDirty: true,
+        model: {
+          ...state.model,
+          properties: {
+            ...state.model.properties,
+            endConditions: {
+              ...ec,
+              indicatorConditions: reorderById(ec.indicatorConditions, action.newOrder),
+            },
+          },
+        },
+      };
+    }
   }
+}
+
+/** Reorder an array of { id } items by the given ID list. Items not in newOrder
+ *  are appended at the end in their current order (defensive against drift). */
+function reorderById<T extends { id: string }>(items: T[], newOrder: string[]): T[] {
+  const byId = new Map(items.map(x => [x.id, x]));
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const id of newOrder) {
+    const item = byId.get(id);
+    if (item && !seen.has(id)) { out.push(item); seen.add(id); }
+  }
+  for (const item of items) {
+    if (!seen.has(item.id)) out.push(item);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -526,6 +593,11 @@ export interface ModelContextValue {
   addPreset: (preset: Preset) => void;
   deletePreset: (id: string) => void;
   updatePreset: (id: string, patch: Partial<Omit<Preset, 'id'>>) => void;
+  reorderAttributes: (newOrder: string[]) => void;
+  reorderNeighborhoods: (newOrder: string[]) => void;
+  reorderMappings: (newOrder: string[]) => void;
+  reorderIndicators: (newOrder: string[]) => void;
+  reorderEndConditions: (newOrder: string[]) => void;
 }
 
 const ModelContext = createContext<ModelContextValue | null>(null);
@@ -535,76 +607,33 @@ const ModelContext = createContext<ModelContextValue | null>(null);
 // ---------------------------------------------------------------------------
 
 function createInitialState(): ModelState {
-  try {
-    const saved = localStorage.getItem('genesisca_autosave');
-    if (saved) {
-      const model = JSON.parse(saved) as CAModel;
-      if (model.schemaVersion && model.properties && model.attributes) {
-        // Ensure new fields exist for older saved models
-        if (!model.graphNodes) model.graphNodes = [];
-        if (!model.graphEdges) model.graphEdges = [];
-        if (!model.macroDefs) model.macroDefs = [];
-        if (!model.indicators) model.indicators = [];
-        if (!model.properties.tags) model.properties.tags = [];
-        if (!model.properties.updateMode) model.properties.updateMode = 'synchronous';
-        if (!model.properties.asyncScheme) model.properties.asyncScheme = 'random-order';
-        if ('goal' in model.properties) delete (model.properties as unknown as Record<string, unknown>).goal;
-        if (model.properties.modelAuthor === undefined) model.properties.modelAuthor = '';
-        for (const n of model.neighborhoods) { n.margin ??= 2; }
-        for (const a of model.attributes) {
-          if (a.type === 'tag' && !a.tagOptions) a.tagOptions = [];
-        }
-        return { model, isDirty: false, modelVersion: 0 };
-      }
-    }
-  } catch {
-    // ignore parse errors — fall through to default
-  }
   return { model: DEFAULT_MODEL, isDirty: false, modelVersion: 0 };
 }
-
-const FIRST_LAUNCH_KEY = 'genesisca_has_launched';
 
 export function ModelProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(modelReducer, undefined, createInitialState);
 
-  // On first-ever launch (no autosave), load Game of Life from public/models/
+  // One-shot cleanup of legacy localStorage keys from older builds. The app no
+  // longer auto-persists the model — users save `.gcaproj` manually and are
+  // warned on unload if there are unsaved changes. `genesisca_has_launched` was
+  // briefly used to gate the default tab but is unused now that every visit
+  // lands on the Library.
   useEffect(() => {
-    const hasAutosave = localStorage.getItem('genesisca_autosave');
-    const hasLaunched = localStorage.getItem(FIRST_LAUNCH_KEY);
-    if (hasAutosave || hasLaunched) {
-      // Not first launch — mark and skip
-      if (!hasLaunched) localStorage.setItem(FIRST_LAUNCH_KEY, '1');
-      return;
-    }
-    localStorage.setItem(FIRST_LAUNCH_KEY, '1');
-
-    // Fetch Game of Life .gcaproj
-    const base = import.meta.env.BASE_URL;
-    fetch(`${base}models/Game Of Life.gcaproj`)
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.blob();
-      })
-      .then(blob => readModelFile(new File([blob], 'Game Of Life.gcaproj')))
-      .then(model => dispatch({ type: 'LOAD_MODEL', model }))
-      .catch(() => {
-        // Silently fall back to the empty default if fetch fails
-      });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    try { localStorage.removeItem('genesisca_autosave'); } catch { /* ok */ }
+    try { localStorage.removeItem('genesisca_has_launched'); } catch { /* ok */ }
   }, []);
 
-  // Auto-save to localStorage (strip simulationState + presets to avoid exceeding
-  // quota on large grids; presets with embedded grid data can be tens of MB each)
+  // Warn on close/reload when there are unsaved model changes. Modern browsers
+  // show a standardized prompt; the message text can't be customised.
   useEffect(() => {
-    try {
-      const { simulationState: _drop, presets: _dropP, ...modelWithoutState } = state.model;
-      void _drop; void _dropP;
-      localStorage.setItem('genesisca_autosave', JSON.stringify(modelWithoutState));
-    } catch {
-      // localStorage full or unavailable
-    }
-  }, [state.model]);
+    if (!state.isDirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [state.isDirty]);
 
   const updateProperties = useCallback(
     (changes: Partial<ModelProperties>) =>
@@ -695,10 +724,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'UPDATE_INDICATOR', id, changes }),
     [],
   );
-  const newModel = useCallback(() => {
-    dispatch({ type: 'NEW_MODEL' });
-    try { localStorage.removeItem('genesisca_autosave'); } catch { /* ok */ }
-  }, []);
+  const newModel = useCallback(() => dispatch({ type: 'NEW_MODEL' }), []);
   const loadModel = useCallback(
     (model: CAModel) => dispatch({ type: 'LOAD_MODEL', model }),
     [],
@@ -723,6 +749,26 @@ export function ModelProvider({ children }: { children: ReactNode }) {
   const updatePreset = useCallback(
     (id: string, patch: Partial<Omit<Preset, 'id'>>) =>
       dispatch({ type: 'UPDATE_PRESET', id, patch }),
+    [],
+  );
+  const reorderAttributes = useCallback(
+    (newOrder: string[]) => dispatch({ type: 'REORDER_ATTRIBUTES', newOrder }),
+    [],
+  );
+  const reorderNeighborhoods = useCallback(
+    (newOrder: string[]) => dispatch({ type: 'REORDER_NEIGHBORHOODS', newOrder }),
+    [],
+  );
+  const reorderMappings = useCallback(
+    (newOrder: string[]) => dispatch({ type: 'REORDER_MAPPINGS', newOrder }),
+    [],
+  );
+  const reorderIndicators = useCallback(
+    (newOrder: string[]) => dispatch({ type: 'REORDER_INDICATORS', newOrder }),
+    [],
+  );
+  const reorderEndConditions = useCallback(
+    (newOrder: string[]) => dispatch({ type: 'REORDER_END_CONDITIONS', newOrder }),
     [],
   );
 
@@ -757,6 +803,11 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       addPreset,
       deletePreset,
       updatePreset,
+      reorderAttributes,
+      reorderNeighborhoods,
+      reorderMappings,
+      reorderIndicators,
+      reorderEndConditions,
     }),
     [
       state.model,
@@ -788,6 +839,11 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       addPreset,
       deletePreset,
       updatePreset,
+      reorderAttributes,
+      reorderNeighborhoods,
+      reorderMappings,
+      reorderIndicators,
+      reorderEndConditions,
     ],
   );
 

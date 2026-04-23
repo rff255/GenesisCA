@@ -27,8 +27,5 @@ export const EMPTY_MODEL: CAModel = {
   macroDefs: [],
 };
 
-/**
- * Legacy DEFAULT_MODEL kept for backwards compatibility.
- * On first launch the app now loads Game of Life from public/models/ instead.
- */
+/** Legacy alias of EMPTY_MODEL, kept for backwards compatibility. */
 export const DEFAULT_MODEL: CAModel = EMPTY_MODEL;

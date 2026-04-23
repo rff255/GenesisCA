@@ -101,6 +101,9 @@ export interface ModelProperties {
   gridHeight: number;
   maxIterations: number;
   tags: string[];
+  /** Optional preview image (PNG/JPEG/GIF/WebP, <=2 MB) as a data URL. Shown
+   *  on hover in the Models Library. Travels inside the .gcaproj file. */
+  thumbnail?: string;
   /** Optional simulator auto-pause rules. Undefined = disabled. */
   endConditions?: EndConditions;
   /** Wave 2: when true, the simulator runs the WASM-compiled step instead of
@@ -206,6 +209,11 @@ export interface SimulationState {
   unlimitedFps?: boolean;
   gensPerFrame?: number;
   unlimitedGens?: boolean;
+  // Model structure controls — saved in presets so a preset can restore its grid
+  // dimensions and boundary rule even when cell-grid state isn't embedded.
+  boundaryTreatment?: BoundaryTreatment;
+  gridWidth?: number;
+  gridHeight?: number;
 }
 
 /** A named snapshot of model-attribute values (always) and optionally the cell

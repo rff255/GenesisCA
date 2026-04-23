@@ -31,6 +31,9 @@ function GroupNodeInner({ id, data, selected }: NodeProps) {
         minHeight={60}
         lineStyle={{ borderColor: color, pointerEvents: 'auto' }}
         handleStyle={{ width: 8, height: 8, background: color, borderRadius: 2, pointerEvents: 'auto' }}
+        onResizeEnd={(_, params) =>
+          updateNodeData(id, { ...data, width: params.width, height: params.height })
+        }
       />
       <div className={styles.header} data-drag-handle>
         <input

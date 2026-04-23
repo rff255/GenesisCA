@@ -10,7 +10,9 @@ import styles from './App.module.css';
 type AppMode = 'modeler' | 'simulator' | 'help' | 'library';
 
 function AppInner() {
-  const [mode, setMode] = useState<AppMode>('modeler');
+  // Every tab/reload lands on the Library — it's the natural starting point for
+  // picking a model to explore or fork.
+  const [mode, setMode] = useState<AppMode>('library');
   const { model, isDirty, loadModel } = useModel();
 
   const handleLoadLibraryModel = (model: Parameters<typeof loadModel>[0]) => {
@@ -39,7 +41,7 @@ function AppInner() {
               1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
           </svg>
         </a>
-        <span className={styles.title}>GenesisCA <span className={styles.version}>v1.9.0</span></span>
+        <span className={styles.title}>GenesisCA <span className={styles.version}>v1.10.0</span></span>
         <div className={styles.navTabs}>
           <button
             className={`${styles.navButton} ${mode === 'modeler' ? styles.navButtonActive : ''}`}

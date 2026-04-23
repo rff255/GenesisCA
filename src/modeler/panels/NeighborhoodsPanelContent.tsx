@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
+import { useListReorder } from './useListReorder';
 import styles from './PanelContent.module.css';
 
 function coordKey(row: number, col: number): string {
@@ -7,7 +8,7 @@ function coordKey(row: number, col: number): string {
 }
 
 export function NeighborhoodsPanelContent() {
-  const { model, addNeighborhood, duplicateNeighborhood, removeNeighborhood, updateNeighborhood } =
+  const { model, addNeighborhood, duplicateNeighborhood, removeNeighborhood, updateNeighborhood, reorderNeighborhoods } =
     useModel();
   const [selectedIdx, setSelectedIdx] = useState(0);
 
@@ -25,6 +26,15 @@ export function NeighborhoodsPanelContent() {
     prevCount.current = neighborhoods.length;
   }, [neighborhoods]);
   const selected = neighborhoods[selectedIdx];
+  const reorder = useListReorder(neighborhoods, newOrder => {
+    // Keep selection on the same neighborhood after reorder
+    const selectedId = selected?.id;
+    reorderNeighborhoods(newOrder);
+    if (selectedId) {
+      const newIdx = newOrder.indexOf(selectedId);
+      if (newIdx >= 0) setSelectedIdx(newIdx);
+    }
+  });
   const margin = selected?.margin ?? 2;
   const gridSize = 2 * margin + 1;
 
@@ -69,20 +79,33 @@ export function NeighborhoodsPanelContent() {
     <>
       <div className={styles.section}>
         <div className={styles.sectionTitle}>Neighborhoods</div>
-        <div className={styles.list}>
-          {neighborhoods.map((n, i) => (
-            <div
-              key={n.id}
-              id={`nbr-${i}`}
-              className={`${styles.listItem} ${selectedIdx === i ? styles.listItemSelected : ''}`}
-              onClick={() => setSelectedIdx(i)}
-            >
-              <span className={styles.listItemName}>{n.name}</span>
-              <span className={styles.listItemBadge}>
-                {n.coords.length} neighbors
-              </span>
-            </div>
-          ))}
+        <div className={styles.list} data-reorder-list>
+          {neighborhoods.map((n, i) => {
+            const isDragging = reorder.dragState?.id === n.id;
+            const srcIdx = reorder.dragState ? neighborhoods.findIndex(x => x.id === reorder.dragState!.id) : -1;
+            const showBefore = reorder.dragState?.overIdx === i && srcIdx !== i && srcIdx !== i - 1;
+            const showAfter = reorder.dragState?.overIdx === neighborhoods.length && i === neighborhoods.length - 1 && srcIdx !== i;
+            return (
+              <div
+                key={n.id}
+                id={`nbr-${i}`}
+                data-reorder-row
+                className={`${styles.listItem} ${selectedIdx === i ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                onClick={() => setSelectedIdx(i)}
+              >
+                <span className={styles.listItemName}>{n.name}</span>
+                <span className={styles.listItemBadge}>
+                  {n.coords.length} neighbors
+                </span>
+                <button
+                  className={styles.dragHandle}
+                  title="Drag to reorder"
+                  onPointerDown={reorder.startDrag(n.id)}
+                  onClick={e => e.stopPropagation()}
+                >⋮⋮</button>
+              </div>
+            );
+          })}
         </div>
         <div className={styles.buttonRow}>
           <button className={styles.addButton} onClick={() => addNeighborhood()}>
@@ -133,10 +156,10 @@ export function NeighborhoodsPanelContent() {
                 type="number"
                 value={margin}
                 min={1}
-                max={20}
+                max={50}
                 onChange={e =>
                   updateNeighborhood(selected.id, {
-                    margin: Math.max(1, Math.min(20, Number(e.target.value))),
+                    margin: Math.max(1, Math.min(50, Number(e.target.value))),
                   })
                 }
               />

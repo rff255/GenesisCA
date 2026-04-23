@@ -1,14 +1,25 @@
 import { useState, useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
 import type { AttributeType } from '../../model/types';
+import { useListReorder } from './useListReorder';
 import styles from './PanelContent.module.css';
 
 export function AttributesPanelContent() {
-  const { model, addAttribute, removeAttribute, updateAttribute } = useModel();
+  const { model, addAttribute, removeAttribute, updateAttribute, reorderAttributes } = useModel();
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
   const modelAttrs = model.attributes.filter(a => a.isModelAttribute);
+
+  // Independent reorder within each group — preserve the other group's order in the combined array.
+  const cellReorder = useListReorder(cellAttrs, newOrder => {
+    const map = new Map(cellAttrs.map(a => [a.id, a]));
+    reorderAttributes([...newOrder.map(id => map.get(id)!).filter(Boolean), ...modelAttrs].map(a => a.id));
+  });
+  const modelReorder = useListReorder(modelAttrs, newOrder => {
+    const map = new Map(modelAttrs.map(a => [a.id, a]));
+    reorderAttributes([...cellAttrs, ...newOrder.map(id => map.get(id)!).filter(Boolean)].map(a => a.id));
+  });
 
   // Auto-select & scroll to newly added items
   const prevAttrCount = useRef(model.attributes.length);
@@ -37,18 +48,31 @@ export function AttributesPanelContent() {
     <>
       <div className={styles.section}>
         <div className={styles.sectionTitle}>Cell Attributes</div>
-        <div className={styles.list}>
-          {cellAttrs.map(attr => (
-            <div
-              key={attr.id}
-              id={`attr-${attr.id}`}
-              className={`${styles.listItem} ${selectedId === attr.id ? styles.listItemSelected : ''}`}
-              onClick={() => setSelectedId(attr.id)}
-            >
-              <span className={styles.listItemName}>{attr.name}</span>
-              <span className={styles.listItemBadge}>{attr.type}</span>
-            </div>
-          ))}
+        <div className={styles.list} data-reorder-list>
+          {cellAttrs.map((attr, i) => {
+            const isDragging = cellReorder.dragState?.id === attr.id;
+            const srcIdx = cellReorder.dragState ? cellAttrs.findIndex(a => a.id === cellReorder.dragState!.id) : -1;
+            const showBefore = cellReorder.dragState?.overIdx === i && srcIdx !== i && srcIdx !== i - 1;
+            const showAfter = cellReorder.dragState?.overIdx === cellAttrs.length && i === cellAttrs.length - 1 && srcIdx !== i;
+            return (
+              <div
+                key={attr.id}
+                id={`attr-${attr.id}`}
+                data-reorder-row
+                className={`${styles.listItem} ${selectedId === attr.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                onClick={() => setSelectedId(attr.id)}
+              >
+                <span className={styles.listItemName}>{attr.name}</span>
+                <span className={styles.listItemBadge}>{attr.type}</span>
+                <button
+                  className={styles.dragHandle}
+                  title="Drag to reorder"
+                  onPointerDown={cellReorder.startDrag(attr.id)}
+                  onClick={e => e.stopPropagation()}
+                >⋮⋮</button>
+              </div>
+            );
+          })}
         </div>
         <div className={styles.buttonRow}>
           <button
@@ -65,7 +89,7 @@ export function AttributesPanelContent() {
 
       <div className={styles.section}>
         <div className={styles.sectionTitle}>Model Attributes</div>
-        <div className={styles.list}>
+        <div className={styles.list} data-reorder-list>
           {modelAttrs.length === 0 && (
             <p
               style={{
@@ -78,17 +102,30 @@ export function AttributesPanelContent() {
               No model attributes defined.
             </p>
           )}
-          {modelAttrs.map(attr => (
-            <div
-              key={attr.id}
-              id={`attr-${attr.id}`}
-              className={`${styles.listItem} ${selectedId === attr.id ? styles.listItemSelected : ''}`}
-              onClick={() => setSelectedId(attr.id)}
-            >
-              <span className={styles.listItemName}>{attr.name}</span>
-              <span className={styles.listItemBadge}>{attr.type}</span>
-            </div>
-          ))}
+          {modelAttrs.map((attr, i) => {
+            const isDragging = modelReorder.dragState?.id === attr.id;
+            const srcIdx = modelReorder.dragState ? modelAttrs.findIndex(a => a.id === modelReorder.dragState!.id) : -1;
+            const showBefore = modelReorder.dragState?.overIdx === i && srcIdx !== i && srcIdx !== i - 1;
+            const showAfter = modelReorder.dragState?.overIdx === modelAttrs.length && i === modelAttrs.length - 1 && srcIdx !== i;
+            return (
+              <div
+                key={attr.id}
+                id={`attr-${attr.id}`}
+                data-reorder-row
+                className={`${styles.listItem} ${selectedId === attr.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                onClick={() => setSelectedId(attr.id)}
+              >
+                <span className={styles.listItemName}>{attr.name}</span>
+                <span className={styles.listItemBadge}>{attr.type}</span>
+                <button
+                  className={styles.dragHandle}
+                  title="Drag to reorder"
+                  onPointerDown={modelReorder.startDrag(attr.id)}
+                  onClick={e => e.stopPropagation()}
+                >⋮⋮</button>
+              </div>
+            );
+          })}
         </div>
         <div className={styles.buttonRow}>
           <button

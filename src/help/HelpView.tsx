@@ -117,13 +117,14 @@ export function HelpView() {
           <h3 className={styles.h3}>Properties Panel (P)</h3>
           <p className={styles.p}>
             Configure the model&apos;s presentation (name, <strong>Rule Author</strong>,
-            <strong>GenesisCA Model Author</strong>, description), structure (grid
+            <strong>GenesisCA Project Author</strong>, description), structure (grid
             width/height, boundary treatment: torus or constant), execution mode, and
             optional <strong>End Conditions</strong> for the simulator.
           </p>
           <ul className={styles.list}>
             <li><strong>Rule Author</strong> &mdash; originator of the CA rule (domain expert/researcher).</li>
-            <li><strong>GenesisCA Model Author</strong> &mdash; who built this particular GenesisCA model file.</li>
+            <li><strong>GenesisCA Project Author</strong> &mdash; who built this particular GenesisCA project file.</li>
+            <li><strong>Thumbnail</strong> (optional) &mdash; attach a PNG, JPEG, GIF, or WebP image (up to 2&nbsp;MB). It travels inside the <code>.gcaproj</code> file. When the model is shipped as part of the Models Library, hovering its card shows a floating preview; animated GIFs / WebPs play natively.</li>
             <li><strong>End Conditions</strong> (optional) &mdash; auto-pause the simulator when a max generation count is reached or when any indicator satisfies a configured comparison (==, !=, &gt;, &lt;, &ge;, &le;). Scalar indicators compare against their value directly. For <strong>linked-frequency</strong> indicators (which produce a map of category &rarr; count) pick the specific category to monitor; the comparison then applies to the count of that category (e.g. bool <em>alive</em> &mdash; category <code>true</code>, <code>&ge;</code>, <code>100</code> pauses when at least 100 cells are alive). Float-binned frequency indicators can&apos;t be used in end conditions because their bin boundaries depend on runtime data &mdash; switch the aggregation to Total instead. For conditions that need graph-level logic add a <strong>Stop Event</strong> node inside the update graph &mdash; its DO flow input pauses the simulation with a user-defined message.</li>
           </ul>
 

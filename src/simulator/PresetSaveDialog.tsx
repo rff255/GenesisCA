@@ -4,11 +4,15 @@ import styles from '../components/SaveProjectDialog.module.css';
 interface Props {
   onConfirm: (name: string, description: string, includeGrid: boolean) => void;
   onCancel: () => void;
+  initialName?: string;
+  initialDescription?: string;
+  title?: string;
+  confirmLabel?: string;
 }
 
-export function PresetSaveDialog({ onConfirm, onCancel }: Props) {
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
+export function PresetSaveDialog({ onConfirm, onCancel, initialName = '', initialDescription = '', title = 'Save Current as Preset', confirmLabel = 'Save Preset' }: Props) {
+  const [name, setName] = useState(initialName);
+  const [description, setDescription] = useState(initialDescription);
   const [includeGrid, setIncludeGrid] = useState(false);
 
   useEffect(() => {
@@ -25,7 +29,7 @@ export function PresetSaveDialog({ onConfirm, onCancel }: Props) {
   return (
     <div className={styles.backdrop} onClick={onCancel}>
       <div className={styles.dialog} onClick={e => e.stopPropagation()}>
-        <div className={styles.title}>Save Current as Preset</div>
+        <div className={styles.title}>{title}</div>
         <div className={styles.body}>
           <div>
             <div className={styles.rowLabel} style={{ marginBottom: 6 }}>Name</div>
@@ -72,7 +76,7 @@ export function PresetSaveDialog({ onConfirm, onCancel }: Props) {
           <button className={styles.btnSecondary} onClick={onCancel}>Cancel</button>
           <button className={styles.btnPrimary} disabled={!canSave}
             onClick={() => canSave && onConfirm(name.trim(), description, includeGrid)}>
-            Save Preset
+            {confirmLabel}
           </button>
         </div>
       </div>

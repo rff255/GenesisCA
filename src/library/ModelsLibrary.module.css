@@ -55,6 +55,7 @@
   color: #a0b0c0;
   line-height: 1.5;
   margin: 0 0 12px;
+  overflow-wrap: anywhere;
 }
 
 .cardMeta {
@@ -88,4 +89,27 @@
   color: #f44336;
   font-size: 0.85rem;
   padding: 32px 0;
+}
+
+.thumbnailPopover {
+  position: fixed;
+  width: 320px;
+  height: 320px;
+  background: #0d1117;
+  border: 1px solid #4cc9f0;
+  border-radius: 6px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+  z-index: 1000;
+  pointer-events: none;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.thumbnailImg {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: pixelated;
 }

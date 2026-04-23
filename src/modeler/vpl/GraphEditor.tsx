@@ -92,19 +92,26 @@ function toRFEdges(graphEdges: GraphEdge[]): Edge[] {
 
 function toGraphNodes(rfNodes: Node[]): GraphNode[] {
   const existingIds = new Set(rfNodes.map(n => n.id));
-  return rfNodes.map(n => ({
-    id: n.id,
-    type: n.type ?? 'caNode',
-    position: n.position,
-    data: {
-      ...(n.data as GraphNode['data']),
-      // Never serialize orphan parentId refs — belt-and-suspenders against cascade-delete gaps
-      ...(n.parentId && existingIds.has(n.parentId) ? { parentId: n.parentId } : {}),
-      ...((n.type === 'groupNode' || n.type === 'commentNode') && n.style
-        ? { width: (n.style as Record<string, number>).width, height: (n.style as Record<string, number>).height }
-        : {}),
-    },
-  }));
+  return rfNodes.map(n => {
+    const nAny = n as { width?: number; height?: number; measured?: { width?: number; height?: number } };
+    const rawStyle = n.style as Record<string, number> | undefined;
+    // NodeResizer updates n.measured / n.width, NOT n.style — so read those first, fall back to style.
+    const mW = nAny.measured?.width ?? nAny.width ?? rawStyle?.width;
+    const mH = nAny.measured?.height ?? nAny.height ?? rawStyle?.height;
+    const needsSize = n.type === 'groupNode' || n.type === 'commentNode';
+    return {
+      id: n.id,
+      type: n.type ?? 'caNode',
+      position: n.position,
+      data: {
+        ...(n.data as GraphNode['data']),
+        // Never serialize orphan parentId refs — belt-and-suspenders against cascade-delete gaps
+        ...(n.parentId && existingIds.has(n.parentId) ? { parentId: n.parentId } : {}),
+        ...(needsSize && mW != null ? { width: mW } : {}),
+        ...(needsSize && mH != null ? { height: mH } : {}),
+      },
+    };
+  });
 }
 
 function toGraphEdges(rfEdges: Edge[]): GraphEdge[] {
@@ -121,7 +128,7 @@ function toGraphEdges(rfEdges: Edge[]): GraphEdge[] {
 function resizeGroupsToFit(nds: Node[], allowShrink: boolean): Node[] {
   const groups = nds.filter(n => n.type === 'groupNode');
   if (groups.length === 0) return nds;
-  const nodeW = 200, nodeH = 100, pad = 30, topPad = 40;
+  const nodeW = 200, nodeH = 100, collapsedH = 32, pad = 30, topPad = 40;
   let changed = false;
 
   const updated = nds.map(n => {
@@ -131,10 +138,26 @@ function resizeGroupsToFit(nds: Node[], allowShrink: boolean): Node[] {
 
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const c of children) {
+      const cStyle = c.style as Record<string, number> | undefined;
+      const cData = c.data as Record<string, unknown> | undefined;
+      const cAny = c as { width?: number; height?: number; measured?: { width?: number; height?: number } };
+      const isCollapsed = !!cData?.isCollapsed;
+      // Prefer React Flow's measured dimensions — those reflect the actual rendered size
+      // including collapsed-vs-expanded on both axes. Fall back through style, then sensible defaults.
+      const measuredW = cAny.measured?.width ?? cAny.width;
+      const measuredH = cAny.measured?.height ?? cAny.height;
+      const cW = measuredW ?? (c.type === 'groupNode' || c.type === 'commentNode'
+        ? (cStyle?.width ?? nodeW)
+        : nodeW);
+      const cH = measuredH ?? (c.type === 'groupNode'
+        ? (cStyle?.height ?? 200)
+        : c.type === 'commentNode'
+          ? (cStyle?.height ?? 80)
+          : isCollapsed ? collapsedH : nodeH);
       minX = Math.min(minX, c.position.x);
       minY = Math.min(minY, c.position.y);
-      maxX = Math.max(maxX, c.position.x + nodeW);
-      maxY = Math.max(maxY, c.position.y + nodeH);
+      maxX = Math.max(maxX, c.position.x + cW);
+      maxY = Math.max(maxY, c.position.y + cH);
     }
 
     const curStyle = n.style as Record<string, number> | undefined;
@@ -193,6 +216,8 @@ export function GraphEditorInner() {
 
   // Ref for paste position (flow coords of last right-click or viewport center for Ctrl+V)
   const pasteFlowPos = useRef<{ x: number; y: number } | null>(null);
+  // Live cursor in flow coords — populated by mousemove on the pane, used as fallback paste anchor for Ctrl+V
+  const lastFlowMousePos = useRef<{ x: number; y: number } | null>(null);
 
   // Refs for debounced sync
   const nodesRef = useRef(nodes);
@@ -417,11 +442,17 @@ export function GraphEditorInner() {
 
       onNodesChange(changes);
 
-      // Auto-resize groups to fit children (shrink + expand) on drag end
+      // Auto-resize groups to fit children (shrink + expand) on drag end or when
+      // a child's rendered dimensions change (e.g. collapse/uncollapse)
       const hasPositionEnd = changes.some(
         c => c.type === 'position' && 'dragging' in c && !c.dragging,
       );
-      if (hasPositionEnd) {
+      const hasChildDimensionsChange = changes.some(c => {
+        if (c.type !== 'dimensions') return false;
+        const node = nodesRef.current.find(n => n.id === c.id);
+        return !!node?.parentId;
+      });
+      if (hasPositionEnd || hasChildDimensionsChange) {
         setNodes(nds => resizeGroupsToFit(nds, true));
       }
 
@@ -805,31 +836,30 @@ export function GraphEditorInner() {
     }
     pushCurrentSnapshot();
 
-    // Compute clipboard bounding-box center (top-level nodes only)
+    // Compute clipboard top-left corner (top-level nodes only) — paste anchors top-left at cursor
     const topLevel = clipboard.nodes.filter(n => {
       const d = n.data as Record<string, unknown>;
       return !d.parentId;
     });
     let cx = 0, cy = 0;
     if (topLevel.length > 0) {
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      let minX = Infinity, minY = Infinity;
       for (const n of topLevel) {
         minX = Math.min(minX, n.position.x);
         minY = Math.min(minY, n.position.y);
-        maxX = Math.max(maxX, n.position.x + 200);
-        maxY = Math.max(maxY, n.position.y + 100);
       }
-      cx = (minX + maxX) / 2;
-      cy = (minY + maxY) / 2;
+      cx = minX;
+      cy = minY;
     }
 
-    // Determine paste target position
+    // Determine paste target position — prefer right-click menu pos, then live cursor, then viewport center
     let target: { x: number; y: number };
     if (pasteFlowPos.current) {
       target = pasteFlowPos.current;
       pasteFlowPos.current = null;
+    } else if (lastFlowMousePos.current) {
+      target = lastFlowMousePos.current;
     } else {
-      // Ctrl+V: use viewport center
       const rf = rfInstance.current;
       if (rf) {
         const bounds = document.querySelector('.react-flow')?.getBoundingClientRect();
@@ -899,9 +929,10 @@ export function GraphEditorInner() {
       return 0;
     });
 
-    // Deselect existing, add pasted
+    // Deselect existing nodes AND edges; otherwise a follow-up delete of the pasted
+    // selection would also nuke the still-selected original edges.
     setNodes(nds => [...nds.map(n => ({ ...n, selected: false })), ...pastedRFNodes]);
-    setEdges(eds => [...eds, ...pastedRFEdges]);
+    setEdges(eds => [...eds.map(e => ({ ...e, selected: false })), ...pastedRFEdges]);
     scheduleSync();
   }, [nodes, setNodes, setEdges, scheduleSync]);
 
@@ -985,7 +1016,7 @@ export function GraphEditorInner() {
     });
 
     setNodes(nds => [...nds.map(n => ({ ...n, selected: false })), ...dupeNodes]);
-    setEdges(eds => [...eds, ...dupeEdges]);
+    setEdges(eds => [...eds.map(e => ({ ...e, selected: false })), ...dupeEdges]);
     scheduleSync();
   }, [nodes, edges, setNodes, setEdges, scheduleSync]);
 
@@ -1606,6 +1637,11 @@ export function GraphEditorInner() {
         onConnectEnd={onConnectEnd}
         isValidConnection={isValidConnection as IsValidConnection}
         onInit={instance => { rfInstance.current = instance; }}
+        onMouseMove={(e: React.MouseEvent) => {
+          const rf = rfInstance.current;
+          if (!rf) return;
+          lastFlowMousePos.current = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+        }}
         onPaneContextMenu={onPaneContextMenu}
         onNodeContextMenu={onNodeContextMenu}
         onNodeDoubleClick={onNodeDoubleClick}

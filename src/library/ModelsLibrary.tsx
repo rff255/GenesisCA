@@ -6,20 +6,49 @@ interface LibraryEntry {
   id: string;
   name: string;
   author: string;
+  modelAuthor?: string;
   description: string;
   file: string;
   tags: string[];
   gridSize: string;
+  /** Sidecar filename (e.g. `"Game Of Life.gcaproj.thumb.gif"`) emitted by the
+   *  Vite plugin. Absent when the source .gcaproj has no embedded thumbnail. */
+  thumbnail?: string;
 }
 
 interface Props {
   onLoadModel: (model: CAModel) => void;
 }
 
+const POPOVER_SIZE = 320;
+const POPOVER_GAP = 8;
+
+interface HoverState {
+  thumbnail: string;
+  top: number;
+  left: number;
+}
+
+function computePopoverPosition(rect: DOMRect): { top: number; left: number } {
+  const viewportW = window.innerWidth;
+  const viewportH = window.innerHeight;
+  let left = rect.right + POPOVER_GAP;
+  if (left + POPOVER_SIZE > viewportW - POPOVER_GAP) {
+    left = rect.left - POPOVER_SIZE - POPOVER_GAP;
+  }
+  if (left < POPOVER_GAP) left = POPOVER_GAP;
+  let top = rect.top;
+  if (top + POPOVER_SIZE > viewportH - POPOVER_GAP) {
+    top = Math.max(POPOVER_GAP, viewportH - POPOVER_SIZE - POPOVER_GAP);
+  }
+  return { top, left };
+}
+
 export function ModelsLibrary({ onLoadModel }: Props) {
   const [entries, setEntries] = useState<LibraryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [hover, setHover] = useState<HoverState | null>(null);
 
   useEffect(() => {
     const base = import.meta.env.BASE_URL ?? '/';
@@ -50,6 +79,16 @@ export function ModelsLibrary({ onLoadModel }: Props) {
     }
   };
 
+  const handleCardEnter = (entry: LibraryEntry, el: HTMLElement) => {
+    if (!entry.thumbnail) return;
+    const base = import.meta.env.BASE_URL ?? '/';
+    const rect = el.getBoundingClientRect();
+    setHover({
+      thumbnail: `${base}models/${entry.thumbnail}`,
+      ...computePopoverPosition(rect),
+    });
+  };
+
   return (
     <div className={styles.layout}>
       <h1 className={styles.title}>Models Library</h1>
@@ -66,9 +105,16 @@ export function ModelsLibrary({ onLoadModel }: Props) {
             key={entry.id}
             className={styles.card}
             onClick={() => handleClick(entry)}
+            onMouseEnter={e => handleCardEnter(entry, e.currentTarget)}
+            onMouseLeave={() => setHover(null)}
           >
             <div className={styles.cardName}>{entry.name}</div>
-            <div className={styles.cardAuthor}>by {entry.author}</div>
+            {entry.author && (
+              <div className={styles.cardAuthor}>Rule by: {entry.author}</div>
+            )}
+            {entry.modelAuthor && (
+              <div className={styles.cardAuthor}>Project by: {entry.modelAuthor}</div>
+            )}
             <div className={styles.cardDesc}>{entry.description}</div>
             <div className={styles.cardMeta}>
               {entry.tags.map(tag => (
@@ -79,6 +125,15 @@ export function ModelsLibrary({ onLoadModel }: Props) {
           </div>
         ))}
       </div>
+
+      {hover && (
+        <div
+          className={styles.thumbnailPopover}
+          style={{ top: hover.top, left: hover.left }}
+        >
+          <img src={hover.thumbnail} alt="" className={styles.thumbnailImg} />
+        </div>
+      )}
     </div>
   );
 }

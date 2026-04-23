@@ -1,0 +1,179 @@
+{
+  "schemaVersion": 1,
+  "name": "Decide Life State",
+  "description": "",
+  "macroDef": {
+    "id": "mac_mobfiqt38gfvu",
+    "name": "Decide Life State",
+    "nodes": [
+      {
+        "id": "n_mobfiqt3gg8m9",
+        "type": "caNode",
+        "position": {
+          "x": 1000,
+          "y": 380
+        },
+        "data": {
+          "nodeType": "statement",
+          "config": {
+            "operation": "between",
+            "_port_y": "3",
+            "_port_y2": "3"
+          }
+        }
+      },
+      {
+        "id": "n_mobfiqt3r2cj2",
+        "type": "caNode",
+        "position": {
+          "x": 740,
+          "y": 300
+        },
+        "data": {
+          "nodeType": "groupCounting",
+          "config": {
+            "operation": "equals"
+          }
+        }
+      },
+      {
+        "id": "n_mobfiqt3axfk5",
+        "type": "caNode",
+        "position": {
+          "x": 560,
+          "y": 360
+        },
+        "data": {
+          "nodeType": "getConstant",
+          "config": {
+            "constType": "bool",
+            "constValue": "true"
+          }
+        }
+      },
+      {
+        "id": "n_mobfiqt39n622",
+        "type": "caNode",
+        "position": {
+          "x": 300,
+          "y": 300
+        },
+        "data": {
+          "nodeType": "macroInput",
+          "config": {
+            "macroDefId": "mac_mobfiqt38gfvu"
+          }
+        }
+      },
+      {
+        "id": "n_mobfiqt30x2yb",
+        "type": "caNode",
+        "position": {
+          "x": 1240,
+          "y": 280
+        },
+        "data": {
+          "nodeType": "macroOutput",
+          "config": {
+            "macroDefId": "mac_mobfiqt38gfvu"
+          }
+        }
+      },
+      {
+        "id": "nmobfjhaq77y",
+        "type": "caNode",
+        "position": {
+          "x": 1000,
+          "y": 280
+        },
+        "data": {
+          "nodeType": "statement",
+          "config": {
+            "operation": "between",
+            "_port_y": "2",
+            "_port_y2": "3"
+          }
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e_mobfiqt30e8ma",
+        "source": "n_mobfiqt3axfk5",
+        "target": "n_mobfiqt3r2cj2",
+        "sourceHandle": "output_value_value",
+        "targetHandle": "input_value_compare"
+      },
+      {
+        "id": "e_mobfiqt39s1vv",
+        "source": "n_mobfiqt3r2cj2",
+        "target": "n_mobfiqt3gg8m9",
+        "sourceHandle": "output_value_count",
+        "targetHandle": "input_value_x"
+      },
+      {
+        "id": "e_mobfiqt3wyxga",
+        "source": "n_mobfiqt3gg8m9",
+        "target": "n_mobfiqt30x2yb",
+        "sourceHandle": "output_value_result",
+        "targetHandle": "input_value_out_1"
+      },
+      {
+        "id": "xy-edge__n_mobfiqt3r2cj2output_value_count-nmobfjhaq77yinput_value_x",
+        "source": "n_mobfiqt3r2cj2",
+        "target": "nmobfjhaq77y",
+        "sourceHandle": "output_value_count",
+        "targetHandle": "input_value_x"
+      },
+      {
+        "id": "xy-edge__n_mobfiqt3gg8m9output_value_result-n_mobfiqt30x2ybinput_value_out_mobfkga5b40",
+        "source": "n_mobfiqt3gg8m9",
+        "target": "n_mobfiqt30x2yb",
+        "sourceHandle": "output_value_result",
+        "targetHandle": "input_value_out_mobfkga5b40"
+      },
+      {
+        "id": "xy-edge__nmobfjhaq77youtput_value_result-n_mobfiqt30x2ybinput_value_out_mobfk9evne5",
+        "source": "nmobfjhaq77y",
+        "target": "n_mobfiqt30x2yb",
+        "sourceHandle": "output_value_result",
+        "targetHandle": "input_value_out_mobfk9evne5"
+      },
+      {
+        "id": "xy-edge__n_mobfiqt39n622output_value_in_mobflp5o3bi-n_mobfiqt3r2cj2input_value_values",
+        "source": "n_mobfiqt39n622",
+        "target": "n_mobfiqt3r2cj2",
+        "sourceHandle": "output_value_in_mobflp5o3bi",
+        "targetHandle": "input_value_values"
+      }
+    ],
+    "exposedInputs": [
+      {
+        "portId": "in_mobflp5o3bi",
+        "label": "Neighbors",
+        "dataType": "any",
+        "category": "value",
+        "internalNodeId": "n_mobfiqt39n622",
+        "internalPortId": "in_mobflp5o3bi"
+      }
+    ],
+    "exposedOutputs": [
+      {
+        "portId": "out_mobfk9evne5",
+        "label": "Survive",
+        "dataType": "any",
+        "category": "value",
+        "internalNodeId": "n_mobfiqt30x2yb",
+        "internalPortId": "out_mobfk9evne5"
+      },
+      {
+        "portId": "out_mobfkga5b40",
+        "label": "Be Born",
+        "dataType": "any",
+        "category": "value",
+        "internalNodeId": "n_mobfiqt30x2yb",
+        "internalPortId": "out_mobfkga5b40"
+      }
+    ]
+  }
+}
