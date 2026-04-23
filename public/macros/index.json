@@ -1,8 +1,20 @@
 [
   {
-    "key": "count-matching-neighbors",
-    "name": "Count Matching Neighbors",
-    "description": "Counts how many values in a neighbor-values array equal the given Compare-To value.",
-    "file": "count-matching-neighbors.gcamacro"
+    "key": "color-proportional-to-number",
+    "name": "Color proportional to number",
+    "description": "",
+    "file": "color-proportional-to-number.gcamacro"
+  },
+  {
+    "key": "Colorize From Neighbors number",
+    "name": "Colorize from Neighbors number",
+    "description": "",
+    "file": "Colorize From Neighbors number.gcamacro"
+  },
+  {
+    "key": "Game Of Life Core",
+    "name": "Decide Life State",
+    "description": "",
+    "file": "Game Of Life Core.gcamacro"
   }
 ]

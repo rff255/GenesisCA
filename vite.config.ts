@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
+import { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'fs'
 import { join, resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import type { Plugin } from 'vite'
@@ -15,14 +15,51 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 function modelsLibraryPlugin(): Plugin {
   const modelsDir = resolve(__dirname, 'public/models');
 
+  // Regenerated from each .gcaproj's embedded `properties.thumbnail` data URL
+  // on every dev start / build. Clean up stale ones so removed thumbnails
+  // don't linger as orphan files.
+  function cleanThumbnails(dir: string): void {
+    if (!existsSync(dir)) return;
+    for (const f of readdirSync(dir)) {
+      if (/\.thumb\.(png|jpe?g|gif|webp)$/i.test(f)) {
+        try { unlinkSync(join(dir, f)); } catch { /* ok */ }
+      }
+    }
+  }
+
+  function extractThumbnail(file: string, dataUrl: unknown, outDir: string): string | null {
+    if (typeof dataUrl !== 'string') return null;
+    const m = /^data:(image\/(png|jpeg|gif|webp));base64,(.+)$/i.exec(dataUrl);
+    if (!m) return null;
+    const mime = (m[1] || '').toLowerCase();
+    const payload = m[3] || '';
+    if (!mime || !payload) return null;
+    const ext = mime === 'image/png' ? '.png'
+              : mime === 'image/jpeg' ? '.jpg'
+              : mime === 'image/gif' ? '.gif'
+              : '.webp';
+    const sidecar = `${file}.thumb${ext}`;
+    try {
+      writeFileSync(join(outDir, sidecar), Buffer.from(payload, 'base64'));
+      return sidecar;
+    } catch {
+      return null;
+    }
+  }
+
   function generateIndex(outDir: string): void {
     if (!existsSync(modelsDir)) return;
+    const outModelsDir = join(outDir, 'models');
+    if (!existsSync(outModelsDir)) mkdirSync(outModelsDir, { recursive: true });
+    cleanThumbnails(outModelsDir);
+
     const files = readdirSync(modelsDir).filter((f: string) => f.endsWith('.gcaproj'));
     const entries = files.map((file: string) => {
       try {
         const raw = readFileSync(join(modelsDir, file), 'utf-8');
         const model = JSON.parse(raw);
         const props = model.properties || {};
+        const thumbnail = extractThumbnail(file, props.thumbnail, outModelsDir);
         return {
           id: file.replace('.gcaproj', ''),
           name: props.name || file,
@@ -32,14 +69,13 @@ function modelsLibraryPlugin(): Plugin {
           file,
           tags: props.tags || [],
           gridSize: `${props.gridWidth || '?'}x${props.gridHeight || '?'}`,
+          ...(thumbnail ? { thumbnail } : {}),
         };
       } catch {
         return null;
       }
     }).filter(Boolean);
 
-    const outModelsDir = join(outDir, 'models');
-    if (!existsSync(outModelsDir)) mkdirSync(outModelsDir, { recursive: true });
     writeFileSync(join(outModelsDir, 'index.json'), JSON.stringify(entries, null, 2));
   }
 

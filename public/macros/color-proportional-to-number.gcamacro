@@ -1,0 +1,211 @@
+{
+  "schemaVersion": 1,
+  "name": "Color proportional to number",
+  "description": "",
+  "macroDef": {
+    "id": "macro_mobfzfvu",
+    "name": "Color proportional to number",
+    "nodes": [
+      {
+        "id": "nmnusg9a9uaa",
+        "type": "caNode",
+        "position": {
+          "x": 1560,
+          "y": 480
+        },
+        "data": {
+          "nodeType": "outputMapping",
+          "config": {
+            "mappingId": "new_mapping_mnuepgj3dsv"
+          },
+          "parentId": "nmnyclxf5xrq"
+        }
+      },
+      {
+        "id": "nmny05zkco0t",
+        "type": "caNode",
+        "position": {
+          "x": 1980,
+          "y": 540
+        },
+        "data": {
+          "nodeType": "colorInterpolation",
+          "config": {
+            "_port_r1": "51",
+            "_port_g1": "204",
+            "_port_b1": "54",
+            "_port_r2": "208",
+            "_port_g2": "39",
+            "_port_b2": "27"
+          },
+          "isCollapsed": false,
+          "parentId": "nmnyclxf5xrq"
+        }
+      },
+      {
+        "id": "nmny06yvsqzj",
+        "type": "caNode",
+        "position": {
+          "x": 2180,
+          "y": 480
+        },
+        "data": {
+          "nodeType": "setColorViewer",
+          "config": {
+            "mappingId": "new_mapping_mnuepgj3dsv",
+            "_port_r": "7",
+            "_port_g": "209",
+            "_port_b": "213"
+          },
+          "isCollapsed": false,
+          "parentId": "nmnyclxf5xrq"
+        }
+      },
+      {
+        "id": "nmny0zrzog1q",
+        "type": "caNode",
+        "position": {
+          "x": 1760,
+          "y": 540
+        },
+        "data": {
+          "nodeType": "proportionMap",
+          "config": {},
+          "isCollapsed": false,
+          "parentId": "nmnyclxf5xrq"
+        }
+      },
+      {
+        "id": "nmobfwku6b98",
+        "type": "caNode",
+        "position": {
+          "x": 1580,
+          "y": 620
+        },
+        "data": {
+          "nodeType": "getConstant",
+          "config": {
+            "constType": "integer",
+            "constValue": "10"
+          },
+          "label": "Max value of variable",
+          "isCollapsed": true
+        }
+      },
+      {
+        "id": "nmobfyeab9jy",
+        "type": "caNode",
+        "position": {
+          "x": 1580,
+          "y": 580
+        },
+        "data": {
+          "nodeType": "getConstant",
+          "config": {
+            "constType": "integer",
+            "constValue": "10"
+          },
+          "label": "Min value of variable",
+          "isCollapsed": true
+        }
+      },
+      {
+        "id": "mi_macro_mobfzfvu",
+        "type": "caNode",
+        "position": {
+          "x": 1310,
+          "y": 550
+        },
+        "data": {
+          "nodeType": "macroInput",
+          "config": {
+            "macroDefId": "macro_mobfzfvu"
+          }
+        }
+      },
+      {
+        "id": "mo_macro_mobfzfvu",
+        "type": "caNode",
+        "position": {
+          "x": 2280,
+          "y": 550
+        },
+        "data": {
+          "nodeType": "macroOutput",
+          "config": {
+            "macroDefId": "macro_mobfzfvu"
+          }
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "xy-edge__nmny05zkco0toutput_value_r-nmny06yvsqzjinput_value_r",
+        "source": "nmny05zkco0t",
+        "target": "nmny06yvsqzj",
+        "sourceHandle": "output_value_r",
+        "targetHandle": "input_value_r"
+      },
+      {
+        "id": "xy-edge__nmny05zkco0toutput_value_g-nmny06yvsqzjinput_value_g",
+        "source": "nmny05zkco0t",
+        "target": "nmny06yvsqzj",
+        "sourceHandle": "output_value_g",
+        "targetHandle": "input_value_g"
+      },
+      {
+        "id": "xy-edge__nmny05zkco0toutput_value_b-nmny06yvsqzjinput_value_b",
+        "source": "nmny05zkco0t",
+        "target": "nmny06yvsqzj",
+        "sourceHandle": "output_value_b",
+        "targetHandle": "input_value_b"
+      },
+      {
+        "id": "xy-edge__nmny0zrzog1qoutput_value_result-nmny05zkco0tinput_value_t",
+        "source": "nmny0zrzog1q",
+        "target": "nmny05zkco0t",
+        "sourceHandle": "output_value_result",
+        "targetHandle": "input_value_t"
+      },
+      {
+        "id": "xy-edge__nmnusg9a9uaaoutput_flow_do-nmny06yvsqzjinput_flow_do",
+        "source": "nmnusg9a9uaa",
+        "target": "nmny06yvsqzj",
+        "sourceHandle": "output_flow_do",
+        "targetHandle": "input_flow_do"
+      },
+      {
+        "id": "xy-edge__nmobfwku6b98output_value_value-nmny0zrzog1qinput_value_inMax",
+        "source": "nmobfwku6b98",
+        "target": "nmny0zrzog1q",
+        "sourceHandle": "output_value_value",
+        "targetHandle": "input_value_inMax"
+      },
+      {
+        "id": "xy-edge__nmobfyeab9jyoutput_value_value-nmny0zrzog1qinput_value_inMin",
+        "source": "nmobfyeab9jy",
+        "target": "nmny0zrzog1q",
+        "sourceHandle": "output_value_value",
+        "targetHandle": "input_value_inMin"
+      },
+      {
+        "id": "bridge_in_macro_mobfzfvu_0",
+        "source": "mi_macro_mobfzfvu",
+        "sourceHandle": "output_value_in_0",
+        "target": "nmny0zrzog1q",
+        "targetHandle": "input_value_x"
+      }
+    ],
+    "exposedInputs": [
+      {
+        "portId": "in_0",
+        "label": "Input 1",
+        "dataType": "any",
+        "category": "value",
+        "internalNodeId": "mi_macro_mobfzfvu",
+        "internalPortId": "in_0"
+      }
+    ],
+    "exposedOutputs": []
+  }
+}

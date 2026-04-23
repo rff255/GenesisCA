@@ -29,3 +29,11 @@ Thumbs.db
 
 # Auto-generated library index (created by Vite plugin at dev/build time)
 public/models/index.json
+
+# Auto-extracted thumbnail sidecars (regenerated from each .gcaproj's
+# `properties.thumbnail` on every dev start / build)
+public/models/*.thumb.png
+public/models/*.thumb.jpg
+public/models/*.thumb.jpeg
+public/models/*.thumb.gif
+public/models/*.thumb.webp

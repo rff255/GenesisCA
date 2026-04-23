@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useModel } from '../../model/ModelContext';
 import type {
   BoundaryTreatment, UpdateMode, AsyncScheme,
@@ -12,14 +12,38 @@ function newCondId(): string {
   return `ec_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
 }
 
+const THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024; // 2 MB
+const THUMBNAIL_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp';
+
 export function PropertiesPanelContent() {
   const { model, updateProperties, reorderEndConditions } = useModel();
   const { properties } = model;
   const [tagInput, setTagInput] = useState('');
+  const [thumbError, setThumbError] = useState('');
+  const thumbInputRef = useRef<HTMLInputElement | null>(null);
   const ecReorder = useListReorder(
     properties.endConditions?.indicatorConditions || [],
     reorderEndConditions,
   );
+
+  const handleThumbnailPick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-picking the same file
+    if (!file) return;
+    if (file.size > THUMBNAIL_MAX_BYTES) {
+      setThumbError(`File is ${(file.size / 1024 / 1024).toFixed(2)} MB — the limit is 2 MB.`);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== 'string') return;
+      setThumbError('');
+      updateProperties({ thumbnail: result });
+    };
+    reader.onerror = () => setThumbError('Could not read the file.');
+    reader.readAsDataURL(file);
+  };
 
   const ec = properties.endConditions;
   const ecEnabled = !!ec?.enabled;
@@ -120,6 +144,58 @@ export function PropertiesPanelContent() {
               value={properties.description}
               onChange={e => updateProperties({ description: e.target.value })}
             />
+          </div>
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>Thumbnail</label>
+            <input
+              ref={thumbInputRef}
+              type="file"
+              accept={THUMBNAIL_ACCEPT}
+              onChange={handleThumbnailPick}
+              style={{ display: 'none' }}
+            />
+            {properties.thumbnail ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
+                <img
+                  src={properties.thumbnail}
+                  alt="Model thumbnail"
+                  style={{
+                    maxWidth: 200, maxHeight: 200, borderRadius: 4,
+                    border: '1px solid #2d4059', background: '#0d1117',
+                  }}
+                />
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    className={styles.addButton}
+                    style={{ flex: 'none', padding: '4px 10px', fontSize: '0.7rem' }}
+                    onClick={() => thumbInputRef.current?.click()}
+                  >
+                    Replace
+                  </button>
+                  <button
+                    className={styles.deleteButton}
+                    style={{ padding: '4px 10px', fontSize: '0.7rem' }}
+                    onClick={() => { setThumbError(''); updateProperties({ thumbnail: undefined }); }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                className={styles.addButton}
+                style={{ flex: 'none', alignSelf: 'flex-start', padding: '4px 10px', fontSize: '0.72rem' }}
+                onClick={() => thumbInputRef.current?.click()}
+              >
+                Choose Image/GIF…
+              </button>
+            )}
+            <span style={{ color: '#8090a0', fontSize: '0.62rem' }}>
+              PNG, JPEG, GIF, or WebP — up to 2 MB. Shown on hover in the Models Library.
+            </span>
+            {thumbError && (
+              <span style={{ color: '#e05050', fontSize: '0.65rem' }}>{thumbError}</span>
+            )}
           </div>
           <div className={styles.field}>
             <label className={styles.fieldLabel}>Tags</label>

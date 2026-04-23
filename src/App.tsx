@@ -10,7 +10,9 @@ import styles from './App.module.css';
 type AppMode = 'modeler' | 'simulator' | 'help' | 'library';
 
 function AppInner() {
-  const [mode, setMode] = useState<AppMode>('modeler');
+  // Every tab/reload lands on the Library — it's the natural starting point for
+  // picking a model to explore or fork.
+  const [mode, setMode] = useState<AppMode>('library');
   const { model, isDirty, loadModel } = useModel();
 
   const handleLoadLibraryModel = (model: Parameters<typeof loadModel>[0]) => {

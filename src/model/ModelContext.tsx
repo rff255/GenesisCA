@@ -22,7 +22,6 @@ import type {
   SimulationState,
 } from './types';
 import { DEFAULT_MODEL, EMPTY_MODEL } from './defaultModel';
-import { readModelFile } from './fileOperations';
 import { cloneMacroWithFreshIds } from './macroImport';
 
 // ---------------------------------------------------------------------------
@@ -608,76 +607,33 @@ const ModelContext = createContext<ModelContextValue | null>(null);
 // ---------------------------------------------------------------------------
 
 function createInitialState(): ModelState {
-  try {
-    const saved = localStorage.getItem('genesisca_autosave');
-    if (saved) {
-      const model = JSON.parse(saved) as CAModel;
-      if (model.schemaVersion && model.properties && model.attributes) {
-        // Ensure new fields exist for older saved models
-        if (!model.graphNodes) model.graphNodes = [];
-        if (!model.graphEdges) model.graphEdges = [];
-        if (!model.macroDefs) model.macroDefs = [];
-        if (!model.indicators) model.indicators = [];
-        if (!model.properties.tags) model.properties.tags = [];
-        if (!model.properties.updateMode) model.properties.updateMode = 'synchronous';
-        if (!model.properties.asyncScheme) model.properties.asyncScheme = 'random-order';
-        if ('goal' in model.properties) delete (model.properties as unknown as Record<string, unknown>).goal;
-        if (model.properties.modelAuthor === undefined) model.properties.modelAuthor = '';
-        for (const n of model.neighborhoods) { n.margin ??= 2; }
-        for (const a of model.attributes) {
-          if (a.type === 'tag' && !a.tagOptions) a.tagOptions = [];
-        }
-        return { model, isDirty: false, modelVersion: 0 };
-      }
-    }
-  } catch {
-    // ignore parse errors — fall through to default
-  }
   return { model: DEFAULT_MODEL, isDirty: false, modelVersion: 0 };
 }
-
-const FIRST_LAUNCH_KEY = 'genesisca_has_launched';
 
 export function ModelProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(modelReducer, undefined, createInitialState);
 
-  // On first-ever launch (no autosave), load Game of Life from public/models/
+  // One-shot cleanup of legacy localStorage keys from older builds. The app no
+  // longer auto-persists the model — users save `.gcaproj` manually and are
+  // warned on unload if there are unsaved changes. `genesisca_has_launched` was
+  // briefly used to gate the default tab but is unused now that every visit
+  // lands on the Library.
   useEffect(() => {
-    const hasAutosave = localStorage.getItem('genesisca_autosave');
-    const hasLaunched = localStorage.getItem(FIRST_LAUNCH_KEY);
-    if (hasAutosave || hasLaunched) {
-      // Not first launch — mark and skip
-      if (!hasLaunched) localStorage.setItem(FIRST_LAUNCH_KEY, '1');
-      return;
-    }
-    localStorage.setItem(FIRST_LAUNCH_KEY, '1');
-
-    // Fetch Game of Life .gcaproj
-    const base = import.meta.env.BASE_URL;
-    fetch(`${base}models/Game Of Life.gcaproj`)
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.blob();
-      })
-      .then(blob => readModelFile(new File([blob], 'Game Of Life.gcaproj')))
-      .then(model => dispatch({ type: 'LOAD_MODEL', model }))
-      .catch(() => {
-        // Silently fall back to the empty default if fetch fails
-      });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    try { localStorage.removeItem('genesisca_autosave'); } catch { /* ok */ }
+    try { localStorage.removeItem('genesisca_has_launched'); } catch { /* ok */ }
   }, []);
 
-  // Auto-save to localStorage (strip simulationState + presets to avoid exceeding
-  // quota on large grids; presets with embedded grid data can be tens of MB each)
+  // Warn on close/reload when there are unsaved model changes. Modern browsers
+  // show a standardized prompt; the message text can't be customised.
   useEffect(() => {
-    try {
-      const { simulationState: _drop, presets: _dropP, ...modelWithoutState } = state.model;
-      void _drop; void _dropP;
-      localStorage.setItem('genesisca_autosave', JSON.stringify(modelWithoutState));
-    } catch {
-      // localStorage full or unavailable
-    }
-  }, [state.model]);
+    if (!state.isDirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [state.isDirty]);
 
   const updateProperties = useCallback(
     (changes: Partial<ModelProperties>) =>
@@ -768,10 +724,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'UPDATE_INDICATOR', id, changes }),
     [],
   );
-  const newModel = useCallback(() => {
-    dispatch({ type: 'NEW_MODEL' });
-    try { localStorage.removeItem('genesisca_autosave'); } catch { /* ok */ }
-  }, []);
+  const newModel = useCallback(() => dispatch({ type: 'NEW_MODEL' }), []);
   const loadModel = useCallback(
     (model: CAModel) => dispatch({ type: 'LOAD_MODEL', model }),
     [],

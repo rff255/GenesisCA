@@ -64,7 +64,7 @@ A complete GenesisCA model definition consists of:
 ## Features
 
 ### The Modeler
-- **Properties Panel** — model metadata (Rule Author + GenesisCA Project Author), grid dimensions, boundary treatment (torus/constant), update mode (synchronous/asynchronous), tags, optional End Conditions (max generations + indicator-based auto-pause rules)
+- **Properties Panel** — model metadata (Rule Author + GenesisCA Project Author), grid dimensions, boundary treatment (torus/constant), update mode (synchronous/asynchronous), tags, optional **Thumbnail** (PNG/JPEG/GIF/WebP up to 2 MB — shown on hover in the Models Library), optional End Conditions (max generations + indicator-based auto-pause rules)
 - **Attributes Panel** — cell and model attributes with type-specific default value controls (bool, integer, float, tag, color); cell attributes gain an optional **Boundary Value** field when boundary is set to constant
 - **Neighborhoods Panel** — interactive grid editor with per-neighborhood margin, optional per-cell tags for named access, and a Duplicate button for quick variations
 - **Mappings Panel** — Attribute-to-Color and Color-to-Attribute mapping definitions
@@ -110,8 +110,9 @@ A complete GenesisCA model definition consists of:
 
 ### Help & Library
 - **Comprehensive Help tab** — 8 sections covering all features with sidebar navigation
-- **Models Library** — pre-made models loaded from the repository, no manual index required
-- **First launch** — automatically loads Game of Life as a demo; "New" creates a blank model
+- **Models Library** — pre-made models loaded from the repository, no manual index required; cards with thumbnails show a floating preview on hover (animated GIFs play natively)
+- **Library-first** — every tab open / reload lands on the Library tab so you can pick a starting model or fork one into your own
+- **Unsaved changes warning** — the browser prompts before closing the tab if your model has unsaved changes (explicit save only — no auto-restore on reload)
 - **GitHub link** — accessible from the navbar and Help page
 
 ---
