@@ -117,6 +117,14 @@ A complete GenesisCA model definition consists of:
 
 ---
 
+## Documentation
+
+- [Node Reference](docs/NODES_REFERENCE.md) — full catalogue of the 40+ node types, port schemas, and compile-time semantics, with Mermaid diagrams of common patterns.
+- [CA Literature Review](docs/CA_LITERATURE_REVIEW.md) — a survey of ~70 canonical cellular-automata models across physics, chemistry, biology, ecology, sociology, transport, earth sciences (geology / mining / volcanology / seismology), CS theory and cryptography, with a Top-Tier Shortlist driving GenesisCA's feature roadmap.
+- [Performance Optimization Paths](docs/PERFORMANCE_OPTIMIZATION_PATHS.md) — engine-internal notes on the JS- and WASM-compile targets and how to keep large grids fast.
+
+---
+
 ## Screenshots
 
 **Modeler** — Visual programming graph editor with node-based update rules:
