@@ -111,6 +111,12 @@ export interface ModelProperties {
    *  silently if the graph references a node type whose WASM emit is not yet
    *  implemented; the user can flip this off at any time to force JS. */
   useWasm?: boolean;
+  /** Wave 3: when true, the simulator runs the WGSL-compiled compute shaders
+   *  on WebGPU. Mutually exclusive with useWasm — the UI enforces this via a
+   *  3-way radio (JS / WASM / WebGPU); a worker-side safety net prefers
+   *  WebGPU when both flags are somehow set on a loaded file. Sync mode only:
+   *  the UI greys out the async controls when this is on. */
+  useWebGPU?: boolean;
 }
 
 /** A serialized node in the update rules graph */

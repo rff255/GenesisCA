@@ -2,7 +2,7 @@ import { memo, useCallback, useState, useMemo, useSyncExternalStore } from 'reac
 import { Handle, Position, useReactFlow } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
-import { detectMissingConfig } from './nodes/nodeValidation';
+import { detectMissingConfig, detectWebGPUIncompatibilities } from './nodes/nodeValidation';
 import { handleId } from './types';
 import type { NodeConfig } from './types';
 import type { MacroPort } from '../../model/types';
@@ -296,9 +296,16 @@ function CaNodeComponent({ id, data }: NodeProps) {
     return new Map(def.ports.filter(p => p.kind === 'input').map(p => [p.id, p]));
   }, [def]);
 
-  // Detect missing required config (shown as a warning badge in the node header)
+  // Detect missing required config (shown as a warning badge in the node header).
+  // When the model targets WebGPU, also surface target-specific rejections
+  // (async-only nodes, non-parallel-safe Update Indicator ops) so the user
+  // sees them in the modeler before hitting the runtime compile error.
   const configIssues = useMemo(
-    () => detectMissingConfig(nodeData.nodeType, nodeData.config, model),
+    () => {
+      const base = detectMissingConfig(nodeData.nodeType, nodeData.config, model);
+      if (!model.properties.useWebGPU) return base;
+      return [...base, ...detectWebGPUIncompatibilities(nodeData.nodeType, nodeData.config, model)];
+    },
     [
       nodeData.nodeType,
       nodeData.config,
@@ -307,6 +314,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
       model.mappings,
       model.indicators,
       model.macroDefs,
+      model.properties.useWebGPU,
     ],
   );
 

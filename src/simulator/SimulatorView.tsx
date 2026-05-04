@@ -3,6 +3,7 @@ import { useModel } from '../model/ModelContext';
 import { compileGraph } from '../modeler/vpl/compiler/compile';
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
+import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { IndicatorDisplay } from './IndicatorDisplay';
 import { BrushColorPopover } from './BrushColorPopover';
@@ -557,16 +558,35 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       { type: 'module' },
     );
     worker.onmessage = (e) => onWorkerMessageRef.current(e);
+    // Resize / image-import override grid dimensions WITHOUT updating the
+    // model state, so we have to feed the compilers a model with the new
+    // dimensions baked in. WASM happens to be tolerant (it takes `total` as
+    // a runtime function arg), but WebGPU bakes `total` into the WGSL bounds
+    // check — without this override the shader rejects half the cells after a
+    // resize-to-larger and the simulator looks half-frozen.
+    const dimsModel = (model.properties.gridWidth === w && model.properties.gridHeight === h)
+      ? model
+      : { ...model, properties: { ...model.properties, gridWidth: w, gridHeight: h } };
     // Wave 2: try to compile a WASM step alongside the JS one. If anything
     // fails (unsupported node, etc.) we still ship the JS bytes; the worker
     // falls back automatically when wasmStepBytes is missing/empty.
     const wasmResult = (() => {
       try {
-        const layout = computeLayoutFromModel(model);
-        const viewerIds = buildViewerIds(model);
-        return compileGraphWasm(model.graphNodes, model.graphEdges, model, layout, viewerIds);
+        const layout = computeLayoutFromModel(dimsModel);
+        const viewerIds = buildViewerIds(dimsModel);
+        return compileGraphWasm(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel, layout, viewerIds);
       } catch (e) {
         return { bytes: new Uint8Array(), minMemoryPages: 1, error: String((e as Error)?.message || e), viewerIds: {}, exports: [] };
+      }
+    })();
+    // Wave 3: compile WebGPU shader alongside JS/WASM. Same fallback pattern:
+    // any error and the worker stays on JS — useWebGPU only flips on once the
+    // worker successfully acquires a device and the shader module compiles.
+    const webgpuResult = (() => {
+      try {
+        return compileGraphWebGPU(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
+      } catch (e) {
+        return { shaderCode: '', entryPoints: { step: 'step', outputMappings: [] as Array<{ mappingId: string; entry: string }> }, layout: null as never, error: String((e as Error)?.message || e) };
       }
     })();
     worker.postMessage({
@@ -601,6 +621,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       wasmExports: wasmResult.exports,
       viewerIds: wasmResult.viewerIds,
       useWasm: !!model.properties.useWasm,
+      webgpuShaderCode: webgpuResult.error ? undefined : webgpuResult.shaderCode,
+      webgpuShaderError: webgpuResult.error,
+      webgpuEntryPoints: webgpuResult.error ? undefined : webgpuResult.entryPoints,
+      webgpuLayout: webgpuResult.error ? undefined : webgpuResult.layout,
+      useWebGPU: !!model.properties.useWebGPU,
     });
     workerRef.current = worker;
     if (import.meta.env?.DEV) (window as unknown as { __simWorker?: Worker }).__simWorker = worker;
@@ -728,6 +753,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       || prev.properties.updateMode !== model.properties.updateMode
       || prev.properties.asyncScheme !== model.properties.asyncScheme
       || prev.properties.useWasm !== model.properties.useWasm
+      || prev.properties.useWebGPU !== model.properties.useWebGPU
       || prev.attributes !== model.attributes
       || prev.neighborhoods !== model.neighborhoods
       || prev.mappings !== model.mappings;
@@ -750,6 +776,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           return { bytes: new Uint8Array(), minMemoryPages: 1, error: String((e as Error)?.message || e), viewerIds: {}, exports: [] };
         }
       })();
+      const webgpuResult = (() => {
+        try {
+          return compileGraphWebGPU(model.graphNodes, model.graphEdges, model);
+        } catch (e) {
+          return { shaderCode: '', entryPoints: { step: 'step', outputMappings: [] as Array<{ mappingId: string; entry: string }> }, layout: null as never, error: String((e as Error)?.message || e) };
+        }
+      })();
       workerRef.current?.postMessage({
         type: 'recompile',
         stepCode: result.stepCode,
@@ -762,11 +795,19 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         wasmStepError: wasmResult.error,
         wasmExports: wasmResult.exports,
         viewerIds: wasmResult.viewerIds,
+        webgpuShaderCode: webgpuResult.error ? undefined : webgpuResult.shaderCode,
+        webgpuShaderError: webgpuResult.error,
+        webgpuEntryPoints: webgpuResult.error ? undefined : webgpuResult.entryPoints,
+        webgpuLayout: webgpuResult.error ? undefined : webgpuResult.layout,
       });
       // If user has the model toggle on, ensure useWasm is set (recompile doesn't carry useWasm by default)
       workerRef.current?.postMessage({
         type: 'setUseWasm',
         enabled: !!model.properties.useWasm && !wasmResult.error,
+      });
+      workerRef.current?.postMessage({
+        type: 'setUseWebGPU',
+        enabled: !!model.properties.useWebGPU && !webgpuResult.error,
       });
       // Sync indicator definitions when they change (not included in recompile message)
       if (prev && prev.indicators !== model.indicators) {

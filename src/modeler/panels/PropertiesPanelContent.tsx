@@ -291,7 +291,7 @@ export function PropertiesPanelContent() {
           <div className={styles.field}>
             <label className={styles.fieldLabel}>Update Mode</label>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 2 }}>
-              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: properties.useWebGPU ? 'not-allowed' : 'pointer', fontSize: '0.72rem', opacity: properties.useWebGPU ? 0.55 : 1 }}>
                 <input
                   type="radio"
                   name="updateMode"
@@ -308,12 +308,16 @@ export function PropertiesPanelContent() {
                   </span>
                 </span>
               </label>
-              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
+              <label
+                style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: properties.useWebGPU ? 'not-allowed' : 'pointer', fontSize: '0.72rem', opacity: properties.useWebGPU ? 0.55 : 1 }}
+                title={properties.useWebGPU ? 'WebGPU target requires synchronous update mode (cells run in parallel on the GPU).' : undefined}
+              >
                 <input
                   type="radio"
                   name="updateMode"
                   value="asynchronous"
                   checked={properties.updateMode === 'asynchronous'}
+                  disabled={!!properties.useWebGPU}
                   onChange={() => updateProperties({ updateMode: 'asynchronous' as UpdateMode })}
                   style={{ marginTop: 2 }}
                 />
@@ -327,7 +331,7 @@ export function PropertiesPanelContent() {
               </label>
             </div>
           </div>
-          {properties.updateMode === 'asynchronous' && (
+          {properties.updateMode === 'asynchronous' && !properties.useWebGPU && (
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Asynchronous Update Scheme</label>
               <select
@@ -353,20 +357,59 @@ export function PropertiesPanelContent() {
           )}
 
           <div style={{ marginTop: 14, borderTop: '1px solid #333', paddingTop: 10 }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={!!properties.useWasm}
-                onChange={(e) => updateProperties({ useWasm: e.target.checked })}
-              />
-              <span style={{ fontSize: '0.78rem' }}>Use WebAssembly (experimental)</span>
-            </label>
-            <span style={{ color: '#888', fontSize: '0.62rem', marginTop: 2, display: 'block' }}>
-              Experimental optimization. When on, the simulator runs the graph as a hand-compiled WASM module
-              instead of JavaScript — typically several times faster on dense neighborhoods. Falls back to JS
-              automatically when the graph uses a node type whose WASM emit is not yet implemented. Some node
-              combinations are not yet bit-exact between the two backends, so toggle off if you observe a
-              behaviour difference; the simulator restarts on change.
+            <label className={styles.fieldLabel} style={{ marginBottom: 4 }}>Compile Target</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 2 }}>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
+                <input
+                  type="radio"
+                  name="compileTarget"
+                  checked={!properties.useWasm && !properties.useWebGPU}
+                  onChange={() => updateProperties({ useWasm: false, useWebGPU: false })}
+                  style={{ marginTop: 2 }}
+                />
+                <span>
+                  <strong>JavaScript (default)</strong>
+                  <br />
+                  <span style={{ color: '#888', fontSize: '0.66rem' }}>
+                    Graph compiled to a JS function. Always available, supports every node type and both update modes.
+                  </span>
+                </span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
+                <input
+                  type="radio"
+                  name="compileTarget"
+                  checked={!!properties.useWasm && !properties.useWebGPU}
+                  onChange={() => updateProperties({ useWasm: true, useWebGPU: false })}
+                  style={{ marginTop: 2 }}
+                />
+                <span>
+                  <strong>WebAssembly (experimental)</strong>
+                  <br />
+                  <span style={{ color: '#888', fontSize: '0.66rem' }}>
+                    Hand-compiled WASM module — typically several times faster than JS on dense neighborhoods. Falls back to JS automatically for node types whose WASM emit is not yet implemented.
+                  </span>
+                </span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
+                <input
+                  type="radio"
+                  name="compileTarget"
+                  checked={!!properties.useWebGPU}
+                  onChange={() => updateProperties({ useWebGPU: true, useWasm: false, updateMode: 'synchronous' })}
+                  style={{ marginTop: 2 }}
+                />
+                <span>
+                  <strong>WebGPU (experimental, sync only)</strong>
+                  <br />
+                  <span style={{ color: '#888', fontSize: '0.66rem' }}>
+                    WGSL compute shaders on the GPU — designed for very large grids and math-heavy per-cell work. Requires synchronous update mode. Browser must support WebGPU (Chrome 127+, Firefox 141+, Safari 17.4+).
+                  </span>
+                </span>
+              </label>
+            </div>
+            <span style={{ color: '#888', fontSize: '0.62rem', marginTop: 6, display: 'block' }}>
+              Targets are mutually exclusive. Switching restarts the simulator (grid state is lost).
             </span>
           </div>
 
