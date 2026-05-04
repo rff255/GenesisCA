@@ -31,6 +31,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const saved = useRef(loadSimSettings());
 
   const [generation, setGeneration] = useState(0);
+  // Generation is throttled into React state (~10 Hz) but kept up-to-date in
+  // a ref every step. Synchronous readers (filename in screenshot/save-state
+  // downloads, end-condition evaluation, etc.) read the ref so they see the
+  // exact current value; only the visible "Gen X" + indicator panel re-render
+  // tick at the throttled rate. Removes the per-step React reconcile that
+  // was the second-largest per-frame cost behind the canvas-width reset.
+  const generationRef = useRef(0);
+  const lastGenSetTime = useRef(0);
   const [playing, setPlaying] = useState(false);
   const [targetFps, setTargetFps] = useState((saved.current.targetFps as number) ?? 30);
   const [unlimitedFps, setUnlimitedFps] = useState((saved.current.unlimitedFps as boolean) ?? false);
@@ -78,6 +86,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const recordingRef = useRef(false);
   const recordedFrames = useRef<ImageData[]>([]);
   const [recordFrameCount, setRecordFrameCount] = useState(0);
+  // The displayed counter is throttled (~5 Hz); the captured-frames count is
+  // tracked exactly via the ref. setState every step caused a SimulatorView
+  // re-render per captured frame and slowed down the recording itself.
+  const recordCountRef = useRef(0);
+  const lastRecordCountSet = useRef(0);
   useEffect(() => { recordingRef.current = recording; }, [recording]);
 
   // Persist simulator settings
@@ -211,11 +224,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Canvas fills available space
+    // Canvas fills available space. Setting canvas.width / .height resets the
+    // backing store — one of the slowest browser operations and the dominant
+    // per-frame cost on the play hot path. Only re-assign when dimensions
+    // ACTUALLY changed (parent resize, panel collapse, etc).
     const parentW = canvas.parentElement?.clientWidth ?? 500;
     const parentH = canvas.parentElement?.clientHeight ?? 500;
-    canvas.width = parentW;
-    canvas.height = parentH;
+    if (canvas.width !== parentW) canvas.width = parentW;
+    if (canvas.height !== parentH) canvas.height = parentH;
 
     // Build 1:1 pixel source from RGBA buffer.
     // P7 direct render: when the canvas was transferred to the worker, the
@@ -304,7 +320,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const targetFpsRef = useRef(30);
   const lastStepSentTime = useRef(0);
   const lastDrawTime = useRef(0);
-  const nextStepTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // P4 — replaced setTimeout with rAF for steadier pacing aligned to vsync.
+  // setTimeout coalescing made high-FPS playback irregular ("stutter") because
+  // the browser drifts timers under load. rAF resolves at the display's
+  // refresh boundary, so the play loop ticks at predictable intervals.
+  const nextStepRaf = useRef<number | null>(null);
   const unlimitedFpsRef = useRef(false);
   const unlimitedGensRef = useRef(false);
   const endConditionsRef = useRef(model.properties.endConditions);
@@ -447,40 +467,76 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         fpsLastTime.current = now;
       }
 
+      generationRef.current = gen;
       if (unlimitedGensRef.current && playingRef.current) {
         // Unlimited gens: skip drawing, update generation counter periodically
         if (now - lastDrawTime.current >= 500) {
           lastDrawTime.current = now;
           setGeneration(gen);
+          lastGenSetTime.current = now;
         }
         sendNextStep();
       } else {
-        // Normal: draw every result
-        setGeneration(gen);
+        // Normal: throttle the React state update to ~10 Hz so the indicator
+        // panel + transport-bar gen counter don't reconcile every step. Ref
+        // is always current; visible UI ticks at a human-readable rate.
+        if (now - lastGenSetTime.current >= 100) {
+          setGeneration(gen);
+          lastGenSetTime.current = now;
+        }
         draw();
 
-        // GIF frame capture
-        if (recordingRef.current && srcCanvasRef.current) {
-          const src = srcCanvasRef.current;
-          const sctx = src.getContext('2d');
-          if (sctx) {
-            recordedFrames.current.push(sctx.getImageData(0, 0, src.width, src.height));
-            setRecordFrameCount(c => c + 1);
+        // GIF frame capture. Two source paths depending on render mode:
+        // - Non-direct (JS / WASM, or WebGPU pre-P7): srcCanvas's 2D context
+        //   is available; getImageData reads the latest frame.
+        // - Direct render: srcCanvas was transferred to the worker, so the
+        //   2D context is unavailable. The worker (when recording) ships
+        //   colors in the stepped message; we build ImageData directly.
+        if (recordingRef.current) {
+          const w = gridWidth.current, h = gridHeight.current;
+          const stepColors = colorsRef.current;
+          if (directRenderActiveRef.current && stepColors && w && h) {
+            // stepColors is the freshly-readback'd Uint8ClampedArray from
+            // worker (only present in stepped when recording is active).
+            // Copy it before buffering since later steps reuse the slot.
+            const data = new Uint8ClampedArray(stepColors.buffer, stepColors.byteOffset, w * h * 4);
+            recordedFrames.current.push(new ImageData(new Uint8ClampedArray(data), w, h));
+            recordCountRef.current += 1;
+          } else if (srcCanvasRef.current && !directRenderActiveRef.current) {
+            const src = srcCanvasRef.current;
+            let sctx: CanvasRenderingContext2D | null = null;
+            try { sctx = src.getContext('2d'); } catch { /* transferred */ }
+            if (sctx) {
+              recordedFrames.current.push(sctx.getImageData(0, 0, src.width, src.height));
+              recordCountRef.current += 1;
+            }
+          }
+          // Throttle the visible counter to ~5 Hz so we don't re-render the
+          // SimulatorView on every captured frame.
+          if (recordCountRef.current > 0 && now - lastRecordCountSet.current >= 200) {
+            setRecordFrameCount(recordCountRef.current);
+            lastRecordCountSet.current = now;
           }
         }
 
-        // Schedule next step to maintain targetFps rate
+        // Schedule next step to maintain targetFps rate. Uses rAF so the
+        // dispatch lands on a vsync boundary; if the target rate is below
+        // the display's refresh, we wait additional rAFs until elapsed time
+        // matches `msPerFrame`. At unlimited FPS, fires on every rAF.
         if (playingRef.current) {
           const msPerFrame = 1000 / targetFpsRef.current;
-          const elapsed = performance.now() - lastStepSentTime.current;
-          const delay = Math.max(0, msPerFrame - elapsed);
-
-          if (delay <= 1) {
-            sendNextStep();
-          } else {
-            if (nextStepTimer.current) clearTimeout(nextStepTimer.current);
-            nextStepTimer.current = setTimeout(sendNextStep, delay);
-          }
+          if (nextStepRaf.current != null) cancelAnimationFrame(nextStepRaf.current);
+          const tick = () => {
+            nextStepRaf.current = null;
+            if (!playingRef.current) return;
+            const elapsed = performance.now() - lastStepSentTime.current;
+            if (elapsed >= msPerFrame - 0.5) {
+              sendNextStep();
+            } else {
+              nextStepRaf.current = requestAnimationFrame(tick);
+            }
+          };
+          nextStepRaf.current = requestAnimationFrame(tick);
         }
       }
     } else if (msg.type === 'stopEvent') {
@@ -697,6 +753,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
     workerRef.current = worker;
     if (import.meta.env?.DEV) (window as unknown as { __simWorker?: Worker }).__simWorker = worker;
+    generationRef.current = 0;
+    lastGenSetTime.current = 0;
     setGeneration(0);
     setPlaying(false);
     indicatorValuesRef.current = {};
@@ -1205,8 +1263,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (playing) {
       sendNextStep();
     } else {
-      // Stop: cancel any pending timer
-      if (nextStepTimer.current) { clearTimeout(nextStepTimer.current); nextStepTimer.current = null; }
+      // Stop: cancel any pending rAF
+      if (nextStepRaf.current != null) { cancelAnimationFrame(nextStepRaf.current); nextStepRaf.current = null; }
     }
   }, [playing, sendNextStep]);
 
@@ -1239,12 +1297,20 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
   const startRecording = () => {
     recordedFrames.current = [];
+    recordCountRef.current = 0;
+    lastRecordCountSet.current = 0;
     setRecordFrameCount(0);
     setRecording(true);
+    // Tell the worker to include the colors buffer in stepped messages so we
+    // can capture frames under WebGPU direct render (where srcCanvas's 2D
+    // context is unavailable on the main thread). No-op on JS / WASM paths
+    // — those already send colors every frame.
+    workerRef.current?.postMessage({ type: 'setRecording', enabled: true });
   };
 
   const stopRecording = () => {
     setRecording(false);
+    workerRef.current?.postMessage({ type: 'setRecording', enabled: false });
     const frames = recordedFrames.current;
     if (frames.length === 0) return;
     const fw = frames[0]!.width;
@@ -1296,6 +1362,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     a.click();
     URL.revokeObjectURL(url);
     recordedFrames.current = [];
+    recordCountRef.current = 0;
+    lastRecordCountSet.current = 0;
     setRecordFrameCount(0);
   };
 
@@ -1375,7 +1443,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const a = document.createElement('a');
       const name = model.properties.name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '') || 'genesis';
       a.href = url;
-      a.download = `${name}_gen${generation}.png`;
+      a.download = `${name}_gen${generationRef.current}.png`;
       a.click();
       URL.revokeObjectURL(url);
     }, 'image/png');
@@ -1404,7 +1472,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // Also store in model context so next .gcaproj save includes it
       setSimulationState(state);
       const name = model.properties.name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '') || 'genesis';
-      downloadStateFile(state, `${name}_gen${generation}.gcastate`);
+      downloadStateFile(state, `${name}_gen${generationRef.current}.gcastate`);
     };
     workerRef.current.postMessage({ type: 'getState' });
   };
@@ -1534,6 +1602,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // Reset generation counter — saved states restore the grid configuration,
     // not the simulation history. Users building a starting configuration
     // shouldn't inherit the generation count they spent getting there.
+    generationRef.current = 0;
+    lastGenSetTime.current = 0;
     setGeneration(0);
     indicatorValuesRef.current = {};
     indicatorHistoryRef.current = {};
