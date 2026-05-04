@@ -12,7 +12,7 @@ import {
   createWebGPURuntime, destroyWebGPURuntime, isWebGPUAvailable, shaderHashOf,
   setupBuffersAndPipelines, uploadAttrs, uploadNeighborIndices,
   uploadModelAttrs, uploadActiveViewer, uploadIndicators, uploadIndicatorsAt, dispatchStep,
-  dispatchOutputMapping, presentToCanvas, readbackAttrs, readbackColors,
+  dispatchOutputMapping, dispatchColorPassAndPresent, readbackAttrs, readbackColors,
   readbackBatched, unpackAttrsFromReadback, unpackAttrFromReadback, resetStopFlag, seedRngState,
   setupReductionPipelines, dispatchReductions,
   type WebGPURuntime, type ReadbackRegion,
@@ -153,8 +153,15 @@ interface SetUseWebGPUMsg {
  *  message with the current cell-attribute typed arrays. */
 interface ReadbackWebGPUMsg { type: 'readbackWebGPU' }
 interface ColorPassMsg { type: 'colorPass'; activeViewer: string }
+/** Toggle GIF recording: when enabled, the worker readbacks the colors
+ *  buffer after each color pass and includes it in the stepped message so
+ *  the main thread can capture frames. Restores recording functionality
+ *  under WebGPU direct render (where srcCanvas's 2D context is unavailable
+ *  on the main thread). Cost (the per-frame readback) is paid only while
+ *  recording. */
+interface SetRecordingMsg { type: 'setRecording'; enabled: boolean }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -246,6 +253,10 @@ let useWasm = false;
 // step still runs on JS/WASM even when the user has WebGPU selected. This
 // validates the entire control plane without needing buffer/pipeline machinery.
 let useWebGPU = false;
+// GIF recording toggle. When true and direct render is active, sendColors
+// includes the colors buffer (extra readback per frame) so main thread can
+// capture frames. Otherwise direct render skips the colors transfer.
+let recording = false;
 let webgpuRuntime: WebGPURuntime | null = null;
 // Monotonic counter — bumped at the start of every startWebGPUInit. The
 // async init's `.then` captures the value at submit time and bails if it no
@@ -330,17 +341,15 @@ function startWebGPUInit(
       const vals: Record<string, number> = {};
       for (const { idx, id } of standaloneIds) vals[id] = cachedIndicators[idx]!;
       uploadIndicators(rt, vals, isIntEncodedIndicator);
-      // Run the active viewer's outputMapping so the colors buffer matches the
-      // initial state from the very first frame.
-      dispatchOutputMapping(rt, activeViewer);
+      // Run the active viewer's outputMapping + present (single encoder under
+      // direct render — P6) so the canvas shows the initial state from the
+      // very first frame. Falls back to the plain dispatch under non-direct.
       if (rt.directRender) {
-        // P7 — present the initial frame to the OffscreenCanvas. Skip the
-        // colors readback (it's not needed for display) and post a colors-
-        // less stepped message so main thread renders srcCanvas.
-        presentToCanvas(rt);
+        dispatchColorPassAndPresent(rt, activeViewer);
         if (mySeq !== webgpuInitSeq) return;
         self.postMessage({ type: 'stepped', generation });
       } else {
+        dispatchOutputMapping(rt, activeViewer);
         // Pull initial colors back to CPU so the simulator's first paint shows
         // the model's actual visualization (not all-black).
         try { await readbackColors(rt, colors); } catch { /* non-fatal */ }
@@ -830,13 +839,13 @@ function runStepWebGPU(): void {
  *  main thread — no readback or postMessage needed for display. */
 function runColorPassWebGPU(): boolean {
   if (!webgpuRuntime || !webgpuRuntime.stepReady) return false;
-  const ok = dispatchOutputMapping(webgpuRuntime, activeViewer);
-  // When direct render is active, present unconditionally — the colors
-  // buffer holds the latest state written either by the just-dispatched
-  // output mapping OR by an earlier step shader's SetColorViewer-in-step
-  // (the MNCA "Case Colored" / "Decorated Trace" viewer pattern, which has
-  // no dedicated output mapping graph).
-  if (webgpuRuntime.directRender) presentToCanvas(webgpuRuntime);
+  // P6 — combined color-pass + present in one encoder + submit. Saves a
+  // driver round-trip per frame compared to dispatching them separately.
+  // When direct render is on but the active viewer has no Output Mapping
+  // graph (e.g. MNCA "Case Colored" / "Decorated Trace"), the present pass
+  // still runs and pushes whatever the step shader wrote via
+  // SetColorViewer-in-step.
+  const ok = dispatchColorPassAndPresent(webgpuRuntime, activeViewer);
   // O5 — refresh the watched-linked-indicator histograms on GPU. Cheap (a
   // handful of u32 atomics per cell) and the result rides the same
   // batched mapAsync as colors/indicators/stopFlag in the next finalize.
@@ -976,10 +985,20 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
     }
   }
   // P7 — direct render owns the canvas; we never need to readback colors for
-  // display. Save-state / GIF / screenshot paths still call readbackColors
-  // explicitly via their own helpers.
-  const wantColors = (opts.needColors !== false) && !rt.directRender; // default true
-  const wantIndicators = rt.layout.indicatorIds.length > 0;
+  // display. EXCEPT during GIF recording: the main thread's recording loop
+  // needs the per-frame colors to capture into ImageData, since under direct
+  // render srcCanvas's 2D context is unavailable on the main thread. The
+  // readback is the same cost as before P7, but only paid while recording.
+  const wantColors = (opts.needColors !== false) && (!rt.directRender || recording);
+  // P5 — only read back indicators that the UI/end-conditions actually
+  // consume. A model can declare 10 indicators with `watched=false` and they
+  // ALL stayed in the readback path before, paying the per-frame mapAsync
+  // overhead for no observable effect. Now: standalone indicators always
+  // surface (they're scalar, used by end-conditions); linked indicators
+  // only when at least one is watched.
+  const anyLinkedWatched = linkedDefs.some(d => d.watched);
+  const wantIndicators = rt.layout.indicatorIds.length > 0
+    && (standaloneIds.length > 0 || anyLinkedWatched);
   const wantStopFlag = stopMessages.length > 0;
 
   // Pack all readbacks into ONE staging buffer + ONE mapAsync. Pre-batch this
@@ -1026,7 +1045,17 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
       regions.push({ src: rt.attrsReadBuf, srcOffset: a.byteOffset, size: a.count * 4 });
     }
   }
-  if (regions.length === 0) return;
+  if (regions.length === 0) {
+    // Back-pressure: even when there's nothing to read back, we must keep
+    // the worker's dispatch rate from outpacing the GPU's actual execution
+    // rate. Otherwise (typical case: unlimited gens + direct render + no
+    // watched indicators) the worker queues thousands of step batches; when
+    // the user toggles unlimited off, the next color pass has to wait for
+    // the entire backlog to drain before the canvas updates. A bare
+    // `onSubmittedWorkDone()` is a fence with no data transfer.
+    await rt.device.queue.onSubmittedWorkDone();
+    return;
+  }
 
   const sliced = await readbackBatched(rt, regions);
 
@@ -1345,8 +1374,10 @@ function sendColors(): void {
   }
   // P7 — when WebGPU direct render is active, the OffscreenCanvas already
   // holds the latest frame; skip the colors transfer entirely. Main-thread
-  // draw() detects this and only does the zoom/pan composite.
-  if (webgpuRuntime?.directRender) {
+  // draw() detects this and only does the zoom/pan composite. Exception:
+  // when GIF recording is on, finalizeStepWebGPU populated the `colors`
+  // mirror via readback so the main thread can capture frames.
+  if (webgpuRuntime?.directRender && !recording) {
     self.postMessage({ type: 'stepped', generation, indicators });
     return;
   }
@@ -1698,6 +1729,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         useWasm = false;
       }
       self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: webgpuRuntime?.stepReady ?? false });
+      break;
+    }
+
+    case 'setRecording': {
+      recording = !!msg.enabled;
       break;
     }
 

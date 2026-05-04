@@ -890,6 +890,51 @@ export function dispatchOutputMapping(rt: WebGPURuntime, mappingId: string): boo
   return true;
 }
 
+/** P6 — combined color-pass + canvas present in ONE encoder + ONE submit.
+ *  Saves one driver round-trip per frame compared to dispatching them
+ *  separately. Returns true iff the output mapping pipeline ran (caller
+ *  uses this to decide whether to fall back to a step shader for models
+ *  with SetColorViewer-in-step viewers like MNCA). */
+export function dispatchColorPassAndPresent(rt: WebGPURuntime, mappingId: string): boolean {
+  if (!rt.stepReady || !rt.bindGroup) return false;
+  const pipe = ensureOutputPipeline(rt, mappingId);
+  const wantPresent = !!(
+    rt.directRender && rt.canvasContext && rt.presentPipeline
+    && rt.colorsBuf && rt.presentBindGroupLayout
+  );
+  if (!pipe && !wantPresent) return false;
+  const enc = rt.device.createCommandEncoder({ label: 'om+present-enc' });
+  if (pipe) {
+    const omPass = enc.beginComputePass({ label: 'om-pass' });
+    omPass.setPipeline(pipe);
+    omPass.setBindGroup(0, rt.bindGroup);
+    const groups = Math.ceil(rt.layout.total / WORKGROUP_SIZE);
+    omPass.dispatchWorkgroups(Math.max(1, groups));
+    omPass.end();
+  }
+  if (wantPresent) {
+    // The canvas texture handle changes every frame, so the bind group must
+    // be rebuilt; this is intrinsic to the canvas-context API.
+    const tex = rt.canvasContext!.getCurrentTexture();
+    const view = tex.createView();
+    const bg = rt.device.createBindGroup({
+      label: 'present-bg',
+      layout: rt.presentBindGroupLayout!,
+      entries: [
+        { binding: 0, resource: { buffer: rt.colorsBuf! } },
+        { binding: 1, resource: view },
+      ],
+    });
+    const presentPass = enc.beginComputePass({ label: 'present-pass' });
+    presentPass.setPipeline(rt.presentPipeline!);
+    presentPass.setBindGroup(0, bg);
+    presentPass.dispatchWorkgroups(Math.ceil(tex.width / PRESENT_WG), Math.ceil(tex.height / PRESENT_WG));
+    presentPass.end();
+  }
+  rt.device.queue.submit([enc.finish()]);
+  return !!pipe;
+}
+
 // ---------------------------------------------------------------------------
 // Readback — async copy GPU → CPU staging buffer → caller's typed arrays.
 // ---------------------------------------------------------------------------
