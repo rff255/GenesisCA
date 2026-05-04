@@ -13,11 +13,22 @@
 
 import type { WebGPULayout, WebGPULayoutAttr } from '../../modeler/vpl/compiler/webgpu/layout';
 import type { WebGPUEntryPoints } from '../../modeler/vpl/compiler/webgpu/compile';
+import {
+  type LinkedDef, type ReductionPlan,
+  buildReductionPlan, emitReductionShader,
+} from './webgpuReduce';
 
 export interface WebGPURuntimeInit {
   shaderCode: string;
   entryPoints: WebGPUEntryPoints;
   layout: WebGPULayout;
+  /** Optional OffscreenCanvas transferred from the main thread for P7 direct
+   *  render. When provided, the worker dispatches a small compute shader that
+   *  copies the colors storage buffer into the canvas's current texture each
+   *  frame, eliminating the per-frame readback + sendColors round-trip. The
+   *  canvas dimensions must match the grid (gridWidth × gridHeight). When
+   *  absent, the runtime falls back to the existing readbackColors path. */
+  canvas?: OffscreenCanvas;
 }
 
 export interface WebGPURuntime {
@@ -65,6 +76,32 @@ export interface WebGPURuntime {
    *  When a recompile lands with the same hash, we skip the (expensive) async
    *  pipeline rebuilds and reuse what's already on the device. */
   shaderHash: string;
+  /** P7 direct-render — optional canvas state. When set, runColorPassWebGPU
+   *  also dispatches the present pipeline so the canvas is updated in-place
+   *  on the GPU, no per-frame readback. */
+  canvas: OffscreenCanvas | null;
+  canvasContext: GPUCanvasContext | null;
+  canvasFormat: GPUTextureFormat | null;
+  canvasShaderModule: GPUShaderModule | null;
+  presentPipeline: GPUComputePipeline | null;
+  presentBindGroupLayout: GPUBindGroupLayout | null;
+  /** True iff the canvas was successfully configured and the present pipeline
+   *  is built. The worker uses this flag to short-circuit the colors-readback
+   *  + sendColors path. */
+  directRender: boolean;
+
+  /** O5 reduction state — when watched linked indicators have GPU-eligible
+   *  aggregations (total / freq-bool / freq-tag), the reductions buffer is
+   *  populated by per-indicator atomic kernels each step and read back
+   *  instead of doing the equivalent CPU work over a full attrs readback. */
+  reductionsBuf: GPUBuffer | null;
+  reductionShaderModule: GPUShaderModule | null;
+  reductionBindGroupLayout: GPUBindGroupLayout | null;
+  reductionBindGroupAB: GPUBindGroup | null;
+  reductionBindGroupBA: GPUBindGroup | null;
+  /** Pipelines keyed by entry-point name (one per plan entry). */
+  reductionPipelines: Map<string, GPUComputePipeline>;
+  reductionPlan: ReductionPlan | null;
   /** Reusable MAP_READ staging buffers, keyed by power-of-two byte size.
    *  Each readback acquires a buffer ≥ its required size, uses it, then
    *  releases it back to the pool. Avoids per-readback createBuffer +
@@ -165,6 +202,20 @@ export async function createWebGPURuntime(init: WebGPURuntimeInit): Promise<WebG
     outputPipelines: new Map(),
     shaderHash: shaderHashOf(init.shaderCode),
     stagingPool: new Map(),
+    canvas: init.canvas ?? null,
+    canvasContext: null,
+    canvasFormat: null,
+    canvasShaderModule: null,
+    presentPipeline: null,
+    presentBindGroupLayout: null,
+    directRender: false,
+    reductionsBuf: null,
+    reductionShaderModule: null,
+    reductionBindGroupLayout: null,
+    reductionBindGroupAB: null,
+    reductionBindGroupBA: null,
+    reductionPipelines: new Map(),
+    reductionPlan: null,
   };
 }
 
@@ -342,7 +393,232 @@ export async function setupBuffersAndPipelines(rt: WebGPURuntime): Promise<void>
   // the user only visualises one at a time.
   rt.outputPipelines.clear();
 
+  // P7 direct render — when a canvas was transferred, set up its WebGPU
+  // context + the present pipeline. Failures are logged but non-fatal: the
+  // worker falls back to the readback path if directRender stays false.
+  if (rt.canvas) {
+    try { setupDirectRender(rt); }
+    catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[webgpu] direct-render setup failed, falling back to readback path:', e);
+      rt.directRender = false;
+    }
+  }
+
   rt.stepReady = true;
+}
+
+// ---------------------------------------------------------------------------
+// P7 — Direct render via OffscreenCanvas
+// ---------------------------------------------------------------------------
+
+/** WGSL: copy the colors storage buffer (RGBA8 packed u32 per cell) into the
+ *  presented canvas texture. The grid is laid out row-major; the texture
+ *  matches grid dimensions. */
+function presentShaderSource(canvasFormat: GPUTextureFormat): string {
+  return `
+@group(0) @binding(0) var<storage, read> colorsIn : array<u32>;
+@group(0) @binding(1) var canvasOut : texture_storage_2d<${canvasFormat}, write>;
+
+@compute @workgroup_size(8, 8)
+fn presentColors(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let dim = textureDimensions(canvasOut);
+  if (gid.x >= dim.x || gid.y >= dim.y) { return; }
+  let cellIdx = gid.y * dim.x + gid.x;
+  let packed = colorsIn[cellIdx];
+  let r = f32((packed >>  0u) & 0xffu) / 255.0;
+  let g = f32((packed >>  8u) & 0xffu) / 255.0;
+  let b = f32((packed >> 16u) & 0xffu) / 255.0;
+  let a = f32((packed >> 24u) & 0xffu) / 255.0;
+  textureStore(canvasOut, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(r, g, b, a));
+}
+`;
+}
+
+function setupDirectRender(rt: WebGPURuntime): void {
+  if (!rt.canvas || !rt.colorsBuf) return;
+  const ctx = rt.canvas.getContext('webgpu') as GPUCanvasContext | null;
+  if (!ctx) throw new Error('OffscreenCanvas.getContext("webgpu") returned null');
+  const gpu = (typeof navigator !== 'undefined') ? (navigator as Navigator & { gpu: GPU }).gpu : null;
+  // rgba8unorm is universally supported as a texture-storage format and is
+  // what colors are packed as in the storage buffer (RGBA8). Don't trust
+  // getPreferredCanvasFormat() here — bgra8unorm would require us to swap
+  // channel order in the present shader.
+  const format: GPUTextureFormat = 'rgba8unorm';
+  ctx.configure({
+    device: rt.device,
+    format,
+    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_DST,
+    alphaMode: 'opaque',
+  });
+  rt.canvasContext = ctx;
+  rt.canvasFormat = format;
+  // Avoid the unused `gpu` complaint; it'd be needed for getPreferredCanvasFormat.
+  void gpu;
+
+  rt.presentBindGroupLayout = rt.device.createBindGroupLayout({
+    label: 'genesisca-present-bgl',
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+      { binding: 1, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: 'write-only', format, viewDimension: '2d' } },
+    ],
+  });
+  const presentLayout = rt.device.createPipelineLayout({
+    label: 'genesisca-present-pl', bindGroupLayouts: [rt.presentBindGroupLayout],
+  });
+  rt.canvasShaderModule = rt.device.createShaderModule({ code: presentShaderSource(format) });
+  rt.presentPipeline = rt.device.createComputePipeline({
+    label: 'genesisca-present',
+    layout: presentLayout,
+    compute: { module: rt.canvasShaderModule, entryPoint: 'presentColors' },
+  });
+  rt.directRender = true;
+}
+
+const PRESENT_WG = 8;
+
+// ---------------------------------------------------------------------------
+// O5 — GPU-side reduction for watched linked indicators
+// ---------------------------------------------------------------------------
+
+/** (Re)build the reduction shader, pipelines and reductions buffer for the
+ *  given watched linked indicators. Called by the worker after each setup
+ *  or recompile. Tears down any previous reduction state first. */
+export function setupReductionPipelines(rt: WebGPURuntime, linkedDefs: LinkedDef[]): void {
+  // Tear down previous state.
+  if (rt.reductionsBuf) { try { rt.reductionsBuf.destroy(); } catch { /* ok */ } }
+  rt.reductionsBuf = null;
+  rt.reductionShaderModule = null;
+  rt.reductionBindGroupLayout = null;
+  rt.reductionBindGroupAB = null;
+  rt.reductionBindGroupBA = null;
+  rt.reductionPipelines = new Map();
+  rt.reductionPlan = null;
+
+  const plan = buildReductionPlan(linkedDefs, rt.layout);
+  if (plan.entries.length === 0) {
+    // No GPU-eligible watched indicators — leave plan unset; worker stays on
+    // the existing CPU readback path for any remaining watched indicators.
+    return;
+  }
+  rt.reductionPlan = plan;
+
+  rt.reductionsBuf = rt.device.createBuffer({
+    label: 'reductions',
+    size: Math.max(16, plan.totalSlots * 4),
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+  });
+  rt.reductionBindGroupLayout = rt.device.createBindGroupLayout({
+    label: 'genesisca-reduce-bgl',
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+      { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+    ],
+  });
+  // Two bind groups so we read from whichever attrs buffer is "current read"
+  // — mirrors the step shader's ping-pong AB/BA orientation. Without this,
+  // reductions would read stale data after the first step's swap.
+  if (rt.attrsBufA && rt.attrsBufB && rt.reductionsBuf) {
+    rt.reductionBindGroupAB = rt.device.createBindGroup({
+      label: 'reduce-bg-AB',
+      layout: rt.reductionBindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: rt.attrsBufA } },
+        { binding: 1, resource: { buffer: rt.reductionsBuf } },
+      ],
+    });
+    rt.reductionBindGroupBA = rt.device.createBindGroup({
+      label: 'reduce-bg-BA',
+      layout: rt.reductionBindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: rt.attrsBufB } },
+        { binding: 1, resource: { buffer: rt.reductionsBuf } },
+      ],
+    });
+  }
+
+  const wgsl = emitReductionShader(plan, rt.layout.total);
+  rt.reductionShaderModule = rt.device.createShaderModule({ label: 'reduce-shader', code: wgsl });
+  const reduceLayout = rt.device.createPipelineLayout({
+    label: 'reduce-pl', bindGroupLayouts: [rt.reductionBindGroupLayout],
+  });
+  for (const e of plan.entries) {
+    const pipe = rt.device.createComputePipeline({
+      label: `reduce-${e.entry}`,
+      layout: reduceLayout,
+      compute: { module: rt.reductionShaderModule, entryPoint: e.entry },
+    });
+    rt.reductionPipelines.set(e.entry, pipe);
+  }
+}
+
+const REDUCE_WG = 64;
+
+/** Zero the reductions buffer + dispatch every reduction kernel. The
+ *  reductions buffer is re-zeroed every step so accumulation across
+ *  generations stays a worker-side decision (per-gen vs accumulated). */
+export function dispatchReductions(rt: WebGPURuntime): void {
+  if (!rt.reductionPlan || !rt.reductionsBuf || !rt.reductionBindGroupLayout) return;
+  // Zero the buffer via writeBuffer (one queue submission).
+  const zero = new Uint32Array(rt.reductionPlan.totalSlots);
+  rt.device.queue.writeBuffer(rt.reductionsBuf, 0, zero);
+  // Dispatch each kernel using the bind group orientation that matches the
+  // current "read" buffer.
+  const bg = (rt.bindGroup === rt.bindGroupAB ? rt.reductionBindGroupAB : rt.reductionBindGroupBA);
+  if (!bg) return;
+  const enc = rt.device.createCommandEncoder({ label: 'reduce-enc' });
+  const pass = enc.beginComputePass({ label: 'reduce-pass' });
+  pass.setBindGroup(0, bg);
+  const groups = Math.ceil(rt.layout.total / REDUCE_WG);
+  for (const e of rt.reductionPlan.entries) {
+    const pipe = rt.reductionPipelines.get(e.entry);
+    if (!pipe) continue;
+    pass.setPipeline(pipe);
+    pass.dispatchWorkgroups(Math.max(1, groups));
+  }
+  pass.end();
+  rt.device.queue.submit([enc.finish()]);
+}
+
+/** Read the reductions buffer back. Small (typically a few u32s); cheap
+ *  mapAsync. Returns the raw Uint32Array (caller decodes via decodeReductions). */
+export async function readbackReductions(rt: WebGPURuntime): Promise<Uint32Array | null> {
+  if (!rt.reductionPlan || !rt.reductionsBuf) return null;
+  const size = Math.max(16, rt.reductionPlan.totalSlots * 4);
+  const pooled = acquireStagingBuffer(rt, size);
+  const stagingBuf = pooled.buffer;
+  const enc = rt.device.createCommandEncoder({ label: 'reduce-readback-enc' });
+  enc.copyBufferToBuffer(rt.reductionsBuf, 0, stagingBuf, 0, size);
+  rt.device.queue.submit([enc.finish()]);
+  await stagingBuf.mapAsync(GPUMapMode.READ, 0, size);
+  const view = new Uint32Array(stagingBuf.getMappedRange(0, size).slice(0, rt.reductionPlan.totalSlots * 4));
+  stagingBuf.unmap();
+  releaseStagingBuffer(pooled);
+  return view;
+}
+
+/** Dispatch the present pipeline: copy the colors storage buffer into the
+ *  canvas's current texture. No-op when direct render isn't active. */
+export function presentToCanvas(rt: WebGPURuntime): void {
+  if (!rt.directRender || !rt.canvasContext || !rt.presentPipeline || !rt.colorsBuf || !rt.presentBindGroupLayout) return;
+  const tex = rt.canvasContext.getCurrentTexture();
+  const view = tex.createView();
+  const bg = rt.device.createBindGroup({
+    label: 'present-bg',
+    layout: rt.presentBindGroupLayout,
+    entries: [
+      { binding: 0, resource: { buffer: rt.colorsBuf } },
+      { binding: 1, resource: view },
+    ],
+  });
+  const enc = rt.device.createCommandEncoder({ label: 'present-enc' });
+  const pass = enc.beginComputePass({ label: 'present-pass' });
+  pass.setPipeline(rt.presentPipeline);
+  pass.setBindGroup(0, bg);
+  const w = tex.width, h = tex.height;
+  pass.dispatchWorkgroups(Math.ceil(w / PRESENT_WG), Math.ceil(h / PRESENT_WG));
+  pass.end();
+  rt.device.queue.submit([enc.finish()]);
 }
 
 // ---------------------------------------------------------------------------
@@ -749,11 +1025,18 @@ export function destroyWebGPURuntime(rt: WebGPURuntime | null): void {
   if (!rt) return;
   try {
     destroyStagingPool(rt);
+    // P7 — release the canvas context's device binding before destroying the
+    // device so the OffscreenCanvas can be re-acquired by a future runtime
+    // (e.g. after recompile-with-shader-rebuild).
+    if (rt.canvasContext) {
+      try { rt.canvasContext.unconfigure(); } catch { /* ok */ }
+    }
     // attrsReadBuf / attrsWriteBuf are aliases of attrsBufA / attrsBufB —
     // destroy via the underlying refs to avoid double-destroy.
     for (const buf of [
       rt.attrsBufA, rt.attrsBufB, rt.colorsBuf, rt.nbrIndicesBuf,
       rt.modelAttrsBuf, rt.indicatorsBuf, rt.rngStateBuf, rt.controlBuf,
+      rt.reductionsBuf,
     ]) {
       if (buf) buf.destroy();
     }

@@ -411,6 +411,34 @@ export function PropertiesPanelContent() {
             <span style={{ color: '#888', fontSize: '0.62rem', marginTop: 6, display: 'block' }}>
               Targets are mutually exclusive. Switching restarts the simulator (grid state is lost).
             </span>
+            {/* B4B — WebGPU stop-check interval. Greyed unless WebGPU is selected. */}
+            <div
+              className={styles.field}
+              style={{ marginTop: 10, opacity: properties.useWebGPU ? 1 : 0.45 }}
+              title={
+                properties.useWebGPU
+                  ? 'Check stop events every N generations. Higher = faster on WebGPU but may overshoot a stop event by up to N-1 generations. JS / WASM ignore this.'
+                  : 'WebGPU only — enable WebGPU above to use this setting.'
+              }
+            >
+              <label className={styles.fieldLabel}>WebGPU stop-check interval</label>
+              <input
+                className={styles.numberInput}
+                type="number"
+                min={1}
+                step={1}
+                disabled={!properties.useWebGPU}
+                value={properties.webgpuStopCheckInterval ?? 1}
+                onChange={e => {
+                  const n = parseInt(e.target.value, 10);
+                  const k = Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+                  updateProperties({ webgpuStopCheckInterval: k });
+                }}
+              />
+              <span style={{ color: '#888', fontSize: '0.62rem', marginTop: 2, display: 'block' }}>
+                1 = exact (default). Higher values amortize the per-step GPU stall but a stop event may surface up to K-1 generations late.
+              </span>
+            </div>
           </div>
 
           {/* End Conditions — optional, collapsible */}

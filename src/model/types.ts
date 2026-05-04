@@ -117,6 +117,13 @@ export interface ModelProperties {
    *  WebGPU when both flags are somehow set on a loaded file. Sync mode only:
    *  the UI greys out the async controls when this is on. */
   useWebGPU?: boolean;
+  /** WebGPU only: how often (in generations) to read the GPU stop-flag back
+   *  to CPU during a step batch. Each readback is a mapAsync round-trip that
+   *  stalls the GPU pipeline; raising this trades stop-event timing precision
+   *  for throughput. Default 1 (check every step — exact behaviour). With K=8,
+   *  a stop event firing at gen 47 may surface at gen 48–54. JS / WASM
+   *  ignore this. */
+  webgpuStopCheckInterval?: number;
 }
 
 /** A serialized node in the update rules graph */
