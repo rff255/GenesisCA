@@ -41,7 +41,7 @@ function AppInner() {
               1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
           </svg>
         </a>
-        <span className={styles.title}>GenesisCA <span className={styles.version}>v1.10.0</span></span>
+        <span className={styles.title}>GenesisCA <span className={styles.version}>v1.11.0</span></span>
         <div className={styles.navTabs}>
           <button
             className={`${styles.navButton} ${mode === 'modeler' ? styles.navButtonActive : ''}`}
