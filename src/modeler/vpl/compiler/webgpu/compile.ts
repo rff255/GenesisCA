@@ -42,9 +42,6 @@ export interface WebGPUCompileResult {
   /** When set, the WebGPU compile failed (unsupported node, async mode, etc.).
    *  Caller surfaces this and the worker stays on the JS/WASM path. */
   error?: string;
-  /** Compile-time index lookup for stop messages. layout.indicators-style flat
-   *  array — the worker uses this to map `stopFlag` value → message string. */
-  stopMessages: string[];
   viewerIds: Record<string, number>;
 }
 
@@ -73,6 +70,14 @@ interface ArrayRef {
   lenName: string;
   /** Element WGSL type. */
   elemType: WgslType;
+  /** Compile-time upper bound on the array's length (and hence its WGSL
+   *  storage size). Producers tighten this from the global `maxArraySize`
+   *  default — e.g. getNeighborIndexesByTags knows it emits exactly
+   *  `_resolvedTagIndexes.length` entries. Tighter bounds mean smaller
+   *  per-thread `var<function>` arrays and less register pressure on
+   *  workgroup-heavy models like MNCA (was 360-cell × 4-byte arrays per
+   *  thread; with bounds-tightening, often <50). */
+  maxLen: number;
 }
 
 interface CompileCtx {
@@ -306,14 +311,20 @@ function attrElemType(t: string): WgslType {
   return 'i32';
 }
 
-/** Allocate a fresh per-thread `var arr: array<T, MAX>; var arr_len: i32 = 0;`
- *  inside the current function body. Returns the ArrayRef. */
-function allocArray(ctx: CompileCtx, elemType: WgslType, prefix: string = 'arr'): ArrayRef {
+/** Allocate a fresh per-thread `var arr: array<T, CAP>; var arr_len: i32 = 0;`
+ *  inside the current function body. `cap` defaults to `ctx.maxArraySize`
+ *  (safe upper bound = max neighbourhood size in the model); producers should
+ *  pass a tighter bound when they can prove one (e.g. tag count, source.maxLen).
+ *  WGSL requires a compile-time-constant array size — `cap` MUST be a literal
+ *  integer at the JS level. Clamped to >= 1 since WGSL doesn't allow size-0
+ *  arrays. */
+function allocArray(ctx: CompileCtx, elemType: WgslType, prefix: string = 'arr', cap?: number): ArrayRef {
   const name = fresh(ctx, prefix);
   const lenName = `${name}_len`;
-  ctx.lines.push(`  var ${name}: array<${elemType}, ${ctx.maxArraySize}>;`);
+  const size = Math.max(1, Math.min(cap ?? ctx.maxArraySize, ctx.maxArraySize * 2));
+  ctx.lines.push(`  var ${name}: array<${elemType}, ${size}>;`);
   ctx.lines.push(`  var ${lenName}: i32 = 0;`);
-  return { kind: 'array', name, lenName, elemType };
+  return { kind: 'array', name, lenName, elemType, maxLen: size };
 }
 
 /** Expression that loads element `iExpr` from an ArrayRef. */
@@ -388,7 +399,8 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
   getNeighborIndexesByTags: ({ node, ctx }) => {
     const indices: number[] = node.data.config._resolvedTagIndexes
       ? JSON.parse(node.data.config._resolvedTagIndexes as string) : [];
-    const arr = allocArray(ctx, 'i32', 'arrIdxTags');
+    // Output length is exactly indices.length — tightest possible bound.
+    const arr = allocArray(ctx, 'i32', 'arrIdxTags', indices.length);
     for (let k = 0; k < indices.length; k++) {
       ctx.lines.push(`  ${arr.name}[${k}] = ${indices[k]! | 0};`);
     }
@@ -410,7 +422,8 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     if (!inArr) { ctx.errors.push(`filterNeighbors: no array input on "indexes"`); return null; }
 
     const compare = inputs['compare'] ?? { expr: '0.0', type: 'f32' as WgslType };
-    const out = allocArray(ctx, 'i32', 'arrFilter');
+    // filter: |out| ≤ |in|.
+    const out = allocArray(ctx, 'i32', 'arrFilter', inArr.maxLen);
     const k = fresh(ctx, 'fk');
     ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${inArr.lenName}; ${k} = ${k} + 1) {`);
     ctx.lines.push(`    let _idxIn_${k}: i32 = ${arrLoad(inArr, k)};`);
@@ -444,15 +457,19 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     const a = resolveInputArray(ctx, node, 'a');
     const b = resolveInputArray(ctx, node, 'b');
     if (!a || !b) { ctx.errors.push(`joinNeighbors: missing a/b array input`); return null; }
-    const out = allocArray(ctx, 'i32', 'arrJoin');
+    // union ≤ |a| + |b|; intersection ≤ min(|a|, |b|).
+    const cap = op === 'union' ? a.maxLen + b.maxLen : Math.min(a.maxLen, b.maxLen);
+    const out = allocArray(ctx, 'i32', 'arrJoin', cap);
     const i = fresh(ctx, 'ji');
     if (op === 'union') {
-      // Copy A as-is
+      // Copy A as-is (A.len <= maxArraySize, no overflow possible).
       ctx.lines.push(`  for (var ${i}: i32 = 0; ${i} < ${a.lenName}; ${i} = ${i} + 1) {`);
       ctx.lines.push(`    ${out.name}[${out.lenName}] = ${arrLoad(a, i)};`);
       ctx.lines.push(`    ${out.lenName} = ${out.lenName} + 1;`);
       ctx.lines.push(`  }`);
-      // Walk B, skip duplicates
+      // Walk B, skip duplicates. Guard against overflow: union of two full-size
+      // arrays could produce up to 2*maxArraySize distinct elements, and WGSL
+      // writes past the end of a function-scope array are undefined.
       const j = fresh(ctx, 'jj');
       const k = fresh(ctx, 'jk');
       ctx.lines.push(`  for (var ${j}: i32 = 0; ${j} < ${b.lenName}; ${j} = ${j} + 1) {`);
@@ -461,7 +478,7 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
       ctx.lines.push(`    for (var ${k}: i32 = 0; ${k} < ${out.lenName}; ${k} = ${k} + 1) {`);
       ctx.lines.push(`      if (${out.name}[${k}] == _bElem_${j}) { _found_${j} = true; }`);
       ctx.lines.push(`    }`);
-      ctx.lines.push(`    if (!_found_${j}) {`);
+      ctx.lines.push(`    if (!_found_${j} && ${out.lenName} < ${out.maxLen}) {`);
       ctx.lines.push(`      ${out.name}[${out.lenName}] = _bElem_${j};`);
       ctx.lines.push(`      ${out.lenName} = ${out.lenName} + 1;`);
       ctx.lines.push(`    }`);
@@ -501,7 +518,18 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     const cmpRef = inputs['compare'] ?? { expr: '0.0', type: 'f32' as WgslType };
     const cmpHighRef = inputs['compareHigh'] ?? { expr: '0.0', type: 'f32' as WgslType };
 
-    const out = allocArray(ctx, 'i32', 'arrGC');
+    // groupCounting indexes output: matches a subset of the source. Bound is
+    // the source's size — nbr.size for the in-line nbr path, or the array
+    // source's own maxLen.
+    let gcCap: number | undefined;
+    if (isNbrPath) {
+      const nbrSrc = getNbr(ctx.layout, firstSrcNode!.data.config.neighborhoodId as string);
+      gcCap = nbrSrc?.size;
+    } else if (sources.length === 1 && isArrayProducer(firstSrcNode?.data.nodeType ?? '')) {
+      const arrSrc = compileArrayNode(ctx, firstSrc.nodeId);
+      gcCap = arrSrc?.maxLen;
+    }
+    const out = allocArray(ctx, 'i32', 'arrGC', gcCap);
 
     const emitMatch = (loopVar: string, elemFExpr: string) => {
       const cmpF = castTo(cmpRef, 'f32');
@@ -568,7 +596,8 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     if (!inArr) { ctx.errors.push(`getNeighborsAttrByIndexes: no input on "indexes"`); return null; }
 
     const elemType = attrElemType(attr.type);
-    const out = allocArray(ctx, elemType, 'arrNbrAttr');
+    // One output per input index.
+    const out = allocArray(ctx, elemType, 'arrNbrAttr', inArr.maxLen);
     const k = fresh(ctx, 'nak');
     ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${inArr.lenName}; ${k} = ${k} + 1) {`);
     ctx.lines.push(`    let _idxIn_${k}: i32 = ${arrLoad(inArr, k)};`);
@@ -782,11 +811,14 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     const attr = getAttr(ctx.layout, attrId);
     if (!nbr || !attr) { ctx.errors.push(`getNeighborAttributeByIndex: unknown nbr/attr`); return null; }
     const indexRef = inputs['index'] ?? { expr: '0', type: 'i32' as WgslType };
-    const indexExpr = castTo(indexRef, 'i32');
+    // Clamp the user-supplied index to [0, nbr.size - 1]. WGSL out-of-bounds
+    // storage reads return zero, which would silently read "neighbour 0 of
+    // cell 0" (typically the boundary sentinel) instead of failing visibly.
+    const clamped = emitLet(ctx, 'i32', `clamp(${castTo(indexRef, 'i32')}, 0, ${nbr.size - 1})`, 'ni');
     // address into nbr table = nbr.wordOffset + i*size + index
     const nbrSlot = nbr.wordOffset === 0
-      ? `nbrIndices[i32(idx) * ${nbr.size} + ${indexExpr}]`
-      : `nbrIndices[${nbr.wordOffset}i + i32(idx) * ${nbr.size} + ${indexExpr}]`;
+      ? `nbrIndices[i32(idx) * ${nbr.size} + ${clamped.expr}]`
+      : `nbrIndices[${nbr.wordOffset}i + i32(idx) * ${nbr.size} + ${clamped.expr}]`;
     const cellIdx = emitLet(ctx, 'i32', nbrSlot, 'nci');
     // Read attr at cellIdx (cast to u32 for indexing)
     const r = readAttr(attr, `u32(${cellIdx.expr})`, false);
@@ -953,14 +985,14 @@ function emitAggregateOrCount(
     const elem = readAttr(attr, `u32(_nci_${nVar})`, false);
     ctx.lines.push(`    let _e_${nVar}: ${elem.type} = ${elem.expr};`);
     const elemRef: ValueRef = { expr: `_e_${nVar}`, type: elem.type };
-    emitAccumStep(ctx, mode, op, acc, elemRef, accType, cmpRef, cmpHighRef, lo, hi, trackIndex, bestIdx, nVar);
+    emitAccumStep(ctx, mode, op, acc, elemRef, cmpRef, cmpHighRef, lo, hi, trackIndex, bestIdx, nVar);
     ctx.lines.push(`  }`);
   } else if (arrRef) {
     const nVar = fresh(ctx, 'an');
     ctx.lines.push(`  for (var ${nVar}: i32 = 0; ${nVar} < ${arrRef.lenName}; ${nVar} = ${nVar} + 1) {`);
     ctx.lines.push(`    let _e_${nVar}: ${arrRef.elemType} = ${arrLoad(arrRef, nVar)};`);
     const elemRef: ValueRef = { expr: `_e_${nVar}`, type: arrRef.elemType };
-    emitAccumStep(ctx, mode, op, acc, elemRef, accType, cmpRef, cmpHighRef, lo, hi, trackIndex, bestIdx, nVar);
+    emitAccumStep(ctx, mode, op, acc, elemRef, cmpRef, cmpHighRef, lo, hi, trackIndex, bestIdx, nVar);
     ctx.lines.push(`  }`);
   } else {
     // Scalar fold: each source resolved independently
@@ -972,7 +1004,7 @@ function emitAggregateOrCount(
     }
     let i = 0;
     for (const ref of refs) {
-      emitAccumStep(ctx, mode, op, acc, ref, accType, cmpRef, cmpHighRef, lo, hi, trackIndex, bestIdx, `${i}`);
+      emitAccumStep(ctx, mode, op, acc, ref, cmpRef, cmpHighRef, lo, hi, trackIndex, bestIdx, `${i}`);
       i++;
     }
     // Average post-divide for scalar path uses sources.length
@@ -1013,7 +1045,6 @@ function emitAccumStep(
   op: string,
   acc: { name: string; type: WgslType },
   elem: ValueRef,
-  accType: WgslType,
   cmpRef: ValueRef | null,
   cmpHighRef: ValueRef | null,
   lo: string,
@@ -1072,7 +1103,6 @@ function emitAccumStep(
       ctx.lines.push(`    ${acc.name} = ${acc.name} || ${castTo(elem, 'bool')};`);
       break;
   }
-  void accType;
 }
 
 function emitGroupStatement(c: NodeEmitContext): ValueRef | null {
@@ -1140,13 +1170,11 @@ function emitGroupStatement(c: NodeEmitContext): ValueRef | null {
     ctx.lines.push(`    ${accumLine}`);
     ctx.lines.push(`  }`);
   } else {
-    let i = 0;
     for (const s of sources) {
       const r = compileValueNode(ctx, s.nodeId, s.portId);
       if (!r) return null;
       const ef = castTo(r, 'f32');
       ctx.lines.push(`  { let cmp_${acc.name}: bool = (${ef} ${cmpOp} ${xExpr}); ${accumLine} }`);
-      void i; i++;
     }
   }
   const result: ValueRef = { expr: acc.name, type: 'bool' };
@@ -1242,7 +1270,6 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
     const v = inputs['value'];
     const ind = (ctx.model.indicators || []).find(i => i.id === id);
     const isInt = ind && ind.kind === 'standalone' && (ind.dataType === 'integer' || ind.dataType === 'tag');
-    const isBool = ind && ind.kind === 'standalone' && ind.dataType === 'bool';
 
     if (op === 'toggle' || op === 'next' || op === 'previous') {
       // Already rejected by detectWebGPUIncompatibilities — defensive guard.
@@ -1308,7 +1335,6 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
     ctx.lines.push(`    let _r = atomicCompareExchangeWeak(&indicators[${idx}u], _old_u, _new_u);`);
     ctx.lines.push(`    if (_r.exchanged) { break; }`);
     ctx.lines.push(`  }`);
-    void isBool;
     return true;
   },
 
@@ -1848,14 +1874,16 @@ export function compileGraphWebGPU(
   if (expanded.error) {
     return {
       shaderCode: '', entryPoints: { step: 'step', outputMappings: [] },
-      layout, stopMessages: [], viewerIds: {}, error: expanded.error,
+      layout, viewerIds: {}, error: expanded.error,
     };
   }
   graphNodes = expanded.nodes;
   graphEdges = expanded.edges;
 
   // Stop messages flat list — index in `_stopIdx` (1-based; 0 means no stop).
-  // After expansion the graph is flat, so we only walk graphNodes (no macroDef descent).
+  // After expansion the graph is flat, so we only walk graphNodes (no macroDef
+  // descent). The worker uses the JS compiler's stopMessages, but we still
+  // need the local copy for the CompileCtx (used by stopEvent emit + diagnostics).
   const stopMessages: string[] = [];
   for (const n of graphNodes) {
     if (n.data.nodeType === 'stopEvent') {
@@ -1877,7 +1905,7 @@ export function compileGraphWebGPU(
 
   const baseResult: WebGPUCompileResult = {
     shaderCode: '', entryPoints: { step: 'step', outputMappings: [] },
-    layout, stopMessages, viewerIds,
+    layout, viewerIds,
   };
 
   // Compile-time rejections.
@@ -1930,21 +1958,17 @@ export function compileGraphWebGPU(
   }
   sections.push(stepEntry.code);
 
-  // Per-mapping output shaders. Each compiles the OutputMapping graph rooted at
-  // the matching outputMapping node. Mappings without a matching root get a
-  // no-op shader (idempotent w.r.t. colors).
+  // Per-mapping output shaders. Mappings without a matching graph are SKIPPED
+  // entirely — emitting an empty pipeline that does nothing leaves stale colors
+  // in the GPU buffer. Skipping makes `dispatchOutputMapping` return false at
+  // runtime, which the worker treats as a fall-through to writeDefaultColors.
   const outputMappings: Array<{ mappingId: string; entry: string }> = [];
   const outputNodes = graphNodes.filter(n => n.data.nodeType === 'outputMapping');
   for (const m of (model.mappings || [])) {
     if (!m.isAttributeToColor) continue;
     const fnName = 'outputMapping_' + sanitiseWgslName(m.id);
     const root = outputNodes.find(o => (o.data.config as Record<string, unknown>).mappingId === m.id);
-    if (!root) {
-      // No graph — emit empty body; runtime can still bind it.
-      sections.push(emitEntryPoint(fnName, layout.total, '\n'));
-      outputMappings.push({ mappingId: m.id, entry: fnName });
-      continue;
-    }
+    if (!root) continue;
     const omEntry = compileEntry({
       entry: root,
       fnName,

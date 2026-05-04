@@ -9,12 +9,12 @@ import { computeMemoryLayout, type MemoryLayout } from '../../modeler/vpl/compil
 import type { WebGPULayout } from '../../modeler/vpl/compiler/webgpu/layout';
 import type { WebGPUEntryPoints } from '../../modeler/vpl/compiler/webgpu/compile';
 import {
-  createWebGPURuntime, destroyWebGPURuntime, isWebGPUAvailable,
+  createWebGPURuntime, destroyWebGPURuntime, isWebGPUAvailable, shaderHashOf,
   setupBuffersAndPipelines, uploadAttrs, uploadNeighborIndices,
-  uploadModelAttrs, uploadActiveViewer, uploadIndicators, dispatchStep,
-  dispatchOutputMapping, readbackAttrs, readbackColors, readbackIndicators,
-  readbackStopFlag, resetStopFlag, seedRngState,
-  type WebGPURuntime,
+  uploadModelAttrs, uploadActiveViewer, uploadIndicators, uploadIndicatorsAt, dispatchStep,
+  dispatchOutputMapping, readbackAttrs, readbackColors,
+  readbackBatched, unpackAttrsFromReadback, unpackAttrFromReadback, resetStopFlag, seedRngState,
+  type WebGPURuntime, type ReadbackRegion,
 } from './webgpuRuntime';
 
 interface AttrDef {
@@ -240,14 +240,29 @@ function startWebGPUInit(
   layout: WebGPULayout | undefined,
   shaderError: string | undefined,
 ): void {
-  // Tear down any previous runtime first — rebuilt against the new shader/layout.
-  destroyWebGPURuntime(webgpuRuntime);
-  webgpuRuntime = null;
   if (shaderError) {
+    destroyWebGPURuntime(webgpuRuntime);
+    webgpuRuntime = null;
     self.postMessage({ type: 'error', message: '[webgpu] compile failed: ' + shaderError });
     return;
   }
-  if (!shaderCode || !entryPoints || !layout) return;
+  if (!shaderCode || !entryPoints || !layout) {
+    destroyWebGPURuntime(webgpuRuntime);
+    webgpuRuntime = null;
+    return;
+  }
+  // Pipeline cache: when the new shader is byte-identical to the running one,
+  // the layout is identical too (the layout values are baked into the shader
+  // source). We can keep the device + buffers + pipelines and skip the
+  // expensive async device + shaderModule + pipeline rebuild — saves hundreds
+  // of ms on graph-only edits where the user isn't actually changing the rule.
+  if (shaderCode && webgpuRuntime?.stepReady && shaderHashOf(shaderCode) === webgpuRuntime.shaderHash) {
+    self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: true });
+    return;
+  }
+  // Tear down any previous runtime — rebuilt against the new shader/layout.
+  destroyWebGPURuntime(webgpuRuntime);
+  webgpuRuntime = null;
   if (!isWebGPUAvailable()) {
     self.postMessage({ type: 'error', message: '[webgpu] navigator.gpu unavailable in this worker context' });
     return;
@@ -268,7 +283,7 @@ function startWebGPUInit(
       // Initial indicator values
       const vals: Record<string, number> = {};
       for (const { idx, id } of standaloneIds) vals[id] = cachedIndicators[idx]!;
-      uploadIndicators(rt, vals);
+      uploadIndicators(rt, vals, isIntEncodedIndicator);
       // Run the active viewer's outputMapping so the colors buffer matches the
       // initial state from the very first frame.
       dispatchOutputMapping(rt, activeViewer);
@@ -722,20 +737,117 @@ function runStepWebGPU(): void {
   }
   if (linkedDefs.length > 0) linkedResults = {};
   // GPU-side: clear stop flag + reset per-gen indicator slots so atomics start
-  // from defaults each step.
-  resetStopFlag(webgpuRuntime);
+  // from defaults each step. Skip the stopFlag reset when the model has no
+  // stopEvent nodes (the flag never moves off zero) — saves a tiny queue
+  // submission per step but more importantly avoids an unnecessary buffer
+  // touch in the per-step hot path.
+  if (stopMessages.length > 0) resetStopFlag(webgpuRuntime);
   if (standalonePerGenIdx.length > 0) {
-    syncIndicatorsCpuToGpu();
+    // Per-step partial upload: only the per-generation slots need to be
+    // re-seeded with their defaults. Accumulated standalone slots and linked
+    // slots (which run as atomics on GPU) must NOT be touched mid-run.
+    const vals: Record<string, number> = {};
+    for (const i of standalonePerGenIdx) {
+      const id = webgpuRuntime.layout.indicatorIds[i];
+      if (id !== undefined) vals[id] = standaloneDefaults[i]!;
+    }
+    uploadIndicatorsAt(webgpuRuntime, standalonePerGenIdx, vals, isIntEncodedIndicator);
   }
   dispatchStep(webgpuRuntime);
   gpuOwnsAttrs = true;
   generation++;
 }
 
-/** Dispatch the active viewer's outputMapping pipeline (writes to colors). */
+/** Dispatch the active viewer's outputMapping pipeline (writes to colors).
+ *  Returns false when the active mapping has no compiled pipeline (no graph). */
 function runColorPassWebGPU(): boolean {
   if (!webgpuRuntime || !webgpuRuntime.stepReady) return false;
   return dispatchOutputMapping(webgpuRuntime, activeViewer);
+}
+
+/** Refresh the GPU colors buffer after a user interaction (paint, image
+ *  import, writeRegion, clearRegion). When the active viewer has a dedicated
+ *  Output Mapping pipeline, dispatch it. Otherwise, run one Step — models that
+ *  emit colors via SetColorViewer-in-step (e.g. MNCA's "Case Colored") rely on
+ *  the step to update colors. Generation advances by 1 in the fallback case,
+ *  which is the documented behaviour for these models on user interaction. */
+function refreshColorsAfterInputWebGPU(): void {
+  if (!webgpuRuntime || !webgpuRuntime.stepReady) return;
+  if (runColorPassWebGPU()) return;
+  runStepWebGPU();
+}
+
+/** Patch the GPU `attrsRead` buffer for a set of cell indices, copying their
+ *  current values from the CPU `readAttrs` mirror. Used by mutation handlers
+ *  (paint, writeRegion, clearRegion) to update only the touched cells without
+ *  clobbering the rest of the GPU state.
+ *
+ *  Two strategies, picked per attribute:
+ *    - Batched: pack [minIdx..maxIdx] into one ArrayBuffer, single writeBuffer.
+ *      Picked when the bounding range is at most 4× the touched-cell count
+ *      (e.g. one rectangular brush stroke). Pays for some "in-between" cells
+ *      but trades 4-byte queue submissions for one large one.
+ *    - Per-cell: one writeBuffer per touched cell. Picked when the range is
+ *      sparse (e.g. cells at opposite corners) so the batch would be wasteful.
+ *
+ *  We deliberately skip writing to `attrsWriteBuf` — the next step's per-cell
+ *  copy preamble (`attrsWrite[idx] = attrsRead[idx]`) overwrites it before any
+ *  read, so the second writeBuffer is dead bandwidth. */
+function patchWebGPUCells(idxs: ArrayLike<number>): void {
+  const rt = webgpuRuntime;
+  if (!rt || !rt.attrsReadBuf || idxs.length === 0) return;
+  // Sort + dedupe is not required for correctness (writeBuffer with the latest
+  // value wins), but we need min/max for the bounding range. A single linear
+  // pass gets us both without sorting allocations.
+  let minIdx = idxs[0]!;
+  let maxIdx = idxs[0]!;
+  for (let i = 1; i < idxs.length; i++) {
+    const v = idxs[i]!;
+    if (v < minIdx) minIdx = v;
+    if (v > maxIdx) maxIdx = v;
+  }
+  const rangeLen = maxIdx - minIdx + 1;
+  const useBatch = rangeLen <= idxs.length * 4;
+  for (const attr of cellAttrs) {
+    const layoutAttr = rt.layout.attrs.find(a => a.id === attr.id);
+    if (!layoutAttr) continue;
+    const src = readAttrs[attr.id];
+    if (!src) continue;
+    if (useBatch) {
+      const packed = new ArrayBuffer(rangeLen * 4);
+      const view = new DataView(packed);
+      for (let i = 0; i < rangeLen; i++) {
+        const v = src[minIdx + i]!;
+        const off = i * 4;
+        if (attr.type === 'bool') view.setUint32(off, v ? 1 : 0, true);
+        else if (attr.type === 'integer' || attr.type === 'tag') view.setInt32(off, v | 0, true);
+        else if (attr.type === 'float') view.setFloat32(off, v, true);
+        else view.setUint32(off, 0, true);
+      }
+      rt.device.queue.writeBuffer(rt.attrsReadBuf, layoutAttr.byteOffset + minIdx * 4, packed);
+    } else {
+      for (let k = 0; k < idxs.length; k++) {
+        const idx = idxs[k]!;
+        const v = src[idx]!;
+        const buf = new ArrayBuffer(4);
+        const view = new DataView(buf);
+        if (attr.type === 'bool') view.setUint32(0, v ? 1 : 0, true);
+        else if (attr.type === 'integer' || attr.type === 'tag') view.setInt32(0, v | 0, true);
+        else if (attr.type === 'float') view.setFloat32(0, v, true);
+        else view.setUint32(0, 0, true);
+        rt.device.queue.writeBuffer(rt.attrsReadBuf, layoutAttr.byteOffset + idx * 4, buf);
+      }
+    }
+  }
+}
+
+/** Compiler bitcasts standalone integer/tag/bool indicators as i32; everything
+ *  else (standalone float, linked f32 placeholders) is bitcast as f32. The
+ *  upload path must agree with `getIndicator`'s read encoding. */
+function isIntEncodedIndicator(id: string): boolean {
+  const ind = indicatorsList.find(i => i.id === id);
+  if (!ind || ind.kind !== 'standalone') return false;
+  return ind.dataType === 'integer' || ind.dataType === 'tag' || ind.dataType === 'bool';
 }
 
 /** Push CPU indicator values (from cachedIndicators) into the GPU atomics
@@ -747,7 +859,7 @@ function syncIndicatorsCpuToGpu(): void {
   for (const { idx, id } of standaloneIds) vals[id] = cachedIndicators[idx]!;
   // Linked indicator atomic slots stay 0 — linked aggregation runs CPU-side
   // post-step from the readback attrs.
-  uploadIndicators(webgpuRuntime, vals);
+  uploadIndicators(webgpuRuntime, vals, isIntEncodedIndicator);
 }
 
 /** Pull GPU buffers back to the CPU mirrors that sendColors + stop-event +
@@ -765,41 +877,100 @@ function syncIndicatorsCpuToGpu(): void {
 async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: boolean } = {}): Promise<void> {
   const rt = webgpuRuntime;
   if (!rt || !rt.stepReady) return;
-  const wantAttrs = !!opts.needAttrs || (linkedDefs.some(d => d.watched));
+  const fullAttrs = !!opts.needAttrs;
+  // Watched linked indicators need only the source attr's bytes, not the whole
+  // attrs region. Build a deduped list of source attr ids.
+  const watchedAttrIds = new Set<string>();
+  if (!fullAttrs) {
+    for (const d of linkedDefs) {
+      if (d.watched && d.attrId) watchedAttrIds.add(d.attrId);
+    }
+  }
   const wantColors = opts.needColors !== false; // default true
-  const tasks: Array<Promise<unknown>> = [];
-  if (wantColors) tasks.push(readbackColors(rt, colors));
-  if (rt.layout.indicatorIds.length > 0) {
-    tasks.push(
-      readbackIndicators(rt, (id, raw) => {
-        // Decode based on indicator type. Standalone integer/tag/bool: bitcast<i32>.
-        // Everything else (standalone float, linked-as-f32 placeholder): bitcast<f32>.
-        const ind = indicatorsList.find(i => i.id === id);
-        if (ind && ind.kind === 'standalone' && (ind.dataType === 'integer' || ind.dataType === 'tag' || ind.dataType === 'bool')) {
-          // Reinterpret u32 → i32
-          return raw | 0;
-        }
-        // f32 bitcast
-        const buf = new ArrayBuffer(4);
-        new Uint32Array(buf)[0] = raw;
-        return new Float32Array(buf)[0]!;
-      }).then(decoded => {
-        for (const { idx, id } of standaloneIds) {
-          if (id in decoded) cachedIndicators[idx] = decoded[id]!;
-        }
-      }),
-    );
+  const wantIndicators = rt.layout.indicatorIds.length > 0;
+  const wantStopFlag = stopMessages.length > 0;
+
+  // Pack all readbacks into ONE staging buffer + ONE mapAsync. Pre-batch this
+  // saves N-1 GPU↔CPU round trips per finalize compared to the old
+  // one-buffer-per-source pattern. Particularly impactful on the per-step
+  // stop-event path (was 2 mapAsyncs per step, now 1).
+  const regions: ReadbackRegion[] = [];
+  let colorsRegion = -1, indicatorsRegion = -1, stopRegion = -1, attrsRegion = -1;
+  // For selective attrs readback, store the (attrId, region slot) pairs so we
+  // can decode each attr's slice back into readAttrs.
+  const attrSlots: Array<{ attrId: string; slot: number }> = [];
+  if (wantColors && rt.colorsBuf) {
+    colorsRegion = regions.length;
+    regions.push({ src: rt.colorsBuf, srcOffset: 0, size: rt.layout.colorsBytes });
   }
-  tasks.push(readbackStopFlag(rt).then(v => { stopFlag[0] = v >>> 0; }));
-  if (wantAttrs) {
-    tasks.push(readbackAttrs(rt, readAttrs).then(() => {
-      // After readback, the CPU mirror is in sync.
-      gpuOwnsAttrs = false;
-      // Linked indicator aggregation runs against the live readAttrs.
-      if (linkedDefs.length > 0) computeLinkedIndicatorsFromBuffer();
-    }));
+  if (wantIndicators && rt.indicatorsBuf) {
+    indicatorsRegion = regions.length;
+    regions.push({ src: rt.indicatorsBuf, srcOffset: 0, size: rt.layout.indicatorsBytes });
   }
-  await Promise.all(tasks);
+  if (wantStopFlag && rt.controlBuf) {
+    stopRegion = regions.length;
+    regions.push({ src: rt.controlBuf, srcOffset: 0, size: 16 });
+  }
+  if (fullAttrs && rt.attrsReadBuf) {
+    // Save / explicit full readback path.
+    attrsRegion = regions.length;
+    regions.push({ src: rt.attrsReadBuf, srcOffset: 0, size: rt.layout.attrsBytes });
+  } else if (watchedAttrIds.size > 0 && rt.attrsReadBuf) {
+    // Selective: only watched linked indicators' source attrs. The other
+    // attrs stay GPU-resident — gpuOwnsAttrs remains true.
+    for (const attrId of watchedAttrIds) {
+      const a = rt.layout.attrs.find(x => x.id === attrId);
+      if (!a) continue;
+      attrSlots.push({ attrId, slot: regions.length });
+      regions.push({ src: rt.attrsReadBuf, srcOffset: a.byteOffset, size: a.count * 4 });
+    }
+  }
+  if (regions.length === 0) return;
+
+  const sliced = await readbackBatched(rt, regions);
+
+  if (colorsRegion >= 0) {
+    const c = sliced[colorsRegion]!;
+    const limit = Math.min(colors.length, c.length);
+    for (let i = 0; i < limit; i++) colors[i] = c[i]!;
+  }
+  if (indicatorsRegion >= 0) {
+    const bytes = sliced[indicatorsRegion]!;
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const f32buf = new ArrayBuffer(4);
+    const f32view = new Float32Array(f32buf);
+    const u32view = new Uint32Array(f32buf);
+    for (const { idx, id } of standaloneIds) {
+      const slot = rt.layout.indicatorIds.indexOf(id);
+      if (slot < 0) continue;
+      const raw = view.getUint32(slot * 4, true);
+      if (isIntEncodedIndicator(id)) {
+        cachedIndicators[idx] = raw | 0;
+      } else {
+        u32view[0] = raw;
+        cachedIndicators[idx] = f32view[0]!;
+      }
+    }
+  }
+  if (stopRegion >= 0) {
+    const bytes = sliced[stopRegion]!;
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    // controlBuf layout: [activeViewer (i32), stopFlag (atomic u32), pad, pad]
+    stopFlag[0] = view.getUint32(rt.layout.controlOffsets.stopFlag, true) >>> 0;
+  }
+  if (attrsRegion >= 0) {
+    unpackAttrsFromReadback(rt.layout, sliced[attrsRegion]!, readAttrs);
+    gpuOwnsAttrs = false;
+    if (linkedDefs.length > 0) computeLinkedIndicatorsFromBuffer();
+  } else if (attrSlots.length > 0) {
+    for (const { attrId, slot } of attrSlots) {
+      unpackAttrFromReadback(rt.layout, attrId, sliced[slot]!, readAttrs);
+    }
+    // Only a subset of attrs were pulled — the rest remain GPU-only-fresh.
+    // Subsequent paint with `gpuOwnsAttrs && icEntry?.fn` will trigger a full
+    // readback (B5 fix), so leaving gpuOwnsAttrs=true is safe.
+    computeLinkedIndicatorsFromBuffer();
+  }
 }
 
 
@@ -1157,12 +1328,13 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             lastFinalize = Promise.resolve();
           }
           await lastFinalize;
-          // After all steps, dispatch the active viewer's outputMapping.
-          if (!msg.skipColorPass) {
-            const ok = runColorPassWebGPU();
-            if (!ok) writeDefaultColors();
-          }
-          await finalizeStepWebGPU({ needColors: true });
+          // After all steps, dispatch the active viewer's outputMapping if its
+          // pipeline exists. When it doesn't (no Output Mapping graph), the
+          // step shader itself may have written to the colors buffer via
+          // SetColorViewer-in-step (e.g. MNCA's "Case Colored"). Either way we
+          // read the GPU colors buffer back — that's the canonical source.
+          if (!msg.skipColorPass) runColorPassWebGPU();
+          await finalizeStepWebGPU({ needColors: !msg.skipColorPass });
           sendColors();
           if (stoppedByEvent !== null) {
             self.postMessage({ type: 'stopEvent', message: stoppedByEvent });
@@ -1211,85 +1383,83 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         writeAttrs = attrsB;
       }
 
-      for (const c of msg.cells) {
-        if (c.row < 0 || c.row >= height || c.col < 0 || c.col >= width) continue;
-        const idx = c.row * width + c.col;
-
-        if (wasmIcFn) {
-          // WASM InputColor writes via baked-in attrWriteOffset.
-          wasmIcFn(idx, c.r, c.g, c.b);
-          if (isSync) {
-            // Sync mode: also copy the per-cell write back to read so the next
-            // paint / step sees it. (Async shares one buffer so this is a no-op.)
-            for (const attr of cellAttrs) {
-              readAttrs[attr.id]![idx] = writeAttrs[attr.id]![idx]!;
-            }
-          }
-        } else if (icEntry?.fn) {
-          // InputColor writes to writeAttrs (via w_<attr>[idx])
-          // We need to also update readAttrs so the next step sees the change
-          icEntry.fn(c.r, c.g, c.b, ...buildCellArgs(idx));
-          // Copy written values back to read buffer so step() sees them
-          for (const attr of cellAttrs) {
-            readAttrs[attr.id]![idx] = writeAttrs[attr.id]![idx]!;
-          }
-        } else {
-          // Fallback: set first bool attribute in BOTH buffers
-          const firstBool = cellAttrs.find(a => a.type === 'bool');
-          if (firstBool) {
-            readAttrs[firstBool.id]![idx] = 1;
-            writeAttrs[firstBool.id]![idx] = 1;
-          }
-        }
-      }
-
-      // Update display.
-      const hasColorPass = outputMappingFns.some(f => f.mappingId === activeViewer);
-      const webgpuPaint = useWebGPU && webgpuRuntime?.stepReady;
-      if (webgpuPaint && webgpuRuntime) {
-        // Paint only writes a few cells. The other cells must keep their CURRENT
-        // GPU state, which after a play sequence is the evolved generation —
-        // NOT the stale pre-play CPU mirror. uploadAttrs sends the WHOLE region,
-        // so blindly re-uploading without first pulling the live GPU state would
-        // clobber the evolved cells with whatever readAttrs held last (typically
-        // the randomize/reset baseline). Symptom: brushing during/after Play
-        // appears to "reset the board to random". Fix: ALWAYS upload the patched
-        // single-cell write directly, leaving the rest of the GPU buffer alone.
+      const paintApply = (): void => {
         for (const c of msg.cells) {
           if (c.row < 0 || c.row >= height || c.col < 0 || c.col >= width) continue;
           const idx = c.row * width + c.col;
-          for (const attr of cellAttrs) {
-            const layoutAttr = webgpuRuntime.layout.attrs.find(a => a.id === attr.id);
-            if (!layoutAttr) continue;
-            const v = readAttrs[attr.id]![idx]!;
-            const buf = new ArrayBuffer(4);
-            const view = new DataView(buf);
-            if (attr.type === 'bool') view.setUint32(0, v ? 1 : 0, true);
-            else if (attr.type === 'integer' || attr.type === 'tag') view.setInt32(0, v | 0, true);
-            else if (attr.type === 'float') view.setFloat32(0, v, true);
-            else view.setUint32(0, 0, true);
-            const off = layoutAttr.byteOffset + idx * 4;
-            webgpuRuntime.device.queue.writeBuffer(webgpuRuntime.attrsReadBuf!, off, buf);
-            webgpuRuntime.device.queue.writeBuffer(webgpuRuntime.attrsWriteBuf!, off, buf);
+
+          if (wasmIcFn) {
+            // WASM InputColor writes via baked-in attrWriteOffset.
+            wasmIcFn(idx, c.r, c.g, c.b);
+            if (isSync) {
+              // Sync mode: also copy the per-cell write back to read so the next
+              // paint / step sees it. (Async shares one buffer so this is a no-op.)
+              for (const attr of cellAttrs) {
+                readAttrs[attr.id]![idx] = writeAttrs[attr.id]![idx]!;
+              }
+            }
+          } else if (icEntry?.fn) {
+            // InputColor writes to writeAttrs (via w_<attr>[idx])
+            // We need to also update readAttrs so the next step sees the change
+            icEntry.fn(c.r, c.g, c.b, ...buildCellArgs(idx));
+            // Copy written values back to read buffer so step() sees them
+            for (const attr of cellAttrs) {
+              readAttrs[attr.id]![idx] = writeAttrs[attr.id]![idx]!;
+            }
+          } else {
+            // Fallback: set first bool attribute in BOTH buffers
+            const firstBool = cellAttrs.find(a => a.type === 'bool');
+            if (firstBool) {
+              readAttrs[firstBool.id]![idx] = 1;
+              writeAttrs[firstBool.id]![idx] = 1;
+            }
           }
         }
-        uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
-        // gpuOwnsAttrs stays as-is — we only patched a few cells; the rest of
-        // the CPU mirror is still stale w.r.t. the evolved GPU state.
-        const ok = runColorPassWebGPU();
-        if (!ok) writeDefaultColors();
-        finalizeStepWebGPU({ needColors: true }).then(() => sendColors())
-          .catch(e => self.postMessage({ type: 'error', message: '[webgpu] paint colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
+
+        // Update display.
+        const hasColorPass = outputMappingFns.some(f => f.mappingId === activeViewer);
+        const webgpuPaint = useWebGPU && webgpuRuntime?.stepReady;
+        if (webgpuPaint && webgpuRuntime) {
+          // Patch only the painted cells — the rest of the GPU buffer holds
+          // evolved state we mustn't clobber with the stale CPU mirror.
+          const idxs: number[] = [];
+          for (const c of msg.cells) {
+            if (c.row < 0 || c.row >= height || c.col < 0 || c.col >= width) continue;
+            idxs.push(c.row * width + c.col);
+          }
+          patchWebGPUCells(idxs);
+          uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
+          // gpuOwnsAttrs stays as-is — we only patched a few cells; the rest of
+          // the CPU mirror is still stale w.r.t. the evolved GPU state.
+          refreshColorsAfterInputWebGPU();
+          finalizeStepWebGPU({ needColors: true }).then(() => sendColors())
+            .catch(e => self.postMessage({ type: 'error', message: '[webgpu] paint colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
+          return;
+        }
+        if (hasColorPass) {
+          runColorPass();
+        } else if (stepFn) {
+          runStep();
+        } else {
+          writeDefaultColors();
+        }
+        sendColors();
+      };
+
+      // After a play sequence on WebGPU, the live state lives on GPU and the
+      // CPU `readAttrs` is stale. JS InputColor functions that read-before-write
+      // (toggle-style brushes) would compute against pre-play values. Pull the
+      // live state down once before iterating cells. (WASM is mutually exclusive
+      // with WebGPU, so wasmIcFn isn't reachable when webgpuRuntime is live.)
+      if (useWebGPU && webgpuRuntime?.stepReady && gpuOwnsAttrs && icEntry?.fn) {
+        const rt = webgpuRuntime;
+        readbackAttrs(rt, readAttrs).then(() => {
+          gpuOwnsAttrs = false;
+          paintApply();
+        }).catch(e => self.postMessage({ type: 'error', message: '[webgpu] paint readback failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
         break;
       }
-      if (hasColorPass) {
-        runColorPass();
-      } else if (stepFn) {
-        runStep();
-      } else {
-        writeDefaultColors();
-      }
-      sendColors();
+      paintApply();
       break;
     }
 
@@ -1302,8 +1472,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
         syncIndicatorsCpuToGpu();
         gpuOwnsAttrs = false;
-        const ok = runColorPassWebGPU();
-        if (!ok) writeDefaultColors();
+        runColorPassWebGPU();
         finalizeStepWebGPU({ needColors: true }).then(() => sendColors())
           .catch(e => self.postMessage({ type: 'error', message: '[webgpu] randomize colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
         break;
@@ -1321,8 +1490,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
         syncIndicatorsCpuToGpu();
         gpuOwnsAttrs = false;
-        const ok = runColorPassWebGPU();
-        if (!ok) writeDefaultColors();
+        runColorPassWebGPU();
         finalizeStepWebGPU({ needColors: true }).then(() => sendColors())
           .catch(e => self.postMessage({ type: 'error', message: '[webgpu] reset colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
         break;
@@ -1414,6 +1582,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         cachedModelAttrs[key] = val;
       }
       syncModelAttrsToMemory();
+      // Mirror the change into the GPU uniform buffer so the next step shader
+      // sees the updated values (without this, WebGPU silently runs against
+      // the stale modelAttrs frozen at init time).
+      if (webgpuRuntime?.stepReady) {
+        uploadModelAttrs(webgpuRuntime, cachedModelAttrs as Record<string, number>);
+      }
       break;
     }
 
@@ -1466,8 +1640,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         uploadAttrs(webgpuRuntime, readAttrs);
         uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
         gpuOwnsAttrs = false;
-        const ok = runColorPassWebGPU();
-        if (!ok) writeDefaultColors();
+        refreshColorsAfterInputWebGPU();
         finalizeStepWebGPU({ needColors: true }).then(() => sendColors())
           .catch(e => self.postMessage({ type: 'error', message: '[webgpu] importImage colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
         break;
@@ -1488,8 +1661,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       const webgpuCp = useWebGPU && webgpuRuntime?.stepReady;
       if (webgpuCp && webgpuRuntime) {
         uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
-        const ok = runColorPassWebGPU();
-        if (!ok) writeDefaultColors();
+        runColorPassWebGPU();
         finalizeStepWebGPU({ needColors: true }).then(() => sendColors())
           .catch(e => self.postMessage({ type: 'error', message: '[webgpu] colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
         break;
@@ -1666,35 +1838,21 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // Update display via the Output Mapping if one exists, else leave colors as-is.
       const webgpuWrite = useWebGPU && webgpuRuntime?.stepReady;
       if (webgpuWrite && webgpuRuntime) {
-        // Same gpuOwnsAttrs-aware pattern as paint: only patch the cells in the
-        // write region; leave the rest of the GPU buffer alone so any in-flight
-        // evolved state isn't clobbered.
+        // Patch only the cells in the write region; leave the rest of the GPU
+        // buffer alone so any in-flight evolved state isn't clobbered.
+        const idxs: number[] = [];
         for (let dr = 0; dr < msg.h; dr++) {
           const dstRow = msg.row + dr;
           if (dstRow < 0 || dstRow >= height) continue;
           for (let dc = 0; dc < msg.w; dc++) {
             const dstCol = msg.col + dc;
             if (dstCol < 0 || dstCol >= width) continue;
-            const idx = dstRow * width + dstCol;
-            for (const attr of cellAttrs) {
-              const layoutAttr = webgpuRuntime.layout.attrs.find(a => a.id === attr.id);
-              if (!layoutAttr) continue;
-              const v = readAttrs[attr.id]![idx]!;
-              const buf = new ArrayBuffer(4);
-              const view = new DataView(buf);
-              if (attr.type === 'bool') view.setUint32(0, v ? 1 : 0, true);
-              else if (attr.type === 'integer' || attr.type === 'tag') view.setInt32(0, v | 0, true);
-              else if (attr.type === 'float') view.setFloat32(0, v, true);
-              else view.setUint32(0, 0, true);
-              const off = layoutAttr.byteOffset + idx * 4;
-              webgpuRuntime.device.queue.writeBuffer(webgpuRuntime.attrsReadBuf!, off, buf);
-              webgpuRuntime.device.queue.writeBuffer(webgpuRuntime.attrsWriteBuf!, off, buf);
-            }
+            idxs.push(dstRow * width + dstCol);
           }
         }
+        patchWebGPUCells(idxs);
         uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
-        const ok = runColorPassWebGPU();
-        if (!ok) writeDefaultColors();
+        refreshColorsAfterInputWebGPU();
         finalizeStepWebGPU({ needColors: true }).then(() => sendColors())
           .catch(e => self.postMessage({ type: 'error', message: '[webgpu] writeRegion colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
         break;
@@ -1728,32 +1886,19 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       const webgpuClear = useWebGPU && webgpuRuntime?.stepReady;
       if (webgpuClear && webgpuRuntime) {
         // Patch only the cleared region; preserve the rest of the GPU state.
+        const idxs: number[] = [];
         for (let dr = 0; dr < msg.h; dr++) {
           const dstRow = msg.row + dr;
           if (dstRow < 0 || dstRow >= height) continue;
           for (let dc = 0; dc < msg.w; dc++) {
             const dstCol = msg.col + dc;
             if (dstCol < 0 || dstCol >= width) continue;
-            const idx = dstRow * width + dstCol;
-            for (const attr of cellAttrs) {
-              const layoutAttr = webgpuRuntime.layout.attrs.find(a => a.id === attr.id);
-              if (!layoutAttr) continue;
-              const v = readAttrs[attr.id]![idx]!;
-              const buf = new ArrayBuffer(4);
-              const view = new DataView(buf);
-              if (attr.type === 'bool') view.setUint32(0, v ? 1 : 0, true);
-              else if (attr.type === 'integer' || attr.type === 'tag') view.setInt32(0, v | 0, true);
-              else if (attr.type === 'float') view.setFloat32(0, v, true);
-              else view.setUint32(0, 0, true);
-              const off = layoutAttr.byteOffset + idx * 4;
-              webgpuRuntime.device.queue.writeBuffer(webgpuRuntime.attrsReadBuf!, off, buf);
-              webgpuRuntime.device.queue.writeBuffer(webgpuRuntime.attrsWriteBuf!, off, buf);
-            }
+            idxs.push(dstRow * width + dstCol);
           }
         }
+        patchWebGPUCells(idxs);
         uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
-        const ok = runColorPassWebGPU();
-        if (!ok) writeDefaultColors();
+        refreshColorsAfterInputWebGPU();
         finalizeStepWebGPU({ needColors: true }).then(() => sendColors())
           .catch(e => self.postMessage({ type: 'error', message: '[webgpu] clearRegion colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
         break;

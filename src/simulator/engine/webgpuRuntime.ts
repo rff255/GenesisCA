@@ -29,7 +29,13 @@ export interface WebGPURuntime {
   /** True once buffers + pipelines are ready and runStepWebGPU can be called. */
   stepReady: boolean;
 
-  // Buffers
+  // Attrs ping-pong buffers. attrsBufA + attrsBufB are the two underlying
+  // GPU buffers, owned for the lifetime of the runtime. attrsReadBuf and
+  // attrsWriteBuf are references that flip after every dispatchStep — the
+  // "current read" is always whichever buffer holds the live state. This
+  // eliminates the per-step W→R copy that used to dominate large grids.
+  attrsBufA: GPUBuffer | null;
+  attrsBufB: GPUBuffer | null;
   attrsReadBuf: GPUBuffer | null;
   attrsWriteBuf: GPUBuffer | null;
   colorsBuf: GPUBuffer | null;
@@ -41,6 +47,9 @@ export interface WebGPURuntime {
 
   // Pipelines
   bindGroupLayout: GPUBindGroupLayout | null;
+  /** Two bind group orientations; the active one flips after each step. */
+  bindGroupAB: GPUBindGroup | null;
+  bindGroupBA: GPUBindGroup | null;
   bindGroup: GPUBindGroup | null;
   stepPipeline: GPUComputePipeline | null;
   /** One pipeline per outputMapping_<id>. Keyed by mappingId. */
@@ -58,7 +67,7 @@ export function isWebGPUAvailable(): boolean {
 /** Lightweight string hash — good enough to detect "is this the same shader?".
  *  Not crypto-secure; collisions don't break correctness, just cause an
  *  unnecessary skip. */
-function shaderHashOf(s: string): string {
+export function shaderHashOf(s: string): string {
   let h = 5381;
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
   return `${h.toString(36)}_${s.length}`;
@@ -111,10 +120,13 @@ export async function createWebGPURuntime(init: WebGPURuntimeInit): Promise<WebG
     layout: init.layout,
     entryPoints: init.entryPoints,
     stepReady: false,
+    attrsBufA: null, attrsBufB: null,
     attrsReadBuf: null, attrsWriteBuf: null, colorsBuf: null,
     nbrIndicesBuf: null, modelAttrsBuf: null, indicatorsBuf: null,
     rngStateBuf: null, controlBuf: null,
-    bindGroupLayout: null, bindGroup: null, stepPipeline: null,
+    bindGroupLayout: null,
+    bindGroupAB: null, bindGroupBA: null, bindGroup: null,
+    stepPipeline: null,
     outputPipelines: new Map(),
     shaderHash: shaderHashOf(init.shaderCode),
   };
@@ -139,14 +151,17 @@ export async function setupBuffersAndPipelines(rt: WebGPURuntime): Promise<void>
     );
   }
 
-  rt.attrsReadBuf = device.createBuffer({
-    label: 'attrsRead', size: layout.attrsBytes,
+  rt.attrsBufA = device.createBuffer({
+    label: 'attrsA', size: layout.attrsBytes,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
   });
-  rt.attrsWriteBuf = device.createBuffer({
-    label: 'attrsWrite', size: layout.attrsBytes,
+  rt.attrsBufB = device.createBuffer({
+    label: 'attrsB', size: layout.attrsBytes,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
   });
+  // Initial orientation: A is "read", B is "write". After each step they swap.
+  rt.attrsReadBuf = rt.attrsBufA;
+  rt.attrsWriteBuf = rt.attrsBufB;
   rt.colorsBuf = device.createBuffer({
     label: 'colors', size: layout.colorsBytes,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
@@ -186,20 +201,36 @@ export async function setupBuffersAndPipelines(rt: WebGPURuntime): Promise<void>
     ],
   });
 
-  rt.bindGroup = device.createBindGroup({
-    label: 'genesisca-bg',
+  // Two bind group orientations for ping-pong. AB reads A and writes B; BA
+  // reads B and writes A. After each step we flip rt.bindGroup so the just-
+  // written buffer becomes the next step's "read" — no per-step copy needed.
+  const otherEntries = [
+    { binding: 2, resource: { buffer: rt.colorsBuf } },
+    { binding: 3, resource: { buffer: rt.nbrIndicesBuf } },
+    { binding: 4, resource: { buffer: rt.modelAttrsBuf } },
+    { binding: 5, resource: { buffer: rt.indicatorsBuf } },
+    { binding: 6, resource: { buffer: rt.rngStateBuf } },
+    { binding: 7, resource: { buffer: rt.controlBuf } },
+  ];
+  rt.bindGroupAB = device.createBindGroup({
+    label: 'genesisca-bg-AB',
     layout: rt.bindGroupLayout,
     entries: [
-      { binding: 0, resource: { buffer: rt.attrsReadBuf } },
-      { binding: 1, resource: { buffer: rt.attrsWriteBuf } },
-      { binding: 2, resource: { buffer: rt.colorsBuf } },
-      { binding: 3, resource: { buffer: rt.nbrIndicesBuf } },
-      { binding: 4, resource: { buffer: rt.modelAttrsBuf } },
-      { binding: 5, resource: { buffer: rt.indicatorsBuf } },
-      { binding: 6, resource: { buffer: rt.rngStateBuf } },
-      { binding: 7, resource: { buffer: rt.controlBuf } },
+      { binding: 0, resource: { buffer: rt.attrsBufA } },
+      { binding: 1, resource: { buffer: rt.attrsBufB } },
+      ...otherEntries,
     ],
   });
+  rt.bindGroupBA = device.createBindGroup({
+    label: 'genesisca-bg-BA',
+    layout: rt.bindGroupLayout,
+    entries: [
+      { binding: 0, resource: { buffer: rt.attrsBufB } },
+      { binding: 1, resource: { buffer: rt.attrsBufA } },
+      ...otherEntries,
+    ],
+  });
+  rt.bindGroup = rt.bindGroupAB;
 
   const pipelineLayout = device.createPipelineLayout({
     label: 'genesisca-pl', bindGroupLayouts: [rt.bindGroupLayout],
@@ -260,6 +291,26 @@ function writeAttrIntoView(view: DataView, a: WebGPULayoutAttr, src: ArrayLike<n
   }
 }
 
+/** Unpack a single attribute's bytes (size = count*4) into `dstAttrs[attrId]`.
+ *  Used by selective readbacks where only one attr was copied out. */
+export function unpackAttrFromReadback(
+  layout: WebGPULayout, attrId: string, srcU8: Uint8Array, dstAttrs: WorkerAttrArrays,
+): void {
+  const a = layout.attrs.find(x => x.id === attrId);
+  if (!a) return;
+  const dst = dstAttrs[a.id];
+  if (!dst) return;
+  const view = new DataView(srcU8.buffer, srcU8.byteOffset, srcU8.byteLength);
+  const n = Math.min(a.count, dst.length);
+  if (a.type === 'bool') {
+    for (let i = 0; i < n; i++) (dst as { [k: number]: number })[i] = view.getUint32(i * 4, true) ? 1 : 0;
+  } else if (a.type === 'integer' || a.type === 'tag') {
+    for (let i = 0; i < n; i++) (dst as { [k: number]: number })[i] = view.getInt32(i * 4, true);
+  } else if (a.type === 'float') {
+    for (let i = 0; i < n; i++) (dst as { [k: number]: number })[i] = view.getFloat32(i * 4, true);
+  }
+}
+
 export function unpackAttrsFromReadback(
   layout: WebGPULayout, srcU8: Uint8Array, dstAttrs: WorkerAttrArrays,
 ): void {
@@ -283,21 +334,22 @@ export function unpackAttrsFromReadback(
 // ---------------------------------------------------------------------------
 
 export function uploadAttrs(rt: WebGPURuntime, srcAttrs: WorkerAttrArrays): void {
-  if (!rt.attrsReadBuf || !rt.attrsWriteBuf) return;
+  if (!rt.attrsReadBuf) return;
   const packed = packAttrsForUpload(rt.layout, srcAttrs);
+  // Only attrsReadBuf needs the new state. The next step's per-cell copy
+  // preamble (`attrsWrite[idx] = attrsRead[idx]`) populates attrsWriteBuf
+  // before any read, so a second writeBuffer here is dead bandwidth.
   rt.device.queue.writeBuffer(rt.attrsReadBuf, 0, packed);
-  rt.device.queue.writeBuffer(rt.attrsWriteBuf, 0, packed);
 }
 
 /** Upload a single attribute (efficient path — only sends the bytes for one
  *  attr's region, not the whole grid). Used by mutation handlers when only
  *  one attr was touched. */
 export function uploadAttr(rt: WebGPURuntime, attrId: string, src: ArrayLike<number>): void {
-  if (!rt.attrsReadBuf || !rt.attrsWriteBuf) return;
+  if (!rt.attrsReadBuf) return;
   const packed = packAttrIntoUpload(rt.layout, attrId, src);
   if (!packed) return;
   rt.device.queue.writeBuffer(rt.attrsReadBuf, packed.offset, packed.bytes);
-  rt.device.queue.writeBuffer(rt.attrsWriteBuf, packed.offset, packed.bytes);
 }
 
 export function uploadNeighborIndices(rt: WebGPURuntime, indices: Record<string, Int32Array>): void {
@@ -353,24 +405,54 @@ export function seedRngState(rt: WebGPURuntime, globalSeed: number): void {
   rt.device.queue.writeBuffer(rt.rngStateBuf, 0, buf);
 }
 
-/** Initialise indicators buffer to zeros (or to encoded default values, when
- *  the worker passes them). For now: zero — defaults are populated on the JS
- *  side via the existing initIndicators. */
-export function uploadIndicators(rt: WebGPURuntime, values: Record<string, number>): void {
+/** Upload encoded indicator values. The compiler bitcasts the u32 atomic word
+ *  as either f32 (most ops, linked sums, standalone float) or i32 (standalone
+ *  integer/tag/bool reads via getIndicator). The caller passes
+ *  `isIntEncoded(id)` so per-id encoding lines up with the compiler — without
+ *  it, an integer indicator default of `5` would land as 0x40A00000 and
+ *  getIndicator's bitcast<i32> would read back ~1.08 billion. */
+export function uploadIndicators(
+  rt: WebGPURuntime,
+  values: Record<string, number>,
+  isIntEncoded?: (id: string) => boolean,
+): void {
   if (!rt.indicatorsBuf) return;
   const buf = new Uint8Array(rt.layout.indicatorsBytes);
   const view = new DataView(buf.buffer);
-  // Indicators are bit-encoded as either f32 or i32. Without indicator metadata
-  // here we go with f32 — matches the dominant case (linked = always f32 sums,
-  // standalone float). Integer-typed standalone indicators bitcast their value
-  // through u32 too. The compiler emits the matching read/write encoding.
   let i = 0;
   for (const id of rt.layout.indicatorIds) {
     const v = values[id] ?? 0;
-    view.setFloat32(i * 4, v, true);
+    if (isIntEncoded && isIntEncoded(id)) view.setInt32(i * 4, v | 0, true);
+    else view.setFloat32(i * 4, v, true);
     i++;
   }
   rt.device.queue.writeBuffer(rt.indicatorsBuf, 0, buf);
+}
+
+/** Upload values for a specific subset of indicator slot indices (by index in
+ *  layout.indicatorIds). Used by the per-step path to reset only the per-gen
+ *  standalone slots, not the entire indicators buffer. Each slot is written
+ *  with its own writeBuffer at the slot's byte offset — for small subsets
+ *  (typical: 1–3 per-gen indicators per model) this is cheaper than packing
+ *  the full buffer and one big writeBuffer. */
+export function uploadIndicatorsAt(
+  rt: WebGPURuntime,
+  slotIdxs: ArrayLike<number>,
+  values: Record<string, number>,
+  isIntEncoded?: (id: string) => boolean,
+): void {
+  if (!rt.indicatorsBuf || slotIdxs.length === 0) return;
+  const word = new ArrayBuffer(4);
+  const view = new DataView(word);
+  for (let k = 0; k < slotIdxs.length; k++) {
+    const i = slotIdxs[k]!;
+    const id = rt.layout.indicatorIds[i];
+    if (id === undefined) continue;
+    const v = values[id] ?? 0;
+    if (isIntEncoded && isIntEncoded(id)) view.setInt32(0, v | 0, true);
+    else view.setFloat32(0, v, true);
+    rt.device.queue.writeBuffer(rt.indicatorsBuf, i * 4, word);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -379,9 +461,12 @@ export function uploadIndicators(rt: WebGPURuntime, values: Record<string, numbe
 
 const WORKGROUP_SIZE = 64;
 
-/** Encode + submit one step: dispatch step, copy attrsWrite → attrsRead. */
+/** Encode + submit one step. After dispatch we swap the read/write buffer
+ *  references AND flip the active bind group so the next step reads the
+ *  just-written buffer. No copyBufferToBuffer — that copy used to dominate
+ *  step time on large grids (~1 GB/s of bandwidth at 5000×5000). */
 export function dispatchStep(rt: WebGPURuntime): void {
-  if (!rt.stepReady || !rt.stepPipeline || !rt.bindGroup || !rt.attrsReadBuf || !rt.attrsWriteBuf) return;
+  if (!rt.stepReady || !rt.stepPipeline || !rt.bindGroup) return;
   const enc = rt.device.createCommandEncoder({ label: 'step-enc' });
   const pass = enc.beginComputePass({ label: 'step-pass' });
   pass.setPipeline(rt.stepPipeline);
@@ -389,8 +474,14 @@ export function dispatchStep(rt: WebGPURuntime): void {
   const groups = Math.ceil(rt.layout.total / WORKGROUP_SIZE);
   pass.dispatchWorkgroups(Math.max(1, groups));
   pass.end();
-  enc.copyBufferToBuffer(rt.attrsWriteBuf, 0, rt.attrsReadBuf, 0, rt.layout.attrsBytes);
   rt.device.queue.submit([enc.finish()]);
+  // Swap orientation. The buffer that was just written becomes "current read"
+  // (output mappings and next-step inputs see the new state); the previous
+  // "read" buffer is recycled as the next step's "write" target.
+  const prevRead = rt.attrsReadBuf;
+  rt.attrsReadBuf = rt.attrsWriteBuf;
+  rt.attrsWriteBuf = prevRead;
+  rt.bindGroup = rt.bindGroup === rt.bindGroupAB ? rt.bindGroupBA : rt.bindGroupAB;
 }
 
 /** Dispatch one output mapping pipeline (writes to colors buffer). */
@@ -412,6 +503,60 @@ export function dispatchOutputMapping(rt: WebGPURuntime, mappingId: string): boo
 // ---------------------------------------------------------------------------
 // Readback — async copy GPU → CPU staging buffer → caller's typed arrays.
 // ---------------------------------------------------------------------------
+
+/** A region to copy out of a GPU buffer in a batched readback. */
+export interface ReadbackRegion {
+  /** Source buffer (must allow COPY_SRC). */
+  src: GPUBuffer;
+  /** Byte offset within the source buffer. */
+  srcOffset: number;
+  /** Number of bytes to copy. Must be a multiple of 4. */
+  size: number;
+}
+
+/** Batched readback: pack N regions into ONE staging buffer with sub-offsets,
+ *  copy each via copyBufferToBuffer, then issue a SINGLE mapAsync. Returns a
+ *  Uint8Array per region (already sliced to detach from the staging buffer
+ *  before unmap). Callers decode each region's bytes per their own format.
+ *
+ *  Replaces the previous per-readback pattern (one staging buffer + one
+ *  mapAsync per source) — saves N-1 GPU→CPU round trips on the per-step path
+ *  where indicators + stopFlag (+ optionally colors / attrs) are all needed
+ *  together. */
+export async function readbackBatched(
+  rt: WebGPURuntime,
+  regions: ReadbackRegion[],
+): Promise<Uint8Array[]> {
+  if (regions.length === 0) return [];
+  // Each sub-region is naturally 4-byte-aligned (all our buffers are u32-typed),
+  // so a simple running offset works without alignment padding.
+  const offsets: number[] = [];
+  let total = 0;
+  for (const r of regions) {
+    offsets.push(total);
+    total += r.size;
+  }
+  const stagingBuf = rt.device.createBuffer({
+    size: Math.max(total, 16),
+    usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+  });
+  const enc = rt.device.createCommandEncoder({ label: 'readback-batched-enc' });
+  for (let i = 0; i < regions.length; i++) {
+    const r = regions[i]!;
+    enc.copyBufferToBuffer(r.src, r.srcOffset, stagingBuf, offsets[i]!, r.size);
+  }
+  rt.device.queue.submit([enc.finish()]);
+  await stagingBuf.mapAsync(GPUMapMode.READ);
+  const mapped = new Uint8Array(stagingBuf.getMappedRange());
+  const out: Uint8Array[] = [];
+  for (let i = 0; i < regions.length; i++) {
+    const off = offsets[i]!;
+    out.push(mapped.slice(off, off + regions[i]!.size));
+  }
+  stagingBuf.unmap();
+  stagingBuf.destroy();
+  return out;
+}
 
 export async function readbackAttrs(rt: WebGPURuntime, dstAttrs: WorkerAttrArrays): Promise<void> {
   if (!rt.attrsReadBuf) return;
@@ -494,8 +639,10 @@ export async function readbackStopFlag(rt: WebGPURuntime): Promise<number> {
 export function destroyWebGPURuntime(rt: WebGPURuntime | null): void {
   if (!rt) return;
   try {
+    // attrsReadBuf / attrsWriteBuf are aliases of attrsBufA / attrsBufB —
+    // destroy via the underlying refs to avoid double-destroy.
     for (const buf of [
-      rt.attrsReadBuf, rt.attrsWriteBuf, rt.colorsBuf, rt.nbrIndicesBuf,
+      rt.attrsBufA, rt.attrsBufB, rt.colorsBuf, rt.nbrIndicesBuf,
       rt.modelAttrsBuf, rt.indicatorsBuf, rt.rngStateBuf, rt.controlBuf,
     ]) {
       if (buf) buf.destroy();
