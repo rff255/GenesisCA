@@ -92,10 +92,16 @@ ${body}
 /** Emit per-cell bulk-copy lines for sync mode: every attr's slot at `idx` is
  *  copied from attrsRead to attrsWrite. Per-node SetAttribute emitters then
  *  overwrite specific cells. Anything not written by a node retains its
- *  previous-generation value. */
-export function emitPerCellCopyPreamble(layout: WebGPULayout): string {
+ *  previous-generation value.
+ *
+ *  Optional `skipAttrIds`: attrs that are guaranteed to be written by a
+ *  setAttribute on every flow path (and never read via updateAttribute) — the
+ *  copy is dead bandwidth for them. The compiler's dataflow analysis (P8) is
+ *  responsible for proving the guarantee; this helper just trusts the set. */
+export function emitPerCellCopyPreamble(layout: WebGPULayout, skipAttrIds?: ReadonlySet<string>): string {
   const lines: string[] = [];
   for (const a of layout.attrs) {
+    if (skipAttrIds && skipAttrIds.has(a.id)) continue;
     const w = a.wordOffset;
     if (w === 0) {
       lines.push(`  attrsWrite[idx] = attrsRead[idx];`);
@@ -106,27 +112,3 @@ export function emitPerCellCopyPreamble(layout: WebGPULayout): string {
   return lines.join('\n') + (lines.length > 0 ? '\n' : '');
 }
 
-/** Helper exprs used by per-node value/flow emitters. */
-export function attrReadExpr(wordOffset: number, idxExpr: string = 'idx'): string {
-  return wordOffset === 0 ? `attrsRead[${idxExpr}]` : `attrsRead[${wordOffset}u + ${idxExpr}]`;
-}
-export function attrReadExprWriteBuf(wordOffset: number, idxExpr: string = 'idx'): string {
-  return wordOffset === 0 ? `attrsWrite[${idxExpr}]` : `attrsWrite[${wordOffset}u + ${idxExpr}]`;
-}
-export function attrWriteSlot(wordOffset: number, idxExpr: string = 'idx'): string {
-  return wordOffset === 0 ? `attrsWrite[${idxExpr}]` : `attrsWrite[${wordOffset}u + ${idxExpr}]`;
-}
-
-/** Convert a packed u32 word into a typed scalar for the given attribute type. */
-export function decodeAttr(wgslType: 'f32' | 'i32' | 'bool', expr: string): string {
-  if (wgslType === 'f32') return `bitcast<f32>(${expr})`;
-  if (wgslType === 'i32') return `bitcast<i32>(${expr})`;
-  // bool: stored as 0/1 in u32. Compare to 0 to get a WGSL bool.
-  return `(${expr} != 0u)`;
-}
-/** Convert a typed scalar back into a u32 word for storage. */
-export function encodeAttr(wgslType: 'f32' | 'i32' | 'bool', expr: string): string {
-  if (wgslType === 'f32') return `bitcast<u32>(${expr})`;
-  if (wgslType === 'i32') return `bitcast<u32>(${expr})`;
-  return `select(0u, 1u, ${expr})`;
-}

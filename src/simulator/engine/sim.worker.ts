@@ -233,6 +233,12 @@ let useWasm = false;
 // validates the entire control plane without needing buffer/pipeline machinery.
 let useWebGPU = false;
 let webgpuRuntime: WebGPURuntime | null = null;
+// Monotonic counter — bumped at the start of every startWebGPUInit. The
+// async init's `.then` captures the value at submit time and bails if it no
+// longer matches (a newer init landed, OR the worker is being torn down).
+// Without this, an old in-flight init can race the new one and clobber
+// `webgpuRuntime` with a now-orphaned runtime — racy and hard to repro.
+let webgpuInitSeq = 0;
 
 function startWebGPUInit(
   shaderCode: string | undefined,
@@ -240,6 +246,9 @@ function startWebGPUInit(
   layout: WebGPULayout | undefined,
   shaderError: string | undefined,
 ): void {
+  // Bump the sequence FIRST so any in-flight init's `.then` callback sees a
+  // mismatch and bails instead of writing to webgpuRuntime.
+  const mySeq = ++webgpuInitSeq;
   if (shaderError) {
     destroyWebGPURuntime(webgpuRuntime);
     webgpuRuntime = null;
@@ -272,9 +281,22 @@ function startWebGPUInit(
   // true. Step 7 (Save/Load State) introduces the await path.
   void createWebGPURuntime({ shaderCode, entryPoints, layout })
     .then(async rt => {
+      // A newer init started while we were awaiting — the orphaned `rt`
+      // belongs to a stale sequence. Destroy it and bail without touching
+      // webgpuRuntime, which now holds (or is about to hold) the newer one.
+      if (mySeq !== webgpuInitSeq) {
+        destroyWebGPURuntime(rt);
+        return;
+      }
       webgpuRuntime = rt;
       // Build buffers + pipeline, upload initial CPU state, seed per-cell RNG.
       await setupBuffersAndPipelines(rt);
+      // Re-check after the second await — same race window.
+      if (mySeq !== webgpuInitSeq) {
+        destroyWebGPURuntime(rt);
+        if (webgpuRuntime === rt) webgpuRuntime = null;
+        return;
+      }
       uploadAttrs(rt, readAttrs);
       uploadNeighborIndices(rt, nbrIndices);
       uploadModelAttrs(rt, cachedModelAttrs as Record<string, number>);
@@ -290,12 +312,16 @@ function startWebGPUInit(
       // Pull initial colors back to CPU so the simulator's first paint shows
       // the model's actual visualization (not all-black).
       try { await readbackColors(rt, colors); } catch { /* non-fatal */ }
+      if (mySeq !== webgpuInitSeq) return;
       self.postMessage({ type: 'stepped', generation, colors: new Uint8ClampedArray(colors) });
       // eslint-disable-next-line no-console
-      console.log(`[webgpu] runtime ready: device + shader + buffers + ${rt.outputPipelines.size + 1} pipeline(s)`);
+      console.log(`[webgpu] runtime ready: device + shader + buffers + step pipeline (${rt.entryPoints.outputMappings.length} viewer pipeline(s) lazily built)`);
       self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: rt.stepReady });
     })
     .catch((e: unknown) => {
+      // Same staleness check on the failure path — don't clobber the newer
+      // runtime's state with a stale error message.
+      if (mySeq !== webgpuInitSeq) return;
       webgpuRuntime = null;
       const msg = (e instanceof Error) ? e.message : String(e);
       self.postMessage({ type: 'error', message: '[webgpu] init failed: ' + msg });
