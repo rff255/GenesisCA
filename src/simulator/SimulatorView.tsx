@@ -495,21 +495,30 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         if (recordingRef.current) {
           const w = gridWidth.current, h = gridHeight.current;
           const stepColors = colorsRef.current;
-          if (directRenderActiveRef.current && stepColors && w && h) {
+          // Defensive dimension check: never push a frame whose size doesn't
+          // match the first captured frame. Protects the GIF encode from
+          // corrupted output if anything (mode toggle, off-cycle resize,
+          // race) sneaks a different-sized frame past initWorker's
+          // stop-recording reset.
+          const expected = recordedFrames.current[0];
+          let frame: ImageData | null = null;
+          if (directRenderActiveRef.current && stepColors && w && h && stepColors.length >= w * h * 4) {
             // stepColors is the freshly-readback'd Uint8ClampedArray from
             // worker (only present in stepped when recording is active).
             // Copy it before buffering since later steps reuse the slot.
             const data = new Uint8ClampedArray(stepColors.buffer, stepColors.byteOffset, w * h * 4);
-            recordedFrames.current.push(new ImageData(new Uint8ClampedArray(data), w, h));
-            recordCountRef.current += 1;
+            frame = new ImageData(new Uint8ClampedArray(data), w, h);
           } else if (srcCanvasRef.current && !directRenderActiveRef.current) {
             const src = srcCanvasRef.current;
             let sctx: CanvasRenderingContext2D | null = null;
             try { sctx = src.getContext('2d'); } catch { /* transferred */ }
-            if (sctx) {
-              recordedFrames.current.push(sctx.getImageData(0, 0, src.width, src.height));
-              recordCountRef.current += 1;
+            if (sctx && src.width > 0 && src.height > 0) {
+              frame = sctx.getImageData(0, 0, src.width, src.height);
             }
+          }
+          if (frame && (!expected || (frame.width === expected.width && frame.height === expected.height))) {
+            recordedFrames.current.push(frame);
+            recordCountRef.current += 1;
           }
           // Throttle the visible counter to ~5 Hz so we don't re-render the
           // SimulatorView on every captured frame.
@@ -603,6 +612,22 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
   // Reusable worker initializer (used by structural effect and dimension/image apply)
   const initWorkerWithDimensions = useCallback((w: number, h: number) => {
+    // If a recording is in progress, abandon it before tearing down the
+    // worker. Otherwise the captured frames (sized to the OUTGOING worker's
+    // grid) would mix with future captures (sized to the INCOMING worker's
+    // grid), and the GIF builder would encode the mixed buffer at the first
+    // frame's dimensions — silently producing a broken / wrong-sized GIF
+    // that only partially reflects what the user saw.
+    if (recordingRef.current) {
+      recordingRef.current = false;
+      setRecording(false);
+      recordedFrames.current = [];
+      recordCountRef.current = 0;
+      lastRecordCountSet.current = 0;
+      setRecordFrameCount(0);
+      // Tell the worker to stop including colors in stepped messages.
+      workerRef.current?.postMessage({ type: 'setRecording', enabled: false });
+    }
     workerRef.current?.terminate();
     const result = compileModel();
     const firstViewer = model.mappings.find(m => m.isAttributeToColor);
@@ -685,6 +710,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // existing readback-then-putImageData path runs.
     let canvasForWorker: OffscreenCanvas | undefined;
     directRenderActiveRef.current = false;
+    // Drop any prior srcCanvas reference — if the previous worker init went
+    // through the direct-render path, srcCanvasRef holds a transferred canvas
+    // whose 2D context is permanently unavailable. Re-using it here would
+    // make all later getImageData / drawImage calls fail silently (visible
+    // symptom: GIF recording captures zero frames after a WebGPU→JS toggle).
+    srcCanvasRef.current = null;
     const offscreenSupported = typeof HTMLCanvasElement !== 'undefined'
       && typeof (HTMLCanvasElement.prototype as { transferControlToOffscreen?: unknown }).transferControlToOffscreen === 'function';
     if (model.properties.useWebGPU && !webgpuResult.error && offscreenSupported) {
