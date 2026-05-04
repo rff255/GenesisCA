@@ -21,7 +21,6 @@
 
 import type { CAModel, GraphNode, GraphEdge } from '../../../../model/types';
 import { getNodeDef } from '../../nodes/registry';
-import type { PortDef } from '../../types';
 import {
   ValType, F64, I32, OP_F64_ABS, OP_F64_ADD, OP_F64_CONVERT_I32_U, OP_F64_DIV,
   OP_F64_EQ, OP_F64_FLOOR, OP_F64_GE, OP_F64_GT, OP_F64_LE, OP_F64_LT,
@@ -36,6 +35,7 @@ import {
 } from './emitter';
 import type { MemoryLayout } from './layout';
 import { classifyLoopInvariant } from '../loopInvariant';
+import { getInlineValue, parseInlineNum } from '../inlinePort';
 
 export interface WasmCompileResult {
   bytes: Uint8Array;
@@ -166,32 +166,6 @@ interface WasmCompileCtx {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function getInlineValue(port: PortDef, config: Record<string, string | number | boolean>): string | undefined {
-  if (!port.inlineWidget) return undefined;
-  const configKey = `_port_${port.id}`;
-  const val = config[configKey];
-  if (val === undefined || val === '') return port.defaultValue;
-  const s = String(val);
-  if (port.inlineWidget === 'bool') return s === 'true' ? '1' : '0';
-  return s;
-}
-
-/**
- * Parse an inline-widget string into a numeric value. Handles the same coercions
- * the JS compiler gets for free by emitting raw expressions: 'true' / 'false'
- * become 1 / 0 (the SetAttribute number widget can carry these strings if the
- * underlying attribute is bool), numeric strings parse via parseFloat, anything
- * else falls back to 0. Used everywhere an inline port value is materialised
- * into a constant for WASM emission.
- */
-function parseInlineNum(raw: string | undefined, fallback: number = 0): number {
-  if (raw === undefined) return fallback;
-  if (raw === 'true') return 1;
-  if (raw === 'false') return 0;
-  const n = parseFloat(raw);
-  return Number.isFinite(n) ? n : fallback;
-}
 
 function attrValType(t: string): ValType {
   return t === 'float' ? F64 : I32;

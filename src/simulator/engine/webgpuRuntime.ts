@@ -47,17 +47,38 @@ export interface WebGPURuntime {
 
   // Pipelines
   bindGroupLayout: GPUBindGroupLayout | null;
+  /** Pipeline layout retained for lazy output-mapping pipeline creation —
+   *  see ensureOutputPipeline / dispatchOutputMapping. */
+  pipelineLayout: GPUPipelineLayout | null;
   /** Two bind group orientations; the active one flips after each step. */
   bindGroupAB: GPUBindGroup | null;
   bindGroupBA: GPUBindGroup | null;
   bindGroup: GPUBindGroup | null;
   stepPipeline: GPUComputePipeline | null;
-  /** One pipeline per outputMapping_<id>. Keyed by mappingId. */
+  /** One pipeline per outputMapping_<id>. Built lazily on first dispatch
+   *  rather than upfront — most models have several mappings but the user
+   *  only views one at a time, so building all of them at init wastes
+   *  hundreds of ms of GPU pipeline compilation per recompile. Keyed by
+   *  mappingId. */
   outputPipelines: Map<string, GPUComputePipeline>;
   /** SHA-ish hash of the WGSL source the current pipelines were built from.
    *  When a recompile lands with the same hash, we skip the (expensive) async
    *  pipeline rebuilds and reuse what's already on the device. */
   shaderHash: string;
+  /** Reusable MAP_READ staging buffers, keyed by power-of-two byte size.
+   *  Each readback acquires a buffer ≥ its required size, uses it, then
+   *  releases it back to the pool. Avoids per-readback createBuffer +
+   *  destroy churn (~tens of µs each, plus VRAM fragmentation pressure).
+   *  Destroyed wholesale by destroyWebGPURuntime. */
+  stagingPool: Map<number, PooledStagingBuffer[]>;
+}
+
+interface PooledStagingBuffer {
+  buffer: GPUBuffer;
+  /** Actual allocated size (≥ requested; rounded up to next power of two,
+   *  min 64 bytes). */
+  size: number;
+  inUse: boolean;
 }
 
 export function isWebGPUAvailable(): boolean {
@@ -98,7 +119,20 @@ export async function createWebGPURuntime(init: WebGPURuntimeInit): Promise<WebG
     const v = limits[k];
     if (typeof v === 'number') required[k] = v;
   }
-  const device = await adapter.requestDevice({ requiredLimits: required });
+  // Some adapters report supported limits the device can't actually back; the
+  // first requestDevice call then fails with an opaque error. Retry once with
+  // default limits so we degrade gracefully — models that fit within the
+  // default 128 MB storage-buffer cap still work, larger grids will surface
+  // the more specific "buffer size exceeds device limit" error in
+  // setupBuffersAndPipelines.
+  let device: GPUDevice | null = null;
+  try {
+    device = await adapter.requestDevice({ requiredLimits: required });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[webgpu] requestDevice with adapter max limits failed, retrying with defaults:', err);
+    device = await adapter.requestDevice();
+  }
   if (!device) throw new Error('WebGPU device request returned null');
 
   device.addEventListener('uncapturederror', (ev: Event) => {
@@ -125,11 +159,74 @@ export async function createWebGPURuntime(init: WebGPURuntimeInit): Promise<WebG
     nbrIndicesBuf: null, modelAttrsBuf: null, indicatorsBuf: null,
     rngStateBuf: null, controlBuf: null,
     bindGroupLayout: null,
+    pipelineLayout: null,
     bindGroupAB: null, bindGroupBA: null, bindGroup: null,
     stepPipeline: null,
     outputPipelines: new Map(),
     shaderHash: shaderHashOf(init.shaderCode),
+    stagingPool: new Map(),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Staging buffer pool — reusable MAP_READ buffers for readback paths.
+// Buffers are sized in power-of-two byte classes (min 64) so a small number of
+// distinct sizes covers all readbacks (stopFlag/control: 16 → 64 class,
+// indicators: ~tens of bytes → 64 class, colors+attrs: large → matching class).
+// ---------------------------------------------------------------------------
+
+/** Round up to the next power of two, with a 64-byte floor. Keeps the number
+ *  of distinct size classes small (a 100 MB readback and a 50 MB readback
+ *  share the 128 MB class) so the pool doesn't fragment. */
+function poolSizeClass(byteSize: number): number {
+  const min = 64;
+  let n = Math.max(min, byteSize | 0);
+  // Round up to next power of two.
+  n--;
+  n |= n >>> 1; n |= n >>> 2; n |= n >>> 4;
+  n |= n >>> 8; n |= n >>> 16;
+  return (n + 1) >>> 0;
+}
+
+/** Acquire a staging buffer with at least `byteSize` bytes of MAP_READ +
+ *  COPY_DST capacity. The returned buffer is marked in-use; release via
+ *  releaseStagingBuffer once the unmap completes. */
+function acquireStagingBuffer(rt: WebGPURuntime, byteSize: number): PooledStagingBuffer {
+  const sizeClass = poolSizeClass(byteSize);
+  let bucket = rt.stagingPool.get(sizeClass);
+  if (!bucket) {
+    bucket = [];
+    rt.stagingPool.set(sizeClass, bucket);
+  }
+  for (const entry of bucket) {
+    if (!entry.inUse) {
+      entry.inUse = true;
+      return entry;
+    }
+  }
+  const buf = rt.device.createBuffer({
+    label: `staging-${sizeClass}`, size: sizeClass,
+    usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+  });
+  const entry: PooledStagingBuffer = { buffer: buf, size: sizeClass, inUse: true };
+  bucket.push(entry);
+  return entry;
+}
+
+/** Mark a previously-acquired staging buffer as available. Caller must have
+ *  already unmapped it. */
+function releaseStagingBuffer(entry: PooledStagingBuffer): void {
+  entry.inUse = false;
+}
+
+/** Destroy every pooled staging buffer. Called from destroyWebGPURuntime. */
+function destroyStagingPool(rt: WebGPURuntime): void {
+  for (const bucket of rt.stagingPool.values()) {
+    for (const entry of bucket) {
+      try { entry.buffer.destroy(); } catch { /* non-fatal */ }
+    }
+  }
+  rt.stagingPool.clear();
 }
 
 /** Allocate the 8 buffers + bind-group + step + output mapping pipelines. */
@@ -232,21 +329,18 @@ export async function setupBuffersAndPipelines(rt: WebGPURuntime): Promise<void>
   });
   rt.bindGroup = rt.bindGroupAB;
 
-  const pipelineLayout = device.createPipelineLayout({
+  rt.pipelineLayout = device.createPipelineLayout({
     label: 'genesisca-pl', bindGroupLayouts: [rt.bindGroupLayout],
   });
   rt.stepPipeline = await device.createComputePipelineAsync({
-    label: 'genesisca-step', layout: pipelineLayout,
+    label: 'genesisca-step', layout: rt.pipelineLayout,
     compute: { module: rt.shaderModule, entryPoint: rt.entryPoints.step },
   });
+  // Output mapping pipelines are built lazily by dispatchOutputMapping on
+  // first request — see O4 in the WebGPU plan. Models with several mappings
+  // (Coagulation, MNCA viewers) save the per-recompile pipeline cost when
+  // the user only visualises one at a time.
   rt.outputPipelines.clear();
-  for (const om of rt.entryPoints.outputMappings) {
-    const pipe = await device.createComputePipelineAsync({
-      label: `genesisca-${om.entry}`, layout: pipelineLayout,
-      compute: { module: rt.shaderModule, entryPoint: om.entry },
-    });
-    rt.outputPipelines.set(om.mappingId, pipe);
-  }
 
   rt.stepReady = true;
 }
@@ -484,10 +578,30 @@ export function dispatchStep(rt: WebGPURuntime): void {
   rt.bindGroup = rt.bindGroup === rt.bindGroupAB ? rt.bindGroupBA : rt.bindGroupAB;
 }
 
-/** Dispatch one output mapping pipeline (writes to colors buffer). */
+/** Lazily create the output mapping pipeline for `mappingId` if it isn't
+ *  already cached. Uses the synchronous createComputePipeline so callers can
+ *  stay sync — the trade-off is a one-time hitch on first dispatch of each
+ *  viewer (typically a few ms; documented in the O4 plan note). Returns the
+ *  pipeline, or null if the model has no entry point for this mappingId. */
+function ensureOutputPipeline(rt: WebGPURuntime, mappingId: string): GPUComputePipeline | null {
+  const cached = rt.outputPipelines.get(mappingId);
+  if (cached) return cached;
+  if (!rt.pipelineLayout) return null;
+  const om = rt.entryPoints.outputMappings.find(o => o.mappingId === mappingId);
+  if (!om) return null;
+  const pipe = rt.device.createComputePipeline({
+    label: `genesisca-${om.entry}`, layout: rt.pipelineLayout,
+    compute: { module: rt.shaderModule, entryPoint: om.entry },
+  });
+  rt.outputPipelines.set(mappingId, pipe);
+  return pipe;
+}
+
+/** Dispatch one output mapping pipeline (writes to colors buffer). The
+ *  pipeline is built on demand the first time a viewer is requested. */
 export function dispatchOutputMapping(rt: WebGPURuntime, mappingId: string): boolean {
   if (!rt.stepReady || !rt.bindGroup) return false;
-  const pipe = rt.outputPipelines.get(mappingId);
+  const pipe = ensureOutputPipeline(rt, mappingId);
   if (!pipe) return false;
   const enc = rt.device.createCommandEncoder({ label: 'om-enc' });
   const pass = enc.beginComputePass({ label: 'om-pass' });
@@ -536,74 +650,69 @@ export async function readbackBatched(
     offsets.push(total);
     total += r.size;
   }
-  const stagingBuf = rt.device.createBuffer({
-    size: Math.max(total, 16),
-    usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-  });
+  const pooled = acquireStagingBuffer(rt, Math.max(total, 16));
+  const stagingBuf = pooled.buffer;
   const enc = rt.device.createCommandEncoder({ label: 'readback-batched-enc' });
   for (let i = 0; i < regions.length; i++) {
     const r = regions[i]!;
     enc.copyBufferToBuffer(r.src, r.srcOffset, stagingBuf, offsets[i]!, r.size);
   }
   rt.device.queue.submit([enc.finish()]);
-  await stagingBuf.mapAsync(GPUMapMode.READ);
-  const mapped = new Uint8Array(stagingBuf.getMappedRange());
+  await stagingBuf.mapAsync(GPUMapMode.READ, 0, total);
+  const mapped = new Uint8Array(stagingBuf.getMappedRange(0, total));
   const out: Uint8Array[] = [];
   for (let i = 0; i < regions.length; i++) {
     const off = offsets[i]!;
     out.push(mapped.slice(off, off + regions[i]!.size));
   }
   stagingBuf.unmap();
-  stagingBuf.destroy();
+  releaseStagingBuffer(pooled);
   return out;
 }
 
 export async function readbackAttrs(rt: WebGPURuntime, dstAttrs: WorkerAttrArrays): Promise<void> {
   if (!rt.attrsReadBuf) return;
-  const stagingBuf = rt.device.createBuffer({
-    size: rt.layout.attrsBytes,
-    usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-  });
+  const size = rt.layout.attrsBytes;
+  const pooled = acquireStagingBuffer(rt, size);
+  const stagingBuf = pooled.buffer;
   const enc = rt.device.createCommandEncoder({ label: 'readback-enc' });
-  enc.copyBufferToBuffer(rt.attrsReadBuf, 0, stagingBuf, 0, rt.layout.attrsBytes);
+  enc.copyBufferToBuffer(rt.attrsReadBuf, 0, stagingBuf, 0, size);
   rt.device.queue.submit([enc.finish()]);
-  await stagingBuf.mapAsync(GPUMapMode.READ);
-  const mapped = new Uint8Array(stagingBuf.getMappedRange()).slice();
+  await stagingBuf.mapAsync(GPUMapMode.READ, 0, size);
+  const mapped = new Uint8Array(stagingBuf.getMappedRange(0, size)).slice();
   stagingBuf.unmap();
-  stagingBuf.destroy();
+  releaseStagingBuffer(pooled);
   unpackAttrsFromReadback(rt.layout, mapped, dstAttrs);
 }
 
 export async function readbackColors(rt: WebGPURuntime, dst: Uint8ClampedArray): Promise<void> {
   if (!rt.colorsBuf) return;
-  const stagingBuf = rt.device.createBuffer({
-    size: rt.layout.colorsBytes,
-    usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-  });
+  const size = rt.layout.colorsBytes;
+  const pooled = acquireStagingBuffer(rt, size);
+  const stagingBuf = pooled.buffer;
   const enc = rt.device.createCommandEncoder({ label: 'readback-colors-enc' });
-  enc.copyBufferToBuffer(rt.colorsBuf, 0, stagingBuf, 0, rt.layout.colorsBytes);
+  enc.copyBufferToBuffer(rt.colorsBuf, 0, stagingBuf, 0, size);
   rt.device.queue.submit([enc.finish()]);
-  await stagingBuf.mapAsync(GPUMapMode.READ);
-  const mapped = new Uint8Array(stagingBuf.getMappedRange());
+  await stagingBuf.mapAsync(GPUMapMode.READ, 0, size);
+  const mapped = new Uint8Array(stagingBuf.getMappedRange(0, size));
   const limit = Math.min(dst.length, mapped.length);
   for (let i = 0; i < limit; i++) dst[i] = mapped[i]!;
   stagingBuf.unmap();
-  stagingBuf.destroy();
+  releaseStagingBuffer(pooled);
 }
 
 export async function readbackIndicators(rt: WebGPURuntime, decode: (id: string, raw: number) => number): Promise<Record<string, number>> {
   if (!rt.indicatorsBuf || rt.layout.indicatorIds.length === 0) return {};
-  const stagingBuf = rt.device.createBuffer({
-    size: rt.layout.indicatorsBytes,
-    usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-  });
+  const size = rt.layout.indicatorsBytes;
+  const pooled = acquireStagingBuffer(rt, size);
+  const stagingBuf = pooled.buffer;
   const enc = rt.device.createCommandEncoder({ label: 'readback-ind-enc' });
-  enc.copyBufferToBuffer(rt.indicatorsBuf, 0, stagingBuf, 0, rt.layout.indicatorsBytes);
+  enc.copyBufferToBuffer(rt.indicatorsBuf, 0, stagingBuf, 0, size);
   rt.device.queue.submit([enc.finish()]);
-  await stagingBuf.mapAsync(GPUMapMode.READ);
-  const mapped = new Uint8Array(stagingBuf.getMappedRange()).slice();
+  await stagingBuf.mapAsync(GPUMapMode.READ, 0, size);
+  const mapped = new Uint8Array(stagingBuf.getMappedRange(0, size)).slice();
   stagingBuf.unmap();
-  stagingBuf.destroy();
+  releaseStagingBuffer(pooled);
   const view = new DataView(mapped.buffer);
   const out: Record<string, number> = {};
   for (let i = 0; i < rt.layout.indicatorIds.length; i++) {
@@ -618,16 +727,16 @@ export async function readbackIndicators(rt: WebGPURuntime, decode: (id: string,
 /** Read the stop flag value (0 = no stop, otherwise 1-based stop event index). */
 export async function readbackStopFlag(rt: WebGPURuntime): Promise<number> {
   if (!rt.controlBuf) return 0;
-  const stagingBuf = rt.device.createBuffer({
-    size: 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-  });
+  const size = 16;
+  const pooled = acquireStagingBuffer(rt, size);
+  const stagingBuf = pooled.buffer;
   const enc = rt.device.createCommandEncoder({ label: 'readback-control-enc' });
-  enc.copyBufferToBuffer(rt.controlBuf, 0, stagingBuf, 0, 16);
+  enc.copyBufferToBuffer(rt.controlBuf, 0, stagingBuf, 0, size);
   rt.device.queue.submit([enc.finish()]);
-  await stagingBuf.mapAsync(GPUMapMode.READ);
-  const mapped = new Uint32Array(stagingBuf.getMappedRange()).slice();
+  await stagingBuf.mapAsync(GPUMapMode.READ, 0, size);
+  const mapped = new Uint32Array(stagingBuf.getMappedRange(0, size)).slice();
   stagingBuf.unmap();
-  stagingBuf.destroy();
+  releaseStagingBuffer(pooled);
   // controlBuf layout: [activeViewer (i32), stopFlag (atomic u32), pad, pad]
   return mapped[1] ?? 0;
 }
@@ -639,6 +748,7 @@ export async function readbackStopFlag(rt: WebGPURuntime): Promise<number> {
 export function destroyWebGPURuntime(rt: WebGPURuntime | null): void {
   if (!rt) return;
   try {
+    destroyStagingPool(rt);
     // attrsReadBuf / attrsWriteBuf are aliases of attrsBufA / attrsBufB —
     // destroy via the underlying refs to avoid double-destroy.
     for (const buf of [

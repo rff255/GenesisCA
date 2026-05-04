@@ -25,10 +25,11 @@ import {
   emitBindings, emitEntryPoint, emitPerCellCopyPreamble, sanitiseWgslName,
 } from './encoder';
 import { getNodeDef } from '../../nodes/registry';
-import { parseHandleId, type PortDef } from '../../types';
+import { parseHandleId } from '../../types';
 import {
   detectWebGPUIncompatibilities, detectWebGPUModelIncompatibilities,
 } from '../../nodes/nodeValidation';
+import { getInlineValue, parseInlineNum } from '../inlinePort';
 
 export interface WebGPUEntryPoints {
   step: string;
@@ -98,6 +99,11 @@ interface CompileCtx {
   inputToSources: Map<string, Array<{ nodeId: string; portId: string }>>;
   /** "<sourceNodeId>:<sourcePortId>" → all targets (flow chain follower). */
   flowOutputToTargets: Map<string, Array<{ nodeId: string; portId: string }>>;
+  /** sourceNodeId → total outgoing edge count (across all ports). Used to
+   *  detect single-consumer patterns for fusion (O6: when an array producer
+   *  has exactly one consumer, the consumer can fuse the gather into its own
+   *  loop and skip materialising the array). */
+  outDegree: Map<string, number>;
 
   /** Lines accumulated for the current entry point's body. */
   lines: string[];
@@ -130,6 +136,7 @@ function buildAdjacency(
   inputToSource: Map<string, { nodeId: string; portId: string }>;
   inputToSources: Map<string, Array<{ nodeId: string; portId: string }>>;
   flowOutputToTargets: Map<string, Array<{ nodeId: string; portId: string }>>;
+  outDegree: Map<string, number>;
 } {
   const nodeMap = new Map<string, GraphNode>();
   for (const n of graphNodes) nodeMap.set(n.id, n);
@@ -142,11 +149,13 @@ function buildAdjacency(
   const inputToSource = new Map<string, { nodeId: string; portId: string }>();
   const inputToSources = new Map<string, Array<{ nodeId: string; portId: string }>>();
   const flowOutputToTargets = new Map<string, Array<{ nodeId: string; portId: string }>>();
+  const outDegree = new Map<string, number>();
 
   for (const edge of graphEdges) {
     const sh = parseHandleId(edge.sourceHandle);
     const th = parseHandleId(edge.targetHandle);
     if (!sh || !th) continue;
+    outDegree.set(edge.source, (outDegree.get(edge.source) ?? 0) + 1);
     if (th.category === 'value') {
       const k = `${edge.target}:${th.portId}`;
       if (!inputToSource.has(k)) inputToSource.set(k, { nodeId: edge.source, portId: sh.portId });
@@ -162,7 +171,7 @@ function buildAdjacency(
     }
   }
 
-  return { nodeMap, inputToSource, inputToSources, flowOutputToTargets };
+  return { nodeMap, inputToSource, inputToSources, flowOutputToTargets, outDegree };
 }
 
 function getAttr(layout: WebGPULayout, id: string): WebGPULayoutAttr | null {
@@ -253,22 +262,6 @@ function readModelAttr(layout: WebGPULayout, key: string): ValueRef | null {
 // Inline-port helpers
 // ---------------------------------------------------------------------------
 
-function getInlineValue(port: PortDef, config: Record<string, string | number | boolean>): string | undefined {
-  if (!port.inlineWidget) return undefined;
-  const k = `_port_${port.id}`;
-  const val = config[k];
-  if (val === undefined || val === '') return port.defaultValue;
-  const s = String(val);
-  if (port.inlineWidget === 'bool') return s === 'true' ? '1' : '0';
-  return s;
-}
-function parseInlineNum(raw: string | undefined, fallback: number = 0): number {
-  if (raw === undefined) return fallback;
-  if (raw === 'true') return 1;
-  if (raw === 'false') return 0;
-  const n = parseFloat(raw);
-  return Number.isFinite(n) ? n : fallback;
-}
 function inlineValueRef(raw: string | undefined, isFloat: boolean): ValueRef {
   const n = parseInlineNum(raw, 0);
   if (isFloat) {
@@ -759,7 +752,19 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
   },
 
   aggregate: (c) => emitAggregateOrCount(c, 'aggregate'),
-  groupCounting: (c) => emitAggregateOrCount(c, 'count'),
+  groupCounting: (c) => {
+    // O1: if the array side of this groupCounting was already materialised
+    // (a downstream consumer pulled `indexes`), the count is exactly the
+    // array's length. Skip the second per-cell scan entirely — equivalent
+    // result, half the loop work.
+    const cachedArr = c.ctx.arrayRefs.get(c.node.id);
+    if (cachedArr) {
+      const ref: ValueRef = { expr: cachedArr.lenName, type: 'i32' };
+      setCachedPort(c.ctx, c.node.id, 'count', ref);
+      return ref;
+    }
+    return emitAggregateOrCount(c, 'count');
+  },
   groupOperator: (c) => emitAggregateOrCount(c, 'groupOperator'),
   groupStatement: (c) => emitGroupStatement(c),
 
@@ -962,12 +967,52 @@ function emitAggregateOrCount(
   const isArrayPath = sources.length === 1 && !isNbrPath
     && firstSrcNode && isArrayProducer(firstSrcNode.data.nodeType);
   let arrRef: ArrayRef | null = null;
-  if (isArrayPath) {
+  // O6: fuse aggregate over getNeighborsAttrByIndexes when this is the only
+  // consumer and the op is associative. Skips the per-thread var array
+  // allocation (heavy register pressure on WGSL) and merges the gather +
+  // accumulate into a single loop reading from the source's `indexes` input.
+  // Cap at sum/product/min/max/and/or/average + the count comparisons (which
+  // already match the array emitter's semantics).
+  let fusedNbrAttrPath = false;
+  if (
+    isArrayPath
+    && firstSrcNode!.data.nodeType === 'getNeighborsAttrByIndexes'
+    && (ctx.outDegree.get(firstSrc.nodeId) ?? 0) === 1
+    && (mode === 'count' || (op !== 'median' && op !== 'random'))
+  ) {
+    const srcNode = firstSrcNode!;
+    const nbrId = srcNode.data.config.neighborhoodId as string;
+    const attrId = srcNode.data.config.attributeId as string;
+    const nbr = getNbr(ctx.layout, nbrId);
+    const attr = getAttr(ctx.layout, attrId);
+    const inArr = nbr && attr ? resolveInputArray(ctx, srcNode, 'indexes') : null;
+    if (nbr && attr && inArr) {
+      fusedNbrAttrPath = true;
+      const k = fresh(ctx, 'fk');
+      ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${inArr.lenName}; ${k} = ${k} + 1) {`);
+      ctx.lines.push(`    let _idxIn_${k}: i32 = ${arrLoad(inArr, k)};`);
+      const nbrSlot = nbr.wordOffset === 0
+        ? `nbrIndices[i32(idx) * ${nbr.size} + _idxIn_${k}]`
+        : `nbrIndices[${nbr.wordOffset}i + i32(idx) * ${nbr.size} + _idxIn_${k}]`;
+      ctx.lines.push(`    let _nci_${k}: i32 = ${nbrSlot};`);
+      const elem = readAttr(attr, `u32(_nci_${k})`, false);
+      ctx.lines.push(`    let _e_${k}: ${elem.type} = ${elem.expr};`);
+      const elemRef: ValueRef = { expr: `_e_${k}`, type: elem.type };
+      emitAccumStep(ctx, mode, op, acc, elemRef, cmpRef, cmpHighRef, lo, hi, trackIndex, bestIdx, k);
+      ctx.lines.push(`  }`);
+      if (op === 'average') {
+        ctx.lines.push(`  ${acc.name} = ${acc.name} / max(1.0, f32(${inArr.lenName}));`);
+      }
+    }
+  }
+  if (isArrayPath && !fusedNbrAttrPath) {
     arrRef = compileArrayNode(ctx, firstSrc.nodeId);
     if (!arrRef) return null;
   }
 
-  if (isNbrPath) {
+  if (fusedNbrAttrPath) {
+    // Loop already emitted above; fall through to the result-wrapping tail.
+  } else if (isNbrPath) {
     const srcNode = firstSrcNode!;
     const nbrId = srcNode.data.config.neighborhoodId as string;
     const attrId = srcNode.data.config.attributeId as string;
@@ -1709,6 +1754,100 @@ function compileFlowChain(ctx: CompileCtx, sourceNodeId: string, sourcePortId: s
 }
 
 // ---------------------------------------------------------------------------
+// P8 — Per-cell copy preamble dataflow analysis.
+//
+// Goal: skip the `attrsWrite[idx] = attrsRead[idx]` line for any attr we can
+// PROVE is unconditionally written by setAttribute on every flow path. Saves
+// step-time bandwidth on rules that fully recompute attrs each generation.
+//
+// Conservative rules (any failure → keep the copy):
+//  - updateAttribute reads from the write buffer in place; without the copy
+//    populating the slot, it reads garbage. So if updateAttribute(a) appears
+//    ANYWHERE in the graph, attr a is NOT elidable.
+//  - conditional with no else branch → no guaranteed contribution.
+//  - switch needs caseCount > 0 AND a default branch (so every input value
+//    matches some branch) AND firstMatchOnly mode (the only mode where the
+//    branch sequence is deterministic).
+//  - loop bodies might execute zero times → no guarantee.
+// ---------------------------------------------------------------------------
+
+function intersectSets(a: Set<string>, b: Set<string>): Set<string> {
+  const out = new Set<string>();
+  for (const x of a) if (b.has(x)) out.add(x);
+  return out;
+}
+
+function analyzeAlwaysWritten(
+  ctx: CompileCtx, sourceNodeId: string, sourcePortId: string, depth: number,
+): Set<string> {
+  const out = new Set<string>();
+  if (depth > 64) return out; // recursion guard
+  const targets = ctx.flowOutputToTargets.get(`${sourceNodeId}:${sourcePortId}`) ?? [];
+  for (const target of targets) {
+    const node = ctx.nodeMap.get(target.nodeId);
+    if (!node) continue;
+    const t = node.data.nodeType;
+    if (t === 'sequence') {
+      for (const x of analyzeAlwaysWritten(ctx, node.id, 'first', depth + 1)) out.add(x);
+      for (const x of analyzeAlwaysWritten(ctx, node.id, 'then', depth + 1)) out.add(x);
+    } else if (t === 'conditional') {
+      const hasElse = ctx.flowOutputToTargets.has(`${node.id}:else`);
+      if (hasElse) {
+        const thenSet = analyzeAlwaysWritten(ctx, node.id, 'then', depth + 1);
+        const elseSet = analyzeAlwaysWritten(ctx, node.id, 'else', depth + 1);
+        for (const x of intersectSets(thenSet, elseSet)) out.add(x);
+      }
+    } else if (t === 'switch') {
+      const caseCount = Number(node.data.config.caseCount) || 0;
+      const hasDefault = ctx.flowOutputToTargets.has(`${node.id}:default`);
+      const firstMatchOnly = node.data.config.firstMatchOnly !== false;
+      if (caseCount === 0 && hasDefault) {
+        for (const x of analyzeAlwaysWritten(ctx, node.id, 'default', depth + 1)) out.add(x);
+      } else if (firstMatchOnly && caseCount > 0 && hasDefault) {
+        let intersect: Set<string> | null = null;
+        for (let ci = 0; ci < caseCount; ci++) {
+          const s = analyzeAlwaysWritten(ctx, node.id, `case_${ci}`, depth + 1);
+          intersect = intersect ? intersectSets(intersect, s) : s;
+        }
+        const defSet = analyzeAlwaysWritten(ctx, node.id, 'default', depth + 1);
+        intersect = intersect ? intersectSets(intersect, defSet) : defSet;
+        if (intersect) for (const x of intersect) out.add(x);
+      }
+      // else: not all branches guaranteed → no contribution
+    } else if (t === 'loop') {
+      // body may execute zero times — no guarantee
+    } else if (t === 'setAttribute') {
+      const attrId = node.data.config.attributeId as string;
+      if (attrId) out.add(attrId);
+    }
+    // Other flow nodes (setIndicator, updateIndicator, setColorViewer,
+    // stopEvent, setNeighborhoodAttribute*, setNeighborAttributeByIndex*,
+    // updateAttribute) don't guarantee a cell-attr slot is initialised by
+    // setAttribute.
+  }
+  return out;
+}
+
+function computeElidablePreambleAttrs(ctx: CompileCtx, entryNodeId: string): Set<string> {
+  // updateAttribute(a) reads w_attr[idx] before mutating, so it depends on
+  // the preamble copy. Any attr touched by an updateAttribute anywhere in the
+  // graph must keep its preamble. setAttribute(a) is a pure write — safe.
+  const requiresPreamble = new Set<string>();
+  for (const node of ctx.nodeMap.values()) {
+    if (node.data.nodeType === 'updateAttribute') {
+      const aid = node.data.config.attributeId as string;
+      if (aid) requiresPreamble.add(aid);
+    }
+  }
+  const alwaysSet = analyzeAlwaysWritten(ctx, entryNodeId, 'do', 0);
+  const elidable = new Set<string>();
+  for (const a of alwaysSet) {
+    if (!requiresPreamble.has(a)) elidable.add(a);
+  }
+  return elidable;
+}
+
+// ---------------------------------------------------------------------------
 // Entry point compile
 // ---------------------------------------------------------------------------
 
@@ -1735,8 +1874,12 @@ function compileEntry(opts: EntryOpts, base: Omit<CompileCtx, 'lines' | 'valueLo
     allowAttrWrites: opts.allowAttrWrites,
   };
   if (opts.emitCopyPreamble) {
-    // Bulk per-cell copy first
-    const copy = emitPerCellCopyPreamble(ctx.layout);
+    // P8: skip per-cell copy for attrs that every flow path overwrites via
+    // setAttribute (and never read via updateAttribute). Dead bandwidth for
+    // models where the rule fully recomputes some attrs every step
+    // (e.g. Game of Life: alive is always set).
+    const skip = computeElidablePreambleAttrs(ctx, opts.entry.id);
+    const copy = emitPerCellCopyPreamble(ctx.layout, skip);
     if (copy) ctx.lines.push(copy.replace(/\n$/, ''));
   }
   // Pre-emit ALL referenced value nodes at the top scope so subsequent
@@ -1877,15 +2020,15 @@ export function compileGraphWebGPU(
       layout, viewerIds: {}, error: expanded.error,
     };
   }
-  graphNodes = expanded.nodes;
-  graphEdges = expanded.edges;
+  const nodes = expanded.nodes;
+  const edges = expanded.edges;
 
   // Stop messages flat list — index in `_stopIdx` (1-based; 0 means no stop).
-  // After expansion the graph is flat, so we only walk graphNodes (no macroDef
+  // After expansion the graph is flat, so we only walk `nodes` (no macroDef
   // descent). The worker uses the JS compiler's stopMessages, but we still
   // need the local copy for the CompileCtx (used by stopEvent emit + diagnostics).
   const stopMessages: string[] = [];
-  for (const n of graphNodes) {
+  for (const n of nodes) {
     if (n.data.nodeType === 'stopEvent') {
       const idx = Number(n.data.config._stopIdx ?? 0);
       const msg = String(n.data.config.message ?? n.data.config.stopMessage ?? '');
@@ -1911,12 +2054,12 @@ export function compileGraphWebGPU(
   // Compile-time rejections.
   const modelErr = detectWebGPUModelIncompatibilities(model);
   if (modelErr) return { ...baseResult, error: modelErr };
-  for (const n of graphNodes) {
+  for (const n of nodes) {
     const issues = detectWebGPUIncompatibilities(n.data.nodeType, n.data.config, model);
     if (issues.length > 0) return { ...baseResult, error: `Node "${n.data.nodeType}": ${issues[0]}` };
   }
 
-  const adj = buildAdjacency(graphNodes, graphEdges, model);
+  const adj = buildAdjacency(nodes, edges, model);
 
   // Max neighbourhood size — used to size per-thread `var arr<T, N>` arrays for
   // array-producing nodes (filterNeighbors, getNeighborsAttrByIndexes, etc).
@@ -1930,10 +2073,11 @@ export function compileGraphWebGPU(
     inputToSource: adj.inputToSource,
     inputToSources: adj.inputToSources,
     flowOutputToTargets: adj.flowOutputToTargets,
+    outDegree: adj.outDegree,
   };
 
   // Step entry point — root is the (typically single) Step node.
-  const stepNodes = graphNodes.filter(n => n.data.nodeType === 'step');
+  const stepNodes = nodes.filter(n => n.data.nodeType === 'step');
   if (stepNodes.length === 0) {
     // No step graph — emit a no-op. Mirror copy preamble so attrs propagate.
     const copy = emitPerCellCopyPreamble(layout);
@@ -1963,7 +2107,7 @@ export function compileGraphWebGPU(
   // in the GPU buffer. Skipping makes `dispatchOutputMapping` return false at
   // runtime, which the worker treats as a fall-through to writeDefaultColors.
   const outputMappings: Array<{ mappingId: string; entry: string }> = [];
-  const outputNodes = graphNodes.filter(n => n.data.nodeType === 'outputMapping');
+  const outputNodes = nodes.filter(n => n.data.nodeType === 'outputMapping');
   for (const m of (model.mappings || [])) {
     if (!m.isAttributeToColor) continue;
     const fnName = 'outputMapping_' + sanitiseWgslName(m.id);

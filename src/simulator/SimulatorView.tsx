@@ -144,6 +144,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const lastMouse = useRef({ x: 0, y: 0 });
   const cursorGrid = useRef<{ row: number; col: number } | null>(null);
   const lastPaintGrid = useRef<{ row: number; col: number } | null>(null);
+  // Paint coalescing: instead of posting a paint message per mouse-move event
+  // (~50-200/sec on a fast brush drag), collect cells in a buffer and flush
+  // once per requestAnimationFrame. Each flush is a single round-trip through
+  // the worker → GPU pipeline. The mouse-up handler force-flushes so the last
+  // partial batch isn't lost. Different mappingIds within one batch are
+  // flushed eagerly (rare in practice — only when the user changes brush
+  // mid-drag, which already breaks the Bresenham line at lastPaintGrid reset).
+  const pendingPaintCells = useRef<Array<{ row: number; col: number; r: number; g: number; b: number }>>([]);
+  const pendingPaintMapping = useRef<string | null>(null);
+  const pendingPaintViewer = useRef<string>('');
+  const pendingPaintRaf = useRef<number | null>(null);
 
   // FPS + Gens/s tracking
   const fpsFrames = useRef(0);
@@ -924,6 +935,23 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     return cells;
   }, []);
 
+  /** Flush whatever paint cells have accumulated since the last frame. Called
+   *  on the rAF boundary by the coalescer below, and synchronously by mouse-up
+   *  / unmount paths so the final brush stroke isn't dropped. */
+  const flushPaintBatch = useCallback(() => {
+    if (pendingPaintRaf.current != null) {
+      cancelAnimationFrame(pendingPaintRaf.current);
+      pendingPaintRaf.current = null;
+    }
+    const cells = pendingPaintCells.current;
+    const mappingId = pendingPaintMapping.current;
+    const viewer = pendingPaintViewer.current;
+    if (cells.length === 0 || mappingId == null) return;
+    pendingPaintCells.current = [];
+    pendingPaintMapping.current = null;
+    workerRef.current?.postMessage({ type: 'paint', cells, mappingId, activeViewer: viewer });
+  }, []);
+
   /** Paint with Bresenham interpolation from last painted position to current */
   const paintAt = useCallback((clientX: number, clientY: number) => {
     const center = screenToGrid(clientX, clientY);
@@ -949,10 +977,25 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       allCells = brushCellsAt(center.row, center.col, r, g, b);
     }
     lastPaintGrid.current = center;
-    if (allCells.length > 0) {
-      workerRef.current?.postMessage({ type: 'paint', cells: allCells, mappingId: brushMappingRef.current, activeViewer: activeViewerRef.current });
+    if (allCells.length === 0) return;
+    const curMapping = brushMappingRef.current;
+    const curViewer = activeViewerRef.current;
+    // If the user changed brush mapping or active viewer mid-drag (rare), the
+    // pending batch belongs to the previous target — flush before enqueuing the
+    // new cells so they don't get sent to the wrong handler.
+    if (
+      pendingPaintMapping.current !== null &&
+      (pendingPaintMapping.current !== curMapping || pendingPaintViewer.current !== curViewer)
+    ) {
+      flushPaintBatch();
     }
-  }, [screenToGrid, brushCellsAt]);
+    pendingPaintMapping.current = curMapping;
+    pendingPaintViewer.current = curViewer;
+    for (let i = 0; i < allCells.length; i++) pendingPaintCells.current.push(allCells[i]!);
+    if (pendingPaintRaf.current == null) {
+      pendingPaintRaf.current = requestAnimationFrame(flushPaintBatch);
+    }
+  }, [screenToGrid, brushCellsAt, flushPaintBatch]);
 
   // Zoom/Pan/Brush event handlers
   useEffect(() => {
@@ -1067,6 +1110,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       isResizingBrush.active = false;
       canvasBrushActive = false;
       lastPaintGrid.current = null;
+      // End-of-stroke: flush whatever paint cells were buffered for the next
+      // rAF. Otherwise the trailing few cells of a fast brush stroke get held
+      // until the next paint event (which might never come if the user lifts
+      // the mouse and waits) — visible as a "missing tail" on quick clicks.
+      flushPaintBatch();
       container.style.cursor = '';
     };
 
@@ -1092,7 +1140,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [draw, paintAt, screenToGrid]);
+  }, [draw, paintAt, screenToGrid, flushPaintBatch]);
 
   // Play: kick-start the step pipeline (worker message handler chains subsequent steps)
   useEffect(() => {

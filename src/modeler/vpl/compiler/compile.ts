@@ -1,29 +1,10 @@
 import type { GraphNode, GraphEdge, CAModel } from '../../../model/types';
 import { getNodeDef } from '../nodes/registry';
 import { parseHandleId } from '../types';
-import type { PortDef } from '../types';
 import { classifyLoopInvariant } from './loopInvariant';
 import { safeId } from './identifierSafe';
 import { detectFusableConsumers, type FusionResult } from './fusion';
-
-/**
- * Get the inline widget value for an unconnected port.
- * Returns the literal string if the port has an inline widget and a value is set in config,
- * otherwise returns undefined.
- */
-function getInlineValue(port: PortDef, config: Record<string, string | number | boolean>): string | undefined {
-  if (!port.inlineWidget) return undefined;
-  const configKey = `_port_${port.id}`;
-  const val = config[configKey];
-  if (val === undefined || val === '') {
-    return port.defaultValue;
-  }
-  const s = String(val);
-  if (port.inlineWidget === 'bool') {
-    return s === 'true' ? '1' : '0';
-  }
-  return s;
-}
+import { getInlineValue } from './inlinePort';
 
 // ---------------------------------------------------------------------------
 // Graph adjacency helpers
