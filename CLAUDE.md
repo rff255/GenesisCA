@@ -523,6 +523,61 @@ The app is functional with these major systems:
 
 ---
 
+## WebGPU Compile Target (Wave 3)
+
+**Status: functional.** WebGPU is the third compile target alongside JS (default) and WASM. The compiler emits a single WGSL shader module containing the `step` entry point + one `outputMapping_<sanitisedId>` per Attribute→Color mapping, dispatched as compute pipelines on the GPU. Verified on Game of Life (with macros) and Coagulation models — paint, randomize, reset, play, save/load, indicator readback, and stop events all work.
+
+### Architecture
+- `useWebGPU?: boolean` on `ModelProperties`. Mutually exclusive with `useWasm` enforced by the UI 3-way radio (Properties → Execution → Compile Target) and a worker-side safety net (WebGPU wins if both flags arrive true on a hand-edited file).
+- 4-file compiler under `src/modeler/vpl/compiler/webgpu/`:
+  - `encoder.ts` — WGSL string helpers (bindings, struct decls, per-cell copy preamble, attr read/write helpers, PCG functions).
+  - `layout.ts` — 8-binding GPU buffer layout (attrsRead/attrsWrite/colors/nbrIndices/modelAttrs/indicators/rngState/control). Bool/int/tag/float attrs are stored as one u32 word per cell with bitcast on read/write.
+  - `emitter.ts` — `WgslEmitter` shell (legacy; current orchestrator builds lines directly).
+  - `compile.ts` — orchestrator. Macro expansion (`expandMacros`) runs first to flatten the graph. Then `preEmitValueNodes` walks the flow chain to compile every referenced value node at the entry-point's top scope (avoids the "var declared in `if` branch but referenced in sibling `else` branch" WGSL scoping issue). Per-node dispatch via `VALUE_NODE_EMITTERS` and `FLOW_NODE_EMITTERS`.
+- `src/simulator/engine/webgpuRuntime.ts` owns adapter/device/buffers/pipelines. `setupBuffersAndPipelines()` builds the step pipeline plus one pipeline per output mapping. Helpers: `uploadAttrs` / `uploadAttr`, `uploadNeighborIndices`, `uploadModelAttrs`, `uploadActiveViewer`, `uploadIndicators`, `dispatchStep`, `dispatchOutputMapping`, `readbackAttrs`, `readbackColors`, `readbackIndicators`, `readbackStopFlag`, `seedRngState`.
+- Worker integration:
+  - `runStepWebGPU()`: resets stop flag, syncs per-generation indicators to GPU, dispatches step pipeline.
+  - `runColorPassWebGPU()`: dispatches the active viewer's output mapping pipeline.
+  - `finalizeStepWebGPU({needAttrs?, needColors?})`: async tail that reads back colors / indicators / stop flag (and optionally cell attrs for linked indicators or save state). Standalone integer/tag/bool indicators decode as bitcast<i32>; everything else as bitcast<f32>.
+  - Mutation handlers (paint, importImage, randomize, reset, writeRegion, clearRegion) mutate CPU `readAttrs` then upload via `uploadAttrs` and dispatch `runColorPassWebGPU`.
+  - `getState` does `readbackAttrs` first when `gpuOwnsAttrs`. `loadState` uploads everything after CPU restore.
+  - On WebGPU init (`startWebGPUInit` then `setupBuffersAndPipelines`), the worker uploads CPU state, seeds per-cell RNG, dispatches an initial output mapping pass, reads back colors, and posts a `stepped` message so the canvas paints the initial state.
+
+### Atomics
+- Stop events: `atomicCompareExchangeWeak(&control.stopFlag, 0u, idxU)` — first-cell-wins matches JS/WASM semantics.
+- UpdateIndicator (integer/tag): `atomicAdd` for increment/decrement, `atomicMax` / `atomicMin`. `bitcast<u32>(i32)` to encode.
+- UpdateIndicator (bool): `atomicOr(&ind, 1u)` for `or` when value is true; `atomicAnd(&ind, 0u)` for `and` when value is false.
+- UpdateIndicator (float): `loop { atomicLoad → bitcast<f32> → compute → bitcast<u32> → atomicCompareExchangeWeak; if exchanged break }`. CAS loop on the f32-bitcast u32 word.
+- `toggle`/`next`/`previous` on indicators: rejected at compile time (order-dependent under parallel cell execution).
+
+### Compile-time rejections
+`detectWebGPUIncompatibilities()` and `detectWebGPUModelIncompatibilities()` in [nodeValidation.ts](src/modeler/vpl/nodes/nodeValidation.ts) catch async mode, `setNeighborhoodAttribute` / `setNeighborAttributeByIndex` (async-only), and `updateIndicator` with `toggle`/`next`/`previous`. CaNode warning badges surface these in the modeler when `useWebGPU` is on. The compiler returns an `error` and the worker stays on JS.
+
+### Not yet implemented (deferred, fall back to JS)
+- Array-producing nodes: `getNeighborIndexesByTags`, `filterNeighbors`, `joinNeighbors`, `getNeighborsAttrByIndexes`. Models that use these (Wireworld, Gas Particles) compile-error and the worker stays on JS — surfaced via the existing error toast.
+- `aggregate` / `groupOperator` with `op === 'median'` or `op === 'random'`. Use sum/product/min/max/average/and/or, or switch target.
+- Direct OffscreenCanvas render. Currently colors are read back to CPU and posted via the existing `sendColors` path — works but does a per-step colors transfer. The headline perf optimisation is to transfer an OffscreenCanvas to the worker, configure it as the WebGPU output surface, and blit it via `displayCanvas.drawImage(srcCanvas, ...)` on the main thread.
+- Pipeline cache. Currently the runtime rebuilds all pipelines on every recompile. The shader-source hash is computed (`rt.shaderHash`) but not yet checked.
+
+### Known target-specific differences (intentional, documented)
+- WGSL has no f64. Float arithmetic runs in f32 — small precision differences vs JS/WASM accumulate over many generations on chaotic models. Bit-exact parity is NOT a goal.
+- RNG: WebGPU uses per-cell PCG state seeded from a global seed. JS/WASM use a single shared xorshift32 stream. Same global seed → different sequences. Statistical behaviour matches; deterministic replay across targets does not.
+
+### Key gotchas
+- WebGPU types are NOT in the default DOM lib. The project uses `@webgpu/types` (dev dep) referenced via `/// <reference types="@webgpu/types" />` at the top of `webgpuRuntime.ts` — do NOT add `"types": ["@webgpu/types"]` to tsconfig.app.json because that switches off auto-loading of all OTHER `@types/*` packages.
+- WGSL struct definitions must come BEFORE the `var` declarations that reference them. `Control` struct is emitted before `var<...> control: Control` in `emitBindings()`.
+- WGSL `var`/`let` are block-scoped. Pre-emit pass (`preEmitValueNodes`) is REQUIRED to keep value declarations at the entry-point's top scope so cross-branch references resolve. Without it, values cached during one branch's emission become unresolved in the sibling branch (`unresolved value '_acc2'`).
+- Storage buffers must be ≥4 bytes. `layout.ts` clamps `attrsBytes` / `nbrBytes` to a 4-byte minimum so degenerate models don't fail buffer creation.
+- Worker-side mutual-exclusion safety net: in `init` and `setUseWasm`/`setUseWebGPU` handlers, when both flags would be true the worker silently demotes WASM. Keep both UI and worker enforcement — UI for live edits, worker for legacy `.gcaproj` files saved before the radio existed.
+- `gpuOwnsAttrs = true` after `runStepWebGPU` runs. Mutation handlers AND save/load MUST upload-after-write OR readback-before-read. CRITICAL distinction: handlers that overwrite ALL cells (randomize, reset, importImage) call full `uploadAttrs(rt, readAttrs)`. Handlers that touch only a subset of cells (paint, writeRegion, clearRegion) MUST patch the GPU buffer at per-cell offsets via `device.queue.writeBuffer(attrsBuf, byteOffset + idx*4, ...)` — full `uploadAttrs` would clobber the post-Play evolved state with the stale CPU mirror. The bug symptom is "brushing seems to reset the board to random/initial".
+- The Resize button (`handleApplyDimensions`) calls `initWorkerWithDimensions(w, h)` directly with the new dimensions WITHOUT updating `model.properties.gridWidth/Height`. The compilers must therefore receive a `dimsModel` with overridden dimensions — passing the unmodified `model` makes `compileGraphWebGPU` bake the OLD `total` into the WGSL bounds check (`idx >= ${total}u`), causing only the first N cells of the new larger buffer to evolve. WASM is tolerant because it takes `total` as a runtime function arg. Symptom: half the grid shows live evolution, half stays at the initial randomize.
+- `adapter.requestDevice()` defaults to a conservative 128 MB `maxStorageBufferBindingSize` even when the adapter supports 2 GB. Multi-neighbourhood models like MNCA at 500×500 have a 660 MB neighbour index buffer that exceeds the default. Request `requiredLimits` matching the adapter's max so larger grids work. `setupBuffersAndPipelines` also defensively checks each region against the device's actual `maxStorageBufferBindingSize` and throws a clear error before the lower-level GPU validation error fires (which is hard to attribute back to a specific buffer).
+- DO NOT add fake/hardcoded "default viz" output shaders as placeholders for un-implemented per-node emit. The honest path: leave colors uninitialised on GPU, return a clear compile error, let the worker fall back to JS.
+- Macros must be expanded BEFORE compile. `expandMacros` walks the graph, replaces each `macro` instance with the macroDef's internal nodes (prefixed ids) plus rewritten edges. Recursion guard depth=20 mirrors WASM. The compileValueNode / compileFlowChain code only sees flat post-expansion graphs.
+- Vite serves stale dev-server modules aggressively when `@webgpu/types` arrives via reference. After heavy edits to the webgpu/ files, a hard reload is sometimes needed before the browser sees the new shader code.
+
+---
+
 ## Future Work: List Attribute Type
 
 List attributes (fixed-size arrays of a basic type per cell) were prototyped and removed. When re-implementing, watch for these pitfalls:

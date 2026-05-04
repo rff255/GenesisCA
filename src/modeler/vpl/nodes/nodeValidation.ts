@@ -135,3 +135,55 @@ export function detectMissingConfig(
 
   return issues;
 }
+
+/** Wave 3 — return WebGPU-target-specific issues for a node configuration.
+ *
+ *  WebGPU runs cells in parallel on the GPU, so any rule whose result depends
+ *  on the order in which cells fire is ill-defined under that target. This is
+ *  a SEPARATE function (not folded into `detectMissingConfig`) so the existing
+ *  call sites stay untouched and the warning badge can render WebGPU issues
+ *  with a distinct icon/colour or only when the user has selected WebGPU.
+ *
+ *  Caller pattern: `[...detectMissingConfig(...), ...detectWebGPUIncompatibilities(nodeType, config, model)]`
+ *  when `model.properties.useWebGPU` is true.
+ *
+ *  Mirrors the worker-side rejection list — keep in sync with `compileGraphWebGPU`. */
+export function detectWebGPUIncompatibilities(
+  nodeType: string,
+  config: NodeConfig,
+  _model: CAModel,
+): string[] {
+  const issues: string[] = [];
+  switch (nodeType) {
+    // Async-only nodes (also rejected for sync targets, but the message here
+    // is WebGPU-specific because the user might otherwise switch to async to
+    // make them work — and async is incompatible with WebGPU).
+    case 'setNeighborhoodAttribute':
+    case 'setNeighborAttributeByIndex':
+      issues.push('WebGPU target requires synchronous mode; this node only works in asynchronous mode. Switch target or remove this node.');
+      break;
+    // Order-dependent indicator updates.
+    case 'updateIndicator': {
+      const op = config.operation;
+      if (op === 'toggle') {
+        issues.push('WebGPU runs cells in parallel; toggling a shared indicator from multiple cells per generation produces an undefined result. Use `or` (becomes true and stays true) or `and` for the inverse pattern, or switch target.');
+      } else if (op === 'next' || op === 'previous') {
+        issues.push('WebGPU runs cells in parallel; cyclic tag advancement (next/previous) from multiple cells produces an undefined result. Use Set Indicator with an explicit value, or switch target.');
+      }
+      break;
+    }
+  }
+  return issues;
+}
+
+/** Top-level model check — async + WebGPU is incompatible. Returns a
+ *  human-readable message when the combination is invalid, else null.
+ *  Intended for the Properties panel's status line and the
+ *  WebGPU-compile entry point. */
+export function detectWebGPUModelIncompatibilities(model: CAModel): string | null {
+  if (!model.properties.useWebGPU) return null;
+  if (model.properties.updateMode === 'asynchronous') {
+    return 'WebGPU target requires synchronous update mode. Switch to Synchronous in Model Properties or change target.';
+  }
+  return null;
+}
