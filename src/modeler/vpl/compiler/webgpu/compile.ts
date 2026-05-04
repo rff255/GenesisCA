@@ -60,11 +60,30 @@ interface ValueRef {
   type: WgslType;
 }
 
+/** A reference to an array materialised in per-thread (function-scope) WGSL
+ *  `var` storage. Each producer declares a fixed-size array sized to
+ *  `maxArraySize` (= max neighbourhood size in the model) and a length local.
+ *  Consumers iterate `0..lenName` and read `name[k]`. Mirrors the WASM
+ *  `ArrayRef` but with WGSL var arrays instead of bump-pointer scratch. */
+interface ArrayRef {
+  kind: 'array';
+  /** WGSL var name (the array). */
+  name: string;
+  /** WGSL var name (the i32 length). */
+  lenName: string;
+  /** Element WGSL type. */
+  elemType: WgslType;
+}
+
 interface CompileCtx {
   model: CAModel;
   layout: WebGPULayout;
   viewerIds: Record<string, number>;
   stopMessages: string[];
+  /** Maximum private-array size; chosen as the max neighbourhood size in the
+   *  model so per-thread `var arr: array<T, maxArraySize>` fits any nbr-derived
+   *  array. */
+  maxArraySize: number;
 
   /** All graph nodes (top level + macroDefs flattened) keyed by id. */
   nodeMap: Map<string, GraphNode>;
@@ -79,6 +98,8 @@ interface CompileCtx {
   lines: string[];
   /** Multi-output node cache: nodeId → portId → ValueRef. */
   valueLocals: Map<string, Map<string, ValueRef>>;
+  /** Per-node ArrayRef cache. Used by isArrayProducer dispatch. */
+  arrayRefs: Map<string, ArrayRef>;
   /** Local counter for fresh variable name allocation. */
   localCounter: number;
   /** Errors accumulated; non-empty means compile failed for this entry. */
@@ -275,7 +296,299 @@ interface NodeEmitContext {
 }
 
 type NodeValueEmitter = (c: NodeEmitContext) => ValueRef | null;
+type NodeArrayEmitter = (c: NodeEmitContext) => ArrayRef | null;
 type NodeFlowEmitter = (c: NodeEmitContext) => boolean;
+
+/** Produce the WGSL element type for an attribute. */
+function attrElemType(t: string): WgslType {
+  if (t === 'float') return 'f32';
+  if (t === 'bool') return 'i32'; // store bool as 0/1 i32 in arrays for uniform handling
+  return 'i32';
+}
+
+/** Allocate a fresh per-thread `var arr: array<T, MAX>; var arr_len: i32 = 0;`
+ *  inside the current function body. Returns the ArrayRef. */
+function allocArray(ctx: CompileCtx, elemType: WgslType, prefix: string = 'arr'): ArrayRef {
+  const name = fresh(ctx, prefix);
+  const lenName = `${name}_len`;
+  ctx.lines.push(`  var ${name}: array<${elemType}, ${ctx.maxArraySize}>;`);
+  ctx.lines.push(`  var ${lenName}: i32 = 0;`);
+  return { kind: 'array', name, lenName, elemType };
+}
+
+/** Expression that loads element `iExpr` from an ArrayRef. */
+function arrLoad(arr: ArrayRef, iExpr: string): string {
+  return `${arr.name}[${iExpr}]`;
+}
+
+function isArrayProducer(nodeType: string): boolean {
+  switch (nodeType) {
+    case 'getNeighborIndexesByTags':
+    case 'filterNeighbors':
+    case 'joinNeighbors':
+    case 'getNeighborsAttrByIndexes':
+    case 'groupCounting':
+      return true;
+    default:
+      return false;
+  }
+}
+
+function compileArrayNode(ctx: CompileCtx, nodeId: string): ArrayRef | null {
+  const cached = ctx.arrayRefs.get(nodeId);
+  if (cached) return cached;
+
+  const node = ctx.nodeMap.get(nodeId);
+  if (!node) { ctx.errors.push(`unknown array node ${nodeId}`); return null; }
+
+  const emitter = ARRAY_NODE_EMITTERS[node.data.nodeType];
+  if (!emitter) {
+    ctx.errors.push(`No WebGPU array emitter for "${node.data.nodeType}"`);
+    return null;
+  }
+
+  // Resolve scalar (non-array) inputs first. Array inputs are resolved inside
+  // the emitter via resolveInputArray.
+  const def = getNodeDef(node.data.nodeType);
+  const inputs: Record<string, ValueRef | undefined> = {};
+  if (def) {
+    for (const port of def.ports) {
+      if (port.kind !== 'input' || port.category !== 'value' || port.isArray) continue;
+      const src = ctx.inputToSource.get(`${nodeId}:${port.id}`);
+      if (src) {
+        const r = compileValueNode(ctx, src.nodeId, src.portId);
+        if (r) inputs[port.id] = r;
+      } else {
+        const inlineVal = getInlineValue(port, node.data.config);
+        if (inlineVal !== undefined) {
+          inputs[port.id] = inlineValueRef(inlineVal, port.dataType === 'float');
+        }
+      }
+    }
+  }
+
+  const result = emitter({ ctx, node, inputs });
+  if (!result) return null;
+  ctx.arrayRefs.set(nodeId, result);
+  return result;
+}
+
+function resolveInputArray(ctx: CompileCtx, node: GraphNode, portId: string): ArrayRef | null {
+  const src = ctx.inputToSource.get(`${node.id}:${portId}`);
+  if (!src) return null;
+  const srcNode = ctx.nodeMap.get(src.nodeId);
+  if (!srcNode) return null;
+  if (!isArrayProducer(srcNode.data.nodeType)) return null;
+  return compileArrayNode(ctx, src.nodeId);
+}
+
+const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
+
+  // Compile-time constant indices (resolved from tags upstream).
+  getNeighborIndexesByTags: ({ node, ctx }) => {
+    const indices: number[] = node.data.config._resolvedTagIndexes
+      ? JSON.parse(node.data.config._resolvedTagIndexes as string) : [];
+    const arr = allocArray(ctx, 'i32', 'arrIdxTags');
+    for (let k = 0; k < indices.length; k++) {
+      ctx.lines.push(`  ${arr.name}[${k}] = ${indices[k]! | 0};`);
+    }
+    ctx.lines.push(`  ${arr.lenName} = ${indices.length};`);
+    return arr;
+  },
+
+  // Filter input array of neighbor indices by comparing the attribute at each
+  // referenced neighbor cell against `compare`.
+  filterNeighbors: ({ node, ctx, inputs }) => {
+    const nbrId = node.data.config.neighborhoodId as string;
+    const attrId = node.data.config.attributeId as string;
+    const op = (node.data.config.operation as string) || 'equals';
+    const nbr = getNbr(ctx.layout, nbrId);
+    const attr = getAttr(ctx.layout, attrId);
+    if (!nbr || !attr) { ctx.errors.push(`filterNeighbors: unknown nbr/attr (${nbrId}/${attrId})`); return null; }
+
+    const inArr = resolveInputArray(ctx, node, 'indexes');
+    if (!inArr) { ctx.errors.push(`filterNeighbors: no array input on "indexes"`); return null; }
+
+    const compare = inputs['compare'] ?? { expr: '0.0', type: 'f32' as WgslType };
+    const out = allocArray(ctx, 'i32', 'arrFilter');
+    const k = fresh(ctx, 'fk');
+    ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${inArr.lenName}; ${k} = ${k} + 1) {`);
+    ctx.lines.push(`    let _idxIn_${k}: i32 = ${arrLoad(inArr, k)};`);
+    const nbrSlot = nbr.wordOffset === 0
+      ? `nbrIndices[i32(idx) * ${nbr.size} + _idxIn_${k}]`
+      : `nbrIndices[${nbr.wordOffset}i + i32(idx) * ${nbr.size} + _idxIn_${k}]`;
+    ctx.lines.push(`    let _nci_${k}: i32 = ${nbrSlot};`);
+    const elem = readAttr(attr, `u32(_nci_${k})`, false);
+    ctx.lines.push(`    let _e_${k}: ${elem.type} = ${elem.expr};`);
+    const elemF = castTo({ expr: `_e_${k}`, type: elem.type }, 'f32');
+    const cmpF = castTo(compare, 'f32');
+    let cmp: string;
+    switch (op) {
+      case 'notEquals':    cmp = '!='; break;
+      case 'greater':      cmp = '>'; break;
+      case 'lesser':       cmp = '<'; break;
+      case 'greaterEqual': cmp = '>='; break;
+      case 'lesserEqual':  cmp = '<='; break;
+      default:             cmp = '=='; break;
+    }
+    ctx.lines.push(`    if ((${elemF}) ${cmp} (${cmpF})) {`);
+    ctx.lines.push(`      ${out.name}[${out.lenName}] = _idxIn_${k};`);
+    ctx.lines.push(`      ${out.lenName} = ${out.lenName} + 1;`);
+    ctx.lines.push(`    }`);
+    ctx.lines.push(`  }`);
+    return out;
+  },
+
+  joinNeighbors: ({ node, ctx }) => {
+    const op = (node.data.config.operation as string) || 'intersection';
+    const a = resolveInputArray(ctx, node, 'a');
+    const b = resolveInputArray(ctx, node, 'b');
+    if (!a || !b) { ctx.errors.push(`joinNeighbors: missing a/b array input`); return null; }
+    const out = allocArray(ctx, 'i32', 'arrJoin');
+    const i = fresh(ctx, 'ji');
+    if (op === 'union') {
+      // Copy A as-is
+      ctx.lines.push(`  for (var ${i}: i32 = 0; ${i} < ${a.lenName}; ${i} = ${i} + 1) {`);
+      ctx.lines.push(`    ${out.name}[${out.lenName}] = ${arrLoad(a, i)};`);
+      ctx.lines.push(`    ${out.lenName} = ${out.lenName} + 1;`);
+      ctx.lines.push(`  }`);
+      // Walk B, skip duplicates
+      const j = fresh(ctx, 'jj');
+      const k = fresh(ctx, 'jk');
+      ctx.lines.push(`  for (var ${j}: i32 = 0; ${j} < ${b.lenName}; ${j} = ${j} + 1) {`);
+      ctx.lines.push(`    let _bElem_${j}: i32 = ${arrLoad(b, j)};`);
+      ctx.lines.push(`    var _found_${j}: bool = false;`);
+      ctx.lines.push(`    for (var ${k}: i32 = 0; ${k} < ${out.lenName}; ${k} = ${k} + 1) {`);
+      ctx.lines.push(`      if (${out.name}[${k}] == _bElem_${j}) { _found_${j} = true; }`);
+      ctx.lines.push(`    }`);
+      ctx.lines.push(`    if (!_found_${j}) {`);
+      ctx.lines.push(`      ${out.name}[${out.lenName}] = _bElem_${j};`);
+      ctx.lines.push(`      ${out.lenName} = ${out.lenName} + 1;`);
+      ctx.lines.push(`    }`);
+      ctx.lines.push(`  }`);
+    } else {
+      // intersection: keep a[i] if it appears in b
+      const k = fresh(ctx, 'jk');
+      ctx.lines.push(`  for (var ${i}: i32 = 0; ${i} < ${a.lenName}; ${i} = ${i} + 1) {`);
+      ctx.lines.push(`    let _aElem_${i}: i32 = ${arrLoad(a, i)};`);
+      ctx.lines.push(`    var _found_${i}: bool = false;`);
+      ctx.lines.push(`    for (var ${k}: i32 = 0; ${k} < ${b.lenName}; ${k} = ${k} + 1) {`);
+      ctx.lines.push(`      if (${arrLoad(b, k)} == _aElem_${i}) { _found_${i} = true; }`);
+      ctx.lines.push(`    }`);
+      ctx.lines.push(`    if (_found_${i}) {`);
+      ctx.lines.push(`      ${out.name}[${out.lenName}] = _aElem_${i};`);
+      ctx.lines.push(`      ${out.lenName} = ${out.lenName} + 1;`);
+      ctx.lines.push(`    }`);
+      ctx.lines.push(`  }`);
+    }
+    return out;
+  },
+
+  // groupCounting (array output): for each matching value, push the source
+  // index into the output array. Source can be getNeighborsAttribute (walks
+  // 0..nbrSize) or another array producer.
+  groupCounting: ({ node, ctx, inputs }) => {
+    const portKey = `${node.id}:values`;
+    const sources = ctx.inputToSources.get(portKey) ?? [];
+    if (sources.length === 0) { ctx.errors.push(`groupCounting (array): no sources`); return null; }
+    const firstSrc = sources[0]!;
+    const firstSrcNode = ctx.nodeMap.get(firstSrc.nodeId);
+    const isNbrPath = sources.length === 1 && firstSrcNode?.data.nodeType === 'getNeighborsAttribute';
+
+    const cmpOp = (node.data.config.operation as string) || 'equals';
+    const lo = (node.data.config.lowOp as string) === '>' ? '>' : '>=';
+    const hi = (node.data.config.highOp as string) === '<' ? '<' : '<=';
+    const cmpRef = inputs['compare'] ?? { expr: '0.0', type: 'f32' as WgslType };
+    const cmpHighRef = inputs['compareHigh'] ?? { expr: '0.0', type: 'f32' as WgslType };
+
+    const out = allocArray(ctx, 'i32', 'arrGC');
+
+    const emitMatch = (loopVar: string, elemFExpr: string) => {
+      const cmpF = castTo(cmpRef, 'f32');
+      let cond: string;
+      switch (cmpOp) {
+        case 'notEquals': cond = `(${elemFExpr} != ${cmpF})`; break;
+        case 'greater':   cond = `(${elemFExpr} > ${cmpF})`; break;
+        case 'lesser':    cond = `(${elemFExpr} < ${cmpF})`; break;
+        case 'between': {
+          const cmpHF = castTo(cmpHighRef, 'f32');
+          cond = `((${elemFExpr} ${lo} ${cmpF}) && (${elemFExpr} ${hi} ${cmpHF}))`; break;
+        }
+        case 'notBetween': {
+          const cmpHF = castTo(cmpHighRef, 'f32');
+          cond = `!((${elemFExpr} ${lo} ${cmpF}) && (${elemFExpr} ${hi} ${cmpHF}))`; break;
+        }
+        default: cond = `(${elemFExpr} == ${cmpF})`; break;
+      }
+      ctx.lines.push(`    if (${cond}) {`);
+      ctx.lines.push(`      ${out.name}[${out.lenName}] = ${loopVar};`);
+      ctx.lines.push(`      ${out.lenName} = ${out.lenName} + 1;`);
+      ctx.lines.push(`    }`);
+    };
+
+    if (isNbrPath) {
+      const srcNode = firstSrcNode!;
+      const nbr = getNbr(ctx.layout, srcNode.data.config.neighborhoodId as string);
+      const attr = getAttr(ctx.layout, srcNode.data.config.attributeId as string);
+      if (!nbr || !attr) { ctx.errors.push(`groupCounting (array): unknown nbr/attr`); return null; }
+      const n = fresh(ctx, 'gcn');
+      ctx.lines.push(`  for (var ${n}: i32 = 0; ${n} < ${nbr.size}; ${n} = ${n} + 1) {`);
+      const nbrSlot = nbr.wordOffset === 0
+        ? `nbrIndices[i32(idx) * ${nbr.size} + ${n}]`
+        : `nbrIndices[${nbr.wordOffset}i + i32(idx) * ${nbr.size} + ${n}]`;
+      ctx.lines.push(`    let _nci_${n}: i32 = ${nbrSlot};`);
+      const elem = readAttr(attr, `u32(_nci_${n})`, false);
+      const elemF = castTo({ expr: elem.expr, type: elem.type }, 'f32');
+      emitMatch(n, elemF);
+      ctx.lines.push(`  }`);
+    } else {
+      const arrSrc = isArrayProducer(firstSrcNode?.data.nodeType ?? '') && sources.length === 1
+        ? compileArrayNode(ctx, firstSrc.nodeId) : null;
+      if (!arrSrc) {
+        ctx.errors.push(`groupCounting (array): only single nbr/array source supported`);
+        return null;
+      }
+      const k = fresh(ctx, 'gck');
+      ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${arrSrc.lenName}; ${k} = ${k} + 1) {`);
+      const elemF = castTo({ expr: arrLoad(arrSrc, k), type: arrSrc.elemType }, 'f32');
+      emitMatch(k, elemF);
+      ctx.lines.push(`  }`);
+    }
+    return out;
+  },
+
+  // Read attribute values at neighbour positions specified by an indexes array.
+  getNeighborsAttrByIndexes: ({ node, ctx }) => {
+    const nbrId = node.data.config.neighborhoodId as string;
+    const attrId = node.data.config.attributeId as string;
+    const nbr = getNbr(ctx.layout, nbrId);
+    const attr = getAttr(ctx.layout, attrId);
+    if (!nbr || !attr) { ctx.errors.push(`getNeighborsAttrByIndexes: unknown nbr/attr`); return null; }
+    const inArr = resolveInputArray(ctx, node, 'indexes');
+    if (!inArr) { ctx.errors.push(`getNeighborsAttrByIndexes: no input on "indexes"`); return null; }
+
+    const elemType = attrElemType(attr.type);
+    const out = allocArray(ctx, elemType, 'arrNbrAttr');
+    const k = fresh(ctx, 'nak');
+    ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${inArr.lenName}; ${k} = ${k} + 1) {`);
+    ctx.lines.push(`    let _idxIn_${k}: i32 = ${arrLoad(inArr, k)};`);
+    const nbrSlot = nbr.wordOffset === 0
+      ? `nbrIndices[i32(idx) * ${nbr.size} + _idxIn_${k}]`
+      : `nbrIndices[${nbr.wordOffset}i + i32(idx) * ${nbr.size} + _idxIn_${k}]`;
+    ctx.lines.push(`    let _nci_${k}: i32 = ${nbrSlot};`);
+    const e = readAttr(attr, `u32(_nci_${k})`, false);
+    // Coerce to the array's element type. For bool attrs we store as i32 (0/1)
+    // for uniform handling; for float we keep f32; for int/tag we keep i32.
+    let stored: string;
+    if (attr.type === 'bool') stored = `select(0, 1, ${e.expr})`;
+    else if (attr.type === 'float') stored = e.expr; // already f32
+    else stored = e.expr; // already i32
+    ctx.lines.push(`    ${out.name}[${k}] = ${stored};`);
+    ctx.lines.push(`  }`);
+    ctx.lines.push(`  ${out.lenName} = ${inArr.lenName};`);
+    return out;
+  },
+};
 
 const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
 
@@ -612,6 +925,16 @@ function emitAggregateOrCount(
   const lo = (node.data.config.lowOp as string) === '>' ? '>' : '>=';
   const hi = (node.data.config.highOp as string) === '<' ? '<' : '<=';
 
+  // Path: single ArrayRef-producing source (e.g. groupCounting.indexes,
+  // getNeighborsAttrByIndexes, filterNeighbors).
+  const isArrayPath = sources.length === 1 && !isNbrPath
+    && firstSrcNode && isArrayProducer(firstSrcNode.data.nodeType);
+  let arrRef: ArrayRef | null = null;
+  if (isArrayPath) {
+    arrRef = compileArrayNode(ctx, firstSrc.nodeId);
+    if (!arrRef) return null;
+  }
+
   if (isNbrPath) {
     const srcNode = firstSrcNode!;
     const nbrId = srcNode.data.config.neighborhoodId as string;
@@ -630,6 +953,13 @@ function emitAggregateOrCount(
     const elem = readAttr(attr, `u32(_nci_${nVar})`, false);
     ctx.lines.push(`    let _e_${nVar}: ${elem.type} = ${elem.expr};`);
     const elemRef: ValueRef = { expr: `_e_${nVar}`, type: elem.type };
+    emitAccumStep(ctx, mode, op, acc, elemRef, accType, cmpRef, cmpHighRef, lo, hi, trackIndex, bestIdx, nVar);
+    ctx.lines.push(`  }`);
+  } else if (arrRef) {
+    const nVar = fresh(ctx, 'an');
+    ctx.lines.push(`  for (var ${nVar}: i32 = 0; ${nVar} < ${arrRef.lenName}; ${nVar} = ${nVar} + 1) {`);
+    ctx.lines.push(`    let _e_${nVar}: ${arrRef.elemType} = ${arrLoad(arrRef, nVar)};`);
+    const elemRef: ValueRef = { expr: `_e_${nVar}`, type: arrRef.elemType };
     emitAccumStep(ctx, mode, op, acc, elemRef, accType, cmpRef, cmpHighRef, lo, hi, trackIndex, bestIdx, nVar);
     ctx.lines.push(`  }`);
   } else {
@@ -655,6 +985,9 @@ function emitAggregateOrCount(
   if (isNbrPath && op === 'average') {
     const nbrSize = (firstSrcNode && getNbr(ctx.layout, firstSrcNode.data.config.neighborhoodId as string)?.size) || 1;
     ctx.lines.push(`  ${acc.name} = ${acc.name} / ${Math.max(1, nbrSize)}.0;`);
+  }
+  if (arrRef && op === 'average') {
+    ctx.lines.push(`  ${acc.name} = ${acc.name} / max(1.0, f32(${arrRef.lenName}));`);
   }
 
   const result: ValueRef = { expr: acc.name, type: accType };
@@ -774,6 +1107,10 @@ function emitGroupStatement(c: NodeEmitContext): ValueRef | null {
     ? `${acc.name} = ${acc.name} && (cmp_${acc.name});`
     : `${acc.name} = ${acc.name} || (cmp_${acc.name});`;
 
+  const arrRef = sources.length === 1 && !isNbrPath
+    && firstSrcNode && isArrayProducer(firstSrcNode.data.nodeType)
+    ? compileArrayNode(ctx, firstSrc.nodeId) : null;
+
   if (isNbrPath) {
     const srcNode = firstSrcNode!;
     const nbrId = srcNode.data.config.neighborhoodId as string;
@@ -792,6 +1129,13 @@ function emitGroupStatement(c: NodeEmitContext): ValueRef | null {
     const elem = readAttr(attr, `u32(_nci_${nVar})`, false);
     ctx.lines.push(`    let _e_${nVar}: ${elem.type} = ${elem.expr};`);
     const elemF = castTo({ expr: `_e_${nVar}`, type: elem.type }, 'f32');
+    ctx.lines.push(`    let cmp_${acc.name}: bool = (${elemF} ${cmpOp} ${xExpr});`);
+    ctx.lines.push(`    ${accumLine}`);
+    ctx.lines.push(`  }`);
+  } else if (arrRef) {
+    const nVar = fresh(ctx, 'gan');
+    ctx.lines.push(`  for (var ${nVar}: i32 = 0; ${nVar} < ${arrRef.lenName}; ${nVar} = ${nVar} + 1) {`);
+    const elemF = castTo({ expr: arrLoad(arrRef, nVar), type: arrRef.elemType }, 'f32');
     ctx.lines.push(`    let cmp_${acc.name}: bool = (${elemF} ${cmpOp} ${xExpr});`);
     ctx.lines.push(`    ${accumLine}`);
     ctx.lines.push(`  }`);
@@ -1122,10 +1466,22 @@ function preEmitValueNodes(ctx: CompileCtx, sourceNodeId: string, sourcePortId: 
 
     for (const port of def.ports) {
       if (port.kind !== 'input' || port.category !== 'value') continue;
-      if (port.isArray) continue;
       const src = ctx.inputToSource.get(`${target.nodeId}:${port.id}`);
-      if (src) compileValueNode(ctx, src.nodeId, src.portId);
       const srcs = ctx.inputToSources.get(`${target.nodeId}:${port.id}`);
+      // Array inputs: dispatch the source through compileArrayNode so the
+      // private-array decl is emitted at the entry-point top scope (cross-
+      // branch references resolve same as scalar values do).
+      if (port.isArray) {
+        if (src && ctx.nodeMap.get(src.nodeId) && isArrayProducer(ctx.nodeMap.get(src.nodeId)!.data.nodeType)) {
+          compileArrayNode(ctx, src.nodeId);
+        }
+        if (srcs) for (const s of srcs) {
+          const sn = ctx.nodeMap.get(s.nodeId);
+          if (sn && isArrayProducer(sn.data.nodeType)) compileArrayNode(ctx, s.nodeId);
+        }
+        continue;
+      }
+      if (src) compileValueNode(ctx, src.nodeId, src.portId);
       if (srcs) for (const s of srcs) compileValueNode(ctx, s.nodeId, s.portId);
     }
 
@@ -1341,11 +1697,12 @@ interface EntryOpts {
   currentMappingId: string | null;
 }
 
-function compileEntry(opts: EntryOpts, base: Omit<CompileCtx, 'lines' | 'valueLocals' | 'localCounter' | 'errors' | 'currentMappingId' | 'allowAttrWrites'>): { code: string; errors: string[] } {
+function compileEntry(opts: EntryOpts, base: Omit<CompileCtx, 'lines' | 'valueLocals' | 'arrayRefs' | 'localCounter' | 'errors' | 'currentMappingId' | 'allowAttrWrites'>): { code: string; errors: string[] } {
   const ctx: CompileCtx = {
     ...base,
     lines: [],
     valueLocals: new Map(),
+    arrayRefs: new Map(),
     localCounter: 0,
     errors: [],
     currentMappingId: opts.currentMappingId,
@@ -1533,8 +1890,14 @@ export function compileGraphWebGPU(
 
   const adj = buildAdjacency(graphNodes, graphEdges, model);
 
-  const baseCtx: Omit<CompileCtx, 'lines' | 'valueLocals' | 'localCounter' | 'errors' | 'currentMappingId' | 'allowAttrWrites'> = {
-    model, layout, viewerIds, stopMessages,
+  // Max neighbourhood size — used to size per-thread `var arr<T, N>` arrays for
+  // array-producing nodes (filterNeighbors, getNeighborsAttrByIndexes, etc).
+  // Floor of 1 so the WGSL `array<T, 1>` declaration is always valid.
+  let maxArraySize = 1;
+  for (const n of layout.nbrs) if (n.size > maxArraySize) maxArraySize = n.size;
+
+  const baseCtx: Omit<CompileCtx, 'lines' | 'valueLocals' | 'arrayRefs' | 'localCounter' | 'errors' | 'currentMappingId' | 'allowAttrWrites'> = {
+    model, layout, viewerIds, stopMessages, maxArraySize,
     nodeMap: adj.nodeMap,
     inputToSource: adj.inputToSource,
     inputToSources: adj.inputToSources,
