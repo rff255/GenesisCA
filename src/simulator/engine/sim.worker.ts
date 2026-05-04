@@ -12,10 +12,12 @@ import {
   createWebGPURuntime, destroyWebGPURuntime, isWebGPUAvailable, shaderHashOf,
   setupBuffersAndPipelines, uploadAttrs, uploadNeighborIndices,
   uploadModelAttrs, uploadActiveViewer, uploadIndicators, uploadIndicatorsAt, dispatchStep,
-  dispatchOutputMapping, readbackAttrs, readbackColors,
+  dispatchOutputMapping, presentToCanvas, readbackAttrs, readbackColors,
   readbackBatched, unpackAttrsFromReadback, unpackAttrFromReadback, resetStopFlag, seedRngState,
+  setupReductionPipelines, dispatchReductions,
   type WebGPURuntime, type ReadbackRegion,
 } from './webgpuRuntime';
+import { decodeReductions, gpuHandledIds, gpuHandledAttrIds } from './webgpuReduce';
 
 interface AttrDef {
   id: string;
@@ -68,6 +70,18 @@ interface InitMsg {
   webgpuLayout?: WebGPULayout;
   /** Default useWebGPU flag (from model properties); flipped via setUseWebGPU later. */
   useWebGPU?: boolean;
+  /** B4B — WebGPU-only: how often (in generations) to read the GPU stop-flag
+   *  back to CPU during a step batch. Default 1 (every step). Higher values
+   *  amortise the per-step mapAsync stall but a stop event may surface up to
+   *  K-1 generations late. */
+  webgpuStopCheckInterval?: number;
+  /** P7 — optional OffscreenCanvas (transferred from the main thread). When
+   *  present and WebGPU is enabled, the worker writes WebGPU output directly
+   *  into the canvas via a present compute pipeline, eliminating the
+   *  per-frame colors readback + sendColors round-trip. */
+  webgpuCanvas?: OffscreenCanvas;
+  webgpuCanvasWidth?: number;
+  webgpuCanvasHeight?: number;
 }
 
 interface StepMsg { type: 'step'; count: number; activeViewer: string; skipColorPass?: boolean }
@@ -79,7 +93,7 @@ interface PaintMsg {
 }
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout }
+interface RecompileMsg { type: 'recompile'; stepCode: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number }
 interface UpdateModelAttrsMsg { type: 'updateModelAttrs'; attrs: Record<string, number> }
 interface ImportImageMsg { type: 'importImage'; pixels: Uint8ClampedArray; mappingId: string; activeViewer: string }
 
@@ -245,6 +259,7 @@ function startWebGPUInit(
   entryPoints: WebGPUEntryPoints | undefined,
   layout: WebGPULayout | undefined,
   shaderError: string | undefined,
+  canvas?: OffscreenCanvas,
 ): void {
   // Bump the sequence FIRST so any in-flight init's `.then` callback sees a
   // mismatch and bails instead of writing to webgpuRuntime.
@@ -269,6 +284,11 @@ function startWebGPUInit(
     self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: true });
     return;
   }
+  // P7 — salvage any direct-render canvas attached to the previous runtime.
+  // The OffscreenCanvas is tied to the worker's lifetime (not to a specific
+  // device); reusing it after recompile keeps direct render alive instead of
+  // falling back to readback-based rendering on every graph edit.
+  const salvagedCanvas = canvas ?? webgpuRuntime?.canvas ?? undefined;
   // Tear down any previous runtime — rebuilt against the new shader/layout.
   destroyWebGPURuntime(webgpuRuntime);
   webgpuRuntime = null;
@@ -279,7 +299,7 @@ function startWebGPUInit(
   // The promise is intentionally not awaited here — init runs in the background
   // and runStep() falls through to JS/WASM until `webgpuRuntime.stepReady` is
   // true. Step 7 (Save/Load State) introduces the await path.
-  void createWebGPURuntime({ shaderCode, entryPoints, layout })
+  void createWebGPURuntime({ shaderCode, entryPoints, layout, canvas: salvagedCanvas })
     .then(async rt => {
       // A newer init started while we were awaiting — the orphaned `rt`
       // belongs to a stale sequence. Destroy it and bail without touching
@@ -302,6 +322,10 @@ function startWebGPUInit(
       uploadModelAttrs(rt, cachedModelAttrs as Record<string, number>);
       uploadActiveViewer(rt, viewerIdMap[activeViewer] ?? -1);
       seedRngState(rt, rngState[0] ?? 0x12345678);
+      // O5 — set up GPU-side reduction pipelines for any GPU-eligible
+      // watched linked indicators. Skipped indicators (float total, integer
+      // /float frequency) keep using the existing CPU readback fallback.
+      setupReductionPipelines(rt, linkedDefs);
       // Initial indicator values
       const vals: Record<string, number> = {};
       for (const { idx, id } of standaloneIds) vals[id] = cachedIndicators[idx]!;
@@ -309,11 +333,20 @@ function startWebGPUInit(
       // Run the active viewer's outputMapping so the colors buffer matches the
       // initial state from the very first frame.
       dispatchOutputMapping(rt, activeViewer);
-      // Pull initial colors back to CPU so the simulator's first paint shows
-      // the model's actual visualization (not all-black).
-      try { await readbackColors(rt, colors); } catch { /* non-fatal */ }
-      if (mySeq !== webgpuInitSeq) return;
-      self.postMessage({ type: 'stepped', generation, colors: new Uint8ClampedArray(colors) });
+      if (rt.directRender) {
+        // P7 — present the initial frame to the OffscreenCanvas. Skip the
+        // colors readback (it's not needed for display) and post a colors-
+        // less stepped message so main thread renders srcCanvas.
+        presentToCanvas(rt);
+        if (mySeq !== webgpuInitSeq) return;
+        self.postMessage({ type: 'stepped', generation });
+      } else {
+        // Pull initial colors back to CPU so the simulator's first paint shows
+        // the model's actual visualization (not all-black).
+        try { await readbackColors(rt, colors); } catch { /* non-fatal */ }
+        if (mySeq !== webgpuInitSeq) return;
+        self.postMessage({ type: 'stepped', generation, colors: new Uint8ClampedArray(colors) });
+      }
       // eslint-disable-next-line no-console
       console.log(`[webgpu] runtime ready: device + shader + buffers + step pipeline (${rt.entryPoints.outputMappings.length} viewer pipeline(s) lazily built)`);
       self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: rt.stepReady });
@@ -371,6 +404,10 @@ let linkedResults: Record<string, number | Record<string, number>> = {};
 // the layout.stopFlagOffset so JS and WASM share the same memory cell.
 let stopFlag: Uint32Array = new Uint32Array(1);
 let stopMessages: string[] = [];
+// B4B — WebGPU stop-check interval. Default 1 (every step). >1 trades stop-event
+// timing precision for fewer per-step mapAsync stalls. The last step of any
+// batch is ALWAYS checked so the user sees the eventual stop within the batch.
+let webgpuStopCheckInterval = 1;
 
 // ---------------------------------------------------------------------------
 // Typed array creation by attribute type
@@ -785,10 +822,26 @@ function runStepWebGPU(): void {
 }
 
 /** Dispatch the active viewer's outputMapping pipeline (writes to colors).
- *  Returns false when the active mapping has no compiled pipeline (no graph). */
+ *  Returns false when the active mapping has no compiled pipeline (no graph).
+ *
+ *  P7 direct render: when the canvas was transferred at init time, also
+ *  dispatch the present pipeline so the OffscreenCanvas's frame mirrors the
+ *  colors buffer. The canvas auto-presents to the visible DOM canvas on the
+ *  main thread — no readback or postMessage needed for display. */
 function runColorPassWebGPU(): boolean {
   if (!webgpuRuntime || !webgpuRuntime.stepReady) return false;
-  return dispatchOutputMapping(webgpuRuntime, activeViewer);
+  const ok = dispatchOutputMapping(webgpuRuntime, activeViewer);
+  // When direct render is active, present unconditionally — the colors
+  // buffer holds the latest state written either by the just-dispatched
+  // output mapping OR by an earlier step shader's SetColorViewer-in-step
+  // (the MNCA "Case Colored" / "Decorated Trace" viewer pattern, which has
+  // no dedicated output mapping graph).
+  if (webgpuRuntime.directRender) presentToCanvas(webgpuRuntime);
+  // O5 — refresh the watched-linked-indicator histograms on GPU. Cheap (a
+  // handful of u32 atomics per cell) and the result rides the same
+  // batched mapAsync as colors/indicators/stopFlag in the next finalize.
+  if (webgpuRuntime.reductionPlan) dispatchReductions(webgpuRuntime);
+  return ok;
 }
 
 /** Refresh the GPU colors buffer after a user interaction (paint, image
@@ -904,15 +957,28 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
   const rt = webgpuRuntime;
   if (!rt || !rt.stepReady) return;
   const fullAttrs = !!opts.needAttrs;
+  // O5 — figure out which watched indicators are handled by the GPU
+  // reduction plan; their attrs don't need a CPU readback. Empty plan →
+  // gpuHandled is empty and the existing CPU path handles everything.
+  const gpuPlan = rt.reductionPlan;
+  const gpuIds = gpuPlan ? gpuHandledIds(gpuPlan) : new Set<string>();
+  const gpuAttrIds = gpuPlan ? gpuHandledAttrIds(gpuPlan, linkedDefs) : new Set<string>();
   // Watched linked indicators need only the source attr's bytes, not the whole
-  // attrs region. Build a deduped list of source attr ids.
+  // attrs region. Build a deduped list of source attr ids — minus the ones
+  // O5 covers on GPU.
   const watchedAttrIds = new Set<string>();
   if (!fullAttrs) {
     for (const d of linkedDefs) {
-      if (d.watched && d.attrId) watchedAttrIds.add(d.attrId);
+      if (!d.watched || !d.attrId) continue;
+      if (gpuIds.has(d.id)) continue; // GPU-reduction handles this one
+      if (gpuAttrIds.has(d.attrId)) continue; // attr already in GPU plan
+      watchedAttrIds.add(d.attrId);
     }
   }
-  const wantColors = opts.needColors !== false; // default true
+  // P7 — direct render owns the canvas; we never need to readback colors for
+  // display. Save-state / GIF / screenshot paths still call readbackColors
+  // explicitly via their own helpers.
+  const wantColors = (opts.needColors !== false) && !rt.directRender; // default true
   const wantIndicators = rt.layout.indicatorIds.length > 0;
   const wantStopFlag = stopMessages.length > 0;
 
@@ -922,6 +988,7 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
   // stop-event path (was 2 mapAsyncs per step, now 1).
   const regions: ReadbackRegion[] = [];
   let colorsRegion = -1, indicatorsRegion = -1, stopRegion = -1, attrsRegion = -1;
+  let reductionsRegion = -1;
   // For selective attrs readback, store the (attrId, region slot) pairs so we
   // can decode each attr's slice back into readAttrs.
   const attrSlots: Array<{ attrId: string; slot: number }> = [];
@@ -936,6 +1003,14 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
   if (wantStopFlag && rt.controlBuf) {
     stopRegion = regions.length;
     regions.push({ src: rt.controlBuf, srcOffset: 0, size: 16 });
+  }
+  // O5 reductions buffer: tiny (a few u32 per watched-linked indicator).
+  // Only included on full finalizes (i.e., not the per-step stop-check
+  // intermediates that pass needColors: false) since dispatchReductions runs
+  // alongside runColorPassWebGPU at the end of a step batch.
+  if (gpuPlan && rt.reductionsBuf && gpuPlan.totalSlots > 0 && opts.needColors !== false) {
+    reductionsRegion = regions.length;
+    regions.push({ src: rt.reductionsBuf, srcOffset: 0, size: Math.max(16, gpuPlan.totalSlots * 4) });
   }
   if (fullAttrs && rt.attrsReadBuf) {
     // Save / explicit full readback path.
@@ -996,6 +1071,38 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
     // Subsequent paint with `gpuOwnsAttrs && icEntry?.fn` will trigger a full
     // readback (B5 fix), so leaving gpuOwnsAttrs=true is safe.
     computeLinkedIndicatorsFromBuffer();
+  }
+  // O5 — decode the reductions slice into linkedResults. Done AFTER the CPU
+  // computeLinkedIndicatorsFromBuffer above so GPU-handled ids overwrite any
+  // partial CPU result for the same id (defensive: gpuAttrIds excludes them
+  // already, but cheap to be safe).
+  if (reductionsRegion >= 0 && gpuPlan) {
+    const bytes = sliced[reductionsRegion]!;
+    const view = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+    const decoded = decodeReductions(gpuPlan, view);
+    for (const id of Object.keys(decoded)) {
+      // Apply per-indicator accumulation mode. Per-generation (the default
+      // for linked indicators) takes the new value as-is; accumulated keeps
+      // a running sum on the CPU side.
+      const def = linkedDefs.find(d => d.id === id);
+      const v = decoded[id]!;
+      if (def && def.accumulationMode === 'accumulated') {
+        if (typeof v === 'number') {
+          const prev = (linkedAccumulators[id] as number | undefined) ?? 0;
+          const next = prev + v;
+          linkedAccumulators[id] = next;
+          linkedResults[id] = next;
+        } else {
+          const prev = (linkedAccumulators[id] as Record<string, number> | undefined) ?? {};
+          const next: Record<string, number> = { ...prev };
+          for (const k of Object.keys(v)) next[k] = (next[k] ?? 0) + (v[k] ?? 0);
+          linkedAccumulators[id] = next;
+          linkedResults[id] = next;
+        }
+      } else {
+        linkedResults[id] = v;
+      }
+    }
   }
 }
 
@@ -1223,7 +1330,6 @@ function computeLinkedIndicatorsFromBuffer(): void {
 }
 
 function sendColors(): void {
-  const copy = new Uint8ClampedArray(colors);
   // Only build indicators payload when there are entries (avoids overhead when no indicators)
   const hasStandalone = standaloneIds.length > 0;
   const hasLinked = linkedDefs.length > 0;
@@ -1237,6 +1343,14 @@ function sendColors(): void {
       indicators[id] = linkedResults[id]!;
     }
   }
+  // P7 — when WebGPU direct render is active, the OffscreenCanvas already
+  // holds the latest frame; skip the colors transfer entirely. Main-thread
+  // draw() detects this and only does the zoom/pan composite.
+  if (webgpuRuntime?.directRender) {
+    self.postMessage({ type: 'stepped', generation, indicators });
+    return;
+  }
+  const copy = new Uint8ClampedArray(colors);
   self.postMessage(
     { type: 'stepped', generation, colors: copy, indicators },
     { transfer: [copy.buffer] },
@@ -1289,6 +1403,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       syncActiveViewerToMemory();
       compileFns(msg.stepCode, msg.inputColorCodes, msg.outputMappingCodes || []);
       stopMessages = msg.stopMessages || [];
+      webgpuStopCheckInterval = Math.max(1, Math.floor(msg.webgpuStopCheckInterval ?? 1));
       // Mutual exclusion safety net: a saved file or hand-edited JSON could
       // arrive with both flags true. The model-properties UI prevents this for
       // any live edit, but worker-side enforcement keeps legacy inputs sane.
@@ -1309,7 +1424,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // adapter/device handshake; runStep() falls through to JS/WASM until
       // `webgpuRuntime.stepReady` flips true (filled in by step 2+).
       if (wantWebGPU) {
-        startWebGPUInit(msg.webgpuShaderCode, msg.webgpuEntryPoints, msg.webgpuLayout, msg.webgpuShaderError);
+        startWebGPUInit(
+          msg.webgpuShaderCode, msg.webgpuEntryPoints, msg.webgpuLayout, msg.webgpuShaderError,
+          msg.webgpuCanvas,
+        );
       } else {
         destroyWebGPURuntime(webgpuRuntime);
         webgpuRuntime = null;
@@ -1336,12 +1454,17 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         (async () => {
           let stoppedByEvent: string | null = null;
           let lastFinalize: Promise<void> = Promise.resolve();
+          // B4B: opt-in K-step skipping. With K=1 (default), check every step
+          // — exact stop-event timing. With K>1, skip the readback on most
+          // steps but ALWAYS check the last step of the batch so the user
+          // sees any pending stop within this batch (otherwise the play loop
+          // would advance past it).
+          const k = Math.max(1, webgpuStopCheckInterval | 0);
           for (let i = 0; i < msg.count; i++) {
             runStepWebGPU();
-            // Only do per-step finalize if there are stop events; otherwise
-            // batch the readback at the end. (When stopMessages is empty the
-            // graph has no stopEvent nodes so the flag stays 0.)
-            if (stopMessages.length > 0) {
+            const isLast = i === msg.count - 1;
+            const shouldCheck = stopMessages.length > 0 && (k === 1 || isLast || (i % k) === (k - 1));
+            if (shouldCheck) {
               await finalizeStepWebGPU({ needColors: false });
               const rawStop = stopFlag[0] ?? 0;
               if (rawStop !== 0) {
@@ -1534,6 +1657,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       }
       compileFns(msg.stepCode, msg.inputColorCodes, (msg as RecompileMsg).outputMappingCodes || []);
       stopMessages = (msg as RecompileMsg).stopMessages || [];
+      if ((msg as RecompileMsg).webgpuStopCheckInterval !== undefined) {
+        webgpuStopCheckInterval = Math.max(1, Math.floor((msg as RecompileMsg).webgpuStopCheckInterval!));
+      }
       tryInstantiateWasmModule((msg as RecompileMsg).wasmStepBytes, (msg as RecompileMsg).wasmExports);
       if ((msg as RecompileMsg).wasmStepError) {
         self.postMessage({ type: 'error', message: '[wasm] recompile failed, falling back to JS: ' + (msg as RecompileMsg).wasmStepError });
@@ -1619,6 +1745,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
 
     case 'updateIndicators': {
       initIndicators(msg.indicators);
+      // O5 — refresh the GPU reduction plan whenever watched/linked status
+      // changes. Cheap (no buffer reallocation when the plan is unchanged at
+      // setupReductionPipelines's level — though the function does rebuild
+      // on every call; acceptable since this fires only on user edit).
+      if (webgpuRuntime?.stepReady) setupReductionPipelines(webgpuRuntime, linkedDefs);
       break;
     }
 
@@ -1732,9 +1863,15 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         }
         self.postMessage(response, { transfer: transfers });
       };
-      if (useWebGPU && webgpuRuntime?.stepReady && gpuOwnsAttrs) {
-        // Pull live GPU state down before serialising.
-        readbackAttrs(webgpuRuntime, readAttrs).then(() => {
+      if (useWebGPU && webgpuRuntime?.stepReady && (gpuOwnsAttrs || webgpuRuntime.directRender)) {
+        // Pull live GPU state down before serialising. With direct render the
+        // CPU `colors` mirror is stale (no per-step readback) — pull it too
+        // so the saved state contains the actual displayed colors.
+        const rt = webgpuRuntime;
+        const tasks: Array<Promise<void>> = [];
+        if (gpuOwnsAttrs) tasks.push(readbackAttrs(rt, readAttrs));
+        if (rt.directRender) tasks.push(readbackColors(rt, colors));
+        Promise.all(tasks).then(() => {
           gpuOwnsAttrs = false;
           sendNow();
         }).catch(e => {

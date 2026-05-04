@@ -164,6 +164,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
   // 1:1 pixel source canvas (reused across draws)
   const srcCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // P7 — when true, srcCanvasRef has had its 2D context transferred to the
+  // worker via OffscreenCanvas. The worker writes WebGPU output directly to
+  // it, so draw() must skip the putImageData step and only do the
+  // zoom/pan drawImage. Reset when the worker is reinitialised.
+  const directRenderActiveRef = useRef<boolean>(false);
 
   // Build full code display from all compiled functions
   const buildFullCode = useCallback((result: ReturnType<typeof compileGraph>) => {
@@ -197,7 +202,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const colors = colorsRef.current;
     const w = gridWidth.current;
     const h = gridHeight.current;
-    if (!canvas || !colors || !w || !h) return;
+    if (!canvas || !w || !h) return;
+    // P7 direct render: srcCanvas is populated by the worker via WebGPU, so
+    // we don't need a CPU `colors` buffer to draw. Without direct render, a
+    // missing colors buffer means we have nothing to display yet.
+    if (!colors && !directRenderActiveRef.current) return;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -208,18 +217,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     canvas.width = parentW;
     canvas.height = parentH;
 
-    // Build 1:1 pixel source from RGBA buffer
-    if (!srcCanvasRef.current || srcCanvasRef.current.width !== w || srcCanvasRef.current.height !== h) {
-      srcCanvasRef.current = document.createElement('canvas');
-      srcCanvasRef.current.width = w;
-      srcCanvasRef.current.height = h;
+    // Build 1:1 pixel source from RGBA buffer.
+    // P7 direct render: when the canvas was transferred to the worker, the
+    // OffscreenCanvas already holds the latest GPU-rendered frame — skip
+    // putImageData (and DON'T recreate, since transferControlToOffscreen has
+    // moved ownership of the 2D context).
+    if (directRenderActiveRef.current && srcCanvasRef.current) {
+      // canvas dimensions are fixed at transfer time; nothing to do here.
+    } else if (colors) {
+      if (!srcCanvasRef.current || srcCanvasRef.current.width !== w || srcCanvasRef.current.height !== h) {
+        srcCanvasRef.current = document.createElement('canvas');
+        srcCanvasRef.current.width = w;
+        srcCanvasRef.current.height = h;
+      }
+      const srcCtx = srcCanvasRef.current.getContext('2d')!;
+      const imageData = new ImageData(
+        new Uint8ClampedArray(colors.buffer, colors.byteOffset, w * h * 4),
+        w, h,
+      );
+      srcCtx.putImageData(imageData, 0, 0);
     }
-    const srcCtx = srcCanvasRef.current.getContext('2d')!;
-    const imageData = new ImageData(
-      new Uint8ClampedArray(colors.buffer, colors.byteOffset, w * h * 4),
-      w, h,
-    );
-    srcCtx.putImageData(imageData, 0, 0);
 
     // Clear and apply zoom/pan
     ctx.clearRect(0, 0, parentW, parentH);
@@ -238,7 +255,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const ox = (parentW - scaledW) / 2 + pan.x;
     const oy = (parentH - scaledH) / 2 + pan.y;
 
-    ctx.drawImage(srcCanvasRef.current, ox, oy, scaledW, scaledH);
+    if (srcCanvasRef.current) {
+      ctx.drawImage(srcCanvasRef.current, ox, oy, scaledW, scaledH);
+    }
 
     // Draw gridlines when zoomed in enough (cells >= 4px)
     if (showGridlinesRef.current && scale >= 4) {
@@ -600,7 +619,36 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         return { shaderCode: '', entryPoints: { step: 'step', outputMappings: [] as Array<{ mappingId: string; entry: string }> }, layout: null as never, error: String((e as Error)?.message || e) };
       }
     })();
-    worker.postMessage({
+    // P7 direct render: when WebGPU is the chosen target AND OffscreenCanvas
+    // is supported (Chrome/Edge for sure, Firefox 144+; Safari is iffy),
+    // pre-allocate srcCanvasRef at grid resolution and transfer its 2D
+    // context to the worker. The worker then writes WebGPU output directly
+    // to it via a present compute pipeline — no per-frame readback or
+    // postMessage of the colors buffer. Failure or unsupported envs fall
+    // back transparently: directRenderActiveRef stays false and the
+    // existing readback-then-putImageData path runs.
+    let canvasForWorker: OffscreenCanvas | undefined;
+    directRenderActiveRef.current = false;
+    const offscreenSupported = typeof HTMLCanvasElement !== 'undefined'
+      && typeof (HTMLCanvasElement.prototype as { transferControlToOffscreen?: unknown }).transferControlToOffscreen === 'function';
+    if (model.properties.useWebGPU && !webgpuResult.error && offscreenSupported) {
+      try {
+        // Always allocate a fresh srcCanvas so transferControlToOffscreen can
+        // succeed (a canvas can only be transferred once, and only if it has
+        // never had a 2D / WebGL context retrieved on the main thread).
+        const fresh = document.createElement('canvas');
+        fresh.width = w; fresh.height = h;
+        canvasForWorker = (fresh as HTMLCanvasElement & { transferControlToOffscreen: () => OffscreenCanvas }).transferControlToOffscreen();
+        srcCanvasRef.current = fresh;
+        directRenderActiveRef.current = true;
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[webgpu] OffscreenCanvas transfer failed; falling back to readback path:', e);
+        canvasForWorker = undefined;
+        directRenderActiveRef.current = false;
+      }
+    }
+    const initMsg: Record<string, unknown> = {
       type: 'init',
       width: w,
       height: h,
@@ -637,7 +685,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       webgpuEntryPoints: webgpuResult.error ? undefined : webgpuResult.entryPoints,
       webgpuLayout: webgpuResult.error ? undefined : webgpuResult.layout,
       useWebGPU: !!model.properties.useWebGPU,
-    });
+      webgpuStopCheckInterval: Math.max(1, Math.floor(model.properties.webgpuStopCheckInterval ?? 1)),
+    };
+    if (canvasForWorker) {
+      initMsg.webgpuCanvas = canvasForWorker;
+      initMsg.webgpuCanvasWidth = w;
+      initMsg.webgpuCanvasHeight = h;
+      worker.postMessage(initMsg, [canvasForWorker]);
+    } else {
+      worker.postMessage(initMsg);
+    }
     workerRef.current = worker;
     if (import.meta.env?.DEV) (window as unknown as { __simWorker?: Worker }).__simWorker = worker;
     setGeneration(0);
@@ -810,6 +867,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         webgpuShaderError: webgpuResult.error,
         webgpuEntryPoints: webgpuResult.error ? undefined : webgpuResult.entryPoints,
         webgpuLayout: webgpuResult.error ? undefined : webgpuResult.layout,
+        webgpuStopCheckInterval: Math.max(1, Math.floor(model.properties.webgpuStopCheckInterval ?? 1)),
       });
       // If user has the model toggle on, ensure useWasm is set (recompile doesn't carry useWasm by default)
       workerRef.current?.postMessage({
