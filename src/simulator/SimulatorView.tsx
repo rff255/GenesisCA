@@ -937,21 +937,34 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       initWorkerWithDimensions(model.properties.gridWidth, model.properties.gridHeight);
     } else {
       // Graph or indicator watch change only → soft recompile (preserves grid)
-      const result = compileGraph(model.graphNodes, model.graphEdges, model);
+      // The Resize button updates `gridWidth.current` / `gridHeight.current` but
+      // intentionally does NOT update model.properties (so the model isn't
+      // marked dirty for a temporary experiment). Mirror the dimsModel pattern
+      // from the full-reinit branch so the recompile sees the actual current
+      // dims — otherwise WebGPU bakes the OLD `total` into its bounds check
+      // and only the first N rows of the resized grid get computed (the
+      // "top stripe" symptom). JS / WASM are tolerant (total is a runtime
+      // arg there); only WebGPU exhibits the bug.
+      const curW = gridWidth.current;
+      const curH = gridHeight.current;
+      const dimsModel = (model.properties.gridWidth === curW && model.properties.gridHeight === curH)
+        ? model
+        : { ...model, properties: { ...model.properties, gridWidth: curW, gridHeight: curH } };
+      const result = compileGraph(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
       setCompiledCode(buildFullCode(result));
       setCompileError(result.error ?? '');
       const wasmResult = (() => {
         try {
-          const layout = computeLayoutFromModel(model);
-          const viewerIds = buildViewerIds(model);
-          return compileGraphWasm(model.graphNodes, model.graphEdges, model, layout, viewerIds);
+          const layout = computeLayoutFromModel(dimsModel);
+          const viewerIds = buildViewerIds(dimsModel);
+          return compileGraphWasm(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel, layout, viewerIds);
         } catch (e) {
           return { bytes: new Uint8Array(), minMemoryPages: 1, error: String((e as Error)?.message || e), viewerIds: {}, exports: [] };
         }
       })();
       const webgpuResult = (() => {
         try {
-          return compileGraphWebGPU(model.graphNodes, model.graphEdges, model);
+          return compileGraphWebGPU(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
         } catch (e) {
           return { shaderCode: '', entryPoints: { step: 'step', outputMappings: [] as Array<{ mappingId: string; entry: string }> }, layout: null as never, error: String((e as Error)?.message || e) };
         }
