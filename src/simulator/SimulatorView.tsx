@@ -198,6 +198,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // it, so draw() must skip the putImageData step and only do the
   // zoom/pan drawImage. Reset when the worker is reinitialised.
   const directRenderActiveRef = useRef<boolean>(false);
+  // True between worker init and the first useWebGPUStatus { ready: true }
+  // message: signals that we still owe the worker a canvas transfer once it
+  // confirms WebGPU is up. We defer the transfer (rather than doing it
+  // optimistically at init time) so the JS-fallback period during async
+  // device acquisition can still draw via putImageData on a regular 2D
+  // canvas. Set in initWorkerWithDimensions; cleared in the
+  // useWebGPUStatus handler after the canvas is sent.
+  const pendingCanvasAttach = useRef<boolean>(false);
 
   // Build full code display from all compiled functions
   const buildFullCode = useCallback((result: ReturnType<typeof compileGraph>) => {
@@ -624,6 +632,42 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       pendingSimStateRestore.current = null;
       applySimulationState(state);
     }
+
+    // P7 deferred attach: when the worker confirms WebGPU is up AND we still
+    // owe it a canvas, do the transferControlToOffscreen + attachCanvas
+    // postMessage now. Only the FIRST ready per worker triggers the transfer
+    // (pendingCanvasAttach.current gates it). After the swap, draw() switches
+    // from the JS-fallback putImageData path to the direct-render drawImage
+    // path automatically (directRenderActiveRef flips with srcCanvasRef).
+    if (msg.type === 'useWebGPUStatus') {
+      if (msg.ready && pendingCanvasAttach.current) {
+        pendingCanvasAttach.current = false;
+        try {
+          const fresh = document.createElement('canvas');
+          fresh.width = gridWidth.current;
+          fresh.height = gridHeight.current;
+          const offscreen = (fresh as HTMLCanvasElement & {
+            transferControlToOffscreen: () => OffscreenCanvas;
+          }).transferControlToOffscreen();
+          workerRef.current?.postMessage(
+            { type: 'attachCanvas', canvas: offscreen, width: fresh.width, height: fresh.height },
+            [offscreen],
+          );
+          srcCanvasRef.current = fresh;
+          directRenderActiveRef.current = true;
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.warn('[webgpu] deferred OffscreenCanvas transfer failed; staying on readback path:', e);
+          directRenderActiveRef.current = false;
+        }
+      } else if (msg.ready === false) {
+        // Worker reports WebGPU is not ready (init failure or downgrade).
+        // If we already attached a canvas, the transferred canvas is dead and
+        // we can't putImageData onto it — but at least the flag now reflects
+        // reality so future fixes (spare canvas, etc) have a hook.
+        directRenderActiveRef.current = false;
+      }
+    }
   };
 
   // Reusable worker initializer (used by structural effect and dimension/image apply)
@@ -716,40 +760,34 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         return { shaderCode: '', entryPoints: { step: 'step', outputMappings: [] as Array<{ mappingId: string; entry: string }> }, layout: null as never, error: String((e as Error)?.message || e) };
       }
     })();
-    // P7 direct render: when WebGPU is the chosen target AND OffscreenCanvas
-    // is supported (Chrome/Edge for sure, Firefox 144+; Safari is iffy),
-    // pre-allocate srcCanvasRef at grid resolution and transfer its 2D
-    // context to the worker. The worker then writes WebGPU output directly
-    // to it via a present compute pipeline — no per-frame readback or
-    // postMessage of the colors buffer. Failure or unsupported envs fall
-    // back transparently: directRenderActiveRef stays false and the
-    // existing readback-then-putImageData path runs.
-    let canvasForWorker: OffscreenCanvas | undefined;
+    // P7 direct render: under WebGPU we eventually transfer srcCanvas's
+    // control to an OffscreenCanvas so the worker's WebGPU runtime can write
+    // straight to it via the present compute pipeline. We DEFER that transfer
+    // until the worker confirms via useWebGPUStatus that the runtime is up —
+    // until then srcCanvas stays a regular 2D canvas so the JS-fallback
+    // colors path (which the worker uses while async device init is in
+    // flight) can still putImageData onto it. Without this deferral, every
+    // worker init had a 50-500ms window where the user saw a frozen blank
+    // grid even while the worker was correctly evolving CPU state.
     directRenderActiveRef.current = false;
+    pendingCanvasAttach.current = false;
     // Drop any prior srcCanvas reference — if the previous worker init went
     // through the direct-render path, srcCanvasRef holds a transferred canvas
     // whose 2D context is permanently unavailable. Re-using it here would
     // make all later getImageData / drawImage calls fail silently (visible
     // symptom: GIF recording captures zero frames after a WebGPU→JS toggle).
-    srcCanvasRef.current = null;
+    {
+      const fresh = document.createElement('canvas');
+      fresh.width = w; fresh.height = h;
+      srcCanvasRef.current = fresh;
+    }
     const offscreenSupported = typeof HTMLCanvasElement !== 'undefined'
       && typeof (HTMLCanvasElement.prototype as { transferControlToOffscreen?: unknown }).transferControlToOffscreen === 'function';
+    // Mark that we want to attach a canvas once the worker reports ready.
+    // The actual transferControlToOffscreen + postMessage('attachCanvas')
+    // happens in the useWebGPUStatus handler.
     if (model.properties.useWebGPU && !webgpuResult.error && offscreenSupported) {
-      try {
-        // Always allocate a fresh srcCanvas so transferControlToOffscreen can
-        // succeed (a canvas can only be transferred once, and only if it has
-        // never had a 2D / WebGL context retrieved on the main thread).
-        const fresh = document.createElement('canvas');
-        fresh.width = w; fresh.height = h;
-        canvasForWorker = (fresh as HTMLCanvasElement & { transferControlToOffscreen: () => OffscreenCanvas }).transferControlToOffscreen();
-        srcCanvasRef.current = fresh;
-        directRenderActiveRef.current = true;
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn('[webgpu] OffscreenCanvas transfer failed; falling back to readback path:', e);
-        canvasForWorker = undefined;
-        directRenderActiveRef.current = false;
-      }
+      pendingCanvasAttach.current = true;
     }
     const initMsg: Record<string, unknown> = {
       type: 'init',
@@ -790,14 +828,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       useWebGPU: !!model.properties.useWebGPU,
       webgpuStopCheckInterval: Math.max(1, Math.floor(model.properties.webgpuStopCheckInterval ?? 1)),
     };
-    if (canvasForWorker) {
-      initMsg.webgpuCanvas = canvasForWorker;
-      initMsg.webgpuCanvasWidth = w;
-      initMsg.webgpuCanvasHeight = h;
-      worker.postMessage(initMsg, [canvasForWorker]);
-    } else {
-      worker.postMessage(initMsg);
-    }
+    // Canvas transfer is deferred to the useWebGPUStatus handler — see
+    // pendingCanvasAttach above. The init message never carries webgpuCanvas
+    // anymore; the worker's startWebGPUInit runs without a canvas, falls
+    // through to the readback path until attachCanvas arrives.
+    worker.postMessage(initMsg);
     workerRef.current = worker;
     if (import.meta.env?.DEV) (window as unknown as { __simWorker?: Worker }).__simWorker = worker;
     generationRef.current = 0;

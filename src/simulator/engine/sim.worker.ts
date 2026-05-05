@@ -14,7 +14,7 @@ import {
   uploadModelAttrs, uploadActiveViewer, uploadIndicators, uploadIndicatorsAt, dispatchStep,
   dispatchOutputMapping, dispatchColorPassAndPresent, readbackAttrs, readbackColors,
   readbackBatched, unpackAttrsFromReadback, unpackAttrFromReadback, resetStopFlag, seedRngState,
-  setupReductionPipelines, dispatchReductions,
+  setupReductionPipelines, dispatchReductions, setupDirectRender,
   type WebGPURuntime, type ReadbackRegion,
 } from './webgpuRuntime';
 import { decodeReductions, gpuHandledIds, gpuHandledAttrIds } from './webgpuReduce';
@@ -160,8 +160,13 @@ interface ColorPassMsg { type: 'colorPass'; activeViewer: string }
  *  on the main thread). Cost (the per-frame readback) is paid only while
  *  recording. */
 interface SetRecordingMsg { type: 'setRecording'; enabled: boolean }
+/** Late-binding canvas attach: the main thread defers transferControlToOffscreen
+ *  until the WebGPU runtime is confirmed ready, so the JS-fallback period during
+ *  init can still putImageData onto a regular canvas. Worker switches to direct
+ *  render upon receipt. */
+interface AttachCanvasMsg { type: 'attachCanvas'; canvas: OffscreenCanvas; width: number; height: number }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -292,7 +297,7 @@ function startWebGPUInit(
   // expensive async device + shaderModule + pipeline rebuild — saves hundreds
   // of ms on graph-only edits where the user isn't actually changing the rule.
   if (shaderCode && webgpuRuntime?.stepReady && shaderHashOf(shaderCode) === webgpuRuntime.shaderHash) {
-    self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: true });
+    self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: true, directRender: webgpuRuntime.directRender });
     return;
   }
   // P7 — salvage any direct-render canvas attached to the previous runtime.
@@ -358,7 +363,7 @@ function startWebGPUInit(
       }
       // eslint-disable-next-line no-console
       console.log(`[webgpu] runtime ready: device + shader + buffers + step pipeline (${rt.entryPoints.outputMappings.length} viewer pipeline(s) lazily built)`);
-      self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: rt.stepReady });
+      self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: rt.stepReady, directRender: rt.directRender });
     })
     .catch((e: unknown) => {
       // Same staleness check on the failure path — don't clobber the newer
@@ -367,7 +372,7 @@ function startWebGPUInit(
       webgpuRuntime = null;
       const msg = (e instanceof Error) ? e.message : String(e);
       self.postMessage({ type: 'error', message: '[webgpu] init failed: ' + msg });
-      self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: false });
+      self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: false, directRender: false });
     });
 }
 
@@ -1738,12 +1743,36 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // Mutual exclusion: WebGPU wins.
         useWasm = false;
       }
-      self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: webgpuRuntime?.stepReady ?? false });
+      self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: webgpuRuntime?.stepReady ?? false, directRender: webgpuRuntime?.directRender ?? false });
       break;
     }
 
     case 'setRecording': {
       recording = !!msg.enabled;
+      break;
+    }
+
+    case 'attachCanvas': {
+      // Main thread deferred the canvas transfer until WebGPU runtime is up.
+      // Wire it into the existing runtime via setupDirectRender, then dispatch
+      // an immediate color pass + present so the canvas isn't blank when the
+      // main thread drawImage's it on the next frame.
+      if (!webgpuRuntime || !webgpuRuntime.stepReady) {
+        self.postMessage({ type: 'error', message: '[webgpu] attachCanvas before runtime ready' });
+        break;
+      }
+      webgpuRuntime.canvas = msg.canvas;
+      try {
+        setupDirectRender(webgpuRuntime);
+        if (webgpuRuntime.directRender) {
+          dispatchColorPassAndPresent(webgpuRuntime, activeViewer);
+          self.postMessage({ type: 'stepped', generation });
+          self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: true, directRender: true });
+        }
+      } catch (e) {
+        const m = (e instanceof Error) ? e.message : String(e);
+        self.postMessage({ type: 'error', message: '[webgpu] attachCanvas failed: ' + m });
+      }
       break;
     }
 
