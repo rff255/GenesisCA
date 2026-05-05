@@ -887,6 +887,24 @@ function refreshColorsAfterInputWebGPU(): void {
   runStepWebGPU();
 }
 
+/** JS / WASM analogue of refreshColorsAfterInputWebGPU. Same intent: after any
+ *  CPU-side mutation (paint, paste, clear, randomize, reset, image import),
+ *  refresh the CPU `colors` mirror so the next sendColors ships up-to-date
+ *  pixels. Prefer the active viewer's Output Mapping (no generation advance);
+ *  fall back to one Step (advances gen by 1; required for viewers like MNCA
+ *  that emit colors via SetColorViewer-in-step); fall back to the bool-attr
+ *  default coloring. ALL JS/WASM mutation handlers should call this — without
+ *  it, no-OM viewers display pre-mutation colors after Ctrl+V / Ctrl+X. */
+function refreshColorsAfterInputJS(): void {
+  if (outputMappingFns.some(f => f.mappingId === activeViewer)) {
+    runColorPass();
+  } else if (stepFn) {
+    runStep();
+  } else {
+    writeDefaultColors();
+  }
+}
+
 /** Patch the GPU `attrsRead` buffer for a set of cell indices, copying their
  *  current values from the CPU `readAttrs` mirror. Used by mutation handlers
  *  (paint, writeRegion, clearRegion) to update only the touched cells without
@@ -1210,9 +1228,7 @@ function randomizeGrid(): void {
   // SetColorViewer-in-step viewers (e.g. MNCA "Decorated Trace") display a
   // step OF the pre-randomize state instead of the random state itself.
   if (useWebGPU && webgpuRuntime?.stepReady) return;
-  // Prefer Output Mapping color pass (no generation advance) over runStep fallback
-  const hasColorPassR = outputMappingFns.some(f => f.mappingId === activeViewer);
-  if (hasColorPassR) { runColorPass(); } else if (stepFn) { runStep(); } else { writeDefaultColors(); }
+  refreshColorsAfterInputJS();
 }
 
 function resetGrid(): void {
@@ -1227,8 +1243,7 @@ function resetGrid(): void {
   // Same reasoning as randomizeGrid — under WebGPU defer the visual update to
   // the message handler. See randomizeGrid comment above.
   if (useWebGPU && webgpuRuntime?.stepReady) return;
-  const hasColorPassRs = outputMappingFns.some(f => f.mappingId === activeViewer);
-  if (hasColorPassRs) { runColorPass(); } else if (stepFn) { runStep(); } else { writeDefaultColors(); }
+  refreshColorsAfterInputJS();
 }
 
 function compileFns(
@@ -1640,7 +1655,6 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         }
 
         // Update display.
-        const hasColorPass = outputMappingFns.some(f => f.mappingId === activeViewer);
         const webgpuPaint = useWebGPU && webgpuRuntime?.stepReady;
         if (webgpuPaint && webgpuRuntime) {
           // Patch only the painted cells — the rest of the GPU buffer holds
@@ -1659,13 +1673,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             .catch(e => self.postMessage({ type: 'error', message: '[webgpu] paint colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
           return;
         }
-        if (hasColorPass) {
-          runColorPass();
-        } else if (stepFn) {
-          runStep();
-        } else {
-          writeDefaultColors();
-        }
+        refreshColorsAfterInputJS();
         sendColors();
       };
 
@@ -1966,7 +1974,6 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         }
       }
       // Update display.
-      const hasColorPassImg = outputMappingFns.some(f => f.mappingId === activeViewer);
       const webgpuImport = useWebGPU && webgpuRuntime?.stepReady;
       if (webgpuImport && webgpuRuntime) {
         uploadAttrs(webgpuRuntime, readAttrs);
@@ -1977,13 +1984,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           .catch(e => self.postMessage({ type: 'error', message: '[webgpu] importImage colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
         break;
       }
-      if (hasColorPassImg) {
-        runColorPass();
-      } else if (stepFn) {
-        runStep();
-      } else {
-        writeDefaultColors();
-      }
+      refreshColorsAfterInputJS();
       sendColors();
       break;
     }
@@ -2214,9 +2215,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           .catch(e => self.postMessage({ type: 'error', message: '[webgpu] writeRegion colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
         break;
       }
-      if (outputMappingFns.some(f => f.mappingId === activeViewer)) {
-        runColorPass();
-      }
+      // JS / WASM fallback — without the runStep fallback for no-OM viewers,
+      // pasting on viewers like MNCA "Decorated Trace" leaves the canvas
+      // showing pre-paste colors (the colors buffer is only refreshed by the
+      // step shader on those viewers).
+      refreshColorsAfterInputJS();
       sendColors();
       break;
     }
@@ -2260,9 +2263,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           .catch(e => self.postMessage({ type: 'error', message: '[webgpu] clearRegion colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
         break;
       }
-      if (outputMappingFns.some(f => f.mappingId === activeViewer)) {
-        runColorPass();
-      }
+      // JS / WASM fallback — same shape as writeRegion above. No-OM viewers
+      // rely on the step shader to repaint colors.
+      refreshColorsAfterInputJS();
       sendColors();
       break;
     }
