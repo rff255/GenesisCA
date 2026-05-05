@@ -206,6 +206,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // canvas. Set in initWorkerWithDimensions; cleared in the
   // useWebGPUStatus handler after the canvas is sent.
   const pendingCanvasAttach = useRef<boolean>(false);
+  // Holds the about-to-be-direct-render canvas between the moment we send
+  // attachCanvas to the worker and the moment the worker confirms direct
+  // render is live (second useWebGPUStatus { ready: true, directRender: true }).
+  // Until that ack arrives we keep srcCanvasRef pointing at the regular 2D
+  // canvas (which has the latest JS-fallback putImageData content) so draw()
+  // doesn't flash blank. If the ack never arrives (worker rejected attach,
+  // or the runtime was destroyed before processing it), the placeholder
+  // canvas stays orphaned and we stay on the JS-fallback path.
+  const pendingDirectRenderCanvas = useRef<HTMLCanvasElement | null>(null);
 
   // Build full code display from all compiled functions
   const buildFullCode = useCallback((result: ReturnType<typeof compileGraph>) => {
@@ -626,6 +635,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       );
     }
 
+    // One-shot colors snapshot — used by handleScreenshot under direct render
+    // (where the placeholder srcCanvas can't be read on the main thread).
+    if (msg.type === 'colorsSnapshot') {
+      const cb = screenshotPendingRef.current;
+      if (cb && msg.tag === 'screenshot') {
+        screenshotPendingRef.current = null;
+        cb({ w: msg.w as number, h: msg.h as number, colors: msg.colors as Uint8ClampedArray | undefined });
+      }
+      return;
+    }
+
     // Restore simulation state from loaded .gcaproj (after worker init completes)
     if (msg.type === 'stepped' && pendingSimStateRestore.current) {
       const state = pendingSimStateRestore.current;
@@ -633,14 +653,33 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       applySimulationState(state);
     }
 
-    // P7 deferred attach: when the worker confirms WebGPU is up AND we still
-    // owe it a canvas, do the transferControlToOffscreen + attachCanvas
-    // postMessage now. Only the FIRST ready per worker triggers the transfer
-    // (pendingCanvasAttach.current gates it). After the swap, draw() switches
-    // from the JS-fallback putImageData path to the direct-render drawImage
-    // path automatically (directRenderActiveRef flips with srcCanvasRef).
+    // P7 deferred attach: a two-phase handshake with the worker so we never
+    // claim direct render before it's actually live.
+    //
+    //   Phase 1 — useWebGPUStatus { ready: true, directRender: false }:
+    //     Worker has its WebGPU runtime up but no canvas yet. We allocate a
+    //     fresh canvas, transferControlToOffscreen, and ship it via
+    //     attachCanvas. We do NOT swap srcCanvasRef yet — keep the existing
+    //     regular 2D canvas (with its JS-fallback putImageData content) so
+    //     draw() doesn't flash blank during the GPU's first present.
+    //
+    //   Phase 2 — useWebGPUStatus { ready: true, directRender: true }:
+    //     Worker has wired the canvas in setupDirectRender and dispatched the
+    //     first present. NOW we swap srcCanvasRef to the transferred canvas
+    //     and flip directRenderActiveRef. Subsequent draw() reads GPU output.
+    //
+    // If Phase 2 never arrives (attachCanvas rejected, runtime destroyed in
+    // a race), the transferred canvas stays orphaned in pendingDirectRenderCanvas
+    // and we stay permanently on JS-fallback — graceful degradation.
     if (msg.type === 'useWebGPUStatus') {
-      if (msg.ready && pendingCanvasAttach.current) {
+      if (msg.ready && msg.directRender && pendingDirectRenderCanvas.current) {
+        // Phase 2 ack — commit the swap.
+        srcCanvasRef.current = pendingDirectRenderCanvas.current;
+        pendingDirectRenderCanvas.current = null;
+        directRenderActiveRef.current = true;
+      } else if (msg.ready && pendingCanvasAttach.current) {
+        // Phase 1 ack — send attachCanvas, stash the fresh canvas, but DON'T
+        // swap srcCanvasRef or set directRenderActiveRef yet.
         pendingCanvasAttach.current = false;
         try {
           const fresh = document.createElement('canvas');
@@ -653,19 +692,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             { type: 'attachCanvas', canvas: offscreen, width: fresh.width, height: fresh.height },
             [offscreen],
           );
-          srcCanvasRef.current = fresh;
-          directRenderActiveRef.current = true;
+          pendingDirectRenderCanvas.current = fresh;
         } catch (e) {
           // eslint-disable-next-line no-console
           console.warn('[webgpu] deferred OffscreenCanvas transfer failed; staying on readback path:', e);
           directRenderActiveRef.current = false;
+          pendingDirectRenderCanvas.current = null;
         }
       } else if (msg.ready === false) {
-        // Worker reports WebGPU is not ready (init failure or downgrade).
-        // If we already attached a canvas, the transferred canvas is dead and
-        // we can't putImageData onto it — but at least the flag now reflects
-        // reality so future fixes (spare canvas, etc) have a hook.
+        // Worker reports WebGPU is off (init failure or explicit downgrade).
+        // Drop any pending direct-render canvas so we don't apply it later.
         directRenderActiveRef.current = false;
+        pendingDirectRenderCanvas.current = null;
       }
     }
   };
@@ -771,6 +809,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // grid even while the worker was correctly evolving CPU state.
     directRenderActiveRef.current = false;
     pendingCanvasAttach.current = false;
+    pendingDirectRenderCanvas.current = null;
     // Drop any prior srcCanvas reference — if the previous worker init went
     // through the direct-render path, srcCanvasRef holds a transferred canvas
     // whose 2D context is permanently unavailable. Re-using it here would
@@ -1576,12 +1615,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     workerRef.current?.postMessage({ type: 'updateModelAttrs', attrs: { [attrId]: value } });
   };
 
-  // F4: Screenshot export — 1:1 pixel-perfect from source canvas (no scaling)
+  // F4: Screenshot export — 1:1 pixel-perfect from source canvas (no scaling).
+  // Under WebGPU direct render the placeholder srcCanvas's 2D context is gone
+  // (transferred to the worker), so toBlob/getImageData all fail. Ask the
+  // worker for a fresh colors snapshot, paint it onto an offscreen 2D canvas,
+  // then toBlob from there. Falls through to direct toBlob in JS/WASM modes.
+  const screenshotPendingRef = useRef<((data: { w: number; h: number; colors?: Uint8ClampedArray }) => void) | null>(null);
   const handleScreenshot = () => {
-    const src = srcCanvasRef.current;
-    if (!src) return;
-    src.toBlob(blob => {
-      if (!blob) return;
+    const w = gridWidth.current;
+    const h = gridHeight.current;
+    const downloadBlob = (blob: Blob) => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       const name = model.properties.name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '') || 'genesis';
@@ -1589,7 +1632,25 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       a.download = `${name}_gen${generationRef.current}.png`;
       a.click();
       URL.revokeObjectURL(url);
-    }, 'image/png');
+    };
+    if (directRenderActiveRef.current) {
+      if (!workerRef.current || !w || !h) return;
+      screenshotPendingRef.current = ({ w: cw, h: ch, colors }) => {
+        if (!colors || colors.length < cw * ch * 4) return;
+        const off = document.createElement('canvas');
+        off.width = cw; off.height = ch;
+        const ctx = off.getContext('2d');
+        if (!ctx) return;
+        const imageData = new ImageData(new Uint8ClampedArray(colors), cw, ch);
+        ctx.putImageData(imageData, 0, 0);
+        off.toBlob(blob => { if (blob) downloadBlob(blob); }, 'image/png');
+      };
+      workerRef.current.postMessage({ type: 'requestColorsSnapshot', tag: 'screenshot' });
+      return;
+    }
+    const src = srcCanvasRef.current;
+    if (!src) return;
+    src.toBlob(blob => { if (blob) downloadBlob(blob); }, 'image/png');
   };
 
   // Save simulation state
