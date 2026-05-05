@@ -1,9 +1,14 @@
 import type { NodeTypeDef } from '../types';
+import {
+  DEFAULT_INTERPOLATION_METHOD,
+  curvedTVarName,
+  emitInterpolationCurveJS,
+} from './interpolationMethods';
 
 export const ColorInterpolationNode: NodeTypeDef = {
   type: 'colorInterpolation',
   label: 'Color Interpolate',
-  description: 'Linearly interpolates between two RGB colors using T in [0, 1].',
+  description: 'Interpolates between two RGB colors using T in [0, 1] with a selectable curve.',
   category: 'color',
   color: '#006064',
   ports: [
@@ -18,8 +23,8 @@ export const ColorInterpolationNode: NodeTypeDef = {
     { id: 'g', label: 'G', kind: 'output', category: 'value', dataType: 'integer' },
     { id: 'b', label: 'B', kind: 'output', category: 'value', dataType: 'integer' },
   ],
-  defaultConfig: {},
-  compile: (nodeId, _config, inputs) => {
+  defaultConfig: { method: DEFAULT_INTERPOLATION_METHOD },
+  compile: (nodeId, config, inputs) => {
     const t = inputs['t'] || '0.5';
     const r1 = inputs['r1'] || '0';
     const g1 = inputs['g1'] || '0';
@@ -27,10 +32,14 @@ export const ColorInterpolationNode: NodeTypeDef = {
     const r2 = inputs['r2'] || '255';
     const g2 = inputs['g2'] || '255';
     const b2 = inputs['b2'] || '255';
+    const method = (config.method as string) || DEFAULT_INTERPOLATION_METHOD;
+    const curveSetup = emitInterpolationCurveJS(nodeId, t, method);
+    const tf = curvedTVarName(nodeId);
     return [
-      `const _v${nodeId}_r = Math.round((${r1}) + (${t}) * ((${r2}) - (${r1})));`,
-      `const _v${nodeId}_g = Math.round((${g1}) + (${t}) * ((${g2}) - (${g1})));`,
-      `const _v${nodeId}_b = Math.round((${b1}) + (${t}) * ((${b2}) - (${b1})));`,
+      curveSetup,
+      `const _v${nodeId}_r = Math.round((${r1}) + ${tf} * ((${r2}) - (${r1})));`,
+      `const _v${nodeId}_g = Math.round((${g1}) + ${tf} * ((${g2}) - (${g1})));`,
+      `const _v${nodeId}_b = Math.round((${b1}) + ${tf} * ((${b2}) - (${b1})));`,
     ].join(' ') + '\n';
   },
 };

@@ -166,6 +166,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const isPanning = useRef(false);
   const lastMouse = useRef({ x: 0, y: 0 });
   const cursorGrid = useRef<{ row: number; col: number } | null>(null);
+  /** Cell coordinates / brush rect under the cursor. State (not a ref) so the
+   *  overlay re-renders, but only updated when the integer cell or brush
+   *  dimensions change to keep mousemove cheap. */
+  const [hoverCellInfo, setHoverCellInfo] = useState<{
+    col: number; row: number; x0: number; y0: number; x1: number; y1: number;
+  } | null>(null);
   const lastPaintGrid = useRef<{ row: number; col: number } | null>(null);
   // Paint coalescing: instead of posting a paint message per mouse-move event
   // (~50-200/sec on a fast brush drag), collect cells in a buffer and flush
@@ -1231,6 +1237,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // Update brush cursor position
       const gridPos = screenToGrid(e.clientX, e.clientY);
       cursorGrid.current = gridPos;
+      // Update the hover-coords chip — only when the integer cell or brush
+      // dimensions change, so React re-renders are coarse-grained.
+      const bw = brushWRef.current;
+      const bh = brushHRef.current;
+      if (gridPos) {
+        const halfW = Math.floor((bw - 1) / 2);
+        const halfH = Math.floor((bh - 1) / 2);
+        const x0 = gridPos.col - halfW;
+        const y0 = gridPos.row - halfH;
+        const x1 = x0 + bw - 1;
+        const y1 = y0 + bh - 1;
+        setHoverCellInfo(prev =>
+          prev && prev.col === gridPos.col && prev.row === gridPos.row
+            && prev.x0 === x0 && prev.y0 === y0 && prev.x1 === x1 && prev.y1 === y1
+            ? prev
+            : { col: gridPos.col, row: gridPos.row, x0, y0, x1, y1 }
+        );
+      } else {
+        setHoverCellInfo(prev => (prev === null ? prev : null));
+      }
       if (!isPanning.current && !(e.buttons & 1) && !isResizingBrush.active) draw();
 
       // Ctrl+LMB drag = resize brush
@@ -1280,7 +1306,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       e.preventDefault();
     };
 
-    const handleMouseLeave = () => { cursorGrid.current = null; draw(); };
+    const handleMouseLeave = () => {
+      cursorGrid.current = null;
+      setHoverCellInfo(prev => (prev === null ? prev : null));
+      draw();
+    };
 
     container.addEventListener('wheel', handleWheel, { passive: false });
     container.addEventListener('mousedown', handleMouseDown);
@@ -1943,6 +1973,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           <span>{gridWidth.current || simWidth}&times;{gridHeight.current || simHeight}</span>
           <span>{actualFps} FPS</span>
           <span>{actualGps} g/s</span>
+          {hoverCellInfo && (
+            (hoverCellInfo.x0 === hoverCellInfo.x1 && hoverCellInfo.y0 === hoverCellInfo.y1)
+              ? <span title="Hovered cell">Cell ({hoverCellInfo.col}, {hoverCellInfo.row})</span>
+              : <span title="Brush footprint at the hovered cell">Cells ({hoverCellInfo.x0},{hoverCellInfo.y0}) {'\u2192'} ({hoverCellInfo.x1},{hoverCellInfo.y1})</span>
+          )}
           {recording && <span style={{ color: '#e05050' }}>{'\u23FA'} REC {recordFrameCount}f</span>}
         </div>
 

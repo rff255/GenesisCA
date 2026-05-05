@@ -196,6 +196,37 @@ function emitLet(ctx: CompileCtx, type: WgslType, expr: string, prefix: string =
   ctx.lines.push(`  let ${name}: ${type} = ${expr};`);
   return { expr: name, type };
 }
+
+/**
+ * Build a WGSL expression that computes the interpolation curve f(t) for the
+ * given method. Mirrors `emitInterpolationCurveJS` in
+ * `nodes/interpolationMethods.ts` and the WASM variant.
+ *
+ * For non-linear methods, t is clamped to [0, 1] before applying the curve;
+ * `linear` keeps unclamped extrapolation to match the JS / WASM behaviour.
+ */
+function wgslInterpolationCurveExpr(tExpr: string, method: string): string {
+  if (method === 'linear') return `(${tExpr})`;
+  const tcl = `clamp((${tExpr}), 0.0, 1.0)`;
+  switch (method) {
+    case 'smoothstep':
+      // Use a let to evaluate clamp once. We inline via a function-call to a
+      // builtin pattern — wrap the body in a select-free expression.
+      return `(${tcl}) * (${tcl}) * (3.0 - 2.0 * (${tcl}))`;
+    case 'easeInQuad':
+      return `(${tcl}) * (${tcl})`;
+    case 'easeOutQuad':
+      return `(1.0 - (1.0 - (${tcl})) * (1.0 - (${tcl})))`;
+    case 'exponential':
+      // tcl > 0 ? pow(2, 10*(tcl-1)) : 0
+      return `select(0.0, pow(2.0, 10.0 * ((${tcl}) - 1.0)), (${tcl}) > 0.0)`;
+    case 'logarithmic':
+      // tcl < 1 ? 1 - pow(2, -10*tcl) : 1
+      return `select(1.0, (1.0 - pow(2.0, -10.0 * (${tcl}))), (${tcl}) < 1.0)`;
+    default:
+      return `(${tcl})`;
+  }
+}
 function emitVar(ctx: CompileCtx, type: WgslType, expr: string, prefix: string = 'v'): { name: string; type: WgslType } {
   const name = fresh(ctx, prefix);
   ctx.lines.push(`  var ${name}: ${type} = ${expr};`);
@@ -845,14 +876,20 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return emitLet(ctx, r.type, r.expr, 'nbAtr');
   },
 
-  proportionMap: ({ ctx, inputs }) => {
+  proportionMap: ({ ctx, node, inputs }) => {
     const x = castTo(inputs['x'] ?? { expr: '0.0', type: 'f32' }, 'f32');
     const inMin = castTo(inputs['inMin'] ?? { expr: '0.0', type: 'f32' }, 'f32');
     const inMax = castTo(inputs['inMax'] ?? { expr: '1.0', type: 'f32' }, 'f32');
     const outMin = castTo(inputs['outMin'] ?? { expr: '0.0', type: 'f32' }, 'f32');
     const outMax = castTo(inputs['outMax'] ?? { expr: '1.0', type: 'f32' }, 'f32');
+    const method = (node.data.config.method as string) || 'linear';
     const span = emitLet(ctx, 'f32', `(${inMax} - ${inMin})`, 'sp');
-    const expr = `select((${outMin}), ((${outMin}) + ((${x}) - (${inMin})) * ((${outMax}) - (${outMin})) / ${span.expr}), (${span.expr} != 0.0))`;
+    // tRaw = inSpan != 0 ? (x-inMin)/inSpan : 0
+    const tRawExpr = `select(0.0, ((${x}) - (${inMin})) / ${span.expr}, (${span.expr} != 0.0))`;
+    const tRaw = emitLet(ctx, 'f32', tRawExpr, 'pmt');
+    const tCurveExpr = wgslInterpolationCurveExpr(tRaw.expr, method);
+    const tCurve = emitLet(ctx, 'f32', tCurveExpr, 'pmc');
+    const expr = `select((${outMin}), ((${outMin}) + ${tCurve.expr} * ((${outMax}) - (${outMin}))), (${span.expr} != 0.0))`;
     return emitLet(ctx, 'f32', expr, 'pm');
   },
 
@@ -878,7 +915,9 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
 
   colorInterpolation: ({ ctx, node, inputs }) => {
     const t = castTo(inputs['t'] ?? { expr: '0.5', type: 'f32' }, 'f32');
-    const tLoc = emitLet(ctx, 'f32', t, 'ct');
+    const method = (node.data.config.method as string) || 'linear';
+    const tRaw = emitLet(ctx, 'f32', t, 'cit');
+    const tLoc = emitLet(ctx, 'f32', wgslInterpolationCurveExpr(tRaw.expr, method), 'cic');
     const ch = (c1k: string, c2k: string, def1: number, def2: number, port: 'r' | 'g' | 'b'): ValueRef => {
       const c1 = castTo(inputs[c1k] ?? { expr: `${def1 | 0}`, type: 'i32' }, 'f32');
       const c2 = castTo(inputs[c2k] ?? { expr: `${def2 | 0}`, type: 'i32' }, 'f32');

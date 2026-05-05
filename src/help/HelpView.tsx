@@ -236,7 +236,13 @@ export function HelpView() {
           <ul className={styles.list}>
             <li><strong>Palette</strong> &mdash; Browse all node types (grouped by category) plus
               default macros shipped with the app (from <code>public/macros/*.gcamacro</code>) and
-              the current project's macros. Drag any item onto the canvas to add it.</li>
+              the current project's macros. Drag any item onto the canvas to add it.
+              The panel splits vertically into two independently-scrolling sections &mdash;
+              <strong>Nodes</strong> on top, <strong>Macros</strong> on the bottom &mdash;
+              with a draggable horizontal splitter between them. A <strong>List / Visual</strong>
+              toggle in the header switches the renderer between a compact text list and
+              draggable mini node previews that mirror the node visuals; both modes drag
+              identically. Both the split position and the view mode are remembered across sessions.</li>
             <li><strong>Node Explorer</strong> (<kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>F</kbd>) &mdash; Search and jump to nodes
               already placed in your graph.</li>
           </ul>
@@ -246,6 +252,13 @@ export function HelpView() {
             Nodes with required parameters that are not yet set (e.g., a <em>Set Attribute</em>
             node without an attribute selected) show a small amber <strong>!</strong> badge in their
             top-right corner. Hover it to see exactly what needs configuration.
+          </p>
+          <p className={styles.p}>
+            <strong>Macro instances bubble up internal warnings:</strong> if any node inside the
+            macro (or inside a nested macro) has a configuration warning, the macro instance
+            itself also shows the badge with a tooltip like &quot;3 internal warnings (expand
+            macro to see)&quot;. This makes misconfigured internals visible without having to
+            open the macro first.
           </p>
 
           <h3 className={styles.h3}>Node Collapse &amp; Expand</h3>
@@ -344,7 +357,7 @@ export function HelpView() {
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
               <tr><td>Arithmetic Operator (Math)</td><td>+, -, *, /, %, sqrt, pow, abs, max, min, mean.</td></tr>
-              <tr><td>Proportion Map</td><td>Remap a value from one range to another: output = outMin + (x - inMin) * (outMax - outMin) / (inMax - inMin). Has 5 inputs: X, In Min, In Max, Out Min, Out Max.</td></tr>
+              <tr><td>Proportion Map</td><td>Remap a value from one range to another: <em>output = outMin + curve(t) * (outMax - outMin)</em> with <em>t = (x - inMin) / (inMax - inMin)</em>. Has 5 inputs (X, In Min, In Max, Out Min, Out Max) plus a <strong>curve</strong> dropdown: Linear, Smoothstep, Ease-In Quadratic, Ease-Out Quadratic, Exponential, Logarithmic. Linear keeps un-clamped extrapolation; non-linear curves clamp t to [0, 1].</td></tr>
               <tr><td>Interpolate</td><td>Linear interpolation: output = min + t * (max - min). Inputs: T (0&ndash;1), Min, Max.</td></tr>
               <tr><td>Compare (Statement)</td><td>Comparison operators: ==, !=, &gt;, &lt;, &gt;=, &lt;=, <strong>Between</strong>, and <strong>Not Between</strong>. The between-family ops reveal a Y&#8322; input and two picklists for the lower (&gt;= or &gt;) and upper (&lt;= or &lt;) interval sides; <em>Not Between</em> fires when the value is outside the interval. Replaces the common Compare + Compare + AND chain.</td></tr>
               <tr><td>Logic Operator</td><td>AND, OR, XOR, NOT on boolean values.</td></tr>
@@ -387,7 +400,7 @@ export function HelpView() {
             <tbody>
               <tr><td>Set Color Viewer</td><td>Write RGB values for an Attribute-to-Color visualization.</td></tr>
               <tr><td>Get Color Constant</td><td>Output fixed R, G, B values.</td></tr>
-              <tr><td>Color Interpolate</td><td>Linearly interpolate between two colors. Inputs: interpolation point T (0&ndash;1), From R/G/B, To R/G/B. Outputs: R, G, B. Includes color picker widgets for &quot;Color From&quot; and &quot;Color To&quot; when the per-channel ports are not connected.</td></tr>
+              <tr><td>Color Interpolate</td><td>Interpolate between two colors. Inputs: interpolation point T (0&ndash;1), From R/G/B, To R/G/B. Outputs: R, G, B. The <strong>curve</strong> dropdown controls the interpolation shape: Linear, Smoothstep, Ease-In Quadratic, Ease-Out Quadratic, Exponential, Logarithmic. Includes color picker widgets for &quot;Color From&quot; and &quot;Color To&quot; when the per-channel ports are not connected.</td></tr>
             </tbody>
           </table>
 
@@ -506,6 +519,11 @@ export function HelpView() {
             <li><strong>Scroll wheel</strong> &mdash; Zoom in/out.</li>
             <li><strong>Ctrl + left-click drag</strong> &mdash; Resize brush (horizontal = width, vertical = height).</li>
             <li><strong>Zoom buttons</strong> (+/&minus;/fit) &mdash; Bottom-left of the canvas.</li>
+            <li><strong>Hover coordinates</strong> &mdash; the top-left stats overlay shows the
+              cell currently under the cursor as <code>Cell (col, row)</code>. When the brush
+              is larger than 1&times;1, the chip switches to{' '}
+              <code>Cells (x0,y0) &rarr; (x1,y1)</code> showing the brush footprint
+              (end-inclusive indices).</li>
           </ul>
 
           <h3 className={styles.h3}>Playback</h3>

@@ -136,6 +136,48 @@ export function detectMissingConfig(
   return issues;
 }
 
+/**
+ * Walk a macro's subgraph and return the total count of internal-node
+ * configuration warnings (and, if `useWebGPU`, WebGPU incompatibilities).
+ *
+ * Recurses into nested macros up to `MAX_MACRO_DEPTH` (mirrors the macro
+ * inliner's recursion guard in `compiler/compile.ts`). Boundary nodes
+ * (`macroInput`, `macroOutput`) and structural-only nodes (`commentNode`,
+ * `groupNode`) carry no validateable config and are skipped.
+ *
+ * Used by CaNode to "bubble up" warnings from internal nodes onto the macro
+ * instance's amber `!` badge, so misconfigurations are visible without
+ * expanding the macro.
+ */
+const MAX_MACRO_DEPTH = 20;
+
+export function countMacroSubgraphIssues(
+  macroDefId: string,
+  model: CAModel,
+  useWebGPU: boolean,
+  depth: number = 0,
+): number {
+  if (depth > MAX_MACRO_DEPTH) return 0;
+  const def = (model.macroDefs || []).find(m => m.id === macroDefId);
+  if (!def) return 0;
+  let count = 0;
+  for (const node of def.nodes) {
+    const t = node.data?.nodeType;
+    if (!t) continue;
+    if (t === 'macroInput' || t === 'macroOutput' || t === 'commentNode' || t === 'groupNode') continue;
+    const cfg = node.data.config || {};
+    count += detectMissingConfig(t, cfg, model).length;
+    if (useWebGPU) count += detectWebGPUIncompatibilities(t, cfg, model).length;
+    if (t === 'macro') {
+      const innerId = cfg.macroDefId;
+      if (typeof innerId === 'string' && innerId.length > 0) {
+        count += countMacroSubgraphIssues(innerId, model, useWebGPU, depth + 1);
+      }
+    }
+  }
+  return count;
+}
+
 /** Wave 3 — return WebGPU-target-specific issues for a node configuration.
  *
  *  WebGPU runs cells in parallel on the GPU, so any rule whose result depends

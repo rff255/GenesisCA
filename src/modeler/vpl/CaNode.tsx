@@ -2,7 +2,9 @@ import { memo, useCallback, useState, useMemo, useSyncExternalStore } from 'reac
 import { Handle, Position, useReactFlow } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
-import { detectMissingConfig, detectWebGPUIncompatibilities } from './nodes/nodeValidation';
+import { detectMissingConfig, detectWebGPUIncompatibilities, countMacroSubgraphIssues } from './nodes/nodeValidation';
+import { INTERPOLATION_METHODS, INTERPOLATION_SHORT_LABELS, DEFAULT_INTERPOLATION_METHOD } from './nodes/interpolationMethods';
+import type { InterpolationMethod } from './nodes/interpolationMethods';
 import { handleId } from './types';
 import type { NodeConfig } from './types';
 import type { MacroPort } from '../../model/types';
@@ -302,9 +304,23 @@ function CaNodeComponent({ id, data }: NodeProps) {
   // sees them in the modeler before hitting the runtime compile error.
   const configIssues = useMemo(
     () => {
+      const useWebGPU = !!model.properties.useWebGPU;
       const base = detectMissingConfig(nodeData.nodeType, nodeData.config, model);
-      if (!model.properties.useWebGPU) return base;
-      return [...base, ...detectWebGPUIncompatibilities(nodeData.nodeType, nodeData.config, model)];
+      const own = useWebGPU
+        ? [...base, ...detectWebGPUIncompatibilities(nodeData.nodeType, nodeData.config, model)]
+        : base;
+      // Bubble up internal-node warnings on macro instances so they're visible
+      // without expanding the macro (and recursively through nested macros).
+      if (nodeData.nodeType === 'macro') {
+        const macroDefId = nodeData.config.macroDefId;
+        if (typeof macroDefId === 'string' && macroDefId.length > 0) {
+          const innerCount = countMacroSubgraphIssues(macroDefId, model, useWebGPU);
+          if (innerCount > 0) {
+            own.push(`${innerCount} internal warning${innerCount === 1 ? '' : 's'} (expand macro to see)`);
+          }
+        }
+      }
+      return own;
     },
     [
       nodeData.nodeType,
@@ -491,6 +507,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
         average: 'Average', median: 'Median', and: 'AND', or: 'OR',
       };
       collapsedLabel = opLabels[op] ?? op;
+    } else if (nodeData.nodeType === 'colorInterpolation') {
+      const m = ((nodeData.config.method as string) || DEFAULT_INTERPOLATION_METHOD) as InterpolationMethod;
+      collapsedLabel = `Color Interp · ${INTERPOLATION_SHORT_LABELS[m] ?? m}`;
+    } else if (nodeData.nodeType === 'proportionMap') {
+      const m = ((nodeData.config.method as string) || DEFAULT_INTERPOLATION_METHOD) as InterpolationMethod;
+      collapsedLabel = `Prop Map · ${INTERPOLATION_SHORT_LABELS[m] ?? m}`;
     } else if (nodeData.nodeType === 'filterNeighbors') {
       const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
       const nbr = model.neighborhoods.find(n => n.id === nodeData.config.neighborhoodId);
@@ -1304,6 +1326,19 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <option value="median">Median</option>
             <option value="and">AND (all true)</option>
             <option value="or">OR (any true)</option>
+          </select>
+        )}
+
+        {(nodeData.nodeType === 'colorInterpolation' || nodeData.nodeType === 'proportionMap') && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.method as string) || DEFAULT_INTERPOLATION_METHOD}
+            onChange={e => updateConfig('method', e.target.value)}
+            title="Interpolation curve"
+          >
+            {INTERPOLATION_METHODS.map(m => (
+              <option key={m.value} value={m.value}>{m.label}</option>
+            ))}
           </select>
         )}
 

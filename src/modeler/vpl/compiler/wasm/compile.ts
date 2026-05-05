@@ -300,6 +300,126 @@ function storeResult(em: WasmEmitter, valtype: ValType): LocalRef {
   return { localIdx: local, valtype };
 }
 
+/**
+ * Emit WASM that computes the interpolation curve f(t) for the given method,
+ * reading from `tRawLoc` (an f64 local containing the raw t value) and
+ * returning the f64 local that holds the curved result.
+ *
+ * For non-linear methods, t is clamped to [0, 1] before applying the curve;
+ * `linear` keeps unclamped extrapolation to match the prior bit-identical
+ * behaviour for saved models. Mirrors `emitInterpolationCurveJS` in
+ * `nodes/interpolationMethods.ts` and the WGSL variant.
+ */
+function emitInterpolationCurveWasm(
+  em: WasmEmitter,
+  tRawLoc: number,
+  method: string,
+): number {
+  const out = em.allocLocal(F64);
+  if (method === 'linear') {
+    em.localGet(tRawLoc);
+    em.localSet(out);
+    return out;
+  }
+  // Clamp t to [0, 1] using f64.max(0, f64.min(1, t)).
+  const tcl = em.allocLocal(F64);
+  em.f64Const(0);
+  em.f64Const(1);
+  em.localGet(tRawLoc);
+  em.op(OP_F64_MIN);
+  em.op(OP_F64_MAX);
+  em.localSet(tcl);
+  switch (method) {
+    case 'smoothstep': {
+      // tcl * tcl * (3 - 2 * tcl)
+      em.localGet(tcl);
+      em.localGet(tcl);
+      em.op(OP_F64_MUL);
+      em.f64Const(3);
+      em.f64Const(2);
+      em.localGet(tcl);
+      em.op(OP_F64_MUL);
+      em.op(OP_F64_SUB);
+      em.op(OP_F64_MUL);
+      em.localSet(out);
+      break;
+    }
+    case 'easeInQuad': {
+      // tcl * tcl
+      em.localGet(tcl);
+      em.localGet(tcl);
+      em.op(OP_F64_MUL);
+      em.localSet(out);
+      break;
+    }
+    case 'easeOutQuad': {
+      // 1 - (1-tcl)*(1-tcl)
+      em.f64Const(1);
+      em.f64Const(1);
+      em.localGet(tcl);
+      em.op(OP_F64_SUB);
+      em.f64Const(1);
+      em.localGet(tcl);
+      em.op(OP_F64_SUB);
+      em.op(OP_F64_MUL);
+      em.op(OP_F64_SUB);
+      em.localSet(out);
+      break;
+    }
+    case 'exponential': {
+      // tcl > 0 ? pow(2, 10*(tcl-1)) : 0
+      em.localGet(tcl);
+      em.f64Const(0);
+      em.op(OP_F64_GT);
+      em.ifThenElse(
+        () => {
+          em.f64Const(2);
+          em.f64Const(10);
+          em.localGet(tcl);
+          em.f64Const(1);
+          em.op(OP_F64_SUB);
+          em.op(OP_F64_MUL);
+          em.emit(byte(0x10), leb128u(POW_FUNC_IDX));
+          em.localSet(out);
+        },
+        () => {
+          em.f64Const(0);
+          em.localSet(out);
+        },
+      );
+      break;
+    }
+    case 'logarithmic': {
+      // tcl < 1 ? 1 - pow(2, -10*tcl) : 1
+      em.localGet(tcl);
+      em.f64Const(1);
+      em.op(OP_F64_LT);
+      em.ifThenElse(
+        () => {
+          em.f64Const(1);
+          em.f64Const(2);
+          em.f64Const(-10);
+          em.localGet(tcl);
+          em.op(OP_F64_MUL);
+          em.emit(byte(0x10), leb128u(POW_FUNC_IDX));
+          em.op(OP_F64_SUB);
+          em.localSet(out);
+        },
+        () => {
+          em.f64Const(1);
+          em.localSet(out);
+        },
+      );
+      break;
+    }
+    default:
+      em.localGet(tcl);
+      em.localSet(out);
+      break;
+  }
+  return out;
+}
+
 const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
 
   getConstant: ({ node, ctx }) => {
@@ -738,17 +858,19 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return emitAggregateOrCount(ctx, node, inputs, 'groupOperator');
   },
 
-  // -- proportionMap: linear remap from [inMin, inMax] to [outMin, outMax].
-  //    Result = ((inMax - inMin) !== 0)
-  //      ? outMin + (x - inMin) * (outMax - outMin) / (inMax - inMin)
-  //      : outMin
+  // -- proportionMap: remap from [inMin, inMax] to [outMin, outMax] using a
+  //    selectable curve.
+  //    Let t = (x - inMin) / (inMax - inMin) when inSpan != 0, else 0.
+  //    Result = outMin + curve(t) * (outMax - outMin) when inSpan != 0,
+  //             else outMin.
   //    All maths in f64 to match JS Number semantics.
-  proportionMap: ({ ctx, inputs }) => {
+  proportionMap: ({ ctx, node, inputs }) => {
     const x      = inputs['x']      ?? { inline: true, value: 0, valtype: F64 };
     const inMin  = inputs['inMin']  ?? { inline: true, value: 0, valtype: F64 };
     const inMax  = inputs['inMax']  ?? { inline: true, value: 1, valtype: F64 };
     const outMin = inputs['outMin'] ?? { inline: true, value: 0, valtype: F64 };
     const outMax = inputs['outMax'] ?? { inline: true, value: 1, valtype: F64 };
+    const method = (node.data.config.method as string) || 'linear';
     // Compute (inMax - inMin) into a local (used twice: zero-check + divisor).
     const inSpan = ctx.emitter.allocLocal(F64);
     pushValueAs(ctx.emitter, inMax, F64);
@@ -757,26 +879,28 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     ctx.emitter.localSet(inSpan);
     // Result local
     const result = ctx.emitter.allocLocal(F64);
-    // if (inSpan != 0) result = outMin + (x - inMin) * (outMax - outMin) / inSpan
+    // if (inSpan != 0) result = outMin + curve(t) * (outMax - outMin)
     // else result = outMin
     ctx.emitter.localGet(inSpan);
     ctx.emitter.f64Const(0);
     ctx.emitter.op(OP_F64_NE);
     ctx.emitter.ifThenElse(
       () => {
-        // (x - inMin)
+        // tRaw = (x - inMin) / inSpan
+        const tRaw = ctx.emitter.allocLocal(F64);
         pushValueAs(ctx.emitter, x, F64);
         pushValueAs(ctx.emitter, inMin, F64);
         ctx.emitter.op(OP_F64_SUB);
-        // * (outMax - outMin)
+        ctx.emitter.localGet(inSpan);
+        ctx.emitter.op(OP_F64_DIV);
+        ctx.emitter.localSet(tRaw);
+        const tCurve = emitInterpolationCurveWasm(ctx.emitter, tRaw, method);
+        // (outMax - outMin) * tCurve + outMin
         pushValueAs(ctx.emitter, outMax, F64);
         pushValueAs(ctx.emitter, outMin, F64);
         ctx.emitter.op(OP_F64_SUB);
+        ctx.emitter.localGet(tCurve);
         ctx.emitter.op(OP_F64_MUL);
-        // / inSpan
-        ctx.emitter.localGet(inSpan);
-        ctx.emitter.op(OP_F64_DIV);
-        // + outMin
         pushValueAs(ctx.emitter, outMin, F64);
         ctx.emitter.op(OP_F64_ADD);
         ctx.emitter.localSet(result);
@@ -822,7 +946,7 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return rRef;
   },
 
-  // -- colorInterpolation: Math.round(c1 + t * (c2 - c1)) per channel.
+  // -- colorInterpolation: Math.round(c1 + curve(t) * (c2 - c1)) per channel.
   //    Math.round(x) = floor(x + 0.5) for the values we deal with (positive
   //    color channels in [0, 255]). --
   colorInterpolation: ({ ctx, node, inputs }) => {
@@ -833,11 +957,13 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     const r2 = inputs['r2'] ?? { inline: true, value: 255, valtype: I32 };
     const g2 = inputs['g2'] ?? { inline: true, value: 255, valtype: I32 };
     const b2 = inputs['b2'] ?? { inline: true, value: 255, valtype: I32 };
-    const tLoc = ctx.emitter.allocLocal(F64);
+    const method = (node.data.config.method as string) || 'linear';
+    const tRaw = ctx.emitter.allocLocal(F64);
     pushValueAs(ctx.emitter, t, F64);
-    ctx.emitter.localSet(tLoc);
+    ctx.emitter.localSet(tRaw);
+    const tLoc = emitInterpolationCurveWasm(ctx.emitter, tRaw, method);
     const emitCh = (c1: ValueRef, c2: ValueRef): LocalRef => {
-      // floor(c1 + t * (c2 - c1) + 0.5) → i32
+      // floor(c1 + curveT * (c2 - c1) + 0.5) → i32
       pushValueAs(ctx.emitter, c1, F64);
       ctx.emitter.localGet(tLoc);
       pushValueAs(ctx.emitter, c2, F64);

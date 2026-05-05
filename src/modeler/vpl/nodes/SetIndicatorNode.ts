@@ -5,7 +5,7 @@ export const SetIndicatorNode: NodeTypeDef = {
   label: 'Set Indicator',
   description: 'Assigns a value to a standalone indicator.',
   category: 'output',
-  color: '#00695c',
+  color: '#5c427c',
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
     { id: 'value', label: 'Value', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '0' },

@@ -5,7 +5,7 @@ export const UpdateIndicatorNode: NodeTypeDef = {
   label: 'Update Indicator',
   description: 'Modifies an indicator in place: increment, decrement, toggle, min/max, next/previous tag.',
   category: 'output',
-  color: '#00695c',
+  color: '#5c427c',
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
     { id: 'value', label: 'Value', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '0' },
