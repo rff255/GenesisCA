@@ -37,9 +37,10 @@ export function IndicatorDisplay({ indicators, values, history, generation, vizM
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       if (!resizing.current) return;
-      const delta = e.clientY - resizing.current.startY;
-      const newH = Math.max(30, resizing.current.startH + delta);
-      setHeights(prev => ({ ...prev, [resizing.current!.id]: newH }));
+      const { id, startY, startH } = resizing.current;
+      const delta = e.clientY - startY;
+      const newH = Math.max(30, startH + delta);
+      setHeights(prev => ({ ...prev, [id]: newH }));
     };
     const onUp = () => { resizing.current = null; };
     window.addEventListener('mousemove', onMove);
