@@ -32,15 +32,14 @@ interface HoverState {
 function computePopoverPosition(rect: DOMRect): { top: number; left: number } {
   const viewportW = window.innerWidth;
   const viewportH = window.innerHeight;
-  let left = rect.right + POPOVER_GAP;
-  if (left + POPOVER_SIZE > viewportW - POPOVER_GAP) {
-    left = rect.left - POPOVER_SIZE - POPOVER_GAP;
-  }
-  if (left < POPOVER_GAP) left = POPOVER_GAP;
-  let top = rect.top;
-  if (top + POPOVER_SIZE > viewportH - POPOVER_GAP) {
-    top = Math.max(POPOVER_GAP, viewportH - POPOVER_SIZE - POPOVER_GAP);
-  }
+  // Centre the popover on the card. The popover has `pointer-events: none`
+  // (see ModelsLibrary.module.css) so it doesn't steal the card's hover —
+  // the user's cursor stays "on" the card even when the popover overlays it.
+  let left = rect.left + rect.width / 2 - POPOVER_SIZE / 2;
+  let top = rect.top + rect.height / 2 - POPOVER_SIZE / 2;
+  // Clamp to viewport so corner cards still get a fully-visible popover.
+  left = Math.max(POPOVER_GAP, Math.min(viewportW - POPOVER_SIZE - POPOVER_GAP, left));
+  top = Math.max(POPOVER_GAP, Math.min(viewportH - POPOVER_SIZE - POPOVER_GAP, top));
   return { top, left };
 }
 
