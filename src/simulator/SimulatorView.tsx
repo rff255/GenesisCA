@@ -5,6 +5,7 @@ import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
+import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
 import { IndicatorDisplay } from './IndicatorDisplay';
 import { BrushColorPopover } from './BrushColorPopover';
 import { PresetSaveDialog } from './PresetSaveDialog';
@@ -81,7 +82,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     return {};
   });
 
-  // GIF recording state
+  // GIF / WebM recording state
   const [recording, setRecording] = useState(false);
   const recordingRef = useRef(false);
   const recordedFrames = useRef<ImageData[]>([]);
@@ -91,6 +92,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // re-render per captured frame and slowed down the recording itself.
   const recordCountRef = useRef(0);
   const lastRecordCountSet = useRef(0);
+  // WebM is the default; falls back to GIF in browsers without WebCodecs.
+  const webmAvailable = isWebMSupported();
+  type RecordFormat = 'gif' | 'webm';
+  const [recordFormat, setRecordFormat] = useState<RecordFormat>(() => {
+    const saved2 = saved.current.recordFormat as RecordFormat | undefined;
+    if (saved2 === 'gif') return 'gif';
+    return webmAvailable ? 'webm' : 'gif';
+  });
+  const [encodingWebM, setEncodingWebM] = useState(false);
   useEffect(() => { recordingRef.current = recording; }, [recording]);
 
   // Persist simulator settings
@@ -100,12 +110,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         localStorage.setItem(SIM_SETTINGS_KEY, JSON.stringify({
           targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines,
-          indicatorVizModes,
+          indicatorVizModes, recordFormat,
         }));
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, indicatorVizModes]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, indicatorVizModes, recordFormat]);
 
   const cycleIndicatorVizMode = useCallback((id: string) => {
     setIndicatorVizModes(prev => {
@@ -1339,63 +1349,87 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     workerRef.current?.postMessage({ type: 'setRecording', enabled: true });
   };
 
-  const stopRecording = () => {
+  const stopRecording = async () => {
     setRecording(false);
     workerRef.current?.postMessage({ type: 'setRecording', enabled: false });
     const frames = recordedFrames.current;
     if (frames.length === 0) return;
-    const fw = frames[0]!.width;
-    const fh = frames[0]!.height;
-    // Downscale large grids to max 512px
-    const maxDim = 512;
-    let outW = fw, outH = fh;
-    if (fw > maxDim || fh > maxDim) {
-      const s = maxDim / Math.max(fw, fh);
-      outW = Math.round(fw * s);
-      outH = Math.round(fh * s);
-    }
-    const gif = GIFEncoder();
-    const delay = Math.round(1000 / (targetFpsRef.current || 30));
-    const needsScale = outW !== fw || outH !== fh;
-    let scaleCanvas: HTMLCanvasElement | null = null;
-    let scaleCtx: CanvasRenderingContext2D | null = null;
-    let srcCanvas: HTMLCanvasElement | null = null;
-    let srcCtx: CanvasRenderingContext2D | null = null;
-    if (needsScale) {
-      scaleCanvas = document.createElement('canvas');
-      scaleCanvas.width = outW; scaleCanvas.height = outH;
-      scaleCtx = scaleCanvas.getContext('2d')!;
-      scaleCtx.imageSmoothingEnabled = false;
-      srcCanvas = document.createElement('canvas');
-      srcCanvas.width = fw; srcCanvas.height = fh;
-      srcCtx = srcCanvas.getContext('2d')!;
-    }
-    for (const frame of frames) {
-      let rgba: Uint8ClampedArray;
-      if (needsScale && scaleCtx && scaleCanvas && srcCtx && srcCanvas) {
-        srcCtx.putImageData(frame, 0, 0);
-        scaleCtx.drawImage(srcCanvas, 0, 0, outW, outH);
-        rgba = scaleCtx.getImageData(0, 0, outW, outH).data;
-      } else {
-        rgba = frame.data;
-      }
-      const palette = quantize(rgba, 256);
-      const indexed = applyPalette(rgba, palette);
-      gif.writeFrame(indexed, outW, outH, { palette, delay });
-    }
-    gif.finish();
-    const blob = new Blob([gif.bytes()], { type: 'image/gif' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
     const fname = model.properties.name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '') || 'genesis';
-    a.href = url;
-    a.download = `${fname}_recording.gif`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const fps = targetFpsRef.current || 30;
+
+    // Use the format selected at the moment recording stops. WebM falls back
+    // to GIF if the browser doesn't support WebCodecs (defensive — the UI
+    // already greys out the WebM option in that case).
+    const format: RecordFormat = recordFormat === 'webm' && !isWebMSupported() ? 'gif' : recordFormat;
+
+    if (format === 'webm') {
+      setEncodingWebM(true);
+      try {
+        const blob = await encodeFramesToWebM(frames, fps);
+        triggerDownload(blob, `${fname}_recording.webm`);
+      } catch (err) {
+        console.error('WebM encode failed', err);
+        alert(`WebM encode failed: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        setEncodingWebM(false);
+      }
+    } else {
+      const fw = frames[0]!.width;
+      const fh = frames[0]!.height;
+      // Downscale large grids to max 512px (GIF only — WebM keeps native size).
+      const maxDim = 512;
+      let outW = fw, outH = fh;
+      if (fw > maxDim || fh > maxDim) {
+        const s = maxDim / Math.max(fw, fh);
+        outW = Math.round(fw * s);
+        outH = Math.round(fh * s);
+      }
+      const gif = GIFEncoder();
+      const delay = Math.round(1000 / fps);
+      const needsScale = outW !== fw || outH !== fh;
+      let scaleCanvas: HTMLCanvasElement | null = null;
+      let scaleCtx: CanvasRenderingContext2D | null = null;
+      let srcCanvas: HTMLCanvasElement | null = null;
+      let srcCtx: CanvasRenderingContext2D | null = null;
+      if (needsScale) {
+        scaleCanvas = document.createElement('canvas');
+        scaleCanvas.width = outW; scaleCanvas.height = outH;
+        scaleCtx = scaleCanvas.getContext('2d')!;
+        scaleCtx.imageSmoothingEnabled = false;
+        srcCanvas = document.createElement('canvas');
+        srcCanvas.width = fw; srcCanvas.height = fh;
+        srcCtx = srcCanvas.getContext('2d')!;
+      }
+      for (const frame of frames) {
+        let rgba: Uint8ClampedArray;
+        if (needsScale && scaleCtx && scaleCanvas && srcCtx && srcCanvas) {
+          srcCtx.putImageData(frame, 0, 0);
+          scaleCtx.drawImage(srcCanvas, 0, 0, outW, outH);
+          rgba = scaleCtx.getImageData(0, 0, outW, outH).data;
+        } else {
+          rgba = frame.data;
+        }
+        const palette = quantize(rgba, 256);
+        const indexed = applyPalette(rgba, palette);
+        gif.writeFrame(indexed, outW, outH, { palette, delay });
+      }
+      gif.finish();
+      const blob = new Blob([gif.bytes()], { type: 'image/gif' });
+      triggerDownload(blob, `${fname}_recording.gif`);
+    }
     recordedFrames.current = [];
     recordCountRef.current = 0;
     lastRecordCountSet.current = 0;
     setRecordFrameCount(0);
+  };
+
+  const triggerDownload = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
 
@@ -1984,9 +2018,30 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           <button className={styles.transportBtn} onClick={handleReset} title="Reset (Esc)">&#9632;</button>
           <button className={styles.transportBtn} onClick={handleScreenshot} title="Screenshot (PNG)">{'\uD83D\uDCF7'}</button>
           {!recording ? (
-            <button className={styles.transportBtn} onClick={startRecording} title="Record GIF" style={{ color: '#e05050' }}>{'\u23FA'}</button>
+            <>
+              <button
+                className={styles.transportBtn}
+                onClick={startRecording}
+                disabled={encodingWebM}
+                title={encodingWebM ? 'Encoding WebM\u2026' : `Record ${recordFormat.toUpperCase()}`}
+                style={{ color: '#e05050' }}
+              >{'\u23FA'}</button>
+              <select
+                className={styles.transportBtn}
+                value={recordFormat}
+                onChange={e => setRecordFormat(e.target.value as RecordFormat)}
+                disabled={encodingWebM}
+                title={webmAvailable
+                  ? 'Recording format'
+                  : 'WebM not supported in this browser \u2014 use GIF instead'}
+                style={{ padding: '4px 4px', fontSize: '0.65rem' }}
+              >
+                <option value="webm" disabled={!webmAvailable}>WebM</option>
+                <option value="gif">GIF</option>
+              </select>
+            </>
           ) : (
-            <button className={styles.transportBtn} onClick={stopRecording} title="Stop & Save GIF" style={{ color: '#e05050' }}>{'\u23F9'} {recordFrameCount}</button>
+            <button className={styles.transportBtn} onClick={stopRecording} title={`Stop & Save ${recordFormat.toUpperCase()}`} style={{ color: '#e05050' }}>{'\u23F9'} {recordFrameCount}</button>
           )}
           <div className={styles.transportDivider} />
 

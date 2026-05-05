@@ -104,7 +104,7 @@ A complete GenesisCA model definition consists of:
 - **Live model attribute controls** — change global parameters without recompiling
 - **Grid dimension overrides** — experiment with different sizes
 - **PNG screenshot export** — captures the display view with current zoom/pan (nearest-neighbor upscale for crisp pixels)
-- **GIF recording** — record simulation frames and export as animated GIF (auto-downscale for large grids)
+- **Recording** — record simulation frames and export as **WebM** (default; native grid resolution, smaller files, no 256-colour limit; needs WebCodecs) or animated **GIF** (256 colours, auto-downscaled to 512&nbsp;px max)
 - **Open Image** — load PNG/BMP/JPG as starting point via the brush panel
 - **Persistent settings** — speed, brush, viewer settings saved across sessions
 
