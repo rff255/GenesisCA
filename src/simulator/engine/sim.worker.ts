@@ -895,7 +895,17 @@ function patchWebGPUCells(idxs: ArrayLike<number>): void {
     if (v > maxIdx) maxIdx = v;
   }
   const rangeLen = maxIdx - minIdx + 1;
-  const useBatch = rangeLen <= idxs.length * 4;
+  // The batched path uploads all cells in [minIdx, maxIdx], pulling the
+  // "in-between" (not-touched) cells from CPU readAttrs. That's a no-op
+  // when the mirror is current (post-reset / pre-step). After a step under
+  // WebGPU, gpuOwnsAttrs=true and the CPU mirror is stale — uploading
+  // those in-between cells would overwrite the GPU's live post-step state
+  // with stale CPU values. Symptom: pasting a brush-wide rectangle after
+  // play produces a brush-tall "wipe" stripe across the entire row, where
+  // the cells between paste columns get clobbered. Force per-cell whenever
+  // the mirror could be stale; the per-cell cost is negligible for typical
+  // brush / paste sizes (a few queue.writeBuffer calls per attr).
+  const useBatch = !gpuOwnsAttrs && rangeLen <= idxs.length * 4;
   for (const attr of cellAttrs) {
     const layoutAttr = rt.layout.attrs.find(a => a.id === attr.id);
     if (!layoutAttr) continue;
