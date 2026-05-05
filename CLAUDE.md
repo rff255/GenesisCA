@@ -4,11 +4,9 @@
 
 This repository (https://github.com/rff255/GenesisCA) originally contained a Qt/C++ desktop application built in 2017 as an undergrad final project (Universidade Federal de Pernambuco). The `legacy_qt_cpp_solution` branch preserves that legacy code — a qmake project with `src/modeler` and `src/simulator` subdirectories, DearImGui-based node editor, and C++ code generation for model export.
 
-**The current work is a complete rewrite.** The legacy Qt/C++ code has been preserved in the `legacy_qt_cpp_solution` branch, frozen as historical reference. The new implementation is being developed on the `repo_overhaul` branch, which will eventually be merged into `master`. All legacy files (`.gitignore`, `.pro` files, `src/`, `third-party/`, etc.) have been removed on this branch — it starts clean with only this `CLAUDE.md` and the new project scaffolding.
+**The current work is a complete rewrite.** `master` is the main branch and ships releases (current: v1.11.0). Active development happens on feature branches off `master` (most recently `webgpu_compiler`). The `legacy_qt_cpp_solution` branch is frozen as historical reference — do not modify.
 
 The old implementation in `legacy_qt_cpp_solution` serves as architectural reference. Key file for understanding the old compilation approach: `src/modeler/UpdateRulesHandler/node_graph_instance.h` — each node had an `Eval()` method that emitted C++ code snippets, stitched together into `.h`/`.cpp` files, then compiled to `.dll`/`.exe`. The new version follows the same pattern but targets JavaScript instead of C++.
-
-Active development lives on feature branches off `master` (most recently `improvements`). The `repo_overhaul` branch mentioned in older history was an early-rewrite checkpoint and is no longer the working branch.
 
 ---
 
@@ -196,7 +194,7 @@ genesis-ca/
 │   │       ├── GraphEditor.tsx
 │   │       ├── graphState.ts          # Shared mutable state (avoids circular imports between GraphEditor/CaNode)
 │   │       ├── NodeExplorer.tsx        # Right-side searchable node list panel
-│   │       ├── nodes/                # 40 node types (one file each)
+│   │       ├── nodes/                # 42 node types (one file each)
 │   │       │   └── nodeValidation.ts  # detectMissingConfig() — drives warning badges
 │   │       └── compiler/
 │   │           └── compile.ts        # Two-pass compiler (hoisted values + flow)
@@ -280,7 +278,7 @@ The app is functional with these major systems:
 ### Visual Programming Language (VPL)
 - `src/modeler/vpl/GraphEditor.tsx` — React Flow-based node graph editor
 - `src/modeler/vpl/CaNode.tsx` — Custom node component with per-type config UI
-- `src/modeler/vpl/nodes/` — 40 node types, each in its own file with `compile()` method (2 are async-only: SetNeighborhoodAttribute, SetNeighborAttributeByIndex). Includes `StopEventNode` (flow input only, text widget for stop message — compiles to `if (_stopFlag[0] === 0) _stopFlag[0] = <1-based idx>;` first-match-wins; WASM emitter mirrors this via `i32.store` at `layout.stopFlagOffset`).
+- `src/modeler/vpl/nodes/` — 42 node types, each in its own file with `compile()` method (2 are async-only: SetNeighborhoodAttribute, SetNeighborAttributeByIndex). Includes `StopEventNode` (flow input only, text widget for stop message — compiles to `if (_stopFlag[0] === 0) _stopFlag[0] = <1-based idx>;` first-match-wins; WASM emitter mirrors this via `i32.store` at `layout.stopFlagOffset`).
 - Three "event" entry-point nodes: GenerationStep (per-gen logic), InputMapping C→A (brush), OutputMapping A→C (color pass)
 - `src/modeler/vpl/compiler/compile.ts` — Two-pass compiler: hoists values, then emits flow
 - Multi-output nodes (InputColor, GetColorConstant, MacroNode, ColorInterpolation) use `_v${nodeId}_${portId}` naming
@@ -319,7 +317,7 @@ The app is functional with these major systems:
 - Bottom transport bar: playback + speed sliders; top viewer bar: mapping tabs; collapsible side panels
 - Keyboard shortcuts: Space=step (also pauses), Enter=play/pause, Esc=reset
 - Brush cursor rectangle drawn on canvas; Ctrl+LMB drag to resize brush
-- GIF recording: `gifenc` library, frame capture from srcCanvas in worker message handler, max 512px downscale
+- Recording: per-frame ImageData capture in `recordedFrames.current`. GIF path via `gifenc` (256-colour palette, max 512 px downscale); WebM path via `webm-muxer` (VP9 profile 1 4:4:4 chroma when supported, profile 0 fallback, native grid resolution, all-intra keyframing). Format selector on transport bar; default = WebM with auto-fallback to GIF on browsers without WebCodecs. Encoder lives in `src/simulator/recording/webmEncoder.ts`. Worker tracks a `recording` flag (toggled via `setRecording` message) so direct render still ships colors when capturing.
 - Screenshot exports at display canvas resolution (not grid resolution) with nearest-neighbor upscale
 - Recompile optimization: structural changes reinit worker, graph-only changes send `recompile` message (preserves grid state)
 - Save/Load State: transport bar buttons (left side) save `.gcastate` / load `.gcastate`. Worker `getState` copies all typed arrays via `.slice()` and transfers them. Worker `loadState` restores arrays and rebuilds neighbor indices. `applySimulationState()` validates grid dimensions match before loading. Auto-save strips `simulationState` from localStorage to avoid quota overflow. Saving state also stores it in model context so next `.gcaproj` save includes it. On `.gcaproj` load, `pendingSimStateRestore` ref triggers restore after first worker `stepped` message.
@@ -525,10 +523,11 @@ The app is functional with these major systems:
 
 ## WebGPU Compile Target (Wave 3)
 
-**Status: functional.** WebGPU is the third compile target alongside JS (default) and WASM. The compiler emits a single WGSL shader module containing the `step` entry point + one `outputMapping_<sanitisedId>` per Attribute→Color mapping, dispatched as compute pipelines on the GPU. Verified on Game of Life (with macros) and Coagulation models — paint, randomize, reset, play, save/load, indicator readback, and stop events all work.
+**Status: functional.** WebGPU is the third compile target alongside JS (default) and WASM. The compiler emits a single WGSL shader module containing the `step` entry point + one `outputMapping_<sanitisedId>` per Attribute→Color mapping, dispatched as compute pipelines on the GPU. Verified on Game of Life (with macros), Coagulation, MNCA (model-attribute-driven trace gradient), and Wireworld (array-producing nodes + linked-frequency indicators) — paint, randomize, reset, play, save/load, indicator readback, stop events, GIF + WebM recording all work. Direct OffscreenCanvas render (transferControlToOffscreen + a `presentColors` compute pipeline) skips the per-step colors readback. GPU-side reductions cover eligible linked-indicator aggregations. Pipeline cache short-circuits rebuild when the WGSL source is byte-identical (`shaderHashOf` check at `sim.worker.ts:294`).
 
 ### Architecture
 - `useWebGPU?: boolean` on `ModelProperties`. Mutually exclusive with `useWasm` enforced by the UI 3-way radio (Properties → Execution → Compile Target) and a worker-side safety net (WebGPU wins if both flags arrive true on a hand-edited file).
+- `webgpuStopCheckInterval?: number` on `ModelProperties` (default 1) — opt-in throughput knob on WebGPU only. Worker checks the stop flag every K generations AND always on the last step of any batch (so the user never overshoots a stop event past the current play batch). K=1 preserves exact behaviour. JS / WASM ignore the setting.
 - 4-file compiler under `src/modeler/vpl/compiler/webgpu/`:
   - `encoder.ts` — WGSL string helpers (bindings, struct decls, per-cell copy preamble, attr read/write helpers, PCG functions).
   - `layout.ts` — 8-binding GPU buffer layout (attrsRead/attrsWrite/colors/nbrIndices/modelAttrs/indicators/rngState/control). Bool/int/tag/float attrs are stored as one u32 word per cell with bitcast on read/write.
@@ -553,11 +552,10 @@ The app is functional with these major systems:
 ### Compile-time rejections
 `detectWebGPUIncompatibilities()` and `detectWebGPUModelIncompatibilities()` in [nodeValidation.ts](src/modeler/vpl/nodes/nodeValidation.ts) catch async mode, `setNeighborhoodAttribute` / `setNeighborAttributeByIndex` (async-only), and `updateIndicator` with `toggle`/`next`/`previous`. CaNode warning badges surface these in the modeler when `useWebGPU` is on. The compiler returns an `error` and the worker stays on JS.
 
-### Not yet implemented (deferred, fall back to JS)
-- Array-producing nodes: `getNeighborIndexesByTags`, `filterNeighbors`, `joinNeighbors`, `getNeighborsAttrByIndexes`. Models that use these (Wireworld, Gas Particles) compile-error and the worker stays on JS — surfaced via the existing error toast.
+### Not implemented on WebGPU (compile-time rejected, worker falls back to JS)
 - `aggregate` / `groupOperator` with `op === 'median'` or `op === 'random'`. Use sum/product/min/max/average/and/or, or switch target.
-- Direct OffscreenCanvas render. Currently colors are read back to CPU and posted via the existing `sendColors` path — works but does a per-step colors transfer. The headline perf optimisation is to transfer an OffscreenCanvas to the worker, configure it as the WebGPU output surface, and blit it via `displayCanvas.drawImage(srcCanvas, ...)` on the main thread.
-- Pipeline cache. Currently the runtime rebuilds all pipelines on every recompile. The shader-source hash is computed (`rt.shaderHash`) but not yet checked.
+- Async update mode and async-only nodes (`setNeighborhoodAttribute`, `setNeighborAttributeByIndex`).
+- `updateIndicator` with `toggle` / `next` / `previous` (order-dependent under parallel cell execution).
 
 ### Known target-specific differences (intentional, documented)
 - WGSL has no f64. Float arithmetic runs in f32 — small precision differences vs JS/WASM accumulate over many generations on chaotic models. Bit-exact parity is NOT a goal.
@@ -576,19 +574,3 @@ The app is functional with these major systems:
 - Macros must be expanded BEFORE compile. `expandMacros` walks the graph, replaces each `macro` instance with the macroDef's internal nodes (prefixed ids) plus rewritten edges. Recursion guard depth=20 mirrors WASM. The compileValueNode / compileFlowChain code only sees flat post-expansion graphs.
 - Vite serves stale dev-server modules aggressively when `@webgpu/types` arrives via reference. After heavy edits to the webgpu/ files, a hard reload is sometimes needed before the browser sees the new shader code.
 
----
-
-## Future Work: List Attribute Type
-
-List attributes (fixed-size arrays of a basic type per cell) were prototyped and removed. When re-implementing, watch for these pitfalls:
-
-1. **SoA storage**: Each list attr with size K needs K separate typed arrays (`attrId_0` .. `attrId_K-1`). Every code path that iterates `cellAttrs` and accesses `readAttrs[attr.id]` / `writeAttrs[attr.id]` must expand list attrs into their sub-keys. Known locations:
-   - `initGrid()` — create K arrays instead of 1
-   - `randomizeGrid()` / `resetGrid()` — iterate sub-arrays
-   - `buildLoopArgs()` / `buildCellArgs()` — push K arrays per list attr
-   - **Paint handler** (`case 'paint'`) — copy-back loop after `icEntry.fn()` must copy each sub-key
-   - **importImage handler** — same copy-back issue
-   - **Constant boundary sentinel** (`buildNeighborIndices`) — must extend each sub-array by 1 for the sentinel cell
-2. **Compiler**: `buildLoopParams` / `buildCellParams` must emit K params per list attr. `copyLines` / `icCopyLines` must copy each sub-array.
-3. **Dynamic index access**: Emitting `[arr0,arr1,...][indexExpr]` works but the fallback for out-of-bounds must use `?? arr0` (nullish coalescing), NOT `|| [arr0]` which wraps the typed array in a JS array.
-4. **Node types needed**: ListGetElement (value node) and ListSetElement (flow node) with attribute selector + index input. Store `listSize` in node config so the compiler knows expansion width.
