@@ -558,7 +558,7 @@ export function HelpView() {
             <li><strong>Grid Dimensions</strong> &mdash; Override the model&apos;s default size. Click &quot;Apply&quot; to reinitialize.</li>
             <li><strong>Model Attributes</strong> &mdash; Adjust global parameters in real time without recompiling.</li>
             <li><strong>Screenshot</strong> &mdash; Save the current view as a PNG image (matches display resolution with zoom/pan).</li>
-            <li><strong>Record GIF</strong> &mdash; Click the red record button in the transport bar, play the simulation, then click stop to encode and download an animated GIF.</li>
+            <li><strong>Record</strong> &mdash; Click the red record button in the transport bar, play the simulation, then click stop to encode and download. Use the format dropdown next to the button to choose <strong>WebM</strong> (default; native grid resolution, smaller files, no 256-colour limit) or <strong>GIF</strong> (256 colours, max 512&nbsp;px). WebM requires a browser with WebCodecs support (recent Chrome / Edge / Firefox); if unavailable the dropdown disables it and falls back to GIF.</li>
             <li><strong>Show Code</strong> &mdash; View the compiled JavaScript function.</li>
           </ul>
 
