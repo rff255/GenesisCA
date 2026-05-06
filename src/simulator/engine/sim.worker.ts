@@ -12,7 +12,7 @@ import {
   createWebGPURuntime, destroyWebGPURuntime, isWebGPUAvailable, shaderHashOf,
   setupBuffersAndPipelines, uploadAttrs, uploadNeighborIndices,
   uploadModelAttrs, uploadActiveViewer, uploadIndicators, uploadIndicatorsAt, dispatchStep,
-  dispatchOutputMapping, dispatchColorPassAndPresent, readbackAttrs, readbackColors,
+  dispatchOutputMapping, dispatchColorPassAndPresent, presentToCanvas, readbackAttrs, readbackColors,
   readbackBatched, unpackAttrsFromReadback, unpackAttrFromReadback, resetStopFlag, seedRngState,
   setupReductionPipelines, dispatchReductions, setupDirectRender,
   type WebGPURuntime, type ReadbackRegion,
@@ -880,11 +880,30 @@ function runColorPassWebGPU(): boolean {
  *  Output Mapping pipeline, dispatch it. Otherwise, run one Step — models that
  *  emit colors via SetColorViewer-in-step (e.g. MNCA's "Case Colored") rely on
  *  the step to update colors. Generation advances by 1 in the fallback case,
- *  which is the documented behaviour for these models on user interaction. */
+ *  which is the documented behaviour for these models on user interaction.
+ *
+ *  CRITICAL ordering: for no-OM viewers we MUST dispatch the step BEFORE the
+ *  present pass — otherwise the present blits the stale colors that were
+ *  there before the mutation, then the step writes new colors that never
+ *  reach the canvas. dispatchColorPassAndPresent runs OM (which writes
+ *  colors) and present in one encoder, so ordering is correct for OM
+ *  viewers; but it dispatches present unconditionally under direct render
+ *  even when the OM pipeline doesn't exist, so we have to gate which path
+ *  we take based on whether an OM pipeline actually exists.
+ */
 function refreshColorsAfterInputWebGPU(): void {
-  if (!webgpuRuntime || !webgpuRuntime.stepReady) return;
-  if (runColorPassWebGPU()) return;
+  const rt = webgpuRuntime;
+  if (!rt || !rt.stepReady) return;
+  const omExists = rt.entryPoints.outputMappings.some(o => o.mappingId === activeViewer);
+  if (omExists) {
+    runColorPassWebGPU();
+    return;
+  }
+  // No OM pipeline → step shader populates colors via SetColorViewer-in-step.
+  // Dispatch step FIRST so colorsBuf is fresh, THEN present so the canvas
+  // texture picks it up.
   runStepWebGPU();
+  presentToCanvas(rt);
 }
 
 /** JS / WASM analogue of refreshColorsAfterInputWebGPU. Same intent: after any
