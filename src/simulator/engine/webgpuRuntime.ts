@@ -435,7 +435,7 @@ fn presentColors(@builtin(global_invocation_id) gid: vec3<u32>) {
 `;
 }
 
-function setupDirectRender(rt: WebGPURuntime): void {
+export function setupDirectRender(rt: WebGPURuntime): void {
   if (!rt.canvas || !rt.colorsBuf) return;
   const ctx = rt.canvas.getContext('webgpu') as GPUCanvasContext | null;
   if (!ctx) throw new Error('OffscreenCanvas.getContext("webgpu") returned null');

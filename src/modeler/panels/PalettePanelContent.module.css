@@ -29,6 +29,232 @@
   padding-right: 4px;
 }
 
+/* ── Vertical split between Nodes and Macros sections ─────────────────── */
+
+.splitContainer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.scrollSection {
+  flex: 1;
+  min-height: 60px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.scrollSectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 4px 6px 4px;
+  /* Solid panel-matching background so cards scrolling underneath don't bleed
+     through (sticky header would otherwise be partly transparent). */
+  background: #16213e;
+  border-bottom: 1px solid #2d4059;
+  color: #4cc9f0;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.scrollSectionHeader .sectionCount {
+  margin-left: auto;
+}
+
+.splitter {
+  flex: 0 0 6px;
+  cursor: row-resize;
+  background: #1a2535;
+  border-top: 1px solid #2d4059;
+  border-bottom: 1px solid #2d4059;
+  transition: background 0.15s;
+}
+
+.splitter:hover,
+.splitterDragging {
+  background: #4cc9f0;
+}
+
+/* ── Header row: hint + view toggle ───────────────────────────────────── */
+
+.headerRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px 6px;
+}
+
+.headerRow .hint {
+  flex: 1;
+  padding: 0;
+}
+
+.viewToggle {
+  display: flex;
+  background: #0d1117;
+  border: 1px solid #2d4059;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.viewToggleButton {
+  background: transparent;
+  border: none;
+  color: #7a8a99;
+  font-size: 0.6rem;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-family: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.viewToggleButton:hover {
+  color: #c0c8d0;
+}
+
+.viewToggleButtonActive {
+  background: #1f3247;
+  color: #4cc9f0;
+}
+
+/* ── Visual mode: preview card grid ────────────────────────────────────── */
+
+/* Cards flow into multiple columns when the panel is wide enough; each card
+   sizes to its content (label + port labels) up to a soft cap so long labels
+   still wrap into ellipsis instead of stretching the whole row. */
+.previewGrid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.previewCard {
+  display: inline-flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  width: max-content;
+  min-width: 110px;
+  max-width: 200px;
+  background: #1a2535;
+  border: 1px solid #2d4059;
+  border-radius: 4px;
+  cursor: grab;
+  user-select: none;
+  overflow: hidden;
+  transition: border-color 0.1s, box-shadow 0.1s;
+}
+
+.previewCard:hover {
+  border-color: #4cc9f0;
+  box-shadow: 0 0 0 1px rgba(76, 201, 240, 0.2);
+}
+
+.previewCard:active {
+  cursor: grabbing;
+}
+
+.previewCard:focus-visible {
+  outline: 1px solid #4cc9f0;
+  outline-offset: 0;
+}
+
+.previewHeader {
+  padding: 3px 6px;
+  font-size: 0.58rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  /* Inline color set per-card by NodePreview.tsx via textColorForBg() —
+     dark on light headers, white on dark headers. */
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.previewLabel {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.previewSubtitle {
+  font-size: 0.5rem;
+  font-weight: 500;
+  opacity: 0.75;
+}
+
+.previewBody {
+  display: flex;
+  padding: 4px 4px;
+  gap: 6px;
+  background: #131b27;
+  min-height: 18px;
+}
+
+.previewPortCol {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.previewPortColRight {
+  text-align: right;
+}
+
+.previewPortRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.55rem;
+  color: #c0c8d0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.previewPortRowRight {
+  justify-content: flex-end;
+}
+
+.previewPortLabel {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.previewPortSpacer {
+  height: 9px;
+}
+
+.previewDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.previewDotValue {
+  background: #4cc9f0;
+}
+
+.previewDotFlow {
+  background: #ffd166;
+}
+
 .section {
   margin-bottom: 6px;
 }

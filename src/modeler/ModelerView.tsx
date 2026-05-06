@@ -61,24 +61,41 @@ export function ModelerView() {
     setActiveRightPanel(lastRightPanel);
   }, [lastRightPanel]);
 
-  // Ctrl+F opens Node Explorer and focuses search; Esc closes it
+  // Ctrl+F opens Node Explorer and focuses search; Space toggles Palette;
+  // Esc closes whichever right panel is open. Registered in the capture phase
+  // so the Space toggle preempts the always-mounted SimulatorView's
+  // space-to-step listener (which is in the bubble phase) when the modeler
+  // tab is active.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      const ae = document.activeElement as HTMLElement | null;
+      const tag = ae?.tagName;
+      const isField = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+        || (ae?.isContentEditable ?? false);
+
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
-        const tag = (document.activeElement as HTMLElement)?.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        if (isField) return;
         e.preventDefault();
         setActiveRightPanel('explorer');
+        setLastRightPanel('explorer');
         setTimeout(() => explorerRef.current?.focusSearch(), 50);
+      } else if ((e.key === ' ' || e.code === 'Space') && !e.repeat) {
+        // Skip when typing or when a button has focus (Space activates buttons).
+        if (isField || tag === 'BUTTON') return;
+        e.preventDefault();
+        // Block the simulator's bubble-phase space-step listener from also
+        // running on this keystroke.
+        e.stopImmediatePropagation();
+        setActiveRightPanel(prev => (prev === 'palette' ? null : 'palette'));
+        setLastRightPanel('palette');
       } else if (e.key === 'Escape' && activeRightPanel) {
         // Don't steal Esc from fields (e.g. clearing the search input first)
-        const tag = (document.activeElement as HTMLElement)?.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        if (isField) return;
         setActiveRightPanel(null);
       }
     };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
+    document.addEventListener('keydown', handler, true);
+    return () => document.removeEventListener('keydown', handler, true);
   }, [activeRightPanel]);
 
   const PanelContent = activePanel ? panelComponents[activePanel] : null;

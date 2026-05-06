@@ -166,6 +166,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const isPanning = useRef(false);
   const lastMouse = useRef({ x: 0, y: 0 });
   const cursorGrid = useRef<{ row: number; col: number } | null>(null);
+  /** Cell coordinates / brush rect under the cursor. State (not a ref) so the
+   *  overlay re-renders, but only updated when the integer cell or brush
+   *  dimensions change to keep mousemove cheap. */
+  const [hoverCellInfo, setHoverCellInfo] = useState<{
+    col: number; row: number; x0: number; y0: number; x1: number; y1: number;
+  } | null>(null);
   const lastPaintGrid = useRef<{ row: number; col: number } | null>(null);
   // Paint coalescing: instead of posting a paint message per mouse-move event
   // (~50-200/sec on a fast brush drag), collect cells in a buffer and flush
@@ -192,6 +198,23 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // it, so draw() must skip the putImageData step and only do the
   // zoom/pan drawImage. Reset when the worker is reinitialised.
   const directRenderActiveRef = useRef<boolean>(false);
+  // True between worker init and the first useWebGPUStatus { ready: true }
+  // message: signals that we still owe the worker a canvas transfer once it
+  // confirms WebGPU is up. We defer the transfer (rather than doing it
+  // optimistically at init time) so the JS-fallback period during async
+  // device acquisition can still draw via putImageData on a regular 2D
+  // canvas. Set in initWorkerWithDimensions; cleared in the
+  // useWebGPUStatus handler after the canvas is sent.
+  const pendingCanvasAttach = useRef<boolean>(false);
+  // Holds the about-to-be-direct-render canvas between the moment we send
+  // attachCanvas to the worker and the moment the worker confirms direct
+  // render is live (second useWebGPUStatus { ready: true, directRender: true }).
+  // Until that ack arrives we keep srcCanvasRef pointing at the regular 2D
+  // canvas (which has the latest JS-fallback putImageData content) so draw()
+  // doesn't flash blank. If the ack never arrives (worker rejected attach,
+  // or the runtime was destroyed before processing it), the placeholder
+  // canvas stays orphaned and we stay on the JS-fallback path.
+  const pendingDirectRenderCanvas = useRef<HTMLCanvasElement | null>(null);
 
   // Build full code display from all compiled functions
   const buildFullCode = useCallback((result: ReturnType<typeof compileGraph>) => {
@@ -495,6 +518,20 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           lastGenSetTime.current = now;
         }
         draw();
+        // Under WebGPU direct render, drawImage(srcCanvas) reads the
+        // OffscreenCanvas placeholder's *last-composited* frame. The worker
+        // has just dispatched the present pass and posted stepped, but the
+        // browser's compositor may not have picked up that frame yet — so
+        // the immediate draw above can blit the *previous* frame. Schedule
+        // a follow-up draw on the next animation frame: by then the
+        // compositor has run, drawImage reads the new frame, and the user
+        // sees the actual result of paint / paste / clear / reset / etc.
+        // Without this, one-shot mutations under direct render leave the
+        // canvas showing stale post-Play state until the next user action.
+        // Cost is negligible (one extra drawImage at vsync rate).
+        if (directRenderActiveRef.current) {
+          requestAnimationFrame(() => draw());
+        }
 
         // GIF frame capture. Two source paths depending on render mode:
         // - Non-direct (JS / WASM, or WebGPU pre-P7): srcCanvas's 2D context
@@ -612,11 +649,76 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       );
     }
 
+    // One-shot colors snapshot — used by handleScreenshot under direct render
+    // (where the placeholder srcCanvas can't be read on the main thread).
+    if (msg.type === 'colorsSnapshot') {
+      const cb = screenshotPendingRef.current;
+      if (cb && msg.tag === 'screenshot') {
+        screenshotPendingRef.current = null;
+        cb({ w: msg.w as number, h: msg.h as number, colors: msg.colors as Uint8ClampedArray | undefined });
+      }
+      return;
+    }
+
     // Restore simulation state from loaded .gcaproj (after worker init completes)
     if (msg.type === 'stepped' && pendingSimStateRestore.current) {
       const state = pendingSimStateRestore.current;
       pendingSimStateRestore.current = null;
       applySimulationState(state);
+    }
+
+    // P7 deferred attach: a two-phase handshake with the worker so we never
+    // claim direct render before it's actually live.
+    //
+    //   Phase 1 — useWebGPUStatus { ready: true, directRender: false }:
+    //     Worker has its WebGPU runtime up but no canvas yet. We allocate a
+    //     fresh canvas, transferControlToOffscreen, and ship it via
+    //     attachCanvas. We do NOT swap srcCanvasRef yet — keep the existing
+    //     regular 2D canvas (with its JS-fallback putImageData content) so
+    //     draw() doesn't flash blank during the GPU's first present.
+    //
+    //   Phase 2 — useWebGPUStatus { ready: true, directRender: true }:
+    //     Worker has wired the canvas in setupDirectRender and dispatched the
+    //     first present. NOW we swap srcCanvasRef to the transferred canvas
+    //     and flip directRenderActiveRef. Subsequent draw() reads GPU output.
+    //
+    // If Phase 2 never arrives (attachCanvas rejected, runtime destroyed in
+    // a race), the transferred canvas stays orphaned in pendingDirectRenderCanvas
+    // and we stay permanently on JS-fallback — graceful degradation.
+    if (msg.type === 'useWebGPUStatus') {
+      if (msg.ready && msg.directRender && pendingDirectRenderCanvas.current) {
+        // Phase 2 ack — commit the swap.
+        srcCanvasRef.current = pendingDirectRenderCanvas.current;
+        pendingDirectRenderCanvas.current = null;
+        directRenderActiveRef.current = true;
+      } else if (msg.ready && pendingCanvasAttach.current) {
+        // Phase 1 ack — send attachCanvas, stash the fresh canvas, but DON'T
+        // swap srcCanvasRef or set directRenderActiveRef yet.
+        pendingCanvasAttach.current = false;
+        try {
+          const fresh = document.createElement('canvas');
+          fresh.width = gridWidth.current;
+          fresh.height = gridHeight.current;
+          const offscreen = (fresh as HTMLCanvasElement & {
+            transferControlToOffscreen: () => OffscreenCanvas;
+          }).transferControlToOffscreen();
+          workerRef.current?.postMessage(
+            { type: 'attachCanvas', canvas: offscreen, width: fresh.width, height: fresh.height },
+            [offscreen],
+          );
+          pendingDirectRenderCanvas.current = fresh;
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.warn('[webgpu] deferred OffscreenCanvas transfer failed; staying on readback path:', e);
+          directRenderActiveRef.current = false;
+          pendingDirectRenderCanvas.current = null;
+        }
+      } else if (msg.ready === false) {
+        // Worker reports WebGPU is off (init failure or explicit downgrade).
+        // Drop any pending direct-render canvas so we don't apply it later.
+        directRenderActiveRef.current = false;
+        pendingDirectRenderCanvas.current = null;
+      }
     }
   };
 
@@ -710,40 +812,35 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         return { shaderCode: '', entryPoints: { step: 'step', outputMappings: [] as Array<{ mappingId: string; entry: string }> }, layout: null as never, error: String((e as Error)?.message || e) };
       }
     })();
-    // P7 direct render: when WebGPU is the chosen target AND OffscreenCanvas
-    // is supported (Chrome/Edge for sure, Firefox 144+; Safari is iffy),
-    // pre-allocate srcCanvasRef at grid resolution and transfer its 2D
-    // context to the worker. The worker then writes WebGPU output directly
-    // to it via a present compute pipeline — no per-frame readback or
-    // postMessage of the colors buffer. Failure or unsupported envs fall
-    // back transparently: directRenderActiveRef stays false and the
-    // existing readback-then-putImageData path runs.
-    let canvasForWorker: OffscreenCanvas | undefined;
+    // P7 direct render: under WebGPU we eventually transfer srcCanvas's
+    // control to an OffscreenCanvas so the worker's WebGPU runtime can write
+    // straight to it via the present compute pipeline. We DEFER that transfer
+    // until the worker confirms via useWebGPUStatus that the runtime is up —
+    // until then srcCanvas stays a regular 2D canvas so the JS-fallback
+    // colors path (which the worker uses while async device init is in
+    // flight) can still putImageData onto it. Without this deferral, every
+    // worker init had a 50-500ms window where the user saw a frozen blank
+    // grid even while the worker was correctly evolving CPU state.
     directRenderActiveRef.current = false;
+    pendingCanvasAttach.current = false;
+    pendingDirectRenderCanvas.current = null;
     // Drop any prior srcCanvas reference — if the previous worker init went
     // through the direct-render path, srcCanvasRef holds a transferred canvas
     // whose 2D context is permanently unavailable. Re-using it here would
     // make all later getImageData / drawImage calls fail silently (visible
     // symptom: GIF recording captures zero frames after a WebGPU→JS toggle).
-    srcCanvasRef.current = null;
+    {
+      const fresh = document.createElement('canvas');
+      fresh.width = w; fresh.height = h;
+      srcCanvasRef.current = fresh;
+    }
     const offscreenSupported = typeof HTMLCanvasElement !== 'undefined'
       && typeof (HTMLCanvasElement.prototype as { transferControlToOffscreen?: unknown }).transferControlToOffscreen === 'function';
+    // Mark that we want to attach a canvas once the worker reports ready.
+    // The actual transferControlToOffscreen + postMessage('attachCanvas')
+    // happens in the useWebGPUStatus handler.
     if (model.properties.useWebGPU && !webgpuResult.error && offscreenSupported) {
-      try {
-        // Always allocate a fresh srcCanvas so transferControlToOffscreen can
-        // succeed (a canvas can only be transferred once, and only if it has
-        // never had a 2D / WebGL context retrieved on the main thread).
-        const fresh = document.createElement('canvas');
-        fresh.width = w; fresh.height = h;
-        canvasForWorker = (fresh as HTMLCanvasElement & { transferControlToOffscreen: () => OffscreenCanvas }).transferControlToOffscreen();
-        srcCanvasRef.current = fresh;
-        directRenderActiveRef.current = true;
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn('[webgpu] OffscreenCanvas transfer failed; falling back to readback path:', e);
-        canvasForWorker = undefined;
-        directRenderActiveRef.current = false;
-      }
+      pendingCanvasAttach.current = true;
     }
     const initMsg: Record<string, unknown> = {
       type: 'init',
@@ -784,14 +881,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       useWebGPU: !!model.properties.useWebGPU,
       webgpuStopCheckInterval: Math.max(1, Math.floor(model.properties.webgpuStopCheckInterval ?? 1)),
     };
-    if (canvasForWorker) {
-      initMsg.webgpuCanvas = canvasForWorker;
-      initMsg.webgpuCanvasWidth = w;
-      initMsg.webgpuCanvasHeight = h;
-      worker.postMessage(initMsg, [canvasForWorker]);
-    } else {
-      worker.postMessage(initMsg);
-    }
+    // Canvas transfer is deferred to the useWebGPUStatus handler — see
+    // pendingCanvasAttach above. The init message never carries webgpuCanvas
+    // anymore; the worker's startWebGPUInit runs without a canvas, falls
+    // through to the readback path until attachCanvas arrives.
+    worker.postMessage(initMsg);
     workerRef.current = worker;
     if (import.meta.env?.DEV) (window as unknown as { __simWorker?: Worker }).__simWorker = worker;
     generationRef.current = 0;
@@ -931,21 +1025,34 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       initWorkerWithDimensions(model.properties.gridWidth, model.properties.gridHeight);
     } else {
       // Graph or indicator watch change only → soft recompile (preserves grid)
-      const result = compileGraph(model.graphNodes, model.graphEdges, model);
+      // The Resize button updates `gridWidth.current` / `gridHeight.current` but
+      // intentionally does NOT update model.properties (so the model isn't
+      // marked dirty for a temporary experiment). Mirror the dimsModel pattern
+      // from the full-reinit branch so the recompile sees the actual current
+      // dims — otherwise WebGPU bakes the OLD `total` into its bounds check
+      // and only the first N rows of the resized grid get computed (the
+      // "top stripe" symptom). JS / WASM are tolerant (total is a runtime
+      // arg there); only WebGPU exhibits the bug.
+      const curW = gridWidth.current;
+      const curH = gridHeight.current;
+      const dimsModel = (model.properties.gridWidth === curW && model.properties.gridHeight === curH)
+        ? model
+        : { ...model, properties: { ...model.properties, gridWidth: curW, gridHeight: curH } };
+      const result = compileGraph(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
       setCompiledCode(buildFullCode(result));
       setCompileError(result.error ?? '');
       const wasmResult = (() => {
         try {
-          const layout = computeLayoutFromModel(model);
-          const viewerIds = buildViewerIds(model);
-          return compileGraphWasm(model.graphNodes, model.graphEdges, model, layout, viewerIds);
+          const layout = computeLayoutFromModel(dimsModel);
+          const viewerIds = buildViewerIds(dimsModel);
+          return compileGraphWasm(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel, layout, viewerIds);
         } catch (e) {
           return { bytes: new Uint8Array(), minMemoryPages: 1, error: String((e as Error)?.message || e), viewerIds: {}, exports: [] };
         }
       })();
       const webgpuResult = (() => {
         try {
-          return compileGraphWebGPU(model.graphNodes, model.graphEdges, model);
+          return compileGraphWebGPU(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
         } catch (e) {
           return { shaderCode: '', entryPoints: { step: 'step', outputMappings: [] as Array<{ mappingId: string; entry: string }> }, layout: null as never, error: String((e as Error)?.message || e) };
         }
@@ -1231,6 +1338,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // Update brush cursor position
       const gridPos = screenToGrid(e.clientX, e.clientY);
       cursorGrid.current = gridPos;
+      // Update the hover-coords chip — only when the integer cell or brush
+      // dimensions change, so React re-renders are coarse-grained.
+      const bw = brushWRef.current;
+      const bh = brushHRef.current;
+      if (gridPos) {
+        const halfW = Math.floor((bw - 1) / 2);
+        const halfH = Math.floor((bh - 1) / 2);
+        const x0 = gridPos.col - halfW;
+        const y0 = gridPos.row - halfH;
+        const x1 = x0 + bw - 1;
+        const y1 = y0 + bh - 1;
+        setHoverCellInfo(prev =>
+          prev && prev.col === gridPos.col && prev.row === gridPos.row
+            && prev.x0 === x0 && prev.y0 === y0 && prev.x1 === x1 && prev.y1 === y1
+            ? prev
+            : { col: gridPos.col, row: gridPos.row, x0, y0, x1, y1 }
+        );
+      } else {
+        setHoverCellInfo(prev => (prev === null ? prev : null));
+      }
       if (!isPanning.current && !(e.buttons & 1) && !isResizingBrush.active) draw();
 
       // Ctrl+LMB drag = resize brush
@@ -1280,7 +1407,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       e.preventDefault();
     };
 
-    const handleMouseLeave = () => { cursorGrid.current = null; draw(); };
+    const handleMouseLeave = () => {
+      cursorGrid.current = null;
+      setHoverCellInfo(prev => (prev === null ? prev : null));
+      draw();
+    };
 
     container.addEventListener('wheel', handleWheel, { passive: false });
     container.addEventListener('mousedown', handleMouseDown);
@@ -1498,12 +1629,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     workerRef.current?.postMessage({ type: 'updateModelAttrs', attrs: { [attrId]: value } });
   };
 
-  // F4: Screenshot export — 1:1 pixel-perfect from source canvas (no scaling)
+  // F4: Screenshot export — 1:1 pixel-perfect from source canvas (no scaling).
+  // Under WebGPU direct render the placeholder srcCanvas's 2D context is gone
+  // (transferred to the worker), so toBlob/getImageData all fail. Ask the
+  // worker for a fresh colors snapshot, paint it onto an offscreen 2D canvas,
+  // then toBlob from there. Falls through to direct toBlob in JS/WASM modes.
+  const screenshotPendingRef = useRef<((data: { w: number; h: number; colors?: Uint8ClampedArray }) => void) | null>(null);
   const handleScreenshot = () => {
-    const src = srcCanvasRef.current;
-    if (!src) return;
-    src.toBlob(blob => {
-      if (!blob) return;
+    const w = gridWidth.current;
+    const h = gridHeight.current;
+    const downloadBlob = (blob: Blob) => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       const name = model.properties.name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '') || 'genesis';
@@ -1511,7 +1646,25 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       a.download = `${name}_gen${generationRef.current}.png`;
       a.click();
       URL.revokeObjectURL(url);
-    }, 'image/png');
+    };
+    if (directRenderActiveRef.current) {
+      if (!workerRef.current || !w || !h) return;
+      screenshotPendingRef.current = ({ w: cw, h: ch, colors }) => {
+        if (!colors || colors.length < cw * ch * 4) return;
+        const off = document.createElement('canvas');
+        off.width = cw; off.height = ch;
+        const ctx = off.getContext('2d');
+        if (!ctx) return;
+        const imageData = new ImageData(new Uint8ClampedArray(colors), cw, ch);
+        ctx.putImageData(imageData, 0, 0);
+        off.toBlob(blob => { if (blob) downloadBlob(blob); }, 'image/png');
+      };
+      workerRef.current.postMessage({ type: 'requestColorsSnapshot', tag: 'screenshot' });
+      return;
+    }
+    const src = srcCanvasRef.current;
+    if (!src) return;
+    src.toBlob(blob => { if (blob) downloadBlob(blob); }, 'image/png');
   };
 
   // Save simulation state
@@ -1943,6 +2096,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           <span>{gridWidth.current || simWidth}&times;{gridHeight.current || simHeight}</span>
           <span>{actualFps} FPS</span>
           <span>{actualGps} g/s</span>
+          {hoverCellInfo && (
+            (hoverCellInfo.x0 === hoverCellInfo.x1 && hoverCellInfo.y0 === hoverCellInfo.y1)
+              ? <span title="Hovered cell">Cell ({hoverCellInfo.col}, {hoverCellInfo.row})</span>
+              : <span title="Brush footprint at the hovered cell">Cells ({hoverCellInfo.x0},{hoverCellInfo.y0}) {'\u2192'} ({hoverCellInfo.x1},{hoverCellInfo.y1})</span>
+          )}
           {recording && <span style={{ color: '#e05050' }}>{'\u23FA'} REC {recordFrameCount}f</span>}
         </div>
 

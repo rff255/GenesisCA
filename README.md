@@ -69,15 +69,15 @@ A complete GenesisCA model definition consists of:
 - **Neighborhoods Panel** — interactive grid editor with per-neighborhood margin, optional per-cell tags for named access, and a Duplicate button for quick variations
 - **Mappings Panel** — Attribute-to-Color and Color-to-Attribute mapping definitions
 - **Indicators** — standalone (typed scalar, graph-writable) or linked (auto-aggregated from cell attributes: frequency, total), with per-generation or accumulated modes. Frequency indicators can be viewed as horizontal bars, multi-line time series, or stacked-area time series (viz button cycles the three; preference persists per indicator). End Conditions accept per-category comparisons on frequency indicators (e.g. pause when count of `alive` cells &ge; 100).
-- **Graph Editor** — 37 node types across 8 categories (event, flow, data, logic, aggregation, output, color, indicators), with RMB pan, scroll zoom, and snap-to-grid. Includes Switch (flow routing by conditions or value), Proportion Map, Interpolation, Color Interpolation, Aggregate (multi-input math), neighborhood tag-based access nodes, and a **Stop Event** node that pauses the simulator with a user-defined message when its flow input fires.
+- **Graph Editor** — 37 node types across 8 categories (event, flow, data, logic, aggregation, output, color, indicators), with RMB pan, scroll zoom, and snap-to-grid. Includes Switch (flow routing by conditions or value), Proportion Map and Color Interpolation (with selectable curves: Linear, Smoothstep, Ease-In/Out Quadratic, Exponential, Logarithmic), Interpolation, Aggregate (multi-input math), neighborhood tag-based access nodes, and a **Stop Event** node that pauses the simulator with a user-defined message when its flow input fires.
 - **Connection validation** — prevents incompatible connections (flow/value), cycles, and duplicate inputs; compatible ports highlight during drag
 - **Inline Port Widgets** — input ports show small value editors (number/bool) when unconnected, eliminating the need for constant nodes in simple cases
 - **Node Collapse/Expand** — double-click any node to collapse it; constants show their value; collapsed nodes temporarily expand when connecting edges
 - **Color Pickers** — Color Constant and Set Color Viewer nodes include hex color pickers with per-channel R/G/B controls
-- **Palette** — right-side panel with a drag-and-drop list of every node type (grouped by category), default macros shipped with the app (from `public/macros/*.gcamacro`), and the current project's macros
+- **Palette** — right-side panel with a drag-and-drop list of every node type (grouped by category), default macros shipped with the app (from `public/macros/*.gcamacro`), and the current project's macros. Splits vertically into independently-scrolling **Nodes** and **Macros** sections with a draggable horizontal splitter; a **List / Visual** toggle switches between a compact text list and mini node-preview cards (split position and view mode persist across sessions)
 - **Node Explorer** — searchable right-side panel (Ctrl+F to open, Esc to close) listing all placed nodes with click-to-focus
 - **Add-Node tooltips** — hover any entry in the Add Node context menu to see a short description of what it does
-- **Incomplete-config warnings** — nodes with unset required parameters (e.g., an unselected attribute/neighborhood/mapping) show an amber warning badge in the header so you can spot them at a glance
+- **Incomplete-config warnings** — nodes with unset required parameters (e.g., an unselected attribute/neighborhood/mapping) show an amber warning badge in the header so you can spot them at a glance. Macro instances bubble up internal-node warnings (recursively through nested macros), so misconfigured internals are visible without opening the macro
 - **Canvas toggles** — toggle port labels, grid lines, and snap-to-grid from buttons below zoom controls
 - **Macro System** — encapsulate node groups into reusable subgraphs with MacroInput/MacroOutput boundary nodes
 - **Undo/Redo** — Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) for node/edge operations, moves, paste, config changes
@@ -95,7 +95,7 @@ A complete GenesisCA model definition consists of:
 - **Save Project dialog** — checkboxes to include simulator controls (speed, brush, mapping, model-attribute values) and/or the full board state; choices persist across sessions
 - **Save / Load State** — save the full simulation snapshot (`.gcastate`) for experiment repeatability; load to restore a previous state. State is also embedded in `.gcaproj` for project-level persistence.
 - **Model Presets** — embed named snapshots of model-attribute values (and optionally the cell grid) in the project, listed in the left panel above Model Attributes. One-click switching between behavioral variants — ideal for generic models like MNCA where the same rules produce wildly different emergent patterns per parameter set. Include/exclude from `.gcaproj` via the Save Project dialog.
-- **Canvas controls** — LMB=brush, RMB=pan, scroll=zoom, Ctrl+LMB drag=resize brush, Ctrl+wheel=cycle input mappings, Shift+RMB=open in-page color picker at the cursor
+- **Canvas controls** — LMB=brush, RMB=pan, scroll=zoom, Ctrl+LMB drag=resize brush, Ctrl+wheel=cycle input mappings, Shift+RMB=open in-page color picker at the cursor. The stats overlay shows the cell coordinates under the cursor (or the brush footprint range when brush > 1×1)
 - **Brush tool** — configurable color (with live R/G/B channel inputs beside the picker), width/height, input mapping; visual brush cursor; Ctrl+drag interactive resize
 - **Region clipboard** — Ctrl+C/V/X on the simulator copy/paste/cut all cell attributes within the brush rectangle; paste anchors to the brush's top-left corner
 - **Viewer tabs** — horizontal bar at the top to switch between Attribute-to-Color visualization modes
@@ -122,6 +122,7 @@ A complete GenesisCA model definition consists of:
 - [Node Reference](docs/NODES_REFERENCE.md) — full catalogue of the 40+ node types, port schemas, and compile-time semantics, with Mermaid diagrams of common patterns.
 - [CA Literature Review](docs/CA_LITERATURE_REVIEW.md) — a survey of ~70 canonical cellular-automata models across physics, chemistry, biology, ecology, sociology, transport, earth sciences (geology / mining / volcanology / seismology), CS theory and cryptography, with a Top-Tier Shortlist driving GenesisCA's feature roadmap.
 - [Performance Optimization Paths](docs/PERFORMANCE_OPTIMIZATION_PATHS.md) — engine-internal notes on the JS- and WASM-compile targets and how to keep large grids fast.
+- [Huge Grid Optimizations](docs/HUGE_GRID_OPTIMIZATIONS.md) — deferred memory-scaling techniques for pushing grids past today's WebGPU ceiling: implicit neighbor lookup, tile-based dispatch, sub-word packing for bool / small-tag attributes.
 
 ---
 
