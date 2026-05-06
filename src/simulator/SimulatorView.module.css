@@ -387,12 +387,24 @@
   left: 50%;
   transform: translateX(-50%);
   display: flex;
+  align-items: center;
   gap: var(--space-1);
   background: var(--color-bg-panel);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   padding: var(--space-1);
   z-index: 5;
+}
+
+/* Inline label inside .viewerBar ("Output Mapping (A→C):") — kept compact
+ * so it sits as a caption next to the tabs, but explicitly centred so it
+ * doesn't drift above the tab baseline. */
+.viewerBarLabel {
+  font-size: var(--font-2xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  padding: 0 var(--space-2);
+  line-height: 1;
 }
 
 .viewerTab {

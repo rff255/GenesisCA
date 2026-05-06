@@ -2107,7 +2107,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         {/* Top overlay: Viewer tabs */}
         {attrToColorMappings.length > 0 && (
           <div className={styles.viewerBar} data-sim-overlay>
-            <span style={{ fontSize: '0.65rem', color: '#6080a0', marginRight: 4, whiteSpace: 'nowrap' }}>Output Mapping (A{'\u2192'}C):</span>
+            <span className={styles.viewerBarLabel}>Output Mapping (A{'\u2192'}C):</span>
             {attrToColorMappings.map(m => (
               <button
                 key={m.id}
