@@ -24,13 +24,13 @@
   flex-direction: column;
   gap: var(--space-3);
   padding-bottom: var(--space-8);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-muted);
 }
 
 .pageTitle {
   font-size: var(--font-xl);
   font-weight: 700;
-  color: var(--color-accent);
+  color: var(--color-heading);
   letter-spacing: 0.02em;
 }
 
@@ -53,7 +53,7 @@
   align-items: baseline;
   gap: var(--space-6);
   padding-bottom: var(--space-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-muted);
 }
 
 .sectionTitle {
@@ -79,7 +79,7 @@
 .subsectionTitle {
   font-size: var(--font-xs);
   font-weight: 600;
-  color: var(--color-accent);
+  color: var(--color-heading);
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
@@ -234,7 +234,7 @@
   width: 56px;
   height: 56px;
   background: var(--color-bg-panel);
-  border: 1px solid var(--color-accent);
+  border: 1px solid var(--color-border-muted);
 }
 
 /* Shadows */
@@ -294,14 +294,14 @@
 
 .demoNavButtonActive {
   color: var(--color-text-primary);
-  background: var(--color-accent-soft);
-  border-color: var(--color-accent);
+  background: var(--color-tab-active-bg);
+  border-color: var(--color-tab-active-border);
 }
 
 .demoAddButton {
   padding: var(--space-3) var(--space-8);
   background: transparent;
-  border: 1px dashed var(--color-border);
+  border: 1px dashed var(--color-border-muted);
   border-radius: var(--radius-md);
   color: var(--color-text-muted);
   font-size: var(--font-xs);
@@ -310,8 +310,8 @@
 }
 
 .demoAddButton:hover {
-  border-color: var(--color-accent);
-  color: var(--color-accent);
+  border-color: var(--color-emphasis);
+  color: var(--color-emphasis);
 }
 
 .demoDeleteButton {
@@ -409,8 +409,8 @@
 }
 
 .forceHoverAdd {
-  border-color: var(--color-accent) !important;
-  color: var(--color-accent) !important;
+  border-color: var(--color-emphasis) !important;
+  color: var(--color-emphasis) !important;
 }
 
 .forceHoverDelete {
@@ -429,7 +429,7 @@
   width: 100%;
   padding: var(--space-3) var(--space-4);
   background: var(--color-bg-canvas);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-md);
   color: var(--color-text-primary);
   font-size: var(--font-md);
@@ -455,7 +455,7 @@
   width: 100%;
   padding: var(--space-3) var(--space-4);
   background: var(--color-bg-canvas);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-md);
   color: var(--color-text-primary);
   font-size: var(--font-md);
@@ -474,7 +474,7 @@
   width: 80px;
   padding: var(--space-3) var(--space-4);
   background: var(--color-bg-canvas);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-md);
   color: var(--color-text-primary);
   font-size: var(--font-md);
@@ -486,7 +486,7 @@
   width: 100%;
   padding: var(--space-3) var(--space-4);
   background: var(--color-bg-canvas);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-md);
   color: var(--color-text-primary);
   font-size: var(--font-md);
@@ -527,7 +527,7 @@
   height: 220px;
   background: var(--color-bg-panel);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--panel-radius);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -538,7 +538,7 @@
   align-items: center;
   justify-content: space-between;
   padding: var(--space-5) var(--space-6);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-muted);
   min-height: 40px;
 }
 
@@ -562,7 +562,7 @@
   width: 200px;
   padding: var(--space-6);
   background: var(--color-bg-elevated);
-  border: 1px solid var(--color-accent);
+  border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
   font-size: var(--font-md);
@@ -572,7 +572,7 @@
 .demoCard {
   padding: var(--space-6);
   background: var(--color-bg-panel);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-lg);
   font-size: var(--font-md);
   color: var(--color-text-secondary);
@@ -583,7 +583,7 @@
 .demoSegmented {
   display: inline-flex;
   background: var(--color-bg-canvas);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-md);
   padding: var(--space-1);
   gap: var(--space-1);
@@ -605,8 +605,8 @@
 }
 
 .demoSegmentedButtonActive {
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
+  background: var(--color-tab-active-bg);
+  color: var(--color-emphasis);
 }
 
 /* --- Lists mock --- */
@@ -631,7 +631,7 @@
 }
 
 .demoListItem:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--color-hover-bg);
 }
 
 .demoListItemSelected {
@@ -651,7 +651,7 @@
   font-size: var(--font-3xs);
   font-weight: 600;
   text-transform: uppercase;
-  color: var(--color-accent);
+  color: var(--color-emphasis);
   letter-spacing: 0.04em;
 }
 
@@ -665,11 +665,11 @@
 }
 
 .demoDropBefore {
-  box-shadow: 0 -2px 0 0 var(--color-accent) inset;
+  box-shadow: 0 -2px 0 0 var(--color-emphasis) inset;
 }
 
 .demoDropAfter {
-  box-shadow: 0 2px 0 0 var(--color-accent) inset;
+  box-shadow: 0 2px 0 0 var(--color-emphasis) inset;
 }
 
 /* --- Badges & chips --- */
@@ -691,7 +691,7 @@
   font-size: var(--font-3xs);
   font-weight: 600;
   text-transform: uppercase;
-  color: var(--color-accent);
+  color: var(--color-emphasis);
   letter-spacing: 0.04em;
 }
 
@@ -811,9 +811,9 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--color-accent);
+  color: var(--color-heading);
   padding-bottom: var(--space-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-muted);
 }
 
 .dropDemo {
@@ -895,7 +895,7 @@
 .sparklineValue {
   font-family: monospace;
   font-size: var(--font-md);
-  color: var(--color-accent);
+  color: var(--color-text-primary);
 }
 
 /* --- Grid cells (neighborhood demo) --- */

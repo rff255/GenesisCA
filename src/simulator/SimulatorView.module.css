@@ -16,6 +16,7 @@
   gap: var(--space-4);
   border-right: 1px solid var(--color-border);
   border-left: 1px solid var(--color-border);
+  border-radius: var(--panel-radius);
   overflow-y: auto;
   overflow-x: hidden;
   position: relative;
@@ -45,6 +46,8 @@
   flex-direction: column;
   position: relative;
   overflow: visible;
+  border-top-left-radius: var(--panel-radius);
+  border-bottom-left-radius: var(--panel-radius);
 }
 
 .rightPanelCollapseTab {
@@ -139,7 +142,7 @@
 .panelTitle {
   font-size: var(--font-sm);
   font-weight: 600;
-  color: var(--color-accent);
+  color: var(--color-heading);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -160,7 +163,7 @@
 
 .panelCollapseBtn:hover {
   color: var(--color-text-primary);
-  border-color: var(--color-accent);
+  border-color: var(--color-border-muted);
 }
 
 .panelExpandBtn {
@@ -220,8 +223,8 @@
 }
 
 .controlButton:hover {
-  background: var(--color-bg-elevated);
-  border-color: var(--color-accent);
+  background: var(--color-overlay-hover-medium);
+  border-color: var(--color-border-muted);
 }
 
 .controlButton:disabled {
@@ -259,7 +262,7 @@
 .sectionTitle {
   font-size: var(--font-2xs);
   font-weight: 600;
-  color: var(--color-accent);
+  color: var(--color-heading);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -294,7 +297,7 @@
   width: 100%;
   padding: var(--space-1) var(--space-3);
   background: var(--color-bg-canvas);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-md);
   color: var(--color-text-primary);
   font-size: var(--font-2xs);
@@ -305,7 +308,7 @@
 .colorPicker {
   width: 40px;
   height: 24px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-md);
   background: var(--color-bg-canvas);
   cursor: pointer;
@@ -317,7 +320,7 @@
   width: 44px;
   padding: var(--space-1) var(--space-2);
   background: var(--color-bg-canvas);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-md);
   color: var(--color-text-primary);
   font-size: 0.68rem;
@@ -410,9 +413,9 @@
 }
 
 .viewerTabActive {
-  color: var(--color-accent);
-  background: var(--color-accent-soft);
-  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+  background: var(--color-tab-active-bg);
+  border-color: var(--color-tab-active-border);
 }
 
 /* --- Bottom overlay: Transport bar --- */
@@ -445,8 +448,8 @@
 }
 
 .transportBtn:hover {
-  background: var(--color-accent-soft);
-  border-color: var(--color-accent);
+  background: var(--color-hover-bg);
+  border-color: var(--color-border-muted);
 }
 
 .transportBtn:disabled {
@@ -550,14 +553,14 @@
 }
 
 .zoomBtn:hover {
-  background: var(--color-border);
-  border-color: var(--color-accent);
+  background: var(--color-overlay-hover-medium);
+  border-color: var(--color-border-muted);
 }
 
 .zoomBtnActive {
-  color: var(--color-accent);
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
+  color: var(--color-text-primary);
+  border-color: var(--color-tab-active-border);
+  background: var(--color-tab-active-bg);
 }
 
 /* --- Input mapping tabs (in brush panel) --- */
@@ -586,9 +589,9 @@
 }
 
 .mappingTabActive {
-  color: var(--color-accent);
-  background: var(--color-accent-soft);
-  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+  background: var(--color-tab-active-bg);
+  border-color: var(--color-tab-active-border);
 }
 
 /* --- Overlay (unlimited gens message) --- */
@@ -622,17 +625,18 @@
   top: var(--space-2);
   right: var(--space-2);
   padding: var(--space-1) var(--space-4);
-  background: var(--color-border);
-  border: 1px solid var(--color-accent);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-muted);
   border-radius: var(--radius-sm);
-  color: var(--color-accent);
+  color: var(--color-text-secondary);
   font-size: 0.55rem;
   cursor: pointer;
   z-index: 1;
 }
 
 .copyButton:hover {
-  background: var(--color-border-muted);
+  background: var(--color-overlay-hover-medium);
+  color: var(--color-text-primary);
 }
 
 .codeBlock {

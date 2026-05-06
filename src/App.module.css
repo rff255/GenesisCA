@@ -18,7 +18,7 @@
 .title {
   font-size: var(--font-lg);
   font-weight: 700;
-  color: var(--color-accent);
+  color: var(--color-heading);
   letter-spacing: 0.02em;
 }
 
@@ -53,8 +53,8 @@
 
 .navButtonActive {
   color: var(--color-text-primary);
-  background: var(--color-accent-soft);
-  border-color: var(--color-accent);
+  background: var(--color-tab-active-bg);
+  border-color: var(--color-tab-active-border);
 }
 
 .githubLink {

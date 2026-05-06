@@ -16,7 +16,7 @@
 .tocTitle {
   font-size: var(--font-sm);
   font-weight: 600;
-  color: var(--color-accent);
+  color: var(--color-heading);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   padding: 0 var(--space-8) var(--space-4);
@@ -37,7 +37,7 @@
 
 .tocItem:hover {
   color: var(--color-text-primary);
-  background: var(--color-accent-soft);
+  background: var(--color-hover-bg);
 }
 
 .content {
@@ -53,7 +53,7 @@
 .h1 {
   font-size: var(--font-xl);
   font-weight: 700;
-  color: var(--color-accent);
+  color: var(--color-heading);
   margin: 0 0 var(--space-4);
 }
 

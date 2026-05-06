@@ -10,7 +10,7 @@
   width: 100%;
   padding: var(--space-3) var(--space-5);
   background: var(--color-bg-canvas);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-md);
   color: var(--color-text-primary);
   font-size: var(--font-xs);
@@ -53,8 +53,8 @@
   /* Solid panel-matching background so cards scrolling underneath don't bleed
      through (sticky header would otherwise be partly transparent). */
   background: var(--color-bg-panel);
-  border-bottom: 1px solid var(--color-border);
-  color: var(--color-accent);
+  border-bottom: 1px solid var(--color-border-muted);
+  color: var(--color-heading);
   font-size: var(--font-2xs);
   font-weight: 700;
   text-transform: uppercase;
@@ -99,7 +99,7 @@
 .viewToggle {
   display: flex;
   background: var(--color-bg-canvas);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-md);
   overflow: hidden;
 }
@@ -121,8 +121,8 @@
 }
 
 .viewToggleButtonActive {
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
+  background: var(--color-tab-active-bg);
+  color: var(--color-emphasis);
 }
 
 /* ── Visual mode: preview card grid ────────────────────────────────────── */
@@ -146,7 +146,7 @@
   min-width: 110px;
   max-width: 200px;
   background: var(--color-bg-elevated);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-md);
   cursor: grab;
   user-select: none;
@@ -267,7 +267,7 @@
   padding: var(--space-2) 0;
   background: transparent;
   border: none;
-  color: var(--color-accent);
+  color: var(--color-heading);
   font-size: var(--font-2xs);
   font-weight: 600;
   text-transform: uppercase;
@@ -277,7 +277,7 @@
 }
 
 .sectionHeader:hover {
-  color: var(--color-accent-hover);
+  color: var(--color-text-primary);
 }
 
 .sectionChevron {
@@ -323,8 +323,8 @@
 }
 
 .item:hover {
-  background: var(--color-accent-soft);
-  border-color: var(--color-accent-strong);
+  background: var(--color-hover-bg);
+  border-color: var(--color-border-muted);
 }
 
 .item:active {

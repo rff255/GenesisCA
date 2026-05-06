@@ -9,7 +9,7 @@
 .contextMenu {
   position: absolute;
   background: var(--color-bg-elevated);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-lg);
   padding: var(--space-3) 0;
   min-width: 180px;
@@ -21,10 +21,10 @@
   padding: var(--space-3) var(--space-6);
   font-size: var(--font-xs);
   font-weight: 600;
-  color: var(--color-accent);
+  color: var(--color-heading);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-muted);
   margin-bottom: var(--space-2);
 }
 
@@ -54,7 +54,7 @@
 }
 
 .contextItem:hover {
-  background: var(--color-accent-soft);
+  background: var(--color-hover-bg);
 }
 
 .contextDot {
@@ -74,7 +74,7 @@
   left: 100%;
   top: 0;
   background: var(--color-bg-elevated);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-lg);
   padding: var(--space-3) 0;
   min-width: 180px;
@@ -133,8 +133,8 @@
 }
 
 .breadcrumbItem:hover {
-  color: var(--color-accent);
-  background: var(--color-accent-soft);
+  color: var(--color-text-primary);
+  background: var(--color-hover-bg);
 }
 
 .breadcrumbActive {
@@ -196,7 +196,7 @@
   width: 28px;
   height: 28px;
   background: var(--color-bg-elevated);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-md);
   color: var(--color-text-muted);
   font-size: var(--font-xs);
@@ -209,14 +209,14 @@
 }
 
 .toggleButton:hover {
-  background: var(--color-border);
+  background: var(--color-overlay-hover-medium);
   color: var(--color-text-primary);
 }
 
 .toggleActive {
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
-  border-color: var(--color-accent);
+  background: var(--color-tab-active-bg);
+  color: var(--color-emphasis);
+  border-color: var(--color-tab-active-border);
 }
 
 /* Let RMB drag pass through group node body to canvas for panning */

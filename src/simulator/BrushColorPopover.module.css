@@ -22,7 +22,7 @@
 .swatch {
   width: 22px;
   height: 22px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-sm);
   flex: none;
 }
@@ -41,7 +41,7 @@
   padding: 0;
   line-height: 18px;
   background: transparent;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-sm);
   color: var(--color-text-tertiary);
   cursor: pointer;
@@ -72,7 +72,7 @@
   box-sizing: border-box;
   padding: var(--space-1) var(--space-2);
   background: var(--color-bg-canvas);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-sm);
   color: var(--color-text-primary);
   font-size: var(--font-xs);
@@ -103,7 +103,7 @@
   width: 40px;
   height: 22px;
   padding: 0;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-sm);
   background: transparent;
   cursor: pointer;

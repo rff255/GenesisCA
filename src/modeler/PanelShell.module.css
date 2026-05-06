@@ -7,6 +7,10 @@
   flex-direction: column;
   background: var(--color-bg-panel);
   border-right: 1px solid var(--color-border);
+  /* Outer right corners pick up --panel-radius (Blender rounds editor panels;
+     Default Generic uses 0). Header has the matching radius applied. */
+  border-top-right-radius: var(--panel-radius);
+  border-bottom-right-radius: var(--panel-radius);
   position: relative;
 }
 
@@ -15,8 +19,9 @@
   align-items: center;
   justify-content: space-between;
   padding: var(--space-5) var(--space-6);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-muted);
   min-height: 40px;
+  border-top-right-radius: var(--panel-radius);
 }
 
 .title {
