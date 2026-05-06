@@ -123,6 +123,12 @@
   --font-lg:   1.1rem;
   --font-xl:   1.4rem;
 
+  /* ----- Label/heading typography (Default uses uppercase + tracking;
+   *       Blender uses sentence case + normal tracking — softer feel) ----- */
+  --label-text-transform: uppercase;
+  --label-letter-spacing: 0.04em;
+  --label-font-weight: 500;
+
   /* ----- Radii ----- */
   --radius-sm:   3px;
   --radius-md:   4px;
@@ -290,6 +296,11 @@
   --font-base: 0.85rem;
   --font-lg:   1rem;
   --font-xl:   1.25rem;
+
+  /* Label typography (Blender uses sentence case, no tracking) */
+  --label-text-transform: none;
+  --label-letter-spacing: normal;
+  --label-font-weight: 500;
 
   /* ----- Radii (Blender is nearly flat) ----- */
   --radius-sm:   2px;

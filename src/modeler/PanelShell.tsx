@@ -14,7 +14,10 @@ export function PanelShell({ title, onClose, children, side = 'left' }: PanelShe
   const isRight = side === 'right';
 
   return (
-    <div className={styles.panelShell} ref={panelRef} style={isRight ? { borderRight: 'none', borderLeft: '1px solid #2d4059' } : undefined}>
+    <div
+      className={`${styles.panelShell} ${isRight ? styles.panelShellRight : ''}`}
+      ref={panelRef}
+    >
       <div className={styles.header}>
         <span className={styles.title}>{title}</span>
         <button className={styles.closeButton} onClick={onClose} title="Close panel">
