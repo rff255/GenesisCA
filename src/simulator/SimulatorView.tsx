@@ -518,6 +518,20 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           lastGenSetTime.current = now;
         }
         draw();
+        // Under WebGPU direct render, drawImage(srcCanvas) reads the
+        // OffscreenCanvas placeholder's *last-composited* frame. The worker
+        // has just dispatched the present pass and posted stepped, but the
+        // browser's compositor may not have picked up that frame yet — so
+        // the immediate draw above can blit the *previous* frame. Schedule
+        // a follow-up draw on the next animation frame: by then the
+        // compositor has run, drawImage reads the new frame, and the user
+        // sees the actual result of paint / paste / clear / reset / etc.
+        // Without this, one-shot mutations under direct render leave the
+        // canvas showing stale post-Play state until the next user action.
+        // Cost is negligible (one extra drawImage at vsync rate).
+        if (directRenderActiveRef.current) {
+          requestAnimationFrame(() => draw());
+        }
 
         // GIF frame capture. Two source paths depending on render mode:
         // - Non-direct (JS / WASM, or WebGPU pre-P7): srcCanvas's 2D context
