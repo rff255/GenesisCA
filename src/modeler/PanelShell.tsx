@@ -14,16 +14,25 @@ export function PanelShell({ title, onClose, children, side = 'left' }: PanelShe
   const isRight = side === 'right';
 
   return (
-    <div className={styles.panelShell} ref={panelRef} style={isRight ? { borderRight: 'none', borderLeft: '1px solid #2d4059' } : undefined}>
+    <div
+      className={`${styles.panelShell} ${isRight ? styles.panelShellRight : ''}`}
+      ref={panelRef}
+    >
       <div className={styles.header}>
         <span className={styles.title}>{title}</span>
-        <button className={styles.closeButton} onClick={onClose} title="Close panel">
-          &times;
-        </button>
       </div>
       <div className={styles.body}>
         {children}
       </div>
+      {/* Outside ear-tab: collapses the panel. Mirrors the simulator-right
+          pattern. Arrow points TOWARDS the direction the panel will move. */}
+      <button
+        className={`${styles.earTab} ${isRight ? styles.earTabLeft : styles.earTabRight}`}
+        onClick={onClose}
+        title="Close panel"
+      >
+        {isRight ? '›' : '‹'}
+      </button>
       <div
         className={isRight ? styles.resizeHandleLeft : styles.resizeHandle}
         onMouseDown={e => {

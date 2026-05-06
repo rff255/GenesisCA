@@ -1902,7 +1902,6 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         <div className={styles.sidePanel} ref={leftPanelRef}>
           <div className={styles.panelHeader}>
             <span className={styles.panelTitle}>Settings</span>
-            <button className={styles.panelCollapseBtn} onClick={() => setLeftPanelOpen(false)}>&lsaquo;</button>
           </div>
           <div
             className={styles.leftPanelResizeHandle}
@@ -2085,9 +2084,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             {compileError}
           </div>
         )}
-        {!leftPanelOpen && (
-          <button className={styles.panelExpandBtn} style={{ left: 0 }} onClick={() => setLeftPanelOpen(true)} title="Open settings" data-sim-overlay>&rsaquo;</button>
-        )}
+        {/* Settings panel ear — sits at the canvas's left edge. We render it
+            inside canvasArea (not inside .sidePanel, which has overflow:hidden
+            and would clip a sticking-out ear) so it works in both states.
+            Glyph + handler swap based on whether the panel is open. */}
+        <button
+          className={styles.panelExpandBtn}
+          style={{ left: 0 }}
+          onClick={() => setLeftPanelOpen(v => !v)}
+          title={leftPanelOpen ? 'Close settings' : 'Open settings'}
+          data-sim-overlay
+        >{leftPanelOpen ? '‹' : '›'}</button>
         <canvas ref={canvasRef} className={styles.canvas} />
 
         {/* Top-left stats (discreet, no background) */}
@@ -2107,7 +2114,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         {/* Top overlay: Viewer tabs */}
         {attrToColorMappings.length > 0 && (
           <div className={styles.viewerBar} data-sim-overlay>
-            <span style={{ fontSize: '0.65rem', color: '#6080a0', marginRight: 4, whiteSpace: 'nowrap' }}>Output Mapping (A{'\u2192'}C):</span>
+            <span className={styles.viewerBarLabel}>Output Mapping (A{'\u2192'}C):</span>
             {attrToColorMappings.map(m => (
               <button
                 key={m.id}

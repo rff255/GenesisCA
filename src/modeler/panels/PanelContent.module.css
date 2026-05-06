@@ -1,18 +1,18 @@
 /* --- Sections --- */
 
 .section {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-8);
 }
 
 .sectionTitle {
-  font-size: 0.7rem;
+  font-size: var(--font-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #4cc9f0;
-  margin-bottom: 10px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid #2d4059;
+  color: var(--color-heading);
+  margin-bottom: var(--space-5);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--color-border-muted);
 }
 
 /* --- Form fields --- */
@@ -20,110 +20,112 @@
 .fieldGroup {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-5);
 }
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .fieldRow {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
 }
 
 .fieldLabel {
-  font-size: 0.7rem;
-  font-weight: 500;
-  color: #6080a0;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: var(--font-xs);
+  font-weight: var(--label-font-weight);
+  color: var(--color-text-muted);
+  text-transform: var(--label-text-transform);
+  letter-spacing: var(--label-letter-spacing);
 }
 
 .textInput {
   width: 100%;
-  padding: 6px 8px;
-  background: #0d1117;
-  border: 1px solid #2d4059;
-  border-radius: 4px;
-  color: #e0e0e0;
-  font-size: 0.8rem;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg-canvas);
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font-size: var(--font-md);
   font-family: inherit;
   outline: none;
-  transition: border-color 0.15s;
+  box-shadow: var(--shadow-input-inset);
+  transition: border-color var(--duration-base);
 }
 
 .textInput:focus {
-  border-color: #4cc9f0;
+  border-color: var(--color-accent);
 }
 
 .textArea {
   width: 100%;
-  padding: 6px 8px;
-  background: #0d1117;
-  border: 1px solid #2d4059;
-  border-radius: 4px;
-  color: #e0e0e0;
-  font-size: 0.8rem;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg-canvas);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font-size: var(--font-md);
   font-family: inherit;
   outline: none;
   resize: vertical;
   min-height: 60px;
-  transition: border-color 0.15s;
+  transition: border-color var(--duration-base);
 }
 
 .textArea:focus {
-  border-color: #4cc9f0;
+  border-color: var(--color-accent);
 }
 
 .selectInput {
   width: 100%;
-  padding: 6px 8px;
-  background: #0d1117;
-  border: 1px solid #2d4059;
-  border-radius: 4px;
-  color: #e0e0e0;
-  font-size: 0.8rem;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg-canvas);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font-size: var(--font-md);
   font-family: inherit;
   outline: none;
   cursor: pointer;
-  transition: border-color 0.15s;
+  transition: border-color var(--duration-base);
 }
 
 .selectInput:focus {
-  border-color: #4cc9f0;
+  border-color: var(--color-accent);
 }
 
 .numberInput {
   width: 80px;
-  padding: 6px 8px;
-  background: #0d1117;
-  border: 1px solid #2d4059;
-  border-radius: 4px;
-  color: #e0e0e0;
-  font-size: 0.8rem;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg-canvas);
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font-size: var(--font-md);
   font-family: inherit;
   outline: none;
-  transition: border-color 0.15s;
+  box-shadow: var(--shadow-input-inset);
+  transition: border-color var(--duration-base);
 }
 
 .numberInput:focus {
-  border-color: #4cc9f0;
+  border-color: var(--color-accent);
 }
 
 .checkboxRow {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 0.8rem;
-  color: #c0c8d0;
+  gap: var(--space-4);
+  font-size: var(--font-md);
+  color: var(--color-text-secondary);
 }
 
 .checkboxRow input[type="checkbox"] {
-  accent-color: #4cc9f0;
+  accent-color: var(--color-accent);
 }
 
 /* --- Lists --- */
@@ -131,30 +133,30 @@
 .list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  margin-bottom: 8px;
+  gap: var(--space-1);
+  margin-bottom: var(--space-4);
 }
 
 .listItem {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  background: rgba(255, 255, 255, 0.02);
-  border-radius: 4px;
-  font-size: 0.8rem;
-  color: #c0c8d0;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-overlay-row);
+  border-radius: var(--radius-md);
+  font-size: var(--font-md);
+  color: var(--color-text-secondary);
   cursor: pointer;
   transition: background 0.12s;
 }
 
 .listItem:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--color-hover-bg);
 }
 
 .listItemSelected {
-  background: rgba(76, 201, 240, 0.1);
-  border: 1px solid rgba(76, 201, 240, 0.3);
+  background: var(--color-accent-soft);
+  border: 1px solid var(--color-accent-strong);
 }
 
 .listItemName {
@@ -167,10 +169,10 @@
 }
 
 .listItemBadge {
-  font-size: 0.6rem;
+  font-size: var(--font-3xs);
   font-weight: 600;
   text-transform: uppercase;
-  color: #4cc9f0;
+  color: var(--color-emphasis);
   letter-spacing: 0.04em;
   flex-shrink: 0;
 }
@@ -178,17 +180,17 @@
 /* Drag handle for reorderable list rows. Anchored at the far right. */
 .dragHandle {
   flex-shrink: 0;
-  margin-left: 2px;
-  padding: 0 2px;
+  margin-left: var(--space-1);
+  padding: 0 var(--space-1);
   background: transparent;
   border: none;
-  color: #4a6080;
+  color: var(--color-border-muted);
   font-size: 0.95rem;
   line-height: 1;
   cursor: grab;
   touch-action: none;
   user-select: none;
-  transition: color 0.15s;
+  transition: color var(--duration-base);
   width: 14px;
   height: 20px;
   display: flex;
@@ -197,7 +199,7 @@
 }
 
 .dragHandle:hover {
-  color: #4cc9f0;
+  color: var(--color-emphasis);
 }
 
 .dragHandle:active {
@@ -206,11 +208,11 @@
 
 /* Drop-indicator line drawn above a row during drag */
 .dropIndicatorBefore {
-  box-shadow: 0 -2px 0 0 #4cc9f0 inset;
+  box-shadow: 0 -2px 0 0 var(--color-accent) inset;
 }
 
 .dropIndicatorAfter {
-  box-shadow: 0 2px 0 0 #4cc9f0 inset;
+  box-shadow: 0 2px 0 0 var(--color-accent) inset;
 }
 
 .draggingRow {
@@ -221,57 +223,58 @@
 
 .buttonRow {
   display: flex;
-  gap: 6px;
-  margin-bottom: 12px;
+  gap: var(--space-3);
+  margin-bottom: var(--space-6);
 }
 
 .addButton {
   flex: 1;
-  padding: 6px 0;
+  padding: var(--space-3) 0;
   background: transparent;
-  border: 1px dashed #2d4059;
-  border-radius: 4px;
-  color: #6080a0;
-  font-size: 0.7rem;
+  border: 1px dashed var(--color-border-muted);
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  font-size: var(--font-xs);
   cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
+  transition: border-color var(--duration-base), color var(--duration-base), background var(--duration-base);
 }
 
 .addButton:hover {
-  border-color: #4cc9f0;
-  color: #4cc9f0;
+  border-color: var(--color-emphasis);
+  color: var(--color-emphasis);
+  background: var(--color-overlay-hover-weak);
 }
 
 .deleteButton {
-  padding: 6px 12px;
+  padding: var(--space-3) var(--space-6);
   background: transparent;
-  border: 1px solid #3d2020;
-  border-radius: 4px;
-  color: #c06060;
-  font-size: 0.7rem;
+  border: 1px solid var(--color-border-danger);
+  border-radius: var(--radius-md);
+  color: var(--color-danger);
+  font-size: var(--font-xs);
   cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
+  transition: border-color var(--duration-base), color var(--duration-base);
 }
 
 .deleteButton:hover {
-  border-color: #e05050;
-  color: #e05050;
+  border-color: var(--color-danger-hover);
+  color: var(--color-danger-hover);
 }
 
 /* --- Detail editor --- */
 
 .detailEditor {
-  padding-top: 12px;
-  border-top: 1px solid #2d4059;
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--color-border-muted);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-5);
 }
 
 .detailTitle {
-  font-size: 0.7rem;
+  font-size: var(--font-xs);
   font-weight: 600;
-  color: #8090a0;
+  color: var(--color-text-tertiary);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -279,33 +282,33 @@
 /* --- Neighborhoods grid --- */
 
 .gridContainer {
-  margin-top: 8px;
+  margin-top: var(--space-4);
 }
 
 .gridControls {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-  font-size: 0.75rem;
-  color: #8090a0;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+  font-size: var(--font-sm);
+  color: var(--color-text-tertiary);
 }
 
 .grid {
   display: grid;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .gridCell {
   aspect-ratio: 1;
   border: none;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background 0.12s;
 }
 
 .gridCellEmpty {
-  background: #0d1117;
+  background: var(--color-bg-canvas);
 }
 
 .gridCellEmpty:hover {
@@ -313,7 +316,7 @@
 }
 
 .gridCellActive {
-  background: #4cc9f0;
+  background: var(--color-grid-active);
   opacity: 0.7;
 }
 
@@ -322,7 +325,7 @@
 }
 
 .gridCellTagged {
-  background: #26a69a;
+  background: var(--color-grid-tagged);
   opacity: 0.85;
   position: relative;
 }
@@ -332,34 +335,34 @@
 }
 
 .gridCellCenter {
-  background: #e8a838;
+  background: var(--color-grid-center);
   cursor: default;
 }
 
 /* --- Color labels for mappings --- */
 
 .colorLabel {
-  font-size: 0.7rem;
+  font-size: var(--font-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding: 2px 6px;
-  border-radius: 3px;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
   display: inline-block;
-  margin-bottom: 4px;
+  margin-bottom: var(--space-2);
 }
 
 .colorLabelRed {
-  color: #ff6b6b;
+  color: var(--color-channel-r);
   background: rgba(255, 107, 107, 0.1);
 }
 
 .colorLabelGreen {
-  color: #51cf66;
+  color: var(--color-channel-g);
   background: rgba(81, 207, 102, 0.1);
 }
 
 .colorLabelBlue {
-  color: #339af0;
+  color: var(--color-channel-b);
   background: rgba(51, 154, 240, 0.1);
 }

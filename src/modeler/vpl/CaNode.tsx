@@ -14,9 +14,18 @@ import {
   showPortLabelsGlobal,
   subscribeShowPortLabels,
   connectingFrom,
+  subscribeConnectingFrom,
   subscribeConnectedHandles,
   getConnectedHandlesForNode,
 } from './graphState';
+
+/** Snapshot getter for useSyncExternalStore — must return a stable reference
+ *  when nothing changed (otherwise React thinks the store keeps changing).
+ *  connectingFrom is either null or a fresh object set once per drag, so
+ *  identity equality is the right semantics. */
+function getConnectingFromSnapshot() {
+  return connectingFrom;
+}
 import styles from './CaNode.module.css';
 
 /** Returns dark text for light backgrounds, white text for dark backgrounds */
@@ -27,6 +36,18 @@ function textColorForBg(bgHex: string): string {
   const b = parseInt(hex.slice(4, 6), 16);
   const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
   return luminance > 0.6 ? '#1e2a3a' : '#ffffff';
+}
+
+/** True when the chosen text colour for this bg is DARK (luminance > 0.6).
+ *  We use this to suppress the global text-shadow on dark text — the body's
+ *  `0 1px 0 rgba(0,0,0,0.55)` is designed for light-on-dark UI; on dark text
+ *  it just smears each glyph downward. */
+function isLightHeaderBg(bgHex: string): boolean {
+  const hex = bgHex.replace('#', '');
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6;
 }
 
 /** Light-colored node backgrounds need a visible border instead of the bg color */
@@ -52,6 +73,10 @@ function CaNodeComponent({ id, data }: NodeProps) {
   const { updateNodeData } = useReactFlow();
   // Subscribe to port-label toggle so memoized CaNodes re-render when it changes
   const showPortLabels = useSyncExternalStore(subscribeShowPortLabels, () => showPortLabelsGlobal);
+  // Subscribe to connectingFrom so this memoized node re-renders the moment a
+  // connection drag starts/ends — needed for compatible/incompatible port
+  // highlight classes, which read connectingFrom directly during render.
+  useSyncExternalStore(subscribeConnectingFrom, getConnectingFromSnapshot);
 
   const updateConfig = useCallback(
     (key: string, value: string | number | boolean) => {
@@ -562,7 +587,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         {isColorConstant ? (
           <div className={styles.collapsedColorSwatch} style={{ background: colorSwatchHex }} />
         ) : (
-          <div className={styles.collapsedHeader} style={{ background: def.color, color: textColorForBg(def.color) }}>
+          <div className={styles.collapsedHeader} style={{ background: def.color, color: textColorForBg(def.color), textShadow: isLightHeaderBg(def.color) ? 'none' : undefined }}>
             {collapsedLabel}
             {collapsedColorPreview && (
               <span className={styles.collapsedColorDot} style={{ background: collapsedColorPreview }} />
@@ -622,7 +647,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
       {userLabel && (
         <div className={styles.userLabel}>{userLabel}</div>
       )}
-      <div className={styles.header} style={{ background: def.color, color: textColorForBg(def.color) }}>
+      <div className={styles.header} style={{ background: def.color, color: textColorForBg(def.color), textShadow: isLightHeaderBg(def.color) ? 'none' : undefined }}>
         {def.label}
       </div>
       {configIssues.length > 0 && (

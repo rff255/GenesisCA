@@ -35,18 +35,24 @@ const rightPanelTitles: Record<RightPanelId, string> = {
 export function ModelerView() {
   const [activePanel, setActivePanel] = useState<PanelId | null>('properties');
   const [activeRightPanel, setActiveRightPanel] = useState<RightPanelId | null>(null);
-  // Remembered last-opened right panel — used by the floating graph-area toggle to reopen
-  // whatever the user had open before closing it. Defaults to 'palette'.
+  // Remembered last-opened panels — used by the floating graph-area expand-ears
+  // to reopen whatever the user had open before closing it.
+  const [lastLeftPanel, setLastLeftPanel] = useState<PanelId>('properties');
   const [lastRightPanel, setLastRightPanel] = useState<RightPanelId>('palette');
   const explorerRef = useRef<NodeExplorerHandle>(null);
 
   const handleTogglePanel = useCallback((panel: PanelId) => {
     setActivePanel(prev => (prev === panel ? null : panel));
+    setLastLeftPanel(panel);
   }, []);
 
   const handleClosePanel = useCallback(() => {
     setActivePanel(null);
   }, []);
+
+  const handleOpenLastLeftPanel = useCallback(() => {
+    setActivePanel(lastLeftPanel);
+  }, [lastLeftPanel]);
 
   const handleToggleRightPanel = useCallback((panel: RightPanelId) => {
     setActiveRightPanel(prev => (prev === panel ? null : panel));
@@ -111,6 +117,15 @@ export function ModelerView() {
         )}
         <div className={styles.graphArea}>
           <GraphEditorInner />
+          {!activePanel && (
+            <button
+              className={styles.leftPanelExpandBtn}
+              onClick={handleOpenLastLeftPanel}
+              title={`Open ${panelTitles[lastLeftPanel]}`}
+            >
+              &rsaquo;
+            </button>
+          )}
           {!activeRightPanel && (
             <button
               className={styles.rightPanelExpandBtn}

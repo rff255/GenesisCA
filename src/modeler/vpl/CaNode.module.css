@@ -1,10 +1,10 @@
 .node {
   min-width: 150px;
-  background: #1e2a3a;
-  border: 2px solid #2d4059;
-  border-radius: 6px;
-  font-size: 0.7rem;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  background: var(--color-bg-elevated);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  font-size: var(--font-xs);
+  box-shadow: var(--shadow-sm);
   position: relative;
 }
 
@@ -13,52 +13,57 @@
 }
 
 .userLabel {
-  padding: 3px 10px;
-  font-size: 0.65rem;
+  padding: var(--space-1) var(--space-5);
+  font-size: var(--font-2xs);
   font-weight: 500;
-  color: #c0c8d0;
+  color: var(--color-text-secondary);
   text-align: center;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--color-overlay-hover-medium);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .header {
-  padding: 5px 10px;
+  padding: var(--space-2) var(--space-5);
   font-weight: 600;
   color: #fff;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  font-size: 0.6rem;
-  border-radius: 4px 4px 0 0;
+  font-size: var(--font-3xs);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
 }
 
 .body {
-  padding: 6px 10px;
+  padding: var(--space-3) var(--space-5);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .select,
 .input {
   width: 100%;
-  padding: 3px 5px;
-  background: #0d1117;
-  border: 1px solid #2d4059;
-  border-radius: 3px;
-  color: #e0e0e0;
-  font-size: 0.65rem;
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-bg-canvas);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  font-size: var(--font-2xs);
   font-family: inherit;
   outline: none;
 }
 
 .select:focus,
 .input:focus {
-  border-color: #4cc9f0;
+  border-color: var(--color-accent);
 }
 
+/* Graph handle ports use GenesisCA's visual identity colours, not the
+ * theme palette — green flow / cyan value were the original convention
+ * and shouldn't drift between Default and Blender. (The palette preview
+ * dots in PalettePanelContent.module.css use --color-port-flow /
+ * --color-port-value, which CAN be theme-tinted.) */
 .handleFlow {
   width: 10px !important;
   height: 10px !important;
@@ -75,7 +80,8 @@
   transform-origin: center;
 }
 
-/* Unconnected value ports: filled with node body background */
+/* Unconnected value ports: slightly darker than the node body so the
+ * port reads as an 'empty hole'. */
 .handleUnconnected {
   background: #1a2435 !important;
 }
@@ -86,9 +92,9 @@
   position: absolute;
   right: 100%;
   transform: translateY(-50%);
-  margin-right: 6px;
+  margin-right: var(--space-3);
   font-size: 0.55rem;
-  color: #6080a0;
+  color: var(--color-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   white-space: nowrap;
@@ -100,9 +106,9 @@
   position: absolute;
   left: 100%;
   transform: translateY(-50%);
-  margin-left: 6px;
+  margin-left: var(--space-3);
   font-size: 0.55rem;
-  color: #6080a0;
+  color: var(--color-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   white-space: nowrap;
@@ -125,7 +131,7 @@
   position: absolute;
   right: 100%;
   transform: translateY(-50%);
-  margin-right: 6px;
+  margin-right: var(--space-3);
   pointer-events: auto;
   z-index: 1;
 }
@@ -133,17 +139,17 @@
 .inlineWidget {
   width: 52px;
   padding: 1px 3px;
-  background: #0d1117;
-  border: 1px solid #2d4059;
-  border-radius: 3px;
-  color: #e0e0e0;
+  background: var(--color-bg-canvas);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
   font-size: 0.55rem;
   font-family: inherit;
   outline: none;
 }
 
 .inlineWidget:focus {
-  border-color: #4cc9f0;
+  border-color: var(--color-accent);
 }
 
 /* --- Collapsed node styles --- */
@@ -154,19 +160,19 @@
 }
 
 .collapsedHeader {
-  padding: 4px 12px;
+  padding: var(--space-2) var(--space-6);
   font-weight: 600;
   color: #fff;
-  font-size: 0.6rem;
+  font-size: var(--font-3xs);
   letter-spacing: 0.04em;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   white-space: nowrap;
 }
 
 .collapsedConstant {
   min-width: auto !important;
   min-height: auto !important;
-  border-radius: 12px;
+  border-radius: var(--radius-pill);
 }
 
 .collapsedColorSwatch {
@@ -180,7 +186,7 @@
   width: 10px;
   height: 10px;
   border-radius: 2px;
-  margin-left: 6px;
+  margin-left: var(--space-3);
   vertical-align: middle;
   border: 1px solid rgba(255, 255, 255, 0.3);
   flex-shrink: 0;
@@ -191,11 +197,11 @@
   top: -6px;
   font-size: 0.5rem;
   font-weight: 700;
-  color: #4cc9f0;
-  background: #0d1117;
-  border: 1px solid #2d4059;
-  border-radius: 6px;
-  padding: 0 3px;
+  color: var(--color-accent);
+  background: var(--color-bg-canvas);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 0 var(--space-1);
   line-height: 12px;
 }
 
@@ -206,12 +212,12 @@
   right: -7px;
   width: 16px;
   height: 16px;
-  font-size: 0.65rem;
+  font-size: var(--font-2xs);
   font-weight: 700;
   line-height: 16px;
   text-align: center;
-  color: #1e2a3a;
-  background: #ffb74d;
+  color: var(--color-bg-elevated);
+  background: var(--color-warning);
   border: 1px solid #f57c00;
   border-radius: 50%;
   box-shadow: 0 0 4px rgba(255, 167, 38, 0.7);

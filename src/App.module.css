@@ -7,71 +7,72 @@
 .navbar {
   display: flex;
   align-items: center;
-  gap: 24px;
-  padding: 0 16px;
-  height: 48px;
-  min-height: 48px;
-  background: #16213e;
-  border-bottom: 1px solid #2d4059;
+  gap: var(--space-12);
+  padding: 0 var(--space-8);
+  height: var(--navbar-height);
+  min-height: var(--navbar-height);
+  background: var(--color-bg-panel);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .title {
-  font-size: 1.1rem;
+  font-size: var(--font-lg);
   font-weight: 700;
-  color: #4cc9f0;
+  color: var(--color-heading);
   letter-spacing: 0.02em;
 }
 
 .version {
-  font-size: 0.6rem;
+  font-size: var(--font-3xs);
   font-weight: 400;
-  color: #6080a0;
+  color: var(--color-text-muted);
   vertical-align: super;
 }
 
 .navTabs {
   display: flex;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .navButton {
-  padding: 6px 16px;
+  padding: var(--space-3) var(--space-8);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 4px;
-  color: #8090a0;
-  font-size: 0.8rem;
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-md);
   font-weight: 500;
   cursor: pointer;
-  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  transition: color var(--duration-base), background var(--duration-base), border-color var(--duration-base);
 }
 
 .navButton:hover {
-  color: #c0c8d0;
-  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-secondary);
+  background: var(--color-overlay-hover-weak);
 }
 
 .navButtonActive {
-  color: #e0e0e0;
-  background: rgba(76, 201, 240, 0.1);
-  border-color: #4cc9f0;
+  color: var(--color-text-primary);
+  background: var(--color-tab-active-bg);
+  border-color: var(--color-tab-active-border);
 }
 
 .githubLink {
-  color: #6080a0;
+  color: var(--color-text-muted);
   display: flex;
   align-items: center;
-  transition: color 0.15s;
+  transition: color var(--duration-base);
 }
 
 .githubLink:hover {
-  color: #e0e0e0;
+  color: var(--color-text-primary);
 }
 
 .modelName {
   margin-left: auto;
+  /* 0.78rem is a one-off — closest token is --font-md (0.8rem); keep literal to preserve exact look. */
   font-size: 0.78rem;
-  color: #8899aa;
+  color: var(--color-text-subtle);
   font-style: italic;
   white-space: nowrap;
   overflow: hidden;
@@ -80,7 +81,7 @@
 }
 
 .dirtyIndicator {
-  color: #4cc9f0;
+  color: var(--color-accent);
   font-weight: 700;
   font-style: normal;
 }

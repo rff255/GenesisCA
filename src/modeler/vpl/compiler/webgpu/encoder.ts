@@ -9,11 +9,18 @@
  *   binding 0  attrsRead      array<u32>    — current generation, read-only
  *   binding 1  attrsWrite     array<u32>    — next generation, written by step
  *   binding 2  colors         array<u32>    — RGBA8, one packed u32 per cell
- *   binding 3  nbrIndices     array<i32>    — neighbour cell indices, per nbrhd
+ *   binding 3  nbrOffsets     array<i32>    — relative (dRow, dCol) pairs per neighbourhood
  *   binding 4  modelAttrs     array<vec4f, 64>  — uniform, packed scalars/colors
  *   binding 5  indicators     array<atomic<u32>> — one atomic word per indicator
  *   binding 6  rngState       array<u32>    — one u32 per cell (PCG state)
  *   binding 7  control        Control       — { activeViewer: i32, stopFlag: atomic<u32> }
+ *
+ * Neighbour cell indices are NOT stored per-cell. Instead the shared helper
+ * `nbrCellIdx(cellIdx, baseOffset, k)` reads the (dRow, dCol) pair at
+ * `nbrOffsets[baseOffset + 2k]` / `nbrOffsets[baseOffset + 2k + 1]`, applies
+ * the boundary rule (torus wrap or constant-sentinel), and returns the linear
+ * cell index. Saves multi-GB of buffer + readback bandwidth on huge grids
+ * (see docs/HUGE_GRID_OPTIMIZATIONS.md §2.1).
  *
  * Bool/int/tag/float attrs are all stored as one u32 word per cell on GPU,
  * with bool packed as 0/1, int/tag as bitcast<i32>, float as bitcast<f32>.
@@ -32,13 +39,47 @@ export function sanitiseWgslName(s: string): string {
   return r;
 }
 
-/** Bind-group declarations + Control struct + the shared PCG advance helper.
- *  Struct definitions must come before any `var` decl that references them. */
+/** Bind-group declarations + Control struct + the shared PCG advance helper +
+ *  the boundary-aware `nbrCellIdx` helper. Struct definitions must come before
+ *  any `var` decl that references them. */
 export function emitBindings(layout: WebGPULayout): string {
   // Uniform buffer must be at least 16 bytes (one vec4). Compute the f32-element
   // capacity so the WGSL declaration matches what the worker uploads.
   const modelAttrFloats = Math.max(4, Math.ceil(layout.modelAttrsBytes / 4));
   const modelAttrVec4s = Math.ceil(modelAttrFloats / 4);
+
+  // Boundary-baked nbrCellIdx helper. Width/height/sentinel are emitted as
+  // literals so each grid-size produces a unique shader (so the pipeline
+  // cache invalidates correctly via shaderHashOf when the user resizes).
+  // Torus has no sentinel; constant returns SENTINEL on out-of-bounds, which
+  // points at the +1 slot in attrsRead/Write that the worker fills with the
+  // attribute's boundary value at upload time.
+  const gw = layout.gridWidth;
+  const gh = layout.gridHeight;
+  const isTorus = layout.boundaryTreatment === 'torus';
+  const nbrCellIdxFn = isTorus ? `
+fn nbrCellIdx(cellIdx: u32, baseOffset: u32, k: i32) -> i32 {
+  let dr: i32 = nbrOffsets[baseOffset + u32(k) * 2u];
+  let dc: i32 = nbrOffsets[baseOffset + u32(k) * 2u + 1u];
+  let row: i32 = i32(cellIdx) / ${gw};
+  let col: i32 = i32(cellIdx) % ${gw};
+  let nr: i32 = ((row + dr) % ${gh} + ${gh}) % ${gh};
+  let nc: i32 = ((col + dc) % ${gw} + ${gw}) % ${gw};
+  return nr * ${gw} + nc;
+}` : `
+fn nbrCellIdx(cellIdx: u32, baseOffset: u32, k: i32) -> i32 {
+  let dr: i32 = nbrOffsets[baseOffset + u32(k) * 2u];
+  let dc: i32 = nbrOffsets[baseOffset + u32(k) * 2u + 1u];
+  let row: i32 = i32(cellIdx) / ${gw};
+  let col: i32 = i32(cellIdx) % ${gw};
+  let nr: i32 = row + dr;
+  let nc: i32 = col + dc;
+  if (nr < 0 || nr >= ${gh} || nc < 0 || nc >= ${gw}) {
+    return ${layout.sentinelIndex};
+  }
+  return nr * ${gw} + nc;
+}`;
+
   return `// === Bindings ===
 struct Control {
   activeViewer : i32,
@@ -48,11 +89,12 @@ struct Control {
 @group(0) @binding(0) var<storage, read>       attrsRead    : array<u32>;
 @group(0) @binding(1) var<storage, read_write> attrsWrite   : array<u32>;
 @group(0) @binding(2) var<storage, read_write> colors       : array<u32>;
-@group(0) @binding(3) var<storage, read>       nbrIndices   : array<i32>;
+@group(0) @binding(3) var<storage, read>       nbrOffsets   : array<i32>;
 @group(0) @binding(4) var<uniform>             modelAttrs   : array<vec4<f32>, ${modelAttrVec4s}u>;
 @group(0) @binding(5) var<storage, read_write> indicators   : array<atomic<u32>>;
 @group(0) @binding(6) var<storage, read_write> rngState     : array<u32>;
 @group(0) @binding(7) var<storage, read_write> control      : Control;
+${nbrCellIdxFn}
 
 // PCG hash + per-cell advance. Mirrors the per-cell stream model in the
 // runtime: each cell owns its own rngState[cellIdx] and updates it in place.

@@ -21,6 +21,17 @@ function textColorForBg(bgHex: string): string {
   return luminance > 0.6 ? '#1e2a3a' : '#ffffff';
 }
 
+/** Suppress the global Blender-style text-shadow when the chosen text colour
+ *  is dark — the shadow looks 'smeared' on dark glyphs because it's tuned for
+ *  light-on-dark UI. */
+function isLightHeaderBg(bgHex: string): boolean {
+  const hex = bgHex.replace('#', '');
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6;
+}
+
 interface PortRow {
   label: string;
   category: 'value' | 'flow';
@@ -68,7 +79,7 @@ function PreviewCard(props: PreviewProps) {
       onDragStart={props.onDragStart}
       title={description || label}
     >
-      <div className={styles.previewHeader} style={{ background: color, color: textColorForBg(color) }}>
+      <div className={styles.previewHeader} style={{ background: color, color: textColorForBg(color), textShadow: isLightHeaderBg(color) ? 'none' : undefined }}>
         <span className={styles.previewLabel}>{label}</span>
         {subtitle && <span className={styles.previewSubtitle}>{subtitle}</span>}
       </div>

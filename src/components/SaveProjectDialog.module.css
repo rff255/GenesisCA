@@ -11,32 +11,32 @@
 .dialog {
   width: 420px;
   max-width: calc(100vw - 32px);
-  background: #131a24;
-  border: 1px solid #2d4059;
-  border-radius: 6px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-  color: #c0c8d0;
-  font-size: 0.78rem;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  color: var(--color-text-secondary);
+  font-size: var(--font-sm);
 }
 
 .title {
-  padding: 10px 14px;
-  border-bottom: 1px solid #2d4059;
+  padding: var(--space-5) var(--space-6);
+  border-bottom: 1px solid var(--color-border);
   font-weight: 600;
-  font-size: 0.85rem;
-  color: #e0e8f0;
+  font-size: var(--font-base);
+  color: var(--color-text-primary);
 }
 
 .body {
-  padding: 14px;
+  padding: var(--space-6);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-6);
 }
 
 .row {
   display: flex;
-  gap: 10px;
+  gap: var(--space-5);
   align-items: flex-start;
   cursor: pointer;
 }
@@ -44,56 +44,57 @@
 .row input[type='checkbox'] {
   margin-top: 3px;
   flex: none;
+  accent-color: var(--color-accent);
 }
 
 .rowLabel {
-  color: #e0e8f0;
+  color: var(--color-text-primary);
   font-weight: 500;
-  margin-bottom: 2px;
+  margin-bottom: var(--space-1);
 }
 
 .rowHint {
-  color: #8090a0;
-  font-size: 0.7rem;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-xs);
   line-height: 1.35;
 }
 
 .actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 10px 14px;
-  border-top: 1px solid #2d4059;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6);
+  border-top: 1px solid var(--color-border);
 }
 
 .btnPrimary,
 .btnSecondary {
-  padding: 6px 14px;
-  border-radius: 4px;
-  font-size: 0.75rem;
+  padding: var(--space-3) var(--space-6);
+  border-radius: var(--radius-md);
+  font-size: var(--font-sm);
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  transition: background var(--duration-base), border-color var(--duration-base), color var(--duration-base);
 }
 
 .btnPrimary {
-  background: #4cc9f0;
-  border: 1px solid #4cc9f0;
-  color: #0d1117;
+  background: var(--color-accent);
+  border: 1px solid var(--color-accent);
+  color: var(--color-bg-canvas);
 }
 
 .btnPrimary:hover {
-  background: #66d9ff;
-  border-color: #66d9ff;
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
 }
 
 .btnSecondary {
   background: transparent;
-  border: 1px solid #2d4059;
-  color: #8090a0;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-tertiary);
 }
 
 .btnSecondary:hover {
-  color: #c0c8d0;
-  border-color: #4a6080;
+  color: var(--color-text-secondary);
+  border-color: var(--color-border-muted);
 }

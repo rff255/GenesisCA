@@ -1,4 +1,5 @@
 import { useRef, useEffect, useLayoutEffect, useState } from 'react';
+import { useThemeTokens } from '../styles/useThemeTokens';
 
 interface Props {
   /** Per-category history: category key → array of counts over time. */
@@ -7,24 +8,18 @@ interface Props {
   height: number;
 }
 
-const AXIS_COLOR = '#506070';
-const LABEL_COLOR = '#8090a0';
+const TOKEN_NAMES = [
+  '--chart-axis', '--chart-label',
+  '--chart-color-1', '--chart-color-2', '--chart-color-3', '--chart-color-4',
+  '--chart-color-5', '--chart-color-6', '--chart-color-7', '--chart-color-8',
+  '--chart-color-9', '--chart-color-10',
+  '--color-text-secondary', '--color-text-tertiary',
+] as const;
 const LABEL_FONT = '7.5px monospace';
 const LEFT_MARGIN = 24;
 const BOTTOM_MARGIN = 10;
 const RIGHT_PAD = 1;
 const TOP_PAD = 1;
-
-// Fixed palette — cycles when categories exceed palette length.
-const PALETTE = [
-  '#4cc9f0', '#f77f00', '#90e0ef', '#e07a5f',
-  '#b5179e', '#ffd166', '#06d6a0', '#e5383b',
-  '#8ecae6', '#fb8500',
-];
-
-function colorFor(idx: number): string {
-  return PALETTE[idx % PALETTE.length]!;
-}
 
 function formatAxisValue(v: number): string {
   const abs = Math.abs(v);
@@ -38,6 +33,13 @@ export function IndicatorMultiLineChart({ data, generation, height }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
+  const tokens = useThemeTokens(TOKEN_NAMES);
+  const AXIS_COLOR = tokens[0] || '#506070';
+  const LABEL_COLOR = tokens[1] || '#8090a0';
+  const PALETTE = tokens.slice(2, 12).map(c => c || '#888');
+  const LEGEND_LABEL_COLOR = tokens[12] || '#aab';
+  const LEGEND_VALUE_COLOR = tokens[13] || '#cdd';
+  const colorFor = (idx: number): string => PALETTE[idx % PALETTE.length]!;
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -157,7 +159,7 @@ export function IndicatorMultiLineChart({ data, generation, height }: Props) {
       ctx.stroke();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, generation, width, plotHeight, categories.length, categories.join('|')]);
+  }, [data, generation, width, plotHeight, categories.length, categories.join('|'), AXIS_COLOR, LABEL_COLOR, PALETTE.join(',')]);
 
   // Wrapper always mounts so ResizeObserver can attach on first render.
   return (
@@ -171,7 +173,7 @@ export function IndicatorMultiLineChart({ data, generation, height }: Props) {
       {/* Legend — one swatch per category, with current value */}
       <div style={{
         display: 'flex', flexWrap: 'wrap', gap: '2px 8px',
-        marginTop: 2, fontSize: '0.62rem', color: '#aab',
+        marginTop: 2, fontSize: '0.62rem', color: LEGEND_LABEL_COLOR,
         lineHeight: 1.2,
       }}>
         {categories.map((cat, ci) => {
@@ -184,7 +186,7 @@ export function IndicatorMultiLineChart({ data, generation, height }: Props) {
                 background: colorFor(ci), borderRadius: 1,
               }} />
               <span title={cat}>{cat}</span>
-              <span style={{ color: '#cdd' }}>{cur ?? ''}</span>
+              <span style={{ color: LEGEND_VALUE_COLOR }}>{cur ?? ''}</span>
             </span>
           );
         })}

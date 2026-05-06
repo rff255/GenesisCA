@@ -8,53 +8,53 @@
 
 .contextMenu {
   position: absolute;
-  background: #1e2a3a;
-  border: 1px solid #2d4059;
-  border-radius: 6px;
-  padding: 6px 0;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) 0;
   min-width: 180px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-md);
   z-index: 100;
 }
 
 .contextTitle {
-  padding: 6px 12px;
-  font-size: 0.7rem;
+  padding: var(--space-3) var(--space-6);
+  font-size: var(--font-xs);
   font-weight: 600;
-  color: #4cc9f0;
+  color: var(--color-heading);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  border-bottom: 1px solid #2d4059;
-  margin-bottom: 4px;
+  border-bottom: 1px solid var(--color-border-muted);
+  margin-bottom: var(--space-2);
 }
 
 .contextCategory {
-  padding: 4px 12px 2px;
-  font-size: 0.6rem;
+  padding: var(--space-2) var(--space-6) var(--space-1);
+  font-size: var(--font-3xs);
   font-weight: 600;
-  color: #6080a0;
+  color: var(--color-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  margin-top: 4px;
+  margin-top: var(--space-2);
 }
 
 .contextItem {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
   width: 100%;
-  padding: 5px 12px;
+  padding: var(--space-2) var(--space-6);
   background: transparent;
   border: none;
-  color: #c0c8d0;
-  font-size: 0.72rem;
+  color: var(--color-text-secondary);
+  font-size: var(--font-xs);
   text-align: left;
   cursor: pointer;
-  transition: background 0.1s;
+  transition: background var(--duration-fast);
 }
 
 .contextItem:hover {
-  background: rgba(76, 201, 240, 0.1);
+  background: var(--color-hover-bg);
 }
 
 .contextDot {
@@ -73,12 +73,12 @@
   position: absolute;
   left: 100%;
   top: 0;
-  background: #1e2a3a;
-  border: 1px solid #2d4059;
-  border-radius: 6px;
-  padding: 6px 0;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) 0;
   min-width: 180px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-md);
   z-index: 101;
   max-height: 400px;
   overflow-y: auto;
@@ -104,65 +104,65 @@
 
 .breadcrumb {
   position: absolute;
-  top: 8px;
-  left: 8px;
+  top: var(--space-4);
+  left: var(--space-4);
   z-index: 10;
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 4px 10px;
-  background: rgba(22, 33, 62, 0.9);
-  border: 1px solid #2d4059;
-  border-radius: 4px;
-  font-size: 0.7rem;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-5);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: var(--font-xs);
 }
 
 .breadcrumbSep {
-  color: #4a6080;
-  margin: 0 4px;
+  color: var(--color-border-muted);
+  margin: 0 var(--space-2);
 }
 
 .breadcrumbItem {
   background: transparent;
   border: none;
-  color: #6080a0;
-  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  font-size: var(--font-xs);
   cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 3px;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
 }
 
 .breadcrumbItem:hover {
-  color: #4cc9f0;
-  background: rgba(76, 201, 240, 0.1);
+  color: var(--color-text-primary);
+  background: var(--color-hover-bg);
 }
 
 .breadcrumbActive {
-  color: #e0e0e0;
+  color: var(--color-text-primary);
   cursor: default;
 }
 
 .breadcrumbActive:hover {
-  color: #e0e0e0;
+  color: var(--color-text-primary);
   background: transparent;
 }
 
 /* Override React Flow dark theme */
 
 :global(.react-flow) {
-  --xy-background-color: #0d1117;
+  --xy-background-color: var(--color-bg-canvas);
   --xy-node-background-color: transparent;
   --xy-node-border-color: transparent;
-  --xy-edge-stroke: #4cc9f0;
-  --xy-controls-button-background-color: #1e2a3a;
-  --xy-controls-button-color: #8090a0;
-  --xy-controls-button-border-color: #2d4059;
-  --xy-minimap-background-color: #0d1117;
+  --xy-edge-stroke: var(--color-accent);
+  --xy-controls-button-background-color: var(--color-bg-elevated);
+  --xy-controls-button-color: var(--color-text-tertiary);
+  --xy-controls-button-border-color: var(--color-border);
+  --xy-minimap-background-color: var(--color-bg-canvas);
 }
 
 :global(.react-flow__controls button:hover) {
-  background: #2d4059 !important;
-  color: #e0e0e0 !important;
+  background: var(--color-border) !important;
+  color: var(--color-text-primary) !important;
 }
 
 /* Hide the persistent selection indicator rectangle after box select */
@@ -171,52 +171,52 @@
 }
 
 :global(.react-flow__edge.selected .react-flow__edge-path) {
-  stroke: #ff6b6b !important;
+  stroke: var(--color-danger) !important;
   stroke-width: 3 !important;
 }
 
 :global(.react-flow__node.selected) {
-  outline: 2px solid #ff6b6b;
+  outline: 2px solid var(--color-danger);
   outline-offset: 2px;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
 }
 
 /* Canvas toggle buttons (below React Flow Controls) */
 
 .canvasToggles {
   position: absolute;
-  bottom: 10px;
+  bottom: var(--space-5);
   left: 50px;
   z-index: 5;
   display: flex;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .toggleButton {
   width: 28px;
   height: 28px;
-  background: #1e2a3a;
-  border: 1px solid #2d4059;
-  border-radius: 4px;
-  color: #6080a0;
-  font-size: 0.7rem;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  font-size: var(--font-xs);
   font-weight: 600;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--duration-base), color var(--duration-base);
 }
 
 .toggleButton:hover {
-  background: #2d4059;
-  color: #e0e0e0;
+  background: var(--color-overlay-hover-medium);
+  color: var(--color-text-primary);
 }
 
 .toggleActive {
-  background: rgba(76, 201, 240, 0.15);
-  color: #4cc9f0;
-  border-color: #4cc9f0;
+  background: var(--color-tab-active-bg);
+  color: var(--color-emphasis);
+  border-color: var(--color-tab-active-border);
 }
 
 /* Let RMB drag pass through group node body to canvas for panning */

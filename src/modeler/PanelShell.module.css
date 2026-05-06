@@ -1,82 +1,126 @@
 .panelShell {
-  width: 350px;
-  min-width: 200px;
-  max-width: 600px;
+  width: var(--panel-width-default);
+  min-width: var(--panel-width-min);
+  max-width: var(--panel-width-max);
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: #16213e;
-  border-right: 1px solid #2d4059;
+  background: var(--color-bg-panel);
+  border-right: 1px solid var(--color-border);
+  /* Outer right corners pick up --panel-radius (Blender rounds editor panels;
+     Default Generic uses 0). Header has the matching radius applied. */
+  border-top-right-radius: var(--panel-radius);
+  border-bottom-right-radius: var(--panel-radius);
   position: relative;
+}
+
+/* Right-side variant: panel sits on the right edge of the screen, so its
+   rounded corners and 1px separator are on the LEFT side. */
+.panelShellRight {
+  border-right: none;
+  border-left: 1px solid var(--color-border);
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-top-left-radius: var(--panel-radius);
+  border-bottom-left-radius: var(--panel-radius);
 }
 
 .header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
-  border-bottom: 1px solid #2d4059;
+  padding: var(--space-5) var(--space-6);
+  border-bottom: 1px solid var(--color-border-muted);
   min-height: 40px;
+  border-top-right-radius: var(--panel-radius);
+}
+
+/* Right-side variant: header rounds its top-left corner instead of top-right. */
+.panelShellRight .header {
+  border-top-right-radius: 0;
+  border-top-left-radius: var(--panel-radius);
 }
 
 .title {
-  font-size: 0.75rem;
+  font-size: var(--font-sm);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #8090a0;
-}
-
-.closeButton {
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  color: #6080a0;
-  font-size: 1.1rem;
-  cursor: pointer;
-  border-radius: 4px;
-  transition: color 0.15s, background 0.15s;
-}
-
-.closeButton:hover {
-  color: #e0e0e0;
-  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-tertiary);
 }
 
 .body {
   flex: 1;
   overflow-y: auto;
-  padding: 12px;
+  padding: var(--space-6);
 }
 
+/* Resize handles sit on the INSIDE edge of the panel (not straddling) so
+ * they don't fight with the outside ear-tab in the same vertical band.
+ * Matches the simulator-right pattern. */
 .resizeHandle {
   position: absolute;
   top: 0;
-  right: -3px;
-  width: 6px;
+  right: 0;
+  width: var(--resize-handle-width);
   height: 100%;
   cursor: col-resize;
-  z-index: 10;
+  z-index: 5;
 }
 
 .resizeHandle:hover {
-  background: rgba(76, 201, 240, 0.3);
+  background: var(--color-accent-strong);
 }
 
 .resizeHandleLeft {
   position: absolute;
   top: 0;
-  left: -3px;
-  width: 6px;
+  left: 0;
+  width: var(--resize-handle-width);
   height: 100%;
   cursor: col-resize;
-  z-index: 10;
+  z-index: 5;
 }
 
 .resizeHandleLeft:hover {
-  background: rgba(76, 201, 240, 0.3);
+  background: var(--color-accent-strong);
+}
+
+/* --- Ear tab (collapse button outside the panel) -------------------------
+ * Replaces the previous in-header X-close. Mirrors the canonical simulator-
+ * right pattern: a small button that sticks 18px past the panel's outer
+ * edge, vertically anchored near the top, with the rounded corners on the
+ * outer side and the inner side flush. The arrow points TOWARDS the
+ * action's destination (where the panel will collapse to). */
+.earTab {
+  position: absolute;
+  top: var(--space-4);
+  z-index: 6;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: var(--font-base);
+  cursor: pointer;
+  padding: var(--space-6) var(--space-2);
+  line-height: 1;
+  transition: color var(--duration-base), background var(--duration-base);
+}
+
+.earTab:hover {
+  color: var(--color-text-primary);
+  background: var(--color-overlay-hover-medium);
+}
+
+/* Left-side panel: ear sticks out to the RIGHT of the panel. */
+.earTabRight {
+  right: -18px;
+  border-left: none;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+
+/* Right-side panel: ear sticks out to the LEFT of the panel. */
+.earTabLeft {
+  left: -18px;
+  border-right: none;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
 }

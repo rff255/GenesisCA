@@ -1,0 +1,369 @@
+/* GenesisCA design tokens — multi-theme.
+ *
+ * Two themes are defined: "default-generic" (the original dark blue + cyan
+ * GenesisCA look) and "blender" (modelled on Blender's default dark theme,
+ * with its iconic gray surfaces, blue selection accent, compact type, and
+ * minimal corner radii).
+ *
+ * Activation: <html data-theme="…">. The default theme on first load is
+ * "blender" (set by the boot script in index.html); user preference is
+ * persisted to localStorage by App.tsx.
+ *
+ * Both blocks define the COMPLETE token set so they're easy to compare
+ * side-by-side. Imported by src/index.css before any module CSS.
+ *
+ * Blender colour values were extracted from blender/source/blender/editors/
+ * interface (default theme initialiser) — see commit message for context.
+ */
+
+/* ====================================================================== */
+/* DEFAULT GENERIC                                                        */
+/* The original GenesisCA dark-blue / cyan look.                          */
+/* ====================================================================== */
+
+:root,
+[data-theme="default-generic"] {
+  /* ----- Surfaces ----- */
+  --color-bg-app:         #1a1a2e;
+  --color-bg-canvas:      #0d1117;
+  --color-bg-panel:       #16213e;
+  --color-bg-elevated:    #1e2a3a;
+  --color-bg-activitybar: #0f1a2e;
+
+  /* ----- Borders & dividers ----- */
+  --color-border:         #2d4059;
+  --color-border-muted:   #4a6080;
+  --color-border-danger:  #3d2020;
+
+  /* ----- Text ----- */
+  --color-text-primary:   #e0e0e0;
+  --color-text-secondary: #c0c8d0;
+  --color-text-tertiary:  #8090a0;
+  --color-text-muted:     #6080a0;
+  --color-text-subtle:    #8899aa;
+
+  /* ----- Accent (cyan) ----- */
+  --color-accent:         #4cc9f0;
+  --color-accent-hover:   #66d9ff;
+  --color-accent-soft:    rgba(76, 201, 240, 0.10);
+  --color-accent-strong:  rgba(76, 201, 240, 0.30);
+
+  /* ----- Semantic ----- */
+  --color-danger:         #c06060;
+  --color-danger-hover:   #e05050;
+  --color-warning:        #ffb74d;
+  --color-success:        #51cf66;
+  --color-info:           #339af0;
+
+  /* ----- Hover overlays ----- */
+  --color-overlay-hover-weak:   rgba(255, 255, 255, 0.03);
+  --color-overlay-hover-medium: rgba(255, 255, 255, 0.06);
+  --color-overlay-row:          rgba(255, 255, 255, 0.02);
+
+  /* ----- Semantic role tokens — these decouple "decorative accent" from
+   * "selection accent". The Default Generic theme paints both with cyan;
+   * Blender keeps cyan only for true selection/focus and uses neutral text
+   * for headings, badges, and emphasis. Hover backgrounds likewise: cyan-
+   * tinted in Default, white-tinted overlay in Blender. ----- */
+  --color-heading:        #4cc9f0;     /* section titles, page titles */
+  --color-emphasis:       #4cc9f0;     /* badges, value readouts, list-item type tags */
+  --color-hover-bg:       rgba(76, 201, 240, 0.10);   /* item hover bg */
+  --color-tab-active-bg:  rgba(76, 201, 240, 0.10);
+  --color-tab-active-border: #4cc9f0;
+  --color-widget-border:  #2d4059;     /* input/button outlines (matches --color-border by default) */
+
+  /* ----- RGB channel chips ----- */
+  --color-channel-r:      #ff6b6b;
+  --color-channel-g:      #51cf66;
+  --color-channel-b:      #339af0;
+
+  /* ----- Neighborhood grid cells ----- */
+  --color-grid-active:    #4cc9f0;
+  --color-grid-tagged:    #26a69a;
+  --color-grid-center:    #e8a838;
+
+  /* ----- Node category fills (Modeler graph) ----- */
+  --color-node-event:     #2e7d32;
+  --color-node-flow:      #1b5e20;
+  --color-node-data:      #0d47a1;
+  --color-node-logic:     #e65100;
+  --color-node-aggregation: #6a1b9a;
+  --color-node-output:    #b71c1c;
+  --color-node-color:     #00695c;
+
+  /* ----- Port colours ----- */
+  --color-port-value:     #4cc9f0;
+  --color-port-flow:      #ffd166;
+
+  /* ----- Spacing scale ----- */
+  --space-1:  2px;
+  --space-2:  4px;
+  --space-3:  6px;
+  --space-4:  8px;
+  --space-5:  10px;
+  --space-6:  12px;
+  --space-8:  16px;
+  --space-10: 20px;
+  --space-12: 24px;
+  --space-16: 32px;
+  --space-24: 48px;
+
+  /* ----- Font family + sizes ----- */
+  --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
+                 Ubuntu, Cantarell, sans-serif;
+  --font-family-mono: ui-monospace, SFMono-Regular, Menlo, Monaco,
+                      'Cascadia Mono', 'Roboto Mono', Consolas,
+                      'Liberation Mono', monospace;
+  /* The smallest sizes (~9-10px) were too tiny to comfortably read in
+   * panel chrome — bumped slightly so even the bottom of the scale stays
+   * legible. Default Generic stays close to its original look. */
+  --font-3xs:  0.65rem;        /* 10.4px — was 0.6rem */
+  --font-2xs:  0.7rem;         /* 11.2px — was 0.65rem */
+  --font-xs:   0.75rem;        /* 12px   — was 0.7rem */
+  --font-sm:   0.8rem;         /* 12.8px — was 0.75rem */
+  --font-md:   0.85rem;        /* 13.6px — was 0.8rem  */
+  --font-base: 0.95rem;        /* 15.2px — was 0.9rem  */
+  --font-lg:   1.1rem;
+  --font-xl:   1.4rem;
+
+  /* ----- Text shadow (Default Generic: none) ----- */
+  --text-shadow: none;
+
+  /* ----- Label/heading typography (Default uses uppercase + tracking;
+   *       Blender uses sentence case + normal tracking — softer feel) ----- */
+  --label-text-transform: uppercase;
+  --label-letter-spacing: 0.04em;
+  --label-font-weight: 500;
+
+  /* ----- Radii ----- */
+  --radius-sm:   3px;
+  --radius-md:   4px;
+  --radius-lg:   6px;
+  --radius-xl:   8px;
+  --radius-pill: 12px;
+
+  /* ----- Shadows ----- */
+  --shadow-sm: 0 2px 8px  rgba(0, 0, 0, 0.30);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.40);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.60);
+
+  /* ----- Widget bevels (Blender's signature subtle 3D effect) -----
+   * Default Generic uses none. Blender uses very faint inset highlights/
+   * shadows so buttons appear raised and inputs appear depressed. */
+  --shadow-button-inset: none;
+  --shadow-input-inset:  none;
+
+  /* ----- Transitions ----- */
+  --duration-fast: 0.10s;
+  --duration-base: 0.15s;
+
+  /* ----- Layout primitives ----- */
+  --navbar-height:        48px;
+  --panel-width-default: 350px;
+  --panel-width-min:     200px;
+  --panel-width-max:     600px;
+  --resize-handle-width:   6px;
+  --panel-radius:         0;       /* outer corner radius on editor panels (Blender rounds these) */
+
+  /* ----- Scrollbars ----- */
+  --scrollbar-width:        10px;
+  --scrollbar-track:        transparent;
+  --scrollbar-thumb:        #2d4059;
+  --scrollbar-thumb-hover:  #4a6080;
+  --scrollbar-thumb-active: #4cc9f0;
+
+  /* ----- Chart palette (categorical line colours) ----- */
+  --chart-color-1:  #4cc9f0;
+  --chart-color-2:  #f77f00;
+  --chart-color-3:  #90e0ef;
+  --chart-color-4:  #e07a5f;
+  --chart-color-5:  #b5179e;
+  --chart-color-6:  #ffd166;
+  --chart-color-7:  #06d6a0;
+  --chart-color-8:  #e5383b;
+  --chart-color-9:  #8ecae6;
+  --chart-color-10: #fb8500;
+
+  /* Chart axis / label colours (used by IndicatorSparkline et al.). */
+  --chart-axis:  #506070;
+  --chart-label: #8090a0;
+}
+
+/* ====================================================================== */
+/* BLENDER                                                                */
+/* Modelled on Blender's default dark theme. Iconic dark grays + Blender  */
+/* blue selection. Compact type, tight radii, near-flat surfaces.         */
+/* ====================================================================== */
+
+[data-theme="blender"] {
+  /* ----- Surfaces ----- */
+  --color-bg-app:         #232323;        /* between-editor space */
+  --color-bg-canvas:      #1d1d1d;        /* input fields + node editor canvas */
+  --color-bg-panel:       #3d3d3d;        /* panel/header background (Blender's default) */
+  --color-bg-elevated:    #232323;        /* popovers / menus */
+  --color-bg-activitybar: #303030;        /* tabs bar */
+
+  /* ----- Borders & dividers ----- */
+  /* Blender draws DARK panel-to-panel boundaries (the editor separator
+   * lines look almost black) but does NOT outline widgets inside a panel
+   * — text/number fields and buttons sit on the panel surface with a
+   * barely-perceptible inset edge.
+   *  --color-border           panel/region separators (dark, visible)
+   *  --color-widget-border    input/button/card outlines (≈ panel bg)
+   *  --color-border-muted     in-panel section dividers (subtle)         */
+  --color-border:         #1d1d1d;        /* dark panel boundary line */
+  --color-border-muted:   #353535;        /* subtle in-panel divider */
+  --color-border-danger:  #5d2828;
+
+  /* ----- Text ----- */
+  --color-text-primary:   #e6e6e6;
+  --color-text-secondary: #d0d0d0;
+  --color-text-tertiary:  #989898;        /* tab labels, dim headings */
+  --color-text-muted:     #898989;
+  --color-text-subtle:    #a0a0a0;
+
+  /* ----- Accent (Blender's iconic blue) ----- */
+  --color-accent:         #4772b3;
+  --color-accent-hover:   #5a85c4;
+  --color-accent-soft:    rgba(71, 114, 179, 0.18);
+  --color-accent-strong:  rgba(71, 114, 179, 0.45);
+
+  /* ----- Semantic ----- */
+  --color-danger:         #c95151;
+  --color-danger-hover:   #e06b6b;
+  --color-warning:        #e7b75e;
+  --color-success:        #6abe6a;
+  --color-info:           #4772b3;
+
+  /* ----- Hover overlays ----- */
+  --color-overlay-hover-weak:   rgba(255, 255, 255, 0.06);
+  --color-overlay-hover-medium: rgba(255, 255, 255, 0.10);
+  --color-overlay-row:          rgba(255, 255, 255, 0.03);
+
+  /* ----- Semantic role tokens (Blender) — neutral grays for decoration; */
+  /*       blue is reserved for actual selection/focus.                  */
+  --color-heading:        #e6e6e6;     /* same as text-primary — section titles render as bright text */
+  --color-emphasis:       #d0d0d0;     /* same as text-secondary — value readouts, badges */
+  --color-hover-bg:       rgba(255, 255, 255, 0.07);   /* white overlay, no blue tint */
+  --color-tab-active-bg:  rgba(255, 255, 255, 0.08);
+  --color-tab-active-border: transparent;              /* Blender's active tab has no blue border */
+  --color-widget-border:  #3a3a3a;     /* almost identical to panel bg (#3d3d3d) — outlines virtually disappear */
+
+  /* ----- RGB channel chips ----- */
+  --color-channel-r:      #d96868;
+  --color-channel-g:      #6abe6a;
+  --color-channel-b:      #5a85c4;
+
+  /* ----- Neighborhood grid cells ----- */
+  --color-grid-active:    #4772b3;
+  --color-grid-tagged:    #4f9c9c;
+  --color-grid-center:    #d49b1f;
+
+  /* ----- Node category fills (Modeler graph) ----- */
+  /* Blender's compositor-node palette: muted, less saturated than ours. */
+  --color-node-event:     #4f7a3a;        /* desaturated green */
+  --color-node-flow:      #3a6a4a;
+  --color-node-data:      #3a5a8a;        /* muted blue */
+  --color-node-logic:     #b86b30;        /* warm orange */
+  --color-node-aggregation: #6e3a8a;      /* desaturated purple */
+  --color-node-output:    #a04040;        /* muted red */
+  --color-node-color:     #2a7a6e;        /* teal */
+
+  /* ----- Port colours ----- */
+  --color-port-value:     #b0b0b0;        /* grey value sockets, like Blender */
+  --color-port-flow:      #d4a04a;        /* warm yellow flow sockets */
+
+  /* ----- Spacing scale (kept identical to default to avoid layout breakage; */
+  /*       Blender feel comes from smaller fonts + radii) ----- */
+  --space-1:  2px;
+  --space-2:  4px;
+  --space-3:  6px;
+  --space-4:  8px;
+  --space-5:  10px;
+  --space-6:  12px;
+  --space-8:  16px;
+  --space-10: 20px;
+  --space-12: 24px;
+  --space-16: 32px;
+  --space-24: 48px;
+
+  /* ----- Font family + sizes (Blender uses Inter by default in 4.x+; */
+  /*       fall back to system stack if Inter isn't installed) ----- */
+  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+                 'Helvetica Neue', sans-serif;
+  --font-family-mono: ui-monospace, SFMono-Regular, Menlo, Monaco,
+                      'Cascadia Mono', 'Roboto Mono', Consolas,
+                      'Liberation Mono', monospace;
+  /* Blender's actual UI runs ~11pt (12px) for body text, with the smallest
+   * labels around 10-11px — never the 8-9px we had before. Bumped the
+   * scale so even the tiniest accents stay readable on a panel. */
+  --font-3xs:  0.7rem;         /* 11.2px — was 0.55rem */
+  --font-2xs:  0.75rem;        /* 12px   — was 0.6rem  */
+  --font-xs:   0.8rem;         /* 12.8px — was 0.65rem */
+  --font-sm:   0.85rem;        /* 13.6px — was 0.7rem  */
+  --font-md:   0.9rem;         /* 14.4px — was 0.75rem */
+  --font-base: 1rem;           /* 16px   — was 0.85rem */
+  --font-lg:   1.15rem;        /* 18.4px — was 1rem    */
+  --font-xl:   1.4rem;         /* 22.4px — was 1.25rem */
+
+  /* ----- Text shadow — Blender draws a faint 1px dropshadow under most
+   *       UI text, giving letters a subtle 'engraved' depth. Very low
+   *       alpha so it reads as a softening, not a hard shadow. ----- */
+  --text-shadow: 0 1px 0 rgba(0, 0, 0, 0.55);
+
+  /* Label typography (Blender uses sentence case, no tracking) */
+  --label-text-transform: none;
+  --label-letter-spacing: normal;
+  --label-font-weight: 500;
+
+  /* ----- Radii (Blender is nearly flat) ----- */
+  --radius-sm:   2px;
+  --radius-md:   3px;
+  --radius-lg:   4px;
+  --radius-xl:   5px;
+  --radius-pill: 8px;
+
+  /* ----- Shadows (Blender uses minimal shadows) ----- */
+  --shadow-sm: 0 1px 3px  rgba(0, 0, 0, 0.40);
+  --shadow-md: 0 2px 6px  rgba(0, 0, 0, 0.50);
+  --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.60);
+
+  /* ----- Widget bevels — the small 3D effect on buttons & inputs ----- */
+  --shadow-button-inset: inset 0 1px 0 rgba(255, 255, 255, 0.06),
+                         inset 0 -1px 0 rgba(0, 0, 0, 0.18);
+  --shadow-input-inset:  inset 0 1px 1px rgba(0, 0, 0, 0.20);
+
+  /* ----- Transitions (Blender is snappy) ----- */
+  --duration-fast: 0.08s;
+  --duration-base: 0.12s;
+
+  /* ----- Layout primitives ----- */
+  --navbar-height:        36px;            /* Blender's headers are tighter */
+  --panel-width-default: 320px;
+  --panel-width-min:     200px;
+  --panel-width-max:     500px;
+  --resize-handle-width:   4px;
+  --panel-radius:          5px;            /* Blender editors have rounded outer corners */
+
+  /* ----- Scrollbars (Blender uses gray, not accent-coloured thumbs) ----- */
+  --scrollbar-width:        12px;
+  --scrollbar-track:        rgba(0, 0, 0, 0.20);
+  --scrollbar-thumb:        #6e6e6e;
+  --scrollbar-thumb-hover:  #8a8a8a;
+  --scrollbar-thumb-active: #4772b3;
+
+  /* ----- Chart palette (Blender-style: muted, slightly desaturated) ----- */
+  --chart-color-1:  #6a9bd1;     /* Blender blue */
+  --chart-color-2:  #d49b1f;     /* warm yellow */
+  --chart-color-3:  #6abe6a;     /* green */
+  --chart-color-4:  #d96868;     /* red */
+  --chart-color-5:  #b07acc;     /* purple */
+  --chart-color-6:  #4f9c9c;     /* teal */
+  --chart-color-7:  #e08e3a;     /* orange */
+  --chart-color-8:  #c9c171;     /* khaki */
+  --chart-color-9:  #9aaf6c;     /* olive */
+  --chart-color-10: #c46a8d;     /* rose */
+
+  --chart-axis:  #555555;
+  --chart-label: #a0a0a0;
+}

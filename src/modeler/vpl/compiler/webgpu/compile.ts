@@ -181,6 +181,15 @@ function getNbr(layout: WebGPULayout, id: string): WebGPULayoutNbr | null {
   return layout.nbrs.find(n => n.id === id) ?? null;
 }
 
+/** Emit the WGSL expression that produces the linear cell index of neighbour
+ *  `kExpr` of cell `idx` in neighbourhood `nbr`. Replaces the legacy per-cell
+ *  `nbrIndices[wordOffset + idx*size + k]` lookup with a call into the shared
+ *  `nbrCellIdx` helper (see encoder.ts emitBindings) — the helper does the
+ *  (dRow, dCol) lookup + boundary math inline. */
+function emitNbrCellIdx(nbr: WebGPULayoutNbr, kExpr: string): string {
+  return `nbrCellIdx(idx, ${nbr.wordOffset}u, ${kExpr})`;
+}
+
 function attrWgslType(t: string): WgslType {
   if (t === 'float') return 'f32';
   if (t === 'bool') return 'bool';
@@ -451,10 +460,7 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     const k = fresh(ctx, 'fk');
     ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${inArr.lenName}; ${k} = ${k} + 1) {`);
     ctx.lines.push(`    let _idxIn_${k}: i32 = ${arrLoad(inArr, k)};`);
-    const nbrSlot = nbr.wordOffset === 0
-      ? `nbrIndices[i32(idx) * ${nbr.size} + _idxIn_${k}]`
-      : `nbrIndices[${nbr.wordOffset}i + i32(idx) * ${nbr.size} + _idxIn_${k}]`;
-    ctx.lines.push(`    let _nci_${k}: i32 = ${nbrSlot};`);
+    ctx.lines.push(`    let _nci_${k}: i32 = ${emitNbrCellIdx(nbr, `_idxIn_${k}`)};`);
     const elem = readAttr(attr, `u32(_nci_${k})`, false);
     ctx.lines.push(`    let _e_${k}: ${elem.type} = ${elem.expr};`);
     const elemF = castTo({ expr: `_e_${k}`, type: elem.type }, 'f32');
@@ -585,10 +591,7 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
       if (!nbr || !attr) { ctx.errors.push(`groupCounting (array): unknown nbr/attr`); return null; }
       const n = fresh(ctx, 'gcn');
       ctx.lines.push(`  for (var ${n}: i32 = 0; ${n} < ${nbr.size}; ${n} = ${n} + 1) {`);
-      const nbrSlot = nbr.wordOffset === 0
-        ? `nbrIndices[i32(idx) * ${nbr.size} + ${n}]`
-        : `nbrIndices[${nbr.wordOffset}i + i32(idx) * ${nbr.size} + ${n}]`;
-      ctx.lines.push(`    let _nci_${n}: i32 = ${nbrSlot};`);
+      ctx.lines.push(`    let _nci_${n}: i32 = ${emitNbrCellIdx(nbr, n)};`);
       const elem = readAttr(attr, `u32(_nci_${n})`, false);
       const elemF = castTo({ expr: elem.expr, type: elem.type }, 'f32');
       emitMatch(n, elemF);
@@ -625,10 +628,7 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     const k = fresh(ctx, 'nak');
     ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${inArr.lenName}; ${k} = ${k} + 1) {`);
     ctx.lines.push(`    let _idxIn_${k}: i32 = ${arrLoad(inArr, k)};`);
-    const nbrSlot = nbr.wordOffset === 0
-      ? `nbrIndices[i32(idx) * ${nbr.size} + _idxIn_${k}]`
-      : `nbrIndices[${nbr.wordOffset}i + i32(idx) * ${nbr.size} + _idxIn_${k}]`;
-    ctx.lines.push(`    let _nci_${k}: i32 = ${nbrSlot};`);
+    ctx.lines.push(`    let _nci_${k}: i32 = ${emitNbrCellIdx(nbr, `_idxIn_${k}`)};`);
     const e = readAttr(attr, `u32(_nci_${k})`, false);
     // Coerce to the array's element type. For bool attrs we store as i32 (0/1)
     // for uniform handling; for float we keep f32; for int/tag we keep i32.
@@ -851,11 +851,7 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     // storage reads return zero, which would silently read "neighbour 0 of
     // cell 0" (typically the boundary sentinel) instead of failing visibly.
     const clamped = emitLet(ctx, 'i32', `clamp(${castTo(indexRef, 'i32')}, 0, ${nbr.size - 1})`, 'ni');
-    // address into nbr table = nbr.wordOffset + i*size + index
-    const nbrSlot = nbr.wordOffset === 0
-      ? `nbrIndices[i32(idx) * ${nbr.size} + ${clamped.expr}]`
-      : `nbrIndices[${nbr.wordOffset}i + i32(idx) * ${nbr.size} + ${clamped.expr}]`;
-    const cellIdx = emitLet(ctx, 'i32', nbrSlot, 'nci');
+    const cellIdx = emitLet(ctx, 'i32', emitNbrCellIdx(nbr, clamped.expr), 'nci');
     // Read attr at cellIdx (cast to u32 for indexing)
     const r = readAttr(attr, `u32(${cellIdx.expr})`, false);
     return emitLet(ctx, r.type, r.expr, 'nbAtr');
@@ -868,10 +864,7 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     const attr = getAttr(ctx.layout, attrId);
     if (!nbr || !attr) { ctx.errors.push(`getNeighborAttributeByTag: unknown nbr/attr`); return null; }
     const tagIdx = Number((node.data.config as Record<string, unknown>)._resolvedTagIndex ?? 0);
-    const nbrSlot = nbr.wordOffset === 0
-      ? `nbrIndices[i32(idx) * ${nbr.size} + ${tagIdx}]`
-      : `nbrIndices[${nbr.wordOffset}i + i32(idx) * ${nbr.size} + ${tagIdx}]`;
-    const cellIdx = emitLet(ctx, 'i32', nbrSlot, 'nci');
+    const cellIdx = emitLet(ctx, 'i32', emitNbrCellIdx(nbr, `${tagIdx | 0}`), 'nci');
     const r = readAttr(attr, `u32(${cellIdx.expr})`, false);
     return emitLet(ctx, r.type, r.expr, 'nbAtr');
   },
@@ -1030,10 +1023,7 @@ function emitAggregateOrCount(
       const k = fresh(ctx, 'fk');
       ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${inArr.lenName}; ${k} = ${k} + 1) {`);
       ctx.lines.push(`    let _idxIn_${k}: i32 = ${arrLoad(inArr, k)};`);
-      const nbrSlot = nbr.wordOffset === 0
-        ? `nbrIndices[i32(idx) * ${nbr.size} + _idxIn_${k}]`
-        : `nbrIndices[${nbr.wordOffset}i + i32(idx) * ${nbr.size} + _idxIn_${k}]`;
-      ctx.lines.push(`    let _nci_${k}: i32 = ${nbrSlot};`);
+      ctx.lines.push(`    let _nci_${k}: i32 = ${emitNbrCellIdx(nbr, `_idxIn_${k}`)};`);
       const elem = readAttr(attr, `u32(_nci_${k})`, false);
       ctx.lines.push(`    let _e_${k}: ${elem.type} = ${elem.expr};`);
       const elemRef: ValueRef = { expr: `_e_${k}`, type: elem.type };
@@ -1062,10 +1052,7 @@ function emitAggregateOrCount(
     }
     const nVar = fresh(ctx, 'n');
     ctx.lines.push(`  for (var ${nVar}: i32 = 0; ${nVar} < ${nbr.size}; ${nVar} = ${nVar} + 1) {`);
-    const nbrSlot = nbr.wordOffset === 0
-      ? `nbrIndices[i32(idx) * ${nbr.size} + ${nVar}]`
-      : `nbrIndices[${nbr.wordOffset}i + i32(idx) * ${nbr.size} + ${nVar}]`;
-    ctx.lines.push(`    let _nci_${nVar}: i32 = ${nbrSlot};`);
+    ctx.lines.push(`    let _nci_${nVar}: i32 = ${emitNbrCellIdx(nbr, nVar)};`);
     const elem = readAttr(attr, `u32(_nci_${nVar})`, false);
     ctx.lines.push(`    let _e_${nVar}: ${elem.type} = ${elem.expr};`);
     const elemRef: ValueRef = { expr: `_e_${nVar}`, type: elem.type };
@@ -1236,10 +1223,7 @@ function emitGroupStatement(c: NodeEmitContext): ValueRef | null {
     }
     const nVar = fresh(ctx, 'gn');
     ctx.lines.push(`  for (var ${nVar}: i32 = 0; ${nVar} < ${nbr.size}; ${nVar} = ${nVar} + 1) {`);
-    const nbrSlot = nbr.wordOffset === 0
-      ? `nbrIndices[i32(idx) * ${nbr.size} + ${nVar}]`
-      : `nbrIndices[${nbr.wordOffset}i + i32(idx) * ${nbr.size} + ${nVar}]`;
-    ctx.lines.push(`    let _nci_${nVar}: i32 = ${nbrSlot};`);
+    ctx.lines.push(`    let _nci_${nVar}: i32 = ${emitNbrCellIdx(nbr, nVar)};`);
     const elem = readAttr(attr, `u32(_nci_${nVar})`, false);
     ctx.lines.push(`    let _e_${nVar}: ${elem.type} = ${elem.expr};`);
     const elemF = castTo({ expr: `_e_${nVar}`, type: elem.type }, 'f32');

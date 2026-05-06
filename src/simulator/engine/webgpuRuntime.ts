@@ -50,7 +50,10 @@ export interface WebGPURuntime {
   attrsReadBuf: GPUBuffer | null;
   attrsWriteBuf: GPUBuffer | null;
   colorsBuf: GPUBuffer | null;
-  nbrIndicesBuf: GPUBuffer | null;
+  /** Small buffer holding (dRow, dCol) i32 pairs per neighbour, keyed by
+   *  `WebGPULayoutNbr.wordOffset`. Replaces the old multi-GB per-cell index
+   *  table — the WGSL `nbrCellIdx` helper computes cell indices inline. */
+  nbrOffsetsBuf: GPUBuffer | null;
   modelAttrsBuf: GPUBuffer | null;
   indicatorsBuf: GPUBuffer | null;
   rngStateBuf: GPUBuffer | null;
@@ -193,7 +196,7 @@ export async function createWebGPURuntime(init: WebGPURuntimeInit): Promise<WebG
     stepReady: false,
     attrsBufA: null, attrsBufB: null,
     attrsReadBuf: null, attrsWriteBuf: null, colorsBuf: null,
-    nbrIndicesBuf: null, modelAttrsBuf: null, indicatorsBuf: null,
+    nbrOffsetsBuf: null, modelAttrsBuf: null, indicatorsBuf: null,
     rngStateBuf: null, controlBuf: null,
     bindGroupLayout: null,
     pipelineLayout: null,
@@ -289,7 +292,7 @@ export async function setupBuffersAndPipelines(rt: WebGPURuntime): Promise<void>
   const limit = device.limits.maxStorageBufferBindingSize;
   const offenders: Array<{ name: string; bytes: number }> = [];
   if (layout.attrsBytes > limit) offenders.push({ name: 'attrsRead/Write', bytes: layout.attrsBytes });
-  if (layout.nbrBytes > limit) offenders.push({ name: 'nbrIndices', bytes: layout.nbrBytes });
+  if (layout.nbrBytes > limit) offenders.push({ name: 'nbrOffsets', bytes: layout.nbrBytes });
   if (layout.colorsBytes > limit) offenders.push({ name: 'colors', bytes: layout.colorsBytes });
   if (offenders.length > 0) {
     const fmt = (n: number) => `${(n / 1048576).toFixed(1)} MB`;
@@ -314,8 +317,8 @@ export async function setupBuffersAndPipelines(rt: WebGPURuntime): Promise<void>
     label: 'colors', size: layout.colorsBytes,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
   });
-  rt.nbrIndicesBuf = device.createBuffer({
-    label: 'nbrIndices', size: layout.nbrBytes,
+  rt.nbrOffsetsBuf = device.createBuffer({
+    label: 'nbrOffsets', size: layout.nbrBytes,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
   rt.modelAttrsBuf = device.createBuffer({
@@ -354,7 +357,7 @@ export async function setupBuffersAndPipelines(rt: WebGPURuntime): Promise<void>
   // written buffer becomes the next step's "read" — no per-step copy needed.
   const otherEntries = [
     { binding: 2, resource: { buffer: rt.colorsBuf } },
-    { binding: 3, resource: { buffer: rt.nbrIndicesBuf } },
+    { binding: 3, resource: { buffer: rt.nbrOffsetsBuf } },
     { binding: 4, resource: { buffer: rt.modelAttrsBuf } },
     { binding: 5, resource: { buffer: rt.indicatorsBuf } },
     { binding: 6, resource: { buffer: rt.rngStateBuf } },
@@ -722,17 +725,28 @@ export function uploadAttr(rt: WebGPURuntime, attrId: string, src: ArrayLike<num
   rt.device.queue.writeBuffer(rt.attrsReadBuf, packed.offset, packed.bytes);
 }
 
-export function uploadNeighborIndices(rt: WebGPURuntime, indices: Record<string, Int32Array>): void {
-  if (!rt.nbrIndicesBuf) return;
+/** Upload the neighbour-offset table (vec2<i32>(dRow, dCol) per neighbour, per
+ *  neighbourhood). The data lives on the layout itself — `coords` was captured
+ *  at `computeWebGPULayout` time — so no parameter is needed beyond the
+ *  runtime. The previous shape took a `Record<string, Int32Array>` of per-cell
+ *  index tables; that table has been replaced by inline shader math (see the
+ *  WGSL `nbrCellIdx` helper in encoder.ts). */
+export function uploadNeighborOffsets(rt: WebGPURuntime): void {
+  if (!rt.nbrOffsetsBuf) return;
   const buf = new Uint8Array(rt.layout.nbrBytes);
   const view = new DataView(buf.buffer);
   for (const n of rt.layout.nbrs) {
-    const src = indices[n.id];
-    if (!src) continue;
-    const lim = Math.min(n.count, src.length);
-    for (let i = 0; i < lim; i++) view.setInt32(n.byteOffset + i * 4, src[i] ?? 0, true);
+    // Each neighbour contributes 2 i32s: (dRow, dCol). `wordOffset` is the
+    // starting i32-element index inside the buffer for this neighbourhood —
+    // matches what the compiler emits as `baseOffset` for `nbrCellIdx`.
+    let off = n.byteOffset;
+    for (let k = 0; k < n.coords.length; k++) {
+      const pair = n.coords[k]!;
+      view.setInt32(off, pair[0] | 0, true); off += 4;
+      view.setInt32(off, pair[1] | 0, true); off += 4;
+    }
   }
-  rt.device.queue.writeBuffer(rt.nbrIndicesBuf, 0, buf);
+  rt.device.queue.writeBuffer(rt.nbrOffsetsBuf, 0, buf);
 }
 
 export function uploadModelAttrs(rt: WebGPURuntime, modelAttrs: Record<string, number>): void {
@@ -1079,7 +1093,7 @@ export function destroyWebGPURuntime(rt: WebGPURuntime | null): void {
     // attrsReadBuf / attrsWriteBuf are aliases of attrsBufA / attrsBufB —
     // destroy via the underlying refs to avoid double-destroy.
     for (const buf of [
-      rt.attrsBufA, rt.attrsBufB, rt.colorsBuf, rt.nbrIndicesBuf,
+      rt.attrsBufA, rt.attrsBufB, rt.colorsBuf, rt.nbrOffsetsBuf,
       rt.modelAttrsBuf, rt.indicatorsBuf, rt.rngStateBuf, rt.controlBuf,
       rt.reductionsBuf,
     ]) {
