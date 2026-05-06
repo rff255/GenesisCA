@@ -36,30 +36,6 @@
   background: var(--color-accent-strong);
 }
 
-/* Outside ear-tab on the right edge of the left side panel — collapses
- * the panel. Mirrors .rightPanelCollapseTab but on the opposite side. */
-.leftPanelCollapseTab {
-  position: absolute;
-  top: var(--space-4);
-  right: -18px;
-  z-index: 6;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-border);
-  border-left: none;
-  border-radius: 0 var(--radius-md) var(--radius-md) 0;
-  color: var(--color-text-muted);
-  font-size: var(--font-base);
-  cursor: pointer;
-  padding: var(--space-6) var(--space-2);
-  line-height: 1;
-  transition: color var(--duration-base), background var(--duration-base);
-}
-
-.leftPanelCollapseTab:hover {
-  color: var(--color-text-primary);
-  background: var(--color-overlay-hover-medium);
-}
-
 /* --- Right side panel (shared, resizable via left border drag) --- */
 
 .rightPanel {

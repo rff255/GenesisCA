@@ -1900,11 +1900,6 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       {/* === Left Panel (collapsible) === */}
       {leftPanelOpen && (
         <div className={styles.sidePanel} ref={leftPanelRef}>
-          <button
-            className={styles.leftPanelCollapseTab}
-            onClick={() => setLeftPanelOpen(false)}
-            title="Close settings"
-          >&lsaquo;</button>
           <div className={styles.panelHeader}>
             <span className={styles.panelTitle}>Settings</span>
           </div>
@@ -2089,9 +2084,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             {compileError}
           </div>
         )}
-        {!leftPanelOpen && (
-          <button className={styles.panelExpandBtn} style={{ left: 0 }} onClick={() => setLeftPanelOpen(true)} title="Open settings" data-sim-overlay>&rsaquo;</button>
-        )}
+        {/* Settings panel ear — sits at the canvas's left edge. We render it
+            inside canvasArea (not inside .sidePanel, which has overflow:hidden
+            and would clip a sticking-out ear) so it works in both states.
+            Glyph + handler swap based on whether the panel is open. */}
+        <button
+          className={styles.panelExpandBtn}
+          style={{ left: 0 }}
+          onClick={() => setLeftPanelOpen(v => !v)}
+          title={leftPanelOpen ? 'Close settings' : 'Open settings'}
+          data-sim-overlay
+        >{leftPanelOpen ? '‹' : '›'}</button>
         <canvas ref={canvasRef} className={styles.canvas} />
 
         {/* Top-left stats (discreet, no background) */}
