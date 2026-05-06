@@ -432,6 +432,7 @@
   border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-md);
   color: var(--color-text-primary);
+  box-shadow: var(--shadow-input-inset);
   font-size: var(--font-md);
   font-family: inherit;
   outline: none;
@@ -458,6 +459,7 @@
   border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-md);
   color: var(--color-text-primary);
+  box-shadow: var(--shadow-input-inset);
   font-size: var(--font-md);
   font-family: inherit;
   outline: none;
@@ -477,6 +479,7 @@
   border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-md);
   color: var(--color-text-primary);
+  box-shadow: var(--shadow-input-inset);
   font-size: var(--font-md);
   font-family: inherit;
   outline: none;
@@ -489,6 +492,7 @@
   border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-md);
   color: var(--color-text-primary);
+  box-shadow: var(--shadow-input-inset);
   font-size: var(--font-md);
   cursor: pointer;
 }

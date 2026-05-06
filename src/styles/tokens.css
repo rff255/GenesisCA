@@ -135,6 +135,12 @@
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.40);
   --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.60);
 
+  /* ----- Widget bevels (Blender's signature subtle 3D effect) -----
+   * Default Generic uses none. Blender uses very faint inset highlights/
+   * shadows so buttons appear raised and inputs appear depressed. */
+  --shadow-button-inset: none;
+  --shadow-input-inset:  none;
+
   /* ----- Transitions ----- */
   --duration-fast: 0.10s;
   --duration-base: 0.15s;
@@ -186,13 +192,15 @@
   --color-bg-activitybar: #303030;        /* tabs bar */
 
   /* ----- Borders & dividers ----- */
-  /* Blender doesn't draw harsh dark outlines around widgets — most form
-   * controls and buttons sit on a panel with a barely-visible inset edge.
-   * We use a softer --color-border for panel-to-panel separators and a
-   * very-near-bg --color-widget-border so input outlines fade into the
-   * panel surface (matching the Blender screenshot). */
-  --color-border:         #2a2a2a;        /* subtle separator between regions */
-  --color-border-muted:   #353535;        /* even softer, almost matches panel bg */
+  /* Blender draws DARK panel-to-panel boundaries (the editor separator
+   * lines look almost black) but does NOT outline widgets inside a panel
+   * — text/number fields and buttons sit on the panel surface with a
+   * barely-perceptible inset edge.
+   *  --color-border           panel/region separators (dark, visible)
+   *  --color-widget-border    input/button/card outlines (≈ panel bg)
+   *  --color-border-muted     in-panel section dividers (subtle)         */
+  --color-border:         #1d1d1d;        /* dark panel boundary line */
+  --color-border-muted:   #353535;        /* subtle in-panel divider */
   --color-border-danger:  #5d2828;
 
   /* ----- Text ----- */
@@ -227,7 +235,7 @@
   --color-hover-bg:       rgba(255, 255, 255, 0.07);   /* white overlay, no blue tint */
   --color-tab-active-bg:  rgba(255, 255, 255, 0.08);
   --color-tab-active-border: transparent;              /* Blender's active tab has no blue border */
-  --color-widget-border:  #353535;     /* nearly matches panel bg — outlines fade in */
+  --color-widget-border:  #3a3a3a;     /* almost identical to panel bg (#3d3d3d) — outlines virtually disappear */
 
   /* ----- RGB channel chips ----- */
   --color-channel-r:      #d96868;
@@ -294,6 +302,11 @@
   --shadow-sm: 0 1px 3px  rgba(0, 0, 0, 0.40);
   --shadow-md: 0 2px 6px  rgba(0, 0, 0, 0.50);
   --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.60);
+
+  /* ----- Widget bevels — the small 3D effect on buttons & inputs ----- */
+  --shadow-button-inset: inset 0 1px 0 rgba(255, 255, 255, 0.06),
+                         inset 0 -1px 0 rgba(0, 0, 0, 0.18);
+  --shadow-input-inset:  inset 0 1px 1px rgba(0, 0, 0, 0.20);
 
   /* ----- Transitions (Blender is snappy) ----- */
   --duration-fast: 0.08s;

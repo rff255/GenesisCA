@@ -16,6 +16,7 @@
   font-size: var(--font-xs);
   font-family: inherit;
   outline: none;
+  box-shadow: var(--shadow-input-inset);
   margin-bottom: var(--space-3);
 }
 

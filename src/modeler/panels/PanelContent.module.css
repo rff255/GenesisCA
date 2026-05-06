@@ -53,6 +53,7 @@
   font-size: var(--font-md);
   font-family: inherit;
   outline: none;
+  box-shadow: var(--shadow-input-inset);
   transition: border-color var(--duration-base);
 }
 
@@ -107,6 +108,7 @@
   font-size: var(--font-md);
   font-family: inherit;
   outline: none;
+  box-shadow: var(--shadow-input-inset);
   transition: border-color var(--duration-base);
 }
 
