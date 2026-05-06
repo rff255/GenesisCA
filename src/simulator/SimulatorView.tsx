@@ -1900,9 +1900,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       {/* === Left Panel (collapsible) === */}
       {leftPanelOpen && (
         <div className={styles.sidePanel} ref={leftPanelRef}>
+          <button
+            className={styles.leftPanelCollapseTab}
+            onClick={() => setLeftPanelOpen(false)}
+            title="Close settings"
+          >&lsaquo;</button>
           <div className={styles.panelHeader}>
             <span className={styles.panelTitle}>Settings</span>
-            <button className={styles.panelCollapseBtn} onClick={() => setLeftPanelOpen(false)}>&lsaquo;</button>
           </div>
           <div
             className={styles.leftPanelResizeHandle}

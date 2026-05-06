@@ -20,13 +20,19 @@ export function PanelShell({ title, onClose, children, side = 'left' }: PanelShe
     >
       <div className={styles.header}>
         <span className={styles.title}>{title}</span>
-        <button className={styles.closeButton} onClick={onClose} title="Close panel">
-          &times;
-        </button>
       </div>
       <div className={styles.body}>
         {children}
       </div>
+      {/* Outside ear-tab: collapses the panel. Mirrors the simulator-right
+          pattern. Arrow points TOWARDS the direction the panel will move. */}
+      <button
+        className={`${styles.earTab} ${isRight ? styles.earTabLeft : styles.earTabRight}`}
+        onClick={onClose}
+        title="Close panel"
+      >
+        {isRight ? '›' : '‹'}
+      </button>
       <div
         className={isRight ? styles.resizeHandleLeft : styles.resizeHandle}
         onMouseDown={e => {
