@@ -6,6 +6,19 @@
     <title>GenesisCA</title>
   </head>
   <body>
+    <script>
+      // Set theme attribute synchronously before first paint to avoid a flash.
+      // Default to "blender" on first load; subsequent visits respect the
+      // value persisted by App.tsx into localStorage.
+      (function () {
+        try {
+          var t = localStorage.getItem('genesisca_theme') || 'blender';
+          document.documentElement.dataset.theme = t;
+        } catch (e) {
+          document.documentElement.dataset.theme = 'blender';
+        }
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

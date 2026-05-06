@@ -9,13 +9,13 @@
   width: 200px;
   min-width: 150px;
   max-width: 400px;
-  background: #16213e;
-  padding: 12px;
+  background: var(--color-bg-panel);
+  padding: var(--space-6);
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  border-right: 1px solid #2d4059;
-  border-left: 1px solid #2d4059;
+  gap: var(--space-4);
+  border-right: 1px solid var(--color-border);
+  border-left: 1px solid var(--color-border);
   overflow-y: auto;
   overflow-x: hidden;
   position: relative;
@@ -25,20 +25,20 @@
   position: absolute;
   top: 0;
   right: -3px;
-  width: 6px;
+  width: var(--resize-handle-width);
   height: 100%;
   cursor: col-resize;
   z-index: 10;
 }
 
 .leftPanelResizeHandle:hover {
-  background: rgba(76, 201, 240, 0.3);
+  background: var(--color-accent-strong);
 }
 
 /* --- Right side panel (shared, resizable via left border drag) --- */
 
 .rightPanel {
-  background: #16213e;
+  background: var(--color-bg-panel);
   width: 220px;
   min-width: 160px;
   display: flex;
@@ -49,23 +49,23 @@
 
 .rightPanelCollapseTab {
   position: absolute;
-  top: 8px;
+  top: var(--space-4);
   left: -18px;
   z-index: 6;
-  background: rgba(30, 42, 58, 0.9);
-  border: 1px solid #2d4059;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
   border-right: none;
-  border-radius: 4px 0 0 4px;
-  color: #6080a0;
-  font-size: 0.9rem;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  color: var(--color-text-muted);
+  font-size: var(--font-base);
   cursor: pointer;
-  padding: 12px 4px;
+  padding: var(--space-6) var(--space-2);
   line-height: 1;
-  transition: color 0.15s;
+  transition: color var(--duration-base);
 }
 
 .rightPanelCollapseTab:hover {
-  color: #4cc9f0;
+  color: var(--color-accent);
 }
 
 .rightPanelResizeHandle {
@@ -76,25 +76,25 @@
   height: 100%;
   cursor: col-resize;
   z-index: 5;
-  background: #2d4059;
-  transition: background 0.15s;
+  background: var(--color-border);
+  transition: background var(--duration-base);
 }
 
 .rightPanelResizeHandle:hover,
 .rightPanelResizeHandle:active {
-  background: #4cc9f0;
+  background: var(--color-accent);
 }
 
 .rightPanelSection {
-  padding: 10px;
+  padding: var(--space-5);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-3);
   overflow-y: auto;
 }
 
 .rightPanelSection + .rightPanelSection {
-  border-top: 1px solid #2d4059;
+  border-top: 1px solid var(--color-border);
 }
 
 /* Brush section: shrink to content */
@@ -110,46 +110,46 @@
 
 .panelExpandBtnRight {
   position: absolute;
-  top: 8px;
+  top: var(--space-4);
   right: 0;
   z-index: 10;
-  background: rgba(30, 42, 58, 0.9);
-  border: 1px solid #2d4059;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
   border-right: none;
-  border-radius: 4px 0 0 4px;
-  color: #6080a0;
-  font-size: 0.9rem;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  color: var(--color-text-muted);
+  font-size: var(--font-base);
   cursor: pointer;
-  padding: 12px 4px;
-  transition: color 0.15s;
+  padding: var(--space-6) var(--space-2);
+  transition: color var(--duration-base);
   line-height: 1;
 }
 
 .panelExpandBtnRight:hover {
-  color: #4cc9f0;
+  color: var(--color-accent);
 }
 
 .panelHeader {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 4px;
+  margin-bottom: var(--space-2);
 }
 
 .panelTitle {
-  font-size: 0.75rem;
+  font-size: var(--font-sm);
   font-weight: 600;
-  color: #4cc9f0;
+  color: var(--color-accent);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
 
 .panelCollapseBtn {
   background: transparent;
-  border: 1px solid #2d4059;
-  border-radius: 3px;
-  color: #6080a0;
-  font-size: 0.8rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: var(--font-md);
   cursor: pointer;
   width: 22px;
   height: 22px;
@@ -159,28 +159,28 @@
 }
 
 .panelCollapseBtn:hover {
-  color: #e0e0e0;
-  border-color: #4cc9f0;
+  color: var(--color-text-primary);
+  border-color: var(--color-accent);
 }
 
 .panelExpandBtn {
   position: absolute;
-  top: 8px;
+  top: var(--space-4);
   left: 0;
   z-index: 10;
-  background: rgba(30, 42, 58, 0.9);
-  border: 1px solid #2d4059;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
   border-left: none;
-  border-radius: 0 4px 4px 0;
-  color: #6080a0;
-  font-size: 0.9rem;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-base);
   cursor: pointer;
-  padding: 12px 4px;
-  transition: color 0.15s;
+  padding: var(--space-6) var(--space-2);
+  transition: color var(--duration-base);
 }
 
 .panelExpandBtn:hover {
-  color: #4cc9f0;
+  color: var(--color-accent);
 }
 
 
@@ -189,39 +189,39 @@
 .stat {
   display: flex;
   justify-content: space-between;
-  font-size: 0.72rem;
+  font-size: var(--font-xs);
 }
 
 .statLabel {
-  color: #8090a0;
+  color: var(--color-text-tertiary);
   font-size: 0.68rem;
 }
 
 .statValue {
-  color: #e0e0e0;
+  color: var(--color-text-primary);
   font-weight: 500;
-  font-size: 0.72rem;
+  font-size: var(--font-xs);
 }
 
 .buttonGroup {
   display: flex;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .controlButton {
-  padding: 5px 0;
+  padding: var(--space-2) 0;
   background: transparent;
-  border: 1px solid #2d4059;
-  border-radius: 4px;
-  color: #c0c8d0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
   font-size: 0.68rem;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition: background var(--duration-base), border-color var(--duration-base);
 }
 
 .controlButton:hover {
-  background: #1e2a3a;
-  border-color: #4cc9f0;
+  background: var(--color-bg-elevated);
+  border-color: var(--color-accent);
 }
 
 .controlButton:disabled {
@@ -231,35 +231,35 @@
 
 .controlButton:disabled:hover {
   background: transparent;
-  border-color: #2d4059;
+  border-color: var(--color-border);
 }
 
 .controlButtonAccent {
-  padding: 6px 0;
-  background: rgba(76, 201, 240, 0.1);
-  border: 1px solid #4cc9f0;
-  border-radius: 4px;
-  color: #4cc9f0;
+  padding: var(--space-3) 0;
+  background: var(--color-accent-soft);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  color: var(--color-accent);
   font-size: 0.68rem;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background var(--duration-base);
 }
 
 .controlButtonAccent:hover {
-  background: rgba(76, 201, 240, 0.2);
+  background: var(--color-accent-strong);
 }
 
 .divider {
   border: none;
-  border-top: 1px solid #2d4059;
-  margin: 2px 0;
+  border-top: 1px solid var(--color-border);
+  margin: var(--space-1) 0;
 }
 
 .sectionTitle {
-  font-size: 0.65rem;
+  font-size: var(--font-2xs);
   font-weight: 600;
-  color: #4cc9f0;
+  color: var(--color-accent);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -267,37 +267,37 @@
 .fieldRow {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 0.72rem;
+  gap: var(--space-3);
+  font-size: var(--font-xs);
 }
 
 .speedInput {
   flex: 1;
-  accent-color: #4cc9f0;
+  accent-color: var(--color-accent);
   cursor: pointer;
 }
 
 .checkRow {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 0.65rem;
-  color: #8090a0;
+  gap: var(--space-3);
+  font-size: var(--font-2xs);
+  color: var(--color-text-tertiary);
   cursor: pointer;
 }
 
 .checkRow input[type="checkbox"] {
-  accent-color: #4cc9f0;
+  accent-color: var(--color-accent);
 }
 
 .viewerSelect {
   width: 100%;
-  padding: 3px 6px;
-  background: #0d1117;
-  border: 1px solid #2d4059;
-  border-radius: 4px;
-  color: #e0e0e0;
-  font-size: 0.65rem;
+  padding: var(--space-1) var(--space-3);
+  background: var(--color-bg-canvas);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font-size: var(--font-2xs);
   font-family: inherit;
   cursor: pointer;
 }
@@ -305,9 +305,9 @@
 .colorPicker {
   width: 40px;
   height: 24px;
-  border: 1px solid #2d4059;
-  border-radius: 4px;
-  background: #0d1117;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-canvas);
   cursor: pointer;
   padding: 2px;
   margin-left: auto;
@@ -315,11 +315,11 @@
 
 .brushInput {
   width: 44px;
-  padding: 3px 4px;
-  background: #0d1117;
-  border: 1px solid #2d4059;
-  border-radius: 4px;
-  color: #e0e0e0;
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-bg-canvas);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
   font-size: 0.68rem;
   font-family: inherit;
   text-align: center;
@@ -327,18 +327,18 @@
 
 .hint {
   font-size: 0.55rem;
-  color: #506070;
+  color: var(--color-text-muted);
   font-style: italic;
   line-height: 1.4;
 }
 
 .error {
-  padding: 6px;
+  padding: var(--space-3);
   background: rgba(200, 50, 50, 0.15);
   border: 1px solid rgba(200, 50, 50, 0.3);
-  border-radius: 4px;
-  color: #e08080;
-  font-size: 0.65rem;
+  border-radius: var(--radius-md);
+  color: var(--color-danger);
+  font-size: var(--font-2xs);
   line-height: 1.4;
   word-break: break-word;
 }
@@ -349,10 +349,10 @@
   left: 0;
   right: 0;
   z-index: 20;
-  padding: 8px 16px;
+  padding: var(--space-4) var(--space-8);
   background: rgba(200, 40, 40, 0.92);
   color: #fff;
-  font-size: 0.75rem;
+  font-size: var(--font-sm);
   font-weight: 600;
   text-align: center;
   pointer-events: auto;
@@ -365,7 +365,7 @@
   flex: 1;
   position: relative;
   overflow: hidden;
-  background: #0d1117;
+  background: var(--color-bg-canvas);
   cursor: grab;
 }
 
@@ -379,74 +379,74 @@
 
 .viewerBar {
   position: absolute;
-  top: 8px;
+  top: var(--space-4);
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  gap: 2px;
-  background: rgba(22, 33, 62, 0.85);
-  border: 1px solid #2d4059;
-  border-radius: 6px;
-  padding: 3px;
+  gap: var(--space-1);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-1);
   z-index: 5;
 }
 
 .viewerTab {
-  padding: 4px 12px;
+  padding: var(--space-2) var(--space-6);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 4px;
-  color: #8090a0;
-  font-size: 0.65rem;
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-2xs);
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--duration-base);
   white-space: nowrap;
 }
 
 .viewerTab:hover {
-  color: #e0e0e0;
-  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-primary);
+  background: var(--color-overlay-hover-weak);
 }
 
 .viewerTabActive {
-  color: #4cc9f0;
-  background: rgba(76, 201, 240, 0.12);
-  border-color: #4cc9f0;
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent);
 }
 
 /* --- Bottom overlay: Transport bar --- */
 
 .transportBar {
   position: absolute;
-  bottom: 12px;
+  bottom: var(--space-6);
   left: 50%;
   transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 4px;
-  background: rgba(22, 33, 62, 0.9);
-  border: 1px solid #2d4059;
-  border-radius: 8px;
-  padding: 6px 12px;
+  gap: var(--space-2);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: var(--space-3) var(--space-6);
   z-index: 5;
 }
 
 .transportBtn {
   background: transparent;
-  border: 1px solid #2d4059;
-  border-radius: 4px;
-  color: #c0c8d0;
-  font-size: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-size: var(--font-sm);
   cursor: pointer;
-  padding: 4px 8px;
-  transition: background 0.15s, border-color 0.15s;
+  padding: var(--space-2) var(--space-4);
+  transition: background var(--duration-base), border-color var(--duration-base);
   line-height: 1;
 }
 
 .transportBtn:hover {
-  background: rgba(76, 201, 240, 0.12);
-  border-color: #4cc9f0;
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent);
 }
 
 .transportBtn:disabled {
@@ -456,39 +456,39 @@
 
 .transportBtn:disabled:hover {
   background: transparent;
-  border-color: #2d4059;
+  border-color: var(--color-border);
 }
 
 .transportDivider {
   width: 1px;
   height: 18px;
-  background: #2d4059;
-  margin: 0 4px;
+  background: var(--color-border);
+  margin: 0 var(--space-2);
 }
 
 .transportStat {
-  font-size: 0.6rem;
-  color: #8090a0;
+  font-size: var(--font-3xs);
+  color: var(--color-text-tertiary);
   white-space: nowrap;
-  padding: 0 4px;
+  padding: 0 var(--space-2);
 }
 
 .transportSpeed {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .transportSpeedLabel {
   font-size: 0.55rem;
-  color: #6080a0;
+  color: var(--color-text-muted);
   white-space: nowrap;
   min-width: 36px;
 }
 
 .transportSlider {
   width: 60px;
-  accent-color: #4cc9f0;
+  accent-color: var(--color-accent);
   cursor: pointer;
   height: 12px;
 }
@@ -496,14 +496,14 @@
 .transportCheck {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
   font-size: 0.55rem;
-  color: #6080a0;
+  color: var(--color-text-muted);
   cursor: pointer;
 }
 
 .transportCheck input[type="checkbox"] {
-  accent-color: #4cc9f0;
+  accent-color: var(--color-accent);
   width: 12px;
   height: 12px;
 }
@@ -512,11 +512,11 @@
 
 .statsOverlay {
   position: absolute;
-  top: 8px;
-  left: 8px;
+  top: var(--space-4);
+  left: var(--space-4);
   z-index: 4;
   display: flex;
-  gap: 12px;
+  gap: var(--space-6);
   font-size: 0.58rem;
   color: rgba(128, 144, 160, 0.7);
   pointer-events: none;
@@ -527,37 +527,37 @@
 .zoomControls {
   position: absolute;
   bottom: 60px;
-  left: 8px;
+  left: var(--space-4);
   z-index: 5;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .zoomBtn {
   width: 28px;
   height: 28px;
-  background: rgba(30, 42, 58, 0.9);
-  border: 1px solid #2d4059;
-  border-radius: 4px;
-  color: #c0c8d0;
-  font-size: 0.85rem;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-size: var(--font-base);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s, border-color 0.15s;
+  transition: background var(--duration-base), border-color var(--duration-base);
 }
 
 .zoomBtn:hover {
-  background: #2d4059;
-  border-color: #4cc9f0;
+  background: var(--color-border);
+  border-color: var(--color-accent);
 }
 
 .zoomBtnActive {
-  color: #4cc9f0;
-  border-color: #4cc9f0;
-  background: rgba(76, 201, 240, 0.12);
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
 }
 
 /* --- Input mapping tabs (in brush panel) --- */
@@ -565,30 +565,30 @@
 .mappingTabs {
   display: flex;
   flex-wrap: wrap;
-  gap: 2px;
-  margin-bottom: 4px;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
 }
 
 .mappingTab {
-  padding: 3px 8px;
+  padding: var(--space-1) var(--space-4);
   background: transparent;
-  border: 1px solid #2d4059;
-  border-radius: 4px;
-  color: #8090a0;
-  font-size: 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-3xs);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--duration-base);
 }
 
 .mappingTab:hover {
-  color: #e0e0e0;
-  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-primary);
+  background: var(--color-overlay-hover-weak);
 }
 
 .mappingTabActive {
-  color: #4cc9f0;
-  background: rgba(76, 201, 240, 0.12);
-  border-color: #4cc9f0;
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent);
 }
 
 /* --- Overlay (unlimited gens message) --- */
@@ -598,12 +598,12 @@
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  background: rgba(13, 17, 23, 0.85);
-  border: 1px solid #2d4059;
-  border-radius: 8px;
-  padding: 16px 24px;
-  color: #8090a0;
-  font-size: 0.75rem;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: var(--space-8) var(--space-12);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-sm);
   text-align: center;
   max-width: 280px;
   line-height: 1.5;
@@ -619,30 +619,30 @@
 
 .copyButton {
   position: absolute;
-  top: 4px;
-  right: 4px;
-  padding: 2px 8px;
-  background: #2d4059;
-  border: 1px solid #4cc9f0;
-  border-radius: 3px;
-  color: #4cc9f0;
+  top: var(--space-2);
+  right: var(--space-2);
+  padding: var(--space-1) var(--space-4);
+  background: var(--color-border);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  color: var(--color-accent);
   font-size: 0.55rem;
   cursor: pointer;
   z-index: 1;
 }
 
 .copyButton:hover {
-  background: #3d5069;
+  background: var(--color-border-muted);
 }
 
 .codeBlock {
   margin: 0;
-  padding: 6px;
-  background: #0d1117;
-  border: 1px solid #2d4059;
-  border-radius: 4px;
-  color: #a0c0e0;
-  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  padding: var(--space-3);
+  background: var(--color-bg-canvas);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
   font-size: 0.5rem;
   line-height: 1.4;
   overflow-x: auto;

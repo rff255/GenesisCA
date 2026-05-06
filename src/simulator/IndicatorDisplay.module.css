@@ -1,39 +1,39 @@
 .container {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-3);
   overflow-y: auto;
   flex: 1;
   min-height: 0;
 }
 
 .indicator {
-  background: rgba(13, 17, 23, 0.5);
-  border: 1px solid #2d4059;
-  border-radius: 4px;
-  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.20);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
 }
 
 .header {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .eyeBtn {
   background: none;
   border: none;
   cursor: pointer;
-  font-size: 0.7rem;
+  font-size: var(--font-xs);
   padding: 0;
   line-height: 1;
-  color: #8090a0;
+  color: var(--color-text-tertiary);
   width: 16px;
   text-align: center;
 }
 
 .eyeActive {
-  color: #4cc9f0;
+  color: var(--color-accent);
 }
 
 .eyeDisabled {
@@ -48,23 +48,23 @@
   font-size: 0.5rem;
   padding: 0;
   line-height: 1;
-  color: #6080a0;
+  color: var(--color-text-muted);
   width: 14px;
   text-align: center;
-  transition: color 0.15s;
+  transition: color var(--duration-base);
 }
 
 .chartBtn:hover {
-  color: #4cc9f0;
+  color: var(--color-accent);
 }
 
 .chartBtnActive {
-  color: #4cc9f0;
+  color: var(--color-accent);
 }
 
 .name {
-  font-size: 0.7rem;
-  color: #e0e0e0;
+  font-size: var(--font-xs);
+  color: var(--color-text-primary);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -74,30 +74,30 @@
 .badge {
   font-size: 0.55rem;
   font-weight: 700;
-  color: #0d1117;
-  background: #4cc9f0;
-  border-radius: 3px;
-  padding: 0 3px;
+  color: var(--color-bg-canvas);
+  background: var(--color-accent);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
   line-height: 1.4;
 }
 
 .scalarValue {
-  font-size: 0.75rem;
-  color: #4cc9f0;
+  font-size: var(--font-sm);
+  color: var(--color-accent);
   font-weight: 600;
-  margin-top: 2px;
-  padding-left: 20px;
-  font-family: monospace;
+  margin-top: var(--space-1);
+  padding-left: var(--space-10);
+  font-family: var(--font-family-mono);
 }
 
 .sparklineWrap {
-  margin-top: 4px;
-  border-radius: 3px;
+  margin-top: var(--space-2);
+  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 
 .freqTable {
-  margin-top: 4px;
+  margin-top: var(--space-2);
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -108,17 +108,17 @@
 .freqRow {
   display: flex;
   justify-content: space-between;
-  font-size: 0.65rem;
-  padding: 1px 4px 1px 20px;
+  font-size: var(--font-2xs);
+  padding: 1px var(--space-2) 1px var(--space-10);
 }
 
 /* Histogram bar row */
 .freqBarRow {
   display: flex;
   align-items: center;
-  font-size: 0.65rem;
-  padding: 1px 4px 1px 4px;
-  gap: 4px;
+  font-size: var(--font-2xs);
+  padding: 1px var(--space-2) 1px var(--space-2);
+  gap: var(--space-2);
 }
 
 .freqBarRow .freqKey {
@@ -133,14 +133,14 @@
 .freqBarTrack {
   flex: 1;
   height: 10px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-overlay-row);
   border-radius: 2px;
   overflow: hidden;
 }
 
 .freqBar {
   height: 100%;
-  background: rgba(76, 201, 240, 0.45);
+  background: var(--color-accent-strong);
   border-radius: 2px;
   min-width: 1px;
   transition: width 0.1s ease-out;
@@ -154,7 +154,7 @@
 }
 
 .freqKey {
-  color: #b0b8c0;
+  color: var(--color-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -162,20 +162,20 @@
 }
 
 .freqCount {
-  color: #4cc9f0;
-  font-family: monospace;
-  font-size: 0.6rem;
-  margin-left: 8px;
+  color: var(--color-accent);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-3xs);
+  margin-left: var(--space-4);
   flex-shrink: 0;
 }
 
 .resizeHandle {
   height: 5px;
-  margin-top: 2px;
+  margin-top: var(--space-1);
   cursor: ns-resize;
-  border-radius: 0 0 3px 3px;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
   background: transparent;
-  transition: background 0.15s;
+  transition: background var(--duration-base);
   position: relative;
 }
 
@@ -186,14 +186,14 @@
   right: 25%;
   top: 2px;
   height: 1px;
-  background: #3d5070;
+  background: var(--color-border-muted);
   border-radius: 1px;
 }
 
 .resizeHandle:hover {
-  background: rgba(76, 201, 240, 0.1);
+  background: var(--color-accent-soft);
 }
 
 .resizeHandle:hover::after {
-  background: #4cc9f0;
+  background: var(--color-accent);
 }

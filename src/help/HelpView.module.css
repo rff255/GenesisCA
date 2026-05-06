@@ -7,131 +7,131 @@
 .toc {
   width: 220px;
   min-width: 220px;
-  background: #0d1117;
-  border-right: 1px solid #2d4059;
-  padding: 16px 0;
+  background: var(--color-bg-canvas);
+  border-right: 1px solid var(--color-border);
+  padding: var(--space-8) 0;
   overflow-y: auto;
 }
 
 .tocTitle {
-  font-size: 0.75rem;
+  font-size: var(--font-sm);
   font-weight: 600;
-  color: #4cc9f0;
+  color: var(--color-accent);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  padding: 0 16px 8px;
+  padding: 0 var(--space-8) var(--space-4);
 }
 
 .tocItem {
   display: block;
   width: 100%;
-  padding: 6px 16px;
+  padding: var(--space-3) var(--space-8);
   background: none;
   border: none;
-  color: #8899aa;
-  font-size: 0.75rem;
+  color: var(--color-text-subtle);
+  font-size: var(--font-sm);
   text-align: left;
   cursor: pointer;
   font-family: inherit;
 }
 
 .tocItem:hover {
-  color: #e0e0e0;
-  background: rgba(76, 201, 240, 0.08);
+  color: var(--color-text-primary);
+  background: var(--color-accent-soft);
 }
 
 .content {
   flex: 1;
   overflow-y: auto;
-  padding: 32px 48px;
+  padding: var(--space-16) var(--space-24);
 }
 
 .section {
-  margin-bottom: 40px;
+  margin-bottom: var(--space-24);
 }
 
 .h1 {
-  font-size: 1.6rem;
+  font-size: var(--font-xl);
   font-weight: 700;
-  color: #4cc9f0;
-  margin: 0 0 8px;
+  color: var(--color-accent);
+  margin: 0 0 var(--space-4);
 }
 
 .h2 {
-  font-size: 1.1rem;
+  font-size: var(--font-lg);
   font-weight: 600;
-  color: #e0e0e0;
-  margin: 32px 0 12px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid #2d4059;
+  color: var(--color-text-primary);
+  margin: var(--space-16) 0 var(--space-6);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .h3 {
-  font-size: 0.9rem;
+  font-size: var(--font-base);
   font-weight: 600;
-  color: #c0c8d0;
-  margin: 20px 0 8px;
+  color: var(--color-text-secondary);
+  margin: var(--space-10) 0 var(--space-4);
 }
 
 .p {
-  font-size: 0.82rem;
-  color: #a0b0c0;
+  font-size: var(--font-md);
+  color: var(--color-text-secondary);
   line-height: 1.65;
-  margin: 8px 0;
+  margin: var(--space-4) 0;
 }
 
 .list {
-  font-size: 0.82rem;
-  color: #a0b0c0;
+  font-size: var(--font-md);
+  color: var(--color-text-secondary);
   line-height: 1.65;
-  margin: 8px 0 8px 20px;
+  margin: var(--space-4) 0 var(--space-4) var(--space-10);
   padding: 0;
 }
 
 .list li {
-  margin-bottom: 4px;
+  margin-bottom: var(--space-2);
 }
 
 .kbd {
-  background: #1a2538;
-  border: 1px solid #2d4059;
-  border-radius: 3px;
-  padding: 1px 5px;
-  font-family: monospace;
-  font-size: 0.75rem;
-  color: #e0e0e0;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-2);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-sm);
+  color: var(--color-text-primary);
 }
 
 .nodeCategory {
   display: inline-block;
-  padding: 2px 8px;
-  border-radius: 3px;
-  font-size: 0.7rem;
+  padding: var(--space-1) var(--space-4);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-xs);
   font-weight: 600;
   color: #fff;
-  margin-right: 6px;
+  margin-right: var(--space-3);
   text-transform: uppercase;
 }
 
 .table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.78rem;
-  margin: 12px 0;
+  font-size: var(--font-sm);
+  margin: var(--space-6) 0;
 }
 
 .table th {
   text-align: left;
-  color: #c0c8d0;
-  border-bottom: 1px solid #2d4059;
-  padding: 6px 10px;
+  color: var(--color-text-secondary);
+  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-3) var(--space-5);
   font-weight: 600;
 }
 
 .table td {
-  color: #a0b0c0;
-  border-bottom: 1px solid rgba(45, 64, 89, 0.4);
-  padding: 5px 10px;
+  color: var(--color-text-secondary);
+  border-bottom: 1px solid var(--color-border-muted);
+  padding: var(--space-2) var(--space-5);
   vertical-align: top;
 }
 
@@ -142,8 +142,8 @@
 }
 
 .subtitle {
-  font-size: 0.9rem;
-  color: #8899aa;
-  margin: 0 0 24px;
+  font-size: var(--font-base);
+  color: var(--color-text-subtle);
+  margin: 0 0 var(--space-12);
   font-style: italic;
 }

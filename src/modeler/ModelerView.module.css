@@ -7,7 +7,7 @@
   flex: 1;
   position: relative;
   overflow: hidden;
-  background: #0d1117;
+  background: var(--color-bg-canvas);
 }
 
 /* Generic expand tab for the right-side panel (appears when no right panel is open).
@@ -15,21 +15,21 @@
    right edge of the graph area. */
 .rightPanelExpandBtn {
   position: absolute;
-  top: 8px;
+  top: var(--space-4);
   right: 0;
   z-index: 10;
-  background: rgba(30, 42, 58, 0.9);
-  border: 1px solid #2d4059;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
   border-right: none;
-  border-radius: 4px 0 0 4px;
-  color: #6080a0;
-  font-size: 0.9rem;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  color: var(--color-text-muted);
+  font-size: var(--font-base);
   cursor: pointer;
-  padding: 12px 4px;
-  transition: color 0.15s;
+  padding: var(--space-6) var(--space-2);
+  transition: color var(--duration-base);
   line-height: 1;
 }
 
 .rightPanelExpandBtn:hover {
-  color: #4cc9f0;
+  color: var(--color-accent);
 }

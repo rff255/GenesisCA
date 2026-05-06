@@ -1,30 +1,29 @@
 .fileMenu {
   display: flex;
-  gap: 6px;
+  gap: var(--space-3);
   align-items: center;
-  margin-left: auto;
 }
 
 .menuButton {
-  padding: 5px 12px;
+  padding: var(--space-2) var(--space-6);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 4px;
-  color: #8090a0;
-  font-size: 0.75rem;
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-sm);
   font-weight: 500;
   cursor: pointer;
-  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  transition: color var(--duration-base), background var(--duration-base), border-color var(--duration-base);
 }
 
 .menuButton:hover {
-  color: #c0c8d0;
-  background: rgba(255, 255, 255, 0.03);
-  border-color: #2d4059;
+  color: var(--color-text-secondary);
+  background: var(--color-overlay-hover-weak);
+  border-color: var(--color-border);
 }
 
 .dirtyIndicator {
-  color: #4cc9f0;
+  color: var(--color-accent);
   font-size: 1rem;
   font-weight: 700;
   line-height: 1;

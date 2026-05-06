@@ -13,45 +13,45 @@ import { useState } from 'react';
 import { IndicatorSparkline } from '../simulator/IndicatorSparkline';
 import { NodePreview } from '../modeler/panels/NodePreview';
 import type { NodeTypeDef } from '../modeler/vpl/types';
+import { useThemeTokens } from '../styles/useThemeTokens';
 import styles from './StyleReferenceView.module.css';
 
 // ---------------------------------------------------------------------------
-// Token catalogues — single source of truth for what the swatches show.
-// Hex values are duplicated from tokens.css so we can render them as text
-// next to the swatch; the actual visual colour is pulled via var(--token).
+// Token catalogues — names only. Values are read from getComputedStyle on
+// the document root so the displayed hex always matches the active theme.
 // ---------------------------------------------------------------------------
 
-const COLOR_TOKENS: { name: string; value: string }[] = [
-  { name: '--color-bg-app', value: '#1a1a2e' },
-  { name: '--color-bg-canvas', value: '#0d1117' },
-  { name: '--color-bg-panel', value: '#16213e' },
-  { name: '--color-bg-elevated', value: '#1e2a3a' },
-  { name: '--color-bg-activitybar', value: '#0f1a2e' },
-  { name: '--color-border', value: '#2d4059' },
-  { name: '--color-border-muted', value: '#4a6080' },
-  { name: '--color-border-danger', value: '#3d2020' },
-  { name: '--color-text-primary', value: '#e0e0e0' },
-  { name: '--color-text-secondary', value: '#c0c8d0' },
-  { name: '--color-text-tertiary', value: '#8090a0' },
-  { name: '--color-text-muted', value: '#6080a0' },
-  { name: '--color-text-subtle', value: '#8899aa' },
-  { name: '--color-accent', value: '#4cc9f0' },
-  { name: '--color-accent-hover', value: '#66d9ff' },
-  { name: '--color-danger', value: '#c06060' },
-  { name: '--color-danger-hover', value: '#e05050' },
-  { name: '--color-warning', value: '#ffb74d' },
-  { name: '--color-success', value: '#51cf66' },
-  { name: '--color-info', value: '#339af0' },
-  { name: '--color-channel-r', value: '#ff6b6b' },
-  { name: '--color-channel-g', value: '#51cf66' },
-  { name: '--color-channel-b', value: '#339af0' },
-  { name: '--color-grid-active', value: '#4cc9f0' },
-  { name: '--color-grid-tagged', value: '#26a69a' },
-  { name: '--color-grid-center', value: '#e8a838' },
-  { name: '--scrollbar-thumb', value: '#2d4059' },
-  { name: '--scrollbar-thumb-hover', value: '#4a6080' },
-  { name: '--scrollbar-thumb-active', value: '#4cc9f0' },
-];
+const COLOR_TOKEN_NAMES = [
+  '--color-bg-app',
+  '--color-bg-canvas',
+  '--color-bg-panel',
+  '--color-bg-elevated',
+  '--color-bg-activitybar',
+  '--color-border',
+  '--color-border-muted',
+  '--color-border-danger',
+  '--color-text-primary',
+  '--color-text-secondary',
+  '--color-text-tertiary',
+  '--color-text-muted',
+  '--color-text-subtle',
+  '--color-accent',
+  '--color-accent-hover',
+  '--color-danger',
+  '--color-danger-hover',
+  '--color-warning',
+  '--color-success',
+  '--color-info',
+  '--color-channel-r',
+  '--color-channel-g',
+  '--color-channel-b',
+  '--color-grid-active',
+  '--color-grid-tagged',
+  '--color-grid-center',
+  '--scrollbar-thumb',
+  '--scrollbar-thumb-hover',
+  '--scrollbar-thumb-active',
+] as const;
 
 const SPACE_TOKENS = [
   { name: '--space-1', px: 2 },
@@ -170,6 +170,11 @@ export function StyleReferenceView() {
   const [numberValue, setNumberValue] = useState(42);
   const [segmentedValue, setSegmentedValue] = useState<'list' | 'visual'>('list');
 
+  // Read live values for every colour token; re-runs on theme switch so
+  // displayed hex matches the active theme.
+  const colorValues = useThemeTokens(COLOR_TOKEN_NAMES);
+  const colorTokens = COLOR_TOKEN_NAMES.map((name, i) => ({ name, value: colorValues[i] || '' }));
+
   return (
     <div className={styles.page}>
       <div className={styles.container}>
@@ -189,7 +194,7 @@ export function StyleReferenceView() {
           <div className={styles.subsection}>
             <div className={styles.subsectionTitle}>Colours</div>
             <div className={styles.swatchGrid}>
-              {COLOR_TOKENS.map(t => (
+              {colorTokens.map(t => (
                 <div className={styles.swatchRow} key={t.name}>
                   <div className={styles.swatchChip} style={{ background: `var(${t.name})` }} />
                   <div className={styles.swatchInfo}>

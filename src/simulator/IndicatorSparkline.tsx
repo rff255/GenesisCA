@@ -1,4 +1,5 @@
 import { useRef, useEffect, useLayoutEffect, useState } from 'react';
+import { useThemeTokens } from '../styles/useThemeTokens';
 
 interface SparklineProps {
   data: number[];
@@ -6,10 +7,7 @@ interface SparklineProps {
   height: number;
 }
 
-const LINE_COLOR = '#4cc9f0';
-const FILL_COLOR = 'rgba(76, 201, 240, 0.12)';
-const AXIS_COLOR = '#506070';
-const LABEL_COLOR = '#8090a0';
+const TOKEN_NAMES = ['--color-accent', '--color-accent-soft', '--chart-axis', '--chart-label'] as const;
 const LABEL_FONT = '7.5px monospace';
 const LEFT_MARGIN = 24;
 const BOTTOM_MARGIN = 10;
@@ -28,6 +26,7 @@ export function IndicatorSparkline({ data, generation, height }: SparklineProps)
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
+  const [LINE_COLOR = '#4cc9f0', FILL_COLOR = 'rgba(76,201,240,0.12)', AXIS_COLOR = '#506070', LABEL_COLOR = '#8090a0'] = useThemeTokens(TOKEN_NAMES);
 
   // Measure container width. ResizeObserver keeps `width` in sync as the
   // element resizes AND when it transitions from display:none (0x0 content
@@ -137,7 +136,7 @@ export function IndicatorSparkline({ data, generation, height }: SparklineProps)
     ctx.lineWidth = 1.2;
     ctx.stroke();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, data.length, data[data.length - 1], generation, width, height]);
+  }, [data, data.length, data[data.length - 1], generation, width, height, LINE_COLOR, FILL_COLOR, AXIS_COLOR, LABEL_COLOR]);
 
   // Always mount the wrapper div so the ResizeObserver (set up in an empty-deps
   // effect above) sees a real DOM node on first mount and can measure width.
