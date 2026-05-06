@@ -10,7 +10,7 @@ import type { WebGPULayout } from '../../modeler/vpl/compiler/webgpu/layout';
 import type { WebGPUEntryPoints } from '../../modeler/vpl/compiler/webgpu/compile';
 import {
   createWebGPURuntime, destroyWebGPURuntime, isWebGPUAvailable, shaderHashOf,
-  setupBuffersAndPipelines, uploadAttrs, uploadNeighborIndices,
+  setupBuffersAndPipelines, uploadAttrs, uploadNeighborOffsets,
   uploadModelAttrs, uploadActiveViewer, uploadIndicators, uploadIndicatorsAt, dispatchStep,
   dispatchOutputMapping, dispatchColorPassAndPresent, presentToCanvas, readbackAttrs, readbackColors,
   readbackBatched, unpackAttrsFromReadback, unpackAttrFromReadback, resetStopFlag, seedRngState,
@@ -339,7 +339,7 @@ function startWebGPUInit(
         return;
       }
       uploadAttrs(rt, readAttrs);
-      uploadNeighborIndices(rt, nbrIndices);
+      uploadNeighborOffsets(rt);
       uploadModelAttrs(rt, cachedModelAttrs as Record<string, number>);
       uploadActiveViewer(rt, viewerIdMap[activeViewer] ?? -1);
       seedRngState(rt, rngState[0] ?? 0x12345678);
@@ -2140,7 +2140,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // Sync restored state to GPU when WebGPU is active.
       if (useWebGPU && webgpuRuntime?.stepReady) {
         uploadAttrs(webgpuRuntime, readAttrs);
-        uploadNeighborIndices(webgpuRuntime, nbrIndices);
+        uploadNeighborOffsets(webgpuRuntime);
         uploadModelAttrs(webgpuRuntime, cachedModelAttrs as Record<string, number>);
         uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
         syncIndicatorsCpuToGpu();

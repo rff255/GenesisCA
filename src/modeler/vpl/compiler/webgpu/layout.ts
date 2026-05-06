@@ -6,8 +6,12 @@
  * formulas reuse the WASM ones: `cellsPerAttr = total + 1` when boundary is
  * "constant" so the sentinel cell still works for out-of-grid neighbour reads.
  *
- * Step 1 scope: just enough shape so the worker can allocate buffers in
- * step 2. Detailed offsets and per-attribute partitioning come with step 2.
+ * Neighbour storage uses IMPLICIT lookup: rather than precomputing a per-cell
+ * `(total × nbr_size)` index table (catastrophic on huge grids — 1.4 GB for
+ * MNCA at 1000²), we upload only the relative coordinate offsets per
+ * neighbourhood (`nbr.size × 2 × 4` bytes — a few KB total) and let the WGSL
+ * shader compute neighbour cell indices inline via the `nbrCellIdx` helper.
+ * See docs/HUGE_GRID_OPTIMIZATIONS.md §2.1 for the rationale.
  */
 
 import type { CAModel } from '../../../../model/types';
@@ -26,13 +30,18 @@ export interface WebGPULayoutAttr {
 
 export interface WebGPULayoutNbr {
   id: string;
-  size: number;        // neighbour count per cell
-  /** Element count in the index table (total * size). */
+  size: number;        // neighbour count per cell (= coords.length)
+  /** Element count in the offsets buffer for this neighbourhood. = size * 2
+   *  (one i32 each for dRow, dCol, per neighbour offset). */
   count: number;
-  /** Offset within the nbrIndices buffer, in bytes. */
+  /** Offset within the nbrOffsets buffer, in bytes. */
   byteOffset: number;
-  /** Offset within the buffer when accessed as `array<i32>` — = byteOffset / 4. */
+  /** Offset within the buffer when accessed as `array<i32>` — = byteOffset / 4.
+   *  Compiler emits this as the `baseOffset` arg to `nbrCellIdx`. */
   wordOffset: number;
+  /** Pre-flattened relative coords [dRow, dCol] per neighbour — uploaded
+   *  verbatim into the offsets buffer at `byteOffset`. */
+  coords: Array<[number, number]>;
 }
 
 export interface WebGPULayout {
@@ -41,10 +50,19 @@ export interface WebGPULayout {
   /** total + 1 when boundary is "constant", else total. Sentinel slot is `total`. */
   cellsPerAttr: number;
   sentinelIndex: number;
+  /** Grid dimensions (baked into the WGSL `nbrCellIdx` helper as literals).
+   *  Zero values (degenerate empty model) are clamped to 1 to keep the WGSL
+   *  modulo math defined. */
+  gridWidth: number;
+  gridHeight: number;
+  /** Boundary mode (selects which `nbrCellIdx` helper variant the encoder
+   *  emits — torus wraps, constant returns the sentinel). */
+  boundaryTreatment: 'torus' | 'constant';
   /** Total bytes for one attrs buffer (read or write). */
   attrsBytes: number;
   attrs: WebGPULayoutAttr[];
-  /** Total bytes for the neighbour-index buffer. */
+  /** Total bytes for the small neighbour-offsets buffer (sum across
+   *  neighbourhoods of `size × 2 × 4`). Independent of grid size. */
   nbrBytes: number;
   nbrs: WebGPULayoutNbr[];
   /** Bytes for the colors buffer (RGBA8 = 4 per cell). */
@@ -73,10 +91,13 @@ export interface WebGPULayout {
  * shader module preamble.
  */
 export function computeWebGPULayout(model: CAModel): WebGPULayout {
-  const total = (model.properties.gridWidth || 1) * (model.properties.gridHeight || 1);
+  const gridWidth = Math.max(1, model.properties.gridWidth || 1);
+  const gridHeight = Math.max(1, model.properties.gridHeight || 1);
+  const total = gridWidth * gridHeight;
   const isConstantBoundary = model.properties.boundaryTreatment === 'constant';
   const cellsPerAttr = isConstantBoundary ? total + 1 : total;
   const sentinelIndex = isConstantBoundary ? total : -1;
+  const boundaryTreatment: 'torus' | 'constant' = isConstantBoundary ? 'constant' : 'torus';
 
   const cellAttrs = (model.attributes || []).filter(a => !a.isModelAttribute);
   const modelAttrs = (model.attributes || []).filter(a => a.isModelAttribute);
@@ -103,14 +124,23 @@ export function computeWebGPULayout(model: CAModel): WebGPULayout {
   // but the simulator doesn't crash on the empty model).
   const attrsBytes = Math.max(4, attrCursor);
 
-  // Neighbour index tables (one per neighbourhood). Each entry is i32.
+  // Neighbour offsets table (one block per neighbourhood). Each block holds
+  // `size × 2` i32 entries — pairs of (dRow, dCol). The shader-side
+  // `nbrCellIdx` helper reads these and computes the linear cell index inline,
+  // applying the boundary rule. Total bytes are independent of grid size.
   let nbrCursor = 0;
   const nbrs: WebGPULayoutNbr[] = (model.neighborhoods || []).map(n => {
-    const count = total * n.coords.length;
+    const size = n.coords.length;
+    const count = size * 2;
     const bytes = count * 4;
+    // Defensive clone: (a) coerce each pair into a fresh tuple so later edits
+    // to the model's coords array can't mutate the layout view, (b) coerce
+    // each component to int32 so non-integer junk in a saved file lands as 0.
+    const coords: Array<[number, number]> = n.coords.map(c => [(c[0] | 0), (c[1] | 0)]);
     const entry: WebGPULayoutNbr = {
-      id: n.id, size: n.coords.length, count,
+      id: n.id, size, count,
       byteOffset: nbrCursor, wordOffset: nbrCursor / 4,
+      coords,
     };
     nbrCursor += bytes;
     return entry;
@@ -144,6 +174,9 @@ export function computeWebGPULayout(model: CAModel): WebGPULayout {
     total,
     cellsPerAttr,
     sentinelIndex,
+    gridWidth,
+    gridHeight,
+    boundaryTreatment,
     attrsBytes,
     attrs,
     nbrBytes,
