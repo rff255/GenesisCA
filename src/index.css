@@ -19,6 +19,7 @@ body {
   font-size: var(--font-md);
   background: var(--color-bg-app);
   color: var(--color-text-primary);
+  text-shadow: var(--text-shadow);
   -webkit-font-smoothing: antialiased;
 }
 
