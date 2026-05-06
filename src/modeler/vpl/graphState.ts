@@ -29,8 +29,21 @@ export function setShowPortLabels(val: boolean) {
 /** Info about the handle being dragged for connection (for port compatibility highlighting) */
 export let connectingFrom: { category: string; kind: string; dataType?: string; nodeId: string } | null = null;
 
+const connectingFromListeners = new Set<() => void>();
+
+/** Subscribe to connectingFrom changes. Used by CaNode via useSyncExternalStore
+ *  so memoized nodes re-render with the right port-compatibility highlighting
+ *  the moment a drag starts and the moment it ends. */
+export function subscribeConnectingFrom(fn: () => void): () => void {
+  connectingFromListeners.add(fn);
+  return () => { connectingFromListeners.delete(fn); };
+}
+
 export function setConnectingFrom(val: typeof connectingFrom) {
+  if (connectingFrom === val) return;
+  // Compare by reference is enough — callers either pass null or a fresh object.
   connectingFrom = val;
+  connectingFromListeners.forEach(fn => fn());
 }
 
 // ---------------------------------------------------------------------------

@@ -59,25 +59,31 @@
   border-color: var(--color-accent);
 }
 
+/* Graph handle ports use GenesisCA's visual identity colours, not the
+ * theme palette — green flow / cyan value were the original convention
+ * and shouldn't drift between Default and Blender. (The palette preview
+ * dots in PalettePanelContent.module.css use --color-port-flow /
+ * --color-port-value, which CAN be theme-tinted.) */
 .handleFlow {
   width: 10px !important;
   height: 10px !important;
-  background: var(--color-port-flow) !important;
-  border: 2px solid var(--color-node-flow) !important;
+  background: #4caf50 !important;
+  border: 2px solid #1b5e20 !important;
   transform-origin: center;
 }
 
 .handleValue {
   width: 8px !important;
   height: 8px !important;
-  background: var(--color-port-value) !important;
-  border: 2px solid var(--color-node-data) !important;
+  background: #4cc9f0 !important;
+  border: 2px solid #0d47a1 !important;
   transform-origin: center;
 }
 
-/* Unconnected value ports: filled with node body background */
+/* Unconnected value ports: slightly darker than the node body so the
+ * port reads as an 'empty hole'. */
 .handleUnconnected {
-  background: var(--color-bg-elevated) !important;
+  background: #1a2435 !important;
 }
 
 /* --- External port labels (outside the node) --- */
