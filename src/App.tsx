@@ -5,9 +5,10 @@ import { ModelerView } from './modeler/ModelerView';
 import { SimulatorView } from './simulator/SimulatorView';
 import { HelpView } from './help/HelpView';
 import { ModelsLibrary } from './library/ModelsLibrary';
+import { StyleReferenceView } from './styleguide/StyleReferenceView';
 import styles from './App.module.css';
 
-type AppMode = 'modeler' | 'simulator' | 'help' | 'library';
+type AppMode = 'modeler' | 'simulator' | 'help' | 'library' | 'styleref';
 
 function AppInner() {
   // Every tab/reload lands on the Library — it's the natural starting point for
@@ -67,6 +68,14 @@ function AppInner() {
           >
             Library
           </button>
+          {import.meta.env.DEV && (
+            <button
+              className={`${styles.navButton} ${mode === 'styleref' ? styles.navButtonActive : ''}`}
+              onClick={() => setMode('styleref')}
+            >
+              Style Reference
+            </button>
+          )}
         </div>
         <span className={styles.modelName}>
           {model.properties.name}{isDirty && <span className={styles.dirtyIndicator}> *</span>}
@@ -80,6 +89,7 @@ function AppInner() {
         </div>
         {mode === 'help' && <HelpView />}
         {mode === 'library' && <ModelsLibrary onLoadModel={handleLoadLibraryModel} />}
+        {mode === 'styleref' && <StyleReferenceView />}
       </main>
     </div>
   );

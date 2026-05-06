@@ -1,0 +1,138 @@
+/* GenesisCA design tokens.
+ * Single source of truth for atomic visual values. CSS modules and inline
+ * styles should reference var(--token) instead of inlining literals.
+ *
+ * Imported by src/index.css so it loads before any module CSS evaluates.
+ */
+
+:root {
+  /* ------------------------------------------------------------------ */
+  /* Surfaces — darkest to lightest                                      */
+  /* ------------------------------------------------------------------ */
+  --color-bg-app:         #1a1a2e;
+  --color-bg-canvas:      #0d1117;
+  --color-bg-panel:       #16213e;
+  --color-bg-elevated:    #1e2a3a;
+  --color-bg-activitybar: #0f1a2e;
+
+  /* ------------------------------------------------------------------ */
+  /* Borders & dividers                                                  */
+  /* ------------------------------------------------------------------ */
+  --color-border:         #2d4059;
+  --color-border-muted:   #4a6080;
+  --color-border-danger:  #3d2020;
+
+  /* ------------------------------------------------------------------ */
+  /* Text — primary to muted                                             */
+  /* ------------------------------------------------------------------ */
+  --color-text-primary:   #e0e0e0;
+  --color-text-secondary: #c0c8d0;
+  --color-text-tertiary:  #8090a0;
+  --color-text-muted:     #6080a0;
+  --color-text-subtle:    #8899aa;
+
+  /* ------------------------------------------------------------------ */
+  /* Accent (cyan)                                                       */
+  /* ------------------------------------------------------------------ */
+  --color-accent:         #4cc9f0;
+  --color-accent-hover:   #66d9ff;
+  --color-accent-soft:    rgba(76, 201, 240, 0.10);
+  --color-accent-strong:  rgba(76, 201, 240, 0.30);
+
+  /* ------------------------------------------------------------------ */
+  /* Semantic                                                            */
+  /* ------------------------------------------------------------------ */
+  --color-danger:         #c06060;
+  --color-danger-hover:   #e05050;
+  --color-warning:        #ffb74d;
+  --color-success:        #51cf66;
+  --color-info:           #339af0;
+
+  /* ------------------------------------------------------------------ */
+  /* Hover overlays on dark surfaces                                     */
+  /* ------------------------------------------------------------------ */
+  --color-overlay-hover-weak:   rgba(255, 255, 255, 0.03);
+  --color-overlay-hover-medium: rgba(255, 255, 255, 0.06);
+  --color-overlay-row:          rgba(255, 255, 255, 0.02);
+
+  /* ------------------------------------------------------------------ */
+  /* RGB channel chips                                                   */
+  /* ------------------------------------------------------------------ */
+  --color-channel-r:      #ff6b6b;
+  --color-channel-g:      #51cf66;
+  --color-channel-b:      #339af0;
+
+  /* ------------------------------------------------------------------ */
+  /* Neighborhood grid cells                                             */
+  /* ------------------------------------------------------------------ */
+  --color-grid-active:    #4cc9f0;
+  --color-grid-tagged:    #26a69a;
+  --color-grid-center:    #e8a838;
+
+  /* ------------------------------------------------------------------ */
+  /* Spacing scale (px-based, 2-step)                                    */
+  /* ------------------------------------------------------------------ */
+  --space-1:  2px;
+  --space-2:  4px;
+  --space-3:  6px;
+  --space-4:  8px;
+  --space-5:  10px;
+  --space-6:  12px;
+  --space-8:  16px;
+  --space-10: 20px;
+  --space-12: 24px;
+  --space-16: 32px;
+  --space-24: 48px;
+
+  /* ------------------------------------------------------------------ */
+  /* Font sizes                                                          */
+  /* ------------------------------------------------------------------ */
+  --font-3xs:  0.6rem;
+  --font-2xs:  0.65rem;
+  --font-xs:   0.7rem;
+  --font-sm:   0.75rem;
+  --font-md:   0.8rem;
+  --font-base: 0.9rem;
+  --font-lg:   1.1rem;
+  --font-xl:   1.4rem;
+
+  /* ------------------------------------------------------------------ */
+  /* Radii                                                               */
+  /* ------------------------------------------------------------------ */
+  --radius-sm:   3px;
+  --radius-md:   4px;
+  --radius-lg:   6px;
+  --radius-xl:   8px;
+  --radius-pill: 12px;
+
+  /* ------------------------------------------------------------------ */
+  /* Shadows                                                             */
+  /* ------------------------------------------------------------------ */
+  --shadow-sm: 0 2px 8px  rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.6);
+
+  /* ------------------------------------------------------------------ */
+  /* Transitions                                                         */
+  /* ------------------------------------------------------------------ */
+  --duration-fast: 0.1s;
+  --duration-base: 0.15s;
+
+  /* ------------------------------------------------------------------ */
+  /* Scrollbars                                                          */
+  /* ------------------------------------------------------------------ */
+  --scrollbar-width:        10px;
+  --scrollbar-track:        transparent;
+  --scrollbar-thumb:        #2d4059;     /* same as --color-border */
+  --scrollbar-thumb-hover:  #4a6080;     /* same as --color-border-muted */
+  --scrollbar-thumb-active: #4cc9f0;     /* same as --color-accent */
+
+  /* ------------------------------------------------------------------ */
+  /* Layout primitives                                                   */
+  /* ------------------------------------------------------------------ */
+  --navbar-height:        48px;
+  --panel-width-default: 350px;
+  --panel-width-min:     200px;
+  --panel-width-max:     600px;
+  --resize-handle-width:   6px;
+}
