@@ -1709,6 +1709,28 @@ function compileFlowChain(ctx: CompileCtx, sourceNodeId: string, sourcePortId: s
       ctx.lines.push(`  for (var ${li}: i32 = 0; ${li} < ${cnt}; ${li} = ${li} + 1) {`);
       if (!compileFlowChain(ctx, node.id, 'body')) return false;
       ctx.lines.push(`  }`);
+    } else if (node.data.nodeType === 'forEachInArray') {
+      // Iterate over a typed-array source. The element is exposed via the node's
+      // `element` output port (cached as a ValueRef so body action-node input
+      // resolution finds it via the standard valueLocals path). Body value nodes
+      // emit inside the WGSL `for` block (lexically scoped) since
+      // preEmitValueNodes deliberately does NOT recurse into forEachInArray
+      // bodies — element-dependent expressions stay inside the iteration scope
+      // where the element variable is in scope.
+      const arrSource = ctx.inputToSource.get(`${node.id}:array`);
+      if (!arrSource) continue;
+      const arrRef = resolveInputArray(ctx, node, 'array');
+      if (!arrRef) {
+        ctx.errors.push(`forEachInArray: input "array" must come from an array-producing node`);
+        return false;
+      }
+      const fi = fresh(ctx, 'fei');
+      const elemName = fresh(ctx, 'feiE');
+      ctx.lines.push(`  for (var ${fi}: i32 = 0; ${fi} < ${arrRef.lenName}; ${fi} = ${fi} + 1) {`);
+      ctx.lines.push(`    let ${elemName}: ${arrRef.elemType} = ${arrLoad(arrRef, fi)};`);
+      setCachedPort(ctx, node.id, 'element', { expr: elemName, type: arrRef.elemType });
+      if (!compileFlowChain(ctx, node.id, 'body')) return false;
+      ctx.lines.push(`  }`);
     } else if (node.data.nodeType === 'switch') {
       const mode = (node.data.config.mode as string) || 'conditions';
       const firstMatchOnly = node.data.config.firstMatchOnly !== false;

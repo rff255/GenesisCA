@@ -3238,6 +3238,53 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
           ctx.emitter.br(0);
         });
       });
+    } else if (node.data.nodeType === 'forEachInArray') {
+      // Iterate over a typed-array source, exposing the per-iteration element
+      // via the node's `element` output port (cached as a LocalRef in
+      // valueLocals so body action-node input resolution finds it).
+      //
+      // Body value-emit scoping: WASM locals are function-scope (not
+      // block-scope), so we don't need to recompute element-dependent value
+      // nodes in a separate cache. Each value node's local-set bytecode is
+      // emitted inside the loop block once at compile time, runs each
+      // iteration with the current element. The pre-emit pass deliberately
+      // does NOT recurse into forEachInArray bodies (no `case` in visitFlow's
+      // switch) — body value sources emit inline here instead.
+      const arrSource = ctx.inputToSource.get(`${node.id}:array`);
+      if (!arrSource) continue; // empty body, skip
+      const arrRef = resolveInputArray(ctx, node, 'array');
+      if (!arrRef) {
+        ctx.errors.push(`forEachInArray: input "array" must come from an array-producing node (filterNeighbors / getNeighborIndexesByTags / joinNeighbors / getNeighborsAttrByIndexes / groupCounting.indexes)`);
+        return false;
+      }
+      const fi = ctx.emitter.allocLocal(I32);
+      const elemLocal = ctx.emitter.allocLocal(arrRef.elemValtype);
+      ctx.emitter.i32Const(0);
+      ctx.emitter.localSet(fi);
+      ctx.emitter.block(() => {
+        ctx.emitter.loop(() => {
+          // if (fi >= arr.len) br block
+          ctx.emitter.localGet(fi);
+          ctx.emitter.localGet(arrRef.lenLocal);
+          ctx.emitter.op(OP_I32_GE_S);
+          ctx.emitter.brIf(1);
+          // element = arr[fi]
+          ctx.emitter.localGet(fi);
+          emitArrayLoadElem(ctx.emitter, arrRef);
+          ctx.emitter.localSet(elemLocal);
+          // Cache element on the node's `element` port so body action-node
+          // input resolution finds it via the standard valueLocals path.
+          setCachedPort(ctx, node.id, 'element', { localIdx: elemLocal, valtype: arrRef.elemValtype });
+          // Body
+          compileFlowChain(node.id, 'body', ctx);
+          // fi++; br loop
+          ctx.emitter.localGet(fi);
+          ctx.emitter.i32Const(1);
+          ctx.emitter.op(OP_I32_ADD);
+          ctx.emitter.localSet(fi);
+          ctx.emitter.br(0);
+        });
+      });
     } else if (node.data.nodeType === 'switch') {
       // Switch: build per-case condition expressions, then if-else-if chain
       // (firstMatchOnly=true) or independent ifs (firstMatchOnly=false).
