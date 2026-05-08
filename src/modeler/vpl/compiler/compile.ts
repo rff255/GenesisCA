@@ -281,6 +281,55 @@ function compileRoot(
   const preLoopValueLines: string[] = [];
   const scratchNodes: Array<{ scratchVarName: string; nbrId?: string; attrId?: string; initExpr?: string }> = [];
 
+  // forEachInArray body-emit context. When non-null, value nodes whose ID is in
+  // `bodyDependents` are emitted to `bodyTarget` (with `bodyIndent`) rather than to
+  // the cell-scope `valueLines`, and tracked in `bodyCompiled` (a per-scope dedup set)
+  // instead of the global `compiled` set. This keeps element-dependent computations
+  // inside the for-loop block where `_v{forEachId}_element` is in scope.
+  let bodyTarget: string[] | null = null;
+  let bodyIndent: string = '';
+  let bodyDependents: Set<string> | null = null;
+  let bodyCompiled: Set<string> = new Set();
+
+  /** Forward-BFS from `(forEachNodeId, 'element')` through value-input consumers.
+   *  Returns the transitive closure of value nodes whose computation depends on
+   *  the iteration element. */
+  function findElementDependents(forEachNodeId: string): Set<string> {
+    const result = new Set<string>();
+    const queue: Array<{ nodeId: string; portId: string }> = [{ nodeId: forEachNodeId, portId: 'element' }];
+    while (queue.length > 0) {
+      const src = queue.shift()!;
+      const enqueueConsumer = (consumerId: string) => {
+        if (result.has(consumerId)) return;
+        result.add(consumerId);
+        const consumerNode = nodeMap.get(consumerId);
+        const consumerDef = consumerNode ? getNodeDef(consumerNode.data.nodeType) : null;
+        if (!consumerDef) return;
+        for (const port of consumerDef.ports) {
+          if (port.kind === 'output' && port.category === 'value') {
+            queue.push({ nodeId: consumerId, portId: port.id });
+          }
+        }
+      };
+      for (const [key, source] of inputToSource) {
+        if (source.nodeId === src.nodeId && source.portId === src.portId) {
+          const cid = key.split(':')[0];
+          if (cid) enqueueConsumer(cid);
+        }
+      }
+      for (const [key, sources] of inputToSources) {
+        for (const s of sources) {
+          if (s.nodeId === src.nodeId && s.portId === src.portId) {
+            const cid = key.split(':')[0];
+            if (cid) enqueueConsumer(cid);
+            break;
+          }
+        }
+      }
+    }
+    return result;
+  }
+
   function varName(sourceNodeId: string, sourcePortId: string): string {
     const sourceNode = nodeMap.get(sourceNodeId);
     if (sourceNode && isMultiOutput(sourceNode.data)) {
@@ -628,8 +677,18 @@ function compileRoot(
   }
 
   function compileValueNode(nodeId: string): string {
-    if (compiled.has(nodeId)) return `_v${nodeId}`;
-    compiled.add(nodeId);
+    const isBodyDep = !!(bodyDependents && bodyDependents.has(nodeId));
+    if (isBodyDep) {
+      // Body-dependent value: dedup against the per-scope `bodyCompiled` set so the
+      // emit appears at most once per body, but DON'T touch the global `compiled` set
+      // (the variable is block-scoped to the for-loop body — a cell-scope re-emit
+      // would still need its own copy).
+      if (bodyCompiled.has(nodeId)) return `_v${nodeId}`;
+      bodyCompiled.add(nodeId);
+    } else {
+      if (compiled.has(nodeId)) return `_v${nodeId}`;
+      compiled.add(nodeId);
+    }
 
     const node = nodeMap.get(nodeId);
     if (!node) return 'undefined';
@@ -764,8 +823,16 @@ function compileRoot(
       // hoist out of the cell loop and emit once per step instead of per cell.
       // Indentation for preLoopValueLines is two spaces because they live at
       // function scope, not inside the four-space cell loop body.
-      if (loopInvariant.has(nodeId)) preLoopValueLines.push('  ' + code.trimEnd());
-      else valueLines.push('      ' + code.trimEnd());
+      // Body-dependent nodes (inside a forEachInArray) emit to bodyTarget at
+      // bodyIndent so they sit inside the for-loop block where the iteration
+      // element variable is in scope.
+      if (isBodyDep && bodyTarget) {
+        bodyTarget.push(bodyIndent + code.trimEnd());
+      } else if (loopInvariant.has(nodeId)) {
+        preLoopValueLines.push('  ' + code.trimEnd());
+      } else {
+        valueLines.push('      ' + code.trimEnd());
+      }
     }
 
     return `_v${nodeId}`;
@@ -1024,7 +1091,27 @@ function compileRoot(
         const elementVar = `_v${node.id}_element`;
         flowLines.push(`${indent}for (let ${idxVar} = 0; ${idxVar} < ${arrayVar}.length; ${idxVar}++) {`);
         flowLines.push(`${indent}  const ${elementVar} = ${arrayVar}[${idxVar}];`);
+        // Activate body-emit context so element-dependent value nodes consumed
+        // inside the body land in flowLines at body indent (inside the loop block,
+        // where elementVar is in scope) rather than in cell-scope valueLines.
+        // Save/restore supports nested forEachInArray.
+        const savedTarget = bodyTarget;
+        const savedIndent = bodyIndent;
+        const savedDeps = bodyDependents;
+        const savedCompiled = bodyCompiled;
+        const ownDeps = findElementDependents(node.id);
+        // Merge with any outer body's dependents — a value chain can be dependent
+        // on multiple nested elements; either-scope dependents emit at the inner-
+        // most body that sees them.
+        bodyDependents = new Set([...(savedDeps ?? []), ...ownDeps]);
+        bodyTarget = flowLines;
+        bodyIndent = indent + '  ';
+        bodyCompiled = new Set(savedCompiled);
         compileFlowChain(node.id, 'body', indent + '  ');
+        bodyTarget = savedTarget;
+        bodyIndent = savedIndent;
+        bodyDependents = savedDeps;
+        bodyCompiled = savedCompiled;
         flowLines.push(`${indent}}`);
       } else if (node.data.nodeType === 'switch') {
         const switchMode = (node.data.config.mode as string) || 'conditions';
