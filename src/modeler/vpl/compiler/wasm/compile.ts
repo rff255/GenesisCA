@@ -1061,11 +1061,38 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     const attrId = node.data.config.attributeId as string;
     const attr = getAttr(ctx.layout, attrId);
     if (!attr) { ctx.errors.push(`getNeighborAttributeByIndex: unknown attr ${attrId}`); return null; }
-    const indexRef = inputs['index'] ?? { inline: true, value: 0, valtype: I32 };
     // Stash NI in a local so we can decode dr/dc inline.
     const niLocal = ctx.emitter.allocLocal(I32);
-    pushValueAs(ctx.emitter, indexRef, I32);
-    ctx.emitter.localSet(niLocal);
+    // If the index input is wired to an array producer (e.g. pickRandomNeighbor
+    // returns NI from an array, or pickNRandomNeighbors returns NI[]), the
+    // outer input loop skipped the value compile. Fetch the array and take
+    // element [0] to mirror JS's `Array.isArray ? arr[0] : scalar` semantic.
+    const indexSrc = ctx.inputToSource.get(`${node.id}:index`);
+    const srcNode = indexSrc ? ctx.nodeMap.get(indexSrc.nodeId) : undefined;
+    if (srcNode && isArrayProducer(srcNode.data.nodeType)) {
+      const arrRef = compileArrayNode(indexSrc!.nodeId, ctx);
+      if (!arrRef) return null;
+      // First element of the array (or 0 when empty — matches JS `arr[0] ?? 0`).
+      ctx.emitter.localGet(arrRef.lenLocal);
+      ctx.emitter.i32Const(0);
+      ctx.emitter.op(OP_I32_GT_S);
+      ctx.emitter.ifThenElse(
+        () => {
+          ctx.emitter.i32Const(0);
+          emitArrayLoadElem(ctx.emitter, arrRef);
+          if (arrRef.elemValtype === F64) ctx.emitter.f64ToI32();
+          ctx.emitter.localSet(niLocal);
+        },
+        () => {
+          ctx.emitter.i32Const(0);
+          ctx.emitter.localSet(niLocal);
+        },
+      );
+    } else {
+      const indexRef = inputs['index'] ?? { inline: true, value: 0, valtype: I32 };
+      pushValueAs(ctx.emitter, indexRef, I32);
+      ctx.emitter.localSet(niLocal);
+    }
     // cellIdx = niCellIdx(NI)  — pushed to stack
     pushNiCellIdx(ctx, niLocal);
     // byteOffset = cellIdx * itemBytes
@@ -3317,12 +3344,18 @@ function compileValueNode(nodeId: string, ctx: WasmCompileCtx, portId: string = 
   // sources via ctx.inputToSources and the array-producer dispatch path; if
   // we tried to compileValueNode an array source as a scalar we'd hit the
   // "no value emitter" error for nodes like getNeighborsAttrByIndexes.
+  // Same skip-array-producer rule as the regular-flow-node path: a NI-scalar
+  // port can be wired to a NI-array source (e.g. pickNRandomNeighbors output);
+  // calling compileValueNode on an array producer hits "No value emitter".
+  // The value emitter handles array sources itself if it cares.
   const inputs: Record<string, ValueRef | undefined> = {};
   for (const port of def.ports) {
     if (port.kind !== 'input' || port.category !== 'value') continue;
     if (port.isArray) continue;
     const source = ctx.inputToSource.get(`${nodeId}:${port.id}`);
     if (source) {
+      const srcNode = ctx.nodeMap.get(source.nodeId);
+      if (srcNode && isArrayProducer(srcNode.data.nodeType)) continue;
       const srcRef = compileValueNode(source.nodeId, ctx, source.portId);
       if (!srcRef) return null;
       inputs[port.id] = srcRef;
@@ -3675,12 +3708,21 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
       // Regular flow node: resolve scalar value inputs (skip arrays; flow
       // emitters that consume arrays — setNeighborAttributeByIndex with array
       // index input — fetch the ArrayRef themselves via compileArrayNode).
+      //
+      // Skip array-producer sources too: e.g. pickNRandomNeighbors output
+      // (an NI[]) wired to setNeighborAttributeByIndex.index (a scalar NI
+      // port). The connection is type-permitted (NI[] → NI is the implicit
+      // "iterate the array" semantic), but trying to compileValueNode an
+      // array producer hits the "No value emitter" error. Let the FLOW_NODE_
+      // EMITTER fetch the source via compileArrayNode itself.
       const inputs: Record<string, ValueRef | undefined> = {};
       for (const port of def.ports) {
         if (port.kind !== 'input' || port.category !== 'value') continue;
         if (port.isArray) continue;
         const source = ctx.inputToSource.get(`${node.id}:${port.id}`);
         if (source) {
+          const srcNode = ctx.nodeMap.get(source.nodeId);
+          if (srcNode && isArrayProducer(srcNode.data.nodeType)) continue;
           const srcRef = compileValueNode(source.nodeId, ctx, source.portId);
           if (!srcRef) return false;
           inputs[port.id] = srcRef;
