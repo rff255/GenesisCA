@@ -97,7 +97,7 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 | 5 | `conditional` | If / Then / Else | Branch on bool. | `I: CHECK` (flow) `I: IF` (bool) / `O: THEN` `O: ELSE` (flow) | |
 | 6 | `sequence` | Sequence | Execute two flows in order. | `I: DO` / `O: FIRST` `O: THEN` (flow) | |
 | 7 | `loop` | Loop | Repeat flow N times. | `I: DO` (flow) `I: COUNT` (int) / `O: BODY` (flow) | |
-| 8 | `forEachInArray` | For Each In Array | Iterates a typed array, exposing the per-iteration element via the `Element` output port. | `I: DO` (flow) `I: Array` (any[]) / `O: BODY` (flow) `O: Element` (any) | JS path implemented; body **flow** nodes can consume `Element` directly via input ports. Body **value** nodes that depend on `Element` are not yet supported (pre-emit pass scopes value nodes to cell, not loop iteration). WASM/WebGPU emitters not yet implemented — graphs using this node fall back to JS. |
+| 8 | `forEachInArray` | For Each In Array | Iterates a typed array, exposing the per-iteration element via the `Element` output port. Body action nodes can consume `Element` directly; body value nodes that depend on `Element` (e.g. `Math.add(element, 1) → setIndicator`) emit inline inside the loop block on all three targets. | `I: DO` (flow) `I: Array` (any[]) / `O: BODY` (flow) `O: Element` (any) | Full JS / WASM / WebGPU lockstep |
 | 9 | `switch` | Switch | Multi-way branch (by value or conditions). | `I: CHECK` (flow) `I: VALUE` (optional) / dynamic `O: CASE_N` + `O: DEFAULT` | 2 modes: `conditions` (per-case bool inputs) or `value` (compare to cases); optional `firstMatchOnly` |
 | 10 | `macro` | Macro | Reusable sub-graph. | dynamic — ports from `MacroDef.exposedInputs/Outputs` | Requires `macroDefId`; compiler inlines the subgraph |
 
@@ -435,9 +435,11 @@ without migration. What changed is the **typing** layer:
   Replaces the broken `groupOperator(random)` pattern. Returns -1 on empty input.
 
 **Iteration.** `forEachInArray(arr) { body }` exposes the per-iteration element via an
-`Element` value port. Body **flow** nodes that consume `Element` directly via input
-ports work; body **value** nodes that depend on `Element` are not yet supported on
-any compile target (pre-emit pass scopes value nodes to cell, not loop iteration).
+`Element` value port. Both body **flow** nodes (consuming `Element` directly via
+input ports) and body **value** nodes that depend on `Element` work — the per-
+iteration value-emit scoping is implemented across all three compile targets via
+forward BFS from `Element` through value consumers, with element-dependent
+expressions emitted inside the loop block where the element variable is in scope.
 
 **NeighborIndex as a stored attribute.** Cell and model attributes can be declared
 with `type: 'neighborIndex'` (storage = `Int32Array`, identical to integer/tag). The
@@ -447,10 +449,12 @@ just a slot index, interpreted at runtime relative to the consuming node's
 neighborhood. Cross-neighborhood reuse of a stored NI is brittle and not recommended
 unless both neighborhoods share the same slot ordering for the relevant offsets.
 
-**What is NOT yet implemented (deferred to Wave A.5+):**
-- Brush integration for NI cell attributes (paint values onto the canvas).
-- Default Attribute → Color mapping for NI cell attrs (currently render flat).
-- WASM and WebGPU emitters for `forEachInArray` (graphs using it auto-fall-back to JS).
+**Brush + visualization for NI cell attributes** are user-defined via the standard
+mapping pipeline (Color → Attribute for the brush, Attribute → Color for the viewer):
+the user wires `inputColor.R/G/B → ... → setAttribute(NI cell attr)` for the brush
+direction and `getCellAttribute(NI) → ... → setColorViewer.R/G/B` for visualization.
+No additional infrastructure is needed; NI cell attrs flow through the same
+mapping graph as any other attribute kind.
 
 **WebGPU compatibility.** All four NI value nodes have JS + WASM + WebGPU lockstep
 emitters. The async-mode "move into a random empty neighbor" pattern still requires

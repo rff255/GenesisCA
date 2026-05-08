@@ -542,12 +542,12 @@ export function HelpView() {
             Useful for &ldquo;iterate matching neighbors and apply different ops&rdquo; patterns.
           </p>
           <p className={styles.p}>
-            <strong>Current limitation:</strong> body <em>flow</em> nodes can consume <em>Element</em>
-            directly via input ports (e.g. <em>Set Neighbor Attr By Index</em> with index =
-            element). Body <em>value</em> nodes that depend on element (e.g. wiring element through a
-            Math node before the action) are not yet supported on any compile target. WASM/WebGPU
-            emitters are also pending &mdash; graphs using For Each currently auto-fall-back to the
-            JS path.
+            Both patterns work: body <em>flow</em> nodes can consume <em>Element</em> directly via
+            input ports (e.g. <em>Set Neighbor Attr By Index</em> with index = element), and body
+            <em> value</em> chains that depend on element (e.g. wiring element through a Math node
+            before the action) compile correctly because element-dependent expressions emit
+            inside the loop block where the element variable is in scope. Available on JS, WASM,
+            and WebGPU.
           </p>
         </section>
 
