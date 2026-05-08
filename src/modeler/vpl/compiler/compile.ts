@@ -83,6 +83,7 @@ function scratchCtorForAttr(attrId: string | undefined, model: CAModel | undefin
     case 'bool': return 'Uint8Array';
     case 'integer': return 'Int32Array';
     case 'tag': return 'Int32Array';
+    case 'neighborIndex': return 'Int32Array';
     case 'float': return 'Float64Array';
     default: return '';
   }

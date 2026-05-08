@@ -18,7 +18,7 @@ import type { CAModel } from '../../../../model/types';
 
 export interface WebGPULayoutAttr {
   id: string;
-  type: string;        // 'bool' | 'integer' | 'float' | 'tag' | 'color'
+  type: string;        // 'bool' | 'integer' | 'float' | 'tag' | 'color' | 'neighborIndex'
   itemBytes: number;   // 4 — every attr stored as one u32 word per cell on GPU (bool 0/1, int/tag i32, float f32)
   /** Element count per buffer (= cellsPerAttr). */
   count: number;
