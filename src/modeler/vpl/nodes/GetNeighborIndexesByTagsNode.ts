@@ -7,7 +7,7 @@ export const GetNeighborIndexesByTagsNode: NodeTypeDef = {
   category: 'data',
   color: '#b71c1c',
   ports: [
-    { id: 'indexes', label: 'Indexes', kind: 'output', category: 'value', dataType: 'any', isArray: true },
+    { id: 'indexes', label: 'Indexes', kind: 'output', category: 'value', dataType: 'neighborIndex', isArray: true },
   ],
   defaultConfig: { neighborhoodId: '', tagCount: 0 },
   compile: (nodeId, config) => {

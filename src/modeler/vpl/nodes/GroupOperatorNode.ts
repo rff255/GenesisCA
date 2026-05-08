@@ -9,7 +9,7 @@ export const GroupOperatorNode: NodeTypeDef = {
   ports: [
     { id: 'values', label: 'Values', kind: 'input', category: 'value', dataType: 'any', isArray: true },
     { id: 'result', label: 'Result', kind: 'output', category: 'value', dataType: 'any' },
-    { id: 'index', label: 'Index', kind: 'output', category: 'value', dataType: 'integer' },
+    { id: 'index', label: 'Position', kind: 'output', category: 'value', dataType: 'integer' },
   ],
   defaultConfig: { operation: 'sum' },
   compile: (nodeId, config, inputs) => {

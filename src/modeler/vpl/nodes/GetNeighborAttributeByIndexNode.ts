@@ -7,7 +7,7 @@ export const GetNeighborAttributeByIndexNode: NodeTypeDef = {
   category: 'data',
   color: '#b71c1c',
   ports: [
-    { id: 'index', label: 'Index', kind: 'input', category: 'value', dataType: 'integer', inlineWidget: 'number', defaultValue: '0' },
+    { id: 'index', label: 'Index', kind: 'input', category: 'value', dataType: 'neighborIndex', inlineWidget: 'number', defaultValue: '0' },
     { id: 'value', label: 'Value', kind: 'output', category: 'value', dataType: 'any' },
   ],
   defaultConfig: { neighborhoodId: '', attributeId: '' },

@@ -35,7 +35,8 @@ const nodeTypes: NodeTypes = {
 
 let clipboard: { nodes: GraphNode[]; edges: GraphEdge[] } | null = null;
 
-import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, setConnectedHandlesFromEdges } from './graphState';
+import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, setConnectedHandlesFromEdges, setConnectionHazards } from './graphState';
+import { detectEdgeHazard } from './nodes/nodeValidation';
 import { pushSnapshot, undo, redo, pushToRedo, pushToUndo, clearHistory } from './graphHistory';
 
 // ---------------------------------------------------------------------------
@@ -230,9 +231,35 @@ export function GraphEditorInner() {
   // Perf: maintain a graph-level map of connected input handles per node so each CaNode can
   // subscribe once via useSyncExternalStore instead of scanning all edges on every store event.
   // useLayoutEffect runs before paint so CaNodes reading the map never observe a stale frame.
+  // We also recompute connection-kind hazards (e.g. list-position int wired into a NeighborIndex
+  // port) here, hence the [nodes, edges] deps — recomputing on drag is wasted work but the
+  // diff-aware setConnectionHazards skips downstream re-renders when the hazard map is unchanged.
   useLayoutEffect(() => {
     setConnectedHandlesFromEdges(edges);
-  }, [edges]);
+
+    const nodeById = new Map<string, typeof nodes[number]>();
+    for (const n of nodes) nodeById.set(n.id, n);
+    const hazards = new Map<string, readonly string[]>();
+    for (const e of edges) {
+      if (!e.source || !e.target) continue;
+      const srcNode = nodeById.get(e.source);
+      const tgtNode = nodeById.get(e.target);
+      if (!srcNode || !tgtNode) continue;
+      const srcType = (srcNode.data as Record<string, unknown> | undefined)?.nodeType as string | undefined;
+      const tgtType = (tgtNode.data as Record<string, unknown> | undefined)?.nodeType as string | undefined;
+      if (!srcType || !tgtType) continue;
+      const srcParsed = parseHandleId(e.sourceHandle ?? '');
+      const tgtParsed = parseHandleId(e.targetHandle ?? '');
+      if (!srcParsed || !tgtParsed) continue;
+      const hazard = detectEdgeHazard(srcType, srcParsed.portId, tgtType, tgtParsed.portId);
+      if (hazard) {
+        const list = (hazards.get(e.target) ?? []) as string[];
+        list.push(hazard);
+        hazards.set(e.target, list);
+      }
+    }
+    setConnectionHazards(hazards);
+  }, [edges, nodes]);
 
   const currentScopeRef = useRef(currentScope);
   useEffect(() => { currentScopeRef.current = currentScope; }, [currentScope]);
@@ -326,7 +353,12 @@ export function GraphEditorInner() {
 
       const currentEdges = edgesRef.current;
 
-      // Prevent connecting to an already-connected value input (unless port is isArray)
+      // Prevent connecting to an already-connected value input (unless port is isArray).
+      // Also enforce NeighborIndex type compatibility: a NI port may only connect to
+      // another NI port or to an `any`-typed port. This is the only data-type rule
+      // currently enforced by the connection validator (other types remain unchecked
+      // for back-compat); it exists to prevent the silent list-position vs coord-idx
+      // hazards that previously surfaced as wrong-cell lookups at runtime.
       if (tgtParsed.category === 'value') {
         const targetNode = nodesRef.current.find(n => n.id === connection.target);
         const targetNodeType = (targetNode?.data as Record<string, unknown> | undefined)?.nodeType as string | undefined;
@@ -338,6 +370,20 @@ export function GraphEditorInner() {
             e => e.target === connection.target && e.targetHandle === connection.targetHandle,
           );
           if (alreadyConnected) return false;
+        }
+
+        // NeighborIndex compatibility check
+        const sourceNode = nodesRef.current.find(n => n.id === connection.source);
+        const sourceNodeType = (sourceNode?.data as Record<string, unknown> | undefined)?.nodeType as string | undefined;
+        const sourceDef = sourceNodeType ? getNodeDef(sourceNodeType) : undefined;
+        const sourcePort = sourceDef?.ports.find(p => p.id === srcParsed.portId);
+        const tgtIsNI = targetPort?.dataType === 'neighborIndex';
+        const srcIsNI = sourcePort?.dataType === 'neighborIndex';
+        if (tgtIsNI && sourcePort && sourcePort.dataType !== 'neighborIndex' && sourcePort.dataType !== 'any') {
+          return false;
+        }
+        if (srcIsNI && targetPort && targetPort.dataType !== 'neighborIndex' && targetPort.dataType !== 'any') {
+          return false;
         }
       }
 

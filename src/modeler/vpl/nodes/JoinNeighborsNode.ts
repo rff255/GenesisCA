@@ -7,9 +7,9 @@ export const JoinNeighborsNode: NodeTypeDef = {
   category: 'aggregation',
   color: '#e65100',
   ports: [
-    { id: 'a', label: 'A', kind: 'input', category: 'value', dataType: 'any', isArray: true },
-    { id: 'b', label: 'B', kind: 'input', category: 'value', dataType: 'any', isArray: true },
-    { id: 'result', label: 'Result', kind: 'output', category: 'value', dataType: 'any', isArray: true },
+    { id: 'a', label: 'A', kind: 'input', category: 'value', dataType: 'neighborIndex', isArray: true },
+    { id: 'b', label: 'B', kind: 'input', category: 'value', dataType: 'neighborIndex', isArray: true },
+    { id: 'result', label: 'Result', kind: 'output', category: 'value', dataType: 'neighborIndex', isArray: true },
   ],
   defaultConfig: { operation: 'intersection' },
   compile: (nodeId, config, inputs) => {

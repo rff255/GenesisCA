@@ -7,9 +7,9 @@ export const FilterNeighborsNode: NodeTypeDef = {
   category: 'aggregation',
   color: '#e65100',
   ports: [
-    { id: 'indexes', label: 'Indexes', kind: 'input', category: 'value', dataType: 'any', isArray: true },
+    { id: 'indexes', label: 'Indexes', kind: 'input', category: 'value', dataType: 'neighborIndex', isArray: true },
     { id: 'compare', label: 'Compare', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '0' },
-    { id: 'result', label: 'Filtered', kind: 'output', category: 'value', dataType: 'any', isArray: true },
+    { id: 'result', label: 'Filtered', kind: 'output', category: 'value', dataType: 'neighborIndex', isArray: true },
   ],
   defaultConfig: { neighborhoodId: '', attributeId: '', operation: 'equals' },
   compile: (nodeId, config, inputs) => {

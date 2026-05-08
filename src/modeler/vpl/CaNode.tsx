@@ -6,7 +6,7 @@ import { detectMissingConfig, detectWebGPUIncompatibilities, countMacroSubgraphI
 import { INTERPOLATION_METHODS, INTERPOLATION_SHORT_LABELS, DEFAULT_INTERPOLATION_METHOD } from './nodes/interpolationMethods';
 import type { InterpolationMethod } from './nodes/interpolationMethods';
 import { handleId } from './types';
-import type { NodeConfig } from './types';
+import type { NodeConfig, PortDef } from './types';
 import type { MacroPort } from '../../model/types';
 import { useModel } from '../../model/ModelContext';
 import {
@@ -17,6 +17,8 @@ import {
   subscribeConnectingFrom,
   subscribeConnectedHandles,
   getConnectedHandlesForNode,
+  subscribeConnectionHazards,
+  getConnectionHazardsForNode,
 } from './graphState';
 
 /** Snapshot getter for useSyncExternalStore — must return a stable reference
@@ -27,6 +29,14 @@ function getConnectingFromSnapshot() {
   return connectingFrom;
 }
 import styles from './CaNode.module.css';
+
+/** Pick the handle CSS class for a port based on its category + data type.
+ *  Flow → green; NeighborIndex value → amber; everything else → cyan. */
+function portHandleClass(port: PortDef): string {
+  if (port.category === 'flow') return styles.handleFlow!;
+  if (port.dataType === 'neighborIndex') return styles.handleNeighborIndex!;
+  return styles.handleValue!;
+}
 
 /** Returns dark text for light backgrounds, white text for dark backgrounds */
 function textColorForBg(bgHex: string): string {
@@ -317,6 +327,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
     () => getConnectedHandlesForNode(id),
   );
 
+  // Connection-kind hazards (e.g. list-position int wired into a NeighborIndex port).
+  // Same single-pub/sub pattern as connectedHandles; identity-stable when unchanged so
+  // memoized nodes only re-render when their own hazard list actually changes.
+  const connectionHazards = useSyncExternalStore(
+    subscribeConnectionHazards,
+    () => getConnectionHazardsForNode(id),
+  );
+
   // Build a map of all port definitions for inline widget lookup
   const allInputPortDefs = useMemo(() => {
     if (!def) return new Map<string, typeof inputPorts[0]>();
@@ -345,6 +363,10 @@ function CaNodeComponent({ id, data }: NodeProps) {
           }
         }
       }
+      // Connection-kind hazards (typed-port mismatches that the runtime would silently accept)
+      if (connectionHazards.length > 0) {
+        for (const h of connectionHazards) own.push(h);
+      }
       return own;
     },
     [
@@ -356,6 +378,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
       model.indicators,
       model.macroDefs,
       model.properties.useWebGPU,
+      connectionHazards,
     ],
   );
 
@@ -605,7 +628,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             type="target"
             position={Position.Left}
             id={handleId(port)}
-            className={port.category === 'flow' ? styles.handleFlow : styles.handleValue}
+            className={portHandleClass(port)}
             style={{ top: '50%' }}
             title={port.label}
           />
@@ -616,7 +639,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             type="source"
             position={Position.Right}
             id={handleId(port)}
-            className={port.category === 'flow' ? styles.handleFlow : styles.handleValue}
+            className={portHandleClass(port)}
             style={{ top: '50%' }}
             title={port.label}
           />
@@ -1731,7 +1754,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         const alreadyOccupied = isConnected && port.category === 'value' && !isArrayPort;
         const isCompatible = cf ? (directionMatch && categoryMatch && !alreadyOccupied) : null;
         const handleClass = [
-          port.category === 'flow' ? styles.handleFlow : styles.handleValue,
+          portHandleClass(port),
           !isConnected && port.category === 'value' ? styles.handleUnconnected : '',
           cf && isCompatible ? styles.handleCompatible : '',
           cf && !isCompatible ? styles.handleIncompatible : '',
@@ -1802,7 +1825,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         const directionOk = cf ? cf.kind !== 'output' : false; // output ports match when dragging from input
         const isCompatible = cf ? (directionOk && port.category === cf.category && id !== cf.nodeId) : null;
         const handleClass = [
-          port.category === 'flow' ? styles.handleFlow : styles.handleValue,
+          portHandleClass(port),
           cf && isCompatible ? styles.handleCompatible : '',
           cf && !isCompatible ? styles.handleIncompatible : '',
         ].filter(Boolean).join(' ');

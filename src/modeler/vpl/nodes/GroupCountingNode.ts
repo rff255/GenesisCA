@@ -11,7 +11,7 @@ export const GroupCountingNode: NodeTypeDef = {
     { id: 'compare', label: 'Compare To', kind: 'input', category: 'value', dataType: 'any' },
     { id: 'compareHigh', label: 'Compare High', kind: 'input', category: 'value', dataType: 'any' },
     { id: 'count', label: 'Count', kind: 'output', category: 'value', dataType: 'integer' },
-    { id: 'indexes', label: 'Indexes', kind: 'output', category: 'value', dataType: 'any', isArray: true },
+    { id: 'indexes', label: 'Positions', kind: 'output', category: 'value', dataType: 'integer', isArray: true },
   ],
   defaultConfig: { operation: 'equals', lowOp: '>=', highOp: '<=' },
   compile: (nodeId, config, inputs) => {
