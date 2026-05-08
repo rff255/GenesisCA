@@ -368,10 +368,12 @@ function arrLoad(arr: ArrayRef, iExpr: string): string {
 function isArrayProducer(nodeType: string): boolean {
   switch (nodeType) {
     case 'getNeighborIndexesByTags':
+    case 'getAllNeighborIndexes':
     case 'filterNeighbors':
     case 'joinNeighbors':
     case 'getNeighborsAttrByIndexes':
     case 'groupCounting':
+    case 'pickNRandomNeighbors':
       return true;
     default:
       return false;
@@ -441,8 +443,58 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     return arr;
   },
 
+  // Wave A.5: full NI[] of a neighborhood — [0, 1, …, nbrSize-1].
+  getAllNeighborIndexes: ({ node, ctx }) => {
+    const nbrId = node.data.config.neighborhoodId as string;
+    const nbr = getNbr(ctx.layout, nbrId);
+    if (!nbr) { ctx.errors.push(`getAllNeighborIndexes: unknown neighborhood ${nbrId}`); return null; }
+    const arr = allocArray(ctx, 'i32', 'arrAllNbr', nbr.size);
+    for (let k = 0; k < nbr.size; k++) {
+      ctx.lines.push(`  ${arr.name}[${k}] = ${k};`);
+    }
+    ctx.lines.push(`  ${arr.lenName} = ${nbr.size};`);
+    return arr;
+  },
+
+  // Wave A.5: partial Fisher-Yates over a working copy of the input. Uses the
+  // per-cell PCG stream (rand_f32) — different from JS / WASM xorshift32 but
+  // statistically equivalent (already-documented Wave 3 target difference).
+  pickNRandomNeighbors: ({ node, ctx, inputs }) => {
+    const inArr = resolveInputArray(ctx, node, 'indexes');
+    if (!inArr) {
+      ctx.errors.push(`pickNRandomNeighbors: input "indexes" must come from an array-producing node`);
+      return null;
+    }
+    const nRef = inputs['n'] ?? { expr: '1', type: 'i32' as WgslType };
+    const nExpr = castTo(nRef, 'i32');
+    const work = allocArray(ctx, 'i32', 'pnWork', inArr.maxLen);
+    const result = allocArray(ctx, 'i32', 'pnRes', inArr.maxLen);
+    const k = fresh(ctx, 'pnK');
+    const ci = fresh(ctx, 'pnI');
+    const fi = fresh(ctx, 'pnFi');
+    const j = fresh(ctx, 'pnJ');
+    const tmp = fresh(ctx, 'pnT');
+    ctx.lines.push(`  var ${k}: i32 = clamp(${nExpr}, 0, ${inArr.lenName});`);
+    ctx.lines.push(`  ${work.lenName} = ${inArr.lenName};`);
+    // Copy input -> work
+    ctx.lines.push(`  for (var ${ci}: i32 = 0; ${ci} < ${inArr.lenName}; ${ci} = ${ci} + 1) {`);
+    ctx.lines.push(`    ${work.name}[${ci}] = ${arrLoad(inArr, ci)};`);
+    ctx.lines.push(`  }`);
+    // Partial Fisher-Yates
+    ctx.lines.push(`  ${result.lenName} = ${k};`);
+    ctx.lines.push(`  for (var ${fi}: i32 = 0; ${fi} < ${k}; ${fi} = ${fi} + 1) {`);
+    ctx.lines.push(`    let ${j}: i32 = ${fi} + i32(rand_f32(idx) * f32(${inArr.lenName} - ${fi}));`);
+    ctx.lines.push(`    let ${tmp}: i32 = ${work.name}[${fi}];`);
+    ctx.lines.push(`    ${work.name}[${fi}] = ${work.name}[${j}];`);
+    ctx.lines.push(`    ${work.name}[${j}] = ${tmp};`);
+    ctx.lines.push(`    ${result.name}[${fi}] = ${work.name}[${fi}];`);
+    ctx.lines.push(`  }`);
+    return result;
+  },
+
   // Filter input array of neighbor indices by comparing the attribute at each
-  // referenced neighbor cell against `compare`.
+  // referenced neighbor cell against `compare`. Wave A.5: when the Indexes input
+  // is unconnected, iterate every slot of the configured neighborhood.
   filterNeighbors: ({ node, ctx, inputs }) => {
     const nbrId = node.data.config.neighborhoodId as string;
     const attrId = node.data.config.attributeId as string;
@@ -452,14 +504,16 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     if (!nbr || !attr) { ctx.errors.push(`filterNeighbors: unknown nbr/attr (${nbrId}/${attrId})`); return null; }
 
     const inArr = resolveInputArray(ctx, node, 'indexes');
-    if (!inArr) { ctx.errors.push(`filterNeighbors: no array input on "indexes"`); return null; }
+    const isExplicit = !!inArr;
 
     const compare = inputs['compare'] ?? { expr: '0.0', type: 'f32' as WgslType };
-    // filter: |out| ≤ |in|.
-    const out = allocArray(ctx, 'i32', 'arrFilter', inArr.maxLen);
+    const cap = isExplicit ? inArr!.maxLen : nbr.size;
+    const out = allocArray(ctx, 'i32', 'arrFilter', cap);
     const k = fresh(ctx, 'fk');
-    ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${inArr.lenName}; ${k} = ${k} + 1) {`);
-    ctx.lines.push(`    let _idxIn_${k}: i32 = ${arrLoad(inArr, k)};`);
+    const loopBound = isExplicit ? inArr!.lenName : `${nbr.size}`;
+    ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${loopBound}; ${k} = ${k} + 1) {`);
+    const slotExpr = isExplicit ? arrLoad(inArr!, k) : k;
+    ctx.lines.push(`    let _idxIn_${k}: i32 = ${slotExpr};`);
     ctx.lines.push(`    let _nci_${k}: i32 = ${emitNbrCellIdx(nbr, `_idxIn_${k}`)};`);
     const elem = readAttr(attr, `u32(_nci_${k})`, false);
     ctx.lines.push(`    let _e_${k}: ${elem.type} = ${elem.expr};`);
@@ -693,6 +747,37 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       ctx.lines.push(`  if (${inName} == ${k}) { ${resultName} = ${(table[k] ?? -1) | 0}; }`);
     }
     return { expr: resultName, type: 'i32' };
+  },
+
+  // Wave A.5: array length.
+  arrayLength: ({ node, ctx }) => {
+    const inArr = resolveInputArray(ctx, node, 'array');
+    if (!inArr) {
+      ctx.errors.push(`arrayLength: input "array" must come from an array-producing node`);
+      return null;
+    }
+    return emitLet(ctx, 'i32', inArr.lenName, 'aL');
+  },
+
+  // Wave A.5: bounds-checked indexed access. Out-of-range returns -1.
+  arrayElement: ({ node, ctx, inputs }) => {
+    const inArr = resolveInputArray(ctx, node, 'array');
+    if (!inArr) {
+      ctx.errors.push(`arrayElement: input "array" must come from an array-producing node`);
+      return null;
+    }
+    const posRef = inputs['position'] ?? { expr: '0', type: 'i32' as WgslType };
+    const posExpr = castTo(posRef, 'i32');
+    const idx = fresh(ctx, 'aeI');
+    ctx.lines.push(`  let ${idx}: i32 = ${posExpr};`);
+    const inb = `(${idx} >= 0 && ${idx} < ${inArr.lenName})`;
+    if (inArr.elemType === 'f32') {
+      return emitLet(ctx, 'f32', `select(0.0, ${arrLoad(inArr, idx)}, ${inb})`, 'aeV');
+    }
+    if (inArr.elemType === 'bool') {
+      return emitLet(ctx, 'bool', `select(false, ${arrLoad(inArr, idx)}, ${inb})`, 'aeV');
+    }
+    return emitLet(ctx, 'i32', `select(-1, ${arrLoad(inArr, idx)}, ${inb})`, 'aeV');
   },
 
   // Wave A PR2: pick a random element from a NeighborIndex array. Uses the

@@ -4,7 +4,7 @@ This document catalogues every node in the GenesisCA Visual Programming Language
 describes the port type system, and flags redundancies or gaps. It is a working reference
 to inform future consolidation — it does **not** describe any committed refactoring.
 
-**Scope:** 45 visible node types across 7 categories, plus 2 hidden boundary nodes
+**Scope:** 49 visible node types across 7 categories, plus 2 hidden boundary nodes
 (`macroInput` / `macroOutput`).
 
 ---
@@ -112,9 +112,12 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 | 13 | `getNeighborAttributeByTag` | Get Neighbor Attr By Tag | Read **one** neighbor by neighborhood-tag name. | `O: Value` | Requires tag in the neighborhood's `tags` map |
 | 14 | `getNeighborIndexesByTags` | Get Neighbor Indexes By Tags | Return neighborhood indices matching a set of tag names. | `O: Indexes` (NI arr) | Dynamic config rows per tag |
 | 15 | `getNeighborsAttrByIndexes` | Get Neighbors Attr By Indexes | Read attr values for a given NeighborIndex array. | `I: INDEXES` (NI arr) / `O: Values` (arr) | Pair with `filterNeighbors`, `getNeighborIndexesByTags`, or `joinNeighbors` |
-| 15a | `neighborIndexFromOffset` | Neighbor Index (from Offset) | Build a NI pointing at the (dRow, dCol) slot of the chosen neighborhood. Compile-time-resolved. | `O: Value` (NI) | Returns -1 if the offset is not in the neighborhood |
-| 15b | `neighborIndexFromTag` | Neighbor Index (from Tag) | Build a NI pointing at the slot tagged with the given name. Compile-time-resolved. | `O: Value` (NI) | Same shape as fromOffset but resolves by tag name |
-| 15c | `flipNeighborIndex` | Flip Neighbor Index | Mirror a NI horizontally / vertically / both. Compile-time precomputed lookup table. | `I: Index` (NI) / `O: Value` (NI) | Returns -1 when the flipped offset isn't in the configured neighborhood |
+| 15a | `getAllNeighborIndexes` | Get All Neighbor Indexes | Returns the full NI[] of a neighborhood — every slot, [0..nbrSize-1]. Bootstrap for filterNeighbors / forEachInArray chains without needing tags. | `O: Indexes` (NI[]) | Compile-time-resolved |
+| 15b | `arrayElement` | Array Element | Returns `arr[position]` with bounds check; out-of-range yields a safe default (-1 for NI / int, 0 for float, false for bool). | `I: Array` `I: Position` (int) / `O: Value` | Bridges Position outputs of group* nodes back to NIs via a parallel array |
+| 15c | `arrayLength` | Array Length | Returns the number of elements in an array. | `I: Array` / `O: Length` (int) | |
+| 15d | `neighborIndexFromOffset` | Neighbor Index (from Offset) | Build a NI pointing at the (dRow, dCol) slot of the chosen neighborhood. Compile-time-resolved. | `O: Value` (NI) | Returns -1 if the offset is not in the neighborhood |
+| 15e | `neighborIndexFromTag` | Neighbor Index (from Tag) | Build a NI pointing at the slot tagged with the given name. Compile-time-resolved. | `O: Value` (NI) | Same shape as fromOffset but resolves by tag name |
+| 15f | `flipNeighborIndex` | Flip Neighbor Index | Mirror a NI horizontally / vertically / both. Compile-time precomputed lookup table. | `I: Index` (NI) / `O: Value` (NI) | Returns -1 when the flipped offset isn't in the configured neighborhood |
 | 16 | `getConstant` | Get Constant | Emit fixed bool/int/float/tag. | `O: Value` | `constType` + `constValue` config |
 | 17 | `getRandom` | Get Random | Random bool/int/float. | `I: P` (float, bool mode only) / `O: Value` | Bool mode: `probability` input; Int mode: min/max config |
 | 18 | `tagConstant` | Tag Constant | Emit a fixed tag value. | `O: Value` (int = tag index) | Hidden from Add-Node menu; created contextually |
@@ -141,6 +144,8 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 | 29 | `filterNeighbors` | Filter Neighbors | Keep NeighborIndex entries where the attribute passes a comparison. | `I: INDEXES` (NI arr) `I: Compare` / `O: Result` (NI arr) | Configurable neighborhood + attribute + op |
 | 30 | `joinNeighbors` | Join Neighbors | `Intersection (AND) / Union (OR)` of two NeighborIndex arrays. | `I: A` `I: B` (NI arr) / `O: Result` (NI arr) | |
 | 30a | `pickRandomNeighbor` | Pick Random Neighbor | Pick one element at random from a NeighborIndex array. Returns -1 on empty input. | `I: Indexes` (NI arr) / `O: Value` (NI) | Replaces the broken `groupOperator(random)` pattern; uses the same xorshift32 stream as `getRandom` |
+| 30b | `pickNRandomNeighbors` | Pick N Random Neighbors | Pick `N` distinct elements at random from a NeighborIndex array (without replacement, partial Fisher-Yates). | `I: Indexes` (NI arr) `I: N` (int) / `O: Picked` (NI arr) | Returns at most `min(N, input.length)` entries |
+| 29a | `filterNeighbors` (implicit-all) | — | When the `Indexes` input is unconnected, filterNeighbors iterates every slot of the configured neighborhood instead of an empty input. Saves the `getAllNeighborIndexes` bootstrap node in the common case. | (no port-shape change) | Wave A.5 enhancement |
 
 ### 3.6 Output (writers) — `output`
 
@@ -455,6 +460,73 @@ the user wires `inputColor.R/G/B → ... → setAttribute(NI cell attr)` for the
 direction and `getCellAttribute(NI) → ... → setColorViewer.R/G/B` for visualization.
 No additional infrastructure is needed; NI cell attrs flow through the same
 mapping graph as any other attribute kind.
+
+---
+
+## 7.1 Wave A.5 — Bootstrap, Array Access, and Pick-N
+
+The original Wave A docs claimed a "canonical movement pattern" using
+`getNeighborsAttribute → filterNeighbors → pickRandomNeighbor`. That chain is
+typed-incorrect: `getNeighborsAttribute.Values` is a *values* array, not an
+NI[]. The PR A.1 connection validator allows `any → NI` for back-compat, but
+the runtime then mis-interprets the values as slot indexes. **Wave A.5 closes
+this by adding a real bootstrap node and the array-access primitives needed
+to compose NI[] pipelines correctly.**
+
+### Bootstrap
+
+`getAllNeighborIndexes(neighborhoodId) → NI[]` — emits `[0, 1, …, nbrSize-1]`
+at compile time. Use it whenever you need "all neighbors of this neighborhood"
+as a starting point for a filter / iterate / pick chain.
+
+### Array access
+
+- `arrayElement(arr, position) → element` — bounds-checked indexed access.
+  Bridges `Position(s)` outputs of `groupCounting` / `groupStatement` /
+  `groupOperator` back to NIs via a parallel array. Out-of-range yields a
+  safe default (-1 for NI / int, 0 for float, false for bool).
+- `arrayLength(arr) → int` — generic size operator. Use it instead of the
+  awkward `groupCounting(arr, !=, sentinel).Count` workaround.
+
+### Pick-N
+
+`pickNRandomNeighbors(NI[], n) → NI[]` — partial Fisher-Yates over a working
+copy of the input, returning the first `min(n, len)` shuffled entries. Uses
+the shared xorshift32 stream on JS / WASM and per-cell PCG on WebGPU
+(matching `getRandom` / `pickRandomNeighbor`).
+
+### Canonical movement pattern (corrected)
+
+```
+allNIs   = getAllNeighborIndexes(Moore)
+empties  = filterNeighbors(allNIs, alive, ==, 0)        // config: nbr=Moore, attr=alive
+chosen   = pickRandomNeighbor(empties)
+flow:
+  conditional(chosen >= 0)            // statement compares chosen to 0
+    setNeighborAttributeByIndex(Moore, alive, true, chosen)
+    setAttribute(alive, false)
+```
+
+With the implicit-all default on `filterNeighbors` (Wave A.5), this collapses
+to two NI-pipeline nodes:
+
+```
+empties = filterNeighbors(Moore, alive, ==, 0)         // Indexes unconnected → all-NIs of Moore
+chosen  = pickRandomNeighbor(empties)
+flow: …
+```
+
+### "Neighbor with max attribute X" pattern
+
+```
+allNIs = getAllNeighborIndexes(N)
+vals   = getNeighborsAttrByIndexes(allNIs, X)      // values[] aligned with allNIs
+red    = groupOperator(vals, max)                   // .Result = max value, .Position = list-pos
+maxNI  = arrayElement(allNIs, red.Position)         // resolves Position to the corresponding NI
+```
+
+This is where `Position(s)` outputs become useful: as parallel-array indexers
+into an NI[]. Without `arrayElement`, they were inert.
 
 **WebGPU compatibility.** All four NI value nodes have JS + WASM + WebGPU lockstep
 emitters. The async-mode "move into a random empty neighbor" pattern still requires

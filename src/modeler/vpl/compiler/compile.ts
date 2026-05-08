@@ -360,6 +360,11 @@ function compileRoot(
     if (sourceNode?.data.nodeType === 'forEachInArray' && sourcePortId === 'element') {
       return `_v${sourceNodeId}_element`;
     }
+    // pickNRandomNeighbors writes its output to the _result scratch array (the _work
+    // scratch is internal and never read by downstream nodes).
+    if (sourceNode?.data.nodeType === 'pickNRandomNeighbors') {
+      return `_v${sourceNodeId}_result`;
+    }
     return `_v${sourceNodeId}`;
   }
 
@@ -790,6 +795,10 @@ function compileRoot(
       scratchNodes.push({ scratchVarName: `_v${nodeId}_result`, initExpr: '[]' });
     }
     if (node.data.nodeType === 'joinNeighbors' && (node.data.config.operation as string || 'intersection') === 'intersection') {
+      scratchNodes.push({ scratchVarName: `_v${nodeId}_result`, initExpr: '[]' });
+    }
+    if (node.data.nodeType === 'pickNRandomNeighbors') {
+      scratchNodes.push({ scratchVarName: `_v${nodeId}_work`, initExpr: '[]' });
       scratchNodes.push({ scratchVarName: `_v${nodeId}_result`, initExpr: '[]' });
     }
 
@@ -1423,6 +1432,13 @@ export function compileGraph(
         ? Object.entries(nbr.tags).find(([, name]) => name === tagName)
         : undefined;
       node.data.config._resolvedSlot = tagEntry !== undefined ? Number(tagEntry[0]) : -1;
+    }
+    if (node.data.nodeType === 'getAllNeighborIndexes') {
+      // Wave A.5: resolve neighborhood size at compile time so the emit can
+      // produce `[0, 1, …, nbrSize-1]` directly.
+      const nbrId = node.data.config.neighborhoodId as string;
+      const nbr = model.neighborhoods.find(n => n.id === nbrId);
+      node.data.config._resolvedNbrSize = nbr ? nbr.coords.length : 0;
     }
     if (node.data.nodeType === 'flipNeighborIndex') {
       const nbrId = node.data.config.neighborhoodId as string;

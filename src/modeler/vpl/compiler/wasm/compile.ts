@@ -488,6 +488,51 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return storeResult(ctx.emitter, I32);
   },
 
+  // Wave A.5: array length — return inArr.lenLocal as i32.
+  arrayLength: ({ node, ctx }) => {
+    const inArr = resolveInputArray(ctx, node, 'array');
+    if (!inArr) {
+      ctx.errors.push(`arrayLength: input "array" must come from an array-producing node`);
+      return null;
+    }
+    ctx.emitter.localGet(inArr.lenLocal);
+    return storeResult(ctx.emitter, I32);
+  },
+
+  // Wave A.5: bounds-checked indexed access into an array. Out-of-range yields
+  // -1 (safe default for NI; reasonable sentinel for int/tag; for f64 elements
+  // the local default of 0.0 is used since -1 wouldn't be more sensible than 0).
+  arrayElement: ({ node, ctx, inputs }) => {
+    const inArr = resolveInputArray(ctx, node, 'array');
+    if (!inArr) {
+      ctx.errors.push(`arrayElement: input "array" must come from an array-producing node`);
+      return null;
+    }
+    const posRef = inputs['position'] ?? { inline: true, value: 0, valtype: I32 };
+    const em = ctx.emitter;
+
+    const idxLocal = em.allocLocal(I32);
+    pushValueAs(em, posRef, I32);
+    em.localSet(idxLocal);
+
+    const result = em.allocLocal(inArr.elemValtype);
+    if (inArr.elemValtype === F64) { em.f64Const(0); }
+    else { em.i32Const(-1); }
+    em.localSet(result);
+
+    // if (idx >= 0 && idx < len) result = arr[idx]
+    em.localGet(idxLocal); em.i32Const(0); em.op(OP_I32_GE_S);
+    em.localGet(idxLocal); em.localGet(inArr.lenLocal); em.op(OP_I32_LT_S);
+    em.op(OP_I32_AND);
+    em.ifThen(() => {
+      em.localGet(idxLocal);
+      emitArrayLoadElem(em, inArr);
+      em.localSet(result);
+    });
+    em.localGet(result);
+    return storeResult(em, inArr.elemValtype);
+  },
+
   // Wave A PR2: pick a random element from a NeighborIndex array. Mirrors
   // GetRandomNode's xorshift32 advance + stores _rs back to memory so
   // subsequent RNG draws stay in lockstep with the JS stream. Returns -1
@@ -1266,10 +1311,12 @@ function emitGroupStatement(
 function isArrayProducer(nodeType: string): boolean {
   switch (nodeType) {
     case 'getNeighborIndexesByTags':
+    case 'getAllNeighborIndexes':
     case 'filterNeighbors':
     case 'joinNeighbors':
     case 'getNeighborsAttrByIndexes':
     case 'groupCounting':
+    case 'pickNRandomNeighbors':
       return true;
     default:
       return false;
@@ -2117,7 +2164,125 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     return arr;
   },
 
+  // Wave A.5: full NI[] of a neighborhood — [0, 1, …, nbrSize-1].
+  getAllNeighborIndexes: ({ node, ctx }) => {
+    const nbrId = node.data.config.neighborhoodId as string;
+    const nbr = getNbr(ctx.layout, nbrId);
+    if (!nbr) { ctx.errors.push(`getAllNeighborIndexes: unknown neighborhood ${nbrId}`); return null; }
+    const arr = allocArrayInScratchConst(ctx, nbr.size, I32, 4);
+    for (let k = 0; k < nbr.size; k++) {
+      ctx.emitter.i32Const(k * 4);
+      ctx.emitter.localGet(arr.offsetLocal);
+      ctx.emitter.op(OP_I32_ADD);
+      ctx.emitter.i32Const(k);
+      ctx.emitter.i32Store(0, 2);
+    }
+    return arr;
+  },
+
+  // Wave A.5: partial Fisher-Yates over a working copy of the input.
+  // Allocates two scratch arrays (work + result) and uses the shared xorshift32
+  // RNG so the random sequence stays in lockstep with JS / pickRandomNeighbor.
+  pickNRandomNeighbors: ({ node, ctx, inputs }) => {
+    const inArr = resolveInputArray(ctx, node, 'indexes');
+    if (!inArr) {
+      ctx.errors.push(`pickNRandomNeighbors: input "indexes" must come from an array-producing node`);
+      return null;
+    }
+    const nRef = inputs['n'] ?? { inline: true, value: 1, valtype: I32 };
+    const em = ctx.emitter;
+
+    // K = clamp(n, 0, L)
+    const kLocal = em.allocLocal(I32);
+    pushValueAs(em, nRef, I32);
+    em.localSet(kLocal);
+    em.localGet(kLocal); em.i32Const(0); em.op(OP_I32_LT_S);
+    em.ifThen(() => { em.i32Const(0); em.localSet(kLocal); });
+    em.localGet(kLocal); em.localGet(inArr.lenLocal); em.op(OP_I32_GT_S);
+    em.ifThen(() => { em.localGet(inArr.lenLocal); em.localSet(kLocal); });
+
+    // Allocate work[L] and result[K] in scratch (i32 elements, 4 bytes).
+    const work = allocArrayInScratch(ctx, inArr.lenLocal, I32, 4);
+    const result = allocArrayInScratch(ctx, kLocal, I32, 4);
+
+    // Copy input -> work
+    const ci = em.allocLocal(I32);
+    em.i32Const(0); em.localSet(ci);
+    em.block(() => {
+      em.loop(() => {
+        em.localGet(ci); em.localGet(inArr.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+        // work[ci] = inArr[ci]
+        em.localGet(ci); em.i32Const(4); em.op(OP_I32_MUL);
+        em.localGet(work.offsetLocal); em.op(OP_I32_ADD);
+        em.localGet(ci); emitArrayLoadElem(em, inArr);
+        em.i32Store(0, 2);
+        em.localGet(ci); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(ci);
+        em.br(0);
+      });
+    });
+
+    // Partial Fisher-Yates: for fi in [0, K): pick j in [fi, L), swap, copy result[fi]
+    const fi = em.allocLocal(I32);
+    const rsLocal = em.allocLocal(I32);
+    const jLocal = em.allocLocal(I32);
+    const tmpLocal = em.allocLocal(I32);
+    em.i32Const(0); em.localSet(fi);
+    em.block(() => {
+      em.loop(() => {
+        em.localGet(fi); em.localGet(kLocal); em.op(OP_I32_GE_S); em.brIf(1);
+
+        // Advance _rs (xorshift32)
+        em.i32Const(0); em.i32Load(ctx.layout.rngStateOffset, 2); em.localSet(rsLocal);
+        em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(13); em.op(byte(0x74)); em.op(byte(0x73)); em.localSet(rsLocal);
+        em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(17); em.op(byte(0x76)); em.op(byte(0x73)); em.localSet(rsLocal);
+        em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(5); em.op(byte(0x74)); em.op(byte(0x73)); em.localSet(rsLocal);
+        em.i32Const(0); em.localGet(rsLocal); em.i32Store(ctx.layout.rngStateOffset, 2);
+
+        // j = fi + floor((rs / 2^32) * (L - fi))
+        em.localGet(rsLocal); em.op(OP_F64_CONVERT_I32_U); em.f64Const(4294967296); em.op(OP_F64_DIV);
+        em.localGet(inArr.lenLocal); em.localGet(fi); em.op(OP_I32_SUB); em.i32ToF64();
+        em.op(OP_F64_MUL);
+        em.f64ToI32();
+        em.localGet(fi); em.op(OP_I32_ADD);
+        em.localSet(jLocal);
+
+        // tmp = work[fi]
+        em.localGet(fi); em.i32Const(4); em.op(OP_I32_MUL);
+        em.localGet(work.offsetLocal); em.op(OP_I32_ADD);
+        em.i32Load(0, 2);
+        em.localSet(tmpLocal);
+        // work[fi] = work[jLocal]
+        em.localGet(fi); em.i32Const(4); em.op(OP_I32_MUL);
+        em.localGet(work.offsetLocal); em.op(OP_I32_ADD);
+        em.localGet(jLocal); em.i32Const(4); em.op(OP_I32_MUL);
+        em.localGet(work.offsetLocal); em.op(OP_I32_ADD);
+        em.i32Load(0, 2);
+        em.i32Store(0, 2);
+        // work[jLocal] = tmp
+        em.localGet(jLocal); em.i32Const(4); em.op(OP_I32_MUL);
+        em.localGet(work.offsetLocal); em.op(OP_I32_ADD);
+        em.localGet(tmpLocal);
+        em.i32Store(0, 2);
+        // result[fi] = work[fi]
+        em.localGet(fi); em.i32Const(4); em.op(OP_I32_MUL);
+        em.localGet(result.offsetLocal); em.op(OP_I32_ADD);
+        em.localGet(fi); em.i32Const(4); em.op(OP_I32_MUL);
+        em.localGet(work.offsetLocal); em.op(OP_I32_ADD);
+        em.i32Load(0, 2);
+        em.i32Store(0, 2);
+
+        em.localGet(fi); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(fi);
+        em.br(0);
+      });
+    });
+
+    return result;
+  },
+
   // Filter: walk input array, keep elements whose nbr-attr passes the comparison.
+  // Wave A.5: when the Indexes input is unconnected, iterate every slot of the
+  // configured neighborhood (loop bound = nbr.size) and the slot itself is the
+  // iteration index — saves the bootstrap node in the common case.
   filterNeighbors: ({ node, ctx, inputs }) => {
     const nbrId = node.data.config.neighborhoodId as string;
     const attrId = node.data.config.attributeId as string;
@@ -2127,19 +2292,22 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     if (!nbr || !attr) { ctx.errors.push(`filterNeighbors: unknown nbr/attr (${nbrId}/${attrId})`); return null; }
 
     const inArr = resolveInputArray(ctx, node, 'indexes');
-    if (!inArr) { ctx.errors.push(`filterNeighbors: no array input on "indexes"`); return null; }
+    const isExplicit = !!inArr;
     const compare = inputs['compare'] ?? { inline: true, value: 0, valtype: attrValType(attr.type) };
 
-    // Output: at most inArr.lenLocal entries; allocate the worst-case bytes.
+    // Output: at most inArr.lenLocal (or nbr.size) entries; allocate worst-case bytes.
     const outOffsetLocal = ctx.emitter.allocLocal(I32);
     ctx.emitter.localGet(ctx.scratchTopLocal);
     ctx.emitter.localSet(outOffsetLocal);
-    // outLen = 0 at start; we count up
     const outLenLocal = ctx.emitter.allocLocal(I32);
     ctx.emitter.i32Const(0); ctx.emitter.localSet(outLenLocal);
-    // Reserve scratch up-front (worst case, len * 4 bytes for i32 indices)
+    // Reserve scratch up-front
     ctx.emitter.localGet(ctx.scratchTopLocal);
-    ctx.emitter.localGet(inArr.lenLocal);
+    if (isExplicit) {
+      ctx.emitter.localGet(inArr!.lenLocal);
+    } else {
+      ctx.emitter.i32Const(nbr.size);
+    }
     ctx.emitter.i32Const(4); ctx.emitter.op(OP_I32_MUL);
     ctx.emitter.op(OP_I32_ADD);
     ctx.emitter.localSet(ctx.scratchTopLocal);
@@ -2148,12 +2316,20 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     ctx.emitter.i32Const(0); ctx.emitter.localSet(k);
     ctx.emitter.block(() => {
       ctx.emitter.loop(() => {
-        ctx.emitter.localGet(k); ctx.emitter.localGet(inArr.lenLocal); ctx.emitter.op(OP_I32_GE_S); ctx.emitter.brIf(1);
-        // Load index from input array as i32: indexes[k]
-        const idxElem = ctx.emitter.allocLocal(I32);
+        // Loop bound: explicit -> inArr.lenLocal; implicit -> nbr.size
         ctx.emitter.localGet(k);
-        emitArrayLoadElem(ctx.emitter, inArr);
-        if (inArr.elemValtype === F64) ctx.emitter.f64ToI32();
+        if (isExplicit) ctx.emitter.localGet(inArr!.lenLocal);
+        else ctx.emitter.i32Const(nbr.size);
+        ctx.emitter.op(OP_I32_GE_S); ctx.emitter.brIf(1);
+        // idxElem: explicit -> indexes[k]; implicit -> k itself
+        const idxElem = ctx.emitter.allocLocal(I32);
+        if (isExplicit) {
+          ctx.emitter.localGet(k);
+          emitArrayLoadElem(ctx.emitter, inArr!);
+          if (inArr!.elemValtype === F64) ctx.emitter.f64ToI32();
+        } else {
+          ctx.emitter.localGet(k);
+        }
         ctx.emitter.localSet(idxElem);
         // Load r_attr[nIdx[idx*nbrSize + idxElem]]
         const loadElem = () => {
