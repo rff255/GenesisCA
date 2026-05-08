@@ -45,8 +45,8 @@ A complete GenesisCA model definition consists of:
    - 1.2. Structure (Topology, Boundary Treatment, Grid Size)
    - 1.3. Execution (Update Mode, optional End Conditions: max generations + indicator rules)
 
-2. **Attributes** — each has a name, type (bool, integer, float), description, and a default value
-   - 2.1. Cell Attributes (per-cell state)
+2. **Attributes** — each has a name, type (bool, integer, float, tag, color, NeighborIndex), description, and a default value
+   - 2.1. Cell Attributes (per-cell state) — including NeighborIndex for cells that point at one of their neighbors (movement direction, leader-follower, etc.)
    - 2.2. Model Attributes (global parameters that all cells can read but not write; adjustable at runtime in the Simulator)
 
 3. **Neighborhoods** — a list of neighborhoods, each being a list of relative offsets from the central cell (margin up to 20)
@@ -65,11 +65,11 @@ A complete GenesisCA model definition consists of:
 
 ### The Modeler
 - **Properties Panel** — model metadata (Rule Author + GenesisCA Project Author), grid dimensions, boundary treatment (torus/constant), update mode (synchronous/asynchronous), tags, optional **Thumbnail** (PNG/JPEG/GIF/WebP up to 2 MB — shown on hover in the Models Library), optional End Conditions (max generations + indicator-based auto-pause rules)
-- **Attributes Panel** — cell and model attributes with type-specific default value controls (bool, integer, float, tag, color); cell attributes gain an optional **Boundary Value** field when boundary is set to constant
+- **Attributes Panel** — cell and model attributes with type-specific default value controls (bool, integer, float, tag, color, NeighborIndex); cell attributes gain an optional **Boundary Value** field when boundary is set to constant. NeighborIndex attributes show a clickable cell-grid editor anchored to a chosen *hint neighborhood* for picking the default slot.
 - **Neighborhoods Panel** — interactive grid editor with per-neighborhood margin, optional per-cell tags for named access, and a Duplicate button for quick variations
 - **Mappings Panel** — Attribute-to-Color and Color-to-Attribute mapping definitions
 - **Indicators** — standalone (typed scalar, graph-writable) or linked (auto-aggregated from cell attributes: frequency, total), with per-generation or accumulated modes. Frequency indicators can be viewed as horizontal bars, multi-line time series, or stacked-area time series (viz button cycles the three; preference persists per indicator). End Conditions accept per-category comparisons on frequency indicators (e.g. pause when count of `alive` cells &ge; 100).
-- **Graph Editor** — 37 node types across 8 categories (event, flow, data, logic, aggregation, output, color, indicators), with RMB pan, scroll zoom, and snap-to-grid. Includes Switch (flow routing by conditions or value), Proportion Map and Color Interpolation (with selectable curves: Linear, Smoothstep, Ease-In/Out Quadratic, Exponential, Logarithmic), Interpolation, Aggregate (multi-input math), neighborhood tag-based access nodes, and a **Stop Event** node that pauses the simulator with a user-defined message when its flow input fires.
+- **Graph Editor** — 45+ node types across 8 categories (event, flow, data, logic, aggregation, output, color, indicators), with RMB pan, scroll zoom, and snap-to-grid. Includes Switch (flow routing by conditions or value), For Each In Array (iterate any typed array), Proportion Map and Color Interpolation (with selectable curves: Linear, Smoothstep, Ease-In/Out Quadratic, Exponential, Logarithmic), Interpolation, Aggregate (multi-input math), neighborhood tag-based access nodes, NeighborIndex constructors and Flip / Pick Random Neighbor, and a **Stop Event** node that pauses the simulator with a user-defined message when its flow input fires.
 - **Connection validation** — prevents incompatible connections (flow/value), cycles, and duplicate inputs; compatible ports highlight during drag
 - **Inline Port Widgets** — input ports show small value editors (number/bool) when unconnected, eliminating the need for constant nodes in simple cases
 - **Node Collapse/Expand** — double-click any node to collapse it; constants show their value; collapsed nodes temporarily expand when connecting edges
@@ -89,6 +89,8 @@ A complete GenesisCA model definition consists of:
 - **Update Mode** — choose Synchronous (classic CA) or Asynchronous (sequential updates with single buffer) in Model Properties
 - **Update Schemes** — Random Order, Random Independent, or Cyclic — balancing accuracy vs. performance
 - **Async-only nodes** — Set Neighborhood Attribute, Set Neighbor Attr By Index for number-conserving movement patterns. Get Neighbor Attr By Index works in both modes.
+- **NeighborIndex type** — first-class typed handle for a neighbor slot. Distinguishes coord-handles (the slot you want to read or write to) from list-positions (positions in an array of values), eliminating a class of silent runtime bugs. Companion nodes: Pick Random Neighbor, Neighbor Index (from Offset / from Tag), Flip Neighbor Index. Wiring a non-NI integer source into an NI port shows an amber warning badge on the target node.
+- **For Each In Array** — flow node that iterates a typed array and exposes the per-iteration element via an output port (JS-only currently). Useful for "iterate matching neighbors" patterns; body flow nodes can consume the element directly.
 
 ### The Simulator
 - **Transport bar** — Play/Pause/Step/Reset with FPS and Gens/Frame sliders, keyboard shortcuts (Space=step, Enter=play/pause, Esc=reset)
@@ -119,7 +121,8 @@ A complete GenesisCA model definition consists of:
 
 ## Documentation
 
-- [Node Reference](docs/NODES_REFERENCE.md) — full catalogue of the 40+ node types, port schemas, and compile-time semantics, with Mermaid diagrams of common patterns.
+- [Node Reference](docs/NODES_REFERENCE.md) — full catalogue of the 45+ node types, port schemas, and compile-time semantics, with Mermaid diagrams of common patterns. Includes a §7 dedicated to the NeighborIndex type and the index-kind hazards it prevents.
+- [NeighborIndex / List Attributes Impact Map](docs/IMPACT_MAP_NEIGHBORINDEX_LIST.md) — cross-subsystem analysis behind the Wave A NeighborIndex work and the (deferred) Wave B bounded list-attributes proposal.
 - [CA Literature Review](docs/CA_LITERATURE_REVIEW.md) — a survey of ~70 canonical cellular-automata models across physics, chemistry, biology, ecology, sociology, transport, earth sciences (geology / mining / volcanology / seismology), CS theory and cryptography, with a Top-Tier Shortlist driving GenesisCA's feature roadmap.
 - [Performance Optimization Paths](docs/PERFORMANCE_OPTIMIZATION_PATHS.md) — engine-internal notes on the JS- and WASM-compile targets and how to keep large grids fast.
 - [Huge Grid Optimizations](docs/HUGE_GRID_OPTIMIZATIONS.md) — deferred memory-scaling techniques for pushing grids past today's WebGPU ceiling: implicit neighbor lookup, tile-based dispatch, sub-word packing for bool / small-tag attributes.

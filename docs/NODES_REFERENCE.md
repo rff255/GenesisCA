@@ -4,7 +4,7 @@ This document catalogues every node in the GenesisCA Visual Programming Language
 describes the port type system, and flags redundancies or gaps. It is a working reference
 to inform future consolidation — it does **not** describe any committed refactoring.
 
-**Scope:** 40 visible node types across 7 categories, plus 2 hidden boundary nodes
+**Scope:** 45 visible node types across 7 categories, plus 2 hidden boundary nodes
 (`macroInput` / `macroOutput`).
 
 ---
@@ -46,14 +46,22 @@ by downstream consumers.
 | `integer` | whole number (stored in `Int32Array` for attrs; plain JS number elsewhere) | yes | yes | `number` |
 | `float` | decimal (`Float64Array` for attrs) | yes | yes | `number` |
 | `tag` | index into a named-values list (`Int32Array`) | yes | yes | `tag` (dropdown) |
+| `neighborIndex` | slot index into a neighborhood (`Int32Array`); typed-distinct from `integer` to catch the silent index-kind hazards in §7 | yes | yes | `number` |
 | `color-r/g/b` | 3 integer channels — emitted as separate ports (no single "color" type) | yes | — | `color` (on triples) |
 | `any` | type-agnostic; most ports use this | yes | depends on `isArray` | varies |
 
 **Notable non-obvious rules**
 
-- The compiler does not verify data-type matches when connecting value ports. Connections
-  are only blocked by **category** (flow↔flow, value↔value) and structural checks
-  (cycles, self-connection, duplicate targets unless the input has `isArray: true`).
+- The compiler does not verify data-type matches when connecting value ports, **except**
+  for `neighborIndex` ports: a NeighborIndex port may only connect to another
+  NeighborIndex port or to an `any`-typed port. Other type mismatches (bool ↔ int,
+  int ↔ float, etc.) are still allowed for back-compat. Connections are also blocked
+  by **category** (flow↔flow, value↔value) and structural checks (cycles,
+  self-connection, duplicate targets unless the input has `isArray: true`).
+- Wiring a non-NI integer source (e.g. `groupCounting.Positions`,
+  `groupOperator.Position`, `getRandom.Value`) into a NeighborIndex port surfaces an
+  amber warning badge on the target node — see §7 for the index-kind hazards this
+  prevents.
 - A port with `isArray: true` expects an array; some aggregation inputs (`aggregate.Values`)
   additionally accept **multiple simultaneous connections** on the same port, producing
   an array from the individual scalars upstream.
@@ -89,8 +97,9 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 | 5 | `conditional` | If / Then / Else | Branch on bool. | `I: CHECK` (flow) `I: IF` (bool) / `O: THEN` `O: ELSE` (flow) | |
 | 6 | `sequence` | Sequence | Execute two flows in order. | `I: DO` / `O: FIRST` `O: THEN` (flow) | |
 | 7 | `loop` | Loop | Repeat flow N times. | `I: DO` (flow) `I: COUNT` (int) / `O: BODY` (flow) | |
-| 8 | `switch` | Switch | Multi-way branch (by value or conditions). | `I: CHECK` (flow) `I: VALUE` (optional) / dynamic `O: CASE_N` + `O: DEFAULT` | 2 modes: `conditions` (per-case bool inputs) or `value` (compare to cases); optional `firstMatchOnly` |
-| 9 | `macro` | Macro | Reusable sub-graph. | dynamic — ports from `MacroDef.exposedInputs/Outputs` | Requires `macroDefId`; compiler inlines the subgraph |
+| 8 | `forEachInArray` | For Each In Array | Iterates a typed array, exposing the per-iteration element via the `Element` output port. | `I: DO` (flow) `I: Array` (any[]) / `O: BODY` (flow) `O: Element` (any) | JS path implemented; body **flow** nodes can consume `Element` directly via input ports. Body **value** nodes that depend on `Element` are not yet supported (pre-emit pass scopes value nodes to cell, not loop iteration). WASM/WebGPU emitters not yet implemented — graphs using this node fall back to JS. |
+| 9 | `switch` | Switch | Multi-way branch (by value or conditions). | `I: CHECK` (flow) `I: VALUE` (optional) / dynamic `O: CASE_N` + `O: DEFAULT` | 2 modes: `conditions` (per-case bool inputs) or `value` (compare to cases); optional `firstMatchOnly` |
+| 10 | `macro` | Macro | Reusable sub-graph. | dynamic — ports from `MacroDef.exposedInputs/Outputs` | Requires `macroDefId`; compiler inlines the subgraph |
 
 ### 3.3 Data readers — `data`
 
@@ -99,10 +108,13 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 | 9 | `getCellAttribute` | Get Cell Attribute | Read current cell's attribute. | `O: Value` (any) | Requires `attributeId` |
 | 10 | `getModelAttribute` | Get Model Attribute | Read global model-level attribute. | `O: Value` OR `O: R/G/B` (if attr is a color) | Requires model-level `attributeId` |
 | 11 | `getNeighborsAttribute` | Get Neighbors Attribute | Read attr of **every** neighbor → array. | `O: Values` (arr) | Requires `neighborhoodId` + `attributeId`; allocates a scratch array per cell |
-| 12 | `getNeighborAttributeByIndex` | Get Neighbor Attr By Index | Read **one** neighbor by index. | `I: INDEX` (int) / `O: Value` | Requires `neighborhoodId` + `attributeId`; read-only so sync-safe. Accepts an array index input (uses element 0). |
+| 12 | `getNeighborAttributeByIndex` | Get Neighbor Attr By Index | Read **one** neighbor by index. | `I: INDEX` (NI) / `O: Value` | Requires `neighborhoodId` + `attributeId`; read-only so sync-safe. Index port retyped to `neighborIndex`. |
 | 13 | `getNeighborAttributeByTag` | Get Neighbor Attr By Tag | Read **one** neighbor by neighborhood-tag name. | `O: Value` | Requires tag in the neighborhood's `tags` map |
-| 14 | `getNeighborIndexesByTags` | Get Neighbor Indexes By Tags | Return neighborhood indices matching a set of tag names. | `O: Indexes` (arr) | Dynamic config rows per tag |
-| 15 | `getNeighborsAttrByIndexes` | Get Neighbors Attr By Indexes | Read attr values for a given index array. | `I: INDEXES` (int arr) / `O: Values` (arr) | Pair with `filterNeighbors` or `getNeighborIndexesByTags` |
+| 14 | `getNeighborIndexesByTags` | Get Neighbor Indexes By Tags | Return neighborhood indices matching a set of tag names. | `O: Indexes` (NI arr) | Dynamic config rows per tag |
+| 15 | `getNeighborsAttrByIndexes` | Get Neighbors Attr By Indexes | Read attr values for a given NeighborIndex array. | `I: INDEXES` (NI arr) / `O: Values` (arr) | Pair with `filterNeighbors`, `getNeighborIndexesByTags`, or `joinNeighbors` |
+| 15a | `neighborIndexFromOffset` | Neighbor Index (from Offset) | Build a NI pointing at the (dRow, dCol) slot of the chosen neighborhood. Compile-time-resolved. | `O: Value` (NI) | Returns -1 if the offset is not in the neighborhood |
+| 15b | `neighborIndexFromTag` | Neighbor Index (from Tag) | Build a NI pointing at the slot tagged with the given name. Compile-time-resolved. | `O: Value` (NI) | Same shape as fromOffset but resolves by tag name |
+| 15c | `flipNeighborIndex` | Flip Neighbor Index | Mirror a NI horizontally / vertically / both. Compile-time precomputed lookup table. | `I: Index` (NI) / `O: Value` (NI) | Returns -1 when the flipped offset isn't in the configured neighborhood |
 | 16 | `getConstant` | Get Constant | Emit fixed bool/int/float/tag. | `O: Value` | `constType` + `constValue` config |
 | 17 | `getRandom` | Get Random | Random bool/int/float. | `I: P` (float, bool mode only) / `O: Value` | Bool mode: `probability` input; Int mode: min/max config |
 | 18 | `tagConstant` | Tag Constant | Emit a fixed tag value. | `O: Value` (int = tag index) | Hidden from Add-Node menu; created contextually |
@@ -122,12 +134,13 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 
 | # | Type | Label | Description | Ports | Notes |
 |---|---|---|---|---|---|
-| 25 | `groupCounting` | Count Matching | Count array values matching a comparison vs X, or falling inside/outside an interval (`Between` / `Not Between`). | `I: Values` (arr) `I: Compare` `I: Compare High` (between-family only) / `O: Count` (int) `O: Indexes` (arr) | Configurable op |
-| 26 | `groupStatement` | Group Assert | Assertion across array (all/none/any, greater/lesser). | `I: Values` (arr) `I: X` (opt) / `O: Result` (bool) `O: Indexes` (arr) | 7 operations in one dropdown |
-| 27 | `groupOperator` | Group Reduce | `Sum Product Min Max Mean AND OR Random` on an array. | `I: Values` (arr) / `O: Result` `O: Index` (for min/max/random) | |
+| 25 | `groupCounting` | Count Matching | Count array values matching a comparison vs X, or falling inside/outside an interval (`Between` / `Not Between`). | `I: Values` (arr) `I: Compare` `I: Compare High` (between-family only) / `O: Count` (int) `O: Positions` (int arr) | "Positions" output: list-positions into the input array — NOT NeighborIndex coord-handles (see §7) |
+| 26 | `groupStatement` | Group Assert | Assertion across array (all/none/any, greater/lesser). | `I: Values` (arr) `I: X` (opt) / `O: Result` (bool) `O: Positions` (int arr) | "Positions" output: same caveat as `groupCounting` |
+| 27 | `groupOperator` | Group Reduce | `Sum Product Min Max Mean AND OR Random` on an array. | `I: Values` (arr) / `O: Result` `O: Position` (int, for min/max/random) | "Position" output: list-position into input array, NOT a NeighborIndex |
 | 28 | `aggregate` | Aggregate | Combine **multiple connections** into one value. | `I: Values` (arr, multi-connect) / `O: Result` | Unlike `groupOperator` which takes an array, this takes N scalar edges |
-| 29 | `filterNeighbors` | Filter Neighbors | Keep neighbor indices where attr passes a comparison. | `I: INDEXES` (arr) `I: Compare` / `O: Result` (arr) | Configurable neighborhood + attribute + op |
-| 30 | `joinNeighbors` | Join Neighbors | `Intersection (AND) / Union (OR)` of two index arrays. | `I: A` `I: B` (arr) / `O: Result` (arr) | |
+| 29 | `filterNeighbors` | Filter Neighbors | Keep NeighborIndex entries where the attribute passes a comparison. | `I: INDEXES` (NI arr) `I: Compare` / `O: Result` (NI arr) | Configurable neighborhood + attribute + op |
+| 30 | `joinNeighbors` | Join Neighbors | `Intersection (AND) / Union (OR)` of two NeighborIndex arrays. | `I: A` `I: B` (NI arr) / `O: Result` (NI arr) | |
+| 30a | `pickRandomNeighbor` | Pick Random Neighbor | Pick one element at random from a NeighborIndex array. Returns -1 on empty input. | `I: Indexes` (NI arr) / `O: Value` (NI) | Replaces the broken `groupOperator(random)` pattern; uses the same xorshift32 stream as `getRandom` |
 
 ### 3.6 Output (writers) — `output`
 
@@ -374,12 +387,78 @@ These would reduce the palette's cognitive load:
 
 ### 6.4 Port-system improvements
 
-- **Type-aware connection validation**: currently only the port *category* is checked.
-  The compiler tolerates bool-into-int connections but adding a visible incompatibility
-  warning (not a hard block) would catch mistakes earlier.
+- **Type-aware connection validation**: currently only the port *category* is checked
+  (with the exception of NeighborIndex — see §7). Other type mismatches like bool ↔ int
+  or int ↔ float remain unchecked for back-compat.
 - **Inline widgets on more ports**: neighbor writers (`setNeighborhoodAttribute`,
   `setNeighborAttributeByIndex`) have no inline widget for `Value`, forcing an extra
   `getConstant` for trivial writes. Reuse the dynamic widget pattern from `setAttribute`.
+
+---
+
+## 7. NeighborIndex (Wave A)
+
+**Background.** Before Wave A, every "integer" floating through a neighbor-aware port
+could mean three different things at runtime:
+- a **cell-idx** (0..total-1), i.e. a global address into the grid;
+- a **coord-idx** (0..nbrSize-1), i.e. a slot inside a specific neighborhood;
+- a **list-position** (0..arr.length-1), i.e. a position inside an array of values.
+
+The port type system collapsed all three into `integer`, which meant chains like
+`groupOperator(min/max)` → `setNeighborAttributeByIndex` looked correct in the editor
+but performed wrong-cell lookups at runtime as soon as the input array had been
+filtered or reordered (since the emitted `Index` output is a list-position, not a
+coord-idx).
+
+**The fix.** Wave A introduces `neighborIndex` as a distinct port type. Internally it
+is still an `i32` carrying the same coord-idx (slot index into the consuming node's
+neighborhood) — the runtime representation is unchanged so existing graphs still work
+without migration. What changed is the **typing** layer:
+
+- Every neighbor-touching port that previously took a coord-idx (`getNeighborAttributeByIndex.Index`,
+  `setNeighborAttributeByIndex.Index`, `filterNeighbors.Indexes` / `.Filtered`,
+  `getNeighborIndexesByTags.Indexes`, `joinNeighbors.A/B/Result`,
+  `getNeighborsAttrByIndexes.Indexes`) was retyped to `neighborIndex`.
+- Aggregation outputs that emit *list-positions* (`groupCounting.Positions`,
+  `groupStatement.Positions`, `groupOperator.Position`) were renamed and stay typed
+  as plain `integer` — wiring one of them into a NeighborIndex port now fires a
+  warning badge on the target node.
+- `isValidConnection` blocks NI ↔ non-NI/non-`any` wires at edit time. Other type
+  combinations (bool ↔ int, etc.) remain unchecked.
+
+**Constructor + manipulation nodes.** Four value nodes operate on NI:
+- `neighborIndexFromOffset(neighborhoodId, dr, dc) → NI` — compile-time-resolved.
+- `neighborIndexFromTag(neighborhoodId, tagName) → NI` — compile-time-resolved.
+- `flipNeighborIndex(neighborhoodId, mode) NI → NI` — mirror horizontally / vertically /
+  both. Compile-time precomputes a flip table per neighborhood.
+- `pickRandomNeighbor(NI[]) → NI` — pick one element at random from a NI array.
+  Replaces the broken `groupOperator(random)` pattern. Returns -1 on empty input.
+
+**Iteration.** `forEachInArray(arr) { body }` exposes the per-iteration element via an
+`Element` value port. Body **flow** nodes that consume `Element` directly via input
+ports work; body **value** nodes that depend on `Element` are not yet supported on
+any compile target (pre-emit pass scopes value nodes to cell, not loop iteration).
+
+**NeighborIndex as a stored attribute.** Cell and model attributes can be declared
+with `type: 'neighborIndex'` (storage = `Int32Array`, identical to integer/tag). The
+attribute editor exposes a *hint neighborhood* dropdown plus a clickable cell grid for
+picking the default value. The hint is purely a UI affordance — the stored value is
+just a slot index, interpreted at runtime relative to the consuming node's
+neighborhood. Cross-neighborhood reuse of a stored NI is brittle and not recommended
+unless both neighborhoods share the same slot ordering for the relevant offsets.
+
+**What is NOT yet implemented (deferred to Wave A.5+):**
+- Brush integration for NI cell attributes (paint values onto the canvas).
+- Default Attribute → Color mapping for NI cell attrs (currently render flat).
+- WASM and WebGPU emitters for `forEachInArray` (graphs using it auto-fall-back to JS).
+
+**WebGPU compatibility.** All four NI value nodes have JS + WASM + WebGPU lockstep
+emitters. The async-mode "move into a random empty neighbor" pattern still requires
+`updateMode: 'asynchronous'` and `setNeighborAttributeByIndex` (both async-only),
+which are rejected by WebGPU at compile time — the async movement-rule territory
+remains JS / WASM only. WebGPU's contribution from Wave A is sync-mode probabilistic
+neighbor sampling: `getNeighborsAttribute → filterNeighbors → pickRandomNeighbor →
+getNeighborAttributeByIndex` now compiles on WebGPU.
 
 ---
 
