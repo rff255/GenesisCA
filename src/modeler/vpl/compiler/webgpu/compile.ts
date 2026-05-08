@@ -668,6 +668,53 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return emitLet(ctx, 'i32', `${idx | 0}`, 'tag');
   },
 
+  // Wave A PR2: NeighborIndex constructors (compile-time-resolved slot)
+  neighborIndexFromOffset: ({ node, ctx }) => {
+    const slot = Number(node.data.config._resolvedSlot ?? -1);
+    return emitLet(ctx, 'i32', `${slot | 0}`, 'nio');
+  },
+  neighborIndexFromTag: ({ node, ctx }) => {
+    const slot = Number(node.data.config._resolvedSlot ?? -1);
+    return emitLet(ctx, 'i32', `${slot | 0}`, 'nit');
+  },
+
+  // Wave A PR2: flip a NeighborIndex via compile-time precomputed table.
+  // Out-of-range inputs (or table[k] === -1) yield -1.
+  flipNeighborIndex: ({ node, ctx, inputs }) => {
+    const tableJSON = node.data.config._resolvedFlipTable as string | undefined;
+    const table: number[] = tableJSON ? JSON.parse(tableJSON) : [];
+    const idxRef = inputs['index'] ?? { expr: '0', type: 'i32' as WgslType };
+    const inExpr = castTo(idxRef, 'i32');
+    const inName = fresh(ctx, 'flipIn');
+    ctx.lines.push(`  let ${inName}: i32 = ${inExpr};`);
+    const resultName = fresh(ctx, 'flipR');
+    ctx.lines.push(`  var ${resultName}: i32 = -1;`);
+    for (let k = 0; k < table.length; k++) {
+      ctx.lines.push(`  if (${inName} == ${k}) { ${resultName} = ${(table[k] ?? -1) | 0}; }`);
+    }
+    return { expr: resultName, type: 'i32' };
+  },
+
+  // Wave A PR2: pick a random element from a NeighborIndex array. Uses the
+  // per-cell PCG stream (rand_f32) — different sequence from JS/WASM
+  // (xorshift32) but statistically equivalent. Returns -1 on empty input.
+  pickRandomNeighbor: ({ node, ctx }) => {
+    const inArr = resolveInputArray(ctx, node, 'indexes');
+    if (!inArr) {
+      ctx.errors.push(`pickRandomNeighbor: input "indexes" must come from an array-producing node (filterNeighbors / getNeighborIndexesByTags / joinNeighbors)`);
+      return null;
+    }
+    const r = fresh(ctx, 'pickR');
+    ctx.lines.push(`  let ${r}: f32 = rand_f32(idx);`);
+    const idxName = fresh(ctx, 'pickI');
+    // Clamp at compile time to maxLen-1 so the index is statically known to be
+    // a valid array index when len > 0; runtime select() guards the empty case.
+    ctx.lines.push(`  let ${idxName}: i32 = i32(${r} * f32(${inArr.lenName}));`);
+    const resultName = fresh(ctx, 'pickV');
+    ctx.lines.push(`  let ${resultName}: i32 = select(-1, ${arrLoad(inArr, idxName)}, ${inArr.lenName} > 0);`);
+    return { expr: resultName, type: 'i32' };
+  },
+
   getCellAttribute: ({ node, ctx }) => {
     const attrId = node.data.config.attributeId as string;
     const attr = getAttr(ctx.layout, attrId);
