@@ -491,12 +491,18 @@ export function HelpView() {
             <strong>Canonical movement pattern</strong> (mass-conservation, particle-style rules):
           </p>
           <ol className={styles.list}>
-            <li><strong>Get Neighbors Attribute</strong> &rarr; read every neighbor&apos;s state.</li>
-            <li><strong>Filter Neighbors</strong> &rarr; keep the ones where state == empty.</li>
+            <li><strong>Filter Neighbors</strong> with <em>Indexes</em> unconnected (defaults to all
+              slots of the configured neighborhood) &rarr; keeps the slots where the chosen
+              attribute equals "empty". Output is a NeighborIndex[].</li>
             <li><strong>Pick Random Neighbor</strong> &rarr; pick one slot at random from the filtered list.</li>
-            <li><strong>Set Neighbor Attr By Index</strong> on the picked slot &mdash; mark it occupied.</li>
-            <li><strong>Set Attribute</strong> on self &mdash; clear current cell.</li>
+            <li>If the picked slot is &ge; 0 (a Compare node against 0), <strong>Set Neighbor Attr By
+              Index</strong> on the picked slot to mark it occupied AND <strong>Set Attribute</strong>
+              on self to clear the current cell.</li>
           </ol>
+          <p className={styles.p}>
+            (Equivalent fully-explicit form: <strong>Get All Neighbor Indexes</strong> &rarr;
+            <strong> Filter Neighbors</strong> with <em>Indexes</em> wired &rarr; same as above.)
+          </p>
 
           <h3 className={styles.h3}>NeighborIndex Type</h3>
           <p className={styles.p}>
@@ -515,16 +521,29 @@ export function HelpView() {
             you&apos;ll see a warning badge on the target node.
           </p>
           <p className={styles.p}>
-            Four nodes operate on NeighborIndex:
+            Nodes that operate on NeighborIndex:
           </p>
           <ul className={styles.ul}>
-            <li><strong>Pick Random Neighbor</strong> &mdash; pick one slot from a NI array at random.</li>
+            <li><strong>Get All Neighbor Indexes</strong> &mdash; the bootstrap. Returns the full
+              NI[] of a neighborhood (every slot). Use it to start a filter / iterate / pick chain
+              without needing tags.</li>
+            <li><strong>Filter Neighbors</strong> &mdash; narrow an NI[] (or, with the input
+              unconnected, all neighbors of the configured neighborhood) by an attribute predicate.</li>
+            <li><strong>Join Neighbors</strong> &mdash; intersection / union of two NI[]s.</li>
+            <li><strong>Pick Random Neighbor</strong> &mdash; pick one slot from a NI[] at random.</li>
+            <li><strong>Pick N Random Neighbors</strong> &mdash; pick N distinct slots without
+              replacement (partial Fisher-Yates).</li>
             <li><strong>Neighbor Index (from Offset)</strong> &mdash; build a NI from a (dRow, dCol)
               offset into a chosen neighborhood. Compile-time-resolved.</li>
             <li><strong>Neighbor Index (from Tag)</strong> &mdash; build a NI from a tag name in the
               neighborhood&apos;s tags map.</li>
             <li><strong>Flip Neighbor Index</strong> &mdash; mirror a NI horizontally / vertically /
               both, relative to the configured neighborhood.</li>
+            <li><strong>Array Element</strong> / <strong>Array Length</strong> &mdash; generic indexed
+              access and size for any array (NI[] or otherwise). Pair Array Element with the
+              <em>Position(s)</em> outputs of Count Matching / Group Reduce to recover the NI of the
+              matching neighbor when reducing an aligned values[] from <em>Get Neighbors Attr By
+              Indexes</em>.</li>
           </ul>
           <p className={styles.p}>
             NeighborIndex can also be a <strong>cell or model attribute type</strong>. The
