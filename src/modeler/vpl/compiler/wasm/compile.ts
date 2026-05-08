@@ -448,6 +448,100 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return storeResult(ctx.emitter, I32);
   },
 
+  // Wave A PR2: NeighborIndex constructors (compile-time-resolved)
+  neighborIndexFromOffset: ({ node, ctx }) => {
+    const slot = Number(node.data.config._resolvedSlot ?? -1);
+    ctx.emitter.i32Const(slot | 0);
+    return storeResult(ctx.emitter, I32);
+  },
+  neighborIndexFromTag: ({ node, ctx }) => {
+    const slot = Number(node.data.config._resolvedSlot ?? -1);
+    ctx.emitter.i32Const(slot | 0);
+    return storeResult(ctx.emitter, I32);
+  },
+
+  // Wave A PR2: flip a NeighborIndex via a precomputed lookup table.
+  // _resolvedFlipTable is a JSON array [src=0..nbrSize-1] -> flipped or -1.
+  // Bounds-check the input; out-of-range yields -1 (matches JS emit).
+  flipNeighborIndex: ({ node, ctx, inputs }) => {
+    const tableJSON = node.data.config._resolvedFlipTable as string | undefined;
+    const table: number[] = tableJSON ? JSON.parse(tableJSON) : [];
+    const idxRef = inputs['index'] ?? { inline: true, value: 0, valtype: I32 };
+    const inLocal = ctx.emitter.allocLocal(I32);
+    pushValueAs(ctx.emitter, idxRef, I32);
+    ctx.emitter.localSet(inLocal);
+    const result = ctx.emitter.allocLocal(I32);
+    ctx.emitter.i32Const(-1); ctx.emitter.localSet(result);
+    // For each valid table entry, emit `if (in === k) result = table[k];`
+    // Small neighborhoods (<=32 slots) keep this compact; larger tables
+    // generate one if-then per slot but the runtime cost stays O(n).
+    for (let k = 0; k < table.length; k++) {
+      ctx.emitter.localGet(inLocal);
+      ctx.emitter.i32Const(k);
+      ctx.emitter.op(byte(0x46)); // OP_I32_EQ
+      ctx.emitter.ifThen(() => {
+        ctx.emitter.i32Const((table[k] ?? -1) | 0);
+        ctx.emitter.localSet(result);
+      });
+    }
+    ctx.emitter.localGet(result);
+    return storeResult(ctx.emitter, I32);
+  },
+
+  // Wave A PR2: pick a random element from a NeighborIndex array. Mirrors
+  // GetRandomNode's xorshift32 advance + stores _rs back to memory so
+  // subsequent RNG draws stay in lockstep with the JS stream. Returns -1
+  // when the input array is empty.
+  pickRandomNeighbor: ({ node, ctx }) => {
+    const inArr = resolveInputArray(ctx, node, 'indexes');
+    if (!inArr) {
+      ctx.errors.push(`pickRandomNeighbor: input "indexes" must come from an array-producing node (filterNeighbors / getNeighborIndexesByTags / joinNeighbors)`);
+      return null;
+    }
+    const em = ctx.emitter;
+    // Advance _rs (xorshift32) — same constants as GetRandomNode
+    const rsLocal = em.allocLocal(I32);
+    em.i32Const(0);
+    em.i32Load(ctx.layout.rngStateOffset, 2);
+    em.localSet(rsLocal);
+    // _rs ^= _rs << 13
+    em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(13);
+    em.op(byte(0x74)); em.op(byte(0x73)); em.localSet(rsLocal);
+    // _rs ^= _rs >>> 17
+    em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(17);
+    em.op(byte(0x76)); em.op(byte(0x73)); em.localSet(rsLocal);
+    // _rs ^= _rs << 5
+    em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(5);
+    em.op(byte(0x74)); em.op(byte(0x73)); em.localSet(rsLocal);
+    // Store back to memory
+    em.i32Const(0); em.localGet(rsLocal); em.i32Store(ctx.layout.rngStateOffset, 2);
+
+    const result = em.allocLocal(I32);
+    em.i32Const(-1); em.localSet(result);
+    // if (len > 0) result = arr[floor((rs / 2^32) * len)]
+    em.localGet(inArr.lenLocal);
+    em.i32Const(0);
+    em.op(byte(0x4b)); // OP_I32_GT_U
+    em.ifThen(() => {
+      // floor(rs_u32 / 2^32 * len_s32) -> i32
+      em.localGet(rsLocal);
+      em.op(OP_F64_CONVERT_I32_U);
+      em.f64Const(4294967296);
+      em.op(OP_F64_DIV);
+      em.localGet(inArr.lenLocal);
+      em.i32ToF64();
+      em.op(OP_F64_MUL);
+      em.f64ToI32();
+      // address = arr.offset + idx * 4
+      em.i32Const(4); em.op(OP_I32_MUL);
+      em.localGet(inArr.offsetLocal); em.op(OP_I32_ADD);
+      em.i32Load(0, 2);
+      em.localSet(result);
+    });
+    em.localGet(result);
+    return storeResult(em, I32);
+  },
+
   getCellAttribute: ({ node, ctx }) => {
     const attrId = node.data.config.attributeId as string;
     const attr = getAttr(ctx.layout, attrId);
