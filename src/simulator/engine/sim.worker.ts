@@ -438,6 +438,7 @@ function createTypedArray(type: string, size: number): Float64Array | Int32Array
     case 'integer': return new Int32Array(size);
     case 'float': return new Float64Array(size);
     case 'tag': return new Int32Array(size);
+    case 'neighborIndex': return new Int32Array(size);
     default: return new Float64Array(size);
   }
 }
@@ -449,6 +450,7 @@ function viewOver(type: string, buf: ArrayBuffer, byteOffset: number, length: nu
     case 'bool': return new Uint8Array(buf, byteOffset, length);
     case 'integer': return new Int32Array(buf, byteOffset, length);
     case 'tag': return new Int32Array(buf, byteOffset, length);
+    case 'neighborIndex': return new Int32Array(buf, byteOffset, length);
     case 'float': return new Float64Array(buf, byteOffset, length);
     default: return new Float64Array(buf, byteOffset, length);
   }
@@ -460,6 +462,7 @@ function defaultValue(attr: AttrDef): number {
     case 'integer': return parseInt(attr.defaultValue, 10) || 0;
     case 'float': return parseFloat(attr.defaultValue) || 0;
     case 'tag': return parseInt(attr.defaultValue, 10) || 0;
+    case 'neighborIndex': return parseInt(attr.defaultValue, 10) || 0;
     default: return 0;
   }
 }
@@ -474,6 +477,7 @@ function boundaryCellValue(attr: AttrDef): number {
     case 'integer': return parseInt(bv, 10) || 0;
     case 'float': return parseFloat(bv) || 0;
     case 'tag': return parseInt(bv, 10) || 0;
+    case 'neighborIndex': return parseInt(bv, 10) || 0;
     default: return 0;
   }
 }

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
 import type { AttributeType } from '../../model/types';
 import { useListReorder } from './useListReorder';
+import { NeighborIndexDefaultEditor } from './NeighborIndexDefaultEditor';
 import styles from './PanelContent.module.css';
 
 export function AttributesPanelContent() {
@@ -163,6 +164,7 @@ export function AttributesPanelContent() {
                   const newType = e.target.value as AttributeType;
                   const resetDefaults: Record<string, string> = {
                     bool: 'false', integer: '0', float: '0', list: '', tag: '', color: '#808080',
+                    neighborIndex: '0',
                   };
                   updateAttribute(selected.id, {
                     type: newType,
@@ -174,6 +176,7 @@ export function AttributesPanelContent() {
                 <option value="integer">Integer</option>
                 <option value="float">Float</option>
                 <option value="tag">Tag</option>
+                <option value="neighborIndex">Neighbor Index</option>
                 {selected.isModelAttribute && <option value="color">Color</option>}
               </select>
             </div>
@@ -236,6 +239,12 @@ export function AttributesPanelContent() {
                     <option value="0">(no tags defined)</option>
                   )}
                 </select>
+              ) : selected.type === 'neighborIndex' ? (
+                <NeighborIndexDefaultEditor
+                  attribute={selected}
+                  onChange={cfg => updateAttribute(selected.id, cfg)}
+                  neighborhoods={model.neighborhoods}
+                />
               ) : (
                 <input
                   className={styles.textInput}

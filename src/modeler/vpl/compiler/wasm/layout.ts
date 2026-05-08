@@ -96,6 +96,7 @@ export function bytesPerType(t: string): number {
     case 'bool': return 1;
     case 'integer': return 4;
     case 'tag': return 4;
+    case 'neighborIndex': return 4;
     case 'float': return 8;
     default: return 8;
   }
