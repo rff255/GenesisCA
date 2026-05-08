@@ -45,6 +45,7 @@ import { NeighborIndexFromOffsetNode } from './NeighborIndexFromOffsetNode';
 import { NeighborIndexFromTagNode } from './NeighborIndexFromTagNode';
 import { PickRandomNeighborNode } from './PickRandomNeighborNode';
 import { FlipNeighborIndexNode } from './FlipNeighborIndexNode';
+import { ForEachInArrayNode } from './ForEachInArrayNode';
 
 const ALL_NODES: NodeTypeDef[] = [
   // Event (entry points)
@@ -56,6 +57,7 @@ const ALL_NODES: NodeTypeDef[] = [
   ConditionalNode,
   SequenceNode,
   LoopNode,
+  ForEachInArrayNode,
   SwitchNode,
   // Data
   GetCellAttributeNode,

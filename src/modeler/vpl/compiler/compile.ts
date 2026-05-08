@@ -302,6 +302,14 @@ function compileRoot(
       && ((sourceNode.data.config.operation as string) || 'intersection') === 'intersection') {
       return `_v${sourceNodeId}_result`;
     }
+    // ForEachInArray exposes the per-iteration element via the 'element' output port.
+    // Inside the body chain, references resolve to _v{id}_element (declared at the top
+    // of each iteration in compileFlowChain). Outside the body, references would be
+    // unresolved — the type system does not currently catch this, but the body-only
+    // scope is enforced by where compileFlowChain places the declaration.
+    if (sourceNode?.data.nodeType === 'forEachInArray' && sourcePortId === 'element') {
+      return `_v${sourceNodeId}_element`;
+    }
     return `_v${sourceNodeId}`;
   }
 
@@ -908,6 +916,16 @@ function compileRoot(
           flowLines.push(`${ind}for (let ${loopVar} = 0; ${loopVar} < ${countVar}; ${loopVar}++) {`);
           compileInnerFlow(iNode.id, 'body', ind + '  ');
           flowLines.push(`${ind}}`);
+        } else if (nt === 'forEachInArray') {
+          const arraySrc = inner.inputToSource.get(`${iNode.id}:array`);
+          if (!arraySrc) continue;
+          const arrayVar = innerFlowVarName(arraySrc.nodeId, arraySrc.portId);
+          const idxVar = `${prefix}_fei${iNode.id}`;
+          const elementVar = `${prefix}_v${iNode.id}_element`;
+          flowLines.push(`${ind}for (let ${idxVar} = 0; ${idxVar} < ${arrayVar}.length; ${idxVar}++) {`);
+          flowLines.push(`${ind}  const ${elementVar} = ${arrayVar}[${idxVar}];`);
+          compileInnerFlow(iNode.id, 'body', ind + '  ');
+          flowLines.push(`${ind}}`);
         } else {
           // Regular action node — compile with scoped inputs
           const iInputVars: Record<string, string> = {};
@@ -991,6 +1009,20 @@ function compileRoot(
           countVar = inlineVal ?? '0';
         }
         flowLines.push(`${indent}for (let _li${node.id} = 0; _li${node.id} < ${countVar}; _li${node.id}++) {`);
+        compileFlowChain(node.id, 'body', indent + '  ');
+        flowLines.push(`${indent}}`);
+      } else if (node.data.nodeType === 'forEachInArray') {
+        const arraySource = inputToSource.get(`${node.id}:array`);
+        if (!arraySource) {
+          // No array wired; body is unreachable, skip.
+          continue;
+        }
+        compileValueNode(arraySource.nodeId);
+        const arrayVar = varName(arraySource.nodeId, arraySource.portId);
+        const idxVar = `_fei${node.id}`;
+        const elementVar = `_v${node.id}_element`;
+        flowLines.push(`${indent}for (let ${idxVar} = 0; ${idxVar} < ${arrayVar}.length; ${idxVar}++) {`);
+        flowLines.push(`${indent}  const ${elementVar} = ${arrayVar}[${idxVar}];`);
         compileFlowChain(node.id, 'body', indent + '  ');
         flowLines.push(`${indent}}`);
       } else if (node.data.nodeType === 'switch') {
