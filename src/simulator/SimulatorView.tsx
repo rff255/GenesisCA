@@ -806,6 +806,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // any error and the worker stays on JS — useWebGPU only flips on once the
     // worker successfully acquires a device and the shader module compiles.
     const webgpuResult = (() => {
+      // Skip the WebGPU compile when the user hasn't selected the WebGPU target.
+      // Otherwise, async-only nodes etc. produce a shader error that the worker
+      // would surface as a popup even though the model is running on JS/WASM.
+      if (!model.properties.useWebGPU) {
+        return { shaderCode: '', entryPoints: { step: 'step', outputMappings: [] as Array<{ mappingId: string; entry: string }> }, layout: null as never, error: '' };
+      }
       try {
         return compileGraphWebGPU(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
       } catch (e) {

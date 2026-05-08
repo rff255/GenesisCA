@@ -1777,7 +1777,13 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       const recompile = msg as RecompileMsg;
       if (useWebGPU && recompile.webgpuShaderCode) {
         startWebGPUInit(recompile.webgpuShaderCode, recompile.webgpuEntryPoints, recompile.webgpuLayout, recompile.webgpuShaderError);
-      } else if (recompile.webgpuShaderError) {
+      } else if (useWebGPU && recompile.webgpuShaderError) {
+        // Only surface WebGPU compile errors when the user has WebGPU selected.
+        // Pre-Wave-A-PR1, the sender always speculatively compiled WebGPU and
+        // forwarded the error regardless of target — which spammed users with
+        // async-only-node errors while running on JS/WASM. Sender now skips
+        // the compile when !useWebGPU; this guard is a belt-and-suspenders
+        // defence against any stale message that still carries the field.
         self.postMessage({ type: 'error', message: '[webgpu] recompile failed: ' + recompile.webgpuShaderError });
       }
       self.postMessage({ type: 'ready' });
