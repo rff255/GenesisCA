@@ -92,3 +92,48 @@ export function setConnectedHandlesFromEdges(edges: Array<{ target: string; targ
   connectedHandlesMap = next;
   connectedHandlesListeners.forEach(fn => fn());
 }
+
+// ---------------------------------------------------------------------------
+// Connection-kind hazards per node (e.g. list-position → NeighborIndex mis-wires)
+// Same pub/sub pattern as connectedHandles — single global recomputation,
+// per-node useSyncExternalStore subscription, diff-aware notify.
+// ---------------------------------------------------------------------------
+
+const EMPTY_HAZARD_LIST: readonly string[] = [];
+let connectionHazardsMap = new Map<string, readonly string[]>();
+const connectionHazardsListeners = new Set<() => void>();
+
+export function subscribeConnectionHazards(fn: () => void): () => void {
+  connectionHazardsListeners.add(fn);
+  return () => { connectionHazardsListeners.delete(fn); };
+}
+
+/** Get the list of hazard messages for a node (target side of incoming edges). Stable identity when unchanged. */
+export function getConnectionHazardsForNode(id: string): readonly string[] {
+  return connectionHazardsMap.get(id) ?? EMPTY_HAZARD_LIST;
+}
+
+/** Replace the global hazards map. Caller (GraphEditor) precomputes by walking edges + calling
+ *  `detectEdgeHazard` per edge; this function handles diff-aware storage and notify. */
+export function setConnectionHazards(next: Map<string, readonly string[]>): void {
+  const prev = connectionHazardsMap;
+  // Stabilize identity for unchanged entries
+  const stabilized = new Map<string, readonly string[]>();
+  for (const [k, v] of next) {
+    const old = prev.get(k);
+    if (old && old.length === v.length && old.every((x, i) => x === v[i])) {
+      stabilized.set(k, old);
+    } else {
+      stabilized.set(k, v);
+    }
+  }
+  // Detect any change (size or differing per-node references)
+  let changed = stabilized.size !== prev.size;
+  if (!changed) {
+    for (const [k, v] of prev) {
+      if (stabilized.get(k) !== v) { changed = true; break; }
+    }
+  }
+  connectionHazardsMap = stabilized;
+  if (changed) connectionHazardsListeners.forEach(fn => fn());
+}

@@ -1,5 +1,6 @@
 import type { NodeConfig } from '../types';
 import type { CAModel } from '../../../model/types';
+import { getNodeDef } from './registry';
 
 /** Return a list of human-readable issue strings for a node's configuration.
  *  Empty array = node is fully configured.
@@ -228,4 +229,38 @@ export function detectWebGPUModelIncompatibilities(model: CAModel): string | nul
     return 'WebGPU target requires synchronous update mode. Switch to Synchronous in Model Properties or change target.';
   }
   return null;
+}
+
+/** Detect a connection-kind hazard between two ports.
+ *
+ *  The classic hazard: a node emits an `integer` (or `integer[]`) that *looks*
+ *  like a coord-handle but is actually a list-position into the source array
+ *  (e.g. `groupOperator.index`, `groupCounting.indexes`). When wired into a
+ *  port that expects a `neighborIndex`, the runtime accepts the value (because
+ *  it's just a number) but looks up the WRONG neighbor.
+ *
+ *  Returns a human-readable warning when the source-port type is incompatible
+ *  with a `neighborIndex` target port (i.e. the source is anything other than
+ *  `neighborIndex` or `any`). Returns null otherwise.
+ *
+ *  GraphEditor walks all edges, calls this per edge, and aggregates the
+ *  results into the per-node hazards map (`graphState.connectionHazardsMap`).
+ *  CaNode's warning badge surfaces them alongside config-missing issues. */
+export function detectEdgeHazard(
+  srcNodeType: string,
+  srcPortId: string,
+  tgtNodeType: string,
+  tgtPortId: string,
+): string | null {
+  const srcDef = getNodeDef(srcNodeType);
+  const tgtDef = getNodeDef(tgtNodeType);
+  if (!srcDef || !tgtDef) return null;
+  const srcPort = srcDef.ports.find(p => p.id === srcPortId);
+  const tgtPort = tgtDef.ports.find(p => p.id === tgtPortId);
+  if (!srcPort || !tgtPort) return null;
+  if (tgtPort.category !== 'value' || tgtPort.dataType !== 'neighborIndex') return null;
+  if (srcPort.dataType === 'neighborIndex' || srcPort.dataType === 'any' || srcPort.dataType === undefined) {
+    return null;
+  }
+  return `${srcDef.label} "${srcPort.label}" carries a list-position (${srcPort.dataType}); ${tgtDef.label} "${tgtPort.label}" expects a NeighborIndex (coord handle). Use Filter Neighbors / Get Neighbor Indexes By Tags / Pick Random Neighbor instead.`;
 }

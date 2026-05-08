@@ -8,7 +8,7 @@ export const SetNeighborAttributeByIndexNode: NodeTypeDef = {
   color: '#4a148c',
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
-    { id: 'index', label: 'Index', kind: 'input', category: 'value', dataType: 'integer', inlineWidget: 'number', defaultValue: '0' },
+    { id: 'index', label: 'Index', kind: 'input', category: 'value', dataType: 'neighborIndex', inlineWidget: 'number', defaultValue: '0' },
     { id: 'value', label: 'Value', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '0' },
   ],
   defaultConfig: { neighborhoodId: '', attributeId: '' },

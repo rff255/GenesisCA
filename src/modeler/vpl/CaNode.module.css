@@ -80,6 +80,17 @@
   transform-origin: center;
 }
 
+/* NeighborIndex value ports — amber to distinguish them from generic value ports.
+ * NI is a typed handle (packed dr/dc offset), not a plain integer; the colour
+ * cues users that this port carries a coord-handle, not a list-position. */
+.handleNeighborIndex {
+  width: 8px !important;
+  height: 8px !important;
+  background: #ffb300 !important;
+  border: 2px solid #ff6f00 !important;
+  transform-origin: center;
+}
+
 /* Unconnected value ports: slightly darker than the node body so the
  * port reads as an 'empty hole'. */
 .handleUnconnected {

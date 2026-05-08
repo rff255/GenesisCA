@@ -1,5 +1,10 @@
-/** Data types that flow through value ports */
-export type PortDataType = 'bool' | 'integer' | 'float' | 'any';
+/** Data types that flow through value ports.
+ *
+ *  `neighborIndex` is a packed `i32` carrying `((dr + 128) << 8) | ((dc + 128) & 0xFF)` —
+ *  an offset relative to the current cell, with 8-bit signed components. It is distinct
+ *  from `integer` to prevent the silent index-kind hazards (cell-idx vs coord-idx vs
+ *  list-position) that previously surfaced as wrong-cell lookups at runtime. */
+export type PortDataType = 'bool' | 'integer' | 'float' | 'neighborIndex' | 'any';
 
 /** Port direction */
 export type PortKind = 'input' | 'output';
