@@ -41,6 +41,10 @@ import { GetNeighborIndexesByTagsNode } from './GetNeighborIndexesByTagsNode';
 import { FilterNeighborsNode } from './FilterNeighborsNode';
 import { JoinNeighborsNode } from './JoinNeighborsNode';
 import { StopEventNode } from './StopEventNode';
+import { NeighborIndexFromOffsetNode } from './NeighborIndexFromOffsetNode';
+import { NeighborIndexFromTagNode } from './NeighborIndexFromTagNode';
+import { PickRandomNeighborNode } from './PickRandomNeighborNode';
+import { FlipNeighborIndexNode } from './FlipNeighborIndexNode';
 
 const ALL_NODES: NodeTypeDef[] = [
   // Event (entry points)
@@ -61,6 +65,9 @@ const ALL_NODES: NodeTypeDef[] = [
   GetNeighborAttributeByTagNode,
   GetNeighborIndexesByTagsNode,
   GetNeighborsAttrByIndexesNode,
+  NeighborIndexFromOffsetNode,
+  NeighborIndexFromTagNode,
+  FlipNeighborIndexNode,
   GetConstantNode,
   GetRandomNode,
   TagConstantNode,
@@ -77,6 +84,7 @@ const ALL_NODES: NodeTypeDef[] = [
   AggregateNode,
   FilterNeighborsNode,
   JoinNeighborsNode,
+  PickRandomNeighborNode,
   // Output
   SetAttributeNode,
   UpdateAttributeNode,
