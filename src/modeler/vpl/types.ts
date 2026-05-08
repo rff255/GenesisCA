@@ -41,8 +41,16 @@ export interface NodeTypeDef {
   description?: string;
   ports: PortDef[];
   defaultConfig: NodeConfig;
-  /** Emit JS code for this node. Returns code string. */
-  compile: (nodeId: string, config: NodeConfig, inputVars: Record<string, string>) => string;
+  /** Emit JS code for this node. Returns code string.
+   *  `boundary` is the model's boundary treatment ('torus' | 'constant'),
+   *  needed by NI access emitters to inline the right cell-index expression.
+   *  Other nodes may ignore it. */
+  compile: (
+    nodeId: string,
+    config: NodeConfig,
+    inputVars: Record<string, string>,
+    boundary?: 'torus' | 'constant',
+  ) => string;
 }
 
 /** Handle ID encoding: combine port kind, category, and port id */

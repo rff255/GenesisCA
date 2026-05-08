@@ -1,5 +1,14 @@
 # Impact Map — Wave A (NeighborIndex) + Wave B (List Attributes)
 
+> **Wave A.6 update (2026-05-08):** the runtime representation in this document
+> (packed `(dr, dc)` i32) is now the actual implementation. Wave A initially
+> shipped with slot-index runtime values, and Wave A.6 brought it back into line
+> with this document's original proposal — the NI runtime is now position-only
+> with a `0x80000000` "no neighbor" sentinel, 16-bit signed dr (high) and dc
+> (low) per axis. The neighborhood-coupling on `filterNeighbors` /
+> `flipNeighborIndex` / `neighborIndexFromOffset` / access nodes was removed in
+> A.6. See `docs/NODES_REFERENCE.md` §7 for the current node API.
+
 ## Context
 
 This document maps the cross-cutting subsystem impact of two architectural waves agreed in conversation with the user (2026-05-07):

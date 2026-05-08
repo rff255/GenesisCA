@@ -66,10 +66,33 @@ fn nbrCellIdx(cellIdx: u32, baseOffset: u32, k: i32) -> i32 {
   let nr: i32 = ((row + dr) % ${gh} + ${gh}) % ${gh};
   let nc: i32 = ((col + dc) % ${gw} + ${gw}) % ${gw};
   return nr * ${gw} + nc;
+}
+// Wave A.6: variant for packed (dr, dc) NIs. dr in upper 16 bits, dc in lower.
+fn nbrCellIdxFromNi(cellIdx: u32, ni: i32) -> i32 {
+  let dr: i32 = ni >> 16;
+  let dc: i32 = (ni << 16) >> 16;
+  let row: i32 = i32(cellIdx) / ${gw};
+  let col: i32 = i32(cellIdx) % ${gw};
+  let nr: i32 = ((row + dr) % ${gh} + ${gh}) % ${gh};
+  let nc: i32 = ((col + dc) % ${gw} + ${gw}) % ${gw};
+  return nr * ${gw} + nc;
 }` : `
 fn nbrCellIdx(cellIdx: u32, baseOffset: u32, k: i32) -> i32 {
   let dr: i32 = nbrOffsets[baseOffset + u32(k) * 2u];
   let dc: i32 = nbrOffsets[baseOffset + u32(k) * 2u + 1u];
+  let row: i32 = i32(cellIdx) / ${gw};
+  let col: i32 = i32(cellIdx) % ${gw};
+  let nr: i32 = row + dr;
+  let nc: i32 = col + dc;
+  if (nr < 0 || nr >= ${gh} || nc < 0 || nc >= ${gw}) {
+    return ${layout.sentinelIndex};
+  }
+  return nr * ${gw} + nc;
+}
+// Wave A.6: variant for packed (dr, dc) NIs. dr in upper 16 bits, dc in lower.
+fn nbrCellIdxFromNi(cellIdx: u32, ni: i32) -> i32 {
+  let dr: i32 = ni >> 16;
+  let dc: i32 = (ni << 16) >> 16;
   let row: i32 = i32(cellIdx) / ${gw};
   let col: i32 = i32(cellIdx) % ${gw};
   let nr: i32 = row + dr;

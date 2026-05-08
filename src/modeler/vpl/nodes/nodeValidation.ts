@@ -52,12 +52,19 @@ export function detectMissingConfig(
       break;
 
     case 'getNeighborsAttribute':
+    case 'setNeighborhoodAttribute':
+      // Wave A.6: nodes that walk a configured neighborhood — both nbrId
+      // and attrId required.
+      if (!hasNeighborhood(config.neighborhoodId)) issues.push('Select a neighborhood');
+      if (!hasCellAttr(config.attributeId)) issues.push('Select a cell attribute');
+      break;
+
     case 'getNeighborAttributeByIndex':
     case 'getNeighborsAttrByIndexes':
     case 'filterNeighbors':
-    case 'setNeighborhoodAttribute':
     case 'setNeighborAttributeByIndex':
-      if (!hasNeighborhood(config.neighborhoodId)) issues.push('Select a neighborhood');
+      // Wave A.6: NI-consuming nodes — only attrId required. The NI input
+      // carries its own (dr, dc) offset; no neighborhood needed.
       if (!hasCellAttr(config.attributeId)) issues.push('Select a cell attribute');
       break;
 
@@ -76,6 +83,35 @@ export function detectMissingConfig(
       }
       break;
     }
+
+    case 'getAllNeighborIndexes':
+      // Wave A.6: needs the neighborhood to know which (dr, dc) offsets to
+      // enumerate. Emits literal packed NIs.
+      if (!hasNeighborhood(config.neighborhoodId)) issues.push('Select a neighborhood');
+      break;
+
+    case 'neighborIndexFromTag': {
+      // Wave A.6: tags are per-neighborhood, so the neighborhood is still
+      // load-bearing (resolved to packed (dr, dc) at compile time).
+      if (!hasNeighborhood(config.neighborhoodId)) {
+        issues.push('Select a neighborhood');
+      } else {
+        const tagName = config.tagName;
+        if (typeof tagName !== 'string' || tagName.length === 0) {
+          issues.push('Select a tag');
+        } else {
+          const nbr = model.neighborhoods.find(n => n.id === config.neighborhoodId);
+          const tagValues = nbr?.tags ? Object.values(nbr.tags) : [];
+          if (nbr && !tagValues.includes(tagName)) {
+            issues.push(`Tag "${tagName}" not found in neighborhood`);
+          }
+        }
+      }
+      break;
+    }
+
+    // Wave A.6: neighborIndexFromOffset and flipNeighborIndex have no required
+    // config — dr/dc are runtime inputs; flip mode has a default.
 
     case 'getNeighborIndexesByTags': {
       if (!hasNeighborhood(config.neighborhoodId)) issues.push('Select a neighborhood');

@@ -1,36 +1,40 @@
 import type { NodeTypeDef } from '../types';
+import { niCellExprStmts } from '../compiler/niCodec';
 
+/** Wave A.6: writes a value to one neighbor's attribute at a packed NI offset.
+ *  Async-only. */
 export const SetNeighborAttributeByIndexNode: NodeTypeDef = {
   type: 'setNeighborAttributeByIndex',
   label: 'Set Neighbor Attr By Index',
-  description: 'Writes a value to one neighbor\u2019s attribute at the given index. Accepts an array of indices to write to multiple neighbors. Async-only.',
+  description: 'Writes a value to one neighbor’s attribute at the given NeighborIndex (a packed dr/dc offset). Accepts an array of indices to write to multiple neighbors. Async-only.',
   category: 'output',
   color: '#4a148c',
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
-    { id: 'index', label: 'Index', kind: 'input', category: 'value', dataType: 'neighborIndex', inlineWidget: 'number', defaultValue: '0' },
+    { id: 'index', label: 'Index', kind: 'input', category: 'value', dataType: 'neighborIndex' },
     { id: 'value', label: 'Value', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '0' },
   ],
-  defaultConfig: { neighborhoodId: '', attributeId: '' },
-  compile: (nodeId, config, inputs) => {
-    const nbrId = config.neighborhoodId as string || '_undef';
+  defaultConfig: { attributeId: '' },
+  compile: (nodeId, config, inputs, boundary) => {
     const attr = config.attributeId as string || '_undef';
     const index = inputs['index'] || '0';
     const value = inputs['value'] || '0';
-    // Branch on Array.isArray once per cell; V8 specializes both paths.
-    // Without this, an array index input (e.g. from getNeighborIndexesByTags or filterNeighbors)
-    // is coerced via "((arr) | 0)" which silently picks index 0 for any multi-element or empty
-    // array — a footgun. Single-element arrays only worked by accident through toString coercion.
+    const b = boundary || 'torus';
+    const arrAccess = niCellExprStmts(`_eli${nodeId}`, b, `${nodeId}_a`);
+    const sclAccess = niCellExprStmts(`_idx${nodeId}`, b, `${nodeId}_s`);
     return [
-      `const _idx${nodeId} = ${index};`,
-      `if (Array.isArray(_idx${nodeId})) {`,
-      `  for (let _ai${nodeId} = 0; _ai${nodeId} < _idx${nodeId}.length; _ai${nodeId}++) {`,
-      `    const _ni${nodeId}_a = nIdx_${nbrId}[idx * nSz_${nbrId} + ((_idx${nodeId}[_ai${nodeId}]) | 0)];`,
-      `    if (_ni${nodeId}_a < total) w_${attr}[_ni${nodeId}_a] = ${value};`,
+      `const _idx${nodeId} = (${index}) | 0;`,
+      `if (Array.isArray(${index})) {`,
+      `  for (let _ai${nodeId} = 0; _ai${nodeId} < (${index}).length; _ai${nodeId}++) {`,
+      `    const _eli${nodeId} = ((${index})[_ai${nodeId}]) | 0;`,
+      `    if (_eli${nodeId} !== ${0x80000000 | 0}) {`,
+      `      ${arrAccess.stmts}`,
+      `      if (${arrAccess.cellExpr} < total) w_${attr}[${arrAccess.cellExpr}] = ${value};`,
+      `    }`,
       `  }`,
-      `} else {`,
-      `  const _ni${nodeId} = nIdx_${nbrId}[idx * nSz_${nbrId} + ((_idx${nodeId}) | 0)];`,
-      `  if (_ni${nodeId} < total) w_${attr}[_ni${nodeId}] = ${value};`,
+      `} else if (_idx${nodeId} !== ${0x80000000 | 0}) {`,
+      `  ${sclAccess.stmts}`,
+      `  if (${sclAccess.cellExpr} < total) w_${attr}[${sclAccess.cellExpr}] = ${value};`,
       `}`,
     ].join(' ') + '\n';
   },

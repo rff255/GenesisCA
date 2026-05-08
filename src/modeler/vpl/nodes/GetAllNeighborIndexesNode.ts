@@ -1,9 +1,12 @@
 import type { NodeTypeDef } from '../types';
 
+/** Wave A.6: emits a literal i32[] of packed (dr, dc) for every slot of the
+ *  configured neighborhood. The pre-pass populates `_resolvedPackedAll` as
+ *  a JSON array of i32s. */
 export const GetAllNeighborIndexesNode: NodeTypeDef = {
   type: 'getAllNeighborIndexes',
   label: 'Get All Neighbor Indexes',
-  description: 'Returns the full NeighborIndex array of a neighborhood — every slot, [0, 1, …, nbrSize-1]. Bootstrap for filterNeighbors / forEachInArray chains without needing tags.',
+  description: 'Returns the full NeighborIndex array of a neighborhood — every slot as a packed (dr, dc). Bootstrap for filterNeighbors / forEachInArray chains without needing tags.',
   category: 'data',
   color: '#b71c1c',
   ports: [
@@ -11,10 +14,8 @@ export const GetAllNeighborIndexesNode: NodeTypeDef = {
   ],
   defaultConfig: { neighborhoodId: '' },
   compile: (nodeId, config) => {
-    // _resolvedNbrSize is set by the compiler pre-pass (looks up the neighborhood's coord count).
-    const size = config._resolvedNbrSize !== undefined ? Number(config._resolvedNbrSize) : 0;
-    const indices: number[] = [];
-    for (let i = 0; i < size; i++) indices.push(i);
-    return `const _v${nodeId} = [${indices.join(', ')}];\n`;
+    const json = config._resolvedPackedAll as string | undefined;
+    const packed: number[] = json ? JSON.parse(json) : [];
+    return `const _v${nodeId} = [${packed.join(', ')}];\n`;
   },
 };
