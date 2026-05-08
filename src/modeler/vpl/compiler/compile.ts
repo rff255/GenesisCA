@@ -1286,6 +1286,41 @@ export function compileGraph(
       }
       node.data.config._resolvedTagIndexes = JSON.stringify(indices);
     }
+    // Wave A PR2: resolve (dr, dc) -> slot index for NeighborIndex constructor nodes
+    if (node.data.nodeType === 'neighborIndexFromOffset') {
+      const nbrId = node.data.config.neighborhoodId as string;
+      const nbr = model.neighborhoods.find(n => n.id === nbrId);
+      const dr = Number(node.data.config.dr ?? 0);
+      const dc = Number(node.data.config.dc ?? 0);
+      const slot = nbr ? nbr.coords.findIndex(c => c[0] === dr && c[1] === dc) : -1;
+      node.data.config._resolvedSlot = slot;
+    }
+    if (node.data.nodeType === 'neighborIndexFromTag') {
+      const nbrId = node.data.config.neighborhoodId as string;
+      const nbr = model.neighborhoods.find(n => n.id === nbrId);
+      const tagName = node.data.config.tagName as string;
+      const tagEntry = nbr?.tags
+        ? Object.entries(nbr.tags).find(([, name]) => name === tagName)
+        : undefined;
+      node.data.config._resolvedSlot = tagEntry !== undefined ? Number(tagEntry[0]) : -1;
+    }
+    if (node.data.nodeType === 'flipNeighborIndex') {
+      const nbrId = node.data.config.neighborhoodId as string;
+      const nbr = model.neighborhoods.find(n => n.id === nbrId);
+      const mode = (node.data.config.mode as string) || 'horizontal';
+      const flipDr = mode === 'vertical' || mode === 'both';
+      const flipDc = mode === 'horizontal' || mode === 'both';
+      const table: number[] = [];
+      if (nbr) {
+        for (const [dr, dc] of nbr.coords) {
+          const fr = flipDr ? -dr : dr;
+          const fc = flipDc ? -dc : dc;
+          const flipped = nbr.coords.findIndex(c => c[0] === fr && c[1] === fc);
+          table.push(flipped);
+        }
+      }
+      node.data.config._resolvedFlipTable = JSON.stringify(table);
+    }
   }
 
   // Pre-resolve indicator IDs to numeric indices so the per-cell hot path can
