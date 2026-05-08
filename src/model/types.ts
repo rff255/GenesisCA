@@ -1,10 +1,11 @@
 /** Attribute data types supported by GenesisCA.
  *
- *  `neighborIndex` is stored at runtime as an `Int32Array` (one slot per cell)
- *  holding a coord-idx into the neighborhood the consuming node references.
- *  The editor can optionally show a neighborhood-anchored grid for picking
- *  default values via `Attribute.neighborhoodHintId`, but that hint is purely
- *  a UI affordance — the runtime int is the slot index. */
+ *  `neighborIndex` is stored at runtime as an `Int32Array` (one packed value
+ *  per cell) holding `(dr << 16) | (dc & 0xFFFF)` — a sign-extended (dr, dc)
+ *  offset pair. Position-only, neighborhood-agnostic. The editor can show a
+ *  neighborhood-anchored grid for default-value picking via
+ *  `Attribute.neighborhoodHintId`, but the hint is purely UI; the runtime
+ *  value is just the packed offset. */
 export type AttributeType = 'bool' | 'integer' | 'float' | 'tag' | 'color' | 'neighborIndex';
 
 /** A single attribute definition (per-cell or global model attribute) */
@@ -28,8 +29,9 @@ export interface Attribute {
   /** Upper bound when hasBounds is true */
   max?: number;
   /** NeighborIndex attributes only: optional neighborhood id used by the editor's
-   *  clickable-grid picker to display the default-value cell. Not load-bearing
-   *  at runtime — the stored value is just a coord-idx (integer). */
+   *  clickable-grid picker to highlight which offsets belong to a familiar
+   *  neighborhood. Not load-bearing at runtime — the stored value is a packed
+   *  (dr, dc) i32 offset, independent of any neighborhood. */
   neighborhoodHintId?: string;
 }
 

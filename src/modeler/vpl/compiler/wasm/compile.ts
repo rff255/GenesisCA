@@ -25,11 +25,13 @@ import {
   ValType, F64, I32, OP_F64_ABS, OP_F64_ADD, OP_F64_CONVERT_I32_U, OP_F64_DIV,
   OP_F64_EQ, OP_F64_FLOOR, OP_F64_GE, OP_F64_GT, OP_F64_LE, OP_F64_LT,
   OP_F64_MAX, OP_F64_MIN, OP_F64_MUL, OP_F64_NE, OP_F64_SQRT, OP_F64_SUB,
-  OP_I32_ADD, OP_I32_AND, OP_I32_EQ, OP_I32_EQZ, OP_I32_GE_S, OP_I32_GT_S,
-  OP_I32_LT_S, OP_I32_MUL, OP_I32_OR, OP_I32_SUB, OP_SELECT,
+  OP_I32_ADD, OP_I32_AND, OP_I32_DIV_S, OP_I32_EQ, OP_I32_EQZ, OP_I32_GE_S,
+  OP_I32_GT_S, OP_I32_LT_S, OP_I32_MUL, OP_I32_OR, OP_I32_REM_S, OP_I32_SHL,
+  OP_I32_SHR_S, OP_I32_SUB, OP_SELECT,
   buildModule, byte, exportEntry, EXPORT_FUNC, funcType, importEntry,
   importFuncDesc, importMemoryDesc, leb128u,
 } from './encoder';
+import { INVALID_NI, packNI } from '../niCodec';
 import {
   WasmEmitter, ArrayRef, LocalRef, ValueRef, pushValueAs,
 } from './emitter';
@@ -124,6 +126,12 @@ interface WasmCompileCtx {
   model: CAModel;
   /** Loop counter local: index of the current cell. i32. */
   iLocalIdx: number;
+  /** Wave A.6: row/col of the current cell, decoded from idx once per iteration.
+   *  Used by NI access emitters (filterNeighbors, get/setNeighborAttributeByIndex,
+   *  getNeighborsAttrByIndexes) to compute neighbor cell indices inline from
+   *  packed (dr, dc) NI values. -1 when not initialised (non-loop entry point). */
+  rowLocalIdx: number;
+  colLocalIdx: number;
   /** Memoised value-node compile results for this per-cell pass.
    *  Keyed by nodeId → portId → LocalRef. Default port id is 'value'.
    *  Multi-output value nodes (getColorConstant, colorInterpolation,
@@ -169,6 +177,96 @@ interface WasmCompileCtx {
 
 function attrValType(t: string): ValType {
   return t === 'float' ? F64 : I32;
+}
+
+/** Wave A.6: emit code that pushes the cell index reached by applying NI
+ *  (packed dr, dc in the local `niLocal`) from the current cell, with
+ *  boundary handling baked at compile time.
+ *
+ *  Stack effect: pushes one i32 (the resulting cell index). For
+ *  constant-boundary models, out-of-bounds offsets resolve to `total`
+ *  (the sentinel cell). For torus, modular wrapping. The caller is
+ *  responsible for guarding the niLocal against `INVALID_NI` if needed. */
+function pushNiCellIdx(ctx: WasmCompileCtx, niLocal: number): void {
+  const em = ctx.emitter;
+  const W = ctx.model.properties.gridWidth;
+  const H = ctx.model.properties.gridHeight;
+  const total = W * H;
+  const boundary = ctx.model.properties.boundaryTreatment;
+  const newRow = em.allocLocal(I32);
+  const newCol = em.allocLocal(I32);
+  // newRow = row + (ni >> 16)
+  em.localGet(ctx.rowLocalIdx);
+  em.localGet(niLocal);
+  em.i32Const(16);
+  em.op(OP_I32_SHR_S);
+  em.op(OP_I32_ADD);
+  em.localSet(newRow);
+  // newCol = col + ((ni << 16) >> 16)
+  em.localGet(ctx.colLocalIdx);
+  em.localGet(niLocal);
+  em.i32Const(16);
+  em.op(OP_I32_SHL);
+  em.i32Const(16);
+  em.op(OP_I32_SHR_S);
+  em.op(OP_I32_ADD);
+  em.localSet(newCol);
+
+  if (boundary === 'torus') {
+    // r = ((newRow % H) + H) % H
+    em.localGet(newRow);
+    em.i32Const(H);
+    em.op(OP_I32_REM_S);
+    em.i32Const(H);
+    em.op(OP_I32_ADD);
+    em.i32Const(H);
+    em.op(OP_I32_REM_S);
+    em.localSet(newRow);
+    // c = ((newCol % W) + W) % W
+    em.localGet(newCol);
+    em.i32Const(W);
+    em.op(OP_I32_REM_S);
+    em.i32Const(W);
+    em.op(OP_I32_ADD);
+    em.i32Const(W);
+    em.op(OP_I32_REM_S);
+    em.localSet(newCol);
+    // result = r * W + c
+    em.localGet(newRow);
+    em.i32Const(W);
+    em.op(OP_I32_MUL);
+    em.localGet(newCol);
+    em.op(OP_I32_ADD);
+  } else {
+    // Constant boundary: out-of-bounds → total (sentinel).
+    // result = inBounds ? (newRow * W + newCol) : total
+    // Build via OP_SELECT (pops [a, b, cond] → pushes cond ? a : b).
+    // a = newRow * W + newCol  (in-bounds branch)
+    em.localGet(newRow);
+    em.i32Const(W);
+    em.op(OP_I32_MUL);
+    em.localGet(newCol);
+    em.op(OP_I32_ADD);
+    // b = total  (out-of-bounds branch — sentinel cell)
+    em.i32Const(total);
+    // cond = newRow >= 0 && newRow < H && newCol >= 0 && newCol < W
+    em.localGet(newRow);
+    em.i32Const(0);
+    em.op(OP_I32_GE_S);
+    em.localGet(newRow);
+    em.i32Const(H);
+    em.op(OP_I32_LT_S);
+    em.op(OP_I32_AND);
+    em.localGet(newCol);
+    em.i32Const(0);
+    em.op(OP_I32_GE_S);
+    em.op(OP_I32_AND);
+    em.localGet(newCol);
+    em.i32Const(W);
+    em.op(OP_I32_LT_S);
+    em.op(OP_I32_AND);
+    em.op(OP_SELECT);
+  }
 }
 
 /** Push `i * itemBytes` onto the stack (reads from a cached local; computes + caches if first use). */
@@ -448,44 +546,61 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return storeResult(ctx.emitter, I32);
   },
 
-  // Wave A PR2: NeighborIndex constructors (compile-time-resolved)
-  neighborIndexFromOffset: ({ node, ctx }) => {
-    const slot = Number(node.data.config._resolvedSlot ?? -1);
-    ctx.emitter.i32Const(slot | 0);
-    return storeResult(ctx.emitter, I32);
+  // Wave A.6: NIs are packed (dr, dc) i32. neighborIndexFromOffset takes dr/dc
+  // as input ports and emits the packed value at runtime.
+  neighborIndexFromOffset: ({ ctx, inputs }) => {
+    const drRef = inputs['dr'] ?? { inline: true, value: 0, valtype: I32 };
+    const dcRef = inputs['dc'] ?? { inline: true, value: 0, valtype: I32 };
+    const em = ctx.emitter;
+    // (dr & 0xFFFF) << 16
+    pushValueAs(em, drRef, I32);
+    em.i32Const(0xFFFF); em.op(OP_I32_AND);
+    em.i32Const(16); em.op(OP_I32_SHL);
+    // | (dc & 0xFFFF)
+    pushValueAs(em, dcRef, I32);
+    em.i32Const(0xFFFF); em.op(OP_I32_AND);
+    em.op(OP_I32_OR);
+    return storeResult(em, I32);
   },
+  // neighborIndexFromTag: pre-pass resolves to a packed i32 stored in
+  // _resolvedPacked. Emit a constant.
   neighborIndexFromTag: ({ node, ctx }) => {
-    const slot = Number(node.data.config._resolvedSlot ?? -1);
-    ctx.emitter.i32Const(slot | 0);
+    const packed = node.data.config._resolvedPacked !== undefined
+      ? Number(node.data.config._resolvedPacked) | 0
+      : INVALID_NI;
+    ctx.emitter.i32Const(packed);
     return storeResult(ctx.emitter, I32);
   },
 
-  // Wave A PR2: flip a NeighborIndex via a precomputed lookup table.
-  // _resolvedFlipTable is a JSON array [src=0..nbrSize-1] -> flipped or -1.
-  // Bounds-check the input; out-of-range yields -1 (matches JS emit).
+  // Wave A.6: flip a NeighborIndex by decoding (dr, dc), conditionally negating,
+  // and re-encoding. No neighborhood needed.
   flipNeighborIndex: ({ node, ctx, inputs }) => {
-    const tableJSON = node.data.config._resolvedFlipTable as string | undefined;
-    const table: number[] = tableJSON ? JSON.parse(tableJSON) : [];
+    const mode = (node.data.config.mode as string) || 'horizontal';
+    const flipDr = mode === 'vertical' || mode === 'both';
+    const flipDc = mode === 'horizontal' || mode === 'both';
     const idxRef = inputs['index'] ?? { inline: true, value: 0, valtype: I32 };
-    const inLocal = ctx.emitter.allocLocal(I32);
-    pushValueAs(ctx.emitter, idxRef, I32);
-    ctx.emitter.localSet(inLocal);
-    const result = ctx.emitter.allocLocal(I32);
-    ctx.emitter.i32Const(-1); ctx.emitter.localSet(result);
-    // For each valid table entry, emit `if (in === k) result = table[k];`
-    // Small neighborhoods (<=32 slots) keep this compact; larger tables
-    // generate one if-then per slot but the runtime cost stays O(n).
-    for (let k = 0; k < table.length; k++) {
-      ctx.emitter.localGet(inLocal);
-      ctx.emitter.i32Const(k);
-      ctx.emitter.op(byte(0x46)); // OP_I32_EQ
-      ctx.emitter.ifThen(() => {
-        ctx.emitter.i32Const((table[k] ?? -1) | 0);
-        ctx.emitter.localSet(result);
-      });
-    }
-    ctx.emitter.localGet(result);
-    return storeResult(ctx.emitter, I32);
+    const em = ctx.emitter;
+    const inLocal = em.allocLocal(I32);
+    pushValueAs(em, idxRef, I32);
+    em.localSet(inLocal);
+    // Decode dr/dc into locals
+    const drLocal = em.allocLocal(I32);
+    em.localGet(inLocal); em.i32Const(16); em.op(OP_I32_SHR_S);
+    em.localSet(drLocal);
+    const dcLocal = em.allocLocal(I32);
+    em.localGet(inLocal); em.i32Const(16); em.op(OP_I32_SHL); em.i32Const(16); em.op(OP_I32_SHR_S);
+    em.localSet(dcLocal);
+    // Push (flippedDr & 0xFFFF) << 16
+    if (flipDr) { em.i32Const(0); em.localGet(drLocal); em.op(OP_I32_SUB); }
+    else { em.localGet(drLocal); }
+    em.i32Const(0xFFFF); em.op(OP_I32_AND);
+    em.i32Const(16); em.op(OP_I32_SHL);
+    // | (flippedDc & 0xFFFF)
+    if (flipDc) { em.i32Const(0); em.localGet(dcLocal); em.op(OP_I32_SUB); }
+    else { em.localGet(dcLocal); }
+    em.i32Const(0xFFFF); em.op(OP_I32_AND);
+    em.op(OP_I32_OR);
+    return storeResult(em, I32);
   },
 
   // Wave A.5: array length — return inArr.lenLocal as i32.
@@ -517,7 +632,7 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
 
     const result = em.allocLocal(inArr.elemValtype);
     if (inArr.elemValtype === F64) { em.f64Const(0); }
-    else { em.i32Const(-1); }
+    else { em.i32Const(INVALID_NI); }
     em.localSet(result);
 
     // if (idx >= 0 && idx < len) result = arr[idx]
@@ -562,7 +677,7 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     em.i32Const(0); em.localGet(rsLocal); em.i32Store(ctx.layout.rngStateOffset, 2);
 
     const result = em.allocLocal(I32);
-    em.i32Const(-1); em.localSet(result);
+    em.i32Const(INVALID_NI); em.localSet(result);
     // if (len > 0) result = arr[floor((rs / 2^32) * len)]
     em.localGet(inArr.lenLocal);
     em.i32Const(0);
@@ -941,24 +1056,19 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return storeResult(ctx.emitter, F64);
   },
 
-  // -- Neighbor by index --
+  // -- Neighbor by index (Wave A.6: packed NI inline access) --
   getNeighborAttributeByIndex: ({ node, ctx, inputs }) => {
-    const nbrId = node.data.config.neighborhoodId as string;
     const attrId = node.data.config.attributeId as string;
-    const nbr = getNbr(ctx.layout, nbrId);
     const attr = getAttr(ctx.layout, attrId);
-    if (!nbr || !attr) { ctx.errors.push(`getNeighborAttributeByIndex: unknown nbr/attr`); return null; }
+    if (!attr) { ctx.errors.push(`getNeighborAttributeByIndex: unknown attr ${attrId}`); return null; }
     const indexRef = inputs['index'] ?? { inline: true, value: 0, valtype: I32 };
-    // address into nbr table = nbrOffset + (i*nbrSize + index) * 4
-    ctx.emitter.localGet(ctx.iLocalIdx);
-    ctx.emitter.i32Const(nbr.size);
-    ctx.emitter.op(OP_I32_MUL);
+    // Stash NI in a local so we can decode dr/dc inline.
+    const niLocal = ctx.emitter.allocLocal(I32);
     pushValueAs(ctx.emitter, indexRef, I32);
-    ctx.emitter.op(OP_I32_ADD);
-    ctx.emitter.i32Const(4);
-    ctx.emitter.op(OP_I32_MUL);
-    ctx.emitter.i32Load(nbr.offset, 2);  // load neighbor cell idx
-    // attr byte offset = nbrCellIdx * itemBytes
+    ctx.emitter.localSet(niLocal);
+    // cellIdx = niCellIdx(NI)  — pushed to stack
+    pushNiCellIdx(ctx, niLocal);
+    // byteOffset = cellIdx * itemBytes
     ctx.emitter.i32Const(attr.itemBytes);
     ctx.emitter.op(OP_I32_MUL);
     if (attr.type === 'bool') ctx.emitter.i32Load8U(attr.readOffset, 0);
@@ -2164,17 +2274,19 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     return arr;
   },
 
-  // Wave A.5: full NI[] of a neighborhood — [0, 1, …, nbrSize-1].
+  // Wave A.6: full NI[] of a neighborhood — packed (dr, dc) for every slot.
   getAllNeighborIndexes: ({ node, ctx }) => {
     const nbrId = node.data.config.neighborhoodId as string;
-    const nbr = getNbr(ctx.layout, nbrId);
+    const nbr = ctx.model.neighborhoods.find(n => n.id === nbrId);
     if (!nbr) { ctx.errors.push(`getAllNeighborIndexes: unknown neighborhood ${nbrId}`); return null; }
-    const arr = allocArrayInScratchConst(ctx, nbr.size, I32, 4);
-    for (let k = 0; k < nbr.size; k++) {
+    const arr = allocArrayInScratchConst(ctx, nbr.coords.length, I32, 4);
+    for (let k = 0; k < nbr.coords.length; k++) {
+      const [dr, dc] = nbr.coords[k]!;
+      const packed = packNI(dr, dc);
       ctx.emitter.i32Const(k * 4);
       ctx.emitter.localGet(arr.offsetLocal);
       ctx.emitter.op(OP_I32_ADD);
-      ctx.emitter.i32Const(k);
+      ctx.emitter.i32Const(packed);
       ctx.emitter.i32Store(0, 2);
     }
     return arr;
@@ -2284,30 +2396,29 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
   // configured neighborhood (loop bound = nbr.size) and the slot itself is the
   // iteration index — saves the bootstrap node in the common case.
   filterNeighbors: ({ node, ctx, inputs }) => {
-    const nbrId = node.data.config.neighborhoodId as string;
+    // Wave A.6: NIs are packed (dr, dc); no neighborhood config. Indexes
+    // input is required (implicit-all default removed).
     const attrId = node.data.config.attributeId as string;
     const op = (node.data.config.operation as string) || 'equals';
-    const nbr = getNbr(ctx.layout, nbrId);
     const attr = getAttr(ctx.layout, attrId);
-    if (!nbr || !attr) { ctx.errors.push(`filterNeighbors: unknown nbr/attr (${nbrId}/${attrId})`); return null; }
+    if (!attr) { ctx.errors.push(`filterNeighbors: unknown attr ${attrId}`); return null; }
 
     const inArr = resolveInputArray(ctx, node, 'indexes');
-    const isExplicit = !!inArr;
+    if (!inArr) {
+      ctx.errors.push(`filterNeighbors: requires Indexes input (e.g., from Get All Neighbor Indexes)`);
+      return null;
+    }
     const compare = inputs['compare'] ?? { inline: true, value: 0, valtype: attrValType(attr.type) };
 
-    // Output: at most inArr.lenLocal (or nbr.size) entries; allocate worst-case bytes.
+    // Output: at most inArr.lenLocal entries; allocate worst-case bytes.
     const outOffsetLocal = ctx.emitter.allocLocal(I32);
     ctx.emitter.localGet(ctx.scratchTopLocal);
     ctx.emitter.localSet(outOffsetLocal);
     const outLenLocal = ctx.emitter.allocLocal(I32);
     ctx.emitter.i32Const(0); ctx.emitter.localSet(outLenLocal);
-    // Reserve scratch up-front
+    // Reserve scratch up-front: inArr.lenLocal * 4
     ctx.emitter.localGet(ctx.scratchTopLocal);
-    if (isExplicit) {
-      ctx.emitter.localGet(inArr!.lenLocal);
-    } else {
-      ctx.emitter.i32Const(nbr.size);
-    }
+    ctx.emitter.localGet(inArr.lenLocal);
     ctx.emitter.i32Const(4); ctx.emitter.op(OP_I32_MUL);
     ctx.emitter.op(OP_I32_ADD);
     ctx.emitter.localSet(ctx.scratchTopLocal);
@@ -2316,36 +2427,24 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     ctx.emitter.i32Const(0); ctx.emitter.localSet(k);
     ctx.emitter.block(() => {
       ctx.emitter.loop(() => {
-        // Loop bound: explicit -> inArr.lenLocal; implicit -> nbr.size
+        // _i >= len → exit
         ctx.emitter.localGet(k);
-        if (isExplicit) ctx.emitter.localGet(inArr!.lenLocal);
-        else ctx.emitter.i32Const(nbr.size);
+        ctx.emitter.localGet(inArr.lenLocal);
         ctx.emitter.op(OP_I32_GE_S); ctx.emitter.brIf(1);
-        // idxElem: explicit -> indexes[k]; implicit -> k itself
+        // idxElem = indexes[k]  (packed NI)
         const idxElem = ctx.emitter.allocLocal(I32);
-        if (isExplicit) {
-          ctx.emitter.localGet(k);
-          emitArrayLoadElem(ctx.emitter, inArr!);
-          if (inArr!.elemValtype === F64) ctx.emitter.f64ToI32();
-        } else {
-          ctx.emitter.localGet(k);
-        }
+        ctx.emitter.localGet(k);
+        emitArrayLoadElem(ctx.emitter, inArr);
+        if (inArr.elemValtype === F64) ctx.emitter.f64ToI32();
         ctx.emitter.localSet(idxElem);
-        // Load r_attr[nIdx[idx*nbrSize + idxElem]]
+        // Load r_attr[niCellIdx(idxElem)]
         const loadElem = () => {
-          ctx.emitter.localGet(ctx.iLocalIdx);
-          ctx.emitter.i32Const(nbr.size);
-          ctx.emitter.op(OP_I32_MUL);
-          ctx.emitter.localGet(idxElem);
-          ctx.emitter.op(OP_I32_ADD);
-          ctx.emitter.i32Const(4); ctx.emitter.op(OP_I32_MUL);
-          ctx.emitter.i32Load(nbr.offset, 2);
+          pushNiCellIdx(ctx, idxElem);
           ctx.emitter.i32Const(attr.itemBytes); ctx.emitter.op(OP_I32_MUL);
           if (attr.type === 'bool') ctx.emitter.i32Load8U(attr.readOffset, 0);
           else if (attr.type === 'float') ctx.emitter.f64Load(attr.readOffset, 3);
           else ctx.emitter.i32Load(attr.readOffset, 2);
         };
-        // Compare
         const elemValtype = attrValType(attr.type);
         loadElem();
         pushValueAs(ctx.emitter, compare, elemValtype);
@@ -2652,13 +2751,11 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     return { kind: 'array', offsetLocal: outOff, lenLocal: outLen, elemValtype: I32, elemBytes: 4 };
   },
 
-  // Read neighbor attribute values for a list of nbr-table indices.
+  // Read neighbor attribute values for a list of packed NIs (Wave A.6).
   getNeighborsAttrByIndexes: ({ node, ctx }) => {
-    const nbrId = node.data.config.neighborhoodId as string;
     const attrId = node.data.config.attributeId as string;
-    const nbr = getNbr(ctx.layout, nbrId);
     const attr = getAttr(ctx.layout, attrId);
-    if (!nbr || !attr) { ctx.errors.push(`getNeighborsAttrByIndexes: unknown nbr/attr`); return null; }
+    if (!attr) { ctx.errors.push(`getNeighborsAttrByIndexes: unknown attr ${attrId}`); return null; }
     const inArr = resolveInputArray(ctx, node, 'indexes');
     if (!inArr) { ctx.errors.push(`getNeighborsAttrByIndexes: no input on "indexes"`); return null; }
 
@@ -2671,22 +2768,18 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     ctx.emitter.block(() => {
       ctx.emitter.loop(() => {
         ctx.emitter.localGet(k); ctx.emitter.localGet(inArr.lenLocal); ctx.emitter.op(OP_I32_GE_S); ctx.emitter.brIf(1);
-        // Load idxIn = inArr[k]
+        // Load idxIn = inArr[k] (packed NI)
         const idxIn = ctx.emitter.allocLocal(I32);
         ctx.emitter.localGet(k); emitArrayLoadElem(ctx.emitter, inArr);
         if (inArr.elemValtype === F64) ctx.emitter.f64ToI32();
         ctx.emitter.localSet(idxIn);
-        // out[k] = r_attr[nIdx[idx*nbrSize + idxIn]]
+        // out[k] = r_attr[niCellIdx(idxIn)]
         // Out address
         ctx.emitter.localGet(k);
         if (elemBytes !== 1) { ctx.emitter.i32Const(elemBytes); ctx.emitter.op(OP_I32_MUL); }
         ctx.emitter.localGet(outArr.offsetLocal); ctx.emitter.op(OP_I32_ADD);
-        // Load value
-        ctx.emitter.localGet(ctx.iLocalIdx);
-        ctx.emitter.i32Const(nbr.size); ctx.emitter.op(OP_I32_MUL);
-        ctx.emitter.localGet(idxIn); ctx.emitter.op(OP_I32_ADD);
-        ctx.emitter.i32Const(4); ctx.emitter.op(OP_I32_MUL);
-        ctx.emitter.i32Load(nbr.offset, 2);
+        // Load value via inline NI access
+        pushNiCellIdx(ctx, idxIn);
         ctx.emitter.i32Const(attr.itemBytes); ctx.emitter.op(OP_I32_MUL);
         if (attr.type === 'bool') ctx.emitter.i32Load8U(attr.readOffset, 0);
         else if (attr.type === 'float') ctx.emitter.f64Load(attr.readOffset, 3);
@@ -3063,17 +3156,15 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
     return true;
   },
 
-  // -- setNeighborAttributeByIndex (async-only): writes a value to one or more
-  //    neighbours' attribute. Index input may be a scalar (write to one) or an
-  //    ArrayRef (write to each). Sentinel guard `nIdx < total` protects the
-  //    constant-boundary slot.
+  // -- setNeighborAttributeByIndex (async-only, Wave A.6): writes a value to
+  //    one or more neighbours via packed NIs. Sentinel guards: niLocal !=
+  //    INVALID_NI before the access; nbrCellIdx < total to skip the constant-
+  //    boundary sentinel slot.
   setNeighborAttributeByIndex: ({ node, ctx, inputs }) => {
-    const nbrId = node.data.config.neighborhoodId as string;
     const attrId = node.data.config.attributeId as string;
-    const nbr = getNbr(ctx.layout, nbrId);
     const attr = getAttr(ctx.layout, attrId);
-    if (!nbr || !attr) {
-      ctx.errors.push(`setNeighborAttributeByIndex: unknown nbr/attr (${nbrId}/${attrId})`);
+    if (!attr) {
+      ctx.errors.push(`setNeighborAttributeByIndex: unknown attr ${attrId}`);
       return false;
     }
     if (!ctx.layout.isAsync) {
@@ -3092,30 +3183,34 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
       }
     }
 
-    const writeOne = (pushNbrIdx: () => void) => {
-      const nbrCellLocal = ctx.emitter.allocLocal(I32);
-      ctx.emitter.localGet(ctx.iLocalIdx);
-      ctx.emitter.i32Const(nbr.size);
-      ctx.emitter.op(OP_I32_MUL);
-      pushNbrIdx();
-      ctx.emitter.op(OP_I32_ADD);
-      ctx.emitter.i32Const(4);
-      ctx.emitter.op(OP_I32_MUL);
-      ctx.emitter.i32Load(nbr.offset, 2);
-      ctx.emitter.localSet(nbrCellLocal);
-      ctx.emitter.localGet(nbrCellLocal);
-      ctx.emitter.localGet(0); // total param
-      ctx.emitter.op(OP_I32_LT_S);
+    const writeOne = (pushNi: () => void) => {
+      const niLocal = ctx.emitter.allocLocal(I32);
+      pushNi();
+      ctx.emitter.localSet(niLocal);
+      // Guard: skip if NI is INVALID_NI sentinel
+      ctx.emitter.localGet(niLocal);
+      ctx.emitter.i32Const(INVALID_NI);
+      ctx.emitter.op(OP_I32_EQ);
+      ctx.emitter.op(OP_I32_EQZ);
       ctx.emitter.ifThen(() => {
+        const nbrCellLocal = ctx.emitter.allocLocal(I32);
+        pushNiCellIdx(ctx, niLocal);
+        ctx.emitter.localSet(nbrCellLocal);
+        // Guard: skip the boundary-sentinel cell (>= total)
         ctx.emitter.localGet(nbrCellLocal);
-        if (attr.itemBytes !== 1) {
-          ctx.emitter.i32Const(attr.itemBytes);
-          ctx.emitter.op(OP_I32_MUL);
-        }
-        pushValueAs(ctx.emitter, valueRef, attrValType(attr.type));
-        if (attr.type === 'bool') ctx.emitter.i32Store8(attr.writeOffset, 0);
-        else if (attr.type === 'float') ctx.emitter.f64Store(attr.writeOffset, 3);
-        else ctx.emitter.i32Store(attr.writeOffset, 2);
+        ctx.emitter.localGet(0); // total param
+        ctx.emitter.op(OP_I32_LT_S);
+        ctx.emitter.ifThen(() => {
+          ctx.emitter.localGet(nbrCellLocal);
+          if (attr.itemBytes !== 1) {
+            ctx.emitter.i32Const(attr.itemBytes);
+            ctx.emitter.op(OP_I32_MUL);
+          }
+          pushValueAs(ctx.emitter, valueRef, attrValType(attr.type));
+          if (attr.type === 'bool') ctx.emitter.i32Store8(attr.writeOffset, 0);
+          else if (attr.type === 'float') ctx.emitter.f64Store(attr.writeOffset, 3);
+          else ctx.emitter.i32Store(attr.writeOffset, 2);
+        });
       });
     };
 
@@ -3660,6 +3755,13 @@ function compileEntry(
   // (or at the function start, for non-loop entries).
   const scratchTopLocal = emitter.allocLocal(I32);
 
+  // Wave A.6: per-cell row / col, decoded from idx once per iteration. Used by
+  // NI access emitters (filterNeighbors etc.) to compute neighbor cell indices
+  // inline from packed (dr, dc) NIs. W is the grid width — baked as a compile-
+  // time constant in the emit.
+  const rowLocal = emitter.allocLocal(I32);
+  const colLocal = emitter.allocLocal(I32);
+
   // paramRefs: register InputColor's r/g/b outputs as param-backed locals.
   // These are ALWAYS i32 in the param signature.
   const paramRefs = new Map<string, Map<string, LocalRef>>();
@@ -3677,6 +3779,8 @@ function compileEntry(
     viewerIds,
     model,
     iLocalIdx: iLocal,
+    rowLocalIdx: rowLocal,
+    colLocalIdx: colLocal,
     valueLocals: new Map(),
     arrayRefs: new Map(),
     byteOffsetLocals: new Map(),
@@ -3697,6 +3801,7 @@ function compileEntry(
   // calls hit the cache and skip re-emission.
   const invariantSnapshot = new Map<string, Map<string, LocalRef>>();
 
+  const W = model.properties.gridWidth;
   const emitBody = () => {
     // Reset per-cell caches and scratch pointer
     ctx.byteOffsetLocals.clear();
@@ -3704,6 +3809,20 @@ function compileEntry(
     ctx.arrayRefs.clear();
     emitter.i32Const(layout.scratchOffset);
     emitter.localSet(scratchTopLocal);
+
+    // Wave A.6: compute row/col from idx once per cell. Used by NI access
+    // emitters to decode packed (dr, dc) NIs into cell indices inline.
+    //   row = idx / W; col = idx - row * W;
+    emitter.localGet(iLocal);
+    emitter.i32Const(W);
+    emitter.op(OP_I32_DIV_S);
+    emitter.localSet(rowLocal);
+    emitter.localGet(iLocal);
+    emitter.localGet(rowLocal);
+    emitter.i32Const(W);
+    emitter.op(OP_I32_MUL);
+    emitter.op(OP_I32_SUB);
+    emitter.localSet(colLocal);
 
     // Re-register paramRefs after the cache clear (they're stable across cells).
     if (opts.paramOutputs) {

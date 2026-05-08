@@ -1,5 +1,78 @@
 import { SCHEMA_VERSION } from './schema';
-import type { CAModel, SimulationState, SerializedTypedArray } from './types';
+import type { CAModel, SimulationState, SerializedTypedArray, Attribute } from './types';
+import { packNI } from '../modeler/vpl/compiler/niCodec';
+
+/** Wave A.6: migrate v1 NeighborIndex attribute values (slot indices) to
+ *  v2 packed (dr, dc) i32 using the attribute's neighborhood hint.
+ *
+ *  Legacy v1 stored a slot index (`0..nbrSize-1`) of a specific neighborhood.
+ *  v2 stores packed `(dr << 16) | (dc & 0xFFFF)` — neighborhood-agnostic.
+ *  When the hint is set we look up `coords[slotIndex]` and pack; otherwise
+ *  we leave the value unchanged (a console warning fires) — the user will
+ *  re-pick a default via the editor's clickable grid.
+ *
+ *  Returns true if the value was migrated, false if left unchanged. */
+function migrateNiSlotToPacked(slotStr: string, attr: Attribute, model: CAModel): string {
+  const slot = parseInt(slotStr, 10);
+  if (!Number.isFinite(slot)) return slotStr;
+  if (!attr.neighborhoodHintId) return slotStr;
+  const nbr = model.neighborhoods.find(n => n.id === attr.neighborhoodHintId);
+  if (!nbr) return slotStr;
+  const coord = nbr.coords[slot];
+  if (!coord) return slotStr;
+  return String(packNI(coord[0]!, coord[1]!));
+}
+
+/** Walk every NI cell-attribute array in the embedded simulationState and
+ *  translate each Int32 slot-index element to a packed (dr, dc) i32 using
+ *  the attribute's hint neighborhood. Element-by-element decode of the
+ *  base64-encoded buffer; re-encodes back to base64 in place. */
+function migrateNiCellAttrArraysV1toV2(model: CAModel): void {
+  const sim = model.simulationState;
+  if (!sim?.attributes) return;
+  for (const attr of model.attributes) {
+    if (attr.type !== 'neighborIndex' || attr.isModelAttribute) continue;
+    if (!attr.neighborhoodHintId) continue;
+    const nbr = model.neighborhoods.find(n => n.id === attr.neighborhoodHintId);
+    if (!nbr) continue;
+    const entry = sim.attributes[attr.id];
+    if (!entry || entry.type !== 'int32') continue;
+    // Decode → translate → encode.
+    const buf = base64ToArrayBuffer(entry.data);
+    const arr = new Int32Array(buf);
+    for (let i = 0; i < arr.length; i++) {
+      const slot = arr[i]!;
+      const coord = (slot >= 0 && slot < nbr.coords.length) ? nbr.coords[slot] : undefined;
+      arr[i] = coord ? packNI(coord[0]!, coord[1]!) : 0;
+    }
+    entry.data = arrayBufferToBase64(arr.buffer);
+  }
+}
+
+/** Walk model.attributes and migrate NI default/boundary values from
+ *  v1 slot index to v2 packed (dr, dc). Mutates the attributes in place. */
+function migrateNiAttributesV1toV2(model: CAModel): void {
+  let warned = false;
+  for (const attr of model.attributes) {
+    if (attr.type !== 'neighborIndex') continue;
+    if (!attr.neighborhoodHintId) {
+      if (!warned) {
+        console.warn(
+          `[wave-a.6] NeighborIndex attribute "${attr.name}" has no `
+          + `neighborhoodHintId — its default value (slot-index "${attr.defaultValue}") `
+          + `cannot be migrated to packed (dr, dc) automatically. `
+          + `Please re-pick the default via the editor.`,
+        );
+        warned = true;
+      }
+      continue;
+    }
+    attr.defaultValue = migrateNiSlotToPacked(attr.defaultValue, attr, model);
+    if (attr.boundaryValue !== undefined && attr.boundaryValue.length > 0) {
+      attr.boundaryValue = migrateNiSlotToPacked(attr.boundaryValue, attr, model);
+    }
+  }
+}
 
 /** Pretty-print JSON for .gcaproj files with targeted single-line inlining for
  *  structurally-small, high-volume arrays that make default 2-space pretty-print
@@ -154,6 +227,18 @@ export function readModelFile(file: File): Promise<CAModel> {
           ),
         );
         return;
+      }
+      // Wave A.6: v1 → v2 migration translates slot-index NI default values
+      // into packed (dr, dc) using each NI attribute's neighborhoodHintId.
+      // Skipped silently when schemaVersion is already >= 2 or undefined for
+      // very old files (which had no NI attrs).
+      if (model.schemaVersion != null && model.schemaVersion < 2) {
+        migrateNiAttributesV1toV2(model);
+        // Embedded simulationState's NI cell-attr arrays also need translation
+        // (per-element). The slot index N becomes the packed value coords[N].
+        if (model.simulationState?.attributes) {
+          migrateNiCellAttrArraysV1toV2(model);
+        }
       }
       model.schemaVersion = SCHEMA_VERSION;
       resolve(model);

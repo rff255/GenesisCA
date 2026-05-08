@@ -491,27 +491,31 @@ export function HelpView() {
             <strong>Canonical movement pattern</strong> (mass-conservation, particle-style rules):
           </p>
           <ol className={styles.list}>
-            <li><strong>Filter Neighbors</strong> with <em>Indexes</em> unconnected (defaults to all
-              slots of the configured neighborhood) &rarr; keeps the slots where the chosen
-              attribute equals "empty". Output is a NeighborIndex[].</li>
-            <li><strong>Pick Random Neighbor</strong> &rarr; pick one slot at random from the filtered list.</li>
-            <li>If the picked slot is &ge; 0 (a Compare node against 0), <strong>Set Neighbor Attr By
-              Index</strong> on the picked slot to mark it occupied AND <strong>Set Attribute</strong>
-              on self to clear the current cell.</li>
+            <li><strong>Get All Neighbor Indexes</strong> with the chosen neighborhood &rarr;
+              produces an NI[] of every slot.</li>
+            <li><strong>Filter Neighbors</strong> with that NI[] wired into <em>Indexes</em> &rarr;
+              keeps the slots where the chosen attribute equals &ldquo;empty&rdquo;.</li>
+            <li><strong>Pick Random Neighbor</strong> &rarr; pick one slot at random from the
+              filtered list. Returns <em>INVALID_NI</em> (0x80000000) on empty.</li>
+            <li>If the picked slot is not <em>INVALID_NI</em>, <strong>Set Neighbor Attr By Index</strong>
+              on that slot to mark it occupied AND <strong>Set Attribute</strong> on self to clear
+              the current cell.</li>
           </ol>
-          <p className={styles.p}>
-            (Equivalent fully-explicit form: <strong>Get All Neighbor Indexes</strong> &rarr;
-            <strong> Filter Neighbors</strong> with <em>Indexes</em> wired &rarr; same as above.)
-          </p>
 
           <h3 className={styles.h3}>NeighborIndex Type</h3>
           <p className={styles.p}>
-            <strong>NeighborIndex</strong> is a typed handle for a neighbor slot (an entry in a
-            neighborhood pattern). It exists to prevent a class of silent runtime bugs: before
-            it existed, an integer port could equally mean &ldquo;neighbor slot 2&rdquo;, &ldquo;the 3rd
-            element of an arbitrary array&rdquo;, or &ldquo;global cell index 2&rdquo; &mdash;
-            and chains like <em>filter</em> &rarr; <em>min</em> &rarr; <em>set neighbor</em> would
-            silently look up the wrong cell.
+            <strong>NeighborIndex</strong> (NI) is a typed handle that carries a relative
+            (dRow, dCol) offset to a neighbor cell. The runtime representation is a packed i32:
+            dRow in the upper 16 bits, dCol in the lower 16 bits, both sign-extended on decode.
+            An NI is <strong>position-only</strong> &mdash; it does not belong to any specific
+            neighborhood, so wires through filter / pick / iterate / set chains without ever needing
+            a "which neighborhood is this from?" question.
+          </p>
+          <p className={styles.p}>
+            The "no neighbor" sentinel is <code>INVALID_NI = 0x80000000</code> (i32 min). Producers
+            that may yield no result (e.g. <em>Pick Random Neighbor</em> on an empty array) return
+            this value; consumers (<em>Set Neighbor Attr By Index</em>, <em>Get Neighbor Attr By
+            Index</em>) ignore it.
           </p>
           <p className={styles.p}>
             NeighborIndex ports are <strong>amber-coloured</strong> in the editor (versus cyan for
@@ -525,20 +529,24 @@ export function HelpView() {
           </p>
           <ul className={styles.ul}>
             <li><strong>Get All Neighbor Indexes</strong> &mdash; the bootstrap. Returns the full
-              NI[] of a neighborhood (every slot). Use it to start a filter / iterate / pick chain
-              without needing tags.</li>
-            <li><strong>Filter Neighbors</strong> &mdash; narrow an NI[] (or, with the input
-              unconnected, all neighbors of the configured neighborhood) by an attribute predicate.</li>
+              NI[] (one packed offset per slot) of a chosen neighborhood. Use it to start a filter /
+              iterate / pick chain without needing tags.</li>
+            <li><strong>Filter Neighbors</strong> &mdash; narrow an NI[] by an attribute predicate.
+              Just an attribute and an operator &mdash; no neighborhood needed (the NIs carry their
+              own offsets). The Indexes input is required.</li>
             <li><strong>Join Neighbors</strong> &mdash; intersection / union of two NI[]s.</li>
-            <li><strong>Pick Random Neighbor</strong> &mdash; pick one slot from a NI[] at random.</li>
-            <li><strong>Pick N Random Neighbors</strong> &mdash; pick N distinct slots without
+            <li><strong>Pick Random Neighbor</strong> &mdash; pick one element from a NI[] at random.
+              Returns <em>INVALID_NI</em> on empty.</li>
+            <li><strong>Pick N Random Neighbors</strong> &mdash; pick N distinct elements without
               replacement (partial Fisher-Yates).</li>
             <li><strong>Neighbor Index (from Offset)</strong> &mdash; build a NI from a (dRow, dCol)
-              offset into a chosen neighborhood. Compile-time-resolved.</li>
+              pair. dr and dc are input ports with inline number widgets, so they can be either
+              typed or wired from any computation (e.g. a model attribute encoding direction).</li>
             <li><strong>Neighbor Index (from Tag)</strong> &mdash; build a NI from a tag name in the
-              neighborhood&apos;s tags map.</li>
-            <li><strong>Flip Neighbor Index</strong> &mdash; mirror a NI horizontally / vertically /
-              both, relative to the configured neighborhood.</li>
+              neighborhood&apos;s tags map. Compile-time-resolved.</li>
+            <li><strong>Flip Neighbor Index</strong> &mdash; mirror a NI horizontally (negate dCol),
+              vertically (negate dRow), or both (180&deg; rotation). Pure bit math; no neighborhood
+              needed.</li>
             <li><strong>Array Element</strong> / <strong>Array Length</strong> &mdash; generic indexed
               access and size for any array (NI[] or otherwise). Pair Array Element with the
               <em>Position(s)</em> outputs of Count Matching / Group Reduce to recover the NI of the
@@ -547,10 +555,11 @@ export function HelpView() {
           </ul>
           <p className={styles.p}>
             NeighborIndex can also be a <strong>cell or model attribute type</strong>. The
-            attribute editor exposes a clickable cell grid (anchored to a chosen &ldquo;hint
-            neighborhood&rdquo;) for picking the default value. This lets a cell remember &ldquo;which
-            neighbor I&apos;m pointing at&rdquo; across generations &mdash; useful for movement-direction
-            rules, leader-follower patterns, or static target-direction maps.
+            attribute editor exposes a clickable cell grid (with an optional &ldquo;hint
+            neighborhood&rdquo; that highlights its slots) for picking the default direction.
+            Without a hint, the editor falls back to two number inputs (dr + dc). The stored
+            value is the same packed (dr, dc) i32 used by the rest of the system &mdash; usable
+            anywhere a NI is expected.
           </p>
 
           <h3 className={styles.h3}>For Each In Array</h3>

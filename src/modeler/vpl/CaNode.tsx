@@ -693,12 +693,10 @@ function CaNodeComponent({ id, data }: NodeProps) {
           </select>
         )}
 
+        {/* Wave A.6: nodes that walk a configured neighborhood (getNeighborsAttribute,
+            setNeighborhoodAttribute) keep both Neighborhood + Attribute. */}
         {(nodeData.nodeType === 'getNeighborsAttribute'
-          || nodeData.nodeType === 'getNeighborAttributeByIndex'
-          || nodeData.nodeType === 'getNeighborsAttrByIndexes'
-          || nodeData.nodeType === 'setNeighborhoodAttribute'
-          || nodeData.nodeType === 'setNeighborAttributeByIndex'
-          || nodeData.nodeType === 'filterNeighbors') && (
+          || nodeData.nodeType === 'setNeighborhoodAttribute') && (
           <>
             <select
               className={styles.select}
@@ -723,6 +721,26 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 ))}
             </select>
           </>
+        )}
+
+        {/* Wave A.6: NI-consuming access nodes drop the Neighborhood dropdown —
+            each NI carries its own (dr, dc) inline. Only Attribute is configured. */}
+        {(nodeData.nodeType === 'getNeighborAttributeByIndex'
+          || nodeData.nodeType === 'getNeighborsAttrByIndexes'
+          || nodeData.nodeType === 'setNeighborAttributeByIndex'
+          || nodeData.nodeType === 'filterNeighbors') && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.attributeId as string) || ''}
+            onChange={e => updateConfig('attributeId', e.target.value)}
+          >
+            <option value="">Attribute...</option>
+            {model.attributes
+              .filter(a => !a.isModelAttribute)
+              .map(a => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+          </select>
         )}
 
         {nodeData.nodeType === 'filterNeighbors' && (
@@ -1660,6 +1678,71 @@ function CaNodeComponent({ id, data }: NodeProps) {
             </>
           );
         })()}
+
+        {nodeData.nodeType === 'getAllNeighborIndexes' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.neighborhoodId as string) || ''}
+            onChange={e => updateConfig('neighborhoodId', e.target.value)}
+          >
+            <option value="">Neighborhood...</option>
+            {model.neighborhoods.map(n => (
+              <option key={n.id} value={n.id}>{n.name}</option>
+            ))}
+          </select>
+        )}
+
+        {/* Wave A.6: neighborIndexFromOffset has no body widget — dr/dc are
+            input ports with their own inline number widgets. */}
+
+        {nodeData.nodeType === 'neighborIndexFromTag' && (() => {
+          const selNbr = model.neighborhoods.find(n => n.id === nodeData.config.neighborhoodId);
+          const tagNames = selNbr?.tags ? Object.values(selNbr.tags) : [];
+          return (
+            <>
+              <select
+                className={styles.select}
+                value={(nodeData.config.neighborhoodId as string) || ''}
+                onChange={e => updateConfig('neighborhoodId', e.target.value)}
+              >
+                <option value="">Neighborhood...</option>
+                {model.neighborhoods.map(n => (
+                  <option key={n.id} value={n.id}>{n.name}</option>
+                ))}
+              </select>
+              <select
+                className={styles.select}
+                value={(nodeData.config.tagName as string) || ''}
+                onChange={e => updateConfig('tagName', e.target.value)}
+              >
+                <option value="">Tag...</option>
+                {tagNames.map(t => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+              {selNbr && tagNames.length === 0 && (
+                <span style={{ fontSize: '0.6rem', color: '#f44336', fontStyle: 'italic' }}>
+                  No tags on this neighborhood
+                </span>
+              )}
+            </>
+          );
+        })()}
+
+        {/* Wave A.6: flipNeighborIndex is pure bit math — only the mode (which
+            axis to mirror across) is configurable; no neighborhood needed. */}
+        {nodeData.nodeType === 'flipNeighborIndex' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.mode as string) || 'horizontal'}
+            onChange={e => updateConfig('mode', e.target.value)}
+            title="Which axis to mirror across"
+          >
+            <option value="horizontal">Flip horizontal (negate dCol)</option>
+            <option value="vertical">Flip vertical (negate dRow)</option>
+            <option value="both">Flip both (180° rotate)</option>
+          </select>
+        )}
 
         {nodeData.nodeType === 'macro' && (
           <span style={{ fontSize: '0.6rem', color: '#8060c0', fontStyle: 'italic' }}>

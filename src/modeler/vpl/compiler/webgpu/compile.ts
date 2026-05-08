@@ -30,6 +30,7 @@ import {
   detectWebGPUIncompatibilities, detectWebGPUModelIncompatibilities,
 } from '../../nodes/nodeValidation';
 import { getInlineValue, parseInlineNum } from '../inlinePort';
+import { INVALID_NI, packNI } from '../niCodec';
 
 export interface WebGPUEntryPoints {
   step: string;
@@ -188,6 +189,13 @@ function getNbr(layout: WebGPULayout, id: string): WebGPULayoutNbr | null {
  *  (dRow, dCol) lookup + boundary math inline. */
 function emitNbrCellIdx(nbr: WebGPULayoutNbr, kExpr: string): string {
   return `nbrCellIdx(idx, ${nbr.wordOffset}u, ${kExpr})`;
+}
+
+/** Wave A.6: emit the WGSL expression that produces the cell index reached by
+ *  applying packed NI `niExpr` from cell `idx`. Decodes (dr, dc) inline and
+ *  applies the model's boundary treatment. */
+function emitNiCellIdx(niExpr: string): string {
+  return `nbrCellIdxFromNi(idx, ${niExpr})`;
 }
 
 function attrWgslType(t: string): WgslType {
@@ -431,28 +439,30 @@ function resolveInputArray(ctx: CompileCtx, node: GraphNode, portId: string): Ar
 const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
 
   // Compile-time constant indices (resolved from tags upstream).
+  // Wave A.6: emits literal packed NIs (resolved by pre-pass).
   getNeighborIndexesByTags: ({ node, ctx }) => {
-    const indices: number[] = node.data.config._resolvedTagIndexes
+    const packed: number[] = node.data.config._resolvedTagIndexes
       ? JSON.parse(node.data.config._resolvedTagIndexes as string) : [];
-    // Output length is exactly indices.length — tightest possible bound.
-    const arr = allocArray(ctx, 'i32', 'arrIdxTags', indices.length);
-    for (let k = 0; k < indices.length; k++) {
-      ctx.lines.push(`  ${arr.name}[${k}] = ${indices[k]! | 0};`);
+    const arr = allocArray(ctx, 'i32', 'arrIdxTags', packed.length);
+    for (let k = 0; k < packed.length; k++) {
+      ctx.lines.push(`  ${arr.name}[${k}] = ${packed[k]! | 0};`);
     }
-    ctx.lines.push(`  ${arr.lenName} = ${indices.length};`);
+    ctx.lines.push(`  ${arr.lenName} = ${packed.length};`);
     return arr;
   },
 
-  // Wave A.5: full NI[] of a neighborhood — [0, 1, …, nbrSize-1].
+  // Wave A.6: full NI[] of a neighborhood — packed (dr, dc) for every slot.
   getAllNeighborIndexes: ({ node, ctx }) => {
     const nbrId = node.data.config.neighborhoodId as string;
-    const nbr = getNbr(ctx.layout, nbrId);
+    const nbr = ctx.model.neighborhoods.find(n => n.id === nbrId);
     if (!nbr) { ctx.errors.push(`getAllNeighborIndexes: unknown neighborhood ${nbrId}`); return null; }
-    const arr = allocArray(ctx, 'i32', 'arrAllNbr', nbr.size);
-    for (let k = 0; k < nbr.size; k++) {
-      ctx.lines.push(`  ${arr.name}[${k}] = ${k};`);
+    const arr = allocArray(ctx, 'i32', 'arrAllNbr', nbr.coords.length);
+    for (let k = 0; k < nbr.coords.length; k++) {
+      const [dr, dc] = nbr.coords[k]!;
+      const pk = packNI(dr, dc);
+      ctx.lines.push(`  ${arr.name}[${k}] = ${pk};`);
     }
-    ctx.lines.push(`  ${arr.lenName} = ${nbr.size};`);
+    ctx.lines.push(`  ${arr.lenName} = ${nbr.coords.length};`);
     return arr;
   },
 
@@ -492,29 +502,27 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     return result;
   },
 
-  // Filter input array of neighbor indices by comparing the attribute at each
-  // referenced neighbor cell against `compare`. Wave A.5: when the Indexes input
-  // is unconnected, iterate every slot of the configured neighborhood.
+  // Wave A.6: filter input NI[] by comparing the attribute at each referenced
+  // neighbor cell. NIs are packed (dr, dc); no neighborhood config. Indexes
+  // input is required.
   filterNeighbors: ({ node, ctx, inputs }) => {
-    const nbrId = node.data.config.neighborhoodId as string;
     const attrId = node.data.config.attributeId as string;
     const op = (node.data.config.operation as string) || 'equals';
-    const nbr = getNbr(ctx.layout, nbrId);
     const attr = getAttr(ctx.layout, attrId);
-    if (!nbr || !attr) { ctx.errors.push(`filterNeighbors: unknown nbr/attr (${nbrId}/${attrId})`); return null; }
+    if (!attr) { ctx.errors.push(`filterNeighbors: unknown attr ${attrId}`); return null; }
 
     const inArr = resolveInputArray(ctx, node, 'indexes');
-    const isExplicit = !!inArr;
+    if (!inArr) {
+      ctx.errors.push(`filterNeighbors: requires Indexes input (e.g., from Get All Neighbor Indexes)`);
+      return null;
+    }
 
     const compare = inputs['compare'] ?? { expr: '0.0', type: 'f32' as WgslType };
-    const cap = isExplicit ? inArr!.maxLen : nbr.size;
-    const out = allocArray(ctx, 'i32', 'arrFilter', cap);
+    const out = allocArray(ctx, 'i32', 'arrFilter', inArr.maxLen);
     const k = fresh(ctx, 'fk');
-    const loopBound = isExplicit ? inArr!.lenName : `${nbr.size}`;
-    ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${loopBound}; ${k} = ${k} + 1) {`);
-    const slotExpr = isExplicit ? arrLoad(inArr!, k) : k;
-    ctx.lines.push(`    let _idxIn_${k}: i32 = ${slotExpr};`);
-    ctx.lines.push(`    let _nci_${k}: i32 = ${emitNbrCellIdx(nbr, `_idxIn_${k}`)};`);
+    ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${inArr.lenName}; ${k} = ${k} + 1) {`);
+    ctx.lines.push(`    let _niIn_${k}: i32 = ${arrLoad(inArr, k)};`);
+    ctx.lines.push(`    let _nci_${k}: i32 = ${emitNiCellIdx(`_niIn_${k}`)};`);
     const elem = readAttr(attr, `u32(_nci_${k})`, false);
     ctx.lines.push(`    let _e_${k}: ${elem.type} = ${elem.expr};`);
     const elemF = castTo({ expr: `_e_${k}`, type: elem.type }, 'f32');
@@ -529,7 +537,7 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
       default:             cmp = '=='; break;
     }
     ctx.lines.push(`    if ((${elemF}) ${cmp} (${cmpF})) {`);
-    ctx.lines.push(`      ${out.name}[${out.lenName}] = _idxIn_${k};`);
+    ctx.lines.push(`      ${out.name}[${out.lenName}] = _niIn_${k};`);
     ctx.lines.push(`      ${out.lenName} = ${out.lenName} + 1;`);
     ctx.lines.push(`    }`);
     ctx.lines.push(`  }`);
@@ -667,29 +675,25 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
   },
 
   // Read attribute values at neighbour positions specified by an indexes array.
+  // Wave A.6: read neighbor attribute values for a list of packed NIs.
   getNeighborsAttrByIndexes: ({ node, ctx }) => {
-    const nbrId = node.data.config.neighborhoodId as string;
     const attrId = node.data.config.attributeId as string;
-    const nbr = getNbr(ctx.layout, nbrId);
     const attr = getAttr(ctx.layout, attrId);
-    if (!nbr || !attr) { ctx.errors.push(`getNeighborsAttrByIndexes: unknown nbr/attr`); return null; }
+    if (!attr) { ctx.errors.push(`getNeighborsAttrByIndexes: unknown attr ${attrId}`); return null; }
     const inArr = resolveInputArray(ctx, node, 'indexes');
     if (!inArr) { ctx.errors.push(`getNeighborsAttrByIndexes: no input on "indexes"`); return null; }
 
     const elemType = attrElemType(attr.type);
-    // One output per input index.
     const out = allocArray(ctx, elemType, 'arrNbrAttr', inArr.maxLen);
     const k = fresh(ctx, 'nak');
     ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${inArr.lenName}; ${k} = ${k} + 1) {`);
-    ctx.lines.push(`    let _idxIn_${k}: i32 = ${arrLoad(inArr, k)};`);
-    ctx.lines.push(`    let _nci_${k}: i32 = ${emitNbrCellIdx(nbr, `_idxIn_${k}`)};`);
+    ctx.lines.push(`    let _niIn_${k}: i32 = ${arrLoad(inArr, k)};`);
+    ctx.lines.push(`    let _nci_${k}: i32 = ${emitNiCellIdx(`_niIn_${k}`)};`);
     const e = readAttr(attr, `u32(_nci_${k})`, false);
-    // Coerce to the array's element type. For bool attrs we store as i32 (0/1)
-    // for uniform handling; for float we keep f32; for int/tag we keep i32.
     let stored: string;
     if (attr.type === 'bool') stored = `select(0, 1, ${e.expr})`;
-    else if (attr.type === 'float') stored = e.expr; // already f32
-    else stored = e.expr; // already i32
+    else if (attr.type === 'float') stored = e.expr;
+    else stored = e.expr;
     ctx.lines.push(`    ${out.name}[${k}] = ${stored};`);
     ctx.lines.push(`  }`);
     ctx.lines.push(`  ${out.lenName} = ${inArr.lenName};`);
@@ -722,31 +726,46 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return emitLet(ctx, 'i32', `${idx | 0}`, 'tag');
   },
 
-  // Wave A PR2: NeighborIndex constructors (compile-time-resolved slot)
-  neighborIndexFromOffset: ({ node, ctx }) => {
-    const slot = Number(node.data.config._resolvedSlot ?? -1);
-    return emitLet(ctx, 'i32', `${slot | 0}`, 'nio');
+  // Wave A.6: NIs are packed (dr, dc) i32. neighborIndexFromOffset takes
+  // dr/dc as input ports and emits the packed value at runtime.
+  neighborIndexFromOffset: ({ ctx, inputs }) => {
+    const drRef = inputs['dr'] ?? { expr: '0', type: 'i32' as WgslType };
+    const dcRef = inputs['dc'] ?? { expr: '0', type: 'i32' as WgslType };
+    const drI = castTo(drRef, 'i32');
+    const dcI = castTo(dcRef, 'i32');
+    return emitLet(
+      ctx,
+      'i32',
+      `(((${drI}) & 0xFFFF) << 16) | ((${dcI}) & 0xFFFF)`,
+      'nio',
+    );
   },
+  // Wave A.6: emit a packed-NI literal pre-resolved by the compiler pre-pass.
   neighborIndexFromTag: ({ node, ctx }) => {
-    const slot = Number(node.data.config._resolvedSlot ?? -1);
-    return emitLet(ctx, 'i32', `${slot | 0}`, 'nit');
+    const packed = node.data.config._resolvedPacked !== undefined
+      ? Number(node.data.config._resolvedPacked) | 0
+      : INVALID_NI;
+    return emitLet(ctx, 'i32', `${packed}`, 'nit');
   },
 
-  // Wave A PR2: flip a NeighborIndex via compile-time precomputed table.
-  // Out-of-range inputs (or table[k] === -1) yield -1.
+  // Wave A.6: flip a NeighborIndex by decoding (dr, dc), conditionally
+  // negating, and re-encoding. No neighborhood needed.
   flipNeighborIndex: ({ node, ctx, inputs }) => {
-    const tableJSON = node.data.config._resolvedFlipTable as string | undefined;
-    const table: number[] = tableJSON ? JSON.parse(tableJSON) : [];
+    const mode = (node.data.config.mode as string) || 'horizontal';
+    const flipDr = mode === 'vertical' || mode === 'both';
+    const flipDc = mode === 'horizontal' || mode === 'both';
     const idxRef = inputs['index'] ?? { expr: '0', type: 'i32' as WgslType };
     const inExpr = castTo(idxRef, 'i32');
     const inName = fresh(ctx, 'flipIn');
     ctx.lines.push(`  let ${inName}: i32 = ${inExpr};`);
-    const resultName = fresh(ctx, 'flipR');
-    ctx.lines.push(`  var ${resultName}: i32 = -1;`);
-    for (let k = 0; k < table.length; k++) {
-      ctx.lines.push(`  if (${inName} == ${k}) { ${resultName} = ${(table[k] ?? -1) | 0}; }`);
-    }
-    return { expr: resultName, type: 'i32' };
+    const drExpr = flipDr ? `(-((${inName}) >> 16))` : `((${inName}) >> 16)`;
+    const dcExpr = flipDc ? `(-(((${inName}) << 16) >> 16))` : `(((${inName}) << 16) >> 16)`;
+    return emitLet(
+      ctx,
+      'i32',
+      `((${drExpr}) & 0xFFFF) << 16 | ((${dcExpr}) & 0xFFFF)`,
+      'flipR',
+    );
   },
 
   // Wave A.5: array length.
@@ -777,7 +796,9 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     if (inArr.elemType === 'bool') {
       return emitLet(ctx, 'bool', `select(false, ${arrLoad(inArr, idx)}, ${inb})`, 'aeV');
     }
-    return emitLet(ctx, 'i32', `select(-1, ${arrLoad(inArr, idx)}, ${inb})`, 'aeV');
+    // Wave A.6: out-of-range default is INVALID_NI (i32 min) — also a fine
+    // sentinel for non-NI integer arrays.
+    return emitLet(ctx, 'i32', `select(${INVALID_NI}, ${arrLoad(inArr, idx)}, ${inb})`, 'aeV');
   },
 
   // Wave A PR2: pick a random element from a NeighborIndex array. Uses the
@@ -796,7 +817,8 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     // a valid array index when len > 0; runtime select() guards the empty case.
     ctx.lines.push(`  let ${idxName}: i32 = i32(${r} * f32(${inArr.lenName}));`);
     const resultName = fresh(ctx, 'pickV');
-    ctx.lines.push(`  let ${resultName}: i32 = select(-1, ${arrLoad(inArr, idxName)}, ${inArr.lenName} > 0);`);
+    // Wave A.6: empty-array sentinel is INVALID_NI (i32 min) instead of -1.
+    ctx.lines.push(`  let ${resultName}: i32 = select(${INVALID_NI}, ${arrLoad(inArr, idxName)}, ${inArr.lenName} > 0);`);
     return { expr: resultName, type: 'i32' };
   },
 
@@ -972,19 +994,14 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return emitLet(ctx, 'f32', `bitcast<f32>(atomicLoad(&indicators[${idx}u]))`, 'ind');
   },
 
+  // Wave A.6: read one neighbor's attribute at a packed NI offset.
   getNeighborAttributeByIndex: ({ node, ctx, inputs }) => {
-    const nbrId = node.data.config.neighborhoodId as string;
     const attrId = node.data.config.attributeId as string;
-    const nbr = getNbr(ctx.layout, nbrId);
     const attr = getAttr(ctx.layout, attrId);
-    if (!nbr || !attr) { ctx.errors.push(`getNeighborAttributeByIndex: unknown nbr/attr`); return null; }
+    if (!attr) { ctx.errors.push(`getNeighborAttributeByIndex: unknown attr ${attrId}`); return null; }
     const indexRef = inputs['index'] ?? { expr: '0', type: 'i32' as WgslType };
-    // Clamp the user-supplied index to [0, nbr.size - 1]. WGSL out-of-bounds
-    // storage reads return zero, which would silently read "neighbour 0 of
-    // cell 0" (typically the boundary sentinel) instead of failing visibly.
-    const clamped = emitLet(ctx, 'i32', `clamp(${castTo(indexRef, 'i32')}, 0, ${nbr.size - 1})`, 'ni');
-    const cellIdx = emitLet(ctx, 'i32', emitNbrCellIdx(nbr, clamped.expr), 'nci');
-    // Read attr at cellIdx (cast to u32 for indexing)
+    const niLocal = emitLet(ctx, 'i32', castTo(indexRef, 'i32'), 'ni');
+    const cellIdx = emitLet(ctx, 'i32', emitNiCellIdx(niLocal.expr), 'nci');
     const r = readAttr(attr, `u32(${cellIdx.expr})`, false);
     return emitLet(ctx, r.type, r.expr, 'nbAtr');
   },

@@ -401,7 +401,7 @@ These would reduce the palette's cognitive load:
 
 ---
 
-## 7. NeighborIndex (Wave A)
+## 7. NeighborIndex (Wave A → A.6)
 
 **Background.** Before Wave A, every "integer" floating through a neighbor-aware port
 could mean three different things at runtime:
@@ -415,29 +415,52 @@ but performed wrong-cell lookups at runtime as soon as the input array had been
 filtered or reordered (since the emitted `Index` output is a list-position, not a
 coord-idx).
 
-**The fix.** Wave A introduces `neighborIndex` as a distinct port type. Internally it
-is still an `i32` carrying the same coord-idx (slot index into the consuming node's
-neighborhood) — the runtime representation is unchanged so existing graphs still work
-without migration. What changed is the **typing** layer:
+**The fix.** Wave A introduces `neighborIndex` as a distinct port type, and Wave A.6
+makes it neighborhood-agnostic. The runtime representation is **packed `(dr, dc)`
+i32**: dr in the upper 16 bits (sign-extended), dc in the lower 16 bits. So
+`pack(dr, dc) = ((dr & 0xFFFF) << 16) | (dc & 0xFFFF)`, and decode is
+`dr = ni >> 16; dc = (ni << 16) >> 16`. The "no neighbor" sentinel is
+`INVALID_NI = 0x80000000` (i32 min).
+
+This means an NI carries its own offset inline — there is no shared "which neighborhood
+am I a slot of?" context to track. Wiring an NI from one source into a different
+consumer Just Works: the consumer reads (dr, dc) and computes the cell at
+`(row + dr, col + dc)` with the model's boundary treatment baked at compile time.
+
+**What changed in the type system / port validation:**
 
 - Every neighbor-touching port that previously took a coord-idx (`getNeighborAttributeByIndex.Index`,
   `setNeighborAttributeByIndex.Index`, `filterNeighbors.Indexes` / `.Filtered`,
   `getNeighborIndexesByTags.Indexes`, `joinNeighbors.A/B/Result`,
-  `getNeighborsAttrByIndexes.Indexes`) was retyped to `neighborIndex`.
+  `getNeighborsAttrByIndexes.Indexes`) is `neighborIndex`.
 - Aggregation outputs that emit *list-positions* (`groupCounting.Positions`,
-  `groupStatement.Positions`, `groupOperator.Position`) were renamed and stay typed
-  as plain `integer` — wiring one of them into a NeighborIndex port now fires a
-  warning badge on the target node.
-- `isValidConnection` blocks NI ↔ non-NI/non-`any` wires at edit time. Other type
-  combinations (bool ↔ int, etc.) remain unchecked.
+  `groupStatement.Positions`, `groupOperator.Position`) stay typed as plain `integer`
+  — wiring one of them into a NeighborIndex port fires a warning badge on the target
+  node.
+- `isValidConnection` blocks NI ↔ non-NI/non-`any` wires at edit time.
 
-**Constructor + manipulation nodes.** Four value nodes operate on NI:
-- `neighborIndexFromOffset(neighborhoodId, dr, dc) → NI` — compile-time-resolved.
-- `neighborIndexFromTag(neighborhoodId, tagName) → NI` — compile-time-resolved.
-- `flipNeighborIndex(neighborhoodId, mode) NI → NI` — mirror horizontally / vertically /
-  both. Compile-time precomputes a flip table per neighborhood.
-- `pickRandomNeighbor(NI[]) → NI` — pick one element at random from a NI array.
-  Replaces the broken `groupOperator(random)` pattern. Returns -1 on empty input.
+**What changed in node configuration (Wave A.6):** the following nodes no longer
+require a `neighborhoodId` config — they operate on the packed NI directly:
+
+- `filterNeighbors` — only `attributeId` + comparison operator. `Indexes` input is
+  required (the implicit-all default of Wave A.5 is gone — bootstrap with
+  `getAllNeighborIndexes(N)` instead).
+- `getNeighborAttributeByIndex` / `getNeighborsAttrByIndexes` — only `attributeId`.
+- `setNeighborAttributeByIndex` — only `attributeId`. Async-only.
+- `flipNeighborIndex` — only the mirror axis (horizontal / vertical / both). Pure
+  bit math.
+- `neighborIndexFromOffset` — `dr` and `dc` are now **input ports** with inline
+  number widgets, so they can be either typed as constants or wired from any
+  computation. No body widgets, no neighborhood needed.
+
+**Nodes that still take a neighborhoodId** (because they enumerate or walk a specific
+neighborhood's slots):
+
+- `getAllNeighborIndexes(N) → NI[]` — emits packed NIs for every slot of N.
+- `getNeighborIndexesByTags(N, [tags…]) → NI[]` — tag names are per-neighborhood.
+- `neighborIndexFromTag(N, tagName) → NI` — same.
+- `getNeighborsAttribute(N, attr) → values[]` — gathers all-neighbor values.
+- `getNeighborAttributeByTag(N, attr, tagName) → value` — compile-time tag lookup.
 
 **Iteration.** `forEachInArray(arr) { body }` exposes the per-iteration element via an
 `Element` value port. Both body **flow** nodes (consuming `Element` directly via
@@ -447,12 +470,12 @@ forward BFS from `Element` through value consumers, with element-dependent
 expressions emitted inside the loop block where the element variable is in scope.
 
 **NeighborIndex as a stored attribute.** Cell and model attributes can be declared
-with `type: 'neighborIndex'` (storage = `Int32Array`, identical to integer/tag). The
-attribute editor exposes a *hint neighborhood* dropdown plus a clickable cell grid for
-picking the default value. The hint is purely a UI affordance — the stored value is
-just a slot index, interpreted at runtime relative to the consuming node's
-neighborhood. Cross-neighborhood reuse of a stored NI is brittle and not recommended
-unless both neighborhoods share the same slot ordering for the relevant offsets.
+with `type: 'neighborIndex'` (storage = `Int32Array`, one packed value per cell).
+The attribute editor exposes a *hint neighborhood* dropdown plus a clickable cell
+grid for picking the default value — the hint just controls which offsets are
+highlighted as familiar; you can pick any offset. Without a hint, the editor falls
+back to two number inputs (dr + dc). Stored values are neighborhood-agnostic and
+can be reused across any neighborhood without ambiguity.
 
 **Brush + visualization for NI cell attributes** are user-defined via the standard
 mapping pipeline (Color → Attribute for the brush, Attribute → Color for the viewer):
@@ -495,26 +518,22 @@ copy of the input, returning the first `min(n, len)` shuffled entries. Uses
 the shared xorshift32 stream on JS / WASM and per-cell PCG on WebGPU
 (matching `getRandom` / `pickRandomNeighbor`).
 
-### Canonical movement pattern (corrected)
+### Canonical movement pattern (Wave A.6)
 
 ```
 allNIs   = getAllNeighborIndexes(Moore)
-empties  = filterNeighbors(allNIs, alive, ==, 0)        // config: nbr=Moore, attr=alive
-chosen   = pickRandomNeighbor(empties)
+empties  = filterNeighbors(allNIs, alive, ==, 0)        // config: attr=alive (no neighborhood!)
+chosen   = pickRandomNeighbor(empties)                  // returns INVALID_NI on empty
 flow:
-  conditional(chosen >= 0)            // statement compares chosen to 0
-    setNeighborAttributeByIndex(Moore, alive, true, chosen)
+  conditional(chosen != INVALID_NI)
+    setNeighborAttributeByIndex(alive, true, chosen)    // config: attr=alive (no neighborhood!)
     setAttribute(alive, false)
 ```
 
-With the implicit-all default on `filterNeighbors` (Wave A.5), this collapses
-to two NI-pipeline nodes:
-
-```
-empties = filterNeighbors(Moore, alive, ==, 0)         // Indexes unconnected → all-NIs of Moore
-chosen  = pickRandomNeighbor(empties)
-flow: …
-```
+Three NI-pipeline nodes; none of them need a neighborhood configured beyond the
+bootstrap. `filterNeighbors` requires the `Indexes` input now (the implicit-all
+default of Wave A.5 was removed in A.6 — bootstrap with `getAllNeighborIndexes(N)`
+is the one canonical entry point).
 
 ### "Neighbor with max attribute X" pattern
 
@@ -532,9 +551,9 @@ into an NI[]. Without `arrayElement`, they were inert.
 emitters. The async-mode "move into a random empty neighbor" pattern still requires
 `updateMode: 'asynchronous'` and `setNeighborAttributeByIndex` (both async-only),
 which are rejected by WebGPU at compile time — the async movement-rule territory
-remains JS / WASM only. WebGPU's contribution from Wave A is sync-mode probabilistic
-neighbor sampling: `getNeighborsAttribute → filterNeighbors → pickRandomNeighbor →
-getNeighborAttributeByIndex` now compiles on WebGPU.
+remains JS / WASM only. Sync-mode probabilistic neighbor sampling
+(`getAllNeighborIndexes → filterNeighbors → pickRandomNeighbor →
+getNeighborAttributeByIndex`) compiles on WebGPU.
 
 ---
 

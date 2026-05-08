@@ -238,6 +238,7 @@ export const OP_I32_AND = byte(0x71);
 export const OP_I32_OR = byte(0x72);
 export const OP_I32_XOR = byte(0x73);
 export const OP_I32_SHL = byte(0x74);
+export const OP_I32_SHR_S = byte(0x75);
 export const OP_I32_SHR_U = byte(0x76);
 
 // f64 comparisons and arithmetic (subset)

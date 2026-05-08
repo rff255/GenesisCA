@@ -619,7 +619,7 @@ let activeViewer = '';
 
 /** Build args for the loop-wrapped step function (called once per step, not per cell) */
 function buildLoopArgs(): unknown[] {
-  const args: unknown[] = [total];
+  const args: unknown[] = [total, width, height];
   for (const attr of cellAttrs) args.push(readAttrs[attr.id]);
   for (const attr of cellAttrs) args.push(writeAttrs[attr.id]);
   for (const nbr of neighborhoods) {
@@ -633,7 +633,7 @@ function buildLoopArgs(): unknown[] {
 
 /** Build args for a per-cell function (InputColor) */
 function buildCellArgs(idx: number): unknown[] {
-  const args: unknown[] = [idx];
+  const args: unknown[] = [idx, total, width, height];
   for (const attr of cellAttrs) args.push(readAttrs[attr.id]);
   for (const attr of cellAttrs) args.push(writeAttrs[attr.id]);
   for (const nbr of neighborhoods) {

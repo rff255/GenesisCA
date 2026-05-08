@@ -5,6 +5,7 @@ import { classifyLoopInvariant } from './loopInvariant';
 import { safeId } from './identifierSafe';
 import { detectFusableConsumers, type FusionResult } from './fusion';
 import { getInlineValue } from './inlinePort';
+import { INVALID_NI, packNI } from './niCodec';
 
 // ---------------------------------------------------------------------------
 // Graph adjacency helpers
@@ -274,8 +275,11 @@ function compileRoot(
   flowOutputToTargets: Map<string, Array<{ nodeId: string; portId: string }>>,
   loopInvariant: Set<string>,
   fusion: FusionResult,
-  _model?: CAModel,
+  model?: CAModel,
 ): RootCompileResult {
+  // Some internal helpers in this function were written when `model` was unused
+  // (named `_model`). Keep both names in scope for those references.
+  const _model = model;
   const compiled = new Set<string>();
   const valueLines: string[] = [];
   const preLoopValueLines: string[] = [];
@@ -826,7 +830,7 @@ function compileRoot(
     const compileConfig = (node.data.nodeType === 'groupStatement' || node.data.nodeType === 'groupCounting')
       ? { ...node.data.config, _indexesConnected: needsIndexes }
       : node.data.config;
-    const code = def.compile(nodeId, compileConfig, inputVars);
+    const code = def.compile(nodeId, compileConfig, inputVars, model?.properties.boundaryTreatment);
     if (code) {
       // Loop-invariant nodes (e.g. modelAttrs reads + arithmetic over them)
       // hoist out of the cell loop and emit once per step instead of per cell.
@@ -1224,7 +1228,7 @@ function compileRoot(
             if (inlineVal !== undefined) inputVars[port.id] = inlineVal;
           }
         }
-        const code = def.compile(node.id, node.data.config, inputVars);
+        const code = def.compile(node.id, node.data.config, inputVars, model?.properties.boundaryTreatment);
         if (code) flowLines.push(indent + code.trimEnd());
       }
     }
@@ -1250,7 +1254,7 @@ function buildLoopParams(model: CAModel): {
     .map(a => ({ id: a.id, type: a.type }));
   const neighborhoods = model.neighborhoods.map(n => ({ id: n.id }));
 
-  const parts: string[] = ['total'];
+  const parts: string[] = ['total', 'W', 'H'];
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
@@ -1264,7 +1268,7 @@ function buildLoopParams(model: CAModel): {
 function buildCellParams(model: CAModel): string {
   const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
   const neighborhoods = model.neighborhoods;
-  const parts: string[] = ['idx'];
+  const parts: string[] = ['idx', 'total', 'W', 'H'];
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
@@ -1402,28 +1406,27 @@ export function compileGraph(
       node.data.config._resolvedTagIndex = tagEntry !== undefined ? Number(tagEntry[0]) : 0;
     }
     if (node.data.nodeType === 'getNeighborIndexesByTags') {
+      // Wave A.6: resolve each tag to its (dr, dc) and pack into i32. The
+      // emit produces a literal i32[] of packed NIs.
       const nbrId = node.data.config.neighborhoodId as string;
       const nbr = model.neighborhoods.find(n => n.id === nbrId);
       const tagCount = Number(node.data.config.tagCount) || 0;
-      const indices: number[] = [];
+      const packed: number[] = [];
       for (let i = 0; i < tagCount; i++) {
         const tagName = node.data.config[`tag_${i}_name`] as string;
         const tagEntry = nbr?.tags
           ? Object.entries(nbr.tags).find(([, name]) => name === tagName)
           : undefined;
-        indices.push(tagEntry !== undefined ? Number(tagEntry[0]) : 0);
+        const slot = tagEntry !== undefined ? Number(tagEntry[0]) : -1;
+        const coord = (slot >= 0 && nbr) ? nbr.coords[slot] : undefined;
+        packed.push(coord ? packNI(coord[0]!, coord[1]!) : INVALID_NI);
       }
-      node.data.config._resolvedTagIndexes = JSON.stringify(indices);
+      node.data.config._resolvedTagIndexes = JSON.stringify(packed);
     }
-    // Wave A PR2: resolve (dr, dc) -> slot index for NeighborIndex constructor nodes
-    if (node.data.nodeType === 'neighborIndexFromOffset') {
-      const nbrId = node.data.config.neighborhoodId as string;
-      const nbr = model.neighborhoods.find(n => n.id === nbrId);
-      const dr = Number(node.data.config.dr ?? 0);
-      const dc = Number(node.data.config.dc ?? 0);
-      const slot = nbr ? nbr.coords.findIndex(c => c[0] === dr && c[1] === dc) : -1;
-      node.data.config._resolvedSlot = slot;
-    }
+    // Wave A.6: NI runtime is now packed (dr, dc) i32. Pre-pass resolves the
+    // packed values for compile-time-known constructors. (Wave A's prior
+    // slot-index pre-pass is gone; runtime values are packed offsets, not
+    // slot indices.)
     if (node.data.nodeType === 'neighborIndexFromTag') {
       const nbrId = node.data.config.neighborhoodId as string;
       const nbr = model.neighborhoods.find(n => n.id === nbrId);
@@ -1431,31 +1434,21 @@ export function compileGraph(
       const tagEntry = nbr?.tags
         ? Object.entries(nbr.tags).find(([, name]) => name === tagName)
         : undefined;
-      node.data.config._resolvedSlot = tagEntry !== undefined ? Number(tagEntry[0]) : -1;
+      const slot = tagEntry !== undefined ? Number(tagEntry[0]) : -1;
+      const coord = (slot >= 0 && nbr) ? nbr.coords[slot] : undefined;
+      node.data.config._resolvedPacked = coord
+        ? packNI(coord[0]!, coord[1]!)
+        : INVALID_NI;
     }
     if (node.data.nodeType === 'getAllNeighborIndexes') {
-      // Wave A.5: resolve neighborhood size at compile time so the emit can
-      // produce `[0, 1, …, nbrSize-1]` directly.
+      // Wave A.6: pre-resolve packed (dr, dc) for every slot of the
+      // configured neighborhood. Emit becomes a literal array of i32s.
       const nbrId = node.data.config.neighborhoodId as string;
       const nbr = model.neighborhoods.find(n => n.id === nbrId);
-      node.data.config._resolvedNbrSize = nbr ? nbr.coords.length : 0;
-    }
-    if (node.data.nodeType === 'flipNeighborIndex') {
-      const nbrId = node.data.config.neighborhoodId as string;
-      const nbr = model.neighborhoods.find(n => n.id === nbrId);
-      const mode = (node.data.config.mode as string) || 'horizontal';
-      const flipDr = mode === 'vertical' || mode === 'both';
-      const flipDc = mode === 'horizontal' || mode === 'both';
-      const table: number[] = [];
-      if (nbr) {
-        for (const [dr, dc] of nbr.coords) {
-          const fr = flipDr ? -dr : dr;
-          const fc = flipDc ? -dc : dc;
-          const flipped = nbr.coords.findIndex(c => c[0] === fr && c[1] === fc);
-          table.push(flipped);
-        }
-      }
-      node.data.config._resolvedFlipTable = JSON.stringify(table);
+      const packed: number[] = nbr
+        ? nbr.coords.map(([dr, dc]) => packNI(dr, dc))
+        : [];
+      node.data.config._resolvedPackedAll = JSON.stringify(packed);
     }
   }
 
@@ -1569,6 +1562,11 @@ export function compileGraph(
         '  for (let _i = 0; _i < total; _i++) {',
         '    const idx = order[_i];',
         '    const colorIdx = idx * 4;',
+        // Wave A.6: per-cell (row, col) decoded from idx — used by NI access
+        // helpers (filterNeighbors, get/setNeighborAttributeByIndex, etc.).
+        // Two ops per cell, amortised across all NI accesses in the cell body.
+        '    const _row = (idx / W) | 0;',
+        '    const _col = idx - _row * W;',
         ...valueLines,
         '',
         ...flowLines,
@@ -1590,6 +1588,9 @@ export function compileGraph(
         '  let _rs = _rngState[0] || 0x12345678;',
         '  for (let idx = 0; idx < total; idx++) {',
         '    const colorIdx = idx * 4;',
+        // Wave A.6: per-cell (row, col) decoded from idx — see async branch comment.
+        '    const _row = (idx / W) | 0;',
+        '    const _col = idx - _row * W;',
         ...valueLines,
         '',
         ...flowLines,
@@ -1619,6 +1620,9 @@ export function compileGraph(
     const code = [
       `(function(_r, _g, _b, ${cellParams}) {`,
       '  const colorIdx = idx * 4;',
+      // Wave A.6: per-cell (row, col) decoded from idx for NI access helpers.
+      '  const _row = (idx / W) | 0;',
+      '  const _col = idx - _row * W;',
       ...icCopyLines,
       `  const _v${icNode.id}_r = _r; const _v${icNode.id}_g = _g; const _v${icNode.id}_b = _b;`,
       '  let _rs = _rngState[0] || 0x12345678;',
@@ -1639,7 +1643,7 @@ export function compileGraph(
   const outputMappingCodes: Array<{ mappingId: string; code: string }> = [];
 
   // Output mapping uses sync-style loop params (no order) regardless of updateMode
-  const omParamParts: string[] = ['total'];
+  const omParamParts: string[] = ['total', 'W', 'H'];
   for (const a of cellAttrs) omParamParts.push(`r_${a.id}`);
   for (const a of cellAttrs) omParamParts.push(`w_${a.id}`);
   const neighborhoods = model.neighborhoods.map(n => ({ id: n.id }));
@@ -1661,6 +1665,9 @@ export function compileGraph(
       '  let _rs = _rngState[0] || 0x12345678;',
       '  for (let idx = 0; idx < total; idx++) {',
       '    const colorIdx = idx * 4;',
+      // Wave A.6: per-cell (row, col) decoded from idx for NI access helpers.
+      '    const _row = (idx / W) | 0;',
+      '    const _col = idx - _row * W;',
       ...valueLines,
       '',
       ...flowLines,

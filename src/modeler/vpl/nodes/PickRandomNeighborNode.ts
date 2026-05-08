@@ -3,7 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const PickRandomNeighborNode: NodeTypeDef = {
   type: 'pickRandomNeighbor',
   label: 'Pick Random Neighbor',
-  description: 'Picks one element at random from a NeighborIndex array (e.g. the result of Filter Neighbors). Returns -1 if the array is empty.',
+  description: 'Picks one element at random from a NeighborIndex array (e.g. the result of Filter Neighbors). Returns INVALID_NI (0x80000000) if the array is empty.',
   category: 'aggregation',
   color: '#e65100',
   ports: [
@@ -21,7 +21,7 @@ export const PickRandomNeighborNode: NodeTypeDef = {
     return [
       `${advance}`,
       `const _pickArr${nodeId} = ${arr};`,
-      `const _v${nodeId} = _pickArr${nodeId}.length === 0 ? -1 : _pickArr${nodeId}[Math.floor((_rs / 4294967296) * _pickArr${nodeId}.length)];`,
+      `const _v${nodeId} = _pickArr${nodeId}.length === 0 ? ${0x80000000 | 0} : _pickArr${nodeId}[Math.floor((_rs / 4294967296) * _pickArr${nodeId}.length)];`,
     ].join(' ') + '\n';
   },
 };

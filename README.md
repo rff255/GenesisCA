@@ -89,7 +89,7 @@ A complete GenesisCA model definition consists of:
 - **Update Mode** — choose Synchronous (classic CA) or Asynchronous (sequential updates with single buffer) in Model Properties
 - **Update Schemes** — Random Order, Random Independent, or Cyclic — balancing accuracy vs. performance
 - **Async-only nodes** — Set Neighborhood Attribute, Set Neighbor Attr By Index for number-conserving movement patterns. Get Neighbor Attr By Index works in both modes.
-- **NeighborIndex type** — first-class typed handle for a neighbor slot. Distinguishes coord-handles (the slot you want to read or write to) from list-positions (positions in an array of values), eliminating a class of silent runtime bugs. Companion nodes: Pick Random Neighbor, Neighbor Index (from Offset / from Tag), Flip Neighbor Index. Wiring a non-NI integer source into an NI port shows an amber warning badge on the target node.
+- **NeighborIndex type** — first-class typed handle that carries a packed `(dr, dc)` offset to a neighbor cell. Position-only and neighborhood-agnostic, so filter/pick/iterate/set chains compose without ever asking "from which neighborhood?". Distinguishes coord-handles from list-positions (positions in an array of values), eliminating a class of silent runtime bugs. Companion nodes: Get All Neighbor Indexes, Pick Random Neighbor, Pick N Random Neighbors, Neighbor Index (from Offset / from Tag), Flip Neighbor Index. Wiring a non-NI integer source into an NI port shows an amber warning badge on the target node.
 - **For Each In Array** — flow node that iterates a typed array and exposes the per-iteration element via an output port (JS-only currently). Useful for "iterate matching neighbors" patterns; body flow nodes can consume the element directly.
 
 ### The Simulator
