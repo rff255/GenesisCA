@@ -481,17 +481,73 @@ export function HelpView() {
             <li><strong>Set Neighborhood Attribute</strong> &mdash; Sets a cell attribute for all cells in a
               selected neighborhood.</li>
             <li><strong>Set Neighbor Attr By Index</strong> &mdash; Sets a cell attribute for one specific
-              neighbor (by index 0..N&minus;1).</li>
+              neighbor (by NeighborIndex).</li>
           </ul>
           <p className={styles.p}>
             <strong>Get Neighbor Attr By Index</strong> is a read-only node that works in both
             sync and async modes, and is typically used alongside the async-only write nodes.
           </p>
           <p className={styles.p}>
-            <strong>Typical movement pattern:</strong> pick a random neighbor index &rarr;
-            read that neighbor&apos;s attribute (Get Neighbor Attr By Index) &rarr;
-            if empty, set that neighbor (Set Neighbor Attr By Index) and clear self
-            (Set Attribute).
+            <strong>Canonical movement pattern</strong> (mass-conservation, particle-style rules):
+          </p>
+          <ol className={styles.list}>
+            <li><strong>Get Neighbors Attribute</strong> &rarr; read every neighbor&apos;s state.</li>
+            <li><strong>Filter Neighbors</strong> &rarr; keep the ones where state == empty.</li>
+            <li><strong>Pick Random Neighbor</strong> &rarr; pick one slot at random from the filtered list.</li>
+            <li><strong>Set Neighbor Attr By Index</strong> on the picked slot &mdash; mark it occupied.</li>
+            <li><strong>Set Attribute</strong> on self &mdash; clear current cell.</li>
+          </ol>
+
+          <h3 className={styles.h3}>NeighborIndex Type</h3>
+          <p className={styles.p}>
+            <strong>NeighborIndex</strong> is a typed handle for a neighbor slot (an entry in a
+            neighborhood pattern). It exists to prevent a class of silent runtime bugs: before
+            it existed, an integer port could equally mean &ldquo;neighbor slot 2&rdquo;, &ldquo;the 3rd
+            element of an arbitrary array&rdquo;, or &ldquo;global cell index 2&rdquo; &mdash;
+            and chains like <em>filter</em> &rarr; <em>min</em> &rarr; <em>set neighbor</em> would
+            silently look up the wrong cell.
+          </p>
+          <p className={styles.p}>
+            NeighborIndex ports are <strong>amber-coloured</strong> in the editor (versus cyan for
+            generic value ports). The connection validator blocks wiring a non-NI integer source
+            into an NI port; if you connect an aggregation output that produces list-positions
+            (<em>Count Matching</em>&apos;s <em>Positions</em>, <em>Group Reduce</em>&apos;s <em>Position</em>),
+            you&apos;ll see a warning badge on the target node.
+          </p>
+          <p className={styles.p}>
+            Four nodes operate on NeighborIndex:
+          </p>
+          <ul className={styles.ul}>
+            <li><strong>Pick Random Neighbor</strong> &mdash; pick one slot from a NI array at random.</li>
+            <li><strong>Neighbor Index (from Offset)</strong> &mdash; build a NI from a (dRow, dCol)
+              offset into a chosen neighborhood. Compile-time-resolved.</li>
+            <li><strong>Neighbor Index (from Tag)</strong> &mdash; build a NI from a tag name in the
+              neighborhood&apos;s tags map.</li>
+            <li><strong>Flip Neighbor Index</strong> &mdash; mirror a NI horizontally / vertically /
+              both, relative to the configured neighborhood.</li>
+          </ul>
+          <p className={styles.p}>
+            NeighborIndex can also be a <strong>cell or model attribute type</strong>. The
+            attribute editor exposes a clickable cell grid (anchored to a chosen &ldquo;hint
+            neighborhood&rdquo;) for picking the default value. This lets a cell remember &ldquo;which
+            neighbor I&apos;m pointing at&rdquo; across generations &mdash; useful for movement-direction
+            rules, leader-follower patterns, or static target-direction maps.
+          </p>
+
+          <h3 className={styles.h3}>For Each In Array</h3>
+          <p className={styles.p}>
+            <strong>For Each In Array</strong> is a flow node that iterates over each element of
+            a typed array (any kind: bool[], int[], float[], tag[], NeighborIndex[]) and runs the
+            BODY flow for each, exposing the current element via the <em>Element</em> output port.
+            Useful for &ldquo;iterate matching neighbors and apply different ops&rdquo; patterns.
+          </p>
+          <p className={styles.p}>
+            <strong>Current limitation:</strong> body <em>flow</em> nodes can consume <em>Element</em>
+            directly via input ports (e.g. <em>Set Neighbor Attr By Index</em> with index =
+            element). Body <em>value</em> nodes that depend on element (e.g. wiring element through a
+            Math node before the action) are not yet supported on any compile target. WASM/WebGPU
+            emitters are also pending &mdash; graphs using For Each currently auto-fall-back to the
+            JS path.
           </p>
         </section>
 
