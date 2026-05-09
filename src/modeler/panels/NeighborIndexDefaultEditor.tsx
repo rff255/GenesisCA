@@ -1,11 +1,38 @@
 import type { Attribute, Neighborhood } from '../../model/types';
-import { packNI, unpackNI } from '../vpl/compiler/niCodec';
+import { packNI, unpackNI, INVALID_NI } from '../vpl/compiler/niCodec';
 import styles from './PanelContent.module.css';
 
 interface Props {
   attribute: Attribute;
   neighborhoods: Neighborhood[];
   onChange: (cfg: Partial<Attribute>) => void;
+  /** Which value field this editor reads/writes. 'default' (the attribute's
+   *  initial value, plus the hint-neighborhood selector) or 'boundary' (the
+   *  out-of-grid value used under constant boundary treatment). The boundary
+   *  mode hides the hint selector since the hint is per-attribute and already
+   *  shown by the default editor. Defaults to 'default'. */
+  mode?: 'default' | 'boundary';
+}
+
+/** Per-axis clamp range — the runtime packs (dr, dc) as two sign-extended
+ *  16-bit halves of an i32, so values outside [-32767, 32767] silently wrap
+ *  on encode. We bound the editor inputs to the same range so the UI can't
+ *  produce a value the runtime would reinterpret. (-32768 is reserved for
+ *  the upper-half of the INVALID_NI sentinel and isn't a useful offset.) */
+const AXIS_MIN = -32767;
+const AXIS_MAX = 32767;
+const clampAxis = (n: number): number => Math.max(AXIS_MIN, Math.min(AXIS_MAX, n | 0));
+
+/** Decode a stored value string into a packed NI. Falls back to 0 (= centre
+ *  cell) for empty / non-finite / sentinel values so the editor never enters
+ *  a degenerate state — e.g. INVALID_NI's decoded (dr=-32768, dc=0) would
+ *  otherwise expand the auto-bounded grid to ~33 000 rows and lock the UI. */
+function safeDecode(stored: string | undefined): { packed: number; isSentinel: boolean } {
+  if (stored === undefined || stored.length === 0) return { packed: 0, isSentinel: false };
+  const n = parseInt(stored, 10);
+  if (!Number.isFinite(n)) return { packed: 0, isSentinel: false };
+  if (n === INVALID_NI) return { packed: 0, isSentinel: true };
+  return { packed: n | 0, isSentinel: false };
 }
 
 /** Wave A.6 default-value editor for a NeighborIndex attribute.
@@ -14,17 +41,22 @@ interface Props {
  *  representation used in the compiled step / outputMapping functions.
  *
  *  Two-piece UI:
- *    1. A dropdown to pick the *hint neighborhood* — a viewport reference for
- *       the editor only. Stored in `attribute.neighborhoodHintId`. When set,
- *       only the slots present in that neighborhood are highlighted; clicking
- *       any cell in the grid (whether or not it's in the hint) sets a packed
- *       (dr, dc) NI as the default value.
+ *    1. (default mode only) A dropdown to pick the *hint neighborhood* — a
+ *       viewport reference for the editor only. Stored in
+ *       `attribute.neighborhoodHintId`. When set, only the slots present in
+ *       that neighborhood are highlighted; clicking any cell in the grid
+ *       (whether or not it's in the hint) sets a packed (dr, dc) NI as the
+ *       value.
  *    2. When no hint is set, falls back to a row of two number inputs (dr +
- *       dc) so the user can still pick any offset. */
-export function NeighborIndexDefaultEditor({ attribute, neighborhoods, onChange }: Props) {
+ *       dc) so the user can still pick any offset. Inputs are clamped to
+ *       [-32767, 32767] to match the runtime's per-axis 16-bit range. */
+export function NeighborIndexDefaultEditor({ attribute, neighborhoods, onChange, mode = 'default' }: Props) {
+  const isBoundaryMode = mode === 'boundary';
+  const fieldKey: 'defaultValue' | 'boundaryValue' = isBoundaryMode ? 'boundaryValue' : 'defaultValue';
+  const stored = attribute[fieldKey];
   const hintId = attribute.neighborhoodHintId ?? '';
   const hint = neighborhoods.find(n => n.id === hintId) ?? null;
-  const currentPacked = parseInt(attribute.defaultValue, 10) || 0;
+  const { packed: currentPacked, isSentinel } = safeDecode(stored);
   const { dr: curDr, dc: curDc } = unpackNI(currentPacked);
 
   // Compute the grid bounds so it fits the hint's offsets (with a sensible minimum).
@@ -39,10 +71,13 @@ export function NeighborIndexDefaultEditor({ attribute, neighborhoods, onChange 
   }
   // Always include the current value's coordinate in the grid bounds, so the
   // user can see what's currently selected even if it's outside the hint.
-  if (curDr < minDr) minDr = curDr;
-  if (curDr > maxDr) maxDr = curDr;
-  if (curDc < minDc) minDc = curDc;
-  if (curDc > maxDc) maxDc = curDc;
+  // Skip when sentinel — its decoded -32768 row would blow up the grid.
+  if (!isSentinel) {
+    if (curDr < minDr) minDr = curDr;
+    if (curDr > maxDr) maxDr = curDr;
+    if (curDc < minDc) minDc = curDc;
+    if (curDc > maxDc) maxDc = curDc;
+  }
   const rows = maxDr - minDr + 1;
   const cols = maxDc - minDc + 1;
 
@@ -55,19 +90,22 @@ export function NeighborIndexDefaultEditor({ attribute, neighborhoods, onChange 
   }
 
   const cellSize = 22;
+  const writeValue = (newPacked: number) => onChange({ [fieldKey]: String(newPacked) } as Partial<Attribute>);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <select
-        className={styles.selectInput}
-        value={hintId}
-        onChange={e => onChange({ neighborhoodHintId: e.target.value || undefined })}
-      >
-        <option value="">(no hint neighborhood)</option>
-        {neighborhoods.map(n => (
-          <option key={n.id} value={n.id}>{n.name}</option>
-        ))}
-      </select>
+      {!isBoundaryMode && (
+        <select
+          className={styles.selectInput}
+          value={hintId}
+          onChange={e => onChange({ neighborhoodHintId: e.target.value || undefined })}
+        >
+          <option value="">(no hint neighborhood)</option>
+          {neighborhoods.map(n => (
+            <option key={n.id} value={n.id}>{n.name}</option>
+          ))}
+        </select>
+      )}
 
       {hint ? (
         <div
@@ -87,7 +125,7 @@ export function NeighborIndexDefaultEditor({ attribute, neighborhoods, onChange 
             const dc = c + minDc;
             const isCenter = dr === 0 && dc === 0;
             const isInNbr = inHint.has(`${dr},${dc}`);
-            const isSelected = dr === curDr && dc === curDc;
+            const isSelected = !isSentinel && dr === curDr && dc === curDc;
             const bg = isCenter
               ? '#37474f'
               : isSelected
@@ -99,7 +137,7 @@ export function NeighborIndexDefaultEditor({ attribute, neighborhoods, onChange 
             return (
               <div
                 key={i}
-                onClick={() => onChange({ defaultValue: String(packNI(dr, dc)) })}
+                onClick={() => writeValue(packNI(clampAxis(dr), clampAxis(dc)))}
                 title={isCenter ? '(self)' : `(${dr}, ${dc})${isInNbr ? '' : ' — not in hint'}`}
                 style={{
                   background: bg,
@@ -124,10 +162,13 @@ export function NeighborIndexDefaultEditor({ attribute, neighborhoods, onChange 
             className={styles.numberInput}
             type="number"
             step={1}
-            value={curDr}
+            min={AXIS_MIN}
+            max={AXIS_MAX}
+            value={isSentinel ? 0 : curDr}
             onChange={e => {
-              const dr = Math.round(Number(e.target.value) || 0);
-              onChange({ defaultValue: String(packNI(dr, curDc)) });
+              const raw = Number(e.target.value);
+              const dr = Number.isFinite(raw) ? clampAxis(raw) : 0;
+              writeValue(packNI(dr, isSentinel ? 0 : curDc));
             }}
           />
           <span style={{ fontSize: 11, color: 'var(--color-text-secondary)', minWidth: 18 }}>dc</span>
@@ -135,17 +176,26 @@ export function NeighborIndexDefaultEditor({ attribute, neighborhoods, onChange 
             className={styles.numberInput}
             type="number"
             step={1}
-            value={curDc}
+            min={AXIS_MIN}
+            max={AXIS_MAX}
+            value={isSentinel ? 0 : curDc}
             onChange={e => {
-              const dc = Math.round(Number(e.target.value) || 0);
-              onChange({ defaultValue: String(packNI(curDr, dc)) });
+              const raw = Number(e.target.value);
+              const dc = Number.isFinite(raw) ? clampAxis(raw) : 0;
+              writeValue(packNI(isSentinel ? 0 : curDr, dc));
             }}
           />
         </div>
       )}
 
       <div style={{ fontSize: 11, color: '#7a8a9a' }}>
-        Stored value: packed <code>{currentPacked}</code> = (dr {curDr}, dc {curDc})
+        {isBoundaryMode && stored === undefined ? (
+          <em>(blank — falls back to default value)</em>
+        ) : isSentinel ? (
+          <em style={{ color: '#f44336' }}>Stored value: INVALID_NI sentinel — pick a cell to set a real offset.</em>
+        ) : (
+          <>Stored value: packed <code>{currentPacked}</code> = (dr {curDr}, dc {curDc})</>
+        )}
       </div>
     </div>
   );

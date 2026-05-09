@@ -214,6 +214,11 @@ export interface SerializedTypedArray {
  *  All fields are optional so the Save Project dialog can include just the grid
  *  state, just the simulator UI controls, both, or neither. */
 export interface SimulationState {
+  /** Wave A.6: stamped on save by serializeSimState/serializePreset. Loaders
+   *  treat absent as v1 (slot-index NI cell-attr arrays) and run a per-element
+   *  migration via the loaded model's neighborhoodHintIds. Standalone .gcastate
+   *  files saved by older builds carry no version → migrated on load. */
+  schemaVersion?: number;
   // Grid state
   generation?: number;
   width?: number;

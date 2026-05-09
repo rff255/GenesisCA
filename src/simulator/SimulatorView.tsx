@@ -9,7 +9,7 @@ import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
 import { IndicatorDisplay } from './IndicatorDisplay';
 import { BrushColorPopover } from './BrushColorPopover';
 import { PresetSaveDialog } from './PresetSaveDialog';
-import { serializeSimState, serializePreset, downloadStateFile, readStateFile, base64ToArrayBuffer, deserializeTypedArray } from '../model/fileOperations';
+import { serializeSimState, serializePreset, downloadStateFile, readStateFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2 } from '../model/fileOperations';
 import type { Preset, SimulationState } from '../model/types';
 import styles from './SimulatorView.module.css';
 
@@ -915,11 +915,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     gpsGens.current = 0;
 
     // Queue simulation state restoration if present in loaded model — but
-    // only if its dimensions match the grid we just initialised. A grid resize
-    // invalidates the embedded snapshot; honor the resize and drop the stale
-    // state (also clear it from the model so subsequent saves don't re-carry
-    // the dead bytes). The user explicitly chose new dimensions; we'd rather
-    // start fresh than refuse the resize.
+    // only when the embedded snapshot still matches the current model's
+    // structural settings. A grid resize OR a boundary-treatment change
+    // invalidates the snapshot (cells were laid out for the old shape), so
+    // we drop it rather than re-applying it. Otherwise the auto-restore
+    // would re-trigger applySimulationState's "adapt model to state" branch
+    // and silently revert the user's just-made boundary toggle to whatever
+    // was active when the snapshot was saved.
     //
     // NOTE: Don't clobber an already-pending restore. `applySimulationState`
     // may have queued a preset's state BEFORE triggering this reinit (by
@@ -930,7 +932,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const s = model.simulationState;
       const dimsMatch = (s.width == null && s.height == null)
         || (s.width === w && s.height === h);
-      if (dimsMatch) {
+      // Stored states from before boundary was tracked have no
+      // `boundaryTreatment` field — treat as compatible (don't pre-emptively
+      // drop them). Newer snapshots are stamped on save.
+      const boundaryMatch = !s.boundaryTreatment
+        || s.boundaryTreatment === model.properties.boundaryTreatment;
+      if (dimsMatch && boundaryMatch) {
         pendingSimStateRestore.current = model.simulationState;
       } else {
         pendingSimStateRestore.current = null;
@@ -1765,6 +1772,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
   const applySimulationState = useCallback((state: SimulationState) => {
     if (!workerRef.current) return;
+
+    // Wave A.6: standalone .gcastate files saved by pre-A.6 builds carry no
+    // schemaVersion and may hold slot-index NI cell-attr arrays. Migrate
+    // in place using the current model's neighborhoodHintIds. Embedded
+    // simulationState inside .gcaproj files was already migrated by
+    // readModelFile, but presets / direct state loads come through here.
+    if ((state.schemaVersion ?? 1) < 2 && state.attributes) {
+      migrateSimulationStateV1toV2(state, model);
+    }
 
     const hasGrid = state.width != null && state.height != null && state.attributes != null && state.colors != null;
     const hasControls = state.brushColor != null || state.targetFps != null || state.activeViewer != null;

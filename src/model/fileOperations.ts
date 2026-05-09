@@ -1,77 +1,135 @@
 import { SCHEMA_VERSION } from './schema';
 import type { CAModel, SimulationState, SerializedTypedArray, Attribute } from './types';
-import { packNI } from '../modeler/vpl/compiler/niCodec';
+import { packNI, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
 
-/** Wave A.6: migrate v1 NeighborIndex attribute values (slot indices) to
- *  v2 packed (dr, dc) i32 using the attribute's neighborhood hint.
+/** Wave A.6: migrate one v1 NeighborIndex value (slot-index string) to a
+ *  v2 packed (dr, dc) i32 string using the attribute's neighborhood hint.
  *
- *  Legacy v1 stored a slot index (`0..nbrSize-1`) of a specific neighborhood.
- *  v2 stores packed `(dr << 16) | (dc & 0xFFFF)` — neighborhood-agnostic.
- *  When the hint is set we look up `coords[slotIndex]` and pack; otherwise
- *  we leave the value unchanged (a console warning fires) — the user will
- *  re-pick a default via the editor's clickable grid.
+ *  Legacy v1 stored a slot index (`0..nbrSize-1`) into a specific
+ *  neighborhood. v2 stores `(dr << 16) | (dc & 0xFFFF)` — neighborhood-
+ *  agnostic. We look up `coords[slotIndex]` on the hint and pack.
  *
- *  Returns true if the value was migrated, false if left unchanged. */
-function migrateNiSlotToPacked(slotStr: string, attr: Attribute, model: CAModel): string {
+ *  Failure modes (each returns INVALID_NI as a loud sentinel and lets the
+ *  caller emit a per-attribute warning):
+ *    - Empty / non-finite slot string  → INVALID_NI
+ *    - Hint missing or dangling        → INVALID_NI
+ *    - Slot index out of range         → INVALID_NI
+ *
+ *  Using INVALID_NI rather than the raw slot string ensures v2 readers see
+ *  an explicit "no neighbor" sentinel instead of silently re-interpreting
+ *  the slot integer as a packed offset. Consumers (editor, runtime) treat
+ *  INVALID_NI as "unset" and the user can re-pick via the editor. */
+function migrateNiSlotToPacked(slotStr: string, attr: Attribute, model: CAModel): { value: string; reason?: string } {
   const slot = parseInt(slotStr, 10);
-  if (!Number.isFinite(slot)) return slotStr;
-  if (!attr.neighborhoodHintId) return slotStr;
+  if (!Number.isFinite(slot)) {
+    return { value: String(INVALID_NI), reason: `slot value "${slotStr}" is not a finite integer` };
+  }
+  if (!attr.neighborhoodHintId) {
+    return { value: String(INVALID_NI), reason: 'no neighborhoodHintId set' };
+  }
   const nbr = model.neighborhoods.find(n => n.id === attr.neighborhoodHintId);
-  if (!nbr) return slotStr;
+  if (!nbr) {
+    return { value: String(INVALID_NI), reason: `neighborhoodHintId "${attr.neighborhoodHintId}" references a deleted neighborhood` };
+  }
   const coord = nbr.coords[slot];
-  if (!coord) return slotStr;
-  return String(packNI(coord[0]!, coord[1]!));
+  if (!coord) {
+    return { value: String(INVALID_NI), reason: `slot index ${slot} is out of range for neighborhood "${nbr.name}" (${nbr.coords.length} coords)` };
+  }
+  return { value: String(packNI(coord[0]!, coord[1]!)) };
 }
 
 /** Walk every NI cell-attribute array in the embedded simulationState and
  *  translate each Int32 slot-index element to a packed (dr, dc) i32 using
- *  the attribute's hint neighborhood. Element-by-element decode of the
- *  base64-encoded buffer; re-encodes back to base64 in place. */
-function migrateNiCellAttrArraysV1toV2(model: CAModel): void {
-  const sim = model.simulationState;
-  if (!sim?.attributes) return;
+ *  the attribute's hint neighborhood. Out-of-range slots and missing-hint
+ *  attrs both map to INVALID_NI (a loud sentinel rather than silent self-
+ *  reference). Element-by-element decode/re-encode of the base64 buffer. */
+function migrateNiCellAttrArraysV1toV2(state: { attributes?: Record<string, SerializedTypedArray> } | undefined, model: CAModel): void {
+  const attrs = state?.attributes;
+  if (!attrs) return;
   for (const attr of model.attributes) {
     if (attr.type !== 'neighborIndex' || attr.isModelAttribute) continue;
-    if (!attr.neighborhoodHintId) continue;
-    const nbr = model.neighborhoods.find(n => n.id === attr.neighborhoodHintId);
-    if (!nbr) continue;
-    const entry = sim.attributes[attr.id];
+    const entry = attrs[attr.id];
     if (!entry || entry.type !== 'int32') continue;
-    // Decode → translate → encode.
+    const nbr = attr.neighborhoodHintId
+      ? model.neighborhoods.find(n => n.id === attr.neighborhoodHintId)
+      : undefined;
     const buf = base64ToArrayBuffer(entry.data);
     const arr = new Int32Array(buf);
-    for (let i = 0; i < arr.length; i++) {
-      const slot = arr[i]!;
-      const coord = (slot >= 0 && slot < nbr.coords.length) ? nbr.coords[slot] : undefined;
-      arr[i] = coord ? packNI(coord[0]!, coord[1]!) : 0;
+    if (!nbr) {
+      // No hint or dangling hint — we can't translate slot indices. Fill with
+      // INVALID_NI so the v2 reader sees a clear "unset" sentinel rather than
+      // silently mis-reading slot integers as packed offsets.
+      console.warn(
+        `[wave-a.6] NeighborIndex cell attribute "${attr.name}": `
+        + (attr.neighborhoodHintId
+          ? `neighborhoodHintId "${attr.neighborhoodHintId}" references a deleted neighborhood; `
+          : `no neighborhoodHintId set; `)
+        + `${arr.length} cell entries cannot be migrated and have been set to INVALID_NI. `
+        + `Reload the saved state after re-picking a hint or rebuilding the grid.`,
+      );
+      arr.fill(INVALID_NI);
+    } else {
+      let bad = 0;
+      for (let i = 0; i < arr.length; i++) {
+        const slot = arr[i]!;
+        const coord = (slot >= 0 && slot < nbr.coords.length) ? nbr.coords[slot] : undefined;
+        if (coord) {
+          arr[i] = packNI(coord[0]!, coord[1]!);
+        } else {
+          arr[i] = INVALID_NI;
+          bad++;
+        }
+      }
+      if (bad > 0) {
+        console.warn(
+          `[wave-a.6] NeighborIndex cell attribute "${attr.name}": `
+          + `${bad}/${arr.length} cell entries had out-of-range slot indices `
+          + `(neighborhood "${nbr.name}" has ${nbr.coords.length} coords) and were set to INVALID_NI.`,
+        );
+      }
     }
     entry.data = arrayBufferToBase64(arr.buffer);
   }
 }
 
 /** Walk model.attributes and migrate NI default/boundary values from
- *  v1 slot index to v2 packed (dr, dc). Mutates the attributes in place. */
+ *  v1 slot index to v2 packed (dr, dc). Mutates the attributes in place.
+ *  Each problematic attribute emits its own console warning so the user
+ *  can address them all in one pass instead of round-tripping fixes. */
 function migrateNiAttributesV1toV2(model: CAModel): void {
-  let warned = false;
   for (const attr of model.attributes) {
     if (attr.type !== 'neighborIndex') continue;
-    if (!attr.neighborhoodHintId) {
-      if (!warned) {
-        console.warn(
-          `[wave-a.6] NeighborIndex attribute "${attr.name}" has no `
-          + `neighborhoodHintId — its default value (slot-index "${attr.defaultValue}") `
-          + `cannot be migrated to packed (dr, dc) automatically. `
-          + `Please re-pick the default via the editor.`,
-        );
-        warned = true;
-      }
-      continue;
+    const dv = migrateNiSlotToPacked(attr.defaultValue, attr, model);
+    if (dv.reason) {
+      console.warn(
+        `[wave-a.6] NeighborIndex attribute "${attr.name}" defaultValue `
+        + `"${attr.defaultValue}" could not be migrated (${dv.reason}); `
+        + `set to INVALID_NI. Re-pick via the editor.`,
+      );
     }
-    attr.defaultValue = migrateNiSlotToPacked(attr.defaultValue, attr, model);
+    attr.defaultValue = dv.value;
     if (attr.boundaryValue !== undefined && attr.boundaryValue.length > 0) {
-      attr.boundaryValue = migrateNiSlotToPacked(attr.boundaryValue, attr, model);
+      const bv = migrateNiSlotToPacked(attr.boundaryValue, attr, model);
+      if (bv.reason) {
+        console.warn(
+          `[wave-a.6] NeighborIndex attribute "${attr.name}" boundaryValue `
+          + `"${attr.boundaryValue}" could not be migrated (${bv.reason}); `
+          + `set to INVALID_NI. Re-pick via the editor.`,
+        );
+      }
+      attr.boundaryValue = bv.value;
     }
   }
+}
+
+/** Standalone .gcastate v1→v2 migration. Models that loaded the state never
+ *  knew it was a v1 file (state files have no schemaVersion field pre-A.6),
+ *  so the loader has to be told explicitly. Called by `applySimulationState`
+ *  in SimulatorView when a state with `schemaVersion < 2` (or absent) is
+ *  loaded into a v2 model that has NI cell attributes. */
+export function migrateSimulationStateV1toV2(state: SimulationState, model: CAModel): void {
+  migrateNiCellAttrArraysV1toV2(state, model);
+  state.schemaVersion = SCHEMA_VERSION;
 }
 
 /** Pretty-print JSON for .gcaproj files with targeted single-line inlining for
@@ -230,14 +288,16 @@ export function readModelFile(file: File): Promise<CAModel> {
       }
       // Wave A.6: v1 → v2 migration translates slot-index NI default values
       // into packed (dr, dc) using each NI attribute's neighborhoodHintId.
-      // Skipped silently when schemaVersion is already >= 2 or undefined for
-      // very old files (which had no NI attrs).
-      if (model.schemaVersion != null && model.schemaVersion < 2) {
+      // Treat absent schemaVersion as v1 — earlier builds didn't always stamp
+      // the version, so a hand-edited or pre-versioning file might lack it
+      // even though it has NI attrs. Running migration on a model without NI
+      // attrs is a no-op (loop iterates zero times), so this is safe.
+      if ((model.schemaVersion ?? 1) < 2) {
         migrateNiAttributesV1toV2(model);
         // Embedded simulationState's NI cell-attr arrays also need translation
         // (per-element). The slot index N becomes the packed value coords[N].
         if (model.simulationState?.attributes) {
-          migrateNiCellAttrArraysV1toV2(model);
+          migrateNiCellAttrArraysV1toV2(model.simulationState, model);
         }
       }
       model.schemaVersion = SCHEMA_VERSION;
@@ -315,7 +375,7 @@ export function serializeSimState(
 ): SimulationState {
   const wantGrid = include.grid !== false;
   const wantControls = include.controls !== false;
-  const serialized: SimulationState = {};
+  const serialized: SimulationState = { schemaVersion: SCHEMA_VERSION };
   // Model structure (boundary + grid dims) is always useful context; save it whenever either side is wanted.
   if (modelStructure?.boundaryTreatment) serialized.boundaryTreatment = modelStructure.boundaryTreatment;
   serialized.gridWidth = workerState.width;
@@ -373,7 +433,7 @@ export function serializePreset(
   opts: { includeGrid: boolean },
   modelStructure?: { boundaryTreatment?: import('./types').BoundaryTreatment },
 ): SimulationState {
-  const out: SimulationState = { modelAttrs: { ...workerState.modelAttrs } };
+  const out: SimulationState = { schemaVersion: SCHEMA_VERSION, modelAttrs: { ...workerState.modelAttrs } };
   // Grid dimensions and boundary treatment are saved even for parameter-only presets so loading
   // one can restore the model structure, not just the scalar parameters.
   if (modelStructure?.boundaryTreatment) out.boundaryTreatment = modelStructure.boundaryTreatment;

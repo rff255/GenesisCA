@@ -348,7 +348,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
   const configIssues = useMemo(
     () => {
       const useWebGPU = !!model.properties.useWebGPU;
-      const base = detectMissingConfig(nodeData.nodeType, nodeData.config, model);
+      const base = detectMissingConfig(nodeData.nodeType, nodeData.config, model, connectedInputHandles);
       const own = useWebGPU
         ? [...base, ...detectWebGPUIncompatibilities(nodeData.nodeType, nodeData.config, model)]
         : base;
@@ -379,6 +379,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
       model.macroDefs,
       model.properties.useWebGPU,
       connectionHazards,
+      connectedInputHandles,
     ],
   );
 

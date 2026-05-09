@@ -30,7 +30,7 @@ import {
   detectWebGPUIncompatibilities, detectWebGPUModelIncompatibilities,
 } from '../../nodes/nodeValidation';
 import { getInlineValue, parseInlineNum } from '../inlinePort';
-import { INVALID_NI, packNI } from '../niCodec';
+import { INVALID_NI, packNI, NI_ARRAY_PRODUCERS } from '../niCodec';
 
 export interface WebGPUEntryPoints {
   step: string;
@@ -778,7 +778,10 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return emitLet(ctx, 'i32', inArr.lenName, 'aL');
   },
 
-  // Wave A.5: bounds-checked indexed access. Out-of-range returns -1.
+  // Wave A.6: bounds-checked indexed access. Out-of-range default depends on
+  // the source element kind — INVALID_NI for NI[] sources, 0/0.0/false for
+  // value[] sources. The source-type detection mirrors the JS / WASM
+  // arrayElement emitters so all three targets agree on the fallback.
   arrayElement: ({ node, ctx, inputs }) => {
     const inArr = resolveInputArray(ctx, node, 'array');
     if (!inArr) {
@@ -796,9 +799,11 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     if (inArr.elemType === 'bool') {
       return emitLet(ctx, 'bool', `select(false, ${arrLoad(inArr, idx)}, ${inb})`, 'aeV');
     }
-    // Wave A.6: out-of-range default is INVALID_NI (i32 min) — also a fine
-    // sentinel for non-NI integer arrays.
-    return emitLet(ctx, 'i32', `select(${INVALID_NI}, ${arrLoad(inArr, idx)}, ${inb})`, 'aeV');
+    const arraySrc = ctx.inputToSource.get(`${node.id}:array`);
+    const srcNode = arraySrc ? ctx.nodeMap.get(arraySrc.nodeId) : undefined;
+    const isNiArray = !!(srcNode && NI_ARRAY_PRODUCERS.has(srcNode.data.nodeType));
+    const fallback = isNiArray ? `${INVALID_NI}` : '0';
+    return emitLet(ctx, 'i32', `select(${fallback}, ${arrLoad(inArr, idx)}, ${inb})`, 'aeV');
   },
 
   // Wave A PR2: pick a random element from a NeighborIndex array. Uses the
@@ -995,15 +1000,51 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
   },
 
   // Wave A.6: read one neighbor's attribute at a packed NI offset.
+  // Symmetric guards with the JS / WASM emitters:
+  //   - If the input is wired to an array producer (e.g. pickNRandomNeighbors,
+  //     filterNeighbors), take element [0] or INVALID_NI when empty. Without
+  //     this branch, the surrounding compileValueNode would try to look up a
+  //     VALUE emitter for the array producer and fail with "No WebGPU value
+  //     emitter for ...", forcing a JS fallback even for graphs that JS / WASM
+  //     handle natively.
+  //   - If the resolved NI is the INVALID_NI sentinel (empty pick / out-of-
+  //     range arrayElement), return a zero-valued default rather than reading
+  //     from a wrapped torus cell or the constant-boundary sentinel.
   getNeighborAttributeByIndex: ({ node, ctx, inputs }) => {
     const attrId = node.data.config.attributeId as string;
     const attr = getAttr(ctx.layout, attrId);
     if (!attr) { ctx.errors.push(`getNeighborAttributeByIndex: unknown attr ${attrId}`); return null; }
-    const indexRef = inputs['index'] ?? { expr: '0', type: 'i32' as WgslType };
-    const niLocal = emitLet(ctx, 'i32', castTo(indexRef, 'i32'), 'ni');
+    const indexSrc = ctx.inputToSource.get(`${node.id}:index`);
+    const srcNode = indexSrc ? ctx.nodeMap.get(indexSrc.nodeId) : undefined;
+    let niLocal: ValueRef;
+    if (srcNode && isArrayProducer(srcNode.data.nodeType)) {
+      const arrRef = compileArrayNode(ctx, indexSrc!.nodeId);
+      if (!arrRef) return null;
+      // First element of the array, or INVALID_NI when empty (matches JS / WASM).
+      // The array's elemType is i32 for NI[] producers; cast defensively.
+      const elemExpr = arrRef.elemType === 'i32'
+        ? `${arrRef.name}[0]`
+        : `i32(${arrRef.name}[0])`;
+      niLocal = emitLet(ctx, 'i32', `select(${INVALID_NI}, ${elemExpr}, ${arrRef.lenName} > 0)`, 'ni');
+    } else {
+      const indexRef = inputs['index'] ?? { expr: '0', type: 'i32' as WgslType };
+      niLocal = emitLet(ctx, 'i32', castTo(indexRef, 'i32'), 'ni');
+    }
+    // Guard INVALID_NI: select between the read at niCellIdx(NI) and a zero
+    // default. Both sides of the select are evaluated (no branching at the
+    // shader level), but the read still goes through nbrCellIdxFromNi which
+    // does its own boundary handling — for INVALID_NI's decoded offsets this
+    // either wraps to a real cell (torus) or hits the sentinel slot (constant);
+    // in either case we discard the result by selecting the default.
     const cellIdx = emitLet(ctx, 'i32', emitNiCellIdx(niLocal.expr), 'nci');
     const r = readAttr(attr, `u32(${cellIdx.expr})`, false);
-    return emitLet(ctx, r.type, r.expr, 'nbAtr');
+    if (r.type === 'f32') {
+      return emitLet(ctx, 'f32', `select(0.0, ${r.expr}, ${niLocal.expr} != ${INVALID_NI})`, 'nbAtr');
+    }
+    if (r.type === 'bool') {
+      return emitLet(ctx, 'bool', `select(false, ${r.expr}, ${niLocal.expr} != ${INVALID_NI})`, 'nbAtr');
+    }
+    return emitLet(ctx, 'i32', `select(0, ${r.expr}, ${niLocal.expr} != ${INVALID_NI})`, 'nbAtr');
   },
 
   getNeighborAttributeByTag: ({ node, ctx }) => {
@@ -1657,12 +1698,21 @@ function compileValueNode(ctx: CompileCtx, nodeId: string, portId: string = 'val
   }
 
   // Resolve scalar value inputs (skip arrays — handled by aggregate/etc dispatch).
+  // Also skip when the source is an array producer wired to a scalar port —
+  // e.g. pickNRandomNeighbors → getNeighborAttributeByIndex.index. The
+  // consuming emitter (getNeighborAttributeByIndex) detects this case via
+  // ctx.inputToSource and routes through compileArrayNode itself; trying to
+  // value-compile here would hit "No WebGPU value emitter for ..." since
+  // array producers only live in ARRAY_NODE_EMITTERS. Mirrors the WASM fix
+  // in the regular-flow input loop (commit da5f5b2).
   const inputs: Record<string, ValueRef | undefined> = {};
   for (const port of def.ports) {
     if (port.kind !== 'input' || port.category !== 'value') continue;
     if (port.isArray) continue;
     const source = ctx.inputToSource.get(`${nodeId}:${port.id}`);
     if (source) {
+      const srcNode = ctx.nodeMap.get(source.nodeId);
+      if (srcNode && isArrayProducer(srcNode.data.nodeType)) continue;
       const srcRef = compileValueNode(ctx, source.nodeId, source.portId);
       if (!srcRef) return null;
       inputs[port.id] = srcRef;
@@ -1724,8 +1774,22 @@ function preEmitValueNodes(ctx: CompileCtx, sourceNodeId: string, sourcePortId: 
         }
         continue;
       }
-      if (src) compileValueNode(ctx, src.nodeId, src.portId);
-      if (srcs) for (const s of srcs) compileValueNode(ctx, s.nodeId, s.portId);
+      // Scalar port wired to an array producer (e.g. pickNRandomNeighbors →
+      // getNeighborAttributeByIndex.index): pre-emit via compileArrayNode so
+      // the private-array decl lives at the entry-point top scope, then let
+      // the consuming emitter route through ctx.inputToSource to load
+      // element [0]. compileValueNode would fail with "No WebGPU value
+      // emitter for ..." for these node types.
+      if (src) {
+        const sn = ctx.nodeMap.get(src.nodeId);
+        if (sn && isArrayProducer(sn.data.nodeType)) compileArrayNode(ctx, src.nodeId);
+        else compileValueNode(ctx, src.nodeId, src.portId);
+      }
+      if (srcs) for (const s of srcs) {
+        const sn = ctx.nodeMap.get(s.nodeId);
+        if (sn && isArrayProducer(sn.data.nodeType)) compileArrayNode(ctx, s.nodeId);
+        else compileValueNode(ctx, s.nodeId, s.portId);
+      }
     }
 
     if (visited.has(target.nodeId)) continue;
@@ -1926,6 +1990,11 @@ function compileFlowChain(ctx: CompileCtx, sourceNodeId: string, sourcePortId: s
         if (port.isArray) continue;
         const source = ctx.inputToSource.get(`${node.id}:${port.id}`);
         if (source) {
+          // Skip array-producer sources wired to scalar ports — the consuming
+          // emitter handles them via ctx.inputToSource. Mirrors the pre-emit
+          // pass; matches WASM's regular-flow input loop.
+          const srcNode = ctx.nodeMap.get(source.nodeId);
+          if (srcNode && isArrayProducer(srcNode.data.nodeType)) continue;
           const srcRef = compileValueNode(ctx, source.nodeId, source.portId);
           if (!srcRef) return false;
           inputs[port.id] = srcRef;

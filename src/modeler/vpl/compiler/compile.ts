@@ -5,7 +5,7 @@ import { classifyLoopInvariant } from './loopInvariant';
 import { safeId } from './identifierSafe';
 import { detectFusableConsumers, type FusionResult } from './fusion';
 import { getInlineValue } from './inlinePort';
-import { INVALID_NI, packNI } from './niCodec';
+import { INVALID_NI, packNI, NI_ARRAY_PRODUCERS } from './niCodec';
 
 // ---------------------------------------------------------------------------
 // Graph adjacency helpers
@@ -502,7 +502,7 @@ function compileRoot(
         }
       }
 
-      const code = iDef.compile(innerNodeId, iNode.data.config, iInputVars);
+      const code = iDef.compile(innerNodeId, iNode.data.config, iInputVars, _model?.properties.boundaryTreatment);
       if (code) {
         // Rewrite variable names in emitted code to use scoped prefix
         // Note: multi-output vars use _v{id}_{port} — the trailing _ breaks \b, so we
@@ -654,7 +654,7 @@ function compileRoot(
           }
         }
       }
-      const code = iDef.compile(nid, iNode.data.config, iInputVars);
+      const code = iDef.compile(nid, iNode.data.config, iInputVars, _model?.properties.boundaryTreatment);
       if (code) {
         const scopedCode = code
           .replace(new RegExp(`\\b_v${nid}_`, 'g'), `${nestedPrefix}_v${nid}_`)
@@ -1020,7 +1020,7 @@ function compileRoot(
               if (inlineVal !== undefined) iInputVars[port.id] = inlineVal;
             }
           }
-          const code = iDef.compile(iNode.id, iNode.data.config, iInputVars);
+          const code = iDef.compile(iNode.id, iNode.data.config, iInputVars, _model?.properties.boundaryTreatment);
           if (code) {
             // Scope the emitted code
             const scopedCode = code
@@ -1449,6 +1449,22 @@ export function compileGraph(
         ? nbr.coords.map(([dr, dc]) => packNI(dr, dc))
         : [];
       node.data.config._resolvedPackedAll = JSON.stringify(packed);
+    }
+    // Wave A.6: arrayElement out-of-range default depends on whether the
+    // array carries NIs (use INVALID_NI sentinel) or attribute values /
+    // list-positions (use 0). Resolve at compile time by inspecting the
+    // source nodeType. Stored in config for the emitter to pick up. WASM /
+    // WebGPU compilers do their own resolution at emit time via ctx.
+    if (node.data.nodeType === 'arrayElement') {
+      const arraySrc = inputToSource.get(`${node.id}:array`);
+      if (arraySrc) {
+        const srcNode = nodeMap.get(arraySrc.nodeId);
+        node.data.config._elemKind = srcNode && NI_ARRAY_PRODUCERS.has(srcNode.data.nodeType) ? 'ni' : 'value';
+      } else {
+        // No source connected — default to value (0 fallback). The compiler
+        // will emit a `_undef` lookup which is its own diagnostic.
+        node.data.config._elemKind = 'value';
+      }
     }
   }
 

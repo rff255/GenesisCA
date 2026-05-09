@@ -7,8 +7,11 @@
  *
  *  An NI value of `0` decodes to `(0, 0)` — the centre cell itself, a
  *  meaningful position. To distinguish "no neighbor" we use a separate
- *  sentinel: `INVALID_NI = 0x80000000` (i32 min). Both halves decode to
- *  `-32 768`, distinguishable from any realistic offset.
+ *  sentinel: `INVALID_NI = 0x80000000` (i32 min). It decodes to
+ *  `(dr=-32768, dc=0)` — far outside any realistic neighborhood. Treat it as
+ *  an opaque sentinel: producers emit it as the bit pattern `0x80000000`,
+ *  consumers compare against the same bit pattern. Don't rely on the decoded
+ *  (-32768, 0) values matching anything meaningful.
  *
  *  Producers that may yield "no neighbor" (e.g. `pickRandomNeighbor` on an
  *  empty array) emit `INVALID_NI`. Consumers (`getNeighborAttributeByIndex`,
@@ -21,6 +24,19 @@
 
 /** Sentinel "no neighbor" NeighborIndex value. */
 export const INVALID_NI = 0x80000000 | 0; // -2147483648 as i32
+
+/** Node types whose array output is an NI[] (list of packed (dr, dc) NIs).
+ *  Used by `arrayElement` to pick the right out-of-range default —
+ *  `INVALID_NI` for NI[], plain `0` (or `false` / `0.0`) for value[] sources
+ *  like `getNeighborsAttribute` or position-list outputs of group nodes.
+ *  Keep in sync across JS / WASM / WebGPU compilers. */
+export const NI_ARRAY_PRODUCERS: ReadonlySet<string> = new Set([
+  'getAllNeighborIndexes',
+  'getNeighborIndexesByTags',
+  'filterNeighbors',
+  'joinNeighbors',
+  'pickNRandomNeighbors',
+]);
 
 /** Pack `(dr, dc)` integer offsets into a single i32 NI value. */
 export function packNI(dr: number, dc: number): number {
