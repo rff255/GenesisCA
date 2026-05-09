@@ -1,4 +1,5 @@
 import type { NodeConfig } from '../types';
+import { parseHandleId } from '../types';
 import type { CAModel } from '../../../model/types';
 import { getNodeDef } from './registry';
 
@@ -7,13 +8,31 @@ import { getNodeDef } from './registry';
  *
  *  The rules here mirror the compile-time fallbacks in `compiler/compile.ts`
  *  (which emit `_undef` placeholders for unresolved references). A warning badge
- *  in the UI surfaces these cases before the user runs the simulation. */
+ *  in the UI surfaces these cases before the user runs the simulation.
+ *
+ *  `connectedHandles` (optional): set of raw handle IDs (e.g.
+ *  `input_value_indexes`) that have at least one incoming edge. The format
+ *  matches what `graphState.getConnectedHandlesForNode` returns. Used to flag
+ *  required array inputs that the user forgot to wire up — without this,
+ *  nodes like `filterNeighbors` silently produce empty results because their
+ *  compile() emit falls back to `[]` for unconnected array inputs (Wave A.6
+ *  dropped the implicit-all default). When omitted, edge-dependent checks
+ *  are skipped (preserves callers without easy access to edges). */
 export function detectMissingConfig(
   nodeType: string,
   config: NodeConfig,
   model: CAModel,
+  connectedHandles?: ReadonlySet<string>,
 ): string[] {
   const issues: string[] = [];
+  /** Raw handle name — encoded by graphState as `input_value_<portId>` or
+   *  `input_flow_<portId>`. Both forms are checked because flow-input ports
+   *  use the same encoding. */
+  const isInputConnected = (portId: string): boolean | undefined => {
+    if (!connectedHandles) return undefined;
+    return connectedHandles.has(`input_value_${portId}`)
+      || connectedHandles.has(`input_flow_${portId}`);
+  };
 
   const hasCellAttr = (id: unknown) =>
     typeof id === 'string' && id.length > 0 &&
@@ -60,12 +79,55 @@ export function detectMissingConfig(
       break;
 
     case 'getNeighborAttributeByIndex':
-    case 'getNeighborsAttrByIndexes':
-    case 'filterNeighbors':
     case 'setNeighborAttributeByIndex':
       // Wave A.6: NI-consuming nodes — only attrId required. The NI input
-      // carries its own (dr, dc) offset; no neighborhood needed.
+      // carries its own (dr, dc) offset; no neighborhood needed. The scalar
+      // `index` input has a sensible fallback (NI=0 = self) so we don't
+      // require it; users get the centre cell which the warning badge can't
+      // distinguish from intentional self-reference.
       if (!hasCellAttr(config.attributeId)) issues.push('Select a cell attribute');
+      break;
+
+    case 'filterNeighbors':
+    case 'getNeighborsAttrByIndexes':
+      // Wave A.6: array-consuming NI nodes. Indexes input is required —
+      // the implicit-all default was dropped in A.6, so an unconnected
+      // input falls back to `[]` and silently produces an empty result.
+      if (!hasCellAttr(config.attributeId)) issues.push('Select a cell attribute');
+      if (isInputConnected('indexes') === false) {
+        issues.push('Connect an Indexes input (e.g. from Get All Neighbor Indexes)');
+      }
+      break;
+
+    case 'pickRandomNeighbor':
+    case 'pickNRandomNeighbors':
+      // Returns INVALID_NI / empty array when input is unconnected. Surface
+      // it explicitly so the user doesn't wonder why nothing happens.
+      if (isInputConnected('indexes') === false) {
+        issues.push('Connect an Indexes input (e.g. from Filter Neighbors or Get All Neighbor Indexes)');
+      }
+      break;
+
+    case 'forEachInArray':
+      if (isInputConnected('array') === false) {
+        issues.push('Connect an Array input — body will not execute otherwise');
+      }
+      break;
+
+    case 'joinNeighbors':
+      if (isInputConnected('a') === false) {
+        issues.push('Connect input A');
+      }
+      if (isInputConnected('b') === false) {
+        issues.push('Connect input B');
+      }
+      break;
+
+    case 'arrayElement':
+    case 'arrayLength':
+      if (isInputConnected('array') === false) {
+        issues.push('Connect an Array input');
+      }
       break;
 
     case 'getNeighborAttributeByTag': {
@@ -197,13 +259,31 @@ export function countMacroSubgraphIssues(
   if (depth > MAX_MACRO_DEPTH) return 0;
   const def = (model.macroDefs || []).find(m => m.id === macroDefId);
   if (!def) return 0;
+  // Build a per-internal-node "connected input ports" map from the macroDef's
+  // edges so detectMissingConfig can flag required-array-input misses
+  // (e.g. filterNeighbors with no Indexes input). The pub/sub system that
+  // CaNode uses for the main graph only tracks main-graph edges, so for
+  // macro internals we compute it locally each time. Cheap — a typical macro
+  // has tens of edges.
+  // Build raw-handle set per node (matches graphState.getConnectedHandlesForNode
+  // format so detectMissingConfig's isInputConnected can resolve port IDs the
+  // same way for both main-graph and macro-internal nodes).
+  const connectedByNode = new Map<string, Set<string>>();
+  for (const edge of def.edges) {
+    if (!edge.target || !edge.targetHandle) continue;
+    if (!parseHandleId(edge.targetHandle)) continue; // skip malformed handles
+    let s = connectedByNode.get(edge.target);
+    if (!s) { s = new Set(); connectedByNode.set(edge.target, s); }
+    s.add(edge.targetHandle);
+  }
   let count = 0;
   for (const node of def.nodes) {
     const t = node.data?.nodeType;
     if (!t) continue;
     if (t === 'macroInput' || t === 'macroOutput' || t === 'commentNode' || t === 'groupNode') continue;
     const cfg = node.data.config || {};
-    count += detectMissingConfig(t, cfg, model).length;
+    const conn = connectedByNode.get(node.id);
+    count += detectMissingConfig(t, cfg, model, conn).length;
     if (useWebGPU) count += detectWebGPUIncompatibilities(t, cfg, model).length;
     if (t === 'macro') {
       const innerId = cfg.macroDefId;

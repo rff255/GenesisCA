@@ -31,7 +31,7 @@ import {
   buildModule, byte, exportEntry, EXPORT_FUNC, funcType, importEntry,
   importFuncDesc, importMemoryDesc, leb128u,
 } from './encoder';
-import { INVALID_NI, packNI } from '../niCodec';
+import { INVALID_NI, packNI, NI_ARRAY_PRODUCERS } from '../niCodec';
 import {
   WasmEmitter, ArrayRef, LocalRef, ValueRef, pushValueAs,
 } from './emitter';
@@ -614,9 +614,13 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return storeResult(ctx.emitter, I32);
   },
 
-  // Wave A.5: bounds-checked indexed access into an array. Out-of-range yields
-  // -1 (safe default for NI; reasonable sentinel for int/tag; for f64 elements
-  // the local default of 0.0 is used since -1 wouldn't be more sensible than 0).
+  // Wave A.6: bounds-checked indexed access into an array. Out-of-range
+  // default depends on element kind:
+  //   - NI[] sources → INVALID_NI (the "no neighbor" sentinel)
+  //   - value[] / position[] sources → 0 (or 0.0 for f64 elements)
+  // Detected via the source nodeType — a WASM int[] from getNeighborsAttribute
+  // and an NI[] from filterNeighbors share the same elemValtype, so
+  // elemValtype alone can't distinguish them.
   arrayElement: ({ node, ctx, inputs }) => {
     const inArr = resolveInputArray(ctx, node, 'array');
     if (!inArr) {
@@ -630,9 +634,13 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     pushValueAs(em, posRef, I32);
     em.localSet(idxLocal);
 
+    const arraySrc = ctx.inputToSource.get(`${node.id}:array`);
+    const srcNode = arraySrc ? ctx.nodeMap.get(arraySrc.nodeId) : undefined;
+    const isNiArray = !!(srcNode && NI_ARRAY_PRODUCERS.has(srcNode.data.nodeType));
+
     const result = em.allocLocal(inArr.elemValtype);
     if (inArr.elemValtype === F64) { em.f64Const(0); }
-    else { em.i32Const(INVALID_NI); }
+    else { em.i32Const(isNiArray ? INVALID_NI : 0); }
     em.localSet(result);
 
     // if (idx >= 0 && idx < len) result = arr[idx]
@@ -1057,6 +1065,11 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
   },
 
   // -- Neighbor by index (Wave A.6: packed NI inline access) --
+  // Symmetric with setNeighborAttributeByIndex: guards INVALID_NI sentinel
+  // (returned by pickRandomNeighbor on empty array, arrayElement on out-of-
+  // range) and yields a zero-valued default. Without the guard, the decoded
+  // (dr=-32768, dc=0) would silently read from a wrapped torus cell or the
+  // constant-boundary sentinel — both wrong for "no neighbor".
   getNeighborAttributeByIndex: ({ node, ctx, inputs }) => {
     const attrId = node.data.config.attributeId as string;
     const attr = getAttr(ctx.layout, attrId);
@@ -1067,12 +1080,12 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     // returns NI from an array, or pickNRandomNeighbors returns NI[]), the
     // outer input loop skipped the value compile. Fetch the array and take
     // element [0] to mirror JS's `Array.isArray ? arr[0] : scalar` semantic.
+    // Empty array → INVALID_NI so the guard below kicks in.
     const indexSrc = ctx.inputToSource.get(`${node.id}:index`);
     const srcNode = indexSrc ? ctx.nodeMap.get(indexSrc.nodeId) : undefined;
     if (srcNode && isArrayProducer(srcNode.data.nodeType)) {
       const arrRef = compileArrayNode(indexSrc!.nodeId, ctx);
       if (!arrRef) return null;
-      // First element of the array (or 0 when empty — matches JS `arr[0] ?? 0`).
       ctx.emitter.localGet(arrRef.lenLocal);
       ctx.emitter.i32Const(0);
       ctx.emitter.op(OP_I32_GT_S);
@@ -1084,7 +1097,7 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
           ctx.emitter.localSet(niLocal);
         },
         () => {
-          ctx.emitter.i32Const(0);
+          ctx.emitter.i32Const(INVALID_NI);
           ctx.emitter.localSet(niLocal);
         },
       );
@@ -1093,14 +1106,25 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       pushValueAs(ctx.emitter, indexRef, I32);
       ctx.emitter.localSet(niLocal);
     }
-    // cellIdx = niCellIdx(NI)  — pushed to stack
-    pushNiCellIdx(ctx, niLocal);
-    // byteOffset = cellIdx * itemBytes
-    ctx.emitter.i32Const(attr.itemBytes);
-    ctx.emitter.op(OP_I32_MUL);
-    if (attr.type === 'bool') ctx.emitter.i32Load8U(attr.readOffset, 0);
-    else if (attr.type === 'float') ctx.emitter.f64Load(attr.readOffset, 3);
-    else ctx.emitter.i32Load(attr.readOffset, 2);
+    // result := 0 (default for INVALID_NI path)
+    const result = ctx.emitter.allocLocal(attrValType(attr.type));
+    if (attr.type === 'float') { ctx.emitter.f64Const(0); }
+    else { ctx.emitter.i32Const(0); }
+    ctx.emitter.localSet(result);
+    // if (NI !== INVALID_NI) { result = read at niCellIdx(NI) }
+    ctx.emitter.localGet(niLocal);
+    ctx.emitter.i32Const(INVALID_NI);
+    ctx.emitter.op(OP_I32_NE_OP);
+    ctx.emitter.ifThen(() => {
+      pushNiCellIdx(ctx, niLocal);
+      ctx.emitter.i32Const(attr.itemBytes);
+      ctx.emitter.op(OP_I32_MUL);
+      if (attr.type === 'bool') ctx.emitter.i32Load8U(attr.readOffset, 0);
+      else if (attr.type === 'float') ctx.emitter.f64Load(attr.readOffset, 3);
+      else ctx.emitter.i32Load(attr.readOffset, 2);
+      ctx.emitter.localSet(result);
+    });
+    ctx.emitter.localGet(result);
     return storeResult(ctx.emitter, attrValType(attr.type));
   },
 

@@ -306,6 +306,13 @@ export function AttributesPanelContent() {
                       <option value="0">(no tags defined)</option>
                     )}
                   </select>
+                ) : selected.type === 'neighborIndex' ? (
+                  <NeighborIndexDefaultEditor
+                    attribute={selected}
+                    onChange={cfg => updateAttribute(selected.id, cfg)}
+                    neighborhoods={model.neighborhoods}
+                    mode="boundary"
+                  />
                 ) : (
                   <input
                     className={styles.textInput}
