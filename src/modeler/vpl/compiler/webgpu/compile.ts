@@ -1016,8 +1016,14 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     if (!attr) { ctx.errors.push(`getNeighborAttributeByIndex: unknown attr ${attrId}`); return null; }
     const indexSrc = ctx.inputToSource.get(`${node.id}:index`);
     const srcNode = indexSrc ? ctx.nodeMap.get(indexSrc.nodeId) : undefined;
+    // Take the array-source path only when the source's OUTPUT PORT is an
+    // array — checking isArrayProducer(nodeType) would mis-route a scalar
+    // output of a hybrid producer (e.g. groupCounting.count) through the
+    // load-element-[0] branch.
+    const indexSrcDef = srcNode ? getNodeDef(srcNode.data.nodeType) : null;
+    const indexSrcPort = indexSrc ? indexSrcDef?.ports.find(p => p.id === indexSrc.portId) : undefined;
     let niLocal: ValueRef;
-    if (srcNode && isArrayProducer(srcNode.data.nodeType)) {
+    if (indexSrcPort?.isArray) {
       const arrRef = compileArrayNode(ctx, indexSrc!.nodeId);
       if (!arrRef) return null;
       // First element of the array, or INVALID_NI when empty (matches JS / WASM).
@@ -1698,13 +1704,18 @@ function compileValueNode(ctx: CompileCtx, nodeId: string, portId: string = 'val
   }
 
   // Resolve scalar value inputs (skip arrays — handled by aggregate/etc dispatch).
-  // Also skip when the source is an array producer wired to a scalar port —
-  // e.g. pickNRandomNeighbors → getNeighborAttributeByIndex.index. The
-  // consuming emitter (getNeighborAttributeByIndex) detects this case via
-  // ctx.inputToSource and routes through compileArrayNode itself; trying to
-  // value-compile here would hit "No WebGPU value emitter for ..." since
-  // array producers only live in ARRAY_NODE_EMITTERS. Mirrors the WASM fix
-  // in the regular-flow input loop (commit da5f5b2).
+  // Also skip when the source's OUTPUT PORT is an array (e.g. pickNRandomNeighbors's
+  // value output) wired to a scalar consumer port. The consuming emitter
+  // (getNeighborAttributeByIndex etc.) detects this via ctx.inputToSource and
+  // routes through compileArrayNode itself.
+  //
+  // CRITICAL: check the source PORT's isArray, not isArrayProducer(nodeType).
+  // Hybrid nodes like `groupCounting` are array producers (their `indexes`
+  // output is an array) AND value emitters (their `count` output is a scalar).
+  // Using isArrayProducer here silently drops any consumer reading the scalar
+  // `count` port — the input falls through to the inline-default branch and
+  // the count loop is never emitted (manifests as "Count Matching always
+  // returns 0" / "wrong count" downstream).
   const inputs: Record<string, ValueRef | undefined> = {};
   for (const port of def.ports) {
     if (port.kind !== 'input' || port.category !== 'value') continue;
@@ -1712,7 +1723,9 @@ function compileValueNode(ctx: CompileCtx, nodeId: string, portId: string = 'val
     const source = ctx.inputToSource.get(`${nodeId}:${port.id}`);
     if (source) {
       const srcNode = ctx.nodeMap.get(source.nodeId);
-      if (srcNode && isArrayProducer(srcNode.data.nodeType)) continue;
+      const srcDef = srcNode ? getNodeDef(srcNode.data.nodeType) : null;
+      const srcPort = srcDef?.ports.find(p => p.id === source.portId);
+      if (srcPort?.isArray) continue;
       const srcRef = compileValueNode(ctx, source.nodeId, source.portId);
       if (!srcRef) return null;
       inputs[port.id] = srcRef;
@@ -1780,14 +1793,24 @@ function preEmitValueNodes(ctx: CompileCtx, sourceNodeId: string, sourcePortId: 
       // the consuming emitter route through ctx.inputToSource to load
       // element [0]. compileValueNode would fail with "No WebGPU value
       // emitter for ..." for these node types.
+      // Hybrid producers (groupCounting / groupOperator / groupStatement)
+      // expose BOTH array and scalar outputs — dispatch on the source's
+      // OUTPUT PORT, not the node type. Reading a scalar port (e.g.
+      // groupCounting.count) goes through compileValueNode normally so the
+      // count loop is emitted; reading the array port goes through
+      // compileArrayNode.
+      const isArraySrcPort = (s: { nodeId: string; portId: string }): boolean => {
+        const sn = ctx.nodeMap.get(s.nodeId);
+        const sd = sn ? getNodeDef(sn.data.nodeType) : null;
+        const sp = sd?.ports.find(p => p.id === s.portId);
+        return !!sp?.isArray;
+      };
       if (src) {
-        const sn = ctx.nodeMap.get(src.nodeId);
-        if (sn && isArrayProducer(sn.data.nodeType)) compileArrayNode(ctx, src.nodeId);
+        if (isArraySrcPort(src)) compileArrayNode(ctx, src.nodeId);
         else compileValueNode(ctx, src.nodeId, src.portId);
       }
       if (srcs) for (const s of srcs) {
-        const sn = ctx.nodeMap.get(s.nodeId);
-        if (sn && isArrayProducer(sn.data.nodeType)) compileArrayNode(ctx, s.nodeId);
+        if (isArraySrcPort(s)) compileArrayNode(ctx, s.nodeId);
         else compileValueNode(ctx, s.nodeId, s.portId);
       }
     }
@@ -1990,11 +2013,16 @@ function compileFlowChain(ctx: CompileCtx, sourceNodeId: string, sourcePortId: s
         if (port.isArray) continue;
         const source = ctx.inputToSource.get(`${node.id}:${port.id}`);
         if (source) {
-          // Skip array-producer sources wired to scalar ports — the consuming
-          // emitter handles them via ctx.inputToSource. Mirrors the pre-emit
-          // pass; matches WASM's regular-flow input loop.
+          // Skip when the source's OUTPUT PORT is an array (consuming emitter
+          // handles it). Check the source port, not isArrayProducer(nodeType):
+          // hybrid nodes like groupCounting expose both an array `indexes`
+          // port and a scalar `count` port — skipping the whole node would
+          // drop the scalar count silently. Mirrors the same fix in the
+          // top-level compileValueNode input loop.
           const srcNode = ctx.nodeMap.get(source.nodeId);
-          if (srcNode && isArrayProducer(srcNode.data.nodeType)) continue;
+          const srcDef = srcNode ? getNodeDef(srcNode.data.nodeType) : null;
+          const srcPort = srcDef?.ports.find(p => p.id === source.portId);
+          if (srcPort?.isArray) continue;
           const srcRef = compileValueNode(ctx, source.nodeId, source.portId);
           if (!srcRef) return false;
           inputs[port.id] = srcRef;

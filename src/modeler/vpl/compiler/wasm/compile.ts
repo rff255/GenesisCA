@@ -1080,10 +1080,17 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     // returns NI from an array, or pickNRandomNeighbors returns NI[]), the
     // outer input loop skipped the value compile. Fetch the array and take
     // element [0] to mirror JS's `Array.isArray ? arr[0] : scalar` semantic.
-    // Empty array → INVALID_NI so the guard below kicks in.
+    // Empty array → INVALID_NI so the guard below kicks in. Detect via the
+    // source's OUTPUT PORT, not isArrayProducer(nodeType) — hybrid nodes
+    // (groupCounting / groupOperator / groupStatement) are array producers
+    // for their indexes/positions output but expose scalar outputs too;
+    // routing a scalar output through the load-element-[0] branch would
+    // mis-read the indexes array instead of the wired scalar.
     const indexSrc = ctx.inputToSource.get(`${node.id}:index`);
     const srcNode = indexSrc ? ctx.nodeMap.get(indexSrc.nodeId) : undefined;
-    if (srcNode && isArrayProducer(srcNode.data.nodeType)) {
+    const indexSrcDef = srcNode ? getNodeDef(srcNode.data.nodeType) : null;
+    const indexSrcPort = indexSrc ? indexSrcDef?.ports.find(p => p.id === indexSrc.portId) : undefined;
+    if (indexSrcPort?.isArray) {
       const arrRef = compileArrayNode(indexSrc!.nodeId, ctx);
       if (!arrRef) return null;
       ctx.emitter.localGet(arrRef.lenLocal);
@@ -3378,8 +3385,14 @@ function compileValueNode(nodeId: string, ctx: WasmCompileCtx, portId: string = 
     if (port.isArray) continue;
     const source = ctx.inputToSource.get(`${nodeId}:${port.id}`);
     if (source) {
+      // Skip when the source PORT is an array (consumer handles it). Hybrid
+      // producers like groupCounting expose both an array `indexes` port and
+      // a scalar `count` port — checking isArrayProducer(nodeType) would
+      // silently drop scalar count consumers.
       const srcNode = ctx.nodeMap.get(source.nodeId);
-      if (srcNode && isArrayProducer(srcNode.data.nodeType)) continue;
+      const srcDef = srcNode ? getNodeDef(srcNode.data.nodeType) : null;
+      const srcPort = srcDef?.ports.find(p => p.id === source.portId);
+      if (srcPort?.isArray) continue;
       const srcRef = compileValueNode(source.nodeId, ctx, source.portId);
       if (!srcRef) return null;
       inputs[port.id] = srcRef;
@@ -3745,8 +3758,14 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
         if (port.isArray) continue;
         const source = ctx.inputToSource.get(`${node.id}:${port.id}`);
         if (source) {
+          // Skip when the source PORT is an array (consumer handles it).
+          // Mirror the top-level compileValueNode fix — hybrid producers
+          // like groupCounting have both array and scalar outputs; checking
+          // isArrayProducer(nodeType) would drop scalar count consumers.
           const srcNode = ctx.nodeMap.get(source.nodeId);
-          if (srcNode && isArrayProducer(srcNode.data.nodeType)) continue;
+          const srcDef = srcNode ? getNodeDef(srcNode.data.nodeType) : null;
+          const srcPort = srcDef?.ports.find(p => p.id === source.portId);
+          if (srcPort?.isArray) continue;
           const srcRef = compileValueNode(source.nodeId, ctx, source.portId);
           if (!srcRef) return false;
           inputs[port.id] = srcRef;
