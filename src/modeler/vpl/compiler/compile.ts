@@ -809,7 +809,17 @@ function compileRoot(
     const inputVars: Record<string, string> = {};
     for (const port of def.ports) {
       if (port.kind !== 'input' || port.category !== 'value') continue;
-      // Multi-input support for isArray ports (e.g., Aggregate node)
+      // Multi-input support for isArray ports (e.g., Aggregate node).
+      // - sources.length > 1: build a JS array literal of each source's varName.
+      // - sources.length === 1: pass the source's varName directly. If the source's
+      //   own output port is also `isArray` (e.g. filterNeighbors → aggregate), the
+      //   varName resolves to a typed-array / scratch-array name and downstream
+      //   array-shape consumers iterate over it correctly. If the source is
+      //   scalar (e.g. getCellAttribute → aggregate), wrap in a 1-element array
+      //   literal so consumers that do `.length` / `for (i<len)` see length 1
+      //   instead of `undefined` — without this wrap, single-scalar aggregate
+      //   silently returned the op's identity value (0 for sum, etc.). This
+      //   mirrors WASM's emitScalarAggregate behaviour where N=1 already works.
       const sources = inputToSources.get(`${nodeId}:${port.id}`);
       if (port.isArray && sources && sources.length > 1) {
         for (const s of sources) compileValueNode(s.nodeId);
@@ -818,7 +828,15 @@ function compileRoot(
         const source = inputToSource.get(`${nodeId}:${port.id}`);
         if (source) {
           compileValueNode(source.nodeId);
-          inputVars[port.id] = varName(source.nodeId, source.portId);
+          const srcName = varName(source.nodeId, source.portId);
+          if (port.isArray) {
+            const srcNode = nodeMap.get(source.nodeId);
+            const srcDef = srcNode ? getNodeDef(srcNode.data.nodeType) : null;
+            const srcPort = srcDef?.ports.find(p => p.id === source.portId);
+            inputVars[port.id] = srcPort?.isArray ? srcName : `[${srcName}]`;
+          } else {
+            inputVars[port.id] = srcName;
+          }
         } else {
           const inlineVal = getInlineValue(port, node.data.config);
           if (inlineVal !== undefined) inputVars[port.id] = inlineVal;
