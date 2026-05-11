@@ -10,8 +10,9 @@ export const GetCellAttributeNode: NodeTypeDef = {
     { id: 'value', label: 'Value', kind: 'output', category: 'value', dataType: 'any' },
   ],
   defaultConfig: { attributeId: '' },
-  compile: (nodeId, config) => {
+  compile: (nodeId, config, _inputs, _boundary, ctx) => {
     const attr = config.attributeId as string || '_undef';
-    return `const _v${nodeId} = r_${attr}[idx];\n`;
+    const readExpr = ctx ? ctx.readAttrExpr(attr, 'idx') : `r_${attr}[idx]`;
+    return `const _v${nodeId} = ${readExpr};\n`;
   },
 };

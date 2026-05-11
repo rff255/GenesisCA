@@ -20,7 +20,7 @@ export const GetNeighborAttributeByIndexNode: NodeTypeDef = {
     { id: 'value', label: 'Value', kind: 'output', category: 'value', dataType: 'any' },
   ],
   defaultConfig: { attributeId: '' },
-  compile: (nodeId, config, inputs, boundary) => {
+  compile: (nodeId, config, inputs, boundary, ctx) => {
     const attr = config.attributeId as string || '_undef';
     const index = inputs['index'] || '0';
     const niExpr = `_ni${nodeId}`;
@@ -30,12 +30,15 @@ export const GetNeighborAttributeByIndexNode: NodeTypeDef = {
     // in an IIFE so we can keep `_v${nodeId}` as a const at the call-site
     // scope without leaking the niCellExpr locals (each iteration of an outer
     // for/loop would otherwise re-declare the same names).
+    // For sub-attributes, the read uses ctx.readAttrExpr to apply the parent-check
+    // guard at the resolved neighbor cell index (the neighbor's parent, not idx's).
+    const readExpr = ctx ? ctx.readAttrExpr(attr, cellExpr) : `r_${attr}[${cellExpr}]`;
     return `const _v${nodeId} = (() => {`
       + ` const _idx${nodeId} = ${index};`
       + ` const ${niExpr} = (Array.isArray(_idx${nodeId}) ? (_idx${nodeId}.length > 0 ? (_idx${nodeId}[0] | 0) : ${INVALID_NI}) : (_idx${nodeId} | 0));`
       + ` if (${niExpr} === ${INVALID_NI}) return 0;`
       + ` ${stmts}`
-      + ` return r_${attr}[${cellExpr}];`
+      + ` return ${readExpr};`
       + ` })();\n`;
   },
 };

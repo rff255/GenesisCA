@@ -19,7 +19,7 @@
  * returns an error and the worker falls back to the JS step function.
  */
 
-import type { CAModel, GraphNode, GraphEdge } from '../../../../model/types';
+import type { Attribute, CAModel, GraphNode, GraphEdge } from '../../../../model/types';
 import { getNodeDef } from '../../nodes/registry';
 import {
   ValType, F64, I32, OP_F64_ABS, OP_F64_ADD, OP_F64_CONVERT_I32_U, OP_F64_DIV,
@@ -39,6 +39,7 @@ import type { MemoryLayout } from './layout';
 import { classifyLoopInvariant } from '../loopInvariant';
 import { getInlineValue, parseInlineNum } from '../inlinePort';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } from '../sinkAnalysis';
+import { isSubAttribute, subAttrInfo } from '../subAttribute';
 
 export interface WasmCompileResult {
   bytes: Uint8Array;
@@ -295,13 +296,132 @@ function pushCellByteOffset(ctx: WasmCompileCtx, itemBytes: number): void {
   ctx.byteOffsetLocals.set(itemBytes, local);
 }
 
-/** Emit a load from cell attribute `attr.id` at the current cell index, pushes the value. */
+/** Sub-attribute info resolved against the WASM layout. Used by the read wrap
+ *  helpers below to emit the parent-match guard. */
+interface WasmSubAttrInfo {
+  parent: AttrInfo;
+  parentValuesInt: number[];
+  undefinedValueStr: string;
+}
+
+/** Look up sub-attribute info for an attribute, or null if it's regular. */
+function getSubAttrWasm(ctx: WasmCompileCtx, attrId: string): WasmSubAttrInfo | null {
+  const attr = ctx.model.attributes.find(a => a.id === attrId);
+  const info = subAttrInfo(attr, ctx.model);
+  if (!info || !attr) return null;
+  const parentLayout = getAttr(ctx.layout, info.parent.id);
+  if (!parentLayout) return null;
+  const parentValuesInt = info.parentValues.map(v => parentValueToInt(info.parent, v));
+  return {
+    parent: parentLayout,
+    parentValuesInt,
+    undefinedValueStr: info.undefinedValue ?? attr.defaultValue ?? '',
+  };
+}
+
+function parentValueToInt(parent: Attribute, raw: string): number {
+  if (parent.type === 'bool') return raw === 'true' || raw === '1' ? 1 : 0;
+  if (parent.type === 'tag') {
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
+}
+
+/** Push an attribute-typed constant onto the stack from a string-encoded value
+ *  (matches Attribute.defaultValue's encoding). Bool 'true'/'false' → 1/0,
+ *  numeric strings parsed accordingly. */
+function emitAttrLiteralWasm(ctx: WasmCompileCtx, attr: AttrInfo, valueStr: string): void {
+  switch (attr.type) {
+    case 'bool':
+      ctx.emitter.i32Const(valueStr === 'true' || valueStr === '1' ? 1 : 0);
+      break;
+    case 'float': {
+      const n = parseFloat(valueStr);
+      ctx.emitter.f64Const(Number.isFinite(n) ? n : 0);
+      break;
+    }
+    default: {
+      const n = parseInt(valueStr, 10);
+      ctx.emitter.i32Const(Number.isFinite(n) ? n : 0);
+      break;
+    }
+  }
+}
+
+/** OR-chain helper. Given a local holding the parent's stored value (i32),
+ *  push an i32 boolean (1 if the value matches any of `parentValuesInt`, else 0). */
+function emitMatchOR(ctx: WasmCompileCtx, valueLocal: number, parentValuesInt: number[]): void {
+  if (parentValuesInt.length === 0) {
+    ctx.emitter.i32Const(0);
+    return;
+  }
+  ctx.emitter.localGet(valueLocal);
+  ctx.emitter.i32Const(parentValuesInt[0]!);
+  ctx.emitter.op(OP_I32_EQ);
+  for (let i = 1; i < parentValuesInt.length; i++) {
+    ctx.emitter.localGet(valueLocal);
+    ctx.emitter.i32Const(parentValuesInt[i]!);
+    ctx.emitter.op(OP_I32_EQ);
+    ctx.emitter.op(OP_I32_OR);
+  }
+}
+
+/** Push an i32 boolean (1/0) indicating whether the parent's stored value at
+ *  the CURRENT cell index matches any value in `parentValuesInt`. */
+function emitParentMatchAtCellWasm(
+  ctx: WasmCompileCtx,
+  parent: AttrInfo,
+  parentValuesInt: number[],
+  useWriteBuffer: boolean,
+): void {
+  // Load parent[idx]
+  pushCellByteOffset(ctx, parent.itemBytes);
+  const offset = useWriteBuffer ? parent.writeOffset : parent.readOffset;
+  if (parent.type === 'bool') ctx.emitter.i32Load8U(offset, 0);
+  else ctx.emitter.i32Load(offset, 2);
+  // Cache, then OR-chain compare
+  const local = ctx.emitter.allocLocal(I32);
+  ctx.emitter.localSet(local);
+  emitMatchOR(ctx, local, parentValuesInt);
+}
+
+/** Push an i32 boolean indicating parent-match at an arbitrary cell index
+ *  (held in `cellIdxLocal`). Used for neighbor-cell sub-attribute reads. */
+function emitParentMatchAtIdxWasm(
+  ctx: WasmCompileCtx,
+  parent: AttrInfo,
+  parentValuesInt: number[],
+  cellIdxLocal: number,
+  useWriteBuffer: boolean,
+): void {
+  ctx.emitter.localGet(cellIdxLocal);
+  ctx.emitter.i32Const(parent.itemBytes);
+  ctx.emitter.op(OP_I32_MUL);
+  const offset = useWriteBuffer ? parent.writeOffset : parent.readOffset;
+  if (parent.type === 'bool') ctx.emitter.i32Load8U(offset, 0);
+  else ctx.emitter.i32Load(offset, 2);
+  const local = ctx.emitter.allocLocal(I32);
+  ctx.emitter.localSet(local);
+  emitMatchOR(ctx, local, parentValuesInt);
+}
+
+/** Emit a load from cell attribute `attr.id` at the current cell index, pushes the value.
+ *  For sub-attributes the load is wrapped with a parent-check guard returning
+ *  the configured `undefinedValue` on mismatch (via WASM `select`). */
 function emitCellRead(ctx: WasmCompileCtx, attr: AttrInfo, useWriteBuffer: boolean): void {
+  const sub = getSubAttrWasm(ctx, attr.id);
+  // Always emit the raw load first (the matched-case value).
   pushCellByteOffset(ctx, attr.itemBytes);
   const offset = useWriteBuffer ? attr.writeOffset : attr.readOffset;
   if (attr.type === 'bool') ctx.emitter.i32Load8U(offset, 0);
   else if (attr.type === 'float') ctx.emitter.f64Load(offset, 3);
   else ctx.emitter.i32Load(offset, 2);
+  if (!sub) return;
+  // Push the undefined-case literal, then the i32 condition, then select.
+  emitAttrLiteralWasm(ctx, attr, sub.undefinedValueStr);
+  emitParentMatchAtCellWasm(ctx, sub.parent, sub.parentValuesInt, useWriteBuffer);
+  ctx.emitter.op(OP_SELECT);
 }
 
 /** Emit a store to cell attribute `attr.id` at the current cell index. */
@@ -1142,17 +1262,29 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     if (attr.type === 'float') { ctx.emitter.f64Const(0); }
     else { ctx.emitter.i32Const(0); }
     ctx.emitter.localSet(result);
-    // if (NI !== INVALID_NI) { result = read at niCellIdx(NI) }
+    // if (NI !== INVALID_NI) { result = read at niCellIdx(NI), wrapped if sub-attr }
     ctx.emitter.localGet(niLocal);
     ctx.emitter.i32Const(INVALID_NI);
     ctx.emitter.op(OP_I32_NE_OP);
+    const subN = getSubAttrWasm(ctx, attrId);
     ctx.emitter.ifThen(() => {
       pushNiCellIdx(ctx, niLocal);
+      // Stash cell idx so we can use it for both the load and the parent check.
+      const cellIdxLocal = ctx.emitter.allocLocal(I32);
+      ctx.emitter.localSet(cellIdxLocal);
+      // Push the raw value at the neighbor cell.
+      ctx.emitter.localGet(cellIdxLocal);
       ctx.emitter.i32Const(attr.itemBytes);
       ctx.emitter.op(OP_I32_MUL);
       if (attr.type === 'bool') ctx.emitter.i32Load8U(attr.readOffset, 0);
       else if (attr.type === 'float') ctx.emitter.f64Load(attr.readOffset, 3);
       else ctx.emitter.i32Load(attr.readOffset, 2);
+      if (subN) {
+        // [value, undefined, match] → select → wrapped read
+        emitAttrLiteralWasm(ctx, attr, subN.undefinedValueStr);
+        emitParentMatchAtIdxWasm(ctx, subN.parent, subN.parentValuesInt, cellIdxLocal, false);
+        ctx.emitter.op(OP_SELECT);
+      }
       ctx.emitter.localSet(result);
     });
     ctx.emitter.localGet(result);
@@ -1167,7 +1299,7 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     const attr = getAttr(ctx.layout, attrId);
     if (!nbr || !attr) { ctx.errors.push(`getNeighborAttributeByTag: unknown nbr/attr`); return null; }
     const tagIndex = Number((node.data.config as Record<string, unknown>)._resolvedTagIndex ?? 0);
-    // address = nbrOffset + (i*nbrSize + tagIndex) * 4
+    // Load neighbor cell idx into a local: nIdx[i*nbrSize + tagIndex]
     ctx.emitter.localGet(ctx.iLocalIdx);
     ctx.emitter.i32Const(nbr.size);
     ctx.emitter.op(OP_I32_MUL);
@@ -1176,11 +1308,22 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     ctx.emitter.i32Const(4);
     ctx.emitter.op(OP_I32_MUL);
     ctx.emitter.i32Load(nbr.offset, 2);
+    const cellIdxLocal = ctx.emitter.allocLocal(I32);
+    ctx.emitter.localSet(cellIdxLocal);
+    // Load value at that cell
+    ctx.emitter.localGet(cellIdxLocal);
     ctx.emitter.i32Const(attr.itemBytes);
     ctx.emitter.op(OP_I32_MUL);
     if (attr.type === 'bool') ctx.emitter.i32Load8U(attr.readOffset, 0);
     else if (attr.type === 'float') ctx.emitter.f64Load(attr.readOffset, 3);
     else ctx.emitter.i32Load(attr.readOffset, 2);
+    // Sub-attribute wrap: select(value, undefinedLit, parent_match_at_neighborCell)
+    const subT = getSubAttrWasm(ctx, attrId);
+    if (subT) {
+      emitAttrLiteralWasm(ctx, attr, subT.undefinedValueStr);
+      emitParentMatchAtIdxWasm(ctx, subT.parent, subT.parentValuesInt, cellIdxLocal, false);
+      ctx.emitter.op(OP_SELECT);
+    }
     return storeResult(ctx.emitter, attrValType(attr.type));
   },
 
@@ -3969,25 +4112,50 @@ function compileEntry(
       for (const [pid, ref] of ports) m.set(pid, ref);
     }
 
-    // Per-cell copy (sync mode only). For loop entries (Step), this is hoisted
-    // to a single bulk memory.copy before the loop — see emitBulkCopyLines below.
-    // For single-shot entries (InputColor), keep the per-cell copy: only one
-    // cell is touched per call, so a bulk copy of the whole grid would be wrong.
-    if (!opts.hasLoop && opts.emitCopyLines && !layout.isAsync) {
+    // Per-cell copy (sync mode only). Two flavours:
+    //   1. Regular attrs in single-shot entries (InputColor): emit `w = r` here.
+    //      Loop entries (Step) use the bulk memory.copy path instead.
+    //   2. Sub-attributes (any entry kind): emit conditional copy here. The
+    //      bulk-copy path SKIPS sub-attrs, so we do per-cell `w = match ? r : default`
+    //      for ALL entries that emitCopyLines.
+    if (opts.emitCopyLines && !layout.isAsync) {
       for (const id of Object.keys(layout.attrType)) {
         const a = getAttr(layout, id)!;
-        pushCellByteOffset(ctx, a.itemBytes);  // store address
-        pushCellByteOffset(ctx, a.itemBytes);  // load address
-        if (a.type === 'bool') {
-          emitter.i32Load8U(a.readOffset, 0);
-          emitter.i32Store8(a.writeOffset, 0);
-        } else if (a.type === 'float') {
-          emitter.f64Load(a.readOffset, 3);
-          emitter.f64Store(a.writeOffset, 3);
-        } else {
-          emitter.i32Load(a.readOffset, 2);
-          emitter.i32Store(a.writeOffset, 2);
+        const sub = getSubAttrWasm(ctx, id);
+        if (sub) {
+          // Sub-attribute conditional copy: w[idx] = parent_match ? r[idx] : defaultValue
+          const attr = model.attributes.find(at => at.id === id)!;
+          pushCellByteOffset(ctx, a.itemBytes);  // store address
+          // Push matched-case value (r_subattr[idx])
+          pushCellByteOffset(ctx, a.itemBytes);
+          if (a.type === 'bool') emitter.i32Load8U(a.readOffset, 0);
+          else if (a.type === 'float') emitter.f64Load(a.readOffset, 3);
+          else emitter.i32Load(a.readOffset, 2);
+          // Push default literal
+          emitAttrLiteralWasm(ctx, a, attr.defaultValue || '');
+          // Push parent_match condition (reads from r_ buffer)
+          emitParentMatchAtCellWasm(ctx, sub.parent, sub.parentValuesInt, false);
+          emitter.op(OP_SELECT);
+          // Store result
+          if (a.type === 'bool') emitter.i32Store8(a.writeOffset, 0);
+          else if (a.type === 'float') emitter.f64Store(a.writeOffset, 3);
+          else emitter.i32Store(a.writeOffset, 2);
+        } else if (!opts.hasLoop) {
+          // Regular attr, single-shot entry: per-cell `w = r` copy
+          pushCellByteOffset(ctx, a.itemBytes);  // store address
+          pushCellByteOffset(ctx, a.itemBytes);  // load address
+          if (a.type === 'bool') {
+            emitter.i32Load8U(a.readOffset, 0);
+            emitter.i32Store8(a.writeOffset, 0);
+          } else if (a.type === 'float') {
+            emitter.f64Load(a.readOffset, 3);
+            emitter.f64Store(a.writeOffset, 3);
+          } else {
+            emitter.i32Load(a.readOffset, 2);
+            emitter.i32Store(a.writeOffset, 2);
+          }
         }
+        // Regular attr in loop entry: handled by emitBulkCopyLines (bulk memcpy).
       }
     }
 
@@ -4007,6 +4175,9 @@ function compileEntry(
   const cellsPerAttr = layout.sentinelIndex >= 0 ? layout.total + 1 : layout.total;
   const emitBulkCopyLines = () => {
     for (const id of Object.keys(layout.attrType)) {
+      // Sub-attributes get per-cell conditional copy in emitBody — the bulk
+      // memcpy can't express the parent-check guard, so we skip it here.
+      if (getSubAttrWasm(ctx, id)) continue;
       const a = getAttr(layout, id)!;
       // memory.copy stack signature: [dst, src, n]
       emitter.i32Const(a.writeOffset);
@@ -4179,6 +4350,36 @@ export function compileGraphWasm(
   layout: MemoryLayout,
   viewerIds: Record<string, number>,
 ): WasmCompileResult {
+  // Sub-attribute iteration support not implemented in WASM yet — bail out and
+  // let the worker fall back to JS. Scalar reads (getCellAttribute, neighbor-by-
+  // index, neighbor-by-tag, updateAttribute) are wrapped correctly via
+  // emitCellRead's parent-check; iteration emitters (aggregate/groupOperator/
+  // filterNeighbors/getNeighborsAttribute consumers) still inline raw reads.
+  const subAttrIds = new Set(model.attributes.filter(a => isSubAttribute(a)).map(a => a.id));
+  if (subAttrIds.size > 0) {
+    const ITER_NODE_TYPES = new Set([
+      'getNeighborsAttribute', 'filterNeighbors', 'getNeighborsAttrByIndexes',
+      'aggregate', 'groupOperator', 'groupCounting', 'groupStatement',
+    ]);
+    const checkNodes = (nodes: GraphNode[]): string | null => {
+      for (const n of nodes) {
+        if (!ITER_NODE_TYPES.has(n.data.nodeType)) continue;
+        const attrId = n.data.config.attributeId as string | undefined;
+        if (attrId && subAttrIds.has(attrId)) {
+          const attrName = model.attributes.find(a => a.id === attrId)?.name ?? attrId;
+          return `Sub-attribute "${attrName}" used in iteration node "${n.data.nodeType}" — WASM compile target doesn't yet support sub-attribute iteration. Falling back to JS (which handles this correctly).`;
+        }
+      }
+      return null;
+    };
+    const err = checkNodes(graphNodes) ?? (model.macroDefs || []).reduce<string | null>(
+      (acc, d) => acc ?? checkNodes(d.nodes), null,
+    );
+    if (err) {
+      return { bytes: new Uint8Array(0), minMemoryPages: 0, error: err, viewerIds, exports: [] };
+    }
+  }
+
   // Pre-pass: resolve indicator IDs to numeric indices (mirrors the JS
   // compiler — without this, fresh-loaded models that haven't been JS-compiled
   // first will see _indicatorIdx === -1 on every indicator node). Also resolve

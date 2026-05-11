@@ -369,6 +369,199 @@ export function AttributesPanelContent() {
               </div>
             )}
 
+            {/* Sub-Attribute — cell attributes only. A sub-attribute is "only well-defined"
+                on cells whose parent attribute (tag or bool) holds one of the configured
+                parent values. Reads on non-matching cells return the undefinedValue. */}
+            {!selected.isModelAttribute && (() => {
+              const validParents = model.attributes.filter(a =>
+                !a.isModelAttribute &&
+                a.id !== selected.id &&
+                (a.type === 'tag' || a.type === 'bool') &&
+                !a.parentAttributeId,
+              );
+              const parent = validParents.find(p => p.id === selected.parentAttributeId)
+                ?? model.attributes.find(p => p.id === selected.parentAttributeId);
+              const isSub = !!selected.parentAttributeId;
+              return (
+                <div className={styles.field}>
+                  <label
+                    className={styles.fieldLabel}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                    title="When checked, this attribute is only well-defined on cells whose parent attribute is in the chosen parent-values set. Reads on non-matching cells return the undefined value."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSub}
+                      disabled={!isSub && validParents.length === 0}
+                      onChange={e => {
+                        if (e.target.checked) {
+                          const first = validParents[0];
+                          if (!first) return;
+                          updateAttribute(selected.id, {
+                            parentAttributeId: first.id,
+                            parentValues: [],
+                            undefinedValue: selected.defaultValue,
+                          });
+                        } else {
+                          updateAttribute(selected.id, {
+                            parentAttributeId: undefined,
+                            parentValues: undefined,
+                            undefinedValue: undefined,
+                          });
+                        }
+                      }}
+                    />
+                    Sub-attribute (only valid under a parent attribute condition)
+                  </label>
+                  {!isSub && validParents.length === 0 && (
+                    <p style={{ fontSize: '0.7rem', color: '#7a8a9a', fontStyle: 'italic', marginTop: 4 }}>
+                      Requires at least one tag or bool cell attribute (not itself a sub-attribute) to use as parent.
+                    </p>
+                  )}
+                  {isSub && (
+                    <div style={{ marginTop: 8, paddingLeft: 12, borderLeft: '2px solid #00897b', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div>
+                        <label className={styles.fieldLabel}>Parent Attribute</label>
+                        <select
+                          className={styles.selectInput}
+                          value={selected.parentAttributeId ?? ''}
+                          onChange={e => updateAttribute(selected.id, {
+                            parentAttributeId: e.target.value,
+                            parentValues: [],
+                          })}
+                        >
+                          {validParents.map(p => (
+                            <option key={p.id} value={p.id}>{p.name} ({p.type})</option>
+                          ))}
+                          {parent && !validParents.some(p => p.id === parent.id) && (
+                            <option value={parent.id}>{parent.name} (invalid)</option>
+                          )}
+                        </select>
+                      </div>
+                      {parent && (parent.type === 'tag' || parent.type === 'bool') && (
+                        <div>
+                          <label className={styles.fieldLabel} title="Sub-attribute is only well-defined when the parent's value is in this set.">
+                            Parent Values ({parent.name})
+                          </label>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            {parent.type === 'tag' ? (
+                              (parent.tagOptions ?? []).length === 0 ? (
+                                <p style={{ fontSize: '0.7rem', color: '#7a8a9a', fontStyle: 'italic' }}>
+                                  Parent has no tag options yet.
+                                </p>
+                              ) : (parent.tagOptions ?? []).map((tag, i) => {
+                                const idx = String(i);
+                                const checked = (selected.parentValues ?? []).includes(idx);
+                                return (
+                                  <label key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8rem' }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={e => {
+                                        const cur = new Set(selected.parentValues ?? []);
+                                        if (e.target.checked) cur.add(idx); else cur.delete(idx);
+                                        updateAttribute(selected.id, { parentValues: Array.from(cur) });
+                                      }}
+                                    />
+                                    <span>{tag}</span>
+                                  </label>
+                                );
+                              })
+                            ) : (
+                              ['false', 'true'].map(v => {
+                                const checked = (selected.parentValues ?? []).includes(v);
+                                return (
+                                  <label key={v} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8rem' }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={e => {
+                                        const cur = new Set(selected.parentValues ?? []);
+                                        if (e.target.checked) cur.add(v); else cur.delete(v);
+                                        updateAttribute(selected.id, { parentValues: Array.from(cur) });
+                                      }}
+                                    />
+                                    <span>{v}</span>
+                                  </label>
+                                );
+                              })
+                            )}
+                          </div>
+                          {(selected.parentValues ?? []).length === 0 && (
+                            <p style={{ fontSize: '0.7rem', color: '#cc8800', fontStyle: 'italic', marginTop: 4 }}>
+                              No parent values selected — reads will always return the undefined value.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                      <div>
+                        <label
+                          className={styles.fieldLabel}
+                          title="Value returned by a read of this sub-attribute when the parent's value is NOT in the selected set."
+                        >
+                          Undefined Value
+                        </label>
+                        {selected.type === 'bool' ? (
+                          <select
+                            className={styles.selectInput}
+                            value={selected.undefinedValue ?? selected.defaultValue}
+                            onChange={e => updateAttribute(selected.id, { undefinedValue: e.target.value })}
+                          >
+                            <option value="false">false</option>
+                            <option value="true">true</option>
+                          </select>
+                        ) : selected.type === 'integer' ? (
+                          <input
+                            className={styles.numberInput}
+                            type="number"
+                            step={1}
+                            value={selected.undefinedValue ?? selected.defaultValue}
+                            onChange={e => updateAttribute(selected.id, {
+                              undefinedValue: String(Math.round(Number(e.target.value) || 0)),
+                            })}
+                          />
+                        ) : selected.type === 'float' ? (
+                          <input
+                            className={styles.numberInput}
+                            type="number"
+                            step="any"
+                            value={selected.undefinedValue ?? selected.defaultValue}
+                            onChange={e => updateAttribute(selected.id, { undefinedValue: e.target.value })}
+                          />
+                        ) : selected.type === 'tag' ? (
+                          <select
+                            className={styles.selectInput}
+                            value={selected.undefinedValue ?? selected.defaultValue ?? '0'}
+                            onChange={e => updateAttribute(selected.id, { undefinedValue: e.target.value })}
+                          >
+                            {(selected.tagOptions ?? []).map((tag, i) => (
+                              <option key={i} value={String(i)}>{tag}</option>
+                            ))}
+                            {(!selected.tagOptions || selected.tagOptions.length === 0) && (
+                              <option value="0">(no tags defined)</option>
+                            )}
+                          </select>
+                        ) : selected.type === 'neighborIndex' ? (
+                          <NeighborIndexDefaultEditor
+                            attribute={selected}
+                            onChange={cfg => updateAttribute(selected.id, cfg)}
+                            neighborhoods={model.neighborhoods}
+                            mode="undefined"
+                          />
+                        ) : (
+                          <input
+                            className={styles.textInput}
+                            value={selected.undefinedValue ?? selected.defaultValue}
+                            onChange={e => updateAttribute(selected.id, { undefinedValue: e.target.value })}
+                          />
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Description</label>
               <textarea

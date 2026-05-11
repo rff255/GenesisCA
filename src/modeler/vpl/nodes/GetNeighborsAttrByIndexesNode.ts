@@ -14,19 +14,25 @@ export const GetNeighborsAttrByIndexesNode: NodeTypeDef = {
     { id: 'values', label: 'Values', kind: 'output', category: 'value', dataType: 'any', isArray: true },
   ],
   defaultConfig: { attributeId: '' },
-  compile: (nodeId, config, inputs, boundary) => {
+  compile: (nodeId, config, inputs, boundary, ctx) => {
     const attr = config.attributeId as string || '_undef';
     const indexes = inputs['indexes'] || '[]';
     const ni = `_ni${nodeId}`;
     const niVar = `_niv${nodeId}`;
     const vl = `_v${nodeId}_valsLen`;
     const { stmts, cellExpr } = niCellExprStmts(niVar, boundary || 'torus', `${nodeId}_e`);
+    // Sub-attribute iteration: skip neighbors whose parent doesn't match (the
+    // values output excludes them entirely). Regular attrs read unconditionally.
+    const guard = ctx ? ctx.parentMatchesExpr(attr, cellExpr) : null;
+    const pushLine = guard
+      ? `  if (${guard}) _v${nodeId}_vals[${vl}++] = r_${attr}[${cellExpr}];`
+      : `  _v${nodeId}_vals[${vl}++] = r_${attr}[${cellExpr}];`;
     return [
       `_v${nodeId}_vals.length = 0; let ${vl} = 0;`,
       `for (let ${ni} = 0; ${ni} < ${indexes}.length; ${ni}++) {`,
       `  const ${niVar} = (${indexes}[${ni}]) | 0;`,
       `  ${stmts}`,
-      `  _v${nodeId}_vals[${vl}++] = r_${attr}[${cellExpr}];`,
+      pushLine,
       `}`,
     ].join(' ') + '\n';
   },

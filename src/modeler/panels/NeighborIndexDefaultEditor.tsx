@@ -7,11 +7,13 @@ interface Props {
   neighborhoods: Neighborhood[];
   onChange: (cfg: Partial<Attribute>) => void;
   /** Which value field this editor reads/writes. 'default' (the attribute's
-   *  initial value, plus the hint-neighborhood selector) or 'boundary' (the
-   *  out-of-grid value used under constant boundary treatment). The boundary
-   *  mode hides the hint selector since the hint is per-attribute and already
-   *  shown by the default editor. Defaults to 'default'. */
-  mode?: 'default' | 'boundary';
+   *  initial value, plus the hint-neighborhood selector), 'boundary' (the
+   *  out-of-grid value used under constant boundary treatment), or 'undefined'
+   *  (sub-attributes only: the value returned on cells whose parent doesn't
+   *  match). The 'boundary' and 'undefined' modes hide the hint selector since
+   *  the hint is per-attribute and already shown by the default editor. Defaults
+   *  to 'default'. */
+  mode?: 'default' | 'boundary' | 'undefined';
 }
 
 /** Per-axis clamp range — the runtime packs (dr, dc) as two sign-extended
@@ -52,7 +54,13 @@ function safeDecode(stored: string | undefined): { packed: number; isSentinel: b
  *       [-32767, 32767] to match the runtime's per-axis 16-bit range. */
 export function NeighborIndexDefaultEditor({ attribute, neighborhoods, onChange, mode = 'default' }: Props) {
   const isBoundaryMode = mode === 'boundary';
-  const fieldKey: 'defaultValue' | 'boundaryValue' = isBoundaryMode ? 'boundaryValue' : 'defaultValue';
+  const isUndefinedMode = mode === 'undefined';
+  const showHintSelector = !isBoundaryMode && !isUndefinedMode;
+  const fieldKey: 'defaultValue' | 'boundaryValue' | 'undefinedValue' = isBoundaryMode
+    ? 'boundaryValue'
+    : isUndefinedMode
+      ? 'undefinedValue'
+      : 'defaultValue';
   const stored = attribute[fieldKey];
   const hintId = attribute.neighborhoodHintId ?? '';
   const hint = neighborhoods.find(n => n.id === hintId) ?? null;
@@ -94,7 +102,7 @@ export function NeighborIndexDefaultEditor({ attribute, neighborhoods, onChange,
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      {!isBoundaryMode && (
+      {showHintSelector && (
         <select
           className={styles.selectInput}
           value={hintId}
@@ -189,7 +197,7 @@ export function NeighborIndexDefaultEditor({ attribute, neighborhoods, onChange,
       )}
 
       <div style={{ fontSize: 11, color: '#7a8a9a' }}>
-        {isBoundaryMode && stored === undefined ? (
+        {(isBoundaryMode || isUndefinedMode) && stored === undefined ? (
           <em>(blank — falls back to default value)</em>
         ) : isSentinel ? (
           <em style={{ color: '#f44336' }}>Stored value: INVALID_NI sentinel — pick a cell to set a real offset.</em>

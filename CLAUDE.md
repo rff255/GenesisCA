@@ -623,3 +623,67 @@ All three compile targets share `src/modeler/vpl/compiler/sinkAnalysis.ts` — a
 - `compileRoot` (JS) takes raw `graphNodes` / `graphEdges` even though they're redundant with `nodeMap` etc. — the analyzer rebuilds adjacency internally, keeping it target-independent. Same pattern for WASM (`compileEntry` takes a precomputed `SinkAnalysisResult`) and WebGPU (`baseCtx.graphNodes` / `baseCtx.graphEdges` threaded through, analyzer called per-entry inside `compileEntry`).
 - WebGPU's buffer-swap captures only the emitter's OWN push'es. Recursive `compileValueNode` calls for input sources have already routed their own emissions via their own wrappers, since inputs are resolved upstream of the wrapped emit call.
 
+---
+
+## Sub-Attributes (schema-level feature)
+
+A **sub-attribute** is a cell attribute that's "only well-defined" on cells whose parent (Tag or Boolean) cell attribute holds one of a chosen set of values. Wireworld's `charge` only makes sense on Wire / Pulsar / Switch cells; sub-attributes encode this in the schema so the compiler injects parent-check guards automatically, and the graph never has to wire up manual filter-by-type chains.
+
+### Schema
+
+Three optional fields on `Attribute` (`src/model/types.ts`):
+- `parentAttributeId?: string` — presence marks the attribute as a sub-attribute; references the parent cell attribute.
+- `parentValues?: string[]` — encoded same as `defaultValue` (tag indices as `"0"`/`"1"`/..., bools as `"true"`/`"false"`).
+- `undefinedValue?: string` — the value reads see when parent doesn't match.
+
+The existing `defaultValue` plays a double role: init/randomize/reset value AND the value the copy-line / pre-scrub uses for non-matching cells between steps. Three fields total, all optional, all additive — old `.gcaproj` files load unchanged.
+
+### Read semantics — context-dependent
+
+- **Scalar reads** (`GetCellAttribute`, `GetNeighborAttributeByIndex` with a fixed index, `GetNeighborAttributeByTag`): the read emit wraps with `parent_matches(r_parent[idx]) ? raw_read : undefinedValue`. The user explicitly asked for ONE specific cell's value; they get a value either way.
+- **Iteration contexts** (per-neighbor reads inside `GetNeighborsAttribute`, predicates inside `FilterNeighbors`, the per-element loop in `Aggregate`/`GroupOperator`/`GroupCounting` when fed from sub-attribute sources, and the worker's `computeLinkedIndicators` aggregation): non-matching cells are EXCLUDED from the iteration entirely. They don't appear in result arrays, predicates never evaluate them, aggregations skip them. The user's mental model is "a sub-attribute doesn't exist on cells where the parent doesn't match" — iteration treats those cells as if they weren't there.
+
+### Write semantics
+
+Writes ALWAYS proceed (rule a) regardless of parent. Storage at non-matching indices is invisible to reads (the guard returns `undefinedValue`), so "garbage" stored there is harmless. This sidesteps the order-of-writes hazard in async mode: a rule that writes `charge` before `cellType=Wire` in the same cell must not silently drop the charge write.
+
+### Per-cell conditional copy (sync mode)
+
+Both JS and WASM compilers emit a per-cell conditional copy at the top of the step loop body for sub-attributes: `w_subattr[i] = parent_matches(r_parent[i]) ? r_subattr[i] : defaultValue`. This:
+- Auto-scrubs storage to `defaultValue` one step after a flip-OUT (parent transitions out of valid).
+- Establishes a "starting point" for the cell rule. User writes (which happen later in the cell body) overwrite as needed, so order between `setAttribute(charge)` and `setAttribute(cellType)` doesn't matter.
+- JS: in `compile.ts`, the bulk `cellAttrs.map(a => 'w_${a.id}.set(r_${a.id});')` skips sub-attrs; `subAttrSyncCopyLines` are injected at the top of the loop body instead. InputColor (per-cell, non-loop) uses the same conditional shape inline.
+- WASM: `emitBulkCopyLines` skips sub-attrs (no bulk `memory.copy`); `emitBody` emits a `select`-based conditional copy at the top of each cell iteration for sub-attrs.
+
+### Async-mode pre-scrub (worker)
+
+Async mode shares a single buffer (`r_` and `w_` point at the same typed array), so the per-cell copy doesn't fit. Instead, `sim.worker.ts` runs `applySubAttributeAsyncScrub()` once per step before the cell loop: for each sub-attribute, set storage to `defaultValue` at indices where the parent's value isn't in `parentValues`. O(N) per sub-attribute per step.
+
+### CompileContext (JS-target)
+
+JS-target nodes that emit attribute reads call `ctx.readAttrExpr(attrId, idxExpr)` (5th arg on the `NodeTypeDef.compile` signature) instead of inlining `r_<id>[<idx>]`. For sub-attributes the helper emits the wrapped expression; for regular attributes it passes through. The matching `ctx.parentMatchesExpr` returns the iteration-skip predicate (or null for regular attrs). Helpers live in `src/modeler/vpl/compiler/subAttribute.ts` (target-independent core: `isSubAttribute`, `subAttrInfo`, plus JS-string emit helpers `attrValueLiteralJS`, `parentMatchExprJS`).
+
+### Compile-target coverage
+
+- **JS** — full support, scalar + iteration.
+- **WASM** — scalar reads supported (cell read, neighbor-by-index, neighbor-by-tag, update). Per-cell conditional copy supported via `emitBody`. Iteration over a sub-attribute (`getNeighborsAttribute`, `filterNeighbors`, aggregate/groupOperator/groupCounting/groupStatement with sub-attr source, `getNeighborsAttrByIndexes`) is REJECTED at compile time — the worker falls back to JS with a clear error. Fusion is also auto-disabled for sub-attribute sources via `detectFusableConsumers`.
+- **WebGPU** — sub-attributes refused at compile time entirely; falls back to WASM/JS. Per-cell scrub via dedicated compute pipeline is the planned next step but not implemented in this wave.
+
+### Indicator aggregation
+
+`computeLinkedIndicatorsFromBuffer` (sim.worker.ts) is an iteration context. For sub-attribute linked indicators, the per-cell loop prepends a parent-check guard — non-matching cells contribute to neither frequency buckets nor total sums. As a free upside, "total energy of predators"–style indicators become trivially expressible: mark `energy` as a sub-attribute of `creatureType` with `parentValues=[Predator]` and use a vanilla Total linked indicator on `energy`.
+
+### Cascade behaviour
+
+In `ModelContext` (`UPDATE_ATTRIBUTE` / `REMOVE_ATTRIBUTE` reducers):
+- Deleting an attribute that's used as a sub-attribute's parent auto-detaches the dependents (clears `parentAttributeId` / `parentValues` / `undefinedValue` on each).
+- Editing a parent's `tagOptions` remaps sub-attributes' `parentValues` (mirrors the existing tag-index remap for node configs). Tag entries whose names were removed are dropped from the set; surviving names are remapped to their new index.
+- Changing a parent attribute's type AWAY from Tag/Bool auto-detaches dependents.
+
+### Gotchas
+
+- The worker's `AttrDef` must carry the three sub-attribute fields (`parentAttributeId`, `parentValues`, `undefinedValue`). SimulatorView's `init` message construction must include them or the async pre-scrub silently no-ops because `cellAttrs[i].parentAttributeId` is `undefined`.
+- `scratchCtorForAttr` (JS compile.ts) returns `''` for sub-attributes — the scratch array must be a plain `Array` (not typed) so `GetNeighborsAttribute`'s filter-with-push pattern can call `.length = 0` and `.push()`. Typed arrays don't permit those operations.
+- The WASM iteration-bailout check at the top of `compileGraphWasm` scans BOTH `model.graphNodes` and every `model.macroDefs[*].nodes` — without the macro descent, sub-attribute iteration inside a macro would silently emit broken bytecode.
+- WASM `select` (opcode `0x1b`) pops `[a, b, cond]` and pushes `a` when `cond != 0`, else `b`. My emit pushes value-first, then undefined, then condition — so `cond=match`, `a=value`, `b=undefined`. Easy to flip if you're not careful.
+
