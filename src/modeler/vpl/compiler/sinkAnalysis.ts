@@ -166,8 +166,16 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
     }
   }
 
-  /** Visited-set for flow walk — guards against pathological flow cycles. */
+  /** Visited-set for flow walk — guards against re-walking children on revisit. */
   const visitedFlow = new Set<string>();
+
+  /** Per flow node, every parent scope it was reached from. Size > 1 means the
+   *  flow node is a "diamond entry" — `compileFlowChain` will emit its body
+   *  inline at each parent path. Value declarations placed inside the body
+   *  would only appear in one path's emission; references in the other path's
+   *  emission would be undeclared. Used by `diamondHoist` below to push such
+   *  values up to the LCA of the diamond's containing scopes. */
+  const flowNodeContainingScopes = new Map<string, Set<ScopeId>>();
 
   function walkFlowOutput(srcNodeId: string, srcPortId: string, parentScope: ScopeId): void {
     const targets = adj.flowOutputToTargets.get(`${srcNodeId}:${srcPortId}`);
@@ -176,15 +184,29 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
   }
 
   function walkFlowNode(nodeId: string, parentScope: ScopeId): void {
-    if (visitedFlow.has(nodeId)) return;
-    visitedFlow.add(nodeId);
+    // Record this parent path. Multiple paths to the same flow node accumulate;
+    // a multi-element set marks `nodeId` as a diamond entry.
+    let containing = flowNodeContainingScopes.get(nodeId);
+    if (!containing) { containing = new Set(); flowNodeContainingScopes.set(nodeId, containing); }
+    containing.add(parentScope);
 
     const node = adj.nodeMap.get(nodeId);
     if (!node) return;
     const type = node.data.nodeType;
 
-    // Every flow/action node's value inputs are used at its own scope.
+    // Every flow/action node's value inputs are used at its own scope. Must run
+    // on EVERY visit (not just the first), because a multi-parent flow node's
+    // value inputs — e.g., a Conditional's `condition` source wired to a node
+    // reached from two switch cases — need use scopes from every path. The
+    // LCA(uses) then naturally lands at the diamond's join.
     recordValueInputs(nodeId, parentScope);
+
+    // Skip recursion into children on revisit. The children are the same
+    // regardless of which parent path we arrived through; re-walking them
+    // would re-record the same scope keys with no new information. Diamond
+    // bodies still get correctly hoisted via `diamondHoist` below.
+    if (visitedFlow.has(nodeId)) return;
+    visitedFlow.add(nodeId);
 
     if (TRANSPARENT_FLOW_TYPES.has(type)) {
       walkFlowOutput(nodeId, 'first', parentScope);
@@ -427,6 +449,59 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
     return aa;
   }
 
+  // -----------------------------------------------------------------
+  // Diamond-taint analysis: identify scopes inside a multi-parent (DAG)
+  // region. Values whose tree-LCA lands in a tainted scope must hoist OUT,
+  // because compileFlowChain emits diamond bodies multiple times (once per
+  // parent path) and value declarations would only live in one of them.
+  //
+  // Seed: containing scopes + body scopes of any flow node reached via
+  //       multiple parent scopes (i.e., flowNodeContainingScopes[F].size > 1).
+  // Closure: a scope is tainted if any of its ancestors (up to cellTop) is
+  //          in the seed — descendants of a tainted scope are themselves
+  //          reached via multiple parent expansions of the ancestor's
+  //          re-emitted body.
+  // -----------------------------------------------------------------
+
+  const taintedSeed = new Set<ScopeId>();
+  for (const [flowNodeId, containing] of flowNodeContainingScopes) {
+    if (containing.size <= 1) continue;
+    // Containing scopes — declaring here is only visible on one path.
+    for (const s of containing) taintedSeed.add(s);
+    // Body scopes — re-emitted by compileFlowChain at each parent path.
+    for (const [scopeId, kind] of scopeKind) {
+      if (kind.kind === 'cellTop') continue;
+      if ((kind as { flowNodeId?: string }).flowNodeId === flowNodeId) {
+        taintedSeed.add(scopeId);
+      }
+    }
+  }
+
+  function isTainted(scope: ScopeId): boolean {
+    let cursor = scope;
+    while (cursor !== CELL_TOP) {
+      if (taintedSeed.has(cursor)) return true;
+      const parent = scopeParent.get(cursor);
+      if (parent === null || parent === undefined) break;
+      cursor = parent;
+    }
+    return false;
+  }
+
+  /** Climb out of any diamond-tainted region. Returns the deepest untainted
+   *  ancestor scope (or CELL_TOP). A no-op when `taintedSeed` is empty —
+   *  guarantees zero regression on tree-shaped flow graphs. */
+  function diamondHoist(scope: ScopeId): ScopeId {
+    let current = scope;
+    let safety = 100;
+    while (current !== CELL_TOP && isTainted(current) && safety-- > 0) {
+      const parent = scopeParent.get(current);
+      if (parent === null || parent === undefined) break;
+      current = parent;
+    }
+    return current;
+  }
+
   const emitScope = new Map<string, ScopeId>();
   for (const [valueId, uses] of allUses) {
     if (uses.size === 0) continue;
@@ -436,6 +511,13 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
     // Hoist past loop bodies where this value isn't forced to live (loops have
     // a per-iteration recompute cost, branches don't).
     lca = hoistPastLoops(valueId, lca);
+    // Hoist out of diamond-tainted regions (DAG flow patterns). Tree-LCA from
+    // single-parent scope walks gives wrong answers inside multi-parent flow
+    // node bodies — the body is emitted multiple times by compileFlowChain
+    // but the analyzer's compiled-Set dedup declares the value in only one of
+    // those emissions. Hoisting to the diamond's join scope makes the value
+    // visible from all parent-path emissions.
+    lca = diamondHoist(lca);
     emitScope.set(valueId, lca);
   }
 
