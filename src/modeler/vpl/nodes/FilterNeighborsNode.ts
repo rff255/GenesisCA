@@ -23,7 +23,7 @@ export const FilterNeighborsNode: NodeTypeDef = {
     { id: 'count', label: 'Count', kind: 'output', category: 'value', dataType: 'integer' },
   ],
   defaultConfig: { attributeId: '', operation: 'equals' },
-  compile: (nodeId, config, inputs, boundary) => {
+  compile: (nodeId, config, inputs, boundary, ctx) => {
     const attr = config.attributeId as string || '_undef';
     const compare = inputs['compare'] || '0';
     const op = config.operation as string;
@@ -44,12 +44,17 @@ export const FilterNeighborsNode: NodeTypeDef = {
       case 'lesserEqual':  cond = `${elemExpr} <= ${compare}`; break;
       default:             cond = `${elemExpr} === ${compare}`; break; // equals
     }
+    // Sub-attribute iteration semantics: non-matching neighbors are skipped
+    // entirely (don't reach the predicate). Conjunct the cond with the
+    // parent-match guard at the neighbor's resolved cell index.
+    const guard = ctx ? ctx.parentMatchesExpr(attr, cellExpr) : null;
+    const finalCond = guard ? `(${guard}) && (${cond})` : cond;
     return [
       `_v${nodeId}_result.length = 0; let ${cnt} = 0;`,
       `for (let ${fi} = 0; ${fi} < ${indexes}.length; ${fi}++) {`,
       `  const ${ni} = (${indexes}[${fi}]) | 0;`,
       `  ${stmts}`,
-      `  if (${cond}) _v${nodeId}_result[${cnt}++] = ${ni};`,
+      `  if (${finalCond}) _v${nodeId}_result[${cnt}++] = ${ni};`,
       `}`,
     ].join(' ') + '\n';
   },

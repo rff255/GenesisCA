@@ -33,7 +33,8 @@
  * map. Top-level fusion covers the common case.
  */
 
-import type { GraphNode, GraphEdge } from '../../../model/types';
+import type { CAModel, GraphNode, GraphEdge } from '../../../model/types';
+import { isSubAttribute } from './subAttribute';
 
 export type FusableConsumerType = 'aggregate' | 'groupOperator' | 'groupCounting' | 'groupStatement';
 
@@ -66,6 +67,7 @@ export function detectFusableConsumers(
   graphEdges: GraphEdge[],
   inputToSources: Map<string, Array<{ nodeId: string; portId: string }>>,
   inputToSource: Map<string, { nodeId: string; portId: string }>,
+  model?: CAModel,
 ): FusionResult {
   const nodeMap = new Map(graphNodes.map(n => [n.id, n] as const));
 
@@ -117,6 +119,16 @@ export function detectFusableConsumers(
     if (!srcNode || srcNode.data.nodeType !== 'getNeighborsAttribute') continue;
 
     if ((outDegree.get(src.nodeId) ?? 0) !== 1) continue;
+
+    // Refuse fusion for sub-attribute sources — the fused emit inlines
+    // `r_<attr>[...]` directly, bypassing the parent-check guard and
+    // filter-with-push that the non-fused GetNeighborsAttribute path applies.
+    // The non-fused path costs a scratch array but is correct.
+    if (model) {
+      const attrId = srcNode.data.config.attributeId as string | undefined;
+      const attr = attrId ? model.attributes.find(a => a.id === attrId) : undefined;
+      if (isSubAttribute(attr)) continue;
+    }
 
     fusedConsumers.set(node.id, { sourceId: src.nodeId, consumerType: t, op });
     skippedGather.add(src.nodeId);

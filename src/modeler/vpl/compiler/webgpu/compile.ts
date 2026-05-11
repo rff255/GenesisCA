@@ -32,6 +32,7 @@ import {
 import { getInlineValue, parseInlineNum } from '../inlinePort';
 import { INVALID_NI, packNI, NI_ARRAY_PRODUCERS } from '../niCodec';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } from '../sinkAnalysis';
+import { isSubAttribute } from '../subAttribute';
 
 export interface WebGPUEntryPoints {
   step: string;
@@ -2394,6 +2395,25 @@ export function compileGraphWebGPU(
   graphEdges: GraphEdge[],
   model: CAModel,
 ): WebGPUCompileResult {
+  // Sub-attributes not yet supported on WebGPU target — bail out and let the
+  // worker fall back to WASM/JS. Per-cell parent-check guards in WGSL are
+  // straightforward, but the post-step storage scrub for non-matching cells
+  // needs a dedicated compute pipeline plus careful binding management; for
+  // v1 we keep WebGPU on regular attrs only and surface a clear error.
+  const subAttrNames = model.attributes
+    .filter(a => isSubAttribute(a))
+    .map(a => a.name);
+  if (subAttrNames.length > 0) {
+    const list = subAttrNames.join(', ');
+    return {
+      shaderCode: '',
+      entryPoints: { step: 'step', outputMappings: [] },
+      layout: computeWebGPULayout(model),
+      viewerIds: {},
+      error: `Sub-attributes (${list}) are not yet supported on the WebGPU compile target. Falling back to WASM/JS, which handle this correctly.`,
+    };
+  }
+
   const layout = computeWebGPULayout(model);
 
   // Expand macro instances first so the rest of the compile sees a flat graph.

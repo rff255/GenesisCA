@@ -160,10 +160,16 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
     }
 
     case 'REMOVE_ATTRIBUTE': {
-      const modelAfterFilter = {
-        ...state.model,
-        attributes: state.model.attributes.filter(a => a.id !== action.id),
-      };
+      // Cascade: any sub-attribute pointing at this one as parent gets detached
+      // (parentAttributeId cleared along with parentValues/undefinedValue).
+      // Otherwise the dangling parent reference would silently survive in saved
+      // files and cause "invalid parent" errors at compile time.
+      const filteredAttrs = state.model.attributes
+        .filter(a => a.id !== action.id)
+        .map(a => a.parentAttributeId === action.id
+          ? { ...a, parentAttributeId: undefined, parentValues: undefined, undefinedValue: undefined }
+          : a);
+      const modelAfterFilter = { ...state.model, attributes: filteredAttrs };
       // Clear stale attributeId and tagAttributeId references in node configs
       const a1 = clearDeletedId(modelAfterFilter, 'attributeId', action.id);
       const a2 = patchAllNodes(
@@ -187,7 +193,8 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         ),
       };
 
-      // If tagOptions changed, remap tag indices in node configs
+      // If tagOptions changed, remap tag indices in node configs AND in any
+      // sub-attribute's parentValues that points at this attribute as parent.
       if (oldAttr && action.changes.tagOptions && oldAttr.tagOptions) {
         const oldOpts = oldAttr.tagOptions;
         const newOpts = action.changes.tagOptions;
@@ -202,8 +209,25 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
           return String(indexMap.get(oldIdx) ?? 0);
         };
         const attrId = action.id;
+        // Remap parentValues on sub-attributes that use this attribute as parent.
+        // Also drop parentValues entries whose tag was deleted (indexMap value 0
+        // is the fallback; if multiple old indices collapse to 0 we dedupe).
+        const remappedAttrs = updatedModel.attributes.map(sa => {
+          if (sa.parentAttributeId !== attrId || !sa.parentValues) return sa;
+          const deletedOld = new Set<number>();
+          for (let oi = 0; oi < oldOpts.length; oi++) {
+            if (newOpts.indexOf(oldOpts[oi]!) < 0) deletedOld.add(oi);
+          }
+          const next = Array.from(new Set(
+            sa.parentValues
+              .filter(v => !deletedOld.has(parseInt(v, 10)))
+              .map(v => remap(v)),
+          ));
+          return { ...sa, parentValues: next };
+        });
+        const remappedModel = { ...updatedModel, attributes: remappedAttrs };
         const patched = patchAllNodes(
-          updatedModel,
+          remappedModel,
           (cfg, nt) => {
             if ((nt === 'getConstant' && cfg.constType === 'tag' && cfg.tagAttributeId === attrId) ||
                 (nt === 'tagConstant' && cfg.attributeId === attrId) ||
@@ -228,8 +252,30 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         );
         return {
           ...state, isDirty: true,
-          model: { ...updatedModel, graphNodes: patched.graphNodes, macroDefs: patched.macroDefs },
+          model: { ...remappedModel, graphNodes: patched.graphNodes, macroDefs: patched.macroDefs },
         };
+      }
+
+      // Parent-type change cascade. If the attribute was previously Tag or Bool
+      // and is being changed to anything else (including Tag→Bool or Bool→Tag),
+      // any sub-attribute that referenced it as parent has stale parentValues
+      // (tag indices vs bool 0/1 are encoded differently and don't carry over).
+      // Two cases:
+      //   - new type is still Tag or Bool → keep the parent link, RESET
+      //     parentValues to [] so the user picks again under the new type.
+      //   - new type is something else (int/float/color/neighborIndex) → detach
+      //     entirely (clear parentAttributeId, parentValues, undefinedValue).
+      if (oldAttr && action.changes.type
+          && oldAttr.type !== action.changes.type
+          && (oldAttr.type === 'tag' || oldAttr.type === 'bool')) {
+        const newType = action.changes.type;
+        const stillValidParent = newType === 'tag' || newType === 'bool';
+        const detached = updatedModel.attributes.map(a => a.parentAttributeId === action.id
+          ? stillValidParent
+              ? { ...a, parentValues: [] }
+              : { ...a, parentAttributeId: undefined, parentValues: undefined, undefinedValue: undefined }
+          : a);
+        return { ...state, isDirty: true, model: { ...updatedModel, attributes: detached } };
       }
 
       return { ...state, isDirty: true, model: updatedModel };

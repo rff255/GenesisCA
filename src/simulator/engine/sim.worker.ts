@@ -28,6 +28,12 @@ interface AttrDef {
    *  is "constant". When undefined/empty, boundary sentinel uses defaultValue. */
   boundaryValue?: string;
   tagOptions?: string[];
+  /** Sub-attribute schema fields. When `parentAttributeId` is set, this attribute
+   *  is "only well-defined" on cells whose parent's value is in `parentValues`.
+   *  Used by the async pre-scrub and the indicator aggregation guard. */
+  parentAttributeId?: string;
+  parentValues?: string[];
+  undefinedValue?: string;
 }
 
 interface NeighborhoodDef {
@@ -694,6 +700,64 @@ async function ensureCpuAttrsFresh(): Promise<void> {
   gpuOwnsAttrs = false;
 }
 
+/** Parse an attribute's `defaultValue` string into the numeric storage value.
+ *  Mirrors attrValueLiteralJS but evaluates to a JS number. */
+function parseAttrValue(attr: AttrDef, valueStr: string | undefined): number {
+  const raw = valueStr ?? attr.defaultValue ?? '';
+  switch (attr.type) {
+    case 'bool': return raw === 'true' || raw === '1' ? 1 : 0;
+    case 'integer':
+    case 'tag':
+    case 'neighborIndex': {
+      const n = parseInt(raw, 10);
+      return Number.isFinite(n) ? n : 0;
+    }
+    case 'float': {
+      const n = parseFloat(raw);
+      return Number.isFinite(n) ? n : 0;
+    }
+    default: return 0;
+  }
+}
+
+/** Build a Set<number> of parent values (as integers) for matching. */
+function buildParentMatchSet(parent: AttrDef, parentValues: string[]): Set<number> {
+  return new Set(parentValues.map(v => {
+    if (parent.type === 'bool') return v === 'true' || v === '1' ? 1 : 0;
+    if (parent.type === 'tag') {
+      const n = parseInt(v, 10);
+      return Number.isFinite(n) ? n : 0;
+    }
+    return 0;
+  }));
+}
+
+/** Async-mode pre-scrub: for every sub-attribute, set storage to `defaultValue`
+ *  at indices where the parent's value is NOT in `parentValues`. Runs once per
+ *  step before the cell loop; matches the sync-mode per-cell conditional copy
+ *  semantics for non-matching cells. No-op when no sub-attributes exist. */
+function applySubAttributeAsyncScrub(): void {
+  for (const attr of cellAttrs) {
+    const parentId = attr.parentAttributeId;
+    if (!parentId) continue;
+    const parentValues = attr.parentValues;
+    if (!parentValues || parentValues.length === 0) continue;
+    const parent = cellAttrs.find(p => p.id === parentId);
+    if (!parent) continue;
+    const parentArr = readAttrs[parentId];
+    const subArr = readAttrs[attr.id];
+    if (!parentArr || !subArr) continue;
+    const matchSet = buildParentMatchSet(parent, parentValues);
+    const defaultV = parseAttrValue(attr, attr.defaultValue);
+    for (let i = 0; i < total; i++) {
+      const pv = (parentArr as unknown as { [k: number]: number })[i];
+      if (!matchSet.has(pv as number)) {
+        (subArr as unknown as { [k: number]: number })[i] = defaultV;
+      }
+    }
+  }
+}
+
 function runStep(): void {
   // Wave 3: triple branch — WebGPU > WASM > JS. WebGPU only takes the
   // dispatch when the runtime has finished its async buffer + pipeline setup.
@@ -754,6 +818,13 @@ function runStep(): void {
       }
     }
     // 'cyclic': orderArray stays as shuffled at init — no per-step work
+
+    // Sub-attribute pre-scrub (async mode only): the cell loop uses a single
+    // buffer, so the JS/WASM emit can't insert a "w = match ? r : default"
+    // copy at the top of each cell. Instead, scrub non-matching cells to
+    // defaultValue once per step before the cell loop runs. Sync mode does
+    // this inline via the per-cell copy emit (see compile.ts / wasm/compile.ts).
+    applySubAttributeAsyncScrub();
   }
 
   // ONE call per step — the loop is inside the compiled function.
@@ -1378,22 +1449,48 @@ function computeLinkedIndicatorsFromBuffer(): void {
     if (!def.watched) continue;
     const arr = readAttrs[def.attrId ?? ''];
     if (!arr || !def.attrType || !def.aggregation) continue;
+    // Sub-attribute guard: when the linked attribute is a sub-attribute, skip
+    // cells whose parent's value isn't in the configured parentValues. Empty
+    // parentValues \u2192 matchSet is an empty Set \u2192 ALL cells are skipped (semantics:
+    // "the sub-attribute is defined on no cells"). This is the iteration
+    // semantics \u2014 non-matching cells don't contribute to any bucket.
+    const linkedAttr = cellAttrs.find(a => a.id === def.attrId);
+    const isSubAttr = !!linkedAttr?.parentAttributeId;
+    const parent = isSubAttr
+      ? cellAttrs.find(p => p.id === linkedAttr!.parentAttributeId)
+      : null;
+    const parentArr = (parent && readAttrs[parent.id]) || null;
+    const matchSet = isSubAttr && parent
+      ? buildParentMatchSet(parent, linkedAttr!.parentValues ?? [])
+      : null;
+    const skipUnmatched = parentArr && matchSet ? matchSet : null;
+    const pa = parentArr as unknown as { [k: number]: number } | null;
+
     if (def.aggregation === 'total') {
       let sum = 0;
-      for (let i = 0; i < total; i++) sum += arr[i] ?? 0;
+      for (let i = 0; i < total; i++) {
+        if (skipUnmatched && pa && !skipUnmatched.has(pa[i] as number)) continue;
+        sum += arr[i] ?? 0;
+      }
       linkedResults[def.id] = sum;
       continue;
     }
     // frequency
     if (def.attrType === 'bool') {
       let t = 0;
-      for (let i = 0; i < total; i++) if (arr[i]) t++;
-      linkedResults[def.id] = { 'true': t, 'false': total - t };
+      let counted = 0;
+      for (let i = 0; i < total; i++) {
+        if (skipUnmatched && pa && !skipUnmatched.has(pa[i] as number)) continue;
+        counted++;
+        if (arr[i]) t++;
+      }
+      linkedResults[def.id] = { 'true': t, 'false': counted - t };
     } else if (def.attrType === 'tag') {
       const opts = def.tagOptions || [];
       const freq: Record<string, number> = {};
       for (const name of opts) freq[name] = 0;
       for (let i = 0; i < total; i++) {
+        if (skipUnmatched && pa && !skipUnmatched.has(pa[i] as number)) continue;
         const idx = arr[i] ?? 0;
         const name = opts[idx];
         if (name !== undefined) freq[name] = (freq[name] ?? 0) + 1;
@@ -1402,6 +1499,7 @@ function computeLinkedIndicatorsFromBuffer(): void {
     } else if (def.attrType === 'integer') {
       const freq: Record<string, number> = {};
       for (let i = 0; i < total; i++) {
+        if (skipUnmatched && pa && !skipUnmatched.has(pa[i] as number)) continue;
         const k = String(arr[i] ?? 0);
         freq[k] = (freq[k] ?? 0) + 1;
       }
@@ -1409,19 +1507,23 @@ function computeLinkedIndicatorsFromBuffer(): void {
     } else if (def.attrType === 'float') {
       const bins = Math.max(1, def.binCount ?? 10);
       let mn = Infinity, mx = -Infinity;
+      let counted = 0;
       for (let i = 0; i < total; i++) {
+        if (skipUnmatched && pa && !skipUnmatched.has(pa[i] as number)) continue;
         const v = arr[i] ?? 0;
         if (v < mn) mn = v;
         if (v > mx) mx = v;
+        counted++;
       }
       if (!Number.isFinite(mn) || !Number.isFinite(mx) || mn === mx) {
-        linkedResults[def.id] = { [`${(mn || 0).toFixed(2)}\u2013${(mn || 0).toFixed(2)}`]: total };
+        linkedResults[def.id] = { [`${(mn || 0).toFixed(2)}\u2013${(mn || 0).toFixed(2)}`]: counted };
         continue;
       }
       const range = mx - mn;
       const step = range / bins;
       const counts: number[] = new Array(bins).fill(0);
       for (let i = 0; i < total; i++) {
+        if (skipUnmatched && pa && !skipUnmatched.has(pa[i] as number)) continue;
         const v = arr[i] ?? 0;
         let b = Math.floor(((v - mn) / range) * bins);
         if (b >= bins) b = bins - 1;

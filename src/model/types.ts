@@ -33,6 +33,22 @@ export interface Attribute {
    *  neighborhood. Not load-bearing at runtime — the stored value is a packed
    *  (dr, dc) i32 offset, independent of any neighborhood. */
   neighborhoodHintId?: string;
+  /** Sub-attribute marker — when set, this cell attribute is "only well-defined"
+   *  on cells whose parent attribute is in `parentValues`. Reads on non-matching
+   *  cells return `undefinedValue`; writes always proceed (storage at non-matching
+   *  indices is invisible to reads). Parent must be a Tag or Boolean cell
+   *  attribute that is itself not a sub-attribute. Model attributes can't be
+   *  sub-attributes. */
+  parentAttributeId?: string;
+  /** Parent attribute values that "enable" this sub-attribute. Each entry uses
+   *  the same string encoding as `defaultValue` — tag indices like "0"/"1"/"2"
+   *  for tag parents, or "true"/"false" for bool parents. Multi-value when the
+   *  sub-attribute is meaningful on more than one parent value (e.g. charge on
+   *  Wire AND Capacitor). */
+  parentValues?: string[];
+  /** Sub-attributes only: the value returned by a read when the parent's value
+   *  is NOT in `parentValues`. Same string encoding as `defaultValue`. */
+  undefinedValue?: string;
 }
 
 /** A neighborhood definition — list of relative offsets from the central cell */

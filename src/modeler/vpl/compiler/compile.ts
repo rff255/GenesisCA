@@ -1,12 +1,18 @@
 import type { GraphNode, GraphEdge, CAModel } from '../../../model/types';
 import { getNodeDef } from '../nodes/registry';
-import { parseHandleId } from '../types';
+import { parseHandleId, type CompileContext } from '../types';
 import { classifyLoopInvariant } from './loopInvariant';
 import { safeId } from './identifierSafe';
 import { detectFusableConsumers, type FusionResult } from './fusion';
 import { getInlineValue } from './inlinePort';
 import { INVALID_NI, packNI, NI_ARRAY_PRODUCERS } from './niCodec';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId } from './sinkAnalysis';
+import {
+  isSubAttribute,
+  subAttrInfo,
+  attrValueLiteralJS,
+  parentMatchExprJS,
+} from './subAttribute';
 
 // ---------------------------------------------------------------------------
 // Graph adjacency helpers
@@ -84,6 +90,11 @@ function scratchCtorForAttr(attrId: string | undefined, model: CAModel | undefin
   if (!attrId || !model) return '';
   const attr = model.attributes.find(a => a.id === attrId);
   if (!attr) return '';
+  // Sub-attribute scratch arrays use plain Array (not typed) so the filter-with-push
+  // emit in GetNeighborsAttribute can call `.length = 0` and `.push(...)` —
+  // operations not supported on typed arrays. The output is variable-length,
+  // excluding neighbors whose parent doesn't match.
+  if (isSubAttribute(attr)) return '';
   switch (attr.type) {
     case 'bool': return 'Uint8Array';
     case 'integer': return 'Int32Array';
@@ -286,6 +297,38 @@ function compileRoot(
   // Some internal helpers in this function were written when `model` was unused
   // (named `_model`). Keep both names in scope for those references.
   const _model = model;
+
+  // Sub-attribute-aware CompileContext, threaded through to each node's compile().
+  // Nodes call `ctx.readAttrExpr(attrId, idxExpr)` instead of inlining
+  // `r_<id>[idx]`, so reads of sub-attributes get wrapped with a parent-check
+  // guard returning `undefinedValue` on mismatch. Regular attributes pass through.
+  const ctx: CompileContext = {
+    readAttrExpr(attrId, idxExpr, opts) {
+      const buf: 'r' | 'w' = opts?.fromWriteBuffer ? 'w' : 'r';
+      if (!model) return `${buf}_${attrId}[${idxExpr}]`;
+      const attr = model.attributes.find(a => a.id === attrId);
+      const info = subAttrInfo(attr, model);
+      if (!info || !attr) return `${buf}_${attrId}[${idxExpr}]`;
+      const undefLit = attrValueLiteralJS(attr, info.undefinedValue);
+      const guard = parentMatchExprJS(info.parent, info.parentValues, idxExpr, buf);
+      return `((${guard}) ? ${buf}_${attrId}[${idxExpr}] : ${undefLit})`;
+    },
+    parentMatchesExpr(attrId, idxExpr, opts) {
+      const buf: 'r' | 'w' = opts?.fromWriteBuffer ? 'w' : 'r';
+      if (!model) return null;
+      const attr = model.attributes.find(a => a.id === attrId);
+      const info = subAttrInfo(attr, model);
+      if (!info) return null;
+      return parentMatchExprJS(info.parent, info.parentValues, idxExpr, buf);
+    },
+    defaultValueLiteral(attrId) {
+      if (!model) return '0';
+      const attr = model.attributes.find(a => a.id === attrId);
+      if (!attr) return '0';
+      return attrValueLiteralJS(attr, attr.defaultValue);
+    },
+  };
+
   const compiled = new Set<string>();
   const valueLines: string[] = [];
   const preLoopValueLines: string[] = [];
@@ -539,7 +582,7 @@ function compileRoot(
         }
       }
 
-      const code = iDef.compile(innerNodeId, iNode.data.config, iInputVars, _model?.properties.boundaryTreatment);
+      const code = iDef.compile(innerNodeId, iNode.data.config, iInputVars, _model?.properties.boundaryTreatment, ctx);
       if (code) {
         // Rewrite variable names in emitted code to use scoped prefix
         // Note: multi-output vars use _v{id}_{port} — the trailing _ breaks \b, so we
@@ -691,7 +734,7 @@ function compileRoot(
           }
         }
       }
-      const code = iDef.compile(nid, iNode.data.config, iInputVars, _model?.properties.boundaryTreatment);
+      const code = iDef.compile(nid, iNode.data.config, iInputVars, _model?.properties.boundaryTreatment, ctx);
       if (code) {
         const scopedCode = code
           .replace(new RegExp(`\\b_v${nid}_`, 'g'), `${nestedPrefix}_v${nid}_`)
@@ -885,7 +928,7 @@ function compileRoot(
     const compileConfig = (node.data.nodeType === 'groupStatement' || node.data.nodeType === 'groupCounting')
       ? { ...node.data.config, _indexesConnected: needsIndexes }
       : node.data.config;
-    const code = def.compile(nodeId, compileConfig, inputVars, model?.properties.boundaryTreatment);
+    const code = def.compile(nodeId, compileConfig, inputVars, model?.properties.boundaryTreatment, ctx);
     if (code) {
       // Loop-invariant nodes (e.g. modelAttrs reads + arithmetic over them)
       // hoist out of the cell loop and emit once per step instead of per cell.
@@ -1088,7 +1131,7 @@ function compileRoot(
               if (inlineVal !== undefined) iInputVars[port.id] = inlineVal;
             }
           }
-          const code = iDef.compile(iNode.id, iNode.data.config, iInputVars, _model?.properties.boundaryTreatment);
+          const code = iDef.compile(iNode.id, iNode.data.config, iInputVars, _model?.properties.boundaryTreatment, ctx);
           if (code) {
             // Scope the emitted code
             const scopedCode = code
@@ -1304,7 +1347,7 @@ function compileRoot(
             if (inlineVal !== undefined) inputVars[port.id] = inlineVal;
           }
         }
-        const code = def.compile(node.id, node.data.config, inputVars, model?.properties.boundaryTreatment);
+        const code = def.compile(node.id, node.data.config, inputVars, model?.properties.boundaryTreatment, ctx);
         if (code) flowLines.push(indent + code.trimEnd());
       }
     }
@@ -1373,28 +1416,39 @@ function buildLinkedIndicatorCode(model: CAModel): {
   // (single buffer is fully updated). A separate pass over a typed array is fast
   // (sequential memory scan, perfect cache locality) and avoids the async-mode bug
   // where mid-loop aggregation sees a mix of old and new values.
+  //
+  // Sub-attribute guard: if `attr` is a sub-attribute, the per-cell loop must skip
+  // cells whose parent isn't in parentValues — the iteration semantics treat those
+  // cells as if the sub-attribute doesn't exist on them.
   for (const ind of watched) {
     const attr = model.attributes.find(a => a.id === ind.linkedAttributeId);
     if (!attr || attr.isModelAttribute) continue;
     const wVar = `w_${attr.id}`;
     const key = JSON.stringify(ind.id);
+    const subInf = subAttrInfo(attr, model);
+    const guard = subInf
+      ? `(${parentMatchExprJS(subInf.parent, subInf.parentValues, '_i', 'w')})`
+      : null;
+    // Empty parentValues on a sub-attr → guard is `false`, so all cells skipped.
+    // (parentMatchExprJS returns 'false' when parentValues array is empty.)
+    const skip = guard ? `if (!${guard}) continue; ` : '';
 
     if (ind.linkedAggregation === 'total') {
       postLoopLines.push(
-        `  { let _s = 0; for (let _i = 0; _i < total; _i++) _s += ${wVar}[_i];` +
+        `  { let _s = 0; for (let _i = 0; _i < total; _i++) { ${skip}_s += ${wVar}[_i]; }` +
         ` _linkedResults[${key}] = _s; }`,
       );
     } else if (attr.type === 'bool') {
       postLoopLines.push(
-        `  { let _t = 0; for (let _i = 0; _i < total; _i++) if (${wVar}[_i]) _t++;` +
-        ` _linkedResults[${key}] = { 'true': _t, 'false': total - _t }; }`,
+        `  { let _t = 0; let _n = 0; for (let _i = 0; _i < total; _i++) { ${skip}_n++; if (${wVar}[_i]) _t++; }` +
+        ` _linkedResults[${key}] = { 'true': _t, 'false': _n - _t }; }`,
       );
     } else if (attr.type === 'tag') {
       const tagLen = attr.tagOptions?.length || 1;
       const tagNames = JSON.stringify(attr.tagOptions || []);
       postLoopLines.push(
         `  { const _c = new Int32Array(${tagLen});` +
-        ` for (let _i = 0; _i < total; _i++) _c[${wVar}[_i]]++;` +
+        ` for (let _i = 0; _i < total; _i++) { ${skip}_c[${wVar}[_i]]++; }` +
         ` const _tn = ${tagNames}; const _f = {};` +
         ` for (let _ti = 0; _ti < ${tagLen}; _ti++) _f[_tn[_ti]] = _c[_ti];` +
         ` _linkedResults[${key}] = _f; }`,
@@ -1402,17 +1456,17 @@ function buildLinkedIndicatorCode(model: CAModel): {
     } else if (attr.type === 'integer') {
       postLoopLines.push(
         `  { const _f = {};` +
-        ` for (let _i = 0; _i < total; _i++) { const _k = ${wVar}[_i]; _f[_k] = (_f[_k] || 0) + 1; }` +
+        ` for (let _i = 0; _i < total; _i++) { ${skip}const _k = ${wVar}[_i]; _f[_k] = (_f[_k] || 0) + 1; }` +
         ` _linkedResults[${key}] = _f; }`,
       );
     } else if (attr.type === 'float') {
       const bc = ind.binCount || 10;
       postLoopLines.push(
         `  { let _mn = Infinity, _mx = -Infinity;` +
-        ` for (let _i = 0; _i < total; _i++) { const _v = ${wVar}[_i]; if (_v < _mn) _mn = _v; if (_v > _mx) _mx = _v; }` +
+        ` for (let _i = 0; _i < total; _i++) { ${skip}const _v = ${wVar}[_i]; if (_v < _mn) _mn = _v; if (_v > _mx) _mx = _v; }` +
         ` if (_mn === _mx) _mx = _mn + 1;` +
         ` const _bw = (_mx - _mn) / ${bc}; const _bins = new Int32Array(${bc});` +
-        ` for (let _i = 0; _i < total; _i++) { let _b = (${wVar}[_i] - _mn) / _bw | 0; if (_b >= ${bc}) _b = ${bc - 1}; _bins[_b]++; }` +
+        ` for (let _i = 0; _i < total; _i++) { ${skip}let _b = (${wVar}[_i] - _mn) / _bw | 0; if (_b >= ${bc}) _b = ${bc - 1}; _bins[_b]++; }` +
         ` const _f = {};` +
         ` for (let _bi = 0; _bi < ${bc}; _bi++)` +
         ` { const _lo = (_mn + _bi * _bw).toFixed(2); const _hi = (_mn + (_bi + 1) * _bw).toFixed(2);` +
@@ -1591,19 +1645,46 @@ export function compileGraph(
   // collapse the two-loop pattern (gather scratch + reduce) into one inlined
   // loop. Halves work for the MNCA-style hot path (large neighborhoods).
   // Shared with the WASM compiler.
-  const fusion = detectFusableConsumers(graphNodes, graphEdges, inputToSources, inputToSource);
+  const fusion = detectFusableConsumers(graphNodes, graphEdges, inputToSources, inputToSource, model);
 
   const { params: loopParams, cellAttrs } = buildLoopParams(model);
   const cellParams = buildCellParams(model);
+
+  // Per-attribute sub-attribute info (null for regular attrs).
+  const subAttrInfoById = new Map<string, ReturnType<typeof subAttrInfo>>();
+  for (const a of cellAttrs) {
+    const full = model.attributes.find(x => x.id === a.id);
+    subAttrInfoById.set(a.id, subAttrInfo(full, model));
+  }
 
   // Sync mode: bulk-copy r→w ONCE before the loop (TypedArray.set dispatches to
   // SIMD memcpy in V8). Replaces N per-cell stores with one engine call per attr.
   // Cell rules then overwrite specific indices inside the loop; untouched cells
   // retain the prior generation's value, matching the previous semantics exactly.
   // Async mode: r_ and w_ are the same buffer so no copy needed.
+  //
+  // Sub-attributes can't use the bulk .set() — non-matching cells need to be
+  // scrubbed to defaultValue, so they get a conditional per-cell copy at the
+  // top of the loop body instead (see subAttrSyncCopyLines below).
   const bulkCopyLines = isAsync
     ? []
-    : cellAttrs.map(a => `  w_${a.id}.set(r_${a.id});`);
+    : cellAttrs.filter(a => !subAttrInfoById.get(a.id)).map(a => `  w_${a.id}.set(r_${a.id});`);
+
+  // Per-cell conditional copy for sub-attributes, emitted at the top of the
+  // sync loop body. `w_subattr[idx] = parent_matches(r_parent[idx]) ? r_subattr[idx] : defaultValue`.
+  // Keeps storage at non-matching indices scrubbed to defaultValue between steps.
+  // Async mode: handled by a worker-side pre-scrub pass (r_ and w_ share one buffer).
+  const subAttrSyncCopyLines = isAsync
+    ? []
+    : cellAttrs
+        .filter(a => subAttrInfoById.get(a.id))
+        .map(a => {
+          const info = subAttrInfoById.get(a.id)!;
+          const full = model.attributes.find(x => x.id === a.id)!;
+          const guard = parentMatchExprJS(info!.parent, info!.parentValues, 'idx', 'r');
+          const defaultLit = attrValueLiteralJS(full, full.defaultValue);
+          return `    w_${a.id}[idx] = (${guard}) ? r_${a.id}[idx] : ${defaultLit};`;
+        });
 
   // Per-step hoist of activeViewer comparisons. SetColorViewer compile() emits
   // `if (_isV_<safeId(mappingId)>) { ... }`; the actual string compare happens
@@ -1683,6 +1764,10 @@ export function compileGraph(
         // Wave A.6: per-cell (row, col) decoded from idx — see async branch comment.
         '    const _row = (idx / W) | 0;',
         '    const _col = idx - _row * W;',
+        // Sub-attribute conditional copy: scrub non-matching cells to defaultValue,
+        // copy from r_ to w_ for matching cells. Replaces the bulk .set() that
+        // regular attrs use. User rule writes later overwrite w_ as needed.
+        ...subAttrSyncCopyLines,
         ...valueLines,
         '',
         ...flowLines,
@@ -1708,7 +1793,16 @@ export function compileGraph(
     // preLoopValueLines (modelAttrs reads etc.) still go in the function preamble —
     // they happen once per call, not per cell, but the same hoisting structure
     // keeps the body free of redundant work.
-    const icCopyLines = cellAttrs.map(a => `  w_${a.id}[idx] = r_${a.id}[idx];`);
+    // Per-cell copy. Sub-attributes use the conditional form (scrub non-matching cells
+     // to defaultValue) — same semantics as the sync step's subAttrSyncCopyLines.
+    const icCopyLines = cellAttrs.map(a => {
+      const info = subAttrInfoById.get(a.id);
+      if (!info) return `  w_${a.id}[idx] = r_${a.id}[idx];`;
+      const full = model.attributes.find(x => x.id === a.id)!;
+      const guard = parentMatchExprJS(info.parent, info.parentValues, 'idx', 'r');
+      const defaultLit = attrValueLiteralJS(full, full.defaultValue);
+      return `  w_${a.id}[idx] = (${guard}) ? r_${a.id}[idx] : ${defaultLit};`;
+    });
     const code = [
       `(function(_r, _g, _b, ${cellParams}) {`,
       '  const colorIdx = idx * 4;',

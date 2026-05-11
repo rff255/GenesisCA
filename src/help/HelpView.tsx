@@ -146,6 +146,24 @@ export function HelpView() {
             <li><strong>Tag</strong> &mdash; An integer with named values (picklist). Define tag options in the editor, and use the Tag Constant node to reference them by name.</li>
             <li><strong>Color</strong> (model attributes only) &mdash; An RGB color value. Accessed via Get Model Attribute with separate R, G, B output ports. Adjustable live in the simulator.</li>
             <li><strong>Boundary Value</strong> (cell attributes only, constant boundary) &mdash; the value held by out-of-grid cells. Shown next to Default Value only when the model&apos;s boundary treatment is <em>constant</em>. Leave blank to inherit the default.</li>
+            <li>
+              <strong>Sub-attribute</strong> (cell attributes only) &mdash; a cell
+              attribute marked as &quot;only well-defined&quot; on cells whose
+              parent attribute (a Tag or Bool cell attribute) is in a chosen
+              set of values. For example, a <em>charge</em> attribute might be
+              defined only on cells whose <em>state</em> is Wire / Pulsar /
+              Switch. Reads on non-matching cells return the configured{' '}
+              <strong>Undefined Value</strong>; in iteration contexts (Get
+              Neighbors Attribute, Filter Neighbors, Aggregate, linked
+              indicators) non-matching cells are <em>excluded entirely</em>{' '}
+              &mdash; so &quot;count head-charges around me&quot; becomes one
+              node instead of a manual filter-by-state chain. Writes proceed
+              regardless of parent value, but storage at non-matching indices
+              is invisible (reads always go through the parent-check guard).
+              The compiler injects the guards automatically; no graph changes
+              are needed. Currently supported on JS and WASM compile targets
+              (WebGPU and WASM iteration over sub-attributes fall back to JS).
+            </li>
           </ul>
 
           <h3 className={styles.h3}>Neighborhoods Panel (N)</h3>
