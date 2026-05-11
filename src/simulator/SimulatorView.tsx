@@ -233,14 +233,39 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     return parts.join('\n\n');
   }, [model.mappings]);
 
-  // Compile graph (deps include indicator watched state since it affects compiled code)
+  // Compile graph (deps include indicator watched state since it affects compiled code).
+  // Always returns the JS CompileResult — it's the universal fallback for the worker
+  // and the Show Code source when JS is the selected target. The Show Code panel
+  // displays whichever artefact matches the currently-selected compile target:
+  //   - JS selected      → readable JS source from buildFullCode
+  //   - WebGPU selected  → WGSL shader source (an extra compile pass; only when active)
+  //   - WASM selected    → placeholder string (binary, not human-readable)
   const compileModel = useCallback(() => {
     const result = compileGraph(model.graphNodes, model.graphEdges, model);
-    setCompiledCode(buildFullCode(result));
-    setCompileError(result.error ?? '');
+    if (model.properties.useWebGPU) {
+      try {
+        const wgpu = compileGraphWebGPU(model.graphNodes, model.graphEdges, model);
+        setCompiledCode(wgpu.shaderCode || '(no shader emitted)');
+        setCompileError(wgpu.error || result.error || '');
+      } catch (e) {
+        setCompiledCode('');
+        setCompileError(String((e as Error)?.message || e));
+      }
+    } else if (model.properties.useWasm) {
+      setCompiledCode(
+        '/* WebAssembly target selected.\n' +
+        ' * The compiled module is a binary WASM blob — not human-readable.\n' +
+        ' * Switch to "Debug / Reference (JS)" in Model Properties to inspect generated code.\n' +
+        ' */'
+      );
+      setCompileError(result.error ?? '');
+    } else {
+      setCompiledCode(buildFullCode(result));
+      setCompileError(result.error ?? '');
+    }
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model.graphNodes, model.graphEdges, model.indicators, buildFullCode]);
+  }, [model.graphNodes, model.graphEdges, model.indicators, model.properties.useWasm, model.properties.useWebGPU, buildFullCode]);
 
   // Draw using ImageData + zoom/pan transform
   const draw = useCallback(() => {
@@ -790,10 +815,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const dimsModel = (model.properties.gridWidth === w && model.properties.gridHeight === h)
       ? model
       : { ...model, properties: { ...model.properties, gridWidth: w, gridHeight: h } };
-    // Wave 2: try to compile a WASM step alongside the JS one. If anything
-    // fails (unsupported node, etc.) we still ship the JS bytes; the worker
-    // falls back automatically when wasmStepBytes is missing/empty.
+    // Wave 2: compile WASM only when the user has selected the WASM target.
+    // Mirrors the WebGPU gating below — saves a compile pass per model change
+    // when WASM isn't active, and avoids surfacing WASM-only errors when the
+    // user is on JS or WebGPU.
     const wasmResult = (() => {
+      if (!model.properties.useWasm) {
+        return { bytes: new Uint8Array(), minMemoryPages: 1, error: '', viewerIds: {}, exports: [] };
+      }
       try {
         const layout = computeLayoutFromModel(dimsModel);
         const viewerIds = buildViewerIds(dimsModel);
@@ -1052,9 +1081,32 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         ? model
         : { ...model, properties: { ...model.properties, gridWidth: curW, gridHeight: curH } };
       const result = compileGraph(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
-      setCompiledCode(buildFullCode(result));
-      setCompileError(result.error ?? '');
+      // Show Code follows the selected target — same dispatch as compileModel().
+      if (dimsModel.properties.useWebGPU) {
+        try {
+          const wgpu = compileGraphWebGPU(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
+          setCompiledCode(wgpu.shaderCode || '(no shader emitted)');
+          setCompileError(wgpu.error || result.error || '');
+        } catch (e) {
+          setCompiledCode('');
+          setCompileError(String((e as Error)?.message || e));
+        }
+      } else if (dimsModel.properties.useWasm) {
+        setCompiledCode(
+          '/* WebAssembly target selected.\n' +
+          ' * The compiled module is a binary WASM blob — not human-readable.\n' +
+          ' * Switch to "Debug / Reference (JS)" in Model Properties to inspect generated code.\n' +
+          ' */'
+        );
+        setCompileError(result.error ?? '');
+      } else {
+        setCompiledCode(buildFullCode(result));
+        setCompileError(result.error ?? '');
+      }
       const wasmResult = (() => {
+        if (!dimsModel.properties.useWasm) {
+          return { bytes: new Uint8Array(), minMemoryPages: 1, error: '', viewerIds: {}, exports: [] };
+        }
         try {
           const layout = computeLayoutFromModel(dimsModel);
           const viewerIds = buildViewerIds(dimsModel);
@@ -1064,6 +1116,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         }
       })();
       const webgpuResult = (() => {
+        if (!dimsModel.properties.useWebGPU) {
+          return { shaderCode: '', entryPoints: { step: 'step', outputMappings: [] as Array<{ mappingId: string; entry: string }> }, layout: null as never, error: '' };
+        }
         try {
           return compileGraphWebGPU(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
         } catch (e) {

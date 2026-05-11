@@ -2186,8 +2186,51 @@ function emitScalarAggregate(
     if (op === 'mul') op = 'product';
     if (op === 'mean') op = 'average';
     if (op === 'random') {
-      ctx.errors.push('groupOperator random pick on multi-source not yet WASM-supported');
-      return null;
+      // Multi-source random pick: choose uniform index in [0, N), select that
+      // source's value as the result. Mirrors the single-source path at the top
+      // of compileArrayNode (`if (op === 'random') { ... }`) and the JS impl at
+      // GroupOperatorNode.compile() (`Math.floor(Math.random() * values.length)`).
+      const em = ctx.emitter;
+      const N = sourceRefs.length;
+      if (N === 0) {
+        ctx.errors.push('groupOperator: random requires at least one source');
+        return null;
+      }
+      // Advance shared xorshift32 RNG (stays in lockstep with JS / single-source path).
+      const rsLocal = em.allocLocal(I32);
+      em.i32Const(0); em.i32Load(ctx.layout.rngStateOffset, 2); em.localSet(rsLocal);
+      em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(13); em.emit(byte(0x74)); em.emit(byte(0x73)); em.localSet(rsLocal);
+      em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(17); em.emit(byte(0x76)); em.emit(byte(0x73)); em.localSet(rsLocal);
+      em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(5);  em.emit(byte(0x74)); em.emit(byte(0x73)); em.localSet(rsLocal);
+      em.i32Const(0); em.localGet(rsLocal); em.i32Store(ctx.layout.rngStateOffset, 2);
+      // idx = floor((rsLocal / 2^32) * N), N known at compile time.
+      em.localGet(rsLocal);
+      em.op(OP_F64_CONVERT_I32_U);
+      em.f64Const(4294967296); em.op(OP_F64_DIV);
+      em.f64Const(N); em.op(OP_F64_MUL);
+      em.f64ToI32();
+      const idxLocal = em.allocLocal(I32);
+      em.localSet(idxLocal);
+      // Result type is F64 (preserves either int or float source values; downstream
+      // consumers coerce as needed — matches JS Number semantics).
+      const accValtypeR: ValType = F64;
+      const accLocalR = em.allocLocal(accValtypeR);
+      // Initialise to sources[0], then overwrite if idx selects a different source.
+      // Non-null asserts are safe — we've already checked N > 0 above.
+      pushValueAs(em, sourceRefs[0]!, accValtypeR);
+      em.localSet(accLocalR);
+      for (let i = 1; i < N; i++) {
+        em.localGet(idxLocal); em.i32Const(i); em.op(OP_I32_EQ);
+        em.ifThen(() => {
+          pushValueAs(em, sourceRefs[i]!, accValtypeR);
+          em.localSet(accLocalR);
+        });
+      }
+      if (mode === 'groupOperator') {
+        setCachedPort(ctx, node.id, 'index', { localIdx: idxLocal, valtype: I32 });
+        setCachedPort(ctx, node.id, 'result', { localIdx: accLocalR, valtype: accValtypeR });
+      }
+      return { localIdx: accLocalR, valtype: accValtypeR };
     }
   }
 

@@ -94,19 +94,23 @@ The app is **100% client-side**. No backend, no server, no paid hosting.
 
 Both modes coexist in one app. The user can seamlessly switch between editing and simulating.
 
-### Graph → JS Compilation Strategy
+### Graph → Compile Strategy
 
 This is the critical performance decision. At 5000×5000 (25M cells), the update function runs 25M times per generation.
 
-**Approach: Compile the node graph to a JavaScript function string at edit time.**
+**Approach: Compile the node graph at edit time to one of three targets.** Selectable per-model via the Compile Target radio in Properties → Execution.
 
-Each node type defines a `compile()` method that emits a JS code snippet. The compiler:
+- **WebAssembly (default).** Hand-emitted WASM module, typically several times faster than JS on dense neighborhoods. Production target for most models.
+- **WebGPU.** WGSL compute shaders dispatched on the GPU. Best for very large grids and math-heavy per-cell work. Requires synchronous mode + a browser with WebGPU support.
+- **Debug / Reference (JS).** Plain JavaScript via `new Function(...)`. Slower than WASM, but its source is readable in the simulator's Show Code panel — useful for prototyping new node types and verifying parity with the other targets.
+
+Each node type defines `compile()` (JS) plus per-target emitters (WASM / WGSL). The JS compiler:
 1. Topologically sorts the graph
 2. Resolves connections (output of node A → input of node B)
 3. Stitches snippets into a flat function body with intermediate variables
 4. Creates an executable function via `new Function(...)`
 
-Example — a Game of Life graph compiles to a loop-wrapped step function (called ONCE per step, not per cell):
+Example — the JS compile of a Game of Life graph emits a loop-wrapped step function (called ONCE per step, not per cell):
 ```js
 (function(total, r_alive, w_alive, nIdx_moore, nSz_moore, modelAttrs, colors, activeViewer) {
   const _scr_n1 = new Array(nSz_moore); // scratch array (reused per cell)
@@ -257,7 +261,7 @@ genesis-ca/
 
 - No server-side computation. Everything runs in the browser.
 - No paid hosting dependencies. GitHub Pages or equivalent free static hosting.
-- No external compilation toolchains. The graph compiles to JS inside the browser instantly.
+- No external compilation toolchains. The graph compiles to WASM (default), WebGPU, or JS inside the browser instantly — all three compilers are hand-rolled in TypeScript.
 - Do not modify the `legacy_qt_cpp_solution` branch. It is frozen as historical reference.
 - All new work goes on feature branches off `master` (e.g., `ux_improvements`).
 
@@ -505,7 +509,9 @@ The app is functional with these major systems:
 
 ---
 
-## WASM Compile Target (Wave 2)
+## WASM Compile Target (Wave 2 — current default)
+
+WASM is the default compile target for new models (`EMPTY_MODEL.properties.useWasm = true` in [defaultModel.ts](src/model/defaultModel.ts)). Full node-catalogue coverage including the multi-source `groupOperator.random` path. The Properties radio orders targets as **WebAssembly (default) / WebGPU / Debug & Reference (JS)**.
 
 - 4-file structure under `src/modeler/vpl/compiler/wasm/`: `encoder.ts` (hand-rolled WASM binary encoder, no wabt.js), `layout.ts` (memory layout: attrs/colors/nbrs/modelAttrs/indicators/rngState/activeViewer/order/scratch), `emitter.ts` (`WasmEmitter` class + `ValueRef`/`ArrayRef` types), `compile.ts` (orchestrator + per-node emitters)
 - One module exports all entry points: `step`, `inputColor_<sanitisedMappingId>`, `outputMapping_<sanitisedMappingId>`. `Math.pow` is imported as funcIdx 0 (JS provides via `env.pow`); sqrt/abs/floor use native f64 intrinsics

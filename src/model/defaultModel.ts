@@ -17,6 +17,7 @@ export const EMPTY_MODEL: CAModel = {
     gridHeight: 100,
     maxIterations: 1000,
     tags: [],
+    useWasm: true,
   },
   attributes: [],
   neighborhoods: [],

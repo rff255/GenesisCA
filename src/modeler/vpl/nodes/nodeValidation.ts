@@ -254,6 +254,7 @@ export function countMacroSubgraphIssues(
   macroDefId: string,
   model: CAModel,
   useWebGPU: boolean,
+  useWasm: boolean = false,
   depth: number = 0,
 ): number {
   if (depth > MAX_MACRO_DEPTH) return 0;
@@ -285,10 +286,11 @@ export function countMacroSubgraphIssues(
     const conn = connectedByNode.get(node.id);
     count += detectMissingConfig(t, cfg, model, conn).length;
     if (useWebGPU) count += detectWebGPUIncompatibilities(t, cfg, model).length;
+    else if (useWasm) count += detectWasmIncompatibilities(t, cfg, model).length;
     if (t === 'macro') {
       const innerId = cfg.macroDefId;
       if (typeof innerId === 'string' && innerId.length > 0) {
-        count += countMacroSubgraphIssues(innerId, model, useWebGPU, depth + 1);
+        count += countMacroSubgraphIssues(innerId, model, useWebGPU, useWasm, depth + 1);
       }
     }
   }
@@ -333,6 +335,26 @@ export function detectWebGPUIncompatibilities(
     }
   }
   return issues;
+}
+
+/** Wave A — return WASM-target-specific issues for a node configuration.
+ *
+ *  Mirrors `detectWebGPUIncompatibilities` so WASM-only gaps surface as
+ *  warning badges in the modeler instead of init-time errors. Currently the
+ *  WASM target covers the full node catalogue (multi-source `groupOperator`
+ *  with `op === 'random'` was the last gap and is implemented) so this
+ *  function returns no issues. The scaffold + call site is kept so future
+ *  WASM-only gaps can be reported here without touching the rest of the
+ *  validation pipeline.
+ *
+ *  Caller pattern: `[...detectMissingConfig(...), ...detectWasmIncompatibilities(nodeType, config, model)]`
+ *  when `model.properties.useWasm` is true and `useWebGPU` is false. */
+export function detectWasmIncompatibilities(
+  _nodeType: string,
+  _config: NodeConfig,
+  _model: CAModel,
+): string[] {
+  return [];
 }
 
 /** Top-level model check — async + WebGPU is incompatible. Returns a

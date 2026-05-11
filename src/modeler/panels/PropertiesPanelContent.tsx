@@ -363,31 +363,15 @@ export function PropertiesPanelContent() {
                 <input
                   type="radio"
                   name="compileTarget"
-                  checked={!properties.useWasm && !properties.useWebGPU}
-                  onChange={() => updateProperties({ useWasm: false, useWebGPU: false })}
-                  style={{ marginTop: 2 }}
-                />
-                <span>
-                  <strong>JavaScript (default)</strong>
-                  <br />
-                  <span style={{ color: '#888', fontSize: '0.66rem' }}>
-                    Graph compiled to a JS function. Always available, supports every node type and both update modes.
-                  </span>
-                </span>
-              </label>
-              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
-                <input
-                  type="radio"
-                  name="compileTarget"
                   checked={!!properties.useWasm && !properties.useWebGPU}
                   onChange={() => updateProperties({ useWasm: true, useWebGPU: false })}
                   style={{ marginTop: 2 }}
                 />
                 <span>
-                  <strong>WebAssembly (experimental)</strong>
+                  <strong>WebAssembly (default)</strong>
                   <br />
                   <span style={{ color: '#888', fontSize: '0.66rem' }}>
-                    Hand-compiled WASM module — typically several times faster than JS on dense neighborhoods. Falls back to JS automatically for node types whose WASM emit is not yet implemented.
+                    Hand-compiled WASM module — typically several times faster than JS on dense neighborhoods. Production target for most models.
                   </span>
                 </span>
               </label>
@@ -400,10 +384,26 @@ export function PropertiesPanelContent() {
                   style={{ marginTop: 2 }}
                 />
                 <span>
-                  <strong>WebGPU (experimental, sync only)</strong>
+                  <strong>WebGPU (sync only)</strong>
                   <br />
                   <span style={{ color: '#888', fontSize: '0.66rem' }}>
                     WGSL compute shaders on the GPU — designed for very large grids and math-heavy per-cell work. Requires synchronous update mode. Browser must support WebGPU (Chrome 127+, Firefox 141+, Safari 17.4+).
+                  </span>
+                </span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
+                <input
+                  type="radio"
+                  name="compileTarget"
+                  checked={!properties.useWasm && !properties.useWebGPU}
+                  onChange={() => updateProperties({ useWasm: false, useWebGPU: false })}
+                  style={{ marginTop: 2 }}
+                />
+                <span>
+                  <strong>Debug / Reference (JS)</strong>
+                  <br />
+                  <span style={{ color: '#888', fontSize: '0.66rem' }}>
+                    Plain JavaScript compile target. Slower but human-readable in Show Code, with full node coverage. Useful for prototyping and verifying WASM/WebGPU parity.
                   </span>
                 </span>
               </label>
