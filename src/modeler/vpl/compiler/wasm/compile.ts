@@ -39,7 +39,7 @@ import type { MemoryLayout } from './layout';
 import { classifyLoopInvariant } from '../loopInvariant';
 import { getInlineValue, parseInlineNum } from '../inlinePort';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } from '../sinkAnalysis';
-import { isSubAttribute, subAttrInfo } from '../subAttribute';
+import { subAttrInfo } from '../subAttribute';
 
 export interface WasmCompileResult {
   bytes: Uint8Array;
@@ -1550,6 +1550,11 @@ function emitGroupStatement(
       return null;
     }
     const elemValtype: ValType = attrValType(attr.type);
+    // Sub-attribute iteration semantics: non-matching neighbors are EXCLUDED
+    // entirely. "all" ops vacuously hold for the empty match set (acc stays at
+    // 1); "any" ops vacuously fail (acc stays at 0). Matches JS `[].every(...)`
+    // returning true and `[].some(...)` returning false.
+    const sub = getSubAttrWasm(ctx, attrId);
     const nLocal = ctx.emitter.allocLocal(I32);
     ctx.emitter.i32Const(0);
     ctx.emitter.localSet(nLocal);
@@ -1559,22 +1564,33 @@ function emitGroupStatement(
         ctx.emitter.i32Const(nbr.size);
         ctx.emitter.op(OP_I32_GE_S);
         ctx.emitter.brIf(1);
+        // Compute neighbor cell idx, stash in local.
+        ctx.emitter.localGet(ctx.iLocalIdx);
+        ctx.emitter.i32Const(nbr.size);
+        ctx.emitter.op(OP_I32_MUL);
+        ctx.emitter.localGet(nLocal);
+        ctx.emitter.op(OP_I32_ADD);
+        ctx.emitter.i32Const(4);
+        ctx.emitter.op(OP_I32_MUL);
+        ctx.emitter.i32Load(nbr.offset, 2);
+        const cellIdxLocal = ctx.emitter.allocLocal(I32);
+        ctx.emitter.localSet(cellIdxLocal);
+
         const loadElem = () => {
-          ctx.emitter.localGet(ctx.iLocalIdx);
-          ctx.emitter.i32Const(nbr.size);
-          ctx.emitter.op(OP_I32_MUL);
-          ctx.emitter.localGet(nLocal);
-          ctx.emitter.op(OP_I32_ADD);
-          ctx.emitter.i32Const(4);
-          ctx.emitter.op(OP_I32_MUL);
-          ctx.emitter.i32Load(nbr.offset, 2);
+          ctx.emitter.localGet(cellIdxLocal);
           ctx.emitter.i32Const(attr.itemBytes);
           ctx.emitter.op(OP_I32_MUL);
           if (attr.type === 'bool') ctx.emitter.i32Load8U(attr.readOffset, 0);
           else if (attr.type === 'float') ctx.emitter.f64Load(attr.readOffset, 3);
           else ctx.emitter.i32Load(attr.readOffset, 2);
         };
-        emitCmp(loadElem, elemValtype);
+
+        if (sub) {
+          emitParentMatchAtIdxWasm(ctx, sub.parent, sub.parentValuesInt, cellIdxLocal, false);
+          ctx.emitter.ifThen(() => emitCmp(loadElem, elemValtype));
+        } else {
+          emitCmp(loadElem, elemValtype);
+        }
         ctx.emitter.localGet(nLocal);
         ctx.emitter.i32Const(1);
         ctx.emitter.op(OP_I32_ADD);
@@ -1708,10 +1724,26 @@ function emitAggregateOrCount(
     if (op === 'mean') op = 'average';
     if (op === 'median') {
       // Median requires materialising into scratch first; route to ArrayRef path.
+      // Sub-attribute median isn't yet supported by the scratch path — bail out
+      // so the worker falls back to JS (which handles it correctly via the
+      // variable-length scratch from GetNeighborsAttribute).
+      if (getSubAttrWasm(ctx, attrId)) {
+        const attrName = ctx.model.attributes.find(a => a.id === attrId)?.name ?? attrId;
+        ctx.errors.push(`Aggregate.median on sub-attribute "${attrName}" not yet supported on WASM; falling back to JS.`);
+        return null;
+      }
       return emitMedianViaScratchFromNbr(ctx, nbr, attr);
     }
     if (op === 'random') {
-      // groupOperator random pick: choose uniform index in [0, size), fetch
+      // groupOperator random pick: choose uniform index in [0, size), fetch.
+      // Sub-attribute random needs to pick uniformly OVER MATCHING NEIGHBORS,
+      // not over the full neighborhood. The current uniform-index implementation
+      // can land on a non-matching cell. Bail out → JS fallback.
+      if (getSubAttrWasm(ctx, attrId)) {
+        const attrName = ctx.model.attributes.find(a => a.id === attrId)?.name ?? attrId;
+        ctx.errors.push(`GroupOperator.random on sub-attribute "${attrName}" not yet supported on WASM; falling back to JS.`);
+        return null;
+      }
       const indexLocal = pickRandomIndex(ctx, nbr.size);
       // Load element at that index from neighborhood
       ctx.emitter.localGet(ctx.iLocalIdx);
@@ -1734,6 +1766,15 @@ function emitAggregateOrCount(
     }
   }
 
+  // Sub-attribute support: iteration semantics exclude non-matching neighbors.
+  // When the source attribute is a sub-attribute, we wrap the per-iteration
+  // value-load + accumulate in `ifThen(parent_match)`, so non-matching cells
+  // contribute nothing. For ops that need a divisor (average) or a position
+  // index (groupOperator min/max), we also track `matchCountLocal` so the
+  // post-divide and bestIdx semantics match JS (which iterates a variable-
+  // length filtered scratch).
+  const sub = getSubAttrWasm(ctx, attrId);
+
   // Determine value type for the loaded element
   const elemValtype = attrValType(attr.type);
   const accValtype = (mode === 'count') ? I32 : (op === 'and' || op === 'or') ? I32 : F64;
@@ -1742,12 +1783,20 @@ function emitAggregateOrCount(
   const accLocal = ctx.emitter.allocLocal(accValtype);
   const nLocal = ctx.emitter.allocLocal(I32);
 
-  // For groupOperator min/max, also track the current best index
+  // For groupOperator min/max, also track the current best index.
   const trackIndex = mode === 'groupOperator' && (op === 'min' || op === 'max');
   const bestIdxLocal = trackIndex ? ctx.emitter.allocLocal(I32) : -1;
   if (trackIndex) {
     ctx.emitter.i32Const(0);
     ctx.emitter.localSet(bestIdxLocal);
+  }
+
+  // Sub-attr match counter — drives the average divisor and (for groupOperator
+  // min/max) the bestIdx position-in-filtered-set semantics.
+  const matchCountLocal = sub ? ctx.emitter.allocLocal(I32) : -1;
+  if (sub) {
+    ctx.emitter.i32Const(0);
+    ctx.emitter.localSet(matchCountLocal);
   }
 
   // Initialize accumulator
@@ -1798,110 +1847,140 @@ function emitAggregateOrCount(
       ctx.emitter.i32Const(4);
       ctx.emitter.op(OP_I32_MUL);
       ctx.emitter.i32Load(nbr.offset, 2); // load i32 neighbor idx
+      // Stash cell idx — used for both parent_match (sub-attr) and value load.
+      const cellIdxLocal = ctx.emitter.allocLocal(I32);
+      ctx.emitter.localSet(cellIdxLocal);
 
-      // Convert neighbor cell idx -> byte offset into attribute array
-      ctx.emitter.i32Const(attr.itemBytes);
-      ctx.emitter.op(OP_I32_MUL);
-      // Stack: [byte_offset_into_attr]
-      // Load from read region
-      if (attr.type === 'bool') ctx.emitter.i32Load8U(attr.readOffset, 0);
-      else if (attr.type === 'float') ctx.emitter.f64Load(attr.readOffset, 3);
-      else ctx.emitter.i32Load(attr.readOffset, 2);
-
-      // Combine into accumulator
-      if (mode === 'count') {
-        // Stack: [loadedValue]
-        // Stash to a fresh local so we can re-push for between's two compares.
-        const elemLocal = ctx.emitter.allocLocal(elemValtype);
-        ctx.emitter.localSet(elemLocal);
-        const lo = (node.data.config.lowOp as string) === '>' ? '>' : '>=';
-        const hi = (node.data.config.highOp as string) === '<' ? '<' : '<=';
-        const emitCmp = (cmpOp: string, ref: ValueRef) => {
-          ctx.emitter.localGet(elemLocal);
-          pushValueAs(ctx.emitter, ref, elemValtype);
-          if (elemValtype === F64) ctx.emitter.op(cmpToF64Op(cmpOp));
-          else ctx.emitter.op(cmpToI32Op(cmpOp));
-        };
-        switch (countCmpOp) {
-          case 'notEquals': emitCmp('!=', cmpRef!); break;
-          case 'greater':   emitCmp('>',  cmpRef!); break;
-          case 'lesser':    emitCmp('<',  cmpRef!); break;
-          case 'between':
-            emitCmp(lo, cmpRef!);
-            emitCmp(hi, cmpHighRef!);
-            ctx.emitter.op(OP_I32_AND);
-            break;
-          case 'notBetween':
-            emitCmp(lo, cmpRef!);
-            emitCmp(hi, cmpHighRef!);
-            ctx.emitter.op(OP_I32_AND);
-            ctx.emitter.op(OP_I32_EQZ);
-            break;
-          default: emitCmp('==', cmpRef!); break;
-        }
-        // if (matched) acc++
-        ctx.emitter.ifThen(() => {
-          ctx.emitter.localGet(accLocal);
+      // Inner work (load + accumulate). Called either unconditionally (regular
+      // attr) or inside `ifThen(parent_match)` (sub-attribute).
+      const innerWork = () => {
+        // Increment match counter for sub-attrs (used by post-divide and bestIdx)
+        if (matchCountLocal >= 0) {
+          ctx.emitter.localGet(matchCountLocal);
           ctx.emitter.i32Const(1);
           ctx.emitter.op(OP_I32_ADD);
-          ctx.emitter.localSet(accLocal);
-        });
-      } else {
-        // aggregate: depends on op
-        // Promote loaded value to f64 if accumulating in f64
-        if (accValtype === F64 && elemValtype === I32) ctx.emitter.i32ToF64();
-        if (accValtype === I32 && elemValtype === F64) ctx.emitter.f64ToI32();
+          ctx.emitter.localSet(matchCountLocal);
+        }
+        // Compute byte offset and load value from the neighbor cell
+        ctx.emitter.localGet(cellIdxLocal);
+        ctx.emitter.i32Const(attr.itemBytes);
+        ctx.emitter.op(OP_I32_MUL);
+        if (attr.type === 'bool') ctx.emitter.i32Load8U(attr.readOffset, 0);
+        else if (attr.type === 'float') ctx.emitter.f64Load(attr.readOffset, 3);
+        else ctx.emitter.i32Load(attr.readOffset, 2);
 
-        if (trackIndex) {
-          // Stash loaded value into a local so we can compare AND maybe assign.
-          const elemLocal = ctx.emitter.allocLocal(F64);
+        // Combine into accumulator
+        if (mode === 'count') {
+          // Stack: [loadedValue]
+          // Stash to a fresh local so we can re-push for between's two compares.
+          const elemLocal = ctx.emitter.allocLocal(elemValtype);
           ctx.emitter.localSet(elemLocal);
-          // Compare: elem < acc (for min) or elem > acc (for max)
-          ctx.emitter.localGet(elemLocal);
-          ctx.emitter.localGet(accLocal);
-          ctx.emitter.op(op === 'min' ? OP_F64_LT : OP_F64_GT);
-          ctx.emitter.ifThen(() => {
+          const lo = (node.data.config.lowOp as string) === '>' ? '>' : '>=';
+          const hi = (node.data.config.highOp as string) === '<' ? '<' : '<=';
+          const emitCmp = (cmpOp: string, ref: ValueRef) => {
             ctx.emitter.localGet(elemLocal);
+            pushValueAs(ctx.emitter, ref, elemValtype);
+            if (elemValtype === F64) ctx.emitter.op(cmpToF64Op(cmpOp));
+            else ctx.emitter.op(cmpToI32Op(cmpOp));
+          };
+          switch (countCmpOp) {
+            case 'notEquals': emitCmp('!=', cmpRef!); break;
+            case 'greater':   emitCmp('>',  cmpRef!); break;
+            case 'lesser':    emitCmp('<',  cmpRef!); break;
+            case 'between':
+              emitCmp(lo, cmpRef!);
+              emitCmp(hi, cmpHighRef!);
+              ctx.emitter.op(OP_I32_AND);
+              break;
+            case 'notBetween':
+              emitCmp(lo, cmpRef!);
+              emitCmp(hi, cmpHighRef!);
+              ctx.emitter.op(OP_I32_AND);
+              ctx.emitter.op(OP_I32_EQZ);
+              break;
+            default: emitCmp('==', cmpRef!); break;
+          }
+          // if (matched) acc++
+          ctx.emitter.ifThen(() => {
+            ctx.emitter.localGet(accLocal);
+            ctx.emitter.i32Const(1);
+            ctx.emitter.op(OP_I32_ADD);
             ctx.emitter.localSet(accLocal);
-            ctx.emitter.localGet(nLocal);
-            ctx.emitter.localSet(bestIdxLocal);
           });
         } else {
-          // Now acc combines with elem
-          switch (op) {
-            case 'sum':
-            case 'average':
-              ctx.emitter.localGet(accLocal);
-              ctx.emitter.op(OP_F64_ADD);
+          // aggregate: depends on op
+          // Promote loaded value to f64 if accumulating in f64
+          if (accValtype === F64 && elemValtype === I32) ctx.emitter.i32ToF64();
+          if (accValtype === I32 && elemValtype === F64) ctx.emitter.f64ToI32();
+
+          if (trackIndex) {
+            // Stash loaded value into a local so we can compare AND maybe assign.
+            const elemLocal = ctx.emitter.allocLocal(F64);
+            ctx.emitter.localSet(elemLocal);
+            // Compare: elem < acc (for min) or elem > acc (for max)
+            ctx.emitter.localGet(elemLocal);
+            ctx.emitter.localGet(accLocal);
+            ctx.emitter.op(op === 'min' ? OP_F64_LT : OP_F64_GT);
+            ctx.emitter.ifThen(() => {
+              ctx.emitter.localGet(elemLocal);
               ctx.emitter.localSet(accLocal);
-              break;
-            case 'product':
-              ctx.emitter.localGet(accLocal);
-              ctx.emitter.op(OP_F64_MUL);
-              ctx.emitter.localSet(accLocal);
-              break;
-            case 'min':
-              ctx.emitter.localGet(accLocal);
-              ctx.emitter.op(OP_F64_MIN);
-              ctx.emitter.localSet(accLocal);
-              break;
-            case 'max':
-              ctx.emitter.localGet(accLocal);
-              ctx.emitter.op(OP_F64_MAX);
-              ctx.emitter.localSet(accLocal);
-              break;
-            case 'and':
-              ctx.emitter.localGet(accLocal);
-              ctx.emitter.op(OP_I32_AND);
-              ctx.emitter.localSet(accLocal);
-              break;
-            case 'or':
-              ctx.emitter.localGet(accLocal);
-              ctx.emitter.op(OP_I32_OR);
-              ctx.emitter.localSet(accLocal);
-              break;
+              // Use position-in-filtered-set for sub-attrs (matches JS) — that's
+              // matchCount - 1 since we just incremented it above. For regular
+              // attrs, use the neighborhood iteration index `nLocal`.
+              if (matchCountLocal >= 0) {
+                ctx.emitter.localGet(matchCountLocal);
+                ctx.emitter.i32Const(1);
+                ctx.emitter.op(OP_I32_SUB);
+                ctx.emitter.localSet(bestIdxLocal);
+              } else {
+                ctx.emitter.localGet(nLocal);
+                ctx.emitter.localSet(bestIdxLocal);
+              }
+            });
+          } else {
+            // Now acc combines with elem
+            switch (op) {
+              case 'sum':
+              case 'average':
+                ctx.emitter.localGet(accLocal);
+                ctx.emitter.op(OP_F64_ADD);
+                ctx.emitter.localSet(accLocal);
+                break;
+              case 'product':
+                ctx.emitter.localGet(accLocal);
+                ctx.emitter.op(OP_F64_MUL);
+                ctx.emitter.localSet(accLocal);
+                break;
+              case 'min':
+                ctx.emitter.localGet(accLocal);
+                ctx.emitter.op(OP_F64_MIN);
+                ctx.emitter.localSet(accLocal);
+                break;
+              case 'max':
+                ctx.emitter.localGet(accLocal);
+                ctx.emitter.op(OP_F64_MAX);
+                ctx.emitter.localSet(accLocal);
+                break;
+              case 'and':
+                ctx.emitter.localGet(accLocal);
+                ctx.emitter.op(OP_I32_AND);
+                ctx.emitter.localSet(accLocal);
+                break;
+              case 'or':
+                ctx.emitter.localGet(accLocal);
+                ctx.emitter.op(OP_I32_OR);
+                ctx.emitter.localSet(accLocal);
+                break;
+            }
           }
         }
+      };
+
+      if (sub) {
+        emitParentMatchAtIdxWasm(ctx, sub.parent, sub.parentValuesInt, cellIdxLocal, false);
+        ctx.emitter.ifThen(innerWork);
+      } else {
+        innerWork();
       }
 
       // n += 1; br 0 (continue loop)
@@ -1913,12 +1992,33 @@ function emitAggregateOrCount(
     });
   });
 
-  // Average post-divide
+  // Average post-divide. For sub-attrs, divide by matchCount; for regular
+  // attrs, divide by the fixed neighborhood size.
   if (op === 'average') {
-    ctx.emitter.localGet(accLocal);
-    ctx.emitter.f64Const(nbr.size || 1);
-    ctx.emitter.op(OP_F64_DIV);
-    ctx.emitter.localSet(accLocal);
+    if (matchCountLocal >= 0) {
+      // matchCount > 0 ? acc / matchCount : 0
+      ctx.emitter.localGet(matchCountLocal);
+      ctx.emitter.i32Const(0);
+      ctx.emitter.op(OP_I32_GT_S);
+      ctx.emitter.ifThenElse(
+        () => {
+          ctx.emitter.localGet(accLocal);
+          ctx.emitter.localGet(matchCountLocal);
+          ctx.emitter.i32ToF64();
+          ctx.emitter.op(OP_F64_DIV);
+          ctx.emitter.localSet(accLocal);
+        },
+        () => {
+          ctx.emitter.f64Const(0);
+          ctx.emitter.localSet(accLocal);
+        },
+      );
+    } else {
+      ctx.emitter.localGet(accLocal);
+      ctx.emitter.f64Const(nbr.size || 1);
+      ctx.emitter.op(OP_F64_DIV);
+      ctx.emitter.localSet(accLocal);
+    }
   }
 
   if (mode === 'groupOperator' && trackIndex) {
@@ -2691,6 +2791,11 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     ctx.emitter.op(OP_I32_ADD);
     ctx.emitter.localSet(ctx.scratchTopLocal);
 
+    // Sub-attribute iteration semantics: when filtering on a sub-attribute, the
+    // predicate is implicitly conjuncted with parent_match — non-matching
+    // neighbors never reach the user's comparison (match the JS / iteration
+    // contract: "the sub-attribute doesn't exist on those cells").
+    const subF = getSubAttrWasm(ctx, attrId);
     const k = ctx.emitter.allocLocal(I32);
     ctx.emitter.i32Const(0); ctx.emitter.localSet(k);
     ctx.emitter.block(() => {
@@ -2705,9 +2810,14 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
         emitArrayLoadElem(ctx.emitter, inArr);
         if (inArr.elemValtype === F64) ctx.emitter.f64ToI32();
         ctx.emitter.localSet(idxElem);
-        // Load r_attr[niCellIdx(idxElem)]
+        // Resolve neighbor cell idx once and stash; used for both parent_match
+        // (sub-attr) and the attribute value load.
+        pushNiCellIdx(ctx, idxElem);
+        const cellIdxLocal = ctx.emitter.allocLocal(I32);
+        ctx.emitter.localSet(cellIdxLocal);
+        // Load r_attr[cellIdxLocal]
         const loadElem = () => {
-          pushNiCellIdx(ctx, idxElem);
+          ctx.emitter.localGet(cellIdxLocal);
           ctx.emitter.i32Const(attr.itemBytes); ctx.emitter.op(OP_I32_MUL);
           if (attr.type === 'bool') ctx.emitter.i32Load8U(attr.readOffset, 0);
           else if (attr.type === 'float') ctx.emitter.f64Load(attr.readOffset, 3);
@@ -2728,6 +2838,12 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
         })();
         if (elemValtype === F64) ctx.emitter.op(cmpToF64Op(cmp));
         else ctx.emitter.op(cmpToI32Op(cmp));
+        // Sub-attribute: AND with parent_match. Skipped cells short-circuit
+        // before the comparison's outcome can include them.
+        if (subF) {
+          emitParentMatchAtIdxWasm(ctx, subF.parent, subF.parentValuesInt, cellIdxLocal, false);
+          ctx.emitter.op(OP_I32_AND);
+        }
 
         ctx.emitter.ifThen(() => {
           // out[outLen++] = idxElem
@@ -2957,7 +3073,8 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     // Nbr-source path
     const srcNode = firstSrcNode!;
     const nbr = getNbr(ctx.layout, srcNode.data.config.neighborhoodId as string);
-    const attr = getAttr(ctx.layout, srcNode.data.config.attributeId as string);
+    const attrId2 = srcNode.data.config.attributeId as string;
+    const attr = getAttr(ctx.layout, attrId2);
     if (!nbr || !attr) {
       ctx.errors.push(`groupCounting (array): unknown nbr/attr`);
       return null;
@@ -2966,6 +3083,9 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     const cmpRef = inputs['compare'] ?? { inline: true, value: 0, valtype: elemValtype };
     const cmpHighRef = inputs['compareHigh'] ?? { inline: true, value: 0, valtype: elemValtype };
     const em = ctx.emitter;
+    // Sub-attribute iteration: non-matching neighbors are excluded BEFORE the
+    // user's comparison reaches them (matches the JS iteration contract).
+    const subGC = getSubAttrWasm(ctx, attrId2);
 
     // Reserve worst-case scratch up-front
     const outOff = em.allocLocal(I32);
@@ -2981,11 +3101,15 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     em.block(() => {
       em.loop(() => {
         em.localGet(n); em.i32Const(nbr.size); em.op(OP_I32_GE_S); em.brIf(1);
-        // Load nbr value
+        // Compute neighbor cell idx, stash for parent_match + value load.
         em.localGet(ctx.iLocalIdx); em.i32Const(nbr.size); em.op(OP_I32_MUL);
         em.localGet(n); em.op(OP_I32_ADD);
         em.i32Const(4); em.op(OP_I32_MUL);
         em.i32Load(nbr.offset, 2);
+        const cellIdxLocal = em.allocLocal(I32);
+        em.localSet(cellIdxLocal);
+        // Load value at cellIdx
+        em.localGet(cellIdxLocal);
         em.i32Const(attr.itemBytes); em.op(OP_I32_MUL);
         if (attr.type === 'bool') em.i32Load8U(attr.readOffset, 0);
         else if (attr.type === 'float') em.f64Load(attr.readOffset, 3);
@@ -3009,6 +3133,12 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
             emitCmp(lo, cmpRef); emitCmp(hi, cmpHighRef); em.op(OP_I32_AND); em.op(OP_I32_EQZ);
             break;
           default: emitCmp('==', cmpRef); break;
+        }
+        // Sub-attribute: AND with parent_match so non-matching cells are
+        // excluded from the output indexes.
+        if (subGC) {
+          emitParentMatchAtIdxWasm(ctx, subGC.parent, subGC.parentValuesInt, cellIdxLocal, false);
+          em.op(OP_I32_AND);
         }
         em.ifThen(() => {
           em.localGet(outLen); em.i32Const(4); em.op(OP_I32_MUL);
@@ -3034,7 +3164,21 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
 
     const elemValtype = attrValType(attr.type);
     const elemBytes = attr.itemBytes;
-    const outArr = allocArrayInScratch(ctx, inArr.lenLocal, elemValtype, elemBytes);
+    // Sub-attribute iteration: non-matching neighbors are EXCLUDED from the
+    // output, producing a variable-length array (filter-with-push pattern).
+    // For regular attrs the output is fixed-length (same as input).
+    const subG = getSubAttrWasm(ctx, attrId);
+    // Allocate worst-case capacity (input length).
+    const outOff = ctx.emitter.allocLocal(I32);
+    ctx.emitter.localGet(ctx.scratchTopLocal); ctx.emitter.localSet(outOff);
+    const outLen = ctx.emitter.allocLocal(I32);
+    ctx.emitter.i32Const(0); ctx.emitter.localSet(outLen);
+    // Reserve worst-case scratch: inArr.lenLocal * elemBytes
+    ctx.emitter.localGet(ctx.scratchTopLocal);
+    ctx.emitter.localGet(inArr.lenLocal);
+    if (elemBytes !== 1) { ctx.emitter.i32Const(elemBytes); ctx.emitter.op(OP_I32_MUL); }
+    ctx.emitter.op(OP_I32_ADD);
+    ctx.emitter.localSet(ctx.scratchTopLocal);
 
     const k = ctx.emitter.allocLocal(I32);
     ctx.emitter.i32Const(0); ctx.emitter.localSet(k);
@@ -3046,26 +3190,42 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
         ctx.emitter.localGet(k); emitArrayLoadElem(ctx.emitter, inArr);
         if (inArr.elemValtype === F64) ctx.emitter.f64ToI32();
         ctx.emitter.localSet(idxIn);
-        // out[k] = r_attr[niCellIdx(idxIn)]
-        // Out address
-        ctx.emitter.localGet(k);
-        if (elemBytes !== 1) { ctx.emitter.i32Const(elemBytes); ctx.emitter.op(OP_I32_MUL); }
-        ctx.emitter.localGet(outArr.offsetLocal); ctx.emitter.op(OP_I32_ADD);
-        // Load value via inline NI access
+        // Resolve neighbor cell idx, stash for parent_match + value load.
         pushNiCellIdx(ctx, idxIn);
-        ctx.emitter.i32Const(attr.itemBytes); ctx.emitter.op(OP_I32_MUL);
-        if (attr.type === 'bool') ctx.emitter.i32Load8U(attr.readOffset, 0);
-        else if (attr.type === 'float') ctx.emitter.f64Load(attr.readOffset, 3);
-        else ctx.emitter.i32Load(attr.readOffset, 2);
-        // Store
-        if (elemBytes === 1) ctx.emitter.i32Store8(0, 0);
-        else if (elemValtype === F64) ctx.emitter.f64Store(0, 3);
-        else ctx.emitter.i32Store(0, 2);
+        const cellIdxLocal = ctx.emitter.allocLocal(I32);
+        ctx.emitter.localSet(cellIdxLocal);
+
+        const emitStoreElem = () => {
+          // out[outLen] = r_attr[cellIdxLocal]
+          ctx.emitter.localGet(outLen);
+          if (elemBytes !== 1) { ctx.emitter.i32Const(elemBytes); ctx.emitter.op(OP_I32_MUL); }
+          ctx.emitter.localGet(outOff); ctx.emitter.op(OP_I32_ADD);
+          // Load value
+          ctx.emitter.localGet(cellIdxLocal);
+          ctx.emitter.i32Const(attr.itemBytes); ctx.emitter.op(OP_I32_MUL);
+          if (attr.type === 'bool') ctx.emitter.i32Load8U(attr.readOffset, 0);
+          else if (attr.type === 'float') ctx.emitter.f64Load(attr.readOffset, 3);
+          else ctx.emitter.i32Load(attr.readOffset, 2);
+          // Store
+          if (elemBytes === 1) ctx.emitter.i32Store8(0, 0);
+          else if (elemValtype === F64) ctx.emitter.f64Store(0, 3);
+          else ctx.emitter.i32Store(0, 2);
+          // outLen++
+          ctx.emitter.localGet(outLen);
+          ctx.emitter.i32Const(1); ctx.emitter.op(OP_I32_ADD);
+          ctx.emitter.localSet(outLen);
+        };
+        if (subG) {
+          emitParentMatchAtIdxWasm(ctx, subG.parent, subG.parentValuesInt, cellIdxLocal, false);
+          ctx.emitter.ifThen(emitStoreElem);
+        } else {
+          emitStoreElem();
+        }
         ctx.emitter.localGet(k); ctx.emitter.i32Const(1); ctx.emitter.op(OP_I32_ADD); ctx.emitter.localSet(k);
         ctx.emitter.br(0);
       });
     });
-    return outArr;
+    return { kind: 'array', offsetLocal: outOff, lenLocal: outLen, elemValtype, elemBytes };
   },
 };
 
@@ -4350,35 +4510,13 @@ export function compileGraphWasm(
   layout: MemoryLayout,
   viewerIds: Record<string, number>,
 ): WasmCompileResult {
-  // Sub-attribute iteration support not implemented in WASM yet — bail out and
-  // let the worker fall back to JS. Scalar reads (getCellAttribute, neighbor-by-
-  // index, neighbor-by-tag, updateAttribute) are wrapped correctly via
-  // emitCellRead's parent-check; iteration emitters (aggregate/groupOperator/
-  // filterNeighbors/getNeighborsAttribute consumers) still inline raw reads.
-  const subAttrIds = new Set(model.attributes.filter(a => isSubAttribute(a)).map(a => a.id));
-  if (subAttrIds.size > 0) {
-    const ITER_NODE_TYPES = new Set([
-      'getNeighborsAttribute', 'filterNeighbors', 'getNeighborsAttrByIndexes',
-      'aggregate', 'groupOperator', 'groupCounting', 'groupStatement',
-    ]);
-    const checkNodes = (nodes: GraphNode[]): string | null => {
-      for (const n of nodes) {
-        if (!ITER_NODE_TYPES.has(n.data.nodeType)) continue;
-        const attrId = n.data.config.attributeId as string | undefined;
-        if (attrId && subAttrIds.has(attrId)) {
-          const attrName = model.attributes.find(a => a.id === attrId)?.name ?? attrId;
-          return `Sub-attribute "${attrName}" used in iteration node "${n.data.nodeType}" — WASM compile target doesn't yet support sub-attribute iteration. Falling back to JS (which handles this correctly).`;
-        }
-      }
-      return null;
-    };
-    const err = checkNodes(graphNodes) ?? (model.macroDefs || []).reduce<string | null>(
-      (acc, d) => acc ?? checkNodes(d.nodes), null,
-    );
-    if (err) {
-      return { bytes: new Uint8Array(0), minMemoryPages: 0, error: err, viewerIds, exports: [] };
-    }
-  }
+  // Sub-attribute iteration is supported on WASM for the common ops (sum,
+  // product, min, max, average, and, or, count, filter, allIs/noneIs/etc.) via
+  // per-emitter parent_match guards. Two ops still bail out at the per-emitter
+  // level: aggregate.median (sorts a scratch copy; the median scratch path
+  // doesn't yet filter by parent) and groupOperator.random (picks uniformly
+  // over the full neighborhood). Those return a clear error from the emitter
+  // and the worker falls back to JS.
 
   // Pre-pass: resolve indicator IDs to numeric indices (mirrors the JS
   // compiler — without this, fresh-loaded models that haven't been JS-compiled

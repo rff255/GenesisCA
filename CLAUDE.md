@@ -666,7 +666,7 @@ JS-target nodes that emit attribute reads call `ctx.readAttrExpr(attrId, idxExpr
 ### Compile-target coverage
 
 - **JS** — full support, scalar + iteration.
-- **WASM** — scalar reads supported (cell read, neighbor-by-index, neighbor-by-tag, update). Per-cell conditional copy supported via `emitBody`. Iteration over a sub-attribute (`getNeighborsAttribute`, `filterNeighbors`, aggregate/groupOperator/groupCounting/groupStatement with sub-attr source, `getNeighborsAttrByIndexes`) is REJECTED at compile time — the worker falls back to JS with a clear error. Fusion is also auto-disabled for sub-attribute sources via `detectFusableConsumers`.
+- **WASM** — full support except `aggregate.median` and `groupOperator.random` on sub-attribute sources (those two emitters return a clear error and the worker falls back to JS). All scalar reads, the per-cell sync conditional copy, and the iteration emitters (`aggregate`, `groupCounting`, `groupOperator` for sum/mul/mean/min/max/and/or, `groupStatement` for allIs/noneIs/hasA/etc., `filterNeighbors`, `getNeighborsAttrByIndexes`) handle sub-attributes via per-loop `ifThen(parent_match)` skips. For `aggregate.average` and `groupOperator.min`/`max` on sub-attrs, the WASM emit also tracks a `matchCount` local so the post-divide uses the filtered count and `bestIdx` reports the position-in-filtered-set (matches JS semantics). Fusion is auto-disabled for sub-attribute sources via `detectFusableConsumers` (a JS-only path; WASM doesn't consult fusion).
 - **WebGPU** — sub-attributes refused at compile time entirely; falls back to WASM/JS. Per-cell scrub via dedicated compute pipeline is the planned next step but not implemented in this wave.
 
 ### Indicator aggregation
