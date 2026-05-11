@@ -27,7 +27,7 @@ import {
   OP_F64_MAX, OP_F64_MIN, OP_F64_MUL, OP_F64_NE, OP_F64_SQRT, OP_F64_SUB,
   OP_I32_ADD, OP_I32_AND, OP_I32_DIV_S, OP_I32_EQ, OP_I32_EQZ, OP_I32_GE_S,
   OP_I32_GT_S, OP_I32_LT_S, OP_I32_MUL, OP_I32_OR, OP_I32_REM_S, OP_I32_SHL,
-  OP_I32_SHR_S, OP_I32_SUB, OP_SELECT,
+  OP_I32_SHR_S, OP_I32_SHR_U, OP_I32_SUB, OP_I32_XOR, OP_SELECT,
   buildModule, byte, exportEntry, EXPORT_FUNC, funcType, importEntry,
   importFuncDesc, importMemoryDesc, leb128u,
 } from './encoder';
@@ -1724,25 +1724,18 @@ function emitAggregateOrCount(
     if (op === 'mean') op = 'average';
     if (op === 'median') {
       // Median requires materialising into scratch first; route to ArrayRef path.
-      // Sub-attribute median isn't yet supported by the scratch path — bail out
-      // so the worker falls back to JS (which handles it correctly via the
-      // variable-length scratch from GetNeighborsAttribute).
-      if (getSubAttrWasm(ctx, attrId)) {
-        const attrName = ctx.model.attributes.find(a => a.id === attrId)?.name ?? attrId;
-        ctx.errors.push(`Aggregate.median on sub-attribute "${attrName}" not yet supported on WASM; falling back to JS.`);
-        return null;
-      }
-      return emitMedianViaScratchFromNbr(ctx, nbr, attr);
+      // Sub-attributes filter while filling (only matching neighbors land in
+      // the prefix), then sort the prefix and median-pick over it.
+      return emitMedianViaScratchFromNbr(ctx, nbr, attr, getSubAttrWasm(ctx, attrId));
     }
     if (op === 'random') {
       // groupOperator random pick: choose uniform index in [0, size), fetch.
-      // Sub-attribute random needs to pick uniformly OVER MATCHING NEIGHBORS,
-      // not over the full neighborhood. The current uniform-index implementation
-      // can land on a non-matching cell. Bail out → JS fallback.
-      if (getSubAttrWasm(ctx, attrId)) {
-        const attrName = ctx.model.attributes.find(a => a.id === attrId)?.name ?? attrId;
-        ctx.errors.push(`GroupOperator.random on sub-attribute "${attrName}" not yet supported on WASM; falling back to JS.`);
-        return null;
+      // Sub-attribute path: filter matching neighbor values into scratch first,
+      // then pick uniformly from the filtered length. RNG advances regardless
+      // (matches JS `Math.random()` semantics — called even on empty arrays).
+      const subRand = getSubAttrWasm(ctx, attrId);
+      if (subRand) {
+        return emitRandomViaScratchFromSubAttrNbr(ctx, node, nbr, attr, subRand);
       }
       const indexLocal = pickRandomIndex(ctx, nbr.size);
       // Load element at that index from neighborhood
@@ -2054,80 +2047,249 @@ function pickRandomIndex(ctx: WasmCompileCtx, n: number): number {
 }
 
 /** aggregate median via scratch: copy nbr values into scratch, insertion-sort, take middle.
- *  Currently used when mode=aggregate, op=median, source=getNeighborsAttribute. */
+ *  Used when mode=aggregate, op=median, source=getNeighborsAttribute.
+ *
+ *  Sub-attribute handling: when `sub` is non-null, the fill loop is wrapped
+ *  in `ifThen(parent_match)` and the scratch slot index uses a separate
+ *  `filledLocal` counter so only matching neighbors land in the prefix.
+ *  `lenLocal` is then narrowed to `filledLocal`, so the in-place insertion
+ *  sort + median pick operate over the filtered prefix only. The over-
+ *  allocated scratch tail past `filledLocal` is harmless (never read).
+ *  Empty filtered set returns 0 (matches the JS AggregateNode contract). */
 function emitMedianViaScratchFromNbr(
   ctx: WasmCompileCtx,
   nbr: NbrInfo,
   attr: AttrInfo,
+  sub: WasmSubAttrInfo | null,
 ): LocalRef | null {
   const em = ctx.emitter;
   const elemValtype = F64;
   const elemBytes = 8;
-  // Materialise into scratch as f64s
+  // Materialise into scratch as f64s. Worst-case capacity = nbr.size.
   const lenLocal = em.allocLocal(I32);
   em.i32Const(nbr.size);
   em.localSet(lenLocal);
   const arr = allocArrayInScratch(ctx, lenLocal, elemValtype, elemBytes);
-  // Fill: for k=0..n-1: arr[k] = neighbor attr value
+
+  // Sub-attr: track the "next write" slot. Without sub, slot == kLoc.
+  const filledLocal = sub ? em.allocLocal(I32) : -1;
+  if (sub) {
+    em.i32Const(0);
+    em.localSet(filledLocal);
+  }
+
+  // Fill: for k=0..n-1: optionally guarded by parent_match.
   const kLoc = em.allocLocal(I32);
   em.i32Const(0); em.localSet(kLoc);
   em.block(() => {
     em.loop(() => {
-      em.localGet(kLoc); em.localGet(lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
-      // address: arr.offsetLocal + k*8
-      em.localGet(kLoc); em.i32Const(8); em.op(OP_I32_MUL);
-      em.localGet(arr.offsetLocal); em.op(OP_I32_ADD);
-      // value: load neighbor attr
+      em.localGet(kLoc); em.i32Const(nbr.size); em.op(OP_I32_GE_S); em.brIf(1);
+      // Resolve neighbor cell idx and stash (used for parent_match + value load).
       em.localGet(ctx.iLocalIdx); em.i32Const(nbr.size); em.op(OP_I32_MUL);
       em.localGet(kLoc); em.op(OP_I32_ADD);
       em.i32Const(4); em.op(OP_I32_MUL);
       em.i32Load(nbr.offset, 2);
-      em.i32Const(attr.itemBytes); em.op(OP_I32_MUL);
-      if (attr.type === 'bool') em.i32Load8U(attr.readOffset, 0);
-      else if (attr.type === 'float') em.f64Load(attr.readOffset, 3);
-      else em.i32Load(attr.readOffset, 2);
-      if (attr.type !== 'float') em.i32ToF64();
-      em.f64Store(0, 3);
+      const cellIdxLocal = em.allocLocal(I32);
+      em.localSet(cellIdxLocal);
+
+      const writeSlot = () => {
+        // address: arr.offsetLocal + slot*8 (slot = filledLocal if sub, else kLoc)
+        if (sub) em.localGet(filledLocal);
+        else em.localGet(kLoc);
+        em.i32Const(8); em.op(OP_I32_MUL);
+        em.localGet(arr.offsetLocal); em.op(OP_I32_ADD);
+        // value: load attr at cellIdxLocal, promote to f64
+        em.localGet(cellIdxLocal);
+        em.i32Const(attr.itemBytes); em.op(OP_I32_MUL);
+        if (attr.type === 'bool') em.i32Load8U(attr.readOffset, 0);
+        else if (attr.type === 'float') em.f64Load(attr.readOffset, 3);
+        else em.i32Load(attr.readOffset, 2);
+        if (attr.type !== 'float') em.i32ToF64();
+        em.f64Store(0, 3);
+        if (sub) {
+          em.localGet(filledLocal); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(filledLocal);
+        }
+      };
+
+      if (sub) {
+        emitParentMatchAtIdxWasm(ctx, sub.parent, sub.parentValuesInt, cellIdxLocal, false);
+        em.ifThen(writeSlot);
+      } else {
+        writeSlot();
+      }
+
       em.localGet(kLoc); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(kLoc);
       em.br(0);
     });
   });
-  // Insertion sort in place
+
+  // For sub-attrs, narrow lenLocal so the sort + median pick operate on the
+  // filtered prefix. arr.lenLocal === lenLocal (same local).
+  if (sub) {
+    em.localGet(filledLocal);
+    em.localSet(lenLocal);
+  }
+
   insertionSortF64(ctx, arr);
-  // Median: if (n % 2 === 0) (arr[n/2-1] + arr[n/2]) / 2 else arr[(n-1)/2]
+
+  // Median: empty-set → 0 (matches JS AggregateNode contract); even → mean of
+  // middle two; odd → middle. (n & 1) == 0 means even.
   const result = em.allocLocal(F64);
-  // Compute parity: (n & 1) == 0
   em.localGet(lenLocal);
-  em.i32Const(1); em.op(OP_I32_AND);
-  em.op(OP_I32_EQZ);
+  em.i32Const(0);
+  em.op(OP_I32_EQ);
   em.ifThenElse(
     () => {
-      // (arr[n/2-1] + arr[n/2]) / 2
-      em.localGet(lenLocal); em.i32Const(2); em.emit(byte(0x6d)); /* OP_I32_DIV_S */
-      em.i32Const(1); em.op(OP_I32_SUB);
-      em.i32Const(8); em.op(OP_I32_MUL);
-      em.localGet(arr.offsetLocal); em.op(OP_I32_ADD);
-      em.f64Load(0, 3);
-      em.localGet(lenLocal); em.i32Const(2); em.emit(byte(0x6d));
-      em.i32Const(8); em.op(OP_I32_MUL);
-      em.localGet(arr.offsetLocal); em.op(OP_I32_ADD);
-      em.f64Load(0, 3);
-      em.op(OP_F64_ADD);
-      em.f64Const(2);
-      em.op(OP_F64_DIV);
+      em.f64Const(0);
       em.localSet(result);
     },
     () => {
-      // arr[(n-1)/2]
-      em.localGet(lenLocal); em.i32Const(1); em.op(OP_I32_SUB);
-      em.i32Const(2); em.emit(byte(0x6d));
-      em.i32Const(8); em.op(OP_I32_MUL);
-      em.localGet(arr.offsetLocal); em.op(OP_I32_ADD);
-      em.f64Load(0, 3);
-      em.localSet(result);
+      em.localGet(lenLocal);
+      em.i32Const(1); em.op(OP_I32_AND);
+      em.op(OP_I32_EQZ);
+      em.ifThenElse(
+        () => {
+          // (arr[n/2-1] + arr[n/2]) / 2
+          em.localGet(lenLocal); em.i32Const(2); em.op(OP_I32_DIV_S);
+          em.i32Const(1); em.op(OP_I32_SUB);
+          em.i32Const(8); em.op(OP_I32_MUL);
+          em.localGet(arr.offsetLocal); em.op(OP_I32_ADD);
+          em.f64Load(0, 3);
+          em.localGet(lenLocal); em.i32Const(2); em.op(OP_I32_DIV_S);
+          em.i32Const(8); em.op(OP_I32_MUL);
+          em.localGet(arr.offsetLocal); em.op(OP_I32_ADD);
+          em.f64Load(0, 3);
+          em.op(OP_F64_ADD);
+          em.f64Const(2);
+          em.op(OP_F64_DIV);
+          em.localSet(result);
+        },
+        () => {
+          // arr[(n-1)/2]
+          em.localGet(lenLocal); em.i32Const(1); em.op(OP_I32_SUB);
+          em.i32Const(2); em.op(OP_I32_DIV_S);
+          em.i32Const(8); em.op(OP_I32_MUL);
+          em.localGet(arr.offsetLocal); em.op(OP_I32_ADD);
+          em.f64Load(0, 3);
+          em.localSet(result);
+        },
+      );
     },
   );
   return { localIdx: result, valtype: F64 };
+}
+
+/** groupOperator.random over a sub-attribute neighborhood source.
+ *
+ *  Filters matching neighbor values into scratch, then picks uniformly from
+ *  the filtered length. RNG advances regardless of filtered length (matches
+ *  JS `Math.random()` semantics on empty arrays). Empty filtered set returns
+ *  0 — closest typed-array analog to JS `arr[0] === undefined` propagating
+ *  to a typed-array write as 0 (int/bool) or NaN-coerced-to-0 elsewhere.
+ *  The `index` output port is the position in the FILTERED set (matches JS,
+ *  which routes random via getNeighborsAttribute filter-with-push). */
+function emitRandomViaScratchFromSubAttrNbr(
+  ctx: WasmCompileCtx,
+  node: GraphNode,
+  nbr: NbrInfo,
+  attr: AttrInfo,
+  sub: WasmSubAttrInfo,
+): LocalRef | null {
+  const em = ctx.emitter;
+  const elemValtype = attrValType(attr.type);
+  const elemBytes = attr.itemBytes;
+
+  // Worst-case capacity = nbr.size. The filtered prefix is populated below.
+  const lenLocal = em.allocLocal(I32);
+  em.i32Const(nbr.size);
+  em.localSet(lenLocal);
+  const arr = allocArrayInScratch(ctx, lenLocal, elemValtype, elemBytes);
+
+  const filledLocal = em.allocLocal(I32);
+  em.i32Const(0);
+  em.localSet(filledLocal);
+
+  // Fill loop with parent_match guard.
+  const kLoc = em.allocLocal(I32);
+  em.i32Const(0); em.localSet(kLoc);
+  em.block(() => {
+    em.loop(() => {
+      em.localGet(kLoc); em.i32Const(nbr.size); em.op(OP_I32_GE_S); em.brIf(1);
+
+      em.localGet(ctx.iLocalIdx); em.i32Const(nbr.size); em.op(OP_I32_MUL);
+      em.localGet(kLoc); em.op(OP_I32_ADD);
+      em.i32Const(4); em.op(OP_I32_MUL);
+      em.i32Load(nbr.offset, 2);
+      const cellIdxLocal = em.allocLocal(I32);
+      em.localSet(cellIdxLocal);
+
+      emitParentMatchAtIdxWasm(ctx, sub.parent, sub.parentValuesInt, cellIdxLocal, false);
+      em.ifThen(() => {
+        // arr[filledLocal] = value at cellIdxLocal — store typed by attr.
+        em.localGet(filledLocal);
+        em.i32Const(elemBytes); em.op(OP_I32_MUL);
+        em.localGet(arr.offsetLocal); em.op(OP_I32_ADD);
+        em.localGet(cellIdxLocal);
+        em.i32Const(attr.itemBytes); em.op(OP_I32_MUL);
+        if (attr.type === 'bool') em.i32Load8U(attr.readOffset, 0);
+        else if (attr.type === 'float') em.f64Load(attr.readOffset, 3);
+        else em.i32Load(attr.readOffset, 2);
+        if (attr.type === 'bool') em.i32Store8(0, 0);
+        else if (attr.type === 'float') em.f64Store(0, 3);
+        else em.i32Store(0, 2);
+        em.localGet(filledLocal); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(filledLocal);
+      });
+
+      em.localGet(kLoc); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(kLoc);
+      em.br(0);
+    });
+  });
+
+  // Advance RNG (unconditional — matches JS behavior on empty arrays).
+  const rsLocal = em.allocLocal(I32);
+  em.i32Const(0); em.i32Load(ctx.layout.rngStateOffset, 2); em.localSet(rsLocal);
+  em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(13); em.op(OP_I32_SHL); em.op(OP_I32_XOR); em.localSet(rsLocal);
+  em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(17); em.op(OP_I32_SHR_U); em.op(OP_I32_XOR); em.localSet(rsLocal);
+  em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(5);  em.op(OP_I32_SHL); em.op(OP_I32_XOR); em.localSet(rsLocal);
+  em.i32Const(0); em.localGet(rsLocal); em.i32Store(ctx.layout.rngStateOffset, 2);
+
+  // Random index in [0, filledLocal). When filledLocal == 0, idx == 0.
+  em.localGet(rsLocal);
+  em.op(OP_F64_CONVERT_I32_U);
+  em.f64Const(4294967296); em.op(OP_F64_DIV);
+  em.localGet(filledLocal); em.i32ToF64();
+  em.op(OP_F64_MUL);
+  em.f64ToI32();
+  const idxLocal = em.allocLocal(I32);
+  em.localSet(idxLocal);
+
+  // Result: if filled > 0, arr[idx]; else 0 (closest defined analog to JS
+  // `arr[0] === undefined` for empty array, which writes as 0 to typed arrays).
+  const resultLocal = em.allocLocal(elemValtype);
+  em.localGet(filledLocal);
+  em.i32Const(0);
+  em.op(OP_I32_GT_S);
+  em.ifThenElse(
+    () => {
+      em.localGet(idxLocal);
+      em.i32Const(elemBytes); em.op(OP_I32_MUL);
+      em.localGet(arr.offsetLocal); em.op(OP_I32_ADD);
+      if (attr.type === 'bool') em.i32Load8U(0, 0);
+      else if (attr.type === 'float') em.f64Load(0, 3);
+      else em.i32Load(0, 2);
+      em.localSet(resultLocal);
+    },
+    () => {
+      if (attr.type === 'float') em.f64Const(0);
+      else em.i32Const(0);
+      em.localSet(resultLocal);
+    },
+  );
+
+  const ref: LocalRef = { localIdx: resultLocal, valtype: elemValtype };
+  setCachedPort(ctx, node.id, 'index', { localIdx: idxLocal, valtype: I32 });
+  setCachedPort(ctx, node.id, 'result', ref);
+  return ref;
 }
 
 /** In-place insertion sort of an f64 ArrayRef. Stable enough for median use. */

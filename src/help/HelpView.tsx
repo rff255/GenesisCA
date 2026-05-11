@@ -161,10 +161,12 @@ export function HelpView() {
               regardless of parent value, but storage at non-matching indices
               is invisible (reads always go through the parent-check guard).
               The compiler injects the guards automatically; no graph changes
-              are needed. Supported on JS and WASM compile targets, except two
-              edge-case ops (Aggregate median and GroupOperator random) which
-              fall back to JS on WASM. WebGPU falls back to WASM/JS for
-              sub-attribute models.
+              are needed. Supported on all three compile targets (JS, WASM,
+              WebGPU) across every node in the catalogue. The only edge cases
+              are Aggregate median and GroupOperator random on WebGPU &mdash;
+              not because of sub-attributes, but because WebGPU doesn&apos;t
+              implement those two ops at all; the worker falls back to JS for
+              models that use them.
             </li>
           </ul>
 
