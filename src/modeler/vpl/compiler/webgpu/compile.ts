@@ -31,6 +31,7 @@ import {
 } from '../../nodes/nodeValidation';
 import { getInlineValue, parseInlineNum } from '../inlinePort';
 import { INVALID_NI, packNI, NI_ARRAY_PRODUCERS } from '../niCodec';
+import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } from '../sinkAnalysis';
 
 export interface WebGPUEntryPoints {
   step: string;
@@ -112,6 +113,18 @@ interface CompileCtx {
   valueLocals: Map<string, Map<string, ValueRef>>;
   /** Per-node ArrayRef cache. Used by isArrayProducer dispatch. */
   arrayRefs: Map<string, ArrayRef>;
+  /** Sink-scope analysis for the current entry's flow tree. Tells us, for
+   *  every value-producing node, the deepest scope where it can be emitted
+   *  such that all uses are dominated. Set in compileEntry. */
+  sinkAnalysis?: SinkAnalysisResult;
+  /** Per-scope buffers for sunk value emissions. Each value's emit lines land
+   *  in branchLines[emitScope[nodeId]] (cellTop → ctx.lines directly) and
+   *  flushBranchValues drains them into ctx.lines when the flow walk enters
+   *  the matching branch. */
+  branchLines: Map<ScopeId, string[]>;
+  /** Flat post-macro-expansion graph; needed to feed the sink analyzer. */
+  graphNodes: GraphNode[];
+  graphEdges: GraphEdge[];
   /** Local counter for fresh variable name allocation. */
   localCounter: number;
   /** Errors accumulated; non-empty means compile failed for this entry. */
@@ -206,6 +219,42 @@ function attrWgslType(t: string): WgslType {
 
 function fresh(ctx: CompileCtx, prefix: string = 'l'): string {
   return `_${prefix}${ctx.localCounter++}`;
+}
+
+/** Run `emit` with ctx.lines redirected into a fresh buffer, then route the
+ *  captured lines based on the analyzer's emit scope for `nodeId`:
+ *   - CELL_TOP (or no analysis result) → push directly to ctx.lines (current
+ *     behaviour).
+ *   - deeper scope → append to ctx.branchLines[scope]; flushBranchValues
+ *     will drain it when the flow walk enters that branch.
+ *
+ * Captures only the emitter's OWN push'es. Any recursive `compileValueNode`
+ * calls the emitter triggers (e.g., for inputs) have already routed their
+ * own emissions before this wrapper saw them, since inputs are resolved
+ * upstream of the wrapped emit call. */
+function routeEmissionForNode<T>(ctx: CompileCtx, nodeId: string, emit: () => T): T {
+  const scope = ctx.sinkAnalysis?.emitScope.get(nodeId) ?? CELL_TOP;
+  if (scope === CELL_TOP) return emit();
+  const original = ctx.lines;
+  const captured: string[] = [];
+  ctx.lines = captured;
+  let result: T;
+  try {
+    result = emit();
+  } finally {
+    ctx.lines = original;
+  }
+  let arr = ctx.branchLines.get(scope);
+  if (!arr) { arr = []; ctx.branchLines.set(scope, arr); }
+  for (const line of captured) arr.push(line);
+  return result;
+}
+
+function flushBranchValues(ctx: CompileCtx, scope: ScopeId): void {
+  const arr = ctx.branchLines.get(scope);
+  if (!arr || arr.length === 0) return;
+  for (const line of arr) ctx.lines.push(line);
+  arr.length = 0;
 }
 
 function emitLet(ctx: CompileCtx, type: WgslType, expr: string, prefix: string = 'l'): ValueRef {
@@ -421,7 +470,7 @@ function compileArrayNode(ctx: CompileCtx, nodeId: string): ArrayRef | null {
     }
   }
 
-  const result = emitter({ ctx, node, inputs });
+  const result = routeEmissionForNode(ctx, nodeId, () => emitter({ ctx, node, inputs }));
   if (!result) return null;
   ctx.arrayRefs.set(nodeId, result);
   return result;
@@ -1759,7 +1808,7 @@ function compileValueNode(ctx: CompileCtx, nodeId: string, portId: string = 'val
     }
   }
 
-  const result = emitter({ ctx, node, inputs });
+  const result = routeEmissionForNode(ctx, nodeId, () => emitter({ ctx, node, inputs }));
   if (!result) return null;
   if (!getCachedPort(ctx, node.id, 'value')) setCachedPort(ctx, node.id, 'value', result);
   const outputPorts = def.ports.filter(p => p.kind === 'output' && p.category === 'value');
@@ -1894,9 +1943,11 @@ function compileFlowChain(ctx: CompileCtx, sourceNodeId: string, sourcePortId: s
       const cb = castTo(condRef, 'bool');
       const hasElse = ctx.flowOutputToTargets.has(`${node.id}:else`);
       ctx.lines.push(`  if (${cb}) {`);
+      flushBranchValues(ctx, `${node.id}:then`);
       if (!compileFlowChain(ctx, node.id, 'then')) return false;
       if (hasElse) {
         ctx.lines.push(`  } else {`);
+        flushBranchValues(ctx, `${node.id}:else`);
         if (!compileFlowChain(ctx, node.id, 'else')) return false;
       }
       ctx.lines.push(`  }`);
@@ -1918,6 +1969,7 @@ function compileFlowChain(ctx: CompileCtx, sourceNodeId: string, sourcePortId: s
       const cnt = castTo(countRef, 'i32');
       const li = fresh(ctx, 'li');
       ctx.lines.push(`  for (var ${li}: i32 = 0; ${li} < ${cnt}; ${li} = ${li} + 1) {`);
+      flushBranchValues(ctx, `${node.id}:body`);
       if (!compileFlowChain(ctx, node.id, 'body')) return false;
       ctx.lines.push(`  }`);
     } else if (node.data.nodeType === 'forEachInArray') {
@@ -1940,6 +1992,7 @@ function compileFlowChain(ctx: CompileCtx, sourceNodeId: string, sourcePortId: s
       ctx.lines.push(`  for (var ${fi}: i32 = 0; ${fi} < ${arrRef.lenName}; ${fi} = ${fi} + 1) {`);
       ctx.lines.push(`    let ${elemName}: ${arrRef.elemType} = ${arrLoad(arrRef, fi)};`);
       setCachedPort(ctx, node.id, 'element', { expr: elemName, type: arrRef.elemType });
+      flushBranchValues(ctx, `${node.id}:body`);
       if (!compileFlowChain(ctx, node.id, 'body')) return false;
       ctx.lines.push(`  }`);
     } else if (node.data.nodeType === 'switch') {
@@ -2002,10 +2055,14 @@ function compileFlowChain(ctx: CompileCtx, sourceNodeId: string, sourcePortId: s
       if (firstMatchOnly) {
         const open = (ci: number): boolean => {
           if (ci >= caseCount) {
-            if (hasDefault) return compileFlowChain(ctx, node.id, 'default');
+            if (hasDefault) {
+              flushBranchValues(ctx, `${node.id}:default`);
+              return compileFlowChain(ctx, node.id, 'default');
+            }
             return true;
           }
           ctx.lines.push(`  if (${caseConds[ci]}) {`);
+          flushBranchValues(ctx, `${node.id}:case_${ci}`);
           if (!compileFlowChain(ctx, node.id, `case_${ci}`)) return false;
           ctx.lines.push(`  } else {`);
           if (!open(ci + 1)) return false;
@@ -2019,11 +2076,13 @@ function compileFlowChain(ctx: CompileCtx, sourceNodeId: string, sourcePortId: s
         for (let ci = 0; ci < caseCount; ci++) {
           ctx.lines.push(`  if (${caseConds[ci]}) {`);
           ctx.lines.push(`    ${matched} = true;`);
+          flushBranchValues(ctx, `${node.id}:case_${ci}`);
           if (!compileFlowChain(ctx, node.id, `case_${ci}`)) return false;
           ctx.lines.push(`  }`);
         }
         if (hasDefault) {
           ctx.lines.push(`  if (!${matched}) {`);
+          flushBranchValues(ctx, `${node.id}:default`);
           if (!compileFlowChain(ctx, node.id, 'default')) return false;
           ctx.lines.push(`  }`);
         }
@@ -2175,7 +2234,17 @@ interface EntryOpts {
   currentMappingId: string | null;
 }
 
-function compileEntry(opts: EntryOpts, base: Omit<CompileCtx, 'lines' | 'valueLocals' | 'arrayRefs' | 'localCounter' | 'errors' | 'currentMappingId' | 'allowAttrWrites'>): { code: string; errors: string[] } {
+function compileEntry(opts: EntryOpts, base: Omit<CompileCtx, 'lines' | 'valueLocals' | 'arrayRefs' | 'localCounter' | 'errors' | 'currentMappingId' | 'allowAttrWrites' | 'sinkAnalysis' | 'branchLines'>): { code: string; errors: string[] } {
+  // Sink analysis: per-value LCA-of-uses scope assignment. Drives
+  // routeEmissionForNode (where each value's emit lines land) and the
+  // flushBranchValues calls in compileFlowChain. Per-entry — each root has
+  // its own flow tree.
+  const sinkAnalysis = analyzeSinkScopes({
+    nodes: base.graphNodes,
+    edges: base.graphEdges,
+    rootNodeId: opts.entry.id,
+    rootFlowPortId: 'do',
+  });
   const ctx: CompileCtx = {
     ...base,
     lines: [],
@@ -2185,6 +2254,8 @@ function compileEntry(opts: EntryOpts, base: Omit<CompileCtx, 'lines' | 'valueLo
     errors: [],
     currentMappingId: opts.currentMappingId,
     allowAttrWrites: opts.allowAttrWrites,
+    sinkAnalysis,
+    branchLines: new Map(),
   };
   if (opts.emitCopyPreamble) {
     // P8: skip per-cell copy for attrs that every flow path overwrites via
@@ -2380,13 +2451,15 @@ export function compileGraphWebGPU(
   let maxArraySize = 1;
   for (const n of layout.nbrs) if (n.size > maxArraySize) maxArraySize = n.size;
 
-  const baseCtx: Omit<CompileCtx, 'lines' | 'valueLocals' | 'arrayRefs' | 'localCounter' | 'errors' | 'currentMappingId' | 'allowAttrWrites'> = {
+  const baseCtx: Omit<CompileCtx, 'lines' | 'valueLocals' | 'arrayRefs' | 'localCounter' | 'errors' | 'currentMappingId' | 'allowAttrWrites' | 'sinkAnalysis' | 'branchLines'> = {
     model, layout, viewerIds, stopMessages, maxArraySize,
     nodeMap: adj.nodeMap,
     inputToSource: adj.inputToSource,
     inputToSources: adj.inputToSources,
     flowOutputToTargets: adj.flowOutputToTargets,
     outDegree: adj.outDegree,
+    graphNodes: nodes,
+    graphEdges: edges,
   };
 
   // Step entry point — root is the (typically single) Step node.
