@@ -19,7 +19,7 @@
  * as a target-specific precision difference vs JS/WASM.
  */
 
-import type { CAModel, GraphEdge, GraphNode } from '../../../../model/types';
+import type { Attribute, CAModel, GraphEdge, GraphNode } from '../../../../model/types';
 import { computeWebGPULayout, type WebGPULayout, type WebGPULayoutAttr, type WebGPULayoutNbr } from './layout';
 import {
   emitBindings, emitEntryPoint, emitPerCellCopyPreamble, sanitiseWgslName,
@@ -32,7 +32,7 @@ import {
 import { getInlineValue, parseInlineNum } from '../inlinePort';
 import { INVALID_NI, packNI, NI_ARRAY_PRODUCERS } from '../niCodec';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } from '../sinkAnalysis';
-import { isSubAttribute } from '../subAttribute';
+import { subAttrInfo, subAttributesOf } from '../subAttribute';
 
 export interface WebGPUEntryPoints {
   step: string;
@@ -346,6 +346,133 @@ function encodeAttrWord(attrType: string, srcExpr: string, srcType: WgslType): s
   return `bitcast<u32>(i32(${srcExpr}))`;
 }
 
+// ---------------------------------------------------------------------------
+// Sub-attribute helpers (WGSL-specific guard / literal emission)
+//
+// All three guard sites compare the parent's raw u32 slot against literal
+// u32 values — bool stored as 0/1, tag stored as bitcast<u32>(int) which
+// for non-negative tag indices equals u32(index). Scalar reads (current
+// cell, fixed neighbour idx) wrap the raw `readAttr` with `select(undef,
+// raw, parent_match)`. Iteration consumer loops use the same `parent_match`
+// expression as a `continue` predicate (the cell isn't part of the
+// effective neighbourhood from the user's perspective).
+// ---------------------------------------------------------------------------
+
+/** WGSL boolean expression: true when the parent attribute at `idxExpr` holds
+ *  one of `parentValues`. `parent` must be a Tag or Boolean cell attribute. */
+function parentMatchExprWgsl(
+  ctx: CompileCtx,
+  parent: Attribute,
+  parentValues: string[],
+  idxExpr: string,
+  useWriteBuf: boolean,
+): string {
+  if (parentValues.length === 0) return 'false';
+  const parentLayout = getAttr(ctx.layout, parent.id);
+  if (!parentLayout) return 'false';
+  const buf = useWriteBuf ? 'attrsWrite' : 'attrsRead';
+  const slot = parentLayout.wordOffset === 0
+    ? `${buf}[${idxExpr}]`
+    : `${buf}[${parentLayout.wordOffset}u + ${idxExpr}]`;
+  const literals = parentValues.map(v => {
+    if (parent.type === 'bool') return v === 'true' || v === '1' ? '1u' : '0u';
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) && n >= 0 ? `${n}u` : `bitcast<u32>(${Number.isFinite(n) ? n : 0})`;
+  });
+  const uniq = Array.from(new Set(literals));
+  if (uniq.length === 1) return `(${slot} == ${uniq[0]})`;
+  return `(` + uniq.map(l => `${slot} == ${l}`).join(' || ') + `)`;
+}
+
+/** WGSL typed literal matching the attribute's logical type (i32 for tag /
+ *  integer / neighborIndex, f32 for float, bool for bool). Mirrors
+ *  attrValueLiteralJS in subAttribute.ts. */
+function attrValueLiteralWgsl(attr: Attribute, valueStr: string | undefined): ValueRef {
+  const raw = valueStr ?? attr.defaultValue ?? '';
+  switch (attr.type) {
+    case 'bool': {
+      const b = raw === 'true' || raw === '1';
+      return { expr: b ? 'true' : 'false', type: 'bool' };
+    }
+    case 'integer':
+    case 'tag':
+    case 'neighborIndex': {
+      const n = parseInt(raw, 10);
+      return { expr: Number.isFinite(n) ? `${n}` : '0', type: 'i32' };
+    }
+    case 'float': {
+      const n = parseFloat(raw);
+      const s = Number.isFinite(n) ? String(n) : '0';
+      return { expr: s.includes('.') || s.includes('e') || s.includes('E') ? s : `${s}.0`, type: 'f32' };
+    }
+    default:
+      return { expr: '0', type: 'i32' };
+  }
+}
+
+/** Read attr value at idxExpr, wrapped with sub-attribute parent-match guard.
+ *  Returns the raw read if attr is not a sub-attribute. */
+function readAttrGuarded(
+  ctx: CompileCtx,
+  attr: WebGPULayoutAttr,
+  idxExpr: string = 'idx',
+  useWriteBuf: boolean = false,
+): ValueRef {
+  const raw = readAttr(attr, idxExpr, useWriteBuf);
+  const modelAttr = ctx.model.attributes.find(a => a.id === attr.id);
+  const sub = subAttrInfo(modelAttr, ctx.model);
+  if (!sub) return raw;
+  const matchExpr = parentMatchExprWgsl(ctx, sub.parent, sub.parentValues, idxExpr, useWriteBuf);
+  const undef = attrValueLiteralWgsl(modelAttr!, sub.undefinedValue);
+  // WGSL select(falseValue, trueValue, cond): cond==true returns trueValue.
+  return { expr: `select(${undef.expr}, ${raw.expr}, ${matchExpr})`, type: raw.type };
+}
+
+/** Returns the WGSL parent-match expression for attr at idxExpr, or null when
+ *  attr is not a sub-attribute. Iteration consumer loops use this to inject
+ *  `if (!(<match>)) { continue; }` skips on non-matching neighbours. */
+function subAttrIterMatchExpr(
+  ctx: CompileCtx,
+  attrId: string,
+  idxExpr: string,
+  useWriteBuf: boolean = false,
+): string | null {
+  const modelAttr = ctx.model.attributes.find(a => a.id === attrId);
+  const sub = subAttrInfo(modelAttr, ctx.model);
+  if (!sub) return null;
+  return parentMatchExprWgsl(ctx, sub.parent, sub.parentValues, idxExpr, useWriteBuf);
+}
+
+/** Emit per-cell conditional copy lines for every sub-attribute in the model.
+ *  Matches the JS/WASM contract: at the top of each cell iteration in sync
+ *  mode, `attrsWrite[subAttr][i] = parent_matches(attrsRead[parent][i])
+ *  ? attrsRead[subAttr][i] : defaultValue`. Storage at non-matching cells is
+ *  scrubbed back to defaultValue one step after a flip-out, and the user's
+ *  rule's writes (which run later in the cell body) overwrite this seed where
+ *  needed — so write-order between setAttribute(subAttr) and setAttribute(parent)
+ *  is irrelevant. The bulk preamble skips sub-attrs (they're added to the
+ *  elidable set at the call site), so the only copy these get is this one. */
+function emitSubAttrConditionalCopy(ctx: CompileCtx): string[] {
+  const lines: string[] = [];
+  for (const subAttr of subAttributesOf(ctx.model)) {
+    const layoutAttr = getAttr(ctx.layout, subAttr.id);
+    if (!layoutAttr) continue;
+    const info = subAttrInfo(subAttr, ctx.model);
+    if (!info) continue;
+    const slotR = layoutAttr.wordOffset === 0
+      ? `attrsRead[idx]`
+      : `attrsRead[${layoutAttr.wordOffset}u + idx]`;
+    const slotW = layoutAttr.wordOffset === 0
+      ? `attrsWrite[idx]`
+      : `attrsWrite[${layoutAttr.wordOffset}u + idx]`;
+    const matchExpr = parentMatchExprWgsl(ctx, info.parent, info.parentValues, 'idx', false);
+    const defaultLit = attrValueLiteralWgsl(subAttr, subAttr.defaultValue);
+    const defaultWord = encodeAttrWord(subAttr.type, defaultLit.expr, defaultLit.type);
+    lines.push(`  ${slotW} = select(${defaultWord}, ${slotR}, ${matchExpr});`);
+  }
+  return lines;
+}
+
 function readModelAttr(layout: WebGPULayout, key: string): ValueRef | null {
   const off = layout.modelAttrOffset[key];
   if (off === undefined) return null;
@@ -573,6 +700,12 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${inArr.lenName}; ${k} = ${k} + 1) {`);
     ctx.lines.push(`    let _niIn_${k}: i32 = ${arrLoad(inArr, k)};`);
     ctx.lines.push(`    let _nci_${k}: i32 = ${emitNiCellIdx(`_niIn_${k}`)};`);
+    // Sub-attribute iteration semantics: non-matching neighbours never reach
+    // the user's predicate (the sub-attribute "doesn't exist" on them).
+    const subFilterSkip = subAttrIterMatchExpr(ctx, attrId, `u32(_nci_${k})`, false);
+    if (subFilterSkip) {
+      ctx.lines.push(`    if (!${subFilterSkip}) { continue; }`);
+    }
     const elem = readAttr(attr, `u32(_nci_${k})`, false);
     ctx.lines.push(`    let _e_${k}: ${elem.type} = ${elem.expr};`);
     const elemF = castTo({ expr: `_e_${k}`, type: elem.type }, 'f32');
@@ -710,6 +843,11 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
       const n = fresh(ctx, 'gcn');
       ctx.lines.push(`  for (var ${n}: i32 = 0; ${n} < ${nbr.size}; ${n} = ${n} + 1) {`);
       ctx.lines.push(`    let _nci_${n}: i32 = ${emitNbrCellIdx(nbr, n)};`);
+      // Sub-attribute: non-matching neighbours don't appear in the counted set.
+      const subGcSkip = subAttrIterMatchExpr(ctx, srcNode.data.config.attributeId as string, `u32(_nci_${n})`, false);
+      if (subGcSkip) {
+        ctx.lines.push(`    if (!${subGcSkip}) { continue; }`);
+      }
       const elem = readAttr(attr, `u32(_nci_${n})`, false);
       const elemF = castTo({ expr: elem.expr, type: elem.type }, 'f32');
       emitMatch(n, elemF);
@@ -742,17 +880,32 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     const elemType = attrElemType(attr.type);
     const out = allocArray(ctx, elemType, 'arrNbrAttr', inArr.maxLen);
     const k = fresh(ctx, 'nak');
+    // Sub-attribute: filter-with-push. Only matching neighbours contribute,
+    // so the output length is the match count (tracked via out.lenName).
+    // For regular attrs the loop unconditionally writes at slot k and assigns
+    // the final length once after the loop.
+    const subNbiSkip = subAttrIterMatchExpr(ctx, attrId, `u32(_nci_${k})`, false);
     ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${inArr.lenName}; ${k} = ${k} + 1) {`);
     ctx.lines.push(`    let _niIn_${k}: i32 = ${arrLoad(inArr, k)};`);
     ctx.lines.push(`    let _nci_${k}: i32 = ${emitNiCellIdx(`_niIn_${k}`)};`);
+    if (subNbiSkip) {
+      ctx.lines.push(`    if (!${subNbiSkip}) { continue; }`);
+    }
     const e = readAttr(attr, `u32(_nci_${k})`, false);
     let stored: string;
     if (attr.type === 'bool') stored = `select(0, 1, ${e.expr})`;
     else if (attr.type === 'float') stored = e.expr;
     else stored = e.expr;
-    ctx.lines.push(`    ${out.name}[${k}] = ${stored};`);
+    if (subNbiSkip) {
+      ctx.lines.push(`    ${out.name}[${out.lenName}] = ${stored};`);
+      ctx.lines.push(`    ${out.lenName} = ${out.lenName} + 1;`);
+    } else {
+      ctx.lines.push(`    ${out.name}[${k}] = ${stored};`);
+    }
     ctx.lines.push(`  }`);
-    ctx.lines.push(`  ${out.lenName} = ${inArr.lenName};`);
+    if (!subNbiSkip) {
+      ctx.lines.push(`  ${out.lenName} = ${inArr.lenName};`);
+    }
     return out;
   },
 };
@@ -887,7 +1040,8 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     const attrId = node.data.config.attributeId as string;
     const attr = getAttr(ctx.layout, attrId);
     if (!attr) { ctx.errors.push(`getCellAttribute: unknown attr ${attrId}`); return null; }
-    const r = readAttr(attr, 'idx', false);
+    // Sub-attribute scalar read: parent_match ? raw : undefinedValue.
+    const r = readAttrGuarded(ctx, attr, 'idx', false);
     return emitLet(ctx, r.type, r.expr, 'cell');
   },
 
@@ -1115,7 +1269,8 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     // either wraps to a real cell (torus) or hits the sentinel slot (constant);
     // in either case we discard the result by selecting the default.
     const cellIdx = emitLet(ctx, 'i32', emitNiCellIdx(niLocal.expr), 'nci');
-    const r = readAttr(attr, `u32(${cellIdx.expr})`, false);
+    // Sub-attribute scalar read at neighbour cell: parent_match ? raw : undefinedValue.
+    const r = readAttrGuarded(ctx, attr, `u32(${cellIdx.expr})`, false);
     if (r.type === 'f32') {
       return emitLet(ctx, 'f32', `select(0.0, ${r.expr}, ${niLocal.expr} != ${INVALID_NI})`, 'nbAtr');
     }
@@ -1133,7 +1288,8 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     if (!nbr || !attr) { ctx.errors.push(`getNeighborAttributeByTag: unknown nbr/attr`); return null; }
     const tagIdx = Number((node.data.config as Record<string, unknown>)._resolvedTagIndex ?? 0);
     const cellIdx = emitLet(ctx, 'i32', emitNbrCellIdx(nbr, `${tagIdx | 0}`), 'nci');
-    const r = readAttr(attr, `u32(${cellIdx.expr})`, false);
+    // Sub-attribute scalar read at the tagged neighbour: parent_match ? raw : undefinedValue.
+    const r = readAttrGuarded(ctx, attr, `u32(${cellIdx.expr})`, false);
     return emitLet(ctx, r.type, r.expr, 'nbAtr');
   },
 
@@ -1274,11 +1430,19 @@ function emitAggregateOrCount(
   // Cap at sum/product/min/max/and/or/average + the count comparisons (which
   // already match the array emitter's semantics).
   let fusedNbrAttrPath = false;
+  // Sub-attribute sources route through the materialised filter-with-push path
+  // (getNeighborsAttrByIndexes does the parent_match skip while filling) and
+  // the aggregate then walks the filtered array. Fusion would have to recreate
+  // skip + matchCount inline, doubling the maintenance surface for marginal
+  // benefit on the type-dispatched models that use sub-attrs.
+  const fusedSrcAttrId = (firstSrcNode?.data.config.attributeId as string) || '';
+  const fusedSrcIsSubAttr = !!subAttrIterMatchExpr(ctx, fusedSrcAttrId, 'idx', false);
   if (
     isArrayPath
     && firstSrcNode!.data.nodeType === 'getNeighborsAttrByIndexes'
     && (ctx.outDegree.get(firstSrc.nodeId) ?? 0) === 1
     && (mode === 'count' || (op !== 'median' && op !== 'random'))
+    && !fusedSrcIsSubAttr
   ) {
     const srcNode = firstSrcNode!;
     const nbrId = srcNode.data.config.neighborhoodId as string;
@@ -1307,6 +1471,20 @@ function emitAggregateOrCount(
     if (!arrRef) return null;
   }
 
+  // Sub-attribute on the nbr-path: pre-declare matchCount before the loop, so
+  // it survives the loop's block scope. The post-divide / iterTag for min-max
+  // both need it. Declared here (in the outer block) so it's in scope below.
+  let nbrSubMatch: string | null = null;
+  let nbrMatchCount: { name: string; type: WgslType } | null = null;
+  if (isNbrPath && !fusedNbrAttrPath) {
+    const srcAttrId = (firstSrcNode!.data.config.attributeId as string) || '';
+    // Use a placeholder idxExpr just to detect whether attr is a sub-attr; the
+    // real idxExpr is built inside the loop body and re-passed below.
+    if (subAttrIterMatchExpr(ctx, srcAttrId, 'idx', false)) {
+      nbrMatchCount = emitVar(ctx, 'i32', '0', 'mc');
+    }
+  }
+
   if (fusedNbrAttrPath) {
     // Loop already emitted above; fall through to the result-wrapping tail.
   } else if (isNbrPath) {
@@ -1319,12 +1497,21 @@ function emitAggregateOrCount(
       ctx.errors.push(`${mode}: unknown nbr/attr (${nbrId}/${attrId})`); return null;
     }
     const nVar = fresh(ctx, 'n');
+    nbrSubMatch = subAttrIterMatchExpr(ctx, attrId, `u32(_nci_${nVar})`, false);
     ctx.lines.push(`  for (var ${nVar}: i32 = 0; ${nVar} < ${nbr.size}; ${nVar} = ${nVar} + 1) {`);
     ctx.lines.push(`    let _nci_${nVar}: i32 = ${emitNbrCellIdx(nbr, nVar)};`);
+    if (nbrSubMatch) {
+      // Skip non-matching neighbours and track filtered count. The position
+      // exposed to trackIndex (groupOperator min/max) is the position-in-
+      // filtered-set, matching JS/WASM semantics.
+      ctx.lines.push(`    if (!${nbrSubMatch}) { continue; }`);
+      ctx.lines.push(`    ${nbrMatchCount!.name} = ${nbrMatchCount!.name} + 1;`);
+    }
     const elem = readAttr(attr, `u32(_nci_${nVar})`, false);
     ctx.lines.push(`    let _e_${nVar}: ${elem.type} = ${elem.expr};`);
     const elemRef: ValueRef = { expr: `_e_${nVar}`, type: elem.type };
-    emitAccumStep(ctx, mode, op, acc, elemRef, cmpRef, cmpHighRef, lo, hi, trackIndex, bestIdx, nVar);
+    const iterTag = nbrSubMatch ? `(${nbrMatchCount!.name} - 1)` : nVar;
+    emitAccumStep(ctx, mode, op, acc, elemRef, cmpRef, cmpHighRef, lo, hi, trackIndex, bestIdx, iterTag);
     ctx.lines.push(`  }`);
   } else if (arrRef) {
     const nVar = fresh(ctx, 'an');
@@ -1352,10 +1539,15 @@ function emitAggregateOrCount(
     }
   }
 
-  // Average post-divide for nbr path
+  // Average post-divide for nbr path. For sub-attribute sources, divide by
+  // matchCount (filtered) instead of the fixed neighbourhood size.
   if (isNbrPath && op === 'average') {
-    const nbrSize = (firstSrcNode && getNbr(ctx.layout, firstSrcNode.data.config.neighborhoodId as string)?.size) || 1;
-    ctx.lines.push(`  ${acc.name} = ${acc.name} / ${Math.max(1, nbrSize)}.0;`);
+    if (nbrMatchCount) {
+      ctx.lines.push(`  ${acc.name} = ${acc.name} / max(1.0, f32(${nbrMatchCount.name}));`);
+    } else {
+      const nbrSize = (firstSrcNode && getNbr(ctx.layout, firstSrcNode.data.config.neighborhoodId as string)?.size) || 1;
+      ctx.lines.push(`  ${acc.name} = ${acc.name} / ${Math.max(1, nbrSize)}.0;`);
+    }
   }
   if (arrRef && op === 'average') {
     ctx.lines.push(`  ${acc.name} = ${acc.name} / max(1.0, f32(${arrRef.lenName}));`);
@@ -1490,8 +1682,13 @@ function emitGroupStatement(c: NodeEmitContext): ValueRef | null {
       ctx.errors.push(`groupStatement: unknown nbr/attr`); return null;
     }
     const nVar = fresh(ctx, 'gn');
+    const gsSubMatch = subAttrIterMatchExpr(ctx, attrId, `u32(_nci_${nVar})`, false);
     ctx.lines.push(`  for (var ${nVar}: i32 = 0; ${nVar} < ${nbr.size}; ${nVar} = ${nVar} + 1) {`);
     ctx.lines.push(`    let _nci_${nVar}: i32 = ${emitNbrCellIdx(nbr, nVar)};`);
+    if (gsSubMatch) {
+      // Sub-attribute: non-matching neighbours don't appear in the tested set.
+      ctx.lines.push(`    if (!${gsSubMatch}) { continue; }`);
+    }
     const elem = readAttr(attr, `u32(_nci_${nVar})`, false);
     ctx.lines.push(`    let _e_${nVar}: ${elem.type} = ${elem.expr};`);
     const elemF = castTo({ expr: `_e_${nVar}`, type: elem.type }, 'f32');
@@ -1688,7 +1885,10 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
     const slot = attr.wordOffset === 0 ? `attrsWrite[idx]` : `attrsWrite[${attr.wordOffset}u + idx]`;
 
     // Read current value from write buffer (matches JS read-modify-write).
-    const cur = readAttr(attr, 'idx', true);
+    // Sub-attribute reads return undefinedValue when parent doesn't match —
+    // the write itself proceeds regardless (rule a). The stored "garbage"
+    // at non-matching cells is invisible to subsequent reads (also wrapped).
+    const cur = readAttrGuarded(ctx, attr, 'idx', true);
     const curRef = emitLet(ctx, cur.type, cur.expr, 'cur');
 
     let newExpr: string;
@@ -2264,8 +2464,13 @@ function compileEntry(opts: EntryOpts, base: Omit<CompileCtx, 'lines' | 'valueLo
     // models where the rule fully recomputes some attrs every step
     // (e.g. Game of Life: alive is always set).
     const skip = computeElidablePreambleAttrs(ctx, opts.entry.id);
+    // Sub-attributes use a per-cell conditional copy instead of the bulk
+    // pass-through, so they're skipped from the elidable preamble emission
+    // and emitted via `emitSubAttrConditionalCopy` immediately after.
+    for (const subAttr of subAttributesOf(ctx.model)) skip.add(subAttr.id);
     const copy = emitPerCellCopyPreamble(ctx.layout, skip);
     if (copy) ctx.lines.push(copy.replace(/\n$/, ''));
+    for (const line of emitSubAttrConditionalCopy(ctx)) ctx.lines.push(line);
   }
   // Pre-emit ALL referenced value nodes at the top scope so subsequent
   // references inside conditional branches resolve correctly.
@@ -2395,24 +2600,18 @@ export function compileGraphWebGPU(
   graphEdges: GraphEdge[],
   model: CAModel,
 ): WebGPUCompileResult {
-  // Sub-attributes not yet supported on WebGPU target — bail out and let the
-  // worker fall back to WASM/JS. Per-cell parent-check guards in WGSL are
-  // straightforward, but the post-step storage scrub for non-matching cells
-  // needs a dedicated compute pipeline plus careful binding management; for
-  // v1 we keep WebGPU on regular attrs only and surface a clear error.
-  const subAttrNames = model.attributes
-    .filter(a => isSubAttribute(a))
-    .map(a => a.name);
-  if (subAttrNames.length > 0) {
-    const list = subAttrNames.join(', ');
-    return {
-      shaderCode: '',
-      entryPoints: { step: 'step', outputMappings: [] },
-      layout: computeWebGPULayout(model),
-      viewerIds: {},
-      error: `Sub-attributes (${list}) are not yet supported on the WebGPU compile target. Falling back to WASM/JS, which handle this correctly.`,
-    };
-  }
+  // Sub-attributes are now natively supported on WebGPU:
+  //   - Scalar reads (GetCellAttribute / GetNeighborAttributeByIndex / Tag)
+  //     wrap with `select(undefinedValue, raw, parent_match)` in `readAttr*`.
+  //   - Iteration consumers (FilterNeighbors, GetNeighborsAttrByIndexes,
+  //     Aggregate/GroupOperator/GroupCounting/GroupStatement nbr-path) inject
+  //     a `continue` skip on non-matching neighbours; for nbr-path aggregate,
+  //     matchCount drives the average post-divide and the bestIdx for
+  //     groupOperator min/max (position-in-filtered-set, matching JS/WASM).
+  //   - Per-cell conditional copy at the top of `step` mirrors the JS/WASM
+  //     copy-line semantics (auto-scrub one step after a flip-out).
+  // The general WebGPU rejections still apply: median / random on aggregate
+  // and groupOperator paths fall back to JS regardless of sub-attr status.
 
   const layout = computeWebGPULayout(model);
 

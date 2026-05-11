@@ -419,6 +419,10 @@ let linkedDefs: Array<{
   binCount?: number;
   tagOptions?: string[];
   watched?: boolean;
+  /** Sub-attribute marker. When true, GPU-side reductions skip this indicator
+   *  (the parent_match guard isn't expressible against the current reduction
+   *  shader's binding set) and the CPU readback path handles it. */
+  isSubAttribute?: boolean;
 }> = [];
 let linkedAccumulators: Record<string, number | Record<string, number>> = {};
 let linkedResults: Record<string, number | Record<string, number>> = {};
@@ -1427,6 +1431,13 @@ function initIndicators(defs: IndicatorDef[]): void {
         binCount: ind.binCount,
         tagOptions: linkedAttr?.tagOptions,
         watched: ind.watched,
+        // Sub-attribute indicators stay on the CPU readback path so the
+        // existing parent_match guard in computeLinkedIndicatorsFromBuffer
+        // applies. Without this flag, buildReductionPlan would put them on
+        // the GPU and the reduction shader would aggregate over every cell
+        // (including non-matching cells whose storage is scrubbed to
+        // defaultValue, double-counting that bucket).
+        isSubAttribute: !!linkedAttr?.parentAttributeId,
       });
     }
   }

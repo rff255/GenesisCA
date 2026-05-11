@@ -39,6 +39,13 @@ export interface LinkedDef {
   binCount?: number;
   tagOptions?: string[];
   watched?: boolean;
+  /** Set when the linked attribute is a sub-attribute. Sub-attribute indicators
+   *  fall back to the CPU readback path (computeLinkedIndicatorsFromBuffer
+   *  already applies the parent_match guard); the GPU shader doesn't have the
+   *  parent attribute's wordOffset / parentValues in its current binding set,
+   *  and the cost of CPU readback for the typically-one sub-attr indicator is
+   *  small (a few ms at 1000²). */
+  isSubAttribute?: boolean;
 }
 
 export interface ReductionPlanEntry {
@@ -76,6 +83,12 @@ export function buildReductionPlan(linkedDefs: LinkedDef[], layout: WebGPULayout
   for (const d of linkedDefs) {
     if (!d.watched) continue;
     if (!d.attrId || !d.attrType || !d.aggregation) continue;
+    // Sub-attribute aggregation requires a parent_match guard inside the
+    // reduction shader (cells where the parent doesn't match must not
+    // contribute). The current binding set doesn't expose parent metadata;
+    // fall back to CPU readback + computeLinkedIndicatorsFromBuffer, which
+    // already applies the guard.
+    if (d.isSubAttribute) continue;
     const attr = layout.attrs.find(a => a.id === d.attrId);
     if (!attr) continue;
     let slotCount = 0;
