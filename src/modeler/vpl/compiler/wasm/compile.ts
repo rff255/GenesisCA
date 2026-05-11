@@ -975,6 +975,22 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return emitAggregateOrCount(ctx, node, inputs, 'count');
   },
 
+  // Wave A.7: filterNeighbors is multi-output (result array + scalar count).
+  // The array emitter caches both — calling compileArrayNode here triggers
+  // the emit (or hits the cache if already run) and the count port appears in
+  // ctx.valueLocals. Then return the cached count LocalRef.
+  filterNeighbors: ({ node, ctx }) => {
+    const arr = compileArrayNode(node.id, ctx);
+    if (!arr) return null;
+    const cached = getCachedPort(ctx, node.id, 'count');
+    if (cached) return cached;
+    // Fallback: re-cache directly from the ArrayRef's lenLocal if the array
+    // emitter didn't (defensive — current emitter always caches, see line ~2545).
+    const ref: LocalRef = { localIdx: arr.lenLocal, valtype: I32 };
+    setCachedPort(ctx, node.id, 'count', ref);
+    return ref;
+  },
+
   // -- Random (xorshift32, similar to JS GetRandomNode) --
   getRandom: ({ node, ctx, inputs }) => {
     const t = (node.data.config.randomType as string) || 'float';
@@ -2533,6 +2549,11 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
         ctx.emitter.br(0);
       });
     });
+
+    // Wave A.7: expose the final length on the `count` value port too. Lets
+    // downstream scalar consumers read `_v<id>_count` directly without
+    // bouncing through `arrayLength`.
+    setCachedPort(ctx, node.id, 'count', { localIdx: outLenLocal, valtype: I32 });
 
     return { kind: 'array', offsetLocal: outOffsetLocal, lenLocal: outLenLocal, elemValtype: I32, elemBytes: 4 };
   },

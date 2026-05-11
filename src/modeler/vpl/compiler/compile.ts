@@ -56,6 +56,9 @@ function isMultiOutput(data: { nodeType: string; config: Record<string, string |
   if (data.nodeType === 'getModelAttribute' && data.config.isColorAttr) return true;
   if (data.nodeType === 'groupStatement' || data.nodeType === 'groupCounting'
     || data.nodeType === 'groupOperator') return true;
+  // filterNeighbors exposes the kept array (`result`) and its length (`count`)
+  // — varName resolves both via the `_v<id>_<port>` convention.
+  if (data.nodeType === 'filterNeighbors') return true;
   return false;
 }
 
@@ -347,10 +350,8 @@ function compileRoot(
     if (sourceNode?.data.nodeType === 'getNeighborsAttrByIndexes') {
       return `_v${sourceNodeId}_vals`;
     }
-    // FilterNeighbors uses _v{id}_result scratch array
-    if (sourceNode?.data.nodeType === 'filterNeighbors') {
-      return `_v${sourceNodeId}_result`;
-    }
+    // FilterNeighbors is multi-output (result + count) — caught by the
+    // isMultiOutput branch above; both ports resolve via `_v<id>_<port>`.
     // JoinNeighbors intersection uses _v{id}_result scratch array; union uses _v{id} (default)
     if (sourceNode?.data.nodeType === 'joinNeighbors'
       && ((sourceNode.data.config.operation as string) || 'intersection') === 'intersection') {

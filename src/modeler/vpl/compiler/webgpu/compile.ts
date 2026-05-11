@@ -541,6 +541,12 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     ctx.lines.push(`      ${out.lenName} = ${out.lenName} + 1;`);
     ctx.lines.push(`    }`);
     ctx.lines.push(`  }`);
+    // Wave A.7: expose final length on the `count` scalar value port so
+    // downstream consumers can read it without a separate arrayLength node.
+    // `out.lenName` is a `var` at the entry-point top scope (allocArray puts
+    // both `arr` and `arr_len` there), so it's in scope wherever the count
+    // is later referenced.
+    setCachedPort(ctx, node.id, 'count', { expr: out.lenName, type: 'i32' });
     return out;
   },
 
@@ -957,6 +963,22 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
   },
   groupOperator: (c) => emitAggregateOrCount(c, 'groupOperator'),
   groupStatement: (c) => emitGroupStatement(c),
+
+  // Wave A.7: filterNeighbors is multi-output. The array emitter caches the
+  // `count` scalar port as a side effect, so calling compileArrayNode here
+  // either hits an existing cache or runs the array emit (which caches both
+  // result + count). Then we return the cached scalar count.
+  filterNeighbors: (c) => {
+    const arr = compileArrayNode(c.ctx, c.node.id);
+    if (!arr) return null;
+    const cached = getCachedPort(c.ctx, c.node.id, 'count');
+    if (cached) return cached;
+    // Defensive fallback — current array emitter always caches `count`, but
+    // if a future variant forgets, materialise from the array's len directly.
+    const ref: ValueRef = { expr: arr.lenName, type: 'i32' };
+    setCachedPort(c.ctx, c.node.id, 'count', ref);
+    return ref;
+  },
 
   getRandom: ({ node, ctx, inputs }) => {
     const t = (node.data.config.randomType as string) || 'float';

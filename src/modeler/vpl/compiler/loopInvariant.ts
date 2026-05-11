@@ -48,6 +48,17 @@ const NEVER_INVARIANT = new Set<string>([
   'filterNeighbors',
   'joinNeighbors',
   'getNeighborIndexesByTags',
+  // RNG side-effect: every invocation must advance the shared _rs stream.
+  // Without this, the composite rule classifies `pickRandomNeighbor` (or
+  // `pickNRandomNeighbors`) as invariant whenever ALL its inputs happen to
+  // be invariant — e.g. wired straight from `getAllNeighborIndexes` (no
+  // inputs → vacuously invariant). The hoist then emits the pick ONCE
+  // pre-loop and every cell sees the same random pick within a step.
+  // WebGPU is unaffected (per-cell PCG via `rand_f32(idx)`); JS/WASM use
+  // the shared xorshift32 stream and depend on per-cell emission for
+  // correctness.
+  'pickRandomNeighbor',
+  'pickNRandomNeighbors',
   // Entry-point / flow types — never invariant; included here for safety so
   // they're never falsely hoisted if a downstream consumer dereferences them.
   'inputColor',
