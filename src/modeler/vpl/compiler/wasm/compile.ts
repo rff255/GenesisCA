@@ -38,6 +38,7 @@ import {
 import type { MemoryLayout } from './layout';
 import { classifyLoopInvariant } from '../loopInvariant';
 import { getInlineValue, parseInlineNum } from '../inlinePort';
+import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } from '../sinkAnalysis';
 
 export interface WasmCompileResult {
   bytes: Uint8Array;
@@ -169,6 +170,13 @@ interface WasmCompileCtx {
    *  function preamble and reused by every SetColorViewer per cell. Mirrors
    *  the JS compiler's `_isV_<safeId>` constants. */
   viewerLocals: Map<string, number>;
+  /** Sink-scope analysis for the current entry's flow tree. Each value node
+   *  is assigned an LCA scope (CELL_TOP or `${flowNodeId}:${branchPortId}`).
+   *  emitValuesForScope iterates sinkAnalysis.valuesByScope[scope] in topo
+   *  order and calls compileValueNode / compileArrayNode at the current
+   *  bytecode position — which is implicitly inside the branch when the
+   *  caller is inside an emitter.ifThen / ifThenElse / loop callback. */
+  sinkAnalysis?: SinkAnalysisResult;
 }
 
 // ---------------------------------------------------------------------------
@@ -3495,84 +3503,36 @@ function compileValueNode(nodeId: string, ctx: WasmCompileCtx, portId: string = 
 }
 
 /**
- * Walk the flow chain reachable from `entryNode:do` and emit every value node
- * those branches reference. After this pre-pass, the actual flow-chain emission
- * only needs `localGet`s. Mirrors the JS compiler's two-pass strategy.
- */
-function preEmitValueNodes(ctx: WasmCompileCtx, entryNode: GraphNode): void {
-  const visited = new Set<string>();
-  const visitValue = (nodeId: string) => {
-    if (visited.has(nodeId)) return;
-    visited.add(nodeId);
+ * Emit every value node assigned to `scope` by the sink analyzer, in topo
+ * order. The bytecode lands at the current emit position — which is inside
+ * the branch when this is called from inside an emitter.ifThen / ifThenElse
+ * / loop callback (WASM's structured control flow). Loop-invariant value
+ * nodes are skipped here — they're emitted once pre-loop via
+ * emitInvariantValueNodes and restored into valueLocals at every cell entry,
+ * so compileValueNode for them is a cache hit anyway. */
+function emitValuesForScope(ctx: WasmCompileCtx, scope: ScopeId): void {
+  if (!ctx.sinkAnalysis) return;
+  const ids = ctx.sinkAnalysis.valuesByScope.get(scope);
+  if (!ids || ids.length === 0) return;
+  for (const nodeId of ids) {
     const node = ctx.nodeMap.get(nodeId);
-    if (!node) return;
-    // Entry-point nodes don't compile to value emitters — their value outputs
-    // (e.g. inputColor's r/g/b) come from function params and are picked up
-    // via paramRefs at consume time.
-    if (node.data.nodeType === 'inputColor'
-        || node.data.nodeType === 'step'
-        || node.data.nodeType === 'outputMapping') return;
+    if (!node) continue;
     const t = node.data.nodeType;
+    if (t === 'inputColor' || t === 'step' || t === 'outputMapping') continue;
+    if (t === 'macro' || t === 'macroInput' || t === 'macroOutput') continue;
     const hasArrayEmitter = !!ARRAY_NODE_EMITTERS[t];
     const hasValueEmitter = !!VALUE_NODE_EMITTERS[t];
-    // Hybrid nodes (groupCounting has both `count` scalar and `indexes` array
-    // outputs) need both views hoisted so subsequent consumers find cached
-    // results regardless of which port they wire.
     if (hasValueEmitter) compileValueNode(nodeId, ctx);
     if (hasArrayEmitter) compileArrayNode(nodeId, ctx);
-  };
-  const visitFlow = (srcId: string, portId: string, seen: Set<string>) => {
-    const targets = ctx.flowOutputToTargets.get(`${srcId}:${portId}`) ?? [];
-    for (const t of targets) {
-      const node = ctx.nodeMap.get(t.nodeId);
-      if (!node) continue;
-      const def = getNodeDef(node.data.nodeType);
-      if (!def) continue;
-      // Visit value inputs of this flow node (single + multi-source)
-      for (const port of def.ports) {
-        if (port.kind !== 'input' || port.category !== 'value') continue;
-        const src = ctx.inputToSource.get(`${t.nodeId}:${port.id}`);
-        if (src) visitValue(src.nodeId);
-        const srcs = ctx.inputToSources.get(`${t.nodeId}:${port.id}`);
-        if (srcs) for (const s of srcs) visitValue(s.nodeId);
-      }
-      // Recurse into flow children
-      const flowKey = `${t.nodeId}:`;
-      if (seen.has(flowKey)) continue; // cycle guard
-      seen.add(flowKey);
-      switch (node.data.nodeType) {
-        case 'conditional':
-          visitFlow(t.nodeId, 'then', seen);
-          visitFlow(t.nodeId, 'else', seen);
-          break;
-        case 'sequence':
-          visitFlow(t.nodeId, 'first', seen);
-          visitFlow(t.nodeId, 'then', seen);
-          break;
-        case 'loop':
-          visitFlow(t.nodeId, 'body', seen);
-          break;
-        case 'switch': {
-          const caseCount = Number(node.data.config.caseCount) || 0;
-          for (let ci = 0; ci < caseCount; ci++) {
-            visitFlow(t.nodeId, `case_${ci}`, seen);
-            // Switch in 'value' mode also reads case_*_val ports
-            const caseValSrc = ctx.inputToSource.get(`${t.nodeId}:case_${ci}_val`);
-            if (caseValSrc) visitValue(caseValSrc.nodeId);
-            const caseCondSrc = ctx.inputToSource.get(`${t.nodeId}:case_${ci}_cond`);
-            if (caseCondSrc) visitValue(caseCondSrc.nodeId);
-          }
-          visitFlow(t.nodeId, 'default', seen);
-          // Switch in 'value' mode also reads its 'value' input
-          const valSrc = ctx.inputToSource.get(`${t.nodeId}:value`);
-          if (valSrc) visitValue(valSrc.nodeId);
-          break;
-        }
-      }
-    }
-  };
-  visitFlow(entryNode.id, 'do', new Set());
+  }
 }
+
+// Note: the eager preEmitValueNodes pass was removed in favour of
+// emitValuesForScope, which runs at each scope entry in compileFlowChain
+// (and once for CELL_TOP at the top of emitBody). Per-scope emission cuts
+// the per-cell instruction count on type-dispatch models (Wireworld etc.)
+// because each cell only executes the value computations relevant to its
+// branch.
 
 function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmCompileCtx): boolean {
   const targets = ctx.flowOutputToTargets.get(`${sourceNodeId}:${sourcePortId}`) ?? [];
@@ -3597,11 +3557,20 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
       const hasElse = ctx.flowOutputToTargets.has(`${node.id}:else`);
       if (hasElse) {
         ctx.emitter.ifThenElse(
-          () => { compileFlowChain(node.id, 'then', ctx); },
-          () => { compileFlowChain(node.id, 'else', ctx); },
+          () => {
+            emitValuesForScope(ctx, `${node.id}:then`);
+            compileFlowChain(node.id, 'then', ctx);
+          },
+          () => {
+            emitValuesForScope(ctx, `${node.id}:else`);
+            compileFlowChain(node.id, 'else', ctx);
+          },
         );
       } else {
-        ctx.emitter.ifThen(() => { compileFlowChain(node.id, 'then', ctx); });
+        ctx.emitter.ifThen(() => {
+          emitValuesForScope(ctx, `${node.id}:then`);
+          compileFlowChain(node.id, 'then', ctx);
+        });
       }
     } else if (node.data.nodeType === 'sequence') {
       compileFlowChain(node.id, 'first', ctx);
@@ -3634,6 +3603,7 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
           ctx.emitter.op(OP_I32_GE_S);
           ctx.emitter.brIf(1);
           // body
+          emitValuesForScope(ctx, `${node.id}:body`);
           compileFlowChain(node.id, 'body', ctx);
           // li++; br loop
           ctx.emitter.localGet(li);
@@ -3681,6 +3651,7 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
           // input resolution finds it via the standard valueLocals path.
           setCachedPort(ctx, node.id, 'element', { localIdx: elemLocal, valtype: arrRef.elemValtype });
           // Body
+          emitValuesForScope(ctx, `${node.id}:body`);
           compileFlowChain(node.id, 'body', ctx);
           // fi++; br loop
           ctx.emitter.localGet(fi);
@@ -3771,13 +3742,17 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
         const open = (ci: number): boolean => {
           if (ci >= caseCount) {
             if (hasDefault) {
+              emitValuesForScope(ctx, `${node.id}:default`);
               return compileFlowChain(node.id, 'default', ctx);
             }
             return true;
           }
           pushValueAs(ctx.emitter, caseConds[ci]!, I32);
           ctx.emitter.ifThenElse(
-            () => { compileFlowChain(node.id, `case_${ci}`, ctx); },
+            () => {
+              emitValuesForScope(ctx, `${node.id}:case_${ci}`);
+              compileFlowChain(node.id, `case_${ci}`, ctx);
+            },
             () => { open(ci + 1); },
           );
           return true;
@@ -3794,6 +3769,7 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
           ctx.emitter.ifThen(() => {
             ctx.emitter.i32Const(1);
             ctx.emitter.localSet(matched);
+            emitValuesForScope(ctx, `${node.id}:case_${ci}`);
             compileFlowChain(node.id, `case_${ci}`, ctx);
           });
         }
@@ -3801,6 +3777,7 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
           ctx.emitter.localGet(matched);
           ctx.emitter.op(OP_I32_EQZ);
           ctx.emitter.ifThen(() => {
+            emitValuesForScope(ctx, `${node.id}:default`);
             compileFlowChain(node.id, 'default', ctx);
           });
         }
@@ -3888,6 +3865,7 @@ function compileEntry(
   inputToSources: Map<string, Array<{ nodeId: string; portId: string }>>,
   flowOutputToTargets: Map<string, Array<{ nodeId: string; portId: string }>>,
   loopInvariant: Set<string>,
+  sinkAnalysis: SinkAnalysisResult,
 ): { body: Uint8Array; errors: string[] } {
   const emitter = new WasmEmitter(opts.numParams);
 
@@ -3942,6 +3920,7 @@ function compileEntry(
     paramRefs,
     loopInvariant,
     viewerLocals: new Map(),
+    sinkAnalysis,
   };
 
   // Snapshot of value-local refs that are loop-invariant. Populated after the
@@ -4012,7 +3991,10 @@ function compileEntry(
       }
     }
 
-    preEmitValueNodes(ctx, opts.entry);
+    // Emit values whose LCA is CELL_TOP. Deeper-scoped values land at branch
+    // entry in compileFlowChain. Loop-invariant values already cached via
+    // invariantSnapshot are no-ops here (memoised by valueLocals).
+    emitValuesForScope(ctx, CELL_TOP);
     compileFlowChain(opts.entry.id, 'do', ctx);
   };
 
@@ -4282,6 +4264,9 @@ export function compileGraphWasm(
   const allErrors: string[] = [];
 
   // Step
+  const stepSink = analyzeSinkScopes({
+    nodes: graphNodes, edges: graphEdges, rootNodeId: stepNode.id, rootFlowPortId: 'do',
+  });
   const stepRes = compileEntry(
     {
       entry: stepNode,
@@ -4291,7 +4276,7 @@ export function compileGraphWasm(
       emitCopyLines: true,
       useOrderArrayInAsync: true,
     },
-    layout, viewerIds, model, nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant,
+    layout, viewerIds, model, nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, stepSink,
   );
   allErrors.push(...stepRes.errors);
   exportEntries.push({ name: 'step', typeIdx: TYPE_IDX_TOTAL, body: stepRes.body });
@@ -4299,6 +4284,9 @@ export function compileGraphWasm(
   // OutputMapping (one per mapping) — always sequential, no copy lines.
   for (const om of outputMappingNodes) {
     const mappingId = (om.data.config.mappingId as string) || '';
+    const omSink = analyzeSinkScopes({
+      nodes: graphNodes, edges: graphEdges, rootNodeId: om.id, rootFlowPortId: 'do',
+    });
     const omRes = compileEntry(
       {
         entry: om,
@@ -4308,7 +4296,7 @@ export function compileGraphWasm(
         emitCopyLines: false,
         useOrderArrayInAsync: false,
       },
-      layout, viewerIds, model, nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant,
+      layout, viewerIds, model, nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, omSink,
     );
     allErrors.push(...omRes.errors);
     exportEntries.push({ name: `outputMapping_${sanitiseExportName(mappingId)}`, typeIdx: TYPE_IDX_TOTAL, body: omRes.body });
@@ -4318,6 +4306,9 @@ export function compileGraphWasm(
   // still needs copy lines (so subsequent step sees the painted state).
   for (const ic of inputColorNodes) {
     const mappingId = (ic.data.config.mappingId as string) || '';
+    const icSink = analyzeSinkScopes({
+      nodes: graphNodes, edges: graphEdges, rootNodeId: ic.id, rootFlowPortId: 'do',
+    });
     const icRes = compileEntry(
       {
         entry: ic,
@@ -4329,7 +4320,7 @@ export function compileGraphWasm(
         // Param indexes match the function signature: 0=idx, 1=r, 2=g, 3=b.
         paramOutputs: { r: 1, g: 2, b: 3 },
       },
-      layout, viewerIds, model, nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant,
+      layout, viewerIds, model, nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, icSink,
     );
     allErrors.push(...icRes.errors);
     exportEntries.push({ name: `inputColor_${sanitiseExportName(mappingId)}`, typeIdx: TYPE_IDX_IDX_RGB, body: icRes.body });
