@@ -2,7 +2,7 @@ import { memo, useCallback, useState, useMemo, useSyncExternalStore } from 'reac
 import { Handle, Position, useReactFlow } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
-import { detectMissingConfig, detectWebGPUIncompatibilities, countMacroSubgraphIssues } from './nodes/nodeValidation';
+import { detectMissingConfig, detectWebGPUIncompatibilities, detectWasmIncompatibilities, countMacroSubgraphIssues } from './nodes/nodeValidation';
 import { INTERPOLATION_METHODS, INTERPOLATION_SHORT_LABELS, DEFAULT_INTERPOLATION_METHOD } from './nodes/interpolationMethods';
 import type { InterpolationMethod } from './nodes/interpolationMethods';
 import { handleId } from './types';
@@ -348,16 +348,19 @@ function CaNodeComponent({ id, data }: NodeProps) {
   const configIssues = useMemo(
     () => {
       const useWebGPU = !!model.properties.useWebGPU;
+      const useWasm = !!model.properties.useWasm && !useWebGPU;
       const base = detectMissingConfig(nodeData.nodeType, nodeData.config, model, connectedInputHandles);
       const own = useWebGPU
         ? [...base, ...detectWebGPUIncompatibilities(nodeData.nodeType, nodeData.config, model)]
-        : base;
+        : useWasm
+          ? [...base, ...detectWasmIncompatibilities(nodeData.nodeType, nodeData.config, model)]
+          : base;
       // Bubble up internal-node warnings on macro instances so they're visible
       // without expanding the macro (and recursively through nested macros).
       if (nodeData.nodeType === 'macro') {
         const macroDefId = nodeData.config.macroDefId;
         if (typeof macroDefId === 'string' && macroDefId.length > 0) {
-          const innerCount = countMacroSubgraphIssues(macroDefId, model, useWebGPU);
+          const innerCount = countMacroSubgraphIssues(macroDefId, model, useWebGPU, useWasm);
           if (innerCount > 0) {
             own.push(`${innerCount} internal warning${innerCount === 1 ? '' : 's'} (expand macro to see)`);
           }

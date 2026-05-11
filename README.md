@@ -57,7 +57,7 @@ A complete GenesisCA model definition consists of:
 
 5. **Indicators** — quantitative monitoring variables, either standalone (read/write from graph) or linked to cell attributes (auto-computed aggregations: frequency, total)
 
-6. **Update Rules** — a node graph defining what each cell computes per generation, compiled into optimized JavaScript at edit time
+6. **Update Rules** — a node graph defining what each cell computes per generation, compiled at edit time to one of three targets: WebAssembly (default), WebGPU, or JavaScript (debug / reference)
 
 ---
 
@@ -124,7 +124,7 @@ A complete GenesisCA model definition consists of:
 - [Node Reference](docs/NODES_REFERENCE.md) — full catalogue of the 49+ node types, port schemas, and compile-time semantics, with Mermaid diagrams of common patterns. Includes §7 on the NeighborIndex type and §7.1 on the canonical movement pattern (Get All Neighbor Indexes → Filter → Pick Random) plus the Position(s)+Array-Element bridge for "neighbor with extreme attribute X" reductions.
 - [NeighborIndex / List Attributes Impact Map](docs/IMPACT_MAP_NEIGHBORINDEX_LIST.md) — cross-subsystem analysis behind the Wave A NeighborIndex work and the (deferred) Wave B bounded list-attributes proposal.
 - [CA Literature Review](docs/CA_LITERATURE_REVIEW.md) — a survey of ~70 canonical cellular-automata models across physics, chemistry, biology, ecology, sociology, transport, earth sciences (geology / mining / volcanology / seismology), CS theory and cryptography, with a Top-Tier Shortlist driving GenesisCA's feature roadmap.
-- [Performance Optimization Paths](docs/PERFORMANCE_OPTIMIZATION_PATHS.md) — engine-internal notes on the JS- and WASM-compile targets and how to keep large grids fast.
+- [Performance Optimization Paths](docs/PERFORMANCE_OPTIMIZATION_PATHS.md) — engine-internal notes on the JS / WASM / WebGPU compile targets and how to keep large grids fast.
 - [Huge Grid Optimizations](docs/HUGE_GRID_OPTIMIZATIONS.md) — deferred memory-scaling techniques for pushing grids past today's WebGPU ceiling: implicit neighbor lookup, tile-based dispatch, sub-word packing for bool / small-tag attributes.
 
 ---

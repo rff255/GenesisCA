@@ -126,7 +126,8 @@ export function HelpView() {
             <li><strong>GenesisCA Project Author</strong> &mdash; who built this particular GenesisCA project file.</li>
             <li><strong>Thumbnail</strong> (optional) &mdash; attach a PNG, JPEG, GIF, or WebP image (up to 2&nbsp;MB). It travels inside the <code>.gcaproj</code> file. When the model is shipped as part of the Models Library, hovering its card shows a floating preview; animated GIFs / WebPs play natively.</li>
             <li><strong>End Conditions</strong> (optional) &mdash; auto-pause the simulator when a max generation count is reached or when any indicator satisfies a configured comparison (==, !=, &gt;, &lt;, &ge;, &le;). Scalar indicators compare against their value directly. For <strong>linked-frequency</strong> indicators (which produce a map of category &rarr; count) pick the specific category to monitor; the comparison then applies to the count of that category (e.g. bool <em>alive</em> &mdash; category <code>true</code>, <code>&ge;</code>, <code>100</code> pauses when at least 100 cells are alive). Float-binned frequency indicators can&apos;t be used in end conditions because their bin boundaries depend on runtime data &mdash; switch the aggregation to Total instead. For conditions that need graph-level logic add a <strong>Stop Event</strong> node inside the update graph &mdash; its DO flow input pauses the simulation with a user-defined message.</li>
-            <li><strong>WebGPU stop-check interval</strong> (advanced, WebGPU only) &mdash; Properties &rarr; Execution exposes an integer spinbox below the JS / WASM / WebGPU radio. It defaults to <code>1</code> &mdash; check the GPU stop flag after every step, exact stop-event timing. Higher values amortise the per-step <code>mapAsync</code> stall so big batches run faster, but a stop event firing at gen <em>n</em> may surface up to <em>K</em>&minus;1 generations later. The last step of every batch is always checked, so a stopped run never overshoots beyond the current play batch. JS and WASM ignore this setting.</li>
+            <li><strong>Compile Target</strong> &mdash; choose the runtime backend the simulator uses to evolve cells. <strong>WebAssembly</strong> is the default and is recommended for most models &mdash; typically several times faster than JS on dense neighborhoods, full node coverage. <strong>WebGPU</strong> runs WGSL compute shaders on the GPU and is best for very large grids and math-heavy per-cell work; it requires synchronous mode and a browser with WebGPU support (Chrome 127+, Firefox 141+, Safari 17.4+). <strong>Debug / Reference (JS)</strong> compiles the graph to a plain JavaScript function &mdash; slower than WASM, but its source is readable in Show Code and useful for prototyping or verifying parity. Targets are mutually exclusive; switching restarts the simulator (grid state is lost).</li>
+            <li><strong>WebGPU stop-check interval</strong> (advanced, WebGPU only) &mdash; Properties &rarr; Execution exposes an integer spinbox below the compile-target radio. It defaults to <code>1</code> &mdash; check the GPU stop flag after every step, exact stop-event timing. Higher values amortise the per-step <code>mapAsync</code> stall so big batches run faster, but a stop event firing at gen <em>n</em> may surface up to <em>K</em>&minus;1 generations later. The last step of every batch is always checked, so a stopped run never overshoots beyond the current play batch. JS and WASM ignore this setting.</li>
           </ul>
 
           <p className={styles.p}>
@@ -206,9 +207,9 @@ export function HelpView() {
           <h3 className={styles.h3}>The Graph Editor</h3>
           <p className={styles.p}>
             The central area is a node-based visual programming editor. You connect nodes
-            to define what each cell computes per generation. The graph is compiled into
-            optimized JavaScript that runs 25+ million times per generation at large grid
-            sizes.
+            to define what each cell computes per generation. The graph is compiled to one
+            of three targets &mdash; WebAssembly (default), WebGPU, or JavaScript &mdash;
+            and runs 25+ million times per generation at large grid sizes.
           </p>
           <p className={styles.p}>
             <strong>Value ports</strong> (blue circles) carry data. <strong>Flow
@@ -661,7 +662,7 @@ export function HelpView() {
             <li><strong>Model Attributes</strong> &mdash; Adjust global parameters in real time without recompiling.</li>
             <li><strong>Screenshot</strong> &mdash; Save the current view as a PNG image (matches display resolution with zoom/pan).</li>
             <li><strong>Record</strong> &mdash; Click the red record button in the transport bar, play the simulation, then click stop to encode and download. Use the format dropdown next to the button to choose <strong>WebM</strong> (default; native grid resolution, smaller files, no 256-colour limit) or <strong>GIF</strong> (256 colours, max 512&nbsp;px). WebM requires a browser with WebCodecs support (recent Chrome / Edge / Firefox); if unavailable the dropdown disables it and falls back to GIF.</li>
-            <li><strong>Show Code</strong> &mdash; View the compiled JavaScript function.</li>
+            <li><strong>Show Code</strong> &mdash; View the compiled artefact for the currently-selected target. JS shows the compiled JavaScript function; WebGPU shows the WGSL shader source; WebAssembly is binary and shows a placeholder &mdash; switch to JS to inspect a readable form.</li>
           </ul>
 
           <h3 className={styles.h3}>Save &amp; Load State</h3>
