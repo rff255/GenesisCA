@@ -6,6 +6,7 @@ import { safeId } from './identifierSafe';
 import { detectFusableConsumers, type FusionResult } from './fusion';
 import { getInlineValue } from './inlinePort';
 import { INVALID_NI, packNI, NI_ARRAY_PRODUCERS } from './niCodec';
+import { analyzeSinkScopes, CELL_TOP, type ScopeId } from './sinkAnalysis';
 
 // ---------------------------------------------------------------------------
 // Graph adjacency helpers
@@ -278,6 +279,8 @@ function compileRoot(
   flowOutputToTargets: Map<string, Array<{ nodeId: string; portId: string }>>,
   loopInvariant: Set<string>,
   fusion: FusionResult,
+  graphNodes: GraphNode[],
+  graphEdges: GraphEdge[],
   model?: CAModel,
 ): RootCompileResult {
   // Some internal helpers in this function were written when `model` was unused
@@ -287,6 +290,39 @@ function compileRoot(
   const valueLines: string[] = [];
   const preLoopValueLines: string[] = [];
   const scratchNodes: Array<{ scratchVarName: string; nbrId?: string; attrId?: string; initExpr?: string }> = [];
+
+  // Sink-scope analysis: tells us, for every value node referenced in this
+  // root's flow tree, the deepest scope where it can be emitted such that all
+  // uses are dominated. Values whose LCA is CELL_TOP go to valueLines as
+  // before; values whose LCA is a deeper scope go to branchValueLines and are
+  // flushed by compileFlowChain at branch entry.
+  const sinkAnalysis = analyzeSinkScopes({
+    nodes: graphNodes,
+    edges: graphEdges,
+    rootNodeId: rootNode.id,
+    rootFlowPortId: rootFlowPort,
+  });
+  const branchValueLines = new Map<ScopeId, string[]>();
+  function routeValueEmit(nodeId: string, code: string): void {
+    const scope = sinkAnalysis.emitScope.get(nodeId) ?? CELL_TOP;
+    if (scope === CELL_TOP) {
+      valueLines.push('      ' + code.trimEnd());
+      return;
+    }
+    let arr = branchValueLines.get(scope);
+    if (!arr) { arr = []; branchValueLines.set(scope, arr); }
+    // Stored unindented — flushBranchValues applies the indent that matches
+    // the flow walk's actual position. This handles edge cases where the
+    // analyzer's scope-depth count doesn't line up with the emit indent
+    // (e.g., a transparent sequence collapsing one nesting level).
+    arr.push(code.trimEnd());
+  }
+  function flushBranchValues(scope: ScopeId, target: string[], indent: string): void {
+    const arr = branchValueLines.get(scope);
+    if (!arr || arr.length === 0) return;
+    for (const line of arr) target.push(indent + line);
+    arr.length = 0;
+  }
 
   // forEachInArray body-emit context. When non-null, value nodes whose ID is in
   // `bodyDependents` are emitted to `bodyTarget` (with `bodyIndent`) rather than to
@@ -770,7 +806,7 @@ function compileRoot(
           code = buildFusedGroupStatementJS(nodeId, fused.op, nbrId, attrId, xVar);
         }
         if (code) {
-          valueLines.push('      ' + code.trimEnd());
+          routeValueEmit(nodeId, code);
           return `_v${nodeId}`;
         }
       }
@@ -863,7 +899,7 @@ function compileRoot(
       } else if (loopInvariant.has(nodeId)) {
         preLoopValueLines.push('  ' + code.trimEnd());
       } else {
-        valueLines.push('      ' + code.trimEnd());
+        routeValueEmit(nodeId, code);
       }
     }
 
@@ -905,13 +941,26 @@ function compileRoot(
       const source = inputToSource.get(`${nodeId}:${port.id}`);
       if (source) compileValueNode(source.nodeId);
     }
+    // Switch's case_N_cond and case_N_val value inputs are dynamic — not in
+    // def.ports. Iterate edge map directly so their sources get pre-compiled
+    // alongside the static value inputs.
+    for (const [key, source] of inputToSource) {
+      if (!key.startsWith(`${nodeId}:`)) continue;
+      const portId = key.slice(nodeId.length + 1);
+      // Skip ports we already handled via def.ports.
+      if (def.ports.some(p => p.kind === 'input' && p.category === 'value' && p.id === portId)) continue;
+      compileValueNode(source.nodeId);
+    }
 
-    for (const port of def.ports) {
-      if (port.kind !== 'output' || port.category !== 'flow') continue;
-      const targets = flowOutputToTargets.get(`${nodeId}:${port.id}`);
-      if (targets) {
-        for (const t of targets) collectValueDeps(t.nodeId);
-      }
+    // Iterate ALL flow output edges from this node (including dynamic case_N
+    // ports on switch). Using def.ports alone misses dynamic ports, which left
+    // values referenced inside switch cases uncompiled-until-flow-walk-time —
+    // breaking the sink-flush invariant (flushes happen BEFORE recursion, so
+    // any compileValueNode call from inside compileFlowChain's case dispatch
+    // would route to a branch whose flush already fired).
+    for (const [key, targets] of flowOutputToTargets) {
+      if (!key.startsWith(`${nodeId}:`)) continue;
+      for (const t of targets) collectValueDeps(t.nodeId);
     }
   }
 
@@ -1088,9 +1137,11 @@ function compileRoot(
         }
         const hasElse = flowOutputToTargets.has(`${node.id}:else`);
         flowLines.push(`${indent}if (${condVar}) {`);
+        flushBranchValues(`${node.id}:then`, flowLines, indent + '  ');
         compileFlowChain(node.id, 'then', indent + '  ');
         if (hasElse) {
           flowLines.push(`${indent}} else {`);
+          flushBranchValues(`${node.id}:else`, flowLines, indent + '  ');
           compileFlowChain(node.id, 'else', indent + '  ');
         }
         flowLines.push(`${indent}}`);
@@ -1109,6 +1160,7 @@ function compileRoot(
           countVar = inlineVal ?? '0';
         }
         flowLines.push(`${indent}for (let _li${node.id} = 0; _li${node.id} < ${countVar}; _li${node.id}++) {`);
+        flushBranchValues(`${node.id}:body`, flowLines, indent + '  ');
         compileFlowChain(node.id, 'body', indent + '  ');
         flowLines.push(`${indent}}`);
       } else if (node.data.nodeType === 'forEachInArray') {
@@ -1123,6 +1175,7 @@ function compileRoot(
         const elementVar = `_v${node.id}_element`;
         flowLines.push(`${indent}for (let ${idxVar} = 0; ${idxVar} < ${arrayVar}.length; ${idxVar}++) {`);
         flowLines.push(`${indent}  const ${elementVar} = ${arrayVar}[${idxVar}];`);
+        flushBranchValues(`${node.id}:body`, flowLines, indent + '  ');
         // Activate body-emit context so element-dependent value nodes consumed
         // inside the body land in flowLines at body indent (inside the loop block,
         // where elementVar is in scope) rather than in cell-scope valueLines.
@@ -1207,10 +1260,12 @@ function compileRoot(
             for (let ci = 0; ci < caseCount; ci++) {
               const prefix = ci === 0 ? 'if' : '} else if';
               flowLines.push(`${indent}${prefix} (${caseConditions[ci]}) {`);
+              flushBranchValues(`${node.id}:case_${ci}`, flowLines, indent + '  ');
               compileFlowChain(node.id, `case_${ci}`, indent + '  ');
             }
             if (hasDefault) {
               flowLines.push(`${indent}} else {`);
+              flushBranchValues(`${node.id}:default`, flowLines, indent + '  ');
               compileFlowChain(node.id, 'default', indent + '  ');
             }
             flowLines.push(`${indent}}`);
@@ -1219,11 +1274,13 @@ function compileRoot(
             flowLines.push(`${indent}let _sw${node.id} = false;`);
             for (let ci = 0; ci < caseCount; ci++) {
               flowLines.push(`${indent}if (${caseConditions[ci]}) { _sw${node.id} = true;`);
+              flushBranchValues(`${node.id}:case_${ci}`, flowLines, indent + '  ');
               compileFlowChain(node.id, `case_${ci}`, indent + '  ');
               flowLines.push(`${indent}}`);
             }
             if (hasDefault) {
               flowLines.push(`${indent}if (!_sw${node.id}) {`);
+              flushBranchValues(`${node.id}:default`, flowLines, indent + '  ');
               compileFlowChain(node.id, 'default', indent + '  ');
               flowLines.push(`${indent}}`);
             }
@@ -1576,7 +1633,7 @@ export function compileGraph(
   let stepCode = '';
   if (stepNode) {
     const { valueLines, preLoopValueLines, flowLines, scratchNodes } = compileRoot(
-      stepNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, model,
+      stepNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, graphNodes, graphEdges, model,
     );
 
     // Scratch array declarations (before the loop)
@@ -1645,7 +1702,7 @@ export function compileGraph(
   for (const icNode of inputColorNodes) {
     const mappingId = icNode.data.config.mappingId as string || '';
     const { valueLines, preLoopValueLines, flowLines } = compileRoot(
-      icNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, model,
+      icNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, graphNodes, graphEdges, model,
     );
     // InputColor is called per-cell (for painted cells only), keep per-cell signature.
     // preLoopValueLines (modelAttrs reads etc.) still go in the function preamble —
@@ -1689,7 +1746,7 @@ export function compileGraph(
   for (const omNode of outputMappingNodes) {
     const mappingId = omNode.data.config.mappingId as string || '';
     const { valueLines, preLoopValueLines, flowLines, scratchNodes } = compileRoot(
-      omNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, model,
+      omNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, graphNodes, graphEdges, model,
     );
     const scratchDecls = scratchNodes.map(s => buildScratchDecl(s, model));
     const code = [
