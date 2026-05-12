@@ -2268,6 +2268,17 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
         syncIndicatorsCpuToGpu();
         gpuOwnsAttrs = false;
+        // Refresh the GPU's color buffer + canvas so the user sees the loaded
+        // state, not the pre-loadState pixels left over from init's default
+        // colors. Without this, direct-render WebGPU keeps showing the old
+        // OffscreenCanvas contents (matches the user-reported "grid turns to
+        // default state on load" symptom), and the readback path would ship
+        // stale GPU colors to main thread. Mirrors randomize / reset / paint.
+        refreshColorsAfterInputWebGPU();
+        finalizeStepWebGPU({ needColors: true })
+          .then(() => sendColors())
+          .catch(e => self.postMessage({ type: 'error', message: '[webgpu] loadState colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
+        break;
       }
 
       sendColors();
