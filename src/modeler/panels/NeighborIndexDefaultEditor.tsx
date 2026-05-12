@@ -2,7 +2,7 @@ import type { Attribute, Neighborhood } from '../../model/types';
 import { packNI, unpackNI, INVALID_NI } from '../vpl/compiler/niCodec';
 import styles from './PanelContent.module.css';
 
-interface Props {
+interface DefaultEditorProps {
   attribute: Attribute;
   neighborhoods: Neighborhood[];
   onChange: (cfg: Partial<Attribute>) => void;
@@ -37,35 +37,34 @@ function safeDecode(stored: string | undefined): { packed: number; isSentinel: b
   return { packed: n | 0, isSentinel: false };
 }
 
-/** Wave A.6 default-value editor for a NeighborIndex attribute.
- *
- *  Stored value is now packed `(dr, dc)` i32 — the same NI runtime
- *  representation used in the compiled step / outputMapping functions.
- *
- *  Two-piece UI:
- *    1. (default mode only) A dropdown to pick the *hint neighborhood* — a
- *       viewport reference for the editor only. Stored in
- *       `attribute.neighborhoodHintId`. When set, only the slots present in
- *       that neighborhood are highlighted; clicking any cell in the grid
- *       (whether or not it's in the hint) sets a packed (dr, dc) NI as the
- *       value.
- *    2. When no hint is set, falls back to a row of two number inputs (dr +
- *       dc) so the user can still pick any offset. Inputs are clamped to
- *       [-32767, 32767] to match the runtime's per-axis 16-bit range. */
-export function NeighborIndexDefaultEditor({ attribute, neighborhoods, onChange, mode = 'default' }: Props) {
-  const isBoundaryMode = mode === 'boundary';
-  const isUndefinedMode = mode === 'undefined';
-  const showHintSelector = !isBoundaryMode && !isUndefinedMode;
-  const fieldKey: 'defaultValue' | 'boundaryValue' | 'undefinedValue' = isBoundaryMode
-    ? 'boundaryValue'
-    : isUndefinedMode
-      ? 'undefinedValue'
-      : 'defaultValue';
-  const stored = attribute[fieldKey];
-  const hintId = attribute.neighborhoodHintId ?? '';
-  const hint = neighborhoods.find(n => n.id === hintId) ?? null;
-  const { packed: currentPacked, isSentinel } = safeDecode(stored);
-  const { dr: curDr, dc: curDc } = unpackNI(currentPacked);
+interface PickerProps {
+  /** Current packed (dr, dc) i32. INVALID_NI is normalised to (0, 0) for
+   *  display (otherwise its decoded dr = -32768 would blow up the grid
+   *  bounds calculation). */
+  value: number;
+  /** Optional hint neighborhood — when set, the picker shows a clickable
+   *  grid spanning the hint's offsets (plus the current value's coordinate,
+   *  even if outside the hint, so the selection is always visible). When
+   *  null/undefined, the picker falls back to two number inputs (dr + dc). */
+  hint?: Neighborhood | null;
+  /** Called with the new packed (dr, dc) i32 when the user picks a cell or
+   *  edits one of the dr/dc inputs. */
+  onChange: (newPacked: number) => void;
+  /** Cell size in px for the grid mode. Defaults to 22. Callers with tight
+   *  horizontal space (e.g. the simulator side panel) can shrink it. */
+  cellSize?: number;
+}
+
+/** Pure picker UI for a NeighborIndex value. Used by both the modeler's
+ *  per-attribute default-value editor and the simulator's runtime model-attr
+ *  panel. Renders either a clickable grid (when `hint` is set) or two
+ *  number inputs (otherwise). Does NOT include the hint-neighborhood
+ *  selector — that's modeler-specific (changing the hint changes the
+ *  per-attribute config, not the picked value). */
+export function NeighborIndexValuePicker({ value, hint, onChange, cellSize = 22 }: PickerProps) {
+  const isSentinel = value === INVALID_NI;
+  const packed = isSentinel ? 0 : (value | 0);
+  const { dr: curDr, dc: curDc } = unpackNI(packed);
 
   // Compute the grid bounds so it fits the hint's offsets (with a sensible minimum).
   let minDr = -1, maxDr = 1, minDc = -1, maxDc = 1;
@@ -97,8 +96,113 @@ export function NeighborIndexDefaultEditor({ attribute, neighborhoods, onChange,
     for (const [dr, dc] of hint.coords) inHint.add(`${dr},${dc}`);
   }
 
-  const cellSize = 22;
-  const writeValue = (newPacked: number) => onChange({ [fieldKey]: String(newPacked) } as Partial<Attribute>);
+  if (hint) {
+    return (
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: `repeat(${cols}, ${cellSize}px)`,
+          gridTemplateRows: `repeat(${rows}, ${cellSize}px)`,
+          gap: 2,
+          justifyContent: 'center',
+          padding: 4,
+        }}
+      >
+        {Array.from({ length: rows * cols }, (_, i) => {
+          const r = Math.floor(i / cols);
+          const c = i % cols;
+          const dr = r + minDr;
+          const dc = c + minDc;
+          const isCenter = dr === 0 && dc === 0;
+          const isInNbr = inHint.has(`${dr},${dc}`);
+          const isSelected = !isSentinel && dr === curDr && dc === curDc;
+          const bg = isCenter
+            ? '#37474f'
+            : isSelected
+              ? '#ffb300'
+              : isInNbr
+                ? '#1e3a52'
+                : 'transparent';
+          const border = isInNbr || isCenter ? '1px solid #4cc9f0' : '1px solid #2a3a4a';
+          return (
+            <div
+              key={i}
+              onClick={() => onChange(packNI(clampAxis(dr), clampAxis(dc)))}
+              title={isCenter ? '(self)' : `(${dr}, ${dc})${isInNbr ? '' : ' — not in hint'}`}
+              style={{
+                background: bg,
+                border,
+                cursor: 'pointer',
+                fontSize: Math.max(7, Math.min(10, cellSize - 12)),
+                color: isSelected ? '#1e2a3a' : '#7a8a9a',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontWeight: isSelected ? 600 : 400,
+                userSelect: 'none',
+              }}
+            >
+              {isCenter ? '•' : `${dr},${dc}`}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+      <span style={{ fontSize: 11, color: 'var(--color-text-secondary)', minWidth: 18 }}>dr</span>
+      <input
+        className={styles.numberInput}
+        type="number"
+        step={1}
+        min={AXIS_MIN}
+        max={AXIS_MAX}
+        value={isSentinel ? 0 : curDr}
+        onChange={e => {
+          const raw = Number(e.target.value);
+          const dr = Number.isFinite(raw) ? clampAxis(raw) : 0;
+          onChange(packNI(dr, isSentinel ? 0 : curDc));
+        }}
+      />
+      <span style={{ fontSize: 11, color: 'var(--color-text-secondary)', minWidth: 18 }}>dc</span>
+      <input
+        className={styles.numberInput}
+        type="number"
+        step={1}
+        min={AXIS_MIN}
+        max={AXIS_MAX}
+        value={isSentinel ? 0 : curDc}
+        onChange={e => {
+          const raw = Number(e.target.value);
+          const dc = Number.isFinite(raw) ? clampAxis(raw) : 0;
+          onChange(packNI(isSentinel ? 0 : curDr, dc));
+        }}
+      />
+    </div>
+  );
+}
+
+/** Wave A.6 default-value editor for a NeighborIndex attribute.
+ *
+ *  Stored value is now packed `(dr, dc)` i32 — the same NI runtime
+ *  representation used in the compiled step / outputMapping functions.
+ *
+ *  Three-piece UI: (1) hint-neighborhood selector (default mode only),
+ *  (2) NeighborIndexValuePicker (grid or dr/dc fallback), (3) status line. */
+export function NeighborIndexDefaultEditor({ attribute, neighborhoods, onChange, mode = 'default' }: DefaultEditorProps) {
+  const isBoundaryMode = mode === 'boundary';
+  const isUndefinedMode = mode === 'undefined';
+  const showHintSelector = !isBoundaryMode && !isUndefinedMode;
+  const fieldKey: 'defaultValue' | 'boundaryValue' | 'undefinedValue' = isBoundaryMode
+    ? 'boundaryValue'
+    : isUndefinedMode
+      ? 'undefinedValue'
+      : 'defaultValue';
+  const stored = attribute[fieldKey];
+  const hintId = attribute.neighborhoodHintId ?? '';
+  const hint = neighborhoods.find(n => n.id === hintId) ?? null;
+  const { packed: currentPacked, isSentinel } = safeDecode(stored);
+  const { dr: curDr, dc: curDc } = unpackNI(currentPacked);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -115,86 +219,11 @@ export function NeighborIndexDefaultEditor({ attribute, neighborhoods, onChange,
         </select>
       )}
 
-      {hint ? (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: `repeat(${cols}, ${cellSize}px)`,
-            gridTemplateRows: `repeat(${rows}, ${cellSize}px)`,
-            gap: 2,
-            justifyContent: 'center',
-            padding: 4,
-          }}
-        >
-          {Array.from({ length: rows * cols }, (_, i) => {
-            const r = Math.floor(i / cols);
-            const c = i % cols;
-            const dr = r + minDr;
-            const dc = c + minDc;
-            const isCenter = dr === 0 && dc === 0;
-            const isInNbr = inHint.has(`${dr},${dc}`);
-            const isSelected = !isSentinel && dr === curDr && dc === curDc;
-            const bg = isCenter
-              ? '#37474f'
-              : isSelected
-                ? '#ffb300'
-                : isInNbr
-                  ? '#1e3a52'
-                  : 'transparent';
-            const border = isInNbr || isCenter ? '1px solid #4cc9f0' : '1px solid #2a3a4a';
-            return (
-              <div
-                key={i}
-                onClick={() => writeValue(packNI(clampAxis(dr), clampAxis(dc)))}
-                title={isCenter ? '(self)' : `(${dr}, ${dc})${isInNbr ? '' : ' — not in hint'}`}
-                style={{
-                  background: bg,
-                  border,
-                  cursor: 'pointer',
-                  fontSize: 9,
-                  color: isSelected ? '#1e2a3a' : '#7a8a9a',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontWeight: isSelected ? 600 : 400,
-                  userSelect: 'none',
-                }}
-              >
-                {isCenter ? '•' : `${dr},${dc}`}
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-          <span style={{ fontSize: 11, color: 'var(--color-text-secondary)', minWidth: 18 }}>dr</span>
-          <input
-            className={styles.numberInput}
-            type="number"
-            step={1}
-            min={AXIS_MIN}
-            max={AXIS_MAX}
-            value={isSentinel ? 0 : curDr}
-            onChange={e => {
-              const raw = Number(e.target.value);
-              const dr = Number.isFinite(raw) ? clampAxis(raw) : 0;
-              writeValue(packNI(dr, isSentinel ? 0 : curDc));
-            }}
-          />
-          <span style={{ fontSize: 11, color: 'var(--color-text-secondary)', minWidth: 18 }}>dc</span>
-          <input
-            className={styles.numberInput}
-            type="number"
-            step={1}
-            min={AXIS_MIN}
-            max={AXIS_MAX}
-            value={isSentinel ? 0 : curDc}
-            onChange={e => {
-              const raw = Number(e.target.value);
-              const dc = Number.isFinite(raw) ? clampAxis(raw) : 0;
-              writeValue(packNI(isSentinel ? 0 : curDr, dc));
-            }}
-          />
-        </div>
-      )}
+      <NeighborIndexValuePicker
+        value={currentPacked}
+        hint={hint}
+        onChange={newPacked => onChange({ [fieldKey]: String(newPacked) } as Partial<Attribute>)}
+      />
 
       <div style={{ fontSize: 11, color: '#7a8a9a' }}>
         {(isBoundaryMode || isUndefinedMode) && stored === undefined ? (
