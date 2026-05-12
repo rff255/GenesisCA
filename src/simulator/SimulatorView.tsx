@@ -3,7 +3,8 @@ import { useModel } from '../model/ModelContext';
 import { compileGraph } from '../modeler/vpl/compiler/compile';
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
-import { packNI, unpackNI, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
+import { unpackNI, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
+import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefaultEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
@@ -2136,39 +2137,32 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                       style={{ width: 50, height: 24, border: 'none', cursor: 'pointer' }}
                     />
                   ) : a.type === 'neighborIndex' ? (
-                    // NeighborIndex is stored on GPU/WASM as a packed (dr, dc) i32 —
-                    // the raw value isn't human-meaningful, so render two compact
-                    // dr/dc number inputs and pack on the way out. Sentinel value
-                    // (INVALID_NI) decodes to dr=-32768 which would blow up any
-                    // input UI; treat it as (0, 0) for display purposes.
+                    // NeighborIndex is stored on GPU/WASM as a packed (dr, dc) i32.
+                    // Reuses the modeler's NeighborIndexValuePicker: when the
+                    // attribute has a `neighborhoodHintId`, the picker shows a
+                    // clickable grid (one cell per offset) so the user just picks
+                    // a position; otherwise it falls back to dr/dc number inputs.
+                    // The model-side `neighborhoodHintId` is read-only here (the
+                    // simulator doesn't mutate model definitions); the user
+                    // changes it in the Attributes panel of the modeler.
                     (() => {
                       const raw = runtimeModelAttrs[a.id] ?? 0;
-                      const isSentinel = raw === INVALID_NI;
-                      const { dr, dc } = isSentinel ? { dr: 0, dc: 0 } : unpackNI(raw | 0);
-                      const AXIS = 32767;
-                      const clamp = (n: number) => Math.max(-AXIS, Math.min(AXIS, Math.round(n)));
+                      const value = raw === INVALID_NI ? 0 : (raw | 0);
+                      const hint = a.neighborhoodHintId
+                        ? (model.neighborhoods.find(n => n.id === a.neighborhoodHintId) ?? null)
+                        : null;
+                      const { dr, dc } = unpackNI(value);
                       return (
-                        <div style={{ display: 'flex', gap: 4, alignItems: 'center', flex: 2, minWidth: 0 }}>
-                          <span style={{ fontSize: 10, color: '#7a8a9a' }}>dr</span>
-                          <input className={styles.brushInput} type="number" step={1}
-                            min={-AXIS} max={AXIS}
-                            value={dr}
-                            onChange={e => {
-                              const v = Number(e.target.value);
-                              const ndr = Number.isFinite(v) ? clamp(v) : 0;
-                              handleModelAttrChange(a.id, packNI(ndr, dc));
-                            }}
-                            style={{ width: 0, flex: 1 }} />
-                          <span style={{ fontSize: 10, color: '#7a8a9a' }}>dc</span>
-                          <input className={styles.brushInput} type="number" step={1}
-                            min={-AXIS} max={AXIS}
-                            value={dc}
-                            onChange={e => {
-                              const v = Number(e.target.value);
-                              const ndc = Number.isFinite(v) ? clamp(v) : 0;
-                              handleModelAttrChange(a.id, packNI(dr, ndc));
-                            }}
-                            style={{ width: 0, flex: 1 }} />
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 2, minWidth: 0, alignItems: 'flex-end' }}>
+                          <NeighborIndexValuePicker
+                            value={value}
+                            hint={hint}
+                            onChange={packed => handleModelAttrChange(a.id, packed)}
+                            cellSize={18}
+                          />
+                          <span style={{ fontSize: 10, color: '#7a8a9a' }}>
+                            (dr {dr}, dc {dc})
+                          </span>
                         </div>
                       );
                     })()
