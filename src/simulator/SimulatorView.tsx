@@ -1002,7 +1002,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   useEffect(() => {
     const captureState = (e: Event) => {
       const detail = (e as CustomEvent).detail as
-        | { resolve?: () => void; include?: { grid?: boolean; controls?: boolean } }
+        | { resolve?: (state?: SimulationState | null) => void; include?: { grid?: boolean; controls?: boolean } }
         | undefined;
       const resolve = detail?.resolve;
       const include = detail?.include ?? { grid: true, controls: true };
@@ -1010,12 +1010,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const wantControls = include.controls !== false;
 
       if (!wantGrid && !wantControls) {
-        // Nothing to capture — clear any stale embedded state from the model.
+        // Nothing to capture — clear any stale embedded state from the model
+        // and tell the caller "use no state" (null, distinct from undefined
+        // which means "use whatever's already on the model").
         setSimulationState(undefined);
-        resolve?.();
+        resolve?.(null);
         return;
       }
-      if (!workerRef.current) { resolve?.(); return; }
+      if (!workerRef.current) { resolve?.(null); return; }
 
       if (!wantGrid) {
         // Controls only: no need to round-trip through the worker. The current
@@ -1036,7 +1038,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           { boundaryTreatment: model.properties.boundaryTreatment },
         );
         setSimulationState(state);
-        resolve?.();
+        resolve?.(state);
         return;
       }
 
@@ -1044,7 +1046,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // resolve the prior promise rather than letting it hang. The replacement
       // capture will still finish via the new pendingStateSave callback.
       if (pendingStateSave.current) {
-        // Drop the prior callback silently — its caller will see captured=false
+        // Drop the prior callback silently — its caller will see captured=null
         // via its own 5s timeout, but we keep the worker round-trip available
         // for the new request rather than racing two state messages.
         pendingStateSave.current = null;
@@ -1057,7 +1059,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           { boundaryTreatment: model.properties.boundaryTreatment },
         );
         setSimulationState(state);
-        resolve?.();
+        // Pass the freshly-captured state back through the event so callers
+        // (FileMenu.doSave) can serialise it directly without depending on
+        // React having flushed the setSimulationState dispatch.
+        resolve?.(state);
       };
       workerRef.current.postMessage({ type: 'getState' });
     };

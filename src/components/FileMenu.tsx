@@ -6,6 +6,7 @@ import {
   downloadJSON,
   readModelFile,
 } from '../model/fileOperations';
+import type { SimulationState } from '../model/types';
 import { SaveProjectDialog, type SaveOptions } from './SaveProjectDialog';
 import styles from './FileMenu.module.css';
 
@@ -50,33 +51,33 @@ export function FileMenu() {
       localStorage.setItem(SAVE_OPTS_KEY, JSON.stringify(opts));
     } catch { /* ignore */ }
 
-    // Ask simulator to capture the requested pieces into model context and wait
-    const captured = await new Promise<boolean>(resolve => {
-      const timeout = setTimeout(() => resolve(false), 5000);
+    // Ask simulator to capture the requested pieces into model context and wait.
+    // The simulator passes the captured SimulationState back through the resolve
+    // callback so we can serialise it DIRECTLY without waiting for React to
+    // re-render — bypassing a race where modelRef.current would still hold the
+    // pre-capture model if React hadn't flushed yet.
+    const captured = await new Promise<SimulationState | null | undefined>(resolve => {
+      const timeout = setTimeout(() => resolve(undefined), 5000);
       window.dispatchEvent(new CustomEvent('genesis-capture-sim-state', {
         detail: {
-          resolve: () => { clearTimeout(timeout); resolve(true); },
+          resolve: (state: SimulationState | null = null) => {
+            clearTimeout(timeout);
+            resolve(state);
+          },
           include: { grid: opts.includeGrid, controls: opts.includeControls },
         },
       }));
     });
-    void captured;
-    // Wait one frame so React state updates have settled. Use setTimeout(0) as a
-    // fallback if rAF is throttled (background tab) — rAF wouldn't fire and the
-    // save would hang indefinitely. Either signal proves a microtask flush gap.
-    await new Promise<void>(resolve => {
-      let done = false;
-      const finish = () => { if (!done) { done = true; resolve(); } };
-      requestAnimationFrame(() => finish());
-      // Backstop: if rAF is throttled (tab not visible / window minimised),
-      // a 50ms macrotask still flushes the pending React render and unblocks save.
-      setTimeout(finish, 50);
-    });
     const latest = modelRef.current;
     // If user opted out of both, strip simulationState entirely regardless of what's in model
-    let toSerialize = (!opts.includeControls && !opts.includeGrid)
-      ? { ...latest, simulationState: undefined }
-      : latest;
+    const wantsAny = opts.includeControls || opts.includeGrid;
+    // Prefer the captured state passed back through the event (bypasses React's
+    // render cycle). Fall back to modelRef.current.simulationState only if the
+    // simulator didn't pass one (e.g. timed out or no worker).
+    const stateForFile = wantsAny
+      ? (captured ?? latest.simulationState)
+      : undefined;
+    let toSerialize = { ...latest, simulationState: stateForFile };
     if (!opts.includePresets) {
       toSerialize = { ...toSerialize, presets: undefined };
     }
