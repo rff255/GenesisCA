@@ -343,8 +343,18 @@ export function deserializeTypedArray(
   }
 }
 
+// Maps each cell-attribute runtime type to the typed-array kind we store on
+// disk. MUST cover every type that `createTypedArray` in sim.worker.ts knows
+// about (bool/integer/float/tag/neighborIndex). A missing entry silently falls
+// through to 'float64' inside serializeSimState/serializePreset, which mis-
+// labels an int32 buffer as float64 — on reload deserializeTypedArray reads
+// it back as Float64Array, slicing 4N bytes into N/2 elements of garbage, and
+// the cell data round-trips into the worker as junk. NeighborIndex was the
+// first such regression; if you add another cell-attr runtime type, register
+// it here AT THE SAME TIME or saves will be silently broken.
 const ATTR_TYPE_MAP: Record<string, 'uint8' | 'int32' | 'float64'> = {
   bool: 'uint8', integer: 'int32', float: 'float64', tag: 'int32',
+  neighborIndex: 'int32',
 };
 
 export function serializeSimState(
