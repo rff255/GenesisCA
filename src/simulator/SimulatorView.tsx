@@ -1093,7 +1093,24 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (needsFullInit) {
       workerRef.current?.terminate();
       workerRef.current = null;
-      initWorkerWithDimensions(model.properties.gridWidth, model.properties.gridHeight);
+      // When a freshly loaded model embeds a simulationState whose grid dims
+      // differ from properties.gridWidth/Height (typical after an F5 Resize
+      // before save — properties stay at the original size, the snapshot has
+      // the resized size), initialise the worker at the SNAPSHOT's dims. This
+      // avoids the dim-mismatch drop in initWorkerWithDimensions that would
+      // otherwise scrub the snapshot and show a default grid. We can tell it's
+      // a "fresh" snapshot (vs a stale one left over from a properties-only
+      // edit) by comparing object identity to the previous model — load sets
+      // a new simulationState reference; properties-edit leaves it alone.
+      const snapJustChanged = !prev
+        || (model.simulationState && model.simulationState !== prev.simulationState);
+      const snapW = snapJustChanged
+        ? (model.simulationState?.gridWidth ?? model.simulationState?.width ?? model.properties.gridWidth)
+        : model.properties.gridWidth;
+      const snapH = snapJustChanged
+        ? (model.simulationState?.gridHeight ?? model.simulationState?.height ?? model.properties.gridHeight)
+        : model.properties.gridHeight;
+      initWorkerWithDimensions(snapW, snapH);
     } else {
       // Graph or indicator watch change only → soft recompile (preserves grid)
       // The Resize button updates `gridWidth.current` / `gridHeight.current` but
