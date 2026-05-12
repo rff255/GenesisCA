@@ -996,7 +996,7 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
             em.localGet(xLoc);
             em.localGet(yLoc);
             em.op(OP_F64_DIV);
-            em.emit(byte(0x9b)); // OP_F64_TRUNC
+            em.emit(byte(0x9d)); // OP_F64_TRUNC (rounds toward zero)
             em.localGet(yLoc);
             em.op(OP_F64_MUL);
             em.op(OP_F64_SUB);
@@ -3496,7 +3496,15 @@ function compileArrayNode(nodeId: string, ctx: WasmCompileCtx): ArrayRef | null 
         const inlineVal = getInlineValue(port, node.data.config);
         if (inlineVal !== undefined) {
           const num = parseInlineNum(inlineVal);
-          const isFloat = port.dataType === 'float';
+          // Use F64 for 'float' AND 'any' ports — `any` is what arithmeticOperator's
+          // x/y inputs (and setAttribute's `value`) use, and the user can type a
+          // fractional number into the inline widget there. Defaulting to I32 would
+          // pass the value through `pushValue`'s `n | 0` truncation, turning e.g.
+          // `0.11111` into `0` before it ever reaches the f64 multiplication. The
+          // consumer's `pushValueAs(..., wantType)` still converts F64 → I32 with
+          // f64ToI32 (truncation toward zero, matching JS Number→Integer coercion)
+          // for callsites that genuinely want an integer.
+          const isFloat = port.dataType === 'float' || port.dataType === 'any';
           inputs[port.id] = { inline: true, value: num, valtype: isFloat ? F64 : I32 };
         }
       }
@@ -3993,7 +4001,10 @@ function compileValueNode(nodeId: string, ctx: WasmCompileCtx, portId: string = 
       const inlineVal = getInlineValue(port, node.data.config);
       if (inlineVal !== undefined) {
         const num = parseInlineNum(inlineVal);
-        const isFloat = port.dataType === 'float';
+        // Same rationale as the input-resolver above the wrapper: `any` ports
+        // accept fractional values; storing as I32 here would truncate via
+        // `n | 0` in pushValue.
+        const isFloat = port.dataType === 'float' || port.dataType === 'any';
         inputs[port.id] = { inline: true, value: num, valtype: isFloat ? F64 : I32 };
       }
     }
@@ -4335,7 +4346,11 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
           const inlineVal = getInlineValue(port, node.data.config);
           if (inlineVal !== undefined) {
             const num = parseInlineNum(inlineVal);
-            const isFloat = port.dataType === 'float';
+            // Same rationale as the value-emitter input resolver: `any` ports
+            // (e.g., setAttribute's `value`) accept fractional inline values
+            // — storing as I32 would truncate via `n | 0` before the consumer
+            // ever sees the fraction.
+            const isFloat = port.dataType === 'float' || port.dataType === 'any';
             inputs[port.id] = { inline: true, value: num, valtype: isFloat ? F64 : I32 };
           }
         }

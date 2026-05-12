@@ -592,7 +592,10 @@ function compileArrayNode(ctx: CompileCtx, nodeId: string): ArrayRef | null {
       } else {
         const inlineVal = getInlineValue(port, node.data.config);
         if (inlineVal !== undefined) {
-          inputs[port.id] = inlineValueRef(inlineVal, port.dataType === 'float');
+          // `any` ports (arithmeticOperator x/y, setAttribute value, etc.) accept
+          // fractional inline values; treating them as i32 would truncate the
+          // value via `n | 0` inside inlineValueRef before the f32 op ever ran.
+          inputs[port.id] = inlineValueRef(inlineVal, port.dataType === 'float' || port.dataType === 'any');
         }
       }
     }
@@ -2311,7 +2314,10 @@ function compileFlowChain(ctx: CompileCtx, sourceNodeId: string, sourcePortId: s
         } else {
           const inlineVal = getInlineValue(port, node.data.config);
           if (inlineVal !== undefined) {
-            inputs[port.id] = inlineValueRef(inlineVal, port.dataType === 'float');
+            // `any` ports (arithmeticOperator x/y, setAttribute value, etc.) accept
+          // fractional inline values; treating them as i32 would truncate the
+          // value via `n | 0` inside inlineValueRef before the f32 op ever ran.
+          inputs[port.id] = inlineValueRef(inlineVal, port.dataType === 'float' || port.dataType === 'any');
           }
         }
       }
