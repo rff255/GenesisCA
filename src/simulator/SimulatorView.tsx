@@ -1953,6 +1953,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const attrBuffers: Record<string, { type: string; buffer: ArrayBuffer }> = {};
     const total = state.width! * state.height!;
     for (const [id, entry] of Object.entries(state.attributes!)) {
+      // Backward-compat: files saved before `neighborIndex: 'int32'` was added
+      // to ATTR_TYPE_MAP in fileOperations.ts wrote NI cell-attr buffers with
+      // type='float64' even though the bytes were really int32. Fix the label
+      // on the way in so deserializeTypedArray reads the buffer as Int32Array
+      // (correct byte interpretation) instead of Float64Array (which would
+      // slice 4N bytes into N/2 float64 elements of garbage and corrupt every
+      // NI cell value silently). Detected by the model declaring the attr as
+      // neighborIndex while the serialized type is float64.
+      const modelAttr = model.attributes.find(a => a.id === id);
+      if (modelAttr?.type === 'neighborIndex' && entry.type === 'float64') {
+        entry.type = 'int32';
+      }
       const arr = deserializeTypedArray(entry, total);
       const typeMap: Record<string, string> = { uint8: 'bool', int32: 'integer', float64: 'float' };
       attrBuffers[id] = { type: typeMap[entry.type] || 'float', buffer: arr.buffer };
