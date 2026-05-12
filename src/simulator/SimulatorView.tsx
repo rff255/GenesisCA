@@ -3,6 +3,7 @@ import { useModel } from '../model/ModelContext';
 import { compileGraph } from '../modeler/vpl/compiler/compile';
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
+import { packNI, unpackNI, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
@@ -789,6 +790,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         case 'bool': mAttrs[a.id] = a.defaultValue === 'true' ? 1 : 0; break;
         case 'integer': mAttrs[a.id] = parseInt(a.defaultValue, 10) || 0; break;
         case 'float': mAttrs[a.id] = parseFloat(a.defaultValue) || 0; break;
+        case 'neighborIndex': {
+          // Stored value is the packed (dr, dc) i32 (see NeighborIndexDefaultEditor).
+          // INVALID_NI on a model attribute is meaningless at runtime — normalize to 0.
+          const n = parseInt(a.defaultValue, 10);
+          mAttrs[a.id] = (Number.isFinite(n) && n !== INVALID_NI) ? (n | 0) : 0;
+          break;
+        }
         case 'color': {
           const hex = a.defaultValue || '#808080';
           mAttrs[a.id + '_r'] = parseInt(hex.slice(1, 3), 16) || 0;
@@ -2127,6 +2135,43 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                       }}
                       style={{ width: 50, height: 24, border: 'none', cursor: 'pointer' }}
                     />
+                  ) : a.type === 'neighborIndex' ? (
+                    // NeighborIndex is stored on GPU/WASM as a packed (dr, dc) i32 —
+                    // the raw value isn't human-meaningful, so render two compact
+                    // dr/dc number inputs and pack on the way out. Sentinel value
+                    // (INVALID_NI) decodes to dr=-32768 which would blow up any
+                    // input UI; treat it as (0, 0) for display purposes.
+                    (() => {
+                      const raw = runtimeModelAttrs[a.id] ?? 0;
+                      const isSentinel = raw === INVALID_NI;
+                      const { dr, dc } = isSentinel ? { dr: 0, dc: 0 } : unpackNI(raw | 0);
+                      const AXIS = 32767;
+                      const clamp = (n: number) => Math.max(-AXIS, Math.min(AXIS, Math.round(n)));
+                      return (
+                        <div style={{ display: 'flex', gap: 4, alignItems: 'center', flex: 2, minWidth: 0 }}>
+                          <span style={{ fontSize: 10, color: '#7a8a9a' }}>dr</span>
+                          <input className={styles.brushInput} type="number" step={1}
+                            min={-AXIS} max={AXIS}
+                            value={dr}
+                            onChange={e => {
+                              const v = Number(e.target.value);
+                              const ndr = Number.isFinite(v) ? clamp(v) : 0;
+                              handleModelAttrChange(a.id, packNI(ndr, dc));
+                            }}
+                            style={{ width: 0, flex: 1 }} />
+                          <span style={{ fontSize: 10, color: '#7a8a9a' }}>dc</span>
+                          <input className={styles.brushInput} type="number" step={1}
+                            min={-AXIS} max={AXIS}
+                            value={dc}
+                            onChange={e => {
+                              const v = Number(e.target.value);
+                              const ndc = Number.isFinite(v) ? clamp(v) : 0;
+                              handleModelAttrChange(a.id, packNI(dr, ndc));
+                            }}
+                            style={{ width: 0, flex: 1 }} />
+                        </div>
+                      );
+                    })()
                   ) : (
                     <input className={styles.brushInput} type="number" step="any"
                       value={runtimeModelAttrs[a.id] ?? 0}
