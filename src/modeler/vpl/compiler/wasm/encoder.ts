@@ -250,9 +250,13 @@ export const OP_F64_LE = byte(0x65);
 export const OP_F64_GE = byte(0x66);
 export const OP_F64_ABS = byte(0x99);
 export const OP_F64_NEG = byte(0x9a);
-export const OP_F64_TRUNC = byte(0x9b);
+// Per WebAssembly binary spec: f64.ceil = 0x9b, f64.floor = 0x9c, f64.trunc = 0x9d.
+// (Earlier versions of this file had TRUNC and CEIL swapped, which made the
+// arithmeticOperator `%` emit compute `x - ceil(x/y) * y` instead of the
+// `x - trunc(x/y) * y` it intended — `0.5 % 0.3` produced `-0.1` on WASM.)
+export const OP_F64_CEIL = byte(0x9b);
 export const OP_F64_FLOOR = byte(0x9c);
-export const OP_F64_CEIL = byte(0x9d);
+export const OP_F64_TRUNC = byte(0x9d);
 export const OP_F64_NEAREST = byte(0x9e);
 export const OP_F64_SQRT = byte(0x9f);
 export const OP_F64_ADD = byte(0xa0);
