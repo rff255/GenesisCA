@@ -797,13 +797,35 @@ export function GraphEditorInner() {
     const srcType = (sourceNode.data as Record<string, unknown>)?.nodeType;
     if (srcType === 'step') { setContextMenu(null); return; }
     pushCurrentSnapshot();
+
+    // Macro instances must NOT share a MacroDef with their original — otherwise
+    // Undo Macro on one would remove the shared definition and silently break
+    // the other. Clone the definition with fresh IDs and point the duplicate
+    // at the new def.
+    let clonedMacroDefId: string | undefined;
+    if (srcType === 'macro') {
+      const srcConfig = (sourceNode.data as Record<string, unknown>).config as Record<string, unknown> | undefined;
+      const srcMacroDefId = srcConfig?.macroDefId as string | undefined;
+      const srcDef = srcMacroDefId
+        ? (model.macroDefs || []).find(m => m.id === srcMacroDefId)
+        : undefined;
+      if (srcDef) {
+        clonedMacroDefId = importMacro(srcDef);
+      }
+    }
+
     setNodes(nds => {
       const id = generateNodeId(nds);
+      const dupData = JSON.parse(JSON.stringify(sourceNode.data)) as Record<string, unknown>;
+      if (clonedMacroDefId) {
+        const cfg = (dupData.config as Record<string, unknown> | undefined) ?? {};
+        dupData.config = { ...cfg, macroDefId: clonedMacroDefId };
+      }
       const newNode: Node = {
         id,
         type: sourceNode.type,
         position: { x: sourceNode.position.x + 30, y: sourceNode.position.y + 30 },
-        data: JSON.parse(JSON.stringify(sourceNode.data)),
+        data: dupData,
       };
       // Preserve parent relationship (keep position relative to group)
       if (sourceNode.parentId) {
@@ -819,7 +841,7 @@ export function GraphEditorInner() {
     });
     scheduleSync();
     setContextMenu(null);
-  }, [contextMenu, nodes, setNodes, scheduleSync]);
+  }, [contextMenu, nodes, setNodes, scheduleSync, importMacro, model.macroDefs]);
 
   const deleteSelection = useCallback(() => {
     if (!contextMenu) return;
@@ -933,6 +955,26 @@ export function GraphEditorInner() {
       existingIds.add(newId);
     }
 
+    // For every macro instance in the clipboard, clone its MacroDef so each
+    // pasted copy gets its own independent definition. Multiple pastes of the
+    // same source macro each get their own def too (one clone per pasted node).
+    // Without this, Undo Macro on a pasted instance would remove the shared
+    // def and silently break the original (and any other paste).
+    const macroDefRemap = new Map<string, string>(); // oldDefId → newDefId per node
+    for (const n of clipboard.nodes) {
+      const nt = (n.data as Record<string, unknown>)?.nodeType;
+      if (nt !== 'macro') continue;
+      const cfg = (n.data as Record<string, unknown>).config as Record<string, unknown> | undefined;
+      const oldDefId = cfg?.macroDefId as string | undefined;
+      if (!oldDefId) continue;
+      const srcDef = (model.macroDefs || []).find(m => m.id === oldDefId);
+      if (!srcDef) continue;
+      const newDefId = importMacro(srcDef);
+      // Key by the per-node old id so multiple pasted copies of the same source
+      // macro instance each get their own def (importMacro called once per node).
+      macroDefRemap.set(n.id, newDefId);
+    }
+
     const pastedRFNodes: Node[] = clipboard.nodes.map(n => {
       const clonedData = JSON.parse(JSON.stringify(n.data)) as Record<string, unknown>;
       const oldParentId = clonedData.parentId as string | undefined;
@@ -941,6 +983,11 @@ export function GraphEditorInner() {
         clonedData.parentId = newParentId;
       } else {
         delete clonedData.parentId;
+      }
+      const newDefId = macroDefRemap.get(n.id);
+      if (newDefId) {
+        const cfg = (clonedData.config as Record<string, unknown> | undefined) ?? {};
+        clonedData.config = { ...cfg, macroDefId: newDefId };
       }
       return {
         id: idMap.get(n.id)!,
@@ -980,7 +1027,7 @@ export function GraphEditorInner() {
     setNodes(nds => [...nds.map(n => ({ ...n, selected: false })), ...pastedRFNodes]);
     setEdges(eds => [...eds.map(e => ({ ...e, selected: false })), ...pastedRFEdges]);
     scheduleSync();
-  }, [nodes, setNodes, setEdges, scheduleSync]);
+  }, [nodes, setNodes, setEdges, scheduleSync, importMacro, model.macroDefs]);
 
   const duplicateSelection = useCallback(() => {
     const selected = nodes.filter(n => n.selected);
@@ -1009,11 +1056,31 @@ export function GraphEditorInner() {
       existingIds.add(newId);
     }
 
+    // Clone each macro instance's MacroDef so the duplicates don't share a def
+    // with their originals (see handlePaste / duplicateNode for rationale).
+    const macroDefRemap = new Map<string, string>();
+    for (const n of srcNodes) {
+      const nt = (n.data as Record<string, unknown>)?.nodeType;
+      if (nt !== 'macro') continue;
+      const cfg = (n.data as Record<string, unknown>).config as Record<string, unknown> | undefined;
+      const oldDefId = cfg?.macroDefId as string | undefined;
+      if (!oldDefId) continue;
+      const srcDef = (model.macroDefs || []).find(m => m.id === oldDefId);
+      if (!srcDef) continue;
+      const newDefId = importMacro(srcDef);
+      macroDefRemap.set(n.id, newDefId);
+    }
+
     const dupeNodes: Node[] = srcNodes.map(n => {
       const clonedData = JSON.parse(JSON.stringify(n.data)) as Record<string, unknown>;
       const oldParentId = clonedData.parentId as string | undefined;
       const newParentId = oldParentId ? idMap.get(oldParentId) : undefined;
       if (newParentId) { clonedData.parentId = newParentId; } else { delete clonedData.parentId; }
+      const newDefId = macroDefRemap.get(n.id);
+      if (newDefId) {
+        const cfg = (clonedData.config as Record<string, unknown> | undefined) ?? {};
+        clonedData.config = { ...cfg, macroDefId: newDefId };
+      }
 
       // Calculate position: convert parent-relative to absolute if orphaning
       let position: { x: number; y: number };
@@ -1064,7 +1131,7 @@ export function GraphEditorInner() {
     setNodes(nds => [...nds.map(n => ({ ...n, selected: false })), ...dupeNodes]);
     setEdges(eds => [...eds.map(e => ({ ...e, selected: false })), ...dupeEdges]);
     scheduleSync();
-  }, [nodes, edges, setNodes, setEdges, scheduleSync]);
+  }, [nodes, edges, setNodes, setEdges, scheduleSync, importMacro, model.macroDefs]);
 
   const handleCut = useCallback(() => {
     handleCopy();
@@ -1366,6 +1433,17 @@ export function GraphEditorInner() {
     const maxX = Math.max(...selXs);
     const midY = (Math.min(...selYs) + Math.max(...selYs)) / 2;
 
+    // Centroid of the selection. Internal node positions in the MacroDef are
+    // stored RELATIVE to this centroid (subtracting avgX/avgY before saving),
+    // and the MacroNode instance is placed AT (avgX, avgY) on the parent graph.
+    // On Undo Macro, the offset is re-added so:
+    //   (a) If undone immediately, nodes restore to their original positions.
+    //   (b) If the macro instance was moved (or this is a duplicate), nodes
+    //       expand around wherever the macro instance currently sits — not
+    //       far off at the original creation coordinates.
+    const avgX = selectedNodes.reduce((s, n) => s + n.position.x, 0) / selectedNodes.length;
+    const avgY = selectedNodes.reduce((s, n) => s + n.position.y, 0) / selectedNodes.length;
+
     // Create MacroInput and MacroOutput boundary node IDs
     const macroInputNodeId = `mi_${macroId}`;
     const macroOutputNodeId = `mo_${macroId}`;
@@ -1412,29 +1490,36 @@ export function GraphEditorInner() {
       targetHandle: handleId({ id: `out_${i}`, kind: 'input', category: exposedOutputs[i]!.category }),
     }));
 
-    // MacroInput/MacroOutput boundary nodes
+    // MacroInput/MacroOutput boundary nodes — positions also stored relative
+    // to the centroid so navigating into the macro view doesn't dump them at
+    // arbitrary far-off coordinates.
     const macroInputGraphNode: GraphNode = {
       id: macroInputNodeId,
       type: 'caNode',
-      position: { x: minX - 250, y: midY },
+      position: { x: (minX - 250) - avgX, y: midY - avgY },
       data: { nodeType: 'macroInput', config: { macroDefId: macroId } },
     };
     const macroOutputGraphNode: GraphNode = {
       id: macroOutputNodeId,
       type: 'caNode',
-      position: { x: maxX + 100, y: midY },
+      position: { x: (maxX + 100) - avgX, y: midY - avgY },
       data: { nodeType: 'macroOutput', config: { macroDefId: macroId } },
     };
 
+    // Internal nodes are stored relative to the centroid so Undo Macro can
+    // expand them around the current macro instance position (see the avgX/avgY
+    // comment above for why).
+    const internalGraphNodes = toGraphNodes(selectedNodes).map(n => ({
+      ...n,
+      position: { x: n.position.x - avgX, y: n.position.y - avgY },
+    }));
+
     addMacro({
       id: macroId, name,
-      nodes: [...toGraphNodes(selectedNodes), macroInputGraphNode, macroOutputGraphNode],
+      nodes: [...internalGraphNodes, macroInputGraphNode, macroOutputGraphNode],
       edges: [...toGraphEdges(internalEdges), ...bridgingInputEdges, ...bridgingOutputEdges],
       exposedInputs, exposedOutputs,
     });
-
-    const avgX = selectedNodes.reduce((s, n) => s + n.position.x, 0) / selectedNodes.length;
-    const avgY = selectedNodes.reduce((s, n) => s + n.position.y, 0) / selectedNodes.length;
 
     // Generate macro node ID before updating nodes
     const macroNodeId = generateNodeId(nodes.filter(n => !selectedIds.has(n.id)));
@@ -1623,8 +1708,28 @@ export function GraphEditorInner() {
       ...reconnectedOutputEdges,
     ]);
 
-    // Remove macro definition
-    removeMacro(macroDefId);
+    // Remove macro definition — but only if no OTHER macro instance still
+    // references it. Duplicating a macro now clones its def (so each instance
+    // has its own), but older saved files or hand-edited JSON could still
+    // share a def across multiple instances. Keeping the def alive when there
+    // are remaining references prevents Undo Macro on one from silently
+    // breaking the others.
+    const otherInstanceExists =
+      freshNodes.some(n =>
+        n.id !== macroNodeId
+        && (n.data as Record<string, unknown>)?.nodeType === 'macro'
+        && ((n.data as Record<string, unknown>).config as Record<string, unknown> | undefined)?.macroDefId === macroDefId,
+      )
+      || (model.macroDefs || []).some(other =>
+        other.id !== macroDefId
+        && other.nodes.some(n =>
+          (n.data as Record<string, unknown>)?.nodeType === 'macro'
+          && ((n.data as Record<string, unknown>).config as Record<string, unknown> | undefined)?.macroDefId === macroDefId,
+        ),
+      );
+    if (!otherInstanceExists) {
+      removeMacro(macroDefId);
+    }
     scheduleSync();
     setContextMenu(null);
   }, [contextMenu, getNodes, edges, model.macroDefs, removeMacro, setNodes, setEdges, scheduleSync]);

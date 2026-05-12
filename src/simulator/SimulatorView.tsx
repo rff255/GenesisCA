@@ -1018,14 +1018,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (!workerRef.current) { resolve?.(); return; }
 
       if (!wantGrid) {
-        // Controls only: no need to round-trip through the worker.
+        // Controls only: no need to round-trip through the worker. The current
+        // model-attribute values live in `runtimeModelAttrs` (mirrors the
+        // worker's cachedModelAttrs); pass them through so a controls-only save
+        // doesn't silently zero out the user's tuned parameters.
         const state = serializeSimState(
           {
             generation: 0,
             width: gridWidth.current,
             height: gridHeight.current,
             attributes: {},
-            modelAttrs: {}, indicators: {}, linkedAccumulators: {},
+            modelAttrs: { ...runtimeModelAttrs }, indicators: {}, linkedAccumulators: {},
             colors: new ArrayBuffer(0),
           },
           { activeViewer, brushColor, brushW, brushH, brushMapping, targetFps, unlimitedFps, gensPerFrame, unlimitedGens },
@@ -1037,6 +1040,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         return;
       }
 
+      // If a previous capture is still pending (worker hasn't replied yet),
+      // resolve the prior promise rather than letting it hang. The replacement
+      // capture will still finish via the new pendingStateSave callback.
+      if (pendingStateSave.current) {
+        // Drop the prior callback silently — its caller will see captured=false
+        // via its own 5s timeout, but we keep the worker round-trip available
+        // for the new request rather than racing two state messages.
+        pendingStateSave.current = null;
+      }
       pendingStateSave.current = (workerState) => {
         const state = serializeSimState(
           workerState as Parameters<typeof serializeSimState>[0],
@@ -1051,7 +1063,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     };
     window.addEventListener('genesis-capture-sim-state', captureState);
     return () => window.removeEventListener('genesis-capture-sim-state', captureState);
-  }, [activeViewer, brushColor, brushW, brushH, brushMapping, targetFps, unlimitedFps, gensPerFrame, unlimitedGens, setSimulationState]);
+  }, [activeViewer, brushColor, brushW, brushH, brushMapping, targetFps, unlimitedFps, gensPerFrame, unlimitedGens, setSimulationState, runtimeModelAttrs, model.properties.boundaryTreatment]);
 
   // Smart init vs recompile: compare previous model to decide.
   // Full reinit for structural changes (grid size, attributes, neighborhoods, mappings, update mode).

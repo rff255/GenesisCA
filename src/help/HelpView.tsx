@@ -570,6 +570,10 @@ export function HelpView() {
             <li><strong>Flip Neighbor Index</strong> &mdash; mirror a NI horizontally (negate dCol),
               vertically (negate dRow), or both (180&deg; rotation). Pure bit math; no neighborhood
               needed.</li>
+            <li><strong>Break Down Neighbor Index</strong> &mdash; inverse of <em>Neighbor Index
+              (from Offset)</em>. Unpacks a NI into its two integer outputs <em>dr</em> and
+              <em>dc</em>, for per-axis arithmetic on computed NIs (e.g. inspecting the direction
+              returned by Pick Random Neighbor).</li>
             <li><strong>Array Element</strong> / <strong>Array Length</strong> &mdash; generic indexed
               access and size for any array (NI[] or otherwise). Pair Array Element with the
               <em>Position(s)</em> outputs of Count Matching / Group Reduce to recover the NI of the
