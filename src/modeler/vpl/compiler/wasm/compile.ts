@@ -278,14 +278,24 @@ function pushNiCellIdx(ctx: WasmCompileCtx, niLocal: number): void {
   }
 }
 
-/** Push `i * itemBytes` onto the stack (reads from a cached local; computes + caches if first use). */
+/** Push `i * itemBytes` onto the stack. The cache local is pre-initialised at
+ *  the top of each cell body by `initByteOffsetLocals` (called from emitBody
+ *  before any value-sinking emission), so every callsite — including ones
+ *  inside conditional branches that don't always execute — sees a value
+ *  computed for the CURRENT cell. Without the pre-init, value sinking can
+ *  push the first use of an itemBytes into one branch's body, where the
+ *  `localTee` only runs when that branch fires; sibling branches reading the
+ *  same cached local would then see stale data from a prior cell (or 0 for
+ *  the first cell). */
 function pushCellByteOffset(ctx: WasmCompileCtx, itemBytes: number): void {
   const cached = ctx.byteOffsetLocals.get(itemBytes);
   if (cached !== undefined) {
     ctx.emitter.localGet(cached);
     return;
   }
-  // First use: compute i * itemBytes, store in a fresh local, then push it.
+  // Fallback: not pre-initialised (defensive — initByteOffsetLocals should
+  // have covered every itemBytes the model uses). Allocate + initialise here
+  // for callsites that escape the model's normal attr/nbr-index surface.
   const local = ctx.emitter.allocLocal(I32);
   ctx.emitter.localGet(ctx.iLocalIdx);
   if (itemBytes !== 1) {
@@ -294,6 +304,24 @@ function pushCellByteOffset(ctx: WasmCompileCtx, itemBytes: number): void {
   }
   ctx.emitter.localTee(local);
   ctx.byteOffsetLocals.set(itemBytes, local);
+}
+
+/** Pre-allocate + initialise the cached `idx * itemBytes` locals for every
+ *  distinct itemBytes value the model uses. Called from emitBody right after
+ *  the per-cell cache clear; emits the multiplication unconditionally at
+ *  cell-top so subsequent uses (even ones sunk into branches) read a value
+ *  computed for the current cell. */
+function initByteOffsetLocals(ctx: WasmCompileCtx, itemBytesSet: ReadonlySet<number>): void {
+  for (const itemBytes of itemBytesSet) {
+    const local = ctx.emitter.allocLocal(I32);
+    ctx.emitter.localGet(ctx.iLocalIdx);
+    if (itemBytes !== 1) {
+      ctx.emitter.i32Const(itemBytes);
+      ctx.emitter.op(OP_I32_MUL);
+    }
+    ctx.emitter.localSet(local);
+    ctx.byteOffsetLocals.set(itemBytes, local);
+  }
 }
 
 /** Sub-attribute info resolved against the WASM layout. Used by the read wrap
@@ -2014,9 +2042,23 @@ function emitAggregateOrCount(
     }
   }
 
-  if (mode === 'groupOperator' && trackIndex) {
-    setCachedPort(ctx, node.id, 'index', { localIdx: bestIdxLocal, valtype: I32 });
+  // Multi-output nodes need their non-default port refs cached explicitly
+  // (the wrapper in compileValueNode only caches 'value' + the SINGLE output
+  // port name; both groupCounting and groupOperator have two output ports,
+  // so the wrapper's auto-cache for the named port skips). Without these
+  // explicit caches, value sinking re-emits the entire aggregate loop on the
+  // second access (under a different cache key) and aliases consumers in
+  // sibling branches to a local that's only written inside one branch —
+  // observed as Game of Life births failing because the count-comparison
+  // reads `0` from an unset local.
+  if (mode === 'count') {
+    setCachedPort(ctx, node.id, 'count', { localIdx: accLocal, valtype: accValtype });
+  }
+  if (mode === 'groupOperator') {
     setCachedPort(ctx, node.id, 'result', { localIdx: accLocal, valtype: accValtype });
+    if (trackIndex) {
+      setCachedPort(ctx, node.id, 'index', { localIdx: bestIdxLocal, valtype: I32 });
+    }
   }
   return { localIdx: accLocal, valtype: accValtype };
 }
@@ -2559,9 +2601,15 @@ function emitArrayAggregate(
     em.localSet(accLocal);
   }
 
-  if (mode === 'groupOperator' && trackIndex) {
-    setCachedPort(ctx, node.id, 'index', { localIdx: bestIdxLocal, valtype: I32 });
+  // Multi-output port caching — see comment in emitAggregateOrCount above.
+  if (mode === 'count') {
+    setCachedPort(ctx, node.id, 'count', { localIdx: accLocal, valtype: accValtype });
+  }
+  if (mode === 'groupOperator') {
     setCachedPort(ctx, node.id, 'result', { localIdx: accLocal, valtype: accValtype });
+    if (trackIndex) {
+      setCachedPort(ctx, node.id, 'index', { localIdx: bestIdxLocal, valtype: I32 });
+    }
   }
   return { localIdx: accLocal, valtype: accValtype };
 }
@@ -2775,6 +2823,14 @@ function emitScalarAggregate(
     ctx.emitter.f64Const(sourceRefs.length || 1);
     ctx.emitter.op(OP_F64_DIV);
     ctx.emitter.localSet(accLocal);
+  }
+
+  // Multi-output port caching — see comment in emitAggregateOrCount above.
+  if (mode === 'count') {
+    setCachedPort(ctx, node.id, 'count', { localIdx: accLocal, valtype: accValtype });
+  }
+  if (mode === 'groupOperator') {
+    setCachedPort(ctx, node.id, 'result', { localIdx: accLocal, valtype: accValtype });
   }
 
   return { localIdx: accLocal, valtype: accValtype };
@@ -4395,6 +4451,16 @@ function compileEntry(
   const invariantSnapshot = new Map<string, Map<string, LocalRef>>();
 
   const W = model.properties.gridWidth;
+  // Collect every distinct attribute itemBytes value (1=bool, 4=int/tag, 8=float)
+  // that appears in the cell-attr layout. Used by `initByteOffsetLocals` to
+  // pre-emit `idx * itemBytes` cache locals at cell-top — see the comment on
+  // pushCellByteOffset for why this matters under value sinking.
+  const cellAttrItemBytes = new Set<number>();
+  for (const id of Object.keys(layout.attrType)) {
+    const a = getAttr(layout, id);
+    if (a) cellAttrItemBytes.add(a.itemBytes);
+  }
+
   const emitBody = () => {
     // Reset per-cell caches and scratch pointer
     ctx.byteOffsetLocals.clear();
@@ -4402,6 +4468,12 @@ function compileEntry(
     ctx.arrayRefs.clear();
     emitter.i32Const(layout.scratchOffset);
     emitter.localSet(scratchTopLocal);
+    // Pre-initialise the cached `idx * itemBytes` locals for every itemBytes
+    // the model uses. Must run BEFORE any value emission so cell-body code
+    // that consumes a cached offset always reads a freshly-computed local —
+    // even when the consumer landed inside a conditional branch via value
+    // sinking and a sibling branch never executed the localTee.
+    initByteOffsetLocals(ctx, cellAttrItemBytes);
 
     // Wave A.6: compute row/col from idx once per cell. Used by NI access
     // emitters to decode packed (dr, dc) NIs into cell indices inline.
