@@ -728,6 +728,32 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return storeResult(ctx.emitter, I32);
   },
 
+  // Wave A.6: break a packed NI into its (dr, dc) components — multi-output.
+  // Stores both port refs via setCachedPort so downstream nodes see them under
+  // the `_v<id>_dr` / `_v<id>_dc` convention. The default 'value' port resolves
+  // to dr (parity with other multi-output nodes that return the "primary" out).
+  breakDownNeighborIndex: ({ node, ctx, inputs }) => {
+    const idxRef = inputs['index'] ?? { inline: true, value: 0, valtype: I32 };
+    const em = ctx.emitter;
+    const inLocal = em.allocLocal(I32);
+    pushValueAs(em, idxRef, I32);
+    em.localSet(inLocal);
+    // dr = ni >> 16 (arithmetic right-shift — sign-extends)
+    const drLocal = em.allocLocal(I32);
+    em.localGet(inLocal); em.i32Const(16); em.op(OP_I32_SHR_S);
+    em.localSet(drLocal);
+    // dc = (ni << 16) >> 16 (shl16 then arithmetic shr16 — sign-extends low 16)
+    const dcLocal = em.allocLocal(I32);
+    em.localGet(inLocal); em.i32Const(16); em.op(OP_I32_SHL); em.i32Const(16); em.op(OP_I32_SHR_S);
+    em.localSet(dcLocal);
+    const drRef: LocalRef = { localIdx: drLocal, valtype: I32 };
+    const dcRef: LocalRef = { localIdx: dcLocal, valtype: I32 };
+    setCachedPort(ctx, node.id, 'dr', drRef);
+    setCachedPort(ctx, node.id, 'dc', dcRef);
+    // Default 'value' port also resolves to dr (matches other multi-output emitters).
+    return drRef;
+  },
+
   // Wave A.6: flip a NeighborIndex by decoding (dr, dc), conditionally negating,
   // and re-encoding. No neighborhood needed.
   flipNeighborIndex: ({ node, ctx, inputs }) => {

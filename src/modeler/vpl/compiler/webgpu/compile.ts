@@ -960,6 +960,21 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return emitLet(ctx, 'i32', `${packed}`, 'nit');
   },
 
+  // Wave A.6: break a packed NI into its (dr, dc) components — multi-output.
+  // Caches both port refs so downstream nodes can read either independently.
+  breakDownNeighborIndex: ({ node, ctx, inputs }) => {
+    const idxRef = inputs['index'] ?? { expr: '0', type: 'i32' as WgslType };
+    const inExpr = castTo(idxRef, 'i32');
+    const inName = fresh(ctx, 'bdnIn');
+    ctx.lines.push(`  let ${inName}: i32 = ${inExpr};`);
+    const drRef = emitLet(ctx, 'i32', `(${inName}) >> 16`, 'bdnDr');
+    const dcRef = emitLet(ctx, 'i32', `((${inName}) << 16) >> 16`, 'bdnDc');
+    setCachedPort(ctx, node.id, 'dr', drRef);
+    setCachedPort(ctx, node.id, 'dc', dcRef);
+    // Default 'value' port also resolves to dr (matches other multi-output emitters).
+    return drRef;
+  },
+
   // Wave A.6: flip a NeighborIndex by decoding (dr, dc), conditionally
   // negating, and re-encoding. No neighborhood needed.
   flipNeighborIndex: ({ node, ctx, inputs }) => {

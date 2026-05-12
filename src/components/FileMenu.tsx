@@ -61,8 +61,17 @@ export function FileMenu() {
       }));
     });
     void captured;
-    // Wait one frame so React state updates have settled
-    await new Promise(r => requestAnimationFrame(r));
+    // Wait one frame so React state updates have settled. Use setTimeout(0) as a
+    // fallback if rAF is throttled (background tab) — rAF wouldn't fire and the
+    // save would hang indefinitely. Either signal proves a microtask flush gap.
+    await new Promise<void>(resolve => {
+      let done = false;
+      const finish = () => { if (!done) { done = true; resolve(); } };
+      requestAnimationFrame(() => finish());
+      // Backstop: if rAF is throttled (tab not visible / window minimised),
+      // a 50ms macrotask still flushes the pending React render and unblocks save.
+      setTimeout(finish, 50);
+    });
     const latest = modelRef.current;
     // If user opted out of both, strip simulationState entirely regardless of what's in model
     let toSerialize = (!opts.includeControls && !opts.includeGrid)

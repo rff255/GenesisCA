@@ -45,6 +45,7 @@ import { NeighborIndexFromOffsetNode } from './NeighborIndexFromOffsetNode';
 import { NeighborIndexFromTagNode } from './NeighborIndexFromTagNode';
 import { PickRandomNeighborNode } from './PickRandomNeighborNode';
 import { FlipNeighborIndexNode } from './FlipNeighborIndexNode';
+import { BreakDownNeighborIndexNode } from './BreakDownNeighborIndexNode';
 import { ForEachInArrayNode } from './ForEachInArrayNode';
 import { GetAllNeighborIndexesNode } from './GetAllNeighborIndexesNode';
 import { ArrayElementNode } from './ArrayElementNode';
@@ -75,6 +76,7 @@ const ALL_NODES: NodeTypeDef[] = [
   NeighborIndexFromOffsetNode,
   NeighborIndexFromTagNode,
   FlipNeighborIndexNode,
+  BreakDownNeighborIndexNode,
   ArrayElementNode,
   ArrayLengthNode,
   GetConstantNode,
