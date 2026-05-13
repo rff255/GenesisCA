@@ -5,6 +5,7 @@ import { useListReorder } from './useListReorder';
 import { NeighborIndexDefaultEditor } from './NeighborIndexDefaultEditor';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
+import { setCurrentModelElementDrag } from '../vpl/graphState';
 import styles from './PanelContent.module.css';
 
 /** Build the drag payload for an attribute row. Cell vs Model attribute drop
@@ -21,7 +22,12 @@ function handleRowDragStart(payload: ModelElementDragPayload) {
   return (e: React.DragEvent) => {
     e.dataTransfer.setData(MODEL_ELEMENT_DRAG_MIME, JSON.stringify(payload));
     e.dataTransfer.effectAllowed = 'copy';
+    setCurrentModelElementDrag(payload);
   };
+}
+
+function handleRowDragEnd() {
+  setCurrentModelElementDrag(null);
 }
 
 export function AttributesPanelContent() {
@@ -83,6 +89,7 @@ export function AttributesPanelContent() {
                 onClick={() => setSelectedId(attr.id)}
                 draggable
                 onDragStart={handleRowDragStart(buildAttrDragPayload(attr))}
+                onDragEnd={handleRowDragEnd}
                 title={`Drag to canvas to add a node that uses '${attr.name}'`}
               >
                 <span className={styles.listItemName}>{attr.name}</span>
@@ -139,6 +146,7 @@ export function AttributesPanelContent() {
                 onClick={() => setSelectedId(attr.id)}
                 draggable
                 onDragStart={handleRowDragStart(buildAttrDragPayload(attr))}
+                onDragEnd={handleRowDragEnd}
                 title={`Drag to canvas to add a node that uses '${attr.name}'`}
               >
                 <span className={styles.listItemName}>{attr.name}</span>

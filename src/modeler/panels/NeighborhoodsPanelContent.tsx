@@ -3,6 +3,7 @@ import { useModel } from '../../model/ModelContext';
 import { useListReorder } from './useListReorder';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
+import { setCurrentModelElementDrag } from '../vpl/graphState';
 import styles from './PanelContent.module.css';
 
 function handleNeighborhoodDragStart(neighborhoodId: string) {
@@ -10,7 +11,12 @@ function handleNeighborhoodDragStart(neighborhoodId: string) {
     const payload: ModelElementDragPayload = { kind: 'neighborhood', neighborhoodId };
     e.dataTransfer.setData(MODEL_ELEMENT_DRAG_MIME, JSON.stringify(payload));
     e.dataTransfer.effectAllowed = 'copy';
+    setCurrentModelElementDrag(payload);
   };
+}
+
+function handleNeighborhoodDragEnd() {
+  setCurrentModelElementDrag(null);
 }
 
 function coordKey(row: number, col: number): string {
@@ -104,6 +110,7 @@ export function NeighborhoodsPanelContent() {
                 onClick={() => setSelectedIdx(i)}
                 draggable
                 onDragStart={handleNeighborhoodDragStart(n.id)}
+                onDragEnd={handleNeighborhoodDragEnd}
                 title={`Drag to canvas to add a node that uses '${n.name}'`}
               >
                 <span className={styles.listItemName}>{n.name}</span>

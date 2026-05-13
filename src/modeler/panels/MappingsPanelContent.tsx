@@ -3,6 +3,7 @@ import { useModel } from '../../model/ModelContext';
 import { useListReorder } from './useListReorder';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
+import { setCurrentModelElementDrag } from '../vpl/graphState';
 import styles from './PanelContent.module.css';
 
 function handleMappingDragStart(mappingId: string, isAttributeToColor: boolean) {
@@ -12,7 +13,12 @@ function handleMappingDragStart(mappingId: string, isAttributeToColor: boolean) 
       : { kind: 'mapping-c2a', mappingId };
     e.dataTransfer.setData(MODEL_ELEMENT_DRAG_MIME, JSON.stringify(payload));
     e.dataTransfer.effectAllowed = 'copy';
+    setCurrentModelElementDrag(payload);
   };
+}
+
+function handleMappingDragEnd() {
+  setCurrentModelElementDrag(null);
 }
 
 export function MappingsPanelContent() {
@@ -76,6 +82,7 @@ export function MappingsPanelContent() {
                 onClick={() => setSelectedId(m.id)}
                 draggable
                 onDragStart={handleMappingDragStart(m.id, true)}
+                onDragEnd={handleMappingDragEnd}
                 title={`Drag to canvas to add a node that uses '${m.name}'`}
               >
                 <span className={styles.listItemName}>{m.name}</span>
@@ -119,6 +126,7 @@ export function MappingsPanelContent() {
                 onClick={() => setSelectedId(m.id)}
                 draggable
                 onDragStart={handleMappingDragStart(m.id, false)}
+                onDragEnd={handleMappingDragEnd}
                 title={`Drag to canvas to add a node that uses '${m.name}'`}
               >
                 <span className={styles.listItemName}>{m.name}</span>

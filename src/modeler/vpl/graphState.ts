@@ -141,6 +141,63 @@ export function setConnectedHandlesFromEdges(edges: Array<{ target: string; targ
 }
 
 // ---------------------------------------------------------------------------
+// Model-element panel drag (Attribute / Neighborhood / Mapping / Indicator
+// dragged from a side panel onto the canvas). Drives:
+//   1. `compatibleHandlesForDrag` — the set of existing-canvas handles that a
+//      to-be-spawned related node could connect to. CaNode subscribes and
+//      lights up matching ports with the existing `handleCompatible` glow.
+//   2. The snap-to-port detection in `onPaletteDrop` — if the drop lands
+//      within React Flow's connection radius of any handle in this set, the
+//      menu filters to nodes that can actually connect, and the chosen node
+//      auto-wires its matching port.
+// ---------------------------------------------------------------------------
+
+/** Opaque to graphState — actual type lives in modelElementDrag.ts. Stored
+ *  here as `unknown` to avoid an import cycle (graphState is imported by
+ *  CaNode which is imported by GraphEditor which is where the drag types
+ *  live). Callers cast on read. */
+export let currentModelElementDrag: unknown = null;
+const currentModelElementDragListeners = new Set<() => void>();
+
+export function subscribeCurrentModelElementDrag(fn: () => void): () => void {
+  currentModelElementDragListeners.add(fn);
+  return () => { currentModelElementDragListeners.delete(fn); };
+}
+export function setCurrentModelElementDrag(val: unknown): void {
+  if (currentModelElementDrag === val) return;
+  currentModelElementDrag = val;
+  currentModelElementDragListeners.forEach(fn => fn());
+}
+
+/** Set of canvas handle keys (`${nodeId}|${kind}|${category}|${portId}`) that
+ *  are compatible with the current panel drag. Recomputed by GraphEditor when
+ *  the drag payload changes or the node list changes. */
+const EMPTY_HANDLE_KEY_SET: ReadonlySet<string> = new Set();
+export let compatibleHandlesForDrag: ReadonlySet<string> = EMPTY_HANDLE_KEY_SET;
+const compatibleHandlesForDragListeners = new Set<() => void>();
+
+export function subscribeCompatibleHandlesForDrag(fn: () => void): () => void {
+  compatibleHandlesForDragListeners.add(fn);
+  return () => { compatibleHandlesForDragListeners.delete(fn); };
+}
+export function setCompatibleHandlesForDrag(val: ReadonlySet<string>): void {
+  if (compatibleHandlesForDrag === val) return;
+  // Reference compare is enough — callers either pass the empty constant or a
+  // freshly built set.
+  compatibleHandlesForDrag = val;
+  compatibleHandlesForDragListeners.forEach(fn => fn());
+}
+export function clearCompatibleHandlesForDrag(): void {
+  setCompatibleHandlesForDrag(EMPTY_HANDLE_KEY_SET);
+}
+
+/** Canonical handle-key encoding shared by the producer (compatibility
+ *  computation) and the consumer (CaNode highlight check). */
+export function handleKey(nodeId: string, kind: 'input' | 'output', category: 'flow' | 'value', portId: string): string {
+  return `${nodeId}|${kind}|${category}|${portId}`;
+}
+
+// ---------------------------------------------------------------------------
 // Connection-kind hazards per node (e.g. list-position → NeighborIndex mis-wires)
 // Same pub/sub pattern as connectedHandles — single global recomputation,
 // per-node useSyncExternalStore subscription, diff-aware notify.

@@ -12,6 +12,12 @@
  * the two paths visually distinct.
  */
 
+import type { Node } from '@xyflow/react';
+import type { PortDef } from './types';
+import { getNodeDef } from './nodes/registry';
+import { getEffectivePorts } from './effectivePorts';
+import { handleKey } from './graphState';
+
 export const MODEL_ELEMENT_DRAG_MIME = 'application/genesisca-model-element';
 
 export type ModelElementDragPayload =
@@ -91,3 +97,127 @@ export const RELATED_NODES: Record<ModelElementDragPayload['kind'], RelatedNodeE
     { nodeType: 'updateIndicator', configKey: 'indicatorId' },
   ],
 };
+
+// ---------------------------------------------------------------------------
+// Compatible-handle computation for the panel-drag highlight + snap-to-port
+// menu filter. Given the dragged element, find every existing canvas port
+// that a to-be-spawned related node could connect to.
+// ---------------------------------------------------------------------------
+
+interface PortShape {
+  kind: 'input' | 'output';
+  category: 'flow' | 'value';
+  dataType?: string;
+  isArray?: boolean;
+}
+
+/** All effective port shapes that a related node would expose, given the
+ *  payload (most importantly, isColorAttr for color model attributes). */
+function relatedNodePotentialPorts(payload: ModelElementDragPayload): PortShape[] {
+  const shapes: PortShape[] = [];
+  for (const entry of RELATED_NODES[payload.kind]) {
+    const def = getNodeDef(entry.nodeType);
+    if (!def) continue;
+    // Resolve the config the new node would spawn with so getEffectivePorts
+    // can branch correctly (e.g., GetModelAttribute r/g/b vs value).
+    const cfg: Record<string, unknown> = {
+      ...def.defaultConfig,
+      ...(entry.extraConfig ?? {}),
+      [entry.configKey]: 'placeholder',
+    };
+    if (payload.kind === 'model-attribute') cfg.isColorAttr = payload.isColor;
+    const ports = getEffectivePorts(def.type, cfg);
+    for (const p of [...ports.inputs, ...ports.outputs]) {
+      shapes.push({ kind: p.kind, category: p.category, dataType: p.dataType, isArray: p.isArray });
+    }
+  }
+  return shapes;
+}
+
+function shapesMate(a: PortShape, b: PortShape): boolean {
+  if (a.category !== b.category) return false;
+  if (a.kind === b.kind) return false;
+  if (a.category === 'flow') return true;
+  if (!!a.isArray !== !!b.isArray) return false;
+  const da = a.dataType ?? 'any';
+  const db = b.dataType ?? 'any';
+  return da === 'any' || db === 'any' || da === db;
+}
+
+/** Build the set of compatible handle keys for the current panel drag against
+ *  the current canvas nodes + edges. Excludes already-occupied non-array value
+ *  inputs (matching CaNode's `alreadyOccupied` check). */
+export function computeCompatibleHandlesForDrag(
+  payload: ModelElementDragPayload,
+  nodes: Node[],
+  occupiedInputs: ReadonlySet<string>,
+): Set<string> {
+  const result = new Set<string>();
+  const potentialShapes = relatedNodePotentialPorts(payload);
+  if (potentialShapes.length === 0) return result;
+  for (const node of nodes) {
+    if (node.type !== 'caNode') continue;
+    const data = node.data as { nodeType?: string; config?: Record<string, unknown> } | undefined;
+    const t = data?.nodeType;
+    if (!t) continue;
+    const eff = getEffectivePorts(t, data?.config ?? {});
+    const allPorts: PortDef[] = [...eff.inputs, ...eff.outputs];
+    for (const port of allPorts) {
+      // Skip occupied non-array value inputs.
+      if (port.kind === 'input' && port.category === 'value' && !port.isArray) {
+        if (occupiedInputs.has(`${node.id}|${port.id}`)) continue;
+      }
+      const portShape: PortShape = {
+        kind: port.kind, category: port.category, dataType: port.dataType, isArray: port.isArray,
+      };
+      const hasMate = potentialShapes.some(ns => shapesMate(portShape, ns));
+      if (hasMate) {
+        result.add(handleKey(node.id, port.kind, port.category, port.id));
+      }
+    }
+  }
+  return result;
+}
+
+/** Find the canvas handle nearest the drop point within `radiusPx`. Iterates
+ *  the highlighted set so we don't scan every handle in the DOM. Returns the
+ *  matched handle DOM element + parsed info, or null. */
+export function findNearestCompatibleHandle(
+  compatibleHandles: ReadonlySet<string>,
+  clientX: number,
+  clientY: number,
+  radiusPx: number,
+): {
+  nodeId: string;
+  portId: string;
+  kind: 'input' | 'output';
+  category: 'flow' | 'value';
+  dataType?: string;
+  isArray?: boolean;
+} | null {
+  if (compatibleHandles.size === 0) return null;
+  let best: { dist: number; info: { nodeId: string; portId: string; kind: 'input' | 'output'; category: 'flow' | 'value' } } | null = null;
+  for (const key of compatibleHandles) {
+    const [nodeId, kindS, categoryS, portId] = key.split('|') as [string, string, string, string];
+    if (!nodeId || !portId) continue;
+    const kind = kindS as 'input' | 'output';
+    const category = categoryS as 'flow' | 'value';
+    const nodeEl = document.querySelector(`[data-id="${nodeId}"]`);
+    if (!nodeEl) continue;
+    const handleId = `${kind}_${category}_${portId}`;
+    const handleEl = nodeEl.querySelector(`[data-handleid="${handleId}"]`) as HTMLElement | null;
+    if (!handleEl) continue;
+    const r = handleEl.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    const dx = cx - clientX;
+    const dy = cy - clientY;
+    const dist = Math.hypot(dx, dy);
+    if (dist <= radiusPx && (!best || dist < best.dist)) {
+      best = { dist, info: { nodeId, portId, kind, category } };
+    }
+  }
+  if (!best) return null;
+  // Re-resolve dataType / isArray for the auto-connect step using the live config.
+  return best.info;
+}
