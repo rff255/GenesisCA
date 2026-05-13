@@ -7,19 +7,15 @@
 
 .sidePanel {
   width: 200px;
-  min-width: 150px;
-  max-width: 400px;
   background: var(--color-bg-panel);
-  padding: var(--space-6);
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
   border-right: 1px solid var(--color-border);
   border-left: 1px solid var(--color-border);
   border-radius: var(--panel-radius);
-  overflow-y: auto;
-  overflow-x: hidden;
   position: relative;
+  /* Overflow is owned by `.panelBody` so the header stays pinned at top. */
+  overflow: hidden;
 }
 
 .leftPanelResizeHandle {
@@ -41,7 +37,6 @@
 .rightPanel {
   background: var(--color-bg-panel);
   width: 220px;
-  min-width: 160px;
   display: flex;
   flex-direction: column;
   position: relative;
@@ -89,11 +84,11 @@
 }
 
 .rightPanelSection {
-  padding: var(--space-5);
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  overflow-y: auto;
+  /* Padding and overflow live on `.rightPanelSectionBody` so the section's
+   * header stays pinned at the top of its scroll region. */
+  min-height: 0;
 }
 
 .rightPanelSection + .rightPanelSection {
@@ -136,15 +131,44 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: var(--space-2);
+  padding: var(--space-5) var(--space-6);
+  border-bottom: 1px solid var(--color-border-muted);
+  min-height: 40px;
+  flex: 0 0 auto;
 }
 
 .panelTitle {
   font-size: var(--font-sm);
   font-weight: 600;
-  color: var(--color-heading);
+  color: var(--color-text-tertiary);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
+}
+
+/* Scrollable body of the left panel — separated from `.panelHeader` so the
+ * title stays pinned and the resize handle sits outside (to the right of)
+ * the body's scrollbar. Mirrors the modeler PanelShell layout. */
+.panelBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* Each right-panel section gets its own pinned header + scrollable body,
+ * matching the left panel's structure. */
+.rightPanelSectionBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
 }
 
 .panelCollapseBtn {
@@ -218,7 +242,7 @@
 
 .statLabel {
   color: var(--color-text-tertiary);
-  font-size: 0.68rem;
+  font-size: var(--font-2xs);
 }
 
 .statValue {
@@ -238,7 +262,7 @@
   border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-md);
   color: var(--color-text-secondary);
-  font-size: 0.68rem;
+  font-size: var(--font-xs);
   cursor: pointer;
   box-shadow: var(--shadow-button-inset);
   transition: background var(--duration-base), border-color var(--duration-base);
@@ -257,22 +281,6 @@
 .controlButton:disabled:hover {
   background: transparent;
   border-color: var(--color-border);
-}
-
-.controlButtonAccent {
-  padding: var(--space-3) 0;
-  background: var(--color-accent-soft);
-  border: 1px solid var(--color-accent);
-  border-radius: var(--radius-md);
-  color: var(--color-accent);
-  font-size: 0.68rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background var(--duration-base);
-}
-
-.controlButtonAccent:hover {
-  background: var(--color-accent-strong);
 }
 
 .divider {
@@ -339,19 +347,26 @@
 }
 
 .brushInput {
-  width: 44px;
+  /* Flex-based sizing: the input grows with its parent (a fieldRow / model
+   * attribute container). When the side panel is wider, the input is wider —
+   * letting long decimals like 0.001234 fit without horizontal clipping.
+   * `min-width: 0` lets the flex layout shrink below content size; the
+   * separate `min-width` floor (48px) is what keeps it readable when several
+   * brushInputs share a row (RGB channels, brush W×H, grid W×H pairs). */
+  flex: 1;
+  min-width: 48px;
   padding: var(--space-1) var(--space-2);
   background: var(--color-bg-canvas);
   border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-md);
   color: var(--color-text-primary);
-  font-size: 0.68rem;
+  font-size: var(--font-xs);
   font-family: inherit;
   text-align: center;
 }
 
 .hint {
-  font-size: 0.55rem;
+  font-size: var(--font-2xs);
   color: var(--color-text-muted);
   font-style: italic;
   line-height: 1.4;
@@ -534,7 +549,7 @@
 }
 
 .transportSpeedLabel {
-  font-size: 0.55rem;
+  font-size: var(--font-2xs);
   color: var(--color-text-muted);
   white-space: nowrap;
   min-width: 36px;
@@ -551,7 +566,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  font-size: 0.55rem;
+  font-size: var(--font-2xs);
   color: var(--color-text-muted);
   cursor: pointer;
 }
@@ -583,7 +598,7 @@
   gap: var(--space-1);
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-sm);
-  font-size: 0.58rem;
+  font-size: var(--font-2xs);
   color: rgba(128, 144, 160, 0.7);
   transition: background var(--duration-base), color var(--duration-base);
 }
@@ -698,7 +713,7 @@
   border: 1px solid var(--color-border-muted);
   border-radius: var(--radius-sm);
   color: var(--color-text-secondary);
-  font-size: 0.55rem;
+  font-size: var(--font-2xs);
   cursor: pointer;
   z-index: 1;
 }
@@ -716,7 +731,7 @@
   border-radius: var(--radius-md);
   color: var(--color-text-secondary);
   font-family: var(--font-family-mono);
-  font-size: 0.5rem;
+  font-size: var(--font-2xs);
   line-height: 1.4;
   overflow-x: auto;
   white-space: pre;

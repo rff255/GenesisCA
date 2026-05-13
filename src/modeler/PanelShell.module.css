@@ -1,7 +1,5 @@
 .panelShell {
   width: var(--panel-width-default);
-  min-width: var(--panel-width-min);
-  max-width: var(--panel-width-max);
   height: 100%;
   display: flex;
   flex-direction: column;

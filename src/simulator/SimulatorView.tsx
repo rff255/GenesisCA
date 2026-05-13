@@ -915,6 +915,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       workerRef.current?.postMessage({ type: 'setRecording', enabled: false });
     }
     workerRef.current?.terminate();
+    // Clear stale buffers from the OUTGOING worker. Without this, `draw()`
+    // can fire in the gap between `gridWidth.current = w` (below) and the
+    // first stepped message from the new worker, and try to build a
+    // `new Uint8ClampedArray(colors.buffer, 0, w*h*4)` view sized for the
+    // NEW grid over the PREVIOUS worker's smaller colors buffer — throwing
+    // "Invalid typed array length" and tearing down React. Same risk
+    // applies to inspect-cell maps (a stale entry keyed by a no-longer-
+    // -valid cellIdx). srcCanvas is rebuilt on the next draw when needed.
+    colorsRef.current = null;
+    inspectDataRef.current.clear();
+    inspectColorsRef.current.clear();
+    srcCanvasRef.current = null;
     const result = compileModel();
     const firstViewer = model.mappings.find(m => m.isAttributeToColor);
     const viewer = firstViewer?.id ?? '';
@@ -1779,8 +1791,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         // color popup — modifier+click is the "debug info, don't paint" gesture.
         e.preventDefault();
         const cell = screenToGrid(e.clientX, e.clientY);
-        if (!cell) return;
-        const idx = cell.row * gridWidth.current + cell.col;
+        // Guard against the brief window where the canvas hasn't been laid out
+        // (parent rect 0×0 → scale 0 → NaN row/col). `!cell` only catches the
+        // out-of-bounds null return — a finite check is needed for the rest.
+        if (!cell || !Number.isFinite(cell.row) || !Number.isFinite(cell.col)) return;
+        const w = gridWidth.current;
+        if (w <= 0) return;
+        const idx = cell.row * w + cell.col;
         setInspectPopovers(prev => {
           const existingIdx = prev.findIndex(p => p.cellIdx === idx);
           if (existingIdx >= 0) {
@@ -2495,22 +2512,36 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               if (!panel) return;
               const startX = e.clientX;
               const startW = panel.offsetWidth;
+              // Drag below this on release → snap closed. Mirrors the
+              // common IDE "drag inward to collapse" gesture. The drag
+              // visually clamps a bit lower (40px) so the user sees the
+              // panel shrink before the snap fires.
+              const COLLAPSE_THRESHOLD = 100;
+              const DRAG_MIN = 40;
+              let lastW = startW;
               const onMove = (ev: MouseEvent) => {
-                const newW = Math.max(150, Math.min(400, startW + (ev.clientX - startX)));
-                panel.style.width = newW + 'px';
-                panel.style.minWidth = newW + 'px';
+                lastW = Math.max(DRAG_MIN, startW + (ev.clientX - startX));
+                panel.style.width = lastW + 'px';
+                panel.style.minWidth = lastW + 'px';
               };
               const onUp = () => {
                 document.removeEventListener('mousemove', onMove);
                 document.removeEventListener('mouseup', onUp);
+                if (lastW < COLLAPSE_THRESHOLD) {
+                  // Snap-close. The panel is unmounted next render, so
+                  // any inline width/minWidth set during the drag goes
+                  // with it — re-opening starts from the CSS default.
+                  setLeftPanelOpen(false);
+                }
               };
               document.addEventListener('mousemove', onMove);
               document.addEventListener('mouseup', onUp);
             }}
           />
 
+          <div className={styles.panelBody}>
           <div className={styles.sectionTitle}>Actions</div>
-          <button className={styles.controlButtonAccent} onClick={handleRandomize}>Randomize</button>
+          <button className={styles.controlButton} onClick={handleRandomize}>Randomize</button>
           <button className={styles.controlButton} onClick={handleRecompile}>Recompile</button>
 
           <hr className={styles.divider} />
@@ -2688,6 +2719,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               <pre className={styles.codeBlock}>{compiledCode || '(no compiled code)'}</pre>
             </div>
           )}
+          </div>
         </div>
       )}
 
@@ -2912,13 +2944,19 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               if (!panel) return;
               const startX = e.clientX;
               const startW = panel.offsetWidth;
+              // Mirror of the left panel: drag-inward-to-collapse. Right
+              // panel grows when the handle moves LEFT (delta inverted).
+              const COLLAPSE_THRESHOLD = 100;
+              const DRAG_MIN = 40;
+              let lastW = startW;
               const onMove = (ev: MouseEvent) => {
-                const newW = Math.max(160, startW - (ev.clientX - startX));
-                panel.style.width = newW + 'px';
+                lastW = Math.max(DRAG_MIN, startW - (ev.clientX - startX));
+                panel.style.width = lastW + 'px';
               };
               const onUp = () => {
                 document.removeEventListener('mousemove', onMove);
                 document.removeEventListener('mouseup', onUp);
+                if (lastW < COLLAPSE_THRESHOLD) setRightPanelOpen(false);
               };
               document.addEventListener('mousemove', onMove);
               document.addEventListener('mouseup', onUp);
@@ -2930,6 +2968,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             <div className={styles.panelHeader}>
               <span className={styles.panelTitle}>Input Mapping (C{'\u2192'}A)</span>
             </div>
+            <div className={styles.rightPanelSectionBody}>
             {colorToAttrMappings.length > 0 && (
               <div className={styles.mappingTabs}>
                 {colorToAttrMappings.map(m => (
@@ -2983,7 +3022,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               <input type="checkbox" checked={showBrushCursor} onChange={e => setShowBrushCursor(e.target.checked)} />
               Show brush cursor
             </label>
-            <div className={styles.hint}>LMB paint {'\u00B7'} RMB pan {'\u00B7'} Ctrl+LMB drag resize {'\u00B7'} Ctrl+wheel cycle mapping {'\u00B7'} Shift+RMB color</div>
+            <div className={styles.hint}>LMB paint {'\u00B7'} RMB pan {'\u00B7'} Ctrl+LMB drag resize {'\u00B7'} Ctrl+wheel cycle mapping {'\u00B7'} Shift+RMB color {'\u00B7'} Shift+LMB inspect</div>
+            </div>
           </div>
 
           {/* Indicators Section (bottom, fills remaining space) */}
@@ -2992,6 +3032,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               <div className={styles.panelHeader}>
                 <span className={styles.panelTitle}>Indicators</span>
               </div>
+              <div className={styles.rightPanelSectionBody}>
               <IndicatorDisplay
                 indicators={model.indicators || []}
                 values={indicatorValuesRef.current}
@@ -3005,6 +3046,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 }}
                 onCycleVizMode={cycleIndicatorVizMode}
               />
+              </div>
             </div>
           )}
         </div>
