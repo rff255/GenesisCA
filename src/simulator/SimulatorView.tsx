@@ -242,6 +242,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // or the runtime was destroyed before processing it), the placeholder
   // canvas stays orphaned and we stay on the JS-fallback path.
   const pendingDirectRenderCanvas = useRef<HTMLCanvasElement | null>(null);
+  // True between sending a soft `recompile` message under WebGPU direct render
+  // and receiving the worker's post-rebuild `useWebGPUStatus { ready: true,
+  // directRender: true }`. Used to trigger a fresh canvas re-attach so we
+  // sidestep an issue where reusing the salvaged OffscreenCanvas across a
+  // device swap leaves it in a broken state (no subsequent present produces
+  // visible output, even play / viewer switches don't recover). Full Recompile
+  // works because it creates a fresh canvas via Phase 1 — this flag opts the
+  // soft recompile path into the same fresh-canvas treatment, but without
+  // tearing down the worker (so model attribute sliders + grid state survive).
+  const recompilePendingCanvasRefresh = useRef<boolean>(false);
 
   // Build full code display from all compiled functions
   const buildFullCode = useCallback((result: ReturnType<typeof compileGraph>) => {
@@ -865,6 +875,33 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         srcCanvasRef.current = pendingDirectRenderCanvas.current;
         pendingDirectRenderCanvas.current = null;
         directRenderActiveRef.current = true;
+      } else if (msg.ready && msg.directRender && recompilePendingCanvasRefresh.current) {
+        // Post-soft-recompile fresh-canvas swap. Allocate a NEW srcCanvas
+        // placeholder, transferControlToOffscreen, and send attachCanvas to
+        // the worker. Worker discards the salvaged-but-broken OffscreenCanvas
+        // and runs setupDirectRender against the fresh one. The Phase 2
+        // branch above commits the swap when the worker's reply lands. Grid
+        // state and model attribute sliders survive because the worker isn't
+        // torn down. The OFFSCREEN-RENDER FALSE branch never runs here —
+        // the recompile path always lands in direct render when the user has
+        // useWebGPU on.
+        recompilePendingCanvasRefresh.current = false;
+        try {
+          const fresh = document.createElement('canvas');
+          fresh.width = gridWidth.current;
+          fresh.height = gridHeight.current;
+          const offscreen = (fresh as HTMLCanvasElement & {
+            transferControlToOffscreen: () => OffscreenCanvas;
+          }).transferControlToOffscreen();
+          pendingDirectRenderCanvas.current = fresh;
+          workerRef.current?.postMessage(
+            { type: 'attachCanvas', canvas: offscreen, width: fresh.width, height: fresh.height },
+            [offscreen],
+          );
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.warn('[webgpu] post-recompile canvas refresh failed; staying with stale canvas:', e);
+        }
       } else if (msg.ready && pendingCanvasAttach.current) {
         // Phase 1 ack — send attachCanvas, stash the fresh canvas, but DON'T
         // swap srcCanvasRef or set directRenderActiveRef yet.
@@ -1349,6 +1386,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           return { shaderCode: '', entryPoints: { step: 'step', outputMappings: [] as Array<{ mappingId: string; entry: string }> }, layout: null as never, error: String((e as Error)?.message || e) };
         }
       })();
+      // Under WebGPU direct render, a soft recompile rebuilds the GPU device
+      // and reconfigures the salvaged OffscreenCanvas — but in practice the
+      // canvas can land in a broken state where no subsequent present produces
+      // visible output (manual Recompile fixes it because it allocates a fresh
+      // canvas via Phase 1/2). Set a flag so the useWebGPUStatus handler does
+      // the same fresh-canvas swap automatically when the rebuild lands —
+      // no worker teardown, model attribute sliders + grid state survive.
+      if (dimsModel.properties.useWebGPU && !webgpuResult.error && directRenderActiveRef.current) {
+        recompilePendingCanvasRefresh.current = true;
+      }
       workerRef.current?.postMessage({
         type: 'recompile',
         stepCode: result.stepCode,
