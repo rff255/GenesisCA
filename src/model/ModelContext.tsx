@@ -23,7 +23,7 @@ import type {
 } from './types';
 import { DEFAULT_MODEL, EMPTY_MODEL } from './defaultModel';
 import { cloneMacroWithFreshIds } from './macroImport';
-import { setSavedGraphViewport } from '../modeler/vpl/graphState';
+import { clearAllSavedGraphViewports, setSavedCurrentScope } from '../modeler/vpl/graphState';
 
 // ---------------------------------------------------------------------------
 // ID generation
@@ -772,18 +772,19 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     [],
   );
   const newModel = useCallback(() => {
-    // Clear the GraphEditor's saved viewport so the next ModelerView mount
-    // auto-fits the fresh graph instead of restoring the pan/zoom that was
-    // appropriate for the previous model's node layout. (If the modeler is
-    // already mounted at the moment of the load, the user can hit React
-    // Flow's fitView button — re-fitting a live instance through a window
-    // event raced with the dispatch cycle in ways that were unreliable.)
-    setSavedGraphViewport(null);
+    // Clear every cached GraphEditor viewport and scope so the next
+    // ModelerView mount auto-fits the fresh graph from root scope, instead
+    // of restoring pan/zoom that was appropriate for the previous model's
+    // node layout (or dumping the user into a macro from the prior session
+    // that no longer exists in the new model).
+    clearAllSavedGraphViewports();
+    setSavedCurrentScope(['root']);
     dispatch({ type: 'NEW_MODEL' });
   }, []);
   const loadModel = useCallback(
     (model: CAModel) => {
-      setSavedGraphViewport(null);
+      clearAllSavedGraphViewports();
+      setSavedCurrentScope(['root']);
       dispatch({ type: 'LOAD_MODEL', model });
     },
     [],
