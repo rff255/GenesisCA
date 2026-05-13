@@ -26,6 +26,17 @@ export function getInlineValue(port: PortDef, config: Record<string, string | nu
     // <input type="number"> step-validity / locale-parsing edge case where the
     // raw config value can end up as '' or otherwise non-numeric and produce
     // an "always-true" comparison via the defaultValue '0' fallback.
+    //
+    // Must also accept 'true'/'false' here because SetAttribute /
+    // UpdateAttribute / SetNeighborhoodAttribute / SetNeighborAttributeByIndex
+    // declare their `value` port as `inlineWidget: 'number'` but CaNode swaps
+    // the widget render to a bool <select> when the chosen attribute is bool —
+    // so the same config key can carry 'true' / 'false'. Without this branch,
+    // parseFloat returns NaN and the JS emit silently falls back to '0',
+    // breaking any rule that writes a bool attribute via the inline widget.
+    // Matches parseInlineNum() in this file (used by WASM/WebGPU).
+    if (s === 'true') return '1';
+    if (s === 'false') return '0';
     const n = parseFloat(s);
     if (Number.isFinite(n)) return String(n);
     return port.defaultValue;
