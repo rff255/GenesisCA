@@ -150,17 +150,25 @@
 .inlineWidget {
   width: 52px;
   padding: 1px 3px;
-  background: var(--color-bg-canvas);
-  border: 1px solid var(--color-border);
+  /* Match the node body's background (var(--color-bg-elevated)) instead of
+   * the canvas. Previously these widgets shared the canvas background, so
+   * the values appeared to float in empty space — hard to associate with
+   * the node they configure. Matching the node body, adding a stronger
+   * border, and a subtle shadow make them read as "tabs attached to the
+   * left edge of the node". */
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-muted);
   border-radius: var(--radius-sm);
   color: var(--color-text-primary);
   font-size: 0.55rem;
   font-family: inherit;
   outline: none;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 .inlineWidget:focus {
   border-color: var(--color-accent);
+  background: var(--color-bg-canvas);
 }
 
 /* --- Collapsed node styles --- */
