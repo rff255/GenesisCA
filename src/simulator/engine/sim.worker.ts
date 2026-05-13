@@ -181,8 +181,14 @@ interface RequestColorsSnapshotMsg { type: 'requestColorsSnapshot'; tag?: string
  *  echoes attribute values back via `inspectCellsData` after every step and
  *  immediately on subscription change. Declarative (replaces the prior set). */
 interface SetInspectCellsMsg { type: 'setInspectCells'; cellIdxs: number[] }
+/** Defensive WebGPU repaint trigger. Main thread sends this on visibility-
+ *  return so the canvas refreshes if the OffscreenCanvas was left in an
+ *  unpresented state by a soft recompile that ran while the simulator was
+ *  hidden (the device-swap inside startWebGPUInit can lose the visible
+ *  content despite dispatching a present internally). Idempotent + cheap. */
+interface RefreshDisplayMsg { type: 'refreshDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -2074,6 +2080,41 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           })();
         } else {
           postInspectCellsData();
+        }
+      }
+      break;
+    }
+
+    case 'refreshDisplay': {
+      // Main thread requests a fresh present pass — sent on visibility-return
+      // and after a soft recompile completes. Under WebGPU direct render, the
+      // OffscreenCanvas can land in an unpresented state after the recompile's
+      // device-swap inside startWebGPUInit (unconfigure → configure with new
+      // device → dispatch present), and the next compositor frame may show
+      // blank until something forces a new dispatch. Re-running the color
+      // pass + present here is cheap and idempotent. Posts a fresh `stepped`
+      // so the main thread also runs draw() and updates the visible canvas.
+      if (useWebGPU && webgpuRuntime?.stepReady) {
+        const rt = webgpuRuntime;
+        if (rt.directRender) {
+          try {
+            dispatchColorPassAndPresent(rt, activeViewer);
+            self.postMessage({ type: 'stepped', generation });
+          } catch (e) {
+            self.postMessage({ type: 'error', message: '[webgpu] refreshDisplay failed: ' + ((e instanceof Error) ? e.message : String(e)) });
+          }
+        } else {
+          // Non-direct path: readback colors so the main thread has fresh
+          // pixels to drawImage. async IIFE to avoid making onmessage async.
+          void (async () => {
+            try {
+              dispatchOutputMapping(rt, activeViewer);
+              await readbackColors(rt, colors);
+              self.postMessage({ type: 'stepped', generation, colors: new Uint8ClampedArray(colors) });
+            } catch (e) {
+              self.postMessage({ type: 'error', message: '[webgpu] refreshDisplay failed: ' + ((e instanceof Error) ? e.message : String(e)) });
+            }
+          })();
         }
       }
       break;
