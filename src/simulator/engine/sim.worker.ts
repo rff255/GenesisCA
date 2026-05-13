@@ -2252,9 +2252,23 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         cachedModelAttrs[key] = val;
       }
 
-      // Restore order array
-      if (msg.orderArray) {
-        orderArray = new Int32Array(msg.orderArray);
+      // Restore order array — COPY INTO the existing view rather than
+      // replacing the reference. The initial `orderArray` is a typed-array
+      // view over `wasmMemory` at `wasmLayout.orderOffset` (see initGrid).
+      // Replacing the reference orphans WASM (which reads the order via the
+      // baked-in offset, not via the JS reference): the per-step shuffle then
+      // writes to the standalone array while WASM keeps reading the original
+      // view's stale contents. Under random-order async this freezes cell
+      // iteration into the init-time sequential [0,1,2,...] order — the
+      // resulting top-left-first bias propagates directly into any rule that
+      // writes per-cell during the step, e.g. Plantbox's "set neighbor's
+      // Light direction toward this cell" macro emits biased NI values.
+      // Pre-d581232 the load failed silently for NI models so this latent
+      // bug never manifested; the working load surfaces it.
+      if (msg.orderArray && orderArray) {
+        const srcOrder = new Int32Array(msg.orderArray);
+        const olen = Math.min(orderArray.length, srcOrder.length);
+        for (let i = 0; i < olen; i++) orderArray[i] = srcOrder[i]!;
       }
 
       // Rebuild neighbor indices for constant boundary sentinel
