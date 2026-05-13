@@ -26,6 +26,20 @@ function loadSimSettings(): Record<string, unknown> {
   return {};
 }
 
+// Tiny chevron icons used by the viewer / transport bar collapse toggles. Inline
+// SVG (not Unicode glyphs) so the up and down variants are pixel-identical —
+// fonts can't be relied on to render ⌃ and ⌄ at the same width.
+const ChevronUpIcon = () => (
+  <svg width="10" height="6" viewBox="0 0 10 6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+    <polyline points="1,5 5,1 9,5" />
+  </svg>
+);
+const ChevronDownIcon = () => (
+  <svg width="10" height="6" viewBox="0 0 10 6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+    <polyline points="1,1 5,5 9,1" />
+  </svg>
+);
+
 export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { model, updateIndicator, setSimulationState, addPreset, deletePreset, updatePreset, updateProperties } = useModel();
@@ -60,6 +74,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const [brushMapping, setBrushMapping] = useState((saved.current.brushMapping as string) ?? '');
   const [showBrushCursor, setShowBrushCursor] = useState((saved.current.showBrushCursor as boolean) ?? true);
   const [showGridlines, setShowGridlines] = useState((saved.current.showGridlines as boolean) ?? false);
+  // Infinity canvas: when the model uses torus boundary, the grid tiles into the
+  // viewport so the user can pan endlessly across the wrap seams. Settings flag
+  // persists across sessions, but the boundary-treatment guard below forces it
+  // off whenever the active model isn't torus.
+  const [infinityCanvas, setInfinityCanvas] = useState((saved.current.infinityCanvas as boolean) ?? false);
 
   // Indicator values from worker
   // Indicator values stored in ref (not state) to avoid extra re-renders on every step.
@@ -113,12 +132,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         localStorage.setItem(SIM_SETTINGS_KEY, JSON.stringify({
           targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines,
-          indicatorVizModes, recordFormat,
+          infinityCanvas, indicatorVizModes, recordFormat,
         }));
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, indicatorVizModes, recordFormat]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, infinityCanvas, indicatorVizModes, recordFormat]);
 
   const cycleIndicatorVizMode = useCallback((id: string) => {
     setIndicatorVizModes(prev => {
@@ -336,8 +355,44 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const ox = (parentW - scaledW) / 2 + pan.x;
     const oy = (parentH - scaledH) / 2 + pan.y;
 
+    // Infinity canvas: tile the grid bitmap across the viewport. Only engaged when
+    // the toggle is on AND the model uses torus boundary — otherwise we'd render a
+    // tiled image that lies about the simulation physics.
+    const infinity = infinityCanvasRef.current && boundaryTreatmentRef.current === 'torus';
+
+    // Soft cap: at extreme zoom-out (cells << 1px) the tile count explodes. Beyond
+    // ~256 visible tiles we draw only the centre tile to keep per-frame cost bounded.
+    let txMin = 0, txMax = 0, tyMin = 0, tyMax = 0;
+    if (infinity && scaledW > 0 && scaledH > 0) {
+      txMin = Math.floor(-ox / scaledW);
+      txMax = Math.floor((parentW - ox) / scaledW);
+      tyMin = Math.floor(-oy / scaledH);
+      tyMax = Math.floor((parentH - oy) / scaledH);
+      const tileCount = (txMax - txMin + 1) * (tyMax - tyMin + 1);
+      if (tileCount > 256) {
+        txMin = txMax = tyMin = tyMax = 0;
+      }
+    }
+
     if (srcCanvasRef.current) {
-      ctx.drawImage(srcCanvasRef.current, ox, oy, scaledW, scaledH);
+      if (infinity) {
+        // Snap each tile's left/top edges to integer pixels and derive width/height
+        // from the difference with the NEXT tile's left/top. This guarantees that
+        // tile (tx)'s right edge == tile (tx+1)'s left edge to the pixel — otherwise
+        // sub-pixel destination positions at non-integer scaledW leave faint seams
+        // (a half-pixel gap or overlap) at every tile boundary.
+        for (let ty = tyMin; ty <= tyMax; ty++) {
+          const yTop = Math.round(oy + ty * scaledH);
+          const yBot = Math.round(oy + (ty + 1) * scaledH);
+          for (let tx = txMin; tx <= txMax; tx++) {
+            const xLeft = Math.round(ox + tx * scaledW);
+            const xRight = Math.round(ox + (tx + 1) * scaledW);
+            ctx.drawImage(srcCanvasRef.current, xLeft, yTop, xRight - xLeft, yBot - yTop);
+          }
+        }
+      } else {
+        ctx.drawImage(srcCanvasRef.current, ox, oy, scaledW, scaledH);
+      }
     }
 
     // Draw gridlines when zoomed in enough (cells >= 4px)
@@ -345,24 +400,43 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
       ctx.lineWidth = 0.5;
       ctx.beginPath();
-      for (let col = 0; col <= w; col++) {
-        const x = ox + col * scale;
-        if (x >= 0 && x <= parentW) {
-          ctx.moveTo(x, Math.max(0, oy));
-          ctx.lineTo(x, Math.min(parentH, oy + scaledH));
-        }
-      }
-      for (let row = 0; row <= h; row++) {
-        const y = oy + row * scale;
-        if (y >= 0 && y <= parentH) {
-          ctx.moveTo(Math.max(0, ox), y);
-          ctx.lineTo(Math.min(parentW, ox + scaledW), y);
+      const xtMin = infinity ? txMin : 0;
+      const xtMax = infinity ? txMax : 0;
+      const ytMin = infinity ? tyMin : 0;
+      const ytMax = infinity ? tyMax : 0;
+      for (let ty = ytMin; ty <= ytMax; ty++) {
+        for (let tx = xtMin; tx <= xtMax; tx++) {
+          const tileOx = ox + tx * scaledW;
+          const tileOy = oy + ty * scaledH;
+          const tileTop = Math.max(0, tileOy);
+          const tileBot = Math.min(parentH, tileOy + scaledH);
+          const tileLeft = Math.max(0, tileOx);
+          const tileRight = Math.min(parentW, tileOx + scaledW);
+          for (let col = 0; col <= w; col++) {
+            const x = tileOx + col * scale;
+            if (x >= 0 && x <= parentW) {
+              ctx.moveTo(x, tileTop);
+              ctx.lineTo(x, tileBot);
+            }
+          }
+          for (let row = 0; row <= h; row++) {
+            const y = tileOy + row * scale;
+            if (y >= 0 && y <= parentH) {
+              ctx.moveTo(tileLeft, y);
+              ctx.lineTo(tileRight, y);
+            }
+          }
         }
       }
       ctx.stroke();
     }
 
-    // Draw brush cursor rectangle
+    // Draw brush cursor rectangle. In infinity mode, draw one copy per visible
+    // tile so the user always sees the brush location — using the same tile range
+    // as the bitmap loop, not a fixed 3×3 neighbourhood (which left the far tiles
+    // without an outline when the user zoomed out enough to see 4+ tiles per axis).
+    // The rect itself can extend past a tile's edge into the neighbour; emitting
+    // it on each tile naturally produces the wrap-onto-adjacent-tile visual.
     const cursor = cursorGrid.current;
     if (cursor && showBrushCursorRef.current) {
       const bw = brushWRef.current;
@@ -371,9 +445,59 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const halfH = Math.floor((bh - 1) / 2);
       const bx = ox + (cursor.col - halfW) * scale;
       const by = oy + (cursor.row - halfH) * scale;
+      const bWidth = bw * scale;
+      const bHeight = bh * scale;
       ctx.strokeStyle = 'rgba(76, 201, 240, 0.7)';
       ctx.lineWidth = 1;
-      ctx.strokeRect(bx, by, bw * scale, bh * scale);
+      if (infinity) {
+        // Extend by ceil(brushSize / gridSize) tiles on each side so a brush
+        // that spans more than one tile still draws every overhanging copy.
+        // The per-copy viewport-intersection check below culls anything off-screen.
+        const brushSpanX = Math.max(1, Math.ceil(bw / w));
+        const brushSpanY = Math.max(1, Math.ceil(bh / h));
+        for (let ty = tyMin - brushSpanY; ty <= tyMax + brushSpanY; ty++) {
+          for (let tx = txMin - brushSpanX; tx <= txMax + brushSpanX; tx++) {
+            const rx = bx + tx * scaledW;
+            const ry = by + ty * scaledH;
+            if (rx + bWidth < 0 || rx > parentW || ry + bHeight < 0 || ry > parentH) continue;
+            ctx.strokeRect(rx, ry, bWidth, bHeight);
+          }
+        }
+      } else {
+        ctx.strokeRect(bx, by, bWidth, bHeight);
+      }
+    }
+
+    // Middle-click autoscroll indicator: small unfilled ring + centre dot at the
+    // anchor, plus a faint direction line to the cursor. Kept low-contrast so it
+    // doesn't compete with the cell content visually.
+    const aoOrigin = autoscrollOriginRef.current;
+    const aoCursor = autoscrollCursorRef.current;
+    if (aoOrigin) {
+      ctx.save();
+      if (aoCursor) {
+        const dx = aoCursor.x - aoOrigin.x;
+        const dy = aoCursor.y - aoOrigin.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 12) {
+          ctx.strokeStyle = 'rgba(220, 230, 245, 0.18)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(aoOrigin.x, aoOrigin.y);
+          ctx.lineTo(aoCursor.x, aoCursor.y);
+          ctx.stroke();
+        }
+      }
+      ctx.strokeStyle = 'rgba(220, 230, 245, 0.35)';
+      ctx.fillStyle = 'rgba(220, 230, 245, 0.55)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(aoOrigin.x, aoOrigin.y, 5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(aoOrigin.x, aoOrigin.y, 1.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
     }
 
     fpsFrames.current++;
@@ -1275,6 +1399,29 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   useEffect(() => { showBrushCursorRef.current = showBrushCursor; }, [showBrushCursor]);
   const showGridlinesRef = useRef(false);
   useEffect(() => { showGridlinesRef.current = showGridlines; }, [showGridlines]);
+  // Middle-click autoscroll — origin/cursor are canvas-local pixel coords.
+  // When origin is non-null we're in autoscroll mode; the rAF loop pans by a
+  // velocity proportional to (cursor - origin) and the draw() function paints
+  // a small compass indicator at the origin.
+  const autoscrollOriginRef = useRef<{ x: number; y: number } | null>(null);
+  const autoscrollCursorRef = useRef<{ x: number; y: number } | null>(null);
+  const autoscrollRafRef = useRef<number | null>(null);
+  const infinityCanvasRef = useRef(false);
+  useEffect(() => { infinityCanvasRef.current = infinityCanvas; draw(); }, [infinityCanvas, draw]);
+  // Boundary-treatment ref so the memoized draw/screenToGrid/brushCellsAt callbacks
+  // (empty-deps useCallbacks) can read the live value.
+  const boundaryTreatmentRef = useRef<'torus' | 'constant'>(model.properties.boundaryTreatment);
+  useEffect(() => {
+    boundaryTreatmentRef.current = model.properties.boundaryTreatment;
+    draw();
+  }, [model.properties.boundaryTreatment, draw]);
+  // When the model leaves torus, infinity canvas no longer makes physical sense
+  // (it would lie about the grid wrapping). Force the toggle off.
+  useEffect(() => {
+    if (model.properties.boundaryTreatment !== 'torus' && infinityCanvas) {
+      setInfinityCanvas(false);
+    }
+  }, [model.properties.boundaryTreatment, infinityCanvas]);
   useEffect(() => { brushMappingRef.current = brushMapping; }, [brushMapping]);
   // Mappings ref lets mouse/keyboard handlers see the latest model.mappings without re-registering.
   const mappingsRef = useRef(model.mappings);
@@ -1286,7 +1433,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // for users who want the full gradient UI.
   const [colorPopover, setColorPopover] = useState<{ x: number; y: number } | null>(null);
 
-  /** Convert screen coords to grid cell coords */
+  /** Convert screen coords to grid cell coords. In infinity mode, wraps via
+   *  modulo so painting / hovering across tile seams hits the correct cell. */
   const screenToGrid = useCallback((clientX: number, clientY: number): { row: number; col: number } | null => {
     const canvas = canvasRef.current;
     if (!canvas) return null;
@@ -1299,8 +1447,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const scale = baseScale * zoomRef.current;
     const ox = (parentW - w * scale) / 2 + panRef.current.x;
     const oy = (parentH - h * scale) / 2 + panRef.current.y;
-    const col = Math.floor((clientX - rect.left - ox) / scale);
-    const row = Math.floor((clientY - rect.top - oy) / scale);
+    let col = Math.floor((clientX - rect.left - ox) / scale);
+    let row = Math.floor((clientY - rect.top - oy) / scale);
+    const infinity = infinityCanvasRef.current && boundaryTreatmentRef.current === 'torus';
+    if (infinity) {
+      col = ((col % w) + w) % w;
+      row = ((row % h) + h) % h;
+      return { row, col };
+    }
     if (col < 0 || col >= w || row < 0 || row >= h) return null;
     return { row, col };
   }, []);
@@ -1311,16 +1465,28 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
   };
 
-  /** Collect brush-rect cells around a grid center (no message sent) */
+  /** Collect brush-rect cells around a grid center (no message sent). In infinity
+   *  mode, individual cell coords are wrapped modulo grid size so the worker's
+   *  paint handler (which drops out-of-bounds row/col) doesn't silently lose the
+   *  cells of a brush that straddles a tile seam. */
   const brushCellsAt = useCallback((row: number, col: number, r: number, g: number, b: number) => {
     const bw = brushWRef.current;
     const bh = brushHRef.current;
     const cells: Array<{ row: number; col: number; r: number; g: number; b: number }> = [];
     const halfW = Math.floor((bw - 1) / 2);
     const halfH = Math.floor((bh - 1) / 2);
+    const infinity = infinityCanvasRef.current && boundaryTreatmentRef.current === 'torus';
+    const gw = gridWidth.current;
+    const gh = gridHeight.current;
     for (let dr = -halfH; dr <= halfH + ((bh - 1) % 2); dr++) {
       for (let dc = -halfW; dc <= halfW + ((bw - 1) % 2); dc++) {
-        cells.push({ row: row + dr, col: col + dc, r, g, b });
+        let cellRow = row + dr;
+        let cellCol = col + dc;
+        if (infinity && gw > 0 && gh > 0) {
+          cellRow = ((cellRow % gh) + gh) % gh;
+          cellCol = ((cellCol % gw) + gw) % gw;
+        }
+        cells.push({ row: cellRow, col: cellCol, r, g, b });
       }
     }
     return cells;
@@ -1343,7 +1509,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     workerRef.current?.postMessage({ type: 'paint', cells, mappingId, activeViewer: viewer });
   }, []);
 
-  /** Paint with Bresenham interpolation from last painted position to current */
+  /** Paint with Bresenham interpolation from last painted position to current.
+   *  In infinity (torus tiling) mode, the line walks the SHORTER wrap path: the
+   *  signed delta is folded into [-range/2, range/2] so dragging across a seam
+   *  paints a few cells via the wrap, not a long line across the bounded grid. */
   const paintAt = useCallback((clientX: number, clientY: number) => {
     const center = screenToGrid(clientX, clientY);
     if (!center) return;
@@ -1351,18 +1520,38 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     let allCells: Array<{ row: number; col: number; r: number; g: number; b: number }> = [];
     const prev = lastPaintGrid.current;
     if (prev && (prev.row !== center.row || prev.col !== center.col)) {
-      // Bresenham line from prev to center
+      const gw = gridWidth.current;
+      const gh = gridHeight.current;
+      const infinity = infinityCanvasRef.current && boundaryTreatmentRef.current === 'torus';
       let r0 = prev.row, c0 = prev.col;
-      const r1 = center.row, c1 = center.col;
-      let dr = Math.abs(r1 - r0), dc = Math.abs(c1 - c0);
-      const sr = r0 < r1 ? 1 : -1, sc = c0 < c1 ? 1 : -1;
+      // Signed delta in cells. Without wrapping, a drag across the seam (e.g.
+      // col 98 -> col 1) would compute a -97 delta and paint the long way; the
+      // torus-shortest fold below collapses that to +3.
+      let signedDR = center.row - r0;
+      let signedDC = center.col - c0;
+      if (infinity) {
+        if (signedDR > gh / 2) signedDR -= gh;
+        else if (signedDR < -gh / 2) signedDR += gh;
+        if (signedDC > gw / 2) signedDC -= gw;
+        else if (signedDC < -gw / 2) signedDC += gw;
+      }
+      const dr = Math.abs(signedDR), dc = Math.abs(signedDC);
+      const sr = signedDR >= 0 ? 1 : -1, sc = signedDC >= 0 ? 1 : -1;
       let err = dc - dr;
-      // Skip first point (already painted on previous call)
-      while (r0 !== r1 || c0 !== c1) {
+      let stepsR = dr, stepsC = dc;
+      // Bresenham — walks until both axis step counts are exhausted. Mod each
+      // emitted (r0, c0) to grid range in infinity mode so the cells we push are
+      // the wrapped cells the worker expects.
+      while (stepsR > 0 || stepsC > 0) {
         const e2 = 2 * err;
-        if (e2 > -dr) { err -= dr; c0 += sc; }
-        if (e2 < dc) { err += dc; r0 += sr; }
-        allCells = allCells.concat(brushCellsAt(r0, c0, r, g, b));
+        if (e2 > -dr && stepsC > 0) { err -= dr; c0 += sc; stepsC--; }
+        if (e2 < dc && stepsR > 0) { err += dc; r0 += sr; stepsR--; }
+        let cellR = r0, cellC = c0;
+        if (infinity) {
+          cellR = ((cellR % gh) + gh) % gh;
+          cellC = ((cellC % gw) + gw) % gw;
+        }
+        allCells = allCells.concat(brushCellsAt(cellR, cellC, r, g, b));
       }
     } else {
       allCells = brushCellsAt(center.row, center.col, r, g, b);
@@ -1425,10 +1614,75 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const isResizingBrush = { active: false, startX: 0, startY: 0, startW: 0, startH: 0 };
     let canvasBrushActive = false; // true only when LMB started on canvas, not overlay
 
+    // Middle-click autoscroll: rAF loop pans by (cursor - origin) each frame.
+    // Speed scales with distance; below the deadzone the pointer is treated as
+    // resting (no pan). Stops on any non-middle-button click, second middle
+    // click, Escape, or unmount.
+    const AUTOSCROLL_DEADZONE = 12;
+    const AUTOSCROLL_DAMP = 12;
+    const tickAutoscroll = () => {
+      autoscrollRafRef.current = null;
+      const origin = autoscrollOriginRef.current;
+      const cur = autoscrollCursorRef.current;
+      if (!origin) return;
+      if (cur) {
+        const dx = cur.x - origin.x;
+        const dy = cur.y - origin.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > AUTOSCROLL_DEADZONE) {
+          const speed = (dist - AUTOSCROLL_DEADZONE) / AUTOSCROLL_DAMP;
+          const factor = speed / dist;
+          panRef.current = {
+            x: panRef.current.x - dx * factor,
+            y: panRef.current.y - dy * factor,
+          };
+        }
+      }
+      draw();
+      autoscrollRafRef.current = requestAnimationFrame(tickAutoscroll);
+    };
+    const stopAutoscroll = () => {
+      if (autoscrollOriginRef.current == null) return;
+      autoscrollOriginRef.current = null;
+      autoscrollCursorRef.current = null;
+      if (autoscrollRafRef.current != null) {
+        cancelAnimationFrame(autoscrollRafRef.current);
+        autoscrollRafRef.current = null;
+      }
+      container.style.cursor = '';
+      draw();
+    };
+    const startAutoscroll = (clientX: number, clientY: number) => {
+      const rect = container.getBoundingClientRect();
+      const cx = clientX - rect.left;
+      const cy = clientY - rect.top;
+      autoscrollOriginRef.current = { x: cx, y: cy };
+      autoscrollCursorRef.current = { x: cx, y: cy };
+      container.style.cursor = 'all-scroll';
+      if (autoscrollRafRef.current == null) {
+        autoscrollRafRef.current = requestAnimationFrame(tickAutoscroll);
+      }
+    };
+
     const handleMouseDown = (e: MouseEvent) => {
       // Ignore events from overlay controls (transport bar, viewer bar, etc.)
       const target = e.target as HTMLElement;
       if (target.closest('[data-sim-overlay]')) { canvasBrushActive = false; return; }
+
+      // Middle-click toggles autoscroll mode. Any other button while autoscroll
+      // is active just exits and consumes the click — matches browser autoscroll
+      // semantics (Firefox / Chromium).
+      if (e.button === 1) {
+        e.preventDefault();
+        if (autoscrollOriginRef.current) stopAutoscroll();
+        else startAutoscroll(e.clientX, e.clientY);
+        return;
+      }
+      if (autoscrollOriginRef.current) {
+        e.preventDefault();
+        stopAutoscroll();
+        return;
+      }
 
       if (e.button === 0 && e.ctrlKey) {
         // Ctrl+LMB = resize brush
@@ -1462,6 +1716,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     };
 
     const handleMouseMove = (e: MouseEvent) => {
+      // Autoscroll active: just track cursor + redraw to update the indicator's
+      // direction line. The actual pan happens in tickAutoscroll's rAF loop so
+      // we keep moving even when the cursor sits still.
+      if (autoscrollOriginRef.current) {
+        const rect = container.getBoundingClientRect();
+        autoscrollCursorRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        return;
+      }
+
       // Update brush cursor position
       const gridPos = screenToGrid(e.clientX, e.clientY);
       cursorGrid.current = gridPos;
@@ -1540,12 +1803,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       draw();
     };
 
+    // Escape exits autoscroll. We attach at window level because the focus might
+    // be on any overlay control while autoscroll is active.
+    const handleKeyDownAutoscroll = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && autoscrollOriginRef.current) {
+        stopAutoscroll();
+      }
+    };
+
     container.addEventListener('wheel', handleWheel, { passive: false });
     container.addEventListener('mousedown', handleMouseDown);
     container.addEventListener('contextmenu', handleContextMenu);
     container.addEventListener('mouseleave', handleMouseLeave);
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('keydown', handleKeyDownAutoscroll);
 
     return () => {
       container.removeEventListener('wheel', handleWheel);
@@ -1554,6 +1826,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       container.removeEventListener('mouseleave', handleMouseLeave);
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('keydown', handleKeyDownAutoscroll);
+      // Stop autoscroll loop on unmount to avoid leaking the rAF cycle.
+      if (autoscrollRafRef.current != null) {
+        cancelAnimationFrame(autoscrollRafRef.current);
+        autoscrollRafRef.current = null;
+      }
+      autoscrollOriginRef.current = null;
+      autoscrollCursorRef.current = null;
     };
   }, [draw, paintAt, screenToGrid, flushPaintBatch]);
 
@@ -2033,8 +2313,47 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const [topBarOpen, setTopBarOpen] = useState(true);
+  const [bottomBarOpen, setBottomBarOpen] = useState(true);
   const leftPanelRef = useRef<HTMLDivElement>(null);
   const rightPanelRef = useRef<HTMLDivElement>(null);
+  // Remembers panel + bar state before entering F-fullscreen so the toggle
+  // restores the user's previous layout (instead of always opening everything).
+  const prePanelStateRef = useRef<{ left: boolean; right: boolean; top: boolean; bottom: boolean } | null>(null);
+
+  // F = toggle all four bars at once (true canvas fullscreen). Gated on
+  // visibility so the shortcut doesn't fire from the Modeler / Help / Library
+  // tabs (SimulatorView is always-mounted), and on no-active-text-field so the
+  // user can still type 'f' in inputs.
+  const visibleRef = useRef(visible);
+  useEffect(() => { visibleRef.current = visible; }, [visible]);
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!visibleRef.current) return;
+      if (e.key !== 'f' && e.key !== 'F') return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const ae = document.activeElement as HTMLElement | null;
+      const tag = ae?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (ae?.isContentEditable ?? false)) return;
+      e.preventDefault();
+      const anyOpen = leftPanelOpen || rightPanelOpen || topBarOpen || bottomBarOpen;
+      if (anyOpen) {
+        prePanelStateRef.current = { left: leftPanelOpen, right: rightPanelOpen, top: topBarOpen, bottom: bottomBarOpen };
+        setLeftPanelOpen(false);
+        setRightPanelOpen(false);
+        setTopBarOpen(false);
+        setBottomBarOpen(false);
+      } else {
+        const prev = prePanelStateRef.current;
+        setLeftPanelOpen(prev ? prev.left : true);
+        setRightPanelOpen(prev ? prev.right : true);
+        setTopBarOpen(prev ? prev.top : true);
+        setBottomBarOpen(prev ? prev.bottom : true);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [leftPanelOpen, rightPanelOpen, topBarOpen, bottomBarOpen]);
 
   const modelAttrs = model.attributes.filter(a => a.isModelAttribute);
   const attrToColorMappings = model.mappings.filter(m => m.isAttributeToColor);
@@ -2286,19 +2605,31 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           {recording && <span style={{ color: '#e05050' }}>{'\u23FA'} REC {recordFrameCount}f</span>}
         </div>
 
-        {/* Top overlay: Viewer tabs */}
+        {/* Top overlay: small attached ear (its own pill) + viewer bar pill,
+            wrapped together so the ear reads as a separate widget adjacent to
+            the bar, not as one of the bar's tabs. Chevrons are inline SVGs so
+            the up/down pair is pixel-identical. */}
         {attrToColorMappings.length > 0 && (
-          <div className={styles.viewerBar} data-sim-overlay>
-            <span className={styles.viewerBarLabel}>Output Mapping (A{'\u2192'}C):</span>
-            {attrToColorMappings.map(m => (
-              <button
-                key={m.id}
-                className={`${styles.viewerTab} ${activeViewer === m.id ? styles.viewerTabActive : ''}`}
-                onClick={() => setActiveViewer(m.id)}
-              >
-                {m.name}
-              </button>
-            ))}
+          <div className={styles.viewerBarRow} data-sim-overlay>
+            <button
+              className={styles.barAttachedEar}
+              onClick={() => setTopBarOpen(v => !v)}
+              title={topBarOpen ? 'Hide viewer bar' : 'Show viewer bar'}
+            >{topBarOpen ? <ChevronUpIcon /> : <ChevronDownIcon />}</button>
+            {topBarOpen && (
+              <div className={styles.viewerBar}>
+                <span className={styles.viewerBarLabel}>Output Mapping (A{'\u2192'}C):</span>
+                {attrToColorMappings.map(m => (
+                  <button
+                    key={m.id}
+                    className={`${styles.viewerTab} ${activeViewer === m.id ? styles.viewerTabActive : ''}`}
+                    onClick={() => setActiveViewer(m.id)}
+                  >
+                    {m.name}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -2322,8 +2653,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           </div>
         )}
 
-        {/* Bottom overlay: Transport controls + speed + stats */}
-        <div className={styles.transportBar} data-sim-overlay>
+        {/* Bottom overlay: attached ear pill + transport bar pill in a flex
+            wrapper. Ear visually adjacent to (and separate from) the bar. */}
+        <div className={styles.transportBarRow} data-sim-overlay>
+          <button
+            className={styles.barAttachedEar}
+            onClick={() => setBottomBarOpen(v => !v)}
+            title={bottomBarOpen ? 'Hide transport bar' : 'Show transport bar'}
+          >{bottomBarOpen ? <ChevronDownIcon /> : <ChevronUpIcon />}</button>
+          {bottomBarOpen && (<>
+        <div className={styles.transportBar}>
           {/* Save/Load state */}
           <button className={styles.transportBtn} onClick={handleSaveState} title="Save State (.gcastate)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -2401,6 +2740,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             Processing without displaying. Change Gens/Frame to see evolution.
           </div>
         )}
+          </>)}
+        </div>
 
         {/* Zoom controls (bottom-left, like modeler) */}
         <div className={styles.zoomControls} data-sim-overlay>
@@ -2412,6 +2753,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             onClick={() => { setShowGridlines(v => !v); draw(); }}
             title="Toggle gridlines"
           >#</button>
+          <button
+            className={`${styles.zoomBtn} ${infinityCanvas ? styles.zoomBtnActive : ''}`}
+            onClick={() => { setInfinityCanvas(v => !v); }}
+            disabled={model.properties.boundaryTreatment !== 'torus'}
+            title={
+              model.properties.boundaryTreatment === 'torus'
+                ? 'Infinity canvas (tile the grid across the viewport)'
+                : 'Infinity canvas — only available with Torus boundary'
+            }
+            style={{ opacity: model.properties.boundaryTreatment === 'torus' ? 1 : 0.4 }}
+          >&infin;</button>
         </div>
 
         {/* Right panel expand button */}

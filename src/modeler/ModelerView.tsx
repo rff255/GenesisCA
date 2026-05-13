@@ -39,6 +39,9 @@ export function ModelerView() {
   // to reopen whatever the user had open before closing it.
   const [lastLeftPanel, setLastLeftPanel] = useState<PanelId>('properties');
   const [lastRightPanel, setLastRightPanel] = useState<RightPanelId>('palette');
+  // Snapshot of panel state when entering F-fullscreen so the toggle restores
+  // exactly what was open before (null entries are preserved as null).
+  const prePanelStateRef = useRef<{ left: PanelId | null; right: RightPanelId | null } | null>(null);
   const explorerRef = useRef<NodeExplorerHandle>(null);
 
   const handleTogglePanel = useCallback((panel: PanelId) => {
@@ -85,6 +88,21 @@ export function ModelerView() {
         setActiveRightPanel('explorer');
         setLastRightPanel('explorer');
         setTimeout(() => explorerRef.current?.focusSearch(), 50);
+      } else if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        // F = toggle both side panels (canvas fullscreen). Restore the exact
+        // previous layout (including null entries) when toggling back out.
+        if (isField) return;
+        e.preventDefault();
+        const anyOpen = activePanel != null || activeRightPanel != null;
+        if (anyOpen) {
+          prePanelStateRef.current = { left: activePanel, right: activeRightPanel };
+          setActivePanel(null);
+          setActiveRightPanel(null);
+        } else {
+          const prev = prePanelStateRef.current;
+          setActivePanel(prev ? prev.left : lastLeftPanel);
+          setActiveRightPanel(prev ? prev.right : null);
+        }
       } else if ((e.key === ' ' || e.code === 'Space') && !e.repeat) {
         // Skip when typing or when a button has focus (Space activates buttons).
         if (isField || tag === 'BUTTON') return;
@@ -102,7 +120,7 @@ export function ModelerView() {
     };
     document.addEventListener('keydown', handler, true);
     return () => document.removeEventListener('keydown', handler, true);
-  }, [activeRightPanel]);
+  }, [activePanel, activeRightPanel, lastLeftPanel]);
 
   const PanelContent = activePanel ? panelComponents[activePanel] : null;
 

@@ -627,9 +627,15 @@ export function HelpView() {
           <ul className={styles.list}>
             <li><strong>Left-click drag</strong> &mdash; Paint with the brush tool.</li>
             <li><strong>Right-click drag</strong> &mdash; Pan the grid view.</li>
+            <li><strong>Middle-click</strong> &mdash; Toggle autoscroll: the cursor becomes an anchor and the
+              view continuously pans toward wherever you move the cursor, with speed proportional to the
+              distance from the anchor. Click again (any button) or press <kbd className={styles.kbd}>Esc</kbd>
+              to stop.</li>
             <li><strong>Scroll wheel</strong> &mdash; Zoom in/out.</li>
             <li><strong>Ctrl + left-click drag</strong> &mdash; Resize brush (horizontal = width, vertical = height).</li>
-            <li><strong>Zoom buttons</strong> (+/&minus;/fit) &mdash; Bottom-left of the canvas.</li>
+            <li><strong>Zoom buttons</strong> (+/&minus;/fit/gridlines/infinity) &mdash; Bottom-left of the canvas.
+              The <strong>&infin;</strong> button (only enabled on torus-boundary models) tiles the grid
+              across the viewport so you can pan endlessly across the wrap seams; the brush wraps with it.</li>
             <li><strong>Hover coordinates</strong> &mdash; the top-left stats overlay shows the
               cell currently under the cursor as <code>Cell (col, row)</code>. When the brush
               is larger than 1&times;1, the chip switches to{' '}
@@ -762,6 +768,7 @@ export function HelpView() {
               <tr><td>Right-click drag</td><td>Pan the canvas</td></tr>
               <tr><td>Scroll wheel</td><td>Zoom in/out</td></tr>
               <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>F</kbd></td><td>Open Node Explorer (search &amp; focus)</td></tr>
+              <tr><td><kbd className={styles.kbd}>F</kbd></td><td>Toggle fullscreen graph (collapses both side panels; press again to restore)</td></tr>
               <tr><td><kbd className={styles.kbd}>Esc</kbd></td><td>Close Node Explorer (if open; first press clears the search field)</td></tr>
               <tr><td>Double-click (node)</td><td>Collapse / expand node</td></tr>
               <tr><td>Double-click (macro)</td><td>Enter macro subgraph</td></tr>
@@ -787,6 +794,7 @@ export function HelpView() {
               <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>X</kbd></td><td>Copy, then reset the source region to default attribute values</td></tr>
               <tr><td><kbd className={styles.kbd}>Space</kbd></td><td>Step (one generation; pauses if running)</td></tr>
               <tr><td><kbd className={styles.kbd}>Enter</kbd></td><td>Play / Pause</td></tr>
+              <tr><td><kbd className={styles.kbd}>F</kbd></td><td>Toggle fullscreen canvas (collapses both side panels; press again to restore)</td></tr>
               <tr><td><kbd className={styles.kbd}>Esc</kbd></td><td>Reset</td></tr>
             </tbody>
           </table>
