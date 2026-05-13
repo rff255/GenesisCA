@@ -20,8 +20,9 @@ import { useModel } from '../../model/ModelContext';
 import { getNodeDefsByCategory, getNodeDef, getAllNodeDefs } from './nodes/registry';
 import { parseHandleId, handleId } from './types';
 import type { PortDef, NodeTypeDef } from './types';
-import { MODEL_ELEMENT_DRAG_MIME, RELATED_NODES, payloadElementId } from './modelElementDrag';
+import { MODEL_ELEMENT_DRAG_MIME, RELATED_NODES, payloadElementId, computeCompatibleHandlesForDrag, findNearestCompatibleHandle } from './modelElementDrag';
 import type { ModelElementDragPayload } from './modelElementDrag';
+import { getEffectivePorts } from './effectivePorts';
 import type { GraphNode, GraphEdge } from '../../model/types';
 import type { MacroPort } from '../../model/types';
 import styles from './GraphEditor.module.css';
@@ -38,7 +39,7 @@ const nodeTypes: NodeTypes = {
 
 let clipboard: { nodes: GraphNode[]; edges: GraphEdge[] } | null = null;
 
-import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope } from './graphState';
+import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag } from './graphState';
 import { detectEdgeHazard } from './nodes/nodeValidation';
 import { pushSnapshot, undo, redo, pushToRedo, pushToUndo, clearHistory } from './graphHistory';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
@@ -127,14 +128,25 @@ function nodeHasCompatiblePort(def: NodeTypeDef, origin: ConnectionOrigin): bool
 }
 
 /** Pick the best compatible port on the new node for auto-connect. Prefers
- *  exact dataType match, then `'any'` matches; isArray must always match. */
+ *  exact dataType match, then `'any'` matches; isArray must always match.
+ *  When `resolvedConfig` is provided, uses effective ports (handles config-
+ *  dependent ports like GetModelAttribute's r/g/b vs value). */
 function pickCompatiblePort(
   def: NodeTypeDef,
   origin: ConnectionOrigin,
+  resolvedConfig?: Record<string, unknown>,
 ): PortDef | null {
-  const candidates = def.ports.filter(p =>
-    portsCompatible(origin.category, origin.kind, origin.dataType, origin.isArray, p),
-  );
+  let candidates: PortDef[];
+  if (resolvedConfig) {
+    const eff = getEffectivePorts(def.type, resolvedConfig);
+    candidates = [...eff.inputs, ...eff.outputs].filter(p =>
+      portsCompatible(origin.category, origin.kind, origin.dataType, origin.isArray, p),
+    );
+  } else {
+    candidates = def.ports.filter(p =>
+      portsCompatible(origin.category, origin.kind, origin.dataType, origin.isArray, p),
+    );
+  }
   if (candidates.length === 0) return null;
   if (origin.category === 'flow') return candidates[0] ?? null;
   const exact = candidates.find(p => p.dataType === origin.dataType);
@@ -143,6 +155,12 @@ function pickCompatiblePort(
 }
 
 const HIDDEN_FROM_DROP_MENU = new Set(['macro', 'macroInput', 'macroOutput', 'tagConstant']);
+
+/** Screen-space radius for snapping a panel-drag drop onto a nearby canvas
+ *  port. Matches xyflow's default `connectionRadius` so the snap distance is
+ *  consistent with how the user already perceives "near a port" when
+ *  connecting links. */
+const PANEL_DRAG_SNAP_RADIUS_PX = 20;
 
 // ---------------------------------------------------------------------------
 // Conversion helpers
@@ -286,7 +304,7 @@ interface ContextMenuState {
     | { type: 'node'; nodeId: string; nodeType: string; isMacro: boolean; isGroup: boolean }
     | { type: 'selection'; nodeIds: string[] }
     | { type: 'connection-drop'; origin: ConnectionOrigin }
-    | { type: 'model-element-drop'; element: ModelElementDragPayload };
+    | { type: 'model-element-drop'; element: ModelElementDragPayload; snapToPort?: ConnectionOrigin };
 }
 
 // ---------------------------------------------------------------------------
@@ -815,7 +833,10 @@ export function GraphEditorInner() {
         );
         if (hasStep) return false;
       }
-      const targetPort = pickCompatiblePort(def, origin);
+      // Resolved config drives effective ports for nodes whose port set depends
+      // on config (e.g., GetModelAttribute r/g/b vs value via isColorAttr).
+      const resolvedCfg: Record<string, unknown> = { ...def.defaultConfig, ...(configOverrides ?? {}) };
+      const targetPort = pickCompatiblePort(def, origin, resolvedCfg);
       if (!targetPort) return false;
       pushCurrentSnapshot();
       const newId = generateNodeId(nodesRef.current);
@@ -875,18 +896,54 @@ export function GraphEditorInner() {
       e.preventDefault();
       let payload: ModelElementDragPayload | null = null;
       try { payload = JSON.parse(elemRaw) as ModelElementDragPayload; } catch { /* swallow */ }
-      if (!payload) return;
+      if (!payload) {
+        setCurrentModelElementDrag(null);
+        return;
+      }
       const flowPos = rfInstance.current?.screenToFlowPosition({ x: e.clientX, y: e.clientY });
-      if (!flowPos) return;
+      if (!flowPos) {
+        setCurrentModelElementDrag(null);
+        return;
+      }
       const bounds = (e.currentTarget as HTMLElement).getBoundingClientRect();
       pasteFlowPos.current = { x: flowPos.x, y: flowPos.y };
+      // Snap-to-port: if the drop landed within the snap radius of any
+      // currently-highlighted handle, capture it so the menu can filter to
+      // nodes that can auto-connect there.
+      const snapTarget = findNearestCompatibleHandle(
+        compatibleHandlesForDrag,
+        e.clientX, e.clientY,
+        PANEL_DRAG_SNAP_RADIUS_PX,
+      );
+      let snapToPort: ConnectionOrigin | undefined;
+      if (snapTarget) {
+        // Resolve dataType + isArray by looking up the live node's effective ports.
+        const node = nodesRef.current.find(n => n.id === snapTarget.nodeId);
+        const nd = node?.data as { nodeType?: string; config?: Record<string, unknown> } | undefined;
+        if (nd?.nodeType) {
+          const eff = getEffectivePorts(nd.nodeType, nd.config ?? {});
+          const port = [...eff.inputs, ...eff.outputs].find(p => p.id === snapTarget.portId && p.kind === snapTarget.kind && p.category === snapTarget.category);
+          if (port) {
+            snapToPort = {
+              nodeId: snapTarget.nodeId,
+              portId: snapTarget.portId,
+              kind: snapTarget.kind,
+              category: snapTarget.category,
+              dataType: port.dataType,
+              isArray: port.isArray,
+            };
+          }
+        }
+      }
       setContextMenu({
         x: e.clientX - bounds.left,
         y: e.clientY - bounds.top,
         flowX: flowPos.x,
         flowY: flowPos.y,
-        target: { type: 'model-element-drop', element: payload },
+        target: { type: 'model-element-drop', element: payload, snapToPort },
       });
+      // Clear the highlight state — the drop is done.
+      setCurrentModelElementDrag(null);
       return;
     }
 
@@ -2004,6 +2061,33 @@ export function GraphEditorInner() {
     scheduleSync();
   }, [scheduleSync, pushDebouncedSnapshot]);
 
+  // Panel-drag highlight: when the user starts dragging a side-panel item,
+  // light up every existing canvas port that a to-be-spawned related node
+  // could connect to. CaNode reads `compatibleHandlesForDrag` and applies the
+  // existing `handleCompatible` glow. Recomputed whenever the drag payload
+  // OR the nodes/edges list changes mid-drag (rare but cheap to handle).
+  useEffect(() => {
+    const recompute = () => {
+      const payload = currentModelElementDrag as ModelElementDragPayload | null;
+      if (!payload) { clearCompatibleHandlesForDrag(); return; }
+      // Build the occupied-inputs set so we don't suggest snapping to a
+      // value-input that already has an edge.
+      const occupied = new Set<string>();
+      for (const e of edgesRef.current) {
+        if (!e.targetHandle) continue;
+        const parsed = parseHandleId(e.targetHandle);
+        if (parsed && parsed.kind === 'input' && parsed.category === 'value') {
+          occupied.add(`${e.target}|${parsed.portId}`);
+        }
+      }
+      const compatible = computeCompatibleHandlesForDrag(payload, nodesRef.current, occupied);
+      setCompatibleHandlesForDrag(compatible);
+    };
+    const unsub = subscribeCurrentModelElementDrag(recompute);
+    recompute();
+    return () => { unsub(); clearCompatibleHandlesForDrag(); };
+  }, []);
+
   const categories = getNodeDefsByCategory();
 
   return (
@@ -2196,15 +2280,48 @@ export function GraphEditorInner() {
           {/* MODEL-ELEMENT-DROP context menu (drag attribute/neighborhood/etc. from side panel) */}
           {contextMenu.target.type === 'model-element-drop' && (() => {
             const payload = contextMenu.target.element;
+            const snap = contextMenu.target.snapToPort;
             const entries = RELATED_NODES[payload.kind] ?? [];
-            // Group entries by their node def's category.
-            const grouped = new Map<string, { entry: typeof entries[number]; def: NodeTypeDef }[]>();
+            // When snapped to a port, additionally require that the related
+            // node has a port compatible with the snap target (so the
+            // auto-connect will succeed) and pre-compute that port for the
+            // click handler.
+            type ResolvedEntry = { entry: typeof entries[number]; def: NodeTypeDef; matchPort?: PortDef };
+            const resolved: ResolvedEntry[] = [];
             for (const entry of entries) {
               const def = getNodeDef(entry.nodeType);
               if (!def) continue;
-              const list = grouped.get(def.category) ?? [];
-              list.push({ entry, def });
-              grouped.set(def.category, list);
+              if (snap) {
+                // Resolve effective ports of the new node given default + overrides
+                const newCfg: Record<string, unknown> = {
+                  ...def.defaultConfig,
+                  ...(entry.extraConfig ?? {}),
+                  [entry.configKey]: payloadElementId(payload),
+                };
+                if (payload.kind === 'model-attribute') newCfg.isColorAttr = payload.isColor;
+                const eff = getEffectivePorts(def.type, newCfg);
+                const candidates = [...eff.inputs, ...eff.outputs];
+                const compatible = candidates.find(p => {
+                  if (p.category !== snap.category) return false;
+                  if (p.kind === snap.kind) return false;
+                  if (p.category === 'flow') return true;
+                  if (!!p.isArray !== !!snap.isArray) return false;
+                  const a = p.dataType ?? 'any';
+                  const b = snap.dataType ?? 'any';
+                  return a === 'any' || b === 'any' || a === b;
+                });
+                if (!compatible) continue;
+                resolved.push({ entry, def, matchPort: compatible });
+              } else {
+                resolved.push({ entry, def });
+              }
+            }
+            // Group by category
+            const grouped = new Map<string, ResolvedEntry[]>();
+            for (const r of resolved) {
+              const list = grouped.get(r.def.category) ?? [];
+              list.push(r);
+              grouped.set(r.def.category, list);
             }
             const elemId = payloadElementId(payload);
             const titleByKind: Record<ModelElementDragPayload['kind'], string> = {
@@ -2215,12 +2332,21 @@ export function GraphEditorInner() {
               'mapping-c2a': 'Input mapping (C→A)',
               'indicator': 'Indicator',
             };
+            const baseTitle = titleByKind[payload.kind];
+            let title = baseTitle;
+            if (snap) {
+              const snapNode = nodesRef.current.find(n => n.id === snap.nodeId);
+              const snapData = snapNode?.data as { nodeType?: string; config?: Record<string, unknown> } | undefined;
+              const snapDef = snapData?.nodeType ? getNodeDef(snapData.nodeType) : null;
+              const snapPortLabel = snapDef?.ports.find(p => p.id === snap.portId)?.label ?? snap.portId;
+              title = `${baseTitle} → ${snapDef?.label ?? 'node'}.${snapPortLabel}`;
+            }
             return (
               <>
-                <div className={styles.contextTitle}>{titleByKind[payload.kind]}</div>
-                {entries.length === 0 && (
+                <div className={styles.contextTitle}>{title}</div>
+                {resolved.length === 0 && (
                   <div style={{ padding: '6px 10px', fontSize: '0.7rem', color: '#8090a0', fontStyle: 'italic' }}>
-                    No related nodes
+                    {snap ? 'No related node can connect there' : 'No related nodes'}
                   </div>
                 )}
                 {Array.from(grouped.entries()).map(([cat, items]) => (
@@ -2238,7 +2364,12 @@ export function GraphEditorInner() {
                             ...(entry.extraConfig ?? {}),
                           };
                           if (payload.kind === 'model-attribute') cfg.isColorAttr = payload.isColor;
-                          addNodeAtPosition(def.type, { x: contextMenu.flowX, y: contextMenu.flowY }, cfg);
+                          if (snap) {
+                            // Auto-connect path: spawn + wire to the snapped port.
+                            addNodeAndConnect(def.type, { x: contextMenu.flowX, y: contextMenu.flowY }, snap, cfg);
+                          } else {
+                            addNodeAtPosition(def.type, { x: contextMenu.flowX, y: contextMenu.flowY }, cfg);
+                          }
                           setContextMenu(null);
                         }}
                       >

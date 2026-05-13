@@ -19,6 +19,9 @@ import {
   getConnectedHandlesForNode,
   subscribeConnectionHazards,
   getConnectionHazardsForNode,
+  compatibleHandlesForDrag,
+  subscribeCompatibleHandlesForDrag,
+  handleKey,
 } from './graphState';
 
 /** Snapshot getter for useSyncExternalStore — must return a stable reference
@@ -27,6 +30,12 @@ import {
  *  identity equality is the right semantics. */
 function getConnectingFromSnapshot() {
   return connectingFrom;
+}
+
+/** Snapshot getter for the panel-drag compatible-handles set. The setter
+ *  swaps the entire set reference on change, so identity equality is right. */
+function getCompatibleHandlesSnapshot() {
+  return compatibleHandlesForDrag;
 }
 import styles from './CaNode.module.css';
 
@@ -87,6 +96,10 @@ function CaNodeComponent({ id, data }: NodeProps) {
   // connection drag starts/ends — needed for compatible/incompatible port
   // highlight classes, which read connectingFrom directly during render.
   useSyncExternalStore(subscribeConnectingFrom, getConnectingFromSnapshot);
+  // Subscribe to the panel-drag compatible-handles set so this memoized node
+  // re-renders when the user starts/stops dragging a side-panel item. Each
+  // handle reads the snapshot below to decide whether to glow.
+  const compatibleHandles = useSyncExternalStore(subscribeCompatibleHandlesForDrag, getCompatibleHandlesSnapshot);
 
   const updateConfig = useCallback(
     (key: string, value: string | number | boolean) => {
@@ -1894,11 +1907,16 @@ function CaNodeComponent({ id, data }: NodeProps) {
         const isArrayPort = !!portDef.isArray;
         const alreadyOccupied = isConnected && port.category === 'value' && !isArrayPort;
         const isCompatible = cf ? (directionMatch && categoryMatch && !alreadyOccupied) : null;
+        // Panel-drag highlight: same magenta glow as the connection-drag
+        // compatibility hint. Only one of the two highlight states can be
+        // active at a time (connection drag vs. panel drag).
+        const panelDragHighlight = !cf && compatibleHandles.has(handleKey(id, port.kind, port.category, port.id));
         const handleClass = [
           portHandleClass(port),
           !isConnected && port.category === 'value' ? styles.handleUnconnected : '',
           cf && isCompatible ? styles.handleCompatible : '',
           cf && !isCompatible ? styles.handleIncompatible : '',
+          panelDragHighlight ? styles.handleCompatible : '',
         ].filter(Boolean).join(' ');
 
         return (
@@ -1968,10 +1986,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
         const cf = connectingFrom;
         const directionOk = cf ? cf.kind !== 'output' : false; // output ports match when dragging from input
         const isCompatible = cf ? (directionOk && port.category === cf.category && id !== cf.nodeId) : null;
+        const panelDragHighlight = !cf && compatibleHandles.has(handleKey(id, port.kind, port.category, port.id));
         const handleClass = [
           portHandleClass(port),
           cf && isCompatible ? styles.handleCompatible : '',
           cf && !isCompatible ? styles.handleIncompatible : '',
+          panelDragHighlight ? styles.handleCompatible : '',
         ].filter(Boolean).join(' ');
 
         return (
