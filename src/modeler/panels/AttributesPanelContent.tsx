@@ -1,9 +1,28 @@
 import { useState, useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
-import type { AttributeType } from '../../model/types';
+import type { Attribute, AttributeType } from '../../model/types';
 import { useListReorder } from './useListReorder';
 import { NeighborIndexDefaultEditor } from './NeighborIndexDefaultEditor';
+import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
+import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import styles from './PanelContent.module.css';
+
+/** Build the drag payload for an attribute row. Cell vs Model attribute drop
+ *  on the canvas opens different related-node menus (cell attrs get reads /
+ *  writes / neighbor accessors; model attrs get GetModelAttribute). */
+function buildAttrDragPayload(attr: Attribute): ModelElementDragPayload {
+  if (attr.isModelAttribute) {
+    return { kind: 'model-attribute', attributeId: attr.id, isColor: attr.type === 'color' };
+  }
+  return { kind: 'cell-attribute', attributeId: attr.id, attrType: attr.type };
+}
+
+function handleRowDragStart(payload: ModelElementDragPayload) {
+  return (e: React.DragEvent) => {
+    e.dataTransfer.setData(MODEL_ELEMENT_DRAG_MIME, JSON.stringify(payload));
+    e.dataTransfer.effectAllowed = 'copy';
+  };
+}
 
 export function AttributesPanelContent() {
   const { model, addAttribute, removeAttribute, updateAttribute, reorderAttributes } = useModel();
@@ -62,6 +81,9 @@ export function AttributesPanelContent() {
                 data-reorder-row
                 className={`${styles.listItem} ${selectedId === attr.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
                 onClick={() => setSelectedId(attr.id)}
+                draggable
+                onDragStart={handleRowDragStart(buildAttrDragPayload(attr))}
+                title={`Drag to canvas to add a node that uses '${attr.name}'`}
               >
                 <span className={styles.listItemName}>{attr.name}</span>
                 <span className={styles.listItemBadge}>{attr.type}</span>
@@ -115,6 +137,9 @@ export function AttributesPanelContent() {
                 data-reorder-row
                 className={`${styles.listItem} ${selectedId === attr.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
                 onClick={() => setSelectedId(attr.id)}
+                draggable
+                onDragStart={handleRowDragStart(buildAttrDragPayload(attr))}
+                title={`Drag to canvas to add a node that uses '${attr.name}'`}
               >
                 <span className={styles.listItemName}>{attr.name}</span>
                 <span className={styles.listItemBadge}>{attr.type}</span>

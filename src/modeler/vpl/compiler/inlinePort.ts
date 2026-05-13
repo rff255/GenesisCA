@@ -20,6 +20,16 @@ export function getInlineValue(port: PortDef, config: Record<string, string | nu
   if (val === undefined || val === '') return port.defaultValue;
   const s = String(val);
   if (port.inlineWidget === 'bool') return s === 'true' ? '1' : '0';
+  if (port.inlineWidget === 'number') {
+    // Canonicalize to a well-formed JS number literal so the JS-emit path can
+    // never inline a non-numeric string. Defense-in-depth against the
+    // <input type="number"> step-validity / locale-parsing edge case where the
+    // raw config value can end up as '' or otherwise non-numeric and produce
+    // an "always-true" comparison via the defaultValue '0' fallback.
+    const n = parseFloat(s);
+    if (Number.isFinite(n)) return String(n);
+    return port.defaultValue;
+  }
   return s;
 }
 

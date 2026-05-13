@@ -2113,10 +2113,15 @@ function preEmitValueNodes(ctx: CompileCtx, sourceNodeId: string, sourcePortId: 
         preEmitValueNodes(ctx, target.nodeId, 'then', visited);
         preEmitValueNodes(ctx, target.nodeId, 'else', visited);
         break;
-      case 'sequence':
+      case 'sequence': {
         preEmitValueNodes(ctx, target.nodeId, 'first', visited);
         preEmitValueNodes(ctx, target.nodeId, 'then', visited);
+        const extra = Number(node.data.config.extraCount) || 0;
+        for (let si = 2; si < 2 + extra; si++) {
+          preEmitValueNodes(ctx, target.nodeId, `then_${si}`, visited);
+        }
         break;
+      }
       case 'loop':
         preEmitValueNodes(ctx, target.nodeId, 'body', visited);
         break;
@@ -2173,6 +2178,10 @@ function compileFlowChain(ctx: CompileCtx, sourceNodeId: string, sourcePortId: s
     } else if (node.data.nodeType === 'sequence') {
       if (!compileFlowChain(ctx, node.id, 'first')) return false;
       if (!compileFlowChain(ctx, node.id, 'then')) return false;
+      const extra = Number(node.data.config.extraCount) || 0;
+      for (let si = 2; si < 2 + extra; si++) {
+        if (!compileFlowChain(ctx, node.id, `then_${si}`)) return false;
+      }
     } else if (node.data.nodeType === 'loop') {
       const countSrc = ctx.inputToSource.get(`${node.id}:count`);
       let countRef: ValueRef;
@@ -2384,6 +2393,10 @@ function analyzeAlwaysWritten(
     if (t === 'sequence') {
       for (const x of analyzeAlwaysWritten(ctx, node.id, 'first', depth + 1)) out.add(x);
       for (const x of analyzeAlwaysWritten(ctx, node.id, 'then', depth + 1)) out.add(x);
+      const extra = Number(node.data.config.extraCount) || 0;
+      for (let si = 2; si < 2 + extra; si++) {
+        for (const x of analyzeAlwaysWritten(ctx, node.id, `then_${si}`, depth + 1)) out.add(x);
+      }
     } else if (t === 'conditional') {
       const hasElse = ctx.flowOutputToTargets.has(`${node.id}:else`);
       if (hasElse) {

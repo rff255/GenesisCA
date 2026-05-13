@@ -63,8 +63,18 @@ export function setShowPortLabels(val: boolean) {
   labelListeners.forEach(fn => fn());
 }
 
-/** Info about the handle being dragged for connection (for port compatibility highlighting) */
-export let connectingFrom: { category: string; kind: string; dataType?: string; nodeId: string } | null = null;
+/** Info about the handle being dragged for connection (for port compatibility highlighting
+ *  AND the connection-drop-to-pane feature that pops the Add Node menu filtered to
+ *  compatible nodes). `portId` and `dataType` populated when known so the drop-on-pane
+ *  handler can filter the menu and seed the auto-connect edge. */
+export let connectingFrom: {
+  category: string;
+  kind: string;
+  dataType?: string;
+  isArray?: boolean;
+  nodeId: string;
+  portId?: string;
+} | null = null;
 
 const connectingFromListeners = new Set<() => void>();
 

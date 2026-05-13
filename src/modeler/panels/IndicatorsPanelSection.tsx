@@ -2,7 +2,17 @@ import { useState, useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
 import type { AttributeType, LinkedAggregation } from '../../model/types';
 import { useListReorder } from './useListReorder';
+import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
+import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import styles from './PanelContent.module.css';
+
+function handleIndicatorDragStart(indicatorId: string) {
+  return (e: React.DragEvent) => {
+    const payload: ModelElementDragPayload = { kind: 'indicator', indicatorId };
+    e.dataTransfer.setData(MODEL_ELEMENT_DRAG_MIME, JSON.stringify(payload));
+    e.dataTransfer.effectAllowed = 'copy';
+  };
+}
 
 export function IndicatorsPanelSection() {
   const { model, addIndicator, removeIndicator, updateIndicator, reorderIndicators } = useModel();
@@ -63,6 +73,9 @@ export function IndicatorsPanelSection() {
               data-reorder-row
               className={`${styles.listItem} ${ind.id === selectedId ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
               onClick={() => setSelectedId(ind.id === selectedId ? null : ind.id)}
+              draggable
+              onDragStart={handleIndicatorDragStart(ind.id)}
+              title={`Drag to canvas to add a node that uses '${ind.name}'`}
             >
               <span className={styles.listItemName}>{ind.name}</span>
               <span className={styles.listItemBadge}>{ind.kind === 'standalone' ? 'Standalone' : 'Linked'}</span>

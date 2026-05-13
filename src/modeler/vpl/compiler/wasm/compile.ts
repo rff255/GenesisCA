@@ -4133,6 +4133,10 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
     } else if (node.data.nodeType === 'sequence') {
       compileFlowChain(node.id, 'first', ctx);
       compileFlowChain(node.id, 'then', ctx);
+      const extra = Number(node.data.config.extraCount) || 0;
+      for (let si = 2; si < 2 + extra; si++) {
+        compileFlowChain(node.id, `then_${si}`, ctx);
+      }
     } else if (node.data.nodeType === 'loop') {
       // Loop: for (let _i = 0; _i < count; _i++) { body }
       const countSource = ctx.inputToSource.get(`${node.id}:count`);
@@ -4672,10 +4676,15 @@ function compileEntry(
             visitFlow(t.nodeId, 'then', seen);
             visitFlow(t.nodeId, 'else', seen);
             break;
-          case 'sequence':
+          case 'sequence': {
             visitFlow(t.nodeId, 'first', seen);
             visitFlow(t.nodeId, 'then', seen);
+            const extra = Number(node.data.config.extraCount) || 0;
+            for (let si = 2; si < 2 + extra; si++) {
+              visitFlow(t.nodeId, `then_${si}`, seen);
+            }
             break;
+          }
           case 'loop':
             visitFlow(t.nodeId, 'body', seen);
             break;

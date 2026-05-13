@@ -11,14 +11,17 @@ import {
   useReactFlow,
   ReactFlowProvider,
 } from '@xyflow/react';
-import type { Connection, Edge, Node, NodeTypes, ReactFlowInstance, SelectionMode, IsValidConnection, OnConnectStart } from '@xyflow/react';
+import type { Connection, Edge, Node, NodeTypes, ReactFlowInstance, SelectionMode, IsValidConnection, OnConnectStart, OnConnectEnd, FinalConnectionState } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { CaNode } from './CaNode';
 import { CommentNodeComponent } from './CommentNodeComponent';
 import { GroupNodeComponent } from './GroupNodeComponent';
 import { useModel } from '../../model/ModelContext';
-import { getNodeDefsByCategory, getNodeDef } from './nodes/registry';
+import { getNodeDefsByCategory, getNodeDef, getAllNodeDefs } from './nodes/registry';
 import { parseHandleId, handleId } from './types';
+import type { PortDef, NodeTypeDef } from './types';
+import { MODEL_ELEMENT_DRAG_MIME, RELATED_NODES, payloadElementId } from './modelElementDrag';
+import type { ModelElementDragPayload } from './modelElementDrag';
 import type { GraphNode, GraphEdge } from '../../model/types';
 import type { MacroPort } from '../../model/types';
 import styles from './GraphEditor.module.css';
@@ -52,6 +55,94 @@ function generateNodeId(existingNodes: Node[]): string {
   }
   return id;
 }
+
+// ---------------------------------------------------------------------------
+// Connection-drop helpers (drag a link onto empty canvas → Add Node menu
+// filtered to nodes compatible with the originating port + auto-connect)
+// ---------------------------------------------------------------------------
+
+interface ConnectionOrigin {
+  nodeId: string;
+  portId: string;
+  kind: 'input' | 'output';
+  category: 'flow' | 'value';
+  dataType?: string;
+  isArray?: boolean;
+}
+
+/** Resolve the static or dynamic port info on the source side of a connection
+ *  drag. Covers the dynamic ports the editor actually creates (switch case_N /
+ *  case_N_cond / case_N_val, sequence then_N, getModelAttribute r/g/b). */
+function getOriginPortInfo(
+  node: Node,
+  portId: string,
+): { category: 'flow' | 'value'; dataType?: string; isArray?: boolean } | null {
+  const nd = node.data as { nodeType?: string; config?: Record<string, unknown> } | undefined;
+  const t = nd?.nodeType;
+  if (!t) return null;
+  const def = getNodeDef(t);
+  if (def) {
+    const staticPort = def.ports.find(p => p.id === portId);
+    if (staticPort) {
+      return { category: staticPort.category, dataType: staticPort.dataType, isArray: staticPort.isArray };
+    }
+  }
+  if (t === 'switch') {
+    if (/^case_\d+_cond$/.test(portId)) return { category: 'value', dataType: 'bool' };
+    if (/^case_\d+_val$/.test(portId)) return { category: 'value', dataType: 'any' };
+    if (/^case_\d+$/.test(portId)) return { category: 'flow' };
+  }
+  if (t === 'sequence' && /^then_\d+$/.test(portId)) return { category: 'flow' };
+  if (t === 'getModelAttribute' && (portId === 'r' || portId === 'g' || portId === 'b')) {
+    return { category: 'value', dataType: 'integer' };
+  }
+  return null;
+}
+
+function portsCompatible(
+  srcCategory: 'flow' | 'value',
+  srcKind: 'input' | 'output',
+  srcType: string | undefined,
+  srcIsArray: boolean | undefined,
+  dstPort: PortDef,
+): boolean {
+  if (dstPort.category !== srcCategory) return false;
+  if (dstPort.kind === srcKind) return false;
+  if (srcCategory === 'flow') return true;
+  // isArray must match — array → array, scalar → scalar
+  if (!!dstPort.isArray !== !!srcIsArray) return false;
+  const a = srcType ?? 'any';
+  const b = dstPort.dataType ?? 'any';
+  return a === 'any' || b === 'any' || a === b;
+}
+
+/** Does the node definition have at least one static port compatible with the
+ *  connection origin? Used for menu inclusion. Dynamic-only ports aren't a
+ *  selection criterion — a node still appears if its static port set has a
+ *  match (Switch passes via its `default`/`check`/`value` static ports). */
+function nodeHasCompatiblePort(def: NodeTypeDef, origin: ConnectionOrigin): boolean {
+  return def.ports.some(p =>
+    portsCompatible(origin.category, origin.kind, origin.dataType, origin.isArray, p),
+  );
+}
+
+/** Pick the best compatible port on the new node for auto-connect. Prefers
+ *  exact dataType match, then `'any'` matches; isArray must always match. */
+function pickCompatiblePort(
+  def: NodeTypeDef,
+  origin: ConnectionOrigin,
+): PortDef | null {
+  const candidates = def.ports.filter(p =>
+    portsCompatible(origin.category, origin.kind, origin.dataType, origin.isArray, p),
+  );
+  if (candidates.length === 0) return null;
+  if (origin.category === 'flow') return candidates[0] ?? null;
+  const exact = candidates.find(p => p.dataType === origin.dataType);
+  if (exact) return exact;
+  return candidates[0] ?? null;
+}
+
+const HIDDEN_FROM_DROP_MENU = new Set(['macro', 'macroInput', 'macroOutput', 'tagConstant']);
 
 // ---------------------------------------------------------------------------
 // Conversion helpers
@@ -193,7 +284,9 @@ interface ContextMenuState {
   target:
     | { type: 'pane' }
     | { type: 'node'; nodeId: string; nodeType: string; isMacro: boolean; isGroup: boolean }
-    | { type: 'selection'; nodeIds: string[] };
+    | { type: 'selection'; nodeIds: string[] }
+    | { type: 'connection-drop'; origin: ConnectionOrigin }
+    | { type: 'model-element-drop'; element: ModelElementDragPayload };
 }
 
 // ---------------------------------------------------------------------------
@@ -704,15 +797,99 @@ export function GraphEditorInner() {
     [contextMenu, addNodeAtPosition],
   );
 
+  /** Create a new node AND an edge connecting it to the connection-drop origin.
+   *  Used by the connection-drop context menu (drag a link onto empty canvas →
+   *  pick a node → spawn + auto-wire). */
+  const addNodeAndConnect = useCallback(
+    (
+      nodeType: string,
+      position: { x: number; y: number },
+      origin: ConnectionOrigin,
+      configOverrides?: Record<string, string | number | boolean>,
+    ): boolean => {
+      const def = getNodeDef(nodeType);
+      if (!def) return false;
+      if (nodeType === 'step') {
+        const hasStep = nodesRef.current.some(
+          n => (n.data as Record<string, unknown>)?.nodeType === 'step',
+        );
+        if (hasStep) return false;
+      }
+      const targetPort = pickCompatiblePort(def, origin);
+      if (!targetPort) return false;
+      pushCurrentSnapshot();
+      const newId = generateNodeId(nodesRef.current);
+      const seededConfig: Record<string, string | number | boolean> = { ...def.defaultConfig };
+      for (const port of def.ports) {
+        if (port.inlineWidget && port.defaultValue !== undefined) {
+          const key = `_port_${port.id}`;
+          if (seededConfig[key] === undefined) seededConfig[key] = port.defaultValue;
+        }
+      }
+      const data: Record<string, unknown> = {
+        nodeType: def.type,
+        config: { ...seededConfig, ...(configOverrides || {}) },
+      };
+      const newNode: Node = { id: newId, type: 'caNode', position, data };
+      setNodes(nds => [...nds, newNode]);
+
+      // Build the edge. origin.kind tells us which side the drag started from:
+      // - kind === 'output': origin is the SOURCE, new node's port is the TARGET (input).
+      // - kind === 'input':  new node's port is the SOURCE (output), origin is the TARGET.
+      const sourceNodeId = origin.kind === 'output' ? origin.nodeId : newId;
+      const targetNodeId = origin.kind === 'output' ? newId : origin.nodeId;
+      const sourcePortId = origin.kind === 'output' ? origin.portId : targetPort.id;
+      const targetPortId = origin.kind === 'output' ? targetPort.id : origin.portId;
+      const sourceHandle = handleId({ id: sourcePortId, kind: 'output', category: origin.category });
+      const targetHandle = handleId({ id: targetPortId, kind: 'input', category: origin.category });
+      const edgeId = `e${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+      const newEdge: Edge = {
+        id: edgeId,
+        source: sourceNodeId,
+        target: targetNodeId,
+        sourceHandle,
+        targetHandle,
+        style: { stroke: origin.category === 'flow' ? '#66bb6a' : '#4cc9f0', strokeWidth: 2 },
+      };
+      setEdges(eds => addEdge(newEdge, eds));
+      scheduleSync();
+      return true;
+    },
+    [setNodes, setEdges, scheduleSync],
+  );
+
   // --- Palette drag-drop handlers ---
 
   const onPaletteDragOver = useCallback((e: React.DragEvent) => {
-    if (!e.dataTransfer.types.includes('application/genesisca-palette')) return;
+    const types = e.dataTransfer.types;
+    if (!types.includes('application/genesisca-palette') && !types.includes(MODEL_ELEMENT_DRAG_MIME)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
   }, []);
 
   const onPaletteDrop = useCallback((e: React.DragEvent) => {
+    // Model element drag (Attributes/Neighborhoods/Mappings/Indicators panels)
+    // takes priority — opens a categorized context menu of related nodes.
+    const elemRaw = e.dataTransfer.getData(MODEL_ELEMENT_DRAG_MIME);
+    if (elemRaw) {
+      e.preventDefault();
+      let payload: ModelElementDragPayload | null = null;
+      try { payload = JSON.parse(elemRaw) as ModelElementDragPayload; } catch { /* swallow */ }
+      if (!payload) return;
+      const flowPos = rfInstance.current?.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      if (!flowPos) return;
+      const bounds = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      pasteFlowPos.current = { x: flowPos.x, y: flowPos.y };
+      setContextMenu({
+        x: e.clientX - bounds.left,
+        y: e.clientY - bounds.top,
+        flowX: flowPos.x,
+        flowY: flowPos.y,
+        target: { type: 'model-element-drop', element: payload },
+      });
+      return;
+    }
+
     const raw = e.dataTransfer.getData('application/genesisca-palette');
     if (!raw) return;
     e.preventDefault();
@@ -1585,20 +1762,88 @@ export function GraphEditorInner() {
 
   // Track whether a connection is being dragged (for hover-to-uncollapse)
   const isConnecting = useRef(false);
+  // Snapshot of the origin port at connect-start. Used by onConnectEnd's
+  // pane-drop branch (popups the filtered Add Node menu + auto-connect) since
+  // `connectingFrom` is cleared the moment onConnectEnd fires.
+  const connectionOriginRef = useRef<ConnectionOrigin | null>(null);
+  // Set in onConnectEnd when the connection-drop menu is just opened, so the
+  // editor's outer `onClick={() => setContextMenu(null)}` (which fires on the
+  // same LMB-up via the synthesized click event) doesn't immediately close it.
+  const suppressNextEditorClickRef = useRef(false);
   const onConnectStart: OnConnectStart = useCallback((_event, params) => {
     isConnecting.current = true;
     setIsConnecting(true);
-    if (params.handleId) {
+    connectionOriginRef.current = null;
+    if (params.handleId && params.nodeId) {
       const parsed = parseHandleId(params.handleId);
-      if (parsed && params.nodeId) {
-        setConnectingFrom({ category: parsed.category, kind: parsed.kind, nodeId: params.nodeId });
+      if (parsed) {
+        const srcNode = nodesRef.current.find(n => n.id === params.nodeId);
+        const info = srcNode ? getOriginPortInfo(srcNode, parsed.portId) : null;
+        const origin: ConnectionOrigin = {
+          nodeId: params.nodeId,
+          portId: parsed.portId,
+          kind: parsed.kind,
+          category: parsed.category,
+          dataType: info?.dataType,
+          isArray: info?.isArray,
+        };
+        connectionOriginRef.current = origin;
+        setConnectingFrom({
+          category: origin.category,
+          kind: origin.kind,
+          dataType: origin.dataType,
+          isArray: origin.isArray,
+          nodeId: origin.nodeId,
+          portId: origin.portId,
+        });
       }
     }
   }, []);
-  const onConnectEnd = useCallback(() => {
+  const onConnectEnd: OnConnectEnd = useCallback((event, connectionState: FinalConnectionState) => {
     isConnecting.current = false;
     setIsConnecting(false);
+    const origin = connectionOriginRef.current;
+    connectionOriginRef.current = null;
     setConnectingFrom(null);
+    if (!origin) return;
+    // Skip ONLY when the release landed on a port (valid or invalid). For any
+    // non-port release — empty pane, node body, controls, minimap overlay,
+    // background — pop the compatible-nodes menu so the user gets the same
+    // affordance regardless of where they let go inside the canvas.
+    if (connectionState.toHandle) return;
+    const me = event as MouseEvent;
+    const clientX = typeof me.clientX === 'number'
+      ? me.clientX
+      : ((event as TouchEvent).changedTouches?.[0]?.clientX ?? 0);
+    const clientY = typeof me.clientY === 'number'
+      ? me.clientY
+      : ((event as TouchEvent).changedTouches?.[0]?.clientY ?? 0);
+    const rf = rfInstance.current;
+    if (!rf) return;
+    // Resolve the React Flow root for menu positioning. If the release happened
+    // outside the canvas entirely (dragged into a sidebar), silently bail.
+    const target = event.target as Element | null;
+    const rfRoot = (target?.closest('.react-flow') as HTMLElement | null)
+      ?? (document.querySelector('.react-flow') as HTMLElement | null);
+    if (!rfRoot) return;
+    const bounds = rfRoot.getBoundingClientRect();
+    // If the release was outside the canvas bounds, also bail.
+    if (clientX < bounds.left || clientX > bounds.right || clientY < bounds.top || clientY > bounds.bottom) return;
+    const flowPos = rf.screenToFlowPosition({ x: clientX, y: clientY });
+    pasteFlowPos.current = { x: flowPos.x, y: flowPos.y };
+    setContextMenu({
+      x: clientX - bounds.left,
+      y: clientY - bounds.top,
+      flowX: flowPos.x,
+      flowY: flowPos.y,
+      target: { type: 'connection-drop', origin },
+    });
+    // The same LMB-up that fired onConnectEnd will, a tick later, also fire a
+    // synthesized `click` on the editor wrapper — which otherwise calls
+    // `setContextMenu(null)` and closes the menu we just opened. Skip exactly
+    // one click. (The RMB-during-LMB-drag case works without this because RMB
+    // doesn't generate a click event.)
+    suppressNextEditorClickRef.current = true;
   }, []);
 
   // Double-click: enter macro or toggle collapse
@@ -1764,7 +2009,13 @@ export function GraphEditorInner() {
   return (
     <div
       className={styles.editor}
-      onClick={() => setContextMenu(null)}
+      onClick={() => {
+        if (suppressNextEditorClickRef.current) {
+          suppressNextEditorClickRef.current = false;
+          return;
+        }
+        setContextMenu(null);
+      }}
       onChangeCapture={onNodeDataChange}
       onDragOver={onPaletteDragOver}
       onDrop={onPaletteDrop}
@@ -1890,6 +2141,117 @@ export function GraphEditorInner() {
             visibility: menuPos ? 'visible' : 'hidden',
           }}
         >
+          {/* CONNECTION-DROP context menu (drag link to empty canvas → compatible nodes) */}
+          {contextMenu.target.type === 'connection-drop' && (() => {
+            const origin = contextMenu.target.origin;
+            const allDefs = getAllNodeDefs();
+            // Step is allowed as a target only if no Step exists yet.
+            const hasStep = nodesRef.current.some(n => (n.data as Record<string, unknown>)?.nodeType === 'step');
+            const matches = allDefs.filter(d => {
+              if (HIDDEN_FROM_DROP_MENU.has(d.type)) return false;
+              if (d.type === 'step' && hasStep) return false;
+              return nodeHasCompatiblePort(d, origin);
+            });
+            const grouped = new Map<string, NodeTypeDef[]>();
+            for (const d of matches) {
+              const list = grouped.get(d.category) ?? [];
+              list.push(d);
+              grouped.set(d.category, list);
+            }
+            const titleText = origin.category === 'flow'
+              ? `Flow ${origin.kind === 'output' ? 'output' : 'input'} → compatible node`
+              : `${origin.dataType ?? 'value'} ${origin.kind === 'output' ? 'output' : 'input'} → compatible node`;
+            return (
+              <>
+                <div className={styles.contextTitle}>{titleText}</div>
+                {matches.length === 0 && (
+                  <div style={{ padding: '6px 10px', fontSize: '0.7rem', color: '#8090a0', fontStyle: 'italic' }}>
+                    No compatible nodes
+                  </div>
+                )}
+                {Array.from(grouped.entries()).map(([cat, defs]) => (
+                  <div key={cat}>
+                    <div className={styles.contextCategory}>{cat}</div>
+                    {defs.map(def => (
+                      <button
+                        key={def.type}
+                        className={styles.contextItem}
+                        title={def.description}
+                        onClick={e => {
+                          e.stopPropagation();
+                          addNodeAndConnect(def.type, { x: contextMenu.flowX, y: contextMenu.flowY }, origin);
+                          setContextMenu(null);
+                        }}
+                      >
+                        <span className={styles.contextDot} style={{ background: def.color }} />
+                        {def.label}
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </>
+            );
+          })()}
+
+          {/* MODEL-ELEMENT-DROP context menu (drag attribute/neighborhood/etc. from side panel) */}
+          {contextMenu.target.type === 'model-element-drop' && (() => {
+            const payload = contextMenu.target.element;
+            const entries = RELATED_NODES[payload.kind] ?? [];
+            // Group entries by their node def's category.
+            const grouped = new Map<string, { entry: typeof entries[number]; def: NodeTypeDef }[]>();
+            for (const entry of entries) {
+              const def = getNodeDef(entry.nodeType);
+              if (!def) continue;
+              const list = grouped.get(def.category) ?? [];
+              list.push({ entry, def });
+              grouped.set(def.category, list);
+            }
+            const elemId = payloadElementId(payload);
+            const titleByKind: Record<ModelElementDragPayload['kind'], string> = {
+              'cell-attribute': 'Cell attribute',
+              'model-attribute': 'Model attribute',
+              'neighborhood': 'Neighborhood',
+              'mapping-a2c': 'Output mapping (A→C)',
+              'mapping-c2a': 'Input mapping (C→A)',
+              'indicator': 'Indicator',
+            };
+            return (
+              <>
+                <div className={styles.contextTitle}>{titleByKind[payload.kind]}</div>
+                {entries.length === 0 && (
+                  <div style={{ padding: '6px 10px', fontSize: '0.7rem', color: '#8090a0', fontStyle: 'italic' }}>
+                    No related nodes
+                  </div>
+                )}
+                {Array.from(grouped.entries()).map(([cat, items]) => (
+                  <div key={cat}>
+                    <div className={styles.contextCategory}>{cat}</div>
+                    {items.map(({ entry, def }) => (
+                      <button
+                        key={def.type}
+                        className={styles.contextItem}
+                        title={def.description}
+                        onClick={e => {
+                          e.stopPropagation();
+                          const cfg: Record<string, string | number | boolean> = {
+                            [entry.configKey]: elemId,
+                            ...(entry.extraConfig ?? {}),
+                          };
+                          if (payload.kind === 'model-attribute') cfg.isColorAttr = payload.isColor;
+                          addNodeAtPosition(def.type, { x: contextMenu.flowX, y: contextMenu.flowY }, cfg);
+                          setContextMenu(null);
+                        }}
+                      >
+                        <span className={styles.contextDot} style={{ background: def.color }} />
+                        {def.label}
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </>
+            );
+          })()}
+
           {/* PANE context menu */}
           {contextMenu.target.type === 'pane' && (
             <>

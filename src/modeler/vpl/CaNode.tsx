@@ -277,6 +277,18 @@ function CaNodeComponent({ id, data }: NodeProps) {
     }
   }
 
+  // Sequence: dynamic flow output ports beyond the static FIRST/THEN.
+  // extraCount=0 → just FIRST/THEN; extraCount=2 → FIRST, THEN, Then 3, Then 4.
+  if (nodeData.nodeType === 'sequence') {
+    const extraCount = Number(nodeData.config.extraCount) || 0;
+    for (let i = 2; i < 2 + extraCount; i++) {
+      outputPorts.push({
+        id: `then_${i}`, label: `Then ${i + 1}`,
+        kind: 'output' as const, category: 'flow' as const,
+      });
+    }
+  }
+
   // GetModelAttribute: show R/G/B ports for color attrs, Value port for others
   if (nodeData.nodeType === 'getModelAttribute') {
     const isColor = nodeData.config.isColorAttr;
@@ -1567,6 +1579,48 @@ function CaNodeComponent({ id, data }: NodeProps) {
           );
         })()}
 
+        {nodeData.nodeType === 'sequence' && (() => {
+          const extraCount = Number(nodeData.config.extraCount) || 0;
+          const addThen = () => {
+            updateNodeData(id, {
+              ...nodeData,
+              config: { ...nodeData.config, extraCount: extraCount + 1 },
+            });
+          };
+          const removeThen = () => {
+            if (extraCount === 0) return;
+            updateNodeData(id, {
+              ...nodeData,
+              config: { ...nodeData.config, extraCount: extraCount - 1 },
+            });
+          };
+          return (
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center', justifyContent: 'flex-end' }}>
+              <button
+                className={styles.select}
+                style={{
+                  cursor: extraCount === 0 ? 'not-allowed' : 'pointer',
+                  opacity: extraCount === 0 ? 0.4 : 1,
+                  textAlign: 'center', flex: 1,
+                }}
+                onClick={removeThen}
+                disabled={extraCount === 0}
+                title="Remove last Then output"
+              >
+                −
+              </button>
+              <button
+                className={styles.select}
+                style={{ cursor: 'pointer', textAlign: 'center', flex: 1 }}
+                onClick={addThen}
+                title="Add another Then output"
+              >
+                +
+              </button>
+            </div>
+          );
+        })()}
+
         {nodeData.nodeType === 'getNeighborAttributeByTag' && (() => {
           const selNbr = model.neighborhoods.find(n => n.id === nodeData.config.neighborhoodId);
           const tags = selNbr?.tags || {};
@@ -1887,6 +1941,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   <input
                     className={styles.inlineWidget}
                     type="number"
+                    step="any"
+                    lang="en"
+                    inputMode="decimal"
                     value={val}
                     onChange={e => updateConfig(configKey, e.target.value)}
                     onClick={e => e.stopPropagation()}
