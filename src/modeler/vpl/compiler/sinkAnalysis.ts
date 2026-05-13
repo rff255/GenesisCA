@@ -211,6 +211,11 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
     if (TRANSPARENT_FLOW_TYPES.has(type)) {
       walkFlowOutput(nodeId, 'first', parentScope);
       walkFlowOutput(nodeId, 'then', parentScope);
+      // Sequence's dynamic `then_N` outputs share the parent scope.
+      const extra = Number(node.data.config.extraCount) || 0;
+      for (let si = 2; si < 2 + extra; si++) {
+        walkFlowOutput(nodeId, `then_${si}`, parentScope);
+      }
       return;
     }
 

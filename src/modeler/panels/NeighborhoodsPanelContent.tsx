@@ -1,7 +1,17 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
 import { useListReorder } from './useListReorder';
+import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
+import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import styles from './PanelContent.module.css';
+
+function handleNeighborhoodDragStart(neighborhoodId: string) {
+  return (e: React.DragEvent) => {
+    const payload: ModelElementDragPayload = { kind: 'neighborhood', neighborhoodId };
+    e.dataTransfer.setData(MODEL_ELEMENT_DRAG_MIME, JSON.stringify(payload));
+    e.dataTransfer.effectAllowed = 'copy';
+  };
+}
 
 function coordKey(row: number, col: number): string {
   return `${row},${col}`;
@@ -92,6 +102,9 @@ export function NeighborhoodsPanelContent() {
                 data-reorder-row
                 className={`${styles.listItem} ${selectedIdx === i ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
                 onClick={() => setSelectedIdx(i)}
+                draggable
+                onDragStart={handleNeighborhoodDragStart(n.id)}
+                title={`Drag to canvas to add a node that uses '${n.name}'`}
               >
                 <span className={styles.listItemName}>{n.name}</span>
                 <span className={styles.listItemBadge}>

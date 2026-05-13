@@ -1,7 +1,19 @@
 import { useState, useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
 import { useListReorder } from './useListReorder';
+import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
+import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import styles from './PanelContent.module.css';
+
+function handleMappingDragStart(mappingId: string, isAttributeToColor: boolean) {
+  return (e: React.DragEvent) => {
+    const payload: ModelElementDragPayload = isAttributeToColor
+      ? { kind: 'mapping-a2c', mappingId }
+      : { kind: 'mapping-c2a', mappingId };
+    e.dataTransfer.setData(MODEL_ELEMENT_DRAG_MIME, JSON.stringify(payload));
+    e.dataTransfer.effectAllowed = 'copy';
+  };
+}
 
 export function MappingsPanelContent() {
   const { model, addMapping, removeMapping, updateMapping, reorderMappings } = useModel();
@@ -62,6 +74,9 @@ export function MappingsPanelContent() {
                 data-reorder-row
                 className={`${styles.listItem} ${selectedId === m.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
                 onClick={() => setSelectedId(m.id)}
+                draggable
+                onDragStart={handleMappingDragStart(m.id, true)}
+                title={`Drag to canvas to add a node that uses '${m.name}'`}
               >
                 <span className={styles.listItemName}>{m.name}</span>
                 <span className={styles.listItemBadge}>A&rarr;C</span>
@@ -102,6 +117,9 @@ export function MappingsPanelContent() {
                 data-reorder-row
                 className={`${styles.listItem} ${selectedId === m.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
                 onClick={() => setSelectedId(m.id)}
+                draggable
+                onDragStart={handleMappingDragStart(m.id, false)}
+                title={`Drag to canvas to add a node that uses '${m.name}'`}
               >
                 <span className={styles.listItemName}>{m.name}</span>
                 <span className={styles.listItemBadge}>C&rarr;A</span>

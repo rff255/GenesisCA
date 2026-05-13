@@ -1094,6 +1094,10 @@ function compileRoot(
         } else if (nt === 'sequence') {
           compileInnerFlow(iNode.id, 'first', ind);
           compileInnerFlow(iNode.id, 'then', ind);
+          const extra = Number(iNode.data.config.extraCount) || 0;
+          for (let si = 2; si < 2 + extra; si++) {
+            compileInnerFlow(iNode.id, `then_${si}`, ind);
+          }
         } else if (nt === 'loop') {
           const countSrc = inner.inputToSource.get(`${iNode.id}:count`);
           let countVar: string;
@@ -1191,6 +1195,10 @@ function compileRoot(
       } else if (node.data.nodeType === 'sequence') {
         compileFlowChain(node.id, 'first', indent);
         compileFlowChain(node.id, 'then', indent);
+        const extra = Number(node.data.config.extraCount) || 0;
+        for (let si = 2; si < 2 + extra; si++) {
+          compileFlowChain(node.id, `then_${si}`, indent);
+        }
       } else if (node.data.nodeType === 'loop') {
         const countSource = inputToSource.get(`${node.id}:count`);
         let countVar: string;
