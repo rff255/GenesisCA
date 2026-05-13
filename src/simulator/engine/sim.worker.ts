@@ -2136,7 +2136,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       const webgpuCp = useWebGPU && webgpuRuntime?.stepReady;
       if (webgpuCp && webgpuRuntime) {
         uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
-        runColorPassWebGPU();
+        // For no-OM viewers (e.g. MNCA's "Case Colored") refreshColorsAfterInputWebGPU
+        // falls back to a step shader dispatch so SetColorViewer-in-step writes land
+        // in the colors buffer before the present pass blits — otherwise the canvas
+        // freezes on the previous viewer's pixels.
+        refreshColorsAfterInputWebGPU();
         finalizeStepWebGPU({ needColors: true }).then(() => sendColors())
           .catch(e => self.postMessage({ type: 'error', message: '[webgpu] colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
         break;
@@ -2149,12 +2153,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           self.postMessage({ type: 'error', message: '[webgpu] colorPass readback failed: ' + ((e instanceof Error) ? e.message : String(e)) });
           return;
         }
-        const hasColorPassCp = outputMappingFns.some(f => f.mappingId === activeViewer);
-        if (hasColorPassCp) {
-          runColorPass();
-        } else {
-          writeDefaultColors();
-        }
+        // Mirrors the WebGPU branch: prefer the OM pipeline; fall back to one
+        // step for SetColorViewer-in-step viewers; fall back to default colors
+        // when no compiled step is available at all.
+        refreshColorsAfterInputJS();
         sendColors();
       })();
       break;

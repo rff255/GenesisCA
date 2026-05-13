@@ -961,20 +961,25 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const dimsModel = (model.properties.gridWidth === w && model.properties.gridHeight === h)
       ? model
       : { ...model, properties: { ...model.properties, gridWidth: w, gridHeight: h } };
+    // Viewer→int mapping is target-agnostic — the worker needs it for
+    // uploadActiveViewer regardless of which compile target is active. WGSL
+    // SetColorViewer-in-step writes are guarded on `control.activeViewer ==
+    // <int>`; without this map populated, the upload defaults to -1, no guards
+    // fire, and no-OM viewers (e.g. MNCA's "Case Colored") never write colors.
+    const viewerIds = buildViewerIds(dimsModel);
     // Wave 2: compile WASM only when the user has selected the WASM target.
     // Mirrors the WebGPU gating below — saves a compile pass per model change
     // when WASM isn't active, and avoids surfacing WASM-only errors when the
     // user is on JS or WebGPU.
     const wasmResult = (() => {
       if (!model.properties.useWasm) {
-        return { bytes: new Uint8Array(), minMemoryPages: 1, error: '', viewerIds: {}, exports: [] };
+        return { bytes: new Uint8Array(), minMemoryPages: 1, error: '', viewerIds, exports: [] };
       }
       try {
         const layout = computeLayoutFromModel(dimsModel);
-        const viewerIds = buildViewerIds(dimsModel);
         return compileGraphWasm(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel, layout, viewerIds);
       } catch (e) {
-        return { bytes: new Uint8Array(), minMemoryPages: 1, error: String((e as Error)?.message || e), viewerIds: {}, exports: [] };
+        return { bytes: new Uint8Array(), minMemoryPages: 1, error: String((e as Error)?.message || e), viewerIds, exports: [] };
       }
     })();
     // Wave 3: compile WebGPU shader alongside JS/WASM. Same fallback pattern:
@@ -1286,16 +1291,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         setCompiledCode(buildFullCode(result));
         setCompileError(result.error ?? '');
       }
+      // Build viewerIds unconditionally — see init path above for rationale.
+      const viewerIds = buildViewerIds(dimsModel);
       const wasmResult = (() => {
         if (!dimsModel.properties.useWasm) {
-          return { bytes: new Uint8Array(), minMemoryPages: 1, error: '', viewerIds: {}, exports: [] };
+          return { bytes: new Uint8Array(), minMemoryPages: 1, error: '', viewerIds, exports: [] };
         }
         try {
           const layout = computeLayoutFromModel(dimsModel);
-          const viewerIds = buildViewerIds(dimsModel);
           return compileGraphWasm(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel, layout, viewerIds);
         } catch (e) {
-          return { bytes: new Uint8Array(), minMemoryPages: 1, error: String((e as Error)?.message || e), viewerIds: {}, exports: [] };
+          return { bytes: new Uint8Array(), minMemoryPages: 1, error: String((e as Error)?.message || e), viewerIds, exports: [] };
         }
       })();
       const webgpuResult = (() => {
