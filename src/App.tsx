@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { ModelProvider, useModel } from './model/ModelContext';
 import { FileMenu } from './components/FileMenu';
+import { ConfirmDialog } from './components/ConfirmDialog';
 import { ModelerView } from './modeler/ModelerView';
 import { SimulatorView } from './simulator/SimulatorView';
 import { HelpView } from './help/HelpView';
 import { ModelsLibrary } from './library/ModelsLibrary';
 import { StyleReferenceView } from './styleguide/StyleReferenceView';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
+import type { CAModel } from './model/types';
 import styles from './App.module.css';
 
 type AppMode = 'modeler' | 'simulator' | 'help' | 'library' | 'styleref';
@@ -16,9 +18,13 @@ function AppInner() {
   // picking a model to explore or fork.
   const [mode, setMode] = useState<AppMode>('library');
   const { model, isDirty, loadModel } = useModel();
+  // Pending library-load that's waiting for an unsaved-changes confirmation.
+  // Holds the requested model so the deferred onConfirm has a closed-over
+  // reference; setting to null dismisses the dialog.
+  const [pendingLibLoad, setPendingLibLoad] = useState<CAModel | null>(null);
 
-  const handleLoadLibraryModel = (model: Parameters<typeof loadModel>[0]) => {
-    if (isDirty && !window.confirm('You have unsaved changes. Load a library model?')) return;
+  const handleLoadLibraryModel = (model: CAModel) => {
+    if (isDirty) { setPendingLibLoad(model); return; }
     loadModel(model);
     setMode('modeler');
   };
@@ -93,6 +99,21 @@ function AppInner() {
         {mode === 'library' && <ModelsLibrary onLoadModel={handleLoadLibraryModel} />}
         {mode === 'styleref' && <StyleReferenceView />}
       </main>
+      {pendingLibLoad && (
+        <ConfirmDialog
+          title="Discard unsaved changes?"
+          message="You have unsaved changes that will be lost if you load this library model."
+          confirmLabel="Load"
+          danger
+          onConfirm={() => {
+            const m = pendingLibLoad;
+            setPendingLibLoad(null);
+            loadModel(m);
+            setMode('modeler');
+          }}
+          onCancel={() => setPendingLibLoad(null)}
+        />
+      )}
     </div>
   );
 }

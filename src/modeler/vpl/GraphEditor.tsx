@@ -38,6 +38,7 @@ let clipboard: { nodes: GraphNode[]; edges: GraphEdge[] } | null = null;
 import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, setConnectedHandlesFromEdges, setConnectionHazards, savedGraphViewport, setSavedGraphViewport } from './graphState';
 import { detectEdgeHazard } from './nodes/nodeValidation';
 import { pushSnapshot, undo, redo, pushToRedo, pushToUndo, clearHistory } from './graphHistory';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 
 // ---------------------------------------------------------------------------
 // ID generation
@@ -205,6 +206,11 @@ export function GraphEditorInner() {
   const [nodes, setNodes, onNodesChange] = useNodesState(toRFNodes(model.graphNodes));
   const [edges, setEdges, onEdgesChange] = useEdgesState(toRFEdges(model.graphEdges));
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  // Pending bulk-delete waiting for user confirmation. We close the context
+  // menu first (UX), then surface a custom ConfirmDialog instead of blocking
+  // the page with the browser's native `confirm`. onConfirm performs the
+  // real deletion using the captured node-id list.
+  const [pendingMultiDelete, setPendingMultiDelete] = useState<string[] | null>(null);
   const [currentScope, setCurrentScope] = useState<string[]>(['root']);
   const [showGrid, setShowGrid] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
@@ -845,6 +851,17 @@ export function GraphEditorInner() {
     setContextMenu(null);
   }, [contextMenu, nodes, setNodes, scheduleSync, importMacro, model.macroDefs]);
 
+  // Perform the deletion of a known node-id list. Extracted from
+  // `deleteSelection` so the ConfirmDialog's onConfirm can call it without
+  // re-deriving the IDs from a possibly-cleared context menu.
+  const performDeleteNodes = useCallback((nodeIds: string[]) => {
+    if (nodeIds.length === 0) return;
+    pushCurrentSnapshot();
+    deleteElements({ nodes: nodeIds.map(id => ({ id })) });
+    scheduleSync();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deleteElements, scheduleSync]);
+
   const deleteSelection = useCallback(() => {
     if (!contextMenu) return;
     let nodeIds: string[] = [];
@@ -860,17 +877,13 @@ export function GraphEditorInner() {
       return nt !== 'macroInput' && nt !== 'macroOutput';
     });
     if (nodeIds.length === 0) { setContextMenu(null); return; }
-    if (nodeIds.length > 1) {
-      if (!window.confirm(`Delete ${nodeIds.length} selected elements?`)) {
-        setContextMenu(null);
-        return;
-      }
-    }
-    pushCurrentSnapshot();
-    deleteElements({ nodes: nodeIds.map(id => ({ id })) });
-    scheduleSync();
     setContextMenu(null);
-  }, [contextMenu, nodes, deleteElements, scheduleSync]);
+    if (nodeIds.length > 1) {
+      setPendingMultiDelete(nodeIds);
+      return;
+    }
+    performDeleteNodes(nodeIds);
+  }, [contextMenu, nodes, performDeleteNodes]);
 
   // --- Copy / Paste / Cut ---
 
@@ -1999,6 +2012,20 @@ export function GraphEditorInner() {
             </>
           )}
         </div>
+      )}
+      {pendingMultiDelete && (
+        <ConfirmDialog
+          title={`Delete ${pendingMultiDelete.length} elements?`}
+          message="The selected nodes and their connections will be removed from the graph."
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            const ids = pendingMultiDelete;
+            setPendingMultiDelete(null);
+            performDeleteNodes(ids);
+          }}
+          onCancel={() => setPendingMultiDelete(null)}
+        />
       )}
     </div>
   );

@@ -11,6 +11,7 @@ import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
 import { IndicatorDisplay } from './IndicatorDisplay';
 import { BrushColorPopover } from './BrushColorPopover';
 import { PresetSaveDialog } from './PresetSaveDialog';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { serializeSimState, serializePreset, downloadStateFile, readStateFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2 } from '../model/fileOperations';
 import type { Preset, SimulationState } from '../model/types';
 import styles from './SimulatorView.module.css';
@@ -147,6 +148,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // Preset-save dialog
   const [presetDialogOpen, setPresetDialogOpen] = useState(false);
   const [presetOverwriteTarget, setPresetOverwriteTarget] = useState<Preset | null>(null);
+  // Per-action confirmation modals — delete / overwrite. Carry the target preset
+  // so the deferred onConfirm doesn't need to recapture it through a closure.
+  const [presetToDelete, setPresetToDelete] = useState<Preset | null>(null);
+  const [presetToOverwrite, setPresetToOverwrite] = useState<Preset | null>(null);
 
   // Clipboard for Ctrl+C / Ctrl+V / Ctrl+X (cell-attribute region copy)
   const clipboardRef = useRef<{
@@ -1853,15 +1858,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   };
 
   const handleDeletePreset = (p: Preset) => {
-    if (window.confirm(`Delete preset "${p.name}"?`)) {
-      deletePreset(p.id);
-    }
+    setPresetToDelete(p);
   };
 
   // Overwrite preset: same pipeline as create, but dispatches updatePreset instead of addPreset.
   const handleOverwritePreset = (p: Preset) => {
-    if (!window.confirm(`Overwrite preset "${p.name}" with the current simulation state?`)) return;
-    setPresetOverwriteTarget(p);
+    setPresetToOverwrite(p);
   };
 
   const doOverwritePreset = (target: Preset, name: string, description: string, includeGrid: boolean) => {
@@ -2565,6 +2567,34 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             doOverwritePreset(target, name, description, includeGrid);
           }}
           onCancel={() => setPresetOverwriteTarget(null)}
+        />
+      )}
+      {presetToDelete && (
+        <ConfirmDialog
+          title="Delete preset?"
+          message={`The preset "${presetToDelete.name}" will be removed from this model.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            const id = presetToDelete.id;
+            setPresetToDelete(null);
+            deletePreset(id);
+          }}
+          onCancel={() => setPresetToDelete(null)}
+        />
+      )}
+      {presetToOverwrite && (
+        <ConfirmDialog
+          title="Overwrite preset?"
+          message={`Replace "${presetToOverwrite.name}" with the current simulation state? The current data in this preset will be lost.`}
+          confirmLabel="Overwrite"
+          danger
+          onConfirm={() => {
+            const target = presetToOverwrite;
+            setPresetToOverwrite(null);
+            setPresetOverwriteTarget(target);
+          }}
+          onCancel={() => setPresetToOverwrite(null)}
         />
       )}
     </div>

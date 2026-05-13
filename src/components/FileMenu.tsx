@@ -8,7 +8,15 @@ import {
 } from '../model/fileOperations';
 import type { SimulationState } from '../model/types';
 import { SaveProjectDialog, type SaveOptions } from './SaveProjectDialog';
+import { ConfirmDialog } from './ConfirmDialog';
 import styles from './FileMenu.module.css';
+
+/** Confirm dialog payload — set when an action needs user confirmation
+ *  before proceeding. onConfirm runs the deferred action; setting state to
+ *  null dismisses. Keeps render markup simple (one optional ConfirmDialog). */
+type PendingConfirm =
+  | { title: string; message: string; confirmLabel: string; onConfirm: () => void }
+  | null;
 
 const SAVE_OPTS_KEY = 'genesisca_save_options';
 
@@ -33,9 +41,16 @@ export function FileMenu() {
   const modelRef = useRef(model);
   modelRef.current = model;
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm>(null);
 
   const handleNew = () => {
-    if (isDirty && !window.confirm('You have unsaved changes. Create a new model?')) {
+    if (isDirty) {
+      setPendingConfirm({
+        title: 'Discard unsaved changes?',
+        message: 'You have unsaved changes that will be lost if you create a new model.',
+        confirmLabel: 'Create new',
+        onConfirm: () => { setPendingConfirm(null); newModel(); },
+      });
       return;
     }
     newModel();
@@ -88,7 +103,13 @@ export function FileMenu() {
   };
 
   const handleLoad = () => {
-    if (isDirty && !window.confirm('You have unsaved changes. Load a different model?')) {
+    if (isDirty) {
+      setPendingConfirm({
+        title: 'Discard unsaved changes?',
+        message: 'You have unsaved changes that will be lost if you load a different model.',
+        confirmLabel: 'Load',
+        onConfirm: () => { setPendingConfirm(null); fileInputRef.current?.click(); },
+      });
       return;
     }
     fileInputRef.current?.click();
@@ -129,6 +150,16 @@ export function FileMenu() {
           initial={loadSaveOptions()}
           onConfirm={doSave}
           onCancel={() => setSaveDialogOpen(false)}
+        />
+      )}
+      {pendingConfirm && (
+        <ConfirmDialog
+          title={pendingConfirm.title}
+          message={pendingConfirm.message}
+          confirmLabel={pendingConfirm.confirmLabel}
+          danger
+          onConfirm={pendingConfirm.onConfirm}
+          onCancel={() => setPendingConfirm(null)}
         />
       )}
     </div>

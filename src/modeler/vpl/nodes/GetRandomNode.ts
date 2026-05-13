@@ -3,7 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const GetRandomNode: NodeTypeDef = {
   type: 'getRandom',
   label: 'Get Random',
-  description: 'Generates a random bool (with probability), integer, or float.',
+  description: 'Random value: bool (1 with probability P, else 0), integer in [min, max], or float in [min, max).',
   category: 'data',
   color: '#b71c1c',
   ports: [
