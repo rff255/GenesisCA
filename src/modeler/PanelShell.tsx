@@ -41,16 +41,23 @@ export function PanelShell({ title, onClose, children, side = 'left' }: PanelShe
           if (!panel) return;
           const startX = e.clientX;
           const startW = panel.offsetWidth;
+          // Drag-inward-to-collapse, no upper cap. Mirrors the simulator's
+          // side-panel behaviour: visual drag clamps at DRAG_MIN so the
+          // user sees the panel shrink, and on release below
+          // COLLAPSE_THRESHOLD the panel snaps closed via onClose().
+          const COLLAPSE_THRESHOLD = 100;
+          const DRAG_MIN = 40;
+          let lastW = startW;
           const onMove = (ev: MouseEvent) => {
-            // Right-side panel: dragging left increases width
             const delta = isRight ? startX - ev.clientX : ev.clientX - startX;
-            const newW = Math.max(200, Math.min(600, startW + delta));
-            panel.style.width = newW + 'px';
-            panel.style.minWidth = newW + 'px';
+            lastW = Math.max(DRAG_MIN, startW + delta);
+            panel.style.width = lastW + 'px';
+            panel.style.minWidth = lastW + 'px';
           };
           const onUp = () => {
             document.removeEventListener('mousemove', onMove);
             document.removeEventListener('mouseup', onUp);
+            if (lastW < COLLAPSE_THRESHOLD) onClose();
           };
           document.addEventListener('mousemove', onMove);
           document.addEventListener('mouseup', onUp);
