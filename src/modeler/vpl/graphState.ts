@@ -1,13 +1,39 @@
 /** Shared mutable state between GraphEditor and CaNode (avoids circular imports) */
 
-/** Last viewport (x/y/zoom) of the GraphEditor's ReactFlow canvas. Persists
- *  across ModelerView unmounts so that tab-switching (Modeler → Simulator →
- *  Modeler) doesn't lose the user's pan/zoom — they often want quick A/B
- *  testing without re-finding their place in the graph. GraphEditor updates
- *  this via onMove and passes it as defaultViewport on mount. */
-export let savedGraphViewport: { x: number; y: number; zoom: number } | null = null;
-export function setSavedGraphViewport(v: typeof savedGraphViewport): void {
-  savedGraphViewport = v;
+/** Per-scope viewport cache (x/y/zoom) for the GraphEditor's ReactFlow canvas.
+ *  Keyed by scope id — `"root"` for the top-level graph, or the macro id
+ *  (e.g. `"macro_abc123"`) when the user is inside a macro definition.
+ *
+ *  Persists across ModelerView unmounts so that tab-switching (Modeler →
+ *  Simulator → Modeler) doesn't lose pan/zoom — they often want quick A/B
+ *  testing without re-finding their place. Also persists across scope
+ *  switches inside the modeler so navigating breadcrumbs Foo → Bar → Foo
+ *  doesn't keep re-fitting Foo.
+ *
+ *  Cleared en masse on `loadModel`/`newModel` (different graph layout —
+ *  saved coords are meaningless). */
+type Viewport = { x: number; y: number; zoom: number };
+const savedViewports = new Map<string, Viewport>();
+
+export function getSavedGraphViewport(scopeId: string): Viewport | null {
+  return savedViewports.get(scopeId) ?? null;
+}
+export function setSavedGraphViewport(scopeId: string, v: Viewport | null): void {
+  if (v === null) savedViewports.delete(scopeId);
+  else savedViewports.set(scopeId, v);
+}
+export function clearAllSavedGraphViewports(): void {
+  savedViewports.clear();
+}
+
+/** Scope stack the user was in when the GraphEditor last unmounted. Stored
+ *  so a Modeler → Simulator → Modeler round-trip leaves the user inside the
+ *  macro they were editing instead of dumping them back at root scope. */
+export let savedCurrentScope: string[] = ['root'];
+export function setSavedCurrentScope(scope: string[]): void {
+  // Defensive copy so external mutations to the React state array don't
+  // silently mutate the saved snapshot.
+  savedCurrentScope = scope.slice();
 }
 
 

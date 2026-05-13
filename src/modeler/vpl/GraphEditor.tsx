@@ -35,7 +35,7 @@ const nodeTypes: NodeTypes = {
 
 let clipboard: { nodes: GraphNode[]; edges: GraphEdge[] } | null = null;
 
-import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, setConnectedHandlesFromEdges, setConnectionHazards, savedGraphViewport, setSavedGraphViewport } from './graphState';
+import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope } from './graphState';
 import { detectEdgeHazard } from './nodes/nodeValidation';
 import { pushSnapshot, undo, redo, pushToRedo, pushToUndo, clearHistory } from './graphHistory';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
@@ -211,7 +211,10 @@ export function GraphEditorInner() {
   // the page with the browser's native `confirm`. onConfirm performs the
   // real deletion using the captured node-id list.
   const [pendingMultiDelete, setPendingMultiDelete] = useState<string[] | null>(null);
-  const [currentScope, setCurrentScope] = useState<string[]>(['root']);
+  // Seed from the module-level saved scope so a Modeler → Simulator → Modeler
+  // round-trip leaves the user inside the macro they were editing (instead of
+  // resetting back to root). Defaults to ['root'] on first-ever mount.
+  const [currentScope, setCurrentScope] = useState<string[]>(() => savedCurrentScope.slice());
   const [showGrid, setShowGrid] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
   // Seed from the module global so the toggle's visual state survives modeler remounts (tab switches)
@@ -325,7 +328,7 @@ export function GraphEditorInner() {
 
   // Switch displayed graph when scope changes
   useEffect(() => {
-    const scopeId = currentScope[currentScope.length - 1];
+    const scopeId = currentScope[currentScope.length - 1] ?? 'root';
     if (!scopeId || scopeId === 'root') {
       setNodes(toRFNodes(model.graphNodes));
       setEdges(toRFEdges(model.graphEdges));
@@ -336,11 +339,19 @@ export function GraphEditorInner() {
         setEdges(toRFEdges(macroDef.edges));
       }
     }
-    // Shrink-to-fit groups on load, then fit view + reset history
+    // Persist the scope so a Modeler ↔ Simulator round-trip lands the user
+    // back in the same scope they were editing.
+    setSavedCurrentScope(currentScope);
+    // Shrink-to-fit groups on load. If we have a saved viewport for the
+    // scope we're switching INTO, restore it; otherwise auto-fit. Using
+    // setViewport (not setting `defaultViewport`) because the component is
+    // already mounted — `defaultViewport` is initial-render only.
     clearHistory();
     setTimeout(() => {
       setNodes(nds => resizeGroupsToFit(nds, true));
-      rfInstance.current?.fitView();
+      const saved = getSavedGraphViewport(scopeId);
+      if (saved) rfInstance.current?.setViewport(saved);
+      else rfInstance.current?.fitView();
     }, 50);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentScope, modelVersion]);
@@ -1808,18 +1819,27 @@ export function GraphEditorInner() {
           if (!rf) return;
           lastFlowMousePos.current = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
         }}
-        onMove={(_e, viewport) => setSavedGraphViewport(viewport)}
+        onMove={(_e, viewport) => {
+          // Key the saved viewport by the scope the user is CURRENTLY in,
+          // so root vs each macro keep independent pan/zoom.
+          const scopeId = currentScope[currentScope.length - 1] ?? 'root';
+          setSavedGraphViewport(scopeId, viewport);
+        }}
         onPaneContextMenu={onPaneContextMenu}
         onNodeContextMenu={onNodeContextMenu}
         onNodeDoubleClick={onNodeDoubleClick}
         onEdgeDoubleClick={(_event, edge) => { setEdges(eds => eds.filter(e => e.id !== edge.id)); scheduleSync(); }}
         nodeTypes={nodeTypes}
         // Restore the user's last pan/zoom across ModelerView unmounts (tab
-        // switches). Only auto-fit the first time we mount with no saved
-        // viewport — typically the very first session render OR after the
-        // user explicitly cleared the saved viewport (e.g. by loading a new
-        // model that should re-fit).
-        {...(savedGraphViewport ? { defaultViewport: savedGraphViewport } : { fitView: true })}
+        // switches). Look up by the scope the editor is mounting into — root
+        // vs each macro have independent saved viewports. Only auto-fit when
+        // there's no saved viewport for the current scope (first session
+        // render OR after a model load that wiped saved viewports).
+        {...((() => {
+          const scopeId = currentScope[currentScope.length - 1] ?? 'root';
+          const saved = getSavedGraphViewport(scopeId);
+          return saved ? { defaultViewport: saved } : { fitView: true };
+        })())}
         deleteKeyCode={['Delete', 'Backspace']}
         snapToGrid={snapEnabled}
         snapGrid={[20, 20]}
