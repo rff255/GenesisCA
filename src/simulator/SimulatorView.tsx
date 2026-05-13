@@ -1409,6 +1409,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   useEffect(() => {
     if (visible) {
       requestAnimationFrame(() => draw());
+      // Under WebGPU direct render, the OffscreenCanvas can land in an
+      // unpresented state if a soft recompile happened while the simulator
+      // was hidden (startWebGPUInit unconfigures + reconfigures the canvas
+      // context with the new device — the next compositor frame may show
+      // blank). Ask the worker to re-dispatch the present so the canvas has
+      // fresh content the moment the user returns to the tab.
+      if (directRenderActiveRef.current && workerRef.current) {
+        workerRef.current.postMessage({ type: 'refreshDisplay' });
+      }
     } else if (playing) {
       setPlaying(false);
     }
