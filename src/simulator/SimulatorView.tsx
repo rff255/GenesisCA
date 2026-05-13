@@ -776,12 +776,20 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     setBrushMapping(firstInput?.id ?? '');
     if (result.error) setCompileError(result.error);
 
+    // Only reset pan/zoom when the grid dimensions actually change. This
+    // function ALSO fires on structural reinit at the same dims (e.g. the
+    // user edits an attribute or mapping while pan/zoom-focused on a region)
+    // — resetting in that case throws the user back to a fresh view every
+    // edit, breaking the back-and-forth tweak workflow.
+    const dimsChanged = gridWidth.current !== w || gridHeight.current !== h;
     gridWidth.current = w;
     gridHeight.current = h;
     setSimWidth(w);
     setSimHeight(h);
-    zoomRef.current = 1;
-    panRef.current = { x: 0, y: 0 };
+    if (dimsChanged) {
+      zoomRef.current = 1;
+      panRef.current = { x: 0, y: 0 };
+    }
 
     // Initialize runtime model attrs from defaults
     const mAttrs: Record<string, number> = {};

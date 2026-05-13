@@ -35,7 +35,7 @@ const nodeTypes: NodeTypes = {
 
 let clipboard: { nodes: GraphNode[]; edges: GraphEdge[] } | null = null;
 
-import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, setConnectedHandlesFromEdges, setConnectionHazards } from './graphState';
+import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, setConnectedHandlesFromEdges, setConnectionHazards, savedGraphViewport, setSavedGraphViewport } from './graphState';
 import { detectEdgeHazard } from './nodes/nodeValidation';
 import { pushSnapshot, undo, redo, pushToRedo, pushToUndo, clearHistory } from './graphHistory';
 
@@ -211,6 +211,8 @@ export function GraphEditorInner() {
   // Seed from the module global so the toggle's visual state survives modeler remounts (tab switches)
   const [portLabelsVisible, setPortLabelsVisible] = useState(showPortLabelsGlobal);
   const rfInstance = useRef<ReactFlowInstance | null>(null);
+
+
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const { deleteElements, getNodes, updateNodeData } = useReactFlow();
@@ -1793,12 +1795,18 @@ export function GraphEditorInner() {
           if (!rf) return;
           lastFlowMousePos.current = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
         }}
+        onMove={(_e, viewport) => setSavedGraphViewport(viewport)}
         onPaneContextMenu={onPaneContextMenu}
         onNodeContextMenu={onNodeContextMenu}
         onNodeDoubleClick={onNodeDoubleClick}
         onEdgeDoubleClick={(_event, edge) => { setEdges(eds => eds.filter(e => e.id !== edge.id)); scheduleSync(); }}
         nodeTypes={nodeTypes}
-        fitView
+        // Restore the user's last pan/zoom across ModelerView unmounts (tab
+        // switches). Only auto-fit the first time we mount with no saved
+        // viewport — typically the very first session render OR after the
+        // user explicitly cleared the saved viewport (e.g. by loading a new
+        // model that should re-fit).
+        {...(savedGraphViewport ? { defaultViewport: savedGraphViewport } : { fitView: true })}
         deleteKeyCode={['Delete', 'Backspace']}
         snapToGrid={snapEnabled}
         snapGrid={[20, 20]}

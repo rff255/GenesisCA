@@ -1,5 +1,16 @@
 /** Shared mutable state between GraphEditor and CaNode (avoids circular imports) */
 
+/** Last viewport (x/y/zoom) of the GraphEditor's ReactFlow canvas. Persists
+ *  across ModelerView unmounts so that tab-switching (Modeler → Simulator →
+ *  Modeler) doesn't lose the user's pan/zoom — they often want quick A/B
+ *  testing without re-finding their place in the graph. GraphEditor updates
+ *  this via onMove and passes it as defaultViewport on mount. */
+export let savedGraphViewport: { x: number; y: number; zoom: number } | null = null;
+export function setSavedGraphViewport(v: typeof savedGraphViewport): void {
+  savedGraphViewport = v;
+}
+
+
 /** Whether the user is currently dragging a connection */
 export let isConnectingGlobal = false;
 

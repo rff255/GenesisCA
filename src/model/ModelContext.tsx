@@ -23,6 +23,7 @@ import type {
 } from './types';
 import { DEFAULT_MODEL, EMPTY_MODEL } from './defaultModel';
 import { cloneMacroWithFreshIds } from './macroImport';
+import { setSavedGraphViewport } from '../modeler/vpl/graphState';
 
 // ---------------------------------------------------------------------------
 // ID generation
@@ -770,9 +771,21 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'UPDATE_INDICATOR', id, changes }),
     [],
   );
-  const newModel = useCallback(() => dispatch({ type: 'NEW_MODEL' }), []);
+  const newModel = useCallback(() => {
+    // Clear the GraphEditor's saved viewport so the next ModelerView mount
+    // auto-fits the fresh graph instead of restoring the pan/zoom that was
+    // appropriate for the previous model's node layout. (If the modeler is
+    // already mounted at the moment of the load, the user can hit React
+    // Flow's fitView button — re-fitting a live instance through a window
+    // event raced with the dispatch cycle in ways that were unreliable.)
+    setSavedGraphViewport(null);
+    dispatch({ type: 'NEW_MODEL' });
+  }, []);
   const loadModel = useCallback(
-    (model: CAModel) => dispatch({ type: 'LOAD_MODEL', model }),
+    (model: CAModel) => {
+      setSavedGraphViewport(null);
+      dispatch({ type: 'LOAD_MODEL', model });
+    },
     [],
   );
   const markSaved = useCallback(
