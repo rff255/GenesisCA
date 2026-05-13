@@ -97,12 +97,12 @@ A complete GenesisCA model definition consists of:
 - **Save Project dialog** — checkboxes to include simulator controls (speed, brush, mapping, model-attribute values) and/or the full board state; choices persist across sessions
 - **Save / Load State** — save the full simulation snapshot (`.gcastate`) for experiment repeatability; load to restore a previous state. State is also embedded in `.gcaproj` for project-level persistence.
 - **Model Presets** — embed named snapshots of model-attribute values (and optionally the cell grid) in the project, listed in the left panel above Model Attributes. One-click switching between behavioral variants — ideal for generic models like MNCA where the same rules produce wildly different emergent patterns per parameter set. Include/exclude from `.gcaproj` via the Save Project dialog.
-- **Canvas controls** — LMB=brush, RMB=pan, scroll=zoom, Ctrl+LMB drag=resize brush, Ctrl+wheel=cycle input mappings, Shift+RMB=open in-page color picker at the cursor. The stats overlay shows the cell coordinates under the cursor (or the brush footprint range when brush > 1×1)
+- **Canvas controls** — LMB=brush, RMB=pan, MMB=toggle autoscroll (anchor + speed-by-distance pan; Esc to exit), scroll=zoom, Ctrl+LMB drag=resize brush, Ctrl+wheel=cycle input mappings, Shift+RMB=open in-page color picker at the cursor. The stats overlay shows the cell coordinates under the cursor (or the brush footprint range when brush > 1×1)
 - **Brush tool** — configurable color (with live R/G/B channel inputs beside the picker), width/height, input mapping; visual brush cursor; Ctrl+drag interactive resize
 - **Region clipboard** — Ctrl+C/V/X on the simulator copy/paste/cut all cell attributes within the brush rectangle; paste anchors to the brush's top-left corner
 - **Viewer tabs** — horizontal bar at the top to switch between Attribute-to-Color visualization modes
 - **Collapsible panels** — left panel for settings (actions, grid dimensions, model attributes), right panel for brush
-- **Zoom controls** — +/−/fit buttons on the canvas, matching the modeler
+- **Zoom controls** — +/−/fit/gridlines/infinity buttons on the canvas. The infinity (∞) button (enabled only for torus-boundary models) tiles the grid across the viewport so you can pan endlessly across the wrap seams
 - **Live model attribute controls** — change global parameters without recompiling
 - **Grid dimension overrides** — experiment with different sizes
 - **PNG screenshot export** — captures the display view with current zoom/pan (nearest-neighbor upscale for crisp pixels)

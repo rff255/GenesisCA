@@ -186,6 +186,27 @@
   color: var(--color-accent);
 }
 
+/* Attached ear button — a small distinct pill that sits adjacent to the viewer
+ * or transport bar (same background / border so they live in the same visual
+ * language, but the gap between them communicates that the ear is a separate
+ * control, not just another tab inside the bar). */
+.barAttachedEar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: var(--space-2) var(--space-3);
+  transition: color var(--duration-base);
+}
+
+.barAttachedEar:hover {
+  color: var(--color-accent);
+}
+
 
 /* --- Stat & control reusables --- */
 
@@ -381,11 +402,20 @@
 
 /* --- Top overlay: Viewer tabs --- */
 
-.viewerBar {
+/* Wrapper that owns positioning (top-centre); contains the attached ear pill
+ * + the actual viewer bar pill as two distinct flex items. */
+.viewerBarRow {
   position: absolute;
   top: var(--space-4);
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  z-index: 5;
+}
+
+.viewerBar {
   display: flex;
   align-items: center;
   gap: var(--space-1);
@@ -393,7 +423,6 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   padding: var(--space-1);
-  z-index: 5;
 }
 
 /* Inline label inside .viewerBar ("Output Mapping (A→C):") — kept compact
@@ -433,7 +462,9 @@
 
 /* --- Bottom overlay: Transport bar --- */
 
-.transportBar {
+/* Wrapper that owns positioning (bottom-centre); contains the attached ear
+ * pill + the transport bar pill as two distinct flex items. */
+.transportBarRow {
   position: absolute;
   bottom: var(--space-6);
   left: 50%;
@@ -441,11 +472,17 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  z-index: 5;
+}
+
+.transportBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   background: var(--color-bg-panel);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-xl);
   padding: var(--space-3) var(--space-6);
-  z-index: 5;
 }
 
 .transportBtn {
@@ -528,15 +565,32 @@
 /* --- Top-left stats overlay (discreet, no background) --- */
 
 .statsOverlay {
+  /* Bottom-right corner — vertical column tucked against the right edge of the
+   * canvas. Was originally top-left, but the left-panel ear sometimes occluded
+   * the first entries. Right side is empty (the right-panel ear sits at the
+   * top-right), so a low-key narrow strip down there reads cleanly.
+   *
+   * On hover the strip dims behind a 60% black backdrop so the text becomes
+   * legible against busy cells. No backdrop otherwise — keeps the overlay
+   * unobtrusive while the user is looking at the simulation itself. */
   position: absolute;
-  top: var(--space-4);
-  left: var(--space-4);
+  bottom: var(--space-6);
+  right: var(--space-4);
   z-index: 4;
   display: flex;
-  gap: var(--space-6);
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
   font-size: 0.58rem;
   color: rgba(128, 144, 160, 0.7);
-  pointer-events: none;
+  transition: background var(--duration-base), color var(--duration-base);
+}
+
+.statsOverlay:hover {
+  background: rgba(0, 0, 0, 0.6);
+  color: rgba(220, 230, 245, 0.95);
 }
 
 /* --- Zoom controls (bottom-left of canvas) --- */
