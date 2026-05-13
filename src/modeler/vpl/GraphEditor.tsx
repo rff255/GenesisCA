@@ -88,7 +88,6 @@ function toRFEdges(graphEdges: GraphEdge[]): Edge[] {
     sourceHandle: e.sourceHandle,
     targetHandle: e.targetHandle,
     style: { stroke: e.sourceHandle.includes('flow') ? '#66bb6a' : '#4cc9f0', strokeWidth: 2 },
-    animated: e.sourceHandle.includes('flow'),
   }));
 }
 
@@ -441,7 +440,6 @@ export function GraphEditorInner() {
         {
           ...connection,
           style: { stroke: (connection.sourceHandle?.includes('flow') ? '#66bb6a' : '#4cc9f0'), strokeWidth: 2 },
-          animated: connection.sourceHandle?.includes('flow') ?? false,
         },
         eds,
       ));
@@ -1038,7 +1036,6 @@ export function GraphEditorInner() {
         sourceHandle: e.sourceHandle,
         targetHandle: e.targetHandle,
         style: { stroke: e.sourceHandle.includes('flow') ? '#66bb6a' : '#4cc9f0', strokeWidth: 2 },
-        animated: e.sourceHandle.includes('flow'),
       }));
 
     // Sort so group nodes come before their children (React Flow requires parent first)
@@ -1145,7 +1142,6 @@ export function GraphEditorInner() {
         sourceHandle: e.sourceHandle,
         targetHandle: e.targetHandle,
         style: { stroke: e.sourceHandle.includes('flow') ? '#66bb6a' : '#4cc9f0', strokeWidth: 2 },
-        animated: e.sourceHandle.includes('flow'),
       }));
 
     dupeNodes.sort((a, b) => {
@@ -1559,7 +1555,6 @@ export function GraphEditorInner() {
         target: macroNodeId,
         targetHandle: handleId({ id: `in_${i}`, kind: 'input', category: exposedInputs[i]!.category }),
         style: { stroke: exposedInputs[i]!.category === 'flow' ? '#66bb6a' : '#4cc9f0', strokeWidth: 2 },
-        animated: exposedInputs[i]!.category === 'flow',
       })),
       ...externalOutputEdges.map((e, i) => ({
         id: `${macroNodeId}_eout_${i}`,
@@ -1568,7 +1563,6 @@ export function GraphEditorInner() {
         target: e.target,
         targetHandle: e.targetHandle,
         style: { stroke: exposedOutputs[i]!.category === 'flow' ? '#66bb6a' : '#4cc9f0', strokeWidth: 2 },
-        animated: exposedOutputs[i]!.category === 'flow',
       })),
     ];
 
@@ -1671,7 +1665,6 @@ export function GraphEditorInner() {
         sourceHandle: e.sourceHandle,
         targetHandle: e.targetHandle,
         style: { stroke: e.sourceHandle.includes('flow') ? '#66bb6a' : '#4cc9f0', strokeWidth: 2 },
-        animated: e.sourceHandle.includes('flow'),
       }));
 
     // Reconnect external edges: trace through boundary nodes to find actual internal targets.
