@@ -10,6 +10,7 @@ import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
 import { IndicatorDisplay } from './IndicatorDisplay';
 import { BrushColorPopover } from './BrushColorPopover';
+import { InspectCellPopover, InspectHoverLink, type InspectPopoverState } from './InspectCellPopover';
 import { PresetSaveDialog } from './PresetSaveDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { serializeSimState, serializePreset, downloadStateFile, readStateFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2 } from '../model/fileOperations';
@@ -596,6 +597,23 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const onWorkerMessageRef = useRef<(e: MessageEvent) => void>(() => {});
   onWorkerMessageRef.current = (e: MessageEvent) => {
     const msg = e.data;
+    if (msg.type === 'inspectCellsData') {
+      // Worker batched attribute readout + per-cell RGB for all subscribed
+      // inspect cells. Per-cell colors are bundled here (instead of relying
+      // on colorsRef) so the popover swatch works uniformly across JS / WASM
+      // / WebGPU direct render — under direct render the full colors buffer
+      // is never sent to the main thread.
+      inspectDataRef.current.clear();
+      inspectColorsRef.current.clear();
+      const data = msg.data as Record<string, Record<string, number>>;
+      for (const k of Object.keys(data)) inspectDataRef.current.set(Number(k), data[k]!);
+      const colors = msg.colors as Record<string, { r: number; g: number; b: number }> | undefined;
+      if (colors) {
+        for (const k of Object.keys(colors)) inspectColorsRef.current.set(Number(k), colors[k]!);
+      }
+      bumpInspectVersion(v => v + 1);
+      return;
+    }
     if (msg.type === 'stepped') {
       colorsRef.current = msg.colors as Uint8ClampedArray;
       if (msg.indicators) {
@@ -1076,6 +1094,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // through to the readback path until attachCanvas arrives.
     worker.postMessage(initMsg);
     workerRef.current = worker;
+    // Re-publish any open inspect-popup subscriptions to the fresh worker so
+    // values keep streaming after a recompile / hard re-init.
+    if (inspectCellIdxsRef.current.length > 0) {
+      worker.postMessage({ type: 'setInspectCells', cellIdxs: inspectCellIdxsRef.current });
+    }
     if (import.meta.env?.DEV) (window as unknown as { __simWorker?: Worker }).__simWorker = worker;
     generationRef.current = 0;
     lastGenSetTime.current = 0;
@@ -1439,6 +1462,49 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // for users who want the full gradient UI.
   const [colorPopover, setColorPopover] = useState<{ x: number; y: number } | null>(null);
 
+  // Inspect-cell popups (Shift+LMB). Each popup tracks one cell. Multiple
+  // popups can coexist; z-order is the array order (later items render on top).
+  // inspectDataRef holds the latest worker-supplied attribute values keyed by
+  // cellIdx; bumping inspectDataVersion forces a re-render of all popovers.
+  const [inspectPopovers, setInspectPopovers] = useState<InspectPopoverState[]>([]);
+  const [hoveredInspectIdx, setHoveredInspectIdx] = useState<number | null>(null);
+  const [pulseInspectIdx, setPulseInspectIdx] = useState<number | null>(null);
+  const [focusedInspectIdx, setFocusedInspectIdx] = useState<number | null>(null);
+  const inspectDataRef = useRef<Map<number, Record<string, number>>>(new Map());
+  const inspectColorsRef = useRef<Map<number, { r: number; g: number; b: number }>>(new Map());
+  const [, bumpInspectVersion] = useState(0);
+  const popoverRectsRef = useRef<Map<number, DOMRect>>(new Map());
+  const pulseTimerRef = useRef<number | null>(null);
+  // Mirror the popover cell ids in a ref so worker-init code (running outside
+  // React's render cycle) can re-publish the subscription without staleness.
+  const inspectCellIdxsRef = useRef<number[]>([]);
+  useEffect(() => {
+    const ids = inspectPopovers.map(p => p.cellIdx);
+    inspectCellIdxsRef.current = ids;
+    // Drop stale rect entries so the hover overlay doesn't anchor to a
+    // popover that was just closed.
+    const live = new Set(ids);
+    for (const k of Array.from(popoverRectsRef.current.keys())) {
+      if (!live.has(k)) popoverRectsRef.current.delete(k);
+    }
+    for (const k of Array.from(inspectDataRef.current.keys())) {
+      if (!live.has(k)) inspectDataRef.current.delete(k);
+    }
+    for (const k of Array.from(inspectColorsRef.current.keys())) {
+      if (!live.has(k)) inspectColorsRef.current.delete(k);
+    }
+    workerRef.current?.postMessage({ type: 'setInspectCells', cellIdxs: ids });
+  }, [inspectPopovers]);
+  // Auto-close popovers whose cell is out of bounds after a grid resize.
+  useEffect(() => {
+    const w = model.properties.gridWidth;
+    const h = model.properties.gridHeight;
+    setInspectPopovers(prev => {
+      const next = prev.filter(p => p.row < h && p.col < w);
+      return next.length === prev.length ? prev : next;
+    });
+  }, [model.properties.gridWidth, model.properties.gridHeight]);
+
   /** Convert screen coords to grid cell coords. In infinity mode, wraps via
    *  modulo so painting / hovering across tile seams hits the correct cell. */
   const screenToGrid = useCallback((clientX: number, clientY: number): { row: number; col: number } | null => {
@@ -1463,6 +1529,24 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
     if (col < 0 || col >= w || row < 0 || row >= h) return null;
     return { row, col };
+  }, []);
+
+  /** Inverse of screenToGrid: cell (row, col) → top-left viewport coords and
+   *  cell pixel size. Used by the inspect-cell hover overlay to anchor a
+   *  contour around the inspected cell. Returns null if the canvas is not
+   *  yet mounted or the grid is empty. */
+  const gridToScreen = useCallback((row: number, col: number): { x: number; y: number; cellSize: number } | null => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.parentElement!.getBoundingClientRect();
+    const w = gridWidth.current;
+    const h = gridHeight.current;
+    if (w === 0 || h === 0) return null;
+    const baseScale = Math.min(rect.width / w, rect.height / h);
+    const scale = baseScale * zoomRef.current;
+    const ox = (rect.width - w * scale) / 2 + panRef.current.x;
+    const oy = (rect.height - h * scale) / 2 + panRef.current.y;
+    return { x: rect.left + ox + col * scale, y: rect.top + oy + row * scale, cellSize: scale };
   }, []);
 
   /** Parse hex color to RGB */
@@ -1687,6 +1771,36 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (autoscrollOriginRef.current) {
         e.preventDefault();
         stopAutoscroll();
+        return;
+      }
+
+      if (e.button === 0 && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        // Shift+LMB = open inspect-cell popup. Mirrors the Shift+RMB brush
+        // color popup — modifier+click is the "debug info, don't paint" gesture.
+        e.preventDefault();
+        const cell = screenToGrid(e.clientX, e.clientY);
+        if (!cell) return;
+        const idx = cell.row * gridWidth.current + cell.col;
+        setInspectPopovers(prev => {
+          const existingIdx = prev.findIndex(p => p.cellIdx === idx);
+          if (existingIdx >= 0) {
+            // Re-open on the same cell: bring to front + pulse so the user can
+            // spot which popup they re-clicked among several open ones.
+            const next = [...prev];
+            const [moved] = next.splice(existingIdx, 1);
+            next.push(moved!);
+            setPulseInspectIdx(idx);
+            if (pulseTimerRef.current != null) window.clearTimeout(pulseTimerRef.current);
+            pulseTimerRef.current = window.setTimeout(() => {
+              setPulseInspectIdx(curr => (curr === idx ? null : curr));
+              pulseTimerRef.current = null;
+            }, 500);
+            setFocusedInspectIdx(idx);
+            return next;
+          }
+          return [...prev, { cellIdx: idx, row: cell.row, col: cell.col, x: e.clientX, y: e.clientY }];
+        });
+        setFocusedInspectIdx(idx);
         return;
       }
 
@@ -2904,6 +3018,60 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           onClose={() => setColorPopover(null)}
         />
       )}
+      {inspectPopovers.map(p => (
+        <InspectCellPopover
+          key={p.cellIdx}
+          popover={p}
+          cellAttrs={model.attributes.filter(a => !a.isModelAttribute)}
+          values={inspectDataRef.current.get(p.cellIdx) ?? null}
+          color={inspectColorsRef.current.get(p.cellIdx) ?? null}
+          pulse={pulseInspectIdx === p.cellIdx}
+          focused={focusedInspectIdx === p.cellIdx}
+          totalOpen={inspectPopovers.length}
+          onClose={() => {
+            setInspectPopovers(prev => prev.filter(pp => pp.cellIdx !== p.cellIdx));
+            setFocusedInspectIdx(curr => (curr === p.cellIdx ? null : curr));
+            setHoveredInspectIdx(curr => (curr === p.cellIdx ? null : curr));
+          }}
+          onCloseAll={() => {
+            setInspectPopovers([]);
+            setFocusedInspectIdx(null);
+            setHoveredInspectIdx(null);
+          }}
+          onFocus={() => {
+            setFocusedInspectIdx(p.cellIdx);
+            setInspectPopovers(prev => {
+              const i = prev.findIndex(pp => pp.cellIdx === p.cellIdx);
+              if (i < 0 || i === prev.length - 1) return prev;
+              const next = [...prev];
+              const [moved] = next.splice(i, 1);
+              next.push(moved!);
+              return next;
+            });
+          }}
+          onDragEnd={(x, y) => {
+            setInspectPopovers(prev => prev.map(pp => pp.cellIdx === p.cellIdx ? { ...pp, x, y } : pp));
+          }}
+          onHoverEnter={() => setHoveredInspectIdx(p.cellIdx)}
+          onHoverLeave={() => setHoveredInspectIdx(curr => (curr === p.cellIdx ? null : curr))}
+          onRectMeasure={(rect) => { popoverRectsRef.current.set(p.cellIdx, rect); }}
+        />
+      ))}
+      {hoveredInspectIdx != null && (() => {
+        const p = inspectPopovers.find(pp => pp.cellIdx === hoveredInspectIdx);
+        if (!p) return null;
+        const cell = gridToScreen(p.row, p.col);
+        if (!cell) return null;
+        const popupRect = popoverRectsRef.current.get(p.cellIdx);
+        return (
+          <InspectHoverLink
+            cellX={cell.x}
+            cellY={cell.y}
+            cellSize={cell.cellSize}
+            popupRect={popupRect}
+          />
+        );
+      })()}
       {presetDialogOpen && (
         <PresetSaveDialog
           onConfirm={(name, description, includeGrid) => {

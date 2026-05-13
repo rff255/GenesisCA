@@ -176,8 +176,13 @@ interface AttachCanvasMsg { type: 'attachCanvas'; canvas: OffscreenCanvas; width
  *  2D-context APIs (getImageData, toBlob) all fail; instead it asks the worker
  *  for a fresh colors snapshot, builds an offscreen 2D canvas, and toBlob's. */
 interface RequestColorsSnapshotMsg { type: 'requestColorsSnapshot'; tag?: string }
+/** Inspect-cell subscription. The main thread keeps a (possibly empty) set of
+ *  cell indices the user is inspecting via the Shift+LMB popup; the worker
+ *  echoes attribute values back via `inspectCellsData` after every step and
+ *  immediately on subscription change. Declarative (replaces the prior set). */
+interface SetInspectCellsMsg { type: 'setInspectCells'; cellIdxs: number[] }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -206,6 +211,13 @@ let nbrIndices: Record<string, Int32Array> = {};
 
 let colors: Uint8ClampedArray = new Uint8ClampedArray(0);
 let orderArray: Int32Array | null = null;
+
+// Inspect-cell subscriptions — flat cell indices the main thread is watching
+// via the Shift+LMB popup. Worker emits `inspectCellsData` after every step
+// (piggy-backed onto sendColors) and immediately when the set is updated.
+// Cost when empty: a single empty-array length check per step. Cost when
+// non-empty: one read × cellAttrs.length per subscribed cell per step.
+let inspectCellIdxs: number[] = [];
 
 // WASM linear memory backs cell attributes and the color buffer so the future
 // WASM step function can address them directly. JS still uses typed-array views
@@ -1113,7 +1125,9 @@ function syncIndicatorsCpuToGpu(): void {
 async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: boolean } = {}): Promise<void> {
   const rt = webgpuRuntime;
   if (!rt || !rt.stepReady) return;
-  const fullAttrs = !!opts.needAttrs;
+  // Inspect-cell popups need fresh CPU attrs for their per-cell readout. Bump
+  // needAttrs internally so callers don't have to thread the flag.
+  const fullAttrs = !!opts.needAttrs || inspectCellIdxs.length > 0;
   // O5 — figure out which watched indicators are handled by the GPU
   // reduction plan; their attrs don't need a CPU readback. Empty plan →
   // gpuHandled is empty and the existing CPU path handles everything.
@@ -1133,11 +1147,12 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
     }
   }
   // P7 — direct render owns the canvas; we never need to readback colors for
-  // display. EXCEPT during GIF recording: the main thread's recording loop
-  // needs the per-frame colors to capture into ImageData, since under direct
-  // render srcCanvas's 2D context is unavailable on the main thread. The
-  // readback is the same cost as before P7, but only paid while recording.
-  const wantColors = (opts.needColors !== false) && (!rt.directRender || recording);
+  // display. EXCEPT during GIF recording or inspect popups: both consume the
+  // per-frame colors on the main thread (recording: into ImageData frames;
+  // inspect: into the per-cell RGB readout in the popover). The readback is
+  // the same cost as before P7, but only paid when at least one of those is
+  // active.
+  const wantColors = (opts.needColors !== false) && (!rt.directRender || recording || inspectCellIdxs.length > 0);
   // P5 — only read back indicators that the UI/end-conditions actually
   // consume. A model can declare 10 indicators with `watched=false` and they
   // ALL stayed in the readback path before, paying the per-frame mapAsync
@@ -1552,6 +1567,36 @@ function computeLinkedIndicatorsFromBuffer(): void {
   }
 }
 
+/** Build and post the current attribute values for every cell index the main
+ *  thread is inspecting. No-op when the subscription set is empty. Under
+ *  WebGPU, callers MUST ensure `readAttrs` is fresh (via ensureCpuAttrsFresh)
+ *  before invoking — otherwise the CPU mirror is stale. */
+function postInspectCellsData(): void {
+  if (inspectCellIdxs.length === 0) return;
+  const data: Record<number, Record<string, number>> = {};
+  const colorsByCell: Record<number, { r: number; g: number; b: number }> = {};
+  for (const idx of inspectCellIdxs) {
+    if (idx < 0 || idx >= total) continue;
+    const attrs: Record<string, number> = {};
+    for (const attr of cellAttrs) {
+      const arr = readAttrs[attr.id];
+      if (arr) attrs[attr.id] = arr[idx]!;
+    }
+    data[idx] = attrs;
+    // Per-cell RGB so the popover swatch works uniformly under JS / WASM /
+    // WebGPU (direct render skips the full colors transfer to the main thread,
+    // so the popover can't rely on `colorsRef`). The worker's `colors` typed
+    // array is kept fresh because finalizeStepWebGPU's `wantColors` is
+    // forced true while any inspect popup is subscribed, and the subscription
+    // entry point readback-colors before the first postInspectCellsData fire.
+    const base = idx * 4;
+    if (colors.length >= base + 3) {
+      colorsByCell[idx] = { r: colors[base]!, g: colors[base + 1]!, b: colors[base + 2]! };
+    }
+  }
+  self.postMessage({ type: 'inspectCellsData', data, colors: colorsByCell });
+}
+
 function sendColors(): void {
   // Only build indicators payload when there are entries (avoids overhead when no indicators)
   const hasStandalone = standaloneIds.length > 0;
@@ -1573,6 +1618,7 @@ function sendColors(): void {
   // mirror via readback so the main thread can capture frames.
   if (webgpuRuntime?.directRender && !recording) {
     self.postMessage({ type: 'stepped', generation, indicators });
+    postInspectCellsData();
     return;
   }
   const copy = new Uint8ClampedArray(colors);
@@ -1580,6 +1626,7 @@ function sendColors(): void {
     { type: 'stepped', generation, colors: copy, indicators },
     { transfer: [copy.buffer] },
   );
+  postInspectCellsData();
 }
 
 // ---------------------------------------------------------------------------
@@ -1998,6 +2045,36 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           { type: 'colorsSnapshot', tag, w: width, h: height, colors: snap },
           { transfer: [snap.buffer] },
         );
+      }
+      break;
+    }
+
+    case 'setInspectCells': {
+      // Declarative — replace the subscription set. Filter out-of-range
+      // indices so a stale popup from before a grid resize doesn't keep
+      // emitting garbage. Fire one immediate response so the popup opens
+      // populated without waiting for the next step.
+      inspectCellIdxs = msg.cellIdxs.filter(i => Number.isInteger(i) && i >= 0 && i < total);
+      if (inspectCellIdxs.length > 0) {
+        const rt = webgpuRuntime;
+        if (useWebGPU && rt?.stepReady) {
+          // Under WebGPU direct render, both the CPU attrs mirror and the CPU
+          // colors mirror are stale between steps. Readback both before firing
+          // the first postInspectCellsData so the popup opens with correct
+          // values AND the right swatch RGB.
+          void (async () => {
+            try {
+              await ensureCpuAttrsFresh();
+              await readbackColors(rt, colors);
+            } catch (e) {
+              self.postMessage({ type: 'error', message: '[webgpu] inspect readback failed: ' + ((e instanceof Error) ? e.message : String(e)) });
+              return;
+            }
+            postInspectCellsData();
+          })();
+        } else {
+          postInspectCellsData();
+        }
       }
       break;
     }
