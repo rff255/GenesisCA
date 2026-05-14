@@ -7,6 +7,7 @@ import { GetModelAttributeNode } from './GetModelAttributeNode';
 import { GetRandomNode } from './GetRandomNode';
 import { GetColorConstantNode } from './GetColorConstantNode';
 import { ArithmeticOperatorNode } from './ArithmeticOperatorNode';
+import { ExpressionNode } from './ExpressionNode';
 import { GroupCountingNode } from './GroupCountingNode';
 import { GroupStatementNode } from './GroupStatementNode';
 import { GroupOperatorNode } from './GroupOperatorNode';
@@ -84,6 +85,7 @@ const ALL_NODES: NodeTypeDef[] = [
   TagConstantNode,
   // Arithmetic & Logic
   ArithmeticOperatorNode,
+  ExpressionNode,
   ProportionMapNode,
   InterpolationNode,
   StatementNode,

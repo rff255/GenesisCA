@@ -40,6 +40,8 @@ import { classifyLoopInvariant } from '../loopInvariant';
 import { getInlineValue, parseInlineNum } from '../inlinePort';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } from '../sinkAnalysis';
 import { subAttrInfo } from '../subAttribute';
+import { emitWasm } from '../expression/emitWasm';
+import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
 
 export interface WasmCompileResult {
   bytes: Uint8Array;
@@ -110,7 +112,9 @@ const OP_I32_LE_S_OP = byte(0x4c);
 // intrinsics; we import it as func index 0. All other Math.* operations have
 // native WASM equivalents (sqrt = OP_F64_SQRT, abs = OP_F64_ABS, floor =
 // OP_F64_FLOOR; round is emitted as floor(x + 0.5)).
-const POW_FUNC_IDX = 0;
+// Exported so the Expression node's WASM emitter (compiler/expression/emitWasm.ts)
+// can emit `call pow` against the same single source of truth.
+export const POW_FUNC_IDX = 0;
 
 // Module-level type indices (assigned in buildOneModule based on which entry
 // points are present). Imported pow lives at type 0; entry-point types start
@@ -1072,6 +1076,16 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
         return null;
     }
     return storeResult(em, F64);
+  },
+
+  // -- Expression (ExpressionNode: parse the formula string, emit the AST) --
+  expression: ({ node, ctx, inputs }) => {
+    const visibleCount = clampVisibleCount(node.data.config.visibleCount);
+    const { map, errors } = buildVarMap(node.data.config, visibleCount);
+    if (errors.length > 0) { ctx.errors.push(`expression: ${errors[0]}`); return null; }
+    const res = parseExpression(String(node.data.config.expression ?? ''), map);
+    if ('error' in res) { ctx.errors.push(`expression: ${res.error}`); return null; }
+    return emitWasm(res.ast, ctx.emitter, inputs);
   },
 
   // -- Comparison (StatementNode "Compare": x, y, y2 inputs, ops ==/!=/</>/<=/>=/between/notBetween) --

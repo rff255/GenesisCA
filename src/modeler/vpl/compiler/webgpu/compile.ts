@@ -33,6 +33,8 @@ import { getInlineValue, parseInlineNum } from '../inlinePort';
 import { INVALID_NI, packNI, NI_ARRAY_PRODUCERS } from '../niCodec';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } from '../sinkAnalysis';
 import { subAttrInfo, subAttributesOf } from '../subAttribute';
+import { emitWgsl } from '../expression/emitWgsl';
+import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
 
 export interface WebGPUEntryPoints {
   step: string;
@@ -53,9 +55,11 @@ export interface WebGPUCompileResult {
 // Types
 // ---------------------------------------------------------------------------
 
-type WgslType = 'f32' | 'i32' | 'bool';
+export type WgslType = 'f32' | 'i32' | 'bool';
 
-interface ValueRef {
+/** Exported so the Expression node's WGSL emitter (compiler/expression/emitWgsl.ts)
+ *  can type its `inputs` map. */
+export interface ValueRef {
   /** Name of the WGSL local that holds this value, OR an inline literal expr. */
   expr: string;
   type: WgslType;
@@ -300,8 +304,9 @@ function emitVar(ctx: CompileCtx, type: WgslType, expr: string, prefix: string =
   return { name, type };
 }
 
-/** Coerce a ValueRef to the requested WGSL type. */
-function castTo(v: ValueRef, want: WgslType): string {
+/** Coerce a ValueRef to the requested WGSL type.
+ *  Exported for the Expression node's WGSL emitter (compiler/expression/emitWgsl.ts). */
+export function castTo(v: ValueRef, want: WgslType): string {
   if (v.type === want) return v.expr;
   if (want === 'f32') {
     if (v.type === 'i32') return `f32(${v.expr})`;
@@ -1126,6 +1131,16 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
         return null;
     }
     return emitLet(ctx, 'f32', expr, 'arith');
+  },
+
+  // Expression node: parse the formula string, emit the AST as a WGSL f32 expr.
+  expression: ({ node, ctx, inputs }) => {
+    const visibleCount = clampVisibleCount(node.data.config.visibleCount);
+    const { map, errors } = buildVarMap(node.data.config, visibleCount);
+    if (errors.length > 0) { ctx.errors.push(`expression: ${errors[0]}`); return null; }
+    const res = parseExpression(String(node.data.config.expression ?? ''), map);
+    if ('error' in res) { ctx.errors.push(`expression: ${res.error}`); return null; }
+    return emitLet(ctx, 'f32', emitWgsl(res.ast, inputs), 'expr');
   },
 
   statement: ({ node, ctx, inputs }) => {

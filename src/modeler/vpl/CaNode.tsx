@@ -5,6 +5,7 @@ import { getNodeDef } from './nodes/registry';
 import { detectMissingConfig, detectWebGPUIncompatibilities, detectWasmIncompatibilities, countMacroSubgraphIssues } from './nodes/nodeValidation';
 import { INTERPOLATION_METHODS, INTERPOLATION_SHORT_LABELS, DEFAULT_INTERPOLATION_METHOD } from './nodes/interpolationMethods';
 import type { InterpolationMethod } from './nodes/interpolationMethods';
+import { buildVarMap, parseExpression, clampVisibleCount, VISIBLE_PORT_IDS, MAX_VISIBLE } from './compiler/expression/parser';
 import { handleId } from './types';
 import type { NodeConfig, PortDef } from './types';
 import type { MacroPort } from '../../model/types';
@@ -302,6 +303,17 @@ function CaNodeComponent({ id, data }: NodeProps) {
     }
   }
 
+  // Expression: show only `visibleCount` of the 8 input ports, relabelled with
+  // the user's variable names. Mirrors effectivePorts.ts (UI-only — all 8 ports
+  // stay in def.ports so the compilers resolve them).
+  if (nodeData.nodeType === 'expression') {
+    const visibleCount = clampVisibleCount(nodeData.config.visibleCount);
+    inputPorts = inputPorts.slice(0, visibleCount).map(p => {
+      const nm = nodeData.config[`_varName_${p.id}`];
+      return (typeof nm === 'string' && nm.trim()) ? { ...p, label: nm.trim() } : p;
+    });
+  }
+
   // GetModelAttribute: show R/G/B ports for color attrs, Value port for others
   if (nodeData.nodeType === 'getModelAttribute') {
     const isColor = nodeData.config.isColorAttr;
@@ -543,6 +555,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
       const yVal = yConn ? '?' : ((nodeData.config._port_y as string) ?? '0');
       const unary = op === 'sqrt' || op === 'abs';
       collapsedLabel = unary ? `${op}(${xVal})` : `${xVal} ${op} ${yVal}`;
+    } else if (nodeData.nodeType === 'expression') {
+      const expr = ((nodeData.config.expression as string) ?? '').trim();
+      collapsedLabel = expr ? (expr.length > 18 ? `${expr.slice(0, 18)}…` : expr) : 'Expression';
     } else if (nodeData.nodeType === 'logicOperator') {
       collapsedLabel = (nodeData.config.operation as string) || 'OR';
     } else if (nodeData.nodeType === 'groupStatement') {
@@ -1373,6 +1388,93 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <option value="mean">Mean</option>
           </select>
         )}
+
+        {nodeData.nodeType === 'expression' && (() => {
+          const visibleCount = clampVisibleCount(nodeData.config.visibleCount);
+          const formula = (nodeData.config.expression as string) ?? '';
+          const { map, errors: varErrors } = buildVarMap(nodeData.config, visibleCount);
+          let parseErr: string | null = varErrors[0] ?? null;
+          if (!parseErr && formula.trim()) {
+            const res = parseExpression(formula, map);
+            if ('error' in res) parseErr = res.error;
+          }
+          const setVisible = (next: number) => {
+            const clamped = Math.max(1, Math.min(MAX_VISIBLE, next));
+            const newConfig: NodeConfig = { ...nodeData.config, visibleCount: clamped };
+            // Hidden ports: drop their name + inline value so config stays clean.
+            for (let i = clamped; i < MAX_VISIBLE; i++) {
+              const pid: string = VISIBLE_PORT_IDS[i]!;
+              delete newConfig[`_varName_${pid}`];
+              delete newConfig[`_port_${pid}`];
+            }
+            updateNodeData(id, { ...nodeData, config: newConfig });
+          };
+          return (
+            <>
+              <textarea
+                className={styles.input}
+                style={{ fontFamily: 'monospace', resize: 'vertical', boxSizing: 'border-box' }}
+                rows={3}
+                value={formula}
+                placeholder="e.g. a + b*c - pow(d, 2)"
+                spellCheck={false}
+                onChange={e => updateConfig('expression', e.target.value)}
+                onMouseDown={stopDrag}
+                onDoubleClick={stopAll}
+              />
+              {parseErr && (
+                <div style={{ color: '#f44336', fontSize: '0.65rem' }}>{parseErr}</div>
+              )}
+              {Array.from({ length: visibleCount }, (_, i) => {
+                const pid = VISIBLE_PORT_IDS[i]!;
+                return (
+                  <div key={pid} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.6rem', opacity: 0.6, width: 10, textAlign: 'center' }}>{pid}</span>
+                    <input
+                      className={styles.input}
+                      style={{ flex: 1 }}
+                      type="text"
+                      value={(nodeData.config[`_varName_${pid}`] as string) ?? ''}
+                      placeholder={pid}
+                      spellCheck={false}
+                      onChange={e => updateConfig(`_varName_${pid}`, e.target.value)}
+                      onMouseDown={stopDrag}
+                      onDoubleClick={stopAll}
+                    />
+                  </div>
+                );
+              })}
+              <div style={{ display: 'flex', gap: 4, alignItems: 'center', justifyContent: 'flex-end' }}>
+                <button
+                  className={styles.select}
+                  style={{
+                    cursor: visibleCount <= 1 ? 'not-allowed' : 'pointer',
+                    opacity: visibleCount <= 1 ? 0.4 : 1,
+                    textAlign: 'center', flex: 1,
+                  }}
+                  onClick={() => setVisible(visibleCount - 1)}
+                  disabled={visibleCount <= 1}
+                  title="Remove last input port"
+                >
+                  −
+                </button>
+                <button
+                  className={styles.select}
+                  style={{
+                    cursor: visibleCount >= MAX_VISIBLE ? 'not-allowed' : 'pointer',
+                    opacity: visibleCount >= MAX_VISIBLE ? 0.4 : 1,
+                    textAlign: 'center', flex: 1,
+                  }}
+                  onClick={() => setVisible(visibleCount + 1)}
+                  disabled={visibleCount >= MAX_VISIBLE}
+                  title="Add another input port"
+                >
+                  +
+                </button>
+              </div>
+            </>
+          );
+        })()}
 
         {nodeData.nodeType === 'groupStatement' && (
           <select
