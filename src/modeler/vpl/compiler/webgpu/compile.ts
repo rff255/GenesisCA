@@ -2022,7 +2022,10 @@ function compileValueNode(ctx: CompileCtx, nodeId: string, portId: string = 'val
     } else {
       const inlineVal = getInlineValue(port, node.data.config);
       if (inlineVal !== undefined) {
-        inputs[port.id] = inlineValueRef(inlineVal, port.dataType === 'float');
+        // `any` ports (arithmeticOperator x/y, proportionMap in/out range, etc.)
+        // accept fractional inline values; treating them as i32 would truncate the
+        // value via `n | 0` inside inlineValueRef before the f32 op ever ran.
+        inputs[port.id] = inlineValueRef(inlineVal, port.dataType === 'float' || port.dataType === 'any');
       }
     }
   }
