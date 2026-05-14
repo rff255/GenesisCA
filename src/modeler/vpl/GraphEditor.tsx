@@ -167,21 +167,28 @@ const PANEL_DRAG_SNAP_RADIUS_PX = 20;
 // ---------------------------------------------------------------------------
 
 function toRFNodes(graphNodes: GraphNode[]): Node[] {
-  const existingIds = new Set(graphNodes.map(n => n.id));
+  // Defensive parentId scrub: groups are free-floating area markers, not
+  // parents. The LOAD_MODEL migration normally handles this, but if any
+  // legacy `data.parentId` slips through (e.g., from a state set BEFORE
+  // the migration ran), strip it here too. Position is already absolute
+  // post-migration; this is purely a data-hygiene step.
   return graphNodes.map(n => {
+    const d = n.data as Record<string, unknown>;
+    const cleanData = ('parentId' in d)
+      ? (() => { const c = { ...d }; delete c.parentId; return c as GraphNode['data']; })()
+      : n.data;
     const rfNode: Node = {
       id: n.id,
       type: n.type === 'groupNode' ? 'groupNode' : n.type === 'commentNode' ? 'commentNode' : 'caNode',
       position: n.position,
-      data: n.data,
+      data: cleanData,
     };
-    const d = n.data as Record<string, unknown>;
-    // Heal orphan parentId refs from older/corrupt files — drop if parent no longer exists
-    if (d.parentId && existingIds.has(d.parentId as string)) rfNode.parentId = d.parentId as string;
     if (n.type === 'groupNode') {
       rfNode.style = { width: (d.width as number) || 300, height: (d.height as number) || 200 };
       rfNode.zIndex = -1;
-      rfNode.dragHandle = '[data-drag-handle]';
+      // No dragHandle constraint: with groups as free-floating area markers,
+      // the entire group is draggable. Interactive widgets inside the header
+      // opt out via the React-Flow `nodrag` / `nopan` class.
     } else if (n.type === 'commentNode') {
       rfNode.style = { width: (d.width as number) || 200, height: (d.height as number) || 80 };
     }
@@ -201,7 +208,6 @@ function toRFEdges(graphEdges: GraphEdge[]): Edge[] {
 }
 
 function toGraphNodes(rfNodes: Node[]): GraphNode[] {
-  const existingIds = new Set(rfNodes.map(n => n.id));
   return rfNodes.map(n => {
     const nAny = n as { width?: number; height?: number; measured?: { width?: number; height?: number } };
     const rawStyle = n.style as Record<string, number> | undefined;
@@ -215,8 +221,6 @@ function toGraphNodes(rfNodes: Node[]): GraphNode[] {
       position: n.position,
       data: {
         ...(n.data as GraphNode['data']),
-        // Never serialize orphan parentId refs — belt-and-suspenders against cascade-delete gaps
-        ...(n.parentId && existingIds.has(n.parentId) ? { parentId: n.parentId } : {}),
         ...(needsSize && mW != null ? { width: mW } : {}),
         ...(needsSize && mH != null ? { height: mH } : {}),
       },
@@ -234,60 +238,31 @@ function toGraphEdges(rfEdges: Edge[]): GraphEdge[] {
   }));
 }
 
-/** Recalculate group dimensions to fit children. allowShrink=true on load. */
-function resizeGroupsToFit(nds: Node[], allowShrink: boolean): Node[] {
-  const groups = nds.filter(n => n.type === 'groupNode');
-  if (groups.length === 0) return nds;
-  const nodeW = 200, nodeH = 100, collapsedH = 32, pad = 30, topPad = 40;
-  let changed = false;
+/** Approximate rendered dimensions for a node. Used by the group-drag intercept
+ *  to decide which nodes are inside a group's rectangle at drag-start. Mirrors
+ *  the fallbacks used elsewhere (NODE_W/H, collapsedH, groupNode/commentNode
+ *  style). */
+function nodeSize(n: Node): { w: number; h: number } {
+  const nAny = n as { width?: number; height?: number; measured?: { width?: number; height?: number } };
+  const style = n.style as Record<string, number> | undefined;
+  const data = n.data as Record<string, unknown> | undefined;
+  const isCollapsed = !!data?.isCollapsed;
+  const w = nAny.measured?.width
+    ?? nAny.width
+    ?? (n.type === 'groupNode' || n.type === 'commentNode' ? (style?.width ?? 200) : 200);
+  const h = nAny.measured?.height
+    ?? nAny.height
+    ?? (n.type === 'groupNode'
+      ? (style?.height ?? 200)
+      : n.type === 'commentNode'
+        ? (style?.height ?? 80)
+        : isCollapsed ? 32 : 100);
+  return { w, h };
+}
 
-  const updated = nds.map(n => {
-    if (n.type !== 'groupNode') return n;
-    const children = nds.filter(c => c.parentId === n.id);
-    if (children.length === 0) return n;
-
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const c of children) {
-      const cStyle = c.style as Record<string, number> | undefined;
-      const cData = c.data as Record<string, unknown> | undefined;
-      const cAny = c as { width?: number; height?: number; measured?: { width?: number; height?: number } };
-      const isCollapsed = !!cData?.isCollapsed;
-      // Prefer React Flow's measured dimensions — those reflect the actual rendered size
-      // including collapsed-vs-expanded on both axes. Fall back through style, then sensible defaults.
-      const measuredW = cAny.measured?.width ?? cAny.width;
-      const measuredH = cAny.measured?.height ?? cAny.height;
-      const cW = measuredW ?? (c.type === 'groupNode' || c.type === 'commentNode'
-        ? (cStyle?.width ?? nodeW)
-        : nodeW);
-      const cH = measuredH ?? (c.type === 'groupNode'
-        ? (cStyle?.height ?? 200)
-        : c.type === 'commentNode'
-          ? (cStyle?.height ?? 80)
-          : isCollapsed ? collapsedH : nodeH);
-      minX = Math.min(minX, c.position.x);
-      minY = Math.min(minY, c.position.y);
-      maxX = Math.max(maxX, c.position.x + cW);
-      maxY = Math.max(maxY, c.position.y + cH);
-    }
-
-    const curStyle = n.style as Record<string, number> | undefined;
-    const curW = curStyle?.width || 300;
-    const curH = curStyle?.height || 200;
-
-    const shiftX = minX < pad ? pad - minX : 0;
-    const shiftY = minY < topPad ? topPad - minY : 0;
-    const idealW = maxX + pad + shiftX;
-    const idealH = maxY + pad + shiftY;
-
-    const newW = allowShrink ? idealW : Math.max(curW, idealW);
-    const newH = allowShrink ? idealH : Math.max(curH, idealH);
-
-    if (Math.abs(newW - curW) < 1 && Math.abs(newH - curH) < 1) return n;
-    changed = true;
-    return { ...n, style: { ...n.style, width: newW, height: newH } };
-  });
-
-  return changed ? updated : nds;
+function nodeCenter(n: Node): { x: number; y: number } {
+  const { w, h } = nodeSize(n);
+  return { x: n.position.x + w / 2, y: n.position.y + h / 2 };
 }
 
 // ---------------------------------------------------------------------------
@@ -348,6 +323,41 @@ export function GraphEditorInner() {
 
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
+
+  // Group drag state: captured on onNodeDragStart, applied per-tick inside
+  // handleNodesChange. Membership is frozen at drag-start so dragging a group
+  // translates exactly the set of nodes that were inside its rectangle when
+  // the drag began — moving over other nodes mid-drag doesn't capture them.
+  const groupDragRef = useRef<{
+    groupId: string;
+    lastPos: { x: number; y: number };
+    movedIds: string[];
+  } | null>(null);
+
+  // Snapshot of the currently selected node ids, captured on RMB mousedown in
+  // the capture phase BEFORE React Flow's internal handlers can collapse a
+  // multi-selection. Read by onNodeContextMenu / openContextMenu to keep the
+  // "Selection (N)" context menu and outline consistent.
+  const preSelectionRef = useRef<string[]>([]);
+
+  // Box-select modifier state. Plain LMB-drag on the pane runs React Flow's
+  // default "replace selection with intersected nodes" behavior. When the
+  // user starts the drag with Shift or Ctrl held, `handleNodesChange`
+  // intercepts the per-tick select changes so the final selection is
+  // pre ∪ box (Shift = add) or pre \ box (Ctrl = remove). Captured on the
+  // capture-phase pointerdown listener so React Flow's own handlers can't
+  // observe the modifier and steer behavior themselves.
+  const boxSelectModeRef = useRef<'replace' | 'add' | 'remove'>('replace');
+  const boxSelectActiveRef = useRef(false);
+  const preBoxSelectionRef = useRef<Set<string>>(new Set());
+
+  // True while LMB is held after pressing on the pane (a potential box-select
+  // drag). Used by `handleEdgesChange` to drop edge `select` changes so the
+  // box-select doesn't auto-highlight edges connected to the boxed nodes —
+  // an edge has two endpoints, so "is the edge selected when only one end is"
+  // has no good answer. Box-select is nodes-only; edges respond only to
+  // direct edge interactions (click, double-click).
+  const paneBoxDragRef = useRef(false);
 
   // Perf: maintain a graph-level map of connected input handles per node so each CaNode can
   // subscribe once via useSyncExternalStore instead of scanning all edges on every store event.
@@ -450,21 +460,90 @@ export function GraphEditorInner() {
       }
     }
     // Persist the scope so a Modeler ↔ Simulator round-trip lands the user
-    // back in the same scope they were editing.
+    // back in the same scope they were editing. If we have a saved viewport
+    // for the scope we're switching INTO, restore it; otherwise auto-fit.
+    // Using setViewport (not setting `defaultViewport`) because the component
+    // is already mounted — `defaultViewport` is initial-render only.
     setSavedCurrentScope(currentScope);
-    // Shrink-to-fit groups on load. If we have a saved viewport for the
-    // scope we're switching INTO, restore it; otherwise auto-fit. Using
-    // setViewport (not setting `defaultViewport`) because the component is
-    // already mounted — `defaultViewport` is initial-render only.
     clearHistory();
     setTimeout(() => {
-      setNodes(nds => resizeGroupsToFit(nds, true));
       const saved = getSavedGraphViewport(scopeId);
       if (saved) rfInstance.current?.setViewport(saved);
       else rfInstance.current?.fitView();
     }, 50);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentScope, modelVersion]);
+
+  // Capture-phase mousedown on the viewport: snapshot the current multi-node
+  // selection BEFORE React Flow's internal handlers run, so onNodeContextMenu
+  // can decide whether to show the "Selection (N)" menu even when RF has
+  // already collapsed the selection by the time `contextmenu` fires.
+  // (mousedown precedes contextmenu in the DOM event order.)
+  //
+  // The same listener also detects modifier-held LMB-drags that start on the
+  // pane and primes `boxSelectActiveRef` / `boxSelectModeRef` so that the
+  // intercept inside `handleNodesChange` can convert React Flow's default
+  // "replace" box-select into "add" (Shift) or "remove" (Ctrl/Meta).
+  useEffect(() => {
+    const el = document.querySelector('.react-flow') as HTMLElement | null;
+    if (!el) return;
+    const downHandler = (e: PointerEvent) => {
+      // RMB: snapshot selection for the context-menu preservation fix.
+      if (e.button === 2) {
+        preSelectionRef.current = nodesRef.current
+          .filter(n => n.selected)
+          .map(n => n.id);
+        return;
+      }
+      // LMB on the pane: detect modifier for box-select add/remove.
+      if (e.button !== 0) return;
+      const target = e.target as HTMLElement | null;
+      // Box-select only starts when the LMB-down lands on the pane itself
+      // (not a node, edge, or any inner element). React Flow's own
+      // selection-on-drag uses the same test.
+      if (!target || !target.classList.contains('react-flow__pane')) {
+        boxSelectActiveRef.current = false;
+        boxSelectModeRef.current = 'replace';
+        paneBoxDragRef.current = false;
+        return;
+      }
+      paneBoxDragRef.current = true;
+      if (e.shiftKey) {
+        boxSelectModeRef.current = 'add';
+        boxSelectActiveRef.current = true;
+      } else if (e.ctrlKey || e.metaKey) {
+        boxSelectModeRef.current = 'remove';
+        boxSelectActiveRef.current = true;
+      } else {
+        boxSelectModeRef.current = 'replace';
+        boxSelectActiveRef.current = false;
+      }
+      if (boxSelectActiveRef.current) {
+        preBoxSelectionRef.current = new Set(
+          nodesRef.current.filter(n => n.selected).map(n => n.id),
+        );
+      }
+    };
+    const upHandler = () => {
+      boxSelectActiveRef.current = false;
+      paneBoxDragRef.current = false;
+    };
+    el.addEventListener('pointerdown', downHandler, true);
+    // Listen on document so we catch releases outside the React Flow element.
+    document.addEventListener('pointerup', upHandler, true);
+    return () => {
+      el.removeEventListener('pointerdown', downHandler, true);
+      document.removeEventListener('pointerup', upHandler, true);
+    };
+  }, []);
+
+  // (Removed: one-shot parentId scrub effect.) Even when it returned `nds`
+  // unchanged, the setNodes call invalidated React Flow's internal
+  // handleBounds for every node — which caused box-select to inadvertently
+  // include any not-yet-remeasured node (including legitimate non-targets)
+  // via `forceInitialRender = !handleBounds`. LOAD_MODEL migration + the
+  // data.parentId strip in toRFNodes already handle fresh loads; legacy
+  // HMR state can be recovered by a page reload.
 
   // --- Connection validation ---
   const isValidConnection = useCallback(
@@ -573,35 +652,112 @@ export function GraphEditorInner() {
         });
       }
 
-      // Cascade-delete descendants when a group (or any parent node) is removed.
-      // Prevents orphaned parentId refs in saved models.
-      const removeIds = new Set<string>();
-      for (const c of changes) {
-        if (c.type === 'remove') removeIds.add(c.id);
-      }
-      if (removeIds.size > 0) {
-        const cascadeAdditions: string[] = [];
-        let frontier = Array.from(removeIds);
-        while (frontier.length > 0) {
-          const next: string[] = [];
-          for (const parentId of frontier) {
-            for (const n of nodesRef.current) {
-              if (n.parentId !== parentId || removeIds.has(n.id)) continue;
-              const nt = (n.data as Record<string, unknown> | undefined)?.nodeType;
-              // Never cascade to macro boundary nodes
-              if (nt === 'macroInput' || nt === 'macroOutput') continue;
-              removeIds.add(n.id);
-              cascadeAdditions.push(n.id);
-              next.push(n.id);
-            }
-          }
-          frontier = next;
+      // Box-select modifier intercept. When the user started the LMB-drag on
+      // the pane with Shift or Ctrl/Meta held, React Flow's default behavior
+      // ("replace selection with intersected") is rewritten to:
+      //   - Shift → pre ∪ box  (add intersected to existing selection)
+      //   - Ctrl  → pre \ box  (remove intersected from existing selection)
+      // The intercept runs on every per-tick batch of select changes so the
+      // visible selection during the drag already reflects the modifier (no
+      // flicker of the pre-existing selection during the drag).
+      //
+      // CRITICAL: React Flow's `getSelectionChanges(..., mutateItem=true)`
+      // mutates the internal `nodeLookup` BEFORE these changes are dispatched
+      // — every node RF emits a change for has its `internalNode.selected`
+      // pre-mutated. If we drop or override one of those changes without
+      // emitting a NEW select change for the same id, `applyNodeChanges`
+      // won't create a new user-node reference for that id, and the next
+      // `adoptUserNodes` pass will preserve the corrupted (mutated) internal
+      // entry via its `checkEquality` shortcut. The visible state (from the
+      // user-prop nodes) and the lookup (used by node drag, NodesSelection,
+      // arrow-key move, etc.) drift apart, and only the most recently
+      // touched nodes actually move on a subsequent drag. So we ALWAYS
+      // emit a fresh select change for every id RF touched, with our
+      // desired final value — guarantees a new ref → forced rebuild.
+      if (boxSelectActiveRef.current && changes.some(c => c.type === 'select')) {
+        const mode = boxSelectModeRef.current;
+        const preSelected = preBoxSelectionRef.current;
+        // boxSet = nodes RF wants selected after this tick's changes apply.
+        // Compute by starting from the pre-tick state (nodesRef, which is
+        // still on the previous render's data) and overlaying the changes.
+        const boxSet = new Set<string>();
+        for (const n of nodesRef.current) if (n.selected) boxSet.add(n.id);
+        const touchedIds = new Set<string>();
+        for (const c of changes) {
+          if (c.type !== 'select') continue;
+          touchedIds.add(c.id);
+          if (c.selected) boxSet.add(c.id);
+          else boxSet.delete(c.id);
         }
-        if (cascadeAdditions.length > 0) {
-          changes = [
-            ...changes,
-            ...cascadeAdditions.map(id => ({ type: 'remove' as const, id })),
-          ];
+        // Desired final selection per mode.
+        const finalSet = new Set<string>();
+        if (mode === 'add') {
+          preSelected.forEach(id => finalSet.add(id));
+          boxSet.forEach(id => finalSet.add(id));
+        } else if (mode === 'remove') {
+          preSelected.forEach(id => { if (!boxSet.has(id)) finalSet.add(id); });
+        }
+        const nonSelect = changes.filter(c => c.type !== 'select');
+        const newSelect: typeof changes = [];
+        // (1) For every id RF touched, emit a select with our desired value
+        //     even if it matches RF's value or the previous state — see the
+        //     CRITICAL comment above. The new ref guarantees a clean rebuild.
+        touchedIds.forEach(id => {
+          newSelect.push({ type: 'select', id, selected: finalSet.has(id) });
+        });
+        // (2) For ids RF did NOT touch but where our desired state differs
+        //     from the pre-tick state, emit our own select change. RF didn't
+        //     mutate the lookup for these, so a normal diff is sufficient.
+        for (const n of nodesRef.current) {
+          if (touchedIds.has(n.id)) continue;
+          const desired = finalSet.has(n.id);
+          if (!!n.selected !== desired) {
+            newSelect.push({ type: 'select', id: n.id, selected: desired });
+          }
+        }
+        changes = [...nonSelect, ...newSelect];
+      }
+
+      // Group drag intercept: when a group is being dragged, translate every
+      // node whose center was inside the group's rect at drag-start by the
+      // same per-tick delta. Membership is frozen for the drag duration so
+      // nodes outside the rect at drag-start don't get sucked in mid-drag.
+      const dragState = groupDragRef.current;
+      if (dragState) {
+        const groupChange = changes.find(
+          c => c.type === 'position' && c.id === dragState.groupId && c.position,
+        ) as { type: 'position'; id: string; position: { x: number; y: number } } | undefined;
+        if (groupChange) {
+          let dx = groupChange.position.x - dragState.lastPos.x;
+          let dy = groupChange.position.y - dragState.lastPos.y;
+          if (snapEnabled) {
+            dx = Math.round(dx / 20) * 20;
+            dy = Math.round(dy / 20) * 20;
+          }
+          if (dx !== 0 || dy !== 0) {
+            dragState.lastPos = {
+              x: dragState.lastPos.x + dx,
+              y: dragState.lastPos.y + dy,
+            };
+            const alreadyMoving = new Set<string>();
+            for (const c of changes) {
+              if (c.type === 'position' && c.position) alreadyMoving.add(c.id);
+            }
+            const extra = dragState.movedIds
+              .filter(id => !alreadyMoving.has(id))
+              .map(id => {
+                const cur = nodesRef.current.find(n => n.id === id);
+                if (!cur) return null;
+                return {
+                  type: 'position' as const,
+                  id,
+                  position: { x: cur.position.x + dx, y: cur.position.y + dy },
+                  dragging: true,
+                };
+              })
+              .filter((c): c is NonNullable<typeof c> => c !== null);
+            if (extra.length > 0) changes = [...changes, ...extra];
+          }
         }
       }
 
@@ -616,20 +772,6 @@ export function GraphEditorInner() {
 
       onNodesChange(changes);
 
-      // Auto-resize groups to fit children (shrink + expand) on drag end or when
-      // a child's rendered dimensions change (e.g. collapse/uncollapse)
-      const hasPositionEnd = changes.some(
-        c => c.type === 'position' && 'dragging' in c && !c.dragging,
-      );
-      const hasChildDimensionsChange = changes.some(c => {
-        if (c.type !== 'dimensions') return false;
-        const node = nodesRef.current.find(n => n.id === c.id);
-        return !!node?.parentId;
-      });
-      if (hasPositionEnd || hasChildDimensionsChange) {
-        setNodes(nds => resizeGroupsToFit(nds, true));
-      }
-
       const needsSync = changes.some(
         c => c.type === 'remove' ||
              (c.type === 'position' && 'dragging' in c && !c.dragging) ||
@@ -637,11 +779,23 @@ export function GraphEditorInner() {
       );
       if (needsSync) scheduleSync();
     },
-    [onNodesChange, setNodes, scheduleSync],
+    [onNodesChange, scheduleSync, snapEnabled],
   );
 
   const handleEdgesChange = useCallback(
     (changes: Parameters<typeof onEdgesChange>[0]) => {
+      // Box-select is nodes-only. During a pane-initiated LMB drag, React
+      // Flow's box-select pointermove also generates select changes for every
+      // edge connected to a boxed node (see @xyflow/react: it iterates the
+      // connectionLookup and unions edges into `selectedEdgeIds`). The
+      // semantics are awkward — an edge has two endpoints and there's no
+      // sensible answer to "is the edge selected when only one end is" — so
+      // we drop edge select changes for the duration of the pane drag.
+      // Direct edge interactions (click, double-click) are unaffected because
+      // their pointerdown lands on the edge, not the pane.
+      if (paneBoxDragRef.current) {
+        changes = changes.filter(c => c.type !== 'select');
+      }
       if (changes.some(c => c.type === 'remove')) pushCurrentSnapshot();
       onEdgesChange(changes);
       if (changes.some(c => c.type === 'remove')) scheduleSync();
@@ -649,7 +803,74 @@ export function GraphEditorInner() {
     [onEdgesChange, scheduleSync, pushCurrentSnapshot],
   );
 
+  // Group drag: snapshot contained nodes at drag-start so the handleNodesChange
+  // intercept can translate them in lock-step with the group. Membership is
+  // frozen for the drag duration — nodes whose center wasn't inside the rect
+  // at drag-start won't be picked up mid-drag.
+  const onNodeDragStart = useCallback(
+    (_event: React.MouseEvent, node: Node) => {
+      if (node.type !== 'groupNode') return;
+      const { w, h } = nodeSize(node);
+      const rect = {
+        x1: node.position.x,
+        y1: node.position.y,
+        x2: node.position.x + w,
+        y2: node.position.y + h,
+      };
+      const movedIds: string[] = [];
+      for (const n of nodesRef.current) {
+        if (n.id === node.id) continue;
+        if (n.type === 'groupNode') continue;
+        const c = nodeCenter(n);
+        if (c.x > rect.x1 && c.x < rect.x2 && c.y > rect.y1 && c.y < rect.y2) {
+          movedIds.push(n.id);
+        }
+      }
+      groupDragRef.current = {
+        groupId: node.id,
+        lastPos: { x: node.position.x, y: node.position.y },
+        movedIds,
+      };
+      // Snapshot covers both group AND contained nodes so undo restores
+      // everything in one step.
+      pushCurrentSnapshot();
+    },
+    [],
+  );
+
+  const onNodeDragStop = useCallback(
+    (_event: React.MouseEvent, node: Node) => {
+      if (groupDragRef.current?.groupId === node.id) {
+        groupDragRef.current = null;
+      }
+    },
+    [],
+  );
+
   // --- Unified context menu ---
+  // Compute the "logical" selection at menu-open time. The capture-phase
+  // mousedown listener (see effect above) has already stashed the pre-RMB
+  // selection into preSelectionRef BEFORE React Flow had a chance to collapse
+  // it. Prefer that ref when it indicates a multi-selection containing the
+  // right-clicked node; otherwise fall back to React Flow's live state.
+  const resolveSelectionForMenu = useCallback(
+    (rfSelected: Node[], nodeId: string | undefined): Node[] => {
+      const pre = preSelectionRef.current;
+      if (pre.length >= 2) {
+        // RMB happened on or near a multi-selection. If a specific node was
+        // clicked, only honour the snapshot when that node was part of it —
+        // RMB on a node outside the selection should still target that node.
+        if (!nodeId || pre.includes(nodeId)) {
+          const map = new Map(nodesRef.current.map(n => [n.id, n]));
+          const resolved = pre.map(id => map.get(id)).filter((n): n is Node => !!n);
+          if (resolved.length >= 2) return resolved;
+        }
+      }
+      return rfSelected;
+    },
+    [],
+  );
+
   const openContextMenu = useCallback(
     (event: MouseEvent | React.MouseEvent, nodeId?: string) => {
       event.preventDefault();
@@ -658,7 +879,10 @@ export function GraphEditorInner() {
       if (!bounds || !rf) return;
       const position = rf.screenToFlowPosition({ x: event.clientX, y: event.clientY });
 
-      const selectedNodes = getNodes().filter(n => n.selected);
+      const selectedNodes = resolveSelectionForMenu(
+        getNodes().filter(n => n.selected),
+        nodeId,
+      );
 
       let target: ContextMenuState['target'];
 
@@ -694,7 +918,7 @@ export function GraphEditorInner() {
         target,
       });
     },
-    [getNodes],
+    [getNodes, resolveSelectionForMenu],
   );
 
   const onPaneContextMenu = useCallback(
@@ -705,19 +929,21 @@ export function GraphEditorInner() {
   const onNodeContextMenu = useCallback(
     (event: React.MouseEvent, node: Node) => {
       event.stopPropagation();
-      // React Flow's default RMB behaviour can collapse a multi-selection to
-      // just the clicked node before our context-menu code inspects state.
-      // Snapshot the selection synchronously and, if the clicked node is part
-      // of a multi-selection, re-assert it so the outline and the menu's
-      // "Selection (N)" target both stay consistent.
-      const preSelectedIds = getNodes().filter(n => n.selected).map(n => n.id);
-      if (preSelectedIds.length >= 2 && preSelectedIds.includes(node.id)) {
-        const keep = new Set(preSelectedIds);
-        setNodes(nds => nds.map(n => (keep.has(n.id) ? (n.selected ? n : { ...n, selected: true }) : (n.selected ? { ...n, selected: false } : n))));
+      // If React Flow's internal mousedown collapsed the multi-selection by
+      // the time contextmenu fires, re-assert it from preSelectionRef so the
+      // outline redraws on every previously-selected node and the menu uses
+      // the same logical target. The preSelectionRef snapshot was taken in
+      // the capture-phase mousedown listener BEFORE RF could modify state.
+      const pre = preSelectionRef.current;
+      if (pre.length >= 2 && pre.includes(node.id)) {
+        const keep = new Set(pre);
+        setNodes(nds => nds.map(n => (keep.has(n.id)
+          ? (n.selected ? n : { ...n, selected: true })
+          : (n.selected ? { ...n, selected: false } : n))));
       }
       openContextMenu(event, node.id);
     },
-    [openContextMenu, getNodes, setNodes],
+    [openContextMenu, setNodes],
   );
 
   // --- Clamp context menu to viewport bounds + submenu direction ---
@@ -1078,15 +1304,10 @@ export function GraphEditorInner() {
         position: { x: sourceNode.position.x + 30, y: sourceNode.position.y + 30 },
         data: dupData,
       };
-      // Preserve parent relationship (keep position relative to group)
-      if (sourceNode.parentId) {
-        newNode.parentId = sourceNode.parentId;
-      }
       if (sourceNode.type === 'groupNode') {
         const d = sourceNode.data as Record<string, unknown>;
         newNode.style = { width: (d.width as number) || 300, height: (d.height as number) || 200 };
         newNode.zIndex = -1;
-        newNode.dragHandle = '[data-drag-handle]';
       }
       return [...nds, newNode];
     });
@@ -1162,15 +1383,11 @@ export function GraphEditorInner() {
     }
     pushCurrentSnapshot();
 
-    // Compute clipboard top-left corner (top-level nodes only) — paste anchors top-left at cursor
-    const topLevel = clipboard.nodes.filter(n => {
-      const d = n.data as Record<string, unknown>;
-      return !d.parentId;
-    });
+    // Compute clipboard top-left corner — paste anchors top-left at cursor
     let cx = 0, cy = 0;
-    if (topLevel.length > 0) {
+    if (clipboard.nodes.length > 0) {
       let minX = Infinity, minY = Infinity;
-      for (const n of topLevel) {
+      for (const n of clipboard.nodes) {
         minX = Math.min(minX, n.position.x);
         minY = Math.min(minY, n.position.y);
       }
@@ -1235,13 +1452,7 @@ export function GraphEditorInner() {
 
     const pastedRFNodes: Node[] = clipboard.nodes.map(n => {
       const clonedData = JSON.parse(JSON.stringify(n.data)) as Record<string, unknown>;
-      const oldParentId = clonedData.parentId as string | undefined;
-      const newParentId = oldParentId ? idMap.get(oldParentId) : undefined;
-      if (newParentId) {
-        clonedData.parentId = newParentId;
-      } else {
-        delete clonedData.parentId;
-      }
+      delete clonedData.parentId; // legacy hygiene — groups no longer own children
       const newDefId = macroDefRemap.get(n.id);
       if (newDefId) {
         const cfg = (clonedData.config as Record<string, unknown> | undefined) ?? {};
@@ -1250,13 +1461,10 @@ export function GraphEditorInner() {
       return {
         id: idMap.get(n.id)!,
         type: n.type === 'groupNode' ? 'groupNode' : n.type === 'commentNode' ? 'commentNode' : 'caNode',
-        position: newParentId
-          ? { x: n.position.x, y: n.position.y }
-          : { x: n.position.x + offsetX, y: n.position.y + offsetY },
+        position: { x: n.position.x + offsetX, y: n.position.y + offsetY },
         data: clonedData,
         selected: true,
-        ...(newParentId ? { parentId: newParentId } : {}),
-        ...(n.type === 'groupNode' ? { style: { width: (clonedData.width as number) || 300, height: (clonedData.height as number) || 200 }, zIndex: -1, dragHandle: '[data-drag-handle]' } : {}),
+        ...(n.type === 'groupNode' ? { style: { width: (clonedData.width as number) || 300, height: (clonedData.height as number) || 200 }, zIndex: -1 } : {}),
       };
     });
 
@@ -1271,13 +1479,6 @@ export function GraphEditorInner() {
         targetHandle: e.targetHandle,
         style: { stroke: e.sourceHandle.includes('flow') ? '#66bb6a' : '#4cc9f0', strokeWidth: 2 },
       }));
-
-    // Sort so group nodes come before their children (React Flow requires parent first)
-    pastedRFNodes.sort((a, b) => {
-      if (a.type === 'groupNode' && b.parentId === a.id) return -1;
-      if (b.type === 'groupNode' && a.parentId === b.id) return 1;
-      return 0;
-    });
 
     // Deselect existing nodes AND edges; otherwise a follow-up delete of the pasted
     // selection would also nuke the still-selected original edges.
@@ -1330,39 +1531,20 @@ export function GraphEditorInner() {
 
     const dupeNodes: Node[] = srcNodes.map(n => {
       const clonedData = JSON.parse(JSON.stringify(n.data)) as Record<string, unknown>;
-      const oldParentId = clonedData.parentId as string | undefined;
-      const newParentId = oldParentId ? idMap.get(oldParentId) : undefined;
-      if (newParentId) { clonedData.parentId = newParentId; } else { delete clonedData.parentId; }
+      delete clonedData.parentId; // legacy hygiene — groups no longer own children
       const newDefId = macroDefRemap.get(n.id);
       if (newDefId) {
         const cfg = (clonedData.config as Record<string, unknown> | undefined) ?? {};
         clonedData.config = { ...cfg, macroDefId: newDefId };
       }
 
-      // Calculate position: convert parent-relative to absolute if orphaning
-      let position: { x: number; y: number };
-      if (newParentId) {
-        // Parent is also duplicated — keep relative position
-        position = { x: n.position.x, y: n.position.y };
-      } else if (oldParentId && !newParentId) {
-        // Orphaned from parent not in selection — convert to absolute
-        const parentNode = nodes.find(p => p.id === oldParentId);
-        position = {
-          x: (parentNode?.position.x ?? 0) + n.position.x + 30,
-          y: (parentNode?.position.y ?? 0) + n.position.y + 30,
-        };
-      } else {
-        position = { x: n.position.x + 30, y: n.position.y + 30 };
-      }
-
       return {
         id: idMap.get(n.id)!,
         type: n.type === 'groupNode' ? 'groupNode' : n.type === 'commentNode' ? 'commentNode' : 'caNode',
-        position,
+        position: { x: n.position.x + 30, y: n.position.y + 30 },
         data: clonedData,
         selected: true,
-        ...(newParentId ? { parentId: newParentId } : {}),
-        ...(n.type === 'groupNode' ? { style: { width: (clonedData.width as number) || 300, height: (clonedData.height as number) || 200 }, zIndex: -1, dragHandle: '[data-drag-handle]' } : {}),
+        ...(n.type === 'groupNode' ? { style: { width: (clonedData.width as number) || 300, height: (clonedData.height as number) || 200 }, zIndex: -1 } : {}),
       };
     });
 
@@ -1377,12 +1559,6 @@ export function GraphEditorInner() {
         targetHandle: e.targetHandle,
         style: { stroke: e.sourceHandle.includes('flow') ? '#66bb6a' : '#4cc9f0', strokeWidth: 2 },
       }));
-
-    dupeNodes.sort((a, b) => {
-      if (a.type === 'groupNode' && b.parentId === a.id) return -1;
-      if (b.type === 'groupNode' && a.parentId === b.id) return 1;
-      return 0;
-    });
 
     setNodes(nds => [...nds.map(n => ({ ...n, selected: false })), ...dupeNodes]);
     setEdges(eds => [...eds.map(e => ({ ...e, selected: false })), ...dupeEdges]);
@@ -1456,93 +1632,84 @@ export function GraphEditorInner() {
   }, [contextMenu, setNodes, scheduleSync]);
 
   // --- Group actions ---
+  // Groups are free-floating area markers — they don't own their children.
+  // Creating a group just drops a rectangle around the selection's bbox; the
+  // selected nodes stay where they are (no reparenting, no relative coords).
+  // Dragging the group's header translates whichever nodes have their center
+  // inside the rect AT DRAG-START (see onNodeDragStart). Deleting a group
+  // only removes the rect — contained nodes stay put.
+
+  // Shared helper: drop a groupNode rectangle into the graph at the given
+  // flow-space `position`, sized to `width` × `height`. Returns the new
+  // group's id. Used by both `createGroup` (around a selection's bbox) and
+  // `createEmptyGroup` (free-standing rectangle at the cursor).
+  const insertGroupNode = useCallback(
+    (name: string, position: { x: number; y: number }, width: number, height: number): void => {
+      pushCurrentSnapshot();
+      setNodes(nds => {
+        const groupId = generateNodeId(nds);
+        const groupNode: Node = {
+          id: groupId,
+          type: 'groupNode',
+          position,
+          data: { label: name, width, height, nodeType: 'group', config: {} },
+          style: { width, height },
+          zIndex: -1,
+        };
+        // Insert BEFORE existing nodes so z-order (combined with zIndex: -1)
+        // keeps the group visually behind any nodes that happen to overlap.
+        return [groupNode, ...nds];
+      });
+      scheduleSync();
+    },
+    [setNodes, scheduleSync],
+  );
 
   const createGroup = useCallback(() => {
     if (!contextMenu || contextMenu.target.type !== 'selection') return;
     const name = window.prompt('Group name:', 'Group');
     if (!name) { setContextMenu(null); return; }
-    pushCurrentSnapshot();
     const selectedIds = new Set(contextMenu.target.nodeIds);
     const selectedNodes = nodes.filter(n => selectedIds.has(n.id));
-    if (selectedNodes.length < 2) return;
+    if (selectedNodes.length < 2) { setContextMenu(null); return; }
 
-    // Compute bounding box
+    // Compute bounding box around the selected nodes using their actual
+    // rendered dimensions where available.
     const pad = 40;
+    const topPad = pad + 20;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const n of selectedNodes) {
+      const { w, h } = nodeSize(n);
       minX = Math.min(minX, n.position.x);
       minY = Math.min(minY, n.position.y);
-      maxX = Math.max(maxX, n.position.x + 200); // approximate node width
-      maxY = Math.max(maxY, n.position.y + 100); // approximate node height
+      maxX = Math.max(maxX, n.position.x + w);
+      maxY = Math.max(maxY, n.position.y + h);
     }
-
-    setNodes(nds => {
-      const groupId = generateNodeId(nds);
-      const groupNode: Node = {
-        id: groupId,
-        type: 'groupNode',
-        position: { x: minX - pad, y: minY - pad - 20 },
-        data: { label: name, width: maxX - minX + pad * 2, height: maxY - minY + pad * 2 + 20, nodeType: 'group', config: {} },
-        style: { width: maxX - minX + pad * 2, height: maxY - minY + pad * 2 + 20 },
-        zIndex: -1,
-        dragHandle: '[data-drag-handle]',
-      };
-      // Reparent selected nodes
-      const updated = nds.map(n => {
-        if (selectedIds.has(n.id)) {
-          return {
-            ...n,
-            parentId: groupId,
-            position: {
-              x: n.position.x - (minX - pad),
-              y: n.position.y - (minY - pad - 20),
-            },
-          };
-        }
-        return n;
-      });
-      return [groupNode, ...updated];
-    });
-    scheduleSync();
+    insertGroupNode(
+      name,
+      { x: minX - pad, y: minY - topPad },
+      maxX - minX + pad * 2,
+      maxY - minY + pad + topPad,
+    );
     setContextMenu(null);
-  }, [contextMenu, nodes, setNodes, scheduleSync]);
+  }, [contextMenu, nodes, insertGroupNode]);
 
-  const dismissGroup = useCallback(() => {
-    if (!contextMenu || contextMenu.target.type !== 'node' || !contextMenu.target.isGroup) return;
-    pushCurrentSnapshot();
-    const groupId = contextMenu.target.nodeId;
-    // Use getNodes() for fresh positions (avoids stale closure after auto-resize)
-    const freshNodes = getNodes();
-    const groupNode = freshNodes.find(n => n.id === groupId);
-    if (!groupNode) return;
-
-    setNodes(nds => {
-      // Convert child positions back to absolute, select ungrouped children
-      // Use fresh child positions from getNodes() for accuracy
-      const freshMap = new Map(freshNodes.map(n => [n.id, n]));
-      const updated = nds
-        .filter(n => n.id !== groupId)
-        .map(n => {
-          if (n.parentId === groupId) {
-            const fresh = freshMap.get(n.id);
-            const childPos = fresh?.position ?? n.position;
-            return {
-              ...n,
-              parentId: undefined,
-              selected: true,
-              position: {
-                x: childPos.x + groupNode.position.x,
-                y: childPos.y + groupNode.position.y,
-              },
-            };
-          }
-          return { ...n, selected: false };
-        });
-      return updated;
-    });
-    scheduleSync();
+  // Pane-menu "Add Group": drop an empty group rectangle at the cursor.
+  // No selection required.
+  const createEmptyGroup = useCallback(() => {
+    if (!contextMenu) return;
+    const name = window.prompt('Group name:', 'Group');
+    if (!name) { setContextMenu(null); return; }
+    const DEFAULT_W = 300;
+    const DEFAULT_H = 200;
+    insertGroupNode(
+      name,
+      { x: contextMenu.flowX - DEFAULT_W / 2, y: contextMenu.flowY - 20 },
+      DEFAULT_W,
+      DEFAULT_H,
+    );
     setContextMenu(null);
-  }, [contextMenu, getNodes, setNodes, scheduleSync]);
+  }, [contextMenu, insertGroupNode]);
 
   // --- Align / Distribute (multi-selection only) ---
   // Node width/height approximation matches resizeGroupsToFit.
@@ -2155,6 +2322,8 @@ export function GraphEditorInner() {
         }}
         onPaneContextMenu={onPaneContextMenu}
         onNodeContextMenu={onNodeContextMenu}
+        onNodeDragStart={onNodeDragStart}
+        onNodeDragStop={onNodeDragStop}
         onNodeDoubleClick={onNodeDoubleClick}
         onEdgeDoubleClick={(_event, edge) => { setEdges(eds => eds.filter(e => e.id !== edge.id)); scheduleSync(); }}
         nodeTypes={nodeTypes}
@@ -2392,6 +2561,9 @@ export function GraphEditorInner() {
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); addCommentNode(); }}>
                 Add Comment
               </button>
+              <button className={styles.contextItem} onClick={e => { e.stopPropagation(); createEmptyGroup(); }}>
+                Add Group
+              </button>
               <button
                 className={styles.contextItem}
                 title="Load a macro from a .gcamacro file and add it at this position"
@@ -2468,7 +2640,6 @@ export function GraphEditorInner() {
             <>
               <div className={styles.contextTitle}>Group</div>
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); renameNode(); }}>Rename</button>
-              <button className={styles.contextItem} onClick={e => { e.stopPropagation(); dismissGroup(); }}>Undo Group</button>
               <button className={styles.contextItem} style={{ color: '#e05050' }} onClick={e => { e.stopPropagation(); deleteSelection(); }}>Delete</button>
             </>
           )}

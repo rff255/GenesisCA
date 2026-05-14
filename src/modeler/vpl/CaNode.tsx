@@ -2023,9 +2023,6 @@ export const CaNode = memo(CaNodeComponent, (prev, next) => {
   if (prev.id !== next.id) return false;
   if (prev.selected !== next.selected) return false;
   if (prev.dragging !== next.dragging) return false;
-  const prevParent = (prev as NodeProps & { parentId?: string }).parentId;
-  const nextParent = (next as NodeProps & { parentId?: string }).parentId;
-  if (prevParent !== nextParent) return false;
   if (prev.data !== next.data) return false;
   return true;
 });

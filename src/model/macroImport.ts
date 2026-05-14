@@ -13,8 +13,11 @@ function genId(prefix: string): string {
  *   - MacroDef.id
  *   - every node.id in the subgraph (including group/commentNode children)
  *   - every edge.id, edge.source, edge.target
- *   - any node.data.parentId references (to keep group membership)
  *   - MacroPort.internalNodeId references (to keep boundary ports wired)
+ *
+ * Also migrates legacy `data.parentId` group memberships: translates child
+ * positions (relative to the group) back to absolute and drops the field.
+ * Groups are free-floating area markers now and don't own their children.
  *
  * Internal port ids (sourceHandle/targetHandle strings, MacroPort.internalPortId,
  * MacroPort.portId) are intentionally preserved — they're stable identifiers
@@ -32,15 +35,25 @@ export function cloneMacroWithFreshIds(raw: MacroDef): MacroDef {
     return fresh;
   };
 
-  // Pre-register all node ids so later references (parentId, edge endpoints,
+  // Pre-register all node ids so later references (edge endpoints,
   // MacroPort.internalNodeId) map consistently regardless of iteration order.
   for (const n of raw.nodes) mapId(n.id);
 
+  // Snapshot group positions BEFORE id remap so the legacy-parentId migration
+  // can resolve relative coords. Index by ORIGINAL id.
+  const groupPos = new Map<string, { x: number; y: number }>();
+  for (const n of raw.nodes) {
+    if (n.type === 'groupNode') groupPos.set(n.id, n.position);
+  }
+
   const nodes: GraphNode[] = raw.nodes.map(n => {
-    const data = { ...n.data } as GraphNode['data'] & { parentId?: string };
-    if ((data as Record<string, unknown>).parentId) {
-      const parentOld = (data as Record<string, unknown>).parentId as string;
-      (data as Record<string, unknown>).parentId = idMap.get(parentOld) ?? parentOld;
+    const data = { ...n.data } as Record<string, unknown>;
+    let position = { ...n.position };
+    if ('parentId' in data) {
+      const parentOld = data.parentId as string | undefined;
+      const parent = parentOld ? groupPos.get(parentOld) : undefined;
+      if (parent) position = { x: position.x + parent.x, y: position.y + parent.y };
+      delete data.parentId;
     }
     // Update macroDefId on boundary nodes (macroInput/macroOutput) to point at the new MacroDef.
     const config: GraphNode['data']['config'] = { ...n.data.config };
@@ -50,8 +63,8 @@ export function cloneMacroWithFreshIds(raw: MacroDef): MacroDef {
     return {
       ...n,
       id: mapId(n.id),
-      position: { ...n.position },
-      data: { ...data, config },
+      position,
+      data: { ...(data as GraphNode['data']), config },
     };
   });
 

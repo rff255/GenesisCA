@@ -6,7 +6,14 @@
   border: 1px dashed var(--color-border-muted);
   border-radius: var(--radius-xl);
   padding: var(--space-2);
-  pointer-events: none;
+  /* Group is a free-floating area marker, NOT a parent of contained nodes.
+   * The body must catch clicks (so clicking the group selects the group,
+   * not the pane underneath) — otherwise a Ctrl+click meant for the group
+   * falls through to the pane which calls resetSelectedElements. Children
+   * are NOT DOM-nested in the group, so they're rendered as siblings and
+   * win hit-testing because their z-index is higher than the group's
+   * (groupNode is set to z-index: -1 in toRFNodes). */
+  pointer-events: auto;
 }
 
 .header {
@@ -14,7 +21,6 @@
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-1) var(--space-2);
-  pointer-events: auto;
 }
 
 .label {
