@@ -83,6 +83,49 @@ function clearDeletedId(model: CAModel, field: string, deletedId: string) {
   );
 }
 
+/** Convert legacy `data.parentId` group memberships into absolute positions and
+ *  drop the parentId field. Groups are now free-floating area markers (no
+ *  parent-child relationship); legacy files stored child positions relative to
+ *  the group, so we translate them back to absolute on load so the visual
+ *  layout is preserved. Idempotent: no-op when no parentId is present. */
+function migrateNodesDropParentId(nodes: GraphNode[]): GraphNode[] {
+  const groupPos = new Map<string, { x: number; y: number }>();
+  for (const n of nodes) {
+    if (n.type === 'groupNode') groupPos.set(n.id, n.position);
+  }
+  let changed = false;
+  const result = nodes.map(n => {
+    const data = n.data as Record<string, unknown>;
+    if (!data || !('parentId' in data)) return n;
+    changed = true;
+    const parentId = data.parentId as string | undefined;
+    const parent = parentId ? groupPos.get(parentId) : undefined;
+    const newData = { ...data };
+    delete newData.parentId;
+    const position = parent
+      ? { x: n.position.x + parent.x, y: n.position.y + parent.y }
+      : n.position;
+    return { ...n, position, data: newData as GraphNode['data'] };
+  });
+  return changed ? result : nodes;
+}
+
+function migrateLegacyParentIds(model: CAModel): CAModel {
+  const graphNodes = migrateNodesDropParentId(model.graphNodes);
+  let macrosChanged = false;
+  const macroDefs = (model.macroDefs || []).map(m => {
+    const migrated = migrateNodesDropParentId(m.nodes);
+    if (migrated !== m.nodes) { macrosChanged = true; return { ...m, nodes: migrated }; }
+    return m;
+  });
+  if (graphNodes === model.graphNodes && !macrosChanged) return model;
+  return {
+    ...model,
+    graphNodes,
+    macroDefs: macrosChanged ? macroDefs : model.macroDefs,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // State & actions
 // ---------------------------------------------------------------------------
@@ -479,7 +522,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       return { model: EMPTY_MODEL, isDirty: false, modelVersion: state.modelVersion + 1 };
 
     case 'LOAD_MODEL': {
-      const m = action.model;
+      let m = action.model;
       // Migration guards for loaded files (same as localStorage)
       if (!m.graphNodes) m.graphNodes = [];
       if (!m.graphEdges) m.graphEdges = [];
@@ -495,6 +538,10 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       for (const a of m.attributes) {
         if (a.type === 'tag' && !a.tagOptions) a.tagOptions = [];
       }
+      // Groups are free-floating area markers now — translate any legacy
+      // child positions (relative to a group) back to absolute and drop
+      // data.parentId. Visual layout is preserved.
+      m = migrateLegacyParentIds(m);
       return { model: m, isDirty: false, modelVersion: state.modelVersion + 1 };
     }
 

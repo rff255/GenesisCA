@@ -175,9 +175,17 @@
   stroke-width: 3 !important;
 }
 
+/* Selected highlight. Uses box-shadow rather than `outline` because outline
+ * is not reliably repainted by browsers on transformed elements: clicking a
+ * node would select it (state + .selected class applied) but the outline
+ * stayed invisible until an unrelated repaint (e.g., RMB-drag panning the
+ * viewport) flushed the rendering. box-shadow is part of the element's
+ * paint layer so it updates on every state change. The double-shadow
+ * trick gives an outline-offset look (transparent gap + colored ring). */
 :global(.react-flow__node.selected) {
-  outline: 2px solid var(--color-danger);
-  outline-offset: 2px;
+  box-shadow:
+    0 0 0 2px var(--color-bg-canvas),
+    0 0 0 4px var(--color-danger);
   border-radius: var(--radius-lg);
 }
 
@@ -219,11 +227,11 @@
   border-color: var(--color-tab-active-border);
 }
 
-/* Let RMB drag pass through group node body to canvas for panning */
-:global(.react-flow__node-groupNode) {
-  pointer-events: none !important;
-}
-:global(.react-flow__node-groupNode) [data-drag-handle],
+/* Groups are free-floating area markers. The wrapper catches clicks so
+ * Ctrl+click on the group toggles its own selection; children win
+ * hit-testing via their higher z-index (groupNode renders at z-index: -1).
+ * NodeResizer's handles need explicit auto in case any inherited rule
+ * disables pointer events on the wrapper. */
 :global(.react-flow__node-groupNode) .react-flow__resize-control {
   pointer-events: auto !important;
 }

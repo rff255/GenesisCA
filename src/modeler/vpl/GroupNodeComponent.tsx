@@ -35,19 +35,21 @@ function GroupNodeInner({ id, data, selected }: NodeProps) {
           updateNodeData(id, { ...data, width: params.width, height: params.height })
         }
       />
-      <div className={styles.header} data-drag-handle>
+      <div className={styles.header}>
         <input
-          className={styles.label}
+          className={`${styles.label} nodrag nopan`}
           value={label}
           onChange={handleLabelChange}
           onClick={e => e.stopPropagation()}
+          onMouseDown={e => e.stopPropagation()}
         />
         <input
           type="color"
-          className={styles.colorPicker}
+          className={`${styles.colorPicker} nodrag nopan`}
           value={color}
           onChange={handleColorChange}
           onClick={e => e.stopPropagation()}
+          onMouseDown={e => e.stopPropagation()}
           title="Group color"
         />
       </div>
