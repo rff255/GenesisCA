@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { CAModel } from '../model/types';
 import styles from './ModelsLibrary.module.css';
 
@@ -20,26 +20,38 @@ interface Props {
   onLoadModel: (model: CAModel) => void;
 }
 
-const POPOVER_SIZE = 320;
+// The popover width is fixed in CSS; its height is content-driven and measured
+// after render (see the useLayoutEffect below) so it can be positioned exactly.
+const POPOVER_WIDTH = 320;
 const POPOVER_GAP = 8;
 
-interface HoverState {
-  thumbnail: string;
+interface CardRect {
   top: number;
+  bottom: number;
   left: number;
+  right: number;
 }
 
-function computePopoverPosition(rect: DOMRect): { top: number; left: number } {
+interface HoverState {
+  thumbnail?: string;
+  description: string;
+  cardRect: CardRect;
+}
+
+function computePopoverPosition(
+  card: CardRect,
+  popoverHeight: number,
+): { top: number; left: number } {
   const viewportW = window.innerWidth;
   const viewportH = window.innerHeight;
-  // Centre the popover on the card. The popover has `pointer-events: none`
-  // (see ModelsLibrary.module.css) so it doesn't steal the card's hover —
-  // the user's cursor stays "on" the card even when the popover overlays it.
-  let left = rect.left + rect.width / 2 - POPOVER_SIZE / 2;
-  let top = rect.top + rect.height / 2 - POPOVER_SIZE / 2;
-  // Clamp to viewport so corner cards still get a fully-visible popover.
-  left = Math.max(POPOVER_GAP, Math.min(viewportW - POPOVER_SIZE - POPOVER_GAP, left));
-  top = Math.max(POPOVER_GAP, Math.min(viewportH - POPOVER_SIZE - POPOVER_GAP, top));
+  // Centred over the card — it overlays the card rather than sitting beside it.
+  // `pointer-events: none` (see the CSS module) keeps the card's hover intact,
+  // so the cursor stays "on" the card even while the popover covers it.
+  let left = (card.left + card.right) / 2 - POPOVER_WIDTH / 2;
+  let top = (card.top + card.bottom) / 2 - popoverHeight / 2;
+  // Clamp so corner cards still get a fully-visible popover.
+  left = Math.max(POPOVER_GAP, Math.min(viewportW - POPOVER_WIDTH - POPOVER_GAP, left));
+  top = Math.max(POPOVER_GAP, Math.min(viewportH - popoverHeight - POPOVER_GAP, top));
   return { top, left };
 }
 
@@ -48,6 +60,16 @@ export function ModelsLibrary({ onLoadModel }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [hover, setHover] = useState<HoverState | null>(null);
+  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  // The popover is rendered first (invisible), measured, then positioned — the
+  // only way to place a content-sized box exactly without guessing its height.
+  // useLayoutEffect runs before paint, so the unpositioned frame is never shown.
+  useLayoutEffect(() => {
+    if (!hover || !popoverRef.current) return;
+    setPopoverPos(computePopoverPosition(hover.cardRect, popoverRef.current.offsetHeight));
+  }, [hover]);
 
   useEffect(() => {
     const base = import.meta.env.BASE_URL ?? '/';
@@ -79,12 +101,14 @@ export function ModelsLibrary({ onLoadModel }: Props) {
   };
 
   const handleCardEnter = (entry: LibraryEntry, el: HTMLElement) => {
-    if (!entry.thumbnail) return;
+    if (!entry.thumbnail && !entry.description.trim()) return;
     const base = import.meta.env.BASE_URL ?? '/';
-    const rect = el.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    setPopoverPos(null); // hidden until useLayoutEffect measures + positions it
     setHover({
-      thumbnail: `${base}models/${entry.thumbnail}`,
-      ...computePopoverPosition(rect),
+      thumbnail: entry.thumbnail ? `${base}models/${entry.thumbnail}` : undefined,
+      description: entry.description,
+      cardRect: { top: r.top, bottom: r.bottom, left: r.left, right: r.right },
     });
   };
 
@@ -127,10 +151,20 @@ export function ModelsLibrary({ onLoadModel }: Props) {
 
       {hover && (
         <div
-          className={styles.thumbnailPopover}
-          style={{ top: hover.top, left: hover.left }}
+          ref={popoverRef}
+          className={styles.previewPopover}
+          style={
+            popoverPos
+              ? { top: popoverPos.top, left: popoverPos.left }
+              : { visibility: 'hidden' }
+          }
         >
-          <img src={hover.thumbnail} alt="" className={styles.thumbnailImg} />
+          {hover.thumbnail && (
+            <img src={hover.thumbnail} alt="" className={styles.previewThumb} />
+          )}
+          {hover.description && (
+            <p className={styles.previewDesc}>{hover.description}</p>
+          )}
         </div>
       )}
     </div>
