@@ -128,6 +128,7 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 | # | Type | Label | Description | Ports | Notes |
 |---|---|---|---|---|---|
 | 20 | `arithmeticOperator` | Math | `+ − × ÷ % sqrt pow abs max min mean`. | `I: X` `I: Y` (num) / `O: Result` | Unary ops (`sqrt`, `abs`) ignore `Y` |
+| 20a | `expression` | Expression | Type a math formula instead of wiring many Math nodes — collapses an equation-heavy chain into one node. Operators `+ − × ÷ % ^`, functions `sqrt abs floor ceil round min max pow mod`, constants `pi` `e`. Variables come from the input ports. | dynamic `I: a…h` (1–8 ports, configurable count, each renamable) / `O: Result` | Parses to a shared AST; JS / WASM / WebGPU lockstep. Scalar-only — no array/neighbour reductions; transcendentals (`sin`/`cos`/`exp`/`log`) not yet supported |
 | 21 | `proportionMap` | Proportion Map | Linear remap `X ∈ [inMin..inMax] → [outMin..outMax]`. | `I: X`, `I: inMin`, `I: inMax`, `I: outMin`, `I: outMax` / `O: Result` | |
 | 22 | `interpolation` | Interpolate | `T ∈ [0,1] → [Min..Max]`. | `I: T`, `I: Min`, `I: Max` / `O: Result` | |
 | 23 | `statement` | Compare | `== != > < >= <=` on two scalars, or `Between` / `Not Between` (range check with configurable low/high sides). | `I: X` `I: Y` `I: Y₂` (between-family only) / `O: Result` (bool) | Name collision risk with `groupStatement` |
@@ -345,10 +346,10 @@ These are **ideas**, not committed work. They inform future passes on the node s
 
 ### 6.1 Missing utility nodes
 
-- **Clamp** — `clamp(x, min, max)`. Currently requires `arithmeticOperator(min, max)` +
-  `arithmeticOperator(max, min)`.
-- **Integer cast** / **Float cast** — no explicit conversion. `Math.floor(x)` would need
-  an extension to `arithmeticOperator`.
+- **Clamp** — `clamp(x, min, max)`. Now expressible in one `expression` node as
+  `min(max(x, lo), hi)`; a dedicated node would still be more discoverable.
+- **Integer cast** / **Float cast** — no explicit conversion, but `expression` now exposes
+  `floor` / `ceil` / `round` directly.
 - **Array length** — `getNeighborsAttribute.Values.length` is inaccessible. Workaround:
   use `groupCounting(notEquals, some-sentinel)` or read `neighborhood.coords.length` —
   but neither is discoverable.

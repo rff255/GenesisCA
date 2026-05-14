@@ -2,6 +2,7 @@ import type { NodeConfig } from '../types';
 import { parseHandleId } from '../types';
 import type { CAModel } from '../../../model/types';
 import { getNodeDef } from './registry';
+import { buildVarMap, parseExpression, clampVisibleCount } from '../compiler/expression/parser';
 
 /** Return a list of human-readable issue strings for a node's configuration.
  *  Empty array = node is fully configured.
@@ -218,6 +219,20 @@ export function detectMissingConfig(
     case 'tagConstant':
       if (!hasAnyAttr(config.tagAttributeId)) issues.push('Select a tag attribute');
       break;
+
+    case 'expression': {
+      const visibleCount = clampVisibleCount(config.visibleCount);
+      const { map, errors } = buildVarMap(config, visibleCount);
+      for (const e of errors) issues.push(e);
+      const formula = String(config.expression ?? '');
+      if (!formula.trim()) {
+        issues.push('Enter a formula');
+      } else if (errors.length === 0) {
+        const res = parseExpression(formula, map);
+        if ('error' in res) issues.push(`Formula error: ${res.error}`);
+      }
+      break;
+    }
 
     case 'macro':
       if (!hasMacroDef(config.macroDefId)) issues.push('Macro definition not found');

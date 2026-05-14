@@ -17,6 +17,7 @@
 
 import type { PortDef, NodeTypeDef } from './types';
 import { getNodeDef } from './nodes/registry';
+import { clampVisibleCount } from './compiler/expression/parser';
 
 export interface EffectivePorts {
   inputs: PortDef[];
@@ -73,6 +74,17 @@ export function getEffectivePorts(
     for (let i = 2; i < 2 + extraCount; i++) {
       outputs.push({ id: `then_${i}`, label: `Then ${i + 1}`, kind: 'output', category: 'flow' });
     }
+  }
+
+  // Expression: show only `visibleCount` of the 8 input ports, with the
+  // user-chosen variable names as labels. UI-only — every port still lives in
+  // def.ports, so the compilers resolve them all.
+  if (nodeType === 'expression') {
+    const visibleCount = clampVisibleCount(cfg.visibleCount);
+    inputs = inputs.slice(0, visibleCount).map(p => {
+      const nm = cfg[`_varName_${p.id}`];
+      return (typeof nm === 'string' && nm.trim()) ? { ...p, label: nm.trim() } : p;
+    });
   }
 
   // GetModelAttribute: r/g/b vs value depending on isColorAttr
