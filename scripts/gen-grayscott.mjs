@@ -10,10 +10,17 @@
  *   U'   = U + (Du*lapU - uvv + F*(1-U)) * dt
  *   V'   = V + (Dv*lapV + uvv - (F+k)*V) * dt
  *
- * The graph is ~50 nodes / ~59 edges — built programmatically here rather than
+ * Each of the five equations above maps to a single `expression` node, so the
+ * graph is ~31 nodes / ~37 edges (vs. ~50 / ~59 when the arithmetic was wired
+ * one operator per node). The data reads and the neighbour gather+sum pairs are
+ * still discrete nodes — an expression's inputs are scalars, so the Laplacian
+ * sums are computed up front. Built programmatically here rather than
  * hand-typed as JSON. Re-run after any tweak: `node scripts/gen-grayscott.mjs`.
+ *
+ * Re-running preserves the saved simulationState + library thumbnail from the
+ * existing output file (they are added after generation, not by this script).
  */
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -60,6 +67,20 @@ function edge(srcNode, srcPort, tgtNode, tgtPort, category) {
 const vEdge = (s, sp, t, tp) => edge(s, sp, t, tp, 'value');
 const fEdge = (s, sp, t, tp) => edge(s, sp, t, tp, 'flow');
 
+/** Create an `expression` node. `varNames` are the user-facing names for the
+ *  input ports, in port order — port `a` = varNames[0], `b` = varNames[1], …
+ *  so callers wire with `vEdge(src, srcPort, exprNode, 'a' | 'b' | …)`.
+ *  `label` is the theory-facing name shown above the node header (`data.label`,
+ *  the same per-node label macros use — it round-trips through save/load). */
+const PORT_IDS = 'abcdefgh';
+function exprNode(expression, varNames, col, row, label) {
+  const config = { expression, visibleCount: varNames.length };
+  varNames.forEach((nm, i) => { config[`_varName_${PORT_IDS[i]}`] = nm; });
+  const n = node('expression', config, col, row);
+  if (label) n.data.label = label;
+  return n;
+}
+
 // =============================================================================
 // C. STEP GRAPH — the Gray-Scott per-cell update
 // =============================================================================
@@ -91,91 +112,60 @@ vEdge(diagUgather,  'values', diagUsum,  'values');
 vEdge(orthoVgather, 'values', orthoVsum, 'values');
 vEdge(diagVgather,  'values', diagVsum,  'values');
 
-// --- Laplacians: 0.2*orthoSum + 0.05*diagSum - center ------------------------
-// lapU
-const lapU_a  = node('arithmeticOperator', { operation: '*', _port_y: '0.2'  }, 2, 11);
-const lapU_b  = node('arithmeticOperator', { operation: '*', _port_y: '0.05' }, 2, 12);
-const lapU_ab = node('arithmeticOperator', { operation: '+' }, 3, 11);
-const lapU    = node('arithmeticOperator', { operation: '-' }, 4, 11);
-vEdge(orthoUsum, 'result', lapU_a, 'x');
-vEdge(diagUsum,  'result', lapU_b, 'x');
-vEdge(lapU_a, 'result', lapU_ab, 'x');
-vEdge(lapU_b, 'result', lapU_ab, 'y');
-vEdge(lapU_ab, 'result', lapU, 'x');
-vEdge(uRead,   'value',  lapU, 'y');
+// --- Laplacians: 0.2*orthoSum + 0.05*diagSum - centre (9-point weighted) -----
+// Each Laplacian is one expression node. Its scalar inputs come from the
+// neighbour sums (an expression can't reduce an array itself) and the centre.
+const lapU = exprNode('0.2*orthoSum + 0.05*diagSum - u', ['orthoSum', 'diagSum', 'u'], 2, 11,
+  'U diffusion (∇²U)');
+vEdge(orthoUsum, 'result', lapU, 'a');
+vEdge(diagUsum,  'result', lapU, 'b');
+vEdge(uRead,     'value',  lapU, 'c');
 
-// lapV
-const lapV_a  = node('arithmeticOperator', { operation: '*', _port_y: '0.2'  }, 2, 13);
-const lapV_b  = node('arithmeticOperator', { operation: '*', _port_y: '0.05' }, 2, 14);
-const lapV_ab = node('arithmeticOperator', { operation: '+' }, 3, 13);
-const lapV    = node('arithmeticOperator', { operation: '-' }, 4, 13);
-vEdge(orthoVsum, 'result', lapV_a, 'x');
-vEdge(diagVsum,  'result', lapV_b, 'x');
-vEdge(lapV_a, 'result', lapV_ab, 'x');
-vEdge(lapV_b, 'result', lapV_ab, 'y');
-vEdge(lapV_ab, 'result', lapV, 'x');
-vEdge(vRead,   'value',  lapV, 'y');
+const lapV = exprNode('0.2*orthoSum + 0.05*diagSum - v', ['orthoSum', 'diagSum', 'v'], 2, 13,
+  'V diffusion (∇²V)');
+vEdge(orthoVsum, 'result', lapV, 'a');
+vEdge(diagVsum,  'result', lapV, 'b');
+vEdge(vRead,     'value',  lapV, 'c');
 
-// --- shared uvv = U * V * V --------------------------------------------------
-const vv  = node('arithmeticOperator', { operation: '*' }, 1, 2);
-const uvv = node('arithmeticOperator', { operation: '*' }, 2, 2);
-vEdge(vRead, 'value', vv, 'x');
-vEdge(vRead, 'value', vv, 'y');
-vEdge(uRead, 'value', uvv, 'x');
-vEdge(vv, 'result', uvv, 'y');
+// --- shared autocatalytic reaction term: uvv = U * V * V --------------------
+const uvv = exprNode('u * (v * v)', ['u', 'v'], 2, 2, 'Reaction (U·V²)');
+vEdge(uRead, 'value', uvv, 'a');
+vEdge(vRead, 'value', uvv, 'b');
 
 // --- U' = U + (Du*lapU - uvv + F*(1-U)) * dt ---------------------------------
-const DuLapU          = node('arithmeticOperator', { operation: '*' }, 5, 7);
-const oneMinusU       = node('arithmeticOperator', { operation: '-', _port_x: '1.0' }, 1, 4);
-const FtimesOneMinusU = node('arithmeticOperator', { operation: '*' }, 2, 4);
-const U_diff1         = node('arithmeticOperator', { operation: '-' }, 6, 4);
-const U_rate          = node('arithmeticOperator', { operation: '+' }, 7, 4);
-const U_delta         = node('arithmeticOperator', { operation: '*' }, 8, 4);
-const U_next          = node('arithmeticOperator', { operation: '+' }, 9, 4);
-vEdge(Duattr, 'value', DuLapU, 'x');
-vEdge(lapU,   'result', DuLapU, 'y');
-vEdge(uRead,  'value', oneMinusU, 'y');
-vEdge(Fattr,      'value',  FtimesOneMinusU, 'x');
-vEdge(oneMinusU,  'result', FtimesOneMinusU, 'y');
-vEdge(DuLapU, 'result', U_diff1, 'x');
-vEdge(uvv,    'result', U_diff1, 'y');
-vEdge(U_diff1,         'result', U_rate, 'x');
-vEdge(FtimesOneMinusU, 'result', U_rate, 'y');
-vEdge(U_rate,  'result', U_delta, 'x');
-vEdge(dtattr,  'value',  U_delta, 'y');
-vEdge(uRead,   'value',  U_next, 'x');
-vEdge(U_delta, 'result', U_next, 'y');
+const uNext = exprNode(
+  'u + (Du*lapU - uvv + F*(1 - u)) * dt',
+  ['u', 'Du', 'lapU', 'uvv', 'F', 'dt'], 3, 4,
+  'U update (U′)',
+);
+vEdge(uRead,  'value',  uNext, 'a');
+vEdge(Duattr, 'value',  uNext, 'b');
+vEdge(lapU,   'result', uNext, 'c');
+vEdge(uvv,    'result', uNext, 'd');
+vEdge(Fattr,  'value',  uNext, 'e');
+vEdge(dtattr, 'value',  uNext, 'f');
 
 // --- V' = V + (Dv*lapV + uvv - (F+k)*V) * dt ---------------------------------
-const FplusK  = node('arithmeticOperator', { operation: '+' }, 1, 6);
-const DvLapV  = node('arithmeticOperator', { operation: '*' }, 5, 9);
-const FkV     = node('arithmeticOperator', { operation: '*' }, 2, 6);
-const V_sum1  = node('arithmeticOperator', { operation: '+' }, 6, 9);
-const V_rate  = node('arithmeticOperator', { operation: '-' }, 7, 9);
-const V_delta = node('arithmeticOperator', { operation: '*' }, 8, 9);
-const V_next  = node('arithmeticOperator', { operation: '+' }, 9, 9);
-vEdge(Fattr, 'value', FplusK, 'x');
-vEdge(kattr, 'value', FplusK, 'y');
-vEdge(Dvattr, 'value', DvLapV, 'x');
-vEdge(lapV,   'result', DvLapV, 'y');
-vEdge(FplusK, 'result', FkV, 'x');
-vEdge(vRead,  'value',  FkV, 'y');
-vEdge(DvLapV, 'result', V_sum1, 'x');
-vEdge(uvv,    'result', V_sum1, 'y');
-vEdge(V_sum1, 'result', V_rate, 'x');
-vEdge(FkV,    'result', V_rate, 'y');
-vEdge(V_rate,  'result', V_delta, 'x');
-vEdge(dtattr,  'value',  V_delta, 'y');
-vEdge(vRead,   'value',  V_next, 'x');
-vEdge(V_delta, 'result', V_next, 'y');
+const vNext = exprNode(
+  'v + (Dv*lapV + uvv - (F + k)*v) * dt',
+  ['v', 'Dv', 'lapV', 'uvv', 'F', 'k', 'dt'], 3, 9,
+  'V update (V′)',
+);
+vEdge(vRead,  'value',  vNext, 'a');
+vEdge(Dvattr, 'value',  vNext, 'b');
+vEdge(lapV,   'result', vNext, 'c');
+vEdge(uvv,    'result', vNext, 'd');
+vEdge(Fattr,  'value',  vNext, 'e');
+vEdge(kattr,  'value',  vNext, 'f');
+vEdge(dtattr, 'value',  vNext, 'g');
 
 // --- writes ------------------------------------------------------------------
-const writeU = node('setAttribute', { attributeId: 'U' }, 10, 4);
-const writeV = node('setAttribute', { attributeId: 'V' }, 10, 9);
+const writeU = node('setAttribute', { attributeId: 'U' }, 4, 4);
+const writeV = node('setAttribute', { attributeId: 'V' }, 4, 9);
 fEdge(stepNode, 'do', writeU, 'do');
 fEdge(stepNode, 'do', writeV, 'do');
-vEdge(U_next, 'result', writeU, 'value');
-vEdge(V_next, 'result', writeV, 'value');
+vEdge(uNext, 'result', writeU, 'value');
+vEdge(vNext, 'result', writeV, 'value');
 
 // =============================================================================
 // D. SEED INPUT-MAPPING GRAPH — paint sets U=0.5, V=0.25
@@ -193,11 +183,11 @@ fEdge(seedInput, 'do', seedWriteV, 'do');
 
 const vOutput     = node('outputMapping', { mappingId: 'vConc' }, 0, 22);
 const vViewerRead = node('getCellAttribute', { attributeId: 'V' }, 0, 23);
-// inMax 0.5 leaves headroom above V's observed ceiling (~0.42) so the brightest
-// cells don't clip; smoothstep gives the ramp a softer toe/shoulder.
+// inMax 0.4 maps the V field's typical [0, ~0.4] working range onto the full
+// ramp; smoothstep gives the ramp a softer toe/shoulder.
 const vScale      = node('proportionMap', {
   method: 'linear',
-  _port_inMin: '0', _port_inMax: '0.5', _port_outMin: '0', _port_outMax: '1',
+  _port_inMin: '0', _port_inMax: '0.4', _port_outMin: '0', _port_outMax: '1',
 }, 1, 23);
 const vColor      = node('colorInterpolation', {
   method: 'smoothstep',
@@ -219,7 +209,7 @@ vEdge(vColor, 'b', vSetViewer, 'b');
 const properties = {
   name: 'Gray-Scott Reaction-Diffusion',
   author: 'Peter Gray & Stephen K. Scott (1983); 9-point CA form per Karl Sims',
-  modelAuthor: 'GenesisCA',
+  modelAuthor: 'Rodrigo F. Figueiredo',
   description:
     'A two-chemical reaction-diffusion system (Gray-Scott, 1983). Feed chemical U ' +
     'is replenished everywhere; catalyst V consumes it autocatalytically ' +
@@ -232,11 +222,12 @@ const properties = {
   boundaryTreatment: 'torus',
   updateMode: 'synchronous',
   asyncScheme: 'random-order',
-  gridWidth: 200,
-  gridHeight: 200,
+  gridWidth: 300,
+  gridHeight: 300,
   maxIterations: 100000,
   tags: ['reaction-diffusion', 'continuous', 'pattern-formation', 'chemistry', 'Gray-Scott'],
-  useWasm: true,
+  useWasm: false,
+  useWebGPU: true,
 };
 
 const attributes = [
@@ -323,9 +314,28 @@ const model = {
 };
 
 mkdirSync(dirname(OUT), { recursive: true });
+
+// Preserve enrichment data that lives in the output file but isn't produced by
+// this script — the saved simulationState snapshot and the library thumbnail
+// are added in-app after generation, so carry them across a regenerate.
+let preserved = '';
+if (existsSync(OUT)) {
+  try {
+    const prev = JSON.parse(readFileSync(OUT, 'utf-8'));
+    if (prev.simulationState) {
+      model.simulationState = prev.simulationState;
+      preserved += ' +simulationState';
+    }
+    if (prev.properties?.thumbnail) {
+      model.properties.thumbnail = prev.properties.thumbnail;
+      preserved += ' +thumbnail';
+    }
+  } catch { /* unreadable / older format — just write a fresh file */ }
+}
+
 writeFileSync(OUT, JSON.stringify(model, null, 2) + '\n', 'utf-8');
 console.log(
   `Wrote ${OUT}\n  ${graphNodes.length} nodes, ${graphEdges.length} edges, ` +
   `${attributes.length} attributes, ${neighborhoods.length} neighborhoods, ` +
-  `${mappings.length} mappings, ${presets.length} presets`,
+  `${mappings.length} mappings, ${presets.length} presets${preserved}`,
 );
