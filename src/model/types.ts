@@ -60,6 +60,10 @@ export interface Neighborhood {
   margin?: number;
   /** Optional tags for individual cells: coord index → tag name */
   tags?: Record<number, string>;
+  /** When true, the central cell ([0,0]) is appended to the effective
+   *  neighborhood, so neighbor-iterating nodes treat the cell itself as a
+   *  member. Default false. Expanded into `coords` at the sim boundary. */
+  includeCentralCell?: boolean;
 }
 
 /** A color mapping (attribute-to-color for visualization, or color-to-attribute for interaction) */

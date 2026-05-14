@@ -462,6 +462,17 @@ neighborhood's slots):
 - `getNeighborsAttribute(N, attr) → values[]` — gathers all-neighbor values.
 - `getNeighborAttributeByTag(N, attr, tagName) → value` — compile-time tag lookup.
 
+**Include central cell.** A neighborhood carries an optional `includeCentralCell`
+flag (toggled by clicking the centre cell in the Neighborhoods panel grid, default
+off). When set, the central cell `[0,0]`
+is appended as an extra slot at the **end** of the neighborhood's coordinate list —
+so the slot-walking nodes above (`getNeighborsAttribute`, `getAllNeighborIndexes`,
+`filterNeighbors` implicit-all, `setNeighborhoodAttribute`) and linked-frequency
+indicators treat the cell itself as one of its own neighbors. Appending last keeps
+every existing slot index and tag valid. The flag is expanded into `coords` at the
+simulation boundary, so all three compile targets and the worker need no special
+handling.
+
 **Iteration.** `forEachInArray(arr) { body }` exposes the per-iteration element via an
 `Element` value port. Both body **flow** nodes (consuming `Element` directly via
 input ports) and body **value** nodes that depend on `Element` work — the per-

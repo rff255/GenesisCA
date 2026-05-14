@@ -332,6 +332,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         description: '',
         coords: [],
         margin: 2,
+        includeCentralCell: false,
       };
       return {
         ...state,
@@ -352,6 +353,10 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         description: source.description,
         coords: source.coords.map(([r, c]) => [r, c] as [number, number]),
         margin: source.margin,
+        includeCentralCell: source.includeCentralCell,
+        // tags is keyed by coord index; the duplicated coords preserve index
+        // order, so a shallow copy keeps the same keys valid.
+        tags: source.tags ? { ...source.tags } : undefined,
       };
       return {
         ...state,
@@ -534,7 +539,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // v1.8: rename/add — silently drop legacy `goal`, default new `modelAuthor` to ''.
       if ('goal' in m.properties) delete (m.properties as unknown as Record<string, unknown>).goal;
       if (m.properties.modelAuthor === undefined) m.properties.modelAuthor = '';
-      for (const n of m.neighborhoods) { n.margin ??= 2; }
+      for (const n of m.neighborhoods) { n.margin ??= 2; n.includeCentralCell ??= false; }
       for (const a of m.attributes) {
         if (a.type === 'tag' && !a.tagOptions) a.tagOptions = [];
       }
