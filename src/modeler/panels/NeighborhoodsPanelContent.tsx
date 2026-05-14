@@ -62,7 +62,12 @@ export function NeighborhoodsPanelContent() {
   const handleCellClick = useCallback(
     (row: number, col: number) => {
       if (!selected) return;
-      if (row === 0 && col === 0) return;
+      if (row === 0 && col === 0) {
+        // The central cell isn't a normal selectable coord — clicking it
+        // toggles the "include central cell" flag (same as the checkbox).
+        updateNeighborhood(selected.id, { includeCentralCell: !selected.includeCentralCell });
+        return;
+      }
       const key = coordKey(row, col);
       let newCoords: Array<[number, number]>;
       if (activeCoords.has(key)) {
@@ -115,7 +120,7 @@ export function NeighborhoodsPanelContent() {
               >
                 <span className={styles.listItemName}>{n.name}</span>
                 <span className={styles.listItemBadge}>
-                  {n.coords.length} neighbors
+                  {n.coords.length + (n.includeCentralCell ? 1 : 0)} neighbors
                 </span>
                 <button
                   className={styles.dragHandle}
@@ -204,7 +209,9 @@ export function NeighborhoodsPanelContent() {
 
                   let cellClass = styles.gridCell + ' ';
                   if (isCenter) {
-                    cellClass += styles.gridCellCenter;
+                    cellClass += selected.includeCentralCell
+                      ? styles.gridCellCenterIncluded
+                      : styles.gridCellCenter;
                   } else if (isActive) {
                     cellClass += tagName ? styles.gridCellTagged : styles.gridCellActive;
                   } else {
@@ -227,7 +234,10 @@ export function NeighborhoodsPanelContent() {
                         }
                       }}
                       title={
-                        isCenter ? 'Center cell'
+                        isCenter
+                          ? (selected.includeCentralCell
+                              ? 'Center cell — included in neighborhood (click to exclude)'
+                              : 'Center cell — click to include in neighborhood')
                         : tagName ? `[${row},${col}] tag: "${tagName}" (right-click to add tag)`
                         : isActive ? `(${row}, ${col}) — right-click to tag`
                         : `(${row}, ${col})`

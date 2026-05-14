@@ -175,9 +175,11 @@ export function HelpView() {
             Define spatial neighborhoods &mdash; the set of relative cell positions a cell
             can &quot;see.&quot; Common patterns include Moore (8 surrounding cells) and
             Von Neumann (4 cardinal neighbors). Use the interactive grid to toggle neighbor
-            positions. Each neighborhood has its own margin setting (up to 20) that controls
-            the grid editor size. Use the <strong>Duplicate</strong> button to clone an
-            existing neighborhood for quick variations.
+            positions; click the centre cell to include the cell itself in the neighborhood,
+            so neighbor-iterating nodes count the cell among its own neighbors. Each
+            neighborhood has its own margin setting (up to 20) that controls the grid editor
+            size. Use the <strong>Duplicate</strong> button to clone an existing neighborhood
+            for quick variations.
           </p>
 
           <h3 className={styles.h3}>Mappings Panel (M)</h3>

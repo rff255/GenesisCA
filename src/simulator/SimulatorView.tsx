@@ -14,7 +14,7 @@ import { InspectCellPopover, InspectHoverLink, type InspectPopoverState } from '
 import { PresetSaveDialog } from './PresetSaveDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { serializeSimState, serializePreset, downloadStateFile, readStateFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2 } from '../model/fileOperations';
-import type { Preset, SimulationState } from '../model/types';
+import type { Attribute, CAModel, Preset, SimulationState } from '../model/types';
 import styles from './SimulatorView.module.css';
 
 const SIM_SETTINGS_KEY = 'genesisca_sim_settings';
@@ -25,6 +25,58 @@ function loadSimSettings(): Record<string, unknown> {
     if (raw) return JSON.parse(raw);
   } catch { /* ignore */ }
   return {};
+}
+
+// "Include central cell" is a schema-level flag that is compiled away before
+// simulation: a neighborhood with the flag set gets [0,0] appended to its
+// effective `coords`, so the worker + all three compilers (which iterate
+// `coords` / read `coords.length`) treat the cell itself as a member with no
+// code changes of their own. This MUST be applied as the first transform at
+// every point the model is handed to the compile/sim pipeline — applying it
+// per-site risks the worker's neighbor tables and the compiled `nSz_<nbr>`
+// desyncing. Returns the same model reference when no neighborhood uses it.
+function withEffectiveNeighborhoods(model: CAModel): CAModel {
+  if (!model.neighborhoods.some(n => n.includeCentralCell)) return model;
+  return {
+    ...model,
+    neighborhoods: model.neighborhoods.map(n => {
+      if (!n.includeCentralCell) return n;
+      // Guard against a hand-edited file that already lists [0,0] — never
+      // double-count the central cell.
+      if (n.coords.some(([r, c]) => r === 0 && c === 0)) return n;
+      return { ...n, coords: [...n.coords, [0, 0] as [number, number]] };
+    }),
+  };
+}
+
+// Build the runtime model-attribute value map from each model attribute's
+// declared default. Shared by worker init and the "Reset to Default" button.
+function computeDefaultModelAttrs(attributes: Attribute[]): Record<string, number> {
+  const mAttrs: Record<string, number> = {};
+  for (const a of attributes) {
+    if (!a.isModelAttribute) continue;
+    switch (a.type) {
+      case 'bool': mAttrs[a.id] = a.defaultValue === 'true' ? 1 : 0; break;
+      case 'integer': mAttrs[a.id] = parseInt(a.defaultValue, 10) || 0; break;
+      case 'float': mAttrs[a.id] = parseFloat(a.defaultValue) || 0; break;
+      case 'neighborIndex': {
+        // Stored value is the packed (dr, dc) i32 (see NeighborIndexDefaultEditor).
+        // INVALID_NI on a model attribute is meaningless at runtime — normalize to 0.
+        const n = parseInt(a.defaultValue, 10);
+        mAttrs[a.id] = (Number.isFinite(n) && n !== INVALID_NI) ? (n | 0) : 0;
+        break;
+      }
+      case 'color': {
+        const hex = a.defaultValue || '#808080';
+        mAttrs[a.id + '_r'] = parseInt(hex.slice(1, 3), 16) || 0;
+        mAttrs[a.id + '_g'] = parseInt(hex.slice(3, 5), 16) || 0;
+        mAttrs[a.id + '_b'] = parseInt(hex.slice(5, 7), 16) || 0;
+        break;
+      }
+      default: mAttrs[a.id] = 0;
+    }
+  }
+  return mAttrs;
 }
 
 // Tiny chevron icons used by the viewer / transport bar collapse toggles. Inline
@@ -278,10 +330,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   //   - WebGPU selected  → WGSL shader source (an extra compile pass; only when active)
   //   - WASM selected    → placeholder string (binary, not human-readable)
   const compileModel = useCallback(() => {
-    const result = compileGraph(model.graphNodes, model.graphEdges, model);
+    const m = withEffectiveNeighborhoods(model);
+    const result = compileGraph(m.graphNodes, m.graphEdges, m);
     if (model.properties.useWebGPU) {
       try {
-        const wgpu = compileGraphWebGPU(model.graphNodes, model.graphEdges, model);
+        const wgpu = compileGraphWebGPU(m.graphNodes, m.graphEdges, m);
         setCompiledCode(wgpu.shaderCode || '(no shader emitted)');
         setCompileError(wgpu.error || result.error || '');
       } catch (e) {
@@ -302,7 +355,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model.graphNodes, model.graphEdges, model.indicators, model.properties.useWasm, model.properties.useWebGPU, buildFullCode]);
+  }, [model.graphNodes, model.graphEdges, model.neighborhoods, model.indicators, model.properties.useWasm, model.properties.useWebGPU, buildFullCode]);
 
   // Draw using ImageData + zoom/pan transform
   const draw = useCallback(() => {
@@ -988,31 +1041,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
 
     // Initialize runtime model attrs from defaults
-    const mAttrs: Record<string, number> = {};
-    for (const a of model.attributes) {
-      if (!a.isModelAttribute) continue;
-      switch (a.type) {
-        case 'bool': mAttrs[a.id] = a.defaultValue === 'true' ? 1 : 0; break;
-        case 'integer': mAttrs[a.id] = parseInt(a.defaultValue, 10) || 0; break;
-        case 'float': mAttrs[a.id] = parseFloat(a.defaultValue) || 0; break;
-        case 'neighborIndex': {
-          // Stored value is the packed (dr, dc) i32 (see NeighborIndexDefaultEditor).
-          // INVALID_NI on a model attribute is meaningless at runtime — normalize to 0.
-          const n = parseInt(a.defaultValue, 10);
-          mAttrs[a.id] = (Number.isFinite(n) && n !== INVALID_NI) ? (n | 0) : 0;
-          break;
-        }
-        case 'color': {
-          const hex = a.defaultValue || '#808080';
-          mAttrs[a.id + '_r'] = parseInt(hex.slice(1, 3), 16) || 0;
-          mAttrs[a.id + '_g'] = parseInt(hex.slice(3, 5), 16) || 0;
-          mAttrs[a.id + '_b'] = parseInt(hex.slice(5, 7), 16) || 0;
-          break;
-        }
-        default: mAttrs[a.id] = 0;
-      }
-    }
-    setRuntimeModelAttrs(mAttrs);
+    setRuntimeModelAttrs(computeDefaultModelAttrs(model.attributes));
 
     const worker = new Worker(
       new URL('./engine/sim.worker.ts', import.meta.url),
@@ -1025,9 +1054,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // a runtime function arg), but WebGPU bakes `total` into the WGSL bounds
     // check — without this override the shader rejects half the cells after a
     // resize-to-larger and the simulator looks half-frozen.
+    const effModel = withEffectiveNeighborhoods(model);
     const dimsModel = (model.properties.gridWidth === w && model.properties.gridHeight === h)
-      ? model
-      : { ...model, properties: { ...model.properties, gridWidth: w, gridHeight: h } };
+      ? effModel
+      : { ...effModel, properties: { ...effModel.properties, gridWidth: w, gridHeight: h } };
     // Viewer→int mapping is target-agnostic — the worker needs it for
     // uploadActiveViewer regardless of which compile target is active. WGSL
     // SetColorViewer-in-step writes are guarded on `control.activeViewer ==
@@ -1108,7 +1138,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         parentValues: a.parentValues,
         undefinedValue: a.undefinedValue,
       })),
-      neighborhoods: model.neighborhoods.map(n => ({ id: n.id, coords: n.coords })),
+      neighborhoods: effModel.neighborhoods.map(n => ({ id: n.id, coords: n.coords })),
       boundaryTreatment: model.properties.boundaryTreatment,
       updateMode: model.properties.updateMode || 'synchronous',
       asyncScheme: model.properties.asyncScheme || 'random-order',
@@ -1337,9 +1367,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // arg there); only WebGPU exhibits the bug.
       const curW = gridWidth.current;
       const curH = gridHeight.current;
+      const effModel = withEffectiveNeighborhoods(model);
       const dimsModel = (model.properties.gridWidth === curW && model.properties.gridHeight === curH)
-        ? model
-        : { ...model, properties: { ...model.properties, gridWidth: curW, gridHeight: curH } };
+        ? effModel
+        : { ...effModel, properties: { ...effModel.properties, gridWidth: curW, gridHeight: curH } };
       const result = compileGraph(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
       // Show Code follows the selected target — same dispatch as compileModel().
       if (dimsModel.properties.useWebGPU) {
@@ -1918,6 +1949,27 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         return;
       }
 
+      // The brush rectangle + hover-coords chip are on-canvas indicators — they
+      // must stop tracking the pointer once it leaves the canvas area (top bar,
+      // side panels, etc.). This is a window-level listener so it keeps firing
+      // off-canvas, and in infinity-canvas mode screenToGrid WRAPS off-canvas
+      // coords instead of returning null — so without this guard both would
+      // persist with bogus wrapped values. Active drags (pan / paint / brush-
+      // resize) legitimately continue off-canvas, so only bail when idle.
+      if (!isPanning.current && !(e.buttons & 1) && !isResizingBrush.active) {
+        const rect = container.getBoundingClientRect();
+        const overCanvas = e.clientX >= rect.left && e.clientX < rect.right
+          && e.clientY >= rect.top && e.clientY < rect.bottom;
+        if (!overCanvas) {
+          if (cursorGrid.current !== null) {
+            cursorGrid.current = null;
+            setHoverCellInfo(prev => (prev === null ? prev : null));
+            draw();
+          }
+          return;
+        }
+      }
+
       // Update brush cursor position
       const gridPos = screenToGrid(e.clientX, e.clientY);
       cursorGrid.current = gridPos;
@@ -2227,6 +2279,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const handleModelAttrChange = (attrId: string, value: number) => {
     setRuntimeModelAttrs(prev => ({ ...prev, [attrId]: value }));
     workerRef.current?.postMessage({ type: 'updateModelAttrs', attrs: { [attrId]: value } });
+  };
+
+  // Reset every model attribute back to its declared default value.
+  const handleResetModelAttrs = () => {
+    const defaults = computeDefaultModelAttrs(model.attributes);
+    setRuntimeModelAttrs(defaults);
+    workerRef.current?.postMessage({ type: 'updateModelAttrs', attrs: defaults });
   };
 
   // F4: Screenshot export — 1:1 pixel-perfect from source canvas (no scaling).
@@ -2652,6 +2711,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             <>
               <hr className={styles.divider} />
               <div className={styles.sectionTitle}>Model Attributes</div>
+              <button className={styles.controlButton} onClick={handleResetModelAttrs}>
+                Reset to Default
+              </button>
               {modelAttrs.map(a => (
                 <div key={a.id} className={styles.fieldRow}>
                   <span className={styles.statLabel} style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={a.description || a.name}>{a.name}</span>
