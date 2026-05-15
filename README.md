@@ -130,16 +130,30 @@ A complete GenesisCA model definition consists of:
 ## Screenshots
 
 **Modeler** — Visual programming graph editor with node-based update rules:
-![Modeler](docs/screenshots/2026%2004%2007%20-%20Modeler.png)
+![Modeler](docs/Gifs/modeler.gif)
 
 **Simulator** — Real-time grid visualization with zoom, pan, and brush tools:
-![Simulator](docs/screenshots/2026%2004%2007%20-%20Simulator.png)
+![Simulator](docs/Gifs/simulator.gif)
 
 **Models Library** — Pre-made models to explore and learn from:
-![Library](docs/screenshots/2026%2004%2007%20-%20Library.png)
+![Library](docs/Gifs/model_library.gif)
 
-**Other Images**
-![Coagulation](docs/screenshots/2026_04_07-Coagulation.png)
+**Other**
+
+<table>
+  <tr>
+    <td align="center" width="25%"><img src="docs/Gifs/gray-scott.gif" width="100%"/><br/><sub>Gray-Scott reaction-diffusion</sub></td>
+    <td align="center" width="25%"><img src="docs/Gifs/wireworld.gif" width="100%"/><br/><sub>Wireworld (expanded)</sub></td>
+    <td align="center" width="25%"><img src="docs/Gifs/help.gif" width="100%"/><br/><sub>In-app Help tab</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/grayscott.png" width="100%"/><br/><sub>Gray-Scott (still)</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="25%"><img src="docs/screenshots/game_of_life.png" width="100%"/><br/><sub>Game of Life</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/coagulation.png" width="100%"/><br/><sub>Coagulation</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/elementary_1d_ca_rule90.png" width="100%"/><br/><sub>1D Elementary CA — Rule 90</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/elementary_1d_ca_rule110.png" width="100%"/><br/><sub>1D Elementary CA — Rule 110</sub></td>
+  </tr>
+</table>
 
 ---
 
