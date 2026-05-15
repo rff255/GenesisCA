@@ -8,11 +8,50 @@ An IDE for modeling and simulating Cellular Automata, built as a self-contained 
 
 ## What GenesisCA Is
 
-GenesisCA is an IDE for modeling and simulating Cellular Automata (CA). It uses a Visual Programming Language (VPL) — a node-based graph editor — so users can design arbitrarily complex CA models without writing code. The goals are **accessibility** (no programming required) and **performance** (grids up to 5000x5000+).
+GenesisCA is an IDE for modeling and simulating Cellular Automata (CA). It uses a Visual Programming Language (VPL) — a node-based graph editor — so users can design arbitrarily complex CA models without writing code. The goals are **accessibility** (no programming required) and **performance** (compiles WASM and even WebGPU for synchronous models).
 
-Everything runs 100% client-side — no server, no sign-up, no paid hosting.
+> Everything runs 100% client-side — no server, no sign-up, no paid hosting.
 
-Originally created as an undergraduate final project at the Universidade Federal de Pernambuco (UFPE, Brazil) in 2017, the application has been completely rewritten as a modern web application.
+Originally implemented in C++/Qt/DearImgui as an undergraduate final project at the Universidade Federal de Pernambuco (UFPE, Brazil) in 2017 (See historical branch `legacy_qt_cpp_solution`), the application has been completely rewritten as the free modern web application it is today.
+
+---
+
+## Overview
+
+### **Modeler**
+Visual programming graph editor with node-based update rules, and panel with total freedom to define any and how many cell attributes; neighborhoods; and mappings to/from colors from/to cell attributes:
+![Modeler](docs/Gifs/modeler.gif)
+
+### **Simulator**
+Real-time visualization with parameter controls; cell inspector; copy/paste selection; brush/image input; enabling saving of full grid state; recording gifs/videos; and taking screenshots:
+![Simulator](docs/Gifs/simulator.gif)
+
+### **Models Library**
+Pre-made models to explore and learn from. Enabling users to build upon classical or innovative models:
+![Library](docs/Gifs/model_library.gif)
+
+### **In-app Help**
+Detailed in-app help tab with a comprehensive tutorial and reference material regarding features, usage, shortcuts and such:
+![Library](docs/Gifs/help.gif)
+
+### **Example**
+Gray-Scott Reaction-Diffusion model `[Peter Gray & Stephen K. Scott (1983)]`:
+![Library](docs/Gifs/gray-scott.gif)
+
+**Other**
+
+<table>
+  <tr>
+    <td align="center" width="25%"><img src="docs/screenshots/elementary_1d_ca_rule90.png" width="100%"/><br/><sub>1D Elementary CA — Rule 90</sub></td>
+    <td align="center" width="25%"><img src="docs/Gifs/wireworld.gif" width="100%"/><br/><sub>Wireworld (expanded)</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/grayscott.png" width="100%"/><br/><sub>Gray-Scott (still)</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="25%"><img src="docs/screenshots/game_of_life.png" width="100%"/><br/><sub>Game of Life</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/coagulation.png" width="100%"/><br/><sub>Coagulation</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/elementary_1d_ca_rule110.png" width="100%"/><br/><sub>1D Elementary CA — Rule 110</sub></td>
+  </tr>
+</table>
 
 ---
 
@@ -46,7 +85,7 @@ A complete GenesisCA model definition consists of:
    - 1.3. Execution (Update Mode, optional End Conditions: max generations + indicator rules)
 
 2. **Attributes** — each has a name, type (bool, integer, float, tag, color, NeighborIndex), description, and a default value
-   - 2.1. Cell Attributes (per-cell state) — including NeighborIndex for cells that point at one of their neighbors (movement direction, leader-follower, etc.). Cell attributes can also be marked as **sub-attributes** — only well-defined when a parent (Tag or Bool) cell attribute is in a chosen value set, e.g. *charge* defined only on Wire / Pulsar / Switch cells. The compiler auto-injects parent-check guards at every read site so rules express "count head-charges around me" directly, with no manual filter-by-type chains.
+   - 2.1. Cell Attributes (per-cell state) — including NeighborIndex for cells that point at one of their neighbors (movement direction, leader-follower, etc.). Cell attributes can also be marked as **sub-attributes** — only well-defined when a parent (Tag or Bool) cell attribute is in a chosen value set, e.g. *charge* defined only on Wire (wireworld model). The compiler auto-injects parent-check guards at every read site so rules express "count head-charges around me" directly, with no manual filter-by-type chains
    - 2.2. Model Attributes (global parameters that all cells can read but not write; adjustable at runtime in the Simulator)
 
 3. **Neighborhoods** — a list of neighborhoods, each being a list of relative offsets from the central cell (margin up to 20), optionally including the central cell (`[0,0]`) itself
@@ -77,7 +116,7 @@ A complete GenesisCA model definition consists of:
 - **Node Explorer** — searchable right-side panel (Ctrl+F to open, Esc to close) listing all placed nodes with click-to-focus
 - **Incomplete-config warnings** — nodes with unset required parameters (e.g., an unselected attribute/neighborhood/mapping) show an amber warning badge in the header so you can spot them at a glance. Macro instances bubble up internal-node warnings (recursively through nested macros), so misconfigured internals are visible without opening the macro
 - **Macro System** — encapsulate node groups into reusable subgraphs with MacroInput/MacroOutput boundary nodes
-- **Undo/Redo** — Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) for node/edge operations, moves, paste, config changes
+- **Undo/Redo** (partial) — Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) for node/edge operations, moves, paste, config changes
 - **Copy/Paste/Duplicate** — Ctrl+C/V/X/D, context menu on single nodes and selections, paste at right-click location
 - **Groups & Comments** — visual organization tools; comment background color is customizable and the resized size persists; Undo Group dissolves a group and selects all contained nodes
 
@@ -85,15 +124,15 @@ A complete GenesisCA model definition consists of:
 - **Update Mode** — choose Synchronous (classic CA) or Asynchronous (sequential updates with single buffer) in Model Properties
 - **Update Schemes** — Random Order, Random Independent, or Cyclic — balancing accuracy vs. performance
 - **Async-only nodes** — Set Neighborhood Attribute, Set Neighbor Attr By Index for number-conserving movement patterns. Get Neighbor Attr By Index works in both modes.
-- **NeighborIndex type** — first-class typed handle that carries a packed `(dr, dc)` offset to a neighbor cell. Position-only and neighborhood-agnostic, so filter/pick/iterate/set chains compose without ever asking "from which neighborhood?". Distinguishes coord-handles from list-positions (positions in an array of values), eliminating a class of silent runtime bugs. Companion nodes: Get All Neighbor Indexes, Pick Random Neighbor, Pick N Random Neighbors, Neighbor Index (from Offset / from Tag), Flip Neighbor Index. Wiring a non-NI integer source into an NI port shows an amber warning badge on the target node.
-- **For Each In Array** — flow node that iterates a typed array and exposes the per-iteration element via an output port (JS-only currently). Useful for "iterate matching neighbors" patterns; body flow nodes can consume the element directly.
+- **NeighborIndex type** — first-class typed handle that carries a packed `(dr, dc)` offset to a neighbor cell. Position-only and neighborhood-agnostic, so filter/pick/iterate/set chains compose without ever asking "from which neighborhood?". Companion nodes: Get All Neighbor Indexes, Pick Random Neighbor, Pick N Random Neighbors, Neighbor Index (from Offset / from Tag), Flip Neighbor Index. Wiring a non-NI integer source into an NI port shows an amber warning badge on the target node.
+- **For Each In Array** — flow node that iterates a typed array and exposes the per-iteration element via an output port. Useful for "iterate matching neighbors" patterns; body flow nodes can consume the element directly.
 
 ### The Simulator
 - **Transport bar** — Play/Pause/Step/Reset with FPS and Gens/Frame sliders, keyboard shortcuts (Space=step, Enter=play/pause, Esc=reset)
 - **Save Project dialog** — checkboxes to include simulator controls (speed, brush, mapping, model-attribute values) and/or the full board state; choices persist across sessions
 - **Save / Load State** — save the full simulation snapshot (`.gcastate`) for experiment repeatability; load to restore a previous state. State is also embedded in `.gcaproj` for project-level persistence.
 - **Model Presets** — embed named snapshots of model-attribute values (and optionally the cell grid) in the project, listed in the left panel above Model Attributes. One-click switching between behavioral variants — ideal for generic models like MNCA where the same rules produce wildly different emergent patterns per parameter set. Include/exclude from `.gcaproj` via the Save Project dialog.
-- **Canvas controls** — LMB=brush, RMB=pan, MMB=toggle autoscroll (anchor + speed-by-distance pan; Esc to exit), scroll=zoom, Ctrl+LMB drag=resize brush, Ctrl+wheel=cycle input mappings, Shift+RMB=open in-page color picker at the cursor, Shift+LMB=open Inspect Cell popup (live attribute readout + RGB; draggable and stackable for comparing cells; hover to highlight the linked cell), Shift+LMB drag=sweep inspect (a single transient popup follows the cursor cell and is discarded on release — quick-peek a region without pinning many popups). The stats overlay shows the cell coordinates under the cursor (or the brush footprint range when brush > 1×1)
+- **Canvas controls** — LMB=brush, RMB=pan, MMB=toggle autoscroll (anchor + speed-by-distance pan; Esc to exit), scroll=zoom, Ctrl+LMB drag=resize brush, Ctrl+wheel=cycle input mappings, Shift+RMB=open in-page color picker at the cursor, Shift+LMB=open Inspect Cell popup (live attribute readout + RGB; draggable and stackable for comparing cells; hover to highlight the linked cell), Shift+LMB drag=sweep inspect (a single transient popup follows the cursor cell and is discarded on release
 - **Brush tool** — configurable color (with live R/G/B channel inputs beside the picker), width/height, input mapping; visual brush cursor; Ctrl+drag interactive resize
 - **Region clipboard** — Ctrl+C/V/X on the simulator copy/paste/cut all cell attributes within the brush rectangle; paste anchors to the brush's top-left corner
 - **Viewer tabs** — horizontal bar at the top to switch between Attribute-to-Color visualization modes
@@ -115,38 +154,7 @@ A complete GenesisCA model definition consists of:
 ## Documentation
 
 - [Node Reference](docs/NODES_REFERENCE.md) — full catalogue of the 50+ node types, port schemas, and compile-time semantics, with Mermaid diagrams of common patterns.
-- [NeighborIndex / List Attributes Impact Map](docs/IMPACT_MAP_NEIGHBORINDEX_LIST.md) — cross-subsystem analysis behind the NeighborIndex work.
 - [CA Literature Review](docs/CA_LITERATURE_REVIEW.md) — a survey of ~70 canonical cellular-automata models across physics, chemistry, biology, ecology, sociology, transport, earth sciences, CS theory and cryptography, with a shortlist driving GenesisCA's feature roadmap.
-
----
-
-## Screenshots
-
-**Modeler** — Visual programming graph editor with node-based update rules:
-![Modeler](docs/Gifs/modeler.gif)
-
-**Simulator** — Real-time grid visualization with zoom, pan, and brush tools:
-![Simulator](docs/Gifs/simulator.gif)
-
-**Models Library** — Pre-made models to explore and learn from:
-![Library](docs/Gifs/model_library.gif)
-
-**Other**
-
-<table>
-  <tr>
-    <td align="center" width="25%"><img src="docs/Gifs/gray-scott.gif" width="100%"/><br/><sub>Gray-Scott reaction-diffusion</sub></td>
-    <td align="center" width="25%"><img src="docs/Gifs/wireworld.gif" width="100%"/><br/><sub>Wireworld (expanded)</sub></td>
-    <td align="center" width="25%"><img src="docs/Gifs/help.gif" width="100%"/><br/><sub>In-app Help tab</sub></td>
-    <td align="center" width="25%"><img src="docs/screenshots/grayscott.png" width="100%"/><br/><sub>Gray-Scott (still)</sub></td>
-  </tr>
-  <tr>
-    <td align="center" width="25%"><img src="docs/screenshots/game_of_life.png" width="100%"/><br/><sub>Game of Life</sub></td>
-    <td align="center" width="25%"><img src="docs/screenshots/coagulation.png" width="100%"/><br/><sub>Coagulation</sub></td>
-    <td align="center" width="25%"><img src="docs/screenshots/elementary_1d_ca_rule90.png" width="100%"/><br/><sub>1D Elementary CA — Rule 90</sub></td>
-    <td align="center" width="25%"><img src="docs/screenshots/elementary_1d_ca_rule110.png" width="100%"/><br/><sub>1D Elementary CA — Rule 110</sub></td>
-  </tr>
-</table>
 
 ---
 
