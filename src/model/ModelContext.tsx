@@ -23,6 +23,7 @@ import type {
 } from './types';
 import { DEFAULT_MODEL, EMPTY_MODEL } from './defaultModel';
 import { cloneMacroWithFreshIds } from './macroImport';
+import { migrateColorInterpolationNodes } from './colorScaleMigration';
 import { clearAllSavedGraphViewports, setSavedCurrentScope } from '../modeler/vpl/graphState';
 
 // ---------------------------------------------------------------------------
@@ -547,6 +548,12 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // child positions (relative to a group) back to absolute and drop
       // data.parentId. Visual layout is preserved.
       m = migrateLegacyParentIds(m);
+      // Color Scale migration: rewrite legacy colorInterpolation nodes to
+      // the new colorScale shape (top-level + all macroDefs). Idempotent.
+      {
+        const r = migrateColorInterpolationNodes(m.graphNodes, m.graphEdges, m.macroDefs);
+        m = { ...m, graphNodes: r.graphNodes, graphEdges: r.graphEdges, macroDefs: r.macroDefs };
+      }
       return { model: m, isDirty: false, modelVersion: state.modelVersion + 1 };
     }
 

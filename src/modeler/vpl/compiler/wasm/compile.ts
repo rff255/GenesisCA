@@ -21,6 +21,7 @@
 
 import type { Attribute, CAModel, GraphNode, GraphEdge } from '../../../../model/types';
 import { getNodeDef } from '../../nodes/registry';
+import { readColorScaleStops } from '../../nodes/ColorScaleNode';
 import {
   ValType, F64, I32, OP_F64_ABS, OP_F64_ADD, OP_F64_CONVERT_I32_U, OP_F64_DIV,
   OP_F64_EQ, OP_F64_FLOOR, OP_F64_GE, OP_F64_GT, OP_F64_LE, OP_F64_LT,
@@ -140,7 +141,7 @@ interface WasmCompileCtx {
   colLocalIdx: number;
   /** Memoised value-node compile results for this per-cell pass.
    *  Keyed by nodeId → portId → LocalRef. Default port id is 'value'.
-   *  Multi-output value nodes (getColorConstant, colorInterpolation,
+   *  Multi-output value nodes (getColorConstant, colorScale,
    *  getModelAttribute color, inputColor) populate multiple ports. */
   valueLocals: Map<string, Map<string, LocalRef>>;
   /** Memoised array-producing emitter results. Array nodes only have one
@@ -1488,40 +1489,93 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return rRef;
   },
 
-  // -- colorInterpolation: Math.round(c1 + curve(t) * (c2 - c1)) per channel.
-  //    Math.round(x) = floor(x + 0.5) for the values we deal with (positive
-  //    color channels in [0, 255]). --
-  colorInterpolation: ({ ctx, node, inputs }) => {
-    const t  = inputs['t']  ?? { inline: true, value: 0.5, valtype: F64 };
-    const r1 = inputs['r1'] ?? { inline: true, value: 0,   valtype: I32 };
-    const g1 = inputs['g1'] ?? { inline: true, value: 0,   valtype: I32 };
-    const b1 = inputs['b1'] ?? { inline: true, value: 0,   valtype: I32 };
-    const r2 = inputs['r2'] ?? { inline: true, value: 255, valtype: I32 };
-    const g2 = inputs['g2'] ?? { inline: true, value: 255, valtype: I32 };
-    const b2 = inputs['b2'] ?? { inline: true, value: 255, valtype: I32 };
+  // -- colorScale: maps t to RGB via N color stops + selectable curve.
+  //    Sorted-by-position stops; head t<=p[0] clamps to first; tail t>=p[N-1]
+  //    clamps to last; each interior segment computes
+  //    round(a.c + curve(localT) * (b.c - a.c)) per channel. --
+  colorScale: ({ ctx, node, inputs }) => {
+    const t = inputs['t'] ?? { inline: true, value: 0.5, valtype: F64 };
     const method = (node.data.config.method as string) || 'linear';
-    const tRaw = ctx.emitter.allocLocal(F64);
-    pushValueAs(ctx.emitter, t, F64);
-    ctx.emitter.localSet(tRaw);
-    const tLoc = emitInterpolationCurveWasm(ctx.emitter, tRaw, method);
-    const emitCh = (c1: ValueRef, c2: ValueRef): LocalRef => {
-      // floor(c1 + curveT * (c2 - c1) + 0.5) → i32
-      pushValueAs(ctx.emitter, c1, F64);
-      ctx.emitter.localGet(tLoc);
-      pushValueAs(ctx.emitter, c2, F64);
-      pushValueAs(ctx.emitter, c1, F64);
-      ctx.emitter.op(OP_F64_SUB);
-      ctx.emitter.op(OP_F64_MUL);
-      ctx.emitter.op(OP_F64_ADD);
-      ctx.emitter.f64Const(0.5);
-      ctx.emitter.op(OP_F64_ADD);
-      ctx.emitter.op(OP_F64_FLOOR);
-      ctx.emitter.f64ToI32();
-      return storeResult(ctx.emitter, I32);
+    const stops = readColorScaleStops(node.data.config);
+
+    const em = ctx.emitter;
+    const tLoc = em.allocLocal(F64);
+    const rLoc = em.allocLocal(I32);
+    const gLoc = em.allocLocal(I32);
+    const bLoc = em.allocLocal(I32);
+
+    pushValueAs(em, t, F64);
+    em.localSet(tLoc);
+
+    const writeConst = (r: number, g: number, b: number) => {
+      em.i32Const(r | 0); em.localSet(rLoc);
+      em.i32Const(g | 0); em.localSet(gLoc);
+      em.i32Const(b | 0); em.localSet(bLoc);
     };
-    const rRef = emitCh(r1, r2);
-    const gRef = emitCh(g1, g2);
-    const bRef = emitCh(b1, b2);
+    const writeSegment = (a: { p: number; r: number; g: number; b: number },
+                          b: { p: number; r: number; g: number; b: number }) => {
+      const localTLoc = em.allocLocal(F64);
+      em.localGet(tLoc);
+      em.f64Const(a.p);
+      em.op(OP_F64_SUB);
+      em.f64Const(b.p - a.p);
+      em.op(OP_F64_DIV);
+      em.localSet(localTLoc);
+      const curveLoc = emitInterpolationCurveWasm(em, localTLoc, method);
+      const chan = (ac: number, bc: number, dst: number) => {
+        em.f64Const(ac);
+        em.localGet(curveLoc);
+        em.f64Const(bc - ac);
+        em.op(OP_F64_MUL);
+        em.op(OP_F64_ADD);
+        em.f64Const(0.5);
+        em.op(OP_F64_ADD);
+        em.op(OP_F64_FLOOR);
+        em.f64ToI32();
+        em.localSet(dst);
+      };
+      chan(a.r, b.r, rLoc);
+      chan(a.g, b.g, gLoc);
+      chan(a.b, b.b, bLoc);
+    };
+
+    if (stops.length === 0) {
+      writeConst(0, 0, 0);
+    } else if (stops.length === 1) {
+      writeConst(stops[0]!.r, stops[0]!.g, stops[0]!.b);
+    } else {
+      const first = stops[0]!;
+      em.localGet(tLoc);
+      em.f64Const(first.p);
+      em.op(OP_F64_LE);
+      em.ifThenElse(
+        () => writeConst(first.r, first.g, first.b),
+        () => {
+          const buildChain = (i: number) => {
+            if (i >= stops.length - 1) {
+              const last = stops[stops.length - 1]!;
+              writeConst(last.r, last.g, last.b);
+              return;
+            }
+            const a = stops[i]!;
+            const b = stops[i + 1]!;
+            if (b.p === a.p) { buildChain(i + 1); return; }
+            em.localGet(tLoc);
+            em.f64Const(b.p);
+            em.op(OP_F64_LT);
+            em.ifThenElse(
+              () => writeSegment(a, b),
+              () => buildChain(i + 1),
+            );
+          };
+          buildChain(0);
+        },
+      );
+    }
+
+    const rRef: LocalRef = { localIdx: rLoc, valtype: I32 };
+    const gRef: LocalRef = { localIdx: gLoc, valtype: I32 };
+    const bRef: LocalRef = { localIdx: bLoc, valtype: I32 };
     setCachedPort(ctx, node.id, 'r', rRef);
     setCachedPort(ctx, node.id, 'g', gRef);
     setCachedPort(ctx, node.id, 'b', bRef);

@@ -1,4 +1,5 @@
 import type { MacroDef, MacroPort, GraphNode, GraphEdge } from './types';
+import { migrateColorInterpolationInMacroDef } from './colorScaleMigration';
 
 function genId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
@@ -24,7 +25,11 @@ function genId(prefix: string): string {
  * inside the subgraph and don't collide across macro instances because each
  * MacroDef.id differs.
  */
-export function cloneMacroWithFreshIds(raw: MacroDef): MacroDef {
+export function cloneMacroWithFreshIds(rawIn: MacroDef): MacroDef {
+  // Rewrite any legacy colorInterpolation nodes inside the source MacroDef
+  // BEFORE the id remap. Idempotent — returns the same reference when no
+  // matching nodes are present, so the default no-colorInterp path is free.
+  const raw = migrateColorInterpolationInMacroDef(rawIn);
   const newMacroId = genId('mac');
   const idMap = new Map<string, string>();
   const mapId = (oldId: string): string => {

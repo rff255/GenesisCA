@@ -165,7 +165,7 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 |---|---|---|---|---|---|
 | 37 | `setColorViewer` | Set Color Viewer | Write R/G/B to the output mapping's color buffer. | `I: DO` (flow) `I: R` `I: G` `I: B` / — | Used in `outputMapping` chains |
 | 38 | `getColorConstant` | Color Constant | Emit a fixed RGB triple. | `O: R` `O: G` `O: B` (int) | |
-| 39 | `colorInterpolation` | Color Interpolate | Linearly interpolate between two RGB colors by `T`. | `I: T` (float) `I: R1 G1 B1 R2 G2 B2` / `O: R` `O: G` `O: B` | |
+| 39 | `colorScale` | Color Scale | Map `T` to an RGB color via N colour stops with a selectable curve (linear / smoothstep / easeInQuad / easeOutQuad / exponential / logarithmic). Replaces the legacy `colorInterpolation` node. | `I: T` (float) / `O: R` `O: G` `O: B` (int) | Min 2 stops; `t` outside the stop range clamps to nearest endpoint |
 
 ### Hidden / auto-generated
 
@@ -284,7 +284,7 @@ graph LR
 
   A[getColorConstant<br/>picker]:::prod -- R,G,B --> C
   B[getModelAttribute<br/>color-typed]:::prod -- R,G,B --> C
-  D[colorInterpolation<br/>2 pickers + T]:::prod -- R,G,B --> C
+  D[colorScale<br/>N stops + T]:::prod -- R,G,B --> C
   E[inputColor event]:::prod -- R,G,B --> C
 
   C[setColorViewer]:::cons
@@ -295,7 +295,7 @@ graph LR
 - No first-class "color" port type. Every color transit requires three edges
   (or three inline widget values). This makes simple flows like "paint cell the
   brush color" verbose.
-- Color pickers are re-implemented in three nodes: `getColorConstant`, `colorInterpolation`,
+- Color pickers are re-implemented in three nodes: `getColorConstant`, `colorScale`,
   and `setColorViewer` (on its R/G/B inline widgets).
 - `getModelAttribute` becomes 3-port when the attribute is color-typed — a type-aware
   port set. No other node has this behaviour.
@@ -368,7 +368,7 @@ These are **ideas**, not committed work. They inform future passes on the node s
   `getNeighborAttributeByIndex` (scalar): plural "s" indicates array, but the
   singular "ByIndex" (not "ByIndexes") muddies the pattern.
 - Colour-picker and color-channel nodes don't use a consistent vocabulary —
-  `getColorConstant` vs `setColorViewer` vs `colorInterpolation` all refer to colors
+  `getColorConstant` vs `setColorViewer` vs `colorScale` all refer to colors
   but from different angles.
 
 ### 6.3 Consolidation proposals
