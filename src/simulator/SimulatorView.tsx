@@ -1574,11 +1574,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const [, bumpInspectVersion] = useState(0);
   const popoverRectsRef = useRef<Map<number, DOMRect>>(new Map());
   const pulseTimerRef = useRef<number | null>(null);
+  // Shift+LMB sweep: hold-and-drag a single transient inspector across cells
+  // instead of pinning one popover per click. On release, if the cursor never
+  // left the start cell we COMMIT (fall through to the existing pin path); if
+  // it moved we DISCARD. The ref mirrors state so the mouse handlers (registered
+  // once per useEffect run) read the live value without closure staleness.
+  const [sweepInspector, setSweepInspector] = useState<InspectPopoverState | null>(null);
+  const sweepInspectorRef = useRef<InspectPopoverState | null>(null);
+  const sweepActiveRef = useRef(false);
+  const sweepStartCellRef = useRef<number | null>(null);
+  const sweepMovedRef = useRef(false);
+  const sweepRectRef = useRef<DOMRect | null>(null);
   // Mirror the popover cell ids in a ref so worker-init code (running outside
   // React's render cycle) can re-publish the subscription without staleness.
   const inspectCellIdxsRef = useRef<number[]>([]);
   useEffect(() => {
-    const ids = inspectPopovers.map(p => p.cellIdx);
+    const pinnedIds = inspectPopovers.map(p => p.cellIdx);
+    const sweepIdx = sweepInspector?.cellIdx;
+    const ids = sweepIdx != null && !pinnedIds.includes(sweepIdx)
+      ? [...pinnedIds, sweepIdx]
+      : pinnedIds;
     inspectCellIdxsRef.current = ids;
     // Drop stale rect entries so the hover overlay doesn't anchor to a
     // popover that was just closed.
@@ -1593,7 +1608,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (!live.has(k)) inspectColorsRef.current.delete(k);
     }
     workerRef.current?.postMessage({ type: 'setInspectCells', cellIdxs: ids });
-  }, [inspectPopovers]);
+  }, [inspectPopovers, sweepInspector?.cellIdx]);
   // Auto-close popovers whose cell is out of bounds after a grid resize.
   useEffect(() => {
     const w = model.properties.gridWidth;
@@ -1602,7 +1617,42 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const next = prev.filter(p => p.row < h && p.col < w);
       return next.length === prev.length ? prev : next;
     });
+    setSweepInspector(prev => {
+      if (!prev) return prev;
+      if (prev.row >= h || prev.col >= w) {
+        sweepActiveRef.current = false;
+        sweepStartCellRef.current = null;
+        sweepMovedRef.current = false;
+        sweepInspectorRef.current = null;
+        return null;
+      }
+      return prev;
+    });
   }, [model.properties.gridWidth, model.properties.gridHeight]);
+
+  // Pin (or re-focus) an inspector popover at the given cell. Shared by the
+  // Shift+LMB click path (mouseup-after-no-movement on a sweep) and any
+  // future commit point.
+  const commitInspectPopover = useCallback((idx: number, row: number, col: number, x: number, y: number) => {
+    setInspectPopovers(prev => {
+      const existingIdx = prev.findIndex(p => p.cellIdx === idx);
+      if (existingIdx >= 0) {
+        const next = [...prev];
+        const [moved] = next.splice(existingIdx, 1);
+        next.push(moved!);
+        setPulseInspectIdx(idx);
+        if (pulseTimerRef.current != null) window.clearTimeout(pulseTimerRef.current);
+        pulseTimerRef.current = window.setTimeout(() => {
+          setPulseInspectIdx(curr => (curr === idx ? null : curr));
+          pulseTimerRef.current = null;
+        }, 500);
+        setFocusedInspectIdx(idx);
+        return next;
+      }
+      return [...prev, { cellIdx: idx, row, col, x, y }];
+    });
+    setFocusedInspectIdx(idx);
+  }, []);
 
   /** Convert screen coords to grid cell coords. In infinity mode, wraps via
    *  modulo so painting / hovering across tile seams hits the correct cell. */
@@ -1874,8 +1924,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
 
       if (e.button === 0 && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
-        // Shift+LMB = open inspect-cell popup. Mirrors the Shift+RMB brush
-        // color popup — modifier+click is the "debug info, don't paint" gesture.
+        // Shift+LMB = start a cell-inspector sweep. A plain click (release on
+        // the same cell as press, no drag) commits via mouseup → pins a popover
+        // (today's behavior). Dragging to a different cell recycles a single
+        // transient popover and discards it on release — quick-peek across a
+        // region without accumulating popovers.
         e.preventDefault();
         const cell = screenToGrid(e.clientX, e.clientY);
         // Guard against the brief window where the canvas hasn't been laid out
@@ -1885,26 +1938,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         const w = gridWidth.current;
         if (w <= 0) return;
         const idx = cell.row * w + cell.col;
-        setInspectPopovers(prev => {
-          const existingIdx = prev.findIndex(p => p.cellIdx === idx);
-          if (existingIdx >= 0) {
-            // Re-open on the same cell: bring to front + pulse so the user can
-            // spot which popup they re-clicked among several open ones.
-            const next = [...prev];
-            const [moved] = next.splice(existingIdx, 1);
-            next.push(moved!);
-            setPulseInspectIdx(idx);
-            if (pulseTimerRef.current != null) window.clearTimeout(pulseTimerRef.current);
-            pulseTimerRef.current = window.setTimeout(() => {
-              setPulseInspectIdx(curr => (curr === idx ? null : curr));
-              pulseTimerRef.current = null;
-            }, 500);
-            setFocusedInspectIdx(idx);
-            return next;
-          }
-          return [...prev, { cellIdx: idx, row: cell.row, col: cell.col, x: e.clientX, y: e.clientY }];
-        });
-        setFocusedInspectIdx(idx);
+        const inspector: InspectPopoverState = { cellIdx: idx, row: cell.row, col: cell.col, x: e.clientX, y: e.clientY };
+        sweepActiveRef.current = true;
+        sweepStartCellRef.current = idx;
+        sweepMovedRef.current = false;
+        sweepInspectorRef.current = inspector;
+        setSweepInspector(inspector);
         return;
       }
 
@@ -1995,6 +2034,34 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
       if (!isPanning.current && !(e.buttons & 1) && !isResizingBrush.active) draw();
 
+      // Shift+LMB sweep: update the transient inspector to follow the cursor
+      // cell, and detect movement off the start cell (= sweep, not click).
+      // Releasing Shift mid-drag cancels the sweep entirely.
+      if (sweepActiveRef.current) {
+        if (!e.shiftKey) {
+          sweepActiveRef.current = false;
+          sweepStartCellRef.current = null;
+          sweepMovedRef.current = false;
+          sweepInspectorRef.current = null;
+          setSweepInspector(null);
+          return;
+        }
+        if (gridPos && Number.isFinite(gridPos.row) && Number.isFinite(gridPos.col)) {
+          const w = gridWidth.current;
+          if (w > 0) {
+            const idx = gridPos.row * w + gridPos.col;
+            if (idx !== sweepStartCellRef.current) sweepMovedRef.current = true;
+            const prior = sweepInspectorRef.current;
+            if (prior && prior.cellIdx !== idx) {
+              const next = { ...prior, cellIdx: idx, row: gridPos.row, col: gridPos.col };
+              sweepInspectorRef.current = next;
+              setSweepInspector(next);
+            }
+          }
+        }
+        return;
+      }
+
       // Ctrl+LMB drag = resize brush
       if (isResizingBrush.active) {
         const dx = e.clientX - isResizingBrush.startX;
@@ -2025,6 +2092,23 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     };
 
     const handleMouseUp = () => {
+      // End of a Shift+LMB sweep: if the cursor never left the start cell,
+      // commit (pin the popover — today's Shift+LMB click behavior). If it
+      // moved, discard the transient. Runs before the brush-stroke cleanup
+      // because sweep is mutually exclusive with paint/pan.
+      if (sweepActiveRef.current) {
+        const inspector = sweepInspectorRef.current;
+        const moved = sweepMovedRef.current;
+        sweepActiveRef.current = false;
+        sweepStartCellRef.current = null;
+        sweepMovedRef.current = false;
+        sweepInspectorRef.current = null;
+        setSweepInspector(null);
+        if (!moved && inspector) {
+          commitInspectPopover(inspector.cellIdx, inspector.row, inspector.col, inspector.x, inspector.y);
+        }
+        return;
+      }
       isPanning.current = false;
       isResizingBrush.active = false;
       canvasBrushActive = false;
@@ -2080,7 +2164,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       autoscrollOriginRef.current = null;
       autoscrollCursorRef.current = null;
     };
-  }, [draw, paintAt, screenToGrid, flushPaintBatch]);
+  }, [draw, paintAt, screenToGrid, flushPaintBatch, commitInspectPopover]);
 
   // Play: kick-start the step pipeline (worker message handler chains subsequent steps)
   useEffect(() => {
@@ -3217,6 +3301,25 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           onRectMeasure={(rect) => { popoverRectsRef.current.set(p.cellIdx, rect); }}
         />
       ))}
+      {sweepInspector && (
+        <InspectCellPopover
+          key="sweep"
+          popover={sweepInspector}
+          cellAttrs={model.attributes.filter(a => !a.isModelAttribute)}
+          values={inspectDataRef.current.get(sweepInspector.cellIdx) ?? null}
+          color={inspectColorsRef.current.get(sweepInspector.cellIdx) ?? null}
+          pulse={false}
+          focused={false}
+          totalOpen={inspectPopovers.length + 1}
+          onClose={() => {}}
+          onCloseAll={() => {}}
+          onFocus={() => {}}
+          onDragEnd={() => {}}
+          onHoverEnter={() => {}}
+          onHoverLeave={() => {}}
+          onRectMeasure={(rect) => { sweepRectRef.current = rect; }}
+        />
+      )}
       {hoveredInspectIdx != null && (() => {
         const p = inspectPopovers.find(pp => pp.cellIdx === hoveredInspectIdx);
         if (!p) return null;
@@ -3229,6 +3332,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             cellY={cell.y}
             cellSize={cell.cellSize}
             popupRect={popupRect}
+          />
+        );
+      })()}
+      {sweepInspector && (() => {
+        // Always draw the link line + cell outline for the transient sweep
+        // popover — it's the user's primary feedback for which cell is being
+        // inspected as they drag the cursor around.
+        const cell = gridToScreen(sweepInspector.row, sweepInspector.col);
+        if (!cell) return null;
+        return (
+          <InspectHoverLink
+            cellX={cell.x}
+            cellY={cell.y}
+            cellSize={cell.cellSize}
+            popupRect={sweepRectRef.current ?? undefined}
           />
         );
       })()}
