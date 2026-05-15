@@ -1,4 +1,4 @@
-import { memo, useCallback, useState, useMemo, useSyncExternalStore } from 'react';
+import { memo, useCallback, useState, useMemo, useRef, useSyncExternalStore } from 'react';
 import { Handle, Position, useReactFlow } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
@@ -84,6 +84,245 @@ interface CaNodeData {
   nodeType: string;
   config: NodeConfig;
   [key: string]: unknown;
+}
+
+/** Gradient-editor UI for the Color Scale node. Renders a CSS gradient bar
+ *  with draggable color-stop markers, a detail row for the selected stop
+ *  (numeric position + color picker + delete), and an "+ Add Stop" button.
+ *  Stops live in node.data.config as `stopCount` + `stop_<i>_(position|r|g|b)`. */
+function ColorScaleEditor({ id, nodeData }: { id: string; nodeData: CaNodeData }) {
+  const { updateNodeData } = useReactFlow();
+  const [selectedStopIdx, setSelectedStopIdx] = useState<number>(0);
+  const barRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<
+    { idx: number; startX: number; startP: number; barWidth: number } | null
+  >(null);
+
+  type StopUI = { p: number; r: number; g: number; b: number };
+  const stopCount = Math.max(0, Number(nodeData.config.stopCount) || 0);
+  const stops: StopUI[] = [];
+  for (let i = 0; i < stopCount; i++) {
+    stops.push({
+      p: Number(nodeData.config[`stop_${i}_position`] ?? '0'),
+      r: parseInt(String(nodeData.config[`stop_${i}_r`] ?? '0'), 10) || 0,
+      g: parseInt(String(nodeData.config[`stop_${i}_g`] ?? '0'), 10) || 0,
+      b: parseInt(String(nodeData.config[`stop_${i}_b`] ?? '0'), 10) || 0,
+    });
+  }
+  const safeIdx = Math.min(Math.max(0, selectedStopIdx), Math.max(0, stops.length - 1));
+  const selStop = stops[safeIdx];
+
+  const stopDrag = (e: React.MouseEvent) => {
+    if (e.button === 0) e.stopPropagation();
+  };
+
+  const writeStops = (next: StopUI[]) => {
+    const newConfig: NodeConfig = { ...nodeData.config };
+    for (const k of Object.keys(newConfig)) {
+      if (/^stop_\d+_(position|r|g|b)$/.test(k)) delete newConfig[k];
+    }
+    next.forEach((s, i) => {
+      newConfig[`stop_${i}_position`] = String(s.p);
+      newConfig[`stop_${i}_r`] = String(s.r | 0);
+      newConfig[`stop_${i}_g`] = String(s.g | 0);
+      newConfig[`stop_${i}_b`] = String(s.b | 0);
+    });
+    newConfig.stopCount = next.length;
+    updateNodeData(id, { ...nodeData, config: newConfig });
+  };
+
+  const updateStop = (i: number, patch: Partial<StopUI>) => {
+    writeStops(stops.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+  };
+
+  const sampleAt = (p: number): { r: number; g: number; b: number } => {
+    if (stops.length === 0) return { r: 0, g: 0, b: 0 };
+    const sorted = [...stops].sort((a, b) => a.p - b.p);
+    if (p <= sorted[0]!.p) return { r: sorted[0]!.r, g: sorted[0]!.g, b: sorted[0]!.b };
+    if (p >= sorted[sorted.length - 1]!.p) {
+      const s = sorted[sorted.length - 1]!;
+      return { r: s.r, g: s.g, b: s.b };
+    }
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const a = sorted[i]!;
+      const b = sorted[i + 1]!;
+      if (p < b.p && b.p !== a.p) {
+        const t = (p - a.p) / (b.p - a.p);
+        return {
+          r: Math.round(a.r + t * (b.r - a.r)),
+          g: Math.round(a.g + t * (b.g - a.g)),
+          b: Math.round(a.b + t * (b.b - a.b)),
+        };
+      }
+    }
+    return { r: 0, g: 0, b: 0 };
+  };
+
+  const addStop = () => {
+    const sorted = [...stops].sort((a, b) => a.p - b.p);
+    const last = sorted[sorted.length - 1];
+    const prev = sorted[sorted.length - 2];
+    let np = 0.5;
+    let sample = { r: 128, g: 128, b: 128 };
+    if (last && prev) {
+      np = (last.p + prev.p) / 2;
+      sample = sampleAt(np);
+    } else if (last) {
+      np = Math.min(1, last.p + 0.1);
+      sample = { r: last.r, g: last.g, b: last.b };
+    }
+    const next = [...stops, { p: np, ...sample }];
+    writeStops(next);
+    setSelectedStopIdx(next.length - 1);
+  };
+
+  const deleteStop = (i: number) => {
+    if (stops.length <= 2) return;
+    const next = stops.filter((_, j) => j !== i);
+    writeStops(next);
+    setSelectedStopIdx(Math.max(0, Math.min(i, next.length - 1)));
+  };
+
+  const sortedForCss = [...stops].sort((a, b) => a.p - b.p);
+  const gradStops = sortedForCss.length === 0
+    ? 'rgb(0,0,0)'
+    : sortedForCss
+        .map(s => `rgb(${s.r},${s.g},${s.b}) ${Math.max(0, Math.min(1, s.p)) * 100}%`)
+        .join(', ');
+  const barBg = `linear-gradient(to right, ${gradStops})`;
+
+  return (
+    <>
+      <div
+        ref={barRef}
+        style={{
+          position: 'relative',
+          height: 22,
+          width: '100%',
+          background: barBg,
+          border: '1px solid #2a3a4a',
+          borderRadius: 3,
+          cursor: 'crosshair',
+        }}
+        onMouseDown={stopDrag}
+        onClick={(e) => {
+          if (!barRef.current || dragRef.current) return;
+          if (e.target !== barRef.current) return;
+          const rect = barRef.current.getBoundingClientRect();
+          const p = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+          const sampled = sampleAt(p);
+          const next = [...stops, { p, ...sampled }];
+          writeStops(next);
+          setSelectedStopIdx(next.length - 1);
+        }}
+      >
+        {stops.map((s, i) => (
+          <div
+            key={i}
+            style={{
+              position: 'absolute',
+              left: `calc(${Math.max(0, Math.min(1, s.p)) * 100}% - 6px)`,
+              top: -3,
+              width: 12,
+              height: 28,
+              background: `rgb(${s.r},${s.g},${s.b})`,
+              border: i === safeIdx ? '2px solid #4cc9f0' : '1px solid #cfd8dc',
+              borderRadius: 2,
+              cursor: 'grab',
+              boxSizing: 'border-box',
+            }}
+            onMouseDown={(e) => {
+              if (e.button !== 0) return;
+              e.preventDefault();
+              e.stopPropagation();
+              if (!barRef.current) return;
+              const rect = barRef.current.getBoundingClientRect();
+              dragRef.current = { idx: i, startX: e.clientX, startP: s.p, barWidth: rect.width };
+              setSelectedStopIdx(i);
+              const onMove = (ev: MouseEvent) => {
+                const d = dragRef.current;
+                if (!d) return;
+                const dp = (ev.clientX - d.startX) / d.barWidth;
+                const newP = Math.max(0, Math.min(1, d.startP + dp));
+                updateStop(d.idx, { p: newP });
+              };
+              const onUp = () => {
+                dragRef.current = null;
+                window.removeEventListener('mousemove', onMove);
+                window.removeEventListener('mouseup', onUp);
+              };
+              window.addEventListener('mousemove', onMove);
+              window.addEventListener('mouseup', onUp);
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setSelectedStopIdx(i);
+            }}
+            title={`Stop ${i}: pos ${s.p.toFixed(3)}, rgb(${s.r},${s.g},${s.b})`}
+          />
+        ))}
+      </div>
+
+      {selStop && (
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          <input
+            className={styles.input}
+            type="number"
+            min={0}
+            max={1}
+            step={0.01}
+            lang="en"
+            inputMode="decimal"
+            value={selStop.p}
+            onChange={(e) => updateStop(safeIdx, { p: parseFloat(e.target.value) || 0 })}
+            onMouseDown={stopDrag}
+            style={{ width: 60 }}
+            title="Stop position"
+          />
+          <input
+            type="color"
+            className={styles.input}
+            style={{ height: 24, padding: 1, cursor: 'pointer', flex: 1 }}
+            value={`#${[selStop.r, selStop.g, selStop.b]
+              .map(c => Math.min(255, Math.max(0, c)).toString(16).padStart(2, '0'))
+              .join('')}`}
+            onChange={(e) => {
+              const h = e.target.value;
+              updateStop(safeIdx, {
+                r: parseInt(h.slice(1, 3), 16),
+                g: parseInt(h.slice(3, 5), 16),
+                b: parseInt(h.slice(5, 7), 16),
+              });
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button
+            onClick={() => deleteStop(safeIdx)}
+            disabled={stops.length <= 2}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: stops.length <= 2 ? '#586060' : '#f44336',
+              cursor: stops.length <= 2 ? 'not-allowed' : 'pointer',
+              fontSize: '0.7rem',
+              padding: '0 2px',
+            }}
+            title={stops.length <= 2 ? 'A scale must have at least 2 stops' : 'Delete this stop'}
+          >
+            x
+          </button>
+        </div>
+      )}
+
+      <button
+        className={styles.select}
+        style={{ cursor: 'pointer', textAlign: 'center' }}
+        onClick={addStop}
+      >
+        + Add Stop
+      </button>
+    </>
+  );
 }
 
 function CaNodeComponent({ id, data }: NodeProps) {
@@ -599,9 +838,10 @@ function CaNodeComponent({ id, data }: NodeProps) {
         average: 'Average', median: 'Median', and: 'AND', or: 'OR',
       };
       collapsedLabel = opLabels[op] ?? op;
-    } else if (nodeData.nodeType === 'colorInterpolation') {
+    } else if (nodeData.nodeType === 'colorScale') {
       const m = ((nodeData.config.method as string) || DEFAULT_INTERPOLATION_METHOD) as InterpolationMethod;
-      collapsedLabel = `Color Interp · ${INTERPOLATION_SHORT_LABELS[m] ?? m}`;
+      const nStops = Math.max(0, Number(nodeData.config.stopCount) || 0);
+      collapsedLabel = `Color Scale · ${INTERPOLATION_SHORT_LABELS[m] ?? m} · ${nStops} stops`;
     } else if (nodeData.nodeType === 'proportionMap') {
       const m = ((nodeData.config.method as string) || DEFAULT_INTERPOLATION_METHOD) as InterpolationMethod;
       collapsedLabel = `Prop Map · ${INTERPOLATION_SHORT_LABELS[m] ?? m}`;
@@ -628,19 +868,22 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
     // Color preview dot for nodes with unconnected color inline inputs
     let collapsedColorPreview: string | undefined;
-    if (nodeData.nodeType === 'setColorViewer' || nodeData.nodeType === 'colorInterpolation') {
-      // Check common port IDs for color channels
-      const portIds = nodeData.nodeType === 'colorInterpolation'
-        ? { r: 'r1', g: 'g1', b: 'b1' }
-        : { r: 'r', g: 'g', b: 'b' };
-      const rConn = connectedInputHandles.has(handleId({ id: portIds.r, kind: 'input', category: 'value' }));
-      const gConn = connectedInputHandles.has(handleId({ id: portIds.g, kind: 'input', category: 'value' }));
-      const bConn = connectedInputHandles.has(handleId({ id: portIds.b, kind: 'input', category: 'value' }));
+    if (nodeData.nodeType === 'setColorViewer') {
+      const rConn = connectedInputHandles.has(handleId({ id: 'r', kind: 'input', category: 'value' }));
+      const gConn = connectedInputHandles.has(handleId({ id: 'g', kind: 'input', category: 'value' }));
+      const bConn = connectedInputHandles.has(handleId({ id: 'b', kind: 'input', category: 'value' }));
       if (!rConn && !gConn && !bConn) {
-        const pr = parseInt(String(nodeData.config[`_port_${portIds.r}`] ?? '0'), 10);
-        const pg = parseInt(String(nodeData.config[`_port_${portIds.g}`] ?? '0'), 10);
-        const pb = parseInt(String(nodeData.config[`_port_${portIds.b}`] ?? '0'), 10);
+        const pr = parseInt(String(nodeData.config._port_r ?? '0'), 10);
+        const pg = parseInt(String(nodeData.config._port_g ?? '0'), 10);
+        const pb = parseInt(String(nodeData.config._port_b ?? '0'), 10);
         collapsedColorPreview = `rgb(${pr},${pg},${pb})`;
+      }
+    } else if (nodeData.nodeType === 'colorScale') {
+      if ((Number(nodeData.config.stopCount) || 0) >= 1) {
+        const r = parseInt(String(nodeData.config.stop_0_r ?? '0'), 10) || 0;
+        const g = parseInt(String(nodeData.config.stop_0_g ?? '0'), 10) || 0;
+        const b = parseInt(String(nodeData.config.stop_0_b ?? '0'), 10) || 0;
+        collapsedColorPreview = `rgb(${r},${g},${b})`;
       }
     }
 
@@ -720,7 +963,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
       {configIssues.length > 0 && (
         <div className={styles.warningBadge} title={configIssues.join('\n')}>!</div>
       )}
-      <div className={styles.body} onDoubleClick={stopAll}>
+      <div className={`${styles.body} nodrag`} onDoubleClick={stopAll}>
         {/* Node-specific config UI */}
         {nodeData.nodeType === 'getCellAttribute' && (
           <select
@@ -1308,66 +1551,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
           );
         })()}
 
-        {nodeData.nodeType === 'colorInterpolation' && (() => {
-          const fromConnected =
-            connectedInputHandles.has(handleId({ id: 'r1', kind: 'input', category: 'value' })) &&
-            connectedInputHandles.has(handleId({ id: 'g1', kind: 'input', category: 'value' })) &&
-            connectedInputHandles.has(handleId({ id: 'b1', kind: 'input', category: 'value' }));
-          const toConnected =
-            connectedInputHandles.has(handleId({ id: 'r2', kind: 'input', category: 'value' })) &&
-            connectedInputHandles.has(handleId({ id: 'g2', kind: 'input', category: 'value' })) &&
-            connectedInputHandles.has(handleId({ id: 'b2', kind: 'input', category: 'value' }));
-          const fr = parseInt(String(nodeData.config._port_r1 ?? '0'), 10) || 0;
-          const fg = parseInt(String(nodeData.config._port_g1 ?? '0'), 10) || 0;
-          const fb = parseInt(String(nodeData.config._port_b1 ?? '0'), 10) || 0;
-          const tr = parseInt(String(nodeData.config._port_r2 ?? '255'), 10) || 0;
-          const tg = parseInt(String(nodeData.config._port_g2 ?? '255'), 10) || 0;
-          const tb = parseInt(String(nodeData.config._port_b2 ?? '255'), 10) || 0;
-          const fromHex = `#${Math.min(255,Math.max(0,fr)).toString(16).padStart(2,'0')}${Math.min(255,Math.max(0,fg)).toString(16).padStart(2,'0')}${Math.min(255,Math.max(0,fb)).toString(16).padStart(2,'0')}`;
-          const toHex = `#${Math.min(255,Math.max(0,tr)).toString(16).padStart(2,'0')}${Math.min(255,Math.max(0,tg)).toString(16).padStart(2,'0')}${Math.min(255,Math.max(0,tb)).toString(16).padStart(2,'0')}`;
-          return (
-            <>
-              {!fromConnected && (
-                <>
-                  <span style={{ fontSize: '0.6rem', color: '#8090a0' }}>Color From</span>
-                  <input
-                    type="color" className={styles.input}
-                    style={{ height: 24, padding: 1, cursor: 'pointer' }}
-                    value={fromHex}
-                    onChange={e => {
-                      const h = e.target.value;
-                      updateNodeData(id, { ...nodeData, config: { ...nodeData.config,
-                        _port_r1: String(parseInt(h.slice(1,3),16)),
-                        _port_g1: String(parseInt(h.slice(3,5),16)),
-                        _port_b1: String(parseInt(h.slice(5,7),16)),
-                      }});
-                    }}
-                    onClick={e => e.stopPropagation()}
-                  />
-                </>
-              )}
-              {!toConnected && (
-                <>
-                  <span style={{ fontSize: '0.6rem', color: '#8090a0' }}>Color To</span>
-                  <input
-                    type="color" className={styles.input}
-                    style={{ height: 24, padding: 1, cursor: 'pointer' }}
-                    value={toHex}
-                    onChange={e => {
-                      const h = e.target.value;
-                      updateNodeData(id, { ...nodeData, config: { ...nodeData.config,
-                        _port_r2: String(parseInt(h.slice(1,3),16)),
-                        _port_g2: String(parseInt(h.slice(3,5),16)),
-                        _port_b2: String(parseInt(h.slice(5,7),16)),
-                      }});
-                    }}
-                    onClick={e => e.stopPropagation()}
-                  />
-                </>
-              )}
-            </>
-          );
-        })()}
+        {nodeData.nodeType === 'colorScale' && (
+          <ColorScaleEditor id={id} nodeData={nodeData} />
+        )}
 
         {nodeData.nodeType === 'arithmeticOperator' && (
           <select
@@ -1526,7 +1712,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
           </select>
         )}
 
-        {(nodeData.nodeType === 'colorInterpolation' || nodeData.nodeType === 'proportionMap') && (
+        {(nodeData.nodeType === 'colorScale' || nodeData.nodeType === 'proportionMap') && (
           <select
             className={styles.select}
             value={(nodeData.config.method as string) || DEFAULT_INTERPOLATION_METHOD}
@@ -2032,7 +2218,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               title={port.label}
             />
             {showWidget && (
-              <div className={styles.inlineWidgetWrapper} style={{ top: `${topPx}px` }} onMouseDown={stopDrag} onDoubleClick={stopAll}>
+              <div className={`${styles.inlineWidgetWrapper} nodrag`} style={{ top: `${topPx}px` }} onDoubleClick={stopAll}>
                 {effectiveWidget === 'bool' ? (
                   <select
                     className={styles.inlineWidget}

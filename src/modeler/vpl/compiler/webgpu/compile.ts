@@ -25,6 +25,7 @@ import {
   emitBindings, emitEntryPoint, emitPerCellCopyPreamble, sanitiseWgslName,
 } from './encoder';
 import { getNodeDef } from '../../nodes/registry';
+import { readColorScaleStops } from '../../nodes/ColorScaleNode';
 import { parseHandleId } from '../../types';
 import {
   detectWebGPUIncompatibilities, detectWebGPUModelIncompatibilities,
@@ -1363,21 +1364,58 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return rRef;
   },
 
-  colorInterpolation: ({ ctx, node, inputs }) => {
+  colorScale: ({ ctx, node, inputs }) => {
     const t = castTo(inputs['t'] ?? { expr: '0.5', type: 'f32' }, 'f32');
     const method = (node.data.config.method as string) || 'linear';
-    const tRaw = emitLet(ctx, 'f32', t, 'cit');
-    const tLoc = emitLet(ctx, 'f32', wgslInterpolationCurveExpr(tRaw.expr, method), 'cic');
-    const ch = (c1k: string, c2k: string, def1: number, def2: number, port: 'r' | 'g' | 'b'): ValueRef => {
-      const c1 = castTo(inputs[c1k] ?? { expr: `${def1 | 0}`, type: 'i32' }, 'f32');
-      const c2 = castTo(inputs[c2k] ?? { expr: `${def2 | 0}`, type: 'i32' }, 'f32');
-      const expr = `i32(floor(${c1} + ${tLoc.expr} * (${c2} - ${c1}) + 0.5))`;
-      const ref = emitLet(ctx, 'i32', expr, 'ci' + port);
-      return ref;
-    };
-    const rRef = ch('r1', 'r2', 0, 255, 'r');
-    const gRef = ch('g1', 'g2', 0, 255, 'g');
-    const bRef = ch('b1', 'b2', 0, 255, 'b');
+    const stops = readColorScaleStops(node.data.config);
+
+    const f32Lit = (n: number) => Number.isInteger(n) ? `${n}.0` : `${n}`;
+
+    // Single-eval of t; then three vars at the same scope that the if-chain
+    // below assigns into. routeEmissionForNode captures every push, so all of
+    // these lines land in a single block — assignments inside the branches
+    // can see the vars declared above.
+    const tName = fresh(ctx, 'cst');
+    ctx.lines.push(`  let ${tName}: f32 = ${t};`);
+    const rName = fresh(ctx, 'csr');
+    const gName = fresh(ctx, 'csg');
+    const bName = fresh(ctx, 'csb');
+    ctx.lines.push(`  var ${rName}: i32;`);
+    ctx.lines.push(`  var ${gName}: i32;`);
+    ctx.lines.push(`  var ${bName}: i32;`);
+
+    const writeConst = (r: number, g: number, b: number) =>
+      `${rName} = ${r | 0}; ${gName} = ${g | 0}; ${bName} = ${b | 0};`;
+
+    if (stops.length === 0) {
+      ctx.lines.push(`  ${writeConst(0, 0, 0)}`);
+    } else if (stops.length === 1) {
+      const s = stops[0]!;
+      ctx.lines.push(`  ${writeConst(s.r, s.g, s.b)}`);
+    } else {
+      const first = stops[0]!;
+      const last = stops[stops.length - 1]!;
+      ctx.lines.push(`  if (${tName} <= ${f32Lit(first.p)}) { ${writeConst(first.r, first.g, first.b)} }`);
+      for (let i = 0; i < stops.length - 1; i++) {
+        const a = stops[i]!;
+        const b = stops[i + 1]!;
+        if (b.p === a.p) continue;
+        const localExpr = `((${tName} - ${f32Lit(a.p)}) / ${f32Lit(b.p - a.p)})`;
+        const curved = wgslInterpolationCurveExpr(localExpr, method);
+        const rExpr = `i32(floor(${f32Lit(a.r)} + (${curved}) * ${f32Lit(b.r - a.r)} + 0.5))`;
+        const gExpr = `i32(floor(${f32Lit(a.g)} + (${curved}) * ${f32Lit(b.g - a.g)} + 0.5))`;
+        const bExpr = `i32(floor(${f32Lit(a.b)} + (${curved}) * ${f32Lit(b.b - a.b)} + 0.5))`;
+        ctx.lines.push(
+          `  else if (${tName} < ${f32Lit(b.p)}) { `
+          + `${rName} = ${rExpr}; ${gName} = ${gExpr}; ${bName} = ${bExpr}; }`,
+        );
+      }
+      ctx.lines.push(`  else { ${writeConst(last.r, last.g, last.b)} }`);
+    }
+
+    const rRef: ValueRef = { expr: rName, type: 'i32' };
+    const gRef: ValueRef = { expr: gName, type: 'i32' };
+    const bRef: ValueRef = { expr: bName, type: 'i32' };
     setCachedPort(ctx, node.id, 'r', rRef);
     setCachedPort(ctx, node.id, 'g', gRef);
     setCachedPort(ctx, node.id, 'b', bRef);

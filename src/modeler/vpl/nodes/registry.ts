@@ -34,7 +34,7 @@ import { SetIndicatorNode } from './SetIndicatorNode';
 import { UpdateIndicatorNode } from './UpdateIndicatorNode';
 import { ProportionMapNode } from './ProportionMapNode';
 import { InterpolationNode } from './InterpolationNode';
-import { ColorInterpolationNode } from './ColorInterpolationNode';
+import { ColorScaleNode } from './ColorScaleNode';
 import { SwitchNode } from './SwitchNode';
 import { AggregateNode } from './AggregateNode';
 import { GetNeighborAttributeByTagNode } from './GetNeighborAttributeByTagNode';
@@ -107,7 +107,7 @@ const ALL_NODES: NodeTypeDef[] = [
   // Color
   SetColorViewerNode,
   GetColorConstantNode,
-  ColorInterpolationNode,
+  ColorScaleNode,
   // Indicators
   GetIndicatorNode,
   SetIndicatorNode,

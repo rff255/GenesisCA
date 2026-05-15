@@ -775,7 +775,8 @@ export function GraphEditorInner() {
       const needsSync = changes.some(
         c => c.type === 'remove' ||
              (c.type === 'position' && 'dragging' in c && !c.dragging) ||
-             c.type === 'dimensions',
+             c.type === 'dimensions' ||
+             c.type === 'replace',
       );
       if (needsSync) scheduleSync();
     },
