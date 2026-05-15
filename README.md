@@ -73,17 +73,13 @@ A complete GenesisCA model definition consists of:
 - **Connection validation** — prevents incompatible connections (flow/value), cycles, and duplicate inputs; compatible ports highlight during drag
 - **Inline Port Widgets** — input ports show small value editors (number/bool) when unconnected, eliminating the need for constant nodes in simple cases
 - **Node Collapse/Expand** — double-click any node to collapse it; constants show their value; collapsed nodes temporarily expand when connecting edges
-- **Color Pickers** — Color Constant and Set Color Viewer nodes include hex color pickers with per-channel R/G/B controls
 - **Palette** — right-side panel with a drag-and-drop list of every node type (grouped by category), default macros shipped with the app (from `public/macros/*.gcamacro`), and the current project's macros. Splits vertically into independently-scrolling **Nodes** and **Macros** sections with a draggable horizontal splitter; a **List / Visual** toggle switches between a compact text list and mini node-preview cards (split position and view mode persist across sessions)
 - **Node Explorer** — searchable right-side panel (Ctrl+F to open, Esc to close) listing all placed nodes with click-to-focus
-- **Add-Node tooltips** — hover any entry in the Add Node context menu to see a short description of what it does
 - **Incomplete-config warnings** — nodes with unset required parameters (e.g., an unselected attribute/neighborhood/mapping) show an amber warning badge in the header so you can spot them at a glance. Macro instances bubble up internal-node warnings (recursively through nested macros), so misconfigured internals are visible without opening the macro
-- **Canvas toggles** — toggle port labels, grid lines, and snap-to-grid from buttons below zoom controls
 - **Macro System** — encapsulate node groups into reusable subgraphs with MacroInput/MacroOutput boundary nodes
 - **Undo/Redo** — Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) for node/edge operations, moves, paste, config changes
 - **Copy/Paste/Duplicate** — Ctrl+C/V/X/D, context menu on single nodes and selections, paste at right-click location
 - **Groups & Comments** — visual organization tools; comment background color is customizable and the resized size persists; Undo Group dissolves a group and selects all contained nodes
-- **Edge management** — double-click any edge to delete it
 
 ### Asynchronous Mode
 - **Update Mode** — choose Synchronous (classic CA) or Asynchronous (sequential updates with single buffer) in Model Properties
@@ -101,29 +97,26 @@ A complete GenesisCA model definition consists of:
 - **Brush tool** — configurable color (with live R/G/B channel inputs beside the picker), width/height, input mapping; visual brush cursor; Ctrl+drag interactive resize
 - **Region clipboard** — Ctrl+C/V/X on the simulator copy/paste/cut all cell attributes within the brush rectangle; paste anchors to the brush's top-left corner
 - **Viewer tabs** — horizontal bar at the top to switch between Attribute-to-Color visualization modes
-- **Collapsible panels** — left panel for settings (actions, grid dimensions, model attributes), right panel for brush
-- **Zoom controls** — +/−/fit/gridlines/infinity buttons on the canvas. The infinity (∞) button (enabled only for torus-boundary models) tiles the grid across the viewport so you can pan endlessly across the wrap seams
+- **Infinite-tile mode** — the ∞ button (torus-boundary models only) tiles the grid across the viewport so you can pan endlessly across the wrap seams
 - **Live model attribute controls** — change global parameters without recompiling
 - **Grid dimension overrides** — experiment with different sizes
 - **PNG screenshot export** — captures the display view with current zoom/pan (nearest-neighbor upscale for crisp pixels)
 - **Recording** — record simulation frames and export as **WebM** (default; native grid resolution, smaller files, no 256-colour limit; needs WebCodecs) or animated **GIF** (256 colours, auto-downscaled to 512&nbsp;px max)
 - **Open Image** — load PNG/BMP/JPG as starting point via the brush panel
-- **Persistent settings** — speed, brush, viewer settings saved across sessions
 
 ### Help & Library
-- **Comprehensive Help tab** — 8 sections covering all features with sidebar navigation
+- **In-app Help tab** — feature reference with sidebar navigation
 - **Models Library** — pre-made models loaded from the repository, no manual index required; cards with thumbnails show a floating preview on hover (animated GIFs play natively)
 - **Library-first** — every tab open / reload lands on the Library tab so you can pick a starting model or fork one into your own
 - **Unsaved changes warning** — the browser prompts before closing the tab if your model has unsaved changes (explicit save only — no auto-restore on reload)
-- **GitHub link** — accessible from the navbar and Help page
 
 ---
 
 ## Documentation
 
-- [Node Reference](docs/NODES_REFERENCE.md) — full catalogue of the 50+ node types, port schemas, and compile-time semantics, with Mermaid diagrams of common patterns. Includes §7 on the NeighborIndex type and §7.1 on the canonical movement pattern (Get All Neighbor Indexes → Filter → Pick Random) plus the Position(s)+Array-Element bridge for "neighbor with extreme attribute X" reductions.
-- [NeighborIndex / List Attributes Impact Map](docs/IMPACT_MAP_NEIGHBORINDEX_LIST.md) — cross-subsystem analysis behind the Wave A NeighborIndex work and the (deferred) Wave B bounded list-attributes proposal.
-- [CA Literature Review](docs/CA_LITERATURE_REVIEW.md) — a survey of ~70 canonical cellular-automata models across physics, chemistry, biology, ecology, sociology, transport, earth sciences (geology / mining / volcanology / seismology), CS theory and cryptography, with a Top-Tier Shortlist driving GenesisCA's feature roadmap.
+- [Node Reference](docs/NODES_REFERENCE.md) — full catalogue of the 50+ node types, port schemas, and compile-time semantics, with Mermaid diagrams of common patterns.
+- [NeighborIndex / List Attributes Impact Map](docs/IMPACT_MAP_NEIGHBORINDEX_LIST.md) — cross-subsystem analysis behind the NeighborIndex work.
+- [CA Literature Review](docs/CA_LITERATURE_REVIEW.md) — a survey of ~70 canonical cellular-automata models across physics, chemistry, biology, ecology, sociology, transport, earth sciences, CS theory and cryptography, with a shortlist driving GenesisCA's feature roadmap.
 
 ---
 
