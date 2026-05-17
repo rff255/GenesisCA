@@ -1,3 +1,4 @@
+import { useModel } from '../model/ModelContext';
 import styles from './ActivityBar.module.css';
 
 export type PanelId = 'properties' | 'attributes' | 'neighborhoods' | 'mappings' | 'variegated';
@@ -7,17 +8,21 @@ interface ActivityBarProps {
   onTogglePanel: (panel: PanelId) => void;
 }
 
-const panels: Array<{ id: PanelId; label: string; icon: string }> = [
+const BASE_PANELS: Array<{ id: PanelId; label: string; icon: string }> = [
   { id: 'properties', label: 'Properties', icon: 'P' },
   { id: 'attributes', label: 'Attributes', icon: 'A' },
   { id: 'neighborhoods', label: 'Neighborhoods', icon: 'N' },
   { id: 'mappings', label: 'Mappings', icon: 'M' },
-  // Variegated Cells — always visible; the panel renders an empty-state CTA
-  // when the feature is off so users discover where to enable it.
-  { id: 'variegated', label: 'Variegated Cells', icon: 'V' },
 ];
 
 export function ActivityBar({ activePanel, onTogglePanel }: ActivityBarProps) {
+  const { model } = useModel();
+  // Variegated Cells tab is hidden entirely unless the feature is enabled in
+  // Properties. Auto-switching the active panel when the feature flips off
+  // is handled by ModelerView; here we just elide the button.
+  const panels = model.variegatedCells?.enabled
+    ? [...BASE_PANELS, { id: 'variegated' as PanelId, label: 'Variegated Cells', icon: 'V' }]
+    : BASE_PANELS;
   return (
     <div className={styles.activityBar}>
       {panels.map(({ id, label, icon }) => (

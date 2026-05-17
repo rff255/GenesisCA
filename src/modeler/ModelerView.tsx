@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
+import { useModel } from '../model/ModelContext';
 import { ActivityBar, type PanelId } from './ActivityBar';
 import { RightActivityBar, type RightPanelId } from './RightActivityBar';
 import { PanelShell } from './PanelShell';
@@ -36,7 +37,16 @@ const rightPanelTitles: Record<RightPanelId, string> = {
 };
 
 export function ModelerView() {
+  const { model } = useModel();
+  const variegatedEnabled = !!model.variegatedCells?.enabled;
   const [activePanel, setActivePanel] = useState<PanelId | null>('properties');
+  // When the user disables Variegated Cells while its panel is open, switch
+  // the left panel to Properties (where the toggle lives). The ActivityBar
+  // hides the V tab in this case so there'd be no way to dismiss the panel
+  // otherwise. Also re-aim `lastLeftPanel` if it pointed at variegated.
+  useEffect(() => {
+    if (!variegatedEnabled && activePanel === 'variegated') setActivePanel('properties');
+  }, [variegatedEnabled, activePanel]);
   const [activeRightPanel, setActiveRightPanel] = useState<RightPanelId | null>(null);
   // Remembered last-opened panels — used by the floating graph-area expand-ears
   // to reopen whatever the user had open before closing it.
