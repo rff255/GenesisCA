@@ -2,7 +2,7 @@ import { memo, useCallback, useState, useMemo, useRef, useSyncExternalStore } fr
 import { Handle, Position, useReactFlow } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
-import { detectMissingConfig, detectWebGPUIncompatibilities, detectWasmIncompatibilities, countMacroSubgraphIssues } from './nodes/nodeValidation';
+import { detectMissingConfig, detectCapabilityRequirements, detectWebGPUIncompatibilities, detectWasmIncompatibilities, countMacroSubgraphIssues } from './nodes/nodeValidation';
 import { INTERPOLATION_METHODS, INTERPOLATION_SHORT_LABELS, DEFAULT_INTERPOLATION_METHOD } from './nodes/interpolationMethods';
 import type { InterpolationMethod } from './nodes/interpolationMethods';
 import { buildVarMap, parseExpression, clampVisibleCount, VISIBLE_PORT_IDS, MAX_VISIBLE } from './compiler/expression/parser';
@@ -627,11 +627,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
       const useWebGPU = !!model.properties.useWebGPU;
       const useWasm = !!model.properties.useWasm && !useWebGPU;
       const base = detectMissingConfig(nodeData.nodeType, nodeData.config, model, connectedInputHandles);
+      const capability = detectCapabilityRequirements(nodeData.nodeType, model);
       const own = useWebGPU
-        ? [...base, ...detectWebGPUIncompatibilities(nodeData.nodeType, nodeData.config, model)]
+        ? [...base, ...capability, ...detectWebGPUIncompatibilities(nodeData.nodeType, nodeData.config, model)]
         : useWasm
-          ? [...base, ...detectWasmIncompatibilities(nodeData.nodeType, nodeData.config, model)]
-          : base;
+          ? [...base, ...capability, ...detectWasmIncompatibilities(nodeData.nodeType, nodeData.config, model)]
+          : [...base, ...capability];
       // Bubble up internal-node warnings on macro instances so they're visible
       // without expanding the macro (and recursively through nested macros).
       if (nodeData.nodeType === 'macro') {
@@ -658,6 +659,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
       model.indicators,
       model.macroDefs,
       model.properties.useWebGPU,
+      model.properties.useWasm,
+      model.properties.updateMode,
+      model.variegatedCells?.enabled,
       connectionHazards,
       connectedInputHandles,
     ],

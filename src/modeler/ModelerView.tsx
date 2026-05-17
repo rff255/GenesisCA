@@ -8,6 +8,7 @@ import { AttributesPanelContent } from './panels/AttributesPanelContent';
 import { NeighborhoodsPanelContent } from './panels/NeighborhoodsPanelContent';
 import { MappingsPanelContent } from './panels/MappingsPanelContent';
 import { PalettePanelContent } from './panels/PalettePanelContent';
+import { VariegatedCellsPanelContent } from './panels/VariegatedCellsPanelContent';
 import { GraphEditorInner } from './vpl/GraphEditor';
 import { NodeExplorer } from './vpl/NodeExplorer';
 import type { NodeExplorerHandle } from './vpl/NodeExplorer';
@@ -18,6 +19,7 @@ const panelTitles: Record<PanelId, string> = {
   attributes: 'Attributes',
   neighborhoods: 'Neighborhoods',
   mappings: 'Mappings',
+  variegated: 'Variegated Cells',
 };
 
 const panelComponents: Record<PanelId, React.ComponentType> = {
@@ -25,6 +27,7 @@ const panelComponents: Record<PanelId, React.ComponentType> = {
   attributes: AttributesPanelContent,
   neighborhoods: NeighborhoodsPanelContent,
   mappings: MappingsPanelContent,
+  variegated: VariegatedCellsPanelContent,
 };
 
 const rightPanelTitles: Record<RightPanelId, string> = {

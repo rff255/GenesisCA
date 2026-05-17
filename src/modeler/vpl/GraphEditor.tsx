@@ -40,7 +40,7 @@ const nodeTypes: NodeTypes = {
 let clipboard: { nodes: GraphNode[]; edges: GraphEdge[] } | null = null;
 
 import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag } from './graphState';
-import { detectEdgeHazard } from './nodes/nodeValidation';
+import { detectEdgeHazard, isNodeAvailable } from './nodes/nodeValidation';
 import { pushSnapshot, undo, redo, pushToRedo, pushToUndo, clearHistory } from './graphHistory';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 
@@ -1007,6 +1007,13 @@ export function GraphEditorInner() {
         );
         if (hasStep) return false;
       }
+      // Singleton: only one Init Event node allowed (mirrors Step semantics).
+      if (nodeType === 'initEvent') {
+        const hasInit = nodesRef.current.some(
+          n => (n.data as Record<string, unknown>)?.nodeType === 'initEvent',
+        );
+        if (hasInit) return false;
+      }
       pushCurrentSnapshot();
       setNodes(nds => {
         const id = generateNodeId(nds);
@@ -1067,6 +1074,12 @@ export function GraphEditorInner() {
           n => (n.data as Record<string, unknown>)?.nodeType === 'step',
         );
         if (hasStep) return false;
+      }
+      if (nodeType === 'initEvent') {
+        const hasInit = nodesRef.current.some(
+          n => (n.data as Record<string, unknown>)?.nodeType === 'initEvent',
+        );
+        if (hasInit) return false;
       }
       // Resolved config drives effective ports for nodes whose port set depends
       // on config (e.g., GetModelAttribute r/g/b vs value via isColorAttr).
@@ -1379,13 +1392,23 @@ export function GraphEditorInner() {
 
   const handlePaste = useCallback(() => {
     if (!clipboard || clipboard.nodes.length === 0) return;
-    // Singleton: filter out Step nodes if one already exists in the graph
+    // Singleton: filter out Step / Init Event nodes if one already exists in the graph
     const hasStepInGraph = nodesRef.current.some(
       n => (n.data as Record<string, unknown>)?.nodeType === 'step',
     );
     if (hasStepInGraph) {
       clipboard = {
         nodes: clipboard.nodes.filter(n => (n.data as Record<string, unknown>)?.nodeType !== 'step'),
+        edges: clipboard.edges,
+      };
+      if (clipboard.nodes.length === 0) return;
+    }
+    const hasInitInGraph = nodesRef.current.some(
+      n => (n.data as Record<string, unknown>)?.nodeType === 'initEvent',
+    );
+    if (hasInitInGraph) {
+      clipboard = {
+        nodes: clipboard.nodes.filter(n => (n.data as Record<string, unknown>)?.nodeType !== 'initEvent'),
         edges: clipboard.edges,
       };
       if (clipboard.nodes.length === 0) return;
@@ -2264,7 +2287,26 @@ export function GraphEditorInner() {
     return () => { unsub(); clearCompatibleHandlesForDrag(); };
   }, []);
 
-  const categories = getNodeDefsByCategory();
+  // Add-Node menu — drop nodes whose capability requirements
+  // (requirements.async / requirements.variegated) the current model doesn't
+  // satisfy. Also drop singleton entry-points (Step, Init Event) when one
+  // already exists in the graph. Empty categories are dropped so the submenu
+  // doesn't show empty section headers.
+  const categories = (() => {
+    const all = getNodeDefsByCategory();
+    const hasStepNow = nodesRef.current.some(n => (n.data as Record<string, unknown>)?.nodeType === 'step');
+    const hasInitNow = nodesRef.current.some(n => (n.data as Record<string, unknown>)?.nodeType === 'initEvent');
+    const filtered = new Map<string, NodeTypeDef[]>();
+    for (const [cat, defs] of all) {
+      const kept = defs.filter(d => {
+        if (d.type === 'step' && hasStepNow) return false;
+        if (d.type === 'initEvent' && hasInitNow) return false;
+        return isNodeAvailable(d, model);
+      });
+      if (kept.length > 0) filtered.set(cat, kept);
+    }
+    return filtered;
+  })();
 
   return (
     <div
@@ -2409,9 +2451,12 @@ export function GraphEditorInner() {
             const allDefs = getAllNodeDefs();
             // Step is allowed as a target only if no Step exists yet.
             const hasStep = nodesRef.current.some(n => (n.data as Record<string, unknown>)?.nodeType === 'step');
+            const hasInit = nodesRef.current.some(n => (n.data as Record<string, unknown>)?.nodeType === 'initEvent');
             const matches = allDefs.filter(d => {
               if (HIDDEN_FROM_DROP_MENU.has(d.type)) return false;
               if (d.type === 'step' && hasStep) return false;
+              if (d.type === 'initEvent' && hasInit) return false;
+              if (!isNodeAvailable(d, model)) return false;
               return nodeHasCompatiblePort(d, origin);
             });
             const grouped = new Map<string, NodeTypeDef[]>();

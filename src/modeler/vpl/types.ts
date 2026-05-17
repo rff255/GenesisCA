@@ -52,6 +52,25 @@ export interface CompileContext {
   defaultValueLiteral(attrId: string): string;
 }
 
+/** Capability requirements for a node type. A node whose requirements aren't
+ *  met by the current model is:
+ *    - hidden from the palette and Add-Node menu (so users don't add nodes
+ *      that won't work),
+ *    - flagged with an amber `!` badge if already in the graph (so loading a
+ *      `.gcaproj` that doesn't satisfy a requirement still surfaces the issue),
+ *    - rejected by the compilers (defence-in-depth — runtime never silently
+ *      misbehaves on a requirement violation).
+ *
+ *  Requirements are additive: a node satisfies the gate iff ALL flags hold for
+ *  the current model. Adding a new capability flag means adding a check in
+ *  `detectCapabilityRequirements` in `nodes/nodeValidation.ts`. */
+export interface NodeRequirements {
+  /** Requires `model.properties.updateMode === 'asynchronous'`. */
+  async?: boolean;
+  /** Requires `model.variegatedCells?.enabled === true`. */
+  variegated?: boolean;
+}
+
 /** Definition of a node type */
 export interface NodeTypeDef {
   type: string;
@@ -60,6 +79,9 @@ export interface NodeTypeDef {
   color: string;
   /** Short one-sentence tooltip for the Add-Node menu and explorer. */
   description?: string;
+  /** Per-node capability gating (async-only, variegated-only, ...). See
+   *  `NodeRequirements`. Undefined = available in any model. */
+  requirements?: NodeRequirements;
   ports: PortDef[];
   defaultConfig: NodeConfig;
   /** Emit JS code for this node. Returns code string.

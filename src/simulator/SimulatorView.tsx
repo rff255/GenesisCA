@@ -5,6 +5,7 @@ import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
 import { unpackNI, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
 import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefaultEditor';
+import { InteractionTableEditor } from '../modeler/panels/InteractionTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
@@ -73,6 +74,10 @@ function computeDefaultModelAttrs(attributes: Attribute[]): Record<string, numbe
         mAttrs[a.id + '_b'] = parseInt(hex.slice(5, 7), 16) || 0;
         break;
       }
+      case 'interactionTable':
+        // Lives in `interactionTables` worker payload (separate from the
+        // scalar `modelAttrs` record). Don't allocate a slot here.
+        break;
       default: mAttrs[a.id] = 0;
     }
   }
@@ -95,7 +100,7 @@ const ChevronDownIcon = () => (
 
 export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { model, updateIndicator, setSimulationState, addPreset, deletePreset, updatePreset, updateProperties } = useModel();
+  const { model, updateIndicator, setSimulationState, addPreset, deletePreset, updatePreset, updateProperties, updateAttribute } = useModel();
   const workerRef = useRef<Worker | null>(null);
   const pendingStep = useRef(false);
 
@@ -310,6 +315,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const parts: string[] = [];
     if (result.stepCode) {
       parts.push('// === Step Function ===\n' + result.stepCode);
+    }
+    if (result.initCode) {
+      parts.push('// === Init Event (per-cell, runs once on Reset) ===\n' + result.initCode);
     }
     for (const ic of result.inputColorCodes) {
       const m = model.mappings.find(mp => mp.id === ic.mappingId);
@@ -1143,10 +1151,28 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       updateMode: model.properties.updateMode || 'synchronous',
       asyncScheme: model.properties.asyncScheme || 'random-order',
       stepCode: result.stepCode,
+      initCode: result.initCode,
       inputColorCodes: result.inputColorCodes,
       outputMappingCodes: result.outputMappingCodes,
       stopMessages: result.stopMessages,
       activeViewer: viewer,
+      // Variegated Cells: orientation buffer + face-pattern lookup + the
+      // interaction-table payload. The worker only allocates these when
+      // variegatedCells.enabled is true; absent / disabled = no extra state.
+      variegated: model.variegatedCells?.enabled ? {
+        sourceAttributeId: model.variegatedCells.sourceAttributeId,
+        faceLabels: model.variegatedCells.faceLabels,
+        facePatterns: model.variegatedCells.facePatterns,
+        facePatternAssignments: ((): Record<string, string> => {
+          const src = model.attributes.find(a => a.id === model.variegatedCells!.sourceAttributeId);
+          return src?.facePatternAssignments || {};
+        })(),
+      } : undefined,
+      interactionTables: model.variegatedCells?.enabled
+        ? model.attributes
+            .filter(a => a.isModelAttribute && a.type === 'interactionTable')
+            .map(a => ({ id: a.id, faceLabels: model.variegatedCells!.faceLabels, values: a.tableValues || {} }))
+        : [],
       indicators: (model.indicators || []).map(i => ({
         id: i.id, kind: i.kind, dataType: i.dataType,
         defaultValue: i.defaultValue, accumulationMode: i.accumulationMode,
@@ -1430,8 +1456,23 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       workerRef.current?.postMessage({
         type: 'recompile',
         stepCode: result.stepCode,
+        initCode: result.initCode,
         inputColorCodes: result.inputColorCodes,
         outputMappingCodes: result.outputMappingCodes || [],
+        variegated: model.variegatedCells?.enabled ? {
+          sourceAttributeId: model.variegatedCells.sourceAttributeId,
+          faceLabels: model.variegatedCells.faceLabels,
+          facePatterns: model.variegatedCells.facePatterns,
+          facePatternAssignments: ((): Record<string, string> => {
+            const src = model.attributes.find(a => a.id === model.variegatedCells!.sourceAttributeId);
+            return src?.facePatternAssignments || {};
+          })(),
+        } : undefined,
+        interactionTables: model.variegatedCells?.enabled
+          ? model.attributes
+              .filter(a => a.isModelAttribute && a.type === 'interactionTable')
+              .map(a => ({ id: a.id, faceLabels: model.variegatedCells!.faceLabels, values: a.tableValues || {} }))
+          : [],
         stopMessages: result.stopMessages,
         updateMode: model.properties.updateMode,
         asyncScheme: model.properties.asyncScheme,
@@ -2365,6 +2406,32 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     workerRef.current?.postMessage({ type: 'updateModelAttrs', attrs: { [attrId]: value } });
   };
 
+  // Variegated Cells: interaction-table model attrs are live-tuneable like
+  // any other model attr but their payload is the full nested map (not a
+  // single number). We persist via updateAttribute (marks the model dirty
+  // because changing the table changes the model spec, same as editing it in
+  // the modeler) AND post an updateInteractionTable message to the worker so
+  // the simulator sees the new values immediately.
+  const handleInteractionTableEdit = (
+    attrId: string,
+    tableValues: Record<string, Record<string, number>> | undefined,
+    symmetric: boolean | undefined,
+  ) => {
+    const changes: Partial<Attribute> = {};
+    if (tableValues !== undefined) changes.tableValues = tableValues;
+    if (symmetric !== undefined) changes.symmetric = symmetric;
+    updateAttribute(attrId, changes);
+    if (tableValues !== undefined) {
+      const faceLabels = model.variegatedCells?.faceLabels ?? [];
+      workerRef.current?.postMessage({
+        type: 'updateInteractionTable',
+        attrId,
+        faceLabels,
+        values: tableValues,
+      });
+    }
+  };
+
   // Reset every model attribute back to its declared default value.
   const handleResetModelAttrs = () => {
     const defaults = computeDefaultModelAttrs(model.attributes);
@@ -2894,6 +2961,25 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                         </div>
                       );
                     })()
+                  ) : a.type === 'interactionTable' ? (
+                    // Interaction Tables are too wide for the single-row layout.
+                    // The matrix editor renders below the label inside the row
+                    // and dispatches an updateInteractionTable worker message
+                    // (live-tuned during simulation, like other model attrs).
+                    <div style={{ flex: 2, minWidth: 0 }}>
+                      {model.variegatedCells?.enabled && model.variegatedCells.faceLabels.length > 0 ? (
+                        <InteractionTableEditor
+                          attribute={a}
+                          faceLabels={model.variegatedCells.faceLabels}
+                          compact
+                          onChange={changes => handleInteractionTableEdit(a.id, changes.tableValues, changes.symmetric)}
+                        />
+                      ) : (
+                        <div style={{ color: '#888', fontSize: '0.62rem' }}>
+                          Enable Variegated Cells and define face labels to populate this table.
+                        </div>
+                      )}
+                    </div>
                   ) : (
                     <input className={styles.brushInput} type="number" step="any"
                       value={runtimeModelAttrs[a.id] ?? 0}

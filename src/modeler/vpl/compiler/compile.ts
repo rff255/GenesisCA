@@ -1,5 +1,5 @@
 import type { GraphNode, GraphEdge, CAModel } from '../../../model/types';
-import { getNodeDef } from '../nodes/registry';
+import { getAllNodeDefs, getNodeDef } from '../nodes/registry';
 import { parseHandleId, type CompileContext } from '../types';
 import { classifyLoopInvariant } from './loopInvariant';
 import { safeId } from './identifierSafe';
@@ -13,6 +13,7 @@ import {
   attrValueLiteralJS,
   parentMatchExprJS,
 } from './subAttribute';
+import { buildDirectionMap } from './variegation';
 
 // ---------------------------------------------------------------------------
 // Graph adjacency helpers
@@ -55,7 +56,7 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
 // Compile a single root's subgraph (per-cell body)
 // ---------------------------------------------------------------------------
 
-const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'getColorConstant', 'macro', 'colorScale', 'breakDownNeighborIndex']);
+const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'breakDownNeighborIndex', 'getFacingLabels']);
 
 /** Check if a node's data uses multi-output variable naming */
 function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
@@ -1376,6 +1377,7 @@ function buildLoopParams(model: CAModel): {
   neighborhoods: Array<{ id: string }>;
 } {
   const isAsync = model.properties.updateMode === 'asynchronous';
+  const variegated = !!model.variegatedCells?.enabled;
   const cellAttrs = model.attributes
     .filter(a => !a.isModelAttribute)
     .map(a => ({ id: a.id, type: a.type }));
@@ -1386,6 +1388,11 @@ function buildLoopParams(model: CAModel): {
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
   parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState', '_stopFlag');
+  // Variegated Cells: r/w orientation arrays + flat facePatternLookup +
+  // _interactionTables object. Always emit these when the feature is on so
+  // the worker's buildLoopArgs (in sim.worker.ts) and this signature stay
+  // in lockstep. `order` is always last for async mode.
+  if (variegated) parts.push('r_orientation', 'w_orientation', '_facePatternLookup', '_interactionTables');
   if (isAsync) parts.push('order');
 
   return { params: parts.join(', '), cellAttrs, neighborhoods };
@@ -1395,11 +1402,13 @@ function buildLoopParams(model: CAModel): {
 function buildCellParams(model: CAModel): string {
   const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
   const neighborhoods = model.neighborhoods;
+  const variegated = !!model.variegatedCells?.enabled;
   const parts: string[] = ['idx', 'total', 'W', 'H'];
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
   parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState', '_stopFlag');
+  if (variegated) parts.push('r_orientation', 'w_orientation', '_facePatternLookup', '_interactionTables');
   return parts.join(', ');
 }
 
@@ -1493,6 +1502,11 @@ function buildLinkedIndicatorCode(model: CAModel): {
 
 export interface CompileResult {
   stepCode: string;
+  /** Per-cell init function code, emitted when the graph contains an Init
+   *  Event Node. Loop-wrapped; called once per cell on simulator Reset only
+   *  (not on Randomize, not on Load State). Empty string when no Init Event
+   *  Node is present. */
+  initCode: string;
   inputColorCodes: Array<{ mappingId: string; code: string }>;
   outputMappingCodes: Array<{ mappingId: string; code: string }>;
   /** Parallel to stop-event-node index. When `_stopFlag[0] === n+1`, the
@@ -1508,25 +1522,40 @@ export function compileGraph(
   model?: CAModel,
 ): CompileResult {
   if (graphNodes.length === 0) {
-    return { stepCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'No nodes in graph.' };
+    return { stepCode: '', initCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'No nodes in graph.' };
   }
 
   if (!model) {
-    return { stepCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'Model required for SoA compilation.' };
+    return { stepCode: '', initCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'Model required for SoA compilation.' };
   }
 
   const isAsync = model.properties.updateMode === 'asynchronous';
 
-  // --- Validate async-only nodes in sync mode ---
-  // getNeighborAttributeByIndex is read-only so it works in both sync and async modes
-  const ASYNC_ONLY_TYPES = new Set(['setNeighborhoodAttribute', 'setNeighborAttributeByIndex']);
+  // --- Validate node capability requirements ---
+  // Each NodeTypeDef may declare `requirements: { async?, variegated? }`.
+  // This loop derives the active rejection sets from the registry (replaces the
+  // legacy hardcoded `ASYNC_ONLY_TYPES`). getNeighborAttributeByIndex stays
+  // read-only and works in both sync and async modes (no `async: true` flag).
   let asyncValidationError: string | undefined;
-  if (!isAsync) {
-    const offending = graphNodes.find(n => ASYNC_ONLY_TYPES.has(n.data.nodeType));
+  let variegatedValidationError: string | undefined;
+  const asyncOnlyTypes = new Set<string>();
+  const variegatedOnlyTypes = new Set<string>();
+  for (const def of getAllNodeDefs()) {
+    if (def.requirements?.async) asyncOnlyTypes.add(def.type);
+    if (def.requirements?.variegated) variegatedOnlyTypes.add(def.type);
+  }
+  if (!isAsync && asyncOnlyTypes.size > 0) {
+    const offending = graphNodes.find(n => asyncOnlyTypes.has(n.data.nodeType));
     if (offending) {
-      const label = offending.data.nodeType === 'setNeighborhoodAttribute'
-        ? 'Set Neighborhood Attribute' : 'Set Neighbor Attr By Index';
+      const label = getNodeDef(offending.data.nodeType)?.label ?? offending.data.nodeType;
       asyncValidationError = `Node "${label}" requires Asynchronous update mode. Change in Model Properties > Execution.`;
+    }
+  }
+  if (!model.variegatedCells?.enabled && variegatedOnlyTypes.size > 0) {
+    const offending = graphNodes.find(n => variegatedOnlyTypes.has(n.data.nodeType));
+    if (offending) {
+      const label = getNodeDef(offending.data.nodeType)?.label ?? offending.data.nodeType;
+      variegatedValidationError = `Node "${label}" requires Variegated Cells enabled. Enable in Model Properties > Execution.`;
     }
   }
 
@@ -1641,6 +1670,32 @@ export function compileGraph(
   preResolveStopEvents(graphNodes);
   for (const def of (model.macroDefs || [])) preResolveStopEvents(def.nodes);
 
+  // Pre-resolve variegated nodes' compile-time fields:
+  //   - getFacingLabels: source attr id + baked directionMap from its neighborhood
+  //   - lookupInteraction: labelCount = faceLabels.length + 1 (includes implicit `none`)
+  // Skipped when variegation is off — those node types are also filtered out
+  // of the palette in that case, so the user can't easily place them.
+  const variegationOn = !!model.variegatedCells?.enabled;
+  const variegatedSourceAttrId = variegationOn ? (model.variegatedCells?.sourceAttributeId ?? '') : '';
+  const variegatedLabelCount = variegationOn ? ((model.variegatedCells?.faceLabels.length ?? 0) + 1) : 1;
+  const modelForVariegated = model!;
+  function preResolveVariegatedNodes(nodes: GraphNode[]): void {
+    for (const node of nodes) {
+      if (node.data.nodeType === 'getFacingLabels') {
+        const nbrId = node.data.config.neighborhoodId as string;
+        const nbr = modelForVariegated.neighborhoods.find(n => n.id === nbrId);
+        const directionMap = buildDirectionMap(nbr);
+        node.data.config._directionMap = JSON.stringify(Array.from(directionMap));
+        node.data.config._sourceAttrId = variegatedSourceAttrId;
+      }
+      if (node.data.nodeType === 'lookupInteraction') {
+        node.data.config._labelCount = variegatedLabelCount;
+      }
+    }
+  }
+  preResolveVariegatedNodes(graphNodes);
+  for (const def of (model.macroDefs || [])) preResolveVariegatedNodes(def.nodes);
+
   // Loop-invariance classification: identifies value nodes whose result does
   // not depend on the cell index (modelAttrs reads, getConstant, arithmetic
   // over them). Their emissions hoist out of the cell loop, paying the cost
@@ -1677,6 +1732,13 @@ export function compileGraph(
   const bulkCopyLines = isAsync
     ? []
     : cellAttrs.filter(a => !subAttrInfoById.get(a.id)).map(a => `  w_${a.id}.set(r_${a.id});`);
+  // Variegated Cells: orientation has the same sync-mode discipline as the
+  // cell attrs — bulk-copy r→w before the loop body so SetOrientation writes
+  // overlay onto a fresh copy of the read buffer. Async mode shares one
+  // buffer (r/w are the same Int32Array view), so the line is skipped.
+  if (!isAsync && model.variegatedCells?.enabled) {
+    bulkCopyLines.push('  w_orientation.set(r_orientation);');
+  }
 
   // Per-cell conditional copy for sub-attributes, emitted at the top of the
   // sync loop body. `w_subattr[idx] = parent_matches(r_parent[idx]) ? r_subattr[idx] : defaultValue`.
@@ -1843,6 +1905,9 @@ export function compileGraph(
   const neighborhoods = model.neighborhoods.map(n => ({ id: n.id }));
   for (const n of neighborhoods) { omParamParts.push(`nIdx_${n.id}`); omParamParts.push(`nSz_${n.id}`); }
   omParamParts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState', '_stopFlag');
+  if (model.variegatedCells?.enabled) {
+    omParamParts.push('r_orientation', 'w_orientation', '_facePatternLookup', '_interactionTables');
+  }
   const omParams = omParamParts.join(', ');
 
   for (const omNode of outputMappingNodes) {
@@ -1872,10 +1937,56 @@ export function compileGraph(
     outputMappingCodes.push({ mappingId, code });
   }
 
+  // --- Compile Init Event function (one-shot per cell on Reset) ---
+  // Init runs ONCE per cell after defaults are applied, before the first
+  // color pass. Same per-cell-loop shape as OutputMapping (always sequential,
+  // no async ordering). DIFFERS from OutputMapping in that init writes
+  // attributes — so it needs the sync-mode bulk copy + sub-attribute scrub
+  // lines that step has, and the worker performs a buffer swap after running
+  // it in sync mode so subsequent reads see the init-time writes.
+  const initNode = graphNodes.find(n => n.data.nodeType === 'initEvent');
+  let initCode = '';
+  if (initNode) {
+    const { valueLines, preLoopValueLines, flowLines, scratchNodes } = compileRoot(
+      initNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, graphNodes, graphEdges, model,
+    );
+    const scratchDecls = scratchNodes.map(s => buildScratchDecl(s, model));
+    // Sync-mode bulk copy. Async mode skips (single buffer) — sub-attribute
+    // scrub lines below still apply because parent could be in either buffer.
+    const initBulkCopy = isAsync
+      ? []
+      : cellAttrs.filter(a => !subAttrInfoById.get(a.id)).map(a => `  w_${a.id}.set(r_${a.id});`);
+    const initId = initNode.id;
+    initCode = [
+      `(function(${omParams}) {`,
+      ...scratchDecls,
+      ...viewerHoistLines,
+      ...preLoopValueLines,
+      '  let _rs = _rngState[0] || 0x12345678;',
+      ...initBulkCopy,
+      '  for (let idx = 0; idx < total; idx++) {',
+      '    const colorIdx = idx * 4;',
+      '    const _row = (idx / W) | 0;',
+      '    const _col = idx - _row * W;',
+      `    const _v${initId}_x = _col;`,
+      `    const _v${initId}_y = _row;`,
+      `    const _v${initId}_maxX = W - 1;`,
+      `    const _v${initId}_maxY = H - 1;`,
+      ...subAttrSyncCopyLines,
+      ...valueLines,
+      '',
+      ...flowLines,
+      '  }',
+      '  _rngState[0] = _rs;',
+      '})',
+    ].join('\n');
+  }
+
   const error = asyncValidationError
+    ?? variegatedValidationError
     ?? (!stepNode ? 'No Step node found. Add a Step node as the entry point.' : undefined);
 
-  return { stepCode, inputColorCodes, outputMappingCodes, stopMessages, error };
+  return { stepCode, initCode, inputColorCodes, outputMappingCodes, stopMessages, error };
 }
 
 /**

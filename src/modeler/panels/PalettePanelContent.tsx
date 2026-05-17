@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useModel } from '../../model/ModelContext';
 import { getNodeDefsByCategory } from '../vpl/nodes/registry';
+import { isNodeAvailable } from '../vpl/nodes/nodeValidation';
 import type { NodeTypeDef } from '../vpl/types';
 import type { GraphNode } from '../../model/types';
 import { NodePreview, MacroPreview } from './NodePreview';
@@ -139,9 +140,13 @@ export function PalettePanelContent() {
   };
   const itemMatches = (name: string, description?: string) => matches(name) || matches(description);
 
-  // Node sections by category
+  // Node sections by category — hide nodes whose capability requirements
+  // (requirements.async / requirements.variegated) the current model doesn't
+  // satisfy, so users don't drag in nodes that won't work.
   const nodeSections = CATEGORY_ORDER.map(cat => {
-    const defs = (byCategory.get(cat) || []).filter(d => itemMatches(d.label, d.description));
+    const defs = (byCategory.get(cat) || [])
+      .filter(d => isNodeAvailable(d, model))
+      .filter(d => itemMatches(d.label, d.description));
     return { cat, defs };
   }).filter(s => s.defs.length > 0);
   const totalNodeMatches = nodeSections.reduce((n, s) => n + s.defs.length, 0);

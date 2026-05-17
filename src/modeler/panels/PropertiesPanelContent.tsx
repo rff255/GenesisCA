@@ -16,7 +16,7 @@ const THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024; // 2 MB
 const THUMBNAIL_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp';
 
 export function PropertiesPanelContent() {
-  const { model, updateProperties, reorderEndConditions } = useModel();
+  const { model, updateProperties, reorderEndConditions, updateVariegatedCells } = useModel();
   const { properties } = model;
   const [tagInput, setTagInput] = useState('');
   const [thumbError, setThumbError] = useState('');
@@ -439,6 +439,28 @@ export function PropertiesPanelContent() {
                 1 = exact (default). Higher values amortize the per-step GPU stall but a stop event may surface up to K-1 generations late.
               </span>
             </div>
+          </div>
+
+          {/* Variegated Cells — gates the per-cell orientation buffer + the
+              variegated node palette + a dedicated sidebar panel. Off by
+              default; flipping on doesn't break existing models (the field
+              is additive on CAModel). */}
+          <div style={{ marginTop: 14, borderTop: '1px solid #333', paddingTop: 10 }}>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
+              <input
+                type="checkbox"
+                checked={!!model.variegatedCells?.enabled}
+                onChange={e => updateVariegatedCells({ enabled: e.target.checked })}
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                <strong>Use Variegated Cells (Directional Interactions)</strong>
+                <br />
+                <span style={{ color: '#888', fontSize: '0.66rem' }}>
+                  Adds a per-cell orientation (0-3 = 90&deg; rotations) and face-pattern labels for directional rules (chemistry CA, micelle formation, chiral models). Configure face patterns in the dedicated <strong>Variegated Cells</strong> panel (V) on the left sidebar.
+                </span>
+              </span>
+            </label>
           </div>
 
           {/* End Conditions — optional, collapsible */}
