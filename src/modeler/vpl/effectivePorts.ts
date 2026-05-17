@@ -106,9 +106,11 @@ export function getEffectivePorts(
     }
   }
 
-  // GetRandom: probability port only for bool
-  if (nodeType === 'getRandom' && cfg.randomType !== 'bool') {
-    inputs = inputs.filter(p => p.id !== 'probability');
+  // GetRandom: probability port only for bool; options + fallback only for options mode
+  if (nodeType === 'getRandom') {
+    const t = cfg.randomType as string;
+    if (t !== 'bool') inputs = inputs.filter(p => p.id !== 'probability');
+    if (t !== 'options') inputs = inputs.filter(p => p.id !== 'options' && p.id !== 'fallback');
   }
 
   // Statement (Compare): y2 only for between ops

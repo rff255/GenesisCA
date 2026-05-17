@@ -109,6 +109,17 @@ export function detectMissingConfig(
       }
       break;
 
+    case 'getRandom':
+      // Options mode requires a wired Options input — without one the node
+      // unconditionally emits the Fallback value, which is almost never the
+      // user's intent. Other modes (bool/integer/float) need no extra config.
+      if ((config.randomType as string) === 'options') {
+        if (isInputConnected('options') === false) {
+          issues.push('Options mode: wire one or more sources to the Options input');
+        }
+      }
+      break;
+
     case 'forEachInArray':
       if (isInputConnected('array') === false) {
         issues.push('Connect an Array input — body will not execute otherwise');

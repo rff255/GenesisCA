@@ -370,7 +370,7 @@ export function HelpView() {
               <tr><td>Get Neighbor Indexes By Tags</td><td>Select multiple neighborhood cells by their tag names and output an array of indices. Use with &quot;Get Neighbors Attr By Indexes&quot; for tag-based multi-neighbor access.</td></tr>
               <tr><td>Get Neighbors Attr By Indexes</td><td>Read attributes from a subset of neighbors specified by an array of indices.</td></tr>
               <tr><td>Get Constant</td><td>A fixed value (bool, integer, or float).</td></tr>
-              <tr><td>Get Random</td><td>Generate a random value (bool, integer, or float). In Bool mode, an input port &quot;P&quot; (probability 0&ndash;1) controls the chance of producing 1 (default 0.5 = 50%).</td></tr>
+              <tr><td>Get Random</td><td>Generate a random value (bool, integer, float, or Options). In Bool mode, an input port &quot;P&quot; (probability 0&ndash;1) controls the chance of producing 1 (default 0.5 = 50%). In Options mode, wire one or more values to the &quot;Options&quot; array input (multi-scalar OR a single array source like Filter Neighbors / Get All Neighbor Indexes / Get Neighbors Attribute) and the node picks one uniformly; the &quot;Fallback&quot; inline value is returned when the array is empty.</td></tr>
             </tbody>
           </table>
 

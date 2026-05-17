@@ -119,7 +119,7 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 | 15e | `neighborIndexFromTag` | Neighbor Index (from Tag) | Build a NI pointing at the slot tagged with the given name. Compile-time-resolved. | `O: Value` (NI) | Same shape as fromOffset but resolves by tag name |
 | 15f | `flipNeighborIndex` | Flip Neighbor Index | Mirror a NI horizontally / vertically / both. Compile-time precomputed lookup table. | `I: Index` (NI) / `O: Value` (NI) | Returns -1 when the flipped offset isn't in the configured neighborhood |
 | 16 | `getConstant` | Get Constant | Emit fixed bool/int/float/tag. | `O: Value` | `constType` + `constValue` config |
-| 17 | `getRandom` | Get Random | Random bool/int/float. | `I: P` (float, bool mode only) / `O: Value` | Bool mode: `probability` input; Int mode: min/max config |
+| 17 | `getRandom` | Get Random | Random bool/int/float, or pick uniformly from a wired Options array. | `I: P` (float, bool mode only), `I: Options` (any, isArray, options mode only), `I: Fallback` (any, inline, options mode only) / `O: Value` | Bool mode: `probability` input; Int mode: min/max config; Options mode: wire scalars or array source to `Options`; `Fallback` returned on empty array |
 | 18 | `tagConstant` | Tag Constant | Emit a fixed tag value. | `O: Value` (int = tag index) | Hidden from Add-Node menu; created contextually |
 | 19 | `getIndicator` | Get Indicator | Read a standalone indicator's value. | `O: Value` (any) | Requires `indicatorId` |
 

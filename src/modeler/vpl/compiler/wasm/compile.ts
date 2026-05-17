@@ -1254,6 +1254,97 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       ctx.emitter.i32Const(minN | 0);
       ctx.emitter.op(OP_I32_ADD);
       return storeResult(ctx.emitter, I32);
+    } else if (t === 'options') {
+      // Options mode: stack already has [uniform_f64] from above. Three source
+      // dispatch paths mirror the JS isArray + inputToSources logic in
+      // compile.ts:904-916, with a fallback ValueRef for the empty-array case
+      // (the user always sees + can override the fallback in the inline widget,
+      // so empty-array is never silent).
+      const em = ctx.emitter;
+      const OP_DROP = byte(0x1a);
+      const fallbackRef: ValueRef = inputs['fallback'] ?? { inline: true, value: 0, valtype: F64 };
+      const sources = ctx.inputToSources.get(`${node.id}:options`) ?? [];
+
+      if (sources.length === 0) {
+        // No source wired — emit the fallback. RNG already advanced + stored
+        // for parity with the other paths.
+        em.op(OP_DROP);
+        pushValueAs(em, fallbackRef, F64);
+        return storeResult(em, F64);
+      }
+
+      if (sources.length === 1) {
+        const src = sources[0]!;
+        const srcNode = ctx.nodeMap.get(src.nodeId);
+        if (srcNode && isArrayProducer(srcNode.data.nodeType)) {
+          // Single array source: idx = i32(uniform * len); guard len > 0.
+          const arr = compileArrayNode(src.nodeId, ctx);
+          if (!arr) return null;
+          // Stack: [uniform_f64]
+          em.localGet(arr.lenLocal); em.i32ToF64();
+          em.op(OP_F64_MUL);
+          em.f64ToI32();
+          const idxLocal = em.allocLocal(I32);
+          em.localSet(idxLocal);
+          const resultLocal = em.allocLocal(arr.elemValtype);
+          pushValueAs(em, fallbackRef, arr.elemValtype);
+          em.localSet(resultLocal);
+          // if (len > 0) result = arr[idx]
+          em.localGet(arr.lenLocal);
+          em.i32Const(0);
+          em.op(byte(0x4b)); // OP_I32_GT_U
+          em.ifThen(() => {
+            em.localGet(idxLocal);
+            emitArrayLoadElem(em, arr);
+            em.localSet(resultLocal);
+          });
+          em.localGet(resultLocal);
+          return storeResult(em, arr.elemValtype);
+        }
+        // Single scalar source: length 1, trivially returns that value. Drop
+        // the uniform, emit the scalar. RNG already advanced for parity.
+        em.op(OP_DROP);
+        const srcRef = compileValueNode(src.nodeId, ctx, src.portId);
+        if (!srcRef) {
+          ctx.errors.push(`getRandom options: scalar source ${src.nodeId} did not produce a value`);
+          return null;
+        }
+        // Return the cached ref directly — no need to copy into a new local.
+        return srcRef;
+      }
+
+      // Multi-scalar (≥ 2 sources): materialise scalars, idx = i32(uniform * N),
+      // result = sources[idx]. N is statically known so we use a chain of
+      // ifThen() blocks (matches emitScalarAggregate's 'random' op pattern at
+      // ~line 2755 — kept in lockstep with the single-source-array path).
+      const sourceRefs: LocalRef[] = [];
+      for (const s of sources) {
+        const r = compileValueNode(s.nodeId, ctx, s.portId);
+        if (!r) {
+          ctx.errors.push(`getRandom options: scalar source ${s.nodeId} did not produce a value`);
+          return null;
+        }
+        sourceRefs.push(r);
+      }
+      const N = sourceRefs.length;
+      // Stack: [uniform_f64]
+      em.f64Const(N); em.op(OP_F64_MUL);
+      em.f64ToI32();
+      const idxLocal = em.allocLocal(I32);
+      em.localSet(idxLocal);
+      const accValtype: ValType = F64;
+      const accLocal = em.allocLocal(accValtype);
+      // Initialise to sources[0]; overwrite if idx selects a different source.
+      pushValueAs(em, sourceRefs[0]!, accValtype);
+      em.localSet(accLocal);
+      for (let i = 1; i < N; i++) {
+        em.localGet(idxLocal); em.i32Const(i); em.op(OP_I32_EQ);
+        em.ifThen(() => {
+          pushValueAs(em, sourceRefs[i]!, accValtype);
+          em.localSet(accLocal);
+        });
+      }
+      return { localIdx: accLocal, valtype: accValtype };
     } else {
       // random * (max - min) + min
       ctx.emitter.f64Const(maxN - minN);

@@ -1235,6 +1235,74 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       const lit = `${span}.0`;
       return emitLet(ctx, 'i32', `(i32(${rExpr} * ${lit}) + ${minN | 0})`, 'ri');
     }
+    if (t === 'options') {
+      // Options mode: pick uniformly from a wired array source, or from multiple
+      // scalar sources (Aggregate-style multi-source isArray pattern). Empty-
+      // array case falls back to the Fallback input port — surfaced in the UI
+      // so the user can't be surprised by silent zeros.
+      const fallback = inputs['fallback'] ?? ({ expr: '0.0', type: 'f32' } as ValueRef);
+      const sources = ctx.inputToSources.get(`${node.id}:options`) ?? [];
+
+      if (sources.length === 0) {
+        // No source wired — always returns fallback. Bind rand_f32 to a let so
+        // its side effect (per-cell PCG advance) is guaranteed even if the
+        // result expression is constant-folded by a downstream WGSL compiler.
+        // Matches JS / WASM which always emit the RNG advance prefix.
+        const rName = fresh(ctx, 'roRng');
+        ctx.lines.push(`  let ${rName}: f32 = ${rExpr};`);
+        return emitLet(ctx, 'f32', castTo(fallback, 'f32'), 'rof');
+      }
+
+      if (sources.length === 1) {
+        const src = sources[0]!;
+        const srcNode = ctx.nodeMap.get(src.nodeId);
+        if (srcNode && isArrayProducer(srcNode.data.nodeType)) {
+          // Single array source: pick at random with fallback guard for empty.
+          // For len == 0 the idx evaluates to 0; the static `array<T, maxLen>`
+          // is zero-initialised, so the `arr[0]` read is well-defined garbage
+          // that select() discards in favour of fbCast.
+          const arr = compileArrayNode(ctx, src.nodeId);
+          if (!arr) return null;
+          const fbCast = castTo(fallback, arr.elemType);
+          const idxName = fresh(ctx, 'roI');
+          ctx.lines.push(`  let ${idxName}: i32 = i32(${rExpr} * f32(${arr.lenName}));`);
+          return emitLet(ctx, arr.elemType,
+            `select(${fbCast}, ${arrLoad(arr, idxName)}, ${arr.lenName} > 0)`, 'rov');
+        }
+        // Single scalar source: trivially returns that value. Bind rand_f32 to
+        // a let for RNG parity (same reasoning as the no-source path above).
+        const srcRef = compileValueNode(ctx, src.nodeId, src.portId);
+        if (!srcRef) {
+          ctx.errors.push(`getRandom options: scalar source ${src.nodeId} did not produce a value`);
+          return null;
+        }
+        const rName = fresh(ctx, 'roRng');
+        ctx.lines.push(`  let ${rName}: f32 = ${rExpr};`);
+        return emitLet(ctx, srcRef.type, srcRef.expr, 'ros');
+      }
+
+      // Multi-scalar (≥ 2 sources): materialise into a fixed-length WGSL var
+      // array, then index by `i32(rand * N)`. N is statically known. Element
+      // type is f32 (safe default — downstream consumers `castTo` as needed).
+      const sourceRefs: ValueRef[] = [];
+      for (const s of sources) {
+        const r = compileValueNode(ctx, s.nodeId, s.portId);
+        if (!r) {
+          ctx.errors.push(`getRandom options: scalar source ${s.nodeId} did not produce a value`);
+          return null;
+        }
+        sourceRefs.push(r);
+      }
+      const N = sourceRefs.length;
+      const arrName = fresh(ctx, 'roOpts');
+      ctx.lines.push(`  var ${arrName}: array<f32, ${N}>;`);
+      for (let i = 0; i < N; i++) {
+        ctx.lines.push(`  ${arrName}[${i}] = ${castTo(sourceRefs[i]!, 'f32')};`);
+      }
+      const idxName = fresh(ctx, 'roI');
+      ctx.lines.push(`  let ${idxName}: i32 = i32(${rExpr} * ${N}.0);`);
+      return emitLet(ctx, 'f32', `${arrName}[${idxName}]`, 'rom');
+    }
     const span = maxN - minN;
     const sl = Number.isInteger(span) ? `${span}.0` : `${span}`;
     const ml = Number.isInteger(minN) ? `${minN}.0` : `${minN}`;
