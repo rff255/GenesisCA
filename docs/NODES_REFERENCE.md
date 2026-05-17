@@ -133,6 +133,7 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 | 22 | `interpolation` | Interpolate | `T ∈ [0,1] → [Min..Max]`. | `I: T`, `I: Min`, `I: Max` / `O: Result` | |
 | 23 | `statement` | Compare | `== != > < >= <=` on two scalars, or `Between` / `Not Between` (range check with configurable low/high sides). | `I: X` `I: Y` `I: Y₂` (between-family only) / `O: Result` (bool) | Name collision risk with `groupStatement` |
 | 24 | `logicOperator` | Logic | `AND OR XOR NOT` on bools. | `I: A` `I: B` (hidden for NOT) / `O: Result` (bool) | |
+| 24a | `valueSwitch` | Value Switch | `condition ? ifValue : elseValue`. Pure value, no flow port. | `I: Condition` (any) `I: If` (any) `I: Else` (any) / `O: Result` (any) | All inputs optional (inline defaults: condition=false, if=1, else=0). Both branches always evaluate — for short-circuit use flow `conditional` instead. |
 
 ### 3.5 Aggregation — `aggregation`
 
