@@ -138,7 +138,13 @@ function shapesMate(a: PortShape, b: PortShape): boolean {
   if (a.category !== b.category) return false;
   if (a.kind === b.kind) return false;
   if (a.category === 'flow') return true;
-  if (!!a.isArray !== !!b.isArray) return false;
+  // Asymmetric isArray rule: scalar source → array target is fine (compilers
+  // wrap as `[src]` / `[s1, s2, ...]` via inputToSources). Only array source
+  // → scalar target is rejected. Matches `portsCompatible` in GraphEditor.tsx
+  // — keep the two in lockstep.
+  const sourceIsArray = a.kind === 'output' ? !!a.isArray : !!b.isArray;
+  const targetIsArray = a.kind === 'input' ? !!a.isArray : !!b.isArray;
+  if (sourceIsArray && !targetIsArray) return false;
   const da = a.dataType ?? 'any';
   const db = b.dataType ?? 'any';
   return da === 'any' || db === 'any' || da === db;

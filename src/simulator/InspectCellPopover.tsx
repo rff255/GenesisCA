@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Attribute } from '../model/types';
+import { unpackNI, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
 import styles from './InspectCellPopover.module.css';
 
 export type InspectPopoverState = {
@@ -53,7 +54,12 @@ function decodeAttrValue(v: number | undefined, attr: Attribute): string {
       if (idx >= 0 && idx < opts.length) return opts[idx]!;
       return `(${idx})`;
     }
-    case 'neighborIndex': return String(v | 0);
+    case 'neighborIndex': {
+      const packed = v | 0;
+      if (packed === INVALID_NI) return 'INVALID_NI (no neighbor)';
+      const { dr, dc } = unpackNI(packed);
+      return `(dr ${dr}, dc ${dc})`;
+    }
     default: return formatFloat(v);
   }
 }

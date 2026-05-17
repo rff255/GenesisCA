@@ -110,8 +110,16 @@ function portsCompatible(
   if (dstPort.category !== srcCategory) return false;
   if (dstPort.kind === srcKind) return false;
   if (srcCategory === 'flow') return true;
-  // isArray must match — array → array, scalar → scalar
-  if (!!dstPort.isArray !== !!srcIsArray) return false;
+  // Reject only array-source → scalar-target. Scalar → array is fine — the
+  // compilers wrap a single scalar as `[src]` and multiple scalars wired to
+  // the same isArray port as `[s1, s2, ...]` via `inputToSources`
+  // (compile.ts:904-916). Without this asymmetry, the panel-drag compatible
+  // sources menu for Aggregate-style isArray inputs (Aggregate.values,
+  // GetRandom.options) would hide every scalar producer, even though
+  // isValidConnection permits the connection at wire-time.
+  const sourceIsArray = srcKind === 'output' ? !!srcIsArray : !!dstPort.isArray;
+  const targetIsArray = srcKind === 'input' ? !!srcIsArray : !!dstPort.isArray;
+  if (sourceIsArray && !targetIsArray) return false;
   const a = srcType ?? 'any';
   const b = dstPort.dataType ?? 'any';
   return a === 'any' || b === 'any' || a === b;
@@ -2471,15 +2479,8 @@ export function GraphEditorInner() {
                 if (payload.kind === 'model-attribute') newCfg.isColorAttr = payload.isColor;
                 const eff = getEffectivePorts(def.type, newCfg);
                 const candidates = [...eff.inputs, ...eff.outputs];
-                const compatible = candidates.find(p => {
-                  if (p.category !== snap.category) return false;
-                  if (p.kind === snap.kind) return false;
-                  if (p.category === 'flow') return true;
-                  if (!!p.isArray !== !!snap.isArray) return false;
-                  const a = p.dataType ?? 'any';
-                  const b = snap.dataType ?? 'any';
-                  return a === 'any' || b === 'any' || a === b;
-                });
+                const compatible = candidates.find(p =>
+                  portsCompatible(snap.category, snap.kind, snap.dataType, snap.isArray, p));
                 if (!compatible) continue;
                 resolved.push({ entry, def, matchPort: compatible });
               } else {

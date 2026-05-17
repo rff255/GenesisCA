@@ -39,6 +39,7 @@ function getCompatibleHandlesSnapshot() {
   return compatibleHandlesForDrag;
 }
 import styles from './CaNode.module.css';
+import { InlineNumberInput, InlineBoolSelect, InlineTagSelect } from './widgets/InlineWidgets';
 
 /** Pick the handle CSS class for a port based on its category + data type.
  *  Flow → green; NeighborIndex value → amber; everything else → cyan. */
@@ -265,16 +266,13 @@ function ColorScaleEditor({ id, nodeData }: { id: string; nodeData: CaNodeData }
 
       {selStop && (
         <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-          <input
+          <InlineNumberInput
             className={styles.input}
-            type="number"
             min={0}
             max={1}
             step={0.01}
-            lang="en"
-            inputMode="decimal"
-            value={selStop.p}
-            onChange={(e) => updateStop(safeIdx, { p: parseFloat(e.target.value) || 0 })}
+            value={String(selStop.p)}
+            onChange={(v) => updateStop(safeIdx, { p: parseFloat(v) || 0 })}
             onMouseDown={stopDrag}
             style={{ width: 60 }}
             title="Stop position"
@@ -574,9 +572,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
     }
   }
 
-  // GetRandom: show probability port only when randomType is 'bool'
-  if (nodeData.nodeType === 'getRandom' && nodeData.config.randomType !== 'bool') {
-    inputPorts = inputPorts.filter(p => p.id !== 'probability');
+  // GetRandom: probability port only for bool; options + fallback only for options mode.
+  // Mirror of the same logic in effectivePorts.ts — they MUST stay in sync.
+  if (nodeData.nodeType === 'getRandom') {
+    const rt = nodeData.config.randomType as string;
+    if (rt !== 'bool') inputPorts = inputPorts.filter(p => p.id !== 'probability');
+    if (rt !== 'options') inputPorts = inputPorts.filter(p => p.id !== 'options' && p.id !== 'fallback');
   }
 
   // Statement (Compare): hide y2 unless operation is a between-family op
@@ -1109,11 +1110,10 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 })()}
               </>
             ) : (
-              <input
+              <InlineNumberInput
                 className={styles.input}
-                type="number"
                 value={(nodeData.config.constValue as string) || '0'}
-                onChange={e => updateConfig('constValue', e.target.value)}
+                onChange={v => updateConfig('constValue', v)}
               />
             )}
           </>
@@ -1491,22 +1491,21 @@ function CaNodeComponent({ id, data }: NodeProps) {
               <option value="bool">Bool</option>
               <option value="integer">Integer</option>
               <option value="float">Float</option>
+              <option value="options">Options</option>
             </select>
-            {nodeData.config.randomType !== 'bool' && (
+            {(nodeData.config.randomType === 'integer' || nodeData.config.randomType === 'float') && (
               <>
-                <input
+                <InlineNumberInput
                   className={styles.input}
-                  type="number"
                   placeholder="min"
                   value={(nodeData.config.min as string) || '0'}
-                  onChange={e => updateConfig('min', e.target.value)}
+                  onChange={v => updateConfig('min', v)}
                 />
-                <input
+                <InlineNumberInput
                   className={styles.input}
-                  type="number"
                   placeholder="max"
                   value={(nodeData.config.max as string) || '1'}
-                  onChange={e => updateConfig('max', e.target.value)}
+                  onChange={v => updateConfig('max', v)}
                 />
               </>
             )}
@@ -1538,15 +1537,15 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 }}
                 onClick={e => e.stopPropagation()}
               />
-              <input className={styles.input} type="number" placeholder="R" min={0} max={255}
+              <InlineNumberInput className={styles.input} placeholder="R" min={0} max={255}
                 value={(nodeData.config.r as string) || '128'}
-                onChange={e => updateConfig('r', e.target.value)} />
-              <input className={styles.input} type="number" placeholder="G" min={0} max={255}
+                onChange={v => updateConfig('r', v)} />
+              <InlineNumberInput className={styles.input} placeholder="G" min={0} max={255}
                 value={(nodeData.config.g as string) || '128'}
-                onChange={e => updateConfig('g', e.target.value)} />
-              <input className={styles.input} type="number" placeholder="B" min={0} max={255}
+                onChange={v => updateConfig('g', v)} />
+              <InlineNumberInput className={styles.input} placeholder="B" min={0} max={255}
                 value={(nodeData.config.b as string) || '128'}
-                onChange={e => updateConfig('b', e.target.value)} />
+                onChange={v => updateConfig('b', v)} />
             </>
           );
         })()}
@@ -2220,38 +2219,27 @@ function CaNodeComponent({ id, data }: NodeProps) {
             {showWidget && (
               <div className={`${styles.inlineWidgetWrapper} nodrag`} style={{ top: `${topPx}px` }} onDoubleClick={stopAll}>
                 {effectiveWidget === 'bool' ? (
-                  <select
+                  <InlineBoolSelect
                     className={styles.inlineWidget}
-                    value={val === 'true' ? 'true' : 'false'}
-                    onChange={e => updateConfig(configKey, e.target.value)}
-                    onClick={e => e.stopPropagation()}
-                    onMouseDown={stopDrag}
-                  >
-                    <option value="true">True</option>
-                    <option value="false">False</option>
-                  </select>
-                ) : effectiveWidget === 'tag' ? (
-                  <select
-                    className={styles.inlineWidget}
-                    value={val || '0'}
-                    onChange={e => updateConfig(configKey, e.target.value)}
-                    onClick={e => e.stopPropagation()}
-                    onMouseDown={stopDrag}
-                  >
-                    {(setAttr?.tagOptions || []).map((t, ti) => (
-                      <option key={ti} value={String(ti)}>{t}</option>
-                    ))}
-                    {(!setAttr?.tagOptions || setAttr.tagOptions.length === 0) && <option value="0">(no tags)</option>}
-                  </select>
-                ) : (
-                  <input
-                    className={styles.inlineWidget}
-                    type="number"
-                    step="any"
-                    lang="en"
-                    inputMode="decimal"
                     value={val}
-                    onChange={e => updateConfig(configKey, e.target.value)}
+                    onChange={next => updateConfig(configKey, next)}
+                    onClick={e => e.stopPropagation()}
+                    onMouseDown={stopDrag}
+                  />
+                ) : effectiveWidget === 'tag' ? (
+                  <InlineTagSelect
+                    className={styles.inlineWidget}
+                    value={val}
+                    options={setAttr?.tagOptions || []}
+                    onChange={next => updateConfig(configKey, next)}
+                    onClick={e => e.stopPropagation()}
+                    onMouseDown={stopDrag}
+                  />
+                ) : (
+                  <InlineNumberInput
+                    className={styles.inlineWidget}
+                    value={val}
+                    onChange={next => updateConfig(configKey, next)}
                     onClick={e => e.stopPropagation()}
                     onMouseDown={stopDrag}
                   />
