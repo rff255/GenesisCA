@@ -1471,6 +1471,18 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return storeResult(ctx.emitter, F64);
   },
 
+  // -- valueSwitch: cond ? ifValue : elseValue (f64 result) --
+  valueSwitch: ({ ctx, inputs }) => {
+    const cond = inputs['condition'] ?? { inline: true, value: 0, valtype: I32 };
+    const ifV  = inputs['ifValue']   ?? { inline: true, value: 1, valtype: F64 };
+    const elV  = inputs['elseValue'] ?? { inline: true, value: 0, valtype: F64 };
+    pushValueAs(ctx.emitter, ifV, F64);
+    pushValueAs(ctx.emitter, elV, F64);
+    pushValueAs(ctx.emitter, cond, I32);
+    ctx.emitter.op(OP_SELECT);
+    return storeResult(ctx.emitter, F64);
+  },
+
   // -- getColorConstant: three i32 channels from config (r, g, b) --
   getColorConstant: ({ node, ctx }) => {
     const r = parseInt(String(node.data.config.r ?? '0'), 10) || 0;

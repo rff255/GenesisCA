@@ -34,6 +34,7 @@ import { SetIndicatorNode } from './SetIndicatorNode';
 import { UpdateIndicatorNode } from './UpdateIndicatorNode';
 import { ProportionMapNode } from './ProportionMapNode';
 import { InterpolationNode } from './InterpolationNode';
+import { ValueSwitchNode } from './ValueSwitchNode';
 import { ColorScaleNode } from './ColorScaleNode';
 import { SwitchNode } from './SwitchNode';
 import { AggregateNode } from './AggregateNode';
@@ -90,6 +91,7 @@ const ALL_NODES: NodeTypeDef[] = [
   InterpolationNode,
   StatementNode,
   LogicOperatorNode,
+  ValueSwitchNode,
   // Aggregation
   GroupCountingNode,
   GroupStatementNode,

@@ -1351,6 +1351,13 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return emitLet(ctx, 'f32', `(${mn} + ${t} * (${mx} - ${mn}))`, 'lerp');
   },
 
+  valueSwitch: ({ ctx, inputs }) => {
+    const cond = castTo(inputs['condition'] ?? { expr: 'false', type: 'bool' }, 'bool');
+    const ifV  = castTo(inputs['ifValue']   ?? { expr: '1.0',   type: 'f32' },  'f32');
+    const elV  = castTo(inputs['elseValue'] ?? { expr: '0.0',   type: 'f32' },  'f32');
+    return emitLet(ctx, 'f32', `select(${elV}, ${ifV}, ${cond})`, 'vsel');
+  },
+
   getColorConstant: ({ node, ctx }) => {
     const r = parseInt(String(node.data.config.r ?? '0'), 10) || 0;
     const g = parseInt(String(node.data.config.g ?? '0'), 10) || 0;
