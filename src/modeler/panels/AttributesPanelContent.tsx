@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
 import type { Attribute, AttributeType } from '../../model/types';
+import { InteractionTableEditor } from './InteractionTableEditor';
 import { useListReorder } from './useListReorder';
 import { NeighborIndexDefaultEditor } from './NeighborIndexDefaultEditor';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
@@ -15,7 +16,10 @@ function buildAttrDragPayload(attr: Attribute): ModelElementDragPayload {
   if (attr.isModelAttribute) {
     return { kind: 'model-attribute', attributeId: attr.id, isColor: attr.type === 'color' };
   }
-  return { kind: 'cell-attribute', attributeId: attr.id, attrType: attr.type };
+  // Schema invariant: cell attrs never have type `'interactionTable'` (the
+  // Attributes panel's type dropdown excludes it for cell attrs). Cast away
+  // the wider AttributeType to satisfy the drag payload's restricted union.
+  return { kind: 'cell-attribute', attributeId: attr.id, attrType: attr.type as 'bool' | 'integer' | 'float' | 'tag' | 'color' | 'neighborIndex' };
 }
 
 function handleRowDragStart(payload: ModelElementDragPayload) {
@@ -211,8 +215,26 @@ export function AttributesPanelContent() {
                 <option value="tag">Tag</option>
                 <option value="neighborIndex">Neighbor Index</option>
                 {selected.isModelAttribute && <option value="color">Color</option>}
+                {selected.isModelAttribute && <option value="interactionTable">Interaction Table</option>}
               </select>
             </div>
+            {selected.type === 'interactionTable' && (
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>Interaction Table</label>
+                {!model.variegatedCells?.enabled ? (
+                  <div style={{ color: '#cc8d3a', fontSize: '0.66rem' }}>
+                    Enable Variegated Cells in Properties first; the table is keyed by face labels which are defined in the Variegated Cells panel.
+                  </div>
+                ) : (
+                  <InteractionTableEditor
+                    attribute={selected}
+                    faceLabels={model.variegatedCells.faceLabels}
+                    onChange={changes => updateAttribute(selected.id, changes)}
+                  />
+                )}
+              </div>
+            )}
+            {selected.type !== 'interactionTable' && (<>
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Default Value</label>
               {selected.type === 'bool' ? (
@@ -289,6 +311,7 @@ export function AttributesPanelContent() {
               )}
             </div>
 
+            </>)}
             {/* Boundary Value — cell attributes only, shown when boundary treatment is constant. */}
             {!selected.isModelAttribute && model.properties.boundaryTreatment === 'constant' && (
               <div className={styles.field}>
@@ -359,48 +382,86 @@ export function AttributesPanelContent() {
               </div>
             )}
 
-            {selected.type === 'tag' && (
-              <div className={styles.field}>
-                <label className={styles.fieldLabel}>Tag Options</label>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  {(selected.tagOptions || []).map((tag, i) => (
-                    <div key={i} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                      <span style={{ fontSize: '0.7rem', color: '#6080a0', width: 16 }}>{i}</span>
-                      <input
-                        className={styles.textInput}
-                        value={tag}
-                        onChange={e => {
-                          const opts = [...(selected.tagOptions || [])];
-                          opts[i] = e.target.value;
-                          updateAttribute(selected.id, { tagOptions: opts });
-                        }}
-                        style={{ flex: 1 }}
-                      />
-                      <button
-                        className={styles.deleteButton}
-                        style={{ padding: '2px 6px', fontSize: '0.7rem' }}
-                        onClick={() => {
-                          const opts = (selected.tagOptions || []).filter((_, j) => j !== i);
-                          updateAttribute(selected.id, { tagOptions: opts });
-                        }}
-                      >
-                        &times;
-                      </button>
+            {selected.type === 'tag' && (() => {
+              const isVariegationSource = !!model.variegatedCells?.enabled
+                && model.variegatedCells.sourceAttributeId === selected.id
+                && !selected.isModelAttribute;
+              const facePatterns = model.variegatedCells?.facePatterns || [];
+              const assignments = selected.facePatternAssignments || {};
+              return (
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>
+                    Tag Options
+                    {isVariegationSource && (
+                      <span style={{ color: '#6080a0', fontWeight: 'normal', marginLeft: 6, fontSize: '0.66rem' }}>
+                        (Variegation Source — assign a face pattern per option)
+                      </span>
+                    )}
+                  </label>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {(selected.tagOptions || []).map((tag, i) => (
+                      <div key={i} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.7rem', color: '#6080a0', width: 16 }}>{i}</span>
+                        <input
+                          className={styles.textInput}
+                          value={tag}
+                          onChange={e => {
+                            const opts = [...(selected.tagOptions || [])];
+                            opts[i] = e.target.value;
+                            updateAttribute(selected.id, { tagOptions: opts });
+                          }}
+                          style={{ flex: 1 }}
+                        />
+                        {isVariegationSource && (
+                          <select
+                            className={styles.selectInput}
+                            style={{ flex: 1, fontSize: '0.66rem' }}
+                            value={assignments[tag] ?? ''}
+                            onChange={e => {
+                              const next: Record<string, string> = { ...assignments };
+                              if (e.target.value) next[tag] = e.target.value;
+                              else delete next[tag];
+                              updateAttribute(selected.id, { facePatternAssignments: next });
+                            }}
+                            title={`Face pattern for tag "${tag}"`}
+                          >
+                            <option value="">— none (non-variegated) —</option>
+                            {facePatterns.map(fp => (
+                              <option key={fp.id} value={fp.id}>{fp.name}</option>
+                            ))}
+                          </select>
+                        )}
+                        <button
+                          className={styles.deleteButton}
+                          style={{ padding: '2px 6px', fontSize: '0.7rem' }}
+                          onClick={() => {
+                            const opts = (selected.tagOptions || []).filter((_, j) => j !== i);
+                            updateAttribute(selected.id, { tagOptions: opts });
+                          }}
+                        >
+                          &times;
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      className={styles.addButton}
+                      style={{ fontSize: '0.75rem', padding: '2px 8px' }}
+                      onClick={() => {
+                        const opts = [...(selected.tagOptions || []), `tag_${(selected.tagOptions || []).length}`];
+                        updateAttribute(selected.id, { tagOptions: opts });
+                      }}
+                    >
+                      + Add Tag
+                    </button>
+                  </div>
+                  {isVariegationSource && facePatterns.length === 0 && (
+                    <div style={{ marginTop: 4, color: '#cc8d3a', fontSize: '0.62rem' }}>
+                      No face patterns defined yet. Open the Variegated Cells (V) panel to add one.
                     </div>
-                  ))}
-                  <button
-                    className={styles.addButton}
-                    style={{ fontSize: '0.75rem', padding: '2px 8px' }}
-                    onClick={() => {
-                      const opts = [...(selected.tagOptions || []), `tag_${(selected.tagOptions || []).length}`];
-                      updateAttribute(selected.id, { tagOptions: opts });
-                    }}
-                  >
-                    + Add Tag
-                  </button>
+                  )}
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Sub-Attribute — cell attributes only. A sub-attribute is "only well-defined"
                 on cells whose parent attribute (tag or bool) holds one of the configured

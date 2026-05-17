@@ -10,6 +10,7 @@ import type { ReactNode } from 'react';
 import type {
   Attribute,
   CAModel,
+  FacePattern,
   GraphEdge,
   GraphNode,
   Indicator,
@@ -20,6 +21,7 @@ import type {
   Neighborhood,
   Preset,
   SimulationState,
+  VariegatedCellsConfig,
 } from './types';
 import { DEFAULT_MODEL, EMPTY_MODEL } from './defaultModel';
 import { cloneMacroWithFreshIds } from './macroImport';
@@ -167,7 +169,12 @@ type ModelAction =
   | { type: 'REORDER_NEIGHBORHOODS'; newOrder: string[] }
   | { type: 'REORDER_MAPPINGS'; newOrder: string[] }
   | { type: 'REORDER_INDICATORS'; newOrder: string[] }
-  | { type: 'REORDER_END_CONDITIONS'; newOrder: string[] };
+  | { type: 'REORDER_END_CONDITIONS'; newOrder: string[] }
+  | { type: 'UPDATE_VARIEGATED_CELLS'; changes: Partial<VariegatedCellsConfig> }
+  | { type: 'ADD_FACE_PATTERN' }
+  | { type: 'REMOVE_FACE_PATTERN'; id: string }
+  | { type: 'UPDATE_FACE_PATTERN'; id: string; changes: Partial<FacePattern> }
+  | { type: 'DUPLICATE_FACE_PATTERN'; sourceId: string };
 
 // ---------------------------------------------------------------------------
 // Reducer
@@ -214,7 +221,15 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         .map(a => a.parentAttributeId === action.id
           ? { ...a, parentAttributeId: undefined, parentValues: undefined, undefinedValue: undefined }
           : a);
-      const modelAfterFilter = { ...state.model, attributes: filteredAttrs };
+      // Variegation cascade: if the removed attribute was the variegation
+      // source, clear sourceAttributeId. We do NOT disable variegatedCells —
+      // the user might just be re-pointing the source; preserving facePatterns
+      // and faceLabels avoids re-entry burden.
+      let variegatedCells = state.model.variegatedCells;
+      if (variegatedCells && variegatedCells.sourceAttributeId === action.id) {
+        variegatedCells = { ...variegatedCells, sourceAttributeId: '' };
+      }
+      const modelAfterFilter = { ...state.model, attributes: filteredAttrs, variegatedCells };
       // Clear stale attributeId and tagAttributeId references in node configs
       const a1 = clearDeletedId(modelAfterFilter, 'attributeId', action.id);
       const a2 = patchAllNodes(
@@ -257,18 +272,44 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         // Remap parentValues on sub-attributes that use this attribute as parent.
         // Also drop parentValues entries whose tag was deleted (indexMap value 0
         // is the fallback; if multiple old indices collapse to 0 we dedupe).
+        // Variegation source: facePatternAssignments uses STRING keys (tag
+        // option names, not indices), so deleted-tag entries get pruned and
+        // renamed-tag entries that map to a new name at the same index get
+        // ported across. The tag-options edit UI only adds/removes, but the
+        // index-pairing rename heuristic survives reorderings cleanly.
+        const variegationSourceId = state.model.variegatedCells?.sourceAttributeId;
+        const newOptsSet = new Set(newOpts);
         const remappedAttrs = updatedModel.attributes.map(sa => {
-          if (sa.parentAttributeId !== attrId || !sa.parentValues) return sa;
-          const deletedOld = new Set<number>();
-          for (let oi = 0; oi < oldOpts.length; oi++) {
-            if (newOpts.indexOf(oldOpts[oi]!) < 0) deletedOld.add(oi);
+          let next: Attribute = sa;
+          if (sa.parentAttributeId === attrId && sa.parentValues) {
+            const deletedOld = new Set<number>();
+            for (let oi = 0; oi < oldOpts.length; oi++) {
+              if (newOpts.indexOf(oldOpts[oi]!) < 0) deletedOld.add(oi);
+            }
+            const nextParentValues = Array.from(new Set(
+              sa.parentValues
+                .filter(v => !deletedOld.has(parseInt(v, 10)))
+                .map(v => remap(v)),
+            ));
+            next = { ...next, parentValues: nextParentValues };
           }
-          const next = Array.from(new Set(
-            sa.parentValues
-              .filter(v => !deletedOld.has(parseInt(v, 10)))
-              .map(v => remap(v)),
-          ));
-          return { ...sa, parentValues: next };
+          if (sa.id === attrId && variegationSourceId === attrId && sa.facePatternAssignments) {
+            const nextAssign: Record<string, string> = {};
+            for (let oi = 0; oi < oldOpts.length; oi++) {
+              const oldName = oldOpts[oi]!;
+              const v = sa.facePatternAssignments[oldName];
+              if (!v) continue;
+              if (newOptsSet.has(oldName)) {
+                nextAssign[oldName] = v;
+              } else if (newOpts[oi] && !oldOpts.includes(newOpts[oi]!)) {
+                // Same index, new name not present in oldOpts → rename detected.
+                nextAssign[newOpts[oi]!] = v;
+              }
+              // else: deleted tag, drop assignment.
+            }
+            next = { ...next, facePatternAssignments: nextAssign };
+          }
+          return next;
         });
         const remappedModel = { ...updatedModel, attributes: remappedAttrs };
         const patched = patchAllNodes(
@@ -644,6 +685,92 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         },
       };
     }
+
+    case 'UPDATE_VARIEGATED_CELLS': {
+      const current: VariegatedCellsConfig = state.model.variegatedCells ?? {
+        enabled: false, sourceAttributeId: '', faceLabels: [], facePatterns: [],
+      };
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, variegatedCells: { ...current, ...action.changes } },
+      };
+    }
+
+    case 'ADD_FACE_PATTERN': {
+      const current: VariegatedCellsConfig = state.model.variegatedCells ?? {
+        enabled: false, sourceAttributeId: '', faceLabels: [], facePatterns: [],
+      };
+      const newPattern: FacePattern = {
+        id: generateId('face_pattern'),
+        name: `pattern_${current.facePatterns.length + 1}`,
+        layoutMode: 'edges',
+        faces: [null, null, null, null, null, null, null, null],
+      };
+      return {
+        ...state, isDirty: true,
+        model: {
+          ...state.model,
+          variegatedCells: { ...current, facePatterns: [...current.facePatterns, newPattern] },
+        },
+      };
+    }
+
+    case 'DUPLICATE_FACE_PATTERN': {
+      const current = state.model.variegatedCells;
+      if (!current) return state;
+      const src = current.facePatterns.find(p => p.id === action.sourceId);
+      if (!src) return state;
+      const dup: FacePattern = {
+        id: generateId((src.name || 'face_pattern') + '_copy'),
+        name: src.name + ' (copy)',
+        layoutMode: src.layoutMode,
+        faces: [...src.faces],
+      };
+      return {
+        ...state, isDirty: true,
+        model: {
+          ...state.model,
+          variegatedCells: { ...current, facePatterns: [...current.facePatterns, dup] },
+        },
+      };
+    }
+
+    case 'REMOVE_FACE_PATTERN': {
+      const current = state.model.variegatedCells;
+      if (!current) return state;
+      const remaining = current.facePatterns.filter(p => p.id !== action.id);
+      // Cascade: clear facePatternAssignments entries that referenced the deleted pattern.
+      const attributes = state.model.attributes.map(a => {
+        if (!a.facePatternAssignments) return a;
+        let touched = false;
+        const next: Record<string, string> = {};
+        for (const [k, v] of Object.entries(a.facePatternAssignments)) {
+          if (v === action.id) { touched = true; continue; }
+          next[k] = v;
+        }
+        return touched ? { ...a, facePatternAssignments: next } : a;
+      });
+      return {
+        ...state, isDirty: true,
+        model: {
+          ...state.model,
+          attributes,
+          variegatedCells: { ...current, facePatterns: remaining },
+        },
+      };
+    }
+
+    case 'UPDATE_FACE_PATTERN': {
+      const current = state.model.variegatedCells;
+      if (!current) return state;
+      const facePatterns = current.facePatterns.map(p =>
+        p.id === action.id ? { ...p, ...action.changes } : p,
+      );
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, variegatedCells: { ...current, facePatterns } },
+      };
+    }
   }
 }
 
@@ -704,6 +831,14 @@ export interface ModelContextValue {
   reorderMappings: (newOrder: string[]) => void;
   reorderIndicators: (newOrder: string[]) => void;
   reorderEndConditions: (newOrder: string[]) => void;
+  /** Variegated Cells — partial update for top-level config (enabled,
+   *  sourceAttributeId, faceLabels, facePatterns). Initializes the
+   *  `variegatedCells` object on the model when absent. */
+  updateVariegatedCells: (changes: Partial<VariegatedCellsConfig>) => void;
+  addFacePattern: () => void;
+  duplicateFacePattern: (sourceId: string) => void;
+  removeFacePattern: (id: string) => void;
+  updateFacePattern: (id: string, changes: Partial<FacePattern>) => void;
 }
 
 const ModelContext = createContext<ModelContextValue | null>(null);
@@ -890,6 +1025,28 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     (newOrder: string[]) => dispatch({ type: 'REORDER_END_CONDITIONS', newOrder }),
     [],
   );
+  const updateVariegatedCells = useCallback(
+    (changes: Partial<VariegatedCellsConfig>) =>
+      dispatch({ type: 'UPDATE_VARIEGATED_CELLS', changes }),
+    [],
+  );
+  const addFacePattern = useCallback(
+    () => dispatch({ type: 'ADD_FACE_PATTERN' }),
+    [],
+  );
+  const duplicateFacePattern = useCallback(
+    (sourceId: string) => dispatch({ type: 'DUPLICATE_FACE_PATTERN', sourceId }),
+    [],
+  );
+  const removeFacePattern = useCallback(
+    (id: string) => dispatch({ type: 'REMOVE_FACE_PATTERN', id }),
+    [],
+  );
+  const updateFacePattern = useCallback(
+    (id: string, changes: Partial<FacePattern>) =>
+      dispatch({ type: 'UPDATE_FACE_PATTERN', id, changes }),
+    [],
+  );
 
   const value = useMemo<ModelContextValue>(
     () => ({
@@ -927,6 +1084,11 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       reorderMappings,
       reorderIndicators,
       reorderEndConditions,
+      updateVariegatedCells,
+      addFacePattern,
+      duplicateFacePattern,
+      removeFacePattern,
+      updateFacePattern,
     }),
     [
       state.model,
@@ -963,6 +1125,11 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       reorderMappings,
       reorderIndicators,
       reorderEndConditions,
+      updateVariegatedCells,
+      addFacePattern,
+      duplicateFacePattern,
+      removeFacePattern,
+      updateFacePattern,
     ],
   );
 

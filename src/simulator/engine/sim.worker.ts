@@ -5,6 +5,7 @@
  */
 
 import { instantiateWasmModule } from '../../modeler/vpl/compiler/wasm/compile';
+import { buildFacePatternLookup, normalizeInteractionTable } from '../../modeler/vpl/compiler/variegation';
 import { computeMemoryLayout, type MemoryLayout } from '../../modeler/vpl/compiler/wasm/layout';
 import type { WebGPULayout } from '../../modeler/vpl/compiler/webgpu/layout';
 import type { WebGPUEntryPoints } from '../../modeler/vpl/compiler/webgpu/compile';
@@ -41,6 +42,30 @@ interface NeighborhoodDef {
   coords: Array<[number, number]>;
 }
 
+interface FacePatternDef {
+  id: string;
+  name: string;
+  layoutMode: 'edges' | 'edges+corners';
+  faces: (string | null)[];
+}
+interface VariegatedPayload {
+  sourceAttributeId: string;
+  faceLabels: string[];
+  facePatterns: FacePatternDef[];
+  /** Map from tagOption name → FacePattern.id. */
+  facePatternAssignments: Record<string, string>;
+}
+interface InteractionTablePayload {
+  id: string;
+  /** Per-table face-label list (currently always the same as the variegated
+   *  payload's faceLabels — kept per-table for forward flexibility). The flat
+   *  storage is `(labelCount + 1)²` Float64Array, including the implicit
+   *  `none` row/col at index 0. */
+  faceLabels: string[];
+  /** Sparse `[rowLabel][colLabel] → number`. Missing entries default to 0. */
+  values: Record<string, Record<string, number>>;
+}
+
 interface InitMsg {
   type: 'init';
   width: number;
@@ -51,8 +76,19 @@ interface InitMsg {
   updateMode: string;
   asyncScheme: string;
   stepCode: string;
+  /** Optional per-cell init function source (loop-wrapped). When present, the
+   *  reset handler runs it once after default values are applied and before
+   *  the first color pass. */
+  initCode?: string;
   inputColorCodes: Array<{ mappingId: string; code: string }>;
   outputMappingCodes: Array<{ mappingId: string; code: string }>;
+  /** Variegated Cells config. Undefined / absent ⇒ feature disabled, no
+   *  orientation buffer / face-pattern lookup allocated. */
+  variegated?: VariegatedPayload;
+  /** Interaction Table model attributes. Empty array ⇒ no tables. Each table
+   *  is flattened to a Float64Array of length `(labelCount + 1)²` and stored
+   *  in `cachedInteractionTables[id]`. Live-tuned via updateInteractionTable. */
+  interactionTables?: InteractionTablePayload[];
   /** Per-stop-event-node message, indexed by (_stopIdx - 1). */
   stopMessages?: string[];
   activeViewer: string;
@@ -99,7 +135,13 @@ interface PaintMsg {
 }
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[] }
+interface UpdateInteractionTableMsg {
+  type: 'updateInteractionTable';
+  attrId: string;
+  faceLabels: string[];
+  values: Record<string, Record<string, number>>;
+}
 interface UpdateModelAttrsMsg { type: 'updateModelAttrs'; attrs: Record<string, number> }
 interface ImportImageMsg { type: 'importImage'; pixels: Uint8ClampedArray; mappingId: string; activeViewer: string }
 
@@ -188,7 +230,7 @@ interface SetInspectCellsMsg { type: 'setInspectCells'; cellIdxs: number[] }
  *  content despite dispatching a present internally). Idempotent + cheap. */
 interface RefreshDisplayMsg { type: 'refreshDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateInteractionTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -268,6 +310,61 @@ rngState[0] = (Date.now() * 0x9e3779b9) >>> 0 || 0x12345678;
 let stepFn: Function | null = null;
 let inputColorFns: Array<{ mappingId: string; fn: Function }> = [];
 let outputMappingFns: Array<{ mappingId: string; fn: Function }> = [];
+/** Optional per-cell init function compiled from the Init Event Node.
+ *  Null when the graph contains no Init Event Node. Runs once per cell on
+ *  Reset (NOT on Randomize, NOT on Load State), after default values are
+ *  applied and before the first color pass. */
+let initFn: Function | null = null;
+
+/** Per-table Float64Array of length `(labelCount + 1)²` (rows × cols, with
+ *  the implicit `none` label at index 0). Keyed by attribute id. Rebuilt on
+ *  init / recompile / updateInteractionTable. */
+let cachedInteractionTables: Record<string, Float64Array> = {};
+
+/** Variegated Cells state. All null when the feature is disabled for the
+ *  current model; populated together in `initVariegation()` on init/recompile.
+ *  Phase 6 wires these into the JS-target compiled-fn signature; Phases 8 / 9
+ *  add WASM / WebGPU layout slots that mirror the values. */
+let variegated: VariegatedPayload | null = null;
+let orientationReadView: Int32Array | null = null;
+let orientationWriteView: Int32Array | null = null;
+/** Flat `[speciesIdx * 8 + faceIdx → labelIdx]` (0 = "none"). Built once by
+ *  `buildFacePatternLookup` from the variegation source attribute's
+ *  facePatternAssignments. */
+let facePatternLookup: Int32Array | null = null;
+
+/** Allocate the orientation arrays + build the facePatternLookup table for
+ *  the current model. Standalone Int32Arrays (NOT inside wasmMemory) — Phase
+ *  8 adds a WASM layout slot and mirrors the values; Phase 9 does the GPU
+ *  upload. Called from the `init` handler after `initGrid()` (which sets
+ *  `total` + `updateMode`). Sentinel cell at index `total` stays at 0 per
+ *  spec §6.3 (orientation boundary value is fixed at 0). */
+function initVariegation(payload: VariegatedPayload | undefined): void {
+  variegated = payload ?? null;
+  if (!variegated) {
+    orientationReadView = null;
+    orientationWriteView = null;
+    facePatternLookup = null;
+    return;
+  }
+  const isAsync = updateMode === 'asynchronous';
+  const viewLen = boundaryTreatment === 'torus' ? total : (total + 1);
+  orientationReadView = new Int32Array(viewLen);
+  // Async mode shares a single buffer (same pattern as cell attrs).
+  orientationWriteView = isAsync ? orientationReadView : new Int32Array(viewLen);
+  // Build the face-pattern lookup from the variegation source's tagOptions.
+  const source = cellAttrs.find(a => a.id === variegated!.sourceAttributeId);
+  if (source && source.tagOptions) {
+    facePatternLookup = buildFacePatternLookup({
+      tagOptions: source.tagOptions,
+      facePatternAssignments: variegated.facePatternAssignments,
+      faceLabels: variegated.faceLabels,
+      facePatterns: variegated.facePatterns,
+    });
+  } else {
+    facePatternLookup = new Int32Array(0);
+  }
+}
 
 // WASM step (Wave 2) — when useWasm is true, runStep() calls this instead of
 // the JS stepFn. Default false; flipped via the 'setUseWasm' message. The WASM
@@ -655,6 +752,11 @@ function buildLoopArgs(): unknown[] {
     args.push(nbr.coords.length);
   }
   args.push(cachedModelAttrs, colors, activeViewer, cachedIndicators, linkedResults, rngState, stopFlag);
+  // Variegated Cells: orientation arrays + face-pattern lookup + interaction
+  // tables, in the same order the JS compiler emits its param list.
+  if (variegated) {
+    args.push(orientationReadView, orientationWriteView, facePatternLookup, cachedInteractionTables);
+  }
   if (updateMode === 'asynchronous' && orderArray) args.push(orderArray);
   return args;
 }
@@ -669,6 +771,9 @@ function buildCellArgs(idx: number): unknown[] {
     args.push(nbr.coords.length);
   }
   args.push(cachedModelAttrs, colors, activeViewer, cachedIndicators, linkedResults, rngState, stopFlag);
+  if (variegated) {
+    args.push(orientationReadView, orientationWriteView, facePatternLookup, cachedInteractionTables);
+  }
   return args;
 }
 
@@ -1369,11 +1474,16 @@ function compileFns(
   stepCode: string,
   icCodes: Array<{ mappingId: string; code: string }>,
   omCodes: Array<{ mappingId: string; code: string }> = [],
+  initCode: string = '',
 ): void {
   try {
     // eslint-disable-next-line no-eval
     stepFn = stepCode ? (eval(stepCode) as Function) : null;
   } catch { stepFn = null; }
+  try {
+    // eslint-disable-next-line no-eval
+    initFn = initCode ? (eval(initCode) as Function) : null;
+  } catch { initFn = null; }
   inputColorFns = [];
   for (const ic of icCodes) {
     try {
@@ -1387,6 +1497,39 @@ function compileFns(
       // eslint-disable-next-line no-eval
       outputMappingFns.push({ mappingId: om.mappingId, fn: eval(om.code) as Function });
     } catch { /* skip */ }
+  }
+}
+
+/** Run the per-cell Init function for the entire grid (one cell per
+ *  iteration). Sync mode swaps r/w buffers after, so subsequent reads from
+ *  readAttrs see the init-time writes. Async mode shares a single buffer so
+ *  no swap is needed. No-op when initFn is null. Called from the reset
+ *  handler after `resetGrid()` and before sendColors / GPU upload.
+ *
+ *  Wave-2/3 caveat: this calls the JS initFn even when useWasm or useWebGPU
+ *  is active — WASM and WebGPU init entry-points are added in later phases
+ *  (Phase 8 / 9). Init runs once per reset so the JS path is acceptable for
+ *  Phase 2; the cell attribute buffers are TypedArray views (in WASM mode,
+ *  views over wasmMemory) so writes still land in the right place. Under
+ *  WebGPU the worker uploads readAttrs to the GPU after init in the reset
+ *  handler. */
+function runInit(): void {
+  if (!initFn) return;
+  try {
+    initFn(...buildLoopArgs());
+  } catch (e) {
+    self.postMessage({ type: 'error', message: '[init] init function failed: ' + ((e instanceof Error) ? e.message : String(e)) });
+    return;
+  }
+  // Sync mode: copy writeAttrs → readAttrs so both buffers match (mirrors the
+  // resetGrid invariant) and subsequent reads from readAttrs see init-time
+  // writes. The copy (vs a ref swap) keeps the canonical orientation
+  // readAttrs=attrsA / writeAttrs=attrsB unchanged, which the WASM step (and
+  // WebGPU upload) assume. Async mode: r/w share one buffer, no copy needed.
+  if (updateMode !== 'asynchronous') {
+    for (const attr of cellAttrs) {
+      (readAttrs[attr.id] as Uint8Array).set(writeAttrs[attr.id] as Uint8Array);
+    }
   }
 }
 
@@ -1679,7 +1822,18 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // so WASM emitters that read those regions see meaningful values.
       syncModelAttrsToMemory();
       syncActiveViewerToMemory();
-      compileFns(msg.stepCode, msg.inputColorCodes, msg.outputMappingCodes || []);
+      // Variegated Cells: allocate orientation arrays + build facePatternLookup
+      // from the variegation source attribute. Phase 7 wires the runtime
+      // reads (GetOrientation, GetFacingLabels, etc.) against these arrays.
+      initVariegation(msg.variegated);
+      compileFns(msg.stepCode, msg.inputColorCodes, msg.outputMappingCodes || [], msg.initCode || '');
+      // Variegated Cells: flatten each interaction table into row-major
+      // Float64Arrays. Phase 7 wires interaction table reads into
+      // LookupInteraction emit.
+      cachedInteractionTables = {};
+      for (const t of msg.interactionTables ?? []) {
+        cachedInteractionTables[t.id] = normalizeInteractionTable(t.values, t.faceLabels);
+      }
       stopMessages = msg.stopMessages || [];
       webgpuStopCheckInterval = Math.max(1, Math.floor(msg.webgpuStopCheckInterval ?? 1));
       // Mutual exclusion safety net: a saved file or hand-edited JSON could
@@ -1909,6 +2063,17 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'reset': {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       resetGrid();
+      // Init Event runs once per cell on Reset only (not on Randomize, not on
+      // Load State). When present, it modifies attrs in place AFTER defaults
+      // have been applied and BEFORE the color pass / GPU upload.
+      const hadInit = initFn !== null;
+      runInit();
+      if (hadInit) {
+        // Init wrote to attrs after resetGrid's color refresh — recompute
+        // colors so the user sees the post-init state, not the defaults.
+        // WebGPU path skips this and recomputes via runColorPassWebGPU below.
+        if (!(useWebGPU && webgpuRuntime?.stepReady)) refreshColorsAfterInputJS();
+      }
       const webgpuReset = useWebGPU && webgpuRuntime?.stepReady;
       if (webgpuReset && webgpuRuntime) {
         uploadAttrs(webgpuRuntime, readAttrs);
@@ -1931,7 +2096,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         viewerIdMap = (msg as RecompileMsg).viewerIds!;
         syncActiveViewerToMemory();
       }
-      compileFns(msg.stepCode, msg.inputColorCodes, (msg as RecompileMsg).outputMappingCodes || []);
+      compileFns(msg.stepCode, msg.inputColorCodes, (msg as RecompileMsg).outputMappingCodes || [], (msg as RecompileMsg).initCode || '');
+      // Variegated Cells: re-flatten interaction tables (same wiring as init).
+      cachedInteractionTables = {};
+      for (const t of (msg as RecompileMsg).interactionTables ?? []) {
+        cachedInteractionTables[t.id] = normalizeInteractionTable(t.values, t.faceLabels);
+      }
       stopMessages = (msg as RecompileMsg).stopMessages || [];
       if ((msg as RecompileMsg).webgpuStopCheckInterval !== undefined) {
         webgpuStopCheckInterval = Math.max(1, Math.floor((msg as RecompileMsg).webgpuStopCheckInterval!));
@@ -2183,6 +2353,15 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       if (webgpuRuntime?.stepReady) {
         uploadModelAttrs(webgpuRuntime, cachedModelAttrs as Record<string, number>);
       }
+      break;
+    }
+
+    case 'updateInteractionTable': {
+      // Live-tune a single Interaction Table model attribute. Re-flatten and
+      // replace the cached buffer; next step sees the new values. WASM /
+      // WebGPU upload is added in Phases 8 / 9 when those targets emit
+      // LookupInteraction reads against baked-in offsets.
+      cachedInteractionTables[msg.attrId] = normalizeInteractionTable(msg.values, msg.faceLabels);
       break;
     }
 

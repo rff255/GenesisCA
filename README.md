@@ -120,6 +120,14 @@ A complete GenesisCA model definition consists of:
 - **Copy/Paste/Duplicate** — Ctrl+C/V/X/D, context menu on single nodes and selections, paste at right-click location
 - **Groups & Comments** — visual organization tools; comment background color is customizable and the resized size persists; Undo Group dissolves a group and selects all contained nodes
 
+### Variegated Cells (Directional Interactions) &mdash; opt-in
+- **Per-cell orientation** — 0&ndash;3 = 0/90/180/270&deg; clockwise rotation, auto-allocated when the feature is on. Defaults to 0; set via the new `Set Orientation` node (typical pattern: an `Init Event` runs once on Reset, picks a random rotation per cell).
+- **Face Patterns** — named 8-slot layouts (N/NE/E/SE/S/SW/W/NW; edges-only mode disables the four corners). Assign a pattern to each tag option in the Attributes panel; the implicit `none` label covers unassigned slots and non-variegated neighbors.
+- **`Interaction Table` model attribute** — a matrix of float values keyed by two face labels (rows &times; cols = `['none', ...faceLabels]`). Edit in the Attributes panel; live-tune in the Simulator like any other model attribute.
+- **6 new nodes** — `Get Orientation`, `Set Orientation`, `Get Neighbor Orientation`, `Set Neighbor Orientation` (async-only), `Get Facing Labels` (resolves the two face labels touching at an encounter, accounting for both cells&apos; orientations and patterns), and `Lookup Interaction` (indexes a table by two face labels). Hidden from the palette when the feature is off; the WASM/WebGPU compilers fall back to JS for the step function until those emitters land.
+- **`Init Event` Node** — entry-point that runs once per cell on simulator Reset (after defaults, before the first color pass). Outputs `x`, `y`, `maxX`, `maxY` and triggers a DO flow chain. Useful for any model that wants procedural initial state, not just variegated ones.
+- **Unlocks chemistry CA models** — water-aabb (H/LP face patterns + interaction matrix), amphiphile micelle formation, chiral chromatographic separation, structured solvent dynamics. References: Kier, Seybold &amp; Cheng (2005), Kier et al. (2000), DeSoi et al. (2013).
+
 ### Asynchronous Mode
 - **Update Mode** — choose Synchronous (classic CA) or Asynchronous (sequential updates with single buffer) in Model Properties
 - **Update Schemes** — Random Order, Random Independent, or Cyclic — balancing accuracy vs. performance

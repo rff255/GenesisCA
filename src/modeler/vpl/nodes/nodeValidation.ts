@@ -1,4 +1,4 @@
-import type { NodeConfig } from '../types';
+import type { NodeConfig, NodeTypeDef } from '../types';
 import { parseHandleId } from '../types';
 import type { CAModel } from '../../../model/types';
 import { getNodeDef } from './registry';
@@ -311,6 +311,7 @@ export function countMacroSubgraphIssues(
     const cfg = node.data.config || {};
     const conn = connectedByNode.get(node.id);
     count += detectMissingConfig(t, cfg, model, conn).length;
+    count += detectCapabilityRequirements(t, model).length;
     if (useWebGPU) count += detectWebGPUIncompatibilities(t, cfg, model).length;
     else if (useWasm) count += detectWasmIncompatibilities(t, cfg, model).length;
     if (t === 'macro') {
@@ -321,6 +322,48 @@ export function countMacroSubgraphIssues(
     }
   }
   return count;
+}
+
+/** Capability-requirements check.
+ *
+ *  Reads `NodeTypeDef.requirements` and emits a human-readable issue per
+ *  unmet flag. The model-level state interrogated:
+ *    - `requirements.async` → `model.properties.updateMode === 'asynchronous'`
+ *    - `requirements.variegated` → `model.variegatedCells?.enabled === true`
+ *
+ *  Returns `[]` when the node has no requirements OR all requirements are
+ *  satisfied. Returns one string per unmet requirement otherwise. CaNode's
+ *  warning badge consumes the result, and `isNodeAvailable` wraps it for
+ *  palette/Add-Node-menu filtering.
+ *
+ *  Defence-in-depth: the JS / WASM / WebGPU compilers also reject offending
+ *  nodes at compile time, so a `.gcaproj` loaded with incompatible nodes
+ *  doesn't silently misbehave even if the badge is missed.
+ */
+export function detectCapabilityRequirements(
+  nodeType: string,
+  model: CAModel,
+): string[] {
+  const def = getNodeDef(nodeType);
+  if (!def?.requirements) return [];
+  const issues: string[] = [];
+  if (def.requirements.async && model.properties.updateMode !== 'asynchronous') {
+    issues.push(`"${def.label}" requires asynchronous update mode. Change in Model Properties > Execution.`);
+  }
+  if (def.requirements.variegated && !model.variegatedCells?.enabled) {
+    issues.push(`"${def.label}" requires Variegated Cells enabled. Enable it in Model Properties > Execution.`);
+  }
+  return issues;
+}
+
+/** True when a node type can be added to / kept in the current model. Used to
+ *  hide unavailable nodes from the palette and Add-Node menu. Mirrors
+ *  `detectCapabilityRequirements(...).length === 0`. */
+export function isNodeAvailable(def: NodeTypeDef, model: CAModel): boolean {
+  if (!def.requirements) return true;
+  if (def.requirements.async && model.properties.updateMode !== 'asynchronous') return false;
+  if (def.requirements.variegated && !model.variegatedCells?.enabled) return false;
+  return true;
 }
 
 /** Wave 3 — return WebGPU-target-specific issues for a node configuration.
@@ -334,7 +377,12 @@ export function countMacroSubgraphIssues(
  *  Caller pattern: `[...detectMissingConfig(...), ...detectWebGPUIncompatibilities(nodeType, config, model)]`
  *  when `model.properties.useWebGPU` is true.
  *
- *  Mirrors the worker-side rejection list — keep in sync with `compileGraphWebGPU`. */
+ *  Mirrors the worker-side rejection list — keep in sync with `compileGraphWebGPU`.
+ *
+ *  Note: async-only nodes (setNeighborhoodAttribute, setNeighborAttributeByIndex)
+ *  are NOT listed here. They surface via `detectCapabilityRequirements` with
+ *  "requires async mode", and the model-level `detectWebGPUModelIncompatibilities`
+ *  surfaces the "WebGPU requires sync mode" half — together unambiguous. */
 export function detectWebGPUIncompatibilities(
   nodeType: string,
   config: NodeConfig,
@@ -342,13 +390,6 @@ export function detectWebGPUIncompatibilities(
 ): string[] {
   const issues: string[] = [];
   switch (nodeType) {
-    // Async-only nodes (also rejected for sync targets, but the message here
-    // is WebGPU-specific because the user might otherwise switch to async to
-    // make them work — and async is incompatible with WebGPU).
-    case 'setNeighborhoodAttribute':
-    case 'setNeighborAttributeByIndex':
-      issues.push('WebGPU target requires synchronous mode; this node only works in asynchronous mode. Switch target or remove this node.');
-      break;
     // Order-dependent indicator updates.
     case 'updateIndicator': {
       const op = config.operation;
@@ -359,6 +400,18 @@ export function detectWebGPUIncompatibilities(
       }
       break;
     }
+    // Variegated Cells nodes — WebGPU emitters not yet implemented. The worker
+    // falls back to JS for the step function. Switch target or remove the
+    // variegated node to clear this warning.
+    case 'initEvent':
+    case 'getOrientation':
+    case 'setOrientation':
+    case 'getNeighborOrientation':
+    case 'setNeighborOrientation':
+    case 'getFacingLabels':
+    case 'lookupInteraction':
+      issues.push('Variegated Cells nodes are not yet implemented on the WebGPU target. The simulator will fall back to JS for the step function.');
+      break;
   }
   return issues;
 }
@@ -376,11 +429,26 @@ export function detectWebGPUIncompatibilities(
  *  Caller pattern: `[...detectMissingConfig(...), ...detectWasmIncompatibilities(nodeType, config, model)]`
  *  when `model.properties.useWasm` is true and `useWebGPU` is false. */
 export function detectWasmIncompatibilities(
-  _nodeType: string,
+  nodeType: string,
   _config: NodeConfig,
   _model: CAModel,
 ): string[] {
-  return [];
+  const issues: string[] = [];
+  switch (nodeType) {
+    // Variegated Cells nodes — WASM emitters not yet implemented. The worker
+    // falls back to JS for the step function. Switch target or remove the
+    // variegated node to clear this warning.
+    case 'initEvent':
+    case 'getOrientation':
+    case 'setOrientation':
+    case 'getNeighborOrientation':
+    case 'setNeighborOrientation':
+    case 'getFacingLabels':
+    case 'lookupInteraction':
+      issues.push('Variegated Cells nodes are not yet implemented on the WASM target. The simulator will fall back to JS for the step function.');
+      break;
+  }
+  return issues;
 }
 
 /** Top-level model check — async + WebGPU is incompatible. Returns a

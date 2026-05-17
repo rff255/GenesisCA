@@ -228,6 +228,75 @@ export function HelpView() {
             indicator and persists across sessions.
           </p>
 
+          <h3 className={styles.h3}>Variegated Cells &mdash; Directional Interactions (V)</h3>
+          <p className={styles.p}>
+            Opt-in feature for chemistry CA models where interactions depend on
+            <em> which face of one cell meets which face of the other</em>. Examples: water
+            molecules (H, lone pair, H, lone pair), amphiphiles (hydrophobic vs hydrophilic
+            faces), chiral enantiomers. Enable via the <strong>Use Variegated Cells
+            (Directional Interactions)</strong> checkbox in <strong>Properties &rsaquo;
+            Execution</strong>. Models without this feature behave identically to before.
+          </p>
+          <p className={styles.p}>
+            When enabled, the engine auto-allocates a per-cell <strong>orientation</strong>
+            (0&ndash;3 = 0&deg;/90&deg;/180&deg;/270&deg; clockwise rotation), and the
+            <strong> Variegated Cells</strong> panel (V) on the left sidebar lets you define:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Variegation Source</strong> &mdash; a Tag cell attribute whose
+              values identify cell &ldquo;species&rdquo; (e.g. Water, Amphiphile, Empty).</li>
+            <li><strong>Face Label Palette</strong> &mdash; the labels you can place on
+              cell faces (e.g. H, LP, X, Y). The implicit <em>none</em> label is reserved
+              for unassigned slots and non-variegated neighbors.</li>
+            <li><strong>Face Patterns</strong> &mdash; named 8-slot layouts
+              (N/NE/E/SE/S/SW/W/NW). Edges-only mode disables the four corner slots.
+              Assign a pattern to each tag option in the Attributes panel.</li>
+          </ul>
+          <p className={styles.p}>
+            New <strong>Interaction Table</strong> model-attribute type stores a matrix of
+            float values keyed by two face labels. Live-tuneable in the simulator like any
+            other model attribute (matrix shown directly under the attribute name).
+          </p>
+          <p className={styles.p}>
+            Six new node types become available when Variegated Cells is enabled (hidden
+            from the palette otherwise):
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Get Orientation</strong> &mdash; reads the current cell&apos;s
+              orientation (0&ndash;3).</li>
+            <li><strong>Set Orientation</strong> &mdash; writes the current cell&apos;s
+              orientation; value wraps via <code>&amp; 3</code>.</li>
+            <li><strong>Get Neighbor Orientation</strong> &mdash; reads a neighbor&apos;s
+              orientation by slot index.</li>
+            <li><strong>Set Neighbor Orientation</strong> &mdash; writes a neighbor&apos;s
+              orientation. Async-only (sync mode would have the post-step copy overwrite
+              the write).</li>
+            <li><strong>Get Facing Labels</strong> &mdash; resolves the two face labels
+              touching at a neighbor encounter, accounting for both cells&apos;
+              orientations and face patterns. Outputs <em>myFaceLabel</em> and
+              <em>theirFaceLabel</em>; pipe these into Lookup Interaction.</li>
+            <li><strong>Lookup Interaction</strong> &mdash; indexes an Interaction Table
+              model attribute by two face labels. Returns a float.</li>
+          </ul>
+          <p className={styles.p}>
+            For procedural initial-state setup, see <strong>Init Event</strong> below.
+          </p>
+
+          <h3 className={styles.h3}>Init Event Node</h3>
+          <p className={styles.p}>
+            New event entry-point that runs <em>once per cell on simulator Reset only</em>
+            (not on Randomize, not on Load State). Useful for procedural initial state:
+            gradients, deterministic noise, ID-encoded debug values. With Variegated Cells
+            enabled, the typical pattern is to wire <code>GetRandom(int, 0, 3)</code> into
+            <code>SetOrientation</code> so each cell starts with a random rotation.
+          </p>
+          <p className={styles.p}>
+            Init Event is a <strong>singleton</strong> (one per model, like the Generation
+            Step) and outputs the current cell&apos;s coordinates: <code>x</code>,
+            <code>y</code>, <code>maxX</code> (= W&minus;1), <code>maxY</code> (= H&minus;1).
+            Trigger downstream initialization via its <code>DO</code> flow port.
+          </p>
+
           <h3 className={styles.h3}>The Graph Editor</h3>
           <p className={styles.p}>
             The central area is a node-based visual programming editor. You connect nodes

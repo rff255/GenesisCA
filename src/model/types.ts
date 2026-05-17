@@ -6,7 +6,7 @@
  *  neighborhood-anchored grid for default-value picking via
  *  `Attribute.neighborhoodHintId`, but the hint is purely UI; the runtime
  *  value is just the packed offset. */
-export type AttributeType = 'bool' | 'integer' | 'float' | 'tag' | 'color' | 'neighborIndex';
+export type AttributeType = 'bool' | 'integer' | 'float' | 'tag' | 'color' | 'neighborIndex' | 'interactionTable';
 
 /** A single attribute definition (per-cell or global model attribute) */
 export interface Attribute {
@@ -49,6 +49,20 @@ export interface Attribute {
   /** Sub-attributes only: the value returned by a read when the parent's value
    *  is NOT in `parentValues`. Same string encoding as `defaultValue`. */
   undefinedValue?: string;
+  /** Variegated Cells: when this attribute is the variegation source (its id
+   *  matches `model.variegatedCells.sourceAttributeId`), this map assigns a
+   *  `FacePattern.id` to each `tagOption` string. Tag values without an entry
+   *  (or with an empty / unresolved id) are treated as non-variegated. Lives
+   *  on Attribute because face patterns are inherently per-species. */
+  facePatternAssignments?: Record<string, string>;
+  /** Interaction Table model attributes only: when true, the editor mirrors
+   *  table[A][B] = table[B][A] on edit (default true). Doesn't affect runtime
+   *  storage layout (the worker holds a full square Float64Array regardless). */
+  symmetric?: boolean;
+  /** Interaction Table model attributes only: sparse table values, keyed by
+   *  face-label string × face-label string → float. Missing entries default
+   *  to 0. The implicit `none` label uses the literal key `"none"`. */
+  tableValues?: Record<string, Record<string, number>>;
 }
 
 /** A neighborhood definition — list of relative offsets from the central cell */
@@ -281,6 +295,43 @@ export interface Preset {
   createdAt: number;
 }
 
+/** Variegated Cells feature — gated config + face-pattern definitions. Cells
+ *  whose source-tag value has an assigned `FacePattern` carry directional
+ *  state: an auto-managed orientation (0-3 = 90° rotations) plus face labels
+ *  on their 4 edges (and optionally 4 corners). Interactions between adjacent
+ *  cells become directional — see HelpView's Variegated Cells section.
+ *  When `enabled === false` (or this field is absent), the engine behaves
+ *  identically to a non-variegated model — no UI changes, no behavioural
+ *  drift. */
+export interface FacePattern {
+  /** Unique within the model. */
+  id: string;
+  /** User-facing name (rendered in the Variegated Cells panel and dropdowns). */
+  name: string;
+  /** `'edges'` exposes only the 4 cardinal slots (N, E, S, W); the 4 corner
+   *  slots are locked to `null`. `'edges+corners'` exposes all 8 slots. */
+  layoutMode: 'edges' | 'edges+corners';
+  /** Length 8: `[N, NE, E, SE, S, SW, W, NW]`. Each entry is a face-label
+   *  string from `VariegatedCellsConfig.faceLabels`, or `null` for "no face
+   *  at this slot" (treated as the implicit `none` label at runtime). */
+  faces: (string | null)[];
+}
+
+export interface VariegatedCellsConfig {
+  /** Master toggle (single Properties-panel checkbox). When false, all of the
+   *  other fields are dormant — they may carry data but the engine ignores it. */
+  enabled: boolean;
+  /** ID of the Tag cell attribute whose values identify "species" — each tag
+   *  option can be assigned a `FacePattern`. Empty string when unset. */
+  sourceAttributeId: string;
+  /** User-defined face-label palette. The implicit `none` label is always
+   *  available (index 0 at runtime) and is NOT stored in this array. */
+  faceLabels: string[];
+  /** Named face patterns the user can assign to source-attr tag values via
+   *  `Attribute.facePatternAssignments`. */
+  facePatterns: FacePattern[];
+}
+
 /** Complete CA model definition */
 export interface CAModel {
   schemaVersion: number;
@@ -294,4 +345,7 @@ export interface CAModel {
   macroDefs: MacroDef[];
   simulationState?: SimulationState;
   presets?: Preset[];
+  /** Variegated Cells feature config. Absent / `enabled: false` → engine and
+   *  UI behave as if the feature didn't exist. See `VariegatedCellsConfig`. */
+  variegatedCells?: VariegatedCellsConfig;
 }

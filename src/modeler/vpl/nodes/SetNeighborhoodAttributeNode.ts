@@ -6,6 +6,7 @@ export const SetNeighborhoodAttributeNode: NodeTypeDef = {
   description: 'Writes a value to the same attribute of every neighbor in the neighborhood. Async-only.',
   category: 'output',
   color: '#4a148c',
+  requirements: { async: true },
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
     { id: 'value', label: 'Value', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '0' },

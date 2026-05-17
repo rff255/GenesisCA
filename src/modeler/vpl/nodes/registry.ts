@@ -1,5 +1,12 @@
 import type { NodeTypeDef } from '../types';
 import { StepNode } from './StepNode';
+import { InitEventNode } from './InitEventNode';
+import { GetOrientationNode } from './GetOrientationNode';
+import { SetOrientationNode } from './SetOrientationNode';
+import { GetNeighborOrientationNode } from './GetNeighborOrientationNode';
+import { SetNeighborOrientationNode } from './SetNeighborOrientationNode';
+import { GetFacingLabelsNode } from './GetFacingLabelsNode';
+import { LookupInteractionNode } from './LookupInteractionNode';
 import { GetCellAttributeNode } from './GetCellAttributeNode';
 import { GetNeighborsAttributeNode } from './GetNeighborsAttributeNode';
 import { GetConstantNode } from './GetConstantNode';
@@ -57,6 +64,7 @@ import { PickNRandomNeighborsNode } from './PickNRandomNeighborsNode';
 const ALL_NODES: NodeTypeDef[] = [
   // Event (entry points)
   StepNode,
+  InitEventNode,
   InputColorNode,
   OutputMappingNode,
   StopEventNode,
@@ -84,6 +92,12 @@ const ALL_NODES: NodeTypeDef[] = [
   GetConstantNode,
   GetRandomNode,
   TagConstantNode,
+  // Variegated Cells — visible only when the feature is enabled (palette
+  // filter via `requirements.variegated`).
+  GetOrientationNode,
+  GetNeighborOrientationNode,
+  GetFacingLabelsNode,
+  LookupInteractionNode,
   // Arithmetic & Logic
   ArithmeticOperatorNode,
   ExpressionNode,
@@ -106,6 +120,8 @@ const ALL_NODES: NodeTypeDef[] = [
   UpdateAttributeNode,
   SetNeighborhoodAttributeNode,
   SetNeighborAttributeByIndexNode,
+  SetOrientationNode,
+  SetNeighborOrientationNode,
   // Color
   SetColorViewerNode,
   GetColorConstantNode,
