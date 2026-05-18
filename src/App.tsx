@@ -7,7 +7,6 @@ import { SimulatorView } from './simulator/SimulatorView';
 import { HelpView } from './help/HelpView';
 import { ModelsLibrary } from './library/ModelsLibrary';
 import { StyleReferenceView } from './styleguide/StyleReferenceView';
-import { ThemeSwitcher } from './components/ThemeSwitcher';
 import type { CAModel } from './model/types';
 import styles from './App.module.css';
 
@@ -87,7 +86,6 @@ function AppInner() {
         <span className={styles.modelName}>
           {model.properties.name}{isDirty && <span className={styles.dirtyIndicator}> *</span>}
         </span>
-        <ThemeSwitcher />
         <FileMenu />
       </nav>
       <main className={styles.content}>

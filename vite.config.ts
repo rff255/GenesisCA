@@ -76,6 +76,13 @@ function modelsLibraryPlugin(): Plugin {
       }
     }).filter(Boolean);
 
+    // Alphabetical by display name (case-insensitive) so the library card order
+    // stays stable across recompiles + model edits, instead of tracking the
+    // filesystem's arbitrary readdir order.
+    entries.sort((a: { name: string } | null, b: { name: string } | null) =>
+      (a?.name || '').localeCompare(b?.name || '', undefined, { sensitivity: 'base' })
+    );
+
     writeFileSync(join(outModelsDir, 'index.json'), JSON.stringify(entries, null, 2));
   }
 
