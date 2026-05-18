@@ -5540,12 +5540,23 @@ function compileEntry(
     if (a) cellAttrItemBytes.add(a.itemBytes);
   }
 
+  // Per-cell scratch base: starts at layout.scratchOffset, BUT loop-invariant
+  // value emits (emitInvariantValueNodes, below) bump scratchTop past whatever
+  // they allocate. After that pass we snapshot scratchTop into this local so
+  // per-cell scratch resets to the post-invariant top instead of clobbering
+  // the loop-invariant arrays (e.g. the niArr returned by getAllNeighborIndexes
+  // hoisted as loop-invariant — without the snapshot, per-cell scratch starts
+  // at scratchOffset and overwrites the invariant data on the very first cell
+  // iteration). Allocated upfront so emitBody can reference it via closure;
+  // the actual value gets stored after invariant emission completes.
+  const perCellScratchBase = emitter.allocLocal(I32);
+
   const emitBody = () => {
     // Reset per-cell caches and scratch pointer
     ctx.byteOffsetLocals.clear();
     ctx.valueLocals.clear();
     ctx.arrayRefs.clear();
-    emitter.i32Const(layout.scratchOffset);
+    emitter.localGet(perCellScratchBase);
     emitter.localSet(scratchTopLocal);
     // Pre-initialise the cached `idx * itemBytes` locals for every itemBytes
     // the model uses. Must run BEFORE any value emission so cell-body code
@@ -5782,7 +5793,20 @@ function compileEntry(
       emitBulkCopyLines();
     }
     emitViewerHoist();
+    // Initialise scratchTopLocal so loop-invariant scratch allocations land
+    // within the scratch region — WASM locals default to 0, so without this
+    // the very first allocArrayInScratch call inside emitInvariantValueNodes
+    // would capture offsetLocal = 0 (kind buffer base) and the producer's
+    // writes would corrupt cell-attribute storage.
+    emitter.i32Const(layout.scratchOffset);
+    emitter.localSet(scratchTopLocal);
     emitInvariantValueNodes();
+    // Snapshot scratchTop after invariants so per-cell scratch resets to this
+    // point each iteration instead of layout.scratchOffset (which would clobber
+    // the invariant data). When no invariants were emitted, this is still
+    // layout.scratchOffset, so the snapshot is a no-op in that case.
+    emitter.localGet(scratchTopLocal);
+    emitter.localSet(perCellScratchBase);
     emitter.i32Const(0);
     emitter.localSet(outerCounter);
     emitter.block(() => {
@@ -5821,6 +5845,11 @@ function compileEntry(
     // legal). Without it the per-cell SetColorViewer would fall back to the
     // inline load+compare path.
     emitViewerHoist();
+    // No invariant emit in single-shot entries; perCellScratchBase still
+    // needs initialising so emitBody's `local.get perCellScratchBase` reads
+    // a sensible value (scratchOffset) instead of WASM's default 0.
+    emitter.i32Const(layout.scratchOffset);
+    emitter.localSet(perCellScratchBase);
     emitBody();
   }
 
