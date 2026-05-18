@@ -15,6 +15,7 @@
  */
 
 import type { CAModel } from '../../../../model/types';
+import { FACE_SLOT_COUNT } from '../variegation';
 
 export interface WebGPULayoutAttr {
   id: string;
@@ -42,6 +43,14 @@ export interface WebGPULayoutNbr {
   /** Pre-flattened relative coords [dRow, dCol] per neighbour — uploaded
    *  verbatim into the offsets buffer at `byteOffset`. */
   coords: Array<[number, number]>;
+}
+
+/** Per-interaction-table location within the varAux buffer. */
+export interface WebGPUInteractionTableLayout {
+  /** Word offset into the varAux array<u32> at which the f32 values start. */
+  wordOffset: number;
+  /** Number of f32 entries — equals `(faceLabelsCount + 1)²`. */
+  count: number;
 }
 
 export interface WebGPULayout {
@@ -81,6 +90,41 @@ export interface WebGPULayout {
   controlBytes: number;
   /** Byte offsets within the control buffer. */
   controlOffsets: { activeViewer: number; stopFlag: number };
+
+  // ---- Variegated Cells regions. All zero / empty when disabled. ----
+
+  /** True when the layout reserves orientation + facePatternLookup +
+   *  interaction tables. Implies `model.variegatedCells?.enabled === true`. */
+  variegatedEnabled: boolean;
+  /** Word offset of the orientation read region INSIDE the attrs buffer (i.e.
+   *  within `attrsRead` / `attrsWrite` — orientation is co-located with cell
+   *  attrs so no new storage binding is needed). One u32 per cell, sized
+   *  `cellsPerAttr × 4` bytes. The write region uses the same offset within
+   *  the attrsWrite ping-pong buffer; bind-group orientation flipping keeps
+   *  the source-of-truth aligned. 0 when variegation is off. */
+  orientationWordOffset: number;
+  /** Bytes occupied by the orientation region inside the attrs buffer
+   *  (= cellsPerAttr × 4). 0 when variegation is off. */
+  orientationBytes: number;
+
+  /** Total bytes in the varAux storage buffer (binding 8) — sized to fit
+   *  facePatternLookup + every interaction table. Stub-sized (16 bytes) when
+   *  variegation is off so the bind group still binds something. */
+  varAuxBytes: number;
+  /** Word offset of facePatternLookup inside varAux (read as i32). Layout
+   *  matches `buildFacePatternLookup`: `[speciesIdx * 8 + faceIdx]`. 0 when
+   *  variegation is off. */
+  facePatternLookupWordOffset: number;
+  /** Number of i32 entries (= speciesCount × 8). 0 when no source attr / no
+   *  variegation. */
+  facePatternLookupCount: number;
+  /** Per-attribute interaction table location within varAux. Keyed by the
+   *  model attribute's id. Values are read as f32 via `bitcast<f32>(...)`. */
+  interactionTableOffsets: Record<string, WebGPUInteractionTableLayout>;
+  /** Number of labels per row/col in every interaction table
+   *  (= faceLabelsCount + 1 for the implicit `none`). All tables share this
+   *  because they all index into the model's face-label palette. */
+  interactionTableLabelCount: number;
 }
 
 /**
@@ -119,6 +163,21 @@ export function computeWebGPULayout(model: CAModel): WebGPULayout {
     attrCursor += bytes;
     return entry;
   });
+  // Variegated Cells: orientation read/write are co-located inside the same
+  // attrs ping-pong buffer (one u32 per cell, sized like an integer attr).
+  // No new storage binding — the WGSL emit indexes attrsRead/Write at
+  // `orientationWordOffset + cellIdx`. The attrsBufA / attrsBufB swap (which
+  // already handles per-step ping-pong of cell attrs) automatically also
+  // swaps orientation read↔write. The +1 sentinel slot stays at 0 (initGrid
+  // zero-fills the whole buffer; resetGrid zeros the orientation region).
+  let orientationWordOffset = 0;
+  let orientationBytes = 0;
+  const isVariegated = !!model.variegatedCells?.enabled;
+  if (isVariegated) {
+    orientationWordOffset = attrCursor / 4;
+    orientationBytes = cellsPerAttr * 4;
+    attrCursor += orientationBytes;
+  }
   // Storage buffers must have non-zero size; clamp to 4 bytes when there are
   // no cell attrs (degenerate models — UI prevents this once you have a graph,
   // but the simulator doesn't crash on the empty model).
@@ -170,6 +229,49 @@ export function computeWebGPULayout(model: CAModel): WebGPULayout {
   const controlOffsets = { activeViewer: 0, stopFlag: 4 };
   const controlBytes = 16; // 8 bytes used + padding to align
 
+  // Variegated Cells: varAux is a small storage buffer holding the
+  // facePatternLookup (i32 entries) followed by every interaction table
+  // (f32 entries). All entries are u32-aligned. Reads from WGSL use bitcast
+  // to recover the typed value.
+  //
+  // The buffer is always created (stub-sized at 16 bytes when off) so the
+  // bind group can attach binding 8 unconditionally — keeps the pipeline
+  // layout model-independent.
+  let varAuxCursor = 0;
+  let facePatternLookupWordOffset = 0;
+  let facePatternLookupCount = 0;
+  let interactionTableLabelCount = 1;
+  const interactionTableOffsets: Record<string, WebGPUInteractionTableLayout> = {};
+  if (isVariegated) {
+    const v = model.variegatedCells!;
+    const source = model.attributes.find(a => a.id === v.sourceAttributeId);
+    const speciesCount = source && source.type === 'tag' && !source.isModelAttribute
+      ? (source.tagOptions?.length ?? 0) : 0;
+    facePatternLookupCount = speciesCount * FACE_SLOT_COUNT;
+    if (facePatternLookupCount > 0) {
+      facePatternLookupWordOffset = varAuxCursor / 4;
+      varAuxCursor += facePatternLookupCount * 4;
+    }
+    interactionTableLabelCount = v.faceLabels.length + 1;
+    const tableCount = interactionTableLabelCount * interactionTableLabelCount;
+    const tableBytes = tableCount * 4;
+    for (const a of modelAttrs) {
+      if (a.type !== 'interactionTable') continue;
+      // 16-byte alignment for storage struct safety (not strictly required for
+      // array<u32>, but keeps every table on a cache line for slightly better
+      // access patterns on tile-based GPUs).
+      varAuxCursor = Math.ceil(varAuxCursor / 16) * 16;
+      interactionTableOffsets[a.id] = {
+        wordOffset: varAuxCursor / 4,
+        count: tableCount,
+      };
+      varAuxCursor += tableBytes;
+    }
+  }
+  // Storage buffers must be at least 4 bytes — even when no variegation data
+  // exists, the buffer is created with the stub size so binding 8 is bindable.
+  const varAuxBytes = Math.max(16, varAuxCursor);
+
   return {
     total,
     cellsPerAttr,
@@ -189,5 +291,13 @@ export function computeWebGPULayout(model: CAModel): WebGPULayout {
     rngStateBytes,
     controlBytes,
     controlOffsets,
+    variegatedEnabled: isVariegated,
+    orientationWordOffset,
+    orientationBytes,
+    varAuxBytes,
+    facePatternLookupWordOffset,
+    facePatternLookupCount,
+    interactionTableOffsets,
+    interactionTableLabelCount,
   };
 }

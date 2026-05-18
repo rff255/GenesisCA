@@ -40,6 +40,10 @@ import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/p
 export interface WebGPUEntryPoints {
   step: string;
   outputMappings: Array<{ mappingId: string; entry: string }>;
+  /** Optional Init Event entry-point name. Present iff the graph contains
+   *  an InitEventNode AND variegated cells (or any other init-only writes)
+   *  are needed. The worker dispatches it once per Reset. */
+  init?: string;
 }
 
 export interface WebGPUCompileResult {
@@ -1496,6 +1500,157 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     setCachedPort(ctx, node.id, 'b', bRef);
     return rRef;
   },
+
+  // -- Variegated Cells: Get Orientation ----------------------------------
+  // Reads the current cell's orientation from the read buffer. Co-located
+  // inside the attrs buffer at orientationWordOffset (see layout.ts).
+  getOrientation: ({ ctx }) => {
+    if (!ctx.layout.variegatedEnabled) {
+      ctx.errors.push('getOrientation: variegated cells disabled');
+      return null;
+    }
+    const w = ctx.layout.orientationWordOffset;
+    return emitLet(ctx, 'i32', `bitcast<i32>(attrsRead[${w}u + idx])`, 'gOri');
+  },
+
+  // -- Variegated Cells: Get Neighbor Orientation -------------------------
+  // Reads a specific neighbor's orientation. The neighbor cell index is
+  // resolved through `nbrCellIdx`. Out-of-grid neighbors point at the
+  // sentinel slot (`total`) which is always 0 (initGrid zero-fills, resetGrid
+  // re-clears).
+  getNeighborOrientation: ({ node, ctx, inputs }) => {
+    if (!ctx.layout.variegatedEnabled) {
+      ctx.errors.push('getNeighborOrientation: variegated cells disabled');
+      return null;
+    }
+    const nbrId = node.data.config.neighborhoodId as string;
+    const nbr = getNbr(ctx.layout, nbrId);
+    if (!nbr) { ctx.errors.push(`getNeighborOrientation: unknown nbr ${nbrId}`); return null; }
+    const indexRef = inputs['index'] ?? { expr: '0', type: 'i32' as WgslType };
+    const kExpr = castTo(indexRef, 'i32');
+    const cellIdx = emitLet(ctx, 'i32', emitNbrCellIdx(nbr, kExpr), 'nciOri');
+    const w = ctx.layout.orientationWordOffset;
+    return emitLet(ctx, 'i32', `bitcast<i32>(attrsRead[${w}u + u32(${cellIdx.expr})])`, 'gNbrOri');
+  },
+
+  // -- Variegated Cells: Get Facing Labels (multi-output) -----------------
+  // Resolves the two face labels touching at a neighbor encounter, accounting
+  // for both cells' orientations and face patterns. Same rotation math as the
+  // JS / WASM emit. The pre-resolve in compile.ts (JS) bakes `_directionMap`
+  // + `_sourceAttrId` into the node config; we read them at compile time and
+  // emit a per-slot if-chain for directionMap lookup (small N keeps it cheap).
+  getFacingLabels: ({ node, ctx, inputs }) => {
+    if (!ctx.layout.variegatedEnabled) {
+      ctx.errors.push('getFacingLabels: variegated cells disabled');
+      return null;
+    }
+    const nbrId = node.data.config.neighborhoodId as string;
+    const nbr = getNbr(ctx.layout, nbrId);
+    if (!nbr) { ctx.errors.push(`getFacingLabels: unknown nbr ${nbrId}`); return null; }
+    const sourceAttrId = (node.data.config._sourceAttrId as string) || '';
+    const sourceAttr = sourceAttrId ? getAttr(ctx.layout, sourceAttrId) : null;
+    let directionMap: number[] = [];
+    try { directionMap = JSON.parse((node.data.config._directionMap as string) || '[]'); }
+    catch { directionMap = []; }
+    const indexRef = inputs['index'] ?? { expr: '0', type: 'i32' as WgslType };
+    const w = ctx.layout.orientationWordOffset;
+    const lookupW = ctx.layout.facePatternLookupWordOffset;
+    const total = ctx.layout.total;
+
+    // niSlot = (index | 0); clamp negative to 0 because directionMap chain only
+    // matches non-negative ints. Out-of-range slots fall through to dir = -1.
+    const niSlot = emitLet(ctx, 'i32', castTo(indexRef, 'i32'), 'fl_ni');
+    const nbrCell = emitLet(ctx, 'i32', emitNbrCellIdx(nbr, niSlot.expr), 'fl_nc');
+
+    // dir = directionMap[niSlot] or -1. WGSL `var` allows mutation.
+    const dirName = fresh(ctx, 'fl_dir');
+    ctx.lines.push(`  var ${dirName}: i32 = -1;`);
+    for (let k = 0; k < directionMap.length; k++) {
+      const val = directionMap[k]!;
+      if (val < 0) continue;
+      ctx.lines.push(`  if (${niSlot.expr} == ${k}) { ${dirName} = ${val}; }`);
+    }
+
+    // myOri = orientation[idx]; theirOri = orientation[nbrCell]
+    const myOri = emitLet(ctx, 'i32', `bitcast<i32>(attrsRead[${w}u + idx])`, 'fl_mo');
+    const theirOri = emitLet(ctx, 'i32', `bitcast<i32>(attrsRead[${w}u + u32(${nbrCell.expr})])`, 'fl_to');
+
+    // myFaceIdx = (dir + 2 * myOri) & 7
+    const myFaceIdx = emitLet(ctx, 'i32', `((${dirName} + 2 * ${myOri.expr}) & 7)`, 'fl_mf');
+    // theirFaceIdx = ((dir + 4) & 7) + 2 * theirOri, then & 7
+    const theirFaceIdx = emitLet(ctx, 'i32', `((((${dirName} + 4) & 7) + 2 * ${theirOri.expr}) & 7)`, 'fl_tf');
+
+    // mySpec / theirSpec = source attribute at idx / nbrCell, or 0 if no source.
+    const mySpec = sourceAttr
+      ? emitLet(ctx, 'i32', `bitcast<i32>(attrsRead[${sourceAttr.wordOffset}u + idx])`, 'fl_ms')
+      : emitLet(ctx, 'i32', '0', 'fl_ms');
+    const theirSpec = sourceAttr
+      ? emitLet(ctx, 'i32', `bitcast<i32>(attrsRead[${sourceAttr.wordOffset}u + u32(${nbrCell.expr})])`, 'fl_ts')
+      : emitLet(ctx, 'i32', '0', 'fl_ts');
+
+    // myLabel: (dir >= 0 && mySpec >= 0) ? varAux[lookupW + mySpec*8 + myFaceIdx] : 0
+    const myLabelExpr =
+      `select(0, bitcast<i32>(varAux[u32(${lookupW} + ${mySpec.expr} * 8 + ${myFaceIdx.expr})]), `
+      + `(${dirName} >= 0) && (${mySpec.expr} >= 0))`;
+    const myLabel = emitLet(ctx, 'i32', myLabelExpr, 'fl_ml');
+
+    // theirLabel: (dir >= 0 && nbrCell < total) ? varAux[lookupW + theirSpec*8 + theirFaceIdx] : 0
+    const theirLabelExpr =
+      `select(0, bitcast<i32>(varAux[u32(${lookupW} + ${theirSpec.expr} * 8 + ${theirFaceIdx.expr})]), `
+      + `(${dirName} >= 0) && (${nbrCell.expr} < ${total}))`;
+    const theirLabel = emitLet(ctx, 'i32', theirLabelExpr, 'fl_tl');
+
+    setCachedPort(ctx, node.id, 'myFaceLabel', myLabel);
+    setCachedPort(ctx, node.id, 'theirFaceLabel', theirLabel);
+    return myLabel;
+  },
+
+  // -- Variegated Cells: Lookup Interaction -------------------------------
+  // Indexes an interactionTable model attribute by two face labels. Returns
+  // the f32 stored at `(labelA * labelCount + labelB)` within the table's
+  // region of varAux. Unknown tableId returns 0.
+  lookupInteraction: ({ node, ctx, inputs }) => {
+    if (!ctx.layout.variegatedEnabled) {
+      ctx.errors.push('lookupInteraction: variegated cells disabled');
+      return null;
+    }
+    const tableId = (node.data.config.tableId as string) || '';
+    const tableLayout = tableId ? ctx.layout.interactionTableOffsets[tableId] : undefined;
+    if (!tableLayout) {
+      return emitLet(ctx, 'f32', '0.0', 'li');
+    }
+    const labelCount = ctx.layout.interactionTableLabelCount;
+    const labelA = inputs['labelA'] ?? { expr: '0', type: 'i32' as WgslType };
+    const labelB = inputs['labelB'] ?? { expr: '0', type: 'i32' as WgslType };
+    const a = castTo(labelA, 'i32');
+    const b = castTo(labelB, 'i32');
+    const off = tableLayout.wordOffset;
+    // No bounds clamp — out-of-range labels would read adjacent table memory.
+    // Practical models stay within [0, labelCount). The CPU side does its
+    // own clamp via the worker's normalizeInteractionTable, but the GPU just
+    // trusts the inputs (mirrors JS / WASM, which also don't clamp).
+    return emitLet(ctx, 'f32',
+      `bitcast<f32>(varAux[u32(${off} + (${a}) * ${labelCount} + (${b}))])`, 'li');
+  },
+
+  // -- Init Event (multi-output: x, y, maxX, maxY) ------------------------
+  // Per-cell coordinate outputs for the Init Event entry point. Init shares
+  // the same shader module + bindings as `step`; the entry-point orchestrator
+  // emits one pipeline per entry point, distinguished by name.
+  initEvent: ({ node, ctx }) => {
+    const W = ctx.layout.gridWidth;
+    const H = ctx.layout.gridHeight;
+    // x = idx % W; y = idx / W (as i32); maxX = W-1; maxY = H-1.
+    const x = emitLet(ctx, 'i32', `i32(idx % ${W}u)`, 'init_x');
+    const y = emitLet(ctx, 'i32', `i32(idx / ${W}u)`, 'init_y');
+    const maxX = emitLet(ctx, 'i32', `${W - 1}`, 'init_mx');
+    const maxY = emitLet(ctx, 'i32', `${H - 1}`, 'init_my');
+    setCachedPort(ctx, node.id, 'x', x);
+    setCachedPort(ctx, node.id, 'y', y);
+    setCachedPort(ctx, node.id, 'maxX', maxX);
+    setCachedPort(ctx, node.id, 'maxY', maxY);
+    return x;
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -2084,6 +2239,34 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
   },
   setNeighborAttributeByIndex: ({ ctx }) => {
     ctx.errors.push(`setNeighborAttributeByIndex: requires async update mode (incompatible with WebGPU)`);
+    return false;
+  },
+
+  // -- Variegated Cells: Set Orientation ---------------------------------
+  // Writes the current cell's orientation to attrsWrite at orientationWordOffset.
+  // Clamped to 0..3 via `& 3i`. Encoded as u32 for storage.
+  setOrientation: ({ ctx, inputs }) => {
+    if (!ctx.layout.variegatedEnabled) {
+      ctx.errors.push('setOrientation: variegated cells disabled');
+      return false;
+    }
+    if (!ctx.allowAttrWrites) {
+      ctx.errors.push('setOrientation: cannot write attributes from outputMapping graph');
+      return false;
+    }
+    const valueRef = inputs['value'] ?? { expr: '0', type: 'i32' as WgslType };
+    const v = castTo(valueRef, 'i32');
+    const w = ctx.layout.orientationWordOffset;
+    ctx.lines.push(`  attrsWrite[${w}u + idx] = bitcast<u32>((${v}) & 3i);`);
+    return true;
+  },
+
+  // -- Variegated Cells: Set Neighbor Orientation — REJECTED on WebGPU ----
+  // Async-only node; WebGPU is sync-only (detectWebGPUModelIncompatibilities
+  // catches async-mode at the model level). Defensive in case validation is
+  // bypassed.
+  setNeighborOrientation: ({ ctx }) => {
+    ctx.errors.push('setNeighborOrientation: requires async update mode (incompatible with WebGPU)');
     return false;
   },
 };
@@ -2872,6 +3055,28 @@ export function compileGraphWebGPU(
   }
   sections.push(stepEntry.code);
 
+  // Init Event entry point (optional). Same loop shape as step (per-cell, with
+  // the bulk-copy preamble that includes orientation in variegated models), so
+  // SetAttribute / SetOrientation inside Init see a fresh w-buffer. Worker
+  // dispatches `dispatchInit` once on Reset and then swaps the ping-pong bind
+  // group so the next step reads init writes.
+  let initEntryName: string | undefined;
+  const initNode = nodes.find(n => n.data.nodeType === 'initEvent');
+  if (initNode) {
+    const initEntry = compileEntry({
+      entry: initNode,
+      fnName: 'init',
+      emitCopyPreamble: true,
+      allowAttrWrites: true,
+      currentMappingId: null,
+    }, baseCtx);
+    if (initEntry.errors.length > 0) {
+      return { ...baseResult, error: initEntry.errors.join('; ') };
+    }
+    sections.push(initEntry.code);
+    initEntryName = 'init';
+  }
+
   // Per-mapping output shaders. Mappings without a matching graph are SKIPPED
   // entirely — emitting an empty pipeline that does nothing leaves stale colors
   // in the GPU buffer. Skipping makes `dispatchOutputMapping` return false at
@@ -2900,6 +3105,6 @@ export function compileGraphWebGPU(
   return {
     ...baseResult,
     shaderCode: sections.join('\n'),
-    entryPoints: { step: 'step', outputMappings },
+    entryPoints: { step: 'step', outputMappings, init: initEntryName },
   };
 }

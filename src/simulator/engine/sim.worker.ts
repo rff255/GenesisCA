@@ -16,6 +16,7 @@ import {
   dispatchOutputMapping, dispatchColorPassAndPresent, presentToCanvas, readbackAttrs, readbackColors,
   readbackBatched, unpackAttrsFromReadback, unpackAttrFromReadback, resetStopFlag, seedRngState,
   setupReductionPipelines, dispatchReductions, setupDirectRender,
+  dispatchInit, uploadOrientation, uploadFacePatternLookup, uploadInteractionTable,
   type WebGPURuntime, type ReadbackRegion,
 } from './webgpuRuntime';
 import { decodeReductions, gpuHandledIds, gpuHandledAttrIds } from './webgpuReduce';
@@ -407,6 +408,24 @@ function initVariegation(
   }
 }
 
+/** Upload the current variegation data to the WebGPU runtime (orientation,
+ *  facePatternLookup, every interaction table). Called from the WebGPU init
+ *  path after setupBuffersAndPipelines + from recompile + from
+ *  updateInteractionTable so the GPU stays in sync with the JS-side views.
+ *  No-op when WebGPU isn't ready or the model doesn't use variegation. */
+function syncVariegationToGPU(): void {
+  const rt = webgpuRuntime;
+  if (!rt || !rt.stepReady || !rt.layout.variegatedEnabled) return;
+  if (orientationReadView) uploadOrientation(rt, orientationReadView);
+  if (facePatternLookup && facePatternLookup.length > 0) uploadFacePatternLookup(rt, facePatternLookup);
+  for (const [id, view] of Object.entries(cachedInteractionTables)) {
+    // The cached view is a Float64Array (over wasmMemory). The GPU stores f32,
+    // so the upload helper down-converts via a fresh Float32Array. Negligible
+    // copy cost — tables are small ((labels+1)² entries).
+    uploadInteractionTable(rt, id, view);
+  }
+}
+
 // WASM step (Wave 2) — when useWasm is true, runStep() calls this instead of
 // the JS stepFn. Default false; flipped via the 'setUseWasm' message. The WASM
 // module is rebuilt on every init/recompile because it imports the linear
@@ -509,6 +528,10 @@ function startWebGPUInit(
       uploadModelAttrs(rt, cachedModelAttrs as Record<string, number>);
       uploadActiveViewer(rt, viewerIdMap[activeViewer] ?? -1);
       seedRngState(rt, rngState[0] ?? 0x12345678);
+      // Variegated Cells: upload facePatternLookup + interaction tables +
+      // initial orientation. setupBuffersAndPipelines already flipped
+      // `rt.stepReady = true` so syncVariegationToGPU's gate passes.
+      syncVariegationToGPU();
       // O5 — set up GPU-side reduction pipelines for any GPU-eligible
       // watched linked indicators. Skipped indicators (float total, integer
       // /float frequency) keep using the existing CPU readback fallback.
@@ -1626,9 +1649,22 @@ function compileFns(
  *  views over wasmMemory so writes still land in the right place; WebGPU
  *  uploads readAttrs after init in the reset handler. */
 function runInit(): void {
+  const useWebGPUInit = useWebGPU && webgpuRuntime?.stepReady && webgpuRuntime.initPipeline !== null;
   const callWasm = useWasm && wasmInitFn !== null;
   const isSync = updateMode !== 'asynchronous';
-  if (!callWasm && !initFn) return;
+  if (!useWebGPUInit && !callWasm && !initFn) return;
+  // WebGPU path: dispatch the GPU init pipeline. CPU views aren't touched by
+  // the dispatch itself; the post-init bind-group swap makes attrsReadBuf
+  // point at what was just written. The Reset handler is responsible for
+  // having already uploaded the CPU defaults + orientation BEFORE runInit so
+  // the GPU init shader reads the right pre-init state.
+  if (useWebGPUInit && webgpuRuntime) {
+    dispatchInit(webgpuRuntime);
+    // After this dispatchInit, the GPU owns the latest attrs / orientation
+    // (in attrsReadBuf post-swap). gpuOwnsAttrs is flipped on by the caller's
+    // refreshColorsAfterInputWebGPU path; we don't need to readback here.
+    return;
+  }
   if (callWasm && isSync && readAttrs !== attrsA) {
     // Normalise to the baked-in WASM read offset before calling so WASM sees
     // the canonical pre-init state. Mirrors the runStep pattern.
@@ -2173,6 +2209,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       const webgpuRandomize = useWebGPU && webgpuRuntime?.stepReady;
       if (webgpuRandomize && webgpuRuntime) {
         uploadAttrs(webgpuRuntime, readAttrs);
+        if (orientationReadView) uploadOrientation(webgpuRuntime, orientationReadView);
         uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
         syncIndicatorsCpuToGpu();
         gpuOwnsAttrs = false;
@@ -2196,7 +2233,16 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // Init Event runs once per cell on Reset only (not on Randomize, not on
       // Load State). When present, it modifies attrs in place AFTER defaults
       // have been applied and BEFORE the color pass / GPU upload.
-      const hadInit = initFn !== null;
+      const webgpuReset = useWebGPU && webgpuRuntime?.stepReady;
+      const useGPUInit = !!(webgpuReset && webgpuRuntime?.initPipeline);
+      const hadInit = initFn !== null || (useWasm && wasmInitFn !== null) || useGPUInit;
+      // GPU init path: push the CPU defaults to GPU BEFORE dispatching init so
+      // the init shader reads from a known-good attrsReadBuf. dispatchInit then
+      // writes + swaps; the GPU owns the post-init state.
+      if (useGPUInit && webgpuRuntime) {
+        uploadAttrs(webgpuRuntime, readAttrs);
+        if (orientationReadView) uploadOrientation(webgpuRuntime, orientationReadView);
+      }
       runInit();
       if (hadInit) {
         // Init wrote to attrs after resetGrid's color refresh — recompute
@@ -2204,12 +2250,18 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // WebGPU path skips this and recomputes via runColorPassWebGPU below.
         if (!(useWebGPU && webgpuRuntime?.stepReady)) refreshColorsAfterInputJS();
       }
-      const webgpuReset = useWebGPU && webgpuRuntime?.stepReady;
       if (webgpuReset && webgpuRuntime) {
-        uploadAttrs(webgpuRuntime, readAttrs);
+        // When the JS / WASM init ran (no GPU init pipeline), CPU readAttrs
+        // holds the post-init state — push it to GPU. When the GPU init ran,
+        // the GPU already owns the post-init attrsReadBuf and uploading again
+        // would clobber it.
+        if (!useGPUInit) {
+          uploadAttrs(webgpuRuntime, readAttrs);
+          if (orientationReadView) uploadOrientation(webgpuRuntime, orientationReadView);
+        }
         uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
         syncIndicatorsCpuToGpu();
-        gpuOwnsAttrs = false;
+        gpuOwnsAttrs = useGPUInit;
         refreshColorsAfterInputWebGPU();
         finalizeStepWebGPU({ needColors: true }).then(() => sendColors())
           .catch(e => self.postMessage({ type: 'error', message: '[webgpu] reset colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
@@ -2233,6 +2285,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // attribute schema, which a recompile doesn't change). Writes through
       // the existing typed-array views so WASM keeps the same source of truth.
       initVariegation((msg as RecompileMsg).variegated, (msg as RecompileMsg).interactionTables);
+      // Push the re-flattened variegation buffers to the GPU as well so a
+      // WebGPU recompile picks up the same values (in case interaction tables
+      // / facePatternLookup changed). No-op when GPU isn't ready or variegation
+      // is off.
+      syncVariegationToGPU();
       stopMessages = (msg as RecompileMsg).stopMessages || [];
       if ((msg as RecompileMsg).webgpuStopCheckInterval !== undefined) {
         webgpuStopCheckInterval = Math.max(1, Math.floor((msg as RecompileMsg).webgpuStopCheckInterval!));
@@ -2503,6 +2560,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // offset for it either, so this branch is harmless.
         cachedInteractionTables[msg.attrId] = normalized;
       }
+      // WebGPU: upload the new values to varAux so the next step / output
+      // mapping reads them. No-op when GPU isn't ready or table isn't in layout.
+      const target = cachedInteractionTables[msg.attrId];
+      if (target && webgpuRuntime?.stepReady) uploadInteractionTable(webgpuRuntime, msg.attrId, target);
       break;
     }
 
@@ -2728,6 +2789,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // Sync restored state to GPU when WebGPU is active.
       if (useWebGPU && webgpuRuntime?.stepReady) {
         uploadAttrs(webgpuRuntime, readAttrs);
+        if (orientationReadView) uploadOrientation(webgpuRuntime, orientationReadView);
         uploadNeighborOffsets(webgpuRuntime);
         uploadModelAttrs(webgpuRuntime, cachedModelAttrs as Record<string, number>);
         uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
