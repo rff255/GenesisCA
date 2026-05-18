@@ -495,6 +495,7 @@ export function HelpView() {
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
               <tr><td>Set Color Viewer</td><td>Write RGB values for an Attribute-to-Color visualization.</td></tr>
+              <tr><td>Set Cell Glyph</td><td>Overlay a Unicode character on the current cell when the named Output Mapping is active. Inputs: <strong>Glyph</strong> (Unicode codepoint, with an inline text picker), <strong>R/G/B</strong> for glyph colour. Cells with glyph=0 render no character. Glyphs only paint when the cell is at least 6 screen pixels (configurable via <code>genesisca_sim_settings.glyphMinPx</code>) — they hide gracefully at small zooms.</td></tr>
               <tr><td>Get Color Constant</td><td>Output fixed R, G, B values.</td></tr>
               <tr><td>Color Interpolate</td><td>Interpolate between two colors. Inputs: interpolation point T (0&ndash;1), From R/G/B, To R/G/B. Outputs: R, G, B. The <strong>curve</strong> dropdown controls the interpolation shape: Linear, Smoothstep, Ease-In Quadratic, Ease-Out Quadratic, Exponential, Logarithmic. Includes color picker widgets for &quot;Color From&quot; and &quot;Color To&quot; when the per-channel ports are not connected.</td></tr>
             </tbody>

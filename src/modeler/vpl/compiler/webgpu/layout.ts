@@ -16,6 +16,7 @@
 
 import type { CAModel } from '../../../../model/types';
 import { FACE_SLOT_COUNT } from '../variegation';
+import { hasGlyphsInModel } from '../glyphsUsage';
 
 export interface WebGPULayoutAttr {
   id: string;
@@ -76,6 +77,16 @@ export interface WebGPULayout {
   nbrs: WebGPULayoutNbr[];
   /** Bytes for the colors buffer (RGBA8 = 4 per cell). */
   colorsBytes: number;
+
+  /** True when any `setCellGlyph` node exists in the graph. When false the
+   *  glyph regions are stub-sized (16 bytes) so the bind group still has
+   *  something to attach for the unconditional bindings 9 & 10, but no
+   *  meaningful storage is reserved. */
+  hasGlyphs: boolean;
+  /** Bytes for the glyphCodes storage buffer (u32 per cell). */
+  glyphCodesBytes: number;
+  /** Bytes for the glyphColors storage buffer (u32 per cell, R|G<<8|B<<16). */
+  glyphColorsBytes: number;
   /** Bytes for the modelAttrs uniform buffer (one f32 per scalar, three f32 per color). */
   modelAttrsBytes: number;
   /** Map from model-attr key ("id" or "id_r" / "id_g" / "id_b") to byte offset
@@ -272,6 +283,9 @@ export function computeWebGPULayout(model: CAModel): WebGPULayout {
   // exists, the buffer is created with the stub size so binding 8 is bindable.
   const varAuxBytes = Math.max(16, varAuxCursor);
 
+  const hasGlyphs = hasGlyphsInModel(model);
+  const glyphBytes = hasGlyphs ? Math.max(4, total * 4) : 16;
+
   return {
     total,
     cellsPerAttr,
@@ -284,6 +298,9 @@ export function computeWebGPULayout(model: CAModel): WebGPULayout {
     nbrBytes,
     nbrs,
     colorsBytes: total * 4,
+    hasGlyphs,
+    glyphCodesBytes: glyphBytes,
+    glyphColorsBytes: glyphBytes,
     modelAttrsBytes,
     modelAttrOffset,
     indicatorsBytes,

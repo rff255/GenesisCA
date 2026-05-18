@@ -118,6 +118,8 @@ struct Control {
 @group(0) @binding(6) var<storage, read_write> rngState     : array<u32>;
 @group(0) @binding(7) var<storage, read_write> control      : Control;
 @group(0) @binding(8) var<storage, read>       varAux       : array<u32>;
+@group(0) @binding(9) var<storage, read_write> glyphCodes   : array<u32>;
+@group(0) @binding(10) var<storage, read_write> glyphColors  : array<u32>;
 ${nbrCellIdxFn}
 
 // PCG hash + per-cell advance. Mirrors the per-cell stream model in the

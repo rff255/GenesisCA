@@ -1394,7 +1394,7 @@ function buildLoopParams(model: CAModel): {
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
-  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState', '_stopFlag');
+  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
   // Variegated Cells: r/w orientation arrays + flat facePatternLookup +
   // _interactionTables object. Always emit these when the feature is on so
   // the worker's buildLoopArgs (in sim.worker.ts) and this signature stay
@@ -1414,7 +1414,7 @@ function buildCellParams(model: CAModel): string {
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
-  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState', '_stopFlag');
+  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
   if (variegated) parts.push('r_orientation', 'w_orientation', '_facePatternLookup', '_interactionTables');
   return parts.join(', ');
 }
@@ -1800,7 +1800,7 @@ export function compileGraph(
   for (const m of model.mappings || []) viewerIdsToHoist.add(m.id);
   const collectViewerRefs = (nodes: GraphNode[]) => {
     for (const n of nodes) {
-      if (n.data.nodeType === 'setColorViewer') {
+      if (n.data.nodeType === 'setColorViewer' || n.data.nodeType === 'setCellGlyph') {
         viewerIdsToHoist.add((n.data.config.mappingId as string) || 'default');
       }
     }
@@ -1936,7 +1936,7 @@ export function compileGraph(
   for (const a of cellAttrs) omParamParts.push(`w_${a.id}`);
   const neighborhoods = model.neighborhoods.map(n => ({ id: n.id }));
   for (const n of neighborhoods) { omParamParts.push(`nIdx_${n.id}`); omParamParts.push(`nSz_${n.id}`); }
-  omParamParts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState', '_stopFlag');
+  omParamParts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
   if (model.variegatedCells?.enabled) {
     omParamParts.push('r_orientation', 'w_orientation', '_facePatternLookup', '_interactionTables');
   }

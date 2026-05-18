@@ -140,6 +140,62 @@ export function InlineBoolSelect(props: InlineBoolSelectProps) {
   );
 }
 
+interface InlineGlyphInputProps {
+  /** Codepoint stored as a decimal string. '0' / '' = no glyph. */
+  value: string;
+  onChange: (next: string) => void;
+  className?: string;
+  onMouseDown?: (e: React.MouseEvent) => void;
+  onClick?: (e: React.MouseEvent) => void;
+  style?: React.CSSProperties;
+}
+
+const GLYPH_STARTER_PALETTE = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖', '○', '△', '★'];
+const GLYPH_PICKER_TITLE = 'Type any character — starters: ' + GLYPH_STARTER_PALETTE.join(' ');
+
+function decodeCodepoint(cpStr: string): string {
+  const cp = parseInt(cpStr, 10);
+  if (!Number.isFinite(cp) || cp <= 0) return '';
+  try { return String.fromCodePoint(cp); } catch { return ''; }
+}
+
+function encodeFirstCodepoint(s: string): string {
+  if (s.length === 0) return '0';
+  const cp = s.codePointAt(0);
+  return cp !== undefined ? String(cp) : '0';
+}
+
+/**
+ * Text-input widget for picking a Unicode glyph. Stores the codepoint as a
+ * decimal string; the visible character is decoded for display. Typing a new
+ * character overwrites the previous one (we keep only the LAST codepoint, so
+ * users can overwrite without first clearing).
+ */
+export function InlineGlyphInput(props: InlineGlyphInputProps) {
+  const display = decodeCodepoint(props.value);
+  return (
+    <input
+      type="text"
+      className={props.className}
+      value={display}
+      // Take the LAST character typed so the user can overwrite without
+      // clearing first ("type x to replace y"); ignore leading carry-over.
+      onChange={e => {
+        const v = e.target.value;
+        if (v.length === 0) { props.onChange('0'); return; }
+        const codepoints = Array.from(v);
+        const ch = codepoints[codepoints.length - 1] ?? '';
+        props.onChange(encodeFirstCodepoint(ch));
+      }}
+      onMouseDown={props.onMouseDown}
+      onClick={props.onClick}
+      title={GLYPH_PICKER_TITLE}
+      placeholder="·"
+      style={{ textAlign: 'center', ...props.style }}
+    />
+  );
+}
+
 interface InlineTagSelectProps {
   /** Tag index as a string. */
   value: string;

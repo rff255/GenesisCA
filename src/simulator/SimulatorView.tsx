@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useModel } from '../model/ModelContext';
 import { compileGraph } from '../modeler/vpl/compiler/compile';
+import { hasGlyphsInModel } from '../modeler/vpl/compiler/glyphsUsage';
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
 import { unpackNI, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
@@ -9,6 +10,7 @@ import { InteractionTableEditor } from '../modeler/panels/InteractionTableEditor
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
+import { getGlyphTile } from './recording/glyphAtlas';
 import { IndicatorDisplay } from './IndicatorDisplay';
 import { BrushColorPopover } from './BrushColorPopover';
 import { InspectCellPopover, InspectHoverLink, type InspectPopoverState } from './InspectCellPopover';
@@ -185,6 +187,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // persists across sessions, but the boundary-treatment guard below forces it
   // off whenever the active model isn't torus.
   const [infinityCanvas, setInfinityCanvas] = useState((saved.current.infinityCanvas as boolean) ?? false);
+  // Per-cell glyph overlay: minimum cell pixel size below which glyphs are
+  // hidden. Glyphs are unreadable at small cell sizes and the per-cell
+  // drawImage loop is wasted work — gate it at the configured threshold.
+  // Held in a ref (no UI control yet) — tunable via the persisted
+  // `genesisca_sim_settings.glyphMinPx` localStorage key.
+  const glyphMinPxRef = useRef<number>(
+    (typeof saved.current.glyphMinPx === 'number' && saved.current.glyphMinPx > 0)
+      ? (saved.current.glyphMinPx as number)
+      : 6,
+  );
 
   // Indicator values from worker
   // Indicator values stored in ref (not state) to avoid extra re-renders on every step.
@@ -239,6 +251,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines,
           infinityCanvas, indicatorVizModes, recordFormat,
+          glyphMinPx: glyphMinPxRef.current,
         }));
       } catch { /* localStorage full */ }
     }, 300);
@@ -299,6 +312,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
   // Colors buffer + grid dimensions
   const colorsRef = useRef<Uint8ClampedArray | null>(null);
+  // Per-cell glyph overlay buffers (worker ships them only when the model uses
+  // setCellGlyph AND any cell has a non-zero glyph). null otherwise — the
+  // overlay path short-circuits in that case.
+  const glyphCodesRef = useRef<Uint32Array | null>(null);
+  const glyphColorsRef = useRef<Uint32Array | null>(null);
   const gridWidth = useRef(0);
   const gridHeight = useRef(0);
 
@@ -504,6 +522,54 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
     }
 
+    // Per-cell glyph overlay. Drawn AFTER the colour blit (so glyphs sit on
+    // top of cell colours) but BEFORE gridlines and brush cursor (so those
+    // remain crisp on top of glyphs). Skipped entirely when no glyph data
+    // arrived for this frame OR cells are too small to read (<6px default;
+    // configurable via genesisca_sim_settings.glyphMinPx).
+    const drawGlyphOverlay = () => {
+      const codes = glyphCodesRef.current;
+      const cols = glyphColorsRef.current;
+      if (!codes || !cols) return;
+      const minPx = glyphMinPxRef.current;
+      if (scale < minPx) return;
+      const tileSize = Math.max(2, Math.round(scale));
+      // Visible cell range. We compute once per (tile origin) for the infinity
+      // path; for the non-infinity path tx=ty=0 only.
+      const drawForTile = (tileOx: number, tileOy: number) => {
+        const colMin = Math.max(0, Math.floor((0 - tileOx) / scale));
+        const colMax = Math.min(w - 1, Math.ceil((parentW - tileOx) / scale));
+        const rowMin = Math.max(0, Math.floor((0 - tileOy) / scale));
+        const rowMax = Math.min(h - 1, Math.ceil((parentH - tileOy) / scale));
+        if (colMin > colMax || rowMin > rowMax) return;
+        for (let row = rowMin; row <= rowMax; row++) {
+          const rowBase = row * w;
+          const screenY = Math.round(tileOy + row * scale);
+          for (let col = colMin; col <= colMax; col++) {
+            const i = rowBase + col;
+            const cp = codes[i]!;
+            if (cp === 0) continue;
+            const packed = cols[i]!;
+            const r = packed & 0xff;
+            const g = (packed >> 8) & 0xff;
+            const b = (packed >> 16) & 0xff;
+            const tile = getGlyphTile(cp, r, g, b, tileSize);
+            const screenX = Math.round(tileOx + col * scale);
+            ctx.drawImage(tile, screenX, screenY, tileSize, tileSize);
+          }
+        }
+      };
+      if (infinity) {
+        for (let ty = tyMin; ty <= tyMax; ty++) {
+          for (let tx = txMin; tx <= txMax; tx++) {
+            drawForTile(ox + tx * scaledW, oy + ty * scaledH);
+          }
+        }
+      } else {
+        drawForTile(ox, oy);
+      }
+    };
+
     if (srcCanvasRef.current) {
       if (infinity) {
         // Snap each tile's left/top edges to integer pixels and derive width/height
@@ -524,6 +590,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         ctx.drawImage(srcCanvasRef.current, ox, oy, scaledW, scaledH);
       }
     }
+
+    // Glyph overlay (after colour blit, before gridlines + cursor).
+    drawGlyphOverlay();
 
     // Draw gridlines when zoomed in enough (cells >= 4px)
     if (showGridlinesRef.current && scale >= 4) {
@@ -750,6 +819,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
     if (msg.type === 'stepped') {
       colorsRef.current = msg.colors as Uint8ClampedArray;
+      // Glyph overlay buffers — undefined when the model has no setCellGlyph
+      // OR when every cell's glyph code is 0 this frame. Clearing to null in
+      // the latter case lets the overlay skip the loop entirely (no need to
+      // iterate visible cells just to find all zeros).
+      const gc = msg.glyphCodes as Uint32Array | undefined;
+      const gcol = msg.glyphColors as Uint32Array | undefined;
+      glyphCodesRef.current = gc ?? null;
+      glyphColorsRef.current = gcol ?? null;
       if (msg.indicators) {
         indicatorValuesRef.current = msg.indicators;
         // Collect history for indicators with expanded charts. Scalars → number[];
@@ -1085,6 +1162,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // applies to inspect-cell maps (a stale entry keyed by a no-longer-
     // -valid cellIdx). srcCanvas is rebuilt on the next draw when needed.
     colorsRef.current = null;
+    glyphCodesRef.current = null;
+    glyphColorsRef.current = null;
     inspectDataRef.current.clear();
     inspectColorsRef.current.clear();
     inspectOrientationsRef.current.clear();
@@ -1273,6 +1352,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       webgpuLayout: webgpuResult.error ? undefined : webgpuResult.layout,
       useWebGPU: !!model.properties.useWebGPU,
       webgpuStopCheckInterval: Math.max(1, Math.floor(model.properties.webgpuStopCheckInterval ?? 1)),
+      // Glyph overlay regions are only allocated when the graph actually uses
+      // setCellGlyph. Worker reads this BEFORE initGrid so layout reserves the
+      // matching memory (and the views are non-null).
+      hasGlyphs: hasGlyphsInModel(model),
     };
     // Canvas transfer is deferred to the useWebGPUStatus handler — see
     // pendingCanvasAttach above. The init message never carries webgpuCanvas
@@ -1439,7 +1522,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       || prev.properties.useWebGPU !== model.properties.useWebGPU
       || !attrsStructurallyEqual(prev.attributes, model.attributes)
       || prev.neighborhoods !== model.neighborhoods
-      || prev.mappings !== model.mappings;
+      || prev.mappings !== model.mappings
+      // Glyph regions are allocated at init time; changing whether the model
+      // uses setCellGlyph requires re-laying out wasmMemory.
+      || hasGlyphsInModel(prev) !== hasGlyphsInModel(model);
 
     if (needsFullInit) {
       workerRef.current?.terminate();
