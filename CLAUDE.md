@@ -394,6 +394,7 @@ The app is functional with these major systems:
 - A new flow-control node with DYNAMIC flow outputs (Switch-style `case_N`, Sequence-style `then_N`) requires edits in ALL of: NodeTypeDef (+ defaultConfig counter), CaNode dynamic-port derivation + +/- UI, [effectivePorts.ts](src/modeler/vpl/effectivePorts.ts) (consumed by panel-drag + connection-drop helpers), `compile.ts` × 2 sites (compileInnerFlow + compileFlowChain), `wasm/compile.ts` × 2 sites (compileFlowChain + visitFlow), `webgpu/compile.ts` × 3 sites (preEmitValueNodes + compileFlowChain + analyzeAlwaysWritten), and `sinkAnalysis.ts` if the node belongs in `TRANSPARENT_FLOW_TYPES`.
 - Worker `self.onmessage` is sync — `await` directly inside a `case` body is a syntax error. Wrap async work in `void (async () => { ... })()` IIFE (same pattern as `setUseWasm`), OR keep the await out of the message handler entirely.
 - Module-level `let` exports from `graphState.ts` are LIVE bindings — reading the imported identifier inside a callback always sees the current value at call time (no ref needed). Used for `compatibleHandlesForDrag` and `currentModelElementDrag`. Safer than refs when the consumer is a pure function or non-React module.
+- Accessor CSE: all three compilers run [accessorCSE.ts](src/modeler/vpl/compiler/accessorCSE.ts)'s `canonicalizeAccessorEdges` before sink analysis to dedup pure value-producing nodes (GetCellAttribute, GetNeighborsAttribute, arithmetic over them, etc.) that share a structural purity key. Sync-mode only (async-mode global no-op — single buffer means a read can change after an intervening write). See the "Accessor CSE" major section for purity rules and per-target wiring.
 
 ---
 
@@ -642,6 +643,42 @@ All three compile targets share `src/modeler/vpl/compiler/sinkAnalysis.ts` — a
 - The analyzer expects a **flat post-macro-expansion graph**. JS inlines macros during compile via `inlineMacroValues` / `inlineMacroFlow` — the analyzer therefore sees the macro instance as a single opaque value node and assigns it ONE emit scope; the macro's internal value nodes inherit by going through `routeValueEmit` themselves at the same scope when `inlineMacroValues` runs. WASM and WebGPU expand macros upfront (`expandMacros`) so the analyzer sees fully flat graphs.
 - `compileRoot` (JS) takes raw `graphNodes` / `graphEdges` even though they're redundant with `nodeMap` etc. — the analyzer rebuilds adjacency internally, keeping it target-independent. Same pattern for WASM (`compileEntry` takes a precomputed `SinkAnalysisResult`) and WebGPU (`baseCtx.graphNodes` / `baseCtx.graphEdges` threaded through, analyzer called per-entry inside `compileEntry`).
 - WebGPU's buffer-swap captures only the emitter's OWN push'es. Recursive `compileValueNode` calls for input sources have already routed their own emissions via their own wrappers, since inputs are resolved upstream of the wrapped emit call.
+
+---
+
+## Accessor CSE (cross-target compile optimisation)
+
+All three compile targets run `canonicalizeAccessorEdges` from [accessorCSE.ts](src/modeler/vpl/compiler/accessorCSE.ts) before sink analysis. It computes a structural "purity key" for every value-producing node, groups nodes that share a key, picks one canonical per group (lexicographically smallest id), and rewrites consumer edges so non-canonical equivalents become unreachable. The downstream compilers (sink analysis, loop-invariance, fusion, per-target emit) see the dedup'd edges naturally — no per-target emit changes needed because all three lookup sources via `inputToSource` / `inputToSources`.
+
+### Why it matters
+- Lets users freely re-instance simple accessors in multi-equation graphs (Gray-Scott reaction-diffusion is the canonical case: each equation reads `u`, `v`, `∇²u`, `∇²v` — pre-CSE forced the user to either share one node and run cables everywhere, or pay 2× the read cost).
+- Catches deeper duplicates too: `Compare(GetCellAttribute(u), GetConstant(3))` × 2 collapses all three pairs (the two compares, the two gets, the two constants), recursively.
+
+### Purity rules
+- **Impure (never canonicalised, each instance emits independently):** `getRandom`, `pickRandomNeighbor`, `pickNRandomNeighbors` (RNG side effect); `getIndicator` (`_indicators[id]` is mutable mid-cell via `SetIndicator`/`UpdateIndicator`); `aggregate` / `groupOperator` with `op === 'random'`; `macro` (opaque container — v1 doesn't introspect macro internals); entry-point types (`step`, `inputColor`, `initEvent`, `outputMapping`, `macroInput`, `macroOutput`).
+- **Pure (CSE-eligible):** every other value-producing node, **provided every value input is also pure**. Impurity propagates through the key — `Compare(GetRandomA, k)` and `Compare(GetRandomB, k)` get different keys (even with identical configs) because the random source IDs differ in the `nonpure:<nodeId>:<port>` tag. Two consumers wired to the SAME `GetRandom` do canonicalise (they share the canonical key of that single source).
+
+### Async-mode gate
+- The pass is a no-op when `model.properties.updateMode === 'asynchronous'`. Async-mode Step shares one buffer, so a `GetCellAttribute` read can change after an intervening write within the same cell body — CSE would silently merge them, breaking the model. InputColor / OutputMapping / Init are individually safe to CSE in async mode (no in-loop mutation), but the global edge rewrite spans all roots, so the simplest sound design is "all-or-nothing per model".
+
+### Per-target wiring
+- **JS** ([compile.ts](src/modeler/vpl/compiler/compile.ts)): runs at the top of `compileGraph` right after async-validation, before `buildAdjacency`. Macros aren't pre-expanded in JS, so CSE only sees top-level nodes — fine because macros are impure anyway.
+- **WASM** ([wasm/compile.ts](src/modeler/vpl/compiler/wasm/compile.ts)): runs AFTER `expandMacros`, so duplicate accessors inside (or across) macro instances also get merged.
+- **WebGPU** ([webgpu/compile.ts](src/modeler/vpl/compiler/webgpu/compile.ts)): same — runs AFTER `expandMacros` on `expanded.edges` before `buildAdjacency`.
+
+### Interaction with aggregate fusion
+- `detectFusableConsumers` runs AFTER CSE on the rewritten edges. The common case (two `getNeighborsAttribute → aggregate` pipelines with identical inputs+op) merges into one pipeline that still has exactly one consumer → fuses normally.
+- Corner-case regression: two `aggregate` nodes with DIFFERENT ops over the SAME `getNeighborsAttribute`. Pre-CSE: 2 fused gather+reduce loops (2 × N_nbr work). Post-CSE: 1 canonical scratch fill + 2 unfused reductions reading scratch (3 × N_nbr). Accepted as a v1 tradeoff — uncommon shape vs the broad Gray-Scott win.
+
+### Gotchas
+- `handleId` does NOT encode the source node id (`${kind}_${category}_${portId}` only) — CSE rewrites `edge.source` and leaves `sourceHandle` intact, which is sound because canonical and non-canonical share the same node TYPE → same port set.
+- Vite dev-server module cache for `compile.ts` is sticky: editing the import line without restarting the dev server can leave the worker (which loaded the pre-edit module) emitting un-deduplicated code. Verify via a cache-bust import (`?t=Date.now()`) when smoke-testing fresh edits.
+- The purity key serialises config minus underscored keys (`_resolvedTagIndex`, `_elemKind`, `_indicatorIdx`, etc.) — those are compiler-injected and derived from other config or graph structure, so structurally-identical nodes already match on the source keys that produced them. Adding a new user-facing config field needs no change here; adding a compiler-injected one should keep the leading-underscore convention.
+- Dynamic value-input ports (`switch.case_N_cond` / `case_N_val`) aren't in `def.ports` — `purityKey` walks them from the edge map, same pattern as `sinkAnalysis.recordValueInputs`. Adding another dynamic-port node means it would benefit from CSE automatically as long as the dynamic ports follow the `${nodeId}:${portId}` edge-map convention.
+- The pass is an O(N+E) edge-array rebuild. On Gray-Scott with ~12 duplicate accessors it shaves ~1 µs of compile time; even on huge models the cost is dominated by graph size, not CSE bookkeeping. No bypass flag.
+
+### Behavioural changes you may see
+- For seeded random models: pre-CSE, two `GetRandom` instances wired to the same Compare both advanced the shared `_rs` xorshift stream once per cell. CSE doesn't merge separate `GetRandom` instances (they're impure), so the RNG stream draws are unchanged. But: when two equivalent `Compare(GetRandom, …)` nodes are wired to a SHARED `GetRandom`, the redundant Compare collapses — only one branch evaluation per cell — and downstream branches that depended on this Compare's result see the same RNG draw. Models that incidentally relied on the duplicate emit (e.g., two Compare nodes each re-reading the same `GetRandom` output but bundled into different branches) won't see a behaviour change because both Compares read the SAME varname (`_v<random>`) anyway; CSE just folds the consumer.
 
 ---
 

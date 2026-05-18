@@ -7,6 +7,7 @@ import { detectFusableConsumers, type FusionResult } from './fusion';
 import { getInlineValue } from './inlinePort';
 import { INVALID_NI, packNI, NI_ARRAY_PRODUCERS } from './niCodec';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId } from './sinkAnalysis';
+import { canonicalizeAccessorEdges } from './accessorCSE';
 import {
   isSubAttribute,
   subAttrInfo,
@@ -1565,6 +1566,14 @@ export function compileGraph(
       variegatedValidationError = `Node "${label}" requires Variegated Cells enabled. Enable in Model Properties > Execution.`;
     }
   }
+
+  // Accessor CSE — sync-mode only. Deduplicates pure value-producing nodes
+  // (GetCellAttribute, GetNeighborsAttribute, arithmetic over them, etc.) that
+  // share the same purity key, by rewriting their consumer edges to point at
+  // one canonical representative per group. Frees users from sharing accessor
+  // nodes manually in multi-equation models (Gray-Scott and similar). See
+  // accessorCSE.ts for the full rationale and purity rules.
+  graphEdges = canonicalizeAccessorEdges(graphNodes, graphEdges, model);
 
   const { nodeMap, inputToSource, inputToSources, flowOutputToTargets } = buildAdjacency(graphNodes, graphEdges);
 
