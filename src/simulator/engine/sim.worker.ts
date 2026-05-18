@@ -573,8 +573,8 @@ function startWebGPUInit(
 /** Mirror of the compiler's sanitiseExportName: drop everything except
  *  [A-Za-z0-9_] so the export name is a valid JS identifier and we can match
  *  it back to the mapping id at lookup time. */
-function sanitiseExportName(s: string): string {
-  return s.replace(/[^A-Za-z0-9_]/g, '_');
+function sanitiseExportName(s: string | undefined | null): string {
+  return (s ?? '').replace(/[^A-Za-z0-9_]/g, '_');
 }
 
 // Cached model attributes
@@ -1115,6 +1115,13 @@ function runStep(): void {
       const tmp = readAttrs;
       readAttrs = writeAttrs;
       writeAttrs = tmp;
+    }
+    // Variegated Cells: orientation views live at fixed offsets in wasmMemory,
+    // so a JS-style ref swap can't bring writes into the read view. Same
+    // problem on WASM — the read/write offsets are baked. Bulk-copy w → r so
+    // the next step (and the output mapping) sees the new orientations.
+    if (orientationReadView && orientationWriteView && orientationReadView !== orientationWriteView) {
+      orientationReadView.set(orientationWriteView);
     }
   }
   generation++;
@@ -1891,6 +1898,7 @@ function postInspectCellsData(): void {
   if (inspectCellIdxs.length === 0) return;
   const data: Record<number, Record<string, number>> = {};
   const colorsByCell: Record<number, { r: number; g: number; b: number }> = {};
+  const orientationsByCell: Record<number, number> = {};
   for (const idx of inspectCellIdxs) {
     if (idx < 0 || idx >= total) continue;
     const attrs: Record<string, number> = {};
@@ -1909,8 +1917,16 @@ function postInspectCellsData(): void {
     if (colors.length >= base + 3) {
       colorsByCell[idx] = { r: colors[base]!, g: colors[base + 1]!, b: colors[base + 2]! };
     }
+    // Variegated cells: include the orientation so the popover can show it as
+    // an extra row alongside user attributes. Lets users sanity-check that
+    // rotation rules are firing and that face-pattern lookups are using the
+    // right slot. Absent (undefined) when variegation isn't enabled — the
+    // main-thread receiver checks before adding to its map.
+    if (orientationReadView) {
+      orientationsByCell[idx] = orientationReadView[idx]!;
+    }
   }
-  self.postMessage({ type: 'inspectCellsData', data, colors: colorsByCell });
+  self.postMessage({ type: 'inspectCellsData', data, colors: colorsByCell, orientations: orientationsByCell });
 }
 
 function sendColors(): void {

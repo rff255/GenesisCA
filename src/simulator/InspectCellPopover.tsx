@@ -16,6 +16,9 @@ interface Props {
   cellAttrs: Attribute[];
   values: Record<string, number> | null;
   color: { r: number; g: number; b: number } | null;
+  /** Variegated-cells orientation (0..3 = N/E/S/W head direction). null when
+   *  the model isn't variegated or the worker hasn't published it yet. */
+  orientation: number | null;
   pulse: boolean;
   focused: boolean;
   totalOpen: number;
@@ -27,6 +30,8 @@ interface Props {
   onHoverLeave: () => void;
   onRectMeasure: (rect: DOMRect) => void;
 }
+
+const ORIENTATION_NAMES = ['N', 'E', 'S', 'W'] as const;
 
 const DRAG_MARGIN = 8;
 
@@ -80,7 +85,7 @@ function parentMatches(parent: Attribute, parentValue: number | undefined, paren
 }
 
 export function InspectCellPopover({
-  popover, cellAttrs, values, color, pulse, focused, totalOpen,
+  popover, cellAttrs, values, color, orientation, pulse, focused, totalOpen,
   onClose, onCloseAll, onFocus, onDragEnd, onHoverEnter, onHoverLeave, onRectMeasure,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -205,7 +210,15 @@ export function InspectCellPopover({
       </div>
 
       <div className={styles.attrTable}>
-        {cellAttrs.length === 0 && (
+        {orientation !== null && (
+          <div className={styles.attrRow}>
+            <span className={styles.attrName} title="Variegated-cells orientation (head direction)">orientation</span>
+            <span className={styles.attrValue}>
+              {orientation} ({ORIENTATION_NAMES[orientation & 3]})
+            </span>
+          </div>
+        )}
+        {cellAttrs.length === 0 && orientation === null && (
           <div className={styles.empty}>No cell attributes defined.</div>
         )}
         {cellAttrs.map(attr => {

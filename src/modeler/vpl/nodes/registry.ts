@@ -3,9 +3,12 @@ import { StepNode } from './StepNode';
 import { InitEventNode } from './InitEventNode';
 import { GetOrientationNode } from './GetOrientationNode';
 import { SetOrientationNode } from './SetOrientationNode';
-import { GetNeighborOrientationNode } from './GetNeighborOrientationNode';
-import { SetNeighborOrientationNode } from './SetNeighborOrientationNode';
+import { GetFacingOrientationNode } from './GetFacingOrientationNode';
+import { SetFacingOrientationNode } from './SetFacingOrientationNode';
+import { GetNeighborOrientationByIndexNode } from './GetNeighborOrientationByIndexNode';
+import { SetNeighborOrientationByIndexNode } from './SetNeighborOrientationByIndexNode';
 import { GetFacingLabelsNode } from './GetFacingLabelsNode';
+import { GetAllFacingLabelsNode } from './GetAllFacingLabelsNode';
 import { LookupInteractionNode } from './LookupInteractionNode';
 import { GetCellAttributeNode } from './GetCellAttributeNode';
 import { GetNeighborsAttributeNode } from './GetNeighborsAttributeNode';
@@ -95,8 +98,10 @@ const ALL_NODES: NodeTypeDef[] = [
   // Variegated Cells — visible only when the feature is enabled (palette
   // filter via `requirements.variegated`).
   GetOrientationNode,
-  GetNeighborOrientationNode,
+  GetFacingOrientationNode,
+  GetNeighborOrientationByIndexNode,
   GetFacingLabelsNode,
+  GetAllFacingLabelsNode,
   LookupInteractionNode,
   // Arithmetic & Logic
   ArithmeticOperatorNode,
@@ -121,7 +126,8 @@ const ALL_NODES: NodeTypeDef[] = [
   SetNeighborhoodAttributeNode,
   SetNeighborAttributeByIndexNode,
   SetOrientationNode,
-  SetNeighborOrientationNode,
+  SetFacingOrientationNode,
+  SetNeighborOrientationByIndexNode,
   // Color
   SetColorViewerNode,
   GetColorConstantNode,

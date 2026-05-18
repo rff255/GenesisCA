@@ -13,7 +13,7 @@ import {
   attrValueLiteralJS,
   parentMatchExprJS,
 } from './subAttribute';
-import { buildDirectionMap } from './variegation';
+import { directionIndex, DIRECTION_TAGS } from './variegation';
 
 // ---------------------------------------------------------------------------
 // Graph adjacency helpers
@@ -56,7 +56,7 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
 // Compile a single root's subgraph (per-cell body)
 // ---------------------------------------------------------------------------
 
-const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'breakDownNeighborIndex', 'getFacingLabels']);
+const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels']);
 
 /** Check if a node's data uses multi-output variable naming */
 function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
@@ -886,6 +886,13 @@ function compileRoot(
       scratchNodes.push({ scratchVarName: `_v${nodeId}_work`, initExpr: '[]' });
       scratchNodes.push({ scratchVarName: `_v${nodeId}_result`, initExpr: '[]' });
     }
+    // Variegated: multi-output array node — fixed length 8 (one entry per
+    // direction). Use typed Int32Array for the cache-friendly access shape
+    // that downstream Aggregate / ForEach consumers benefit from.
+    if (node.data.nodeType === 'getAllFacingLabels') {
+      scratchNodes.push({ scratchVarName: `_v${nodeId}_myFaceLabels`, initExpr: 'new Int32Array(8)' });
+      scratchNodes.push({ scratchVarName: `_v${nodeId}_theirFaceLabels`, initExpr: 'new Int32Array(8)' });
+    }
 
     const inputVars: Record<string, string> = {};
     for (const port of def.ports) {
@@ -1671,21 +1678,46 @@ export function compileGraph(
   for (const def of (model.macroDefs || [])) preResolveStopEvents(def.nodes);
 
   // Pre-resolve variegated nodes' compile-time fields:
-  //   - getFacingLabels: source attr id + baked directionMap from its neighborhood
+  //   - getFacingLabels: direction index + (dr, dc) offset resolved from
+  //     directionTag alone. The encounter is intrinsic to the grid (one step
+  //     in one of 8 fixed directions); no neighborhood needed. Unset / invalid
+  //     tag → dirIdx = -1, emit collapses to `none/none`.
   //   - lookupInteraction: labelCount = faceLabels.length + 1 (includes implicit `none`)
   // Skipped when variegation is off — those node types are also filtered out
   // of the palette in that case, so the user can't easily place them.
   const variegationOn = !!model.variegatedCells?.enabled;
   const variegatedSourceAttrId = variegationOn ? (model.variegatedCells?.sourceAttributeId ?? '') : '';
   const variegatedLabelCount = variegationOn ? ((model.variegatedCells?.faceLabels.length ?? 0) + 1) : 1;
-  const modelForVariegated = model!;
+  // (dr, dc) offsets for each of the 8 face slots, indexed by direction index.
+  // Order matches DIRECTION_TAGS exactly: N, NE, E, SE, S, SW, W, NW.
+  const DIRECTION_OFFSETS: ReadonlyArray<readonly [number, number]> = [
+    [-1, 0], [-1, 1], [0, 1], [1, 1], [1, 0], [1, -1], [0, -1], [-1, -1],
+  ];
+  const boundaryTreatment = model!.properties.boundaryTreatment ?? 'torus';
   function preResolveVariegatedNodes(nodes: GraphNode[]): void {
     for (const node of nodes) {
-      if (node.data.nodeType === 'getFacingLabels') {
-        const nbrId = node.data.config.neighborhoodId as string;
-        const nbr = modelForVariegated.neighborhoods.find(n => n.id === nbrId);
-        const directionMap = buildDirectionMap(nbr);
-        node.data.config._directionMap = JSON.stringify(Array.from(directionMap));
+      if (node.data.nodeType === 'getFacingLabels'
+        || node.data.nodeType === 'getFacingOrientation'
+        || node.data.nodeType === 'setFacingOrientation') {
+        const tag = (node.data.config.directionTag as string) || '';
+        let dirIdx = -1;
+        let dr = 0, dc = 0;
+        if (tag && (DIRECTION_TAGS as readonly string[]).includes(tag)) {
+          dirIdx = directionIndex(tag);
+          const off = DIRECTION_OFFSETS[dirIdx]!;
+          dr = off[0];
+          dc = off[1];
+        }
+        node.data.config._resolvedDirIdx = dirIdx;
+        node.data.config._resolvedDr = dr;
+        node.data.config._resolvedDc = dc;
+        node.data.config._boundaryTreatment = boundaryTreatment;
+        if (node.data.nodeType === 'getFacingLabels') {
+          node.data.config._sourceAttrId = variegatedSourceAttrId;
+        }
+      }
+      if (node.data.nodeType === 'getAllFacingLabels') {
+        node.data.config._boundaryTreatment = boundaryTreatment;
         node.data.config._sourceAttrId = variegatedSourceAttrId;
       }
       if (node.data.nodeType === 'lookupInteraction') {

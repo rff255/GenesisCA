@@ -256,6 +256,33 @@ export function detectMissingConfig(
       }
       break;
     }
+
+    case 'getFacingLabels':
+    case 'getFacingOrientation':
+    case 'setFacingOrientation': {
+      // Face encounters are intrinsic to the grid (1 step in 1 of 8 fixed
+      // directions). No neighborhood needed — just pick a direction.
+      const tag = config.directionTag;
+      const VALID = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+      if (typeof tag !== 'string' || tag.length === 0) {
+        issues.push('Pick a direction (N/E/S/W or a diagonal)');
+      } else if (!VALID.includes(tag)) {
+        issues.push(`Direction "${tag}" is not one of N/NE/E/SE/S/SW/W/NW`);
+      }
+      break;
+    }
+
+    case 'lookupInteraction': {
+      const tableId = config.tableId;
+      if (typeof tableId !== 'string' || tableId.length === 0) {
+        issues.push('Select an Interaction Table');
+      } else {
+        const attr = model.attributes.find(a => a.id === tableId);
+        if (!attr) issues.push('Selected Interaction Table no longer exists');
+        else if (attr.type !== 'interactionTable') issues.push('Selected attribute is not an Interaction Table');
+      }
+      break;
+    }
   }
 
   return issues;
@@ -400,12 +427,15 @@ export function detectWebGPUIncompatibilities(
       }
       break;
     }
-    // Variegated Cells: `setNeighborOrientation` is async-only — WebGPU is
-    // sync-only, so it's never reachable. detectWebGPUModelIncompatibilities
-    // also rejects async-mode at the model level, but flagging the node
-    // surfaces the issue directly on the badge.
-    case 'setNeighborOrientation':
-      issues.push('Set Neighbor Orientation requires asynchronous update mode — WebGPU is sync-only. Switch to WebAssembly / Debug target, or remove this node.');
+    // Variegated Cells: async-only orientation writes — WebGPU is sync-only,
+    // so they're never reachable. detectWebGPUModelIncompatibilities also
+    // rejects async-mode at the model level, but flagging the node surfaces
+    // the issue directly on the badge.
+    case 'setFacingOrientation':
+      issues.push('Set Facing Orientation requires asynchronous update mode — WebGPU is sync-only. Switch to WebAssembly / Debug target, or remove this node.');
+      break;
+    case 'setNeighborOrientationByIndex':
+      issues.push('Set Neighbor Orientation By Index requires asynchronous update mode — WebGPU is sync-only. Switch to WebAssembly / Debug target, or remove this node.');
       break;
   }
   return issues;

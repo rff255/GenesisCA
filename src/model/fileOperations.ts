@@ -441,7 +441,14 @@ export function serializePreset(
     orderArray?: ArrayBuffer;
   },
   opts: { includeGrid: boolean },
-  modelStructure?: { boundaryTreatment?: import('./types').BoundaryTreatment },
+  modelStructure?: {
+    boundaryTreatment?: import('./types').BoundaryTreatment;
+    /** Current interaction-table values keyed by attribute id. Snapshotted at
+     *  save time so the preset captures whatever the user had tweaked in the
+     *  simulator, not just the model's defaults. Caller is responsible for the
+     *  deep clone — we just store the reference into the SimulationState. */
+    interactionTables?: Record<string, Record<string, Record<string, number>>>;
+  },
 ): SimulationState {
   const out: SimulationState = { schemaVersion: SCHEMA_VERSION, modelAttrs: { ...workerState.modelAttrs } };
   // Grid dimensions and boundary treatment are saved even for parameter-only presets so loading
@@ -449,6 +456,9 @@ export function serializePreset(
   if (modelStructure?.boundaryTreatment) out.boundaryTreatment = modelStructure.boundaryTreatment;
   out.gridWidth = workerState.width;
   out.gridHeight = workerState.height;
+  if (modelStructure?.interactionTables && Object.keys(modelStructure.interactionTables).length > 0) {
+    out.interactionTables = modelStructure.interactionTables;
+  }
   if (opts.includeGrid) {
     // Presets also store starting configurations — skip generation + indicators
     // for the same reason as serializeSimState above.

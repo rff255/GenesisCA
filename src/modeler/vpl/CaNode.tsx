@@ -345,10 +345,11 @@ function CaNodeComponent({ id, data }: NodeProps) {
       // Reset constValue when constType changes to prevent stale values
       if (key === 'constType') {
         switch (value) {
-          case 'bool':    newConfig.constValue = 'false'; break;
-          case 'integer': newConfig.constValue = '0'; break;
-          case 'float':   newConfig.constValue = '0'; break;
-          case 'tag':     newConfig.constValue = '0'; newConfig.tagAttributeId = ''; break;
+          case 'bool':        newConfig.constValue = 'false'; break;
+          case 'integer':     newConfig.constValue = '0'; break;
+          case 'float':       newConfig.constValue = '0'; break;
+          case 'tag':         newConfig.constValue = '0'; newConfig.tagAttributeId = ''; break;
+          case 'orientation': newConfig.constValue = '0'; break;
         }
       }
       updateNodeData(id, { ...nodeData, config: newConfig });
@@ -1072,6 +1073,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               <option value="integer">Integer</option>
               <option value="float">Float</option>
               <option value="tag">Tag</option>
+              <option value="orientation">Orientation</option>
             </select>
             {nodeData.config.constType === 'bool' ? (
               <select
@@ -1081,6 +1083,17 @@ function CaNodeComponent({ id, data }: NodeProps) {
               >
                 <option value="true">true</option>
                 <option value="false">false</option>
+              </select>
+            ) : nodeData.config.constType === 'orientation' ? (
+              <select
+                className={styles.select}
+                value={(nodeData.config.constValue as string) || '0'}
+                onChange={e => updateConfig('constValue', e.target.value)}
+              >
+                <option value="0">N (0&deg;)</option>
+                <option value="1">E (90&deg;)</option>
+                <option value="2">S (180&deg;)</option>
+                <option value="3">W (270&deg;)</option>
               </select>
             ) : nodeData.config.constType === 'tag' ? (
               <>
@@ -1495,6 +1508,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               <option value="bool">Bool</option>
               <option value="integer">Integer</option>
               <option value="float">Float</option>
+              <option value="orientation">Orientation</option>
               <option value="options">Options</option>
             </select>
             {(nodeData.config.randomType === 'integer' || nodeData.config.randomType === 'float') && (
@@ -1969,6 +1983,47 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 </span>
               )}
             </>
+          );
+        })()}
+
+        {(nodeData.nodeType === 'getFacingLabels'
+          || nodeData.nodeType === 'getFacingOrientation'
+          || nodeData.nodeType === 'setFacingOrientation') && (() => {
+          // Variegated Cells: pick one cardinal/diagonal direction. Face
+          // encounters are intrinsic to the grid (one step in one of 8 fixed
+          // directions), so no neighborhood is needed — the compiler resolves
+          // the chosen direction directly to a (dr, dc) offset.
+          const DIRECTION_TAGS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+          return (
+            <select
+              className={styles.select}
+              value={(nodeData.config.directionTag as string) || ''}
+              onChange={e => updateConfig('directionTag', e.target.value)}
+            >
+              <option value="">Direction...</option>
+              {DIRECTION_TAGS.map(d => (
+                <option key={d} value={d}>{d}</option>
+              ))}
+            </select>
+          );
+        })()}
+
+        {nodeData.nodeType === 'lookupInteraction' && (() => {
+          // Variegated Cells: pick one of the model's Interaction Table model
+          // attributes. labelA / labelB are wired via input ports (typically
+          // from a Get Facing Labels node).
+          const tables = model.attributes.filter(a => a.isModelAttribute && a.type === 'interactionTable');
+          return (
+            <select
+              className={styles.select}
+              value={(nodeData.config.tableId as string) || ''}
+              onChange={e => updateConfig('tableId', e.target.value)}
+            >
+              <option value="">Interaction Table...</option>
+              {tables.map(a => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </select>
           );
         })()}
 
