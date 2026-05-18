@@ -3,7 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const GetRandomNode: NodeTypeDef = {
   type: 'getRandom',
   label: 'Get Random',
-  description: 'Random value: bool (1 with probability P, else 0), integer in [min, max], float in [min, max), or one option uniformly picked from the wired Options array (returns Fallback if array is empty).',
+  description: 'Random value: bool (1 with probability P, else 0), integer in [min, max], float in [min, max), orientation (uniform 0..3 = N/E/S/W), or one option uniformly picked from the wired Options array (returns Fallback if array is empty).',
   category: 'data',
   color: '#b71c1c',
   ports: [
@@ -28,6 +28,10 @@ export const GetRandomNode: NodeTypeDef = {
       return `${advance} const _v${nodeId} = (_rs / 4294967296) < ${prob} ? 1 : 0;\n`;
     } else if (type === 'integer') {
       return `${advance} const _v${nodeId} = Math.floor((_rs / 4294967296) * (${max} - ${min} + 1)) + ${min};\n`;
+    } else if (type === 'orientation') {
+      // Orientation: uniform pick from 0..3 (N/E/S/W). No min/max widgets —
+      // the domain is fixed. Matches the integer path's truncation pattern.
+      return `${advance} const _v${nodeId} = Math.floor((_rs / 4294967296) * 4) & 3;\n`;
     } else if (type === 'options') {
       // inputVars.options resolves via inputToSources in compile.ts: '[v1,v2,...]'
       // for multi-source, the array varName for a single array source, or

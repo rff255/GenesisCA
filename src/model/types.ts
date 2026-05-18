@@ -278,6 +278,13 @@ export interface SimulationState {
   boundaryTreatment?: BoundaryTreatment;
   gridWidth?: number;
   gridHeight?: number;
+  /** Interaction-table model attribute overrides. Outer key = attribute id; inner
+   *  table maps `rowLabel -> colLabel -> float`. Saved in presets so a preset
+   *  can swap an entire parameter set (e.g. the 8 Kier 1996 amphiphile sets)
+   *  without forcing the user to retype every cell. On apply, this rewrites both
+   *  the cached worker tables (via updateInteractionTable) and the model state
+   *  (via updateAttribute) so Reset-to-Default snapshots also follow the preset. */
+  interactionTables?: Record<string, Record<string, Record<string, number>>>;
 }
 
 /** A named snapshot of model-attribute values (always) and optionally the cell

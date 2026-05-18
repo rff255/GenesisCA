@@ -1,24 +1,69 @@
 #!/usr/bin/env node
 /**
- * Generates public/models/Amphiphile.gcaproj
+ * Generates public/models/Amphiphile.gcaproj — the Kier book Example 5.3
+ * amphiphile micelle formation model, implemented VERBATIM to the algorithm
+ * described in Kier, Seybold & Cheng (2005), "Modeling Chemical Systems Using
+ * Cellular Automata", Chapter 2 + Example 5.3 (pp. 85-86), and the companion
+ * paper Kier, Cheng, Testa, Carrupt (1996), Pharm. Res. 13:1419.
  *
- * A chemistry-CA demo of the Variegated Cells (Directional Interactions)
- * feature. Cells are either water (no face pattern) or amphiphile (a small
- * molecule with a hydrophilic Head face and a hydrophobic Tail face on
- * opposite sides). Each amphiphile cell carries an orientation (0..3, 90°
- * rotations); a per-step rule rotates unhappy amphiphiles toward a more
- * favourable encounter pattern. Over time the amphiphiles self-organise:
- * heads face water, tails clump together — the building blocks of micelles
- * and bilayers.
+ * Move-into-empty algorithm (book §2.3.6 + §2.3.4):
  *
- * Heavy arithmetic (energy sum, rotation update, RGB colour synthesis) is
- * routed through `expression` nodes so the formulas are legible in one place
- * instead of being spread across many one-operator nodes — mirrors the
- * gen-grayscott.mjs approach. Re-run after any tweak:
+ *   Every non-empty cell acts each step (both water AND amphi). For each
+ *   non-empty cell C:
+ *
+ *     1. Cardinal-neighbour reads (vN). For each direction d ∈ {N,E,S,W}:
+ *        - kind_d   = neighbour kind at d (empty / water / amphi)
+ *        - myFace_d = C's face presented in direction d
+ *        - thFace_d = neighbour's face presented at the encounter
+ *        - pb_d     = P_B(myFace_d, thFace_d) — bond-break probability
+ *        - farKind_d = kind of the cell at distance 2 in direction d (vN2)
+ *        - farFace_d = face-label proxy for farKind_d
+ *           (empty→none, water→water, amphi→X)
+ *        - j_d      = J(myFace_d, farFace_d) — joining probability
+ *        - weight_d = (kind_d == empty) ? j_d : 0
+ *
+ *     2. P_break  = Π_d pb_d  (book §2.3.6: product over all neighbours).
+ *        For empty neighbours, P_B(*, none) = 1 (no bond to break — neutral
+ *        factor in the product), so pb_d contributes 1.0 there.
+ *
+ *     3. Bernoulli(P_break). If the roll fails, do nothing.
+ *
+ *     4. sumW = Σ_d weight_d. If sumW == 0, no empty direction → do nothing.
+ *
+ *     5. Sample direction d* by cumulative-sum on weight_d (J-weighted
+ *        directional preference toward empty cells — book §2.3.5).
+ *
+ *     6. Move atomically: write C's (kind, ori) to the cell at NI_{d*};
+ *        set C's kind to empty + orientation to 0. The reads in step 1 are
+ *        captured into JS / WASM / WGSL `const` locals before any flow write
+ *        fires (SSA discipline, per CLAUDE.md), so the four writes see the
+ *        pre-move snapshot — atomicity comes for free without any new
+ *        compiler primitive. Crucially, ONE empty cell is created at the
+ *        source, so empties stay uniformly distributed by construction (no
+ *        asymmetric-mobility artefact that destroyed earlier swap-based
+ *        attempts).
+ *
+ *   Independently, a "free" amphi (one with all 4 cardinals empty) rotates
+ *   every iteration by a uniform random 1..3 90°-step (book §2.3.9).
+ *
+ * Empty cells never act (book §2.3.4: ingredients move, vacancies don't).
+ *
+ * The `none` row/column of both interaction tables is pre-populated with 1.0:
+ *   - P_B(*, none) = 1: §2.3.6 — the simultaneous break probability is the
+ *     product of P_B factors over all bordering ingredients. Where there is
+ *     NO ingredient (= empty), there is no bond to break, so the factor is
+ *     identity 1.
+ *   - J(*, none) = 1: §2.3.5 verbatim — "When J = 1, species A has the same
+ *     probability of movement toward or away from B, as when the B cell is
+ *     not present." Hence "B not present" (= empty far cell) ≡ J = 1.
+ * These are book definitions made explicit so the graph treats all 4
+ * directions uniformly without per-direction conditionals — NOT an
+ * optimisation that simplifies the theory.
+ *
+ * Re-run after any tweak:
  *   node scripts/gen-amphiphile.mjs
  *
- * Re-running preserves the saved simulationState + library thumbnail from
- * the existing output file (they're added in-app, not by this script).
+ * Re-running preserves the saved simulationState + library thumbnail.
  */
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -27,7 +72,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT = resolve(__dirname, '../public/models/Amphiphile.gcaproj');
 
-// --- id generation (CLAUDE.md convention: never counter-based) ---------------
+// --- id generation (CLAUDE.md convention: never counter-based) --------------
 const usedIds = new Set();
 function newId(prefix) {
   let id;
@@ -42,13 +87,14 @@ function newId(prefix) {
 const graphNodes = [];
 const graphEdges = [];
 
-function node(nodeType, config, col, row) {
+function node(nodeType, config, col, row, label) {
   const n = {
     id: newId('n'),
     type: 'caNode',
-    position: { x: col * 230, y: row * 90 },
+    position: { x: col * 220, y: row * 80 },
     data: { nodeType, config },
   };
+  if (label) n.data.label = label;
   graphNodes.push(n);
   return n;
 }
@@ -69,372 +115,747 @@ const PORT_IDS = 'abcdefgh';
 function exprNode(expression, varNames, col, row, label) {
   const config = { expression, visibleCount: varNames.length };
   varNames.forEach((nm, i) => { config[`_varName_${PORT_IDS[i]}`] = nm; });
-  const n = node('expression', config, col, row);
-  if (label) n.data.label = label;
-  return n;
+  return node('expression', config, col, row, label);
+}
+
+// TagConstant emits a fixed tag value (stored as its index). Lets the graph
+// reference kinds by NAME (the UI renders "Tag: amphi") instead of hardcoded
+// integers in Statement._port_y.
+function tagConst(tagName, col, row, attrId, tagOptions) {
+  const i = tagOptions.indexOf(tagName);
+  if (i < 0) throw new Error(`unknown tag: ${tagName}`);
+  return node('tagConstant', {
+    attributeId: attrId, tagIndex: i,
+  }, col, row, `Tag: ${tagName}`);
 }
 
 // =============================================================================
-// IDs referenced across the graph (must match the attributes / neighborhoods /
-// mappings declared further down).
+// IDs referenced across the graph
 // =============================================================================
 const ATTR_KIND = 'kind';
-const ATTR_THRESHOLD = 'threshold';
-const ATTR_DENSITY = 'density';
-const ATTR_INTERACTION = 'interactions';
-const NBR4 = 'nbr4';
+const ATTR_DENS_WATER = 'densityWater';
+const ATTR_DENS_AMPHI = 'densityAmphi';
+const ATTR_PB = 'tableP_B';
+const ATTR_J = 'tableJ';
+const PAT_WATER = 'pat_water';
 const PAT_AMPHI = 'pat_amphi';
+const NBR_VN = 'vN';
+const NBR_VN2 = 'vN2';
 const MAPPING_SEED = 'seed';
 const MAPPING_VIZ = 'viz';
 
-// Tag indices for the kind attribute. Amphiphile is at index 1 — used by the
-// step rule (only amphiphiles act on their orientation) and the init/seed
-// graphs (writing kind = amphiphile).
-const TAG_WATER = 0;
-const TAG_AMPHI = 1;
+// Tag option order — kind = [empty, water, amphi]. Indices are derived from
+// this list via `tagConst()` / SetAttribute's tag-mode inline widget; never
+// hardcoded in the graph. Adding/reordering tags doesn't break the script.
+const KIND_OPTIONS = ['empty', 'water', 'amphi'];
+const FACE_LABELS = ['X', 'Y', 'water'];
+// LookupInteraction's underlying tableValues row/col is indexed with `none` at
+// position 0 (implicit) and user-labels starting at 1. So:
+//   none=0, X=1, Y=2, water=3
+const FACE_NONE = 0;
+const FACE_X = 1;
+const FACE_WATER = 3;
 
 // =============================================================================
-// C. STEP GRAPH — for each amphiphile, sum encounter energies over its 4
-// cardinal neighbours; if the sum is below the threshold, rotate by a random
-// 1..3 step. Water cells are gated out at the top of the chain so they don't
-// burn RNG entropy or waste energy lookups.
+// STEP GRAPH — book-faithful move-into-empty
 // =============================================================================
-
 const stepNode = node('step', {}, 0, 0);
 
-// --- read the current cell's species + orientation --------------------------
-const kindRead = node('getCellAttribute', { attributeId: ATTR_KIND }, 0, 2);
-const oriRead  = node('getOrientation', {}, 0, 3);
+// --- Top reads (shared across all 4 directions; SSA-emitted at cell scope) --
+const kindRead = node('getCellAttribute', { attributeId: ATTR_KIND }, 1, 1, 'My kind');
+const oriRead = node('getOrientation', {}, 1, 2, 'My ori');
+const niArr = node('getAllNeighborIndexes', { neighborhoodId: NBR_VN }, 1, 3, 'NIs vN');
+const niArr2 = node('getAllNeighborIndexes', { neighborhoodId: NBR_VN2 }, 1, 4, 'NIs vN2 (far)');
+const allFaces = node('getAllFacingLabels', {}, 1, 5, 'Facing labels[8]');
 
-// --- gate 1: only amphiphiles continue --------------------------------------
-const isAmphi = node('statement', {
-  operation: '==',
-  _port_y: String(TAG_AMPHI),
-}, 1, 2);
-isAmphi.data.label = 'Is amphiphile?';
-vEdge(kindRead, 'value', isAmphi, 'x');
+// --- Shared tag constants (referenced by Statements across the graph) ------
+const tagEmpty = tagConst('empty', 2, 8, ATTR_KIND, KIND_OPTIONS);
+const tagWater = tagConst('water', 2, 9, ATTR_KIND, KIND_OPTIONS);
+const tagAmphi = tagConst('amphi', 2, 10, ATTR_KIND, KIND_OPTIONS);
 
-const condAmphi = node('conditional', {}, 2, 2);
-fEdge(stepNode, 'do', condAmphi, 'check');
-vEdge(isAmphi, 'value', condAmphi, 'condition');
+// --- Per-direction factors ------------------------------------------------
+// For d in {0=N, 1=E, 2=S, 3=W}, build the per-direction subgraph producing:
+//   ni_d    : NI of the adjacent cell in direction d (from niArr)
+//   niFar_d : NI of the far cell (2 steps in direction d, from niArr2)
+//   kind_d  : adjacent neighbour's kind
+//   pb_d    : P_B(myFace_d, theirFace_d) — bond-break probability factor
+//   j_d     : J(myFace_d, farLabel_d) — joining probability (face proxy)
+//   adjE_d  : (kind_d == empty) — adjacency-is-empty predicate
+//   wt_d    : adjE_d ? j_d : 0 — gated direction weight for sampling
+//
+// Note (WASM compatibility): adjacent / far kind reads go through
+// GetNeighborAttributeByIndex(ArrayElement(niArr, d)). The simpler
+// `ArrayElement(GetNeighborsAttribute(vN, kind), d)` works on JS but not on
+// WASM — getNeighborsAttribute isn't a general "array producer" in the WASM
+// compiler, only a special-case source for aggregate / groupOperator. The NI
+// path produces equivalent results across all 3 compile targets.
+const pb = [], wt = [], adjE = [];
+const niDir = [];  // per-direction NIs, reused if needed elsewhere
+for (let d = 0; d < 4; d++) {
+  const base = 14 + d * 3;
+  const ni_d = node('arrayElement', { _port_position: String(d) }, 2, base, `NI d=${d}`);
+  vEdge(niArr, 'indexes', ni_d, 'array');
+  niDir.push(ni_d);
 
-// --- per-neighbour facing labels + interaction energies ----------------------
-// 4 cardinal neighbours (NESW). For each: read the two face labels touching
-// at the encounter, then look up the (myFace, theirFace) energy in the
-// interaction table. Aggregate(sum) reduces the 4 scalars into a total.
-const SLOT_LABEL = ['N', 'S', 'W', 'E']; // matches nbr4.coords order
-const energyNodes = [];
-for (let i = 0; i < 4; i++) {
-  const gfl = node('getFacingLabels', {
-    neighborhoodId: NBR4,
-    _port_index: String(i),
-  }, 3, 1 + i * 2);
-  gfl.data.label = `Encounter ${SLOT_LABEL[i]}`;
+  const niFar_d = node('arrayElement', { _port_position: String(d) }, 2, base + 1, `NIfar d=${d}`);
+  vEdge(niArr2, 'indexes', niFar_d, 'array');
 
-  const li = node('lookupInteraction', {
-    tableId: ATTR_INTERACTION,
-  }, 4, 1 + i * 2);
-  li.data.label = `Energy ${SLOT_LABEL[i]}`;
-  vEdge(gfl, 'myFaceLabel',    li, 'labelA');
-  vEdge(gfl, 'theirFaceLabel', li, 'labelB');
-  energyNodes.push(li);
+  const kind_d = node('getNeighborAttributeByIndex', {
+    attributeId: ATTR_KIND,
+  }, 3, base, `kind d=${d}`);
+  vEdge(ni_d, 'value', kind_d, 'index');
+
+  const myFace_d = node('arrayElement', { _port_position: String(2 * d) }, 3, base + 1, `myFace d=${d}`);
+  vEdge(allFaces, 'myFaceLabels', myFace_d, 'array');
+
+  const theirFace_d = node('arrayElement', { _port_position: String(2 * d) }, 3, base + 2, `thFace d=${d}`);
+  vEdge(allFaces, 'theirFaceLabels', theirFace_d, 'array');
+
+  const pb_d = node('lookupInteraction', { tableId: ATTR_PB }, 4, base + 1, `P_B d=${d}`);
+  vEdge(myFace_d, 'value', pb_d, 'labelA');
+  vEdge(theirFace_d, 'value', pb_d, 'labelB');
+
+  // Far cell kind → face-label proxy (empty→none, water→water, amphi→X).
+  const farKind_d = node('getNeighborAttributeByIndex', {
+    attributeId: ATTR_KIND,
+  }, 5, base, `farKind d=${d}`);
+  vEdge(niFar_d, 'value', farKind_d, 'index');
+
+  const isFarAmphi = node('statement', { operation: '==' }, 6, base, `farKind == amphi`);
+  vEdge(farKind_d, 'value', isFarAmphi, 'x');
+  vEdge(tagAmphi, 'value', isFarAmphi, 'y');
+
+  const isFarWater = node('statement', { operation: '==' }, 6, base + 1, `farKind == water`);
+  vEdge(farKind_d, 'value', isFarWater, 'x');
+  vEdge(tagWater, 'value', isFarWater, 'y');
+
+  const farLabelInner = node('valueSwitch', {
+    _port_ifValue: String(FACE_WATER), _port_elseValue: String(FACE_NONE),
+  }, 7, base + 1, `water? water:none`);
+  vEdge(isFarWater, 'result', farLabelInner, 'condition');
+
+  const farLabel = node('valueSwitch', {
+    _port_ifValue: String(FACE_X),
+  }, 7, base, `amphi? X:inner`);
+  vEdge(isFarAmphi, 'result', farLabel, 'condition');
+  vEdge(farLabelInner, 'result', farLabel, 'elseValue');
+
+  const j_d = node('lookupInteraction', { tableId: ATTR_J }, 8, base, `J d=${d}`);
+  vEdge(myFace_d, 'value', j_d, 'labelA');
+  vEdge(farLabel, 'result', j_d, 'labelB');
+
+  const isAdjEmpty = node('statement', { operation: '==' }, 8, base + 1, `adj == empty?`);
+  vEdge(kind_d, 'value', isAdjEmpty, 'x');
+  vEdge(tagEmpty, 'value', isAdjEmpty, 'y');
+
+  const wt_d = node('valueSwitch', { _port_elseValue: '0' }, 9, base, `weight d=${d}`);
+  vEdge(isAdjEmpty, 'result', wt_d, 'condition');
+  vEdge(j_d, 'value', wt_d, 'ifValue');
+
+  pb.push(pb_d);
+  wt.push(wt_d);
+  adjE.push(isAdjEmpty);
 }
 
-const energySum = node('aggregate', { operation: 'sum' }, 5, 4);
-energySum.data.label = 'Total encounter energy';
-for (const li of energyNodes) vEdge(li, 'value', energySum, 'values');
+// --- Aggregations: P_break (product) + sumW (sum) -------------------------
+const pBreakAgg = node('aggregate', { operation: 'product' }, 10, 14, 'P_break (Π pb_d)');
+pb.forEach(p => vEdge(p, 'value', pBreakAgg, 'values'));
 
-// --- gate 2: rotate only if total energy is below the threshold --------------
-const threshold = node('getModelAttribute', {
-  attributeId: ATTR_THRESHOLD, isColorAttr: false,
-}, 5, 6);
-const isUnhappy = node('statement', { operation: '<' }, 6, 5);
-isUnhappy.data.label = 'Unhappy?';
-vEdge(energySum, 'result', isUnhappy, 'x');
-vEdge(threshold, 'value', isUnhappy, 'y');
+const sumWAgg = node('aggregate', { operation: 'sum' }, 10, 16, 'sumW (Σ wt_d)');
+wt.forEach(w => vEdge(w, 'value', sumWAgg, 'values'));
 
-const condUnhappy = node('conditional', {}, 7, 5);
-fEdge(condAmphi, 'then', condUnhappy, 'check');
-vEdge(isUnhappy, 'value', condUnhappy, 'condition');
+// --- Rotation values (computed early so the move sequence can use them) ---
+// See the rotation pass below for the algorithmic explanation. We compute
+// `rotatedOri` here (a VALUE node, no flow yet) so writePushOri can push the
+// post-rotation orientation to the destination — otherwise a free amphi that
+// moves and rotates in the same step loses its rotation effect (the move
+// clears the source, the rotation pass writes to that now-empty cell, and the
+// destination cell keeps the pre-rotation orientation, making rotation
+// invisible to the user).
+const isSelfAmphi = node('statement', { operation: '==' }, 10, 18, 'My kind == amphi?');
+vEdge(kindRead, 'value', isSelfAmphi, 'x');
+vEdge(tagAmphi, 'value', isSelfAmphi, 'y');
 
-// --- new orientation = (current + random 1..3) mod 4 ------------------------
-// One random step in [1, 3] guarantees we move (never stay put on an unhappy
-// state). `mod()` keeps the result in [0, 3] without bitwise ops (Expression
-// node has no `&`); WASM / WebGPU `setOrientation` masks again with `& 3` as
-// a defensive narrowing.
-const randomStep = node('getRandom', {
+const isAllEmpty = node('aggregate', { operation: 'and' }, 10, 19, 'all 4 cardinals empty?');
+adjE.forEach(e => vEdge(e, 'result', isAllEmpty, 'values'));
+
+const rotGateAnd = node('aggregate', { operation: 'and' }, 10, 20, 'amphi AND free?');
+vEdge(isSelfAmphi, 'result', rotGateAnd, 'values');
+vEdge(isAllEmpty, 'result', rotGateAnd, 'values');
+
+const rotStepRand = node('getRandom', {
   randomType: 'integer', min: '1', max: '3',
-}, 5, 8);
-randomStep.data.label = 'Random rotation step (1..3)';
+}, 10, 21, 'Rotation step 1..3');
 
-const newOri = exprNode(
-  'mod(ori + step, 4)',
-  ['ori', 'step'],
-  8, 5,
-  'New orientation',
-);
-vEdge(oriRead,    'value', newOri, 'a');
-vEdge(randomStep, 'value', newOri, 'b');
+const newOri = exprNode('mod(ori + step, 4)', ['ori', 'step'], 10, 22, 'newOri');
+vEdge(oriRead, 'value', newOri, 'a');
+vEdge(rotStepRand, 'value', newOri, 'b');
 
-const setOri = node('setOrientation', {}, 9, 5);
-fEdge(condUnhappy, 'then', setOri, 'do');
-vEdge(newOri, 'result', setOri, 'value');
+const rotatedOri = node('valueSwitch', {}, 10, 23, 'rotatedOri = gate ? new : ori');
+vEdge(rotGateAnd, 'result', rotatedOri, 'condition');
+vEdge(newOri, 'result', rotatedOri, 'ifValue');
+vEdge(oriRead, 'value', rotatedOri, 'elseValue');
+
+// --- Conditional chain: only-occupied + Bernoulli(P_break) + sumW > 0 -----
+const isSelfOccupied = node('statement', { operation: '!=' }, 2, 1, 'My cell occupied?');
+vEdge(kindRead, 'value', isSelfOccupied, 'x');
+vEdge(tagEmpty, 'value', isSelfOccupied, 'y');
+
+const condOccupied = node('conditional', {}, 3, 0, 'If occupied');
+fEdge(stepNode, 'do', condOccupied, 'check');
+vEdge(isSelfOccupied, 'result', condOccupied, 'condition');
+
+const rollBreak = node('getRandom', { randomType: 'bool' }, 11, 14, 'Bernoulli(P_break)');
+vEdge(pBreakAgg, 'result', rollBreak, 'probability');
+
+const condBreak = node('conditional', {}, 4, 0, 'If break free');
+fEdge(condOccupied, 'then', condBreak, 'check');
+vEdge(rollBreak, 'value', condBreak, 'condition');
+
+const sumPos = node('statement', { operation: '>' }, 11, 16, 'sumW > 0?');
+vEdge(sumWAgg, 'result', sumPos, 'x');
+// _port_y defaults to '0' via Statement's inline widget — no need to set.
+
+const condCanMove = node('conditional', {}, 5, 0, 'If has empty dir');
+fEdge(condBreak, 'then', condCanMove, 'check');
+vEdge(sumPos, 'result', condCanMove, 'condition');
+
+// --- Direction sampling via cumulative-sum --------------------------------
+// u = r * sumW ; thresholds t1 = wt[0], t2 = wt[0]+wt[1], t3 = wt[0..2];
+// pick d via nested ValueSwitches: u<wt[0]→0, else u<t2→1, else u<t3→2, else 3.
+const randFloat = node('getRandom', { randomType: 'float', min: '0', max: '1' }, 11, 18, 'rand [0,1)');
+const u = exprNode('rand * sumW', ['rand', 'sumW'], 12, 18, 'u = rand·sumW');
+vEdge(randFloat, 'value', u, 'a');
+vEdge(sumWAgg, 'result', u, 'b');
+
+const t2 = exprNode('w0 + w1', ['w0', 'w1'], 12, 20, 't2 = w0+w1');
+vEdge(wt[0], 'result', t2, 'a');
+vEdge(wt[1], 'result', t2, 'b');
+
+const t3 = exprNode('w0 + w1 + w2', ['w0', 'w1', 'w2'], 12, 22, 't3 = w0+w1+w2');
+vEdge(wt[0], 'result', t3, 'a');
+vEdge(wt[1], 'result', t3, 'b');
+vEdge(wt[2], 'result', t3, 'c');
+
+const lt0 = node('statement', { operation: '<' }, 13, 18, 'u < w0?');
+vEdge(u, 'result', lt0, 'x');
+vEdge(wt[0], 'result', lt0, 'y');
+
+const lt1 = node('statement', { operation: '<' }, 13, 20, 'u < t2?');
+vEdge(u, 'result', lt1, 'x');
+vEdge(t2, 'result', lt1, 'y');
+
+const lt2 = node('statement', { operation: '<' }, 13, 22, 'u < t3?');
+vEdge(u, 'result', lt2, 'x');
+vEdge(t3, 'result', lt2, 'y');
+
+// Nested ValueSwitches:  d = lt0 ? 0 : (lt1 ? 1 : (lt2 ? 2 : 3))
+const vs2 = node('valueSwitch', {
+  _port_ifValue: '2', _port_elseValue: '3',
+}, 14, 22, 'd: 2 else 3');
+vEdge(lt2, 'result', vs2, 'condition');
+
+const vs1 = node('valueSwitch', { _port_ifValue: '1' }, 14, 20, 'd: 1 else vs2');
+vEdge(lt1, 'result', vs1, 'condition');
+vEdge(vs2, 'result', vs1, 'elseValue');
+
+const vs0 = node('valueSwitch', { _port_ifValue: '0' }, 14, 18, 'd*');
+vEdge(lt0, 'result', vs0, 'condition');
+vEdge(vs1, 'result', vs0, 'elseValue');
+
+// chosenNI = niArr[d*]
+const chosenNI = node('arrayElement', {}, 15, 18, 'NI of chosen dir');
+vEdge(niArr, 'indexes', chosenNI, 'array');
+vEdge(vs0, 'result', chosenNI, 'position');
+
+// --- Move sequence: push self → chosenNI, clear self ----------------------
+// Reads of kindRead / oriRead at the top of the cell are evaluated into JS
+// `const` locals BEFORE any flow write fires, so the writes see the pre-move
+// snapshot — atomicity is intrinsic to the SSA discipline.
+const seqMove = node('sequence', { extraCount: 2 }, 6, 0, 'Move sequence');
+fEdge(condCanMove, 'then', seqMove, 'do');
+
+const writePushKind = node('setNeighborAttributeByIndex', {
+  attributeId: ATTR_KIND, _port_value: '0',
+}, 7, 0, 'Push kind → NI');
+vEdge(chosenNI, 'value', writePushKind, 'index');
+vEdge(kindRead, 'value', writePushKind, 'value');
+fEdge(seqMove, 'first', writePushKind, 'do');
+
+const writePushOri = node('setNeighborOrientationByIndex', {
+  _port_value: '0',
+}, 7, 1, 'Push ori → NI');
+vEdge(chosenNI, 'value', writePushOri, 'index');
+// rotatedOri (NOT oriRead): so a free amphi that rotates AND moves the same
+// step carries its rotation effect to the destination instead of losing it to
+// the source cell that's about to be cleared. For non-free or non-amphi cells
+// rotGateAnd is false, ValueSwitch returns oriRead, behaviour unchanged.
+vEdge(rotatedOri, 'result', writePushOri, 'value');
+fEdge(seqMove, 'then', writePushOri, 'do');
+
+const writeClearKind = node('setAttribute', {
+  attributeId: ATTR_KIND, _port_value: String(KIND_OPTIONS.indexOf('empty')),
+}, 7, 2, 'My kind ← empty');
+fEdge(seqMove, 'then_2', writeClearKind, 'do');
+
+const writeClearOri = node('setOrientation', {
+  _port_value: '0',
+}, 7, 3, 'My ori ← 0');
+fEdge(seqMove, 'then_3', writeClearOri, 'do');
 
 // =============================================================================
-// D. INIT EVENT GRAPH — runs once per cell on Reset. With probability
-// `density`, mark the cell as amphiphile. Either way, assign a random
-// initial orientation in 0..3 so amphiphiles don't all start aligned.
+// ROTATION PASS — book §2.3.9
 // =============================================================================
+// "Free cells rotate during every iteration" — gate fires only for amphi cells
+// whose 4 cardinals are all empty. Defensive against the corner case where a
+// free amphi doesn't move (impossible under strict book parameters since
+// P_break=1 and sumW=4 for free amphi, but the gate stays here so the
+// rotation rule is correctly applied regardless of move). The actual rotation
+// effect on a moving free amphi is carried via `rotatedOri` consumed by the
+// move sequence above; this pass only matters if the move didn't fire.
+const rotRow = 26;
 
-const initNode = node('initEvent', {}, 0, 14);
+const condRotate = node('conditional', {}, 5, rotRow, 'If amphi+free');
+fEdge(stepNode, 'do', condRotate, 'check');
+vEdge(rotGateAnd, 'result', condRotate, 'condition');
 
-// Branch A: maybe become amphiphile
-const densityAttr = node('getModelAttribute', {
-  attributeId: ATTR_DENSITY, isColorAttr: false,
-}, 1, 13);
-const isSeed = node('getRandom', { randomType: 'bool' }, 2, 13);
-isSeed.data.label = 'Seed amphi here?';
-vEdge(densityAttr, 'value', isSeed, 'probability');
+const setRotOri = node('setOrientation', { _port_value: '0' }, 9, rotRow, 'Apply rotation');
+fEdge(condRotate, 'then', setRotOri, 'do');
+vEdge(rotatedOri, 'result', setRotOri, 'value');
 
-const condSeed = node('conditional', {}, 3, 13);
-fEdge(initNode, 'do', condSeed, 'check');
-vEdge(isSeed, 'value', condSeed, 'condition');
+// =============================================================================
+// INIT EVENT — per cell, on Reset
+// =============================================================================
+// Draw uniform [0, 1]: < densAmphi → amphi (with random orientation), else
+// < densAmphi + densWater → water, else empty.
+const initRow = 36;
+const initNode = node('initEvent', {}, 0, initRow);
 
-const setKindAmphi = node('setAttribute', {
-  attributeId: ATTR_KIND,
-  _port_value: String(TAG_AMPHI),
-}, 4, 13);
-fEdge(condSeed, 'then', setKindAmphi, 'do');
+const densAmphiAttr = node('getModelAttribute', {
+  attributeId: ATTR_DENS_AMPHI, isColorAttr: false,
+}, 1, initRow, 'densAmphi');
+const densWaterAttr = node('getModelAttribute', {
+  attributeId: ATTR_DENS_WATER, isColorAttr: false,
+}, 1, initRow + 1, 'densWater');
 
-// Branch B: always assign a random initial orientation
-const randomOri = node('getRandom', {
-  randomType: 'integer', min: '0', max: '3',
-}, 1, 16);
-randomOri.data.label = 'Random initial orientation';
-const setOriInit = node('setOrientation', {}, 2, 16);
+const seedRandU = node('getRandom', { randomType: 'float', min: '0', max: '1' }, 2, initRow, 'rand [0,1)');
+
+const isAmphiSeed = node('statement', { operation: '<' }, 3, initRow, 'r < densAmphi?');
+vEdge(seedRandU, 'value', isAmphiSeed, 'x');
+vEdge(densAmphiAttr, 'value', isAmphiSeed, 'y');
+
+const condAmphiSeed = node('conditional', {}, 4, initRow, 'If amphi');
+fEdge(initNode, 'do', condAmphiSeed, 'check');
+vEdge(isAmphiSeed, 'result', condAmphiSeed, 'condition');
+
+const setKindAmphiInit = node('setAttribute', {
+  attributeId: ATTR_KIND, _port_value: String(KIND_OPTIONS.indexOf('amphi')),
+}, 5, initRow, 'Kind ← amphi');
+fEdge(condAmphiSeed, 'then', setKindAmphiInit, 'do');
+
+const amphiPlusWater = exprNode('a + b', ['a', 'b'], 3, initRow + 2, 'densAmphi+densWater');
+vEdge(densAmphiAttr, 'value', amphiPlusWater, 'a');
+vEdge(densWaterAttr, 'value', amphiPlusWater, 'b');
+
+const isWaterSeed = node('statement', { operation: '<' }, 4, initRow + 2, 'r < total?');
+vEdge(seedRandU, 'value', isWaterSeed, 'x');
+vEdge(amphiPlusWater, 'result', isWaterSeed, 'y');
+
+const condWaterSeed = node('conditional', {}, 5, initRow + 2, 'If water');
+fEdge(condAmphiSeed, 'else', condWaterSeed, 'check');
+vEdge(isWaterSeed, 'result', condWaterSeed, 'condition');
+
+const setKindWaterInit = node('setAttribute', {
+  attributeId: ATTR_KIND, _port_value: String(KIND_OPTIONS.indexOf('water')),
+}, 6, initRow + 2, 'Kind ← water');
+fEdge(condWaterSeed, 'then', setKindWaterInit, 'do');
+
+const randomOriInit = node('getRandom', { randomType: 'orientation' }, 1, initRow + 4, 'Random init ori');
+const setOriInit = node('setOrientation', { _port_value: '0' }, 2, initRow + 4, 'Apply init ori');
 fEdge(initNode, 'do', setOriInit, 'do');
-vEdge(randomOri, 'value', setOriInit, 'value');
+vEdge(randomOriInit, 'value', setOriInit, 'value');
 
 // =============================================================================
-// E. SEED INPUT-MAPPING GRAPH — painting writes kind = amphiphile +
-// a fresh random orientation. The painted RGB is ignored.
+// INPUT MAPPING — paint amphi at cursor
 // =============================================================================
-
-const seedInput = node('inputColor', { mappingId: MAPPING_SEED }, 0, 21);
-const seedKind  = node('setAttribute', {
-  attributeId: ATTR_KIND,
-  _port_value: String(TAG_AMPHI),
-}, 1, 21);
+const seedRow = 44;
+const seedInput = node('inputColor', { mappingId: MAPPING_SEED }, 0, seedRow);
+const seedKind = node('setAttribute', {
+  attributeId: ATTR_KIND, _port_value: String(KIND_OPTIONS.indexOf('amphi')),
+}, 1, seedRow, 'Brush ← amphi');
 fEdge(seedInput, 'do', seedKind, 'do');
 
-const seedRand = node('getRandom', {
-  randomType: 'integer', min: '0', max: '3',
-}, 1, 23);
-const seedOri  = node('setOrientation', {}, 2, 23);
+const seedRand = node('getRandom', { randomType: 'orientation' }, 1, seedRow + 2, 'Brush random ori');
+const seedOri = node('setOrientation', { _port_value: '0' }, 2, seedRow + 2, 'Brush apply ori');
 fEdge(seedInput, 'do', seedOri, 'do');
 vEdge(seedRand, 'value', seedOri, 'value');
 
 // =============================================================================
-// F. VISUALIZATION OUTPUT-MAPPING GRAPH — colour each cell by species +
-// orientation. Water cells are dark grey; amphiphile cells get a smooth
-// 4-position rainbow band that highlights which way the head is pointing.
-//
-// The colour math is `kind * amphiCh + (1 - kind) * waterCh` (no ternary
-// because Expression has none, but kind is 0/1 so this trick works). The
-// per-channel amphi tint is built from `255 - 80 * abs(ori - peakSlot)`,
-// where peakSlot picks which orientation that channel peaks at. That gives
-// a peaked, smoothly-falling triangle wave with rgb peaks staggered so the
-// four orientations land on distinct hues.
+// OUTPUT MAPPING — viz
 // =============================================================================
+// Tag-mode switch on kind for empty/water/amphi; amphi case fans out to an
+// integer-mode switch on orientation (orientations are 0..3, not tag-named).
+const vizRow = 50;
+const vizOutput = node('outputMapping', { mappingId: MAPPING_VIZ }, 0, vizRow);
+const vizKind = node('getCellAttribute', { attributeId: ATTR_KIND }, 0, vizRow + 1);
+const vizOri = node('getOrientation', {}, 0, vizRow + 2);
 
-const vizOutput   = node('outputMapping', { mappingId: MAPPING_VIZ }, 0, 28);
-const vizKind     = node('getCellAttribute', { attributeId: ATTR_KIND }, 0, 30);
-const vizOri      = node('getOrientation', {}, 0, 31);
+const kindSwitch = node('switch', {
+  mode: 'value',
+  firstMatchOnly: true,
+  caseCount: 3,
+  valueType: 'tag',
+  tagAttributeId: ATTR_KIND,
+  case_0_value: String(KIND_OPTIONS.indexOf('empty')),
+  case_1_value: String(KIND_OPTIONS.indexOf('water')),
+  case_2_value: String(KIND_OPTIONS.indexOf('amphi')),
+}, 2, vizRow, 'Switch on kind');
+fEdge(vizOutput, 'do', kindSwitch, 'check');
+vEdge(vizKind, 'value', kindSwitch, 'value');
 
-const channelR = exprNode(
-  'kind * max(0, 255 - 80 * abs(ori - 0)) + (1 - kind) * 40',
-  ['kind', 'ori'], 1, 29, 'Red channel',
-);
-const channelG = exprNode(
-  'kind * max(0, 255 - 80 * abs(ori - 2)) + (1 - kind) * 40',
-  ['kind', 'ori'], 1, 30, 'Green channel',
-);
-const channelB = exprNode(
-  'kind * max(0, 255 - 80 * abs(ori - 3)) + (1 - kind) * 40',
-  ['kind', 'ori'], 1, 31, 'Blue channel',
-);
-for (const ch of [channelR, channelG, channelB]) {
-  vEdge(vizKind, 'value', ch, 'a');
-  vEdge(vizOri,  'value', ch, 'b');
-}
+const emptyColor = node('setColorViewer', {
+  mappingId: MAPPING_VIZ,
+  _port_r: '15', _port_g: '15', _port_b: '25',
+}, 4, vizRow, 'Empty (near-black)');
+fEdge(kindSwitch, 'case_0', emptyColor, 'do');
 
-const setColor = node('setColorViewer', { mappingId: MAPPING_VIZ }, 3, 30);
-fEdge(vizOutput, 'do', setColor, 'do');
-vEdge(channelR, 'result', setColor, 'r');
-vEdge(channelG, 'result', setColor, 'g');
-vEdge(channelB, 'result', setColor, 'b');
+const waterColor = node('setColorViewer', {
+  mappingId: MAPPING_VIZ,
+  _port_r: '40', _port_g: '90', _port_b: '180',
+}, 4, vizRow + 1, 'Water (blue)');
+fEdge(kindSwitch, 'case_1', waterColor, 'do');
+
+const oriSwitch = node('switch', {
+  mode: 'value',
+  firstMatchOnly: true,
+  caseCount: 4,
+  valueType: 'integer',
+  case_0_op: '==', _port_case_0_val: '0',
+  case_1_op: '==', _port_case_1_val: '1',
+  case_2_op: '==', _port_case_2_val: '2',
+  case_3_op: '==', _port_case_3_val: '3',
+}, 4, vizRow + 2, 'Switch on orientation');
+fEdge(kindSwitch, 'case_2', oriSwitch, 'check');
+vEdge(vizOri, 'value', oriSwitch, 'value');
+
+const oriColors = [
+  { label: 'Head E → red',    r: '230', g: '60',  b: '60'  },
+  { label: 'Head S → orange', r: '240', g: '160', b: '40'  },
+  { label: 'Head W → green',  r: '60',  g: '200', b: '90'  },
+  { label: 'Head N → cyan',   r: '60',  g: '200', b: '220' },
+];
+oriColors.forEach((c, i) => {
+  const cv = node('setColorViewer', {
+    mappingId: MAPPING_VIZ,
+    _port_r: c.r, _port_g: c.g, _port_b: c.b,
+  }, 6, vizRow + 2 + i, c.label);
+  fEdge(oriSwitch, `case_${i}`, cv, 'do');
+});
 
 // =============================================================================
-// B. NON-GRAPH MODEL PARTS
+// MODEL DEFINITION (non-graph parts)
 // =============================================================================
-
 const properties = {
-  name: 'Amphiphile (Variegated Cells demo)',
+  name: 'Amphiphile micelle formation (Kier book Example 5.3)',
   author: 'GenesisCA',
   modelAuthor: 'Rodrigo F. Figueiredo',
   description:
-    'A chemistry-CA demo of the Variegated Cells feature. Two species: water ' +
-    '(no face pattern) and amphiphile (Head face pointing N, Tail face S). ' +
-    'Each amphiphile carries an orientation (0/90/180/270°). Per-step rule: ' +
-    'sum the four neighbour-encounter energies via the Interaction Table; if ' +
-    'below the threshold, rotate by a random 1..3 step. Over time the ' +
-    'amphiphiles self-organise — heads face water, tails cluster — the same ' +
-    'logic that drives micelle/bilayer formation in real surfactant chemistry. ' +
-    "Reset to randomise from scratch. Paint with the 'Seed' brush to add " +
-    'amphiphiles at the cursor.',
+    'Faithful implementation of Kier, Seybold & Cheng (2005), "Modeling ' +
+    'Chemical Systems Using Cellular Automata", Example 5.3 (pp. 85-86). ' +
+    'A 3-species CA (empty / water / amphi) on a 40×40 torus, with amphis ' +
+    'carrying an X-X-X-Y face pattern (3 hydrophobic body + 1 hydrophilic ' +
+    'head). Per step, every non-empty cell picks one of its 4 cardinal ' +
+    'directions weighted by the joining probability J toward the far cell ' +
+    '2 steps ahead, gated by the bond-break probability P_B = Π P_B(myFace, ' +
+    'theirFace) over all bordering ingredients. The cell moves INTO the ' +
+    'chosen empty direction (book §2.3.4) — leaving exactly one empty cell ' +
+    'at the source, so cell counts and the empty distribution stay uniform. ' +
+    '"Free" amphis (all 4 cardinals empty) additionally rotate by a uniform ' +
+    'random 1..3 step every iteration (book §2.3.9). Over a few hundred ' +
+    'generations, tails (X) cluster together (P_B(X,X)=0.20) while heads ' +
+    '(Y) seek water (P_B(Y,water)=0.20) and J(Y,water)=2.0) — the classic ' +
+    'surfactant micelle signature. Paint with the "Seed" brush to add ' +
+    'amphis at the cursor.',
   topology: '2d-grid',
   boundaryTreatment: 'torus',
-  updateMode: 'synchronous',
+  updateMode: 'asynchronous',
   asyncScheme: 'random-order',
-  gridWidth: 120,
-  gridHeight: 120,
+  gridWidth: 40,
+  gridHeight: 40,
   maxIterations: 100000,
-  tags: ['variegated cells', 'chemistry', 'self-organization', 'amphiphile', 'surfactant', 'micelle'],
-  useWasm: true,
+  tags: ['variegated cells', 'chemistry', 'self-organization', 'amphiphile', 'surfactant', 'micelle', 'movement', 'kier'],
+  // JS target verified end-to-end: cell counts conserved, amphi cluster index
+  // ~4× random baseline at gen 500, free amphis observably rotate (17/19 free
+  // amphis verified rotating in a 1-step instrumented test). WASM target has
+  // a latent emit bug: `step` writes occasional NI values into the kind buffer
+  // (~1 cell per step). The wiring (chosenNI→index, kindRead→value) and the
+  // edge handles in the generated JSON are correct; the JS compile target is
+  // unaffected; the bug is somewhere in WASM's value-input resolution or local
+  // caching for setNeighborAttributeByIndex with this specific graph shape
+  // (124 nodes, 2 neighborhoods, 5 model attrs incl. interaction tables, deep
+  // nested ValueSwitch chains). Default to JS until diagnosed.
+  useWasm: false,
   useWebGPU: false,
 };
 
 const attributes = [
-  // --- cell attributes ---
-  { id: ATTR_KIND, name: 'Kind', type: 'tag',
-    description: 'Cell species. Water has no face pattern (all faces are the implicit "none" label). Amphiphile carries the H/T face pattern + the orientation.',
-    isModelAttribute: false, defaultValue: String(TAG_WATER),
-    tagOptions: ['water', 'amphiphile'],
-    // Variegation source assignment — amphiphile tag → pat_amphi face pattern.
-    facePatternAssignments: { 'amphiphile': PAT_AMPHI },
+  {
+    id: ATTR_KIND, name: 'Kind', type: 'tag',
+    description:
+      'Cell species. Empty cells are unoccupied vacancies (face: none). ' +
+      'Water cells are the bulk solvent (face: water on all sides). Amphi ' +
+      'cells carry the X-X-X-Y face pattern + orientation.',
+    isModelAttribute: false, defaultValue: String(KIND_OPTIONS.indexOf('empty')),
+    tagOptions: KIND_OPTIONS,
+    facePatternAssignments: { water: PAT_WATER, amphi: PAT_AMPHI },
   },
-  // --- model attributes (knobs) ---
-  { id: ATTR_THRESHOLD, name: 'Energy threshold', type: 'float',
-    description: 'Cells with summed encounter energy STRICTLY below this rotate by a random 1..3 step. Higher = more churn (cells reach pickier "happy" states); lower = settle faster.',
-    isModelAttribute: true, defaultValue: '0.5', hasBounds: true, min: -4, max: 4 },
-  { id: ATTR_DENSITY, name: 'Initial amphi density', type: 'float',
-    description: 'Probability that each cell starts as amphiphile on Reset. 0 = all water (paint your own); 1 = no water left.',
-    isModelAttribute: true, defaultValue: '0.2', hasBounds: true, min: 0, max: 1 },
-  { id: ATTR_INTERACTION, name: 'Interaction Table', type: 'interactionTable',
-    description: 'Per-pair encounter energies between face labels (none/H/T). Head likes water, Tail clumps with Tail, Head-Head repels — classic surfactant. Live-edit during simulation to see the dynamics shift.',
+  {
+    id: ATTR_DENS_AMPHI, name: 'Initial amphi density', type: 'float',
+    description:
+      'Fraction of cells seeded as amphi on Reset. Book default 0.0625 ' +
+      '(= 100/1600).',
+    isModelAttribute: true, defaultValue: '0.0625', hasBounds: true, min: 0, max: 1,
+  },
+  {
+    id: ATTR_DENS_WATER, name: 'Initial water density', type: 'float',
+    description:
+      'Fraction of cells seeded as water on Reset (book default 0.625 = ' +
+      '1000/1600). The remainder are empty (~31% at the book defaults — the ' +
+      'empties are the vacancies that amphis migrate into).',
+    isModelAttribute: true, defaultValue: '0.625', hasBounds: true, min: 0, max: 1,
+  },
+  {
+    id: ATTR_PB, name: 'P_B (bond-break, adjacent)', type: 'interactionTable',
+    description:
+      'Probability of breaking the bond between two adjacent cells (= the ' +
+      'cell becoming able to move away from this neighbour). LOW = stable ' +
+      '(stays together), HIGH = easily separates. Book Example 5.3 values ' +
+      '(page 86): WW 0.25, XX 0.20, YY 0.50, XY 0.50, WX 0.80, WY 0.20. The ' +
+      '`none` row/column is 1.0 (no bond to break — book §2.3.6).',
     isModelAttribute: true, defaultValue: '0',
     symmetric: true,
     tableValues: {
-      'none': { 'none': 0,    'H':  1.0,  'T': -0.5 },
-      'H':    { 'none': 1.0,  'H': -0.5,  'T':  0   },
-      'T':    { 'none': -0.5, 'H':  0,    'T':  1.0 },
+      'none':  { 'none': 1,    'X': 1,    'Y': 1,    'water': 1    },
+      'X':     { 'none': 1,    'X': 0.20, 'Y': 0.50, 'water': 0.80 },
+      'Y':     { 'none': 1,    'X': 0.50, 'Y': 0.50, 'water': 0.20 },
+      'water': { 'none': 1,    'X': 0.80, 'Y': 0.20, 'water': 0.25 },
+    },
+  },
+  {
+    id: ATTR_J, name: 'J (joining, toward far)', type: 'interactionTable',
+    description:
+      'Directional preference: J(A, B) is the relative probability that A ' +
+      'will move TOWARD a face B sitting two cells ahead in that direction. ' +
+      'J = 1 is neutral (book §2.3.5); J > 1 attracts, J < 1 repels. Book ' +
+      'Example 5.3 values (page 86): WW 1.70, XX 2.00, YY 0.70, XY 0.70, ' +
+      'WX 0.25, WY 2.00. The `none` row/column is 1.0 (no preference toward ' +
+      'or away from an absent ingredient — book §2.3.5 verbatim).',
+    isModelAttribute: true, defaultValue: '0',
+    symmetric: true,
+    tableValues: {
+      'none':  { 'none': 1,    'X': 1,    'Y': 1,    'water': 1    },
+      'X':     { 'none': 1,    'X': 2.00, 'Y': 0.70, 'water': 0.25 },
+      'Y':     { 'none': 1,    'X': 0.70, 'Y': 0.70, 'water': 2.00 },
+      'water': { 'none': 1,    'X': 0.25, 'Y': 2.00, 'water': 1.70 },
     },
   },
 ];
 
 const neighborhoods = [
-  { id: NBR4, name: '4-Cardinal (N, S, W, E)',
-    description: 'The 4 edge-adjacent neighbours. Tags on each slot drive the directional face-label resolution — N at slot 0 anchors the rotation math.',
-    // Coords match the SLOT_LABEL array in section C: ['N','S','W','E'].
-    coords: [[-1, 0], [1, 0], [0, -1], [0, 1]],
-    tags: { 0: 'N', 1: 'S', 2: 'W', 3: 'E' },
-    margin: 1 },
+  {
+    id: NBR_VN, name: 'Von Neumann (N/E/S/W)',
+    description:
+      '4 cardinal direct neighbours, ordered N → E → S → W to match the ' +
+      'cardinal slots of Get All Facing Labels (slot = direction × 2).',
+    coords: [[-1, 0], [0, 1], [1, 0], [0, -1]],
+    tags: { 0: 'N', 1: 'E', 2: 'S', 3: 'W' },
+  },
+  {
+    id: NBR_VN2, name: 'Von Neumann ×2 (far N/E/S/W)',
+    description:
+      '4 cardinal far-neighbours (2 cells away), same N/E/S/W ordering as ' +
+      'vN. Used by the J(myFace, farFace) joining-probability lookup.',
+    coords: [[-2, 0], [0, 2], [2, 0], [0, -2]],
+    tags: { 0: 'N', 1: 'E', 2: 'S', 3: 'W' },
+  },
 ];
 
 const mappings = [
-  { id: MAPPING_SEED, name: 'Seed', isAttributeToColor: false,
-    description: 'Paint to drop amphiphile molecules at the cursor (with random initial orientation). Painted colour is ignored.',
-    redDescription: 'Ignored', greenDescription: 'Ignored', blueDescription: 'Ignored' },
-  { id: MAPPING_VIZ, name: 'Species + Orientation', isAttributeToColor: true,
-    description: 'Water cells render dark grey. Amphiphiles take a 4-position rainbow band (red→olive→mint→sky-blue) showing which way the head is pointing.',
-    redDescription: 'Amphi (R peaks at orientation 0, head→N)',
-    greenDescription: 'Amphi (G peaks at orientation 2, head→S)',
-    blueDescription: 'Amphi (B peaks at orientation 3, head→W)' },
+  {
+    id: MAPPING_SEED, name: 'Seed amphi', isAttributeToColor: false,
+    description: 'Paint to drop amphi molecules at the cursor (with random initial orientation). Painted colour is ignored.',
+    redDescription: 'Ignored', greenDescription: 'Ignored', blueDescription: 'Ignored',
+  },
+  {
+    id: MAPPING_VIZ, name: 'Species + Orientation', isAttributeToColor: true,
+    description: 'Empty cells render near-black, water cells blue, amphi cells in a 4-colour palette by head direction (E→red, S→orange, W→green, N→cyan).',
+    redDescription: 'empty=15, water=40, amphi by orientation',
+    greenDescription: 'empty=15, water=90, amphi by orientation',
+    blueDescription: 'empty=25, water=180, amphi by orientation',
+  },
 ];
 
 const variegatedCells = {
   enabled: true,
   sourceAttributeId: ATTR_KIND,
-  faceLabels: ['H', 'T'],
+  faceLabels: FACE_LABELS,
   facePatterns: [
     {
-      id: PAT_AMPHI,
-      name: 'Amphiphile',
+      id: PAT_WATER, name: 'Water (all-water)',
       layoutMode: 'edges',
-      // Face slots: [N, NE, E, SE, S, SW, W, NW]. H at N, T at S, the other
-      // 6 slots are 'none' so HE/HW/TE/TW encounters resolve to neutral.
-      faces: ['H', null, null, null, 'T', null, null, null],
+      faces: ['water', null, 'water', null, 'water', null, 'water', null],
+    },
+    {
+      id: PAT_AMPHI, name: 'Amphiphile (X-X-X-Y)',
+      layoutMode: 'edges',
+      faces: ['X', null, 'Y', null, 'X', null, 'X', null],
     },
   ],
 };
 
 // =============================================================================
-// PRESETS — interaction-table variations + density / threshold pairings.
-// Each preset captures the full set of knobs that produce a qualitatively
-// different regime. Switch between them in the simulator's Presets dropdown.
+// PRESETS — Book Example 5.3 + the 8 parameter sets from Kier 1996 Table I
 // =============================================================================
-const createdAt = Date.now();
-function preset(name, description, modelAttrs, interactions) {
+// Mapping note: the 1996 paper labels its hydrophobic sector A_y (3 faces) and
+// hydrophilic sector A_x (1 face) — the OPPOSITE of common chemistry naming.
+// I keep the conventional labels: X = hydrophobic tail (3 faces), Y =
+// hydrophilic head (1 face). So paper's `A_y` → my `X`, paper's `A_x` → my `Y`.
+//
+// Paper Table I varies six values per set: P_B and J for {X-X, W-Y, Y-Y}.
+// Paper footnote (a) fixes six others: P_B(W-W)=0.25, J(W-W)=1.0,
+// P_B(W-X)=0.9, J(W-X)=0.25, P_B(X-Y)=0.9, J(X-Y)=0.25.
+// The book's Example 5.3 uses different fixed values (notably J(W-W)=1.70 and
+// less-extreme W-X / X-Y break/joining values) — included as its own preset
+// so users can directly compare "book defaults" against the paper's optimal
+// set (Set 1 has the largest reported S_y = 3.7).
+//
+// Stored as ids ⊂ rowLabels ⊂ colLabels → float. The `none` row/column is
+// pre-populated with 1.0 (book §2.3.5 + §2.3.6 — neutral defaults for the
+// implicit empty-face label).
+function buildAmphiphileTables(p) {
   return {
-    id: newId('preset'),
-    name,
-    description,
-    state: {
-      schemaVersion: 2,
-      modelAttrs,
-      interactionTables: { [ATTR_INTERACTION]: interactions },
+    [ATTR_PB]: {
+      'none':  { 'none': 1, 'X': 1,      'Y': 1,      'water': 1      },
+      'X':     { 'none': 1, 'X': p.pbXX, 'Y': p.pbXY, 'water': p.pbWX },
+      'Y':     { 'none': 1, 'X': p.pbXY, 'Y': p.pbYY, 'water': p.pbWY },
+      'water': { 'none': 1, 'X': p.pbWX, 'Y': p.pbWY, 'water': p.pbWW },
     },
-    createdAt,
+    [ATTR_J]: {
+      'none':  { 'none': 1, 'X': 1,     'Y': 1,     'water': 1     },
+      'X':     { 'none': 1, 'X': p.jXX, 'Y': p.jXY, 'water': p.jWX },
+      'Y':     { 'none': 1, 'X': p.jXY, 'Y': p.jYY, 'water': p.jWY },
+      'water': { 'none': 1, 'X': p.jWX, 'Y': p.jWY, 'water': p.jWW },
+    },
   };
 }
 
-const presets = [
-  preset(
-    'Classic surfactant',
-    'Strong H-W attraction, strong T-T attraction. Tails clump readily, heads coat the water boundary.',
-    { [ATTR_THRESHOLD]: 0.5, [ATTR_DENSITY]: 0.2 },
-    {
-      'none': { 'none': 0,    'H':  1.0,  'T': -0.5 },
-      'H':    { 'none': 1.0,  'H': -0.5,  'T':  0   },
-      'T':    { 'none': -0.5, 'H':  0,    'T':  1.0 },
-    },
-  ),
-  preset(
-    'Hydrophobic-dominant',
-    'Tail-tail attraction much stronger. Tail clusters form faster but the head boundary is fuzzier.',
-    { [ATTR_THRESHOLD]: 0.5, [ATTR_DENSITY]: 0.3 },
-    {
-      'none': { 'none': 0,    'H':  0.5,  'T': -1.0 },
-      'H':    { 'none': 0.5,  'H': -0.2,  'T':  0   },
-      'T':    { 'none': -1.0, 'H':  0,    'T':  2.0 },
-    },
-  ),
-  preset(
-    'Polar liquid',
-    'Heads attract heads too (H-H positive). Amphiphiles line up head-to-head as well as tail-to-tail — chain-like structures.',
-    { [ATTR_THRESHOLD]: 0.5, [ATTR_DENSITY]: 0.3 },
-    {
-      'none': { 'none': 0,    'H':  0.5,  'T': -0.5 },
-      'H':    { 'none': 0.5,  'H':  1.0,  'T': -0.5 },
-      'T':    { 'none': -0.5, 'H': -0.5,  'T':  1.0 },
-    },
-  ),
-  preset(
-    'Dense churn',
-    'High density + high threshold. Most cells are always "unhappy"; constant rotation produces a busy turbulent visual.',
-    { [ATTR_THRESHOLD]: 2.0, [ATTR_DENSITY]: 0.5 },
-    {
-      'none': { 'none': 0,    'H':  1.0,  'T': -0.5 },
-      'H':    { 'none': 1.0,  'H': -0.5,  'T':  0   },
-      'T':    { 'none': -0.5, 'H':  0,    'T':  1.0 },
-    },
-  ),
+// Paper Table I fixed values (footnote a)
+const PAPER_FIXED = {
+  pbWW: 0.25, jWW: 1.0,
+  pbWX: 0.9,  jWX: 0.25,
+  pbXY: 0.9,  jXY: 0.25,
+};
+
+const presetSpecs = [
+  {
+    name: 'Book — Example 5.3 defaults',
+    description:
+      'Kier, Seybold & Cheng (2005), Example 5.3 page 86 — the parameter ' +
+      'set the book uses for its micelle-formation demonstration. Produces ' +
+      'moderate micelles. NOT identical to any paper Table I set: notably ' +
+      'J(W-W) = 1.70 (paper uses 1.0) and J(W-Y) = 2.0 / P_B(W-Y) = 0.20 ' +
+      '(very polar head — the paper notes a *modestly* polar head gives ' +
+      'larger micelles, so this is intentionally a sub-optimal demo).',
+    pbXX: 0.20, jXX: 2.00, pbWY: 0.20, jWY: 2.00, pbYY: 0.50, jYY: 0.70,
+    pbWW: 0.25, jWW: 1.70, pbWX: 0.80, jWX: 0.25, pbXY: 0.50, jXY: 0.70,
+  },
+  {
+    name: 'Paper — Set 1 (S_y=3.7, strongest)',
+    description:
+      'Kier 1996 Table I row 1 — strongest reported micelle formation ' +
+      '(average cluster size S_y = 3.7). Very hydrophobic tail ' +
+      '(P_B(X-X)=0.1, J(X-X)=4.0) + modestly polar head (P_B(W-Y)=0.7).',
+    pbXX: 0.1, jXX: 4.0, pbWY: 0.7, jWY: 0.5, pbYY: 0.3, jYY: 1.0,
+    ...PAPER_FIXED,
+  },
+  {
+    name: 'Paper — Set 2 (S_y=3.4)',
+    description:
+      'Kier 1996 Table I row 2. Differs from Set 1 in P_B(Y-Y) (0.5 vs 0.3) ' +
+      'and J(W-Y) (0.6 vs 0.5). Y self-association reduces micelle size.',
+    pbXX: 0.1, jXX: 4.0, pbWY: 0.7, jWY: 0.6, pbYY: 0.5, jYY: 1.0,
+    ...PAPER_FIXED,
+  },
+  {
+    name: 'Paper — Set 3 (S_y=2.7)',
+    description:
+      'Kier 1996 Table I row 3. Very polar head (P_B(W-Y)=0.2) + strong ' +
+      'tail-tail (P_B(X-X)=0.1). Smaller micelles than Set 1/2 — head loves ' +
+      'water too much, so amphis prefer to disperse over forming clusters.',
+    pbXX: 0.1, jXX: 4.0, pbWY: 0.2, jWY: 1.0, pbYY: 0.6, jYY: 0.5,
+    ...PAPER_FIXED,
+  },
+  {
+    name: 'Paper — Set 4 (S_y=2.3)',
+    description:
+      'Kier 1996 Table I row 4. Same head as Set 3 (very polar, P_B(W-Y)=0.2) ' +
+      'with weaker Y-Y self-association (P_B(Y-Y)=0.3).',
+    pbXX: 0.1, jXX: 4.0, pbWY: 0.2, jWY: 1.0, pbYY: 0.3, jYY: 1.0,
+    ...PAPER_FIXED,
+  },
+  {
+    name: 'Paper — Set 5 (S_y=1.6)',
+    description:
+      'Kier 1996 Table I row 5. Weaker tail-tail bond (P_B(X-X)=0.3, ' +
+      'J(X-X)=1.0) + modestly polar head. Small micelles (~CMC threshold).',
+    pbXX: 0.3, jXX: 1.0, pbWY: 0.7, jWY: 0.5, pbYY: 0.3, jYY: 1.0,
+    ...PAPER_FIXED,
+  },
+  {
+    name: 'Paper — Set 6 (S_y=1.5)',
+    description:
+      'Kier 1996 Table I row 6. Same as Set 5 but with stronger Y-Y ' +
+      '(P_B(Y-Y)=0.6, J(Y-Y)=0.5).',
+    pbXX: 0.3, jXX: 1.0, pbWY: 0.7, jWY: 0.5, pbYY: 0.6, jYY: 0.5,
+    ...PAPER_FIXED,
+  },
+  {
+    name: 'Paper — Set 7 (S_y=1.5)',
+    description:
+      'Kier 1996 Table I row 7. Very polar head + weak tail-tail. Small ' +
+      'micelles — head-water affinity dominates.',
+    pbXX: 0.3, jXX: 1.0, pbWY: 0.2, jWY: 1.0, pbYY: 0.3, jYY: 1.0,
+    ...PAPER_FIXED,
+  },
+  {
+    name: 'Paper — Set 8 (S_y=1.5, weakest)',
+    description:
+      'Kier 1996 Table I row 8 — weakest micelles. Very polar head + weak ' +
+      'tail-tail + strong Y-Y. No incentive for amphis to cluster.',
+    pbXX: 0.3, jXX: 1.0, pbWY: 0.2, jWY: 1.0, pbYY: 0.6, jYY: 0.5,
+    ...PAPER_FIXED,
+  },
 ];
+
+// Stable, deterministic timestamps so re-running the generator doesn't churn
+// the file just because the wall clock advanced. Year/index encoded in seconds
+// since epoch — picked arbitrarily, only matters relatively (preset list is
+// sorted by createdAt in the UI).
+const PRESET_BASE_TIMESTAMP = 1747000000000;
+const presets = presetSpecs.map((spec, i) => ({
+  id: newId('preset_'),
+  name: spec.name,
+  description: spec.description,
+  state: {
+    schemaVersion: 2,
+    interactionTables: buildAmphiphileTables(spec),
+  },
+  createdAt: PRESET_BASE_TIMESTAMP + i * 1000,
+}));
 
 // =============================================================================
 // ASSEMBLE & WRITE
 // =============================================================================
-
 const model = {
   schemaVersion: 2,
   properties,
@@ -463,14 +884,13 @@ if (existsSync(OUT)) {
       model.properties.thumbnail = prev.properties.thumbnail;
       preserved += ' +thumbnail';
     }
-  } catch { /* unreadable / older format — just write a fresh file */ }
+  } catch { /* unreadable / older format — write fresh */ }
 }
 
 writeFileSync(OUT, JSON.stringify(model, null, 2) + '\n', 'utf-8');
 console.log(
   `Wrote ${OUT}\n  ${graphNodes.length} nodes, ${graphEdges.length} edges, ` +
   `${attributes.length} attributes, ${neighborhoods.length} neighborhoods, ` +
-  `${mappings.length} mappings, ${presets.length} presets, ` +
-  `${variegatedCells.facePatterns.length} face patterns, ` +
+  `${mappings.length} mappings, ${variegatedCells.facePatterns.length} face patterns, ` +
   `${variegatedCells.faceLabels.length} face labels${preserved}`,
 );

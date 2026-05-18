@@ -67,14 +67,17 @@ const NEVER_INVARIANT = new Set<string>([
   'initEvent',
   'macroInput',
   'macroOutput',
-  // Variegated Cells reads: GetOrientation / GetNeighborOrientation /
-  // GetFacingLabels all read `r_orientation[idx]` (or `r_orientation` at a
-  // neighbor cell index derived from `idx`), so they're per-cell by
-  // construction. LookupInteraction is allowed to be composite: when both
-  // label inputs are loop-invariant, the lookup hoists out of the loop.
+  // Variegated Cells reads: GetOrientation / GetFacingOrientation /
+  // GetNeighborOrientationByIndex / GetFacingLabels all read `r_orientation[idx]`
+  // (or `r_orientation` at a neighbor cell index derived from `idx`), so
+  // they're per-cell by construction. LookupInteraction is allowed to be
+  // composite: when both label inputs are loop-invariant, the lookup hoists
+  // out of the loop.
   'getOrientation',
-  'getNeighborOrientation',
+  'getFacingOrientation',
+  'getNeighborOrientationByIndex',
   'getFacingLabels',
+  'getAllFacingLabels',
 ]);
 
 export function classifyLoopInvariant(

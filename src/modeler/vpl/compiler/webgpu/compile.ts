@@ -569,18 +569,38 @@ function isArrayProducer(nodeType: string): boolean {
     case 'getNeighborsAttrByIndexes':
     case 'groupCounting':
     case 'pickNRandomNeighbors':
+    case 'getAllFacingLabels':
       return true;
     default:
       return false;
   }
 }
 
-function compileArrayNode(ctx: CompileCtx, nodeId: string): ArrayRef | null {
-  const cached = ctx.arrayRefs.get(nodeId);
-  if (cached) return cached;
+/** Multi-output array node types: a single emit fills multiple ArrayRefs
+ *  cached under `${nodeId}::${portId}`. compileArrayNode disambiguates via
+ *  the optional portId arg, and the emitter manually populates each port's
+ *  slot in `ctx.arrayRefs`. */
+const MULTI_OUTPUT_ARRAY_TYPES = new Set<string>([
+  'getAllFacingLabels',
+]);
 
+/** Canonical default port for each multi-output array node — used when the
+ *  caller doesn't pass a portId. MUST match the port the emitter returns. */
+const MULTI_OUTPUT_ARRAY_DEFAULT_PORT: Record<string, string> = {
+  getAllFacingLabels: 'myFaceLabels',
+};
+
+function compileArrayNode(ctx: CompileCtx, nodeId: string, portId?: string): ArrayRef | null {
   const node = ctx.nodeMap.get(nodeId);
   if (!node) { ctx.errors.push(`unknown array node ${nodeId}`); return null; }
+  const isMulti = MULTI_OUTPUT_ARRAY_TYPES.has(node.data.nodeType);
+
+  const resolvedPort = isMulti
+    ? (portId ?? MULTI_OUTPUT_ARRAY_DEFAULT_PORT[node.data.nodeType] ?? '')
+    : '';
+  const cacheKey = isMulti ? `${nodeId}::${resolvedPort}` : nodeId;
+  const cached = ctx.arrayRefs.get(cacheKey);
+  if (cached) return cached;
 
   const emitter = ARRAY_NODE_EMITTERS[node.data.nodeType];
   if (!emitter) {
@@ -613,6 +633,14 @@ function compileArrayNode(ctx: CompileCtx, nodeId: string): ArrayRef | null {
 
   const result = routeEmissionForNode(ctx, nodeId, () => emitter({ ctx, node, inputs }));
   if (!result) return null;
+  if (isMulti) {
+    // Multi-output emitter is responsible for caching each port's ArrayRef
+    // under `${nodeId}::${portId}` before returning. Re-fetch the requested
+    // port's ref (the emitter's return value is the canonical default port).
+    const fresh = ctx.arrayRefs.get(cacheKey);
+    if (fresh) return fresh;
+    return result;
+  }
   ctx.arrayRefs.set(nodeId, result);
   return result;
 }
@@ -623,7 +651,7 @@ function resolveInputArray(ctx: CompileCtx, node: GraphNode, portId: string): Ar
   const srcNode = ctx.nodeMap.get(src.nodeId);
   if (!srcNode) return null;
   if (!isArrayProducer(srcNode.data.nodeType)) return null;
-  return compileArrayNode(ctx, src.nodeId);
+  return compileArrayNode(ctx, src.nodeId, src.portId);
 }
 
 const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
@@ -820,7 +848,7 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
       const nbrSrc = getNbr(ctx.layout, firstSrcNode!.data.config.neighborhoodId as string);
       gcCap = nbrSrc?.size;
     } else if (sources.length === 1 && isArrayProducer(firstSrcNode?.data.nodeType ?? '')) {
-      const arrSrc = compileArrayNode(ctx, firstSrc.nodeId);
+      const arrSrc = compileArrayNode(ctx, firstSrc.nodeId, firstSrc.portId);
       gcCap = arrSrc?.maxLen;
     }
     const out = allocArray(ctx, 'i32', 'arrGC', gcCap);
@@ -867,7 +895,7 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
       ctx.lines.push(`  }`);
     } else {
       const arrSrc = isArrayProducer(firstSrcNode?.data.nodeType ?? '') && sources.length === 1
-        ? compileArrayNode(ctx, firstSrc.nodeId) : null;
+        ? compileArrayNode(ctx, firstSrc.nodeId, firstSrc.portId) : null;
       if (!arrSrc) {
         ctx.errors.push(`groupCounting (array): only single nbr/array source supported`);
         return null;
@@ -921,6 +949,113 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     }
     return out;
   },
+
+  // -- Variegated Cells: Get All Facing Labels (multi-output arrays) -----
+  // Emits two parallel WGSL arrays of length 8 (one per direction in
+  // N/NE/E/SE/S/SW/W/NW order). Both ArrayRefs are cached under
+  // `${nodeId}::myFaceLabels` and `${nodeId}::theirFaceLabels`; the emitter
+  // returns myFaceLabels as the canonical default. The 8-direction loop is
+  // unrolled at emit time — branchless straight-line WGSL for the GPU.
+  //
+  // Boundary treatment is baked at compile time (torus wrap vs sentinel
+  // clamp). Out-of-bounds neighbours (constant boundary only) resolve to
+  // labelIndex 0 (`none`).
+  getAllFacingLabels: ({ node, ctx }) => {
+    if (!ctx.layout.variegatedEnabled) {
+      ctx.errors.push('getAllFacingLabels: variegated cells disabled');
+      return null;
+    }
+    const sourceAttrId = (node.data.config._sourceAttrId as string) || '';
+    const sourceAttr = sourceAttrId ? getAttr(ctx.layout, sourceAttrId) : null;
+    const boundary = (node.data.config._boundaryTreatment as string) || 'torus';
+    const w = ctx.layout.orientationWordOffset;
+    const lookupW = ctx.layout.facePatternLookupWordOffset;
+    const total = ctx.layout.total;
+    const W = ctx.model.properties.gridWidth;
+    const H = ctx.model.properties.gridHeight;
+
+    const myArr = allocArray(ctx, 'i32', 'gafl_my', 8);
+    const theirArr = allocArray(ctx, 'i32', 'gafl_their', 8);
+    ctx.lines.push(`  ${myArr.lenName} = 8;`);
+    ctx.lines.push(`  ${theirArr.lenName} = 8;`);
+
+    // Read my species + orientation once.
+    const mySpec = fresh(ctx, 'gafl_ms');
+    const mySpecExpr = sourceAttr
+      ? `bitcast<i32>(attrsRead[${sourceAttr.wordOffset}u + idx])`
+      : '0';
+    ctx.lines.push(`  let ${mySpec}: i32 = ${mySpecExpr};`);
+    const myOri = fresh(ctx, 'gafl_mo');
+    ctx.lines.push(`  let ${myOri}: i32 = bitcast<i32>(attrsRead[${w}u + idx]);`);
+
+    // Row / col helpers (idx is u32; cast to i32 for signed arithmetic).
+    const rowExpr = `i32(idx / ${W}u)`;
+    const colExpr = `i32(idx % ${W}u)`;
+
+    const OFFSETS: ReadonlyArray<readonly [number, number]> = [
+      [-1, 0], [-1, 1], [0, 1], [1, 1], [1, 0], [1, -1], [0, -1], [-1, -1],
+    ];
+
+    for (let d = 0; d < 8; d++) {
+      const [dr, dc] = OFFSETS[d]!;
+      const dirP4 = (d + 4) & 7;
+      let nciExpr: string;
+      if (boundary === 'constant') {
+        // Branched: var with sentinel default, overwrite when in-bounds.
+        const nRow = fresh(ctx, 'gafl_nr');
+        const nCol = fresh(ctx, 'gafl_nc');
+        const nci = fresh(ctx, 'gafl_nci');
+        ctx.lines.push(`  let ${nRow}: i32 = ${rowExpr} + ${dr};`);
+        ctx.lines.push(`  let ${nCol}: i32 = ${colExpr} + ${dc};`);
+        ctx.lines.push(`  var ${nci}: i32 = ${total};`);
+        ctx.lines.push(
+          `  if (${nRow} >= 0 && ${nRow} < ${H} && ${nCol} >= 0 && ${nCol} < ${W}) {`,
+          `    ${nci} = ${nRow} * ${W} + ${nCol};`,
+          `  }`,
+        );
+        nciExpr = nci;
+      } else {
+        // torus
+        const nRowE = dr === 0 ? rowExpr : `((${rowExpr} + ${dr}) % ${H} + ${H}) % ${H}`;
+        const nColE = dc === 0 ? colExpr : `((${colExpr} + ${dc}) % ${W} + ${W}) % ${W}`;
+        nciExpr = `((${nRowE}) * ${W} + (${nColE}))`;
+      }
+      const nciLet = fresh(ctx, 'gafl_nc2');
+      ctx.lines.push(`  let ${nciLet}: i32 = ${nciExpr};`);
+
+      const theirSpec = fresh(ctx, 'gafl_ts');
+      const theirSpecExpr = sourceAttr
+        ? `bitcast<i32>(attrsRead[${sourceAttr.wordOffset}u + u32(${nciLet})])`
+        : '0';
+      ctx.lines.push(`  let ${theirSpec}: i32 = ${theirSpecExpr};`);
+      const theirOri = fresh(ctx, 'gafl_to');
+      ctx.lines.push(`  let ${theirOri}: i32 = bitcast<i32>(attrsRead[${w}u + u32(${nciLet})]);`);
+
+      const myFaceIdx = fresh(ctx, 'gafl_mf');
+      ctx.lines.push(`  let ${myFaceIdx}: i32 = ((${d} + 2 * ${myOri}) & 7);`);
+      const theirFaceIdx = fresh(ctx, 'gafl_tf');
+      ctx.lines.push(`  let ${theirFaceIdx}: i32 = ((${dirP4} + 2 * ${theirOri}) & 7);`);
+
+      // myLabel & theirLabel via select() for branchless writes.
+      const myLabel = fresh(ctx, 'gafl_ml');
+      const myLabelExpr =
+        `select(0, bitcast<i32>(varAux[u32(${lookupW} + ${mySpec} * 8 + ${myFaceIdx})]), `
+        + `(${mySpec} >= 0))`;
+      ctx.lines.push(`  let ${myLabel}: i32 = ${myLabelExpr};`);
+      const theirLabel = fresh(ctx, 'gafl_tl');
+      const theirLabelExpr =
+        `select(0, bitcast<i32>(varAux[u32(${lookupW} + ${theirSpec} * 8 + ${theirFaceIdx})]), `
+        + `(${nciLet} < ${total}))`;
+      ctx.lines.push(`  let ${theirLabel}: i32 = ${theirLabelExpr};`);
+
+      ctx.lines.push(`  ${myArr.name}[${d}] = ${myLabel};`);
+      ctx.lines.push(`  ${theirArr.name}[${d}] = ${theirLabel};`);
+    }
+
+    ctx.arrayRefs.set(`${node.id}::myFaceLabels`, myArr);
+    ctx.arrayRefs.set(`${node.id}::theirFaceLabels`, theirArr);
+    return myArr;
+  },
 };
 
 const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
@@ -937,6 +1072,12 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       num = typeof raw === 'number' ? raw : (parseFloat(String(raw ?? '0')) || 0);
       const lit = Number.isInteger(num) ? `${num}.0` : `${num}`;
       return emitLet(ctx, 'f32', lit, 'kf');
+    }
+    if (t === 'orientation') {
+      // Orientation: integer 0..3 (N/E/S/W). Clamp to range as a safety net.
+      const n = typeof raw === 'number' ? raw : (parseInt(String(raw ?? '0'), 10) || 0);
+      num = Number.isFinite(n) && n >= 0 && n <= 3 ? (n | 0) : 0;
+      return emitLet(ctx, 'i32', `${num}`, 'ko');
     }
     // integer / tag
     num = typeof raw === 'number' ? raw : (parseInt(String(raw ?? '0'), 10) || 0);
@@ -1239,6 +1380,11 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       const lit = `${span}.0`;
       return emitLet(ctx, 'i32', `(i32(${rExpr} * ${lit}) + ${minN | 0})`, 'ri');
     }
+    if (t === 'orientation') {
+      // Uniform pick from 0..3 (N/E/S/W). No min/max — domain is fixed.
+      // & 3 narrows for the edge case where the f32 RNG hits exactly 1.0.
+      return emitLet(ctx, 'i32', `(i32(${rExpr} * 4.0) & 3)`, 'ro');
+    }
     if (t === 'options') {
       // Options mode: pick uniformly from a wired array source, or from multiple
       // scalar sources (Aggregate-style multi-source isArray pattern). Empty-
@@ -1265,7 +1411,7 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
           // For len == 0 the idx evaluates to 0; the static `array<T, maxLen>`
           // is zero-initialised, so the `arr[0]` read is well-defined garbage
           // that select() discards in favour of fbCast.
-          const arr = compileArrayNode(ctx, src.nodeId);
+          const arr = compileArrayNode(ctx, src.nodeId, src.portId);
           if (!arr) return null;
           const fbCast = castTo(fallback, arr.elemType);
           const idxName = fresh(ctx, 'roI');
@@ -1356,7 +1502,7 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     const indexSrcPort = indexSrc ? indexSrcDef?.ports.find(p => p.id === indexSrc.portId) : undefined;
     let niLocal: ValueRef;
     if (indexSrcPort?.isArray) {
-      const arrRef = compileArrayNode(ctx, indexSrc!.nodeId);
+      const arrRef = compileArrayNode(ctx, indexSrc!.nodeId, indexSrc!.portId);
       if (!arrRef) return null;
       // First element of the array, or INVALID_NI when empty (matches JS / WASM).
       // The array's elemType is i32 for NI[] producers; cast defensively.
@@ -1513,24 +1659,79 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return emitLet(ctx, 'i32', `bitcast<i32>(attrsRead[${w}u + idx])`, 'gOri');
   },
 
-  // -- Variegated Cells: Get Neighbor Orientation -------------------------
-  // Reads a specific neighbor's orientation. The neighbor cell index is
-  // resolved through `nbrCellIdx`. Out-of-grid neighbors point at the
-  // sentinel slot (`total`) which is always 0 (initGrid zero-fills, resetGrid
-  // re-clears).
-  getNeighborOrientation: ({ node, ctx, inputs }) => {
+  // -- Variegated Cells: Get Facing Orientation --------------------------
+  // Reads the orientation of the neighbour touching this cell in a fixed
+  // direction. directionTag pre-resolved into (_resolvedDirIdx, _resolvedDr,
+  // _resolvedDc, _boundaryTreatment). Mirrors `getFacingLabels` neighbour
+  // computation; returns 0 when direction is unset.
+  getFacingOrientation: ({ node, ctx }) => {
     if (!ctx.layout.variegatedEnabled) {
-      ctx.errors.push('getNeighborOrientation: variegated cells disabled');
+      ctx.errors.push('getFacingOrientation: variegated cells disabled');
       return null;
     }
-    const nbrId = node.data.config.neighborhoodId as string;
-    const nbr = getNbr(ctx.layout, nbrId);
-    if (!nbr) { ctx.errors.push(`getNeighborOrientation: unknown nbr ${nbrId}`); return null; }
-    const indexRef = inputs['index'] ?? { expr: '0', type: 'i32' as WgslType };
-    const kExpr = castTo(indexRef, 'i32');
-    const cellIdx = emitLet(ctx, 'i32', emitNbrCellIdx(nbr, kExpr), 'nciOri');
+    const dirIdx = Number(node.data.config._resolvedDirIdx);
+    const dr = Number(node.data.config._resolvedDr);
+    const dc = Number(node.data.config._resolvedDc);
+    const boundary = (node.data.config._boundaryTreatment as string) || 'torus';
+    if (!Number.isFinite(dirIdx) || dirIdx < 0) {
+      return emitLet(ctx, 'i32', '0', 'gfOri');
+    }
+    const total = ctx.layout.total;
+    const W = ctx.model.properties.gridWidth;
+    const H = ctx.model.properties.gridHeight;
+    const rowExpr = `i32(idx / ${W}u)`;
+    const colExpr = `i32(idx % ${W}u)`;
+    let nbrCellExpr: string;
+    if (boundary === 'constant') {
+      const nRow = emitLet(ctx, 'i32', `(${rowExpr} + ${dr})`, 'gfo_nr');
+      const nCol = emitLet(ctx, 'i32', `(${colExpr} + ${dc})`, 'gfo_nc');
+      const nciName = fresh(ctx, 'gfo_nci');
+      ctx.lines.push(`  var ${nciName}: i32 = ${total};`);
+      ctx.lines.push(
+        `  if (${nRow.expr} >= 0 && ${nRow.expr} < ${H} && ${nCol.expr} >= 0 && ${nCol.expr} < ${W}) {`,
+        `    ${nciName} = ${nRow.expr} * ${W} + ${nCol.expr};`,
+        `  }`,
+      );
+      nbrCellExpr = nciName;
+    } else {
+      const nRow = `((${rowExpr} + ${dr}) % ${H} + ${H}) % ${H}`;
+      const nCol = `((${colExpr} + ${dc}) % ${W} + ${W}) % ${W}`;
+      nbrCellExpr = `((${nRow}) * ${W} + (${nCol}))`;
+    }
+    const nbrCell = emitLet(ctx, 'i32', nbrCellExpr, 'gfo_nc2');
     const w = ctx.layout.orientationWordOffset;
-    return emitLet(ctx, 'i32', `bitcast<i32>(attrsRead[${w}u + u32(${cellIdx.expr})])`, 'gNbrOri');
+    return emitLet(ctx, 'i32', `bitcast<i32>(attrsRead[${w}u + u32(${nbrCell.expr})])`, 'gfo');
+  },
+
+  // -- Variegated Cells: Get Neighbor Orientation By Index ---------------
+  // Reads one neighbour's orientation given a packed NeighborIndex. Mirrors
+  // `getNeighborAttributeByIndex` — handles scalar NI or array (take [0]) and
+  // guards INVALID_NI (returns 0).
+  getNeighborOrientationByIndex: ({ node, ctx, inputs }) => {
+    if (!ctx.layout.variegatedEnabled) {
+      ctx.errors.push('getNeighborOrientationByIndex: variegated cells disabled');
+      return null;
+    }
+    const indexSrc = ctx.inputToSource.get(`${node.id}:index`);
+    const srcNode = indexSrc ? ctx.nodeMap.get(indexSrc.nodeId) : undefined;
+    const indexSrcDef = srcNode ? getNodeDef(srcNode.data.nodeType) : null;
+    const indexSrcPort = indexSrc ? indexSrcDef?.ports.find(p => p.id === indexSrc.portId) : undefined;
+    let niLocal: ValueRef;
+    if (indexSrcPort?.isArray) {
+      const arrRef = compileArrayNode(ctx, indexSrc!.nodeId, indexSrc!.portId);
+      if (!arrRef) return null;
+      const elemExpr = arrRef.elemType === 'i32'
+        ? `${arrRef.name}[0]`
+        : `i32(${arrRef.name}[0])`;
+      niLocal = emitLet(ctx, 'i32', `select(${INVALID_NI}, ${elemExpr}, ${arrRef.lenName} > 0)`, 'ni');
+    } else {
+      const indexRef = inputs['index'] ?? { expr: '0', type: 'i32' as WgslType };
+      niLocal = emitLet(ctx, 'i32', castTo(indexRef, 'i32'), 'ni');
+    }
+    const cellIdx = emitLet(ctx, 'i32', emitNiCellIdx(niLocal.expr), 'nci');
+    const w = ctx.layout.orientationWordOffset;
+    const rawOri = `bitcast<i32>(attrsRead[${w}u + u32(${cellIdx.expr})])`;
+    return emitLet(ctx, 'i32', `select(0, ${rawOri}, ${niLocal.expr} != ${INVALID_NI})`, 'nbOri');
   },
 
   // -- Variegated Cells: Get Facing Labels (multi-output) -----------------
@@ -1539,46 +1740,70 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
   // JS / WASM emit. The pre-resolve in compile.ts (JS) bakes `_directionMap`
   // + `_sourceAttrId` into the node config; we read them at compile time and
   // emit a per-slot if-chain for directionMap lookup (small N keeps it cheap).
-  getFacingLabels: ({ node, ctx, inputs }) => {
+  getFacingLabels: ({ node, ctx }) => {
     if (!ctx.layout.variegatedEnabled) {
       ctx.errors.push('getFacingLabels: variegated cells disabled');
       return null;
     }
-    const nbrId = node.data.config.neighborhoodId as string;
-    const nbr = getNbr(ctx.layout, nbrId);
-    if (!nbr) { ctx.errors.push(`getFacingLabels: unknown nbr ${nbrId}`); return null; }
     const sourceAttrId = (node.data.config._sourceAttrId as string) || '';
     const sourceAttr = sourceAttrId ? getAttr(ctx.layout, sourceAttrId) : null;
-    let directionMap: number[] = [];
-    try { directionMap = JSON.parse((node.data.config._directionMap as string) || '[]'); }
-    catch { directionMap = []; }
-    const indexRef = inputs['index'] ?? { expr: '0', type: 'i32' as WgslType };
+    const dirIdx = Number(node.data.config._resolvedDirIdx);
+    const dr = Number(node.data.config._resolvedDr);
+    const dc = Number(node.data.config._resolvedDc);
+    const boundary = (node.data.config._boundaryTreatment as string) || 'torus';
+
+    // Unresolved direction → both labels are `none` (0). No memory access.
+    if (!Number.isFinite(dirIdx) || dirIdx < 0) {
+      const myZ = emitLet(ctx, 'i32', '0', 'fl_ml');
+      const theirZ = emitLet(ctx, 'i32', '0', 'fl_tl');
+      setCachedPort(ctx, node.id, 'myFaceLabel', myZ);
+      setCachedPort(ctx, node.id, 'theirFaceLabel', theirZ);
+      return myZ;
+    }
+
     const w = ctx.layout.orientationWordOffset;
     const lookupW = ctx.layout.facePatternLookupWordOffset;
     const total = ctx.layout.total;
+    const W = ctx.model.properties.gridWidth;
+    const H = ctx.model.properties.gridHeight;
+    const dirP4 = (dirIdx + 4) & 7;
 
-    // niSlot = (index | 0); clamp negative to 0 because directionMap chain only
-    // matches non-negative ints. Out-of-range slots fall through to dir = -1.
-    const niSlot = emitLet(ctx, 'i32', castTo(indexRef, 'i32'), 'fl_ni');
-    const nbrCell = emitLet(ctx, 'i32', emitNbrCellIdx(nbr, niSlot.expr), 'fl_nc');
-
-    // dir = directionMap[niSlot] or -1. WGSL `var` allows mutation.
-    const dirName = fresh(ctx, 'fl_dir');
-    ctx.lines.push(`  var ${dirName}: i32 = -1;`);
-    for (let k = 0; k < directionMap.length; k++) {
-      const val = directionMap[k]!;
-      if (val < 0) continue;
-      ctx.lines.push(`  if (${niSlot.expr} == ${k}) { ${dirName} = ${val}; }`);
+    // Compute the neighbour cell index from (dr, dc) honouring the model's
+    // boundary treatment.
+    //   torus:    nci = ((row + dr + H) % H) * W + ((col + dc + W) % W)
+    //   constant: nci = (in-bounds) ? (row+dr)*W + (col+dc) : total
+    // WGSL has no native negative-safe wrap; use ((x % m + m) % m) form.
+    const rowExpr = `i32(idx / ${W}u)`;
+    const colExpr = `i32(idx % ${W}u)`;
+    let nbrCellExpr: string;
+    if (boundary === 'constant') {
+      // Branchy: emit a var with the sentinel default, overwrite when in-bounds.
+      const nRow = emitLet(ctx, 'i32', `(${rowExpr} + ${dr})`, 'fl_nr');
+      const nCol = emitLet(ctx, 'i32', `(${colExpr} + ${dc})`, 'fl_nc');
+      const nciName = fresh(ctx, 'fl_nci');
+      ctx.lines.push(`  var ${nciName}: i32 = ${total};`);
+      ctx.lines.push(
+        `  if (${nRow.expr} >= 0 && ${nRow.expr} < ${H} && ${nCol.expr} >= 0 && ${nCol.expr} < ${W}) {`,
+        `    ${nciName} = ${nRow.expr} * ${W} + ${nCol.expr};`,
+        `  }`,
+      );
+      nbrCellExpr = nciName;
+    } else {
+      // torus
+      const nRow = `((${rowExpr} + ${dr}) % ${H} + ${H}) % ${H}`;
+      const nCol = `((${colExpr} + ${dc}) % ${W} + ${W}) % ${W}`;
+      nbrCellExpr = `((${nRow}) * ${W} + (${nCol}))`;
     }
+    const nbrCell = emitLet(ctx, 'i32', nbrCellExpr, 'fl_nc2');
 
     // myOri = orientation[idx]; theirOri = orientation[nbrCell]
     const myOri = emitLet(ctx, 'i32', `bitcast<i32>(attrsRead[${w}u + idx])`, 'fl_mo');
     const theirOri = emitLet(ctx, 'i32', `bitcast<i32>(attrsRead[${w}u + u32(${nbrCell.expr})])`, 'fl_to');
 
-    // myFaceIdx = (dir + 2 * myOri) & 7
-    const myFaceIdx = emitLet(ctx, 'i32', `((${dirName} + 2 * ${myOri.expr}) & 7)`, 'fl_mf');
-    // theirFaceIdx = ((dir + 4) & 7) + 2 * theirOri, then & 7
-    const theirFaceIdx = emitLet(ctx, 'i32', `((((${dirName} + 4) & 7) + 2 * ${theirOri.expr}) & 7)`, 'fl_tf');
+    // myFaceIdx = (dirIdx + 2 * myOri) & 7
+    const myFaceIdx = emitLet(ctx, 'i32', `((${dirIdx} + 2 * ${myOri.expr}) & 7)`, 'fl_mf');
+    // theirFaceIdx = ((dirIdx + 4) & 7 + 2 * theirOri) & 7
+    const theirFaceIdx = emitLet(ctx, 'i32', `((${dirP4} + 2 * ${theirOri.expr}) & 7)`, 'fl_tf');
 
     // mySpec / theirSpec = source attribute at idx / nbrCell, or 0 if no source.
     const mySpec = sourceAttr
@@ -1588,16 +1813,16 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       ? emitLet(ctx, 'i32', `bitcast<i32>(attrsRead[${sourceAttr.wordOffset}u + u32(${nbrCell.expr})])`, 'fl_ts')
       : emitLet(ctx, 'i32', '0', 'fl_ts');
 
-    // myLabel: (dir >= 0 && mySpec >= 0) ? varAux[lookupW + mySpec*8 + myFaceIdx] : 0
+    // myLabel: (mySpec >= 0) ? varAux[lookupW + mySpec*8 + myFaceIdx] : 0
     const myLabelExpr =
       `select(0, bitcast<i32>(varAux[u32(${lookupW} + ${mySpec.expr} * 8 + ${myFaceIdx.expr})]), `
-      + `(${dirName} >= 0) && (${mySpec.expr} >= 0))`;
+      + `(${mySpec.expr} >= 0))`;
     const myLabel = emitLet(ctx, 'i32', myLabelExpr, 'fl_ml');
 
-    // theirLabel: (dir >= 0 && nbrCell < total) ? varAux[lookupW + theirSpec*8 + theirFaceIdx] : 0
+    // theirLabel: (nbrCell < total) ? varAux[lookupW + theirSpec*8 + theirFaceIdx] : 0
     const theirLabelExpr =
       `select(0, bitcast<i32>(varAux[u32(${lookupW} + ${theirSpec.expr} * 8 + ${theirFaceIdx.expr})]), `
-      + `(${dirName} >= 0) && (${nbrCell.expr} < ${total}))`;
+      + `(${nbrCell.expr} < ${total}))`;
     const theirLabel = emitLet(ctx, 'i32', theirLabelExpr, 'fl_tl');
 
     setCachedPort(ctx, node.id, 'myFaceLabel', myLabel);
@@ -1768,7 +1993,7 @@ function emitAggregateOrCount(
     }
   }
   if (isArrayPath && !fusedNbrAttrPath) {
-    arrRef = compileArrayNode(ctx, firstSrc.nodeId);
+    arrRef = compileArrayNode(ctx, firstSrc.nodeId, firstSrc.portId);
     if (!arrRef) return null;
   }
 
@@ -1971,7 +2196,7 @@ function emitGroupStatement(c: NodeEmitContext): ValueRef | null {
 
   const arrRef = sources.length === 1 && !isNbrPath
     && firstSrcNode && isArrayProducer(firstSrcNode.data.nodeType)
-    ? compileArrayNode(ctx, firstSrc.nodeId) : null;
+    ? compileArrayNode(ctx, firstSrc.nodeId, firstSrc.portId) : null;
 
   if (isNbrPath) {
     const srcNode = firstSrcNode!;
@@ -2261,12 +2486,16 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
     return true;
   },
 
-  // -- Variegated Cells: Set Neighbor Orientation — REJECTED on WebGPU ----
+  // -- Variegated Cells: Set Facing Orientation — REJECTED on WebGPU -----
   // Async-only node; WebGPU is sync-only (detectWebGPUModelIncompatibilities
   // catches async-mode at the model level). Defensive in case validation is
   // bypassed.
-  setNeighborOrientation: ({ ctx }) => {
-    ctx.errors.push('setNeighborOrientation: requires async update mode (incompatible with WebGPU)');
+  setFacingOrientation: ({ ctx }) => {
+    ctx.errors.push('setFacingOrientation: requires async update mode (incompatible with WebGPU)');
+    return false;
+  },
+  setNeighborOrientationByIndex: ({ ctx }) => {
+    ctx.errors.push('setNeighborOrientationByIndex: requires async update mode (incompatible with WebGPU)');
     return false;
   },
 };
@@ -2383,11 +2612,11 @@ function preEmitValueNodes(ctx: CompileCtx, sourceNodeId: string, sourcePortId: 
       // branch references resolve same as scalar values do).
       if (port.isArray) {
         if (src && ctx.nodeMap.get(src.nodeId) && isArrayProducer(ctx.nodeMap.get(src.nodeId)!.data.nodeType)) {
-          compileArrayNode(ctx, src.nodeId);
+          compileArrayNode(ctx, src.nodeId, src.portId);
         }
         if (srcs) for (const s of srcs) {
           const sn = ctx.nodeMap.get(s.nodeId);
-          if (sn && isArrayProducer(sn.data.nodeType)) compileArrayNode(ctx, s.nodeId);
+          if (sn && isArrayProducer(sn.data.nodeType)) compileArrayNode(ctx, s.nodeId, s.portId);
         }
         continue;
       }
@@ -2410,11 +2639,11 @@ function preEmitValueNodes(ctx: CompileCtx, sourceNodeId: string, sourcePortId: 
         return !!sp?.isArray;
       };
       if (src) {
-        if (isArraySrcPort(src)) compileArrayNode(ctx, src.nodeId);
+        if (isArraySrcPort(src)) compileArrayNode(ctx, src.nodeId, src.portId);
         else compileValueNode(ctx, src.nodeId, src.portId);
       }
       if (srcs) for (const s of srcs) {
-        if (isArraySrcPort(s)) compileArrayNode(ctx, s.nodeId);
+        if (isArraySrcPort(s)) compileArrayNode(ctx, s.nodeId, s.portId);
         else compileValueNode(ctx, s.nodeId, s.portId);
       }
     }

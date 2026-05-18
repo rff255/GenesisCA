@@ -84,6 +84,54 @@ function computeDefaultModelAttrs(attributes: Attribute[]): Record<string, numbe
   return mAttrs;
 }
 
+/** Compare two attribute lists for STRUCTURAL changes only — the kind of changes
+ *  that affect worker init (buffer layout, indicator ids, sub-attribute parent
+ *  checks, variegated face-pattern lookup size, sentinel-cell defaults). Returns
+ *  true when the only differences are in live-tunable fields that the running
+ *  worker can absorb without a reinit:
+ *    - name / description / hasBounds / min / max / symmetric: pure UI fields,
+ *      never read by the worker.
+ *    - tableValues: interaction-table data, pushed via updateInteractionTable.
+ *      Lives outside the cell-attr / model-attr layout.
+ *  The existing reference-equality check `prev.attributes === model.attributes`
+ *  forced a reinit on EVERY updateAttribute (the reducer always rebuilds the
+ *  array). That wiped the grid whenever a preset, Reset-to-Default, or in-panel
+ *  interaction-table edit fired — even though none of those touch buffer layout.
+ *  This structural compare keeps the existing "reinit on shape change" semantic
+ *  while letting live-tunable updates flow through without disturbing the grid. */
+function attrsStructurallyEqual(prev: Attribute[], curr: Attribute[]): boolean {
+  if (prev === curr) return true;
+  if (prev.length !== curr.length) return false;
+  for (let i = 0; i < prev.length; i++) {
+    const a = prev[i]!, b = curr[i]!;
+    if (a === b) continue;
+    if (a.id !== b.id) return false;
+    if (a.type !== b.type) return false;
+    if (a.isModelAttribute !== b.isModelAttribute) return false;
+    if (a.defaultValue !== b.defaultValue) return false;
+    if (a.boundaryValue !== b.boundaryValue) return false;
+    if (a.parentAttributeId !== b.parentAttributeId) return false;
+    if (a.undefinedValue !== b.undefinedValue) return false;
+    if (a.neighborhoodHintId !== b.neighborhoodHintId) return false;
+    // tagOptions order matters (face-pattern lookup keys + node-config tag indices)
+    const at = a.tagOptions, bt = b.tagOptions;
+    const al = at?.length ?? 0, bl = bt?.length ?? 0;
+    if (al !== bl) return false;
+    for (let j = 0; j < al; j++) if (at![j] !== bt![j]) return false;
+    // parentValues order matters (sub-attribute parent-check)
+    const ap = a.parentValues, bp = b.parentValues;
+    const apl = ap?.length ?? 0, bpl = bp?.length ?? 0;
+    if (apl !== bpl) return false;
+    for (let j = 0; j < apl; j++) if (ap![j] !== bp![j]) return false;
+    // facePatternAssignments: compare as a key→value map
+    const fpaA = a.facePatternAssignments ?? {};
+    const fpaB = b.facePatternAssignments ?? {};
+    const fpaKeys = new Set([...Object.keys(fpaA), ...Object.keys(fpaB)]);
+    for (const k of fpaKeys) if (fpaA[k] !== fpaB[k]) return false;
+  }
+  return true;
+}
+
 // Tiny chevron icons used by the viewer / transport bar collapse toggles. Inline
 // SVG (not Unicode glyphs) so the up and down variants are pixel-identical —
 // fonts can't be relied on to render ⌃ and ⌄ at the same width.
@@ -100,7 +148,7 @@ const ChevronDownIcon = () => (
 
 export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { model, updateIndicator, setSimulationState, addPreset, deletePreset, updatePreset, updateProperties, updateAttribute } = useModel();
+  const { model, modelVersion, updateIndicator, setSimulationState, addPreset, deletePreset, updatePreset, updateProperties, updateAttribute } = useModel();
   const workerRef = useRef<Worker | null>(null);
   const pendingStep = useRef(false);
 
@@ -207,6 +255,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
   // F3: Runtime model attribute values
   const [runtimeModelAttrs, setRuntimeModelAttrs] = useState<Record<string, number>>({});
+
+  // F3b: Interaction-table defaults snapshot — captured the first time we see
+  // a given `modelVersion` (= a fresh LOAD_MODEL / NEW_MODEL). Used by Reset
+  // to Default to restore the table values to whatever was last loaded (live
+  // edits via the simulator's per-cell editor mutate `model.attributes` via
+  // updateAttribute, so a plain re-read of `model.attributes` wouldn't be
+  // "default" anymore). Per-cell edits don't bump modelVersion (only
+  // load/new do), so the snapshot survives table edits within a session.
+  const interactionTableDefaultsRef = useRef<Record<string, Record<string, Record<string, number>>>>({});
+  const lastSnapshottedVersionRef = useRef<number>(-1);
 
   // F5: Simulator dimension overrides
   const [simWidth, setSimWidth] = useState(100);
@@ -676,11 +734,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // is never sent to the main thread.
       inspectDataRef.current.clear();
       inspectColorsRef.current.clear();
+      inspectOrientationsRef.current.clear();
       const data = msg.data as Record<string, Record<string, number>>;
       for (const k of Object.keys(data)) inspectDataRef.current.set(Number(k), data[k]!);
       const colors = msg.colors as Record<string, { r: number; g: number; b: number }> | undefined;
       if (colors) {
         for (const k of Object.keys(colors)) inspectColorsRef.current.set(Number(k), colors[k]!);
+      }
+      const orientations = msg.orientations as Record<string, number> | undefined;
+      if (orientations) {
+        for (const k of Object.keys(orientations)) inspectOrientationsRef.current.set(Number(k), orientations[k]!);
       }
       bumpInspectVersion(v => v + 1);
       return;
@@ -1024,6 +1087,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     colorsRef.current = null;
     inspectDataRef.current.clear();
     inspectColorsRef.current.clear();
+    inspectOrientationsRef.current.clear();
     srcCanvasRef.current = null;
     const result = compileModel();
     const firstViewer = model.mappings.find(m => m.isAttributeToColor);
@@ -1050,6 +1114,23 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
     // Initialize runtime model attrs from defaults
     setRuntimeModelAttrs(computeDefaultModelAttrs(model.attributes));
+
+    // Snapshot interaction-table defaults the first time we see this
+    // modelVersion (= a fresh LOAD_MODEL / NEW_MODEL — modelVersion bumps in
+    // ModelContext.tsx only for those two actions, not for per-attribute
+    // edits). The simulator's per-cell table editor mutates `model.attributes`
+    // directly via updateAttribute, so we need a snapshot taken BEFORE any of
+    // those edits to recover the as-loaded values on Reset to Default.
+    if (lastSnapshottedVersionRef.current !== modelVersion) {
+      lastSnapshottedVersionRef.current = modelVersion;
+      const snap: Record<string, Record<string, Record<string, number>>> = {};
+      for (const a of model.attributes) {
+        if (a.type === 'interactionTable' && a.tableValues) {
+          snap[a.id] = JSON.parse(JSON.stringify(a.tableValues));
+        }
+      }
+      interactionTableDefaultsRef.current = snap;
+    }
 
     const worker = new Worker(
       new URL('./engine/sim.worker.ts', import.meta.url),
@@ -1356,7 +1437,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       || prev.properties.asyncScheme !== model.properties.asyncScheme
       || prev.properties.useWasm !== model.properties.useWasm
       || prev.properties.useWebGPU !== model.properties.useWebGPU
-      || prev.attributes !== model.attributes
+      || !attrsStructurallyEqual(prev.attributes, model.attributes)
       || prev.neighborhoods !== model.neighborhoods
       || prev.mappings !== model.mappings;
 
@@ -1612,6 +1693,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const [focusedInspectIdx, setFocusedInspectIdx] = useState<number | null>(null);
   const inspectDataRef = useRef<Map<number, Record<string, number>>>(new Map());
   const inspectColorsRef = useRef<Map<number, { r: number; g: number; b: number }>>(new Map());
+  // Variegated cells only: per-cell orientation (0..3). Worker omits the field
+  // entirely when variegation is disabled, so the popover only shows the
+  // orientation row when the map has an entry for the cell.
+  const inspectOrientationsRef = useRef<Map<number, number>>(new Map());
   const [, bumpInspectVersion] = useState(0);
   const popoverRectsRef = useRef<Map<number, DOMRect>>(new Map());
   const pulseTimerRef = useRef<number | null>(null);
@@ -1647,6 +1732,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
     for (const k of Array.from(inspectColorsRef.current.keys())) {
       if (!live.has(k)) inspectColorsRef.current.delete(k);
+    }
+    for (const k of Array.from(inspectOrientationsRef.current.keys())) {
+      if (!live.has(k)) inspectOrientationsRef.current.delete(k);
     }
     workerRef.current?.postMessage({ type: 'setInspectCells', cellIdxs: ids });
   }, [inspectPopovers, sweepInspector?.cellIdx]);
@@ -2433,10 +2521,33 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   };
 
   // Reset every model attribute back to its declared default value.
+  // Scalar attrs come from `computeDefaultModelAttrs`. Interaction tables
+  // restore from the snapshot captured at model-load time (see
+  // `interactionTableDefaultsRef`) — both via `updateAttribute` (so a
+  // subsequent .gcaproj save captures the restored values) AND via the worker
+  // `updateInteractionTable` message (so the running simulation sees the
+  // restored values immediately).
   const handleResetModelAttrs = () => {
     const defaults = computeDefaultModelAttrs(model.attributes);
     setRuntimeModelAttrs(defaults);
     workerRef.current?.postMessage({ type: 'updateModelAttrs', attrs: defaults });
+    const tableDefaults = interactionTableDefaultsRef.current;
+    const faceLabels = model.variegatedCells?.faceLabels ?? [];
+    for (const a of model.attributes) {
+      if (a.type !== 'interactionTable') continue;
+      const def = tableDefaults[a.id];
+      if (!def) continue;
+      // Deep clone — keep the snapshot intact so subsequent resets still work
+      // after future edits.
+      const restored = JSON.parse(JSON.stringify(def));
+      updateAttribute(a.id, { tableValues: restored });
+      workerRef.current?.postMessage({
+        type: 'updateInteractionTable',
+        attrId: a.id,
+        faceLabels,
+        values: restored,
+      });
+    }
   };
 
   // F4: Screenshot export — 1:1 pixel-perfect from source canvas (no scaling).
@@ -2518,6 +2629,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
   };
 
+  // Snapshot the current interaction-table values keyed by attribute id, deep-
+  // cloned so a later mutation of model.attributes doesn't leak back into the
+  // saved preset payload. Returns undefined when no interaction-table attrs
+  // exist (serializePreset skips the field entirely in that case).
+  const snapshotInteractionTables = (): Record<string, Record<string, Record<string, number>>> | undefined => {
+    const out: Record<string, Record<string, Record<string, number>>> = {};
+    let any = false;
+    for (const a of model.attributes) {
+      if (a.type !== 'interactionTable' || !a.tableValues) continue;
+      out[a.id] = JSON.parse(JSON.stringify(a.tableValues));
+      any = true;
+    }
+    return any ? out : undefined;
+  };
+
   // Save current state as a named preset (captures modelAttrs always, grid optionally)
   const handleCreatePreset = (name: string, description: string, includeGrid: boolean) => {
     if (!workerRef.current) return;
@@ -2525,7 +2651,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const state = serializePreset(
         workerState as Parameters<typeof serializePreset>[0],
         { includeGrid },
-        { boundaryTreatment: model.properties.boundaryTreatment },
+        {
+          boundaryTreatment: model.properties.boundaryTreatment,
+          interactionTables: snapshotInteractionTables(),
+        },
       );
       const id = 'preset_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
       const preset: Preset = { id, name, state, createdAt: Date.now() };
@@ -2555,7 +2684,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const state = serializePreset(
         workerState as Parameters<typeof serializePreset>[0],
         { includeGrid },
-        { boundaryTreatment: model.properties.boundaryTreatment },
+        {
+          boundaryTreatment: model.properties.boundaryTreatment,
+          interactionTables: snapshotInteractionTables(),
+        },
       );
       const patch: Partial<Omit<Preset, 'id'>> = { name, state };
       patch.description = description.trim() || undefined;
@@ -2620,6 +2752,30 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (state.modelAttrs) {
       setRuntimeModelAttrs(prev => ({ ...prev, ...state.modelAttrs }));
       workerRef.current?.postMessage({ type: 'updateModelAttrs', attrs: state.modelAttrs });
+    }
+
+    // Restore interaction-table model attributes. Presets (e.g. parameter sets
+    // for chemistry models like Amphiphile) typically vary a dozen+ float values
+    // across several tables; storing them by id->row->col->float keeps the
+    // preset payload compact and human-readable. Apply to BOTH the worker
+    // (immediate effect on the running simulation) AND the model state via
+    // updateAttribute (so a subsequent .gcaproj save captures the preset values
+    // and the Properties panel reflects them). UPDATE_ATTRIBUTE does NOT bump
+    // modelVersion, so the interaction-table snapshot used by Reset-to-Default
+    // stays pointed at the model's ORIGINAL defaults — letting the user always
+    // get back to the model's shipped baseline after experimenting.
+    if (state.interactionTables) {
+      const faceLabels = model.variegatedCells?.faceLabels ?? [];
+      for (const [attrId, values] of Object.entries(state.interactionTables)) {
+        const cloned = JSON.parse(JSON.stringify(values));
+        updateAttribute(attrId, { tableValues: cloned });
+        workerRef.current?.postMessage({
+          type: 'updateInteractionTable',
+          attrId,
+          faceLabels,
+          values: cloned,
+        });
+      }
     }
 
     // Restore grid state if present
@@ -3355,6 +3511,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           cellAttrs={model.attributes.filter(a => !a.isModelAttribute)}
           values={inspectDataRef.current.get(p.cellIdx) ?? null}
           color={inspectColorsRef.current.get(p.cellIdx) ?? null}
+          orientation={inspectOrientationsRef.current.get(p.cellIdx) ?? null}
           pulse={pulseInspectIdx === p.cellIdx}
           focused={focusedInspectIdx === p.cellIdx}
           totalOpen={inspectPopovers.length}
@@ -3394,6 +3551,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           cellAttrs={model.attributes.filter(a => !a.isModelAttribute)}
           values={inspectDataRef.current.get(sweepInspector.cellIdx) ?? null}
           color={inspectColorsRef.current.get(sweepInspector.cellIdx) ?? null}
+          orientation={inspectOrientationsRef.current.get(sweepInspector.cellIdx) ?? null}
           pulse={false}
           focused={false}
           totalOpen={inspectPopovers.length + 1}
