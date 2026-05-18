@@ -1,0 +1,1155 @@
+{
+  "schemaVersion": 2,
+  "properties": {
+    "name": "Amphiphile (Variegated Cells demo)",
+    "author": "GenesisCA",
+    "modelAuthor": "Rodrigo F. Figueiredo",
+    "description": "A chemistry-CA demo of the Variegated Cells feature. Two species: water (no face pattern) and amphiphile (Head face pointing N, Tail face S). Each amphiphile carries an orientation (0/90/180/270°). Per-step rule: sum the four neighbour-encounter energies via the Interaction Table; if below the threshold, rotate by a random 1..3 step. Over time the amphiphiles self-organise — heads face water, tails cluster — the same logic that drives micelle/bilayer formation in real surfactant chemistry. Reset to randomise from scratch. Paint with the 'Seed' brush to add amphiphiles at the cursor.",
+    "topology": "2d-grid",
+    "boundaryTreatment": "torus",
+    "updateMode": "synchronous",
+    "asyncScheme": "random-order",
+    "gridWidth": 120,
+    "gridHeight": 120,
+    "maxIterations": 100000,
+    "tags": [
+      "variegated cells",
+      "chemistry",
+      "self-organization",
+      "amphiphile",
+      "surfactant",
+      "micelle"
+    ],
+    "useWasm": true,
+    "useWebGPU": false
+  },
+  "attributes": [
+    {
+      "id": "kind",
+      "name": "Kind",
+      "type": "tag",
+      "description": "Cell species. Water has no face pattern (all faces are the implicit \"none\" label). Amphiphile carries the H/T face pattern + the orientation.",
+      "isModelAttribute": false,
+      "defaultValue": "0",
+      "tagOptions": [
+        "water",
+        "amphiphile"
+      ],
+      "facePatternAssignments": {
+        "amphiphile": "pat_amphi"
+      }
+    },
+    {
+      "id": "threshold",
+      "name": "Energy threshold",
+      "type": "float",
+      "description": "Cells with summed encounter energy STRICTLY below this rotate by a random 1..3 step. Higher = more churn (cells reach pickier \"happy\" states); lower = settle faster.",
+      "isModelAttribute": true,
+      "defaultValue": "0.5",
+      "hasBounds": true,
+      "min": -4,
+      "max": 4
+    },
+    {
+      "id": "density",
+      "name": "Initial amphi density",
+      "type": "float",
+      "description": "Probability that each cell starts as amphiphile on Reset. 0 = all water (paint your own); 1 = no water left.",
+      "isModelAttribute": true,
+      "defaultValue": "0.2",
+      "hasBounds": true,
+      "min": 0,
+      "max": 1
+    },
+    {
+      "id": "interactions",
+      "name": "Interaction Table",
+      "type": "interactionTable",
+      "description": "Per-pair encounter energies between face labels (none/H/T). Head likes water, Tail clumps with Tail, Head-Head repels — classic surfactant. Live-edit during simulation to see the dynamics shift.",
+      "isModelAttribute": true,
+      "defaultValue": "0",
+      "symmetric": true,
+      "tableValues": {
+        "none": {
+          "none": 0,
+          "H": 1,
+          "T": -0.5
+        },
+        "H": {
+          "none": 1,
+          "H": -0.5,
+          "T": 0
+        },
+        "T": {
+          "none": -0.5,
+          "H": 0,
+          "T": 1
+        }
+      }
+    }
+  ],
+  "neighborhoods": [
+    {
+      "id": "nbr4",
+      "name": "4-Cardinal (N, S, W, E)",
+      "description": "The 4 edge-adjacent neighbours. Tags on each slot drive the directional face-label resolution — N at slot 0 anchors the rotation math.",
+      "coords": [
+        [
+          -1,
+          0
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          0,
+          -1
+        ],
+        [
+          0,
+          1
+        ]
+      ],
+      "tags": {
+        "0": "N",
+        "1": "S",
+        "2": "W",
+        "3": "E"
+      },
+      "margin": 1
+    }
+  ],
+  "mappings": [
+    {
+      "id": "seed",
+      "name": "Seed",
+      "isAttributeToColor": false,
+      "description": "Paint to drop amphiphile molecules at the cursor (with random initial orientation). Painted colour is ignored.",
+      "redDescription": "Ignored",
+      "greenDescription": "Ignored",
+      "blueDescription": "Ignored"
+    },
+    {
+      "id": "viz",
+      "name": "Species + Orientation",
+      "isAttributeToColor": true,
+      "description": "Water cells render dark grey. Amphiphiles take a 4-position rainbow band (red→olive→mint→sky-blue) showing which way the head is pointing.",
+      "redDescription": "Amphi (R peaks at orientation 0, head→N)",
+      "greenDescription": "Amphi (G peaks at orientation 2, head→S)",
+      "blueDescription": "Amphi (B peaks at orientation 3, head→W)"
+    }
+  ],
+  "indicators": [],
+  "graphNodes": [
+    {
+      "id": "nmpah47wu61sl",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "step",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmpah47wuxzqj",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 180
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "kind"
+        }
+      }
+    },
+    {
+      "id": "nmpah47wut22z",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 270
+      },
+      "data": {
+        "nodeType": "getOrientation",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmpah47wucs3f",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 180
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "==",
+          "_port_y": "1"
+        },
+        "label": "Is amphiphile?"
+      }
+    },
+    {
+      "id": "nmpah47wuo525",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 180
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmpah47wuzxa8",
+      "type": "caNode",
+      "position": {
+        "x": 690,
+        "y": 90
+      },
+      "data": {
+        "nodeType": "getFacingLabels",
+        "config": {
+          "neighborhoodId": "nbr4",
+          "_port_index": "0"
+        },
+        "label": "Encounter N"
+      }
+    },
+    {
+      "id": "nmpah47wulvaw",
+      "type": "caNode",
+      "position": {
+        "x": 920,
+        "y": 90
+      },
+      "data": {
+        "nodeType": "lookupInteraction",
+        "config": {
+          "tableId": "interactions"
+        },
+        "label": "Energy N"
+      }
+    },
+    {
+      "id": "nmpah47wuug4q",
+      "type": "caNode",
+      "position": {
+        "x": 690,
+        "y": 270
+      },
+      "data": {
+        "nodeType": "getFacingLabels",
+        "config": {
+          "neighborhoodId": "nbr4",
+          "_port_index": "1"
+        },
+        "label": "Encounter S"
+      }
+    },
+    {
+      "id": "nmpah47wu58st",
+      "type": "caNode",
+      "position": {
+        "x": 920,
+        "y": 270
+      },
+      "data": {
+        "nodeType": "lookupInteraction",
+        "config": {
+          "tableId": "interactions"
+        },
+        "label": "Energy S"
+      }
+    },
+    {
+      "id": "nmpah47wubxih",
+      "type": "caNode",
+      "position": {
+        "x": 690,
+        "y": 450
+      },
+      "data": {
+        "nodeType": "getFacingLabels",
+        "config": {
+          "neighborhoodId": "nbr4",
+          "_port_index": "2"
+        },
+        "label": "Encounter W"
+      }
+    },
+    {
+      "id": "nmpah47wud3g8",
+      "type": "caNode",
+      "position": {
+        "x": 920,
+        "y": 450
+      },
+      "data": {
+        "nodeType": "lookupInteraction",
+        "config": {
+          "tableId": "interactions"
+        },
+        "label": "Energy W"
+      }
+    },
+    {
+      "id": "nmpah47wu6wrq",
+      "type": "caNode",
+      "position": {
+        "x": 690,
+        "y": 630
+      },
+      "data": {
+        "nodeType": "getFacingLabels",
+        "config": {
+          "neighborhoodId": "nbr4",
+          "_port_index": "3"
+        },
+        "label": "Encounter E"
+      }
+    },
+    {
+      "id": "nmpah47wukvzp",
+      "type": "caNode",
+      "position": {
+        "x": 920,
+        "y": 630
+      },
+      "data": {
+        "nodeType": "lookupInteraction",
+        "config": {
+          "tableId": "interactions"
+        },
+        "label": "Energy E"
+      }
+    },
+    {
+      "id": "nmpah47wuvqzt",
+      "type": "caNode",
+      "position": {
+        "x": 1150,
+        "y": 360
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "sum"
+        },
+        "label": "Total encounter energy"
+      }
+    },
+    {
+      "id": "nmpah47wuxvh8",
+      "type": "caNode",
+      "position": {
+        "x": 1150,
+        "y": 540
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "threshold",
+          "isColorAttr": false
+        }
+      }
+    },
+    {
+      "id": "nmpah47wumtyh",
+      "type": "caNode",
+      "position": {
+        "x": 1380,
+        "y": 450
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "<"
+        },
+        "label": "Unhappy?"
+      }
+    },
+    {
+      "id": "nmpah47wu8mby",
+      "type": "caNode",
+      "position": {
+        "x": 1610,
+        "y": 450
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmpah47wuumrk",
+      "type": "caNode",
+      "position": {
+        "x": 1150,
+        "y": 720
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "randomType": "integer",
+          "min": "1",
+          "max": "3"
+        },
+        "label": "Random rotation step (1..3)"
+      }
+    },
+    {
+      "id": "nmpah47wu5yb3",
+      "type": "caNode",
+      "position": {
+        "x": 1840,
+        "y": 450
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "mod(ori + step, 4)",
+          "visibleCount": 2,
+          "_varName_a": "ori",
+          "_varName_b": "step"
+        },
+        "label": "New orientation"
+      }
+    },
+    {
+      "id": "nmpah47wu9nst",
+      "type": "caNode",
+      "position": {
+        "x": 2070,
+        "y": 450
+      },
+      "data": {
+        "nodeType": "setOrientation",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmpah47wuv3ig",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 1260
+      },
+      "data": {
+        "nodeType": "initEvent",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmpah47wu3zzp",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 1170
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "density",
+          "isColorAttr": false
+        }
+      }
+    },
+    {
+      "id": "nmpah47wuskgx",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 1170
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "randomType": "bool"
+        },
+        "label": "Seed amphi here?"
+      }
+    },
+    {
+      "id": "nmpah47wuf01b",
+      "type": "caNode",
+      "position": {
+        "x": 690,
+        "y": 1170
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmpah47wub61a",
+      "type": "caNode",
+      "position": {
+        "x": 920,
+        "y": 1170
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "kind",
+          "_port_value": "1"
+        }
+      }
+    },
+    {
+      "id": "nmpah47wugmyc",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 1440
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "randomType": "integer",
+          "min": "0",
+          "max": "3"
+        },
+        "label": "Random initial orientation"
+      }
+    },
+    {
+      "id": "nmpah47wuu84w",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 1440
+      },
+      "data": {
+        "nodeType": "setOrientation",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmpah47wu9gcv",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 1890
+      },
+      "data": {
+        "nodeType": "inputColor",
+        "config": {
+          "mappingId": "seed"
+        }
+      }
+    },
+    {
+      "id": "nmpah47wuzuar",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 1890
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "kind",
+          "_port_value": "1"
+        }
+      }
+    },
+    {
+      "id": "nmpah47wu8vbg",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 2070
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "randomType": "integer",
+          "min": "0",
+          "max": "3"
+        }
+      }
+    },
+    {
+      "id": "nmpah47wu510e",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 2070
+      },
+      "data": {
+        "nodeType": "setOrientation",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmpah47wuyrxl",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 2520
+      },
+      "data": {
+        "nodeType": "outputMapping",
+        "config": {
+          "mappingId": "viz"
+        }
+      }
+    },
+    {
+      "id": "nmpah47wu9jso",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 2700
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "kind"
+        }
+      }
+    },
+    {
+      "id": "nmpah47wus0vy",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 2790
+      },
+      "data": {
+        "nodeType": "getOrientation",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmpah47wuobxs",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 2610
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "kind * max(0, 255 - 80 * abs(ori - 0)) + (1 - kind) * 40",
+          "visibleCount": 2,
+          "_varName_a": "kind",
+          "_varName_b": "ori"
+        },
+        "label": "Red channel"
+      }
+    },
+    {
+      "id": "nmpah47wugju5",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 2700
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "kind * max(0, 255 - 80 * abs(ori - 2)) + (1 - kind) * 40",
+          "visibleCount": 2,
+          "_varName_a": "kind",
+          "_varName_b": "ori"
+        },
+        "label": "Green channel"
+      }
+    },
+    {
+      "id": "nmpah47wu2z1d",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 2790
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "kind * max(0, 255 - 80 * abs(ori - 3)) + (1 - kind) * 40",
+          "visibleCount": 2,
+          "_varName_a": "kind",
+          "_varName_b": "ori"
+        },
+        "label": "Blue channel"
+      }
+    },
+    {
+      "id": "nmpah47wuzw1q",
+      "type": "caNode",
+      "position": {
+        "x": 690,
+        "y": 2700
+      },
+      "data": {
+        "nodeType": "setColorViewer",
+        "config": {
+          "mappingId": "viz"
+        }
+      }
+    }
+  ],
+  "graphEdges": [
+    {
+      "id": "empah47wupmca",
+      "source": "nmpah47wuxzqj",
+      "target": "nmpah47wucs3f",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empah47wug67g",
+      "source": "nmpah47wu61sl",
+      "target": "nmpah47wuo525",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "empah47wuuzi5",
+      "source": "nmpah47wucs3f",
+      "target": "nmpah47wuo525",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "empah47wujmjr",
+      "source": "nmpah47wuzxa8",
+      "target": "nmpah47wulvaw",
+      "sourceHandle": "output_value_myFaceLabel",
+      "targetHandle": "input_value_labelA"
+    },
+    {
+      "id": "empah47wuqwvm",
+      "source": "nmpah47wuzxa8",
+      "target": "nmpah47wulvaw",
+      "sourceHandle": "output_value_theirFaceLabel",
+      "targetHandle": "input_value_labelB"
+    },
+    {
+      "id": "empah47wuk9ro",
+      "source": "nmpah47wuug4q",
+      "target": "nmpah47wu58st",
+      "sourceHandle": "output_value_myFaceLabel",
+      "targetHandle": "input_value_labelA"
+    },
+    {
+      "id": "empah47wu4qqs",
+      "source": "nmpah47wuug4q",
+      "target": "nmpah47wu58st",
+      "sourceHandle": "output_value_theirFaceLabel",
+      "targetHandle": "input_value_labelB"
+    },
+    {
+      "id": "empah47wupgy8",
+      "source": "nmpah47wubxih",
+      "target": "nmpah47wud3g8",
+      "sourceHandle": "output_value_myFaceLabel",
+      "targetHandle": "input_value_labelA"
+    },
+    {
+      "id": "empah47wuhah0",
+      "source": "nmpah47wubxih",
+      "target": "nmpah47wud3g8",
+      "sourceHandle": "output_value_theirFaceLabel",
+      "targetHandle": "input_value_labelB"
+    },
+    {
+      "id": "empah47wubdhd",
+      "source": "nmpah47wu6wrq",
+      "target": "nmpah47wukvzp",
+      "sourceHandle": "output_value_myFaceLabel",
+      "targetHandle": "input_value_labelA"
+    },
+    {
+      "id": "empah47wu195w",
+      "source": "nmpah47wu6wrq",
+      "target": "nmpah47wukvzp",
+      "sourceHandle": "output_value_theirFaceLabel",
+      "targetHandle": "input_value_labelB"
+    },
+    {
+      "id": "empah47wuih0z",
+      "source": "nmpah47wulvaw",
+      "target": "nmpah47wuvqzt",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "empah47wuf08z",
+      "source": "nmpah47wu58st",
+      "target": "nmpah47wuvqzt",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "empah47wu83nc",
+      "source": "nmpah47wud3g8",
+      "target": "nmpah47wuvqzt",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "empah47wu7y1t",
+      "source": "nmpah47wukvzp",
+      "target": "nmpah47wuvqzt",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "empah47wuk8yd",
+      "source": "nmpah47wuvqzt",
+      "target": "nmpah47wumtyh",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empah47wuvs8a",
+      "source": "nmpah47wuxvh8",
+      "target": "nmpah47wumtyh",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empah47wuk4pw",
+      "source": "nmpah47wuo525",
+      "target": "nmpah47wu8mby",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "empah47wu34s3",
+      "source": "nmpah47wumtyh",
+      "target": "nmpah47wu8mby",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "empah47wuo9de",
+      "source": "nmpah47wut22z",
+      "target": "nmpah47wu5yb3",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "empah47wuuz99",
+      "source": "nmpah47wuumrk",
+      "target": "nmpah47wu5yb3",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "empah47wud2ts",
+      "source": "nmpah47wu8mby",
+      "target": "nmpah47wu9nst",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "empah47wuabby",
+      "source": "nmpah47wu5yb3",
+      "target": "nmpah47wu9nst",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "empah47wuhjeb",
+      "source": "nmpah47wu3zzp",
+      "target": "nmpah47wuskgx",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_probability"
+    },
+    {
+      "id": "empah47wufnzy",
+      "source": "nmpah47wuv3ig",
+      "target": "nmpah47wuf01b",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "empah47wudt8h",
+      "source": "nmpah47wuskgx",
+      "target": "nmpah47wuf01b",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "empah47wusukb",
+      "source": "nmpah47wuf01b",
+      "target": "nmpah47wub61a",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "empah47wup1td",
+      "source": "nmpah47wuv3ig",
+      "target": "nmpah47wuu84w",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "empah47wudhok",
+      "source": "nmpah47wugmyc",
+      "target": "nmpah47wuu84w",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "empah47wultyd",
+      "source": "nmpah47wu9gcv",
+      "target": "nmpah47wuzuar",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "empah47wu8jkq",
+      "source": "nmpah47wu9gcv",
+      "target": "nmpah47wu510e",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "empah47wulr5s",
+      "source": "nmpah47wu8vbg",
+      "target": "nmpah47wu510e",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "empah47wua7x8",
+      "source": "nmpah47wu9jso",
+      "target": "nmpah47wuobxs",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "empah47wun87p",
+      "source": "nmpah47wus0vy",
+      "target": "nmpah47wuobxs",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "empah47wuhftj",
+      "source": "nmpah47wu9jso",
+      "target": "nmpah47wugju5",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "empah47wunx41",
+      "source": "nmpah47wus0vy",
+      "target": "nmpah47wugju5",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "empah47wusis2",
+      "source": "nmpah47wu9jso",
+      "target": "nmpah47wu2z1d",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "empah47wuc2cr",
+      "source": "nmpah47wus0vy",
+      "target": "nmpah47wu2z1d",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "empah47wuyct4",
+      "source": "nmpah47wuyrxl",
+      "target": "nmpah47wuzw1q",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "empah47wu3r4v",
+      "source": "nmpah47wuobxs",
+      "target": "nmpah47wuzw1q",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_r"
+    },
+    {
+      "id": "empah47wuvtn1",
+      "source": "nmpah47wugju5",
+      "target": "nmpah47wuzw1q",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_g"
+    },
+    {
+      "id": "empah47wuobtd",
+      "source": "nmpah47wu2z1d",
+      "target": "nmpah47wuzw1q",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    }
+  ],
+  "macroDefs": [],
+  "presets": [
+    {
+      "id": "presetmpah47wvhgct",
+      "name": "Classic surfactant",
+      "description": "Strong H-W attraction, strong T-T attraction. Tails clump readily, heads coat the water boundary.",
+      "state": {
+        "schemaVersion": 2,
+        "modelAttrs": {
+          "threshold": 0.5,
+          "density": 0.2
+        },
+        "interactionTables": {
+          "interactions": {
+            "none": {
+              "none": 0,
+              "H": 1,
+              "T": -0.5
+            },
+            "H": {
+              "none": 1,
+              "H": -0.5,
+              "T": 0
+            },
+            "T": {
+              "none": -0.5,
+              "H": 0,
+              "T": 1
+            }
+          }
+        }
+      },
+      "createdAt": 1779064580622
+    },
+    {
+      "id": "presetmpah47wvqe4o",
+      "name": "Hydrophobic-dominant",
+      "description": "Tail-tail attraction much stronger. Tail clusters form faster but the head boundary is fuzzier.",
+      "state": {
+        "schemaVersion": 2,
+        "modelAttrs": {
+          "threshold": 0.5,
+          "density": 0.3
+        },
+        "interactionTables": {
+          "interactions": {
+            "none": {
+              "none": 0,
+              "H": 0.5,
+              "T": -1
+            },
+            "H": {
+              "none": 0.5,
+              "H": -0.2,
+              "T": 0
+            },
+            "T": {
+              "none": -1,
+              "H": 0,
+              "T": 2
+            }
+          }
+        }
+      },
+      "createdAt": 1779064580622
+    },
+    {
+      "id": "presetmpah47wvnpx6",
+      "name": "Polar liquid",
+      "description": "Heads attract heads too (H-H positive). Amphiphiles line up head-to-head as well as tail-to-tail — chain-like structures.",
+      "state": {
+        "schemaVersion": 2,
+        "modelAttrs": {
+          "threshold": 0.5,
+          "density": 0.3
+        },
+        "interactionTables": {
+          "interactions": {
+            "none": {
+              "none": 0,
+              "H": 0.5,
+              "T": -0.5
+            },
+            "H": {
+              "none": 0.5,
+              "H": 1,
+              "T": -0.5
+            },
+            "T": {
+              "none": -0.5,
+              "H": -0.5,
+              "T": 1
+            }
+          }
+        }
+      },
+      "createdAt": 1779064580622
+    },
+    {
+      "id": "presetmpah47wvgw42",
+      "name": "Dense churn",
+      "description": "High density + high threshold. Most cells are always \"unhappy\"; constant rotation produces a busy turbulent visual.",
+      "state": {
+        "schemaVersion": 2,
+        "modelAttrs": {
+          "threshold": 2,
+          "density": 0.5
+        },
+        "interactionTables": {
+          "interactions": {
+            "none": {
+              "none": 0,
+              "H": 1,
+              "T": -0.5
+            },
+            "H": {
+              "none": 1,
+              "H": -0.5,
+              "T": 0
+            },
+            "T": {
+              "none": -0.5,
+              "H": 0,
+              "T": 1
+            }
+          }
+        }
+      },
+      "createdAt": 1779064580622
+    }
+  ],
+  "variegatedCells": {
+    "enabled": true,
+    "sourceAttributeId": "kind",
+    "faceLabels": [
+      "H",
+      "T"
+    ],
+    "facePatterns": [
+      {
+        "id": "pat_amphi",
+        "name": "Amphiphile",
+        "layoutMode": "edges",
+        "faces": [
+          "H",
+          null,
+          null,
+          null,
+          "T",
+          null,
+          null,
+          null
+        ]
+      }
+    ]
+  }
+}
