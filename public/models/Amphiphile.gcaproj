@@ -22,7 +22,7 @@
       "movement",
       "kier"
     ],
-    "useWasm": false,
+    "useWasm": true,
     "useWebGPU": false
   },
   "attributes": [

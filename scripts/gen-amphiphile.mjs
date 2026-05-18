@@ -584,17 +584,7 @@ const properties = {
   gridHeight: 40,
   maxIterations: 100000,
   tags: ['variegated cells', 'chemistry', 'self-organization', 'amphiphile', 'surfactant', 'micelle', 'movement', 'kier'],
-  // JS target verified end-to-end: cell counts conserved, amphi cluster index
-  // ~4× random baseline at gen 500, free amphis observably rotate (17/19 free
-  // amphis verified rotating in a 1-step instrumented test). WASM target has
-  // a latent emit bug: `step` writes occasional NI values into the kind buffer
-  // (~1 cell per step). The wiring (chosenNI→index, kindRead→value) and the
-  // edge handles in the generated JSON are correct; the JS compile target is
-  // unaffected; the bug is somewhere in WASM's value-input resolution or local
-  // caching for setNeighborAttributeByIndex with this specific graph shape
-  // (124 nodes, 2 neighborhoods, 5 model attrs incl. interaction tables, deep
-  // nested ValueSwitch chains). Default to JS until diagnosed.
-  useWasm: false,
+  useWasm: true,
   useWebGPU: false,
 };
 
