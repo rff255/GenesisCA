@@ -40,6 +40,7 @@ import type { MemoryLayout } from './layout';
 import { classifyLoopInvariant } from '../loopInvariant';
 import { getInlineValue, parseInlineNum } from '../inlinePort';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } from '../sinkAnalysis';
+import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { subAttrInfo } from '../subAttribute';
 import { emitWasm } from '../expression/emitWasm';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
@@ -5973,6 +5974,12 @@ export function compileGraphWasm(
   }
   graphNodes = expanded.nodes;
   graphEdges = expanded.edges;
+
+  // Accessor CSE — sync-mode only. Runs AFTER macro expansion so that
+  // duplicate accessors inside (or across) macro instances also get merged.
+  // No-op when no group has more than one member (typical for single-accessor
+  // models like Game of Life). See accessorCSE.ts for the full rationale.
+  graphEdges = canonicalizeAccessorEdges(graphNodes, graphEdges, model);
 
   // Build adjacency
   const nodeMap = new Map<string, GraphNode>();

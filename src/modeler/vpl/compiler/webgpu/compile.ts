@@ -33,6 +33,7 @@ import {
 import { getInlineValue, parseInlineNum } from '../inlinePort';
 import { INVALID_NI, packNI, NI_ARRAY_PRODUCERS } from '../niCodec';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } from '../sinkAnalysis';
+import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { subAttrInfo, subAttributesOf } from '../subAttribute';
 import { emitWgsl } from '../expression/emitWgsl';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
@@ -3233,7 +3234,10 @@ export function compileGraphWebGPU(
     };
   }
   const nodes = expanded.nodes;
-  const edges = expanded.edges;
+  // Accessor CSE — sync-mode only. Runs AFTER macro expansion so duplicate
+  // accessors inside (or across) macro instances also get merged. No-op when
+  // no group has more than one member. See accessorCSE.ts for the full rationale.
+  const edges = canonicalizeAccessorEdges(nodes, expanded.edges, model);
 
   // Stop messages flat list — index in `_stopIdx` (1-based; 0 means no stop).
   // After expansion the graph is flat, so we only walk `nodes` (no macroDef
