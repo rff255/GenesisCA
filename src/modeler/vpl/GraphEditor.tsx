@@ -313,6 +313,9 @@ export function GraphEditorInner() {
   // Seed from the module global so the toggle's visual state survives modeler remounts (tab switches)
   const [portLabelsVisible, setPortLabelsVisible] = useState(showPortLabelsGlobal);
   const rfInstance = useRef<ReactFlowInstance | null>(null);
+  // Wrapper around <ReactFlow/> — used by the RMB-pass-through-edges effect
+  // below to delegate right-button pointerdowns from edges to the pane.
+  const editorWrapperRef = useRef<HTMLDivElement>(null);
 
 
   const contextMenuRef = useRef<HTMLDivElement>(null);
@@ -453,6 +456,47 @@ export function GraphEditorInner() {
     setEdges(toRFEdges(snapshot.edges));
     scheduleSync();
   }, [setNodes, setEdges, scheduleSync]);
+
+  // RMB on edges should pan the canvas (same as RMB on the empty pane), not be
+  // swallowed by React Flow's edge handlers. We catch right-button pointerdowns
+  // in capture phase, stop propagation so React Flow's edge listeners don't
+  // claim the gesture, then re-dispatch the event from .react-flow__pane so
+  // d3-zoom's pan-on-drag starts as if the user had pressed on empty canvas.
+  // LMB is untouched — edges remain selectable / double-click-deletable.
+  useEffect(() => {
+    const wrapper = editorWrapperRef.current;
+    if (!wrapper) return;
+    const handler = (e: PointerEvent) => {
+      if (e.button !== 2) return;
+      const target = e.target as Element | null;
+      if (!target?.closest('.react-flow__edge')) return;
+      e.stopPropagation();
+      const pane = wrapper.querySelector('.react-flow__pane') as HTMLElement | null;
+      if (!pane) return;
+      // d3-zoom listens for pointerdown + mousedown; fire both for safety.
+      pane.dispatchEvent(new PointerEvent('pointerdown', {
+        pointerId: e.pointerId,
+        pointerType: e.pointerType,
+        button: e.button,
+        buttons: e.buttons,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        bubbles: true,
+        cancelable: true,
+      }));
+      pane.dispatchEvent(new MouseEvent('mousedown', {
+        button: e.button,
+        buttons: e.buttons,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        bubbles: true,
+        cancelable: true,
+        view: window,
+      }));
+    };
+    wrapper.addEventListener('pointerdown', handler, true);
+    return () => wrapper.removeEventListener('pointerdown', handler, true);
+  }, []);
 
   // Switch displayed graph when scope changes
   useEffect(() => {
@@ -2310,6 +2354,7 @@ export function GraphEditorInner() {
 
   return (
     <div
+      ref={editorWrapperRef}
       className={styles.editor}
       onClick={() => {
         if (suppressNextEditorClickRef.current) {
@@ -2431,6 +2476,12 @@ export function GraphEditorInner() {
           nodeColor={n => n.type === 'groupNode' ? 'rgba(45,64,89,0.5)' : '#2d4059'}
           maskColor="rgba(0, 0, 0, 0.7)"
           style={{ background: '#0d1117' }}
+          pannable
+          zoomable
+          onClick={(_e, position) => {
+            // Jump the viewport to the clicked spot; keep current zoom.
+            rfInstance.current?.setCenter(position.x, position.y, { duration: 200 });
+          }}
         />
       </ReactFlow>
 
