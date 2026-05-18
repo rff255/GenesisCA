@@ -4418,6 +4418,62 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
     return true;
   },
 
+  setCellGlyph: ({ node, ctx, inputs }) => {
+    const viewerId = (node.data.config.mappingId as string) || '';
+    const viewerInt = ctx.viewerIds[viewerId];
+    if (viewerInt === undefined) return true; // unknown viewer — silently skip
+    if (!ctx.layout.hasGlyphs) return true;   // defensive: no glyph regions reserved
+
+    // Viewer guard — same hoisted-local pattern as setColorViewer.
+    const cachedLocal = ctx.viewerLocals.get(viewerId);
+    if (cachedLocal !== undefined) {
+      ctx.emitter.localGet(cachedLocal);
+    } else {
+      ctx.emitter.i32Const(0);
+      ctx.emitter.i32Load(ctx.layout.activeViewerOffset, 2);
+      ctx.emitter.i32Const(viewerInt);
+      ctx.emitter.op(OP_I32_EQ);
+    }
+    ctx.emitter.ifThen(() => {
+      // glyphCodes[idx]: u32 store at glyphCodesOffset + idx*4
+      const glyphByte = ctx.emitter.allocLocal(I32);
+      ctx.emitter.localGet(ctx.iLocalIdx);
+      ctx.emitter.i32Const(4);
+      ctx.emitter.op(OP_I32_MUL);
+      ctx.emitter.localTee(glyphByte);
+
+      const cp = inputs['glyph'] ?? { inline: true, value: 0, valtype: I32 };
+      pushValueAs(ctx.emitter, cp, I32);
+      ctx.emitter.i32Store(ctx.layout.glyphCodesOffset, 2);
+
+      // glyphColors[idx]: pack R | G<<8 | B<<16, store as u32.
+      ctx.emitter.localGet(glyphByte);
+      const r = inputs['r'] ?? { inline: true, value: 0, valtype: I32 };
+      const g = inputs['g'] ?? { inline: true, value: 0, valtype: I32 };
+      const b = inputs['b'] ?? { inline: true, value: 0, valtype: I32 };
+      // R & 0xFF
+      pushValueAs(ctx.emitter, r, I32);
+      ctx.emitter.i32Const(0xFF);
+      ctx.emitter.op(OP_I32_AND);
+      // | ((G & 0xFF) << 8)
+      pushValueAs(ctx.emitter, g, I32);
+      ctx.emitter.i32Const(0xFF);
+      ctx.emitter.op(OP_I32_AND);
+      ctx.emitter.i32Const(8);
+      ctx.emitter.op(OP_I32_SHL);
+      ctx.emitter.op(OP_I32_OR);
+      // | ((B & 0xFF) << 16)
+      pushValueAs(ctx.emitter, b, I32);
+      ctx.emitter.i32Const(0xFF);
+      ctx.emitter.op(OP_I32_AND);
+      ctx.emitter.i32Const(16);
+      ctx.emitter.op(OP_I32_SHL);
+      ctx.emitter.op(OP_I32_OR);
+      ctx.emitter.i32Store(ctx.layout.glyphColorsOffset, 2);
+    });
+    return true;
+  },
+
   setColorViewer: ({ node, ctx, inputs }) => {
     const viewerId = (node.data.config.mappingId as string) || '';
     const viewerInt = ctx.viewerIds[viewerId];

@@ -17,6 +17,7 @@ import {
   readbackBatched, unpackAttrsFromReadback, unpackAttrFromReadback, resetStopFlag, seedRngState,
   setupReductionPipelines, dispatchReductions, setupDirectRender,
   dispatchInit, uploadOrientation, uploadFacePatternLookup, uploadInteractionTable,
+  clearGlyphBuffersWebGPU,
   type WebGPURuntime, type ReadbackRegion,
 } from './webgpuRuntime';
 import { decodeReductions, gpuHandledIds, gpuHandledAttrIds } from './webgpuReduce';
@@ -125,6 +126,9 @@ interface InitMsg {
   webgpuCanvas?: OffscreenCanvas;
   webgpuCanvasWidth?: number;
   webgpuCanvasHeight?: number;
+  /** True when the model uses setCellGlyph anywhere — drives allocation of
+   *  the per-cell glyph overlay regions (codes + colours) in wasmMemory. */
+  hasGlyphs?: boolean;
 }
 
 interface StepMsg { type: 'step'; count: number; activeViewer: string; skipColorPass?: boolean }
@@ -260,6 +264,18 @@ let nbrIndices: Record<string, Int32Array> = {};
 
 let colors: Uint8ClampedArray = new Uint8ClampedArray(0);
 let orderArray: Int32Array | null = null;
+// Per-cell glyph overlay buffers. Views over wasmMemory at layout.glyph{Codes,Colors}Offset
+// when layout.hasGlyphs is true; null otherwise. glyphCodes holds one Unicode
+// codepoint per cell (0 = no glyph); glyphColors holds R | G<<8 | B<<16 per cell.
+// Cleared at the top of every colour pass so compiled writes start fresh.
+let glyphCodes: Uint32Array | null = null;
+let glyphColors: Uint32Array | null = null;
+// Empty placeholders passed to compiled JS step/colour-pass functions when
+// the model has no setCellGlyph node — keeps the function arity stable
+// without paying for a per-cell buffer. The compiled code never reads these
+// because no setCellGlyph emit landed in the function body.
+const GLYPH_NOOP_CODES: Uint32Array = new Uint32Array(0);
+const GLYPH_NOOP_COLORS: Uint32Array = new Uint32Array(0);
 
 // Inspect-cell subscriptions — flat cell indices the main thread is watching
 // via the Shift+LMB popup. Worker emits `inspectCellsData` after every step
@@ -327,6 +343,10 @@ let cachedInteractionTables: Record<string, Float64Array> = {};
  *  Phase 6 wires these into the JS-target compiled-fn signature; Phases 8 / 9
  *  add WASM / WebGPU layout slots that mirror the values. */
 let variegated: VariegatedPayload | null = null;
+// Set by init/recompile BEFORE initGrid runs. Drives layout.hasGlyphs which
+// in turn drives glyphCodes/glyphColors view allocation. Defaults to false
+// so unmigrated/legacy init messages don't allocate the regions for free.
+let hasGlyphs = false;
 let orientationReadView: Int32Array | null = null;
 let orientationWriteView: Int32Array | null = null;
 /** Flat `[speciesIdx * 8 + faceIdx → labelIdx]` (0 = "none"). Built once by
@@ -714,6 +734,7 @@ function initGrid(): void {
     cellAttrs, modelAttrsList, neighborhoods, indicatorsList,
     total, isAsync, boundaryTreatment,
     variegatedInputs,
+    hasGlyphs,
   );
   wasmMemory = new WebAssembly.Memory({ initial: wasmLayout.pages });
   const buf = wasmMemory.buffer;
@@ -742,6 +763,16 @@ function initGrid(): void {
   readAttrs = attrsA;
   writeAttrs = isAsync ? attrsA : attrsB;
   colors = new Uint8ClampedArray(buf, wasmLayout.colorsOffset, wasmLayout.colorsBytes);
+  // Glyph buffer views — only when the layout reserved regions (i.e. the
+  // model has at least one setCellGlyph node). Otherwise null, all readers
+  // skip.
+  if (wasmLayout.hasGlyphs) {
+    glyphCodes = new Uint32Array(buf, wasmLayout.glyphCodesOffset, wasmLayout.glyphCodesBytes / 4);
+    glyphColors = new Uint32Array(buf, wasmLayout.glyphColorsOffset, wasmLayout.glyphColorsBytes / 4);
+  } else {
+    glyphCodes = null;
+    glyphColors = null;
+  }
   generation = 0;
 
   // Variegated Cells — orientation views over wasmMemory. Same sentinel-aware
@@ -860,6 +891,10 @@ function buildLoopArgs(): unknown[] {
     args.push(nbr.coords.length);
   }
   args.push(cachedModelAttrs, colors, activeViewer, cachedIndicators, linkedResults, rngState, stopFlag);
+  // Glyph buffers — always present in the param list to keep arity stable;
+  // empty Uint32Arrays when the model has no glyphs (compiled writes never
+  // execute in that case because no setCellGlyph node was compiled).
+  args.push(glyphCodes ?? GLYPH_NOOP_CODES, glyphColors ?? GLYPH_NOOP_COLORS);
   // Variegated Cells: orientation arrays + face-pattern lookup + interaction
   // tables, in the same order the JS compiler emits its param list.
   if (variegated) {
@@ -879,6 +914,10 @@ function buildCellArgs(idx: number): unknown[] {
     args.push(nbr.coords.length);
   }
   args.push(cachedModelAttrs, colors, activeViewer, cachedIndicators, linkedResults, rngState, stopFlag);
+  // Glyph buffers — always present in the param list to keep arity stable;
+  // empty Uint32Arrays when the model has no glyphs (compiled writes never
+  // execute in that case because no setCellGlyph node was compiled).
+  args.push(glyphCodes ?? GLYPH_NOOP_CODES, glyphColors ?? GLYPH_NOOP_COLORS);
   if (variegated) {
     args.push(orientationReadView, orientationWriteView, facePatternLookup, cachedInteractionTables);
   }
@@ -1022,6 +1061,14 @@ function runStep(): void {
   // fired during an internal runStep call (reset/randomize/paint visualisation)
   // would persist and falsely pause the user's next Play.
   if (stopFlag) stopFlag[0] = 0;
+
+  // Clear glyph buffers — matches runColorPass behaviour. If the model uses
+  // setCellGlyph in step (no output mapping) the step-side writes are the
+  // only source; if both step and an output mapping write glyphs, the
+  // mapping's clear+write happens after this and wins (same semantics as
+  // colour writes via SetColorViewer).
+  if (glyphCodes) glyphCodes.fill(0);
+  if (glyphColors) glyphColors.fill(0);
 
   // Reset per-generation standalone indicators to defaults
   if (standalonePerGenIdx.length > 0) {
@@ -1168,6 +1215,9 @@ function runStepWebGPU(): void {
     }
     uploadIndicatorsAt(webgpuRuntime, standalonePerGenIdx, vals, isIntEncodedIndicator);
   }
+  // Zero the GPU glyph buffers each step so per-cell setCellGlyph writes
+  // can treat codepoint 0 as "no glyph". Matches the CPU runStep behaviour.
+  if (webgpuRuntime.layout.hasGlyphs) clearGlyphBuffersWebGPU(webgpuRuntime);
   dispatchStep(webgpuRuntime);
   gpuOwnsAttrs = true;
   generation++;
@@ -1182,6 +1232,9 @@ function runStepWebGPU(): void {
  *  main thread — no readback or postMessage needed for display. */
 function runColorPassWebGPU(): boolean {
   if (!webgpuRuntime || !webgpuRuntime.stepReady) return false;
+  // Glyphs: clear before the colour pass so the OM shader's per-cell writes
+  // see codepoint-0 sentinels everywhere. Mirrors the CPU runColorPass path.
+  if (webgpuRuntime.layout.hasGlyphs) clearGlyphBuffersWebGPU(webgpuRuntime);
   // P6 — combined color-pass + present in one encoder + submit. Saves a
   // driver round-trip per frame compared to dispatching them separately.
   // When direct render is on but the active viewer has no Output Mapping
@@ -1401,6 +1454,7 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
   const regions: ReadbackRegion[] = [];
   let colorsRegion = -1, indicatorsRegion = -1, stopRegion = -1, attrsRegion = -1;
   let reductionsRegion = -1;
+  let glyphCodesRegion = -1, glyphColorsRegion = -1;
   // For selective attrs readback, store the (attrId, region slot) pairs so we
   // can decode each attr's slice back into readAttrs.
   const attrSlots: Array<{ attrId: string; slot: number }> = [];
@@ -1423,6 +1477,16 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
   if (gpuPlan && rt.reductionsBuf && gpuPlan.totalSlots > 0 && opts.needColors !== false) {
     reductionsRegion = regions.length;
     regions.push({ src: rt.reductionsBuf, srcOffset: 0, size: Math.max(16, gpuPlan.totalSlots * 4) });
+  }
+  // Glyph buffers: read back when the model uses setCellGlyph AND this is
+  // a full finalize (the main thread needs them to overlay characters on
+  // top of cell colours). Cheap relative to colors at typical grids; gated
+  // by `hasGlyphs` so models without the feature pay zero.
+  if (rt.layout.hasGlyphs && rt.glyphCodesBuf && rt.glyphColorsBuf && opts.needColors !== false) {
+    glyphCodesRegion = regions.length;
+    regions.push({ src: rt.glyphCodesBuf, srcOffset: 0, size: rt.layout.glyphCodesBytes });
+    glyphColorsRegion = regions.length;
+    regions.push({ src: rt.glyphColorsBuf, srcOffset: 0, size: rt.layout.glyphColorsBytes });
   }
   if (fullAttrs && rt.attrsReadBuf) {
     // Save / explicit full readback path.
@@ -1480,6 +1544,18 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     // controlBuf layout: [activeViewer (i32), stopFlag (atomic u32), pad, pad]
     stopFlag[0] = view.getUint32(rt.layout.controlOffsets.stopFlag, true) >>> 0;
+  }
+  if (glyphCodesRegion >= 0 && glyphCodes) {
+    const bytes = sliced[glyphCodesRegion]!;
+    const src = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+    const lim = Math.min(glyphCodes.length, src.length);
+    for (let i = 0; i < lim; i++) glyphCodes[i] = src[i]!;
+  }
+  if (glyphColorsRegion >= 0 && glyphColors) {
+    const bytes = sliced[glyphColorsRegion]!;
+    const src = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+    const lim = Math.min(glyphColors.length, src.length);
+    for (let i = 0; i < lim; i++) glyphColors[i] = src[i]!;
   }
   if (attrsRegion >= 0) {
     unpackAttrsFromReadback(rt.layout, sliced[attrsRegion]!, readAttrs);
@@ -1712,6 +1788,12 @@ function runInit(): void {
  *  same readAttrs->attrsA pre-step normalisation as runStep does, because the
  *  output mapping reads from the baked-in attrReadOffset. */
 function runColorPass(): void {
+  // Glyph buffers: zero before every colour pass so per-cell setCellGlyph
+  // writes see a fresh canvas. "Codepoint 0" is the renderer's "skip this
+  // cell" signal. Cheap memset — at 5000² this is ~3–6ms; for typical grids
+  // negligible. Only allocated when the model uses setCellGlyph.
+  if (glyphCodes) glyphCodes.fill(0);
+  if (glyphColors) glyphColors.fill(0);
   const sanitised = sanitiseExportName(activeViewer);
   if (useWasm && wasmOutputMappingFns[sanitised]) {
     if (updateMode !== 'asynchronous' && readAttrs !== attrsA) {
@@ -1943,21 +2025,53 @@ function sendColors(): void {
       indicators[id] = linkedResults[id]!;
     }
   }
+  // Build glyph payload when the model uses setCellGlyph AND there are any
+  // non-zero entries. Quick-scan via a single-pass length-aware probe (cheap
+  // even at 5000²: ~5–10 ms typed-array scan worst case, often early-exits
+  // on a small region of zeros). Sent as detached Uint32Array transfers.
+  let glyphsPayload: { codes: Uint32Array; colors: Uint32Array } | undefined;
+  if (glyphCodes && glyphColors) {
+    let any = false;
+    for (let i = 0; i < glyphCodes.length; i++) {
+      if (glyphCodes[i] !== 0) { any = true; break; }
+    }
+    if (any) {
+      glyphsPayload = {
+        codes: new Uint32Array(glyphCodes),
+        colors: new Uint32Array(glyphColors),
+      };
+    }
+  }
+
   // P7 — when WebGPU direct render is active, the OffscreenCanvas already
   // holds the latest frame; skip the colors transfer entirely. Main-thread
   // draw() detects this and only does the zoom/pan composite. Exception:
   // when GIF recording is on, finalizeStepWebGPU populated the `colors`
   // mirror via readback so the main thread can capture frames.
   if (webgpuRuntime?.directRender && !recording) {
-    self.postMessage({ type: 'stepped', generation, indicators });
+    if (glyphsPayload) {
+      self.postMessage(
+        { type: 'stepped', generation, indicators, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors },
+        { transfer: [glyphsPayload.codes.buffer, glyphsPayload.colors.buffer] },
+      );
+    } else {
+      self.postMessage({ type: 'stepped', generation, indicators });
+    }
     postInspectCellsData();
     return;
   }
   const copy = new Uint8ClampedArray(colors);
-  self.postMessage(
-    { type: 'stepped', generation, colors: copy, indicators },
-    { transfer: [copy.buffer] },
-  );
+  if (glyphsPayload) {
+    self.postMessage(
+      { type: 'stepped', generation, colors: copy, indicators, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors },
+      { transfer: [copy.buffer, glyphsPayload.codes.buffer, glyphsPayload.colors.buffer] },
+    );
+  } else {
+    self.postMessage(
+      { type: 'stepped', generation, colors: copy, indicators },
+      { transfer: [copy.buffer] },
+    );
+  }
   postInspectCellsData();
 }
 
@@ -2001,6 +2115,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // in wasmMemory. initVariegation runs AFTER initGrid to fill the
       // reserved regions with computed values.
       variegated = msg.variegated ?? null;
+      hasGlyphs = !!(msg as InitMsg).hasGlyphs;
       // initGrid first because it allocates wasmMemory + computes layout that
       // initIndicators / buildNeighborIndices need to create their views over.
       initGrid();

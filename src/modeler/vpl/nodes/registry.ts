@@ -29,6 +29,7 @@ import { LoopNode } from './LoopNode';
 import { SetAttributeNode } from './SetAttributeNode';
 import { UpdateAttributeNode } from './UpdateAttributeNode';
 import { SetColorViewerNode } from './SetColorViewerNode';
+import { SetCellGlyphNode } from './SetCellGlyphNode';
 import { InputColorNode } from './InputColorNode';
 import { MacroNode } from './MacroNode';
 import { MacroInputNode } from './MacroInputNode';
@@ -130,6 +131,7 @@ const ALL_NODES: NodeTypeDef[] = [
   SetNeighborOrientationByIndexNode,
   // Color
   SetColorViewerNode,
+  SetCellGlyphNode,
   GetColorConstantNode,
   ColorScaleNode,
   // Indicators

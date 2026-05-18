@@ -20,6 +20,17 @@ export function getInlineValue(port: PortDef, config: Record<string, string | nu
   if (val === undefined || val === '') return port.defaultValue;
   const s = String(val);
   if (port.inlineWidget === 'bool') return s === 'true' ? '1' : '0';
+  if (port.inlineWidget === 'glyph') {
+    // Stored as a numeric codepoint string ('8593' for ↑, etc.). Coerce
+    // defensively in case a future widget revision writes raw characters.
+    const n = parseInt(s, 10);
+    if (Number.isFinite(n) && n >= 0) return String(n);
+    if (s.length > 0) {
+      const cp = s.codePointAt(0);
+      if (cp !== undefined) return String(cp);
+    }
+    return port.defaultValue;
+  }
   if (port.inlineWidget === 'number') {
     // Canonicalize to a well-formed JS number literal so the JS-emit path can
     // never inline a non-numeric string. Defense-in-depth against the

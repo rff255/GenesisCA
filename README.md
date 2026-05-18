@@ -144,6 +144,7 @@ A complete GenesisCA model definition consists of:
 - **Brush tool** — configurable color (with live R/G/B channel inputs beside the picker), width/height, input mapping; visual brush cursor; Ctrl+drag interactive resize
 - **Region clipboard** — Ctrl+C/V/X on the simulator copy/paste/cut all cell attributes within the brush rectangle; paste anchors to the brush's top-left corner
 - **Viewer tabs** — horizontal bar at the top to switch between Attribute-to-Color visualization modes
+- **Glyph overlay** — drop a `Set Cell Glyph` node into any Output Mapping to paint a Unicode character on top of each cell (any character, in any RGB colour). Per-cell glyph + colour are computed by the same node graph as the cell colour, so patterns like `GetOrientation → Switch → SetCellGlyph(↑→↓←)` show per-cell facing direction at a glance. Cached pre-rasterised tiles keep it fast; glyphs hide automatically when cells are too small to read.
 - **Infinite-tile mode** — the ∞ button (torus-boundary models only) tiles the grid across the viewport so you can pan endlessly across the wrap seams
 - **Live model attribute controls** — change global parameters without recompiling
 - **Grid dimension overrides** — experiment with different sizes

@@ -165,8 +165,9 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 | # | Type | Label | Description | Ports | Notes |
 |---|---|---|---|---|---|
 | 37 | `setColorViewer` | Set Color Viewer | Write R/G/B to the output mapping's color buffer. | `I: DO` (flow) `I: R` `I: G` `I: B` / — | Used in `outputMapping` chains |
-| 38 | `getColorConstant` | Color Constant | Emit a fixed RGB triple. | `O: R` `O: G` `O: B` (int) | |
-| 39 | `colorScale` | Color Scale | Map `T` to an RGB color via N colour stops with a selectable curve (linear / smoothstep / easeInQuad / easeOutQuad / exponential / logarithmic). Replaces the legacy `colorInterpolation` node. | `I: T` (float) / `O: R` `O: G` `O: B` (int) | Min 2 stops; `t` outside the stop range clamps to nearest endpoint |
+| 38 | `setCellGlyph` | Set Cell Glyph | Write a per-cell Unicode glyph + RGB tint to the overlay buffers. The simulator paints the glyph on top of the cell colour when zoom is sufficient. | `I: DO` (flow) `I: Glyph` (codepoint, inline glyph picker) `I: R` `I: G` `I: B` / — | Used in `outputMapping` chains. Hidden below ~6 px/cell |
+| 39 | `getColorConstant` | Color Constant | Emit a fixed RGB triple. | `O: R` `O: G` `O: B` (int) | |
+| 40 | `colorScale` | Color Scale | Map `T` to an RGB color via N colour stops with a selectable curve (linear / smoothstep / easeInQuad / easeOutQuad / exponential / logarithmic). Replaces the legacy `colorInterpolation` node. | `I: T` (float) / `O: R` `O: G` `O: B` (int) | Min 2 stops; `t` outside the stop range clamps to nearest endpoint |
 
 ### Hidden / auto-generated
 
@@ -289,6 +290,10 @@ graph LR
   E[inputColor event]:::prod -- R,G,B --> C
 
   C[setColorViewer]:::cons
+  F[setCellGlyph<br/>glyph + R/G/B]:::cons
+  A -- R,G,B --> F
+  B -- R,G,B --> F
+  D -- R,G,B --> F
 ```
 
 **Observations**

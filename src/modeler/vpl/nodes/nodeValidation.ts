@@ -207,6 +207,7 @@ export function detectMissingConfig(
     case 'inputColor':
     case 'outputMapping':
     case 'setColorViewer':
+    case 'setCellGlyph':
       if (!hasMapping(config.mappingId)) issues.push('Select a mapping');
       break;
 

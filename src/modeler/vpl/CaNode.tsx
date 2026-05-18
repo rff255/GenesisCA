@@ -39,7 +39,7 @@ function getCompatibleHandlesSnapshot() {
   return compatibleHandlesForDrag;
 }
 import styles from './CaNode.module.css';
-import { InlineNumberInput, InlineBoolSelect, InlineTagSelect } from './widgets/InlineWidgets';
+import { InlineNumberInput, InlineBoolSelect, InlineTagSelect, InlineGlyphInput } from './widgets/InlineWidgets';
 
 /** Pick the handle CSS class for a port based on its category + data type.
  *  Flow → green; NeighborIndex value → amber; everything else → cyan. */
@@ -1406,6 +1406,84 @@ function CaNodeComponent({ id, data }: NodeProps) {
           );
         })()}
 
+        {nodeData.nodeType === 'setCellGlyph' && (() => {
+          const allRgbConnected =
+            connectedInputHandles.has(handleId({ id: 'r', kind: 'input', category: 'value' })) &&
+            connectedInputHandles.has(handleId({ id: 'g', kind: 'input', category: 'value' })) &&
+            connectedInputHandles.has(handleId({ id: 'b', kind: 'input', category: 'value' }));
+          const pr = parseInt(String(nodeData.config._port_r ?? '255'), 10) || 0;
+          const pg = parseInt(String(nodeData.config._port_g ?? '255'), 10) || 0;
+          const pb = parseInt(String(nodeData.config._port_b ?? '255'), 10) || 0;
+          const hex = `#${Math.min(255, Math.max(0, pr)).toString(16).padStart(2, '0')}${Math.min(255, Math.max(0, pg)).toString(16).padStart(2, '0')}${Math.min(255, Math.max(0, pb)).toString(16).padStart(2, '0')}`;
+          const glyphConnected = connectedInputHandles.has(handleId({ id: 'glyph', kind: 'input', category: 'value' }));
+          // Starter palette — clicking inserts the codepoint into _port_glyph.
+          // Hidden when the Glyph port is wired (the upstream node controls it).
+          const STARTER = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖', '○', '△', '★'];
+          return (
+            <>
+              <select
+                className={styles.select}
+                value={(nodeData.config.mappingId as string) || ''}
+                onChange={e => updateConfig('mappingId', e.target.value)}
+              >
+                <option value="">Select Mapping...</option>
+                {model.mappings
+                  .filter(m => m.isAttributeToColor)
+                  .map(m => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+              </select>
+              {!allRgbConnected && (
+                <input
+                  type="color"
+                  className={styles.input}
+                  style={{ height: 24, padding: 1, cursor: 'pointer' }}
+                  value={hex}
+                  onChange={e => {
+                    const h = e.target.value;
+                    const nr = parseInt(h.slice(1, 3), 16);
+                    const ng = parseInt(h.slice(3, 5), 16);
+                    const nb = parseInt(h.slice(5, 7), 16);
+                    updateNodeData(id, {
+                      ...nodeData,
+                      config: { ...nodeData.config, _port_r: String(nr), _port_g: String(ng), _port_b: String(nb) },
+                    });
+                  }}
+                  onClick={e => e.stopPropagation()}
+                  title="Glyph color (overridden per-channel by connections)"
+                />
+              )}
+              {!glyphConnected && (
+                <div
+                  className="nodrag"
+                  style={{ display: 'flex', flexWrap: 'wrap', gap: 2, justifyContent: 'center', marginTop: 4 }}
+                  onMouseDown={e => e.stopPropagation()}
+                  onClick={e => e.stopPropagation()}
+                  title="Quick-pick a glyph"
+                >
+                  {STARTER.map(g => {
+                    const cp = g.codePointAt(0) ?? 0;
+                    return (
+                      <button
+                        key={g}
+                        type="button"
+                        onClick={() => updateConfig('_port_glyph', String(cp))}
+                        style={{
+                          width: 20, height: 20, padding: 0, lineHeight: '20px',
+                          fontSize: 14, cursor: 'pointer',
+                          background: 'transparent', border: '1px solid #555',
+                          color: '#ddd', borderRadius: 2,
+                        }}
+                        title={`Insert ${g} (U+${cp.toString(16).toUpperCase().padStart(4, '0')})`}
+                      >{g}</button>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          );
+        })()}
+
         {nodeData.nodeType === 'inputColor' && (
           <select
             className={styles.select}
@@ -2290,6 +2368,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
                     className={styles.inlineWidget}
                     value={val}
                     options={setAttr?.tagOptions || []}
+                    onChange={next => updateConfig(configKey, next)}
+                    onClick={e => e.stopPropagation()}
+                    onMouseDown={stopDrag}
+                  />
+                ) : effectiveWidget === 'glyph' ? (
+                  <InlineGlyphInput
+                    className={styles.inlineWidget}
+                    value={val}
                     onChange={next => updateConfig(configKey, next)}
                     onClick={e => e.stopPropagation()}
                     onMouseDown={stopDrag}

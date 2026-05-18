@@ -26,6 +26,7 @@
 
 import type { CAModel } from '../../../../model/types';
 import { FACE_SLOT_COUNT } from '../variegation';
+import { hasGlyphsInModel } from '../glyphsUsage';
 
 export interface AttrDef {
   id: string;
@@ -73,6 +74,22 @@ export interface MemoryLayout {
 
   colorsOffset: number;
   colorsBytes: number;
+
+  /** True when any `setCellGlyph` node exists in the graph. When false the
+   *  glyph regions are 0-sized and the worker skips view allocation, ship,
+   *  and overlay render entirely (~zero cost for the common case). */
+  hasGlyphs: boolean;
+  /** Byte offset of the per-cell glyph codepoint buffer (Uint32Array, one
+   *  codepoint per cell). 0 when `hasGlyphs` is false. */
+  glyphCodesOffset: number;
+  /** Bytes reserved for glyphCodes (`total × 4`). 0 when off. */
+  glyphCodesBytes: number;
+  /** Byte offset of the per-cell glyph colour buffer (Uint32Array, R in low
+   *  byte, G middle, B high; alpha byte unused). Matches WebGPU's u32 layout
+   *  1:1 so readback / overlay paths can share the same packed format. */
+  glyphColorsOffset: number;
+  /** Bytes reserved for glyphColors (`total × 4`). 0 when off. */
+  glyphColorsBytes: number;
 
   /** byte offset of nbr index Int32Array; size in i32-elems is total * coords.length */
   nbrIndexOffset: Record<string, number>;
@@ -168,6 +185,7 @@ export function computeMemoryLayout(
   isAsync: boolean,
   boundaryTreatment: string,
   variegated?: VariegatedLayoutInputs,
+  hasGlyphs: boolean = false,
 ): MemoryLayout {
   let off = 0;
 
@@ -230,6 +248,24 @@ export function computeMemoryLayout(
   const colorsOffset = off;
   const colorsBytes = total * 4;
   off += colorsBytes;
+
+  // Glyph regions (codes + packed RGB colours) — both u32 per cell, allocated
+  // only when the model actually references setCellGlyph. Sized by `total`
+  // (not `cellsPerAttr`) — there's no sentinel slot to read from.
+  let glyphCodesOffset = 0;
+  let glyphCodesBytes = 0;
+  let glyphColorsOffset = 0;
+  let glyphColorsBytes = 0;
+  if (hasGlyphs) {
+    glyphCodesBytes = total * 4;
+    off = alignTo(off, 8);
+    glyphCodesOffset = off;
+    off += glyphCodesBytes;
+    glyphColorsBytes = total * 4;
+    off = alignTo(off, 8);
+    glyphColorsOffset = off;
+    off += glyphColorsBytes;
+  }
 
   // Neighbor index tables (Int32Array per neighborhood, length = total * coords.length)
   const nbrIndexOffset: Record<string, number> = {};
@@ -329,6 +365,9 @@ export function computeMemoryLayout(
     totalBytes, pages, isAsync, total,
     attrReadOffset, attrWriteOffset, attrTypeBytes, attrType,
     colorsOffset, colorsBytes,
+    hasGlyphs,
+    glyphCodesOffset, glyphCodesBytes,
+    glyphColorsOffset, glyphColorsBytes,
     nbrIndexOffset, nbrSize,
     modelAttrOffset,
     indicatorOffset, indicatorIds,
@@ -375,6 +414,7 @@ export function computeLayoutFromModel(
     isAsync,
     model.properties.boundaryTreatment,
     variegated,
+    hasGlyphsInModel(model),
   );
 }
 

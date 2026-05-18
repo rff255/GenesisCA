@@ -74,6 +74,12 @@ export interface WebGPURuntime {
    *  (stub-sized when variegation is off) so the bind group can bind
    *  binding 8 unconditionally and the pipeline layout stays model-independent. */
   varAuxBuf: GPUBuffer | null;
+  /** Per-cell glyph codepoint buffer (binding 9, u32 per cell). Stub-sized
+   *  when no setCellGlyph node exists; bound unconditionally so the pipeline
+   *  layout stays model-independent. */
+  glyphCodesBuf: GPUBuffer | null;
+  /** Per-cell glyph colour buffer (binding 10, u32 per cell, R|G<<8|B<<16). */
+  glyphColorsBuf: GPUBuffer | null;
   /** Variegated Cells: Init Event compute pipeline (parallel to step). Built
    *  when the compiled shader exposes `entryPoints.init`. Worker dispatches it
    *  on Reset and then swaps the ping-pong bind group so subsequent step reads
@@ -218,6 +224,8 @@ export async function createWebGPURuntime(init: WebGPURuntimeInit): Promise<WebG
     bindGroupAB: null, bindGroupBA: null, bindGroup: null,
     stepPipeline: null,
     varAuxBuf: null,
+    glyphCodesBuf: null,
+    glyphColorsBuf: null,
     initPipeline: null,
     outputPipelines: new Map(),
     shaderHash: shaderHashOf(init.shaderCode),
@@ -361,6 +369,17 @@ export async function setupBuffersAndPipelines(rt: WebGPURuntime): Promise<void>
     label: 'varAux', size: layout.varAuxBytes,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
+  // Glyph buffers (bindings 9 & 10). Stub-sized when no setCellGlyph exists,
+  // bound unconditionally for the same model-independent pipeline-layout
+  // reason as varAux. COPY_SRC because the overlay path reads them back.
+  rt.glyphCodesBuf = device.createBuffer({
+    label: 'glyphCodes', size: layout.glyphCodesBytes,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+  });
+  rt.glyphColorsBuf = device.createBuffer({
+    label: 'glyphColors', size: layout.glyphColorsBytes,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+  });
 
   rt.bindGroupLayout = device.createBindGroupLayout({
     label: 'genesisca-bgl',
@@ -374,6 +393,8 @@ export async function setupBuffersAndPipelines(rt: WebGPURuntime): Promise<void>
       { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
       { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
       { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+      { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      { binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
     ],
   });
 
@@ -388,6 +409,8 @@ export async function setupBuffersAndPipelines(rt: WebGPURuntime): Promise<void>
     { binding: 6, resource: { buffer: rt.rngStateBuf } },
     { binding: 7, resource: { buffer: rt.controlBuf } },
     { binding: 8, resource: { buffer: rt.varAuxBuf } },
+    { binding: 9, resource: { buffer: rt.glyphCodesBuf } },
+    { binding: 10, resource: { buffer: rt.glyphColorsBuf } },
   ];
   rt.bindGroupAB = device.createBindGroup({
     label: 'genesisca-bg-AB',
@@ -1139,6 +1162,46 @@ export async function readbackColors(rt: WebGPURuntime, dst: Uint8ClampedArray):
   releaseStagingBuffer(pooled);
 }
 
+/** Zero the GPU-side glyph buffers. Called at the top of every colour pass
+ *  when `layout.hasGlyphs` is true so per-cell writes from setCellGlyph can
+ *  treat "codepoint 0" as "no glyph here". Cheap — driver-level memset. */
+export function clearGlyphBuffersWebGPU(rt: WebGPURuntime): void {
+  if (!rt.layout.hasGlyphs || !rt.glyphCodesBuf || !rt.glyphColorsBuf) return;
+  const enc = rt.device.createCommandEncoder({ label: 'clear-glyphs-enc' });
+  enc.clearBuffer(rt.glyphCodesBuf, 0, rt.layout.glyphCodesBytes);
+  enc.clearBuffer(rt.glyphColorsBuf, 0, rt.layout.glyphColorsBytes);
+  rt.device.queue.submit([enc.finish()]);
+}
+
+export async function readbackGlyphs(
+  rt: WebGPURuntime,
+  dstCodes: Uint32Array,
+  dstColors: Uint32Array,
+): Promise<void> {
+  if (!rt.layout.hasGlyphs || !rt.glyphCodesBuf || !rt.glyphColorsBuf) return;
+  const codesSize = rt.layout.glyphCodesBytes;
+  const colorsSize = rt.layout.glyphColorsBytes;
+  // One staging buffer holds both regions back-to-back (codesSize aligned to 4
+  // is fine; both regions are u32-aligned already).
+  const totalSize = codesSize + colorsSize;
+  const pooled = acquireStagingBuffer(rt, totalSize);
+  const stagingBuf = pooled.buffer;
+  const enc = rt.device.createCommandEncoder({ label: 'readback-glyphs-enc' });
+  enc.copyBufferToBuffer(rt.glyphCodesBuf, 0, stagingBuf, 0, codesSize);
+  enc.copyBufferToBuffer(rt.glyphColorsBuf, 0, stagingBuf, codesSize, colorsSize);
+  rt.device.queue.submit([enc.finish()]);
+  await stagingBuf.mapAsync(GPUMapMode.READ, 0, totalSize);
+  const mapped = new Uint8Array(stagingBuf.getMappedRange(0, totalSize));
+  const codesView = new Uint32Array(mapped.buffer, mapped.byteOffset, codesSize / 4);
+  const colorsView = new Uint32Array(mapped.buffer, mapped.byteOffset + codesSize, colorsSize / 4);
+  const lim1 = Math.min(dstCodes.length, codesView.length);
+  for (let i = 0; i < lim1; i++) dstCodes[i] = codesView[i]!;
+  const lim2 = Math.min(dstColors.length, colorsView.length);
+  for (let i = 0; i < lim2; i++) dstColors[i] = colorsView[i]!;
+  stagingBuf.unmap();
+  releaseStagingBuffer(pooled);
+}
+
 export async function readbackIndicators(rt: WebGPURuntime, decode: (id: string, raw: number) => number): Promise<Record<string, number>> {
   if (!rt.indicatorsBuf || rt.layout.indicatorIds.length === 0) return {};
   const size = rt.layout.indicatorsBytes;
@@ -1198,7 +1261,7 @@ export function destroyWebGPURuntime(rt: WebGPURuntime | null): void {
     for (const buf of [
       rt.attrsBufA, rt.attrsBufB, rt.colorsBuf, rt.nbrOffsetsBuf,
       rt.modelAttrsBuf, rt.indicatorsBuf, rt.rngStateBuf, rt.controlBuf,
-      rt.reductionsBuf, rt.varAuxBuf,
+      rt.reductionsBuf, rt.varAuxBuf, rt.glyphCodesBuf, rt.glyphColorsBuf,
     ]) {
       if (buf) buf.destroy();
     }

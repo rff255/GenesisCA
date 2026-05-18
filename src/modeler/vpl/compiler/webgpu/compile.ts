@@ -2261,6 +2261,38 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
     return true;
   },
 
+  setCellGlyph: ({ node, ctx, inputs }) => {
+    const viewerId = (node.data.config.mappingId as string) || '';
+    const viewerInt = ctx.viewerIds[viewerId];
+    if (viewerInt === undefined) return true; // unknown viewer — silently skip
+    if (!ctx.layout.hasGlyphs) return true;   // defensive: stub-sized regions
+
+    const cp = inputs['glyph'] ?? { expr: '0', type: 'i32' as WgslType };
+    const r = inputs['r'] ?? { expr: '0', type: 'i32' as WgslType };
+    const g = inputs['g'] ?? { expr: '0', type: 'i32' as WgslType };
+    const b = inputs['b'] ?? { expr: '0', type: 'i32' as WgslType };
+    const cpe = `u32(max(${castTo(cp, 'i32')}, 0))`;
+    const re = `u32(clamp(${castTo(r, 'i32')}, 0, 255))`;
+    const ge = `u32(clamp(${castTo(g, 'i32')}, 0, 255))`;
+    const be = `u32(clamp(${castTo(b, 'i32')}, 0, 255))`;
+    const packed = `(${re}) | ((${ge}) << 8u) | ((${be}) << 16u)`;
+
+    if (ctx.currentMappingId !== null) {
+      // Inside an outputMapping shader: only write if THIS shader's mapping is
+      // the one referenced. Mirrors setColorViewer's compile-time skip.
+      if (ctx.currentMappingId !== viewerId) return true;
+      ctx.lines.push(`  glyphCodes[idx] = ${cpe};`);
+      ctx.lines.push(`  glyphColors[idx] = ${packed};`);
+      return true;
+    }
+    // Step shader: runtime guard on activeViewer.
+    ctx.lines.push(`  if (control.activeViewer == ${viewerInt}) {`);
+    ctx.lines.push(`    glyphCodes[idx] = ${cpe};`);
+    ctx.lines.push(`    glyphColors[idx] = ${packed};`);
+    ctx.lines.push(`  }`);
+    return true;
+  },
+
   setColorViewer: ({ node, ctx, inputs }) => {
     const viewerId = (node.data.config.mappingId as string) || '';
     const viewerInt = ctx.viewerIds[viewerId];
