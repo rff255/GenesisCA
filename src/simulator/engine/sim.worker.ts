@@ -21,6 +21,9 @@ import {
   type WebGPURuntime, type ReadbackRegion,
 } from './webgpuRuntime';
 import { decodeReductions, gpuHandledIds, gpuHandledAttrIds } from './webgpuReduce';
+import { encodeAttrValue } from '../../model/attrValueEncoding';
+import { subAttrInfo, parentValueToInt } from '../../modeler/vpl/compiler/subAttribute';
+import type { Attribute } from '../../model/types';
 
 interface AttrDef {
   id: string;
@@ -138,6 +141,21 @@ interface PaintMsg {
   mappingId: string;
   activeViewer: string;
 }
+/** Manual Brush — runtime-only special Input Mapping. Bypasses any compiled
+ *  InputColor function and writes each `sets` entry directly into
+ *  `readAttrs[attrId][idx]` for every painted cell. Sub-attributes honour
+ *  per-cell skip: a sub-attr write is suppressed on a cell whose effective
+ *  parent value (the brush's parent value if the parent is also in `sets`,
+ *  otherwise the cell's current `readAttrs[parentId][idx]`) is not in the
+ *  schema-declared `parentValues`. */
+interface PaintManualMsg {
+  type: 'paintManual';
+  cells: Array<{ row: number; col: number }>;
+  /** Only attributes the user marked "Set". Pre-encoded by the UI using
+   *  encodeAttrValue() so the worker doesn't repeat the string→number switch. */
+  sets: Array<{ attrId: string; value: number }>;
+  activeViewer: string;
+}
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
 interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[] }
@@ -235,7 +253,7 @@ interface SetInspectCellsMsg { type: 'setInspectCells'; cellIdxs: number[] }
  *  content despite dispatching a present internally). Idempotent + cheap. */
 interface RefreshDisplayMsg { type: 'refreshDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateInteractionTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateInteractionTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -670,14 +688,7 @@ function viewOver(type: string, buf: ArrayBuffer, byteOffset: number, length: nu
 }
 
 function defaultValue(attr: AttrDef): number {
-  switch (attr.type) {
-    case 'bool': return attr.defaultValue === 'true' ? 1 : 0;
-    case 'integer': return parseInt(attr.defaultValue, 10) || 0;
-    case 'float': return parseFloat(attr.defaultValue) || 0;
-    case 'tag': return parseInt(attr.defaultValue, 10) || 0;
-    case 'neighborIndex': return parseInt(attr.defaultValue, 10) || 0;
-    default: return 0;
-  }
+  return encodeAttrValue(attr, attr.defaultValue);
 }
 
 /** Parsed value held by out-of-grid cells under constant boundary. Falls back
@@ -685,14 +696,7 @@ function defaultValue(attr: AttrDef): number {
 function boundaryCellValue(attr: AttrDef): number {
   const bv = attr.boundaryValue;
   if (bv === undefined || bv === '') return defaultValue(attr);
-  switch (attr.type) {
-    case 'bool': return bv === 'true' ? 1 : 0;
-    case 'integer': return parseInt(bv, 10) || 0;
-    case 'float': return parseFloat(bv) || 0;
-    case 'tag': return parseInt(bv, 10) || 0;
-    case 'neighborIndex': return parseInt(bv, 10) || 0;
-    default: return 0;
-  }
+  return encodeAttrValue(attr, bv);
 }
 
 // ---------------------------------------------------------------------------
@@ -2331,6 +2335,96 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         break;
       }
       paintApply();
+      break;
+    }
+
+    case 'paintManual': {
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
+
+      // Pre-compute per-set sub-attribute metadata once (not per cell).
+      // subAttrInfo / parentValueToInt are typed against `Attribute`; our
+      // AttrDef is a structural subset that carries the same relevant
+      // fields (type, parentAttributeId, parentValues, tagOptions), so a
+      // shape cast is safe here.
+      const setEntries = msg.sets.map(s => {
+        const attr = cellAttrs.find(a => a.id === s.attrId);
+        if (!attr) return { s, info: null as null | { parentId: string; values: number[] } };
+        const info = subAttrInfo(attr as unknown as Attribute, { attributes: cellAttrs as unknown as Attribute[] });
+        if (!info) return { s, info: null };
+        return {
+          s,
+          info: {
+            parentId: info.parent.id,
+            values: info.parentValues.map(v => parentValueToInt(info.parent, v)),
+          },
+        };
+      }).filter(e => cellAttrs.some(a => a.id === e.s.attrId));
+      // Brush-parent override: if a parent attribute is itself in `sets`, the
+      // brush's value takes precedence over the cell's stored parent value
+      // when deciding sub-attribute writability.
+      const brushParentOverride = new Map<string, number>();
+      for (const s of msg.sets) brushParentOverride.set(s.attrId, s.value);
+
+      const isSync = updateMode !== 'asynchronous';
+
+      const applyManual = (): void => {
+        for (const c of msg.cells) {
+          if (c.row < 0 || c.row >= height || c.col < 0 || c.col >= width) continue;
+          const idx = c.row * width + c.col;
+          for (const { s, info } of setEntries) {
+            if (info) {
+              const pv = brushParentOverride.has(info.parentId)
+                ? brushParentOverride.get(info.parentId)!
+                : (readAttrs[info.parentId]?.[idx] as number | undefined);
+              if (pv === undefined) continue;
+              if (!info.values.includes(pv)) continue; // SKIP this cell for this sub-attr
+            }
+            const buf = readAttrs[s.attrId];
+            if (!buf) continue;
+            buf[idx] = s.value;
+            // In sync mode the step copies r→w at the top of the next step,
+            // but a paint that lands between steps must keep both buffers
+            // consistent so InputColor / step compiled functions see the new
+            // value through w_<id>[idx] reads as well. Async shares one buffer.
+            if (isSync) writeAttrs[s.attrId]![idx] = s.value;
+          }
+        }
+
+        // Display refresh — mirror of `paint` tail.
+        const webgpuPaint = useWebGPU && webgpuRuntime?.stepReady;
+        if (webgpuPaint && webgpuRuntime) {
+          const idxs: number[] = [];
+          for (const c of msg.cells) {
+            if (c.row < 0 || c.row >= height || c.col < 0 || c.col >= width) continue;
+            idxs.push(c.row * width + c.col);
+          }
+          patchWebGPUCells(idxs);
+          uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
+          refreshColorsAfterInputWebGPU();
+          finalizeStepWebGPU({ needColors: true }).then(() => sendColors())
+            .catch(e => self.postMessage({ type: 'error', message: '[webgpu] paintManual colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
+          return;
+        }
+        refreshColorsAfterInputJS();
+        sendColors();
+      };
+
+      // After a Play sequence on WebGPU, the live state lives on GPU and the
+      // CPU `readAttrs` is stale. The sub-attribute filter reads parent values
+      // from `readAttrs[parentId][idx]`, so pull state down once before
+      // iterating cells. Only needed when at least one sub-attr is being set
+      // AND the parent isn't being overridden by the brush itself.
+      const needsReadback = useWebGPU && webgpuRuntime?.stepReady && gpuOwnsAttrs
+        && setEntries.some(e => e.info && !brushParentOverride.has(e.info.parentId));
+      if (needsReadback && webgpuRuntime) {
+        const rt = webgpuRuntime;
+        readbackAttrs(rt, readAttrs).then(() => {
+          gpuOwnsAttrs = false;
+          applyManual();
+        }).catch(e => self.postMessage({ type: 'error', message: '[webgpu] paintManual readback failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
+        break;
+      }
+      applyManual();
       break;
     }
 

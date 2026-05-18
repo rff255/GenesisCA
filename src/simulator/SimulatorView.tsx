@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useModel } from '../model/ModelContext';
 import { compileGraph } from '../modeler/vpl/compiler/compile';
 import { hasGlyphsInModel } from '../modeler/vpl/compiler/glyphsUsage';
@@ -13,11 +13,13 @@ import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
 import { getGlyphTile } from './recording/glyphAtlas';
 import { IndicatorDisplay } from './IndicatorDisplay';
 import { BrushColorPopover } from './BrushColorPopover';
+import { ManualBrushPanel } from './ManualBrushPanel';
 import { InspectCellPopover, InspectHoverLink, type InspectPopoverState } from './InspectCellPopover';
 import { PresetSaveDialog } from './PresetSaveDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { serializeSimState, serializePreset, downloadStateFile, readStateFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2 } from '../model/fileOperations';
 import type { Attribute, CAModel, Preset, SimulationState } from '../model/types';
+import { encodeAttrValue } from '../model/attrValueEncoding';
 import styles from './SimulatorView.module.css';
 
 const SIM_SETTINGS_KEY = 'genesisca_sim_settings';
@@ -28,6 +30,40 @@ function loadSimSettings(): Record<string, unknown> {
     if (raw) return JSON.parse(raw);
   } catch { /* ignore */ }
   return {};
+}
+
+// --- Manual Brush ---
+// Sentinel mapping ID for the runtime-only "Manual" tab in the brush mapping
+// strip. Doesn't collide with real mapping IDs (which are nanoid-like).
+export const MANUAL_BRUSH_MAPPING_ID = '__manual__';
+
+export interface ManualBrushAttrEntry {
+  enabled: boolean;
+  /** Canonical string encoding, identical to Attribute.defaultValue. */
+  value: string;
+}
+export type ManualBrushModelState = Record<string /* attrId */, ManualBrushAttrEntry>;
+
+const MANUAL_BRUSH_KEY_PREFIX = 'genesisca_manual_brush_v1:';
+function manualBrushStorageKey(modelName: string): string {
+  // Models don't have a stable id field, so we key on the user-visible name.
+  // Renaming a model resets brush state (acceptable UX wart — values are
+  // re-derived from each attribute's defaultValue with all rows enabled).
+  return MANUAL_BRUSH_KEY_PREFIX + (modelName.trim() || '__unnamed__');
+}
+function loadManualBrush(modelName: string): ManualBrushModelState | null {
+  try {
+    const raw = localStorage.getItem(manualBrushStorageKey(modelName));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as ManualBrushModelState;
+  } catch { /* ignore */ }
+  return null;
+}
+function saveManualBrush(modelName: string, state: ManualBrushModelState): void {
+  try {
+    localStorage.setItem(manualBrushStorageKey(modelName), JSON.stringify(state));
+  } catch { /* localStorage full */ }
 }
 
 // "Include central cell" is a schema-level flag that is compiled away before
@@ -180,6 +216,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const [brushW, setBrushW] = useState((saved.current.brushW as number) ?? 1);
   const [brushH, setBrushH] = useState((saved.current.brushH as number) ?? 1);
   const [brushMapping, setBrushMapping] = useState((saved.current.brushMapping as string) ?? '');
+  // Manual Brush — per-model state: which cell attrs are being set, and to
+  // what value. Persisted per-model name in localStorage (see helpers above).
+  // The merge effect below seeds defaults whenever the attribute list changes.
+  const [manualBrush, setManualBrush] = useState<ManualBrushModelState>({});
+  const manualBrushRef = useRef<ManualBrushModelState>({});
+  useEffect(() => { manualBrushRef.current = manualBrush; }, [manualBrush]);
   const [showBrushCursor, setShowBrushCursor] = useState((saved.current.showBrushCursor as boolean) ?? true);
   const [showGridlines, setShowGridlines] = useState((saved.current.showGridlines as boolean) ?? false);
   // Infinity canvas: when the model uses torus boundary, the grid tiles into the
@@ -257,6 +299,41 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }, 300);
     return () => clearTimeout(timer);
   }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, infinityCanvas, indicatorVizModes, recordFormat]);
+
+  // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
+  // whenever the cell attribute set (id+type) changes. Surviving attrs carry
+  // their stored entry; new attrs seed `{enabled: true, value: defaultValue}`;
+  // type-changed attrs reset to defaults. The signature key (not the model
+  // object identity) means live name/description edits in the Modeler don't
+  // wipe brush state mid-edit.
+  const cellAttrSig = useMemo(
+    () => model.attributes.filter(a => !a.isModelAttribute).map(a => a.id + ':' + a.type).join('|'),
+    [model.attributes],
+  );
+  const manualBrushModelKey = model.properties.name;
+  useEffect(() => {
+    const stored = loadManualBrush(manualBrushModelKey) ?? {};
+    const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
+    const next: ManualBrushModelState = {};
+    for (const a of cellAttrs) {
+      const prev = stored[a.id];
+      // Defensive: skip attribute types we have no widget for (cell attrs are
+      // bool/integer/float/tag/neighborIndex today — color/interactionTable are
+      // model-only).
+      if (a.type === 'color' || a.type === 'interactionTable') continue;
+      next[a.id] = prev
+        ? { enabled: !!prev.enabled, value: typeof prev.value === 'string' ? prev.value : (a.defaultValue ?? '') }
+        : { enabled: true, value: a.defaultValue ?? '' };
+    }
+    setManualBrush(next);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manualBrushModelKey, cellAttrSig]);
+
+  // Manual Brush — debounced persistence (per-model, separate localStorage entry).
+  useEffect(() => {
+    const t = setTimeout(() => saveManualBrush(manualBrushModelKey, manualBrush), 300);
+    return () => clearTimeout(t);
+  }, [manualBrushModelKey, manualBrush]);
 
   const cycleIndicatorVizMode = useCallback((id: string) => {
     setIndicatorVizModes(prev => {
@@ -1173,7 +1250,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const viewer = firstViewer?.id ?? '';
     setActiveViewer(viewer);
     const firstInput = model.mappings.find(m => !m.isAttributeToColor);
-    setBrushMapping(firstInput?.id ?? '');
+    // Fall back to the always-available Manual Brush when the model has no
+    // color-input mappings, so the brush is immediately usable on empty
+    // models or models that only define output mappings.
+    setBrushMapping(firstInput?.id ?? MANUAL_BRUSH_MAPPING_ID);
     if (result.error) setCompileError(result.error);
 
     // Only reset pan/zoom when the grid dimensions actually change. This
@@ -1762,6 +1842,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // Mappings ref lets mouse/keyboard handlers see the latest model.mappings without re-registering.
   const mappingsRef = useRef(model.mappings);
   useEffect(() => { mappingsRef.current = model.mappings; }, [model.mappings]);
+  // Cell attributes ref — flushPaintBatch needs the attribute types to encode
+  // Manual Brush values into typed-array numerics. Keeping a ref avoids
+  // re-registering the paint callback on every model edit.
+  const cellAttrsRef = useRef<Attribute[]>(model.attributes.filter(a => !a.isModelAttribute));
+  useEffect(() => { cellAttrsRef.current = model.attributes.filter(a => !a.isModelAttribute); }, [model.attributes]);
   // In-page color popover shown on Modifier+RMB (null = closed).
   // We render our own popover at the cursor because the native <input type="color">
   // picker opens as an OS-managed window anchored to the input's DOM position, which
@@ -1960,6 +2045,22 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (cells.length === 0 || mappingId == null) return;
     pendingPaintCells.current = [];
     pendingPaintMapping.current = null;
+    if (mappingId === MANUAL_BRUSH_MAPPING_ID) {
+      // Snapshot the brush state AT FLUSH TIME so mid-drag widget edits land
+      // on the second half of the stroke (matches the mid-drag-tab-switch
+      // semantics that already exist for the color mapping case).
+      const brush = manualBrushRef.current;
+      const sets: Array<{ attrId: string; value: number }> = [];
+      for (const attr of cellAttrsRef.current) {
+        const entry = brush[attr.id];
+        if (!entry || !entry.enabled) continue;
+        sets.push({ attrId: attr.id, value: encodeAttrValue(attr, entry.value) });
+      }
+      if (sets.length === 0) return; // nothing enabled — a no-op stroke
+      const trimmedCells = cells.map(c => ({ row: c.row, col: c.col }));
+      workerRef.current?.postMessage({ type: 'paintManual', cells: trimmedCells, sets, activeViewer: viewer });
+      return;
+    }
     workerRef.current?.postMessage({ type: 'paint', cells, mappingId, activeViewer: viewer });
   }, []);
 
@@ -2040,13 +2141,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if ((e.target as HTMLElement).closest('[data-sim-overlay]')) return;
       e.preventDefault();
       // Ctrl+wheel = cycle through Input Mappings (for quick brush behavior switching)
+      // Manual Brush participates in the cycle as the rightmost entry, so it's
+      // always reachable even when the model has zero color-input mappings.
       if (e.ctrlKey) {
-        const inputs = mappingsRef.current.filter(m => !m.isAttributeToColor);
+        const inputs = [
+          ...mappingsRef.current.filter(m => !m.isAttributeToColor).map(m => m.id),
+          MANUAL_BRUSH_MAPPING_ID,
+        ];
         if (inputs.length === 0) return;
-        const curIdx = inputs.findIndex(m => m.id === brushMappingRef.current);
+        const curIdx = inputs.findIndex(id => id === brushMappingRef.current);
         const base = curIdx < 0 ? 0 : curIdx;
         const nextIdx = (base + (e.deltaY > 0 ? 1 : -1) + inputs.length) % inputs.length;
-        setBrushMapping(inputs[nextIdx]!.id);
+        setBrushMapping(inputs[nextIdx]!);
         return;
       }
       const zoomFactor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
@@ -2176,12 +2282,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         canvasBrushActive = true;
         lastPaintGrid.current = null; // first paint call sets it
         paintAt(e.clientX, e.clientY);
-      } else if (e.button === 2 && (e.ctrlKey || e.altKey || e.shiftKey || e.metaKey)) {
+      } else if (e.button === 2 && (e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) && brushMappingRef.current !== MANUAL_BRUSH_MAPPING_ID) {
         // Modifier+RMB = open the in-page brush color popover at the cursor.
         // Any modifier is accepted (Ctrl, Shift, Alt, Meta) because plain Ctrl+RMB
         // gets swallowed on some Windows/Chrome combos (observed on ABNT2/Brazilian
         // layouts where AltGr=Ctrl+Alt works but Ctrl alone does not). Shift+RMB,
-        // Alt+RMB, Ctrl+Shift+RMB all work too.
+        // Alt+RMB, Ctrl+Shift+RMB all work too. Suppressed when Manual Brush is
+        // active — Manual has no color picker, so falling through to RMB pan is
+        // the natural behaviour.
         e.preventDefault();
         setColorPopover({ x: e.clientX, y: e.clientY });
       } else if (e.button === 2) {
@@ -3499,42 +3607,58 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               <span className={styles.panelTitle}>Input Mapping (C{'\u2192'}A)</span>
             </div>
             <div className={styles.rightPanelSectionBody}>
-            {colorToAttrMappings.length > 0 && (
-              <div className={styles.mappingTabs}>
-                {colorToAttrMappings.map(m => (
-                  <button
-                    key={m.id}
-                    className={`${styles.mappingTab} ${brushMapping === m.id ? styles.mappingTabActive : ''}`}
-                    onClick={() => setBrushMapping(m.id)}
-                  >
-                    {m.name}
-                  </button>
-                ))}
+            {/* Tab strip \u2014 always rendered: even when the model has zero color
+                input mappings, the Manual tab still appears. */}
+            <div className={styles.mappingTabs}>
+              {colorToAttrMappings.map(m => (
+                <button
+                  key={m.id}
+                  className={`${styles.mappingTab} ${brushMapping === m.id ? styles.mappingTabActive : ''}`}
+                  onClick={() => setBrushMapping(m.id)}
+                >
+                  {m.name}
+                </button>
+              ))}
+              <button
+                key={MANUAL_BRUSH_MAPPING_ID}
+                className={`${styles.mappingTab} ${styles.mappingTabManual} ${brushMapping === MANUAL_BRUSH_MAPPING_ID ? styles.mappingTabActive : ''}`}
+                onClick={() => setBrushMapping(MANUAL_BRUSH_MAPPING_ID)}
+                title="Manual Brush \u2014 directly set chosen cell attributes on painted cells (always available)"
+              >
+                Manual
+              </button>
+            </div>
+            {brushMapping === MANUAL_BRUSH_MAPPING_ID ? (
+              <ManualBrushPanel
+                cellAttributes={model.attributes.filter(a => !a.isModelAttribute)}
+                state={manualBrush}
+                onChange={setManualBrush}
+              />
+            ) : (
+              <div className={styles.fieldRow}>
+                <span className={styles.statLabel}>Color</span>
+                <input type="color" className={styles.colorPicker} value={brushColor}
+                  onChange={e => setBrushColor(e.target.value)} />
+                {(() => {
+                  const { r, g, b } = hexToRgb(brushColor);
+                  const setChannel = (which: 'r' | 'g' | 'b', val: number) => {
+                    const c = { r, g, b, [which]: Math.max(0, Math.min(255, val | 0)) };
+                    const hex = '#' + [c.r, c.g, c.b].map(v => v.toString(16).padStart(2, '0')).join('');
+                    setBrushColor(hex);
+                  };
+                  return (
+                    <>
+                      <input className={styles.brushInput} type="number" min={0} max={255} title="Red"
+                        value={r} onChange={e => setChannel('r', Number(e.target.value))} />
+                      <input className={styles.brushInput} type="number" min={0} max={255} title="Green"
+                        value={g} onChange={e => setChannel('g', Number(e.target.value))} />
+                      <input className={styles.brushInput} type="number" min={0} max={255} title="Blue"
+                        value={b} onChange={e => setChannel('b', Number(e.target.value))} />
+                    </>
+                  );
+                })()}
               </div>
             )}
-            <div className={styles.fieldRow}>
-              <span className={styles.statLabel}>Color</span>
-              <input type="color" className={styles.colorPicker} value={brushColor}
-                onChange={e => setBrushColor(e.target.value)} />
-              {(() => {
-                const { r, g, b } = hexToRgb(brushColor);
-                const setChannel = (which: 'r' | 'g' | 'b', val: number) => {
-                  const c = { r, g, b, [which]: Math.max(0, Math.min(255, val | 0)) };
-                  const hex = '#' + [c.r, c.g, c.b].map(v => v.toString(16).padStart(2, '0')).join('');
-                  setBrushColor(hex);
-                };
-                return (
-                  <>
-                    <input className={styles.brushInput} type="number" min={0} max={255} title="Red"
-                      value={r} onChange={e => setChannel('r', Number(e.target.value))} />
-                    <input className={styles.brushInput} type="number" min={0} max={255} title="Green"
-                      value={g} onChange={e => setChannel('g', Number(e.target.value))} />
-                    <input className={styles.brushInput} type="number" min={0} max={255} title="Blue"
-                      value={b} onChange={e => setChannel('b', Number(e.target.value))} />
-                  </>
-                );
-              })()}
-            </div>
             <div className={styles.fieldRow}>
               <span className={styles.statLabel}>W</span>
               <input className={styles.brushInput} type="number" min={1} max={(gridWidth.current || simWidth) * 2} value={brushW}
@@ -3544,7 +3668,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 onChange={e => setBrushH(Math.max(1, Number(e.target.value) || 1))} />
             </div>
             <hr className={styles.divider} />
-            <button className={styles.controlButton} onClick={() => imageInputRef.current?.click()}>
+            <button
+              className={styles.controlButton}
+              onClick={() => imageInputRef.current?.click()}
+              disabled={brushMapping === MANUAL_BRUSH_MAPPING_ID}
+              title={brushMapping === MANUAL_BRUSH_MAPPING_ID ? 'Image import uses the active color mapping \u2014 select a non-Manual tab to enable.' : undefined}
+            >
               Open Image
             </button>
             <input ref={imageInputRef} type="file" accept=".png,.bmp,.jpg,.jpeg" style={{ display: 'none' }} onChange={handleImageImport} />
@@ -3552,7 +3681,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               <input type="checkbox" checked={showBrushCursor} onChange={e => setShowBrushCursor(e.target.checked)} />
               Show brush cursor
             </label>
-            <div className={styles.hint}>LMB paint {'\u00B7'} RMB pan {'\u00B7'} Ctrl+LMB drag resize {'\u00B7'} Ctrl+wheel cycle mapping {'\u00B7'} Shift+RMB color {'\u00B7'} Shift+LMB inspect</div>
+            <div className={styles.hint}>
+              {brushMapping === MANUAL_BRUSH_MAPPING_ID
+                ? <>LMB paint {'\u00B7'} RMB pan {'\u00B7'} Ctrl+LMB drag resize {'\u00B7'} Ctrl+wheel cycle mapping {'\u00B7'} Shift+LMB inspect</>
+                : <>LMB paint {'\u00B7'} RMB pan {'\u00B7'} Ctrl+LMB drag resize {'\u00B7'} Ctrl+wheel cycle mapping {'\u00B7'} Shift+RMB color {'\u00B7'} Shift+LMB inspect</>}
+            </div>
             </div>
           </div>
 
