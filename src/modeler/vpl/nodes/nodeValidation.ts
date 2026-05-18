@@ -400,17 +400,12 @@ export function detectWebGPUIncompatibilities(
       }
       break;
     }
-    // Variegated Cells nodes — WebGPU emitters not yet implemented. The worker
-    // falls back to JS for the step function. Switch target or remove the
-    // variegated node to clear this warning.
-    case 'initEvent':
-    case 'getOrientation':
-    case 'setOrientation':
-    case 'getNeighborOrientation':
+    // Variegated Cells: `setNeighborOrientation` is async-only — WebGPU is
+    // sync-only, so it's never reachable. detectWebGPUModelIncompatibilities
+    // also rejects async-mode at the model level, but flagging the node
+    // surfaces the issue directly on the badge.
     case 'setNeighborOrientation':
-    case 'getFacingLabels':
-    case 'lookupInteraction':
-      issues.push('Variegated Cells nodes are not yet implemented on the WebGPU target. The simulator will fall back to JS for the step function.');
+      issues.push('Set Neighbor Orientation requires asynchronous update mode — WebGPU is sync-only. Switch to WebAssembly / Debug target, or remove this node.');
       break;
   }
   return issues;

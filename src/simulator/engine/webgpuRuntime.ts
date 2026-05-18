@@ -69,6 +69,16 @@ export interface WebGPURuntime {
   bindGroupBA: GPUBindGroup | null;
   bindGroup: GPUBindGroup | null;
   stepPipeline: GPUComputePipeline | null;
+  /** Variegated Cells: aux buffer holding facePatternLookup (i32) +
+   *  interaction-table values (f32 stored as bitcast<u32>). Always created
+   *  (stub-sized when variegation is off) so the bind group can bind
+   *  binding 8 unconditionally and the pipeline layout stays model-independent. */
+  varAuxBuf: GPUBuffer | null;
+  /** Variegated Cells: Init Event compute pipeline (parallel to step). Built
+   *  when the compiled shader exposes `entryPoints.init`. Worker dispatches it
+   *  on Reset and then swaps the ping-pong bind group so subsequent step reads
+   *  see the init writes (mirrors the JS / WASM post-init swap). */
+  initPipeline: GPUComputePipeline | null;
   /** One pipeline per outputMapping_<id>. Built lazily on first dispatch
    *  rather than upfront — most models have several mappings but the user
    *  only views one at a time, so building all of them at init wastes
@@ -153,6 +163,11 @@ export async function createWebGPURuntime(init: WebGPURuntimeInit): Promise<WebG
     'maxComputeWorkgroupStorageSize', 'maxComputeInvocationsPerWorkgroup',
     'maxComputeWorkgroupSizeX', 'maxComputeWorkgroupSizeY', 'maxComputeWorkgroupSizeZ',
     'maxComputeWorkgroupsPerDimension',
+    // Variegated Cells: binding 8 (varAux) takes us to 7 storage buffers per
+    // compute stage in non-variegated models (still ≤ default 8) and 8 in
+    // variegated models. Some conservative adapters cap at 8 by default,
+    // others go higher — request the adapter's max so we don't trip the cap.
+    'maxStorageBuffersPerShaderStage',
   ] as const;
   const limits = adapter.limits as unknown as Record<string, number>;
   for (const k of limitKeys) {
@@ -202,6 +217,8 @@ export async function createWebGPURuntime(init: WebGPURuntimeInit): Promise<WebG
     pipelineLayout: null,
     bindGroupAB: null, bindGroupBA: null, bindGroup: null,
     stepPipeline: null,
+    varAuxBuf: null,
+    initPipeline: null,
     outputPipelines: new Map(),
     shaderHash: shaderHashOf(init.shaderCode),
     stagingPool: new Map(),
@@ -337,6 +354,13 @@ export async function setupBuffersAndPipelines(rt: WebGPURuntime): Promise<void>
     label: 'control', size: layout.controlBytes,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
   });
+  // Variegated Cells: aux buffer (binding 8). Always created — stub-sized
+  // when variegation is off so the bind group can attach binding 8
+  // unconditionally and the pipeline layout stays model-independent.
+  rt.varAuxBuf = device.createBuffer({
+    label: 'varAux', size: layout.varAuxBytes,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
 
   rt.bindGroupLayout = device.createBindGroupLayout({
     label: 'genesisca-bgl',
@@ -349,6 +373,7 @@ export async function setupBuffersAndPipelines(rt: WebGPURuntime): Promise<void>
       { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
       { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
       { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
     ],
   });
 
@@ -362,6 +387,7 @@ export async function setupBuffersAndPipelines(rt: WebGPURuntime): Promise<void>
     { binding: 5, resource: { buffer: rt.indicatorsBuf } },
     { binding: 6, resource: { buffer: rt.rngStateBuf } },
     { binding: 7, resource: { buffer: rt.controlBuf } },
+    { binding: 8, resource: { buffer: rt.varAuxBuf } },
   ];
   rt.bindGroupAB = device.createBindGroup({
     label: 'genesisca-bg-AB',
@@ -390,6 +416,18 @@ export async function setupBuffersAndPipelines(rt: WebGPURuntime): Promise<void>
     label: 'genesisca-step', layout: rt.pipelineLayout,
     compute: { module: rt.shaderModule, entryPoint: rt.entryPoints.step },
   });
+  // Variegated Cells: Init Event entry point. Built lazily? No — init pipelines
+  // are cheap to build relative to step (small WGSL, no neighbour loops in the
+  // common case) and the user pays the cost once per recompile. Skip when the
+  // compiled shader didn't expose an `init` entry (no InitEventNode in graph).
+  if (rt.entryPoints.init) {
+    rt.initPipeline = await device.createComputePipelineAsync({
+      label: 'genesisca-init', layout: rt.pipelineLayout,
+      compute: { module: rt.shaderModule, entryPoint: rt.entryPoints.init },
+    });
+  } else {
+    rt.initPipeline = null;
+  }
   // Output mapping pipelines are built lazily by dispatchOutputMapping on
   // first request — see O4 in the WebGPU plan. Models with several mappings
   // (Coagulation, MNCA viewers) save the per-recompile pipeline cost when
@@ -868,6 +906,71 @@ export function dispatchStep(rt: WebGPURuntime): void {
   rt.bindGroup = rt.bindGroup === rt.bindGroupAB ? rt.bindGroupBA : rt.bindGroupAB;
 }
 
+/** Variegated Cells: Init Event dispatch. Per-cell entry point that runs ONCE
+ *  on Reset (mirrors the JS / WASM `runInit` semantics). Uses the same bind
+ *  group as the step shader (orientation + facePatternLookup + interaction
+ *  tables read from the same bindings); same buffer-swap semantics so the
+ *  next step reads init-time writes from what is now `attrsReadBuf`. Returns
+ *  false when no init pipeline was compiled. */
+export function dispatchInit(rt: WebGPURuntime): boolean {
+  if (!rt.stepReady || !rt.initPipeline || !rt.bindGroup) return false;
+  const enc = rt.device.createCommandEncoder({ label: 'init-enc' });
+  const pass = enc.beginComputePass({ label: 'init-pass' });
+  pass.setPipeline(rt.initPipeline);
+  pass.setBindGroup(0, rt.bindGroup);
+  const groups = Math.ceil(rt.layout.total / WORKGROUP_SIZE);
+  pass.dispatchWorkgroups(Math.max(1, groups));
+  pass.end();
+  rt.device.queue.submit([enc.finish()]);
+  // Same swap as step: init writes land in attrsWriteBuf; flip so subsequent
+  // step / color reads see them as the new "current read".
+  const prevRead = rt.attrsReadBuf;
+  rt.attrsReadBuf = rt.attrsWriteBuf;
+  rt.attrsWriteBuf = prevRead;
+  rt.bindGroup = rt.bindGroup === rt.bindGroupAB ? rt.bindGroupBA : rt.bindGroupAB;
+  return true;
+}
+
+/** Variegated Cells: upload the per-cell orientation region into the current
+ *  read buffer. The orientation region lives co-located with cell attrs inside
+ *  attrsBufA/B at `layout.orientationWordOffset`. After upload the value is
+ *  visible to the next step / color pass (which read from attrsReadBuf). */
+export function uploadOrientation(rt: WebGPURuntime, src: ArrayLike<number>): void {
+  if (!rt.attrsReadBuf || !rt.layout.variegatedEnabled) return;
+  const count = Math.min(src.length, rt.layout.cellsPerAttr);
+  const packed = new Uint32Array(count);
+  for (let i = 0; i < count; i++) packed[i] = (src[i] ?? 0) & 0xffffffff;
+  const byteOffset = rt.layout.orientationWordOffset * 4;
+  rt.device.queue.writeBuffer(rt.attrsReadBuf, byteOffset, packed);
+}
+
+/** Variegated Cells: upload the facePatternLookup region of varAux. Values
+ *  are i32, stored as u32 via bitcast (WGSL reads with bitcast<i32>). Builds
+ *  the buffer on the JS side and `writeBuffer`s in one shot. */
+export function uploadFacePatternLookup(rt: WebGPURuntime, src: ArrayLike<number>): void {
+  if (!rt.varAuxBuf || !rt.layout.variegatedEnabled || rt.layout.facePatternLookupCount === 0) return;
+  const count = Math.min(src.length, rt.layout.facePatternLookupCount);
+  const packed = new Int32Array(count);
+  for (let i = 0; i < count; i++) packed[i] = (src[i] ?? 0) | 0;
+  const byteOffset = rt.layout.facePatternLookupWordOffset * 4;
+  rt.device.queue.writeBuffer(rt.varAuxBuf, byteOffset, packed);
+}
+
+/** Variegated Cells: upload a single interaction table's region of varAux.
+ *  Values are f32 stored bit-wise in u32 words (WGSL reads with
+ *  `bitcast<f32>(varAux[..])`). Called on init/recompile AND on every live
+ *  updateInteractionTable so the GPU stays in sync. */
+export function uploadInteractionTable(rt: WebGPURuntime, tableId: string, src: ArrayLike<number>): void {
+  if (!rt.varAuxBuf || !rt.layout.variegatedEnabled) return;
+  const slot = rt.layout.interactionTableOffsets[tableId];
+  if (!slot) return;
+  const count = Math.min(src.length, slot.count);
+  const packed = new Float32Array(count);
+  for (let i = 0; i < count; i++) packed[i] = src[i] ?? 0;
+  const byteOffset = slot.wordOffset * 4;
+  rt.device.queue.writeBuffer(rt.varAuxBuf, byteOffset, packed);
+}
+
 /** Lazily create the output mapping pipeline for `mappingId` if it isn't
  *  already cached. Uses the synchronous createComputePipeline so callers can
  *  stay sync — the trade-off is a one-time hitch on first dispatch of each
@@ -1095,7 +1198,7 @@ export function destroyWebGPURuntime(rt: WebGPURuntime | null): void {
     for (const buf of [
       rt.attrsBufA, rt.attrsBufB, rt.colorsBuf, rt.nbrOffsetsBuf,
       rt.modelAttrsBuf, rt.indicatorsBuf, rt.rngStateBuf, rt.controlBuf,
-      rt.reductionsBuf,
+      rt.reductionsBuf, rt.varAuxBuf,
     ]) {
       if (buf) buf.destroy();
     }

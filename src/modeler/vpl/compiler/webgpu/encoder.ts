@@ -117,6 +117,7 @@ struct Control {
 @group(0) @binding(5) var<storage, read_write> indicators   : array<atomic<u32>>;
 @group(0) @binding(6) var<storage, read_write> rngState     : array<u32>;
 @group(0) @binding(7) var<storage, read_write> control      : Control;
+@group(0) @binding(8) var<storage, read>       varAux       : array<u32>;
 ${nbrCellIdxFn}
 
 // PCG hash + per-cell advance. Mirrors the per-cell stream model in the
@@ -173,6 +174,14 @@ export function emitPerCellCopyPreamble(layout: WebGPULayout, skipAttrIds?: Read
     } else {
       lines.push(`  attrsWrite[${w}u + idx] = attrsRead[${w}u + idx];`);
     }
+  }
+  // Variegated Cells: same sync-mode discipline — copy orientation r→w so
+  // SetOrientation writes overlay on a fresh copy of the read buffer. The
+  // attrsBufA / attrsBufB swap (which already handles cell-attr ping-pong)
+  // also flips orientation read↔write.
+  if (layout.variegatedEnabled && layout.orientationBytes > 0) {
+    const w = layout.orientationWordOffset;
+    lines.push(`  attrsWrite[${w}u + idx] = attrsRead[${w}u + idx];`);
   }
   return lines.join('\n') + (lines.length > 0 ? '\n' : '');
 }
