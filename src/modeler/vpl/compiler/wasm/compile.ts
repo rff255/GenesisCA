@@ -1487,6 +1487,308 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return storeResult(ctx.emitter, attrValType(attr.type));
   },
 
+  // -- Variegated Cells: Get Orientation ----------------------------------
+  // Reads the current cell's orientation (0..3) from the orientation read
+  // buffer. JS-target equivalent: `r_orientation[idx] | 0`.
+  getOrientation: ({ ctx }) => {
+    if (!ctx.layout.variegatedEnabled) {
+      ctx.errors.push('getOrientation: variegated cells disabled');
+      return null;
+    }
+    // addr = idx * 4 + orientationReadOffset
+    pushCellByteOffset(ctx, 4);
+    ctx.emitter.i32Load(ctx.layout.orientationReadOffset, 2);
+    return storeResult(ctx.emitter, I32);
+  },
+
+  // -- Variegated Cells: Get Neighbor Orientation -------------------------
+  // Reads one neighbor's orientation. The `index` input is the slot position
+  // (0..nbrSize-1) in the configured neighborhood; the neighbor cell index is
+  // resolved through nbrIndexOffset[nbrId]. Out-of-grid neighbors (constant-
+  // boundary sentinel at total) return 0 because the sentinel slot is always
+  // 0 in the orientation buffer (initGrid / resetGrid clear to 0).
+  getNeighborOrientation: ({ node, ctx, inputs }) => {
+    if (!ctx.layout.variegatedEnabled) {
+      ctx.errors.push('getNeighborOrientation: variegated cells disabled');
+      return null;
+    }
+    const nbrId = node.data.config.neighborhoodId as string;
+    const nbr = getNbr(ctx.layout, nbrId);
+    if (!nbr) { ctx.errors.push(`getNeighborOrientation: unknown nbr ${nbrId}`); return null; }
+    const indexRef = inputs['index'] ?? { inline: true, value: 0, valtype: I32 };
+    // Compute the neighbor cell index: nbrCell = nIdx[idx * nbrSize + index]
+    // addr = nbrIndexOffset + (idx * nbrSize + index) * 4
+    ctx.emitter.localGet(ctx.iLocalIdx);
+    ctx.emitter.i32Const(nbr.size);
+    ctx.emitter.op(OP_I32_MUL);
+    pushValueAs(ctx.emitter, indexRef, I32);
+    ctx.emitter.op(OP_I32_ADD);
+    ctx.emitter.i32Const(4);
+    ctx.emitter.op(OP_I32_MUL);
+    ctx.emitter.i32Load(nbr.offset, 2);
+    // Now stack has the neighbor cell index. Load orientation at that cell:
+    // addr = nbrCell * 4 + orientationReadOffset
+    ctx.emitter.i32Const(4);
+    ctx.emitter.op(OP_I32_MUL);
+    ctx.emitter.i32Load(ctx.layout.orientationReadOffset, 2);
+    return storeResult(ctx.emitter, I32);
+  },
+
+  // -- Variegated Cells: Get Facing Labels (multi-output) -----------------
+  // Resolves the two face labels touching at a neighbor encounter, accounting
+  // for both cells' orientations and face patterns. Outputs:
+  //   myFaceLabel    — this cell's face touching the neighbor
+  //   theirFaceLabel — the neighbor's face touching this cell
+  // Both are face-label indices into `['none', ...faceLabels]`.
+  //
+  // Direction math mirrors the JS emit exactly:
+  //   dir         = directionMap[slotIdx]                     // -1 if untagged
+  //   myFaceIdx   = (dir + 2 * myOrientation) & 7
+  //   theirFaceIdx = ((dir + 4) & 7) + 2 * theirOrientation, & 7
+  //   myLabel    = (dir < 0 || mySpec < 0) ? 0 : lookup[mySpec * 8 + myFaceIdx]
+  //   theirLabel = (dir < 0 || nbrCell >= total) ? 0 : lookup[theirSpec * 8 + theirFaceIdx]
+  //
+  // The pre-resolve pass in compile.ts bakes `_directionMap` (JSON-encoded
+  // i32 array, one entry per neighborhood slot) and `_sourceAttrId` into the
+  // node config; this emitter reads them at compile time and emits a small
+  // if-chain to map slot index → direction (one chain entry per slot).
+  getFacingLabels: ({ node, ctx, inputs }) => {
+    if (!ctx.layout.variegatedEnabled) {
+      ctx.errors.push('getFacingLabels: variegated cells disabled');
+      return null;
+    }
+    const nbrId = node.data.config.neighborhoodId as string;
+    const nbr = getNbr(ctx.layout, nbrId);
+    if (!nbr) { ctx.errors.push(`getFacingLabels: unknown nbr ${nbrId}`); return null; }
+    const sourceAttrId = (node.data.config._sourceAttrId as string) || '';
+    const sourceAttr = sourceAttrId ? getAttr(ctx.layout, sourceAttrId) : null;
+    let directionMap: number[] = [];
+    try { directionMap = JSON.parse((node.data.config._directionMap as string) || '[]'); }
+    catch { directionMap = []; }
+    const indexRef = inputs['index'] ?? { inline: true, value: 0, valtype: I32 };
+    const em = ctx.emitter;
+    const lookupOff = ctx.layout.facePatternLookupOffset;
+    const total = ctx.layout.total;
+
+    // niLocal = (index | 0)
+    const niLocal = em.allocLocal(I32);
+    pushValueAs(em, indexRef, I32);
+    em.localSet(niLocal);
+
+    // nbrCellLocal = nIdx[idx * nbrSize + ni]
+    const nbrCellLocal = em.allocLocal(I32);
+    em.localGet(ctx.iLocalIdx);
+    em.i32Const(nbr.size);
+    em.op(OP_I32_MUL);
+    em.localGet(niLocal);
+    em.op(OP_I32_ADD);
+    em.i32Const(4);
+    em.op(OP_I32_MUL);
+    em.i32Load(nbr.offset, 2);
+    em.localSet(nbrCellLocal);
+
+    // dirLocal = directionMap[ni] (or -1 when ni out of range / untagged)
+    // Emit one `if (ni == k) dir = directionMap[k]` per slot. Slots that map
+    // to -1 don't need an emit (the initial -1 stands). Default chains
+    // through the initial value.
+    const dirLocal = em.allocLocal(I32);
+    em.i32Const(-1);
+    em.localSet(dirLocal);
+    for (let k = 0; k < directionMap.length; k++) {
+      const val = directionMap[k]!;
+      if (val < 0) continue;
+      em.localGet(niLocal);
+      em.i32Const(k);
+      em.op(OP_I32_EQ);
+      em.ifThen(() => {
+        em.i32Const(val);
+        em.localSet(dirLocal);
+      });
+    }
+
+    // myOriLocal = r_orientation[idx]
+    const myOriLocal = em.allocLocal(I32);
+    pushCellByteOffset(ctx, 4);
+    em.i32Load(ctx.layout.orientationReadOffset, 2);
+    em.localSet(myOriLocal);
+
+    // theirOriLocal = r_orientation[nbrCell]
+    const theirOriLocal = em.allocLocal(I32);
+    em.localGet(nbrCellLocal);
+    em.i32Const(4);
+    em.op(OP_I32_MUL);
+    em.i32Load(ctx.layout.orientationReadOffset, 2);
+    em.localSet(theirOriLocal);
+
+    // myFaceIdx = (dir + 2 * myOri) & 7
+    const myFaceIdx = em.allocLocal(I32);
+    em.localGet(dirLocal);
+    em.localGet(myOriLocal);
+    em.i32Const(2);
+    em.op(OP_I32_MUL);
+    em.op(OP_I32_ADD);
+    em.i32Const(7);
+    em.op(OP_I32_AND);
+    em.localSet(myFaceIdx);
+
+    // theirFaceIdx = ((dir + 4) & 7) + 2 * theirOri, then & 7
+    const theirFaceIdx = em.allocLocal(I32);
+    em.localGet(dirLocal);
+    em.i32Const(4);
+    em.op(OP_I32_ADD);
+    em.i32Const(7);
+    em.op(OP_I32_AND);
+    em.localGet(theirOriLocal);
+    em.i32Const(2);
+    em.op(OP_I32_MUL);
+    em.op(OP_I32_ADD);
+    em.i32Const(7);
+    em.op(OP_I32_AND);
+    em.localSet(theirFaceIdx);
+
+    // mySpecLocal = sourceAttr ? r_<sourceAttrId>[idx] : 0
+    const mySpec = em.allocLocal(I32);
+    if (sourceAttr) {
+      pushCellByteOffset(ctx, sourceAttr.itemBytes);
+      if (sourceAttr.type === 'bool') em.i32Load8U(sourceAttr.readOffset, 0);
+      else em.i32Load(sourceAttr.readOffset, 2);
+      em.localSet(mySpec);
+    } else {
+      em.i32Const(0);
+      em.localSet(mySpec);
+    }
+
+    // theirSpecLocal = sourceAttr ? r_<sourceAttrId>[nbrCell] : 0
+    const theirSpec = em.allocLocal(I32);
+    if (sourceAttr) {
+      em.localGet(nbrCellLocal);
+      em.i32Const(sourceAttr.itemBytes);
+      em.op(OP_I32_MUL);
+      if (sourceAttr.type === 'bool') em.i32Load8U(sourceAttr.readOffset, 0);
+      else em.i32Load(sourceAttr.readOffset, 2);
+      em.localSet(theirSpec);
+    } else {
+      em.i32Const(0);
+      em.localSet(theirSpec);
+    }
+
+    // myLabel = (dir < 0 || mySpec < 0) ? 0 : lookup[mySpec * 8 + myFaceIdx]
+    const myLabel = em.allocLocal(I32);
+    em.i32Const(0);
+    em.localSet(myLabel);
+    // condition = (dir >= 0) && (mySpec >= 0)
+    em.localGet(dirLocal);
+    em.i32Const(0);
+    em.op(OP_I32_GE_S);
+    em.localGet(mySpec);
+    em.i32Const(0);
+    em.op(OP_I32_GE_S);
+    em.op(OP_I32_AND);
+    em.ifThen(() => {
+      em.localGet(mySpec);
+      em.i32Const(8);
+      em.op(OP_I32_MUL);
+      em.localGet(myFaceIdx);
+      em.op(OP_I32_ADD);
+      em.i32Const(4);
+      em.op(OP_I32_MUL);
+      em.i32Load(lookupOff, 2);
+      em.localSet(myLabel);
+    });
+
+    // theirLabel = (dir < 0 || nbrCell >= total) ? 0 : lookup[theirSpec * 8 + theirFaceIdx]
+    const theirLabel = em.allocLocal(I32);
+    em.i32Const(0);
+    em.localSet(theirLabel);
+    // condition = (dir >= 0) && (nbrCell < total)
+    em.localGet(dirLocal);
+    em.i32Const(0);
+    em.op(OP_I32_GE_S);
+    em.localGet(nbrCellLocal);
+    em.i32Const(total);
+    em.op(OP_I32_LT_S);
+    em.op(OP_I32_AND);
+    em.ifThen(() => {
+      em.localGet(theirSpec);
+      em.i32Const(8);
+      em.op(OP_I32_MUL);
+      em.localGet(theirFaceIdx);
+      em.op(OP_I32_ADD);
+      em.i32Const(4);
+      em.op(OP_I32_MUL);
+      em.i32Load(lookupOff, 2);
+      em.localSet(theirLabel);
+    });
+
+    setCachedPort(ctx, node.id, 'myFaceLabel', { localIdx: myLabel, valtype: I32 });
+    setCachedPort(ctx, node.id, 'theirFaceLabel', { localIdx: theirLabel, valtype: I32 });
+    // Canonical default-port return is myFaceLabel.
+    return { localIdx: myLabel, valtype: I32 };
+  },
+
+  // -- Variegated Cells: Lookup Interaction -------------------------------
+  // Indexes an interactionTable model attribute by two face labels. Output
+  // is f64 (table values are floats). Returns 0 when the tableId is unknown
+  // or variegation is off.
+  lookupInteraction: ({ node, ctx, inputs }) => {
+    if (!ctx.layout.variegatedEnabled) {
+      ctx.errors.push('lookupInteraction: variegated cells disabled');
+      return null;
+    }
+    const tableId = (node.data.config.tableId as string) || '';
+    const tableOff = tableId ? ctx.layout.interactionTableOffsets[tableId] : undefined;
+    const labelCount = ctx.layout.interactionTableLabelCount;
+    if (tableOff === undefined) {
+      // Tableless lookup compiles to constant 0 (matches JS fallback).
+      ctx.emitter.f64Const(0);
+      return storeResult(ctx.emitter, F64);
+    }
+    const labelA = inputs['labelA'] ?? { inline: true, value: 0, valtype: I32 };
+    const labelB = inputs['labelB'] ?? { inline: true, value: 0, valtype: I32 };
+    // addr = (labelA * labelCount + labelB) * 8 + tableOff
+    pushValueAs(ctx.emitter, labelA, I32);
+    ctx.emitter.i32Const(labelCount);
+    ctx.emitter.op(OP_I32_MUL);
+    pushValueAs(ctx.emitter, labelB, I32);
+    ctx.emitter.op(OP_I32_ADD);
+    ctx.emitter.i32Const(8);
+    ctx.emitter.op(OP_I32_MUL);
+    ctx.emitter.f64Load(tableOff, 3);
+    return storeResult(ctx.emitter, F64);
+  },
+
+  // -- Init Event (multi-output: x, y, maxX, maxY) ------------------------
+  // Resolves the per-cell coordinates. Like the JS compiler, the entry-point
+  // orchestrator pre-emits these locals before the flow body runs; this
+  // emitter is here as a safety net so a stray reference outside Init still
+  // compiles instead of crashing. Real values come from `initParamRefs` set
+  // up by compileEntry when the entry is the init node.
+  initEvent: ({ node, ctx }) => {
+    // No-op compute: just register all four outputs as zero locals so
+    // downstream consumers find something. The Init entry-point overrides
+    // these via paramRefs / direct local population before running the flow.
+    const W = ctx.model.properties.gridWidth;
+    const H = ctx.model.properties.gridHeight;
+    // x = idx % W; y = idx / W; maxX = W - 1; maxY = H - 1
+    const xLoc = ctx.emitter.allocLocal(I32);
+    ctx.emitter.localGet(ctx.colLocalIdx);
+    ctx.emitter.localSet(xLoc);
+    const yLoc = ctx.emitter.allocLocal(I32);
+    ctx.emitter.localGet(ctx.rowLocalIdx);
+    ctx.emitter.localSet(yLoc);
+    const maxXLoc = ctx.emitter.allocLocal(I32);
+    ctx.emitter.i32Const(W - 1);
+    ctx.emitter.localSet(maxXLoc);
+    const maxYLoc = ctx.emitter.allocLocal(I32);
+    ctx.emitter.i32Const(H - 1);
+    ctx.emitter.localSet(maxYLoc);
+    setCachedPort(ctx, node.id, 'x', { localIdx: xLoc, valtype: I32 });
+    setCachedPort(ctx, node.id, 'y', { localIdx: yLoc, valtype: I32 });
+    setCachedPort(ctx, node.id, 'maxX', { localIdx: maxXLoc, valtype: I32 });
+    setCachedPort(ctx, node.id, 'maxY', { localIdx: maxYLoc, valtype: I32 });
+    return { localIdx: xLoc, valtype: I32 };
+  },
+
   // -- groupOperator (multi-output: result + index). --
   groupOperator: ({ node, ctx, inputs }) => {
     return emitAggregateOrCount(ctx, node, inputs, 'groupOperator');
@@ -4136,6 +4438,73 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
     });
     return true;
   },
+
+  // -- Variegated Cells: Set Orientation ---------------------------------
+  // Writes the current cell's orientation to the write buffer, clamped to
+  // 0..3 via `& 3`. Mirrors the JS emit `w_orientation[idx] = (value) & 3`.
+  setOrientation: ({ ctx, inputs }) => {
+    if (!ctx.layout.variegatedEnabled) {
+      ctx.errors.push('setOrientation: variegated cells disabled');
+      return false;
+    }
+    const valueRef = inputs['value'] ?? { inline: true, value: 0, valtype: I32 };
+    const em = ctx.emitter;
+    // addr = idx * 4
+    pushCellByteOffset(ctx, 4);
+    // value & 3
+    pushValueAs(em, valueRef, I32);
+    em.i32Const(3);
+    em.op(OP_I32_AND);
+    em.i32Store(ctx.layout.orientationWriteOffset, 2);
+    return true;
+  },
+
+  // -- Variegated Cells: Set Neighbor Orientation (async-only) -----------
+  // Writes a specific neighbor's orientation. Async-only — sync mode's post-
+  // step bulk copy would overwrite the write. The boundary guard
+  // `if (nbrCell < total)` protects the constant-boundary sentinel cell
+  // (mirrors SetNeighborAttributeByIndex's discipline).
+  setNeighborOrientation: ({ node, ctx, inputs }) => {
+    if (!ctx.layout.variegatedEnabled) {
+      ctx.errors.push('setNeighborOrientation: variegated cells disabled');
+      return false;
+    }
+    if (!ctx.layout.isAsync) {
+      ctx.errors.push('setNeighborOrientation: requires asynchronous update mode');
+      return false;
+    }
+    const nbrId = node.data.config.neighborhoodId as string;
+    const nbr = getNbr(ctx.layout, nbrId);
+    if (!nbr) { ctx.errors.push(`setNeighborOrientation: unknown nbr ${nbrId}`); return false; }
+    const indexRef = inputs['index'] ?? { inline: true, value: 0, valtype: I32 };
+    const valueRef = inputs['value'] ?? { inline: true, value: 0, valtype: I32 };
+    const em = ctx.emitter;
+    // nbrCell = nIdx[idx * nbrSize + index]
+    const nbrCell = em.allocLocal(I32);
+    em.localGet(ctx.iLocalIdx);
+    em.i32Const(nbr.size);
+    em.op(OP_I32_MUL);
+    pushValueAs(em, indexRef, I32);
+    em.op(OP_I32_ADD);
+    em.i32Const(4);
+    em.op(OP_I32_MUL);
+    em.i32Load(nbr.offset, 2);
+    em.localSet(nbrCell);
+    // if (nbrCell < total) w_orientation[nbrCell] = (value) & 3
+    em.localGet(nbrCell);
+    em.localGet(0); // total param
+    em.op(OP_I32_LT_S);
+    em.ifThen(() => {
+      em.localGet(nbrCell);
+      em.i32Const(4);
+      em.op(OP_I32_MUL);
+      pushValueAs(em, valueRef, I32);
+      em.i32Const(3);
+      em.op(OP_I32_AND);
+      em.i32Store(ctx.layout.orientationWriteOffset, 2);
+    });
+    return true;
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -4795,6 +5164,16 @@ function compileEntry(
       emitter.i32Const(cellsPerAttr * a.itemBytes);
       emitter.memoryCopy();
     }
+    // Variegated Cells: orientation has the same sync-mode discipline — bulk
+    // memcpy r→w so SetOrientation writes overlay on a fresh copy of the read
+    // buffer. Skipped in async mode (r/w share one buffer). Matches the JS
+    // compiler's `w_orientation.set(r_orientation)` bulk-copy line.
+    if (layout.variegatedEnabled) {
+      emitter.i32Const(layout.orientationWriteOffset);
+      emitter.i32Const(layout.orientationReadOffset);
+      emitter.i32Const(layout.orientationBytes);
+      emitter.memoryCopy();
+    }
   };
 
   // Hoist loop-invariant value nodes to a single emission BEFORE the cell
@@ -5044,6 +5423,7 @@ export function compileGraphWasm(
   const stepNode = graphNodes.find(n => n.data.nodeType === 'step');
   const inputColorNodes = graphNodes.filter(n => n.data.nodeType === 'inputColor');
   const outputMappingNodes = graphNodes.filter(n => n.data.nodeType === 'outputMapping');
+  const initNode = graphNodes.find(n => n.data.nodeType === 'initEvent');
 
   if (!stepNode) {
     return { bytes: new Uint8Array(), minMemoryPages: 1, error: 'no Step node', viewerIds, exports: [] };
@@ -5094,6 +5474,30 @@ export function compileGraphWasm(
     );
     allErrors.push(...omRes.errors);
     exportEntries.push({ name: `outputMapping_${sanitiseExportName(mappingId)}`, typeIdx: TYPE_IDX_TOTAL, body: omRes.body });
+  }
+
+  // Init Event entry-point (optional, one per model). Runs once per cell on
+  // Reset after defaults are applied; same loop shape as Step but always
+  // sequential (no orderArray) and Init writes ARE bulk-copied for sync mode
+  // so SetAttribute / SetOrientation inside init see a fresh w-buffer.
+  // Exported as `init`. The worker calls it on Reset (paralleling JS `runInit`).
+  if (initNode) {
+    const initSink = analyzeSinkScopes({
+      nodes: graphNodes, edges: graphEdges, rootNodeId: initNode.id, rootFlowPortId: 'do',
+    });
+    const initRes = compileEntry(
+      {
+        entry: initNode,
+        numParams: 1,
+        iLocalSource: 'param0WithLoop',
+        hasLoop: true,
+        emitCopyLines: true,
+        useOrderArrayInAsync: false,
+      },
+      layout, viewerIds, model, nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, initSink,
+    );
+    allErrors.push(...initRes.errors);
+    exportEntries.push({ name: 'init', typeIdx: TYPE_IDX_TOTAL, body: initRes.body });
   }
 
   // InputColor (one per mapping) — single cell, no loop. Per-cell preamble

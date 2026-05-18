@@ -6,7 +6,7 @@
 
 import { instantiateWasmModule } from '../../modeler/vpl/compiler/wasm/compile';
 import { buildFacePatternLookup, normalizeInteractionTable } from '../../modeler/vpl/compiler/variegation';
-import { computeMemoryLayout, type MemoryLayout } from '../../modeler/vpl/compiler/wasm/layout';
+import { computeMemoryLayout, type MemoryLayout, type VariegatedLayoutInputs } from '../../modeler/vpl/compiler/wasm/layout';
 import type { WebGPULayout } from '../../modeler/vpl/compiler/webgpu/layout';
 import type { WebGPUEntryPoints } from '../../modeler/vpl/compiler/webgpu/compile';
 import {
@@ -333,36 +333,77 @@ let orientationWriteView: Int32Array | null = null;
  *  facePatternAssignments. */
 let facePatternLookup: Int32Array | null = null;
 
-/** Allocate the orientation arrays + build the facePatternLookup table for
- *  the current model. Standalone Int32Arrays (NOT inside wasmMemory) — Phase
- *  8 adds a WASM layout slot and mirrors the values; Phase 9 does the GPU
- *  upload. Called from the `init` handler after `initGrid()` (which sets
- *  `total` + `updateMode`). Sentinel cell at index `total` stays at 0 per
- *  spec §6.3 (orientation boundary value is fixed at 0). */
-function initVariegation(payload: VariegatedPayload | undefined): void {
+/** Build the facePatternLookup table + populate cached interaction tables
+ *  for the current model. Phase 8: orientation arrays and the lookup +
+ *  interaction tables are stored as typed-array VIEWS over `wasmMemory` (see
+ *  initGrid for the orientation views; this function fills the lookup +
+ *  table regions). Per the typed-array-view discipline in CLAUDE.md, future
+ *  live updates (e.g. updateInteractionTable) MUST copy into these views,
+ *  never reassign the JS reference — WASM reads via baked offsets, not the
+ *  JS reference.
+ *
+ *  Called from the init/recompile handlers AFTER `initGrid()` (which sized
+ *  `wasmMemory`/`wasmLayout` with the variegated regions reserved). When
+ *  variegation is disabled all state is cleared and no memory is touched. */
+function initVariegation(
+  payload: VariegatedPayload | undefined,
+  interactionTablesPayload: InteractionTablePayload[] | undefined,
+): void {
   variegated = payload ?? null;
+  cachedInteractionTables = {};
   if (!variegated) {
-    orientationReadView = null;
-    orientationWriteView = null;
+    // initGrid already left orientationReadView / orientationWriteView null
+    // because wasmLayout.variegatedEnabled was false. Leave facePatternLookup
+    // null too — no consumer should reach it with variegation off.
     facePatternLookup = null;
     return;
   }
-  const isAsync = updateMode === 'asynchronous';
-  const viewLen = boundaryTreatment === 'torus' ? total : (total + 1);
-  orientationReadView = new Int32Array(viewLen);
-  // Async mode shares a single buffer (same pattern as cell attrs).
-  orientationWriteView = isAsync ? orientationReadView : new Int32Array(viewLen);
-  // Build the face-pattern lookup from the variegation source's tagOptions.
-  const source = cellAttrs.find(a => a.id === variegated!.sourceAttributeId);
-  if (source && source.tagOptions) {
-    facePatternLookup = buildFacePatternLookup({
-      tagOptions: source.tagOptions,
-      facePatternAssignments: variegated.facePatternAssignments,
-      faceLabels: variegated.faceLabels,
-      facePatterns: variegated.facePatterns,
-    });
+  if (!wasmMemory || !wasmLayout) {
+    facePatternLookup = null;
+    return;
+  }
+  // facePatternLookup region — view over wasmMemory at the layout offset.
+  // initGrid sized it from the source attribute's tagOptions count; rebuild
+  // the values and `set()` them into the view so JS-target reads and WASM
+  // reads both see the same bytes.
+  if (wasmLayout.facePatternLookupBytes > 0) {
+    const source = cellAttrs.find(a => a.id === variegated!.sourceAttributeId);
+    facePatternLookup = new Int32Array(
+      wasmMemory.buffer,
+      wasmLayout.facePatternLookupOffset,
+      wasmLayout.facePatternLookupBytes / 4,
+    );
+    facePatternLookup.fill(0);
+    if (source && source.tagOptions) {
+      const built = buildFacePatternLookup({
+        tagOptions: source.tagOptions,
+        facePatternAssignments: variegated.facePatternAssignments,
+        faceLabels: variegated.faceLabels,
+        facePatterns: variegated.facePatterns,
+      });
+      facePatternLookup.set(built);
+    }
   } else {
     facePatternLookup = new Int32Array(0);
+  }
+  // Interaction tables — one Float64Array view per table at the per-attr
+  // offset reserved by computeMemoryLayout. `set()` the normalised values in;
+  // updateInteractionTable later writes through the same view.
+  const labelCount = wasmLayout.interactionTableLabelCount;
+  for (const t of interactionTablesPayload ?? []) {
+    const off = wasmLayout.interactionTableOffsets[t.id];
+    const normalized = normalizeInteractionTable(t.values, t.faceLabels);
+    if (off !== undefined) {
+      const view = new Float64Array(wasmMemory.buffer, off, labelCount * labelCount);
+      view.fill(0);
+      view.set(normalized);
+      cachedInteractionTables[t.id] = view;
+    } else {
+      // Layout had no slot for this table id (e.g. interactionTable attr was
+      // added after init without a recompile). Fall back to a standalone array
+      // so JS reads still work; WASM won't have an offset for it either.
+      cachedInteractionTables[t.id] = normalized;
+    }
   }
 }
 
@@ -375,6 +416,10 @@ let wasmStepFn: ((total: number) => void) | null = null;
 // `inputColor_<id>` / `outputMapping_<id>` export names the compiler emits).
 let wasmInputColorFns: Record<string, (idx: number, r: number, g: number, b: number) => void> = {};
 let wasmOutputMappingFns: Record<string, (total: number) => void> = {};
+/** Variegated Cells: WASM Init Event entry point. Same signature as `step`
+ *  — single `total` param, walks every cell sequentially. Called by `runInit`
+ *  on Reset when the model has an Init Event node + WASM target. */
+let wasmInitFn: ((total: number) => void) | null = null;
 let useWasm = false;
 
 // Wave 3: WebGPU runtime. `useWebGPU` is the user's intent; `webgpuRuntime` is
@@ -623,9 +668,29 @@ function initGrid(): void {
   // order array. JS-side variables (attrsA/B, nbrIndices, orderArray, etc.)
   // become typed-array views over wasmMemory at the layout offsets — single
   // source of truth shared between JS step and WASM step.
+  //
+  // Variegated Cells: when the feature is enabled (`variegated` was set by the
+  // init/recompile handler BEFORE calling initGrid), the layout also reserves
+  // orientation read/write regions, the facePatternLookup region, and a
+  // contiguous f64 region per interactionTable model attribute. Sized from the
+  // source attribute's tagOptions count + the face-label palette length so the
+  // regions are stable across live edits to the values themselves.
+  let variegatedInputs: VariegatedLayoutInputs | undefined;
+  if (variegated) {
+    const source = cellAttrs.find(a => a.id === variegated!.sourceAttributeId);
+    const interactionTableIds = modelAttrsList
+      .filter(a => a.type === 'interactionTable')
+      .map(a => a.id);
+    variegatedInputs = {
+      speciesCount: source?.tagOptions?.length ?? 0,
+      faceLabelsCount: variegated.faceLabels.length,
+      interactionTableIds,
+    };
+  }
   wasmLayout = computeMemoryLayout(
     cellAttrs, modelAttrsList, neighborhoods, indicatorsList,
     total, isAsync, boundaryTreatment,
+    variegatedInputs,
   );
   wasmMemory = new WebAssembly.Memory({ initial: wasmLayout.pages });
   const buf = wasmMemory.buffer;
@@ -655,6 +720,26 @@ function initGrid(): void {
   writeAttrs = isAsync ? attrsA : attrsB;
   colors = new Uint8ClampedArray(buf, wasmLayout.colorsOffset, wasmLayout.colorsBytes);
   generation = 0;
+
+  // Variegated Cells — orientation views over wasmMemory. Same sentinel-aware
+  // length as cell attrs. Sentinel cell at index `total` stays at 0 per spec
+  // §6.3 (orientation boundary value is fixed at 0). In async mode the write
+  // view aliases the read view (single shared buffer, mirrors cell-attr
+  // async discipline).
+  if (wasmLayout.variegatedEnabled) {
+    const oLen = wasmLayout.orientationBytes / 4;
+    orientationReadView = new Int32Array(buf, wasmLayout.orientationReadOffset, oLen);
+    orientationReadView.fill(0);
+    if (isAsync) {
+      orientationWriteView = orientationReadView;
+    } else {
+      orientationWriteView = new Int32Array(buf, wasmLayout.orientationWriteOffset, oLen);
+      orientationWriteView.fill(0);
+    }
+  } else {
+    orientationReadView = null;
+    orientationWriteView = null;
+  }
 
   // RNG state lives in memory at layout.rngStateOffset (Uint32Array of length 1).
   // Sync the existing seed into memory so WASM and JS share the same starting state.
@@ -783,14 +868,17 @@ function tryInstantiateWasmModule(bytes: Uint8Array | undefined, exportNames: st
   wasmStepFn = null;
   wasmInputColorFns = {};
   wasmOutputMappingFns = {};
+  wasmInitFn = null;
   if (!bytes || bytes.length === 0 || !wasmMemory) return;
   const names = exportNames ?? [];
   instantiateWasmModule({ bytes, minMemoryPages: 1, viewerIds: {}, exports: names }, wasmMemory).then(
     inst => {
       const stepExp = inst.exports['step'];
       if (typeof stepExp === 'function') wasmStepFn = stepExp as (t: number) => void;
+      const initExp = inst.exports['init'];
+      if (typeof initExp === 'function') wasmInitFn = initExp as (t: number) => void;
       for (const [name, fn] of Object.entries(inst.exports)) {
-        if (name === 'step') continue;
+        if (name === 'step' || name === 'init') continue;
         if (name.startsWith('inputColor_')) {
           const sanitised = name.slice('inputColor_'.length);
           wasmInputColorFns[sanitised] = fn as (idx: number, r: number, g: number, b: number) => void;
@@ -804,6 +892,7 @@ function tryInstantiateWasmModule(bytes: Uint8Array | undefined, exportNames: st
       wasmStepFn = null;
       wasmInputColorFns = {};
       wasmOutputMappingFns = {};
+      wasmInitFn = null;
       self.postMessage({ type: 'error', message: '[wasm] instantiate failed: ' + (err?.message || err) });
     },
   );
@@ -1442,6 +1531,16 @@ function randomizeGrid(): void {
     const wArr = writeAttrs[attr.id]!;
     (wArr as Uint8Array).set(arr as Uint8Array);
   }
+  // Variegated Cells: randomize orientations too. The buffer is a view over
+  // wasmMemory, so writes through the JS view land in the same bytes WASM reads.
+  if (orientationReadView) {
+    for (let i = 0; i < total; i++) {
+      orientationReadView[i] = (Math.random() * 4) | 0;
+    }
+    if (orientationWriteView && orientationWriteView !== orientationReadView) {
+      orientationWriteView.set(orientationReadView);
+    }
+  }
   resetIndicators();
   generation = 0;
   // Under WebGPU the message handler is solely responsible for the post-mutation
@@ -1461,6 +1560,15 @@ function resetGrid(): void {
     const arr = readAttrs[attr.id]!;
     const wArr = writeAttrs[attr.id]!;
     for (let i = 0; i < total; i++) { arr[i] = dv; wArr[i] = dv; }
+  }
+  // Variegated Cells: orientation defaults to 0 (spec §6.3). Clear both views
+  // so init / step start from a clean state. Both views are over wasmMemory so
+  // WASM sees the same zeros.
+  if (orientationReadView) {
+    orientationReadView.fill(0);
+    if (orientationWriteView && orientationWriteView !== orientationReadView) {
+      orientationWriteView.fill(0);
+    }
   }
   resetIndicators();
   generation = 0;
@@ -1503,20 +1611,36 @@ function compileFns(
 /** Run the per-cell Init function for the entire grid (one cell per
  *  iteration). Sync mode swaps r/w buffers after, so subsequent reads from
  *  readAttrs see the init-time writes. Async mode shares a single buffer so
- *  no swap is needed. No-op when initFn is null. Called from the reset
- *  handler after `resetGrid()` and before sendColors / GPU upload.
+ *  no swap is needed. No-op when no init function exists. Called from the
+ *  reset handler after `resetGrid()` and before sendColors / GPU upload.
  *
- *  Wave-2/3 caveat: this calls the JS initFn even when useWasm or useWebGPU
- *  is active — WASM and WebGPU init entry-points are added in later phases
- *  (Phase 8 / 9). Init runs once per reset so the JS path is acceptable for
- *  Phase 2; the cell attribute buffers are TypedArray views (in WASM mode,
- *  views over wasmMemory) so writes still land in the right place. Under
- *  WebGPU the worker uploads readAttrs to the GPU after init in the reset
- *  handler. */
+ *  Wave-2 (WASM): when `useWasm` and the WASM module exported `init`, call
+ *  it instead of the JS function — both write through views over `wasmMemory`,
+ *  so the post-run sync-mode swap below sees the right bytes regardless of
+ *  which path wrote them. Same sync normalisation as runStep: when readAttrs
+ *  != attrsA we copy back to attrsA first so WASM's baked-in offsets read the
+ *  freshly-zeroed defaults instead of stale attrsB data.
+ *
+ *  WebGPU Init isn't supported in this phase — the worker falls back to the
+ *  JS init function under WebGPU. The cell attribute buffers are TypedArray
+ *  views over wasmMemory so writes still land in the right place; WebGPU
+ *  uploads readAttrs after init in the reset handler. */
 function runInit(): void {
-  if (!initFn) return;
+  const callWasm = useWasm && wasmInitFn !== null;
+  const isSync = updateMode !== 'asynchronous';
+  if (!callWasm && !initFn) return;
+  if (callWasm && isSync && readAttrs !== attrsA) {
+    // Normalise to the baked-in WASM read offset before calling so WASM sees
+    // the canonical pre-init state. Mirrors the runStep pattern.
+    for (const attr of cellAttrs) {
+      (attrsA[attr.id] as Uint8Array).set(readAttrs[attr.id] as Uint8Array);
+    }
+    readAttrs = attrsA;
+    writeAttrs = attrsB;
+  }
   try {
-    initFn(...buildLoopArgs());
+    if (callWasm) wasmInitFn!(total);
+    else initFn!(...buildLoopArgs());
   } catch (e) {
     self.postMessage({ type: 'error', message: '[init] init function failed: ' + ((e instanceof Error) ? e.message : String(e)) });
     return;
@@ -1529,6 +1653,13 @@ function runInit(): void {
   if (updateMode !== 'asynchronous') {
     for (const attr of cellAttrs) {
       (readAttrs[attr.id] as Uint8Array).set(writeAttrs[attr.id] as Uint8Array);
+    }
+    // Variegated Cells: same sync-mode discipline for orientation. The init
+    // function's per-cell `w_orientation.set(r_orientation)` preamble produces
+    // a write buffer that contains the user's SetOrientation writes; copy it
+    // back to the read buffer so subsequent step reads see init-time orientation.
+    if (orientationReadView && orientationWriteView && orientationReadView !== orientationWriteView) {
+      orientationReadView.set(orientationWriteView);
     }
   }
 }
@@ -1813,6 +1944,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
 
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       viewerIdMap = msg.viewerIds || {};
+      // Variegated Cells: stash the payload BEFORE initGrid so the layout
+      // reserves orientation / facePatternLookup / interactionTable regions
+      // in wasmMemory. initVariegation runs AFTER initGrid to fill the
+      // reserved regions with computed values.
+      variegated = msg.variegated ?? null;
       // initGrid first because it allocates wasmMemory + computes layout that
       // initIndicators / buildNeighborIndices need to create their views over.
       initGrid();
@@ -1822,18 +1958,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // so WASM emitters that read those regions see meaningful values.
       syncModelAttrsToMemory();
       syncActiveViewerToMemory();
-      // Variegated Cells: allocate orientation arrays + build facePatternLookup
-      // from the variegation source attribute. Phase 7 wires the runtime
-      // reads (GetOrientation, GetFacingLabels, etc.) against these arrays.
-      initVariegation(msg.variegated);
+      // Variegated Cells: fill the reserved facePatternLookup region + per-
+      // table interaction-table regions. WASM emitters read from baked-in
+      // offsets; JS-target step also reads through the same Float64Array /
+      // Int32Array views (single source of truth).
+      initVariegation(msg.variegated, msg.interactionTables);
       compileFns(msg.stepCode, msg.inputColorCodes, msg.outputMappingCodes || [], msg.initCode || '');
-      // Variegated Cells: flatten each interaction table into row-major
-      // Float64Arrays. Phase 7 wires interaction table reads into
-      // LookupInteraction emit.
-      cachedInteractionTables = {};
-      for (const t of msg.interactionTables ?? []) {
-        cachedInteractionTables[t.id] = normalizeInteractionTable(t.values, t.faceLabels);
-      }
       stopMessages = msg.stopMessages || [];
       webgpuStopCheckInterval = Math.max(1, Math.floor(msg.webgpuStopCheckInterval ?? 1));
       // Mutual exclusion safety net: a saved file or hand-edited JSON could
@@ -2097,11 +2227,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         syncActiveViewerToMemory();
       }
       compileFns(msg.stepCode, msg.inputColorCodes, (msg as RecompileMsg).outputMappingCodes || [], (msg as RecompileMsg).initCode || '');
-      // Variegated Cells: re-flatten interaction tables (same wiring as init).
-      cachedInteractionTables = {};
-      for (const t of (msg as RecompileMsg).interactionTables ?? []) {
-        cachedInteractionTables[t.id] = normalizeInteractionTable(t.values, t.faceLabels);
-      }
+      // Variegated Cells: re-fill the facePatternLookup + interaction-table
+      // regions in wasmMemory. The regions themselves stay at the same
+      // offsets (no reallocation — initGrid sized them at init time from the
+      // attribute schema, which a recompile doesn't change). Writes through
+      // the existing typed-array views so WASM keeps the same source of truth.
+      initVariegation((msg as RecompileMsg).variegated, (msg as RecompileMsg).interactionTables);
       stopMessages = (msg as RecompileMsg).stopMessages || [];
       if ((msg as RecompileMsg).webgpuStopCheckInterval !== undefined) {
         webgpuStopCheckInterval = Math.max(1, Math.floor((msg as RecompileMsg).webgpuStopCheckInterval!));
@@ -2357,11 +2488,21 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
 
     case 'updateInteractionTable': {
-      // Live-tune a single Interaction Table model attribute. Re-flatten and
-      // replace the cached buffer; next step sees the new values. WASM /
-      // WebGPU upload is added in Phases 8 / 9 when those targets emit
-      // LookupInteraction reads against baked-in offsets.
-      cachedInteractionTables[msg.attrId] = normalizeInteractionTable(msg.values, msg.faceLabels);
+      // Live-tune a single Interaction Table model attribute. The cached
+      // Float64Array is a typed-array view over `wasmMemory` at the layout's
+      // reserved offset (see initVariegation), so we must COPY into the
+      // existing view — never reassign the JS reference — or WASM would lose
+      // its source of truth (it reads via baked offsets, not the JS ref).
+      const normalized = normalizeInteractionTable(msg.values, msg.faceLabels);
+      const existing = cachedInteractionTables[msg.attrId];
+      if (existing && existing.length === normalized.length) {
+        existing.set(normalized);
+      } else {
+        // Fallback path: standalone array (no layout slot, e.g. interactionTable
+        // attr added without recompile). JS reads still work; WASM has no
+        // offset for it either, so this branch is harmless.
+        cachedInteractionTables[msg.attrId] = normalized;
+      }
       break;
     }
 
@@ -2549,6 +2690,17 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // so they ARE restored)
       for (const [key, val] of Object.entries(msg.modelAttrs)) {
         cachedModelAttrs[key] = val;
+      }
+
+      // Variegated Cells: saved .gcastate files don't carry orientation yet
+      // (added when orientation save/load lands as a follow-up). Clear the
+      // orientation views so loaded states start with the spec-mandated
+      // default (0) instead of stale orientations from the pre-load run.
+      if (orientationReadView) {
+        orientationReadView.fill(0);
+        if (orientationWriteView && orientationWriteView !== orientationReadView) {
+          orientationWriteView.fill(0);
+        }
       }
 
       // Restore order array — COPY INTO the existing view rather than
