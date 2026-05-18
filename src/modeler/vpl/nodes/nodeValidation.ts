@@ -420,35 +420,19 @@ export function detectWebGPUIncompatibilities(
  *
  *  Mirrors `detectWebGPUIncompatibilities` so WASM-only gaps surface as
  *  warning badges in the modeler instead of init-time errors. Currently the
- *  WASM target covers the full node catalogue (multi-source `groupOperator`
- *  with `op === 'random'` was the last gap and is implemented) so this
- *  function returns no issues. The scaffold + call site is kept so future
- *  WASM-only gaps can be reported here without touching the rest of the
- *  validation pipeline.
+ *  WASM target covers the full node catalogue (Variegated Cells nodes +
+ *  Init Event landed in Phase 8) so this function returns no issues. The
+ *  scaffold + call site is kept so future WASM-only gaps can be reported
+ *  here without touching the rest of the validation pipeline.
  *
  *  Caller pattern: `[...detectMissingConfig(...), ...detectWasmIncompatibilities(nodeType, config, model)]`
  *  when `model.properties.useWasm` is true and `useWebGPU` is false. */
 export function detectWasmIncompatibilities(
-  nodeType: string,
+  _nodeType: string,
   _config: NodeConfig,
   _model: CAModel,
 ): string[] {
-  const issues: string[] = [];
-  switch (nodeType) {
-    // Variegated Cells nodes — WASM emitters not yet implemented. The worker
-    // falls back to JS for the step function. Switch target or remove the
-    // variegated node to clear this warning.
-    case 'initEvent':
-    case 'getOrientation':
-    case 'setOrientation':
-    case 'getNeighborOrientation':
-    case 'setNeighborOrientation':
-    case 'getFacingLabels':
-    case 'lookupInteraction':
-      issues.push('Variegated Cells nodes are not yet implemented on the WASM target. The simulator will fall back to JS for the step function.');
-      break;
-  }
-  return issues;
+  return [];
 }
 
 /** Top-level model check — async + WebGPU is incompatible. Returns a

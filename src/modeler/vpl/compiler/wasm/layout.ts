@@ -6,6 +6,7 @@
  * Layout (in order):
  *   [cell attr 0 read][cell attr 1 read]...
  *   [cell attr 0 write][cell attr 1 write]...      (skipped in async — write aliases read)
+ *   [orientation read][orientation write]           (variegated only; i32/cell, write skipped in async)
  *   [colors: 4 bytes/cell]
  *   [neighbor index table 0][...]                   (Int32Array per neighborhood, total*size i32 each)
  *   [model attrs region]                            (one f64 per scalar; 3 per color attr)
@@ -13,6 +14,10 @@
  *   [rngState: 4 bytes]
  *   [activeViewer: 4 bytes]
  *   [orderArray: total * 4 bytes — async only]
+ *   [stopFlag: 4 bytes]
+ *   [facePatternLookup: tagOptions × 8 i32]         (variegated only)
+ *   [interactionTables...]                          (variegated only; f64 each, (labels+1)² entries per table)
+ *   [scratch region]
  *
  * All region offsets are 8-byte aligned. Total bytes are rounded up to the
  * nearest 64KB page. The grid never resizes without a fresh init, so memory
@@ -20,6 +25,7 @@
  */
 
 import type { CAModel } from '../../../../model/types';
+import { FACE_SLOT_COUNT } from '../variegation';
 
 export interface AttrDef {
   id: string;
@@ -37,6 +43,21 @@ export interface NeighborhoodDef {
 export interface IndicatorLite {
   id: string;
   kind: string;
+}
+
+/** Variegated Cells layout inputs — when omitted the layout has no
+ *  orientation / facePatternLookup / interactionTable regions and the
+ *  related offsets are all 0. */
+export interface VariegatedLayoutInputs {
+  /** Source attribute's `tagOptions.length` — facePatternLookup is sized
+   *  `tagOptions × 8` i32. Zero ⇒ lookup region is empty. */
+  speciesCount: number;
+  /** User-defined face label palette length (without implicit `none`). Each
+   *  interaction table is `(faceLabelsCount + 1)²` f64. */
+  faceLabelsCount: number;
+  /** Ids of every model attribute with `type === 'interactionTable'`. Each
+   *  gets its own contiguous f64 region. Iterated in stable order. */
+  interactionTableIds: string[];
 }
 
 export interface MemoryLayout {
@@ -74,6 +95,42 @@ export interface MemoryLayout {
    *  the simulator, surfacing `stopMessages[idx-1]`. */
   stopFlagOffset: number;
 
+  // ---- Variegated Cells regions. All zero when `variegatedEnabled` is false. ----
+
+  /** True when the layout reserves orientation / facePatternLookup /
+   *  interactionTable regions. Implies the model has Variegated Cells on. */
+  variegatedEnabled: boolean;
+
+  /** Byte offset of the orientation read buffer (i32 per cell, sized to
+   *  match cell-attr buffers — `cellsPerAttr` = `total + 1` for constant
+   *  boundary, `total` for torus). 0 when variegation is off. */
+  orientationReadOffset: number;
+  /** Byte offset of the orientation write buffer. Equal to
+   *  `orientationReadOffset` in async mode (single shared buffer). 0 when
+   *  variegation is off. */
+  orientationWriteOffset: number;
+  /** Bytes per orientation buffer (cellsPerAttr × 4). Used by bulk copy. */
+  orientationBytes: number;
+
+  /** Byte offset of the flat facePatternLookup i32 region. Layout matches
+   *  `buildFacePatternLookup`: `[speciesIdx * 8 + faceIdx → labelIdx]`. The
+   *  worker uploads this once on init/recompile; emitters read it at
+   *  compile-time-known offsets relative to `facePatternLookupOffset`. */
+  facePatternLookupOffset: number;
+  /** Bytes reserved for facePatternLookup (`speciesCount × 8 × 4`). */
+  facePatternLookupBytes: number;
+
+  /** Byte offset per interaction-table model attr (f64 row-major
+   *  `[rowLabelIdx * labelCount + colLabelIdx]`, sized
+   *  `(faceLabelsCount + 1)² × 8` bytes per table). Keyed by attribute id.
+   *  Empty map when variegation is off. */
+  interactionTableOffsets: Record<string, number>;
+  /** Number of labels per row/col in every interaction table — equal to
+   *  `faceLabelsCount + 1` (the implicit `none` label at index 0 plus the
+   *  user-defined palette). Same for every table because they all share
+   *  the model's face-label palette. */
+  interactionTableLabelCount: number;
+
   /** Per-cell-iteration scratch region (bump-pointer allocator).
    *  Used by array-producing emitters (filterNeighbors, joinNeighbors,
    *  getNeighborIndexesByTags, getNeighborsAttrByIndexes) to materialise
@@ -110,6 +167,7 @@ export function computeMemoryLayout(
   total: number,
   isAsync: boolean,
   boundaryTreatment: string,
+  variegated?: VariegatedLayoutInputs,
 ): MemoryLayout {
   let off = 0;
 
@@ -144,6 +202,27 @@ export function computeMemoryLayout(
     }
   } else {
     for (const a of cellAttrs) attrWriteOffset[a.id] = attrReadOffset[a.id]!;
+  }
+
+  // Variegated Cells — orientation read/write regions. Same i32-per-cell shape
+  // as integer cell attrs, sized with the same sentinel-aware `cellsPerAttr`
+  // so the JS-side typed-array views and WASM emit see identical bytes.
+  const variegatedEnabled = !!variegated;
+  let orientationReadOffset = 0;
+  let orientationWriteOffset = 0;
+  let orientationBytes = 0;
+  if (variegatedEnabled) {
+    orientationBytes = cellsPerAttr * 4;
+    off = alignTo(off, 8);
+    orientationReadOffset = off;
+    off += orientationBytes;
+    if (!isAsync) {
+      off = alignTo(off, 8);
+      orientationWriteOffset = off;
+      off += orientationBytes;
+    } else {
+      orientationWriteOffset = orientationReadOffset;
+    }
   }
 
   // Colors region (RGBA Uint8 per cell)
@@ -205,6 +284,31 @@ export function computeMemoryLayout(
   const stopFlagOffset = off;
   off += 8;
 
+  // Variegated Cells — facePatternLookup + interaction tables. Uploaded by the
+  // worker on init/recompile. Sized once at layout time (count-driven, not
+  // value-driven) so the layout is stable across live edits to the table
+  // values themselves (those are upload-only). Tables share one labelCount
+  // because they all use the model's face-label palette.
+  let facePatternLookupOffset = 0;
+  let facePatternLookupBytes = 0;
+  const interactionTableOffsets: Record<string, number> = {};
+  let interactionTableLabelCount = 1; // implicit `none` = 1 when palette empty
+  if (variegated) {
+    facePatternLookupBytes = variegated.speciesCount * FACE_SLOT_COUNT * 4;
+    if (facePatternLookupBytes > 0) {
+      off = alignTo(off, 8);
+      facePatternLookupOffset = off;
+      off += facePatternLookupBytes;
+    }
+    interactionTableLabelCount = variegated.faceLabelsCount + 1;
+    const tableBytes = interactionTableLabelCount * interactionTableLabelCount * 8;
+    for (const id of variegated.interactionTableIds) {
+      off = alignTo(off, 8);
+      interactionTableOffsets[id] = off;
+      off += tableBytes;
+    }
+  }
+
   // Scratch region for per-cell array allocation (bump-pointer reset per
   // iteration). Sized for: max neighborhood size × 8 bytes (worst-case f64
   // element) × 32 concurrent arrays. With a floor of 4 KB so trivial graphs
@@ -230,6 +334,10 @@ export function computeMemoryLayout(
     indicatorOffset, indicatorIds,
     rngStateOffset, activeViewerOffset, orderOffset,
     stopFlagOffset,
+    variegatedEnabled,
+    orientationReadOffset, orientationWriteOffset, orientationBytes,
+    facePatternLookupOffset, facePatternLookupBytes,
+    interactionTableOffsets, interactionTableLabelCount,
     scratchOffset, scratchBytes,
     sentinelIndex,
   };
@@ -244,6 +352,20 @@ export function computeLayoutFromModel(
   const indicators = (model.indicators || []).map(i => ({ id: i.id, kind: i.kind }));
   const total = model.properties.gridWidth * model.properties.gridHeight;
   const isAsync = model.properties.updateMode === 'asynchronous';
+  let variegated: VariegatedLayoutInputs | undefined;
+  if (model.variegatedCells?.enabled) {
+    const source = model.attributes.find(a => a.id === model.variegatedCells!.sourceAttributeId);
+    const speciesCount = source && source.type === 'tag' && !source.isModelAttribute
+      ? (source.tagOptions?.length ?? 0) : 0;
+    const interactionTableIds = model.attributes
+      .filter(a => a.isModelAttribute && a.type === 'interactionTable')
+      .map(a => a.id);
+    variegated = {
+      speciesCount,
+      faceLabelsCount: model.variegatedCells.faceLabels.length,
+      interactionTableIds,
+    };
+  }
   return computeMemoryLayout(
     cellAttrs.map(a => ({ id: a.id, type: a.type, isModelAttribute: false, defaultValue: a.defaultValue, tagOptions: a.tagOptions })),
     modelAttrs.map(a => ({ id: a.id, type: a.type, isModelAttribute: true, defaultValue: a.defaultValue, tagOptions: a.tagOptions })),
@@ -252,6 +374,7 @@ export function computeLayoutFromModel(
     total,
     isAsync,
     model.properties.boundaryTreatment,
+    variegated,
   );
 }
 
