@@ -742,6 +742,29 @@ export function HelpView() {
             the starting grid state.
           </p>
 
+          <h3 className={styles.h3}>Manual Brush</h3>
+          <p className={styles.p}>
+            The brush mapping strip always shows a special <strong>Manual</strong> tab on
+            the right, even when the model has no Color&rarr;Attribute input mappings.
+            Selecting it swaps the color picker for a per-attribute panel: one row per
+            cell attribute, each with a <strong>Set</strong> checkbox and a
+            type-appropriate value widget (bool dropdown, integer/float number input, or
+            tag dropdown). When you paint, every cell under the brush has each checked
+            attribute overwritten with its chosen value; unchecked attributes are skipped
+            so you keep fine control over what gets touched. Configuration persists
+            per-model name in localStorage, separate from saved projects.
+          </p>
+          <p className={styles.p}>
+            <strong>Sub-attribute behaviour:</strong> when you mark a sub-attribute
+            (e.g. <em>charge</em> under <em>cellType</em>) as Set, the worker checks each
+            painted cell&apos;s effective parent value &mdash; the brush&apos;s parent
+            value if the parent is also being Set, otherwise the cell&apos;s current
+            value &mdash; and only writes the sub-attribute where the parent is in the
+            schema-declared <code>parentValues</code>. This mirrors the schema&apos;s
+            iteration semantics: &ldquo;paint <em>charge=2</em> on every Wire cell under
+            this stroke&rdquo; works naturally without first wiring a filter graph.
+          </p>
+
           <h3 className={styles.h3}>Copy, Paste, Cut (Cell Regions)</h3>
           <p className={styles.p}>
             With the cursor over the grid, press <kbd className={styles.kbd}>Ctrl</kbd>+

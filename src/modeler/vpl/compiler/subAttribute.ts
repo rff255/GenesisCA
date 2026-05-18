@@ -71,8 +71,10 @@ export function attrValueLiteralJS(attr: Attribute, valueStr: string | undefined
 }
 
 /** Convert a parentValues entry (string) to the integer that the parent's
- *  typed-array storage holds. Tag parent: index as integer. Bool parent: 0/1. */
-function parentValueToInt(parent: Attribute, raw: string): number {
+ *  typed-array storage holds. Tag parent: index as integer. Bool parent: 0/1.
+ *  Exported so non-compile-target consumers (e.g. the simulator's Manual Brush
+ *  worker handler) share the canonical encoding rule. */
+export function parentValueToInt(parent: Attribute, raw: string): number {
   if (parent.type === 'bool') return raw === 'true' || raw === '1' ? 1 : 0;
   if (parent.type === 'tag') {
     const n = parseInt(raw, 10);
