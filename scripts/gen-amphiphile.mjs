@@ -247,8 +247,13 @@ const pBreakAgg = node('aggregate', { operation: 'product' }, 11, 12, 'P_break (
 vEdge(pbsArr, 'values', pBreakAgg, 'values');
 
 // ForEachInArray loop — iterates the 4 cardinal NIs in niArr; the body uses
-// `forEachDirs.index` as the direction slot d (0..3).
+// `forEachDirs.index` as the direction slot d (0..3). The flow input `do`
+// fires from condBreak.then (so weights are populated only when the cell is
+// occupied + broke its bonds — same gate as the move below). The array
+// input is niArr, whose length 4 drives the iteration count; we don't read
+// `element` (the NI itself) — the body uses `index` instead.
 const forEachDirs = node('forEachInArray', {}, 3, 14, 'For each direction d');
+vEdge(niArr, 'indexes', forEachDirs, 'array');
 
 const kind_d = node('arrayElement', {}, 4, 14, 'kind[d]');
 vEdge(kindsArr, 'values', kind_d, 'array');
@@ -365,6 +370,12 @@ vEdge(pBreakAgg, 'result', rollBreak, 'probability');
 const condBreak = node('conditional', {}, 4, 0, 'If break free');
 fEdge(condOccupied, 'then', condBreak, 'check');
 vEdge(rollBreak, 'value', condBreak, 'condition');
+
+// Populate `weights` BEFORE the sumW gate fires. The forEach loop and the
+// downstream condCanMove both hang off `condBreak.then` — compileFlowChain
+// processes them in edge-add order, so the for-loop emits first, then the
+// `if (sumPos)` gate. Same `if (rollBreak)` block contains both.
+fEdge(condBreak, 'then', forEachDirs, 'do');
 
 const sumPos = node('statement', { operation: '>' }, 11, 16, 'sumW > 0?');
 vEdge(sumWAgg, 'result', sumPos, 'x');
