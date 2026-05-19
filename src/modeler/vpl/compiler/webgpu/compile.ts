@@ -561,6 +561,65 @@ function arrLoad(arr: ArrayRef, iExpr: string): string {
   return `${arr.name}[${iExpr}]`;
 }
 
+/** WGSL type for a Variable's storage. bool/integer/tag use i32 (WGSL has
+ *  a native bool but reading/writing through it via storage buffers is awkward
+ *  — we already use i32 for cell attributes of the same logical types).
+ *  float uses f32 (WGSL has no f64; we accept the precision loss vs JS/WASM,
+ *  same as the rest of the WebGPU target). */
+function variableWgslType(dataType: string): WgslType {
+  return dataType === 'float' ? 'f32' : 'i32';
+}
+
+/** WGSL literal for a Variable's initialValue. Bools become `0` / `1`
+ *  (we store them in i32 slots), floats parse as decimal with `.0` suffix
+ *  if integral, integers parse as int. */
+function variableInitWgsl(v: import('../../../../model/types').Variable): string {
+  const raw = v.initialValue ?? '0';
+  if (v.dataType === 'bool') return (raw === 'true' || raw === '1') ? '1' : '0';
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return '0';
+  if (v.dataType === 'float') {
+    // WGSL f32 literals need a decimal point or `f` suffix to parse as float.
+    return Number.isInteger(n) ? `${n}.0` : `${n}`;
+  }
+  return `${n | 0}`;
+}
+
+/** Sanitised WGSL var name for a Variable id. Mirrors `variableLocalName`
+ *  in the JS compile path. */
+function variableWgslName(variableId: string): string {
+  return '_var_' + variableId.replace(/[^a-zA-Z0-9_]/g, '_');
+}
+
+/** Emit `var<function>` declarations + per-cell initialisation at the top
+ *  of an entry function. Scalars: `var<function> _var_X: i32 = 0; ... = init;`
+ *  Arrays: `var<function> _var_X: array<i32, N>;` followed by an unrolled
+ *  init loop (`_var_X[0] = init; _var_X[1] = init; ...`). For small N
+ *  (typical chemistry: N=4) the unroll keeps the shader compile fast; for
+ *  large N a runtime for-loop would be more compact, but per-thread arrays
+ *  rarely exceed N=8 in practice. */
+function emitVariableDeclsWgsl(ctx: CompileCtx): void {
+  const variables = ctx.model.variables || [];
+  if (variables.length === 0) return;
+  for (const v of variables) {
+    const ty = variableWgslType(v.dataType);
+    const name = variableWgslName(v.id);
+    const init = variableInitWgsl(v);
+    if (v.kind === 'scalar') {
+      // Declared + initialised in one line.
+      ctx.lines.push(`  var ${name}: ${ty} = ${init};`);
+    } else {
+      const length = Math.max(1, Number(v.length) | 0) || 1;
+      ctx.lines.push(`  var ${name}: array<${ty}, ${length}>;`);
+      // Unrolled fill — small N typical, and avoids a runtime loop that
+      // would also bloat the shader text marginally.
+      for (let i = 0; i < length; i++) {
+        ctx.lines.push(`  ${name}[${i}] = ${init};`);
+      }
+    }
+  }
+}
+
 function isArrayProducer(nodeType: string): boolean {
   switch (nodeType) {
     case 'getNeighborIndexesByTags':
@@ -572,6 +631,10 @@ function isArrayProducer(nodeType: string): boolean {
     case 'pickNRandomNeighbors':
     case 'getAllFacingLabels':
     case 'interactionTableMap':
+    // getVariable dispatches through this path when reading an array
+    // variable; scalar variables go through the value-emitter path. The
+    // emitter throws if the variable's kind doesn't match the dispatch.
+    case 'getVariable':
       return true;
     default:
       return false;
@@ -954,6 +1017,37 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
 
   // -- Variegated Cells: Interaction Table Map ----------------------------
   // Vectorised LookupInteraction over two parallel face-label arrays. WGSL
+  // Local Variable read (array path). Returns an ArrayRef pointing at the
+  // function-scope `var<function>` array declared by emitVariableDeclsWgsl.
+  // Scalar variables go through VALUE_NODE_EMITTERS['getVariable']; this
+  // path errors out for them.
+  getVariable: ({ node, ctx }) => {
+    const variableId = node.data.config.variableId as string;
+    const v = (ctx.model.variables || []).find(x => x.id === variableId);
+    if (!v) {
+      ctx.errors.push(`getVariable (array): unknown variable "${variableId}"`);
+      return null;
+    }
+    if (v.kind !== 'array') {
+      ctx.errors.push(`getVariable: variable "${variableId}" is a scalar; array consumers need an array-typed variable`);
+      return null;
+    }
+    const length = Math.max(1, Number(v.length) | 0) || 1;
+    const elemType = variableWgslType(v.dataType);
+    const name = variableWgslName(v.id);
+    // The lenName needs to be a WGSL local holding the constant length so
+    // consumers that read `arr.lenName` get a valid identifier (not a
+    // numeric literal). emitLet declares and returns a fresh name.
+    const lenRef = emitLet(ctx, 'i32', `${length}`, 'vlen');
+    return {
+      kind: 'array',
+      name,
+      lenName: lenRef.expr,
+      elemType,
+      maxLen: length,
+    };
+  },
+
   // emits a single loop reading f32 entries from varAux at word offset
   // `tableOff + a * labelCount + b`. Output length = min(myFaces, theirFaces).
   // Unknown tableId returns an empty array (parity with JS/WASM).
@@ -1506,6 +1600,24 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     const sl = Number.isInteger(span) ? `${span}.0` : `${span}`;
     const ml = Number.isInteger(minN) ? `${minN}.0` : `${minN}`;
     return emitLet(ctx, 'f32', `((${rExpr} * ${sl}) + ${ml})`, 'rf');
+  },
+
+  // Local Variable read (scalar path). Array variables go through the
+  // array-emitter dispatch (ARRAY_NODE_EMITTERS['getVariable']) — both
+  // registrations let the dispatcher pick based on the consumer's expected
+  // input shape.
+  getVariable: ({ node, ctx }) => {
+    const variableId = node.data.config.variableId as string;
+    const v = (ctx.model.variables || []).find(x => x.id === variableId);
+    if (!v) {
+      ctx.errors.push(`getVariable: unknown variable "${variableId}"`);
+      return null;
+    }
+    if (v.kind !== 'scalar') {
+      ctx.errors.push(`getVariable: variable "${variableId}" is an array; wire to an isArray input or use ArrayElement to index it`);
+      return null;
+    }
+    return { expr: variableWgslName(v.id), type: variableWgslType(v.dataType) };
   },
 
   getIndicator: ({ node, ctx }) => {
@@ -2375,6 +2487,52 @@ function emitGroupStatement(c: NodeEmitContext): ValueRef | null {
 
 const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
 
+  // Write to a scalar Local Variable. Cast the input to the variable's
+  // WGSL type and assign. Array variables use setArrayElement; validation
+  // rejects the mismatch.
+  setVariable: ({ node, ctx, inputs }) => {
+    const variableId = node.data.config.variableId as string;
+    const v = (ctx.model.variables || []).find(x => x.id === variableId);
+    if (!v) { ctx.errors.push(`setVariable: unknown variable "${variableId}"`); return false; }
+    if (v.kind !== 'scalar') {
+      ctx.errors.push(`setVariable: variable "${variableId}" is an array; use setArrayElement instead`);
+      return false;
+    }
+    const valueRef = inputs['value'];
+    if (!valueRef) { ctx.errors.push('setVariable: missing value input'); return false; }
+    const ty = variableWgslType(v.dataType);
+    ctx.lines.push(`  ${variableWgslName(v.id)} = ${castTo(valueRef, ty)};`);
+    return true;
+  },
+
+  // Write to an array Local Variable at a runtime-computed index. Bounds-
+  // checked at runtime (mirrors JS/WASM emits) — out-of-range writes
+  // silently skip.
+  setArrayElement: ({ node, ctx, inputs }) => {
+    const variableId = node.data.config.variableId as string;
+    const v = (ctx.model.variables || []).find(x => x.id === variableId);
+    if (!v) { ctx.errors.push(`setArrayElement: unknown variable "${variableId}"`); return false; }
+    if (v.kind !== 'array') {
+      ctx.errors.push(`setArrayElement: variable "${variableId}" is a scalar; use setVariable instead`);
+      return false;
+    }
+    const idxRef = inputs['index'];
+    const valueRef = inputs['value'];
+    if (!idxRef) { ctx.errors.push('setArrayElement: missing index input'); return false; }
+    if (!valueRef) { ctx.errors.push('setArrayElement: missing value input'); return false; }
+    const length = Math.max(1, Number(v.length) | 0) || 1;
+    const ty = variableWgslType(v.dataType);
+    const name = variableWgslName(v.id);
+    const idxExpr = castTo(idxRef, 'i32');
+    const valExpr = castTo(valueRef, ty);
+    // WGSL `if` block: bounds check, then assign. Stash idx as a let so
+    // we only evaluate the input once.
+    const iName = fresh(ctx, 'saiI');
+    ctx.lines.push(`  let ${iName}: i32 = ${idxExpr};`);
+    ctx.lines.push(`  if (${iName} >= 0 && ${iName} < ${length}) { ${name}[${iName}] = ${valExpr}; }`);
+    return true;
+  },
+
   setAttribute: ({ node, ctx, inputs }) => {
     const attrId = node.data.config.attributeId as string;
     const attr = getAttr(ctx.layout, attrId);
@@ -3198,6 +3356,13 @@ function compileEntry(opts: EntryOpts, base: Omit<CompileCtx, 'lines' | 'valueLo
     sinkAnalysis,
     branchLines: new Map(),
   };
+  // Local Variables — emit `var<function>` declarations + initial-value
+  // assignments at the top of the function. Per-thread storage is per-cell
+  // by construction (one shader invocation = one cell). Runs in every
+  // entry-point shader (step, inputColor, outputMapping, initEvent) so
+  // user code can read/write variables from any of them.
+  emitVariableDeclsWgsl(ctx);
+
   if (opts.emitCopyPreamble) {
     // P8: skip per-cell copy for attrs that every flow path overwrites via
     // setAttribute (and never read via updateAttribute). Dead bandwidth for
