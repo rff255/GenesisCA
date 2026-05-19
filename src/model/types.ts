@@ -339,6 +339,41 @@ export interface VariegatedCellsConfig {
   facePatterns: FacePattern[];
 }
 
+/** Local Variables — per-cell mutable storage in the update-rules graph.
+ *
+ *  A Variable lets a graph rule "declare a value here, mutate it in a loop,
+ *  read it elsewhere" — bridging the gap between pure dataflow and the
+ *  imperative pseudocode most CA rules are written in (e.g. "for each
+ *  direction d, weights[d] = compute(d); then sample by weights"). Each cell
+ *  gets its own copy, populated fresh at the start of every cell iteration
+ *  by resetting to `initialValue`. Variables don't persist across steps —
+ *  treat them as scratch space local to one cell-step's computation.
+ *
+ *  Read via `getVariable` (value node), write via `setVariable` (scalar) or
+ *  `setArrayElement` (array). Defined globally on the model (Properties
+ *  panel) so multiple graph nodes can reference the same variable by id. */
+export type VariableKind = 'scalar' | 'array';
+export type VariableDataType = 'bool' | 'integer' | 'float' | 'tag';
+
+export interface Variable {
+  id: string;
+  name: string;
+  description?: string;
+  kind: VariableKind;
+  dataType: VariableDataType;
+  /** Array kind only: number of elements. Allocated once at compile time. */
+  length?: number;
+  /** Initial value populated into every cell's copy at the start of each cell
+   *  iteration. Same string encoding as `Attribute.defaultValue` — tag
+   *  indices as `"0"`/`"1"`/..., bools as `"true"`/`"false"`, numbers as
+   *  decimal strings. For arrays, ALL elements reset to this value (uniform
+   *  fill is the v1 semantics; per-index init can be added later). */
+  initialValue: string;
+  /** Tag dataType only: tag attribute defining the tag space (its
+   *  `tagOptions` provides the named values for the initialValue dropdown). */
+  attributeId?: string;
+}
+
 /** Complete CA model definition */
 export interface CAModel {
   schemaVersion: number;
@@ -350,6 +385,10 @@ export interface CAModel {
   graphNodes: GraphNode[];
   graphEdges: GraphEdge[];
   macroDefs: MacroDef[];
+  /** Local Variables — per-cell mutable storage referenced by getVariable /
+   *  setVariable / setArrayElement nodes. Empty / absent → no variables in
+   *  the model. */
+  variables?: Variable[];
   simulationState?: SimulationState;
   presets?: Preset[];
   /** Variegated Cells feature config. Absent / `enabled: false` → engine and

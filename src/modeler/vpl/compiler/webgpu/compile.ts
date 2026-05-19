@@ -2923,6 +2923,9 @@ function compileFlowChain(ctx: CompileCtx, sourceNodeId: string, sourcePortId: s
       ctx.lines.push(`  for (var ${fi}: i32 = 0; ${fi} < ${arrRef.lenName}; ${fi} = ${fi} + 1) {`);
       ctx.lines.push(`    let ${elemName}: ${arrRef.elemType} = ${arrLoad(arrRef, fi)};`);
       setCachedPort(ctx, node.id, 'element', { expr: elemName, type: arrRef.elemType });
+      // Expose the loop counter — body-side nodes that index parallel arrays
+      // by slot read this instead of `element`.
+      setCachedPort(ctx, node.id, 'index', { expr: fi, type: 'i32' });
       flushBranchValues(ctx, `${node.id}:body`);
       if (!compileFlowChain(ctx, node.id, 'body')) return false;
       ctx.lines.push(`  }`);

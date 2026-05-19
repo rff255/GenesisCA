@@ -78,6 +78,16 @@ const NEVER_INVARIANT = new Set<string>([
   'getNeighborOrientationByIndex',
   'getFacingLabels',
   'getAllFacingLabels',
+  // Local Variables: per-cell scratch storage mutated by SetVariable /
+  // SetArrayElement inside the cell loop. Hoisting GetVariable out would
+  // emit the read ONCE at function scope BEFORE the cell loop runs and
+  // ANY writes happen — the consumer would see the variable's initial
+  // value (or worse, the previous cell's leftover value) instead of the
+  // current cell's state. Forrest applies to every consumer that depends
+  // on GetVariable via the composite rule, so the whole post-loop chain
+  // (Aggregate / GroupOperator / ArrayElement on the variable's value)
+  // also lands inside the loop body.
+  'getVariable',
 ]);
 
 export function classifyLoopInvariant(

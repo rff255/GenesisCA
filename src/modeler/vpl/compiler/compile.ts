@@ -15,6 +15,7 @@ import {
   parentMatchExprJS,
 } from './subAttribute';
 import { directionIndex, DIRECTION_TAGS } from './variegation';
+import { buildVariableJS } from './variable';
 
 // ---------------------------------------------------------------------------
 // Graph adjacency helpers
@@ -461,6 +462,13 @@ function compileRoot(
     // scope is enforced by where compileFlowChain places the declaration.
     if (sourceNode?.data.nodeType === 'forEachInArray' && sourcePortId === 'element') {
       return `_v${sourceNodeId}_element`;
+    }
+    // Same scope rules: the loop counter is declared as `_fei<id>` at the top
+    // of each iteration in compileFlowChain. Exposing it lets body-side nodes
+    // index into parallel arrays (kindsArr / farKindsArr / etc.) by the
+    // current iteration's slot.
+    if (sourceNode?.data.nodeType === 'forEachInArray' && sourcePortId === 'index') {
+      return `_fei${sourceNodeId}`;
     }
     // pickNRandomNeighbors writes its output to the _result scratch array (the _work
     // scratch is internal and never read by downstream nodes).
@@ -1885,6 +1893,11 @@ export function compileGraph(
     // Scratch array declarations (before the loop)
     const scratchDecls = scratchNodes.map(s => buildScratchDecl(s, model));
 
+    // Local Variables: per-cell scratch storage. Array variables get one
+    // typed-array buffer allocated outside the loop (reused per cell), reset
+    // to initialValue at cell-top. Scalar variables become per-cell `let`s.
+    const variableBlocks = buildVariableJS(model);
+
     // Build linked indicator aggregation code (injected into the loop)
     const linked = buildLinkedIndicatorCode(model);
 
@@ -1893,6 +1906,7 @@ export function compileGraph(
       stepCode = [
         `(function(${loopParams}) {`,
         ...scratchDecls,
+        ...variableBlocks.preLoop,
         ...viewerHoistLines,
         ...preLoopValueLines,
         ...linked.preLoopDecls,
@@ -1905,6 +1919,7 @@ export function compileGraph(
         // Two ops per cell, amortised across all NI accesses in the cell body.
         '    const _row = (idx / W) | 0;',
         '    const _col = idx - _row * W;',
+        ...variableBlocks.inLoopReset,
         ...valueLines,
         '',
         ...flowLines,
@@ -1919,6 +1934,7 @@ export function compileGraph(
       stepCode = [
         `(function(${loopParams}) {`,
         ...scratchDecls,
+        ...variableBlocks.preLoop,
         ...bulkCopyLines,
         ...viewerHoistLines,
         ...preLoopValueLines,
@@ -1933,6 +1949,7 @@ export function compileGraph(
         // copy from r_ to w_ for matching cells. Replaces the bulk .set() that
         // regular attrs use. User rule writes later overwrite w_ as needed.
         ...subAttrSyncCopyLines,
+        ...variableBlocks.inLoopReset,
         ...valueLines,
         '',
         ...flowLines,

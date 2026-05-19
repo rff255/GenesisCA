@@ -221,109 +221,103 @@ const tagEmpty = tagConst('empty', 2, 8, ATTR_KIND, KIND_OPTIONS);
 const tagWater = tagConst('water', 2, 9, ATTR_KIND, KIND_OPTIONS);
 const tagAmphi = tagConst('amphi', 2, 10, ATTR_KIND, KIND_OPTIONS);
 
-// --- Per-direction factors ------------------------------------------------
-// For d in {0=N, 1=E, 2=S, 3=W}, build the per-direction subgraph producing:
-//   pb_d    : P_B(myFace_d, theirFace_d) — bond-break probability factor
-//   j_d     : J(myFace_d, farLabel_d) — joining probability (face proxy)
-//   adjE_d  : (kind_d == empty) — adjacency-is-empty predicate
-//   wt_d    : adjE_d ? j_d : 0 — gated direction weight for sampling
+// --- Per-direction factors via ForEachInArray loop (Tier D.4) ------------
+// The loop body executes once per direction d ∈ {0=N, 1=E, 2=S, 3=W}, with
+// the loop-counter `d` exposed via `forEachDirs.index`. Each iteration:
+//   1. Reads kind_d, myFace_d, farKind_d via arrayElement[d] from the shared
+//      kindsArr / allFaces / farKindsArr arrays.
+//   2. Computes farLabel_d = (farKind==amphi)?X : (farKind==water)?WATER : NONE
+//      via a 2× ValueSwitch chain — each switch is a direct "if predicate,
+//      use Y, else use Z" semantic lookup (no arithmetic on label indices).
+//   3. Computes wt_d = adj_is_empty ? J(myFace_d, farLabel_d) : 0.
+//   4. Stores wt_d into the `weights` Local Variable at index d.
 //
-// Tier-A.2: adjacent + far neighbour kinds come from the shared kindsArr /
-// farKindsArr arrays (built once via getNeighborsAttrByIndexes above), so each
-// direction only needs an arrayElement instead of its own NI + scalar
-// getNeighborAttributeByIndex pair.
+// After the loop, `weights` is a fully populated 4-element array readable
+// by aggregate / groupOperator.weightedRandom downstream. Replaces 4×
+// unrolled copies of the same 10-node subgraph (40 nodes) with a single
+// loop instance running 4 times at runtime (~12 nodes total).
 //
-// Tier-D.1: the per-direction farKind→farLabel translation uses a 2× ValueSwitch
-// chain — each switch is a direct "if predicate, use FACE_X, else use Y"
-// mapping. The earlier `iswater*3 + isamphi*1` arithmetic expression was
-// semantically wrong (encoding a label LOOKUP as a MULTIPLICATION over the
-// label index space) and broke silently if FACE_* indices were reordered.
-//
-// Tier-B.1: P_B factors are computed in a single `interactionTableMap` node
-// vectorised over the cardinal facing-label arrays (no per-direction pb_d).
-// J still goes through per-direction lookupInteraction because farLabel
-// assembly stays per-direction (Y-vs-X-vs-none picked by the cell kind, no
-// vectorised path without elementwise array ops).
-const wt = [], adjE = [];
-const farLabels = []; // per-direction farLabel scalars
-const dirGroupContents = [];  // bbox source for per-direction Group wrappers
-for (let d = 0; d < 4; d++) {
-  const base = 14 + d * 3;
-  const dirNodes = [];
-
-  const kind_d = node('arrayElement', { _port_position: String(d) }, 3, base, `kind d=${d}`);
-  vEdge(kindsArr, 'values', kind_d, 'array');
-  dirNodes.push(kind_d);
-
-  const myFace_d = node('arrayElement', { _port_position: String(d) }, 3, base + 1, `myFace d=${d}`);
-  vEdge(allFaces, 'myFaceLabels', myFace_d, 'array');
-  dirNodes.push(myFace_d);
-
-  // Far cell kind → face-label proxy (empty→none=0, water→water=3, amphi→X=1).
-  const farKind_d = node('arrayElement', { _port_position: String(d) }, 5, base, `farKind d=${d}`);
-  vEdge(farKindsArr, 'values', farKind_d, 'array');
-  dirNodes.push(farKind_d);
-
-  const isFarAmphi = node('statement', { operation: '==' }, 6, base, `farKind==amphi`);
-  vEdge(farKind_d, 'value', isFarAmphi, 'x');
-  vEdge(tagAmphi, 'value', isFarAmphi, 'y');
-  dirNodes.push(isFarAmphi);
-
-  const isFarWater = node('statement', { operation: '==' }, 6, base + 1, `farKind==water`);
-  vEdge(farKind_d, 'value', isFarWater, 'x');
-  vEdge(tagWater, 'value', isFarWater, 'y');
-  dirNodes.push(isFarWater);
-
-  // farLabel = isAmphi ? FACE_X : (isWater ? FACE_WATER : FACE_NONE)
-  // Two ValueSwitches: each is a direct "if predicate, use Y, else use Z"
-  // mapping. No arithmetic on label indices.
-  const farLabelWaterElse = node('valueSwitch', {
-    _port_ifValue: String(FACE_WATER),
-    _port_elseValue: String(FACE_NONE),
-  }, 7, base, `farLabel: water?else none`);
-  vEdge(isFarWater, 'result', farLabelWaterElse, 'condition');
-  dirNodes.push(farLabelWaterElse);
-
-  const farLabel = node('valueSwitch', {
-    _port_ifValue: String(FACE_X),
-  }, 7, base + 1, `farLabel: amphi?X:above`);
-  vEdge(isFarAmphi, 'result', farLabel, 'condition');
-  vEdge(farLabelWaterElse, 'result', farLabel, 'elseValue');
-  dirNodes.push(farLabel);
-  farLabels.push(farLabel);
-
-  const j_d = node('lookupInteraction', { tableId: ATTR_J }, 8, base, `J d=${d}`);
-  vEdge(myFace_d, 'value', j_d, 'labelA');
-  vEdge(farLabel, 'result', j_d, 'labelB');
-  dirNodes.push(j_d);
-
-  const isAdjEmpty = node('statement', { operation: '==' }, 8, base + 1, `adj==empty?`);
-  vEdge(kind_d, 'value', isAdjEmpty, 'x');
-  vEdge(tagEmpty, 'value', isAdjEmpty, 'y');
-  dirNodes.push(isAdjEmpty);
-
-  const wt_d = node('valueSwitch', { _port_elseValue: '0' }, 9, base, `weight d=${d}`);
-  vEdge(isAdjEmpty, 'result', wt_d, 'condition');
-  vEdge(j_d, 'value', wt_d, 'ifValue');
-  dirNodes.push(wt_d);
-
-  wt.push(wt_d);
-  adjE.push(isAdjEmpty);
-  dirGroupContents.push(dirNodes);
-}
-
-// Tier-B.1: vectorised P_B lookup over the cardinal facing-label arrays.
-// Single node replaces 4× lookupInteraction (one per direction).
+// Tier-B.1: P_B factors stay vectorised in `pbsArr` (single InteractionTableMap
+// outside the loop) since they don't need per-direction farLabel assembly.
 const pbsArr = node('interactionTableMap', { tableId: ATTR_PB }, 10, 12, 'P_B vec[4]');
 vEdge(allFaces, 'myFaceLabels', pbsArr, 'myFaces');
 vEdge(allFaces, 'theirFaceLabels', pbsArr, 'theirFaces');
 
-// --- Aggregations: P_break (product) + sumW (sum) -------------------------
 const pBreakAgg = node('aggregate', { operation: 'product' }, 11, 12, 'P_break (Π pb_d)');
 vEdge(pbsArr, 'values', pBreakAgg, 'values');
 
-const sumWAgg = node('aggregate', { operation: 'sum' }, 10, 16, 'sumW (Σ wt_d)');
-wt.forEach(w => vEdge(w, 'value', sumWAgg, 'values'));
+// ForEachInArray loop — iterates the 4 cardinal NIs in niArr; the body uses
+// `forEachDirs.index` as the direction slot d (0..3).
+const forEachDirs = node('forEachInArray', {}, 3, 14, 'For each direction d');
+
+const kind_d = node('arrayElement', {}, 4, 14, 'kind[d]');
+vEdge(kindsArr, 'values', kind_d, 'array');
+vEdge(forEachDirs, 'index', kind_d, 'position');
+
+const myFace_d = node('arrayElement', {}, 4, 15, 'myFace[d]');
+vEdge(allFaces, 'myFaceLabels', myFace_d, 'array');
+vEdge(forEachDirs, 'index', myFace_d, 'position');
+
+const farKind_d = node('arrayElement', {}, 4, 16, 'farKind[d]');
+vEdge(farKindsArr, 'values', farKind_d, 'array');
+vEdge(forEachDirs, 'index', farKind_d, 'position');
+
+const isFarAmphi = node('statement', { operation: '==' }, 5, 16, 'farKind==amphi');
+vEdge(farKind_d, 'value', isFarAmphi, 'x');
+vEdge(tagAmphi, 'value', isFarAmphi, 'y');
+
+const isFarWater = node('statement', { operation: '==' }, 5, 17, 'farKind==water');
+vEdge(farKind_d, 'value', isFarWater, 'x');
+vEdge(tagWater, 'value', isFarWater, 'y');
+
+const farLabelWaterElse = node('valueSwitch', {
+  _port_ifValue: String(FACE_WATER),
+  _port_elseValue: String(FACE_NONE),
+}, 6, 16, 'farLabel: water?else none');
+vEdge(isFarWater, 'result', farLabelWaterElse, 'condition');
+
+const farLabel_d = node('valueSwitch', {
+  _port_ifValue: String(FACE_X),
+}, 6, 17, 'farLabel: amphi?X:above');
+vEdge(isFarAmphi, 'result', farLabel_d, 'condition');
+vEdge(farLabelWaterElse, 'result', farLabel_d, 'elseValue');
+
+const j_d = node('lookupInteraction', { tableId: ATTR_J }, 7, 14, 'J(myFace, farLabel)');
+vEdge(myFace_d, 'value', j_d, 'labelA');
+vEdge(farLabel_d, 'result', j_d, 'labelB');
+
+const isAdjEmpty = node('statement', { operation: '==' }, 7, 15, 'kind[d]==empty');
+vEdge(kind_d, 'value', isAdjEmpty, 'x');
+vEdge(tagEmpty, 'value', isAdjEmpty, 'y');
+
+const wt_d = node('valueSwitch', { _port_elseValue: '0' }, 8, 14, 'weight[d] = empty?J:0');
+vEdge(isAdjEmpty, 'result', wt_d, 'condition');
+vEdge(j_d, 'value', wt_d, 'ifValue');
+
+// Store wt_d into the `weights` Local Variable at index d.
+const setWeight = node('setArrayElement', {
+  variableId: 'weights',
+}, 9, 14, 'weights[d] ← wt_d');
+fEdge(forEachDirs, 'body', setWeight, 'do');
+vEdge(forEachDirs, 'index', setWeight, 'index');
+vEdge(wt_d, 'result', setWeight, 'value');
+
+const weightsRead = node('getVariable', { variableId: 'weights' }, 10, 14, 'weights[]');
+
+const sumWAgg = node('aggregate', { operation: 'sum' }, 11, 14, 'sumW (Σ weights)');
+vEdge(weightsRead, 'value', sumWAgg, 'values');
+
+// "All 4 cardinals are empty" via groupCounting (count where kind==empty) ==
+// 4. Used by the rotation gate. Replaces the previous 4× per-direction
+// `aggregate.and` over per-direction adjE booleans.
+const emptyCount = node('groupCounting', {
+  operation: 'equals',
+}, 8, 19, 'count(kind == empty)');
+vEdge(kindsArr, 'values', emptyCount, 'values');
+vEdge(tagEmpty, 'value', emptyCount, 'compare');
+
+const isAllEmpty = node('statement', { operation: '==', _port_y: '4' }, 9, 19, 'count == 4 ?');
+vEdge(emptyCount, 'count', isAllEmpty, 'x');
 
 // --- Rotation values (computed early so the move sequence can use them) ---
 // See the rotation pass below for the algorithmic explanation. We compute
@@ -333,14 +327,13 @@ wt.forEach(w => vEdge(w, 'value', sumWAgg, 'values'));
 // clears the source, the rotation pass writes to that now-empty cell, and the
 // destination cell keeps the pre-rotation orientation, making rotation
 // invisible to the user).
-const isSelfAmphi = node('statement', { operation: '==' }, 10, 18, 'My kind == amphi?');
+const isSelfAmphi = node('statement', { operation: '==' }, 10, 21, 'My kind == amphi?');
 vEdge(kindRead, 'value', isSelfAmphi, 'x');
 vEdge(tagAmphi, 'value', isSelfAmphi, 'y');
 
-const isAllEmpty = node('aggregate', { operation: 'and' }, 10, 19, 'all 4 cardinals empty?');
-adjE.forEach(e => vEdge(e, 'result', isAllEmpty, 'values'));
-
-const rotGateAnd = node('aggregate', { operation: 'and' }, 10, 20, 'amphi AND free?');
+// isAllEmpty: already declared above (via groupCounting + statement). Reused
+// as one of the two inputs to rotGateAnd.
+const rotGateAnd = node('aggregate', { operation: 'and' }, 10, 22, 'amphi AND free?');
 vEdge(isSelfAmphi, 'result', rotGateAnd, 'values');
 vEdge(isAllEmpty, 'result', rotGateAnd, 'values');
 
@@ -382,12 +375,11 @@ fEdge(condBreak, 'then', condCanMove, 'check');
 vEdge(sumPos, 'result', condCanMove, 'condition');
 
 // --- Direction sampling (Tier-D.2: GroupOperator.weightedRandom) ----------
-// Folds the cumulative-sum weighted sampler into the existing GroupReduce
-// node, where it sits alongside the uniform `random` op as a natural family
-// member. The 4 per-direction weight scalars wire to its `values` input via
-// the same multi-source isArray pattern Aggregate uses.
-const chosenSamp = node('groupOperator', { operation: 'weightedRandom' }, 12, 18, 'Pick direction');
-wt.forEach(w => vEdge(w, 'result', chosenSamp, 'values'));
+// Reads the `weights` Local Variable (populated by the ForEachInArray loop
+// above) and samples one index proportional to the weights — the same shape
+// as the book's `d* = sample(weights)` step.
+const chosenSamp = node('groupOperator', { operation: 'weightedRandom' }, 12, 14, 'Pick direction');
+vEdge(weightsRead, 'value', chosenSamp, 'values');
 
 // chosenNI = niArr[chosenSamp.index]
 const chosenNI = node('arrayElement', {}, 13, 18, 'NI of chosen dir');
@@ -579,11 +571,19 @@ oriColors.forEach((c, i) => {
 // jump directly to a specific direction's logic. Non-direction groups
 // describe the algorithmic role they play.
 
-const DIR_NAMES = ['N (north)', 'E (east)', 'S (south)', 'W (west)'];
-const DIR_COLORS = ['#4a5878', '#787250', '#785a4a', '#5a4a78'];  // muted N/E/S/W tints
-for (let d = 0; d < 4; d++) {
-  groupNode(`Direction ${DIR_NAMES[d]}`, dirGroupContents[d], DIR_COLORS[d]);
-}
+// Per-direction loop body — wraps the 9 nodes the ForEachInArray loop runs
+// per iteration into a single visual block. Replaces 4× unrolled direction
+// groups (Tier B + earlier) — the runtime still visits N/E/S/W in turn, but
+// the GRAPH expresses it ONCE.
+groupNode(
+  'Per-direction body (runs for d ∈ {N, E, S, W})',
+  [
+    forEachDirs, kind_d, myFace_d, farKind_d,
+    isFarAmphi, isFarWater, farLabelWaterElse, farLabel_d,
+    j_d, isAdjEmpty, wt_d, setWeight,
+  ],
+  '#4a5878',
+);
 
 // Shared cell reads — the inputs every direction draws from. Lives at the
 // top of the per-direction column.
@@ -665,7 +665,11 @@ const properties = {
   gridHeight: 40,
   maxIterations: 100000,
   tags: ['variegated cells', 'chemistry', 'self-organization', 'amphiphile', 'surfactant', 'micelle', 'movement', 'kier'],
-  useWasm: true,
+  // Tier D.4: Local Variables (used by the per-direction loop body's
+  // SetArrayElement + GetVariable on `weights`) are JS-only in v1 — the
+  // WASM/WebGPU emitters reject them, falling back to the JS step. Keep
+  // useWasm false to avoid the recompile-fallback round-trip noise.
+  useWasm: false,
   useWebGPU: false,
 };
 
@@ -934,6 +938,20 @@ const model = {
   neighborhoods,
   mappings,
   indicators: [],
+  // Tier D.4: per-cell scratch storage for the direction sampler. The
+  // ForEachInArray loop body writes weights[d] for each cardinal direction;
+  // groupOperator.weightedRandom + Aggregate.sum read it after the loop.
+  variables: [
+    {
+      id: 'weights',
+      name: 'weights',
+      description: 'Per-direction joining weights wt_d = (kind_d == empty) ? J(myFace_d, farLabel_d) : 0',
+      kind: 'array',
+      dataType: 'float',
+      length: 4,
+      initialValue: '0',
+    },
+  ],
   graphNodes,
   graphEdges,
   macroDefs: [],

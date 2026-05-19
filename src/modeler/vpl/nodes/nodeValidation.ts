@@ -286,6 +286,26 @@ export function detectMissingConfig(
       break;
     }
 
+    case 'getVariable':
+    case 'setVariable':
+    case 'setArrayElement': {
+      const variableId = config.variableId;
+      const variables = model.variables || [];
+      if (typeof variableId !== 'string' || variableId.length === 0) {
+        issues.push('Select a Local Variable');
+      } else {
+        const v = variables.find(x => x.id === variableId);
+        if (!v) {
+          issues.push('Selected variable no longer exists');
+        } else if (nodeType === 'setVariable' && v.kind !== 'scalar') {
+          issues.push('Selected variable is an Array — use Set Array Element instead');
+        } else if (nodeType === 'setArrayElement' && v.kind !== 'array') {
+          issues.push('Selected variable is a Scalar — use Set Variable instead');
+        }
+      }
+      break;
+    }
+
     case 'moveSelfToNeighbor': {
       const payloadCount = Math.max(1, Number(config.payloadCount) || 1);
       let anySlotConfigured = false;
@@ -463,6 +483,15 @@ export function detectWebGPUIncompatibilities(
     case 'moveSelfToNeighbor':
       issues.push('Move Self To Neighbor composes async-only neighbour writes — WebGPU is sync-only. Switch to WebAssembly / Debug target, or remove this node.');
       break;
+    // Local Variables are JS-only in v1. The per-cell mutable storage layout
+    // hasn't been ported to per-thread WGSL storage yet. Falls back to JS at
+    // the worker level (compileGraphWebGPU emits an error → useWebGPU stays
+    // off, JS step runs instead).
+    case 'getVariable':
+    case 'setVariable':
+    case 'setArrayElement':
+      issues.push('Local Variables are not yet implemented for WebGPU. Switch to Debug & Reference (JS) target.');
+      break;
   }
   return issues;
 }
@@ -479,10 +508,19 @@ export function detectWebGPUIncompatibilities(
  *  Caller pattern: `[...detectMissingConfig(...), ...detectWasmIncompatibilities(nodeType, config, model)]`
  *  when `model.properties.useWasm` is true and `useWebGPU` is false. */
 export function detectWasmIncompatibilities(
-  _nodeType: string,
+  nodeType: string,
   _config: NodeConfig,
   _model: CAModel,
 ): string[] {
+  switch (nodeType) {
+    // Local Variables are JS-only in v1. The per-cell mutable storage layout
+    // hasn't been ported to WASM memory yet. Falls back to JS at the worker
+    // level (compileGraphWasm emits an error → useWasm stays off, JS runs).
+    case 'getVariable':
+    case 'setVariable':
+    case 'setArrayElement':
+      return ['Local Variables are not yet implemented for WebAssembly. Switch to Debug & Reference (JS) target.'];
+  }
   return [];
 }
 
