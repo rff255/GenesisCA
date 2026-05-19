@@ -282,6 +282,55 @@ function buildFusedGroupStatementJS(
   }
 }
 
+/** Compute the transitive value-input closure starting from every `getVariable`
+ *  node. Membership marks a value node as "volatile" — its result depends on
+ *  per-cell mutable state (Local Variables), so it can't be hoisted to scope
+ *  entry via sink analysis. Routed inline at the use site instead. */
+function computeVolatileValueClosure(
+  graphNodes: GraphNode[],
+  inputToSource: Map<string, { nodeId: string; portId: string }>,
+  inputToSources: Map<string, Array<{ nodeId: string; portId: string }>>,
+): Set<string> {
+  const out = new Set<string>();
+  // Forward BFS: a value node is volatile iff any of its value-input sources is
+  // volatile, OR it IS a getVariable. Building the reverse map (source → consumers)
+  // upfront makes the BFS direct.
+  const consumers = new Map<string, Set<string>>();
+  const addConsumer = (sourceId: string, targetId: string) => {
+    let s = consumers.get(sourceId);
+    if (!s) { s = new Set(); consumers.set(sourceId, s); }
+    s.add(targetId);
+  };
+  for (const [targetKey, src] of inputToSource) {
+    const targetId = targetKey.split(':')[0];
+    if (targetId) addConsumer(src.nodeId, targetId);
+  }
+  for (const [targetKey, sources] of inputToSources) {
+    const targetId = targetKey.split(':')[0];
+    if (!targetId) continue;
+    for (const s of sources) addConsumer(s.nodeId, targetId);
+  }
+  const queue: string[] = [];
+  for (const n of graphNodes) {
+    if (n.data.nodeType === 'getVariable') {
+      out.add(n.id);
+      queue.push(n.id);
+    }
+  }
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    const cs = consumers.get(id);
+    if (!cs) continue;
+    for (const c of cs) {
+      if (!out.has(c)) {
+        out.add(c);
+        queue.push(c);
+      }
+    }
+  }
+  return out;
+}
+
 /** Build the scratch declaration line for a single scratchNodes entry. */
 function buildScratchDecl(
   s: { scratchVarName: string; nbrId?: string; attrId?: string; initExpr?: string },
@@ -361,7 +410,35 @@ function compileRoot(
     rootFlowPortId: rootFlowPort,
   });
   const branchValueLines = new Map<ScopeId, string[]>();
+
+  // "Volatile" values: transitive value-input consumers of any `getVariable`
+  // node. These values read mutable per-cell state (Local Variables) that
+  // is updated by SetVariable / SetArrayElement flow nodes elsewhere in the
+  // same scope. Sink analysis would normally hoist them to the LCA-of-uses
+  // scope and flush them at scope entry — but that's BEFORE the mutating
+  // flow children run, so the read would see the variable's initial value
+  // instead of the post-mutation value. We bypass sinkAnalysis for these
+  // and emit inline at the use site instead: the first time a consumer
+  // references a volatile value inside compileFlowChain, the value's code
+  // lands at the current flow-walk position. The `compiled` set still
+  // dedups so each volatile chain emits at most once per cell-step. Single-
+  // use is the typical pattern (e.g. Amphiphile's sumW feeds exactly one
+  // condCanMove); multi-use across mutations would need re-emit logic
+  // (not implemented in v1 — would surface as stale reads).
+  const volatileValues = computeVolatileValueClosure(graphNodes, inputToSource, inputToSources);
+  // Tracks the current compileFlowChain emit position so volatile values
+  // can route inline. Set at the top of compileFlowChain and inside each
+  // branch (then/else/body/case_N) recursion.
+  let volatileEmitTarget: string[] | null = null;
+  let volatileEmitIndent: string = '    ';
+
   function routeValueEmit(nodeId: string, code: string): void {
+    if (volatileValues.has(nodeId) && volatileEmitTarget) {
+      // Inline emit at the current flow-walk position. flowLines (or a
+      // branch's accumulator) gets the line right where we are.
+      volatileEmitTarget.push(volatileEmitIndent + code.trimEnd());
+      return;
+    }
     const scope = sinkAnalysis.emitScope.get(nodeId) ?? CELL_TOP;
     if (scope === CELL_TOP) {
       valueLines.push('      ' + code.trimEnd());
@@ -392,12 +469,18 @@ function compileRoot(
   let bodyDependents: Set<string> | null = null;
   let bodyCompiled: Set<string> = new Set();
 
-  /** Forward-BFS from `(forEachNodeId, 'element')` through value-input consumers.
-   *  Returns the transitive closure of value nodes whose computation depends on
-   *  the iteration element. */
+  /** Forward-BFS from `(forEachNodeId, 'element')` AND `(forEachNodeId, 'index')`
+   *  through value-input consumers. Returns the transitive closure of value
+   *  nodes whose computation depends on either iteration variable. Without
+   *  walking BOTH ports, value nodes that only read the loop counter (e.g.
+   *  ArrayElement[index] on parallel arrays) land in cell-top scope and
+   *  reference an undeclared loop-counter variable at runtime. */
   function findElementDependents(forEachNodeId: string): Set<string> {
     const result = new Set<string>();
-    const queue: Array<{ nodeId: string; portId: string }> = [{ nodeId: forEachNodeId, portId: 'element' }];
+    const queue: Array<{ nodeId: string; portId: string }> = [
+      { nodeId: forEachNodeId, portId: 'element' },
+      { nodeId: forEachNodeId, portId: 'index' },
+    ];
     while (queue.length > 0) {
       const src = queue.shift()!;
       const enqueueConsumer = (consumerId: string) => {
@@ -798,7 +881,11 @@ function compileRoot(
       // emit appears at most once per body, but DON'T touch the global `compiled` set
       // (the variable is block-scoped to the for-loop body — a cell-scope re-emit
       // would still need its own copy).
-      if (bodyCompiled.has(nodeId)) return `_v${nodeId}`;
+      // Also short-circuit when the node has already been emitted via the
+      // sinkAnalysis path at forEachBody scope (its branchValueLines flush
+      // already produced the const declaration inside the loop) — without
+      // this guard the body-dep emit duplicates the line.
+      if (bodyCompiled.has(nodeId) || compiled.has(nodeId)) return `_v${nodeId}`;
       bodyCompiled.add(nodeId);
     } else {
       if (compiled.has(nodeId)) return `_v${nodeId}`;
@@ -947,7 +1034,18 @@ function compileRoot(
             const srcNode = nodeMap.get(source.nodeId);
             const srcDef = srcNode ? getNodeDef(srcNode.data.nodeType) : null;
             const srcPort = srcDef?.ports.find(p => p.id === source.portId);
-            inputVars[port.id] = srcPort?.isArray ? srcName : `[${srcName}]`;
+            // getVariable's output port is statically scalar, but the actual
+            // dataflow shape depends on the referenced variable's kind. For
+            // array-kind variables, the JS local `_var_<id>` IS a typed
+            // array — passing it directly to an isArray consumer is correct.
+            // For scalar variables, wrap-in-1-element-array (existing behaviour).
+            let srcIsArray = !!srcPort?.isArray;
+            if (!srcIsArray && srcNode?.data.nodeType === 'getVariable') {
+              const variableId = srcNode.data.config.variableId as string;
+              const v = (_model?.variables || []).find(x => x.id === variableId);
+              if (v?.kind === 'array') srcIsArray = true;
+            }
+            inputVars[port.id] = srcIsArray ? srcName : `[${srcName}]`;
           } else {
             inputVars[port.id] = srcName;
           }
@@ -1016,7 +1114,7 @@ function compileRoot(
     for (const port of def.ports) {
       if (port.kind !== 'input' || port.category !== 'value') continue;
       const source = inputToSource.get(`${nodeId}:${port.id}`);
-      if (source) compileValueNode(source.nodeId);
+      if (source && !volatileValues.has(source.nodeId)) compileValueNode(source.nodeId);
     }
     // Switch's case_N_cond and case_N_val value inputs are dynamic — not in
     // def.ports. Iterate edge map directly so their sources get pre-compiled
@@ -1026,6 +1124,7 @@ function compileRoot(
       const portId = key.slice(nodeId.length + 1);
       // Skip ports we already handled via def.ports.
       if (def.ports.some(p => p.kind === 'input' && p.category === 'value' && p.id === portId)) continue;
+      if (volatileValues.has(source.nodeId)) continue;
       compileValueNode(source.nodeId);
     }
 
@@ -1198,6 +1297,15 @@ function compileRoot(
   function compileFlowChain(sourceNodeId: string, sourcePortId: string, indent: string): void {
     const targets = flowOutputToTargets.get(`${sourceNodeId}:${sourcePortId}`);
     if (!targets || targets.length === 0) return;
+
+    // Volatile values (transitively reading getVariable) emit inline at the
+    // current flow-walk position. Save/restore the closure variables so
+    // nested compileFlowChain calls inside Conditionals / ForEachInArray
+    // bodies route to the right indent.
+    const savedVolatileTarget = volatileEmitTarget;
+    const savedVolatileIndent = volatileEmitIndent;
+    volatileEmitTarget = flowLines;
+    volatileEmitIndent = indent;
 
     for (const target of targets) {
       const node = nodeMap.get(target.nodeId);
@@ -1402,6 +1510,10 @@ function compileRoot(
         if (code) flowLines.push(indent + code.trimEnd());
       }
     }
+
+    // Restore the outer volatile-emit context (if any).
+    volatileEmitTarget = savedVolatileTarget;
+    volatileEmitIndent = savedVolatileIndent;
   }
 
   compileFlowChain(rootNode.id, rootFlowPort, '      ');
