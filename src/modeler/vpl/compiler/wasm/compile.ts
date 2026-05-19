@@ -193,6 +193,14 @@ interface WasmCompileCtx {
    *  + emitVariableReset; consumed by VALUE_NODE_EMITTERS['getVariable']
    *  / FLOW_NODE_EMITTERS['setVariable'] / ['setArrayElement']. */
   variableLocals: Map<string, VariableSlotWasm>;
+  /** Volatile values — transitive value-input consumers of any `getVariable`
+   *  node. These read per-cell mutable state and must NOT be hoisted to
+   *  scope entry by emitValuesForScope (they'd read the variable's initial
+   *  value, missing later mutations). The consumer's input resolution
+   *  triggers their compile lazily at the use site instead, where the
+   *  bytecode lands after the mutating flow children have run. Mirrors
+   *  the JS compiler's volatileValues set. */
+  volatileValues: Set<string>;
 }
 
 /** WASM-side slot for a Local Variable. Scalar: function-local holding the
@@ -210,6 +218,53 @@ type VariableSlotWasm =
 
 function attrValType(t: string): ValType {
   return t === 'float' ? F64 : I32;
+}
+
+/** Compute the transitive value-input closure starting from every
+ *  `getVariable` node. Mirrors the JS compiler's helper of the same name —
+ *  membership marks a node as "volatile" so emitValuesForScope skips it
+ *  and the consumer-side input resolution triggers a lazy compile at the
+ *  use site (where the bytecode lands AFTER any mutating flow children). */
+function computeVolatileValueClosureWasm(
+  graphNodes: GraphNode[],
+  inputToSource: Map<string, { nodeId: string; portId: string }>,
+  inputToSources: Map<string, Array<{ nodeId: string; portId: string }>>,
+): Set<string> {
+  const out = new Set<string>();
+  const consumers = new Map<string, Set<string>>();
+  const addConsumer = (sourceId: string, targetId: string) => {
+    let s = consumers.get(sourceId);
+    if (!s) { s = new Set(); consumers.set(sourceId, s); }
+    s.add(targetId);
+  };
+  for (const [targetKey, src] of inputToSource) {
+    const targetId = targetKey.split(':')[0];
+    if (targetId) addConsumer(src.nodeId, targetId);
+  }
+  for (const [targetKey, sources] of inputToSources) {
+    const targetId = targetKey.split(':')[0];
+    if (!targetId) continue;
+    for (const s of sources) addConsumer(s.nodeId, targetId);
+  }
+  const queue: string[] = [];
+  for (const n of graphNodes) {
+    if (n.data.nodeType === 'getVariable') {
+      out.add(n.id);
+      queue.push(n.id);
+    }
+  }
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    const cs = consumers.get(id);
+    if (!cs) continue;
+    for (const c of cs) {
+      if (!out.has(c)) {
+        out.add(c);
+        queue.push(c);
+      }
+    }
+  }
+  return out;
 }
 
 /** Parse a Variable's initialValue string into a numeric literal. Mirrors
@@ -5657,6 +5712,21 @@ function emitValuesForScope(ctx: WasmCompileCtx, scope: ScopeId): void {
     if (t === 'macro' || t === 'macroInput' || t === 'macroOutput') continue;
     const hasArrayEmitter = !!ARRAY_NODE_EMITTERS[t];
     const hasValueEmitter = !!VALUE_NODE_EMITTERS[t];
+    // getVariable is registered in BOTH tables — dispatch picks at use time
+    // based on the consumer's input port (scalar consumer → value emitter,
+    // isArray consumer → array emitter). The pre-emit walk would otherwise
+    // call both and the wrong one errors out. Skip both here and let
+    // consumers trigger compile lazily via resolveInputArray / inputs.
+    if (t === 'getVariable') continue;
+    // Volatile values — any node transitively reading getVariable — depend
+    // on per-cell mutable state that is updated by setVariable /
+    // setArrayElement flow nodes mid-scope. Emitting them at scope entry
+    // (which is what emitValuesForScope does) reads the variable's INITIAL
+    // value, missing every subsequent mutation. Skip them here; consumer-
+    // side input resolution will trigger compileValueNode lazily at the
+    // use site, where the bytecode lands AFTER the mutating flow children
+    // have run. Matches the JS compiler's volatile-emit mechanism.
+    if (ctx.volatileValues.has(nodeId)) continue;
     if (hasValueEmitter) compileValueNode(nodeId, ctx);
     if (hasArrayEmitter) compileArrayNode(nodeId, ctx);
   }
@@ -6082,6 +6152,7 @@ function compileEntry(
     viewerLocals: new Map(),
     sinkAnalysis,
     variableLocals: new Map(),
+    volatileValues: computeVolatileValueClosureWasm(Array.from(nodeMap.values()), inputToSource, inputToSources),
   };
 
   // Snapshot of value-local refs that are loop-invariant. Populated after the
