@@ -725,6 +725,55 @@ CaNode UI: list of attribute-slot rows with dropdown + `−` button, `+ Slot` bu
 
 ---
 
+## Local Variables (schema-level feature, JS target only in v1)
+
+**Local Variables** are per-cell mutable scratch storage referenced by id across the graph. They let the user write rules as imperative pseudocode — "declare a value here, mutate it in a loop, read it elsewhere" — bridging the gap between GenesisCA's pure-dataflow model and the imperative style most CA rules are written in (e.g. "for each direction d, weights[d] = compute(d); then sample by weights").
+
+### Lifetime + storage
+
+- **Per-cell, per-step.** Each cell sees a fresh copy populated with `initialValue` at the start of its computation; mutations live only within that cell-step. No persistence across cells, no persistence across steps.
+- **Storage:** function-local in the compiled step. Array variables get ONE typed-array buffer allocated outside the cell loop (reused per cell) and refilled via `.fill(initialValue)` at cell-top. Scalar variables become per-cell `let _var_<id> = <init>;` declarations. The reset lines are injected into both sync and async-mode loop bodies right after the `_row`/`_col` decode.
+- **WASM / WebGPU:** rejected with explicit "JS-only in v1" messages in `detectWasmIncompatibilities` / `detectWebGPUIncompatibilities`. The worker falls back to the JS step. Per-target ports are a follow-up — the per-cell storage layout maps cleanly to WASM scratch (allocated at cell-top, offset saved in a function-local) and WGSL function-scope `var<function> X: array<T, N>`, but neither is wired yet.
+
+### Schema (`Variable` in src/model/types.ts)
+
+`{ id, name, description?, kind: 'scalar' | 'array', dataType: 'bool' | 'integer' | 'float' | 'tag', length?, initialValue, attributeId? }`. The `initialValue` string follows the same encoding as `Attribute.defaultValue` (bools as `"true"`/`"false"`, tag indices as `"0"`/`"1"`/..., numbers as decimal strings). For arrays, ALL elements reset to that one value (uniform fill — per-index init is a v1 limitation).
+
+`model.variables` is the top-level array on CAModel. Cascade rules in ModelContext: removing the attribute a tag variable references demotes the variable to integer + clears `attributeId`; remapping the parent attr's `tagOptions` remaps the variable's `initialValue` via the same indexMap used for graph nodes; changing the attr's type away from tag also detaches.
+
+### Three new node types
+
+- **`getVariable`** (value): outputs the current value (scalar) OR the underlying typed array (array). Consumers iterate it like any other array source (Aggregate, GroupReduce, ArrayElement, ForEachInArray).
+- **`setVariable`** (flow): assigns a value to a scalar variable. Validation rejects array variables (use SetArrayElement instead).
+- **`setArrayElement`** (flow): writes `variable[index] = value` for array variables. Out-of-range writes silently skip (typed-array native behaviour, but written explicitly via `if (index >= 0 && index < arr.length)` so the user can read the emitted code without surprise).
+
+### Loop-invariance gotcha (critical)
+
+`getVariable` is on the `NEVER_INVARIANT` list in `loopInvariant.ts`. Without this, the composite rule classifies the GetVariable read (which has no value inputs) as vacuously invariant — and through it, every downstream consumer (Aggregate over the variable, GroupOperator over the variable, ArrayElement at the variable's chosen index). The hoist then emits the consumer chain at function scope BEFORE the cell loop runs and ANY writes happen. Symptom: `_rs` (declared just before the cell loop) is referenced in the hoisted weightedRandom emit (which uses RNG), producing `Cannot access '_rs' before initialization` at runtime. The fix is the entry in `NEVER_INVARIANT` — without it the model compiles but is silently broken for any variable used by a downstream aggregate.
+
+### ForEach.index — companion enhancement
+
+`ForEachInArray` exposes a new `index` output port carrying the per-iteration loop counter. The compile plumbing was already there (`_fei<id>` in JS, `fi` in WASM-WebGPU local); just needed a port + a varName mapping in all three targets. Body-side nodes that need to index parallel arrays by slot (`kindsArr[d]`, `myFaceArr[d]`, etc.) read this instead of `element`. Amphiphile's per-direction loop body uses it heavily.
+
+### Validation
+
+- All three nodes require `variableId`. Missing config → warning badge.
+- SetVariable rejects array-typed variables; SetArrayElement rejects scalar-typed.
+- WASM / WebGPU rejection messages route through `detectWasmIncompatibilities` / `detectWebGPUIncompatibilities` so the user sees them as badge tooltips in the editor.
+
+### Properties panel UI
+
+`VariablesPanelSection` (new) renders at the bottom of the Properties tab, below Indicators. List + inspector (name, description, kind, dataType, length, initialValue, tag attribute for tag-typed variables, delete button). `+ Variable` button at the bottom of the list adds a new variable with sensible defaults (scalar float, initialValue 0). Drag-to-canvas not supported in v1.
+
+### Behavioural notes
+
+- The `_var_<id>` JS local name uses a sanitised version of the variable id (`[^a-zA-Z0-9_]` → `_`). Stable across the GetVariable / SetVariable / SetArrayElement emit + the `variable.ts::variableLocalName` helper.
+- Array length is fixed at compile time (the value of `length` config). Resizing the variable's length re-allocates the typed-array on the next recompile.
+- The reset cost is ONE `.fill()` call per array variable per cell — V8 optimises this to a memset. Scalar variables cost one `let` per cell. Both are negligible compared to the work the cell rule does.
+- Currently variables only work in the `step` root. InputColor + OutputMapping don't get the variable decls (they're per-cell, called outside the loop). If a future model needs them in those entry points too, extend `buildVariableJS` to inject the same decls + resets in those compile branches.
+
+---
+
 ## Sub-Attributes (schema-level feature)
 
 A **sub-attribute** is a cell attribute that's "only well-defined" on cells whose parent (Tag or Boolean) cell attribute holds one of a chosen set of values. Wireworld's `charge` only makes sense on Wire / Pulsar / Switch cells; sub-attributes encode this in the schema so the compiler injects parent-check guards automatically, and the graph never has to wire up manual filter-by-type chains.
