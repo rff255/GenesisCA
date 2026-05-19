@@ -118,6 +118,41 @@ function exprNode(expression, varNames, col, row, label) {
   return node('expression', config, col, row, label);
 }
 
+// --- Group (visual area marker) ----------------------------------------------
+// Groups in saved .gcaproj files are free-floating area markers — children
+// keep their absolute positions and don't carry parentId references (see
+// `GraphEditor.tsx`'s defensive parentId scrub at toRFNodes). The group node
+// just renders a labeled box behind the contained nodes for visual scoping.
+function bboxOf(contents, padX = 30, padY = 60) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const n of contents) {
+    // CaNode default render is ~200×80 (the actual measured size varies with
+    // collapsed/expanded state and port count, but the bbox just needs to
+    // visually enclose the cluster — measured sizes land at runtime).
+    minX = Math.min(minX, n.position.x);
+    minY = Math.min(minY, n.position.y);
+    maxX = Math.max(maxX, n.position.x + 200);
+    maxY = Math.max(maxY, n.position.y + 80);
+  }
+  return {
+    x: minX - padX, y: minY - padY,
+    width: (maxX - minX) + 2 * padX,
+    height: (maxY - minY) + 2 * padY,
+  };
+}
+function groupNode(label, contents, color) {
+  const bb = bboxOf(contents);
+  const g = {
+    id: newId('g'),
+    type: 'groupNode',
+    position: { x: bb.x, y: bb.y },
+    data: { label, width: bb.width, height: bb.height, nodeType: 'group', config: {} },
+  };
+  if (color) g.data.groupColor = color;
+  graphNodes.push(g);
+  return g;
+}
+
 // TagConstant emits a fixed tag value (stored as its index). Lets the graph
 // reference kinds by NAME (the UI renders "Tag: amphi") instead of hardcoded
 // integers in Statement._port_y.
@@ -166,7 +201,20 @@ const kindRead = node('getCellAttribute', { attributeId: ATTR_KIND }, 1, 1, 'My 
 const oriRead = node('getOrientation', {}, 1, 2, 'My ori');
 const niArr = node('getAllNeighborIndexes', { neighborhoodId: NBR_VN }, 1, 3, 'NIs vN');
 const niArr2 = node('getAllNeighborIndexes', { neighborhoodId: NBR_VN2 }, 1, 4, 'NIs vN2 (far)');
-const allFaces = node('getAllFacingLabels', {}, 1, 5, 'Facing labels[8]');
+// Tier-B.0: cardinalsOnly produces 4-slot N/E/S/W arrays instead of 8-slot
+// Moore. The per-direction reads below use slot d directly (not 2*d).
+const allFaces = node('getAllFacingLabels', { cardinalsOnly: true }, 1, 5, 'Facing labels[4] cardinals');
+// Vectorized neighbor-kind reads. Each is one node returning a 4-element array,
+// indexed per-direction below via arrayElement. Replaces 4× scalar
+// getNeighborAttributeByIndex chains per neighborhood (8 nodes → 2). See
+// `GetNeighborsAttrByIndexes` — it's a registered ARRAY_NODE_EMITTER on JS,
+// WASM, and WebGPU, so this works on all three compile targets (the comment
+// at the top of this file warning about getNeighborsAttribute does NOT apply
+// to this node — different node, different compile path).
+const kindsArr = node('getNeighborsAttrByIndexes', { attributeId: ATTR_KIND }, 1, 6, 'kinds[4] adj');
+vEdge(niArr, 'indexes', kindsArr, 'indexes');
+const farKindsArr = node('getNeighborsAttrByIndexes', { attributeId: ATTR_KIND }, 1, 7, 'farKinds[4]');
+vEdge(niArr2, 'indexes', farKindsArr, 'indexes');
 
 // --- Shared tag constants (referenced by Statements across the graph) ------
 const tagEmpty = tagConst('empty', 2, 8, ATTR_KIND, KIND_OPTIONS);
@@ -175,91 +223,94 @@ const tagAmphi = tagConst('amphi', 2, 10, ATTR_KIND, KIND_OPTIONS);
 
 // --- Per-direction factors ------------------------------------------------
 // For d in {0=N, 1=E, 2=S, 3=W}, build the per-direction subgraph producing:
-//   ni_d    : NI of the adjacent cell in direction d (from niArr)
-//   niFar_d : NI of the far cell (2 steps in direction d, from niArr2)
-//   kind_d  : adjacent neighbour's kind
 //   pb_d    : P_B(myFace_d, theirFace_d) — bond-break probability factor
 //   j_d     : J(myFace_d, farLabel_d) — joining probability (face proxy)
 //   adjE_d  : (kind_d == empty) — adjacency-is-empty predicate
 //   wt_d    : adjE_d ? j_d : 0 — gated direction weight for sampling
 //
-// Note (WASM compatibility): adjacent / far kind reads go through
-// GetNeighborAttributeByIndex(ArrayElement(niArr, d)). The simpler
-// `ArrayElement(GetNeighborsAttribute(vN, kind), d)` works on JS but not on
-// WASM — getNeighborsAttribute isn't a general "array producer" in the WASM
-// compiler, only a special-case source for aggregate / groupOperator. The NI
-// path produces equivalent results across all 3 compile targets.
-const pb = [], wt = [], adjE = [];
-const niDir = [];  // per-direction NIs, reused if needed elsewhere
+// Tier-A.2: adjacent + far neighbour kinds come from the shared kindsArr /
+// farKindsArr arrays (built once via getNeighborsAttrByIndexes above), so each
+// direction only needs an arrayElement instead of its own NI + scalar
+// getNeighborAttributeByIndex pair.
+//
+// Tier-A.3: the per-direction farKind→farLabel translation is a single
+// Expression node (`iswater*3 + isamphi*1`) instead of 2 ValueSwitches +
+// 2 Statements.
+//
+// Tier-B.1: P_B factors are computed in a single `interactionTableMap` node
+// vectorised over the cardinal facing-label arrays (no per-direction pb_d).
+// J still goes through per-direction lookupInteraction because farLabel
+// assembly stays per-direction (Y-vs-X-vs-none picked by the cell kind, no
+// vectorised path without elementwise array ops).
+const wt = [], adjE = [];
+const farLabels = []; // per-direction farLabel scalars
+const dirGroupContents = [];  // bbox source for per-direction Group wrappers
 for (let d = 0; d < 4; d++) {
   const base = 14 + d * 3;
-  const ni_d = node('arrayElement', { _port_position: String(d) }, 2, base, `NI d=${d}`);
-  vEdge(niArr, 'indexes', ni_d, 'array');
-  niDir.push(ni_d);
+  const dirNodes = [];
 
-  const niFar_d = node('arrayElement', { _port_position: String(d) }, 2, base + 1, `NIfar d=${d}`);
-  vEdge(niArr2, 'indexes', niFar_d, 'array');
+  const kind_d = node('arrayElement', { _port_position: String(d) }, 3, base, `kind d=${d}`);
+  vEdge(kindsArr, 'values', kind_d, 'array');
+  dirNodes.push(kind_d);
 
-  const kind_d = node('getNeighborAttributeByIndex', {
-    attributeId: ATTR_KIND,
-  }, 3, base, `kind d=${d}`);
-  vEdge(ni_d, 'value', kind_d, 'index');
-
-  const myFace_d = node('arrayElement', { _port_position: String(2 * d) }, 3, base + 1, `myFace d=${d}`);
+  const myFace_d = node('arrayElement', { _port_position: String(d) }, 3, base + 1, `myFace d=${d}`);
   vEdge(allFaces, 'myFaceLabels', myFace_d, 'array');
+  dirNodes.push(myFace_d);
 
-  const theirFace_d = node('arrayElement', { _port_position: String(2 * d) }, 3, base + 2, `thFace d=${d}`);
-  vEdge(allFaces, 'theirFaceLabels', theirFace_d, 'array');
+  // Far cell kind → face-label proxy (empty→none=0, water→water=3, amphi→X=1).
+  const farKind_d = node('arrayElement', { _port_position: String(d) }, 5, base, `farKind d=${d}`);
+  vEdge(farKindsArr, 'values', farKind_d, 'array');
+  dirNodes.push(farKind_d);
 
-  const pb_d = node('lookupInteraction', { tableId: ATTR_PB }, 4, base + 1, `P_B d=${d}`);
-  vEdge(myFace_d, 'value', pb_d, 'labelA');
-  vEdge(theirFace_d, 'value', pb_d, 'labelB');
-
-  // Far cell kind → face-label proxy (empty→none, water→water, amphi→X).
-  const farKind_d = node('getNeighborAttributeByIndex', {
-    attributeId: ATTR_KIND,
-  }, 5, base, `farKind d=${d}`);
-  vEdge(niFar_d, 'value', farKind_d, 'index');
-
-  const isFarAmphi = node('statement', { operation: '==' }, 6, base, `farKind == amphi`);
+  const isFarAmphi = node('statement', { operation: '==' }, 6, base, `farKind==amphi`);
   vEdge(farKind_d, 'value', isFarAmphi, 'x');
   vEdge(tagAmphi, 'value', isFarAmphi, 'y');
+  dirNodes.push(isFarAmphi);
 
-  const isFarWater = node('statement', { operation: '==' }, 6, base + 1, `farKind == water`);
+  const isFarWater = node('statement', { operation: '==' }, 6, base + 1, `farKind==water`);
   vEdge(farKind_d, 'value', isFarWater, 'x');
   vEdge(tagWater, 'value', isFarWater, 'y');
+  dirNodes.push(isFarWater);
 
-  const farLabelInner = node('valueSwitch', {
-    _port_ifValue: String(FACE_WATER), _port_elseValue: String(FACE_NONE),
-  }, 7, base + 1, `water? water:none`);
-  vEdge(isFarWater, 'result', farLabelInner, 'condition');
-
-  const farLabel = node('valueSwitch', {
-    _port_ifValue: String(FACE_X),
-  }, 7, base, `amphi? X:inner`);
-  vEdge(isFarAmphi, 'result', farLabel, 'condition');
-  vEdge(farLabelInner, 'result', farLabel, 'elseValue');
+  const farLabel = exprNode(
+    'iswater * 3 + isamphi * 1',
+    ['iswater', 'isamphi'],
+    7, base, `farLabel d=${d}`,
+  );
+  vEdge(isFarWater, 'result', farLabel, 'a');
+  vEdge(isFarAmphi, 'result', farLabel, 'b');
+  dirNodes.push(farLabel);
+  farLabels.push(farLabel);
 
   const j_d = node('lookupInteraction', { tableId: ATTR_J }, 8, base, `J d=${d}`);
   vEdge(myFace_d, 'value', j_d, 'labelA');
   vEdge(farLabel, 'result', j_d, 'labelB');
+  dirNodes.push(j_d);
 
-  const isAdjEmpty = node('statement', { operation: '==' }, 8, base + 1, `adj == empty?`);
+  const isAdjEmpty = node('statement', { operation: '==' }, 8, base + 1, `adj==empty?`);
   vEdge(kind_d, 'value', isAdjEmpty, 'x');
   vEdge(tagEmpty, 'value', isAdjEmpty, 'y');
+  dirNodes.push(isAdjEmpty);
 
   const wt_d = node('valueSwitch', { _port_elseValue: '0' }, 9, base, `weight d=${d}`);
   vEdge(isAdjEmpty, 'result', wt_d, 'condition');
   vEdge(j_d, 'value', wt_d, 'ifValue');
+  dirNodes.push(wt_d);
 
-  pb.push(pb_d);
   wt.push(wt_d);
   adjE.push(isAdjEmpty);
+  dirGroupContents.push(dirNodes);
 }
 
+// Tier-B.1: vectorised P_B lookup over the cardinal facing-label arrays.
+// Single node replaces 4× lookupInteraction (one per direction).
+const pbsArr = node('interactionTableMap', { tableId: ATTR_PB }, 10, 12, 'P_B vec[4]');
+vEdge(allFaces, 'myFaceLabels', pbsArr, 'myFaces');
+vEdge(allFaces, 'theirFaceLabels', pbsArr, 'theirFaces');
+
 // --- Aggregations: P_break (product) + sumW (sum) -------------------------
-const pBreakAgg = node('aggregate', { operation: 'product' }, 10, 14, 'P_break (Π pb_d)');
-pb.forEach(p => vEdge(p, 'value', pBreakAgg, 'values'));
+const pBreakAgg = node('aggregate', { operation: 'product' }, 11, 12, 'P_break (Π pb_d)');
+vEdge(pbsArr, 'values', pBreakAgg, 'values');
 
 const sumWAgg = node('aggregate', { operation: 'sum' }, 10, 16, 'sumW (Σ wt_d)');
 wt.forEach(w => vEdge(w, 'value', sumWAgg, 'values'));
@@ -320,88 +371,37 @@ const condCanMove = node('conditional', {}, 5, 0, 'If has empty dir');
 fEdge(condBreak, 'then', condCanMove, 'check');
 vEdge(sumPos, 'result', condCanMove, 'condition');
 
-// --- Direction sampling via cumulative-sum --------------------------------
-// u = r * sumW ; thresholds t1 = wt[0], t2 = wt[0]+wt[1], t3 = wt[0..2];
-// pick d via nested ValueSwitches: u<wt[0]→0, else u<t2→1, else u<t3→2, else 3.
-const randFloat = node('getRandom', { randomType: 'float', min: '0', max: '1' }, 11, 18, 'rand [0,1)');
-const u = exprNode('rand * sumW', ['rand', 'sumW'], 12, 18, 'u = rand·sumW');
-vEdge(randFloat, 'value', u, 'a');
-vEdge(sumWAgg, 'result', u, 'b');
+// --- Direction sampling (Tier-B.2: single SampleArrayByWeight node) -------
+// Replaces the cumulative-sum + nested-ValueSwitch chain (10 nodes → 1) with
+// a single weighted-pick node. Feeds the 4 per-direction weight scalars as a
+// multi-source isArray input (same pattern as Aggregate's `values` port).
+const chosenSamp = node('sampleArrayByWeight', {}, 12, 18, 'Sample direction');
+wt.forEach(w => vEdge(w, 'result', chosenSamp, 'weights'));
 
-const t2 = exprNode('w0 + w1', ['w0', 'w1'], 12, 20, 't2 = w0+w1');
-vEdge(wt[0], 'result', t2, 'a');
-vEdge(wt[1], 'result', t2, 'b');
-
-const t3 = exprNode('w0 + w1 + w2', ['w0', 'w1', 'w2'], 12, 22, 't3 = w0+w1+w2');
-vEdge(wt[0], 'result', t3, 'a');
-vEdge(wt[1], 'result', t3, 'b');
-vEdge(wt[2], 'result', t3, 'c');
-
-const lt0 = node('statement', { operation: '<' }, 13, 18, 'u < w0?');
-vEdge(u, 'result', lt0, 'x');
-vEdge(wt[0], 'result', lt0, 'y');
-
-const lt1 = node('statement', { operation: '<' }, 13, 20, 'u < t2?');
-vEdge(u, 'result', lt1, 'x');
-vEdge(t2, 'result', lt1, 'y');
-
-const lt2 = node('statement', { operation: '<' }, 13, 22, 'u < t3?');
-vEdge(u, 'result', lt2, 'x');
-vEdge(t3, 'result', lt2, 'y');
-
-// Nested ValueSwitches:  d = lt0 ? 0 : (lt1 ? 1 : (lt2 ? 2 : 3))
-const vs2 = node('valueSwitch', {
-  _port_ifValue: '2', _port_elseValue: '3',
-}, 14, 22, 'd: 2 else 3');
-vEdge(lt2, 'result', vs2, 'condition');
-
-const vs1 = node('valueSwitch', { _port_ifValue: '1' }, 14, 20, 'd: 1 else vs2');
-vEdge(lt1, 'result', vs1, 'condition');
-vEdge(vs2, 'result', vs1, 'elseValue');
-
-const vs0 = node('valueSwitch', { _port_ifValue: '0' }, 14, 18, 'd*');
-vEdge(lt0, 'result', vs0, 'condition');
-vEdge(vs1, 'result', vs0, 'elseValue');
-
-// chosenNI = niArr[d*]
-const chosenNI = node('arrayElement', {}, 15, 18, 'NI of chosen dir');
+// chosenNI = niArr[chosenSamp.index]
+const chosenNI = node('arrayElement', {}, 13, 18, 'NI of chosen dir');
 vEdge(niArr, 'indexes', chosenNI, 'array');
-vEdge(vs0, 'result', chosenNI, 'position');
+vEdge(chosenSamp, 'index', chosenNI, 'position');
 
-// --- Move sequence: push self → chosenNI, clear self ----------------------
-// Reads of kindRead / oriRead at the top of the cell are evaluated into JS
-// `const` locals BEFORE any flow write fires, so the writes see the pre-move
-// snapshot — atomicity is intrinsic to the SSA discipline.
-const seqMove = node('sequence', { extraCount: 2 }, 6, 0, 'Move sequence');
-fEdge(condCanMove, 'then', seqMove, 'do');
-
-const writePushKind = node('setNeighborAttributeByIndex', {
-  attributeId: ATTR_KIND, _port_value: '0',
-}, 7, 0, 'Push kind → NI');
-vEdge(chosenNI, 'value', writePushKind, 'index');
-vEdge(kindRead, 'value', writePushKind, 'value');
-fEdge(seqMove, 'first', writePushKind, 'do');
-
-const writePushOri = node('setNeighborOrientationByIndex', {
-  _port_value: '0',
-}, 7, 1, 'Push ori → NI');
-vEdge(chosenNI, 'value', writePushOri, 'index');
+// --- Move sequence (Tier-B.3: single MoveSelfToNeighbor node) -------------
+// Replaces the 5-node atomic-write sequence (sequence + setNeighborAttr +
+// setNeighborOri + setAttribute + setOrientation) with one node. Payloads
+// (kindRead, rotatedOri) are SSA-snapshot at cell-top before any flow write
+// fires — atomicity is intrinsic to the JS / WASM compile pipeline, NOT a
+// new primitive. Clear-to-defaultValue (empty kind, ori=0) is automatic.
+const moveSelf = node('moveSelfToNeighbor', {
+  payloadCount: 1,
+  attr_0: ATTR_KIND,
+  transferOrientation: true,
+}, 7, 0, 'Move self → NI');
+fEdge(condCanMove, 'then', moveSelf, 'do');
+vEdge(chosenNI, 'value', moveSelf, 'targetNI');
+vEdge(kindRead, 'value', moveSelf, 'payload_0');
 // rotatedOri (NOT oriRead): so a free amphi that rotates AND moves the same
 // step carries its rotation effect to the destination instead of losing it to
 // the source cell that's about to be cleared. For non-free or non-amphi cells
 // rotGateAnd is false, ValueSwitch returns oriRead, behaviour unchanged.
-vEdge(rotatedOri, 'result', writePushOri, 'value');
-fEdge(seqMove, 'then', writePushOri, 'do');
-
-const writeClearKind = node('setAttribute', {
-  attributeId: ATTR_KIND, _port_value: String(KIND_OPTIONS.indexOf('empty')),
-}, 7, 2, 'My kind ← empty');
-fEdge(seqMove, 'then_2', writeClearKind, 'do');
-
-const writeClearOri = node('setOrientation', {
-  _port_value: '0',
-}, 7, 3, 'My ori ← 0');
-fEdge(seqMove, 'then_3', writeClearOri, 'do');
+vEdge(rotatedOri, 'result', moveSelf, 'orientation');
 
 // =============================================================================
 // ROTATION PASS — book §2.3.9
@@ -544,13 +544,83 @@ const oriColors = [
   { label: 'Head W → green',  r: '60',  g: '200', b: '90'  },
   { label: 'Head N → cyan',   r: '60',  g: '200', b: '220' },
 ];
+const oriColorNodes = [];
 oriColors.forEach((c, i) => {
   const cv = node('setColorViewer', {
     mappingId: MAPPING_VIZ,
     _port_r: c.r, _port_g: c.g, _port_b: c.b,
   }, 6, vizRow + 2 + i, c.label);
   fEdge(oriSwitch, `case_${i}`, cv, 'do');
+  oriColorNodes.push(cv);
 });
+
+// =============================================================================
+// GROUP WRAPPERS — visual scoping for the top-level graph layout (Tier-A.1)
+// =============================================================================
+// Groups in saved .gcaproj files are free-floating area markers — children
+// keep their absolute positions and don't carry parentId references (see
+// `GraphEditor.tsx` toRFNodes for the defensive parentId scrub). Wrapping
+// well-separated zones in groups lets the top-level layout read as
+// "[shared reads] → [4 direction bundles] → [aggregate / sample] → [move]
+// + [rotation pass] + [init] + [brush] + [viz]" instead of a dense node soup.
+//
+// Per-direction groups get distinct labels (N / E / S / W) so the eye can
+// jump directly to a specific direction's logic. Non-direction groups
+// describe the algorithmic role they play.
+
+const DIR_NAMES = ['N (north)', 'E (east)', 'S (south)', 'W (west)'];
+const DIR_COLORS = ['#4a5878', '#787250', '#785a4a', '#5a4a78'];  // muted N/E/S/W tints
+for (let d = 0; d < 4; d++) {
+  groupNode(`Direction ${DIR_NAMES[d]}`, dirGroupContents[d], DIR_COLORS[d]);
+}
+
+// Shared cell reads — the inputs every direction draws from. Lives at the
+// top of the per-direction column.
+groupNode(
+  'Shared reads (this cell + array-of-4 neighbour kinds)',
+  [kindRead, oriRead, niArr, niArr2, allFaces, kindsArr, farKindsArr],
+  '#4a6858',
+);
+
+// Move sequence (atomic single MoveSelfToNeighbor node)
+groupNode(
+  'Move sequence (atomic push self → chosenNI, clear self)',
+  [moveSelf],
+  '#705038',
+);
+
+// Rotation pass (the secondary flow root)
+groupNode(
+  'Rotation pass (book §2.3.9 — free amphis rotate every step)',
+  [condRotate, setRotOri],
+  '#705038',
+);
+
+// Init Event (per cell on Reset)
+groupNode(
+  'Init Event — seed random water / amphi by density',
+  [
+    initNode, densAmphiAttr, densWaterAttr, seedRandU,
+    isAmphiSeed, condAmphiSeed, setKindAmphiInit,
+    amphiPlusWater, isWaterSeed, condWaterSeed, setKindWaterInit,
+    randomOriInit, setOriInit,
+  ],
+  '#406870',
+);
+
+// Input mapping (brush)
+groupNode(
+  'Brush — paint amphi at cursor (random orientation)',
+  [seedInput, seedKind, seedRand, seedOri],
+  '#604070',
+);
+
+// Visualization
+groupNode(
+  'Visualization — colour by kind + amphi orientation',
+  [vizOutput, vizKind, vizOri, kindSwitch, emptyColor, waterColor, oriSwitch, ...oriColorNodes],
+  '#586870',
+);
 
 // =============================================================================
 // MODEL DEFINITION (non-graph parts)

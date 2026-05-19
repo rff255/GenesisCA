@@ -57,7 +57,7 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
 // Compile a single root's subgraph (per-cell body)
 // ---------------------------------------------------------------------------
 
-const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels']);
+const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels', 'sampleArrayByWeight']);
 
 /** Check if a node's data uses multi-output variable naming */
 function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
@@ -431,6 +431,10 @@ function compileRoot(
     if (sourceNode?.data.nodeType === 'getNeighborsAttrByIndexes') {
       return `_v${sourceNodeId}_vals`;
     }
+    // InteractionTableMap also outputs to _v{id}_vals
+    if (sourceNode?.data.nodeType === 'interactionTableMap') {
+      return `_v${sourceNodeId}_vals`;
+    }
     // FilterNeighbors is multi-output (result + count) — caught by the
     // isMultiOutput branch above; both ports resolve via `_v<id>_<port>`.
     // JoinNeighbors intersection uses _v{id}_result scratch array; union uses _v{id} (default)
@@ -557,7 +561,7 @@ function compileRoot(
       if (nt === 'groupStatement' || nt === 'groupCounting') {
         scratchNodes.push({ scratchVarName: `${prefix}_v${innerNodeId}_indexes`, initExpr: '[]' });
       }
-      if (nt === 'getNeighborsAttrByIndexes') {
+      if (nt === 'getNeighborsAttrByIndexes' || nt === 'interactionTableMap') {
         scratchNodes.push({ scratchVarName: `${prefix}_v${innerNodeId}_vals`, initExpr: '[]' });
       }
       if (nt === 'filterNeighbors') {
@@ -712,7 +716,7 @@ function compileRoot(
       if (nt === 'groupStatement' || nt === 'groupCounting') {
         scratchNodes.push({ scratchVarName: `${nestedPrefix}_v${nid}_indexes`, initExpr: '[]' });
       }
-      if (nt === 'getNeighborsAttrByIndexes') {
+      if (nt === 'getNeighborsAttrByIndexes' || nt === 'interactionTableMap') {
         scratchNodes.push({ scratchVarName: `${nestedPrefix}_v${nid}_vals`, initExpr: '[]' });
       }
       if (nt === 'filterNeighbors') {
@@ -874,7 +878,7 @@ function compileRoot(
     if (needsIndexes) {
       scratchNodes.push({ scratchVarName: `_v${nodeId}_indexes`, initExpr: '[]' });
     }
-    if (node.data.nodeType === 'getNeighborsAttrByIndexes') {
+    if (node.data.nodeType === 'getNeighborsAttrByIndexes' || node.data.nodeType === 'interactionTableMap') {
       scratchNodes.push({ scratchVarName: `_v${nodeId}_vals`, initExpr: '[]' });
     }
     if (node.data.nodeType === 'filterNeighbors') {
@@ -887,12 +891,13 @@ function compileRoot(
       scratchNodes.push({ scratchVarName: `_v${nodeId}_work`, initExpr: '[]' });
       scratchNodes.push({ scratchVarName: `_v${nodeId}_result`, initExpr: '[]' });
     }
-    // Variegated: multi-output array node — fixed length 8 (one entry per
-    // direction). Use typed Int32Array for the cache-friendly access shape
-    // that downstream Aggregate / ForEach consumers benefit from.
+    // Variegated: multi-output array node — length 8 (Moore) or 4 (cardinals
+    // only). Use typed Int32Array for the cache-friendly access shape that
+    // downstream Aggregate / ForEach consumers benefit from.
     if (node.data.nodeType === 'getAllFacingLabels') {
-      scratchNodes.push({ scratchVarName: `_v${nodeId}_myFaceLabels`, initExpr: 'new Int32Array(8)' });
-      scratchNodes.push({ scratchVarName: `_v${nodeId}_theirFaceLabels`, initExpr: 'new Int32Array(8)' });
+      const len = node.data.config?.cardinalsOnly ? 4 : 8;
+      scratchNodes.push({ scratchVarName: `_v${nodeId}_myFaceLabels`, initExpr: `new Int32Array(${len})` });
+      scratchNodes.push({ scratchVarName: `_v${nodeId}_theirFaceLabels`, initExpr: `new Int32Array(${len})` });
     }
 
     const inputVars: Record<string, string> = {};
@@ -1364,6 +1369,15 @@ function compileRoot(
             if (inlineVal !== undefined) inputVars[port.id] = inlineVal;
           }
         }
+        // Dynamic value-input ports (e.g., MoveSelfToNeighbor's payload_${i})
+        // aren't in def.ports — pick them up from the edge map.
+        for (const [key, source] of inputToSource) {
+          if (!key.startsWith(`${node.id}:`)) continue;
+          const portId = key.slice(node.id.length + 1);
+          if (def.ports.some(p => p.kind === 'input' && p.category === 'value' && p.id === portId)) continue;
+          compileValueNode(source.nodeId);
+          inputVars[portId] = varName(source.nodeId, source.portId);
+        }
         const code = def.compile(node.id, node.data.config, inputVars, model?.properties.boundaryTreatment, ctx);
         if (code) flowLines.push(indent + code.trimEnd());
       }
@@ -1732,8 +1746,36 @@ export function compileGraph(
       if (node.data.nodeType === 'lookupInteraction') {
         node.data.config._labelCount = variegatedLabelCount;
       }
+      if (node.data.nodeType === 'interactionTableMap') {
+        node.data.config._labelCount = variegatedLabelCount;
+      }
     }
   }
+
+  // Bake per-slot attribute defaultValue into MoveSelfToNeighbor configs.
+  // The node's compile() emits `w_attr[idx] = ${_attr_${i}_default}` to clear
+  // the source cell after pushing; the literal comes from the attribute's
+  // schema-declared defaultValue. Tag attrs already encode as the tag-index
+  // string ('0', '1', ...); bool / int / float use their defaultValue string
+  // directly. Same baking happens for the WASM emit's attr.defaultValue lookup,
+  // but the JS path doesn't have model layout — so we inject into config here.
+  function preResolveMoveNodes(nodes: GraphNode[]): void {
+    for (const node of nodes) {
+      if (node.data.nodeType !== 'moveSelfToNeighbor') continue;
+      const payloadCount = Math.max(1, Number(node.data.config.payloadCount) || 1);
+      for (let i = 0; i < payloadCount; i++) {
+        const attrId = node.data.config[`attr_${i}`] as string;
+        if (!attrId) continue;
+        const attr = model!.attributes.find(a => a.id === attrId && !a.isModelAttribute);
+        if (!attr) continue;
+        const raw = (attr.defaultValue ?? '0').toString();
+        const normalised = raw === 'true' ? '1' : raw === 'false' ? '0' : raw;
+        node.data.config[`_attr_${i}_default`] = normalised;
+      }
+    }
+  }
+  preResolveMoveNodes(graphNodes);
+  for (const def of (model.macroDefs || [])) preResolveMoveNodes(def.nodes);
   preResolveVariegatedNodes(graphNodes);
   for (const def of (model.macroDefs || [])) preResolveVariegatedNodes(def.nodes);
 

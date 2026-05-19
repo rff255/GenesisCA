@@ -571,6 +571,7 @@ function isArrayProducer(nodeType: string): boolean {
     case 'groupCounting':
     case 'pickNRandomNeighbors':
     case 'getAllFacingLabels':
+    case 'interactionTableMap':
       return true;
     default:
       return false;
@@ -951,6 +952,45 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     return out;
   },
 
+  // -- Variegated Cells: Interaction Table Map ----------------------------
+  // Vectorised LookupInteraction over two parallel face-label arrays. WGSL
+  // emits a single loop reading f32 entries from varAux at word offset
+  // `tableOff + a * labelCount + b`. Output length = min(myFaces, theirFaces).
+  // Unknown tableId returns an empty array (parity with JS/WASM).
+  interactionTableMap: ({ node, ctx }) => {
+    if (!ctx.layout.variegatedEnabled) {
+      ctx.errors.push('interactionTableMap: variegated cells disabled');
+      return null;
+    }
+    const tableId = (node.data.config.tableId as string) || '';
+    const tableLayout = tableId ? ctx.layout.interactionTableOffsets[tableId] : undefined;
+    const labelCount = ctx.layout.interactionTableLabelCount;
+    const myArr = resolveInputArray(ctx, node, 'myFaces');
+    const theirArr = resolveInputArray(ctx, node, 'theirFaces');
+    if (!myArr || !theirArr) {
+      ctx.errors.push('interactionTableMap: missing myFaces or theirFaces input');
+      return null;
+    }
+    const out = allocArray(ctx, 'f32', 'arrITM', Math.min(myArr.maxLen, theirArr.maxLen));
+    if (!tableLayout) {
+      ctx.lines.push(`  ${out.lenName} = 0;`);
+      return out;
+    }
+    const off = tableLayout.wordOffset;
+    const k = fresh(ctx, 'itm');
+    const n = fresh(ctx, 'itmN');
+    ctx.lines.push(`  let ${n}: i32 = min(${myArr.lenName}, ${theirArr.lenName});`);
+    ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${n}; ${k} = ${k} + 1) {`);
+    ctx.lines.push(`    let _itmA_${k}: i32 = ${arrLoad(myArr, k)};`);
+    ctx.lines.push(`    let _itmB_${k}: i32 = ${arrLoad(theirArr, k)};`);
+    ctx.lines.push(
+      `    ${out.name}[${k}] = bitcast<f32>(varAux[u32(${off} + _itmA_${k} * ${labelCount} + _itmB_${k})]);`,
+    );
+    ctx.lines.push(`  }`);
+    ctx.lines.push(`  ${out.lenName} = ${n};`);
+    return out;
+  },
+
   // -- Variegated Cells: Get All Facing Labels (multi-output arrays) -----
   // Emits two parallel WGSL arrays of length 8 (one per direction in
   // N/NE/E/SE/S/SW/W/NW order). Both ArrayRefs are cached under
@@ -969,16 +1009,18 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     const sourceAttrId = (node.data.config._sourceAttrId as string) || '';
     const sourceAttr = sourceAttrId ? getAttr(ctx.layout, sourceAttrId) : null;
     const boundary = (node.data.config._boundaryTreatment as string) || 'torus';
+    const cardinalsOnly = !!node.data.config.cardinalsOnly;
     const w = ctx.layout.orientationWordOffset;
     const lookupW = ctx.layout.facePatternLookupWordOffset;
     const total = ctx.layout.total;
     const W = ctx.model.properties.gridWidth;
     const H = ctx.model.properties.gridHeight;
 
-    const myArr = allocArray(ctx, 'i32', 'gafl_my', 8);
-    const theirArr = allocArray(ctx, 'i32', 'gafl_their', 8);
-    ctx.lines.push(`  ${myArr.lenName} = 8;`);
-    ctx.lines.push(`  ${theirArr.lenName} = 8;`);
+    const outLen = cardinalsOnly ? 4 : 8;
+    const myArr = allocArray(ctx, 'i32', 'gafl_my', outLen);
+    const theirArr = allocArray(ctx, 'i32', 'gafl_their', outLen);
+    ctx.lines.push(`  ${myArr.lenName} = ${outLen};`);
+    ctx.lines.push(`  ${theirArr.lenName} = ${outLen};`);
 
     // Read my species + orientation once.
     const mySpec = fresh(ctx, 'gafl_ms');
@@ -996,8 +1038,14 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     const OFFSETS: ReadonlyArray<readonly [number, number]> = [
       [-1, 0], [-1, 1], [0, 1], [1, 1], [1, 0], [1, -1], [0, -1], [-1, -1],
     ];
+    // In cardinalsOnly mode iterate only Moore slots 0/2/4/6 (= N/E/S/W) but
+    // write to output indices 0..3. The face-rotation arithmetic still uses
+    // the Moore index because face patterns are 8-slot-keyed.
+    const iterations: ReadonlyArray<readonly [number, number]> = cardinalsOnly
+      ? [[0, 0], [2, 1], [4, 2], [6, 3]]
+      : [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [7, 7]];
 
-    for (let d = 0; d < 8; d++) {
+    for (const [d, outIdx] of iterations) {
       const [dr, dc] = OFFSETS[d]!;
       const dirP4 = (d + 4) & 7;
       let nciExpr: string;
@@ -1049,8 +1097,8 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
         + `(${nciLet} < ${total}))`;
       ctx.lines.push(`  let ${theirLabel}: i32 = ${theirLabelExpr};`);
 
-      ctx.lines.push(`  ${myArr.name}[${d}] = ${myLabel};`);
-      ctx.lines.push(`  ${theirArr.name}[${d}] = ${theirLabel};`);
+      ctx.lines.push(`  ${myArr.name}[${outIdx}] = ${myLabel};`);
+      ctx.lines.push(`  ${theirArr.name}[${outIdx}] = ${theirLabel};`);
     }
 
     ctx.arrayRefs.set(`${node.id}::myFaceLabels`, myArr);
@@ -1204,6 +1252,76 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     // Wave A.6: empty-array sentinel is INVALID_NI (i32 min) instead of -1.
     ctx.lines.push(`  let ${resultName}: i32 = select(${INVALID_NI}, ${arrLoad(inArr, idxName)}, ${inArr.lenName} > 0);`);
     return { expr: resultName, type: 'i32' };
+  },
+
+  // Cumulative-sum sampling over a weights array. Multi-output: 'index' (i32,
+  // -1 when empty/sum=0) and 'weight' (f32, 0 in those cases). Always
+  // advances the per-cell PCG RNG (rand_f32) once — parity with WASM/JS.
+  //
+  // Two source shapes supported (mirrors Aggregate):
+  //   - single array source: direct ArrayRef via resolveInputArray.
+  //   - multi-source scalars: materialise each scalar into a fresh f32 array
+  //     allocated in the static `arrSbw_*` slot, then run sampling.
+  sampleArrayByWeight: ({ node, ctx }) => {
+    let inArr = resolveInputArray(ctx, node, 'weights');
+    if (!inArr) {
+      const sources = ctx.inputToSources.get(`${node.id}:weights`) ?? [];
+      if (sources.length === 0) {
+        ctx.errors.push('sampleArrayByWeight: no weights input wired');
+        return null;
+      }
+      const N = sources.length;
+      const tmp = allocArray(ctx, 'f32', 'arrSbw', N);
+      for (let k = 0; k < N; k++) {
+        const src = sources[k]!;
+        const sref = compileValueNode(ctx, src.nodeId, src.portId);
+        if (!sref) {
+          ctx.errors.push(`sampleArrayByWeight: scalar source ${src.nodeId} did not produce a value`);
+          return null;
+        }
+        ctx.lines.push(`  ${tmp.name}[${k}] = ${castTo(sref, 'f32')};`);
+      }
+      ctx.lines.push(`  ${tmp.lenName} = ${N};`);
+      inArr = tmp;
+    }
+    const rName = fresh(ctx, 'sbwR');
+    ctx.lines.push(`  let ${rName}: f32 = rand_f32(idx);`);
+    const sumName = fresh(ctx, 'sbwSum');
+    const sumI = fresh(ctx, 'sbwSi');
+    ctx.lines.push(`  var ${sumName}: f32 = 0.0;`);
+    ctx.lines.push(`  for (var ${sumI}: i32 = 0; ${sumI} < ${inArr.lenName}; ${sumI} = ${sumI} + 1) {`);
+    ctx.lines.push(`    ${sumName} = ${sumName} + f32(${arrLoad(inArr, sumI)});`);
+    ctx.lines.push(`  }`);
+    const idxName = fresh(ctx, 'sbwIdx');
+    const wtName = fresh(ctx, 'sbwWt');
+    ctx.lines.push(`  var ${idxName}: i32 = -1;`);
+    ctx.lines.push(`  var ${wtName}: f32 = 0.0;`);
+    ctx.lines.push(`  if (${sumName} > 0.0) {`);
+    const uName = fresh(ctx, 'sbwU');
+    ctx.lines.push(`    let ${uName}: f32 = ${rName} * ${sumName};`);
+    const accName = fresh(ctx, 'sbwAcc');
+    ctx.lines.push(`    var ${accName}: f32 = 0.0;`);
+    const i = fresh(ctx, 'sbwI');
+    ctx.lines.push(`    for (var ${i}: i32 = 0; ${i} < ${inArr.lenName}; ${i} = ${i} + 1) {`);
+    ctx.lines.push(`      let _sbwW_${i}: f32 = f32(${arrLoad(inArr, i)});`);
+    ctx.lines.push(`      ${accName} = ${accName} + _sbwW_${i};`);
+    ctx.lines.push(`      if (${uName} < ${accName}) {`);
+    ctx.lines.push(`        ${idxName} = ${i};`);
+    ctx.lines.push(`        ${wtName} = _sbwW_${i};`);
+    ctx.lines.push(`        break;`);
+    ctx.lines.push(`      }`);
+    ctx.lines.push(`    }`);
+    // Numerical-safety fallback: if FP drift made u >= sum, pick last index.
+    ctx.lines.push(`    if (${idxName} < 0) {`);
+    ctx.lines.push(`      ${idxName} = ${inArr.lenName} - 1;`);
+    ctx.lines.push(`      ${wtName} = f32(${arrLoad(inArr, idxName)});`);
+    ctx.lines.push(`    }`);
+    ctx.lines.push(`  }`);
+    const idxRef: ValueRef = { expr: idxName, type: 'i32' };
+    const wtRef: ValueRef = { expr: wtName, type: 'f32' };
+    setCachedPort(ctx, node.id, 'index', idxRef);
+    setCachedPort(ctx, node.id, 'weight', wtRef);
+    return idxRef;
   },
 
   getCellAttribute: ({ node, ctx }) => {
