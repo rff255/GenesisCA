@@ -282,6 +282,11 @@ let nbrIndices: Record<string, Int32Array> = {};
 
 let colors: Uint8ClampedArray = new Uint8ClampedArray(0);
 let orderArray: Int32Array | null = null;
+// Async-only: per-cell Uint8 view at wasmLayout.skippedOffset. Set by
+// `markCellUpdated` (via the compiled step in JS mode, or `i32.store8` in
+// WASM mode), tested at the top of each cell iteration, cleared before
+// every step.
+let skippedArray: Uint8Array | null = null;
 // Per-cell glyph overlay buffers. Views over wasmMemory at layout.glyph{Codes,Colors}Offset
 // when layout.hasGlyphs is true; null otherwise. glyphCodes holds one Unicode
 // codepoint per cell (0 = no glyph); glyphColors holds R | G<<8 | B<<16 per cell.
@@ -821,8 +826,11 @@ function initGrid(): void {
         const tmp = orderArray[i]!; orderArray[i] = orderArray[j]!; orderArray[j] = tmp;
       }
     }
+    // Mark-Cell-Updated flag (async only). Cleared at the top of every step.
+    skippedArray = new Uint8Array(buf, wasmLayout.skippedOffset, total);
   } else {
     orderArray = null;
+    skippedArray = null;
   }
 }
 
@@ -904,7 +912,13 @@ function buildLoopArgs(): unknown[] {
   if (variegated) {
     args.push(orientationReadView, orientationWriteView, facePatternLookup, cachedInteractionTables);
   }
-  if (updateMode === 'asynchronous' && orderArray) args.push(orderArray);
+  if (updateMode === 'asynchronous' && orderArray) {
+    args.push(orderArray);
+    // `_skipped` is the same shape as orderArray (length=total) so the JS step
+    // emit's `if (_skipped[idx] !== 0) continue;` works directly. WASM ignores
+    // this arg (it reads via `i32.load8_u` at the baked-in offset).
+    args.push(skippedArray);
+  }
   return args;
 }
 
@@ -1108,6 +1122,13 @@ function runStep(): void {
       }
     }
     // 'cyclic': orderArray stays as shuffled at init — no per-step work
+
+    // Mark-Cell-Updated flag is per-step transient: every cell starts the
+    // generation eligible for update. JS step reads `_skipped[idx]` at the
+    // top of each iteration; WASM step reads via `i32.load8_u` at the same
+    // offset. Either way, clearing the byte view here lets the compiled code
+    // see a fresh 0 at the start of every step.
+    if (skippedArray) skippedArray.fill(0);
 
     // Sub-attribute pre-scrub (async mode only): the cell loop uses a single
     // buffer, so the JS/WASM emit can't insert a "w = match ? r : default"

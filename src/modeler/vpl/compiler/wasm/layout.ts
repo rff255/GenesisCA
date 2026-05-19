@@ -112,6 +112,15 @@ export interface MemoryLayout {
    *  the simulator, surfacing `stopMessages[idx-1]`. */
   stopFlagOffset: number;
 
+  /** Async-only per-cell skip flag (Uint8Array, one byte per cell). The
+   *  compiled step writes 1 via `markCellUpdated`; the cell-iteration loop
+   *  reads at the top and `continue`s when non-zero, preventing the cell
+   *  from running again this step. Worker clears it before every step.
+   *  Region is always reserved (size `total` aligned) so layout stays stable
+   *  across sync/async edits. */
+  skippedOffset: number;
+  skippedBytes: number;
+
   // ---- Variegated Cells regions. All zero when `variegatedEnabled` is false. ----
 
   /** True when the layout reserves orientation / facePatternLookup /
@@ -320,6 +329,13 @@ export function computeMemoryLayout(
   const stopFlagOffset = off;
   off += 8;
 
+  // Mark Cell Updated: per-cell Uint8 skip flag (only meaningful in async mode,
+  // but reserve in both modes for layout stability — matches orderOffset).
+  off = alignTo(off, 8);
+  const skippedOffset = off;
+  const skippedBytes = total;
+  off += alignTo(skippedBytes, 8);
+
   // Variegated Cells — facePatternLookup + interaction tables. Uploaded by the
   // worker on init/recompile. Sized once at layout time (count-driven, not
   // value-driven) so the layout is stable across live edits to the table
@@ -373,6 +389,7 @@ export function computeMemoryLayout(
     indicatorOffset, indicatorIds,
     rngStateOffset, activeViewerOffset, orderOffset,
     stopFlagOffset,
+    skippedOffset, skippedBytes,
     variegatedEnabled,
     orientationReadOffset, orientationWriteOffset, orientationBytes,
     facePatternLookupOffset, facePatternLookupBytes,

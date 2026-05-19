@@ -65,6 +65,7 @@ import { ArrayElementNode } from './ArrayElementNode';
 import { ArrayLengthNode } from './ArrayLengthNode';
 import { PickNRandomNeighborsNode } from './PickNRandomNeighborsNode';
 import { MoveSelfToNeighborNode } from './MoveSelfToNeighborNode';
+import { MarkCellUpdatedNode } from './MarkCellUpdatedNode';
 import { GetVariableNode } from './GetVariableNode';
 import { SetVariableNode } from './SetVariableNode';
 import { SetArrayElementNode } from './SetArrayElementNode';
@@ -134,6 +135,7 @@ const ALL_NODES: NodeTypeDef[] = [
   UpdateAttributeNode,
   SetNeighborhoodAttributeNode,
   SetNeighborAttributeByIndexNode,
+  MarkCellUpdatedNode,
   SetOrientationNode,
   SetFacingOrientationNode,
   SetNeighborOrientationByIndexNode,

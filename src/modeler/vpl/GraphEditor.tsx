@@ -127,6 +127,125 @@ function portsCompatible(
   return a === 'any' || b === 'any' || a === b;
 }
 
+/** Build the list of node-type candidates for a model-element drop. When
+ *  `snap` is present, each candidate must also have a port compatible with the
+ *  snap target so auto-connect can succeed. Shared between the drop handler
+ *  (which auto-creates when the list collapses to one entry) and the menu
+ *  render (which categorises and shows the list to the user). */
+interface ResolvedDropCandidate {
+  entry: typeof RELATED_NODES[ModelElementDragPayload['kind']][number];
+  def: NodeTypeDef;
+  /** Resolved port on the to-be-created node that will receive the auto-connect.
+   *  Present only when `snap` was provided to resolveDropCandidates. */
+  matchPort?: PortDef;
+}
+
+function resolveDropCandidates(
+  payload: ModelElementDragPayload,
+  snap: ConnectionOrigin | undefined,
+): ResolvedDropCandidate[] {
+  const entries = RELATED_NODES[payload.kind] ?? [];
+  const resolved: ResolvedDropCandidate[] = [];
+  for (const entry of entries) {
+    const def = getNodeDef(entry.nodeType);
+    if (!def) continue;
+    if (snap) {
+      const newCfg: Record<string, unknown> = {
+        ...def.defaultConfig,
+        ...(entry.extraConfig ?? {}),
+        [entry.configKey]: payloadElementId(payload),
+      };
+      if (payload.kind === 'model-attribute') newCfg.isColorAttr = payload.isColor;
+      const eff = getEffectivePorts(def.type, newCfg);
+      const candidates = [...eff.inputs, ...eff.outputs];
+      const compatible = candidates.find(p =>
+        portsCompatible(snap.category, snap.kind, snap.dataType, snap.isArray, p));
+      if (!compatible) continue;
+      resolved.push({ entry, def, matchPort: compatible });
+    } else {
+      resolved.push({ entry, def });
+    }
+  }
+  return resolved;
+}
+
+// --- Snap-to-port placement ---
+// Visual constants for the heuristic placement: the new node's connecting port
+// should sit a small gap from the target port and align vertically. The RAF
+// refinement step measures actual DOM positions after layout and applies a
+// precise correction — these constants only need to be close enough that the
+// initial position isn't disorienting.
+const SNAP_GAP_FLOW = 30;       // horizontal flow-coord gap between ports
+const SNAP_NEW_NODE_WIDTH = 200; // estimated new CaNode width
+const SNAP_HEADER_Y = 36;        // estimated y of the first port relative to node top
+const SNAP_PORT_ROW_Y = 24;      // estimated per-row port spacing
+
+/** Estimate the per-axis offset (in node-local pixels) of the new node's
+ *  matchPort relative to the new node's top-left corner. Used by the initial
+ *  snap placement BEFORE the new node has rendered + been measured. The RAF
+ *  refinement step replaces this estimate with the real measurement. */
+function estimateNewNodePortY(def: NodeTypeDef, matchPort: PortDef): number {
+  // Group ports by side: inputs (kind === 'input') are on the LEFT, outputs
+  // (kind === 'output') on the RIGHT. Index within the same side gives the
+  // vertical row, roughly. Excludes the flow-input "do" port which renders
+  // attached to the header in many node templates — for the estimate we just
+  // count it as row 0 like other ports; the RAF step corrects any drift.
+  const sameSide = def.ports.filter(p => p.kind === matchPort.kind);
+  const idx = sameSide.findIndex(p => p.id === matchPort.id);
+  return SNAP_HEADER_Y + Math.max(0, idx) * SNAP_PORT_ROW_Y;
+}
+
+/** Compute the FLOW-coord position where the new node should spawn so that
+ *  its `matchPort` aligns with the snap target's port (with a small gap on
+ *  the correct side). `targetPortScreenPos` is the live DOM bounding-rect
+ *  centre of the target port; the screenToFlow helper converts to flow coords. */
+function computeSnapPosition(
+  snap: ConnectionOrigin,
+  targetPortScreenPos: { x: number; y: number } | null,
+  newDef: NodeTypeDef,
+  matchPort: PortDef,
+  screenToFlow: (p: { x: number; y: number }) => { x: number; y: number },
+  fallback: { x: number; y: number },
+): { x: number; y: number } {
+  if (!targetPortScreenPos) return fallback;
+  // Convert the screen-space target port centre to flow coords. Then offset
+  // by the new node's expected port-on-node position in flow units. (At
+  // typical zoom levels the px↔flow ratio is 1, but if the user is zoomed
+  // the heuristic gap will be slightly off — RAF refinement corrects.)
+  const targetFlow = screenToFlow(targetPortScreenPos);
+  const newPortYInNode = estimateNewNodePortY(newDef, matchPort);
+  // Target is INPUT → new node sits to the LEFT, its output port at right edge.
+  // Target is OUTPUT → new node sits to the RIGHT, its input port at left edge.
+  if (snap.kind === 'input') {
+    return {
+      x: targetFlow.x - SNAP_GAP_FLOW - SNAP_NEW_NODE_WIDTH,
+      y: targetFlow.y - newPortYInNode,
+    };
+  }
+  return {
+    x: targetFlow.x + SNAP_GAP_FLOW,
+    y: targetFlow.y - newPortYInNode,
+  };
+}
+
+/** Look up a port's screen-space bounding rect via React Flow's DOM
+ *  conventions. Returns the centre of the rect, or null if the handle isn't
+ *  in the DOM yet. Mirrors `findNearestCompatibleHandle`'s query. */
+function getPortScreenCentre(
+  nodeId: string,
+  portId: string,
+  kind: 'input' | 'output',
+  category: 'flow' | 'value',
+): { x: number; y: number } | null {
+  const nodeEl = document.querySelector(`[data-id="${nodeId}"]`);
+  if (!nodeEl) return null;
+  const handleId = `${kind}_${category}_${portId}`;
+  const handleEl = nodeEl.querySelector(`[data-handleid="${handleId}"]`) as HTMLElement | null;
+  if (!handleEl) return null;
+  const r = handleEl.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}
+
 /** Does the node definition have at least one static port compatible with the
  *  connection origin? Used for menu inclusion. Dynamic-only ports aren't a
  *  selection criterion — a node still appears if its static port set has a
@@ -1270,7 +1389,9 @@ export function GraphEditorInner() {
   /** Core helper: insert a new node of `nodeType` at the given flow position.
    *  Config overrides are merged with the node type's defaultConfig.
    *  Optional `label` is shown above the header (matches the userLabel pattern used by
-   *  Create-Macro-from-Selection). Returns true if added; false if blocked (e.g., Step singleton).
+   *  Create-Macro-from-Selection). Returns the new node id, or null if blocked
+   *  (e.g., Step singleton). Callers that only care about success/failure can
+   *  treat any truthy return as success.
    *  Shared between the "Add Node" context menu and palette drag-drop. */
   const addNodeAtPosition = useCallback(
     (
@@ -1278,53 +1399,51 @@ export function GraphEditorInner() {
       position: { x: number; y: number },
       configOverrides?: Record<string, string | number | boolean>,
       label?: string,
-    ): boolean => {
+    ): string | null => {
       const def = getNodeDef(nodeType);
-      if (!def) return false;
+      if (!def) return null;
       // Singleton: only one Step node allowed
       if (nodeType === 'step') {
         const hasStep = nodesRef.current.some(
           n => (n.data as Record<string, unknown>)?.nodeType === 'step',
         );
-        if (hasStep) return false;
+        if (hasStep) return null;
       }
       // Singleton: only one Init Event node allowed (mirrors Step semantics).
       if (nodeType === 'initEvent') {
         const hasInit = nodesRef.current.some(
           n => (n.data as Record<string, unknown>)?.nodeType === 'initEvent',
         );
-        if (hasInit) return false;
+        if (hasInit) return null;
       }
       pushCurrentSnapshot();
-      setNodes(nds => {
-        const id = generateNodeId(nds);
-        // Seed _port_<id> with each inline-widget port's defaultValue so the
-        // collapsed-node title renders the correct default from t=0 (instead of
-        // the hardcoded '0' fallback in CaNode.tsx). Compiler's getInlineValue
-        // already falls back to port.defaultValue, so this is display-only —
-        // but it also makes .gcaproj files self-contained.
-        const seededConfig: Record<string, string | number | boolean> = { ...def.defaultConfig };
-        for (const port of def.ports) {
-          if (port.inlineWidget && port.defaultValue !== undefined) {
-            const key = `_port_${port.id}`;
-            if (seededConfig[key] === undefined) seededConfig[key] = port.defaultValue;
-          }
+      const newId = generateNodeId(nodesRef.current);
+      // Seed _port_<id> with each inline-widget port's defaultValue so the
+      // collapsed-node title renders the correct default from t=0 (instead of
+      // the hardcoded '0' fallback in CaNode.tsx). Compiler's getInlineValue
+      // already falls back to port.defaultValue, so this is display-only —
+      // but it also makes .gcaproj files self-contained.
+      const seededConfig: Record<string, string | number | boolean> = { ...def.defaultConfig };
+      for (const port of def.ports) {
+        if (port.inlineWidget && port.defaultValue !== undefined) {
+          const key = `_port_${port.id}`;
+          if (seededConfig[key] === undefined) seededConfig[key] = port.defaultValue;
         }
-        const data: Record<string, unknown> = {
-          nodeType: def.type,
-          config: { ...seededConfig, ...(configOverrides || {}) },
-        };
-        if (label) data.label = label;
-        const newNode: Node = {
-          id,
-          type: 'caNode',
-          position,
-          data,
-        };
-        return [...nds, newNode];
-      });
+      }
+      const data: Record<string, unknown> = {
+        nodeType: def.type,
+        config: { ...seededConfig, ...(configOverrides || {}) },
+      };
+      if (label) data.label = label;
+      const newNode: Node = {
+        id: newId,
+        type: 'caNode',
+        position,
+        data,
+      };
+      setNodes(nds => [...nds, newNode]);
       scheduleSync();
-      return true;
+      return newId;
     },
     [setNodes, scheduleSync],
   );
@@ -1347,26 +1466,26 @@ export function GraphEditorInner() {
       position: { x: number; y: number },
       origin: ConnectionOrigin,
       configOverrides?: Record<string, string | number | boolean>,
-    ): boolean => {
+    ): string | null => {
       const def = getNodeDef(nodeType);
-      if (!def) return false;
+      if (!def) return null;
       if (nodeType === 'step') {
         const hasStep = nodesRef.current.some(
           n => (n.data as Record<string, unknown>)?.nodeType === 'step',
         );
-        if (hasStep) return false;
+        if (hasStep) return null;
       }
       if (nodeType === 'initEvent') {
         const hasInit = nodesRef.current.some(
           n => (n.data as Record<string, unknown>)?.nodeType === 'initEvent',
         );
-        if (hasInit) return false;
+        if (hasInit) return null;
       }
       // Resolved config drives effective ports for nodes whose port set depends
       // on config (e.g., GetModelAttribute r/g/b vs value via isColorAttr).
       const resolvedCfg: Record<string, unknown> = { ...def.defaultConfig, ...(configOverrides ?? {}) };
       const targetPort = pickCompatiblePort(def, origin, resolvedCfg);
-      if (!targetPort) return false;
+      if (!targetPort) return null;
       pushCurrentSnapshot();
       const newId = generateNodeId(nodesRef.current);
       const seededConfig: Record<string, string | number | boolean> = { ...def.defaultConfig };
@@ -1403,9 +1522,56 @@ export function GraphEditorInner() {
       };
       setEdges(eds => addEdge(newEdge, eds));
       scheduleSync();
-      return true;
+      return newId;
     },
     [setNodes, setEdges, scheduleSync],
+  );
+
+  /** After a snap-to-port node has been added, schedule a one-shot
+   *  `requestAnimationFrame` that measures the actual port positions in the
+   *  DOM (the heuristic estimate may have been a few px off vertically or
+   *  horizontally, e.g. when the new node has unusual port layout / non-
+   *  standard width) and applies a precise correction to the node's position.
+   *  Visually this typically arrives within one frame of the spawn so the
+   *  user sees an aligned wire from the start. */
+  const scheduleSnapRefinement = useCallback(
+    (newNodeId: string, snap: ConnectionOrigin, matchPort: PortDef) => {
+      requestAnimationFrame(() => {
+        const targetScreen = getPortScreenCentre(snap.nodeId, snap.portId, snap.kind, snap.category);
+        const newPortScreen = getPortScreenCentre(
+          newNodeId,
+          matchPort.id,
+          matchPort.kind,
+          matchPort.category,
+        );
+        if (!targetScreen || !newPortScreen) return;
+        const screenToFlow = (p: { x: number; y: number }) =>
+          rfInstance.current?.screenToFlowPosition(p) ?? p;
+        // Desired SCREEN position of the new node's port: a small gap from
+        // the target port on the correct side, same vertical y.
+        const gapScreen = SNAP_GAP_FLOW; // ~px at zoom=1; close enough at other zooms
+        const desiredX = snap.kind === 'input'
+          ? targetScreen.x - gapScreen
+          : targetScreen.x + gapScreen;
+        const desiredY = targetScreen.y;
+        // Convert both the desired-port-position and the actual-port-position
+        // to flow coords, take the delta, and apply it to the node's current
+        // flow position. This avoids having to know the node's top-left
+        // relative to its measured rect (which depends on RF transforms).
+        const desiredFlow = screenToFlow({ x: desiredX, y: desiredY });
+        const actualFlow = screenToFlow(newPortScreen);
+        const dx = desiredFlow.x - actualFlow.x;
+        const dy = desiredFlow.y - actualFlow.y;
+        if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+        setNodes(nds => nds.map(n =>
+          n.id === newNodeId
+            ? { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } }
+            : n,
+        ));
+        scheduleSync();
+      });
+    },
+    [setNodes, scheduleSync],
   );
 
   // --- Palette drag-drop handlers ---
@@ -1464,6 +1630,35 @@ export function GraphEditorInner() {
           }
         }
       }
+
+      // Pre-compute the resolved-candidate list. If snap is present and only
+      // one related-node candidate would survive the compatibility filter,
+      // skip the menu entirely and create the node directly — the menu would
+      // just be a single-button click anyway.
+      const resolved = resolveDropCandidates(payload, snapToPort);
+      if (snapToPort && resolved.length === 1) {
+        const { entry, def, matchPort } = resolved[0]!;
+        const cfg: Record<string, string | number | boolean> = {
+          [entry.configKey]: payloadElementId(payload),
+          ...(entry.extraConfig ?? {}),
+        };
+        if (payload.kind === 'model-attribute') cfg.isColorAttr = payload.isColor;
+        const screenToFlow = (p: { x: number; y: number }) =>
+          rfInstance.current?.screenToFlowPosition(p) ?? p;
+        const targetScreen = getPortScreenCentre(
+          snapToPort.nodeId, snapToPort.portId, snapToPort.kind, snapToPort.category,
+        );
+        const pos = matchPort
+          ? computeSnapPosition(snapToPort, targetScreen, def, matchPort, screenToFlow, flowPos)
+          : flowPos;
+        const newId = addNodeAndConnect(def.type, pos, snapToPort, cfg);
+        if (newId && matchPort) {
+          scheduleSnapRefinement(newId, snapToPort, matchPort);
+        }
+        setCurrentModelElementDrag(null);
+        return;
+      }
+
       setContextMenu({
         x: e.clientX - bounds.left,
         y: e.clientY - bounds.top,
@@ -1505,7 +1700,7 @@ export function GraphEditorInner() {
         })
         .catch(() => { /* swallow — network/parse failure */ });
     }
-  }, [addNodeAtPosition, importMacro, model.macroDefs]);
+  }, [addNodeAtPosition, addNodeAndConnect, scheduleSnapRefinement, importMacro, model.macroDefs]);
 
   // --- Macro export / import ---
 
@@ -2795,36 +2990,11 @@ export function GraphEditorInner() {
           {contextMenu.target.type === 'model-element-drop' && (() => {
             const payload = contextMenu.target.element;
             const snap = contextMenu.target.snapToPort;
-            const entries = RELATED_NODES[payload.kind] ?? [];
-            // When snapped to a port, additionally require that the related
-            // node has a port compatible with the snap target (so the
-            // auto-connect will succeed) and pre-compute that port for the
-            // click handler.
-            type ResolvedEntry = { entry: typeof entries[number]; def: NodeTypeDef; matchPort?: PortDef };
-            const resolved: ResolvedEntry[] = [];
-            for (const entry of entries) {
-              const def = getNodeDef(entry.nodeType);
-              if (!def) continue;
-              if (snap) {
-                // Resolve effective ports of the new node given default + overrides
-                const newCfg: Record<string, unknown> = {
-                  ...def.defaultConfig,
-                  ...(entry.extraConfig ?? {}),
-                  [entry.configKey]: payloadElementId(payload),
-                };
-                if (payload.kind === 'model-attribute') newCfg.isColorAttr = payload.isColor;
-                const eff = getEffectivePorts(def.type, newCfg);
-                const candidates = [...eff.inputs, ...eff.outputs];
-                const compatible = candidates.find(p =>
-                  portsCompatible(snap.category, snap.kind, snap.dataType, snap.isArray, p));
-                if (!compatible) continue;
-                resolved.push({ entry, def, matchPort: compatible });
-              } else {
-                resolved.push({ entry, def });
-              }
-            }
+            // Shared helper: same filter used by `onPaletteDrop` to decide
+            // whether to skip the menu (single-option short-circuit).
+            const resolved = resolveDropCandidates(payload, snap);
             // Group by category
-            const grouped = new Map<string, ResolvedEntry[]>();
+            const grouped = new Map<string, ResolvedDropCandidate[]>();
             for (const r of resolved) {
               const list = grouped.get(r.def.category) ?? [];
               list.push(r);
@@ -2859,7 +3029,7 @@ export function GraphEditorInner() {
                 {Array.from(grouped.entries()).map(([cat, items]) => (
                   <div key={cat}>
                     <div className={styles.contextCategory}>{cat}</div>
-                    {items.map(({ entry, def }) => (
+                    {items.map(({ entry, def, matchPort }) => (
                       <button
                         key={def.type}
                         className={styles.contextItem}
@@ -2872,8 +3042,20 @@ export function GraphEditorInner() {
                           };
                           if (payload.kind === 'model-attribute') cfg.isColorAttr = payload.isColor;
                           if (snap) {
-                            // Auto-connect path: spawn + wire to the snapped port.
-                            addNodeAndConnect(def.type, { x: contextMenu.flowX, y: contextMenu.flowY }, snap, cfg);
+                            // Auto-connect path: snap-aligned spawn + wire.
+                            const screenToFlow = (p: { x: number; y: number }) =>
+                              rfInstance.current?.screenToFlowPosition(p) ?? p;
+                            const targetScreen = getPortScreenCentre(
+                              snap.nodeId, snap.portId, snap.kind, snap.category,
+                            );
+                            const flowFallback = { x: contextMenu.flowX, y: contextMenu.flowY };
+                            const pos = matchPort
+                              ? computeSnapPosition(snap, targetScreen, def, matchPort, screenToFlow, flowFallback)
+                              : flowFallback;
+                            const newId = addNodeAndConnect(def.type, pos, snap, cfg);
+                            if (newId && matchPort) {
+                              scheduleSnapRefinement(newId, snap, matchPort);
+                            }
                           } else {
                             addNodeAtPosition(def.type, { x: contextMenu.flowX, y: contextMenu.flowY }, cfg);
                           }

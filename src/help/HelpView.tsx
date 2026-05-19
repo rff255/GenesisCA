@@ -321,6 +321,7 @@ export function HelpView() {
             <li><strong>Right-click</strong> (on selection) &mdash; Selection options: Duplicate, Copy, Cut, Paste, Create Macro, Create Group, <strong>Align</strong> (horizontally: left/center/right; vertically: top/center/bottom) and <strong>Distribute</strong> (horizontally/vertically &mdash; keeps the leftmost/topmost in place and evens out the gaps).</li>
             <li><strong>Right-click</strong> (on group) &mdash; Group options: Rename, Undo Group, Delete.</li>
             <li><strong>Drag from Palette</strong> &mdash; Drop a node or macro from the right-side Palette tab onto the canvas to add it at the drop position.</li>
+            <li><strong>Drag from a panel</strong> (Attributes, Neighborhoods, Mappings, Indicators) &mdash; Drop a model element onto the canvas to spawn a menu of related nodes pre-configured with that element. Drop directly onto a compatible port to auto-connect: when only one node type would fit, it is created and wired without a menu. The new node is positioned so its connecting port aligns with the target.</li>
           </ul>
 
           <h3 className={styles.h3}>Palette &amp; Node Explorer</h3>
@@ -484,6 +485,7 @@ export function HelpView() {
               <tr><td>Set Attribute</td><td>Write a value to the current cell&apos;s attribute for the next generation.</td></tr>
               <tr><td>Set Neighborhood Attribute</td><td><strong>(Async only)</strong> Set a cell attribute for ALL cells in a neighborhood to a given value.</td></tr>
               <tr><td>Set Neighbor Attr By Index</td><td><strong>(Async only)</strong> Set a cell attribute for ONE specific neighbor (by index 0..N&minus;1) to a given value.</td></tr>
+              <tr><td>Mark Cell Updated</td><td><strong>(Async only)</strong> Mark a neighbor cell (by NeighborIndex) as already-updated for the rest of this generation, so the async scheduler skips it on subsequent visits. Accepts a single NI or an NI array (loops). Lets &quot;movement&quot; rules (gas particles, chemistry CA) guarantee a piece of state only moves once per step, even if it would otherwise land on a cell that comes later in the random update order.</td></tr>
             </tbody>
           </table>
 
@@ -571,7 +573,7 @@ export function HelpView() {
 
           <h3 className={styles.h3}>Async-Only Nodes</h3>
           <p className={styles.p}>
-            Two node types are exclusive to asynchronous mode. Using them in synchronous
+            Three node types are exclusive to asynchronous mode. Using them in synchronous
             mode will produce a compiler error.
           </p>
           <ul className={styles.ul}>
@@ -579,6 +581,12 @@ export function HelpView() {
               selected neighborhood.</li>
             <li><strong>Set Neighbor Attr By Index</strong> &mdash; Sets a cell attribute for one specific
               neighbor (by NeighborIndex).</li>
+            <li><strong>Mark Cell Updated</strong> &mdash; Marks a neighbor cell (by NeighborIndex) as
+              already-updated for the rest of this generation. The scheduler tests this flag at
+              the top of each cell iteration and skips the body when set. Use it after &ldquo;moving&rdquo;
+              state into a neighbor so that neighbor doesn&apos;t get another turn in the same step
+              (without it, a gas particle could chain-move across the whole grid in one generation
+              if it picked the same direction as the random update order).</li>
           </ul>
           <p className={styles.p}>
             <strong>Get Neighbor Attr By Index</strong> is a read-only node that works in both
@@ -596,7 +604,8 @@ export function HelpView() {
               filtered list. Returns <em>INVALID_NI</em> (0x80000000) on empty.</li>
             <li>If the picked slot is not <em>INVALID_NI</em>, <strong>Set Neighbor Attr By Index</strong>
               on that slot to mark it occupied AND <strong>Set Attribute</strong> on self to clear
-              the current cell.</li>
+              the current cell. Then <strong>Mark Cell Updated</strong> with the same NI to prevent
+              the destination cell from running its own rule later in this generation.</li>
           </ol>
 
           <h3 className={styles.h3}>NeighborIndex Type</h3>
@@ -630,8 +639,11 @@ export function HelpView() {
               iterate / pick chain without needing tags.</li>
             <li><strong>Filter Neighbors</strong> &mdash; narrow an NI[] by an attribute predicate.
               Just an attribute and an operator &mdash; no neighborhood needed (the NIs carry their
-              own offsets). The Indexes input is required.</li>
-            <li><strong>Join Neighbors</strong> &mdash; intersection / union of two NI[]s.</li>
+              own offsets). The Indexes input is required. Exposes both <em>Result</em> (NI[]) and
+              <em>Count</em> (int) outputs so downstream rules don&apos;t need a separate <em>Array
+              Length</em> node when they care about &ldquo;how many neighbors matched&rdquo;.</li>
+            <li><strong>Join Neighbors</strong> &mdash; intersection / union of two NI[]s. Also
+              exposes <em>Result</em> (NI[]) and <em>Count</em> (int), mirroring Filter Neighbors.</li>
             <li><strong>Pick Random Neighbor</strong> &mdash; pick one element from a NI[] at random.
               Returns <em>INVALID_NI</em> on empty.</li>
             <li><strong>Pick N Random Neighbors</strong> &mdash; pick N distinct elements without
@@ -694,7 +706,9 @@ export function HelpView() {
             a <strong>top viewer bar</strong> for switching between visualization
             mappings, a collapsible <strong>left panel</strong> for settings (actions,
             grid dimensions, model attributes), and a collapsible <strong>right
-            panel</strong> for brush settings.
+            panel</strong> for brush settings. Hover over any mapping tab in either bar
+            to see the mapping&apos;s description as a tooltip (matches the existing
+            attribute / preset tooltips).
           </p>
 
           <h3 className={styles.h3}>Canvas Controls</h3>
