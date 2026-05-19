@@ -194,227 +194,221 @@ const FACE_WATER = 3;
 // =============================================================================
 // STEP GRAPH — book-faithful move-into-empty
 // =============================================================================
+//
+// Layout philosophy (D.9): "duplicate cheap, route expensive". Simple accessors
+// (getCellAttribute, getOrientation, tagConstant, getAllNeighborIndexes,
+// getAllFacingLabels, getNeighborsAttrByIndexes) are DUPLICATED locally near
+// each consumer instead of routed across the graph. The accessor CSE pass
+// (compiler/accessorCSE.ts) merges them into ONE emit at compile time on all
+// three targets, so there's no runtime cost. Visually, this keeps edges
+// short and each subregion self-contained.
+//
+// Top row (row 0) is the gating flow chain:
+//   stepNode → condOccupied → condBreak → condCanMove → moveSelf
+// Each gate's value-input chain sits in the rows immediately below it.
+//
+// The per-direction forEach loop body lives in its own cluster (cols 4-11,
+// rows 6-11) — hangs off condBreak.then and populates `weights[d]`.
+//
+// The rotation block (cols 13-15, rows 5-10) sits to the right of the loop,
+// close to moveSelf (which consumes rotatedOri) and feeds the secondary
+// rotation pass at the bottom of the graph.
+
 const stepNode = node('step', {}, 0, 0);
 
-// --- Top reads (shared across all 4 directions; SSA-emitted at cell scope) --
-const kindRead = node('getCellAttribute', { attributeId: ATTR_KIND }, 1, 1, 'My kind');
-const oriRead = node('getOrientation', {}, 1, 2, 'My ori');
-const niArr = node('getAllNeighborIndexes', { neighborhoodId: NBR_VN }, 1, 3, 'NIs vN');
-const niArr2 = node('getAllNeighborIndexes', { neighborhoodId: NBR_VN2 }, 1, 4, 'NIs vN2 (far)');
-// Tier-B.0: cardinalsOnly produces 4-slot N/E/S/W arrays instead of 8-slot
-// Moore. The per-direction reads below use slot d directly (not 2*d).
-const allFaces = node('getAllFacingLabels', { cardinalsOnly: true }, 1, 5, 'Facing labels[4] cardinals');
-// Vectorized neighbor-kind reads. Each is one node returning a 4-element array,
-// indexed per-direction below via arrayElement. Replaces 4× scalar
-// getNeighborAttributeByIndex chains per neighborhood (8 nodes → 2). See
-// `GetNeighborsAttrByIndexes` — it's a registered ARRAY_NODE_EMITTER on JS,
-// WASM, and WebGPU, so this works on all three compile targets (the comment
-// at the top of this file warning about getNeighborsAttribute does NOT apply
-// to this node — different node, different compile path).
-const kindsArr = node('getNeighborsAttrByIndexes', { attributeId: ATTR_KIND }, 1, 6, 'kinds[4] adj');
-vEdge(niArr, 'indexes', kindsArr, 'indexes');
-const farKindsArr = node('getNeighborsAttrByIndexes', { attributeId: ATTR_KIND }, 1, 7, 'farKinds[4]');
-vEdge(niArr2, 'indexes', farKindsArr, 'indexes');
+// ─── Top gating chain (row 0) ───────────────────────────────────────────────
+//   stepNode → condOccupied → condBreak → condCanMove → moveSelf
+// Gates declared HERE so subsequent edges can wire to them. The
+// `condBreak.then → condCanMove.check` edge is deferred until AFTER the
+// forEach loop's `condBreak.then → forEachDirs.do` edge is added, so
+// compileFlowChain processes the loop FIRST (which populates weights[d])
+// and condCanMove SECOND (which reads sumW). compileFlowChain walks
+// targets in edge-insertion order.
+const condOccupied = node('conditional', {}, 2, 0, 'If occupied');
+fEdge(stepNode, 'do', condOccupied, 'check');
+const condBreak = node('conditional', {}, 5, 0, 'If break free');
+fEdge(condOccupied, 'then', condBreak, 'check');
+const condCanMove = node('conditional', {}, 9, 0, 'If has empty dir');
+// condBreak.then → condCanMove.check wired LATER (see "Gate 3" below).
 
-// --- Shared tag constants (referenced by Statements across the graph) ------
-const tagEmpty = tagConst('empty', 2, 8, ATTR_KIND, KIND_OPTIONS);
-const tagWater = tagConst('water', 2, 9, ATTR_KIND, KIND_OPTIONS);
-const tagAmphi = tagConst('amphi', 2, 10, ATTR_KIND, KIND_OPTIONS);
+// ─── Rotation values (cols 13-15, rows 5-9) ────────────────────────────────
+// Declared early because moveSelf (in the top chain) reads `rotatedOri` and
+// the rotation pass (below) reads `rotGateAnd` and `rotatedOri`. Sits to
+// the right of the forEach body in a compact cluster.
+//
+// Each accessor here is a LOCAL copy — the CSE pass dedups them at compile
+// time, so the graph reads like a self-contained rotation subregion.
+const kindRead_rot = node('getCellAttribute', { attributeId: ATTR_KIND }, 13, 5, 'My kind');
+const tagAmphi_rot = tagConst('amphi', 13, 6, ATTR_KIND, KIND_OPTIONS);
+const isSelfAmphi = node('statement', { operation: '==' }, 14, 5, 'kind == amphi?');
+vEdge(kindRead_rot, 'value', isSelfAmphi, 'x');
+vEdge(tagAmphi_rot, 'value', isSelfAmphi, 'y');
 
-// --- Per-direction factors via ForEachInArray loop (Tier D.4) ------------
+// "All 4 cardinals are empty" via groupCounting (count where kind==empty) == 4.
+const niArr_rot = node('getAllNeighborIndexes', { neighborhoodId: NBR_VN }, 13, 7, 'NIs vN');
+const kindsArr_rot = node('getNeighborsAttrByIndexes', { attributeId: ATTR_KIND }, 13, 8, 'kinds[4]');
+vEdge(niArr_rot, 'indexes', kindsArr_rot, 'indexes');
+const tagEmpty_rot = tagConst('empty', 13, 9, ATTR_KIND, KIND_OPTIONS);
+const emptyCount = node('groupCounting', { operation: 'equals' }, 14, 8, 'count(kind == empty)');
+vEdge(kindsArr_rot, 'values', emptyCount, 'values');
+vEdge(tagEmpty_rot, 'value', emptyCount, 'compare');
+const isAllEmpty = node('statement', { operation: '==', _port_y: '4' }, 15, 8, 'count == 4 ?');
+vEdge(emptyCount, 'count', isAllEmpty, 'x');
+
+const rotGateAnd = node('aggregate', { operation: 'and' }, 15, 6, 'amphi AND free?');
+vEdge(isSelfAmphi, 'result', rotGateAnd, 'values');
+vEdge(isAllEmpty, 'result', rotGateAnd, 'values');
+
+const oriRead_rot = node('getOrientation', {}, 13, 10, 'My ori');
+const rotStepRand = node('getRandom', {
+  randomType: 'integer', min: '1', max: '3',
+}, 13, 11, 'Rot step 1..3');
+const newOri = exprNode('mod(ori + step, 4)', ['ori', 'step'], 14, 10, 'newOri');
+vEdge(oriRead_rot, 'value', newOri, 'a');
+vEdge(rotStepRand, 'value', newOri, 'b');
+
+// rotatedOri: ifValue = newOri when gated, else preserve current ori. Consumed
+// by both moveSelf (carries rotation to destination on the same step) and the
+// rotation pass below (applies rotation to non-moving free amphis).
+const rotatedOri = node('valueSwitch', {}, 15, 10, 'rotatedOri = gate ? new : ori');
+vEdge(rotGateAnd, 'result', rotatedOri, 'condition');
+vEdge(newOri, 'result', rotatedOri, 'ifValue');
+vEdge(oriRead_rot, 'value', rotatedOri, 'elseValue');
+
+// ─── Gate 1: cell is occupied? (cols 1-2, rows 1-2) ───────────────────────
+const kindRead_occ = node('getCellAttribute', { attributeId: ATTR_KIND }, 1, 1, 'My kind');
+const tagEmpty_occ = tagConst('empty', 1, 2, ATTR_KIND, KIND_OPTIONS);
+const isSelfOccupied = node('statement', { operation: '!=' }, 2, 1, 'occupied?');
+vEdge(kindRead_occ, 'value', isSelfOccupied, 'x');
+vEdge(tagEmpty_occ, 'value', isSelfOccupied, 'y');
+vEdge(isSelfOccupied, 'result', condOccupied, 'condition');
+
+// ─── Gate 2: Bernoulli(P_break) (cols 3-5, rows 1-3) ──────────────────────
+// Bond-break chain: cardinal-only face labels → P_B vec → Π → Bernoulli.
+const allFaces_bond = node('getAllFacingLabels', { cardinalsOnly: true }, 3, 2, 'Faces (cardinals)');
+const pbsArr = node('interactionTableMap', { tableId: ATTR_PB }, 4, 2, 'P_B vec[4]');
+vEdge(allFaces_bond, 'myFaceLabels', pbsArr, 'myFaces');
+vEdge(allFaces_bond, 'theirFaceLabels', pbsArr, 'theirFaces');
+const pBreakAgg = node('aggregate', { operation: 'product' }, 4, 1, 'P_break (Π pb_d)');
+vEdge(pbsArr, 'values', pBreakAgg, 'values');
+const rollBreak = node('getRandom', { randomType: 'bool' }, 5, 1, 'Bernoulli(P_break)');
+vEdge(pBreakAgg, 'result', rollBreak, 'probability');
+vEdge(rollBreak, 'value', condBreak, 'condition');
+
+// ─── Per-direction loop (cols 4-11, rows 6-11) ────────────────────────────
 // The loop body executes once per direction d ∈ {0=N, 1=E, 2=S, 3=W}, with
-// the loop-counter `d` exposed via `forEachDirs.index`. Each iteration:
-//   1. Reads kind_d, myFace_d, farKind_d via arrayElement[d] from the shared
-//      kindsArr / allFaces / farKindsArr arrays.
+// the loop counter `d` exposed via `forEachDirs.index`. Each iteration:
+//   1. Reads kind_d, myFace_d, farKind_d via arrayElement[d].
 //   2. Computes farLabel_d = (farKind==amphi)?X : (farKind==water)?WATER : NONE
-//      via a 2× ValueSwitch chain — each switch is a direct "if predicate,
-//      use Y, else use Z" semantic lookup (no arithmetic on label indices).
+//      via a 2× ValueSwitch chain — each switch a direct "if pred, use Y, else Z"
+//      semantic lookup (no arithmetic on label indices).
 //   3. Computes wt_d = adj_is_empty ? J(myFace_d, farLabel_d) : 0.
 //   4. Stores wt_d into the `weights` Local Variable at index d.
-//
-// After the loop, `weights` is a fully populated 4-element array readable
-// by aggregate / groupOperator.weightedRandom downstream. Replaces 4×
-// unrolled copies of the same 10-node subgraph (40 nodes) with a single
-// loop instance running 4 times at runtime (~12 nodes total).
-//
-// Tier-B.1: P_B factors stay vectorised in `pbsArr` (single InteractionTableMap
-// outside the loop) since they don't need per-direction farLabel assembly.
-const pbsArr = node('interactionTableMap', { tableId: ATTR_PB }, 10, 12, 'P_B vec[4]');
-vEdge(allFaces, 'myFaceLabels', pbsArr, 'myFaces');
-vEdge(allFaces, 'theirFaceLabels', pbsArr, 'theirFaces');
+// After the loop, `weights` is fully populated for aggregate / weightedRandom
+// downstream. Hangs off condBreak.then so it only runs when the cell broke
+// its bonds — and is sequenced BEFORE condCanMove (which reads weights).
+const niArr_loop = node('getAllNeighborIndexes', { neighborhoodId: NBR_VN }, 3, 6, 'NIs vN');
+const niArr2_loop = node('getAllNeighborIndexes', { neighborhoodId: NBR_VN2 }, 3, 7, 'NIs vN2 (far)');
+const allFaces_loop = node('getAllFacingLabels', { cardinalsOnly: true }, 3, 8, 'Faces (cardinals)');
+const kindsArr_loop = node('getNeighborsAttrByIndexes', { attributeId: ATTR_KIND }, 4, 6, 'kinds[4]');
+vEdge(niArr_loop, 'indexes', kindsArr_loop, 'indexes');
+const farKindsArr_loop = node('getNeighborsAttrByIndexes', { attributeId: ATTR_KIND }, 4, 7, 'farKinds[4]');
+vEdge(niArr2_loop, 'indexes', farKindsArr_loop, 'indexes');
 
-const pBreakAgg = node('aggregate', { operation: 'product' }, 11, 12, 'P_break (Π pb_d)');
-vEdge(pbsArr, 'values', pBreakAgg, 'values');
+const forEachDirs = node('forEachInArray', {}, 4, 9, 'For each direction d');
+vEdge(niArr_loop, 'indexes', forEachDirs, 'array');
+fEdge(condBreak, 'then', forEachDirs, 'do');
 
-// ForEachInArray loop — iterates the 4 cardinal NIs in niArr; the body uses
-// `forEachDirs.index` as the direction slot d (0..3). The flow input `do`
-// fires from condBreak.then (so weights are populated only when the cell is
-// occupied + broke its bonds — same gate as the move below). The array
-// input is niArr, whose length 4 drives the iteration count; we don't read
-// `element` (the NI itself) — the body uses `index` instead.
-const forEachDirs = node('forEachInArray', {}, 3, 14, 'For each direction d');
-vEdge(niArr, 'indexes', forEachDirs, 'array');
-
-const kind_d = node('arrayElement', {}, 4, 14, 'kind[d]');
-vEdge(kindsArr, 'values', kind_d, 'array');
+const kind_d = node('arrayElement', {}, 5, 6, 'kind[d]');
+vEdge(kindsArr_loop, 'values', kind_d, 'array');
 vEdge(forEachDirs, 'index', kind_d, 'position');
 
-const myFace_d = node('arrayElement', {}, 4, 15, 'myFace[d]');
-vEdge(allFaces, 'myFaceLabels', myFace_d, 'array');
+const myFace_d = node('arrayElement', {}, 5, 7, 'myFace[d]');
+vEdge(allFaces_loop, 'myFaceLabels', myFace_d, 'array');
 vEdge(forEachDirs, 'index', myFace_d, 'position');
 
-const farKind_d = node('arrayElement', {}, 4, 16, 'farKind[d]');
-vEdge(farKindsArr, 'values', farKind_d, 'array');
+const farKind_d = node('arrayElement', {}, 5, 8, 'farKind[d]');
+vEdge(farKindsArr_loop, 'values', farKind_d, 'array');
 vEdge(forEachDirs, 'index', farKind_d, 'position');
 
-const isFarAmphi = node('statement', { operation: '==' }, 5, 16, 'farKind==amphi');
+// farKind → face-label proxy. Tag constants live LOCAL to their comparisons.
+const tagAmphi_loop = tagConst('amphi', 6, 8, ATTR_KIND, KIND_OPTIONS);
+const isFarAmphi = node('statement', { operation: '==' }, 7, 8, 'far==amphi');
 vEdge(farKind_d, 'value', isFarAmphi, 'x');
-vEdge(tagAmphi, 'value', isFarAmphi, 'y');
+vEdge(tagAmphi_loop, 'value', isFarAmphi, 'y');
 
-const isFarWater = node('statement', { operation: '==' }, 5, 17, 'farKind==water');
+const tagWater_loop = tagConst('water', 6, 9, ATTR_KIND, KIND_OPTIONS);
+const isFarWater = node('statement', { operation: '==' }, 7, 9, 'far==water');
 vEdge(farKind_d, 'value', isFarWater, 'x');
-vEdge(tagWater, 'value', isFarWater, 'y');
+vEdge(tagWater_loop, 'value', isFarWater, 'y');
 
 const farLabelWaterElse = node('valueSwitch', {
   _port_ifValue: String(FACE_WATER),
   _port_elseValue: String(FACE_NONE),
-}, 6, 16, 'farLabel: water?else none');
+}, 8, 9, 'water?WATER:NONE');
 vEdge(isFarWater, 'result', farLabelWaterElse, 'condition');
 
 const farLabel_d = node('valueSwitch', {
   _port_ifValue: String(FACE_X),
-}, 6, 17, 'farLabel: amphi?X:above');
+}, 8, 8, 'amphi?X:above');
 vEdge(isFarAmphi, 'result', farLabel_d, 'condition');
 vEdge(farLabelWaterElse, 'result', farLabel_d, 'elseValue');
 
-const j_d = node('lookupInteraction', { tableId: ATTR_J }, 7, 14, 'J(myFace, farLabel)');
+const j_d = node('lookupInteraction', { tableId: ATTR_J }, 9, 7, 'J(myFace, farLabel)');
 vEdge(myFace_d, 'value', j_d, 'labelA');
 vEdge(farLabel_d, 'result', j_d, 'labelB');
 
-const isAdjEmpty = node('statement', { operation: '==' }, 7, 15, 'kind[d]==empty');
+const tagEmpty_loop = tagConst('empty', 6, 6, ATTR_KIND, KIND_OPTIONS);
+const isAdjEmpty = node('statement', { operation: '==' }, 7, 6, 'kind[d]==empty');
 vEdge(kind_d, 'value', isAdjEmpty, 'x');
-vEdge(tagEmpty, 'value', isAdjEmpty, 'y');
+vEdge(tagEmpty_loop, 'value', isAdjEmpty, 'y');
 
-const wt_d = node('valueSwitch', { _port_elseValue: '0' }, 8, 14, 'weight[d] = empty?J:0');
+const wt_d = node('valueSwitch', { _port_elseValue: '0' }, 10, 7, 'weight[d]=empty?J:0');
 vEdge(isAdjEmpty, 'result', wt_d, 'condition');
 vEdge(j_d, 'value', wt_d, 'ifValue');
 
-// Store wt_d into the `weights` Local Variable at index d.
 const setWeight = node('setArrayElement', {
   variableId: 'weights',
-}, 9, 14, 'weights[d] ← wt_d');
+}, 11, 9, 'weights[d] ← wt_d');
 fEdge(forEachDirs, 'body', setWeight, 'do');
 vEdge(forEachDirs, 'index', setWeight, 'index');
 vEdge(wt_d, 'result', setWeight, 'value');
 
-const weightsRead = node('getVariable', { variableId: 'weights' }, 10, 14, 'weights[]');
-
-const sumWAgg = node('aggregate', { operation: 'sum' }, 11, 14, 'sumW (Σ weights)');
-vEdge(weightsRead, 'value', sumWAgg, 'values');
-
-// "All 4 cardinals are empty" via groupCounting (count where kind==empty) ==
-// 4. Used by the rotation gate. Replaces the previous 4× per-direction
-// `aggregate.and` over per-direction adjE booleans.
-const emptyCount = node('groupCounting', {
-  operation: 'equals',
-}, 8, 19, 'count(kind == empty)');
-vEdge(kindsArr, 'values', emptyCount, 'values');
-vEdge(tagEmpty, 'value', emptyCount, 'compare');
-
-const isAllEmpty = node('statement', { operation: '==', _port_y: '4' }, 9, 19, 'count == 4 ?');
-vEdge(emptyCount, 'count', isAllEmpty, 'x');
-
-// --- Rotation values (computed early so the move sequence can use them) ---
-// See the rotation pass below for the algorithmic explanation. We compute
-// `rotatedOri` here (a VALUE node, no flow yet) so writePushOri can push the
-// post-rotation orientation to the destination — otherwise a free amphi that
-// moves and rotates in the same step loses its rotation effect (the move
-// clears the source, the rotation pass writes to that now-empty cell, and the
-// destination cell keeps the pre-rotation orientation, making rotation
-// invisible to the user).
-const isSelfAmphi = node('statement', { operation: '==' }, 10, 21, 'My kind == amphi?');
-vEdge(kindRead, 'value', isSelfAmphi, 'x');
-vEdge(tagAmphi, 'value', isSelfAmphi, 'y');
-
-// isAllEmpty: already declared above (via groupCounting + statement). Reused
-// as one of the two inputs to rotGateAnd.
-const rotGateAnd = node('aggregate', { operation: 'and' }, 10, 22, 'amphi AND free?');
-vEdge(isSelfAmphi, 'result', rotGateAnd, 'values');
-vEdge(isAllEmpty, 'result', rotGateAnd, 'values');
-
-const rotStepRand = node('getRandom', {
-  randomType: 'integer', min: '1', max: '3',
-}, 10, 21, 'Rotation step 1..3');
-
-const newOri = exprNode('mod(ori + step, 4)', ['ori', 'step'], 10, 22, 'newOri');
-vEdge(oriRead, 'value', newOri, 'a');
-vEdge(rotStepRand, 'value', newOri, 'b');
-
-const rotatedOri = node('valueSwitch', {}, 10, 23, 'rotatedOri = gate ? new : ori');
-vEdge(rotGateAnd, 'result', rotatedOri, 'condition');
-vEdge(newOri, 'result', rotatedOri, 'ifValue');
-vEdge(oriRead, 'value', rotatedOri, 'elseValue');
-
-// --- Conditional chain: only-occupied + Bernoulli(P_break) + sumW > 0 -----
-const isSelfOccupied = node('statement', { operation: '!=' }, 2, 1, 'My cell occupied?');
-vEdge(kindRead, 'value', isSelfOccupied, 'x');
-vEdge(tagEmpty, 'value', isSelfOccupied, 'y');
-
-const condOccupied = node('conditional', {}, 3, 0, 'If occupied');
-fEdge(stepNode, 'do', condOccupied, 'check');
-vEdge(isSelfOccupied, 'result', condOccupied, 'condition');
-
-const rollBreak = node('getRandom', { randomType: 'bool' }, 11, 14, 'Bernoulli(P_break)');
-vEdge(pBreakAgg, 'result', rollBreak, 'probability');
-
-const condBreak = node('conditional', {}, 4, 0, 'If break free');
-fEdge(condOccupied, 'then', condBreak, 'check');
-vEdge(rollBreak, 'value', condBreak, 'condition');
-
-// Populate `weights` BEFORE the sumW gate fires. The forEach loop and the
-// downstream condCanMove both hang off `condBreak.then` — compileFlowChain
-// processes them in edge-add order, so the for-loop emits first, then the
-// `if (sumPos)` gate. Same `if (rollBreak)` block contains both.
-fEdge(condBreak, 'then', forEachDirs, 'do');
-
-const sumPos = node('statement', { operation: '>' }, 11, 16, 'sumW > 0?');
-vEdge(sumWAgg, 'result', sumPos, 'x');
-// _port_y defaults to '0' via Statement's inline widget — no need to set.
-
-const condCanMove = node('conditional', {}, 5, 0, 'If has empty dir');
+// ─── Gate 3: any direction available? (cols 7-9, rows 1-3) ────────────────
+// Reads the `weights` Local Variable (populated by the forEach loop above).
+// Wire the `condBreak.then → condCanMove.check` edge HERE — AFTER the
+// forEach's `do` edge was added — so compileFlowChain processes the loop
+// before the gate.
 fEdge(condBreak, 'then', condCanMove, 'check');
+const weightsRead_gate = node('getVariable', { variableId: 'weights' }, 7, 2, 'weights[]');
+const sumWAgg = node('aggregate', { operation: 'sum' }, 8, 2, 'Σ weights');
+vEdge(weightsRead_gate, 'value', sumWAgg, 'values');
+const sumPos = node('statement', { operation: '>' }, 9, 2, 'sumW > 0?');
+vEdge(sumWAgg, 'result', sumPos, 'x');
 vEdge(sumPos, 'result', condCanMove, 'condition');
 
-// --- Direction sampling (Tier-D.2: GroupOperator.weightedRandom) ----------
-// Reads the `weights` Local Variable (populated by the ForEachInArray loop
-// above) and samples one index proportional to the weights — the same shape
-// as the book's `d* = sample(weights)` step.
-const chosenSamp = node('groupOperator', { operation: 'weightedRandom' }, 12, 14, 'Pick direction');
-vEdge(weightsRead, 'value', chosenSamp, 'values');
-
-// chosenNI = niArr[chosenSamp.index]
-const chosenNI = node('arrayElement', {}, 13, 18, 'NI of chosen dir');
-vEdge(niArr, 'indexes', chosenNI, 'array');
+// ─── moveSelf inputs (cols 10-11, rows 1-3) ───────────────────────────────
+// Sample a direction proportional to weights, look up its NI, move.
+const weightsRead_pick = node('getVariable', { variableId: 'weights' }, 10, 2, 'weights[]');
+const chosenSamp = node('groupOperator', { operation: 'weightedRandom' }, 11, 2, 'Pick direction');
+vEdge(weightsRead_pick, 'value', chosenSamp, 'values');
+const niArr_pick = node('getAllNeighborIndexes', { neighborhoodId: NBR_VN }, 10, 3, 'NIs vN');
+const chosenNI = node('arrayElement', {}, 11, 3, 'NI of chosen dir');
+vEdge(niArr_pick, 'indexes', chosenNI, 'array');
 vEdge(chosenSamp, 'index', chosenNI, 'position');
 
-// --- Move sequence (Tier-B.3: single MoveSelfToNeighbor node) -------------
-// Replaces the 5-node atomic-write sequence (sequence + setNeighborAttr +
-// setNeighborOri + setAttribute + setOrientation) with one node. Payloads
-// (kindRead, rotatedOri) are SSA-snapshot at cell-top before any flow write
-// fires — atomicity is intrinsic to the JS / WASM compile pipeline, NOT a
-// new primitive. Clear-to-defaultValue (empty kind, ori=0) is automatic.
+// Move sequence: payload = MY kind (local read), orientation = rotatedOri
+// (so a free amphi that rotates AND moves the same step carries its
+// rotation effect to the destination instead of losing it).
+const kindRead_payload = node('getCellAttribute', { attributeId: ATTR_KIND }, 12, 1, 'My kind');
 const moveSelf = node('moveSelfToNeighbor', {
   payloadCount: 1,
   attr_0: ATTR_KIND,
   transferOrientation: true,
-}, 7, 0, 'Move self → NI');
+}, 12, 0, 'Move self → NI');
 fEdge(condCanMove, 'then', moveSelf, 'do');
 vEdge(chosenNI, 'value', moveSelf, 'targetNI');
-vEdge(kindRead, 'value', moveSelf, 'payload_0');
-// rotatedOri (NOT oriRead): so a free amphi that rotates AND moves the same
-// step carries its rotation effect to the destination instead of losing it to
-// the source cell that's about to be cleared. For non-free or non-amphi cells
-// rotGateAnd is false, ValueSwitch returns oriRead, behaviour unchanged.
+vEdge(kindRead_payload, 'value', moveSelf, 'payload_0');
 vEdge(rotatedOri, 'result', moveSelf, 'orientation');
 
 // =============================================================================
@@ -427,13 +421,15 @@ vEdge(rotatedOri, 'result', moveSelf, 'orientation');
 // rotation rule is correctly applied regardless of move). The actual rotation
 // effect on a moving free amphi is carried via `rotatedOri` consumed by the
 // move sequence above; this pass only matters if the move didn't fire.
-const rotRow = 26;
+// Sits right below the rotation values cluster so the gate + apply share the
+// same column span as their inputs (rotGateAnd at col 15, rotatedOri at col 15).
+const rotRow = 14;
 
-const condRotate = node('conditional', {}, 5, rotRow, 'If amphi+free');
+const condRotate = node('conditional', {}, 14, rotRow, 'If amphi+free');
 fEdge(stepNode, 'do', condRotate, 'check');
 vEdge(rotGateAnd, 'result', condRotate, 'condition');
 
-const setRotOri = node('setOrientation', { _port_value: '0' }, 9, rotRow, 'Apply rotation');
+const setRotOri = node('setOrientation', { _port_value: '0' }, 15, rotRow, 'Apply rotation');
 fEdge(condRotate, 'then', setRotOri, 'do');
 vEdge(rotatedOri, 'result', setRotOri, 'value');
 
@@ -582,40 +578,53 @@ oriColors.forEach((c, i) => {
 // jump directly to a specific direction's logic. Non-direction groups
 // describe the algorithmic role they play.
 
-// Per-direction loop body — wraps the 9 nodes the ForEachInArray loop runs
-// per iteration into a single visual block. Replaces 4× unrolled direction
-// groups (Tier B + earlier) — the runtime still visits N/E/S/W in turn, but
-// the GRAPH expresses it ONCE.
+// Top gating chain — the main rule's sequential gates with their
+// value-input chains. Each gate's accessors live directly below it.
+groupNode(
+  'Gating chain → move (occupied? → broke bonds? → has empty dir? → move)',
+  [
+    condOccupied, condBreak, condCanMove, moveSelf,
+    kindRead_occ, tagEmpty_occ, isSelfOccupied,
+    allFaces_bond, pbsArr, pBreakAgg, rollBreak,
+    weightsRead_gate, sumWAgg, sumPos,
+    weightsRead_pick, chosenSamp, niArr_pick, chosenNI,
+    kindRead_payload,
+  ],
+  '#4a6858',
+);
+
+// Per-direction loop body — wraps the ForEachInArray loop and its body
+// nodes into a single visual block. The runtime visits N/E/S/W in turn,
+// but the GRAPH expresses it ONCE.
 groupNode(
   'Per-direction body (runs for d ∈ {N, E, S, W})',
   [
+    niArr_loop, niArr2_loop, allFaces_loop, kindsArr_loop, farKindsArr_loop,
     forEachDirs, kind_d, myFace_d, farKind_d,
+    tagAmphi_loop, tagWater_loop, tagEmpty_loop,
     isFarAmphi, isFarWater, farLabelWaterElse, farLabel_d,
     j_d, isAdjEmpty, wt_d, setWeight,
   ],
   '#4a5878',
 );
 
-// Shared cell reads — the inputs every direction draws from. Lives at the
-// top of the per-direction column.
+// Rotation values (feed moveSelf.orientation and the rotation pass below).
 groupNode(
-  'Shared reads (this cell + array-of-4 neighbour kinds)',
-  [kindRead, oriRead, niArr, niArr2, allFaces, kindsArr, farKindsArr],
-  '#4a6858',
-);
-
-// Move sequence (atomic single MoveSelfToNeighbor node)
-groupNode(
-  'Move sequence (atomic push self → chosenNI, clear self)',
-  [moveSelf],
+  'Rotation values (rotatedOri + amphi-AND-free gate)',
+  [
+    kindRead_rot, tagAmphi_rot, isSelfAmphi,
+    niArr_rot, kindsArr_rot, tagEmpty_rot, emptyCount, isAllEmpty,
+    rotGateAnd,
+    oriRead_rot, rotStepRand, newOri, rotatedOri,
+  ],
   '#705038',
 );
 
-// Rotation pass (the secondary flow root)
+// Rotation pass (the secondary flow root — applies rotation to non-moving free amphis).
 groupNode(
-  'Rotation pass (book §2.3.9 — free amphis rotate every step)',
+  'Rotation pass (book §2.3.9)',
   [condRotate, setRotOri],
-  '#705038',
+  '#785a4a',
 );
 
 // Init Event (per cell on Reset)
