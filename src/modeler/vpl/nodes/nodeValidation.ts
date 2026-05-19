@@ -273,7 +273,8 @@ export function detectMissingConfig(
       break;
     }
 
-    case 'lookupInteraction': {
+    case 'lookupInteraction':
+    case 'interactionTableMap': {
       const tableId = config.tableId;
       if (typeof tableId !== 'string' || tableId.length === 0) {
         issues.push('Select an Interaction Table');
@@ -281,6 +282,27 @@ export function detectMissingConfig(
         const attr = model.attributes.find(a => a.id === tableId);
         if (!attr) issues.push('Selected Interaction Table no longer exists');
         else if (attr.type !== 'interactionTable') issues.push('Selected attribute is not an Interaction Table');
+      }
+      break;
+    }
+
+    case 'moveSelfToNeighbor': {
+      const payloadCount = Math.max(1, Number(config.payloadCount) || 1);
+      let anySlotConfigured = false;
+      for (let i = 0; i < payloadCount; i++) {
+        const attrId = config[`attr_${i}`];
+        if (typeof attrId === 'string' && attrId.length > 0) {
+          anySlotConfigured = true;
+          if (!hasCellAttr(attrId)) {
+            issues.push(`Payload ${i + 1}: selected attribute no longer exists`);
+          }
+        }
+      }
+      if (!anySlotConfigured && !config.transferOrientation) {
+        issues.push('Configure at least one payload attribute or enable Transfer Orientation');
+      }
+      if (config.transferOrientation && !model.variegatedCells?.enabled) {
+        issues.push('Transfer Orientation requires Variegated Cells to be enabled');
       }
       break;
     }
@@ -437,6 +459,9 @@ export function detectWebGPUIncompatibilities(
       break;
     case 'setNeighborOrientationByIndex':
       issues.push('Set Neighbor Orientation By Index requires asynchronous update mode — WebGPU is sync-only. Switch to WebAssembly / Debug target, or remove this node.');
+      break;
+    case 'moveSelfToNeighbor':
+      issues.push('Move Self To Neighbor composes async-only neighbour writes — WebGPU is sync-only. Switch to WebAssembly / Debug target, or remove this node.');
       break;
   }
   return issues;

@@ -10,6 +10,7 @@ import { SetNeighborOrientationByIndexNode } from './SetNeighborOrientationByInd
 import { GetFacingLabelsNode } from './GetFacingLabelsNode';
 import { GetAllFacingLabelsNode } from './GetAllFacingLabelsNode';
 import { LookupInteractionNode } from './LookupInteractionNode';
+import { InteractionTableMapNode } from './InteractionTableMapNode';
 import { GetCellAttributeNode } from './GetCellAttributeNode';
 import { GetNeighborsAttributeNode } from './GetNeighborsAttributeNode';
 import { GetConstantNode } from './GetConstantNode';
@@ -64,6 +65,8 @@ import { GetAllNeighborIndexesNode } from './GetAllNeighborIndexesNode';
 import { ArrayElementNode } from './ArrayElementNode';
 import { ArrayLengthNode } from './ArrayLengthNode';
 import { PickNRandomNeighborsNode } from './PickNRandomNeighborsNode';
+import { SampleArrayByWeightNode } from './SampleArrayByWeightNode';
+import { MoveSelfToNeighborNode } from './MoveSelfToNeighborNode';
 
 const ALL_NODES: NodeTypeDef[] = [
   // Event (entry points)
@@ -104,6 +107,7 @@ const ALL_NODES: NodeTypeDef[] = [
   GetFacingLabelsNode,
   GetAllFacingLabelsNode,
   LookupInteractionNode,
+  InteractionTableMapNode,
   // Arithmetic & Logic
   ArithmeticOperatorNode,
   ExpressionNode,
@@ -121,6 +125,7 @@ const ALL_NODES: NodeTypeDef[] = [
   JoinNeighborsNode,
   PickRandomNeighborNode,
   PickNRandomNeighborsNode,
+  SampleArrayByWeightNode,
   // Output
   SetAttributeNode,
   UpdateAttributeNode,
@@ -129,6 +134,7 @@ const ALL_NODES: NodeTypeDef[] = [
   SetOrientationNode,
   SetFacingOrientationNode,
   SetNeighborOrientationByIndexNode,
+  MoveSelfToNeighborNode,
   // Color
   SetColorViewerNode,
   SetCellGlyphNode,

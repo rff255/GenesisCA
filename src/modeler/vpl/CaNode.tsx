@@ -2086,10 +2086,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
           );
         })()}
 
-        {nodeData.nodeType === 'lookupInteraction' && (() => {
+        {(nodeData.nodeType === 'lookupInteraction' || nodeData.nodeType === 'interactionTableMap') && (() => {
           // Variegated Cells: pick one of the model's Interaction Table model
-          // attributes. labelA / labelB are wired via input ports (typically
-          // from a Get Facing Labels node).
+          // attributes. For LookupInteraction, labelA / labelB are wired via
+          // scalar input ports. For InteractionTableMap, myFaces / theirFaces
+          // are wired as parallel int arrays (typically the two outputs of
+          // Get All Facing Labels in cardinals-only mode).
           const tables = model.attributes.filter(a => a.isModelAttribute && a.type === 'interactionTable');
           return (
             <select
@@ -2102,6 +2104,81 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 <option key={a.id} value={a.id}>{a.name}</option>
               ))}
             </select>
+          );
+        })()}
+
+        {nodeData.nodeType === 'getAllFacingLabels' && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.68rem', color: '#a0b0c0', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={!!nodeData.config.cardinalsOnly}
+              onChange={e => updateConfig('cardinalsOnly', e.target.checked)}
+              style={{ cursor: 'pointer' }}
+            />
+            Cardinals only (4 slots N/E/S/W)
+          </label>
+        )}
+
+        {nodeData.nodeType === 'moveSelfToNeighbor' && (() => {
+          const payloadCount = Math.max(1, Number(nodeData.config.payloadCount) || 1);
+          const transferOri = !!nodeData.config.transferOrientation;
+          const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
+          const addSlot = () => {
+            const next = { ...nodeData.config, payloadCount: payloadCount + 1 };
+            updateNodeData(id, { ...nodeData, config: next });
+          };
+          const removeSlot = (i: number) => {
+            const next = { ...nodeData.config };
+            for (let j = i; j < payloadCount - 1; j++) {
+              const upper = next[`attr_${j + 1}`];
+              if (upper === undefined) delete next[`attr_${j}`];
+              else next[`attr_${j}`] = upper;
+            }
+            delete next[`attr_${payloadCount - 1}`];
+            next.payloadCount = Math.max(1, payloadCount - 1);
+            updateNodeData(id, { ...nodeData, config: next });
+          };
+          return (
+            <>
+              {Array.from({ length: payloadCount }, (_, i) => (
+                <div key={`slot-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <select
+                    className={styles.select}
+                    style={{ flex: 1 }}
+                    value={(nodeData.config[`attr_${i}`] as string) || ''}
+                    onChange={e => updateConfig(`attr_${i}`, e.target.value)}
+                  >
+                    <option value="">Attribute {i + 1}...</option>
+                    {cellAttrs.map(a => (
+                      <option key={a.id} value={a.id}>{a.name}</option>
+                    ))}
+                  </select>
+                  {payloadCount > 1 && (
+                    <button
+                      onMouseDown={e => e.stopPropagation()}
+                      onClick={() => removeSlot(i)}
+                      style={{ fontSize: '0.7rem', padding: '2px 6px', cursor: 'pointer' }}
+                      title="Remove this payload slot"
+                    >−</button>
+                  )}
+                </div>
+              ))}
+              <button
+                onMouseDown={e => e.stopPropagation()}
+                onClick={addSlot}
+                style={{ fontSize: '0.7rem', padding: '2px 8px', cursor: 'pointer' }}
+                title="Add another payload slot"
+              >+ Slot</button>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.68rem', color: '#a0b0c0', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={transferOri}
+                  onChange={e => updateConfig('transferOrientation', e.target.checked)}
+                  style={{ cursor: 'pointer' }}
+                />
+                Transfer Orientation
+              </label>
+            </>
           );
         })()}
 

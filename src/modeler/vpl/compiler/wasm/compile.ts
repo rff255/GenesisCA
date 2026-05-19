@@ -23,7 +23,7 @@ import type { Attribute, CAModel, GraphNode, GraphEdge } from '../../../../model
 import { getNodeDef } from '../../nodes/registry';
 import { readColorScaleStops } from '../../nodes/ColorScaleNode';
 import {
-  ValType, F64, I32, OP_F64_ABS, OP_F64_ADD, OP_F64_CONVERT_I32_U, OP_F64_DIV,
+  ValType, F64, I32, OP_F64_ABS, OP_F64_ADD, OP_F64_CONVERT_I32_S, OP_F64_CONVERT_I32_U, OP_F64_DIV,
   OP_F64_EQ, OP_F64_FLOOR, OP_F64_GE, OP_F64_GT, OP_F64_LE, OP_F64_LT,
   OP_F64_MAX, OP_F64_MIN, OP_F64_MUL, OP_F64_NE, OP_F64_SQRT, OP_F64_SUB,
   OP_I32_ADD, OP_I32_AND, OP_I32_DIV_S, OP_I32_EQ, OP_I32_EQZ, OP_I32_GE_S,
@@ -1369,6 +1369,144 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     }
   },
 
+  // -- Sample By Weight (cumulative-sum sampling over an input weights array)
+  // Multi-output: returns 'index' (i32; -1 when empty / sum == 0) and 'weight'
+  // (f64; 0 in the same cases). Always advances the shared xorshift32 RNG once
+  // — parity with JS / WebGPU and every other random-using node, so different
+  // control-flow branches that DO sample stay in step across compile targets.
+  //
+  // Two source shapes supported (mirrors Aggregate):
+  //   - single array source (`getNeighborsAttrByIndexes`, `interactionTableMap`,
+  //     etc.): direct ArrayRef via resolveInputArray.
+  //   - multi-source scalars (Aggregate-style): materialise each scalar into a
+  //     fresh f64 scratch array, then run the sampling logic.
+  sampleArrayByWeight: ({ node, ctx }) => {
+    const em = ctx.emitter;
+    let inArr = resolveInputArray(ctx, node, 'weights');
+    if (!inArr) {
+      // Multi-source scalar path: build a temporary f64 scratch array from each
+      // scalar source, then proceed as if it were a single array source.
+      const sources = ctx.inputToSources.get(`${node.id}:weights`) ?? [];
+      if (sources.length === 0) {
+        ctx.errors.push('sampleArrayByWeight: no weights input wired');
+        return null;
+      }
+      const N = sources.length;
+      // Allocate scratch (N × f64 = N × 8 bytes)
+      const tmpOff = em.allocLocal(I32);
+      em.localGet(ctx.scratchTopLocal); em.localSet(tmpOff);
+      em.localGet(ctx.scratchTopLocal); em.i32Const(N * 8); em.op(OP_I32_ADD); em.localSet(ctx.scratchTopLocal);
+      const tmpLen = em.allocLocal(I32);
+      em.i32Const(N); em.localSet(tmpLen);
+      // Fill scratch[k] = sources[k] (promote i32 sources to f64)
+      for (let k = 0; k < N; k++) {
+        const src = sources[k]!;
+        const sref = compileValueNode(src.nodeId, ctx, src.portId);
+        if (!sref) {
+          ctx.errors.push(`sampleArrayByWeight: scalar source ${src.nodeId} did not produce a value`);
+          return null;
+        }
+        em.i32Const(k * 8);
+        em.localGet(tmpOff);
+        em.op(OP_I32_ADD);
+        em.localGet(sref.localIdx);
+        if (sref.valtype !== F64) em.op(OP_F64_CONVERT_I32_S);
+        em.f64Store(0, 3);
+      }
+      inArr = { kind: 'array', offsetLocal: tmpOff, lenLocal: tmpLen, elemValtype: F64, elemBytes: 8 };
+    }
+
+    // Advance _rs (xorshift32). Same constants as GetRandomNode.
+    const rsLocal = em.allocLocal(I32);
+    em.i32Const(0); em.i32Load(ctx.layout.rngStateOffset, 2); em.localSet(rsLocal);
+    em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(13);
+    em.op(byte(0x74)); em.op(byte(0x73)); em.localSet(rsLocal);
+    em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(17);
+    em.op(byte(0x76)); em.op(byte(0x73)); em.localSet(rsLocal);
+    em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(5);
+    em.op(byte(0x74)); em.op(byte(0x73)); em.localSet(rsLocal);
+    em.i32Const(0); em.localGet(rsLocal); em.i32Store(ctx.layout.rngStateOffset, 2);
+
+    // sum = sum(weights[i] as f64) over i in [0, len)
+    const sumLocal = em.allocLocal(F64);
+    em.f64Const(0); em.localSet(sumLocal);
+    const sumI = em.allocLocal(I32);
+    em.i32Const(0); em.localSet(sumI);
+    em.block(() => {
+      em.loop(() => {
+        em.localGet(sumI); em.localGet(inArr.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+        // sum += weights[sumI]
+        em.localGet(sumLocal);
+        em.localGet(sumI); emitArrayLoadElem(em, inArr);
+        if (inArr.elemValtype !== F64) em.op(OP_F64_CONVERT_I32_S);
+        em.op(OP_F64_ADD);
+        em.localSet(sumLocal);
+        em.localGet(sumI); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(sumI);
+        em.br(0);
+      });
+    });
+
+    // Allocate output locals (defaults: index=-1, weight=0)
+    const idxLocal = em.allocLocal(I32);
+    em.i32Const(-1); em.localSet(idxLocal);
+    const wtLocal = em.allocLocal(F64);
+    em.f64Const(0); em.localSet(wtLocal);
+
+    // if (sum > 0): u = rand * sum; cumulative scan
+    em.localGet(sumLocal);
+    em.f64Const(0);
+    em.op(OP_F64_GT);
+    em.ifThen(() => {
+      const uLocal = em.allocLocal(F64);
+      em.localGet(rsLocal);
+      em.op(OP_F64_CONVERT_I32_U);
+      em.f64Const(4294967296);
+      em.op(OP_F64_DIV);
+      em.localGet(sumLocal);
+      em.op(OP_F64_MUL);
+      em.localSet(uLocal);
+
+      const accLocal = em.allocLocal(F64);
+      em.f64Const(0); em.localSet(accLocal);
+      const i = em.allocLocal(I32);
+      em.i32Const(0); em.localSet(i);
+      em.block(() => {
+        em.loop(() => {
+          em.localGet(i); em.localGet(inArr.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+          // wHere = weights[i] (as f64)
+          const wHere = em.allocLocal(F64);
+          em.localGet(i); emitArrayLoadElem(em, inArr);
+          if (inArr.elemValtype !== F64) em.op(OP_F64_CONVERT_I32_S);
+          em.localSet(wHere);
+          // acc += wHere
+          em.localGet(accLocal); em.localGet(wHere); em.op(OP_F64_ADD); em.localSet(accLocal);
+          // if (u < acc) { idxLocal = i; wtLocal = wHere; break; }
+          em.localGet(uLocal); em.localGet(accLocal); em.op(OP_F64_LT);
+          em.ifThen(() => {
+            em.localGet(i); em.localSet(idxLocal);
+            em.localGet(wHere); em.localSet(wtLocal);
+            em.br(2); // break out of the loop+block
+          });
+          em.localGet(i); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(i);
+          em.br(0);
+        });
+      });
+      // Numerical-safety fallback: if no entry was picked (FP drift), pick last.
+      em.localGet(idxLocal); em.i32Const(0); em.op(OP_I32_LT_S);
+      em.ifThen(() => {
+        em.localGet(inArr.lenLocal); em.i32Const(1); em.op(OP_I32_SUB); em.localSet(idxLocal);
+        em.localGet(idxLocal); emitArrayLoadElem(em, inArr);
+        if (inArr.elemValtype !== F64) em.op(OP_F64_CONVERT_I32_S);
+        em.localSet(wtLocal);
+      });
+    });
+
+    setCachedPort(ctx, node.id, 'index', { localIdx: idxLocal, valtype: I32 });
+    setCachedPort(ctx, node.id, 'weight', { localIdx: wtLocal, valtype: F64 });
+    // Default port: index (the more useful one; gates branch on >= 0).
+    return { localIdx: idxLocal, valtype: I32 };
+  },
+
   // -- Indicator reads --
   getIndicator: ({ node, ctx }) => {
     const idxRaw = node.data.config._indicatorIdx;
@@ -2322,6 +2460,7 @@ function isArrayProducer(nodeType: string): boolean {
     case 'groupCounting':
     case 'pickNRandomNeighbors':
     case 'getAllFacingLabels':
+    case 'interactionTableMap':
       return true;
     default:
       return false;
@@ -4088,6 +4227,105 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     return { kind: 'array', offsetLocal: outOff, lenLocal: outLen, elemValtype, elemBytes };
   },
 
+  // -- Variegated Cells: Interaction Table Map ----------------------------
+  // Vectorised LookupInteraction over two parallel face-label arrays. Reads
+  // f64 entries from the interaction-table region of memory at byte offset
+  // `(labelA * labelCount + labelB) * 8 + tableOff` and stores them into a
+  // freshly-allocated scratch array. Output length = min(myFaces.len,
+  // theirFaces.len). Unknown tableId returns an empty array (parity with the
+  // JS emit).
+  interactionTableMap: ({ node, ctx }) => {
+    if (!ctx.layout.variegatedEnabled) {
+      ctx.errors.push('interactionTableMap: variegated cells disabled');
+      return null;
+    }
+    const tableId = (node.data.config.tableId as string) || '';
+    const tableOff = tableId ? ctx.layout.interactionTableOffsets[tableId] : undefined;
+    const labelCount = ctx.layout.interactionTableLabelCount;
+    const myArr = resolveInputArray(ctx, node, 'myFaces');
+    const theirArr = resolveInputArray(ctx, node, 'theirFaces');
+    if (!myArr || !theirArr) {
+      ctx.errors.push('interactionTableMap: missing myFaces or theirFaces input');
+      return null;
+    }
+    // Reserve scratch for the output (worst-case = min input length).
+    // We allocate worst-case = max input length to keep alloc simple — the
+    // unused tail just doesn't get read.
+    const outOff = ctx.emitter.allocLocal(I32);
+    ctx.emitter.localGet(ctx.scratchTopLocal); ctx.emitter.localSet(outOff);
+    const outLen = ctx.emitter.allocLocal(I32);
+    ctx.emitter.i32Const(0); ctx.emitter.localSet(outLen);
+
+    // n = min(myArr.len, theirArr.len) via OP_SELECT (pops [a, b, cond] →
+    // pushes cond ? a : b). a = my.len, b = their.len, cond = (my < their).
+    const n = ctx.emitter.allocLocal(I32);
+    ctx.emitter.localGet(myArr.lenLocal);
+    ctx.emitter.localGet(theirArr.lenLocal);
+    ctx.emitter.localGet(myArr.lenLocal);
+    ctx.emitter.localGet(theirArr.lenLocal);
+    ctx.emitter.op(OP_I32_LT_S);
+    ctx.emitter.op(OP_SELECT);
+    ctx.emitter.localSet(n);
+
+    // Reserve scratch: n * 8 (f64 elements)
+    ctx.emitter.localGet(ctx.scratchTopLocal);
+    ctx.emitter.localGet(n);
+    ctx.emitter.i32Const(8);
+    ctx.emitter.op(OP_I32_MUL);
+    ctx.emitter.op(OP_I32_ADD);
+    ctx.emitter.localSet(ctx.scratchTopLocal);
+
+    if (tableOff === undefined) {
+      // Tableless: output stays empty (len = 0).
+      return { kind: 'array', offsetLocal: outOff, lenLocal: outLen, elemValtype: F64, elemBytes: 8 };
+    }
+
+    const k = ctx.emitter.allocLocal(I32);
+    ctx.emitter.i32Const(0); ctx.emitter.localSet(k);
+    ctx.emitter.block(() => {
+      ctx.emitter.loop(() => {
+        ctx.emitter.localGet(k); ctx.emitter.localGet(n); ctx.emitter.op(OP_I32_GE_S); ctx.emitter.brIf(1);
+        // a = myArr[k] | 0; b = theirArr[k] | 0
+        const a = ctx.emitter.allocLocal(I32);
+        ctx.emitter.localGet(k); emitArrayLoadElem(ctx.emitter, myArr);
+        if (myArr.elemValtype === F64) ctx.emitter.f64ToI32();
+        ctx.emitter.localSet(a);
+        const b = ctx.emitter.allocLocal(I32);
+        ctx.emitter.localGet(k); emitArrayLoadElem(ctx.emitter, theirArr);
+        if (theirArr.elemValtype === F64) ctx.emitter.f64ToI32();
+        ctx.emitter.localSet(b);
+
+        // out[k] (f64) = f64Load((a * labelCount + b) * 8 + tableOff)
+        // Compute the byte offset into the OUTPUT scratch slot first.
+        ctx.emitter.localGet(k);
+        ctx.emitter.i32Const(8);
+        ctx.emitter.op(OP_I32_MUL);
+        ctx.emitter.localGet(outOff);
+        ctx.emitter.op(OP_I32_ADD);
+        // Compute the byte offset into the TABLE.
+        ctx.emitter.localGet(a);
+        ctx.emitter.i32Const(labelCount);
+        ctx.emitter.op(OP_I32_MUL);
+        ctx.emitter.localGet(b);
+        ctx.emitter.op(OP_I32_ADD);
+        ctx.emitter.i32Const(8);
+        ctx.emitter.op(OP_I32_MUL);
+        ctx.emitter.f64Load(tableOff, 3);
+        // Store into the output slot
+        ctx.emitter.f64Store(0, 3);
+
+        // outLen++
+        ctx.emitter.localGet(outLen);
+        ctx.emitter.i32Const(1); ctx.emitter.op(OP_I32_ADD);
+        ctx.emitter.localSet(outLen);
+        // k++
+        ctx.emitter.localGet(k); ctx.emitter.i32Const(1); ctx.emitter.op(OP_I32_ADD); ctx.emitter.localSet(k);
+        ctx.emitter.br(0);
+      });
+    });
+    return { kind: 'array', offsetLocal: outOff, lenLocal: outLen, elemValtype: F64, elemBytes: 8 };
+  },
+
   // -- Variegated Cells: Get All Facing Labels (multi-output arrays) -----
   // Produces two parallel ArrayRefs of length 8 (i32 elements, one per
   // direction in N/NE/E/SE/S/SW/W/NW order). Both are cached under
@@ -4111,15 +4349,17 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     const sourceAttrId = (node.data.config._sourceAttrId as string) || '';
     const sourceAttr = sourceAttrId ? getAttr(ctx.layout, sourceAttrId) : null;
     const boundary = (node.data.config._boundaryTreatment as string) || 'torus';
+    const cardinalsOnly = !!node.data.config.cardinalsOnly;
     const em = ctx.emitter;
     const lookupOff = ctx.layout.facePatternLookupOffset;
     const total = ctx.layout.total;
     const W = ctx.model.properties.gridWidth;
     const H = ctx.model.properties.gridHeight;
 
-    // Allocate both scratch arrays first (length 8, i32, 4 bytes each).
-    const myArr = allocArrayInScratchConst(ctx, 8, I32, 4);
-    const theirArr = allocArrayInScratchConst(ctx, 8, I32, 4);
+    // Allocate both scratch arrays first (length 4 cardinals or 8 Moore, i32).
+    const outLen = cardinalsOnly ? 4 : 8;
+    const myArr = allocArrayInScratchConst(ctx, outLen, I32, 4);
+    const theirArr = allocArrayInScratchConst(ctx, outLen, I32, 4);
 
     // Read my species + orientation once (loop-invariant within this emit).
     const mySpec = em.allocLocal(I32);
@@ -4137,12 +4377,18 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     em.i32Load(ctx.layout.orientationReadOffset, 2);
     em.localSet(myOri);
 
-    // 8 directions in canonical N/NE/E/SE/S/SW/W/NW order.
+    // 8 directions in canonical N/NE/E/SE/S/SW/W/NW order. In cardinalsOnly
+    // mode we iterate only slots 0/2/4/6 (= N/E/S/W) but write them to output
+    // indices 0..3. The face-rotation arithmetic still uses the Moore index
+    // (d8) because face patterns are 8-slot-keyed.
     const OFFSETS: ReadonlyArray<readonly [number, number]> = [
       [-1, 0], [-1, 1], [0, 1], [1, 1], [1, 0], [1, -1], [0, -1], [-1, -1],
     ];
+    const iterations: ReadonlyArray<readonly [number, number]> = cardinalsOnly
+      ? [[0, 0], [2, 1], [4, 2], [6, 3]]
+      : [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [7, 7]];
 
-    for (let d = 0; d < 8; d++) {
+    for (const [d, outIdx] of iterations) {
       const [dr, dc] = OFFSETS[d]!;
       const dirP4 = (d + 4) & 7;
       const nbrCell = em.allocLocal(I32);
@@ -4279,15 +4525,16 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
         em.localSet(theirLabel);
       });
 
-      // Store myLabel and theirLabel into their respective scratch arrays
-      // at offset d * 4.
+      // Store myLabel and theirLabel into their respective scratch arrays at
+      // OUTPUT slot offset (= outIdx * 4). outIdx differs from d only in
+      // cardinalsOnly mode, where d=2/4/6 collapse to outIdx=1/2/3.
       em.localGet(myArr.offsetLocal);
-      em.i32Const(d * 4);
+      em.i32Const(outIdx * 4);
       em.op(OP_I32_ADD);
       em.localGet(myLabel);
       em.i32Store(0, 2);
       em.localGet(theirArr.offsetLocal);
-      em.i32Const(d * 4);
+      em.i32Const(outIdx * 4);
       em.op(OP_I32_ADD);
       em.localGet(theirLabel);
       em.i32Store(0, 2);
@@ -5056,6 +5303,87 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
     }
     return true;
   },
+
+  // -- MoveSelfToNeighbor (async-only) -----------------------------------
+  // Atomic chemistry move-into-vacancy: pushes payloads to the target NI,
+  // then clears the source cell. Composes setNeighborAttributeByIndex (per
+  // payload) + setAttribute(defaultValue) (clear self) + optionally
+  // setNeighborOrientationByIndex + setOrientation(0). All four writes share
+  // one NI guard (INVALID_NI + boundary sentinel checked once).
+  moveSelfToNeighbor: ({ node, ctx, inputs }) => {
+    if (!ctx.layout.isAsync) {
+      ctx.errors.push('moveSelfToNeighbor: requires asynchronous update mode');
+      return false;
+    }
+    const em = ctx.emitter;
+    const payloadCount = Math.max(1, Number(node.data.config.payloadCount) || 1);
+    const transferOri = !!node.data.config.transferOrientation;
+    if (transferOri && !ctx.layout.variegatedEnabled) {
+      ctx.errors.push('moveSelfToNeighbor: transferOrientation requires variegated cells');
+      return false;
+    }
+    const niRef = inputs['targetNI'] ?? { inline: true, value: 0, valtype: I32 };
+    // Resolve target NI + cell index once.
+    const niLocal = em.allocLocal(I32);
+    pushValueAs(em, niRef, I32);
+    em.localSet(niLocal);
+    // Guard: skip if NI is INVALID_NI sentinel.
+    em.localGet(niLocal);
+    em.i32Const(INVALID_NI);
+    em.op(OP_I32_EQ);
+    em.op(OP_I32_EQZ);
+    em.ifThen(() => {
+      const nbrCellLocal = em.allocLocal(I32);
+      pushNiCellIdx(ctx, niLocal);
+      em.localSet(nbrCellLocal);
+      // Guard: boundary sentinel (>= total).
+      em.localGet(nbrCellLocal);
+      em.localGet(0); // total param
+      em.op(OP_I32_LT_S);
+      em.ifThen(() => {
+        // Per-payload writes: push to neighbour + clear self to defaultValue.
+        for (let i = 0; i < payloadCount; i++) {
+          const attrId = node.data.config[`attr_${i}`] as string;
+          if (!attrId) continue;
+          const attr = getAttr(ctx.layout, attrId);
+          if (!attr) {
+            ctx.errors.push(`moveSelfToNeighbor: unknown attr ${attrId} at slot ${i}`);
+            continue;
+          }
+          const payload = inputs[`payload_${i}`] ?? { inline: true, value: 0, valtype: attrValType(attr.type) };
+          const defaultRaw = (node.data.config[`_attr_${i}_default`] as string) ?? '0';
+          const defaultNum = parseFloat(defaultRaw) || 0;
+          // 1. Push payload to neighbour: w_attr[nbrCellLocal] = payload
+          em.localGet(nbrCellLocal);
+          if (attr.itemBytes !== 1) { em.i32Const(attr.itemBytes); em.op(OP_I32_MUL); }
+          pushValueAs(em, payload, attrValType(attr.type));
+          if (attr.type === 'bool') em.i32Store8(attr.writeOffset, 0);
+          else if (attr.type === 'float') em.f64Store(attr.writeOffset, 3);
+          else em.i32Store(attr.writeOffset, 2);
+          // 2. Clear self to defaultValue: w_attr[idx] = defaultNum
+          const defaultRef: ValueRef = { inline: true, value: defaultNum, valtype: attrValType(attr.type) };
+          emitCellWriteAtIdx(ctx, attr, defaultRef);
+        }
+        // Orientation transfer (variegated cells, when enabled).
+        if (transferOri) {
+          const oriRef = inputs['orientation'] ?? { inline: true, value: 0, valtype: I32 };
+          // 1. Push orientation to neighbour: w_orientation[nbrCellLocal] = (ori) & 3
+          em.localGet(nbrCellLocal);
+          em.i32Const(4);
+          em.op(OP_I32_MUL);
+          pushValueAs(em, oriRef, I32);
+          em.i32Const(3);
+          em.op(OP_I32_AND);
+          em.i32Store(ctx.layout.orientationWriteOffset, 2);
+          // 2. Clear self orientation to 0: w_orientation[idx] = 0
+          pushCellByteOffset(ctx, 4);
+          em.i32Const(0);
+          em.i32Store(ctx.layout.orientationWriteOffset, 2);
+        }
+      });
+    });
+    return true;
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -5475,6 +5803,20 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
             inputs[port.id] = { inline: true, value: num, valtype: isFloat ? F64 : I32 };
           }
         }
+      }
+      // Dynamic value-input ports (e.g., MoveSelfToNeighbor's payload_${i})
+      // aren't in def.ports — pick them up from the edge map.
+      for (const [key, source] of ctx.inputToSource) {
+        if (!key.startsWith(`${node.id}:`)) continue;
+        const portId = key.slice(node.id.length + 1);
+        if (def.ports.some(p => p.kind === 'input' && p.category === 'value' && p.id === portId)) continue;
+        const srcNode = ctx.nodeMap.get(source.nodeId);
+        const srcDef = srcNode ? getNodeDef(srcNode.data.nodeType) : null;
+        const srcPort = srcDef?.ports.find(p => p.id === source.portId);
+        if (srcPort?.isArray) continue;
+        const srcRef = compileValueNode(source.nodeId, ctx, source.portId);
+        if (!srcRef) return false;
+        inputs[portId] = srcRef;
       }
       const flowEmitter = FLOW_NODE_EMITTERS[node.data.nodeType];
       if (!flowEmitter) {

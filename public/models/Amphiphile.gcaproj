@@ -219,7 +219,7 @@
   "indicators": [],
   "graphNodes": [
     {
-      "id": "nmpayeg6bqklp",
+      "id": "nmpbu56m7wehx",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -231,7 +231,7 @@
       }
     },
     {
-      "id": "nmpayeg6chybl",
+      "id": "nmpbu56m7ftkl",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -246,7 +246,7 @@
       }
     },
     {
-      "id": "nmpayeg6cqp0d",
+      "id": "nmpbu56m7sihs",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -259,7 +259,7 @@
       }
     },
     {
-      "id": "nmpayeg6chriu",
+      "id": "nmpbu56m70tfd",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -274,7 +274,7 @@
       }
     },
     {
-      "id": "nmpayeg6cb5z8",
+      "id": "nmpbu56m7p87y",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -289,7 +289,7 @@
       }
     },
     {
-      "id": "nmpayeg6ckuw2",
+      "id": "nmpbu56m8ol0h",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -297,12 +297,44 @@
       },
       "data": {
         "nodeType": "getAllFacingLabels",
-        "config": {},
-        "label": "Facing labels[8]"
+        "config": {
+          "cardinalsOnly": true
+        },
+        "label": "Facing labels[4] cardinals"
       }
     },
     {
-      "id": "nmpayeg6cowbv",
+      "id": "nmpbu56m82nli",
+      "type": "caNode",
+      "position": {
+        "x": 220,
+        "y": 480
+      },
+      "data": {
+        "nodeType": "getNeighborsAttrByIndexes",
+        "config": {
+          "attributeId": "kind"
+        },
+        "label": "kinds[4] adj"
+      }
+    },
+    {
+      "id": "nmpbu56m8oaft",
+      "type": "caNode",
+      "position": {
+        "x": 220,
+        "y": 560
+      },
+      "data": {
+        "nodeType": "getNeighborsAttrByIndexes",
+        "config": {
+          "attributeId": "kind"
+        },
+        "label": "farKinds[4]"
+      }
+    },
+    {
+      "id": "nmpbu56m81n1o",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -318,7 +350,7 @@
       }
     },
     {
-      "id": "nmpayeg6c0ca3",
+      "id": "nmpbu56m83kck",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -334,7 +366,7 @@
       }
     },
     {
-      "id": "nmpayeg6cpg75",
+      "id": "nmpbu56m8akxl",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -350,52 +382,22 @@
       }
     },
     {
-      "id": "nmpayeg6czmi0",
-      "type": "caNode",
-      "position": {
-        "x": 440,
-        "y": 1120
-      },
-      "data": {
-        "nodeType": "arrayElement",
-        "config": {
-          "_port_position": "0"
-        },
-        "label": "NI d=0"
-      }
-    },
-    {
-      "id": "nmpayeg6cck99",
-      "type": "caNode",
-      "position": {
-        "x": 440,
-        "y": 1200
-      },
-      "data": {
-        "nodeType": "arrayElement",
-        "config": {
-          "_port_position": "0"
-        },
-        "label": "NIfar d=0"
-      }
-    },
-    {
-      "id": "nmpayeg6c989d",
+      "id": "nmpbu56m8v4so",
       "type": "caNode",
       "position": {
         "x": 660,
         "y": 1120
       },
       "data": {
-        "nodeType": "getNeighborAttributeByIndex",
+        "nodeType": "arrayElement",
         "config": {
-          "attributeId": "kind"
+          "_port_position": "0"
         },
         "label": "kind d=0"
       }
     },
     {
-      "id": "nmpayeg6cmpfl",
+      "id": "nmpbu56m8lbrt",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -410,52 +412,22 @@
       }
     },
     {
-      "id": "nmpayeg6cmx8h",
-      "type": "caNode",
-      "position": {
-        "x": 660,
-        "y": 1280
-      },
-      "data": {
-        "nodeType": "arrayElement",
-        "config": {
-          "_port_position": "0"
-        },
-        "label": "thFace d=0"
-      }
-    },
-    {
-      "id": "nmpayeg6cg287",
-      "type": "caNode",
-      "position": {
-        "x": 880,
-        "y": 1200
-      },
-      "data": {
-        "nodeType": "lookupInteraction",
-        "config": {
-          "tableId": "tableP_B"
-        },
-        "label": "P_B d=0"
-      }
-    },
-    {
-      "id": "nmpayeg6cyuzq",
+      "id": "nmpbu56m8bccd",
       "type": "caNode",
       "position": {
         "x": 1100,
         "y": 1120
       },
       "data": {
-        "nodeType": "getNeighborAttributeByIndex",
+        "nodeType": "arrayElement",
         "config": {
-          "attributeId": "kind"
+          "_port_position": "0"
         },
         "label": "farKind d=0"
       }
     },
     {
-      "id": "nmpayeg6cf1cq",
+      "id": "nmpbu56m8mcws",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -466,11 +438,11 @@
         "config": {
           "operation": "=="
         },
-        "label": "farKind == amphi"
+        "label": "farKind==amphi"
       }
     },
     {
-      "id": "nmpayeg6c5wp8",
+      "id": "nmpbu56m8urvo",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -481,42 +453,29 @@
         "config": {
           "operation": "=="
         },
-        "label": "farKind == water"
+        "label": "farKind==water"
       }
     },
     {
-      "id": "nmpayeg6crpga",
-      "type": "caNode",
-      "position": {
-        "x": 1540,
-        "y": 1200
-      },
-      "data": {
-        "nodeType": "valueSwitch",
-        "config": {
-          "_port_ifValue": "3",
-          "_port_elseValue": "0"
-        },
-        "label": "water? water:none"
-      }
-    },
-    {
-      "id": "nmpayeg6c4mmk",
+      "id": "nmpbu56m8pcx4",
       "type": "caNode",
       "position": {
         "x": 1540,
         "y": 1120
       },
       "data": {
-        "nodeType": "valueSwitch",
+        "nodeType": "expression",
         "config": {
-          "_port_ifValue": "1"
+          "expression": "iswater * 3 + isamphi * 1",
+          "visibleCount": 2,
+          "_varName_a": "iswater",
+          "_varName_b": "isamphi"
         },
-        "label": "amphi? X:inner"
+        "label": "farLabel d=0"
       }
     },
     {
-      "id": "nmpayeg6cdbo7",
+      "id": "nmpbu56m8habf",
       "type": "caNode",
       "position": {
         "x": 1760,
@@ -531,7 +490,7 @@
       }
     },
     {
-      "id": "nmpayeg6c5ws0",
+      "id": "nmpbu56m8kw8x",
       "type": "caNode",
       "position": {
         "x": 1760,
@@ -542,11 +501,11 @@
         "config": {
           "operation": "=="
         },
-        "label": "adj == empty?"
+        "label": "adj==empty?"
       }
     },
     {
-      "id": "nmpayeg6clse8",
+      "id": "nmpbu56m8gi80",
       "type": "caNode",
       "position": {
         "x": 1980,
@@ -561,52 +520,22 @@
       }
     },
     {
-      "id": "nmpayeg6czoyj",
-      "type": "caNode",
-      "position": {
-        "x": 440,
-        "y": 1360
-      },
-      "data": {
-        "nodeType": "arrayElement",
-        "config": {
-          "_port_position": "1"
-        },
-        "label": "NI d=1"
-      }
-    },
-    {
-      "id": "nmpayeg6c1jgv",
-      "type": "caNode",
-      "position": {
-        "x": 440,
-        "y": 1440
-      },
-      "data": {
-        "nodeType": "arrayElement",
-        "config": {
-          "_port_position": "1"
-        },
-        "label": "NIfar d=1"
-      }
-    },
-    {
-      "id": "nmpayeg6c6m4f",
+      "id": "nmpbu56m8fhvg",
       "type": "caNode",
       "position": {
         "x": 660,
         "y": 1360
       },
       "data": {
-        "nodeType": "getNeighborAttributeByIndex",
+        "nodeType": "arrayElement",
         "config": {
-          "attributeId": "kind"
+          "_port_position": "1"
         },
         "label": "kind d=1"
       }
     },
     {
-      "id": "nmpayeg6crepb",
+      "id": "nmpbu56m8chb1",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -615,58 +544,28 @@
       "data": {
         "nodeType": "arrayElement",
         "config": {
-          "_port_position": "2"
+          "_port_position": "1"
         },
         "label": "myFace d=1"
       }
     },
     {
-      "id": "nmpayeg6cukr2",
-      "type": "caNode",
-      "position": {
-        "x": 660,
-        "y": 1520
-      },
-      "data": {
-        "nodeType": "arrayElement",
-        "config": {
-          "_port_position": "2"
-        },
-        "label": "thFace d=1"
-      }
-    },
-    {
-      "id": "nmpayeg6cz1io",
-      "type": "caNode",
-      "position": {
-        "x": 880,
-        "y": 1440
-      },
-      "data": {
-        "nodeType": "lookupInteraction",
-        "config": {
-          "tableId": "tableP_B"
-        },
-        "label": "P_B d=1"
-      }
-    },
-    {
-      "id": "nmpayeg6cm205",
+      "id": "nmpbu56m8yzr6",
       "type": "caNode",
       "position": {
         "x": 1100,
         "y": 1360
       },
       "data": {
-        "nodeType": "getNeighborAttributeByIndex",
+        "nodeType": "arrayElement",
         "config": {
-          "attributeId": "kind"
+          "_port_position": "1"
         },
         "label": "farKind d=1"
       }
     },
     {
-      "id": "nmpayeg6crpt4",
+      "id": "nmpbu56m85dv5",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -677,11 +576,11 @@
         "config": {
           "operation": "=="
         },
-        "label": "farKind == amphi"
+        "label": "farKind==amphi"
       }
     },
     {
-      "id": "nmpayeg6c89dn",
+      "id": "nmpbu56m8n9ft",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -692,42 +591,29 @@
         "config": {
           "operation": "=="
         },
-        "label": "farKind == water"
+        "label": "farKind==water"
       }
     },
     {
-      "id": "nmpayeg6c1unr",
-      "type": "caNode",
-      "position": {
-        "x": 1540,
-        "y": 1440
-      },
-      "data": {
-        "nodeType": "valueSwitch",
-        "config": {
-          "_port_ifValue": "3",
-          "_port_elseValue": "0"
-        },
-        "label": "water? water:none"
-      }
-    },
-    {
-      "id": "nmpayeg6c9pm1",
+      "id": "nmpbu56m8d582",
       "type": "caNode",
       "position": {
         "x": 1540,
         "y": 1360
       },
       "data": {
-        "nodeType": "valueSwitch",
+        "nodeType": "expression",
         "config": {
-          "_port_ifValue": "1"
+          "expression": "iswater * 3 + isamphi * 1",
+          "visibleCount": 2,
+          "_varName_a": "iswater",
+          "_varName_b": "isamphi"
         },
-        "label": "amphi? X:inner"
+        "label": "farLabel d=1"
       }
     },
     {
-      "id": "nmpayeg6cbnha",
+      "id": "nmpbu56m8yl4x",
       "type": "caNode",
       "position": {
         "x": 1760,
@@ -742,7 +628,7 @@
       }
     },
     {
-      "id": "nmpayeg6ciujw",
+      "id": "nmpbu56m84bip",
       "type": "caNode",
       "position": {
         "x": 1760,
@@ -753,11 +639,11 @@
         "config": {
           "operation": "=="
         },
-        "label": "adj == empty?"
+        "label": "adj==empty?"
       }
     },
     {
-      "id": "nmpayeg6c7ghj",
+      "id": "nmpbu56m8eylr",
       "type": "caNode",
       "position": {
         "x": 1980,
@@ -772,52 +658,22 @@
       }
     },
     {
-      "id": "nmpayeg6cx7jf",
-      "type": "caNode",
-      "position": {
-        "x": 440,
-        "y": 1600
-      },
-      "data": {
-        "nodeType": "arrayElement",
-        "config": {
-          "_port_position": "2"
-        },
-        "label": "NI d=2"
-      }
-    },
-    {
-      "id": "nmpayeg6c84pt",
-      "type": "caNode",
-      "position": {
-        "x": 440,
-        "y": 1680
-      },
-      "data": {
-        "nodeType": "arrayElement",
-        "config": {
-          "_port_position": "2"
-        },
-        "label": "NIfar d=2"
-      }
-    },
-    {
-      "id": "nmpayeg6c5yul",
+      "id": "nmpbu56m8xztc",
       "type": "caNode",
       "position": {
         "x": 660,
         "y": 1600
       },
       "data": {
-        "nodeType": "getNeighborAttributeByIndex",
+        "nodeType": "arrayElement",
         "config": {
-          "attributeId": "kind"
+          "_port_position": "2"
         },
         "label": "kind d=2"
       }
     },
     {
-      "id": "nmpayeg6c0nod",
+      "id": "nmpbu56m8gkqg",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -826,58 +682,28 @@
       "data": {
         "nodeType": "arrayElement",
         "config": {
-          "_port_position": "4"
+          "_port_position": "2"
         },
         "label": "myFace d=2"
       }
     },
     {
-      "id": "nmpayeg6ch3e1",
-      "type": "caNode",
-      "position": {
-        "x": 660,
-        "y": 1760
-      },
-      "data": {
-        "nodeType": "arrayElement",
-        "config": {
-          "_port_position": "4"
-        },
-        "label": "thFace d=2"
-      }
-    },
-    {
-      "id": "nmpayeg6cacul",
-      "type": "caNode",
-      "position": {
-        "x": 880,
-        "y": 1680
-      },
-      "data": {
-        "nodeType": "lookupInteraction",
-        "config": {
-          "tableId": "tableP_B"
-        },
-        "label": "P_B d=2"
-      }
-    },
-    {
-      "id": "nmpayeg6dxvva",
+      "id": "nmpbu56m82kkj",
       "type": "caNode",
       "position": {
         "x": 1100,
         "y": 1600
       },
       "data": {
-        "nodeType": "getNeighborAttributeByIndex",
+        "nodeType": "arrayElement",
         "config": {
-          "attributeId": "kind"
+          "_port_position": "2"
         },
         "label": "farKind d=2"
       }
     },
     {
-      "id": "nmpayeg6d5b05",
+      "id": "nmpbu56m8stxs",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -888,11 +714,11 @@
         "config": {
           "operation": "=="
         },
-        "label": "farKind == amphi"
+        "label": "farKind==amphi"
       }
     },
     {
-      "id": "nmpayeg6depcq",
+      "id": "nmpbu56m8ccyl",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -903,42 +729,29 @@
         "config": {
           "operation": "=="
         },
-        "label": "farKind == water"
+        "label": "farKind==water"
       }
     },
     {
-      "id": "nmpayeg6d4lzi",
-      "type": "caNode",
-      "position": {
-        "x": 1540,
-        "y": 1680
-      },
-      "data": {
-        "nodeType": "valueSwitch",
-        "config": {
-          "_port_ifValue": "3",
-          "_port_elseValue": "0"
-        },
-        "label": "water? water:none"
-      }
-    },
-    {
-      "id": "nmpayeg6duv4v",
+      "id": "nmpbu56m8yeck",
       "type": "caNode",
       "position": {
         "x": 1540,
         "y": 1600
       },
       "data": {
-        "nodeType": "valueSwitch",
+        "nodeType": "expression",
         "config": {
-          "_port_ifValue": "1"
+          "expression": "iswater * 3 + isamphi * 1",
+          "visibleCount": 2,
+          "_varName_a": "iswater",
+          "_varName_b": "isamphi"
         },
-        "label": "amphi? X:inner"
+        "label": "farLabel d=2"
       }
     },
     {
-      "id": "nmpayeg6dtx33",
+      "id": "nmpbu56m8cprn",
       "type": "caNode",
       "position": {
         "x": 1760,
@@ -953,7 +766,7 @@
       }
     },
     {
-      "id": "nmpayeg6dofr6",
+      "id": "nmpbu56m8le50",
       "type": "caNode",
       "position": {
         "x": 1760,
@@ -964,11 +777,11 @@
         "config": {
           "operation": "=="
         },
-        "label": "adj == empty?"
+        "label": "adj==empty?"
       }
     },
     {
-      "id": "nmpayeg6dw9zs",
+      "id": "nmpbu56m8efim",
       "type": "caNode",
       "position": {
         "x": 1980,
@@ -983,52 +796,22 @@
       }
     },
     {
-      "id": "nmpayeg6dggng",
-      "type": "caNode",
-      "position": {
-        "x": 440,
-        "y": 1840
-      },
-      "data": {
-        "nodeType": "arrayElement",
-        "config": {
-          "_port_position": "3"
-        },
-        "label": "NI d=3"
-      }
-    },
-    {
-      "id": "nmpayeg6dzfzy",
-      "type": "caNode",
-      "position": {
-        "x": 440,
-        "y": 1920
-      },
-      "data": {
-        "nodeType": "arrayElement",
-        "config": {
-          "_port_position": "3"
-        },
-        "label": "NIfar d=3"
-      }
-    },
-    {
-      "id": "nmpayeg6dyoum",
+      "id": "nmpbu56m8dni8",
       "type": "caNode",
       "position": {
         "x": 660,
         "y": 1840
       },
       "data": {
-        "nodeType": "getNeighborAttributeByIndex",
+        "nodeType": "arrayElement",
         "config": {
-          "attributeId": "kind"
+          "_port_position": "3"
         },
         "label": "kind d=3"
       }
     },
     {
-      "id": "nmpayeg6dhdd7",
+      "id": "nmpbu56m8q4fk",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -1037,58 +820,28 @@
       "data": {
         "nodeType": "arrayElement",
         "config": {
-          "_port_position": "6"
+          "_port_position": "3"
         },
         "label": "myFace d=3"
       }
     },
     {
-      "id": "nmpayeg6dy132",
-      "type": "caNode",
-      "position": {
-        "x": 660,
-        "y": 2000
-      },
-      "data": {
-        "nodeType": "arrayElement",
-        "config": {
-          "_port_position": "6"
-        },
-        "label": "thFace d=3"
-      }
-    },
-    {
-      "id": "nmpayeg6dgvac",
-      "type": "caNode",
-      "position": {
-        "x": 880,
-        "y": 1920
-      },
-      "data": {
-        "nodeType": "lookupInteraction",
-        "config": {
-          "tableId": "tableP_B"
-        },
-        "label": "P_B d=3"
-      }
-    },
-    {
-      "id": "nmpayeg6divr5",
+      "id": "nmpbu56m8q0cm",
       "type": "caNode",
       "position": {
         "x": 1100,
         "y": 1840
       },
       "data": {
-        "nodeType": "getNeighborAttributeByIndex",
+        "nodeType": "arrayElement",
         "config": {
-          "attributeId": "kind"
+          "_port_position": "3"
         },
         "label": "farKind d=3"
       }
     },
     {
-      "id": "nmpayeg6dko8c",
+      "id": "nmpbu56m8b82p",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -1099,11 +852,11 @@
         "config": {
           "operation": "=="
         },
-        "label": "farKind == amphi"
+        "label": "farKind==amphi"
       }
     },
     {
-      "id": "nmpayeg6dy22f",
+      "id": "nmpbu56m83jmx",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -1114,42 +867,29 @@
         "config": {
           "operation": "=="
         },
-        "label": "farKind == water"
+        "label": "farKind==water"
       }
     },
     {
-      "id": "nmpayeg6dbwef",
-      "type": "caNode",
-      "position": {
-        "x": 1540,
-        "y": 1920
-      },
-      "data": {
-        "nodeType": "valueSwitch",
-        "config": {
-          "_port_ifValue": "3",
-          "_port_elseValue": "0"
-        },
-        "label": "water? water:none"
-      }
-    },
-    {
-      "id": "nmpayeg6d1ovi",
+      "id": "nmpbu56m8bmy3",
       "type": "caNode",
       "position": {
         "x": 1540,
         "y": 1840
       },
       "data": {
-        "nodeType": "valueSwitch",
+        "nodeType": "expression",
         "config": {
-          "_port_ifValue": "1"
+          "expression": "iswater * 3 + isamphi * 1",
+          "visibleCount": 2,
+          "_varName_a": "iswater",
+          "_varName_b": "isamphi"
         },
-        "label": "amphi? X:inner"
+        "label": "farLabel d=3"
       }
     },
     {
-      "id": "nmpayeg6d003c",
+      "id": "nmpbu56m808e8",
       "type": "caNode",
       "position": {
         "x": 1760,
@@ -1164,7 +904,7 @@
       }
     },
     {
-      "id": "nmpayeg6dkxm6",
+      "id": "nmpbu56m817fp",
       "type": "caNode",
       "position": {
         "x": 1760,
@@ -1175,11 +915,11 @@
         "config": {
           "operation": "=="
         },
-        "label": "adj == empty?"
+        "label": "adj==empty?"
       }
     },
     {
-      "id": "nmpayeg6dokbt",
+      "id": "nmpbu56m88j12",
       "type": "caNode",
       "position": {
         "x": 1980,
@@ -1194,11 +934,26 @@
       }
     },
     {
-      "id": "nmpayeg6da1mg",
+      "id": "nmpbu56m8ylwd",
       "type": "caNode",
       "position": {
         "x": 2200,
-        "y": 1120
+        "y": 960
+      },
+      "data": {
+        "nodeType": "interactionTableMap",
+        "config": {
+          "tableId": "tableP_B"
+        },
+        "label": "P_B vec[4]"
+      }
+    },
+    {
+      "id": "nmpbu56m81t6e",
+      "type": "caNode",
+      "position": {
+        "x": 2420,
+        "y": 960
       },
       "data": {
         "nodeType": "aggregate",
@@ -1209,7 +964,7 @@
       }
     },
     {
-      "id": "nmpayeg6dv4xp",
+      "id": "nmpbu56m8nz8f",
       "type": "caNode",
       "position": {
         "x": 2200,
@@ -1224,7 +979,7 @@
       }
     },
     {
-      "id": "nmpayeg6dj0bo",
+      "id": "nmpbu56m87dt5",
       "type": "caNode",
       "position": {
         "x": 2200,
@@ -1239,7 +994,7 @@
       }
     },
     {
-      "id": "nmpayeg6dw1uw",
+      "id": "nmpbu56m8ehgz",
       "type": "caNode",
       "position": {
         "x": 2200,
@@ -1254,7 +1009,7 @@
       }
     },
     {
-      "id": "nmpayeg6d8kgt",
+      "id": "nmpbu56m8ijaz",
       "type": "caNode",
       "position": {
         "x": 2200,
@@ -1269,7 +1024,7 @@
       }
     },
     {
-      "id": "nmpayeg6d9blz",
+      "id": "nmpbu56m89yh6",
       "type": "caNode",
       "position": {
         "x": 2200,
@@ -1286,7 +1041,7 @@
       }
     },
     {
-      "id": "nmpayeg6dz4f4",
+      "id": "nmpbu56m8x180",
       "type": "caNode",
       "position": {
         "x": 2200,
@@ -1304,7 +1059,7 @@
       }
     },
     {
-      "id": "nmpayeg6dx46m",
+      "id": "nmpbu56m8mqw2",
       "type": "caNode",
       "position": {
         "x": 2200,
@@ -1317,7 +1072,7 @@
       }
     },
     {
-      "id": "nmpayeg6d8ej8",
+      "id": "nmpbu56m8ymx9",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -1332,7 +1087,7 @@
       }
     },
     {
-      "id": "nmpayeg6da1c8",
+      "id": "nmpbu56m8v535",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -1345,7 +1100,7 @@
       }
     },
     {
-      "id": "nmpayeg6dnvu6",
+      "id": "nmpbu56m87cri",
       "type": "caNode",
       "position": {
         "x": 2420,
@@ -1360,7 +1115,7 @@
       }
     },
     {
-      "id": "nmpayeg6dih35",
+      "id": "nmpbu56m85059",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -1373,7 +1128,7 @@
       }
     },
     {
-      "id": "nmpayeg6d7uwl",
+      "id": "nmpbu56m82u1i",
       "type": "caNode",
       "position": {
         "x": 2420,
@@ -1388,7 +1143,7 @@
       }
     },
     {
-      "id": "nmpayeg6dl0hm",
+      "id": "nmpbu56m8rekp",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -1401,173 +1156,23 @@
       }
     },
     {
-      "id": "nmpayeg6dthpl",
-      "type": "caNode",
-      "position": {
-        "x": 2420,
-        "y": 1440
-      },
-      "data": {
-        "nodeType": "getRandom",
-        "config": {
-          "randomType": "float",
-          "min": "0",
-          "max": "1"
-        },
-        "label": "rand [0,1)"
-      }
-    },
-    {
-      "id": "nmpayeg6d1275",
+      "id": "nmpbu56m8f9nl",
       "type": "caNode",
       "position": {
         "x": 2640,
         "y": 1440
       },
       "data": {
-        "nodeType": "expression",
-        "config": {
-          "expression": "rand * sumW",
-          "visibleCount": 2,
-          "_varName_a": "rand",
-          "_varName_b": "sumW"
-        },
-        "label": "u = rand·sumW"
+        "nodeType": "sampleArrayByWeight",
+        "config": {},
+        "label": "Sample direction"
       }
     },
     {
-      "id": "nmpayeg6d2iw2",
-      "type": "caNode",
-      "position": {
-        "x": 2640,
-        "y": 1600
-      },
-      "data": {
-        "nodeType": "expression",
-        "config": {
-          "expression": "w0 + w1",
-          "visibleCount": 2,
-          "_varName_a": "w0",
-          "_varName_b": "w1"
-        },
-        "label": "t2 = w0+w1"
-      }
-    },
-    {
-      "id": "nmpayeg6dtxyx",
-      "type": "caNode",
-      "position": {
-        "x": 2640,
-        "y": 1760
-      },
-      "data": {
-        "nodeType": "expression",
-        "config": {
-          "expression": "w0 + w1 + w2",
-          "visibleCount": 3,
-          "_varName_a": "w0",
-          "_varName_b": "w1",
-          "_varName_c": "w2"
-        },
-        "label": "t3 = w0+w1+w2"
-      }
-    },
-    {
-      "id": "nmpayeg6dy0pe",
+      "id": "nmpbu56m8ztvp",
       "type": "caNode",
       "position": {
         "x": 2860,
-        "y": 1440
-      },
-      "data": {
-        "nodeType": "statement",
-        "config": {
-          "operation": "<"
-        },
-        "label": "u < w0?"
-      }
-    },
-    {
-      "id": "nmpayeg6d2zia",
-      "type": "caNode",
-      "position": {
-        "x": 2860,
-        "y": 1600
-      },
-      "data": {
-        "nodeType": "statement",
-        "config": {
-          "operation": "<"
-        },
-        "label": "u < t2?"
-      }
-    },
-    {
-      "id": "nmpayeg6dniaj",
-      "type": "caNode",
-      "position": {
-        "x": 2860,
-        "y": 1760
-      },
-      "data": {
-        "nodeType": "statement",
-        "config": {
-          "operation": "<"
-        },
-        "label": "u < t3?"
-      }
-    },
-    {
-      "id": "nmpayeg6dh1pr",
-      "type": "caNode",
-      "position": {
-        "x": 3080,
-        "y": 1760
-      },
-      "data": {
-        "nodeType": "valueSwitch",
-        "config": {
-          "_port_ifValue": "2",
-          "_port_elseValue": "3"
-        },
-        "label": "d: 2 else 3"
-      }
-    },
-    {
-      "id": "nmpayeg6dax86",
-      "type": "caNode",
-      "position": {
-        "x": 3080,
-        "y": 1600
-      },
-      "data": {
-        "nodeType": "valueSwitch",
-        "config": {
-          "_port_ifValue": "1"
-        },
-        "label": "d: 1 else vs2"
-      }
-    },
-    {
-      "id": "nmpayeg6dwcg5",
-      "type": "caNode",
-      "position": {
-        "x": 3080,
-        "y": 1440
-      },
-      "data": {
-        "nodeType": "valueSwitch",
-        "config": {
-          "_port_ifValue": "0"
-        },
-        "label": "d*"
-      }
-    },
-    {
-      "id": "nmpayeg6digm5",
-      "type": "caNode",
-      "position": {
-        "x": 3300,
         "y": 1440
       },
       "data": {
@@ -1577,84 +1182,24 @@
       }
     },
     {
-      "id": "nmpayeg6d7cmd",
-      "type": "caNode",
-      "position": {
-        "x": 1320,
-        "y": 0
-      },
-      "data": {
-        "nodeType": "sequence",
-        "config": {
-          "extraCount": 2
-        },
-        "label": "Move sequence"
-      }
-    },
-    {
-      "id": "nmpayeg6dilp6",
+      "id": "nmpbu56m8r1rx",
       "type": "caNode",
       "position": {
         "x": 1540,
         "y": 0
       },
       "data": {
-        "nodeType": "setNeighborAttributeByIndex",
+        "nodeType": "moveSelfToNeighbor",
         "config": {
-          "attributeId": "kind",
-          "_port_value": "0"
+          "payloadCount": 1,
+          "attr_0": "kind",
+          "transferOrientation": true
         },
-        "label": "Push kind → NI"
+        "label": "Move self → NI"
       }
     },
     {
-      "id": "nmpayeg6dpdkj",
-      "type": "caNode",
-      "position": {
-        "x": 1540,
-        "y": 80
-      },
-      "data": {
-        "nodeType": "setNeighborOrientationByIndex",
-        "config": {
-          "_port_value": "0"
-        },
-        "label": "Push ori → NI"
-      }
-    },
-    {
-      "id": "nmpayeg6dcbj9",
-      "type": "caNode",
-      "position": {
-        "x": 1540,
-        "y": 160
-      },
-      "data": {
-        "nodeType": "setAttribute",
-        "config": {
-          "attributeId": "kind",
-          "_port_value": "0"
-        },
-        "label": "My kind ← empty"
-      }
-    },
-    {
-      "id": "nmpayeg6dszu7",
-      "type": "caNode",
-      "position": {
-        "x": 1540,
-        "y": 240
-      },
-      "data": {
-        "nodeType": "setOrientation",
-        "config": {
-          "_port_value": "0"
-        },
-        "label": "My ori ← 0"
-      }
-    },
-    {
-      "id": "nmpayeg6dqdmy",
+      "id": "nmpbu56m8daf6",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -1667,7 +1212,7 @@
       }
     },
     {
-      "id": "nmpayeg6dbo79",
+      "id": "nmpbu56m8vnwk",
       "type": "caNode",
       "position": {
         "x": 1980,
@@ -1682,7 +1227,7 @@
       }
     },
     {
-      "id": "nmpayeg6duq9x",
+      "id": "nmpbu56m8sgd2",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -1694,7 +1239,7 @@
       }
     },
     {
-      "id": "nmpayeg6d164s",
+      "id": "nmpbu56m8k0qv",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -1710,7 +1255,7 @@
       }
     },
     {
-      "id": "nmpayeg6dujid",
+      "id": "nmpbu56m8c3jg",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -1726,7 +1271,7 @@
       }
     },
     {
-      "id": "nmpayeg6e6dwm",
+      "id": "nmpbu56m8xn4b",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -1743,7 +1288,7 @@
       }
     },
     {
-      "id": "nmpayeg6erbhu",
+      "id": "nmpbu56m8bj9m",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -1758,7 +1303,7 @@
       }
     },
     {
-      "id": "nmpayeg6efn92",
+      "id": "nmpbu56m84fua",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -1771,7 +1316,7 @@
       }
     },
     {
-      "id": "nmpayeg6evv5j",
+      "id": "nmpbu56m82eu8",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -1787,7 +1332,7 @@
       }
     },
     {
-      "id": "nmpayeg6esfvq",
+      "id": "nmpbu56m855eu",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -1805,7 +1350,7 @@
       }
     },
     {
-      "id": "nmpayeg6ej8t6",
+      "id": "nmpbu56m8ytaf",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -1820,7 +1365,7 @@
       }
     },
     {
-      "id": "nmpayeg6e587y",
+      "id": "nmpbu56m8a60i",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -1833,7 +1378,7 @@
       }
     },
     {
-      "id": "nmpayeg6erkwj",
+      "id": "nmpbu56m8btf5",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -1849,7 +1394,7 @@
       }
     },
     {
-      "id": "nmpayeg6ehfmj",
+      "id": "nmpbu56m8m4cw",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -1864,7 +1409,7 @@
       }
     },
     {
-      "id": "nmpayeg6eqzj7",
+      "id": "nmpbu56m85cpo",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -1879,7 +1424,7 @@
       }
     },
     {
-      "id": "nmpayeg6eq333",
+      "id": "nmpbu56m80u60",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -1893,7 +1438,7 @@
       }
     },
     {
-      "id": "nmpayeg6efie2",
+      "id": "nmpbu56m84xym",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -1909,7 +1454,7 @@
       }
     },
     {
-      "id": "nmpayeg6eyz5m",
+      "id": "nmpbu56m8ur91",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -1924,7 +1469,7 @@
       }
     },
     {
-      "id": "nmpayeg6ezpa9",
+      "id": "nmpbu56m8u7hz",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -1939,7 +1484,7 @@
       }
     },
     {
-      "id": "nmpayeg6eq6x4",
+      "id": "nmpbu56m8q39r",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -1953,7 +1498,7 @@
       }
     },
     {
-      "id": "nmpayeg6e0wao",
+      "id": "nmpbu56m8hxqe",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -1967,7 +1512,7 @@
       }
     },
     {
-      "id": "nmpayeg6etkvu",
+      "id": "nmpbu56m8um35",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -1979,7 +1524,7 @@
       }
     },
     {
-      "id": "nmpayeg6egpml",
+      "id": "nmpbu56m8pmxs",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -2001,7 +1546,7 @@
       }
     },
     {
-      "id": "nmpayeg6eqyrs",
+      "id": "nmpbu56m80wb6",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -2019,7 +1564,7 @@
       }
     },
     {
-      "id": "nmpayeg6emyfn",
+      "id": "nmpbu56m8sswo",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -2037,7 +1582,7 @@
       }
     },
     {
-      "id": "nmpayeg6e6jh5",
+      "id": "nmpbu56m8q10p",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -2063,7 +1608,7 @@
       }
     },
     {
-      "id": "nmpayeg6eim83",
+      "id": "nmpbu56m82r1b",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -2081,7 +1626,7 @@
       }
     },
     {
-      "id": "nmpayeg6emvms",
+      "id": "nmpbu56m8j229",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -2099,7 +1644,7 @@
       }
     },
     {
-      "id": "nmpayeg6e8ulp",
+      "id": "nmpbu56m8fj3m",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -2117,7 +1662,7 @@
       }
     },
     {
-      "id": "nmpayeg6ev30b",
+      "id": "nmpbu56m8xdp6",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -2133,1231 +1678,1097 @@
         },
         "label": "Head N → cyan"
       }
+    },
+    {
+      "id": "gmpbu56m9r0a0",
+      "type": "groupNode",
+      "position": {
+        "x": 630,
+        "y": 1060
+      },
+      "data": {
+        "label": "Direction N (north)",
+        "width": 1580,
+        "height": 280,
+        "nodeType": "group",
+        "config": {},
+        "groupColor": "#4a5878"
+      }
+    },
+    {
+      "id": "gmpbu56m9hn8o",
+      "type": "groupNode",
+      "position": {
+        "x": 630,
+        "y": 1300
+      },
+      "data": {
+        "label": "Direction E (east)",
+        "width": 1580,
+        "height": 280,
+        "nodeType": "group",
+        "config": {},
+        "groupColor": "#787250"
+      }
+    },
+    {
+      "id": "gmpbu56m9qqw0",
+      "type": "groupNode",
+      "position": {
+        "x": 630,
+        "y": 1540
+      },
+      "data": {
+        "label": "Direction S (south)",
+        "width": 1580,
+        "height": 280,
+        "nodeType": "group",
+        "config": {},
+        "groupColor": "#785a4a"
+      }
+    },
+    {
+      "id": "gmpbu56m9oklq",
+      "type": "groupNode",
+      "position": {
+        "x": 630,
+        "y": 1780
+      },
+      "data": {
+        "label": "Direction W (west)",
+        "width": 1580,
+        "height": 280,
+        "nodeType": "group",
+        "config": {},
+        "groupColor": "#5a4a78"
+      }
+    },
+    {
+      "id": "gmpbu56m9ahpn",
+      "type": "groupNode",
+      "position": {
+        "x": 190,
+        "y": 20
+      },
+      "data": {
+        "label": "Shared reads (this cell + array-of-4 neighbour kinds)",
+        "width": 260,
+        "height": 680,
+        "nodeType": "group",
+        "config": {},
+        "groupColor": "#4a6858"
+      }
+    },
+    {
+      "id": "gmpbu56m9br3h",
+      "type": "groupNode",
+      "position": {
+        "x": 1510,
+        "y": -60
+      },
+      "data": {
+        "label": "Move sequence (atomic push self → chosenNI, clear self)",
+        "width": 260,
+        "height": 200,
+        "nodeType": "group",
+        "config": {},
+        "groupColor": "#705038"
+      }
+    },
+    {
+      "id": "gmpbu56m9sp5i",
+      "type": "groupNode",
+      "position": {
+        "x": 1070,
+        "y": 2020
+      },
+      "data": {
+        "label": "Rotation pass (book §2.3.9 — free amphis rotate every step)",
+        "width": 1140,
+        "height": 200,
+        "nodeType": "group",
+        "config": {},
+        "groupColor": "#705038"
+      }
+    },
+    {
+      "id": "gmpbu56m9pix7",
+      "type": "groupNode",
+      "position": {
+        "x": -30,
+        "y": 2820
+      },
+      "data": {
+        "label": "Init Event — seed random water / amphi by density",
+        "width": 1580,
+        "height": 520,
+        "nodeType": "group",
+        "config": {},
+        "groupColor": "#406870"
+      }
+    },
+    {
+      "id": "gmpbu56m9ifsb",
+      "type": "groupNode",
+      "position": {
+        "x": -30,
+        "y": 3460
+      },
+      "data": {
+        "label": "Brush — paint amphi at cursor (random orientation)",
+        "width": 700,
+        "height": 360,
+        "nodeType": "group",
+        "config": {},
+        "groupColor": "#604070"
+      }
+    },
+    {
+      "id": "gmpbu56m91d3h",
+      "type": "groupNode",
+      "position": {
+        "x": -30,
+        "y": 3940
+      },
+      "data": {
+        "label": "Visualization — colour by kind + amphi orientation",
+        "width": 1580,
+        "height": 600,
+        "nodeType": "group",
+        "config": {},
+        "groupColor": "#586870"
+      }
     }
   ],
   "graphEdges": [
     {
-      "id": "empayeg6cqmvp",
-      "source": "nmpayeg6chriu",
-      "target": "nmpayeg6czmi0",
+      "id": "empbu56m84g48",
+      "source": "nmpbu56m70tfd",
+      "target": "nmpbu56m82nli",
       "sourceHandle": "output_value_indexes",
+      "targetHandle": "input_value_indexes"
+    },
+    {
+      "id": "empbu56m81w5d",
+      "source": "nmpbu56m7p87y",
+      "target": "nmpbu56m8oaft",
+      "sourceHandle": "output_value_indexes",
+      "targetHandle": "input_value_indexes"
+    },
+    {
+      "id": "empbu56m8qyxf",
+      "source": "nmpbu56m82nli",
+      "target": "nmpbu56m8v4so",
+      "sourceHandle": "output_value_values",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empayeg6cj5en",
-      "source": "nmpayeg6cb5z8",
-      "target": "nmpayeg6cck99",
-      "sourceHandle": "output_value_indexes",
-      "targetHandle": "input_value_array"
-    },
-    {
-      "id": "empayeg6c8yog",
-      "source": "nmpayeg6czmi0",
-      "target": "nmpayeg6c989d",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_index"
-    },
-    {
-      "id": "empayeg6cwfcg",
-      "source": "nmpayeg6ckuw2",
-      "target": "nmpayeg6cmpfl",
+      "id": "empbu56m8koav",
+      "source": "nmpbu56m8ol0h",
+      "target": "nmpbu56m8lbrt",
       "sourceHandle": "output_value_myFaceLabels",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empayeg6c7gb2",
-      "source": "nmpayeg6ckuw2",
-      "target": "nmpayeg6cmx8h",
-      "sourceHandle": "output_value_theirFaceLabels",
+      "id": "empbu56m8qyym",
+      "source": "nmpbu56m8oaft",
+      "target": "nmpbu56m8bccd",
+      "sourceHandle": "output_value_values",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empayeg6c3vh1",
-      "source": "nmpayeg6cmpfl",
-      "target": "nmpayeg6cg287",
+      "id": "empbu56m8vuam",
+      "source": "nmpbu56m8bccd",
+      "target": "nmpbu56m8mcws",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empbu56m8q0em",
+      "source": "nmpbu56m8akxl",
+      "target": "nmpbu56m8mcws",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empbu56m8khoy",
+      "source": "nmpbu56m8bccd",
+      "target": "nmpbu56m8urvo",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empbu56m8apuw",
+      "source": "nmpbu56m83kck",
+      "target": "nmpbu56m8urvo",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empbu56m88pdm",
+      "source": "nmpbu56m8urvo",
+      "target": "nmpbu56m8pcx4",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "empbu56m8xyw2",
+      "source": "nmpbu56m8mcws",
+      "target": "nmpbu56m8pcx4",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "empbu56m8ocdi",
+      "source": "nmpbu56m8lbrt",
+      "target": "nmpbu56m8habf",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_labelA"
     },
     {
-      "id": "empayeg6c9sir",
-      "source": "nmpayeg6cmx8h",
-      "target": "nmpayeg6cg287",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_labelB"
-    },
-    {
-      "id": "empayeg6cvidd",
-      "source": "nmpayeg6cck99",
-      "target": "nmpayeg6cyuzq",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_index"
-    },
-    {
-      "id": "empayeg6cus7z",
-      "source": "nmpayeg6cyuzq",
-      "target": "nmpayeg6cf1cq",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empayeg6cvko5",
-      "source": "nmpayeg6cpg75",
-      "target": "nmpayeg6cf1cq",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empayeg6c8hqd",
-      "source": "nmpayeg6cyuzq",
-      "target": "nmpayeg6c5wp8",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empayeg6c1ml5",
-      "source": "nmpayeg6c0ca3",
-      "target": "nmpayeg6c5wp8",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empayeg6c7ool",
-      "source": "nmpayeg6c5wp8",
-      "target": "nmpayeg6crpga",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empayeg6cqyhr",
-      "source": "nmpayeg6cf1cq",
-      "target": "nmpayeg6c4mmk",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empayeg6cn9ou",
-      "source": "nmpayeg6crpga",
-      "target": "nmpayeg6c4mmk",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_elseValue"
-    },
-    {
-      "id": "empayeg6c0527",
-      "source": "nmpayeg6cmpfl",
-      "target": "nmpayeg6cdbo7",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_labelA"
-    },
-    {
-      "id": "empayeg6cad9h",
-      "source": "nmpayeg6c4mmk",
-      "target": "nmpayeg6cdbo7",
+      "id": "empbu56m8q0qp",
+      "source": "nmpbu56m8pcx4",
+      "target": "nmpbu56m8habf",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_labelB"
     },
     {
-      "id": "empayeg6cofc8",
-      "source": "nmpayeg6c989d",
-      "target": "nmpayeg6c5ws0",
+      "id": "empbu56m83hgf",
+      "source": "nmpbu56m8v4so",
+      "target": "nmpbu56m8kw8x",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empayeg6c6783",
-      "source": "nmpayeg6cowbv",
-      "target": "nmpayeg6c5ws0",
+      "id": "empbu56m829rc",
+      "source": "nmpbu56m81n1o",
+      "target": "nmpbu56m8kw8x",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empayeg6czzwx",
-      "source": "nmpayeg6c5ws0",
-      "target": "nmpayeg6clse8",
+      "id": "empbu56m8zsg8",
+      "source": "nmpbu56m8kw8x",
+      "target": "nmpbu56m8gi80",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empayeg6crlts",
-      "source": "nmpayeg6cdbo7",
-      "target": "nmpayeg6clse8",
+      "id": "empbu56m88qdt",
+      "source": "nmpbu56m8habf",
+      "target": "nmpbu56m8gi80",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_ifValue"
     },
     {
-      "id": "empayeg6cjmel",
-      "source": "nmpayeg6chriu",
-      "target": "nmpayeg6czoyj",
-      "sourceHandle": "output_value_indexes",
+      "id": "empbu56m8cgqd",
+      "source": "nmpbu56m82nli",
+      "target": "nmpbu56m8fhvg",
+      "sourceHandle": "output_value_values",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empayeg6cywz8",
-      "source": "nmpayeg6cb5z8",
-      "target": "nmpayeg6c1jgv",
-      "sourceHandle": "output_value_indexes",
-      "targetHandle": "input_value_array"
-    },
-    {
-      "id": "empayeg6cqbwv",
-      "source": "nmpayeg6czoyj",
-      "target": "nmpayeg6c6m4f",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_index"
-    },
-    {
-      "id": "empayeg6czvsb",
-      "source": "nmpayeg6ckuw2",
-      "target": "nmpayeg6crepb",
+      "id": "empbu56m8x2w6",
+      "source": "nmpbu56m8ol0h",
+      "target": "nmpbu56m8chb1",
       "sourceHandle": "output_value_myFaceLabels",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empayeg6c0csa",
-      "source": "nmpayeg6ckuw2",
-      "target": "nmpayeg6cukr2",
-      "sourceHandle": "output_value_theirFaceLabels",
+      "id": "empbu56m87eq8",
+      "source": "nmpbu56m8oaft",
+      "target": "nmpbu56m8yzr6",
+      "sourceHandle": "output_value_values",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empayeg6chc3w",
-      "source": "nmpayeg6crepb",
-      "target": "nmpayeg6cz1io",
+      "id": "empbu56m8n67g",
+      "source": "nmpbu56m8yzr6",
+      "target": "nmpbu56m85dv5",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empbu56m8ylu3",
+      "source": "nmpbu56m8akxl",
+      "target": "nmpbu56m85dv5",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empbu56m8ww2u",
+      "source": "nmpbu56m8yzr6",
+      "target": "nmpbu56m8n9ft",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empbu56m8vcoo",
+      "source": "nmpbu56m83kck",
+      "target": "nmpbu56m8n9ft",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empbu56m8id9v",
+      "source": "nmpbu56m8n9ft",
+      "target": "nmpbu56m8d582",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "empbu56m87nak",
+      "source": "nmpbu56m85dv5",
+      "target": "nmpbu56m8d582",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "empbu56m8egm6",
+      "source": "nmpbu56m8chb1",
+      "target": "nmpbu56m8yl4x",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_labelA"
     },
     {
-      "id": "empayeg6cie0n",
-      "source": "nmpayeg6cukr2",
-      "target": "nmpayeg6cz1io",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_labelB"
-    },
-    {
-      "id": "empayeg6cnael",
-      "source": "nmpayeg6c1jgv",
-      "target": "nmpayeg6cm205",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_index"
-    },
-    {
-      "id": "empayeg6ceifw",
-      "source": "nmpayeg6cm205",
-      "target": "nmpayeg6crpt4",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empayeg6c8a22",
-      "source": "nmpayeg6cpg75",
-      "target": "nmpayeg6crpt4",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empayeg6col4l",
-      "source": "nmpayeg6cm205",
-      "target": "nmpayeg6c89dn",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empayeg6cop3n",
-      "source": "nmpayeg6c0ca3",
-      "target": "nmpayeg6c89dn",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empayeg6c8n1x",
-      "source": "nmpayeg6c89dn",
-      "target": "nmpayeg6c1unr",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empayeg6crgyg",
-      "source": "nmpayeg6crpt4",
-      "target": "nmpayeg6c9pm1",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empayeg6cosjd",
-      "source": "nmpayeg6c1unr",
-      "target": "nmpayeg6c9pm1",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_elseValue"
-    },
-    {
-      "id": "empayeg6c5rdz",
-      "source": "nmpayeg6crepb",
-      "target": "nmpayeg6cbnha",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_labelA"
-    },
-    {
-      "id": "empayeg6cbt87",
-      "source": "nmpayeg6c9pm1",
-      "target": "nmpayeg6cbnha",
+      "id": "empbu56m881o6",
+      "source": "nmpbu56m8d582",
+      "target": "nmpbu56m8yl4x",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_labelB"
     },
     {
-      "id": "empayeg6ckymf",
-      "source": "nmpayeg6c6m4f",
-      "target": "nmpayeg6ciujw",
+      "id": "empbu56m8zntb",
+      "source": "nmpbu56m8fhvg",
+      "target": "nmpbu56m84bip",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empayeg6cj48i",
-      "source": "nmpayeg6cowbv",
-      "target": "nmpayeg6ciujw",
+      "id": "empbu56m8300k",
+      "source": "nmpbu56m81n1o",
+      "target": "nmpbu56m84bip",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empayeg6ckfbe",
-      "source": "nmpayeg6ciujw",
-      "target": "nmpayeg6c7ghj",
+      "id": "empbu56m8cuo5",
+      "source": "nmpbu56m84bip",
+      "target": "nmpbu56m8eylr",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empayeg6cydld",
-      "source": "nmpayeg6cbnha",
-      "target": "nmpayeg6c7ghj",
+      "id": "empbu56m834vc",
+      "source": "nmpbu56m8yl4x",
+      "target": "nmpbu56m8eylr",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_ifValue"
     },
     {
-      "id": "empayeg6c3imo",
-      "source": "nmpayeg6chriu",
-      "target": "nmpayeg6cx7jf",
-      "sourceHandle": "output_value_indexes",
+      "id": "empbu56m8a9oo",
+      "source": "nmpbu56m82nli",
+      "target": "nmpbu56m8xztc",
+      "sourceHandle": "output_value_values",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empayeg6cww6g",
-      "source": "nmpayeg6cb5z8",
-      "target": "nmpayeg6c84pt",
-      "sourceHandle": "output_value_indexes",
-      "targetHandle": "input_value_array"
-    },
-    {
-      "id": "empayeg6cvnhw",
-      "source": "nmpayeg6cx7jf",
-      "target": "nmpayeg6c5yul",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_index"
-    },
-    {
-      "id": "empayeg6c10wh",
-      "source": "nmpayeg6ckuw2",
-      "target": "nmpayeg6c0nod",
+      "id": "empbu56m8r5ty",
+      "source": "nmpbu56m8ol0h",
+      "target": "nmpbu56m8gkqg",
       "sourceHandle": "output_value_myFaceLabels",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empayeg6cdec8",
-      "source": "nmpayeg6ckuw2",
-      "target": "nmpayeg6ch3e1",
-      "sourceHandle": "output_value_theirFaceLabels",
+      "id": "empbu56m85539",
+      "source": "nmpbu56m8oaft",
+      "target": "nmpbu56m82kkj",
+      "sourceHandle": "output_value_values",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empayeg6cc0s5",
-      "source": "nmpayeg6c0nod",
-      "target": "nmpayeg6cacul",
+      "id": "empbu56m890zl",
+      "source": "nmpbu56m82kkj",
+      "target": "nmpbu56m8stxs",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empbu56m8fyri",
+      "source": "nmpbu56m8akxl",
+      "target": "nmpbu56m8stxs",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empbu56m8qu2b",
+      "source": "nmpbu56m82kkj",
+      "target": "nmpbu56m8ccyl",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empbu56m84p2r",
+      "source": "nmpbu56m83kck",
+      "target": "nmpbu56m8ccyl",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empbu56m826t7",
+      "source": "nmpbu56m8ccyl",
+      "target": "nmpbu56m8yeck",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "empbu56m8aqq4",
+      "source": "nmpbu56m8stxs",
+      "target": "nmpbu56m8yeck",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "empbu56m80b2k",
+      "source": "nmpbu56m8gkqg",
+      "target": "nmpbu56m8cprn",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_labelA"
     },
     {
-      "id": "empayeg6db5r3",
-      "source": "nmpayeg6ch3e1",
-      "target": "nmpayeg6cacul",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_labelB"
-    },
-    {
-      "id": "empayeg6dqukf",
-      "source": "nmpayeg6c84pt",
-      "target": "nmpayeg6dxvva",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_index"
-    },
-    {
-      "id": "empayeg6dqvq7",
-      "source": "nmpayeg6dxvva",
-      "target": "nmpayeg6d5b05",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empayeg6dtniz",
-      "source": "nmpayeg6cpg75",
-      "target": "nmpayeg6d5b05",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empayeg6d7uat",
-      "source": "nmpayeg6dxvva",
-      "target": "nmpayeg6depcq",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empayeg6dp5vn",
-      "source": "nmpayeg6c0ca3",
-      "target": "nmpayeg6depcq",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empayeg6dj2e1",
-      "source": "nmpayeg6depcq",
-      "target": "nmpayeg6d4lzi",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empayeg6d33bx",
-      "source": "nmpayeg6d5b05",
-      "target": "nmpayeg6duv4v",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empayeg6d8tn9",
-      "source": "nmpayeg6d4lzi",
-      "target": "nmpayeg6duv4v",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_elseValue"
-    },
-    {
-      "id": "empayeg6dpa1r",
-      "source": "nmpayeg6c0nod",
-      "target": "nmpayeg6dtx33",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_labelA"
-    },
-    {
-      "id": "empayeg6d9zo2",
-      "source": "nmpayeg6duv4v",
-      "target": "nmpayeg6dtx33",
+      "id": "empbu56m8b92e",
+      "source": "nmpbu56m8yeck",
+      "target": "nmpbu56m8cprn",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_labelB"
     },
     {
-      "id": "empayeg6dg476",
-      "source": "nmpayeg6c5yul",
-      "target": "nmpayeg6dofr6",
+      "id": "empbu56m8ayu2",
+      "source": "nmpbu56m8xztc",
+      "target": "nmpbu56m8le50",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empayeg6dt632",
-      "source": "nmpayeg6cowbv",
-      "target": "nmpayeg6dofr6",
+      "id": "empbu56m83ffs",
+      "source": "nmpbu56m81n1o",
+      "target": "nmpbu56m8le50",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empayeg6dzmfd",
-      "source": "nmpayeg6dofr6",
-      "target": "nmpayeg6dw9zs",
+      "id": "empbu56m84kib",
+      "source": "nmpbu56m8le50",
+      "target": "nmpbu56m8efim",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empayeg6d755c",
-      "source": "nmpayeg6dtx33",
-      "target": "nmpayeg6dw9zs",
+      "id": "empbu56m8bo3l",
+      "source": "nmpbu56m8cprn",
+      "target": "nmpbu56m8efim",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_ifValue"
     },
     {
-      "id": "empayeg6dcot2",
-      "source": "nmpayeg6chriu",
-      "target": "nmpayeg6dggng",
-      "sourceHandle": "output_value_indexes",
+      "id": "empbu56m8ijjr",
+      "source": "nmpbu56m82nli",
+      "target": "nmpbu56m8dni8",
+      "sourceHandle": "output_value_values",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empayeg6di96l",
-      "source": "nmpayeg6cb5z8",
-      "target": "nmpayeg6dzfzy",
-      "sourceHandle": "output_value_indexes",
-      "targetHandle": "input_value_array"
-    },
-    {
-      "id": "empayeg6d07od",
-      "source": "nmpayeg6dggng",
-      "target": "nmpayeg6dyoum",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_index"
-    },
-    {
-      "id": "empayeg6ddiqv",
-      "source": "nmpayeg6ckuw2",
-      "target": "nmpayeg6dhdd7",
+      "id": "empbu56m89id3",
+      "source": "nmpbu56m8ol0h",
+      "target": "nmpbu56m8q4fk",
       "sourceHandle": "output_value_myFaceLabels",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empayeg6d2km9",
-      "source": "nmpayeg6ckuw2",
-      "target": "nmpayeg6dy132",
-      "sourceHandle": "output_value_theirFaceLabels",
+      "id": "empbu56m8stin",
+      "source": "nmpbu56m8oaft",
+      "target": "nmpbu56m8q0cm",
+      "sourceHandle": "output_value_values",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empayeg6djrzo",
-      "source": "nmpayeg6dhdd7",
-      "target": "nmpayeg6dgvac",
+      "id": "empbu56m8ozps",
+      "source": "nmpbu56m8q0cm",
+      "target": "nmpbu56m8b82p",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empbu56m87jjw",
+      "source": "nmpbu56m8akxl",
+      "target": "nmpbu56m8b82p",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empbu56m8asxk",
+      "source": "nmpbu56m8q0cm",
+      "target": "nmpbu56m83jmx",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empbu56m8rhji",
+      "source": "nmpbu56m83kck",
+      "target": "nmpbu56m83jmx",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empbu56m8awqv",
+      "source": "nmpbu56m83jmx",
+      "target": "nmpbu56m8bmy3",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "empbu56m84fpi",
+      "source": "nmpbu56m8b82p",
+      "target": "nmpbu56m8bmy3",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "empbu56m89mvn",
+      "source": "nmpbu56m8q4fk",
+      "target": "nmpbu56m808e8",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_labelA"
     },
     {
-      "id": "empayeg6dsytz",
-      "source": "nmpayeg6dy132",
-      "target": "nmpayeg6dgvac",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_labelB"
-    },
-    {
-      "id": "empayeg6dcb0e",
-      "source": "nmpayeg6dzfzy",
-      "target": "nmpayeg6divr5",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_index"
-    },
-    {
-      "id": "empayeg6dmf6a",
-      "source": "nmpayeg6divr5",
-      "target": "nmpayeg6dko8c",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empayeg6d7qxk",
-      "source": "nmpayeg6cpg75",
-      "target": "nmpayeg6dko8c",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empayeg6dw9bx",
-      "source": "nmpayeg6divr5",
-      "target": "nmpayeg6dy22f",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empayeg6dwhco",
-      "source": "nmpayeg6c0ca3",
-      "target": "nmpayeg6dy22f",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empayeg6dl9lu",
-      "source": "nmpayeg6dy22f",
-      "target": "nmpayeg6dbwef",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empayeg6dd1z3",
-      "source": "nmpayeg6dko8c",
-      "target": "nmpayeg6d1ovi",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empayeg6d7acp",
-      "source": "nmpayeg6dbwef",
-      "target": "nmpayeg6d1ovi",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_elseValue"
-    },
-    {
-      "id": "empayeg6dzyan",
-      "source": "nmpayeg6dhdd7",
-      "target": "nmpayeg6d003c",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_labelA"
-    },
-    {
-      "id": "empayeg6dhfp9",
-      "source": "nmpayeg6d1ovi",
-      "target": "nmpayeg6d003c",
+      "id": "empbu56m8642n",
+      "source": "nmpbu56m8bmy3",
+      "target": "nmpbu56m808e8",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_labelB"
     },
     {
-      "id": "empayeg6d6s9t",
-      "source": "nmpayeg6dyoum",
-      "target": "nmpayeg6dkxm6",
+      "id": "empbu56m8gq54",
+      "source": "nmpbu56m8dni8",
+      "target": "nmpbu56m817fp",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empayeg6dc6jf",
-      "source": "nmpayeg6cowbv",
-      "target": "nmpayeg6dkxm6",
+      "id": "empbu56m8vpkl",
+      "source": "nmpbu56m81n1o",
+      "target": "nmpbu56m817fp",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empayeg6d99wd",
-      "source": "nmpayeg6dkxm6",
-      "target": "nmpayeg6dokbt",
+      "id": "empbu56m8pkiy",
+      "source": "nmpbu56m817fp",
+      "target": "nmpbu56m88j12",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empayeg6dfsro",
-      "source": "nmpayeg6d003c",
-      "target": "nmpayeg6dokbt",
+      "id": "empbu56m8g067",
+      "source": "nmpbu56m808e8",
+      "target": "nmpbu56m88j12",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_ifValue"
     },
     {
-      "id": "empayeg6dw7kk",
-      "source": "nmpayeg6cg287",
-      "target": "nmpayeg6da1mg",
+      "id": "empbu56m87cj9",
+      "source": "nmpbu56m8ol0h",
+      "target": "nmpbu56m8ylwd",
+      "sourceHandle": "output_value_myFaceLabels",
+      "targetHandle": "input_value_myFaces"
+    },
+    {
+      "id": "empbu56m8zbib",
+      "source": "nmpbu56m8ol0h",
+      "target": "nmpbu56m8ylwd",
+      "sourceHandle": "output_value_theirFaceLabels",
+      "targetHandle": "input_value_theirFaces"
+    },
+    {
+      "id": "empbu56m8cvy2",
+      "source": "nmpbu56m8ylwd",
+      "target": "nmpbu56m81t6e",
+      "sourceHandle": "output_value_values",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "empbu56m8n9z8",
+      "source": "nmpbu56m8gi80",
+      "target": "nmpbu56m8nz8f",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empayeg6dz2id",
-      "source": "nmpayeg6cz1io",
-      "target": "nmpayeg6da1mg",
+      "id": "empbu56m8b3p6",
+      "source": "nmpbu56m8eylr",
+      "target": "nmpbu56m8nz8f",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empayeg6djt0c",
-      "source": "nmpayeg6cacul",
-      "target": "nmpayeg6da1mg",
+      "id": "empbu56m8fwmq",
+      "source": "nmpbu56m8efim",
+      "target": "nmpbu56m8nz8f",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empayeg6dasbl",
-      "source": "nmpayeg6dgvac",
-      "target": "nmpayeg6da1mg",
+      "id": "empbu56m8cio5",
+      "source": "nmpbu56m88j12",
+      "target": "nmpbu56m8nz8f",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empayeg6di2is",
-      "source": "nmpayeg6clse8",
-      "target": "nmpayeg6dv4xp",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_values"
-    },
-    {
-      "id": "empayeg6dvfye",
-      "source": "nmpayeg6c7ghj",
-      "target": "nmpayeg6dv4xp",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_values"
-    },
-    {
-      "id": "empayeg6d3hg1",
-      "source": "nmpayeg6dw9zs",
-      "target": "nmpayeg6dv4xp",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_values"
-    },
-    {
-      "id": "empayeg6d1bek",
-      "source": "nmpayeg6dokbt",
-      "target": "nmpayeg6dv4xp",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_values"
-    },
-    {
-      "id": "empayeg6dmkw7",
-      "source": "nmpayeg6chybl",
-      "target": "nmpayeg6dj0bo",
+      "id": "empbu56m8jvni",
+      "source": "nmpbu56m7ftkl",
+      "target": "nmpbu56m87dt5",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empayeg6d3hro",
-      "source": "nmpayeg6cpg75",
-      "target": "nmpayeg6dj0bo",
+      "id": "empbu56m8l41g",
+      "source": "nmpbu56m8akxl",
+      "target": "nmpbu56m87dt5",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empayeg6dl8op",
-      "source": "nmpayeg6c5ws0",
-      "target": "nmpayeg6dw1uw",
+      "id": "empbu56m8d2kq",
+      "source": "nmpbu56m8kw8x",
+      "target": "nmpbu56m8ehgz",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empayeg6d6tlh",
-      "source": "nmpayeg6ciujw",
-      "target": "nmpayeg6dw1uw",
+      "id": "empbu56m8z7vv",
+      "source": "nmpbu56m84bip",
+      "target": "nmpbu56m8ehgz",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empayeg6djbky",
-      "source": "nmpayeg6dofr6",
-      "target": "nmpayeg6dw1uw",
+      "id": "empbu56m8ld9f",
+      "source": "nmpbu56m8le50",
+      "target": "nmpbu56m8ehgz",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empayeg6dmhjv",
-      "source": "nmpayeg6dkxm6",
-      "target": "nmpayeg6dw1uw",
+      "id": "empbu56m8c71b",
+      "source": "nmpbu56m817fp",
+      "target": "nmpbu56m8ehgz",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empayeg6dvcne",
-      "source": "nmpayeg6dj0bo",
-      "target": "nmpayeg6d8kgt",
+      "id": "empbu56m87xmh",
+      "source": "nmpbu56m87dt5",
+      "target": "nmpbu56m8ijaz",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empayeg6dnvux",
-      "source": "nmpayeg6dw1uw",
-      "target": "nmpayeg6d8kgt",
+      "id": "empbu56m8bmtc",
+      "source": "nmpbu56m8ehgz",
+      "target": "nmpbu56m8ijaz",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empayeg6dqdeb",
-      "source": "nmpayeg6cqp0d",
-      "target": "nmpayeg6dz4f4",
+      "id": "empbu56m8anhs",
+      "source": "nmpbu56m7sihs",
+      "target": "nmpbu56m8x180",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "empayeg6dn3te",
-      "source": "nmpayeg6d9blz",
-      "target": "nmpayeg6dz4f4",
+      "id": "empbu56m89jol",
+      "source": "nmpbu56m89yh6",
+      "target": "nmpbu56m8x180",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "empayeg6d74e5",
-      "source": "nmpayeg6d8kgt",
-      "target": "nmpayeg6dx46m",
+      "id": "empbu56m8hdtn",
+      "source": "nmpbu56m8ijaz",
+      "target": "nmpbu56m8mqw2",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empayeg6desfu",
-      "source": "nmpayeg6dz4f4",
-      "target": "nmpayeg6dx46m",
+      "id": "empbu56m8mcaz",
+      "source": "nmpbu56m8x180",
+      "target": "nmpbu56m8mqw2",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_ifValue"
     },
     {
-      "id": "empayeg6d3mrd",
-      "source": "nmpayeg6cqp0d",
-      "target": "nmpayeg6dx46m",
+      "id": "empbu56m8s0uq",
+      "source": "nmpbu56m7sihs",
+      "target": "nmpbu56m8mqw2",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_elseValue"
     },
     {
-      "id": "empayeg6d2041",
-      "source": "nmpayeg6chybl",
-      "target": "nmpayeg6d8ej8",
+      "id": "empbu56m8ivoj",
+      "source": "nmpbu56m7ftkl",
+      "target": "nmpbu56m8ymx9",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empayeg6ddhdr",
-      "source": "nmpayeg6cowbv",
-      "target": "nmpayeg6d8ej8",
+      "id": "empbu56m821i9",
+      "source": "nmpbu56m81n1o",
+      "target": "nmpbu56m8ymx9",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empayeg6d1u3n",
-      "source": "nmpayeg6bqklp",
-      "target": "nmpayeg6da1c8",
+      "id": "empbu56m8b1o5",
+      "source": "nmpbu56m7wehx",
+      "target": "nmpbu56m8v535",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empayeg6d2a2m",
-      "source": "nmpayeg6d8ej8",
-      "target": "nmpayeg6da1c8",
+      "id": "empbu56m857ae",
+      "source": "nmpbu56m8ymx9",
+      "target": "nmpbu56m8v535",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empayeg6dv9fd",
-      "source": "nmpayeg6da1mg",
-      "target": "nmpayeg6dnvu6",
+      "id": "empbu56m87gsc",
+      "source": "nmpbu56m81t6e",
+      "target": "nmpbu56m87cri",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_probability"
     },
     {
-      "id": "empayeg6dzxkd",
-      "source": "nmpayeg6da1c8",
-      "target": "nmpayeg6dih35",
+      "id": "empbu56m89bbv",
+      "source": "nmpbu56m8v535",
+      "target": "nmpbu56m85059",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empayeg6dfabr",
-      "source": "nmpayeg6dnvu6",
-      "target": "nmpayeg6dih35",
+      "id": "empbu56m8cv6v",
+      "source": "nmpbu56m87cri",
+      "target": "nmpbu56m85059",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empayeg6dp5gv",
-      "source": "nmpayeg6dv4xp",
-      "target": "nmpayeg6d7uwl",
+      "id": "empbu56m8qjyo",
+      "source": "nmpbu56m8nz8f",
+      "target": "nmpbu56m82u1i",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empayeg6d9u0t",
-      "source": "nmpayeg6dih35",
-      "target": "nmpayeg6dl0hm",
+      "id": "empbu56m8ds91",
+      "source": "nmpbu56m85059",
+      "target": "nmpbu56m8rekp",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empayeg6dy20c",
-      "source": "nmpayeg6d7uwl",
-      "target": "nmpayeg6dl0hm",
+      "id": "empbu56m8ikuk",
+      "source": "nmpbu56m82u1i",
+      "target": "nmpbu56m8rekp",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empayeg6dsj99",
-      "source": "nmpayeg6dthpl",
-      "target": "nmpayeg6d1275",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_a"
-    },
-    {
-      "id": "empayeg6dtxid",
-      "source": "nmpayeg6dv4xp",
-      "target": "nmpayeg6d1275",
+      "id": "empbu56m8215l",
+      "source": "nmpbu56m8gi80",
+      "target": "nmpbu56m8f9nl",
       "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_b"
+      "targetHandle": "input_value_weights"
     },
     {
-      "id": "empayeg6d54mr",
-      "source": "nmpayeg6clse8",
-      "target": "nmpayeg6d2iw2",
+      "id": "empbu56m8dddc",
+      "source": "nmpbu56m8eylr",
+      "target": "nmpbu56m8f9nl",
       "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_a"
+      "targetHandle": "input_value_weights"
     },
     {
-      "id": "empayeg6di90v",
-      "source": "nmpayeg6c7ghj",
-      "target": "nmpayeg6d2iw2",
+      "id": "empbu56m8e20o",
+      "source": "nmpbu56m8efim",
+      "target": "nmpbu56m8f9nl",
       "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_b"
+      "targetHandle": "input_value_weights"
     },
     {
-      "id": "empayeg6d5buz",
-      "source": "nmpayeg6clse8",
-      "target": "nmpayeg6dtxyx",
+      "id": "empbu56m8t3vm",
+      "source": "nmpbu56m88j12",
+      "target": "nmpbu56m8f9nl",
       "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_a"
+      "targetHandle": "input_value_weights"
     },
     {
-      "id": "empayeg6drdip",
-      "source": "nmpayeg6c7ghj",
-      "target": "nmpayeg6dtxyx",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_b"
-    },
-    {
-      "id": "empayeg6djnzs",
-      "source": "nmpayeg6dw9zs",
-      "target": "nmpayeg6dtxyx",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_c"
-    },
-    {
-      "id": "empayeg6dcshp",
-      "source": "nmpayeg6d1275",
-      "target": "nmpayeg6dy0pe",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empayeg6dqywc",
-      "source": "nmpayeg6clse8",
-      "target": "nmpayeg6dy0pe",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empayeg6dnw3o",
-      "source": "nmpayeg6d1275",
-      "target": "nmpayeg6d2zia",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empayeg6dlhaj",
-      "source": "nmpayeg6d2iw2",
-      "target": "nmpayeg6d2zia",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empayeg6dqdbj",
-      "source": "nmpayeg6d1275",
-      "target": "nmpayeg6dniaj",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empayeg6d2qr2",
-      "source": "nmpayeg6dtxyx",
-      "target": "nmpayeg6dniaj",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empayeg6diyla",
-      "source": "nmpayeg6dniaj",
-      "target": "nmpayeg6dh1pr",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empayeg6dcr7z",
-      "source": "nmpayeg6d2zia",
-      "target": "nmpayeg6dax86",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empayeg6dc18v",
-      "source": "nmpayeg6dh1pr",
-      "target": "nmpayeg6dax86",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_elseValue"
-    },
-    {
-      "id": "empayeg6djm2p",
-      "source": "nmpayeg6dy0pe",
-      "target": "nmpayeg6dwcg5",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empayeg6dz91r",
-      "source": "nmpayeg6dax86",
-      "target": "nmpayeg6dwcg5",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_elseValue"
-    },
-    {
-      "id": "empayeg6dfppb",
-      "source": "nmpayeg6chriu",
-      "target": "nmpayeg6digm5",
+      "id": "empbu56m86x8r",
+      "source": "nmpbu56m70tfd",
+      "target": "nmpbu56m8ztvp",
       "sourceHandle": "output_value_indexes",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empayeg6dllfe",
-      "source": "nmpayeg6dwcg5",
-      "target": "nmpayeg6digm5",
-      "sourceHandle": "output_value_result",
+      "id": "empbu56m8ksyc",
+      "source": "nmpbu56m8f9nl",
+      "target": "nmpbu56m8ztvp",
+      "sourceHandle": "output_value_index",
       "targetHandle": "input_value_position"
     },
     {
-      "id": "empayeg6dgopu",
-      "source": "nmpayeg6dl0hm",
-      "target": "nmpayeg6d7cmd",
+      "id": "empbu56m82apn",
+      "source": "nmpbu56m8rekp",
+      "target": "nmpbu56m8r1rx",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empayeg6dv7q8",
-      "source": "nmpayeg6digm5",
-      "target": "nmpayeg6dilp6",
+      "id": "empbu56m84v6r",
+      "source": "nmpbu56m8ztvp",
+      "target": "nmpbu56m8r1rx",
       "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_index"
+      "targetHandle": "input_value_targetNI"
     },
     {
-      "id": "empayeg6dfbvp",
-      "source": "nmpayeg6chybl",
-      "target": "nmpayeg6dilp6",
+      "id": "empbu56m8qyt5",
+      "source": "nmpbu56m7ftkl",
+      "target": "nmpbu56m8r1rx",
       "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_value"
+      "targetHandle": "input_value_payload_0"
     },
     {
-      "id": "empayeg6d3a5t",
-      "source": "nmpayeg6d7cmd",
-      "target": "nmpayeg6dilp6",
-      "sourceHandle": "output_flow_first",
-      "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "empayeg6dexuy",
-      "source": "nmpayeg6digm5",
-      "target": "nmpayeg6dpdkj",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_index"
-    },
-    {
-      "id": "empayeg6di6ee",
-      "source": "nmpayeg6dx46m",
-      "target": "nmpayeg6dpdkj",
+      "id": "empbu56m89ogy",
+      "source": "nmpbu56m8mqw2",
+      "target": "nmpbu56m8r1rx",
       "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_value"
+      "targetHandle": "input_value_orientation"
     },
     {
-      "id": "empayeg6d30yo",
-      "source": "nmpayeg6d7cmd",
-      "target": "nmpayeg6dpdkj",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "empayeg6ddqcj",
-      "source": "nmpayeg6d7cmd",
-      "target": "nmpayeg6dcbj9",
-      "sourceHandle": "output_flow_then_2",
-      "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "empayeg6der23",
-      "source": "nmpayeg6d7cmd",
-      "target": "nmpayeg6dszu7",
-      "sourceHandle": "output_flow_then_3",
-      "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "empayeg6d39zl",
-      "source": "nmpayeg6bqklp",
-      "target": "nmpayeg6dqdmy",
+      "id": "empbu56m8vcq3",
+      "source": "nmpbu56m7wehx",
+      "target": "nmpbu56m8daf6",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empayeg6dicu7",
-      "source": "nmpayeg6d8kgt",
-      "target": "nmpayeg6dqdmy",
+      "id": "empbu56m80fps",
+      "source": "nmpbu56m8ijaz",
+      "target": "nmpbu56m8daf6",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empayeg6d9kpi",
-      "source": "nmpayeg6dqdmy",
-      "target": "nmpayeg6dbo79",
+      "id": "empbu56m8a8dt",
+      "source": "nmpbu56m8daf6",
+      "target": "nmpbu56m8vnwk",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empayeg6d1twv",
-      "source": "nmpayeg6dx46m",
-      "target": "nmpayeg6dbo79",
+      "id": "empbu56m8v446",
+      "source": "nmpbu56m8mqw2",
+      "target": "nmpbu56m8vnwk",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "empayeg6etddj",
-      "source": "nmpayeg6e6dwm",
-      "target": "nmpayeg6erbhu",
+      "id": "empbu56m8nqe0",
+      "source": "nmpbu56m8xn4b",
+      "target": "nmpbu56m8bj9m",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empayeg6ejc2b",
-      "source": "nmpayeg6d164s",
-      "target": "nmpayeg6erbhu",
+      "id": "empbu56m8z7o0",
+      "source": "nmpbu56m8k0qv",
+      "target": "nmpbu56m8bj9m",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empayeg6e8448",
-      "source": "nmpayeg6duq9x",
-      "target": "nmpayeg6efn92",
+      "id": "empbu56m8x6xy",
+      "source": "nmpbu56m8sgd2",
+      "target": "nmpbu56m84fua",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empayeg6e65gy",
-      "source": "nmpayeg6erbhu",
-      "target": "nmpayeg6efn92",
+      "id": "empbu56m8d7od",
+      "source": "nmpbu56m8bj9m",
+      "target": "nmpbu56m84fua",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empayeg6epibo",
-      "source": "nmpayeg6efn92",
-      "target": "nmpayeg6evv5j",
+      "id": "empbu56m8xpm2",
+      "source": "nmpbu56m84fua",
+      "target": "nmpbu56m82eu8",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empayeg6epbw4",
-      "source": "nmpayeg6d164s",
-      "target": "nmpayeg6esfvq",
+      "id": "empbu56m85lm4",
+      "source": "nmpbu56m8k0qv",
+      "target": "nmpbu56m855eu",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "empayeg6ee5cr",
-      "source": "nmpayeg6dujid",
-      "target": "nmpayeg6esfvq",
+      "id": "empbu56m8agwn",
+      "source": "nmpbu56m8c3jg",
+      "target": "nmpbu56m855eu",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "empayeg6e3be1",
-      "source": "nmpayeg6e6dwm",
-      "target": "nmpayeg6ej8t6",
+      "id": "empbu56m89ei6",
+      "source": "nmpbu56m8xn4b",
+      "target": "nmpbu56m8ytaf",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empayeg6evgtb",
-      "source": "nmpayeg6esfvq",
-      "target": "nmpayeg6ej8t6",
+      "id": "empbu56m8e3vw",
+      "source": "nmpbu56m855eu",
+      "target": "nmpbu56m8ytaf",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empayeg6eg8jc",
-      "source": "nmpayeg6efn92",
-      "target": "nmpayeg6e587y",
+      "id": "empbu56m8a0d1",
+      "source": "nmpbu56m84fua",
+      "target": "nmpbu56m8a60i",
       "sourceHandle": "output_flow_else",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empayeg6ex3cu",
-      "source": "nmpayeg6ej8t6",
-      "target": "nmpayeg6e587y",
+      "id": "empbu56m8obuf",
+      "source": "nmpbu56m8ytaf",
+      "target": "nmpbu56m8a60i",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empayeg6e17bv",
-      "source": "nmpayeg6e587y",
-      "target": "nmpayeg6erkwj",
+      "id": "empbu56m89x6m",
+      "source": "nmpbu56m8a60i",
+      "target": "nmpbu56m8btf5",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empayeg6e1k2k",
-      "source": "nmpayeg6duq9x",
-      "target": "nmpayeg6eqzj7",
+      "id": "empbu56m86ew1",
+      "source": "nmpbu56m8sgd2",
+      "target": "nmpbu56m85cpo",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empayeg6e2nci",
-      "source": "nmpayeg6ehfmj",
-      "target": "nmpayeg6eqzj7",
+      "id": "empbu56m86eo7",
+      "source": "nmpbu56m8m4cw",
+      "target": "nmpbu56m85cpo",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "empayeg6evg65",
-      "source": "nmpayeg6eq333",
-      "target": "nmpayeg6efie2",
+      "id": "empbu56m818cj",
+      "source": "nmpbu56m80u60",
+      "target": "nmpbu56m84xym",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empayeg6e5xa3",
-      "source": "nmpayeg6eq333",
-      "target": "nmpayeg6ezpa9",
+      "id": "empbu56m8v6v4",
+      "source": "nmpbu56m80u60",
+      "target": "nmpbu56m8u7hz",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empayeg6e9ef4",
-      "source": "nmpayeg6eyz5m",
-      "target": "nmpayeg6ezpa9",
+      "id": "empbu56m85t4e",
+      "source": "nmpbu56m8ur91",
+      "target": "nmpbu56m8u7hz",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "empayeg6ekxnq",
-      "source": "nmpayeg6eq6x4",
-      "target": "nmpayeg6egpml",
+      "id": "empbu56m8qwds",
+      "source": "nmpbu56m8q39r",
+      "target": "nmpbu56m8pmxs",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empayeg6er2bs",
-      "source": "nmpayeg6e0wao",
-      "target": "nmpayeg6egpml",
+      "id": "empbu56m8obxm",
+      "source": "nmpbu56m8hxqe",
+      "target": "nmpbu56m8pmxs",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "empayeg6e5km0",
-      "source": "nmpayeg6egpml",
-      "target": "nmpayeg6eqyrs",
+      "id": "empbu56m82zli",
+      "source": "nmpbu56m8pmxs",
+      "target": "nmpbu56m80wb6",
       "sourceHandle": "output_flow_case_0",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empayeg6e7kj1",
-      "source": "nmpayeg6egpml",
-      "target": "nmpayeg6emyfn",
+      "id": "empbu56m8np0i",
+      "source": "nmpbu56m8pmxs",
+      "target": "nmpbu56m8sswo",
       "sourceHandle": "output_flow_case_1",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empayeg6e6dyj",
-      "source": "nmpayeg6egpml",
-      "target": "nmpayeg6e6jh5",
+      "id": "empbu56m8c270",
+      "source": "nmpbu56m8pmxs",
+      "target": "nmpbu56m8q10p",
       "sourceHandle": "output_flow_case_2",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empayeg6e879j",
-      "source": "nmpayeg6etkvu",
-      "target": "nmpayeg6e6jh5",
+      "id": "empbu56m82qfr",
+      "source": "nmpbu56m8um35",
+      "target": "nmpbu56m8q10p",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "empayeg6ex5ox",
-      "source": "nmpayeg6e6jh5",
-      "target": "nmpayeg6eim83",
+      "id": "empbu56m8n17t",
+      "source": "nmpbu56m8q10p",
+      "target": "nmpbu56m82r1b",
       "sourceHandle": "output_flow_case_0",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empayeg6ex7hu",
-      "source": "nmpayeg6e6jh5",
-      "target": "nmpayeg6emvms",
+      "id": "empbu56m8bmop",
+      "source": "nmpbu56m8q10p",
+      "target": "nmpbu56m8j229",
       "sourceHandle": "output_flow_case_1",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empayeg6eclr8",
-      "source": "nmpayeg6e6jh5",
-      "target": "nmpayeg6e8ulp",
+      "id": "empbu56m8752x",
+      "source": "nmpbu56m8q10p",
+      "target": "nmpbu56m8fj3m",
       "sourceHandle": "output_flow_case_2",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empayeg6e91bl",
-      "source": "nmpayeg6e6jh5",
-      "target": "nmpayeg6ev30b",
+      "id": "empbu56m8uyk2",
+      "source": "nmpbu56m8q10p",
+      "target": "nmpbu56m8xdp6",
       "sourceHandle": "output_flow_case_3",
       "targetHandle": "input_flow_do"
     }
@@ -3365,7 +2776,7 @@
   "macroDefs": [],
   "presets": [
     {
-      "id": "preset_mpayeg6eicgp",
+      "id": "preset_mpbu56m99k2o",
       "name": "Book — Example 5.3 defaults",
       "description": "Kier, Seybold & Cheng (2005), Example 5.3 page 86 — the parameter set the book uses for its micelle-formation demonstration. Produces moderate micelles. NOT identical to any paper Table I set: notably J(W-W) = 1.70 (paper uses 1.0) and J(W-Y) = 2.0 / P_B(W-Y) = 0.20 (very polar head — the paper notes a *modestly* polar head gives larger micelles, so this is intentionally a sub-optimal demo).",
       "state": {
@@ -3428,7 +2839,7 @@
       "createdAt": 1747000000000
     },
     {
-      "id": "preset_mpayeg6e2hox",
+      "id": "preset_mpbu56m9px4h",
       "name": "Paper — Set 1 (S_y=3.7, strongest)",
       "description": "Kier 1996 Table I row 1 — strongest reported micelle formation (average cluster size S_y = 3.7). Very hydrophobic tail (P_B(X-X)=0.1, J(X-X)=4.0) + modestly polar head (P_B(W-Y)=0.7).",
       "state": {
@@ -3491,7 +2902,7 @@
       "createdAt": 1747000001000
     },
     {
-      "id": "preset_mpayeg6eiceb",
+      "id": "preset_mpbu56m9ht2r",
       "name": "Paper — Set 2 (S_y=3.4)",
       "description": "Kier 1996 Table I row 2. Differs from Set 1 in P_B(Y-Y) (0.5 vs 0.3) and J(W-Y) (0.6 vs 0.5). Y self-association reduces micelle size.",
       "state": {
@@ -3554,7 +2965,7 @@
       "createdAt": 1747000002000
     },
     {
-      "id": "preset_mpayeg6f54f8",
+      "id": "preset_mpbu56m9n5i2",
       "name": "Paper — Set 3 (S_y=2.7)",
       "description": "Kier 1996 Table I row 3. Very polar head (P_B(W-Y)=0.2) + strong tail-tail (P_B(X-X)=0.1). Smaller micelles than Set 1/2 — head loves water too much, so amphis prefer to disperse over forming clusters.",
       "state": {
@@ -3617,7 +3028,7 @@
       "createdAt": 1747000003000
     },
     {
-      "id": "preset_mpayeg6fztbg",
+      "id": "preset_mpbu56m9xask",
       "name": "Paper — Set 4 (S_y=2.3)",
       "description": "Kier 1996 Table I row 4. Same head as Set 3 (very polar, P_B(W-Y)=0.2) with weaker Y-Y self-association (P_B(Y-Y)=0.3).",
       "state": {
@@ -3680,7 +3091,7 @@
       "createdAt": 1747000004000
     },
     {
-      "id": "preset_mpayeg6fkjzl",
+      "id": "preset_mpbu56m9qigf",
       "name": "Paper — Set 5 (S_y=1.6)",
       "description": "Kier 1996 Table I row 5. Weaker tail-tail bond (P_B(X-X)=0.3, J(X-X)=1.0) + modestly polar head. Small micelles (~CMC threshold).",
       "state": {
@@ -3743,7 +3154,7 @@
       "createdAt": 1747000005000
     },
     {
-      "id": "preset_mpayeg6f1sai",
+      "id": "preset_mpbu56m9on5q",
       "name": "Paper — Set 6 (S_y=1.5)",
       "description": "Kier 1996 Table I row 6. Same as Set 5 but with stronger Y-Y (P_B(Y-Y)=0.6, J(Y-Y)=0.5).",
       "state": {
@@ -3806,7 +3217,7 @@
       "createdAt": 1747000006000
     },
     {
-      "id": "preset_mpayeg6fam9z",
+      "id": "preset_mpbu56m9syk8",
       "name": "Paper — Set 7 (S_y=1.5)",
       "description": "Kier 1996 Table I row 7. Very polar head + weak tail-tail. Small micelles — head-water affinity dominates.",
       "state": {
@@ -3869,7 +3280,7 @@
       "createdAt": 1747000007000
     },
     {
-      "id": "preset_mpayeg6fddpv",
+      "id": "preset_mpbu56m9q181",
       "name": "Paper — Set 8 (S_y=1.5, weakest)",
       "description": "Kier 1996 Table I row 8 — weakest micelles. Very polar head + weak tail-tail + strong Y-Y. No incentive for amphis to cluster.",
       "state": {

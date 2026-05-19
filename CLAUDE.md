@@ -682,6 +682,40 @@ All three compile targets run `canonicalizeAccessorEdges` from [accessorCSE.ts](
 
 ---
 
+## Chemistry Primitives (B.0 + B.1 + B.2 + B.3 nodes)
+
+Four additions on the `variegated_cells` branch that collapse the per-direction unroll typical of Kier-style chemistry CA models. Together they cut the Amphiphile example graph from 125 → 105 nodes (175 → 133 edges), and the high-level structure now mirrors the book's pseudocode for the move-into-empty rule.
+
+### B.0 — `cardinalsOnly` flag on `GetAllFacingLabels`
+Optional config (default false). When true, the node emits 4-slot N/E/S/W arrays (cardinal directions only) instead of the default 8-slot Moore arrays. Slot indexing collapses 0/2/4/6 → 0/1/2/3. The face-rotation arithmetic still uses the Moore slot for lookup, but the OUTPUT arrays are 4-wide. Per-target: JS allocates `Int32Array(4)`, WASM allocates `4 × I32`, WebGPU `array<i32, 4>`. UI checkbox in CaNode. Book §2.3.6 P_B product naturally fits this — it's defined over Von Neumann (4 cardinals) not full Moore.
+
+### B.1 — `InteractionTableMap` node
+Vectorised `LookupInteraction` over parallel face-label arrays. Inputs: `myFaces` + `theirFaces` (parallel int arrays — typically the two outputs of `GetAllFacingLabels` in cardinals-only mode). Output: `values` (float array, length = min of input lengths). Replaces N scalar `LookupInteraction` chains with one node + one per-cell loop. Pair with `Aggregate.product` for the book's `P_break = ∏ P_B(myFace, theirFace)` formula. Registered as an `ARRAY_NODE_EMITTER` on all three targets. `requirements: { variegated: true }`.
+
+### B.2 — `SampleArrayByWeight` node
+Cumulative-sum sampler. Input: `weights` (float array). Outputs: `index` (i32) + `weight` (float). Empty array OR sum-of-weights == 0 → `index = -1`. Always advances the shared RNG once (xorshift32 on JS/WASM, per-cell PCG on WebGPU) — parity with every other random-using node so branched control flow stays in step across targets. Numerical-safety fallback: if FP drift puts u >= sum, picks last index instead of returning -1. Multi-output (`index` + `weight` ports). Both compilers support BOTH single-array-source AND multi-source-scalars input (mirrors Aggregate's input handling) — needed because per-direction weights from per-direction `valueSwitch` nodes feed as multi-source isArray scalars, not a single array.
+
+### B.3 — `MoveSelfToNeighbor` node
+Flow node that packages the atomic chemistry move-into-vacancy idiom. Static ports: `do` (flow input), `targetNI` (NI value), `orientation` (value, only shown when `transferOrientation` config is true). Dynamic per-slot value inputs `payload_${i}` driven by `payloadCount` config + per-slot `attr_${i}` config (which cell attribute to transfer). Emits, per slot: `w_attr[targetCell] = payload` then `w_attr[idx] = attr.defaultValue` (clear self to schema default). If `transferOrientation`: pushes orientation to target + clears self to 0.
+
+Async-only (composes `setNeighborAttributeByIndex` writes which are async-only). WebGPU rejects via `detectWebGPUIncompatibilities`. Atomicity is intrinsic to SSA — payload values are snapshot at cell-top scope before any flow write fires, so the writes see the pre-move state even though the node executes them sequentially.
+
+Pre-resolve (`preResolveMoveNodes` in `compile.ts`) bakes each slot's attribute defaultValue into `_attr_${i}_default` config (string), normalising `'true'`/`'false'` → `'1'`/`'0'` for typed-array compatibility. WASM emit reads `attr.defaultValue` directly via `getAttr(ctx.layout, attrId)`.
+
+Dynamic-input port handling required adding edge-map iteration to BOTH the JS `compileFlowChain` and the WASM flow-input gathering (around the `flowEmitter()` dispatch). Previously only `def.ports` was iterated — Switch's `case_N_*` ports happened to be value-pre-emitted via a different path, but a leaf flow node like MoveSelfToNeighbor needs dynamic ports gathered into the `inputs` map. The pattern is now consistent across JS, WASM, and the sink analyzer.
+
+CaNode UI: list of attribute-slot rows with dropdown + `−` button, `+ Slot` button, `Transfer Orientation` checkbox. Replaces the 5-node Amphiphile move sequence (sequence + 4 setters) with 1 node.
+
+### Pre-resolve config injections (compile.ts)
+`interactionTableMap` joins `lookupInteraction` in the variegation pre-resolve pass that injects `_labelCount` into the node's config from `faceLabels.length + 1`. JS-target only; WASM/WebGPU read `ctx.layout.interactionTableLabelCount` directly.
+
+### Behavioural notes
+- SampleArrayByWeight always advances the RNG even on empty/zero-sum input. Models that relied on conditional RNG skipping would see different sequences — but no existing model uses this pattern (the node is new).
+- InteractionTableMap is pure (CSE-eligible per `accessorCSE.ts`'s purity rules — it has no RNG, indicator reads, or write side-effects). SampleArrayByWeight is impure (RNG). Both are filtered correctly by the existing accessor-CSE classification.
+- `interactionTableMap` on a sub-attribute source: untested. The scalar `lookupInteraction` doesn't handle sub-attributes either (interaction tables are typically full model-attribute lookups). If users need sub-attribute-aware variants, file follow-up.
+
+---
+
 ## Sub-Attributes (schema-level feature)
 
 A **sub-attribute** is a cell attribute that's "only well-defined" on cells whose parent (Tag or Boolean) cell attribute holds one of a chosen set of values. Wireworld's `charge` only makes sense on Wire / Pulsar / Switch cells; sub-attributes encode this in the schema so the compiler injects parent-check guards automatically, and the graph never has to wire up manual filter-by-type chains.
