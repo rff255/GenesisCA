@@ -725,15 +725,16 @@ CaNode UI: list of attribute-slot rows with dropdown + `−` button, `+ Slot` bu
 
 ---
 
-## Local Variables (schema-level feature, JS target only in v1)
+## Local Variables (schema-level feature, all three compile targets)
 
 **Local Variables** are per-cell mutable scratch storage referenced by id across the graph. They let the user write rules as imperative pseudocode — "declare a value here, mutate it in a loop, read it elsewhere" — bridging the gap between GenesisCA's pure-dataflow model and the imperative style most CA rules are written in (e.g. "for each direction d, weights[d] = compute(d); then sample by weights").
 
 ### Lifetime + storage
 
 - **Per-cell, per-step.** Each cell sees a fresh copy populated with `initialValue` at the start of its computation; mutations live only within that cell-step. No persistence across cells, no persistence across steps.
-- **Storage:** function-local in the compiled step. Array variables get ONE typed-array buffer allocated outside the cell loop (reused per cell) and refilled via `.fill(initialValue)` at cell-top. Scalar variables become per-cell `let _var_<id> = <init>;` declarations. The reset lines are injected into both sync and async-mode loop bodies right after the `_row`/`_col` decode.
-- **WASM / WebGPU:** rejected with explicit "JS-only in v1" messages in `detectWasmIncompatibilities` / `detectWebGPUIncompatibilities`. The worker falls back to the JS step. Per-target ports are a follow-up — the per-cell storage layout maps cleanly to WASM scratch (allocated at cell-top, offset saved in a function-local) and WGSL function-scope `var<function> X: array<T, N>`, but neither is wired yet.
+- **JS:** function-local in the compiled step. Array variables get ONE typed-array buffer allocated outside the cell loop (reused per cell) and refilled via `.fill(initialValue)` at cell-top. Scalar variables become per-cell `let _var_<id> = <init>;` declarations.
+- **WASM:** ctx.variableLocals maps each variable to a slot. Scalars get a WASM function-local (`F64` for float, `I32` otherwise). Arrays get a function-local holding a scratch offset that's bumped each cell at cell-top (storage lives in per-cell scratch — fresh allocation, then unrolled fill with the initial value). `emitVariableStorage()` runs once at function entry; `emitVariableReset()` runs at cell-top inside `emitBody`.
+- **WebGPU:** WGSL `var<function>` declarations at the top of every entry function (one shader invocation = one cell, so function scope is naturally per-cell). Scalars: `var<function> _var_X: T = init;`. Arrays: `var<function> _var_X: array<T, N>;` + unrolled init. WGSL types: i32 for bool/int/tag, f32 for float (no f64 in WGSL — same precision tradeoff as cell attrs).
 
 ### Schema (`Variable` in src/model/types.ts)
 
@@ -743,9 +744,9 @@ CaNode UI: list of attribute-slot rows with dropdown + `−` button, `+ Slot` bu
 
 ### Three new node types
 
-- **`getVariable`** (value): outputs the current value (scalar) OR the underlying typed array (array). Consumers iterate it like any other array source (Aggregate, GroupReduce, ArrayElement, ForEachInArray).
+- **`getVariable`** (value): outputs the current value (scalar) OR the underlying typed array (array). Consumers iterate it like any other array source (Aggregate, GroupReduce, ArrayElement, ForEachInArray). Registered in BOTH `VALUE_NODE_EMITTERS` and `ARRAY_NODE_EMITTERS` on WASM and WebGPU — the dispatcher picks the right path based on the consumer's input port; the emitter errors out if the variable's kind doesn't match the dispatch path. Also listed in `isArrayProducer` on both backends so array consumers route correctly.
 - **`setVariable`** (flow): assigns a value to a scalar variable. Validation rejects array variables (use SetArrayElement instead).
-- **`setArrayElement`** (flow): writes `variable[index] = value` for array variables. Out-of-range writes silently skip (typed-array native behaviour, but written explicitly via `if (index >= 0 && index < arr.length)` so the user can read the emitted code without surprise).
+- **`setArrayElement`** (flow): writes `variable[index] = value` for array variables. Out-of-range writes silently skip — bounds-checked at runtime on all three targets (JS `if (i >= 0 && i < arr.length)`, WASM via `i32` compares wrapped in `ifThen`, WGSL via `if (i >= 0 && i < N)`).
 
 ### Loop-invariance gotcha (critical)
 
