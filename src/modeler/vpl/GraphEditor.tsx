@@ -543,13 +543,19 @@ export function GraphEditorInner() {
       metaKey: boolean;
       handled: boolean;
       paneBounds: DOMRect | null;
-      selectedIds: Set<string>;
+      // Snapshot of node ids that were selected at gesture start. Needed for
+      // modifier-aware box-select (Shift adds to it, Ctrl/Meta subtracts).
+      preSelectedIds: Set<string>;
+      // What this gesture has currently applied to the selection state.
+      // Diff target for incremental change generation.
+      appliedIds: Set<string>;
     } | null = null;
 
-    // Compute current rect (pane-local coords), find intersecting non-group
-    // nodes, and push selection changes through RF's store. Mirrors the body
-    // of Pane.onPointerMove in @xyflow/react but reads coords from our own
-    // document-level pointermove so we don't need pointer capture.
+    // Compute the rect (pane-local coords), find intersecting non-group
+    // nodes, compose the desired final selection per modifier mode, then
+    // push the diff against `drag.appliedIds` through RF's store. Mirrors
+    // the body of Pane.onPointerMove in @xyflow/react but reads coords from
+    // our own document-level pointermove so we don't need pointer capture.
     const updateBoxSelect = (clientX: number, clientY: number) => {
       if (!drag?.paneBounds) return;
       const bounds = drag.paneBounds;
@@ -566,15 +572,32 @@ export function GraphEditorInner() {
         height: Math.abs(yLocal - startYLocal),
       };
       const state = rfStore.getState();
-      const inside = getNodesInside(state.nodeLookup, rect, state.transform, true, true)
-        .filter(n => n.type !== 'groupNode')
-        .map(n => n.id);
-      const nextIds = new Set(inside);
-      const prevIds = drag.selectedIds;
+      const boxIds = new Set(
+        getNodesInside(state.nodeLookup, rect, state.transform, true, true)
+          .filter(n => n.type !== 'groupNode')
+          .map(n => n.id),
+      );
+
+      // Compose the desired final selection per modifier mode.
+      let desired: Set<string>;
+      if (drag.shiftKey) {
+        // Shift: add boxed nodes to the pre-existing selection.
+        desired = new Set(drag.preSelectedIds);
+        for (const id of boxIds) desired.add(id);
+      } else if (drag.ctrlKey || drag.metaKey) {
+        // Ctrl/Meta: subtract boxed nodes from the pre-existing selection.
+        desired = new Set(drag.preSelectedIds);
+        for (const id of boxIds) desired.delete(id);
+      } else {
+        // Plain: replace selection with just the boxed nodes.
+        desired = boxIds;
+      }
+
+      const current = drag.appliedIds;
       const changes: Array<{ id: string; type: 'select'; selected: boolean }> = [];
-      for (const id of nextIds) if (!prevIds.has(id)) changes.push({ id, type: 'select', selected: true });
-      for (const id of prevIds) if (!nextIds.has(id)) changes.push({ id, type: 'select', selected: false });
-      drag.selectedIds = nextIds;
+      for (const id of desired) if (!current.has(id)) changes.push({ id, type: 'select', selected: true });
+      for (const id of current) if (!desired.has(id)) changes.push({ id, type: 'select', selected: false });
+      drag.appliedIds = desired;
       rfStore.setState({ userSelectionRect: rect, userSelectionActive: true });
       if (changes.length > 0) state.triggerNodeChanges(changes);
     };
@@ -588,8 +611,13 @@ export function GraphEditorInner() {
         drag.handled = true;
         const pane = wrapper.querySelector('.react-flow__pane') as HTMLElement | null;
         drag.paneBounds = pane?.getBoundingClientRect() ?? null;
-        // Reset existing selection so the box starts fresh (mirrors RF).
-        rfStore.getState().resetSelectedElements();
+        // Plain mode wipes the pre-existing selection so the box replaces
+        // it. Shift/Ctrl/Meta preserve it — preSelectedIds is the source of
+        // truth for those modes (see updateBoxSelect's `desired` calc).
+        if (!drag.shiftKey && !drag.ctrlKey && !drag.metaKey) {
+          rfStore.getState().resetSelectedElements();
+          drag.appliedIds = new Set();
+        }
       }
       // Stop the event before it reaches React's root listener / Pane's
       // synthetic onPointerMove. With userSelectionActive=true in the store,
@@ -651,6 +679,13 @@ export function GraphEditorInner() {
       // some RF/d3-drag path can otherwise select the group on pointerdown
       // even with dragHandle restricting drag-start to the header.
       boxFromGroupRef.current = true;
+      // Snapshot current selection so Shift / Ctrl / Meta can compose
+      // against it (read from the RF store's internal lookup so we see the
+      // freshest state, not the user-prop nodes which may lag a render).
+      const preSelectedIds = new Set<string>();
+      for (const [id, n] of rfStore.getState().nodeLookup) {
+        if (n.selected) preSelectedIds.add(id);
+      }
       drag = {
         groupId: groupEl.getAttribute('data-id') || '',
         startX: e.clientX,
@@ -661,15 +696,27 @@ export function GraphEditorInner() {
         metaKey: e.metaKey,
         handled: false,
         paneBounds: null,
-        selectedIds: new Set(),
+        preSelectedIds,
+        appliedIds: new Set(preSelectedIds),
       };
       document.addEventListener('pointermove', onMove, true);
       document.addEventListener('pointerup', onUp, true);
     };
 
-    wrapper.addEventListener('pointerdown', onDown, true);
+    // IMPORTANT: this listener lives on `document`, not on the editor
+    // wrapper. With Shift held, React Flow's `Pane.onPointerDownCapture`
+    // (a synthetic listener that fires from React's root delegation at
+    // <div id="root">) treats Shift as the selectionKey and intercepts the
+    // pointerdown — it calls setPointerCapture on the pane and starts a
+    // native RF box-select that includes the group via getSelectionChanges
+    // with mutateItem=true. An editor-wrapper listener is deeper than the
+    // React root in capture-phase order, so it fires too late. document is
+    // above the React root, so our listener fires first and the
+    // stopPropagation prevents React's root delegation from ever seeing the
+    // event.
+    document.addEventListener('pointerdown', onDown, true);
     return () => {
-      wrapper.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('pointerdown', onDown, true);
       document.removeEventListener('pointermove', onMove, true);
       document.removeEventListener('pointerup', onUp, true);
     };
