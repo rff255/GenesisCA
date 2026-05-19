@@ -184,7 +184,25 @@ interface WasmCompileCtx {
    *  bytecode position — which is implicitly inside the branch when the
    *  caller is inside an emitter.ifThen / ifThenElse / loop callback. */
   sinkAnalysis?: SinkAnalysisResult;
+  /** Local Variables — per-cell scratch storage keyed by variable id.
+   *  Scalar variables back to a WASM function-local. Array variables back
+   *  to a scratch slot whose offset is captured in a function-local at
+   *  cell-top (so the offset is stable across the cell's emit, while
+   *  the storage itself lives in per-cell scratch and gets reset to
+   *  initialValue every cell iteration). Populated by emitVariableStorage
+   *  + emitVariableReset; consumed by VALUE_NODE_EMITTERS['getVariable']
+   *  / FLOW_NODE_EMITTERS['setVariable'] / ['setArrayElement']. */
+  variableLocals: Map<string, VariableSlotWasm>;
 }
+
+/** WASM-side slot for a Local Variable. Scalar: function-local holding the
+ *  current value. Array: function-local holding the scratch offset (in
+ *  bytes from memory base) of the storage region; per-cell, this offset is
+ *  re-assigned by emitVariableReset, but stays constant within one cell's
+ *  emit so reads/writes see a consistent base. */
+type VariableSlotWasm =
+  | { kind: 'scalar'; localIdx: number; valtype: ValType; initLiteral: number }
+  | { kind: 'array'; offsetLocal: number; length: number; elemBytes: number; elemValtype: ValType; initLiteral: number };
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -192,6 +210,18 @@ interface WasmCompileCtx {
 
 function attrValType(t: string): ValType {
   return t === 'float' ? F64 : I32;
+}
+
+/** Parse a Variable's initialValue string into a numeric literal. Mirrors
+ *  `variableValueLiteralJS` in compiler/variable.ts — bools become 0/1,
+ *  numbers parse decimal, tag indices are already stringified ints. */
+function variableInitLiteralWasm(v: import('../../../../model/types').Variable): number {
+  const r = v.initialValue ?? '0';
+  if (v.dataType === 'bool') {
+    return (r === 'true' || r === '1') ? 1 : 0;
+  }
+  const n = Number(r);
+  return Number.isFinite(n) ? n : 0;
 }
 
 /** Wave A.6: emit code that pushes the cell index reached by applying NI
@@ -1382,6 +1412,25 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return storeResult(ctx.emitter, F64);
   },
 
+  // -- Local Variable read (scalar path). Array variables go through the
+  //    array-emitter path (ARRAY_NODE_EMITTERS['getVariable']) instead;
+  //    consumers with isArray inputs dispatch there automatically. */
+  getVariable: ({ node, ctx }) => {
+    const variableId = node.data.config.variableId as string;
+    const slot = ctx.variableLocals.get(variableId);
+    if (!slot) {
+      ctx.errors.push(`getVariable: unknown variable "${variableId}"`);
+      return null;
+    }
+    if (slot.kind !== 'scalar') {
+      // Scalar consumer wired to an array variable — emit a useful error.
+      // (Validation catches the inverse — Array consumer with scalar variable.)
+      ctx.errors.push(`getVariable: variable "${variableId}" is an array; wire to an isArray input or use ArrayElement to index it`);
+      return null;
+    }
+    return { localIdx: slot.localIdx, valtype: slot.valtype };
+  },
+
   // -- Neighbor by index (Wave A.6: packed NI inline access) --
   // Symmetric with setNeighborAttributeByIndex: guards INVALID_NI sentinel
   // (returned by pickRandomNeighbor on empty array, arrayElement on out-of-
@@ -2323,6 +2372,12 @@ function isArrayProducer(nodeType: string): boolean {
     case 'pickNRandomNeighbors':
     case 'getAllFacingLabels':
     case 'interactionTableMap':
+    // getVariable is dual-mode: scalar variables dispatch through the value
+    // path, array variables through the array path. Returning true here lets
+    // array consumers (Aggregate, GroupOperator, ForEachInArray, etc.) reach
+    // ARRAY_NODE_EMITTERS['getVariable']. The emitter throws an error if the
+    // referenced variable is actually a scalar.
+    case 'getVariable':
       return true;
     default:
       return false;
@@ -4247,6 +4302,37 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
   // freshly-allocated scratch array. Output length = min(myFaces.len,
   // theirFaces.len). Unknown tableId returns an empty array (parity with the
   // JS emit).
+  // Local Variable read (array path). For scalar variables, dispatch lands
+  // on VALUE_NODE_EMITTERS['getVariable'] instead — both registrations
+  // ensure that whichever input-port flavour the consumer expects gets the
+  // right return type. Builds an ArrayRef pointing at the variable's
+  // current per-cell scratch storage. The lenLocal is allocated once and
+  // re-used (length is a compile-time constant from the variable definition).
+  getVariable: ({ node, ctx }) => {
+    const variableId = node.data.config.variableId as string;
+    const slot = ctx.variableLocals.get(variableId);
+    if (!slot) {
+      ctx.errors.push(`getVariable (array): unknown variable "${variableId}"`);
+      return null;
+    }
+    if (slot.kind !== 'array') {
+      ctx.errors.push(`getVariable: variable "${variableId}" is a scalar; an array consumer needs an array-typed variable`);
+      return null;
+    }
+    // Materialise length as a function-local so the ArrayRef contract is
+    // satisfied (it expects lenLocal to be a localIdx, not a constant).
+    const lenLocal = ctx.emitter.allocLocal(I32);
+    ctx.emitter.i32Const(slot.length);
+    ctx.emitter.localSet(lenLocal);
+    return {
+      kind: 'array',
+      offsetLocal: slot.offsetLocal,
+      lenLocal,
+      elemValtype: slot.elemValtype,
+      elemBytes: slot.elemBytes,
+    };
+  },
+
   interactionTableMap: ({ node, ctx }) => {
     if (!ctx.layout.variegatedEnabled) {
       ctx.errors.push('interactionTableMap: variegated cells disabled');
@@ -4668,6 +4754,65 @@ function compileArrayNode(nodeId: string, ctx: WasmCompileCtx, portId?: string):
 // ---------------------------------------------------------------------------
 
 const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
+
+  // Write to a scalar Local Variable. Stores the (cast-to-variable-type)
+  // input value into the variable's function-local. Array variables use
+  // setArrayElement instead — validation rejects the mismatch upstream.
+  setVariable: ({ node, ctx, inputs }) => {
+    const variableId = node.data.config.variableId as string;
+    const slot = ctx.variableLocals.get(variableId);
+    if (!slot) { ctx.errors.push(`setVariable: unknown variable "${variableId}"`); return false; }
+    if (slot.kind !== 'scalar') {
+      ctx.errors.push(`setVariable: variable "${variableId}" is an array; use setArrayElement instead`);
+      return false;
+    }
+    const v = inputs['value'];
+    if (!v) { ctx.errors.push('setVariable: missing value input'); return false; }
+    pushValueAs(ctx.emitter, v, slot.valtype);
+    ctx.emitter.localSet(slot.localIdx);
+    return true;
+  },
+
+  // Write to an array Local Variable at a runtime-computed index. Bounds-
+  // checked at runtime via i32 compare — out-of-range writes silently skip
+  // (mirrors the JS emit's `if (index >= 0 && index < arr.length)`).
+  setArrayElement: ({ node, ctx, inputs }) => {
+    const variableId = node.data.config.variableId as string;
+    const slot = ctx.variableLocals.get(variableId);
+    if (!slot) { ctx.errors.push(`setArrayElement: unknown variable "${variableId}"`); return false; }
+    if (slot.kind !== 'array') {
+      ctx.errors.push(`setArrayElement: variable "${variableId}" is a scalar; use setVariable instead`);
+      return false;
+    }
+    const idxRef = inputs['index'];
+    const v = inputs['value'];
+    if (!idxRef) { ctx.errors.push('setArrayElement: missing index input'); return false; }
+    if (!v) { ctx.errors.push('setArrayElement: missing value input'); return false; }
+    const em = ctx.emitter;
+    // Stash idx as i32 local so we can both bounds-check and reuse for store.
+    const idxLocal = em.allocLocal(I32);
+    pushValueAs(em, idxRef, I32);
+    em.localSet(idxLocal);
+    // if (idx >= 0 && idx < length) { ... }
+    em.localGet(idxLocal); em.i32Const(0); em.op(OP_I32_GE_S);
+    em.localGet(idxLocal); em.i32Const(slot.length); em.op(OP_I32_LT_S);
+    em.op(OP_I32_AND);
+    em.ifThen(() => {
+      // Address = offsetLocal + idx * elemBytes
+      em.localGet(slot.offsetLocal);
+      em.localGet(idxLocal);
+      em.i32Const(slot.elemBytes);
+      em.op(OP_I32_MUL);
+      em.op(OP_I32_ADD);
+      // Value
+      pushValueAs(em, v, slot.elemValtype);
+      // Store
+      if (slot.elemValtype === F64) em.f64Store(0, 3);
+      else if (slot.elemBytes === 1) em.i32Store8(0, 0);
+      else em.i32Store(0, 2);
+    });
+    return true;
+  },
 
   setAttribute: ({ node, ctx, inputs }) => {
     const attrId = node.data.config.attributeId as string;
@@ -5936,6 +6081,7 @@ function compileEntry(
     loopInvariant,
     viewerLocals: new Map(),
     sinkAnalysis,
+    variableLocals: new Map(),
   };
 
   // Snapshot of value-local refs that are loop-invariant. Populated after the
@@ -5965,6 +6111,77 @@ function compileEntry(
   // iteration). Allocated upfront so emitBody can reference it via closure;
   // the actual value gets stored after invariant emission completes.
   const perCellScratchBase = emitter.allocLocal(I32);
+
+  // Local Variables — allocate function-locals for each variable in
+  // model.variables, register in ctx.variableLocals. Scalar variables get
+  // a single function-local for the value. Array variables get a
+  // function-local for the storage OFFSET; the storage itself is allocated
+  // from per-cell scratch at cell-top by emitVariableReset (the offset
+  // local is re-assigned each cell but stays stable within the cell's
+  // emit, so reads/writes via that offset address the current cell's slot).
+  const emitVariableStorage = () => {
+    for (const v of model.variables || []) {
+      const valtype: ValType = v.dataType === 'float' ? F64 : I32;
+      const elemBytes = v.dataType === 'float' ? 8 : v.dataType === 'bool' ? 1 : 4;
+      const initLit = variableInitLiteralWasm(v);
+      if (v.kind === 'scalar') {
+        const localIdx = emitter.allocLocal(valtype);
+        ctx.variableLocals.set(v.id, {
+          kind: 'scalar', localIdx, valtype, initLiteral: initLit,
+        });
+      } else {
+        const length = Math.max(1, Number(v.length) | 0) || 1;
+        const offsetLocal = emitter.allocLocal(I32);
+        ctx.variableLocals.set(v.id, {
+          kind: 'array', offsetLocal, length, elemBytes,
+          elemValtype: valtype, initLiteral: initLit,
+        });
+      }
+    }
+  };
+
+  // Per-cell reset. Scalars: re-assign to initLiteral. Arrays: allocate
+  // fresh scratch (advances scratchTopLocal), capture the new offset in
+  // the variable's offsetLocal, then write initLiteral to all N slots.
+  // Runs at cell-top, right after scratchTopLocal is reset to
+  // perCellScratchBase — so each cell starts with a clean variable state.
+  const emitVariableReset = () => {
+    for (const [, slot] of ctx.variableLocals) {
+      if (slot.kind === 'scalar') {
+        if (slot.valtype === F64) emitter.f64Const(slot.initLiteral);
+        else emitter.i32Const(slot.initLiteral | 0);
+        emitter.localSet(slot.localIdx);
+      } else {
+        // offsetLocal := scratchTop; scratchTop += length * elemBytes
+        emitter.localGet(scratchTopLocal);
+        emitter.localSet(slot.offsetLocal);
+        emitter.localGet(scratchTopLocal);
+        emitter.i32Const(slot.length * slot.elemBytes);
+        emitter.op(OP_I32_ADD);
+        emitter.localSet(scratchTopLocal);
+        // Fill: for (i = 0; i < length; i++) mem[offset + i*elemBytes] = init
+        // Unrolled for small N (typical chemistry: N=4). For larger arrays
+        // we'd want a loop, but a brief unroll keeps the bytecode trivial.
+        for (let i = 0; i < slot.length; i++) {
+          emitter.localGet(slot.offsetLocal);
+          if (i > 0) {
+            emitter.i32Const(i * slot.elemBytes);
+            emitter.op(OP_I32_ADD);
+          }
+          if (slot.elemValtype === F64) {
+            emitter.f64Const(slot.initLiteral);
+            emitter.f64Store(0, 3);
+          } else if (slot.elemBytes === 1) {
+            emitter.i32Const(slot.initLiteral | 0);
+            emitter.i32Store8(0, 0);
+          } else {
+            emitter.i32Const(slot.initLiteral | 0);
+            emitter.i32Store(0, 2);
+          }
+        }
+      }
+    }
+  };
 
   const emitBody = () => {
     // Reset per-cell caches and scratch pointer
@@ -6057,6 +6274,12 @@ function compileEntry(
         // Regular attr in loop entry: handled by emitBulkCopyLines (bulk memcpy).
       }
     }
+
+    // Reset Local Variables to their initial values + allocate fresh
+    // per-cell scratch for arrays. Must run BEFORE the cell's value/flow
+    // emissions so the user-visible "initial state" of each variable is
+    // initialValue at the start of every cell.
+    emitVariableReset();
 
     // Emit values whose LCA is CELL_TOP. Deeper-scoped values land at branch
     // entry in compileFlowChain. Loop-invariant values already cached via
@@ -6202,6 +6425,13 @@ function compileEntry(
       ctx.viewerLocals.set(mappingId, local);
     }
   };
+
+  // Allocate Local Variable function-locals upfront, BEFORE any code emits.
+  // The locals are referenced in emitBody (per-cell reset) and in
+  // VALUE_NODE_EMITTERS['getVariable'] / FLOW_NODE_EMITTERS['setVariable']
+  // / ['setArrayElement']. Storage is populated per-cell by emitVariableReset
+  // (called inside emitBody).
+  emitVariableStorage();
 
   if (opts.hasLoop) {
     if (opts.emitCopyLines && !layout.isAsync) {

@@ -676,11 +676,7 @@ const properties = {
   gridHeight: 40,
   maxIterations: 100000,
   tags: ['variegated cells', 'chemistry', 'self-organization', 'amphiphile', 'surfactant', 'micelle', 'movement', 'kier'],
-  // Tier D.4: Local Variables (used by the per-direction loop body's
-  // SetArrayElement + GetVariable on `weights`) are JS-only in v1 — the
-  // WASM/WebGPU emitters reject them, falling back to the JS step. Keep
-  // useWasm false to avoid the recompile-fallback round-trip noise.
-  useWasm: false,
+  useWasm: true,
   useWebGPU: false,
 };
 
