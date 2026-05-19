@@ -885,6 +885,8 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
       ctx.lines.push(`    }`);
       ctx.lines.push(`  }`);
     }
+    // Expose final length on the `count` scalar value port (mirrors filterNeighbors).
+    setCachedPort(ctx, node.id, 'count', { expr: out.lenName, type: 'i32' });
     return out;
   },
 
@@ -1503,6 +1505,18 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     if (cached) return cached;
     // Defensive fallback — current array emitter always caches `count`, but
     // if a future variant forgets, materialise from the array's len directly.
+    const ref: ValueRef = { expr: arr.lenName, type: 'i32' };
+    setCachedPort(c.ctx, c.node.id, 'count', ref);
+    return ref;
+  },
+
+  // joinNeighbors mirrors filterNeighbors: array emit fills `result` and caches
+  // `count`; this value-emitter entry lets scalar consumers reach the count.
+  joinNeighbors: (c) => {
+    const arr = compileArrayNode(c.ctx, c.node.id);
+    if (!arr) return null;
+    const cached = getCachedPort(c.ctx, c.node.id, 'count');
+    if (cached) return cached;
     const ref: ValueRef = { expr: arr.lenName, type: 'i32' };
     setCachedPort(c.ctx, c.node.id, 'count', ref);
     return ref;

@@ -1278,6 +1278,18 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return ref;
   },
 
+  // joinNeighbors mirrors filterNeighbors: array emit fills `result` and caches
+  // `count`; this value-emitter entry lets scalar consumers reach the count.
+  joinNeighbors: ({ node, ctx }) => {
+    const arr = compileArrayNode(node.id, ctx);
+    if (!arr) return null;
+    const cached = getCachedPort(ctx, node.id, 'count');
+    if (cached) return cached;
+    const ref: LocalRef = { localIdx: arr.lenLocal, valtype: I32 };
+    setCachedPort(ctx, node.id, 'count', ref);
+    return ref;
+  },
+
   // -- Random (xorshift32, similar to JS GetRandomNode) --
   getRandom: ({ node, ctx, inputs }) => {
     const t = (node.data.config.randomType as string) || 'float';
@@ -4109,6 +4121,10 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
         });
       });
     }
+    // Expose the final length on the `count` value port. Mirrors filterNeighbors —
+    // downstream scalar consumers read `_v<id>_count` directly without bouncing
+    // through `arrayLength`.
+    setCachedPort(ctx, node.id, 'count', { localIdx: outLenLocal, valtype: I32 });
     return { kind: 'array', offsetLocal: outOffsetLocal, lenLocal: outLenLocal, elemValtype: I32, elemBytes: 4 };
   },
 
@@ -5277,6 +5293,74 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
 
     if (indexArr) {
       // Loop over each element in the index array
+      const k = ctx.emitter.allocLocal(I32);
+      ctx.emitter.i32Const(0); ctx.emitter.localSet(k);
+      ctx.emitter.block(() => {
+        ctx.emitter.loop(() => {
+          ctx.emitter.localGet(k); ctx.emitter.localGet(indexArr!.lenLocal); ctx.emitter.op(OP_I32_GE_S); ctx.emitter.brIf(1);
+          writeOne(() => {
+            ctx.emitter.localGet(k);
+            emitArrayLoadElem(ctx.emitter, indexArr!);
+            if (indexArr!.elemValtype === F64) ctx.emitter.f64ToI32();
+          });
+          ctx.emitter.localGet(k); ctx.emitter.i32Const(1); ctx.emitter.op(OP_I32_ADD); ctx.emitter.localSet(k);
+          ctx.emitter.br(0);
+        });
+      });
+    } else {
+      const indexRef = inputs['index'] ?? { inline: true, value: 0, valtype: I32 };
+      writeOne(() => pushValueAs(ctx.emitter, indexRef, I32));
+    }
+    return true;
+  },
+
+  // -- markCellUpdated (async-only): writes 1 into `_skipped[cellIdx]` for
+  //    one or more neighbours via packed NIs. The async cell loop reads this
+  //    flag at the top of each iteration via `i32.load8_u` at the same offset
+  //    and `br`s past the body when set. Mirrors setNeighborAttributeByIndex's
+  //    scalar+array branching + INVALID_NI / boundary-sentinel guards.
+  markCellUpdated: ({ node, ctx, inputs }) => {
+    if (!ctx.layout.isAsync) {
+      ctx.errors.push(`markCellUpdated: requires asynchronous update mode`);
+      return false;
+    }
+
+    const indexSrc = ctx.inputToSource.get(`${node.id}:index`);
+    let indexArr: ArrayRef | null = null;
+    if (indexSrc) {
+      const srcNode = ctx.nodeMap.get(indexSrc.nodeId);
+      if (srcNode && isArrayProducer(srcNode.data.nodeType)) {
+        indexArr = compileArrayNode(indexSrc.nodeId, ctx, indexSrc.portId);
+      }
+    }
+
+    const writeOne = (pushNi: () => void) => {
+      const niLocal = ctx.emitter.allocLocal(I32);
+      pushNi();
+      ctx.emitter.localSet(niLocal);
+      // Guard: skip INVALID_NI
+      ctx.emitter.localGet(niLocal);
+      ctx.emitter.i32Const(INVALID_NI);
+      ctx.emitter.op(OP_I32_EQ);
+      ctx.emitter.op(OP_I32_EQZ);
+      ctx.emitter.ifThen(() => {
+        const nbrCellLocal = ctx.emitter.allocLocal(I32);
+        pushNiCellIdx(ctx, niLocal);
+        ctx.emitter.localSet(nbrCellLocal);
+        // Guard: skip the boundary-sentinel cell (>= total)
+        ctx.emitter.localGet(nbrCellLocal);
+        ctx.emitter.localGet(0); // total param
+        ctx.emitter.op(OP_I32_LT_S);
+        ctx.emitter.ifThen(() => {
+          // _skipped[nbrCell] = 1  — one byte per cell, no multiply needed.
+          ctx.emitter.localGet(nbrCellLocal);
+          ctx.emitter.i32Const(1);
+          ctx.emitter.i32Store8(ctx.layout.skippedOffset, 0);
+        });
+      });
+    };
+
+    if (indexArr) {
       const k = ctx.emitter.allocLocal(I32);
       ctx.emitter.i32Const(0); ctx.emitter.localSet(k);
       ctx.emitter.block(() => {
@@ -6540,6 +6624,22 @@ function compileEntry(
           emitter.op(OP_I32_MUL);
           emitter.i32Load(layout.orderOffset, 2);
           emitter.localSet(iLocal);
+
+          // Mark Cell Updated: if `_skipped[i] != 0`, advance the outer counter
+          // and continue to the next iteration without running the body. JS
+          // mirror is `if (_skipped[idx] !== 0) continue;` at the top of the
+          // async loop. `br 1` inside the `ifThen` re-enters the loop (skipping
+          // the body + the post-body increment), so increment outerCounter
+          // here first.
+          emitter.localGet(iLocal);
+          emitter.i32Load8U(layout.skippedOffset, 0);
+          emitter.ifThen(() => {
+            emitter.localGet(outerCounter);
+            emitter.i32Const(1);
+            emitter.op(OP_I32_ADD);
+            emitter.localSet(outerCounter);
+            emitter.br(1); // continue loop
+          });
         } else {
           emitter.localGet(outerCounter);
           emitter.localSet(iLocal);

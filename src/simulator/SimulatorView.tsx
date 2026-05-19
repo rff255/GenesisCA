@@ -3414,6 +3414,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                     key={m.id}
                     className={`${styles.viewerTab} ${activeViewer === m.id ? styles.viewerTabActive : ''}`}
                     onClick={() => setActiveViewer(m.id)}
+                    title={m.description || undefined}
                   >
                     {m.name}
                   </button>
@@ -3615,6 +3616,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                   key={m.id}
                   className={`${styles.mappingTab} ${brushMapping === m.id ? styles.mappingTabActive : ''}`}
                   onClick={() => setBrushMapping(m.id)}
+                  title={m.description || undefined}
                 >
                   {m.name}
                 </button>

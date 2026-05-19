@@ -66,9 +66,11 @@ function isMultiOutput(data: { nodeType: string; config: Record<string, string |
   if (data.nodeType === 'getModelAttribute' && data.config.isColorAttr) return true;
   if (data.nodeType === 'groupStatement' || data.nodeType === 'groupCounting'
     || data.nodeType === 'groupOperator') return true;
-  // filterNeighbors exposes the kept array (`result`) and its length (`count`)
-  // — varName resolves both via the `_v<id>_<port>` convention.
+  // filterNeighbors and joinNeighbors expose `result` (kept NI array) and
+  // `count` (its length) — varName resolves both via the `_v<id>_<port>`
+  // convention.
   if (data.nodeType === 'filterNeighbors') return true;
+  if (data.nodeType === 'joinNeighbors') return true;
   return false;
 }
 
@@ -531,13 +533,9 @@ function compileRoot(
     if (sourceNode?.data.nodeType === 'interactionTableMap') {
       return `_v${sourceNodeId}_vals`;
     }
-    // FilterNeighbors is multi-output (result + count) — caught by the
-    // isMultiOutput branch above; both ports resolve via `_v<id>_<port>`.
-    // JoinNeighbors intersection uses _v{id}_result scratch array; union uses _v{id} (default)
-    if (sourceNode?.data.nodeType === 'joinNeighbors'
-      && ((sourceNode.data.config.operation as string) || 'intersection') === 'intersection') {
-      return `_v${sourceNodeId}_result`;
-    }
+    // FilterNeighbors and JoinNeighbors are multi-output (result + count) —
+    // caught by the isMultiOutput branch above; both ports resolve via
+    // `_v<id>_<port>`.
     // ForEachInArray exposes the per-iteration element via the 'element' output port.
     // Inside the body chain, references resolve to _v{id}_element (declared at the top
     // of each iteration in compileFlowChain). Outside the body, references would be
@@ -670,7 +668,7 @@ function compileRoot(
       if (nt === 'filterNeighbors') {
         scratchNodes.push({ scratchVarName: `${prefix}_v${innerNodeId}_result`, initExpr: '[]' });
       }
-      if (nt === 'joinNeighbors' && (iNode.data.config.operation as string || 'intersection') === 'intersection') {
+      if (nt === 'joinNeighbors') {
         scratchNodes.push({ scratchVarName: `${prefix}_v${innerNodeId}_result`, initExpr: '[]' });
       }
 
@@ -825,7 +823,7 @@ function compileRoot(
       if (nt === 'filterNeighbors') {
         scratchNodes.push({ scratchVarName: `${nestedPrefix}_v${nid}_result`, initExpr: '[]' });
       }
-      if (nt === 'joinNeighbors' && (iNode.data.config.operation as string || 'intersection') === 'intersection') {
+      if (nt === 'joinNeighbors') {
         scratchNodes.push({ scratchVarName: `${nestedPrefix}_v${nid}_result`, initExpr: '[]' });
       }
       const iInputVars: Record<string, string> = {};
@@ -991,7 +989,7 @@ function compileRoot(
     if (node.data.nodeType === 'filterNeighbors') {
       scratchNodes.push({ scratchVarName: `_v${nodeId}_result`, initExpr: '[]' });
     }
-    if (node.data.nodeType === 'joinNeighbors' && (node.data.config.operation as string || 'intersection') === 'intersection') {
+    if (node.data.nodeType === 'joinNeighbors') {
       scratchNodes.push({ scratchVarName: `_v${nodeId}_result`, initExpr: '[]' });
     }
     if (node.data.nodeType === 'pickNRandomNeighbors') {
@@ -1547,7 +1545,9 @@ function buildLoopParams(model: CAModel): {
   // the worker's buildLoopArgs (in sim.worker.ts) and this signature stay
   // in lockstep. `order` is always last for async mode.
   if (variegated) parts.push('r_orientation', 'w_orientation', '_facePatternLookup', '_interactionTables');
-  if (isAsync) parts.push('order');
+  // Async-only: per-cell Uint8Array, set by `markCellUpdated` and tested at
+  // the top of every cell iteration. Worker resets it before each step.
+  if (isAsync) parts.push('order', '_skipped');
 
   return { params: parts.join(', '), cellAttrs, neighborhoods };
 }
@@ -2043,6 +2043,9 @@ export function compileGraph(
         '  let _rs = _rngState[0] || 0x12345678;',
         '  for (let _i = 0; _i < total; _i++) {',
         '    const idx = order[_i];',
+        // Mark Cell Updated: skip cells flagged by an earlier iteration's rule.
+        // Flag is cleared each step by the worker before the loop runs.
+        '    if (_skipped[idx] !== 0) continue;',
         '    const colorIdx = idx * 4;',
         // Wave A.6: per-cell (row, col) decoded from idx — used by NI access
         // helpers (filterNeighbors, get/setNeighborAttributeByIndex, etc.).
