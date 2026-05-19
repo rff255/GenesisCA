@@ -83,7 +83,7 @@ const NEVER_INVARIANT = new Set<string>([
   // emit the read ONCE at function scope BEFORE the cell loop runs and
   // ANY writes happen — the consumer would see the variable's initial
   // value (or worse, the previous cell's leftover value) instead of the
-  // current cell's state. Forrest applies to every consumer that depends
+  // current cell's state. This propagates through every consumer that depends
   // on GetVariable via the composite rule, so the whole post-loop chain
   // (Aggregate / GroupOperator / ArrayElement on the variable's value)
   // also lands inside the loop body.
