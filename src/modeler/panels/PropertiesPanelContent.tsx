@@ -5,7 +5,6 @@ import type {
   EndConditions, EndConditionOp, IndicatorEndCondition,
 } from '../../model/types';
 import { IndicatorsPanelSection } from './IndicatorsPanelSection';
-import { VariablesPanelSection } from './VariablesPanelSection';
 import { useListReorder } from './useListReorder';
 import styles from './PanelContent.module.css';
 
@@ -663,7 +662,6 @@ export function PropertiesPanelContent() {
       </div>
 
       <IndicatorsPanelSection />
-      <VariablesPanelSection />
     </div>
   );
 }

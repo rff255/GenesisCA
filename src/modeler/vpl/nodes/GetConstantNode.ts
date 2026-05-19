@@ -3,7 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const GetConstantNode: NodeTypeDef = {
   type: 'getConstant',
   label: 'Get Constant',
-  description: 'Emits a fixed value. Type selector picks the domain: bool, integer, float, tag, or orientation (0/90/180/270 with the directional picker).',
+  description: 'Emits a fixed value. Type selector picks the domain: bool, integer, float, tag, orientation (0/90/180/270 with the directional picker), or face label (Variegated models only — emits the integer index of the named face label).',
   category: 'data',
   color: '#b71c1c',
   ports: [
@@ -24,6 +24,13 @@ export const GetConstantNode: NodeTypeDef = {
       // so a misconfigured node still emits a valid orientation value.
       const n = parseInt(raw, 10);
       value = String(Number.isFinite(n) && n >= 0 && n <= 3 ? n : 0);
+    } else if (type === 'faceLabel') {
+      // Face label index pre-resolved by compile.ts::preResolveVariegatedNodes
+      // from the configured face-label NAME against model.variegatedCells.faceLabels.
+      // Implicit 'none' = 0; user labels start at 1. Unresolved (variegation off
+      // or unknown label) emits -1 as a sentinel.
+      const idx = parseInt(String(config._resolvedFaceLabelIndex ?? -1), 10);
+      value = String(Number.isFinite(idx) ? idx : -1);
     } else {
       value = String(parseInt(raw, 10) || 0);
     }

@@ -225,11 +225,17 @@ export function detectMissingConfig(
           const attr = model.attributes.find(a => a.id === config.tagAttributeId);
           if (attr && attr.type !== 'tag') issues.push('Selected attribute is not a tag type');
         }
+      } else if (config.constType === 'faceLabel') {
+        if (!model.variegatedCells?.enabled) {
+          issues.push('Face Label requires Variegated Cells enabled');
+        } else {
+          const labels = model.variegatedCells?.faceLabels ?? [];
+          const name = String(config.constValue ?? 'none');
+          if (name !== 'none' && !labels.includes(name)) {
+            issues.push(`Face label "${name}" not in this model's face labels`);
+          }
+        }
       }
-      break;
-
-    case 'tagConstant':
-      if (!hasAnyAttr(config.tagAttributeId)) issues.push('Select a tag attribute');
       break;
 
     case 'expression': {

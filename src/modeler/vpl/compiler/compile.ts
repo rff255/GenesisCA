@@ -1881,6 +1881,24 @@ export function compileGraph(
       if (node.data.nodeType === 'interactionTableMap') {
         node.data.config._labelCount = variegatedLabelCount;
       }
+      if (node.data.nodeType === 'getConstant' && node.data.config.constType === 'faceLabel') {
+        // Resolve face-label NAME to its compile-time index. Implicit 'none' is 0;
+        // user labels start at 1 (1-based into faceLabels[]). Unresolved cases
+        // (variegation off, blank, or unknown label) emit -1 as a sentinel so
+        // the consumer can detect misconfiguration.
+        const raw = String(node.data.config.constValue ?? 'none');
+        let idx: number;
+        if (!variegationOn) {
+          idx = -1;
+        } else if (raw === 'none') {
+          idx = 0;
+        } else {
+          const labels = model!.variegatedCells?.faceLabels ?? [];
+          const i = labels.indexOf(raw);
+          idx = i >= 0 ? i + 1 : -1;
+        }
+        node.data.config._resolvedFaceLabelIndex = idx;
+      }
     }
   }
 

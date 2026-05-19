@@ -1062,79 +1062,105 @@ function CaNodeComponent({ id, data }: NodeProps) {
           </select>
         )}
 
-        {nodeData.nodeType === 'getConstant' && (
-          <>
-            <select
-              className={styles.select}
-              value={(nodeData.config.constType as string) || 'integer'}
-              onChange={e => updateConfig('constType', e.target.value)}
-            >
-              <option value="bool">Bool</option>
-              <option value="integer">Integer</option>
-              <option value="float">Float</option>
-              <option value="tag">Tag</option>
-              <option value="orientation">Orientation</option>
-            </select>
-            {nodeData.config.constType === 'bool' ? (
+        {nodeData.nodeType === 'getConstant' && (() => {
+          const variegated = !!model.variegatedCells?.enabled;
+          const faceLabels = model.variegatedCells?.faceLabels ?? [];
+          return (
+            <>
               <select
                 className={styles.select}
-                value={String(nodeData.config.constValue) === 'true' ? 'true' : 'false'}
-                onChange={e => updateConfig('constValue', e.target.value)}
+                value={(nodeData.config.constType as string) || 'integer'}
+                onChange={e => {
+                  // Reset constValue when switching to faceLabel so the picker
+                  // starts on a valid option (the implicit 'none').
+                  if (e.target.value === 'faceLabel') {
+                    const newConfig = { ...nodeData.config, constType: 'faceLabel', constValue: 'none' };
+                    updateNodeData(id, { ...nodeData, config: newConfig });
+                  } else {
+                    updateConfig('constType', e.target.value);
+                  }
+                }}
               >
-                <option value="true">true</option>
-                <option value="false">false</option>
+                <option value="bool">Bool</option>
+                <option value="integer">Integer</option>
+                <option value="float">Float</option>
+                <option value="tag">Tag</option>
+                <option value="orientation">Orientation</option>
+                {variegated && <option value="faceLabel">Face Label</option>}
               </select>
-            ) : nodeData.config.constType === 'orientation' ? (
-              <select
-                className={styles.select}
-                value={(nodeData.config.constValue as string) || '0'}
-                onChange={e => updateConfig('constValue', e.target.value)}
-              >
-                <option value="0">N (0&deg;)</option>
-                <option value="1">E (90&deg;)</option>
-                <option value="2">S (180&deg;)</option>
-                <option value="3">W (270&deg;)</option>
-              </select>
-            ) : nodeData.config.constType === 'tag' ? (
-              <>
+              {nodeData.config.constType === 'bool' ? (
                 <select
                   className={styles.select}
-                  value={(nodeData.config.tagAttributeId as string) || ''}
-                  onChange={e => {
-                    const newConfig = { ...nodeData.config, tagAttributeId: e.target.value, constValue: '0' };
-                    updateNodeData(id, { ...nodeData, config: newConfig });
-                  }}
+                  value={String(nodeData.config.constValue) === 'true' ? 'true' : 'false'}
+                  onChange={e => updateConfig('constValue', e.target.value)}
                 >
-                  <option value="">Tag attr...</option>
-                  {model.attributes
-                    .filter(a => a.type === 'tag')
-                    .map(a => (
-                      <option key={a.id} value={a.id}>{a.name}</option>
-                    ))}
+                  <option value="true">true</option>
+                  <option value="false">false</option>
                 </select>
-                {(() => {
-                  const tagAttr = model.attributes.find(a => a.id === nodeData.config.tagAttributeId);
-                  const opts = tagAttr?.tagOptions || [];
-                  return opts.length > 0 ? (
-                    <select
-                      className={styles.select}
-                      value={(nodeData.config.constValue as string) || '0'}
-                      onChange={e => updateConfig('constValue', e.target.value)}
-                    >
-                      {opts.map((t, i) => <option key={i} value={String(i)}>{t}</option>)}
-                    </select>
-                  ) : null;
-                })()}
-              </>
-            ) : (
-              <InlineNumberInput
-                className={styles.input}
-                value={(nodeData.config.constValue as string) || '0'}
-                onChange={v => updateConfig('constValue', v)}
-              />
-            )}
-          </>
-        )}
+              ) : nodeData.config.constType === 'orientation' ? (
+                <select
+                  className={styles.select}
+                  value={(nodeData.config.constValue as string) || '0'}
+                  onChange={e => updateConfig('constValue', e.target.value)}
+                >
+                  <option value="0">N (0&deg;)</option>
+                  <option value="1">E (90&deg;)</option>
+                  <option value="2">S (180&deg;)</option>
+                  <option value="3">W (270&deg;)</option>
+                </select>
+              ) : nodeData.config.constType === 'tag' ? (
+                <>
+                  <select
+                    className={styles.select}
+                    value={(nodeData.config.tagAttributeId as string) || ''}
+                    onChange={e => {
+                      const newConfig = { ...nodeData.config, tagAttributeId: e.target.value, constValue: '0' };
+                      updateNodeData(id, { ...nodeData, config: newConfig });
+                    }}
+                  >
+                    <option value="">Tag attr...</option>
+                    {model.attributes
+                      .filter(a => a.type === 'tag')
+                      .map(a => (
+                        <option key={a.id} value={a.id}>{a.name}</option>
+                      ))}
+                  </select>
+                  {(() => {
+                    const tagAttr = model.attributes.find(a => a.id === nodeData.config.tagAttributeId);
+                    const opts = tagAttr?.tagOptions || [];
+                    return opts.length > 0 ? (
+                      <select
+                        className={styles.select}
+                        value={(nodeData.config.constValue as string) || '0'}
+                        onChange={e => updateConfig('constValue', e.target.value)}
+                      >
+                        {opts.map((t, i) => <option key={i} value={String(i)}>{t}</option>)}
+                      </select>
+                    ) : null;
+                  })()}
+                </>
+              ) : nodeData.config.constType === 'faceLabel' ? (
+                <select
+                  className={styles.select}
+                  value={(nodeData.config.constValue as string) || 'none'}
+                  onChange={e => updateConfig('constValue', e.target.value)}
+                  title="Face label name. Emits the compile-time integer index (none=0; user labels start at 1)."
+                >
+                  <option value="none">none (0)</option>
+                  {faceLabels.map((lab, i) => (
+                    <option key={i} value={lab}>{lab} ({i + 1})</option>
+                  ))}
+                </select>
+              ) : (
+                <InlineNumberInput
+                  className={styles.input}
+                  value={(nodeData.config.constValue as string) || '0'}
+                  onChange={v => updateConfig('constValue', v)}
+                />
+              )}
+            </>
+          );
+        })()}
 
         {nodeData.nodeType === 'groupCounting' && (() => {
           const op = (nodeData.config.operation as string) || 'equals';
@@ -1572,36 +1598,6 @@ function CaNodeComponent({ id, data }: NodeProps) {
             onDoubleClick={stopAll}
             title="Shown in the simulator when this flow fires and pauses the run."
           />
-        )}
-
-        {nodeData.nodeType === 'tagConstant' && (
-          <>
-            <select
-              className={styles.select}
-              value={(nodeData.config.attributeId as string) || ''}
-              onChange={e => updateConfig('attributeId', e.target.value)}
-            >
-              <option value="">Attr...</option>
-              {model.attributes
-                .filter(a => a.type === 'tag')
-                .map(a => (
-                  <option key={a.id} value={a.id}>{a.name}</option>
-                ))}
-            </select>
-            {(() => {
-              const tagAttr = model.attributes.find(a => a.id === nodeData.config.attributeId);
-              const opts = tagAttr?.tagOptions || [];
-              return opts.length > 0 ? (
-                <select
-                  className={styles.select}
-                  value={String(nodeData.config.tagIndex ?? 0)}
-                  onChange={e => updateConfig('tagIndex', Number(e.target.value))}
-                >
-                  {opts.map((t, i) => <option key={i} value={String(i)}>{t}</option>)}
-                </select>
-              ) : null;
-            })()}
-          </>
         )}
 
         {nodeData.nodeType === 'getRandom' && (

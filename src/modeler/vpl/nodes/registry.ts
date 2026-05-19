@@ -35,7 +35,6 @@ import { InputColorNode } from './InputColorNode';
 import { MacroNode } from './MacroNode';
 import { MacroInputNode } from './MacroInputNode';
 import { MacroOutputNode } from './MacroOutputNode';
-import { TagConstantNode } from './TagConstantNode';
 import { SetNeighborhoodAttributeNode } from './SetNeighborhoodAttributeNode';
 import { GetNeighborAttributeByIndexNode } from './GetNeighborAttributeByIndexNode';
 import { SetNeighborAttributeByIndexNode } from './SetNeighborAttributeByIndexNode';
@@ -100,7 +99,6 @@ const ALL_NODES: NodeTypeDef[] = [
   ArrayLengthNode,
   GetConstantNode,
   GetRandomNode,
-  TagConstantNode,
   // Local Variables — per-cell scratch storage referenced by id.
   GetVariableNode,
   // Variegated Cells — visible only when the feature is enabled (palette
@@ -169,7 +167,7 @@ export function getAllNodeDefs(): NodeTypeDef[] {
 }
 
 /** Node types hidden from the "Add Node" menu (created programmatically) */
-const HIDDEN_FROM_MENU = new Set(['macro', 'macroInput', 'macroOutput', 'tagConstant']);
+const HIDDEN_FROM_MENU = new Set(['macro', 'macroInput', 'macroOutput']);
 
 /** Grouped by category for the "Add Node" menu */
 export function getNodeDefsByCategory(): Map<string, NodeTypeDef[]> {

@@ -164,7 +164,7 @@ function pickCompatiblePort(
   return candidates[0] ?? null;
 }
 
-const HIDDEN_FROM_DROP_MENU = new Set(['macro', 'macroInput', 'macroOutput', 'tagConstant']);
+const HIDDEN_FROM_DROP_MENU = new Set(['macro', 'macroInput', 'macroOutput']);
 
 /** Screen-space radius for snapping a panel-drag drop onto a nearby canvas
  *  port. Matches xyflow's default `connectionRadius` so the snap distance is

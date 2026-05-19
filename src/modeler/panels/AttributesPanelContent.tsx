@@ -4,6 +4,7 @@ import type { Attribute, AttributeType } from '../../model/types';
 import { InteractionTableEditor } from './InteractionTableEditor';
 import { useListReorder } from './useListReorder';
 import { NeighborIndexDefaultEditor } from './NeighborIndexDefaultEditor';
+import { VariablesPanelSection } from './VariablesPanelSection';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag } from '../vpl/graphState';
@@ -177,6 +178,8 @@ export function AttributesPanelContent() {
           </button>
         </div>
       </div>
+
+      <VariablesPanelSection />
 
       {selected && (
         <div className={styles.detailEditor}>

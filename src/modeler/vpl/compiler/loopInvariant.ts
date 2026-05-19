@@ -13,8 +13,8 @@
  * can never disagree on which nodes can be hoisted.
  *
  * Rules:
- *   - ALWAYS invariant: getConstant, tagConstant, getModelAttribute,
- *     getColorConstant. These have no inputs that vary by cell.
+ *   - ALWAYS invariant: getConstant, getModelAttribute, getColorConstant.
+ *     These have no inputs that vary by cell.
  *   - NEVER invariant: getCellAttribute, getNeighborsAttribute, getRandom,
  *     getNeighborAttributeByTag, getNeighborAttributeByIndex, getIndicator,
  *     getNeighborsAttrByIndexes, filterNeighbors, joinNeighbors,
@@ -32,7 +32,6 @@ import type { GraphNode } from '../../../model/types';
 
 const ALWAYS_INVARIANT = new Set<string>([
   'getConstant',
-  'tagConstant',
   'getModelAttribute',
   'getColorConstant',
 ]);
