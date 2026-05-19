@@ -1222,14 +1222,16 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       num = Number.isFinite(n) && n >= 0 && n <= 3 ? (n | 0) : 0;
       return emitLet(ctx, 'i32', `${num}`, 'ko');
     }
+    if (t === 'faceLabel') {
+      // Face label index pre-resolved into _resolvedFaceLabelIndex by
+      // compile.ts::preResolveVariegatedNodes. Unresolved is -1.
+      const idx = parseInt(String(node.data.config._resolvedFaceLabelIndex ?? -1), 10);
+      num = Number.isFinite(idx) ? idx : -1;
+      return emitLet(ctx, 'i32', `${num | 0}`, 'kfl');
+    }
     // integer / tag
     num = typeof raw === 'number' ? raw : (parseInt(String(raw ?? '0'), 10) || 0);
     return emitLet(ctx, 'i32', `${num | 0}`, 'ki');
-  },
-
-  tagConstant: ({ node, ctx }) => {
-    const idx = Number(node.data.config.tagIndex) || 0;
-    return emitLet(ctx, 'i32', `${idx | 0}`, 'tag');
   },
 
   // Wave A.6: NIs are packed (dr, dc) i32. neighborIndexFromOffset takes

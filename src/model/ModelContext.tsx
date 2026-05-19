@@ -27,6 +27,7 @@ import type {
 import { DEFAULT_MODEL, EMPTY_MODEL } from './defaultModel';
 import { cloneMacroWithFreshIds } from './macroImport';
 import { migrateColorInterpolationNodes } from './colorScaleMigration';
+import { migrateTagConstantNodes } from './tagConstantMigration';
 import { clearAllSavedGraphViewports, setSavedCurrentScope } from '../modeler/vpl/graphState';
 
 // ---------------------------------------------------------------------------
@@ -336,7 +337,6 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
           remappedModel,
           (cfg, nt) => {
             if ((nt === 'getConstant' && cfg.constType === 'tag' && cfg.tagAttributeId === attrId) ||
-                (nt === 'tagConstant' && cfg.attributeId === attrId) ||
                 (nt === 'switch' && cfg.tagAttributeId === attrId && cfg.valueType === 'tag')) return true;
             // setAttribute/setNeighborhood/setNeighborByIndex with this tag attr
             if ((nt === 'setAttribute' || nt === 'setNeighborhoodAttribute' || nt === 'setNeighborAttributeByIndex')
@@ -345,7 +345,6 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
           },
           (cfg, nt) => {
             if (nt === 'getConstant') cfg.constValue = remap(cfg.constValue);
-            if (nt === 'tagConstant') cfg.tagIndex = Number(remap(cfg.tagIndex));
             if (nt === 'switch') {
               const cc = Number(cfg.caseCount) || 0;
               for (let i = 0; i < cc; i++) cfg[`case_${i}_value`] = remap(cfg[`case_${i}_value`]);
@@ -621,6 +620,13 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // the new colorScale shape (top-level + all macroDefs). Idempotent.
       {
         const r = migrateColorInterpolationNodes(m.graphNodes, m.graphEdges, m.macroDefs);
+        m = { ...m, graphNodes: r.graphNodes, graphEdges: r.graphEdges, macroDefs: r.macroDefs };
+      }
+      // TagConstant migration: rewrite legacy tagConstant nodes to the
+      // equivalent getConstant in tag mode (the picker UI is identical and
+      // both emit the same integer). Idempotent.
+      {
+        const r = migrateTagConstantNodes(m.graphNodes, m.graphEdges, m.macroDefs);
         m = { ...m, graphNodes: r.graphNodes, graphEdges: r.graphEdges, macroDefs: r.macroDefs };
       }
       return { model: m, isDirty: false, modelVersion: state.modelVersion + 1 };

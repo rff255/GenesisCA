@@ -230,7 +230,7 @@
   ],
   "graphNodes": [
     {
-      "id": "nmpcfpd9j5u3o",
+      "id": "nmpcouy6czdie",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -242,7 +242,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jwsc8",
+      "id": "nmpcouy6cgsls",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -255,7 +255,7 @@
       }
     },
     {
-      "id": "nmpcfpd9j6ems",
+      "id": "nmpcouy6c4nh7",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -268,7 +268,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jdhl8",
+      "id": "nmpcouy6cz8qw",
       "type": "caNode",
       "position": {
         "x": 1980,
@@ -281,7 +281,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jodcn",
+      "id": "nmpcouy6cw2ut",
       "type": "caNode",
       "position": {
         "x": 2860,
@@ -296,23 +296,24 @@
       }
     },
     {
-      "id": "nmpcfpd9j1fdq",
+      "id": "nmpcouy6c3tds",
       "type": "caNode",
       "position": {
         "x": 2860,
         "y": 480
       },
       "data": {
-        "nodeType": "tagConstant",
+        "nodeType": "getConstant",
         "config": {
-          "attributeId": "kind",
-          "tagIndex": 2
+          "constType": "tag",
+          "tagAttributeId": "kind",
+          "constValue": "2"
         },
         "label": "Tag: amphi"
       }
     },
     {
-      "id": "nmpcfpd9jwgcj",
+      "id": "nmpcouy6cqhyc",
       "type": "caNode",
       "position": {
         "x": 3080,
@@ -327,7 +328,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jdhxp",
+      "id": "nmpcouy6c0vzq",
       "type": "caNode",
       "position": {
         "x": 2860,
@@ -342,7 +343,7 @@
       }
     },
     {
-      "id": "nmpcfpd9je08d",
+      "id": "nmpcouy6coa8n",
       "type": "caNode",
       "position": {
         "x": 2860,
@@ -357,54 +358,39 @@
       }
     },
     {
-      "id": "nmpcfpd9jbogk",
+      "id": "nmpcouy6cnljt",
       "type": "caNode",
       "position": {
         "x": 2860,
         "y": 720
       },
       "data": {
-        "nodeType": "tagConstant",
+        "nodeType": "getConstant",
         "config": {
-          "attributeId": "kind",
-          "tagIndex": 0
+          "constType": "tag",
+          "tagAttributeId": "kind",
+          "constValue": "0"
         },
         "label": "Tag: empty"
       }
     },
     {
-      "id": "nmpcfpd9jbqhe",
-      "type": "caNode",
-      "position": {
-        "x": 3080,
-        "y": 640
-      },
-      "data": {
-        "nodeType": "groupCounting",
-        "config": {
-          "operation": "equals"
-        },
-        "label": "count(kind == empty)"
-      }
-    },
-    {
-      "id": "nmpcfpd9j172d",
+      "id": "nmpcouy6ceof6",
       "type": "caNode",
       "position": {
         "x": 3300,
         "y": 640
       },
       "data": {
-        "nodeType": "statement",
+        "nodeType": "groupStatement",
         "config": {
-          "operation": "==",
-          "_port_y": "4"
+          "operation": "allIs"
         },
-        "label": "count == 4 ?"
+        "label": "all kinds == empty?"
       }
     },
     {
-      "id": "nmpcfpd9j4bzn",
+      "id": "nmpcouy6cizbt",
       "type": "caNode",
       "position": {
         "x": 3300,
@@ -419,7 +405,7 @@
       }
     },
     {
-      "id": "nmpcfpd9j28ud",
+      "id": "nmpcouy6c6rhh",
       "type": "caNode",
       "position": {
         "x": 2860,
@@ -432,7 +418,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jikub",
+      "id": "nmpcouy6ce55z",
       "type": "caNode",
       "position": {
         "x": 2860,
@@ -449,7 +435,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jxjhk",
+      "id": "nmpcouy6cbfpe",
       "type": "caNode",
       "position": {
         "x": 3080,
@@ -467,20 +453,7 @@
       }
     },
     {
-      "id": "nmpcfpd9je9f1",
-      "type": "caNode",
-      "position": {
-        "x": 3300,
-        "y": 800
-      },
-      "data": {
-        "nodeType": "valueSwitch",
-        "config": {},
-        "label": "rotatedOri = gate ? new : ori"
-      }
-    },
-    {
-      "id": "nmpcfpd9j9ncp",
+      "id": "nmpcouy6cem4g",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -495,23 +468,24 @@
       }
     },
     {
-      "id": "nmpcfpd9j0fsr",
+      "id": "nmpcouy6czrh6",
       "type": "caNode",
       "position": {
         "x": 220,
         "y": 160
       },
       "data": {
-        "nodeType": "tagConstant",
+        "nodeType": "getConstant",
         "config": {
-          "attributeId": "kind",
-          "tagIndex": 0
+          "constType": "tag",
+          "tagAttributeId": "kind",
+          "constValue": "0"
         },
         "label": "Tag: empty"
       }
     },
     {
-      "id": "nmpcfpd9j5lyu",
+      "id": "nmpcouy6cqfy2",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -526,7 +500,7 @@
       }
     },
     {
-      "id": "nmpcfpd9j8lia",
+      "id": "nmpcouy6c7awu",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -541,7 +515,7 @@
       }
     },
     {
-      "id": "nmpcfpd9j73je",
+      "id": "nmpcouy6cbnw9",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -556,7 +530,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jv3dj",
+      "id": "nmpcouy6ca4d4",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -571,7 +545,7 @@
       }
     },
     {
-      "id": "nmpcfpd9ja9ua",
+      "id": "nmpcouy6ci6hk",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -586,7 +560,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jxe7n",
+      "id": "nmpcouy6cya3g",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -601,7 +575,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jiv3k",
+      "id": "nmpcouy6crr7q",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -616,7 +590,7 @@
       }
     },
     {
-      "id": "nmpcfpd9j3d56",
+      "id": "nmpcouy6cv75c",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -631,7 +605,7 @@
       }
     },
     {
-      "id": "nmpcfpd9j9g9c",
+      "id": "nmpcouy6c5hli",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -646,7 +620,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jh2a1",
+      "id": "nmpcouy6ccd5j",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -661,7 +635,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jy2py",
+      "id": "nmpcouy6cffp1",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -674,7 +648,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jk4e2",
+      "id": "nmpcouy6c0eno",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -687,7 +661,7 @@
       }
     },
     {
-      "id": "nmpcfpd9j636l",
+      "id": "nmpcouy6c1kdg",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -700,7 +674,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jf5cb",
+      "id": "nmpcouy6cnrtw",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -713,23 +687,24 @@
       }
     },
     {
-      "id": "nmpcfpd9j7xmg",
+      "id": "nmpcouy6cx8jj",
       "type": "caNode",
       "position": {
         "x": 1320,
         "y": 640
       },
       "data": {
-        "nodeType": "tagConstant",
+        "nodeType": "getConstant",
         "config": {
-          "attributeId": "kind",
-          "tagIndex": 2
+          "constType": "tag",
+          "tagAttributeId": "kind",
+          "constValue": "2"
         },
         "label": "Tag: amphi"
       }
     },
     {
-      "id": "nmpcfpd9jd82j",
+      "id": "nmpcouy6c1aoo",
       "type": "caNode",
       "position": {
         "x": 1540,
@@ -744,23 +719,24 @@
       }
     },
     {
-      "id": "nmpcfpd9jzvkb",
+      "id": "nmpcouy6c7d25",
       "type": "caNode",
       "position": {
         "x": 1320,
         "y": 720
       },
       "data": {
-        "nodeType": "tagConstant",
+        "nodeType": "getConstant",
         "config": {
-          "attributeId": "kind",
-          "tagIndex": 1
+          "constType": "tag",
+          "tagAttributeId": "kind",
+          "constValue": "1"
         },
         "label": "Tag: water"
       }
     },
     {
-      "id": "nmpcfpd9js6ta",
+      "id": "nmpcouy6c8hgc",
       "type": "caNode",
       "position": {
         "x": 1540,
@@ -775,7 +751,55 @@
       }
     },
     {
-      "id": "nmpcfpd9j5cw3",
+      "id": "nmpcouy6c3ueb",
+      "type": "caNode",
+      "position": {
+        "x": 1320,
+        "y": 560
+      },
+      "data": {
+        "nodeType": "getConstant",
+        "config": {
+          "constType": "faceLabel",
+          "constValue": "X"
+        },
+        "label": "Face: X"
+      }
+    },
+    {
+      "id": "nmpcouy6clgb5",
+      "type": "caNode",
+      "position": {
+        "x": 1320,
+        "y": 800
+      },
+      "data": {
+        "nodeType": "getConstant",
+        "config": {
+          "constType": "faceLabel",
+          "constValue": "water"
+        },
+        "label": "Face: water"
+      }
+    },
+    {
+      "id": "nmpcouy6cmjei",
+      "type": "caNode",
+      "position": {
+        "x": 1540,
+        "y": 800
+      },
+      "data": {
+        "nodeType": "getConstant",
+        "config": {
+          "constType": "faceLabel",
+          "constValue": "none"
+        },
+        "label": "Face: none"
+      }
+    },
+    {
+      "id": "nmpcouy6clzq0",
       "type": "caNode",
       "position": {
         "x": 1760,
@@ -783,15 +807,12 @@
       },
       "data": {
         "nodeType": "valueSwitch",
-        "config": {
-          "_port_ifValue": "3",
-          "_port_elseValue": "0"
-        },
+        "config": {},
         "label": "water?WATER:NONE"
       }
     },
     {
-      "id": "nmpcfpd9j5oq0",
+      "id": "nmpcouy6c067n",
       "type": "caNode",
       "position": {
         "x": 1760,
@@ -799,14 +820,12 @@
       },
       "data": {
         "nodeType": "valueSwitch",
-        "config": {
-          "_port_ifValue": "1"
-        },
+        "config": {},
         "label": "amphi?X:above"
       }
     },
     {
-      "id": "nmpcfpd9jao2d",
+      "id": "nmpcouy6cj5pg",
       "type": "caNode",
       "position": {
         "x": 1980,
@@ -821,23 +840,24 @@
       }
     },
     {
-      "id": "nmpcfpd9jfuxw",
+      "id": "nmpcouy6cz9o4",
       "type": "caNode",
       "position": {
         "x": 1320,
         "y": 480
       },
       "data": {
-        "nodeType": "tagConstant",
+        "nodeType": "getConstant",
         "config": {
-          "attributeId": "kind",
-          "tagIndex": 0
+          "constType": "tag",
+          "tagAttributeId": "kind",
+          "constValue": "0"
         },
         "label": "Tag: empty"
       }
     },
     {
-      "id": "nmpcfpd9ja2qt",
+      "id": "nmpcouy6cdr6i",
       "type": "caNode",
       "position": {
         "x": 1540,
@@ -852,7 +872,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jvfwh",
+      "id": "nmpcouy6cjtgx",
       "type": "caNode",
       "position": {
         "x": 2200,
@@ -867,7 +887,7 @@
       }
     },
     {
-      "id": "nmpcfpd9j2f4s",
+      "id": "nmpcouy6cbcm0",
       "type": "caNode",
       "position": {
         "x": 2420,
@@ -882,52 +902,69 @@
       }
     },
     {
-      "id": "nmpcfpd9ju8uu",
+      "id": "nmpcouy6c9lms",
+      "type": "caNode",
+      "position": {
+        "x": 1540,
+        "y": 80
+      },
+      "data": {
+        "nodeType": "getAllNeighborIndexes",
+        "config": {
+          "neighborhoodId": "vN"
+        },
+        "label": "NIs vN"
+      }
+    },
+    {
+      "id": "nmpcouy6c1dfc",
       "type": "caNode",
       "position": {
         "x": 1540,
         "y": 160
       },
       "data": {
-        "nodeType": "getVariable",
+        "nodeType": "getNeighborsAttrByIndexes",
         "config": {
-          "variableId": "weights"
+          "attributeId": "kind"
         },
-        "label": "weights[]"
+        "label": "kinds[4]"
       }
     },
     {
-      "id": "nmpcfpd9jf3ef",
+      "id": "nmpcouy6cnu41",
       "type": "caNode",
       "position": {
-        "x": 1760,
-        "y": 160
+        "x": 1540,
+        "y": 240
       },
       "data": {
-        "nodeType": "aggregate",
+        "nodeType": "getConstant",
         "config": {
-          "operation": "sum"
+          "constType": "tag",
+          "tagAttributeId": "kind",
+          "constValue": "0"
         },
-        "label": "Σ weights"
+        "label": "Tag: empty"
       }
     },
     {
-      "id": "nmpcfpd9j2i9r",
+      "id": "nmpcouy6cgbhp",
       "type": "caNode",
       "position": {
         "x": 1980,
         "y": 160
       },
       "data": {
-        "nodeType": "statement",
+        "nodeType": "groupStatement",
         "config": {
-          "operation": ">"
+          "operation": "hasA"
         },
-        "label": "sumW > 0?"
+        "label": "hasA(empty)?"
       }
     },
     {
-      "id": "nmpcfpd9jj4pw",
+      "id": "nmpcouy6c8tgs",
       "type": "caNode",
       "position": {
         "x": 2200,
@@ -942,7 +979,7 @@
       }
     },
     {
-      "id": "nmpcfpd9j1gue",
+      "id": "nmpcouy6cy0v9",
       "type": "caNode",
       "position": {
         "x": 2420,
@@ -957,7 +994,7 @@
       }
     },
     {
-      "id": "nmpcfpd9j1ydk",
+      "id": "nmpcouy6c7mjj",
       "type": "caNode",
       "position": {
         "x": 2200,
@@ -972,7 +1009,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jdrph",
+      "id": "nmpcouy6c8qz4",
       "type": "caNode",
       "position": {
         "x": 2420,
@@ -985,7 +1022,7 @@
       }
     },
     {
-      "id": "nmpcfpd9juz8b",
+      "id": "nmpcouy6c3t6c",
       "type": "caNode",
       "position": {
         "x": 2640,
@@ -1000,7 +1037,20 @@
       }
     },
     {
-      "id": "nmpcfpd9jxzvo",
+      "id": "nmpcouy6cjxe6",
+      "type": "caNode",
+      "position": {
+        "x": 2640,
+        "y": 160
+      },
+      "data": {
+        "nodeType": "getOrientation",
+        "config": {},
+        "label": "My ori"
+      }
+    },
+    {
+      "id": "nmpcouy6c748s",
       "type": "caNode",
       "position": {
         "x": 2640,
@@ -1017,7 +1067,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jbm1l",
+      "id": "nmpcouy6c479n",
       "type": "caNode",
       "position": {
         "x": 3080,
@@ -1030,7 +1080,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jdpxs",
+      "id": "nmpcouy6c6gqw",
       "type": "caNode",
       "position": {
         "x": 3300,
@@ -1045,7 +1095,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jqcec",
+      "id": "nmpcouy6cxxof",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -1057,7 +1107,7 @@
       }
     },
     {
-      "id": "nmpcfpd9j43o3",
+      "id": "nmpcouy6cw5u2",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -1073,7 +1123,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jhqgk",
+      "id": "nmpcouy6ci7l1",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -1089,7 +1139,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jd9f3",
+      "id": "nmpcouy6ci8qp",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -1106,7 +1156,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jr6q3",
+      "id": "nmpcouy6carsk",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -1121,7 +1171,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jhpmq",
+      "id": "nmpcouy6cjpdu",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -1134,7 +1184,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jlw1z",
+      "id": "nmpcouy6cbu4x",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -1150,7 +1200,7 @@
       }
     },
     {
-      "id": "nmpcfpd9j04t0",
+      "id": "nmpcouy6cid7v",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -1168,7 +1218,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jgw5g",
+      "id": "nmpcouy6cj3sw",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -1183,7 +1233,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jfh3n",
+      "id": "nmpcouy6c3ivv",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -1196,7 +1246,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jb3k9",
+      "id": "nmpcouy6c6fqr",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -1212,7 +1262,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jf8o8",
+      "id": "nmpcouy6cub46",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -1227,7 +1277,7 @@
       }
     },
     {
-      "id": "nmpcfpd9j6wtj",
+      "id": "nmpcouy6cl271",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -1242,7 +1292,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jwkae",
+      "id": "nmpcouy6c6fxn",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -1256,7 +1306,7 @@
       }
     },
     {
-      "id": "nmpcfpd9j939y",
+      "id": "nmpcouy6c1ch4",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -1272,7 +1322,7 @@
       }
     },
     {
-      "id": "nmpcfpd9jcrco",
+      "id": "nmpcouy6c7vf5",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -1287,7 +1337,7 @@
       }
     },
     {
-      "id": "nmpcfpd9j5h3m",
+      "id": "nmpcouy6csyec",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -1302,7 +1352,7 @@
       }
     },
     {
-      "id": "nmpcfpd9ka1fk",
+      "id": "nmpcouy6c4mh3",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -1316,7 +1366,7 @@
       }
     },
     {
-      "id": "nmpcfpd9kqaej",
+      "id": "nmpcouy6c10zn",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -1330,7 +1380,7 @@
       }
     },
     {
-      "id": "nmpcfpd9kcw7f",
+      "id": "nmpcouy6c5e8h",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -1342,7 +1392,7 @@
       }
     },
     {
-      "id": "nmpcfpd9khjhc",
+      "id": "nmpcouy6dy3ow",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -1364,7 +1414,7 @@
       }
     },
     {
-      "id": "nmpcfpd9krffm",
+      "id": "nmpcouy6dcubh",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -1382,7 +1432,7 @@
       }
     },
     {
-      "id": "nmpcfpd9k9ksl",
+      "id": "nmpcouy6dyh07",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -1400,7 +1450,7 @@
       }
     },
     {
-      "id": "nmpcfpd9ktaps",
+      "id": "nmpcouy6dkuev",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -1426,7 +1476,7 @@
       }
     },
     {
-      "id": "nmpcfpd9k0272",
+      "id": "nmpcouy6dqneb",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -1444,7 +1494,7 @@
       }
     },
     {
-      "id": "nmpcfpd9ktxuz",
+      "id": "nmpcouy6d4jaz",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -1462,7 +1512,7 @@
       }
     },
     {
-      "id": "nmpcfpd9kxgv6",
+      "id": "nmpcouy6dewpk",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -1480,7 +1530,7 @@
       }
     },
     {
-      "id": "nmpcfpd9k7do9",
+      "id": "nmpcouy6drxtr",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -1498,7 +1548,7 @@
       }
     },
     {
-      "id": "gmpcfpd9kvpht",
+      "id": "gmpcouy6darox",
       "type": "groupNode",
       "position": {
         "x": 190,
@@ -1514,7 +1564,7 @@
       }
     },
     {
-      "id": "gmpcfpd9k2i1e",
+      "id": "gmpcouy6di05m",
       "type": "groupNode",
       "position": {
         "x": 630,
@@ -1523,21 +1573,21 @@
       "data": {
         "label": "Per-direction body (runs for d ∈ {N, E, S, W})",
         "width": 2020,
-        "height": 440,
+        "height": 520,
         "nodeType": "group",
         "config": {},
         "groupColor": "#4a5878"
       }
     },
     {
-      "id": "gmpcfpd9kcwkq",
+      "id": "gmpcouy6dwogk",
       "type": "groupNode",
       "position": {
         "x": 2830,
         "y": 340
       },
       "data": {
-        "label": "Rotation values (rotatedOri + amphi-AND-free gate)",
+        "label": "Rotation values (newOri + amphi-AND-free gate)",
         "width": 700,
         "height": 680,
         "nodeType": "group",
@@ -1546,7 +1596,7 @@
       }
     },
     {
-      "id": "gmpcfpd9ku4sx",
+      "id": "gmpcouy6dmdzw",
       "type": "groupNode",
       "position": {
         "x": 3050,
@@ -1562,7 +1612,7 @@
       }
     },
     {
-      "id": "gmpcfpd9k40vw",
+      "id": "gmpcouy6dk4ly",
       "type": "groupNode",
       "position": {
         "x": -30,
@@ -1578,7 +1628,7 @@
       }
     },
     {
-      "id": "gmpcfpd9kqrx4",
+      "id": "gmpcouy6dboai",
       "type": "groupNode",
       "position": {
         "x": -30,
@@ -1594,7 +1644,7 @@
       }
     },
     {
-      "id": "gmpcfpd9kkfvk",
+      "id": "gmpcouy6dpk7t",
       "type": "groupNode",
       "position": {
         "x": -30,
@@ -1612,639 +1662,639 @@
   ],
   "graphEdges": [
     {
-      "id": "empcfpd9jgah7",
-      "source": "nmpcfpd9j5u3o",
-      "target": "nmpcfpd9jwsc8",
+      "id": "empcouy6cq96v",
+      "source": "nmpcouy6czdie",
+      "target": "nmpcouy6cgsls",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empcfpd9jh1w6",
-      "source": "nmpcfpd9jwsc8",
-      "target": "nmpcfpd9j6ems",
+      "id": "empcouy6cegrf",
+      "source": "nmpcouy6cgsls",
+      "target": "nmpcouy6c4nh7",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empcfpd9j9opq",
-      "source": "nmpcfpd9jodcn",
-      "target": "nmpcfpd9jwgcj",
+      "id": "empcouy6ccz51",
+      "source": "nmpcouy6cw2ut",
+      "target": "nmpcouy6cqhyc",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empcfpd9jcfvz",
-      "source": "nmpcfpd9j1fdq",
-      "target": "nmpcfpd9jwgcj",
+      "id": "empcouy6csud9",
+      "source": "nmpcouy6c3tds",
+      "target": "nmpcouy6cqhyc",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empcfpd9jne89",
-      "source": "nmpcfpd9jdhxp",
-      "target": "nmpcfpd9je08d",
+      "id": "empcouy6chle4",
+      "source": "nmpcouy6c0vzq",
+      "target": "nmpcouy6coa8n",
       "sourceHandle": "output_value_indexes",
       "targetHandle": "input_value_indexes"
     },
     {
-      "id": "empcfpd9jpelo",
-      "source": "nmpcfpd9je08d",
-      "target": "nmpcfpd9jbqhe",
+      "id": "empcouy6cgtpt",
+      "source": "nmpcouy6coa8n",
+      "target": "nmpcouy6ceof6",
       "sourceHandle": "output_value_values",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empcfpd9jr2rp",
-      "source": "nmpcfpd9jbogk",
-      "target": "nmpcfpd9jbqhe",
+      "id": "empcouy6cwsoe",
+      "source": "nmpcouy6cnljt",
+      "target": "nmpcouy6ceof6",
       "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_compare"
-    },
-    {
-      "id": "empcfpd9jylgi",
-      "source": "nmpcfpd9jbqhe",
-      "target": "nmpcfpd9j172d",
-      "sourceHandle": "output_value_count",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empcfpd9jibna",
-      "source": "nmpcfpd9jwgcj",
-      "target": "nmpcfpd9j4bzn",
+      "id": "empcouy6cquo9",
+      "source": "nmpcouy6cqhyc",
+      "target": "nmpcouy6cizbt",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empcfpd9jlfox",
-      "source": "nmpcfpd9j172d",
-      "target": "nmpcfpd9j4bzn",
+      "id": "empcouy6c9fgo",
+      "source": "nmpcouy6ceof6",
+      "target": "nmpcouy6cizbt",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empcfpd9jldab",
-      "source": "nmpcfpd9j28ud",
-      "target": "nmpcfpd9jxjhk",
+      "id": "empcouy6cbvgs",
+      "source": "nmpcouy6c6rhh",
+      "target": "nmpcouy6cbfpe",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "empcfpd9jw74u",
-      "source": "nmpcfpd9jikub",
-      "target": "nmpcfpd9jxjhk",
+      "id": "empcouy6c8rmn",
+      "source": "nmpcouy6ce55z",
+      "target": "nmpcouy6cbfpe",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "empcfpd9jquem",
-      "source": "nmpcfpd9j4bzn",
-      "target": "nmpcfpd9je9f1",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empcfpd9jgbbk",
-      "source": "nmpcfpd9jxjhk",
-      "target": "nmpcfpd9je9f1",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_ifValue"
-    },
-    {
-      "id": "empcfpd9j5aco",
-      "source": "nmpcfpd9j28ud",
-      "target": "nmpcfpd9je9f1",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_elseValue"
-    },
-    {
-      "id": "empcfpd9jnrbz",
-      "source": "nmpcfpd9j9ncp",
-      "target": "nmpcfpd9j5lyu",
+      "id": "empcouy6cpanb",
+      "source": "nmpcouy6cem4g",
+      "target": "nmpcouy6cqfy2",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empcfpd9jjyzg",
-      "source": "nmpcfpd9j0fsr",
-      "target": "nmpcfpd9j5lyu",
+      "id": "empcouy6cqx7g",
+      "source": "nmpcouy6czrh6",
+      "target": "nmpcouy6cqfy2",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empcfpd9jngd2",
-      "source": "nmpcfpd9j5lyu",
-      "target": "nmpcfpd9jwsc8",
+      "id": "empcouy6c2ze9",
+      "source": "nmpcouy6cqfy2",
+      "target": "nmpcouy6cgsls",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empcfpd9j3xpt",
-      "source": "nmpcfpd9j8lia",
-      "target": "nmpcfpd9j73je",
+      "id": "empcouy6c0uym",
+      "source": "nmpcouy6c7awu",
+      "target": "nmpcouy6cbnw9",
       "sourceHandle": "output_value_myFaceLabels",
       "targetHandle": "input_value_myFaces"
     },
     {
-      "id": "empcfpd9jurfj",
-      "source": "nmpcfpd9j8lia",
-      "target": "nmpcfpd9j73je",
+      "id": "empcouy6c5bss",
+      "source": "nmpcouy6c7awu",
+      "target": "nmpcouy6cbnw9",
       "sourceHandle": "output_value_theirFaceLabels",
       "targetHandle": "input_value_theirFaces"
     },
     {
-      "id": "empcfpd9jgkzr",
-      "source": "nmpcfpd9j73je",
-      "target": "nmpcfpd9jv3dj",
+      "id": "empcouy6cj3fx",
+      "source": "nmpcouy6cbnw9",
+      "target": "nmpcouy6ca4d4",
       "sourceHandle": "output_value_values",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empcfpd9jhuqk",
-      "source": "nmpcfpd9jv3dj",
-      "target": "nmpcfpd9ja9ua",
+      "id": "empcouy6cteoh",
+      "source": "nmpcouy6ca4d4",
+      "target": "nmpcouy6ci6hk",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_probability"
     },
     {
-      "id": "empcfpd9j9gjf",
-      "source": "nmpcfpd9ja9ua",
-      "target": "nmpcfpd9j6ems",
+      "id": "empcouy6c6ejp",
+      "source": "nmpcouy6ci6hk",
+      "target": "nmpcouy6c4nh7",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empcfpd9jvfo6",
-      "source": "nmpcfpd9jxe7n",
-      "target": "nmpcfpd9j9g9c",
+      "id": "empcouy6cgbj5",
+      "source": "nmpcouy6cya3g",
+      "target": "nmpcouy6c5hli",
       "sourceHandle": "output_value_indexes",
       "targetHandle": "input_value_indexes"
     },
     {
-      "id": "empcfpd9jym40",
-      "source": "nmpcfpd9jiv3k",
-      "target": "nmpcfpd9jh2a1",
+      "id": "empcouy6ctt67",
+      "source": "nmpcouy6crr7q",
+      "target": "nmpcouy6ccd5j",
       "sourceHandle": "output_value_indexes",
       "targetHandle": "input_value_indexes"
     },
     {
-      "id": "empcfpd9jc3bh",
-      "source": "nmpcfpd9jxe7n",
-      "target": "nmpcfpd9jy2py",
+      "id": "empcouy6coqd4",
+      "source": "nmpcouy6cya3g",
+      "target": "nmpcouy6cffp1",
       "sourceHandle": "output_value_indexes",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empcfpd9jsqng",
-      "source": "nmpcfpd9j6ems",
-      "target": "nmpcfpd9jy2py",
+      "id": "empcouy6csqyo",
+      "source": "nmpcouy6c4nh7",
+      "target": "nmpcouy6cffp1",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empcfpd9jmzfa",
-      "source": "nmpcfpd9j9g9c",
-      "target": "nmpcfpd9jk4e2",
+      "id": "empcouy6cpjie",
+      "source": "nmpcouy6c5hli",
+      "target": "nmpcouy6c0eno",
       "sourceHandle": "output_value_values",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empcfpd9jauwi",
-      "source": "nmpcfpd9jy2py",
-      "target": "nmpcfpd9jk4e2",
+      "id": "empcouy6c4kbb",
+      "source": "nmpcouy6cffp1",
+      "target": "nmpcouy6c0eno",
       "sourceHandle": "output_value_index",
       "targetHandle": "input_value_position"
     },
     {
-      "id": "empcfpd9jvms8",
-      "source": "nmpcfpd9j3d56",
-      "target": "nmpcfpd9j636l",
+      "id": "empcouy6cmbio",
+      "source": "nmpcouy6cv75c",
+      "target": "nmpcouy6c1kdg",
       "sourceHandle": "output_value_myFaceLabels",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empcfpd9jexl7",
-      "source": "nmpcfpd9jy2py",
-      "target": "nmpcfpd9j636l",
+      "id": "empcouy6cfhft",
+      "source": "nmpcouy6cffp1",
+      "target": "nmpcouy6c1kdg",
       "sourceHandle": "output_value_index",
       "targetHandle": "input_value_position"
     },
     {
-      "id": "empcfpd9jnn09",
-      "source": "nmpcfpd9jh2a1",
-      "target": "nmpcfpd9jf5cb",
+      "id": "empcouy6c8jgl",
+      "source": "nmpcouy6ccd5j",
+      "target": "nmpcouy6cnrtw",
       "sourceHandle": "output_value_values",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empcfpd9j7yru",
-      "source": "nmpcfpd9jy2py",
-      "target": "nmpcfpd9jf5cb",
+      "id": "empcouy6ccs6g",
+      "source": "nmpcouy6cffp1",
+      "target": "nmpcouy6cnrtw",
       "sourceHandle": "output_value_index",
       "targetHandle": "input_value_position"
     },
     {
-      "id": "empcfpd9jqraw",
-      "source": "nmpcfpd9jf5cb",
-      "target": "nmpcfpd9jd82j",
+      "id": "empcouy6chgvj",
+      "source": "nmpcouy6cnrtw",
+      "target": "nmpcouy6c1aoo",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empcfpd9jrfbg",
-      "source": "nmpcfpd9j7xmg",
-      "target": "nmpcfpd9jd82j",
+      "id": "empcouy6cilua",
+      "source": "nmpcouy6cx8jj",
+      "target": "nmpcouy6c1aoo",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empcfpd9j871b",
-      "source": "nmpcfpd9jf5cb",
-      "target": "nmpcfpd9js6ta",
+      "id": "empcouy6cpphd",
+      "source": "nmpcouy6cnrtw",
+      "target": "nmpcouy6c8hgc",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empcfpd9jnttj",
-      "source": "nmpcfpd9jzvkb",
-      "target": "nmpcfpd9js6ta",
+      "id": "empcouy6cc3y1",
+      "source": "nmpcouy6c7d25",
+      "target": "nmpcouy6c8hgc",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empcfpd9jpksl",
-      "source": "nmpcfpd9js6ta",
-      "target": "nmpcfpd9j5cw3",
+      "id": "empcouy6cgkip",
+      "source": "nmpcouy6c8hgc",
+      "target": "nmpcouy6clzq0",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empcfpd9jua4d",
-      "source": "nmpcfpd9jd82j",
-      "target": "nmpcfpd9j5oq0",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empcfpd9juf35",
-      "source": "nmpcfpd9j5cw3",
-      "target": "nmpcfpd9j5oq0",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_elseValue"
-    },
-    {
-      "id": "empcfpd9j5hxc",
-      "source": "nmpcfpd9j636l",
-      "target": "nmpcfpd9jao2d",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_labelA"
-    },
-    {
-      "id": "empcfpd9je5ml",
-      "source": "nmpcfpd9j5oq0",
-      "target": "nmpcfpd9jao2d",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_labelB"
-    },
-    {
-      "id": "empcfpd9jjva1",
-      "source": "nmpcfpd9jk4e2",
-      "target": "nmpcfpd9ja2qt",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empcfpd9j1lre",
-      "source": "nmpcfpd9jfuxw",
-      "target": "nmpcfpd9ja2qt",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empcfpd9jxose",
-      "source": "nmpcfpd9ja2qt",
-      "target": "nmpcfpd9jvfwh",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empcfpd9jp7s8",
-      "source": "nmpcfpd9jao2d",
-      "target": "nmpcfpd9jvfwh",
+      "id": "empcouy6cnh5k",
+      "source": "nmpcouy6clgb5",
+      "target": "nmpcouy6clzq0",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_ifValue"
     },
     {
-      "id": "empcfpd9jup3z",
-      "source": "nmpcfpd9jy2py",
-      "target": "nmpcfpd9j2f4s",
+      "id": "empcouy6cpzfd",
+      "source": "nmpcouy6cmjei",
+      "target": "nmpcouy6clzq0",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_elseValue"
+    },
+    {
+      "id": "empcouy6czfxt",
+      "source": "nmpcouy6c1aoo",
+      "target": "nmpcouy6c067n",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "empcouy6cfy5w",
+      "source": "nmpcouy6c3ueb",
+      "target": "nmpcouy6c067n",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_ifValue"
+    },
+    {
+      "id": "empcouy6cfwsv",
+      "source": "nmpcouy6clzq0",
+      "target": "nmpcouy6c067n",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_elseValue"
+    },
+    {
+      "id": "empcouy6cdihm",
+      "source": "nmpcouy6c1kdg",
+      "target": "nmpcouy6cj5pg",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_labelA"
+    },
+    {
+      "id": "empcouy6cfuk8",
+      "source": "nmpcouy6c067n",
+      "target": "nmpcouy6cj5pg",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_labelB"
+    },
+    {
+      "id": "empcouy6c22fp",
+      "source": "nmpcouy6c0eno",
+      "target": "nmpcouy6cdr6i",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empcouy6ck419",
+      "source": "nmpcouy6cz9o4",
+      "target": "nmpcouy6cdr6i",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empcouy6cslew",
+      "source": "nmpcouy6cdr6i",
+      "target": "nmpcouy6cjtgx",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "empcouy6c3mwi",
+      "source": "nmpcouy6cj5pg",
+      "target": "nmpcouy6cjtgx",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_ifValue"
+    },
+    {
+      "id": "empcouy6cn270",
+      "source": "nmpcouy6cffp1",
+      "target": "nmpcouy6cbcm0",
       "sourceHandle": "output_flow_body",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empcfpd9jllkv",
-      "source": "nmpcfpd9jy2py",
-      "target": "nmpcfpd9j2f4s",
+      "id": "empcouy6c3u8b",
+      "source": "nmpcouy6cffp1",
+      "target": "nmpcouy6cbcm0",
       "sourceHandle": "output_value_index",
       "targetHandle": "input_value_index"
     },
     {
-      "id": "empcfpd9j6d1k",
-      "source": "nmpcfpd9jvfwh",
-      "target": "nmpcfpd9j2f4s",
+      "id": "empcouy6c91cb",
+      "source": "nmpcouy6cjtgx",
+      "target": "nmpcouy6cbcm0",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "empcfpd9jnzj9",
-      "source": "nmpcfpd9j6ems",
-      "target": "nmpcfpd9jdhl8",
+      "id": "empcouy6c69u3",
+      "source": "nmpcouy6c4nh7",
+      "target": "nmpcouy6cz8qw",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empcfpd9jw6od",
-      "source": "nmpcfpd9ju8uu",
-      "target": "nmpcfpd9jf3ef",
-      "sourceHandle": "output_value_value",
+      "id": "empcouy6cpzue",
+      "source": "nmpcouy6c9lms",
+      "target": "nmpcouy6c1dfc",
+      "sourceHandle": "output_value_indexes",
+      "targetHandle": "input_value_indexes"
+    },
+    {
+      "id": "empcouy6c6hy1",
+      "source": "nmpcouy6c1dfc",
+      "target": "nmpcouy6cgbhp",
+      "sourceHandle": "output_value_values",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empcfpd9j5gy8",
-      "source": "nmpcfpd9jf3ef",
-      "target": "nmpcfpd9j2i9r",
-      "sourceHandle": "output_value_result",
+      "id": "empcouy6cci49",
+      "source": "nmpcouy6cnu41",
+      "target": "nmpcouy6cgbhp",
+      "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empcfpd9jkt07",
-      "source": "nmpcfpd9j2i9r",
-      "target": "nmpcfpd9jdhl8",
+      "id": "empcouy6c0k28",
+      "source": "nmpcouy6cgbhp",
+      "target": "nmpcouy6cz8qw",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empcfpd9jaahu",
-      "source": "nmpcfpd9jj4pw",
-      "target": "nmpcfpd9j1gue",
+      "id": "empcouy6ceor7",
+      "source": "nmpcouy6c8tgs",
+      "target": "nmpcouy6cy0v9",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empcfpd9jhj4v",
-      "source": "nmpcfpd9j1ydk",
-      "target": "nmpcfpd9jdrph",
+      "id": "empcouy6c6r2h",
+      "source": "nmpcouy6c7mjj",
+      "target": "nmpcouy6c8qz4",
       "sourceHandle": "output_value_indexes",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empcfpd9jakzm",
-      "source": "nmpcfpd9j1gue",
-      "target": "nmpcfpd9jdrph",
+      "id": "empcouy6cro0v",
+      "source": "nmpcouy6cy0v9",
+      "target": "nmpcouy6c8qz4",
       "sourceHandle": "output_value_index",
       "targetHandle": "input_value_position"
     },
     {
-      "id": "empcfpd9j5jy7",
-      "source": "nmpcfpd9jdhl8",
-      "target": "nmpcfpd9jxzvo",
+      "id": "empcouy6ccy04",
+      "source": "nmpcouy6cz8qw",
+      "target": "nmpcouy6c748s",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empcfpd9jusz0",
-      "source": "nmpcfpd9jdrph",
-      "target": "nmpcfpd9jxzvo",
+      "id": "empcouy6ck9zn",
+      "source": "nmpcouy6c8qz4",
+      "target": "nmpcouy6c748s",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_targetNI"
     },
     {
-      "id": "empcfpd9j2vym",
-      "source": "nmpcfpd9juz8b",
-      "target": "nmpcfpd9jxzvo",
+      "id": "empcouy6cyrpi",
+      "source": "nmpcouy6c3t6c",
+      "target": "nmpcouy6c748s",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_payload_0"
     },
     {
-      "id": "empcfpd9j72nn",
-      "source": "nmpcfpd9je9f1",
-      "target": "nmpcfpd9jxzvo",
-      "sourceHandle": "output_value_result",
+      "id": "empcouy6cr1kg",
+      "source": "nmpcouy6cjxe6",
+      "target": "nmpcouy6c748s",
+      "sourceHandle": "output_value_value",
       "targetHandle": "input_value_orientation"
     },
     {
-      "id": "empcfpd9j1c5h",
-      "source": "nmpcfpd9j5u3o",
-      "target": "nmpcfpd9jbm1l",
+      "id": "empcouy6cswxd",
+      "source": "nmpcouy6czdie",
+      "target": "nmpcouy6c479n",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empcfpd9jvh8f",
-      "source": "nmpcfpd9j4bzn",
-      "target": "nmpcfpd9jbm1l",
+      "id": "empcouy6cegra",
+      "source": "nmpcouy6cizbt",
+      "target": "nmpcouy6c479n",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empcfpd9j58jw",
-      "source": "nmpcfpd9jbm1l",
-      "target": "nmpcfpd9jdpxs",
+      "id": "empcouy6ccf4a",
+      "source": "nmpcouy6c479n",
+      "target": "nmpcouy6c6gqw",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empcfpd9jxa00",
-      "source": "nmpcfpd9je9f1",
-      "target": "nmpcfpd9jdpxs",
+      "id": "empcouy6cincy",
+      "source": "nmpcouy6cbfpe",
+      "target": "nmpcouy6c6gqw",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "empcfpd9jedsv",
-      "source": "nmpcfpd9jd9f3",
-      "target": "nmpcfpd9jr6q3",
+      "id": "empcouy6ce5fo",
+      "source": "nmpcouy6ci8qp",
+      "target": "nmpcouy6carsk",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empcfpd9j5yxd",
-      "source": "nmpcfpd9j43o3",
-      "target": "nmpcfpd9jr6q3",
+      "id": "empcouy6c5jl3",
+      "source": "nmpcouy6cw5u2",
+      "target": "nmpcouy6carsk",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empcfpd9jx6jh",
-      "source": "nmpcfpd9jqcec",
-      "target": "nmpcfpd9jhpmq",
+      "id": "empcouy6cahre",
+      "source": "nmpcouy6cxxof",
+      "target": "nmpcouy6cjpdu",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empcfpd9jo29s",
-      "source": "nmpcfpd9jr6q3",
-      "target": "nmpcfpd9jhpmq",
+      "id": "empcouy6c27zb",
+      "source": "nmpcouy6carsk",
+      "target": "nmpcouy6cjpdu",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empcfpd9j1k45",
-      "source": "nmpcfpd9jhpmq",
-      "target": "nmpcfpd9jlw1z",
+      "id": "empcouy6c0rvu",
+      "source": "nmpcouy6cjpdu",
+      "target": "nmpcouy6cbu4x",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empcfpd9jwgyf",
-      "source": "nmpcfpd9j43o3",
-      "target": "nmpcfpd9j04t0",
+      "id": "empcouy6crzvh",
+      "source": "nmpcouy6cw5u2",
+      "target": "nmpcouy6cid7v",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "empcfpd9jhugn",
-      "source": "nmpcfpd9jhqgk",
-      "target": "nmpcfpd9j04t0",
+      "id": "empcouy6czdaf",
+      "source": "nmpcouy6ci7l1",
+      "target": "nmpcouy6cid7v",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "empcfpd9jzyvk",
-      "source": "nmpcfpd9jd9f3",
-      "target": "nmpcfpd9jgw5g",
+      "id": "empcouy6c8tbp",
+      "source": "nmpcouy6ci8qp",
+      "target": "nmpcouy6cj3sw",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empcfpd9jasvn",
-      "source": "nmpcfpd9j04t0",
-      "target": "nmpcfpd9jgw5g",
+      "id": "empcouy6cv8kl",
+      "source": "nmpcouy6cid7v",
+      "target": "nmpcouy6cj3sw",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empcfpd9jmyks",
-      "source": "nmpcfpd9jhpmq",
-      "target": "nmpcfpd9jfh3n",
+      "id": "empcouy6crnbx",
+      "source": "nmpcouy6cjpdu",
+      "target": "nmpcouy6c3ivv",
       "sourceHandle": "output_flow_else",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empcfpd9jwg1b",
-      "source": "nmpcfpd9jgw5g",
-      "target": "nmpcfpd9jfh3n",
+      "id": "empcouy6czkjq",
+      "source": "nmpcouy6cj3sw",
+      "target": "nmpcouy6c3ivv",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empcfpd9jb4ph",
-      "source": "nmpcfpd9jfh3n",
-      "target": "nmpcfpd9jb3k9",
+      "id": "empcouy6ceigm",
+      "source": "nmpcouy6c3ivv",
+      "target": "nmpcouy6c6fqr",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empcfpd9jwg8w",
-      "source": "nmpcfpd9jqcec",
-      "target": "nmpcfpd9j6wtj",
+      "id": "empcouy6cycw9",
+      "source": "nmpcouy6cxxof",
+      "target": "nmpcouy6cl271",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empcfpd9jo4rr",
-      "source": "nmpcfpd9jf8o8",
-      "target": "nmpcfpd9j6wtj",
+      "id": "empcouy6cirdv",
+      "source": "nmpcouy6cub46",
+      "target": "nmpcouy6cl271",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "empcfpd9jt7ci",
-      "source": "nmpcfpd9jwkae",
-      "target": "nmpcfpd9j939y",
+      "id": "empcouy6cbbg7",
+      "source": "nmpcouy6c6fxn",
+      "target": "nmpcouy6c1ch4",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empcfpd9jlkgi",
-      "source": "nmpcfpd9jwkae",
-      "target": "nmpcfpd9j5h3m",
+      "id": "empcouy6cdxi4",
+      "source": "nmpcouy6c6fxn",
+      "target": "nmpcouy6csyec",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empcfpd9kcirk",
-      "source": "nmpcfpd9jcrco",
-      "target": "nmpcfpd9j5h3m",
+      "id": "empcouy6cfa45",
+      "source": "nmpcouy6c7vf5",
+      "target": "nmpcouy6csyec",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "empcfpd9kgo1p",
-      "source": "nmpcfpd9ka1fk",
-      "target": "nmpcfpd9khjhc",
+      "id": "empcouy6d2yz2",
+      "source": "nmpcouy6c4mh3",
+      "target": "nmpcouy6dy3ow",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empcfpd9k49c5",
-      "source": "nmpcfpd9kqaej",
-      "target": "nmpcfpd9khjhc",
+      "id": "empcouy6duqrr",
+      "source": "nmpcouy6c10zn",
+      "target": "nmpcouy6dy3ow",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "empcfpd9kbkny",
-      "source": "nmpcfpd9khjhc",
-      "target": "nmpcfpd9krffm",
+      "id": "empcouy6dj1uw",
+      "source": "nmpcouy6dy3ow",
+      "target": "nmpcouy6dcubh",
       "sourceHandle": "output_flow_case_0",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empcfpd9ko4f3",
-      "source": "nmpcfpd9khjhc",
-      "target": "nmpcfpd9k9ksl",
+      "id": "empcouy6dl0l7",
+      "source": "nmpcouy6dy3ow",
+      "target": "nmpcouy6dyh07",
       "sourceHandle": "output_flow_case_1",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empcfpd9kwfgu",
-      "source": "nmpcfpd9khjhc",
-      "target": "nmpcfpd9ktaps",
+      "id": "empcouy6dv7ef",
+      "source": "nmpcouy6dy3ow",
+      "target": "nmpcouy6dkuev",
       "sourceHandle": "output_flow_case_2",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empcfpd9k0iql",
-      "source": "nmpcfpd9kcw7f",
-      "target": "nmpcfpd9ktaps",
+      "id": "empcouy6dtu98",
+      "source": "nmpcouy6c5e8h",
+      "target": "nmpcouy6dkuev",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "empcfpd9kvsq8",
-      "source": "nmpcfpd9ktaps",
-      "target": "nmpcfpd9k0272",
+      "id": "empcouy6d5xf1",
+      "source": "nmpcouy6dkuev",
+      "target": "nmpcouy6dqneb",
       "sourceHandle": "output_flow_case_0",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empcfpd9kdao5",
-      "source": "nmpcfpd9ktaps",
-      "target": "nmpcfpd9ktxuz",
+      "id": "empcouy6dgsmd",
+      "source": "nmpcouy6dkuev",
+      "target": "nmpcouy6d4jaz",
       "sourceHandle": "output_flow_case_1",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empcfpd9khyls",
-      "source": "nmpcfpd9ktaps",
-      "target": "nmpcfpd9kxgv6",
+      "id": "empcouy6dtge3",
+      "source": "nmpcouy6dkuev",
+      "target": "nmpcouy6dewpk",
       "sourceHandle": "output_flow_case_2",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empcfpd9k2dzx",
-      "source": "nmpcfpd9ktaps",
-      "target": "nmpcfpd9k7do9",
+      "id": "empcouy6dj3th",
+      "source": "nmpcouy6dkuev",
+      "target": "nmpcouy6drxtr",
       "sourceHandle": "output_flow_case_3",
       "targetHandle": "input_flow_do"
     }
@@ -2252,7 +2302,7 @@
   "macroDefs": [],
   "presets": [
     {
-      "id": "preset_mpcfpd9knd0b",
+      "id": "preset_mpcouy6dlg62",
       "name": "Book — Example 5.3 defaults",
       "description": "Kier, Seybold & Cheng (2005), Example 5.3 page 86 — the parameter set the book uses for its micelle-formation demonstration. Produces moderate micelles. NOT identical to any paper Table I set: notably J(W-W) = 1.70 (paper uses 1.0) and J(W-Y) = 2.0 / P_B(W-Y) = 0.20 (very polar head — the paper notes a *modestly* polar head gives larger micelles, so this is intentionally a sub-optimal demo).",
       "state": {
@@ -2315,7 +2365,7 @@
       "createdAt": 1747000000000
     },
     {
-      "id": "preset_mpcfpd9klmff",
+      "id": "preset_mpcouy6dmi9e",
       "name": "Paper — Set 1 (S_y=3.7, strongest)",
       "description": "Kier 1996 Table I row 1 — strongest reported micelle formation (average cluster size S_y = 3.7). Very hydrophobic tail (P_B(X-X)=0.1, J(X-X)=4.0) + modestly polar head (P_B(W-Y)=0.7).",
       "state": {
@@ -2378,7 +2428,7 @@
       "createdAt": 1747000001000
     },
     {
-      "id": "preset_mpcfpd9kurnp",
+      "id": "preset_mpcouy6dun72",
       "name": "Paper — Set 2 (S_y=3.4)",
       "description": "Kier 1996 Table I row 2. Differs from Set 1 in P_B(Y-Y) (0.5 vs 0.3) and J(W-Y) (0.6 vs 0.5). Y self-association reduces micelle size.",
       "state": {
@@ -2441,7 +2491,7 @@
       "createdAt": 1747000002000
     },
     {
-      "id": "preset_mpcfpd9krf10",
+      "id": "preset_mpcouy6dem9m",
       "name": "Paper — Set 3 (S_y=2.7)",
       "description": "Kier 1996 Table I row 3. Very polar head (P_B(W-Y)=0.2) + strong tail-tail (P_B(X-X)=0.1). Smaller micelles than Set 1/2 — head loves water too much, so amphis prefer to disperse over forming clusters.",
       "state": {
@@ -2504,7 +2554,7 @@
       "createdAt": 1747000003000
     },
     {
-      "id": "preset_mpcfpd9k9efq",
+      "id": "preset_mpcouy6dd5dl",
       "name": "Paper — Set 4 (S_y=2.3)",
       "description": "Kier 1996 Table I row 4. Same head as Set 3 (very polar, P_B(W-Y)=0.2) with weaker Y-Y self-association (P_B(Y-Y)=0.3).",
       "state": {
@@ -2567,7 +2617,7 @@
       "createdAt": 1747000004000
     },
     {
-      "id": "preset_mpcfpd9krjyd",
+      "id": "preset_mpcouy6dm1uu",
       "name": "Paper — Set 5 (S_y=1.6)",
       "description": "Kier 1996 Table I row 5. Weaker tail-tail bond (P_B(X-X)=0.3, J(X-X)=1.0) + modestly polar head. Small micelles (~CMC threshold).",
       "state": {
@@ -2630,7 +2680,7 @@
       "createdAt": 1747000005000
     },
     {
-      "id": "preset_mpcfpd9kkxg2",
+      "id": "preset_mpcouy6drgvl",
       "name": "Paper — Set 6 (S_y=1.5)",
       "description": "Kier 1996 Table I row 6. Same as Set 5 but with stronger Y-Y (P_B(Y-Y)=0.6, J(Y-Y)=0.5).",
       "state": {
@@ -2693,7 +2743,7 @@
       "createdAt": 1747000006000
     },
     {
-      "id": "preset_mpcfpd9k4z0a",
+      "id": "preset_mpcouy6dyah4",
       "name": "Paper — Set 7 (S_y=1.5)",
       "description": "Kier 1996 Table I row 7. Very polar head + weak tail-tail. Small micelles — head-water affinity dominates.",
       "state": {
@@ -2756,7 +2806,7 @@
       "createdAt": 1747000007000
     },
     {
-      "id": "preset_mpcfpd9k5bkp",
+      "id": "preset_mpcouy6dctmu",
       "name": "Paper — Set 8 (S_y=1.5, weakest)",
       "description": "Kier 1996 Table I row 8 — weakest micelles. Very polar head + weak tail-tail + strong Y-Y. No incentive for amphis to cluster.",
       "state": {

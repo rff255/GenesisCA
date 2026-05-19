@@ -779,6 +779,12 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       // Orientation: integer 0..3 (N/E/S/W). Clamp to range as a safety net.
       const n = typeof raw === 'number' ? raw : (parseInt(String(raw ?? '0'), 10) || 0);
       num = Number.isFinite(n) && n >= 0 && n <= 3 ? (n | 0) : 0;
+    } else if (t === 'faceLabel') {
+      // Face label index pre-resolved into _resolvedFaceLabelIndex by
+      // compile.ts::preResolveVariegatedNodes (target-independent). Unresolved
+      // (variegation off / unknown label) is -1.
+      const idx = parseInt(String(node.data.config._resolvedFaceLabelIndex ?? -1), 10);
+      num = Number.isFinite(idx) ? idx : -1;
     } else {
       num = typeof raw === 'number' ? raw : (parseInt(String(raw ?? '0'), 10) || 0);
     }
@@ -786,14 +792,8 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       ctx.emitter.f64Const(num);
       return storeResult(ctx.emitter, F64);
     }
-    // bool / integer / tag / orientation — i32
+    // bool / integer / tag / orientation / faceLabel — i32
     ctx.emitter.i32Const(num | 0);
-    return storeResult(ctx.emitter, I32);
-  },
-
-  tagConstant: ({ node, ctx }) => {
-    const idx = Number(node.data.config.tagIndex) || 0;
-    ctx.emitter.i32Const(idx);
     return storeResult(ctx.emitter, I32);
   },
 

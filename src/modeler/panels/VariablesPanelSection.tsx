@@ -39,6 +39,12 @@ export function VariablesPanelSection() {
   return (
     <div className={styles.section}>
       <div className={styles.sectionTitle}>Local Variables</div>
+      <div className={styles.sectionHelp}>
+        Per-cell scratch storage referenced by Get / Set Variable nodes. Each
+        cell sees a fresh copy initialised to the variable's Initial Value at
+        the start of every step — not persisted between steps or shared across
+        cells.
+      </div>
 
       <div className={styles.list} data-reorder-list>
         {variables.map((v, i) => {

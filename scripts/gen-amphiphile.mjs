@@ -153,14 +153,15 @@ function groupNode(label, contents, color) {
   return g;
 }
 
-// TagConstant emits a fixed tag value (stored as its index). Lets the graph
-// reference kinds by NAME (the UI renders "Tag: amphi") instead of hardcoded
-// integers in Statement._port_y.
+// GetConstant in tag mode emits a fixed tag value (stored as its index). Lets
+// the graph reference kinds by NAME (the UI renders "Tag: amphi") instead of
+// hardcoded integers in Statement._port_y. The previous tagConstant node was
+// retired in favour of getConstant.tag — same picker UI, same compiled int.
 function tagConst(tagName, col, row, attrId, tagOptions) {
   const i = tagOptions.indexOf(tagName);
   if (i < 0) throw new Error(`unknown tag: ${tagName}`);
-  return node('tagConstant', {
-    attributeId: attrId, tagIndex: i,
+  return node('getConstant', {
+    constType: 'tag', tagAttributeId: attrId, constValue: String(i),
   }, col, row, `Tag: ${tagName}`);
 }
 
@@ -185,18 +186,17 @@ const MAPPING_VIZ = 'viz';
 const KIND_OPTIONS = ['empty', 'water', 'amphi'];
 const FACE_LABELS = ['X', 'Y', 'water'];
 // LookupInteraction's underlying tableValues row/col is indexed with `none` at
-// position 0 (implicit) and user-labels starting at 1. So:
-//   none=0, X=1, Y=2, water=3
-const FACE_NONE = 0;
-const FACE_X = 1;
-const FACE_WATER = 3;
+// position 0 (implicit) and user-labels starting at 1 (none=0, X=1, Y=2,
+// water=3). The graph references these by NAME via GetConstant.faceLabel —
+// the integer index is resolved at compile time, so reordering FACE_LABELS
+// doesn't silently break the per-direction lookup chain.
 
 // =============================================================================
 // STEP GRAPH — book-faithful move-into-empty
 // =============================================================================
 //
 // Layout philosophy (D.9): "duplicate cheap, route expensive". Simple accessors
-// (getCellAttribute, getOrientation, tagConstant, getAllNeighborIndexes,
+// (getCellAttribute, getOrientation, getConstant.tag, getAllNeighborIndexes,
 // getAllFacingLabels, getNeighborsAttrByIndexes) are DUPLICATED locally near
 // each consumer instead of routed across the graph. The accessor CSE pass
 // (compiler/accessorCSE.ts) merges them into ONE emit at compile time on all
@@ -210,9 +210,9 @@ const FACE_WATER = 3;
 // The per-direction forEach loop body lives in its own cluster (cols 4-11,
 // rows 6-11) — hangs off condBreak.then and populates `weights[d]`.
 //
-// The rotation block (cols 13-15, rows 5-10) sits to the right of the loop,
-// close to moveSelf (which consumes rotatedOri) and feeds the secondary
-// rotation pass at the bottom of the graph.
+// The rotation block (cols 13-15, rows 5-10) sits to the right of the loop;
+// it feeds the secondary rotation pass at the bottom of the graph (no
+// longer wired into moveSelf — rotation is deferred to the rotation pass).
 
 const stepNode = node('step', {}, 0, 0);
 
@@ -232,9 +232,12 @@ const condCanMove = node('conditional', {}, 9, 0, 'If has empty dir');
 // condBreak.then → condCanMove.check wired LATER (see "Gate 3" below).
 
 // ─── Rotation values (cols 13-15, rows 5-9) ────────────────────────────────
-// Declared early because moveSelf (in the top chain) reads `rotatedOri` and
-// the rotation pass (below) reads `rotGateAnd` and `rotatedOri`. Sits to
-// the right of the forEach body in a compact cluster.
+// Computes `newOri = mod(ori + rotStep, 4)` and the `amphi AND all-cardinals-
+// empty` gate. Consumed only by the rotation pass below (setRotOri); moveSelf
+// uses its own local getOrientation, so a free amphi that moves AND rotates
+// in the same step has the rotation applied at the SOURCE cell on the next
+// rotation pass — not at the destination. Sits to the right of the forEach
+// body in a compact cluster.
 //
 // Each accessor here is a LOCAL copy — the CSE pass dedups them at compile
 // time, so the graph reads like a self-contained rotation subregion.
@@ -244,16 +247,15 @@ const isSelfAmphi = node('statement', { operation: '==' }, 14, 5, 'kind == amphi
 vEdge(kindRead_rot, 'value', isSelfAmphi, 'x');
 vEdge(tagAmphi_rot, 'value', isSelfAmphi, 'y');
 
-// "All 4 cardinals are empty" via groupCounting (count where kind==empty) == 4.
+// "All 4 cardinals are empty" via groupStatement.allIs — a single-node
+// shorthand for `kinds[].every(v => v === empty)`.
 const niArr_rot = node('getAllNeighborIndexes', { neighborhoodId: NBR_VN }, 13, 7, 'NIs vN');
 const kindsArr_rot = node('getNeighborsAttrByIndexes', { attributeId: ATTR_KIND }, 13, 8, 'kinds[4]');
 vEdge(niArr_rot, 'indexes', kindsArr_rot, 'indexes');
 const tagEmpty_rot = tagConst('empty', 13, 9, ATTR_KIND, KIND_OPTIONS);
-const emptyCount = node('groupCounting', { operation: 'equals' }, 14, 8, 'count(kind == empty)');
-vEdge(kindsArr_rot, 'values', emptyCount, 'values');
-vEdge(tagEmpty_rot, 'value', emptyCount, 'compare');
-const isAllEmpty = node('statement', { operation: '==', _port_y: '4' }, 15, 8, 'count == 4 ?');
-vEdge(emptyCount, 'count', isAllEmpty, 'x');
+const isAllEmpty = node('groupStatement', { operation: 'allIs' }, 15, 8, 'all kinds == empty?');
+vEdge(kindsArr_rot, 'values', isAllEmpty, 'values');
+vEdge(tagEmpty_rot, 'value', isAllEmpty, 'x');
 
 const rotGateAnd = node('aggregate', { operation: 'and' }, 15, 6, 'amphi AND free?');
 vEdge(isSelfAmphi, 'result', rotGateAnd, 'values');
@@ -266,14 +268,15 @@ const rotStepRand = node('getRandom', {
 const newOri = exprNode('mod(ori + step, 4)', ['ori', 'step'], 14, 10, 'newOri');
 vEdge(oriRead_rot, 'value', newOri, 'a');
 vEdge(rotStepRand, 'value', newOri, 'b');
-
-// rotatedOri: ifValue = newOri when gated, else preserve current ori. Consumed
-// by both moveSelf (carries rotation to destination on the same step) and the
-// rotation pass below (applies rotation to non-moving free amphis).
-const rotatedOri = node('valueSwitch', {}, 15, 10, 'rotatedOri = gate ? new : ori');
-vEdge(rotGateAnd, 'result', rotatedOri, 'condition');
-vEdge(newOri, 'result', rotatedOri, 'ifValue');
-vEdge(oriRead_rot, 'value', rotatedOri, 'elseValue');
+// newOri is consumed only by the rotation pass below (setRotOri). The
+// previous design also fed it into moveSelf via a rotatedOri ValueSwitch
+// gated on `rotGateAnd`, so a free amphi that moved + rotated in the same
+// step would deliver its post-rotation orientation to the destination.
+// Per user review: that conflates "face direction the cell chose to move
+// through" with "face presented at the destination" — semantically wrong,
+// since the amphi's move was decided based on the PRE-rotation face. The
+// move now transfers the current orientation (local getOrientation near
+// moveSelf), and rotation is deferred to the rotation pass below.
 
 // ─── Gate 1: cell is occupied? (cols 1-2, rows 1-2) ───────────────────────
 const kindRead_occ = node('getCellAttribute', { attributeId: ATTR_KIND }, 1, 1, 'My kind');
@@ -342,16 +345,22 @@ const isFarWater = node('statement', { operation: '==' }, 7, 9, 'far==water');
 vEdge(farKind_d, 'value', isFarWater, 'x');
 vEdge(tagWater_loop, 'value', isFarWater, 'y');
 
-const farLabelWaterElse = node('valueSwitch', {
-  _port_ifValue: String(FACE_WATER),
-  _port_elseValue: String(FACE_NONE),
-}, 8, 9, 'water?WATER:NONE');
-vEdge(isFarWater, 'result', farLabelWaterElse, 'condition');
+// Face-label constants — reorder-safe references to the variegated face-label
+// list. GetConstant.faceLabel resolves NAME → integer index at compile time
+// (none=0, X=1, Y=2, water=3 in this model), so renaming or reordering the
+// face-label list in Properties doesn't silently break the chain.
+const faceX     = node('getConstant', { constType: 'faceLabel', constValue: 'X' },     6, 7, 'Face: X');
+const faceWater = node('getConstant', { constType: 'faceLabel', constValue: 'water' }, 6, 10, 'Face: water');
+const faceNone  = node('getConstant', { constType: 'faceLabel', constValue: 'none' },  7, 10, 'Face: none');
 
-const farLabel_d = node('valueSwitch', {
-  _port_ifValue: String(FACE_X),
-}, 8, 8, 'amphi?X:above');
+const farLabelWaterElse = node('valueSwitch', {}, 8, 9, 'water?WATER:NONE');
+vEdge(isFarWater, 'result', farLabelWaterElse, 'condition');
+vEdge(faceWater, 'value', farLabelWaterElse, 'ifValue');
+vEdge(faceNone, 'value', farLabelWaterElse, 'elseValue');
+
+const farLabel_d = node('valueSwitch', {}, 8, 8, 'amphi?X:above');
 vEdge(isFarAmphi, 'result', farLabel_d, 'condition');
+vEdge(faceX, 'value', farLabel_d, 'ifValue');
 vEdge(farLabelWaterElse, 'result', farLabel_d, 'elseValue');
 
 const j_d = node('lookupInteraction', { tableId: ATTR_J }, 9, 7, 'J(myFace, farLabel)');
@@ -375,17 +384,23 @@ vEdge(forEachDirs, 'index', setWeight, 'index');
 vEdge(wt_d, 'result', setWeight, 'value');
 
 // ─── Gate 3: any direction available? (cols 7-9, rows 1-3) ────────────────
-// Reads the `weights` Local Variable (populated by the forEach loop above).
-// Wire the `condBreak.then → condCanMove.check` edge HERE — AFTER the
-// forEach's `do` edge was added — so compileFlowChain processes the loop
-// before the gate.
+// Pure TOPOLOGY question: "does at least one cardinal neighbour have
+// kind==empty?". Computed via a single groupStatement.hasA on the cell's
+// 4 cardinal kinds[] — independent of the joining weights (the previous
+// `sumW > 0` gate accidentally rejected the move when every empty
+// neighbour happened to have J(myFace, farLabel)=0, even though the move
+// is still topologically valid). Wire the `condBreak.then → condCanMove`
+// edge HERE — AFTER the forEach's `do` edge was added — so compileFlowChain
+// processes the loop before the gate.
 fEdge(condBreak, 'then', condCanMove, 'check');
-const weightsRead_gate = node('getVariable', { variableId: 'weights' }, 7, 2, 'weights[]');
-const sumWAgg = node('aggregate', { operation: 'sum' }, 8, 2, 'Σ weights');
-vEdge(weightsRead_gate, 'value', sumWAgg, 'values');
-const sumPos = node('statement', { operation: '>' }, 9, 2, 'sumW > 0?');
-vEdge(sumWAgg, 'result', sumPos, 'x');
-vEdge(sumPos, 'result', condCanMove, 'condition');
+const niArr_gate = node('getAllNeighborIndexes', { neighborhoodId: NBR_VN }, 7, 1, 'NIs vN');
+const kindsArr_gate = node('getNeighborsAttrByIndexes', { attributeId: ATTR_KIND }, 7, 2, 'kinds[4]');
+vEdge(niArr_gate, 'indexes', kindsArr_gate, 'indexes');
+const tagEmpty_gate = tagConst('empty', 7, 3, ATTR_KIND, KIND_OPTIONS);
+const hasEmptyDir = node('groupStatement', { operation: 'hasA' }, 9, 2, 'hasA(empty)?');
+vEdge(kindsArr_gate, 'values', hasEmptyDir, 'values');
+vEdge(tagEmpty_gate, 'value', hasEmptyDir, 'x');
+vEdge(hasEmptyDir, 'result', condCanMove, 'condition');
 
 // ─── moveSelf inputs (cols 10-11, rows 1-3) ───────────────────────────────
 // Sample a direction proportional to weights, look up its NI, move.
@@ -397,10 +412,12 @@ const chosenNI = node('arrayElement', {}, 11, 3, 'NI of chosen dir');
 vEdge(niArr_pick, 'indexes', chosenNI, 'array');
 vEdge(chosenSamp, 'index', chosenNI, 'position');
 
-// Move sequence: payload = MY kind (local read), orientation = rotatedOri
-// (so a free amphi that rotates AND moves the same step carries its
-// rotation effect to the destination instead of losing it).
+// Move sequence: payload = MY kind, orientation = MY current orientation
+// (NOT the post-rotation orientation). Carrying the rotated orientation
+// would mean the destination cell sees a face that didn't drive the move
+// decision; rotation is deferred to the rotation pass below.
 const kindRead_payload = node('getCellAttribute', { attributeId: ATTR_KIND }, 12, 1, 'My kind');
+const oriRead_move = node('getOrientation', {}, 12, 2, 'My ori');
 const moveSelf = node('moveSelfToNeighbor', {
   payloadCount: 1,
   attr_0: ATTR_KIND,
@@ -409,20 +426,19 @@ const moveSelf = node('moveSelfToNeighbor', {
 fEdge(condCanMove, 'then', moveSelf, 'do');
 vEdge(chosenNI, 'value', moveSelf, 'targetNI');
 vEdge(kindRead_payload, 'value', moveSelf, 'payload_0');
-vEdge(rotatedOri, 'result', moveSelf, 'orientation');
+vEdge(oriRead_move, 'value', moveSelf, 'orientation');
 
 // =============================================================================
 // ROTATION PASS — book §2.3.9
 // =============================================================================
 // "Free cells rotate during every iteration" — gate fires only for amphi cells
-// whose 4 cardinals are all empty. Defensive against the corner case where a
-// free amphi doesn't move (impossible under strict book parameters since
-// P_break=1 and sumW=4 for free amphi, but the gate stays here so the
-// rotation rule is correctly applied regardless of move). The actual rotation
-// effect on a moving free amphi is carried via `rotatedOri` consumed by the
-// move sequence above; this pass only matters if the move didn't fire.
-// Sits right below the rotation values cluster so the gate + apply share the
-// same column span as their inputs (rotGateAnd at col 15, rotatedOri at col 15).
+// whose 4 cardinals are all empty (book §2.3.9). Independent flow root off
+// stepNode; runs every step regardless of whether the cell moved. If a free
+// amphi happened to move this step, the rotation applies at the (now-empty)
+// SOURCE cell — a no-op for the destination cell which already received the
+// pre-rotation orientation via moveSelf. Sits right below the rotation values
+// cluster so the gate + apply share the same column span as their inputs
+// (rotGateAnd at col 15, newOri at col 14).
 const rotRow = 14;
 
 const condRotate = node('conditional', {}, 14, rotRow, 'If amphi+free');
@@ -431,7 +447,7 @@ vEdge(rotGateAnd, 'result', condRotate, 'condition');
 
 const setRotOri = node('setOrientation', { _port_value: '0' }, 15, rotRow, 'Apply rotation');
 fEdge(condRotate, 'then', setRotOri, 'do');
-vEdge(rotatedOri, 'result', setRotOri, 'value');
+vEdge(newOri, 'result', setRotOri, 'value');
 
 // =============================================================================
 // INIT EVENT — per cell, on Reset
@@ -586,9 +602,9 @@ groupNode(
     condOccupied, condBreak, condCanMove, moveSelf,
     kindRead_occ, tagEmpty_occ, isSelfOccupied,
     allFaces_bond, pbsArr, pBreakAgg, rollBreak,
-    weightsRead_gate, sumWAgg, sumPos,
+    niArr_gate, kindsArr_gate, tagEmpty_gate, hasEmptyDir,
     weightsRead_pick, chosenSamp, niArr_pick, chosenNI,
-    kindRead_payload,
+    kindRead_payload, oriRead_move,
   ],
   '#4a6858',
 );
@@ -602,20 +618,21 @@ groupNode(
     niArr_loop, niArr2_loop, allFaces_loop, kindsArr_loop, farKindsArr_loop,
     forEachDirs, kind_d, myFace_d, farKind_d,
     tagAmphi_loop, tagWater_loop, tagEmpty_loop,
-    isFarAmphi, isFarWater, farLabelWaterElse, farLabel_d,
+    isFarAmphi, isFarWater,
+    faceX, faceWater, faceNone, farLabelWaterElse, farLabel_d,
     j_d, isAdjEmpty, wt_d, setWeight,
   ],
   '#4a5878',
 );
 
-// Rotation values (feed moveSelf.orientation and the rotation pass below).
+// Rotation values (feed the rotation pass below).
 groupNode(
-  'Rotation values (rotatedOri + amphi-AND-free gate)',
+  'Rotation values (newOri + amphi-AND-free gate)',
   [
     kindRead_rot, tagAmphi_rot, isSelfAmphi,
-    niArr_rot, kindsArr_rot, tagEmpty_rot, emptyCount, isAllEmpty,
+    niArr_rot, kindsArr_rot, tagEmpty_rot, isAllEmpty,
     rotGateAnd,
-    oriRead_rot, rotStepRand, newOri, rotatedOri,
+    oriRead_rot, rotStepRand, newOri,
   ],
   '#705038',
 );
