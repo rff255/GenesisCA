@@ -1787,6 +1787,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <option value="and">AND (all)</option>
             <option value="or">OR (any)</option>
             <option value="random">Pick Random</option>
+            <option value="weightedRandom">Pick Weighted Random</option>
           </select>
         )}
 

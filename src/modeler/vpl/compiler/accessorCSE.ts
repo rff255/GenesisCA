@@ -98,15 +98,16 @@ const NEVER_PURE_TYPES = new Set<string>([
   'macroOutput',
 ]);
 
-/** For nodes whose config carries an `op` field, this set marks ops whose
- *  emit has a side effect (RNG advance / non-deterministic selection). */
-const IMPURE_OPS = new Set<string>(['random']);
+/** For nodes whose config carries an `operation` field, this set marks ops
+ *  whose emit has a side effect (RNG advance / non-deterministic selection)
+ *  and so must NEVER be CSE'd across instances. */
+const IMPURE_OPS = new Set<string>(['random', 'weightedRandom']);
 
 /** True iff the node TYPE is structurally pure (modulo config / inputs). */
 function isPureType(node: GraphNode): boolean {
   const t = node.data.nodeType;
   if (NEVER_PURE_TYPES.has(t)) return false;
-  if ((t === 'aggregate' || t === 'groupOperator') && IMPURE_OPS.has(String(node.data.config.op))) {
+  if ((t === 'aggregate' || t === 'groupOperator') && IMPURE_OPS.has(String(node.data.config.operation))) {
     return false;
   }
   return true;

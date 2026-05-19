@@ -381,12 +381,13 @@ const condCanMove = node('conditional', {}, 5, 0, 'If has empty dir');
 fEdge(condBreak, 'then', condCanMove, 'check');
 vEdge(sumPos, 'result', condCanMove, 'condition');
 
-// --- Direction sampling (Tier-B.2: single SampleArrayByWeight node) -------
-// Replaces the cumulative-sum + nested-ValueSwitch chain (10 nodes → 1) with
-// a single weighted-pick node. Feeds the 4 per-direction weight scalars as a
-// multi-source isArray input (same pattern as Aggregate's `values` port).
-const chosenSamp = node('sampleArrayByWeight', {}, 12, 18, 'Sample direction');
-wt.forEach(w => vEdge(w, 'result', chosenSamp, 'weights'));
+// --- Direction sampling (Tier-D.2: GroupOperator.weightedRandom) ----------
+// Folds the cumulative-sum weighted sampler into the existing GroupReduce
+// node, where it sits alongside the uniform `random` op as a natural family
+// member. The 4 per-direction weight scalars wire to its `values` input via
+// the same multi-source isArray pattern Aggregate uses.
+const chosenSamp = node('groupOperator', { operation: 'weightedRandom' }, 12, 18, 'Pick direction');
+wt.forEach(w => vEdge(w, 'result', chosenSamp, 'values'));
 
 // chosenNI = niArr[chosenSamp.index]
 const chosenNI = node('arrayElement', {}, 13, 18, 'NI of chosen dir');
