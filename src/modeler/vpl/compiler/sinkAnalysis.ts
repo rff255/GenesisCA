@@ -356,14 +356,18 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
 
   // -----------------------------------------------------------------
   // Compute element-dependency map for each ForEachInArray node.
-  // A value depending on a forEach's `element` output cannot be hoisted out
-  // of that forEach's body — `element` is only in scope inside the body.
+  // A value depending on a forEach's `element` OR `index` output cannot be
+  // hoisted out of that forEach's body — both vars are only in scope inside
+  // the body. Without walking BOTH ports, value nodes that read only the
+  // iteration counter (e.g. ArrayElement[index] on parallel arrays in
+  // chemistry models) get hoisted to a parent scope and reference an
+  // undeclared loop counter.
   // -----------------------------------------------------------------
 
   const elementDependentsByForEach = new Map<string, Set<string>>();
-  function forwardValueConsumers(seedNodeId: string, seedPortId: string): Set<string> {
+  function forwardValueConsumersMulti(seeds: Array<{ nodeId: string; portId: string }>): Set<string> {
     const result = new Set<string>();
-    const queue: Array<{ nodeId: string; portId: string }> = [{ nodeId: seedNodeId, portId: seedPortId }];
+    const queue: Array<{ nodeId: string; portId: string }> = [...seeds];
     while (queue.length > 0) {
       const src = queue.shift()!;
       const enqueueConsumer = (cid: string): void => {
@@ -399,7 +403,10 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
   }
   for (const node of nodes) {
     if (node.data.nodeType === 'forEachInArray') {
-      elementDependentsByForEach.set(node.id, forwardValueConsumers(node.id, 'element'));
+      elementDependentsByForEach.set(node.id, forwardValueConsumersMulti([
+        { nodeId: node.id, portId: 'element' },
+        { nodeId: node.id, portId: 'index' },
+      ]));
     }
   }
 
