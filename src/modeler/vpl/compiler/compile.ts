@@ -57,7 +57,7 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
 // Compile a single root's subgraph (per-cell body)
 // ---------------------------------------------------------------------------
 
-const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels', 'sampleArrayByWeight']);
+const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels']);
 
 /** Check if a node's data uses multi-output variable naming */
 function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
@@ -176,6 +176,18 @@ function buildFusedGroupOperatorJS(nodeId: string, op: string, nbrId: string, at
       return `${head} let ${idx} = 0; let ${result} = ${elemAt('0')}; for (let ${i} = 1; ${i} < ${sz}; ${i}++) { const ${e} = ${elemAt(i)}; if (${e} < ${result}) { ${result} = ${e}; ${idx} = ${i}; } }`;
     case 'random':
       return `${head} const ${idx} = Math.floor(Math.random() * ${sz}); const ${result} = ${elemAt(idx)};`;
+    case 'weightedRandom': {
+      // Cumulative-sum weighted sampling over the neighborhood values. Uses
+      // the shared _rs xorshift32 stream. Empty neighborhood (sz==0) returns
+      // index=-1, result=0; sum<=0 same.
+      const advance = '_rs = (_rs ^ (_rs << 13)) >>> 0;'
+        + ' _rs = (_rs ^ (_rs >>> 17)) >>> 0;'
+        + ' _rs = (_rs ^ (_rs << 5)) >>> 0;';
+      const sum = `_gs${nodeId}`;
+      const u = `_gu${nodeId}`;
+      const acc = `_ga${nodeId}`;
+      return `${head} ${advance} let ${sum} = 0; for (let ${i} = 0; ${i} < ${sz}; ${i}++) ${sum} += ${elemAt(i)}; let ${idx} = -1; let ${result} = 0; if (${sum} > 0) { const ${u} = (_rs / 4294967296) * ${sum}; let ${acc} = 0; for (let ${i} = 0; ${i} < ${sz}; ${i}++) { ${acc} += ${elemAt(i)}; if (${u} < ${acc}) { ${idx} = ${i}; ${result} = ${elemAt(i)}; break; } } if (${idx} < 0) { ${idx} = ${sz} - 1; ${result} = ${elemAt(idx)}; } }`;
+    }
     case 'sum':
     default:
       return `${head} let ${result} = 0; for (let ${i} = 0; ${i} < ${sz}; ${i}++) ${result} += ${elemAt(i)}; const ${idx} = -1;`;

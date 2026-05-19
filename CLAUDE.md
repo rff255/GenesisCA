@@ -682,9 +682,9 @@ All three compile targets run `canonicalizeAccessorEdges` from [accessorCSE.ts](
 
 ---
 
-## Chemistry Primitives (B.0 + B.1 + B.2 + B.3 nodes)
+## Chemistry Primitives (B.0 + B.1 + B.3 + GroupOperator.weightedRandom)
 
-Four additions on the `variegated_cells` branch that collapse the per-direction unroll typical of Kier-style chemistry CA models. Together they cut the Amphiphile example graph from 125 → 105 nodes (175 → 133 edges), and the high-level structure now mirrors the book's pseudocode for the move-into-empty rule.
+Additions on the `variegated_cells` branch that collapse the per-direction unroll typical of Kier-style chemistry CA models. Together they cut the Amphiphile example graph from 125 → ~109 nodes (175 → 137 edges), and the high-level structure now mirrors the book's pseudocode for the move-into-empty rule.
 
 ### B.0 — `cardinalsOnly` flag on `GetAllFacingLabels`
 Optional config (default false). When true, the node emits 4-slot N/E/S/W arrays (cardinal directions only) instead of the default 8-slot Moore arrays. Slot indexing collapses 0/2/4/6 → 0/1/2/3. The face-rotation arithmetic still uses the Moore slot for lookup, but the OUTPUT arrays are 4-wide. Per-target: JS allocates `Int32Array(4)`, WASM allocates `4 × I32`, WebGPU `array<i32, 4>`. UI checkbox in CaNode. Book §2.3.6 P_B product naturally fits this — it's defined over Von Neumann (4 cardinals) not full Moore.
@@ -692,8 +692,17 @@ Optional config (default false). When true, the node emits 4-slot N/E/S/W arrays
 ### B.1 — `InteractionTableMap` node
 Vectorised `LookupInteraction` over parallel face-label arrays. Inputs: `myFaces` + `theirFaces` (parallel int arrays — typically the two outputs of `GetAllFacingLabels` in cardinals-only mode). Output: `values` (float array, length = min of input lengths). Replaces N scalar `LookupInteraction` chains with one node + one per-cell loop. Pair with `Aggregate.product` for the book's `P_break = ∏ P_B(myFace, theirFace)` formula. Registered as an `ARRAY_NODE_EMITTER` on all three targets. `requirements: { variegated: true }`.
 
-### B.2 — `SampleArrayByWeight` node
-Cumulative-sum sampler. Input: `weights` (float array). Outputs: `index` (i32) + `weight` (float). Empty array OR sum-of-weights == 0 → `index = -1`. Always advances the shared RNG once (xorshift32 on JS/WASM, per-cell PCG on WebGPU) — parity with every other random-using node so branched control flow stays in step across targets. Numerical-safety fallback: if FP drift puts u >= sum, picks last index instead of returning -1. Multi-output (`index` + `weight` ports). Both compilers support BOTH single-array-source AND multi-source-scalars input (mirrors Aggregate's input handling) — needed because per-direction weights from per-direction `valueSwitch` nodes feed as multi-source isArray scalars, not a single array.
+### D.2 — `GroupOperator.weightedRandom` op (replaces standalone `SampleArrayByWeight`)
+Cumulative-sum weighted sampling folded into the existing `GroupReduce` node alongside its sibling `random` (uniform) op. Treats the input array as weights; outputs `result` = picked weight, `index` (alias `position`) = picked index. Empty / zero-sum input → `index = -1`, `result = 0`. Always advances the shared RNG once (xorshift32 on JS/WASM, per-cell PCG on WebGPU) — same always-advance semantics as every other RNG-using node so cross-target branched control flow stays in step. FP-drift fallback picks the last index if numerical drift puts u >= sum.
+
+The earlier standalone `SampleArrayByWeight` node was removed: the multi-source scalar variant exposed an invisible coupling (the SampleArrayByWeight's output `index` had no intrinsic order — it only worked when the same code wrote both the weight edges AND the consumer's index lookup, since edge order alone determined the implicit array order). `GroupOperator.weightedRandom` keeps the same operational shape (`values → result + position`, like uniform `random`) but its semantics demand a properly-ordered array source (or the same multi-source scalar convention Aggregate uses).
+
+All three input shapes supported, mirroring Aggregate / the uniform `random` op:
+- Single ArrayRef source (e.g. `InteractionTableMap → groupOperator.weightedRandom`) — the canonical chemistry pattern.
+- Multi-source scalars (e.g. 4× per-direction `wt_d → groupOperator.weightedRandom`) — what the current Amphiphile uses pre-D.4.
+- Single `getNeighborsAttribute` nbr-path source — materialises to a temporary array, then samples.
+
+WASM emit lives in three sites paralleling the other groupOperator ops: `emitAggregateOrCount` (nbr-path), `emitArrayAggregate` (single ArrayRef), `emitScalarAggregate` (multi-source scalars). WebGPU emit lives at the top of `emitAggregateOrCount` and materialises all three input shapes through a unified post-fill path. JS emit is in `GroupOperatorNode.compile()` (standalone) plus `buildFusedGroupOperatorJS` (fused-nbr path).
 
 ### B.3 — `MoveSelfToNeighbor` node
 Flow node that packages the atomic chemistry move-into-vacancy idiom. Static ports: `do` (flow input), `targetNI` (NI value), `orientation` (value, only shown when `transferOrientation` config is true). Dynamic per-slot value inputs `payload_${i}` driven by `payloadCount` config + per-slot `attr_${i}` config (which cell attribute to transfer). Emits, per slot: `w_attr[targetCell] = payload` then `w_attr[idx] = attr.defaultValue` (clear self to schema default). If `transferOrientation`: pushes orientation to target + clears self to 0.
@@ -710,8 +719,8 @@ CaNode UI: list of attribute-slot rows with dropdown + `−` button, `+ Slot` bu
 `interactionTableMap` joins `lookupInteraction` in the variegation pre-resolve pass that injects `_labelCount` into the node's config from `faceLabels.length + 1`. JS-target only; WASM/WebGPU read `ctx.layout.interactionTableLabelCount` directly.
 
 ### Behavioural notes
-- SampleArrayByWeight always advances the RNG even on empty/zero-sum input. Models that relied on conditional RNG skipping would see different sequences — but no existing model uses this pattern (the node is new).
-- InteractionTableMap is pure (CSE-eligible per `accessorCSE.ts`'s purity rules — it has no RNG, indicator reads, or write side-effects). SampleArrayByWeight is impure (RNG). Both are filtered correctly by the existing accessor-CSE classification.
+- `groupOperator.weightedRandom` always advances the RNG even on empty/zero-sum input. Models that relied on conditional RNG skipping would see different sequences — but no existing model uses this pattern (the op is new).
+- InteractionTableMap is pure (CSE-eligible per `accessorCSE.ts`'s purity rules — it has no RNG, indicator reads, or write side-effects). `groupOperator.weightedRandom` is impure (RNG) — same as the existing `random` op. The accessor-CSE classifier already filters `groupOperator` instances by op name (any op === `'random'`), and the same filter covers `weightedRandom` automatically.
 - `interactionTableMap` on a sub-attribute source: untested. The scalar `lookupInteraction` doesn't handle sub-attributes either (interaction tables are typically full model-attribute lookups). If users need sub-attribute-aware variants, file follow-up.
 
 ---

@@ -65,7 +65,6 @@ import { GetAllNeighborIndexesNode } from './GetAllNeighborIndexesNode';
 import { ArrayElementNode } from './ArrayElementNode';
 import { ArrayLengthNode } from './ArrayLengthNode';
 import { PickNRandomNeighborsNode } from './PickNRandomNeighborsNode';
-import { SampleArrayByWeightNode } from './SampleArrayByWeightNode';
 import { MoveSelfToNeighborNode } from './MoveSelfToNeighborNode';
 
 const ALL_NODES: NodeTypeDef[] = [
@@ -125,7 +124,6 @@ const ALL_NODES: NodeTypeDef[] = [
   JoinNeighborsNode,
   PickRandomNeighborNode,
   PickNRandomNeighborsNode,
-  SampleArrayByWeightNode,
   // Output
   SetAttributeNode,
   UpdateAttributeNode,

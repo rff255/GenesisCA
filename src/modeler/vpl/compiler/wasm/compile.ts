@@ -1369,144 +1369,6 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     }
   },
 
-  // -- Sample By Weight (cumulative-sum sampling over an input weights array)
-  // Multi-output: returns 'index' (i32; -1 when empty / sum == 0) and 'weight'
-  // (f64; 0 in the same cases). Always advances the shared xorshift32 RNG once
-  // — parity with JS / WebGPU and every other random-using node, so different
-  // control-flow branches that DO sample stay in step across compile targets.
-  //
-  // Two source shapes supported (mirrors Aggregate):
-  //   - single array source (`getNeighborsAttrByIndexes`, `interactionTableMap`,
-  //     etc.): direct ArrayRef via resolveInputArray.
-  //   - multi-source scalars (Aggregate-style): materialise each scalar into a
-  //     fresh f64 scratch array, then run the sampling logic.
-  sampleArrayByWeight: ({ node, ctx }) => {
-    const em = ctx.emitter;
-    let inArr = resolveInputArray(ctx, node, 'weights');
-    if (!inArr) {
-      // Multi-source scalar path: build a temporary f64 scratch array from each
-      // scalar source, then proceed as if it were a single array source.
-      const sources = ctx.inputToSources.get(`${node.id}:weights`) ?? [];
-      if (sources.length === 0) {
-        ctx.errors.push('sampleArrayByWeight: no weights input wired');
-        return null;
-      }
-      const N = sources.length;
-      // Allocate scratch (N × f64 = N × 8 bytes)
-      const tmpOff = em.allocLocal(I32);
-      em.localGet(ctx.scratchTopLocal); em.localSet(tmpOff);
-      em.localGet(ctx.scratchTopLocal); em.i32Const(N * 8); em.op(OP_I32_ADD); em.localSet(ctx.scratchTopLocal);
-      const tmpLen = em.allocLocal(I32);
-      em.i32Const(N); em.localSet(tmpLen);
-      // Fill scratch[k] = sources[k] (promote i32 sources to f64)
-      for (let k = 0; k < N; k++) {
-        const src = sources[k]!;
-        const sref = compileValueNode(src.nodeId, ctx, src.portId);
-        if (!sref) {
-          ctx.errors.push(`sampleArrayByWeight: scalar source ${src.nodeId} did not produce a value`);
-          return null;
-        }
-        em.i32Const(k * 8);
-        em.localGet(tmpOff);
-        em.op(OP_I32_ADD);
-        em.localGet(sref.localIdx);
-        if (sref.valtype !== F64) em.op(OP_F64_CONVERT_I32_S);
-        em.f64Store(0, 3);
-      }
-      inArr = { kind: 'array', offsetLocal: tmpOff, lenLocal: tmpLen, elemValtype: F64, elemBytes: 8 };
-    }
-
-    // Advance _rs (xorshift32). Same constants as GetRandomNode.
-    const rsLocal = em.allocLocal(I32);
-    em.i32Const(0); em.i32Load(ctx.layout.rngStateOffset, 2); em.localSet(rsLocal);
-    em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(13);
-    em.op(byte(0x74)); em.op(byte(0x73)); em.localSet(rsLocal);
-    em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(17);
-    em.op(byte(0x76)); em.op(byte(0x73)); em.localSet(rsLocal);
-    em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(5);
-    em.op(byte(0x74)); em.op(byte(0x73)); em.localSet(rsLocal);
-    em.i32Const(0); em.localGet(rsLocal); em.i32Store(ctx.layout.rngStateOffset, 2);
-
-    // sum = sum(weights[i] as f64) over i in [0, len)
-    const sumLocal = em.allocLocal(F64);
-    em.f64Const(0); em.localSet(sumLocal);
-    const sumI = em.allocLocal(I32);
-    em.i32Const(0); em.localSet(sumI);
-    em.block(() => {
-      em.loop(() => {
-        em.localGet(sumI); em.localGet(inArr.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
-        // sum += weights[sumI]
-        em.localGet(sumLocal);
-        em.localGet(sumI); emitArrayLoadElem(em, inArr);
-        if (inArr.elemValtype !== F64) em.op(OP_F64_CONVERT_I32_S);
-        em.op(OP_F64_ADD);
-        em.localSet(sumLocal);
-        em.localGet(sumI); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(sumI);
-        em.br(0);
-      });
-    });
-
-    // Allocate output locals (defaults: index=-1, weight=0)
-    const idxLocal = em.allocLocal(I32);
-    em.i32Const(-1); em.localSet(idxLocal);
-    const wtLocal = em.allocLocal(F64);
-    em.f64Const(0); em.localSet(wtLocal);
-
-    // if (sum > 0): u = rand * sum; cumulative scan
-    em.localGet(sumLocal);
-    em.f64Const(0);
-    em.op(OP_F64_GT);
-    em.ifThen(() => {
-      const uLocal = em.allocLocal(F64);
-      em.localGet(rsLocal);
-      em.op(OP_F64_CONVERT_I32_U);
-      em.f64Const(4294967296);
-      em.op(OP_F64_DIV);
-      em.localGet(sumLocal);
-      em.op(OP_F64_MUL);
-      em.localSet(uLocal);
-
-      const accLocal = em.allocLocal(F64);
-      em.f64Const(0); em.localSet(accLocal);
-      const i = em.allocLocal(I32);
-      em.i32Const(0); em.localSet(i);
-      em.block(() => {
-        em.loop(() => {
-          em.localGet(i); em.localGet(inArr.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
-          // wHere = weights[i] (as f64)
-          const wHere = em.allocLocal(F64);
-          em.localGet(i); emitArrayLoadElem(em, inArr);
-          if (inArr.elemValtype !== F64) em.op(OP_F64_CONVERT_I32_S);
-          em.localSet(wHere);
-          // acc += wHere
-          em.localGet(accLocal); em.localGet(wHere); em.op(OP_F64_ADD); em.localSet(accLocal);
-          // if (u < acc) { idxLocal = i; wtLocal = wHere; break; }
-          em.localGet(uLocal); em.localGet(accLocal); em.op(OP_F64_LT);
-          em.ifThen(() => {
-            em.localGet(i); em.localSet(idxLocal);
-            em.localGet(wHere); em.localSet(wtLocal);
-            em.br(2); // break out of the loop+block
-          });
-          em.localGet(i); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(i);
-          em.br(0);
-        });
-      });
-      // Numerical-safety fallback: if no entry was picked (FP drift), pick last.
-      em.localGet(idxLocal); em.i32Const(0); em.op(OP_I32_LT_S);
-      em.ifThen(() => {
-        em.localGet(inArr.lenLocal); em.i32Const(1); em.op(OP_I32_SUB); em.localSet(idxLocal);
-        em.localGet(idxLocal); emitArrayLoadElem(em, inArr);
-        if (inArr.elemValtype !== F64) em.op(OP_F64_CONVERT_I32_S);
-        em.localSet(wtLocal);
-      });
-    });
-
-    setCachedPort(ctx, node.id, 'index', { localIdx: idxLocal, valtype: I32 });
-    setCachedPort(ctx, node.id, 'weight', { localIdx: wtLocal, valtype: F64 });
-    // Default port: index (the more useful one; gates branch on >= 0).
-    return { localIdx: idxLocal, valtype: I32 };
-  },
-
   // -- Indicator reads --
   getIndicator: ({ node, ctx }) => {
     const idxRaw = node.data.config._indicatorIdx;
@@ -3266,6 +3128,83 @@ function emitArrayAggregate(
       setCachedPort(ctx, node.id, 'result', ref);
       return ref;
     }
+    if (op === 'weightedRandom') {
+      // Cumulative-sum sampling over the array. Empty / zero-sum → index = -1,
+      // result = 0. RNG always advances.
+      // Advance _rs once.
+      const rsLocal = em.allocLocal(I32);
+      em.i32Const(0); em.i32Load(ctx.layout.rngStateOffset, 2); em.localSet(rsLocal);
+      em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(13); em.emit(byte(0x74)); em.emit(byte(0x73)); em.localSet(rsLocal);
+      em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(17); em.emit(byte(0x76)); em.emit(byte(0x73)); em.localSet(rsLocal);
+      em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(5);  em.emit(byte(0x74)); em.emit(byte(0x73)); em.localSet(rsLocal);
+      em.i32Const(0); em.localGet(rsLocal); em.i32Store(ctx.layout.rngStateOffset, 2);
+
+      // sum = sum(arr[i] as f64)
+      const sumLocal = em.allocLocal(F64);
+      em.f64Const(0); em.localSet(sumLocal);
+      const si = em.allocLocal(I32);
+      em.i32Const(0); em.localSet(si);
+      em.block(() => {
+        em.loop(() => {
+          em.localGet(si); em.localGet(arr.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+          em.localGet(sumLocal);
+          em.localGet(si); emitArrayLoadElem(em, arr);
+          if (arr.elemValtype !== F64) em.op(OP_F64_CONVERT_I32_S);
+          em.op(OP_F64_ADD); em.localSet(sumLocal);
+          em.localGet(si); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(si);
+          em.br(0);
+        });
+      });
+
+      const idxLocal = em.allocLocal(I32);
+      em.i32Const(-1); em.localSet(idxLocal);
+      const resLocal = em.allocLocal(F64);
+      em.f64Const(0); em.localSet(resLocal);
+
+      em.localGet(sumLocal); em.f64Const(0); em.op(OP_F64_GT);
+      em.ifThen(() => {
+        const uLocal = em.allocLocal(F64);
+        em.localGet(rsLocal);
+        em.op(OP_F64_CONVERT_I32_U);
+        em.f64Const(4294967296); em.op(OP_F64_DIV);
+        em.localGet(sumLocal); em.op(OP_F64_MUL);
+        em.localSet(uLocal);
+        const accLocal = em.allocLocal(F64);
+        em.f64Const(0); em.localSet(accLocal);
+        const i = em.allocLocal(I32);
+        em.i32Const(0); em.localSet(i);
+        em.block(() => {
+          em.loop(() => {
+            em.localGet(i); em.localGet(arr.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+            const wHere = em.allocLocal(F64);
+            em.localGet(i); emitArrayLoadElem(em, arr);
+            if (arr.elemValtype !== F64) em.op(OP_F64_CONVERT_I32_S);
+            em.localSet(wHere);
+            em.localGet(accLocal); em.localGet(wHere); em.op(OP_F64_ADD); em.localSet(accLocal);
+            em.localGet(uLocal); em.localGet(accLocal); em.op(OP_F64_LT);
+            em.ifThen(() => {
+              em.localGet(i); em.localSet(idxLocal);
+              em.localGet(wHere); em.localSet(resLocal);
+              em.br(2); // break out of loop+block
+            });
+            em.localGet(i); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(i);
+            em.br(0);
+          });
+        });
+        // FP-drift fallback: pick last
+        em.localGet(idxLocal); em.i32Const(0); em.op(OP_I32_LT_S);
+        em.ifThen(() => {
+          em.localGet(arr.lenLocal); em.i32Const(1); em.op(OP_I32_SUB); em.localSet(idxLocal);
+          em.localGet(idxLocal); emitArrayLoadElem(em, arr);
+          if (arr.elemValtype !== F64) em.op(OP_F64_CONVERT_I32_S);
+          em.localSet(resLocal);
+        });
+      });
+
+      setCachedPort(ctx, node.id, 'index', { localIdx: idxLocal, valtype: I32 });
+      setCachedPort(ctx, node.id, 'result', { localIdx: resLocal, valtype: F64 });
+      return { localIdx: resLocal, valtype: F64 };
+    }
   }
 
   const elemValtype = arr.elemValtype;
@@ -3473,6 +3412,80 @@ function emitScalarAggregate(
         setCachedPort(ctx, node.id, 'result', { localIdx: accLocalR, valtype: accValtypeR });
       }
       return { localIdx: accLocalR, valtype: accValtypeR };
+    }
+    if (op === 'weightedRandom') {
+      // Multi-source weighted-random pick: treat each scalar source as a weight,
+      // sample one source index proportional to its weight. Empty / zero-sum →
+      // index = -1, result = 0. RNG always advances (matches JS semantics in
+      // GroupOperatorNode.compile()'s weightedRandom branch).
+      const em = ctx.emitter;
+      const N = sourceRefs.length;
+      if (N === 0) {
+        ctx.errors.push('groupOperator: weightedRandom requires at least one source');
+        return null;
+      }
+      // Advance shared xorshift32 RNG once.
+      const rsLocal = em.allocLocal(I32);
+      em.i32Const(0); em.i32Load(ctx.layout.rngStateOffset, 2); em.localSet(rsLocal);
+      em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(13); em.emit(byte(0x74)); em.emit(byte(0x73)); em.localSet(rsLocal);
+      em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(17); em.emit(byte(0x76)); em.emit(byte(0x73)); em.localSet(rsLocal);
+      em.localGet(rsLocal); em.localGet(rsLocal); em.i32Const(5);  em.emit(byte(0x74)); em.emit(byte(0x73)); em.localSet(rsLocal);
+      em.i32Const(0); em.localGet(rsLocal); em.i32Store(ctx.layout.rngStateOffset, 2);
+
+      // Stash each weight as f64 (loop unrolled — N known at compile time)
+      const wLocals: number[] = [];
+      for (let i = 0; i < N; i++) {
+        const w = em.allocLocal(F64);
+        pushValueAs(em, sourceRefs[i]!, F64);
+        em.localSet(w);
+        wLocals.push(w);
+      }
+      // sum = sum(weights)
+      const sumLocal = em.allocLocal(F64);
+      em.f64Const(0); em.localSet(sumLocal);
+      for (let i = 0; i < N; i++) {
+        em.localGet(sumLocal); em.localGet(wLocals[i]!); em.op(OP_F64_ADD); em.localSet(sumLocal);
+      }
+      // Default outputs: index = -1, result = 0
+      const idxLocal = em.allocLocal(I32);
+      em.i32Const(-1); em.localSet(idxLocal);
+      const resLocal = em.allocLocal(F64);
+      em.f64Const(0); em.localSet(resLocal);
+
+      // if (sum > 0): u = (rs / 2^32) * sum; linear scan
+      em.localGet(sumLocal); em.f64Const(0); em.op(OP_F64_GT);
+      em.ifThen(() => {
+        const uLocal = em.allocLocal(F64);
+        em.localGet(rsLocal);
+        em.op(OP_F64_CONVERT_I32_U);
+        em.f64Const(4294967296); em.op(OP_F64_DIV);
+        em.localGet(sumLocal); em.op(OP_F64_MUL);
+        em.localSet(uLocal);
+        const accLocal = em.allocLocal(F64);
+        em.f64Const(0); em.localSet(accLocal);
+        // Iterative pick — emit a chain of `if (idx < 0 && u < acc) { ... }` for
+        // each source. The outer block lets us short-circuit via br.
+        em.block(() => {
+          for (let i = 0; i < N; i++) {
+            em.localGet(accLocal); em.localGet(wLocals[i]!); em.op(OP_F64_ADD); em.localSet(accLocal);
+            em.localGet(uLocal); em.localGet(accLocal); em.op(OP_F64_LT);
+            em.ifThen(() => {
+              em.i32Const(i); em.localSet(idxLocal);
+              em.localGet(wLocals[i]!); em.localSet(resLocal);
+              em.br(2); // break out of block + ifThen
+            });
+          }
+          // FP-drift fallback: pick last source
+          em.i32Const(N - 1); em.localSet(idxLocal);
+          em.localGet(wLocals[N - 1]!); em.localSet(resLocal);
+        });
+      });
+
+      if (mode === 'groupOperator') {
+        setCachedPort(ctx, node.id, 'index', { localIdx: idxLocal, valtype: I32 });
+        setCachedPort(ctx, node.id, 'result', { localIdx: resLocal, valtype: F64 });
+      }
+      return { localIdx: resLocal, valtype: F64 };
     }
   }
 

@@ -1254,76 +1254,6 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return { expr: resultName, type: 'i32' };
   },
 
-  // Cumulative-sum sampling over a weights array. Multi-output: 'index' (i32,
-  // -1 when empty/sum=0) and 'weight' (f32, 0 in those cases). Always
-  // advances the per-cell PCG RNG (rand_f32) once — parity with WASM/JS.
-  //
-  // Two source shapes supported (mirrors Aggregate):
-  //   - single array source: direct ArrayRef via resolveInputArray.
-  //   - multi-source scalars: materialise each scalar into a fresh f32 array
-  //     allocated in the static `arrSbw_*` slot, then run sampling.
-  sampleArrayByWeight: ({ node, ctx }) => {
-    let inArr = resolveInputArray(ctx, node, 'weights');
-    if (!inArr) {
-      const sources = ctx.inputToSources.get(`${node.id}:weights`) ?? [];
-      if (sources.length === 0) {
-        ctx.errors.push('sampleArrayByWeight: no weights input wired');
-        return null;
-      }
-      const N = sources.length;
-      const tmp = allocArray(ctx, 'f32', 'arrSbw', N);
-      for (let k = 0; k < N; k++) {
-        const src = sources[k]!;
-        const sref = compileValueNode(ctx, src.nodeId, src.portId);
-        if (!sref) {
-          ctx.errors.push(`sampleArrayByWeight: scalar source ${src.nodeId} did not produce a value`);
-          return null;
-        }
-        ctx.lines.push(`  ${tmp.name}[${k}] = ${castTo(sref, 'f32')};`);
-      }
-      ctx.lines.push(`  ${tmp.lenName} = ${N};`);
-      inArr = tmp;
-    }
-    const rName = fresh(ctx, 'sbwR');
-    ctx.lines.push(`  let ${rName}: f32 = rand_f32(idx);`);
-    const sumName = fresh(ctx, 'sbwSum');
-    const sumI = fresh(ctx, 'sbwSi');
-    ctx.lines.push(`  var ${sumName}: f32 = 0.0;`);
-    ctx.lines.push(`  for (var ${sumI}: i32 = 0; ${sumI} < ${inArr.lenName}; ${sumI} = ${sumI} + 1) {`);
-    ctx.lines.push(`    ${sumName} = ${sumName} + f32(${arrLoad(inArr, sumI)});`);
-    ctx.lines.push(`  }`);
-    const idxName = fresh(ctx, 'sbwIdx');
-    const wtName = fresh(ctx, 'sbwWt');
-    ctx.lines.push(`  var ${idxName}: i32 = -1;`);
-    ctx.lines.push(`  var ${wtName}: f32 = 0.0;`);
-    ctx.lines.push(`  if (${sumName} > 0.0) {`);
-    const uName = fresh(ctx, 'sbwU');
-    ctx.lines.push(`    let ${uName}: f32 = ${rName} * ${sumName};`);
-    const accName = fresh(ctx, 'sbwAcc');
-    ctx.lines.push(`    var ${accName}: f32 = 0.0;`);
-    const i = fresh(ctx, 'sbwI');
-    ctx.lines.push(`    for (var ${i}: i32 = 0; ${i} < ${inArr.lenName}; ${i} = ${i} + 1) {`);
-    ctx.lines.push(`      let _sbwW_${i}: f32 = f32(${arrLoad(inArr, i)});`);
-    ctx.lines.push(`      ${accName} = ${accName} + _sbwW_${i};`);
-    ctx.lines.push(`      if (${uName} < ${accName}) {`);
-    ctx.lines.push(`        ${idxName} = ${i};`);
-    ctx.lines.push(`        ${wtName} = _sbwW_${i};`);
-    ctx.lines.push(`        break;`);
-    ctx.lines.push(`      }`);
-    ctx.lines.push(`    }`);
-    // Numerical-safety fallback: if FP drift made u >= sum, pick last index.
-    ctx.lines.push(`    if (${idxName} < 0) {`);
-    ctx.lines.push(`      ${idxName} = ${inArr.lenName} - 1;`);
-    ctx.lines.push(`      ${wtName} = f32(${arrLoad(inArr, idxName)});`);
-    ctx.lines.push(`    }`);
-    ctx.lines.push(`  }`);
-    const idxRef: ValueRef = { expr: idxName, type: 'i32' };
-    const wtRef: ValueRef = { expr: wtName, type: 'f32' };
-    setCachedPort(ctx, node.id, 'index', idxRef);
-    setCachedPort(ctx, node.id, 'weight', wtRef);
-    return idxRef;
-  },
-
   getCellAttribute: ({ node, ctx }) => {
     const attrId = node.data.config.attributeId as string;
     const attr = getAttr(ctx.layout, attrId);
@@ -2028,6 +1958,85 @@ function emitAggregateOrCount(
   if (mode !== 'count' && (op === 'median' || op === 'random')) {
     ctx.errors.push(`${mode}: WebGPU target does not yet support op "${op}". Use sum/product/min/max/average/and/or, or switch to JS/WASM target.`);
     return null;
+  }
+
+  // groupOperator.weightedRandom: cumulative-sum sampling. Materialise the
+  // input(s) into an f32 array, then run two-pass cumsum + linear scan.
+  // Supports single-array source, multi-source scalars, and nbr-path source.
+  if (mode === 'groupOperator' && op === 'weightedRandom') {
+    let inArr: ArrayRef;
+    if (sources.length === 1 && !isNbrPath && firstSrcNode && isArrayProducer(firstSrcNode.data.nodeType)) {
+      const ar = compileArrayNode(ctx, firstSrc.nodeId, firstSrc.portId);
+      if (!ar) return null;
+      inArr = ar;
+    } else if (isNbrPath) {
+      const srcNode = firstSrcNode!;
+      const nbrId = srcNode.data.config.neighborhoodId as string;
+      const attrId = srcNode.data.config.attributeId as string;
+      const nbr = getNbr(ctx.layout, nbrId);
+      const attr = getAttr(ctx.layout, attrId);
+      if (!nbr || !attr) { ctx.errors.push(`weightedRandom: unknown nbr/attr (${nbrId}/${attrId})`); return null; }
+      const tmp = allocArray(ctx, 'f32', 'wrNbr', nbr.size);
+      const k = fresh(ctx, 'wrNk');
+      ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${nbr.size}; ${k} = ${k} + 1) {`);
+      ctx.lines.push(`    let _nci_${k}: i32 = ${emitNbrCellIdx(nbr, k)};`);
+      const elem = readAttr(attr, `u32(_nci_${k})`, false);
+      ctx.lines.push(`    ${tmp.name}[${k}] = f32(${elem.expr});`);
+      ctx.lines.push(`  }`);
+      ctx.lines.push(`  ${tmp.lenName} = ${nbr.size};`);
+      inArr = tmp;
+    } else {
+      // Scalar-fold: materialise each scalar source
+      const N = sources.length;
+      const tmp = allocArray(ctx, 'f32', 'wrSc', N);
+      for (let k = 0; k < N; k++) {
+        const src = sources[k]!;
+        const sref = compileValueNode(ctx, src.nodeId, src.portId);
+        if (!sref) { ctx.errors.push(`weightedRandom: scalar source ${src.nodeId} did not produce a value`); return null; }
+        ctx.lines.push(`  ${tmp.name}[${k}] = ${castTo(sref, 'f32')};`);
+      }
+      ctx.lines.push(`  ${tmp.lenName} = ${N};`);
+      inArr = tmp;
+    }
+    // Always-advance RNG (one draw per call, matches JS/WASM semantics).
+    const rName = fresh(ctx, 'wrR');
+    ctx.lines.push(`  let ${rName}: f32 = rand_f32(idx);`);
+    // sum = sum(inArr)
+    const sumName = fresh(ctx, 'wrSum');
+    ctx.lines.push(`  var ${sumName}: f32 = 0.0;`);
+    const sumI = fresh(ctx, 'wrSi');
+    ctx.lines.push(`  for (var ${sumI}: i32 = 0; ${sumI} < ${inArr.lenName}; ${sumI} = ${sumI} + 1) {`);
+    ctx.lines.push(`    ${sumName} = ${sumName} + f32(${arrLoad(inArr, sumI)});`);
+    ctx.lines.push(`  }`);
+    const idxName = fresh(ctx, 'wrIdx');
+    const wtName = fresh(ctx, 'wrWt');
+    ctx.lines.push(`  var ${idxName}: i32 = -1;`);
+    ctx.lines.push(`  var ${wtName}: f32 = 0.0;`);
+    ctx.lines.push(`  if (${sumName} > 0.0) {`);
+    const uName = fresh(ctx, 'wrU');
+    ctx.lines.push(`    let ${uName}: f32 = ${rName} * ${sumName};`);
+    const accName = fresh(ctx, 'wrAcc');
+    ctx.lines.push(`    var ${accName}: f32 = 0.0;`);
+    const i = fresh(ctx, 'wrI');
+    ctx.lines.push(`    for (var ${i}: i32 = 0; ${i} < ${inArr.lenName}; ${i} = ${i} + 1) {`);
+    ctx.lines.push(`      let _wrW_${i}: f32 = f32(${arrLoad(inArr, i)});`);
+    ctx.lines.push(`      ${accName} = ${accName} + _wrW_${i};`);
+    ctx.lines.push(`      if (${uName} < ${accName}) {`);
+    ctx.lines.push(`        ${idxName} = ${i};`);
+    ctx.lines.push(`        ${wtName} = _wrW_${i};`);
+    ctx.lines.push(`        break;`);
+    ctx.lines.push(`      }`);
+    ctx.lines.push(`    }`);
+    ctx.lines.push(`    if (${idxName} < 0) {`);
+    ctx.lines.push(`      ${idxName} = ${inArr.lenName} - 1;`);
+    ctx.lines.push(`      ${wtName} = f32(${arrLoad(inArr, idxName)});`);
+    ctx.lines.push(`    }`);
+    ctx.lines.push(`  }`);
+    const idxRef: ValueRef = { expr: idxName, type: 'i32' };
+    const wtRef: ValueRef = { expr: wtName, type: 'f32' };
+    setCachedPort(ctx, node.id, 'index', idxRef);
+    setCachedPort(ctx, node.id, 'result', wtRef);
+    return wtRef;
   }
 
   // Determine accumulator type
