@@ -2956,11 +2956,19 @@ function preEmitValueNodes(ctx: CompileCtx, sourceNodeId: string, sourcePortId: 
         const sp = sd?.ports.find(p => p.id === s.portId);
         return !!sp?.isArray;
       };
-      if (src) {
+      // getVariable is dual-mode (scalar+array). Skip the pre-emit dispatch
+      // for it — the consumer's inputs resolution at use time picks the right
+      // path based on the variable's kind, and pre-emitting both paths here
+      // would error out for the path that doesn't match.
+      const isGetVariable = (s: { nodeId: string }): boolean => {
+        return ctx.nodeMap.get(s.nodeId)?.data.nodeType === 'getVariable';
+      };
+      if (src && !isGetVariable(src)) {
         if (isArraySrcPort(src)) compileArrayNode(ctx, src.nodeId, src.portId);
         else compileValueNode(ctx, src.nodeId, src.portId);
       }
       if (srcs) for (const s of srcs) {
+        if (isGetVariable(s)) continue;
         if (isArraySrcPort(s)) compileArrayNode(ctx, s.nodeId, s.portId);
         else compileValueNode(ctx, s.nodeId, s.portId);
       }
