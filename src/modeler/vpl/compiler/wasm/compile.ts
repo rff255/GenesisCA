@@ -5644,6 +5644,9 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
           // Cache element on the node's `element` port so body action-node
           // input resolution finds it via the standard valueLocals path.
           setCachedPort(ctx, node.id, 'element', { localIdx: elemLocal, valtype: arrRef.elemValtype });
+          // Cache the iteration counter on the `index` port — body-side nodes
+          // that index parallel arrays by slot read this instead of `element`.
+          setCachedPort(ctx, node.id, 'index', { localIdx: fi, valtype: I32 });
           // Body
           emitValuesForScope(ctx, `${node.id}:body`);
           compileFlowChain(node.id, 'body', ctx);

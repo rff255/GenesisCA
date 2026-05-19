@@ -66,6 +66,9 @@ import { ArrayElementNode } from './ArrayElementNode';
 import { ArrayLengthNode } from './ArrayLengthNode';
 import { PickNRandomNeighborsNode } from './PickNRandomNeighborsNode';
 import { MoveSelfToNeighborNode } from './MoveSelfToNeighborNode';
+import { GetVariableNode } from './GetVariableNode';
+import { SetVariableNode } from './SetVariableNode';
+import { SetArrayElementNode } from './SetArrayElementNode';
 
 const ALL_NODES: NodeTypeDef[] = [
   // Event (entry points)
@@ -98,6 +101,8 @@ const ALL_NODES: NodeTypeDef[] = [
   GetConstantNode,
   GetRandomNode,
   TagConstantNode,
+  // Local Variables — per-cell scratch storage referenced by id.
+  GetVariableNode,
   // Variegated Cells — visible only when the feature is enabled (palette
   // filter via `requirements.variegated`).
   GetOrientationNode,
@@ -125,6 +130,8 @@ const ALL_NODES: NodeTypeDef[] = [
   PickRandomNeighborNode,
   PickNRandomNeighborsNode,
   // Output
+  SetVariableNode,
+  SetArrayElementNode,
   SetAttributeNode,
   UpdateAttributeNode,
   SetNeighborhoodAttributeNode,

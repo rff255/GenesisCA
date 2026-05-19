@@ -1313,6 +1313,34 @@ function CaNodeComponent({ id, data }: NodeProps) {
           </select>
         )}
 
+        {(nodeData.nodeType === 'getVariable'
+          || nodeData.nodeType === 'setVariable'
+          || nodeData.nodeType === 'setArrayElement') && (() => {
+          // Filter by kind: SetVariable wants scalars, SetArrayElement wants
+          // arrays, GetVariable accepts either.
+          const wantArray = nodeData.nodeType === 'setArrayElement';
+          const wantScalar = nodeData.nodeType === 'setVariable';
+          const matching = (model.variables || []).filter(v => {
+            if (wantArray) return v.kind === 'array';
+            if (wantScalar) return v.kind === 'scalar';
+            return true;
+          });
+          return (
+            <select
+              className={styles.select}
+              value={(nodeData.config.variableId as string) || ''}
+              onChange={e => updateConfig('variableId', e.target.value)}
+            >
+              <option value="">Select variable...</option>
+              {matching.map(v => (
+                <option key={v.id} value={v.id}>
+                  {v.name} ({v.kind === 'array' ? `${v.dataType}[${v.length ?? '?'}]` : v.dataType})
+                </option>
+              ))}
+            </select>
+          );
+        })()}
+
         {nodeData.nodeType === 'updateIndicator' && (() => {
           const selInd = (model.indicators || []).find(i => i.id === nodeData.config.indicatorId);
           const dt = selInd?.dataType || 'integer';

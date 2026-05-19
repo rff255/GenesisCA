@@ -21,6 +21,7 @@ import type {
   Neighborhood,
   Preset,
   SimulationState,
+  Variable,
   VariegatedCellsConfig,
 } from './types';
 import { DEFAULT_MODEL, EMPTY_MODEL } from './defaultModel';
@@ -170,6 +171,10 @@ type ModelAction =
   | { type: 'REORDER_MAPPINGS'; newOrder: string[] }
   | { type: 'REORDER_INDICATORS'; newOrder: string[] }
   | { type: 'REORDER_END_CONDITIONS'; newOrder: string[] }
+  | { type: 'ADD_VARIABLE' }
+  | { type: 'REMOVE_VARIABLE'; id: string }
+  | { type: 'UPDATE_VARIABLE'; id: string; changes: Partial<Variable> }
+  | { type: 'REORDER_VARIABLES'; newOrder: string[] }
   | { type: 'UPDATE_VARIEGATED_CELLS'; changes: Partial<VariegatedCellsConfig> }
   | { type: 'ADD_FACE_PATTERN' }
   | { type: 'REMOVE_FACE_PATTERN'; id: string }
@@ -229,7 +234,15 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       if (variegatedCells && variegatedCells.sourceAttributeId === action.id) {
         variegatedCells = { ...variegatedCells, sourceAttributeId: '' };
       }
-      const modelAfterFilter = { ...state.model, attributes: filteredAttrs, variegatedCells };
+      // Variables cascade: tag variables referencing the removed attr lose
+      // their tag space — convert to integer (initialValue is already a
+      // stringified number, no parsing needed) and drop attributeId.
+      const variables = (state.model.variables || []).map(v =>
+        v.attributeId === action.id
+          ? { ...v, attributeId: undefined, dataType: 'integer' as const }
+          : v,
+      );
+      const modelAfterFilter = { ...state.model, attributes: filteredAttrs, variegatedCells, variables };
       // Clear stale attributeId and tagAttributeId references in node configs
       const a1 = clearDeletedId(modelAfterFilter, 'attributeId', action.id);
       const a2 = patchAllNodes(
@@ -311,7 +324,14 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
           }
           return next;
         });
-        const remappedModel = { ...updatedModel, attributes: remappedAttrs };
+        // Variables cascade: tag variables referencing this attr get their
+        // initialValue remapped (same indexMap as graph nodes).
+        const remappedVariables = (updatedModel.variables || []).map(v =>
+          v.attributeId === attrId && v.dataType === 'tag'
+            ? { ...v, initialValue: remap(v.initialValue) }
+            : v,
+        );
+        const remappedModel = { ...updatedModel, attributes: remappedAttrs, variables: remappedVariables };
         const patched = patchAllNodes(
           remappedModel,
           (cfg, nt) => {
@@ -361,7 +381,14 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
               ? { ...a, parentValues: [] }
               : { ...a, parentAttributeId: undefined, parentValues: undefined, undefinedValue: undefined }
           : a);
-        return { ...state, isDirty: true, model: { ...updatedModel, attributes: detached } };
+        // Variables cascade: when this attribute was a tag and is no longer
+        // one, variables that referenced it switch to integer + drop the link.
+        const variables = (updatedModel.variables || []).map(v =>
+          v.attributeId === action.id && v.dataType === 'tag' && newType !== 'tag'
+            ? { ...v, attributeId: undefined, dataType: 'integer' as const }
+            : v,
+        );
+        return { ...state, isDirty: true, model: { ...updatedModel, attributes: detached, variables } };
       }
 
       return { ...state, isDirty: true, model: updatedModel };
@@ -575,6 +602,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       if (!m.graphEdges) m.graphEdges = [];
       if (!m.macroDefs) m.macroDefs = [];
       if (!m.indicators) m.indicators = [];
+      if (!m.variables) m.variables = [];
       if (!m.properties.tags) m.properties.tags = [];
       if (!m.properties.updateMode) m.properties.updateMode = 'synchronous';
       if (!m.properties.asyncScheme) m.properties.asyncScheme = 'random-order';
@@ -683,6 +711,56 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
             },
           },
         },
+      };
+    }
+
+    case 'ADD_VARIABLE': {
+      const current = state.model.variables || [];
+      const newVar: Variable = {
+        id: generateId('variable'),
+        name: `var_${current.length + 1}`,
+        kind: 'scalar',
+        dataType: 'float',
+        initialValue: '0',
+      };
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, variables: [...current, newVar] },
+      };
+    }
+
+    case 'REMOVE_VARIABLE': {
+      const mAfter: CAModel = {
+        ...state.model,
+        variables: (state.model.variables || []).filter(v => v.id !== action.id),
+      };
+      const patch = clearDeletedId(mAfter, 'variableId', action.id);
+      return {
+        ...state, isDirty: true,
+        model: { ...mAfter, graphNodes: patch.graphNodes, macroDefs: patch.macroDefs },
+      };
+    }
+
+    case 'UPDATE_VARIABLE': {
+      const current = state.model.variables || [];
+      // When kind changes from array→scalar, drop `length`. When dataType is no
+      // longer tag, drop `attributeId`. Lets the inspector "settle" without the
+      // user manually clearing now-irrelevant fields.
+      const variables = current.map(v => {
+        if (v.id !== action.id) return v;
+        const next: Variable = { ...v, ...action.changes };
+        if (next.kind === 'scalar') delete next.length;
+        else if (next.length === undefined) next.length = 4;
+        if (next.dataType !== 'tag') delete next.attributeId;
+        return next;
+      });
+      return { ...state, isDirty: true, model: { ...state.model, variables } };
+    }
+
+    case 'REORDER_VARIABLES': {
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, variables: reorderById(state.model.variables || [], action.newOrder) },
       };
     }
 
@@ -839,6 +917,11 @@ export interface ModelContextValue {
   duplicateFacePattern: (sourceId: string) => void;
   removeFacePattern: (id: string) => void;
   updateFacePattern: (id: string, changes: Partial<FacePattern>) => void;
+  /** Local Variables — per-cell scratch storage. */
+  addVariable: () => void;
+  removeVariable: (id: string) => void;
+  updateVariable: (id: string, changes: Partial<Variable>) => void;
+  reorderVariables: (newOrder: string[]) => void;
 }
 
 const ModelContext = createContext<ModelContextValue | null>(null);
@@ -1047,6 +1130,17 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'UPDATE_FACE_PATTERN', id, changes }),
     [],
   );
+  const addVariable = useCallback(() => dispatch({ type: 'ADD_VARIABLE' }), []);
+  const removeVariable = useCallback(
+    (id: string) => dispatch({ type: 'REMOVE_VARIABLE', id }), [],
+  );
+  const updateVariable = useCallback(
+    (id: string, changes: Partial<Variable>) =>
+      dispatch({ type: 'UPDATE_VARIABLE', id, changes }), [],
+  );
+  const reorderVariables = useCallback(
+    (newOrder: string[]) => dispatch({ type: 'REORDER_VARIABLES', newOrder }), [],
+  );
 
   const value = useMemo<ModelContextValue>(
     () => ({
@@ -1089,6 +1183,10 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       duplicateFacePattern,
       removeFacePattern,
       updateFacePattern,
+      addVariable,
+      removeVariable,
+      updateVariable,
+      reorderVariables,
     }),
     [
       state.model,
@@ -1130,6 +1228,10 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       duplicateFacePattern,
       removeFacePattern,
       updateFacePattern,
+      addVariable,
+      removeVariable,
+      updateVariable,
+      reorderVariables,
     ],
   );
 
