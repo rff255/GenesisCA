@@ -233,9 +233,11 @@ const tagAmphi = tagConst('amphi', 2, 10, ATTR_KIND, KIND_OPTIONS);
 // direction only needs an arrayElement instead of its own NI + scalar
 // getNeighborAttributeByIndex pair.
 //
-// Tier-A.3: the per-direction farKind→farLabel translation is a single
-// Expression node (`iswater*3 + isamphi*1`) instead of 2 ValueSwitches +
-// 2 Statements.
+// Tier-D.1: the per-direction farKind→farLabel translation uses a 2× ValueSwitch
+// chain — each switch is a direct "if predicate, use FACE_X, else use Y"
+// mapping. The earlier `iswater*3 + isamphi*1` arithmetic expression was
+// semantically wrong (encoding a label LOOKUP as a MULTIPLICATION over the
+// label index space) and broke silently if FACE_* indices were reordered.
 //
 // Tier-B.1: P_B factors are computed in a single `interactionTableMap` node
 // vectorised over the cardinal facing-label arrays (no per-direction pb_d).
@@ -272,13 +274,21 @@ for (let d = 0; d < 4; d++) {
   vEdge(tagWater, 'value', isFarWater, 'y');
   dirNodes.push(isFarWater);
 
-  const farLabel = exprNode(
-    'iswater * 3 + isamphi * 1',
-    ['iswater', 'isamphi'],
-    7, base, `farLabel d=${d}`,
-  );
-  vEdge(isFarWater, 'result', farLabel, 'a');
-  vEdge(isFarAmphi, 'result', farLabel, 'b');
+  // farLabel = isAmphi ? FACE_X : (isWater ? FACE_WATER : FACE_NONE)
+  // Two ValueSwitches: each is a direct "if predicate, use Y, else use Z"
+  // mapping. No arithmetic on label indices.
+  const farLabelWaterElse = node('valueSwitch', {
+    _port_ifValue: String(FACE_WATER),
+    _port_elseValue: String(FACE_NONE),
+  }, 7, base, `farLabel: water?else none`);
+  vEdge(isFarWater, 'result', farLabelWaterElse, 'condition');
+  dirNodes.push(farLabelWaterElse);
+
+  const farLabel = node('valueSwitch', {
+    _port_ifValue: String(FACE_X),
+  }, 7, base + 1, `farLabel: amphi?X:above`);
+  vEdge(isFarAmphi, 'result', farLabel, 'condition');
+  vEdge(farLabelWaterElse, 'result', farLabel, 'elseValue');
   dirNodes.push(farLabel);
   farLabels.push(farLabel);
 
