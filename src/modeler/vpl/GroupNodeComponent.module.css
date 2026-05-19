@@ -21,6 +21,7 @@
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-1) var(--space-2);
+  cursor: move;
 }
 
 .label {
@@ -34,6 +35,14 @@
   letter-spacing: 0.04em;
   padding: var(--space-1) var(--space-2);
   outline: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.labelInput {
+  cursor: text;
 }
 
 .label:focus {

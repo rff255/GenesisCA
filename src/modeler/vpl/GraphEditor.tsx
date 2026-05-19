@@ -10,7 +10,9 @@ import {
   useEdgesState,
   useReactFlow,
   ReactFlowProvider,
+  useStoreApi,
 } from '@xyflow/react';
+import { getNodesInside } from '@xyflow/system';
 import type { Connection, Edge, Node, NodeTypes, ReactFlowInstance, SelectionMode, IsValidConnection, OnConnectStart, OnConnectEnd, FinalConnectionState } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { CaNode } from './CaNode';
@@ -194,9 +196,12 @@ function toRFNodes(graphNodes: GraphNode[]): Node[] {
     if (n.type === 'groupNode') {
       rfNode.style = { width: (d.width as number) || 300, height: (d.height as number) || 200 };
       rfNode.zIndex = -1;
-      // No dragHandle constraint: with groups as free-floating area markers,
-      // the entire group is draggable. Interactive widgets inside the header
-      // opt out via the React-Flow `nodrag` / `nopan` class.
+      // dragHandle restricts node-drag initiation to the group's header strip.
+      // LMB-down on the body falls through to a capture-phase handler in
+      // GraphEditor that either selects the group (no movement) or
+      // re-dispatches to the pane for box-select (movement past threshold) —
+      // so users can box-select inner nodes without grabbing the group.
+      rfNode.dragHandle = '[data-drag-handle="true"]';
     } else if (n.type === 'commentNode') {
       rfNode.style = { width: (d.width as number) || 200, height: (d.height as number) || 80 };
     }
@@ -321,6 +326,7 @@ export function GraphEditorInner() {
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const { deleteElements, getNodes, updateNodeData } = useReactFlow();
+  const rfStore = useStoreApi();
 
   // Ref for paste position (flow coords of last right-click or viewport center for Ctrl+V)
   const pasteFlowPos = useRef<{ x: number; y: number } | null>(null);
@@ -370,6 +376,13 @@ export function GraphEditorInner() {
   // has no good answer. Box-select is nodes-only; edges respond only to
   // direct edge interactions (click, double-click).
   const paneBoxDragRef = useRef(false);
+  // Set true when a box-select was initiated INSIDE a group's body (our
+  // capture-phase handler re-dispatches the pointerdown to the pane).
+  // handleNodesChange uses this to strip groupNode selects from the box —
+  // user clearly intended to box-select inner nodes, not the surrounding
+  // group(s). A box-select that starts on the empty pane keeps the default
+  // behaviour: groups intersecting the rect are selected normally.
+  const boxFromGroupRef = useRef(false);
 
   // Perf: maintain a graph-level map of connected input handles per node so each CaNode can
   // subscribe once via useSyncExternalStore instead of scanning all edges on every store event.
@@ -458,19 +471,27 @@ export function GraphEditorInner() {
     scheduleSync();
   }, [setNodes, setEdges, scheduleSync]);
 
-  // RMB on edges should pan the canvas (same as RMB on the empty pane), not be
-  // swallowed by React Flow's edge handlers. We catch right-button pointerdowns
-  // in capture phase, stop propagation so React Flow's edge listeners don't
-  // claim the gesture, then re-dispatch the event from .react-flow__pane so
-  // d3-zoom's pan-on-drag starts as if the user had pressed on empty canvas.
-  // LMB is untouched — edges remain selectable / double-click-deletable.
+  // RMB on edges AND groupNode bodies should pan the canvas (same as RMB on
+  // the empty pane), not be swallowed by React Flow's node/edge handlers.
+  // Group bodies have `pointer-events: auto` so they catch LMB clicks (needed
+  // for selection because children render as siblings, not DOM-nested), which
+  // would otherwise let an RMB-drag started over a group fall into RF's node
+  // drag/context-menu path. We catch right-button pointerdowns in capture
+  // phase, stop propagation so React Flow's listeners don't claim the
+  // gesture, then re-dispatch the event from .react-flow__pane so d3-zoom's
+  // pan-on-drag starts as if the user had pressed on empty canvas. LMB is
+  // untouched — edges remain selectable / double-click-deletable, groups
+  // remain selectable / resizable.
   useEffect(() => {
     const wrapper = editorWrapperRef.current;
     if (!wrapper) return;
     const handler = (e: PointerEvent) => {
       if (e.button !== 2) return;
       const target = e.target as Element | null;
-      if (!target?.closest('.react-flow__edge')) return;
+      if (!target) return;
+      const onEdge = !!target.closest('.react-flow__edge');
+      const onGroup = !!target.closest('.react-flow__node-groupNode');
+      if (!onEdge && !onGroup) return;
       e.stopPropagation();
       const pane = wrapper.querySelector('.react-flow__pane') as HTMLElement | null;
       if (!pane) return;
@@ -498,6 +519,161 @@ export function GraphEditorInner() {
     wrapper.addEventListener('pointerdown', handler, true);
     return () => wrapper.removeEventListener('pointerdown', handler, true);
   }, []);
+
+  // LMB on a group's body (not the header drag-handle, not a resize handle,
+  // not an interactive widget): users expect to box-select inner nodes, not
+  // grab the group. We capture LMB pointerdown on the group body and stash
+  // start position. On first pointermove past a small threshold, we drive
+  // React Flow's box-select state directly through its Zustand store
+  // (bypassing synthetic event delegation, which doesn't reliably transfer
+  // pointer capture). On pointerup without movement, the gesture was a click
+  // — we select the group ourselves (with Ctrl/Meta = toggle, Shift = add,
+  // plain = replace). Header drags still move the group via React Flow's
+  // normal dragHandle plumbing.
+  useEffect(() => {
+    const wrapper = editorWrapperRef.current;
+    if (!wrapper) return;
+    let drag: {
+      groupId: string;
+      startX: number;
+      startY: number;
+      pointerId: number;
+      shiftKey: boolean;
+      ctrlKey: boolean;
+      metaKey: boolean;
+      handled: boolean;
+      paneBounds: DOMRect | null;
+      selectedIds: Set<string>;
+    } | null = null;
+
+    // Compute current rect (pane-local coords), find intersecting non-group
+    // nodes, and push selection changes through RF's store. Mirrors the body
+    // of Pane.onPointerMove in @xyflow/react but reads coords from our own
+    // document-level pointermove so we don't need pointer capture.
+    const updateBoxSelect = (clientX: number, clientY: number) => {
+      if (!drag?.paneBounds) return;
+      const bounds = drag.paneBounds;
+      const startXLocal = drag.startX - bounds.left;
+      const startYLocal = drag.startY - bounds.top;
+      const xLocal = clientX - bounds.left;
+      const yLocal = clientY - bounds.top;
+      const rect = {
+        startX: startXLocal,
+        startY: startYLocal,
+        x: Math.min(xLocal, startXLocal),
+        y: Math.min(yLocal, startYLocal),
+        width: Math.abs(xLocal - startXLocal),
+        height: Math.abs(yLocal - startYLocal),
+      };
+      const state = rfStore.getState();
+      const inside = getNodesInside(state.nodeLookup, rect, state.transform, true, true)
+        .filter(n => n.type !== 'groupNode')
+        .map(n => n.id);
+      const nextIds = new Set(inside);
+      const prevIds = drag.selectedIds;
+      const changes: Array<{ id: string; type: 'select'; selected: boolean }> = [];
+      for (const id of nextIds) if (!prevIds.has(id)) changes.push({ id, type: 'select', selected: true });
+      for (const id of prevIds) if (!nextIds.has(id)) changes.push({ id, type: 'select', selected: false });
+      drag.selectedIds = nextIds;
+      rfStore.setState({ userSelectionRect: rect, userSelectionActive: true });
+      if (changes.length > 0) state.triggerNodeChanges(changes);
+    };
+
+    const onMove = (e: PointerEvent) => {
+      if (!drag) return;
+      if (!drag.handled) {
+        const dx = e.clientX - drag.startX;
+        const dy = e.clientY - drag.startY;
+        if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+        drag.handled = true;
+        const pane = wrapper.querySelector('.react-flow__pane') as HTMLElement | null;
+        drag.paneBounds = pane?.getBoundingClientRect() ?? null;
+        // Reset existing selection so the box starts fresh (mirrors RF).
+        rfStore.getState().resetSelectedElements();
+      }
+      // Stop the event before it reaches React's root listener / Pane's
+      // synthetic onPointerMove. With userSelectionActive=true in the store,
+      // Pane.onPointerMove would otherwise run its own getSelectionChanges
+      // pass with `mutateItem=true`, mutating internalNode.selected directly
+      // on the groupNode even though our filter strips the user-prop change
+      // — leaving the group invisibly "selected" so multi-node drag picks it
+      // up. We own this gesture; nothing else should see its pointermoves.
+      e.stopPropagation();
+      updateBoxSelect(e.clientX, e.clientY);
+    };
+
+    const onUp = (e: PointerEvent) => {
+      document.removeEventListener('pointermove', onMove, true);
+      document.removeEventListener('pointerup', onUp, true);
+      boxFromGroupRef.current = false;
+      if (!drag) return;
+      const d = drag;
+      drag = null;
+      if (d.handled) {
+        // Same reason as onMove: prevent Pane.onPointerUp from running its
+        // own getSelectionChanges(...mutateItem=true) finalize pass that
+        // would re-mutate internalNode.selected on the group.
+        e.stopPropagation();
+        // Finalize box-select: clear transient state. Selection changes were
+        // pushed incrementally during onMove.
+        rfStore.setState({ userSelectionRect: null, userSelectionActive: false });
+        return;
+      }
+      // Click without movement → select the group with modifier semantics.
+      const { groupId, shiftKey, ctrlKey, metaKey } = d;
+      setNodes(nds => nds.map(n => {
+        if (n.id === groupId) {
+          if (ctrlKey || metaKey) return { ...n, selected: !n.selected };
+          return n.selected ? n : { ...n, selected: true };
+        }
+        if (shiftKey || ctrlKey || metaKey) return n;
+        return n.selected ? { ...n, selected: false } : n;
+      }));
+    };
+
+    const onDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      const target = e.target as Element | null;
+      if (!target) return;
+      const groupEl = target.closest('.react-flow__node-groupNode') as HTMLElement | null;
+      if (!groupEl) return;
+      // Header (drag handle) → let React Flow start a normal node drag.
+      if (target.closest('[data-drag-handle="true"]')) return;
+      // Resize handles → let NodeResizer handle.
+      if (target.closest('.react-flow__resize-control')) return;
+      // Interactive widgets opt out via the standard `nodrag` class. (We do
+      // NOT check `.nopan` — RF adds it to every node wrapper by default, so
+      // checking it would always early-return.)
+      if (target.closest('.nodrag')) return;
+      e.stopPropagation();
+      // Activate the box-from-group filter immediately so handleNodesChange
+      // strips any group `select: true` change during the entire gesture —
+      // some RF/d3-drag path can otherwise select the group on pointerdown
+      // even with dragHandle restricting drag-start to the header.
+      boxFromGroupRef.current = true;
+      drag = {
+        groupId: groupEl.getAttribute('data-id') || '',
+        startX: e.clientX,
+        startY: e.clientY,
+        pointerId: e.pointerId,
+        shiftKey: e.shiftKey,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        handled: false,
+        paneBounds: null,
+        selectedIds: new Set(),
+      };
+      document.addEventListener('pointermove', onMove, true);
+      document.addEventListener('pointerup', onUp, true);
+    };
+
+    wrapper.addEventListener('pointerdown', onDown, true);
+    return () => {
+      wrapper.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('pointermove', onMove, true);
+      document.removeEventListener('pointerup', onUp, true);
+    };
+  }, [setNodes, rfStore]);
 
   // Switch displayed graph when scope changes
   useEffect(() => {
@@ -702,6 +878,20 @@ export function GraphEditorInner() {
             return nt !== 'macroInput' && nt !== 'macroOutput';
           }
           return true;
+        });
+      }
+
+      // When the user starts a gesture INSIDE a group body, strip any group
+      // SELECT-true changes — they're acting on inner content, not the
+      // group. Deselects pass through so resetSelectedElements at threshold
+      // crossing can clear any prior group selection. Box-selects started on
+      // the empty pane keep RF's default behaviour (groups intersecting the
+      // rect are selected normally).
+      if (boxFromGroupRef.current) {
+        changes = changes.filter(c => {
+          if (c.type !== 'select' || !c.selected) return true;
+          const node = nodesRef.current.find(n => n.id === c.id);
+          return node?.type !== 'groupNode';
         });
       }
 
@@ -1374,6 +1564,7 @@ export function GraphEditorInner() {
         const d = sourceNode.data as Record<string, unknown>;
         newNode.style = { width: (d.width as number) || 300, height: (d.height as number) || 200 };
         newNode.zIndex = -1;
+        newNode.dragHandle = '[data-drag-handle="true"]';
       }
       return [...nds, newNode];
     });
@@ -1540,7 +1731,7 @@ export function GraphEditorInner() {
         position: { x: n.position.x + offsetX, y: n.position.y + offsetY },
         data: clonedData,
         selected: true,
-        ...(n.type === 'groupNode' ? { style: { width: (clonedData.width as number) || 300, height: (clonedData.height as number) || 200 }, zIndex: -1 } : {}),
+        ...(n.type === 'groupNode' ? { style: { width: (clonedData.width as number) || 300, height: (clonedData.height as number) || 200 }, zIndex: -1, dragHandle: '[data-drag-handle="true"]' } : {}),
       };
     });
 
@@ -1620,7 +1811,7 @@ export function GraphEditorInner() {
         position: { x: n.position.x + 30, y: n.position.y + 30 },
         data: clonedData,
         selected: true,
-        ...(n.type === 'groupNode' ? { style: { width: (clonedData.width as number) || 300, height: (clonedData.height as number) || 200 }, zIndex: -1 } : {}),
+        ...(n.type === 'groupNode' ? { style: { width: (clonedData.width as number) || 300, height: (clonedData.height as number) || 200 }, zIndex: -1, dragHandle: '[data-drag-handle="true"]' } : {}),
       };
     });
 
@@ -1731,6 +1922,7 @@ export function GraphEditorInner() {
           data: { label: name, width, height, nodeType: 'group', config: {} },
           style: { width, height },
           zIndex: -1,
+          dragHandle: '[data-drag-handle="true"]',
         };
         // Insert BEFORE existing nodes so z-order (combined with zIndex: -1)
         // keeps the group visually behind any nodes that happen to overlap.
@@ -2198,6 +2390,7 @@ export function GraphEditorInner() {
         position: { x: n.position.x + offsetX, y: n.position.y + offsetY },
         data: n.data,
         selected: true,
+        ...(n.type === 'groupNode' ? { dragHandle: '[data-drag-handle="true"]' } : {}),
       }));
 
     // Restore only internal edges (exclude bridging edges touching boundary nodes)
