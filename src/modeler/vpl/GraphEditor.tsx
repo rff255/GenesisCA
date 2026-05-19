@@ -341,8 +341,9 @@ export function GraphEditorInner() {
   // the drag began — moving over other nodes mid-drag doesn't capture them.
   const groupDragRef = useRef<{
     groupId: string;
-    lastPos: { x: number; y: number };
-    movedIds: string[];
+    startPos: { x: number; y: number };
+    snapAccum: { x: number; y: number };
+    members: Array<{ id: string; startX: number; startY: number }>;
   } | null>(null);
 
   // Snapshot of the currently selected node ids, captured on RMB mousedown in
@@ -780,34 +781,32 @@ export function GraphEditorInner() {
           c => c.type === 'position' && c.id === dragState.groupId && c.position,
         ) as { type: 'position'; id: string; position: { x: number; y: number } } | undefined;
         if (groupChange) {
-          let dx = groupChange.position.x - dragState.lastPos.x;
-          let dy = groupChange.position.y - dragState.lastPos.y;
+          // Compute total delta from drag-start, NOT per-tick delta. nodesRef is
+          // updated by a useEffect that fires after re-render, so during fast
+          // pointer-move bursts it lags behind by one tick. Using
+          // `member.start + totalDelta` (instead of `nodesRef.position + dx`)
+          // makes each tick self-correcting against a stable reference and
+          // keeps inner nodes locked to the group regardless of render timing.
+          let totalDx = groupChange.position.x - dragState.startPos.x;
+          let totalDy = groupChange.position.y - dragState.startPos.y;
           if (snapEnabled) {
-            dx = Math.round(dx / 20) * 20;
-            dy = Math.round(dy / 20) * 20;
+            totalDx = Math.round(totalDx / 20) * 20;
+            totalDy = Math.round(totalDy / 20) * 20;
           }
-          if (dx !== 0 || dy !== 0) {
-            dragState.lastPos = {
-              x: dragState.lastPos.x + dx,
-              y: dragState.lastPos.y + dy,
-            };
+          if (totalDx !== dragState.snapAccum.x || totalDy !== dragState.snapAccum.y) {
+            dragState.snapAccum = { x: totalDx, y: totalDy };
             const alreadyMoving = new Set<string>();
             for (const c of changes) {
               if (c.type === 'position' && c.position) alreadyMoving.add(c.id);
             }
-            const extra = dragState.movedIds
-              .filter(id => !alreadyMoving.has(id))
-              .map(id => {
-                const cur = nodesRef.current.find(n => n.id === id);
-                if (!cur) return null;
-                return {
-                  type: 'position' as const,
-                  id,
-                  position: { x: cur.position.x + dx, y: cur.position.y + dy },
-                  dragging: true,
-                };
-              })
-              .filter((c): c is NonNullable<typeof c> => c !== null);
+            const extra = dragState.members
+              .filter(m => !alreadyMoving.has(m.id))
+              .map(m => ({
+                type: 'position' as const,
+                id: m.id,
+                position: { x: m.startX + totalDx, y: m.startY + totalDy },
+                dragging: true,
+              }));
             if (extra.length > 0) changes = [...changes, ...extra];
           }
         }
@@ -870,19 +869,20 @@ export function GraphEditorInner() {
         x2: node.position.x + w,
         y2: node.position.y + h,
       };
-      const movedIds: string[] = [];
+      const members: Array<{ id: string; startX: number; startY: number }> = [];
       for (const n of nodesRef.current) {
         if (n.id === node.id) continue;
         if (n.type === 'groupNode') continue;
         const c = nodeCenter(n);
         if (c.x > rect.x1 && c.x < rect.x2 && c.y > rect.y1 && c.y < rect.y2) {
-          movedIds.push(n.id);
+          members.push({ id: n.id, startX: n.position.x, startY: n.position.y });
         }
       }
       groupDragRef.current = {
         groupId: node.id,
-        lastPos: { x: node.position.x, y: node.position.y },
-        movedIds,
+        startPos: { x: node.position.x, y: node.position.y },
+        snapAccum: { x: 0, y: 0 },
+        members,
       };
       // Snapshot covers both group AND contained nodes so undo restores
       // everything in one step.
