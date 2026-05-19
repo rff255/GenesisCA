@@ -402,13 +402,17 @@ vEdge(kindsArr_gate, 'values', hasEmptyDir, 'values');
 vEdge(tagEmpty_gate, 'value', hasEmptyDir, 'x');
 vEdge(hasEmptyDir, 'result', condCanMove, 'condition');
 
-// ─── moveSelf inputs (cols 10-11, rows 1-3) ───────────────────────────────
-// Sample a direction proportional to weights, look up its NI, move.
-const weightsRead_pick = node('getVariable', { variableId: 'weights' }, 10, 2, 'weights[]');
-const chosenSamp = node('groupOperator', { operation: 'weightedRandom' }, 11, 2, 'Pick direction');
+// ─── moveSelf inputs (cols 9-11, rows 0-2) ────────────────────────────────
+// Sample a direction proportional to weights, look up its NI, move. All
+// moveSelf feeders sit to the LEFT of moveSelf (col 12) so their outputs
+// flow RIGHT into moveSelf's left-side input handles — no same-column
+// loop-around edges (which can hide behind the node body and visually
+// orphan the source).
+const weightsRead_pick = node('getVariable', { variableId: 'weights' }, 9, 1, 'weights[]');
+const chosenSamp = node('groupOperator', { operation: 'weightedRandom' }, 10, 0, 'Pick direction');
 vEdge(weightsRead_pick, 'value', chosenSamp, 'values');
-const niArr_pick = node('getAllNeighborIndexes', { neighborhoodId: NBR_VN }, 10, 3, 'NIs vN');
-const chosenNI = node('arrayElement', {}, 11, 3, 'NI of chosen dir');
+const niArr_pick = node('getAllNeighborIndexes', { neighborhoodId: NBR_VN }, 10, 1, 'NIs vN');
+const chosenNI = node('arrayElement', {}, 11, 0, 'NI of chosen dir');
 vEdge(niArr_pick, 'indexes', chosenNI, 'array');
 vEdge(chosenSamp, 'index', chosenNI, 'position');
 
@@ -416,8 +420,8 @@ vEdge(chosenSamp, 'index', chosenNI, 'position');
 // (NOT the post-rotation orientation). Carrying the rotated orientation
 // would mean the destination cell sees a face that didn't drive the move
 // decision; rotation is deferred to the rotation pass below.
-const kindRead_payload = node('getCellAttribute', { attributeId: ATTR_KIND }, 12, 1, 'My kind');
-const oriRead_move = node('getOrientation', {}, 12, 2, 'My ori');
+const kindRead_payload = node('getCellAttribute', { attributeId: ATTR_KIND }, 11, 1, 'My kind');
+const oriRead_move = node('getOrientation', {}, 11, 2, 'My ori');
 const moveSelf = node('moveSelfToNeighbor', {
   payloadCount: 1,
   attr_0: ATTR_KIND,
@@ -454,7 +458,7 @@ vEdge(newOri, 'result', setRotOri, 'value');
 // =============================================================================
 // Draw uniform [0, 1]: < densAmphi → amphi (with random orientation), else
 // < densAmphi + densWater → water, else empty.
-const initRow = 36;
+const initRow = 16;
 const initNode = node('initEvent', {}, 0, initRow);
 
 const densAmphiAttr = node('getModelAttribute', {
@@ -504,7 +508,7 @@ vEdge(randomOriInit, 'value', setOriInit, 'value');
 // =============================================================================
 // INPUT MAPPING — paint amphi at cursor
 // =============================================================================
-const seedRow = 44;
+const seedRow = 24;
 const seedInput = node('inputColor', { mappingId: MAPPING_SEED }, 0, seedRow);
 const seedKind = node('setAttribute', {
   attributeId: ATTR_KIND, _port_value: String(KIND_OPTIONS.indexOf('amphi')),
@@ -521,7 +525,7 @@ vEdge(seedRand, 'value', seedOri, 'value');
 // =============================================================================
 // Tag-mode switch on kind for empty/water/amphi; amphi case fans out to an
 // integer-mode switch on orientation (orientations are 0..3, not tag-named).
-const vizRow = 50;
+const vizRow = 30;
 const vizOutput = node('outputMapping', { mappingId: MAPPING_VIZ }, 0, vizRow);
 const vizKind = node('getCellAttribute', { attributeId: ATTR_KIND }, 0, vizRow + 1);
 const vizOri = node('getOrientation', {}, 0, vizRow + 2);
