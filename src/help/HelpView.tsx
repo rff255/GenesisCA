@@ -258,25 +258,37 @@ export function HelpView() {
             other model attribute (matrix shown directly under the attribute name).
           </p>
           <p className={styles.p}>
-            Six new node types become available when Variegated Cells is enabled (hidden
-            from the palette otherwise):
+            Several new node types become available when Variegated Cells is enabled (hidden
+            from the palette otherwise). All run on JS, WASM, and WebGPU &mdash; only the two
+            async-only writers below are unavailable on WebGPU (which is synchronous-only):
           </p>
           <ul className={styles.list}>
-            <li><strong>Get Orientation</strong> &mdash; reads the current cell&apos;s
-              orientation (0&ndash;3).</li>
-            <li><strong>Set Orientation</strong> &mdash; writes the current cell&apos;s
-              orientation; value wraps via <code>&amp; 3</code>.</li>
-            <li><strong>Get Neighbor Orientation</strong> &mdash; reads a neighbor&apos;s
-              orientation by slot index.</li>
-            <li><strong>Set Neighbor Orientation</strong> &mdash; writes a neighbor&apos;s
-              orientation. Async-only (sync mode would have the post-step copy overwrite
-              the write).</li>
+            <li><strong>Get Orientation</strong> / <strong>Set Orientation</strong> &mdash;
+              read / write the current cell&apos;s orientation (0&ndash;3; the setter wraps
+              via <code>&amp; 3</code>).</li>
+            <li><strong>Get Facing Orientation</strong> &mdash; reads the orientation of the
+              neighbour touching this cell in a fixed direction (N/E/S/W/diagonals); does not
+              use a neighborhood.</li>
+            <li><strong>Get Neighbor Orientation By Index</strong> &mdash; reads a
+              neighbor&apos;s orientation by NeighborIndex (read-only, works in sync + async).</li>
+            <li><strong>Set Facing Orientation</strong> / <strong>Set Neighbor Orientation
+              By Index</strong> &mdash; write a neighbour&apos;s orientation. <em>Async-only</em>
+              (sync mode would have the post-step copy overwrite the write).</li>
             <li><strong>Get Facing Labels</strong> &mdash; resolves the two face labels
-              touching at a neighbor encounter, accounting for both cells&apos;
-              orientations and face patterns. Outputs <em>myFaceLabel</em> and
-              <em>theirFaceLabel</em>; pipe these into Lookup Interaction.</li>
-            <li><strong>Lookup Interaction</strong> &mdash; indexes an Interaction Table
-              model attribute by two face labels. Returns a float.</li>
+              touching at a 1-step encounter in a fixed direction, accounting for both
+              cells&apos; orientations and face patterns. Outputs <em>My Face</em> and
+              <em>Their Face</em>; pipe these into Lookup Interaction.</li>
+            <li><strong>Get All Facing Labels</strong> &mdash; two parallel arrays of face
+              labels at each neighbour encounter (8-slot Moore, or 4-slot cardinal with
+              &quot;Cardinals only&quot;). Pair with Aggregate or For Each In Array.</li>
+            <li><strong>Lookup Interaction</strong> &mdash; indexes an Interaction Table model
+              attribute by two face labels &rarr; float.</li>
+            <li><strong>Interaction Table Map</strong> &mdash; vectorised Lookup Interaction
+              over two parallel face-label arrays &rarr; float array (pair with
+              Aggregate&nbsp;&times;&nbsp;product for a break-probability product).</li>
+            <li><strong>Move Self To Neighbor</strong> &mdash; atomic move into a vacant
+              neighbour (push per-attribute payloads + optionally orientation, then clear
+              self to defaults). Async-only; the chemistry move-into-empty idiom.</li>
           </ul>
           <p className={styles.p}>
             For procedural initial-state setup, see <strong>Init Event</strong> below.
@@ -297,6 +309,38 @@ export function HelpView() {
             Trigger downstream initialization via its <code>DO</code> flow port.
           </p>
 
+          <h3 className={styles.h3}>Local Variables</h3>
+          <p className={styles.p}>
+            <strong>Local Variables</strong> are per-cell mutable scratch storage you
+            reference by name across the graph. They let you write rules as imperative
+            pseudocode &mdash; &quot;for each direction <em>d</em>, set
+            <code>weights[d] = compute(d)</code>; then sample by weights&quot; &mdash; instead
+            of unrolling the same dataflow once per case. Define them in the
+            <strong> Attributes</strong> panel&apos;s <em>Local Variables</em> section
+            (name, kind, data type, length, initial value).
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Lifetime</strong> &mdash; per-cell, per-step. Each cell starts with a
+              fresh copy reset to the initial value; nothing carries across cells or across
+              generations. Treat it as scratch for one cell&apos;s computation.</li>
+            <li><strong>Kinds</strong> &mdash; <em>scalar</em> (a single value) or
+              <em>array</em> (fixed length, all elements reset to the initial value). Data
+              type is bool / integer / float / tag.</li>
+            <li><strong>Get Variable</strong> &mdash; reads the current value (scalar) or the
+              underlying array (array variables &mdash; iterate it like any array source:
+              Aggregate, Group Reduce, Array Element, For Each In Array).</li>
+            <li><strong>Set Variable</strong> &mdash; assigns to a scalar variable.</li>
+            <li><strong>Set Array Element</strong> &mdash; writes <code>variable[index] =
+              value</code> into an array variable (out-of-range writes are silently skipped).</li>
+          </ul>
+          <p className={styles.p}>
+            Local Variables run on all three compile targets (JS, WASM, WebGPU). The typical
+            pattern pairs them with <strong>For Each In Array</strong>: loop over the
+            neighbour directions, write a per-direction <code>weights[index]</code>, then
+            after the loop reduce with Aggregate and sample with Group Reduce&apos;s
+            <em> Weighted Random</em> op.
+          </p>
+
           <h3 className={styles.h3}>The Graph Editor</h3>
           <p className={styles.p}>
             The central area is a node-based visual programming editor. You connect nodes
@@ -311,7 +355,7 @@ export function HelpView() {
 
           <h3 className={styles.h3}>Canvas Controls</h3>
           <ul className={styles.list}>
-            <li><strong>Right-click drag</strong> &mdash; Pan the canvas.</li>
+            <li><strong>Right-click drag</strong> &mdash; Pan the canvas (works anywhere, including over edges, nodes, and group bodies).</li>
             <li><strong>Scroll wheel</strong> &mdash; Zoom in/out.</li>
             <li><strong>Left-click drag</strong> (on empty area) &mdash; Box select nodes.</li>
             <li><strong>Left-click drag</strong> (on node) &mdash; Move node.</li>
@@ -388,13 +432,31 @@ export function HelpView() {
             Right-click a group and choose &quot;Undo Group&quot; to dissolve it (all
             contained nodes are selected for easy repositioning).
           </p>
+          <ul className={styles.list}>
+            <li><strong>Drag the header strip</strong> to move the whole group (with its
+              contents).</li>
+            <li><strong>Drag on the body</strong> to box-select the inner nodes (without
+              moving the group); <strong>click the body</strong> to select the group itself.</li>
+            <li><strong>Right-click-drag the body</strong> pans the canvas, just like
+              empty space.</li>
+            <li>Box-select supports modifiers: <strong>Shift</strong> adds to the current
+              selection, <strong>Ctrl/Cmd</strong> removes from it, no modifier replaces it.</li>
+            <li><strong>Double-click the header label</strong> to rename it inline.</li>
+          </ul>
+          <p className={styles.p}>
+            The graph <strong>minimap</strong> (bottom-right) is interactive: drag to pan,
+            scroll to zoom, and click anywhere to jump the viewport to that spot (keeping the
+            current zoom).
+          </p>
         </section>
 
         {/* ============================================================ */}
         <section id="help-nodes" className={styles.section}>
           <h2 className={styles.h2}>Node Types Reference</h2>
           <p className={styles.p}>
-            GenesisCA provides 40 node types organized into categories:
+            GenesisCA provides around 70 node types organized into the categories below.
+            The palette only shows the ones available for your model &mdash; async-only and
+            Variegated-Cells nodes are hidden until you enable those features.
           </p>
 
           <h3 className={styles.h3}>
@@ -404,7 +466,8 @@ export function HelpView() {
           <table className={styles.table}>
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
-              <tr><td>Generation Step</td><td>Entry point for per-generation cell update logic. Connect &quot;DO&quot; to start the flow chain.</td></tr>
+              <tr><td>Generation Step</td><td>Entry point for per-generation cell update logic. Connect &quot;DO&quot; to start the flow chain. Singleton.</td></tr>
+              <tr><td>Init Event</td><td>Runs once per cell on simulator <strong>Reset</strong> (after defaults, before the first color pass; not on Randomize or Load State). Outputs <code>x</code>, <code>y</code>, <code>maxX</code>, <code>maxY</code>. Singleton. Useful for procedural initial state (gradients, noise, random orientations).</td></tr>
               <tr><td>Input Mapping (C&rarr;A)</td><td>Entry point for Color-to-Attribute mapping (brush/image import). Outputs R, G, B values.</td></tr>
               <tr><td>Output Mapping (A&rarr;C)</td><td>Entry point for Attribute-to-Color visualization. Runs as a separate sequential pass after the Generation Step, ensuring colors reflect the final cell state.</td></tr>
               <tr><td>Stop Event</td><td>Terminates the simulation run with a user-defined message when its DO flow input fires. Use for end conditions that need graph-level logic (complex spatial patterns, multi-attribute combinations). The text widget on the node body holds the message. First triggered stop in a step wins.</td></tr>
@@ -439,7 +502,7 @@ export function HelpView() {
               <tr><td>Get Neighbor Attr By Tag</td><td>Read a cell attribute from a specific neighbor identified by a named tag (defined in the Neighborhoods panel). The tag is resolved to an index at compile time.</td></tr>
               <tr><td>Get Neighbor Indexes By Tags</td><td>Select multiple neighborhood cells by their tag names and output an array of indices. Use with &quot;Get Neighbors Attr By Indexes&quot; for tag-based multi-neighbor access.</td></tr>
               <tr><td>Get Neighbors Attr By Indexes</td><td>Read attributes from a subset of neighbors specified by an array of indices.</td></tr>
-              <tr><td>Get Constant</td><td>A fixed value (bool, integer, or float).</td></tr>
+              <tr><td>Get Constant</td><td>A fixed value: bool, integer, float, tag, orientation, or <em>face label</em> (the last only when Variegated Cells is enabled &mdash; emits the compile-time index of the named face label, with implicit <code>none</code> = 0).</td></tr>
               <tr><td>Get Random</td><td>Generate a random value (bool, integer, float, or Options). In Bool mode, an input port &quot;P&quot; (probability 0&ndash;1) controls the chance of producing 1 (default 0.5 = 50%). In Options mode, wire one or more values to the &quot;Options&quot; array input (multi-scalar OR a single array source like Filter Neighbors / Get All Neighbor Indexes / Get Neighbors Attribute) and the node picks one uniformly; the &quot;Fallback&quot; inline value is returned when the array is empty.</td></tr>
             </tbody>
           </table>
@@ -470,7 +533,7 @@ export function HelpView() {
             <tbody>
               <tr><td>Group Counting</td><td>Count neighbors matching a condition (equals, not equals, greater, lesser). Also supports <strong>Between</strong> and <strong>Not Between</strong> for interval counts &mdash; reveals a Compare High input and two picklists for the interval sides; <em>Not Between</em> counts elements outside the interval.</td></tr>
               <tr><td>Group Statement</td><td>Check if all/none/any neighbors satisfy a condition.</td></tr>
-              <tr><td>Group Operator</td><td>Sum, multiply, max, min, mean, AND, OR, or pick random from neighbor values.</td></tr>
+              <tr><td>Group Operator</td><td>Reduce an array: sum, product, max, min, mean, median, AND, OR, pick <em>random</em>, or <em>weighted random</em>. Min/max/random/weighted-random also output the picked <em>position</em>. <em>Weighted Random</em> treats the array as weights and returns the picked weight + index (empty/zero-sum &rarr; index &minus;1); always advances the RNG. (Median and uniform random are JS/WASM-only &mdash; rejected on WebGPU.)</td></tr>
               <tr><td>Aggregate</td><td>Accepts multiple value connections on a single input port. Operations: Sum, Product, Max, Min, Average, Median. Use to combine values from different sources without needing arrays.</td></tr>
             </tbody>
           </table>
@@ -679,15 +742,18 @@ export function HelpView() {
           <p className={styles.p}>
             <strong>For Each In Array</strong> is a flow node that iterates over each element of
             a typed array (any kind: bool[], int[], float[], tag[], NeighborIndex[]) and runs the
-            BODY flow for each, exposing the current element via the <em>Element</em> output port.
-            Useful for &ldquo;iterate matching neighbors and apply different ops&rdquo; patterns.
+            BODY flow for each, exposing the current <em>Element</em> and its 0-based
+            <em> Index</em> via output ports. Useful for &ldquo;iterate matching neighbors and
+            apply different ops&rdquo; patterns &mdash; and the <em>Index</em> lets the body
+            address parallel arrays by slot (e.g. <em>Array Element(otherArray, index)</em> or
+            <em> Set Array Element(weights, index, &hellip;)</em> into a Local Variable).
           </p>
           <p className={styles.p}>
-            Both patterns work: body <em>flow</em> nodes can consume <em>Element</em> directly via
-            input ports (e.g. <em>Set Neighbor Attr By Index</em> with index = element), and body
-            <em> value</em> chains that depend on element (e.g. wiring element through a Math node
-            before the action) compile correctly because element-dependent expressions emit
-            inside the loop block where the element variable is in scope. Available on JS, WASM,
+            Both patterns work: body <em>flow</em> nodes can consume <em>Element</em> / <em>Index</em>
+            directly via input ports (e.g. <em>Set Neighbor Attr By Index</em> with index = element),
+            and body <em> value</em> chains that depend on them (e.g. wiring element through a Math
+            node before the action) compile correctly because element/index-dependent expressions
+            emit inside the loop block where those variables are in scope. Available on JS, WASM,
             and WebGPU.
           </p>
         </section>
