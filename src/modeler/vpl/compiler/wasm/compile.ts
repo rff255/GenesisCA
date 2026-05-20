@@ -6683,13 +6683,15 @@ export function compileGraphWasm(
   layout: MemoryLayout,
   viewerIds: Record<string, number>,
 ): WasmCompileResult {
-  // Sub-attribute iteration is supported on WASM for the common ops (sum,
-  // product, min, max, average, and, or, count, filter, allIs/noneIs/etc.) via
-  // per-emitter parent_match guards. Two ops still bail out at the per-emitter
-  // level: aggregate.median (sorts a scratch copy; the median scratch path
-  // doesn't yet filter by parent) and groupOperator.random (picks uniformly
-  // over the full neighborhood). Those return a clear error from the emitter
-  // and the worker falls back to JS.
+  // Sub-attribute iteration is supported on WASM across the whole node
+  // catalogue via per-emitter parent_match guards: sum, product, min, max,
+  // average, and, or, count, filter, allIs/noneIs/etc., AND median + random.
+  // Median materialises into per-cell scratch with a parent-match filter, then
+  // sorts the filtered prefix (narrows lenLocal to filledLocal). Random filters
+  // values into scratch and picks uniformly from the filtered length (RNG
+  // advances regardless, matching JS Math.random() semantics; empty filtered
+  // set returns 0). For average + min/max, a matchCountLocal drives the
+  // post-divide / position-in-filtered-set so results match JS/WASM semantics.
 
   // Pre-pass: resolve indicator IDs to numeric indices (mirrors the JS
   // compiler — without this, fresh-loaded models that haven't been JS-compiled
