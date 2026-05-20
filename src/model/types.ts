@@ -153,9 +153,10 @@ export interface ModelProperties {
   /** Optional simulator auto-pause rules. Undefined = disabled. */
   endConditions?: EndConditions;
   /** Wave 2: when true, the simulator runs the WASM-compiled step instead of
-   *  the JS-compiled step. Off by default. The WASM compiler falls back to JS
-   *  silently if the graph references a node type whose WASM emit is not yet
-   *  implemented; the user can flip this off at any time to force JS. */
+   *  the JS-compiled step. **Default for new models** (EMPTY_MODEL sets it true).
+   *  The WASM compiler falls back to JS silently if the graph references a node
+   *  type whose WASM emit is not implemented (rare — node coverage is complete);
+   *  the user can flip this off at any time to force JS. */
   useWasm?: boolean;
   /** Wave 3: when true, the simulator runs the WGSL-compiled compute shaders
    *  on WebGPU. Mutually exclusive with useWasm — the UI enforces this via a
