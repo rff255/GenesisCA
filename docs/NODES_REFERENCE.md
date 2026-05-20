@@ -4,8 +4,11 @@ This document catalogues every node in the GenesisCA Visual Programming Language
 describes the port type system, and flags redundancies or gaps. It is a working reference
 to inform future consolidation — it does **not** describe any committed refactoring.
 
-**Scope:** 49 visible node types across 7 categories, plus 2 hidden boundary nodes
-(`macroInput` / `macroOutput`).
+**Scope:** 68 node types across 7 categories (event, flow, data, logic, aggregation,
+output, color), plus 2 hidden boundary nodes (`macroInput` / `macroOutput`). Indicator
+nodes live within the `data` (readers) and `output` (writers) categories rather than a
+category of their own. The variegated-cells and local-variable nodes appear in the editor
+only when their respective model feature is enabled.
 
 ---
 
@@ -29,9 +32,10 @@ Ports come in two **kinds** and two **categories**:
 | `flow` | green, animated dashed line | Execution order — analogous to an event or continuation |
 | `value` | blue, solid line | Carries data (numbers, booleans, tags, arrays of those) |
 
-Event nodes (`step`, `inputColor`, `outputMapping`) are the **entry points** — each one
-is a root the compiler starts from. A flow chain from an event determines what runs,
-and in what order, for the corresponding phase (main generation / paint / color pass).
+Event nodes (`step`, `initEvent`, `inputColor`, `outputMapping`) are the **entry points** —
+each one is a root the compiler starts from. A flow chain from an event determines what runs,
+and in what order, for the corresponding phase (per-cell initialization on Reset / main
+generation / paint / color pass).
 
 Value nodes compute their output based on their inputs. They are evaluated on demand
 by downstream consumers.
@@ -86,88 +90,104 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 | # | Type | Label | Description | Ports | Notes |
 |---|---|---|---|---|---|
 | 1 | `step` | Generation Step | Main per-cell update for each generation. | `O: DO` (flow) | Singleton — one per graph |
-| 2 | `inputColor` | Input Mapping (C→A) | Triggered by painting on the simulator canvas. | `O: DO` (flow), `O: R` `O: G` `O: B` (int) | Requires `mappingId` |
-| 3 | `outputMapping` | Output Mapping (A→C) | Computes cell colour for a viewer. | `O: DO` (flow) | Requires `mappingId`; runs once/frame after all steps |
-| 4 | `stopEvent` | Stop Event | Terminates the simulation run with a user-defined message when its flow input fires. | `I: DO` (flow) | Text widget on body holds the message; first triggered stop in a step wins; WASM emitter mirrors the JS emit via `i32.store` at `layout.stopFlagOffset` |
+| 2 | `initEvent` | Init Event | Runs once per cell on simulator **Reset** (after defaults are applied, before the first colour pass). | `O: DO` (flow), `O: x` `O: y` `O: maxX` `O: maxY` (int) | Singleton. Useful for procedural initial state (gradients, deterministic noise, random orientations). Not triggered by Randomize or Load State |
+| 3 | `inputColor` | Input Mapping (C→A) | Triggered by painting on the simulator canvas. | `O: DO` (flow), `O: R` `O: G` `O: B` (int) | Requires `mappingId` |
+| 4 | `outputMapping` | Output Mapping (A→C) | Computes cell colour for a viewer. | `O: DO` (flow) | Requires `mappingId`; runs once/frame after all steps |
+| 5 | `stopEvent` | Stop Event | Terminates the simulation run with a user-defined message when its flow input fires. | `I: DO` (flow) | Text widget on body holds the message; first triggered stop in a step wins; WASM emitter mirrors the JS emit via `i32.store` at `layout.stopFlagOffset` |
 
 ### 3.2 Flow Control — `flow`
 
 | # | Type | Label | Description | Ports | Notes |
 |---|---|---|---|---|---|
-| 5 | `conditional` | If / Then / Else | Branch on bool. | `I: CHECK` (flow) `I: IF` (bool) / `O: THEN` `O: ELSE` (flow) | |
-| 6 | `sequence` | Sequence | Execute two flows in order. | `I: DO` / `O: FIRST` `O: THEN` (flow) | |
-| 7 | `loop` | Loop | Repeat flow N times. | `I: DO` (flow) `I: COUNT` (int) / `O: BODY` (flow) | |
-| 8 | `forEachInArray` | For Each In Array | Iterates a typed array, exposing the per-iteration element via the `Element` output port. Body action nodes can consume `Element` directly; body value nodes that depend on `Element` (e.g. `Math.add(element, 1) → setIndicator`) emit inline inside the loop block on all three targets. | `I: DO` (flow) `I: Array` (any[]) / `O: BODY` (flow) `O: Element` (any) | Full JS / WASM / WebGPU lockstep |
-| 9 | `switch` | Switch | Multi-way branch (by value or conditions). | `I: CHECK` (flow) `I: VALUE` (optional) / dynamic `O: CASE_N` + `O: DEFAULT` | 2 modes: `conditions` (per-case bool inputs) or `value` (compare to cases); optional `firstMatchOnly` |
-| 10 | `macro` | Macro | Reusable sub-graph. | dynamic — ports from `MacroDef.exposedInputs/Outputs` | Requires `macroDefId`; compiler inlines the subgraph |
+| 6 | `conditional` | If / Then / Else | Branch on bool. | `I: CHECK` (flow) `I: IF` (bool) / `O: THEN` `O: ELSE` (flow) | |
+| 7 | `sequence` | Sequence | Execute two flows in order. | `I: DO` / `O: FIRST` `O: THEN` (flow) | |
+| 8 | `loop` | Loop | Repeat flow N times. | `I: DO` (flow) `I: COUNT` (int) / `O: BODY` (flow) | |
+| 9 | `forEachInArray` | For Each In Array | Iterates a typed array, exposing the per-iteration `Element` and its 0-based `Index`. Body action nodes can consume either directly; body value nodes that depend on `Element`/`Index` (e.g. `Math.add(element, 1) → setIndicator`, or `arrayElement(otherArr, index)`) emit inline inside the loop block on all three targets. | `I: DO` (flow) `I: Array` (any[]) / `O: BODY` (flow) `O: Element` (any) `O: Index` (int) | Full JS / WASM / WebGPU lockstep |
+| 10 | `switch` | Switch | Multi-way branch (by value or conditions). | `I: CHECK` (flow) `I: VALUE` (optional) / dynamic `O: CASE_N` + `O: DEFAULT` | 2 modes: `conditions` (per-case bool inputs) or `value` (compare to cases); optional `firstMatchOnly` |
+| 11 | `macro` | Macro | Reusable sub-graph. | dynamic — ports from `MacroDef.exposedInputs/Outputs` | Requires `macroDefId`; compiler inlines the subgraph |
 
 ### 3.3 Data readers — `data`
 
 | # | Type | Label | Description | Ports | Notes |
 |---|---|---|---|---|---|
-| 9 | `getCellAttribute` | Get Cell Attribute | Read current cell's attribute. | `O: Value` (any) | Requires `attributeId` |
-| 10 | `getModelAttribute` | Get Model Attribute | Read global model-level attribute. | `O: Value` OR `O: R/G/B` (if attr is a color) | Requires model-level `attributeId` |
-| 11 | `getNeighborsAttribute` | Get Neighbors Attribute | Read attr of **every** neighbor → array. | `O: Values` (arr) | Requires `neighborhoodId` + `attributeId`; allocates a scratch array per cell |
-| 12 | `getNeighborAttributeByIndex` | Get Neighbor Attr By Index | Read **one** neighbor by index. | `I: INDEX` (NI) / `O: Value` | Requires `neighborhoodId` + `attributeId`; read-only so sync-safe. Index port retyped to `neighborIndex`. |
-| 13 | `getNeighborAttributeByTag` | Get Neighbor Attr By Tag | Read **one** neighbor by neighborhood-tag name. | `O: Value` | Requires tag in the neighborhood's `tags` map |
-| 14 | `getNeighborIndexesByTags` | Get Neighbor Indexes By Tags | Return neighborhood indices matching a set of tag names. | `O: Indexes` (NI arr) | Dynamic config rows per tag |
-| 15 | `getNeighborsAttrByIndexes` | Get Neighbors Attr By Indexes | Read attr values for a given NeighborIndex array. | `I: INDEXES` (NI arr) / `O: Values` (arr) | Pair with `filterNeighbors`, `getNeighborIndexesByTags`, or `joinNeighbors` |
-| 15a | `getAllNeighborIndexes` | Get All Neighbor Indexes | Returns the full NI[] of a neighborhood — every slot, [0..nbrSize-1]. Bootstrap for filterNeighbors / forEachInArray chains without needing tags. | `O: Indexes` (NI[]) | Compile-time-resolved |
-| 15b | `arrayElement` | Array Element | Returns `arr[position]` with bounds check; out-of-range yields a safe default (-1 for NI / int, 0 for float, false for bool). | `I: Array` `I: Position` (int) / `O: Value` | Bridges Position outputs of group* nodes back to NIs via a parallel array |
-| 15c | `arrayLength` | Array Length | Returns the number of elements in an array. | `I: Array` / `O: Length` (int) | |
-| 15d | `neighborIndexFromOffset` | Neighbor Index (from Offset) | Build a NI pointing at the (dRow, dCol) slot of the chosen neighborhood. Compile-time-resolved. | `O: Value` (NI) | Returns -1 if the offset is not in the neighborhood |
-| 15e | `neighborIndexFromTag` | Neighbor Index (from Tag) | Build a NI pointing at the slot tagged with the given name. Compile-time-resolved. | `O: Value` (NI) | Same shape as fromOffset but resolves by tag name |
-| 15f | `flipNeighborIndex` | Flip Neighbor Index | Mirror a NI horizontally / vertically / both. Compile-time precomputed lookup table. | `I: Index` (NI) / `O: Value` (NI) | Returns -1 when the flipped offset isn't in the configured neighborhood |
-| 16 | `getConstant` | Get Constant | Emit fixed bool / int / float / tag / orientation / face label. | `O: Value` | `constType` + `constValue` config; `faceLabel` only listed when Variegated Cells is enabled (emits the compile-time integer index of the chosen label, with implicit `none`=0) |
-| 17 | `getRandom` | Get Random | Random bool/int/float, or pick uniformly from a wired Options array. | `I: P` (float, bool mode only), `I: Options` (any, isArray, options mode only), `I: Fallback` (any, inline, options mode only) / `O: Value` | Bool mode: `probability` input; Int mode: min/max config; Options mode: wire scalars or array source to `Options`; `Fallback` returned on empty array |
-| 18 | `getIndicator` | Get Indicator | Read a standalone indicator's value. | `O: Value` (any) | Requires `indicatorId` |
+| 12 | `getCellAttribute` | Get Cell Attribute | Read current cell's attribute. | `O: Value` (any) | Requires `attributeId` |
+| 13 | `getModelAttribute` | Get Model Attribute | Read global model-level attribute. | `O: Value` OR `O: R/G/B` (if attr is a color) | Requires model-level `attributeId` |
+| 14 | `getNeighborsAttribute` | Get Neighbors Attribute | Read attr of **every** neighbor → array. | `O: Values` (arr) | Requires `neighborhoodId` + `attributeId`; allocates a scratch array per cell |
+| 15 | `getNeighborAttributeByIndex` | Get Neighbor Attr By Index | Read **one** neighbor by index. | `I: INDEX` (NI) / `O: Value` | Requires `neighborhoodId` + `attributeId`; read-only so sync-safe. Index port retyped to `neighborIndex`. |
+| 16 | `getNeighborAttributeByTag` | Get Neighbor Attr By Tag | Read **one** neighbor by neighborhood-tag name. | `O: Value` | Requires tag in the neighborhood's `tags` map |
+| 17 | `getNeighborIndexesByTags` | Get Neighbor Indexes By Tags | Return neighborhood indices matching a set of tag names. | `O: Indexes` (NI arr) | Dynamic config rows per tag |
+| 18 | `getNeighborsAttrByIndexes` | Get Neighbors Attr By Indexes | Read attr values for a given NeighborIndex array. | `I: INDEXES` (NI arr) / `O: Values` (arr) | Pair with `filterNeighbors`, `getNeighborIndexesByTags`, or `joinNeighbors` |
+| 19 | `getAllNeighborIndexes` | Get All Neighbor Indexes | Returns the full NI[] of a neighborhood — every slot, [0..nbrSize-1]. Bootstrap for filterNeighbors / forEachInArray chains without needing tags. | `O: Indexes` (NI[]) | Compile-time-resolved |
+| 20 | `neighborIndexFromOffset` | Neighbor Index (from Offset) | Build a NI pointing at the (dRow, dCol) slot of the chosen neighborhood. Compile-time-resolved. | `O: Value` (NI) | Returns -1 if the offset is not in the neighborhood |
+| 21 | `neighborIndexFromTag` | Neighbor Index (from Tag) | Build a NI pointing at the slot tagged with the given name. Compile-time-resolved. | `O: Value` (NI) | Same shape as fromOffset but resolves by tag name |
+| 22 | `flipNeighborIndex` | Flip Neighbor Index | Mirror a NI horizontally / vertically / both. Compile-time precomputed lookup table. | `I: Index` (NI) / `O: Value` (NI) | Returns -1 when the flipped offset isn't in the configured neighborhood |
+| 23 | `breakDownNeighborIndex` | Break Down Neighbor Index | Unpacks a NeighborIndex into its `(dRow, dCol)` offset components. | `I: Index` (NI) / `O: dr` `O: dc` (int) | Inverse of `neighborIndexFromOffset`; useful for direction-aware movement logic |
+| 24 | `arrayElement` | Array Element | Returns `arr[position]` with bounds check; out-of-range yields a safe default (-1 for NI / int, 0 for float, false for bool). | `I: Array` `I: Position` (int) / `O: Value` | Bridges Position outputs of group* nodes back to NIs via a parallel array |
+| 25 | `arrayLength` | Array Length | Returns the number of elements in an array. | `I: Array` / `O: Length` (int) | |
+| 26 | `getConstant` | Get Constant | Emit fixed bool / int / float / tag / orientation / face label. | `O: Value` | `constType` + `constValue` config; `faceLabel` only listed when Variegated Cells is enabled (emits the compile-time integer index of the chosen label, with implicit `none`=0) |
+| 27 | `getRandom` | Get Random | Random bool/int/float, or pick uniformly from a wired Options array. | `I: P` (float, bool mode only), `I: Options` (any, isArray, options mode only), `I: Fallback` (any, inline, options mode only) / `O: Value` | Bool mode: `probability` input; Int mode: min/max config; Options mode: wire scalars or array source to `Options`; `Fallback` returned on empty array |
+| 28 | `getVariable` | Get Variable | Read a Local Variable's current value (scalar) or its underlying typed array (array variables — consumers iterate like any array source). | `O: Value` (any) | Requires `variableId`; output shape (scalar vs array) derived from the variable's `kind`. Per-cell scratch, reset to `initialValue` each cell |
+| 29 | `getOrientation` | Get Orientation | Read the current cell's orientation (0–3 = 0/90/180/270° CW). | `O: Orientation` (int) | **Variegated Cells only** |
+| 30 | `getFacingOrientation` | Get Facing Orientation | Read the orientation of the neighbour touching this cell in a fixed direction (N/E/S/W/diagonals). Does not use a neighborhood. | `O: Orientation` (int) | **Variegated Cells only**; `directionTag` config; honours boundary treatment |
+| 31 | `getNeighborOrientationByIndex` | Get Neighbor Orientation By Index | Read the orientation of one neighbour by NeighborIndex. | `I: Index` (NI) / `O: Orientation` (int) | **Variegated Cells only**; read-only so works in sync + async |
+| 32 | `getFacingLabels` | Get Facing Labels | Resolve the two face labels touching at a 1-step encounter in a fixed direction — accounts for both cells' orientations and face patterns. | `O: My Face` `O: Their Face` (int) | **Variegated Cells only**; `directionTag` config; no neighborhood. Pair with `lookupInteraction` |
+| 33 | `getAllFacingLabels` | Get All Facing Labels | Two parallel arrays of face labels at each 1-step encounter — 8 slots (Moore N/NE/E/SE/S/SW/W/NW) or 4 slots (cardinal N/E/S/W) when `cardinalsOnly` is checked. | `O: My Faces` `O: Their Faces` (int arr) | **Variegated Cells only**. Pair with `aggregate`/`interactionTableMap` for energy sums or `forEachInArray` for per-direction logic |
+| 34 | `interactionTableMap` | Interaction Table Map | Vectorised `lookupInteraction`: indexes an Interaction Table model attribute by two parallel face-label arrays → float array. | `I: My Faces` `I: Their Faces` (int arr) / `O: Values` (float arr) | **Variegated Cells only**; pair with `aggregate.product` for `P_break = ∏ P_B(myFace, theirFace)` |
+| 35 | `getIndicator` | Get Indicator | Read a standalone indicator's value. | `O: Value` (any) | Requires `indicatorId` |
 
 ### 3.4 Logic & Math — `logic`
 
 | # | Type | Label | Description | Ports | Notes |
 |---|---|---|---|---|---|
-| 20 | `arithmeticOperator` | Math | `+ − × ÷ % sqrt pow abs max min mean`. | `I: X` `I: Y` (num) / `O: Result` | Unary ops (`sqrt`, `abs`) ignore `Y` |
-| 20a | `expression` | Expression | Type a math formula instead of wiring many Math nodes — collapses an equation-heavy chain into one node. Operators `+ − × ÷ % ^`, functions `sqrt abs floor ceil round min max pow mod`, constants `pi` `e`. Variables come from the input ports. | dynamic `I: a…h` (1–8 ports, configurable count, each renamable) / `O: Result` | Parses to a shared AST; JS / WASM / WebGPU lockstep. Scalar-only — no array/neighbour reductions; transcendentals (`sin`/`cos`/`exp`/`log`) not yet supported |
-| 21 | `proportionMap` | Proportion Map | Linear remap `X ∈ [inMin..inMax] → [outMin..outMax]`. | `I: X`, `I: inMin`, `I: inMax`, `I: outMin`, `I: outMax` / `O: Result` | |
-| 22 | `interpolation` | Interpolate | `T ∈ [0,1] → [Min..Max]`. | `I: T`, `I: Min`, `I: Max` / `O: Result` | |
-| 23 | `statement` | Compare | `== != > < >= <=` on two scalars, or `Between` / `Not Between` (range check with configurable low/high sides). | `I: X` `I: Y` `I: Y₂` (between-family only) / `O: Result` (bool) | Name collision risk with `groupStatement` |
-| 24 | `logicOperator` | Logic | `AND OR XOR NOT` on bools. | `I: A` `I: B` (hidden for NOT) / `O: Result` (bool) | |
-| 24a | `valueSwitch` | Value Switch | `condition ? ifValue : elseValue`. Pure value, no flow port. | `I: Condition` (any) `I: If` (any) `I: Else` (any) / `O: Result` (any) | All inputs optional (inline defaults: condition=false, if=1, else=0). Both branches always evaluate — for short-circuit use flow `conditional` instead. |
+| 36 | `arithmeticOperator` | Math | `+ − × ÷ % sqrt pow abs max min mean`. | `I: X` `I: Y` (num) / `O: Result` | Unary ops (`sqrt`, `abs`) ignore `Y` |
+| 37 | `expression` | Expression | Type a math formula instead of wiring many Math nodes — collapses an equation-heavy chain into one node. Operators `+ − × ÷ % ^`, functions `sqrt abs floor ceil round min max pow mod`, constants `pi` `e`. Variables come from the input ports. | dynamic `I: a…h` (1–8 ports, configurable count, each renamable) / `O: Result` | Parses to a shared AST; JS / WASM / WebGPU lockstep. Scalar-only — no array/neighbour reductions; transcendentals (`sin`/`cos`/`exp`/`log`) not yet supported |
+| 38 | `proportionMap` | Proportion Map | Linear remap `X ∈ [inMin..inMax] → [outMin..outMax]`. | `I: X`, `I: inMin`, `I: inMax`, `I: outMin`, `I: outMax` / `O: Result` | |
+| 39 | `interpolation` | Interpolate | `T ∈ [0,1] → [Min..Max]`. | `I: T`, `I: Min`, `I: Max` / `O: Result` | |
+| 40 | `statement` | Compare | `== != > < >= <=` on two scalars, or `Between` / `Not Between` (range check with configurable low/high sides). | `I: X` `I: Y` `I: Y₂` (between-family only) / `O: Result` (bool) | Name collision risk with `groupStatement` |
+| 41 | `logicOperator` | Logic | `AND OR XOR NOT` on bools. | `I: A` `I: B` (hidden for NOT) / `O: Result` (bool) | |
+| 42 | `valueSwitch` | Value Switch | `condition ? ifValue : elseValue`. Pure value, no flow port. | `I: Condition` (any) `I: If` (any) `I: Else` (any) / `O: Result` (any) | All inputs optional (inline defaults: condition=false, if=1, else=0). Both branches always evaluate — for short-circuit use flow `conditional` instead. |
+| 43 | `lookupInteraction` | Lookup Interaction | Index an Interaction Table model attribute by two face labels (e.g. from `getFacingLabels`) → float. | `I: Label A` `I: Label B` (int, inline) / `O: Value` (float) | **Variegated Cells only**; loop-invariant when both labels are loop-invariant |
 
 ### 3.5 Aggregation — `aggregation`
 
 | # | Type | Label | Description | Ports | Notes |
 |---|---|---|---|---|---|
-| 25 | `groupCounting` | Count Matching | Count array values matching a comparison vs X, or falling inside/outside an interval (`Between` / `Not Between`). | `I: Values` (arr) `I: Compare` `I: Compare High` (between-family only) / `O: Count` (int) `O: Positions` (int arr) | "Positions" output: list-positions into the input array — NOT NeighborIndex coord-handles (see §7) |
-| 26 | `groupStatement` | Group Assert | Assertion across array (all/none/any, greater/lesser). | `I: Values` (arr) `I: X` (opt) / `O: Result` (bool) `O: Positions` (int arr) | "Positions" output: same caveat as `groupCounting` |
-| 27 | `groupOperator` | Group Reduce | `Sum Product Min Max Mean AND OR Random` on an array. | `I: Values` (arr) / `O: Result` `O: Position` (int, for min/max/random) | "Position" output: list-position into input array, NOT a NeighborIndex |
-| 28 | `aggregate` | Aggregate | Combine **multiple connections** into one value. | `I: Values` (arr, multi-connect) / `O: Result` | Unlike `groupOperator` which takes an array, this takes N scalar edges |
-| 29 | `filterNeighbors` | Filter Neighbors | Keep NeighborIndex entries where the attribute passes a comparison. | `I: INDEXES` (NI arr) `I: Compare` / `O: Result` (NI arr) `O: Count` (int) | Configurable neighborhood + attribute + op |
-| 30 | `joinNeighbors` | Join Neighbors | `Intersection (AND) / Union (OR)` of two NeighborIndex arrays. | `I: A` `I: B` (NI arr) / `O: Result` (NI arr) `O: Count` (int) | `Count` mirrors `filterNeighbors` so downstream nodes don't need a separate `arrayLength` |
-| 30a | `pickRandomNeighbor` | Pick Random Neighbor | Pick one element at random from a NeighborIndex array. Returns -1 on empty input. | `I: Indexes` (NI arr) / `O: Value` (NI) | Replaces the broken `groupOperator(random)` pattern; uses the same xorshift32 stream as `getRandom` |
-| 30b | `pickNRandomNeighbors` | Pick N Random Neighbors | Pick `N` distinct elements at random from a NeighborIndex array (without replacement, partial Fisher-Yates). | `I: Indexes` (NI arr) `I: N` (int) / `O: Picked` (NI arr) | Returns at most `min(N, input.length)` entries |
-| 29a | `filterNeighbors` (implicit-all) | — | When the `Indexes` input is unconnected, filterNeighbors iterates every slot of the configured neighborhood instead of an empty input. Saves the `getAllNeighborIndexes` bootstrap node in the common case. | (no port-shape change) | Wave A.5 enhancement |
+| 44 | `groupCounting` | Count Matching | Count array values matching a comparison vs X, or falling inside/outside an interval (`Between` / `Not Between`). | `I: Values` (arr) `I: Compare` `I: Compare High` (between-family only) / `O: Count` (int) `O: Positions` (int arr) | "Positions" output: list-positions into the input array — NOT NeighborIndex coord-handles (see §7) |
+| 45 | `groupStatement` | Group Assert | Assertion across array (all/none/any, greater/lesser). | `I: Values` (arr) `I: X` (opt) / `O: Result` (bool) `O: Positions` (int arr) | "Positions" output: same caveat as `groupCounting` |
+| 46 | `groupOperator` | Group Reduce | `Sum Product Min Max Mean AND OR Median Random WeightedRandom` on an array. | `I: Values` (arr) / `O: Result` `O: Position` (int, for min/max/random/weightedRandom) | "Position" output: list-position into input array, NOT a NeighborIndex. `weightedRandom` treats the array as weights → `Result` = picked weight, `Position` = picked index (empty/zero-sum → index −1). Always advances the RNG. `random`/`median` are rejected on WebGPU |
+| 47 | `aggregate` | Aggregate | Combine **multiple connections** into one value. | `I: Values` (arr, multi-connect) / `O: Result` | Unlike `groupOperator` which takes an array, this takes N scalar edges. Same ops incl. `Median` (`random` rejected on WebGPU) |
+| 48 | `filterNeighbors` | Filter Neighbors | Keep NeighborIndex entries where the attribute passes a comparison. | `I: INDEXES` (NI arr) `I: Compare` / `O: Result` (NI arr) `O: Count` (int) | Configurable neighborhood + attribute + op |
+| 48a | `filterNeighbors` (implicit-all) | — | When the `Indexes` input is unconnected, filterNeighbors iterates every slot of the configured neighborhood instead of an empty input. Saves the `getAllNeighborIndexes` bootstrap node in the common case. | (no port-shape change) | Wave A.5 enhancement |
+| 49 | `joinNeighbors` | Join Neighbors | `Intersection (AND) / Union (OR)` of two NeighborIndex arrays. | `I: A` `I: B` (NI arr) / `O: Result` (NI arr) `O: Count` (int) | `Count` mirrors `filterNeighbors` so downstream nodes don't need a separate `arrayLength`; both ops use the multi-output `_v<id>_result`/`_v<id>_count` convention |
+| 50 | `pickRandomNeighbor` | Pick Random Neighbor | Pick one element at random from a NeighborIndex array. Returns -1 on empty input. | `I: Indexes` (NI arr) / `O: Value` (NI) | Replaces the broken `groupOperator(random)` pattern; uses the same xorshift32 stream as `getRandom` |
+| 51 | `pickNRandomNeighbors` | Pick N Random Neighbors | Pick `N` distinct elements at random from a NeighborIndex array (without replacement, partial Fisher-Yates). | `I: Indexes` (NI arr) `I: N` (int) / `O: Picked` (NI arr) | Returns at most `min(N, input.length)` entries |
 
 ### 3.6 Output (writers) — `output`
 
 | # | Type | Label | Description | Ports | Notes |
 |---|---|---|---|---|---|
-| 31 | `setAttribute` | Set Attribute | Write value to current cell's attribute. | `I: DO` (flow) `I: Value` / — | |
-| 32 | `updateAttribute` | Update Attribute | In-place modify current cell's attribute. | `I: DO` (flow) `I: Value` (hidden on unary ops) / — | Ops: `+` `-` `max` `min` `toggle` `or` `and` `next` `previous` |
-| 33 | `setNeighborhoodAttribute` | Set Neighborhood Attribute | Write to **every** neighbor's attribute. | `I: DO` `I: Value` / — | **Async-only**; sync would be corrupted by copy pass |
-| 34 | `setNeighborAttributeByIndex` | Set Neighbor Attr By Index | Write to one neighbor by index. Array index input loops and writes to every listed neighbor. | `I: DO` `I: INDEX` `I: Value` / — | **Async-only** |
-| 34a | `markCellUpdated` | Mark Cell Updated | Mark a neighbor cell as already-updated for the rest of this generation, so the async scheduler skips it on subsequent visits. Array index input marks each listed neighbor. | `I: DO` `I: INDEX` (NI scalar or NI[]) / — | **Async-only**. Enables single-step movement guarantees (gas particles, chemistry CA): a cell that moves state into a neighbor marks the recipient so it doesn't take a turn the same step. Flag is per-step transient (cleared at top of each step). |
-| 35 | `setIndicator` | Set Indicator | Assign value to an indicator. | `I: DO` `I: Value` / — | |
-| 36 | `updateIndicator` | Update Indicator | In-place modify an indicator. | `I: DO` `I: Value` (hidden on unary ops) / — | Ops same as `updateAttribute` |
+| 52 | `setVariable` | Set Variable | Assign a value to a scalar Local Variable. | `I: DO` (flow) `I: Value` / — | Requires `variableId`; rejects array variables (use Set Array Element) |
+| 53 | `setArrayElement` | Set Array Element | Write `variable[index] = value` into an array Local Variable. | `I: DO` (flow) `I: Index` (int) `I: Value` / — | Requires `variableId`; out-of-range writes silently skip (bounds-checked on all 3 targets) |
+| 54 | `setAttribute` | Set Attribute | Write value to current cell's attribute. | `I: DO` (flow) `I: Value` / — | |
+| 55 | `updateAttribute` | Update Attribute | In-place modify current cell's attribute. | `I: DO` (flow) `I: Value` (hidden on unary ops) / — | Ops: `+` `-` `max` `min` `toggle` `or` `and` `next` `previous` |
+| 56 | `setNeighborhoodAttribute` | Set Neighborhood Attribute | Write to **every** neighbor's attribute. | `I: DO` `I: Value` / — | **Async-only**; sync would be corrupted by copy pass |
+| 57 | `setNeighborAttributeByIndex` | Set Neighbor Attr By Index | Write to one neighbor by index. Array index input loops and writes to every listed neighbor. | `I: DO` `I: INDEX` `I: Value` / — | **Async-only** |
+| 58 | `markCellUpdated` | Mark Cell Updated | Mark a neighbor cell as already-updated for the rest of this generation, so the async scheduler skips it on subsequent visits. Array index input marks each listed neighbor. | `I: DO` `I: INDEX` (NI scalar or NI[]) / — | **Async-only**. Enables single-step movement guarantees (gas particles, chemistry CA): a cell that moves state into a neighbor marks the recipient so it doesn't take a turn the same step. Flag is per-step transient (cleared at top of each step). |
+| 59 | `setOrientation` | Set Orientation | Write the current cell's orientation (0–3). | `I: DO` (flow) `I: Value` (int) / — | **Variegated Cells only**; works in sync + async |
+| 60 | `setFacingOrientation` | Set Facing Orientation | Write the orientation of the neighbour touching this cell in a fixed direction. | `I: DO` (flow) `I: Value` (int) / — | **Async-only + Variegated Cells**; `directionTag` config |
+| 61 | `setNeighborOrientationByIndex` | Set Neighbor Orientation By Index | Write the orientation of one neighbour by NeighborIndex. | `I: DO` (flow) `I: INDEX` (NI) `I: Value` (int) / — | **Async-only + Variegated Cells** |
+| 62 | `moveSelfToNeighbor` | Move Self To Neighbor | Atomic move into a vacant neighbour: push per-attribute payloads (and optionally orientation) to the target NI, then clear self to defaults. | `I: DO` (flow) `I: Target NI` (NI) `I: Orientation` (int, if `transferOrientation`) + dynamic `I: payload_N` / — | **Async-only** (chemistry move-into-empty idiom); `variegated` required only when `transferOrientation`. Payloads are snapshot at cell-top so writes see pre-move state |
+| 63 | `setIndicator` | Set Indicator | Assign value to an indicator. | `I: DO` `I: Value` / — | |
+| 64 | `updateIndicator` | Update Indicator | In-place modify an indicator. | `I: DO` `I: Value` (hidden on unary ops) / — | Ops same as `updateAttribute`; `toggle`/`next`/`previous` rejected on WebGPU (order-dependent) |
 
 ### 3.7 Colour — `color`
 
 | # | Type | Label | Description | Ports | Notes |
 |---|---|---|---|---|---|
-| 37 | `setColorViewer` | Set Color Viewer | Write R/G/B to the output mapping's color buffer. | `I: DO` (flow) `I: R` `I: G` `I: B` / — | Used in `outputMapping` chains |
-| 38 | `setCellGlyph` | Set Cell Glyph | Write a per-cell Unicode glyph + RGB tint to the overlay buffers. The simulator paints the glyph on top of the cell colour when zoom is sufficient. | `I: DO` (flow) `I: Glyph` (codepoint, inline glyph picker) `I: R` `I: G` `I: B` / — | Used in `outputMapping` chains. Hidden below ~6 px/cell |
-| 39 | `getColorConstant` | Color Constant | Emit a fixed RGB triple. | `O: R` `O: G` `O: B` (int) | |
-| 40 | `colorScale` | Color Scale | Map `T` to an RGB color via N colour stops with a selectable curve (linear / smoothstep / easeInQuad / easeOutQuad / exponential / logarithmic). Replaces the legacy `colorInterpolation` node. | `I: T` (float) / `O: R` `O: G` `O: B` (int) | Min 2 stops; `t` outside the stop range clamps to nearest endpoint |
+| 65 | `setColorViewer` | Set Color Viewer | Write R/G/B to the output mapping's color buffer. | `I: DO` (flow) `I: R` `I: G` `I: B` / — | Used in `outputMapping` chains |
+| 66 | `setCellGlyph` | Set Cell Glyph | Write a per-cell Unicode glyph + RGB tint to the overlay buffers. The simulator paints the glyph on top of the cell colour when zoom is sufficient. | `I: DO` (flow) `I: Glyph` (codepoint, inline glyph picker) `I: R` `I: G` `I: B` / — | Used in `outputMapping` chains. Hidden below ~6 px/cell |
+| 67 | `getColorConstant` | Color Constant | Emit a fixed RGB triple. | `O: R` `O: G` `O: B` (int) | |
+| 68 | `colorScale` | Color Scale | Map `T` to an RGB color via N colour stops with a selectable curve (linear / smoothstep / easeInQuad / easeOutQuad / exponential / logarithmic). Replaces the legacy `colorInterpolation` node. | `I: T` (float) / `O: R` `O: G` `O: B` (int) | Min 2 stops; `t` outside the stop range clamps to nearest endpoint |
 
 ### Hidden / auto-generated
 
@@ -262,10 +282,11 @@ graph TD
 **Observations**
 
 - `aggregate` vs `groupOperator` — both reduce to one scalar, both have similar
-  operations (Sum / Product / Max / Min / Mean / AND / OR). The difference is that
-  `aggregate` accepts multiple *scalar* edges on one port (auto-assembled into an array
-  at compile time) while `groupOperator` takes a pre-assembled array input. No
-  indication in either UI of when to prefer which.
+  operations (Sum / Product / Max / Min / Mean / AND / OR / Median). `groupOperator` adds
+  array-only sampling ops `Random` (uniform) and `WeightedRandom` (cumulative-sum weighted
+  pick). The structural difference is that `aggregate` accepts multiple *scalar* edges on
+  one port (auto-assembled into an array at compile time) while `groupOperator` takes a
+  pre-assembled array input. No indication in either UI of when to prefer which.
 - `groupCounting`, `groupStatement` both take an array + a scalar "compare" value, but
   one returns a count (and optional matching indices) while the other returns a bool
   (and optional indices). Both overlap with `filterNeighbors` for the common case
@@ -356,13 +377,10 @@ These are **ideas**, not committed work. They inform future passes on the node s
   `min(max(x, lo), hi)`; a dedicated node would still be more discoverable.
 - **Integer cast** / **Float cast** — no explicit conversion, but `expression` now exposes
   `floor` / `ceil` / `round` directly.
-- **Array length** — `getNeighborsAttribute.Values.length` is inaccessible. Workaround:
-  use `groupCounting(notEquals, some-sentinel)` or read `neighborhood.coords.length` —
-  but neither is discoverable.
-- **Array element** — no "get N-th element of array"; the closest is
-  `getNeighborAttributeByIndex` for neighbor arrays specifically.
-- **Conditional value** (not flow) — `ifExpr(cond, thenVal, elseVal)`. Currently requires
-  `conditional` flow + two `setAttribute` writes.
+- ~~**Array length**~~ — *implemented* as the `arrayLength` node (#25).
+- ~~**Array element**~~ — *implemented* as the `arrayElement` node (#24), bounds-checked.
+- ~~**Conditional value** (not flow)~~ — *implemented* as the `valueSwitch` node (#42):
+  `condition ? ifValue : elseValue` in the value plane, no flow fork.
 - **Print / log** — no debug output node (Unreal's "Print String" equivalent).
 
 ### 6.2 Naming collisions & clarity
@@ -383,10 +401,10 @@ These would reduce the palette's cognitive load:
 
 - **Unified `getAttribute`** with three config dropdowns: `scope ∈ {cell, model, neighbor, neighbors}`,
   `selector ∈ {all, byIndex, byTag, byTagSet, byFilter}`, `attributeId`. Replaces nodes
-  9-15 (7 nodes → 1). The output is array-typed when the selector is multi-result,
+  12-18 (7 nodes → 1). The output is array-typed when the selector is multi-result,
   scalar otherwise.
 - **Unified `setAttribute`** with `scope ∈ {cell, neighbor, neighborhood}`,
-  `operation ∈ {assign, +, -, max, min, toggle, next, prev}`. Replaces nodes 31-34
+  `operation ∈ {assign, +, -, max, min, toggle, next, prev}`. Replaces nodes 54-57
   (4 → 1). Async-only scopes would display a note in the node body when the model's
   `updateMode` is sync.
 - **First-class `color` port type**: add a `color` data type carried as a single value
