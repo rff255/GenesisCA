@@ -96,3 +96,29 @@ export function cloneMacroWithFreshIds(rawIn: MacroDef): MacroDef {
     exposedOutputs: raw.exposedOutputs.map(remapPort),
   };
 }
+
+/**
+ * Count how many macro instances in the model reference a given MacroDef id.
+ * Walks the top-level graph AND every macro's subgraph (instances can be nested
+ * inside other macros). Used for the "linked copies" count badge on macro nodes
+ * and shared with the palette's project-macro reference filter / undoMacro's
+ * ref-check — instances sharing one macroDefId are "linked" (editing one's
+ * internals changes all).
+ */
+export function countMacroInstances(
+  model: { graphNodes: GraphNode[]; macroDefs?: MacroDef[] },
+  macroDefId: string,
+): number {
+  if (!macroDefId) return 0;
+  let count = 0;
+  const visit = (nodes: GraphNode[]) => {
+    for (const n of nodes) {
+      if (n.data?.nodeType !== 'macro') continue;
+      const cfg = n.data.config as Record<string, unknown> | undefined;
+      if (cfg?.macroDefId === macroDefId) count++;
+    }
+  };
+  visit(model.graphNodes);
+  for (const md of model.macroDefs || []) visit(md.nodes);
+  return count;
+}

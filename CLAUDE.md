@@ -217,7 +217,7 @@ genesis-ca/
 │   │   └── ModelsLibrary.tsx         # Models Library tab (fetches from public/models/)
 │   ├── model/
 │   │   ├── ModelContext.tsx           # React Context + useReducer
-│   │   ├── macroImport.ts            # cloneMacroWithFreshIds — ID regen for macro imports
+│   │   ├── macroImport.ts            # cloneMacroWithFreshIds — ID regen for macro imports; countMacroInstances — linked-copy count
 │   │   ├── defaultModel.ts           # EMPTY_MODEL (for New + the initial state on every app load)
 │   │   ├── fileOperations.ts         # .gcaproj save/load/download + .gcastate serialization
 │   │   ├── schema.ts
@@ -518,8 +518,17 @@ The app is functional with these major systems:
 - Scoped scratch arrays: `_m${macroNodeId}_scr_${nodeId}` for GetNeighborsAttribute inside macros
 - `scratchNodes` uses `{ scratchVarName, nbrId }` (not `{ nodeId, nbrId }`)
 
+### Linked vs Independent Copies (v1.16):
+- **The data model already supports sharing** — a macro instance is just a graph node whose `config.macroDefId` points at a `MacroDef`. Two instances sharing one `macroDefId` are **linked** (mirror copies): the MacroDef is the single source of truth (edit-inside writeback via `updateMacro`; all three compilers expand by `macroDefs.find(d => d.id === macroDefId)`), so editing any instance's internals updates ALL of them with **zero compiler changes**. Independent copies each own a separate MacroDef.
+- **Creation paths (intentionally mixed):** Palette "Project Macro" drop = **linked** (reuses the existing `macroDefId`); right-click → **Duplicate → "Duplicate Linked"** = **linked**; right-click → **Duplicate → "Duplicate Independent"** + copy/paste + default-macro drop + Create-from-selection = **independent** (clone the def via `importMacro`/`cloneMacroWithFreshIds`).
+- **`duplicateNode(linked = false)`** in [GraphEditor.tsx](src/modeler/vpl/GraphEditor.tsx): when `linked && srcType === 'macro'` it SKIPS the def-clone block so the duplicate keeps the source `macroDefId`. The single-node context menu renders **Duplicate as a hover submenu for macro nodes** (`.contextSubmenuTrigger`/`.contextSubmenu`, same pattern as Align/Distribute) — "Duplicate Independent" calls `duplicateNode(false)`, "Duplicate Linked" calls `duplicateNode(true)`. Non-macro nodes get a plain "Duplicate" button (`duplicateNode()` → independent). Don't pass `duplicateNode` directly as an `onClick` handler (the event would land in `linked`).
+- **Count badge** ([CaNode.tsx](src/modeler/vpl/CaNode.tsx), `.linkBadge`): rendered as the first child of the macro `.header` (left of the "MACRO" title), shown ONLY when `countMacroInstances(model, macroDefId) >= 2` (Blender-style — single-user macros show nothing). Click → `.linkMenu` popover → **"Make Independent Copy"** = `importMacro(srcDef)` then `updateNodeData(id, {config:{macroDefId: newId}})` for THIS node only; other linked instances stay on the original (their count decrements). Keeps the node's `data.label` (no rename/suffix).
+- **`nodrag` gotcha:** the badge + popover live in the `.header`, which is a React-Flow drag handle (only the `.body` carries the `nodrag` class). Interactive elements in the header MUST add the `nodrag` class or mousing down on them initiates a node drag — `onMouseDown` `stopPropagation` does NOT prevent it because React Flow's d3-drag attaches a native listener on the node element that fires before React's root-delegated handler. (`.linkBadge` + `.linkMenu` both carry `nodrag`.)
+- **`countMacroInstances(model, macroDefId)`** in [macroImport.ts](src/model/macroImport.ts): walks `model.graphNodes` + every `model.macroDefs[*].nodes` counting macro instances with that `macroDefId`. Same traversal as the palette Project-Macros filter and `undoMacro`'s ref-check.
+- **Undo asymmetry (accepted, harmless):** "Make Independent" does a model dispatch (`importMacro` → ADD_MACRO, sets `isDirty`) AND a graph-only node retarget. Ctrl+Z (graph-only history) reverts the retarget but leaves an **orphan MacroDef** — hidden from the palette (`usedMacroIds` filter) and never removed out from under a live instance by `undoMacro`'s ref-count. This exactly mirrors the existing independent-`duplicateNode` behavior. Don't build a combined ModelContext action (it would have to own React-Flow graph state).
+
 ### Remaining:
-- Each macro instance is unique — no switching between definitions (macro dropdown removed)
+- No def-switching dropdown — a macro instance can't be repointed to a different existing MacroDef from the UI (only linked-copy / make-independent).
 
 ### Thumbnails
 - `ModelProperties.thumbnail?: string` stores a PNG/JPEG/GIF/WebP data URL (≤2 MB, validated in `PropertiesPanelContent`). Travels inside `.gcaproj` — no sidecar for user-saved files.
