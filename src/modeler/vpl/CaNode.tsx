@@ -10,6 +10,7 @@ import { handleId } from './types';
 import type { NodeConfig, PortDef } from './types';
 import type { MacroPort } from '../../model/types';
 import { useModel } from '../../model/ModelContext';
+import { countMacroInstances } from '../../model/macroImport';
 import {
   isConnectingGlobal,
   showPortLabelsGlobal,
@@ -192,7 +193,7 @@ function CategoricalColorEditor({ id, nodeData }: { id: string; nodeData: CaNode
 function CaNodeComponent({ id, data }: NodeProps) {
   const nodeData = data as CaNodeData;
   const def = getNodeDef(nodeData.nodeType);
-  const { model, updateMacro } = useModel();
+  const { model, updateMacro, importMacro } = useModel();
   const { updateNodeData } = useReactFlow();
   // Subscribe to port-label toggle so memoized CaNodes re-render when it changes
   const showPortLabels = useSyncExternalStore(subscribeShowPortLabels, () => showPortLabelsGlobal);
@@ -553,6 +554,24 @@ function CaNodeComponent({ id, data }: NodeProps) {
   /** Stop all propagation (for double-click, click handlers) */
   const stopAll = useCallback((e: React.MouseEvent) => e.stopPropagation(), []);
 
+  // Linked-copies badge (Blender-style): how many macro instances share this
+  // node's MacroDef. Only shown at 2+ (single-user macros show nothing).
+  const macroDefId = nodeData.nodeType === 'macro' ? (nodeData.config.macroDefId as string | undefined) : undefined;
+  const linkCount = useMemo(
+    () => (typeof macroDefId === 'string' && macroDefId.length > 0 ? countMacroInstances(model, macroDefId) : 0),
+    [model.graphNodes, model.macroDefs, macroDefId],
+  );
+  const [showLinkMenu, setShowLinkMenu] = useState(false);
+  /** Break the link for THIS instance only: clone the MacroDef and retarget the node. */
+  const makeIndependent = useCallback(() => {
+    if (!macroDefId) return;
+    const srcDef = (model.macroDefs || []).find(m => m.id === macroDefId);
+    if (!srcDef) { setShowLinkMenu(false); return; }
+    const newId = importMacro(srcDef);
+    updateNodeData(id, { ...nodeData, config: { ...nodeData.config, macroDefId: newId } });
+    setShowLinkMenu(false);
+  }, [id, nodeData, macroDefId, model.macroDefs, importMacro, updateNodeData]);
+
   const showExpanded = !isCollapsed || hoverExpand;
 
   const isCompact = nodeData.nodeType === 'step'
@@ -830,7 +849,28 @@ function CaNodeComponent({ id, data }: NodeProps) {
         <div className={styles.userLabel}>{userLabel}</div>
       )}
       <div className={styles.header} style={{ background: def.color, color: textColorForBg(def.color), textShadow: isLightHeaderBg(def.color) ? 'none' : undefined }}>
+        {linkCount >= 2 && (
+          <span
+            className={`${styles.linkBadge} nodrag`}
+            title={`${linkCount} linked copies — click for options`}
+            onMouseDown={stopDrag}
+            onClick={e => { stopAll(e); setShowLinkMenu(v => !v); }}
+          >
+            {linkCount}
+          </span>
+        )}
         {def.label}
+        {linkCount >= 2 && showLinkMenu && (
+          <div className={`${styles.linkMenu} nodrag`} onMouseDown={stopDrag} onDoubleClick={stopAll}>
+            <button
+              type="button"
+              className={styles.linkMenuItem}
+              onClick={e => { stopAll(e); makeIndependent(); }}
+            >
+              Make Independent Copy
+            </button>
+          </div>
+        )}
       </div>
       {configIssues.length > 0 && (
         <div className={styles.warningBadge} title={configIssues.join('\n')}>!</div>

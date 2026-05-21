@@ -25,6 +25,9 @@
 }
 
 .header {
+  position: relative;
+  display: flex;
+  align-items: center;
   padding: var(--space-2) var(--space-5);
   font-weight: 600;
   color: #fff;
@@ -244,4 +247,65 @@
   pointer-events: auto;
   z-index: 2;
   user-select: none;
+}
+
+/* Linked-copies count badge (Blender-style) — sits left of the macro title,
+   shown only when 2+ instances share the MacroDef. Click opens .linkMenu. */
+.linkBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  margin-right: 6px;
+  font-size: var(--font-2xs);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  color: inherit;
+  background: rgba(0, 0, 0, 0.28);
+  border-radius: 8px;
+  cursor: pointer;
+  pointer-events: auto;
+  user-select: none;
+  flex: 0 0 auto;
+}
+
+.linkBadge:hover {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.linkMenu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 3px;
+  z-index: 5;
+  padding: var(--space-1);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.linkMenuItem {
+  display: block;
+  width: 100%;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--font-2xs);
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+  color: var(--color-text-primary);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.linkMenuItem:hover {
+  background: var(--color-overlay-hover-medium);
 }

@@ -1763,7 +1763,7 @@ export function GraphEditorInner() {
     });
   }, [importMacro, addNodeAtPosition]);
 
-  const duplicateNode = useCallback(() => {
+  const duplicateNode = useCallback((linked = false) => {
     if (!contextMenu || contextMenu.target.type !== 'node') return;
     const targetNodeId = contextMenu.target.type === 'node' ? contextMenu.target.nodeId : '';
     const sourceNode = nodes.find(n => n.id === targetNodeId);
@@ -1773,12 +1773,14 @@ export function GraphEditorInner() {
     if (srcType === 'step') { setContextMenu(null); return; }
     pushCurrentSnapshot();
 
-    // Macro instances must NOT share a MacroDef with their original — otherwise
-    // Undo Macro on one would remove the shared definition and silently break
-    // the other. Clone the definition with fresh IDs and point the duplicate
-    // at the new def.
+    // Macro instances: plain Duplicate (linked === false) clones the MacroDef
+    // with fresh IDs so the copy is INDEPENDENT — editing one no longer affects
+    // the other, and Undo Macro on one can't remove a def the other relies on.
+    // "Duplicate Linked" (linked === true) keeps the same macroDefId, producing
+    // a mirror copy: editing one's internals updates all linked instances.
+    // (undoMacro ref-counts before removing a def, so shared defs are safe.)
     let clonedMacroDefId: string | undefined;
-    if (srcType === 'macro') {
+    if (srcType === 'macro' && !linked) {
       const srcConfig = (sourceNode.data as Record<string, unknown>).config as Record<string, unknown> | undefined;
       const srcMacroDefId = srcConfig?.macroDefId as string | undefined;
       const srcDef = srcMacroDefId
@@ -3124,7 +3126,20 @@ export function GraphEditorInner() {
             <>
               <div className={styles.contextTitle}>Node</div>
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); renameNode(); }}>Rename</button>
-              <button className={styles.contextItem} onClick={e => { e.stopPropagation(); duplicateNode(); }}>Duplicate</button>
+              {contextMenu.target.isMacro ? (
+                <div className={styles.contextSubmenuTrigger}>
+                  <button className={styles.contextItem}>
+                    Duplicate
+                    <span style={{ marginLeft: 'auto', fontSize: '0.6rem', color: '#6080a0' }}>&rsaquo;</span>
+                  </button>
+                  <div className={styles.contextSubmenu}>
+                    <button className={styles.contextItem} onClick={e => { e.stopPropagation(); duplicateNode(false); }}>Duplicate Independent</button>
+                    <button className={styles.contextItem} onClick={e => { e.stopPropagation(); duplicateNode(true); }}>Duplicate Linked</button>
+                  </div>
+                </div>
+              ) : (
+                <button className={styles.contextItem} onClick={e => { e.stopPropagation(); duplicateNode(); }}>Duplicate</button>
+              )}
               <button className={styles.contextItem} onClick={e => {
                 e.stopPropagation();
                 // Select this node then copy

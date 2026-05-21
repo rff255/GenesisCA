@@ -1,4 +1,4 @@
-# GenesisCA <sup>v1.15.0</sup>
+# GenesisCA <sup>v1.16.0</sup>
 
 An IDE for modeling and simulating Cellular Automata, built as a self-contained browser application.
 
@@ -116,7 +116,7 @@ A complete GenesisCA model definition consists of:
 - **Palette** — right-side panel with a drag-and-drop list of every node type (grouped by category), default macros shipped with the app (from `public/macros/*.gcamacro`), and the current project's macros. Splits vertically into independently-scrolling **Nodes** and **Macros** sections with a draggable horizontal splitter; a **List / Visual** toggle switches between a compact text list and mini node-preview cards (split position and view mode persist across sessions)
 - **Node Explorer** — searchable right-side panel (Ctrl+F to open, Esc to close) listing all placed nodes with click-to-focus
 - **Incomplete-config warnings** — nodes with unset required parameters (e.g., an unselected attribute/neighborhood/mapping) show an amber warning badge in the header so you can spot them at a glance. Macro instances bubble up internal-node warnings (recursively through nested macros), so misconfigured internals are visible without opening the macro
-- **Macro System** — encapsulate node groups into reusable subgraphs with MacroInput/MacroOutput boundary nodes
+- **Macro System** — encapsulate node groups into reusable subgraphs with MacroInput/MacroOutput boundary nodes. Reuse a macro as a **linked** (mirror) copy that shares one definition — editing any instance's internals updates all of them — or as an **independent** copy with its own definition. Drag from the Palette's Project Macros or right-click → **Duplicate → Duplicate Linked** to make a linked copy; **Duplicate → Duplicate Independent** (or copy/paste) makes an independent one. When 2+ instances share a definition, a small **count badge** (Blender-style) appears at the left of each Macro node's header; click it and choose **Make Independent Copy** to break the link for that instance
 - **Undo/Redo** (partial) — Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) for node/edge operations, moves, paste, config changes
 - **Copy/Paste/Duplicate** — Ctrl+C/V/X/D, context menu on single nodes and selections, paste at right-click location
 - **Groups & Comments** — visual organization tools; comment background color is customizable and the resized size persists; Undo Group dissolves a group and selects all contained nodes. Drag a group's **header** to move it, drag its **body** to box-select inner nodes (Shift adds / Ctrl removes from the selection), click the body to select the group, and right-click-drag to pan; double-click the header to rename

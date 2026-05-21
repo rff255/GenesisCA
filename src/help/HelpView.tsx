@@ -393,7 +393,7 @@ export function HelpView() {
             <li><strong>Left-click drag</strong> (on node) &mdash; Move node.</li>
             <li><strong>Ctrl + click</strong> &mdash; Add/remove from selection.</li>
             <li><strong>Right-click</strong> (on canvas) &mdash; Context menu: Paste, Add Comment, Add Node submenu. Hover over any Add Node entry to see a short description of what it does.</li>
-            <li><strong>Right-click</strong> (on node) &mdash; Node options: Rename, Duplicate, Copy, Cut, Delete. Macros also show Enter Macro and Undo Macro.</li>
+            <li><strong>Right-click</strong> (on node) &mdash; Node options: Rename, Duplicate, Copy, Cut, Delete. On macros, Duplicate expands into a submenu (<strong>Duplicate Independent</strong> / <strong>Duplicate Linked</strong>), and they also show Enter Macro, Export Macro, and Undo Macro &mdash; plus a count badge for making linked copies independent.</li>
             <li><strong>Right-click</strong> (on selection) &mdash; Selection options: Duplicate, Copy, Cut, Paste, Create Macro, Create Group, <strong>Align</strong> (horizontally: left/center/right; vertically: top/center/bottom) and <strong>Distribute</strong> (horizontally/vertically &mdash; keeps the leftmost/topmost in place and evens out the gaps).</li>
             <li><strong>Right-click</strong> (on group) &mdash; Group options: Rename, Undo Group, Delete.</li>
             <li><strong>Drag from Palette</strong> &mdash; Drop a node or macro from the right-side Palette tab onto the canvas to add it at the drop position.</li>
@@ -633,6 +633,20 @@ export function HelpView() {
             nodes. Add, remove, or rename ports on these to modify the macro&apos;s
             external interface. Use the breadcrumb bar at the top to navigate back.
           </p>
+
+          <h3 className={styles.h3}>Linked vs Independent Copies</h3>
+          <p className={styles.p}>
+            A macro can be reused as a <strong>linked</strong> (mirror) copy or an
+            <strong> independent</strong> copy. Linked copies share one definition &mdash;
+            editing the internals of any instance updates <em>all</em> of them, like a
+            reusable &quot;black box.&quot; Independent copies each own their definition,
+            so you can change one without affecting the others.
+          </p>
+          <ul className={styles.list}>
+            <li>Dragging a macro from the Palette&apos;s <strong>Project Macros</strong> section, or right-clicking a Macro node and choosing <strong>Duplicate &rarr; Duplicate Linked</strong>, creates a <em>linked</em> copy.</li>
+            <li><strong>Duplicate &rarr; Duplicate Independent</strong> (and copy/paste) creates an <em>independent</em> copy.</li>
+            <li>When 2+ instances share a definition, a small <strong>count badge</strong> appears at the left of each Macro node&apos;s header. Click it and choose <strong>Make Independent Copy</strong> to break the link for that one instance &mdash; it gets its own definition you can edit and rename freely. (Inspired by Blender&apos;s linked-datablock user count.)</li>
+          </ul>
 
           <h3 className={styles.h3}>Undoing a Macro</h3>
           <p className={styles.p}>
