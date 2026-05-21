@@ -35,7 +35,7 @@ function loadSaveOptions(): SaveOptions {
   return { includeControls: true, includeGrid: true, includePresets: true };
 }
 
-export function FileMenu() {
+export function FileMenu({ onNew }: { onNew?: () => void } = {}) {
   const { model, isDirty, newModel, loadModel, markSaved } = useModel();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modelRef = useRef(model);
@@ -49,11 +49,12 @@ export function FileMenu() {
         title: 'Discard unsaved changes?',
         message: 'You have unsaved changes that will be lost if you create a new model.',
         confirmLabel: 'Create new',
-        onConfirm: () => { setPendingConfirm(null); newModel(); },
+        onConfirm: () => { setPendingConfirm(null); newModel(); onNew?.(); },
       });
       return;
     }
     newModel();
+    onNew?.();
   };
 
   const handleSave = () => {

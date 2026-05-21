@@ -86,7 +86,7 @@ function AppInner() {
         <span className={styles.modelName}>
           {model.properties.name}{isDirty && <span className={styles.dirtyIndicator}> *</span>}
         </span>
-        <FileMenu />
+        <FileMenu onNew={() => setMode('modeler')} />
       </nav>
       <main className={styles.content}>
         {mode === 'modeler' && <ModelerView />}
