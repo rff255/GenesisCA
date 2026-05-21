@@ -130,10 +130,10 @@ const ALL_NODES: NodeTypeDef[] = [
   PickRandomNeighborNode,
   PickNRandomNeighborsNode,
   // Output
-  SetVariableNode,
-  SetArrayElementNode,
   SetAttributeNode,
   UpdateAttributeNode,
+  SetVariableNode,
+  SetArrayElementNode,
   SetNeighborhoodAttributeNode,
   SetNeighborAttributeByIndexNode,
   MarkCellUpdatedNode,
