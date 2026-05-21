@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
-import type { Attribute, AttributeType } from '../../model/types';
-import { InteractionTableEditor } from './InteractionTableEditor';
+import type { Attribute, AttributeType, CAModel, LookupKeySource } from '../../model/types';
+import { LookupTableEditor } from './LookupTableEditor';
+import { resolveKeyLabels } from '../vpl/compiler/variegation';
 import { useListReorder } from './useListReorder';
 import { NeighborIndexDefaultEditor } from './NeighborIndexDefaultEditor';
 import { VariablesPanelSection } from './VariablesPanelSection';
@@ -17,10 +18,53 @@ function buildAttrDragPayload(attr: Attribute): ModelElementDragPayload {
   if (attr.isModelAttribute) {
     return { kind: 'model-attribute', attributeId: attr.id, isColor: attr.type === 'color' };
   }
-  // Schema invariant: cell attrs never have type `'interactionTable'` (the
+  // Schema invariant: cell attrs never have type `'lookupTable'` (the
   // Attributes panel's type dropdown excludes it for cell attrs). Cast away
   // the wider AttributeType to satisfy the drag payload's restricted union.
   return { kind: 'cell-attribute', attributeId: attr.id, attrType: attr.type as 'bool' | 'integer' | 'float' | 'tag' | 'color' | 'neighborIndex' };
+}
+
+/** Row/column key-source picker for a Lookup Table attribute. Lists the model's
+ *  face-label palettes (only when Variegated Cells is enabled) plus every tag
+ *  attribute. An axis keyed by a tag attribute needs no faces at all. */
+function KeySourceField({ label, value, model, onChange }: {
+  label: string;
+  value: LookupKeySource | undefined;
+  model: CAModel;
+  onChange: (src: LookupKeySource | undefined) => void;
+}) {
+  const palettes = model.variegatedCells?.enabled ? (model.variegatedCells.facePalettes ?? []) : [];
+  const tagAttrs = model.attributes.filter(a => a.type === 'tag');
+  const current = value
+    ? value.kind === 'facePalette' ? `palette:${value.paletteId}` : `tag:${value.attributeId}`
+    : '';
+  return (
+    <label style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2, fontSize: '0.66rem' }}>
+      <span style={{ color: '#7a8a9a' }}>{label}</span>
+      <select
+        className={styles.selectInput}
+        value={current}
+        onChange={e => {
+          const v = e.target.value;
+          const ci = v.indexOf(':');
+          if (ci < 0) { onChange(undefined); return; }
+          const kind = v.slice(0, ci);
+          const id = v.slice(ci + 1);
+          onChange(kind === 'palette' ? { kind: 'facePalette', paletteId: id } : { kind: 'tagAttribute', attributeId: id });
+        }}
+      >
+        <option value="">— select —</option>
+        {palettes.length > 0 && (
+          <optgroup label="Face palettes">
+            {palettes.map(p => <option key={p.id} value={`palette:${p.id}`}>{p.name}</option>)}
+          </optgroup>
+        )}
+        <optgroup label="Tag attributes">
+          {tagAttrs.map(a => <option key={a.id} value={`tag:${a.id}`}>{a.name}</option>)}
+        </optgroup>
+      </select>
+    </label>
+  );
 }
 
 function handleRowDragStart(payload: ModelElementDragPayload) {
@@ -218,26 +262,27 @@ export function AttributesPanelContent() {
                 <option value="tag">Tag</option>
                 <option value="neighborIndex">Neighbor Index</option>
                 {selected.isModelAttribute && <option value="color">Color</option>}
-                {selected.isModelAttribute && <option value="interactionTable">Interaction Table</option>}
+                {selected.isModelAttribute && <option value="lookupTable">Lookup Table</option>}
               </select>
             </div>
-            {selected.type === 'interactionTable' && (
+            {selected.type === 'lookupTable' && (
               <div className={styles.field}>
-                <label className={styles.fieldLabel}>Interaction Table</label>
-                {!model.variegatedCells?.enabled ? (
-                  <div style={{ color: '#cc8d3a', fontSize: '0.66rem' }}>
-                    Enable Variegated Cells in Properties first; the table is keyed by face labels which are defined in the Variegated Cells panel.
-                  </div>
-                ) : (
-                  <InteractionTableEditor
-                    attribute={selected}
-                    faceLabels={model.variegatedCells.faceLabels}
-                    onChange={changes => updateAttribute(selected.id, changes)}
-                  />
-                )}
+                <label className={styles.fieldLabel}>Lookup Table</label>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                  <KeySourceField label="Rows" value={selected.rowKeySource} model={model}
+                    onChange={src => updateAttribute(selected.id, { rowKeySource: src })} />
+                  <KeySourceField label="Columns" value={selected.colKeySource} model={model}
+                    onChange={src => updateAttribute(selected.id, { colKeySource: src })} />
+                </div>
+                <LookupTableEditor
+                  attribute={selected}
+                  rowLabels={resolveKeyLabels(selected.rowKeySource, model)}
+                  colLabels={resolveKeyLabels(selected.colKeySource, model)}
+                  onChange={changes => updateAttribute(selected.id, changes)}
+                />
               </div>
             )}
-            {selected.type !== 'interactionTable' && (<>
+            {selected.type !== 'lookupTable' && (<>
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Default Value</label>
               {selected.type === 'bool' ? (

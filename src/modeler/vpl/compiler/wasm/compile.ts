@@ -1975,29 +1975,26 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
   // is f64 (table values are floats). Returns 0 when the tableId is unknown
   // or variegation is off.
   lookupInteraction: ({ node, ctx, inputs }) => {
-    if (!ctx.layout.variegatedEnabled) {
-      ctx.errors.push('lookupInteraction: variegated cells disabled');
-      return null;
-    }
+    // No variegation guard — a Lookup Table can be keyed purely by tag
+    // attributes (no faces). Tableless lookup falls back to constant 0.
     const tableId = (node.data.config.tableId as string) || '';
-    const tableOff = tableId ? ctx.layout.interactionTableOffsets[tableId] : undefined;
-    const labelCount = ctx.layout.interactionTableLabelCount;
-    if (tableOff === undefined) {
-      // Tableless lookup compiles to constant 0 (matches JS fallback).
+    const slot = tableId ? ctx.layout.interactionTableOffsets[tableId] : undefined;
+    if (slot === undefined) {
       ctx.emitter.f64Const(0);
       return storeResult(ctx.emitter, F64);
     }
+    const colCount = slot.colCount; // row-major stride
     const labelA = inputs['labelA'] ?? { inline: true, value: 0, valtype: I32 };
     const labelB = inputs['labelB'] ?? { inline: true, value: 0, valtype: I32 };
-    // addr = (labelA * labelCount + labelB) * 8 + tableOff
+    // addr = (labelA * colCount + labelB) * 8 + slot.offset
     pushValueAs(ctx.emitter, labelA, I32);
-    ctx.emitter.i32Const(labelCount);
+    ctx.emitter.i32Const(colCount);
     ctx.emitter.op(OP_I32_MUL);
     pushValueAs(ctx.emitter, labelB, I32);
     ctx.emitter.op(OP_I32_ADD);
     ctx.emitter.i32Const(8);
     ctx.emitter.op(OP_I32_MUL);
-    ctx.emitter.f64Load(tableOff, 3);
+    ctx.emitter.f64Load(slot.offset, 3);
     return storeResult(ctx.emitter, F64);
   },
 
@@ -4454,13 +4451,9 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
   },
 
   interactionTableMap: ({ node, ctx }) => {
-    if (!ctx.layout.variegatedEnabled) {
-      ctx.errors.push('interactionTableMap: variegated cells disabled');
-      return null;
-    }
+    // No variegation guard — tag×tag tables need no faces.
     const tableId = (node.data.config.tableId as string) || '';
-    const tableOff = tableId ? ctx.layout.interactionTableOffsets[tableId] : undefined;
-    const labelCount = ctx.layout.interactionTableLabelCount;
+    const slot = tableId ? ctx.layout.interactionTableOffsets[tableId] : undefined;
     const myArr = resolveInputArray(ctx, node, 'myFaces');
     const theirArr = resolveInputArray(ctx, node, 'theirFaces');
     if (!myArr || !theirArr) {
@@ -4494,10 +4487,11 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     ctx.emitter.op(OP_I32_ADD);
     ctx.emitter.localSet(ctx.scratchTopLocal);
 
-    if (tableOff === undefined) {
+    if (slot === undefined) {
       // Tableless: output stays empty (len = 0).
       return { kind: 'array', offsetLocal: outOff, lenLocal: outLen, elemValtype: F64, elemBytes: 8 };
     }
+    const colCount = slot.colCount; // row-major stride
 
     const k = ctx.emitter.allocLocal(I32);
     ctx.emitter.i32Const(0); ctx.emitter.localSet(k);
@@ -4514,7 +4508,7 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
         if (theirArr.elemValtype === F64) ctx.emitter.f64ToI32();
         ctx.emitter.localSet(b);
 
-        // out[k] (f64) = f64Load((a * labelCount + b) * 8 + tableOff)
+        // out[k] (f64) = f64Load((a * colCount + b) * 8 + slot.offset)
         // Compute the byte offset into the OUTPUT scratch slot first.
         ctx.emitter.localGet(k);
         ctx.emitter.i32Const(8);
@@ -4523,13 +4517,13 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
         ctx.emitter.op(OP_I32_ADD);
         // Compute the byte offset into the TABLE.
         ctx.emitter.localGet(a);
-        ctx.emitter.i32Const(labelCount);
+        ctx.emitter.i32Const(colCount);
         ctx.emitter.op(OP_I32_MUL);
         ctx.emitter.localGet(b);
         ctx.emitter.op(OP_I32_ADD);
         ctx.emitter.i32Const(8);
         ctx.emitter.op(OP_I32_MUL);
-        ctx.emitter.f64Load(tableOff, 3);
+        ctx.emitter.f64Load(slot.offset, 3);
         // Store into the output slot
         ctx.emitter.f64Store(0, 3);
 

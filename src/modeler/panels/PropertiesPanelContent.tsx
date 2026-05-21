@@ -57,8 +57,12 @@ export function PropertiesPanelContent() {
       },
     });
   };
+  // Spatial indicators (xAxis rows/columns) produce per-position-bin arrays, not
+  // a scalar/category count, so they can't drive a numeric end condition.
+  const isSpatialIndicator = (i: { kind: string; xAxis?: string }) =>
+    i.kind === 'linked' && (i.xAxis === 'rows' || i.xAxis === 'columns');
   const addIndicatorCondition = () => {
-    const firstIndicator = (model.indicators || [])[0];
+    const firstIndicator = (model.indicators || []).find(i => !isSpatialIndicator(i));
     if (!firstIndicator) return;
     // For linked-frequency indicators, seed a sensible default category so the
     // condition is immediately valid (not every user knows they need one).
@@ -529,9 +533,11 @@ export function PropertiesPanelContent() {
                               updateIndicatorCondition(cond.id, { indicatorId: e.target.value, category: undefined });
                             }}
                           >
-                            {(model.indicators || []).map(i => (
-                              <option key={i.id} value={i.id}>{i.name}</option>
-                            ))}
+                            {(model.indicators || [])
+                              .filter(i => !isSpatialIndicator(i) || i.id === cond.indicatorId)
+                              .map(i => (
+                                <option key={i.id} value={i.id}>{i.name}</option>
+                              ))}
                           </select>
                           {/* Category widget (linked-frequency only) */}
                           {isFreq && freqKind === 'bool' && (

@@ -25,7 +25,7 @@
  */
 
 import type { CAModel } from '../../../../model/types';
-import { FACE_SLOT_COUNT } from '../variegation';
+import { FACE_SLOT_COUNT, resolveKeyLabels } from '../variegation';
 import { hasGlyphsInModel } from '../glyphsUsage';
 
 export interface AttrDef {
@@ -47,18 +47,23 @@ export interface IndicatorLite {
 }
 
 /** Variegated Cells layout inputs — when omitted the layout has no
- *  orientation / facePatternLookup / interactionTable regions and the
- *  related offsets are all 0. */
+ *  orientation / facePatternLookup regions and the related offsets are all 0.
+ *  (Lookup tables are NOT here — they're decoupled from variegation; see
+ *  `LookupTableLayoutInput`.) */
 export interface VariegatedLayoutInputs {
   /** Source attribute's `tagOptions.length` — facePatternLookup is sized
    *  `tagOptions × 8` i32. Zero ⇒ lookup region is empty. */
   speciesCount: number;
-  /** User-defined face label palette length (without implicit `none`). Each
-   *  interaction table is `(faceLabelsCount + 1)²` f64. */
-  faceLabelsCount: number;
-  /** Ids of every model attribute with `type === 'interactionTable'`. Each
-   *  gets its own contiguous f64 region. Iterated in stable order. */
-  interactionTableIds: string[];
+}
+
+/** Lookup Table memory-region inputs. Decoupled from variegation — a table can
+ *  be keyed by tag attributes with no faces at all. Each table gets its own
+ *  contiguous row-major f64 region sized `rowCount * colCount * 8` bytes,
+ *  indexed `(row * colCount + col)`. */
+export interface LookupTableLayoutInput {
+  id: string;
+  rowCount: number;
+  colCount: number;
 }
 
 export interface MemoryLayout {
@@ -146,16 +151,12 @@ export interface MemoryLayout {
   /** Bytes reserved for facePatternLookup (`speciesCount × 8 × 4`). */
   facePatternLookupBytes: number;
 
-  /** Byte offset per interaction-table model attr (f64 row-major
-   *  `[rowLabelIdx * labelCount + colLabelIdx]`, sized
-   *  `(faceLabelsCount + 1)² × 8` bytes per table). Keyed by attribute id.
-   *  Empty map when variegation is off. */
-  interactionTableOffsets: Record<string, number>;
-  /** Number of labels per row/col in every interaction table — equal to
-   *  `faceLabelsCount + 1` (the implicit `none` label at index 0 plus the
-   *  user-defined palette). Same for every table because they all share
-   *  the model's face-label palette. */
-  interactionTableLabelCount: number;
+  /** Per Lookup Table model attr: byte `offset` of its f64 row-major region
+   *  plus its `rowCount`/`colCount` dimensions (region sized
+   *  `rowCount * colCount * 8`, indexed `[row * colCount + col]`). Keyed by
+   *  attribute id. Allocated for every lookupTable attr regardless of
+   *  variegation; empty map when the model has none. */
+  interactionTableOffsets: Record<string, { offset: number; rowCount: number; colCount: number }>;
 
   /** Per-cell-iteration scratch region (bump-pointer allocator).
    *  Used by array-producing emitters (filterNeighbors, joinNeighbors,
@@ -195,6 +196,7 @@ export function computeMemoryLayout(
   boundaryTreatment: string,
   variegated?: VariegatedLayoutInputs,
   hasGlyphs: boolean = false,
+  lookupTables: LookupTableLayoutInput[] = [],
 ): MemoryLayout {
   let off = 0;
 
@@ -336,15 +338,11 @@ export function computeMemoryLayout(
   const skippedBytes = total;
   off += alignTo(skippedBytes, 8);
 
-  // Variegated Cells — facePatternLookup + interaction tables. Uploaded by the
-  // worker on init/recompile. Sized once at layout time (count-driven, not
-  // value-driven) so the layout is stable across live edits to the table
-  // values themselves (those are upload-only). Tables share one labelCount
-  // because they all use the model's face-label palette.
+  // Variegated Cells — facePatternLookup. Uploaded by the worker on
+  // init/recompile. Sized once at layout time (count-driven, not value-driven)
+  // so the layout is stable across live edits.
   let facePatternLookupOffset = 0;
   let facePatternLookupBytes = 0;
-  const interactionTableOffsets: Record<string, number> = {};
-  let interactionTableLabelCount = 1; // implicit `none` = 1 when palette empty
   if (variegated) {
     facePatternLookupBytes = variegated.speciesCount * FACE_SLOT_COUNT * 4;
     if (facePatternLookupBytes > 0) {
@@ -352,13 +350,18 @@ export function computeMemoryLayout(
       facePatternLookupOffset = off;
       off += facePatternLookupBytes;
     }
-    interactionTableLabelCount = variegated.faceLabelsCount + 1;
-    const tableBytes = interactionTableLabelCount * interactionTableLabelCount * 8;
-    for (const id of variegated.interactionTableIds) {
-      off = alignTo(off, 8);
-      interactionTableOffsets[id] = off;
-      off += tableBytes;
-    }
+  }
+  // Lookup tables — allocated for every lookupTable model attr regardless of
+  // variegation (tag×tag tables need no faces). Each is row-major f64, sized
+  // rowCount*colCount*8, indexed (row*colCount + col). Stable per-table dims
+  // baked at layout time; values are upload-only.
+  const interactionTableOffsets: Record<string, { offset: number; rowCount: number; colCount: number }> = {};
+  for (const t of lookupTables) {
+    const rowCount = Math.max(1, t.rowCount);
+    const colCount = Math.max(1, t.colCount);
+    off = alignTo(off, 8);
+    interactionTableOffsets[t.id] = { offset: off, rowCount, colCount };
+    off += rowCount * colCount * 8;
   }
 
   // Scratch region for per-cell array allocation (bump-pointer reset per
@@ -393,7 +396,7 @@ export function computeMemoryLayout(
     variegatedEnabled,
     orientationReadOffset, orientationWriteOffset, orientationBytes,
     facePatternLookupOffset, facePatternLookupBytes,
-    interactionTableOffsets, interactionTableLabelCount,
+    interactionTableOffsets,
     scratchOffset, scratchBytes,
     sentinelIndex,
   };
@@ -413,15 +416,17 @@ export function computeLayoutFromModel(
     const source = model.attributes.find(a => a.id === model.variegatedCells!.sourceAttributeId);
     const speciesCount = source && source.type === 'tag' && !source.isModelAttribute
       ? (source.tagOptions?.length ?? 0) : 0;
-    const interactionTableIds = model.attributes
-      .filter(a => a.isModelAttribute && a.type === 'interactionTable')
-      .map(a => a.id);
-    variegated = {
-      speciesCount,
-      faceLabelsCount: model.variegatedCells.faceLabels.length,
-      interactionTableIds,
-    };
+    variegated = { speciesCount };
   }
+  // Lookup tables — every lookupTable model attr, dims resolved per axis key
+  // source (face palette or tag attribute). Independent of variegation.
+  const lookupTables: LookupTableLayoutInput[] = model.attributes
+    .filter(a => a.isModelAttribute && a.type === 'lookupTable')
+    .map(a => ({
+      id: a.id,
+      rowCount: resolveKeyLabels(a.rowKeySource, model).length || 1,
+      colCount: resolveKeyLabels(a.colKeySource, model).length || 1,
+    }));
   return computeMemoryLayout(
     cellAttrs.map(a => ({ id: a.id, type: a.type, isModelAttribute: false, defaultValue: a.defaultValue, tagOptions: a.tagOptions })),
     modelAttrs.map(a => ({ id: a.id, type: a.type, isModelAttribute: true, defaultValue: a.defaultValue, tagOptions: a.tagOptions })),
@@ -432,6 +437,7 @@ export function computeLayoutFromModel(
     model.properties.boundaryTreatment,
     variegated,
     hasGlyphsInModel(model),
+    lookupTables,
   );
 }
 

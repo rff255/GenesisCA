@@ -259,6 +259,21 @@ export function HelpView() {
             indicator header cycles through the three; the preference is stored per
             indicator and persists across sessions.
           </p>
+          <p className={styles.p}>
+            <strong>Spatial X-axis (chromatogram).</strong> A linked indicator&apos;s
+            <strong> X Axis</strong> can be set to <strong>Rows</strong> or
+            <strong> Columns</strong> instead of <strong>Generation</strong>. It then plots
+            value <em>per grid position</em> &mdash; a live spatial histogram &mdash; rather
+            than over time, drawing one curve per series (e.g. one curve per species for a
+            tag attribute). This reproduces the chromatogram plots common in chemistry papers
+            (cell population vs column position). Choose a <strong>Bin Mode</strong>:
+            <strong> Slices</strong> divides the axis into a fixed number of equal bands
+            (relative &mdash; survives grid resize), or <strong>Absolute</strong> uses a fixed
+            number of rows/columns per band. The chart updates every step and is read from the
+            current generation directly (it is not accumulated into a time history). Spatial
+            indicators can&apos;t drive end conditions and have no Bars/Lines/Stack toggle
+            (they are a single chart kind).
+          </p>
 
           <h3 className={styles.h3}>Variegated Cells &mdash; Directional Interactions (V)</h3>
           <p className={styles.p}>
@@ -285,9 +300,17 @@ export function HelpView() {
               Assign a pattern to each tag option in the Attributes panel.</li>
           </ul>
           <p className={styles.p}>
-            New <strong>Interaction Table</strong> model-attribute type stores a matrix of
-            float values keyed by two face labels. Live-tuneable in the simulator like any
-            other model attribute (matrix shown directly under the attribute name).
+            The <strong>Lookup Table</strong> model-attribute type stores a (possibly
+            rectangular) matrix of float values. Each axis has an independent <em>key
+            source</em> &mdash; a face-label palette or a tag attribute &mdash; so a table can
+            be keyed by faces (e.g. analyte&nbsp;&times;&nbsp;CD faces) or by cell type (e.g.
+            empty/water/amphi). A pure tag&times;tag table needs no faces, so it works even
+            with Variegated Cells off. Live-tuneable in the simulator like any other model
+            attribute (matrix shown directly under the attribute name).
+          </p>
+          <p className={styles.p}>
+            You can define multiple face-label <strong>palettes</strong> in the Variegated
+            Cells panel; each face pattern draws its slot labels from one palette.
           </p>
           <p className={styles.p}>
             Several new node types become available when Variegated Cells is enabled (hidden
@@ -309,15 +332,16 @@ export function HelpView() {
             <li><strong>Get Facing Labels</strong> &mdash; resolves the two face labels
               touching at a 1-step encounter in a fixed direction, accounting for both
               cells&apos; orientations and face patterns. Outputs <em>My Face</em> and
-              <em>Their Face</em>; pipe these into Lookup Interaction.</li>
+              <em>Their Face</em>; pipe these into Table Lookup.</li>
             <li><strong>Get All Facing Labels</strong> &mdash; two parallel arrays of face
               labels at each neighbour encounter (8-slot Moore, or 4-slot cardinal with
               &quot;Cardinals only&quot;). Pair with Aggregate or For Each In Array.</li>
-            <li><strong>Lookup Interaction</strong> &mdash; indexes an Interaction Table model
-              attribute by two face labels &rarr; float.</li>
-            <li><strong>Interaction Table Map</strong> &mdash; vectorised Lookup Interaction
-              over two parallel face-label arrays &rarr; float array (pair with
-              Aggregate&nbsp;&times;&nbsp;product for a break-probability product).</li>
+            <li><strong>Table Lookup</strong> &mdash; indexes a Lookup Table model attribute
+              by a row index and a column index &rarr; float. (Indices come from face labels
+              or tag reads, depending on the table&apos;s key sources.)</li>
+            <li><strong>Table Map</strong> &mdash; vectorised Table Lookup over two parallel
+              index arrays &rarr; float array (pair with Aggregate&nbsp;&times;&nbsp;product
+              for a break-probability product).</li>
             <li><strong>Move Self To Neighbor</strong> &mdash; atomic move into a vacant
               neighbour (push per-attribute payloads + optionally orientation, then clear
               self to defaults). Async-only; the chemistry move-into-empty idiom.</li>

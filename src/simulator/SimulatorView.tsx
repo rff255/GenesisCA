@@ -5,8 +5,9 @@ import { hasGlyphsInModel } from '../modeler/vpl/compiler/glyphsUsage';
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
 import { unpackNI, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
+import { resolveKeyLabels } from '../modeler/vpl/compiler/variegation';
 import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefaultEditor';
-import { InteractionTableEditor } from '../modeler/panels/InteractionTableEditor';
+import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
@@ -112,7 +113,7 @@ function computeDefaultModelAttrs(attributes: Attribute[]): Record<string, numbe
         mAttrs[a.id + '_b'] = parseInt(hex.slice(5, 7), 16) || 0;
         break;
       }
-      case 'interactionTable':
+      case 'lookupTable':
         // Lives in `interactionTables` worker payload (separate from the
         // scalar `modelAttrs` record). Don't allocate a slot here.
         break;
@@ -166,8 +167,24 @@ function attrsStructurallyEqual(prev: Attribute[], curr: Attribute[]): boolean {
     const fpaB = b.facePatternAssignments ?? {};
     const fpaKeys = new Set([...Object.keys(fpaA), ...Object.keys(fpaB)]);
     for (const k of fpaKeys) if (fpaA[k] !== fpaB[k]) return false;
+    // Lookup Table key sources: changing which palette / tag attribute an axis
+    // uses changes the table's dimensions → memory layout → requires full reinit.
+    if (JSON.stringify(a.rowKeySource) !== JSON.stringify(b.rowKeySource)) return false;
+    if (JSON.stringify(a.colKeySource) !== JSON.stringify(b.colKeySource)) return false;
   }
   return true;
+}
+
+/** Layout-affecting signature of the variegation config: the source attribute
+ *  (drives facePatternLookup size) + each palette's label COUNT (drives the
+ *  dimensions of any facePalette-keyed Lookup Table). A change here resizes
+ *  wasmMemory regions, so it must force a full worker reinit rather than a soft
+ *  recompile (which would leave stale-sized table views and crash on set()). */
+function variegatedLayoutKey(model: CAModel): string {
+  const v = model.variegatedCells;
+  if (!v?.enabled) return 'off';
+  const palettes = (v.facePalettes ?? []).map(p => `${p.id}:${p.labels.length}`).join(',');
+  return `${v.sourceAttributeId}|${palettes}`;
 }
 
 // Tiny chevron icons used by the viewer / transport bar collapse toggles. Inline
@@ -243,7 +260,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // Indicator values from worker
   // Indicator values stored in ref (not state) to avoid extra re-renders on every step.
   // The component already re-renders from setGeneration, so ref values are read during that render.
-  const indicatorValuesRef = useRef<Record<string, number | Record<string, number>>>({});
+  // Scalar (standalone/linked-total) → number; linked-frequency → Record<cat,number>;
+  // spatial (xAxis rows/columns) → Record<seriesKey, number[]> (per-position-bin
+  // series). IndicatorDisplay branches on the indicator's xAxis to render.
+  const indicatorValuesRef = useRef<Record<string, number | Record<string, number> | Record<string, number[]>>>({});
   // For scalar indicators: number[] of samples over time.
   // For linked-frequency indicators: Record<category, number[]> so each category
   // gets its own time series (drives multi-line / stacked-area charts).
@@ -320,7 +340,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // Defensive: skip attribute types we have no widget for (cell attrs are
       // bool/integer/float/tag/neighborIndex today — color/interactionTable are
       // model-only).
-      if (a.type === 'color' || a.type === 'interactionTable') continue;
+      if (a.type === 'color' || a.type === 'lookupTable') continue;
       next[a.id] = prev
         ? { enabled: !!prev.enabled, value: typeof prev.value === 'string' ? prev.value : (a.defaultValue ?? '') }
         : { enabled: true, value: a.defaultValue ?? '' };
@@ -804,7 +824,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // simulation should auto-pause. Evaluated after each `stepped` message.
   const [endConditionNotice, setEndConditionNotice] = useState<string | null>(null);
   const endNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const evalEndConditions = useCallback((gen: number, indicatorValues: Record<string, number | Record<string, number>>): string | null => {
+  const evalEndConditions = useCallback((gen: number, indicatorValues: Record<string, number | Record<string, number> | Record<string, number[]>>): string | null => {
     const ec = endConditionsRef.current;
     if (!ec || !ec.enabled) return null;
     if (typeof ec.maxGenerations === 'number' && ec.maxGenerations > 0 && gen >= ec.maxGenerations) {
@@ -920,6 +940,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               (arr as number[]).push(v);
               if ((arr as number[]).length > 500) (arr as number[]).shift();
             } else if (v && typeof v === 'object') {
+              // Spatial indicators send Record<seriesKey, number[]> (per-position
+              // bin) — a live snapshot, NOT a time-history. Skip history
+              // collection entirely; IndicatorSpatialChart reads the current
+              // value directly from indicatorValuesRef. Detect structurally by an
+              // array-valued entry (generation-axis frequency maps are number-valued).
+              if (Array.isArray(Object.values(v)[0])) continue;
               let perCat = hist[id];
               if (!perCat || Array.isArray(perCat)) { perCat = {}; hist[id] = perCat; }
               for (const [cat, count] of Object.entries(v as Record<string, number>)) {
@@ -1284,7 +1310,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       lastSnapshottedVersionRef.current = modelVersion;
       const snap: Record<string, Record<string, Record<string, number>>> = {};
       for (const a of model.attributes) {
-        if (a.type === 'interactionTable' && a.tableValues) {
+        if (a.type === 'lookupTable' && a.tableValues) {
           snap[a.id] = JSON.parse(JSON.stringify(a.tableValues));
         }
       }
@@ -1401,25 +1427,34 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // variegatedCells.enabled is true; absent / disabled = no extra state.
       variegated: model.variegatedCells?.enabled ? {
         sourceAttributeId: model.variegatedCells.sourceAttributeId,
-        faceLabels: model.variegatedCells.faceLabels,
+        facePalettes: model.variegatedCells.facePalettes,
         facePatterns: model.variegatedCells.facePatterns,
         facePatternAssignments: ((): Record<string, string> => {
           const src = model.attributes.find(a => a.id === model.variegatedCells!.sourceAttributeId);
           return src?.facePatternAssignments || {};
         })(),
       } : undefined,
-      interactionTables: model.variegatedCells?.enabled
-        ? model.attributes
-            .filter(a => a.isModelAttribute && a.type === 'interactionTable')
-            .map(a => ({ id: a.id, faceLabels: model.variegatedCells!.faceLabels, values: a.tableValues || {} }))
-        : [],
+      // Lookup tables — sent whenever the model has any (independent of
+      // variegation; tag×tag tables need no faces). Row/col labels resolved
+      // from each axis key source.
+      interactionTables: model.attributes
+        .filter(a => a.isModelAttribute && a.type === 'lookupTable')
+        .map(a => ({
+          id: a.id,
+          rowLabels: resolveKeyLabels(a.rowKeySource, model),
+          colLabels: resolveKeyLabels(a.colKeySource, model),
+          values: a.tableValues || {},
+        })),
       indicators: (model.indicators || []).map(i => ({
         id: i.id, kind: i.kind, dataType: i.dataType,
         defaultValue: i.defaultValue, accumulationMode: i.accumulationMode,
         tagOptions: i.tagOptions,
         linkedAttributeId: i.linkedAttributeId,
         linkedAggregation: i.linkedAggregation,
-        binCount: i.binCount, watched: i.watched,
+        binCount: i.binCount,
+        xAxis: i.xAxis, spatialBinMode: i.spatialBinMode,
+        spatialBinCount: i.spatialBinCount, spatialBinSize: i.spatialBinSize,
+        watched: i.watched,
       })),
       wasmStepBytes: wasmResult.error ? undefined : wasmResult.bytes,
       wasmStepError: wasmResult.error,
@@ -1601,6 +1636,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       || prev.properties.useWasm !== model.properties.useWasm
       || prev.properties.useWebGPU !== model.properties.useWebGPU
       || !attrsStructurallyEqual(prev.attributes, model.attributes)
+      || variegatedLayoutKey(prev) !== variegatedLayoutKey(model)
       || prev.neighborhoods !== model.neighborhoods
       || prev.mappings !== model.mappings
       // Glyph regions are allocated at init time; changing whether the model
@@ -1708,18 +1744,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         outputMappingCodes: result.outputMappingCodes || [],
         variegated: model.variegatedCells?.enabled ? {
           sourceAttributeId: model.variegatedCells.sourceAttributeId,
-          faceLabels: model.variegatedCells.faceLabels,
+          facePalettes: model.variegatedCells.facePalettes,
           facePatterns: model.variegatedCells.facePatterns,
           facePatternAssignments: ((): Record<string, string> => {
             const src = model.attributes.find(a => a.id === model.variegatedCells!.sourceAttributeId);
             return src?.facePatternAssignments || {};
           })(),
         } : undefined,
-        interactionTables: model.variegatedCells?.enabled
-          ? model.attributes
-              .filter(a => a.isModelAttribute && a.type === 'interactionTable')
-              .map(a => ({ id: a.id, faceLabels: model.variegatedCells!.faceLabels, values: a.tableValues || {} }))
-          : [],
+        interactionTables: model.attributes
+          .filter(a => a.isModelAttribute && a.type === 'lookupTable')
+          .map(a => ({
+            id: a.id,
+            rowLabels: resolveKeyLabels(a.rowKeySource, model),
+            colLabels: resolveKeyLabels(a.colKeySource, model),
+            values: a.tableValues || {},
+          })),
         stopMessages: result.stopMessages,
         updateMode: model.properties.updateMode,
         asyncScheme: model.properties.asyncScheme,
@@ -1752,7 +1791,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             tagOptions: i.tagOptions,
             linkedAttributeId: i.linkedAttributeId,
             linkedAggregation: i.linkedAggregation,
-            binCount: i.binCount, watched: i.watched,
+            binCount: i.binCount,
+            xAxis: i.xAxis, spatialBinMode: i.spatialBinMode,
+            spatialBinCount: i.spatialBinCount, spatialBinSize: i.spatialBinSize,
+            watched: i.watched,
           })),
           attributes: model.attributes.map(a => ({
             id: a.id, type: a.type,
@@ -2704,11 +2746,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (symmetric !== undefined) changes.symmetric = symmetric;
     updateAttribute(attrId, changes);
     if (tableValues !== undefined) {
-      const faceLabels = model.variegatedCells?.faceLabels ?? [];
+      const a = model.attributes.find(x => x.id === attrId);
       workerRef.current?.postMessage({
-        type: 'updateInteractionTable',
+        type: 'updateLookupTable',
         attrId,
-        faceLabels,
+        rowLabels: resolveKeyLabels(a?.rowKeySource, model),
+        colLabels: resolveKeyLabels(a?.colKeySource, model),
         values: tableValues,
       });
     }
@@ -2726,9 +2769,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     setRuntimeModelAttrs(defaults);
     workerRef.current?.postMessage({ type: 'updateModelAttrs', attrs: defaults });
     const tableDefaults = interactionTableDefaultsRef.current;
-    const faceLabels = model.variegatedCells?.faceLabels ?? [];
     for (const a of model.attributes) {
-      if (a.type !== 'interactionTable') continue;
+      if (a.type !== 'lookupTable') continue;
       const def = tableDefaults[a.id];
       if (!def) continue;
       // Deep clone — keep the snapshot intact so subsequent resets still work
@@ -2736,9 +2778,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const restored = JSON.parse(JSON.stringify(def));
       updateAttribute(a.id, { tableValues: restored });
       workerRef.current?.postMessage({
-        type: 'updateInteractionTable',
+        type: 'updateLookupTable',
         attrId: a.id,
-        faceLabels,
+        rowLabels: resolveKeyLabels(a.rowKeySource, model),
+        colLabels: resolveKeyLabels(a.colKeySource, model),
         values: restored,
       });
     }
@@ -2831,7 +2874,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const out: Record<string, Record<string, Record<string, number>>> = {};
     let any = false;
     for (const a of model.attributes) {
-      if (a.type !== 'interactionTable' || !a.tableValues) continue;
+      if (a.type !== 'lookupTable' || !a.tableValues) continue;
       out[a.id] = JSON.parse(JSON.stringify(a.tableValues));
       any = true;
     }
@@ -2959,14 +3002,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // stays pointed at the model's ORIGINAL defaults — letting the user always
     // get back to the model's shipped baseline after experimenting.
     if (state.interactionTables) {
-      const faceLabels = model.variegatedCells?.faceLabels ?? [];
       for (const [attrId, values] of Object.entries(state.interactionTables)) {
         const cloned = JSON.parse(JSON.stringify(values));
         updateAttribute(attrId, { tableValues: cloned });
+        const a = model.attributes.find(x => x.id === attrId);
         workerRef.current?.postMessage({
-          type: 'updateInteractionTable',
+          type: 'updateLookupTable',
           attrId,
-          faceLabels,
+          rowLabels: resolveKeyLabels(a?.rowKeySource, model),
+          colLabels: resolveKeyLabels(a?.colKeySource, model),
           values: cloned,
         });
       }
@@ -3311,24 +3355,28 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                         </div>
                       );
                     })()
-                  ) : a.type === 'interactionTable' ? (
-                    // Interaction Tables are too wide for the single-row layout.
-                    // The matrix editor renders below the label inside the row
-                    // and dispatches an updateInteractionTable worker message
-                    // (live-tuned during simulation, like other model attrs).
+                  ) : a.type === 'lookupTable' ? (
+                    // Lookup Tables are too wide for the single-row layout. The
+                    // matrix editor renders below the label and dispatches an
+                    // updateLookupTable worker message (live-tuned during sim).
                     <div style={{ flex: 2, minWidth: 0 }}>
-                      {model.variegatedCells?.enabled && model.variegatedCells.faceLabels.length > 0 ? (
-                        <InteractionTableEditor
-                          attribute={a}
-                          faceLabels={model.variegatedCells.faceLabels}
-                          compact
-                          onChange={changes => handleInteractionTableEdit(a.id, changes.tableValues, changes.symmetric)}
-                        />
-                      ) : (
-                        <div style={{ color: '#888', fontSize: '0.62rem' }}>
-                          Enable Variegated Cells and define face labels to populate this table.
-                        </div>
-                      )}
+                      {(() => {
+                        const rowLabels = resolveKeyLabels(a.rowKeySource, model);
+                        const colLabels = resolveKeyLabels(a.colKeySource, model);
+                        return rowLabels.length > 0 && colLabels.length > 0 ? (
+                          <LookupTableEditor
+                            attribute={a}
+                            rowLabels={rowLabels}
+                            colLabels={colLabels}
+                            compact
+                            onChange={changes => handleInteractionTableEdit(a.id, changes.tableValues, changes.symmetric)}
+                          />
+                        ) : (
+                          <div style={{ color: '#888', fontSize: '0.62rem' }}>
+                            Set this table's row and column key sources to populate it.
+                          </div>
+                        );
+                      })()}
                     </div>
                   ) : (
                     <input className={styles.brushInput} type="number" step="any"
@@ -3703,6 +3751,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 values={indicatorValuesRef.current}
                 history={indicatorHistoryRef.current}
                 generation={generation}
+                gridWidth={gridWidth.current || simWidth}
+                gridHeight={gridHeight.current || simHeight}
                 vizModes={indicatorVizModes}
                 onToggleWatch={(id, watched) => updateIndicator(id, { watched })}
                 onChartToggle={(id, expanded) => {

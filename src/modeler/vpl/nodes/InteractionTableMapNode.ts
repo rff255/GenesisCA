@@ -1,32 +1,30 @@
 import type { NodeTypeDef } from '../types';
 
-/** Vectorised LookupInteraction over parallel face-label arrays.
+/** Vectorised Table Lookup over parallel index arrays.
  *
- *  Inputs: `myFaces` + `theirFaces` (parallel int arrays — typically the two
- *  outputs of `Get All Facing Labels` in cardinal-only mode). Output: `values`
+ *  Inputs: `myFaces` (row indices) + `theirFaces` (column indices) — parallel
+ *  int arrays, typically the two outputs of `Get All Facing Labels` in
+ *  cardinal-only mode, but any parallel index arrays work. Output: `values`
  *  (float array, one lookup per slot).
  *
- *  Equivalent to N scalar `LookupInteraction` chains, but as a single node and
- *  a single per-cell loop instead of N wired pairs. The canonical chemistry
- *  idiom — book §2.3.5 / §2.3.6 J and P_B factors aggregated per direction —
- *  drops to two `InteractionTableMap` + `Aggregate` pipelines instead of an
- *  unrolled per-direction subgraph.
+ *  Equivalent to N scalar `Table Lookup` chains, but as a single node and a
+ *  single per-cell loop. The canonical chemistry idiom — book §2.3.5 / §2.3.6
+ *  J and P_B factors aggregated per direction — drops to two `Table Map` +
+ *  `Aggregate` pipelines instead of an unrolled per-direction subgraph.
  *
  *  The output array length matches the shorter of the two input arrays, so
- *  mismatched-length feeds degrade gracefully instead of crashing. Out-of-range
- *  labels read uninitialised table memory (same trust model as the scalar
- *  `LookupInteraction` — practical models stay within [0, labelCount)).
+ *  mismatched-length feeds degrade gracefully. Out-of-range indices read
+ *  uninitialised table memory (same trust model as the scalar `Table Lookup`).
  */
 export const InteractionTableMapNode: NodeTypeDef = {
   type: 'interactionTableMap',
-  label: 'Interaction Table Map',
-  description: 'Vectorised LookupInteraction: indexes an Interaction Table model attribute by two parallel face-label arrays, returns a float array of looked-up values.',
+  label: 'Table Map',
+  description: 'Vectorised Table Lookup: indexes a Lookup Table model attribute by two parallel index arrays (rows + cols), returns a float array of looked-up values.',
   category: 'data',
   color: '#1976d2',
-  requirements: { variegated: true },
   ports: [
-    { id: 'myFaces', label: 'My Faces', kind: 'input', category: 'value', dataType: 'integer', isArray: true },
-    { id: 'theirFaces', label: 'Their Faces', kind: 'input', category: 'value', dataType: 'integer', isArray: true },
+    { id: 'myFaces', label: 'Rows', kind: 'input', category: 'value', dataType: 'integer', isArray: true },
+    { id: 'theirFaces', label: 'Cols', kind: 'input', category: 'value', dataType: 'integer', isArray: true },
     { id: 'values', label: 'Values', kind: 'output', category: 'value', dataType: 'float', isArray: true },
   ],
   defaultConfig: { tableId: '' },
@@ -34,7 +32,8 @@ export const InteractionTableMapNode: NodeTypeDef = {
     const tableId = (config.tableId as string) || '';
     const myFaces = inputs['myFaces'] || '[]';
     const theirFaces = inputs['theirFaces'] || '[]';
-    const labelCount = Number(config._labelCount) || 1;
+    // colCount = column key source's label count (row-major stride).
+    const colCount = Number(config._colCount) || 1;
     const out = `_v${nodeId}_vals`;
     if (!tableId) {
       // No table → output stays empty but at least the variable exists.
@@ -47,13 +46,13 @@ export const InteractionTableMapNode: NodeTypeDef = {
     const b = `_itm${nodeId}_b`;
     return [
       `${out}.length = 0;`,
-      `const ${tbl} = _interactionTables[${JSON.stringify(tableId)}];`,
+      `const ${tbl} = _lookupTables[${JSON.stringify(tableId)}];`,
       `if (${tbl}) {`,
       `  const ${n} = Math.min(${myFaces}.length, ${theirFaces}.length);`,
       `  for (let ${i} = 0; ${i} < ${n}; ${i}++) {`,
       `    const ${a} = (${myFaces}[${i}]) | 0;`,
       `    const ${b} = (${theirFaces}[${i}]) | 0;`,
-      `    ${out}[${i}] = ${tbl}[${a} * ${labelCount} + ${b}] || 0;`,
+      `    ${out}[${i}] = ${tbl}[${a} * ${colCount} + ${b}] || 0;`,
       `  }`,
       `}`,
     ].join(' ') + '\n';

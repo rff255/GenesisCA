@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
-import type { AttributeType, LinkedAggregation } from '../../model/types';
+import type { AttributeType, LinkedAggregation, IndicatorXAxis, SpatialBinMode } from '../../model/types';
 import { useListReorder } from './useListReorder';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
@@ -220,7 +220,7 @@ export function IndicatorsPanelSection() {
 
                 {linkedAttr?.type === 'float' && selected.linkedAggregation === 'frequency' && (
                   <div className={styles.field}>
-                    <label className={styles.fieldLabel}>Bin Count</label>
+                    <label className={styles.fieldLabel}>Value Bins</label>
                     <input
                       className={styles.numberInput}
                       type="number"
@@ -230,6 +230,65 @@ export function IndicatorsPanelSection() {
                       onChange={e => updateIndicator(selected.id, { binCount: Math.max(2, Math.min(100, Number(e.target.value) || 10)) })}
                     />
                   </div>
+                )}
+
+                {/* Spatial X-axis (chromatogram) — linked indicators only. The
+                    'rows'/'columns' options turn the indicator into a live
+                    position histogram instead of a generation time-history. */}
+                {linkedAttr && (
+                  <div className={styles.field}>
+                    <label className={styles.fieldLabel}>X Axis</label>
+                    <select
+                      className={styles.selectInput}
+                      value={selected.xAxis || 'generation'}
+                      onChange={e => updateIndicator(selected.id, { xAxis: e.target.value as IndicatorXAxis })}
+                    >
+                      <option value="generation">Generation (over time)</option>
+                      <option value="rows">Rows (spatial)</option>
+                      <option value="columns">Columns (spatial)</option>
+                    </select>
+                  </div>
+                )}
+
+                {linkedAttr && (selected.xAxis === 'rows' || selected.xAxis === 'columns') && (
+                  <>
+                    <div className={styles.field}>
+                      <label className={styles.fieldLabel}>Bin Mode</label>
+                      <select
+                        className={styles.selectInput}
+                        value={selected.spatialBinMode || 'slices'}
+                        onChange={e => updateIndicator(selected.id, { spatialBinMode: e.target.value as SpatialBinMode })}
+                      >
+                        <option value="slices">Slices (relative count)</option>
+                        <option value="absolute">Absolute ({selected.xAxis === 'rows' ? 'rows' : 'columns'} per bin)</option>
+                      </select>
+                    </div>
+                    {(selected.spatialBinMode || 'slices') === 'slices' ? (
+                      <div className={styles.field}>
+                        <label className={styles.fieldLabel}>Number of Slices</label>
+                        <input
+                          className={styles.numberInput}
+                          type="number"
+                          min={2}
+                          max={1000}
+                          value={selected.spatialBinCount ?? 50}
+                          onChange={e => updateIndicator(selected.id, { spatialBinCount: Math.max(2, Math.min(1000, Number(e.target.value) || 50)) })}
+                        />
+                      </div>
+                    ) : (
+                      <div className={styles.field}>
+                        <label className={styles.fieldLabel}>{selected.xAxis === 'rows' ? 'Rows' : 'Columns'} per Bin</label>
+                        <input
+                          className={styles.numberInput}
+                          type="number"
+                          min={1}
+                          max={1000}
+                          value={selected.spatialBinSize ?? 1}
+                          onChange={e => updateIndicator(selected.id, { spatialBinSize: Math.max(1, Math.min(1000, Number(e.target.value) || 1)) })}
+                        />
+                      </div>
+                    )}
+                  </>
                 )}
               </>
             )}

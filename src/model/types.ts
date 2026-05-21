@@ -6,7 +6,16 @@
  *  neighborhood-anchored grid for default-value picking via
  *  `Attribute.neighborhoodHintId`, but the hint is purely UI; the runtime
  *  value is just the packed offset. */
-export type AttributeType = 'bool' | 'integer' | 'float' | 'tag' | 'color' | 'neighborIndex' | 'interactionTable';
+export type AttributeType = 'bool' | 'integer' | 'float' | 'tag' | 'color' | 'neighborIndex' | 'lookupTable';
+
+/** A Lookup Table axis key source. Determines an axis' labels + dimension:
+ *  - `facePalette`: labels = `['none', ...palette.labels]` (implicit `none` at 0).
+ *  - `tagAttribute`: labels = the referenced tag attribute's `tagOptions` (no
+ *    implicit `none`). Lets a table be keyed by cell *type* with no faces at all
+ *    (e.g. chromatography PB/J keyed by W/S1/S2/B). */
+export type LookupKeySource =
+  | { kind: 'facePalette'; paletteId: string }
+  | { kind: 'tagAttribute'; attributeId: string };
 
 /** A single attribute definition (per-cell or global model attribute) */
 export interface Attribute {
@@ -55,13 +64,22 @@ export interface Attribute {
    *  (or with an empty / unresolved id) are treated as non-variegated. Lives
    *  on Attribute because face patterns are inherently per-species. */
   facePatternAssignments?: Record<string, string>;
-  /** Interaction Table model attributes only: when true, the editor mirrors
-   *  table[A][B] = table[B][A] on edit (default true). Doesn't affect runtime
-   *  storage layout (the worker holds a full square Float64Array regardless). */
+  /** Lookup Table model attributes only: the row-axis key source — a face-label
+   *  palette OR a tag attribute. Determines the table's row dimension + the
+   *  row-label names used as outer keys in `tableValues`. */
+  rowKeySource?: LookupKeySource;
+  /** Lookup Table model attributes only: the column-axis key source. May differ
+   *  from `rowKeySource` — rectangular tables (e.g. analyte-faces × CD-faces). */
+  colKeySource?: LookupKeySource;
+  /** Lookup Table model attributes only: when true, the editor mirrors
+   *  table[A][B] = table[B][A] on edit (default true). Only meaningful when the
+   *  row and column key sources are identical (square). Doesn't affect runtime
+   *  storage (the worker holds a full rowDim×colDim Float64Array regardless). */
   symmetric?: boolean;
-  /** Interaction Table model attributes only: sparse table values, keyed by
-   *  face-label string × face-label string → float. Missing entries default
-   *  to 0. The implicit `none` label uses the literal key `"none"`. */
+  /** Lookup Table model attributes only: sparse table values, keyed by
+   *  rowLabel string × colLabel string → float. Missing entries default to 0.
+   *  A face-palette axis uses the literal `"none"` key at index 0; a
+   *  tag-attribute axis uses tag-option names (no implicit `none`). */
   tableValues?: Record<string, Record<string, number>>;
 }
 
@@ -253,6 +271,18 @@ export type IndicatorKind = 'standalone' | 'linked';
 export type LinkedAggregation = 'frequency' | 'total';
 export type AccumulationMode = 'per-generation' | 'accumulated';
 
+/** Indicator X-axis. `generation` (default/absent) is the classic time-history
+ *  behavior. `rows` / `columns` turn the indicator into a live spatial histogram
+ *  (a chromatogram): the per-step value becomes `Record<seriesKey, number[]>`,
+ *  each array indexed by position bin along the chosen axis. Spatial is a
+ *  cell-aggregation, so it is only valid on **linked** indicators. */
+export type IndicatorXAxis = 'generation' | 'rows' | 'columns';
+
+/** Spatial position-binning mode. `slices` divides the axis into a fixed number
+ *  of equal bands (relative — survives grid resize). `absolute` uses a fixed
+ *  number of rows/columns per band (re-derives bin count when the grid resizes). */
+export type SpatialBinMode = 'slices' | 'absolute';
+
 /** An indicator definition — monitors CA evolution quantitatively */
 export interface Indicator {
   id: string;
@@ -265,7 +295,19 @@ export interface Indicator {
   // Linked-only fields:
   linkedAttributeId?: string;
   linkedAggregation?: LinkedAggregation;
-  binCount?: number;                    // float + frequency: number of histogram bins (default 10)
+  binCount?: number;                    // float + frequency: number of *value* histogram bins (default 10)
+  // Spatial X-axis (linked-only; absent ⇒ 'generation' = classic time-history):
+  /** When 'rows'/'columns', the indicator is a live spatial histogram binned by
+   *  cell position along that axis. Standalone indicators stay Generation-only. */
+  xAxis?: IndicatorXAxis;
+  /** Position-binning mode for spatial indicators (default 'slices'). */
+  spatialBinMode?: SpatialBinMode;
+  /** slices mode: number of equal position bands along the axis (default 50,
+   *  clamped to [2, axisLength]). Distinct from `binCount` (value bins). */
+  spatialBinCount?: number;
+  /** absolute mode: rows/columns per band (default 1). Bin count derives from
+   *  ceil(axisLength / spatialBinSize) at runtime. */
+  spatialBinSize?: number;
   // Display:
   watched: boolean;                     // eye toggle — controls display in simulator
 }
@@ -314,12 +356,14 @@ export interface SimulationState {
   boundaryTreatment?: BoundaryTreatment;
   gridWidth?: number;
   gridHeight?: number;
-  /** Interaction-table model attribute overrides. Outer key = attribute id; inner
+  /** Lookup-table model attribute overrides. Outer key = attribute id; inner
    *  table maps `rowLabel -> colLabel -> float`. Saved in presets so a preset
    *  can swap an entire parameter set (e.g. the 8 Kier 1996 amphiphile sets)
    *  without forcing the user to retype every cell. On apply, this rewrites both
-   *  the cached worker tables (via updateInteractionTable) and the model state
-   *  (via updateAttribute) so Reset-to-Default snapshots also follow the preset. */
+   *  the cached worker tables (via updateLookupTable) and the model state
+   *  (via updateAttribute) so Reset-to-Default snapshots also follow the preset.
+   *  Field name retained as `interactionTables` for back-compat with presets
+   *  saved before the Lookup Table rename. */
   interactionTables?: Record<string, Record<string, Record<string, number>>>;
 }
 
@@ -346,16 +390,33 @@ export interface Preset {
  *  When `enabled === false` (or this field is absent), the engine behaves
  *  identically to a non-variegated model — no UI changes, no behavioural
  *  drift. */
+/** A named, ordered set of face labels. Multiple palettes let different cell
+ *  species carry independent label spaces (e.g. analyte faces A0–A3 vs CD faces
+ *  B0–B2 in an enantiomer model) that key different Lookup Tables. The implicit
+ *  `none` label is always available (index 0 at runtime) and is NOT stored in
+ *  `labels`. */
+export interface FaceLabelPalette {
+  /** Unique within the model. */
+  id: string;
+  /** User-facing name (rendered in the Variegated Cells panel + dropdowns). */
+  name: string;
+  /** User-defined labels (without the implicit `none`). */
+  labels: string[];
+}
+
 export interface FacePattern {
   /** Unique within the model. */
   id: string;
   /** User-facing name (rendered in the Variegated Cells panel and dropdowns). */
   name: string;
+  /** Which `FaceLabelPalette` this pattern's slot labels come from. A species
+   *  assigned this pattern carries face labels in this palette's space. */
+  paletteId: string;
   /** `'edges'` exposes only the 4 cardinal slots (N, E, S, W); the 4 corner
    *  slots are locked to `null`. `'edges+corners'` exposes all 8 slots. */
   layoutMode: 'edges' | 'edges+corners';
   /** Length 8: `[N, NE, E, SE, S, SW, W, NW]`. Each entry is a face-label
-   *  string from `VariegatedCellsConfig.faceLabels`, or `null` for "no face
+   *  string from this pattern's palette (`paletteId`), or `null` for "no face
    *  at this slot" (treated as the implicit `none` label at runtime). */
   faces: (string | null)[];
 }
@@ -367,9 +428,9 @@ export interface VariegatedCellsConfig {
   /** ID of the Tag cell attribute whose values identify "species" — each tag
    *  option can be assigned a `FacePattern`. Empty string when unset. */
   sourceAttributeId: string;
-  /** User-defined face-label palette. The implicit `none` label is always
-   *  available (index 0 at runtime) and is NOT stored in this array. */
-  faceLabels: string[];
+  /** User-defined face-label palettes. Each `FacePattern` references one by id.
+   *  Migrated from the legacy single `faceLabels: string[]` into one palette. */
+  facePalettes: FaceLabelPalette[];
   /** Named face patterns the user can assign to source-attr tag values via
    *  `Attribute.facePatternAssignments`. */
   facePatterns: FacePattern[];

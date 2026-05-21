@@ -5,8 +5,8 @@
  */
 
 import { instantiateWasmModule } from '../../modeler/vpl/compiler/wasm/compile';
-import { buildFacePatternLookup, normalizeInteractionTable } from '../../modeler/vpl/compiler/variegation';
-import { computeMemoryLayout, type MemoryLayout, type VariegatedLayoutInputs } from '../../modeler/vpl/compiler/wasm/layout';
+import { buildFacePatternLookup, normalizeLookupTable } from '../../modeler/vpl/compiler/variegation';
+import { computeMemoryLayout, type MemoryLayout, type VariegatedLayoutInputs, type LookupTableLayoutInput } from '../../modeler/vpl/compiler/wasm/layout';
 import type { WebGPULayout } from '../../modeler/vpl/compiler/webgpu/layout';
 import type { WebGPUEntryPoints } from '../../modeler/vpl/compiler/webgpu/compile';
 import {
@@ -50,23 +50,25 @@ interface NeighborhoodDef {
 interface FacePatternDef {
   id: string;
   name: string;
+  paletteId: string;
   layoutMode: 'edges' | 'edges+corners';
   faces: (string | null)[];
 }
 interface VariegatedPayload {
   sourceAttributeId: string;
-  faceLabels: string[];
+  facePalettes: Array<{ id: string; labels: string[] }>;
   facePatterns: FacePatternDef[];
   /** Map from tagOption name → FacePattern.id. */
   facePatternAssignments: Record<string, string>;
 }
 interface InteractionTablePayload {
   id: string;
-  /** Per-table face-label list (currently always the same as the variegated
-   *  payload's faceLabels — kept per-table for forward flexibility). The flat
-   *  storage is `(labelCount + 1)²` Float64Array, including the implicit
-   *  `none` row/col at index 0. */
-  faceLabels: string[];
+  /** Resolved row / column label lists for THIS table (a face palette →
+   *  ['none', ...labels], or a tag attribute → its tagOptions). The flat
+   *  storage is `rowLabels.length * colLabels.length` Float64Array, indexed
+   *  `(rowIdx * colLabels.length + colIdx)`. Rectangular tables supported. */
+  rowLabels: string[];
+  colLabels: string[];
   /** Sparse `[rowLabel][colLabel] → number`. Missing entries default to 0. */
   values: Record<string, Record<string, number>>;
 }
@@ -159,10 +161,11 @@ interface PaintManualMsg {
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
 interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[] }
-interface UpdateInteractionTableMsg {
-  type: 'updateInteractionTable';
+interface UpdateLookupTableMsg {
+  type: 'updateLookupTable';
   attrId: string;
-  faceLabels: string[];
+  rowLabels: string[];
+  colLabels: string[];
   values: Record<string, Record<string, number>>;
 }
 interface UpdateModelAttrsMsg { type: 'updateModelAttrs'; attrs: Record<string, number> }
@@ -178,6 +181,12 @@ interface IndicatorDef {
   linkedAttributeId?: string;
   linkedAggregation?: string;
   binCount?: number;
+  /** Spatial X-axis (linked-only). 'rows'/'columns' turn the indicator into a
+   *  live position histogram (chromatogram); absent/'generation' = time-history. */
+  xAxis?: string;
+  spatialBinMode?: string;
+  spatialBinCount?: number;
+  spatialBinSize?: number;
   watched: boolean;
 }
 
@@ -253,7 +262,7 @@ interface SetInspectCellsMsg { type: 'setInspectCells'; cellIdxs: number[] }
  *  content despite dispatching a present internally). Idempotent + cheap. */
 interface RefreshDisplayMsg { type: 'refreshDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateInteractionTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -356,10 +365,16 @@ let outputMappingFns: Array<{ mappingId: string; fn: Function }> = [];
  *  applied and before the first color pass. */
 let initFn: Function | null = null;
 
-/** Per-table Float64Array of length `(labelCount + 1)²` (rows × cols, with
- *  the implicit `none` label at index 0). Keyed by attribute id. Rebuilt on
- *  init / recompile / updateInteractionTable. */
+/** Per-table Float64Array of length `rowCount * colCount` (row-major). Keyed by
+ *  attribute id. Rebuilt on init / recompile / updateLookupTable. */
 let cachedInteractionTables: Record<string, Float64Array> = {};
+/** The current Lookup Table payloads (id + resolved row/col labels + values),
+ *  stashed before initGrid so the layout can size each table region. */
+let lookupTablesPayload: InteractionTablePayload[] = [];
+/** True when the model has any Lookup Table model attr — gates emission of the
+ *  `_lookupTables` arg bundle in buildLoopArgs/buildCellArgs (mirrors the JS
+ *  compiler's `variegated || hasLookupTables` param gate). */
+let hasLookupTables = false;
 
 /** Variegated Cells state. All null when the feature is disabled for the
  *  current model; populated together in `initVariegation()` on init/recompile.
@@ -395,22 +410,16 @@ function initVariegation(
 ): void {
   variegated = payload ?? null;
   cachedInteractionTables = {};
-  if (!variegated) {
-    // initGrid already left orientationReadView / orientationWriteView null
-    // because wasmLayout.variegatedEnabled was false. Leave facePatternLookup
-    // null too — no consumer should reach it with variegation off.
-    facePatternLookup = null;
-    return;
-  }
-  if (!wasmMemory || !wasmLayout) {
-    facePatternLookup = null;
-    return;
-  }
-  // facePatternLookup region — view over wasmMemory at the layout offset.
-  // initGrid sized it from the source attribute's tagOptions count; rebuild
-  // the values and `set()` them into the view so JS-target reads and WASM
-  // reads both see the same bytes.
-  if (wasmLayout.facePatternLookupBytes > 0) {
+  lookupTablesPayload = interactionTablesPayload ?? [];
+  hasLookupTables = lookupTablesPayload.length > 0;
+
+  // facePatternLookup region (variegation only) — view over wasmMemory at the
+  // layout offset. initGrid sized it from the source attribute's tagOptions
+  // count; rebuild the values and `set()` them into the view so JS-target reads
+  // and WASM reads both see the same bytes.
+  if (!variegated || !wasmMemory || !wasmLayout || wasmLayout.facePatternLookupBytes <= 0) {
+    facePatternLookup = variegated ? new Int32Array(0) : null;
+  } else {
     const source = cellAttrs.find(a => a.id === variegated!.sourceAttributeId);
     facePatternLookup = new Int32Array(
       wasmMemory.buffer,
@@ -422,31 +431,31 @@ function initVariegation(
       const built = buildFacePatternLookup({
         tagOptions: source.tagOptions,
         facePatternAssignments: variegated.facePatternAssignments,
-        faceLabels: variegated.faceLabels,
+        facePalettes: variegated.facePalettes,
         facePatterns: variegated.facePatterns,
       });
       facePatternLookup.set(built);
     }
-  } else {
-    facePatternLookup = new Int32Array(0);
   }
-  // Interaction tables — one Float64Array view per table at the per-attr
-  // offset reserved by computeMemoryLayout. `set()` the normalised values in;
-  // updateInteractionTable later writes through the same view.
-  const labelCount = wasmLayout.interactionTableLabelCount;
-  for (const t of interactionTablesPayload ?? []) {
-    const off = wasmLayout.interactionTableOffsets[t.id];
-    const normalized = normalizeInteractionTable(t.values, t.faceLabels);
-    if (off !== undefined) {
-      const view = new Float64Array(wasmMemory.buffer, off, labelCount * labelCount);
-      view.fill(0);
-      view.set(normalized);
-      cachedInteractionTables[t.id] = view;
-    } else {
-      // Layout had no slot for this table id (e.g. interactionTable attr was
-      // added after init without a recompile). Fall back to a standalone array
-      // so JS reads still work; WASM won't have an offset for it either.
-      cachedInteractionTables[t.id] = normalized;
+
+  // Lookup tables — one Float64Array view per table at the per-attr offset
+  // reserved by computeMemoryLayout. INDEPENDENT of variegation (tag×tag tables
+  // need no faces). `set()` the normalised values in; updateLookupTable later
+  // writes through the same view (never reassign — WASM reads via baked offset).
+  if (wasmMemory && wasmLayout) {
+    for (const t of lookupTablesPayload) {
+      const slot = wasmLayout.interactionTableOffsets[t.id];
+      const normalized = normalizeLookupTable(t.values, t.rowLabels, t.colLabels);
+      if (slot !== undefined) {
+        const view = new Float64Array(wasmMemory.buffer, slot.offset, slot.rowCount * slot.colCount);
+        view.fill(0);
+        view.set(normalized);
+        cachedInteractionTables[t.id] = view;
+      } else {
+        // No layout slot (table attr added after init without recompile) — keep
+        // a standalone array so JS reads still work; WASM has no offset for it.
+        cachedInteractionTables[t.id] = normalized;
+      }
     }
   }
 }
@@ -458,9 +467,12 @@ function initVariegation(
  *  No-op when WebGPU isn't ready or the model doesn't use variegation. */
 function syncVariegationToGPU(): void {
   const rt = webgpuRuntime;
-  if (!rt || !rt.stepReady || !rt.layout.variegatedEnabled) return;
-  if (orientationReadView) uploadOrientation(rt, orientationReadView);
-  if (facePatternLookup && facePatternLookup.length > 0) uploadFacePatternLookup(rt, facePatternLookup);
+  if (!rt || !rt.stepReady) return;
+  // Orientation + facePatternLookup are variegation-only; tables are not.
+  if (rt.layout.variegatedEnabled) {
+    if (orientationReadView) uploadOrientation(rt, orientationReadView);
+    if (facePatternLookup && facePatternLookup.length > 0) uploadFacePatternLookup(rt, facePatternLookup);
+  }
   for (const [id, view] of Object.entries(cachedInteractionTables)) {
     // The cached view is a Float64Array (over wasmMemory). The GPU stores f32,
     // so the upload helper down-converts via a fresh Float32Array. Negligible
@@ -649,9 +661,22 @@ let linkedDefs: Array<{
    *  (the parent_match guard isn't expressible against the current reduction
    *  shader's binding set) and the CPU readback path handles it. */
   isSubAttribute?: boolean;
+  /** Spatial X-axis. 'rows'/'columns' => this indicator is a position histogram
+   *  computed by computeSpatialIndicators (CPU, all targets); its result is a
+   *  Record<seriesKey, number[]> (array indexed by position bin), NOT a scalar
+   *  or per-value map. Absent/'generation' => classic generation-axis linked. */
+  xAxis?: string;
+  spatialBinMode?: string;
+  spatialBinCount?: number;
+  spatialBinSize?: number;
 }> = [];
+let hasSpatialIndicators = false;
 let linkedAccumulators: Record<string, number | Record<string, number>> = {};
-let linkedResults: Record<string, number | Record<string, number>> = {};
+// Linked + spatial results. Generation-axis linked indicators are number
+// (total) or Record<string,number> (frequency); spatial indicators are
+// Record<string, number[]> (per-position-bin series). The wider union covers
+// all three; the UI branches on the indicator's xAxis.
+let linkedResults: Record<string, number | Record<string, number> | Record<string, number[]>> = {};
 
 // Stop-event flag — compiled step writes a 1-based index into stopFlag[0] when
 // a Stop Event node's flow fires. Worker reads after each step/color/input pass
@@ -730,20 +755,21 @@ function initGrid(): void {
   let variegatedInputs: VariegatedLayoutInputs | undefined;
   if (variegated) {
     const source = cellAttrs.find(a => a.id === variegated!.sourceAttributeId);
-    const interactionTableIds = modelAttrsList
-      .filter(a => a.type === 'interactionTable')
-      .map(a => a.id);
-    variegatedInputs = {
-      speciesCount: source?.tagOptions?.length ?? 0,
-      faceLabelsCount: variegated.faceLabels.length,
-      interactionTableIds,
-    };
+    variegatedInputs = { speciesCount: source?.tagOptions?.length ?? 0 };
   }
+  // Lookup tables — sized from each table's resolved row/col label counts
+  // (carried in the payload, stashed before initGrid). Independent of variegation.
+  const lookupTables: LookupTableLayoutInput[] = lookupTablesPayload.map(t => ({
+    id: t.id,
+    rowCount: t.rowLabels.length || 1,
+    colCount: t.colLabels.length || 1,
+  }));
   wasmLayout = computeMemoryLayout(
     cellAttrs, modelAttrsList, neighborhoods, indicatorsList,
     total, isAsync, boundaryTreatment,
     variegatedInputs,
     hasGlyphs,
+    lookupTables,
   );
   wasmMemory = new WebAssembly.Memory({ initial: wasmLayout.pages });
   const buf = wasmMemory.buffer;
@@ -909,7 +935,7 @@ function buildLoopArgs(): unknown[] {
   args.push(glyphCodes ?? GLYPH_NOOP_CODES, glyphColors ?? GLYPH_NOOP_COLORS);
   // Variegated Cells: orientation arrays + face-pattern lookup + interaction
   // tables, in the same order the JS compiler emits its param list.
-  if (variegated) {
+  if (variegated || hasLookupTables) {
     args.push(orientationReadView, orientationWriteView, facePatternLookup, cachedInteractionTables);
   }
   if (updateMode === 'asynchronous' && orderArray) {
@@ -936,7 +962,7 @@ function buildCellArgs(idx: number): unknown[] {
   // empty Uint32Arrays when the model has no glyphs (compiled writes never
   // execute in that case because no setCellGlyph node was compiled).
   args.push(glyphCodes ?? GLYPH_NOOP_CODES, glyphColors ?? GLYPH_NOOP_COLORS);
-  if (variegated) {
+  if (variegated || hasLookupTables) {
     args.push(orientationReadView, orientationWriteView, facePatternLookup, cachedInteractionTables);
   }
   return args;
@@ -1155,6 +1181,12 @@ function runStep(): void {
   // Handle linked indicator accumulation (skip when no linked indicators)
   for (let _li = 0; _li < linkedDefs.length; _li++) {
     const def = linkedDefs[_li]!;
+    // Spatial indicators are always a live per-step snapshot — never
+    // accumulated (their value is Record<key, number[]>, which the accumulate
+    // branch can't sum). They're also written AFTER this loop (see
+    // computeSpatialIndicators below), so they aren't in linkedResults yet; the
+    // guard is belt-and-suspenders against future reordering.
+    if (def.xAxis === 'rows' || def.xAxis === 'columns') continue;
     if (!(def.id in linkedResults)) continue;
     if (def.accumulationMode === 'accumulated') {
       const cur = linkedResults[def.id]!;
@@ -1196,6 +1228,13 @@ function runStep(): void {
       orientationReadView.set(orientationWriteView);
     }
   }
+  // Spatial indicators (chromatogram): recompute the live per-position histogram
+  // from the post-step buffer. readAttrs now holds the just-computed generation
+  // on JS (ref-swap above) AND on WASM (w→r bulk copy above) — the same buffer
+  // a later getState reads, so the verification parity check holds. Independent
+  // of the generation-axis linked path; written here (after accumulation) so it
+  // is always a fresh per-step snapshot.
+  if (hasSpatialIndicators) computeSpatialIndicators();
   generation++;
 }
 
@@ -1449,6 +1488,17 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
   if (!fullAttrs) {
     for (const d of linkedDefs) {
       if (!d.watched || !d.attrId) continue;
+      const isSpatial = d.xAxis === 'rows' || d.xAxis === 'columns';
+      // Spatial indicators are CPU-only (excluded from buildReductionPlan), so
+      // they always need their source attr (and parent, for sub-attrs) on the
+      // CPU — even if a sibling generation-axis indicator over the same attr is
+      // GPU-reduced (which would otherwise short-circuit via gpuAttrIds below).
+      if (isSpatial) {
+        watchedAttrIds.add(d.attrId);
+        const la = cellAttrs.find(a => a.id === d.attrId);
+        if (la?.parentAttributeId) watchedAttrIds.add(la.parentAttributeId);
+        continue;
+      }
       if (gpuIds.has(d.id)) continue; // GPU-reduction handles this one
       if (gpuAttrIds.has(d.attrId)) continue; // attr already in GPU plan
       watchedAttrIds.add(d.attrId);
@@ -1586,6 +1636,7 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
     unpackAttrsFromReadback(rt.layout, sliced[attrsRegion]!, readAttrs);
     gpuOwnsAttrs = false;
     if (linkedDefs.length > 0) computeLinkedIndicatorsFromBuffer();
+    if (hasSpatialIndicators) computeSpatialIndicators();
   } else if (attrSlots.length > 0) {
     for (const { attrId, slot } of attrSlots) {
       unpackAttrFromReadback(rt.layout, attrId, sliced[slot]!, readAttrs);
@@ -1594,6 +1645,7 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
     // Subsequent paint with `gpuOwnsAttrs && icEntry?.fn` will trigger a full
     // readback (B5 fix), so leaving gpuOwnsAttrs=true is safe.
     computeLinkedIndicatorsFromBuffer();
+    if (hasSpatialIndicators) computeSpatialIndicators();
   }
   // O5 — decode the reductions slice into linkedResults. Done AFTER the CPU
   // computeLinkedIndicatorsFromBuffer above so GPU-handled ids overwrite any
@@ -1850,6 +1902,7 @@ function initIndicators(defs: IndicatorDef[]): void {
   standalonePerGenIdx = [];
   standaloneIds = [];
   linkedDefs = [];
+  hasSpatialIndicators = false;
   linkedAccumulators = {};
 
   for (let i = 0; i < defs.length; i++) {
@@ -1883,7 +1936,12 @@ function initIndicators(defs: IndicatorDef[]): void {
         // (including non-matching cells whose storage is scrubbed to
         // defaultValue, double-counting that bucket).
         isSubAttribute: !!linkedAttr?.parentAttributeId,
+        xAxis: ind.xAxis,
+        spatialBinMode: ind.spatialBinMode,
+        spatialBinCount: ind.spatialBinCount,
+        spatialBinSize: ind.spatialBinSize,
       });
+      if (ind.xAxis === 'rows' || ind.xAxis === 'columns') hasSpatialIndicators = true;
     }
   }
 }
@@ -1997,6 +2055,143 @@ function computeLinkedIndicatorsFromBuffer(): void {
   }
 }
 
+/** Spatial indicators (chromatogram): for each watched linked indicator whose
+ *  xAxis is 'rows' or 'columns', bin every cell by its position along that axis
+ *  and aggregate per bin using the SAME per-attribute-type logic as
+ *  computeLinkedIndicatorsFromBuffer. The result is `Record<seriesKey, number[]>`
+ *  \u2014 each array indexed by position bin (length = bin count), each key a series
+ *  (a curve in the chromatogram). Reuses the existing per-type buckets as
+ *  series: bool \u2192 true/false; tag \u2192 one per option; integer freq \u2192 one per
+ *  distinct value; total \u2192 single 'total'; float freq \u2192 one per value-bin (a
+ *  2-D value\u00d7position histogram).
+ *
+ *  CPU-only, runs on all targets post-step (see the runStep call site and the
+ *  finalizeStepWebGPU readback path). Reads `readAttrs`, which holds the
+ *  just-computed generation at every call site. Mirror of the linked path \u2014
+ *  keep the per-type branches in sync. */
+function computeSpatialIndicators(): void {
+  for (const def of linkedDefs) {
+    if (!def.watched) continue;
+    if (def.xAxis !== 'rows' && def.xAxis !== 'columns') continue;
+    const arr = readAttrs[def.attrId ?? ''];
+    if (!arr || !def.attrType || !def.aggregation) continue;
+    if (width < 1 || height < 1) continue;
+
+    // --- Resolve the position-bin count + a per-cell position\u2192bin mapper. ---
+    const axisLen = def.xAxis === 'rows' ? height : width;
+    const mode = def.spatialBinMode === 'absolute' ? 'absolute' : 'slices';
+    let binSize = 1;
+    let B: number;
+    if (mode === 'absolute') {
+      binSize = Math.max(1, Math.floor(def.spatialBinSize ?? 1));
+      B = Math.max(1, Math.ceil(axisLen / binSize));
+    } else {
+      B = Math.max(2, Math.min(axisLen, Math.floor(def.spatialBinCount ?? 50)));
+    }
+    if (B < 1) continue;
+    const xRows = def.xAxis === 'rows';
+    const posBin = (i: number): number => {
+      const row = Math.floor(i / width);
+      const pos = xRows ? row : i - row * width;
+      let b = mode === 'absolute'
+        ? Math.floor(pos / binSize)
+        : Math.floor((pos / axisLen) * B);
+      if (b >= B) b = B - 1;
+      else if (b < 0) b = 0;
+      return b;
+    };
+
+    // --- Sub-attribute guard (identical to the linked path). ---
+    const linkedAttr = cellAttrs.find(a => a.id === def.attrId);
+    const isSubAttr = !!linkedAttr?.parentAttributeId;
+    const parent = isSubAttr
+      ? cellAttrs.find(p => p.id === linkedAttr!.parentAttributeId)
+      : null;
+    const parentArr = (parent && readAttrs[parent.id]) || null;
+    const matchSet = isSubAttr && parent
+      ? buildParentMatchSet(parent, linkedAttr!.parentValues ?? [])
+      : null;
+    const skipUnmatched = parentArr && matchSet ? matchSet : null;
+    const pa = parentArr as unknown as { [k: number]: number } | null;
+    const newSeries = (): number[] => new Array(B).fill(0) as number[];
+
+    if (def.aggregation === 'total') {
+      const series = newSeries();
+      for (let i = 0; i < total; i++) {
+        if (skipUnmatched && pa && !skipUnmatched.has(pa[i] as number)) continue;
+        series[posBin(i)]! += arr[i] ?? 0;
+      }
+      linkedResults[def.id] = { total: series };
+      continue;
+    }
+    // frequency
+    if (def.attrType === 'bool') {
+      const t = newSeries();
+      const f = newSeries();
+      for (let i = 0; i < total; i++) {
+        if (skipUnmatched && pa && !skipUnmatched.has(pa[i] as number)) continue;
+        const b = posBin(i);
+        if (arr[i]) t[b]! += 1; else f[b]! += 1;
+      }
+      linkedResults[def.id] = { 'true': t, 'false': f };
+    } else if (def.attrType === 'tag') {
+      const opts = def.tagOptions || [];
+      const result: Record<string, number[]> = {};
+      for (const name of opts) result[name] = newSeries();
+      for (let i = 0; i < total; i++) {
+        if (skipUnmatched && pa && !skipUnmatched.has(pa[i] as number)) continue;
+        const name = opts[arr[i] ?? 0];
+        if (name !== undefined) result[name]![posBin(i)]! += 1;
+      }
+      linkedResults[def.id] = result;
+    } else if (def.attrType === 'integer') {
+      const result: Record<string, number[]> = {};
+      for (let i = 0; i < total; i++) {
+        if (skipUnmatched && pa && !skipUnmatched.has(pa[i] as number)) continue;
+        const k = String(arr[i] ?? 0);
+        (result[k] ?? (result[k] = newSeries()))[posBin(i)]! += 1;
+      }
+      linkedResults[def.id] = result;
+    } else if (def.attrType === 'float') {
+      // 2-D histogram: value-bins (via binCount) become series; each series is
+      // an array over position bins. Pre-scan min/max over matching cells.
+      const vbins = Math.max(1, def.binCount ?? 10);
+      let mn = Infinity, mx = -Infinity;
+      for (let i = 0; i < total; i++) {
+        if (skipUnmatched && pa && !skipUnmatched.has(pa[i] as number)) continue;
+        const v = arr[i] ?? 0;
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+      }
+      if (!Number.isFinite(mn) || !Number.isFinite(mx)) {
+        linkedResults[def.id] = {};
+        continue;
+      }
+      if (mn === mx) mx = mn + 1;
+      const range = mx - mn;
+      const vstep = range / vbins;
+      const labels: string[] = [];
+      const result: Record<string, number[]> = {};
+      for (let vb = 0; vb < vbins; vb++) {
+        const lo = mn + vb * vstep;
+        const hi = vb === vbins - 1 ? mx : mn + (vb + 1) * vstep;
+        const lab = `${lo.toFixed(2)}\u2013${hi.toFixed(2)}`;
+        labels.push(lab);
+        result[lab] = newSeries();
+      }
+      for (let i = 0; i < total; i++) {
+        if (skipUnmatched && pa && !skipUnmatched.has(pa[i] as number)) continue;
+        const v = arr[i] ?? 0;
+        let vb = Math.floor(((v - mn) / range) * vbins);
+        if (vb >= vbins) vb = vbins - 1;
+        else if (vb < 0) vb = 0;
+        result[labels[vb]!]![posBin(i)]! += 1;
+      }
+      linkedResults[def.id] = result;
+    }
+  }
+}
+
 /** Build and post the current attribute values for every cell index the main
  *  thread is inspecting. No-op when the subscription set is empty. Under
  *  WebGPU, callers MUST ensure `readAttrs` is fresh (via ensureCpuAttrsFresh)
@@ -2040,7 +2235,7 @@ function sendColors(): void {
   // Only build indicators payload when there are entries (avoids overhead when no indicators)
   const hasStandalone = standaloneIds.length > 0;
   const hasLinked = linkedDefs.length > 0;
-  let indicators: Record<string, number | Record<string, number>> | undefined;
+  let indicators: Record<string, number | Record<string, number> | Record<string, number[]>> | undefined;
   if (hasStandalone || hasLinked) {
     indicators = {};
     for (const { idx, id } of standaloneIds) {
@@ -2140,6 +2335,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // in wasmMemory. initVariegation runs AFTER initGrid to fill the
       // reserved regions with computed values.
       variegated = msg.variegated ?? null;
+      // Stash lookup-table payloads BEFORE initGrid so the layout sizes each
+      // table region (independent of variegation). initVariegation re-sets this.
+      lookupTablesPayload = msg.interactionTables ?? [];
+      hasLookupTables = lookupTablesPayload.length > 0;
       hasGlyphs = !!(msg as InitMsg).hasGlyphs;
       // initGrid first because it allocates wasmMemory + computes layout that
       // initIndicators / buildNeighborIndices need to create their views over.
@@ -2790,18 +2989,18 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       break;
     }
 
-    case 'updateInteractionTable': {
-      // Live-tune a single Interaction Table model attribute. The cached
-      // Float64Array is a typed-array view over `wasmMemory` at the layout's
-      // reserved offset (see initVariegation), so we must COPY into the
-      // existing view — never reassign the JS reference — or WASM would lose
-      // its source of truth (it reads via baked offsets, not the JS ref).
-      const normalized = normalizeInteractionTable(msg.values, msg.faceLabels);
+    case 'updateLookupTable': {
+      // Live-tune a single Lookup Table model attribute. The cached Float64Array
+      // is a typed-array view over `wasmMemory` at the layout's reserved offset
+      // (see initVariegation), so we must COPY into the existing view — never
+      // reassign the JS reference — or WASM would lose its source of truth (it
+      // reads via baked offsets, not the JS ref).
+      const normalized = normalizeLookupTable(msg.values, msg.rowLabels, msg.colLabels);
       const existing = cachedInteractionTables[msg.attrId];
       if (existing && existing.length === normalized.length) {
         existing.set(normalized);
       } else {
-        // Fallback path: standalone array (no layout slot, e.g. interactionTable
+        // Fallback path: standalone array (no layout slot, e.g. lookupTable
         // attr added without recompile). JS reads still work; WASM has no
         // offset for it either, so this branch is harmless.
         cachedInteractionTables[msg.attrId] = normalized;

@@ -30,6 +30,7 @@ import { defaultTagColor } from '../modeler/vpl/compiler/linkedOutputMappings';
 import { cloneMacroWithFreshIds } from './macroImport';
 import { migrateColorInterpolationNodes } from './colorScaleMigration';
 import { migrateTagConstantNodes } from './tagConstantMigration';
+import { migrateLookupTables } from './lookupTableMigration';
 import { clearAllSavedGraphViewports, setSavedCurrentScope } from '../modeler/vpl/graphState';
 
 // ---------------------------------------------------------------------------
@@ -226,9 +227,26 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // files and cause "invalid parent" errors at compile time.
       const filteredAttrs = state.model.attributes
         .filter(a => a.id !== action.id)
-        .map(a => a.parentAttributeId === action.id
-          ? { ...a, parentAttributeId: undefined, parentValues: undefined, undefinedValue: undefined }
-          : a);
+        .map(a => {
+          let next = a;
+          if (next.parentAttributeId === action.id) {
+            next = { ...next, parentAttributeId: undefined, parentValues: undefined, undefinedValue: undefined };
+          }
+          // Lookup Table: detach an axis keyed by the removed tag attribute so
+          // the dangling source doesn't survive in saved files.
+          if (next.type === 'lookupTable') {
+            const rowDangling = next.rowKeySource?.kind === 'tagAttribute' && next.rowKeySource.attributeId === action.id;
+            const colDangling = next.colKeySource?.kind === 'tagAttribute' && next.colKeySource.attributeId === action.id;
+            if (rowDangling || colDangling) {
+              next = {
+                ...next,
+                rowKeySource: rowDangling ? undefined : next.rowKeySource,
+                colKeySource: colDangling ? undefined : next.colKeySource,
+              };
+            }
+          }
+          return next;
+        });
       // Variegation cascade: if the removed attribute was the variegation
       // source, clear sourceAttributeId. We do NOT disable variegatedCells —
       // the user might just be re-pointing the source; preserving facePatterns
@@ -304,6 +322,17 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         // index-pairing rename heuristic survives reorderings cleanly.
         const variegationSourceId = state.model.variegatedCells?.sourceAttributeId;
         const newOptsSet = new Set(newOpts);
+        // Old tag-option NAME → new name (or null when deleted). Same index-pairing
+        // rename heuristic as facePatternAssignments. Used to remap Lookup Table
+        // tableValues keys when this tag attribute is a table's row/col key source.
+        const tagNameRemap = new Map<string, string | null>();
+        for (let oi = 0; oi < oldOpts.length; oi++) {
+          const oldName = oldOpts[oi]!;
+          if (newOptsSet.has(oldName)) tagNameRemap.set(oldName, oldName);
+          else if (newOpts[oi] && !oldOpts.includes(newOpts[oi]!)) tagNameRemap.set(oldName, newOpts[oi]!);
+          else tagNameRemap.set(oldName, null);
+        }
+        const remapTagKey = (k: string): string | null => (tagNameRemap.has(k) ? tagNameRemap.get(k)! : k);
         const remappedAttrs = updatedModel.attributes.map(sa => {
           let next: Attribute = sa;
           if (sa.parentAttributeId === attrId && sa.parentValues) {
@@ -333,6 +362,27 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
               // else: deleted tag, drop assignment.
             }
             next = { ...next, facePatternAssignments: nextAssign };
+          }
+          // Lookup Table tableValues: remap row/col keys when an axis is keyed
+          // by THIS tag attribute (rename → new name, deleted → drop).
+          if (sa.type === 'lookupTable' && sa.tableValues) {
+            const rowIsTag = sa.rowKeySource?.kind === 'tagAttribute' && sa.rowKeySource.attributeId === attrId;
+            const colIsTag = sa.colKeySource?.kind === 'tagAttribute' && sa.colKeySource.attributeId === attrId;
+            if (rowIsTag || colIsTag) {
+              const nextTV: Record<string, Record<string, number>> = {};
+              for (const [rk, row] of Object.entries(sa.tableValues)) {
+                const newRk = rowIsTag ? remapTagKey(rk) : rk;
+                if (newRk === null) continue;
+                const nextRow: Record<string, number> = {};
+                for (const [ck, val] of Object.entries(row)) {
+                  const newCk = colIsTag ? remapTagKey(ck) : ck;
+                  if (newCk === null) continue;
+                  nextRow[newCk] = val;
+                }
+                nextTV[newRk] = { ...(nextTV[newRk] || {}), ...nextRow };
+              }
+              next = { ...next, tableValues: nextTV };
+            }
           }
           return next;
         });
@@ -673,6 +723,10 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         const r = migrateTagConstantNodes(m.graphNodes, m.graphEdges, m.macroDefs);
         m = { ...m, graphNodes: r.graphNodes, graphEdges: r.graphEdges, macroDefs: r.macroDefs };
       }
+      // Lookup Table migration: interactionTable→lookupTable attribute type +
+      // variegatedCells.faceLabels→facePalettes[0] + default square key sources.
+      // Idempotent. Model-level (attributes + variegatedCells), so no macro pass.
+      m = migrateLookupTables(m);
       return { model: m, isDirty: false, modelVersion: state.modelVersion + 1 };
     }
 
@@ -816,7 +870,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
 
     case 'UPDATE_VARIEGATED_CELLS': {
       const current: VariegatedCellsConfig = state.model.variegatedCells ?? {
-        enabled: false, sourceAttributeId: '', faceLabels: [], facePatterns: [],
+        enabled: false, sourceAttributeId: '', facePalettes: [], facePatterns: [],
       };
       return {
         ...state, isDirty: true,
@@ -826,11 +880,12 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
 
     case 'ADD_FACE_PATTERN': {
       const current: VariegatedCellsConfig = state.model.variegatedCells ?? {
-        enabled: false, sourceAttributeId: '', faceLabels: [], facePatterns: [],
+        enabled: false, sourceAttributeId: '', facePalettes: [], facePatterns: [],
       };
       const newPattern: FacePattern = {
         id: generateId('face_pattern'),
         name: `pattern_${current.facePatterns.length + 1}`,
+        paletteId: current.facePalettes[0]?.id ?? '',
         layoutMode: 'edges',
         faces: [null, null, null, null, null, null, null, null],
       };
@@ -851,6 +906,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       const dup: FacePattern = {
         id: generateId((src.name || 'face_pattern') + '_copy'),
         name: src.name + ' (copy)',
+        paletteId: src.paletteId,
         layoutMode: src.layoutMode,
         faces: [...src.faces],
       };
