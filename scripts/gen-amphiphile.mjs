@@ -185,6 +185,9 @@ const MAPPING_VIZ = 'viz';
 // hardcoded in the graph. Adding/reordering tags doesn't break the script.
 const KIND_OPTIONS = ['empty', 'water', 'amphi'];
 const FACE_LABELS = ['X', 'Y', 'water'];
+// Single face-label palette (this model uses faces on both table axes). Both
+// Lookup Tables key rows AND cols by this palette (square, symmetric).
+const PALETTE_FACES = 'palette_faces';
 // LookupInteraction's underlying tableValues row/col is indexed with `none` at
 // position 0 (implicit) and user-labels starting at 1 (none=0, X=1, Y=2,
 // water=3). The graph references these by NAME via GetConstant.faceLabel —
@@ -737,7 +740,7 @@ const attributes = [
     isModelAttribute: true, defaultValue: '0.625', hasBounds: true, min: 0, max: 1,
   },
   {
-    id: ATTR_PB, name: 'P_B (bond-break, adjacent)', type: 'interactionTable',
+    id: ATTR_PB, name: 'P_B (bond-break, adjacent)', type: 'lookupTable',
     description:
       'Probability of breaking the bond between two adjacent cells (= the ' +
       'cell becoming able to move away from this neighbour). LOW = stable ' +
@@ -745,6 +748,8 @@ const attributes = [
       '(page 86): WW 0.25, XX 0.20, YY 0.50, XY 0.50, WX 0.80, WY 0.20. The ' +
       '`none` row/column is 1.0 (no bond to break — book §2.3.6).',
     isModelAttribute: true, defaultValue: '0',
+    rowKeySource: { kind: 'facePalette', paletteId: PALETTE_FACES },
+    colKeySource: { kind: 'facePalette', paletteId: PALETTE_FACES },
     symmetric: true,
     tableValues: {
       'none':  { 'none': 1,    'X': 1,    'Y': 1,    'water': 1    },
@@ -754,7 +759,7 @@ const attributes = [
     },
   },
   {
-    id: ATTR_J, name: 'J (joining, toward far)', type: 'interactionTable',
+    id: ATTR_J, name: 'J (joining, toward far)', type: 'lookupTable',
     description:
       'Directional preference: J(A, B) is the relative probability that A ' +
       'will move TOWARD a face B sitting two cells ahead in that direction. ' +
@@ -763,6 +768,8 @@ const attributes = [
       'WX 0.25, WY 2.00. The `none` row/column is 1.0 (no preference toward ' +
       'or away from an absent ingredient — book §2.3.5 verbatim).',
     isModelAttribute: true, defaultValue: '0',
+    rowKeySource: { kind: 'facePalette', paletteId: PALETTE_FACES },
+    colKeySource: { kind: 'facePalette', paletteId: PALETTE_FACES },
     symmetric: true,
     tableValues: {
       'none':  { 'none': 1,    'X': 1,    'Y': 1,    'water': 1    },
@@ -810,15 +817,17 @@ const mappings = [
 const variegatedCells = {
   enabled: true,
   sourceAttributeId: ATTR_KIND,
-  faceLabels: FACE_LABELS,
+  facePalettes: [{ id: PALETTE_FACES, name: 'Faces', labels: FACE_LABELS }],
   facePatterns: [
     {
       id: PAT_WATER, name: 'Water (all-water)',
+      paletteId: PALETTE_FACES,
       layoutMode: 'edges',
       faces: ['water', null, 'water', null, 'water', null, 'water', null],
     },
     {
       id: PAT_AMPHI, name: 'Amphiphile (X-X-X-Y)',
+      paletteId: PALETTE_FACES,
       layoutMode: 'edges',
       faces: ['X', null, 'Y', null, 'X', null, 'X', null],
     },
@@ -1018,5 +1027,5 @@ console.log(
   `Wrote ${OUT}\n  ${graphNodes.length} nodes, ${graphEdges.length} edges, ` +
   `${attributes.length} attributes, ${neighborhoods.length} neighborhoods, ` +
   `${mappings.length} mappings, ${variegatedCells.facePatterns.length} face patterns, ` +
-  `${variegatedCells.faceLabels.length} face labels${preserved}`,
+  `${variegatedCells.facePalettes.reduce((n, p) => n + p.labels.length, 0)} face labels${preserved}`,
 );

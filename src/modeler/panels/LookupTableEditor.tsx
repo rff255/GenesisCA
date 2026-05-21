@@ -2,32 +2,41 @@ import { useMemo } from 'react';
 import type { Attribute } from '../../model/types';
 import styles from './PanelContent.module.css';
 
-/** Compact matrix editor for an `interactionTable` model attribute. Used in
- *  BOTH the Attributes panel (design-time editing) and the Simulator's
- *  right-side model-attribute panel (runtime live-tuning).
+/** Compact matrix editor for a `lookupTable` model attribute. Used in BOTH the
+ *  Attributes panel (design-time editing) and the Simulator's right-side
+ *  model-attribute panel (runtime live-tuning).
  *
  *  Storage: `Attribute.tableValues: Record<rowLabel, Record<colLabel, number>>`.
- *  Rows / columns are `['none', ...faceLabels]`. Missing entries default to 0.
+ *  Rows come from the row key source, columns from the col key source — each a
+ *  face-label palette (`['none', ...labels]`) or a tag attribute (its
+ *  `tagOptions`). Rectangular tables (rows ≠ cols) are supported. Missing
+ *  entries default to 0.
  *
- *  Symmetric mode (`Attribute.symmetric`, default true) hides the lower
- *  triangle and mirrors edits to `table[A][B] = table[B][A]` so the user
- *  can't get out-of-sync. Storage still holds a full square — the runtime
- *  reads either index unconditionally.
+ *  Symmetric mode (`Attribute.symmetric`, default true) is only meaningful when
+ *  the row and column label sets are identical (square): it hides the lower
+ *  triangle and mirrors edits to `table[A][B] = table[B][A]`. For rectangular
+ *  tables the toggle is hidden and every cell is independent.
  */
-export function InteractionTableEditor({
+export function LookupTableEditor({
   attribute,
-  faceLabels,
+  rowLabels,
+  colLabels,
   onChange,
   compact = false,
 }: {
   attribute: Attribute;
-  faceLabels: string[];
+  rowLabels: string[];
+  colLabels: string[];
   onChange: (changes: Partial<Attribute>) => void;
   /** Smaller cells / inputs for the Simulator right-panel. */
   compact?: boolean;
 }) {
-  const labels = useMemo(() => ['none', ...faceLabels], [faceLabels]);
-  const symmetric = attribute.symmetric !== false; // default true
+  // Square iff the two label sets are identical (order included).
+  const sameAxes = useMemo(
+    () => rowLabels.length === colLabels.length && rowLabels.every((l, i) => l === colLabels[i]),
+    [rowLabels, colLabels],
+  );
+  const symmetric = sameAxes && attribute.symmetric !== false; // default true, only when square
   const values = attribute.tableValues || {};
 
   const get = (row: string, col: string): number => {
@@ -43,7 +52,6 @@ export function InteractionTableEditor({
   const set = (row: string, col: string, raw: string) => {
     const n = Number(raw);
     const v = Number.isFinite(n) ? n : 0;
-    // Immutable deep update: tableValues -> rowMap -> col=v
     const next = { ...values };
     next[row] = { ...(next[row] || {}), [col]: v };
     if (symmetric && row !== col) {
@@ -55,32 +63,34 @@ export function InteractionTableEditor({
   const cellSize = compact ? 56 : 72;
   const inputHeight = compact ? 18 : 22;
 
-  if (labels.length <= 1) {
+  if (rowLabels.length === 0 || colLabels.length === 0) {
     return (
       <div style={{ padding: '6px 0', color: '#888', fontSize: '0.68rem' }}>
-        Add face labels in the Variegated Cells panel to populate the table.
+        Choose a row and column key source (a face palette or a tag attribute) to populate the table.
       </div>
     );
   }
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.7rem', cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={symmetric}
-            onChange={e => onChange({ symmetric: e.target.checked })}
-          />
-          Symmetric (table[A][B] = table[B][A])
-        </label>
-      </div>
+      {sameAxes && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.7rem', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={symmetric}
+              onChange={e => onChange({ symmetric: e.target.checked })}
+            />
+            Symmetric (table[A][B] = table[B][A])
+          </label>
+        </div>
+      )}
       <div style={{ overflowX: 'auto' }}>
         <table style={{ borderCollapse: 'collapse', fontSize: compact ? '0.6rem' : '0.66rem' }}>
           <thead>
             <tr>
               <th style={{ width: cellSize / 2 }} />
-              {labels.map(col => (
+              {colLabels.map(col => (
                 <th key={col} style={{ width: cellSize, padding: '2px 0', textAlign: 'center', color: '#6080a0', fontWeight: 600 }}>
                   {col}
                 </th>
@@ -88,10 +98,10 @@ export function InteractionTableEditor({
             </tr>
           </thead>
           <tbody>
-            {labels.map((row, ri) => (
+            {rowLabels.map((row, ri) => (
               <tr key={row}>
                 <th style={{ padding: '2px 6px', textAlign: 'right', color: '#6080a0', fontWeight: 600 }}>{row}</th>
-                {labels.map((col, ci) => {
+                {colLabels.map((col, ci) => {
                   const isHidden = symmetric && ri > ci;
                   if (isHidden) {
                     return (

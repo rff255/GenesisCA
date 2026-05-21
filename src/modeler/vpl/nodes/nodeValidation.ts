@@ -229,10 +229,13 @@ export function detectMissingConfig(
         if (!model.variegatedCells?.enabled) {
           issues.push('Face Label requires Variegated Cells enabled');
         } else {
-          const labels = model.variegatedCells?.faceLabels ?? [];
+          const palettes = model.variegatedCells?.facePalettes ?? [];
+          const palId = String(config.facePaletteId ?? '');
+          const pal = palettes.find(p => p.id === palId) ?? palettes[0];
+          const labels = pal?.labels ?? [];
           const name = String(config.constValue ?? 'none');
           if (name !== 'none' && !labels.includes(name)) {
-            issues.push(`Face label "${name}" not in this model's face labels`);
+            issues.push(`Face label "${name}" not in the selected palette`);
           }
         }
       }
@@ -283,11 +286,11 @@ export function detectMissingConfig(
     case 'interactionTableMap': {
       const tableId = config.tableId;
       if (typeof tableId !== 'string' || tableId.length === 0) {
-        issues.push('Select an Interaction Table');
+        issues.push('Select a Lookup Table');
       } else {
         const attr = model.attributes.find(a => a.id === tableId);
-        if (!attr) issues.push('Selected Interaction Table no longer exists');
-        else if (attr.type !== 'interactionTable') issues.push('Selected attribute is not an Interaction Table');
+        if (!attr) issues.push('Selected Lookup Table no longer exists');
+        else if (attr.type !== 'lookupTable') issues.push('Selected attribute is not a Lookup Table');
       }
       break;
     }

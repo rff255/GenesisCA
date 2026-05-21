@@ -1056,13 +1056,9 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
   // `tableOff + a * labelCount + b`. Output length = min(myFaces, theirFaces).
   // Unknown tableId returns an empty array (parity with JS/WASM).
   interactionTableMap: ({ node, ctx }) => {
-    if (!ctx.layout.variegatedEnabled) {
-      ctx.errors.push('interactionTableMap: variegated cells disabled');
-      return null;
-    }
+    // No variegation guard — tag×tag tables need no faces.
     const tableId = (node.data.config.tableId as string) || '';
     const tableLayout = tableId ? ctx.layout.interactionTableOffsets[tableId] : undefined;
-    const labelCount = ctx.layout.interactionTableLabelCount;
     const myArr = resolveInputArray(ctx, node, 'myFaces');
     const theirArr = resolveInputArray(ctx, node, 'theirFaces');
     if (!myArr || !theirArr) {
@@ -1075,6 +1071,7 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
       return out;
     }
     const off = tableLayout.wordOffset;
+    const colCount = tableLayout.colCount; // row-major stride
     const k = fresh(ctx, 'itm');
     const n = fresh(ctx, 'itmN');
     ctx.lines.push(`  let ${n}: i32 = min(${myArr.lenName}, ${theirArr.lenName});`);
@@ -1082,7 +1079,7 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     ctx.lines.push(`    let _itmA_${k}: i32 = ${arrLoad(myArr, k)};`);
     ctx.lines.push(`    let _itmB_${k}: i32 = ${arrLoad(theirArr, k)};`);
     ctx.lines.push(
-      `    ${out.name}[${k}] = bitcast<f32>(varAux[u32(${off} + _itmA_${k} * ${labelCount} + _itmB_${k})]);`,
+      `    ${out.name}[${k}] = bitcast<f32>(varAux[u32(${off} + _itmA_${k} * ${colCount} + _itmB_${k})]);`,
     );
     ctx.lines.push(`  }`);
     ctx.lines.push(`  ${out.lenName} = ${n};`);
@@ -2052,27 +2049,24 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
   // the f32 stored at `(labelA * labelCount + labelB)` within the table's
   // region of varAux. Unknown tableId returns 0.
   lookupInteraction: ({ node, ctx, inputs }) => {
-    if (!ctx.layout.variegatedEnabled) {
-      ctx.errors.push('lookupInteraction: variegated cells disabled');
-      return null;
-    }
+    // No variegation guard — tag×tag tables need no faces. Tableless → 0.
     const tableId = (node.data.config.tableId as string) || '';
     const tableLayout = tableId ? ctx.layout.interactionTableOffsets[tableId] : undefined;
     if (!tableLayout) {
       return emitLet(ctx, 'f32', '0.0', 'li');
     }
-    const labelCount = ctx.layout.interactionTableLabelCount;
+    const colCount = tableLayout.colCount; // row-major stride
     const labelA = inputs['labelA'] ?? { expr: '0', type: 'i32' as WgslType };
     const labelB = inputs['labelB'] ?? { expr: '0', type: 'i32' as WgslType };
     const a = castTo(labelA, 'i32');
     const b = castTo(labelB, 'i32');
     const off = tableLayout.wordOffset;
-    // No bounds clamp — out-of-range labels would read adjacent table memory.
-    // Practical models stay within [0, labelCount). The CPU side does its
-    // own clamp via the worker's normalizeInteractionTable, but the GPU just
-    // trusts the inputs (mirrors JS / WASM, which also don't clamp).
+    // No bounds clamp — out-of-range indices would read adjacent table memory.
+    // Practical models stay within [0, rowCount)×[0, colCount). The CPU side
+    // clamps via the worker's normalizeLookupTable; the GPU trusts the inputs
+    // (mirrors JS / WASM, which also don't clamp).
     return emitLet(ctx, 'f32',
-      `bitcast<f32>(varAux[u32(${off} + (${a}) * ${labelCount} + (${b}))])`, 'li');
+      `bitcast<f32>(varAux[u32(${off} + (${a}) * ${colCount} + (${b}))])`, 'li');
   },
 
   // -- Init Event (multi-output: x, y, maxX, maxY) ------------------------

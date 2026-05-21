@@ -982,9 +982,10 @@ export function uploadFacePatternLookup(rt: WebGPURuntime, src: ArrayLike<number
 /** Variegated Cells: upload a single interaction table's region of varAux.
  *  Values are f32 stored bit-wise in u32 words (WGSL reads with
  *  `bitcast<f32>(varAux[..])`). Called on init/recompile AND on every live
- *  updateInteractionTable so the GPU stays in sync. */
+ *  updateLookupTable so the GPU stays in sync. Decoupled from variegation —
+ *  tag×tag tables have no faces but still live in varAux. */
 export function uploadInteractionTable(rt: WebGPURuntime, tableId: string, src: ArrayLike<number>): void {
-  if (!rt.varAuxBuf || !rt.layout.variegatedEnabled) return;
+  if (!rt.varAuxBuf) return;
   const slot = rt.layout.interactionTableOffsets[tableId];
   if (!slot) return;
   const count = Math.min(src.length, slot.count);

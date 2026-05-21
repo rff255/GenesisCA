@@ -9,7 +9,7 @@
  *  three compile targets. Per the parity contract in the implementation
  *  plan, every consumer imports from this module — never re-derives. */
 
-import type { CAModel, Neighborhood } from '../../../model/types';
+import type { CAModel, LookupKeySource, Neighborhood } from '../../../model/types';
 
 /** Canonical 8-slot face layout. Index = face slot ID; value = tag name.
  *  Face slot order is clockwise starting from N. The rotation arithmetic
@@ -59,25 +59,35 @@ export interface FacePatternLookupInputs {
   /** `tagOption string -> FacePattern.id`. Empty / missing entries → species
    *  has no pattern (all slots resolve to `none`). */
   facePatternAssignments: Readonly<Record<string, string>>;
-  /** User-defined face label palette (without the implicit `none`). */
-  faceLabels: readonly string[];
-  /** All face-pattern definitions. */
-  facePatterns: ReadonlyArray<{ id: string; faces: ReadonlyArray<string | null> }>;
+  /** All face-label palettes. A pattern resolves its slot labels against the
+   *  palette named by its `paletteId`. */
+  facePalettes: ReadonlyArray<{ id: string; labels: readonly string[] }>;
+  /** All face-pattern definitions (each carries a `paletteId`). */
+  facePatterns: ReadonlyArray<{ id: string; paletteId: string; faces: ReadonlyArray<string | null> }>;
 }
 
 /** Build the flat species-by-face lookup table. Returns
- *  `Int32Array(tagOptions.length * 8)` where entry
- *  `[speciesIdx * 8 + faceIdx]` is the face-label index in
- *  `['none', ...faceLabels]` (so `0` = none, `1+` = user labels).
+ *  `Int32Array(tagOptions.length * 8)` where entry `[speciesIdx * 8 + faceIdx]`
+ *  is the face-label index in `['none', ...palette.labels]` for THAT species'
+ *  palette (the palette of its assigned pattern). `0` = none, `1+` = user
+ *  labels within that palette. Different species may use different palettes —
+ *  the consuming Lookup Table's row/col key source defines how each index is
+ *  interpreted (so the lookup stays one species-keyed array, no per-palette
+ *  buffers).
  *
  *  Used by `GetFacingLabels` at runtime: `facePatternLookup[species * 8 + rotatedFaceIdx]`.
  *  Built once on init/recompile; cells rotate by indexing into it via the
  *  precomputed `directionMap`. */
 export function buildFacePatternLookup(input: FacePatternLookupInputs): Int32Array {
-  const { tagOptions, facePatternAssignments, faceLabels, facePatterns } = input;
-  const labels = ['none', ...faceLabels];
-  const labelIndex = new Map<string, number>();
-  for (let i = 0; i < labels.length; i++) labelIndex.set(labels[i]!, i);
+  const { tagOptions, facePatternAssignments, facePalettes, facePatterns } = input;
+  // Per-palette label→index map (index into ['none', ...palette.labels]).
+  const paletteIndex = new Map<string, Map<string, number>>();
+  for (const pal of facePalettes) {
+    const m = new Map<string, number>();
+    const labels = ['none', ...pal.labels];
+    for (let i = 0; i < labels.length; i++) m.set(labels[i]!, i);
+    paletteIndex.set(pal.id, m);
+  }
   const out = new Int32Array(tagOptions.length * FACE_SLOT_COUNT);
   for (let s = 0; s < tagOptions.length; s++) {
     const tagName = tagOptions[s]!;
@@ -85,6 +95,8 @@ export function buildFacePatternLookup(input: FacePatternLookupInputs): Int32Arr
     if (!patternId) continue; // species has no pattern → all slots `none` (= 0)
     const pattern = facePatterns.find(p => p.id === patternId);
     if (!pattern) continue;
+    const labelIndex = paletteIndex.get(pattern.paletteId);
+    if (!labelIndex) continue; // pattern's palette missing → all slots `none`
     for (let f = 0; f < FACE_SLOT_COUNT; f++) {
       const slot = pattern.faces[f];
       if (slot === null || slot === undefined) continue; // `none` (= 0)
@@ -104,31 +116,52 @@ export function buildFacePatternLookupFromModel(model: CAModel): Int32Array {
   return buildFacePatternLookup({
     tagOptions: source.tagOptions ?? [],
     facePatternAssignments: source.facePatternAssignments ?? {},
-    faceLabels: v.faceLabels,
+    facePalettes: v.facePalettes,
     facePatterns: v.facePatterns,
   });
 }
 
-/** Flatten an interaction-table value map into a row-major Float64Array
- *  indexed by `(rowLabelIdx * (labelCount + 1) + colLabelIdx)`. The implicit
- *  `none` label sits at row/col index 0; user labels follow in
- *  `faceLabels` order. Missing entries default to 0. Symmetric tables are
- *  stored as full squares so reads don't need to consult the `symmetric`
- *  flag (the editor enforces mirror-on-edit; storage is straightforward). */
-export function normalizeInteractionTable(
+/** Resolve a Lookup Table axis key source to its ordered label list — the
+ *  single source of truth for axis dimension + tableValues key names, shared by
+ *  compilers, editor, and worker:
+ *    - `facePalette` → `['none', ...palette.labels]` (implicit none at index 0).
+ *    - `tagAttribute` → the tag attribute's `tagOptions` (no implicit none).
+ *  Returns `[]` when the source is unset or its referent is missing. */
+export function resolveKeyLabels(
+  source: LookupKeySource | undefined,
+  model: CAModel,
+): string[] {
+  if (!source) return [];
+  if (source.kind === 'facePalette') {
+    const pal = model.variegatedCells?.facePalettes.find(p => p.id === source.paletteId);
+    return pal ? ['none', ...pal.labels] : [];
+  }
+  const attr = model.attributes.find(a => a.id === source.attributeId);
+  return attr?.tagOptions ? [...attr.tagOptions] : [];
+}
+
+/** Flatten a lookup-table value map into a row-major `Float64Array` of size
+ *  `rowLabels.length * colLabels.length`, indexed `(rowIdx * colLabels.length +
+ *  colIdx)` (stride = colLabels.length). `tableValues` outer keys are rowLabel
+ *  names, inner keys colLabel names. Missing entries default to 0. Rectangular
+ *  tables (rowLabels ≠ colLabels) are fully supported; symmetric tables are
+ *  stored as full matrices so reads never consult the `symmetric` flag (the
+ *  editor enforces mirror-on-edit; storage is straightforward). */
+export function normalizeLookupTable(
   values: Record<string, Record<string, number>> | undefined,
-  faceLabels: string[],
+  rowLabels: readonly string[],
+  colLabels: readonly string[],
 ): Float64Array {
-  const labels = ['none', ...faceLabels];
-  const n = labels.length;
-  const out = new Float64Array(n * n);
+  const rows = rowLabels.length;
+  const cols = colLabels.length;
+  const out = new Float64Array(rows * cols);
   if (!values) return out;
-  for (let i = 0; i < n; i++) {
-    const row = values[labels[i]!];
+  for (let i = 0; i < rows; i++) {
+    const row = values[rowLabels[i]!];
     if (!row) continue;
-    for (let j = 0; j < n; j++) {
-      const v = row[labels[j]!];
-      if (typeof v === 'number') out[i * n + j] = v;
+    for (let j = 0; j < cols; j++) {
+      const v = row[colLabels[j]!];
+      if (typeof v === 'number') out[i * cols + j] = v;
     }
   }
   return out;

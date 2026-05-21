@@ -15,7 +15,7 @@
  */
 
 import type { CAModel } from '../../../../model/types';
-import { FACE_SLOT_COUNT } from '../variegation';
+import { FACE_SLOT_COUNT, resolveKeyLabels } from '../variegation';
 import { hasGlyphsInModel } from '../glyphsUsage';
 
 export interface WebGPULayoutAttr {
@@ -46,12 +46,16 @@ export interface WebGPULayoutNbr {
   coords: Array<[number, number]>;
 }
 
-/** Per-interaction-table location within the varAux buffer. */
+/** Per-lookup-table location within the varAux buffer. */
 export interface WebGPUInteractionTableLayout {
   /** Word offset into the varAux array<u32> at which the f32 values start. */
   wordOffset: number;
-  /** Number of f32 entries — equals `(faceLabelsCount + 1)²`. */
+  /** Number of f32 entries — equals `rowCount * colCount`. */
   count: number;
+  /** Row dimension (row key source label count). */
+  rowCount: number;
+  /** Column dimension (col key source label count) — the row-major stride. */
+  colCount: number;
 }
 
 export interface WebGPULayout {
@@ -129,13 +133,11 @@ export interface WebGPULayout {
   /** Number of i32 entries (= speciesCount × 8). 0 when no source attr / no
    *  variegation. */
   facePatternLookupCount: number;
-  /** Per-attribute interaction table location within varAux. Keyed by the
-   *  model attribute's id. Values are read as f32 via `bitcast<f32>(...)`. */
+  /** Per-attribute lookup table location within varAux (incl. per-table
+   *  rowCount/colCount). Keyed by the model attribute's id. Values are read as
+   *  f32 via `bitcast<f32>(...)`. Allocated for every lookupTable attr
+   *  regardless of variegation. */
   interactionTableOffsets: Record<string, WebGPUInteractionTableLayout>;
-  /** Number of labels per row/col in every interaction table
-   *  (= faceLabelsCount + 1 for the implicit `none`). All tables share this
-   *  because they all index into the model's face-label palette. */
-  interactionTableLabelCount: number;
 }
 
 /**
@@ -251,7 +253,6 @@ export function computeWebGPULayout(model: CAModel): WebGPULayout {
   let varAuxCursor = 0;
   let facePatternLookupWordOffset = 0;
   let facePatternLookupCount = 0;
-  let interactionTableLabelCount = 1;
   const interactionTableOffsets: Record<string, WebGPUInteractionTableLayout> = {};
   if (isVariegated) {
     const v = model.variegatedCells!;
@@ -263,21 +264,20 @@ export function computeWebGPULayout(model: CAModel): WebGPULayout {
       facePatternLookupWordOffset = varAuxCursor / 4;
       varAuxCursor += facePatternLookupCount * 4;
     }
-    interactionTableLabelCount = v.faceLabels.length + 1;
-    const tableCount = interactionTableLabelCount * interactionTableLabelCount;
-    const tableBytes = tableCount * 4;
-    for (const a of modelAttrs) {
-      if (a.type !== 'interactionTable') continue;
-      // 16-byte alignment for storage struct safety (not strictly required for
-      // array<u32>, but keeps every table on a cache line for slightly better
-      // access patterns on tile-based GPUs).
-      varAuxCursor = Math.ceil(varAuxCursor / 16) * 16;
-      interactionTableOffsets[a.id] = {
-        wordOffset: varAuxCursor / 4,
-        count: tableCount,
-      };
-      varAuxCursor += tableBytes;
-    }
+  }
+  // Lookup tables — allocated for every lookupTable model attr regardless of
+  // variegation (tag×tag tables need no faces). Row-major f32 (u32-bitcast),
+  // sized rowCount*colCount, indexed (row*colCount + col). Per-table dims from
+  // each axis key source.
+  for (const a of modelAttrs) {
+    if (a.type !== 'lookupTable') continue;
+    const rowCount = resolveKeyLabels(a.rowKeySource, model).length || 1;
+    const colCount = resolveKeyLabels(a.colKeySource, model).length || 1;
+    const count = rowCount * colCount;
+    // 16-byte alignment for storage struct safety / cache locality.
+    varAuxCursor = Math.ceil(varAuxCursor / 16) * 16;
+    interactionTableOffsets[a.id] = { wordOffset: varAuxCursor / 4, count, rowCount, colCount };
+    varAuxCursor += count * 4;
   }
   // Storage buffers must be at least 4 bytes — even when no variegation data
   // exists, the buffer is created with the stub size so binding 8 is bindable.
@@ -315,6 +315,5 @@ export function computeWebGPULayout(model: CAModel): WebGPULayout {
     facePatternLookupWordOffset,
     facePatternLookupCount,
     interactionTableOffsets,
-    interactionTableLabelCount,
   };
 }

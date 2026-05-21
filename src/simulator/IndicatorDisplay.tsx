@@ -3,15 +3,22 @@ import type { Indicator } from '../model/types';
 import { IndicatorSparkline } from './IndicatorSparkline';
 import { IndicatorMultiLineChart } from './IndicatorMultiLineChart';
 import { IndicatorStackedAreaChart } from './IndicatorStackedAreaChart';
+import { IndicatorSpatialChart } from './IndicatorSpatialChart';
 import styles from './IndicatorDisplay.module.css';
 
 export type IndicatorVizMode = 'bars' | 'multiline' | 'stacked';
 
 interface Props {
   indicators: Indicator[];
-  values: Record<string, number | Record<string, number>>;
+  /** number → scalar; Record<cat,number> → frequency map; Record<key,number[]>
+   *  → spatial (per-position-bin series, xAxis rows/columns). */
+  values: Record<string, number | Record<string, number> | Record<string, number[]>>;
   history: Record<string, number[] | Record<string, number[]>>;
   generation: number;
+  /** Live grid dimensions — used to label a spatial chart's X-axis with real
+   *  row/column positions. */
+  gridWidth: number;
+  gridHeight: number;
   vizModes: Record<string, IndicatorVizMode>;
   onToggleWatch: (id: string, watched: boolean) => void;
   onChartToggle: (id: string, expanded: boolean) => void;
@@ -27,7 +34,7 @@ function formatValue(val: number, ind: Indicator): string {
   return String(val);
 }
 
-export function IndicatorDisplay({ indicators, values, history, generation, vizModes, onToggleWatch, onChartToggle, onCycleVizMode }: Props) {
+export function IndicatorDisplay({ indicators, values, history, generation, gridWidth, gridHeight, vizModes, onToggleWatch, onChartToggle, onCycleVizMode }: Props) {
   // Track *collapsed* IDs — everything is expanded by default
   const [collapsedCharts, setCollapsedCharts] = useState<Set<string>>(new Set());
   // Per-indicator custom content height (drag-to-resize)
@@ -85,8 +92,11 @@ export function IndicatorDisplay({ indicators, values, history, generation, vizM
         const isWatched = ind.watched;
         const isStandalone = ind.kind === 'standalone';
         const isExpanded = !collapsedCharts.has(ind.id);
+        // Spatial (xAxis rows/columns) sends Record<seriesKey, number[]> — also
+        // typeof 'object', so it must be split out from the frequency branch.
+        const isSpatial = ind.kind === 'linked' && (ind.xAxis === 'rows' || ind.xAxis === 'columns');
         const isScalar = val !== undefined && typeof val === 'number';
-        const isFreq = val !== undefined && typeof val === 'object';
+        const isFreq = val !== undefined && typeof val === 'object' && !isSpatial;
 
         return (
           <div key={ind.id} className={styles.indicator}>
@@ -197,6 +207,35 @@ export function IndicatorDisplay({ indicators, values, history, generation, vizM
                       <span className={styles.freqCount}>{count}</span>
                     </div>
                   ))}
+                </div>
+              );
+            })()}
+
+            {/* Spatial (chromatogram): live position histogram. One curve per
+                series over the chosen grid axis; no time-history, no viz cycle. */}
+            {isWatched && isSpatial && !isExpanded && val !== undefined && (
+              <div className={styles.freqTable}>
+                {Object.entries(val as Record<string, number[]>).map(([k, arr]) => {
+                  let sum = 0;
+                  for (const x of arr) sum += x;
+                  return (
+                    <div key={k} className={styles.freqRow}>
+                      <span className={styles.freqKey} title={k}>{k}</span>
+                      <span className={styles.freqCount}>{sum}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {isWatched && isSpatial && isExpanded && val !== undefined && (() => {
+              const h = heights[ind.id] ?? 160;
+              const spatialData = typeof val === 'object' ? (val as Record<string, number[]>) : {};
+              const axis = ind.xAxis === 'columns' ? 'columns' : 'rows';
+              const axisLength = axis === 'rows' ? gridHeight : gridWidth;
+              return (
+                <div className={styles.sparklineWrap} style={{ height: h }}>
+                  <IndicatorSpatialChart data={spatialData} axis={axis} axisLength={axisLength} height={h} />
                 </div>
               );
             })()}

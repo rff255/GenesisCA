@@ -132,7 +132,7 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 | 31 | `getNeighborOrientationByIndex` | Get Neighbor Orientation By Index | Read the orientation of one neighbour by NeighborIndex. | `I: Index` (NI) / `O: Orientation` (int) | **Variegated Cells only**; read-only so works in sync + async |
 | 32 | `getFacingLabels` | Get Facing Labels | Resolve the two face labels touching at a 1-step encounter in a fixed direction — accounts for both cells' orientations and face patterns. | `O: My Face` `O: Their Face` (int) | **Variegated Cells only**; `directionTag` config; no neighborhood. Pair with `lookupInteraction` |
 | 33 | `getAllFacingLabels` | Get All Facing Labels | Two parallel arrays of face labels at each 1-step encounter — 8 slots (Moore N/NE/E/SE/S/SW/W/NW) or 4 slots (cardinal N/E/S/W) when `cardinalsOnly` is checked. | `O: My Faces` `O: Their Faces` (int arr) | **Variegated Cells only**. Pair with `aggregate`/`interactionTableMap` for energy sums or `forEachInArray` for per-direction logic |
-| 34 | `interactionTableMap` | Interaction Table Map | Vectorised `lookupInteraction`: indexes an Interaction Table model attribute by two parallel face-label arrays → float array. | `I: My Faces` `I: Their Faces` (int arr) / `O: Values` (float arr) | **Variegated Cells only**; pair with `aggregate.product` for `P_break = ∏ P_B(myFace, theirFace)` |
+| 34 | `interactionTableMap` | Table Map | Vectorised `lookupInteraction`: indexes a Lookup Table model attribute by two parallel index arrays (rows + cols) → float array. | `I: Rows` `I: Cols` (int arr) / `O: Values` (float arr) | Works with or without Variegated Cells; pair with `aggregate.product` for `P_break = ∏ P_B` |
 | 35 | `getIndicator` | Get Indicator | Read a standalone indicator's value. | `O: Value` (any) | Requires `indicatorId` |
 
 ### 3.4 Logic & Math — `logic`
@@ -146,7 +146,7 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 | 40 | `statement` | Compare | `== != > < >= <=` on two scalars, or `Between` / `Not Between` (range check with configurable low/high sides). | `I: X` `I: Y` `I: Y₂` (between-family only) / `O: Result` (bool) | Name collision risk with `groupStatement` |
 | 41 | `logicOperator` | Logic | `AND OR XOR NOT` on bools. | `I: A` `I: B` (hidden for NOT) / `O: Result` (bool) | |
 | 42 | `valueSwitch` | Value Switch | `condition ? ifValue : elseValue`. Pure value, no flow port. | `I: Condition` (any) `I: If` (any) `I: Else` (any) / `O: Result` (any) | All inputs optional (inline defaults: condition=false, if=1, else=0). Both branches always evaluate — for short-circuit use flow `conditional` instead. |
-| 43 | `lookupInteraction` | Lookup Interaction | Index an Interaction Table model attribute by two face labels (e.g. from `getFacingLabels`) → float. | `I: Label A` `I: Label B` (int, inline) / `O: Value` (float) | **Variegated Cells only**; loop-invariant when both labels are loop-invariant |
+| 43 | `lookupInteraction` | Table Lookup | Index a Lookup Table model attribute by a row + column index (from face labels or tag reads) → float. | `I: Row` `I: Col` (int, inline) / `O: Value` (float) | Works with or without Variegated Cells; loop-invariant when both indices are |
 
 ### 3.5 Aggregation — `aggregation`
 

@@ -46,6 +46,10 @@ export interface LinkedDef {
    *  and the cost of CPU readback for the typically-one sub-attr indicator is
    *  small (a few ms at 1000²). */
   isSubAttribute?: boolean;
+  /** Spatial X-axis. 'rows'/'columns' indicators are CPU-only position
+   *  histograms (computeSpatialIndicators); they are excluded from the GPU
+   *  reduction plan entirely. Absent/'generation' => normal GPU-eligible. */
+  xAxis?: string;
 }
 
 export interface ReductionPlanEntry {
@@ -83,6 +87,9 @@ export function buildReductionPlan(linkedDefs: LinkedDef[], layout: WebGPULayout
   for (const d of linkedDefs) {
     if (!d.watched) continue;
     if (!d.attrId || !d.attrType || !d.aggregation) continue;
+    // Spatial indicators (xAxis rows/columns) are position histograms computed
+    // on the CPU (computeSpatialIndicators) — no GPU reduction shader path.
+    if (d.xAxis === 'rows' || d.xAxis === 'columns') continue;
     // Sub-attribute aggregation requires a parent_match guard inside the
     // reduction shader (cells where the parent doesn't match must not
     // contribute). The current binding set doesn't expose parent metadata;

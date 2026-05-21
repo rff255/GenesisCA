@@ -970,7 +970,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
         {nodeData.nodeType === 'getConstant' && (() => {
           const variegated = !!model.variegatedCells?.enabled;
-          const faceLabels = model.variegatedCells?.faceLabels ?? [];
+          const palettes = model.variegatedCells?.facePalettes ?? [];
+          const facePaletteId = (nodeData.config.facePaletteId as string) || palettes[0]?.id || '';
+          const faceLabels = palettes.find(p => p.id === facePaletteId)?.labels ?? [];
           return (
             <>
               <select
@@ -980,7 +982,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   // Reset constValue when switching to faceLabel so the picker
                   // starts on a valid option (the implicit 'none').
                   if (e.target.value === 'faceLabel') {
-                    const newConfig = { ...nodeData.config, constType: 'faceLabel', constValue: 'none' };
+                    const newConfig = { ...nodeData.config, constType: 'faceLabel', constValue: 'none', facePaletteId: palettes[0]?.id ?? '' };
                     updateNodeData(id, { ...nodeData, config: newConfig });
                   } else {
                     updateConfig('constType', e.target.value);
@@ -1046,17 +1048,32 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   })()}
                 </>
               ) : nodeData.config.constType === 'faceLabel' ? (
-                <select
-                  className={styles.select}
-                  value={(nodeData.config.constValue as string) || 'none'}
-                  onChange={e => updateConfig('constValue', e.target.value)}
-                  title="Face label name. Emits the compile-time integer index (none=0; user labels start at 1)."
-                >
-                  <option value="none">none (0)</option>
-                  {faceLabels.map((lab, i) => (
-                    <option key={i} value={lab}>{lab} ({i + 1})</option>
-                  ))}
-                </select>
+                <>
+                  {palettes.length > 1 && (
+                    <select
+                      className={styles.select}
+                      value={facePaletteId}
+                      onChange={e => {
+                        const newConfig = { ...nodeData.config, facePaletteId: e.target.value, constValue: 'none' };
+                        updateNodeData(id, { ...nodeData, config: newConfig });
+                      }}
+                      title="Face palette this label belongs to"
+                    >
+                      {palettes.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                  )}
+                  <select
+                    className={styles.select}
+                    value={(nodeData.config.constValue as string) || 'none'}
+                    onChange={e => updateConfig('constValue', e.target.value)}
+                    title="Face label name. Emits the compile-time integer index (none=0; user labels start at 1)."
+                  >
+                    <option value="none">none (0)</option>
+                    {faceLabels.map((lab, i) => (
+                      <option key={i} value={lab}>{lab} ({i + 1})</option>
+                    ))}
+                  </select>
+                </>
               ) : (
                 <InlineNumberInput
                   className={styles.input}
@@ -2022,19 +2039,19 @@ function CaNodeComponent({ id, data }: NodeProps) {
         })()}
 
         {(nodeData.nodeType === 'lookupInteraction' || nodeData.nodeType === 'interactionTableMap') && (() => {
-          // Variegated Cells: pick one of the model's Interaction Table model
-          // attributes. For LookupInteraction, labelA / labelB are wired via
-          // scalar input ports. For InteractionTableMap, myFaces / theirFaces
-          // are wired as parallel int arrays (typically the two outputs of
-          // Get All Facing Labels in cardinals-only mode).
-          const tables = model.attributes.filter(a => a.isModelAttribute && a.type === 'interactionTable');
+          // Pick one of the model's Lookup Table model attributes. For Table
+          // Lookup, the row/col indices are wired via scalar input ports; for
+          // Table Map, they're parallel int arrays. Indices come from face
+          // labels (Get Facing Labels) or tag reads — depends on the table's
+          // row/col key sources.
+          const tables = model.attributes.filter(a => a.isModelAttribute && a.type === 'lookupTable');
           return (
             <select
               className={styles.select}
               value={(nodeData.config.tableId as string) || ''}
               onChange={e => updateConfig('tableId', e.target.value)}
             >
-              <option value="">Interaction Table...</option>
+              <option value="">Lookup Table...</option>
               {tables.map(a => (
                 <option key={a.id} value={a.id}>{a.name}</option>
               ))}

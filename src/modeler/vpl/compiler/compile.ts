@@ -15,7 +15,7 @@ import {
   attrValueLiteralJS,
   parentMatchExprJS,
 } from './subAttribute';
-import { directionIndex, DIRECTION_TAGS } from './variegation';
+import { directionIndex, DIRECTION_TAGS, resolveKeyLabels } from './variegation';
 import { buildVariableJS } from './variable';
 
 // ---------------------------------------------------------------------------
@@ -1531,6 +1531,7 @@ function buildLoopParams(model: CAModel): {
 } {
   const isAsync = model.properties.updateMode === 'asynchronous';
   const variegated = !!model.variegatedCells?.enabled;
+  const hasLookupTables = model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable');
   const cellAttrs = model.attributes
     .filter(a => !a.isModelAttribute)
     .map(a => ({ id: a.id, type: a.type }));
@@ -1542,10 +1543,12 @@ function buildLoopParams(model: CAModel): {
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
   parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
   // Variegated Cells: r/w orientation arrays + flat facePatternLookup +
-  // _interactionTables object. Always emit these when the feature is on so
-  // the worker's buildLoopArgs (in sim.worker.ts) and this signature stay
-  // in lockstep. `order` is always last for async mode.
-  if (variegated) parts.push('r_orientation', 'w_orientation', '_facePatternLookup', '_interactionTables');
+  // _lookupTables object. Emitted when variegated OR when the model has any
+  // Lookup Table model attr (tag×tag tables need _lookupTables without
+  // variegation — orientation/facePatternLookup are then null but unused). The
+  // worker's buildLoopArgs (sim.worker.ts) mirrors this exact gate + order.
+  // `order` is always last for async mode.
+  if (variegated || hasLookupTables) parts.push('r_orientation', 'w_orientation', '_facePatternLookup', '_lookupTables');
   // Async-only: per-cell Uint8Array, set by `markCellUpdated` and tested at
   // the top of every cell iteration. Worker resets it before each step.
   if (isAsync) parts.push('order', '_skipped');
@@ -1558,12 +1561,13 @@ function buildCellParams(model: CAModel): string {
   const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
   const neighborhoods = model.neighborhoods;
   const variegated = !!model.variegatedCells?.enabled;
+  const hasLookupTables = model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable');
   const parts: string[] = ['idx', 'total', 'W', 'H'];
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
   parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
-  if (variegated) parts.push('r_orientation', 'w_orientation', '_facePatternLookup', '_interactionTables');
+  if (variegated || hasLookupTables) parts.push('r_orientation', 'w_orientation', '_facePatternLookup', '_lookupTables');
   return parts.join(', ');
 }
 
@@ -1851,7 +1855,20 @@ export function compileGraph(
   // of the palette in that case, so the user can't easily place them.
   const variegationOn = !!model.variegatedCells?.enabled;
   const variegatedSourceAttrId = variegationOn ? (model.variegatedCells?.sourceAttributeId ?? '') : '';
-  const variegatedLabelCount = variegationOn ? ((model.variegatedCells?.faceLabels.length ?? 0) + 1) : 1;
+  // Per-table row/col dimensions, resolved from each lookup table's key sources
+  // (face palette → ['none', ...labels]; tag attribute → tagOptions). Replaces
+  // the old single global labelCount — supports rectangular + multi-palette and
+  // tag×tag tables that need no variegation at all.
+  const lookupTableDims = (tableId: string): { rowCount: number; colCount: number } => {
+    const attr = model!.attributes.find(
+      a => a.id === tableId && a.isModelAttribute && a.type === 'lookupTable',
+    );
+    if (!attr) return { rowCount: 1, colCount: 1 };
+    return {
+      rowCount: resolveKeyLabels(attr.rowKeySource, model!).length || 1,
+      colCount: resolveKeyLabels(attr.colKeySource, model!).length || 1,
+    };
+  };
   // (dr, dc) offsets for each of the 8 face slots, indexed by direction index.
   // Order matches DIRECTION_TAGS exactly: N, NE, E, SE, S, SW, W, NW.
   const DIRECTION_OFFSETS: ReadonlyArray<readonly [number, number]> = [
@@ -1884,17 +1901,18 @@ export function compileGraph(
         node.data.config._boundaryTreatment = boundaryTreatment;
         node.data.config._sourceAttrId = variegatedSourceAttrId;
       }
-      if (node.data.nodeType === 'lookupInteraction') {
-        node.data.config._labelCount = variegatedLabelCount;
-      }
-      if (node.data.nodeType === 'interactionTableMap') {
-        node.data.config._labelCount = variegatedLabelCount;
+      if (node.data.nodeType === 'lookupInteraction' || node.data.nodeType === 'interactionTableMap') {
+        // Inject the per-table row count + col stride. The emit indexes the flat
+        // table as `row * _colCount + col`, so the column count is the stride.
+        const dims = lookupTableDims(String(node.data.config.tableId ?? ''));
+        node.data.config._rowCount = dims.rowCount;
+        node.data.config._colCount = dims.colCount;
       }
       if (node.data.nodeType === 'getConstant' && node.data.config.constType === 'faceLabel') {
-        // Resolve face-label NAME to its compile-time index. Implicit 'none' is 0;
-        // user labels start at 1 (1-based into faceLabels[]). Unresolved cases
-        // (variegation off, blank, or unknown label) emit -1 as a sentinel so
-        // the consumer can detect misconfiguration.
+        // Resolve face-label NAME to its compile-time index within the chosen
+        // palette. Implicit 'none' is 0; user labels are 1-based into the
+        // palette's labels[]. Unresolved cases (variegation off, blank, unknown
+        // label, missing palette) emit -1 as a sentinel for the consumer.
         const raw = String(node.data.config.constValue ?? 'none');
         let idx: number;
         if (!variegationOn) {
@@ -1902,8 +1920,10 @@ export function compileGraph(
         } else if (raw === 'none') {
           idx = 0;
         } else {
-          const labels = model!.variegatedCells?.faceLabels ?? [];
-          const i = labels.indexOf(raw);
+          const palettes = model!.variegatedCells?.facePalettes ?? [];
+          const palId = String(node.data.config.facePaletteId ?? '');
+          const pal = palettes.find(p => p.id === palId) ?? palettes[0];
+          const i = (pal?.labels ?? []).indexOf(raw);
           idx = i >= 0 ? i + 1 : -1;
         }
         node.data.config._resolvedFaceLabelIndex = idx;
@@ -2159,8 +2179,8 @@ export function compileGraph(
   const neighborhoods = model.neighborhoods.map(n => ({ id: n.id }));
   for (const n of neighborhoods) { omParamParts.push(`nIdx_${n.id}`); omParamParts.push(`nSz_${n.id}`); }
   omParamParts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_linkedResults', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
-  if (model.variegatedCells?.enabled) {
-    omParamParts.push('r_orientation', 'w_orientation', '_facePatternLookup', '_interactionTables');
+  if (model.variegatedCells?.enabled || model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable')) {
+    omParamParts.push('r_orientation', 'w_orientation', '_facePatternLookup', '_lookupTables');
   }
   const omParams = omParamParts.join(', ');
 

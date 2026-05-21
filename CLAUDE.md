@@ -426,6 +426,7 @@ The app is functional with these major systems:
 - Standalone indicators support all types: bool, integer, float, tag — stored as JS numbers in `_indicators` object
 - Linked indicators aggregate cell attribute arrays: Frequency (count per value) or Total (sum)
 - Both kinds have Accumulation Mode: per-generation (reset each step) or accumulated (running total, reset on simulator reset)
+- **X-axis** (linked only): `generation` (default — classic time-history) or `rows`/`columns` (a live **spatial histogram** = chromatogram; see Spatial Indicators below). Standalone indicators are Generation-only (a graph-written scalar has no spatial extent).
 
 ### Standalone Indicator Nodes:
 - `GetIndicatorNode` (value, `'data'`): reads `_indicators[indicatorId]`
@@ -441,15 +442,16 @@ The app is functional with these major systems:
 - `cachedIndicators: Record<string, number>` — mutable during step function execution
 - `standalonePerGenIds` — per-generation indicators reset to defaults before each step
 - `computeLinkedIndicators()` — iterates typed arrays after each step (frequency, total, with float binning)
+- `computeSpatialIndicators()` — the spatial (rows/columns) sibling: bins each cell by position and aggregates per bin using the SAME per-type branches; writes `Record<seriesKey, number[]>` into `linkedResults` (see Spatial Indicators)
 - `linkedAccumulators` — running state for accumulated linked indicators
-- Indicator values included in `stepped` message as `indicators: Record<string, number | Record<string, number>>`
+- Indicator values included in `stepped` message as `indicators: Record<string, number | Record<string, number> | Record<string, number[]>>` (the `number[]` arm carries spatial series)
 - `initIndicators()` called on init, `resetIndicators()` on reset/randomize
 - `updateIndicators` message rebuilds indicator state when definitions change
 
 ### Modeler UI:
 - `IndicatorsPanelSection` component rendered inside `PropertiesPanelContent`
 - Standalone: type selector, default value (type-specific), tag options editor
-- Linked: attribute dropdown (cell attrs only), aggregation (type-dependent), bin count (float + frequency only)
+- Linked: attribute dropdown (cell attrs only), aggregation (type-dependent), **Value Bins** (float + frequency only — renamed from "Bin Count" to disambiguate from spatial bins), **X Axis** (Generation/Rows/Columns), and when spatial: **Bin Mode** (Slices/Absolute) + Number of Slices / rows-per-bin
 - Both: accumulation mode radio, watched toggle, delete button
 
 ### Simulator UI:
@@ -459,6 +461,19 @@ The app is functional with these major systems:
 - History shape in `SimulatorView.indicatorHistoryRef` is polymorphic: `number[]` for scalars, `Record<category, number[]>` for frequency maps. Capped at 500 samples per series.
 - `chartExpandedRef` is populated by `IndicatorDisplay`'s render-phase ref-compare notification. Do NOT reset it in `initWorker`'s useEffect — that runs AFTER the child's render and wipes the populated set, so the first stepped messages collect no history (symptom: scalar sparklines stay blank until manual collapse/expand).
 - Eye icon per indicator toggles `watched` state
+- Spatial indicators (`xAxis` rows/columns) render `IndicatorSpatialChart` (one curve per series over position bins) — bypasses the scalar/freq branches, hides the viz-mode cycle button. `IndicatorDisplay` takes `gridWidth`/`gridHeight` props (live dims) to label the X-axis with real row/column positions.
+
+### Spatial Indicators (chromatogram X-axis — purely a measurement/visualization layer):
+- A spatial indicator plots value **per position bin** along the grid's `rows` or `columns` axis instead of over `generation` — reproducing the chromatogram plots in the Kier chromatography/enantiomer papers (population vs column position, one curve per species). **No graph nodes, no compiler changes, no per-cell position read** — it's one extra CPU pass in the worker, opt-in per linked indicator.
+- **Why linked-only:** spatial binning = "scan all cells, bin each by position" = a cell-aggregation, which is exactly what linked indicators already do. Standalone indicators (a single graph-written scalar) have no spatial extent and stay Generation-only.
+- **Data shape:** the per-step value is `Record<seriesKey, number[]>` — each array indexed by **position bin** (length = bin count). Each value-bucket the linked path already produces becomes a **series** (a curve): bool → `true`/`false`; tag → one per option (the chromatogram's per-species curves); integer freq → one per distinct value; integer/float **total** → single `total` (per-bin sum); float freq → one per **value-bin** (2-D value×position histogram). color/neighborIndex unchanged.
+- **Two distinct bin counts — don't conflate:** `binCount` = **value** bins (float frequency only); `spatialBinCount` (slices mode) / `spatialBinSize` (absolute mode) = **position** bins. Only float+frequency uses both (value-bins → series, position-bins → array index).
+- **Schema** (`Indicator`, all optional, additive — no migration): `xAxis?: 'generation'|'rows'|'columns'`, `spatialBinMode?: 'slices'|'absolute'` (default slices), `spatialBinCount?` (slices; default 50, clamped [2, axisLen]), `spatialBinSize?` (absolute; rows/cols per bin, default 1 → B = ceil(axisLen/size)).
+- **Worker** (`computeSpatialIndicators` in [sim.worker.ts](src/simulator/engine/sim.worker.ts)): mirrors `computeLinkedIndicatorsFromBuffer` (same per-type branches + sub-attr parent-match guard) but bins by `row = ⌊i/width⌋` / `col = i % width`. `linkedDefs` carry the xAxis + bin config; `hasSpatialIndicators` gates the per-step call. Writes `linkedResults[id]` as `Record<key, number[]>`.
+- **Buffer/timing (the critical gotcha):** called **post-step, after the buffer swap/copy**, so `readAttrs` holds the just-computed generation on JS (ref-swap) AND WASM (w→r copy) — the same buffer a later `getState` reads, which is what makes the parity check exact. On WebGPU it runs inside `finalizeStepWebGPU` after the attrs readback; spatial source attrs (and their parents, for sub-attrs) are force-added to `watchedAttrIds` so the selective readback always pulls them even when a sibling generation-axis indicator on the same attr is GPU-reduced.
+- **Never accumulated:** spatial is always a live per-step snapshot (the accumulation loop + history collection both skip it; SimulatorView detects array-valued entries structurally). End conditions exclude spatial indicators (a spatial value isn't a scalar/category count); the end-condition target dropdown filters them out.
+- **WebGPU:** spatial indicators are CPU-only — `buildReductionPlan` ([webgpuReduce.ts](src/simulator/engine/webgpuReduce.ts)) skips any `xAxis` rows/columns def.
+- **Verified** (tsc + cross-target parity): per-bin series match an independent `getState` re-bin with 0 mismatches and sum-of-bins == per-value total, on JS (columns) / WASM (rows) / WebGPU (rows), both slices and absolute modes.
 
 ### Manual Brush (runtime-only Input Mapping):
 - Special "Manual" tab that always appears as the rightmost entry in the right-panel brush mapping strip, alongside the model's color-input mappings. Renders even when the model has zero color-input mappings (also auto-selected on load in that case). Does NOT appear in the Modeler's Mappings tab — it's purely a simulator UX layer with no model-schema counterpart.
@@ -716,10 +731,10 @@ All three compile targets run `canonicalizeAccessorEdges` from [accessorCSE.ts](
 
 ## Variegated Cells (Directional Interactions) — opt-in feature, all three compile targets
 
-Opt-in support for chemistry CA models where the interaction between two cells depends on **which face of one meets which face of the other** (water-aabb, micelle/bilayer formation, chirality, structured-solvent dynamics). Off by default; the Properties → Execution checkbox (`model.variegatedCells.enabled`) unlocks a dedicated sidebar panel, a per-cell orientation buffer, an Init Event entry-point, the Interaction Table attribute type, and a set of orientation/face nodes. Models with the feature off behave byte-identically (the regions are stub-allocated).
+Opt-in support for chemistry CA models where the interaction between two cells depends on **which face of one meets which face of the other** (water-aabb, micelle/bilayer formation, chirality, structured-solvent dynamics). Off by default; the Properties → Execution checkbox (`model.variegatedCells.enabled`) unlocks a dedicated sidebar panel, a per-cell orientation buffer, an Init Event entry-point, face-label palettes, and a set of orientation/face nodes. (The Lookup Table attribute type is available independently — a tag×tag table needs no variegation.) Models with the feature off behave byte-identically (the regions are stub-allocated).
 
 ### Single source of truth
-- `src/modeler/vpl/compiler/variegation.ts` is shared by the JS/WASM/WebGPU compilers AND the worker runtime to prevent byte-level drift: `DIRECTION_TAGS` (`[N,NE,E,SE,S,SW,W,NW]`), `buildDirectionMap`, `buildFacePatternLookup`, `normalizeInteractionTable`. Any new variegation math goes here, never inlined per-target.
+- `src/modeler/vpl/compiler/variegation.ts` is shared by the JS/WASM/WebGPU compilers AND the worker runtime to prevent byte-level drift: `DIRECTION_TAGS` (`[N,NE,E,SE,S,SW,W,NW]`), `buildDirectionMap`, `buildFacePatternLookup` (palette-aware), `normalizeLookupTable(values, rowLabels, colLabels)` (rectangular), `resolveKeyLabels(source, model)`. Any new variegation math goes here, never inlined per-target.
 
 ### Orientation
 - Per-cell **orientation** = 0–3 (0/90/180/270° clockwise rotation), auto-allocated when the feature is on. Defaults to 0; sentinel cell carries fixed boundary value 0.
@@ -727,15 +742,15 @@ Opt-in support for chemistry CA models where the interaction between two cells d
 - Orientation-reading nodes are `NEVER_INVARIANT` (loopInvariant.ts) so emits stay per-cell.
 
 ### Schema (all additive, no version bump)
-- `CAModel.variegatedCells?: VariegatedCellsConfig` — `{ enabled, sourceAttributeId, faceLabels: string[], facePatterns: FacePattern[], edgesOnly? }`.
-- `FacePattern` — named 8-slot layout (N/NE/E/SE/S/SW/W/NW; edges-only disables the 4 corners). The implicit `none` label (index 0) covers unassigned slots + non-variegated neighbours.
-- `AttributeType += 'interactionTable'` — a float matrix keyed by two face labels (rows × cols = `['none', ...faceLabels]`). New `Attribute` fields: `facePatternAssignments?` (tagOptionId → facePatternId, on the variegation source attr), `symmetric?` (hide lower triangle + mirror edits), `tableValues?` (flattened matrix). Live-tunable in the simulator like any model attribute (worker `updateInteractionTable` message).
+- `CAModel.variegatedCells?: VariegatedCellsConfig` — `{ enabled, sourceAttributeId, facePalettes: FaceLabelPalette[], facePatterns: FacePattern[] }`. **Multiple palettes**: `FaceLabelPalette = { id, name, labels: string[] }`. Each species → one pattern → one palette, so `facePatternLookup` stays ONE species×8 Int32Array (built palette-aware in `buildFacePatternLookup`); `getFacingLabels` returns per-species-palette indices — no per-palette buffers.
+- `FacePattern` — `{ id, name, paletteId, layoutMode, faces }`. Named 8-slot layout (N/NE/E/SE/S/SW/W/NW; edges-only disables the 4 corners) drawing labels from `paletteId`. Implicit `none` (index 0) covers unassigned slots + non-variegated neighbours.
+- **Lookup Tables** (`AttributeType += 'lookupTable'`, renamed from `interactionTable`) — a (possibly **rectangular**) float matrix with independent `rowKeySource` + `colKeySource` (`LookupKeySource = { kind:'facePalette', paletteId } | { kind:'tagAttribute', attributeId }`). Face-palette axis labels = `['none', ...palette.labels]`; tag-attribute axis labels = the tag's `tagOptions` (no implicit none). A pure tag×tag table needs NO variegation. Row-major storage `row * colCount + col` (stride = colCount). `Attribute` fields: `rowKeySource?`/`colKeySource?`, `symmetric?` (only when both sources identical), `tableValues?` (sparse `rowLabel → colLabel → float`), plus `facePatternAssignments?` on the variegation source. `resolveKeyLabels(source, model)` (variegation.ts) is the single source of truth for axis labels+dim. Live-tunable via worker `updateLookupTable`. Migration `lookupTableMigration.ts` (LOAD_MODEL): `interactionTable`→`lookupTable`, `faceLabels`→`facePalettes[0]`, defaults both sources to that palette (square, preserves old behaviour).
 
-### Node set (all gated by `requirements.variegated`, hidden from palette when off)
-- Readers (`data`): `getOrientation`, `getFacingOrientation` (neighbour you face in a config direction, no neighborhood), `getNeighborOrientationByIndex` (read-only, both modes), `getFacingLabels` (multi-output `myFaceLabel`/`theirFaceLabel`), `getAllFacingLabels` (8-slot Moore or 4-slot `cardinalsOnly`), `interactionTableMap` (vectorised lookup over parallel face arrays).
-- Logic: `lookupInteraction` (index an Interaction Table by two labels → float; loop-invariant when both labels are).
+### Node set (orientation/facing/face-label nodes gated by `requirements.variegated`; the two table nodes are NOT — they work with tag×tag tables sans faces)
+- Readers (`data`): `getOrientation`, `getFacingOrientation` (neighbour you face in a config direction, no neighborhood), `getNeighborOrientationByIndex` (read-only, both modes), `getFacingLabels` (multi-output `myFaceLabel`/`theirFaceLabel`), `getAllFacingLabels` (8-slot Moore or 4-slot `cardinalsOnly`), `interactionTableMap` (label "Table Map"; vectorised lookup over parallel index arrays).
+- Logic: `lookupInteraction` (label "Table Lookup"; index a Lookup Table by row+col → float; loop-invariant when both indices are).
 - Writers (`output`): `setOrientation` (sync+async), `setFacingOrientation` (async-only), `setNeighborOrientationByIndex` (async-only). `moveSelfToNeighbor` requires variegated only when `transferOrientation`.
-- `getConstant` gains a `faceLabel` constType (gated on variegated) — `preResolveVariegatedNodes` (compile.ts) bakes the configured face-label NAME into a compile-time integer index (none=0; user labels 1-based). Same pre-resolve injects `_resolvedDirIdx`/`_resolvedDr`/`_resolvedDc` for facing nodes and `_labelCount` for `lookupInteraction`/`interactionTableMap`.
+- `getConstant` gains a `faceLabel` constType (gated on variegated) with a `facePaletteId` selector — `preResolveVariegatedNodes` (compile.ts) bakes the face-label NAME into a compile-time index within the chosen palette (none=0; user labels 1-based). Same pre-resolve injects `_resolvedDirIdx`/`_resolvedDr`/`_resolvedDc` for facing nodes and per-table `_rowCount`/`_colCount` (col=stride) for `lookupInteraction`/`interactionTableMap`.
 
 ### Init Event entry-point (`initEvent`)
 - Singleton entry-point that runs **once per cell on simulator Reset** (after defaults applied, before the first colour pass — NOT on Randomize or Load State). Outputs `x`, `y`, `maxX`, `maxY` + a `DO` flow chain. Useful beyond variegation: any procedural initial state (gradients, deterministic noise, random orientations). Compiled as a separate root (`compileGraph*` emit an `init` entry alongside `step`); worker `runInit` dispatches it before the first step. On all three targets — WASM exports `init`, WebGPU builds an init pipeline.
@@ -748,7 +763,7 @@ Opt-in support for chemistry CA models where the interaction between two cells d
 - 5 reducer actions: `UPDATE_VARIEGATED_CELLS`, `ADD/REMOVE/DUPLICATE/UPDATE_FACE_PATTERN`. Tag-option rename remaps `facePatternAssignments` keys; face-pattern delete clears assignments; deleting the variegation source attr clears `sourceAttributeId`; changing it away from tag detaches.
 
 ### Panel UX
-- `ActivityBar` elides the **V** tab entirely when `variegatedCells.enabled` is false; `ModelerView` auto-switches the active panel to Properties if the user disables variegation while the V panel is open. `VariegatedCellsPanelContent` uses the canonical PanelContent.module.css primitives (source attribute selector, face-label palette, face-patterns list with 3×3 grid widget). `InteractionTableEditor` is shared between the Attributes panel and the simulator right panel.
+- `ActivityBar` elides the **V** tab entirely when `variegatedCells.enabled` is false; `ModelerView` auto-switches the active panel to Properties if the user disables variegation while the V panel is open. `VariegatedCellsPanelContent` uses the canonical PanelContent.module.css primitives (source attribute selector, **multi-palette** Face Label Palettes editor, face-patterns list with a palette selector + 3×3 grid widget). `LookupTableEditor` (renamed from `InteractionTableEditor`, now takes `rowLabels`/`colLabels`) is shared between the Attributes panel (with row/col key-source pickers) and the simulator right panel.
 
 ### Gotchas
 - The worker's `AttrDef` and SimulatorView's `init` message must carry the variegated payload (facePatternLookup + interaction tables + orientation) or the regions silently no-op. Interaction-table typed-array VIEWS over `wasmMemory` must be COPIED into, never reassigned (the usual view discipline).
@@ -757,7 +772,7 @@ Opt-in support for chemistry CA models where the interaction between two cells d
 
 ### Amphiphile sample model + interaction-table presets
 - `scripts/gen-amphiphile.mjs` programmatically builds `public/models/Amphiphile.gcaproj` (mirrors `gen-grayscott.mjs`), implementing the Kier book Example 5.3 move-into-empty rule: every non-empty cell rolls Bernoulli(P_break = ∏ P_B over neighbours), samples a direction by cumulative J-weighting over empty cardinals, moves atomically into the chosen empty cell; free amphis (all 4 cardinals empty) rotate uniformly. Re-running the script preserves any later-added `simulationState` + thumbnail in the existing output (like gen-grayscott). Showcases Variegated Cells + Local Variables + chemistry primitives end-to-end.
-- `SimulationState.interactionTables?: Record<attrId, Record<row, Record<col, number>>>` extends presets to capture/restore interaction tables. `applySimulationState` restores them to BOTH the worker (`updateInteractionTable`) AND model state (`updateAttribute`), so the Properties panel + `.gcaproj` save reflect the preset. Amphiphile ships 9 presets (book Example 5.3 defaults + the 8 Kier 1996 Table I parameter sets).
+- `SimulationState.interactionTables?: Record<attrId, Record<row, Record<col, number>>>` extends presets to capture/restore lookup tables (field name kept for preset back-compat). `applySimulationState` restores them to BOTH the worker (`updateLookupTable`, with per-table resolved row/col labels) AND model state (`updateAttribute`), so the Properties panel + `.gcaproj` save reflect the preset. Amphiphile ships 9 presets (book Example 5.3 defaults + the 8 Kier 1996 Table I parameter sets).
 - **`attrsStructurallyEqual` reinit guard** (worker, [SimulatorView.tsx](src/simulator/SimulatorView.tsx)): the model→worker reinit trigger compares only the fields the init layout depends on (id, type, isModelAttribute, defaultValue, boundaryValue, tagOptions, parentAttribute*/Values, undefinedValue, facePatternAssignments, neighborhoodHintId) — NOT reference equality on `model.attributes`, and NOT live-tunable fields (name, description, hasBounds/min/max, symmetric, tableValues). Without this, every `updateAttribute` (preset apply, Reset-to-Default, per-cell table edit) wiped the grid via full re-init. Latent bug, not just a preset prerequisite.
 
 ---
@@ -796,7 +811,7 @@ Dynamic-input port handling required adding edge-map iteration to BOTH the JS `c
 CaNode UI: list of attribute-slot rows with dropdown + `−` button, `+ Slot` button, `Transfer Orientation` checkbox. Replaces the 5-node Amphiphile move sequence (sequence + 4 setters) with 1 node.
 
 ### Pre-resolve config injections (compile.ts)
-`interactionTableMap` joins `lookupInteraction` in the variegation pre-resolve pass that injects `_labelCount` into the node's config from `faceLabels.length + 1`. JS-target only; WASM/WebGPU read `ctx.layout.interactionTableLabelCount` directly.
+`interactionTableMap` joins `lookupInteraction` in the variegation pre-resolve pass that injects per-table `_rowCount`/`_colCount` (col = row-major stride) resolved via the table's `rowKeySource`/`colKeySource` → `resolveKeyLabels(...).length`. JS-target only; WASM/WebGPU read per-table `ctx.layout.interactionTableOffsets[id].colCount` directly (the old single global `interactionTableLabelCount` is gone). The Lookup Table memory region is allocated whenever the model has any `lookupTable` model attr — independent of variegation (WASM `lookupTables` layout param; WebGPU varAux). JS emits the `_lookupTables` param when `variegated || hasLookupTables`.
 
 ### Behavioural notes
 - `groupOperator.weightedRandom` always advances the RNG even on empty/zero-sum input. Models that relied on conditional RNG skipping would see different sequences — but no existing model uses this pattern (the op is new).
