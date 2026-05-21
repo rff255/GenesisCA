@@ -8,6 +8,7 @@ import { getInlineValue } from './inlinePort';
 import { INVALID_NI, packNI, NI_ARRAY_PRODUCERS } from './niCodec';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId } from './sinkAnalysis';
 import { canonicalizeAccessorEdges } from './accessorCSE';
+import { injectLinkedOutputMappings } from './linkedOutputMappings';
 import {
   isSubAttribute,
   subAttrInfo,
@@ -58,7 +59,7 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
 // Compile a single root's subgraph (per-cell body)
 // ---------------------------------------------------------------------------
 
-const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels']);
+const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'categoricalColor', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels']);
 
 /** Check if a node's data uses multi-output variable naming */
 function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
@@ -1675,12 +1676,20 @@ export function compileGraph(
   graphEdges: GraphEdge[],
   model?: CAModel,
 ): CompileResult {
-  if (graphNodes.length === 0) {
-    return { stepCode: '', initCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'No nodes in graph.' };
-  }
-
   if (!model) {
     return { stepCode: '', initCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'Model required for SoA compilation.' };
+  }
+
+  // Linked Output Mappings — synthesize the auto color pass for any mapping
+  // marked `linked` (ephemeral; rebuilt from the live model each compile). Done
+  // BEFORE the empty-graph check so a model whose only graph is a linked color
+  // pass (no Step/user nodes) still compiles, and before CSE + buildAdjacency so
+  // the synthetic nodes participate normally. (WASM/WebGPU inject post-expand
+  // and have no empty-graph early return, so this keeps the three targets aligned.)
+  ({ nodes: graphNodes, edges: graphEdges } = injectLinkedOutputMappings(graphNodes, graphEdges, model));
+
+  if (graphNodes.length === 0) {
+    return { stepCode: '', initCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'No nodes in graph.' };
   }
 
   const isAsync = model.properties.updateMode === 'asynchronous';

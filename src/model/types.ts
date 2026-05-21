@@ -80,6 +80,27 @@ export interface Neighborhood {
   includeCentralCell?: boolean;
 }
 
+/** A plain 0–255 RGB triple used by Linked Output Mapping palettes. */
+export interface RGB { r: number; g: number; b: number; }
+
+/** A gradient stop for a Linked Output Mapping scale. `position` is in [0,1]
+ *  (same space as the Color Scale node) and is mapped onto [linkedMin, linkedMax]
+ *  at compile time. */
+export interface ColorStop { position: number; r: number; g: number; b: number; }
+
+/** User-overridable colors for a Linked Output Mapping. Absent sub-fields fall
+ *  back to auto-generated defaults at compile time (see linkedOutputMappings.ts). */
+export interface LinkedColorSet {
+  /** bool (2 stops at positions 0/1) / float / integer gradient stops. Stores
+   *  the full Color-Scale stop list (positions + colors), so palette presets
+   *  with non-uniform spacing round-trip exactly. */
+  gradient?: ColorStop[];
+  /** Interpolation curve for the gradient (Color Scale method); default linear. */
+  method?: string;
+  /** tag: per tag-option color; index i == tag option i. */
+  tag?: RGB[];
+}
+
 /** A color mapping (attribute-to-color for visualization, or color-to-attribute for interaction) */
 export interface Mapping {
   id: string;
@@ -89,6 +110,20 @@ export interface Mapping {
   redDescription: string;
   greenDescription: string;
   blueDescription: string;
+  // --- Linked Output Mappings (Attribute→Color only; ignored when isAttributeToColor=false) ---
+  /** When true, the color pass is auto-generated from `linkedAttributeId`.
+   *  Absent/false = Standalone (the classic hand-built color graph). */
+  linked?: boolean;
+  /** Cell attribute whose value drives the auto color pass. Resolved live by id
+   *  at compile time; an empty/invalid/deleted id makes the mapping behave as
+   *  not-linked (graceful default colors). */
+  linkedAttributeId?: string;
+  /** float/integer gradient domain. Seeded from the attribute's bounds at link
+   *  time, user-editable thereafter. */
+  linkedMin?: number;
+  linkedMax?: number;
+  /** Optional user color overrides; absent → auto defaults. */
+  linkedColors?: LinkedColorSet;
 }
 
 export type BoundaryTreatment = 'constant' | 'torus';

@@ -47,6 +47,7 @@ import { ProportionMapNode } from './ProportionMapNode';
 import { InterpolationNode } from './InterpolationNode';
 import { ValueSwitchNode } from './ValueSwitchNode';
 import { ColorScaleNode } from './ColorScaleNode';
+import { CategoricalColorNode } from './CategoricalColorNode';
 import { SwitchNode } from './SwitchNode';
 import { AggregateNode } from './AggregateNode';
 import { GetNeighborAttributeByTagNode } from './GetNeighborAttributeByTagNode';
@@ -145,6 +146,7 @@ const ALL_NODES: NodeTypeDef[] = [
   SetCellGlyphNode,
   GetColorConstantNode,
   ColorScaleNode,
+  CategoricalColorNode,
   // Indicators
   GetIndicatorNode,
   SetIndicatorNode,

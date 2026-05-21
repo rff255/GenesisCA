@@ -22,6 +22,7 @@
 import type { Attribute, CAModel, GraphNode, GraphEdge } from '../../../../model/types';
 import { getNodeDef } from '../../nodes/registry';
 import { readColorScaleStops } from '../../nodes/ColorScaleNode';
+import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/CategoricalColorNode';
 import {
   ValType, F64, I32, OP_F64_ABS, OP_F64_ADD, OP_F64_CONVERT_I32_S, OP_F64_CONVERT_I32_U, OP_F64_DIV,
   OP_F64_EQ, OP_F64_FLOOR, OP_F64_GE, OP_F64_GT, OP_F64_LE, OP_F64_LT,
@@ -41,6 +42,7 @@ import { classifyLoopInvariant } from '../loopInvariant';
 import { getInlineValue, parseInlineNum } from '../inlinePort';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } from '../sinkAnalysis';
 import { canonicalizeAccessorEdges } from '../accessorCSE';
+import { injectLinkedOutputMappings } from '../linkedOutputMappings';
 import { subAttrInfo } from '../subAttribute';
 import { emitWasm } from '../expression/emitWasm';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
@@ -2218,6 +2220,53 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
           buildChain(0);
         },
       );
+    }
+
+    const rRef: LocalRef = { localIdx: rLoc, valtype: I32 };
+    const gRef: LocalRef = { localIdx: gLoc, valtype: I32 };
+    const bRef: LocalRef = { localIdx: bLoc, valtype: I32 };
+    setCachedPort(ctx, node.id, 'r', rRef);
+    setCachedPort(ctx, node.id, 'g', gRef);
+    setCachedPort(ctx, node.id, 'b', bRef);
+    return rRef;
+  },
+
+  // -- categoricalColor: maps an integer index to a flat RGB color from an
+  //    N-entry palette (no blending). `if (k===i) {entry i} else ... else default`. --
+  categoricalColor: ({ ctx, node, inputs }) => {
+    const idx = inputs['index'] ?? { inline: true, value: 0, valtype: I32 };
+    const entries = readCategoricalEntries(node.data.config);
+    const d = readCategoricalDefault(node.data.config);
+
+    const em = ctx.emitter;
+    const rLoc = em.allocLocal(I32);
+    const gLoc = em.allocLocal(I32);
+    const bLoc = em.allocLocal(I32);
+
+    const writeConst = (r: number, g: number, b: number) => {
+      em.i32Const(r | 0); em.localSet(rLoc);
+      em.i32Const(g | 0); em.localSet(gLoc);
+      em.i32Const(b | 0); em.localSet(bLoc);
+    };
+
+    if (entries.length === 0) {
+      writeConst(d.r, d.g, d.b);
+    } else {
+      const kLoc = em.allocLocal(I32);
+      pushValueAs(em, idx, I32);
+      em.localSet(kLoc);
+      const buildChain = (i: number) => {
+        if (i >= entries.length) { writeConst(d.r, d.g, d.b); return; }
+        const e = entries[i]!;
+        em.localGet(kLoc);
+        em.i32Const(i);
+        em.op(OP_I32_EQ);
+        em.ifThenElse(
+          () => writeConst(e.r, e.g, e.b),
+          () => buildChain(i + 1),
+        );
+      };
+      buildChain(0);
     }
 
     const rRef: LocalRef = { localIdx: rLoc, valtype: I32 };
@@ -6735,6 +6784,11 @@ export function compileGraphWasm(
   }
   graphNodes = expanded.nodes;
   graphEdges = expanded.edges;
+
+  // Linked Output Mappings — synthesize the auto color pass for `linked`
+  // mappings (ephemeral; rebuilt from the live model each compile). After macro
+  // expansion, before CSE + adjacency so the synthetic nodes are flat & deduped.
+  ({ nodes: graphNodes, edges: graphEdges } = injectLinkedOutputMappings(graphNodes, graphEdges, model));
 
   // Accessor CSE — sync-mode only. Runs AFTER macro expansion so that
   // duplicate accessors inside (or across) macro instances also get merged.

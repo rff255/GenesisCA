@@ -26,6 +26,7 @@ import {
 } from './encoder';
 import { getNodeDef } from '../../nodes/registry';
 import { readColorScaleStops } from '../../nodes/ColorScaleNode';
+import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/CategoricalColorNode';
 import { parseHandleId } from '../../types';
 import {
   detectWebGPUIncompatibilities, detectWebGPUModelIncompatibilities,
@@ -34,6 +35,7 @@ import { getInlineValue, parseInlineNum } from '../inlinePort';
 import { INVALID_NI, packNI, NI_ARRAY_PRODUCERS } from '../niCodec';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } from '../sinkAnalysis';
 import { canonicalizeAccessorEdges } from '../accessorCSE';
+import { injectLinkedOutputMappings } from '../linkedOutputMappings';
 import { subAttrInfo, subAttributesOf } from '../subAttribute';
 import { emitWgsl } from '../expression/emitWgsl';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
@@ -1824,6 +1826,44 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return rRef;
   },
 
+  // -- categoricalColor: integer index → flat RGB from an N-entry palette
+  //    (no blending). `if (k==i) {entry i} else ... else default`. --
+  categoricalColor: ({ ctx, node, inputs }) => {
+    const idx = castTo(inputs['index'] ?? { expr: '0', type: 'i32' }, 'i32');
+    const entries = readCategoricalEntries(node.data.config);
+    const d = readCategoricalDefault(node.data.config);
+
+    const rName = fresh(ctx, 'ccr');
+    const gName = fresh(ctx, 'ccg');
+    const bName = fresh(ctx, 'ccb');
+    ctx.lines.push(`  var ${rName}: i32;`);
+    ctx.lines.push(`  var ${gName}: i32;`);
+    ctx.lines.push(`  var ${bName}: i32;`);
+
+    const writeConst = (r: number, g: number, b: number) =>
+      `${rName} = ${r | 0}; ${gName} = ${g | 0}; ${bName} = ${b | 0};`;
+
+    if (entries.length === 0) {
+      ctx.lines.push(`  ${writeConst(d.r, d.g, d.b)}`);
+    } else {
+      const kName = fresh(ctx, 'cck');
+      ctx.lines.push(`  let ${kName}: i32 = ${idx};`);
+      entries.forEach((e, i) => {
+        const head = i === 0 ? `if (${kName} == ${i})` : `else if (${kName} == ${i})`;
+        ctx.lines.push(`  ${head} { ${writeConst(e.r, e.g, e.b)} }`);
+      });
+      ctx.lines.push(`  else { ${writeConst(d.r, d.g, d.b)} }`);
+    }
+
+    const rRef: ValueRef = { expr: rName, type: 'i32' };
+    const gRef: ValueRef = { expr: gName, type: 'i32' };
+    const bRef: ValueRef = { expr: bName, type: 'i32' };
+    setCachedPort(ctx, node.id, 'r', rRef);
+    setCachedPort(ctx, node.id, 'g', gRef);
+    setCachedPort(ctx, node.id, 'b', bRef);
+    return rRef;
+  },
+
   // -- Variegated Cells: Get Orientation ----------------------------------
   // Reads the current cell's orientation from the read buffer. Co-located
   // inside the attrs buffer at orientationWordOffset (see layout.ts).
@@ -3552,11 +3592,16 @@ export function compileGraphWebGPU(
       layout, viewerIds: {}, error: expanded.error,
     };
   }
-  const nodes = expanded.nodes;
+  // Linked Output Mappings — synthesize the auto color pass for `linked`
+  // mappings (ephemeral; rebuilt from the live model each compile). MUST rebind
+  // `nodes` so the output-mapping emission loop below sees the synthetic root —
+  // otherwise WebGPU silently shows default colors while JS/WASM render the pass.
+  const injected = injectLinkedOutputMappings(expanded.nodes, expanded.edges, model);
+  const nodes = injected.nodes;
   // Accessor CSE — sync-mode only. Runs AFTER macro expansion so duplicate
   // accessors inside (or across) macro instances also get merged. No-op when
   // no group has more than one member. See accessorCSE.ts for the full rationale.
-  const edges = canonicalizeAccessorEdges(nodes, expanded.edges, model);
+  const edges = canonicalizeAccessorEdges(nodes, injected.edges, model);
 
   // Stop messages flat list — index in `_stopIdx` (1-based; 0 means no stop).
   // After expansion the graph is flat, so we only walk `nodes` (no macroDef

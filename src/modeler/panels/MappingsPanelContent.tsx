@@ -4,7 +4,159 @@ import { useListReorder } from './useListReorder';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag } from '../vpl/graphState';
+import { defaultGradientStops, defaultTagColor } from '../vpl/compiler/linkedOutputMappings';
+import { GradientStopsEditor, type GradStop } from '../vpl/widgets/GradientStopsEditor';
+import { INTERPOLATION_METHODS } from '../vpl/nodes/interpolationMethods';
+import type { Mapping, RGB, ColorStop } from '../../model/types';
 import styles from './PanelContent.module.css';
+
+function rgbToHex(c: RGB): string {
+  const h = (n: number) => Math.max(0, Math.min(255, n | 0)).toString(16).padStart(2, '0');
+  return `#${h(c.r)}${h(c.g)}${h(c.b)}`;
+}
+function hexToRgb(hex: string): RGB {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim());
+  if (!m) return { r: 0, g: 0, b: 0 };
+  return { r: parseInt(m[1]!, 16), g: parseInt(m[2]!, 16), b: parseInt(m[3]!, 16) };
+}
+
+function ColorSwatch({ value, onChange }: { value: RGB; onChange: (c: RGB) => void }) {
+  return (
+    <input
+      type="color"
+      value={rgbToHex(value)}
+      onChange={e => onChange(hexToRgb(e.target.value))}
+      style={{ width: 34, height: 22, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+    />
+  );
+}
+
+/** Linked-mode editor for an Attribute→Color mapping: attribute picker plus
+ *  per-type palette controls (color pickers + min/max). */
+function LinkedOutputEditor({ selected }: { selected: Mapping }) {
+  const { model, updateMapping } = useModel();
+  const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
+  const attr = model.attributes.find(a => a.id === selected.linkedAttributeId && !a.isModelAttribute);
+
+  const rowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 };
+  const lblStyle: React.CSSProperties = { fontSize: 12 };
+
+  const setGradient = (next: ColorStop[]) =>
+    updateMapping(selected.id, { linkedColors: { ...selected.linkedColors, gradient: next } });
+
+  const handleAttrChange = (id: string) => {
+    const a = model.attributes.find(x => x.id === id);
+    const changes: Partial<Mapping> = { linkedAttributeId: id, linkedColors: undefined };
+    if (a && (a.type === 'float' || a.type === 'integer')) {
+      changes.linkedMin = a.min ?? 0;
+      changes.linkedMax = a.max ?? (a.type === 'integer' ? 10 : 1);
+    } else {
+      changes.linkedMin = undefined;
+      changes.linkedMax = undefined;
+    }
+    updateMapping(selected.id, changes);
+  };
+
+  return (
+    <>
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>Linked attribute</label>
+        <select
+          className={styles.textInput}
+          value={selected.linkedAttributeId ?? ''}
+          onChange={e => handleAttrChange(e.target.value)}
+        >
+          <option value="">Select attribute…</option>
+          {cellAttrs.map(a => (
+            <option key={a.id} value={a.id}>{a.name} ({a.type})</option>
+          ))}
+        </select>
+      </div>
+
+      {attr && attr.type === 'bool' && (() => {
+        const g = selected.linkedColors?.gradient ?? defaultGradientStops('bool');
+        const c0: ColorStop = g[0] ?? { position: 0, r: 0, g: 0, b: 0 };
+        const c1: ColorStop = g[1] ?? { position: 1, r: 255, g: 255, b: 255 };
+        return (
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>Colors</label>
+            <div style={rowStyle}>
+              <ColorSwatch value={c0} onChange={c => setGradient([{ position: 0, ...c }, c1])} />
+              <span style={lblStyle}>False</span>
+            </div>
+            <div style={rowStyle}>
+              <ColorSwatch value={c1} onChange={c => setGradient([c0, { position: 1, ...c }])} />
+              <span style={lblStyle}>True</span>
+            </div>
+          </div>
+        );
+      })()}
+
+      {attr && (attr.type === 'float' || attr.type === 'integer') && (() => {
+        const g = selected.linkedColors?.gradient ?? defaultGradientStops(attr.type);
+        const editorStops: GradStop[] = g.map(s => ({ p: s.position, r: s.r, g: s.g, b: s.b }));
+        const onStops = (next: GradStop[]) =>
+          setGradient(next.map(s => ({ position: s.p, r: s.r, g: s.g, b: s.b })));
+        const min = selected.linkedMin ?? attr.min ?? 0;
+        const max = selected.linkedMax ?? attr.max ?? (attr.type === 'integer' ? 10 : 1);
+        return (
+          <>
+            <div className={styles.field}>
+              <label className={styles.fieldLabel}>Range (maps to the scale&apos;s 0 → 1)</label>
+              <div style={rowStyle}>
+                <input className={styles.textInput} type="number" step="any" lang="en" inputMode="decimal"
+                  style={{ width: 80 }} value={min}
+                  onChange={e => updateMapping(selected.id, { linkedMin: Number(e.target.value) })} />
+                <span style={lblStyle}>min</span>
+                <input className={styles.textInput} type="number" step="any" lang="en" inputMode="decimal"
+                  style={{ width: 80 }} value={max}
+                  onChange={e => updateMapping(selected.id, { linkedMax: Number(e.target.value) })} />
+                <span style={lblStyle}>max</span>
+              </div>
+            </div>
+            <div className={styles.field}>
+              <label className={styles.fieldLabel}>Color scale</label>
+              <GradientStopsEditor stops={editorStops} onChange={onStops} />
+            </div>
+            <div className={styles.field}>
+              <label className={styles.fieldLabel}>Curve</label>
+              <select
+                className={styles.textInput}
+                value={(selected.linkedColors?.method as string) || 'linear'}
+                onChange={e => updateMapping(selected.id, { linkedColors: { ...selected.linkedColors, method: e.target.value } })}
+              >
+                {INTERPOLATION_METHODS.map(m => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+              </select>
+            </div>
+          </>
+        );
+      })()}
+
+      {attr && attr.type === 'tag' && (() => {
+        const opts = attr.tagOptions ?? [];
+        const colorAt = (i: number) => selected.linkedColors?.tag?.[i] ?? defaultTagColor(i, opts.length);
+        const setTagAt = (i: number, c: RGB) => {
+          const arr = opts.map((_, j) => (j === i ? c : colorAt(j)));
+          updateMapping(selected.id, { linkedColors: { ...selected.linkedColors, tag: arr } });
+        };
+        return (
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>Tag colors</label>
+            {opts.map((opt, i) => (
+              <div key={i} style={rowStyle}>
+                <ColorSwatch value={colorAt(i)} onChange={c => setTagAt(i, c)} />
+                <span style={lblStyle}>{opt}</span>
+              </div>
+            ))}
+            {opts.length === 0 && <span style={lblStyle}>This tag attribute has no options.</span>}
+          </div>
+        );
+      })()}
+    </>
+  );
+}
 
 function handleMappingDragStart(mappingId: string, isAttributeToColor: boolean) {
   return (e: React.DragEvent) => {
@@ -176,6 +328,27 @@ export function MappingsPanelContent() {
                 }
               />
             </div>
+            {selected.isAttributeToColor && (
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>Color pass</label>
+                <select
+                  className={styles.textInput}
+                  value={selected.linked ? 'linked' : 'standalone'}
+                  onChange={e => updateMapping(selected.id, { linked: e.target.value === 'linked' })}
+                >
+                  <option value="standalone">Standalone</option>
+                  <option value="linked">Linked</option>
+                </select>
+                <span style={{ color: '#888', fontSize: '0.66rem', marginTop: 3, display: 'block' }}>
+                  {selected.linked
+                    ? 'Auto-generates the color pass from a chosen attribute. If you also add an Output Mapping node for this mapping, the auto pass runs first as a background and your graph overrides the cells it paints.'
+                    : 'You build the color pass by hand in the graph (Output Mapping → … → Set Color Viewer).'}
+                </span>
+              </div>
+            )}
+            {selected.isAttributeToColor && selected.linked && (
+              <LinkedOutputEditor selected={selected} />
+            )}
             <div className={styles.field}>
               <span
                 className={`${styles.colorLabel} ${styles.colorLabelRed}`}

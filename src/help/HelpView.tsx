@@ -189,6 +189,38 @@ export function HelpView() {
             mappings define how user interactions (brush painting, image imports) translate
             colors into cell state changes.
           </p>
+          <h4 className={styles.h3}>Linked Output Mappings</h4>
+          <p className={styles.p}>
+            Each Attribute-to-Color mapping has a <strong>Color pass</strong> mode:
+          </p>
+          <ul className={styles.ul}>
+            <li>
+              <strong>Standalone</strong> &mdash; you build the color pass by hand in the
+              graph (an Output Mapping event node feeding Set Color Viewer). This is the
+              classic behavior.
+            </li>
+            <li>
+              <strong>Linked</strong> &mdash; pick a cell attribute and GenesisCA
+              auto-generates the color pass for you, no graph required:
+              <strong> bool</strong> &rarr; two colors (default black/white),
+              <strong> float</strong> and <strong>integer</strong> &rarr; a color scale
+              spanning a user-set min/max &mdash; choose a palette preset (Viridis, Magma,
+              Rainbow, Heat, Cividis, …) or customize the stops with the same gradient
+              editor used by the Color Scale node, and <strong>tag</strong> &rarr; one
+              distinct color per option. Every palette is fully recolorable; the min/max
+              fields appear for float and integer attributes.
+            </li>
+          </ul>
+          <p className={styles.p}>
+            A Linked mapping is selectable as a simulator viewer immediately, with no nodes
+            placed. If you <em>also</em> add an Output Mapping node for a linked mapping, the
+            auto pass runs <strong>first</strong> as a background that colors every cell, then
+            your graph runs and overrides only the cells it paints &mdash; useful for
+            highlighting special cells or adding glyphs on top of an automatic gradient. The
+            auto pass uses the same Color Scale (gradients) and Categorical Color (tags) nodes
+            you can build by hand, and is lockstepped across the JS, WASM, and WebGPU
+            compilers. Show Code displays the synthesized color-pass function.
+          </p>
 
           <h3 className={styles.h3}>Indicators (Properties Panel)</h3>
           <p className={styles.p}>
@@ -469,7 +501,7 @@ export function HelpView() {
               <tr><td>Generation Step</td><td>Entry point for per-generation cell update logic. Connect &quot;DO&quot; to start the flow chain. Singleton.</td></tr>
               <tr><td>Init Event</td><td>Runs once per cell on simulator <strong>Reset</strong> (after defaults, before the first color pass; not on Randomize or Load State). Outputs <code>x</code>, <code>y</code>, <code>maxX</code>, <code>maxY</code>. Singleton. Useful for procedural initial state (gradients, noise, random orientations).</td></tr>
               <tr><td>Input Mapping (C&rarr;A)</td><td>Entry point for Color-to-Attribute mapping (brush/image import). Outputs R, G, B values.</td></tr>
-              <tr><td>Output Mapping (A&rarr;C)</td><td>Entry point for Attribute-to-Color visualization. Runs as a separate sequential pass after the Generation Step, ensuring colors reflect the final cell state.</td></tr>
+              <tr><td>Output Mapping (A&rarr;C)</td><td>Entry point for Attribute-to-Color visualization. Runs as a separate sequential pass after the Generation Step, ensuring colors reflect the final cell state. A mapping can instead be marked <strong>Linked</strong> in the Mappings panel (pick an attribute and the color pass is auto-generated &mdash; see &ldquo;Linked Output Mappings&rdquo; below); if you also add this node for a linked mapping, the auto pass runs first as a background and your graph overrides the cells it paints.</td></tr>
               <tr><td>Stop Event</td><td>Terminates the simulation run with a user-defined message when its DO flow input fires. Use for end conditions that need graph-level logic (complex spatial patterns, multi-attribute combinations). The text widget on the node body holds the message. First triggered stop in a step wins.</td></tr>
             </tbody>
           </table>
@@ -563,6 +595,7 @@ export function HelpView() {
               <tr><td>Set Cell Glyph</td><td>Overlay a Unicode character on the current cell when the named Output Mapping is active. Inputs: <strong>Glyph</strong> (Unicode codepoint, with an inline text picker), <strong>R/G/B</strong> for glyph colour. Cells with glyph=0 render no character. Glyphs only paint when the cell is at least 6 screen pixels (configurable via <code>genesisca_sim_settings.glyphMinPx</code>) — they hide gracefully at small zooms.</td></tr>
               <tr><td>Get Color Constant</td><td>Output fixed R, G, B values.</td></tr>
               <tr><td>Color Interpolate</td><td>Interpolate between two colors. Inputs: interpolation point T (0&ndash;1), From R/G/B, To R/G/B. Outputs: R, G, B. The <strong>curve</strong> dropdown controls the interpolation shape: Linear, Smoothstep, Ease-In Quadratic, Ease-Out Quadratic, Exponential, Logarithmic. Includes color picker widgets for &quot;Color From&quot; and &quot;Color To&quot; when the per-channel ports are not connected.</td></tr>
+              <tr><td>Categorical Color</td><td>Map an integer <strong>Index</strong> to a flat RGB color from an editable N-entry palette &mdash; <em>discrete</em>, with no blending between entries (contrast Color Scale, which interpolates). Index <code>i</code> selects palette entry <code>i</code>; out-of-range indices use the default color. Outputs R, G, B. Used internally by Linked Output Mappings for tag attributes, and available as a node for hand-built graphs.</td></tr>
             </tbody>
           </table>
 
