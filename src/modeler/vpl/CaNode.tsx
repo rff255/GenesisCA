@@ -1,4 +1,4 @@
-import { memo, useCallback, useState, useMemo, useRef, useSyncExternalStore } from 'react';
+import { memo, useCallback, useState, useMemo, useSyncExternalStore } from 'react';
 import { Handle, Position, useReactFlow } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
@@ -40,6 +40,7 @@ function getCompatibleHandlesSnapshot() {
 }
 import styles from './CaNode.module.css';
 import { InlineNumberInput, InlineBoolSelect, InlineTagSelect, InlineGlyphInput } from './widgets/InlineWidgets';
+import { GradientStopsEditor, type GradStop } from './widgets/GradientStopsEditor';
 
 /** Pick the handle CSS class for a port based on its category + data type.
  *  Flow → green; NeighborIndex value → amber; everything else → cyan. */
@@ -87,21 +88,13 @@ interface CaNodeData {
   [key: string]: unknown;
 }
 
-/** Gradient-editor UI for the Color Scale node. Renders a CSS gradient bar
- *  with draggable color-stop markers, a detail row for the selected stop
- *  (numeric position + color picker + delete), and an "+ Add Stop" button.
- *  Stops live in node.data.config as `stopCount` + `stop_<i>_(position|r|g|b)`. */
+/** Gradient-editor UI for the Color Scale node — a thin wrapper that maps the
+ *  node's flat config (`stopCount` + `stop_<i>_(position|r|g|b)`) to/from the
+ *  shared GradientStopsEditor (which also provides the palette presets). */
 function ColorScaleEditor({ id, nodeData }: { id: string; nodeData: CaNodeData }) {
   const { updateNodeData } = useReactFlow();
-  const [selectedStopIdx, setSelectedStopIdx] = useState<number>(0);
-  const barRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<
-    { idx: number; startX: number; startP: number; barWidth: number } | null
-  >(null);
-
-  type StopUI = { p: number; r: number; g: number; b: number };
   const stopCount = Math.max(0, Number(nodeData.config.stopCount) || 0);
-  const stops: StopUI[] = [];
+  const stops: GradStop[] = [];
   for (let i = 0; i < stopCount; i++) {
     stops.push({
       p: Number(nodeData.config[`stop_${i}_position`] ?? '0'),
@@ -110,14 +103,7 @@ function ColorScaleEditor({ id, nodeData }: { id: string; nodeData: CaNodeData }
       b: parseInt(String(nodeData.config[`stop_${i}_b`] ?? '0'), 10) || 0,
     });
   }
-  const safeIdx = Math.min(Math.max(0, selectedStopIdx), Math.max(0, stops.length - 1));
-  const selStop = stops[safeIdx];
-
-  const stopDrag = (e: React.MouseEvent) => {
-    if (e.button === 0) e.stopPropagation();
-  };
-
-  const writeStops = (next: StopUI[]) => {
+  const setStops = (next: GradStop[]) => {
     const newConfig: NodeConfig = { ...nodeData.config };
     for (const k of Object.keys(newConfig)) {
       if (/^stop_\d+_(position|r|g|b)$/.test(k)) delete newConfig[k];
@@ -131,195 +117,75 @@ function ColorScaleEditor({ id, nodeData }: { id: string; nodeData: CaNodeData }
     newConfig.stopCount = next.length;
     updateNodeData(id, { ...nodeData, config: newConfig });
   };
+  return <GradientStopsEditor stops={stops} onChange={setStops} />;
+}
 
-  const updateStop = (i: number, patch: Partial<StopUI>) => {
-    writeStops(stops.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+/** Palette editor for the Categorical Color node: one color swatch per index
+ *  entry (entry i == index i), plus a default color for out-of-range indices.
+ *  Entries live in node.data.config as `count` + `entry_<i>_(r|g|b)` + `default_(r|g|b)`. */
+function CategoricalColorEditor({ id, nodeData }: { id: string; nodeData: CaNodeData }) {
+  const { updateNodeData } = useReactFlow();
+  type E = { r: number; g: number; b: number };
+  const count = Math.max(0, Number(nodeData.config.count) || 0);
+  const entries: E[] = [];
+  for (let i = 0; i < count; i++) {
+    entries.push({
+      r: parseInt(String(nodeData.config[`entry_${i}_r`] ?? '0'), 10) || 0,
+      g: parseInt(String(nodeData.config[`entry_${i}_g`] ?? '0'), 10) || 0,
+      b: parseInt(String(nodeData.config[`entry_${i}_b`] ?? '0'), 10) || 0,
+    });
+  }
+  const def: E = {
+    r: parseInt(String(nodeData.config.default_r ?? '0'), 10) || 0,
+    g: parseInt(String(nodeData.config.default_g ?? '0'), 10) || 0,
+    b: parseInt(String(nodeData.config.default_b ?? '0'), 10) || 0,
   };
-
-  const sampleAt = (p: number): { r: number; g: number; b: number } => {
-    if (stops.length === 0) return { r: 0, g: 0, b: 0 };
-    const sorted = [...stops].sort((a, b) => a.p - b.p);
-    if (p <= sorted[0]!.p) return { r: sorted[0]!.r, g: sorted[0]!.g, b: sorted[0]!.b };
-    if (p >= sorted[sorted.length - 1]!.p) {
-      const s = sorted[sorted.length - 1]!;
-      return { r: s.r, g: s.g, b: s.b };
-    }
-    for (let i = 0; i < sorted.length - 1; i++) {
-      const a = sorted[i]!;
-      const b = sorted[i + 1]!;
-      if (p < b.p && b.p !== a.p) {
-        const t = (p - a.p) / (b.p - a.p);
-        return {
-          r: Math.round(a.r + t * (b.r - a.r)),
-          g: Math.round(a.g + t * (b.g - a.g)),
-          b: Math.round(a.b + t * (b.b - a.b)),
-        };
-      }
-    }
-    return { r: 0, g: 0, b: 0 };
+  const stopDrag = (e: React.MouseEvent) => { if (e.button === 0) e.stopPropagation(); };
+  const hex = (c: E) => `#${[c.r, c.g, c.b].map(x => Math.min(255, Math.max(0, x)).toString(16).padStart(2, '0')).join('')}`;
+  const fromHex = (h: string): E => ({
+    r: parseInt(h.slice(1, 3), 16) || 0,
+    g: parseInt(h.slice(3, 5), 16) || 0,
+    b: parseInt(h.slice(5, 7), 16) || 0,
+  });
+  const writeEntries = (next: E[]) => {
+    const cfg: NodeConfig = { ...nodeData.config };
+    for (const k of Object.keys(cfg)) if (/^entry_\d+_(r|g|b)$/.test(k)) delete cfg[k];
+    next.forEach((e, i) => {
+      cfg[`entry_${i}_r`] = String(e.r | 0);
+      cfg[`entry_${i}_g`] = String(e.g | 0);
+      cfg[`entry_${i}_b`] = String(e.b | 0);
+    });
+    cfg.count = next.length;
+    updateNodeData(id, { ...nodeData, config: cfg });
   };
-
-  const addStop = () => {
-    const sorted = [...stops].sort((a, b) => a.p - b.p);
-    const last = sorted[sorted.length - 1];
-    const prev = sorted[sorted.length - 2];
-    let np = 0.5;
-    let sample = { r: 128, g: 128, b: 128 };
-    if (last && prev) {
-      np = (last.p + prev.p) / 2;
-      sample = sampleAt(np);
-    } else if (last) {
-      np = Math.min(1, last.p + 0.1);
-      sample = { r: last.r, g: last.g, b: last.b };
-    }
-    const next = [...stops, { p: np, ...sample }];
-    writeStops(next);
-    setSelectedStopIdx(next.length - 1);
-  };
-
-  const deleteStop = (i: number) => {
-    if (stops.length <= 2) return;
-    const next = stops.filter((_, j) => j !== i);
-    writeStops(next);
-    setSelectedStopIdx(Math.max(0, Math.min(i, next.length - 1)));
-  };
-
-  const sortedForCss = [...stops].sort((a, b) => a.p - b.p);
-  const gradStops = sortedForCss.length === 0
-    ? 'rgb(0,0,0)'
-    : sortedForCss
-        .map(s => `rgb(${s.r},${s.g},${s.b}) ${Math.max(0, Math.min(1, s.p)) * 100}%`)
-        .join(', ');
-  const barBg = `linear-gradient(to right, ${gradStops})`;
-
+  const setDefault = (c: E) =>
+    updateNodeData(id, { ...nodeData, config: { ...nodeData.config, default_r: String(c.r | 0), default_g: String(c.g | 0), default_b: String(c.b | 0) } });
+  const swatch = (val: E, onChange: (c: E) => void) => (
+    <input type="color" className={styles.input}
+      style={{ height: 24, padding: 1, cursor: 'pointer', flex: 1 }}
+      value={hex(val)} onMouseDown={stopDrag} onClick={e => e.stopPropagation()}
+      onChange={e => onChange(fromHex(e.target.value))} />
+  );
   return (
-    <>
-      <div
-        ref={barRef}
-        style={{
-          position: 'relative',
-          height: 22,
-          width: '100%',
-          background: barBg,
-          border: '1px solid #2a3a4a',
-          borderRadius: 3,
-          cursor: 'crosshair',
-        }}
-        onMouseDown={stopDrag}
-        onClick={(e) => {
-          if (!barRef.current || dragRef.current) return;
-          if (e.target !== barRef.current) return;
-          const rect = barRef.current.getBoundingClientRect();
-          const p = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-          const sampled = sampleAt(p);
-          const next = [...stops, { p, ...sampled }];
-          writeStops(next);
-          setSelectedStopIdx(next.length - 1);
-        }}
-      >
-        {stops.map((s, i) => (
-          <div
-            key={i}
-            style={{
-              position: 'absolute',
-              left: `calc(${Math.max(0, Math.min(1, s.p)) * 100}% - 6px)`,
-              top: -3,
-              width: 12,
-              height: 28,
-              background: `rgb(${s.r},${s.g},${s.b})`,
-              border: i === safeIdx ? '2px solid #4cc9f0' : '1px solid #cfd8dc',
-              borderRadius: 2,
-              cursor: 'grab',
-              boxSizing: 'border-box',
-            }}
-            onMouseDown={(e) => {
-              if (e.button !== 0) return;
-              e.preventDefault();
-              e.stopPropagation();
-              if (!barRef.current) return;
-              const rect = barRef.current.getBoundingClientRect();
-              dragRef.current = { idx: i, startX: e.clientX, startP: s.p, barWidth: rect.width };
-              setSelectedStopIdx(i);
-              const onMove = (ev: MouseEvent) => {
-                const d = dragRef.current;
-                if (!d) return;
-                const dp = (ev.clientX - d.startX) / d.barWidth;
-                const newP = Math.max(0, Math.min(1, d.startP + dp));
-                updateStop(d.idx, { p: newP });
-              };
-              const onUp = () => {
-                dragRef.current = null;
-                window.removeEventListener('mousemove', onMove);
-                window.removeEventListener('mouseup', onUp);
-              };
-              window.addEventListener('mousemove', onMove);
-              window.addEventListener('mouseup', onUp);
-            }}
-            onClick={(e) => {
-              e.stopPropagation();
-              setSelectedStopIdx(i);
-            }}
-            title={`Stop ${i}: pos ${s.p.toFixed(3)}, rgb(${s.r},${s.g},${s.b})`}
-          />
-        ))}
-      </div>
-
-      {selStop && (
-        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-          <InlineNumberInput
-            className={styles.input}
-            min={0}
-            max={1}
-            step={0.01}
-            value={String(selStop.p)}
-            onChange={(v) => updateStop(safeIdx, { p: parseFloat(v) || 0 })}
-            onMouseDown={stopDrag}
-            style={{ width: 60 }}
-            title="Stop position"
-          />
-          <input
-            type="color"
-            className={styles.input}
-            style={{ height: 24, padding: 1, cursor: 'pointer', flex: 1 }}
-            value={`#${[selStop.r, selStop.g, selStop.b]
-              .map(c => Math.min(255, Math.max(0, c)).toString(16).padStart(2, '0'))
-              .join('')}`}
-            onChange={(e) => {
-              const h = e.target.value;
-              updateStop(safeIdx, {
-                r: parseInt(h.slice(1, 3), 16),
-                g: parseInt(h.slice(3, 5), 16),
-                b: parseInt(h.slice(5, 7), 16),
-              });
-            }}
-            onClick={(e) => e.stopPropagation()}
-          />
-          <button
-            onClick={() => deleteStop(safeIdx)}
-            disabled={stops.length <= 2}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: stops.length <= 2 ? '#586060' : '#f44336',
-              cursor: stops.length <= 2 ? 'not-allowed' : 'pointer',
-              fontSize: '0.7rem',
-              padding: '0 2px',
-            }}
-            title={stops.length <= 2 ? 'A scale must have at least 2 stops' : 'Delete this stop'}
-          >
-            x
-          </button>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }} onMouseDown={stopDrag}>
+      {entries.map((e, i) => (
+        <div key={i} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          <span style={{ width: 28, fontSize: '0.7rem', opacity: 0.8 }}>#{i}</span>
+          {swatch(e, c => writeEntries(entries.map((x, j) => (j === i ? c : x))))}
+          <button onClick={() => writeEntries(entries.filter((_, j) => j !== i))}
+            style={{ background: 'none', border: 'none', color: '#f44336', cursor: 'pointer', fontSize: '0.7rem', padding: '0 2px' }}
+            title="Delete this color">x</button>
         </div>
-      )}
-
-      <button
-        className={styles.select}
-        style={{ cursor: 'pointer', textAlign: 'center' }}
-        onClick={addStop}
-      >
-        + Add Stop
+      ))}
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+        <span style={{ width: 28, fontSize: '0.7rem', opacity: 0.6 }}>else</span>
+        {swatch(def, setDefault)}
+      </div>
+      <button className={styles.select} style={{ cursor: 'pointer', textAlign: 'center' }}
+        onClick={() => writeEntries([...entries, def])}>
+        + Add Color
       </button>
-    </>
+    </div>
   );
 }
 
@@ -1672,6 +1538,10 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
         {nodeData.nodeType === 'colorScale' && (
           <ColorScaleEditor id={id} nodeData={nodeData} />
+        )}
+
+        {nodeData.nodeType === 'categoricalColor' && (
+          <CategoricalColorEditor id={id} nodeData={nodeData} />
         )}
 
         {nodeData.nodeType === 'arithmeticOperator' && (

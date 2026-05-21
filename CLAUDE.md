@@ -199,9 +199,12 @@ genesis-ca/
 │   │       ├── graphState.ts          # Shared mutable state (avoids circular imports between GraphEditor/CaNode)
 │   │       ├── NodeExplorer.tsx        # Right-side searchable node list panel
 │   │       ├── nodes/                # ~70 node types (one file each) + registry.ts
-│   │       │   └── nodeValidation.ts  # detectMissingConfig() — drives warning badges
+│   │       │   ├── nodeValidation.ts  # detectMissingConfig() — drives warning badges
+│   │       │   └── colorScalePresets.ts # Named palettes (Viridis/Magma/Rainbow/…) for Color Scale + Linked mappings
+│   │       ├── widgets/              # Shared inline editors (InlineWidgets.tsx, GradientStopsEditor.tsx)
 │   │       └── compiler/
-│   │           └── compile.ts        # Two-pass compiler (hoisted values + flow)
+│   │           ├── compile.ts        # Two-pass compiler (hoisted values + flow)
+│   │           └── linkedOutputMappings.ts # Synthesizes the auto color pass for Linked Output Mappings
 │   ├── simulator/
 │   │   ├── SimulatorView.tsx         # Canvas rendering, zoom/pan, brush tool
 │   │   ├── IndicatorDisplay.tsx      # Indicator values display in simulator
@@ -240,7 +243,7 @@ genesis-ca/
 - Do not assume file structure beyond what's documented here — ask if uncertain
 - When building new node types, follow the established pattern of existing nodes (compile method, port definitions, UI component)
 - `NodeTypeDef` includes optional `description` (one-line summary of what the node does). Include it in new node definitions for Add Node menu tooltips.
-- **Documentation consistency:** When changing features, update all three sources of truth: the code, `src/help/HelpView.tsx` (in-app Help tab), and the root `README.md`. For node-system changes (port types, redundancies, new nodes) also update `docs/NODES_REFERENCE.md` (table + Mermaid diagrams). These must remain consistent with each other.
+- **Documentation consistency (keep ALL sources of truth in sync — do this after every feature change, not as an afterthought):** A change isn't done until every layer that describes it is updated, because future context-gathering relies on them agreeing. Update: (1) the **code itself** — structure + the comments/docstrings near what you changed; (2) **this `CLAUDE.md`** — extend/add the relevant feature section AND the Project Structure tree when files are added/moved; (3) `src/help/HelpView.tsx` (in-app Help tab); (4) the root `README.md`; (5) for node-system changes (new nodes, port types, redundancies) also `docs/NODES_REFERENCE.md` (table + node count + Mermaid diagrams). Drift between any of these silently degrades every later change, so treat them as one atomic update.
 - **Pre-commit type check:** Vite dev server does NOT type-check — always run `npx tsc -b` before committing to catch TypeScript errors that will fail the CI build. Note: `npx tsc --noEmit` (without `-b`) silently checks nothing because the root tsconfig has `"files": []` and only project references.
 - **Debugging blank-screen React crashes:** When the app whites out (React unmounts on uncaught error), console usually only shows generic "error in `<X>` component" warnings without stack traces. Install a `window.onerror` handler via preview_eval BEFORE reproducing, then read captured errors after — this surfaces the real stack trace.
 - **Dismissing a user bug report requires concrete contradicting evidence**, not a plausible-sounding alternative narrative. Byte-level "the data round-trips correctly" is necessary but not sufficient — when the user is certain something is wrong, step the simulation end-to-end and inspect observable behavior (e.g., post-load `getState` + per-step NI histograms). Plausible-sounding stories ("the saved data already has bias, the simulation just preserves it") cost iterations when the actual bug is one indirection away from where you're looking.
@@ -913,4 +916,46 @@ In `ModelContext` (`UPDATE_ATTRIBUTE` / `REMOVE_ATTRIBUTE` reducers):
 - WASM `select` (opcode `0x1b`) pops `[a, b, cond]` and pushes `a` when `cond != 0`, else `b`. The emit pushes value-first, then undefined, then condition — so `cond=match`, `a=value`, `b=undefined`. Easy to flip if you're not careful.
 - WGSL `select(falseValue, trueValue, cond)` is the OPPOSITE order from WASM `select`. Both targets emit conditional copy + scalar-read guards, but the literal argument order differs — `readAttrGuarded` emits `select(undefined, raw, match)` and the per-cell copy emits `select(defaultWord, attrsRead[..], match)`.
 - WebGPU's `LinkedDef.isSubAttribute` must be set when building `linkedDefs` from the model. `buildReductionPlan` uses it to skip sub-attr indicators (CPU readback path applies the parent-match guard); without the flag, the reduction shader would aggregate over every cell and double-count the defaultValue bucket (sub-attr storage is scrubbed to defaultValue on non-matching cells by the sync copy line).
+
+---
+
+## Linked Output Mappings (schema-level feature, all three compile targets)
+
+A quality-of-life feature that lets users **auto-generate** an Attribute→Color output mapping's color pass instead of hand-building the node graph — the on-ramp for newcomers who just want to *see* their model. Each A→C mapping (`isAttributeToColor`) has a **Color pass** mode:
+
+- **Standalone** (classic): the user builds the color pass by hand (Output Mapping event node → … → Set Color Viewer).
+- **Linked**: the user picks a cell attribute and the color pass is generated automatically — **bool** → two colors (default black/white); **float / integer** → a Color Scale spanning a user-set min/max (palette presets or hand-tuned stops); **tag** → one distinct color per option (categorical, no blending).
+- **Override-after-background**: if the user *also* drops an Output Mapping node for a linked mapping, the auto pass runs **first** (a background coloring every cell), then the user's graph runs and overrides whichever cells it paints (special colors, glyphs). Both write the same `colors` buffer; within one OM function the LAST write wins.
+
+### Architecture — synthesis, NOT per-target emit
+The auto pass is produced by a **shared, target-agnostic pre-compile graph transform** that synthesizes **real nodes** (`getCellAttribute → colorScale | categoricalColor → setColorViewer`, rooted at an `outputMapping` node, sequenced via a `Sequence` node). All three compilers then reuse their existing per-node emitters — there is **no per-target color math** for linked mappings. This is the key reason the feature is low-risk: it rides the already-verified `colorScale` / `getCellAttribute` / `setColorViewer` / `sequence` emitters on JS/WASM/WebGPU.
+
+- `src/modeler/vpl/compiler/linkedOutputMappings.ts` — `injectLinkedOutputMappings(graphNodes, graphEdges, model)` returns augmented `{ nodes, edges }`. Hot-path no-op when no linked mappings. Per linked mapping: synthesize the value chain + a terminal `setColorViewer`; if no user OM node exists, synthesize an `outputMapping` root → auto chain; if a user node exists with downstream, insert a `Sequence` (`first` = auto, `then` = the user's original target, preserving its target handle); user node with no downstream → wire root straight to the auto chain. Deterministic synthetic ids prefixed `__linkedOM_<mappingId>_`.
+- **Per-compiler injection points** (all BEFORE accessor-CSE + `buildAdjacency`): JS `compileGraph` ([compile.ts](src/modeler/vpl/compiler/compile.ts)) — injected at the TOP, **before** the `graphNodes.length === 0` early return, so a linked-only model (no user nodes) still compiles; WASM `compileGraphWasm` and WebGPU `compileGraphWebGPU` — **after** `expandMacros`, before CSE. WebGPU MUST rebind the `const nodes` used by the OM-emission loop (`outputNodes.find(... mappingId ...); if (!root) continue;`) or it silently shows default colors while JS/WASM render.
+
+### Freshness guarantee (no stale definitions)
+The synthesized subgraph is **ephemeral** — never serialized, rebuilt from the *current* model on every recompile (and `SimulatorView`'s `useEffect([model])` recompiles on every model change). Only the small `Mapping.linked*` config persists. Two layers keep it sound: the ModelContext cascade (layer 1) + the transform's live resolve/guard/clamp (layer 2). The transform resolves the attribute live by id, branches on its live `type`, and (tag) clamps the palette to the live `tagOptions`, so a stale config can never emit a dangling read. Attribute **rename** needs no cascade (synthesis is id-based, never name-based).
+
+### Schema ([types.ts](src/model/types.ts), all optional → old files load unchanged)
+- `Mapping.linked?`, `linkedAttributeId?`, `linkedMin?`, `linkedMax?`, `linkedColors?: LinkedColorSet`.
+- `ColorStop { position: number; r,g,b }` — gradient stop; `position` is in **[0,1]** (same space as the Color Scale node) and is mapped onto `[linkedMin, linkedMax]` at compile time (raw attribute value fed as `t`; ColorScale clamps outside the range).
+- `LinkedColorSet { gradient?: ColorStop[]; method?: string; tag?: RGB[] }`. `gradient` covers bool (2 stops at 0/1) / float / integer; `method` is the interpolation curve; `tag` is per-option colors. Absent sub-fields → auto defaults generated by the transform.
+
+### `categoricalColor` node ([CategoricalColorNode.ts](src/modeler/vpl/nodes/CategoricalColorNode.ts)) — the only NEW emitter
+First-class, user-facing color node: input `index` (int), multi-output `r`/`g`/`b`, config `count` + `entry_<i>_(r|g|b)` + `default_(r|g|b)`. Emits an N-way integer-compare select (discrete lookup; contrast `colorScale` which interpolates). Used by the transform for tag attributes, and available for hand-built graphs. Registered in `MULTI_OUTPUT_TYPES` (compile.ts) + both WASM/WebGPU `VALUE_NODE_EMITTERS` (per-port `setCachedPort` is the multi-output registration). Pure → CSE-eligible by default. Config UI = palette editor in CaNode (`CategoricalColorEditor`). `readCategoricalEntries` / `readCategoricalDefault` are shared by all three emitters.
+
+### Color Scale presets + shared editor
+- `src/modeler/vpl/nodes/colorScalePresets.ts` — `COLOR_SCALE_PRESETS` (Grayscale, Viridis, Magma, Plasma, Inferno, Rainbow, Heat, Cool→Warm, Cividis) + `presetStops(name)`. Single source for both consumers.
+- `src/modeler/vpl/widgets/GradientStopsEditor.tsx` — the gradient-bar editor (draggable stops + position/color/delete detail + Add Stop) **plus a preset dropdown**, extracted so it's reused by BOTH the Color Scale node (`ColorScaleEditor` is now a thin config↔stops wrapper) AND the linked float/integer editor. The linked editor adds the min/max Range + the Curve (`method`) dropdown for full parity with the node. Bool uses two pickers; tag uses per-option pickers. Defaults: float → Viridis, integer → Rainbow (via the transform's `defaultGradientStops`).
+
+### Cascade ([ModelContext.tsx](src/model/ModelContext.tsx))
+- `REMOVE_ATTRIBUTE`: unlinks any mapping linked to the deleted attribute (clears `linked*`).
+- `UPDATE_ATTRIBUTE` type change: resets `linkedColors`/`linkedMin`/`linkedMax` (keeps the link) so a stale palette can't mismatch the new type — handled in both the tag/bool branch and the fall-through (covers float↔integer).
+- `UPDATE_ATTRIBUTE` tagOptions change: remaps `linkedColors.tag[]` by the same `indexMap` (renamed/reordered keep their color, deleted drop out, new options get `defaultTagColor`).
+
+### Gotchas
+- Viewer tabs come from `model.mappings.filter(isAttributeToColor)` ([SimulatorView.tsx](src/simulator/SimulatorView.tsx)), so a linked mapping is selectable with no node placed; the worker dispatches the OM by `mappingId === activeViewer` exactly like a standalone OM (no new runtime path).
+- `style={{ width: N, ...sharedStyle }}` foot-gun: if `sharedStyle` sets `width: '100%'`, the spread overrides the `N`. Put the override AFTER the spread (bit the GradientStopsEditor position input — kept the bar from squashing the color/delete controls).
+- Inline-style overrides in shared widgets: the position spinbox is fixed-width + `flex: 0 0 auto`; the color input is `flex: 1`. Don't reintroduce `width: 100%` on the spinbox.
+- A linked-only model with no Step node still hits the separate "No Step node" compile gate (the empty-graph reorder only covers the `length === 0` check). Realistic models always have a Step; relaxing the Step requirement is out of scope.
 

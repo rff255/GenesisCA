@@ -4,7 +4,7 @@ This document catalogues every node in the GenesisCA Visual Programming Language
 describes the port type system, and flags redundancies or gaps. It is a working reference
 to inform future consolidation — it does **not** describe any committed refactoring.
 
-**Scope:** 68 node types across 7 categories (event, flow, data, logic, aggregation,
+**Scope:** 69 node types across 7 categories (event, flow, data, logic, aggregation,
 output, color), plus 2 hidden boundary nodes (`macroInput` / `macroOutput`). Indicator
 nodes live within the `data` (readers) and `output` (writers) categories rather than a
 category of their own. The variegated-cells and local-variable nodes appear in the editor
@@ -187,7 +187,8 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 | 65 | `setColorViewer` | Set Color Viewer | Write R/G/B to the output mapping's color buffer. | `I: DO` (flow) `I: R` `I: G` `I: B` / — | Used in `outputMapping` chains |
 | 66 | `setCellGlyph` | Set Cell Glyph | Write a per-cell Unicode glyph + RGB tint to the overlay buffers. The simulator paints the glyph on top of the cell colour when zoom is sufficient. | `I: DO` (flow) `I: Glyph` (codepoint, inline glyph picker) `I: R` `I: G` `I: B` / — | Used in `outputMapping` chains. Hidden below ~6 px/cell |
 | 67 | `getColorConstant` | Color Constant | Emit a fixed RGB triple. | `O: R` `O: G` `O: B` (int) | |
-| 68 | `colorScale` | Color Scale | Map `T` to an RGB color via N colour stops with a selectable curve (linear / smoothstep / easeInQuad / easeOutQuad / exponential / logarithmic). Replaces the legacy `colorInterpolation` node. | `I: T` (float) / `O: R` `O: G` `O: B` (int) | Min 2 stops; `t` outside the stop range clamps to nearest endpoint |
+| 68 | `colorScale` | Color Scale | Map `T` to an RGB color via N colour stops with a selectable curve (linear / smoothstep / easeInQuad / easeOutQuad / exponential / logarithmic). One-click palette presets (Viridis, Magma, Plasma, Inferno, Rainbow, Heat, Cool→Warm, Cividis, Grayscale) load a full stop set. Replaces the legacy `colorInterpolation` node. | `I: T` (float) / `O: R` `O: G` `O: B` (int) | Min 2 stops; `t` outside the stop range clamps to nearest endpoint |
+| 69 | `categoricalColor` | Categorical Color | Map an integer `Index` to a flat RGB color from an N-entry palette (no blending). Index `i` selects entry `i`; out-of-range indices use the default color. | `I: Index` (int) / `O: R` `O: G` `O: B` (int) | Discrete lookup (cf. `colorScale` which interpolates). Used by Linked Output Mappings for tag attributes |
 
 ### Hidden / auto-generated
 
@@ -322,8 +323,8 @@ graph LR
 - No first-class "color" port type. Every color transit requires three edges
   (or three inline widget values). This makes simple flows like "paint cell the
   brush color" verbose.
-- Color pickers are re-implemented in three nodes: `getColorConstant`, `colorScale`,
-  and `setColorViewer` (on its R/G/B inline widgets).
+- Color pickers are re-implemented in four nodes: `getColorConstant`, `colorScale`,
+  `categoricalColor`, and `setColorViewer` (on its R/G/B inline widgets).
 - `getModelAttribute` becomes 3-port when the attribute is color-typed — a type-aware
   port set. No other node has this behaviour.
 

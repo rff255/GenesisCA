@@ -20,11 +20,13 @@ import type {
   ModelProperties,
   Neighborhood,
   Preset,
+  RGB,
   SimulationState,
   Variable,
   VariegatedCellsConfig,
 } from './types';
 import { DEFAULT_MODEL, EMPTY_MODEL } from './defaultModel';
+import { defaultTagColor } from '../modeler/vpl/compiler/linkedOutputMappings';
 import { cloneMacroWithFreshIds } from './macroImport';
 import { migrateColorInterpolationNodes } from './colorScaleMigration';
 import { migrateTagConstantNodes } from './tagConstantMigration';
@@ -243,7 +245,16 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
           ? { ...v, attributeId: undefined, dataType: 'integer' as const }
           : v,
       );
-      const modelAfterFilter = { ...state.model, attributes: filteredAttrs, variegatedCells, variables };
+      // Linked Output Mappings cascade: a mapping linked to the removed attribute
+      // is fully unlinked (so it falls back to a Standalone empty pass, not a
+      // dangling read). The transform also guards this, but clearing keeps the
+      // saved model honest.
+      const mappingsAfterRemove = state.model.mappings.map(m =>
+        m.linkedAttributeId === action.id
+          ? { ...m, linked: false, linkedAttributeId: undefined, linkedColors: undefined, linkedMin: undefined, linkedMax: undefined }
+          : m,
+      );
+      const modelAfterFilter = { ...state.model, attributes: filteredAttrs, variegatedCells, variables, mappings: mappingsAfterRemove };
       // Clear stale attributeId and tagAttributeId references in node configs
       const a1 = clearDeletedId(modelAfterFilter, 'attributeId', action.id);
       const a2 = patchAllNodes(
@@ -332,7 +343,21 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
             ? { ...v, initialValue: remap(v.initialValue) }
             : v,
         );
-        const remappedModel = { ...updatedModel, attributes: remappedAttrs, variables: remappedVariables };
+        // Linked Output Mappings cascade: remap per-tag colors by the same
+        // indexMap (renamed/reordered options keep their color; deleted options
+        // drop out; newly-added options get the transform's default color).
+        const remappedMappings = updatedModel.mappings.map(m => {
+          if (m.linkedAttributeId !== attrId || !m.linkedColors?.tag) return m;
+          const oldTag = m.linkedColors.tag;
+          const nextTag: RGB[] = newOpts.map((_opt, ni) => {
+            for (const [oi, mappedNi] of indexMap.entries()) {
+              if (mappedNi === ni) { const c = oldTag[oi]; if (c) return c; }
+            }
+            return defaultTagColor(ni, newOpts.length);
+          });
+          return { ...m, linkedColors: { ...m.linkedColors, tag: nextTag } };
+        });
+        const remappedModel = { ...updatedModel, attributes: remappedAttrs, variables: remappedVariables, mappings: remappedMappings };
         const patched = patchAllNodes(
           remappedModel,
           (cfg, nt) => {
@@ -387,7 +412,26 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
             ? { ...v, attributeId: undefined, dataType: 'integer' as const }
             : v,
         );
-        return { ...state, isDirty: true, model: { ...updatedModel, attributes: detached, variables } };
+        // Linked Output Mappings: tag/bool → other type invalidates the palette;
+        // reset colors/domain but keep the link (transform regenerates defaults).
+        const mappings = updatedModel.mappings.map(m =>
+          m.linkedAttributeId === action.id
+            ? { ...m, linkedColors: undefined, linkedMin: undefined, linkedMax: undefined }
+            : m,
+        );
+        return { ...state, isDirty: true, model: { ...updatedModel, attributes: detached, variables, mappings } };
+      }
+
+      // Linked Output Mappings: any other attribute type change (e.g. float↔integer)
+      // invalidates a linked palette / domain — reset so the transform regenerates
+      // type-appropriate defaults (the link itself is preserved).
+      if (oldAttr && action.changes.type && oldAttr.type !== action.changes.type) {
+        const mappings = updatedModel.mappings.map(m =>
+          m.linkedAttributeId === action.id
+            ? { ...m, linkedColors: undefined, linkedMin: undefined, linkedMax: undefined }
+            : m,
+        );
+        return { ...state, isDirty: true, model: { ...updatedModel, mappings } };
       }
 
       return { ...state, isDirty: true, model: updatedModel };
