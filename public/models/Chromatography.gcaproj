@@ -4,7 +4,7 @@
     "name": "Chromatography (Kier, Cheng & Karnes 2000)",
     "author": "Lemont B. Kier, Chao-Kun Cheng, H. Thomas Karnes",
     "modelAuthor": "Rodrigo F. Figueiredo",
-    "description": "Faithful reproduction of Kier, Cheng & Karnes (2000), \"A Cellular Automata Model of Chromatography\" (Biomed. Chromatogr. 14:530-534). A 43×200 column on a full torus — the paper's \"cylinder with ingredients flowing back to the top of the system\": it wraps both horizontally (the tube circumference) and vertically (cells leaving the bottom re-enter at the top), so the gravity-driven mobile phase recirculates as continuous flow and never just drains to the bottom. It holds solvent W, immobile stationary phase B, and two solutes S1/S2, governed by pairwise break (PB) and join (J) probabilities + a downward gravity flow G applied to every mobile component (the \"force pushing the mobile phase\"). The strongly-retained solute S2 (low PB, high J with B) lags the weakly-retained S1, so a band injected at the top separates into two peaks as it flows down — watch the \"Chromatogram\" indicator (population vs column position, reproducing Fig. 3). Click Reset to inject the band, then Play. Switch presets to explore the paper's parameter studies (affinity, flow rate, solvent polarity, stationary-phase solvation). Gravity follows the paper's definition (\"the probability of a cell moving to a position further down the column\"): an additive downward push on the move into the open cell below, on the same baseline scale as J (Cheng & Kier 1995, JCICS 35:1054).",
+    "description": "Faithful reproduction of Kier, Cheng & Karnes (2000), \"A Cellular Automata Model of Chromatography\" (Biomed. Chromatogr. 14:530-534). A 43×200 column on a full torus — the paper's \"cylinder with ingredients flowing back to the top of the system\": it wraps both horizontally (the tube circumference) and vertically (cells leaving the bottom re-enter at the top), so the gravity-driven mobile phase recirculates as continuous flow and never just drains to the bottom. It holds solvent W, immobile stationary phase B, and two solutes S1/S2, governed by pairwise break (PB) and join (J) probabilities + a downward gravity flow G applied to every mobile component (the \"force pushing the mobile phase\"). The strongly-retained solute S2 (low PB, high J with B) lags the weakly-retained S1, so a band injected at the top separates into two peaks as it flows down — watch the \"Chromatogram\" indicator (population vs column position, reproducing Fig. 3). A detector line (the \"monitor\" cell flag on the bottom row) pauses the run the moment the leading solute elutes — an event-driven analog of the paper's fixed 600-iteration snapshot. Click Reset to inject the band, then Play. Switch presets to explore the paper's parameter studies (affinity, flow rate, solvent polarity, stationary-phase solvation). Gravity follows the paper's definition (\"the probability of a cell moving to a position further down the column\"): an additive downward push on the move into the open cell below, on the same baseline scale as J (Cheng & Kier 1995, JCICS 35:1054).",
     "topology": "2d-grid",
     "boundaryTreatment": "torus",
     "updateMode": "asynchronous",
@@ -192,6 +192,14 @@
       "hasBounds": true,
       "min": 0,
       "max": 0.5
+    },
+    {
+      "id": "monitor",
+      "name": "Monitor (detector flag)",
+      "type": "bool",
+      "description": "Detector flag, independent of the chemistry. The InitEvent sets it true on the bottom row (the column outlet); each step, a monitor cell that has come to hold a solute (S1 or S2) fires a Stop Event, pausing the run the moment the leading solute elutes (travels the full column). An event-driven analog of the paper's fixed 600-iteration snapshot. Carried per-cell; not used by the colour view.",
+      "isModelAttribute": false,
+      "defaultValue": "false"
     }
   ],
   "neighborhoods": [
@@ -338,7 +346,7 @@
   ],
   "graphNodes": [
     {
-      "id": "nmpgsk5ty2fv4",
+      "id": "nmpgu0m7enhie",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -350,7 +358,7 @@
       }
     },
     {
-      "id": "nmpgsk5ty7dgb",
+      "id": "nmpgu0m7e58po",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -365,7 +373,7 @@
       }
     },
     {
-      "id": "nmpgsk5tyowpi",
+      "id": "nmpgu0m7e08uu",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -380,7 +388,7 @@
       }
     },
     {
-      "id": "nmpgsk5tyz5vc",
+      "id": "nmpgu0m7ei3y0",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -395,7 +403,7 @@
       }
     },
     {
-      "id": "nmpgsk5ty6yxl",
+      "id": "nmpgu0m7eub4m",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -410,7 +418,7 @@
       }
     },
     {
-      "id": "nmpgsk5tyzke1",
+      "id": "nmpgu0m7e4zbc",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -425,7 +433,7 @@
       }
     },
     {
-      "id": "nmpgsk5u18dmu",
+      "id": "nmpgu0m7epkoe",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -442,7 +450,7 @@
       }
     },
     {
-      "id": "nmpgsk5u1jorh",
+      "id": "nmpgu0m7epl8m",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -459,7 +467,7 @@
       }
     },
     {
-      "id": "nmpgsk5u1xqxh",
+      "id": "nmpgu0m7ehu2e",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -475,7 +483,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2zcu7",
+      "id": "nmpgu0m7e2j7c",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -491,7 +499,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2geke",
+      "id": "nmpgu0m7e46m0",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -504,7 +512,7 @@
       }
     },
     {
-      "id": "nmpgsk5u25ups",
+      "id": "nmpgu0m7ehs6t",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -517,7 +525,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2jp1x",
+      "id": "nmpgu0m7et5at",
       "type": "caNode",
       "position": {
         "x": 1760,
@@ -530,7 +538,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2wg0x",
+      "id": "nmpgu0m7eb2p6",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -545,7 +553,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2o8m2",
+      "id": "nmpgu0m7efmu0",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -560,7 +568,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2j6b6",
+      "id": "nmpgu0m7e7cfm",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -575,7 +583,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2b8dh",
+      "id": "nmpgu0m7e97wv",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -588,7 +596,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2ylyw",
+      "id": "nmpgu0m7eb2gz",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -601,7 +609,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2iq66",
+      "id": "nmpgu0m7e1c2l",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -614,7 +622,7 @@
       }
     },
     {
-      "id": "nmpgsk5u275og",
+      "id": "nmpgu0m7enqe5",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -629,7 +637,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2jw1i",
+      "id": "nmpgu0m7ebde2",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -644,7 +652,7 @@
       }
     },
     {
-      "id": "nmpgsk5u24y2y",
+      "id": "nmpgu0m7eacnz",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -659,7 +667,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2bfmr",
+      "id": "nmpgu0m7epreh",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -674,7 +682,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2zlpc",
+      "id": "nmpgu0m7e8i0v",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -692,7 +700,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2iwk9",
+      "id": "nmpgu0m7eplur",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -707,7 +715,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2onbo",
+      "id": "nmpgu0m7e8ddr",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -720,7 +728,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2pnbo",
+      "id": "nmpgu0m7exslx",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -733,7 +741,7 @@
       }
     },
     {
-      "id": "nmpgsk5u26j7m",
+      "id": "nmpgu0m7e0bd6",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -748,7 +756,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2gyvo",
+      "id": "nmpgu0m7ei44r",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -763,7 +771,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2536c",
+      "id": "nmpgu0m7exi7e",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -782,7 +790,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2sc1j",
+      "id": "nmpgu0m7ec8g3",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -797,7 +805,7 @@
       }
     },
     {
-      "id": "nmpgsk5u224qu",
+      "id": "nmpgu0m7eudxg",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -812,7 +820,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2ctg6",
+      "id": "nmpgu0m7eyusm",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -827,7 +835,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2jsi7",
+      "id": "nmpgu0m7e3mha",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -842,7 +850,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2rsza",
+      "id": "nmpgu0m7ez0zq",
       "type": "caNode",
       "position": {
         "x": 1540,
@@ -857,7 +865,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2vt1c",
+      "id": "nmpgu0m7e8pmc",
       "type": "caNode",
       "position": {
         "x": 1540,
@@ -872,7 +880,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2ipsm",
+      "id": "nmpgu0m7e9gm6",
       "type": "caNode",
       "position": {
         "x": 1760,
@@ -887,7 +895,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2gipz",
+      "id": "nmpgu0m7eyla7",
       "type": "caNode",
       "position": {
         "x": 1980,
@@ -900,7 +908,7 @@
       }
     },
     {
-      "id": "nmpgsk5u24rs8",
+      "id": "nmpgu0m7ezz3m",
       "type": "caNode",
       "position": {
         "x": 1980,
@@ -915,7 +923,7 @@
       }
     },
     {
-      "id": "nmpgsk5u211uu",
+      "id": "nmpgu0m7e3f1z",
       "type": "caNode",
       "position": {
         "x": 2200,
@@ -932,7 +940,144 @@
       }
     },
     {
-      "id": "nmpgsk5u25n7z",
+      "id": "nmpgu0m7ewe7a",
+      "type": "caNode",
+      "position": {
+        "x": 1760,
+        "y": 240
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "monitor"
+        },
+        "label": "monitor flag?"
+      }
+    },
+    {
+      "id": "nmpgu0m7eeggb",
+      "type": "caNode",
+      "position": {
+        "x": 1760,
+        "y": 320
+      },
+      "data": {
+        "nodeType": "getConstant",
+        "config": {
+          "constType": "tag",
+          "tagAttributeId": "cellType",
+          "constValue": "3"
+        },
+        "label": "Tag: S1"
+      }
+    },
+    {
+      "id": "nmpgu0m7f7x7n",
+      "type": "caNode",
+      "position": {
+        "x": 1760,
+        "y": 400
+      },
+      "data": {
+        "nodeType": "getConstant",
+        "config": {
+          "constType": "tag",
+          "tagAttributeId": "cellType",
+          "constValue": "4"
+        },
+        "label": "Tag: S2"
+      }
+    },
+    {
+      "id": "nmpgu0m7fyxwm",
+      "type": "caNode",
+      "position": {
+        "x": 1980,
+        "y": 320
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "=="
+        },
+        "label": "type == S1"
+      }
+    },
+    {
+      "id": "nmpgu0m7f0il6",
+      "type": "caNode",
+      "position": {
+        "x": 1980,
+        "y": 400
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "=="
+        },
+        "label": "type == S2"
+      }
+    },
+    {
+      "id": "nmpgu0m7f74fm",
+      "type": "caNode",
+      "position": {
+        "x": 2200,
+        "y": 320
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "or"
+        },
+        "label": "S1 or S2?"
+      }
+    },
+    {
+      "id": "nmpgu0m7f15aw",
+      "type": "caNode",
+      "position": {
+        "x": 2420,
+        "y": 320
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "and"
+        },
+        "label": "monitor & solute?"
+      }
+    },
+    {
+      "id": "nmpgu0m7f94yw",
+      "type": "caNode",
+      "position": {
+        "x": 2640,
+        "y": 240
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {},
+        "label": "If solute at detector"
+      }
+    },
+    {
+      "id": "nmpgu0m7fmy1p",
+      "type": "caNode",
+      "position": {
+        "x": 2860,
+        "y": 240
+      },
+      "data": {
+        "nodeType": "stopEvent",
+        "config": {
+          "message": "A solute reached the detector line at the bottom of the column — the leading solute (S1) has eluted (full traversal). This is the event-driven analog of the paper's fixed 600-iteration snapshot: compare the two peaks in the Chromatogram, then Reset to re-run."
+        },
+        "label": "Stop: solute eluted"
+      }
+    },
+    {
+      "id": "nmpgu0m7fbmfb",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -944,7 +1089,7 @@
       }
     },
     {
-      "id": "nmpgsk5u25op3",
+      "id": "nmpgu0m7f2psi",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -960,7 +1105,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2ob9y",
+      "id": "nmpgu0m7f4own",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -976,7 +1121,7 @@
       }
     },
     {
-      "id": "nmpgsk5u24pn2",
+      "id": "nmpgu0m7frjzg",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -992,7 +1137,7 @@
       }
     },
     {
-      "id": "nmpgsk5u20rpw",
+      "id": "nmpgu0m7f7krj",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -1009,7 +1154,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2w6r3",
+      "id": "nmpgu0m7fgp3y",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -1025,7 +1170,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2imf0",
+      "id": "nmpgu0m7fcxvp",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -1040,7 +1185,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2wq4k",
+      "id": "nmpgu0m7f8qvg",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -1053,7 +1198,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2cmef",
+      "id": "nmpgu0m7fi1l0",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -1068,7 +1213,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2no8o",
+      "id": "nmpgu0m7f964b",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -1081,7 +1226,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2jhik",
+      "id": "nmpgu0m7f1zsb",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -1097,7 +1242,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2md50",
+      "id": "nmpgu0m7fhz5k",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -1114,7 +1259,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2r9th",
+      "id": "nmpgu0m7fmg9b",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -1129,7 +1274,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2bh8m",
+      "id": "nmpgu0m7fdd5n",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -1142,7 +1287,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2ocpa",
+      "id": "nmpgu0m7f6mjx",
       "type": "caNode",
       "position": {
         "x": 1540,
@@ -1158,7 +1303,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2tmv4",
+      "id": "nmpgu0m7facp8",
       "type": "caNode",
       "position": {
         "x": 1540,
@@ -1174,7 +1319,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2rp0r",
+      "id": "nmpgu0m7fzli9",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -1189,7 +1334,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2sbir",
+      "id": "nmpgu0m7f8w81",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -1202,7 +1347,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2qscu",
+      "id": "nmpgu0m7fs2zz",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -1218,7 +1363,7 @@
       }
     },
     {
-      "id": "nmpgsk5u24uwe",
+      "id": "nmpgu0m7fqkgo",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -1236,7 +1381,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2ma68",
+      "id": "nmpgu0m7fxg0i",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -1251,7 +1396,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2s8un",
+      "id": "nmpgu0m7fwxqe",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -1264,7 +1409,7 @@
       }
     },
     {
-      "id": "nmpgsk5u2ahch",
+      "id": "nmpgu0m7fw2oa",
       "type": "caNode",
       "position": {
         "x": 1540,
@@ -1280,7 +1425,51 @@
       }
     },
     {
-      "id": "gmpgsk5u2sd7k",
+      "id": "nmpgu0m7f1jym",
+      "type": "caNode",
+      "position": {
+        "x": 440,
+        "y": 1600
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "=="
+        },
+        "label": "y == maxY (bottom)?"
+      }
+    },
+    {
+      "id": "nmpgu0m7ft513",
+      "type": "caNode",
+      "position": {
+        "x": 660,
+        "y": 1600
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {},
+        "label": "If bottom row"
+      }
+    },
+    {
+      "id": "nmpgu0m7fxrq0",
+      "type": "caNode",
+      "position": {
+        "x": 880,
+        "y": 1600
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "monitor",
+          "_port_value": "1"
+        },
+        "label": "monitor ← true"
+      }
+    },
+    {
+      "id": "gmpgu0m7fgp0e",
       "type": "groupNode",
       "position": {
         "x": -30,
@@ -1296,7 +1485,7 @@
       }
     },
     {
-      "id": "gmpgsk5u3b0ja",
+      "id": "gmpgu0m7fv1zb",
       "type": "groupNode",
       "position": {
         "x": 190,
@@ -1312,7 +1501,7 @@
       }
     },
     {
-      "id": "gmpgsk5u3wby9",
+      "id": "gmpgu0m7fre0z",
       "type": "groupNode",
       "position": {
         "x": 410,
@@ -1328,7 +1517,7 @@
       }
     },
     {
-      "id": "gmpgsk5u3xywh",
+      "id": "gmpgu0m7fg6ot",
       "type": "groupNode",
       "position": {
         "x": 410,
@@ -1344,622 +1533,750 @@
       }
     },
     {
-      "id": "gmpgsk5u3pgpd",
+      "id": "gmpgu0m7ftv4q",
+      "type": "groupNode",
+      "position": {
+        "x": 1730,
+        "y": 180
+      },
+      "data": {
+        "label": "Detector line (monitor cell + solute → Stop Event)",
+        "nodeType": "group",
+        "config": {},
+        "width": 1360,
+        "height": 330,
+        "groupColor": "#785a4a"
+      }
+    },
+    {
+      "id": "gmpgu0m7fc584",
       "type": "groupNode",
       "position": {
         "x": -30,
         "y": 820
       },
       "data": {
-        "label": "Init Event — injection band (near the top) → column bulk",
+        "label": "Init Event — injection band (near the top) → column bulk + detector row",
         "nodeType": "group",
         "config": {},
         "width": 1800,
-        "height": 730,
+        "height": 890,
         "groupColor": "#406870"
       }
     }
   ],
   "graphEdges": [
     {
-      "id": "empgsk5tyw0rb",
-      "source": "nmpgsk5tyowpi",
-      "target": "nmpgsk5ty6yxl",
+      "id": "empgu0m7e5hnx",
+      "source": "nmpgu0m7e08uu",
+      "target": "nmpgu0m7eub4m",
       "sourceHandle": "output_value_indexes",
       "targetHandle": "input_value_indexes"
     },
     {
-      "id": "empgsk5tyoqw3",
-      "source": "nmpgsk5tyz5vc",
-      "target": "nmpgsk5tyzke1",
+      "id": "empgu0m7ewy8c",
+      "source": "nmpgu0m7ei3y0",
+      "target": "nmpgu0m7e4zbc",
       "sourceHandle": "output_value_indexes",
       "targetHandle": "input_value_indexes"
     },
     {
-      "id": "empgsk5u2h3ky",
-      "source": "nmpgsk5ty2fv4",
-      "target": "nmpgsk5u2geke",
+      "id": "empgu0m7e6ay7",
+      "source": "nmpgu0m7enhie",
+      "target": "nmpgu0m7e46m0",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empgsk5u2x12g",
-      "source": "nmpgsk5ty7dgb",
-      "target": "nmpgsk5u2wg0x",
+      "id": "empgu0m7e7l0e",
+      "source": "nmpgu0m7e58po",
+      "target": "nmpgu0m7eb2p6",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empgsk5u2dgd8",
-      "source": "nmpgsk5u18dmu",
-      "target": "nmpgsk5u2wg0x",
+      "id": "empgu0m7ewoon",
+      "source": "nmpgu0m7epkoe",
+      "target": "nmpgu0m7eb2p6",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empgsk5u22m2t",
-      "source": "nmpgsk5ty7dgb",
-      "target": "nmpgsk5u2o8m2",
+      "id": "empgu0m7e9svg",
+      "source": "nmpgu0m7e58po",
+      "target": "nmpgu0m7efmu0",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empgsk5u2mmcj",
-      "source": "nmpgsk5u1jorh",
-      "target": "nmpgsk5u2o8m2",
+      "id": "empgu0m7e7krt",
+      "source": "nmpgu0m7epl8m",
+      "target": "nmpgu0m7efmu0",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empgsk5u2alfj",
-      "source": "nmpgsk5u2wg0x",
-      "target": "nmpgsk5u2j6b6",
+      "id": "empgu0m7eered",
+      "source": "nmpgu0m7eb2p6",
+      "target": "nmpgu0m7e7cfm",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empgsk5u24cub",
-      "source": "nmpgsk5u2o8m2",
-      "target": "nmpgsk5u2j6b6",
+      "id": "empgu0m7ehud0",
+      "source": "nmpgu0m7efmu0",
+      "target": "nmpgu0m7e7cfm",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empgsk5u2asln",
-      "source": "nmpgsk5u2j6b6",
-      "target": "nmpgsk5u2geke",
+      "id": "empgu0m7ertdl",
+      "source": "nmpgu0m7e7cfm",
+      "target": "nmpgu0m7e46m0",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empgsk5u21rxi",
-      "source": "nmpgsk5tyowpi",
-      "target": "nmpgsk5u2b8dh",
+      "id": "empgu0m7ejv2j",
+      "source": "nmpgu0m7e08uu",
+      "target": "nmpgu0m7e97wv",
       "sourceHandle": "output_value_indexes",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empgsk5u2b8tr",
-      "source": "nmpgsk5u2geke",
-      "target": "nmpgsk5u2b8dh",
+      "id": "empgu0m7e901p",
+      "source": "nmpgu0m7e46m0",
+      "target": "nmpgu0m7e97wv",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empgsk5u2on41",
-      "source": "nmpgsk5ty6yxl",
-      "target": "nmpgsk5u2ylyw",
+      "id": "empgu0m7e31g6",
+      "source": "nmpgu0m7eub4m",
+      "target": "nmpgu0m7eb2gz",
       "sourceHandle": "output_value_values",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empgsk5u2b588",
-      "source": "nmpgsk5u2b8dh",
-      "target": "nmpgsk5u2ylyw",
+      "id": "empgu0m7esmmu",
+      "source": "nmpgu0m7e97wv",
+      "target": "nmpgu0m7eb2gz",
       "sourceHandle": "output_value_index",
       "targetHandle": "input_value_position"
     },
     {
-      "id": "empgsk5u2wc9j",
-      "source": "nmpgsk5tyzke1",
-      "target": "nmpgsk5u2iq66",
+      "id": "empgu0m7edw6q",
+      "source": "nmpgu0m7e4zbc",
+      "target": "nmpgu0m7e1c2l",
       "sourceHandle": "output_value_values",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empgsk5u2274w",
-      "source": "nmpgsk5u2b8dh",
-      "target": "nmpgsk5u2iq66",
+      "id": "empgu0m7eagfj",
+      "source": "nmpgu0m7e97wv",
+      "target": "nmpgu0m7e1c2l",
       "sourceHandle": "output_value_index",
       "targetHandle": "input_value_position"
     },
     {
-      "id": "empgsk5u2h1i4",
-      "source": "nmpgsk5ty7dgb",
-      "target": "nmpgsk5u275og",
+      "id": "empgu0m7e1ucg",
+      "source": "nmpgu0m7e58po",
+      "target": "nmpgu0m7enqe5",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_labelA"
     },
     {
-      "id": "empgsk5u2wz3z",
-      "source": "nmpgsk5u2ylyw",
-      "target": "nmpgsk5u275og",
+      "id": "empgu0m7ewwto",
+      "source": "nmpgu0m7eb2gz",
+      "target": "nmpgu0m7enqe5",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_labelB"
     },
     {
-      "id": "empgsk5u2mrkf",
-      "source": "nmpgsk5u2b8dh",
-      "target": "nmpgsk5u2jw1i",
+      "id": "empgu0m7e7ut5",
+      "source": "nmpgu0m7e97wv",
+      "target": "nmpgu0m7ebde2",
       "sourceHandle": "output_flow_body",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empgsk5u2nody",
-      "source": "nmpgsk5u2b8dh",
-      "target": "nmpgsk5u2jw1i",
+      "id": "empgu0m7etqgy",
+      "source": "nmpgu0m7e97wv",
+      "target": "nmpgu0m7ebde2",
       "sourceHandle": "output_value_index",
       "targetHandle": "input_value_index"
     },
     {
-      "id": "empgsk5u2wl5j",
-      "source": "nmpgsk5u275og",
-      "target": "nmpgsk5u2jw1i",
+      "id": "empgu0m7e8jys",
+      "source": "nmpgu0m7enqe5",
+      "target": "nmpgu0m7ebde2",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "empgsk5u2hrns",
-      "source": "nmpgsk5u2ylyw",
-      "target": "nmpgsk5u24y2y",
+      "id": "empgu0m7e2mqn",
+      "source": "nmpgu0m7eb2gz",
+      "target": "nmpgu0m7eacnz",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empgsk5u279w0",
-      "source": "nmpgsk5u18dmu",
-      "target": "nmpgsk5u24y2y",
+      "id": "empgu0m7e8ojd",
+      "source": "nmpgu0m7epkoe",
+      "target": "nmpgu0m7eacnz",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empgsk5u2jwb8",
-      "source": "nmpgsk5ty7dgb",
-      "target": "nmpgsk5u2bfmr",
+      "id": "empgu0m7eqlem",
+      "source": "nmpgu0m7e58po",
+      "target": "nmpgu0m7epreh",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_labelA"
     },
     {
-      "id": "empgsk5u2a07h",
-      "source": "nmpgsk5u2iq66",
-      "target": "nmpgsk5u2bfmr",
+      "id": "empgu0m7ebgj4",
+      "source": "nmpgu0m7e1c2l",
+      "target": "nmpgu0m7epreh",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_labelB"
     },
     {
-      "id": "empgsk5u2xop8",
-      "source": "nmpgsk5u24y2y",
-      "target": "nmpgsk5u2zlpc",
+      "id": "empgu0m7eaq4r",
+      "source": "nmpgu0m7eacnz",
+      "target": "nmpgu0m7e8i0v",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "empgsk5u28kqg",
-      "source": "nmpgsk5u2bfmr",
-      "target": "nmpgsk5u2zlpc",
+      "id": "empgu0m7ewk60",
+      "source": "nmpgu0m7epreh",
+      "target": "nmpgu0m7e8i0v",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "empgsk5u2qpzs",
-      "source": "nmpgsk5u2b8dh",
-      "target": "nmpgsk5u2iwk9",
+      "id": "empgu0m7emml6",
+      "source": "nmpgu0m7e97wv",
+      "target": "nmpgu0m7eplur",
       "sourceHandle": "output_flow_body",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empgsk5u24zcl",
-      "source": "nmpgsk5u2b8dh",
-      "target": "nmpgsk5u2iwk9",
+      "id": "empgu0m7eew44",
+      "source": "nmpgu0m7e97wv",
+      "target": "nmpgu0m7eplur",
       "sourceHandle": "output_value_index",
       "targetHandle": "input_value_index"
     },
     {
-      "id": "empgsk5u2m708",
-      "source": "nmpgsk5u2zlpc",
-      "target": "nmpgsk5u2iwk9",
+      "id": "empgu0m7e0u90",
+      "source": "nmpgu0m7e8i0v",
+      "target": "nmpgu0m7eplur",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "empgsk5u26jaq",
-      "source": "nmpgsk5ty6yxl",
-      "target": "nmpgsk5u2onbo",
+      "id": "empgu0m7ei4xr",
+      "source": "nmpgu0m7eub4m",
+      "target": "nmpgu0m7e8ddr",
       "sourceHandle": "output_value_values",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empgsk5u2ppdo",
-      "source": "nmpgsk5u2zcu7",
-      "target": "nmpgsk5u2onbo",
+      "id": "empgu0m7efnhq",
+      "source": "nmpgu0m7e2j7c",
+      "target": "nmpgu0m7e8ddr",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_position"
     },
     {
-      "id": "empgsk5u2gcux",
-      "source": "nmpgsk5tyzke1",
-      "target": "nmpgsk5u2pnbo",
+      "id": "empgu0m7e5h2u",
+      "source": "nmpgu0m7e4zbc",
+      "target": "nmpgu0m7exslx",
       "sourceHandle": "output_value_values",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empgsk5u2f65f",
-      "source": "nmpgsk5u2zcu7",
-      "target": "nmpgsk5u2pnbo",
+      "id": "empgu0m7eoiwq",
+      "source": "nmpgu0m7e2j7c",
+      "target": "nmpgu0m7exslx",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_position"
     },
     {
-      "id": "empgsk5u260ro",
-      "source": "nmpgsk5u2onbo",
-      "target": "nmpgsk5u26j7m",
+      "id": "empgu0m7ehps6",
+      "source": "nmpgu0m7e8ddr",
+      "target": "nmpgu0m7e0bd6",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empgsk5u2fb2h",
-      "source": "nmpgsk5u18dmu",
-      "target": "nmpgsk5u26j7m",
+      "id": "empgu0m7eq4fk",
+      "source": "nmpgu0m7epkoe",
+      "target": "nmpgu0m7e0bd6",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empgsk5u2r13g",
-      "source": "nmpgsk5ty7dgb",
-      "target": "nmpgsk5u2gyvo",
+      "id": "empgu0m7efhxn",
+      "source": "nmpgu0m7e58po",
+      "target": "nmpgu0m7ei44r",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_labelA"
     },
     {
-      "id": "empgsk5u2fldh",
-      "source": "nmpgsk5u2pnbo",
-      "target": "nmpgsk5u2gyvo",
+      "id": "empgu0m7exueg",
+      "source": "nmpgu0m7exslx",
+      "target": "nmpgu0m7ei44r",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_labelB"
     },
     {
-      "id": "empgsk5u21o70",
-      "source": "nmpgsk5u26j7m",
-      "target": "nmpgsk5u2536c",
+      "id": "empgu0m7enbb2",
+      "source": "nmpgu0m7e0bd6",
+      "target": "nmpgu0m7exi7e",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "empgsk5u2ve8j",
-      "source": "nmpgsk5u2gyvo",
-      "target": "nmpgsk5u2536c",
+      "id": "empgu0m7e5l6r",
+      "source": "nmpgu0m7ei44r",
+      "target": "nmpgu0m7exi7e",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "empgsk5u2ur7p",
-      "source": "nmpgsk5u1xqxh",
-      "target": "nmpgsk5u2536c",
+      "id": "empgu0m7e536l",
+      "source": "nmpgu0m7ehu2e",
+      "target": "nmpgu0m7exi7e",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_c"
     },
     {
-      "id": "empgsk5u2h2f4",
-      "source": "nmpgsk5u2geke",
-      "target": "nmpgsk5u2sc1j",
+      "id": "empgu0m7emnk3",
+      "source": "nmpgu0m7e46m0",
+      "target": "nmpgu0m7ec8g3",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empgsk5u2ahyk",
-      "source": "nmpgsk5u2zcu7",
-      "target": "nmpgsk5u2sc1j",
+      "id": "empgu0m7egskm",
+      "source": "nmpgu0m7e2j7c",
+      "target": "nmpgu0m7ec8g3",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_index"
     },
     {
-      "id": "empgsk5u27pnc",
-      "source": "nmpgsk5u2536c",
-      "target": "nmpgsk5u2sc1j",
+      "id": "empgu0m7ebh93",
+      "source": "nmpgu0m7exi7e",
+      "target": "nmpgu0m7ec8g3",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "empgsk5u27fq3",
-      "source": "nmpgsk5u2geke",
-      "target": "nmpgsk5u25ups",
+      "id": "empgu0m7eu0la",
+      "source": "nmpgu0m7e46m0",
+      "target": "nmpgu0m7ehs6t",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empgsk5u24rkb",
-      "source": "nmpgsk5u224qu",
-      "target": "nmpgsk5u2ctg6",
+      "id": "empgu0m7ec34v",
+      "source": "nmpgu0m7eudxg",
+      "target": "nmpgu0m7eyusm",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empgsk5u2kg0s",
-      "source": "nmpgsk5u2ctg6",
-      "target": "nmpgsk5u2jsi7",
+      "id": "empgu0m7ecrlj",
+      "source": "nmpgu0m7eyusm",
+      "target": "nmpgu0m7e3mha",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_probability"
     },
     {
-      "id": "empgsk5u2k41a",
-      "source": "nmpgsk5u2jsi7",
-      "target": "nmpgsk5u25ups",
+      "id": "empgu0m7eq1sq",
+      "source": "nmpgu0m7e3mha",
+      "target": "nmpgu0m7ehs6t",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empgsk5u2th2d",
-      "source": "nmpgsk5u25ups",
-      "target": "nmpgsk5u2jp1x",
+      "id": "empgu0m7ej9j7",
+      "source": "nmpgu0m7ehs6t",
+      "target": "nmpgu0m7et5at",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empgsk5u29ieb",
-      "source": "nmpgsk5ty6yxl",
-      "target": "nmpgsk5u2rsza",
+      "id": "empgu0m7egar5",
+      "source": "nmpgu0m7eub4m",
+      "target": "nmpgu0m7ez0zq",
       "sourceHandle": "output_value_values",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empgsk5u2e6p6",
-      "source": "nmpgsk5u18dmu",
-      "target": "nmpgsk5u2rsza",
+      "id": "empgu0m7exz85",
+      "source": "nmpgu0m7epkoe",
+      "target": "nmpgu0m7ez0zq",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empgsk5u2jr91",
-      "source": "nmpgsk5u2rsza",
-      "target": "nmpgsk5u2jp1x",
+      "id": "empgu0m7e2lw8",
+      "source": "nmpgu0m7ez0zq",
+      "target": "nmpgu0m7et5at",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empgsk5u2dj1q",
-      "source": "nmpgsk5u2vt1c",
-      "target": "nmpgsk5u2ipsm",
+      "id": "empgu0m7eoupm",
+      "source": "nmpgu0m7e8pmc",
+      "target": "nmpgu0m7e9gm6",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empgsk5u24cjh",
-      "source": "nmpgsk5tyowpi",
-      "target": "nmpgsk5u2gipz",
+      "id": "empgu0m7etz0m",
+      "source": "nmpgu0m7e08uu",
+      "target": "nmpgu0m7eyla7",
       "sourceHandle": "output_value_indexes",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empgsk5u2ixxf",
-      "source": "nmpgsk5u2ipsm",
-      "target": "nmpgsk5u2gipz",
+      "id": "empgu0m7efkur",
+      "source": "nmpgu0m7e9gm6",
+      "target": "nmpgu0m7eyla7",
       "sourceHandle": "output_value_index",
       "targetHandle": "input_value_position"
     },
     {
-      "id": "empgsk5u2izj2",
-      "source": "nmpgsk5u2jp1x",
-      "target": "nmpgsk5u211uu",
+      "id": "empgu0m7e2u40",
+      "source": "nmpgu0m7et5at",
+      "target": "nmpgu0m7e3f1z",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empgsk5u2vck6",
-      "source": "nmpgsk5u2gipz",
-      "target": "nmpgsk5u211uu",
+      "id": "empgu0m7euhmc",
+      "source": "nmpgu0m7eyla7",
+      "target": "nmpgu0m7e3f1z",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_targetNI"
     },
     {
-      "id": "empgsk5u2g0ud",
-      "source": "nmpgsk5u24rs8",
-      "target": "nmpgsk5u211uu",
+      "id": "empgu0m7e58vd",
+      "source": "nmpgu0m7ezz3m",
+      "target": "nmpgu0m7e3f1z",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_payload_0"
     },
     {
-      "id": "empgsk5u2wcnd",
-      "source": "nmpgsk5u25n7z",
-      "target": "nmpgsk5u2imf0",
-      "sourceHandle": "output_value_y",
+      "id": "empgu0m7fl1f8",
+      "source": "nmpgu0m7e58po",
+      "target": "nmpgu0m7fyxwm",
+      "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empgsk5u23fj0",
-      "source": "nmpgsk5u2w6r3",
-      "target": "nmpgsk5u2imf0",
+      "id": "empgu0m7ffo3w",
+      "source": "nmpgu0m7eeggb",
+      "target": "nmpgu0m7fyxwm",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empgsk5u274jz",
-      "source": "nmpgsk5u25n7z",
-      "target": "nmpgsk5u2wq4k",
+      "id": "empgu0m7fyjkx",
+      "source": "nmpgu0m7e58po",
+      "target": "nmpgu0m7f0il6",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empgu0m7fuxdd",
+      "source": "nmpgu0m7f7x7n",
+      "target": "nmpgu0m7f0il6",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empgu0m7fc8y7",
+      "source": "nmpgu0m7fyxwm",
+      "target": "nmpgu0m7f74fm",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "empgu0m7f6r5r",
+      "source": "nmpgu0m7f0il6",
+      "target": "nmpgu0m7f74fm",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "empgu0m7fcnkf",
+      "source": "nmpgu0m7ewe7a",
+      "target": "nmpgu0m7f15aw",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "empgu0m7fc33t",
+      "source": "nmpgu0m7f74fm",
+      "target": "nmpgu0m7f15aw",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "empgu0m7faof1",
+      "source": "nmpgu0m7enhie",
+      "target": "nmpgu0m7f94yw",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empgsk5u2z0k5",
-      "source": "nmpgsk5u2imf0",
-      "target": "nmpgsk5u2wq4k",
+      "id": "empgu0m7fqr42",
+      "source": "nmpgu0m7f15aw",
+      "target": "nmpgu0m7f94yw",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empgsk5u2rd97",
-      "source": "nmpgsk5u20rpw",
-      "target": "nmpgsk5u2cmef",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empgsk5u2daua",
-      "source": "nmpgsk5u24pn2",
-      "target": "nmpgsk5u2cmef",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empgsk5u2rpyk",
-      "source": "nmpgsk5u2wq4k",
-      "target": "nmpgsk5u2no8o",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_check"
-    },
-    {
-      "id": "empgsk5u2zh6p",
-      "source": "nmpgsk5u2cmef",
-      "target": "nmpgsk5u2no8o",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empgsk5u26fe9",
-      "source": "nmpgsk5u2no8o",
-      "target": "nmpgsk5u2jhik",
+      "id": "empgu0m7f4xac",
+      "source": "nmpgu0m7f94yw",
+      "target": "nmpgu0m7fmy1p",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empgsk5u233b0",
-      "source": "nmpgsk5u24pn2",
-      "target": "nmpgsk5u2md50",
+      "id": "empgu0m7fmc90",
+      "source": "nmpgu0m7fbmfb",
+      "target": "nmpgu0m7fcxvp",
+      "sourceHandle": "output_value_y",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empgu0m7f14gf",
+      "source": "nmpgu0m7fgp3y",
+      "target": "nmpgu0m7fcxvp",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empgu0m7fngy0",
+      "source": "nmpgu0m7fbmfb",
+      "target": "nmpgu0m7f8qvg",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "empgu0m7fgdyf",
+      "source": "nmpgu0m7fcxvp",
+      "target": "nmpgu0m7f8qvg",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "empgu0m7fnz1k",
+      "source": "nmpgu0m7f7krj",
+      "target": "nmpgu0m7fi1l0",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empgu0m7f9ifv",
+      "source": "nmpgu0m7frjzg",
+      "target": "nmpgu0m7fi1l0",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empgu0m7fk78e",
+      "source": "nmpgu0m7f8qvg",
+      "target": "nmpgu0m7f964b",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "empgu0m7f4989",
+      "source": "nmpgu0m7fi1l0",
+      "target": "nmpgu0m7f964b",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "empgu0m7fhz0g",
+      "source": "nmpgu0m7f964b",
+      "target": "nmpgu0m7f1zsb",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "empgu0m7fyh9b",
+      "source": "nmpgu0m7frjzg",
+      "target": "nmpgu0m7fhz5k",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "empgsk5u2dplh",
-      "source": "nmpgsk5u20rpw",
-      "target": "nmpgsk5u2r9th",
+      "id": "empgu0m7fx9a9",
+      "source": "nmpgu0m7f7krj",
+      "target": "nmpgu0m7fmg9b",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empgsk5u2oujk",
-      "source": "nmpgsk5u2md50",
-      "target": "nmpgsk5u2r9th",
+      "id": "empgu0m7fg9is",
+      "source": "nmpgu0m7fhz5k",
+      "target": "nmpgu0m7fmg9b",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empgsk5u2salt",
-      "source": "nmpgsk5u2no8o",
-      "target": "nmpgsk5u2bh8m",
+      "id": "empgu0m7fgxqc",
+      "source": "nmpgu0m7f964b",
+      "target": "nmpgu0m7fdd5n",
       "sourceHandle": "output_flow_else",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empgsk5u25fs5",
-      "source": "nmpgsk5u2r9th",
-      "target": "nmpgsk5u2bh8m",
+      "id": "empgu0m7fzxzt",
+      "source": "nmpgu0m7fmg9b",
+      "target": "nmpgu0m7fdd5n",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empgsk5u2xbjz",
-      "source": "nmpgsk5u2bh8m",
-      "target": "nmpgsk5u2ocpa",
+      "id": "empgu0m7fofwl",
+      "source": "nmpgu0m7fdd5n",
+      "target": "nmpgu0m7f6mjx",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empgsk5u2ok6s",
-      "source": "nmpgsk5u2bh8m",
-      "target": "nmpgsk5u2tmv4",
+      "id": "empgu0m7fazmp",
+      "source": "nmpgu0m7fdd5n",
+      "target": "nmpgu0m7facp8",
       "sourceHandle": "output_flow_else",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empgsk5u2p3x7",
-      "source": "nmpgsk5u20rpw",
-      "target": "nmpgsk5u2rp0r",
+      "id": "empgu0m7fll87",
+      "source": "nmpgu0m7f7krj",
+      "target": "nmpgu0m7fzli9",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empgsk5u2snvt",
-      "source": "nmpgsk5u2ob9y",
-      "target": "nmpgsk5u2rp0r",
+      "id": "empgu0m7f9nv5",
+      "source": "nmpgu0m7f4own",
+      "target": "nmpgu0m7fzli9",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empgsk5u2dhwt",
-      "source": "nmpgsk5u2wq4k",
-      "target": "nmpgsk5u2sbir",
+      "id": "empgu0m7f9sgk",
+      "source": "nmpgu0m7f8qvg",
+      "target": "nmpgu0m7f8w81",
       "sourceHandle": "output_flow_else",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empgsk5u2axln",
-      "source": "nmpgsk5u2rp0r",
-      "target": "nmpgsk5u2sbir",
+      "id": "empgu0m7fqyjt",
+      "source": "nmpgu0m7fzli9",
+      "target": "nmpgu0m7f8w81",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empgsk5u21wyh",
-      "source": "nmpgsk5u2sbir",
-      "target": "nmpgsk5u2qscu",
+      "id": "empgu0m7fa5bj",
+      "source": "nmpgu0m7f8w81",
+      "target": "nmpgu0m7fs2zz",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empgsk5u2akvf",
-      "source": "nmpgsk5u2ob9y",
-      "target": "nmpgsk5u24uwe",
+      "id": "empgu0m7ftrlm",
+      "source": "nmpgu0m7f4own",
+      "target": "nmpgu0m7fqkgo",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "empgsk5u2l2rc",
-      "source": "nmpgsk5u25op3",
-      "target": "nmpgsk5u24uwe",
+      "id": "empgu0m7fp9br",
+      "source": "nmpgu0m7f2psi",
+      "target": "nmpgu0m7fqkgo",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "empgsk5u2lwks",
-      "source": "nmpgsk5u20rpw",
-      "target": "nmpgsk5u2ma68",
+      "id": "empgu0m7fylt8",
+      "source": "nmpgu0m7f7krj",
+      "target": "nmpgu0m7fxg0i",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empgsk5u2l8l8",
-      "source": "nmpgsk5u24uwe",
-      "target": "nmpgsk5u2ma68",
+      "id": "empgu0m7fs0t4",
+      "source": "nmpgu0m7fqkgo",
+      "target": "nmpgu0m7fxg0i",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empgsk5u2p2do",
-      "source": "nmpgsk5u2sbir",
-      "target": "nmpgsk5u2s8un",
+      "id": "empgu0m7fyvun",
+      "source": "nmpgu0m7f8w81",
+      "target": "nmpgu0m7fwxqe",
       "sourceHandle": "output_flow_else",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empgsk5u2jl40",
-      "source": "nmpgsk5u2ma68",
-      "target": "nmpgsk5u2s8un",
+      "id": "empgu0m7f8frv",
+      "source": "nmpgu0m7fxg0i",
+      "target": "nmpgu0m7fwxqe",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empgsk5u2zhn6",
-      "source": "nmpgsk5u2s8un",
-      "target": "nmpgsk5u2ahch",
+      "id": "empgu0m7fk4oh",
+      "source": "nmpgu0m7fwxqe",
+      "target": "nmpgu0m7fw2oa",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "empgu0m7f12s9",
+      "source": "nmpgu0m7fbmfb",
+      "target": "nmpgu0m7f1jym",
+      "sourceHandle": "output_value_y",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empgu0m7fltm4",
+      "source": "nmpgu0m7fbmfb",
+      "target": "nmpgu0m7f1jym",
+      "sourceHandle": "output_value_maxY",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empgu0m7f9cra",
+      "source": "nmpgu0m7fbmfb",
+      "target": "nmpgu0m7ft513",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "empgu0m7f1ngz",
+      "source": "nmpgu0m7f1jym",
+      "target": "nmpgu0m7ft513",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "empgu0m7fl0yf",
+      "source": "nmpgu0m7ft513",
+      "target": "nmpgu0m7fxrq0",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     }
@@ -1967,7 +2284,7 @@
   "macroDefs": [],
   "presets": [
     {
-      "id": "preset_mpgsk5u466gw",
+      "id": "preset_mpgu0m7gbo24",
       "name": "Standard — two-solute separation (Table 1)",
       "description": "Paper Table 1 standard rule set + gravity 10. S1 (weak B-affinity) outruns S2 (strong B-affinity); the injected band separates into two peaks (Fig. 3).",
       "state": {
@@ -2055,7 +2372,7 @@
       "createdAt": 1747000000000
     },
     {
-      "id": "preset_mpgsk5u4s06x",
+      "id": "preset_mpgu0m7gfi16",
       "name": "Affinity — PB(SB)=0.10, J(SB)=2.00 (k'=1.193) [Table 2]",
       "description": "Paper Table 2: both solutes given the same stationary-phase affinity. Capacity factor k'=1.193. Higher affinity (lower PB, higher J) → slower migration → peak stays higher up the column.",
       "state": {
@@ -2143,7 +2460,7 @@
       "createdAt": 1747000001000
     },
     {
-      "id": "preset_mpgsk5u4h4f3",
+      "id": "preset_mpgu0m7gs85n",
       "name": "Affinity — PB(SB)=0.30, J(SB)=1.20 (k'=0.246) [Table 2]",
       "description": "Paper Table 2: both solutes given the same stationary-phase affinity. Capacity factor k'=0.246. Higher affinity (lower PB, higher J) → slower migration → peak stays higher up the column.",
       "state": {
@@ -2231,7 +2548,7 @@
       "createdAt": 1747000002000
     },
     {
-      "id": "preset_mpgsk5u4hztm",
+      "id": "preset_mpgu0m7gupuf",
       "name": "Affinity — PB(SB)=0.50, J(SB)=0.80 (k'=0.158) [Table 2]",
       "description": "Paper Table 2: both solutes given the same stationary-phase affinity. Capacity factor k'=0.158. Higher affinity (lower PB, higher J) → slower migration → peak stays higher up the column.",
       "state": {
@@ -2319,7 +2636,7 @@
       "createdAt": 1747000003000
     },
     {
-      "id": "preset_mpgsk5u44xhj",
+      "id": "preset_mpgu0m7g6opq",
       "name": "Affinity — PB(SB)=0.70, J(SB)=0.60 (k'=0.096) [Table 2]",
       "description": "Paper Table 2: both solutes given the same stationary-phase affinity. Capacity factor k'=0.096. Higher affinity (lower PB, higher J) → slower migration → peak stays higher up the column.",
       "state": {
@@ -2407,7 +2724,7 @@
       "createdAt": 1747000004000
     },
     {
-      "id": "preset_mpgsk5u440fb",
+      "id": "preset_mpgu0m7g8csu",
       "name": "Affinity — PB(SB)=0.90, J(SB)=0.20 (k'=0.035) [Table 2]",
       "description": "Paper Table 2: both solutes given the same stationary-phase affinity. Capacity factor k'=0.035. Higher affinity (lower PB, higher J) → slower migration → peak stays higher up the column.",
       "state": {
@@ -2495,7 +2812,7 @@
       "createdAt": 1747000005000
     },
     {
-      "id": "preset_mpgsk5u4xcna",
+      "id": "preset_mpgu0m7g24zw",
       "name": "Flow rate — gravity 2 [Table 4]",
       "description": "Paper Table 4: standard tables, gravity (flow rate) = 2. Faster flow → shorter retention. Watch both solute peaks reach the bottom sooner as gravity rises.",
       "state": {
@@ -2583,7 +2900,7 @@
       "createdAt": 1747000006000
     },
     {
-      "id": "preset_mpgsk5u4j657",
+      "id": "preset_mpgu0m7gsca7",
       "name": "Flow rate — gravity 5 [Table 4]",
       "description": "Paper Table 4: standard tables, gravity (flow rate) = 5. Faster flow → shorter retention. Watch both solute peaks reach the bottom sooner as gravity rises.",
       "state": {
@@ -2671,7 +2988,7 @@
       "createdAt": 1747000007000
     },
     {
-      "id": "preset_mpgsk5u4vvgv",
+      "id": "preset_mpgu0m7gsfol",
       "name": "Flow rate — gravity 10 [Table 4]",
       "description": "Paper Table 4: standard tables, gravity (flow rate) = 10. Faster flow → shorter retention. Watch both solute peaks reach the bottom sooner as gravity rises.",
       "state": {
@@ -2759,7 +3076,7 @@
       "createdAt": 1747000008000
     },
     {
-      "id": "preset_mpgsk5u4rz7y",
+      "id": "preset_mpgu0m7g7ziy",
       "name": "Solvent polarity — PB(W)=0.90, J(W)=0.10 (non-polar) [Table 5]",
       "description": "Paper Table 5: W–W self-association encodes solvent polarity. non-polar. Migration is faster in non-polar solvents (reversed-phase behaviour).",
       "state": {
@@ -2847,7 +3164,7 @@
       "createdAt": 1747000009000
     },
     {
-      "id": "preset_mpgsk5u40uhr",
+      "id": "preset_mpgu0m7g32wp",
       "name": "Solvent polarity — PB(W)=0.50, J(W)=0.70 (intermediate) [Table 5]",
       "description": "Paper Table 5: W–W self-association encodes solvent polarity. intermediate. Migration is faster in non-polar solvents (reversed-phase behaviour).",
       "state": {
@@ -2935,7 +3252,7 @@
       "createdAt": 1747000010000
     },
     {
-      "id": "preset_mpgsk5u42rwr",
+      "id": "preset_mpgu0m7g0xdq",
       "name": "Solvent polarity — PB(W)=0.25, J(W)=1.50 (polar) [Table 5]",
       "description": "Paper Table 5: W–W self-association encodes solvent polarity. polar. Migration is faster in non-polar solvents (reversed-phase behaviour).",
       "state": {
@@ -3023,7 +3340,7 @@
       "createdAt": 1747000011000
     },
     {
-      "id": "preset_mpgsk5u4b221",
+      "id": "preset_mpgu0m7go1b3",
       "name": "Stationary solvation — PB(WB)=0.90, J(WB)=0.10 (Rs=1.125) [Table 6]",
       "description": "Paper Table 6: solvation of the stationary phase (W–B interaction). Resolution Rs=1.125. Greater solvation of B → poorer resolution between the two solute peaks.",
       "state": {
@@ -3111,7 +3428,7 @@
       "createdAt": 1747000012000
     },
     {
-      "id": "preset_mpgsk5u4pwxu",
+      "id": "preset_mpgu0m7g2o9s",
       "name": "Stationary solvation — PB(WB)=0.50, J(WB)=0.80 (Rs=0.667) [Table 6]",
       "description": "Paper Table 6: solvation of the stationary phase (W–B interaction). Resolution Rs=0.667. Greater solvation of B → poorer resolution between the two solute peaks.",
       "state": {
@@ -3199,7 +3516,7 @@
       "createdAt": 1747000013000
     },
     {
-      "id": "preset_mpgsk5u45pe8",
+      "id": "preset_mpgu0m7gfrxo",
       "name": "Stationary solvation — PB(WB)=0.20, J(WB)=1.50 (Rs=0.556) [Table 6]",
       "description": "Paper Table 6: solvation of the stationary phase (W–B interaction). Resolution Rs=0.556. Greater solvation of B → poorer resolution between the two solute peaks.",
       "state": {
@@ -3287,7 +3604,7 @@
       "createdAt": 1747000014000
     },
     {
-      "id": "preset_mpgsk5u4jt7t",
+      "id": "preset_mpgu0m7geahc",
       "name": "Solute+stationary solvation — PB=0.90, J=0.20 [Table 7]",
       "description": "Paper Table 7: solvation of BOTH the solutes and the stationary phase (W–B, W–S1, W–S2 set together). Stronger solvent–solute interaction reduces retention and resolution.",
       "state": {
@@ -3375,7 +3692,7 @@
       "createdAt": 1747000015000
     },
     {
-      "id": "preset_mpgsk5u43vka",
+      "id": "preset_mpgu0m7g7ws6",
       "name": "Solute+stationary solvation — PB=0.20, J=1.50 [Table 7]",
       "description": "Paper Table 7: solvation of BOTH the solutes and the stationary phase (W–B, W–S1, W–S2 set together). Stronger solvent–solute interaction reduces retention and resolution.",
       "state": {
