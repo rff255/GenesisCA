@@ -136,6 +136,7 @@ const ATTR_GRAVITY = 'gravity';
 const ATTR_DENS_W = 'densW';
 const ATTR_DENS_B = 'densB';
 const ATTR_DENS_SOLUTE = 'densSolute';
+const ATTR_MONITOR = 'monitor';
 const NBR_NEAR = 'near';
 const NBR_FAR = 'far';
 const MAPPING_VIZ = 'viz';
@@ -306,6 +307,36 @@ fEdge(condCanMove, 'then', moveSelf, 'do');
 vEdge(chosenNI, 'value', moveSelf, 'targetNI');
 vEdge(myTypePayload, 'value', moveSelf, 'payload_0');
 
+// ─── Detector line — a monitor cell holding a solute → Stop Event ─────────────
+// A second flow branch off `step` (sibling to the move chain). The InitEvent flags
+// `monitor = true` on the bottom row; here, any cell with that flag that is now
+// occupied by S1 or S2 fires a Stop Event — the run pauses the moment the leading
+// solute elutes (reaches the column outlet). `myType` is the cell-top snapshot of
+// cellType (read before the move chain may clear this cell), so the detection is
+// correct even if the solute also moves on within the same async update.
+const getMonitor = node('getCellAttribute', { attributeId: ATTR_MONITOR }, 8, 3, 'monitor flag?');
+const tagS1det = tagConst('S1', 8, 4);
+const tagS2det = tagConst('S2', 8, 5);
+const detIsS1 = node('statement', { operation: '==' }, 9, 4, 'type == S1');
+vEdge(myType, 'value', detIsS1, 'x');
+vEdge(tagS1det, 'value', detIsS1, 'y');
+const detIsS2 = node('statement', { operation: '==' }, 9, 5, 'type == S2');
+vEdge(myType, 'value', detIsS2, 'x');
+vEdge(tagS2det, 'value', detIsS2, 'y');
+const detIsSolute = node('aggregate', { operation: 'or' }, 10, 4, 'S1 or S2?');
+vEdge(detIsS1, 'result', detIsSolute, 'values');
+vEdge(detIsS2, 'result', detIsSolute, 'values');
+const detFire = node('aggregate', { operation: 'and' }, 11, 4, 'monitor & solute?');
+vEdge(getMonitor, 'value', detFire, 'values');
+vEdge(detIsSolute, 'result', detFire, 'values');
+const condDetect = node('conditional', {}, 12, 3, 'If solute at detector');
+fEdge(stepNode, 'do', condDetect, 'check');   // 2nd flow branch off step (sibling of the move chain)
+vEdge(detFire, 'result', condDetect, 'condition');
+const stopNode = node('stopEvent', {
+  message: 'A solute reached the detector line at the bottom of the column — the leading solute (S1) has eluted (full traversal). This is the event-driven analog of the paper\'s fixed 600-iteration snapshot: compare the two peaks in the Chromatogram, then Reset to re-run.',
+}, 13, 3, 'Stop: solute eluted');
+fEdge(condDetect, 'then', stopNode, 'do');
+
 // =============================================================================
 // INIT EVENT — per cell, on Reset: seed the recirculating column
 // =============================================================================
@@ -387,6 +418,18 @@ const setWbulk = node('setAttribute', { attributeId: ATTR_CELLTYPE, _port_value:
 fEdge(condWbulk, 'then', setWbulk, 'do');
 // condWbulk.else → leave empty (default), no write.
 
+// --- Detector line: flag monitor = true on the bottom row (y == maxY). A second
+//     flow branch off initEvent, independent of the cellType seeding above, so the
+//     bottom row still gets its W/B/empty bulk content AND the detector flag. ---
+const isBottomRow = node('statement', { operation: '==' }, 2, initRow + 8, 'y == maxY (bottom)?');
+vEdge(initNode, 'y', isBottomRow, 'x');
+vEdge(initNode, 'maxY', isBottomRow, 'y');
+const condBottomRow = node('conditional', {}, 3, initRow + 8, 'If bottom row');
+fEdge(initNode, 'do', condBottomRow, 'check');
+vEdge(isBottomRow, 'result', condBottomRow, 'condition');
+const setMonitor = node('setAttribute', { attributeId: ATTR_MONITOR, _port_value: '1' }, 4, initRow + 8, 'monitor ← true');
+fEdge(condBottomRow, 'then', setMonitor, 'do');
+
 // =============================================================================
 // GROUP WRAPPERS (visual scoping)
 // =============================================================================
@@ -398,11 +441,14 @@ groupNode('Per-direction body (runs for d ∈ {N,E,S,W})',
   [forEachDirs, nbrType_d, farType_d, pb_d, setPb, isEmpty_d, jOcc_d, wt_d, setWt], '#4a5878');
 groupNode('South gravity boost (weights[S] = empty ? J+G : 0)',
   [southType, southFar, southEmpty, jOccSouth, wSouth, boostSouth], '#5a4a78');
-groupNode('Init Event — injection band (near the top) → column bulk',
+groupNode('Detector line (monitor cell + solute → Stop Event)',
+  [getMonitor, tagS1det, tagS2det, detIsS1, detIsS2, detIsSolute, detFire, condDetect, stopNode], '#785a4a');
+groupNode('Init Event — injection band (near the top) → column bulk + detector row',
   [initNode, densW, densB, densSolute, rInit, injRowConst,
    isRow1, condRow1,
    isS1, condS1, setS1, twoDensSolute, isS2, condS2, setS2, setWrow0,
-   isB, condB, setB, densBplusW, isWbulk, condWbulk, setWbulk], '#406870');
+   isB, condB, setB, densBplusW, isWbulk, condWbulk, setWbulk,
+   isBottomRow, condBottomRow, setMonitor], '#406870');
 
 // =============================================================================
 // MODEL DEFINITION (non-graph parts)
@@ -424,7 +470,10 @@ const properties = {
     'strongly-retained solute S2 (low PB, high J with B) lags the weakly-retained S1, ' +
     'so a band injected at the top separates into two peaks as it flows down — watch ' +
     'the "Chromatogram" indicator (population vs column position, reproducing Fig. 3). ' +
-    'Click Reset to inject the band, then Play. Switch presets to explore the paper\'s ' +
+    'A detector line (the "monitor" cell flag on the bottom row) pauses the run the ' +
+    'moment the leading solute elutes — an event-driven analog of the paper\'s fixed ' +
+    '600-iteration snapshot. Click Reset to inject the band, then Play. Switch presets ' +
+    'to explore the paper\'s ' +
     'parameter studies (affinity, flow rate, solvent polarity, stationary-phase ' +
     'solvation). Gravity follows the paper\'s definition ("the probability of a cell ' +
     'moving to a position further down the column"): an additive downward push on the ' +
@@ -541,6 +590,16 @@ const attributes = [
     id: ATTR_DENS_SOLUTE, name: 'Solute density (init, per species)', type: 'float',
     description: 'Fraction of the injection row (near the top of the column) seeded as each solute (S1 and S2 get this fraction each; the rest of the row is W). Paper ≈ 0.23 (10 of 43 cells per solute).',
     isModelAttribute: true, defaultValue: '0.23', hasBounds: true, min: 0, max: 0.5,
+  },
+  {
+    id: ATTR_MONITOR, name: 'Monitor (detector flag)', type: 'bool',
+    description:
+      'Detector flag, independent of the chemistry. The InitEvent sets it true on the ' +
+      'bottom row (the column outlet); each step, a monitor cell that has come to hold ' +
+      'a solute (S1 or S2) fires a Stop Event, pausing the run the moment the leading ' +
+      'solute elutes (travels the full column). An event-driven analog of the paper\'s ' +
+      'fixed 600-iteration snapshot. Carried per-cell; not used by the colour view.',
+    isModelAttribute: false, defaultValue: 'false',
   },
 ];
 
