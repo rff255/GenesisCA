@@ -4,7 +4,7 @@
     "name": "Chromatography (Kier, Cheng & Karnes 2000)",
     "author": "Lemont B. Kier, Chao-Kun Cheng, H. Thomas Karnes",
     "modelAuthor": "Rodrigo F. Figueiredo",
-    "description": "Faithful reproduction of Kier, Cheng & Karnes (2000), \"A Cellular Automata Model of Chromatography\" (Biomed. Chromatogr. 14:530-534). A 43×200 cylinder column — it wraps horizontally (the tube circumference) while the FIRST and LAST rows are immovable \"wall\" cells that cap the top and bottom (Cheng & Kier 1995), establishing the vertical direction gravity needs. It holds solvent W, immobile stationary phase B, and two solutes S1/S2, governed by pairwise break (PB) and join (J) probabilities + a downward gravity flow G. The strongly-retained solute S2 (low PB, high J with B) lags the weakly-retained S1, so a band injected just below the top cap separates into two peaks as it flows down — watch the \"Chromatogram\" indicator (population vs column position, reproducing Fig. 3). Click Reset to inject the band, then Play. Switch presets to explore the paper's parameter studies (affinity, flow rate, solvent polarity, stationary-phase solvation). Gravity follows the paper's definition (\"the probability of a cell moving to a position further down the column\"): an additive downward push on the move into the open cell below, on the same baseline scale as J (Cheng & Kier 1995, JCICS 35:1054).",
+    "description": "Faithful reproduction of Kier, Cheng & Karnes (2000), \"A Cellular Automata Model of Chromatography\" (Biomed. Chromatogr. 14:530-534). A 43×200 column on a full torus — the paper's \"cylinder with ingredients flowing back to the top of the system\": it wraps both horizontally (the tube circumference) and vertically (cells leaving the bottom re-enter at the top), so the gravity-driven mobile phase recirculates as continuous flow and never just drains to the bottom. It holds solvent W, immobile stationary phase B, and two solutes S1/S2, governed by pairwise break (PB) and join (J) probabilities + a downward gravity flow G applied to every mobile component (the \"force pushing the mobile phase\"). The strongly-retained solute S2 (low PB, high J with B) lags the weakly-retained S1, so a band injected at the top separates into two peaks as it flows down — watch the \"Chromatogram\" indicator (population vs column position, reproducing Fig. 3). Click Reset to inject the band, then Play. Switch presets to explore the paper's parameter studies (affinity, flow rate, solvent polarity, stationary-phase solvation). Gravity follows the paper's definition (\"the probability of a cell moving to a position further down the column\"): an additive downward push on the move into the open cell below, on the same baseline scale as J (Cheng & Kier 1995, JCICS 35:1054).",
     "topology": "2d-grid",
     "boundaryTreatment": "torus",
     "updateMode": "asynchronous",
@@ -30,7 +30,7 @@
       "id": "cellType",
       "name": "Cell type",
       "type": "tag",
-      "description": "Which ingredient occupies the cell. empty = vacancy (the mobile phase flows through these); W = solvent / mobile phase; B = stationary phase (immobile); S1 = weakly-retained solute; S2 = strongly-retained solute; wall = immovable boundary cap (the first + last rows, forming the cylinder).",
+      "description": "Which ingredient occupies the cell. empty = vacancy (the mobile phase flows through these); W = solvent / mobile phase; B = stationary phase (immobile); S1 = weakly-retained solute; S2 = strongly-retained solute.",
       "isModelAttribute": false,
       "defaultValue": "0",
       "tagOptions": [
@@ -38,8 +38,7 @@
         "W",
         "B",
         "S1",
-        "S2",
-        "wall"
+        "S2"
       ]
     },
     {
@@ -64,48 +63,35 @@
           "W": 1,
           "B": 1,
           "S1": 1,
-          "S2": 1,
-          "wall": 1
+          "S2": 1
         },
         "W": {
           "empty": 1,
           "W": 0.9,
           "B": 0.9,
           "S1": 0.9,
-          "S2": 0.9,
-          "wall": 1
+          "S2": 0.9
         },
         "B": {
           "empty": 1,
           "W": 0.9,
           "B": 0.999,
           "S1": 0.9,
-          "S2": 0.1,
-          "wall": 1
+          "S2": 0.1
         },
         "S1": {
           "empty": 1,
           "W": 0.9,
           "B": 0.9,
           "S1": 0.9,
-          "S2": 0.9,
-          "wall": 1
+          "S2": 0.9
         },
         "S2": {
           "empty": 1,
           "W": 0.9,
           "B": 0.1,
           "S1": 0.9,
-          "S2": 0.9,
-          "wall": 1
-        },
-        "wall": {
-          "empty": 1,
-          "W": 1,
-          "B": 1,
-          "S1": 1,
-          "S2": 1,
-          "wall": 1
+          "S2": 0.9
         }
       }
     },
@@ -131,48 +117,35 @@
           "W": 1,
           "B": 1,
           "S1": 1,
-          "S2": 1,
-          "wall": 1
+          "S2": 1
         },
         "W": {
           "empty": 1,
           "W": 0.1,
           "B": 0.1,
           "S1": 0.1,
-          "S2": 0.1,
-          "wall": 1
+          "S2": 0.1
         },
         "B": {
           "empty": 1,
           "W": 0.1,
           "B": 0.001,
           "S1": 0.2,
-          "S2": 2,
-          "wall": 1
+          "S2": 2
         },
         "S1": {
           "empty": 1,
           "W": 0.1,
           "B": 0.2,
           "S1": 0.1,
-          "S2": 0.1,
-          "wall": 1
+          "S2": 0.1
         },
         "S2": {
           "empty": 1,
           "W": 0.1,
           "B": 2,
           "S1": 0.1,
-          "S2": 0.1,
-          "wall": 1
-        },
-        "wall": {
-          "empty": 1,
-          "W": 1,
-          "B": 1,
-          "S1": 1,
-          "S2": 1,
-          "wall": 1
+          "S2": 0.1
         }
       }
     },
@@ -191,7 +164,7 @@
       "id": "densW",
       "name": "Solvent density (init)",
       "type": "float",
-      "description": "Fraction of interior-bulk cells (rows 2..maxY-1) seeded as solvent W on Reset. Paper ≈ 0.69.",
+      "description": "Fraction of column-bulk cells (every row below the top) seeded as solvent W on Reset. Paper ≈ 0.69.",
       "isModelAttribute": true,
       "defaultValue": "0.69",
       "hasBounds": true,
@@ -202,7 +175,7 @@
       "id": "densB",
       "name": "Stationary density (init)",
       "type": "float",
-      "description": "Fraction of interior-bulk cells (rows 2..maxY-1) seeded as immobile stationary phase B on Reset. Paper ≈ 0.07 (600 of 8600 cells). \"≥3 cells apart\" constraint not enforced (random placement).",
+      "description": "Fraction of column-bulk cells (every row below the top) seeded as immobile stationary phase B on Reset. Paper ≈ 0.07 (600 of 8600 cells). \"≥3 cells apart\" constraint not enforced (random placement).",
       "isModelAttribute": true,
       "defaultValue": "0.07",
       "hasBounds": true,
@@ -213,7 +186,7 @@
       "id": "densSolute",
       "name": "Solute density (init, per species)",
       "type": "float",
-      "description": "Fraction of the injection row (row 1, just below the top wall cap) seeded as each solute (S1 and S2 get this fraction each; the rest of the row is W). Paper ≈ 0.23 (10 of 43 cells per solute).",
+      "description": "Fraction of the injection row (near the top of the column) seeded as each solute (S1 and S2 get this fraction each; the rest of the row is W). Paper ≈ 0.23 (10 of 43 cells per solute).",
       "isModelAttribute": true,
       "defaultValue": "0.23",
       "hasBounds": true,
@@ -286,7 +259,7 @@
       "id": "viz",
       "name": "Cell type",
       "isAttributeToColor": true,
-      "description": "Colours each cell by ingredient: empty near-black, W blue, B grey, S1 green, S2 red, wall light-grey (top/bottom caps). (Linked categorical mapping — auto-generated from the cell type.)",
+      "description": "Colours each cell by ingredient: empty near-black, W blue, B grey, S1 green, S2 red. (Linked categorical mapping — auto-generated from the cell type.)",
       "redDescription": "By cell type",
       "greenDescription": "By cell type",
       "blueDescription": "By cell type",
@@ -318,11 +291,6 @@
             "r": 230,
             "g": 60,
             "b": 60
-          },
-          {
-            "r": 165,
-            "g": 165,
-            "b": 175
           }
         ]
       }
@@ -370,7 +338,7 @@
   ],
   "graphNodes": [
     {
-      "id": "nmpgqsmjf57n8",
+      "id": "nmpgsk5ty2fv4",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -382,7 +350,7 @@
       }
     },
     {
-      "id": "nmpgqsmjfkuby",
+      "id": "nmpgsk5ty7dgb",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -397,7 +365,7 @@
       }
     },
     {
-      "id": "nmpgqsmjffv8v",
+      "id": "nmpgsk5tyowpi",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -412,7 +380,7 @@
       }
     },
     {
-      "id": "nmpgqsmjfl4ts",
+      "id": "nmpgsk5tyz5vc",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -427,7 +395,7 @@
       }
     },
     {
-      "id": "nmpgqsmjfz5db",
+      "id": "nmpgsk5ty6yxl",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -442,7 +410,7 @@
       }
     },
     {
-      "id": "nmpgqsmjf785d",
+      "id": "nmpgsk5tyzke1",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -457,7 +425,7 @@
       }
     },
     {
-      "id": "nmpgqsmjfjh31",
+      "id": "nmpgsk5u18dmu",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -474,7 +442,7 @@
       }
     },
     {
-      "id": "nmpgqsmjfez9o",
+      "id": "nmpgsk5u1jorh",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -491,24 +459,7 @@
       }
     },
     {
-      "id": "nmpgqsmjfw1mw",
-      "type": "caNode",
-      "position": {
-        "x": 0,
-        "y": 640
-      },
-      "data": {
-        "nodeType": "getConstant",
-        "config": {
-          "constType": "tag",
-          "tagAttributeId": "cellType",
-          "constValue": "5"
-        },
-        "label": "Tag: wall"
-      }
-    },
-    {
-      "id": "nmpgqsmjf1it9",
+      "id": "nmpgsk5u1xqxh",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -524,7 +475,7 @@
       }
     },
     {
-      "id": "nmpgqsmjfos8v",
+      "id": "nmpgsk5u2zcu7",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -540,7 +491,7 @@
       }
     },
     {
-      "id": "nmpgqsmjfotwh",
+      "id": "nmpgsk5u2geke",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -553,7 +504,7 @@
       }
     },
     {
-      "id": "nmpgqsmjfkx61",
+      "id": "nmpgsk5u25ups",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -566,7 +517,7 @@
       }
     },
     {
-      "id": "nmpgqsmjf4a4m",
+      "id": "nmpgsk5u2jp1x",
       "type": "caNode",
       "position": {
         "x": 1760,
@@ -579,7 +530,7 @@
       }
     },
     {
-      "id": "nmpgqsmjf1t6u",
+      "id": "nmpgsk5u2wg0x",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -594,7 +545,7 @@
       }
     },
     {
-      "id": "nmpgqsmjfz4lq",
+      "id": "nmpgsk5u2o8m2",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -609,22 +560,7 @@
       }
     },
     {
-      "id": "nmpgqsmjftyob",
-      "type": "caNode",
-      "position": {
-        "x": 220,
-        "y": 160
-      },
-      "data": {
-        "nodeType": "statement",
-        "config": {
-          "operation": "!="
-        },
-        "label": "type != wall"
-      }
-    },
-    {
-      "id": "nmpgqsmjfbo1q",
+      "id": "nmpgsk5u2j6b6",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -639,7 +575,7 @@
       }
     },
     {
-      "id": "nmpgqsmjftzvo",
+      "id": "nmpgsk5u2b8dh",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -652,7 +588,7 @@
       }
     },
     {
-      "id": "nmpgqsmjfwgiw",
+      "id": "nmpgsk5u2ylyw",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -665,7 +601,7 @@
       }
     },
     {
-      "id": "nmpgqsmjfvn06",
+      "id": "nmpgsk5u2iq66",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -678,7 +614,7 @@
       }
     },
     {
-      "id": "nmpgqsmjfkqil",
+      "id": "nmpgsk5u275og",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -693,7 +629,7 @@
       }
     },
     {
-      "id": "nmpgqsmjfsgsc",
+      "id": "nmpgsk5u2jw1i",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -708,7 +644,7 @@
       }
     },
     {
-      "id": "nmpgqsmjfca1c",
+      "id": "nmpgsk5u24y2y",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -723,7 +659,7 @@
       }
     },
     {
-      "id": "nmpgqsmjfz68f",
+      "id": "nmpgsk5u2bfmr",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -738,7 +674,7 @@
       }
     },
     {
-      "id": "nmpgqsmjfwp6z",
+      "id": "nmpgsk5u2zlpc",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -756,7 +692,7 @@
       }
     },
     {
-      "id": "nmpgqsmjg4sdl",
+      "id": "nmpgsk5u2iwk9",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -771,7 +707,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgyahm",
+      "id": "nmpgsk5u2onbo",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -784,7 +720,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgw24i",
+      "id": "nmpgsk5u2pnbo",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -797,7 +733,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgq1lk",
+      "id": "nmpgsk5u26j7m",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -812,7 +748,7 @@
       }
     },
     {
-      "id": "nmpgqsmjg1k55",
+      "id": "nmpgsk5u2gyvo",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -827,7 +763,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgo6tc",
+      "id": "nmpgsk5u2536c",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -846,7 +782,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgyavk",
+      "id": "nmpgsk5u2sc1j",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -861,7 +797,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgliq0",
+      "id": "nmpgsk5u224qu",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -876,7 +812,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgpmln",
+      "id": "nmpgsk5u2ctg6",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -891,7 +827,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgpzdh",
+      "id": "nmpgsk5u2jsi7",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -906,7 +842,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgdn6y",
+      "id": "nmpgsk5u2rsza",
       "type": "caNode",
       "position": {
         "x": 1540,
@@ -921,7 +857,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgoxc7",
+      "id": "nmpgsk5u2vt1c",
       "type": "caNode",
       "position": {
         "x": 1540,
@@ -936,7 +872,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgszf4",
+      "id": "nmpgsk5u2ipsm",
       "type": "caNode",
       "position": {
         "x": 1760,
@@ -951,7 +887,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgo5dn",
+      "id": "nmpgsk5u2gipz",
       "type": "caNode",
       "position": {
         "x": 1980,
@@ -964,7 +900,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgq82w",
+      "id": "nmpgsk5u24rs8",
       "type": "caNode",
       "position": {
         "x": 1980,
@@ -979,7 +915,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgb01d",
+      "id": "nmpgsk5u211uu",
       "type": "caNode",
       "position": {
         "x": 2200,
@@ -996,7 +932,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgtnqy",
+      "id": "nmpgsk5u25n7z",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -1008,7 +944,7 @@
       }
     },
     {
-      "id": "nmpgqsmjg1o4l",
+      "id": "nmpgsk5u25op3",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -1024,7 +960,7 @@
       }
     },
     {
-      "id": "nmpgqsmjg3iy2",
+      "id": "nmpgsk5u2ob9y",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -1040,7 +976,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgimqy",
+      "id": "nmpgsk5u24pn2",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -1056,7 +992,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgbfm7",
+      "id": "nmpgsk5u20rpw",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -1073,7 +1009,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgnon4",
+      "id": "nmpgsk5u2w6r3",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -1083,103 +1019,13 @@
         "nodeType": "getConstant",
         "config": {
           "constType": "integer",
-          "constValue": "0"
+          "constValue": "2"
         },
-        "label": "Int: 0"
+        "label": "Int: 2"
       }
     },
     {
-      "id": "nmpgqsmjgzn8v",
-      "type": "caNode",
-      "position": {
-        "x": 220,
-        "y": 1520
-      },
-      "data": {
-        "nodeType": "getConstant",
-        "config": {
-          "constType": "integer",
-          "constValue": "1"
-        },
-        "label": "Int: 1"
-      }
-    },
-    {
-      "id": "nmpgqsmjgmyrv",
-      "type": "caNode",
-      "position": {
-        "x": 440,
-        "y": 720
-      },
-      "data": {
-        "nodeType": "statement",
-        "config": {
-          "operation": "=="
-        },
-        "label": "y == 0?"
-      }
-    },
-    {
-      "id": "nmpgqsmjge9c6",
-      "type": "caNode",
-      "position": {
-        "x": 440,
-        "y": 800
-      },
-      "data": {
-        "nodeType": "statement",
-        "config": {
-          "operation": "=="
-        },
-        "label": "y == maxY?"
-      }
-    },
-    {
-      "id": "nmpgqsmjg2bep",
-      "type": "caNode",
-      "position": {
-        "x": 660,
-        "y": 720
-      },
-      "data": {
-        "nodeType": "aggregate",
-        "config": {
-          "operation": "or"
-        },
-        "label": "first or last row?"
-      }
-    },
-    {
-      "id": "nmpgqsmjg626c",
-      "type": "caNode",
-      "position": {
-        "x": 880,
-        "y": 720
-      },
-      "data": {
-        "nodeType": "conditional",
-        "config": {},
-        "label": "If boundary row"
-      }
-    },
-    {
-      "id": "nmpgqsmjg3zau",
-      "type": "caNode",
-      "position": {
-        "x": 1100,
-        "y": 720
-      },
-      "data": {
-        "nodeType": "setAttribute",
-        "config": {
-          "attributeId": "cellType",
-          "_port_value": "5"
-        },
-        "label": "type ← wall"
-      }
-    },
-    {
-      "id": "nmpgqsmjgpuyy",
+      "id": "nmpgsk5u2imf0",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -1190,11 +1036,11 @@
         "config": {
           "operation": "=="
         },
-        "label": "y == 1?"
+        "label": "y == 2 (near top)?"
       }
     },
     {
-      "id": "nmpgqsmjg804g",
+      "id": "nmpgsk5u2wq4k",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -1207,7 +1053,7 @@
       }
     },
     {
-      "id": "nmpgqsmjghoim",
+      "id": "nmpgsk5u2cmef",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -1222,7 +1068,7 @@
       }
     },
     {
-      "id": "nmpgqsmjg3nqv",
+      "id": "nmpgsk5u2no8o",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -1235,7 +1081,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgdn5q",
+      "id": "nmpgsk5u2jhik",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -1251,7 +1097,7 @@
       }
     },
     {
-      "id": "nmpgqsmjg7h7d",
+      "id": "nmpgsk5u2md50",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -1268,7 +1114,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgnpz6",
+      "id": "nmpgsk5u2r9th",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -1283,7 +1129,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgsddy",
+      "id": "nmpgsk5u2bh8m",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -1296,7 +1142,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgx33k",
+      "id": "nmpgsk5u2ocpa",
       "type": "caNode",
       "position": {
         "x": 1540,
@@ -1312,7 +1158,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgpydd",
+      "id": "nmpgsk5u2tmv4",
       "type": "caNode",
       "position": {
         "x": 1540,
@@ -1328,7 +1174,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgup2u",
+      "id": "nmpgsk5u2rp0r",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -1343,7 +1189,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgm5pl",
+      "id": "nmpgsk5u2sbir",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -1356,7 +1202,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgb9xb",
+      "id": "nmpgsk5u2qscu",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -1372,7 +1218,7 @@
       }
     },
     {
-      "id": "nmpgqsmjgkz0a",
+      "id": "nmpgsk5u24uwe",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -1390,7 +1236,7 @@
       }
     },
     {
-      "id": "nmpgqsmjg0ifl",
+      "id": "nmpgsk5u2ma68",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -1405,7 +1251,7 @@
       }
     },
     {
-      "id": "nmpgqsmjg65dd",
+      "id": "nmpgsk5u2s8un",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -1418,7 +1264,7 @@
       }
     },
     {
-      "id": "nmpgqsmjg847x",
+      "id": "nmpgsk5u2ahch",
       "type": "caNode",
       "position": {
         "x": 1540,
@@ -1434,7 +1280,7 @@
       }
     },
     {
-      "id": "gmpgqsmjg59o4",
+      "id": "gmpgsk5u2sd7k",
       "type": "groupNode",
       "position": {
         "x": -30,
@@ -1445,12 +1291,12 @@
         "nodeType": "group",
         "config": {},
         "width": 480,
-        "height": 730,
+        "height": 650,
         "groupColor": "#3a4a5a"
       }
     },
     {
-      "id": "gmpgqsmjgk1iw",
+      "id": "gmpgsk5u3b0ja",
       "type": "groupNode",
       "position": {
         "x": 190,
@@ -1461,12 +1307,12 @@
         "nodeType": "group",
         "config": {},
         "width": 2240,
-        "height": 330,
+        "height": 250,
         "groupColor": "#4a6858"
       }
     },
     {
-      "id": "gmpgqsmjgr64i",
+      "id": "gmpgsk5u3wby9",
       "type": "groupNode",
       "position": {
         "x": 410,
@@ -1482,7 +1328,7 @@
       }
     },
     {
-      "id": "gmpgqsmjg3tiu",
+      "id": "gmpgsk5u3xywh",
       "type": "groupNode",
       "position": {
         "x": 410,
@@ -1498,706 +1344,622 @@
       }
     },
     {
-      "id": "gmpgqsmjgh1tt",
+      "id": "gmpgsk5u3pgpd",
       "type": "groupNode",
       "position": {
         "x": -30,
-        "y": 660
+        "y": 820
       },
       "data": {
-        "label": "Init Event — wall caps (rows 0 + maxY) → injection band (row 1) → bulk",
+        "label": "Init Event — injection band (near the top) → column bulk",
         "nodeType": "group",
         "config": {},
         "width": 1800,
-        "height": 970,
+        "height": 730,
         "groupColor": "#406870"
       }
     }
   ],
   "graphEdges": [
     {
-      "id": "empgqsmjfdfcs",
-      "source": "nmpgqsmjffv8v",
-      "target": "nmpgqsmjfz5db",
+      "id": "empgsk5tyw0rb",
+      "source": "nmpgsk5tyowpi",
+      "target": "nmpgsk5ty6yxl",
       "sourceHandle": "output_value_indexes",
       "targetHandle": "input_value_indexes"
     },
     {
-      "id": "empgqsmjfmqjx",
-      "source": "nmpgqsmjfl4ts",
-      "target": "nmpgqsmjf785d",
+      "id": "empgsk5tyoqw3",
+      "source": "nmpgsk5tyz5vc",
+      "target": "nmpgsk5tyzke1",
       "sourceHandle": "output_value_indexes",
       "targetHandle": "input_value_indexes"
     },
     {
-      "id": "empgqsmjf0dcp",
-      "source": "nmpgqsmjf57n8",
-      "target": "nmpgqsmjfotwh",
+      "id": "empgsk5u2h3ky",
+      "source": "nmpgsk5ty2fv4",
+      "target": "nmpgsk5u2geke",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empgqsmjfa7if",
-      "source": "nmpgqsmjfkuby",
-      "target": "nmpgqsmjf1t6u",
+      "id": "empgsk5u2x12g",
+      "source": "nmpgsk5ty7dgb",
+      "target": "nmpgsk5u2wg0x",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empgqsmjfjzqr",
-      "source": "nmpgqsmjfjh31",
-      "target": "nmpgqsmjf1t6u",
+      "id": "empgsk5u2dgd8",
+      "source": "nmpgsk5u18dmu",
+      "target": "nmpgsk5u2wg0x",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empgqsmjf6cpv",
-      "source": "nmpgqsmjfkuby",
-      "target": "nmpgqsmjfz4lq",
+      "id": "empgsk5u22m2t",
+      "source": "nmpgsk5ty7dgb",
+      "target": "nmpgsk5u2o8m2",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empgqsmjf9wfo",
-      "source": "nmpgqsmjfez9o",
-      "target": "nmpgqsmjfz4lq",
+      "id": "empgsk5u2mmcj",
+      "source": "nmpgsk5u1jorh",
+      "target": "nmpgsk5u2o8m2",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empgqsmjfpcv7",
-      "source": "nmpgqsmjfkuby",
-      "target": "nmpgqsmjftyob",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empgqsmjfho4k",
-      "source": "nmpgqsmjfw1mw",
-      "target": "nmpgqsmjftyob",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empgqsmjffdtn",
-      "source": "nmpgqsmjf1t6u",
-      "target": "nmpgqsmjfbo1q",
+      "id": "empgsk5u2alfj",
+      "source": "nmpgsk5u2wg0x",
+      "target": "nmpgsk5u2j6b6",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empgqsmjf470i",
-      "source": "nmpgqsmjfz4lq",
-      "target": "nmpgqsmjfbo1q",
+      "id": "empgsk5u24cub",
+      "source": "nmpgsk5u2o8m2",
+      "target": "nmpgsk5u2j6b6",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empgqsmjf4gbm",
-      "source": "nmpgqsmjftyob",
-      "target": "nmpgqsmjfbo1q",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_values"
-    },
-    {
-      "id": "empgqsmjfp4tx",
-      "source": "nmpgqsmjfbo1q",
-      "target": "nmpgqsmjfotwh",
+      "id": "empgsk5u2asln",
+      "source": "nmpgsk5u2j6b6",
+      "target": "nmpgsk5u2geke",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empgqsmjfhslr",
-      "source": "nmpgqsmjffv8v",
-      "target": "nmpgqsmjftzvo",
+      "id": "empgsk5u21rxi",
+      "source": "nmpgsk5tyowpi",
+      "target": "nmpgsk5u2b8dh",
       "sourceHandle": "output_value_indexes",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empgqsmjfq29o",
-      "source": "nmpgqsmjfotwh",
-      "target": "nmpgqsmjftzvo",
+      "id": "empgsk5u2b8tr",
+      "source": "nmpgsk5u2geke",
+      "target": "nmpgsk5u2b8dh",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empgqsmjflf85",
-      "source": "nmpgqsmjfz5db",
-      "target": "nmpgqsmjfwgiw",
+      "id": "empgsk5u2on41",
+      "source": "nmpgsk5ty6yxl",
+      "target": "nmpgsk5u2ylyw",
       "sourceHandle": "output_value_values",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empgqsmjfb3id",
-      "source": "nmpgqsmjftzvo",
-      "target": "nmpgqsmjfwgiw",
+      "id": "empgsk5u2b588",
+      "source": "nmpgsk5u2b8dh",
+      "target": "nmpgsk5u2ylyw",
       "sourceHandle": "output_value_index",
       "targetHandle": "input_value_position"
     },
     {
-      "id": "empgqsmjf1h0i",
-      "source": "nmpgqsmjf785d",
-      "target": "nmpgqsmjfvn06",
+      "id": "empgsk5u2wc9j",
+      "source": "nmpgsk5tyzke1",
+      "target": "nmpgsk5u2iq66",
       "sourceHandle": "output_value_values",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empgqsmjfbocv",
-      "source": "nmpgqsmjftzvo",
-      "target": "nmpgqsmjfvn06",
+      "id": "empgsk5u2274w",
+      "source": "nmpgsk5u2b8dh",
+      "target": "nmpgsk5u2iq66",
       "sourceHandle": "output_value_index",
       "targetHandle": "input_value_position"
     },
     {
-      "id": "empgqsmjfj0wf",
-      "source": "nmpgqsmjfkuby",
-      "target": "nmpgqsmjfkqil",
+      "id": "empgsk5u2h1i4",
+      "source": "nmpgsk5ty7dgb",
+      "target": "nmpgsk5u275og",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_labelA"
     },
     {
-      "id": "empgqsmjfe165",
-      "source": "nmpgqsmjfwgiw",
-      "target": "nmpgqsmjfkqil",
+      "id": "empgsk5u2wz3z",
+      "source": "nmpgsk5u2ylyw",
+      "target": "nmpgsk5u275og",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_labelB"
     },
     {
-      "id": "empgqsmjfi5zb",
-      "source": "nmpgqsmjftzvo",
-      "target": "nmpgqsmjfsgsc",
+      "id": "empgsk5u2mrkf",
+      "source": "nmpgsk5u2b8dh",
+      "target": "nmpgsk5u2jw1i",
       "sourceHandle": "output_flow_body",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empgqsmjfhcfl",
-      "source": "nmpgqsmjftzvo",
-      "target": "nmpgqsmjfsgsc",
+      "id": "empgsk5u2nody",
+      "source": "nmpgsk5u2b8dh",
+      "target": "nmpgsk5u2jw1i",
       "sourceHandle": "output_value_index",
       "targetHandle": "input_value_index"
     },
     {
-      "id": "empgqsmjflx81",
-      "source": "nmpgqsmjfkqil",
-      "target": "nmpgqsmjfsgsc",
+      "id": "empgsk5u2wl5j",
+      "source": "nmpgsk5u275og",
+      "target": "nmpgsk5u2jw1i",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "empgqsmjf4vj8",
-      "source": "nmpgqsmjfwgiw",
-      "target": "nmpgqsmjfca1c",
+      "id": "empgsk5u2hrns",
+      "source": "nmpgsk5u2ylyw",
+      "target": "nmpgsk5u24y2y",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empgqsmjf1rzh",
-      "source": "nmpgqsmjfjh31",
-      "target": "nmpgqsmjfca1c",
+      "id": "empgsk5u279w0",
+      "source": "nmpgsk5u18dmu",
+      "target": "nmpgsk5u24y2y",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empgqsmjflocn",
-      "source": "nmpgqsmjfkuby",
-      "target": "nmpgqsmjfz68f",
+      "id": "empgsk5u2jwb8",
+      "source": "nmpgsk5ty7dgb",
+      "target": "nmpgsk5u2bfmr",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_labelA"
     },
     {
-      "id": "empgqsmjfomvp",
-      "source": "nmpgqsmjfvn06",
-      "target": "nmpgqsmjfz68f",
+      "id": "empgsk5u2a07h",
+      "source": "nmpgsk5u2iq66",
+      "target": "nmpgsk5u2bfmr",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_labelB"
     },
     {
-      "id": "empgqsmjfvtu3",
-      "source": "nmpgqsmjfca1c",
-      "target": "nmpgqsmjfwp6z",
+      "id": "empgsk5u2xop8",
+      "source": "nmpgsk5u24y2y",
+      "target": "nmpgsk5u2zlpc",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "empgqsmjf4w51",
-      "source": "nmpgqsmjfz68f",
-      "target": "nmpgqsmjfwp6z",
+      "id": "empgsk5u28kqg",
+      "source": "nmpgsk5u2bfmr",
+      "target": "nmpgsk5u2zlpc",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "empgqsmjgz0qh",
-      "source": "nmpgqsmjftzvo",
-      "target": "nmpgqsmjg4sdl",
+      "id": "empgsk5u2qpzs",
+      "source": "nmpgsk5u2b8dh",
+      "target": "nmpgsk5u2iwk9",
       "sourceHandle": "output_flow_body",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empgqsmjgyi96",
-      "source": "nmpgqsmjftzvo",
-      "target": "nmpgqsmjg4sdl",
+      "id": "empgsk5u24zcl",
+      "source": "nmpgsk5u2b8dh",
+      "target": "nmpgsk5u2iwk9",
       "sourceHandle": "output_value_index",
       "targetHandle": "input_value_index"
     },
     {
-      "id": "empgqsmjgdbk9",
-      "source": "nmpgqsmjfwp6z",
-      "target": "nmpgqsmjg4sdl",
+      "id": "empgsk5u2m708",
+      "source": "nmpgsk5u2zlpc",
+      "target": "nmpgsk5u2iwk9",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "empgqsmjg9e5y",
-      "source": "nmpgqsmjfz5db",
-      "target": "nmpgqsmjgyahm",
+      "id": "empgsk5u26jaq",
+      "source": "nmpgsk5ty6yxl",
+      "target": "nmpgsk5u2onbo",
       "sourceHandle": "output_value_values",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empgqsmjgntc7",
-      "source": "nmpgqsmjfos8v",
-      "target": "nmpgqsmjgyahm",
+      "id": "empgsk5u2ppdo",
+      "source": "nmpgsk5u2zcu7",
+      "target": "nmpgsk5u2onbo",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_position"
     },
     {
-      "id": "empgqsmjgc7bb",
-      "source": "nmpgqsmjf785d",
-      "target": "nmpgqsmjgw24i",
+      "id": "empgsk5u2gcux",
+      "source": "nmpgsk5tyzke1",
+      "target": "nmpgsk5u2pnbo",
       "sourceHandle": "output_value_values",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empgqsmjg0sh8",
-      "source": "nmpgqsmjfos8v",
-      "target": "nmpgqsmjgw24i",
+      "id": "empgsk5u2f65f",
+      "source": "nmpgsk5u2zcu7",
+      "target": "nmpgsk5u2pnbo",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_position"
     },
     {
-      "id": "empgqsmjgrzxm",
-      "source": "nmpgqsmjgyahm",
-      "target": "nmpgqsmjgq1lk",
+      "id": "empgsk5u260ro",
+      "source": "nmpgsk5u2onbo",
+      "target": "nmpgsk5u26j7m",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empgqsmjg3ago",
-      "source": "nmpgqsmjfjh31",
-      "target": "nmpgqsmjgq1lk",
+      "id": "empgsk5u2fb2h",
+      "source": "nmpgsk5u18dmu",
+      "target": "nmpgsk5u26j7m",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empgqsmjgot1n",
-      "source": "nmpgqsmjfkuby",
-      "target": "nmpgqsmjg1k55",
+      "id": "empgsk5u2r13g",
+      "source": "nmpgsk5ty7dgb",
+      "target": "nmpgsk5u2gyvo",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_labelA"
     },
     {
-      "id": "empgqsmjglnwo",
-      "source": "nmpgqsmjgw24i",
-      "target": "nmpgqsmjg1k55",
+      "id": "empgsk5u2fldh",
+      "source": "nmpgsk5u2pnbo",
+      "target": "nmpgsk5u2gyvo",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_labelB"
     },
     {
-      "id": "empgqsmjgqhoq",
-      "source": "nmpgqsmjgq1lk",
-      "target": "nmpgqsmjgo6tc",
+      "id": "empgsk5u21o70",
+      "source": "nmpgsk5u26j7m",
+      "target": "nmpgsk5u2536c",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "empgqsmjgp1i1",
-      "source": "nmpgqsmjg1k55",
-      "target": "nmpgqsmjgo6tc",
+      "id": "empgsk5u2ve8j",
+      "source": "nmpgsk5u2gyvo",
+      "target": "nmpgsk5u2536c",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "empgqsmjgcqfe",
-      "source": "nmpgqsmjf1it9",
-      "target": "nmpgqsmjgo6tc",
+      "id": "empgsk5u2ur7p",
+      "source": "nmpgsk5u1xqxh",
+      "target": "nmpgsk5u2536c",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_c"
     },
     {
-      "id": "empgqsmjgiimx",
-      "source": "nmpgqsmjfotwh",
-      "target": "nmpgqsmjgyavk",
+      "id": "empgsk5u2h2f4",
+      "source": "nmpgsk5u2geke",
+      "target": "nmpgsk5u2sc1j",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empgqsmjgrf34",
-      "source": "nmpgqsmjfos8v",
-      "target": "nmpgqsmjgyavk",
+      "id": "empgsk5u2ahyk",
+      "source": "nmpgsk5u2zcu7",
+      "target": "nmpgsk5u2sc1j",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_index"
     },
     {
-      "id": "empgqsmjgmygp",
-      "source": "nmpgqsmjgo6tc",
-      "target": "nmpgqsmjgyavk",
+      "id": "empgsk5u27pnc",
+      "source": "nmpgsk5u2536c",
+      "target": "nmpgsk5u2sc1j",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "empgqsmjgyrng",
-      "source": "nmpgqsmjfotwh",
-      "target": "nmpgqsmjfkx61",
+      "id": "empgsk5u27fq3",
+      "source": "nmpgsk5u2geke",
+      "target": "nmpgsk5u25ups",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empgqsmjgp0eu",
-      "source": "nmpgqsmjgliq0",
-      "target": "nmpgqsmjgpmln",
+      "id": "empgsk5u24rkb",
+      "source": "nmpgsk5u224qu",
+      "target": "nmpgsk5u2ctg6",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empgqsmjgm51a",
-      "source": "nmpgqsmjgpmln",
-      "target": "nmpgqsmjgpzdh",
+      "id": "empgsk5u2kg0s",
+      "source": "nmpgsk5u2ctg6",
+      "target": "nmpgsk5u2jsi7",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_probability"
     },
     {
-      "id": "empgqsmjgkhly",
-      "source": "nmpgqsmjgpzdh",
-      "target": "nmpgqsmjfkx61",
+      "id": "empgsk5u2k41a",
+      "source": "nmpgsk5u2jsi7",
+      "target": "nmpgsk5u25ups",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empgqsmjgckey",
-      "source": "nmpgqsmjfkx61",
-      "target": "nmpgqsmjf4a4m",
+      "id": "empgsk5u2th2d",
+      "source": "nmpgsk5u25ups",
+      "target": "nmpgsk5u2jp1x",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empgqsmjgrbg3",
-      "source": "nmpgqsmjfz5db",
-      "target": "nmpgqsmjgdn6y",
+      "id": "empgsk5u29ieb",
+      "source": "nmpgsk5ty6yxl",
+      "target": "nmpgsk5u2rsza",
       "sourceHandle": "output_value_values",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empgqsmjgjvns",
-      "source": "nmpgqsmjfjh31",
-      "target": "nmpgqsmjgdn6y",
+      "id": "empgsk5u2e6p6",
+      "source": "nmpgsk5u18dmu",
+      "target": "nmpgsk5u2rsza",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empgqsmjgy62y",
-      "source": "nmpgqsmjgdn6y",
-      "target": "nmpgqsmjf4a4m",
+      "id": "empgsk5u2jr91",
+      "source": "nmpgsk5u2rsza",
+      "target": "nmpgsk5u2jp1x",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empgqsmjgd4v7",
-      "source": "nmpgqsmjgoxc7",
-      "target": "nmpgqsmjgszf4",
+      "id": "empgsk5u2dj1q",
+      "source": "nmpgsk5u2vt1c",
+      "target": "nmpgsk5u2ipsm",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "empgqsmjgbwaq",
-      "source": "nmpgqsmjffv8v",
-      "target": "nmpgqsmjgo5dn",
+      "id": "empgsk5u24cjh",
+      "source": "nmpgsk5tyowpi",
+      "target": "nmpgsk5u2gipz",
       "sourceHandle": "output_value_indexes",
       "targetHandle": "input_value_array"
     },
     {
-      "id": "empgqsmjgdnqp",
-      "source": "nmpgqsmjgszf4",
-      "target": "nmpgqsmjgo5dn",
+      "id": "empgsk5u2ixxf",
+      "source": "nmpgsk5u2ipsm",
+      "target": "nmpgsk5u2gipz",
       "sourceHandle": "output_value_index",
       "targetHandle": "input_value_position"
     },
     {
-      "id": "empgqsmjgvpv0",
-      "source": "nmpgqsmjf4a4m",
-      "target": "nmpgqsmjgb01d",
+      "id": "empgsk5u2izj2",
+      "source": "nmpgsk5u2jp1x",
+      "target": "nmpgsk5u211uu",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empgqsmjg7vmt",
-      "source": "nmpgqsmjgo5dn",
-      "target": "nmpgqsmjgb01d",
+      "id": "empgsk5u2vck6",
+      "source": "nmpgsk5u2gipz",
+      "target": "nmpgsk5u211uu",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_targetNI"
     },
     {
-      "id": "empgqsmjg2hni",
-      "source": "nmpgqsmjgq82w",
-      "target": "nmpgqsmjgb01d",
+      "id": "empgsk5u2g0ud",
+      "source": "nmpgsk5u24rs8",
+      "target": "nmpgsk5u211uu",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_payload_0"
     },
     {
-      "id": "empgqsmjgqgu0",
-      "source": "nmpgqsmjgtnqy",
-      "target": "nmpgqsmjgmyrv",
+      "id": "empgsk5u2wcnd",
+      "source": "nmpgsk5u25n7z",
+      "target": "nmpgsk5u2imf0",
       "sourceHandle": "output_value_y",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empgqsmjgq60f",
-      "source": "nmpgqsmjgnon4",
-      "target": "nmpgqsmjgmyrv",
+      "id": "empgsk5u23fj0",
+      "source": "nmpgsk5u2w6r3",
+      "target": "nmpgsk5u2imf0",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empgqsmjg4a1o",
-      "source": "nmpgqsmjgtnqy",
-      "target": "nmpgqsmjge9c6",
-      "sourceHandle": "output_value_y",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empgqsmjgfv9x",
-      "source": "nmpgqsmjgtnqy",
-      "target": "nmpgqsmjge9c6",
-      "sourceHandle": "output_value_maxY",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empgqsmjg7tgo",
-      "source": "nmpgqsmjgmyrv",
-      "target": "nmpgqsmjg2bep",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_values"
-    },
-    {
-      "id": "empgqsmjgu65m",
-      "source": "nmpgqsmjge9c6",
-      "target": "nmpgqsmjg2bep",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_values"
-    },
-    {
-      "id": "empgqsmjgxb9v",
-      "source": "nmpgqsmjgtnqy",
-      "target": "nmpgqsmjg626c",
+      "id": "empgsk5u274jz",
+      "source": "nmpgsk5u25n7z",
+      "target": "nmpgsk5u2wq4k",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empgqsmjgd2hz",
-      "source": "nmpgqsmjg2bep",
-      "target": "nmpgqsmjg626c",
+      "id": "empgsk5u2z0k5",
+      "source": "nmpgsk5u2imf0",
+      "target": "nmpgsk5u2wq4k",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empgqsmjgyk8s",
-      "source": "nmpgqsmjg626c",
-      "target": "nmpgqsmjg3zau",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "empgqsmjgscn5",
-      "source": "nmpgqsmjgtnqy",
-      "target": "nmpgqsmjgpuyy",
-      "sourceHandle": "output_value_y",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empgqsmjgf21s",
-      "source": "nmpgqsmjgzn8v",
-      "target": "nmpgqsmjgpuyy",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empgqsmjg2iel",
-      "source": "nmpgqsmjg626c",
-      "target": "nmpgqsmjg804g",
-      "sourceHandle": "output_flow_else",
-      "targetHandle": "input_flow_check"
-    },
-    {
-      "id": "empgqsmjglu8b",
-      "source": "nmpgqsmjgpuyy",
-      "target": "nmpgqsmjg804g",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empgqsmjgc2pt",
-      "source": "nmpgqsmjgbfm7",
-      "target": "nmpgqsmjghoim",
+      "id": "empgsk5u2rd97",
+      "source": "nmpgsk5u20rpw",
+      "target": "nmpgsk5u2cmef",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empgqsmjgquz2",
-      "source": "nmpgqsmjgimqy",
-      "target": "nmpgqsmjghoim",
+      "id": "empgsk5u2daua",
+      "source": "nmpgsk5u24pn2",
+      "target": "nmpgsk5u2cmef",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empgqsmjgb8m2",
-      "source": "nmpgqsmjg804g",
-      "target": "nmpgqsmjg3nqv",
+      "id": "empgsk5u2rpyk",
+      "source": "nmpgsk5u2wq4k",
+      "target": "nmpgsk5u2no8o",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empgqsmjgb6e3",
-      "source": "nmpgqsmjghoim",
-      "target": "nmpgqsmjg3nqv",
+      "id": "empgsk5u2zh6p",
+      "source": "nmpgsk5u2cmef",
+      "target": "nmpgsk5u2no8o",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empgqsmjg0bju",
-      "source": "nmpgqsmjg3nqv",
-      "target": "nmpgqsmjgdn5q",
+      "id": "empgsk5u26fe9",
+      "source": "nmpgsk5u2no8o",
+      "target": "nmpgsk5u2jhik",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empgqsmjgz121",
-      "source": "nmpgqsmjgimqy",
-      "target": "nmpgqsmjg7h7d",
+      "id": "empgsk5u233b0",
+      "source": "nmpgsk5u24pn2",
+      "target": "nmpgsk5u2md50",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "empgqsmjgnh7t",
-      "source": "nmpgqsmjgbfm7",
-      "target": "nmpgqsmjgnpz6",
+      "id": "empgsk5u2dplh",
+      "source": "nmpgsk5u20rpw",
+      "target": "nmpgsk5u2r9th",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empgqsmjg3x88",
-      "source": "nmpgqsmjg7h7d",
-      "target": "nmpgqsmjgnpz6",
+      "id": "empgsk5u2oujk",
+      "source": "nmpgsk5u2md50",
+      "target": "nmpgsk5u2r9th",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empgqsmjgncom",
-      "source": "nmpgqsmjg3nqv",
-      "target": "nmpgqsmjgsddy",
+      "id": "empgsk5u2salt",
+      "source": "nmpgsk5u2no8o",
+      "target": "nmpgsk5u2bh8m",
       "sourceHandle": "output_flow_else",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empgqsmjgxyx8",
-      "source": "nmpgqsmjgnpz6",
-      "target": "nmpgqsmjgsddy",
+      "id": "empgsk5u25fs5",
+      "source": "nmpgsk5u2r9th",
+      "target": "nmpgsk5u2bh8m",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empgqsmjg32g5",
-      "source": "nmpgqsmjgsddy",
-      "target": "nmpgqsmjgx33k",
+      "id": "empgsk5u2xbjz",
+      "source": "nmpgsk5u2bh8m",
+      "target": "nmpgsk5u2ocpa",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empgqsmjgm1n9",
-      "source": "nmpgqsmjgsddy",
-      "target": "nmpgqsmjgpydd",
+      "id": "empgsk5u2ok6s",
+      "source": "nmpgsk5u2bh8m",
+      "target": "nmpgsk5u2tmv4",
       "sourceHandle": "output_flow_else",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empgqsmjgvjdb",
-      "source": "nmpgqsmjgbfm7",
-      "target": "nmpgqsmjgup2u",
+      "id": "empgsk5u2p3x7",
+      "source": "nmpgsk5u20rpw",
+      "target": "nmpgsk5u2rp0r",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empgqsmjgfd5j",
-      "source": "nmpgqsmjg3iy2",
-      "target": "nmpgqsmjgup2u",
+      "id": "empgsk5u2snvt",
+      "source": "nmpgsk5u2ob9y",
+      "target": "nmpgsk5u2rp0r",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empgqsmjgwdqo",
-      "source": "nmpgqsmjg804g",
-      "target": "nmpgqsmjgm5pl",
+      "id": "empgsk5u2dhwt",
+      "source": "nmpgsk5u2wq4k",
+      "target": "nmpgsk5u2sbir",
       "sourceHandle": "output_flow_else",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empgqsmjgil76",
-      "source": "nmpgqsmjgup2u",
-      "target": "nmpgqsmjgm5pl",
+      "id": "empgsk5u2axln",
+      "source": "nmpgsk5u2rp0r",
+      "target": "nmpgsk5u2sbir",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empgqsmjgosrq",
-      "source": "nmpgqsmjgm5pl",
-      "target": "nmpgqsmjgb9xb",
+      "id": "empgsk5u21wyh",
+      "source": "nmpgsk5u2sbir",
+      "target": "nmpgsk5u2qscu",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "empgqsmjg42f7",
-      "source": "nmpgqsmjg3iy2",
-      "target": "nmpgqsmjgkz0a",
+      "id": "empgsk5u2akvf",
+      "source": "nmpgsk5u2ob9y",
+      "target": "nmpgsk5u24uwe",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "empgqsmjgcwvq",
-      "source": "nmpgqsmjg1o4l",
-      "target": "nmpgqsmjgkz0a",
+      "id": "empgsk5u2l2rc",
+      "source": "nmpgsk5u25op3",
+      "target": "nmpgsk5u24uwe",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "empgqsmjgrift",
-      "source": "nmpgqsmjgbfm7",
-      "target": "nmpgqsmjg0ifl",
+      "id": "empgsk5u2lwks",
+      "source": "nmpgsk5u20rpw",
+      "target": "nmpgsk5u2ma68",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "empgqsmjgvynd",
-      "source": "nmpgqsmjgkz0a",
-      "target": "nmpgqsmjg0ifl",
+      "id": "empgsk5u2l8l8",
+      "source": "nmpgsk5u24uwe",
+      "target": "nmpgsk5u2ma68",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "empgqsmjg6kyy",
-      "source": "nmpgqsmjgm5pl",
-      "target": "nmpgqsmjg65dd",
+      "id": "empgsk5u2p2do",
+      "source": "nmpgsk5u2sbir",
+      "target": "nmpgsk5u2s8un",
       "sourceHandle": "output_flow_else",
       "targetHandle": "input_flow_check"
     },
     {
-      "id": "empgqsmjgc70m",
-      "source": "nmpgqsmjg0ifl",
-      "target": "nmpgqsmjg65dd",
+      "id": "empgsk5u2jl40",
+      "source": "nmpgsk5u2ma68",
+      "target": "nmpgsk5u2s8un",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_condition"
     },
     {
-      "id": "empgqsmjgc2bl",
-      "source": "nmpgqsmjg65dd",
-      "target": "nmpgqsmjg847x",
+      "id": "empgsk5u2zhn6",
+      "source": "nmpgsk5u2s8un",
+      "target": "nmpgsk5u2ahch",
       "sourceHandle": "output_flow_then",
       "targetHandle": "input_flow_do"
     }
@@ -2205,7 +1967,7 @@
   "macroDefs": [],
   "presets": [
     {
-      "id": "preset_mpgqsmjhrph4",
+      "id": "preset_mpgsk5u466gw",
       "name": "Standard — two-solute separation (Table 1)",
       "description": "Paper Table 1 standard rule set + gravity 10. S1 (weak B-affinity) outruns S2 (strong B-affinity); the injected band separates into two peaks (Fig. 3).",
       "state": {
@@ -2217,48 +1979,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "B": {
               "empty": 1,
               "W": 0.9,
               "B": 0.999,
               "S1": 0.9,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S1": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "S2": {
               "empty": 1,
               "W": 0.9,
               "B": 0.1,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.9
             }
           },
           "J": {
@@ -2267,48 +2016,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.1,
               "B": 0.1,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "B": {
               "empty": 1,
               "W": 0.1,
               "B": 0.001,
               "S1": 0.2,
-              "S2": 2,
-              "wall": 1
+              "S2": 2
             },
             "S1": {
               "empty": 1,
               "W": 0.1,
               "B": 0.2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S2": {
               "empty": 1,
               "W": 0.1,
               "B": 2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.1
             }
           }
         },
@@ -2319,7 +2055,7 @@
       "createdAt": 1747000000000
     },
     {
-      "id": "preset_mpgqsmjhuxw4",
+      "id": "preset_mpgsk5u4s06x",
       "name": "Affinity — PB(SB)=0.10, J(SB)=2.00 (k'=1.193) [Table 2]",
       "description": "Paper Table 2: both solutes given the same stationary-phase affinity. Capacity factor k'=1.193. Higher affinity (lower PB, higher J) → slower migration → peak stays higher up the column.",
       "state": {
@@ -2331,48 +2067,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "B": {
               "empty": 1,
               "W": 0.9,
               "B": 0.999,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S1": {
               "empty": 1,
               "W": 0.9,
               "B": 0.1,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "S2": {
               "empty": 1,
               "W": 0.9,
               "B": 0.1,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.9
             }
           },
           "J": {
@@ -2381,48 +2104,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.1,
               "B": 0.1,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "B": {
               "empty": 1,
               "W": 0.1,
               "B": 0.001,
               "S1": 2,
-              "S2": 2,
-              "wall": 1
+              "S2": 2
             },
             "S1": {
               "empty": 1,
               "W": 0.1,
               "B": 2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S2": {
               "empty": 1,
               "W": 0.1,
               "B": 2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.1
             }
           }
         },
@@ -2433,7 +2143,7 @@
       "createdAt": 1747000001000
     },
     {
-      "id": "preset_mpgqsmjhzlef",
+      "id": "preset_mpgsk5u4h4f3",
       "name": "Affinity — PB(SB)=0.30, J(SB)=1.20 (k'=0.246) [Table 2]",
       "description": "Paper Table 2: both solutes given the same stationary-phase affinity. Capacity factor k'=0.246. Higher affinity (lower PB, higher J) → slower migration → peak stays higher up the column.",
       "state": {
@@ -2445,48 +2155,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "B": {
               "empty": 1,
               "W": 0.9,
               "B": 0.999,
               "S1": 0.3,
-              "S2": 0.3,
-              "wall": 1
+              "S2": 0.3
             },
             "S1": {
               "empty": 1,
               "W": 0.9,
               "B": 0.3,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "S2": {
               "empty": 1,
               "W": 0.9,
               "B": 0.3,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.9
             }
           },
           "J": {
@@ -2495,48 +2192,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.1,
               "B": 0.1,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "B": {
               "empty": 1,
               "W": 0.1,
               "B": 0.001,
               "S1": 1.2,
-              "S2": 1.2,
-              "wall": 1
+              "S2": 1.2
             },
             "S1": {
               "empty": 1,
               "W": 0.1,
               "B": 1.2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S2": {
               "empty": 1,
               "W": 0.1,
               "B": 1.2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.1
             }
           }
         },
@@ -2547,7 +2231,7 @@
       "createdAt": 1747000002000
     },
     {
-      "id": "preset_mpgqsmjhn78b",
+      "id": "preset_mpgsk5u4hztm",
       "name": "Affinity — PB(SB)=0.50, J(SB)=0.80 (k'=0.158) [Table 2]",
       "description": "Paper Table 2: both solutes given the same stationary-phase affinity. Capacity factor k'=0.158. Higher affinity (lower PB, higher J) → slower migration → peak stays higher up the column.",
       "state": {
@@ -2559,48 +2243,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "B": {
               "empty": 1,
               "W": 0.9,
               "B": 0.999,
               "S1": 0.5,
-              "S2": 0.5,
-              "wall": 1
+              "S2": 0.5
             },
             "S1": {
               "empty": 1,
               "W": 0.9,
               "B": 0.5,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "S2": {
               "empty": 1,
               "W": 0.9,
               "B": 0.5,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.9
             }
           },
           "J": {
@@ -2609,48 +2280,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.1,
               "B": 0.1,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "B": {
               "empty": 1,
               "W": 0.1,
               "B": 0.001,
               "S1": 0.8,
-              "S2": 0.8,
-              "wall": 1
+              "S2": 0.8
             },
             "S1": {
               "empty": 1,
               "W": 0.1,
               "B": 0.8,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S2": {
               "empty": 1,
               "W": 0.1,
               "B": 0.8,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.1
             }
           }
         },
@@ -2661,7 +2319,7 @@
       "createdAt": 1747000003000
     },
     {
-      "id": "preset_mpgqsmjhho1b",
+      "id": "preset_mpgsk5u44xhj",
       "name": "Affinity — PB(SB)=0.70, J(SB)=0.60 (k'=0.096) [Table 2]",
       "description": "Paper Table 2: both solutes given the same stationary-phase affinity. Capacity factor k'=0.096. Higher affinity (lower PB, higher J) → slower migration → peak stays higher up the column.",
       "state": {
@@ -2673,48 +2331,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "B": {
               "empty": 1,
               "W": 0.9,
               "B": 0.999,
               "S1": 0.7,
-              "S2": 0.7,
-              "wall": 1
+              "S2": 0.7
             },
             "S1": {
               "empty": 1,
               "W": 0.9,
               "B": 0.7,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "S2": {
               "empty": 1,
               "W": 0.9,
               "B": 0.7,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.9
             }
           },
           "J": {
@@ -2723,48 +2368,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.1,
               "B": 0.1,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "B": {
               "empty": 1,
               "W": 0.1,
               "B": 0.001,
               "S1": 0.6,
-              "S2": 0.6,
-              "wall": 1
+              "S2": 0.6
             },
             "S1": {
               "empty": 1,
               "W": 0.1,
               "B": 0.6,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S2": {
               "empty": 1,
               "W": 0.1,
               "B": 0.6,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.1
             }
           }
         },
@@ -2775,7 +2407,7 @@
       "createdAt": 1747000004000
     },
     {
-      "id": "preset_mpgqsmjhz3xw",
+      "id": "preset_mpgsk5u440fb",
       "name": "Affinity — PB(SB)=0.90, J(SB)=0.20 (k'=0.035) [Table 2]",
       "description": "Paper Table 2: both solutes given the same stationary-phase affinity. Capacity factor k'=0.035. Higher affinity (lower PB, higher J) → slower migration → peak stays higher up the column.",
       "state": {
@@ -2787,48 +2419,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "B": {
               "empty": 1,
               "W": 0.9,
               "B": 0.999,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "S1": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "S2": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.9
             }
           },
           "J": {
@@ -2837,48 +2456,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.1,
               "B": 0.1,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "B": {
               "empty": 1,
               "W": 0.1,
               "B": 0.001,
               "S1": 0.2,
-              "S2": 0.2,
-              "wall": 1
+              "S2": 0.2
             },
             "S1": {
               "empty": 1,
               "W": 0.1,
               "B": 0.2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S2": {
               "empty": 1,
               "W": 0.1,
               "B": 0.2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.1
             }
           }
         },
@@ -2889,7 +2495,7 @@
       "createdAt": 1747000005000
     },
     {
-      "id": "preset_mpgqsmjhxtft",
+      "id": "preset_mpgsk5u4xcna",
       "name": "Flow rate — gravity 2 [Table 4]",
       "description": "Paper Table 4: standard tables, gravity (flow rate) = 2. Faster flow → shorter retention. Watch both solute peaks reach the bottom sooner as gravity rises.",
       "state": {
@@ -2901,48 +2507,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "B": {
               "empty": 1,
               "W": 0.9,
               "B": 0.999,
               "S1": 0.9,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S1": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "S2": {
               "empty": 1,
               "W": 0.9,
               "B": 0.1,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.9
             }
           },
           "J": {
@@ -2951,48 +2544,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.1,
               "B": 0.1,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "B": {
               "empty": 1,
               "W": 0.1,
               "B": 0.001,
               "S1": 0.2,
-              "S2": 2,
-              "wall": 1
+              "S2": 2
             },
             "S1": {
               "empty": 1,
               "W": 0.1,
               "B": 0.2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S2": {
               "empty": 1,
               "W": 0.1,
               "B": 2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.1
             }
           }
         },
@@ -3003,7 +2583,7 @@
       "createdAt": 1747000006000
     },
     {
-      "id": "preset_mpgqsmjhuaba",
+      "id": "preset_mpgsk5u4j657",
       "name": "Flow rate — gravity 5 [Table 4]",
       "description": "Paper Table 4: standard tables, gravity (flow rate) = 5. Faster flow → shorter retention. Watch both solute peaks reach the bottom sooner as gravity rises.",
       "state": {
@@ -3015,48 +2595,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "B": {
               "empty": 1,
               "W": 0.9,
               "B": 0.999,
               "S1": 0.9,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S1": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "S2": {
               "empty": 1,
               "W": 0.9,
               "B": 0.1,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.9
             }
           },
           "J": {
@@ -3065,48 +2632,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.1,
               "B": 0.1,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "B": {
               "empty": 1,
               "W": 0.1,
               "B": 0.001,
               "S1": 0.2,
-              "S2": 2,
-              "wall": 1
+              "S2": 2
             },
             "S1": {
               "empty": 1,
               "W": 0.1,
               "B": 0.2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S2": {
               "empty": 1,
               "W": 0.1,
               "B": 2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.1
             }
           }
         },
@@ -3117,7 +2671,7 @@
       "createdAt": 1747000007000
     },
     {
-      "id": "preset_mpgqsmjhpqq5",
+      "id": "preset_mpgsk5u4vvgv",
       "name": "Flow rate — gravity 10 [Table 4]",
       "description": "Paper Table 4: standard tables, gravity (flow rate) = 10. Faster flow → shorter retention. Watch both solute peaks reach the bottom sooner as gravity rises.",
       "state": {
@@ -3129,48 +2683,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "B": {
               "empty": 1,
               "W": 0.9,
               "B": 0.999,
               "S1": 0.9,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S1": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "S2": {
               "empty": 1,
               "W": 0.9,
               "B": 0.1,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.9
             }
           },
           "J": {
@@ -3179,48 +2720,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.1,
               "B": 0.1,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "B": {
               "empty": 1,
               "W": 0.1,
               "B": 0.001,
               "S1": 0.2,
-              "S2": 2,
-              "wall": 1
+              "S2": 2
             },
             "S1": {
               "empty": 1,
               "W": 0.1,
               "B": 0.2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S2": {
               "empty": 1,
               "W": 0.1,
               "B": 2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.1
             }
           }
         },
@@ -3231,7 +2759,7 @@
       "createdAt": 1747000008000
     },
     {
-      "id": "preset_mpgqsmjh4pjv",
+      "id": "preset_mpgsk5u4rz7y",
       "name": "Solvent polarity — PB(W)=0.90, J(W)=0.10 (non-polar) [Table 5]",
       "description": "Paper Table 5: W–W self-association encodes solvent polarity. non-polar. Migration is faster in non-polar solvents (reversed-phase behaviour).",
       "state": {
@@ -3243,48 +2771,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "B": {
               "empty": 1,
               "W": 0.9,
               "B": 0.999,
               "S1": 0.9,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S1": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "S2": {
               "empty": 1,
               "W": 0.9,
               "B": 0.1,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.9
             }
           },
           "J": {
@@ -3293,48 +2808,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.1,
               "B": 0.1,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "B": {
               "empty": 1,
               "W": 0.1,
               "B": 0.001,
               "S1": 0.2,
-              "S2": 2,
-              "wall": 1
+              "S2": 2
             },
             "S1": {
               "empty": 1,
               "W": 0.1,
               "B": 0.2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S2": {
               "empty": 1,
               "W": 0.1,
               "B": 2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.1
             }
           }
         },
@@ -3345,7 +2847,7 @@
       "createdAt": 1747000009000
     },
     {
-      "id": "preset_mpgqsmjhsela",
+      "id": "preset_mpgsk5u40uhr",
       "name": "Solvent polarity — PB(W)=0.50, J(W)=0.70 (intermediate) [Table 5]",
       "description": "Paper Table 5: W–W self-association encodes solvent polarity. intermediate. Migration is faster in non-polar solvents (reversed-phase behaviour).",
       "state": {
@@ -3357,48 +2859,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.5,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "B": {
               "empty": 1,
               "W": 0.9,
               "B": 0.999,
               "S1": 0.9,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S1": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "S2": {
               "empty": 1,
               "W": 0.9,
               "B": 0.1,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.9
             }
           },
           "J": {
@@ -3407,48 +2896,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.7,
               "B": 0.1,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "B": {
               "empty": 1,
               "W": 0.1,
               "B": 0.001,
               "S1": 0.2,
-              "S2": 2,
-              "wall": 1
+              "S2": 2
             },
             "S1": {
               "empty": 1,
               "W": 0.1,
               "B": 0.2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S2": {
               "empty": 1,
               "W": 0.1,
               "B": 2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.1
             }
           }
         },
@@ -3459,7 +2935,7 @@
       "createdAt": 1747000010000
     },
     {
-      "id": "preset_mpgqsmjhwby9",
+      "id": "preset_mpgsk5u42rwr",
       "name": "Solvent polarity — PB(W)=0.25, J(W)=1.50 (polar) [Table 5]",
       "description": "Paper Table 5: W–W self-association encodes solvent polarity. polar. Migration is faster in non-polar solvents (reversed-phase behaviour).",
       "state": {
@@ -3471,48 +2947,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.25,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "B": {
               "empty": 1,
               "W": 0.9,
               "B": 0.999,
               "S1": 0.9,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S1": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "S2": {
               "empty": 1,
               "W": 0.9,
               "B": 0.1,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.9
             }
           },
           "J": {
@@ -3521,48 +2984,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 1.5,
               "B": 0.1,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "B": {
               "empty": 1,
               "W": 0.1,
               "B": 0.001,
               "S1": 0.2,
-              "S2": 2,
-              "wall": 1
+              "S2": 2
             },
             "S1": {
               "empty": 1,
               "W": 0.1,
               "B": 0.2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S2": {
               "empty": 1,
               "W": 0.1,
               "B": 2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.1
             }
           }
         },
@@ -3573,7 +3023,7 @@
       "createdAt": 1747000011000
     },
     {
-      "id": "preset_mpgqsmjhdkqq",
+      "id": "preset_mpgsk5u4b221",
       "name": "Stationary solvation — PB(WB)=0.90, J(WB)=0.10 (Rs=1.125) [Table 6]",
       "description": "Paper Table 6: solvation of the stationary phase (W–B interaction). Resolution Rs=1.125. Greater solvation of B → poorer resolution between the two solute peaks.",
       "state": {
@@ -3585,48 +3035,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "B": {
               "empty": 1,
               "W": 0.9,
               "B": 0.999,
               "S1": 0.9,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S1": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "S2": {
               "empty": 1,
               "W": 0.9,
               "B": 0.1,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.9
             }
           },
           "J": {
@@ -3635,48 +3072,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.1,
               "B": 0.1,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "B": {
               "empty": 1,
               "W": 0.1,
               "B": 0.001,
               "S1": 0.2,
-              "S2": 2,
-              "wall": 1
+              "S2": 2
             },
             "S1": {
               "empty": 1,
               "W": 0.1,
               "B": 0.2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S2": {
               "empty": 1,
               "W": 0.1,
               "B": 2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.1
             }
           }
         },
@@ -3687,7 +3111,7 @@
       "createdAt": 1747000012000
     },
     {
-      "id": "preset_mpgqsmjhsmwt",
+      "id": "preset_mpgsk5u4pwxu",
       "name": "Stationary solvation — PB(WB)=0.50, J(WB)=0.80 (Rs=0.667) [Table 6]",
       "description": "Paper Table 6: solvation of the stationary phase (W–B interaction). Resolution Rs=0.667. Greater solvation of B → poorer resolution between the two solute peaks.",
       "state": {
@@ -3699,48 +3123,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.9,
               "B": 0.5,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "B": {
               "empty": 1,
               "W": 0.5,
               "B": 0.999,
               "S1": 0.9,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S1": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "S2": {
               "empty": 1,
               "W": 0.9,
               "B": 0.1,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.9
             }
           },
           "J": {
@@ -3749,48 +3160,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.1,
               "B": 0.8,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "B": {
               "empty": 1,
               "W": 0.8,
               "B": 0.001,
               "S1": 0.2,
-              "S2": 2,
-              "wall": 1
+              "S2": 2
             },
             "S1": {
               "empty": 1,
               "W": 0.1,
               "B": 0.2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S2": {
               "empty": 1,
               "W": 0.1,
               "B": 2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.1
             }
           }
         },
@@ -3801,7 +3199,7 @@
       "createdAt": 1747000013000
     },
     {
-      "id": "preset_mpgqsmjhuwrd",
+      "id": "preset_mpgsk5u45pe8",
       "name": "Stationary solvation — PB(WB)=0.20, J(WB)=1.50 (Rs=0.556) [Table 6]",
       "description": "Paper Table 6: solvation of the stationary phase (W–B interaction). Resolution Rs=0.556. Greater solvation of B → poorer resolution between the two solute peaks.",
       "state": {
@@ -3813,48 +3211,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.9,
               "B": 0.2,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "B": {
               "empty": 1,
               "W": 0.2,
               "B": 0.999,
               "S1": 0.9,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S1": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "S2": {
               "empty": 1,
               "W": 0.9,
               "B": 0.1,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.9
             }
           },
           "J": {
@@ -3863,48 +3248,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.1,
               "B": 1.5,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "B": {
               "empty": 1,
               "W": 1.5,
               "B": 0.001,
               "S1": 0.2,
-              "S2": 2,
-              "wall": 1
+              "S2": 2
             },
             "S1": {
               "empty": 1,
               "W": 0.1,
               "B": 0.2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S2": {
               "empty": 1,
               "W": 0.1,
               "B": 2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.1
             }
           }
         },
@@ -3915,7 +3287,7 @@
       "createdAt": 1747000014000
     },
     {
-      "id": "preset_mpgqsmjh0eue",
+      "id": "preset_mpgsk5u4jt7t",
       "name": "Solute+stationary solvation — PB=0.90, J=0.20 [Table 7]",
       "description": "Paper Table 7: solvation of BOTH the solutes and the stationary phase (W–B, W–S1, W–S2 set together). Stronger solvent–solute interaction reduces retention and resolution.",
       "state": {
@@ -3927,48 +3299,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "B": {
               "empty": 1,
               "W": 0.9,
               "B": 0.999,
               "S1": 0.9,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S1": {
               "empty": 1,
               "W": 0.9,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "S2": {
               "empty": 1,
               "W": 0.9,
               "B": 0.1,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.9
             }
           },
           "J": {
@@ -3977,48 +3336,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.1,
               "B": 0.2,
               "S1": 0.2,
-              "S2": 0.2,
-              "wall": 1
+              "S2": 0.2
             },
             "B": {
               "empty": 1,
               "W": 0.2,
               "B": 0.001,
               "S1": 0.2,
-              "S2": 2,
-              "wall": 1
+              "S2": 2
             },
             "S1": {
               "empty": 1,
               "W": 0.2,
               "B": 0.2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S2": {
               "empty": 1,
               "W": 0.2,
               "B": 2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.1
             }
           }
         },
@@ -4029,7 +3375,7 @@
       "createdAt": 1747000015000
     },
     {
-      "id": "preset_mpgqsmjhdo26",
+      "id": "preset_mpgsk5u43vka",
       "name": "Solute+stationary solvation — PB=0.20, J=1.50 [Table 7]",
       "description": "Paper Table 7: solvation of BOTH the solutes and the stationary phase (W–B, W–S1, W–S2 set together). Stronger solvent–solute interaction reduces retention and resolution.",
       "state": {
@@ -4041,48 +3387,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.9,
               "B": 0.2,
               "S1": 0.2,
-              "S2": 0.2,
-              "wall": 1
+              "S2": 0.2
             },
             "B": {
               "empty": 1,
               "W": 0.2,
               "B": 0.999,
               "S1": 0.9,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S1": {
               "empty": 1,
               "W": 0.2,
               "B": 0.9,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
+              "S2": 0.9
             },
             "S2": {
               "empty": 1,
               "W": 0.2,
               "B": 0.1,
               "S1": 0.9,
-              "S2": 0.9,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.9
             }
           },
           "J": {
@@ -4091,48 +3424,35 @@
               "W": 1,
               "B": 1,
               "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 1
             },
             "W": {
               "empty": 1,
               "W": 0.1,
               "B": 1.5,
               "S1": 1.5,
-              "S2": 1.5,
-              "wall": 1
+              "S2": 1.5
             },
             "B": {
               "empty": 1,
               "W": 1.5,
               "B": 0.001,
               "S1": 0.2,
-              "S2": 2,
-              "wall": 1
+              "S2": 2
             },
             "S1": {
               "empty": 1,
               "W": 1.5,
               "B": 0.2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
+              "S2": 0.1
             },
             "S2": {
               "empty": 1,
               "W": 1.5,
               "B": 2,
               "S1": 0.1,
-              "S2": 0.1,
-              "wall": 1
-            },
-            "wall": {
-              "empty": 1,
-              "W": 1,
-              "B": 1,
-              "S1": 1,
-              "S2": 1,
-              "wall": 1
+              "S2": 0.1
             }
           }
         },
