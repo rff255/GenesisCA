@@ -142,12 +142,12 @@ const MAPPING_VIZ = 'viz';
 const VAR_PB = 'pbFactors';
 const VAR_W = 'weights';
 
-// Tag option order — index 0..5. South = NBR_NEAR coord index 2.
-// `wall` = immovable boundary cell. The first + last rows are filled with walls
-// (Cheng & Kier 1995) so the horizontally-wrapping torus becomes a vertical
-// cylinder with solid top/bottom caps — establishing the "down" that gravity needs.
-const CELL_OPTIONS = ['empty', 'W', 'B', 'S1', 'S2', 'wall'];
+// Tag option order — index 0..4. South = NBR_NEAR coord index 2.
+const CELL_OPTIONS = ['empty', 'W', 'B', 'S1', 'S2'];
 const SOUTH_INDEX = 2;
+// Solutes are injected on this row (near the top). A small offset below row 0 keeps a
+// solute from wrapping to the column foot via the vertical torus (see Init Event).
+const INJECTION_ROW = 2;
 
 function tagConst(tagName, col, row) {
   const i = CELL_OPTIONS.indexOf(tagName);
@@ -175,7 +175,6 @@ const farTypes = node('getNeighborsAttrByIndexes', { attributeId: ATTR_CELLTYPE 
 vEdge(niArrFar, 'indexes', farTypes, 'indexes');
 const tagEmpty = tagConst('empty', 0, 4);
 const tagB = tagConst('B', 0, 5);
-const tagWall = tagConst('wall', 0, 8);
 const gravityAttr = node('getModelAttribute', { attributeId: ATTR_GRAVITY, isColorAttr: false }, 0, 6, 'gravity G');
 const const2 = intConst(SOUTH_INDEX, 0, 7);
 
@@ -193,13 +192,9 @@ vEdge(tagEmpty, 'value', isOccupied, 'y');
 const isNotB = node('statement', { operation: '!=' }, 1, 1, 'type != B');
 vEdge(myType, 'value', isNotB, 'x');
 vEdge(tagB, 'value', isNotB, 'y');
-const isNotWall = node('statement', { operation: '!=' }, 1, 2, 'type != wall');
-vEdge(myType, 'value', isNotWall, 'x');
-vEdge(tagWall, 'value', isNotWall, 'y');
 const canAct = node('aggregate', { operation: 'and' }, 2, 1, 'mobile? (W/S1/S2)');
 vEdge(isOccupied, 'result', canAct, 'values');
 vEdge(isNotB, 'result', canAct, 'values');
-vEdge(isNotWall, 'result', canAct, 'values');
 vEdge(canAct, 'result', condCanAct, 'condition');
 
 // ─── Per-direction loop (cols 2-6, rows 3-9) ─────────────────────────────────
@@ -312,13 +307,17 @@ vEdge(chosenNI, 'value', moveSelf, 'targetNI');
 vEdge(myTypePayload, 'value', moveSelf, 'payload_0');
 
 // =============================================================================
-// INIT EVENT — per cell, on Reset: build the capped cylinder + seed it
+// INIT EVENT — per cell, on Reset: seed the recirculating column
 // =============================================================================
-// The column is a cylinder: it wraps horizontally (torus → circumference) but the
-// FIRST and LAST rows are immovable `wall` cells (Cheng & Kier 1995 — two boundary
-// rows turn the torus into a cylinder and give gravity its "down"). Row 1 (just
-// below the top cap) is the solute injection band; rows 2..maxY-1 are the column
-// bulk (W / B / empty). One uniform draw r per cell drives the injection + bulk.
+// The column is a FULL torus — the paper's "cylinder with ingredients flowing back
+// to the top of the system". It wraps BOTH horizontally (the tube circumference) and
+// vertically (a cell exiting the bottom re-enters at the top), so the gravity-driven
+// mobile phase recirculates as continuous flow and nothing piles up against a bottom
+// edge. (Contrast Cheng & Kier 1995's oil-water model, a CLOSED cylinder with two
+// immovable boundary rows where the liquids settle into static layers — that is NOT
+// this model.) Row 0 (the top — the paper's injection point) is the solute injection
+// band; every other row is the column bulk (W / B / empty). One uniform draw r per
+// cell drives both.
 const initRow = 12;
 const initNode = node('initEvent', {}, 0, initRow);
 
@@ -326,31 +325,20 @@ const densW = node('getModelAttribute', { attributeId: ATTR_DENS_W, isColorAttr:
 const densB = node('getModelAttribute', { attributeId: ATTR_DENS_B, isColorAttr: false }, 1, initRow + 5, 'densB');
 const densSolute = node('getModelAttribute', { attributeId: ATTR_DENS_SOLUTE, isColorAttr: false }, 1, initRow + 1, 'densSolute');
 const rInit = node('getRandom', { randomType: 'float', min: '0', max: '1' }, 1, initRow, 'r ∈ [0,1)');
-const const0 = intConst(0, 1, initRow + 6);
-const const1 = intConst(1, 1, initRow + 7);
+const injRowConst = intConst(INJECTION_ROW, 1, initRow + 6);
 
-// --- First/last row → immovable wall cap (y == 0 OR y == maxY) ---
-const isY0 = node('statement', { operation: '==' }, 2, initRow - 3, 'y == 0?');
-vEdge(initNode, 'y', isY0, 'x');
-vEdge(const0, 'value', isY0, 'y');
-const isYmax = node('statement', { operation: '==' }, 2, initRow - 2, 'y == maxY?');
-vEdge(initNode, 'y', isYmax, 'x');
-vEdge(initNode, 'maxY', isYmax, 'y');
-const isWall = node('aggregate', { operation: 'or' }, 3, initRow - 3, 'first or last row?');
-vEdge(isY0, 'result', isWall, 'values');
-vEdge(isYmax, 'result', isWall, 'values');
-const condWall = node('conditional', {}, 4, initRow - 3, 'If boundary row');
-fEdge(initNode, 'do', condWall, 'check');
-vEdge(isWall, 'result', condWall, 'condition');
-const setWall = node('setAttribute', { attributeId: ATTR_CELLTYPE, _port_value: String(CELL_OPTIONS.indexOf('wall')) }, 5, initRow - 3, 'type ← wall');
-fEdge(condWall, 'then', setWall, 'do');
-
-// --- Interior (condWall.else): row 1 = injection band; rows 2..maxY-1 = bulk ---
-const isRow1 = node('statement', { operation: '==' }, 2, initRow, 'y == 1?');
+// --- Injection band (row INJECTION_ROW, near the top) = solutes; every other row =
+//     column bulk. The band sits a couple of rows BELOW the very top edge: on the
+//     vertical torus, row 0's north neighbour is the bottom row (199), so a solute
+//     injected at row 0 can take the one upward move that wraps it to the column's
+//     foot, showing up as a spurious blip at the far end of the chromatogram. A
+//     small offset removes that (a solute would have to climb several rows against
+//     gravity to wrap) and is negligible vs the paper's "row 1" on a 200-row column. ---
+const isRow1 = node('statement', { operation: '==' }, 2, initRow, `y == ${INJECTION_ROW} (near top)?`);
 vEdge(initNode, 'y', isRow1, 'x');
-vEdge(const1, 'value', isRow1, 'y');
+vEdge(injRowConst, 'value', isRow1, 'y');
 const condRow1 = node('conditional', {}, 3, initRow, 'If injection row');
-fEdge(condWall, 'else', condRow1, 'check');
+fEdge(initNode, 'do', condRow1, 'check');
 vEdge(isRow1, 'result', condRow1, 'condition');
 
 // injection band (condRow1.then): r<densSolute → S1; r<2·densSolute → S2; else W
@@ -402,17 +390,17 @@ fEdge(condWbulk, 'then', setWbulk, 'do');
 // =============================================================================
 // GROUP WRAPPERS (visual scoping)
 // =============================================================================
-groupNode('Shared reads', [myType, niArrNear, niArrFar, nbrTypes, farTypes, tagEmpty, tagB, tagWall, gravityAttr, const2], '#3a4a5a');
+groupNode('Shared reads', [myType, niArrNear, niArrFar, nbrTypes, farTypes, tagEmpty, tagB, gravityAttr, const2], '#3a4a5a');
 groupNode('Gating chain → move (mobile? → broke free? → empty dir? → move)',
-  [condCanAct, condBreak, condCanMove, moveSelf, isOccupied, isNotB, isNotWall, canAct,
+  [condCanAct, condBreak, condCanMove, moveSelf, isOccupied, isNotB, canAct,
    pbRead, pbProduct, rollBreak, hasEmptyDir, weightsRead, chosenSamp, chosenNI, myTypePayload], '#4a6858');
 groupNode('Per-direction body (runs for d ∈ {N,E,S,W})',
   [forEachDirs, nbrType_d, farType_d, pb_d, setPb, isEmpty_d, jOcc_d, wt_d, setWt], '#4a5878');
 groupNode('South gravity boost (weights[S] = empty ? J+G : 0)',
   [southType, southFar, southEmpty, jOccSouth, wSouth, boostSouth], '#5a4a78');
-groupNode('Init Event — wall caps (rows 0 + maxY) → injection band (row 1) → bulk',
-  [initNode, densW, densB, densSolute, rInit, const0, const1,
-   isY0, isYmax, isWall, condWall, setWall, isRow1, condRow1,
+groupNode('Init Event — injection band (near the top) → column bulk',
+  [initNode, densW, densB, densSolute, rInit, injRowConst,
+   isRow1, condRow1,
    isS1, condS1, setS1, twoDensSolute, isS2, condS2, setS2, setWrow0,
    isB, condB, setB, densBplusW, isWbulk, condWbulk, setWbulk], '#406870');
 
@@ -425,21 +413,23 @@ const properties = {
   modelAuthor: 'Rodrigo F. Figueiredo',
   description:
     'Faithful reproduction of Kier, Cheng & Karnes (2000), "A Cellular Automata ' +
-    'Model of Chromatography" (Biomed. Chromatogr. 14:530-534). A 43×200 cylinder ' +
-    'column — it wraps horizontally (the tube circumference) while the FIRST and LAST ' +
-    'rows are immovable "wall" cells that cap the top and bottom (Cheng & Kier 1995), ' +
-    'establishing the vertical direction gravity needs. It holds solvent W, immobile ' +
-    'stationary phase B, and two solutes S1/S2, governed by pairwise break (PB) and ' +
-    'join (J) probabilities + a downward gravity flow G. The strongly-retained solute ' +
-    'S2 (low PB, high J with B) lags the weakly-retained S1, so a band injected just ' +
-    'below the top cap separates into two peaks as it flows down — watch the ' +
-    '"Chromatogram" indicator (population ' +
-    'vs column position, reproducing Fig. 3). Click Reset to inject the band, then ' +
-    'Play. Switch presets to explore the paper\'s parameter studies (affinity, flow ' +
-    'rate, solvent polarity, stationary-phase solvation). Gravity follows the paper\'s ' +
-    'definition ("the probability of a cell moving to a position further down the ' +
-    'column"): an additive downward push on the move into the open cell below, on the ' +
-    'same baseline scale as J (Cheng & Kier 1995, JCICS 35:1054).',
+    'Model of Chromatography" (Biomed. Chromatogr. 14:530-534). A 43×200 column on a ' +
+    'full torus — the paper\'s "cylinder with ingredients flowing back to the top of ' +
+    'the system": it wraps both horizontally (the tube circumference) and vertically ' +
+    '(cells leaving the bottom re-enter at the top), so the gravity-driven mobile ' +
+    'phase recirculates as continuous flow and never just drains to the bottom. It ' +
+    'holds solvent W, immobile stationary phase B, and two solutes S1/S2, governed by ' +
+    'pairwise break (PB) and join (J) probabilities + a downward gravity flow G ' +
+    'applied to every mobile component (the "force pushing the mobile phase"). The ' +
+    'strongly-retained solute S2 (low PB, high J with B) lags the weakly-retained S1, ' +
+    'so a band injected at the top separates into two peaks as it flows down — watch ' +
+    'the "Chromatogram" indicator (population vs column position, reproducing Fig. 3). ' +
+    'Click Reset to inject the band, then Play. Switch presets to explore the paper\'s ' +
+    'parameter studies (affinity, flow rate, solvent polarity, stationary-phase ' +
+    'solvation). Gravity follows the paper\'s definition ("the probability of a cell ' +
+    'moving to a position further down the column"): an additive downward push on the ' +
+    'move into the open cell below, on the same baseline scale as J (Cheng & Kier ' +
+    '1995, JCICS 35:1054).',
   topology: '2d-grid',
   boundaryTreatment: 'torus',
   updateMode: 'asynchronous',
@@ -469,25 +459,22 @@ function buildTables(o) {
     S1S1: 0.10, S1S2: 0.10, S2S2: 0.10,
     ...(o.j || {}),
   };
-  // `empty` and `wall` rows/cols are 1.0 (neutral): no bond to break (PB=1) and
-  // no joining preference (J=1). A wall just blocks the direction it occupies (it
-  // is never empty, so nothing moves into it) without trapping its neighbours.
+  // `empty` rows/cols are 1.0 (neutral): no bond to break (PB=1) and no joining
+  // preference (J=1 — the baseline gravity/J share).
   return {
     [ATTR_PB]: {
-      empty: { empty: 1, W: 1, B: 1, S1: 1, S2: 1, wall: 1 },
-      W: { empty: 1, W: pb.WW, B: pb.WB, S1: pb.WS1, S2: pb.WS2, wall: 1 },
-      B: { empty: 1, W: pb.WB, B: pb.BB, S1: pb.BS1, S2: pb.BS2, wall: 1 },
-      S1: { empty: 1, W: pb.WS1, B: pb.BS1, S1: pb.S1S1, S2: pb.S1S2, wall: 1 },
-      S2: { empty: 1, W: pb.WS2, B: pb.BS2, S1: pb.S1S2, S2: pb.S2S2, wall: 1 },
-      wall: { empty: 1, W: 1, B: 1, S1: 1, S2: 1, wall: 1 },
+      empty: { empty: 1, W: 1, B: 1, S1: 1, S2: 1 },
+      W: { empty: 1, W: pb.WW, B: pb.WB, S1: pb.WS1, S2: pb.WS2 },
+      B: { empty: 1, W: pb.WB, B: pb.BB, S1: pb.BS1, S2: pb.BS2 },
+      S1: { empty: 1, W: pb.WS1, B: pb.BS1, S1: pb.S1S1, S2: pb.S1S2 },
+      S2: { empty: 1, W: pb.WS2, B: pb.BS2, S1: pb.S1S2, S2: pb.S2S2 },
     },
     [ATTR_J]: {
-      empty: { empty: 1, W: 1, B: 1, S1: 1, S2: 1, wall: 1 },
-      W: { empty: 1, W: j.WW, B: j.WB, S1: j.WS1, S2: j.WS2, wall: 1 },
-      B: { empty: 1, W: j.WB, B: j.BB, S1: j.BS1, S2: j.BS2, wall: 1 },
-      S1: { empty: 1, W: j.WS1, B: j.BS1, S1: j.S1S1, S2: j.S1S2, wall: 1 },
-      S2: { empty: 1, W: j.WS2, B: j.BS2, S1: j.S1S2, S2: j.S2S2, wall: 1 },
-      wall: { empty: 1, W: 1, B: 1, S1: 1, S2: 1, wall: 1 },
+      empty: { empty: 1, W: 1, B: 1, S1: 1, S2: 1 },
+      W: { empty: 1, W: j.WW, B: j.WB, S1: j.WS1, S2: j.WS2 },
+      B: { empty: 1, W: j.WB, B: j.BB, S1: j.BS1, S2: j.BS2 },
+      S1: { empty: 1, W: j.WS1, B: j.BS1, S1: j.S1S1, S2: j.S1S2 },
+      S2: { empty: 1, W: j.WS2, B: j.BS2, S1: j.S1S2, S2: j.S2S2 },
     },
   };
 }
@@ -499,8 +486,7 @@ const attributes = [
     description:
       'Which ingredient occupies the cell. empty = vacancy (the mobile phase ' +
       'flows through these); W = solvent / mobile phase; B = stationary phase ' +
-      '(immobile); S1 = weakly-retained solute; S2 = strongly-retained solute; ' +
-      'wall = immovable boundary cap (the first + last rows, forming the cylinder).',
+      '(immobile); S1 = weakly-retained solute; S2 = strongly-retained solute.',
     isModelAttribute: false, defaultValue: String(CELL_OPTIONS.indexOf('empty')),
     tagOptions: CELL_OPTIONS,
   },
@@ -543,17 +529,17 @@ const attributes = [
   },
   {
     id: ATTR_DENS_W, name: 'Solvent density (init)', type: 'float',
-    description: 'Fraction of interior-bulk cells (rows 2..maxY-1) seeded as solvent W on Reset. Paper ≈ 0.69.',
+    description: 'Fraction of column-bulk cells (every row below the top) seeded as solvent W on Reset. Paper ≈ 0.69.',
     isModelAttribute: true, defaultValue: '0.69', hasBounds: true, min: 0, max: 1,
   },
   {
     id: ATTR_DENS_B, name: 'Stationary density (init)', type: 'float',
-    description: 'Fraction of interior-bulk cells (rows 2..maxY-1) seeded as immobile stationary phase B on Reset. Paper ≈ 0.07 (600 of 8600 cells). "≥3 cells apart" constraint not enforced (random placement).',
+    description: 'Fraction of column-bulk cells (every row below the top) seeded as immobile stationary phase B on Reset. Paper ≈ 0.07 (600 of 8600 cells). "≥3 cells apart" constraint not enforced (random placement).',
     isModelAttribute: true, defaultValue: '0.07', hasBounds: true, min: 0, max: 1,
   },
   {
     id: ATTR_DENS_SOLUTE, name: 'Solute density (init, per species)', type: 'float',
-    description: 'Fraction of the injection row (row 1, just below the top wall cap) seeded as each solute (S1 and S2 get this fraction each; the rest of the row is W). Paper ≈ 0.23 (10 of 43 cells per solute).',
+    description: 'Fraction of the injection row (near the top of the column) seeded as each solute (S1 and S2 get this fraction each; the rest of the row is W). Paper ≈ 0.23 (10 of 43 cells per solute).',
     isModelAttribute: true, defaultValue: '0.23', hasBounds: true, min: 0, max: 0.5,
   },
 ];
@@ -576,7 +562,7 @@ const neighborhoods = [
 const mappings = [
   {
     id: MAPPING_VIZ, name: 'Cell type', isAttributeToColor: true,
-    description: 'Colours each cell by ingredient: empty near-black, W blue, B grey, S1 green, S2 red, wall light-grey (top/bottom caps). (Linked categorical mapping — auto-generated from the cell type.)',
+    description: 'Colours each cell by ingredient: empty near-black, W blue, B grey, S1 green, S2 red. (Linked categorical mapping — auto-generated from the cell type.)',
     redDescription: 'By cell type', greenDescription: 'By cell type', blueDescription: 'By cell type',
     linked: true,
     linkedAttributeId: ATTR_CELLTYPE,
@@ -587,7 +573,6 @@ const mappings = [
         { r: 120, g: 120, b: 120 }, // B
         { r: 60, g: 200, b: 90 },   // S1
         { r: 230, g: 60, b: 60 },   // S2
-        { r: 165, g: 165, b: 175 }, // wall (top/bottom caps)
       ],
     },
   },
