@@ -232,6 +232,19 @@ export function IndicatorsPanelSection() {
                   </div>
                 )}
 
+                {/* Track Categories — bool/tag frequency only. Pick the subset of
+                    category values to chart so a dominant one doesn't flatten the
+                    rest on a shared Y-axis. Applies to both generation and spatial
+                    (chromatogram) charts. */}
+                {linkedAttr && (linkedAttr.type === 'bool' || linkedAttr.type === 'tag')
+                  && selected.linkedAggregation === 'frequency' && (
+                  <TrackCategoriesEditor
+                    categories={linkedAttr.type === 'bool' ? ['true', 'false'] : (linkedAttr.tagOptions || [])}
+                    tracked={selected.trackedValues}
+                    onChange={tv => updateIndicator(selected.id, { trackedValues: tv })}
+                  />
+                )}
+
                 {/* Spatial X-axis (chromatogram) — linked indicators only. The
                     'rows'/'columns' options turn the indicator into a live
                     position histogram instead of a generation time-history. */}
@@ -326,6 +339,41 @@ export function IndicatorsPanelSection() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Checkbox multi-select for which bool/tag frequency categories to chart.
+ *  `tracked` undefined/empty = all tracked. Stores the explicit subset when
+ *  partial; collapses a full or empty selection back to `undefined` (= all). */
+function TrackCategoriesEditor({ categories, tracked, onChange }: {
+  categories: string[];
+  tracked: string[] | undefined;
+  onChange: (next: string[] | undefined) => void;
+}) {
+  const isOn = (c: string) => !tracked || tracked.length === 0 || tracked.includes(c);
+  const toggle = (c: string) => {
+    const checked = categories.filter(isOn);
+    const next = checked.includes(c) ? checked.filter(x => x !== c) : [...checked, c];
+    const ordered = categories.filter(x => next.includes(x));
+    onChange(ordered.length === 0 || ordered.length === categories.length ? undefined : ordered);
+  };
+  return (
+    <div className={styles.field}>
+      <label className={styles.fieldLabel}>Track Categories</label>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 2 }}>
+        {categories.length === 0
+          ? <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>(no categories)</span>
+          : categories.map(c => (
+              <label key={c} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
+                <input type="checkbox" checked={isOn(c)} onChange={() => toggle(c)} />
+                <span>{c}</span>
+              </label>
+            ))}
+      </div>
+      <div style={{ fontSize: '0.66rem', opacity: 0.6, marginTop: 3 }}>
+        Only checked categories are charted (all checked = track all).
+      </div>
     </div>
   );
 }

@@ -296,6 +296,13 @@ export interface Indicator {
   linkedAttributeId?: string;
   linkedAggregation?: LinkedAggregation;
   binCount?: number;                    // float + frequency: number of *value* histogram bins (default 10)
+  /** Categorical (bool/tag) frequency only: the subset of category values to
+   *  track/chart (bool → "true"/"false"; tag → tag-option names). Absent or
+   *  empty = track ALL categories (default / back-compat). Lets a chart focus on
+   *  a few categories so a dominant one doesn't flatten the rest on a shared
+   *  Y-axis. Filtered at the worker's message-assembly step, so it applies to
+   *  generation- and spatial-axis frequency on every compile target. */
+  trackedValues?: string[];
   // Spatial X-axis (linked-only; absent ⇒ 'generation' = classic time-history):
   /** When 'rows'/'columns', the indicator is a live spatial histogram binned by
    *  cell position along that axis. Standalone indicators stay Generation-only. */

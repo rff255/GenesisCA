@@ -1,0 +1,4146 @@
+{
+  "schemaVersion": 2,
+  "properties": {
+    "name": "Chromatography (Kier, Cheng & Karnes 2000)",
+    "author": "Lemont B. Kier, Chao-Kun Cheng, H. Thomas Karnes",
+    "modelAuthor": "Rodrigo F. Figueiredo",
+    "description": "Faithful reproduction of Kier, Cheng & Karnes (2000), \"A Cellular Automata Model of Chromatography\" (Biomed. Chromatogr. 14:530-534). A 43×200 cylinder column — it wraps horizontally (the tube circumference) while the FIRST and LAST rows are immovable \"wall\" cells that cap the top and bottom (Cheng & Kier 1995), establishing the vertical direction gravity needs. It holds solvent W, immobile stationary phase B, and two solutes S1/S2, governed by pairwise break (PB) and join (J) probabilities + a downward gravity flow G. The strongly-retained solute S2 (low PB, high J with B) lags the weakly-retained S1, so a band injected just below the top cap separates into two peaks as it flows down — watch the \"Chromatogram\" indicator (population vs column position, reproducing Fig. 3). Click Reset to inject the band, then Play. Switch presets to explore the paper's parameter studies (affinity, flow rate, solvent polarity, stationary-phase solvation). Gravity follows the paper's definition (\"the probability of a cell moving to a position further down the column\"): an additive downward push on the move into the open cell below, on the same baseline scale as J (Cheng & Kier 1995, JCICS 35:1054).",
+    "topology": "2d-grid",
+    "boundaryTreatment": "torus",
+    "updateMode": "asynchronous",
+    "asyncScheme": "random-order",
+    "gridWidth": 43,
+    "gridHeight": 200,
+    "maxIterations": 100000,
+    "tags": [
+      "chemistry",
+      "chromatography",
+      "separation",
+      "movement",
+      "gravity",
+      "kier",
+      "lookup table",
+      "chromatogram"
+    ],
+    "useWasm": true,
+    "useWebGPU": false
+  },
+  "attributes": [
+    {
+      "id": "cellType",
+      "name": "Cell type",
+      "type": "tag",
+      "description": "Which ingredient occupies the cell. empty = vacancy (the mobile phase flows through these); W = solvent / mobile phase; B = stationary phase (immobile); S1 = weakly-retained solute; S2 = strongly-retained solute; wall = immovable boundary cap (the first + last rows, forming the cylinder).",
+      "isModelAttribute": false,
+      "defaultValue": "0",
+      "tagOptions": [
+        "empty",
+        "W",
+        "B",
+        "S1",
+        "S2",
+        "wall"
+      ]
+    },
+    {
+      "id": "PB",
+      "name": "PB (break probability)",
+      "type": "lookupTable",
+      "description": "Probability that two adjacent cells break their bond (= the cell can move away from that neighbour). LOW = strong affinity (stays bonded → retained), HIGH = weak affinity (breaks easily → mobile). Keyed by cell type on both axes; the `empty` row/col is 1.0 (no bond to break). Paper Table 1: B–S1 0.90 (weak), B–S2 0.10 (strong — S2 is retained).",
+      "isModelAttribute": true,
+      "defaultValue": "0",
+      "rowKeySource": {
+        "kind": "tagAttribute",
+        "attributeId": "cellType"
+      },
+      "colKeySource": {
+        "kind": "tagAttribute",
+        "attributeId": "cellType"
+      },
+      "symmetric": true,
+      "tableValues": {
+        "empty": {
+          "empty": 1,
+          "W": 1,
+          "B": 1,
+          "S1": 1,
+          "S2": 1,
+          "wall": 1
+        },
+        "W": {
+          "empty": 1,
+          "W": 0.9,
+          "B": 0.9,
+          "S1": 0.9,
+          "S2": 0.9,
+          "wall": 1
+        },
+        "B": {
+          "empty": 1,
+          "W": 0.9,
+          "B": 0.999,
+          "S1": 0.9,
+          "S2": 0.1,
+          "wall": 1
+        },
+        "S1": {
+          "empty": 1,
+          "W": 0.9,
+          "B": 0.9,
+          "S1": 0.9,
+          "S2": 0.9,
+          "wall": 1
+        },
+        "S2": {
+          "empty": 1,
+          "W": 0.9,
+          "B": 0.1,
+          "S1": 0.9,
+          "S2": 0.9,
+          "wall": 1
+        },
+        "wall": {
+          "empty": 1,
+          "W": 1,
+          "B": 1,
+          "S1": 1,
+          "S2": 1,
+          "wall": 1
+        }
+      }
+    },
+    {
+      "id": "J",
+      "name": "J (join / trajectory)",
+      "type": "lookupTable",
+      "description": "Relative probability that a cell moves TOWARD a given type sitting two cells ahead across a vacancy (the extended von Neumann \"k\" cell). J = 1 neutral, > 1 attracts, < 1 repels. Keyed by cell type on both axes; `empty` = 1.0 (neutral). Paper Table 1: B–S1 0.20 (weak attraction), B–S2 2.00 (strong — S2 is drawn to the stationary phase).",
+      "isModelAttribute": true,
+      "defaultValue": "0",
+      "rowKeySource": {
+        "kind": "tagAttribute",
+        "attributeId": "cellType"
+      },
+      "colKeySource": {
+        "kind": "tagAttribute",
+        "attributeId": "cellType"
+      },
+      "symmetric": true,
+      "tableValues": {
+        "empty": {
+          "empty": 1,
+          "W": 1,
+          "B": 1,
+          "S1": 1,
+          "S2": 1,
+          "wall": 1
+        },
+        "W": {
+          "empty": 1,
+          "W": 0.1,
+          "B": 0.1,
+          "S1": 0.1,
+          "S2": 0.1,
+          "wall": 1
+        },
+        "B": {
+          "empty": 1,
+          "W": 0.1,
+          "B": 0.001,
+          "S1": 0.2,
+          "S2": 2,
+          "wall": 1
+        },
+        "S1": {
+          "empty": 1,
+          "W": 0.1,
+          "B": 0.2,
+          "S1": 0.1,
+          "S2": 0.1,
+          "wall": 1
+        },
+        "S2": {
+          "empty": 1,
+          "W": 0.1,
+          "B": 2,
+          "S1": 0.1,
+          "S2": 0.1,
+          "wall": 1
+        },
+        "wall": {
+          "empty": 1,
+          "W": 1,
+          "B": 1,
+          "S1": 1,
+          "S2": 1,
+          "wall": 1
+        }
+      }
+    },
+    {
+      "id": "gravity",
+      "name": "Gravity (flow rate)",
+      "type": "float",
+      "description": "The downward flow term — \"the probability of a cell moving to a position further down the column\" (paper). Added to the south (down) move weight, on the same baseline scale as J, so larger G = faster migration = shorter retention. Paper standard 10; flow-rate study sweeps 2 / 5 / 10.",
+      "isModelAttribute": true,
+      "defaultValue": "10",
+      "hasBounds": true,
+      "min": 0,
+      "max": 50
+    },
+    {
+      "id": "densW",
+      "name": "Solvent density (init)",
+      "type": "float",
+      "description": "Fraction of interior-bulk cells (rows 2..maxY-1) seeded as solvent W on Reset. Paper ≈ 0.69.",
+      "isModelAttribute": true,
+      "defaultValue": "0.69",
+      "hasBounds": true,
+      "min": 0,
+      "max": 1
+    },
+    {
+      "id": "densB",
+      "name": "Stationary density (init)",
+      "type": "float",
+      "description": "Fraction of interior-bulk cells (rows 2..maxY-1) seeded as immobile stationary phase B on Reset. Paper ≈ 0.07 (600 of 8600 cells). \"≥3 cells apart\" constraint not enforced (random placement).",
+      "isModelAttribute": true,
+      "defaultValue": "0.07",
+      "hasBounds": true,
+      "min": 0,
+      "max": 1
+    },
+    {
+      "id": "densSolute",
+      "name": "Solute density (init, per species)",
+      "type": "float",
+      "description": "Fraction of the injection row (row 1, just below the top wall cap) seeded as each solute (S1 and S2 get this fraction each; the rest of the row is W). Paper ≈ 0.23 (10 of 43 cells per solute).",
+      "isModelAttribute": true,
+      "defaultValue": "0.23",
+      "hasBounds": true,
+      "min": 0,
+      "max": 0.5
+    }
+  ],
+  "neighborhoods": [
+    {
+      "id": "near",
+      "name": "Cardinal (N/E/S/W)",
+      "description": "4 direct cardinal neighbours, ordered N → E → S → W. South = index 2 (the \"down the column\" direction; gravity boosts this slot).",
+      "coords": [
+        [
+          -1,
+          0
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          0,
+          -1
+        ]
+      ],
+      "tags": {
+        "0": "N",
+        "1": "E",
+        "2": "S",
+        "3": "W"
+      }
+    },
+    {
+      "id": "far",
+      "name": "Cardinal ×2 (extended k)",
+      "description": "4 cardinal cells two steps away (the extended von Neumann \"k\" cells), same N/E/S/W order. Used by the J(myType, farType) joining-trajectory lookup.",
+      "coords": [
+        [
+          -2,
+          0
+        ],
+        [
+          0,
+          2
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          0,
+          -2
+        ]
+      ],
+      "tags": {
+        "0": "N",
+        "1": "E",
+        "2": "S",
+        "3": "W"
+      }
+    }
+  ],
+  "mappings": [
+    {
+      "id": "viz",
+      "name": "Cell type",
+      "isAttributeToColor": true,
+      "description": "Colours each cell by ingredient: empty near-black, W blue, B grey, S1 green, S2 red, wall light-grey (top/bottom caps). (Linked categorical mapping — auto-generated from the cell type.)",
+      "redDescription": "By cell type",
+      "greenDescription": "By cell type",
+      "blueDescription": "By cell type",
+      "linked": true,
+      "linkedAttributeId": "cellType",
+      "linkedColors": {
+        "tag": [
+          {
+            "r": 15,
+            "g": 15,
+            "b": 25
+          },
+          {
+            "r": 40,
+            "g": 90,
+            "b": 180
+          },
+          {
+            "r": 120,
+            "g": 120,
+            "b": 120
+          },
+          {
+            "r": 60,
+            "g": 200,
+            "b": 90
+          },
+          {
+            "r": 230,
+            "g": 60,
+            "b": 60
+          },
+          {
+            "r": 165,
+            "g": 165,
+            "b": 175
+          }
+        ]
+      }
+    }
+  ],
+  "indicators": [
+    {
+      "id": "chromatogram",
+      "name": "Chromatogram (solute population vs column position)",
+      "kind": "linked",
+      "dataType": "tag",
+      "defaultValue": "0",
+      "linkedAttributeId": "cellType",
+      "linkedAggregation": "frequency",
+      "trackedValues": [
+        "S1",
+        "S2"
+      ],
+      "accumulationMode": "per-generation",
+      "xAxis": "rows",
+      "spatialBinMode": "absolute",
+      "spatialBinSize": 10,
+      "watched": true
+    }
+  ],
+  "variables": [
+    {
+      "id": "pbFactors",
+      "name": "pbFactors",
+      "description": "Per-direction break factor pb_d = PB(myType, neighbourType_d). Product → Bernoulli break gate.",
+      "kind": "array",
+      "dataType": "float",
+      "length": 4,
+      "initialValue": "1"
+    },
+    {
+      "id": "weights",
+      "name": "weights",
+      "description": "Per-direction move weight wt_d = (neighbour_d empty) ? J(myType, farType_d) + (south ? G : 0) : 0. Sampled by weightedRandom.",
+      "kind": "array",
+      "dataType": "float",
+      "length": 4,
+      "initialValue": "0"
+    }
+  ],
+  "graphNodes": [
+    {
+      "id": "nmpgqsmjf57n8",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "step",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmpgqsmjfkuby",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 80
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "cellType"
+        },
+        "label": "My type"
+      }
+    },
+    {
+      "id": "nmpgqsmjffv8v",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 160
+      },
+      "data": {
+        "nodeType": "getAllNeighborIndexes",
+        "config": {
+          "neighborhoodId": "near"
+        },
+        "label": "NIs (near N/E/S/W)"
+      }
+    },
+    {
+      "id": "nmpgqsmjfl4ts",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 240
+      },
+      "data": {
+        "nodeType": "getAllNeighborIndexes",
+        "config": {
+          "neighborhoodId": "far"
+        },
+        "label": "NIs (far)"
+      }
+    },
+    {
+      "id": "nmpgqsmjfz5db",
+      "type": "caNode",
+      "position": {
+        "x": 220,
+        "y": 160
+      },
+      "data": {
+        "nodeType": "getNeighborsAttrByIndexes",
+        "config": {
+          "attributeId": "cellType"
+        },
+        "label": "neighbour types[4]"
+      }
+    },
+    {
+      "id": "nmpgqsmjf785d",
+      "type": "caNode",
+      "position": {
+        "x": 220,
+        "y": 240
+      },
+      "data": {
+        "nodeType": "getNeighborsAttrByIndexes",
+        "config": {
+          "attributeId": "cellType"
+        },
+        "label": "far types[4]"
+      }
+    },
+    {
+      "id": "nmpgqsmjfjh31",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 320
+      },
+      "data": {
+        "nodeType": "getConstant",
+        "config": {
+          "constType": "tag",
+          "tagAttributeId": "cellType",
+          "constValue": "0"
+        },
+        "label": "Tag: empty"
+      }
+    },
+    {
+      "id": "nmpgqsmjfez9o",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 400
+      },
+      "data": {
+        "nodeType": "getConstant",
+        "config": {
+          "constType": "tag",
+          "tagAttributeId": "cellType",
+          "constValue": "2"
+        },
+        "label": "Tag: B"
+      }
+    },
+    {
+      "id": "nmpgqsmjfw1mw",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 640
+      },
+      "data": {
+        "nodeType": "getConstant",
+        "config": {
+          "constType": "tag",
+          "tagAttributeId": "cellType",
+          "constValue": "5"
+        },
+        "label": "Tag: wall"
+      }
+    },
+    {
+      "id": "nmpgqsmjf1it9",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 480
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "gravity",
+          "isColorAttr": false
+        },
+        "label": "gravity G"
+      }
+    },
+    {
+      "id": "nmpgqsmjfos8v",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 560
+      },
+      "data": {
+        "nodeType": "getConstant",
+        "config": {
+          "constType": "integer",
+          "constValue": "2"
+        },
+        "label": "Int: 2"
+      }
+    },
+    {
+      "id": "nmpgqsmjfotwh",
+      "type": "caNode",
+      "position": {
+        "x": 440,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {},
+        "label": "If mobile (occupied, not B)"
+      }
+    },
+    {
+      "id": "nmpgqsmjfkx61",
+      "type": "caNode",
+      "position": {
+        "x": 1320,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {},
+        "label": "If broke free"
+      }
+    },
+    {
+      "id": "nmpgqsmjf4a4m",
+      "type": "caNode",
+      "position": {
+        "x": 1760,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {},
+        "label": "If empty dir"
+      }
+    },
+    {
+      "id": "nmpgqsmjf1t6u",
+      "type": "caNode",
+      "position": {
+        "x": 220,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "!="
+        },
+        "label": "type != empty"
+      }
+    },
+    {
+      "id": "nmpgqsmjfz4lq",
+      "type": "caNode",
+      "position": {
+        "x": 220,
+        "y": 80
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "!="
+        },
+        "label": "type != B"
+      }
+    },
+    {
+      "id": "nmpgqsmjftyob",
+      "type": "caNode",
+      "position": {
+        "x": 220,
+        "y": 160
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "!="
+        },
+        "label": "type != wall"
+      }
+    },
+    {
+      "id": "nmpgqsmjfbo1q",
+      "type": "caNode",
+      "position": {
+        "x": 440,
+        "y": 80
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "and"
+        },
+        "label": "mobile? (W/S1/S2)"
+      }
+    },
+    {
+      "id": "nmpgqsmjftzvo",
+      "type": "caNode",
+      "position": {
+        "x": 440,
+        "y": 320
+      },
+      "data": {
+        "nodeType": "forEachInArray",
+        "config": {},
+        "label": "For each direction d"
+      }
+    },
+    {
+      "id": "nmpgqsmjfwgiw",
+      "type": "caNode",
+      "position": {
+        "x": 660,
+        "y": 240
+      },
+      "data": {
+        "nodeType": "arrayElement",
+        "config": {},
+        "label": "neighbour[d]"
+      }
+    },
+    {
+      "id": "nmpgqsmjfvn06",
+      "type": "caNode",
+      "position": {
+        "x": 660,
+        "y": 320
+      },
+      "data": {
+        "nodeType": "arrayElement",
+        "config": {},
+        "label": "far[d]"
+      }
+    },
+    {
+      "id": "nmpgqsmjfkqil",
+      "type": "caNode",
+      "position": {
+        "x": 880,
+        "y": 240
+      },
+      "data": {
+        "nodeType": "lookupInteraction",
+        "config": {
+          "tableId": "PB"
+        },
+        "label": "PB(my, nbr)"
+      }
+    },
+    {
+      "id": "nmpgqsmjfsgsc",
+      "type": "caNode",
+      "position": {
+        "x": 1100,
+        "y": 240
+      },
+      "data": {
+        "nodeType": "setArrayElement",
+        "config": {
+          "variableId": "pbFactors"
+        },
+        "label": "pbFactors[d] ← PB"
+      }
+    },
+    {
+      "id": "nmpgqsmjfca1c",
+      "type": "caNode",
+      "position": {
+        "x": 880,
+        "y": 400
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "=="
+        },
+        "label": "nbr[d]==empty"
+      }
+    },
+    {
+      "id": "nmpgqsmjfz68f",
+      "type": "caNode",
+      "position": {
+        "x": 880,
+        "y": 480
+      },
+      "data": {
+        "nodeType": "lookupInteraction",
+        "config": {
+          "tableId": "J"
+        },
+        "label": "J(my, far)"
+      }
+    },
+    {
+      "id": "nmpgqsmjfwp6z",
+      "type": "caNode",
+      "position": {
+        "x": 1100,
+        "y": 480
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "emp * jv",
+          "visibleCount": 2,
+          "_varName_a": "emp",
+          "_varName_b": "jv"
+        },
+        "label": "weight[d] = empty?J:0"
+      }
+    },
+    {
+      "id": "nmpgqsmjg4sdl",
+      "type": "caNode",
+      "position": {
+        "x": 1320,
+        "y": 480
+      },
+      "data": {
+        "nodeType": "setArrayElement",
+        "config": {
+          "variableId": "weights"
+        },
+        "label": "weights[d] ← weight"
+      }
+    },
+    {
+      "id": "nmpgqsmjgyahm",
+      "type": "caNode",
+      "position": {
+        "x": 440,
+        "y": 800
+      },
+      "data": {
+        "nodeType": "arrayElement",
+        "config": {},
+        "label": "neighbour[S]"
+      }
+    },
+    {
+      "id": "nmpgqsmjgw24i",
+      "type": "caNode",
+      "position": {
+        "x": 440,
+        "y": 880
+      },
+      "data": {
+        "nodeType": "arrayElement",
+        "config": {},
+        "label": "far[S]"
+      }
+    },
+    {
+      "id": "nmpgqsmjgq1lk",
+      "type": "caNode",
+      "position": {
+        "x": 660,
+        "y": 800
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "=="
+        },
+        "label": "south empty?"
+      }
+    },
+    {
+      "id": "nmpgqsmjg1k55",
+      "type": "caNode",
+      "position": {
+        "x": 660,
+        "y": 880
+      },
+      "data": {
+        "nodeType": "lookupInteraction",
+        "config": {
+          "tableId": "J"
+        },
+        "label": "J(my, far[S])"
+      }
+    },
+    {
+      "id": "nmpgqsmjgo6tc",
+      "type": "caNode",
+      "position": {
+        "x": 880,
+        "y": 880
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "e * (j + g)",
+          "visibleCount": 3,
+          "_varName_a": "e",
+          "_varName_b": "j",
+          "_varName_c": "g"
+        },
+        "label": "weights[S] = empty?(J+G):0"
+      }
+    },
+    {
+      "id": "nmpgqsmjgyavk",
+      "type": "caNode",
+      "position": {
+        "x": 1100,
+        "y": 880
+      },
+      "data": {
+        "nodeType": "setArrayElement",
+        "config": {
+          "variableId": "weights"
+        },
+        "label": "weights[S] ← empty?(J+G):0"
+      }
+    },
+    {
+      "id": "nmpgqsmjgliq0",
+      "type": "caNode",
+      "position": {
+        "x": 880,
+        "y": 80
+      },
+      "data": {
+        "nodeType": "getVariable",
+        "config": {
+          "variableId": "pbFactors"
+        },
+        "label": "pbFactors[]"
+      }
+    },
+    {
+      "id": "nmpgqsmjgpmln",
+      "type": "caNode",
+      "position": {
+        "x": 1100,
+        "y": 80
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "product"
+        },
+        "label": "P_break (Π pb_d)"
+      }
+    },
+    {
+      "id": "nmpgqsmjgpzdh",
+      "type": "caNode",
+      "position": {
+        "x": 1320,
+        "y": 80
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "randomType": "bool"
+        },
+        "label": "Bernoulli(P_break)"
+      }
+    },
+    {
+      "id": "nmpgqsmjgdn6y",
+      "type": "caNode",
+      "position": {
+        "x": 1540,
+        "y": 80
+      },
+      "data": {
+        "nodeType": "groupStatement",
+        "config": {
+          "operation": "hasA"
+        },
+        "label": "hasA(empty)?"
+      }
+    },
+    {
+      "id": "nmpgqsmjgoxc7",
+      "type": "caNode",
+      "position": {
+        "x": 1540,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "getVariable",
+        "config": {
+          "variableId": "weights"
+        },
+        "label": "weights[]"
+      }
+    },
+    {
+      "id": "nmpgqsmjgszf4",
+      "type": "caNode",
+      "position": {
+        "x": 1760,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "groupOperator",
+        "config": {
+          "operation": "weightedRandom"
+        },
+        "label": "Pick direction"
+      }
+    },
+    {
+      "id": "nmpgqsmjgo5dn",
+      "type": "caNode",
+      "position": {
+        "x": 1980,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "arrayElement",
+        "config": {},
+        "label": "NI of chosen dir"
+      }
+    },
+    {
+      "id": "nmpgqsmjgq82w",
+      "type": "caNode",
+      "position": {
+        "x": 1980,
+        "y": 80
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "cellType"
+        },
+        "label": "My type"
+      }
+    },
+    {
+      "id": "nmpgqsmjgb01d",
+      "type": "caNode",
+      "position": {
+        "x": 2200,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "moveSelfToNeighbor",
+        "config": {
+          "payloadCount": 1,
+          "attr_0": "cellType",
+          "transferOrientation": false
+        },
+        "label": "Move self → NI"
+      }
+    },
+    {
+      "id": "nmpgqsmjgtnqy",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 960
+      },
+      "data": {
+        "nodeType": "initEvent",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmpgqsmjg1o4l",
+      "type": "caNode",
+      "position": {
+        "x": 220,
+        "y": 1280
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "densW",
+          "isColorAttr": false
+        },
+        "label": "densW"
+      }
+    },
+    {
+      "id": "nmpgqsmjg3iy2",
+      "type": "caNode",
+      "position": {
+        "x": 220,
+        "y": 1360
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "densB",
+          "isColorAttr": false
+        },
+        "label": "densB"
+      }
+    },
+    {
+      "id": "nmpgqsmjgimqy",
+      "type": "caNode",
+      "position": {
+        "x": 220,
+        "y": 1040
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "densSolute",
+          "isColorAttr": false
+        },
+        "label": "densSolute"
+      }
+    },
+    {
+      "id": "nmpgqsmjgbfm7",
+      "type": "caNode",
+      "position": {
+        "x": 220,
+        "y": 960
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "randomType": "float",
+          "min": "0",
+          "max": "1"
+        },
+        "label": "r ∈ [0,1)"
+      }
+    },
+    {
+      "id": "nmpgqsmjgnon4",
+      "type": "caNode",
+      "position": {
+        "x": 220,
+        "y": 1440
+      },
+      "data": {
+        "nodeType": "getConstant",
+        "config": {
+          "constType": "integer",
+          "constValue": "0"
+        },
+        "label": "Int: 0"
+      }
+    },
+    {
+      "id": "nmpgqsmjgzn8v",
+      "type": "caNode",
+      "position": {
+        "x": 220,
+        "y": 1520
+      },
+      "data": {
+        "nodeType": "getConstant",
+        "config": {
+          "constType": "integer",
+          "constValue": "1"
+        },
+        "label": "Int: 1"
+      }
+    },
+    {
+      "id": "nmpgqsmjgmyrv",
+      "type": "caNode",
+      "position": {
+        "x": 440,
+        "y": 720
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "=="
+        },
+        "label": "y == 0?"
+      }
+    },
+    {
+      "id": "nmpgqsmjge9c6",
+      "type": "caNode",
+      "position": {
+        "x": 440,
+        "y": 800
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "=="
+        },
+        "label": "y == maxY?"
+      }
+    },
+    {
+      "id": "nmpgqsmjg2bep",
+      "type": "caNode",
+      "position": {
+        "x": 660,
+        "y": 720
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "or"
+        },
+        "label": "first or last row?"
+      }
+    },
+    {
+      "id": "nmpgqsmjg626c",
+      "type": "caNode",
+      "position": {
+        "x": 880,
+        "y": 720
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {},
+        "label": "If boundary row"
+      }
+    },
+    {
+      "id": "nmpgqsmjg3zau",
+      "type": "caNode",
+      "position": {
+        "x": 1100,
+        "y": 720
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "cellType",
+          "_port_value": "5"
+        },
+        "label": "type ← wall"
+      }
+    },
+    {
+      "id": "nmpgqsmjgpuyy",
+      "type": "caNode",
+      "position": {
+        "x": 440,
+        "y": 960
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "=="
+        },
+        "label": "y == 1?"
+      }
+    },
+    {
+      "id": "nmpgqsmjg804g",
+      "type": "caNode",
+      "position": {
+        "x": 660,
+        "y": 960
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {},
+        "label": "If injection row"
+      }
+    },
+    {
+      "id": "nmpgqsmjghoim",
+      "type": "caNode",
+      "position": {
+        "x": 880,
+        "y": 880
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "<"
+        },
+        "label": "r < densSolute?"
+      }
+    },
+    {
+      "id": "nmpgqsmjg3nqv",
+      "type": "caNode",
+      "position": {
+        "x": 1100,
+        "y": 880
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {},
+        "label": "If S1"
+      }
+    },
+    {
+      "id": "nmpgqsmjgdn5q",
+      "type": "caNode",
+      "position": {
+        "x": 1320,
+        "y": 880
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "cellType",
+          "_port_value": "3"
+        },
+        "label": "type ← S1"
+      }
+    },
+    {
+      "id": "nmpgqsmjg7h7d",
+      "type": "caNode",
+      "position": {
+        "x": 880,
+        "y": 1040
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "s * 2",
+          "visibleCount": 1,
+          "_varName_a": "s"
+        },
+        "label": "2·densSolute"
+      }
+    },
+    {
+      "id": "nmpgqsmjgnpz6",
+      "type": "caNode",
+      "position": {
+        "x": 1100,
+        "y": 1040
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "<"
+        },
+        "label": "r < 2·densSolute?"
+      }
+    },
+    {
+      "id": "nmpgqsmjgsddy",
+      "type": "caNode",
+      "position": {
+        "x": 1320,
+        "y": 1040
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {},
+        "label": "If S2"
+      }
+    },
+    {
+      "id": "nmpgqsmjgx33k",
+      "type": "caNode",
+      "position": {
+        "x": 1540,
+        "y": 1040
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "cellType",
+          "_port_value": "4"
+        },
+        "label": "type ← S2"
+      }
+    },
+    {
+      "id": "nmpgqsmjgpydd",
+      "type": "caNode",
+      "position": {
+        "x": 1540,
+        "y": 1120
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "cellType",
+          "_port_value": "1"
+        },
+        "label": "type ← W"
+      }
+    },
+    {
+      "id": "nmpgqsmjgup2u",
+      "type": "caNode",
+      "position": {
+        "x": 880,
+        "y": 1280
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "<"
+        },
+        "label": "r < densB?"
+      }
+    },
+    {
+      "id": "nmpgqsmjgm5pl",
+      "type": "caNode",
+      "position": {
+        "x": 1100,
+        "y": 1280
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {},
+        "label": "If B"
+      }
+    },
+    {
+      "id": "nmpgqsmjgb9xb",
+      "type": "caNode",
+      "position": {
+        "x": 1320,
+        "y": 1280
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "cellType",
+          "_port_value": "2"
+        },
+        "label": "type ← B"
+      }
+    },
+    {
+      "id": "nmpgqsmjgkz0a",
+      "type": "caNode",
+      "position": {
+        "x": 880,
+        "y": 1360
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "b + w",
+          "visibleCount": 2,
+          "_varName_a": "b",
+          "_varName_b": "w"
+        },
+        "label": "densB + densW"
+      }
+    },
+    {
+      "id": "nmpgqsmjg0ifl",
+      "type": "caNode",
+      "position": {
+        "x": 1100,
+        "y": 1360
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "<"
+        },
+        "label": "r < densB+densW?"
+      }
+    },
+    {
+      "id": "nmpgqsmjg65dd",
+      "type": "caNode",
+      "position": {
+        "x": 1320,
+        "y": 1360
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {},
+        "label": "If W"
+      }
+    },
+    {
+      "id": "nmpgqsmjg847x",
+      "type": "caNode",
+      "position": {
+        "x": 1540,
+        "y": 1360
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "cellType",
+          "_port_value": "1"
+        },
+        "label": "type ← W"
+      }
+    },
+    {
+      "id": "gmpgqsmjg59o4",
+      "type": "groupNode",
+      "position": {
+        "x": -30,
+        "y": 20
+      },
+      "data": {
+        "label": "Shared reads",
+        "nodeType": "group",
+        "config": {},
+        "width": 480,
+        "height": 730,
+        "groupColor": "#3a4a5a"
+      }
+    },
+    {
+      "id": "gmpgqsmjgk1iw",
+      "type": "groupNode",
+      "position": {
+        "x": 190,
+        "y": -60
+      },
+      "data": {
+        "label": "Gating chain → move (mobile? → broke free? → empty dir? → move)",
+        "nodeType": "group",
+        "config": {},
+        "width": 2240,
+        "height": 330,
+        "groupColor": "#4a6858"
+      }
+    },
+    {
+      "id": "gmpgqsmjgr64i",
+      "type": "groupNode",
+      "position": {
+        "x": 410,
+        "y": 180
+      },
+      "data": {
+        "label": "Per-direction body (runs for d ∈ {N,E,S,W})",
+        "nodeType": "group",
+        "config": {},
+        "width": 1140,
+        "height": 410,
+        "groupColor": "#4a5878"
+      }
+    },
+    {
+      "id": "gmpgqsmjg3tiu",
+      "type": "groupNode",
+      "position": {
+        "x": 410,
+        "y": 740
+      },
+      "data": {
+        "label": "South gravity boost (weights[S] = empty ? J+G : 0)",
+        "nodeType": "group",
+        "config": {},
+        "width": 920,
+        "height": 250,
+        "groupColor": "#5a4a78"
+      }
+    },
+    {
+      "id": "gmpgqsmjgh1tt",
+      "type": "groupNode",
+      "position": {
+        "x": -30,
+        "y": 660
+      },
+      "data": {
+        "label": "Init Event — wall caps (rows 0 + maxY) → injection band (row 1) → bulk",
+        "nodeType": "group",
+        "config": {},
+        "width": 1800,
+        "height": 970,
+        "groupColor": "#406870"
+      }
+    }
+  ],
+  "graphEdges": [
+    {
+      "id": "empgqsmjfdfcs",
+      "source": "nmpgqsmjffv8v",
+      "target": "nmpgqsmjfz5db",
+      "sourceHandle": "output_value_indexes",
+      "targetHandle": "input_value_indexes"
+    },
+    {
+      "id": "empgqsmjfmqjx",
+      "source": "nmpgqsmjfl4ts",
+      "target": "nmpgqsmjf785d",
+      "sourceHandle": "output_value_indexes",
+      "targetHandle": "input_value_indexes"
+    },
+    {
+      "id": "empgqsmjf0dcp",
+      "source": "nmpgqsmjf57n8",
+      "target": "nmpgqsmjfotwh",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "empgqsmjfa7if",
+      "source": "nmpgqsmjfkuby",
+      "target": "nmpgqsmjf1t6u",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empgqsmjfjzqr",
+      "source": "nmpgqsmjfjh31",
+      "target": "nmpgqsmjf1t6u",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empgqsmjf6cpv",
+      "source": "nmpgqsmjfkuby",
+      "target": "nmpgqsmjfz4lq",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empgqsmjf9wfo",
+      "source": "nmpgqsmjfez9o",
+      "target": "nmpgqsmjfz4lq",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empgqsmjfpcv7",
+      "source": "nmpgqsmjfkuby",
+      "target": "nmpgqsmjftyob",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empgqsmjfho4k",
+      "source": "nmpgqsmjfw1mw",
+      "target": "nmpgqsmjftyob",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empgqsmjffdtn",
+      "source": "nmpgqsmjf1t6u",
+      "target": "nmpgqsmjfbo1q",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "empgqsmjf470i",
+      "source": "nmpgqsmjfz4lq",
+      "target": "nmpgqsmjfbo1q",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "empgqsmjf4gbm",
+      "source": "nmpgqsmjftyob",
+      "target": "nmpgqsmjfbo1q",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "empgqsmjfp4tx",
+      "source": "nmpgqsmjfbo1q",
+      "target": "nmpgqsmjfotwh",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "empgqsmjfhslr",
+      "source": "nmpgqsmjffv8v",
+      "target": "nmpgqsmjftzvo",
+      "sourceHandle": "output_value_indexes",
+      "targetHandle": "input_value_array"
+    },
+    {
+      "id": "empgqsmjfq29o",
+      "source": "nmpgqsmjfotwh",
+      "target": "nmpgqsmjftzvo",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "empgqsmjflf85",
+      "source": "nmpgqsmjfz5db",
+      "target": "nmpgqsmjfwgiw",
+      "sourceHandle": "output_value_values",
+      "targetHandle": "input_value_array"
+    },
+    {
+      "id": "empgqsmjfb3id",
+      "source": "nmpgqsmjftzvo",
+      "target": "nmpgqsmjfwgiw",
+      "sourceHandle": "output_value_index",
+      "targetHandle": "input_value_position"
+    },
+    {
+      "id": "empgqsmjf1h0i",
+      "source": "nmpgqsmjf785d",
+      "target": "nmpgqsmjfvn06",
+      "sourceHandle": "output_value_values",
+      "targetHandle": "input_value_array"
+    },
+    {
+      "id": "empgqsmjfbocv",
+      "source": "nmpgqsmjftzvo",
+      "target": "nmpgqsmjfvn06",
+      "sourceHandle": "output_value_index",
+      "targetHandle": "input_value_position"
+    },
+    {
+      "id": "empgqsmjfj0wf",
+      "source": "nmpgqsmjfkuby",
+      "target": "nmpgqsmjfkqil",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_labelA"
+    },
+    {
+      "id": "empgqsmjfe165",
+      "source": "nmpgqsmjfwgiw",
+      "target": "nmpgqsmjfkqil",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_labelB"
+    },
+    {
+      "id": "empgqsmjfi5zb",
+      "source": "nmpgqsmjftzvo",
+      "target": "nmpgqsmjfsgsc",
+      "sourceHandle": "output_flow_body",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "empgqsmjfhcfl",
+      "source": "nmpgqsmjftzvo",
+      "target": "nmpgqsmjfsgsc",
+      "sourceHandle": "output_value_index",
+      "targetHandle": "input_value_index"
+    },
+    {
+      "id": "empgqsmjflx81",
+      "source": "nmpgqsmjfkqil",
+      "target": "nmpgqsmjfsgsc",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "empgqsmjf4vj8",
+      "source": "nmpgqsmjfwgiw",
+      "target": "nmpgqsmjfca1c",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empgqsmjf1rzh",
+      "source": "nmpgqsmjfjh31",
+      "target": "nmpgqsmjfca1c",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empgqsmjflocn",
+      "source": "nmpgqsmjfkuby",
+      "target": "nmpgqsmjfz68f",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_labelA"
+    },
+    {
+      "id": "empgqsmjfomvp",
+      "source": "nmpgqsmjfvn06",
+      "target": "nmpgqsmjfz68f",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_labelB"
+    },
+    {
+      "id": "empgqsmjfvtu3",
+      "source": "nmpgqsmjfca1c",
+      "target": "nmpgqsmjfwp6z",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "empgqsmjf4w51",
+      "source": "nmpgqsmjfz68f",
+      "target": "nmpgqsmjfwp6z",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "empgqsmjgz0qh",
+      "source": "nmpgqsmjftzvo",
+      "target": "nmpgqsmjg4sdl",
+      "sourceHandle": "output_flow_body",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "empgqsmjgyi96",
+      "source": "nmpgqsmjftzvo",
+      "target": "nmpgqsmjg4sdl",
+      "sourceHandle": "output_value_index",
+      "targetHandle": "input_value_index"
+    },
+    {
+      "id": "empgqsmjgdbk9",
+      "source": "nmpgqsmjfwp6z",
+      "target": "nmpgqsmjg4sdl",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "empgqsmjg9e5y",
+      "source": "nmpgqsmjfz5db",
+      "target": "nmpgqsmjgyahm",
+      "sourceHandle": "output_value_values",
+      "targetHandle": "input_value_array"
+    },
+    {
+      "id": "empgqsmjgntc7",
+      "source": "nmpgqsmjfos8v",
+      "target": "nmpgqsmjgyahm",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_position"
+    },
+    {
+      "id": "empgqsmjgc7bb",
+      "source": "nmpgqsmjf785d",
+      "target": "nmpgqsmjgw24i",
+      "sourceHandle": "output_value_values",
+      "targetHandle": "input_value_array"
+    },
+    {
+      "id": "empgqsmjg0sh8",
+      "source": "nmpgqsmjfos8v",
+      "target": "nmpgqsmjgw24i",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_position"
+    },
+    {
+      "id": "empgqsmjgrzxm",
+      "source": "nmpgqsmjgyahm",
+      "target": "nmpgqsmjgq1lk",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empgqsmjg3ago",
+      "source": "nmpgqsmjfjh31",
+      "target": "nmpgqsmjgq1lk",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empgqsmjgot1n",
+      "source": "nmpgqsmjfkuby",
+      "target": "nmpgqsmjg1k55",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_labelA"
+    },
+    {
+      "id": "empgqsmjglnwo",
+      "source": "nmpgqsmjgw24i",
+      "target": "nmpgqsmjg1k55",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_labelB"
+    },
+    {
+      "id": "empgqsmjgqhoq",
+      "source": "nmpgqsmjgq1lk",
+      "target": "nmpgqsmjgo6tc",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "empgqsmjgp1i1",
+      "source": "nmpgqsmjg1k55",
+      "target": "nmpgqsmjgo6tc",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "empgqsmjgcqfe",
+      "source": "nmpgqsmjf1it9",
+      "target": "nmpgqsmjgo6tc",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_c"
+    },
+    {
+      "id": "empgqsmjgiimx",
+      "source": "nmpgqsmjfotwh",
+      "target": "nmpgqsmjgyavk",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "empgqsmjgrf34",
+      "source": "nmpgqsmjfos8v",
+      "target": "nmpgqsmjgyavk",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_index"
+    },
+    {
+      "id": "empgqsmjgmygp",
+      "source": "nmpgqsmjgo6tc",
+      "target": "nmpgqsmjgyavk",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "empgqsmjgyrng",
+      "source": "nmpgqsmjfotwh",
+      "target": "nmpgqsmjfkx61",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "empgqsmjgp0eu",
+      "source": "nmpgqsmjgliq0",
+      "target": "nmpgqsmjgpmln",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "empgqsmjgm51a",
+      "source": "nmpgqsmjgpmln",
+      "target": "nmpgqsmjgpzdh",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_probability"
+    },
+    {
+      "id": "empgqsmjgkhly",
+      "source": "nmpgqsmjgpzdh",
+      "target": "nmpgqsmjfkx61",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "empgqsmjgckey",
+      "source": "nmpgqsmjfkx61",
+      "target": "nmpgqsmjf4a4m",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "empgqsmjgrbg3",
+      "source": "nmpgqsmjfz5db",
+      "target": "nmpgqsmjgdn6y",
+      "sourceHandle": "output_value_values",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "empgqsmjgjvns",
+      "source": "nmpgqsmjfjh31",
+      "target": "nmpgqsmjgdn6y",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empgqsmjgy62y",
+      "source": "nmpgqsmjgdn6y",
+      "target": "nmpgqsmjf4a4m",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "empgqsmjgd4v7",
+      "source": "nmpgqsmjgoxc7",
+      "target": "nmpgqsmjgszf4",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "empgqsmjgbwaq",
+      "source": "nmpgqsmjffv8v",
+      "target": "nmpgqsmjgo5dn",
+      "sourceHandle": "output_value_indexes",
+      "targetHandle": "input_value_array"
+    },
+    {
+      "id": "empgqsmjgdnqp",
+      "source": "nmpgqsmjgszf4",
+      "target": "nmpgqsmjgo5dn",
+      "sourceHandle": "output_value_index",
+      "targetHandle": "input_value_position"
+    },
+    {
+      "id": "empgqsmjgvpv0",
+      "source": "nmpgqsmjf4a4m",
+      "target": "nmpgqsmjgb01d",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "empgqsmjg7vmt",
+      "source": "nmpgqsmjgo5dn",
+      "target": "nmpgqsmjgb01d",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_targetNI"
+    },
+    {
+      "id": "empgqsmjg2hni",
+      "source": "nmpgqsmjgq82w",
+      "target": "nmpgqsmjgb01d",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_payload_0"
+    },
+    {
+      "id": "empgqsmjgqgu0",
+      "source": "nmpgqsmjgtnqy",
+      "target": "nmpgqsmjgmyrv",
+      "sourceHandle": "output_value_y",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empgqsmjgq60f",
+      "source": "nmpgqsmjgnon4",
+      "target": "nmpgqsmjgmyrv",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empgqsmjg4a1o",
+      "source": "nmpgqsmjgtnqy",
+      "target": "nmpgqsmjge9c6",
+      "sourceHandle": "output_value_y",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empgqsmjgfv9x",
+      "source": "nmpgqsmjgtnqy",
+      "target": "nmpgqsmjge9c6",
+      "sourceHandle": "output_value_maxY",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empgqsmjg7tgo",
+      "source": "nmpgqsmjgmyrv",
+      "target": "nmpgqsmjg2bep",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "empgqsmjgu65m",
+      "source": "nmpgqsmjge9c6",
+      "target": "nmpgqsmjg2bep",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "empgqsmjgxb9v",
+      "source": "nmpgqsmjgtnqy",
+      "target": "nmpgqsmjg626c",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "empgqsmjgd2hz",
+      "source": "nmpgqsmjg2bep",
+      "target": "nmpgqsmjg626c",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "empgqsmjgyk8s",
+      "source": "nmpgqsmjg626c",
+      "target": "nmpgqsmjg3zau",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "empgqsmjgscn5",
+      "source": "nmpgqsmjgtnqy",
+      "target": "nmpgqsmjgpuyy",
+      "sourceHandle": "output_value_y",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empgqsmjgf21s",
+      "source": "nmpgqsmjgzn8v",
+      "target": "nmpgqsmjgpuyy",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empgqsmjg2iel",
+      "source": "nmpgqsmjg626c",
+      "target": "nmpgqsmjg804g",
+      "sourceHandle": "output_flow_else",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "empgqsmjglu8b",
+      "source": "nmpgqsmjgpuyy",
+      "target": "nmpgqsmjg804g",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "empgqsmjgc2pt",
+      "source": "nmpgqsmjgbfm7",
+      "target": "nmpgqsmjghoim",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empgqsmjgquz2",
+      "source": "nmpgqsmjgimqy",
+      "target": "nmpgqsmjghoim",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empgqsmjgb8m2",
+      "source": "nmpgqsmjg804g",
+      "target": "nmpgqsmjg3nqv",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "empgqsmjgb6e3",
+      "source": "nmpgqsmjghoim",
+      "target": "nmpgqsmjg3nqv",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "empgqsmjg0bju",
+      "source": "nmpgqsmjg3nqv",
+      "target": "nmpgqsmjgdn5q",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "empgqsmjgz121",
+      "source": "nmpgqsmjgimqy",
+      "target": "nmpgqsmjg7h7d",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "empgqsmjgnh7t",
+      "source": "nmpgqsmjgbfm7",
+      "target": "nmpgqsmjgnpz6",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empgqsmjg3x88",
+      "source": "nmpgqsmjg7h7d",
+      "target": "nmpgqsmjgnpz6",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empgqsmjgncom",
+      "source": "nmpgqsmjg3nqv",
+      "target": "nmpgqsmjgsddy",
+      "sourceHandle": "output_flow_else",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "empgqsmjgxyx8",
+      "source": "nmpgqsmjgnpz6",
+      "target": "nmpgqsmjgsddy",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "empgqsmjg32g5",
+      "source": "nmpgqsmjgsddy",
+      "target": "nmpgqsmjgx33k",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "empgqsmjgm1n9",
+      "source": "nmpgqsmjgsddy",
+      "target": "nmpgqsmjgpydd",
+      "sourceHandle": "output_flow_else",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "empgqsmjgvjdb",
+      "source": "nmpgqsmjgbfm7",
+      "target": "nmpgqsmjgup2u",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empgqsmjgfd5j",
+      "source": "nmpgqsmjg3iy2",
+      "target": "nmpgqsmjgup2u",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empgqsmjgwdqo",
+      "source": "nmpgqsmjg804g",
+      "target": "nmpgqsmjgm5pl",
+      "sourceHandle": "output_flow_else",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "empgqsmjgil76",
+      "source": "nmpgqsmjgup2u",
+      "target": "nmpgqsmjgm5pl",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "empgqsmjgosrq",
+      "source": "nmpgqsmjgm5pl",
+      "target": "nmpgqsmjgb9xb",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "empgqsmjg42f7",
+      "source": "nmpgqsmjg3iy2",
+      "target": "nmpgqsmjgkz0a",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "empgqsmjgcwvq",
+      "source": "nmpgqsmjg1o4l",
+      "target": "nmpgqsmjgkz0a",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "empgqsmjgrift",
+      "source": "nmpgqsmjgbfm7",
+      "target": "nmpgqsmjg0ifl",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "empgqsmjgvynd",
+      "source": "nmpgqsmjgkz0a",
+      "target": "nmpgqsmjg0ifl",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "empgqsmjg6kyy",
+      "source": "nmpgqsmjgm5pl",
+      "target": "nmpgqsmjg65dd",
+      "sourceHandle": "output_flow_else",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "empgqsmjgc70m",
+      "source": "nmpgqsmjg0ifl",
+      "target": "nmpgqsmjg65dd",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "empgqsmjgc2bl",
+      "source": "nmpgqsmjg65dd",
+      "target": "nmpgqsmjg847x",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    }
+  ],
+  "macroDefs": [],
+  "presets": [
+    {
+      "id": "preset_mpgqsmjhrph4",
+      "name": "Standard — two-solute separation (Table 1)",
+      "description": "Paper Table 1 standard rule set + gravity 10. S1 (weak B-affinity) outruns S2 (strong B-affinity); the injected band separates into two peaks (Fig. 3).",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "PB": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.999,
+              "S1": 0.9,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.1,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          },
+          "J": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.1,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.001,
+              "S1": 0.2,
+              "S2": 2,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          }
+        },
+        "modelAttrs": {
+          "gravity": 10
+        }
+      },
+      "createdAt": 1747000000000
+    },
+    {
+      "id": "preset_mpgqsmjhuxw4",
+      "name": "Affinity — PB(SB)=0.10, J(SB)=2.00 (k'=1.193) [Table 2]",
+      "description": "Paper Table 2: both solutes given the same stationary-phase affinity. Capacity factor k'=1.193. Higher affinity (lower PB, higher J) → slower migration → peak stays higher up the column.",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "PB": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.999,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.1,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.1,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          },
+          "J": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.1,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.001,
+              "S1": 2,
+              "S2": 2,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          }
+        },
+        "modelAttrs": {
+          "gravity": 10
+        }
+      },
+      "createdAt": 1747000001000
+    },
+    {
+      "id": "preset_mpgqsmjhzlef",
+      "name": "Affinity — PB(SB)=0.30, J(SB)=1.20 (k'=0.246) [Table 2]",
+      "description": "Paper Table 2: both solutes given the same stationary-phase affinity. Capacity factor k'=0.246. Higher affinity (lower PB, higher J) → slower migration → peak stays higher up the column.",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "PB": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.999,
+              "S1": 0.3,
+              "S2": 0.3,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.3,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.3,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          },
+          "J": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.1,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.001,
+              "S1": 1.2,
+              "S2": 1.2,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 1.2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 1.2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          }
+        },
+        "modelAttrs": {
+          "gravity": 10
+        }
+      },
+      "createdAt": 1747000002000
+    },
+    {
+      "id": "preset_mpgqsmjhn78b",
+      "name": "Affinity — PB(SB)=0.50, J(SB)=0.80 (k'=0.158) [Table 2]",
+      "description": "Paper Table 2: both solutes given the same stationary-phase affinity. Capacity factor k'=0.158. Higher affinity (lower PB, higher J) → slower migration → peak stays higher up the column.",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "PB": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.999,
+              "S1": 0.5,
+              "S2": 0.5,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.5,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.5,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          },
+          "J": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.1,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.001,
+              "S1": 0.8,
+              "S2": 0.8,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.8,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.8,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          }
+        },
+        "modelAttrs": {
+          "gravity": 10
+        }
+      },
+      "createdAt": 1747000003000
+    },
+    {
+      "id": "preset_mpgqsmjhho1b",
+      "name": "Affinity — PB(SB)=0.70, J(SB)=0.60 (k'=0.096) [Table 2]",
+      "description": "Paper Table 2: both solutes given the same stationary-phase affinity. Capacity factor k'=0.096. Higher affinity (lower PB, higher J) → slower migration → peak stays higher up the column.",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "PB": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.999,
+              "S1": 0.7,
+              "S2": 0.7,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.7,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.7,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          },
+          "J": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.1,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.001,
+              "S1": 0.6,
+              "S2": 0.6,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.6,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.6,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          }
+        },
+        "modelAttrs": {
+          "gravity": 10
+        }
+      },
+      "createdAt": 1747000004000
+    },
+    {
+      "id": "preset_mpgqsmjhz3xw",
+      "name": "Affinity — PB(SB)=0.90, J(SB)=0.20 (k'=0.035) [Table 2]",
+      "description": "Paper Table 2: both solutes given the same stationary-phase affinity. Capacity factor k'=0.035. Higher affinity (lower PB, higher J) → slower migration → peak stays higher up the column.",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "PB": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.999,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          },
+          "J": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.1,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.001,
+              "S1": 0.2,
+              "S2": 0.2,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          }
+        },
+        "modelAttrs": {
+          "gravity": 10
+        }
+      },
+      "createdAt": 1747000005000
+    },
+    {
+      "id": "preset_mpgqsmjhxtft",
+      "name": "Flow rate — gravity 2 [Table 4]",
+      "description": "Paper Table 4: standard tables, gravity (flow rate) = 2. Faster flow → shorter retention. Watch both solute peaks reach the bottom sooner as gravity rises.",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "PB": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.999,
+              "S1": 0.9,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.1,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          },
+          "J": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.1,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.001,
+              "S1": 0.2,
+              "S2": 2,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          }
+        },
+        "modelAttrs": {
+          "gravity": 2
+        }
+      },
+      "createdAt": 1747000006000
+    },
+    {
+      "id": "preset_mpgqsmjhuaba",
+      "name": "Flow rate — gravity 5 [Table 4]",
+      "description": "Paper Table 4: standard tables, gravity (flow rate) = 5. Faster flow → shorter retention. Watch both solute peaks reach the bottom sooner as gravity rises.",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "PB": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.999,
+              "S1": 0.9,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.1,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          },
+          "J": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.1,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.001,
+              "S1": 0.2,
+              "S2": 2,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          }
+        },
+        "modelAttrs": {
+          "gravity": 5
+        }
+      },
+      "createdAt": 1747000007000
+    },
+    {
+      "id": "preset_mpgqsmjhpqq5",
+      "name": "Flow rate — gravity 10 [Table 4]",
+      "description": "Paper Table 4: standard tables, gravity (flow rate) = 10. Faster flow → shorter retention. Watch both solute peaks reach the bottom sooner as gravity rises.",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "PB": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.999,
+              "S1": 0.9,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.1,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          },
+          "J": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.1,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.001,
+              "S1": 0.2,
+              "S2": 2,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          }
+        },
+        "modelAttrs": {
+          "gravity": 10
+        }
+      },
+      "createdAt": 1747000008000
+    },
+    {
+      "id": "preset_mpgqsmjh4pjv",
+      "name": "Solvent polarity — PB(W)=0.90, J(W)=0.10 (non-polar) [Table 5]",
+      "description": "Paper Table 5: W–W self-association encodes solvent polarity. non-polar. Migration is faster in non-polar solvents (reversed-phase behaviour).",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "PB": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.999,
+              "S1": 0.9,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.1,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          },
+          "J": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.1,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.001,
+              "S1": 0.2,
+              "S2": 2,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          }
+        },
+        "modelAttrs": {
+          "gravity": 10
+        }
+      },
+      "createdAt": 1747000009000
+    },
+    {
+      "id": "preset_mpgqsmjhsela",
+      "name": "Solvent polarity — PB(W)=0.50, J(W)=0.70 (intermediate) [Table 5]",
+      "description": "Paper Table 5: W–W self-association encodes solvent polarity. intermediate. Migration is faster in non-polar solvents (reversed-phase behaviour).",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "PB": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.5,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.999,
+              "S1": 0.9,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.1,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          },
+          "J": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.7,
+              "B": 0.1,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.001,
+              "S1": 0.2,
+              "S2": 2,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          }
+        },
+        "modelAttrs": {
+          "gravity": 10
+        }
+      },
+      "createdAt": 1747000010000
+    },
+    {
+      "id": "preset_mpgqsmjhwby9",
+      "name": "Solvent polarity — PB(W)=0.25, J(W)=1.50 (polar) [Table 5]",
+      "description": "Paper Table 5: W–W self-association encodes solvent polarity. polar. Migration is faster in non-polar solvents (reversed-phase behaviour).",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "PB": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.25,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.999,
+              "S1": 0.9,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.1,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          },
+          "J": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 1.5,
+              "B": 0.1,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.001,
+              "S1": 0.2,
+              "S2": 2,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          }
+        },
+        "modelAttrs": {
+          "gravity": 10
+        }
+      },
+      "createdAt": 1747000011000
+    },
+    {
+      "id": "preset_mpgqsmjhdkqq",
+      "name": "Stationary solvation — PB(WB)=0.90, J(WB)=0.10 (Rs=1.125) [Table 6]",
+      "description": "Paper Table 6: solvation of the stationary phase (W–B interaction). Resolution Rs=1.125. Greater solvation of B → poorer resolution between the two solute peaks.",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "PB": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.999,
+              "S1": 0.9,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.1,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          },
+          "J": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.1,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.001,
+              "S1": 0.2,
+              "S2": 2,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          }
+        },
+        "modelAttrs": {
+          "gravity": 10
+        }
+      },
+      "createdAt": 1747000012000
+    },
+    {
+      "id": "preset_mpgqsmjhsmwt",
+      "name": "Stationary solvation — PB(WB)=0.50, J(WB)=0.80 (Rs=0.667) [Table 6]",
+      "description": "Paper Table 6: solvation of the stationary phase (W–B interaction). Resolution Rs=0.667. Greater solvation of B → poorer resolution between the two solute peaks.",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "PB": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.5,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.5,
+              "B": 0.999,
+              "S1": 0.9,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.1,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          },
+          "J": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.8,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.8,
+              "B": 0.001,
+              "S1": 0.2,
+              "S2": 2,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          }
+        },
+        "modelAttrs": {
+          "gravity": 10
+        }
+      },
+      "createdAt": 1747000013000
+    },
+    {
+      "id": "preset_mpgqsmjhuwrd",
+      "name": "Stationary solvation — PB(WB)=0.20, J(WB)=1.50 (Rs=0.556) [Table 6]",
+      "description": "Paper Table 6: solvation of the stationary phase (W–B interaction). Resolution Rs=0.556. Greater solvation of B → poorer resolution between the two solute peaks.",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "PB": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.2,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.2,
+              "B": 0.999,
+              "S1": 0.9,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.1,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          },
+          "J": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 1.5,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 1.5,
+              "B": 0.001,
+              "S1": 0.2,
+              "S2": 2,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          }
+        },
+        "modelAttrs": {
+          "gravity": 10
+        }
+      },
+      "createdAt": 1747000014000
+    },
+    {
+      "id": "preset_mpgqsmjh0eue",
+      "name": "Solute+stationary solvation — PB=0.90, J=0.20 [Table 7]",
+      "description": "Paper Table 7: solvation of BOTH the solutes and the stationary phase (W–B, W–S1, W–S2 set together). Stronger solvent–solute interaction reduces retention and resolution.",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "PB": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.999,
+              "S1": 0.9,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.1,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          },
+          "J": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 0.2,
+              "S1": 0.2,
+              "S2": 0.2,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.2,
+              "B": 0.001,
+              "S1": 0.2,
+              "S2": 2,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.2,
+              "B": 0.2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.2,
+              "B": 2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          }
+        },
+        "modelAttrs": {
+          "gravity": 10
+        }
+      },
+      "createdAt": 1747000015000
+    },
+    {
+      "id": "preset_mpgqsmjhdo26",
+      "name": "Solute+stationary solvation — PB=0.20, J=1.50 [Table 7]",
+      "description": "Paper Table 7: solvation of BOTH the solutes and the stationary phase (W–B, W–S1, W–S2 set together). Stronger solvent–solute interaction reduces retention and resolution.",
+      "state": {
+        "schemaVersion": 2,
+        "interactionTables": {
+          "PB": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.9,
+              "B": 0.2,
+              "S1": 0.2,
+              "S2": 0.2,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 0.2,
+              "B": 0.999,
+              "S1": 0.9,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 0.2,
+              "B": 0.9,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 0.2,
+              "B": 0.1,
+              "S1": 0.9,
+              "S2": 0.9,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          },
+          "J": {
+            "empty": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            },
+            "W": {
+              "empty": 1,
+              "W": 0.1,
+              "B": 1.5,
+              "S1": 1.5,
+              "S2": 1.5,
+              "wall": 1
+            },
+            "B": {
+              "empty": 1,
+              "W": 1.5,
+              "B": 0.001,
+              "S1": 0.2,
+              "S2": 2,
+              "wall": 1
+            },
+            "S1": {
+              "empty": 1,
+              "W": 1.5,
+              "B": 0.2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "S2": {
+              "empty": 1,
+              "W": 1.5,
+              "B": 2,
+              "S1": 0.1,
+              "S2": 0.1,
+              "wall": 1
+            },
+            "wall": {
+              "empty": 1,
+              "W": 1,
+              "B": 1,
+              "S1": 1,
+              "S2": 1,
+              "wall": 1
+            }
+          }
+        },
+        "modelAttrs": {
+          "gravity": 10
+        }
+      },
+      "createdAt": 1747000016000
+    }
+  ]
+}
