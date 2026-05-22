@@ -260,6 +260,15 @@ export function HelpView() {
             indicator and persists across sessions.
           </p>
           <p className={styles.p}>
+            <strong>Track Categories.</strong> For Bool or Tag frequency indicators you can
+            pick <em>which</em> category values to chart (a checklist in the indicator&apos;s
+            settings). Leave everything checked to track all categories (the default), or
+            choose a subset so a dominant category doesn&apos;t flatten the rest on the shared
+            Y-axis &mdash; e.g. a cell-type chromatogram can chart just the two solutes and
+            ignore the solvent / stationary phase. The choice applies to both the
+            generation-axis and spatial (chromatogram) charts.
+          </p>
+          <p className={styles.p}>
             <strong>Spatial X-axis (chromatogram).</strong> A linked indicator&apos;s
             <strong> X Axis</strong> can be set to <strong>Rows</strong> or
             <strong> Columns</strong> instead of <strong>Generation</strong>. It then plots

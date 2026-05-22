@@ -187,6 +187,8 @@ interface IndicatorDef {
   spatialBinMode?: string;
   spatialBinCount?: number;
   spatialBinSize?: number;
+  /** bool/tag frequency only: subset of category values to chart (absent = all). */
+  trackedValues?: string[];
   watched: boolean;
 }
 
@@ -669,6 +671,10 @@ let linkedDefs: Array<{
   spatialBinMode?: string;
   spatialBinCount?: number;
   spatialBinSize?: number;
+  /** Categorical (bool/tag) frequency only: subset of category keys to keep in
+   *  the outgoing indicators payload. Absent/empty = all. Applied in sendColors
+   *  (post-aggregation), so it covers JS/WASM/WebGPU + generation/spatial. */
+  trackedValues?: string[];
 }> = [];
 let hasSpatialIndicators = false;
 let linkedAccumulators: Record<string, number | Record<string, number>> = {};
@@ -1940,6 +1946,7 @@ function initIndicators(defs: IndicatorDef[]): void {
         spatialBinMode: ind.spatialBinMode,
         spatialBinCount: ind.spatialBinCount,
         spatialBinSize: ind.spatialBinSize,
+        trackedValues: ind.trackedValues,
       });
       if (ind.xAxis === 'rows' || ind.xAxis === 'columns') hasSpatialIndicators = true;
     }
@@ -2242,7 +2249,22 @@ function sendColors(): void {
       indicators[id] = cachedIndicators[idx]!;
     }
     for (const id of Object.keys(linkedResults)) {
-      indicators[id] = linkedResults[id]!;
+      const result = linkedResults[id]!;
+      const def = linkedDefs.find(d => d.id === id);
+      if (def && def.aggregation === 'frequency'
+          && def.trackedValues && def.trackedValues.length
+          && result && typeof result === 'object') {
+        // Categorical (bool/tag) frequency: ship only the user-selected categories
+        // so a dominant category (e.g. solvent) doesn't flatten the rest on a
+        // shared Y-axis. Values are number (generation axis) or number[] (spatial);
+        // copy either through. Single filter point ⇒ covers JS / WASM / WebGPU.
+        const src = result as Record<string, number | number[]>;
+        const filtered: Record<string, number | number[]> = {};
+        for (const k of def.trackedValues) { if (k in src) filtered[k] = src[k]!; }
+        indicators[id] = filtered as unknown as Record<string, number>;
+      } else {
+        indicators[id] = result;
+      }
     }
   }
   // Build glyph payload when the model uses setCellGlyph AND there are any

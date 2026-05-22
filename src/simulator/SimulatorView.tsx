@@ -1454,6 +1454,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         binCount: i.binCount,
         xAxis: i.xAxis, spatialBinMode: i.spatialBinMode,
         spatialBinCount: i.spatialBinCount, spatialBinSize: i.spatialBinSize,
+        trackedValues: i.trackedValues,
         watched: i.watched,
       })),
       wasmStepBytes: wasmResult.error ? undefined : wasmResult.bytes,
@@ -1794,6 +1795,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             binCount: i.binCount,
             xAxis: i.xAxis, spatialBinMode: i.spatialBinMode,
             spatialBinCount: i.spatialBinCount, spatialBinSize: i.spatialBinSize,
+            trackedValues: i.trackedValues,
             watched: i.watched,
           })),
           attributes: model.attributes.map(a => ({
