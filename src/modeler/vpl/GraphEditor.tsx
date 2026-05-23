@@ -45,6 +45,7 @@ import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGl
 import { detectEdgeHazard, isNodeAvailable } from './nodes/nodeValidation';
 import { pushSnapshot, undo, redo, pushToRedo, pushToUndo, clearHistory } from './graphHistory';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { NameInputDialog } from '../../components/NameInputDialog';
 
 // ---------------------------------------------------------------------------
 // ID generation
@@ -428,6 +429,40 @@ export function GraphEditorInner() {
   // the page with the browser's native `confirm`. onConfirm performs the
   // real deletion using the captured node-id list.
   const [pendingMultiDelete, setPendingMultiDelete] = useState<string[] | null>(null);
+
+  // In-app name-entry dialog (replaces native window.prompt). A handler opens it
+  // via promptName(...) and awaits the entered name; null means cancelled.
+  const [namePrompt, setNamePrompt] = useState<
+    | null
+    | {
+        title: string;
+        fieldLabel?: string;
+        initialValue: string;
+        placeholder?: string;
+        confirmLabel?: string;
+        allowEmpty: boolean;
+        x: number;
+        y: number;
+        resolve: (value: string | null) => void;
+      }
+  >(null);
+
+  const promptName = useCallback(
+    (opts: {
+      title: string;
+      fieldLabel?: string;
+      initialValue: string;
+      placeholder?: string;
+      confirmLabel?: string;
+      allowEmpty?: boolean;
+      x: number;
+      y: number;
+    }) =>
+      new Promise<string | null>(resolve => {
+        setNamePrompt({ ...opts, allowEmpty: opts.allowEmpty ?? false, resolve });
+      }),
+    [],
+  );
   // Seed from the module-level saved scope so a Modeler → Simulator → Modeler
   // round-trip leaves the user inside the macro they were editing (instead of
   // resetting back to root). Defaults to ['root'] on first-ever mount.
@@ -2210,18 +2245,26 @@ export function GraphEditorInner() {
     return () => document.removeEventListener('keydown', handler);
   }, [handleCopy, handlePaste, handleCut, duplicateSelection, handleUndo, handleRedo]);
 
-  const renameNode = useCallback(() => {
+  const renameNode = useCallback(async () => {
     if (!contextMenu || contextMenu.target.type !== 'node') return;
     const nodeId = contextMenu.target.nodeId;
-    const name = window.prompt('Node name:', '');
-    if (name === null) { setContextMenu(null); return; }
+    const { x, y } = contextMenu;
+    // Prefill with the node's current displayed name (custom label, else the
+    // node type's default label) so the user can just edit/overtype.
+    const node = nodes.find(n => n.id === nodeId);
+    const data = (node?.data ?? {}) as Record<string, unknown>;
+    const ntype = data.nodeType as string | undefined;
+    const current = (data.label as string | undefined) ?? (ntype ? getNodeDef(ntype)?.label : undefined) ?? '';
+    setContextMenu(null);
+    // allowEmpty: clearing the field reverts to the default label (label || undefined).
+    const name = await promptName({ title: 'Rename', fieldLabel: 'Name', initialValue: current, x, y, allowEmpty: true });
+    if (name === null) return;
     pushCurrentSnapshot();
     setNodes(nds => nds.map(n =>
       n.id === nodeId ? { ...n, data: { ...n.data, label: name || undefined } } : n,
     ));
     scheduleSync();
-    setContextMenu(null);
-  }, [contextMenu, setNodes, scheduleSync]);
+  }, [contextMenu, nodes, setNodes, scheduleSync, promptName]);
 
   const addCommentNode = useCallback(() => {
     if (!contextMenu) return;
@@ -2274,13 +2317,13 @@ export function GraphEditorInner() {
     [setNodes, scheduleSync],
   );
 
-  const createGroup = useCallback(() => {
+  const createGroup = useCallback(async () => {
     if (!contextMenu || contextMenu.target.type !== 'selection') return;
-    const name = window.prompt('Group name:', 'Group');
-    if (!name) { setContextMenu(null); return; }
+    const { x, y } = contextMenu;
     const selectedIds = new Set(contextMenu.target.nodeIds);
     const selectedNodes = nodes.filter(n => selectedIds.has(n.id));
-    if (selectedNodes.length < 2) { setContextMenu(null); return; }
+    setContextMenu(null);
+    if (selectedNodes.length < 2) return;
 
     // Compute bounding box around the selected nodes using their actual
     // rendered dimensions where available.
@@ -2294,31 +2337,33 @@ export function GraphEditorInner() {
       maxX = Math.max(maxX, n.position.x + w);
       maxY = Math.max(maxY, n.position.y + h);
     }
+    const name = await promptName({ title: 'Create Group', fieldLabel: 'Group name', initialValue: 'Group', x, y });
+    if (!name) return;
     insertGroupNode(
       name,
       { x: minX - pad, y: minY - topPad },
       maxX - minX + pad * 2,
       maxY - minY + pad + topPad,
     );
-    setContextMenu(null);
-  }, [contextMenu, nodes, insertGroupNode]);
+  }, [contextMenu, nodes, insertGroupNode, promptName]);
 
   // Pane-menu "Add Group": drop an empty group rectangle at the cursor.
   // No selection required.
-  const createEmptyGroup = useCallback(() => {
+  const createEmptyGroup = useCallback(async () => {
     if (!contextMenu) return;
-    const name = window.prompt('Group name:', 'Group');
-    if (!name) { setContextMenu(null); return; }
+    const { x, y, flowX, flowY } = contextMenu;
+    setContextMenu(null);
+    const name = await promptName({ title: 'Add Group', fieldLabel: 'Group name', initialValue: 'Group', x, y });
+    if (!name) return;
     const DEFAULT_W = 300;
     const DEFAULT_H = 200;
     insertGroupNode(
       name,
-      { x: contextMenu.flowX - DEFAULT_W / 2, y: contextMenu.flowY - 20 },
+      { x: flowX - DEFAULT_W / 2, y: flowY - 20 },
       DEFAULT_W,
       DEFAULT_H,
     );
-    setContextMenu(null);
-  }, [contextMenu, insertGroupNode]);
+  }, [contextMenu, insertGroupNode, promptName]);
 
   // --- Align / Distribute (multi-selection only) ---
   // Node width/height approximation matches resizeGroupsToFit.
@@ -2393,9 +2438,9 @@ export function GraphEditorInner() {
 
   // --- Macro actions ---
 
-  const createMacroFromSelection = useCallback(() => {
+  const createMacroFromSelection = useCallback(async () => {
     if (!contextMenu || contextMenu.target.type !== 'selection') return;
-    pushCurrentSnapshot();
+    const { x, y } = contextMenu;
     const selectedIds = new Set(contextMenu.target.nodeIds);
     const selectedNodes = nodes.filter(n => selectedIds.has(n.id) && n.type !== 'commentNode' && n.type !== 'groupNode');
     if (selectedNodes.length < 2) {
@@ -2403,8 +2448,10 @@ export function GraphEditorInner() {
       setContextMenu(null);
       return;
     }
-    const name = window.prompt('Macro name:', 'New Macro');
-    if (!name) { setContextMenu(null); return; }
+    setContextMenu(null);
+    const name = await promptName({ title: 'Create Macro', fieldLabel: 'Macro name', initialValue: 'New Macro', x, y });
+    if (!name) return;
+    pushCurrentSnapshot();
 
     const internalEdges = edges.filter(e => selectedIds.has(e.source) && selectedIds.has(e.target));
     const externalInputEdgesRaw = edges.filter(e => !selectedIds.has(e.source) && selectedIds.has(e.target));
@@ -2591,7 +2638,7 @@ export function GraphEditorInner() {
     });
     scheduleSync();
     setContextMenu(null);
-  }, [contextMenu, nodes, edges, addMacro, setNodes, setEdges, scheduleSync]);
+  }, [contextMenu, nodes, edges, addMacro, setNodes, setEdges, scheduleSync, promptName]);
 
   // Track whether a connection is being dragged (for hover-to-uncollapse)
   const isConnecting = useRef(false);
@@ -3336,6 +3383,26 @@ export function GraphEditorInner() {
           onCancel={() => setPendingMultiDelete(null)}
         />
       )}
+      {namePrompt && (() => {
+        // namePrompt.x/y come from contextMenu, which stores coords relative to
+        // the .react-flow element. The dialog is position:fixed, so add the
+        // wrapper's viewport offset to anchor it at the true click point.
+        const rfRect = document.querySelector('.react-flow')?.getBoundingClientRect();
+        return (
+          <NameInputDialog
+            title={namePrompt.title}
+            fieldLabel={namePrompt.fieldLabel}
+            initialValue={namePrompt.initialValue}
+            placeholder={namePrompt.placeholder}
+            confirmLabel={namePrompt.confirmLabel}
+            allowEmpty={namePrompt.allowEmpty}
+            anchorX={namePrompt.x + (rfRect?.left ?? 0)}
+            anchorY={namePrompt.y + (rfRect?.top ?? 0)}
+            onConfirm={v => { namePrompt.resolve(v); setNamePrompt(null); }}
+            onCancel={() => { namePrompt.resolve(null); setNamePrompt(null); }}
+          />
+        );
+      })()}
     </div>
   );
 }
