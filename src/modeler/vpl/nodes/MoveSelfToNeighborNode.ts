@@ -1,74 +1,90 @@
 import type { NodeTypeDef } from '../types';
 import { niCellExprStmts } from '../compiler/niCodec';
 
-/** Atomic move-into-vacancy: push payloads to a target neighbour, then clear
- *  self. The canonical chemistry idiom for "ingredient moves into the empty
- *  space at NI" — packages the 4-write sequence (push attr + push orientation
- *  + clear attr + clear orientation) into a single flow node.
+/** Transfer Cell Attributes to Neighbor — copy/move/swap the *current* values
+ *  of a chosen set of cell attributes (and optionally orientation) between this
+ *  cell and a target neighbour. Generalises the chemistry move-into-vacancy
+ *  idiom into three operations.
  *
  *  Inputs (static):
  *    - `do`: flow trigger.
- *    - `targetNI`: the NeighborIndex of the destination cell.
- *    - `orientation` (only when `transferOrientation` is true): the value to
- *      push to the destination cell's orientation (e.g. a post-rotation
- *      orientation override).
+ *    - `targetNI`: the NeighborIndex of the destination/source cell.
  *
- *  Inputs (dynamic, derived from `payloadCount` + per-slot `attr_${i}` config):
- *    - `payload_${i}`: the value to push to the destination's `attr_${i}`
- *      cell attribute. The source cell's same attribute is then cleared to
- *      its declared `defaultValue` (book §2.3.4 "ingredient leaves a vacancy
- *      behind").
+ *  Config:
+ *    - `payloadCount` + per-slot `attr_${i}`: the cell attributes to transfer
+ *      (read directly from the cells — no value input ports).
+ *    - `operation`: 'copyTo' (self → neighbour), 'copyFrom' (neighbour → self),
+ *      or 'swap' (exchange, via an intermediary so no data is lost).
+ *    - `nonReceiving`: for copyTo/copyFrom only — what to do with the source
+ *      cell that gave its values: 'untouched' (leave it) or 'defaults' (reset it
+ *      to each attribute's declared `defaultValue`, the classic "leaves a vacancy
+ *      behind" move). Ignored by swap (both cells receive values).
+ *    - `includeOrientation`: also transfer the cell's current orientation, using
+ *      the same operation (default value when reset = 0). Requires Variegated
+ *      Cells enabled.
  *
- *  Atomicity: payload reads happen at cell-top scope (SSA discipline — every
- *  upstream value lands in a JS `const` / WASM `local` before any flow write
- *  fires), so the four writes see the pre-move snapshot. No new compiler
- *  primitive needed; the SSA hoisting that already powers GetCellAttribute
- *  carries the guarantee.
+ *  Post-update semantics: values are read from the WRITE buffer at the node's
+ *  flow position, NOT snapshotted at cell-top. So whatever was written to self
+ *  or the neighbour earlier in this generation step (by setAttribute /
+ *  setNeighborAttributeByIndex / setOrientation / …) is what gets transferred.
+ *  This node is async-only, where the write buffer aliases the read buffer
+ *  (single buffer), so the write buffer is the live, current state.
  *
- *  Async-only. setNeighborAttributeByIndex (which this composes) requires
- *  asynchronous update mode — sync mode's post-step bulk copy would overwrite
- *  the neighbour writes. Validation rejects sync-mode use. WebGPU's WGSL
- *  emitter rejects this for the same reason.
+ *  Async-only. It writes neighbour cells (copyTo / swap / copyFrom+defaults) —
+ *  sync mode's post-step bulk copy would overwrite those writes. Validation
+ *  rejects sync-mode use. WebGPU is sync-only and rejects this node.
  */
 export const MoveSelfToNeighborNode: NodeTypeDef = {
   type: 'moveSelfToNeighbor',
-  label: 'Move Self To Neighbor',
-  description: 'Atomic move into a vacant neighbour: pushes per-attribute payloads (and optionally orientation) to the target NI, then clears self to defaults. Async-only — chemistry move-into-empty idiom.',
+  label: 'Transfer Cell Attributes to Neighbor',
+  description: 'Copy/move/swap the current values of chosen cell attributes (and optionally orientation) between this cell and a target neighbour. Async-only.',
   category: 'output',
   color: '#4a148c',
-  requirements: { async: true, variegated: false }, // variegated only required when transferOrientation
+  requirements: { async: true, variegated: false }, // variegated only required when includeOrientation
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
     { id: 'targetNI', label: 'Target NI', kind: 'input', category: 'value', dataType: 'neighborIndex' },
-    { id: 'orientation', label: 'Orientation', kind: 'input', category: 'value', dataType: 'integer', inlineWidget: 'number', defaultValue: '0' },
-    // Dynamic `payload_${i}` ports — see effectivePorts.ts for the render-time list.
   ],
-  defaultConfig: { payloadCount: 1, transferOrientation: false },
+  defaultConfig: { payloadCount: 1, operation: 'copyTo', nonReceiving: 'defaults', includeOrientation: false },
   compile: (_nodeId, config, inputs, boundary) => {
     const payloadCount = Math.max(1, Number(config.payloadCount) || 1);
-    const transferOri = !!config.transferOrientation;
+    const operation = (config.operation as string) || 'copyTo';
+    const resetSource = ((config.nonReceiving as string) || 'defaults') === 'defaults';
+    const includeOri = !!config.includeOrientation;
     const ni = inputs['targetNI'] || '0';
     const b = boundary || 'torus';
     const lines: string[] = [];
-    // Resolve target cell index ONCE (SSA-style local). Used by every push.
+    // Resolve target cell index ONCE. Used by every transfer.
     const niLocal = `_msn_ni_${_nodeId}`;
     lines.push(`const ${niLocal} = (${ni}) | 0;`);
     const cellAccess = niCellExprStmts(niLocal, b, `${_nodeId}_msn`);
     lines.push(cellAccess.stmts);
-    lines.push(`if (${niLocal} !== ${0x80000000 | 0} && ${cellAccess.cellExpr} < total) {`);
+    const nbr = cellAccess.cellExpr;
+    lines.push(`if (${niLocal} !== ${0x80000000 | 0} && ${nbr} < total) {`);
+    // Emit one transfer per buffer (cell attrs + optional orientation). The read
+    // and write both go through the write buffer `w_*`, so values reflect any
+    // earlier mid-step writes (post-update semantics).
+    const emitTransfer = (buf: string, tmp: string, def: string) => {
+      if (operation === 'copyFrom') {
+        lines.push(`  ${buf}[idx] = ${buf}[${nbr}];`);
+        if (resetSource) lines.push(`  ${buf}[${nbr}] = ${def};`);
+      } else if (operation === 'swap') {
+        lines.push(`  const ${tmp} = ${buf}[idx];`);
+        lines.push(`  ${buf}[idx] = ${buf}[${nbr}];`);
+        lines.push(`  ${buf}[${nbr}] = ${tmp};`);
+      } else {
+        // copyTo (default)
+        lines.push(`  ${buf}[${nbr}] = ${buf}[idx];`);
+        if (resetSource) lines.push(`  ${buf}[idx] = ${def};`);
+      }
+    };
     for (let i = 0; i < payloadCount; i++) {
       const attrId = config[`attr_${i}`] as string;
       if (!attrId) continue;
-      const payload = inputs[`payload_${i}`] ?? '0';
-      const clearTo = (config[`_attr_${i}_default`] as string) ?? '0';
-      lines.push(`  w_${attrId}[${cellAccess.cellExpr}] = ${payload};`);
-      lines.push(`  w_${attrId}[idx] = ${clearTo};`);
+      const def = (config[`_attr_${i}_default`] as string) ?? '0';
+      emitTransfer(`w_${attrId}`, `_msn_t${i}_${_nodeId}`, def);
     }
-    if (transferOri) {
-      const oriValue = inputs['orientation'] ?? '0';
-      lines.push(`  w_orientation[${cellAccess.cellExpr}] = ((${oriValue}) | 0) & 3;`);
-      lines.push(`  w_orientation[idx] = 0;`);
-    }
+    if (includeOri) emitTransfer('w_orientation', `_msn_tori_${_nodeId}`, '0');
     lines.push(`}`);
     return lines.join('\n') + '\n';
   },

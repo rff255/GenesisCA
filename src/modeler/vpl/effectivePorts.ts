@@ -121,28 +121,6 @@ export function getEffectivePorts(
     }
   }
 
-  // MoveSelfToNeighbor: orientation port only when transferOrientation,
-  // dynamic per-slot payload ports derived from payloadCount.
-  if (nodeType === 'moveSelfToNeighbor') {
-    if (!cfg.transferOrientation) {
-      inputs = inputs.filter(p => p.id !== 'orientation');
-    }
-    const payloadCount = Math.max(1, Number(cfg.payloadCount) || 1);
-    for (let i = 0; i < payloadCount; i++) {
-      const attrId = cfg[`attr_${i}`];
-      const labelSuffix = typeof attrId === 'string' && attrId ? ` (${attrId})` : '';
-      inputs.push({
-        id: `payload_${i}`,
-        label: `Payload ${i + 1}${labelSuffix}`,
-        kind: 'input',
-        category: 'value',
-        dataType: 'any',
-        inlineWidget: 'number',
-        defaultValue: '0',
-      });
-    }
-  }
-
   // GroupCounting: compareHigh only for between ops
   if (nodeType === 'groupCounting') {
     const op = cfg.operation as string;

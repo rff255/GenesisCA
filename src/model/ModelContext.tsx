@@ -31,6 +31,7 @@ import { cloneMacroWithFreshIds } from './macroImport';
 import { migrateColorInterpolationNodes } from './colorScaleMigration';
 import { migrateTagConstantNodes } from './tagConstantMigration';
 import { migrateLookupTables } from './lookupTableMigration';
+import { migrateMoveSelfToNeighborNodes } from './moveSelfToNeighborMigration';
 import { clearAllSavedGraphViewports, setSavedCurrentScope } from '../modeler/vpl/graphState';
 
 // ---------------------------------------------------------------------------
@@ -721,6 +722,14 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // both emit the same integer). Idempotent.
       {
         const r = migrateTagConstantNodes(m.graphNodes, m.graphEdges, m.macroDefs);
+        m = { ...m, graphNodes: r.graphNodes, graphEdges: r.graphEdges, macroDefs: r.macroDefs };
+      }
+      // Transfer-to-Neighbor migration: upgrade legacy moveSelfToNeighbor nodes
+      // (payload/orientation ports + transferOrientation) to the reworked
+      // operation/nonReceiving/includeOrientation shape; drop dead payload edges.
+      // Idempotent (top-level + all macroDefs).
+      {
+        const r = migrateMoveSelfToNeighborNodes(m.graphNodes, m.graphEdges, m.macroDefs);
         m = { ...m, graphNodes: r.graphNodes, graphEdges: r.graphEdges, macroDefs: r.macroDefs };
       }
       // Lookup Table migration: interactionTable→lookupTable attribute type +

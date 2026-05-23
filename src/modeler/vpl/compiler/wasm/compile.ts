@@ -5644,12 +5644,14 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
     return true;
   },
 
-  // -- MoveSelfToNeighbor (async-only) -----------------------------------
-  // Atomic chemistry move-into-vacancy: pushes payloads to the target NI,
-  // then clears the source cell. Composes setNeighborAttributeByIndex (per
-  // payload) + setAttribute(defaultValue) (clear self) + optionally
-  // setNeighborOrientationByIndex + setOrientation(0). All four writes share
-  // one NI guard (INVALID_NI + boundary sentinel checked once).
+  // -- Transfer Cell Attributes to Neighbor (async-only) -----------------
+  // Copy/move/swap the current values of the configured cell attributes (and
+  // optionally orientation) between this cell and the target neighbour. Reads
+  // AND writes go through the WRITE buffer at this flow position (post-update
+  // semantics; async aliases write===read), so transferred values reflect any
+  // earlier mid-step writes. copyTo: w[nbr]=w[self] (+ reset self if
+  // 'defaults'); copyFrom: w[self]=w[nbr] (+ reset nbr); swap: temp exchange.
+  // All writes share one NI guard (INVALID_NI + boundary sentinel, checked once).
   moveSelfToNeighbor: ({ node, ctx, inputs }) => {
     if (!ctx.layout.isAsync) {
       ctx.errors.push('moveSelfToNeighbor: requires asynchronous update mode');
@@ -5657,9 +5659,11 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
     }
     const em = ctx.emitter;
     const payloadCount = Math.max(1, Number(node.data.config.payloadCount) || 1);
-    const transferOri = !!node.data.config.transferOrientation;
-    if (transferOri && !ctx.layout.variegatedEnabled) {
-      ctx.errors.push('moveSelfToNeighbor: transferOrientation requires variegated cells');
+    const operation = (node.data.config.operation as string) || 'copyTo';
+    const resetSource = ((node.data.config.nonReceiving as string) || 'defaults') === 'defaults';
+    const includeOri = !!node.data.config.includeOrientation;
+    if (includeOri && !ctx.layout.variegatedEnabled) {
+      ctx.errors.push('moveSelfToNeighbor: includeOrientation requires variegated cells');
       return false;
     }
     const niRef = inputs['targetNI'] ?? { inline: true, value: 0, valtype: I32 };
@@ -5681,7 +5685,40 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
       em.localGet(0); // total param
       em.op(OP_I32_LT_S);
       em.ifThen(() => {
-        // Per-payload writes: push to neighbour + clear self to defaultValue.
+        const pushNbrOffset = (itemBytes: number) => {
+          em.localGet(nbrCellLocal);
+          if (itemBytes !== 1) { em.i32Const(itemBytes); em.op(OP_I32_MUL); }
+        };
+        // Transfer one buffer (cell attr or orientation). Reads + writes both go
+        // through the WRITE buffer so values reflect this step's earlier writes
+        // (post-update semantics); async mode aliases write===read.
+        const emitXfer = (
+          itemBytes: number,
+          valtype: ValType,
+          loadVal: () => void,
+          storeVal: () => void,
+          defaultVal: number,
+        ) => {
+          const defRef: ValueRef = { inline: true, value: defaultVal, valtype };
+          if (operation === 'copyFrom') {
+            // w[self] = w[nbr]
+            pushCellByteOffset(ctx, itemBytes);
+            pushNbrOffset(itemBytes); loadVal();
+            storeVal();
+            if (resetSource) { pushNbrOffset(itemBytes); pushValueAs(em, defRef, valtype); storeVal(); }
+          } else if (operation === 'swap') {
+            const tmp = em.allocLocal(valtype);
+            pushCellByteOffset(ctx, itemBytes); loadVal(); em.localSet(tmp);   // tmp = w[self]
+            pushCellByteOffset(ctx, itemBytes); pushNbrOffset(itemBytes); loadVal(); storeVal(); // w[self] = w[nbr]
+            pushNbrOffset(itemBytes); em.localGet(tmp); storeVal();            // w[nbr] = tmp
+          } else {
+            // copyTo (default)
+            pushNbrOffset(itemBytes);
+            pushCellByteOffset(ctx, itemBytes); loadVal();
+            storeVal();
+            if (resetSource) { pushCellByteOffset(ctx, itemBytes); pushValueAs(em, defRef, valtype); storeVal(); }
+          }
+        };
         for (let i = 0; i < payloadCount; i++) {
           const attrId = node.data.config[`attr_${i}`] as string;
           if (!attrId) continue;
@@ -5690,35 +5727,23 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
             ctx.errors.push(`moveSelfToNeighbor: unknown attr ${attrId} at slot ${i}`);
             continue;
           }
-          const payload = inputs[`payload_${i}`] ?? { inline: true, value: 0, valtype: attrValType(attr.type) };
-          const defaultRaw = (node.data.config[`_attr_${i}_default`] as string) ?? '0';
-          const defaultNum = parseFloat(defaultRaw) || 0;
-          // 1. Push payload to neighbour: w_attr[nbrCellLocal] = payload
-          em.localGet(nbrCellLocal);
-          if (attr.itemBytes !== 1) { em.i32Const(attr.itemBytes); em.op(OP_I32_MUL); }
-          pushValueAs(em, payload, attrValType(attr.type));
-          if (attr.type === 'bool') em.i32Store8(attr.writeOffset, 0);
-          else if (attr.type === 'float') em.f64Store(attr.writeOffset, 3);
-          else em.i32Store(attr.writeOffset, 2);
-          // 2. Clear self to defaultValue: w_attr[idx] = defaultNum
-          const defaultRef: ValueRef = { inline: true, value: defaultNum, valtype: attrValType(attr.type) };
-          emitCellWriteAtIdx(ctx, attr, defaultRef);
+          const defaultNum = parseFloat((node.data.config[`_attr_${i}_default`] as string) ?? '0') || 0;
+          const loadVal = () => {
+            if (attr.type === 'bool') em.i32Load8U(attr.writeOffset, 0);
+            else if (attr.type === 'float') em.f64Load(attr.writeOffset, 3);
+            else em.i32Load(attr.writeOffset, 2);
+          };
+          const storeVal = () => {
+            if (attr.type === 'bool') em.i32Store8(attr.writeOffset, 0);
+            else if (attr.type === 'float') em.f64Store(attr.writeOffset, 3);
+            else em.i32Store(attr.writeOffset, 2);
+          };
+          emitXfer(attr.itemBytes, attrValType(attr.type), loadVal, storeVal, defaultNum);
         }
-        // Orientation transfer (variegated cells, when enabled).
-        if (transferOri) {
-          const oriRef = inputs['orientation'] ?? { inline: true, value: 0, valtype: I32 };
-          // 1. Push orientation to neighbour: w_orientation[nbrCellLocal] = (ori) & 3
-          em.localGet(nbrCellLocal);
-          em.i32Const(4);
-          em.op(OP_I32_MUL);
-          pushValueAs(em, oriRef, I32);
-          em.i32Const(3);
-          em.op(OP_I32_AND);
-          em.i32Store(ctx.layout.orientationWriteOffset, 2);
-          // 2. Clear self orientation to 0: w_orientation[idx] = 0
-          pushCellByteOffset(ctx, 4);
-          em.i32Const(0);
-          em.i32Store(ctx.layout.orientationWriteOffset, 2);
+        // Orientation as an extra slot (i32, default 0). Same operation/option.
+        if (includeOri) {
+          const off = ctx.layout.orientationWriteOffset;
+          emitXfer(4, I32, () => em.i32Load(off, 2), () => em.i32Store(off, 2), 0);
         }
       });
     });
@@ -6162,8 +6187,8 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
           }
         }
       }
-      // Dynamic value-input ports (e.g., MoveSelfToNeighbor's payload_${i})
-      // aren't in def.ports — pick them up from the edge map.
+      // Dynamic per-slot value-input ports (not declared in def.ports) —
+      // pick them up from the edge map (defensive; covers any such flow node).
       for (const [key, source] of ctx.inputToSource) {
         if (!key.startsWith(`${node.id}:`)) continue;
         const portId = key.slice(node.id.length + 1);
