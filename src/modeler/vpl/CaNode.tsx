@@ -1430,33 +1430,40 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   title="Glyph color (overridden per-channel by connections)"
                 />
               )}
-              {!glyphConnected && (
-                <div
-                  className="nodrag"
-                  style={{ display: 'flex', flexWrap: 'wrap', gap: 2, justifyContent: 'center', marginTop: 4 }}
-                  onMouseDown={e => e.stopPropagation()}
-                  onClick={e => e.stopPropagation()}
-                  title="Quick-pick a glyph"
-                >
-                  {STARTER.map(g => {
-                    const cp = g.codePointAt(0) ?? 0;
-                    return (
-                      <button
-                        key={g}
-                        type="button"
-                        onClick={() => updateConfig('_port_glyph', String(cp))}
-                        style={{
-                          width: 20, height: 20, padding: 0, lineHeight: '20px',
-                          fontSize: 14, cursor: 'pointer',
-                          background: 'transparent', border: '1px solid #555',
-                          color: '#ddd', borderRadius: 2,
-                        }}
-                        title={`Insert ${g} (U+${cp.toString(16).toUpperCase().padStart(4, '0')})`}
-                      >{g}</button>
-                    );
-                  })}
-                </div>
-              )}
+              {!glyphConnected && (() => {
+                // Render the starter palette across TWO rows so the node stays
+                // compact instead of stretching into one long single-row strip.
+                const renderGlyph = (g: string) => {
+                  const cp = g.codePointAt(0) ?? 0;
+                  return (
+                    <button
+                      key={g}
+                      type="button"
+                      onClick={() => updateConfig('_port_glyph', String(cp))}
+                      style={{
+                        width: 20, height: 20, padding: 0, lineHeight: '20px',
+                        fontSize: 14, cursor: 'pointer',
+                        background: 'transparent', border: '1px solid #555',
+                        color: '#ddd', borderRadius: 2,
+                      }}
+                      title={`Insert ${g} (U+${cp.toString(16).toUpperCase().padStart(4, '0')})`}
+                    >{g}</button>
+                  );
+                };
+                const half = Math.ceil(STARTER.length / 2);
+                return (
+                  <div
+                    className="nodrag"
+                    style={{ marginTop: 4 }}
+                    onMouseDown={e => e.stopPropagation()}
+                    onClick={e => e.stopPropagation()}
+                    title="Quick-pick a glyph"
+                  >
+                    <div style={{ display: 'flex', gap: 2, justifyContent: 'center' }}>{STARTER.slice(0, half).map(renderGlyph)}</div>
+                    <div style={{ display: 'flex', gap: 2, justifyContent: 'center', marginTop: 2 }}>{STARTER.slice(half).map(renderGlyph)}</div>
+                  </div>
+                );
+              })()}
             </>
           );
         })()}
