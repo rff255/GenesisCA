@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
+import { useDetailSelection, type PanelContentProps } from '../ModelerDetailContext';
 import { useModel } from '../../model/ModelContext';
 import { useListReorder } from './useListReorder';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
@@ -173,9 +174,9 @@ function handleMappingDragEnd() {
   setCurrentModelElementDrag(null);
 }
 
-export function MappingsPanelContent() {
+export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) {
   const { model, addMapping, removeMapping, updateMapping, reorderMappings } = useModel();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useDetailSelection('mappings');
 
   const attrToColor = model.mappings.filter(m => m.isAttributeToColor);
   const colorToAttr = model.mappings.filter(m => !m.isAttributeToColor);
@@ -215,6 +216,7 @@ export function MappingsPanelContent() {
 
   return (
     <>
+      {mode !== 'detail' && (<>
       <div className={styles.section}>
         <div className={styles.sectionTitle}>
           Attribute &rarr; Color (Output)
@@ -303,7 +305,9 @@ export function MappingsPanelContent() {
         </div>
       </div>
 
-      {selected && (
+      </>)}
+
+      {mode === 'detail' && selected && (
         <div className={styles.detailEditor}>
           <div className={styles.detailTitle}>Edit: {selected.name}</div>
           <div className={styles.fieldGroup}>

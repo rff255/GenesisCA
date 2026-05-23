@@ -20,9 +20,13 @@ interface Props {
   gridWidth: number;
   gridHeight: number;
   vizModes: Record<string, IndicatorVizMode>;
+  /** Per-indicator set of legend categories the user has hidden (Lines/Stack). */
+  hiddenCategories: Record<string, Set<string>>;
   onToggleWatch: (id: string, watched: boolean) => void;
   onChartToggle: (id: string, expanded: boolean) => void;
   onCycleVizMode: (id: string) => void;
+  /** Toggle one category's visibility for a frequency indicator's chart. */
+  onToggleCategory: (id: string, category: string) => void;
 }
 
 function formatValue(val: number, ind: Indicator): string {
@@ -34,7 +38,7 @@ function formatValue(val: number, ind: Indicator): string {
   return String(val);
 }
 
-export function IndicatorDisplay({ indicators, values, history, generation, gridWidth, gridHeight, vizModes, onToggleWatch, onChartToggle, onCycleVizMode }: Props) {
+export function IndicatorDisplay({ indicators, values, history, generation, gridWidth, gridHeight, vizModes, hiddenCategories, onToggleWatch, onChartToggle, onCycleVizMode, onToggleCategory }: Props) {
   // Track *collapsed* IDs — everything is expanded by default
   const [collapsedCharts, setCollapsedCharts] = useState<Set<string>>(new Set());
   // Per-indicator custom content height (drag-to-resize)
@@ -178,14 +182,22 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
               if (mode === 'multiline') {
                 return (
                   <div className={styles.sparklineWrap} style={{ height: h }}>
-                    <IndicatorMultiLineChart data={catHist} generation={generation} height={h} />
+                    <IndicatorMultiLineChart
+                      data={catHist} generation={generation} height={h}
+                      hidden={hiddenCategories[ind.id]}
+                      onToggleCategory={cat => onToggleCategory(ind.id, cat)}
+                    />
                   </div>
                 );
               }
               if (mode === 'stacked') {
                 return (
                   <div className={styles.sparklineWrap} style={{ height: h }}>
-                    <IndicatorStackedAreaChart data={catHist} generation={generation} height={h} />
+                    <IndicatorStackedAreaChart
+                      data={catHist} generation={generation} height={h}
+                      hidden={hiddenCategories[ind.id]}
+                      onToggleCategory={cat => onToggleCategory(ind.id, cat)}
+                    />
                   </div>
                 );
               }

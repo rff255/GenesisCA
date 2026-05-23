@@ -235,3 +235,13 @@
 :global(.react-flow__node-groupNode) .react-flow__resize-control {
   pointer-events: auto !important;
 }
+
+/* Keep groups BEHIND their children even when selected. React Flow's
+ * elevateNodesOnSelect (default on) rewrites a selected node's inline
+ * z-index to a high value, which would pop the group in front of its
+ * contained nodes and swallow every click. !important beats the inline
+ * style, pinning groups at the same z-index toRFNodes assigns them (-1)
+ * regardless of selection. Children keep winning hit-testing. */
+:global(.react-flow__node-groupNode) {
+  z-index: -1 !important;
+}

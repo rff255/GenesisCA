@@ -12,10 +12,14 @@ export type AttributeType = 'bool' | 'integer' | 'float' | 'tag' | 'color' | 'ne
  *  - `facePalette`: labels = `['none', ...palette.labels]` (implicit `none` at 0).
  *  - `tagAttribute`: labels = the referenced tag attribute's `tagOptions` (no
  *    implicit `none`). Lets a table be keyed by cell *type* with no faces at all
- *    (e.g. chromatography PB/J keyed by W/S1/S2/B). */
+ *    (e.g. chromatography PB/J keyed by W/S1/S2/B).
+ *  - `single`: a one-element, label-less axis (label = `['value']`). Collapses the
+ *    2-D table into a 1-D "map" keyed only by the *other* axis — no bogus
+ *    single-option tag attribute needed. */
 export type LookupKeySource =
   | { kind: 'facePalette'; paletteId: string }
-  | { kind: 'tagAttribute'; attributeId: string };
+  | { kind: 'tagAttribute'; attributeId: string }
+  | { kind: 'single' };
 
 /** A single attribute definition (per-cell or global model attribute) */
 export interface Attribute {

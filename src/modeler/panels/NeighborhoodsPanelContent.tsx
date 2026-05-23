@@ -1,5 +1,6 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { useCallback, useMemo, useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
+import { useDetailSelection, type PanelContentProps } from '../ModelerDetailContext';
 import { useListReorder } from './useListReorder';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
@@ -23,10 +24,10 @@ function coordKey(row: number, col: number): string {
   return `${row},${col}`;
 }
 
-export function NeighborhoodsPanelContent() {
+export function NeighborhoodsPanelContent({ mode = 'list' }: PanelContentProps = {}) {
   const { model, addNeighborhood, duplicateNeighborhood, removeNeighborhood, updateNeighborhood, reorderNeighborhoods } =
     useModel();
-  const [selectedIdx, setSelectedIdx] = useState(0);
+  const [selectedId, setSelectedId] = useDetailSelection('neighborhoods');
 
   const neighborhoods = model.neighborhoods;
 
@@ -34,22 +35,18 @@ export function NeighborhoodsPanelContent() {
   const prevCount = useRef(neighborhoods.length);
   useEffect(() => {
     if (neighborhoods.length > prevCount.current) {
-      setSelectedIdx(neighborhoods.length - 1);
+      const last = neighborhoods[neighborhoods.length - 1];
+      if (last) setSelectedId(last.id);
       setTimeout(() => {
         document.getElementById(`nbr-${neighborhoods.length - 1}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }, 50);
     }
     prevCount.current = neighborhoods.length;
   }, [neighborhoods]);
-  const selected = neighborhoods[selectedIdx];
+  const selected = neighborhoods.find(n => n.id === selectedId);
+  // Selection is tracked by id, so it survives a reorder with no extra bookkeeping.
   const reorder = useListReorder(neighborhoods, newOrder => {
-    // Keep selection on the same neighborhood after reorder
-    const selectedId = selected?.id;
     reorderNeighborhoods(newOrder);
-    if (selectedId) {
-      const newIdx = newOrder.indexOf(selectedId);
-      if (newIdx >= 0) setSelectedIdx(newIdx);
-    }
   });
   const margin = selected?.margin ?? 2;
   const gridSize = 2 * margin + 1;
@@ -85,19 +82,20 @@ export function NeighborhoodsPanelContent() {
   const handleDelete = () => {
     if (selected) {
       removeNeighborhood(selected.id);
-      setSelectedIdx(prev => Math.max(0, prev - 1));
+      setSelectedId(null);
     }
   };
 
   const handleDuplicate = () => {
     if (selected) {
       duplicateNeighborhood(selected.id);
-      setSelectedIdx(neighborhoods.length); // select the new copy
+      // The auto-select effect selects the new copy when the list grows.
     }
   };
 
   return (
     <>
+      {mode !== 'detail' && (<>
       <div className={styles.section}>
         <div className={styles.sectionTitle}>Neighborhoods</div>
         <div className={styles.list} data-reorder-list>
@@ -111,8 +109,8 @@ export function NeighborhoodsPanelContent() {
                 key={n.id}
                 id={`nbr-${i}`}
                 data-reorder-row
-                className={`${styles.listItem} ${selectedIdx === i ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
-                onClick={() => setSelectedIdx(i)}
+                className={`${styles.listItem} ${selectedId === n.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                onClick={() => setSelectedId(n.id)}
                 draggable
                 onDragStart={handleNeighborhoodDragStart(n.id)}
                 onDragEnd={handleNeighborhoodDragEnd}
@@ -145,7 +143,9 @@ export function NeighborhoodsPanelContent() {
         </div>
       </div>
 
-      {selected && (
+      </>)}
+
+      {mode === 'detail' && selected && (
         <div className={styles.detailEditor}>
           <div className={styles.fieldGroup}>
             <div className={styles.field}>

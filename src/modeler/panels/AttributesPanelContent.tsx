@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
+import { useDetailSelection, type PanelContentProps } from '../ModelerDetailContext';
 import type { Attribute, AttributeType, CAModel, LookupKeySource } from '../../model/types';
 import { LookupTableEditor } from './LookupTableEditor';
 import { resolveKeyLabels } from '../vpl/compiler/variegation';
@@ -36,7 +37,9 @@ function KeySourceField({ label, value, model, onChange }: {
   const palettes = model.variegatedCells?.enabled ? (model.variegatedCells.facePalettes ?? []) : [];
   const tagAttrs = model.attributes.filter(a => a.type === 'tag');
   const current = value
-    ? value.kind === 'facePalette' ? `palette:${value.paletteId}` : `tag:${value.attributeId}`
+    ? value.kind === 'facePalette' ? `palette:${value.paletteId}`
+      : value.kind === 'tagAttribute' ? `tag:${value.attributeId}`
+      : 'single'
     : '';
   return (
     <label style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2, fontSize: '0.66rem' }}>
@@ -46,6 +49,7 @@ function KeySourceField({ label, value, model, onChange }: {
         value={current}
         onChange={e => {
           const v = e.target.value;
+          if (v === 'single') { onChange({ kind: 'single' }); return; }
           const ci = v.indexOf(':');
           if (ci < 0) { onChange(undefined); return; }
           const kind = v.slice(0, ci);
@@ -54,6 +58,7 @@ function KeySourceField({ label, value, model, onChange }: {
         }}
       >
         <option value="">— select —</option>
+        <option value="single">Single value (map)</option>
         {palettes.length > 0 && (
           <optgroup label="Face palettes">
             {palettes.map(p => <option key={p.id} value={`palette:${p.id}`}>{p.name}</option>)}
@@ -79,9 +84,9 @@ function handleRowDragEnd() {
   setCurrentModelElementDrag(null);
 }
 
-export function AttributesPanelContent() {
+export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}) {
   const { model, addAttribute, removeAttribute, updateAttribute, reorderAttributes } = useModel();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useDetailSelection('attributes');
 
   const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
   const modelAttrs = model.attributes.filter(a => a.isModelAttribute);
@@ -121,6 +126,7 @@ export function AttributesPanelContent() {
 
   return (
     <>
+      {mode !== 'detail' && (<>
       <div className={styles.section}>
         <div className={styles.sectionTitle}>Cell Attributes</div>
         <div className={styles.list} data-reorder-list>
@@ -224,8 +230,9 @@ export function AttributesPanelContent() {
       </div>
 
       <VariablesPanelSection />
+      </>)}
 
-      {selected && (
+      {mode === 'detail' && selected && (
         <div className={styles.detailEditor}>
           <div className={styles.detailTitle}>Edit: {selected.name}</div>
           <div className={styles.fieldGroup}>

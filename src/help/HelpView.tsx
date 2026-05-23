@@ -134,6 +134,16 @@ export function HelpView() {
             <strong>Simulation state loading</strong> &mdash; Loading a saved state (either from an embedded project snapshot or a standalone <code>.gcastate</code> file) restores the grid <em>configuration</em> only: cell attributes, colors, model-attribute values, and simulator UI controls. The generation counter always resets to 0 and indicators re-initialise to their defaults. This way you can build a starting configuration over many generations, save it, and always start fresh from that state without inheriting the generation count you spent getting there.
           </p>
 
+          <p className={styles.p}>
+            <strong>Editing list items.</strong> In the Attributes, Neighborhoods, and
+            Mappings panels, selecting an item from the list opens its editor in a{' '}
+            <strong>second panel</strong> beside the list &mdash; so you never scroll past a
+            long list to reach the fields you are editing. Switch between items by clicking
+            them in the list; close the editor with its &lsaquo; tab (this just clears the
+            selection &mdash; it does not delete the item). Each panel remembers its own
+            selection as you switch tabs.
+          </p>
+
           <h3 className={styles.h3}>Attributes Panel (A)</h3>
           <p className={styles.p}>
             Define the data each cell carries. <strong>Cell Attributes</strong> are
@@ -260,6 +270,14 @@ export function HelpView() {
             indicator and persists across sessions.
           </p>
           <p className={styles.p}>
+            In the <strong>Lines</strong> and <strong>Stack</strong> views you can{' '}
+            <strong>click a legend entry</strong> to hide that series (it dims and is
+            struck through); click it again to bring it back. This is a per-session view
+            toggle &mdash; handy when one dominant category flattens the rest &mdash; and
+            is separate from <em>Track Categories</em> (which permanently changes what the
+            indicator computes).
+          </p>
+          <p className={styles.p}>
             <strong>Track Categories.</strong> For Bool or Tag frequency indicators you can
             pick <em>which</em> category values to chart (a checklist in the indicator&apos;s
             settings). Leave everything checked to track all categories (the default), or
@@ -311,11 +329,15 @@ export function HelpView() {
           <p className={styles.p}>
             The <strong>Lookup Table</strong> model-attribute type stores a (possibly
             rectangular) matrix of float values. Each axis has an independent <em>key
-            source</em> &mdash; a face-label palette or a tag attribute &mdash; so a table can
-            be keyed by faces (e.g. analyte&nbsp;&times;&nbsp;CD faces) or by cell type (e.g.
-            empty/water/amphi). A pure tag&times;tag table needs no faces, so it works even
-            with Variegated Cells off. Live-tuneable in the simulator like any other model
-            attribute (matrix shown directly under the attribute name).
+            source</em> &mdash; a face-label palette, a tag attribute, or{' '}
+            <strong>Single value (map)</strong> &mdash; so a table can be keyed by faces
+            (e.g. analyte&nbsp;&times;&nbsp;CD faces) or by cell type (e.g.
+            empty/water/amphi). Choosing <em>Single value</em> for one axis collapses the
+            table into a 1-D <strong>map</strong>: a single column (or row) of floats keyed
+            only by the other axis&apos;s tag &mdash; no need to invent a throwaway
+            single-option tag attribute. A pure tag&times;tag table needs no faces, so it
+            works even with Variegated Cells off. Live-tuneable in the simulator like any
+            other model attribute (matrix shown directly under the attribute name).
           </p>
           <p className={styles.p}>
             You can define multiple face-label <strong>palettes</strong> in the Variegated
@@ -425,7 +447,7 @@ export function HelpView() {
             <li><strong>Left-click drag</strong> (on empty area) &mdash; Box select nodes.</li>
             <li><strong>Left-click drag</strong> (on node) &mdash; Move node.</li>
             <li><strong>Ctrl + click</strong> &mdash; Add/remove from selection.</li>
-            <li><strong>Right-click</strong> (on canvas) &mdash; Context menu: Paste, Add Comment, Add Node submenu. Hover over any Add Node entry to see a short description of what it does.</li>
+            <li><strong>Right-click</strong> (on canvas) &mdash; Context menu: Paste, Add Comment, Add Node submenu. Hover over any Add Node entry to see a short description of what it does. The menu closes as soon as you press or start dragging anywhere outside it (e.g. to box-select or pan).</li>
             <li><strong>Right-click</strong> (on node) &mdash; Node options: Rename, Duplicate, Copy, Cut, Delete. On macros, Duplicate expands into a submenu (<strong>Duplicate Independent</strong> / <strong>Duplicate Linked</strong>), and they also show Enter Macro, Export Macro, and Undo Macro &mdash; plus a count badge for making linked copies independent.</li>
             <li><strong>Right-click</strong> (on selection) &mdash; Selection options: Duplicate, Copy, Cut, Paste, Create Macro, Create Group, <strong>Align</strong> (horizontally: left/center/right; vertically: top/center/bottom) and <strong>Distribute</strong> (horizontally/vertically &mdash; keeps the leftmost/topmost in place and evens out the gaps).</li>
             <li><strong>Right-click</strong> (on group) &mdash; Group options: Rename, Undo Group, Delete.</li>
@@ -502,6 +524,8 @@ export function HelpView() {
               contents).</li>
             <li><strong>Drag on the body</strong> to box-select the inner nodes (without
               moving the group); <strong>click the body</strong> to select the group itself.</li>
+            <li>A selected group <strong>stays behind</strong> its contained nodes (it does
+              not pop to the front), so you can keep clicking the nodes and links inside it.</li>
             <li><strong>Right-click-drag the body</strong> pans the canvas, just like
               empty space.</li>
             <li>Box-select supports modifiers: <strong>Shift</strong> adds to the current

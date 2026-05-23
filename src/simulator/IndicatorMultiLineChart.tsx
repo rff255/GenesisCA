@@ -6,6 +6,10 @@ interface Props {
   data: Record<string, number[]>;
   generation: number;
   height: number;
+  /** Categories the user has dimmed via legend click (display-only, runtime). */
+  hidden?: Set<string>;
+  /** Toggle a category's visibility — fired on legend-entry click. */
+  onToggleCategory?: (category: string) => void;
 }
 
 const TOKEN_NAMES = [
@@ -29,7 +33,7 @@ function formatAxisValue(v: number): string {
   return v.toFixed(1);
 }
 
-export function IndicatorMultiLineChart({ data, generation, height }: Props) {
+export function IndicatorMultiLineChart({ data, generation, height, hidden, onToggleCategory }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
@@ -62,7 +66,11 @@ export function IndicatorMultiLineChart({ data, generation, height }: Props) {
   });
 
   // Stable ordering so line colors don't flicker as keys are re-iterated.
+  // colorFor() is keyed by index in THIS full list, so hiding a category never
+  // recolors the others (we skip drawing hidden ones, not re-index visible ones).
   const categories = Object.keys(data).sort();
+  const isHidden = (c: string) => !!hidden && hidden.has(c);
+  const hiddenKey = hidden ? [...hidden].sort().join('|') : '';
   const legendHeight = 14;
   const plotHeight = Math.max(20, height - legendHeight);
 
@@ -89,6 +97,7 @@ export function IndicatorMultiLineChart({ data, generation, height }: Props) {
     let yMin = Infinity, yMax = -Infinity;
     let maxLen = 0;
     for (const k of categories) {
+      if (isHidden(k)) continue;
       const arr = data[k] || [];
       if (arr.length > maxLen) maxLen = arr.length;
       for (const v of arr) {
@@ -144,6 +153,7 @@ export function IndicatorMultiLineChart({ data, generation, height }: Props) {
     // One line per category
     for (let ci = 0; ci < categories.length; ci++) {
       const cat = categories[ci]!;
+      if (isHidden(cat)) continue;
       const arr = data[cat] || [];
       if (arr.length < 2) continue;
       // Right-align shorter series against the latest generation
@@ -159,7 +169,7 @@ export function IndicatorMultiLineChart({ data, generation, height }: Props) {
       ctx.stroke();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, generation, width, plotHeight, categories.length, categories.join('|'), AXIS_COLOR, LABEL_COLOR, PALETTE.join(',')]);
+  }, [data, generation, width, plotHeight, categories.length, categories.join('|'), hiddenKey, AXIS_COLOR, LABEL_COLOR, PALETTE.join(',')]);
 
   // Wrapper always mounts so ResizeObserver can attach on first render.
   return (
@@ -179,13 +189,25 @@ export function IndicatorMultiLineChart({ data, generation, height }: Props) {
         {categories.map((cat, ci) => {
           const arr = data[cat] || [];
           const cur = arr.length > 0 ? arr[arr.length - 1] : undefined;
+          const off = isHidden(cat);
           return (
-            <span key={cat} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+            <span
+              key={cat}
+              onClick={onToggleCategory ? () => onToggleCategory(cat) : undefined}
+              title={off ? `${cat} (hidden — click to show)` : `${cat} (click to hide)`}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 3,
+                cursor: onToggleCategory ? 'pointer' : 'default',
+                opacity: off ? 0.4 : 1,
+                textDecoration: off ? 'line-through' : 'none',
+                userSelect: 'none',
+              }}
+            >
               <span style={{
                 display: 'inline-block', width: 8, height: 2,
                 background: colorFor(ci), borderRadius: 1,
               }} />
-              <span title={cat}>{cat}</span>
+              <span>{cat}</span>
               <span style={{ color: LEGEND_VALUE_COLOR }}>{cur ?? ''}</span>
             </span>
           );
