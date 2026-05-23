@@ -639,6 +639,23 @@ export function GraphEditorInner() {
     return () => wrapper.removeEventListener('pointerdown', handler, true);
   }, []);
 
+  // Dismiss the context menu on ANY pointer-press outside it. The menu only
+  // closed on a synthesized `click`, which never fires when the user instead
+  // starts a box-select (LMB drag) or pan (RMB drag) — so it lingered. A
+  // capture-phase pointerdown on document closes it the moment a press lands
+  // anywhere outside the menu, without preventDefault/stopPropagation so the
+  // press still starts the drag/selection normally. The inside-menu guard
+  // lets a menu item's own onClick run before the menu unmounts.
+  useEffect(() => {
+    const onDown = (e: PointerEvent) => {
+      if (!contextMenuRef.current) return;
+      if (contextMenuRef.current.contains(e.target as globalThis.Node)) return;
+      setContextMenu(null);
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, []);
+
   // LMB on a group's body (not the header drag-handle, not a resize handle,
   // not an interactive widget): users expect to box-select inner nodes, not
   // grab the group. We capture LMB pointerdown on the group body and stash

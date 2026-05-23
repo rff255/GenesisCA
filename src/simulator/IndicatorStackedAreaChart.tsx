@@ -6,6 +6,10 @@ interface Props {
   data: Record<string, number[]>;
   generation: number;
   height: number;
+  /** Categories the user has dimmed via legend click (display-only, runtime). */
+  hidden?: Set<string>;
+  /** Toggle a category's visibility — fired on legend-entry click. */
+  onToggleCategory?: (category: string) => void;
 }
 
 const TOKEN_NAMES = [
@@ -40,7 +44,7 @@ function formatAxisValue(v: number): string {
   return v.toFixed(1);
 }
 
-export function IndicatorStackedAreaChart({ data, generation, height }: Props) {
+export function IndicatorStackedAreaChart({ data, generation, height, hidden, onToggleCategory }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
@@ -72,7 +76,12 @@ export function IndicatorStackedAreaChart({ data, generation, height }: Props) {
     if (w > 0) setWidth(w);
   });
 
+  // colorFor() is keyed by index in this full sorted list, so hiding a band
+  // never recolors the others. Hidden bands are skipped from the cumulative
+  // stack + yMax (so totals rescale) but keep their colour slot.
   const categories = Object.keys(data).sort();
+  const isHidden = (c: string) => !!hidden && hidden.has(c);
+  const hiddenKey = hidden ? [...hidden].sort().join('|') : '';
   const legendHeight = 14;
   const plotHeight = Math.max(20, height - legendHeight);
 
@@ -124,7 +133,10 @@ export function IndicatorStackedAreaChart({ data, generation, height }: Props) {
     let yMax = 0;
     for (let t = 0; t < maxLen; t++) {
       let sum = 0;
-      for (let c = 0; c < categories.length; c++) sum += aligned[c]![t]!;
+      for (let c = 0; c < categories.length; c++) {
+        if (isHidden(categories[c]!)) continue;
+        sum += aligned[c]![t]!;
+      }
       if (sum > yMax) yMax = sum;
     }
     if (yMax <= 0) yMax = 1;
@@ -165,6 +177,7 @@ export function IndicatorStackedAreaChart({ data, generation, height }: Props) {
     const lower = new Array(maxLen).fill(0);
 
     for (let ci = 0; ci < categories.length; ci++) {
+      if (isHidden(categories[ci]!)) continue;
       const arr = aligned[ci]!;
       // Build upper line for this band = lower + arr
       const upper = arr.map((v, i) => lower[i] + v);
@@ -184,7 +197,7 @@ export function IndicatorStackedAreaChart({ data, generation, height }: Props) {
       for (let i = 0; i < maxLen; i++) lower[i] = upper[i]!;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, generation, width, plotHeight, categories.length, categories.join('|'), AXIS_COLOR, LABEL_COLOR, PALETTE.join(',')]);
+  }, [data, generation, width, plotHeight, categories.length, categories.join('|'), hiddenKey, AXIS_COLOR, LABEL_COLOR, PALETTE.join(',')]);
 
   return (
     <div ref={wrapRef} style={{ width: '100%' }}>
@@ -202,15 +215,27 @@ export function IndicatorStackedAreaChart({ data, generation, height }: Props) {
         {categories.map((cat, ci) => {
           const arr = data[cat] || [];
           const cur = arr.length > 0 ? arr[arr.length - 1] : undefined;
+          const off = isHidden(cat);
           return (
-            <span key={cat} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+            <span
+              key={cat}
+              onClick={onToggleCategory ? () => onToggleCategory(cat) : undefined}
+              title={off ? `${cat} (hidden — click to show)` : `${cat} (click to hide)`}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 3,
+                cursor: onToggleCategory ? 'pointer' : 'default',
+                opacity: off ? 0.4 : 1,
+                textDecoration: off ? 'line-through' : 'none',
+                userSelect: 'none',
+              }}
+            >
               <span style={{
                 display: 'inline-block', width: 8, height: 8,
                 background: withAlpha(colorFor(ci), 0.55),
                 border: `1px solid ${colorFor(ci)}`,
                 borderRadius: 1,
               }} />
-              <span title={cat}>{cat}</span>
+              <span>{cat}</span>
               <span style={{ color: LEGEND_VALUE_COLOR }}>{cur ?? ''}</span>
             </span>
           );

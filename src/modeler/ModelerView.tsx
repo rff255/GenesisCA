@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { useModel } from '../model/ModelContext';
+import type { CAModel } from '../model/types';
 import { ActivityBar, type PanelId } from './ActivityBar';
+import { ModelerDetailContext, type ModelerDetailValue, type PanelContentProps } from './ModelerDetailContext';
 import { RightActivityBar, type RightPanelId } from './RightActivityBar';
 import { PanelShell } from './PanelShell';
 import { PropertiesPanelContent } from './panels/PropertiesPanelContent';
@@ -23,13 +25,27 @@ const panelTitles: Record<PanelId, string> = {
   variegated: 'Variegated Cells',
 };
 
-const panelComponents: Record<PanelId, React.ComponentType> = {
+const panelComponents: Record<PanelId, React.ComponentType<PanelContentProps>> = {
   properties: PropertiesPanelContent,
   attributes: AttributesPanelContent,
   neighborhoods: NeighborhoodsPanelContent,
   mappings: MappingsPanelContent,
   variegated: VariegatedCellsPanelContent,
 };
+
+// Panels with a list + per-item editor. Their editor renders in a second left
+// panel (the "detail" panel) so the user never scrolls past the list to reach it.
+const MASTER_DETAIL_PANELS = new Set<PanelId>(['attributes', 'neighborhoods', 'mappings']);
+
+/** Display name of the active panel's selected item, or null if nothing is
+ *  selected / the id no longer resolves (so the detail panel hides on delete). */
+function selectedItemName(model: CAModel, panel: PanelId, id: string | null): string | null {
+  if (!id) return null;
+  if (panel === 'attributes') return model.attributes.find(a => a.id === id)?.name ?? null;
+  if (panel === 'neighborhoods') return model.neighborhoods.find(n => n.id === id)?.name ?? null;
+  if (panel === 'mappings') return model.mappings.find(m => m.id === id)?.name ?? null;
+  return null;
+}
 
 const rightPanelTitles: Record<RightPanelId, string> = {
   explorer: 'Node Explorer',
@@ -56,6 +72,16 @@ export function ModelerView() {
   // exactly what was open before (null entries are preserved as null).
   const prePanelStateRef = useRef<{ left: PanelId | null; right: RightPanelId | null } | null>(null);
   const explorerRef = useRef<NodeExplorerHandle>(null);
+
+  // Per-panel detail selection, shared with the master-detail panels via context.
+  const [selectedByPanel, setSelectedByPanel] = useState<Partial<Record<PanelId, string | null>>>({});
+  const setSelected = useCallback((panel: PanelId, id: string | null) => {
+    setSelectedByPanel(prev => ({ ...prev, [panel]: id }));
+  }, []);
+  const detailContextValue = useMemo<ModelerDetailValue>(
+    () => ({ selectedByPanel, setSelected }),
+    [selectedByPanel, setSelected],
+  );
 
   const handleTogglePanel = useCallback((panel: PanelId) => {
     setActivePanel(prev => (prev === panel ? null : panel));
@@ -137,13 +163,30 @@ export function ModelerView() {
 
   const PanelContent = activePanel ? panelComponents[activePanel] : null;
 
+  // Second left panel: the active master-detail panel's selected-item editor.
+  // Mounted only when that panel is open AND its selected item still resolves.
+  const detailPanelId = activePanel && MASTER_DETAIL_PANELS.has(activePanel) ? activePanel : null;
+  const DetailContent = detailPanelId ? panelComponents[detailPanelId] : null;
+  const detailItemName = detailPanelId
+    ? selectedItemName(model, detailPanelId, selectedByPanel[detailPanelId] ?? null)
+    : null;
+
   return (
     <ReactFlowProvider>
+      <ModelerDetailContext.Provider value={detailContextValue}>
       <div className={styles.modelerLayout}>
         <ActivityBar activePanel={activePanel} onTogglePanel={handleTogglePanel} />
         {activePanel && PanelContent && (
           <PanelShell title={panelTitles[activePanel]} onClose={handleClosePanel}>
-            <PanelContent />
+            <PanelContent mode="list" />
+          </PanelShell>
+        )}
+        {detailPanelId && DetailContent && detailItemName != null && (
+          <PanelShell
+            title={`Edit: ${detailItemName}`}
+            onClose={() => setSelected(detailPanelId, null)}
+          >
+            <DetailContent mode="detail" />
           </PanelShell>
         )}
         <div className={styles.graphArea}>
@@ -182,6 +225,7 @@ export function ModelerView() {
         )}
         <RightActivityBar activePanel={activeRightPanel} onTogglePanel={handleToggleRightPanel} />
       </div>
+      </ModelerDetailContext.Provider>
     </ReactFlowProvider>
   );
 }

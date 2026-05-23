@@ -283,6 +283,25 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     } catch { /* fall through */ }
     return {};
   });
+  // Per-indicator set of legend categories the user has dimmed in the Lines/Stack
+  // charts (runtime display-only, NOT saved into .gcaproj — distinct from the
+  // model-level `trackedValues`). Stored in localStorage as Record<id, string[]>.
+  const [indicatorHiddenCategories, setIndicatorHiddenCategories] = useState<Record<string, Set<string>>>(() => {
+    try {
+      const raw = localStorage.getItem(SIM_SETTINGS_KEY);
+      if (raw) {
+        const stored = JSON.parse(raw).indicatorHiddenCategories;
+        if (stored && typeof stored === 'object') {
+          const out: Record<string, Set<string>> = {};
+          for (const [id, cats] of Object.entries(stored)) {
+            if (Array.isArray(cats)) out[id] = new Set(cats as string[]);
+          }
+          return out;
+        }
+      }
+    } catch { /* fall through */ }
+    return {};
+  });
 
   // GIF / WebM recording state
   const [recording, setRecording] = useState(false);
@@ -313,12 +332,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines,
           infinityCanvas, indicatorVizModes, recordFormat,
+          indicatorHiddenCategories: Object.fromEntries(
+            Object.entries(indicatorHiddenCategories)
+              .filter(([, s]) => s.size > 0)
+              .map(([id, s]) => [id, [...s]]),
+          ),
           glyphMinPx: glyphMinPxRef.current,
         }));
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, infinityCanvas, indicatorVizModes, recordFormat]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, infinityCanvas, indicatorVizModes, recordFormat, indicatorHiddenCategories]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -360,6 +384,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const cur = prev[id] ?? 'bars';
       const next: VizMode = cur === 'bars' ? 'multiline' : cur === 'multiline' ? 'stacked' : 'bars';
       return { ...prev, [id]: next };
+    });
+  }, []);
+
+  const toggleIndicatorCategory = useCallback((id: string, category: string) => {
+    setIndicatorHiddenCategories(prev => {
+      const next = { ...prev };
+      const set = new Set(next[id] ?? []);
+      if (set.has(category)) set.delete(category); else set.add(category);
+      if (set.size === 0) delete next[id]; else next[id] = set;
+      return next;
     });
   }, []);
 
@@ -3756,12 +3790,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 gridWidth={gridWidth.current || simWidth}
                 gridHeight={gridHeight.current || simHeight}
                 vizModes={indicatorVizModes}
+                hiddenCategories={indicatorHiddenCategories}
                 onToggleWatch={(id, watched) => updateIndicator(id, { watched })}
                 onChartToggle={(id, expanded) => {
                   if (expanded) chartExpandedRef.current.add(id);
                   else chartExpandedRef.current.delete(id);
                 }}
                 onCycleVizMode={cycleIndicatorVizMode}
+                onToggleCategory={toggleIndicatorCategory}
               />
               </div>
             </div>

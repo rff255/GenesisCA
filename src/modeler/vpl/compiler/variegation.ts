@@ -126,12 +126,14 @@ export function buildFacePatternLookupFromModel(model: CAModel): Int32Array {
  *  compilers, editor, and worker:
  *    - `facePalette` → `['none', ...palette.labels]` (implicit none at index 0).
  *    - `tagAttribute` → the tag attribute's `tagOptions` (no implicit none).
+ *    - `single` → `['value']` (a one-element axis → 1-D map keyed by the other axis).
  *  Returns `[]` when the source is unset or its referent is missing. */
 export function resolveKeyLabels(
   source: LookupKeySource | undefined,
   model: CAModel,
 ): string[] {
   if (!source) return [];
+  if (source.kind === 'single') return ['value'];
   if (source.kind === 'facePalette') {
     const pal = model.variegatedCells?.facePalettes.find(p => p.id === source.paletteId);
     return pal ? ['none', ...pal.labels] : [];
