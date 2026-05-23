@@ -6,6 +6,7 @@ import { LookupTableEditor } from './LookupTableEditor';
 import { resolveKeyLabels } from '../vpl/compiler/variegation';
 import { useListReorder } from './useListReorder';
 import { NeighborIndexDefaultEditor } from './NeighborIndexDefaultEditor';
+import { VariablesPanelSection } from './VariablesPanelSection';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag } from '../vpl/graphState';
@@ -85,7 +86,15 @@ function handleRowDragEnd() {
 
 export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}) {
   const { model, addAttribute, removeAttribute, updateAttribute, reorderAttributes } = useModel();
-  const [selectedId, setSelectedId] = useDetailSelection('attributes');
+  // One discriminated selection slot for this panel: `attr:<id>` or `var:<id>`.
+  // Attributes and Local Variables share the single second detail panel, so
+  // selecting one kind clears the other.
+  const [sel, setSel] = useDetailSelection('attributes');
+  const selKind: 'attr' | 'var' = sel?.startsWith('var:') ? 'var' : 'attr';
+  const selAttrId = sel && selKind === 'attr' ? sel.replace(/^attr:/, '') : null;
+  const selVarId = sel && selKind === 'var' ? sel.slice(4) : null;
+  const selectAttr = (id: string | null) => setSel(id ? `attr:${id}` : null);
+  const selectVar = (id: string | null) => setSel(id ? `var:${id}` : null);
 
   const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
   const modelAttrs = model.attributes.filter(a => a.isModelAttribute);
@@ -106,7 +115,7 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
     if (model.attributes.length > prevAttrCount.current) {
       const newItem = model.attributes[model.attributes.length - 1];
       if (newItem) {
-        setSelectedId(newItem.id);
+        selectAttr(newItem.id);
         setTimeout(() => {
           document.getElementById(`attr-${newItem.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }, 50);
@@ -114,12 +123,12 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
     }
     prevAttrCount.current = model.attributes.length;
   }, [model.attributes]);
-  const selected = model.attributes.find(a => a.id === selectedId);
+  const selected = selAttrId ? model.attributes.find(a => a.id === selAttrId) : undefined;
 
   const handleDelete = () => {
-    if (selectedId) {
-      removeAttribute(selectedId);
-      setSelectedId(null);
+    if (selAttrId) {
+      removeAttribute(selAttrId);
+      setSel(null);
     }
   };
 
@@ -139,8 +148,8 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 key={attr.id}
                 id={`attr-${attr.id}`}
                 data-reorder-row
-                className={`${styles.listItem} ${selectedId === attr.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
-                onClick={() => setSelectedId(attr.id)}
+                className={`${styles.listItem} ${sel === `attr:${attr.id}` ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                onClick={() => selectAttr(attr.id)}
                 draggable
                 onDragStart={handleRowDragStart(buildAttrDragPayload(attr))}
                 onDragEnd={handleRowDragEnd}
@@ -196,8 +205,8 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 key={attr.id}
                 id={`attr-${attr.id}`}
                 data-reorder-row
-                className={`${styles.listItem} ${selectedId === attr.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
-                onClick={() => setSelectedId(attr.id)}
+                className={`${styles.listItem} ${sel === `attr:${attr.id}` ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                onClick={() => selectAttr(attr.id)}
                 draggable
                 onDragStart={handleRowDragStart(buildAttrDragPayload(attr))}
                 onDragEnd={handleRowDragEnd}
@@ -228,9 +237,10 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
         </div>
       </div>
 
+      <VariablesPanelSection mode="list" selectedId={selVarId} onSelect={selectVar} />
       </>)}
 
-      {mode === 'detail' && selected && (
+      {mode === 'detail' && selKind === 'attr' && selected && (
         <div className={styles.detailEditor}>
           <div className={styles.detailTitle}>Edit: {selected.name}</div>
           <div className={styles.fieldGroup}>
@@ -769,6 +779,10 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
             )}
           </div>
         </div>
+      )}
+
+      {mode === 'detail' && selKind === 'var' && selVarId && (
+        <VariablesPanelSection mode="detail" selectedId={selVarId} onSelect={selectVar} />
       )}
     </>
   );

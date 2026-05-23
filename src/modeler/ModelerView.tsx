@@ -10,7 +10,6 @@ import { PropertiesPanelContent } from './panels/PropertiesPanelContent';
 import { AttributesPanelContent } from './panels/AttributesPanelContent';
 import { NeighborhoodsPanelContent } from './panels/NeighborhoodsPanelContent';
 import { MappingsPanelContent } from './panels/MappingsPanelContent';
-import { VariablesPanelSection } from './panels/VariablesPanelSection';
 import { PalettePanelContent } from './panels/PalettePanelContent';
 import { VariegatedCellsPanelContent } from './panels/VariegatedCellsPanelContent';
 import { GraphEditorInner } from './vpl/GraphEditor';
@@ -21,7 +20,6 @@ import styles from './ModelerView.module.css';
 const panelTitles: Record<PanelId, string> = {
   properties: 'Properties',
   attributes: 'Attributes',
-  variables: 'Local Variables',
   neighborhoods: 'Neighborhoods',
   mappings: 'Mappings',
   variegated: 'Variegated Cells',
@@ -30,7 +28,6 @@ const panelTitles: Record<PanelId, string> = {
 const panelComponents: Record<PanelId, React.ComponentType<PanelContentProps>> = {
   properties: PropertiesPanelContent,
   attributes: AttributesPanelContent,
-  variables: VariablesPanelSection,
   neighborhoods: NeighborhoodsPanelContent,
   mappings: MappingsPanelContent,
   variegated: VariegatedCellsPanelContent,
@@ -38,14 +35,20 @@ const panelComponents: Record<PanelId, React.ComponentType<PanelContentProps>> =
 
 // Panels with a list + per-item editor. Their editor renders in a second left
 // panel (the "detail" panel) so the user never scrolls past the list to reach it.
-const MASTER_DETAIL_PANELS = new Set<PanelId>(['attributes', 'variables', 'neighborhoods', 'mappings']);
+// (The Attributes panel also hosts Local Variables; its selection is a
+// discriminated `attr:`/`var:` string handled by selectedItemName below.)
+const MASTER_DETAIL_PANELS = new Set<PanelId>(['attributes', 'neighborhoods', 'mappings']);
 
 /** Display name of the active panel's selected item, or null if nothing is
  *  selected / the id no longer resolves (so the detail panel hides on delete). */
 function selectedItemName(model: CAModel, panel: PanelId, id: string | null): string | null {
   if (!id) return null;
-  if (panel === 'attributes') return model.attributes.find(a => a.id === id)?.name ?? null;
-  if (panel === 'variables') return (model.variables ?? []).find(v => v.id === id)?.name ?? null;
+  if (panel === 'attributes') {
+    // Discriminated `attr:<id>` / `var:<id>` — Local Variables share this panel.
+    if (id.startsWith('var:')) return (model.variables ?? []).find(v => v.id === id.slice(4))?.name ?? null;
+    const attrId = id.startsWith('attr:') ? id.slice(5) : id;
+    return model.attributes.find(a => a.id === attrId)?.name ?? null;
+  }
   if (panel === 'neighborhoods') return model.neighborhoods.find(n => n.id === id)?.name ?? null;
   if (panel === 'mappings') return model.mappings.find(m => m.id === id)?.name ?? null;
   return null;
