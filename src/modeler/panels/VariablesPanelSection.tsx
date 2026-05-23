@@ -1,17 +1,18 @@
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
 import type { VariableDataType, VariableKind } from '../../model/types';
 import { useListReorder } from './useListReorder';
+import { useDetailSelection, type PanelContentProps } from '../ModelerDetailContext';
 import styles from './PanelContent.module.css';
 
 /** Properties-panel section for Local Variables — per-cell scratch storage
  *  referenced by getVariable / setVariable / setArrayElement nodes. Mirrors
  *  the Indicators section's interaction shape (list + inspector for selected
  *  item, +Variable button, drag-to-reorder). */
-export function VariablesPanelSection() {
+export function VariablesPanelSection({ mode = 'list' }: PanelContentProps = {}) {
   const { model, addVariable, removeVariable, updateVariable, reorderVariables } = useModel();
   const variables = model.variables || [];
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useDetailSelection('variables');
   const reorder = useListReorder(variables, reorderVariables);
 
   const prevCount = useRef(variables.length);
@@ -37,7 +38,9 @@ export function VariablesPanelSection() {
     : undefined;
 
   return (
-    <div className={styles.section}>
+    <>
+      {mode !== 'detail' && (
+      <div className={styles.section}>
       <div className={styles.sectionTitle}>Local Variables</div>
       <div className={styles.sectionHelp}>
         Per-cell scratch storage referenced by Get / Set Variable nodes. Each
@@ -75,8 +78,10 @@ export function VariablesPanelSection() {
       <div className={styles.buttonRow}>
         <button className={styles.addButton} onClick={addVariable}>+ Variable</button>
       </div>
+      </div>
+      )}
 
-      {selected && (
+      {mode === 'detail' && selected && (
         <div className={styles.detailEditor}>
           <div className={styles.fieldGroup}>
             <div className={styles.field}>
@@ -204,6 +209,6 @@ export function VariablesPanelSection() {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }

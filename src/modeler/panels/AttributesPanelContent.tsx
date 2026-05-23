@@ -6,7 +6,6 @@ import { LookupTableEditor } from './LookupTableEditor';
 import { resolveKeyLabels } from '../vpl/compiler/variegation';
 import { useListReorder } from './useListReorder';
 import { NeighborIndexDefaultEditor } from './NeighborIndexDefaultEditor';
-import { VariablesPanelSection } from './VariablesPanelSection';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag } from '../vpl/graphState';
@@ -229,7 +228,6 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
         </div>
       </div>
 
-      <VariablesPanelSection />
       </>)}
 
       {mode === 'detail' && selected && (

@@ -135,9 +135,9 @@ export function HelpView() {
           </p>
 
           <p className={styles.p}>
-            <strong>Editing list items.</strong> In the Attributes, Neighborhoods, and
-            Mappings panels, selecting an item from the list opens its editor in a{' '}
-            <strong>second panel</strong> beside the list &mdash; so you never scroll past a
+            <strong>Editing list items.</strong> In the Attributes, Local Variables,
+            Neighborhoods, and Mappings panels, selecting an item from the list opens its
+            editor in a <strong>second panel</strong> beside the list &mdash; so you never scroll past a
             long list to reach the fields you are editing. Switch between items by clicking
             them in the list; close the editor with its &lsaquo; tab (this just clears the
             selection &mdash; it does not delete the item). Each panel remembers its own
@@ -270,9 +270,10 @@ export function HelpView() {
             indicator and persists across sessions.
           </p>
           <p className={styles.p}>
-            In the <strong>Lines</strong> and <strong>Stack</strong> views you can{' '}
-            <strong>click a legend entry</strong> to hide that series (it dims and is
-            struck through); click it again to bring it back. This is a per-session view
+            In the <strong>Lines</strong>, <strong>Stack</strong>, and spatial{' '}
+            (rows/columns chromatogram) views you can <strong>click a legend entry</strong>{' '}
+            to hide that series (it dims and is struck through); click it again to bring it
+            back. This is a per-session view
             toggle &mdash; handy when one dominant category flattens the rest &mdash; and
             is separate from <em>Track Categories</em> (which permanently changes what the
             indicator computes).
@@ -403,8 +404,8 @@ export function HelpView() {
             pseudocode &mdash; &quot;for each direction <em>d</em>, set
             <code>weights[d] = compute(d)</code>; then sample by weights&quot; &mdash; instead
             of unrolling the same dataflow once per case. Define them in the
-            <strong> Attributes</strong> panel&apos;s <em>Local Variables</em> section
-            (name, kind, data type, length, initial value).
+            <strong> Local Variables</strong> panel (name, kind, data type, length, initial
+            value).
           </p>
           <ul className={styles.list}>
             <li><strong>Lifetime</strong> &mdash; per-cell, per-step. Each cell starts with a

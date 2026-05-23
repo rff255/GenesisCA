@@ -247,7 +247,11 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
               const axisLength = axis === 'rows' ? gridHeight : gridWidth;
               return (
                 <div className={styles.sparklineWrap} style={{ height: h }}>
-                  <IndicatorSpatialChart data={spatialData} axis={axis} axisLength={axisLength} height={h} />
+                  <IndicatorSpatialChart
+                    data={spatialData} axis={axis} axisLength={axisLength} height={h}
+                    hidden={hiddenCategories[ind.id]}
+                    onToggleCategory={cat => onToggleCategory(ind.id, cat)}
+                  />
                 </div>
               );
             })()}
