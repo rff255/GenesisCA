@@ -502,6 +502,13 @@ export function GraphEditorInner() {
   // group(s). A box-select that starts on the empty pane keeps the default
   // behaviour: groups intersecting the rect are selected normally.
   const boxFromGroupRef = useRef(false);
+  // Client-coord bounds of an in-progress native pane box-select. Lets
+  // handleNodesChange re-verify each box-(de)selected node's real on-screen
+  // rect against the box and drop "phantom" selects that React Flow's
+  // getNodesInside force-includes for nodes whose handle bounds aren't measured
+  // yet (forceInitialRender) — e.g. nodes re-created by a model sync after a
+  // group drag, which a position-only change never re-measures.
+  const paneBoxRectRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
 
   // Perf: maintain a graph-level map of connected input handles per node so each CaNode can
   // subscribe once via useSyncExternalStore instead of scanning all edges on every store event.
@@ -916,6 +923,16 @@ export function GraphEditorInner() {
   useEffect(() => {
     const el = document.querySelector('.react-flow') as HTMLElement | null;
     if (!el) return;
+    // Live pointer position (client coords) tracked ONLY while a pane
+    // box-select is in progress (the listener is added in downHandler and
+    // removed in upHandler — there is NO always-on pointermove listener).
+    // handleNodesChange reads it to test real DOM intersection. Capture phase
+    // → runs before RF's synthetic onPointerMove that generates the box-select
+    // changes, so the rect is current when those land.
+    const moveHandler = (e: PointerEvent) => {
+      const r = paneBoxRectRef.current;
+      if (r) { r.x2 = e.clientX; r.y2 = e.clientY; }
+    };
     const downHandler = (e: PointerEvent) => {
       // RMB: snapshot selection for the context-menu preservation fix.
       if (e.button === 2) {
@@ -934,9 +951,13 @@ export function GraphEditorInner() {
         boxSelectActiveRef.current = false;
         boxSelectModeRef.current = 'replace';
         paneBoxDragRef.current = false;
+        paneBoxRectRef.current = null;
         return;
       }
       paneBoxDragRef.current = true;
+      paneBoxRectRef.current = { x1: e.clientX, y1: e.clientY, x2: e.clientX, y2: e.clientY };
+      // Track the pointer ONLY for this gesture (removed in upHandler).
+      document.addEventListener('pointermove', moveHandler, true);
       if (e.shiftKey) {
         boxSelectModeRef.current = 'add';
         boxSelectActiveRef.current = true;
@@ -956,12 +977,15 @@ export function GraphEditorInner() {
     const upHandler = () => {
       boxSelectActiveRef.current = false;
       paneBoxDragRef.current = false;
+      paneBoxRectRef.current = null;
+      document.removeEventListener('pointermove', moveHandler, true);
     };
     el.addEventListener('pointerdown', downHandler, true);
     // Listen on document so we catch releases outside the React Flow element.
     document.addEventListener('pointerup', upHandler, true);
     return () => {
       el.removeEventListener('pointerdown', downHandler, true);
+      document.removeEventListener('pointermove', moveHandler, true);
       document.removeEventListener('pointerup', upHandler, true);
     };
   }, []);
@@ -1093,6 +1117,34 @@ export function GraphEditorInner() {
           const node = nodesRef.current.find(n => n.id === c.id);
           return node?.type !== 'groupNode';
         });
+      }
+
+      // Native pane box-select: getNodesInside force-includes nodes whose
+      // handle bounds aren't measured (forceInitialRender), IGNORING the rect —
+      // so e.g. nodes re-created by the model sync after a group drag (a
+      // position-only change never re-measures them) get spuriously selected by
+      // an unrelated empty-canvas box-select. Re-verify each box-selected node's
+      // real on-screen rect against the box and FLIP phantom select-TRUEs to
+      // select-FALSE. We flip rather than drop because RF's
+      // getSelectionChanges(mutateItem=true) already pre-mutated the internal
+      // lookup; emitting a real select:false overrides it with a fresh ref (see
+      // the modifier-intercept CRITICAL note below). Mirrors the in-group path.
+      const boxRect = paneBoxRectRef.current;
+      if (boxRect && paneBoxDragRef.current && changes.some(c => c.type === 'select' && c.selected)) {
+        const wrapper = editorWrapperRef.current;
+        if (wrapper) {
+          const left = Math.min(boxRect.x1, boxRect.x2);
+          const right = Math.max(boxRect.x1, boxRect.x2);
+          const top = Math.min(boxRect.y1, boxRect.y2);
+          const bottom = Math.max(boxRect.y1, boxRect.y2);
+          changes = changes.map(c => {
+            if (c.type !== 'select' || !c.selected) return c;
+            const el = wrapper.querySelector(`.react-flow__node[data-id="${CSS.escape(c.id)}"]`);
+            const r = el?.getBoundingClientRect();
+            const hit = !!r && !(r.right < left || r.left > right || r.bottom < top || r.top > bottom);
+            return hit ? c : { ...c, selected: false };
+          });
+        }
       }
 
       // Box-select modifier intercept. When the user started the LMB-drag on
@@ -1372,6 +1424,17 @@ export function GraphEditorInner() {
   const onNodeContextMenu = useCallback(
     (event: React.MouseEvent, node: Node) => {
       event.stopPropagation();
+      // Group nodes: RMB on the header strip opens the group menu; RMB anywhere
+      // in the body opens the regular pane menu (Add Node / Comment / Group /
+      // Macro / Paste …) so the user can build the graph while working inside a
+      // group. The header is the only `[data-drag-handle]` within the group DOM.
+      if (
+        node.type === 'groupNode' &&
+        !(event.target as HTMLElement).closest('[data-drag-handle="true"]')
+      ) {
+        openContextMenu(event);
+        return;
+      }
       // If React Flow's internal mousedown collapsed the multi-selection by
       // the time contextmenu fires, re-assert it from preSelectionRef so the
       // outline redraws on every previously-selected node and the menu uses
