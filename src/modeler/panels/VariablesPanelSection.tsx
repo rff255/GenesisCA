@@ -2,17 +2,25 @@ import { useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
 import type { VariableDataType, VariableKind } from '../../model/types';
 import { useListReorder } from './useListReorder';
-import { useDetailSelection, type PanelContentProps } from '../ModelerDetailContext';
+import type { PanelMode } from '../ModelerDetailContext';
 import styles from './PanelContent.module.css';
 
 /** Properties-panel section for Local Variables — per-cell scratch storage
  *  referenced by getVariable / setVariable / setArrayElement nodes. Mirrors
  *  the Indicators section's interaction shape (list + inspector for selected
  *  item, +Variable button, drag-to-reorder). */
-export function VariablesPanelSection({ mode = 'list' }: PanelContentProps = {}) {
+/** Local Variables master-detail UI. Lives INSIDE the Attributes panel: the
+ *  list renders in the primary panel (`mode='list'`), the selected variable's
+ *  editor renders in the shared second detail panel (`mode='detail'`). Selection
+ *  is controlled by the parent (AttributesPanelContent), which routes attribute
+ *  vs variable selection through one discriminated `attr:`/`var:` slot. */
+export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
+  mode?: PanelMode;
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+}) {
   const { model, addVariable, removeVariable, updateVariable, reorderVariables } = useModel();
   const variables = model.variables || [];
-  const [selectedId, setSelectedId] = useDetailSelection('variables');
   const reorder = useListReorder(variables, reorderVariables);
 
   const prevCount = useRef(variables.length);
@@ -20,7 +28,7 @@ export function VariablesPanelSection({ mode = 'list' }: PanelContentProps = {})
     if (variables.length > prevCount.current) {
       const newItem = variables[variables.length - 1];
       if (newItem) {
-        setSelectedId(newItem.id);
+        onSelect(newItem.id);
         setTimeout(() => {
           document.getElementById(`var-${newItem.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }, 50);
@@ -61,7 +69,7 @@ export function VariablesPanelSection({ mode = 'list' }: PanelContentProps = {})
               id={`var-${v.id}`}
               data-reorder-row
               className={`${styles.listItem} ${v.id === selectedId ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
-              onClick={() => setSelectedId(v.id === selectedId ? null : v.id)}
+              onClick={() => onSelect(v.id === selectedId ? null : v.id)}
             >
               <span className={styles.listItemName}>{v.name}</span>
               <span className={styles.listItemBadge}>
@@ -202,7 +210,7 @@ export function VariablesPanelSection({ mode = 'list' }: PanelContentProps = {})
 
             <button
               className={styles.deleteButton}
-              onClick={() => { removeVariable(selected.id); setSelectedId(null); }}
+              onClick={() => { removeVariable(selected.id); onSelect(null); }}
             >
               Delete Variable
             </button>

@@ -708,9 +708,26 @@ export function GraphEditorInner() {
         height: Math.abs(yLocal - startYLocal),
       };
       const state = rfStore.getState();
+      // getNodesInside force-includes any node whose handles aren't measured yet
+      // (`forceInitialRender = !node.internals.handleBounds`), IGNORING the rect.
+      // That's common right after loading a library model with many (often
+      // collapsed) nodes — and made box-selecting inside a group grab the WHOLE
+      // graph. Re-verify each candidate's ACTUAL on-screen rect against the drag
+      // rectangle (both in client coords, straight from the DOM) so the box only
+      // selects nodes it truly intersects.
+      const dLeft = Math.min(drag.startX, clientX);
+      const dTop = Math.min(drag.startY, clientY);
+      const dRight = Math.max(drag.startX, clientX);
+      const dBottom = Math.max(drag.startY, clientY);
       const boxIds = new Set(
         getNodesInside(state.nodeLookup, rect, state.transform, true, true)
           .filter(n => n.type !== 'groupNode')
+          .filter(n => {
+            const el = wrapper.querySelector(`.react-flow__node[data-id="${CSS.escape(n.id)}"]`);
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            return !(r.right < dLeft || r.left > dRight || r.bottom < dTop || r.top > dBottom);
+          })
           .map(n => n.id),
       );
 
