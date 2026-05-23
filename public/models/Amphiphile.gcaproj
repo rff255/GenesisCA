@@ -68,7 +68,7 @@
     {
       "id": "tableP_B",
       "name": "P_B (bond-break, adjacent)",
-      "type": "interactionTable",
+      "type": "lookupTable",
       "description": "Probability of breaking the bond between two adjacent cells (= the cell becoming able to move away from this neighbour). LOW = stable (stays together), HIGH = easily separates. Book Example 5.3 values (page 86): WW 0.25, XX 0.20, YY 0.50, XY 0.50, WX 0.80, WY 0.20. The `none` row/column is 1.0 (no bond to break — book §2.3.6).",
       "isModelAttribute": true,
       "defaultValue": "0",
@@ -98,12 +98,20 @@
           "Y": 0.7,
           "water": 0.25
         }
+      },
+      "rowKeySource": {
+        "kind": "facePalette",
+        "paletteId": "palette_faces"
+      },
+      "colKeySource": {
+        "kind": "facePalette",
+        "paletteId": "palette_faces"
       }
     },
     {
       "id": "tableJ",
       "name": "J (joining, toward far)",
-      "type": "interactionTable",
+      "type": "lookupTable",
       "description": "Directional preference: J(A, B) is the relative probability that A will move TOWARD a face B sitting two cells ahead in that direction. J = 1 is neutral (book §2.3.5); J > 1 attracts, J < 1 repels. Book Example 5.3 values (page 86): WW 1.70, XX 2.00, YY 0.70, XY 0.70, WX 0.25, WY 2.00. The `none` row/column is 1.0 (no preference toward or away from an absent ingredient — book §2.3.5 verbatim).",
       "isModelAttribute": true,
       "defaultValue": "0",
@@ -133,6 +141,14 @@
           "Y": 0.5,
           "water": 1
         }
+      },
+      "rowKeySource": {
+        "kind": "facePalette",
+        "paletteId": "palette_faces"
+      },
+      "colKeySource": {
+        "kind": "facePalette",
+        "paletteId": "palette_faces"
       }
     }
   ],
@@ -218,7 +234,7 @@
     {"id":"nmpcre8jesnx1","type":"caNode","position":{"x":220,"y":160},"data":{"nodeType":"getConstant","config":{"constType":"tag","tagAttributeId":"kind","constValue":"0"},"label":"Tag: empty"}},
     {"id":"nmpcre8jevu4f","type":"caNode","position":{"x":440,"y":80},"data":{"nodeType":"statement","config":{"operation":"!="},"label":"occupied?"}},
     {"id":"nmpcre8jevlge","type":"caNode","position":{"x":660,"y":160},"data":{"nodeType":"getAllFacingLabels","config":{"cardinalsOnly":true,"_boundaryTreatment":"torus","_sourceAttrId":"kind"},"label":"Faces (cardinals)"}},
-    {"id":"nmpcre8jen4ga","type":"caNode","position":{"x":880,"y":160},"data":{"nodeType":"interactionTableMap","config":{"tableId":"tableP_B","_labelCount":4},"label":"P_B vec[4]"}},
+    {"id":"nmpcre8jen4ga","type":"caNode","position":{"x":880,"y":160},"data":{"nodeType":"interactionTableMap","config":{"tableId":"tableP_B","_labelCount":4,"_rowCount":4,"_colCount":4},"label":"P_B vec[4]"}},
     {"id":"nmpcre8jee4t5","type":"caNode","position":{"x":880,"y":80},"data":{"nodeType":"aggregate","config":{"operation":"product"},"label":"P_break (Π pb_d)"}},
     {"id":"nmpcre8jeyywg","type":"caNode","position":{"x":1100,"y":80},"data":{"nodeType":"getRandom","config":{"randomType":"bool"},"label":"Bernoulli(P_break)"}},
     {"id":"nmpcre8jeofuu","type":"caNode","position":{"x":660,"y":480},"data":{"nodeType":"getAllNeighborIndexes","config":{"neighborhoodId":"vN","_resolvedPackedAll":"[-65536,1,65536,65535]"},"label":"NIs vN"}},
@@ -239,7 +255,7 @@
     {"id":"nmpcre8jevy96","type":"caNode","position":{"x":1540,"y":800},"data":{"nodeType":"getConstant","config":{"constType":"faceLabel","constValue":"none","_resolvedFaceLabelIndex":0},"label":"Face: none"}},
     {"id":"nmpcre8jeg0pe","type":"caNode","position":{"x":1760,"y":720},"data":{"nodeType":"valueSwitch","config":{},"label":"water?WATER:NONE"}},
     {"id":"nmpcre8je5p0t","type":"caNode","position":{"x":1760,"y":640},"data":{"nodeType":"valueSwitch","config":{},"label":"amphi?X:above"}},
-    {"id":"nmpcre8jel9iy","type":"caNode","position":{"x":1980,"y":560},"data":{"nodeType":"lookupInteraction","config":{"tableId":"tableJ","_labelCount":4},"label":"J(myFace, farLabel)"}},
+    {"id":"nmpcre8jel9iy","type":"caNode","position":{"x":1980,"y":560},"data":{"nodeType":"lookupInteraction","config":{"tableId":"tableJ","_labelCount":4,"_rowCount":4,"_colCount":4},"label":"J(myFace, farLabel)"}},
     {"id":"nmpcre8je6mm2","type":"caNode","position":{"x":1320,"y":480},"data":{"nodeType":"getConstant","config":{"constType":"tag","tagAttributeId":"kind","constValue":"0"},"label":"Tag: empty"}},
     {"id":"nmpcre8jebzom","type":"caNode","position":{"x":1540,"y":480},"data":{"nodeType":"statement","config":{"operation":"=="},"label":"kind[d]==empty"}},
     {"id":"nmpcre8jezy41","type":"caNode","position":{"x":2200,"y":560},"data":{"nodeType":"valueSwitch","config":{"_port_elseValue":"0"},"label":"weight[d]=empty?J:0"}},
@@ -254,7 +270,7 @@
     {"id":"nmpcre8jekprc","type":"caNode","position":{"x":2420,"y":0},"data":{"nodeType":"arrayElement","config":{"_elemKind":"ni"},"label":"NI of chosen dir"}},
     {"id":"nmpcre8jexppi","type":"caNode","position":{"x":2420,"y":80},"data":{"nodeType":"getCellAttribute","config":{"attributeId":"kind"},"label":"My kind"}},
     {"id":"nmpcre8jewngl","type":"caNode","position":{"x":2420,"y":160},"data":{"nodeType":"getOrientation","config":{},"label":"My ori"}},
-    {"id":"nmpcre8jew3pi","type":"caNode","position":{"x":2640,"y":0},"data":{"nodeType":"moveSelfToNeighbor","config":{"payloadCount":1,"attr_0":"kind","transferOrientation":true,"_attr_0_default":"0"},"label":"Move self → NI"}},
+    {"id":"nmpcre8jew3pi","type":"caNode","position":{"x":2640,"y":0},"data":{"nodeType":"moveSelfToNeighbor","config":{"payloadCount":1,"attr_0":"kind","transferOrientation":false,"_attr_0_default":"0"},"label":"Move self → NI"}},
     {"id":"nmpcre8jeb608","type":"caNode","position":{"x":3080,"y":1120},"data":{"nodeType":"conditional","config":{},"label":"If amphi+free"}},
     {"id":"nmpcre8jefvbr","type":"caNode","position":{"x":3300,"y":1120},"data":{"nodeType":"setOrientation","config":{"_port_value":"0"},"label":"Apply rotation"}},
     {"id":"nmpcre8jernry","type":"caNode","position":{"x":0,"y":1280},"data":{"nodeType":"initEvent","config":{}}},
@@ -972,10 +988,16 @@
   "variegatedCells": {
     "enabled": true,
     "sourceAttributeId": "kind",
-    "faceLabels": [
-      "X",
-      "Y",
-      "water"
+    "facePalettes": [
+      {
+        "id": "palette_faces",
+        "name": "Faces",
+        "labels": [
+          "X",
+          "Y",
+          "water"
+        ]
+      }
     ],
     "facePatterns": [
       {
@@ -991,7 +1013,8 @@
           null,
           "water",
           null
-        ]
+        ],
+        "paletteId": "palette_faces"
       },
       {
         "id": "pat_amphi",
@@ -1006,27 +1029,9 @@
           null,
           "X",
           null
-        ]
+        ],
+        "paletteId": "palette_faces"
       }
     ]
-  },
-  "simulationState": {
-    "schemaVersion": 2,
-    "boundaryTreatment": "torus",
-    "gridWidth": 40,
-    "gridHeight": 40,
-    "modelAttrs": {
-      "densityAmphi": 0.0625,
-      "densityWater": 0.625
-    },
-    "activeViewer": "viz",
-    "brushColor": "#292929",
-    "brushW": 1,
-    "brushH": 1,
-    "brushMapping": "__manual__",
-    "targetFps": 96,
-    "unlimitedFps": false,
-    "gensPerFrame": 127,
-    "unlimitedGens": false
   }
 }
