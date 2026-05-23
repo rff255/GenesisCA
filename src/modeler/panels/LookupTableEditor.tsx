@@ -39,6 +39,15 @@ export function LookupTableEditor({
   const symmetric = sameAxes && attribute.symmetric !== false; // default true, only when square
   const values = attribute.tableValues || {};
 
+  // A `single` axis is a one-element, label-less axis. Its stored key stays the
+  // stable sentinel ('value') so renaming the attribute never strands the cell
+  // values — but for DISPLAY we show the lookup table's own name as the header
+  // (more meaningful than a generic "value").
+  const rowSingle = attribute.rowKeySource?.kind === 'single';
+  const colSingle = attribute.colKeySource?.kind === 'single';
+  const dispRow = (label: string) => (rowSingle ? attribute.name : label);
+  const dispCol = (label: string) => (colSingle ? attribute.name : label);
+
   const get = (row: string, col: string): number => {
     const r = values[row];
     if (r && typeof r[col] === 'number') return r[col]!;
@@ -92,7 +101,7 @@ export function LookupTableEditor({
               <th style={{ width: cellSize / 2 }} />
               {colLabels.map(col => (
                 <th key={col} style={{ width: cellSize, padding: '2px 0', textAlign: 'center', color: '#6080a0', fontWeight: 600 }}>
-                  {col}
+                  {dispCol(col)}
                 </th>
               ))}
             </tr>
@@ -100,7 +109,7 @@ export function LookupTableEditor({
           <tbody>
             {rowLabels.map((row, ri) => (
               <tr key={row}>
-                <th style={{ padding: '2px 6px', textAlign: 'right', color: '#6080a0', fontWeight: 600 }}>{row}</th>
+                <th style={{ padding: '2px 6px', textAlign: 'right', color: '#6080a0', fontWeight: 600 }}>{dispRow(row)}</th>
                 {colLabels.map((col, ci) => {
                   const isHidden = symmetric && ri > ci;
                   if (isHidden) {

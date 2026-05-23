@@ -13,6 +13,10 @@ interface Props {
    *  when absent. */
   axisLength?: number;
   height: number;
+  /** Series the user has dimmed via legend click (display-only, runtime). */
+  hidden?: Set<string>;
+  /** Toggle a series' visibility — fired on legend-entry click. */
+  onToggleCategory?: (category: string) => void;
 }
 
 const TOKEN_NAMES = [
@@ -51,7 +55,7 @@ function compareSeriesKeys(a: string, b: string): number {
   return a.localeCompare(b);
 }
 
-export function IndicatorSpatialChart({ data, axis, axisLength, height }: Props) {
+export function IndicatorSpatialChart({ data, axis, axisLength, height, hidden, onToggleCategory }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
@@ -84,6 +88,10 @@ export function IndicatorSpatialChart({ data, axis, axisLength, height }: Props)
   });
 
   const categories = Object.keys(data).sort(compareSeriesKeys);
+  // colorFor() is keyed by index in this full sorted list, so hiding one series
+  // never recolors the others (we skip drawing hidden ones, not reindex).
+  const isHidden = (c: string) => !!hidden && hidden.has(c);
+  const hiddenKey = hidden ? [...hidden].sort().join('|') : '';
   const binCount = categories.reduce((m, k) => Math.max(m, (data[k] || []).length), 0);
   const legendHeight = 14;
   const plotHeight = Math.max(20, height - legendHeight);
@@ -113,6 +121,7 @@ export function IndicatorSpatialChart({ data, axis, axisLength, height }: Props)
     // keep any negative min) and pad the top a touch.
     let yMin = 0, yMax = -Infinity;
     for (const k of categories) {
+      if (isHidden(k)) continue;
       const arr = data[k] || [];
       for (const v of arr) {
         if (v < yMin) yMin = v;
@@ -158,6 +167,7 @@ export function IndicatorSpatialChart({ data, axis, axisLength, height }: Props)
     const toX = (i: number) => plotLeft + (binCount > 1 ? i * xStep : plotW / 2);
     const toY = (v: number) => plotTop + plotH - ((v - yMin) / yRange) * plotH;
     for (let ci = 0; ci < categories.length; ci++) {
+      if (isHidden(categories[ci]!)) continue;
       const arr = data[categories[ci]!] || [];
       if (arr.length === 0) continue;
       ctx.beginPath();
@@ -168,7 +178,7 @@ export function IndicatorSpatialChart({ data, axis, axisLength, height }: Props)
       ctx.stroke();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, width, plotHeight, binCount, axisName, axisLength, categories.length, categories.join('|'), AXIS_COLOR, LABEL_COLOR, PALETTE.join(',')]);
+  }, [data, width, plotHeight, binCount, axisName, axisLength, categories.length, categories.join('|'), hiddenKey, AXIS_COLOR, LABEL_COLOR, PALETTE.join(',')]);
 
   // Wrapper always mounts so ResizeObserver can attach on first render.
   return (
@@ -189,13 +199,25 @@ export function IndicatorSpatialChart({ data, axis, axisLength, height }: Props)
           const arr = data[cat] || [];
           let sum = 0;
           for (const v of arr) sum += v;
+          const off = isHidden(cat);
           return (
-            <span key={cat} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+            <span
+              key={cat}
+              onClick={onToggleCategory ? () => onToggleCategory(cat) : undefined}
+              title={off ? `${cat} (hidden — click to show)` : `${cat} (click to hide)`}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 3,
+                cursor: onToggleCategory ? 'pointer' : 'default',
+                opacity: off ? 0.4 : 1,
+                textDecoration: off ? 'line-through' : 'none',
+                userSelect: 'none',
+              }}
+            >
               <span style={{
                 display: 'inline-block', width: 8, height: 2,
                 background: colorFor(ci), borderRadius: 1,
               }} />
-              <span title={cat}>{cat}</span>
+              <span>{cat}</span>
               <span style={{ color: LEGEND_VALUE_COLOR }}>{formatAxisValue(sum)}</span>
             </span>
           );

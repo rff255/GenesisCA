@@ -16,12 +16,22 @@
   pointer-events: auto;
 }
 
+/* The header doubles as the group's drag handle (only the header strip moves
+ * the group; the body box-selects inner nodes). Render it as a subtle title
+ * bar — pulled to the group's inner edges, faint tint, a fine separating line
+ * below — so the distinct interaction zone reads at a glance without being
+ * flashy. */
 .header {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-2)) var(--space-2);
   padding: var(--space-1) var(--space-2);
   cursor: move;
+  background: var(--color-overlay-row);
+  border-bottom: 1px solid var(--color-border-muted);
+  border-top-left-radius: calc(var(--radius-xl) - 1px);
+  border-top-right-radius: calc(var(--radius-xl) - 1px);
 }
 
 .label {
