@@ -90,6 +90,7 @@ export const RELATED_NODES: Record<ModelElementDragPayload['kind'], RelatedNodeE
   'mapping-a2c': [
     { nodeType: 'outputMapping', configKey: 'mappingId' },
     { nodeType: 'setColorViewer', configKey: 'mappingId' },
+    { nodeType: 'setCellGlyph', configKey: 'mappingId' },
   ],
   'indicator': [
     { nodeType: 'getIndicator', configKey: 'indicatorId' },
