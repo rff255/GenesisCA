@@ -24,8 +24,10 @@ Thumbs.db
 # TypeScript build info
 *.tsbuildinfo
 
-# Claude Code local config
-.claude/
+# Claude Code config: keep local settings out of git, but DO share project
+# slash commands (.claude/commands/) so the whole team gets them.
+.claude/*
+!.claude/commands/
 
 # Auto-generated library index (created by Vite plugin at dev/build time)
 public/models/index.json
