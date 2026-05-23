@@ -33,15 +33,15 @@
  *     5. Sample direction d* by cumulative-sum on weight_d (J-weighted
  *        directional preference toward empty cells — book §2.3.5).
  *
- *     6. Move atomically: write C's (kind, ori) to the cell at NI_{d*};
- *        set C's kind to empty + orientation to 0. The reads in step 1 are
- *        captured into JS / WASM / WGSL `const` locals before any flow write
- *        fires (SSA discipline, per CLAUDE.md), so the four writes see the
- *        pre-move snapshot — atomicity comes for free without any new
- *        compiler primitive. Crucially, ONE empty cell is created at the
- *        source, so empties stay uniformly distributed by construction (no
- *        asymmetric-mobility artefact that destroyed earlier swap-based
- *        attempts).
+ *     6. Move via the "Transfer Cell Attributes to Neighbor" node (Copy To +
+ *        Defaults, Include Orientation): copies C's current (kind, ori) to the
+ *        cell at NI_{d*}, then resets C's kind to empty + orientation to 0.
+ *        The node reads the values straight from the cells at its flow
+ *        position, transferring whatever they hold there (here the unchanged
+ *        cell-top values — nothing writes kind/ori before the move). Crucially,
+ *        ONE empty cell is created at the source, so empties stay uniformly
+ *        distributed by construction (no asymmetric-mobility artefact that
+ *        destroyed earlier swap-based attempts).
  *
  *   Independently, a "free" amphi (one with all 4 cardinals empty) rotates
  *   every iteration by a uniform random 1..3 90°-step (book §2.3.9).
@@ -237,10 +237,10 @@ const condCanMove = node('conditional', {}, 9, 0, 'If has empty dir');
 // ─── Rotation values (cols 13-15, rows 5-9) ────────────────────────────────
 // Computes `newOri = mod(ori + rotStep, 4)` and the `amphi AND all-cardinals-
 // empty` gate. Consumed only by the rotation pass below (setRotOri); moveSelf
-// uses its own local getOrientation, so a free amphi that moves AND rotates
-// in the same step has the rotation applied at the SOURCE cell on the next
-// rotation pass — not at the destination. Sits to the right of the forEach
-// body in a compact cluster.
+// transfers the cell's CURRENT orientation (includeOrientation), so a free
+// amphi that moves AND rotates in the same step has the rotation applied at
+// the SOURCE cell on the next rotation pass — not at the destination. Sits to
+// the right of the forEach body in a compact cluster.
 //
 // Each accessor here is a LOCAL copy — the CSE pass dedups them at compile
 // time, so the graph reads like a self-contained rotation subregion.
@@ -278,8 +278,8 @@ vEdge(rotStepRand, 'value', newOri, 'b');
 // Per user review: that conflates "face direction the cell chose to move
 // through" with "face presented at the destination" — semantically wrong,
 // since the amphi's move was decided based on the PRE-rotation face. The
-// move now transfers the current orientation (local getOrientation near
-// moveSelf), and rotation is deferred to the rotation pass below.
+// move now transfers the current orientation (includeOrientation reads the
+// cell's orientation directly), and rotation is deferred to the rotation pass.
 
 // ─── Gate 1: cell is occupied? (cols 1-2, rows 1-2) ───────────────────────
 const kindRead_occ = node('getCellAttribute', { attributeId: ATTR_KIND }, 1, 1, 'My kind');
@@ -419,21 +419,21 @@ const chosenNI = node('arrayElement', {}, 11, 0, 'NI of chosen dir');
 vEdge(niArr_pick, 'indexes', chosenNI, 'array');
 vEdge(chosenSamp, 'index', chosenNI, 'position');
 
-// Move sequence: payload = MY kind, orientation = MY current orientation
-// (NOT the post-rotation orientation). Carrying the rotated orientation
-// would mean the destination cell sees a face that didn't drive the move
-// decision; rotation is deferred to the rotation pass below.
-const kindRead_payload = node('getCellAttribute', { attributeId: ATTR_KIND }, 11, 1, 'My kind');
-const oriRead_move = node('getOrientation', {}, 11, 2, 'My ori');
+// Move: Copy To the chosen empty neighbour, resetting self to defaults (the
+// vacancy). The node reads the attributes directly from the cells, so it
+// transfers MY kind + MY CURRENT orientation (includeOrientation) — not the
+// post-rotation orientation. Carrying the rotated orientation would mean the
+// destination sees a face that didn't drive the move decision; rotation is
+// deferred to the rotation pass below.
 const moveSelf = node('moveSelfToNeighbor', {
   payloadCount: 1,
   attr_0: ATTR_KIND,
-  transferOrientation: true,
+  operation: 'copyTo',
+  nonReceiving: 'defaults',
+  includeOrientation: true,
 }, 12, 0, 'Move self → NI');
 fEdge(condCanMove, 'then', moveSelf, 'do');
 vEdge(chosenNI, 'value', moveSelf, 'targetNI');
-vEdge(kindRead_payload, 'value', moveSelf, 'payload_0');
-vEdge(oriRead_move, 'value', moveSelf, 'orientation');
 
 // =============================================================================
 // ROTATION PASS — book §2.3.9
@@ -611,7 +611,6 @@ groupNode(
     allFaces_bond, pbsArr, pBreakAgg, rollBreak,
     niArr_gate, kindsArr_gate, tagEmpty_gate, hasEmptyDir,
     weightsRead_pick, chosenSamp, niArr_pick, chosenNI,
-    kindRead_payload, oriRead_move,
   ],
   '#4a6858',
 );

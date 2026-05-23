@@ -346,8 +346,9 @@ export function HelpView() {
           </p>
           <p className={styles.p}>
             Several new node types become available when Variegated Cells is enabled (hidden
-            from the palette otherwise). All run on JS, WASM, and WebGPU &mdash; only the two
-            async-only writers below are unavailable on WebGPU (which is synchronous-only):
+            from the palette otherwise). All run on JS, WASM, and WebGPU &mdash; only the
+            async-only nodes below (the two orientation writers and Transfer Cell Attributes to
+            Neighbor) are unavailable on WebGPU (which is synchronous-only):
           </p>
           <ul className={styles.list}>
             <li><strong>Get Orientation</strong> / <strong>Set Orientation</strong> &mdash;
@@ -374,9 +375,12 @@ export function HelpView() {
             <li><strong>Table Map</strong> &mdash; vectorised Table Lookup over two parallel
               index arrays &rarr; float array (pair with Aggregate&nbsp;&times;&nbsp;product
               for a break-probability product).</li>
-            <li><strong>Move Self To Neighbor</strong> &mdash; atomic move into a vacant
-              neighbour (push per-attribute payloads + optionally orientation, then clear
-              self to defaults). Async-only; the chemistry move-into-empty idiom.</li>
+            <li><strong>Transfer Cell Attributes to Neighbor</strong> &mdash; copy/move/swap
+              the current values of chosen cell attributes (and optionally orientation)
+              between this cell and a target neighbour. Operation: Copy&nbsp;To, Copy&nbsp;From,
+              or Swap; for the copy operations the source cell can be left untouched or reset
+              to defaults. Async-only; the chemistry move-into-empty idiom is Copy&nbsp;To +
+              Defaults.</li>
           </ul>
           <p className={styles.p}>
             For procedural initial-state setup, see <strong>Init Event</strong> below.

@@ -323,15 +323,15 @@ export function detectMissingConfig(
         if (typeof attrId === 'string' && attrId.length > 0) {
           anySlotConfigured = true;
           if (!hasCellAttr(attrId)) {
-            issues.push(`Payload ${i + 1}: selected attribute no longer exists`);
+            issues.push(`Attribute ${i + 1}: selected attribute no longer exists`);
           }
         }
       }
-      if (!anySlotConfigured && !config.transferOrientation) {
-        issues.push('Configure at least one payload attribute or enable Transfer Orientation');
+      if (!anySlotConfigured && !config.includeOrientation) {
+        issues.push('Configure at least one attribute to transfer or enable Include Orientation');
       }
-      if (config.transferOrientation && !model.variegatedCells?.enabled) {
-        issues.push('Transfer Orientation requires Variegated Cells to be enabled');
+      if (config.includeOrientation && !model.variegatedCells?.enabled) {
+        issues.push('Include Orientation requires Variegated Cells to be enabled');
       }
       break;
     }
@@ -490,7 +490,7 @@ export function detectWebGPUIncompatibilities(
       issues.push('Set Neighbor Orientation By Index requires asynchronous update mode — WebGPU is sync-only. Switch to WebAssembly / Debug target, or remove this node.');
       break;
     case 'moveSelfToNeighbor':
-      issues.push('Move Self To Neighbor composes async-only neighbour writes — WebGPU is sync-only. Switch to WebAssembly / Debug target, or remove this node.');
+      issues.push('Transfer Cell Attributes to Neighbor requires asynchronous update mode — WebGPU is sync-only. Switch to WebAssembly / Debug target, or remove this node.');
       break;
   }
   return issues;

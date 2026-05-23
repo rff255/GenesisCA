@@ -299,13 +299,14 @@ vEdge(weightsRead, 'value', chosenSamp, 'values');
 const chosenNI = node('arrayElement', {}, 9, 0, 'NI of chosen dir');
 vEdge(niArrNear, 'indexes', chosenNI, 'array');
 vEdge(chosenSamp, 'index', chosenNI, 'position');
-const myTypePayload = node('getCellAttribute', { attributeId: ATTR_CELLTYPE }, 9, 1, 'My type');
+// Copy To the chosen empty neighbour, resetting self to defaults (the vacancy).
+// The node reads cellType straight from the cell — no payload wiring needed.
 const moveSelf = node('moveSelfToNeighbor', {
-  payloadCount: 1, attr_0: ATTR_CELLTYPE, transferOrientation: false,
+  payloadCount: 1, attr_0: ATTR_CELLTYPE,
+  operation: 'copyTo', nonReceiving: 'defaults', includeOrientation: false,
 }, 10, 0, 'Move self → NI');
 fEdge(condCanMove, 'then', moveSelf, 'do');
 vEdge(chosenNI, 'value', moveSelf, 'targetNI');
-vEdge(myTypePayload, 'value', moveSelf, 'payload_0');
 
 // ─── Detector line — a monitor cell holding a solute → Stop Event ─────────────
 // A second flow branch off `step` (sibling to the move chain). The InitEvent flags
@@ -436,7 +437,7 @@ fEdge(condBottomRow, 'then', setMonitor, 'do');
 groupNode('Shared reads', [myType, niArrNear, niArrFar, nbrTypes, farTypes, tagEmpty, tagB, gravityAttr, const2], '#3a4a5a');
 groupNode('Gating chain → move (mobile? → broke free? → empty dir? → move)',
   [condCanAct, condBreak, condCanMove, moveSelf, isOccupied, isNotB, canAct,
-   pbRead, pbProduct, rollBreak, hasEmptyDir, weightsRead, chosenSamp, chosenNI, myTypePayload], '#4a6858');
+   pbRead, pbProduct, rollBreak, hasEmptyDir, weightsRead, chosenSamp, chosenNI], '#4a6858');
 groupNode('Per-direction body (runs for d ∈ {N,E,S,W})',
   [forEachDirs, nbrType_d, farType_d, pb_d, setPb, isEmpty_d, jOcc_d, wt_d, setWt], '#4a5878');
 groupNode('South gravity boost (weights[S] = empty ? J+G : 0)',

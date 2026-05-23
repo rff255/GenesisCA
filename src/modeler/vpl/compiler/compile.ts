@@ -1496,8 +1496,8 @@ function compileRoot(
             if (inlineVal !== undefined) inputVars[port.id] = inlineVal;
           }
         }
-        // Dynamic value-input ports (e.g., MoveSelfToNeighbor's payload_${i})
-        // aren't in def.ports — pick them up from the edge map.
+        // Dynamic per-slot value-input ports (not declared in def.ports) —
+        // pick them up from the edge map (defensive; covers any such flow node).
         for (const [key, source] of inputToSource) {
           if (!key.startsWith(`${node.id}:`)) continue;
           const portId = key.slice(node.id.length + 1);

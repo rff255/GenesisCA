@@ -2073,7 +2073,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
         {nodeData.nodeType === 'moveSelfToNeighbor' && (() => {
           const payloadCount = Math.max(1, Number(nodeData.config.payloadCount) || 1);
-          const transferOri = !!nodeData.config.transferOrientation;
+          const operation = (nodeData.config.operation as string) || 'copyTo';
+          const nonReceiving = (nodeData.config.nonReceiving as string) || 'defaults';
+          const includeOri = !!nodeData.config.includeOrientation;
           const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
           const addSlot = () => {
             const next = { ...nodeData.config, payloadCount: payloadCount + 1 };
@@ -2092,6 +2094,28 @@ function CaNodeComponent({ id, data }: NodeProps) {
           };
           return (
             <>
+              <select
+                className={styles.select}
+                value={operation}
+                onChange={e => updateConfig('operation', e.target.value)}
+                title="Direction of the transfer"
+              >
+                <option value="copyTo">Copy To neighbor</option>
+                <option value="copyFrom">Copy From neighbor</option>
+                <option value="swap">Swap with neighbor</option>
+              </select>
+              {operation !== 'swap' && (
+                <select
+                  className={styles.select}
+                  value={nonReceiving}
+                  onChange={e => updateConfig('nonReceiving', e.target.value)}
+                  title="What to do with the cell that gives its values"
+                >
+                  <option value="defaults">Source → defaults</option>
+                  <option value="untouched">Source untouched</option>
+                </select>
+              )}
+              <div style={{ fontSize: '0.62rem', color: '#8a98a8', marginTop: 2 }}>Attributes to transfer:</div>
               {Array.from({ length: payloadCount }, (_, i) => (
                 <div key={`slot-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <select
@@ -2124,11 +2148,11 @@ function CaNodeComponent({ id, data }: NodeProps) {
               <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.68rem', color: '#a0b0c0', cursor: 'pointer' }}>
                 <input
                   type="checkbox"
-                  checked={transferOri}
-                  onChange={e => updateConfig('transferOrientation', e.target.checked)}
+                  checked={includeOri}
+                  onChange={e => updateConfig('includeOrientation', e.target.checked)}
                   style={{ cursor: 'pointer' }}
                 />
-                Transfer Orientation
+                Include Orientation
               </label>
             </>
           );
