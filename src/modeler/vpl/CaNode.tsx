@@ -683,10 +683,22 @@ function CaNodeComponent({ id, data }: NodeProps) {
       collapsedLabel = ind ? `Upd Ind - ${ind.name}` : def.label;
     } else if (nodeData.nodeType === 'statement') {
       const op = (nodeData.config.operation as string) || '==';
+      const cmpType = (nodeData.config.compareType as string) || 'numerical';
+      // Format an inline operand by the chosen compare type so the collapsed
+      // title reads naturally (tag NAME instead of its index; True/False for bool).
+      const fmtOperand = (raw: string): string => {
+        if (cmpType === 'bool') return (raw === 'true' || raw === '1') ? 'True' : 'False';
+        if (cmpType === 'tag') {
+          const tagAttr = model.attributes.find(a => a.id === nodeData.config.tagAttributeId);
+          const idx = parseInt(raw, 10) || 0;
+          return tagAttr?.tagOptions?.[idx] ?? raw;
+        }
+        return raw;
+      };
       const xConn = connectedInputHandles.has(handleId({ id: 'x', kind: 'input', category: 'value' }));
       const yConn = connectedInputHandles.has(handleId({ id: 'y', kind: 'input', category: 'value' }));
-      const xVal = xConn ? '?' : ((nodeData.config._port_x as string) ?? '0');
-      const yVal = yConn ? '?' : ((nodeData.config._port_y as string) ?? '0');
+      const xVal = xConn ? '?' : fmtOperand((nodeData.config._port_x as string) ?? '0');
+      const yVal = yConn ? '?' : fmtOperand((nodeData.config._port_y as string) ?? '0');
       if (op === 'between' || op === 'notBetween') {
         const y2Conn = connectedInputHandles.has(handleId({ id: 'y2', kind: 'input', category: 'value' }));
         const y2Val = y2Conn ? '?' : ((nodeData.config._port_y2 as string) ?? '0');
