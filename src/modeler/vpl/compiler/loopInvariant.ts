@@ -87,6 +87,16 @@ const NEVER_INVARIANT = new Set<string>([
   // (Aggregate / GroupOperator / ArrayElement on the variable's value)
   // also lands inside the loop body.
   'getVariable',
+  // ForEachInArray's `element` / `index` outputs vary per loop iteration, so
+  // any value reading them must stay INSIDE the loop body. The composite rule
+  // would otherwise classify the forEach node as invariant whenever its input
+  // array is invariant (e.g. a constant NI array from getAllNeighborIndexes) —
+  // and propagate that to every element/index consumer whose OTHER inputs are
+  // also invariant, hoisting `breakDownNeighborIndex(element)`, `expr(index)`,
+  // etc. to the function preamble where the per-iteration var is still
+  // undefined. (Models that route index only into arrayElement/setArrayElement
+  // dodged this because those consumers also read a never-invariant variable.)
+  'forEachInArray',
 ]);
 
 export function classifyLoopInvariant(

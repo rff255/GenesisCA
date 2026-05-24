@@ -420,7 +420,7 @@ export function HelpView() {
               type is bool / integer / float / tag.</li>
             <li><strong>Get Variable</strong> &mdash; reads the current value (scalar) or the
               underlying array (array variables &mdash; iterate it like any array source:
-              Aggregate, Group Reduce, Array Element, For Each In Array).</li>
+              Aggregate, Group Reduce, Get Array Element, For Each In Array).</li>
             <li><strong>Set Variable</strong> &mdash; assigns to a scalar variable.</li>
             <li><strong>Set Array Element</strong> &mdash; writes <code>variable[index] =
               value</code> into an array variable (out-of-range writes are silently skipped).</li>
@@ -578,7 +578,7 @@ export function HelpView() {
               <tr><td>Conditional</td><td>If/else branching based on a boolean condition.</td></tr>
               <tr><td>Sequence</td><td>Execute &quot;First&quot; then &quot;Then&quot; sequentially.</td></tr>
               <tr><td>Loop</td><td>Repeat &quot;Body&quot; a given number of times.</td></tr>
-              <tr><td>Switch</td><td>Route flow to multiple cases. Two modes: <strong>By Conditions</strong> (wire boolean inputs per case) or <strong>By Value</strong> (compare a value against per-case thresholds with ==, !=, &gt;, &lt;, &gt;=, &lt;= operators, or match tag options). A &quot;First match only&quot; toggle controls whether only the first matching case fires or all matches execute.</td></tr>
+              <tr><td>Switch</td><td>Route flow to multiple cases. Two modes: <strong>By Conditions</strong> (wire boolean inputs per case) or <strong>By Value</strong> (compare a value against per-case thresholds with ==, !=, &gt;, &lt;, &gt;=, &lt;= operators, or match tag options). The By Value type can be Integer, Float, Tag, or <strong>Neighbor Index</strong> &mdash; for Neighbor Index each case takes a wired NI value and matching is equality. A &quot;First match only&quot; toggle controls whether only the first matching case fires or all matches execute.</td></tr>
             </tbody>
           </table>
 
@@ -612,7 +612,7 @@ export function HelpView() {
               <tr><td>Expression</td><td>Type a math <strong>formula</strong> in a text field instead of wiring up many Math nodes &mdash; ideal for equation-heavy models. Operators <code>+ - * / % ^</code> and functions <code>sqrt abs floor ceil round min max pow mod</code>, plus the constants <code>pi</code> and <code>e</code>. Variables come from the input ports: add 1&ndash;8 ports with the <strong>+</strong> / <strong>&minus;</strong> buttons, give each a name, then reference those names in the formula (e.g. <em>u + Du*lap - u*v*v</em>). Compiles on all three targets (JS, WASM, WebGPU).</td></tr>
               <tr><td>Proportion Map</td><td>Remap a value from one range to another: <em>output = outMin + curve(t) * (outMax - outMin)</em> with <em>t = (x - inMin) / (inMax - inMin)</em>. Has 5 inputs (X, In Min, In Max, Out Min, Out Max) plus a <strong>curve</strong> dropdown: Linear, Smoothstep, Ease-In Quadratic, Ease-Out Quadratic, Exponential, Logarithmic. Linear keeps un-clamped extrapolation; non-linear curves clamp t to [0, 1].</td></tr>
               <tr><td>Interpolate</td><td>Linear interpolation: output = min + t * (max - min). Inputs: T (0&ndash;1), Min, Max.</td></tr>
-              <tr><td>Compare (Statement)</td><td>Comparison operators: ==, !=, &gt;, &lt;, &gt;=, &lt;=, <strong>Between</strong>, and <strong>Not Between</strong>. The between-family ops reveal a Y&#8322; input and two picklists for the lower (&gt;= or &gt;) and upper (&lt;= or &lt;) interval sides; <em>Not Between</em> fires when the value is outside the interval. Replaces the common Compare + Compare + AND chain.</td></tr>
+              <tr><td>Compare (Statement)</td><td>Comparison operators: ==, !=, &gt;, &lt;, &gt;=, &lt;=, <strong>Between</strong>, and <strong>Not Between</strong>. The between-family ops reveal a Y&#8322; input and two picklists for the lower (&gt;= or &gt;) and upper (&lt;= or &lt;) interval sides; <em>Not Between</em> fires when the value is outside the interval. A <strong>type selector</strong> (Numerical / Bool / Tag / Neighbor Index) swaps the inline operand widgets &mdash; pick <em>Tag</em> and a tag-attribute picker appears so you can compare against a tag option without a Get Constant node (non-numerical types are equality-only). Replaces the common Compare + Compare + AND chain.</td></tr>
               <tr><td>Logic Operator</td><td>AND, OR, XOR, NOT on boolean values.</td></tr>
               <tr><td>Value Switch</td><td>Ternary value selector: outputs <em>If</em> when <em>Condition</em> is truthy, else <em>Else</em>. Pure value &mdash; no flow port, so it stays inline in the graph. Both inputs always evaluate; use a flow Conditional for short-circuit.</td></tr>
             </tbody>
@@ -832,8 +832,8 @@ export function HelpView() {
               (from Offset)</em>. Unpacks a NI into its two integer outputs <em>dr</em> and
               <em>dc</em>, for per-axis arithmetic on computed NIs (e.g. inspecting the direction
               returned by Pick Random Neighbor).</li>
-            <li><strong>Array Element</strong> / <strong>Array Length</strong> &mdash; generic indexed
-              access and size for any array (NI[] or otherwise). Pair Array Element with the
+            <li><strong>Get Array Element</strong> / <strong>Array Length</strong> &mdash; generic indexed
+              access and size for any array (NI[] or otherwise). Pair Get Array Element with the
               <em>Position(s)</em> outputs of Count Matching / Group Reduce to recover the NI of the
               matching neighbor when reducing an aligned values[] from <em>Get Neighbors Attr By
               Indexes</em>.</li>
@@ -854,7 +854,7 @@ export function HelpView() {
             BODY flow for each, exposing the current <em>Element</em> and its 0-based
             <em> Index</em> via output ports. Useful for &ldquo;iterate matching neighbors and
             apply different ops&rdquo; patterns &mdash; and the <em>Index</em> lets the body
-            address parallel arrays by slot (e.g. <em>Array Element(otherArray, index)</em> or
+            address parallel arrays by slot (e.g. <em>Get Array Element(otherArray, index)</em> or
             <em> Set Array Element(weights, index, &hellip;)</em> into a Local Variable).
           </p>
           <p className={styles.p}>

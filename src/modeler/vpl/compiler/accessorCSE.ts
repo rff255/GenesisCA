@@ -180,12 +180,18 @@ function purityKey(
   if (!isPureType(node)) { cache.set(nodeId, null); visiting.delete(nodeId); return null; }
 
   // Configuration enters the key, except for compiler-injected underscored
-  // keys (e.g., _resolvedTagIndex, _elemKind) — those are derived from other
-  // config / graph structure, so structurally-identical nodes already match
-  // on the source keys that produced them.
+  // keys (e.g., _resolvedTagIndex, _elemKind, _indicatorIdx, _attr_*_default) —
+  // those are derived from other config / graph structure, so
+  // structurally-identical nodes already match on the source keys that produced
+  // them. CRUCIAL exception: `_port_*` (inline widget values) and `_varName_*`
+  // (expression variable names) are USER-FACING inputs that change the emitted
+  // output, despite the leading underscore. They MUST stay in the key — without
+  // them, two nodes differing only in an inline value (e.g. two Compares reading
+  // the same attribute but testing `== 5` vs `== 10`, or two Get Array Element
+  // nodes at different inline positions) would collapse into one.
   const configEntries: Array<[string, string | number | boolean]> = [];
   for (const k of Object.keys(node.data.config).sort()) {
-    if (k.startsWith('_')) continue;
+    if (k.startsWith('_') && !k.startsWith('_port_') && !k.startsWith('_varName_')) continue;
     configEntries.push([k, node.data.config[k]!]);
   }
   const configPart = JSON.stringify(configEntries);

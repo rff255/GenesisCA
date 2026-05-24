@@ -241,6 +241,17 @@ export function detectMissingConfig(
       }
       break;
 
+    case 'statement':
+      if (config.compareType === 'tag') {
+        if (!hasAnyAttr(config.tagAttributeId)) {
+          issues.push('Select a tag attribute');
+        } else {
+          const attr = model.attributes.find(a => a.id === config.tagAttributeId);
+          if (attr && attr.type !== 'tag') issues.push('Selected attribute is not a tag type');
+        }
+      }
+      break;
+
     case 'expression': {
       const visibleCount = clampVisibleCount(config.visibleCount);
       const { map, errors } = buildVarMap(config, visibleCount);

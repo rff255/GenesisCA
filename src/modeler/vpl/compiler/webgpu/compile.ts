@@ -1437,6 +1437,15 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
 
   statement: ({ node, ctx, inputs }) => {
     const op = (node.data.config.operation as string) || '==';
+    // Neighbor Index compare: integers up to ~2^31 lose precision as f32, so
+    // compare the operands as i32 (equality only). Bool/tag values are small
+    // enough to stay exact through the f32 path below.
+    if ((node.data.config.compareType as string) === 'neighborIndex') {
+      const xi = castTo(inputs['x'] ?? { expr: '0', type: 'i32' }, 'i32');
+      const yi = castTo(inputs['y'] ?? { expr: '0', type: 'i32' }, 'i32');
+      const cmp = (op === '!=' || op === '!==') ? '!=' : '==';
+      return emitLet(ctx, 'bool', `(${xi} ${cmp} ${yi})`, 'cmp');
+    }
     const x = castTo(inputs['x'] ?? { expr: '0.0', type: 'f32' }, 'f32');
     const y = castTo(inputs['y'] ?? { expr: '0.0', type: 'f32' }, 'f32');
     if (op === 'between' || op === 'notBetween') {

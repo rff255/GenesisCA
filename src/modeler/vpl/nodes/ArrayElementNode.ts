@@ -11,8 +11,8 @@ import { INVALID_NI } from '../compiler/niCodec';
  *  can pick the right default without changing the compile() signature. */
 export const ArrayElementNode: NodeTypeDef = {
   type: 'arrayElement',
-  label: 'Array Element',
-  description: 'Returns the element of an array at the given position. Out-of-range yields INVALID_NI for NI arrays, 0 for value arrays.',
+  label: 'Get Array Element',
+  description: 'Reads the element of an array at the given position (the read counterpart of Set Array Element). Out-of-range yields INVALID_NI for NI arrays, 0 for value arrays.',
   category: 'data',
   color: '#b71c1c',
   ports: [

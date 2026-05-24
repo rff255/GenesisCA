@@ -379,6 +379,24 @@ function CaNodeComponent({ id, data }: NodeProps) {
             kind: 'output' as const, category: 'flow' as const,
           });
         }
+      } else if (valType === 'neighborIndex') {
+        // Neighbor Index mode: the switched value AND each case's match value
+        // are WIRED (there's no inline editor for a packed neighbor index).
+        // Comparison is equality only. Suppress the value port's inline widget.
+        inputPorts = inputPorts.map(p => p.id === 'value'
+          ? { ...p, inlineWidget: undefined, dataType: 'neighborIndex' as const }
+          : p);
+        for (let i = 0; i < caseCount; i++) {
+          inputPorts.push({
+            id: `case_${i}_val`, label: `Case ${i}`,
+            kind: 'input' as const, category: 'value' as const,
+            dataType: 'neighborIndex' as const,
+          });
+          outputPorts.push({
+            id: `case_${i}`, label: `Case ${i}`,
+            kind: 'output' as const, category: 'flow' as const,
+          });
+        }
       } else {
         // Integer/Float mode: per-case comparison op + value input port
         for (let i = 0; i < caseCount; i++) {
@@ -848,7 +866,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
       {userLabel && (
         <div className={styles.userLabel}>{userLabel}</div>
       )}
-      <div className={styles.header} style={{ background: def.color, color: textColorForBg(def.color), textShadow: isLightHeaderBg(def.color) ? 'none' : undefined }}>
+      <div className={styles.header} title={def.description} style={{ background: def.color, color: textColorForBg(def.color), textShadow: isLightHeaderBg(def.color) ? 'none' : undefined }}>
         {linkCount >= 2 && (
           <span
             className={`${styles.linkBadge} nodrag`}
@@ -1129,10 +1147,59 @@ function CaNodeComponent({ id, data }: NodeProps) {
         })()}
 
         {nodeData.nodeType === 'statement' && (() => {
+          const cmpType = (nodeData.config.compareType as string) || 'numerical';
+          const numeric = cmpType === 'numerical';
           const op = (nodeData.config.operation as string) || '==';
-          const isBetween = op === 'between' || op === 'notBetween';
+          const isBetween = numeric && (op === 'between' || op === 'notBetween');
           return (
             <>
+              {/* Compare type: swaps the inline operand widgets. Non-numerical
+                  types only support equality (==/!=). */}
+              <select
+                className={styles.select}
+                value={cmpType}
+                onChange={e => {
+                  const next = e.target.value;
+                  const dflt = next === 'bool' ? 'false' : '0';
+                  const newConfig: typeof nodeData.config = {
+                    ...nodeData.config,
+                    compareType: next,
+                    _port_x: dflt,
+                    _port_y: dflt,
+                    _port_y2: '0',
+                  };
+                  // Non-numerical types compare for equality only.
+                  if (next !== 'numerical' && op !== '==' && op !== '!=') {
+                    newConfig.operation = '==';
+                  }
+                  updateNodeData(id, { ...nodeData, config: newConfig });
+                }}
+                title="Type of the compared values"
+              >
+                <option value="numerical">Numerical</option>
+                <option value="bool">Bool</option>
+                <option value="tag">Tag</option>
+                <option value="neighborIndex">Neighbor Index</option>
+              </select>
+              {/* Tag attribute picker (tag type only) — its options populate the
+                  inline operand pickers, like Get Constant. */}
+              {cmpType === 'tag' && (
+                <select
+                  className={styles.select}
+                  value={(nodeData.config.tagAttributeId as string) || ''}
+                  onChange={e => {
+                    const newConfig = { ...nodeData.config, tagAttributeId: e.target.value, _port_x: '0', _port_y: '0' };
+                    updateNodeData(id, { ...nodeData, config: newConfig });
+                  }}
+                >
+                  <option value="">Tag attr...</option>
+                  {model.attributes
+                    .filter(a => a.type === 'tag')
+                    .map(a => (
+                      <option key={a.id} value={a.id}>{a.name}{a.isModelAttribute ? ' (model)' : ''}</option>
+                    ))}
+                </select>
+              )}
               <select
                 className={styles.select}
                 value={op}
@@ -1140,12 +1207,16 @@ function CaNodeComponent({ id, data }: NodeProps) {
               >
                 <option value="==">==</option>
                 <option value="!=">!=</option>
-                <option value=">">&gt;</option>
-                <option value="<">&lt;</option>
-                <option value=">=">&gt;=</option>
-                <option value="<=">&lt;=</option>
-                <option value="between">Between</option>
-                <option value="notBetween">Not Between</option>
+                {numeric && (
+                  <>
+                    <option value=">">&gt;</option>
+                    <option value="<">&lt;</option>
+                    <option value=">=">&gt;=</option>
+                    <option value="<=">&lt;=</option>
+                    <option value="between">Between</option>
+                    <option value="notBetween">Not Between</option>
+                  </>
+                )}
               </select>
               {isBetween && (
                 <div style={{ display: 'flex', gap: 4 }}>
@@ -1847,6 +1918,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   <option value="integer">Integer</option>
                   <option value="float">Float</option>
                   <option value="tag">Tag</option>
+                  <option value="neighborIndex">Neighbor Index</option>
                 </select>
               )}
 
@@ -1876,8 +1948,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   {switchMode === 'value' && (
                     <span style={{ fontSize: '0.62rem', color: '#8090a0', flexShrink: 0 }}>Case {i}</span>
                   )}
-                  {/* By Value + int/float: comparison op */}
-                  {switchMode === 'value' && valType !== 'tag' && (
+                  {/* By Value + int/float: comparison op (NI cases are wired,
+                      equality-only — no op dropdown, no inline widget) */}
+                  {switchMode === 'value' && valType !== 'tag' && valType !== 'neighborIndex' && (
                     <select
                       className={styles.select}
                       style={{ width: 42, flexShrink: 0 }}
@@ -2152,15 +2225,19 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 style={{ fontSize: '0.7rem', padding: '2px 8px', cursor: 'pointer' }}
                 title="Add another payload slot"
               >+ Slot</button>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.68rem', color: '#a0b0c0', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={includeOri}
-                  onChange={e => updateConfig('includeOrientation', e.target.checked)}
-                  style={{ cursor: 'pointer' }}
-                />
-                Include Orientation
-              </label>
+              {/* Orientation only exists in Variegated Cells models — hide the
+                  option otherwise (the compiler also ignores a stale `true`). */}
+              {model.variegatedCells?.enabled && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.68rem', color: '#a0b0c0', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={includeOri}
+                    onChange={e => updateConfig('includeOrientation', e.target.checked)}
+                    style={{ cursor: 'pointer' }}
+                  />
+                  Include Orientation
+                </label>
+              )}
             </>
           );
         })()}
@@ -2380,6 +2457,25 @@ function CaNodeComponent({ id, data }: NodeProps) {
           }
         }
 
+        // Compare (statement): swap the inline operand widgets by the chosen
+        // value type. Tag options come from the node's own tagAttributeId.
+        // Neighbor Index has no inline editor, so the operands must be wired.
+        let statementTagOptions: string[] | undefined;
+        if (nodeData.nodeType === 'statement' && (port.id === 'x' || port.id === 'y')) {
+          const cmpType = (nodeData.config.compareType as string) || 'numerical';
+          if (cmpType === 'bool') {
+            effectiveWidget = 'bool';
+          } else if (cmpType === 'tag') {
+            effectiveWidget = 'tag';
+            const tAttr = model.attributes.find(a => a.id === nodeData.config.tagAttributeId);
+            statementTagOptions = tAttr?.tagOptions || [];
+          } else if (cmpType === 'neighborIndex') {
+            effectiveWidget = undefined;
+          } else {
+            effectiveWidget = 'number';
+          }
+        }
+
         const showWidget = effectiveWidget && !isConnected && port.category === 'value';
         const configKey = `_port_${port.id}`;
         const val = (nodeData.config[configKey] as string) ?? portDef.defaultValue ?? '';
@@ -2427,7 +2523,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   <InlineTagSelect
                     className={styles.inlineWidget}
                     value={val}
-                    options={setAttr?.tagOptions || []}
+                    options={statementTagOptions ?? (setAttr?.tagOptions || [])}
                     onChange={next => updateConfig(configKey, next)}
                     onClick={e => e.stopPropagation()}
                     onMouseDown={stopDrag}
