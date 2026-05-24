@@ -23,7 +23,11 @@
       "chromatogram"
     ],
     "useWasm": true,
-    "useWebGPU": false
+    "useWebGPU": false,
+    "endConditions": {
+      "enabled": false,
+      "maxGenerations": 600
+    }
   },
   "attributes": [
     {
@@ -195,9 +199,9 @@
     },
     {
       "id": "monitor",
-      "name": "Monitor (detector flag)",
+      "name": "Detector flag",
       "type": "bool",
-      "description": "Detector flag, independent of the chemistry. The InitEvent sets it true on the bottom row (the column outlet); each step, a monitor cell that has come to hold a solute (S1 or S2) fires a Stop Event, pausing the run the moment the leading solute elutes (travels the full column). An event-driven analog of the paper's fixed 600-iteration snapshot. Carried per-cell; not used by the colour view.",
+      "description": "Detector flag, independent of the chemistry. The InitEvent sets it true towards the bottom row (the column outlet); each step, a detector cell that has come to hold a solute (S1 or S2) fires a Stop Event, pausing the run the moment the leading solute elutes (travels the full column). An event-driven analog of the paper's fixed 600-iteration snapshot. Carried per-cell; not used by the color view.",
       "isModelAttribute": false,
       "defaultValue": "false"
     }
@@ -207,59 +211,29 @@
       "id": "near",
       "name": "Cardinal (N/E/S/W)",
       "description": "4 direct cardinal neighbours, ordered N → E → S → W. South = index 2 (the \"down the column\" direction; gravity boosts this slot).",
-      "coords": [
-        [
-          -1,
-          0
-        ],
-        [
-          0,
-          1
-        ],
-        [
-          1,
-          0
-        ],
-        [
-          0,
-          -1
-        ]
-      ],
+      "coords": [[-1,0], [0,1], [1,0], [0,-1]],
       "tags": {
         "0": "N",
         "1": "E",
         "2": "S",
         "3": "W"
-      }
+      },
+      "margin": 2,
+      "includeCentralCell": false
     },
     {
       "id": "far",
       "name": "Cardinal ×2 (extended k)",
       "description": "4 cardinal cells two steps away (the extended von Neumann \"k\" cells), same N/E/S/W order. Used by the J(myType, farType) joining-trajectory lookup.",
-      "coords": [
-        [
-          -2,
-          0
-        ],
-        [
-          0,
-          2
-        ],
-        [
-          2,
-          0
-        ],
-        [
-          0,
-          -2
-        ]
-      ],
+      "coords": [[-2,0], [0,2], [2,0], [0,-2]],
       "tags": {
         "0": "N",
         "1": "E",
         "2": "S",
         "3": "W"
-      }
+      },
+      "margin": 2,
+      "includeCentralCell": false
     }
   ],
   "mappings": [
@@ -281,9 +255,9 @@
             "b": 25
           },
           {
-            "r": 40,
-            "g": 90,
-            "b": 180
+            "r": 22,
+            "g": 42,
+            "b": 80
           },
           {
             "r": 120,
@@ -345,1926 +319,234 @@
     }
   ],
   "graphNodes": [
-    {
-      "id": "nmpi28sjkbx19",
-      "type": "caNode",
-      "position": {
-        "x": 0,
-        "y": 0
-      },
-      "data": {
-        "nodeType": "step",
-        "config": {}
-      }
-    },
-    {
-      "id": "nmpi28sjknl9f",
-      "type": "caNode",
-      "position": {
-        "x": 0,
-        "y": 80
-      },
-      "data": {
-        "nodeType": "getCellAttribute",
-        "config": {
-          "attributeId": "cellType"
-        },
-        "label": "My type"
-      }
-    },
-    {
-      "id": "nmpi28sjk7jxc",
-      "type": "caNode",
-      "position": {
-        "x": 0,
-        "y": 160
-      },
-      "data": {
-        "nodeType": "getAllNeighborIndexes",
-        "config": {
-          "neighborhoodId": "near"
-        },
-        "label": "NIs (near N/E/S/W)"
-      }
-    },
-    {
-      "id": "nmpi28sjkocl3",
-      "type": "caNode",
-      "position": {
-        "x": 0,
-        "y": 240
-      },
-      "data": {
-        "nodeType": "getAllNeighborIndexes",
-        "config": {
-          "neighborhoodId": "far"
-        },
-        "label": "NIs (far)"
-      }
-    },
-    {
-      "id": "nmpi28sjkg1yj",
-      "type": "caNode",
-      "position": {
-        "x": 220,
-        "y": 160
-      },
-      "data": {
-        "nodeType": "getNeighborsAttrByIndexes",
-        "config": {
-          "attributeId": "cellType"
-        },
-        "label": "neighbour types[4]"
-      }
-    },
-    {
-      "id": "nmpi28sjkcjqe",
-      "type": "caNode",
-      "position": {
-        "x": 220,
-        "y": 240
-      },
-      "data": {
-        "nodeType": "getNeighborsAttrByIndexes",
-        "config": {
-          "attributeId": "cellType"
-        },
-        "label": "far types[4]"
-      }
-    },
-    {
-      "id": "nmpi28sjksdn3",
-      "type": "caNode",
-      "position": {
-        "x": 0,
-        "y": 320
-      },
-      "data": {
-        "nodeType": "getConstant",
-        "config": {
-          "constType": "tag",
-          "tagAttributeId": "cellType",
-          "constValue": "0"
-        },
-        "label": "Tag: empty"
-      }
-    },
-    {
-      "id": "nmpi28sjkhnq2",
-      "type": "caNode",
-      "position": {
-        "x": 0,
-        "y": 400
-      },
-      "data": {
-        "nodeType": "getConstant",
-        "config": {
-          "constType": "tag",
-          "tagAttributeId": "cellType",
-          "constValue": "2"
-        },
-        "label": "Tag: B"
-      }
-    },
-    {
-      "id": "nmpi28sjkv84a",
-      "type": "caNode",
-      "position": {
-        "x": 0,
-        "y": 480
-      },
-      "data": {
-        "nodeType": "getModelAttribute",
-        "config": {
-          "attributeId": "gravity",
-          "isColorAttr": false
-        },
-        "label": "gravity G"
-      }
-    },
-    {
-      "id": "nmpi28sjl94xx",
-      "type": "caNode",
-      "position": {
-        "x": 0,
-        "y": 560
-      },
-      "data": {
-        "nodeType": "getConstant",
-        "config": {
-          "constType": "integer",
-          "constValue": "2"
-        },
-        "label": "Int: 2"
-      }
-    },
-    {
-      "id": "nmpi28sjl49k6",
-      "type": "caNode",
-      "position": {
-        "x": 440,
-        "y": 0
-      },
-      "data": {
-        "nodeType": "conditional",
-        "config": {},
-        "label": "If mobile (occupied, not B)"
-      }
-    },
-    {
-      "id": "nmpi28sjlhi3w",
-      "type": "caNode",
-      "position": {
-        "x": 1320,
-        "y": 0
-      },
-      "data": {
-        "nodeType": "conditional",
-        "config": {},
-        "label": "If broke free"
-      }
-    },
-    {
-      "id": "nmpi28sjlfmf5",
-      "type": "caNode",
-      "position": {
-        "x": 1760,
-        "y": 0
-      },
-      "data": {
-        "nodeType": "conditional",
-        "config": {},
-        "label": "If empty dir"
-      }
-    },
-    {
-      "id": "nmpi28sjlf88h",
-      "type": "caNode",
-      "position": {
-        "x": 220,
-        "y": 0
-      },
-      "data": {
-        "nodeType": "statement",
-        "config": {
-          "operation": "!="
-        },
-        "label": "type != empty"
-      }
-    },
-    {
-      "id": "nmpi28sjlv30w",
-      "type": "caNode",
-      "position": {
-        "x": 220,
-        "y": 80
-      },
-      "data": {
-        "nodeType": "statement",
-        "config": {
-          "operation": "!="
-        },
-        "label": "type != B"
-      }
-    },
-    {
-      "id": "nmpi28sjl7fan",
-      "type": "caNode",
-      "position": {
-        "x": 440,
-        "y": 80
-      },
-      "data": {
-        "nodeType": "aggregate",
-        "config": {
-          "operation": "and"
-        },
-        "label": "mobile? (W/S1/S2)"
-      }
-    },
-    {
-      "id": "nmpi28sjlsxgr",
-      "type": "caNode",
-      "position": {
-        "x": 440,
-        "y": 320
-      },
-      "data": {
-        "nodeType": "forEachInArray",
-        "config": {},
-        "label": "For each direction d"
-      }
-    },
-    {
-      "id": "nmpi28sjlxtgb",
-      "type": "caNode",
-      "position": {
-        "x": 660,
-        "y": 240
-      },
-      "data": {
-        "nodeType": "arrayElement",
-        "config": {},
-        "label": "neighbour[d]"
-      }
-    },
-    {
-      "id": "nmpi28sjl7zhv",
-      "type": "caNode",
-      "position": {
-        "x": 660,
-        "y": 320
-      },
-      "data": {
-        "nodeType": "arrayElement",
-        "config": {},
-        "label": "far[d]"
-      }
-    },
-    {
-      "id": "nmpi28sjl13o7",
-      "type": "caNode",
-      "position": {
-        "x": 880,
-        "y": 240
-      },
-      "data": {
-        "nodeType": "lookupInteraction",
-        "config": {
-          "tableId": "PB"
-        },
-        "label": "PB(my, nbr)"
-      }
-    },
-    {
-      "id": "nmpi28sjl0bs0",
-      "type": "caNode",
-      "position": {
-        "x": 1100,
-        "y": 240
-      },
-      "data": {
-        "nodeType": "setArrayElement",
-        "config": {
-          "variableId": "pbFactors"
-        },
-        "label": "pbFactors[d] ← PB"
-      }
-    },
-    {
-      "id": "nmpi28sjlsvmg",
-      "type": "caNode",
-      "position": {
-        "x": 880,
-        "y": 400
-      },
-      "data": {
-        "nodeType": "statement",
-        "config": {
-          "operation": "=="
-        },
-        "label": "nbr[d]==empty"
-      }
-    },
-    {
-      "id": "nmpi28sjl140s",
-      "type": "caNode",
-      "position": {
-        "x": 880,
-        "y": 480
-      },
-      "data": {
-        "nodeType": "lookupInteraction",
-        "config": {
-          "tableId": "J"
-        },
-        "label": "J(my, far)"
-      }
-    },
-    {
-      "id": "nmpi28sjl6m37",
-      "type": "caNode",
-      "position": {
-        "x": 1100,
-        "y": 480
-      },
-      "data": {
-        "nodeType": "expression",
-        "config": {
-          "expression": "emp * jv",
-          "visibleCount": 2,
-          "_varName_a": "emp",
-          "_varName_b": "jv"
-        },
-        "label": "weight[d] = empty?J:0"
-      }
-    },
-    {
-      "id": "nmpi28sjloofp",
-      "type": "caNode",
-      "position": {
-        "x": 1320,
-        "y": 480
-      },
-      "data": {
-        "nodeType": "setArrayElement",
-        "config": {
-          "variableId": "weights"
-        },
-        "label": "weights[d] ← weight"
-      }
-    },
-    {
-      "id": "nmpi28sjl2dhl",
-      "type": "caNode",
-      "position": {
-        "x": 440,
-        "y": 800
-      },
-      "data": {
-        "nodeType": "arrayElement",
-        "config": {},
-        "label": "neighbour[S]"
-      }
-    },
-    {
-      "id": "nmpi28sjlwsho",
-      "type": "caNode",
-      "position": {
-        "x": 440,
-        "y": 880
-      },
-      "data": {
-        "nodeType": "arrayElement",
-        "config": {},
-        "label": "far[S]"
-      }
-    },
-    {
-      "id": "nmpi28sjl8ywo",
-      "type": "caNode",
-      "position": {
-        "x": 660,
-        "y": 800
-      },
-      "data": {
-        "nodeType": "statement",
-        "config": {
-          "operation": "=="
-        },
-        "label": "south empty?"
-      }
-    },
-    {
-      "id": "nmpi28sjllvx3",
-      "type": "caNode",
-      "position": {
-        "x": 660,
-        "y": 880
-      },
-      "data": {
-        "nodeType": "lookupInteraction",
-        "config": {
-          "tableId": "J"
-        },
-        "label": "J(my, far[S])"
-      }
-    },
-    {
-      "id": "nmpi28sjl18v2",
-      "type": "caNode",
-      "position": {
-        "x": 880,
-        "y": 880
-      },
-      "data": {
-        "nodeType": "expression",
-        "config": {
-          "expression": "e * (j + g)",
-          "visibleCount": 3,
-          "_varName_a": "e",
-          "_varName_b": "j",
-          "_varName_c": "g"
-        },
-        "label": "weights[S] = empty?(J+G):0"
-      }
-    },
-    {
-      "id": "nmpi28sjl24h7",
-      "type": "caNode",
-      "position": {
-        "x": 1100,
-        "y": 880
-      },
-      "data": {
-        "nodeType": "setArrayElement",
-        "config": {
-          "variableId": "weights"
-        },
-        "label": "weights[S] ← empty?(J+G):0"
-      }
-    },
-    {
-      "id": "nmpi28sjl7kmx",
-      "type": "caNode",
-      "position": {
-        "x": 880,
-        "y": 80
-      },
-      "data": {
-        "nodeType": "getVariable",
-        "config": {
-          "variableId": "pbFactors"
-        },
-        "label": "pbFactors[]"
-      }
-    },
-    {
-      "id": "nmpi28sjlycpy",
-      "type": "caNode",
-      "position": {
-        "x": 1100,
-        "y": 80
-      },
-      "data": {
-        "nodeType": "aggregate",
-        "config": {
-          "operation": "product"
-        },
-        "label": "P_break (Π pb_d)"
-      }
-    },
-    {
-      "id": "nmpi28sjls0bs",
-      "type": "caNode",
-      "position": {
-        "x": 1320,
-        "y": 80
-      },
-      "data": {
-        "nodeType": "getRandom",
-        "config": {
-          "randomType": "bool"
-        },
-        "label": "Bernoulli(P_break)"
-      }
-    },
-    {
-      "id": "nmpi28sjlh30k",
-      "type": "caNode",
-      "position": {
-        "x": 1540,
-        "y": 80
-      },
-      "data": {
-        "nodeType": "groupStatement",
-        "config": {
-          "operation": "hasA"
-        },
-        "label": "hasA(empty)?"
-      }
-    },
-    {
-      "id": "nmpi28sjlrr1x",
-      "type": "caNode",
-      "position": {
-        "x": 1540,
-        "y": 0
-      },
-      "data": {
-        "nodeType": "getVariable",
-        "config": {
-          "variableId": "weights"
-        },
-        "label": "weights[]"
-      }
-    },
-    {
-      "id": "nmpi28sjl2wib",
-      "type": "caNode",
-      "position": {
-        "x": 1760,
-        "y": 0
-      },
-      "data": {
-        "nodeType": "groupOperator",
-        "config": {
-          "operation": "weightedRandom"
-        },
-        "label": "Pick direction"
-      }
-    },
-    {
-      "id": "nmpi28sjl6q7l",
-      "type": "caNode",
-      "position": {
-        "x": 1980,
-        "y": 0
-      },
-      "data": {
-        "nodeType": "arrayElement",
-        "config": {},
-        "label": "NI of chosen dir"
-      }
-    },
-    {
-      "id": "nmpi28sjl4dsr",
-      "type": "caNode",
-      "position": {
-        "x": 2200,
-        "y": 0
-      },
-      "data": {
-        "nodeType": "moveSelfToNeighbor",
-        "config": {
-          "payloadCount": 1,
-          "attr_0": "cellType",
-          "operation": "copyTo",
-          "nonReceiving": "defaults",
-          "includeOrientation": false
-        },
-        "label": "Move self → NI"
-      }
-    },
-    {
-      "id": "nmpi28sjlheza",
-      "type": "caNode",
-      "position": {
-        "x": 1760,
-        "y": 240
-      },
-      "data": {
-        "nodeType": "getCellAttribute",
-        "config": {
-          "attributeId": "monitor"
-        },
-        "label": "monitor flag?"
-      }
-    },
-    {
-      "id": "nmpi28sjltlav",
-      "type": "caNode",
-      "position": {
-        "x": 1760,
-        "y": 320
-      },
-      "data": {
-        "nodeType": "getConstant",
-        "config": {
-          "constType": "tag",
-          "tagAttributeId": "cellType",
-          "constValue": "3"
-        },
-        "label": "Tag: S1"
-      }
-    },
-    {
-      "id": "nmpi28sjl8tdz",
-      "type": "caNode",
-      "position": {
-        "x": 1760,
-        "y": 400
-      },
-      "data": {
-        "nodeType": "getConstant",
-        "config": {
-          "constType": "tag",
-          "tagAttributeId": "cellType",
-          "constValue": "4"
-        },
-        "label": "Tag: S2"
-      }
-    },
-    {
-      "id": "nmpi28sjlrln3",
-      "type": "caNode",
-      "position": {
-        "x": 1980,
-        "y": 320
-      },
-      "data": {
-        "nodeType": "statement",
-        "config": {
-          "operation": "=="
-        },
-        "label": "type == S1"
-      }
-    },
-    {
-      "id": "nmpi28sjloczd",
-      "type": "caNode",
-      "position": {
-        "x": 1980,
-        "y": 400
-      },
-      "data": {
-        "nodeType": "statement",
-        "config": {
-          "operation": "=="
-        },
-        "label": "type == S2"
-      }
-    },
-    {
-      "id": "nmpi28sjlhxs5",
-      "type": "caNode",
-      "position": {
-        "x": 2200,
-        "y": 320
-      },
-      "data": {
-        "nodeType": "aggregate",
-        "config": {
-          "operation": "or"
-        },
-        "label": "S1 or S2?"
-      }
-    },
-    {
-      "id": "nmpi28sjl1e0c",
-      "type": "caNode",
-      "position": {
-        "x": 2420,
-        "y": 320
-      },
-      "data": {
-        "nodeType": "aggregate",
-        "config": {
-          "operation": "and"
-        },
-        "label": "monitor & solute?"
-      }
-    },
-    {
-      "id": "nmpi28sjlkfex",
-      "type": "caNode",
-      "position": {
-        "x": 2640,
-        "y": 240
-      },
-      "data": {
-        "nodeType": "conditional",
-        "config": {},
-        "label": "If solute at detector"
-      }
-    },
-    {
-      "id": "nmpi28sjl33t9",
-      "type": "caNode",
-      "position": {
-        "x": 2860,
-        "y": 240
-      },
-      "data": {
-        "nodeType": "stopEvent",
-        "config": {
-          "message": "A solute reached the detector line at the bottom of the column — the leading solute (S1) has eluted (full traversal). This is the event-driven analog of the paper's fixed 600-iteration snapshot: compare the two peaks in the Chromatogram, then Reset to re-run."
-        },
-        "label": "Stop: solute eluted"
-      }
-    },
-    {
-      "id": "nmpi28sjlvyr7",
-      "type": "caNode",
-      "position": {
-        "x": 0,
-        "y": 960
-      },
-      "data": {
-        "nodeType": "initEvent",
-        "config": {}
-      }
-    },
-    {
-      "id": "nmpi28sjl23vv",
-      "type": "caNode",
-      "position": {
-        "x": 220,
-        "y": 1280
-      },
-      "data": {
-        "nodeType": "getModelAttribute",
-        "config": {
-          "attributeId": "densW",
-          "isColorAttr": false
-        },
-        "label": "densW"
-      }
-    },
-    {
-      "id": "nmpi28sjlhhu9",
-      "type": "caNode",
-      "position": {
-        "x": 220,
-        "y": 1360
-      },
-      "data": {
-        "nodeType": "getModelAttribute",
-        "config": {
-          "attributeId": "densB",
-          "isColorAttr": false
-        },
-        "label": "densB"
-      }
-    },
-    {
-      "id": "nmpi28sjld720",
-      "type": "caNode",
-      "position": {
-        "x": 220,
-        "y": 1040
-      },
-      "data": {
-        "nodeType": "getModelAttribute",
-        "config": {
-          "attributeId": "densSolute",
-          "isColorAttr": false
-        },
-        "label": "densSolute"
-      }
-    },
-    {
-      "id": "nmpi28sjl2gs1",
-      "type": "caNode",
-      "position": {
-        "x": 220,
-        "y": 960
-      },
-      "data": {
-        "nodeType": "getRandom",
-        "config": {
-          "randomType": "float",
-          "min": "0",
-          "max": "1"
-        },
-        "label": "r ∈ [0,1)"
-      }
-    },
-    {
-      "id": "nmpi28sjl2yop",
-      "type": "caNode",
-      "position": {
-        "x": 220,
-        "y": 1440
-      },
-      "data": {
-        "nodeType": "getConstant",
-        "config": {
-          "constType": "integer",
-          "constValue": "2"
-        },
-        "label": "Int: 2"
-      }
-    },
-    {
-      "id": "nmpi28sjl36pd",
-      "type": "caNode",
-      "position": {
-        "x": 440,
-        "y": 960
-      },
-      "data": {
-        "nodeType": "statement",
-        "config": {
-          "operation": "=="
-        },
-        "label": "y == 2 (near top)?"
-      }
-    },
-    {
-      "id": "nmpi28sjljup8",
-      "type": "caNode",
-      "position": {
-        "x": 660,
-        "y": 960
-      },
-      "data": {
-        "nodeType": "conditional",
-        "config": {},
-        "label": "If injection row"
-      }
-    },
-    {
-      "id": "nmpi28sjlyidt",
-      "type": "caNode",
-      "position": {
-        "x": 880,
-        "y": 880
-      },
-      "data": {
-        "nodeType": "statement",
-        "config": {
-          "operation": "<"
-        },
-        "label": "r < densSolute?"
-      }
-    },
-    {
-      "id": "nmpi28sjlg2zx",
-      "type": "caNode",
-      "position": {
-        "x": 1100,
-        "y": 880
-      },
-      "data": {
-        "nodeType": "conditional",
-        "config": {},
-        "label": "If S1"
-      }
-    },
-    {
-      "id": "nmpi28sjlklz8",
-      "type": "caNode",
-      "position": {
-        "x": 1320,
-        "y": 880
-      },
-      "data": {
-        "nodeType": "setAttribute",
-        "config": {
-          "attributeId": "cellType",
-          "_port_value": "3"
-        },
-        "label": "type ← S1"
-      }
-    },
-    {
-      "id": "nmpi28sjl5cgt",
-      "type": "caNode",
-      "position": {
-        "x": 880,
-        "y": 1040
-      },
-      "data": {
-        "nodeType": "expression",
-        "config": {
-          "expression": "s * 2",
-          "visibleCount": 1,
-          "_varName_a": "s"
-        },
-        "label": "2·densSolute"
-      }
-    },
-    {
-      "id": "nmpi28sjly8ei",
-      "type": "caNode",
-      "position": {
-        "x": 1100,
-        "y": 1040
-      },
-      "data": {
-        "nodeType": "statement",
-        "config": {
-          "operation": "<"
-        },
-        "label": "r < 2·densSolute?"
-      }
-    },
-    {
-      "id": "nmpi28sjl5v3z",
-      "type": "caNode",
-      "position": {
-        "x": 1320,
-        "y": 1040
-      },
-      "data": {
-        "nodeType": "conditional",
-        "config": {},
-        "label": "If S2"
-      }
-    },
-    {
-      "id": "nmpi28sjlzolw",
-      "type": "caNode",
-      "position": {
-        "x": 1540,
-        "y": 1040
-      },
-      "data": {
-        "nodeType": "setAttribute",
-        "config": {
-          "attributeId": "cellType",
-          "_port_value": "4"
-        },
-        "label": "type ← S2"
-      }
-    },
-    {
-      "id": "nmpi28sjl2l7g",
-      "type": "caNode",
-      "position": {
-        "x": 1540,
-        "y": 1120
-      },
-      "data": {
-        "nodeType": "setAttribute",
-        "config": {
-          "attributeId": "cellType",
-          "_port_value": "1"
-        },
-        "label": "type ← W"
-      }
-    },
-    {
-      "id": "nmpi28sjlncjn",
-      "type": "caNode",
-      "position": {
-        "x": 880,
-        "y": 1280
-      },
-      "data": {
-        "nodeType": "statement",
-        "config": {
-          "operation": "<"
-        },
-        "label": "r < densB?"
-      }
-    },
-    {
-      "id": "nmpi28sjlv42z",
-      "type": "caNode",
-      "position": {
-        "x": 1100,
-        "y": 1280
-      },
-      "data": {
-        "nodeType": "conditional",
-        "config": {},
-        "label": "If B"
-      }
-    },
-    {
-      "id": "nmpi28sjl6e0a",
-      "type": "caNode",
-      "position": {
-        "x": 1320,
-        "y": 1280
-      },
-      "data": {
-        "nodeType": "setAttribute",
-        "config": {
-          "attributeId": "cellType",
-          "_port_value": "2"
-        },
-        "label": "type ← B"
-      }
-    },
-    {
-      "id": "nmpi28sjldwk0",
-      "type": "caNode",
-      "position": {
-        "x": 880,
-        "y": 1360
-      },
-      "data": {
-        "nodeType": "expression",
-        "config": {
-          "expression": "b + w",
-          "visibleCount": 2,
-          "_varName_a": "b",
-          "_varName_b": "w"
-        },
-        "label": "densB + densW"
-      }
-    },
-    {
-      "id": "nmpi28sjlfapk",
-      "type": "caNode",
-      "position": {
-        "x": 1100,
-        "y": 1360
-      },
-      "data": {
-        "nodeType": "statement",
-        "config": {
-          "operation": "<"
-        },
-        "label": "r < densB+densW?"
-      }
-    },
-    {
-      "id": "nmpi28sjl9zqi",
-      "type": "caNode",
-      "position": {
-        "x": 1320,
-        "y": 1360
-      },
-      "data": {
-        "nodeType": "conditional",
-        "config": {},
-        "label": "If W"
-      }
-    },
-    {
-      "id": "nmpi28sjl0vyl",
-      "type": "caNode",
-      "position": {
-        "x": 1540,
-        "y": 1360
-      },
-      "data": {
-        "nodeType": "setAttribute",
-        "config": {
-          "attributeId": "cellType",
-          "_port_value": "1"
-        },
-        "label": "type ← W"
-      }
-    },
-    {
-      "id": "nmpi28sjlf43t",
-      "type": "caNode",
-      "position": {
-        "x": 440,
-        "y": 1600
-      },
-      "data": {
-        "nodeType": "statement",
-        "config": {
-          "operation": "=="
-        },
-        "label": "y == maxY (bottom)?"
-      }
-    },
-    {
-      "id": "nmpi28sjldm35",
-      "type": "caNode",
-      "position": {
-        "x": 660,
-        "y": 1600
-      },
-      "data": {
-        "nodeType": "conditional",
-        "config": {},
-        "label": "If bottom row"
-      }
-    },
-    {
-      "id": "nmpi28sjlzfev",
-      "type": "caNode",
-      "position": {
-        "x": 880,
-        "y": 1600
-      },
-      "data": {
-        "nodeType": "setAttribute",
-        "config": {
-          "attributeId": "monitor",
-          "_port_value": "1"
-        },
-        "label": "monitor ← true"
-      }
-    },
-    {
-      "id": "gmpi28sjlpgsu",
-      "type": "groupNode",
-      "position": {
-        "x": -30,
-        "y": 20
-      },
-      "data": {
-        "label": "Shared reads",
-        "nodeType": "group",
-        "config": {},
-        "width": 480,
-        "height": 650,
-        "groupColor": "#3a4a5a"
-      }
-    },
-    {
-      "id": "gmpi28sjloh6a",
-      "type": "groupNode",
-      "position": {
-        "x": 190,
-        "y": -60
-      },
-      "data": {
-        "label": "Gating chain → move (mobile? → broke free? → empty dir? → move)",
-        "nodeType": "group",
-        "config": {},
-        "width": 2240,
-        "height": 250,
-        "groupColor": "#4a6858"
-      }
-    },
-    {
-      "id": "gmpi28sjllae8",
-      "type": "groupNode",
-      "position": {
-        "x": 410,
-        "y": 180
-      },
-      "data": {
-        "label": "Per-direction body (runs for d ∈ {N,E,S,W})",
-        "nodeType": "group",
-        "config": {},
-        "width": 1140,
-        "height": 410,
-        "groupColor": "#4a5878"
-      }
-    },
-    {
-      "id": "gmpi28sjlhxvg",
-      "type": "groupNode",
-      "position": {
-        "x": 410,
-        "y": 740
-      },
-      "data": {
-        "label": "South gravity boost (weights[S] = empty ? J+G : 0)",
-        "nodeType": "group",
-        "config": {},
-        "width": 920,
-        "height": 250,
-        "groupColor": "#5a4a78"
-      }
-    },
-    {
-      "id": "gmpi28sjl1qat",
-      "type": "groupNode",
-      "position": {
-        "x": 1730,
-        "y": 180
-      },
-      "data": {
-        "label": "Detector line (monitor cell + solute → Stop Event)",
-        "nodeType": "group",
-        "config": {},
-        "width": 1360,
-        "height": 330,
-        "groupColor": "#785a4a"
-      }
-    },
-    {
-      "id": "gmpi28sjlw3d5",
-      "type": "groupNode",
-      "position": {
-        "x": -30,
-        "y": 820
-      },
-      "data": {
-        "label": "Init Event — injection band (near the top) → column bulk + detector row",
-        "nodeType": "group",
-        "config": {},
-        "width": 1800,
-        "height": 890,
-        "groupColor": "#406870"
-      }
-    }
+    {"id":"nmpgu0m7enhie","type":"caNode","position":{"x":-407.8069290791033,"y":-256.93078757781893},"data":{"nodeType":"step","config":{}}},
+    {"id":"nmpgu0m7e58po","type":"caNode","position":{"x":-406.56762758408604,"y":-462.58524296726586},"data":{"nodeType":"getCellAttribute","config":{"attributeId":"cellType"},"label":"My type","isCollapsed":true}},
+    {"id":"nmpgu0m7e08uu","type":"caNode","position":{"x":1091.2635985414825,"y":-460.0809040077312},"data":{"nodeType":"getAllNeighborIndexes","config":{"neighborhoodId":"near","_resolvedPackedAll":"[-65536,1,65536,65535]"},"label":"NIs (near N/E/S/W)","isCollapsed":true}},
+    {"id":"nmpgu0m7eub4m","type":"caNode","position":{"x":1300,"y":-640},"data":{"nodeType":"getNeighborsAttrByIndexes","config":{"attributeId":"cellType"},"label":"neighbour types[4]","isCollapsed":true}},
+    {"id":"nmpgu0m7epkoe","type":"caNode","position":{"x":1620,"y":-460},"data":{"nodeType":"getConstant","config":{"constType":"tag","tagAttributeId":"cellType","constValue":"0"},"label":"Tag: empty","isCollapsed":true}},
+    {"id":"nmpgu0m7e46m0","type":"caNode","position":{"x":344,"y":-241},"data":{"nodeType":"conditional","config":{},"label":"If mobile (occupied, not B)"}},
+    {"id":"nmpgu0m7ehs6t","type":"caNode","position":{"x":1518.3043228915064,"y":-225.1145651054955},"data":{"nodeType":"conditional","config":{},"label":"If broke free"}},
+    {"id":"nmpgu0m7eb2p6","type":"caNode","position":{"x":111.82790330589512,"y":-199.3255202850214},"data":{"nodeType":"statement","config":{"operation":"!="},"label":"type != empty","isCollapsed":true}},
+    {"id":"nmpgu0m7efmu0","type":"caNode","position":{"x":114.43955499578345,"y":-134.99543042435164},"data":{"nodeType":"statement","config":{"operation":"!="},"label":"type != B","isCollapsed":true}},
+    {"id":"nmpgu0m7e97wv","type":"caNode","position":{"x":1285.0748773779528,"y":-501.0946497718728},"data":{"nodeType":"forEachInArray","config":{},"label":"For each direction d"}},
+    {"id":"nmpgu0m7eb2gz","type":"caNode","position":{"x":1530,"y":-644},"data":{"nodeType":"arrayElement","config":{"_elemKind":"value"},"label":"neighbour[d]","isCollapsed":true}},
+    {"id":"nmpgu0m7enqe5","type":"caNode","position":{"x":1815,"y":-684},"data":{"nodeType":"lookupInteraction","config":{"tableId":"PB","_rowCount":5,"_colCount":5},"label":"PB(my, nbr)"}},
+    {"id":"nmpgu0m7ebde2","type":"caNode","position":{"x":2023,"y":-686},"data":{"nodeType":"setArrayElement","config":{"variableId":"pbFactors"},"label":"pbFactors[d] ← PB"}},
+    {"id":"nmpgu0m7eacnz","type":"caNode","position":{"x":1740,"y":-460},"data":{"nodeType":"statement","config":{"operation":"=="},"label":"nbr[d]==empty","isCollapsed":true}},
+    {"id":"nmpgu0m7eplur","type":"caNode","position":{"x":2080,"y":-480},"data":{"nodeType":"setArrayElement","config":{"variableId":"weights"},"label":"weights[d] ← weight"}},
+    {"id":"nmpgu0m7eudxg","type":"caNode","position":{"x":964.0478146664916,"y":-169.08043185599396},"data":{"nodeType":"getVariable","config":{"variableId":"pbFactors"},"label":"pbFactors[]"}},
+    {"id":"nmpgu0m7eyusm","type":"caNode","position":{"x":1144.0478146664916,"y":-169.08043185599396},"data":{"nodeType":"aggregate","config":{"operation":"product"},"label":"P_break (Π pb_d)"}},
+    {"id":"nmpgu0m7e3mha","type":"caNode","position":{"x":1324.0478146664916,"y":-169.08043185599396},"data":{"nodeType":"getRandom","config":{"randomType":"bool"},"label":"Bernoulli(P_break)"}},
+    {"id":"nmpgu0m7e8pmc","type":"caNode","position":{"x":1304.0478146664916,"y":-69.08043185599396},"data":{"nodeType":"getVariable","config":{"variableId":"weights"},"label":"weights[]"}},
+    {"id":"nmpgu0m7e9gm6","type":"caNode","position":{"x":1484.0478146664916,"y":-69.08043185599396},"data":{"nodeType":"groupOperator","config":{"operation":"weightedRandom"},"label":"Pick direction"}},
+    {"id":"nmpgu0m7eyla7","type":"caNode","position":{"x":1702.8991163114947,"y":-147.4596055359465},"data":{"nodeType":"arrayElement","config":{"_elemKind":"ni"},"label":"NI of chosen dir"}},
+    {"id":"nmpgu0m7e3f1z","type":"caNode","position":{"x":1881.5949643660226,"y":-229.23759752109794},"data":{"nodeType":"moveSelfToNeighbor","config":{"payloadCount":1,"attr_0":"cellType","_attr_0_default":"0","operation":"copyTo","nonReceiving":"defaults","includeOrientation":false},"label":"Move self → NI"}},
+    {"id":"nmpgu0m7ewe7a","type":"caNode","position":{"x":-142.39318180896834,"y":-502.4469900438031},"data":{"nodeType":"getCellAttribute","config":{"attributeId":"monitor"},"label":"monitor flag?","isCollapsed":true}},
+    {"id":"nmpgu0m7eeggb","type":"caNode","position":{"x":-295.5271328221279,"y":-439.238849572023},"data":{"nodeType":"getConstant","config":{"constType":"tag","tagAttributeId":"cellType","constValue":"3"},"label":"Tag: S1","isCollapsed":true}},
+    {"id":"nmpgu0m7f7x7n","type":"caNode","position":{"x":-292.49569968910737,"y":-395.0060312026997},"data":{"nodeType":"getConstant","config":{"constType":"tag","tagAttributeId":"cellType","constValue":"4"},"label":"Tag: S2","isCollapsed":true}},
+    {"id":"nmpgu0m7fyxwm","type":"caNode","position":{"x":-208.91019067504317,"y":-462.73245635293415},"data":{"nodeType":"statement","config":{"operation":"=="},"label":"type == S1","isCollapsed":true}},
+    {"id":"nmpgu0m7f0il6","type":"caNode","position":{"x":-209.6680489582982,"y":-413.1946300008245},"data":{"nodeType":"statement","config":{"operation":"=="},"label":"type == S2","isCollapsed":true}},
+    {"id":"nmpgu0m7f94yw","type":"caNode","position":{"x":137.33883828171645,"y":-513.5599361377086},"data":{"nodeType":"conditional","config":{},"label":"If solute at detector"}},
+    {"id":"nmpgu0m7fmy1p","type":"caNode","position":{"x":324.0265859868026,"y":-519.3034279126938},"data":{"nodeType":"stopEvent","config":{"message":"A solute reached the detector line at the bottom of the column — the leading solute (S1) has eluted (full traversal). Reset to re-run.","_stopIdx":1},"label":"Stop: solute eluted"}},
+    {"id":"nmpgu0m7fbmfb","type":"caNode","position":{"x":-380,"y":200},"data":{"nodeType":"initEvent","config":{}}},
+    {"id":"nmpgu0m7f2psi","type":"caNode","position":{"x":-160,"y":520},"data":{"nodeType":"getModelAttribute","config":{"attributeId":"densW","isColorAttr":false},"label":"densW"}},
+    {"id":"nmpgu0m7f4own","type":"caNode","position":{"x":-160,"y":600},"data":{"nodeType":"getModelAttribute","config":{"attributeId":"densB","isColorAttr":false},"label":"densB"}},
+    {"id":"nmpgu0m7frjzg","type":"caNode","position":{"x":-160,"y":300},"data":{"nodeType":"getModelAttribute","config":{"attributeId":"densSolute","isColorAttr":false},"label":"densSolute"}},
+    {"id":"nmpgu0m7f7krj","type":"caNode","position":{"x":100,"y":355},"data":{"nodeType":"getRandom","config":{"randomType":"float","min":"0","max":"1"},"label":"r ∈ [0,1)"}},
+    {"id":"nmpgu0m7fgp3y","type":"caNode","position":{"x":-160,"y":680},"data":{"nodeType":"getConstant","config":{"constType":"integer","constValue":"2"},"label":"Int: 2"}},
+    {"id":"nmpgu0m7fcxvp","type":"caNode","position":{"x":66,"y":212},"data":{"nodeType":"statement","config":{"operation":"=="},"label":"y == 2 (near top)?"}},
+    {"id":"nmpgu0m7f8qvg","type":"caNode","position":{"x":286,"y":212},"data":{"nodeType":"conditional","config":{},"label":"If injection row"}},
+    {"id":"nmpgu0m7fi1l0","type":"caNode","position":{"x":488,"y":151},"data":{"nodeType":"statement","config":{"operation":"<"},"label":"r < densSolute?"}},
+    {"id":"nmpgu0m7f964b","type":"caNode","position":{"x":708,"y":151},"data":{"nodeType":"conditional","config":{},"label":"If S1"}},
+    {"id":"nmpgu0m7f1zsb","type":"caNode","position":{"x":941,"y":163},"data":{"nodeType":"setAttribute","config":{"attributeId":"cellType","_port_value":"3"},"label":"type ← S1"}},
+    {"id":"nmpgu0m7fhz5k","type":"caNode","position":{"x":506,"y":292},"data":{"nodeType":"expression","config":{"expression":"s * 2","visibleCount":1,"_varName_a":"s"},"label":"2·densSolute"}},
+    {"id":"nmpgu0m7fmg9b","type":"caNode","position":{"x":726,"y":292},"data":{"nodeType":"statement","config":{"operation":"<"},"label":"r < 2·densSolute?"}},
+    {"id":"nmpgu0m7fdd5n","type":"caNode","position":{"x":946,"y":292},"data":{"nodeType":"conditional","config":{},"label":"If S2"}},
+    {"id":"nmpgu0m7f6mjx","type":"caNode","position":{"x":1166,"y":292},"data":{"nodeType":"setAttribute","config":{"attributeId":"cellType","_port_value":"4"},"label":"type ← S2"}},
+    {"id":"nmpgu0m7facp8","type":"caNode","position":{"x":1166,"y":372},"data":{"nodeType":"setAttribute","config":{"attributeId":"cellType","_port_value":"1"},"label":"type ← W"}},
+    {"id":"nmpgu0m7fzli9","type":"caNode","position":{"x":500,"y":520},"data":{"nodeType":"statement","config":{"operation":"<"},"label":"r < densB?"}},
+    {"id":"nmpgu0m7f8w81","type":"caNode","position":{"x":720,"y":520},"data":{"nodeType":"conditional","config":{},"label":"If B"}},
+    {"id":"nmpgu0m7fs2zz","type":"caNode","position":{"x":940,"y":520},"data":{"nodeType":"setAttribute","config":{"attributeId":"cellType","_port_value":"2"},"label":"type ← B"}},
+    {"id":"nmpgu0m7fqkgo","type":"caNode","position":{"x":500,"y":600},"data":{"nodeType":"expression","config":{"expression":"b + w","visibleCount":2,"_varName_a":"b","_varName_b":"w"},"label":"densB + densW"}},
+    {"id":"nmpgu0m7fxg0i","type":"caNode","position":{"x":720,"y":600},"data":{"nodeType":"statement","config":{"operation":"<"},"label":"r < densB+densW?"}},
+    {"id":"nmpgu0m7fwxqe","type":"caNode","position":{"x":940,"y":600},"data":{"nodeType":"conditional","config":{},"label":"If W"}},
+    {"id":"nmpgu0m7fw2oa","type":"caNode","position":{"x":1160,"y":600},"data":{"nodeType":"setAttribute","config":{"attributeId":"cellType","_port_value":"1"},"label":"type ← W"}},
+    {"id":"nmpgu0m7f1jym","type":"caNode","position":{"x":60,"y":840},"data":{"nodeType":"statement","config":{"operation":"=="},"label":"y == maxY (bottom)?"}},
+    {"id":"nmpgu0m7ft513","type":"caNode","position":{"x":280,"y":840},"data":{"nodeType":"conditional","config":{},"label":"If bottom row"}},
+    {"id":"nmpgu0m7fxrq0","type":"caNode","position":{"x":500,"y":840},"data":{"nodeType":"setAttribute","config":{"attributeId":"monitor","_port_value":"1"},"label":"monitor ← true"}},
+    {"id":"gmpgu0m7fv1zb","type":"groupNode","position":{"x":-423,"y":-299},"data":{"label":"Gating chain → move (mobile? → broke free? → empty dir? → move)","nodeType":"group","config":{},"width":2615,"height":338,"groupColor":"#4a6858"}},
+    {"id":"gmpgu0m7fre0z","type":"groupNode","position":{"x":1060,"y":-740},"data":{"label":"Per-direction body (runs for d ∈ {N,E,S,W}) and updates Break factors, and move weights used later on to decide where to move","nodeType":"group","config":{},"width":1194,"height":406,"groupColor":"#4a5878"}},
+    {"id":"gmpgu0m7ftv4q","type":"groupNode","position":{"x":-421.66116171828355,"y":-571.5599361377086},"data":{"label":"Detector line (monitor cell + solute → Stop Event)","nodeType":"group","config":{},"width":950,"height":233,"groupColor":"#785a4a"}},
+    {"id":"gmpgu0m7fc584","type":"groupNode","position":{"x":-420,"y":100},"data":{"label":"Init Event (Setup grid on reset) — injection band (near the top) → column bulk + detector row","nodeType":"group","config":{},"width":1800,"height":850,"groupColor":"#406870"}},
+    {"id":"nmpgwgchd6xd","type":"caNode","position":{"x":-160,"y":840},"data":{"nodeType":"arithmeticOperator","config":{"operation":"-","_port_x":"10","_port_y":"10"}}},
+    {"id":"nmpgwwb43dzb","type":"caNode","position":{"x":1440,"y":180},"data":{"nodeType":"outputMapping","config":{"mappingId":"viz"}}},
+    {"id":"nmpgwwe0sef8","type":"caNode","position":{"x":1860,"y":180},"data":{"nodeType":"conditional","config":{"_port_condition":"false"}}},
+    {"id":"nmpgwwj1hz5z","type":"caNode","position":{"x":1640,"y":240},"data":{"nodeType":"getCellAttribute","config":{"attributeId":"monitor"},"isCollapsed":true}},
+    {"id":"nmpgwwr7o11n","type":"caNode","position":{"x":2040,"y":180},"data":{"nodeType":"setCellGlyph","config":{"mappingId":"viz","_port_glyph":"8593","_port_r":"234","_port_g":"23","_port_b":"238"}}},
+    {"id":"nmpj37sa26wz","type":"caNode","position":{"x":-128.17209669410488,"y":-200.21873380412836},"data":{"nodeType":"getCellAttribute","config":{"attributeId":"cellType"},"label":"My type","isCollapsed":true}},
+    {"id":"nmpj386btkx4","type":"caNode","position":{"x":-9.913197820697121,"y":-177.60708211424},"data":{"nodeType":"getConstant","config":{"constType":"tag","tagAttributeId":"cellType","constValue":"0"},"label":"Tag: empty","isCollapsed":true}},
+    {"id":"nmpj38e9ik6i","type":"caNode","position":{"x":18.792307812264085,"y":-119.37084619664309},"data":{"nodeType":"getConstant","config":{"constType":"tag","tagAttributeId":"cellType","constValue":"2"},"label":"Tag: B","isCollapsed":true}},
+    {"id":"nmpj3cl06s70","type":"caNode","position":{"x":1542.8991163114947,"y":-127.45960553594651},"data":{"nodeType":"getAllNeighborIndexes","config":{"neighborhoodId":"near","_resolvedPackedAll":"[-65536,1,65536,65535]"},"label":"NIs (near N/E/S/W)","isCollapsed":true}},
+    {"id":"nmpj3mb0xus6","type":"caNode","position":{"x":1683,"y":-665},"data":{"nodeType":"getCellAttribute","config":{"attributeId":"cellType"},"isCollapsed":true}},
+    {"id":"nmpj3oav8hlj","type":"caNode","position":{"x":-1.2848377100623622,"y":-483.0368655131009},"data":{"nodeType":"logicOperator","config":{"operation":"AND","_port_a":"false","_port_b":"false"},"isCollapsed":true}},
+    {"id":"nmpj3opa29oo","type":"caNode","position":{"x":-86.13935361679182,"y":-462.9893537971809},"data":{"nodeType":"logicOperator","config":{"operation":"OR","_port_a":"false","_port_b":"false"},"isCollapsed":true}},
+    {"id":"nmpj3sz2kgtz","type":"caNode","position":{"x":-248.35932495590765,"y":-259.31439588358535},"data":{"nodeType":"sequence","config":{"extraCount":0}}},
+    {"id":"nmpj3vp78jby","type":"caNode","position":{"x":253.32433698608236,"y":-200.29633019727126},"data":{"nodeType":"logicOperator","config":{"operation":"AND","_port_a":"false","_port_b":"false"},"isCollapsed":true}},
+    {"id":"nmpj3xhik0df","type":"caNode","position":{"x":1087.2596037815354,"y":-242.99065898643207},"data":{"nodeType":"sequence","config":{"extraCount":0}}},
+    {"id":"nmpj7c6x97ej","type":"caNode","position":{"x":820,"y":-240},"data":{"nodeType":"conditional","config":{},"label":"If empty dir"}},
+    {"id":"nmpj7c6x9d5o","type":"caNode","position":{"x":637.6427047835682,"y":-184.36668705760118},"data":{"nodeType":"groupStatement","config":{"operation":"hasA"},"label":"hasA(empty)?"}},
+    {"id":"nmpj7c6x9xcx","type":"caNode","position":{"x":526.6427047835682,"y":-127.36668705760118},"data":{"nodeType":"getConstant","config":{"constType":"tag","tagAttributeId":"cellType","constValue":"0"},"label":"Tag: empty","isCollapsed":true}},
+    {"id":"nmpj7c6x918d","type":"caNode","position":{"x":424.6427047835683,"y":-163.36668705760118},"data":{"nodeType":"getNeighborsAttribute","config":{"neighborhoodId":"near","attributeId":"cellType"},"isCollapsed":true}},
+    {"id":"nmpj8enou9un","type":"caNode","position":{"x":1880,"y":-500},"data":{"nodeType":"conditional","config":{"_port_condition":"false"},"isCollapsed":false}},
+    {"id":"nmpj8oql2rhx","type":"commentNode","position":{"x":1440,"y":100},"data":{"text":"Just adding some visual differentiation to the \"Detector\" cells that are marked as the Monitor towards the end of the column, which is used to stop the simulation automatically","width":772,"height":70,"color":"#275e26"}},
+    {"id":"nmpj94zllwwh","type":"caNode","position":{"x":1860,"y":-420},"data":{"nodeType":"macro","config":{"macroDefId":"macro_mpj94zlk"},"label":"Calculate Weight[d]"}}
   ],
   "graphEdges": [
-    {
-      "id": "empi28sjkobuy",
-      "source": "nmpi28sjk7jxc",
-      "target": "nmpi28sjkg1yj",
-      "sourceHandle": "output_value_indexes",
-      "targetHandle": "input_value_indexes"
-    },
-    {
-      "id": "empi28sjkibds",
-      "source": "nmpi28sjkocl3",
-      "target": "nmpi28sjkcjqe",
-      "sourceHandle": "output_value_indexes",
-      "targetHandle": "input_value_indexes"
-    },
-    {
-      "id": "empi28sjl386y",
-      "source": "nmpi28sjkbx19",
-      "target": "nmpi28sjl49k6",
-      "sourceHandle": "output_flow_do",
-      "targetHandle": "input_flow_check"
-    },
-    {
-      "id": "empi28sjlz6tg",
-      "source": "nmpi28sjknl9f",
-      "target": "nmpi28sjlf88h",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empi28sjlm0n6",
-      "source": "nmpi28sjksdn3",
-      "target": "nmpi28sjlf88h",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empi28sjlkc4e",
-      "source": "nmpi28sjknl9f",
-      "target": "nmpi28sjlv30w",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empi28sjluyw7",
-      "source": "nmpi28sjkhnq2",
-      "target": "nmpi28sjlv30w",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empi28sjl2y8z",
-      "source": "nmpi28sjlf88h",
-      "target": "nmpi28sjl7fan",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_values"
-    },
-    {
-      "id": "empi28sjl1n4q",
-      "source": "nmpi28sjlv30w",
-      "target": "nmpi28sjl7fan",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_values"
-    },
-    {
-      "id": "empi28sjlr2od",
-      "source": "nmpi28sjl7fan",
-      "target": "nmpi28sjl49k6",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empi28sjlhmim",
-      "source": "nmpi28sjk7jxc",
-      "target": "nmpi28sjlsxgr",
-      "sourceHandle": "output_value_indexes",
-      "targetHandle": "input_value_array"
-    },
-    {
-      "id": "empi28sjlq6jt",
-      "source": "nmpi28sjl49k6",
-      "target": "nmpi28sjlsxgr",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "empi28sjlsggb",
-      "source": "nmpi28sjkg1yj",
-      "target": "nmpi28sjlxtgb",
-      "sourceHandle": "output_value_values",
-      "targetHandle": "input_value_array"
-    },
-    {
-      "id": "empi28sjla5e5",
-      "source": "nmpi28sjlsxgr",
-      "target": "nmpi28sjlxtgb",
-      "sourceHandle": "output_value_index",
-      "targetHandle": "input_value_position"
-    },
-    {
-      "id": "empi28sjlrfh6",
-      "source": "nmpi28sjkcjqe",
-      "target": "nmpi28sjl7zhv",
-      "sourceHandle": "output_value_values",
-      "targetHandle": "input_value_array"
-    },
-    {
-      "id": "empi28sjl2ygf",
-      "source": "nmpi28sjlsxgr",
-      "target": "nmpi28sjl7zhv",
-      "sourceHandle": "output_value_index",
-      "targetHandle": "input_value_position"
-    },
-    {
-      "id": "empi28sjl22wk",
-      "source": "nmpi28sjknl9f",
-      "target": "nmpi28sjl13o7",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_labelA"
-    },
-    {
-      "id": "empi28sjl9j3l",
-      "source": "nmpi28sjlxtgb",
-      "target": "nmpi28sjl13o7",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_labelB"
-    },
-    {
-      "id": "empi28sjlxh28",
-      "source": "nmpi28sjlsxgr",
-      "target": "nmpi28sjl0bs0",
-      "sourceHandle": "output_flow_body",
-      "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "empi28sjl9w3e",
-      "source": "nmpi28sjlsxgr",
-      "target": "nmpi28sjl0bs0",
-      "sourceHandle": "output_value_index",
-      "targetHandle": "input_value_index"
-    },
-    {
-      "id": "empi28sjlvvsc",
-      "source": "nmpi28sjl13o7",
-      "target": "nmpi28sjl0bs0",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_value"
-    },
-    {
-      "id": "empi28sjlx2u8",
-      "source": "nmpi28sjlxtgb",
-      "target": "nmpi28sjlsvmg",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empi28sjlr0u7",
-      "source": "nmpi28sjksdn3",
-      "target": "nmpi28sjlsvmg",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empi28sjlji63",
-      "source": "nmpi28sjknl9f",
-      "target": "nmpi28sjl140s",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_labelA"
-    },
-    {
-      "id": "empi28sjllpcn",
-      "source": "nmpi28sjl7zhv",
-      "target": "nmpi28sjl140s",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_labelB"
-    },
-    {
-      "id": "empi28sjld0ae",
-      "source": "nmpi28sjlsvmg",
-      "target": "nmpi28sjl6m37",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_a"
-    },
-    {
-      "id": "empi28sjlh4po",
-      "source": "nmpi28sjl140s",
-      "target": "nmpi28sjl6m37",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_b"
-    },
-    {
-      "id": "empi28sjlipqs",
-      "source": "nmpi28sjlsxgr",
-      "target": "nmpi28sjloofp",
-      "sourceHandle": "output_flow_body",
-      "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "empi28sjllhpt",
-      "source": "nmpi28sjlsxgr",
-      "target": "nmpi28sjloofp",
-      "sourceHandle": "output_value_index",
-      "targetHandle": "input_value_index"
-    },
-    {
-      "id": "empi28sjlfazz",
-      "source": "nmpi28sjl6m37",
-      "target": "nmpi28sjloofp",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_value"
-    },
-    {
-      "id": "empi28sjl8cbx",
-      "source": "nmpi28sjkg1yj",
-      "target": "nmpi28sjl2dhl",
-      "sourceHandle": "output_value_values",
-      "targetHandle": "input_value_array"
-    },
-    {
-      "id": "empi28sjlzf0w",
-      "source": "nmpi28sjl94xx",
-      "target": "nmpi28sjl2dhl",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_position"
-    },
-    {
-      "id": "empi28sjlphlf",
-      "source": "nmpi28sjkcjqe",
-      "target": "nmpi28sjlwsho",
-      "sourceHandle": "output_value_values",
-      "targetHandle": "input_value_array"
-    },
-    {
-      "id": "empi28sjlheuz",
-      "source": "nmpi28sjl94xx",
-      "target": "nmpi28sjlwsho",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_position"
-    },
-    {
-      "id": "empi28sjl1f10",
-      "source": "nmpi28sjl2dhl",
-      "target": "nmpi28sjl8ywo",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empi28sjllf1l",
-      "source": "nmpi28sjksdn3",
-      "target": "nmpi28sjl8ywo",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empi28sjloegn",
-      "source": "nmpi28sjknl9f",
-      "target": "nmpi28sjllvx3",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_labelA"
-    },
-    {
-      "id": "empi28sjlpxn7",
-      "source": "nmpi28sjlwsho",
-      "target": "nmpi28sjllvx3",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_labelB"
-    },
-    {
-      "id": "empi28sjlf8a0",
-      "source": "nmpi28sjl8ywo",
-      "target": "nmpi28sjl18v2",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_a"
-    },
-    {
-      "id": "empi28sjl5utt",
-      "source": "nmpi28sjllvx3",
-      "target": "nmpi28sjl18v2",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_b"
-    },
-    {
-      "id": "empi28sjlm7w6",
-      "source": "nmpi28sjkv84a",
-      "target": "nmpi28sjl18v2",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_c"
-    },
-    {
-      "id": "empi28sjltbl9",
-      "source": "nmpi28sjl49k6",
-      "target": "nmpi28sjl24h7",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "empi28sjly4wq",
-      "source": "nmpi28sjl94xx",
-      "target": "nmpi28sjl24h7",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_index"
-    },
-    {
-      "id": "empi28sjl7oss",
-      "source": "nmpi28sjl18v2",
-      "target": "nmpi28sjl24h7",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_value"
-    },
-    {
-      "id": "empi28sjleb1p",
-      "source": "nmpi28sjl49k6",
-      "target": "nmpi28sjlhi3w",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_check"
-    },
-    {
-      "id": "empi28sjlhb5g",
-      "source": "nmpi28sjl7kmx",
-      "target": "nmpi28sjlycpy",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_values"
-    },
-    {
-      "id": "empi28sjlqfjn",
-      "source": "nmpi28sjlycpy",
-      "target": "nmpi28sjls0bs",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_probability"
-    },
-    {
-      "id": "empi28sjls26p",
-      "source": "nmpi28sjls0bs",
-      "target": "nmpi28sjlhi3w",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empi28sjlc2jp",
-      "source": "nmpi28sjlhi3w",
-      "target": "nmpi28sjlfmf5",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_check"
-    },
-    {
-      "id": "empi28sjlshjv",
-      "source": "nmpi28sjkg1yj",
-      "target": "nmpi28sjlh30k",
-      "sourceHandle": "output_value_values",
-      "targetHandle": "input_value_values"
-    },
-    {
-      "id": "empi28sjlg2qc",
-      "source": "nmpi28sjksdn3",
-      "target": "nmpi28sjlh30k",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empi28sjlbrmp",
-      "source": "nmpi28sjlh30k",
-      "target": "nmpi28sjlfmf5",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empi28sjlcujj",
-      "source": "nmpi28sjlrr1x",
-      "target": "nmpi28sjl2wib",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_values"
-    },
-    {
-      "id": "empi28sjlcwvv",
-      "source": "nmpi28sjk7jxc",
-      "target": "nmpi28sjl6q7l",
-      "sourceHandle": "output_value_indexes",
-      "targetHandle": "input_value_array"
-    },
-    {
-      "id": "empi28sjl21yg",
-      "source": "nmpi28sjl2wib",
-      "target": "nmpi28sjl6q7l",
-      "sourceHandle": "output_value_index",
-      "targetHandle": "input_value_position"
-    },
-    {
-      "id": "empi28sjl3a31",
-      "source": "nmpi28sjlfmf5",
-      "target": "nmpi28sjl4dsr",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "empi28sjl8b8y",
-      "source": "nmpi28sjl6q7l",
-      "target": "nmpi28sjl4dsr",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_targetNI"
-    },
-    {
-      "id": "empi28sjli4mc",
-      "source": "nmpi28sjknl9f",
-      "target": "nmpi28sjlrln3",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empi28sjle4kr",
-      "source": "nmpi28sjltlav",
-      "target": "nmpi28sjlrln3",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empi28sjlnd6i",
-      "source": "nmpi28sjknl9f",
-      "target": "nmpi28sjloczd",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empi28sjlxtv0",
-      "source": "nmpi28sjl8tdz",
-      "target": "nmpi28sjloczd",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empi28sjlbpa3",
-      "source": "nmpi28sjlrln3",
-      "target": "nmpi28sjlhxs5",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_values"
-    },
-    {
-      "id": "empi28sjl3tkh",
-      "source": "nmpi28sjloczd",
-      "target": "nmpi28sjlhxs5",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_values"
-    },
-    {
-      "id": "empi28sjlip1g",
-      "source": "nmpi28sjlheza",
-      "target": "nmpi28sjl1e0c",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_values"
-    },
-    {
-      "id": "empi28sjl80x9",
-      "source": "nmpi28sjlhxs5",
-      "target": "nmpi28sjl1e0c",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_values"
-    },
-    {
-      "id": "empi28sjlxuyi",
-      "source": "nmpi28sjkbx19",
-      "target": "nmpi28sjlkfex",
-      "sourceHandle": "output_flow_do",
-      "targetHandle": "input_flow_check"
-    },
-    {
-      "id": "empi28sjl89az",
-      "source": "nmpi28sjl1e0c",
-      "target": "nmpi28sjlkfex",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empi28sjl5st7",
-      "source": "nmpi28sjlkfex",
-      "target": "nmpi28sjl33t9",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "empi28sjl156e",
-      "source": "nmpi28sjlvyr7",
-      "target": "nmpi28sjl36pd",
-      "sourceHandle": "output_value_y",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empi28sjlqx0l",
-      "source": "nmpi28sjl2yop",
-      "target": "nmpi28sjl36pd",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empi28sjl337c",
-      "source": "nmpi28sjlvyr7",
-      "target": "nmpi28sjljup8",
-      "sourceHandle": "output_flow_do",
-      "targetHandle": "input_flow_check"
-    },
-    {
-      "id": "empi28sjl82md",
-      "source": "nmpi28sjl36pd",
-      "target": "nmpi28sjljup8",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empi28sjl4jhj",
-      "source": "nmpi28sjl2gs1",
-      "target": "nmpi28sjlyidt",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empi28sjlni9k",
-      "source": "nmpi28sjld720",
-      "target": "nmpi28sjlyidt",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empi28sjly5ri",
-      "source": "nmpi28sjljup8",
-      "target": "nmpi28sjlg2zx",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_check"
-    },
-    {
-      "id": "empi28sjljjxu",
-      "source": "nmpi28sjlyidt",
-      "target": "nmpi28sjlg2zx",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empi28sjlq9n1",
-      "source": "nmpi28sjlg2zx",
-      "target": "nmpi28sjlklz8",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "empi28sjl889e",
-      "source": "nmpi28sjld720",
-      "target": "nmpi28sjl5cgt",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_a"
-    },
-    {
-      "id": "empi28sjlea8y",
-      "source": "nmpi28sjl2gs1",
-      "target": "nmpi28sjly8ei",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empi28sjlgwvn",
-      "source": "nmpi28sjl5cgt",
-      "target": "nmpi28sjly8ei",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empi28sjlg7iq",
-      "source": "nmpi28sjlg2zx",
-      "target": "nmpi28sjl5v3z",
-      "sourceHandle": "output_flow_else",
-      "targetHandle": "input_flow_check"
-    },
-    {
-      "id": "empi28sjlzdok",
-      "source": "nmpi28sjly8ei",
-      "target": "nmpi28sjl5v3z",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empi28sjl39lp",
-      "source": "nmpi28sjl5v3z",
-      "target": "nmpi28sjlzolw",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "empi28sjlqoiq",
-      "source": "nmpi28sjl5v3z",
-      "target": "nmpi28sjl2l7g",
-      "sourceHandle": "output_flow_else",
-      "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "empi28sjlxux1",
-      "source": "nmpi28sjl2gs1",
-      "target": "nmpi28sjlncjn",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empi28sjla7w2",
-      "source": "nmpi28sjlhhu9",
-      "target": "nmpi28sjlncjn",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empi28sjlh00y",
-      "source": "nmpi28sjljup8",
-      "target": "nmpi28sjlv42z",
-      "sourceHandle": "output_flow_else",
-      "targetHandle": "input_flow_check"
-    },
-    {
-      "id": "empi28sjl56ew",
-      "source": "nmpi28sjlncjn",
-      "target": "nmpi28sjlv42z",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empi28sjl8s10",
-      "source": "nmpi28sjlv42z",
-      "target": "nmpi28sjl6e0a",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "empi28sjl6vp8",
-      "source": "nmpi28sjlhhu9",
-      "target": "nmpi28sjldwk0",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_a"
-    },
-    {
-      "id": "empi28sjlogbb",
-      "source": "nmpi28sjl23vv",
-      "target": "nmpi28sjldwk0",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_b"
-    },
-    {
-      "id": "empi28sjlxx48",
-      "source": "nmpi28sjl2gs1",
-      "target": "nmpi28sjlfapk",
-      "sourceHandle": "output_value_value",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empi28sjlv2n4",
-      "source": "nmpi28sjldwk0",
-      "target": "nmpi28sjlfapk",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empi28sjlpa3p",
-      "source": "nmpi28sjlv42z",
-      "target": "nmpi28sjl9zqi",
-      "sourceHandle": "output_flow_else",
-      "targetHandle": "input_flow_check"
-    },
-    {
-      "id": "empi28sjlh6zi",
-      "source": "nmpi28sjlfapk",
-      "target": "nmpi28sjl9zqi",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empi28sjlnhrz",
-      "source": "nmpi28sjl9zqi",
-      "target": "nmpi28sjl0vyl",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_do"
-    },
-    {
-      "id": "empi28sjlkrky",
-      "source": "nmpi28sjlvyr7",
-      "target": "nmpi28sjlf43t",
-      "sourceHandle": "output_value_y",
-      "targetHandle": "input_value_x"
-    },
-    {
-      "id": "empi28sjl80vd",
-      "source": "nmpi28sjlvyr7",
-      "target": "nmpi28sjlf43t",
-      "sourceHandle": "output_value_maxY",
-      "targetHandle": "input_value_y"
-    },
-    {
-      "id": "empi28sjl9lx5",
-      "source": "nmpi28sjlvyr7",
-      "target": "nmpi28sjldm35",
-      "sourceHandle": "output_flow_do",
-      "targetHandle": "input_flow_check"
-    },
-    {
-      "id": "empi28sjlm81r",
-      "source": "nmpi28sjlf43t",
-      "target": "nmpi28sjldm35",
-      "sourceHandle": "output_value_result",
-      "targetHandle": "input_value_condition"
-    },
-    {
-      "id": "empi28sjleyem",
-      "source": "nmpi28sjldm35",
-      "target": "nmpi28sjlzfev",
-      "sourceHandle": "output_flow_then",
-      "targetHandle": "input_flow_do"
+    {"id":"empgu0m7e5hnx","source":"nmpgu0m7e08uu","target":"nmpgu0m7eub4m","sourceHandle":"output_value_indexes","targetHandle":"input_value_indexes"},
+    {"id":"empgu0m7ejv2j","source":"nmpgu0m7e08uu","target":"nmpgu0m7e97wv","sourceHandle":"output_value_indexes","targetHandle":"input_value_array"},
+    {"id":"empgu0m7e31g6","source":"nmpgu0m7eub4m","target":"nmpgu0m7eb2gz","sourceHandle":"output_value_values","targetHandle":"input_value_array"},
+    {"id":"empgu0m7esmmu","source":"nmpgu0m7e97wv","target":"nmpgu0m7eb2gz","sourceHandle":"output_value_index","targetHandle":"input_value_position"},
+    {"id":"empgu0m7ewwto","source":"nmpgu0m7eb2gz","target":"nmpgu0m7enqe5","sourceHandle":"output_value_value","targetHandle":"input_value_labelB"},
+    {"id":"empgu0m7e7ut5","source":"nmpgu0m7e97wv","target":"nmpgu0m7ebde2","sourceHandle":"output_flow_body","targetHandle":"input_flow_do"},
+    {"id":"empgu0m7etqgy","source":"nmpgu0m7e97wv","target":"nmpgu0m7ebde2","sourceHandle":"output_value_index","targetHandle":"input_value_index"},
+    {"id":"empgu0m7e8jys","source":"nmpgu0m7enqe5","target":"nmpgu0m7ebde2","sourceHandle":"output_value_value","targetHandle":"input_value_value"},
+    {"id":"empgu0m7e2mqn","source":"nmpgu0m7eb2gz","target":"nmpgu0m7eacnz","sourceHandle":"output_value_value","targetHandle":"input_value_x"},
+    {"id":"empgu0m7e8ojd","source":"nmpgu0m7epkoe","target":"nmpgu0m7eacnz","sourceHandle":"output_value_value","targetHandle":"input_value_y"},
+    {"id":"empgu0m7eew44","source":"nmpgu0m7e97wv","target":"nmpgu0m7eplur","sourceHandle":"output_value_index","targetHandle":"input_value_index"},
+    {"id":"empgu0m7ec34v","source":"nmpgu0m7eudxg","target":"nmpgu0m7eyusm","sourceHandle":"output_value_value","targetHandle":"input_value_values"},
+    {"id":"empgu0m7ecrlj","source":"nmpgu0m7eyusm","target":"nmpgu0m7e3mha","sourceHandle":"output_value_result","targetHandle":"input_value_probability"},
+    {"id":"empgu0m7eq1sq","source":"nmpgu0m7e3mha","target":"nmpgu0m7ehs6t","sourceHandle":"output_value_value","targetHandle":"input_value_condition"},
+    {"id":"empgu0m7eoupm","source":"nmpgu0m7e8pmc","target":"nmpgu0m7e9gm6","sourceHandle":"output_value_value","targetHandle":"input_value_values"},
+    {"id":"empgu0m7efkur","source":"nmpgu0m7e9gm6","target":"nmpgu0m7eyla7","sourceHandle":"output_value_index","targetHandle":"input_value_position"},
+    {"id":"empgu0m7euhmc","source":"nmpgu0m7eyla7","target":"nmpgu0m7e3f1z","sourceHandle":"output_value_value","targetHandle":"input_value_targetNI"},
+    {"id":"empgu0m7fl1f8","source":"nmpgu0m7e58po","target":"nmpgu0m7fyxwm","sourceHandle":"output_value_value","targetHandle":"input_value_x"},
+    {"id":"empgu0m7ffo3w","source":"nmpgu0m7eeggb","target":"nmpgu0m7fyxwm","sourceHandle":"output_value_value","targetHandle":"input_value_y"},
+    {"id":"empgu0m7fyjkx","source":"nmpgu0m7e58po","target":"nmpgu0m7f0il6","sourceHandle":"output_value_value","targetHandle":"input_value_x"},
+    {"id":"empgu0m7fuxdd","source":"nmpgu0m7f7x7n","target":"nmpgu0m7f0il6","sourceHandle":"output_value_value","targetHandle":"input_value_y"},
+    {"id":"empgu0m7fmc90","source":"nmpgu0m7fbmfb","target":"nmpgu0m7fcxvp","sourceHandle":"output_value_y","targetHandle":"input_value_x"},
+    {"id":"empgu0m7f14gf","source":"nmpgu0m7fgp3y","target":"nmpgu0m7fcxvp","sourceHandle":"output_value_value","targetHandle":"input_value_y"},
+    {"id":"empgu0m7fngy0","source":"nmpgu0m7fbmfb","target":"nmpgu0m7f8qvg","sourceHandle":"output_flow_do","targetHandle":"input_flow_check"},
+    {"id":"empgu0m7fgdyf","source":"nmpgu0m7fcxvp","target":"nmpgu0m7f8qvg","sourceHandle":"output_value_result","targetHandle":"input_value_condition"},
+    {"id":"empgu0m7fnz1k","source":"nmpgu0m7f7krj","target":"nmpgu0m7fi1l0","sourceHandle":"output_value_value","targetHandle":"input_value_x"},
+    {"id":"empgu0m7f9ifv","source":"nmpgu0m7frjzg","target":"nmpgu0m7fi1l0","sourceHandle":"output_value_value","targetHandle":"input_value_y"},
+    {"id":"empgu0m7fk78e","source":"nmpgu0m7f8qvg","target":"nmpgu0m7f964b","sourceHandle":"output_flow_then","targetHandle":"input_flow_check"},
+    {"id":"empgu0m7f4989","source":"nmpgu0m7fi1l0","target":"nmpgu0m7f964b","sourceHandle":"output_value_result","targetHandle":"input_value_condition"},
+    {"id":"empgu0m7fhz0g","source":"nmpgu0m7f964b","target":"nmpgu0m7f1zsb","sourceHandle":"output_flow_then","targetHandle":"input_flow_do"},
+    {"id":"empgu0m7fyh9b","source":"nmpgu0m7frjzg","target":"nmpgu0m7fhz5k","sourceHandle":"output_value_value","targetHandle":"input_value_a"},
+    {"id":"empgu0m7fx9a9","source":"nmpgu0m7f7krj","target":"nmpgu0m7fmg9b","sourceHandle":"output_value_value","targetHandle":"input_value_x"},
+    {"id":"empgu0m7fg9is","source":"nmpgu0m7fhz5k","target":"nmpgu0m7fmg9b","sourceHandle":"output_value_result","targetHandle":"input_value_y"},
+    {"id":"empgu0m7fgxqc","source":"nmpgu0m7f964b","target":"nmpgu0m7fdd5n","sourceHandle":"output_flow_else","targetHandle":"input_flow_check"},
+    {"id":"empgu0m7fzxzt","source":"nmpgu0m7fmg9b","target":"nmpgu0m7fdd5n","sourceHandle":"output_value_result","targetHandle":"input_value_condition"},
+    {"id":"empgu0m7fofwl","source":"nmpgu0m7fdd5n","target":"nmpgu0m7f6mjx","sourceHandle":"output_flow_then","targetHandle":"input_flow_do"},
+    {"id":"empgu0m7fazmp","source":"nmpgu0m7fdd5n","target":"nmpgu0m7facp8","sourceHandle":"output_flow_else","targetHandle":"input_flow_do"},
+    {"id":"empgu0m7fll87","source":"nmpgu0m7f7krj","target":"nmpgu0m7fzli9","sourceHandle":"output_value_value","targetHandle":"input_value_x"},
+    {"id":"empgu0m7f9nv5","source":"nmpgu0m7f4own","target":"nmpgu0m7fzli9","sourceHandle":"output_value_value","targetHandle":"input_value_y"},
+    {"id":"empgu0m7f9sgk","source":"nmpgu0m7f8qvg","target":"nmpgu0m7f8w81","sourceHandle":"output_flow_else","targetHandle":"input_flow_check"},
+    {"id":"empgu0m7fqyjt","source":"nmpgu0m7fzli9","target":"nmpgu0m7f8w81","sourceHandle":"output_value_result","targetHandle":"input_value_condition"},
+    {"id":"empgu0m7fa5bj","source":"nmpgu0m7f8w81","target":"nmpgu0m7fs2zz","sourceHandle":"output_flow_then","targetHandle":"input_flow_do"},
+    {"id":"empgu0m7ftrlm","source":"nmpgu0m7f4own","target":"nmpgu0m7fqkgo","sourceHandle":"output_value_value","targetHandle":"input_value_a"},
+    {"id":"empgu0m7fp9br","source":"nmpgu0m7f2psi","target":"nmpgu0m7fqkgo","sourceHandle":"output_value_value","targetHandle":"input_value_b"},
+    {"id":"empgu0m7fylt8","source":"nmpgu0m7f7krj","target":"nmpgu0m7fxg0i","sourceHandle":"output_value_value","targetHandle":"input_value_x"},
+    {"id":"empgu0m7fs0t4","source":"nmpgu0m7fqkgo","target":"nmpgu0m7fxg0i","sourceHandle":"output_value_result","targetHandle":"input_value_y"},
+    {"id":"empgu0m7fyvun","source":"nmpgu0m7f8w81","target":"nmpgu0m7fwxqe","sourceHandle":"output_flow_else","targetHandle":"input_flow_check"},
+    {"id":"empgu0m7f8frv","source":"nmpgu0m7fxg0i","target":"nmpgu0m7fwxqe","sourceHandle":"output_value_result","targetHandle":"input_value_condition"},
+    {"id":"empgu0m7fk4oh","source":"nmpgu0m7fwxqe","target":"nmpgu0m7fw2oa","sourceHandle":"output_flow_then","targetHandle":"input_flow_do"},
+    {"id":"empgu0m7f12s9","source":"nmpgu0m7fbmfb","target":"nmpgu0m7f1jym","sourceHandle":"output_value_y","targetHandle":"input_value_x"},
+    {"id":"empgu0m7f9cra","source":"nmpgu0m7fbmfb","target":"nmpgu0m7ft513","sourceHandle":"output_flow_do","targetHandle":"input_flow_check"},
+    {"id":"empgu0m7f1ngz","source":"nmpgu0m7f1jym","target":"nmpgu0m7ft513","sourceHandle":"output_value_result","targetHandle":"input_value_condition"},
+    {"id":"empgu0m7fl0yf","source":"nmpgu0m7ft513","target":"nmpgu0m7fxrq0","sourceHandle":"output_flow_then","targetHandle":"input_flow_do"},
+    {"id":"xy-edge__nmpgu0m7f94ywoutput_flow_then-nmpgu0m7fmy1pinput_flow_do","source":"nmpgu0m7f94yw","target":"nmpgu0m7fmy1p","sourceHandle":"output_flow_then","targetHandle":"input_flow_do"},
+    {"id":"empgwgchdy9l","source":"nmpgwgchd6xd","target":"nmpgu0m7f1jym","sourceHandle":"output_value_result","targetHandle":"input_value_y"},
+    {"id":"xy-edge__nmpgu0m7fbmfboutput_value_maxY-nmpgwgchd6xdinput_value_x","source":"nmpgu0m7fbmfb","target":"nmpgwgchd6xd","sourceHandle":"output_value_maxY","targetHandle":"input_value_x"},
+    {"id":"empgwwe0sfog","source":"nmpgwwb43dzb","target":"nmpgwwe0sef8","sourceHandle":"output_flow_do","targetHandle":"input_flow_check"},
+    {"id":"empgwwj1hgax","source":"nmpgwwj1hz5z","target":"nmpgwwe0sef8","sourceHandle":"output_value_value","targetHandle":"input_value_condition"},
+    {"id":"empgwwr7p2xa","source":"nmpgwwe0sef8","target":"nmpgwwr7o11n","sourceHandle":"output_flow_then","targetHandle":"input_flow_do"},
+    {"id":"xy-edge__nmpj37sa26wzoutput_value_value-nmpgu0m7efmu0input_value_x","source":"nmpj37sa26wz","target":"nmpgu0m7efmu0","sourceHandle":"output_value_value","targetHandle":"input_value_x"},
+    {"id":"xy-edge__nmpj37sa26wzoutput_value_value-nmpgu0m7eb2p6input_value_x","source":"nmpj37sa26wz","target":"nmpgu0m7eb2p6","sourceHandle":"output_value_value","targetHandle":"input_value_x"},
+    {"id":"xy-edge__nmpj386btkx4output_value_value-nmpgu0m7eb2p6input_value_y","source":"nmpj386btkx4","target":"nmpgu0m7eb2p6","sourceHandle":"output_value_value","targetHandle":"input_value_y"},
+    {"id":"xy-edge__nmpj38e9ik6ioutput_value_value-nmpgu0m7efmu0input_value_y","source":"nmpj38e9ik6i","target":"nmpgu0m7efmu0","sourceHandle":"output_value_value","targetHandle":"input_value_y"},
+    {"id":"xy-edge__nmpj3cl06s70output_value_indexes-nmpgu0m7eyla7input_value_array","source":"nmpj3cl06s70","target":"nmpgu0m7eyla7","sourceHandle":"output_value_indexes","targetHandle":"input_value_array"},
+    {"id":"empj3mb0xwdz","source":"nmpj3mb0xus6","target":"nmpgu0m7enqe5","sourceHandle":"output_value_value","targetHandle":"input_value_labelA"},
+    {"id":"empj3oav9ggv","source":"nmpgu0m7ewe7a","target":"nmpj3oav8hlj","sourceHandle":"output_value_value","targetHandle":"input_value_a"},
+    {"id":"xy-edge__nmpj3oav8hljoutput_value_result-nmpgu0m7f94ywinput_value_condition","source":"nmpj3oav8hlj","target":"nmpgu0m7f94yw","sourceHandle":"output_value_result","targetHandle":"input_value_condition"},
+    {"id":"empj3opa2qsp","source":"nmpgu0m7fyxwm","target":"nmpj3opa29oo","sourceHandle":"output_value_result","targetHandle":"input_value_a"},
+    {"id":"xy-edge__nmpj3opa29oooutput_value_result-nmpj3oav8hljinput_value_b","source":"nmpj3opa29oo","target":"nmpj3oav8hlj","sourceHandle":"output_value_result","targetHandle":"input_value_b"},
+    {"id":"xy-edge__nmpgu0m7f0il6output_value_result-nmpj3opa29ooinput_value_b","source":"nmpgu0m7f0il6","target":"nmpj3opa29oo","sourceHandle":"output_value_result","targetHandle":"input_value_b"},
+    {"id":"empj3sz2kex8","source":"nmpgu0m7enhie","target":"nmpj3sz2kgtz","sourceHandle":"output_flow_do","targetHandle":"input_flow_do"},
+    {"id":"xy-edge__nmpj3sz2kgtzoutput_flow_first-nmpgu0m7f94ywinput_flow_check","source":"nmpj3sz2kgtz","target":"nmpgu0m7f94yw","sourceHandle":"output_flow_first","targetHandle":"input_flow_check"},
+    {"id":"xy-edge__nmpj3sz2kgtzoutput_flow_then-nmpgu0m7e46m0input_flow_check","source":"nmpj3sz2kgtz","target":"nmpgu0m7e46m0","sourceHandle":"output_flow_then","targetHandle":"input_flow_check"},
+    {"id":"empj3vp78gcd","source":"nmpj3vp78jby","target":"nmpgu0m7e46m0","sourceHandle":"output_value_result","targetHandle":"input_value_condition"},
+    {"id":"xy-edge__nmpgu0m7eb2p6output_value_result-nmpj3vp78jbyinput_value_a","source":"nmpgu0m7eb2p6","target":"nmpj3vp78jby","sourceHandle":"output_value_result","targetHandle":"input_value_a"},
+    {"id":"xy-edge__nmpgu0m7efmu0output_value_result-nmpj3vp78jbyinput_value_b","source":"nmpgu0m7efmu0","target":"nmpj3vp78jby","sourceHandle":"output_value_result","targetHandle":"input_value_b"},
+    {"id":"xy-edge__nmpj3xhik0dfoutput_flow_then_2-nmpgu0m7ehs6tinput_flow_check","source":"nmpj3xhik0df","target":"nmpgu0m7ehs6t","sourceHandle":"output_flow_then_2","targetHandle":"input_flow_check"},
+    {"id":"xy-edge__nmpgu0m7ehs6toutput_flow_then-nmpgu0m7e3f1zinput_flow_do","source":"nmpgu0m7ehs6t","target":"nmpgu0m7e3f1z","sourceHandle":"output_flow_then","targetHandle":"input_flow_do"},
+    {"id":"xy-edge__nmpj3xhik0dfoutput_flow_then-nmpgu0m7ehs6tinput_flow_check","source":"nmpj3xhik0df","target":"nmpgu0m7ehs6t","sourceHandle":"output_flow_then","targetHandle":"input_flow_check"},
+    {"id":"e_mpj7c6x9_0_kq6","source":"nmpj7c6x9d5o","target":"nmpj7c6x97ej","sourceHandle":"output_value_result","targetHandle":"input_value_condition"},
+    {"id":"e_mpj7c6x9_1_0ai","source":"nmpj7c6x9xcx","target":"nmpj7c6x9d5o","sourceHandle":"output_value_value","targetHandle":"input_value_x"},
+    {"id":"e_mpj7c6x9_2_937","source":"nmpj7c6x918d","target":"nmpj7c6x9d5o","sourceHandle":"output_value_values","targetHandle":"input_value_values"},
+    {"id":"xy-edge__nmpgu0m7e46m0output_flow_then-nmpj7c6x97ejinput_flow_check","source":"nmpgu0m7e46m0","target":"nmpj7c6x97ej","sourceHandle":"output_flow_then","targetHandle":"input_flow_check"},
+    {"id":"xy-edge__nmpj7c6x97ejoutput_flow_then-nmpj3xhik0dfinput_flow_do","source":"nmpj7c6x97ej","target":"nmpj3xhik0df","sourceHandle":"output_flow_then","targetHandle":"input_flow_do"},
+    {"id":"xy-edge__nmpj3xhik0dfoutput_flow_first-nmpgu0m7e97wvinput_flow_do","source":"nmpj3xhik0df","target":"nmpgu0m7e97wv","sourceHandle":"output_flow_first","targetHandle":"input_flow_do"},
+    {"id":"empj8enou9hw","source":"nmpgu0m7e97wv","target":"nmpj8enou9un","sourceHandle":"output_flow_body","targetHandle":"input_flow_check"},
+    {"id":"xy-edge__nmpgu0m7eacnzoutput_value_result-nmpj8enou9uninput_value_condition","source":"nmpgu0m7eacnz","target":"nmpj8enou9un","sourceHandle":"output_value_result","targetHandle":"input_value_condition"},
+    {"id":"xy-edge__nmpj8enou9unoutput_flow_then-nmpgu0m7eplurinput_flow_do","source":"nmpj8enou9un","target":"nmpgu0m7eplur","sourceHandle":"output_flow_then","targetHandle":"input_flow_do"},
+    {"id":"nmpj94zllwwh_ein_0","source":"nmpgu0m7e97wv","target":"nmpj94zllwwh","sourceHandle":"output_value_element","targetHandle":"input_value_in_0"},
+    {"id":"nmpj94zllwwh_ein_1","source":"nmpgu0m7e97wv","target":"nmpj94zllwwh","sourceHandle":"output_value_index","targetHandle":"input_value_in_1"},
+    {"id":"nmpj94zllwwh_eout_0","source":"nmpj94zllwwh","target":"nmpgu0m7eplur","sourceHandle":"output_value_out_0","targetHandle":"input_value_value"}
+  ],
+  "macroDefs": [
+    {
+      "id": "macro_mpj94zlk",
+      "name": "Calculate Weight[d]",
+      "nodes": [
+        {"id":"nmpgu0m7ei3y0","type":"caNode","position":{"x":-379,"y":18.888888888888914},"data":{"nodeType":"getAllNeighborIndexes","config":{"neighborhoodId":"far","_resolvedPackedAll":"[-131072,2,131072,65534]"},"label":"NIs (far)","isCollapsed":true}},
+        {"id":"nmpgu0m7e4zbc","type":"caNode","position":{"x":-286,"y":17.888888888888914},"data":{"nodeType":"getNeighborsAttrByIndexes","config":{"attributeId":"cellType"},"label":"far types[4]","isCollapsed":true}},
+        {"id":"nmpgu0m7e1c2l","type":"caNode","position":{"x":-144,"y":4.888888888888914},"data":{"nodeType":"arrayElement","config":{"_elemKind":"value"},"label":"far[d]","isCollapsed":true}},
+        {"id":"nmpgu0m7epreh","type":"caNode","position":{"x":-41,"y":-44.111111111111086},"data":{"nodeType":"lookupInteraction","config":{"tableId":"J","_rowCount":5,"_colCount":5},"label":"J(my, far)"}},
+        {"id":"nmpj3mf7c7eg","type":"caNode","position":{"x":-189,"y":-28.111111111111086},"data":{"nodeType":"getCellAttribute","config":{"attributeId":"cellType"},"isCollapsed":true}},
+        {"id":"nmpj827bcc3q","type":"caNode","position":{"x":272.31715732284965,"y":5.80796748363619},"data":{"nodeType":"getModelAttribute","config":{"attributeId":"gravity","isColorAttr":false},"label":"gravity G","isCollapsed":true}},
+        {"id":"nmpj8hps0wtk","type":"caNode","position":{"x":396.5404607026264,"y":-64.35275281648063},"data":{"nodeType":"expression","config":{"expression":"J + is_south*G","visibleCount":3,"_port_a":"0","_port_b":"0","_port_c":"0","_port_d":"0","_port_e":"0","_port_f":"0","_port_g":"0","_port_h":"0","_varName_a":"is_south","_varName_b":"J","_varName_c":"G"},"isCollapsed":false}},
+        {"id":"mi_macro_mpj94zlk","type":"caNode","position":{"x":-640,"y":-100},"data":{"nodeType":"macroInput","config":{"macroDefId":"macro_mpj94zlk"}}},
+        {"id":"mo_macro_mpj94zlk","type":"caNode","position":{"x":649.5533932404464,"y":-98.25889887340776},"data":{"nodeType":"macroOutput","config":{"macroDefId":"macro_mpj94zlk"}}},
+        {"id":"nmpj97jy0duc","type":"caNode","position":{"x":191.2944943670388,"y":-99.12944943670388},"data":{"nodeType":"statement","config":{"operation":"==","lowOp":">=","highOp":"<=","_port_x":"0","_port_y":"2","_port_y2":"0"},"label":"d == South","isCollapsed":false}}
+      ],
+      "edges": [
+        {"id":"empgu0m7ewy8c","source":"nmpgu0m7ei3y0","target":"nmpgu0m7e4zbc","sourceHandle":"output_value_indexes","targetHandle":"input_value_indexes"},
+        {"id":"empgu0m7edw6q","source":"nmpgu0m7e4zbc","target":"nmpgu0m7e1c2l","sourceHandle":"output_value_values","targetHandle":"input_value_array"},
+        {"id":"empgu0m7ebgj4","source":"nmpgu0m7e1c2l","target":"nmpgu0m7epreh","sourceHandle":"output_value_value","targetHandle":"input_value_labelB"},
+        {"id":"empj3mf7cfnq","source":"nmpj3mf7c7eg","target":"nmpgu0m7epreh","sourceHandle":"output_value_value","targetHandle":"input_value_labelA"},
+        {"id":"xy-edge__nmpj827bcc3qoutput_value_value-nmpj8hps0wtkinput_value_c","source":"nmpj827bcc3q","target":"nmpj8hps0wtk","sourceHandle":"output_value_value","targetHandle":"input_value_c"},
+        {"id":"bridge_in_macro_mpj94zlk_1","source":"mi_macro_mpj94zlk","target":"nmpgu0m7e1c2l","sourceHandle":"output_value_in_1","targetHandle":"input_value_position"},
+        {"id":"bridge_out_macro_mpj94zlk_0","source":"nmpj8hps0wtk","target":"mo_macro_mpj94zlk","sourceHandle":"output_value_result","targetHandle":"input_value_out_0"},
+        {"id":"empj97jy0vhp","source":"mi_macro_mpj94zlk","target":"nmpj97jy0duc","sourceHandle":"output_value_in_1","targetHandle":"input_value_x"},
+        {"id":"xy-edge__nmpj97jy0ducoutput_value_result-nmpj8hps0wtkinput_value_a","source":"nmpj97jy0duc","target":"nmpj8hps0wtk","sourceHandle":"output_value_result","targetHandle":"input_value_a"},
+        {"id":"xy-edge__nmpgu0m7eprehoutput_value_value-nmpj8hps0wtkinput_value_b","source":"nmpgu0m7epreh","target":"nmpj8hps0wtk","sourceHandle":"output_value_value","targetHandle":"input_value_b"}
+      ],
+      "exposedInputs": [
+        {
+          "portId": "in_1",
+          "label": "Index of d",
+          "dataType": "any",
+          "category": "value",
+          "internalNodeId": "mi_macro_mpj94zlk",
+          "internalPortId": "in_1"
+        }
+      ],
+      "exposedOutputs": [
+        {
+          "portId": "out_0",
+          "label": "Weight[d]",
+          "dataType": "any",
+          "category": "value",
+          "internalNodeId": "mo_macro_mpj94zlk",
+          "internalPortId": "out_0"
+        }
+      ]
     }
   ],
-  "macroDefs": [],
   "presets": [
     {
-      "id": "preset_mpi28sjnweic",
+      "id": "preset_mpgu0m7gbo24",
       "name": "Standard — two-solute separation (Table 1)",
       "description": "Paper Table 1 standard rule set + gravity 10. S1 (weak B-affinity) outruns S2 (strong B-affinity); the injected band separates into two peaks (Fig. 3).",
       "state": {
@@ -2352,7 +634,7 @@
       "createdAt": 1747000000000
     },
     {
-      "id": "preset_mpi28sjn7zpd",
+      "id": "preset_mpgu0m7gfi16",
       "name": "Affinity — PB(SB)=0.10, J(SB)=2.00 (k'=1.193) [Table 2]",
       "description": "Paper Table 2: both solutes given the same stationary-phase affinity. Capacity factor k'=1.193. Higher affinity (lower PB, higher J) → slower migration → peak stays higher up the column.",
       "state": {
@@ -2440,7 +722,7 @@
       "createdAt": 1747000001000
     },
     {
-      "id": "preset_mpi28sjndm8q",
+      "id": "preset_mpgu0m7gs85n",
       "name": "Affinity — PB(SB)=0.30, J(SB)=1.20 (k'=0.246) [Table 2]",
       "description": "Paper Table 2: both solutes given the same stationary-phase affinity. Capacity factor k'=0.246. Higher affinity (lower PB, higher J) → slower migration → peak stays higher up the column.",
       "state": {
@@ -2528,7 +810,7 @@
       "createdAt": 1747000002000
     },
     {
-      "id": "preset_mpi28sjnbsso",
+      "id": "preset_mpgu0m7gupuf",
       "name": "Affinity — PB(SB)=0.50, J(SB)=0.80 (k'=0.158) [Table 2]",
       "description": "Paper Table 2: both solutes given the same stationary-phase affinity. Capacity factor k'=0.158. Higher affinity (lower PB, higher J) → slower migration → peak stays higher up the column.",
       "state": {
@@ -2616,7 +898,7 @@
       "createdAt": 1747000003000
     },
     {
-      "id": "preset_mpi28sjnrl3w",
+      "id": "preset_mpgu0m7g6opq",
       "name": "Affinity — PB(SB)=0.70, J(SB)=0.60 (k'=0.096) [Table 2]",
       "description": "Paper Table 2: both solutes given the same stationary-phase affinity. Capacity factor k'=0.096. Higher affinity (lower PB, higher J) → slower migration → peak stays higher up the column.",
       "state": {
@@ -2704,7 +986,7 @@
       "createdAt": 1747000004000
     },
     {
-      "id": "preset_mpi28sjnrkcv",
+      "id": "preset_mpgu0m7g8csu",
       "name": "Affinity — PB(SB)=0.90, J(SB)=0.20 (k'=0.035) [Table 2]",
       "description": "Paper Table 2: both solutes given the same stationary-phase affinity. Capacity factor k'=0.035. Higher affinity (lower PB, higher J) → slower migration → peak stays higher up the column.",
       "state": {
@@ -2792,7 +1074,7 @@
       "createdAt": 1747000005000
     },
     {
-      "id": "preset_mpi28sjnadng",
+      "id": "preset_mpgu0m7g24zw",
       "name": "Flow rate — gravity 2 [Table 4]",
       "description": "Paper Table 4: standard tables, gravity (flow rate) = 2. Faster flow → shorter retention. Watch both solute peaks reach the bottom sooner as gravity rises.",
       "state": {
@@ -2880,7 +1162,7 @@
       "createdAt": 1747000006000
     },
     {
-      "id": "preset_mpi28sjnis36",
+      "id": "preset_mpgu0m7gsca7",
       "name": "Flow rate — gravity 5 [Table 4]",
       "description": "Paper Table 4: standard tables, gravity (flow rate) = 5. Faster flow → shorter retention. Watch both solute peaks reach the bottom sooner as gravity rises.",
       "state": {
@@ -2968,7 +1250,7 @@
       "createdAt": 1747000007000
     },
     {
-      "id": "preset_mpi28sjnthc6",
+      "id": "preset_mpgu0m7gsfol",
       "name": "Flow rate — gravity 10 [Table 4]",
       "description": "Paper Table 4: standard tables, gravity (flow rate) = 10. Faster flow → shorter retention. Watch both solute peaks reach the bottom sooner as gravity rises.",
       "state": {
@@ -3056,7 +1338,7 @@
       "createdAt": 1747000008000
     },
     {
-      "id": "preset_mpi28sjnhzn7",
+      "id": "preset_mpgu0m7g7ziy",
       "name": "Solvent polarity — PB(W)=0.90, J(W)=0.10 (non-polar) [Table 5]",
       "description": "Paper Table 5: W–W self-association encodes solvent polarity. non-polar. Migration is faster in non-polar solvents (reversed-phase behaviour).",
       "state": {
@@ -3144,7 +1426,7 @@
       "createdAt": 1747000009000
     },
     {
-      "id": "preset_mpi28sjn3qq0",
+      "id": "preset_mpgu0m7g32wp",
       "name": "Solvent polarity — PB(W)=0.50, J(W)=0.70 (intermediate) [Table 5]",
       "description": "Paper Table 5: W–W self-association encodes solvent polarity. intermediate. Migration is faster in non-polar solvents (reversed-phase behaviour).",
       "state": {
@@ -3232,7 +1514,7 @@
       "createdAt": 1747000010000
     },
     {
-      "id": "preset_mpi28sjns9yp",
+      "id": "preset_mpgu0m7g0xdq",
       "name": "Solvent polarity — PB(W)=0.25, J(W)=1.50 (polar) [Table 5]",
       "description": "Paper Table 5: W–W self-association encodes solvent polarity. polar. Migration is faster in non-polar solvents (reversed-phase behaviour).",
       "state": {
@@ -3320,7 +1602,7 @@
       "createdAt": 1747000011000
     },
     {
-      "id": "preset_mpi28sjne1k8",
+      "id": "preset_mpgu0m7go1b3",
       "name": "Stationary solvation — PB(WB)=0.90, J(WB)=0.10 (Rs=1.125) [Table 6]",
       "description": "Paper Table 6: solvation of the stationary phase (W–B interaction). Resolution Rs=1.125. Greater solvation of B → poorer resolution between the two solute peaks.",
       "state": {
@@ -3408,7 +1690,7 @@
       "createdAt": 1747000012000
     },
     {
-      "id": "preset_mpi28sjn77e2",
+      "id": "preset_mpgu0m7g2o9s",
       "name": "Stationary solvation — PB(WB)=0.50, J(WB)=0.80 (Rs=0.667) [Table 6]",
       "description": "Paper Table 6: solvation of the stationary phase (W–B interaction). Resolution Rs=0.667. Greater solvation of B → poorer resolution between the two solute peaks.",
       "state": {
@@ -3496,7 +1778,7 @@
       "createdAt": 1747000013000
     },
     {
-      "id": "preset_mpi28sjnddm4",
+      "id": "preset_mpgu0m7gfrxo",
       "name": "Stationary solvation — PB(WB)=0.20, J(WB)=1.50 (Rs=0.556) [Table 6]",
       "description": "Paper Table 6: solvation of the stationary phase (W–B interaction). Resolution Rs=0.556. Greater solvation of B → poorer resolution between the two solute peaks.",
       "state": {
@@ -3584,7 +1866,7 @@
       "createdAt": 1747000014000
     },
     {
-      "id": "preset_mpi28sjnai16",
+      "id": "preset_mpgu0m7geahc",
       "name": "Solute+stationary solvation — PB=0.90, J=0.20 [Table 7]",
       "description": "Paper Table 7: solvation of BOTH the solutes and the stationary phase (W–B, W–S1, W–S2 set together). Stronger solvent–solute interaction reduces retention and resolution.",
       "state": {
@@ -3672,7 +1954,7 @@
       "createdAt": 1747000015000
     },
     {
-      "id": "preset_mpi28sjn7z86",
+      "id": "preset_mpgu0m7g7ws6",
       "name": "Solute+stationary solvation — PB=0.20, J=1.50 [Table 7]",
       "description": "Paper Table 7: solvation of BOTH the solutes and the stationary phase (W–B, W–S1, W–S2 set together). Stronger solvent–solute interaction reduces retention and resolution.",
       "state": {
