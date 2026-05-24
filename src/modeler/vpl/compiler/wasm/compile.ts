@@ -5661,11 +5661,11 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
     const payloadCount = Math.max(1, Number(node.data.config.payloadCount) || 1);
     const operation = (node.data.config.operation as string) || 'copyTo';
     const resetSource = ((node.data.config.nonReceiving as string) || 'defaults') === 'defaults';
-    const includeOri = !!node.data.config.includeOrientation;
-    if (includeOri && !ctx.layout.variegatedEnabled) {
-      ctx.errors.push('moveSelfToNeighbor: includeOrientation requires variegated cells');
-      return false;
-    }
+    // Orientation only exists in Variegated Cells models. Silently ignore a
+    // stale `includeOrientation` on a non-variegated model — the orientation
+    // region isn't allocated there, so emitting a transfer would corrupt
+    // memory. The modeler still surfaces a validation badge for the mismatch.
+    const includeOri = !!node.data.config.includeOrientation && ctx.layout.variegatedEnabled;
     const niRef = inputs['targetNI'] ?? { inline: true, value: 0, valtype: I32 };
     // Resolve target NI + cell index once.
     const niLocal = em.allocLocal(I32);

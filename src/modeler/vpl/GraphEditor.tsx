@@ -1349,7 +1349,12 @@ export function GraphEditorInner() {
       const members: Array<{ id: string; startX: number; startY: number }> = [];
       for (const n of nodesRef.current) {
         if (n.id === node.id) continue;
-        if (n.type === 'groupNode') continue;
+        // Include nested group nodes too: a smaller group whose center sits
+        // inside this group's rect should translate with it. Its own children
+        // are collected independently (their centers are inside this rect as
+        // well), so arbitrarily-deep nesting moves in lock-step without
+        // recursion. Membership stays purely geometric — groups have no
+        // parentId — matching how caNodes are already gathered.
         const c = nodeCenter(n);
         if (c.x > rect.x1 && c.x < rect.x2 && c.y > rect.y1 && c.y < rect.y2) {
           members.push({ id: n.id, startX: n.position.x, startY: n.position.y });
@@ -2767,9 +2772,35 @@ export function GraphEditorInner() {
         .map(n => n.id),
     );
 
-    // Restore subgraph nodes at macro node's position (excluding boundary nodes)
-    const offsetX = macroNode.position.x;
-    const offsetY = macroNode.position.y;
+    // Restore subgraph nodes centered on the macro node (excluding boundary
+    // nodes). Internal positions can't be assumed relative to (0,0): that only
+    // holds for macros built via Create-from-Selection. Macros created by
+    // import (.gcamacro) or palette drop carry absolute coords, so naively
+    // adding macroNode.position flung them far away. Instead, align the
+    // internal cluster's bounding-box center to the macro node's center —
+    // origin-independent, so the dissolved nodes land where the macro was.
+    const internalNodes = macroDef.nodes.filter(n => !boundaryNodeIds.has(n.id));
+    let offsetX = macroNode.position.x;
+    let offsetY = macroNode.position.y;
+    if (internalNodes.length > 0) {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const n of internalNodes) {
+        const d = n.data as Record<string, unknown> | undefined;
+        const w = typeof d?.width === 'number' ? (d.width as number) : 200;
+        const h = typeof d?.height === 'number'
+          ? (d.height as number)
+          : (d?.isCollapsed ? 32 : 100);
+        minX = Math.min(minX, n.position.x);
+        minY = Math.min(minY, n.position.y);
+        maxX = Math.max(maxX, n.position.x + w);
+        maxY = Math.max(maxY, n.position.y + h);
+      }
+      const clusterCx = (minX + maxX) / 2;
+      const clusterCy = (minY + maxY) / 2;
+      const { w: mw, h: mh } = nodeSize(macroNode);
+      offsetX = (macroNode.position.x + mw / 2) - clusterCx;
+      offsetY = (macroNode.position.y + mh / 2) - clusterCy;
+    }
     const restoredRFNodes: Node[] = macroDef.nodes
       .filter(n => !boundaryNodeIds.has(n.id))
       .map(n => ({

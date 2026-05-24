@@ -1951,6 +1951,12 @@ export function compileGraph(
         const normalised = raw === 'true' ? '1' : raw === 'false' ? '0' : raw;
         node.data.config[`_attr_${i}_default`] = normalised;
       }
+      // Orientation only exists in Variegated Cells models. Bake the resolved
+      // decision so the JS emit never references the (unallocated) orientation
+      // buffer when a stale `includeOrientation: true` lingers on a model whose
+      // variegation was later turned off (or a hand-edited file).
+      node.data.config._includeOriResolved =
+        !!node.data.config.includeOrientation && !!model!.variegatedCells?.enabled;
     }
   }
   preResolveMoveNodes(graphNodes);

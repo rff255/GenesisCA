@@ -50,7 +50,13 @@ export const MoveSelfToNeighborNode: NodeTypeDef = {
     const payloadCount = Math.max(1, Number(config.payloadCount) || 1);
     const operation = (config.operation as string) || 'copyTo';
     const resetSource = ((config.nonReceiving as string) || 'defaults') === 'defaults';
-    const includeOri = !!config.includeOrientation;
+    // `_includeOriResolved` is baked by preResolveMoveNodes (includeOrientation
+    // AND the model being variegated). Honour it so a stale `true` on a
+    // non-variegated model can't emit a w_orientation reference that doesn't
+    // exist. Fall back to the raw flag if pre-resolve hasn't run.
+    const includeOri = config._includeOriResolved !== undefined
+      ? !!config._includeOriResolved
+      : !!config.includeOrientation;
     const ni = inputs['targetNI'] || '0';
     const b = boundary || 'torus';
     const lines: string[] = [];
