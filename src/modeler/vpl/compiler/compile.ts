@@ -472,6 +472,20 @@ function compileRoot(
   let bodyDependents: Set<string> | null = null;
   let bodyCompiled: Set<string> = new Set();
 
+  // Route a macro-inlined line through the same sink-analysis machinery as a
+  // regular value node, keyed on the macro INSTANCE's emit scope. The macro
+  // branch in `compileValueNode` short-circuits before the normal routing and
+  // the macro is typically compiled during the `collectValueDeps` pre-pass
+  // (when `bodyTarget` is still null) — so we must NOT push straight to
+  // `valueLines`/`bodyTarget`. `routeValueEmit` sends the lines to
+  // `branchValueLines[scope]`, which `flushBranchValues` later flushes into the
+  // correct block (e.g. INSIDE a forEachInArray loop for an iteration-dependent
+  // macro). For a loop-invariant macro the scope is CELL_TOP → cell-top, as
+  // before.
+  function emitMacroLine(anchorNodeId: string, code: string): void {
+    routeValueEmit(anchorNodeId, code);
+  }
+
   /** Forward-BFS from `(forEachNodeId, 'element')` AND `(forEachNodeId, 'index')`
    *  through value-input consumers. Returns the transitive closure of value
    *  nodes whose computation depends on either iteration variable. Without
@@ -491,12 +505,24 @@ function compileRoot(
         result.add(consumerId);
         const consumerNode = nodeMap.get(consumerId);
         const consumerDef = consumerNode ? getNodeDef(consumerNode.data.nodeType) : null;
-        if (!consumerDef) return;
-        for (const port of consumerDef.ports) {
-          if (port.kind === 'output' && port.category === 'value') {
-            queue.push({ nodeId: consumerId, portId: port.id });
+        const outPorts = new Set<string>();
+        if (consumerDef) {
+          for (const port of consumerDef.ports) {
+            if (port.kind === 'output' && port.category === 'value') outPorts.add(port.id);
           }
         }
+        // Dynamic value-output ports (e.g. MACRO outputs) aren't in def.ports —
+        // discover the consumer's actual output ports from the edge map so the
+        // BFS can traverse THROUGH a macro to whatever consumes its output.
+        // Without this, a value reached only via a macro never lands in the
+        // element-dependent set and gets hoisted out of the forEach loop.
+        for (const [, source] of inputToSource) {
+          if (source.nodeId === consumerId) outPorts.add(source.portId);
+        }
+        for (const [, sources] of inputToSources) {
+          for (const s of sources) if (s.nodeId === consumerId) outPorts.add(s.portId);
+        }
+        for (const portId of outPorts) queue.push({ nodeId: consumerId, portId });
       };
       for (const [key, source] of inputToSource) {
         if (source.nodeId === src.nodeId && source.portId === src.portId) {
@@ -575,17 +601,17 @@ function compileRoot(
     if (!macroDefId || !_model) return;
     const macroDef = (_model.macroDefs || []).find(m => m.id === macroDefId);
     if (!macroDef) {
-      valueLines.push(`      // ERROR: MacroDef "${macroDefId}" not found`);
+      emitMacroLine(macroNodeId, `// ERROR: MacroDef "${macroDefId}" not found`);
       return;
     }
 
     // Recursion guard
     if (expandingMacroDefs.has(macroDefId)) {
-      valueLines.push(`      // ERROR: Circular macro reference "${macroDef.name}"`);
+      emitMacroLine(macroNodeId, `// ERROR: Circular macro reference "${macroDef.name}"`);
       return;
     }
     if (expandingMacroDefs.size >= 20) {
-      valueLines.push(`      // ERROR: Macro nesting depth exceeded (max 20)`);
+      emitMacroLine(macroNodeId, `// ERROR: Macro nesting depth exceeded (max 20)`);
       return;
     }
     expandingMacroDefs.add(macroDefId);
@@ -708,7 +734,7 @@ function compileRoot(
           new RegExp(`\\b_nb${innerNodeId}\\b`, 'g'),
           `${prefix}_nb${innerNodeId}`,
         );
-        valueLines.push('      ' + scopedCode.trimEnd());
+        emitMacroLine(macroNodeId, scopedCode.trimEnd());
       }
     }
 
@@ -720,7 +746,7 @@ function compileRoot(
           compileInnerValueNode(src.nodeId);
           // Emit output assignment: _v${macroNodeId}_${portId} = innerVar
           const innerVar = innerVarName(src.nodeId, src.portId);
-          valueLines.push(`      const _v${macroNodeId}_${ep.portId} = ${innerVar};`);
+          emitMacroLine(macroNodeId, `const _v${macroNodeId}_${ep.portId} = ${innerVar};`);
         }
       }
     }
@@ -744,7 +770,7 @@ function compileRoot(
     if (!macroDef) return;
 
     if (expandingMacroDefs.has(macroDefId) || expandingMacroDefs.size >= 20) {
-      valueLines.push(`      // ERROR: Circular/deep macro "${macroDef.name}"`);
+      emitMacroLine(outerMacroNodeId, `// ERROR: Circular/deep macro "${macroDef.name}"`);
       return;
     }
     expandingMacroDefs.add(macroDefId);
@@ -849,7 +875,7 @@ function compileRoot(
           .replace(new RegExp(`\\b_v${nid}\\b`, 'g'), `${nestedPrefix}_v${nid}`)
           .replace(new RegExp(`\\b_scr_${nid}\\b`, 'g'), `${nestedPrefix}_scr_${nid}`)
           .replace(new RegExp(`\\b_nb${nid}\\b`, 'g'), `${nestedPrefix}_nb${nid}`);
-        valueLines.push('      ' + scopedCode.trimEnd());
+        emitMacroLine(outerMacroNodeId, scopedCode.trimEnd());
       }
     }
 
@@ -862,9 +888,9 @@ function compileRoot(
           // Use parent prefix for the inner macro node's output variables
           const parentNode = parentAdjacency.nodeMap.get(innerMacroNodeId);
           if (parentNode && isMultiOutput(parentNode.data)) {
-            valueLines.push(`      const ${parentPrefix}_v${innerMacroNodeId}_${ep.portId} = ${innerVar};`);
+            emitMacroLine(outerMacroNodeId, `const ${parentPrefix}_v${innerMacroNodeId}_${ep.portId} = ${innerVar};`);
           } else {
-            valueLines.push(`      const ${parentPrefix}_v${innerMacroNodeId} = ${innerVar};`);
+            emitMacroLine(outerMacroNodeId, `const ${parentPrefix}_v${innerMacroNodeId} = ${innerVar};`);
           }
         }
       }

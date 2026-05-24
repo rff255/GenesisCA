@@ -376,12 +376,25 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
         const cnode = adj.nodeMap.get(cid);
         if (!cnode) return;
         const cdef = getNodeDef(cnode.data.nodeType);
-        if (!cdef) return;
-        for (const cport of cdef.ports) {
-          if (cport.kind === 'output' && cport.category === 'value') {
-            queue.push({ nodeId: cid, portId: cport.id });
+        const outPorts = new Set<string>();
+        if (cdef) {
+          for (const cport of cdef.ports) {
+            if (cport.kind === 'output' && cport.category === 'value') outPorts.add(cport.id);
           }
         }
+        // Dynamic value-output ports (e.g. MACRO outputs) aren't in def.ports —
+        // discover the consumer's actual output ports from the edge map so the
+        // walk traverses THROUGH a macro. Otherwise a value reached only via a
+        // macro is missing from elementDependentsByForEach and hoistPastLoops
+        // wrongly evicts it from the forEach body. (JS compiler only — WASM/
+        // WebGPU pre-expand macros, so they never feed a macro node here.)
+        for (const [, source] of adj.inputToSource) {
+          if (source.nodeId === cid) outPorts.add(source.portId);
+        }
+        for (const [, sources] of adj.inputToSources) {
+          for (const s of sources) if (s.nodeId === cid) outPorts.add(s.portId);
+        }
+        for (const portId of outPorts) queue.push({ nodeId: cid, portId });
       };
       for (const [key, source] of adj.inputToSource) {
         if (source.nodeId === src.nodeId && source.portId === src.portId) {
