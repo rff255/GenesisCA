@@ -10,6 +10,8 @@ import { analyzeSinkScopes, CELL_TOP, type ScopeId } from './sinkAnalysis';
 import { canonicalizeAccessorEdges } from './accessorCSE';
 import { injectLinkedOutputMappings } from './linkedOutputMappings';
 import { collapseReroutes } from './rerouteCollapse';
+import { expandMacros } from './macroExpand';
+import { computeVolatileHoist } from './volatileHoist';
 import {
   isSubAttribute,
   subAttrInfo,
@@ -422,22 +424,39 @@ function compileRoot(
   // scope and flush them at scope entry — but that's BEFORE the mutating
   // flow children run, so the read would see the variable's initial value
   // instead of the post-mutation value. We bypass sinkAnalysis for these
-  // and emit inline at the use site instead: the first time a consumer
-  // references a volatile value inside compileFlowChain, the value's code
-  // lands at the current flow-walk position. The `compiled` set still
-  // dedups so each volatile chain emits at most once per cell-step. Single-
-  // use is the typical pattern (e.g. Amphiphile's sumW feeds exactly one
-  // condCanMove); multi-use across mutations would need re-emit logic
-  // (not implemented in v1 — would surface as stale reads).
+  // and emit them via `volatileHoist` instead: each volatile value is emitted
+  // at the LCA flow scope of all its uses, immediately before the first flow
+  // node there whose subtree references it — AFTER the mutating flow siblings
+  // (so the read sees post-write state) and dominating every branch (so
+  // multi-branch uses, e.g. across switch cases, all see one declaration).
+  // Single-use volatiles resolve to their one consumer — identical to the old
+  // inline behaviour. The `compiled` set still dedups so each chain emits once.
   const volatileValues = computeVolatileValueClosure(graphNodes, inputToSource, inputToSources);
+  const volatileHoist = computeVolatileHoist({
+    nodeMap,
+    inputToSource,
+    inputToSources,
+    flowOutputToTargets,
+    rootNodeId: rootNode.id,
+    rootFlowPortId: rootFlowPort,
+    volatile: volatileValues,
+  }).emitBefore;
   // Tracks the current compileFlowChain emit position so volatile values
   // can route inline. Set at the top of compileFlowChain and inside each
   // branch (then/else/body/case_N) recursion.
   let volatileEmitTarget: string[] | null = null;
   let volatileEmitIndent: string = '    ';
+  // True only while force-emitting a volatile value (and its transitive value
+  // inputs) before a flow node, per volatileHoist. In this window EVERY emission
+  // — including a non-volatile input reachable ONLY through the volatile (e.g. a
+  // getRandom feeding volatile arithmetic) — must land at the current flow
+  // position, NOT its sink branch buffer (already flushed at branch entry) nor
+  // cell-top. Without this the input is declared into a dead buffer and is
+  // undefined at runtime in the branch that uses it.
+  let forceVolatileCurrentScope = false;
 
   function routeValueEmit(nodeId: string, code: string): void {
-    if (volatileValues.has(nodeId) && volatileEmitTarget) {
+    if ((forceVolatileCurrentScope || volatileValues.has(nodeId)) && volatileEmitTarget) {
       // Inline emit at the current flow-walk position. flowLines (or a
       // branch's accumulator) gets the line right where we are.
       volatileEmitTarget.push(volatileEmitIndent + code.trimEnd());
@@ -472,20 +491,6 @@ function compileRoot(
   let bodyIndent: string = '';
   let bodyDependents: Set<string> | null = null;
   let bodyCompiled: Set<string> = new Set();
-
-  // Route a macro-inlined line through the same sink-analysis machinery as a
-  // regular value node, keyed on the macro INSTANCE's emit scope. The macro
-  // branch in `compileValueNode` short-circuits before the normal routing and
-  // the macro is typically compiled during the `collectValueDeps` pre-pass
-  // (when `bodyTarget` is still null) — so we must NOT push straight to
-  // `valueLines`/`bodyTarget`. `routeValueEmit` sends the lines to
-  // `branchValueLines[scope]`, which `flushBranchValues` later flushes into the
-  // correct block (e.g. INSIDE a forEachInArray loop for an iteration-dependent
-  // macro). For a loop-invariant macro the scope is CELL_TOP → cell-top, as
-  // before.
-  function emitMacroLine(anchorNodeId: string, code: string): void {
-    routeValueEmit(anchorNodeId, code);
-  }
 
   /** Forward-BFS from `(forEachNodeId, 'element')` AND `(forEachNodeId, 'index')`
    *  through value-input consumers. Returns the transitive closure of value
@@ -587,319 +592,6 @@ function compileRoot(
     return `_v${sourceNodeId}`;
   }
 
-  // Track macro definitions currently being expanded (recursion guard)
-  const expandingMacroDefs = new Set<string>();
-
-  /**
-   * Inline a macro's value subgraph. Compiles all internal value nodes with
-   * scoped variable names, then emits output assignments.
-   */
-  function inlineMacroValues(macroNodeId: string, macroNode: GraphNode): void {
-    if (compiled.has(`__macro_${macroNodeId}`)) return;
-    compiled.add(`__macro_${macroNodeId}`);
-
-    const macroDefId = macroNode.data.config.macroDefId as string;
-    if (!macroDefId || !_model) return;
-    const macroDef = (_model.macroDefs || []).find(m => m.id === macroDefId);
-    if (!macroDef) {
-      emitMacroLine(macroNodeId, `// ERROR: MacroDef "${macroDefId}" not found`);
-      return;
-    }
-
-    // Recursion guard
-    if (expandingMacroDefs.has(macroDefId)) {
-      emitMacroLine(macroNodeId, `// ERROR: Circular macro reference "${macroDef.name}"`);
-      return;
-    }
-    if (expandingMacroDefs.size >= 20) {
-      emitMacroLine(macroNodeId, `// ERROR: Macro nesting depth exceeded (max 20)`);
-      return;
-    }
-    expandingMacroDefs.add(macroDefId);
-
-    // Build local adjacency for the macro's internal graph
-    const inner = buildAdjacency(macroDef.nodes, macroDef.edges);
-    const prefix = `_m${macroNodeId}`;
-
-    // Find boundary nodes
-    const macroInputNode = macroDef.nodes.find(
-      n => (n.data as Record<string, unknown>).nodeType === 'macroInput',
-    );
-    const macroOutputNode = macroDef.nodes.find(
-      n => (n.data as Record<string, unknown>).nodeType === 'macroOutput',
-    );
-
-    // Build alias map: MacroInput output ports → outer variables
-    const inputAliases = new Map<string, string>(); // "portId" → outer var name
-    if (macroInputNode) {
-      for (const ep of macroDef.exposedInputs) {
-        // Find what's connected to the MacroNode's corresponding input handle in the outer graph
-        const outerSource = inputToSource.get(`${macroNodeId}:${ep.portId}`);
-        if (outerSource) {
-          compileValueNode(outerSource.nodeId);
-          inputAliases.set(ep.portId, varName(outerSource.nodeId, outerSource.portId));
-        }
-      }
-    }
-
-    // Scoped varName for internal nodes
-    function innerVarName(srcNodeId: string, srcPortId: string): string {
-      // MacroInput ports → resolve to outer aliases
-      if (macroInputNode && srcNodeId === macroInputNode.id) {
-        return inputAliases.get(srcPortId) || 'undefined';
-      }
-      const srcNode = inner.nodeMap.get(srcNodeId);
-      if (srcNode && isMultiOutput(srcNode.data)) {
-        return `${prefix}_v${srcNodeId}_${srcPortId}`;
-      }
-      if (srcNode?.data.nodeType === 'getNeighborsAttribute') {
-        return `${prefix}_scr_${srcNodeId}`;
-      }
-      return `${prefix}_v${srcNodeId}`;
-    }
-
-    // Compile internal value nodes
-    const innerCompiled = new Set<string>();
-
-    function compileInnerValueNode(innerNodeId: string): void {
-      if (innerCompiled.has(innerNodeId)) return;
-      innerCompiled.add(innerNodeId);
-
-      const iNode = inner.nodeMap.get(innerNodeId);
-      if (!iNode) return;
-      const nt = iNode.data.nodeType;
-
-      // Skip boundary nodes
-      if (nt === 'macroInput' || nt === 'macroOutput') return;
-
-      // Recursive macro inlining
-      if (nt === 'macro') {
-        inlineNestedMacroValues(macroNodeId, innerNodeId, iNode, inner, prefix);
-        return;
-      }
-
-      const iDef = getNodeDef(nt);
-      if (!iDef) return;
-
-      // Track scratch arrays
-      if (nt === 'getNeighborsAttribute') {
-        const nbrId = iNode.data.config.neighborhoodId as string || '_undef';
-        const attrId = iNode.data.config.attributeId as string || undefined;
-        scratchNodes.push({ scratchVarName: `${prefix}_scr_${innerNodeId}`, nbrId, attrId });
-      }
-      if (nt === 'groupStatement' || nt === 'groupCounting') {
-        scratchNodes.push({ scratchVarName: `${prefix}_v${innerNodeId}_indexes`, initExpr: '[]' });
-      }
-      if (nt === 'getNeighborsAttrByIndexes' || nt === 'interactionTableMap') {
-        scratchNodes.push({ scratchVarName: `${prefix}_v${innerNodeId}_vals`, initExpr: '[]' });
-      }
-      if (nt === 'filterNeighbors') {
-        scratchNodes.push({ scratchVarName: `${prefix}_v${innerNodeId}_result`, initExpr: '[]' });
-      }
-      if (nt === 'joinNeighbors') {
-        scratchNodes.push({ scratchVarName: `${prefix}_v${innerNodeId}_result`, initExpr: '[]' });
-      }
-
-      // Resolve inputs
-      const iInputVars: Record<string, string> = {};
-      for (const port of iDef.ports) {
-        if (port.kind !== 'input' || port.category !== 'value') continue;
-        const src = inner.inputToSource.get(`${innerNodeId}:${port.id}`);
-        if (src) {
-          compileInnerValueNode(src.nodeId);
-          iInputVars[port.id] = innerVarName(src.nodeId, src.portId);
-        } else {
-          const iNode2 = inner.nodeMap.get(innerNodeId);
-          if (iNode2) {
-            const inlineVal = getInlineValue(port, iNode2.data.config);
-            if (inlineVal !== undefined) iInputVars[port.id] = inlineVal;
-          }
-        }
-      }
-
-      const code = iDef.compile(innerNodeId, iNode.data.config, iInputVars, _model?.properties.boundaryTreatment, ctx);
-      if (code) {
-        // Rewrite variable names in emitted code to use scoped prefix
-        // Note: multi-output vars use _v{id}_{port} — the trailing _ breaks \b, so we
-        // also replace _v{id}_ (with trailing underscore) before the word-boundary version.
-        const scopedCode = code.replace(
-          new RegExp(`\\b_v${innerNodeId}_`, 'g'),
-          `${prefix}_v${innerNodeId}_`,
-        ).replace(
-          new RegExp(`\\b_v${innerNodeId}\\b`, 'g'),
-          `${prefix}_v${innerNodeId}`,
-        ).replace(
-          new RegExp(`\\b_scr_${innerNodeId}\\b`, 'g'),
-          `${prefix}_scr_${innerNodeId}`,
-        ).replace(
-          new RegExp(`\\b_nb${innerNodeId}\\b`, 'g'),
-          `${prefix}_nb${innerNodeId}`,
-        );
-        emitMacroLine(macroNodeId, scopedCode.trimEnd());
-      }
-    }
-
-    // Compile all value dependencies by tracing from MacroOutput inputs
-    if (macroOutputNode) {
-      for (const ep of macroDef.exposedOutputs) {
-        const src = inner.inputToSource.get(`${macroOutputNode.id}:${ep.portId}`);
-        if (src) {
-          compileInnerValueNode(src.nodeId);
-          // Emit output assignment: _v${macroNodeId}_${portId} = innerVar
-          const innerVar = innerVarName(src.nodeId, src.portId);
-          emitMacroLine(macroNodeId, `const _v${macroNodeId}_${ep.portId} = ${innerVar};`);
-        }
-      }
-    }
-
-    expandingMacroDefs.delete(macroDefId);
-  }
-
-  /**
-   * Handle nested macros inside a macro subgraph.
-   */
-  function inlineNestedMacroValues(
-    outerMacroNodeId: string,
-    innerMacroNodeId: string,
-    innerMacroNode: GraphNode,
-    parentAdjacency: ReturnType<typeof buildAdjacency>,
-    parentPrefix: string,
-  ): void {
-    const macroDefId = innerMacroNode.data.config.macroDefId as string;
-    if (!macroDefId || !_model) return;
-    const macroDef = (_model.macroDefs || []).find(m => m.id === macroDefId);
-    if (!macroDef) return;
-
-    if (expandingMacroDefs.has(macroDefId) || expandingMacroDefs.size >= 20) {
-      emitMacroLine(outerMacroNodeId, `// ERROR: Circular/deep macro "${macroDef.name}"`);
-      return;
-    }
-    expandingMacroDefs.add(macroDefId);
-
-    const nestedInner = buildAdjacency(macroDef.nodes, macroDef.edges);
-    const nestedPrefix = `${parentPrefix}_m${innerMacroNodeId}`;
-
-    const nestedInputNode = macroDef.nodes.find(
-      n => (n.data as Record<string, unknown>).nodeType === 'macroInput',
-    );
-    const nestedOutputNode = macroDef.nodes.find(
-      n => (n.data as Record<string, unknown>).nodeType === 'macroOutput',
-    );
-
-    // Resolve input aliases from parent adjacency
-    const nestedAliases = new Map<string, string>();
-    if (nestedInputNode) {
-      for (const ep of macroDef.exposedInputs) {
-        const src = parentAdjacency.inputToSource.get(`${innerMacroNodeId}:${ep.portId}`);
-        if (src) {
-          // The source is in the parent scope — use parent's varName
-          const srcNode = parentAdjacency.nodeMap.get(src.nodeId);
-          if (srcNode && srcNode.data.nodeType === 'macroInput') {
-            // It's the parent's MacroInput — handled by parent's alias chain
-            nestedAliases.set(ep.portId, `${parentPrefix}_v${src.nodeId}_${src.portId}`);
-          } else if (srcNode && isMultiOutput(srcNode.data)) {
-            nestedAliases.set(ep.portId, `${parentPrefix}_v${src.nodeId}_${src.portId}`);
-          } else if (srcNode?.data.nodeType === 'getNeighborsAttribute') {
-            nestedAliases.set(ep.portId, `${parentPrefix}_scr_${src.nodeId}`);
-          } else {
-            nestedAliases.set(ep.portId, `${parentPrefix}_v${src.nodeId}`);
-          }
-        }
-      }
-    }
-
-    function nestedVarName(srcNodeId: string, srcPortId: string): string {
-      if (nestedInputNode && srcNodeId === nestedInputNode.id) {
-        return nestedAliases.get(srcPortId) || 'undefined';
-      }
-      const srcNode = nestedInner.nodeMap.get(srcNodeId);
-      if (srcNode && isMultiOutput(srcNode.data)) {
-        return `${nestedPrefix}_v${srcNodeId}_${srcPortId}`;
-      }
-      if (srcNode?.data.nodeType === 'getNeighborsAttribute') {
-        return `${nestedPrefix}_scr_${srcNodeId}`;
-      }
-      return `${nestedPrefix}_v${srcNodeId}`;
-    }
-
-    const nestedCompiled = new Set<string>();
-
-    function compileNestedNode(nid: string): void {
-      if (nestedCompiled.has(nid)) return;
-      nestedCompiled.add(nid);
-      const iNode = nestedInner.nodeMap.get(nid);
-      if (!iNode) return;
-      const nt = iNode.data.nodeType;
-      if (nt === 'macroInput' || nt === 'macroOutput') return;
-      if (nt === 'macro') {
-        inlineNestedMacroValues(outerMacroNodeId, nid, iNode, nestedInner, nestedPrefix);
-        return;
-      }
-      const iDef = getNodeDef(nt);
-      if (!iDef) return;
-      if (nt === 'getNeighborsAttribute') {
-        const nbrId = iNode.data.config.neighborhoodId as string || '_undef';
-        const attrId = iNode.data.config.attributeId as string || undefined;
-        scratchNodes.push({ scratchVarName: `${nestedPrefix}_scr_${nid}`, nbrId, attrId });
-      }
-      if (nt === 'groupStatement' || nt === 'groupCounting') {
-        scratchNodes.push({ scratchVarName: `${nestedPrefix}_v${nid}_indexes`, initExpr: '[]' });
-      }
-      if (nt === 'getNeighborsAttrByIndexes' || nt === 'interactionTableMap') {
-        scratchNodes.push({ scratchVarName: `${nestedPrefix}_v${nid}_vals`, initExpr: '[]' });
-      }
-      if (nt === 'filterNeighbors') {
-        scratchNodes.push({ scratchVarName: `${nestedPrefix}_v${nid}_result`, initExpr: '[]' });
-      }
-      if (nt === 'joinNeighbors') {
-        scratchNodes.push({ scratchVarName: `${nestedPrefix}_v${nid}_result`, initExpr: '[]' });
-      }
-      const iInputVars: Record<string, string> = {};
-      for (const port of iDef.ports) {
-        if (port.kind !== 'input' || port.category !== 'value') continue;
-        const src = nestedInner.inputToSource.get(`${nid}:${port.id}`);
-        if (src) {
-          compileNestedNode(src.nodeId);
-          iInputVars[port.id] = nestedVarName(src.nodeId, src.portId);
-        } else {
-          const nNode = nestedInner.nodeMap.get(nid);
-          if (nNode) {
-            const inlineVal = getInlineValue(port, nNode.data.config);
-            if (inlineVal !== undefined) iInputVars[port.id] = inlineVal;
-          }
-        }
-      }
-      const code = iDef.compile(nid, iNode.data.config, iInputVars, _model?.properties.boundaryTreatment, ctx);
-      if (code) {
-        const scopedCode = code
-          .replace(new RegExp(`\\b_v${nid}_`, 'g'), `${nestedPrefix}_v${nid}_`)
-          .replace(new RegExp(`\\b_v${nid}\\b`, 'g'), `${nestedPrefix}_v${nid}`)
-          .replace(new RegExp(`\\b_scr_${nid}\\b`, 'g'), `${nestedPrefix}_scr_${nid}`)
-          .replace(new RegExp(`\\b_nb${nid}\\b`, 'g'), `${nestedPrefix}_nb${nid}`);
-        emitMacroLine(outerMacroNodeId, scopedCode.trimEnd());
-      }
-    }
-
-    if (nestedOutputNode) {
-      for (const ep of macroDef.exposedOutputs) {
-        const src = nestedInner.inputToSource.get(`${nestedOutputNode.id}:${ep.portId}`);
-        if (src) {
-          compileNestedNode(src.nodeId);
-          const innerVar = nestedVarName(src.nodeId, src.portId);
-          // Use parent prefix for the inner macro node's output variables
-          const parentNode = parentAdjacency.nodeMap.get(innerMacroNodeId);
-          if (parentNode && isMultiOutput(parentNode.data)) {
-            emitMacroLine(outerMacroNodeId, `const ${parentPrefix}_v${innerMacroNodeId}_${ep.portId} = ${innerVar};`);
-          } else {
-            emitMacroLine(outerMacroNodeId, `const ${parentPrefix}_v${innerMacroNodeId} = ${innerVar};`);
-          }
-        }
-      }
-    }
-
-    expandingMacroDefs.delete(macroDefId);
-  }
-
   function compileValueNode(nodeId: string): string {
     const isBodyDep = !!(bodyDependents && bodyDependents.has(nodeId));
     if (isBodyDep) {
@@ -924,17 +616,6 @@ function compileRoot(
     if (!def) return 'undefined';
 
     if (node.data.nodeType === 'inputColor') {
-      return `_v${nodeId}`;
-    }
-
-    // MacroNode — inline the subgraph
-    if (node.data.nodeType === 'macro') {
-      inlineMacroValues(nodeId, node);
-      return `_v${nodeId}`;
-    }
-
-    // MacroInput/MacroOutput — never compiled directly at root level
-    if (node.data.nodeType === 'macroInput' || node.data.nodeType === 'macroOutput') {
       return `_v${nodeId}`;
     }
 
@@ -1113,30 +794,6 @@ function compileRoot(
     const def = getNodeDef(node.data.nodeType);
     if (!def) return;
 
-    // For macro nodes, resolve value inputs from exposed input ports
-    if (node.data.nodeType === 'macro' && _model) {
-      const macroDefId = node.data.config.macroDefId as string;
-      const macroDef = (_model.macroDefs || []).find(m => m.id === macroDefId);
-      if (macroDef) {
-        for (const ep of macroDef.exposedInputs) {
-          if (ep.category === 'value') {
-            const source = inputToSource.get(`${nodeId}:${ep.portId}`);
-            if (source) compileValueNode(source.nodeId);
-          }
-        }
-        // Follow flow output edges from the macro to downstream nodes
-        for (const ep of macroDef.exposedOutputs) {
-          if (ep.category === 'flow') {
-            const targets = flowOutputToTargets.get(`${nodeId}:${ep.portId}`);
-            if (targets) {
-              for (const t of targets) collectValueDeps(t.nodeId);
-            }
-          }
-        }
-      }
-      return;
-    }
-
     for (const port of def.ports) {
       if (port.kind !== 'input' || port.category !== 'value') continue;
       const source = inputToSource.get(`${nodeId}:${port.id}`);
@@ -1170,156 +827,6 @@ function compileRoot(
 
   const flowLines: string[] = [];
 
-  /**
-   * Inline a macro's flow chain. Follows the internal flow from MacroInput's
-   * flow output port through the internal subgraph.
-   */
-  function inlineMacroFlow(macroNodeId: string, macroNode: GraphNode, indent: string): void {
-    const macroDefId = macroNode.data.config.macroDefId as string;
-    if (!macroDefId || !_model) return;
-    const macroDefMaybe = (_model.macroDefs || []).find(m => m.id === macroDefId);
-    if (!macroDefMaybe) return;
-    const md = macroDefMaybe; // local const so TS narrows in closures
-
-    if (expandingMacroDefs.has(macroDefId) || expandingMacroDefs.size >= 20) {
-      flowLines.push(`${indent}// ERROR: Circular/deep macro flow "${md.name}"`);
-      return;
-    }
-    expandingMacroDefs.add(macroDefId);
-
-    const inner = buildAdjacency(md.nodes, md.edges);
-    const prefix = `_m${macroNodeId}`;
-
-    // Find boundary nodes
-    const macroInputNode = md.nodes.find(
-      n => (n.data as Record<string, unknown>).nodeType === 'macroInput',
-    );
-
-    // Build scoped varName for reading value ports inside the flow chain
-    function innerFlowVarName(srcNodeId: string, srcPortId: string): string {
-      if (macroInputNode && srcNodeId === macroInputNode.id) {
-        // Resolve to outer variable via alias
-        const ep = md.exposedInputs.find(p => p.portId === srcPortId);
-        if (ep) {
-          const outerSrc = inputToSource.get(`${macroNodeId}:${ep.portId}`);
-          if (outerSrc) return varName(outerSrc.nodeId, outerSrc.portId);
-        }
-        return 'undefined';
-      }
-      const srcNode = inner.nodeMap.get(srcNodeId);
-      if (srcNode && isMultiOutput(srcNode.data)) {
-        return `${prefix}_v${srcNodeId}_${srcPortId}`;
-      }
-      if (srcNode?.data.nodeType === 'getNeighborsAttribute') {
-        return `${prefix}_scr_${srcNodeId}`;
-      }
-      return `${prefix}_v${srcNodeId}`;
-    }
-
-    // Compile internal flow chain starting from MacroInput's flow output ports
-    function compileInnerFlow(srcNodeId: string, srcPortId: string, ind: string): void {
-      const targets = inner.flowOutputToTargets.get(`${srcNodeId}:${srcPortId}`);
-      if (!targets || targets.length === 0) return;
-
-      for (const t of targets) {
-        const iNode = inner.nodeMap.get(t.nodeId);
-        if (!iNode) continue;
-        const nt = iNode.data.nodeType;
-
-        // If we hit MacroOutput, we've reached the end of the macro's flow
-        if (nt === 'macroOutput') continue;
-
-        const iDef = getNodeDef(nt);
-        if (!iDef) continue;
-
-        if (nt === 'conditional') {
-          const condSrc = inner.inputToSource.get(`${iNode.id}:condition`);
-          let condVar: string;
-          if (condSrc) {
-            condVar = innerFlowVarName(condSrc.nodeId, condSrc.portId);
-          } else {
-            const condPort = iDef.ports.find(p => p.id === 'condition');
-            const inlineVal = condPort ? getInlineValue(condPort, iNode.data.config) : undefined;
-            condVar = inlineVal ?? 'false';
-          }
-          const hasElse = inner.flowOutputToTargets.has(`${iNode.id}:else`);
-          flowLines.push(`${ind}if (${condVar}) {`);
-          compileInnerFlow(iNode.id, 'then', ind + '  ');
-          if (hasElse) {
-            flowLines.push(`${ind}} else {`);
-            compileInnerFlow(iNode.id, 'else', ind + '  ');
-          }
-          flowLines.push(`${ind}}`);
-        } else if (nt === 'sequence') {
-          compileInnerFlow(iNode.id, 'first', ind);
-          compileInnerFlow(iNode.id, 'then', ind);
-          const extra = Number(iNode.data.config.extraCount) || 0;
-          for (let si = 2; si < 2 + extra; si++) {
-            compileInnerFlow(iNode.id, `then_${si}`, ind);
-          }
-        } else if (nt === 'loop') {
-          const countSrc = inner.inputToSource.get(`${iNode.id}:count`);
-          let countVar: string;
-          if (countSrc) {
-            countVar = innerFlowVarName(countSrc.nodeId, countSrc.portId);
-          } else {
-            const countPort = iDef.ports.find(p => p.id === 'count');
-            const inlineVal = countPort ? getInlineValue(countPort, iNode.data.config) : undefined;
-            countVar = inlineVal ?? '0';
-          }
-          const loopVar = `${prefix}_li${iNode.id}`;
-          flowLines.push(`${ind}for (let ${loopVar} = 0; ${loopVar} < ${countVar}; ${loopVar}++) {`);
-          compileInnerFlow(iNode.id, 'body', ind + '  ');
-          flowLines.push(`${ind}}`);
-        } else if (nt === 'forEachInArray') {
-          const arraySrc = inner.inputToSource.get(`${iNode.id}:array`);
-          if (!arraySrc) continue;
-          const arrayVar = innerFlowVarName(arraySrc.nodeId, arraySrc.portId);
-          const idxVar = `${prefix}_fei${iNode.id}`;
-          const elementVar = `${prefix}_v${iNode.id}_element`;
-          flowLines.push(`${ind}for (let ${idxVar} = 0; ${idxVar} < ${arrayVar}.length; ${idxVar}++) {`);
-          flowLines.push(`${ind}  const ${elementVar} = ${arrayVar}[${idxVar}];`);
-          compileInnerFlow(iNode.id, 'body', ind + '  ');
-          flowLines.push(`${ind}}`);
-        } else {
-          // Regular action node — compile with scoped inputs
-          const iInputVars: Record<string, string> = {};
-          for (const port of iDef.ports) {
-            if (port.kind !== 'input' || port.category !== 'value') continue;
-            const src = inner.inputToSource.get(`${iNode.id}:${port.id}`);
-            if (src) {
-              iInputVars[port.id] = innerFlowVarName(src.nodeId, src.portId);
-            } else {
-              const inlineVal = getInlineValue(port, iNode.data.config);
-              if (inlineVal !== undefined) iInputVars[port.id] = inlineVal;
-            }
-          }
-          const code = iDef.compile(iNode.id, iNode.data.config, iInputVars, _model?.properties.boundaryTreatment, ctx);
-          if (code) {
-            // Scope the emitted code
-            const scopedCode = code
-              .replace(new RegExp(`\\b_v${iNode.id}\\b`, 'g'), `${prefix}_v${iNode.id}`)
-              .replace(new RegExp(`\\b_scr_${iNode.id}\\b`, 'g'), `${prefix}_scr_${iNode.id}`)
-              .replace(new RegExp(`\\b_nb${iNode.id}\\b`, 'g'), `${prefix}_nb${iNode.id}`);
-            flowLines.push(ind + scopedCode.trimEnd());
-          }
-        }
-      }
-    }
-
-    // Start flow from MacroInput's flow output ports
-    if (macroInputNode) {
-      // Find which flow ports on the MacroInput connect into the subgraph
-      for (const ep of md.exposedInputs) {
-        if (ep.category === 'flow') {
-          compileInnerFlow(macroInputNode.id, ep.portId, indent);
-        }
-      }
-    }
-
-    expandingMacroDefs.delete(macroDefId);
-  }
-
   function compileFlowChain(sourceNodeId: string, sourcePortId: string, indent: string): void {
     const targets = flowOutputToTargets.get(`${sourceNodeId}:${sourcePortId}`);
     if (!targets || targets.length === 0) return;
@@ -1338,6 +845,17 @@ function compileRoot(
       if (!node) continue;
       const def = getNodeDef(node.data.nodeType);
       if (!def) continue;
+
+      // Volatile values whose LCA flow scope is here: emit them before this
+      // flow node so they land after preceding sibling writes and dominate
+      // every branch this node opens (fixes multi-branch getVariable reads).
+      const hoisted = volatileHoist.get(target.nodeId);
+      if (hoisted) {
+        const savedForce = forceVolatileCurrentScope;
+        forceVolatileCurrentScope = true;
+        for (const vId of hoisted) compileValueNode(vId);
+        forceVolatileCurrentScope = savedForce;
+      }
 
       if (node.data.nodeType === 'conditional') {
         const condSource = inputToSource.get(`${node.id}:condition`);
@@ -1505,11 +1023,6 @@ function compileRoot(
             }
           }
         }
-      } else if (node.data.nodeType === 'macro') {
-        // Inline macro flow chain
-        inlineMacroFlow(node.id, node, indent);
-        // After the macro's internal flow, continue with any flow outputs from the MacroNode
-        // (MacroOutput flow ports map to MacroNode's flow output ports)
       } else {
         const inputVars: Record<string, string> = {};
         for (const port of def.ports) {
@@ -1711,22 +1224,26 @@ export function compileGraph(
     return { stepCode: '', initCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'Model required for SoA compilation.' };
   }
 
+  // Expand macro instances up front so everything downstream sees one FLAT
+  // graph — identical to the WASM/WebGPU targets. Replaces the JS-only lazy
+  // macro-inlining path, so sink analysis, loop-invariance, accessor-CSE and
+  // volatile hoisting all apply uniformly to former macro internals (closing
+  // the in-macro divergence those analyses previously couldn't see).
+  {
+    const expanded = expandMacros(graphNodes, graphEdges, model);
+    if (expanded.error) {
+      return { stepCode: '', initCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: expanded.error };
+    }
+    graphNodes = expanded.nodes;
+    graphEdges = expanded.edges;
+  }
+
   // Reroute collapse — strip editor-only reroute relay nodes, rewiring each
   // consumer directly to the real source it relays from (chains resolved
-  // transitively). Done FIRST so no later analysis or emitter ever sees a
-  // reroute. `A → R → B` compiles byte-identically to `A → B`. WASM/WebGPU run
-  // this post-expandMacros (so in-macro reroutes collapse for free); JS inlines
-  // macros lazily, so additionally collapse each macro def's internal graph here.
+  // transitively). Runs AFTER expandMacros so in-macro reroutes (now flattened
+  // to top-level prefixed nodes) collapse too, and so no later analysis or
+  // emitter ever sees a reroute. `A → R → B` compiles byte-identically to `A → B`.
   ({ nodes: graphNodes, edges: graphEdges } = collapseReroutes(graphNodes, graphEdges));
-  if ((model.macroDefs || []).some(d => d.nodes.some(n => n.type === 'rerouteNode'))) {
-    model = {
-      ...model,
-      macroDefs: (model.macroDefs || []).map(d => {
-        const c = collapseReroutes(d.nodes, d.edges);
-        return c.nodes === d.nodes && c.edges === d.edges ? d : { ...d, nodes: c.nodes, edges: c.edges };
-      }),
-    };
-  }
 
   // Linked Output Mappings — synthesize the auto color pass for any mapping
   // marked `linked` (ephemeral; rebuilt from the live model each compile). Done
@@ -1870,13 +1387,13 @@ export function compileGraph(
     }
   }
   preResolveIndicators(graphNodes);
-  for (const def of (model.macroDefs || [])) preResolveIndicators(def.nodes);
 
   // Pre-assign stop-event indices. Each StopEventNode gets a stable 1-based
   // index (0 reserved for "no stop requested"); the emitted code writes that
   // index into `_stopFlag[0]`. Worker reads the flag after each step call and
   // uses (idx - 1) to look up the user's message from `stopMessages`.
-  // Scoped across main graph + all macro defs so IDs are globally unique.
+  // The graph is already flat here (macros expanded), so former macro-internal
+  // stop events are top-level nodes — walking `graphNodes` covers them all.
   const stopMessages: string[] = [];
   function preResolveStopEvents(nodes: GraphNode[]): void {
     for (const node of nodes) {
@@ -1887,7 +1404,6 @@ export function compileGraph(
     }
   }
   preResolveStopEvents(graphNodes);
-  for (const def of (model.macroDefs || [])) preResolveStopEvents(def.nodes);
 
   // Pre-resolve variegated nodes' compile-time fields:
   //   - getFacingLabels: direction index + (dr, dc) offset resolved from
@@ -2004,9 +1520,7 @@ export function compileGraph(
     }
   }
   preResolveMoveNodes(graphNodes);
-  for (const def of (model.macroDefs || [])) preResolveMoveNodes(def.nodes);
   preResolveVariegatedNodes(graphNodes);
-  for (const def of (model.macroDefs || [])) preResolveVariegatedNodes(def.nodes);
 
   // Loop-invariance classification: identifies value nodes whose result does
   // not depend on the cell index (modelAttrs reads, getConstant, arithmetic
@@ -2086,7 +1600,6 @@ export function compileGraph(
     }
   };
   collectViewerRefs(graphNodes);
-  for (const def of model.macroDefs || []) collectViewerRefs(def.nodes);
   const viewerHoistLines = Array.from(viewerIdsToHoist).map(
     id => `  const _isV_${safeId(id)} = activeViewer === ${JSON.stringify(id)};`,
   );

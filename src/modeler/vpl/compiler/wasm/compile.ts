@@ -44,6 +44,8 @@ import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } fr
 import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { injectLinkedOutputMappings } from '../linkedOutputMappings';
 import { collapseReroutes } from '../rerouteCollapse';
+import { expandMacros } from '../macroExpand';
+import { computeVolatileHoist } from '../volatileHoist';
 import { subAttrInfo } from '../subAttribute';
 import { emitWasm } from '../expression/emitWasm';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
@@ -204,6 +206,12 @@ interface WasmCompileCtx {
    *  bytecode lands after the mutating flow children have run. Mirrors
    *  the JS compiler's volatileValues set. */
   volatileValues: Set<string>;
+  /** Volatile value ids to force-emit immediately BEFORE a given flow node
+   *  (keyed by flow node id), at its enclosing scope — computed by
+   *  `computeVolatileHoist`. Ensures a volatile value used across multiple
+   *  sibling branches is emitted once, before the branch divergence, so its
+   *  function-local is set on every path. */
+  volatileHoist: Map<string, string[]>;
 }
 
 /** WASM-side slot for a Local Variable. Scalar: function-local holding the
@@ -5900,6 +5908,21 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
     const def = getNodeDef(node.data.nodeType);
     if (!def) continue;
 
+    // Volatile values whose LCA flow scope is here: emit them (set their
+    // function-locals) BEFORE this flow node, so the assignment runs on every
+    // branch path this node opens — not just the first case to reference it.
+    // getVariable itself reads variable storage directly (no temp local) and is
+    // dual-registered, so skip it; its derived consumers carry it along.
+    const hoisted = ctx.volatileHoist.get(target.nodeId);
+    if (hoisted) {
+      for (const vId of hoisted) {
+        const vn = ctx.nodeMap.get(vId);
+        if (!vn || vn.data.nodeType === 'getVariable') continue;
+        if (VALUE_NODE_EMITTERS[vn.data.nodeType]) compileValueNode(vId, ctx);
+        else if (ARRAY_NODE_EMITTERS[vn.data.nodeType]) compileArrayNode(vId, ctx);
+      }
+    }
+
     if (node.data.nodeType === 'conditional') {
       const condSource = ctx.inputToSource.get(`${node.id}:condition`);
       let condRef: ValueRef | null = null;
@@ -6283,6 +6306,8 @@ function compileEntry(
     paramRefs.set(opts.entry.id, m);
   }
 
+  const volatileValuesSet = computeVolatileValueClosureWasm(Array.from(nodeMap.values()), inputToSource, inputToSources);
+
   const ctx: WasmCompileCtx = {
     emitter,
     layout,
@@ -6305,7 +6330,16 @@ function compileEntry(
     viewerLocals: new Map(),
     sinkAnalysis,
     variableLocals: new Map(),
-    volatileValues: computeVolatileValueClosureWasm(Array.from(nodeMap.values()), inputToSource, inputToSources),
+    volatileValues: volatileValuesSet,
+    volatileHoist: computeVolatileHoist({
+      nodeMap,
+      inputToSource,
+      inputToSources,
+      flowOutputToTargets,
+      rootNodeId: opts.entry.id,
+      rootFlowPortId: 'do',
+      volatile: volatileValuesSet,
+    }).emitBefore,
   };
 
   // Snapshot of value-local refs that are loop-invariant. Populated after the
@@ -7009,126 +7043,8 @@ function sanitiseExportName(s: string): string {
   return s.replace(/[^A-Za-z0-9_]/g, '_');
 }
 
-// ---------------------------------------------------------------------------
-// Macro inlining (verbatim from the previous implementation)
-// ---------------------------------------------------------------------------
-
-/**
- * Recursively inline all `macro` nodes by expanding each instance's internal
- * subgraph into the outer graph. After expansion the orchestrator never sees
- * `macro` / `macroInput` / `macroOutput` nodes.
- *
- * For each macro instance:
- *  - Internal non-boundary nodes are copied with a prefixed id (`m{instanceId}_*`)
- *    so multiple instances of the same macro don't collide.
- *  - Internal edges touching the boundary nodes are dissolved.
- *
- * Nested macros: re-runs until no `macro` nodes remain (with a depth cap).
- */
-function expandMacros(
-  graphNodes: GraphNode[],
-  graphEdges: GraphEdge[],
-  model: CAModel,
-  depth = 0,
-): { nodes: GraphNode[]; edges: GraphEdge[]; error?: string } {
-  if (depth > 20) return { nodes: graphNodes, edges: graphEdges, error: 'macro recursion depth > 20' };
-  const macroInstances = graphNodes.filter(n => n.data.nodeType === 'macro');
-  if (macroInstances.length === 0) return { nodes: graphNodes, edges: graphEdges };
-
-  const macroDefs = model.macroDefs ?? [];
-
-  // Index outer edges by source/target for fast bridge lookup
-  const edgesByTarget = new Map<string, GraphEdge[]>();
-  const edgesBySource = new Map<string, GraphEdge[]>();
-  for (const e of graphEdges) {
-    const t = edgesByTarget.get(e.target); if (t) t.push(e); else edgesByTarget.set(e.target, [e]);
-    const s = edgesBySource.get(e.source); if (s) s.push(e); else edgesBySource.set(e.source, [e]);
-  }
-
-  const removedNodeIds = new Set(macroInstances.map(m => m.id));
-  const newNodes: GraphNode[] = [];
-  const newEdges: GraphEdge[] = [];
-
-  // Carry over all non-macro outer nodes
-  for (const n of graphNodes) if (!removedNodeIds.has(n.id)) newNodes.push(n);
-  // Carry over outer edges that don't touch any macro instance
-  for (const e of graphEdges) {
-    if (!removedNodeIds.has(e.source) && !removedNodeIds.has(e.target)) newEdges.push(e);
-  }
-
-  for (const m of macroInstances) {
-    const def = macroDefs.find(d => d.id === m.data.config.macroDefId);
-    if (!def) continue;
-    const prefix = `m${m.id}_`;
-
-    // Map external sources for each input port (via outer edges arriving at macro instance)
-    const extInMap = new Map<string, { source: string; sourceHandle: string }>();
-    const extInArr = edgesByTarget.get(m.id) ?? [];
-    for (const e of extInArr) extInMap.set(e.targetHandle, { source: e.source, sourceHandle: e.sourceHandle });
-
-    // Outer edges consuming the macro instance's output ports
-    const extOutArr = edgesBySource.get(m.id) ?? [];
-
-    // Copy internal non-boundary nodes with prefixed ids
-    for (const inner of def.nodes) {
-      if (inner.data.nodeType === 'macroInput' || inner.data.nodeType === 'macroOutput') continue;
-      newNodes.push({ ...inner, id: prefix + inner.id });
-    }
-
-    // Copy internal edges, rewriting endpoints
-    for (const e of def.edges) {
-      const srcInner = def.nodes.find(n => n.id === e.source);
-      const tgtInner = def.nodes.find(n => n.id === e.target);
-      const srcIsBoundary = srcInner?.data.nodeType === 'macroInput' || srcInner?.data.nodeType === 'macroOutput';
-      const tgtIsBoundary = tgtInner?.data.nodeType === 'macroInput' || tgtInner?.data.nodeType === 'macroOutput';
-      if (srcIsBoundary && tgtIsBoundary) continue; // pure boundary-to-boundary — no work
-
-      if (srcInner?.data.nodeType === 'macroInput') {
-        const ep = parseHandle(e.sourceHandle);
-        const epPortId = ep?.portId ?? e.sourceHandle;
-        let ext: { source: string; sourceHandle: string } | undefined;
-        for (const [th, src] of extInMap) {
-          const parsed = parseHandle(th);
-          if (parsed?.portId === epPortId) { ext = src; break; }
-        }
-        if (!ext) continue;
-        newEdges.push({
-          ...e,
-          id: prefix + e.id,
-          source: ext.source,
-          sourceHandle: ext.sourceHandle,
-          target: prefix + e.target,
-        });
-        continue;
-      }
-
-      if (tgtInner?.data.nodeType === 'macroOutput') {
-        const epPortId = parseHandle(e.targetHandle)?.portId ?? e.targetHandle;
-        for (const eOut of extOutArr) {
-          const epExt = parseHandle(eOut.sourceHandle);
-          if (epExt?.portId !== epPortId) continue;
-          newEdges.push({
-            ...eOut,
-            source: prefix + e.source,
-            sourceHandle: e.sourceHandle,
-          });
-        }
-        continue;
-      }
-
-      // Internal-to-internal: just prefix endpoints
-      newEdges.push({
-        ...e,
-        id: prefix + e.id,
-        source: prefix + e.source,
-        target: prefix + e.target,
-      });
-    }
-  }
-
-  // Recurse — nested macros will appear as `macro` nodes in newNodes
-  return expandMacros(newNodes, newEdges, model, depth + 1);
-}
+// Macro inlining (`expandMacros`) now lives in the shared `../macroExpand`
+// module, used identically by the JS / WASM / WebGPU compilers.
 
 function parseHandle(handleId: string | undefined): { category: 'value' | 'flow'; portId: string } | null {
   if (!handleId) return null;
