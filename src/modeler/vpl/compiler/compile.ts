@@ -9,6 +9,7 @@ import { INVALID_NI, packNI, NI_ARRAY_PRODUCERS } from './niCodec';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId } from './sinkAnalysis';
 import { canonicalizeAccessorEdges } from './accessorCSE';
 import { injectLinkedOutputMappings } from './linkedOutputMappings';
+import { collapseReroutes } from './rerouteCollapse';
 import {
   isSubAttribute,
   subAttrInfo,
@@ -1708,6 +1709,23 @@ export function compileGraph(
 ): CompileResult {
   if (!model) {
     return { stepCode: '', initCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'Model required for SoA compilation.' };
+  }
+
+  // Reroute collapse — strip editor-only reroute relay nodes, rewiring each
+  // consumer directly to the real source it relays from (chains resolved
+  // transitively). Done FIRST so no later analysis or emitter ever sees a
+  // reroute. `A → R → B` compiles byte-identically to `A → B`. WASM/WebGPU run
+  // this post-expandMacros (so in-macro reroutes collapse for free); JS inlines
+  // macros lazily, so additionally collapse each macro def's internal graph here.
+  ({ nodes: graphNodes, edges: graphEdges } = collapseReroutes(graphNodes, graphEdges));
+  if ((model.macroDefs || []).some(d => d.nodes.some(n => n.type === 'rerouteNode'))) {
+    model = {
+      ...model,
+      macroDefs: (model.macroDefs || []).map(d => {
+        const c = collapseReroutes(d.nodes, d.edges);
+        return c.nodes === d.nodes && c.edges === d.edges ? d : { ...d, nodes: c.nodes, edges: c.edges };
+      }),
+    };
   }
 
   // Linked Output Mappings — synthesize the auto color pass for any mapping

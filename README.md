@@ -1,4 +1,4 @@
-# GenesisCA <sup>v1.16.2</sup>
+# GenesisCA <sup>v1.17.0</sup>
 
 An IDE for modeling and simulating Cellular Automata, built as a self-contained browser application.
 
@@ -120,6 +120,7 @@ A complete GenesisCA model definition consists of:
 - **Undo/Redo** (partial) — Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) for node/edge operations, moves, paste, config changes
 - **Copy/Paste/Duplicate** — Ctrl+C/V/X/D, context menu on single nodes and selections, paste at right-click location
 - **Groups & Comments** — visual organization tools; comment background color is customizable and the resized size persists; Undo Group dissolves a group and selects all contained nodes. Drag a group's **header** to move it, drag its **body** to box-select inner nodes (Shift adds / Ctrl removes from the selection), click the body to select the group, and right-click-drag to pan; double-click the header to rename. A selected group **stays behind** its contained nodes (it no longer pops to the front), so you can keep clicking the nodes and links inside it
+- **Reroute points** — bend wires and fan one output out to many places without long crossing links. **Press and hold** the left mouse button on a wire (~½ s) to drop a reroute that then follows your cursor; once placed it's an ordinary node — drag it to move it (and it moves with a multi-selection). A reroute always relays an **output** (one input, any number of outputs), and reroutes can be chained. They're purely cosmetic — a wire through a reroute compiles identically to a direct connection — and deleting one removes it and all its links
 - **Interactive minimap** — the overview map (bottom-right) is pannable and zoomable, and a click jumps the viewport to that spot (keeping the current zoom)
 
 ### Variegated Cells (Directional Interactions) &mdash; opt-in

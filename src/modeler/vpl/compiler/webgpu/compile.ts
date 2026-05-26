@@ -36,6 +36,7 @@ import { INVALID_NI, packNI, NI_ARRAY_PRODUCERS } from '../niCodec';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } from '../sinkAnalysis';
 import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { injectLinkedOutputMappings } from '../linkedOutputMappings';
+import { collapseReroutes } from '../rerouteCollapse';
 import { subAttrInfo, subAttributesOf } from '../subAttribute';
 import { emitWgsl } from '../expression/emitWgsl';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
@@ -3595,11 +3596,16 @@ export function compileGraphWebGPU(
       layout, viewerIds: {}, error: expanded.error,
     };
   }
+  // Reroute collapse — strip editor-only reroute relay nodes, rewiring each
+  // consumer to the real source (chains resolved transitively). Runs AFTER
+  // expandMacros so in-macro reroutes collapse too, and before linked-OM / CSE /
+  // adjacency so nothing downstream sees a reroute. See rerouteCollapse.ts.
+  const collapsed = collapseReroutes(expanded.nodes, expanded.edges);
   // Linked Output Mappings — synthesize the auto color pass for `linked`
   // mappings (ephemeral; rebuilt from the live model each compile). MUST rebind
   // `nodes` so the output-mapping emission loop below sees the synthetic root —
   // otherwise WebGPU silently shows default colors while JS/WASM render the pass.
-  const injected = injectLinkedOutputMappings(expanded.nodes, expanded.edges, model);
+  const injected = injectLinkedOutputMappings(collapsed.nodes, collapsed.edges, model);
   const nodes = injected.nodes;
   // Accessor CSE — sync-mode only. Runs AFTER macro expansion so duplicate
   // accessors inside (or across) macro instances also get merged. No-op when

@@ -1,0 +1,28 @@
+/* Reroute relay dot — a tiny movable pass-through point on a wire.
+   Editor-only; collapsed out before compilation (see rerouteCollapse.ts). */
+
+.reroute {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid;
+  box-sizing: border-box;
+  cursor: grab;
+  transition: box-shadow 0.12s ease, filter 0.12s ease;
+}
+
+.reroute:hover {
+  filter: brightness(1.18);
+}
+
+.selected {
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.85),
+    0 0 10px 2px rgba(255, 255, 255, 0.35);
+}
+
+/* While the reroute is being grabbed via the long-press gesture. */
+.grabbing {
+  cursor: grabbing;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.95), 0 0 12px 3px rgba(255, 255, 255, 0.5);
+}

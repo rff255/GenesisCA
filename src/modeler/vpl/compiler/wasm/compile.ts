@@ -43,6 +43,7 @@ import { getInlineValue, parseInlineNum } from '../inlinePort';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } from '../sinkAnalysis';
 import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { injectLinkedOutputMappings } from '../linkedOutputMappings';
+import { collapseReroutes } from '../rerouteCollapse';
 import { subAttrInfo } from '../subAttribute';
 import { emitWasm } from '../expression/emitWasm';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
@@ -6803,6 +6804,13 @@ export function compileGraphWasm(
   }
   graphNodes = expanded.nodes;
   graphEdges = expanded.edges;
+
+  // Reroute collapse — strip editor-only reroute relay nodes, rewiring each
+  // consumer to the real source (chains resolved transitively). Runs AFTER
+  // expandMacros so in-macro reroutes (now flattened to top-level prefixed
+  // nodes) collapse too, and before linked-OM / CSE / adjacency so nothing
+  // downstream sees a reroute. See rerouteCollapse.ts.
+  ({ nodes: graphNodes, edges: graphEdges } = collapseReroutes(graphNodes, graphEdges));
 
   // Linked Output Mappings — synthesize the auto color pass for `linked`
   // mappings (ephemeral; rebuilt from the live model each compile). After macro

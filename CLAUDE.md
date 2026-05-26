@@ -195,6 +195,7 @@ genesis-ca/
 │   │   │   └── PalettePanelContent.tsx  # Palette tab: nodes + default + project macros
 │   │   └── vpl/                      # Visual Programming Language editor
 │   │       ├── CaNode.tsx            # Custom React Flow node component
+│   │       ├── RerouteNodeComponent.tsx # Tiny pass-through reroute dot (editor-only; collapsed at compile time)
 │   │       ├── types.ts              # Port/node type definitions
 │   │       ├── GraphEditor.tsx
 │   │       ├── graphState.ts          # Shared mutable state (avoids circular imports between GraphEditor/CaNode)
@@ -205,6 +206,7 @@ genesis-ca/
 │   │       ├── widgets/              # Shared inline editors (InlineWidgets.tsx, GradientStopsEditor.tsx)
 │   │       └── compiler/
 │   │           ├── compile.ts        # Two-pass compiler (hoisted values + flow)
+│   │           ├── rerouteCollapse.ts # Pre-compile pass: strips reroute relay nodes, rewires consumers to the real source
 │   │           └── linkedOutputMappings.ts # Synthesizes the auto color pass for Linked Output Mappings
 │   ├── simulator/
 │   │   ├── SimulatorView.tsx         # Canvas rendering, zoom/pan, brush tool
@@ -244,6 +246,7 @@ genesis-ca/
 - Do not assume file structure beyond what's documented here — ask if uncertain
 - When building new node types, follow the established pattern of existing nodes (compile method, port definitions, UI component)
 - `NodeTypeDef` includes optional `description` (one-line summary of what the node does). Include it in new node definitions for Add Node menu tooltips.
+- **Illustrated plans (HTML mockups) — required for UI / behavior changes:** Whenever a plan involves a non-trivial UI change OR any change in behavior, produce a self-contained HTML representation of the plan (inline CSS + inline SVG, no external assets) saved alongside the plan `.md` file, IN ADDITION to the written markdown plan. Use visual mockups to illustrate the proposal — before/after states, interaction gestures/sequences, and data-/control-flow diagrams — so the user can SEE the change, not just read it. **Exempt (trivial):** renames, color tweaks, minor repositioning, copy edits, and pure-internal refactors with no observable behavior change.
 - **Documentation consistency (keep ALL sources of truth in sync — do this after every feature change, not as an afterthought):** A change isn't done until every layer that describes it is updated, because future context-gathering relies on them agreeing. Update: (1) the **code itself** — structure + the comments/docstrings near what you changed; (2) **this `CLAUDE.md`** — extend/add the relevant feature section AND the Project Structure tree when files are added/moved; (3) `src/help/HelpView.tsx` (in-app Help tab); (4) the root `README.md`; (5) for node-system changes (new nodes, port types, redundancies) also `docs/NODES_REFERENCE.md` (table + node count + Mermaid diagrams). Drift between any of these silently degrades every later change, so treat them as one atomic update.
 - **Pre-commit type check:** Vite dev server does NOT type-check — always run `npx tsc -b` before committing to catch TypeScript errors that will fail the CI build. Note: `npx tsc --noEmit` (without `-b`) silently checks nothing because the root tsconfig has `"files": []` and only project references.
 - **Debugging blank-screen React crashes:** When the app whites out (React unmounts on uncaught error), console usually only shows generic "error in `<X>` component" warnings without stack traces. Install a `window.onerror` handler via preview_eval BEFORE reproducing, then read captured errors after — this surfaces the real stack trace.
@@ -1015,4 +1018,27 @@ First-class, user-facing color node: input `index` (int), multi-output `r`/`g`/`
 - `style={{ width: N, ...sharedStyle }}` foot-gun: if `sharedStyle` sets `width: '100%'`, the spread overrides the `N`. Put the override AFTER the spread (bit the GradientStopsEditor position input — kept the bar from squashing the color/delete controls).
 - Inline-style overrides in shared widgets: the position spinbox is fixed-width + `flex: 0 0 auto`; the color input is `flex: 1`. Don't reintroduce `width: 100%` on the spinbox.
 - A linked-only model with no Step node still hits the separate "No Step node" compile gate (the empty-graph reorder only covers the `length === 0` check). Realistic models always have a Step; relaxing the Step requirement is out of scope.
+
+---
+
+## Reroute Links (wire reroute points)
+
+Movable relay dots placed on a wire (Blender / Unreal blueprint style) so users can bend connections around nodes and fan one output out to many consumers without long crossing wires. Two layers, deliberately decoupled.
+
+### Editor layer (visual-only node)
+- React Flow `type: 'rerouteNode'` (in the `nodeTypes` map), rendered by [RerouteNodeComponent.tsx](src/modeler/vpl/RerouteNodeComponent.tsx) — a tiny ~16px dot. It is **NOT** a registry `NodeTypeDef` (like comment / group nodes); it has no `compile()` and never reaches a compiler.
+- `data: { nodeType: 'reroute', portCategory: 'value'|'flow', dataType?, config: {} }`. `portCategory` is **locked at creation** from the relayed output (flow ≠ value). One input handle `input_<cat>_in` (left) + one output handle `output_<cat>_out` (right); colored by category (value cyan / flow green / NI amber), with the same compatible/incompatible glow as CaNode handles (subscribes to `connectingFrom`).
+- **A reroute always relays an OUTPUT, never an input** → exactly one inbound edge, any number of outbound. So it's a single-input / multi-output relay. **Composes freely:** many reroutes per output port (ordinary fan-out) and chains of reroutes on one link (`A → R1 → R2 → R3 → B`). **Single-incoming is enforced** in `isValidConnection`: a reroute's input rejects a second incoming wire (for BOTH value and flow — a reroute is not a merge point; the collapse pass would otherwise silently keep only the first inbound). `collapseReroutes` keeps "first inbound wins" purely as a defensive fallback for hand-edited files.
+- **Normal draggable node:** reroutes are NOT `draggable: false`. They move individually AND as part of a multi-selection (drag a selection of nodes and reroutes go with it) — the earlier `draggable: false` approach broke selection moves and was removed. The press-and-hold gesture is ONLY for creating a reroute on a wire, never for moving an existing one (moving is a plain drag).
+- Serialization round-trips like comment/group: `toRFNodes`/`toGraphNodes` map the `rerouteNode` type (the shared type-mapping ternary in [GraphEditor.tsx](src/modeler/vpl/GraphEditor.tsx) was extended at all 4 sites: load, paste, duplicate, undo-macro). `nodeSize` has a 16px case. No schema/`types.ts` change (GraphNode/GraphEdge already round-trip arbitrary node types).
+
+### Creation (press-and-hold gesture, edges only)
+- A capture-phase `pointerdown` handler in [GraphEditor.tsx](src/modeler/vpl/GraphEditor.tsx) (mirrors the RMB-through-edges handler). LMB-press on a `.react-flow__edge` and hold ~550ms (staying within ~6px) → split the wire and drop a reroute that then follows the cursor until release (`insertRerouteOnEdge`). Early movement / quick release before the threshold cancels, so wire double-click-delete, edge selection, and RMB-pan are untouched. The handler targets `.react-flow__edge` ONLY — it never intercepts reroute nodes, so repositioning stays a normal RF node drag (and thus works inside a multi-selection).
+- Secondary path: the connection-drop menu (drag a wire off a port, release on empty canvas) gains a **"Reroute"** entry, shown only when `origin.kind === 'output'` (`addRerouteAndConnect`). `getOriginPortInfo` has a `reroute` branch so dragging from a reroute carries its category/dataType (chains keep their type + highlight).
+- Delete = plain delete (the reroute + all its links); React Flow's `deleteElements` removes connected edges, and `deleteSelection` does NOT filter reroutes (only macro boundary nodes).
+
+### Compiler layer (collapse pass — zero per-target emit changes)
+- [rerouteCollapse.ts](src/modeler/vpl/compiler/rerouteCollapse.ts) — `collapseReroutes(nodes, edges) → { nodes, edges }`. Removes reroute nodes and rewrites each real consumer's edge to the real source it ultimately relays from, resolving chains transitively (memoized + cycle-guarded). Mirrors `injectLinkedOutputMappings` / `canonicalizeAccessorEdges`. **Hot-path no-op** (returns the same arrays) when no reroutes — the overwhelmingly common case.
+- Sound in BOTH sync and async modes (a reroute is a pure wire relay — collapsing changes neither read/write ordering nor any value), so unlike accessor-CSE there is **no async gate**.
+- Wired into all three compilers BEFORE linked-OM / CSE / `buildAdjacency` so nothing downstream sees a reroute: **JS** at the top of `compileGraph` (+ also collapse each `MacroDef`'s internal graph, since JS inlines macros lazily); **WASM** / **WebGPU** right after `expandMacros` (so in-macro reroutes, now flattened, collapse for free). `A → R → B` compiles byte-identically to `A → B`. Verified: collapse unit (chain / fan-out / dangling / no-op), JS full-compile byte-identical on Game of Life, and WASM + WebGPU worker runs of a reroute model with zero errors.
 

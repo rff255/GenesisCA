@@ -18,6 +18,7 @@ import '@xyflow/react/dist/style.css';
 import { CaNode } from './CaNode';
 import { CommentNodeComponent } from './CommentNodeComponent';
 import { GroupNodeComponent } from './GroupNodeComponent';
+import { RerouteNodeComponent } from './RerouteNodeComponent';
 import { useModel } from '../../model/ModelContext';
 import { getNodeDefsByCategory, getNodeDef, getAllNodeDefs } from './nodes/registry';
 import { parseHandleId, handleId } from './types';
@@ -33,6 +34,7 @@ const nodeTypes: NodeTypes = {
   caNode: CaNode,
   commentNode: CommentNodeComponent,
   groupNode: GroupNodeComponent,
+  rerouteNode: RerouteNodeComponent,
 };
 
 // ---------------------------------------------------------------------------
@@ -84,6 +86,11 @@ function getOriginPortInfo(
   const nd = node.data as { nodeType?: string; config?: Record<string, unknown> } | undefined;
   const t = nd?.nodeType;
   if (!t) return null;
+  if (t === 'reroute') {
+    // Reroutes aren't registry nodes; their port shape lives in node.data.
+    const rd = node.data as Record<string, unknown>;
+    return { category: rd.portCategory === 'flow' ? 'flow' : 'value', dataType: rd.dataType as string | undefined };
+  }
   const def = getNodeDef(t);
   if (def) {
     const staticPort = def.ports.find(p => p.id === portId);
@@ -309,7 +316,7 @@ function toRFNodes(graphNodes: GraphNode[]): Node[] {
       : n.data;
     const rfNode: Node = {
       id: n.id,
-      type: n.type === 'groupNode' ? 'groupNode' : n.type === 'commentNode' ? 'commentNode' : 'caNode',
+      type: n.type === 'groupNode' ? 'groupNode' : n.type === 'commentNode' ? 'commentNode' : n.type === 'rerouteNode' ? 'rerouteNode' : 'caNode',
       position: n.position,
       data: cleanData,
     };
@@ -325,6 +332,9 @@ function toRFNodes(graphNodes: GraphNode[]): Node[] {
     } else if (n.type === 'commentNode') {
       rfNode.style = { width: (d.width as number) || 200, height: (d.height as number) || 80 };
     }
+    // Reroutes are normal draggable nodes — they move individually AND as part of
+    // a multi-selection. The press-and-hold gesture (below) is only for CREATING
+    // a reroute on a wire, not for moving an existing one.
     return rfNode;
   });
 }
@@ -382,13 +392,14 @@ function nodeSize(n: Node): { w: number; h: number } {
   const isCollapsed = !!data?.isCollapsed;
   const w = nAny.measured?.width
     ?? nAny.width
-    ?? (n.type === 'groupNode' || n.type === 'commentNode' ? (style?.width ?? 200) : 200);
+    ?? (n.type === 'groupNode' || n.type === 'commentNode' ? (style?.width ?? 200) : n.type === 'rerouteNode' ? 16 : 200);
   const h = nAny.measured?.height
     ?? nAny.height
     ?? (n.type === 'groupNode'
       ? (style?.height ?? 200)
       : n.type === 'commentNode'
         ? (style?.height ?? 80)
+        : n.type === 'rerouteNode' ? 16
         : isCollapsed ? 32 : 100);
   return { w, h };
 }
@@ -1049,6 +1060,18 @@ export function GraphEditorInner() {
 
       const currentEdges = edgesRef.current;
 
+      // A reroute relays exactly ONE output, so its single input accepts at most
+      // one incoming wire — for BOTH value and flow (flow inputs are otherwise
+      // multi-occupancy, but a reroute is not a merge point: extra incoming wires
+      // would be silently dropped at compile time). Reject a second incoming.
+      const tgtNode = nodesRef.current.find(n => n.id === connection.target);
+      if ((tgtNode?.data as Record<string, unknown> | undefined)?.nodeType === 'reroute') {
+        const occupied = currentEdges.some(
+          e => e.target === connection.target && e.targetHandle === connection.targetHandle,
+        );
+        if (occupied) return false;
+      }
+
       // Prevent connecting to an already-connected value input (unless port is isArray).
       // Also enforce NeighborIndex type compatibility: a NI port may only connect to
       // another NI port or to an `any`-typed port. This is the only data-type rule
@@ -1664,6 +1687,191 @@ export function GraphEditorInner() {
     [setNodes, setEdges, scheduleSync],
   );
 
+  // --- Reroute relay points -------------------------------------------------
+  // A reroute is an editor-only dot on a wire (collapsed away at compile time,
+  // see rerouteCollapse.ts). It always relays an OUTPUT, so it has one input
+  // (the relayed wire) and any number of outputs. Built typed from the wire it
+  // sits on; it's a normal draggable node (moves alone and within a multi-
+  // selection). The press-and-hold gesture only CREATES one on a wire.
+
+  const edgeStrokeFor = (category: 'flow' | 'value') =>
+    category === 'flow' ? '#66bb6a' : '#4cc9f0';
+
+  /** Move a reroute node to a flow-space position (used during the hold-drag). */
+  const moveRerouteTo = useCallback((id: string, pos: { x: number; y: number }) => {
+    setNodes(nds => nds.map(n => (n.id === id ? { ...n, position: { x: pos.x, y: pos.y } } : n)));
+  }, [setNodes]);
+
+  /** Build a fresh reroute RF node typed for the given wire category. */
+  const makeRerouteNode = useCallback(
+    (category: 'flow' | 'value', dataType: string | undefined, pos: { x: number; y: number }): Node => ({
+      id: generateNodeId(nodesRef.current),
+      type: 'rerouteNode',
+      position: { x: pos.x, y: pos.y },
+      data: { nodeType: 'reroute', portCategory: category, ...(dataType ? { dataType } : {}), config: {} },
+      selected: true,
+    }),
+    [],
+  );
+
+  /** Split an existing edge by inserting a reroute at `pos`. Returns the new
+   *  reroute id (for the hold-drag to grab), or null if the edge is gone. The
+   *  reroute relays the edge's source output, so chains form naturally when the
+   *  split edge's source is itself a reroute. */
+  const insertRerouteOnEdge = useCallback(
+    (edgeId: string, pos: { x: number; y: number }): string | null => {
+      const edge = edgesRef.current.find(e => e.id === edgeId);
+      if (!edge || !edge.sourceHandle || !edge.targetHandle) return null;
+      const sh = parseHandleId(edge.sourceHandle);
+      if (!sh) return null;
+      const category = sh.category;
+      const srcNode = nodesRef.current.find(n => n.id === edge.source);
+      const dataType = srcNode ? getOriginPortInfo(srcNode, sh.portId)?.dataType : undefined;
+      const reroute = makeRerouteNode(category, dataType, pos);
+      const ts = Date.now().toString(36);
+      const rnd = () => Math.random().toString(36).slice(2, 5);
+      const inEdge: Edge = {
+        id: `e_${ts}_ri_${rnd()}`,
+        source: edge.source,
+        target: reroute.id,
+        sourceHandle: edge.sourceHandle,
+        targetHandle: handleId({ id: 'in', kind: 'input', category }),
+        style: { stroke: edgeStrokeFor(category), strokeWidth: 2 },
+      };
+      const outEdge: Edge = {
+        id: `e_${ts}_ro_${rnd()}`,
+        source: reroute.id,
+        target: edge.target,
+        sourceHandle: handleId({ id: 'out', kind: 'output', category }),
+        targetHandle: edge.targetHandle,
+        style: { stroke: edgeStrokeFor(category), strokeWidth: 2 },
+      };
+      setNodes(nds => [...nds, reroute]);
+      setEdges(eds => [...eds.filter(e => e.id !== edgeId), inEdge, outEdge]);
+      return reroute.id;
+    },
+    [makeRerouteNode, setNodes, setEdges],
+  );
+
+  /** Create a reroute from a connection-drop origin (drag a wire off an OUTPUT
+   *  port, release on empty canvas, pick "Reroute"). Wires origin.out → R.in;
+   *  the user continues wiring from R.out. */
+  const addRerouteAndConnect = useCallback(
+    (origin: ConnectionOrigin, pos: { x: number; y: number }) => {
+      if (origin.kind !== 'output') return; // reroutes relay outputs only
+      pushCurrentSnapshot();
+      const category = origin.category;
+      const reroute = makeRerouteNode(category, origin.dataType, pos);
+      const newEdge: Edge = {
+        id: `e${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
+        source: origin.nodeId,
+        target: reroute.id,
+        sourceHandle: handleId({ id: origin.portId, kind: 'output', category }),
+        targetHandle: handleId({ id: 'in', kind: 'input', category }),
+        style: { stroke: edgeStrokeFor(category), strokeWidth: 2 },
+      };
+      setNodes(nds => [...nds, reroute]);
+      setEdges(eds => addEdge(newEdge, eds));
+      scheduleSync();
+    },
+    [makeRerouteNode, pushCurrentSnapshot, scheduleSync, setNodes, setEdges],
+  );
+
+  // Press-and-hold gesture to CREATE a reroute on a wire: LMB-press on a wire and
+  // hold ~0.55s to drop a reroute that then follows the cursor until release
+  // (splitting the wire). A quick click / drag below the hold threshold is left
+  // untouched, so wire double-click-delete, edge selection, and RMB-pan all keep
+  // working. Repositioning an EXISTING reroute is just a normal node drag (the
+  // node is draggable), so it also moves as part of a multi-selection — the
+  // gesture deliberately only targets edges, never reroute nodes. Mirrors the
+  // capture-phase pattern of the RMB-through-edges handler above.
+  useEffect(() => {
+    const wrapper = editorWrapperRef.current;
+    if (!wrapper) return;
+    const HOLD_MS = 550;
+    const MOVE_TOL = 6; // px; movement beyond this before the hold fires cancels
+
+    type Gesture = {
+      phase: 'holding' | 'dragging';
+      edgeId: string;           // the wire being split
+      rerouteId: string | null; // the reroute created once the hold fires
+      startX: number; startY: number;
+      timer: number;
+    };
+    let g: Gesture | null = null;
+
+    const toFlow = (cx: number, cy: number) => rfInstance.current?.screenToFlowPosition({ x: cx, y: cy }) ?? null;
+
+    function teardownListeners() {
+      window.removeEventListener('pointermove', onMove, true);
+      window.removeEventListener('pointerup', onUp, true);
+      window.removeEventListener('pointercancel', onUp, true);
+    }
+    function cancel() {
+      if (g) window.clearTimeout(g.timer);
+      g = null;
+      teardownListeners();
+    }
+    function fire(cx: number, cy: number) {
+      if (!g) return;
+      const flow = toFlow(cx, cy);
+      if (!flow) { cancel(); return; }
+      pushCurrentSnapshot(); // so undo restores the un-split wire
+      const newId = insertRerouteOnEdge(g.edgeId, flow);
+      if (!newId) { cancel(); return; }
+      g.rerouteId = newId;
+      g.phase = 'dragging';
+      moveRerouteTo(newId, flow);
+    }
+    function onMove(e: PointerEvent) {
+      if (!g) return;
+      if (g.phase === 'holding') {
+        const dx = e.clientX - g.startX, dy = e.clientY - g.startY;
+        if (dx * dx + dy * dy > MOVE_TOL * MOVE_TOL) cancel();
+        return;
+      }
+      // dragging — isolate from React Flow and move the reroute
+      e.preventDefault();
+      e.stopPropagation();
+      const flow = toFlow(e.clientX, e.clientY);
+      if (flow && g.rerouteId) moveRerouteTo(g.rerouteId, flow);
+    }
+    function onUp(e: PointerEvent) {
+      if (!g) return;
+      if (g.phase === 'dragging') {
+        e.preventDefault();
+        e.stopPropagation();
+        scheduleSync();
+      }
+      cancel();
+    }
+    function onDown(e: PointerEvent) {
+      if (e.button !== 0 || g) return; // LMB only; ignore re-entrancy
+      const target = e.target as Element | null;
+      if (!target) return;
+      // Only wires trigger create-on-hold. Existing reroutes use normal node drag,
+      // so we never intercept them here (that's what lets a selection carry them).
+      const edgeEl = target.closest('.react-flow__edge');
+      if (!edgeEl) return;
+      const edgeId = edgeEl.getAttribute('data-id');
+      if (!edgeId) return;
+      g = {
+        phase: 'holding',
+        edgeId,
+        rerouteId: null,
+        startX: e.clientX,
+        startY: e.clientY,
+        timer: window.setTimeout(() => fire(e.clientX, e.clientY), HOLD_MS),
+      };
+      window.addEventListener('pointermove', onMove, true);
+      window.addEventListener('pointerup', onUp, true);
+      window.addEventListener('pointercancel', onUp, true);
+      // No stopPropagation here: let React Flow handle selection during the hold.
+    }
+    wrapper.addEventListener('pointerdown', onDown, true);
+    return () => { wrapper.removeEventListener('pointerdown', onDown, true); cancel(); };
+  }, [pushCurrentSnapshot, scheduleSync, moveRerouteTo, insertRerouteOnEdge]);
+
   /** After a snap-to-port node has been added, schedule a one-shot
    *  `requestAnimationFrame` that measures the actual port positions in the
    *  DOM (the heuristic estimate may have been a few px off vertically or
@@ -2108,12 +2316,11 @@ export function GraphEditorInner() {
       }
       return {
         id: idMap.get(n.id)!,
-        type: n.type === 'groupNode' ? 'groupNode' : n.type === 'commentNode' ? 'commentNode' : 'caNode',
+        type: n.type === 'groupNode' ? 'groupNode' : n.type === 'commentNode' ? 'commentNode' : n.type === 'rerouteNode' ? 'rerouteNode' : 'caNode',
         position: { x: n.position.x + offsetX, y: n.position.y + offsetY },
         data: clonedData,
         selected: true,
-        ...(n.type === 'groupNode' ? { style: { width: (clonedData.width as number) || 300, height: (clonedData.height as number) || 200 }, zIndex: -1, dragHandle: '[data-drag-handle="true"]' } : {}),
-      };
+        ...(n.type === 'groupNode' ? { style: { width: (clonedData.width as number) || 300, height: (clonedData.height as number) || 200 }, zIndex: -1, dragHandle: '[data-drag-handle="true"]' } : {}),      };
     });
 
     const pasteTs = Date.now().toString(36);
@@ -2188,12 +2395,11 @@ export function GraphEditorInner() {
 
       return {
         id: idMap.get(n.id)!,
-        type: n.type === 'groupNode' ? 'groupNode' : n.type === 'commentNode' ? 'commentNode' : 'caNode',
+        type: n.type === 'groupNode' ? 'groupNode' : n.type === 'commentNode' ? 'commentNode' : n.type === 'rerouteNode' ? 'rerouteNode' : 'caNode',
         position: { x: n.position.x + 30, y: n.position.y + 30 },
         data: clonedData,
         selected: true,
-        ...(n.type === 'groupNode' ? { style: { width: (clonedData.width as number) || 300, height: (clonedData.height as number) || 200 }, zIndex: -1, dragHandle: '[data-drag-handle="true"]' } : {}),
-      };
+        ...(n.type === 'groupNode' ? { style: { width: (clonedData.width as number) || 300, height: (clonedData.height as number) || 200 }, zIndex: -1, dragHandle: '[data-drag-handle="true"]' } : {}),      };
     });
 
     const ts = Date.now().toString(36);
@@ -2805,12 +3011,11 @@ export function GraphEditorInner() {
       .filter(n => !boundaryNodeIds.has(n.id))
       .map(n => ({
         id: n.id,
-        type: n.type === 'groupNode' ? 'groupNode' : n.type === 'commentNode' ? 'commentNode' : 'caNode',
+        type: n.type === 'groupNode' ? 'groupNode' : n.type === 'commentNode' ? 'commentNode' : n.type === 'rerouteNode' ? 'rerouteNode' : 'caNode',
         position: { x: n.position.x + offsetX, y: n.position.y + offsetY },
         data: n.data,
         selected: true,
-        ...(n.type === 'groupNode' ? { dragHandle: '[data-drag-handle="true"]' } : {}),
-      }));
+        ...(n.type === 'groupNode' ? { dragHandle: '[data-drag-handle="true"]' } : {}),      }));
 
     // Restore only internal edges (exclude bridging edges touching boundary nodes)
     const restoredRFEdges: Edge[] = macroDef.edges
@@ -3134,6 +3339,20 @@ export function GraphEditorInner() {
             return (
               <>
                 <div className={styles.contextTitle}>{titleText}</div>
+                {origin.kind === 'output' && (
+                  <button
+                    className={styles.contextItem}
+                    title="Insert a reroute relay that carries this output to a new spot (drag from it to fan out)"
+                    onClick={e => {
+                      e.stopPropagation();
+                      addRerouteAndConnect(origin, { x: contextMenu.flowX, y: contextMenu.flowY });
+                      setContextMenu(null);
+                    }}
+                  >
+                    <span className={styles.contextDot} style={{ background: origin.category === 'flow' ? '#4caf50' : '#4cc9f0' }} />
+                    Reroute
+                  </button>
+                )}
                 {matches.length === 0 && (
                   <div style={{ padding: '6px 10px', fontSize: '0.7rem', color: '#8090a0', fontStyle: 'italic' }}>
                     No compatible nodes
