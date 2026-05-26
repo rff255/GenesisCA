@@ -37,6 +37,8 @@ import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } fr
 import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { injectLinkedOutputMappings } from '../linkedOutputMappings';
 import { collapseReroutes } from '../rerouteCollapse';
+import { expandMacros } from '../macroExpand';
+import { computeVolatileHoist, computeVolatileValueClosure } from '../volatileHoist';
 import { subAttrInfo, subAttributesOf } from '../subAttribute';
 import { emitWgsl } from '../expression/emitWgsl';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
@@ -136,6 +138,23 @@ interface CompileCtx {
    *  flushBranchValues drains them into ctx.lines when the flow walk enters
    *  the matching branch. */
   branchLines: Map<ScopeId, string[]>;
+  /** Volatile value node ids (transitive value-consumers of any `getVariable`).
+   *  Their emitScope is forced to CELL_TOP so routeEmissionForNode emits them
+   *  at the current flow position; they are skipped during preEmit (via
+   *  `suppressVolatile`) and force-emitted by compileFlowChain before the flow
+   *  node identified by `volatileHoist`. */
+  volatile: Set<string>;
+  /** flow node id → volatile value ids to emit immediately before it. */
+  volatileHoist: Map<string, string[]>;
+  /** True only during the preEmit pass — makes compileValueNode/compileArrayNode
+   *  skip volatile nodes so they aren't emitted at function-top (stale reads). */
+  suppressVolatile?: boolean;
+  /** True only while force-emitting a volatile (+ its transitive value inputs)
+   *  before a flow node — routeEmissionForNode then emits at the CURRENT ctx.lines
+   *  position regardless of sink scope, so a non-volatile input reachable only
+   *  through the volatile (e.g. a getRandom feeding volatile arithmetic) lands
+   *  in-scope rather than in an already-flushed branch buffer. */
+  forceCurrentScope?: boolean;
   /** Flat post-macro-expansion graph; needed to feed the sink analyzer. */
   graphNodes: GraphNode[];
   graphEdges: GraphEdge[];
@@ -248,7 +267,9 @@ function fresh(ctx: CompileCtx, prefix: string = 'l'): string {
  * upstream of the wrapped emit call. */
 function routeEmissionForNode<T>(ctx: CompileCtx, nodeId: string, emit: () => T): T {
   const scope = ctx.sinkAnalysis?.emitScope.get(nodeId) ?? CELL_TOP;
-  if (scope === CELL_TOP) return emit();
+  // forceCurrentScope: while a volatile (+ its transitive inputs) is force-emitted
+  // before a flow node, every emission lands at the current ctx.lines position.
+  if (ctx.forceCurrentScope || scope === CELL_TOP) return emit();
   const original = ctx.lines;
   const captured: string[] = [];
   ctx.lines = captured;
@@ -659,6 +680,8 @@ const MULTI_OUTPUT_ARRAY_DEFAULT_PORT: Record<string, string> = {
 };
 
 function compileArrayNode(ctx: CompileCtx, nodeId: string, portId?: string): ArrayRef | null {
+  // Mirror compileValueNode: skip volatile array values during preEmit.
+  if (ctx.suppressVolatile && ctx.volatile.has(nodeId)) return null;
   const node = ctx.nodeMap.get(nodeId);
   if (!node) { ctx.errors.push(`unknown array node ${nodeId}`); return null; }
   const isMulti = MULTI_OUTPUT_ARRAY_TYPES.has(node.data.nodeType);
@@ -2883,6 +2906,10 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
 // ---------------------------------------------------------------------------
 
 function compileValueNode(ctx: CompileCtx, nodeId: string, portId: string = 'value'): ValueRef | null {
+  // During preEmit, skip volatile values — emitting them at function-top would
+  // read the variable's initial value (before in-flow writes). compileFlowChain
+  // force-emits them at their LCA flow scope instead (return is ignored here).
+  if (ctx.suppressVolatile && ctx.volatile.has(nodeId)) return null;
   const cached = getCachedPort(ctx, nodeId, portId);
   if (cached) return cached;
 
@@ -3079,6 +3106,24 @@ function compileFlowChain(ctx: CompileCtx, sourceNodeId: string, sourcePortId: s
     if (!node) continue;
     const def = getNodeDef(node.data.nodeType);
     if (!def) continue;
+
+    // Volatile values whose LCA flow scope is here: force-emit them (at the
+    // current position, since their emitScope was forced to CELL_TOP) BEFORE
+    // this flow node, so they land after preceding sibling writes and dominate
+    // every branch this node opens. getVariable reads its var<function> directly
+    // (no block-scoped let), so it never needs hoisting — skip it.
+    const hoisted = ctx.volatileHoist.get(target.nodeId);
+    if (hoisted) {
+      const savedForce = ctx.forceCurrentScope;
+      ctx.forceCurrentScope = true;
+      for (const vId of hoisted) {
+        const vn = ctx.nodeMap.get(vId);
+        if (!vn || vn.data.nodeType === 'getVariable') continue;
+        if (isArrayProducer(vn.data.nodeType)) compileArrayNode(ctx, vId);
+        else compileValueNode(ctx, vId);
+      }
+      ctx.forceCurrentScope = savedForce;
+    }
 
     if (node.data.nodeType === 'conditional') {
       const condSource = ctx.inputToSource.get(`${node.id}:condition`);
@@ -3401,7 +3446,7 @@ interface EntryOpts {
   currentMappingId: string | null;
 }
 
-function compileEntry(opts: EntryOpts, base: Omit<CompileCtx, 'lines' | 'valueLocals' | 'arrayRefs' | 'localCounter' | 'errors' | 'currentMappingId' | 'allowAttrWrites' | 'sinkAnalysis' | 'branchLines'>): { code: string; errors: string[] } {
+function compileEntry(opts: EntryOpts, base: Omit<CompileCtx, 'lines' | 'valueLocals' | 'arrayRefs' | 'localCounter' | 'errors' | 'currentMappingId' | 'allowAttrWrites' | 'sinkAnalysis' | 'branchLines' | 'volatile' | 'volatileHoist'>): { code: string; errors: string[] } {
   // Sink analysis: per-value LCA-of-uses scope assignment. Drives
   // routeEmissionForNode (where each value's emit lines land) and the
   // flushBranchValues calls in compileFlowChain. Per-entry — each root has
@@ -3412,6 +3457,23 @@ function compileEntry(opts: EntryOpts, base: Omit<CompileCtx, 'lines' | 'valueLo
     rootNodeId: opts.entry.id,
     rootFlowPortId: 'do',
   });
+  // Volatile values (transitive getVariable consumers): force their emit scope
+  // to CELL_TOP so routeEmissionForNode emits them at the CURRENT flow position
+  // when triggered — not at function-top (which would read the variable's
+  // pre-write value). They are skipped during preEmit (suppressVolatile) and
+  // force-emitted by compileFlowChain immediately before the flow node that
+  // volatileHoist identifies (the LCA of their uses, after preceding writes).
+  const volatile = computeVolatileValueClosure(base.nodeMap, base.inputToSource, base.inputToSources);
+  for (const v of volatile) sinkAnalysis.emitScope.set(v, CELL_TOP);
+  const volatileHoist = computeVolatileHoist({
+    nodeMap: base.nodeMap,
+    inputToSource: base.inputToSource,
+    inputToSources: base.inputToSources,
+    flowOutputToTargets: base.flowOutputToTargets,
+    rootNodeId: opts.entry.id,
+    rootFlowPortId: 'do',
+    volatile,
+  }).emitBefore;
   const ctx: CompileCtx = {
     ...base,
     lines: [],
@@ -3423,6 +3485,8 @@ function compileEntry(opts: EntryOpts, base: Omit<CompileCtx, 'lines' | 'valueLo
     allowAttrWrites: opts.allowAttrWrites,
     sinkAnalysis,
     branchLines: new Map(),
+    volatile,
+    volatileHoist,
   };
   // Local Variables — emit `var<function>` declarations + initial-value
   // assignments at the top of the function. Per-thread storage is per-cell
@@ -3446,8 +3510,12 @@ function compileEntry(opts: EntryOpts, base: Omit<CompileCtx, 'lines' | 'valueLo
     for (const line of emitSubAttrConditionalCopy(ctx)) ctx.lines.push(line);
   }
   // Pre-emit ALL referenced value nodes at the top scope so subsequent
-  // references inside conditional branches resolve correctly.
+  // references inside conditional branches resolve correctly. Volatile values
+  // are skipped here (suppressVolatile) — compileFlowChain force-emits them at
+  // their LCA flow scope so they land after the variable writes.
+  ctx.suppressVolatile = true;
   preEmitValueNodes(ctx, opts.entry.id, 'do', new Set());
+  ctx.suppressVolatile = false;
   if (ctx.errors.length > 0) return { code: '', errors: ctx.errors };
   // Compile the flow chain rooted at the entry node's `do` port.
   compileFlowChain(ctx, opts.entry.id, 'do');
@@ -3456,113 +3524,8 @@ function compileEntry(opts: EntryOpts, base: Omit<CompileCtx, 'lines' | 'valueLo
   return { code: emitEntryPoint(opts.fnName, ctx.layout.total, body), errors: [] };
 }
 
-// ---------------------------------------------------------------------------
-// Macro expansion — inline every `macro` instance in `graphNodes` into the
-// graph by copying the macroDef's internal nodes (with prefixed ids) and
-// rewriting edges to bridge external sources/targets through what would have
-// been the macroInput/macroOutput boundary nodes. Mirrors the WASM compiler's
-// `expandMacros`.
-//
-// Recursion guard: macros can contain macros; max depth 20 mirrors WASM.
-// ---------------------------------------------------------------------------
-
-function parseHandleSimple(handleId: string | undefined): { category: 'value' | 'flow'; portId: string } | null {
-  if (!handleId) return null;
-  const m = handleId.match(/^(?:input|output)_(value|flow)_(.+)$/);
-  if (!m) return null;
-  return { category: m[1] as 'value' | 'flow', portId: m[2]! };
-}
-
-function expandMacros(
-  graphNodes: GraphNode[], graphEdges: GraphEdge[], model: CAModel, depth = 0,
-): { nodes: GraphNode[]; edges: GraphEdge[]; error?: string } {
-  if (depth > 20) return { nodes: graphNodes, edges: graphEdges, error: 'macro recursion depth > 20' };
-  const macroInstances = graphNodes.filter(n => n.data.nodeType === 'macro');
-  if (macroInstances.length === 0) return { nodes: graphNodes, edges: graphEdges };
-
-  const macroDefs = model.macroDefs ?? [];
-  const edgesByTarget = new Map<string, GraphEdge[]>();
-  const edgesBySource = new Map<string, GraphEdge[]>();
-  for (const e of graphEdges) {
-    const t = edgesByTarget.get(e.target); if (t) t.push(e); else edgesByTarget.set(e.target, [e]);
-    const s = edgesBySource.get(e.source); if (s) s.push(e); else edgesBySource.set(e.source, [e]);
-  }
-
-  const removedNodeIds = new Set(macroInstances.map(m => m.id));
-  const newNodes: GraphNode[] = [];
-  const newEdges: GraphEdge[] = [];
-
-  for (const n of graphNodes) if (!removedNodeIds.has(n.id)) newNodes.push(n);
-  for (const e of graphEdges) {
-    if (!removedNodeIds.has(e.source) && !removedNodeIds.has(e.target)) newEdges.push(e);
-  }
-
-  for (const m of macroInstances) {
-    const def = macroDefs.find(d => d.id === m.data.config.macroDefId);
-    if (!def) continue;
-    const prefix = `m${m.id}_`;
-
-    const extInMap = new Map<string, { source: string; sourceHandle: string }>();
-    const extInArr = edgesByTarget.get(m.id) ?? [];
-    for (const e of extInArr) extInMap.set(e.targetHandle ?? '', { source: e.source, sourceHandle: e.sourceHandle ?? '' });
-    const extOutArr = edgesBySource.get(m.id) ?? [];
-
-    for (const inner of def.nodes) {
-      if (inner.data.nodeType === 'macroInput' || inner.data.nodeType === 'macroOutput') continue;
-      newNodes.push({ ...inner, id: prefix + inner.id });
-    }
-
-    for (const e of def.edges) {
-      const srcInner = def.nodes.find(n => n.id === e.source);
-      const tgtInner = def.nodes.find(n => n.id === e.target);
-      const srcIsBoundary = srcInner?.data.nodeType === 'macroInput' || srcInner?.data.nodeType === 'macroOutput';
-      const tgtIsBoundary = tgtInner?.data.nodeType === 'macroInput' || tgtInner?.data.nodeType === 'macroOutput';
-      if (srcIsBoundary && tgtIsBoundary) continue;
-
-      if (srcInner?.data.nodeType === 'macroInput') {
-        const ep = parseHandleSimple(e.sourceHandle);
-        const epPortId = ep?.portId ?? e.sourceHandle ?? '';
-        let ext: { source: string; sourceHandle: string } | undefined;
-        for (const [th, src] of extInMap) {
-          const parsed = parseHandleSimple(th);
-          if (parsed?.portId === epPortId) { ext = src; break; }
-        }
-        if (!ext) continue;
-        newEdges.push({
-          ...e,
-          id: prefix + e.id,
-          source: ext.source,
-          sourceHandle: ext.sourceHandle,
-          target: prefix + e.target,
-        });
-        continue;
-      }
-
-      if (tgtInner?.data.nodeType === 'macroOutput') {
-        const epPortId = parseHandleSimple(e.targetHandle)?.portId ?? e.targetHandle ?? '';
-        for (const eOut of extOutArr) {
-          const epExt = parseHandleSimple(eOut.sourceHandle);
-          if (epExt?.portId !== epPortId) continue;
-          newEdges.push({
-            ...eOut,
-            source: prefix + e.source,
-            sourceHandle: e.sourceHandle,
-          });
-        }
-        continue;
-      }
-
-      newEdges.push({
-        ...e,
-        id: prefix + e.id,
-        source: prefix + e.source,
-        target: prefix + e.target,
-      });
-    }
-  }
-
-  return expandMacros(newNodes, newEdges, model, depth + 1);
-}
+// Macro expansion (`expandMacros`) now lives in the shared `../macroExpand`
+// module, used identically by the JS / WASM / WebGPU compilers.
 
 // ---------------------------------------------------------------------------
 // Top-level compile
@@ -3656,7 +3619,7 @@ export function compileGraphWebGPU(
   let maxArraySize = 1;
   for (const n of layout.nbrs) if (n.size > maxArraySize) maxArraySize = n.size;
 
-  const baseCtx: Omit<CompileCtx, 'lines' | 'valueLocals' | 'arrayRefs' | 'localCounter' | 'errors' | 'currentMappingId' | 'allowAttrWrites' | 'sinkAnalysis' | 'branchLines'> = {
+  const baseCtx: Omit<CompileCtx, 'lines' | 'valueLocals' | 'arrayRefs' | 'localCounter' | 'errors' | 'currentMappingId' | 'allowAttrWrites' | 'sinkAnalysis' | 'branchLines' | 'volatile' | 'volatileHoist'> = {
     model, layout, viewerIds, stopMessages, maxArraySize,
     nodeMap: adj.nodeMap,
     inputToSource: adj.inputToSource,
