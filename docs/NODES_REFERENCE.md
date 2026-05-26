@@ -10,6 +10,13 @@ nodes live within the `data` (readers) and `output` (writers) categories rather 
 category of their own. The variegated-cells and local-variable nodes appear in the editor
 only when their respective model feature is enabled.
 
+**Editor-only constructs** (not counted above, no computation): comments, groups, and
+**reroute points**. A reroute is a movable relay dot placed on a wire (Blender / Unreal
+blueprint style) to bend connections and fan one output out to many consumers; it always
+relays an *output* (one input, many outputs), can be chained, and is stripped before
+compilation by `collapseReroutes` ([rerouteCollapse.ts](../src/modeler/vpl/compiler/rerouteCollapse.ts)) so `A → reroute → B`
+compiles identically to `A → B` on all three targets.
+
 ---
 
 ## 1. Overview

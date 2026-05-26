@@ -508,6 +508,28 @@ export function HelpView() {
             swatch in the top-right corner to change its background color.
           </p>
 
+          <h3 className={styles.h3}>Reroute Points</h3>
+          <p className={styles.p}>
+            A <strong>reroute</strong> is a small movable dot you place on a wire to
+            bend it around other nodes &mdash; and to fan one output out to many places
+            without long crossing wires. To create one, <strong>press and hold</strong>
+            the left mouse button on a wire for about half a second: a reroute appears and
+            then follows your cursor until you release. Once placed, a reroute is an
+            ordinary node &mdash; <strong>drag it to move it</strong>, and it moves along
+            with a multi-selection just like any other node. You can also drag a wire off
+            an output port, release on empty canvas, and pick
+            <strong>&quot;Reroute&quot;</strong> from the menu.
+          </p>
+          <p className={styles.p}>
+            A reroute always carries an <strong>output</strong>, so it has one input
+            (the wire feeding it) and as many outputs as you like &mdash; drag from it to
+            send the same value to several nodes. You can also chain reroutes
+            (<em>wire &rarr; reroute &rarr; reroute &rarr; node</em>) to route around large
+            areas. Reroutes are purely cosmetic: they have <strong>no effect</strong> on
+            the simulation &mdash; a wire through a reroute behaves exactly like a direct
+            connection. Deleting a reroute removes it and all of its links.
+          </p>
+
           <h3 className={styles.h3}>Inline Port Widgets</h3>
           <p className={styles.p}>
             Input ports on many nodes (Math, Compare, Logic, Loop, Set Attribute, Set Color
