@@ -2975,6 +2975,33 @@ function compileValueNode(ctx: CompileCtx, nodeId: string, portId: string = 'val
     }
   }
 
+  // Pre-resolve MULTI-SOURCE SCALAR inputs of array ports HERE, at the current
+  // (upstream) scope — OUTSIDE the emitter's routeEmissionForNode wrapper below.
+  // Some value emitters (getRandom "options", aggregate/groupOperator over
+  // multi-scalar sources) resolve their array-port sources internally via
+  // compileValueNode. If such a source is a CSE-shared constant whose sink scope
+  // is CELL_TOP, compiling it for the FIRST time inside this node's wrapper dumps
+  // its `let` into this node's temporary branch buffer (routeEmissionForNode's
+  // CELL_TOP fast-path emits into the current ctx.lines), so a sibling branch
+  // that also reads it sees an undeclared identifier (the "_ki10" WGSL crash).
+  // Warming the cache here honors the "inputs resolved upstream" contract (see
+  // routeEmissionForNode's doc comment); the emitter's own resolution then reuses
+  // these cached refs (idempotent — no double emission). Skip single array-
+  // PRODUCER sources (leave them to the emitter so aggregate/groupOperator fusion
+  // is preserved) and getVariable (dual scalar/array; resolved at use site).
+  for (const port of def.ports) {
+    if (port.kind !== 'input' || port.category !== 'value' || !port.isArray) continue;
+    const srcs = ctx.inputToSources.get(`${nodeId}:${port.id}`);
+    if (!srcs) continue;
+    for (const s of srcs) {
+      const sn = ctx.nodeMap.get(s.nodeId);
+      if (!sn || sn.data.nodeType === 'getVariable') continue;
+      const sp = getNodeDef(sn.data.nodeType)?.ports.find(p => p.id === s.portId);
+      if (sp?.isArray) continue; // array producer → leave to emitter (fusion)
+      compileValueNode(ctx, s.nodeId, s.portId);
+    }
+  }
+
   const result = routeEmissionForNode(ctx, nodeId, () => emitter({ ctx, node, inputs }));
   if (!result) return null;
   if (!getCachedPort(ctx, node.id, 'value')) setCachedPort(ctx, node.id, 'value', result);

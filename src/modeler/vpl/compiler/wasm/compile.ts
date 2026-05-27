@@ -2580,7 +2580,7 @@ function emitAggregateOrCount(
       // groupOperator random pick: choose uniform index in [0, size), fetch.
       // Sub-attribute path: filter matching neighbor values into scratch first,
       // then pick uniformly from the filtered length. RNG advances regardless
-      // (matches JS `Math.random()` semantics — called even on empty arrays).
+      // (matches JS's always-advance `_rs` semantics — drawn even on empty arrays).
       const subRand = getSubAttrWasm(ctx, attrId);
       if (subRand) {
         return emitRandomViaScratchFromSubAttrNbr(ctx, node, nbr, attr, subRand);
@@ -3045,7 +3045,7 @@ function emitMedianViaScratchFromNbr(
  *
  *  Filters matching neighbor values into scratch, then picks uniformly from
  *  the filtered length. RNG advances regardless of filtered length (matches
- *  JS `Math.random()` semantics on empty arrays). Empty filtered set returns
+ *  JS's always-advance `_rs` semantics on empty arrays). Empty filtered set returns
  *  0 — closest typed-array analog to JS `arr[0] === undefined` propagating
  *  to a typed-array write as 0 (int/bool) or NaN-coerced-to-0 elsewhere.
  *  The `index` output port is the position in the FILTERED set (matches JS,
@@ -3547,7 +3547,8 @@ function emitScalarAggregate(
       // Multi-source random pick: choose uniform index in [0, N), select that
       // source's value as the result. Mirrors the single-source path at the top
       // of compileArrayNode (`if (op === 'random') { ... }`) and the JS impl at
-      // GroupOperatorNode.compile() (`Math.floor(Math.random() * values.length)`).
+      // GroupOperatorNode.compile(), which also draws from the shared `_rs`
+      // xorshift32 stream via floor((_rs / 2^32) * N) — JS↔WASM pick the same index.
       const em = ctx.emitter;
       const N = sourceRefs.length;
       if (N === 0) {
@@ -6792,7 +6793,7 @@ export function compileGraphWasm(
   // Median materialises into per-cell scratch with a parent-match filter, then
   // sorts the filtered prefix (narrows lenLocal to filledLocal). Random filters
   // values into scratch and picks uniformly from the filtered length (RNG
-  // advances regardless, matching JS Math.random() semantics; empty filtered
+  // advances regardless, matching JS's always-advance `_rs` semantics; empty filtered
   // set returns 0). For average + min/max, a matchCountLocal drives the
   // post-divide / position-in-filtered-set so results match JS/WASM semantics.
 
