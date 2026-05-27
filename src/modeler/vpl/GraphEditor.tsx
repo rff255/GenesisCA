@@ -74,6 +74,8 @@ interface ConnectionOrigin {
   category: 'flow' | 'value';
   dataType?: string;
   isArray?: boolean;
+  /** Dual-mode relay port (valueSwitch) — see PortDef.arrayCapable. */
+  arrayCapable?: boolean;
 }
 
 /** Resolve the static or dynamic port info on the source side of a connection
@@ -82,7 +84,7 @@ interface ConnectionOrigin {
 function getOriginPortInfo(
   node: Node,
   portId: string,
-): { category: 'flow' | 'value'; dataType?: string; isArray?: boolean } | null {
+): { category: 'flow' | 'value'; dataType?: string; isArray?: boolean; arrayCapable?: boolean } | null {
   const nd = node.data as { nodeType?: string; config?: Record<string, unknown> } | undefined;
   const t = nd?.nodeType;
   if (!t) return null;
@@ -95,7 +97,7 @@ function getOriginPortInfo(
   if (def) {
     const staticPort = def.ports.find(p => p.id === portId);
     if (staticPort) {
-      return { category: staticPort.category, dataType: staticPort.dataType, isArray: staticPort.isArray };
+      return { category: staticPort.category, dataType: staticPort.dataType, isArray: staticPort.isArray, arrayCapable: staticPort.arrayCapable };
     }
   }
   if (t === 'switch') {
@@ -115,6 +117,7 @@ function portsCompatible(
   srcKind: 'input' | 'output',
   srcType: string | undefined,
   srcIsArray: boolean | undefined,
+  srcArrayCapable: boolean | undefined,
   dstPort: PortDef,
 ): boolean {
   if (dstPort.category !== srcCategory) return false;
@@ -129,7 +132,14 @@ function portsCompatible(
   // isValidConnection permits the connection at wire-time.
   const sourceIsArray = srcKind === 'output' ? !!srcIsArray : !!dstPort.isArray;
   const targetIsArray = srcKind === 'input' ? !!srcIsArray : !!dstPort.isArray;
-  if (sourceIsArray && !targetIsArray) return false;
+  // Dual-mode relay (valueSwitch, `arrayCapable` ports): a scalar-typed port
+  // that may also carry an array. Treat the TARGET side as array-capable so an
+  // array source into it isn't rejected — covers both drag directions
+  // (dragging an array output onto Value Switch's If/Else, and dragging from
+  // Value Switch's If/Else to find an array source). Wiring + relay are already
+  // handled by isValidConnection + the compilers; this is discovery only.
+  const targetArrayCapable = srcKind === 'input' ? !!srcArrayCapable : !!dstPort.arrayCapable;
+  if (sourceIsArray && !targetIsArray && !targetArrayCapable) return false;
   const a = srcType ?? 'any';
   const b = dstPort.dataType ?? 'any';
   return a === 'any' || b === 'any' || a === b;
@@ -167,7 +177,7 @@ function resolveDropCandidates(
       const eff = getEffectivePorts(def.type, newCfg);
       const candidates = [...eff.inputs, ...eff.outputs];
       const compatible = candidates.find(p =>
-        portsCompatible(snap.category, snap.kind, snap.dataType, snap.isArray, p));
+        portsCompatible(snap.category, snap.kind, snap.dataType, snap.isArray, snap.arrayCapable, p));
       if (!compatible) continue;
       resolved.push({ entry, def, matchPort: compatible });
     } else {
@@ -260,7 +270,7 @@ function getPortScreenCentre(
  *  match (Switch passes via its `default`/`check`/`value` static ports). */
 function nodeHasCompatiblePort(def: NodeTypeDef, origin: ConnectionOrigin): boolean {
   return def.ports.some(p =>
-    portsCompatible(origin.category, origin.kind, origin.dataType, origin.isArray, p),
+    portsCompatible(origin.category, origin.kind, origin.dataType, origin.isArray, origin.arrayCapable, p),
   );
 }
 
@@ -277,11 +287,11 @@ function pickCompatiblePort(
   if (resolvedConfig) {
     const eff = getEffectivePorts(def.type, resolvedConfig);
     candidates = [...eff.inputs, ...eff.outputs].filter(p =>
-      portsCompatible(origin.category, origin.kind, origin.dataType, origin.isArray, p),
+      portsCompatible(origin.category, origin.kind, origin.dataType, origin.isArray, origin.arrayCapable, p),
     );
   } else {
     candidates = def.ports.filter(p =>
-      portsCompatible(origin.category, origin.kind, origin.dataType, origin.isArray, p),
+      portsCompatible(origin.category, origin.kind, origin.dataType, origin.isArray, origin.arrayCapable, p),
     );
   }
   if (candidates.length === 0) return null;
@@ -1971,6 +1981,7 @@ export function GraphEditorInner() {
               category: snapTarget.category,
               dataType: port.dataType,
               isArray: port.isArray,
+              arrayCapable: port.arrayCapable,
             };
           }
         }
@@ -2877,6 +2888,7 @@ export function GraphEditorInner() {
           category: parsed.category,
           dataType: info?.dataType,
           isArray: info?.isArray,
+          arrayCapable: info?.arrayCapable,
         };
         connectionOriginRef.current = origin;
         setConnectingFrom({

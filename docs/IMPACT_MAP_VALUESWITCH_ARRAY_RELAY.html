@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Value Switch as conditional array relay — illustrated plan</title>
+<style>
+  :root{
+    --bg:#1e1e22; --panel:#27272d; --panel2:#2e2e35; --ink:#e6e6ea; --muted:#9a9aa6;
+    --cyan:#4cc9f0; --green:#66bb6a; --amber:#e0a106; --red:#e05a5a; --ok:#46b46e;
+    --border:#3a3a42; --niamber:#d99a2b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;line-height:1.5;padding:28px}
+  h1{font-size:20px;margin:0 0 4px}
+  h2{font-size:15px;margin:26px 0 10px;color:var(--cyan);font-weight:600;
+     border-bottom:1px solid var(--border);padding-bottom:5px}
+  .sub{color:var(--muted);margin:0 0 18px}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px;margin-bottom:18px}
+  code{background:#15151a;border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-family:ui-monospace,Consolas,monospace;font-size:12.5px}
+  .row{display:flex;gap:16px;flex-wrap:wrap}
+  .card{flex:1;min-width:240px;background:var(--panel2);border:1px solid var(--border);border-radius:9px;padding:14px}
+  .card h3{margin:0 0 8px;font-size:13.5px}
+  .pill{display:inline-block;font-size:11px;font-weight:700;border-radius:20px;padding:2px 10px;letter-spacing:.3px}
+  .pill.ok{background:rgba(70,180,110,.16);color:var(--ok);border:1px solid rgba(70,180,110,.5)}
+  .pill.bad{background:rgba(224,90,90,.16);color:var(--red);border:1px solid rgba(224,90,90,.5)}
+  .pill.new{background:rgba(76,201,240,.14);color:var(--cyan);border:1px solid rgba(76,201,240,.5)}
+  .mono{font-family:ui-monospace,Consolas,monospace;font-size:12px;white-space:pre;color:#cdd3da;
+    background:#15151a;border:1px solid var(--border);border-radius:6px;padding:10px 12px;overflow:auto}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;color:var(--muted);font-size:12.5px;margin-top:8px}
+  .dot{display:inline-block;width:11px;height:11px;border-radius:3px;vertical-align:-1px;margin-right:5px}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{border:1px solid var(--border);padding:8px 11px;text-align:left}
+  th{background:#15151a;color:var(--muted);font-weight:600}
+  .arrow{color:var(--amber);font-weight:700}
+  .small{font-size:12px;color:var(--muted)}
+</style>
+</head>
+<body>
+  <h1>Value Switch — conditional array relay</h1>
+  <p class="sub">Make <code>valueSwitch</code> select between two NeighborIndex arrays on every compile target.
+     Today JS does it for free; WASM &amp; WebGPU reject it. This brings them into lockstep.</p>
+
+  <!-- ============ THE GRAPH ============ -->
+  <h2>1 · The graph the user built (legal in the editor today)</h2>
+  <div class="panel">
+    <svg viewBox="0 0 880 280" width="100%" height="280" font-family="ui-monospace,Consolas,monospace" font-size="12">
+      <!-- defs -->
+      <defs>
+        <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#d99a2b"/>
+        </marker>
+        <marker id="ahc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#4cc9f0"/>
+        </marker>
+      </defs>
+
+      <!-- Filter Neighbors A -->
+      <rect x="20" y="24" width="170" height="52" rx="8" fill="#2e2e35" stroke="#e65100" stroke-width="1.5"/>
+      <text x="105" y="44" fill="#ffb877" text-anchor="middle" font-weight="700">Filter Neighbors A</text>
+      <text x="105" y="62" fill="#9a9aa6" text-anchor="middle">result : NI[ ]</text>
+      <circle cx="190" cy="50" r="5" fill="#d99a2b"/>
+
+      <!-- Filter Neighbors B -->
+      <rect x="20" y="120" width="170" height="52" rx="8" fill="#2e2e35" stroke="#e65100" stroke-width="1.5"/>
+      <text x="105" y="140" fill="#ffb877" text-anchor="middle" font-weight="700">Filter Neighbors B</text>
+      <text x="105" y="158" fill="#9a9aa6" text-anchor="middle">result : NI[ ]</text>
+      <circle cx="190" cy="146" r="5" fill="#d99a2b"/>
+
+      <!-- Compare / condition -->
+      <rect x="20" y="216" width="170" height="46" rx="8" fill="#2e2e35" stroke="#b8860b" stroke-width="1.5"/>
+      <text x="105" y="236" fill="#e0c46a" text-anchor="middle" font-weight="700">Compare (cond)</text>
+      <text x="105" y="252" fill="#9a9aa6" text-anchor="middle">bool</text>
+      <circle cx="190" cy="239" r="5" fill="#4cc9f0"/>
+
+      <!-- Value Switch -->
+      <rect x="360" y="70" width="180" height="124" rx="9" fill="#2e2e35" stroke="#b8860b" stroke-width="2"/>
+      <text x="450" y="92" fill="#e0c46a" text-anchor="middle" font-weight="700">Value Switch</text>
+      <circle cx="360" cy="120" r="5" fill="#d99a2b"/><text x="372" y="124" fill="#9a9aa6">If</text>
+      <circle cx="360" cy="150" r="5" fill="#d99a2b"/><text x="372" y="154" fill="#9a9aa6">Else</text>
+      <circle cx="360" cy="180" r="5" fill="#4cc9f0"/><text x="372" y="184" fill="#9a9aa6">Cond</text>
+      <text x="528" y="124" fill="#9a9aa6" text-anchor="end">Result</text>
+      <circle cx="540" cy="120" r="5" fill="#d99a2b"/>
+      <text x="450" y="172" fill="#7d7d88" text-anchor="middle" font-size="10.5">cond ? If : Else</text>
+
+      <!-- Pick Random Neighbor -->
+      <rect x="690" y="80" width="170" height="76" rx="8" fill="#2e2e35" stroke="#e65100" stroke-width="1.5"/>
+      <text x="775" y="104" fill="#ffb877" text-anchor="middle" font-weight="700">Pick Random</text>
+      <text x="775" y="120" fill="#ffb877" text-anchor="middle" font-weight="700">Neighbor</text>
+      <circle cx="690" cy="118" r="5" fill="#d99a2b"/><text x="702" y="122" fill="#9a9aa6">Indexes : NI[ ]</text>
+      <text x="848" y="146" fill="#9a9aa6" text-anchor="end">value : NI</text>
+      <circle cx="860" cy="142" r="5" fill="#d99a2b"/>
+
+      <!-- edges -->
+      <path d="M195,50 C270,50 290,120 355,120" stroke="#d99a2b" fill="none" stroke-width="2" marker-end="url(#ah)"/>
+      <path d="M195,146 C270,146 300,150 355,150" stroke="#d99a2b" fill="none" stroke-width="2" marker-end="url(#ah)"/>
+      <path d="M195,239 C280,239 300,180 355,180" stroke="#4cc9f0" fill="none" stroke-width="2" marker-end="url(#ahc)"/>
+      <path d="M545,120 C610,120 640,118 685,118" stroke="#d99a2b" fill="none" stroke-width="2" marker-end="url(#ah)"/>
+    </svg>
+    <div class="legend">
+      <span><span class="dot" style="background:#d99a2b"></span>NeighborIndex array (NI[ ])</span>
+      <span><span class="dot" style="background:#4cc9f0"></span>scalar value</span>
+      <span class="small">Both <code>If</code> and <code>Else</code> are NI arrays → <code>Result</code> is an NI array.</span>
+    </div>
+  </div>
+
+  <!-- ============ BEFORE / AFTER ============ -->
+  <h2>2 · Compile status — before vs after</h2>
+  <div class="panel">
+    <table>
+      <tr><th>Target</th><th>Today</th><th>After</th><th>Mechanism</th></tr>
+      <tr>
+        <td><b>JS</b> (Debug/Reference)</td>
+        <td><span class="pill bad">compiles but WRONG</span></td>
+        <td><span class="pill new">correct</span></td>
+        <td class="small">Producer relays for free, but the consumer <em>wrapped</em> it as <code>[_v]</code> (picked element 0). Fixed via <code>sourceYieldsArray()</code> &mdash; pass the relay through, don't wrap.</td>
+      </tr>
+      <tr>
+        <td><b>WASM</b> (default)</td>
+        <td><span class="pill bad">rejects → JS fallback</span></td>
+        <td><span class="pill new">compiles</span></td>
+        <td class="small">New array emitter: <b>zero-copy</b> <code>select</code> of offset+len.</td>
+      </tr>
+      <tr>
+        <td><b>WebGPU</b></td>
+        <td><span class="pill bad">rejects → JS fallback</span></td>
+        <td><span class="pill new">compiles</span></td>
+        <td class="small">New array emitter: <b>copy loop</b> into a result array (WGSL can't alias).</td>
+      </tr>
+    </table>
+    <p class="small" style="margin-bottom:0">The error today:
+      <code>pickRandomNeighbor: input "indexes" must come from an array-producing node …</code> —
+      because <code>isArrayProducer('valueSwitch')</code> is <code>false</code>.</p>
+  </div>
+
+  <!-- ============ DISPATCH ============ -->
+  <h2>3 · Why it's tricky — Value Switch is dual-mode</h2>
+  <div class="panel">
+    <p style="margin-top:0">Its output shape <i>equals its input shape</i>, which <code>nodeType</code> alone can't tell.
+       A new context-aware predicate answers it (memoised, recursive for nested switches):</p>
+    <div class="mono">producesArray(node, ctx):
+  if isArrayProducer(node.type):        return true        // filterNeighbors, joinNeighbors, …
+  if node.type == 'valueSwitch':
+      ifSrc   = source feeding  node:ifValue
+      elseSrc = source feeding  node:elseValue
+      if !ifSrc || !elseSrc:            return false       // a branch is an inline scalar → scalar mode
+      return producesArray(ifSrc) && producesArray(elseSrc)
+  return false</div>
+    <p class="small">Replaces the <i>source-node</i> <code>isArrayProducer(...)</code> checks
+       (6 sites in WASM, ~10 in WebGPU) — the gate inside <code>resolveInputArray</code> plus the
+       aggregate/groupOperator/setNeighbor*ByIndex disambiguators. One array branch + one scalar
+       branch ⇒ the emitter raises a compile error (shapes must match).</p>
+  </div>
+
+  <!-- ============ MECHANISM ============ -->
+  <h2>4 · Per-target array-relay emit</h2>
+  <div class="row">
+    <div class="card">
+      <h3 style="color:#9a9aa6">JS &nbsp;<span class="pill new">consumer fix</span></h3>
+      <div class="mono">// producer: relays for free
+const _v_sw = cond
+  ? _v_fnA : _v_fnB;
+// consumer: was [_v_sw] (wrong!)
+//   now passes through:
+const _pickArr = _v_sw;</div>
+      <p class="small"><code>sourceYieldsArray()</code> stops the isArray-input from wrapping the relay in a 1-element array.</p>
+    </div>
+    <div class="card">
+      <h3 style="color:#4cc9f0">WASM &nbsp;<span class="pill new">zero-copy select</span></h3>
+      <div class="mono">// both arrays already in scratch
+off = select(ifOff, elseOff, cond)
+len = select(ifLen, elseLen, cond)
+// Result ArrayRef points at the
+// chosen one — no element copy
+assert ifElem == elseElem</div>
+      <p class="small">Bump-pointer scratch already holds both branches; pick the offset/len pair.</p>
+    </div>
+    <div class="card">
+      <h3 style="color:#d99a2b">WebGPU &nbsp;<span class="pill new">copy loop</span></h3>
+      <div class="mono">var res: array&lt;i32, MAXLEN&gt;;
+var res_len: i32 = 0;
+if (cond) {
+  for k&lt;ifLen { res[k]=ifArr[k]; }
+  res_len = ifLen;
+} else { … elseArr … }</div>
+      <p class="small">WGSL fixed-size <code>var&lt;function&gt;</code> arrays can't alias, so copy the selected one.</p>
+    </div>
+  </div>
+
+  <p class="small" style="margin-top:18px">Downstream, every array consumer reached through the shared
+     <code>resolveInputArray</code> gate benefits uniformly — <code>pickRandomNeighbor</code>,
+     <code>arrayElement</code>, <code>arrayLength</code>, <code>forEachInArray</code>,
+     <code>aggregate</code>/<code>groupOperator</code>, <code>setNeighborAttributeByIndex</code>, …</p>
+</body>
+</html>

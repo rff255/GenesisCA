@@ -8,9 +8,13 @@ export const ValueSwitchNode: NodeTypeDef = {
   color: '#b8860b',
   ports: [
     { id: 'condition', label: 'Condition', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'bool',   defaultValue: 'false' },
-    { id: 'ifValue',   label: 'If',        kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '1' },
-    { id: 'elseValue', label: 'Else',      kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '0' },
-    { id: 'result',    label: 'Result',    kind: 'output', category: 'value', dataType: 'any' },
+    // ifValue/elseValue/result are arrayCapable: when both branches relay arrays
+    // the node selects between them and `result` is an array (handled by the
+    // compilers). The flag lets the compatible-nodes menu offer Value Switch in
+    // array contexts too — wiring already works; this is discovery only.
+    { id: 'ifValue',   label: 'If',        kind: 'input', category: 'value', dataType: 'any', arrayCapable: true, inlineWidget: 'number', defaultValue: '1' },
+    { id: 'elseValue', label: 'Else',      kind: 'input', category: 'value', dataType: 'any', arrayCapable: true, inlineWidget: 'number', defaultValue: '0' },
+    { id: 'result',    label: 'Result',    kind: 'output', category: 'value', dataType: 'any', arrayCapable: true },
   ],
   defaultConfig: {},
   compile: (nodeId, _config, inputs) => {
