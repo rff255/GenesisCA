@@ -10,6 +10,7 @@ import { analyzeSinkScopes, CELL_TOP, type ScopeId } from './sinkAnalysis';
 import { canonicalizeAccessorEdges } from './accessorCSE';
 import { injectLinkedOutputMappings } from './linkedOutputMappings';
 import { collapseReroutes } from './rerouteCollapse';
+import { computeAsyncReadWriteHazards } from './asyncWriteHazard';
 import { expandMacros } from './macroExpand';
 import { computeVolatileHoist } from './volatileHoist';
 import {
@@ -304,6 +305,7 @@ function computeVolatileValueClosure(
   graphNodes: GraphNode[],
   inputToSource: Map<string, { nodeId: string; portId: string }>,
   inputToSources: Map<string, Array<{ nodeId: string; portId: string }>>,
+  extraSeeds?: Iterable<string>,
 ): Set<string> {
   const out = new Set<string>();
   // Forward BFS: a value node is volatile iff any of its value-input sources is
@@ -330,6 +332,11 @@ function computeVolatileValueClosure(
       out.add(n.id);
       queue.push(n.id);
     }
+  }
+  // Extra seeds (async read-after-write hazard reads) propagate through the same
+  // consumer BFS so the whole derived chain becomes volatile.
+  if (extraSeeds) for (const id of extraSeeds) {
+    if (!out.has(id)) { out.add(id); queue.push(id); }
   }
   while (queue.length > 0) {
     const id = queue.shift()!;
@@ -439,7 +446,22 @@ function compileRoot(
   // multi-branch uses, e.g. across switch cases, all see one declaration).
   // Single-use volatiles resolve to their one consumer — identical to the old
   // inline behaviour. The `compiled` set still dedups so each chain emits once.
-  const volatileValues = computeVolatileValueClosure(graphNodes, inputToSource, inputToSources);
+  //
+  // Async read-after-write hazards (step / initEvent roots only): attribute /
+  // orientation reads whose value is used after a write to the SAME attribute in
+  // flow order. In async mode r_/w_ alias one buffer, so such a read must be
+  // emitted at its use site (after the write), NOT hoisted by sink analysis.
+  // Seed them into the volatile set so the existing machinery pins them. Empty
+  // for sync mode and for inputColor/outputMapping roots (no single-buffer step
+  // hazard) → byte-identical there.
+  const isAsyncRoot = model?.properties.updateMode === 'asynchronous';
+  const hazardEligible = !!isAsyncRoot
+    && (rootNode.data.nodeType === 'step' || rootNode.data.nodeType === 'initEvent');
+  const hazardReads = computeAsyncReadWriteHazards({
+    nodeMap, inputToSource, inputToSources, flowOutputToTargets,
+    rootNodeId: rootNode.id, rootFlowPortId: rootFlowPort, isAsync: hazardEligible,
+  });
+  const volatileValues = computeVolatileValueClosure(graphNodes, inputToSource, inputToSources, hazardReads);
   const volatileHoist = computeVolatileHoist({
     nodeMap,
     inputToSource,
@@ -1542,7 +1564,20 @@ export function compileGraph(
   // collapse the two-loop pattern (gather scratch + reduce) into one inlined
   // loop. Halves work for the MNCA-style hot path (large neighborhoods).
   // Shared with the WASM compiler.
-  const fusion = detectFusableConsumers(graphNodes, graphEdges, inputToSources, inputToSource, model);
+  // Async read-after-write hazard reads on the step root: refuse to fuse a
+  // getNeighborsAttribute whose source attribute is written earlier in the same
+  // cell. The fused emit reads `r_<attr>` inline (gather skipped), which would
+  // bypass the volatile pin — forcing the materialized gather lets it ride the
+  // volatile-hoist mechanism instead. JS-only effect: WASM never consults the
+  // fusion map (its gather is always a phantom). Empty for sync.
+  const stepNodeForFusion = graphNodes.find(n => n.data.nodeType === 'step');
+  const fusionHazards = stepNodeForFusion
+    ? computeAsyncReadWriteHazards({
+        nodeMap, inputToSource, inputToSources, flowOutputToTargets,
+        rootNodeId: stepNodeForFusion.id, rootFlowPortId: 'do', isAsync,
+      })
+    : new Set<string>();
+  const fusion = detectFusableConsumers(graphNodes, graphEdges, inputToSources, inputToSource, model, fusionHazards);
 
   const { params: loopParams, cellAttrs } = buildLoopParams(model);
   const cellParams = buildCellParams(model);

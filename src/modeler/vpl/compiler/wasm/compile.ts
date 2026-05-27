@@ -46,6 +46,7 @@ import { injectLinkedOutputMappings } from '../linkedOutputMappings';
 import { collapseReroutes } from '../rerouteCollapse';
 import { expandMacros } from '../macroExpand';
 import { computeVolatileHoist } from '../volatileHoist';
+import { computeAsyncReadWriteHazards } from '../asyncWriteHazard';
 import { subAttrInfo } from '../subAttribute';
 import { emitWasm } from '../expression/emitWasm';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
@@ -240,6 +241,7 @@ function computeVolatileValueClosureWasm(
   graphNodes: GraphNode[],
   inputToSource: Map<string, { nodeId: string; portId: string }>,
   inputToSources: Map<string, Array<{ nodeId: string; portId: string }>>,
+  extraSeeds?: Iterable<string>,
 ): Set<string> {
   const out = new Set<string>();
   const consumers = new Map<string, Set<string>>();
@@ -263,6 +265,11 @@ function computeVolatileValueClosureWasm(
       out.add(n.id);
       queue.push(n.id);
     }
+  }
+  // Extra seeds (async read-after-write hazard reads) propagate through the same
+  // consumer BFS so the whole derived chain becomes volatile.
+  if (extraSeeds) for (const id of extraSeeds) {
+    if (!out.has(id)) { out.add(id); queue.push(id); }
   }
   while (queue.length > 0) {
     const id = queue.shift()!;
@@ -6307,7 +6314,17 @@ function compileEntry(
     paramRefs.set(opts.entry.id, m);
   }
 
-  const volatileValuesSet = computeVolatileValueClosureWasm(Array.from(nodeMap.values()), inputToSource, inputToSources);
+  // Async read-after-write hazard reads (step / initEvent roots only): seed them
+  // into the volatile set so an attribute/orientation read used after a write to
+  // the same attribute is pinned at its use site instead of hoisted. Empty for
+  // sync mode and for inputColor/outputMapping entries → byte-identical there.
+  const wasmHazardEligible = layout.isAsync
+    && (opts.entry.data.nodeType === 'step' || opts.entry.data.nodeType === 'initEvent');
+  const wasmHazardReads = computeAsyncReadWriteHazards({
+    nodeMap, inputToSource, inputToSources, flowOutputToTargets,
+    rootNodeId: opts.entry.id, rootFlowPortId: 'do', isAsync: wasmHazardEligible,
+  });
+  const volatileValuesSet = computeVolatileValueClosureWasm(Array.from(nodeMap.values()), inputToSource, inputToSources, wasmHazardReads);
 
   const ctx: WasmCompileCtx = {
     emitter,

@@ -69,6 +69,7 @@ export function computeVolatileValueClosure(
   nodeMap: Map<string, GraphNode>,
   inputToSource: Map<string, { nodeId: string; portId: string }>,
   inputToSources: Map<string, Array<{ nodeId: string; portId: string }>>,
+  extraSeeds?: Iterable<string>,
 ): Set<string> {
   const out = new Set<string>();
   const consumers = new Map<string, Set<string>>();
@@ -89,6 +90,12 @@ export function computeVolatileValueClosure(
   const queue: string[] = [];
   for (const n of nodeMap.values()) {
     if (n.data.nodeType === 'getVariable') { out.add(n.id); queue.push(n.id); }
+  }
+  // Extra seeds (e.g. async read-after-write hazard reads from asyncWriteHazard.ts)
+  // are treated exactly like getVariable: their transitive value consumers also
+  // become volatile, so the whole chain is emitted at the use site after writes.
+  if (extraSeeds) for (const id of extraSeeds) {
+    if (nodeMap.has(id) && !out.has(id)) { out.add(id); queue.push(id); }
   }
   while (queue.length > 0) {
     const id = queue.shift()!;

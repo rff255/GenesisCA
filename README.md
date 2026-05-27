@@ -1,4 +1,4 @@
-# GenesisCA <sup>v1.17.1</sup>
+# GenesisCA <sup>v1.17.2</sup>
 
 An IDE for modeling and simulating Cellular Automata, built as a self-contained browser application.
 
@@ -134,6 +134,7 @@ A complete GenesisCA model definition consists of:
 
 ### Asynchronous Mode
 - **Update Mode** — choose Synchronous (classic CA) or Asynchronous (sequential updates with single buffer) in Model Properties
+- **Read-after-write** — in async mode, re-reading a cell attribute after writing it earlier in the same rule (e.g. via a Sequence) observes the new value, matching the single-buffer imperative model (sync mode reads always see the previous generation)
 - **Update Schemes** — Random Order, Random Independent, or Cyclic — balancing accuracy vs. performance
 - **Async-only nodes** — Set Neighborhood Attribute, Set Neighbor Attr By Index, and Mark Cell Updated for number-conserving movement patterns. Mark Cell Updated flags a neighbour as already-updated so the scheduler skips it for the rest of the generation (prevents a particle from chain-moving across the grid in one step when it follows the random update order). Get Neighbor Attr By Index is read-only and works in both modes.
 - **NeighborIndex type** — first-class typed handle that carries a packed `(dr, dc)` offset to a neighbor cell. Position-only and neighborhood-agnostic, so filter/pick/iterate/set chains compose without ever asking "from which neighborhood?". Companion nodes: Get All Neighbor Indexes, Pick Random Neighbor, Pick N Random Neighbors, Neighbor Index (from Offset / from Tag), Flip Neighbor Index. Wiring a non-NI integer source into an NI port shows an amber warning badge on the target node.
