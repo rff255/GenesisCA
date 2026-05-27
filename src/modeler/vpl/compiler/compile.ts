@@ -622,6 +622,40 @@ function compileRoot(
     return `_v${sourceNodeId}`;
   }
 
+  // Does a given source (node + output port) yield an ARRAY value in JS? True
+  // for a static `isArray` output port (filterNeighbors, getAllNeighborIndexes,
+  // …), an array-kind getVariable, OR a valueSwitch whose BOTH branches yield
+  // arrays (the dual-mode relay — its `result` port is scalar-typed but holds
+  // the selected branch array). Used by the isArray-input resolution to decide
+  // pass-through vs wrap-in-1-element-array. Memoised + cycle-guarded; mirrors
+  // the WASM/WebGPU `ctx.producesArray` (compiler/arrayRelay.ts) — JS stays
+  // port-based here because its array-ness is per-port, not per-nodeType.
+  const arrayRelayMemo = new Map<string, boolean>();
+  function sourceYieldsArray(srcNodeId: string, srcPortId: string): boolean {
+    const srcNode = nodeMap.get(srcNodeId);
+    if (!srcNode) return false;
+    const srcDef = getNodeDef(srcNode.data.nodeType);
+    const srcPort = srcDef?.ports.find(p => p.id === srcPortId);
+    if (srcPort?.isArray) return true;
+    if (srcNode.data.nodeType === 'getVariable') {
+      const v = (_model?.variables || []).find(x => x.id === srcNode.data.config.variableId);
+      return v?.kind === 'array';
+    }
+    if (srcNode.data.nodeType === 'valueSwitch') {
+      const cached = arrayRelayMemo.get(srcNodeId);
+      if (cached !== undefined) return cached;
+      arrayRelayMemo.set(srcNodeId, false); // cycle guard
+      const ifS = inputToSource.get(`${srcNodeId}:ifValue`);
+      const elS = inputToSource.get(`${srcNodeId}:elseValue`);
+      const r = !!ifS && !!elS
+        && sourceYieldsArray(ifS.nodeId, ifS.portId)
+        && sourceYieldsArray(elS.nodeId, elS.portId);
+      arrayRelayMemo.set(srcNodeId, r);
+      return r;
+    }
+    return false;
+  }
+
   function compileValueNode(nodeId: string): string {
     const isBodyDep = !!(bodyDependents && bodyDependents.has(nodeId));
     if (isBodyDep) {
@@ -768,20 +802,13 @@ function compileRoot(
           compileValueNode(source.nodeId);
           const srcName = varName(source.nodeId, source.portId);
           if (port.isArray) {
-            const srcNode = nodeMap.get(source.nodeId);
-            const srcDef = srcNode ? getNodeDef(srcNode.data.nodeType) : null;
-            const srcPort = srcDef?.ports.find(p => p.id === source.portId);
-            // getVariable's output port is statically scalar, but the actual
-            // dataflow shape depends on the referenced variable's kind. For
-            // array-kind variables, the JS local `_var_<id>` IS a typed
-            // array — passing it directly to an isArray consumer is correct.
-            // For scalar variables, wrap-in-1-element-array (existing behaviour).
-            let srcIsArray = !!srcPort?.isArray;
-            if (!srcIsArray && srcNode?.data.nodeType === 'getVariable') {
-              const variableId = srcNode.data.config.variableId as string;
-              const v = (_model?.variables || []).find(x => x.id === variableId);
-              if (v?.kind === 'array') srcIsArray = true;
-            }
+            // sourceYieldsArray covers: a static isArray output port; an
+            // array-kind getVariable (its `_var_<id>` local IS a typed array);
+            // and a valueSwitch array relay (its scalar-typed `result` holds the
+            // selected branch array). Pass those through; wrap a true scalar
+            // source in a 1-element array literal so `.length` / `for (i<len)`
+            // see length 1 instead of `undefined`.
+            const srcIsArray = sourceYieldsArray(source.nodeId, source.portId);
             inputVars[port.id] = srcIsArray ? srcName : `[${srcName}]`;
           } else {
             inputVars[port.id] = srcName;

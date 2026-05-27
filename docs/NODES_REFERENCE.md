@@ -152,7 +152,7 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 | 39 | `interpolation` | Interpolate | `T ∈ [0,1] → [Min..Max]`. | `I: T`, `I: Min`, `I: Max` / `O: Result` | |
 | 40 | `statement` | Compare | `== != > < >= <=` on two scalars, or `Between` / `Not Between` (range check with configurable low/high sides). A `compareType` selector (Numerical / Bool / Tag / Neighbor Index) swaps the inline operand widgets; non-numerical types are equality-only (==/!=). Tag mode adds a tag-attribute picker (à la Get Constant). | `I: X` `I: Y` `I: Y₂` (between-family only) / `O: Result` (bool) | Name collision risk with `groupStatement` |
 | 41 | `logicOperator` | Logic | `AND OR XOR NOT` on bools. | `I: A` `I: B` (hidden for NOT) / `O: Result` (bool) | |
-| 42 | `valueSwitch` | Value Switch | `condition ? ifValue : elseValue`. Pure value, no flow port. | `I: Condition` (any) `I: If` (any) `I: Else` (any) / `O: Result` (any) | All inputs optional (inline defaults: condition=false, if=1, else=0). Both branches always evaluate — for short-circuit use flow `conditional` instead. |
+| 42 | `valueSwitch` | Value Switch | `condition ? ifValue : elseValue`. Pure value, no flow port. **Dual-mode:** scalar selector OR array relay. | `I: Condition` (any) `I: If` (any) `I: Else` (any) / `O: Result` (any) | All inputs optional (inline defaults: condition=false, if=1, else=0). Both branches always evaluate — for short-circuit use flow `conditional` instead. **Array relay:** when BOTH `If` and `Else` are wired to array producers (e.g. two `filterNeighbors`), `Result` is the selected array (feed it to `pickRandomNeighbor` / `arrayElement` / `aggregate` / …). All three targets — JS relays the reference, WASM selects the scratch offset/len (zero-copy), WebGPU copies the chosen branch. |
 | 43 | `lookupInteraction` | Table Lookup | Index a Lookup Table model attribute by a row + column index (from face labels or tag reads) → float. | `I: Row` `I: Col` (int, inline) / `O: Value` (float) | Works with or without Variegated Cells; loop-invariant when both indices are |
 
 ### 3.5 Aggregation — `aggregation`
@@ -388,7 +388,9 @@ These are **ideas**, not committed work. They inform future passes on the node s
 - ~~**Array length**~~ — *implemented* as the `arrayLength` node (#25).
 - ~~**Array element**~~ — *implemented* as the `arrayElement` node (#24), bounds-checked.
 - ~~**Conditional value** (not flow)~~ — *implemented* as the `valueSwitch` node (#42):
-  `condition ? ifValue : elseValue` in the value plane, no flow fork.
+  `condition ? ifValue : elseValue` in the value plane, no flow fork. Doubles as a
+  **conditional array selector** when both branches are array producers (e.g. pick a
+  random neighbour from set A or set B).
 - **Print / log** — no debug output node (Unreal's "Print String" equivalent).
 
 ### 6.2 Naming collisions & clarity

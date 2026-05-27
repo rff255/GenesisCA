@@ -110,6 +110,8 @@ interface PortShape {
   category: 'flow' | 'value';
   dataType?: string;
   isArray?: boolean;
+  /** Dual-mode relay port (valueSwitch) — see PortDef.arrayCapable. */
+  arrayCapable?: boolean;
 }
 
 /** All effective port shapes that a related node would expose, given the
@@ -129,7 +131,7 @@ function relatedNodePotentialPorts(payload: ModelElementDragPayload): PortShape[
     if (payload.kind === 'model-attribute') cfg.isColorAttr = payload.isColor;
     const ports = getEffectivePorts(def.type, cfg);
     for (const p of [...ports.inputs, ...ports.outputs]) {
-      shapes.push({ kind: p.kind, category: p.category, dataType: p.dataType, isArray: p.isArray });
+      shapes.push({ kind: p.kind, category: p.category, dataType: p.dataType, isArray: p.isArray, arrayCapable: p.arrayCapable });
     }
   }
   return shapes;
@@ -145,7 +147,11 @@ function shapesMate(a: PortShape, b: PortShape): boolean {
   // — keep the two in lockstep.
   const sourceIsArray = a.kind === 'output' ? !!a.isArray : !!b.isArray;
   const targetIsArray = a.kind === 'input' ? !!a.isArray : !!b.isArray;
-  if (sourceIsArray && !targetIsArray) return false;
+  // Dual-mode relay (valueSwitch arrayCapable ports): the input side can carry an
+  // array even when scalar-typed, so an array source into it isn't rejected.
+  // Mirrors `portsCompatible` in GraphEditor.tsx — keep the two in lockstep.
+  const targetArrayCapable = a.kind === 'input' ? !!a.arrayCapable : !!b.arrayCapable;
+  if (sourceIsArray && !targetIsArray && !targetArrayCapable) return false;
   const da = a.dataType ?? 'any';
   const db = b.dataType ?? 'any';
   return da === 'any' || db === 'any' || da === db;
@@ -175,7 +181,7 @@ export function computeCompatibleHandlesForDrag(
         if (occupiedInputs.has(`${node.id}|${port.id}`)) continue;
       }
       const portShape: PortShape = {
-        kind: port.kind, category: port.category, dataType: port.dataType, isArray: port.isArray,
+        kind: port.kind, category: port.category, dataType: port.dataType, isArray: port.isArray, arrayCapable: port.arrayCapable,
       };
       const hasMate = potentialShapes.some(ns => shapesMate(portShape, ns));
       if (hasMate) {

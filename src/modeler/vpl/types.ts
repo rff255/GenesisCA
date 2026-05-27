@@ -20,6 +20,15 @@ export interface PortDef {
   category: PortCategory;
   dataType?: PortDataType;  // only for value ports
   isArray?: boolean;        // true for array-typed value ports (e.g., neighbor values)
+  /** Dual-mode relay flag — a scalar-typed port (`isArray` false) that may ALSO
+   *  carry an array shape depending on its wiring. Only `valueSwitch`'s
+   *  ifValue/elseValue/result use this: when both branches relay arrays the
+   *  result is an array (the compilers handle this via `producesArray` /
+   *  `sourceYieldsArray`). Consumed ONLY by the connection-suggestion layer
+   *  (`portsCompatible` in GraphEditor) so the compatible-nodes menu / panel-drag
+   *  offer such ports in array contexts too. Has no effect on `isValidConnection`
+   *  (which already permits the wiring) or on any compiler. */
+  arrayCapable?: boolean;
   /** Inline widget type for unconnected input ports (Unreal Blueprint style) */
   inlineWidget?: 'number' | 'bool' | 'color' | 'tag' | 'glyph';
   /** Default value for inline widget when port is unconnected */

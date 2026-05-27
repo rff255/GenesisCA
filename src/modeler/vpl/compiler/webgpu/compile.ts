@@ -39,6 +39,7 @@ import { injectLinkedOutputMappings } from '../linkedOutputMappings';
 import { collapseReroutes } from '../rerouteCollapse';
 import { expandMacros } from '../macroExpand';
 import { computeVolatileHoist, computeVolatileValueClosure } from '../volatileHoist';
+import { makeProducesArray } from '../arrayRelay';
 import { subAttrInfo, subAttributesOf } from '../subAttribute';
 import { emitWgsl } from '../expression/emitWgsl';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
@@ -122,6 +123,12 @@ interface CompileCtx {
    *  has exactly one consumer, the consumer can fuse the gather into its own
    *  loop and skip materialising the array). */
   outDegree: Map<string, number>;
+  /** Context-aware "does this source node emit an array?" — true for static
+   *  array producers AND a valueSwitch whose both branches relay arrays. Used at
+   *  every source-disambiguation site (resolveInputArray gate, aggregate /
+   *  groupOperator / groupStatement dispatch, pre-emit walk). Shared with WASM
+   *  via `compiler/arrayRelay.ts`. */
+  producesArray: (node: GraphNode) => boolean;
 
   /** Lines accumulated for the current entry point's body. */
   lines: string[];
@@ -708,6 +715,11 @@ function compileArrayNode(ctx: CompileCtx, nodeId: string, portId?: string): Arr
       if (port.kind !== 'input' || port.category !== 'value' || port.isArray) continue;
       const src = ctx.inputToSource.get(`${nodeId}:${port.id}`);
       if (src) {
+        // A scalar-typed port fed by an array producer (valueSwitch's ifValue /
+        // elseValue relaying arrays): skip scalar-resolution — the emitter reads
+        // it via resolveInputArray. (Static `isArray` ports are skipped above.)
+        const portSrcNode = ctx.nodeMap.get(src.nodeId);
+        if (portSrcNode && ctx.producesArray(portSrcNode)) continue;
         const r = compileValueNode(ctx, src.nodeId, src.portId);
         if (r) inputs[port.id] = r;
       } else {
@@ -741,11 +753,40 @@ function resolveInputArray(ctx: CompileCtx, node: GraphNode, portId: string): Ar
   if (!src) return null;
   const srcNode = ctx.nodeMap.get(src.nodeId);
   if (!srcNode) return null;
-  if (!isArrayProducer(srcNode.data.nodeType)) return null;
+  if (!ctx.producesArray(srcNode)) return null;
   return compileArrayNode(ctx, src.nodeId, src.portId);
 }
 
 const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
+
+  // valueSwitch (array mode): result = cond ? ifArray : elseArray. valueSwitch is
+  // a dual-mode relay — scalar consumers reach VALUE_NODE_EMITTERS; ctx.producesArray
+  // routes an array-relay instance (both branches are array producers) here. WGSL
+  // var<function> arrays can't alias, so COPY the selected branch into a fresh
+  // result array (vs WASM's zero-copy offset select). See compiler/arrayRelay.ts.
+  valueSwitch: ({ node, ctx, inputs }) => {
+    const ifArr = resolveInputArray(ctx, node, 'ifValue');
+    const elseArr = resolveInputArray(ctx, node, 'elseValue');
+    if (!ifArr || !elseArr) {
+      ctx.errors.push(`valueSwitch (array mode): both "If" and "Else" must come from array-producing nodes`);
+      return null;
+    }
+    if (ifArr.elemType !== elseArr.elemType) {
+      ctx.errors.push(`valueSwitch (array mode): "If" and "Else" arrays must have the same element type`);
+      return null;
+    }
+    const cond = castTo(inputs['condition'] ?? { expr: 'false', type: 'bool' }, 'bool');
+    const out = allocArray(ctx, ifArr.elemType, 'arrVSel', Math.max(ifArr.maxLen, elseArr.maxLen));
+    const i = fresh(ctx, 'vsi');
+    ctx.lines.push(`  if (${cond}) {`);
+    ctx.lines.push(`    for (var ${i}: i32 = 0; ${i} < ${ifArr.lenName}; ${i} = ${i} + 1) { ${out.name}[${i}] = ${arrLoad(ifArr, i)}; }`);
+    ctx.lines.push(`    ${out.lenName} = ${ifArr.lenName};`);
+    ctx.lines.push(`  } else {`);
+    ctx.lines.push(`    for (var ${i}: i32 = 0; ${i} < ${elseArr.lenName}; ${i} = ${i} + 1) { ${out.name}[${i}] = ${arrLoad(elseArr, i)}; }`);
+    ctx.lines.push(`    ${out.lenName} = ${elseArr.lenName};`);
+    ctx.lines.push(`  }`);
+    return out;
+  },
 
   // Compile-time constant indices (resolved from tags upstream).
   // Wave A.6: emits literal packed NIs (resolved by pre-pass).
@@ -940,7 +981,7 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     if (isNbrPath) {
       const nbrSrc = getNbr(ctx.layout, firstSrcNode!.data.config.neighborhoodId as string);
       gcCap = nbrSrc?.size;
-    } else if (sources.length === 1 && isArrayProducer(firstSrcNode?.data.nodeType ?? '')) {
+    } else if (sources.length === 1 && firstSrcNode && ctx.producesArray(firstSrcNode)) {
       const arrSrc = compileArrayNode(ctx, firstSrc.nodeId, firstSrc.portId);
       gcCap = arrSrc?.maxLen;
     }
@@ -987,7 +1028,7 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
       emitMatch(n, elemF);
       ctx.lines.push(`  }`);
     } else {
-      const arrSrc = isArrayProducer(firstSrcNode?.data.nodeType ?? '') && sources.length === 1
+      const arrSrc = firstSrcNode && ctx.producesArray(firstSrcNode) && sources.length === 1
         ? compileArrayNode(ctx, firstSrc.nodeId, firstSrc.portId) : null;
       if (!arrSrc) {
         ctx.errors.push(`groupCounting (array): only single nbr/array source supported`);
@@ -1597,7 +1638,7 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       if (sources.length === 1) {
         const src = sources[0]!;
         const srcNode = ctx.nodeMap.get(src.nodeId);
-        if (srcNode && isArrayProducer(srcNode.data.nodeType)) {
+        if (srcNode && ctx.producesArray(srcNode)) {
           // Single array source: pick at random with fallback guard for empty.
           // For len == 0 the idx evaluates to 0; the static `array<T, maxLen>`
           // is zero-initialised, so the `arr[0]` read is well-defined garbage
@@ -1778,7 +1819,13 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return emitLet(ctx, 'f32', `(${mn} + ${t} * (${mx} - ${mn}))`, 'lerp');
   },
 
-  valueSwitch: ({ ctx, inputs }) => {
+  valueSwitch: ({ node, ctx, inputs }) => {
+    // Array-relay instances are routed to ARRAY_NODE_EMITTERS by ctx.producesArray;
+    // this scalar path should never see one. Guard documents the invariant.
+    if (ctx.producesArray(node)) {
+      ctx.errors.push(`valueSwitch: array-relay instance reached the scalar value emitter (internal dispatch error)`);
+      return null;
+    }
     const cond = castTo(inputs['condition'] ?? { expr: 'false', type: 'bool' }, 'bool');
     const ifV  = castTo(inputs['ifValue']   ?? { expr: '1.0',   type: 'f32' },  'f32');
     const elV  = castTo(inputs['elseValue'] ?? { expr: '0.0',   type: 'f32' },  'f32');
@@ -2160,7 +2207,7 @@ function emitAggregateOrCount(
   // Supports single-array source, multi-source scalars, and nbr-path source.
   if (mode === 'groupOperator' && op === 'weightedRandom') {
     let inArr: ArrayRef;
-    if (sources.length === 1 && !isNbrPath && firstSrcNode && isArrayProducer(firstSrcNode.data.nodeType)) {
+    if (sources.length === 1 && !isNbrPath && firstSrcNode && ctx.producesArray(firstSrcNode)) {
       const ar = compileArrayNode(ctx, firstSrc.nodeId, firstSrc.portId);
       if (!ar) return null;
       inArr = ar;
@@ -2270,7 +2317,7 @@ function emitAggregateOrCount(
   // Path: single ArrayRef-producing source (e.g. groupCounting.indexes,
   // getNeighborsAttrByIndexes, filterNeighbors).
   const isArrayPath = sources.length === 1 && !isNbrPath
-    && firstSrcNode && isArrayProducer(firstSrcNode.data.nodeType);
+    && firstSrcNode && ctx.producesArray(firstSrcNode);
   let arrRef: ArrayRef | null = null;
   // O6: fuse aggregate over getNeighborsAttrByIndexes when this is the only
   // consumer and the op is associative. Skips the per-thread var array
@@ -2518,7 +2565,7 @@ function emitGroupStatement(c: NodeEmitContext): ValueRef | null {
     : `${acc.name} = ${acc.name} || (cmp_${acc.name});`;
 
   const arrRef = sources.length === 1 && !isNbrPath
-    && firstSrcNode && isArrayProducer(firstSrcNode.data.nodeType)
+    && firstSrcNode && ctx.producesArray(firstSrcNode)
     ? compileArrayNode(ctx, firstSrc.nodeId, firstSrc.portId) : null;
 
   if (isNbrPath) {
@@ -2996,6 +3043,10 @@ function compileValueNode(ctx: CompileCtx, nodeId: string, portId: string = 'val
     for (const s of srcs) {
       const sn = ctx.nodeMap.get(s.nodeId);
       if (!sn || sn.data.nodeType === 'getVariable') continue;
+      // valueSwitch array relay: its `result` port produces an array even though
+      // it isn't statically isArray — leave it to the emitter's resolveInputArray
+      // (→ compileArrayNode); scalar-resolving it would hit the value emitter.
+      if (sn.data.nodeType === 'valueSwitch' && ctx.producesArray(sn)) continue;
       const sp = getNodeDef(sn.data.nodeType)?.ports.find(p => p.id === s.portId);
       if (sp?.isArray) continue; // array producer → leave to emitter (fusion)
       compileValueNode(ctx, s.nodeId, s.portId);
@@ -3043,12 +3094,13 @@ function preEmitValueNodes(ctx: CompileCtx, sourceNodeId: string, sourcePortId: 
       // private-array decl is emitted at the entry-point top scope (cross-
       // branch references resolve same as scalar values do).
       if (port.isArray) {
-        if (src && ctx.nodeMap.get(src.nodeId) && isArrayProducer(ctx.nodeMap.get(src.nodeId)!.data.nodeType)) {
+        const arraySrcNode = src ? ctx.nodeMap.get(src.nodeId) : undefined;
+        if (src && arraySrcNode && ctx.producesArray(arraySrcNode)) {
           compileArrayNode(ctx, src.nodeId, src.portId);
         }
         if (srcs) for (const s of srcs) {
           const sn = ctx.nodeMap.get(s.nodeId);
-          if (sn && isArrayProducer(sn.data.nodeType)) compileArrayNode(ctx, s.nodeId, s.portId);
+          if (sn && ctx.producesArray(sn)) compileArrayNode(ctx, s.nodeId, s.portId);
         }
         continue;
       }
@@ -3146,7 +3198,9 @@ function compileFlowChain(ctx: CompileCtx, sourceNodeId: string, sourcePortId: s
       for (const vId of hoisted) {
         const vn = ctx.nodeMap.get(vId);
         if (!vn || vn.data.nodeType === 'getVariable') continue;
-        if (isArrayProducer(vn.data.nodeType)) compileArrayNode(ctx, vId);
+        // valueSwitch is dual-registered — ctx.producesArray routes an array-relay
+        // instance (reading getVariable arrays) to the array emitter.
+        if (ctx.producesArray(vn)) compileArrayNode(ctx, vId);
         else compileValueNode(ctx, vId);
       }
       ctx.forceCurrentScope = savedForce;
@@ -3653,6 +3707,11 @@ export function compileGraphWebGPU(
     inputToSources: adj.inputToSources,
     flowOutputToTargets: adj.flowOutputToTargets,
     outDegree: adj.outDegree,
+    producesArray: makeProducesArray({
+      isArrayProducer,
+      inputToSource: adj.inputToSource,
+      nodeMap: adj.nodeMap,
+    }),
     graphNodes: nodes,
     graphEdges: edges,
   };
