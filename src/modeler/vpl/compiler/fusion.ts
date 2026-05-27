@@ -68,6 +68,11 @@ export function detectFusableConsumers(
   inputToSources: Map<string, Array<{ nodeId: string; portId: string }>>,
   inputToSource: Map<string, { nodeId: string; portId: string }>,
   model?: CAModel,
+  /** Async read-after-write hazard reads (asyncWriteHazard.ts). A
+   *  getNeighborsAttribute in this set is written-before in the same cell, so
+   *  fusing it would inline a stale `r_<attr>` read that bypasses the volatile
+   *  pin. Refuse fusion → it materialises and gets pinned instead. */
+  hazardReads?: Set<string>,
 ): FusionResult {
   const nodeMap = new Map(graphNodes.map(n => [n.id, n] as const));
 
@@ -119,6 +124,11 @@ export function detectFusableConsumers(
     if (!srcNode || srcNode.data.nodeType !== 'getNeighborsAttribute') continue;
 
     if ((outDegree.get(src.nodeId) ?? 0) !== 1) continue;
+
+    // Refuse fusion when the source read is an async read-after-write hazard —
+    // the materialised gather must survive so the volatile-hoist mechanism can
+    // pin it after the write (the fused inline read would read stale data).
+    if (hazardReads?.has(src.nodeId)) continue;
 
     // Refuse fusion for sub-attribute sources — the fused emit inlines
     // `r_<attr>[...]` directly, bypassing the parent-check guard and

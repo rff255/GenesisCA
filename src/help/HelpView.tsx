@@ -754,6 +754,13 @@ export function HelpView() {
             (cells can modify neighbor attributes directly), this enables <em>number-conserving</em> models
             where elements move across the grid without being created or destroyed.
           </p>
+          <p className={styles.p}>
+            Because async mode uses a single buffer, a rule that <em>writes</em> a cell attribute and
+            then <em>reads</em> the same attribute later in the same cell&apos;s logic (for example via a
+            <em> Sequence</em> &mdash; decide a value, then test it) observes the value it just wrote, not the
+            value from the start of the generation. (In synchronous mode all reads see the previous
+            generation&apos;s state regardless, since reads and writes use separate buffers.)
+          </p>
 
           <h3 className={styles.h3}>Update Schemes</h3>
           <ul className={styles.ul}>
