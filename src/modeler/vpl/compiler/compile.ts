@@ -181,8 +181,16 @@ function buildFusedGroupOperatorJS(nodeId: string, op: string, nbrId: string, at
       return `${head} let ${idx} = 0; let ${result} = ${elemAt('0')}; for (let ${i} = 1; ${i} < ${sz}; ${i}++) { const ${e} = ${elemAt(i)}; if (${e} > ${result}) { ${result} = ${e}; ${idx} = ${i}; } }`;
     case 'min':
       return `${head} let ${idx} = 0; let ${result} = ${elemAt('0')}; for (let ${i} = 1; ${i} < ${sz}; ${i}++) { const ${e} = ${elemAt(i)}; if (${e} < ${result}) { ${result} = ${e}; ${idx} = ${i}; } }`;
-    case 'random':
-      return `${head} const ${idx} = Math.floor(Math.random() * ${sz}); const ${result} = ${elemAt(idx)};`;
+    case 'random': {
+      // Uniform pick via the shared _rs xorshift32 stream (NOT Math.random) so JS
+      // matches the WASM target and stays reproducible from a given RNG state.
+      // Always advances the stream once; same floor((_rs/2^32)*sz) formula WASM
+      // uses. index = -1 / result = 0 for an empty neighborhood (sz == 0).
+      const advance = '_rs = (_rs ^ (_rs << 13)) >>> 0;'
+        + ' _rs = (_rs ^ (_rs >>> 17)) >>> 0;'
+        + ' _rs = (_rs ^ (_rs << 5)) >>> 0;';
+      return `${head} ${advance} let ${idx} = -1; let ${result} = 0; if (${sz} > 0) { ${idx} = Math.floor((_rs / 4294967296) * ${sz}); ${result} = ${elemAt(idx)}; }`;
+    }
     case 'weightedRandom': {
       // Cumulative-sum weighted sampling over the neighborhood values. Uses
       // the shared _rs xorshift32 stream. Empty neighborhood (sz==0) returns

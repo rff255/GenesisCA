@@ -18,9 +18,19 @@ export const GroupOperatorNode: NodeTypeDef = {
     const gi = `_gi${nodeId}`;
 
     if (op === 'random') {
+      // Uniform pick via the shared _rs xorshift32 stream (NOT Math.random) so JS
+      // matches the WASM target and stays reproducible from a given RNG state.
+      // Always advances the stream once (even on empty input) to mirror the
+      // always-advance semantics of every other RNG-using node. index = -1,
+      // result = 0 when the input array is empty. Same floor((_rs/2^32)*len)
+      // formula WASM uses, so both targets pick the same index for a given state.
+      const advance = '_rs = (_rs ^ (_rs << 13)) >>> 0;'
+        + ' _rs = (_rs ^ (_rs >>> 17)) >>> 0;'
+        + ' _rs = (_rs ^ (_rs << 5)) >>> 0;';
       return [
-        `const _v${nodeId}_index = Math.floor(Math.random() * ${values}.length);`,
-        `const _v${nodeId}_result = ${values}[_v${nodeId}_index];`,
+        `${advance}`,
+        `let _v${nodeId}_index = -1; let _v${nodeId}_result = 0;`,
+        `if (${values}.length > 0) { _v${nodeId}_index = Math.floor((_rs / 4294967296) * ${values}.length); _v${nodeId}_result = ${values}[_v${nodeId}_index]; }`,
       ].join(' ') + '\n';
     }
     if (op === 'weightedRandom') {
