@@ -511,6 +511,7 @@ export function HelpView() {
             <li><strong>Right-click</strong> (on group) &mdash; Group options: Rename, Undo Group, Delete.</li>
             <li><strong>Drag from Palette</strong> &mdash; Drop a node or macro from the right-side Palette tab onto the canvas to add it at the drop position.</li>
             <li><strong>Drag from a panel</strong> (Attributes, Local Variables, Neighborhoods, Mappings, Indicators) &mdash; Drop a model element onto the canvas to spawn a menu of related nodes pre-configured with that element. Drop directly onto a compatible port to auto-connect: when only one node type would fit, it is created and wired without a menu. The new node is positioned so its connecting port aligns with the target.</li>
+            <li><strong>Drag a wire onto empty canvas</strong> &mdash; Drag from any port and release on the background to open a menu of nodes that can connect there. The menu has a <strong>focused search box</strong>: type to filter the compatible list, move the highlighted entry with <kbd className={styles.kbd}>&uarr;</kbd>/<kbd className={styles.kbd}>&darr;</kbd>, and press <kbd className={styles.kbd}>Enter</kbd> to add the highlighted node at the release point and auto-wire it. So you can drag a port, type a few keywords, and hit Enter without ever touching the mouse again. (Dragging from an output also offers <strong>Reroute</strong> as the first entry.) <kbd className={styles.kbd}>Esc</kbd> dismisses.</li>
           </ul>
 
           <h3 className={styles.h3}>Chaining Actions (NEXT / DONE)</h3>
