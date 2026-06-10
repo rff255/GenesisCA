@@ -3175,6 +3175,10 @@ function preEmitValueNodes(ctx: CompileCtx, sourceNodeId: string, sourcePortId: 
         break;
       }
     }
+    // Pass-through continuation (`next`): pre-emit its chain's value inputs
+    // like sibling targets'. (forEachInArray bodies stay excluded above — a
+    // forEach's next chain runs OUTSIDE the loop, so this is safe for it too.)
+    preEmitValueNodes(ctx, target.nodeId, 'next', visited);
   }
 }
 
@@ -3289,6 +3293,8 @@ function compileFlowChain(ctx: CompileCtx, sourceNodeId: string, sourcePortId: s
       const hasDefault = ctx.flowOutputToTargets.has(`${node.id}:default`);
       if (caseCount === 0) {
         if (!compileFlowChain(ctx, node.id, 'default')) return false;
+        // `continue` skips the shared end-of-loop continuation — run it here.
+        if (!compileFlowChain(ctx, node.id, 'next')) return false;
         continue;
       }
       let valueRef: ValueRef | null = null;
@@ -3410,6 +3416,12 @@ function compileFlowChain(ctx: CompileCtx, sourceNodeId: string, sourcePortId: s
       }
       if (!flowEmitter({ ctx, node, inputs })) return false;
     }
+
+    // Pass-through continuation (`next` — NEXT on action nodes, DONE on
+    // control nodes): lines emitted here land right after the node's own
+    // emission / after its closed WGSL block, at the same lexical scope.
+    // No-op when nothing is wired.
+    if (!compileFlowChain(ctx, node.id, 'next')) return false;
   }
   return true;
 }
@@ -3489,6 +3501,11 @@ function analyzeAlwaysWritten(
     // stopEvent, setNeighborhoodAttribute*, setNeighborAttributeByIndex*,
     // updateAttribute) don't guarantee a cell-attr slot is initialised by
     // setAttribute.
+
+    // Pass-through continuation (`next`): runs unconditionally whenever this
+    // target runs — its subtree's guarantees are as strong as the target's
+    // own path (a loop's body gives no guarantee, but its DONE chain does).
+    for (const x of analyzeAlwaysWritten(ctx, node.id, 'next', depth + 1)) out.add(x);
   }
   return out;
 }

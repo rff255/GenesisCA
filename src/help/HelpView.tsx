@@ -497,6 +497,21 @@ export function HelpView() {
             <li><strong>Drag from a panel</strong> (Attributes, Local Variables, Neighborhoods, Mappings, Indicators) &mdash; Drop a model element onto the canvas to spawn a menu of related nodes pre-configured with that element. Drop directly onto a compatible port to auto-connect: when only one node type would fit, it is created and wired without a menu. The new node is positioned so its connecting port aligns with the target.</li>
           </ul>
 
+          <h3 className={styles.h3}>Chaining Actions (NEXT / DONE)</h3>
+          <p className={styles.p}>
+            Every action node (Set Attribute, Set Variable, Set Color Viewer, &hellip;) has a
+            pass-through <strong>NEXT</strong> flow output, so executions chain
+            Blueprints-style &mdash; <em>Set A &rarr; Set B &rarr; Set C</em> reads
+            left-to-right instead of fanning three wires out of one DO port (which still
+            works; order is then the wiring order). A chained node runs immediately after
+            the previous one. Flow-control nodes (If, Loop, For Each, Switch) have a{' '}
+            <strong>DONE</strong> output instead, which fires after the whole construct
+            completes &mdash; after either branch of an If (or none), after all Loop /
+            For&nbsp;Each iterations, after the matching Switch case(s). Chaining has zero
+            runtime cost: it compiles to exactly the same code as the equivalent fan-out.
+            Sequence keeps its numbered THEN pins and has no DONE.
+          </p>
+
           <h3 className={styles.h3}>Palette &amp; Node Explorer</h3>
           <p className={styles.p}>
             Open the right sidebar icons:

@@ -43,6 +43,7 @@ export const MoveSelfToNeighborNode: NodeTypeDef = {
   requirements: { async: true, variegated: false }, // variegated only required when includeOrientation
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
+    { id: 'next', label: 'NEXT', kind: 'output', category: 'flow' },
     { id: 'targetNI', label: 'Target NI', kind: 'input', category: 'value', dataType: 'neighborIndex' },
   ],
   defaultConfig: { payloadCount: 1, operation: 'copyTo', nonReceiving: 'defaults', includeOrientation: false },

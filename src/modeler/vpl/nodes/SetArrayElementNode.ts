@@ -11,6 +11,7 @@ export const SetArrayElementNode: NodeTypeDef = {
   color: '#5e35b1',
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
+    { id: 'next', label: 'NEXT', kind: 'output', category: 'flow' },
     { id: 'index', label: 'Index', kind: 'input', category: 'value', dataType: 'integer', inlineWidget: 'number', defaultValue: '0' },
     { id: 'value', label: 'Value', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '0' },
   ],

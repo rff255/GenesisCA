@@ -220,8 +220,11 @@ export function computeVolatileHoist(input: VolatileHoistInput): VolatileHoistRe
         }
       }
     }
-    // Action nodes (setAttribute, setVariable, setColorViewer, stopEvent, ...)
-    // are terminal — no flow outputs to recurse into.
+    // Pass-through continuation (`next`): runs after this node / construct at
+    // the SAME scope — its targets become later members of `scope`, matching
+    // compileFlowChain's emission order (node, its next-chain, then the parent
+    // port's next sibling). Action nodes have no other flow outputs.
+    walkOutput(nodeId, 'next', scope);
   }
   walkOutput(rootNodeId, rootFlowPortId, CELL_TOP);
 

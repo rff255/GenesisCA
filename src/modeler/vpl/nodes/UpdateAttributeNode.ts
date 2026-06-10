@@ -8,6 +8,7 @@ export const UpdateAttributeNode: NodeTypeDef = {
   color: '#4a148c',
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
+    { id: 'next', label: 'NEXT', kind: 'output', category: 'flow' },
     { id: 'value', label: 'Value', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '1' },
   ],
   defaultConfig: { attributeId: '', operation: 'increment' },

@@ -226,6 +226,7 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
       const elseS = `${nodeId}:else`;
       registerScope(elseS, parentScope, { kind: 'else', flowNodeId: nodeId });
       walkFlowOutput(nodeId, 'else', elseS);
+      walkFlowOutput(nodeId, 'next', parentScope);
       return;
     }
 
@@ -233,6 +234,7 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
       const bodyS = `${nodeId}:body`;
       registerScope(bodyS, parentScope, { kind: 'loopBody', flowNodeId: nodeId });
       walkFlowOutput(nodeId, 'body', bodyS);
+      walkFlowOutput(nodeId, 'next', parentScope);
       return;
     }
 
@@ -240,6 +242,7 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
       const bodyS = `${nodeId}:body`;
       registerScope(bodyS, parentScope, { kind: 'forEachBody', flowNodeId: nodeId });
       walkFlowOutput(nodeId, 'body', bodyS);
+      walkFlowOutput(nodeId, 'next', parentScope);
       return;
     }
 
@@ -250,6 +253,7 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
         // at the switch's own scope — no new child scope created. Matches the
         // JS emit which inlines the default at parent indent.
         walkFlowOutput(nodeId, 'default', parentScope);
+        walkFlowOutput(nodeId, 'next', parentScope);
         return;
       }
       for (let ci = 0; ci < caseCount; ci++) {
@@ -262,13 +266,16 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
         registerScope(defS, parentScope, { kind: 'switchDefault', flowNodeId: nodeId });
         walkFlowOutput(nodeId, 'default', defS);
       }
+      walkFlowOutput(nodeId, 'next', parentScope);
       return;
     }
 
     // Macros are NOT handled here — caller must expand them first. If we encounter
     // a macro node, treat it as a terminal action (its internal flow is invisible).
     // Action nodes (setAttribute, updateIndicator, setColorViewer, stopEvent, ...)
-    // have no flow outputs to recurse into.
+    // continue through their `next` pass-through at the SAME scope (transparent
+    // continuation — no new scope, mirroring the compilers' emit position).
+    walkFlowOutput(nodeId, 'next', parentScope);
   }
 
   // Walk from the root's flow output port. The root itself (StepNode /

@@ -300,21 +300,36 @@ export function computeAsyncReadWriteHazards(input: AsyncHazardInput): Set<strin
     if (type === 'conditional') {
       walkOutput(nodeId, 'then', entry);
       walkOutput(nodeId, 'else', entry);
+      // DONE chain runs after the construct: branches MAY have written.
+      walkOutput(nodeId, 'next', unionWith(entry, bodyWrites(nodeId, ['then', 'else'])));
     } else if (type === 'loop' || type === 'forEachInArray') {
       // A write anywhere in the body precedes a read anywhere in the body on the
       // next iteration → seed the body prefix with the whole body's writes.
       const bodyPrefix = unionWith(entry, bodyWrites(nodeId, ['body']));
       walkOutput(nodeId, 'body', bodyPrefix);
+      walkOutput(nodeId, 'next', bodyPrefix);
     } else if (type === 'switch') {
       const caseCount = Number(node.data.config.caseCount) || 0;
       if (caseCount === 0) {
         walkOutput(nodeId, 'default', entry);
+        walkOutput(nodeId, 'next', unionWith(entry, bodyWrites(nodeId, ['default'])));
       } else {
-        for (let ci = 0; ci < caseCount; ci++) walkOutput(nodeId, `case_${ci}`, entry);
-        if (flowOutputToTargets.has(`${nodeId}:default`)) walkOutput(nodeId, 'default', entry);
+        const casePorts: string[] = [];
+        for (let ci = 0; ci < caseCount; ci++) {
+          casePorts.push(`case_${ci}`);
+          walkOutput(nodeId, `case_${ci}`, entry);
+        }
+        if (flowOutputToTargets.has(`${nodeId}:default`)) {
+          casePorts.push('default');
+          walkOutput(nodeId, 'default', entry);
+        }
+        walkOutput(nodeId, 'next', unionWith(entry, bodyWrites(nodeId, casePorts)));
       }
+    } else {
+      // Action nodes (setAttribute, setVariable, stopEvent, …): the NEXT chain
+      // runs after the action — its own writes join the prefix.
+      walkOutput(nodeId, 'next', unionWith(entry, new Set(attrKeysWritten(node))));
     }
-    // Action nodes (setAttribute, setVariable, stopEvent, …) are terminal.
   }
 
   walkOutput(rootNodeId, rootFlowPortId, new Set());

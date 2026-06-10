@@ -12,6 +12,7 @@ export const ForEachInArrayNode: NodeTypeDef = {
     { id: 'body', label: 'BODY', kind: 'output', category: 'flow' },
     { id: 'element', label: 'Element', kind: 'output', category: 'value', dataType: 'any' },
     { id: 'index', label: 'Index', kind: 'output', category: 'value', dataType: 'integer' },
+    { id: 'next', label: 'DONE', kind: 'output', category: 'flow' },
   ],
   defaultConfig: {},
   compile: () => '', // Compiler handles flow nodes specially in compileFlowChain
