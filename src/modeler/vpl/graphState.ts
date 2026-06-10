@@ -122,6 +122,36 @@ export function setShowPortLabels(val: boolean) {
   labelListeners.forEach(fn => fn());
 }
 
+// ---------------------------------------------------------------------------
+// Quick-add (Spacebar) — GraphEditor registers an API here on mount so the
+// ModelerView / PalettePanelContent (which live OUTSIDE the editor component)
+// can add palette items at the cursor's flow position. Payload is a structural
+// mirror of PalettePanelContent's PaletteDragPayload, kept local to avoid an
+// import cycle (graphState is imported by CaNode → GraphEditor).
+// ---------------------------------------------------------------------------
+
+export interface QuickAddPayload {
+  kind: 'node' | 'macro-default' | 'macro-project';
+  nodeType?: string;
+  macroKey?: string;
+  file?: string;
+  macroDefId?: string;
+}
+
+export interface QuickAddApi {
+  /** Flow position of the cursor (last mousemove over the pane), falling back
+   *  to the viewport centre when the cursor never entered the canvas. */
+  getCursorFlowPos: () => { x: number; y: number };
+  /** Create a node / macro instance from a palette payload at a flow position. */
+  addFromPalette: (payload: QuickAddPayload, pos: { x: number; y: number }) => void;
+}
+
+export let quickAddApi: QuickAddApi | null = null;
+
+export function setQuickAddApi(api: QuickAddApi | null): void {
+  quickAddApi = api;
+}
+
 /** Info about the handle being dragged for connection (for port compatibility highlighting
  *  AND the connection-drop-to-pane feature that pops the Add Node menu filtered to
  *  compatible nodes). `portId` and `dataType` populated when known so the drop-on-pane

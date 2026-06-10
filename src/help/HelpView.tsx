@@ -474,6 +474,14 @@ export function HelpView() {
               toggle in the header switches the renderer between a compact text list and
               draggable mini node previews that mirror the node visuals; both modes drag
               identically. Both the split position and the view mode are remembered across sessions.</li>
+            <li><strong>Quick add</strong> (<kbd className={styles.kbd}>Space</kbd>) &mdash; Press
+              Space over the canvas to open the Palette with its search focused. Type to filter,
+              move the highlighted item with <kbd className={styles.kbd}>&uarr;</kbd>/<kbd className={styles.kbd}>&darr;</kbd>,
+              then press <kbd className={styles.kbd}>Enter</kbd> to add it exactly where the cursor
+              was when you pressed Space &mdash; the panel collapses again so you can keep wiring.
+              There is always one highlighted item (the best name match for what you typed), so
+              <em> Space &rarr; type &rarr; Enter</em> adds the obvious pick without touching the
+              arrow keys. <kbd className={styles.kbd}>Esc</kbd> closes the panel.</li>
             <li><strong>Node Explorer</strong> (<kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>F</kbd>) &mdash; Search and jump to nodes
               already placed in your graph.</li>
           </ul>
@@ -1083,6 +1091,7 @@ export function HelpView() {
               <tr><td>Right-click drag</td><td>Pan the canvas</td></tr>
               <tr><td>Scroll wheel</td><td>Zoom in/out</td></tr>
               <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>F</kbd></td><td>Open Node Explorer (search &amp; focus)</td></tr>
+              <tr><td><kbd className={styles.kbd}>Space</kbd></td><td>Quick add: open Palette with search focused; type, <kbd className={styles.kbd}>&uarr;</kbd>/<kbd className={styles.kbd}>&darr;</kbd> to pick, <kbd className={styles.kbd}>Enter</kbd> adds at the cursor position from when Space was pressed</td></tr>
               <tr><td><kbd className={styles.kbd}>F</kbd></td><td>Toggle fullscreen graph (collapses both side panels; press again to restore)</td></tr>
               <tr><td><kbd className={styles.kbd}>Esc</kbd></td><td>Close Node Explorer (if open; first press clears the search field)</td></tr>
               <tr><td>Double-click (node)</td><td>Collapse / expand node</td></tr>

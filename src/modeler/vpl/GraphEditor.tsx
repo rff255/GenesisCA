@@ -43,7 +43,8 @@ const nodeTypes: NodeTypes = {
 
 let clipboard: { nodes: GraphNode[]; edges: GraphEdge[] } | null = null;
 
-import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag } from './graphState';
+import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag, setQuickAddApi } from './graphState';
+import type { QuickAddPayload } from './graphState';
 import { detectEdgeHazard, isNodeAvailable } from './nodes/nodeValidation';
 import { pushSnapshot, undo, redo, pushToRedo, pushToUndo, clearHistory } from './graphHistory';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
@@ -1628,6 +1629,50 @@ export function GraphEditorInner() {
     [contextMenu, addNodeAtPosition],
   );
 
+  /** Create a node / macro instance from a palette payload at a flow position.
+   *  Shared by the palette drag-drop path (onPaletteDrop) and the Spacebar
+   *  quick-add path (registered as the quickAddApi in graphState). */
+  const spawnPalettePayload = useCallback(
+    (payload: QuickAddPayload, pos: { x: number; y: number }) => {
+      if (payload.kind === 'node' && typeof payload.nodeType === 'string') {
+        addNodeAtPosition(payload.nodeType, pos);
+      } else if (payload.kind === 'macro-project' && typeof payload.macroDefId === 'string') {
+        const def = (model.macroDefs || []).find(m => m.id === payload.macroDefId);
+        addNodeAtPosition('macro', pos, { macroDefId: payload.macroDefId }, def?.name);
+      } else if (payload.kind === 'macro-default' && typeof payload.file === 'string') {
+        // Default macros ship as static .gcamacro files — fetch, then import a
+        // fresh-id clone into the model before instancing.
+        const base = (import.meta.env.BASE_URL || '/');
+        const file = payload.file;
+        fetch(`${base}macros/${file}`)
+          .then(r => (r.ok ? r.json() : null))
+          .then(parsed => {
+            if (!parsed?.macroDef) return;
+            const newId = importMacro(parsed.macroDef);
+            addNodeAtPosition('macro', pos, { macroDefId: newId }, parsed.macroDef.name);
+          })
+          .catch(() => { /* swallow — network/parse failure */ });
+      }
+    },
+    [addNodeAtPosition, importMacro, model.macroDefs],
+  );
+
+  // Register the Spacebar quick-add API (consumed by ModelerView + Palette).
+  useEffect(() => {
+    setQuickAddApi({
+      getCursorFlowPos: () => {
+        if (lastFlowMousePos.current) return lastFlowMousePos.current;
+        const rect = editorWrapperRef.current?.getBoundingClientRect();
+        const centre = rect
+          ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+          : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+        return rfInstance.current?.screenToFlowPosition(centre) ?? { x: 0, y: 0 };
+      },
+      addFromPalette: (payload, pos) => spawnPalettePayload(payload, pos),
+    });
+    return () => setQuickAddApi(null);
+  }, [spawnPalettePayload]);
+
   /** Create a new node AND an edge connecting it to the connection-drop origin.
    *  Used by the connection-drop context menu (drag a link onto empty canvas →
    *  pick a node → spawn + auto-wire). */
@@ -2037,27 +2082,8 @@ export function GraphEditorInner() {
     const pos = rfInstance.current?.screenToFlowPosition({ x: e.clientX, y: e.clientY });
     if (!pos) return;
 
-    if (payload.kind === 'node' && typeof payload.nodeType === 'string') {
-      addNodeAtPosition(payload.nodeType, pos);
-    } else if (payload.kind === 'macro-project' && typeof payload.macroDefId === 'string') {
-      const def = (model.macroDefs || []).find(m => m.id === payload.macroDefId);
-      addNodeAtPosition('macro', pos, { macroDefId: payload.macroDefId }, def?.name);
-    } else if (
-      payload.kind === 'macro-default'
-      && typeof payload.file === 'string'
-    ) {
-      const base = (import.meta.env.BASE_URL || '/');
-      const file = payload.file;
-      fetch(`${base}macros/${file}`)
-        .then(r => (r.ok ? r.json() : null))
-        .then(parsed => {
-          if (!parsed?.macroDef) return;
-          const newId = importMacro(parsed.macroDef);
-          addNodeAtPosition('macro', pos, { macroDefId: newId }, parsed.macroDef.name);
-        })
-        .catch(() => { /* swallow — network/parse failure */ });
-    }
-  }, [addNodeAtPosition, addNodeAndConnect, scheduleSnapRefinement, importMacro, model.macroDefs]);
+    spawnPalettePayload(payload as QuickAddPayload, pos);
+  }, [addNodeAtPosition, addNodeAndConnect, scheduleSnapRefinement, spawnPalettePayload]);
 
   // --- Macro export / import ---
 

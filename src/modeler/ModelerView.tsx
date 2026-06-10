@@ -11,10 +11,13 @@ import { AttributesPanelContent } from './panels/AttributesPanelContent';
 import { NeighborhoodsPanelContent } from './panels/NeighborhoodsPanelContent';
 import { MappingsPanelContent } from './panels/MappingsPanelContent';
 import { PalettePanelContent } from './panels/PalettePanelContent';
+import type { PaletteHandle } from './panels/PalettePanelContent';
 import { VariegatedCellsPanelContent } from './panels/VariegatedCellsPanelContent';
 import { GraphEditorInner } from './vpl/GraphEditor';
 import { NodeExplorer } from './vpl/NodeExplorer';
 import type { NodeExplorerHandle } from './vpl/NodeExplorer';
+import { quickAddApi } from './vpl/graphState';
+import type { QuickAddPayload } from './vpl/graphState';
 import styles from './ModelerView.module.css';
 
 const panelTitles: Record<PanelId, string> = {
@@ -80,6 +83,20 @@ export function ModelerView() {
   const prePanelStateRef = useRef<{ left: PanelId | null; right: RightPanelId | null } | null>(null);
   const explorerRef = useRef<NodeExplorerHandle>(null);
 
+  // Spacebar quick-add: the flow position of the cursor at Space-press time is
+  // frozen here so moving the mouse to the panel doesn't shift where Enter
+  // will drop the node. Cleared when the palette is opened by mouse instead
+  // (Enter then falls back to the cursor's live last canvas position).
+  const paletteRef = useRef<PaletteHandle>(null);
+  const quickAddPosRef = useRef<{ x: number; y: number } | null>(null);
+
+  const handlePaletteQuickAdd = useCallback((payload: QuickAddPayload) => {
+    const pos = quickAddPosRef.current ?? quickAddApi?.getCursorFlowPos() ?? null;
+    if (pos) quickAddApi?.addFromPalette(payload, pos);
+    quickAddPosRef.current = null;
+    setActiveRightPanel(null);
+  }, []);
+
   // Per-panel detail selection, shared with the master-detail panels via context.
   const [selectedByPanel, setSelectedByPanel] = useState<Partial<Record<PanelId, string | null>>>({});
   const setSelected = useCallback((panel: PanelId, id: string | null) => {
@@ -106,6 +123,8 @@ export function ModelerView() {
   const handleToggleRightPanel = useCallback((panel: RightPanelId) => {
     setActiveRightPanel(prev => (prev === panel ? null : panel));
     setLastRightPanel(panel);
+    // Mouse-opened palette: drop any stale Space-press anchor.
+    quickAddPosRef.current = null;
   }, []);
 
   const handleCloseRightPanel = useCallback(() => {
@@ -156,8 +175,14 @@ export function ModelerView() {
         // Block the simulator's bubble-phase space-step listener from also
         // running on this keystroke.
         e.stopImmediatePropagation();
-        setActiveRightPanel(prev => (prev === 'palette' ? null : 'palette'));
+        // Quick-add: open the Palette with its search focused; freeze the
+        // cursor's flow position NOW so Enter adds the selected item where the
+        // cursor was at press time. Pressing Space again re-arms (re-focus +
+        // fresh position) instead of toggling closed — Esc closes.
+        quickAddPosRef.current = quickAddApi?.getCursorFlowPos() ?? null;
+        setActiveRightPanel('palette');
         setLastRightPanel('palette');
+        setTimeout(() => paletteRef.current?.focusSearch(), 50);
       } else if (e.key === 'Escape' && activeRightPanel) {
         // Don't steal Esc from fields (e.g. clearing the search input first)
         if (isField) return;
@@ -226,7 +251,11 @@ export function ModelerView() {
             {activeRightPanel === 'explorer' ? (
               <NodeExplorer ref={explorerRef} />
             ) : (
-              <PalettePanelContent />
+              <PalettePanelContent
+                ref={paletteRef}
+                onQuickAdd={handlePaletteQuickAdd}
+                onQuickAddCancel={handleCloseRightPanel}
+              />
             )}
           </PanelShell>
         )}

@@ -337,6 +337,22 @@
   outline-offset: 0;
 }
 
+/* Keyboard quick-add selection (Space → type → ↑↓ → Enter). Always present on
+   exactly one visible item; mirrors :hover plus an accent outline. */
+.itemSelected,
+.itemSelected:hover {
+  background: var(--color-hover-bg);
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
+}
+
+/* Visual-mode counterpart: outlines the wrapped preview card. */
+.previewSelected {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 1px;
+  border-radius: var(--radius-md);
+}
+
 .itemDragging {
   opacity: 0.55;
 }
