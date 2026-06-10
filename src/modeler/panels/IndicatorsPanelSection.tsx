@@ -6,6 +6,7 @@ import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag } from '../vpl/graphState';
 import { useThemeTokens } from '../../styles/useThemeTokens';
+import { typeDisplayName } from '../../model/typeLabels';
 import styles from './PanelContent.module.css';
 
 function handleIndicatorDragStart(indicatorId: string) {
@@ -131,9 +132,9 @@ export function IndicatorsPanelSection() {
                       });
                     }}
                   >
-                    <option value="bool">Bool</option>
+                    <option value="bool">Binary</option>
                     <option value="integer">Integer</option>
-                    <option value="float">Float</option>
+                    <option value="float">Decimal</option>
                     <option value="tag">Tag</option>
                   </select>
                 </div>
@@ -199,7 +200,7 @@ export function IndicatorsPanelSection() {
                   >
                     <option value="">Select...</option>
                     {cellAttrs.map(a => (
-                      <option key={a.id} value={a.id}>{a.name} ({a.type})</option>
+                      <option key={a.id} value={a.id}>{a.name} ({typeDisplayName(a.type)})</option>
                     ))}
                   </select>
                 </div>

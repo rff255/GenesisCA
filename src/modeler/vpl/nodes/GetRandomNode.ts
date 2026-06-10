@@ -3,7 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const GetRandomNode: NodeTypeDef = {
   type: 'getRandom',
   label: 'Get Random',
-  description: 'Random value: bool (1 with probability P, else 0), integer in [min, max], float in [min, max), orientation (uniform 0..3 = N/E/S/W), or one option uniformly picked from the wired Options array (returns Fallback if array is empty).',
+  description: 'Random value: binary (1 with probability P, else 0), integer in [min, max], decimal in [min, max), orientation (uniform 0..3 = N/E/S/W), or one option uniformly picked from the wired Options array (returns Fallback if array is empty).',
   category: 'data',
   color: '#b71c1c',
   ports: [

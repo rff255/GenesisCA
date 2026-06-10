@@ -225,6 +225,7 @@ genesis-ca/
 │   │   └── ModelsLibrary.tsx         # Models Library tab (fetches from public/models/)
 │   ├── model/
 │   │   ├── ModelContext.tsx           # React Context + useReducer
+│   │   ├── typeLabels.ts             # typeDisplayName(): 'bool'→Binary, 'float'→Decimal (UI-only names)
 │   │   ├── macroImport.ts            # cloneMacroWithFreshIds — ID regen for macro imports; countMacroInstances — linked-copy count
 │   │   ├── defaultModel.ts           # EMPTY_MODEL (for New + the initial state on every app load)
 │   │   ├── fileOperations.ts         # .gcaproj save/load/download + .gcastate serialization
@@ -246,6 +247,7 @@ genesis-ca/
 
 - Language: TypeScript (strict mode)
 - All new code and documentation in English
+- **Type-name display convention:** the UI never shows the raw type ids `bool` / `float` — they render as **Binary** / **Decimal** (general-public vocabulary). Route every user-visible type name through `typeDisplayName()` in [typeLabels.ts](src/model/typeLabels.ts) (badges, dropdowns showing `name (type)`, hints); `<option value>` keeps the internal id, only the option TEXT uses the display name. Prose in HelpView/README/NODES_REFERENCE says binary/decimal too (NODES_REFERENCE's port-type table maps id → UI name). Internal ids in schema/configs/compilers/`.gcaproj` are NEVER renamed.
 - The original undergrad thesis (in Portuguese) exists as reference material but is not part of the codebase
 - Prefer modular, readable code. Each node type is its own file. The compiler is separate from the editor.
 - Do not assume file structure beyond what's documented here — ask if uncertain

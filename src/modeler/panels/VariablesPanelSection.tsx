@@ -6,6 +6,7 @@ import type { PanelMode } from '../ModelerDetailContext';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag } from '../vpl/graphState';
+import { typeDisplayName } from '../../model/typeLabels';
 import styles from './PanelContent.module.css';
 
 function handleRowDragStart(payload: ModelElementDragPayload) {
@@ -92,7 +93,7 @@ export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
             >
               <span className={styles.listItemName}>{v.name}</span>
               <span className={styles.listItemBadge}>
-                {v.kind === 'array' ? `${v.dataType}[${v.length ?? '?'}]` : v.dataType}
+                {v.kind === 'array' ? `${typeDisplayName(v.dataType)}[${v.length ?? '?'}]` : typeDisplayName(v.dataType)}
               </span>
               <button className={styles.dragHandle} title="Drag to reorder"
                 onPointerDown={reorder.startDrag(v.id)}
@@ -158,9 +159,9 @@ export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
                   });
                 }}
               >
-                <option value="bool">Bool</option>
+                <option value="bool">Binary</option>
                 <option value="integer">Integer</option>
-                <option value="float">Float</option>
+                <option value="float">Decimal</option>
                 <option value="tag">Tag</option>
               </select>
             </div>

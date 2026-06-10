@@ -3,7 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const StatementNode: NodeTypeDef = {
   type: 'statement',
   label: 'Compare',
-  description: 'Compares two values with ==, !=, >, <, >=, <=, between (range check), or not between. The type selector (Numerical / Bool / Tag / Neighbor Index) swaps the inline operand widgets; non-numerical types compare for equality only.',
+  description: 'Compares two values with ==, !=, >, <, >=, <=, between (range check), or not between. The type selector (Numerical / Binary / Tag / Neighbor Index) swaps the inline operand widgets; non-numerical types compare for equality only.',
   category: 'logic',
   color: '#1a237e',
   ports: [
