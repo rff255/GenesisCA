@@ -26,7 +26,8 @@ export type ModelElementDragPayload =
   | { kind: 'neighborhood'; neighborhoodId: string }
   | { kind: 'mapping-a2c'; mappingId: string }
   | { kind: 'mapping-c2a'; mappingId: string }
-  | { kind: 'indicator'; indicatorId: string };
+  | { kind: 'indicator'; indicatorId: string }
+  | { kind: 'variable'; variableId: string; varKind: 'scalar' | 'array' };
 
 export interface RelatedNodeEntry {
   /** Node type to instantiate on pick. */
@@ -47,6 +48,7 @@ export function payloadElementId(payload: ModelElementDragPayload): string {
     case 'mapping-a2c': return payload.mappingId;
     case 'mapping-c2a': return payload.mappingId;
     case 'indicator': return payload.indicatorId;
+    case 'variable': return payload.variableId;
   }
 }
 
@@ -97,7 +99,26 @@ export const RELATED_NODES: Record<ModelElementDragPayload['kind'], RelatedNodeE
     { nodeType: 'setIndicator', configKey: 'indicatorId' },
     { nodeType: 'updateIndicator', configKey: 'indicatorId' },
   ],
+  'variable': [
+    { nodeType: 'getVariable', configKey: 'variableId' },
+    { nodeType: 'setVariable', configKey: 'variableId' },
+    { nodeType: 'setArrayElement', configKey: 'variableId' },
+  ],
 };
+
+/** RELATED_NODES entries filtered for payload specifics. Local variables are
+ *  kind-gated: `setVariable` only writes scalars, `setArrayElement` only
+ *  writes array elements — offering the wrong one would just spawn a node
+ *  with an instant validation badge. */
+export function relatedEntriesForPayload(payload: ModelElementDragPayload): RelatedNodeEntry[] {
+  const entries = RELATED_NODES[payload.kind] ?? [];
+  if (payload.kind !== 'variable') return entries;
+  return entries.filter(e => {
+    if (e.nodeType === 'setVariable') return payload.varKind === 'scalar';
+    if (e.nodeType === 'setArrayElement') return payload.varKind === 'array';
+    return true;
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Compatible-handle computation for the panel-drag highlight + snap-to-port
@@ -118,7 +139,7 @@ interface PortShape {
  *  payload (most importantly, isColorAttr for color model attributes). */
 function relatedNodePotentialPorts(payload: ModelElementDragPayload): PortShape[] {
   const shapes: PortShape[] = [];
-  for (const entry of RELATED_NODES[payload.kind]) {
+  for (const entry of relatedEntriesForPayload(payload)) {
     const def = getNodeDef(entry.nodeType);
     if (!def) continue;
     // Resolve the config the new node would spawn with so getEffectivePorts

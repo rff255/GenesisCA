@@ -3,7 +3,22 @@ import { useModel } from '../../model/ModelContext';
 import type { VariableDataType, VariableKind } from '../../model/types';
 import { useListReorder } from './useListReorder';
 import type { PanelMode } from '../ModelerDetailContext';
+import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
+import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
+import { setCurrentModelElementDrag } from '../vpl/graphState';
 import styles from './PanelContent.module.css';
+
+function handleRowDragStart(payload: ModelElementDragPayload) {
+  return (e: React.DragEvent) => {
+    e.dataTransfer.setData(MODEL_ELEMENT_DRAG_MIME, JSON.stringify(payload));
+    e.dataTransfer.effectAllowed = 'copy';
+    setCurrentModelElementDrag(payload);
+  };
+}
+
+function handleRowDragEnd() {
+  setCurrentModelElementDrag(null);
+}
 
 /** Properties-panel section for Local Variables — per-cell scratch storage
  *  referenced by getVariable / setVariable / setArrayElement nodes. Mirrors
@@ -70,6 +85,10 @@ export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
               data-reorder-row
               className={`${styles.listItem} ${v.id === selectedId ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
               onClick={() => onSelect(v.id === selectedId ? null : v.id)}
+              draggable
+              onDragStart={handleRowDragStart({ kind: 'variable', variableId: v.id, varKind: v.kind })}
+              onDragEnd={handleRowDragEnd}
+              title={`Drag to canvas to add a node that uses '${v.name}'`}
             >
               <span className={styles.listItemName}>{v.name}</span>
               <span className={styles.listItemBadge}>

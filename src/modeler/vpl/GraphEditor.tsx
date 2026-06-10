@@ -23,7 +23,7 @@ import { useModel } from '../../model/ModelContext';
 import { getNodeDefsByCategory, getNodeDef, getAllNodeDefs } from './nodes/registry';
 import { parseHandleId, handleId } from './types';
 import type { PortDef, NodeTypeDef } from './types';
-import { MODEL_ELEMENT_DRAG_MIME, RELATED_NODES, payloadElementId, computeCompatibleHandlesForDrag, findNearestCompatibleHandle } from './modelElementDrag';
+import { MODEL_ELEMENT_DRAG_MIME, RELATED_NODES, payloadElementId, relatedEntriesForPayload, computeCompatibleHandlesForDrag, findNearestCompatibleHandle } from './modelElementDrag';
 import type { ModelElementDragPayload } from './modelElementDrag';
 import { getEffectivePorts } from './effectivePorts';
 import type { GraphNode, GraphEdge } from '../../model/types';
@@ -162,7 +162,7 @@ function resolveDropCandidates(
   payload: ModelElementDragPayload,
   snap: ConnectionOrigin | undefined,
 ): ResolvedDropCandidate[] {
-  const entries = RELATED_NODES[payload.kind] ?? [];
+  const entries = relatedEntriesForPayload(payload);
   const resolved: ResolvedDropCandidate[] = [];
   for (const entry of entries) {
     const def = getNodeDef(entry.nodeType);
@@ -3417,6 +3417,7 @@ export function GraphEditorInner() {
               'mapping-a2c': 'Output mapping (A→C)',
               'mapping-c2a': 'Input mapping (C→A)',
               'indicator': 'Indicator',
+              'variable': 'Local variable',
             };
             const baseTitle = titleByKind[payload.kind];
             let title = baseTitle;
