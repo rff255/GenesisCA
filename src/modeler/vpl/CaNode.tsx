@@ -413,9 +413,10 @@ function CaNodeComponent({ id, data }: NodeProps) {
         }
       }
     }
-    // Keep the DONE pass-through after the dynamic case ports (it is static in
-    // def.ports, so it would otherwise render above them). Mirrors effectivePorts.ts.
-    outputPorts = [...outputPorts.filter(p => p.id !== 'next'), ...outputPorts.filter(p => p.id === 'next')];
+    // Keep the DONE pass-through at the TOP of the outputs (above the dynamic
+    // CASE_N + DEFAULT ports) so chained nodes stay horizontally aligned with
+    // the CHECK input. Mirrors effectivePorts.ts.
+    outputPorts = [...outputPorts.filter(p => p.id === 'next'), ...outputPorts.filter(p => p.id !== 'next')];
   }
 
   // Sequence: dynamic flow output ports beyond the static FIRST/THEN.

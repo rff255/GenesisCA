@@ -66,8 +66,8 @@ export function getEffectivePorts(
         }
       }
     }
-    // Keep the DONE pass-through after the dynamic case ports (mirrors CaNode).
-    outputs = [...outputs.filter(p => p.id !== 'next'), ...outputs.filter(p => p.id === 'next')];
+    // Keep the DONE pass-through at the top of the outputs (mirrors CaNode).
+    outputs = [...outputs.filter(p => p.id === 'next'), ...outputs.filter(p => p.id !== 'next')];
   }
 
   // Sequence: dynamic then_N flow outputs
