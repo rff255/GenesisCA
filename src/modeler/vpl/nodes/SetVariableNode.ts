@@ -11,6 +11,7 @@ export const SetVariableNode: NodeTypeDef = {
   color: '#5e35b1',
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
+    { id: 'next', label: 'NEXT', kind: 'output', category: 'flow' },
     { id: 'value', label: 'Value', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '0' },
   ],
   defaultConfig: { variableId: '' },

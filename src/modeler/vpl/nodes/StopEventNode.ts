@@ -12,6 +12,7 @@ export const StopEventNode: NodeTypeDef = {
   color: '#ffffff',
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
+    { id: 'next', label: 'NEXT', kind: 'output', category: 'flow' },
   ],
   defaultConfig: { message: 'Stop condition reached', _stopIdx: -1 },
   compile: (nodeId, config) => {

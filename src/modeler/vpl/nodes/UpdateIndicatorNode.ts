@@ -8,6 +8,7 @@ export const UpdateIndicatorNode: NodeTypeDef = {
   color: '#5c427c',
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
+    { id: 'next', label: 'NEXT', kind: 'output', category: 'flow' },
     { id: 'value', label: 'Value', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '0' },
   ],
   defaultConfig: { indicatorId: '', operation: 'increment' },

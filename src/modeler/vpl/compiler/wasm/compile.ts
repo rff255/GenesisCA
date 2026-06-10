@@ -6136,6 +6136,8 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
 
       if (caseCount === 0) {
         compileFlowChain(node.id, 'default', ctx);
+        // `continue` skips the shared end-of-loop continuation — run it here.
+        if (!compileFlowChain(node.id, 'next', ctx)) return false;
         continue;
       }
 
@@ -6309,6 +6311,13 @@ function compileFlowChain(sourceNodeId: string, sourcePortId: string, ctx: WasmC
       const ok = flowEmitter({ ctx, node, inputs });
       if (!ok) return false;
     }
+
+    // Pass-through continuation (`next` — NEXT on action nodes, DONE on
+    // control nodes): bytecode emitted here lands right after the node's own
+    // emission / after its closed control block, which IS the correct
+    // execution position in WASM's structured control flow. No-op when
+    // nothing is wired.
+    if (!compileFlowChain(node.id, 'next', ctx)) return false;
   }
   return true;
 }
@@ -6741,6 +6750,9 @@ function compileEntry(
             break;
           }
         }
+        // Pass-through continuation (`next`): its chain's loop-invariant value
+        // inputs hoist exactly like sibling targets'.
+        visitFlow(t.nodeId, 'next', seen);
       }
     };
     visitFlow(opts.entry.id, 'do', new Set());

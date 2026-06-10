@@ -1105,6 +1105,13 @@ function compileRoot(
         const code = def.compile(node.id, node.data.config, inputVars, model?.properties.boundaryTreatment, ctx);
         if (code) flowLines.push(indent + code.trimEnd());
       }
+
+      // Pass-through continuation (`next` flow output — NEXT on action nodes,
+      // DONE on control nodes): targets run immediately after this node (after
+      // the whole construct for control nodes), at the same scope/indent,
+      // BEFORE the parent port's next sibling target — depth-first like UE.
+      // No-op when nothing is wired (every pre-existing model).
+      compileFlowChain(node.id, 'next', indent);
     }
 
     // Restore the outer volatile-emit context (if any).

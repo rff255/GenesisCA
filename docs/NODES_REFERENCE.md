@@ -109,14 +109,24 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 
 ### 3.2 Flow Control — `flow`
 
+**Pass-through chaining (`next` port).** Every flow-input node except Sequence and Macro
+carries a pass-through flow output (port id `next`): action nodes label it **NEXT** (their
+only output, rendered at the top) and control nodes label it **DONE** (rendered last, below
+the branches — UE's "Completed"). Targets run immediately after the node — after the whole
+construct for control nodes — at the same scope, before the parent port's next sibling
+target (depth-first). Chaining `A.NEXT → B` compiles byte-identically to fanning both out
+of the parent port, on all three targets; it exists purely to keep graphs readable without
+Sequence nodes. See
+[IMPACT_MAP_FLOW_PASSTHROUGH.md](IMPACT_MAP_FLOW_PASSTHROUGH.md).
+
 | # | Type | Label | Description | Ports | Notes |
 |---|---|---|---|---|---|
-| 6 | `conditional` | If / Then / Else | Branch on a binary condition. | `I: CHECK` (flow) `I: IF` (bool) / `O: THEN` `O: ELSE` (flow) | |
-| 7 | `sequence` | Sequence | Execute two flows in order. | `I: DO` / `O: FIRST` `O: THEN` (flow) | |
-| 8 | `loop` | Loop | Repeat flow N times. | `I: DO` (flow) `I: COUNT` (int) / `O: BODY` (flow) | |
-| 9 | `forEachInArray` | For Each In Array | Iterates a typed array, exposing the per-iteration `Element` and its 0-based `Index`. Body action nodes can consume either directly; body value nodes that depend on `Element`/`Index` (e.g. `Math.add(element, 1) → setIndicator`, or `arrayElement(otherArr, index)`) emit inline inside the loop block on all three targets. | `I: DO` (flow) `I: Array` (any[]) / `O: BODY` (flow) `O: Element` (any) `O: Index` (int) | Full JS / WASM / WebGPU lockstep |
-| 10 | `switch` | Switch | Multi-way branch (by value or conditions). | `I: CHECK` (flow) `I: VALUE` (optional) / dynamic `O: CASE_N` + `O: DEFAULT` | 2 modes: `conditions` (per-case bool inputs) or `value` (compare to cases). Value-mode types: Integer / Float / Tag / **Neighbor Index** (NI cases are wired, equality-only). Optional `firstMatchOnly` |
-| 11 | `macro` | Macro | Reusable sub-graph. | dynamic — ports from `MacroDef.exposedInputs/Outputs` | Requires `macroDefId`; compiler inlines the subgraph |
+| 6 | `conditional` | If / Then / Else | Branch on a binary condition. | `I: CHECK` (flow) `I: IF` (bool) / `O: THEN` `O: ELSE` `O: DONE` (flow) | DONE runs after the if/else completes (either branch, or none) |
+| 7 | `sequence` | Sequence | Execute two flows in order. | `I: DO` / `O: FIRST` `O: THEN` (flow) | No DONE — its last THEN is the continuation |
+| 8 | `loop` | Loop | Repeat flow N times. | `I: DO` (flow) `I: COUNT` (int) / `O: BODY` `O: DONE` (flow) | DONE runs after all iterations |
+| 9 | `forEachInArray` | For Each In Array | Iterates a typed array, exposing the per-iteration `Element` and its 0-based `Index`. Body action nodes can consume either directly; body value nodes that depend on `Element`/`Index` (e.g. `Math.add(element, 1) → setIndicator`, or `arrayElement(otherArr, index)`) emit inline inside the loop block on all three targets. | `I: DO` (flow) `I: Array` (any[]) / `O: BODY` (flow) `O: Element` (any) `O: Index` (int) `O: DONE` (flow) | Full JS / WASM / WebGPU lockstep. An unwired Array skips body AND DONE |
+| 10 | `switch` | Switch | Multi-way branch (by value or conditions). | `I: CHECK` (flow) `I: VALUE` (optional) / dynamic `O: CASE_N` + `O: DEFAULT` + `O: DONE` | 2 modes: `conditions` (per-case bool inputs) or `value` (compare to cases). Value-mode types: Integer / Decimal / Tag / **Neighbor Index** (NI cases are wired, equality-only). Optional `firstMatchOnly`. DONE runs after the matched case(s) |
+| 11 | `macro` | Macro | Reusable sub-graph. | dynamic — ports from `MacroDef.exposedInputs/Outputs` | Requires `macroDefId`; compiler inlines the subgraph. No auto pass-through (expose a flow output explicitly) |
 
 ### 3.3 Data readers — `data`
 

@@ -22,6 +22,7 @@ export const SetCellGlyphNode: NodeTypeDef = {
   color: '#006064',
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
+    { id: 'next', label: 'NEXT', kind: 'output', category: 'flow' },
     { id: 'glyph', label: 'Glyph', kind: 'input', category: 'value', dataType: 'integer', inlineWidget: 'glyph', defaultValue: '0' },
     { id: 'r', label: 'R', kind: 'input', category: 'value', dataType: 'integer', inlineWidget: 'number', defaultValue: '255' },
     { id: 'g', label: 'G', kind: 'input', category: 'value', dataType: 'integer', inlineWidget: 'number', defaultValue: '255' },

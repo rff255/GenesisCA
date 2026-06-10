@@ -12,6 +12,7 @@ export const SetNeighborAttributeByIndexNode: NodeTypeDef = {
   requirements: { async: true },
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
+    { id: 'next', label: 'NEXT', kind: 'output', category: 'flow' },
     { id: 'index', label: 'Index', kind: 'input', category: 'value', dataType: 'neighborIndex' },
     { id: 'value', label: 'Value', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '0' },
   ],

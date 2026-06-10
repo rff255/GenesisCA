@@ -10,6 +10,7 @@ export const LoopNode: NodeTypeDef = {
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
     { id: 'count', label: 'Count', kind: 'input', category: 'value', dataType: 'integer', inlineWidget: 'number', defaultValue: '1' },
     { id: 'body', label: 'BODY', kind: 'output', category: 'flow' },
+    { id: 'next', label: 'DONE', kind: 'output', category: 'flow' },
   ],
   defaultConfig: {},
   compile: () => '', // Compiler handles flow nodes specially
