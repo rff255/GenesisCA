@@ -9,10 +9,12 @@ export const ForEachInArrayNode: NodeTypeDef = {
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
     { id: 'array', label: 'Array', kind: 'input', category: 'value', dataType: 'any', isArray: true },
+    // DONE renders first among outputs (aligned with DO) so chained nodes keep
+    // a horizontal through-line; BODY + the per-iteration Element/Index hang below.
+    { id: 'next', label: 'DONE', kind: 'output', category: 'flow' },
     { id: 'body', label: 'BODY', kind: 'output', category: 'flow' },
     { id: 'element', label: 'Element', kind: 'output', category: 'value', dataType: 'any' },
     { id: 'index', label: 'Index', kind: 'output', category: 'value', dataType: 'integer' },
-    { id: 'next', label: 'DONE', kind: 'output', category: 'flow' },
   ],
   defaultConfig: {},
   compile: () => '', // Compiler handles flow nodes specially in compileFlowChain

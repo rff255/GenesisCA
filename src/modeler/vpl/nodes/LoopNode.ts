@@ -9,8 +9,10 @@ export const LoopNode: NodeTypeDef = {
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
     { id: 'count', label: 'Count', kind: 'input', category: 'value', dataType: 'integer', inlineWidget: 'number', defaultValue: '1' },
-    { id: 'body', label: 'BODY', kind: 'output', category: 'flow' },
+    // DONE renders first among outputs (aligned with DO) so chained nodes keep
+    // a horizontal through-line; BODY hangs below.
     { id: 'next', label: 'DONE', kind: 'output', category: 'flow' },
+    { id: 'body', label: 'BODY', kind: 'output', category: 'flow' },
   ],
   defaultConfig: {},
   compile: () => '', // Compiler handles flow nodes specially

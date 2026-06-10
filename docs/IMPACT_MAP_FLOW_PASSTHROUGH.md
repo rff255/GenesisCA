@@ -17,9 +17,10 @@ DO port or inserting Sequence nodes. Visual companion:
   markCellUpdated, stopEvent): label **NEXT**, the node's only output → renders at the
   top right. Semantics: targets run immediately after the action, same scope.
 - **Control nodes** (conditional, loop, forEachInArray, switch): label **DONE**, placed
-  LAST among outputs (below the branches — UE's "Completed"). Semantics: targets run
-  after the whole construct (after the if/else, after all iterations, after the matching
-  case(s)), at the construct's own scope.
+  FIRST among outputs (top-right, aligned with the flow input — keeps chains on a
+  horizontal through-line; branch outputs THEN/ELSE/BODY/CASE_N/DEFAULT hang below).
+  Semantics: targets run after the whole construct (after the if/else, after all
+  iterations, after the matching case(s)), at the construct's own scope.
 - **Excluded:** `sequence` (it IS the sequencing construct; its last THEN is the
   continuation), entry points (no flow input), macro instances + boundary nodes (no
   internal anchor for a pass-through; macro flow outputs stay user-exposed ports).
@@ -41,8 +42,8 @@ this") — satisfied.
 
 | # | Subsystem | File / site | Change |
 |---|---|---|---|
-| 1 | Node defs | 20 files in `nodes/` | Static `next` port (NEXT first output on sinks; DONE last on control nodes) |
-| 2 | Editor render | `CaNode.tsx` switch block; `effectivePorts.ts` switch block | Re-append `next` after dynamic `case_N` pushes so DONE stays last. Everything else (handles, labels, collapse, validation, copy/paste, reroute) is port-generic |
+| 1 | Node defs | 20 files in `nodes/` | Static `next` port — first output on sinks (NEXT) AND first among control-node outputs (DONE), placed before the branch ports in the def |
+| 2 | Editor render | `CaNode.tsx` switch block; `effectivePorts.ts` switch block | Re-hoist `next` to the FRONT of the outputs after dynamic `case_N` pushes so DONE stays first/top. Everything else (handles, labels, collapse, validation, copy/paste, reroute) is port-generic |
 | 3 | JS compiler | `compile.ts` `compileFlowChain` | One line at the end of the per-target dispatch: `compileFlowChain(node.id, 'next', indent)` — emits the chain after the node/construct at the same indent. `collectValueDeps` already iterates ALL flow-output edges (prefix scan) → next-subtree value deps collected automatically |
 | 4 | Sink analysis | `sinkAnalysis.ts` `walkFlowNode` | After each typed dispatch (and for terminal actions): `walkFlowOutput(nodeId, 'next', parentScope)` — `next` is TRANSPARENT (no new scope). Diamond bookkeeping (`flowNodeContainingScopes`) covers next-reached nodes because it records before the visited-guard |
 | 5 | Volatile hoist | `volatileHoist.ts` `walkNode` | Same transparent walk; next-children become later MEMBERS of the same scope chain, so `emitBefore` placement stays consistent with emission order |
