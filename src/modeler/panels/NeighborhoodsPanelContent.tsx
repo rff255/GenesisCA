@@ -33,8 +33,36 @@ function coordKey(row: number, col: number): string {
 
 type ShapeTool = 'point' | 'circle' | 'ring' | 'line';
 
+/** How an edit treats the cells it covers: mark = only activate, unmark = only
+ *  deactivate, toggle = flip each (the classic behaviour). */
+type PaintMode = 'mark' | 'unmark' | 'toggle';
+
+/** Independent mirror toggles. Edits expand to their closure under the enabled
+ *  mirrors: H (left↔right), V (top↔bottom), D (main diagonal r↔c). H+V+D
+ *  generates the full 8-fold dihedral symmetry (anti-diagonal included). */
+interface Symmetry { h: boolean; v: boolean; d: boolean }
+
 /** Clicks each tool needs before it applies. */
 const SHAPE_CLICKS: Record<ShapeTool, number> = { point: 1, circle: 2, ring: 3, line: 2 };
+
+/** Closure of `cells` under the enabled mirrors. Mirrors of in-grid cells stay
+ *  in-grid (the margin box is symmetric), so no clipping is needed. */
+function expandSymmetry(cells: Array<[number, number]>, sym: Symmetry): Array<[number, number]> {
+  if (!sym.h && !sym.v && !sym.d) return cells;
+  const out = new Map<string, [number, number]>();
+  const queue: Array<[number, number]> = [...cells];
+  while (queue.length > 0) {
+    const cell = queue.pop()!;
+    const key = coordKey(cell[0], cell[1]);
+    if (out.has(key)) continue;
+    out.set(key, cell);
+    const [r, c] = cell;
+    if (sym.h) queue.push([r, -c]);
+    if (sym.v) queue.push([-r, c]);
+    if (sym.d) queue.push([c, r]);
+  }
+  return [...out.values()];
+}
 
 const cellDist = (a: [number, number], b: [number, number]) =>
   Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -103,30 +131,39 @@ function shapeCells(
   return null;
 }
 
-/** Batch-toggle `cells` on a neighborhood: active coords are removed,
- *  inactive ones added, and a covered center cell flips includeCentralCell.
- *  Tag keys are coord-array INDICES, so removals must remap surviving tags —
- *  this helper is the single place that does it (the one-cell Point click
- *  routes through here too). */
-function toggleCellsChanges(
+/** What `mode` does to one covered cell given its current active state. */
+function cellEffect(mode: PaintMode, isActive: boolean): 'add' | 'remove' | 'none' {
+  if (mode === 'mark') return isActive ? 'none' : 'add';
+  if (mode === 'unmark') return isActive ? 'remove' : 'none';
+  return isActive ? 'remove' : 'add';
+}
+
+/** Batch-apply `mode` to `cells` on a neighborhood (mark = activate only,
+ *  unmark = deactivate only, toggle = flip each; a covered center cell drives
+ *  includeCentralCell the same way). Tag keys are coord-array INDICES, so
+ *  removals must remap surviving tags — this helper is the single place that
+ *  does it (the one-cell Point click routes through here too). */
+function applyCellsChanges(
   nbh: Neighborhood,
   cells: Array<[number, number]>,
+  mode: PaintMode,
 ): Partial<Neighborhood> {
   const seen = new Set<string>();
   const removeKeys = new Set<string>();
   const toAdd: Array<[number, number]> = [];
   const activeKeys = new Set(nbh.coords.map(([r, c]) => coordKey(r, c)));
-  let centerTouched = false;
+  let centerEffect: 'add' | 'remove' | 'none' = 'none';
   for (const cell of cells) {
     const key = coordKey(cell[0], cell[1]);
     if (seen.has(key)) continue;
     seen.add(key);
     if (cell[0] === 0 && cell[1] === 0) {
-      centerTouched = true;
+      centerEffect = cellEffect(mode, !!nbh.includeCentralCell);
       continue;
     }
-    if (activeKeys.has(key)) removeKeys.add(key);
-    else toAdd.push(cell);
+    const eff = cellEffect(mode, activeKeys.has(key));
+    if (eff === 'remove') removeKeys.add(key);
+    else if (eff === 'add') toAdd.push(cell);
   }
   const newCoords: Array<[number, number]> = [];
   const newTags: Record<number, string> = {};
@@ -139,13 +176,15 @@ function toggleCellsChanges(
   newCoords.push(...toAdd);
   const changes: Partial<Neighborhood> = { coords: newCoords };
   if (nbh.tags) changes.tags = newTags;
-  if (centerTouched) changes.includeCentralCell = !nbh.includeCentralCell;
+  if (centerEffect === 'add') changes.includeCentralCell = true;
+  else if (centerEffect === 'remove') changes.includeCentralCell = false;
   return changes;
 }
 
 /** Per-tool, per-stage instruction line shown next to the tool buttons. */
-function shapeHint(tool: ShapeTool, stagedCount: number): string {
-  if (tool === 'point') return 'Click cells to toggle them one by one.';
+function shapeHint(tool: ShapeTool, stagedCount: number, mode: PaintMode): string {
+  const verb = mode === 'mark' ? 'mark' : mode === 'unmark' ? 'unmark' : 'toggle';
+  if (tool === 'point') return `Click cells to ${verb} them one by one.`;
   const steps: Record<Exclude<ShapeTool, 'point'>, string[]> = {
     circle: ['Click the circle’s center cell.', 'Click a cell at the circle’s edge.'],
     ring: ['Click the ring’s center cell.', 'Click a cell at the inner radius.', 'Click a cell at the outer radius.'],
@@ -189,8 +228,11 @@ export function NeighborhoodsPanelContent({ mode = 'list' }: PanelContentProps =
 
   // Shape tools: drawing mode + the clicks staged so far + the hovered cell
   // (live preview of the would-be shape). Staging resets on tool or
-  // neighborhood switch.
+  // neighborhood switch. `paintMode` decides what an edit does to covered
+  // cells; the symmetry toggles mirror every edit (and its preview).
   const [tool, setTool] = useState<ShapeTool>('point');
+  const [paintMode, setPaintMode] = useState<PaintMode>('toggle');
+  const [sym, setSym] = useState<Symmetry>({ h: false, v: false, d: false });
   const [staged, setStaged] = useState<Array<[number, number]>>([]);
   const [hoverCell, setHoverCell] = useState<[number, number] | null>(null);
   useEffect(() => { setStaged([]); }, [tool, selectedId]);
@@ -200,20 +242,48 @@ export function NeighborhoodsPanelContent({ mode = 'list' }: PanelContentProps =
     [staged],
   );
 
-  // Cells the in-progress shape would affect if the hovered cell were the
-  // next click — drawn as a dashed outline so the result is predictable.
-  const previewKeys = useMemo(() => {
-    if (tool === 'point' || !hoverCell) return new Set<string>();
-    const cells = shapeCells(tool, [...staged, hoverCell], margin);
-    return new Set((cells ?? []).map(([r, c]) => coordKey(r, c)));
-  }, [tool, staged, hoverCell, margin]);
+  /** Final affected cell set for a completed gesture: shape cells (or the one
+   *  clicked cell for Point) expanded through the enabled mirrors. */
+  const affectedCells = useCallback(
+    (pts: Array<[number, number]>): Array<[number, number]> => {
+      const cells = tool === 'point' ? [pts[pts.length - 1]!] : shapeCells(tool, pts, margin) ?? [];
+      return expandSymmetry(cells, sym);
+    },
+    [tool, margin, sym],
+  );
+
+  // Hover preview, split by what the current mode WOULD do to each covered
+  // cell: cells that would activate, cells that would deactivate, and covered
+  // no-ops. Works for Point too (shows the mirrored set under symmetry).
+  const preview = useMemo(() => {
+    const add = new Set<string>();
+    const remove = new Set<string>();
+    const none = new Set<string>();
+    if (!hoverCell || !selected) return { add, remove, none };
+    if (tool !== 'point' && staged.length === 0 && SHAPE_CLICKS[tool] > 1) {
+      // First click of a multi-click shape only stages an anchor — preview just
+      // the hovered cell (+ mirrors) so the anchor placement is visible.
+      for (const [r, c] of expandSymmetry([hoverCell], sym)) none.add(coordKey(r, c));
+      return { add, remove, none };
+    }
+    for (const cell of affectedCells([...staged, hoverCell])) {
+      const key = coordKey(cell[0], cell[1]);
+      const isActive = cell[0] === 0 && cell[1] === 0
+        ? !!selected.includeCentralCell
+        : activeCoords.has(key);
+      const eff = cellEffect(paintMode, isActive);
+      if (eff === 'add') add.add(key);
+      else if (eff === 'remove') remove.add(key);
+      else none.add(key);
+    }
+    return { add, remove, none };
+  }, [tool, staged, hoverCell, selected, activeCoords, paintMode, sym, affectedCells]);
 
   const handleCellClick = useCallback(
     (row: number, col: number) => {
       if (!selected) return;
       if (tool === 'point') {
-        // Single-cell toggle (center cell flips includeCentralCell).
-        updateNeighborhood(selected.id, toggleCellsChanges(selected, [[row, col]]));
+        updateNeighborhood(selected.id, applyCellsChanges(selected, affectedCells([[row, col]]), paintMode));
         return;
       }
       const next: Array<[number, number]> = [...staged, [row, col]];
@@ -221,13 +291,13 @@ export function NeighborhoodsPanelContent({ mode = 'list' }: PanelContentProps =
         setStaged(next);
         return;
       }
-      const cells = shapeCells(tool, next, margin);
-      if (cells && cells.length > 0) {
-        updateNeighborhood(selected.id, toggleCellsChanges(selected, cells));
+      const cells = affectedCells(next);
+      if (cells.length > 0) {
+        updateNeighborhood(selected.id, applyCellsChanges(selected, cells, paintMode));
       }
       setStaged([]);
     },
-    [selected, tool, staged, margin, updateNeighborhood],
+    [selected, tool, staged, paintMode, affectedCells, updateNeighborhood],
   );
 
   const handleDelete = () => {
@@ -351,17 +421,49 @@ export function NeighborhoodsPanelContent({ mode = 'list' }: PanelContentProps =
                   className={`${styles.shapeToolButton} ${tool === t ? styles.shapeToolButtonActive : ''}`}
                   onClick={() => setTool(t)}
                   title={{
-                    point: 'Point — toggle individual cells',
-                    circle: 'Circle — click the center, then a cell at the edge, to toggle a filled disc',
+                    point: 'Point — edit individual cells',
+                    circle: 'Circle — click the center, then a cell at the edge, to edit a filled disc',
                     ring: 'Ring — click the center, a cell at the inner radius, then one at the outer radius',
-                    line: 'Line — click two endpoints to toggle every cell along the path',
+                    line: 'Line — click two endpoints to edit every cell along the path',
                   }[t]}
                 >
                   {{ point: '·', circle: '●', ring: '◌', line: '╱' }[t]} {t[0]!.toUpperCase() + t.slice(1)}
                 </button>
               ))}
             </div>
-            <div className={styles.shapeToolHint}>{shapeHint(tool, staged.length)}</div>
+            <div className={styles.shapeToolRow} role="group" aria-label="Edit mode and symmetry">
+              {(['mark', 'unmark', 'toggle'] as PaintMode[]).map(m => (
+                <button
+                  key={m}
+                  className={`${styles.shapeToolButton} ${paintMode === m ? styles.shapeToolButtonActive : ''}`}
+                  onClick={() => setPaintMode(m)}
+                  title={{
+                    mark: 'Mark — covered cells become active (already-active cells are left alone)',
+                    unmark: 'Unmark — covered cells become inactive',
+                    toggle: 'Toggle — covered cells flip (active ↔ inactive)',
+                  }[m]}
+                >
+                  {m[0]!.toUpperCase() + m.slice(1)}
+                </button>
+              ))}
+              <span className={styles.shapeToolDivider} />
+              <button
+                className={`${styles.shapeToolButton} ${sym.h ? styles.shapeToolButtonActive : ''}`}
+                onClick={() => setSym(s => ({ ...s, h: !s.h }))}
+                title="Horizontal symmetry — every edit mirrors left ↔ right"
+              >↔ H</button>
+              <button
+                className={`${styles.shapeToolButton} ${sym.v ? styles.shapeToolButtonActive : ''}`}
+                onClick={() => setSym(s => ({ ...s, v: !s.v }))}
+                title="Vertical symmetry — every edit mirrors top ↔ bottom"
+              >↕ V</button>
+              <button
+                className={`${styles.shapeToolButton} ${sym.d ? styles.shapeToolButtonActive : ''}`}
+                onClick={() => setSym(s => ({ ...s, d: !s.d }))}
+                title="Diagonal symmetry — every edit mirrors across the main diagonal (all three together give full 8-fold symmetry)"
+              >⤢ D</button>
+            </div>
+            <div className={styles.shapeToolHint}>{shapeHint(tool, staged.length, paintMode)}</div>
 
             <div
               className={styles.grid}
@@ -390,7 +492,9 @@ export function NeighborhoodsPanelContent({ mode = 'list' }: PanelContentProps =
                   }
                   const key = coordKey(row, col);
                   if (stagedKeys.has(key)) cellClass += ' ' + styles.gridCellStaged;
-                  else if (previewKeys.has(key)) cellClass += ' ' + styles.gridCellPreview;
+                  else if (preview.add.has(key)) cellClass += ' ' + styles.gridCellPreviewAdd;
+                  else if (preview.remove.has(key)) cellClass += ' ' + styles.gridCellPreviewRemove;
+                  else if (preview.none.has(key)) cellClass += ' ' + styles.gridCellPreview;
 
                   return (
                     <button
