@@ -323,6 +323,22 @@ export function HelpView() {
             indicators can&apos;t drive end conditions and have no Bars/Lines/Stack toggle
             (they are a single chart kind).
           </p>
+          <p className={styles.p}>
+            <strong>Chart settings (gear).</strong> Every indicator chart has a small
+            <strong> &#9881;</strong> button in its header opening a popover with: fixed{' '}
+            <strong>Y min</strong> / <strong>Y max</strong> (leave blank for the default
+            dynamic scale that follows the data &mdash; each bound is independent),{' '}
+            <strong>Y ticks</strong> (how many axis labels, 2&ndash;11), and a color picker
+            per series. With a fixed axis the chart stops re-scaling as values evolve, so
+            two runs are visually comparable; out-of-window samples are clipped. Changes made
+            here are <em>simulator-side overrides</em>: they persist across sessions on your
+            machine and are saved into the project only when you save with{' '}
+            <strong>Simulator controls</strong> ticked. The same settings can be set as{' '}
+            <em>model defaults</em> in the Modeler (Properties &rarr; Indicators &rarr;{' '}
+            <strong>Chart Settings</strong>) &mdash; those travel with the <code>.gcaproj</code>{' '}
+            always; the gear&apos;s overrides win where both are set, and{' '}
+            <strong>Reset to model defaults</strong> clears the override layer.
+          </p>
 
           <h3 className={styles.h3}>Variegated Cells &mdash; Directional Interactions (V)</h3>
           <p className={styles.p}>

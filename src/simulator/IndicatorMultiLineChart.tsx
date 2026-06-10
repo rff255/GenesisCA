@@ -1,5 +1,10 @@
 import { useRef, useEffect, useLayoutEffect, useState } from 'react';
 import { useThemeTokens } from '../styles/useThemeTokens';
+import type { IndicatorChartSettings } from '../model/types';
+import {
+  applyAxisOverrides, hasFixedAxis, tickCount,
+  chartSettingsKey, drawIntermediateYTicks,
+} from './indicatorChartSettings';
 
 interface Props {
   /** Per-category history: category key → array of counts over time. */
@@ -10,6 +15,8 @@ interface Props {
   hidden?: Set<string>;
   /** Toggle a category's visibility — fired on legend-entry click. */
   onToggleCategory?: (category: string) => void;
+  /** Effective chart settings (model defaults merged with sim overrides). */
+  settings?: IndicatorChartSettings;
 }
 
 const TOKEN_NAMES = [
@@ -33,7 +40,7 @@ function formatAxisValue(v: number): string {
   return v.toFixed(1);
 }
 
-export function IndicatorMultiLineChart({ data, generation, height, hidden, onToggleCategory }: Props) {
+export function IndicatorMultiLineChart({ data, generation, height, hidden, onToggleCategory, settings }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
@@ -43,7 +50,9 @@ export function IndicatorMultiLineChart({ data, generation, height, hidden, onTo
   const PALETTE = tokens.slice(2, 12).map(c => c || '#888');
   const LEGEND_LABEL_COLOR = tokens[12] || '#aab';
   const LEGEND_VALUE_COLOR = tokens[13] || '#cdd';
-  const colorFor = (idx: number): string => PALETTE[idx % PALETTE.length]!;
+  // Per-series color overrides win over the index-keyed theme palette.
+  const colorFor = (idx: number, cat: string): string =>
+    settings?.seriesColors?.[cat] ?? PALETTE[idx % PALETTE.length]!;
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -110,6 +119,7 @@ export function IndicatorMultiLineChart({ data, generation, height, hidden, onTo
     const yPad = (yMax - yMin) * 0.06;
     yMin -= yPad;
     yMax += yPad;
+    [yMin, yMax] = applyAxisOverrides(yMin, yMax, settings);
     const yRange = yMax - yMin;
 
     if (maxLen < 2) {
@@ -150,6 +160,23 @@ export function IndicatorMultiLineChart({ data, generation, height, hidden, onTo
     ctx.lineTo(plotRight, plotBottom);
     ctx.stroke();
 
+    // Intermediate tick gridlines + labels (yTicks > 2)
+    drawIntermediateYTicks(ctx, {
+      ticks: tickCount(settings), yMin, yMax,
+      plotLeft, plotRight, plotTop, plotBottom,
+      axisColor: AXIS_COLOR, labelColor: LABEL_COLOR,
+      font: LABEL_FONT, format: formatAxisValue,
+    });
+
+    // With a fixed axis, data can fall outside the window — clip to the plot.
+    const clipped = hasFixedAxis(settings);
+    if (clipped) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(plotLeft, plotTop, plotW, plotH);
+      ctx.clip();
+    }
+
     // One line per category
     for (let ci = 0; ci < categories.length; ci++) {
       const cat = categories[ci]!;
@@ -164,12 +191,14 @@ export function IndicatorMultiLineChart({ data, generation, height, hidden, onTo
       ctx.beginPath();
       ctx.moveTo(toX(0), toY(arr[0]!));
       for (let i = 1; i < arr.length; i++) ctx.lineTo(toX(i), toY(arr[i]!));
-      ctx.strokeStyle = colorFor(ci);
+      ctx.strokeStyle = colorFor(ci, cat);
       ctx.lineWidth = 1.2;
       ctx.stroke();
     }
+
+    if (clipped) ctx.restore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, generation, width, plotHeight, categories.length, categories.join('|'), hiddenKey, AXIS_COLOR, LABEL_COLOR, PALETTE.join(',')]);
+  }, [data, generation, width, plotHeight, categories.length, categories.join('|'), hiddenKey, AXIS_COLOR, LABEL_COLOR, PALETTE.join(','), chartSettingsKey(settings)]);
 
   // Wrapper always mounts so ResizeObserver can attach on first render.
   return (
@@ -205,7 +234,7 @@ export function IndicatorMultiLineChart({ data, generation, height, hidden, onTo
             >
               <span style={{
                 display: 'inline-block', width: 8, height: 2,
-                background: colorFor(ci), borderRadius: 1,
+                background: colorFor(ci, cat), borderRadius: 1,
               }} />
               <span>{cat}</span>
               <span style={{ color: LEGEND_VALUE_COLOR }}>{cur ?? ''}</span>

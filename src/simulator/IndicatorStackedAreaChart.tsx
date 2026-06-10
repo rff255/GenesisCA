@@ -1,5 +1,10 @@
 import { useRef, useEffect, useLayoutEffect, useState } from 'react';
 import { useThemeTokens } from '../styles/useThemeTokens';
+import type { IndicatorChartSettings } from '../model/types';
+import {
+  applyAxisOverrides, hasFixedAxis, tickCount,
+  chartSettingsKey, drawIntermediateYTicks,
+} from './indicatorChartSettings';
 
 interface Props {
   /** Per-category history: category key → array of counts over time. */
@@ -10,6 +15,8 @@ interface Props {
   hidden?: Set<string>;
   /** Toggle a category's visibility — fired on legend-entry click. */
   onToggleCategory?: (category: string) => void;
+  /** Effective chart settings (model defaults merged with sim overrides). */
+  settings?: IndicatorChartSettings;
 }
 
 const TOKEN_NAMES = [
@@ -44,7 +51,7 @@ function formatAxisValue(v: number): string {
   return v.toFixed(1);
 }
 
-export function IndicatorStackedAreaChart({ data, generation, height, hidden, onToggleCategory }: Props) {
+export function IndicatorStackedAreaChart({ data, generation, height, hidden, onToggleCategory, settings }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
@@ -54,7 +61,9 @@ export function IndicatorStackedAreaChart({ data, generation, height, hidden, on
   const PALETTE = tokens.slice(2, 12).map(c => c || '#888');
   const LEGEND_LABEL_COLOR = tokens[12] || '#aab';
   const LEGEND_VALUE_COLOR = tokens[13] || '#cdd';
-  const colorFor = (idx: number): string => PALETTE[idx % PALETTE.length]!;
+  // Per-series color overrides win over the index-keyed theme palette.
+  const colorFor = (idx: number, cat: string): string =>
+    settings?.seriesColors?.[cat] ?? PALETTE[idx % PALETTE.length]!;
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -140,7 +149,10 @@ export function IndicatorStackedAreaChart({ data, generation, height, hidden, on
       if (sum > yMax) yMax = sum;
     }
     if (yMax <= 0) yMax = 1;
-    const yMin = 0;
+    let yMin = 0;
+    // Stacked bands always grow from 0, but a fixed window is still honoured
+    // (e.g. pin yMax so the scale doesn't jump as totals change).
+    [yMin, yMax] = applyAxisOverrides(yMin, yMax, settings);
     const yRange = yMax - yMin;
 
     // Y labels
@@ -169,6 +181,23 @@ export function IndicatorStackedAreaChart({ data, generation, height, hidden, on
     ctx.lineTo(plotRight, plotBottom);
     ctx.stroke();
 
+    // Intermediate tick gridlines + labels (yTicks > 2)
+    drawIntermediateYTicks(ctx, {
+      ticks: tickCount(settings), yMin, yMax,
+      plotLeft, plotRight, plotTop, plotBottom,
+      axisColor: AXIS_COLOR, labelColor: LABEL_COLOR,
+      font: LABEL_FONT, format: formatAxisValue,
+    });
+
+    // With a fixed axis, stacked totals can exceed the window — clip.
+    const clipped = hasFixedAxis(settings);
+    if (clipped) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(plotLeft, plotTop, plotW, plotH);
+      ctx.clip();
+    }
+
     const xStep = plotW / (maxLen - 1);
     const toX = (i: number) => plotLeft + i * xStep;
     const toY = (v: number) => plotTop + plotH - ((v - yMin) / yRange) * plotH;
@@ -188,16 +217,18 @@ export function IndicatorStackedAreaChart({ data, generation, height, hidden, on
       // Close via the lower line (backwards)
       for (let i = maxLen - 1; i >= 0; i--) ctx.lineTo(toX(i), toY(lower[i]));
       ctx.closePath();
-      ctx.fillStyle = withAlpha(colorFor(ci), 0.55);
+      ctx.fillStyle = withAlpha(colorFor(ci, categories[ci]!), 0.55);
       ctx.fill();
-      ctx.strokeStyle = colorFor(ci);
+      ctx.strokeStyle = colorFor(ci, categories[ci]!);
       ctx.lineWidth = 0.6;
       ctx.stroke();
 
       for (let i = 0; i < maxLen; i++) lower[i] = upper[i]!;
     }
+
+    if (clipped) ctx.restore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, generation, width, plotHeight, categories.length, categories.join('|'), hiddenKey, AXIS_COLOR, LABEL_COLOR, PALETTE.join(',')]);
+  }, [data, generation, width, plotHeight, categories.length, categories.join('|'), hiddenKey, AXIS_COLOR, LABEL_COLOR, PALETTE.join(','), chartSettingsKey(settings)]);
 
   return (
     <div ref={wrapRef} style={{ width: '100%' }}>
@@ -231,8 +262,8 @@ export function IndicatorStackedAreaChart({ data, generation, height, hidden, on
             >
               <span style={{
                 display: 'inline-block', width: 8, height: 8,
-                background: withAlpha(colorFor(ci), 0.55),
-                border: `1px solid ${colorFor(ci)}`,
+                background: withAlpha(colorFor(ci, cat), 0.55),
+                border: `1px solid ${colorFor(ci, cat)}`,
                 borderRadius: 1,
               }} />
               <span>{cat}</span>

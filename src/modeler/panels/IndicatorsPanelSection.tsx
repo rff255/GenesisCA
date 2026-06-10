@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
-import type { AttributeType, LinkedAggregation, IndicatorXAxis, SpatialBinMode } from '../../model/types';
+import type { AttributeType, Indicator, IndicatorChartSettings, LinkedAggregation, IndicatorXAxis, SpatialBinMode, CAModel } from '../../model/types';
 import { useListReorder } from './useListReorder';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag } from '../vpl/graphState';
+import { useThemeTokens } from '../../styles/useThemeTokens';
 import styles from './PanelContent.module.css';
 
 function handleIndicatorDragStart(indicatorId: string) {
@@ -330,6 +331,12 @@ export function IndicatorsPanelSection() {
               </div>
             </div>
 
+            <ChartDefaultsEditor
+              indicator={selected}
+              model={model}
+              onChange={chartSettings => updateIndicator(selected.id, { chartSettings })}
+            />
+
             <button
               className={styles.deleteButton}
               onClick={() => { removeIndicator(selected.id); setSelectedId(null); }}
@@ -339,6 +346,138 @@ export function IndicatorsPanelSection() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Design-time enumerable series keys for an indicator's charts, in the same
+ *  order the charts assign palette indices (plain sort). Scalar charts use the
+ *  single 'value' key; numeric frequency buckets only exist at runtime → []. */
+function designTimeSeriesKeys(ind: Indicator, model: CAModel): string[] {
+  if (ind.kind === 'standalone') return ['value'];
+  if (ind.linkedAggregation === 'total') return ['value'];
+  if (ind.dataType === 'bool') return ['false', 'true'];
+  if (ind.dataType === 'tag') {
+    const attr = model.attributes.find(a => a.id === ind.linkedAttributeId);
+    return [...(attr?.tagOptions ?? [])].sort();
+  }
+  return [];
+}
+
+const CHART_COLOR_TOKENS = [
+  '--chart-color-1', '--chart-color-2', '--chart-color-3', '--chart-color-4',
+  '--chart-color-5', '--chart-color-6', '--chart-color-7', '--chart-color-8',
+  '--chart-color-9', '--chart-color-10',
+] as const;
+
+/** Normalize a CSS color token to #rrggbb for <input type="color">. */
+function toHexColor(c: string | undefined, fallback: string): string {
+  if (c && /^#[0-9a-f]{6}$/i.test(c.trim())) return c.trim();
+  if (c && /^#[0-9a-f]{3}$/i.test(c.trim())) {
+    const h = c.trim().slice(1);
+    return `#${h[0]}${h[0]}${h[1]}${h[1]}${h[2]}${h[2]}`;
+  }
+  return fallback;
+}
+
+/** Editor for the model-level chart display DEFAULTS (Indicator.chartSettings):
+ *  fixed Y range (blank = dynamic), tick count, per-series default colors. The
+ *  simulator's gear popover layers per-user overrides on top of these. */
+function ChartDefaultsEditor({ indicator, model, onChange }: {
+  indicator: Indicator;
+  model: CAModel;
+  onChange: (next: IndicatorChartSettings | undefined) => void;
+}) {
+  const cs = indicator.chartSettings ?? {};
+  const categories = designTimeSeriesKeys(indicator, model);
+  const paletteTokens = useThemeTokens(CHART_COLOR_TOKENS);
+  const palette = paletteTokens.map(c => c || '#888888');
+  // Numeric frequency buckets (integer values / float value-bins) are only
+  // known at runtime — colors for those are set via the simulator gear.
+  const runtimeOnlySeries = indicator.kind === 'linked'
+    && indicator.linkedAggregation === 'frequency'
+    && (indicator.dataType === 'integer' || indicator.dataType === 'float');
+
+  const emit = (next: IndicatorChartSettings) => {
+    const empty = next.yMin === undefined && next.yMax === undefined
+      && next.yTicks === undefined
+      && (!next.seriesColors || Object.keys(next.seriesColors).length === 0);
+    onChange(empty ? undefined : next);
+  };
+  const setNum = (field: 'yMin' | 'yMax' | 'yTicks') => (e: React.ChangeEvent<HTMLInputElement>) => {
+    const next: IndicatorChartSettings = { ...cs, seriesColors: cs.seriesColors ? { ...cs.seriesColors } : undefined };
+    if (e.target.value === '') {
+      delete next[field];
+    } else {
+      const n = Number(e.target.value);
+      if (!Number.isFinite(n)) return;
+      next[field] = field === 'yTicks' ? Math.max(2, Math.min(11, Math.round(n))) : n;
+    }
+    emit(next);
+  };
+  const setSeriesColor = (cat: string, color: string | null) => {
+    const colors = { ...(cs.seriesColors ?? {}) };
+    if (color === null) delete colors[cat];
+    else colors[cat] = color;
+    emit({ ...cs, seriesColors: Object.keys(colors).length > 0 ? colors : undefined });
+  };
+
+  const numField = (label: string, field: 'yMin' | 'yMax' | 'yTicks', title: string, placeholder: string) => (
+    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.7rem' }} title={title}>
+      <span style={{ flex: '0 0 44px', color: '#8090a0' }}>{label}</span>
+      <input
+        className={styles.numberInput}
+        style={{ flex: 1, minWidth: 0 }}
+        type="number"
+        step={field === 'yTicks' ? 1 : 'any'}
+        lang="en"
+        min={field === 'yTicks' ? 2 : undefined}
+        max={field === 'yTicks' ? 11 : undefined}
+        value={cs[field] ?? ''}
+        placeholder={placeholder}
+        onChange={setNum(field)}
+      />
+    </label>
+  );
+
+  return (
+    <div className={styles.field}>
+      <label className={styles.fieldLabel}>Chart Settings</label>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 2 }}>
+        {numField('Y min', 'yMin', 'Fixed Y-axis minimum — blank = dynamic (follows the data)', 'auto')}
+        {numField('Y max', 'yMax', 'Fixed Y-axis maximum — blank = dynamic (follows the data)', 'auto')}
+        {numField('Y ticks', 'yTicks', 'Number of Y-axis tick labels including min and max (2–11)', '2')}
+        {categories.map((cat, ci) => {
+          const overridden = cs.seriesColors?.[cat] !== undefined;
+          return (
+            <label key={cat} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.7rem' }}>
+              <span style={{ flex: '0 0 44px', color: '#8090a0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={cat}>
+                {cat === 'value' ? 'line' : cat}
+              </span>
+              <input
+                type="color"
+                style={{ width: 32, height: 16, padding: 0, border: '1px solid #2a3a50', borderRadius: 3, background: 'none', cursor: 'pointer' }}
+                value={toHexColor(cs.seriesColors?.[cat] ?? palette[ci % palette.length], '#888888')}
+                onChange={e => setSeriesColor(cat, e.target.value)}
+                title={`Default series color for "${cat}"`}
+              />
+              {overridden && (
+                <button
+                  type="button"
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#8090a0', fontSize: '0.7rem', padding: '0 2px' }}
+                  onClick={() => setSeriesColor(cat, null)}
+                  title="Clear (back to palette default)"
+                >&times;</button>
+              )}
+            </label>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: '0.66rem', opacity: 0.6, marginTop: 3 }}>
+        {runtimeOnlySeries
+          ? 'Blank = dynamic axis. Series colors for numeric frequency buckets are set in the Simulator (bucket names depend on runtime values).'
+          : 'Blank = dynamic axis. The Simulator’s per-chart gear can override these per user.'}
+      </div>
     </div>
   );
 }

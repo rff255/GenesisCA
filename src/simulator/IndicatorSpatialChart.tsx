@@ -1,5 +1,10 @@
 import { useRef, useEffect, useLayoutEffect, useState } from 'react';
 import { useThemeTokens } from '../styles/useThemeTokens';
+import type { IndicatorChartSettings } from '../model/types';
+import {
+  applyAxisOverrides, hasFixedAxis, tickCount,
+  chartSettingsKey, drawIntermediateYTicks,
+} from './indicatorChartSettings';
 
 interface Props {
   /** Per-series position histogram: series key → counts indexed by position
@@ -17,6 +22,8 @@ interface Props {
   hidden?: Set<string>;
   /** Toggle a series' visibility — fired on legend-entry click. */
   onToggleCategory?: (category: string) => void;
+  /** Effective chart settings (model defaults merged with sim overrides). */
+  settings?: IndicatorChartSettings;
 }
 
 const TOKEN_NAMES = [
@@ -43,8 +50,9 @@ function formatAxisValue(v: number): string {
 /** Order series so colors stay stable as the key set changes between steps.
  *  Numeric-leading keys (integer values "2"/"10", float value-bins
  *  "0.00–0.50") sort by their leading number; everything else (tag names,
- *  true/false) sorts as strings. */
-function compareSeriesKeys(a: string, b: string): number {
+ *  true/false) sorts as strings. Exported so the chart-settings gear popover
+ *  can mirror the palette index assignment when showing default colors. */
+export function compareSeriesKeys(a: string, b: string): number {
   const na = parseFloat(a);
   const nb = parseFloat(b);
   const aNum = Number.isFinite(na);
@@ -55,7 +63,7 @@ function compareSeriesKeys(a: string, b: string): number {
   return a.localeCompare(b);
 }
 
-export function IndicatorSpatialChart({ data, axis, axisLength, height, hidden, onToggleCategory }: Props) {
+export function IndicatorSpatialChart({ data, axis, axisLength, height, hidden, onToggleCategory, settings }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
@@ -65,7 +73,9 @@ export function IndicatorSpatialChart({ data, axis, axisLength, height, hidden, 
   const PALETTE = tokens.slice(2, 12).map(c => c || '#888');
   const LEGEND_LABEL_COLOR = tokens[12] || '#aab';
   const LEGEND_VALUE_COLOR = tokens[13] || '#cdd';
-  const colorFor = (idx: number): string => PALETTE[idx % PALETTE.length]!;
+  // Per-series color overrides win over the index-keyed theme palette.
+  const colorFor = (idx: number, cat: string): string =>
+    settings?.seriesColors?.[cat] ?? PALETTE[idx % PALETTE.length]!;
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -131,6 +141,7 @@ export function IndicatorSpatialChart({ data, axis, axisLength, height, hidden, 
     if (!Number.isFinite(yMax)) return;
     if (yMin === yMax) yMax = yMin + 1;
     yMax += (yMax - yMin) * 0.06;
+    [yMin, yMax] = applyAxisOverrides(yMin, yMax, settings);
     const yRange = yMax - yMin;
 
     // Y-axis labels
@@ -161,6 +172,23 @@ export function IndicatorSpatialChart({ data, axis, axisLength, height, hidden, 
     ctx.lineTo(plotRight, plotBottom);
     ctx.stroke();
 
+    // Intermediate tick gridlines + labels (yTicks > 2)
+    drawIntermediateYTicks(ctx, {
+      ticks: tickCount(settings), yMin, yMax,
+      plotLeft, plotRight, plotTop, plotBottom,
+      axisColor: AXIS_COLOR, labelColor: LABEL_COLOR,
+      font: LABEL_FONT, format: formatAxisValue,
+    });
+
+    // With a fixed axis, data can fall outside the window — clip to the plot.
+    const clipped = hasFixedAxis(settings);
+    if (clipped) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(plotLeft, plotTop, plotW, plotH);
+      ctx.clip();
+    }
+
     // One curve per series — all series share the same bin axis (equal length,
     // no right-align/scroll: spatial X is fixed by the grid, not by time).
     const xStep = binCount > 1 ? plotW / (binCount - 1) : 0;
@@ -173,12 +201,14 @@ export function IndicatorSpatialChart({ data, axis, axisLength, height, hidden, 
       ctx.beginPath();
       ctx.moveTo(toX(0), toY(arr[0]!));
       for (let i = 1; i < arr.length; i++) ctx.lineTo(toX(i), toY(arr[i]!));
-      ctx.strokeStyle = colorFor(ci);
+      ctx.strokeStyle = colorFor(ci, categories[ci]!);
       ctx.lineWidth = 1.2;
       ctx.stroke();
     }
+
+    if (clipped) ctx.restore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, width, plotHeight, binCount, axisName, axisLength, categories.length, categories.join('|'), hiddenKey, AXIS_COLOR, LABEL_COLOR, PALETTE.join(',')]);
+  }, [data, width, plotHeight, binCount, axisName, axisLength, categories.length, categories.join('|'), hiddenKey, AXIS_COLOR, LABEL_COLOR, PALETTE.join(','), chartSettingsKey(settings)]);
 
   // Wrapper always mounts so ResizeObserver can attach on first render.
   return (
@@ -215,7 +245,7 @@ export function IndicatorSpatialChart({ data, axis, axisLength, height, hidden, 
             >
               <span style={{
                 display: 'inline-block', width: 8, height: 2,
-                background: colorFor(ci), borderRadius: 1,
+                background: colorFor(ci, cat), borderRadius: 1,
               }} />
               <span>{cat}</span>
               <span style={{ color: LEGEND_VALUE_COLOR }}>{formatAxisValue(sum)}</span>

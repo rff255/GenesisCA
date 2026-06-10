@@ -287,6 +287,24 @@ export type IndicatorXAxis = 'generation' | 'rows' | 'columns';
  *  number of rows/columns per band (re-derives bin count when the grid resizes). */
 export type SpatialBinMode = 'slices' | 'absolute';
 
+/** Per-indicator chart display settings. Every field is optional — absent
+ *  means "dynamic / default" (data-driven axis range, 2 tick labels, palette
+ *  colors). Stored on the Indicator as the model-level DEFAULTS; the simulator
+ *  keeps a per-field OVERRIDE layer on top (persisted in sim settings and in
+ *  SimulationState under "Simulator controls"). */
+export interface IndicatorChartSettings {
+  /** Fixed Y-axis minimum. Absent → dynamic (follows the data). */
+  yMin?: number;
+  /** Fixed Y-axis maximum. Absent → dynamic (follows the data). */
+  yMax?: number;
+  /** Number of Y-axis tick labels incl. min+max (2–11). Absent → 2. */
+  yTicks?: number;
+  /** Per-series color overrides keyed by category (bool → "true"/"false",
+   *  tag → option name, freq buckets → value/bin key). Scalar charts use the
+   *  single key "value". Absent entries fall back to the theme palette. */
+  seriesColors?: Record<string, string>;
+}
+
 /** An indicator definition — monitors CA evolution quantitatively */
 export interface Indicator {
   id: string;
@@ -321,6 +339,10 @@ export interface Indicator {
   spatialBinSize?: number;
   // Display:
   watched: boolean;                     // eye toggle — controls display in simulator
+  /** Chart display defaults (axis range / ticks / series colors). The
+   *  simulator's per-indicator gear popover edits a runtime override layer on
+   *  top of these; field-level merge, override wins. */
+  chartSettings?: IndicatorChartSettings;
 }
 
 // ---------------------------------------------------------------------------
@@ -362,6 +384,9 @@ export interface SimulationState {
   unlimitedFps?: boolean;
   gensPerFrame?: number;
   unlimitedGens?: boolean;
+  /** Simulator-side per-indicator chart-settings overrides (gear popover) —
+   *  field-level layer over each Indicator.chartSettings. */
+  indicatorChartOverrides?: Record<string, IndicatorChartSettings>;
   // Model structure controls — saved in presets so a preset can restore its grid
   // dimensions and boundary rule even when cell-grid state isn't embedded.
   boundaryTreatment?: BoundaryTreatment;
