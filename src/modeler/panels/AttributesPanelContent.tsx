@@ -10,6 +10,7 @@ import { VariablesPanelSection } from './VariablesPanelSection';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag } from '../vpl/graphState';
+import { typeDisplayName } from '../../model/typeLabels';
 import styles from './PanelContent.module.css';
 
 /** Build the drag payload for an attribute row. Cell vs Model attribute drop
@@ -156,7 +157,7 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 title={`Drag to canvas to add a node that uses '${attr.name}'`}
               >
                 <span className={styles.listItemName}>{attr.name}</span>
-                <span className={styles.listItemBadge}>{attr.type}</span>
+                <span className={styles.listItemBadge}>{typeDisplayName(attr.type)}</span>
                 <button
                   className={styles.dragHandle}
                   title="Drag to reorder"
@@ -213,7 +214,7 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 title={`Drag to canvas to add a node that uses '${attr.name}'`}
               >
                 <span className={styles.listItemName}>{attr.name}</span>
-                <span className={styles.listItemBadge}>{attr.type}</span>
+                <span className={styles.listItemBadge}>{typeDisplayName(attr.type)}</span>
                 <button
                   className={styles.dragHandle}
                   title="Drag to reorder"
@@ -271,9 +272,9 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   });
                 }}
               >
-                <option value="bool">Bool</option>
+                <option value="bool">Binary</option>
                 <option value="integer">Integer</option>
-                <option value="float">Float</option>
+                <option value="float">Decimal</option>
                 <option value="tag">Tag</option>
                 <option value="neighborIndex">Neighbor Index</option>
                 {selected.isModelAttribute && <option value="color">Color</option>}
@@ -572,7 +573,7 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   </label>
                   {!isSub && validParents.length === 0 && (
                     <p style={{ fontSize: '0.7rem', color: '#7a8a9a', fontStyle: 'italic', marginTop: 4 }}>
-                      Requires at least one tag or bool cell attribute (not itself a sub-attribute) to use as parent.
+                      Requires at least one tag or binary cell attribute (not itself a sub-attribute) to use as parent.
                     </p>
                   )}
                   {isSub && (

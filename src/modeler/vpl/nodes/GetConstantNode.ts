@@ -3,7 +3,7 @@ import type { NodeTypeDef } from '../types';
 export const GetConstantNode: NodeTypeDef = {
   type: 'getConstant',
   label: 'Get Constant',
-  description: 'Emits a fixed value. Type selector picks the domain: bool, integer, float, tag, orientation (0/90/180/270 with the directional picker), or face label (Variegated models only — emits the integer index of the named face label).',
+  description: 'Emits a fixed value. Type selector picks the domain: binary, integer, decimal, tag, orientation (0/90/180/270 with the directional picker), or face label (Variegated models only — emits the integer index of the named face label).',
   category: 'data',
   color: '#b71c1c',
   ports: [

@@ -645,7 +645,7 @@ export function PropertiesPanelContent() {
                         </div>
                         {floatFreqDisabled && (
                           <span style={{ color: '#e0a050', fontSize: '0.62rem', fontStyle: 'italic', paddingLeft: 4 }}>
-                            Float-binned frequency categories depend on runtime range. Change this indicator&apos;s aggregation to Total, or pick a different indicator.
+                            Decimal-binned frequency categories depend on runtime range. Change this indicator&apos;s aggregation to Total, or pick a different indicator.
                           </span>
                         )}
                       </div>

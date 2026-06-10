@@ -9,6 +9,7 @@ import { defaultGradientStops, defaultTagColor } from '../vpl/compiler/linkedOut
 import { GradientStopsEditor, type GradStop } from '../vpl/widgets/GradientStopsEditor';
 import { INTERPOLATION_METHODS } from '../vpl/nodes/interpolationMethods';
 import type { Mapping, RGB, ColorStop } from '../../model/types';
+import { typeDisplayName } from '../../model/typeLabels';
 import styles from './PanelContent.module.css';
 
 function rgbToHex(c: RGB): string {
@@ -69,7 +70,7 @@ function LinkedOutputEditor({ selected }: { selected: Mapping }) {
         >
           <option value="">Select attribute…</option>
           {cellAttrs.map(a => (
-            <option key={a.id} value={a.id}>{a.name} ({a.type})</option>
+            <option key={a.id} value={a.id}>{a.name} ({typeDisplayName(a.type)})</option>
           ))}
         </select>
       </div>

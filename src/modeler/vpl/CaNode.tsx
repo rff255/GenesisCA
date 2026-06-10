@@ -11,6 +11,7 @@ import type { NodeConfig, PortDef } from './types';
 import type { MacroPort } from '../../model/types';
 import { useModel } from '../../model/ModelContext';
 import { countMacroInstances } from '../../model/macroImport';
+import { typeDisplayName } from '../../model/typeLabels';
 import {
   isConnectingGlobal,
   showPortLabelsGlobal,
@@ -1019,9 +1020,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   }
                 }}
               >
-                <option value="bool">Bool</option>
+                <option value="bool">Binary</option>
                 <option value="integer">Integer</option>
-                <option value="float">Float</option>
+                <option value="float">Decimal</option>
                 <option value="tag">Tag</option>
                 <option value="orientation">Orientation</option>
                 {variegated && <option value="faceLabel">Face Label</option>}
@@ -1189,7 +1190,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 title="Type of the compared values"
               >
                 <option value="numerical">Numerical</option>
-                <option value="bool">Bool</option>
+                <option value="bool">Binary</option>
                 <option value="tag">Tag</option>
                 <option value="neighborIndex">Neighbor Index</option>
               </select>
@@ -1366,7 +1367,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               <option value="">Select variable...</option>
               {matching.map(v => (
                 <option key={v.id} value={v.id}>
-                  {v.name} ({v.kind === 'array' ? `${v.dataType}[${v.length ?? '?'}]` : v.dataType})
+                  {v.name} ({v.kind === 'array' ? `${typeDisplayName(v.dataType)}[${v.length ?? '?'}]` : typeDisplayName(v.dataType)})
                 </option>
               ))}
             </select>
@@ -1620,9 +1621,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
               value={(nodeData.config.randomType as string) || 'float'}
               onChange={e => updateConfig('randomType', e.target.value)}
             >
-              <option value="bool">Bool</option>
+              <option value="bool">Binary</option>
               <option value="integer">Integer</option>
-              <option value="float">Float</option>
+              <option value="float">Decimal</option>
               <option value="orientation">Orientation</option>
               <option value="options">Options</option>
             </select>
@@ -1928,7 +1929,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   }}
                 >
                   <option value="integer">Integer</option>
-                  <option value="float">Float</option>
+                  <option value="float">Decimal</option>
                   <option value="tag">Tag</option>
                   <option value="neighborIndex">Neighbor Index</option>
                 </select>

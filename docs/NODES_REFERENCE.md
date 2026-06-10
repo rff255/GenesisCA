@@ -37,7 +37,7 @@ Ports come in two **kinds** and two **categories**:
 | Port category | Visual | Meaning |
 |---|---|---|
 | `flow` | green, animated dashed line | Execution order — analogous to an event or continuation |
-| `value` | blue, solid line | Carries data (numbers, booleans, tags, arrays of those) |
+| `value` | blue, solid line | Carries data (numbers, binary values, tags, arrays of those) |
 
 Event nodes (`step`, `initEvent`, `inputColor`, `outputMapping`) are the **entry points** —
 each one is a root the compiler starts from. A flow chain from an event determines what runs,
@@ -51,15 +51,20 @@ by downstream consumers.
 
 ## 2. Port Type System
 
-| Data type | Semantics | Scalar | Array | Inline widget |
-|---|---|---|---|---|
-| `bool` | 0 / 1 (stored in `Uint8Array`) | yes | yes | `bool` (dropdown) |
-| `integer` | whole number (stored in `Int32Array` for attrs; plain JS number elsewhere) | yes | yes | `number` |
-| `float` | decimal (`Float64Array` for attrs) | yes | yes | `number` |
-| `tag` | index into a named-values list (`Int32Array`) | yes | yes | `tag` (dropdown) |
-| `neighborIndex` | slot index into a neighborhood (`Int32Array`); typed-distinct from `integer` to catch the silent index-kind hazards in §7 | yes | yes | `number` |
-| `color-r/g/b` | 3 integer channels — emitted as separate ports (no single "color" type) | yes | — | `color` (on triples) |
-| `any` | type-agnostic; most ports use this | yes | depends on `isArray` | varies |
+The first column is the INTERNAL type id (what `PortDef.dataType` / `Attribute.type`
+store and what `.gcaproj` files serialize). The UI shows friendlier names for two of
+them: `bool` renders as **Binary** and `float` as **Decimal** everywhere the user reads
+a type name (see `typeDisplayName` in `src/model/typeLabels.ts`).
+
+| Data type | UI name | Semantics | Scalar | Array | Inline widget |
+|---|---|---|---|---|---|
+| `bool` | Binary | 0 / 1 (stored in `Uint8Array`) | yes | yes | `bool` (dropdown) |
+| `integer` | Integer | whole number (stored in `Int32Array` for attrs; plain JS number elsewhere) | yes | yes | `number` |
+| `float` | Decimal | decimal (`Float64Array` for attrs) | yes | yes | `number` |
+| `tag` | Tag | index into a named-values list (`Int32Array`) | yes | yes | `tag` (dropdown) |
+| `neighborIndex` | NeighborIndex | slot index into a neighborhood (`Int32Array`); typed-distinct from `integer` to catch the silent index-kind hazards in §7 | yes | yes | `number` |
+| `color-r/g/b` | Color | 3 integer channels — emitted as separate ports (no single "color" type) | yes | — | `color` (on triples) |
+| `any` | — | type-agnostic; most ports use this | yes | depends on `isArray` | varies |
 
 **Notable non-obvious rules**
 
@@ -106,7 +111,7 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 
 | # | Type | Label | Description | Ports | Notes |
 |---|---|---|---|---|---|
-| 6 | `conditional` | If / Then / Else | Branch on bool. | `I: CHECK` (flow) `I: IF` (bool) / `O: THEN` `O: ELSE` (flow) | |
+| 6 | `conditional` | If / Then / Else | Branch on a binary condition. | `I: CHECK` (flow) `I: IF` (bool) / `O: THEN` `O: ELSE` (flow) | |
 | 7 | `sequence` | Sequence | Execute two flows in order. | `I: DO` / `O: FIRST` `O: THEN` (flow) | |
 | 8 | `loop` | Loop | Repeat flow N times. | `I: DO` (flow) `I: COUNT` (int) / `O: BODY` (flow) | |
 | 9 | `forEachInArray` | For Each In Array | Iterates a typed array, exposing the per-iteration `Element` and its 0-based `Index`. Body action nodes can consume either directly; body value nodes that depend on `Element`/`Index` (e.g. `Math.add(element, 1) → setIndicator`, or `arrayElement(otherArr, index)`) emit inline inside the loop block on all three targets. | `I: DO` (flow) `I: Array` (any[]) / `O: BODY` (flow) `O: Element` (any) `O: Index` (int) | Full JS / WASM / WebGPU lockstep |
@@ -129,17 +134,17 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 | 21 | `neighborIndexFromTag` | Neighbor Index (from Tag) | Build a NI pointing at the slot tagged with the given name. Compile-time-resolved. | `O: Value` (NI) | Same shape as fromOffset but resolves by tag name |
 | 22 | `flipNeighborIndex` | Flip Neighbor Index | Mirror a NI horizontally / vertically / both. Compile-time precomputed lookup table. | `I: Index` (NI) / `O: Value` (NI) | Returns -1 when the flipped offset isn't in the configured neighborhood |
 | 23 | `breakDownNeighborIndex` | Break Down Neighbor Index | Unpacks a NeighborIndex into its `(dRow, dCol)` offset components. | `I: Index` (NI) / `O: dr` `O: dc` (int) | Inverse of `neighborIndexFromOffset`; useful for direction-aware movement logic |
-| 24 | `arrayElement` | Get Array Element | Returns `arr[position]` with bounds check; out-of-range yields a safe default (-1 for NI / int, 0 for float, false for bool). The read counterpart of Set Array Element. | `I: Array` `I: Position` (int) / `O: Value` | Bridges Position outputs of group* nodes back to NIs via a parallel array |
+| 24 | `arrayElement` | Get Array Element | Returns `arr[position]` with bounds check; out-of-range yields a safe default (-1 for NI / integer, 0 for decimal, false for binary). The read counterpart of Set Array Element. | `I: Array` `I: Position` (int) / `O: Value` | Bridges Position outputs of group* nodes back to NIs via a parallel array |
 | 25 | `arrayLength` | Array Length | Returns the number of elements in an array. | `I: Array` / `O: Length` (int) | |
-| 26 | `getConstant` | Get Constant | Emit fixed bool / int / float / tag / orientation / face label. | `O: Value` | `constType` + `constValue` config; `faceLabel` only listed when Variegated Cells is enabled (emits the compile-time integer index of the chosen label, with implicit `none`=0) |
-| 27 | `getRandom` | Get Random | Random bool/int/float, or pick uniformly from a wired Options array. | `I: P` (float, bool mode only), `I: Options` (any, isArray, options mode only), `I: Fallback` (any, inline, options mode only) / `O: Value` | Bool mode: `probability` input; Int mode: min/max config; Options mode: wire scalars or array source to `Options`; `Fallback` returned on empty array |
+| 26 | `getConstant` | Get Constant | Emit fixed binary / integer / decimal / tag / orientation / face label. | `O: Value` | `constType` + `constValue` config; `faceLabel` only listed when Variegated Cells is enabled (emits the compile-time integer index of the chosen label, with implicit `none`=0) |
+| 27 | `getRandom` | Get Random | Random binary/integer/decimal, or pick uniformly from a wired Options array. | `I: P` (float, Binary mode only), `I: Options` (any, isArray, options mode only), `I: Fallback` (any, inline, options mode only) / `O: Value` | Bool mode: `probability` input; Int mode: min/max config; Options mode: wire scalars or array source to `Options`; `Fallback` returned on empty array |
 | 28 | `getVariable` | Get Variable | Read a Local Variable's current value (scalar) or its underlying typed array (array variables — consumers iterate like any array source). | `O: Value` (any) | Requires `variableId`; output shape (scalar vs array) derived from the variable's `kind`. Per-cell scratch, reset to `initialValue` each cell |
 | 29 | `getOrientation` | Get Orientation | Read the current cell's orientation (0–3 = 0/90/180/270° CW). | `O: Orientation` (int) | **Variegated Cells only** |
 | 30 | `getFacingOrientation` | Get Facing Orientation | Read the orientation of the neighbour touching this cell in a fixed direction (N/E/S/W/diagonals). Does not use a neighborhood. | `O: Orientation` (int) | **Variegated Cells only**; `directionTag` config; honours boundary treatment |
 | 31 | `getNeighborOrientationByIndex` | Get Neighbor Orientation By Index | Read the orientation of one neighbour by NeighborIndex. | `I: Index` (NI) / `O: Orientation` (int) | **Variegated Cells only**; read-only so works in sync + async |
 | 32 | `getFacingLabels` | Get Facing Labels | Resolve the two face labels touching at a 1-step encounter in a fixed direction — accounts for both cells' orientations and face patterns. | `O: My Face` `O: Their Face` (int) | **Variegated Cells only**; `directionTag` config; no neighborhood. Pair with `lookupInteraction` |
 | 33 | `getAllFacingLabels` | Get All Facing Labels | Two parallel arrays of face labels at each 1-step encounter — 8 slots (Moore N/NE/E/SE/S/SW/W/NW) or 4 slots (cardinal N/E/S/W) when `cardinalsOnly` is checked. | `O: My Faces` `O: Their Faces` (int arr) | **Variegated Cells only**. Pair with `aggregate`/`interactionTableMap` for energy sums or `forEachInArray` for per-direction logic |
-| 34 | `interactionTableMap` | Table Map | Vectorised `lookupInteraction`: indexes a Lookup Table model attribute by two parallel index arrays (rows + cols) → float array. | `I: Rows` `I: Cols` (int arr) / `O: Values` (float arr) | Works with or without Variegated Cells; pair with `aggregate.product` for `P_break = ∏ P_B` |
+| 34 | `interactionTableMap` | Table Map | Vectorised `lookupInteraction`: indexes a Lookup Table model attribute by two parallel index arrays (rows + cols) → decimal array. | `I: Rows` `I: Cols` (int arr) / `O: Values` (float arr) | Works with or without Variegated Cells; pair with `aggregate.product` for `P_break = ∏ P_B` |
 | 35 | `getIndicator` | Get Indicator | Read a standalone indicator's value. | `O: Value` (any) | Requires `indicatorId` |
 
 ### 3.4 Logic & Math — `logic`
@@ -151,9 +156,9 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 | 38 | `proportionMap` | Proportion Map | Linear remap `X ∈ [inMin..inMax] → [outMin..outMax]`. | `I: X`, `I: inMin`, `I: inMax`, `I: outMin`, `I: outMax` / `O: Result` | |
 | 39 | `interpolation` | Interpolate | `T ∈ [0,1] → [Min..Max]`. | `I: T`, `I: Min`, `I: Max` / `O: Result` | |
 | 40 | `statement` | Compare | `== != > < >= <=` on two scalars, or `Between` / `Not Between` (range check with configurable low/high sides). A `compareType` selector (Numerical / Bool / Tag / Neighbor Index) swaps the inline operand widgets; non-numerical types are equality-only (==/!=). Tag mode adds a tag-attribute picker (à la Get Constant). | `I: X` `I: Y` `I: Y₂` (between-family only) / `O: Result` (bool) | Name collision risk with `groupStatement` |
-| 41 | `logicOperator` | Logic | `AND OR XOR NOT` on bools. | `I: A` `I: B` (hidden for NOT) / `O: Result` (bool) | |
+| 41 | `logicOperator` | Logic | `AND OR XOR NOT` on binary values. | `I: A` `I: B` (hidden for NOT) / `O: Result` (bool) | |
 | 42 | `valueSwitch` | Value Switch | `condition ? ifValue : elseValue`. Pure value, no flow port. **Dual-mode:** scalar selector OR array relay. | `I: Condition` (any) `I: If` (any) `I: Else` (any) / `O: Result` (any) | All inputs optional (inline defaults: condition=false, if=1, else=0). Both branches always evaluate — for short-circuit use flow `conditional` instead. **Array relay:** when BOTH `If` and `Else` are wired to array producers (e.g. two `filterNeighbors`), `Result` is the selected array (feed it to `pickRandomNeighbor` / `arrayElement` / `aggregate` / …). All three targets — JS relays the reference, WASM selects the scratch offset/len (zero-copy), WebGPU copies the chosen branch. |
-| 43 | `lookupInteraction` | Table Lookup | Index a Lookup Table model attribute by a row + column index (from face labels or tag reads) → float. | `I: Row` `I: Col` (int, inline) / `O: Value` (float) | Works with or without Variegated Cells; loop-invariant when both indices are |
+| 43 | `lookupInteraction` | Table Lookup | Index a Lookup Table model attribute by a row + column index (from face labels or tag reads) → decimal. | `I: Row` `I: Col` (int, inline) / `O: Value` (float) | Works with or without Variegated Cells; loop-invariant when both indices are |
 
 ### 3.5 Aggregation — `aggregation`
 
@@ -296,7 +301,7 @@ graph TD
   one port (auto-assembled into an array at compile time) while `groupOperator` takes a
   pre-assembled array input. No indication in either UI of when to prefer which.
 - `groupCounting`, `groupStatement` both take an array + a scalar "compare" value, but
-  one returns a count (and optional matching indices) while the other returns a bool
+  one returns a count (and optional matching indices) while the other returns a binary result
   (and optional indices). Both overlap with `filterNeighbors` for the common case
   "how many neighbors have attribute > X" which requires either:
   (a) `getNeighborsAttribute` → `groupCounting(greater, X)` → `.count`, or
@@ -383,7 +388,7 @@ These are **ideas**, not committed work. They inform future passes on the node s
 
 - **Clamp** — `clamp(x, min, max)`. Now expressible in one `expression` node as
   `min(max(x, lo), hi)`; a dedicated node would still be more discoverable.
-- **Integer cast** / **Float cast** — no explicit conversion, but `expression` now exposes
+- **Integer cast** / **Decimal cast** — no explicit conversion, but `expression` now exposes
   `floor` / `ceil` / `round` directly.
 - ~~**Array length**~~ — *implemented* as the `arrayLength` node (#25).
 - ~~**Array element**~~ — *implemented* as the `arrayElement` node (#24), bounds-checked.
@@ -395,8 +400,8 @@ These are **ideas**, not committed work. They inform future passes on the node s
 
 ### 6.2 Naming collisions & clarity
 
-- `statement` (scalar compare returning bool) vs `groupStatement` (array assertion) vs
-  `logicOperator` (bool combinator). Consider renaming `statement` → `compare` and
+- `statement` (scalar compare returning a binary value) vs `groupStatement` (array assertion) vs
+  `logicOperator` (binary combinator). Consider renaming `statement` → `compare` and
   `groupStatement` → `assertArray` or similar.
 - `getNeighborsAttribute` (array) vs `getNeighborsAttrByIndexes` (array) vs
   `getNeighborAttributeByIndex` (scalar): plural "s" indicates array, but the
@@ -553,7 +558,7 @@ as a starting point for a filter / iterate / pick chain.
 - `arrayElement(arr, position) → element` — bounds-checked indexed access.
   Bridges `Position(s)` outputs of `groupCounting` / `groupStatement` /
   `groupOperator` back to NIs via a parallel array. Out-of-range yields a
-  safe default (-1 for NI / int, 0 for float, false for bool).
+  safe default (-1 for NI / integer, 0 for decimal, false for binary).
 - `arrayLength(arr) → int` — generic size operator. Use it instead of the
   awkward `groupCounting(arr, !=, sentinel).Count` workaround.
 

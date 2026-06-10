@@ -13,7 +13,7 @@ import type { NodeTypeDef } from '../types';
 export const LookupInteractionNode: NodeTypeDef = {
   type: 'lookupInteraction',
   label: 'Table Lookup',
-  description: 'Indexes a Lookup Table model attribute by a row index and a column index. Returns a float.',
+  description: 'Indexes a Lookup Table model attribute by a row index and a column index. Returns a decimal number.',
   category: 'logic',
   color: '#1976d2',
   ports: [

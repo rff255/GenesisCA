@@ -113,7 +113,7 @@ const DEMO_NODE_DEFS: NodeTypeDef[] = [
     label: 'Conditional',
     category: 'flow',
     color: '#1b5e20',
-    description: 'If/else branching on a boolean condition',
+    description: 'If/else branching on a binary condition',
     ports: [
       { id: 'in', label: '', kind: 'input', category: 'flow' },
       { id: 'cond', label: 'Condition', kind: 'input', category: 'value', dataType: 'bool' },

@@ -78,7 +78,7 @@ export function HelpView() {
             </li>
             <li>
               <strong>N internal attributes</strong> &mdash; Each cell has multiple
-              attributes (bool, integer, float) whose values at a given generation form
+              attributes (binary, integer, decimal) whose values at a given generation form
               its &quot;state.&quot;
             </li>
             <li>
@@ -125,7 +125,7 @@ export function HelpView() {
             <li><strong>Rule Author</strong> &mdash; originator of the CA rule (domain expert/researcher).</li>
             <li><strong>GenesisCA Project Author</strong> &mdash; who built this particular GenesisCA project file.</li>
             <li><strong>Thumbnail</strong> (optional) &mdash; attach a PNG, JPEG, GIF, or WebP image (up to 2&nbsp;MB). It travels inside the <code>.gcaproj</code> file. When the model is shipped as part of the Models Library, hovering its card shows a floating preview; animated GIFs / WebPs play natively.</li>
-            <li><strong>End Conditions</strong> (optional) &mdash; auto-pause the simulator when a max generation count is reached or when any indicator satisfies a configured comparison (==, !=, &gt;, &lt;, &ge;, &le;). Scalar indicators compare against their value directly. For <strong>linked-frequency</strong> indicators (which produce a map of category &rarr; count) pick the specific category to monitor; the comparison then applies to the count of that category (e.g. bool <em>alive</em> &mdash; category <code>true</code>, <code>&ge;</code>, <code>100</code> pauses when at least 100 cells are alive). Float-binned frequency indicators can&apos;t be used in end conditions because their bin boundaries depend on runtime data &mdash; switch the aggregation to Total instead. For conditions that need graph-level logic add a <strong>Stop Event</strong> node inside the update graph &mdash; its DO flow input pauses the simulation with a user-defined message.</li>
+            <li><strong>End Conditions</strong> (optional) &mdash; auto-pause the simulator when a max generation count is reached or when any indicator satisfies a configured comparison (==, !=, &gt;, &lt;, &ge;, &le;). Scalar indicators compare against their value directly. For <strong>linked-frequency</strong> indicators (which produce a map of category &rarr; count) pick the specific category to monitor; the comparison then applies to the count of that category (e.g. binary <em>alive</em> &mdash; category <code>true</code>, <code>&ge;</code>, <code>100</code> pauses when at least 100 cells are alive). Decimal-binned frequency indicators can&apos;t be used in end conditions because their bin boundaries depend on runtime data &mdash; switch the aggregation to Total instead. For conditions that need graph-level logic add a <strong>Stop Event</strong> node inside the update graph &mdash; its DO flow input pauses the simulation with a user-defined message.</li>
             <li><strong>Compile Target</strong> &mdash; choose the runtime backend the simulator uses to evolve cells. <strong>WebAssembly</strong> is the default and is recommended for most models &mdash; typically several times faster than JS on dense neighborhoods, full node coverage. <strong>WebGPU</strong> runs WGSL compute shaders on the GPU and is best for very large grids and math-heavy per-cell work; it requires synchronous mode and a browser with WebGPU support (Chrome 127+, Firefox 141+, Safari 17.4+). <strong>Debug / Reference (JS)</strong> compiles the graph to a plain JavaScript function &mdash; slower than WASM, but its source is readable in Show Code and useful for prototyping or verifying parity. Targets are mutually exclusive; switching restarts the simulator (grid state is lost). All three apply <em>value sinking</em>: per-cell value computations that are only consumed inside one switch case or if branch get emitted <em>inside</em> that branch, so cells in different states only pay for the work their branch needs. Sparse type-dispatch models (e.g. Wireworld with mostly Empty cells) get the biggest speedup from this. A side effect: if your model calls <em>Get Random</em> inside a branch, cells that don't enter that branch no longer advance the RNG &mdash; same seed will produce different output than older builds did.</li>
             <li><strong>WebGPU stop-check interval</strong> (advanced, WebGPU only) &mdash; Properties &rarr; Execution exposes an integer spinbox below the compile-target radio. It defaults to <code>1</code> &mdash; check the GPU stop flag after every step, exact stop-event timing. Higher values amortise the per-step <code>mapAsync</code> stall so big batches run faster, but a stop event firing at gen <em>n</em> may surface up to <em>K</em>&minus;1 generations later. The last step of every batch is always checked, so a stopped run never overshoots beyond the current play batch. JS and WASM ignore this setting.</li>
           </ul>
@@ -150,7 +150,7 @@ export function HelpView() {
             per-cell (e.g., &quot;alive&quot;, &quot;age&quot;).{' '}
             <strong>Model Attributes</strong> are global parameters all cells can read
             but not write (e.g., &quot;birth threshold&quot;). Each attribute has a type
-            (bool, integer, float, tag, color), a default value, and a description.
+            (binary, integer, decimal, tag, color), a default value, and a description.
           </p>
           <ul className={styles.list}>
             <li><strong>Tag</strong> &mdash; An integer with named values (picklist). Define tag options in the editor, and use the Tag Constant node to reference them by name.</li>
@@ -159,7 +159,7 @@ export function HelpView() {
             <li>
               <strong>Sub-attribute</strong> (cell attributes only) &mdash; a cell
               attribute marked as &quot;only well-defined&quot; on cells whose
-              parent attribute (a Tag or Bool cell attribute) is in a chosen
+              parent attribute (a Tag or Binary cell attribute) is in a chosen
               set of values. For example, a <em>charge</em> attribute might be
               defined only on cells whose <em>state</em> is Wire / Pulsar /
               Switch. Reads on non-matching cells return the configured{' '}
@@ -233,13 +233,13 @@ export function HelpView() {
             <li>
               <strong>Linked</strong> &mdash; pick a cell attribute and GenesisCA
               auto-generates the color pass for you, no graph required:
-              <strong> bool</strong> &rarr; two colors (default black/white),
-              <strong> float</strong> and <strong>integer</strong> &rarr; a color scale
+              <strong> binary</strong> &rarr; two colors (default black/white),
+              <strong> decimal</strong> and <strong>integer</strong> &rarr; a color scale
               spanning a user-set min/max &mdash; choose a palette preset (Viridis, Magma,
               Rainbow, Heat, Cividis, …) or customize the stops with the same gradient
               editor used by the Color Scale node, and <strong>tag</strong> &rarr; one
               distinct color per option. Every palette is fully recolorable; the min/max
-              fields appear for float and integer attributes.
+              fields appear for decimal and integer attributes.
             </li>
           </ul>
           <p className={styles.p}>
@@ -260,12 +260,12 @@ export function HelpView() {
             &quot;Indicators&quot; section. Two kinds exist:
           </p>
           <ul className={styles.list}>
-            <li><strong>Standalone</strong> &mdash; Typed scalar values (bool, integer, float,
+            <li><strong>Standalone</strong> &mdash; Typed scalar values (binary, integer, decimal,
             or tag) that can be read and written by graph nodes (Get Indicator, Set Indicator,
             Update Indicator). They act as accumulators inside the step loop.</li>
             <li><strong>Linked</strong> &mdash; Automatically computed from an existing cell
             attribute after each step. The aggregation mode depends on the attribute type:
-            Bool and Tag support Frequency (count per value); Integer and Float support
+            Binary and Tag support Frequency (count per value); Integer and Decimal support
             Total (sum) or Frequency.</li>
           </ul>
           <p className={styles.p}>
@@ -300,7 +300,7 @@ export function HelpView() {
             indicator computes).
           </p>
           <p className={styles.p}>
-            <strong>Track Categories.</strong> For Bool or Tag frequency indicators you can
+            <strong>Track Categories.</strong> For Binary or Tag frequency indicators you can
             pick <em>which</em> category values to chart (a checklist in the indicator&apos;s
             settings). Leave everything checked to track all categories (the default), or
             choose a subset so a dominant category doesn&apos;t flatten the rest on the shared
@@ -366,12 +366,12 @@ export function HelpView() {
           </ul>
           <p className={styles.p}>
             The <strong>Lookup Table</strong> model-attribute type stores a (possibly
-            rectangular) matrix of float values. Each axis has an independent <em>key
+            rectangular) matrix of decimal values. Each axis has an independent <em>key
             source</em> &mdash; a face-label palette, a tag attribute, or{' '}
             <strong>Single value (map)</strong> &mdash; so a table can be keyed by faces
             (e.g. analyte&nbsp;&times;&nbsp;CD faces) or by cell type (e.g.
             empty/water/amphi). Choosing <em>Single value</em> for one axis collapses the
-            table into a 1-D <strong>map</strong>: a single column (or row) of floats keyed
+            table into a 1-D <strong>map</strong>: a single column (or row) of decimal values keyed
             only by the other axis&apos;s tag &mdash; no need to invent a throwaway
             single-option tag attribute. A pure tag&times;tag table needs no faces, so it
             works even with Variegated Cells off. Live-tuneable in the simulator like any
@@ -407,10 +407,10 @@ export function HelpView() {
               labels at each neighbour encounter (8-slot Moore, or 4-slot cardinal with
               &quot;Cardinals only&quot;). Pair with Aggregate or For Each In Array.</li>
             <li><strong>Table Lookup</strong> &mdash; indexes a Lookup Table model attribute
-              by a row index and a column index &rarr; float. (Indices come from face labels
+              by a row index and a column index &rarr; decimal. (Indices come from face labels
               or tag reads, depending on the table&apos;s key sources.)</li>
             <li><strong>Table Map</strong> &mdash; vectorised Table Lookup over two parallel
-              index arrays &rarr; float array (pair with Aggregate&nbsp;&times;&nbsp;product
+              index arrays &rarr; decimal array (pair with Aggregate&nbsp;&times;&nbsp;product
               for a break-probability product).</li>
             <li><strong>Transfer Cell Attributes to Neighbor</strong> &mdash; copy/move/swap
               the current values of chosen cell attributes (and optionally orientation)
@@ -454,7 +454,7 @@ export function HelpView() {
               generations. Treat it as scratch for one cell&apos;s computation.</li>
             <li><strong>Kinds</strong> &mdash; <em>scalar</em> (a single value) or
               <em>array</em> (fixed length, all elements reset to the initial value). Data
-              type is bool / integer / float / tag.</li>
+              type is binary / integer / decimal / tag.</li>
             <li><strong>Get Variable</strong> &mdash; reads the current value (scalar) or the
               underlying array (array variables &mdash; iterate it like any array source:
               Aggregate, Group Reduce, Get Array Element, For Each In Array).</li>
@@ -642,10 +642,10 @@ export function HelpView() {
           <table className={styles.table}>
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
-              <tr><td>Conditional</td><td>If/else branching based on a boolean condition.</td></tr>
+              <tr><td>Conditional</td><td>If/else branching based on a binary (true/false) condition.</td></tr>
               <tr><td>Sequence</td><td>Execute &quot;First&quot; then &quot;Then&quot; sequentially.</td></tr>
               <tr><td>Loop</td><td>Repeat &quot;Body&quot; a given number of times.</td></tr>
-              <tr><td>Switch</td><td>Route flow to multiple cases. Two modes: <strong>By Conditions</strong> (wire boolean inputs per case) or <strong>By Value</strong> (compare a value against per-case thresholds with ==, !=, &gt;, &lt;, &gt;=, &lt;= operators, or match tag options). The By Value type can be Integer, Float, Tag, or <strong>Neighbor Index</strong> &mdash; for Neighbor Index each case takes a wired NI value and matching is equality. A &quot;First match only&quot; toggle controls whether only the first matching case fires or all matches execute.</td></tr>
+              <tr><td>Switch</td><td>Route flow to multiple cases. Two modes: <strong>By Conditions</strong> (wire binary inputs per case) or <strong>By Value</strong> (compare a value against per-case thresholds with ==, !=, &gt;, &lt;, &gt;=, &lt;= operators, or match tag options). The By Value type can be Integer, Decimal, Tag, or <strong>Neighbor Index</strong> &mdash; for Neighbor Index each case takes a wired NI value and matching is equality. A &quot;First match only&quot; toggle controls whether only the first matching case fires or all matches execute.</td></tr>
             </tbody>
           </table>
 
@@ -663,8 +663,8 @@ export function HelpView() {
               <tr><td>Get Neighbor Attr By Tag</td><td>Read a cell attribute from a specific neighbor identified by a named tag (defined in the Neighborhoods panel). The tag is resolved to an index at compile time.</td></tr>
               <tr><td>Get Neighbor Indexes By Tags</td><td>Select multiple neighborhood cells by their tag names and output an array of indices. Use with &quot;Get Neighbors Attr By Indexes&quot; for tag-based multi-neighbor access.</td></tr>
               <tr><td>Get Neighbors Attr By Indexes</td><td>Read attributes from a subset of neighbors specified by an array of indices.</td></tr>
-              <tr><td>Get Constant</td><td>A fixed value: bool, integer, float, tag, orientation, or <em>face label</em> (the last only when Variegated Cells is enabled &mdash; emits the compile-time index of the named face label, with implicit <code>none</code> = 0).</td></tr>
-              <tr><td>Get Random</td><td>Generate a random value (bool, integer, float, or Options). In Bool mode, an input port &quot;P&quot; (probability 0&ndash;1) controls the chance of producing 1 (default 0.5 = 50%). In Options mode, wire one or more values to the &quot;Options&quot; array input (multi-scalar OR a single array source like Filter Neighbors / Get All Neighbor Indexes / Get Neighbors Attribute) and the node picks one uniformly; the &quot;Fallback&quot; inline value is returned when the array is empty.</td></tr>
+              <tr><td>Get Constant</td><td>A fixed value: binary, integer, decimal, tag, orientation, or <em>face label</em> (the last only when Variegated Cells is enabled &mdash; emits the compile-time index of the named face label, with implicit <code>none</code> = 0).</td></tr>
+              <tr><td>Get Random</td><td>Generate a random value (binary, integer, decimal, or Options). In Binary mode, an input port &quot;P&quot; (probability 0&ndash;1) controls the chance of producing 1 (default 0.5 = 50%). In Options mode, wire one or more values to the &quot;Options&quot; array input (multi-scalar OR a single array source like Filter Neighbors / Get All Neighbor Indexes / Get Neighbors Attribute) and the node picks one uniformly; the &quot;Fallback&quot; inline value is returned when the array is empty.</td></tr>
             </tbody>
           </table>
 
@@ -679,8 +679,8 @@ export function HelpView() {
               <tr><td>Expression</td><td>Type a math <strong>formula</strong> in a text field instead of wiring up many Math nodes &mdash; ideal for equation-heavy models. Operators <code>+ - * / % ^</code> and functions <code>sqrt abs floor ceil round min max pow mod</code>, plus the constants <code>pi</code> and <code>e</code>. Variables come from the input ports: add 1&ndash;8 ports with the <strong>+</strong> / <strong>&minus;</strong> buttons, give each a name, then reference those names in the formula (e.g. <em>u + Du*lap - u*v*v</em>). Compiles on all three targets (JS, WASM, WebGPU).</td></tr>
               <tr><td>Proportion Map</td><td>Remap a value from one range to another: <em>output = outMin + curve(t) * (outMax - outMin)</em> with <em>t = (x - inMin) / (inMax - inMin)</em>. Has 5 inputs (X, In Min, In Max, Out Min, Out Max) plus a <strong>curve</strong> dropdown: Linear, Smoothstep, Ease-In Quadratic, Ease-Out Quadratic, Exponential, Logarithmic. Linear keeps un-clamped extrapolation; non-linear curves clamp t to [0, 1].</td></tr>
               <tr><td>Interpolate</td><td>Linear interpolation: output = min + t * (max - min). Inputs: T (0&ndash;1), Min, Max.</td></tr>
-              <tr><td>Compare (Statement)</td><td>Comparison operators: ==, !=, &gt;, &lt;, &gt;=, &lt;=, <strong>Between</strong>, and <strong>Not Between</strong>. The between-family ops reveal a Y&#8322; input and two picklists for the lower (&gt;= or &gt;) and upper (&lt;= or &lt;) interval sides; <em>Not Between</em> fires when the value is outside the interval. A <strong>type selector</strong> (Numerical / Bool / Tag / Neighbor Index) swaps the inline operand widgets &mdash; pick <em>Tag</em> and a tag-attribute picker appears so you can compare against a tag option without a Get Constant node (non-numerical types are equality-only). Replaces the common Compare + Compare + AND chain.</td></tr>
-              <tr><td>Logic Operator</td><td>AND, OR, XOR, NOT on boolean values.</td></tr>
+              <tr><td>Compare (Statement)</td><td>Comparison operators: ==, !=, &gt;, &lt;, &gt;=, &lt;=, <strong>Between</strong>, and <strong>Not Between</strong>. The between-family ops reveal a Y&#8322; input and two picklists for the lower (&gt;= or &gt;) and upper (&lt;= or &lt;) interval sides; <em>Not Between</em> fires when the value is outside the interval. A <strong>type selector</strong> (Numerical / Binary / Tag / Neighbor Index) swaps the inline operand widgets &mdash; pick <em>Tag</em> and a tag-attribute picker appears so you can compare against a tag option without a Get Constant node (non-numerical types are equality-only). Replaces the common Compare + Compare + AND chain.</td></tr>
+              <tr><td>Logic Operator</td><td>AND, OR, XOR, NOT on binary values.</td></tr>
               <tr><td>Value Switch</td><td>Ternary value selector: outputs <em>If</em> when <em>Condition</em> is truthy, else <em>Else</em>. Pure value &mdash; no flow port, so it stays inline in the graph. Both inputs always evaluate; use a flow Conditional for short-circuit. Also works as a <em>conditional array selector</em>: wire two array producers (e.g. Filter Neighbors) into <em>If</em>/<em>Else</em> and the chosen array flows out of <em>Result</em> &mdash; handy for &ldquo;pick a random neighbour from set A or set B&rdquo;.</td></tr>
             </tbody>
           </table>
@@ -924,7 +924,7 @@ export function HelpView() {
           <h3 className={styles.h3}>For Each In Array</h3>
           <p className={styles.p}>
             <strong>For Each In Array</strong> is a flow node that iterates over each element of
-            a typed array (any kind: bool[], int[], float[], tag[], NeighborIndex[]) and runs the
+            a typed array (any kind: binary[], integer[], decimal[], tag[], NeighborIndex[]) and runs the
             BODY flow for each, exposing the current <em>Element</em> and its 0-based
             <em> Index</em> via output ports. Useful for &ldquo;iterate matching neighbors and
             apply different ops&rdquo; patterns &mdash; and the <em>Index</em> lets the body
@@ -1011,7 +1011,7 @@ export function HelpView() {
             the right, even when the model has no Color&rarr;Attribute input mappings.
             Selecting it swaps the color picker for a per-attribute panel: one row per
             cell attribute, each with a <strong>Set</strong> checkbox and a
-            type-appropriate value widget (bool dropdown, integer/float number input, or
+            type-appropriate value widget (binary dropdown, integer/decimal number input, or
             tag dropdown). When you paint, every cell under the brush has each checked
             attribute overwritten with its chosen value; unchecked attributes are skipped
             so you keep fine control over what gets touched. Configuration persists
