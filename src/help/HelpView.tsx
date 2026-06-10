@@ -187,9 +187,30 @@ export function HelpView() {
             Von Neumann (4 cardinal neighbors). Use the interactive grid to toggle neighbor
             positions; click the centre cell to include the cell itself in the neighborhood,
             so neighbor-iterating nodes count the cell among its own neighbors. Each
-            neighborhood has its own margin setting (up to 20) that controls the grid editor
+            neighborhood has its own margin setting (up to 50) that controls the grid editor
             size. Use the <strong>Duplicate</strong> button to clone an existing neighborhood
             for quick variations.
+          </p>
+          <p className={styles.p}>
+            <strong>Drawing tools</strong> &mdash; the row of buttons above the grid speeds up
+            big neighborhoods (MNCA-style radii and rings). Every tool <em>toggles</em> the
+            cells it covers, so drawing over active cells clears them &mdash; e.g. punch a hole
+            in a disc by drawing a smaller circle inside it:
+          </p>
+          <ul className={styles.ul}>
+            <li><strong>Point</strong> &mdash; the classic one-click-per-cell toggle.</li>
+            <li><strong>Circle</strong> &mdash; click the center cell, then a cell at the
+              circle&apos;s edge: every cell within that distance (a filled disc) toggles.</li>
+            <li><strong>Ring</strong> &mdash; click the center, then a cell at the inner
+              radius, then one at the outer radius: cells between the two distances toggle.</li>
+            <li><strong>Line</strong> &mdash; click two endpoints: every cell along the
+              straight path between them toggles.</li>
+          </ul>
+          <p className={styles.p}>
+            While a shape is in progress its anchor cells show a dashed outline and the cells
+            it would affect preview live under the cursor; <strong>right-click cancels</strong> the
+            in-progress shape. A shape that covers the centre cell flips the
+            include-central-cell flag like a normal centre click.
           </p>
 
           <h3 className={styles.h3}>Mappings Panel (M)</h3>

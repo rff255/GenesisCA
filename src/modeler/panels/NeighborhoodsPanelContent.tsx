@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useEffect, useRef } from 'react';
+import { useCallback, useMemo, useEffect, useRef, useState } from 'react';
 import { useModel } from '../../model/ModelContext';
+import type { Neighborhood } from '../../model/types';
 import { useDetailSelection, type PanelContentProps } from '../ModelerDetailContext';
 import { useListReorder } from './useListReorder';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
@@ -22,6 +23,136 @@ function handleNeighborhoodDragEnd() {
 
 function coordKey(row: number, col: number): string {
   return `${row},${col}`;
+}
+
+// ---------------------------------------------------------------------------
+// Shape tools (Point / Circle / Ring / Line) — multi-click drawing aids for
+// big neighborhoods (MNCA-style radii and rings). Pure helpers below compute
+// the affected cell set; `toggleCellsChanges` applies one batch toggle.
+// ---------------------------------------------------------------------------
+
+type ShapeTool = 'point' | 'circle' | 'ring' | 'line';
+
+/** Clicks each tool needs before it applies. */
+const SHAPE_CLICKS: Record<ShapeTool, number> = { point: 1, circle: 2, ring: 3, line: 2 };
+
+const cellDist = (a: [number, number], b: [number, number]) =>
+  Math.hypot(a[0] - b[0], a[1] - b[1]);
+
+/** All grid cells within euclidean distance [rIn, rOut] of `center` (rIn=0 →
+ *  a filled disc). Clipped to the visible margin box. */
+function annulusCells(
+  center: [number, number],
+  rIn: number,
+  rOut: number,
+  margin: number,
+): Array<[number, number]> {
+  const lo = Math.min(rIn, rOut) - 1e-9;
+  const hi = Math.max(rIn, rOut) + 1e-9;
+  const out: Array<[number, number]> = [];
+  for (let row = -margin; row <= margin; row++) {
+    for (let col = -margin; col <= margin; col++) {
+      const d = Math.hypot(row - center[0], col - center[1]);
+      if (d >= lo && d <= hi) out.push([row, col]);
+    }
+  }
+  return out;
+}
+
+/** Integer Bresenham line between two cells, endpoints included. */
+function lineCells(a: [number, number], b: [number, number]): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  let r0 = a[0];
+  let c0 = a[1];
+  const r1 = b[0];
+  const c1 = b[1];
+  const dC = Math.abs(c1 - c0);
+  const dR = Math.abs(r1 - r0);
+  const sC = c0 < c1 ? 1 : -1;
+  const sR = r0 < r1 ? 1 : -1;
+  let err = dC - dR;
+  for (;;) {
+    out.push([r0, c0]);
+    if (r0 === r1 && c0 === c1) break;
+    const e2 = 2 * err;
+    if (e2 > -dR) { err -= dR; c0 += sC; }
+    if (e2 < dC) { err += dC; r0 += sR; }
+  }
+  return out;
+}
+
+/** Cells a tool would affect given its staged points (last one may be the
+ *  hovered cell for live preview). Returns null when not enough points. */
+function shapeCells(
+  tool: ShapeTool,
+  pts: Array<[number, number]>,
+  margin: number,
+): Array<[number, number]> | null {
+  if (tool === 'circle' && pts.length >= 2) {
+    return annulusCells(pts[0]!, 0, cellDist(pts[0]!, pts[1]!), margin);
+  }
+  if (tool === 'line' && pts.length >= 2) {
+    return lineCells(pts[0]!, pts[1]!);
+  }
+  if (tool === 'ring') {
+    // With only the inner radius picked so far, preview the circle outline at
+    // that distance (a zero-width annulus) so the radius is visible.
+    if (pts.length === 2) return annulusCells(pts[0]!, cellDist(pts[0]!, pts[1]!), cellDist(pts[0]!, pts[1]!), margin);
+    if (pts.length >= 3) return annulusCells(pts[0]!, cellDist(pts[0]!, pts[1]!), cellDist(pts[0]!, pts[2]!), margin);
+  }
+  return null;
+}
+
+/** Batch-toggle `cells` on a neighborhood: active coords are removed,
+ *  inactive ones added, and a covered center cell flips includeCentralCell.
+ *  Tag keys are coord-array INDICES, so removals must remap surviving tags —
+ *  this helper is the single place that does it (the one-cell Point click
+ *  routes through here too). */
+function toggleCellsChanges(
+  nbh: Neighborhood,
+  cells: Array<[number, number]>,
+): Partial<Neighborhood> {
+  const seen = new Set<string>();
+  const removeKeys = new Set<string>();
+  const toAdd: Array<[number, number]> = [];
+  const activeKeys = new Set(nbh.coords.map(([r, c]) => coordKey(r, c)));
+  let centerTouched = false;
+  for (const cell of cells) {
+    const key = coordKey(cell[0], cell[1]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (cell[0] === 0 && cell[1] === 0) {
+      centerTouched = true;
+      continue;
+    }
+    if (activeKeys.has(key)) removeKeys.add(key);
+    else toAdd.push(cell);
+  }
+  const newCoords: Array<[number, number]> = [];
+  const newTags: Record<number, string> = {};
+  nbh.coords.forEach((coord, oldIdx) => {
+    if (removeKeys.has(coordKey(coord[0], coord[1]))) return;
+    const tag = nbh.tags?.[oldIdx];
+    if (tag !== undefined) newTags[newCoords.length] = tag;
+    newCoords.push(coord);
+  });
+  newCoords.push(...toAdd);
+  const changes: Partial<Neighborhood> = { coords: newCoords };
+  if (nbh.tags) changes.tags = newTags;
+  if (centerTouched) changes.includeCentralCell = !nbh.includeCentralCell;
+  return changes;
+}
+
+/** Per-tool, per-stage instruction line shown next to the tool buttons. */
+function shapeHint(tool: ShapeTool, stagedCount: number): string {
+  if (tool === 'point') return 'Click cells to toggle them one by one.';
+  const steps: Record<Exclude<ShapeTool, 'point'>, string[]> = {
+    circle: ['Click the circle’s center cell.', 'Click a cell at the circle’s edge.'],
+    ring: ['Click the ring’s center cell.', 'Click a cell at the inner radius.', 'Click a cell at the outer radius.'],
+    line: ['Click the line’s first endpoint.', 'Click the line’s second endpoint.'],
+  };
+  const msg = steps[tool][Math.min(stagedCount, steps[tool].length - 1)]!;
+  return stagedCount > 0 ? `${msg} Right-click cancels.` : msg;
 }
 
 export function NeighborhoodsPanelContent({ mode = 'list' }: PanelContentProps = {}) {
@@ -56,27 +187,47 @@ export function NeighborhoodsPanelContent({ mode = 'list' }: PanelContentProps =
     return new Set(selected.coords.map(([r, c]) => coordKey(r, c)));
   }, [selected]);
 
+  // Shape tools: drawing mode + the clicks staged so far + the hovered cell
+  // (live preview of the would-be shape). Staging resets on tool or
+  // neighborhood switch.
+  const [tool, setTool] = useState<ShapeTool>('point');
+  const [staged, setStaged] = useState<Array<[number, number]>>([]);
+  const [hoverCell, setHoverCell] = useState<[number, number] | null>(null);
+  useEffect(() => { setStaged([]); }, [tool, selectedId]);
+
+  const stagedKeys = useMemo(
+    () => new Set(staged.map(([r, c]) => coordKey(r, c))),
+    [staged],
+  );
+
+  // Cells the in-progress shape would affect if the hovered cell were the
+  // next click — drawn as a dashed outline so the result is predictable.
+  const previewKeys = useMemo(() => {
+    if (tool === 'point' || !hoverCell) return new Set<string>();
+    const cells = shapeCells(tool, [...staged, hoverCell], margin);
+    return new Set((cells ?? []).map(([r, c]) => coordKey(r, c)));
+  }, [tool, staged, hoverCell, margin]);
+
   const handleCellClick = useCallback(
     (row: number, col: number) => {
       if (!selected) return;
-      if (row === 0 && col === 0) {
-        // The central cell isn't a normal selectable coord — clicking it
-        // toggles the "include central cell" flag (same as the checkbox).
-        updateNeighborhood(selected.id, { includeCentralCell: !selected.includeCentralCell });
+      if (tool === 'point') {
+        // Single-cell toggle (center cell flips includeCentralCell).
+        updateNeighborhood(selected.id, toggleCellsChanges(selected, [[row, col]]));
         return;
       }
-      const key = coordKey(row, col);
-      let newCoords: Array<[number, number]>;
-      if (activeCoords.has(key)) {
-        newCoords = selected.coords.filter(
-          ([r, c]) => !(r === row && c === col),
-        );
-      } else {
-        newCoords = [...selected.coords, [row, col]];
+      const next: Array<[number, number]> = [...staged, [row, col]];
+      if (next.length < SHAPE_CLICKS[tool]) {
+        setStaged(next);
+        return;
       }
-      updateNeighborhood(selected.id, { coords: newCoords });
+      const cells = shapeCells(tool, next, margin);
+      if (cells && cells.length > 0) {
+        updateNeighborhood(selected.id, toggleCellsChanges(selected, cells));
+      }
+      setStaged([]);
     },
-    [selected, activeCoords, updateNeighborhood],
+    [selected, tool, staged, margin, updateNeighborhood],
   );
 
   const handleDelete = () => {
@@ -193,9 +344,29 @@ export function NeighborhoodsPanelContent({ mode = 'list' }: PanelContentProps =
               </span>
             </div>
 
+            <div className={styles.shapeToolRow} role="group" aria-label="Drawing tool">
+              {(['point', 'circle', 'ring', 'line'] as ShapeTool[]).map(t => (
+                <button
+                  key={t}
+                  className={`${styles.shapeToolButton} ${tool === t ? styles.shapeToolButtonActive : ''}`}
+                  onClick={() => setTool(t)}
+                  title={{
+                    point: 'Point — toggle individual cells',
+                    circle: 'Circle — click the center, then a cell at the edge, to toggle a filled disc',
+                    ring: 'Ring — click the center, a cell at the inner radius, then one at the outer radius',
+                    line: 'Line — click two endpoints to toggle every cell along the path',
+                  }[t]}
+                >
+                  {{ point: '·', circle: '●', ring: '◌', line: '╱' }[t]} {t[0]!.toUpperCase() + t.slice(1)}
+                </button>
+              ))}
+            </div>
+            <div className={styles.shapeToolHint}>{shapeHint(tool, staged.length)}</div>
+
             <div
               className={styles.grid}
               style={{ gridTemplateColumns: `repeat(${gridSize}, 1fr)` }}
+              onMouseLeave={() => setHoverCell(null)}
             >
               {Array.from({ length: gridSize }, (_, rowIdx) => {
                 const row = rowIdx - margin;
@@ -217,14 +388,23 @@ export function NeighborhoodsPanelContent({ mode = 'list' }: PanelContentProps =
                   } else {
                     cellClass += styles.gridCellEmpty;
                   }
+                  const key = coordKey(row, col);
+                  if (stagedKeys.has(key)) cellClass += ' ' + styles.gridCellStaged;
+                  else if (previewKeys.has(key)) cellClass += ' ' + styles.gridCellPreview;
 
                   return (
                     <button
-                      key={coordKey(row, col)}
+                      key={key}
                       className={cellClass}
                       onClick={() => handleCellClick(row, col)}
+                      onMouseEnter={() => setHoverCell([row, col])}
                       onContextMenu={e => {
                         e.preventDefault();
+                        // Right-click cancels an in-progress shape first.
+                        if (staged.length > 0) {
+                          setStaged([]);
+                          return;
+                        }
                         if (!isActive || isCenter || coordIdx < 0) return;
                         // Right-click on active cell → add a tag for it
                         if (!tagName) {
