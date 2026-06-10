@@ -1,9 +1,11 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import type { Indicator } from '../model/types';
+import type { Indicator, IndicatorChartSettings } from '../model/types';
+import { useThemeTokens } from '../styles/useThemeTokens';
 import { IndicatorSparkline } from './IndicatorSparkline';
 import { IndicatorMultiLineChart } from './IndicatorMultiLineChart';
 import { IndicatorStackedAreaChart } from './IndicatorStackedAreaChart';
-import { IndicatorSpatialChart } from './IndicatorSpatialChart';
+import { IndicatorSpatialChart, compareSeriesKeys } from './IndicatorSpatialChart';
+import { SCALAR_SERIES_KEY, mergeChartSettings } from './indicatorChartSettings';
 import styles from './IndicatorDisplay.module.css';
 
 export type IndicatorVizMode = 'bars' | 'multiline' | 'stacked';
@@ -22,11 +24,181 @@ interface Props {
   vizModes: Record<string, IndicatorVizMode>;
   /** Per-indicator set of legend categories the user has hidden (Lines/Stack). */
   hiddenCategories: Record<string, Set<string>>;
+  /** Simulator-side chart-settings overrides (gear popover) — a field-level
+   *  layer over each Indicator.chartSettings default. */
+  chartOverrides: Record<string, IndicatorChartSettings>;
   onToggleWatch: (id: string, watched: boolean) => void;
   onChartToggle: (id: string, expanded: boolean) => void;
   onCycleVizMode: (id: string) => void;
   /** Toggle one category's visibility for a frequency indicator's chart. */
   onToggleCategory: (id: string, category: string) => void;
+  /** Replace one indicator's override entry (null clears it entirely). */
+  onChangeChartOverrides: (id: string, next: IndicatorChartSettings | null) => void;
+}
+
+const CHART_COLOR_TOKENS = [
+  '--chart-color-1', '--chart-color-2', '--chart-color-3', '--chart-color-4',
+  '--chart-color-5', '--chart-color-6', '--chart-color-7', '--chart-color-8',
+  '--chart-color-9', '--chart-color-10',
+] as const;
+
+/** Series keys an indicator's charts can color, in the same order the charts
+ *  assign palette indices (spatial → compareSeriesKeys; freq → plain sort;
+ *  scalar → the single "value" key). Runtime-derived: keys come from the
+ *  current value/history, with a static true/false fallback for bools. */
+function seriesKeysOf(
+  ind: Indicator,
+  val: number | Record<string, number> | Record<string, number[]> | undefined,
+  hist: number[] | Record<string, number[]> | undefined,
+): string[] {
+  if (typeof val === 'number' || ind.kind === 'standalone') return [SCALAR_SERIES_KEY];
+  const isSpatial = ind.kind === 'linked' && (ind.xAxis === 'rows' || ind.xAxis === 'columns');
+  const keys = new Set<string>();
+  if (val && typeof val === 'object') for (const k of Object.keys(val)) keys.add(k);
+  if (hist && !Array.isArray(hist)) for (const k of Object.keys(hist)) keys.add(k);
+  if (keys.size === 0) {
+    if (ind.linkedAggregation === 'total') return [SCALAR_SERIES_KEY];
+    if (ind.dataType === 'bool') return ['false', 'true'];
+    return [];
+  }
+  return [...keys].sort(isSpatial ? compareSeriesKeys : undefined);
+}
+
+/** Normalize a CSS color token to #rrggbb for <input type="color">. */
+function toHexColor(c: string | undefined, fallback: string): string {
+  if (c && /^#[0-9a-f]{6}$/i.test(c.trim())) return c.trim();
+  if (c && /^#[0-9a-f]{3}$/i.test(c.trim())) {
+    const h = c.trim().slice(1);
+    return `#${h[0]}${h[0]}${h[1]}${h[1]}${h[2]}${h[2]}`;
+  }
+  return fallback;
+}
+
+/** Gear popover: edits the OVERRIDE layer (number fields blank = inherit the
+ *  model default, whose value shows as the placeholder; 'auto' = dynamic). */
+function ChartSettingsPopover({ ind, override, categories, palette, onChange, onClose }: {
+  ind: Indicator;
+  override: IndicatorChartSettings | undefined;
+  categories: string[];
+  palette: string[];
+  onChange: (next: IndicatorChartSettings | null) => void;
+  onClose: () => void;
+}) {
+  const popRef = useRef<HTMLDivElement>(null);
+  const defaults = ind.chartSettings;
+
+  // Outside-press dismiss (capture phase so panel scrolling etc. still work).
+  useEffect(() => {
+    const onDown = (e: PointerEvent) => {
+      if (popRef.current && !popRef.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, [onClose]);
+
+  const ov: IndicatorChartSettings = override ?? {};
+  const emit = (next: IndicatorChartSettings) => {
+    const empty = next.yMin === undefined && next.yMax === undefined
+      && next.yTicks === undefined
+      && (!next.seriesColors || Object.keys(next.seriesColors).length === 0);
+    onChange(empty ? null : next);
+  };
+  const setNum = (field: 'yMin' | 'yMax' | 'yTicks') => (e: React.ChangeEvent<HTMLInputElement>) => {
+    const next = { ...ov, seriesColors: ov.seriesColors ? { ...ov.seriesColors } : undefined };
+    if (e.target.value === '') {
+      delete next[field];
+    } else {
+      const n = Number(e.target.value);
+      if (!Number.isFinite(n)) return;
+      next[field] = field === 'yTicks' ? Math.max(2, Math.min(11, Math.round(n))) : n;
+    }
+    emit(next);
+  };
+  const setSeriesColor = (cat: string, color: string | null) => {
+    const colors = { ...(ov.seriesColors ?? {}) };
+    if (color === null) delete colors[cat];
+    else colors[cat] = color;
+    emit({ ...ov, seriesColors: Object.keys(colors).length > 0 ? colors : undefined });
+  };
+
+  const numPlaceholder = (field: 'yMin' | 'yMax') =>
+    defaults?.[field] !== undefined ? String(defaults[field]) : 'auto';
+
+  return (
+    <div ref={popRef} className={styles.settingsPop}>
+      <div className={styles.settingsTitleRow}>
+        <span className={styles.settingsTitle}>Chart settings</span>
+        <button className={styles.settingsClose} onClick={onClose} title="Close">&times;</button>
+      </div>
+      <div className={styles.settingsRow}>
+        <span className={styles.settingsLabel}>Y min</span>
+        <input
+          className={styles.settingsInput} type="number" step="any" lang="en"
+          value={ov.yMin ?? ''} placeholder={numPlaceholder('yMin')}
+          onChange={setNum('yMin')}
+          title="Fixed Y-axis minimum — blank = dynamic (follows the data)"
+        />
+      </div>
+      <div className={styles.settingsRow}>
+        <span className={styles.settingsLabel}>Y max</span>
+        <input
+          className={styles.settingsInput} type="number" step="any" lang="en"
+          value={ov.yMax ?? ''} placeholder={numPlaceholder('yMax')}
+          onChange={setNum('yMax')}
+          title="Fixed Y-axis maximum — blank = dynamic (follows the data)"
+        />
+      </div>
+      <div className={styles.settingsRow}>
+        <span className={styles.settingsLabel}>Y ticks</span>
+        <input
+          className={styles.settingsInput} type="number" min={2} max={11} step={1}
+          value={ov.yTicks ?? ''}
+          placeholder={defaults?.yTicks !== undefined ? String(defaults.yTicks) : '2'}
+          onChange={setNum('yTicks')}
+          title="Number of Y-axis tick labels including min and max (2–11)"
+        />
+      </div>
+      {categories.length > 0 && (
+        <>
+          <div className={styles.settingsSection}>Series colors</div>
+          {categories.map((cat, ci) => {
+            const overridden = ov.seriesColors?.[cat] !== undefined;
+            const effective = ov.seriesColors?.[cat]
+              ?? defaults?.seriesColors?.[cat]
+              ?? palette[ci % palette.length]!;
+            return (
+              <div key={cat} className={styles.settingsRow}>
+                <span className={styles.settingsLabel} title={cat}>
+                  {cat === SCALAR_SERIES_KEY ? 'line' : cat}
+                </span>
+                <input
+                  type="color"
+                  className={styles.settingsColor}
+                  value={toHexColor(effective, '#888888')}
+                  onChange={e => setSeriesColor(cat, e.target.value)}
+                  title={`Series color for "${cat}"`}
+                />
+                {overridden && (
+                  <button
+                    className={styles.settingsClose}
+                    onClick={() => setSeriesColor(cat, null)}
+                    title="Clear override (back to default)"
+                  >&times;</button>
+                )}
+              </div>
+            );
+          })}
+        </>
+      )}
+      <button
+        className={styles.settingsReset}
+        onClick={() => onChange(null)}
+        title="Remove every simulator-side override for this chart"
+      >
+        Reset to model defaults
+      </button>
+    </div>
+  );
 }
 
 function formatValue(val: number, ind: Indicator): string {
@@ -38,12 +210,16 @@ function formatValue(val: number, ind: Indicator): string {
   return String(val);
 }
 
-export function IndicatorDisplay({ indicators, values, history, generation, gridWidth, gridHeight, vizModes, hiddenCategories, onToggleWatch, onChartToggle, onCycleVizMode, onToggleCategory }: Props) {
+export function IndicatorDisplay({ indicators, values, history, generation, gridWidth, gridHeight, vizModes, hiddenCategories, chartOverrides, onToggleWatch, onChartToggle, onCycleVizMode, onToggleCategory, onChangeChartOverrides }: Props) {
   // Track *collapsed* IDs — everything is expanded by default
   const [collapsedCharts, setCollapsedCharts] = useState<Set<string>>(new Set());
   // Per-indicator custom content height (drag-to-resize)
   const [heights, setHeights] = useState<Record<string, number>>({});
   const resizing = useRef<{ id: string; startY: number; startH: number } | null>(null);
+  // Which indicator's chart-settings gear popover is open (one at a time).
+  const [gearOpenId, setGearOpenId] = useState<string | null>(null);
+  const paletteTokens = useThemeTokens(CHART_COLOR_TOKENS);
+  const palette = paletteTokens.map(c => c || '#888888');
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
@@ -101,6 +277,9 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
         const isSpatial = ind.kind === 'linked' && (ind.xAxis === 'rows' || ind.xAxis === 'columns');
         const isScalar = val !== undefined && typeof val === 'number';
         const isFreq = val !== undefined && typeof val === 'object' && !isSpatial;
+        // Effective chart settings: model defaults ⊕ simulator overrides.
+        const chartFx = mergeChartSettings(ind.chartSettings, chartOverrides[ind.id]);
+        const hasAnyChartSetting = ind.chartSettings !== undefined || chartOverrides[ind.id] !== undefined;
 
         return (
           <div key={ind.id} className={styles.indicator}>
@@ -137,11 +316,31 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
                   </button>
                 );
               })()}
+              {isWatched && isExpanded && (
+                <button
+                  className={`${styles.chartBtn} ${gearOpenId === ind.id || hasAnyChartSetting ? styles.chartBtnActive : ''}`}
+                  onClick={() => setGearOpenId(g => (g === ind.id ? null : ind.id))}
+                  title="Chart settings (axis range, ticks, series colors)"
+                >
+                  {'\u2699'}
+                </button>
+              )}
               <span className={styles.name}>{ind.name}</span>
               <span className={styles.badge}>
                 {ind.kind === 'standalone' ? 'S' : 'L'}
               </span>
             </div>
+
+            {gearOpenId === ind.id && (
+              <ChartSettingsPopover
+                ind={ind}
+                override={chartOverrides[ind.id]}
+                categories={seriesKeysOf(ind, val, history[ind.id])}
+                palette={palette}
+                onChange={next => onChangeChartOverrides(ind.id, next)}
+                onClose={() => setGearOpenId(null)}
+              />
+            )}
 
             {isWatched && isScalar && (
               <div className={styles.scalarValue}>{formatValue(val as number, ind)}</div>
@@ -157,6 +356,7 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
                     data={scalarHist}
                     generation={generation}
                     height={h}
+                    settings={chartFx}
                   />
                 </div>
               );
@@ -186,6 +386,7 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
                       data={catHist} generation={generation} height={h}
                       hidden={hiddenCategories[ind.id]}
                       onToggleCategory={cat => onToggleCategory(ind.id, cat)}
+                      settings={chartFx}
                     />
                   </div>
                 );
@@ -197,6 +398,7 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
                       data={catHist} generation={generation} height={h}
                       hidden={hiddenCategories[ind.id]}
                       onToggleCategory={cat => onToggleCategory(ind.id, cat)}
+                      settings={chartFx}
                     />
                   </div>
                 );
@@ -251,6 +453,7 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
                     data={spatialData} axis={axis} axisLength={axisLength} height={h}
                     hidden={hiddenCategories[ind.id]}
                     onToggleCategory={cat => onToggleCategory(ind.id, cat)}
+                    settings={chartFx}
                   />
                 </div>
               );

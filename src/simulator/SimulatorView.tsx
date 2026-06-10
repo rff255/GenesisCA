@@ -19,7 +19,7 @@ import { InspectCellPopover, InspectHoverLink, type InspectPopoverState } from '
 import { PresetSaveDialog } from './PresetSaveDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { serializeSimState, serializePreset, downloadStateFile, readStateFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2 } from '../model/fileOperations';
-import type { Attribute, CAModel, Preset, SimulationState } from '../model/types';
+import type { Attribute, CAModel, IndicatorChartSettings, Preset, SimulationState } from '../model/types';
 import { encodeAttrValue } from '../model/attrValueEncoding';
 import styles from './SimulatorView.module.css';
 
@@ -302,6 +302,19 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     } catch { /* fall through */ }
     return {};
   });
+  // Per-indicator chart-settings OVERRIDES (gear popover) — a field-level layer
+  // over each Indicator.chartSettings model default. Persisted in sim settings
+  // AND serialized into SimulationState under "Simulator controls".
+  const [indicatorChartOverrides, setIndicatorChartOverrides] = useState<Record<string, IndicatorChartSettings>>(() => {
+    try {
+      const raw = localStorage.getItem(SIM_SETTINGS_KEY);
+      if (raw) {
+        const stored = JSON.parse(raw).indicatorChartOverrides;
+        if (stored && typeof stored === 'object') return stored as Record<string, IndicatorChartSettings>;
+      }
+    } catch { /* fall through */ }
+    return {};
+  });
 
   // GIF / WebM recording state
   const [recording, setRecording] = useState(false);
@@ -337,12 +350,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               .filter(([, s]) => s.size > 0)
               .map(([id, s]) => [id, [...s]]),
           ),
+          indicatorChartOverrides,
           glyphMinPx: glyphMinPxRef.current,
         }));
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, infinityCanvas, indicatorVizModes, recordFormat, indicatorHiddenCategories]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, infinityCanvas, indicatorVizModes, recordFormat, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -394,6 +408,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (set.has(category)) set.delete(category); else set.add(category);
       if (set.size === 0) delete next[id]; else next[id] = set;
       return next;
+    });
+  }, []);
+
+  const changeIndicatorChartOverrides = useCallback((id: string, next: IndicatorChartSettings | null) => {
+    setIndicatorChartOverrides(prev => {
+      const out = { ...prev };
+      if (next === null) delete out[id]; else out[id] = next;
+      return out;
     });
   }, []);
 
@@ -1617,7 +1639,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             modelAttrs: { ...runtimeModelAttrs }, indicators: {}, linkedAccumulators: {},
             colors: new ArrayBuffer(0),
           },
-          { activeViewer, brushColor, brushW, brushH, brushMapping, targetFps, unlimitedFps, gensPerFrame, unlimitedGens },
+          { activeViewer, brushColor, brushW, brushH, brushMapping, targetFps, unlimitedFps, gensPerFrame, unlimitedGens, indicatorChartOverrides },
           { grid: false, controls: true },
           { boundaryTreatment: model.properties.boundaryTreatment },
         );
@@ -1638,7 +1660,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       pendingStateSave.current = (workerState) => {
         const state = serializeSimState(
           workerState as Parameters<typeof serializeSimState>[0],
-          { activeViewer, brushColor, brushW, brushH, brushMapping, targetFps, unlimitedFps, gensPerFrame, unlimitedGens },
+          { activeViewer, brushColor, brushW, brushH, brushMapping, targetFps, unlimitedFps, gensPerFrame, unlimitedGens, indicatorChartOverrides },
           { grid: wantGrid, controls: wantControls },
           { boundaryTreatment: model.properties.boundaryTreatment },
         );
@@ -2877,6 +2899,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           unlimitedFps,
           gensPerFrame,
           unlimitedGens,
+          indicatorChartOverrides,
         },
         { grid: true, controls: true },
         { boundaryTreatment: model.properties.boundaryTreatment },
@@ -3018,6 +3041,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (state.unlimitedFps != null) setUnlimitedFps(state.unlimitedFps);
       if (state.gensPerFrame != null) setGensPerFrame(state.gensPerFrame);
       if (state.unlimitedGens != null) setUnlimitedGens(state.unlimitedGens);
+      // Per-indicator chart-settings overrides (gear popover). Replace
+      // wholesale — the saved snapshot is the complete override layer.
+      if (state.indicatorChartOverrides != null) setIndicatorChartOverrides(state.indicatorChartOverrides);
     }
 
     // Restore model-attribute values independently — presets may carry these
@@ -3791,6 +3817,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 gridHeight={gridHeight.current || simHeight}
                 vizModes={indicatorVizModes}
                 hiddenCategories={indicatorHiddenCategories}
+                chartOverrides={indicatorChartOverrides}
                 onToggleWatch={(id, watched) => updateIndicator(id, { watched })}
                 onChartToggle={(id, expanded) => {
                   if (expanded) chartExpandedRef.current.add(id);
@@ -3798,6 +3825,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 }}
                 onCycleVizMode={cycleIndicatorVizMode}
                 onToggleCategory={toggleIndicatorCategory}
+                onChangeChartOverrides={changeIndicatorChartOverrides}
               />
               </div>
             </div>

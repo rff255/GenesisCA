@@ -379,6 +379,7 @@ export function serializeSimState(
     unlimitedFps: boolean;
     gensPerFrame: number;
     unlimitedGens: boolean;
+    indicatorChartOverrides?: Record<string, import('./types').IndicatorChartSettings>;
   },
   include: { grid?: boolean; controls?: boolean } = { grid: true, controls: true },
   modelStructure?: { boundaryTreatment?: import('./types').BoundaryTreatment },
@@ -421,6 +422,9 @@ export function serializeSimState(
     serialized.unlimitedFps = uiSettings.unlimitedFps;
     serialized.gensPerFrame = uiSettings.gensPerFrame;
     serialized.unlimitedGens = uiSettings.unlimitedGens;
+    if (uiSettings.indicatorChartOverrides && Object.keys(uiSettings.indicatorChartOverrides).length > 0) {
+      serialized.indicatorChartOverrides = uiSettings.indicatorChartOverrides;
+    }
   }
   return serialized;
 }

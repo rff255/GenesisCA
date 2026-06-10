@@ -1,10 +1,17 @@
 import { useRef, useEffect, useLayoutEffect, useState } from 'react';
 import { useThemeTokens } from '../styles/useThemeTokens';
+import type { IndicatorChartSettings } from '../model/types';
+import {
+  SCALAR_SERIES_KEY, applyAxisOverrides, hasFixedAxis, tickCount,
+  chartSettingsKey, drawIntermediateYTicks, withSettingsAlpha,
+} from './indicatorChartSettings';
 
 interface SparklineProps {
   data: number[];
   generation: number;
   height: number;
+  /** Effective chart settings (model defaults merged with sim overrides). */
+  settings?: IndicatorChartSettings;
 }
 
 const TOKEN_NAMES = ['--color-accent', '--color-accent-soft', '--chart-axis', '--chart-label'] as const;
@@ -22,11 +29,15 @@ function formatAxisValue(v: number): string {
   return v.toFixed(1);
 }
 
-export function IndicatorSparkline({ data, generation, height }: SparklineProps) {
+export function IndicatorSparkline({ data, generation, height, settings }: SparklineProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
-  const [LINE_COLOR = '#4cc9f0', FILL_COLOR = 'rgba(76,201,240,0.12)', AXIS_COLOR = '#506070', LABEL_COLOR = '#8090a0'] = useThemeTokens(TOKEN_NAMES);
+  const [THEME_LINE = '#4cc9f0', THEME_FILL = 'rgba(76,201,240,0.12)', AXIS_COLOR = '#506070', LABEL_COLOR = '#8090a0'] = useThemeTokens(TOKEN_NAMES);
+  // Series-color override (key "value") replaces both line + derived fill.
+  const lineOverride = settings?.seriesColors?.[SCALAR_SERIES_KEY];
+  const LINE_COLOR = lineOverride ?? THEME_LINE;
+  const FILL_COLOR = lineOverride ? withSettingsAlpha(lineOverride, 0.12) : THEME_FILL;
 
   // Measure container width. ResizeObserver keeps `width` in sync as the
   // element resizes AND when it transitions from display:none (0x0 content
@@ -85,6 +96,8 @@ export function IndicatorSparkline({ data, generation, height }: SparklineProps)
     const yPad = (yMax - yMin) * 0.06;
     yMin -= yPad;
     yMax += yPad;
+    // Fixed-axis overrides (each bound independent; absent = dynamic).
+    [yMin, yMax] = applyAxisOverrides(yMin, yMax, settings);
     const yRange = yMax - yMin;
 
     const n = data.length;
@@ -118,6 +131,23 @@ export function IndicatorSparkline({ data, generation, height }: SparklineProps)
     ctx.lineTo(plotRight, plotBottom);
     ctx.stroke();
 
+    // Intermediate tick gridlines + labels (yTicks > 2)
+    drawIntermediateYTicks(ctx, {
+      ticks: tickCount(settings), yMin, yMax,
+      plotLeft, plotRight, plotTop, plotBottom,
+      axisColor: AXIS_COLOR, labelColor: LABEL_COLOR,
+      font: LABEL_FONT, format: formatAxisValue,
+    });
+
+    // With a fixed axis, data can fall outside the window — clip to the plot.
+    const clipped = hasFixedAxis(settings);
+    if (clipped) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(plotLeft, plotTop, plotW, plotH);
+      ctx.clip();
+    }
+
     // Fill
     ctx.beginPath();
     ctx.moveTo(toX(0), toY(data[0]!));
@@ -135,8 +165,10 @@ export function IndicatorSparkline({ data, generation, height }: SparklineProps)
     ctx.strokeStyle = LINE_COLOR;
     ctx.lineWidth = 1.2;
     ctx.stroke();
+
+    if (clipped) ctx.restore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, data.length, data[data.length - 1], generation, width, height, LINE_COLOR, FILL_COLOR, AXIS_COLOR, LABEL_COLOR]);
+  }, [data, data.length, data[data.length - 1], generation, width, height, LINE_COLOR, FILL_COLOR, AXIS_COLOR, LABEL_COLOR, chartSettingsKey(settings)]);
 
   // Always mount the wrapper div so the ResizeObserver (set up in an empty-deps
   // effect above) sees a real DOM node on first mount and can measure width.

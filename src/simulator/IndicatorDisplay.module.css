@@ -12,6 +12,122 @@
   border: 1px solid var(--color-widget-border);
   border-radius: var(--radius-md);
   padding: var(--space-3) var(--space-4);
+  /* Anchor for the chart-settings gear popover */
+  position: relative;
+}
+
+/* --- Chart settings popover (gear) --- */
+
+.settingsPop {
+  position: absolute;
+  top: 22px;
+  right: 4px;
+  z-index: 30;
+  width: 188px;
+  background: var(--color-bg-panel, #141b26);
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settingsTitleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+
+.settingsTitle {
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.settingsClose {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.settingsClose:hover {
+  color: var(--color-text-primary);
+}
+
+.settingsRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settingsLabel {
+  flex: 0 0 52px;
+  font-size: 0.6rem;
+  color: var(--color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settingsInput {
+  flex: 1;
+  min-width: 0;
+  background: var(--color-bg-canvas);
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  font-size: 0.62rem;
+  font-family: inherit;
+  padding: 2px 4px;
+}
+
+.settingsInput:focus {
+  border-color: var(--color-accent);
+  outline: none;
+}
+
+.settingsColor {
+  flex: 0 0 32px;
+  width: 32px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-sm);
+  background: none;
+  cursor: pointer;
+}
+
+.settingsSection {
+  margin-top: 4px;
+  font-size: 0.58rem;
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.settingsReset {
+  margin-top: 6px;
+  background: var(--color-bg-canvas);
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+  font-size: 0.6rem;
+  font-family: inherit;
+  padding: 3px 6px;
+  cursor: pointer;
+}
+
+.settingsReset:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-border-muted);
 }
 
 .header {
