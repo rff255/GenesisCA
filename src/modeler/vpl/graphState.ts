@@ -44,8 +44,66 @@ export function setIsConnecting(val: boolean) {
   isConnectingGlobal = val;
 }
 
+// ---------------------------------------------------------------------------
+// Canvas view settings (port labels / grid / snap) — persisted.
+// GraphEditor unmounts on every Modeler → Simulator tab switch, so its local
+// useState seeds from these module globals; the globals themselves write
+// through to localStorage so the choices also survive page reloads.
+// ---------------------------------------------------------------------------
+
+const VIEW_SETTINGS_KEY = 'genesisca_graph_view_settings';
+
+type GraphViewSettings = {
+  showPortLabels?: boolean;
+  showGrid?: boolean;
+  snapEnabled?: boolean;
+};
+
+function loadViewSettings(): GraphViewSettings {
+  try {
+    const raw = localStorage.getItem(VIEW_SETTINGS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as GraphViewSettings;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+const savedViewSettings = loadViewSettings();
+
+function persistViewSettings(): void {
+  try {
+    localStorage.setItem(VIEW_SETTINGS_KEY, JSON.stringify({
+      showPortLabels: showPortLabelsGlobal,
+      showGrid: showGridGlobal,
+      snapEnabled: snapEnabledGlobal,
+    }));
+  } catch {
+    // localStorage unavailable (private mode / quota) — settings just won't persist
+  }
+}
+
+/** Whether the background grid is visible (toggled from canvas controls) */
+export let showGridGlobal = savedViewSettings.showGrid ?? true;
+
+export function setShowGrid(val: boolean): void {
+  if (showGridGlobal === val) return;
+  showGridGlobal = val;
+  persistViewSettings();
+}
+
+/** Whether snap-to-grid is enabled (toggled from canvas controls) */
+export let snapEnabledGlobal = savedViewSettings.snapEnabled ?? true;
+
+export function setSnapEnabled(val: boolean): void {
+  if (snapEnabledGlobal === val) return;
+  snapEnabledGlobal = val;
+  persistViewSettings();
+}
+
 /** Whether port labels are visible (toggled from canvas controls) */
-export let showPortLabelsGlobal = true;
+export let showPortLabelsGlobal = savedViewSettings.showPortLabels ?? true;
 
 /** Subscribers that want to re-render when showPortLabelsGlobal changes */
 const labelListeners = new Set<() => void>();
@@ -60,6 +118,7 @@ export function subscribeShowPortLabels(fn: () => void): () => void {
 export function setShowPortLabels(val: boolean) {
   if (showPortLabelsGlobal === val) return;
   showPortLabelsGlobal = val;
+  persistViewSettings();
   labelListeners.forEach(fn => fn());
 }
 

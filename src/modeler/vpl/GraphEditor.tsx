@@ -43,7 +43,7 @@ const nodeTypes: NodeTypes = {
 
 let clipboard: { nodes: GraphNode[]; edges: GraphEdge[] } | null = null;
 
-import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag } from './graphState';
+import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag } from './graphState';
 import { detectEdgeHazard, isNodeAvailable } from './nodes/nodeValidation';
 import { pushSnapshot, undo, redo, pushToRedo, pushToUndo, clearHistory } from './graphHistory';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
@@ -488,9 +488,10 @@ export function GraphEditorInner() {
   // round-trip leaves the user inside the macro they were editing (instead of
   // resetting back to root). Defaults to ['root'] on first-ever mount.
   const [currentScope, setCurrentScope] = useState<string[]>(() => savedCurrentScope.slice());
-  const [showGrid, setShowGrid] = useState(true);
-  const [snapEnabled, setSnapEnabled] = useState(true);
-  // Seed from the module global so the toggle's visual state survives modeler remounts (tab switches)
+  // Seed from the persisted module globals so the toggles survive modeler
+  // remounts (tab switches) AND page reloads (graphState write-through).
+  const [showGrid, setShowGrid] = useState(showGridGlobal);
+  const [snapEnabled, setSnapEnabled] = useState(snapEnabledGlobal);
   const [portLabelsVisible, setPortLabelsVisible] = useState(showPortLabelsGlobal);
   const rfInstance = useRef<ReactFlowInstance | null>(null);
   // Wrapper around <ReactFlow/> — used by the RMB-pass-through-edges effect
@@ -3288,14 +3289,14 @@ export function GraphEditorInner() {
           </button>
           <button
             className={`${styles.toggleButton} ${showGrid ? styles.toggleActive : ''}`}
-            onClick={() => setShowGrid(v => !v)}
+            onClick={() => { setShowGrid(v => !v); setShowGridGlobal(!showGrid); }}
             title="Toggle grid"
           >
             #
           </button>
           <button
             className={`${styles.toggleButton} ${snapEnabled ? styles.toggleActive : ''}`}
-            onClick={() => setSnapEnabled(v => !v)}
+            onClick={() => { setSnapEnabled(v => !v); setSnapEnabledGlobal(!snapEnabled); }}
             title="Toggle snap to grid"
           >
             &loz;
