@@ -193,24 +193,40 @@ export function HelpView() {
           </p>
           <p className={styles.p}>
             <strong>Drawing tools</strong> &mdash; the row of buttons above the grid speeds up
-            big neighborhoods (MNCA-style radii and rings). Every tool <em>toggles</em> the
-            cells it covers, so drawing over active cells clears them &mdash; e.g. punch a hole
-            in a disc by drawing a smaller circle inside it:
+            big neighborhoods (MNCA-style radii and rings):
           </p>
           <ul className={styles.ul}>
-            <li><strong>Point</strong> &mdash; the classic one-click-per-cell toggle.</li>
+            <li><strong>Point</strong> &mdash; the classic one-click-per-cell edit.</li>
             <li><strong>Circle</strong> &mdash; click the center cell, then a cell at the
-              circle&apos;s edge: every cell within that distance (a filled disc) toggles.</li>
+              circle&apos;s edge: every cell within that distance (a filled disc) is edited.</li>
             <li><strong>Ring</strong> &mdash; click the center, then a cell at the inner
-              radius, then one at the outer radius: cells between the two distances toggle.</li>
+              radius, then one at the outer radius: cells between the two distances are edited.</li>
             <li><strong>Line</strong> &mdash; click two endpoints: every cell along the
-              straight path between them toggles.</li>
+              straight path between them is edited.</li>
           </ul>
           <p className={styles.p}>
-            While a shape is in progress its anchor cells show a dashed outline and the cells
-            it would affect preview live under the cursor; <strong>right-click cancels</strong> the
-            in-progress shape. A shape that covers the centre cell flips the
-            include-central-cell flag like a normal centre click.
+            The second row fine-tunes what an edit does and how it repeats:
+          </p>
+          <ul className={styles.ul}>
+            <li><strong>Mark / Unmark / Toggle</strong> &mdash; covered cells become active /
+              become inactive / flip. Toggle is the classic behaviour (e.g. punch a hole in a
+              disc by drawing a smaller circle inside it); Mark and Unmark are safe for
+              repeated passes over mixed areas.</li>
+            <li><strong>Symmetry (&harr;&nbsp;H / &varr;&nbsp;V / &#x2922;&nbsp;D)</strong> &mdash;
+              independent mirror toggles: every edit (any tool, including Point) also applies
+              to its left&harr;right, top&harr;bottom, and main-diagonal mirror images. Combine
+              them freely &mdash; all three together give the full 8-fold symmetry typical of
+              MNCA neighborhoods, so you only ever draw one octant.</li>
+          </ul>
+          <p className={styles.p}>
+            The cells an edit would touch preview live under the cursor, color-coded by
+            outcome: cells that would <em>activate</em> show an accent tint, cells that
+            would <em>deactivate</em> dim with a warm outline, and covered-but-unchanged
+            cells show a faint outline &mdash; readable over both filled and empty cells.
+            Shape anchor cells show a dashed outline; <strong>right-click cancels</strong> an
+            in-progress shape. The centre cell is permanently ringed in the centre colour but
+            otherwise fills like any other cell &mdash; covering it drives the
+            include-central-cell flag according to the current mode.
           </p>
 
           <h3 className={styles.h3}>Mappings Panel (M)</h3>
