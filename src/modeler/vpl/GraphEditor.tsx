@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -151,6 +151,11 @@ function portsCompatible(
  *  snap target so auto-connect can succeed. Shared between the drop handler
  *  (which auto-creates when the list collapses to one entry) and the menu
  *  render (which categorises and shows the list to the user). */
+/** One selectable row in the connection-drop menu's searchable list. */
+type DropMenuItem =
+  | { key: string; label: string; kind: 'reroute' }
+  | { key: string; label: string; kind: 'node'; def: NodeTypeDef };
+
 interface ResolvedDropCandidate {
   entry: typeof RELATED_NODES[ModelElementDragPayload['kind']][number];
   def: NodeTypeDef;
@@ -2899,6 +2904,125 @@ export function GraphEditorInner() {
   // editor's outer `onClick={() => setContextMenu(null)}` (which fires on the
   // same LMB-up via the synthesized click event) doesn't immediately close it.
   const suppressNextEditorClickRef = useRef(false);
+
+  // --- Connection-drop menu search (quick-add style): drag a wire onto empty
+  // canvas → the compatible-nodes menu opens with a focused search box; type
+  // to filter, ↑/↓ to move the always-present selection, Enter adds + wires.
+  const [dropMenuSearch, setDropMenuSearch] = useState('');
+  const [dropMenuSelIdx, setDropMenuSelIdx] = useState(0);
+  const dropSearchRef = useRef<HTMLInputElement>(null);
+
+  const dropMenuItems = useMemo<DropMenuItem[]>(() => {
+    if (contextMenu?.target.type !== 'connection-drop') return [];
+    const origin = contextMenu.target.origin;
+    const q = dropMenuSearch.trim().toLowerCase();
+    const textMatch = (label: string, desc?: string): boolean =>
+      !q || label.toLowerCase().includes(q) || (desc ?? '').toLowerCase().includes(q);
+    const items: DropMenuItem[] = [];
+    if (origin.kind === 'output' && textMatch('Reroute', 'relay')) {
+      items.push({ key: '__reroute', label: 'Reroute', kind: 'reroute' });
+    }
+    // Same compatibility filter the menu always used — plus the text filter.
+    const hasStep = nodesRef.current.some(n => (n.data as Record<string, unknown>)?.nodeType === 'step');
+    const hasInit = nodesRef.current.some(n => (n.data as Record<string, unknown>)?.nodeType === 'initEvent');
+    const matches = getAllNodeDefs().filter(d => {
+      if (HIDDEN_FROM_DROP_MENU.has(d.type)) return false;
+      if (d.type === 'step' && hasStep) return false;
+      if (d.type === 'initEvent' && hasInit) return false;
+      if (!isNodeAvailable(d, model)) return false;
+      if (!nodeHasCompatiblePort(d, origin)) return false;
+      return textMatch(d.label, d.description);
+    });
+    // Preserve the menu's visual order: registry order, grouped by category.
+    const grouped = new Map<string, NodeTypeDef[]>();
+    for (const d of matches) {
+      const list = grouped.get(d.category) ?? [];
+      list.push(d);
+      grouped.set(d.category, list);
+    }
+    for (const [, defs] of grouped) {
+      for (const d of defs) items.push({ key: d.type, label: d.label, kind: 'node', def: d });
+    }
+    return items;
+  }, [contextMenu, model, dropMenuSearch]);
+
+  const dropItemsRef = useRef(dropMenuItems);
+  dropItemsRef.current = dropMenuItems;
+
+  // Reset + focus when the menu (re)opens. The 50ms delay matters: the menu's
+  // first frame renders visibility:hidden for viewport clamping, and focusing
+  // a hidden element silently no-ops (same gotcha as NameInputDialog).
+  useEffect(() => {
+    setDropMenuSearch('');
+    setDropMenuSelIdx(0);
+    if (contextMenu?.target.type === 'connection-drop') {
+      const t = setTimeout(() => dropSearchRef.current?.focus(), 50);
+      return () => clearTimeout(t);
+    }
+    return undefined;
+  }, [contextMenu]);
+
+  // On every filter change, re-anchor the selection to the best LABEL match —
+  // first label-prefix, else first label-substring, else item 0. Mirrors the
+  // Palette quick-add (description matches would otherwise win by list order).
+  useEffect(() => {
+    const q = dropMenuSearch.trim().toLowerCase();
+    const items = dropItemsRef.current;
+    let idx = 0;
+    if (q) {
+      let substr = -1;
+      let prefix = -1;
+      for (let i = 0; i < items.length; i++) {
+        const label = items[i]!.label.toLowerCase();
+        if (label.startsWith(q)) { prefix = i; break; }
+        if (substr < 0 && label.includes(q)) substr = i;
+      }
+      idx = prefix >= 0 ? prefix : substr >= 0 ? substr : 0;
+    }
+    setDropMenuSelIdx(idx);
+  }, [dropMenuSearch]);
+
+  // Keep the keyboard selection visible while arrowing through a long menu.
+  useEffect(() => {
+    if (contextMenu?.target.type !== 'connection-drop') return;
+    const key = dropItemsRef.current[dropMenuSelIdx]?.key;
+    if (!key) return;
+    contextMenuRef.current?.querySelector(`[data-drop-key="${CSS.escape(key)}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [dropMenuSelIdx, contextMenu]);
+
+  const commitDropMenuItem = useCallback((item: DropMenuItem) => {
+    if (!contextMenu || contextMenu.target.type !== 'connection-drop') return;
+    const origin = contextMenu.target.origin;
+    if (item.kind === 'reroute') {
+      addRerouteAndConnect(origin, { x: contextMenu.flowX, y: contextMenu.flowY });
+    } else {
+      addNodeAndConnect(item.def.type, { x: contextMenu.flowX, y: contextMenu.flowY }, origin);
+    }
+    setContextMenu(null);
+  }, [contextMenu, addRerouteAndConnect, addNodeAndConnect]);
+
+  // DEV-only test hook: React Flow's connection drag ignores synthetic pointer
+  // events (same limitation as box-select / ctrl-click — see CLAUDE.md), so
+  // browser-eval tests open the connection-drop menu through this instead.
+  // Same precedent as SimulatorView's window.__simWorker.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return undefined;
+    (window as unknown as Record<string, unknown>).__openConnectionDropMenu =
+      (origin: ConnectionOrigin, x: number, y: number) => {
+        const rf = rfInstance.current;
+        const flowPos = rf ? rf.screenToFlowPosition({ x, y }) : { x: 0, y: 0 };
+        const bounds = editorWrapperRef.current?.getBoundingClientRect();
+        setContextMenu({
+          x: x - (bounds?.left ?? 0),
+          y: y - (bounds?.top ?? 0),
+          flowX: flowPos.x,
+          flowY: flowPos.y,
+          target: { type: 'connection-drop', origin },
+        });
+      };
+    return () => { delete (window as unknown as Record<string, unknown>).__openConnectionDropMenu; };
+  }, []);
+
   const onConnectStart: OnConnectStart = useCallback((_event, params) => {
     isConnecting.current = true;
     setIsConnecting(true);
@@ -3355,68 +3479,76 @@ export function GraphEditorInner() {
           {/* CONNECTION-DROP context menu (drag link to empty canvas → compatible nodes) */}
           {contextMenu.target.type === 'connection-drop' && (() => {
             const origin = contextMenu.target.origin;
-            const allDefs = getAllNodeDefs();
-            // Step is allowed as a target only if no Step exists yet.
-            const hasStep = nodesRef.current.some(n => (n.data as Record<string, unknown>)?.nodeType === 'step');
-            const hasInit = nodesRef.current.some(n => (n.data as Record<string, unknown>)?.nodeType === 'initEvent');
-            const matches = allDefs.filter(d => {
-              if (HIDDEN_FROM_DROP_MENU.has(d.type)) return false;
-              if (d.type === 'step' && hasStep) return false;
-              if (d.type === 'initEvent' && hasInit) return false;
-              if (!isNodeAvailable(d, model)) return false;
-              return nodeHasCompatiblePort(d, origin);
-            });
-            const grouped = new Map<string, NodeTypeDef[]>();
-            for (const d of matches) {
-              const list = grouped.get(d.category) ?? [];
-              list.push(d);
-              grouped.set(d.category, list);
-            }
             const titleText = origin.category === 'flow'
               ? `Flow ${origin.kind === 'output' ? 'output' : 'input'} → compatible node`
               : `${origin.dataType ?? 'value'} ${origin.kind === 'output' ? 'output' : 'input'} → compatible node`;
+            const effIdx = dropMenuItems.length > 0 ? Math.min(dropMenuSelIdx, dropMenuItems.length - 1) : -1;
+            // Flat keyboard-selectable rows with category headers interleaved
+            // (same visual grouping as before — the flat index drives ↑/↓).
+            const rows: React.ReactNode[] = [];
+            let lastCat: string | null = null;
+            dropMenuItems.forEach((item, i) => {
+              if (item.kind === 'node' && item.def.category !== lastCat) {
+                lastCat = item.def.category;
+                rows.push(<div key={`cat-${lastCat}`} className={styles.contextCategory}>{lastCat}</div>);
+              }
+              rows.push(
+                <button
+                  key={item.key}
+                  data-drop-key={item.key}
+                  className={`${styles.contextItem} ${i === effIdx ? styles.contextItemSelected : ''}`}
+                  title={item.kind === 'node'
+                    ? item.def.description
+                    : 'Insert a reroute relay that carries this output to a new spot (drag from it to fan out)'}
+                  onMouseMove={() => { if (i !== effIdx) setDropMenuSelIdx(i); }}
+                  onClick={e => {
+                    e.stopPropagation();
+                    commitDropMenuItem(item);
+                  }}
+                >
+                  <span
+                    className={styles.contextDot}
+                    style={{ background: item.kind === 'node' ? item.def.color : (origin.category === 'flow' ? '#4caf50' : '#4cc9f0') }}
+                  />
+                  {item.label}
+                </button>,
+              );
+            });
             return (
               <>
                 <div className={styles.contextTitle}>{titleText}</div>
-                {origin.kind === 'output' && (
-                  <button
-                    className={styles.contextItem}
-                    title="Insert a reroute relay that carries this output to a new spot (drag from it to fan out)"
-                    onClick={e => {
+                <input
+                  ref={dropSearchRef}
+                  className={styles.contextSearch}
+                  type="text"
+                  placeholder="Search… (Enter adds + wires)"
+                  value={dropMenuSearch}
+                  onChange={e => setDropMenuSearch(e.target.value)}
+                  onClick={e => e.stopPropagation()}
+                  onKeyDown={e => {
+                    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      const len = dropMenuItems.length;
+                      if (len === 0) return;
+                      const cur = Math.min(dropMenuSelIdx, len - 1);
+                      setDropMenuSelIdx(e.key === 'ArrowDown' ? (cur + 1) % len : (cur - 1 + len) % len);
+                    } else if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const item = effIdx >= 0 ? dropMenuItems[effIdx] : undefined;
+                      if (item) commitDropMenuItem(item);
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
                       e.stopPropagation();
-                      addRerouteAndConnect(origin, { x: contextMenu.flowX, y: contextMenu.flowY });
                       setContextMenu(null);
-                    }}
-                  >
-                    <span className={styles.contextDot} style={{ background: origin.category === 'flow' ? '#4caf50' : '#4cc9f0' }} />
-                    Reroute
-                  </button>
-                )}
-                {matches.length === 0 && (
+                    }
+                  }}
+                />
+                {dropMenuItems.length === 0 && (
                   <div style={{ padding: '6px 10px', fontSize: '0.7rem', color: '#8090a0', fontStyle: 'italic' }}>
-                    No compatible nodes
+                    No compatible nodes{dropMenuSearch ? ' match' : ''}
                   </div>
                 )}
-                {Array.from(grouped.entries()).map(([cat, defs]) => (
-                  <div key={cat}>
-                    <div className={styles.contextCategory}>{cat}</div>
-                    {defs.map(def => (
-                      <button
-                        key={def.type}
-                        className={styles.contextItem}
-                        title={def.description}
-                        onClick={e => {
-                          e.stopPropagation();
-                          addNodeAndConnect(def.type, { x: contextMenu.flowX, y: contextMenu.flowY }, origin);
-                          setContextMenu(null);
-                        }}
-                      >
-                        <span className={styles.contextDot} style={{ background: def.color }} />
-                        {def.label}
-                      </button>
-                    ))}
-                  </div>
-                ))}
+                {rows}
               </>
             );
           })()}
