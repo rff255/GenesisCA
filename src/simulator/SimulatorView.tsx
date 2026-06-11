@@ -2961,7 +2961,20 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   };
 
   const handleLoadPreset = (p: Preset) => {
-    if (playing) setPlaying(false);
+    // Only pause if the preset forces a structural worker reinit (grid
+    // dimensions or boundary treatment change) — that genuinely restarts the
+    // engine. Parameter-only / matching-dims presets apply live, so loading
+    // them while playing must NOT interrupt the running simulation. Predicate
+    // mirrors applySimulationState's boundaryChanged/dimsChanged check.
+    const s = p.state;
+    const hasGrid = s.width != null && s.height != null && s.attributes != null && s.colors != null;
+    const boundaryChanged = !!s.boundaryTreatment && s.boundaryTreatment !== model.properties.boundaryTreatment;
+    const dimsFromState = s.gridWidth != null && s.gridHeight != null
+      ? { w: s.gridWidth, h: s.gridHeight }
+      : hasGrid ? { w: s.width!, h: s.height! } : null;
+    const dimsChanged = dimsFromState != null
+      && (dimsFromState.w !== gridWidth.current || dimsFromState.h !== gridHeight.current);
+    if ((boundaryChanged || dimsChanged) && playing) setPlaying(false);
     applySimulationState(p.state);
   };
 

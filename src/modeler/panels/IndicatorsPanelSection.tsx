@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useModel } from '../../model/ModelContext';
+import type { PanelMode } from '../ModelerDetailContext';
 import type { AttributeType, Indicator, IndicatorChartSettings, LinkedAggregation, IndicatorXAxis, SpatialBinMode, CAModel } from '../../model/types';
 import { useListReorder } from './useListReorder';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
@@ -22,10 +23,13 @@ function handleIndicatorDragEnd() {
   setCurrentModelElementDrag(null);
 }
 
-export function IndicatorsPanelSection() {
+export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect }: {
+  mode?: PanelMode;
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+}) {
   const { model, addIndicator, removeIndicator, updateIndicator, reorderIndicators } = useModel();
   const indicators = model.indicators || [];
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const reorder = useListReorder(indicators, reorderIndicators);
 
   // Auto-select & scroll to newly added indicators
@@ -34,7 +38,7 @@ export function IndicatorsPanelSection() {
     if (indicators.length > prevCount.current) {
       const newItem = indicators[indicators.length - 1];
       if (newItem) {
-        setSelectedId(newItem.id);
+        onSelect(newItem.id);
         setTimeout(() => {
           document.getElementById(`ind-${newItem.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }, 50);
@@ -65,6 +69,8 @@ export function IndicatorsPanelSection() {
     : undefined;
 
   return (
+    <>
+    {mode !== 'detail' && (
     <div className={styles.section}>
       <div className={styles.sectionTitle}>Indicators</div>
 
@@ -80,7 +86,7 @@ export function IndicatorsPanelSection() {
               id={`ind-${ind.id}`}
               data-reorder-row
               className={`${styles.listItem} ${ind.id === selectedId ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
-              onClick={() => setSelectedId(ind.id === selectedId ? null : ind.id)}
+              onClick={() => onSelect(ind.id === selectedId ? null : ind.id)}
               draggable
               onDragStart={handleIndicatorDragStart(ind.id)}
               onDragEnd={handleIndicatorDragEnd}
@@ -100,8 +106,10 @@ export function IndicatorsPanelSection() {
         <button className={styles.addButton} onClick={() => addIndicator('standalone')}>+ Standalone</button>
         <button className={styles.addButton} onClick={() => addIndicator('linked')}>+ Linked</button>
       </div>
+    </div>
+    )}
 
-      {selected && (
+    {mode === 'detail' && selected && (
         <div className={styles.detailEditor}>
           <div className={styles.fieldGroup}>
             <div className={styles.field}>
@@ -340,14 +348,14 @@ export function IndicatorsPanelSection() {
 
             <button
               className={styles.deleteButton}
-              onClick={() => { removeIndicator(selected.id); setSelectedId(null); }}
+              onClick={() => { removeIndicator(selected.id); onSelect(null); }}
             >
               Delete Indicator
             </button>
           </div>
         </div>
-      )}
-    </div>
+    )}
+    </>
   );
 }
 

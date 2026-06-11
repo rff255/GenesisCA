@@ -6,6 +6,7 @@ import { ActivityBar, type PanelId } from './ActivityBar';
 import { ModelerDetailContext, type ModelerDetailValue, type PanelContentProps } from './ModelerDetailContext';
 import { RightActivityBar, type RightPanelId } from './RightActivityBar';
 import { PanelShell } from './PanelShell';
+import { InfoPanelContent } from './panels/InfoPanelContent';
 import { PropertiesPanelContent } from './panels/PropertiesPanelContent';
 import { AttributesPanelContent } from './panels/AttributesPanelContent';
 import { NeighborhoodsPanelContent } from './panels/NeighborhoodsPanelContent';
@@ -18,9 +19,11 @@ import { NodeExplorer } from './vpl/NodeExplorer';
 import type { NodeExplorerHandle } from './vpl/NodeExplorer';
 import { quickAddApi } from './vpl/graphState';
 import type { QuickAddPayload } from './vpl/graphState';
+import { modelerUiState } from './modelerUiState';
 import styles from './ModelerView.module.css';
 
 const panelTitles: Record<PanelId, string> = {
+  info: 'Info',
   properties: 'Properties',
   attributes: 'Attributes',
   neighborhoods: 'Neighborhoods',
@@ -29,6 +32,7 @@ const panelTitles: Record<PanelId, string> = {
 };
 
 const panelComponents: Record<PanelId, React.ComponentType<PanelContentProps>> = {
+  info: InfoPanelContent,
   properties: PropertiesPanelContent,
   attributes: AttributesPanelContent,
   neighborhoods: NeighborhoodsPanelContent,
@@ -39,13 +43,19 @@ const panelComponents: Record<PanelId, React.ComponentType<PanelContentProps>> =
 // Panels with a list + per-item editor. Their editor renders in a second left
 // panel (the "detail" panel) so the user never scrolls past the list to reach it.
 // (The Attributes panel also hosts Local Variables; its selection is a
-// discriminated `attr:`/`var:` string handled by selectedItemName below.)
-const MASTER_DETAIL_PANELS = new Set<PanelId>(['attributes', 'neighborhoods', 'mappings']);
+// discriminated `attr:`/`var:` string handled by selectedItemName below. The
+// Properties panel hosts Indicators the same way via an `indicator:` slot.)
+const MASTER_DETAIL_PANELS = new Set<PanelId>(['properties', 'attributes', 'neighborhoods', 'mappings']);
 
 /** Display name of the active panel's selected item, or null if nothing is
  *  selected / the id no longer resolves (so the detail panel hides on delete). */
 function selectedItemName(model: CAModel, panel: PanelId, id: string | null): string | null {
   if (!id) return null;
+  if (panel === 'properties') {
+    // Indicators are the only master-detail sub-section in Properties.
+    const indId = id.startsWith('indicator:') ? id.slice(10) : id;
+    return (model.indicators ?? []).find(i => i.id === indId)?.name ?? null;
+  }
   if (panel === 'attributes') {
     // Discriminated `attr:<id>` / `var:<id>` — Local Variables share this panel.
     if (id.startsWith('var:')) return (model.variables ?? []).find(v => v.id === id.slice(4))?.name ?? null;
@@ -65,7 +75,9 @@ const rightPanelTitles: Record<RightPanelId, string> = {
 export function ModelerView() {
   const { model } = useModel();
   const variegatedEnabled = !!model.variegatedCells?.enabled;
-  const [activePanel, setActivePanel] = useState<PanelId | null>('properties');
+  // Seed from the module-level snapshot so the modeler layout survives the
+  // unmount that happens when switching to the Simulator / another top-level tab.
+  const [activePanel, setActivePanel] = useState<PanelId | null>(modelerUiState.activePanel);
   // When the user disables Variegated Cells while its panel is open, switch
   // the left panel to Properties (where the toggle lives). The ActivityBar
   // hides the V tab in this case so there'd be no way to dismiss the panel
@@ -73,11 +85,11 @@ export function ModelerView() {
   useEffect(() => {
     if (!variegatedEnabled && activePanel === 'variegated') setActivePanel('properties');
   }, [variegatedEnabled, activePanel]);
-  const [activeRightPanel, setActiveRightPanel] = useState<RightPanelId | null>(null);
+  const [activeRightPanel, setActiveRightPanel] = useState<RightPanelId | null>(modelerUiState.activeRightPanel);
   // Remembered last-opened panels — used by the floating graph-area expand-ears
   // to reopen whatever the user had open before closing it.
-  const [lastLeftPanel, setLastLeftPanel] = useState<PanelId>('properties');
-  const [lastRightPanel, setLastRightPanel] = useState<RightPanelId>('palette');
+  const [lastLeftPanel, setLastLeftPanel] = useState<PanelId>(modelerUiState.lastLeftPanel);
+  const [lastRightPanel, setLastRightPanel] = useState<RightPanelId>(modelerUiState.lastRightPanel);
   // Snapshot of panel state when entering F-fullscreen so the toggle restores
   // exactly what was open before (null entries are preserved as null).
   const prePanelStateRef = useRef<{ left: PanelId | null; right: RightPanelId | null } | null>(null);
@@ -98,10 +110,20 @@ export function ModelerView() {
   }, []);
 
   // Per-panel detail selection, shared with the master-detail panels via context.
-  const [selectedByPanel, setSelectedByPanel] = useState<Partial<Record<PanelId, string | null>>>({});
+  const [selectedByPanel, setSelectedByPanel] = useState<Partial<Record<PanelId, string | null>>>(modelerUiState.selectedByPanel);
   const setSelected = useCallback((panel: PanelId, id: string | null) => {
     setSelectedByPanel(prev => ({ ...prev, [panel]: id }));
   }, []);
+
+  // Write the layout state through to the module-level snapshot on every change
+  // so the next ModelerView mount (after a tab round-trip) restores it.
+  useEffect(() => {
+    modelerUiState.activePanel = activePanel;
+    modelerUiState.activeRightPanel = activeRightPanel;
+    modelerUiState.lastLeftPanel = lastLeftPanel;
+    modelerUiState.lastRightPanel = lastRightPanel;
+    modelerUiState.selectedByPanel = selectedByPanel;
+  }, [activePanel, activeRightPanel, lastLeftPanel, lastRightPanel, selectedByPanel]);
   const detailContextValue = useMemo<ModelerDetailValue>(
     () => ({ selectedByPanel, setSelected }),
     [selectedByPanel, setSelected],

@@ -114,17 +114,26 @@ export function HelpView() {
             area for the Visual Programming graph editor.
           </p>
 
-          <h3 className={styles.h3}>Properties Panel (P)</h3>
+          <h3 className={styles.h3}>Info Panel (I)</h3>
           <p className={styles.p}>
-            Configure the model&apos;s presentation (name, <strong>Rule Author</strong>,
-            <strong>GenesisCA Project Author</strong>, description), structure (grid
-            width/height, boundary treatment: torus or constant), execution mode, and
-            optional <strong>End Conditions</strong> for the simulator.
+            The model&apos;s presentation metadata, kept in its own tab separate from the
+            model&apos;s behavior: <strong>Name</strong>, <strong>Rule Author</strong>,{' '}
+            <strong>GenesisCA Project Author</strong>, <strong>Description</strong>, tags,
+            and an optional <strong>Thumbnail</strong>.
           </p>
           <ul className={styles.list}>
             <li><strong>Rule Author</strong> &mdash; originator of the CA rule (domain expert/researcher).</li>
             <li><strong>GenesisCA Project Author</strong> &mdash; who built this particular GenesisCA project file.</li>
             <li><strong>Thumbnail</strong> (optional) &mdash; attach a PNG, JPEG, GIF, or WebP image (up to 2&nbsp;MB). It travels inside the <code>.gcaproj</code> file. When the model is shipped as part of the Models Library, hovering its card shows a floating preview; animated GIFs / WebPs play natively.</li>
+          </ul>
+
+          <h3 className={styles.h3}>Properties Panel (P)</h3>
+          <p className={styles.p}>
+            Configure the model&apos;s structure (grid width/height, boundary treatment:
+            torus or constant), execution mode and compile target, optional{' '}
+            <strong>End Conditions</strong> for the simulator, and the Indicators list.
+          </p>
+          <ul className={styles.list}>
             <li><strong>End Conditions</strong> (optional) &mdash; auto-pause the simulator when a max generation count is reached or when any indicator satisfies a configured comparison (==, !=, &gt;, &lt;, &ge;, &le;). Scalar indicators compare against their value directly. For <strong>linked-frequency</strong> indicators (which produce a map of category &rarr; count) pick the specific category to monitor; the comparison then applies to the count of that category (e.g. binary <em>alive</em> &mdash; category <code>true</code>, <code>&ge;</code>, <code>100</code> pauses when at least 100 cells are alive). Decimal-binned frequency indicators can&apos;t be used in end conditions because their bin boundaries depend on runtime data &mdash; switch the aggregation to Total instead. For conditions that need graph-level logic add a <strong>Stop Event</strong> node inside the update graph &mdash; its DO flow input pauses the simulation with a user-defined message.</li>
             <li><strong>Compile Target</strong> &mdash; choose the runtime backend the simulator uses to evolve cells. <strong>WebAssembly</strong> is the default and is recommended for most models &mdash; typically several times faster than JS on dense neighborhoods, full node coverage. <strong>WebGPU</strong> runs WGSL compute shaders on the GPU and is best for very large grids and math-heavy per-cell work; it requires synchronous mode and a browser with WebGPU support (Chrome 127+, Firefox 141+, Safari 17.4+). <strong>Debug / Reference (JS)</strong> compiles the graph to a plain JavaScript function &mdash; slower than WASM, but its source is readable in Show Code and useful for prototyping or verifying parity. Targets are mutually exclusive; switching restarts the simulator (grid state is lost). All three apply <em>value sinking</em>: per-cell value computations that are only consumed inside one switch case or if branch get emitted <em>inside</em> that branch, so cells in different states only pay for the work their branch needs. Sparse type-dispatch models (e.g. Wireworld with mostly Empty cells) get the biggest speedup from this. A side effect: if your model calls <em>Get Random</em> inside a branch, cells that don't enter that branch no longer advance the RNG &mdash; same seed will produce different output than older builds did.</li>
             <li><strong>WebGPU stop-check interval</strong> (advanced, WebGPU only) &mdash; Properties &rarr; Execution exposes an integer spinbox below the compile-target radio. It defaults to <code>1</code> &mdash; check the GPU stop flag after every step, exact stop-event timing. Higher values amortise the per-step <code>mapAsync</code> stall so big batches run faster, but a stop event firing at gen <em>n</em> may surface up to <em>K</em>&minus;1 generations later. The last step of every batch is always checked, so a stopped run never overshoots beyond the current play batch. JS and WASM ignore this setting.</li>
@@ -273,7 +282,9 @@ export function HelpView() {
           <p className={styles.p}>
             Indicators are quantitative variables that monitor CA evolution beyond visual
             feedback. They are defined in the <strong>Properties</strong> panel under the
-            &quot;Indicators&quot; section. Two kinds exist:
+            &quot;Indicators&quot; section &mdash; click an indicator in the list to edit it in a
+            side panel (the same master-detail layout as Attributes, Neighborhoods, and Mappings).
+            Two kinds exist:
           </p>
           <ul className={styles.list}>
             <li><strong>Standalone</strong> &mdash; Typed scalar values (binary, integer, decimal,
