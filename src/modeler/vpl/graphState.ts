@@ -144,6 +144,10 @@ export interface QuickAddApi {
   getCursorFlowPos: () => { x: number; y: number };
   /** Create a node / macro instance from a palette payload at a flow position. */
   addFromPalette: (payload: QuickAddPayload, pos: { x: number; y: number }) => void;
+  /** Open the unified quick-add context menu (options + focused search + node
+   *  list) at the cursor — the Spacebar entry point, same menu as a blank-canvas
+   *  right-click. */
+  openQuickAddMenu: () => void;
 }
 
 export let quickAddApi: QuickAddApi | null = null;

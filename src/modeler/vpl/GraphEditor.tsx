@@ -20,7 +20,7 @@ import { CommentNodeComponent } from './CommentNodeComponent';
 import { GroupNodeComponent } from './GroupNodeComponent';
 import { RerouteNodeComponent } from './RerouteNodeComponent';
 import { useModel } from '../../model/ModelContext';
-import { getNodeDefsByCategory, getNodeDef, getAllNodeDefs } from './nodes/registry';
+import { getNodeDef, getAllNodeDefs } from './nodes/registry';
 import { parseHandleId, handleId } from './types';
 import type { PortDef, NodeTypeDef } from './types';
 import { MODEL_ELEMENT_DRAG_MIME, RELATED_NODES, payloadElementId, relatedEntriesForPayload, computeCompatibleHandlesForDrag, findNearestCompatibleHandle } from './modelElementDrag';
@@ -514,6 +514,9 @@ export function GraphEditorInner() {
   const pasteFlowPos = useRef<{ x: number; y: number } | null>(null);
   // Live cursor in flow coords — populated by mousemove on the pane, used as fallback paste anchor for Ctrl+V
   const lastFlowMousePos = useRef<{ x: number; y: number } | null>(null);
+  // Last cursor SCREEN position over the pane — used to place the Spacebar
+  // quick-add menu at the cursor (flow pos alone can't position the popup).
+  const lastClientMousePos = useRef<{ x: number; y: number } | null>(null);
 
   // Refs for debounced sync
   const nodesRef = useRef(nodes);
@@ -1625,15 +1628,6 @@ export function GraphEditorInner() {
     [setNodes, scheduleSync],
   );
 
-  const addNode = useCallback(
-    (nodeType: string) => {
-      if (!contextMenu) return;
-      addNodeAtPosition(nodeType, { x: contextMenu.flowX, y: contextMenu.flowY });
-      setContextMenu(null);
-    },
-    [contextMenu, addNodeAtPosition],
-  );
-
   /** Create a node / macro instance from a palette payload at a flow position.
    *  Shared by the palette drag-drop path (onPaletteDrop) and the Spacebar
    *  quick-add path (registered as the quickAddApi in graphState). */
@@ -1674,6 +1668,25 @@ export function GraphEditorInner() {
         return rfInstance.current?.screenToFlowPosition(centre) ?? { x: 0, y: 0 };
       },
       addFromPalette: (payload, pos) => spawnPalettePayload(payload, pos),
+      // Spacebar: open the unified quick-add menu (options + focused search +
+      // node list) at the cursor — same menu as a blank-canvas right-click.
+      openQuickAddMenu: () => {
+        const rf = rfInstance.current;
+        const bounds = editorWrapperRef.current?.getBoundingClientRect();
+        if (!rf || !bounds) return;
+        const client = lastClientMousePos.current ?? {
+          x: bounds.left + bounds.width / 2,
+          y: bounds.top + bounds.height / 2,
+        };
+        const flow = rf.screenToFlowPosition(client);
+        setContextMenu({
+          x: client.x - bounds.left,
+          y: client.y - bounds.top,
+          flowX: flow.x,
+          flowY: flow.y,
+          target: { type: 'pane' },
+        });
+      },
     });
     return () => setQuickAddApi(null);
   }, [spawnPalettePayload]);
@@ -2913,16 +2926,22 @@ export function GraphEditorInner() {
   const dropSearchRef = useRef<HTMLInputElement>(null);
 
   const dropMenuItems = useMemo<DropMenuItem[]>(() => {
-    if (contextMenu?.target.type !== 'connection-drop') return [];
-    const origin = contextMenu.target.origin;
+    // Shared by the connection-drop menu AND the pane quick-add menu (Spacebar /
+    // right-click on blank canvas). The only differences: the pane menu has no
+    // wire origin, so it offers no Reroute and applies no port-compatibility
+    // filter — it lists every node available to the model.
+    const targetType = contextMenu?.target.type;
+    if (targetType !== 'connection-drop' && targetType !== 'pane') return [];
+    const origin = contextMenu?.target.type === 'connection-drop' ? contextMenu.target.origin : null;
     const q = dropMenuSearch.trim().toLowerCase();
     const textMatch = (label: string, desc?: string): boolean =>
       !q || label.toLowerCase().includes(q) || (desc ?? '').toLowerCase().includes(q);
     const items: DropMenuItem[] = [];
-    if (origin.kind === 'output' && textMatch('Reroute', 'relay')) {
+    if (origin && origin.kind === 'output' && textMatch('Reroute', 'relay')) {
       items.push({ key: '__reroute', label: 'Reroute', kind: 'reroute' });
     }
-    // Same compatibility filter the menu always used — plus the text filter.
+    // Same availability + singleton filter the Add-Node menu always used, plus
+    // the text filter; the compatibility filter applies only with a wire origin.
     const hasStep = nodesRef.current.some(n => (n.data as Record<string, unknown>)?.nodeType === 'step');
     const hasInit = nodesRef.current.some(n => (n.data as Record<string, unknown>)?.nodeType === 'initEvent');
     const matches = getAllNodeDefs().filter(d => {
@@ -2930,7 +2949,7 @@ export function GraphEditorInner() {
       if (d.type === 'step' && hasStep) return false;
       if (d.type === 'initEvent' && hasInit) return false;
       if (!isNodeAvailable(d, model)) return false;
-      if (!nodeHasCompatiblePort(d, origin)) return false;
+      if (origin && !nodeHasCompatiblePort(d, origin)) return false;
       return textMatch(d.label, d.description);
     });
     // Preserve the menu's visual order: registry order, grouped by category.
@@ -2955,9 +2974,10 @@ export function GraphEditorInner() {
   useEffect(() => {
     setDropMenuSearch('');
     setDropMenuSelIdx(0);
-    if (contextMenu?.target.type === 'connection-drop') {
-      const t = setTimeout(() => dropSearchRef.current?.focus(), 50);
-      return () => clearTimeout(t);
+    const t = contextMenu?.target.type;
+    if (t === 'connection-drop' || t === 'pane') {
+      const timer = setTimeout(() => dropSearchRef.current?.focus(), 50);
+      return () => clearTimeout(timer);
     }
     return undefined;
   }, [contextMenu]);
@@ -2984,22 +3004,26 @@ export function GraphEditorInner() {
 
   // Keep the keyboard selection visible while arrowing through a long menu.
   useEffect(() => {
-    if (contextMenu?.target.type !== 'connection-drop') return;
+    const t = contextMenu?.target.type;
+    if (t !== 'connection-drop' && t !== 'pane') return;
     const key = dropItemsRef.current[dropMenuSelIdx]?.key;
     if (!key) return;
     contextMenuRef.current?.querySelector(`[data-drop-key="${CSS.escape(key)}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [dropMenuSelIdx, contextMenu]);
 
   const commitDropMenuItem = useCallback((item: DropMenuItem) => {
-    if (!contextMenu || contextMenu.target.type !== 'connection-drop') return;
-    const origin = contextMenu.target.origin;
-    if (item.kind === 'reroute') {
-      addRerouteAndConnect(origin, { x: contextMenu.flowX, y: contextMenu.flowY });
-    } else {
-      addNodeAndConnect(item.def.type, { x: contextMenu.flowX, y: contextMenu.flowY }, origin);
+    if (!contextMenu) return;
+    const pos = { x: contextMenu.flowX, y: contextMenu.flowY };
+    if (contextMenu.target.type === 'connection-drop') {
+      const origin = contextMenu.target.origin;
+      if (item.kind === 'reroute') addRerouteAndConnect(origin, pos);
+      else addNodeAndConnect(item.def.type, pos, origin);
+    } else if (contextMenu.target.type === 'pane') {
+      // Pane quick-add (Spacebar / right-click): plain node creation, no wiring.
+      if (item.kind === 'node') addNodeAtPosition(item.def.type, pos);
     }
     setContextMenu(null);
-  }, [contextMenu, addRerouteAndConnect, addNodeAndConnect]);
+  }, [contextMenu, addRerouteAndConnect, addNodeAndConnect, addNodeAtPosition]);
 
   // DEV-only test hook: React Flow's connection drag ignores synthetic pointer
   // events (same limitation as box-select / ctrl-click — see CLAUDE.md), so
@@ -3311,26 +3335,78 @@ export function GraphEditorInner() {
     return () => { unsub(); clearCompatibleHandlesForDrag(); };
   }, []);
 
-  // Add-Node menu — drop nodes whose capability requirements
-  // (requirements.async / requirements.variegated) the current model doesn't
-  // satisfy. Also drop singleton entry-points (Step, Init Event) when one
-  // already exists in the graph. Empty categories are dropped so the submenu
-  // doesn't show empty section headers.
-  const categories = (() => {
-    const all = getNodeDefsByCategory();
-    const hasStepNow = nodesRef.current.some(n => (n.data as Record<string, unknown>)?.nodeType === 'step');
-    const hasInitNow = nodesRef.current.some(n => (n.data as Record<string, unknown>)?.nodeType === 'initEvent');
-    const filtered = new Map<string, NodeTypeDef[]>();
-    for (const [cat, defs] of all) {
-      const kept = defs.filter(d => {
-        if (d.type === 'step' && hasStepNow) return false;
-        if (d.type === 'initEvent' && hasInitNow) return false;
-        return isNodeAvailable(d, model);
-      });
-      if (kept.length > 0) filtered.set(cat, kept);
-    }
-    return filtered;
-  })();
+  // Shared search + keyboard-navigable node list, rendered by BOTH the
+  // connection-drop menu and the pane quick-add menu (Spacebar / right-click on
+  // blank canvas). `dropMenuItems` already encodes the right filter per target
+  // (compatible nodes for connection-drop; every available node for pane).
+  const renderQuickAddSearch = (placeholder: string, emptyText: string) => {
+    const origin = contextMenu?.target.type === 'connection-drop' ? contextMenu.target.origin : null;
+    const effIdx = dropMenuItems.length > 0 ? Math.min(dropMenuSelIdx, dropMenuItems.length - 1) : -1;
+    // Flat keyboard-selectable rows with category headers interleaved (the flat
+    // index drives ↑/↓).
+    const rows: React.ReactNode[] = [];
+    let lastCat: string | null = null;
+    dropMenuItems.forEach((item, i) => {
+      if (item.kind === 'node' && item.def.category !== lastCat) {
+        lastCat = item.def.category;
+        rows.push(<div key={`cat-${lastCat}`} className={styles.contextCategory}>{lastCat}</div>);
+      }
+      rows.push(
+        <button
+          key={item.key}
+          data-drop-key={item.key}
+          className={`${styles.contextItem} ${i === effIdx ? styles.contextItemSelected : ''}`}
+          title={item.kind === 'node'
+            ? item.def.description
+            : 'Insert a reroute relay that carries this output to a new spot (drag from it to fan out)'}
+          onMouseMove={() => { if (i !== effIdx) setDropMenuSelIdx(i); }}
+          onClick={e => { e.stopPropagation(); commitDropMenuItem(item); }}
+        >
+          <span
+            className={styles.contextDot}
+            style={{ background: item.kind === 'node' ? item.def.color : (origin?.category === 'flow' ? '#4caf50' : '#4cc9f0') }}
+          />
+          {item.label}
+        </button>,
+      );
+    });
+    return (
+      <>
+        <input
+          ref={dropSearchRef}
+          className={styles.contextSearch}
+          type="text"
+          placeholder={placeholder}
+          value={dropMenuSearch}
+          onChange={e => setDropMenuSearch(e.target.value)}
+          onClick={e => e.stopPropagation()}
+          onKeyDown={e => {
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+              e.preventDefault();
+              const len = dropMenuItems.length;
+              if (len === 0) return;
+              const cur = Math.min(dropMenuSelIdx, len - 1);
+              setDropMenuSelIdx(e.key === 'ArrowDown' ? (cur + 1) % len : (cur - 1 + len) % len);
+            } else if (e.key === 'Enter') {
+              e.preventDefault();
+              const item = effIdx >= 0 ? dropMenuItems[effIdx] : undefined;
+              if (item) commitDropMenuItem(item);
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              e.stopPropagation();
+              setContextMenu(null);
+            }
+          }}
+        />
+        {dropMenuItems.length === 0 && (
+          <div style={{ padding: '6px 10px', fontSize: '0.7rem', color: '#8090a0', fontStyle: 'italic' }}>
+            {emptyText}
+          </div>
+        )}
+        <div className={styles.dropList}>{rows}</div>
+      </>
+    );
+  };
 
   return (
     <div
@@ -3388,6 +3464,7 @@ export function GraphEditorInner() {
         onMouseMove={(e: React.MouseEvent) => {
           const rf = rfInstance.current;
           if (!rf) return;
+          lastClientMousePos.current = { x: e.clientX, y: e.clientY };
           lastFlowMousePos.current = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
         }}
         onMove={(_e, viewport) => {
@@ -3482,73 +3559,10 @@ export function GraphEditorInner() {
             const titleText = origin.category === 'flow'
               ? `Flow ${origin.kind === 'output' ? 'output' : 'input'} → compatible node`
               : `${origin.dataType ?? 'value'} ${origin.kind === 'output' ? 'output' : 'input'} → compatible node`;
-            const effIdx = dropMenuItems.length > 0 ? Math.min(dropMenuSelIdx, dropMenuItems.length - 1) : -1;
-            // Flat keyboard-selectable rows with category headers interleaved
-            // (same visual grouping as before — the flat index drives ↑/↓).
-            const rows: React.ReactNode[] = [];
-            let lastCat: string | null = null;
-            dropMenuItems.forEach((item, i) => {
-              if (item.kind === 'node' && item.def.category !== lastCat) {
-                lastCat = item.def.category;
-                rows.push(<div key={`cat-${lastCat}`} className={styles.contextCategory}>{lastCat}</div>);
-              }
-              rows.push(
-                <button
-                  key={item.key}
-                  data-drop-key={item.key}
-                  className={`${styles.contextItem} ${i === effIdx ? styles.contextItemSelected : ''}`}
-                  title={item.kind === 'node'
-                    ? item.def.description
-                    : 'Insert a reroute relay that carries this output to a new spot (drag from it to fan out)'}
-                  onMouseMove={() => { if (i !== effIdx) setDropMenuSelIdx(i); }}
-                  onClick={e => {
-                    e.stopPropagation();
-                    commitDropMenuItem(item);
-                  }}
-                >
-                  <span
-                    className={styles.contextDot}
-                    style={{ background: item.kind === 'node' ? item.def.color : (origin.category === 'flow' ? '#4caf50' : '#4cc9f0') }}
-                  />
-                  {item.label}
-                </button>,
-              );
-            });
             return (
               <>
                 <div className={styles.contextTitle}>{titleText}</div>
-                <input
-                  ref={dropSearchRef}
-                  className={styles.contextSearch}
-                  type="text"
-                  placeholder="Search… (Enter adds + wires)"
-                  value={dropMenuSearch}
-                  onChange={e => setDropMenuSearch(e.target.value)}
-                  onClick={e => e.stopPropagation()}
-                  onKeyDown={e => {
-                    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-                      e.preventDefault();
-                      const len = dropMenuItems.length;
-                      if (len === 0) return;
-                      const cur = Math.min(dropMenuSelIdx, len - 1);
-                      setDropMenuSelIdx(e.key === 'ArrowDown' ? (cur + 1) % len : (cur - 1 + len) % len);
-                    } else if (e.key === 'Enter') {
-                      e.preventDefault();
-                      const item = effIdx >= 0 ? dropMenuItems[effIdx] : undefined;
-                      if (item) commitDropMenuItem(item);
-                    } else if (e.key === 'Escape') {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setContextMenu(null);
-                    }
-                  }}
-                />
-                {dropMenuItems.length === 0 && (
-                  <div style={{ padding: '6px 10px', fontSize: '0.7rem', color: '#8090a0', fontStyle: 'italic' }}>
-                    No compatible nodes{dropMenuSearch ? ' match' : ''}
-                  </div>
-                )}
-                {rows}
+                {renderQuickAddSearch('Search… (Enter adds + wires)', `No compatible nodes${dropMenuSearch ? ' match' : ''}`)}
               </>
             );
           })()}
@@ -3660,30 +3674,7 @@ export function GraphEditorInner() {
                 Import Macro&hellip;
               </button>
               <hr style={{ border: 'none', borderTop: '1px solid #2d4059', margin: '4px 0' }} />
-              <div className={styles.contextSubmenuTrigger}>
-                <button className={styles.contextItem}>
-                  Add Node
-                  <span style={{ marginLeft: 'auto', fontSize: '0.6rem', color: '#6080a0' }}>&rsaquo;</span>
-                </button>
-                <div className={styles.contextSubmenu}>
-                  {Array.from(categories.entries()).map(([cat, defs]) => (
-                    <div key={cat}>
-                      <div className={styles.contextCategory}>{cat}</div>
-                      {defs.map(def => (
-                        <button
-                          key={def.type}
-                          className={styles.contextItem}
-                          title={def.description}
-                          onClick={e => { e.stopPropagation(); addNode(def.type); }}
-                        >
-                          <span className={styles.contextDot} style={{ background: def.color }} />
-                          {def.label}
-                        </button>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              </div>
+              {renderQuickAddSearch('Search nodes… (Enter adds)', `No nodes${dropMenuSearch ? ' match' : ''}`)}
             </>
           )}
 

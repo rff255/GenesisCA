@@ -516,7 +516,7 @@ export function HelpView() {
             <li><strong>Left-click drag</strong> (on empty area) &mdash; Box select nodes.</li>
             <li><strong>Left-click drag</strong> (on node) &mdash; Move node.</li>
             <li><strong>Ctrl + click</strong> &mdash; Add/remove from selection.</li>
-            <li><strong>Right-click</strong> (on canvas) &mdash; Context menu: Paste, Add Comment, Add Node submenu. Hover over any Add Node entry to see a short description of what it does. The menu closes as soon as you press or start dragging anywhere outside it (e.g. to box-select or pan).</li>
+            <li><strong>Right-click</strong> (on canvas) &mdash; Opens the add-node menu: the actions (Paste, Add Comment, Add Group, Import Macro&hellip;) on top, then a <strong>focused search box</strong> and a category-grouped node list. Type to filter, move the highlighted entry with <kbd className={styles.kbd}>&uarr;</kbd>/<kbd className={styles.kbd}>&darr;</kbd>, and press <kbd className={styles.kbd}>Enter</kbd> to add it at the click position. It's the same menu <kbd className={styles.kbd}>Space</kbd> opens at the cursor. The menu closes as soon as you press or start dragging anywhere outside it (e.g. to box-select or pan).</li>
             <li><strong>Right-click</strong> (on node) &mdash; Node options: Rename, Duplicate, Copy, Cut, Delete. On macros, Duplicate expands into a submenu (<strong>Duplicate Independent</strong> / <strong>Duplicate Linked</strong>), and they also show Enter Macro, Export Macro, and Undo Macro &mdash; plus a count badge for making linked copies independent.</li>
             <li><strong>Right-click</strong> (on selection) &mdash; Selection options: Duplicate, Copy, Cut, Paste, Create Macro, Create Group, <strong>Align</strong> (horizontally: left/center/right; vertically: top/center/bottom) and <strong>Distribute</strong> (horizontally/vertically &mdash; keeps the leftmost/topmost in place and evens out the gaps).</li>
             <li><strong>Right-click</strong> (on group) &mdash; Group options: Rename, Undo Group, Delete.</li>
@@ -555,13 +555,15 @@ export function HelpView() {
               draggable mini node previews that mirror the node visuals; both modes drag
               identically. Both the split position and the view mode are remembered across sessions.</li>
             <li><strong>Quick add</strong> (<kbd className={styles.kbd}>Space</kbd>) &mdash; Press
-              Space over the canvas to open the Palette with its search focused. Type to filter,
-              move the highlighted item with <kbd className={styles.kbd}>&uarr;</kbd>/<kbd className={styles.kbd}>&darr;</kbd>,
-              then press <kbd className={styles.kbd}>Enter</kbd> to add it exactly where the cursor
-              was when you pressed Space &mdash; the panel collapses again so you can keep wiring.
+              Space over the canvas to open the add-node menu <em>right at the cursor</em> with its
+              search focused (the same menu as a blank-canvas right-click, and the same searchable
+              list you get by dragging a wire onto empty canvas). Type to filter, move the
+              highlighted item with <kbd className={styles.kbd}>&uarr;</kbd>/<kbd className={styles.kbd}>&darr;</kbd>,
+              then press <kbd className={styles.kbd}>Enter</kbd> to add it where the cursor was.
               There is always one highlighted item (the best name match for what you typed), so
               <em> Space &rarr; type &rarr; Enter</em> adds the obvious pick without touching the
-              arrow keys. <kbd className={styles.kbd}>Esc</kbd> closes the panel.</li>
+              arrow keys. <kbd className={styles.kbd}>Esc</kbd> closes the menu. (This no longer
+              opens the Palette panel &mdash; open that from the right sidebar when you want to browse.)</li>
             <li><strong>Node Explorer</strong> (<kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>F</kbd>) &mdash; Search and jump to nodes
               already placed in your graph.</li>
           </ul>
@@ -1171,13 +1173,13 @@ export function HelpView() {
               <tr><td>Right-click drag</td><td>Pan the canvas</td></tr>
               <tr><td>Scroll wheel</td><td>Zoom in/out</td></tr>
               <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>F</kbd></td><td>Open Node Explorer (search &amp; focus)</td></tr>
-              <tr><td><kbd className={styles.kbd}>Space</kbd></td><td>Quick add: open Palette with search focused; type, <kbd className={styles.kbd}>&uarr;</kbd>/<kbd className={styles.kbd}>&darr;</kbd> to pick, <kbd className={styles.kbd}>Enter</kbd> adds at the cursor position from when Space was pressed</td></tr>
+              <tr><td><kbd className={styles.kbd}>Space</kbd></td><td>Quick add: open the add-node menu at the cursor with search focused; type, <kbd className={styles.kbd}>&uarr;</kbd>/<kbd className={styles.kbd}>&darr;</kbd> to pick, <kbd className={styles.kbd}>Enter</kbd> adds at the cursor position</td></tr>
               <tr><td><kbd className={styles.kbd}>F</kbd></td><td>Toggle fullscreen graph (collapses both side panels; press again to restore)</td></tr>
               <tr><td><kbd className={styles.kbd}>Esc</kbd></td><td>Close Node Explorer (if open; first press clears the search field)</td></tr>
               <tr><td>Double-click (node)</td><td>Collapse / expand node</td></tr>
               <tr><td>Double-click (macro)</td><td>Enter macro subgraph</td></tr>
               <tr><td>Double-click (edge)</td><td>Delete edge</td></tr>
-              <tr><td>Right-click (canvas)</td><td>Context menu: Paste, Add Comment, Add Node</td></tr>
+              <tr><td>Right-click (canvas)</td><td>Add-node menu: Paste / Add Comment / Add Group / Import Macro + searchable node list</td></tr>
               <tr><td>Right-click (node)</td><td>Rename, Duplicate, Copy, Cut, Delete</td></tr>
               <tr><td>Right-click (selection)</td><td>Duplicate, Copy, Cut, Create Macro/Group</td></tr>
             </tbody>
