@@ -95,17 +95,15 @@ export function ModelerView() {
   const prePanelStateRef = useRef<{ left: PanelId | null; right: RightPanelId | null } | null>(null);
   const explorerRef = useRef<NodeExplorerHandle>(null);
 
-  // Spacebar quick-add: the flow position of the cursor at Space-press time is
-  // frozen here so moving the mouse to the panel doesn't shift where Enter
-  // will drop the node. Cleared when the palette is opened by mouse instead
-  // (Enter then falls back to the cursor's live last canvas position).
+  // The Palette panel keeps its own keyboard quick-add (Enter in its search)
+  // when opened manually; it drops the node at the cursor's live flow position.
+  // (Spacebar no longer opens the Palette — it opens the in-canvas quick-add
+  // menu via quickAddApi.openQuickAddMenu instead.)
   const paletteRef = useRef<PaletteHandle>(null);
-  const quickAddPosRef = useRef<{ x: number; y: number } | null>(null);
 
   const handlePaletteQuickAdd = useCallback((payload: QuickAddPayload) => {
-    const pos = quickAddPosRef.current ?? quickAddApi?.getCursorFlowPos() ?? null;
+    const pos = quickAddApi?.getCursorFlowPos() ?? null;
     if (pos) quickAddApi?.addFromPalette(payload, pos);
-    quickAddPosRef.current = null;
     setActiveRightPanel(null);
   }, []);
 
@@ -145,8 +143,6 @@ export function ModelerView() {
   const handleToggleRightPanel = useCallback((panel: RightPanelId) => {
     setActiveRightPanel(prev => (prev === panel ? null : panel));
     setLastRightPanel(panel);
-    // Mouse-opened palette: drop any stale Space-press anchor.
-    quickAddPosRef.current = null;
   }, []);
 
   const handleCloseRightPanel = useCallback(() => {
@@ -197,14 +193,11 @@ export function ModelerView() {
         // Block the simulator's bubble-phase space-step listener from also
         // running on this keystroke.
         e.stopImmediatePropagation();
-        // Quick-add: open the Palette with its search focused; freeze the
-        // cursor's flow position NOW so Enter adds the selected item where the
-        // cursor was at press time. Pressing Space again re-arms (re-focus +
-        // fresh position) instead of toggling closed — Esc closes.
-        quickAddPosRef.current = quickAddApi?.getCursorFlowPos() ?? null;
-        setActiveRightPanel('palette');
-        setLastRightPanel('palette');
-        setTimeout(() => paletteRef.current?.focusSearch(), 50);
+        // Quick-add: open the unified add-node menu (pane options + focused
+        // search + node list) right at the cursor — same menu as a blank-canvas
+        // right-click. GraphEditor focuses the search and freezes the drop
+        // position from the cursor's last canvas location. Esc closes it.
+        quickAddApi?.openQuickAddMenu();
       } else if (e.key === 'Escape' && activeRightPanel) {
         // Don't steal Esc from fields (e.g. clearing the search input first)
         if (isField) return;

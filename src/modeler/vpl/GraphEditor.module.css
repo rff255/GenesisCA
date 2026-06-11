@@ -86,6 +86,13 @@
   outline: none;
 }
 
+/* Scrollable node-list region inside the connection-drop / quick-add menu, so
+   the pinned options + search stay visible while a long catalogue scrolls. */
+.dropList {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
 .contextDot {
   width: 8px;
   height: 8px;

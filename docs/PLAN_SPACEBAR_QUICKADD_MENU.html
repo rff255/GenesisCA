@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Unified Add-Node menu — Spacebar + right-click</title>
+<style>
+  :root{
+    --bg:#1c1f26; --panel:#282c34; --panel2:#21252b; --bd:#3a3f4b; --bd2:#4a5160;
+    --txt:#d7dae0; --muted:#8b93a3; --faint:#6b7280; --accent:#4c9eff; --accentbg:#13325a;
+    --green:#4caf50; --cyan:#4cc9f0; --teal:#1d9e75; --blue:#378add; --amber:#ef9f27;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  }
+  body{margin:0;background:var(--bg);color:var(--txt);padding:28px;line-height:1.5;}
+  h1{font-size:20px;font-weight:500;margin:0 0 4px;}
+  h2{font-size:14px;font-weight:500;color:var(--muted);margin:0 0 16px;text-transform:uppercase;letter-spacing:.05em;}
+  p.lead{color:var(--muted);max-width:760px;margin:0 0 28px;font-size:14px;}
+  .cols{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;}
+  .col{flex:1 1 320px;}
+  .tag{display:inline-block;font-size:11px;padding:2px 9px;border-radius:10px;border:1px solid var(--bd2);color:var(--muted);margin-bottom:10px;}
+  .tag.before{border-color:#5a3a3a;color:#d99;}
+  .tag.after{border-color:#3a5a40;color:#9d9;}
+  .canvas{position:relative;height:430px;background:var(--bg);
+    background-image:radial-gradient(circle, #2b2f38 1px, transparent 1px);
+    background-size:22px 22px;border:1px solid var(--bd);border-radius:10px;overflow:hidden;}
+  .ghost{position:absolute;width:150px;background:var(--panel2);border:1px solid var(--bd2);border-radius:6px;opacity:.5;font-size:11px;}
+  .ghost .h{padding:5px 8px;border-bottom:1px solid var(--bd);color:var(--muted);}
+  .ghost .b{padding:9px 8px;color:var(--faint);}
+  .cursor{position:absolute;font-size:12px;color:var(--faint);}
+  .menu{position:absolute;background:var(--panel);border:1px solid var(--bd2);border-radius:8px;
+    box-shadow:0 8px 24px rgba(0,0,0,.45);width:262px;overflow:hidden;font-size:12.5px;}
+  .mi{display:flex;align-items:center;gap:8px;padding:6px 12px;color:var(--txt);cursor:default;}
+  .mi:hover{background:var(--panel2);}
+  .mi .ic{color:var(--muted);width:14px;text-align:center;font-size:12px;}
+  .sep{border-top:1px solid var(--bd);margin:4px 0;}
+  .submenu{position:absolute;left:100%;top:78px;width:170px;background:var(--panel);border:1px solid var(--bd2);
+    border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.45);padding:4px 0;}
+  .arrow{margin-left:auto;color:var(--faint);font-size:11px;}
+  .search{display:flex;align-items:center;gap:6px;margin:6px 8px;padding:6px 8px;background:var(--panel2);
+    border:1px solid var(--accent);border-radius:5px;box-shadow:0 0 0 3px var(--accentbg);}
+  .search .ph{color:var(--txt);}
+  .search .caret{width:1px;height:14px;background:var(--txt);}
+  .search .hint{margin-left:auto;font-size:11px;color:var(--faint);}
+  .cat{font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);padding:5px 12px 2px;}
+  .row{display:flex;align-items:center;gap:8px;padding:5px 12px;color:var(--txt);}
+  .row.sel{background:var(--accentbg);}
+  .dot{width:8px;height:8px;border-radius:50%;flex:none;}
+  .list{max-height:204px;overflow:hidden;}
+  .foot{border-top:1px solid var(--bd);display:flex;gap:14px;padding:5px 12px;font-size:10.5px;color:var(--faint);}
+  .legend{margin-top:22px;font-size:13px;color:var(--muted);max-width:760px;}
+  .legend b{color:var(--txt);font-weight:500;}
+  kbd{background:var(--panel);border:1px solid var(--bd2);border-bottom-width:2px;border-radius:4px;
+    padding:1px 6px;font-size:11px;color:var(--txt);font-family:inherit;}
+</style>
+</head>
+<body>
+  <h1>Unified Add-Node menu</h1>
+  <p class="lead">Both <kbd>Space</kbd> and a blank-canvas right-click now open one searchable menu at the cursor —
+    the same focused-search + keyboard-navigable node list as the connection-drop menu. The old Palette-on-Space and
+    the <em>Add Node&nbsp;›</em> hover-submenu are gone.</p>
+
+  <div class="cols">
+    <!-- BEFORE -->
+    <div class="col">
+      <span class="tag before">Before</span>
+      <h2>Two weaker paths</h2>
+      <div class="canvas">
+        <div class="cursor" style="left:150px;top:60px;">right-click&nbsp;▾</div>
+        <div class="menu" style="left:150px;top:78px;width:190px;">
+          <div class="mi"><span class="ic">⧉</span> Paste</div>
+          <div class="mi"><span class="ic">▭</span> Add comment</div>
+          <div class="mi"><span class="ic">▢</span> Add group</div>
+          <div class="mi"><span class="ic">⤓</span> Import macro…</div>
+          <div class="sep"></div>
+          <div class="mi" style="background:var(--panel2);">Add node <span class="arrow">›</span></div>
+        </div>
+        <div class="submenu">
+          <div class="cat">data</div>
+          <div class="row"><span class="dot" style="background:var(--blue)"></span>Get cell attribute</div>
+          <div class="row"><span class="dot" style="background:var(--blue)"></span>Get neighbors attribute</div>
+          <div class="row"><span class="dot" style="background:var(--blue)"></span>Get model attribute</div>
+          <div class="cat">logic</div>
+          <div class="row"><span class="dot" style="background:var(--amber)"></span>Compare</div>
+          <div class="row" style="color:var(--faint)">scroll for 60 more…</div>
+        </div>
+      </div>
+      <p style="color:var(--muted);font-size:13px;margin-top:12px;">
+        <kbd>Space</kbd> opened the right-side Palette panel (away from the cursor); right-click made you
+        hover-and-scroll a submenu with no search.</p>
+    </div>
+
+    <!-- AFTER -->
+    <div class="col">
+      <span class="tag after">After</span>
+      <h2>One menu at the cursor</h2>
+      <div class="canvas">
+        <div class="ghost" style="left:20px;top:26px;"><div class="h">Get Cell Attribute</div><div class="b">alive ▸</div></div>
+        <div class="ghost" style="right:24px;bottom:30px;width:118px;"><div class="h">Set Cell Attribute</div></div>
+        <div class="cursor" style="left:236px;top:70px;">＋</div>
+        <div class="menu" style="left:248px;top:36px;">
+          <div class="mi"><span class="ic">⧉</span> Paste</div>
+          <div class="mi"><span class="ic">▭</span> Add comment</div>
+          <div class="mi"><span class="ic">▢</span> Add group</div>
+          <div class="mi"><span class="ic">⤓</span> Import macro…</div>
+          <div class="sep"></div>
+          <div class="search">
+            <span class="ic" style="color:var(--muted)">⌕</span>
+            <span class="ph">neighbor</span><span class="caret"></span>
+            <span class="hint">Enter adds</span>
+          </div>
+          <div class="list">
+            <div class="cat">data</div>
+            <div class="row"><span class="dot" style="background:var(--blue)"></span>Get neighbors attribute</div>
+            <div class="row"><span class="dot" style="background:var(--blue)"></span>Get neighbor attr by index</div>
+            <div class="row sel"><span class="dot" style="background:var(--blue)"></span>Neighbor index (from offset)</div>
+            <div class="row"><span class="dot" style="background:var(--blue)"></span>Break down neighbor index</div>
+            <div class="cat">aggregation</div>
+            <div class="row"><span class="dot" style="background:var(--teal)"></span>Pick random neighbor</div>
+            <div class="row"><span class="dot" style="background:var(--teal)"></span>Filter neighbors</div>
+          </div>
+          <div class="foot"><span>↑↓ navigate</span><span>⏎ add</span><span>Esc close</span></div>
+        </div>
+      </div>
+      <p style="color:var(--muted);font-size:13px;margin-top:12px;">
+        Actions on top, focused search, category-grouped list with an always-present highlight
+        (first prefix match). <em>Space → type → Enter</em> drops the node where the cursor was.</p>
+    </div>
+  </div>
+
+  <div class="legend">
+    <p><b>Shared machinery.</b> The pane menu reuses the connection-drop menu's <code>renderQuickAddSearch</code>
+      helper (search input + ↑/↓-wrap + Enter/Esc + flat category-headered rows). The connection-drop branch
+      adds a title and a wire origin (offering <b>Reroute</b> first + filtering to compatible ports); the pane
+      branch passes no origin, so it lists every node available to the model and commits via
+      <code>addNodeAtPosition</code> (no wiring). Placed singletons (Step, Init Event) are omitted.</p>
+  </div>
+</body>
+</html>
