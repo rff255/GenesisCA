@@ -506,7 +506,11 @@ export function HelpView() {
           </p>
           <p className={styles.p}>
             <strong>Value ports</strong> (blue circles) carry data. <strong>Flow
-            ports</strong> (green circles) control execution order.
+            ports</strong> (green right-pointing triangles, Unreal-blueprint style)
+            control execution order &mdash; they point in the direction execution
+            flows. Each node's main execution-in and execution-out pins sit at the
+            centre of its header (a horizontal through-line); branch flow pins
+            (THEN/ELSE/BODY/CASE&hellip;) and data ports hang in the body below.
           </p>
 
           <h3 className={styles.h3}>Canvas Controls</h3>

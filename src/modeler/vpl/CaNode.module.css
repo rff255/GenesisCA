@@ -67,12 +67,31 @@
  * and shouldn't drift between Default and Blender. (The palette preview
  * dots in PalettePanelContent.module.css use --color-port-flow /
  * --color-port-value, which CAN be theme-tinted.) */
+/* Flow (execution) ports render as a right-pointing triangle — Unreal-Engine
+ * blueprint style — to read as a directional execution pin (flow runs
+ * left → right). clip-path gives the triangle while keeping a full box for the
+ * connection hit area; the dark drop-shadow stands in for the old border
+ * (a clip-path clips a real border into the triangle, which looks broken). */
 .handleFlow {
-  width: 10px !important;
-  height: 10px !important;
+  width: 11px !important;
+  height: 13px !important;
   background: #4caf50 !important;
-  border: 2px solid #1b5e20 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  clip-path: polygon(0% 0%, 100% 50%, 0% 100%);
+  filter: drop-shadow(0.6px 0 0 #1b5e20) drop-shadow(-0.6px 0 0 #1b5e20)
+    drop-shadow(0 0.6px 0 #1b5e20) drop-shadow(0 -0.6px 0 #1b5e20);
   transform-origin: center;
+}
+
+/* clip-path clips box-shadow, so the magenta connection-compatibility glow used
+ * on round value ports is invisible on the triangle. Express it as a drop-shadow
+ * filter instead (drop-shadow follows the clipped shape). Covers both the
+ * connection-drag (.handleCompatible) and panel-drag highlight states. */
+.handleFlow.handleCompatible {
+  box-shadow: none !important;
+  filter: drop-shadow(0 0 2px rgba(255, 0, 255, 1))
+    drop-shadow(0 0 5px rgba(255, 0, 255, 0.65)) !important;
 }
 
 .handleValue {

@@ -601,10 +601,32 @@ function CaNodeComponent({ id, data }: NodeProps) {
     || nodeData.nodeType === 'conditional'
     || nodeData.nodeType === 'sequence';
 
-  // Dynamic height to fit all ports (compact flow nodes use tighter spacing)
-  const maxPorts = Math.max(inputPorts.length, outputPorts.length);
-  const portSpacing = isCompact ? 16 : 22;
-  const nodeMinHeight = showExpanded ? Math.max(50, 24 + maxPorts * portSpacing + 6) : undefined;
+  // The two MAIN execution/flow ports — the primary flow IN (the single flow
+  // input) and the primary flow OUT (the `next` continuation, or the first flow
+  // output for event roots / Sequence). These are lifted out of the body and
+  // pinned at the vertical centre of the header (Unreal-blueprint style: one
+  // exec pin in at top-left, one out at top-right), so the body rows below carry
+  // only the data ports + any branch flow ports (THEN/ELSE/BODY/CASE_N…).
+  const mainFlowIn = inputPorts.find(p => p.category === 'flow') ?? null;
+  const mainFlowOut =
+    outputPorts.find(p => p.id === 'next') ??
+    outputPorts.find(p => p.category === 'flow') ??
+    null;
+  const bodyInputPorts = mainFlowIn ? inputPorts.filter(p => p !== mainFlowIn) : inputPorts;
+  const bodyOutputPorts = mainFlowOut ? outputPorts.filter(p => p !== mainFlowOut) : outputPorts;
+
+  // Dynamic height to fit the BODY ports (the lifted main flow ports live in the
+  // header and don't occupy a body row). Body ports use a single uniform spacing
+  // across ALL node types so a branch flow output (THEN/ELSE on Conditional,
+  // THEN/Then-N on Sequence) lands on the exact same row grid as BODY/CASE/DEFAULT
+  // on Loop/ForEach/Switch. (Previously the `isCompact` nodes — step/conditional/
+  // sequence — used tighter spacing, which, once the main flow ports moved to the
+  // header, left their remaining body ports sitting higher and closer together
+  // than every other node.)
+  const PORT_TOP_BASE = 30;
+  const maxPorts = Math.max(bodyInputPorts.length, bodyOutputPorts.length);
+  const portSpacing = 22;
+  const nodeMinHeight = showExpanded ? Math.max(50, PORT_TOP_BASE + maxPorts * portSpacing) : undefined;
 
   // --- Collapsed rendering ---
   if (!showExpanded) {
@@ -873,6 +895,46 @@ function CaNodeComponent({ id, data }: NodeProps) {
     );
   }
 
+  // Render a MAIN flow handle pinned to the vertical centre of the header. It
+  // lives inside the (position:relative) header so `top: 50%` resolves to the
+  // header's centre regardless of an optional user label / header height. Same
+  // compatibility-highlight logic as the body port maps.
+  const renderMainFlowHandle = (port: PortDef, kind: 'input' | 'output') => {
+    const hid = handleId(port);
+    const cf = connectingFrom;
+    const isInput = kind === 'input';
+    const directionMatch = cf ? (isInput ? cf.kind !== 'input' : cf.kind !== 'output') : false;
+    const categoryMatch = cf ? port.category === cf.category && id !== cf.nodeId : false;
+    const isCompatible = cf ? directionMatch && categoryMatch : null;
+    const panelDragHighlight = !cf && compatibleHandles.has(handleKey(id, port.kind, port.category, port.id));
+    const handleClass = [
+      portHandleClass(port),
+      cf && isCompatible ? styles.handleCompatible : '',
+      cf && !isCompatible ? styles.handleIncompatible : '',
+      panelDragHighlight ? styles.handleCompatible : '',
+    ].filter(Boolean).join(' ');
+    return (
+      <>
+        <Handle
+          type={isInput ? 'target' : 'source'}
+          position={isInput ? Position.Left : Position.Right}
+          id={hid}
+          className={handleClass}
+          style={{ top: '50%' }}
+          title={port.label}
+        />
+        {showPortLabels && (
+          <div
+            className={isInput ? styles.portLabelLeft : styles.portLabelRight}
+            style={{ top: '50%' }}
+          >
+            {port.label}
+          </div>
+        )}
+      </>
+    );
+  };
+
   return (
     <div
       className={`${styles.node} ${isCompact ? styles.compactNode : ''}`}
@@ -884,6 +946,8 @@ function CaNodeComponent({ id, data }: NodeProps) {
         <div className={styles.userLabel}>{userLabel}</div>
       )}
       <div className={styles.header} title={def.description} style={{ background: def.color, color: textColorForBg(def.color), textShadow: isLightHeaderBg(def.color) ? 'none' : undefined }}>
+        {mainFlowIn && renderMainFlowHandle(mainFlowIn, 'input')}
+        {mainFlowOut && renderMainFlowHandle(mainFlowOut, 'output')}
         {linkCount >= 2 && (
           <span
             className={`${styles.linkBadge} nodrag`}
@@ -2448,12 +2512,13 @@ function CaNodeComponent({ id, data }: NodeProps) {
         })()}
       </div>
 
-      {/* Input handles (left side) + external inline widgets + external labels */}
-      {inputPorts.map((port, i) => {
+      {/* Input handles (left side) + external inline widgets + external labels.
+          The main flow input is rendered in the header (see renderMainFlowHandle). */}
+      {bodyInputPorts.map((port, i) => {
         const portDef = allInputPortDefs.get(port.id) ?? port;
         const hid = handleId(port);
         const isConnected = connectedInputHandles.has(hid);
-        const topPx = (isCompact ? 24 : 30) + i * portSpacing;
+        const topPx = PORT_TOP_BASE + i * portSpacing;
 
         // Determine effective widget type (dynamic for attribute-dependent nodes)
         let effectiveWidget = portDef.inlineWidget;
@@ -2573,10 +2638,11 @@ function CaNodeComponent({ id, data }: NodeProps) {
         );
       })}
 
-      {/* Output handles (right side) + external labels */}
-      {outputPorts.map((port, i) => {
+      {/* Output handles (right side) + external labels.
+          The main flow output is rendered in the header (see renderMainFlowHandle). */}
+      {bodyOutputPorts.map((port, i) => {
         const hid = handleId(port);
-        const topPx = (isCompact ? 24 : 30) + i * portSpacing;
+        const topPx = PORT_TOP_BASE + i * portSpacing;
         const cf = connectingFrom;
         const directionOk = cf ? cf.kind !== 'output' : false; // output ports match when dragging from input
         const isCompatible = cf ? (directionOk && port.category === cf.category && id !== cf.nodeId) : null;
