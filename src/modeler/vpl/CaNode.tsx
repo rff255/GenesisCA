@@ -623,7 +623,15 @@ function CaNodeComponent({ id, data }: NodeProps) {
   // sequence — used tighter spacing, which, once the main flow ports moved to the
   // header, left their remaining body ports sitting higher and closer together
   // than every other node.)
-  const PORT_TOP_BASE = 30;
+  // Body-port handles are absolutely positioned from the NODE's top, so when a
+  // user label (rename) adds its strip above the header, the body's first row
+  // shifts down by exactly the label height — add it to the base or the data /
+  // branch ports ride up onto the header and overlap the main flow pins. The
+  // main flow handles need no adjustment: they live INSIDE the header (top:50%)
+  // and move with it. USER_LABEL_HEIGHT mirrors .userLabel in CaNode.module.css
+  // (var(--space-1) padding ×2 + ~14px line + 1px border-bottom ≈ 21px, measured).
+  const USER_LABEL_HEIGHT = 21;
+  const PORT_TOP_BASE = 30 + (userLabel ? USER_LABEL_HEIGHT : 0);
   const maxPorts = Math.max(bodyInputPorts.length, bodyOutputPorts.length);
   const portSpacing = 22;
   const nodeMinHeight = showExpanded ? Math.max(50, PORT_TOP_BASE + maxPorts * portSpacing) : undefined;
