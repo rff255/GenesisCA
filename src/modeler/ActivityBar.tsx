@@ -1,7 +1,7 @@
 import { useModel } from '../model/ModelContext';
 import styles from './ActivityBar.module.css';
 
-export type PanelId = 'properties' | 'attributes' | 'neighborhoods' | 'mappings' | 'variegated';
+export type PanelId = 'info' | 'properties' | 'attributes' | 'neighborhoods' | 'mappings' | 'variegated';
 
 interface ActivityBarProps {
   activePanel: PanelId | null;
@@ -9,6 +9,7 @@ interface ActivityBarProps {
 }
 
 const BASE_PANELS: Array<{ id: PanelId; label: string; icon: string }> = [
+  { id: 'info', label: 'Info', icon: 'I' },
   { id: 'properties', label: 'Properties', icon: 'P' },
   { id: 'attributes', label: 'Attributes', icon: 'A' },
   { id: 'neighborhoods', label: 'Neighborhoods', icon: 'N' },
