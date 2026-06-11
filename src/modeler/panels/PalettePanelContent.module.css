@@ -252,8 +252,15 @@
   background: var(--color-port-value);
 }
 
+/* Flow ports preview as a green right-pointing triangle, matching the canvas
+ * execution pins (CaNode.module.css .handleFlow). Overrides the round .previewDot
+ * shape/size so the palette faithfully shows what lands on the graph. */
 .previewDotFlow {
-  background: var(--color-port-flow);
+  width: 8px;
+  height: 9px;
+  border-radius: 0;
+  background: #4caf50;
+  clip-path: polygon(0% 0%, 100% 50%, 0% 100%);
 }
 
 .section {

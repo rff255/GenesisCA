@@ -2772,12 +2772,21 @@ export function GraphEditorInner() {
 
     const macroId = `macro_${Date.now().toString(36)}`;
 
-    // Compute bounding box of selected nodes for MacroInput/MacroOutput positioning
-    const selXs = selectedNodes.map(n => n.position.x);
-    const selYs = selectedNodes.map(n => n.position.y);
-    const minX = Math.min(...selXs);
-    const maxX = Math.max(...selXs);
-    const midY = (Math.min(...selYs) + Math.max(...selYs)) / 2;
+    // Bounding box of the selection using FULL node extents (right/bottom edges
+    // = position + measured width/height), not just the top-left corners. The
+    // previous version used bare `position.x`, so `maxX + 100` for the
+    // MacroOutput landed ON TOP of the rightmost node whenever that node was
+    // wider than 100px (i.e. nearly always). We want MacroInput clear to the
+    // LEFT of the whole selection and MacroOutput clear to the RIGHT.
+    let bMinX = Infinity, bMinY = Infinity, bMaxX = -Infinity, bMaxY = -Infinity;
+    for (const n of selectedNodes) {
+      const { w, h } = nodeSize(n);
+      bMinX = Math.min(bMinX, n.position.x);
+      bMinY = Math.min(bMinY, n.position.y);
+      bMaxX = Math.max(bMaxX, n.position.x + w);
+      bMaxY = Math.max(bMaxY, n.position.y + h);
+    }
+    const midY = (bMinY + bMaxY) / 2;
 
     // Centroid of the selection. Internal node positions in the MacroDef are
     // stored RELATIVE to this centroid (subtracting avgX/avgY before saving),
@@ -2838,17 +2847,25 @@ export function GraphEditorInner() {
 
     // MacroInput/MacroOutput boundary nodes — positions also stored relative
     // to the centroid so navigating into the macro view doesn't dump them at
-    // arbitrary far-off coordinates.
+    // arbitrary far-off coordinates. The boundary nodes aren't rendered yet, so
+    // estimate their size to clear the selection: MacroInput's RIGHT edge sits a
+    // gap to the left of the selection's left edge; MacroOutput's LEFT edge sits
+    // a gap to the right of the selection's right edge. Both are vertically
+    // centred on the selection.
+    const BOUNDARY_GAP = 120;     // clear horizontal gap from the selection
+    const EST_BOUNDARY_W = 200;   // typical boundary-node width (not yet measured)
+    const EST_BOUNDARY_H = 90;    // typical boundary-node height (for vertical centring)
+    const boundaryY = (midY - EST_BOUNDARY_H / 2) - avgY;
     const macroInputGraphNode: GraphNode = {
       id: macroInputNodeId,
       type: 'caNode',
-      position: { x: (minX - 250) - avgX, y: midY - avgY },
+      position: { x: (bMinX - BOUNDARY_GAP - EST_BOUNDARY_W) - avgX, y: boundaryY },
       data: { nodeType: 'macroInput', config: { macroDefId: macroId } },
     };
     const macroOutputGraphNode: GraphNode = {
       id: macroOutputNodeId,
       type: 'caNode',
-      position: { x: (maxX + 100) - avgX, y: midY - avgY },
+      position: { x: (bMaxX + BOUNDARY_GAP) - avgX, y: boundaryY },
       data: { nodeType: 'macroOutput', config: { macroDefId: macroId } },
     };
 
@@ -3045,6 +3062,27 @@ export function GraphEditorInner() {
         });
       };
     return () => { delete (window as unknown as Record<string, unknown>).__openConnectionDropMenu; };
+  }, []);
+
+  // DEV-only test hook: box-select multi-selection can't be driven by synthetic
+  // events either (same limitation), so browser-eval tests open the selection
+  // context menu (the one carrying "Create Macro from Selection") through this.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return undefined;
+    (window as unknown as Record<string, unknown>).__openSelectionMenu =
+      (nodeIds: string[], x: number, y: number) => {
+        const rf = rfInstance.current;
+        const flowPos = rf ? rf.screenToFlowPosition({ x, y }) : { x: 0, y: 0 };
+        const bounds = editorWrapperRef.current?.getBoundingClientRect();
+        setContextMenu({
+          x: x - (bounds?.left ?? 0),
+          y: y - (bounds?.top ?? 0),
+          flowX: flowPos.x,
+          flowY: flowPos.y,
+          target: { type: 'selection', nodeIds },
+        });
+      };
+    return () => { delete (window as unknown as Record<string, unknown>).__openSelectionMenu; };
   }, []);
 
   const onConnectStart: OnConnectStart = useCallback((_event, params) => {
