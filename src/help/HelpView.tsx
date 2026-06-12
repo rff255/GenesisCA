@@ -591,7 +591,9 @@ export function HelpView() {
             <strong>Double-click</strong> any non-macro node to collapse it into a compact
             form showing only its title (or value for constants). Double-click again to expand.
             Edges remain connected to collapsed nodes. When dragging a new connection near
-            a collapsed node, it temporarily expands to reveal its ports.
+            a collapsed node that has more than one compatible port, it temporarily expands
+            so you can pick which port to land on; if only one port could accept the wire it
+            stays compact and the connection drops straight onto it.
           </p>
 
           <h3 className={styles.h3}>Comment Nodes</h3>
