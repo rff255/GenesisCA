@@ -1,5 +1,5 @@
-import { memo, useCallback, useState, useMemo, useSyncExternalStore } from 'react';
-import { Handle, Position, useReactFlow } from '@xyflow/react';
+import { memo, useCallback, useEffect, useState, useMemo, useSyncExternalStore } from 'react';
+import { Handle, Position, useReactFlow, useUpdateNodeInternals } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
 import { GROUP_OPERATOR_POSITION_OPS } from './nodes/GroupOperatorNode';
@@ -197,6 +197,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
   const def = getNodeDef(nodeData.nodeType);
   const { model, updateMacro, importMacro } = useModel();
   const { updateNodeData } = useReactFlow();
+  const updateNodeInternals = useUpdateNodeInternals();
   // Subscribe to port-label toggle so memoized CaNodes re-render when it changes
   const showPortLabels = useSyncExternalStore(subscribeShowPortLabels, () => showPortLabelsGlobal);
   // Subscribe to connectingFrom so this memoized node re-renders the moment a
@@ -621,6 +622,15 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
   const showExpanded = !isCollapsed || hoverExpand;
 
+  // Collapsed nodes fan their CONNECTED handles out around the vertical centre
+  // (see the collapsed render branch). Those positions change when an edge is
+  // added/removed WITHOUT the node's size changing, so React Flow won't
+  // re-measure handle bounds on its own — nudge it whenever the connected set
+  // or the collapse state flips. (Expanded nodes re-measure via size changes.)
+  useEffect(() => {
+    if (isCollapsed) updateNodeInternals(id);
+  }, [updateNodeInternals, id, isCollapsed, showExpanded, connectedInputHandles]);
+
   const isCompact = nodeData.nodeType === 'step'
     || nodeData.nodeType === 'conditional'
     || nodeData.nodeType === 'sequence';
@@ -888,29 +898,39 @@ function CaNodeComponent({ id, data }: NodeProps) {
           <div className={styles.warningBadge} title={configIssues.join('\n')}>!</div>
         )}
 
-        {/* Handles at center — still needed for edges */}
-        {inputPorts.map(port => (
-          <Handle
-            key={handleId(port)}
-            type="target"
-            position={Position.Left}
-            id={handleId(port)}
-            className={portHandleClass(port)}
-            style={{ top: '50%' }}
-            title={port.label}
-          />
-        ))}
-        {outputPorts.map(port => (
-          <Handle
-            key={handleId(port)}
-            type="source"
-            position={Position.Right}
-            id={handleId(port)}
-            className={portHandleClass(port)}
-            style={{ top: '50%' }}
-            title={port.label}
-          />
-        ))}
+        {/* Handles — CONNECTED ports fan out around the vertical centre with a
+            tight spacing so the user can still tell which wire lands on which
+            port without expanding the node; unconnected ports stay stacked at
+            the centre (they're only drag targets). */}
+        {(() => {
+          const SPREAD = 11; // px between connected handles (tighter than expanded rows)
+          const spreadTop = (i: number, n: number): string =>
+            n <= 1 ? '50%' : `calc(50% + ${Math.round((i - (n - 1) / 2) * SPREAD)}px)`;
+          const renderSide = (ports: PortDef[], kind: 'input' | 'output') => {
+            const connectedPorts = ports.filter(p => connectedInputHandles.has(handleId(p)));
+            const connIdx = new Map(connectedPorts.map((p, i) => [p.id, i]));
+            return ports.map(port => {
+              const ci = connIdx.get(port.id);
+              return (
+                <Handle
+                  key={handleId(port)}
+                  type={kind === 'input' ? 'target' : 'source'}
+                  position={kind === 'input' ? Position.Left : Position.Right}
+                  id={handleId(port)}
+                  className={portHandleClass(port)}
+                  style={{ top: ci !== undefined ? spreadTop(ci, connectedPorts.length) : '50%' }}
+                  title={port.label}
+                />
+              );
+            });
+          };
+          return (
+            <>
+              {renderSide(inputPorts, 'input')}
+              {renderSide(outputPorts, 'output')}
+            </>
+          );
+        })()}
 
         {/* Port count indicators */}
         {totalInputs > 1 && (

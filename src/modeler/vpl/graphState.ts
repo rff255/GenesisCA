@@ -187,8 +187,10 @@ export function setConnectingFrom(val: typeof connectingFrom) {
 }
 
 // ---------------------------------------------------------------------------
-// Connected input handles per node (perf: single pub/sub instead of per-node
-// useStore subscriptions that fire on every React Flow store change)
+// Connected handles per node — INPUT (target) and OUTPUT (source) handle ids
+// share one set; handle ids encode their kind (`input_…` / `output_…`) so
+// consumers never confuse the two. (Perf: single pub/sub instead of per-node
+// useStore subscriptions that fire on every React Flow store change.)
 // ---------------------------------------------------------------------------
 
 const EMPTY_HANDLE_SET: ReadonlySet<string> = new Set();
@@ -201,7 +203,7 @@ export function subscribeConnectedHandles(fn: () => void): () => void {
   return () => { connectedHandlesListeners.delete(fn); };
 }
 
-/** Get the set of connected input handle IDs for a node. Stable identity when unchanged. */
+/** Get the set of connected handle IDs (inputs + outputs) for a node. Stable identity when unchanged. */
 export function getConnectedHandlesForNode(id: string): ReadonlySet<string> {
   return connectedHandlesMap.get(id) ?? EMPTY_HANDLE_SET;
 }
@@ -209,13 +211,19 @@ export function getConnectedHandlesForNode(id: string): ReadonlySet<string> {
 /** Diff-aware update from the current edges list. Reuses prior Set identity when a node's
  *  connected handles didn't actually change — so useSyncExternalStore consumers only re-render
  *  for nodes that truly changed. */
-export function setConnectedHandlesFromEdges(edges: Array<{ target: string; targetHandle?: string | null }>): void {
+export function setConnectedHandlesFromEdges(
+  edges: Array<{ source?: string; sourceHandle?: string | null; target: string; targetHandle?: string | null }>,
+): void {
   const grouped = new Map<string, Set<string>>();
+  const add = (nodeId: string | undefined, handle: string | null | undefined) => {
+    if (!nodeId) return;
+    let s = grouped.get(nodeId);
+    if (!s) { s = new Set(); grouped.set(nodeId, s); }
+    s.add(handle ?? '');
+  };
   for (const e of edges) {
-    if (!e.target) continue;
-    let s = grouped.get(e.target);
-    if (!s) { s = new Set(); grouped.set(e.target, s); }
-    s.add(e.targetHandle ?? '');
+    add(e.target, e.targetHandle);
+    add(e.source, e.sourceHandle);
   }
   const next = new Map<string, ReadonlySet<string>>();
   for (const [nodeId, nextSet] of grouped) {
