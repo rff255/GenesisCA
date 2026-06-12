@@ -17,6 +17,10 @@ interface Props {
   onToggleCategory?: (category: string) => void;
   /** Effective chart settings (model defaults merged with sim overrides). */
   settings?: IndicatorChartSettings;
+  /** Design-time series-key order (designTimeSeriesKeys). When given, palette
+   *  indices are looked up here so runtime category filtering (Track
+   *  Categories) never shifts surviving series onto different colors. */
+  categoryOrder?: string[];
 }
 
 const TOKEN_NAMES = [
@@ -51,7 +55,7 @@ function formatAxisValue(v: number): string {
   return v.toFixed(1);
 }
 
-export function IndicatorStackedAreaChart({ data, generation, height, hidden, onToggleCategory, settings }: Props) {
+export function IndicatorStackedAreaChart({ data, generation, height, hidden, onToggleCategory, settings, categoryOrder }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
@@ -61,9 +65,15 @@ export function IndicatorStackedAreaChart({ data, generation, height, hidden, on
   const PALETTE = tokens.slice(2, 12).map(c => c || '#888');
   const LEGEND_LABEL_COLOR = tokens[12] || '#aab';
   const LEGEND_VALUE_COLOR = tokens[13] || '#cdd';
-  // Per-series color overrides win over the index-keyed theme palette.
-  const colorFor = (idx: number, cat: string): string =>
-    settings?.seriesColors?.[cat] ?? PALETTE[idx % PALETTE.length]!;
+  // Per-series color overrides win over the index-keyed theme palette. The
+  // palette index prefers the category's position in the DESIGN-TIME order
+  // (stable under Track Categories filtering); the runtime index is the
+  // fallback for runtime-only keys (numeric frequency buckets).
+  const colorFor = (idx: number, cat: string): string => {
+    const stable = categoryOrder ? categoryOrder.indexOf(cat) : -1;
+    const pi = stable >= 0 ? stable : idx;
+    return settings?.seriesColors?.[cat] ?? PALETTE[pi % PALETTE.length]!;
+  };
 
   useEffect(() => {
     const el = wrapRef.current;

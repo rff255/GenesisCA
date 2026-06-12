@@ -1,7 +1,25 @@
-import type { IndicatorChartSettings } from '../model/types';
+import type { CAModel, Indicator, IndicatorChartSettings } from '../model/types';
 
 /** Series key used by scalar charts (sparkline) in `seriesColors`. */
 export const SCALAR_SERIES_KEY = 'value';
+
+/** Design-time-enumerable series keys for an indicator: scalar 'value',
+ *  bool false/true, tag options (sorted — matches the charts' key sort).
+ *  Numeric frequency buckets are runtime-only → []. Single source of truth
+ *  for BOTH the modeler's chart-defaults editor and the simulator charts'
+ *  stable palette indexing: a series' default color is keyed by its position
+ *  in THIS list, so filtering categories at runtime (Track Categories) never
+ *  shifts the surviving series onto different palette slots. */
+export function designTimeSeriesKeys(ind: Indicator, model: CAModel): string[] {
+  if (ind.kind === 'standalone') return [SCALAR_SERIES_KEY];
+  if (ind.linkedAggregation === 'total') return [SCALAR_SERIES_KEY];
+  if (ind.dataType === 'bool') return ['false', 'true'];
+  if (ind.dataType === 'tag') {
+    const attr = model.attributes.find(a => a.id === ind.linkedAttributeId);
+    return [...(attr?.tagOptions ?? [])].sort();
+  }
+  return [];
+}
 
 /** Field-level merge of the model-default settings with the simulator's
  *  runtime override layer — override fields win, per-series colors merge
