@@ -7,6 +7,7 @@ import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag } from '../vpl/graphState';
 import { typeDisplayName } from '../../model/typeLabels';
+import { NumberField, InlineNumberInput } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
 
 function handleRowDragStart(payload: ModelElementDragPayload) {
@@ -169,13 +170,13 @@ export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
             {selected.kind === 'array' && (
               <div className={styles.field}>
                 <label className={styles.fieldLabel}>Length</label>
-                <input
+                <NumberField
                   className={styles.numberInput}
-                  type="number"
-                  min="1"
-                  max="65536"
+                  min={1}
+                  max={65536}
+                  integer
                   value={selected.length ?? 4}
-                  onChange={e => updateVariable(selected.id, { length: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                  onNumber={n => updateVariable(selected.id, { length: n })}
                 />
               </div>
             )}
@@ -218,12 +219,10 @@ export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
                   ))}
                 </select>
               ) : (
-                <input
+                <InlineNumberInput
                   className={styles.numberInput}
-                  type="number"
-                  step={selected.dataType === 'integer' ? '1' : 'any'}
                   value={selected.initialValue}
-                  onChange={e => updateVariable(selected.id, { initialValue: e.target.value })}
+                  onChange={next => updateVariable(selected.id, { initialValue: next })}
                 />
               )}
             </div>

@@ -10,6 +10,7 @@ import { GradientStopsEditor, type GradStop } from '../vpl/widgets/GradientStops
 import { INTERPOLATION_METHODS } from '../vpl/nodes/interpolationMethods';
 import type { Mapping, RGB, ColorStop } from '../../model/types';
 import { typeDisplayName } from '../../model/typeLabels';
+import { NumberField } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
 
 function rgbToHex(c: RGB): string {
@@ -106,13 +107,13 @@ function LinkedOutputEditor({ selected }: { selected: Mapping }) {
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Range (maps to the scale&apos;s 0 → 1)</label>
               <div style={rowStyle}>
-                <input className={styles.textInput} type="number" step="any" lang="en" inputMode="decimal"
+                <NumberField className={styles.textInput}
                   style={{ width: 80 }} value={min}
-                  onChange={e => updateMapping(selected.id, { linkedMin: Number(e.target.value) })} />
+                  onNumber={n => updateMapping(selected.id, { linkedMin: n })} />
                 <span style={lblStyle}>min</span>
-                <input className={styles.textInput} type="number" step="any" lang="en" inputMode="decimal"
+                <NumberField className={styles.textInput}
                   style={{ width: 80 }} value={max}
-                  onChange={e => updateMapping(selected.id, { linkedMax: Number(e.target.value) })} />
+                  onNumber={n => updateMapping(selected.id, { linkedMax: n })} />
                 <span style={lblStyle}>max</span>
               </div>
             </div>

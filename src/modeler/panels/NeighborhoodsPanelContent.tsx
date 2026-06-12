@@ -6,6 +6,7 @@ import { useListReorder } from './useListReorder';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag } from '../vpl/graphState';
+import { NumberField } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
 
 function handleNeighborhoodDragStart(neighborhoodId: string) {
@@ -38,9 +39,10 @@ type ShapeTool = 'point' | 'circle' | 'ring' | 'line';
 type PaintMode = 'mark' | 'unmark' | 'toggle';
 
 /** Independent mirror toggles. Edits expand to their closure under the enabled
- *  mirrors: H (left↔right), V (top↔bottom), D (main diagonal r↔c). H+V+D
- *  generates the full 8-fold dihedral symmetry (anti-diagonal included). */
-interface Symmetry { h: boolean; v: boolean; d: boolean }
+ *  mirrors: H (left↔right), V (top↔bottom), D (main diagonal r↔c), D2 (anti-
+ *  diagonal r↔-c). Any three of them generate the full 8-fold dihedral
+ *  symmetry. */
+interface Symmetry { h: boolean; v: boolean; d: boolean; d2: boolean }
 
 /** Clicks each tool needs before it applies. */
 const SHAPE_CLICKS: Record<ShapeTool, number> = { point: 1, circle: 2, ring: 3, line: 2 };
@@ -48,7 +50,7 @@ const SHAPE_CLICKS: Record<ShapeTool, number> = { point: 1, circle: 2, ring: 3, 
 /** Closure of `cells` under the enabled mirrors. Mirrors of in-grid cells stay
  *  in-grid (the margin box is symmetric), so no clipping is needed. */
 function expandSymmetry(cells: Array<[number, number]>, sym: Symmetry): Array<[number, number]> {
-  if (!sym.h && !sym.v && !sym.d) return cells;
+  if (!sym.h && !sym.v && !sym.d && !sym.d2) return cells;
   const out = new Map<string, [number, number]>();
   const queue: Array<[number, number]> = [...cells];
   while (queue.length > 0) {
@@ -60,6 +62,7 @@ function expandSymmetry(cells: Array<[number, number]>, sym: Symmetry): Array<[n
     if (sym.h) queue.push([r, -c]);
     if (sym.v) queue.push([-r, c]);
     if (sym.d) queue.push([c, r]);
+    if (sym.d2) queue.push([-c, -r]);
   }
   return [...out.values()];
 }
@@ -232,7 +235,7 @@ export function NeighborhoodsPanelContent({ mode = 'list' }: PanelContentProps =
   // cells; the symmetry toggles mirror every edit (and its preview).
   const [tool, setTool] = useState<ShapeTool>('point');
   const [paintMode, setPaintMode] = useState<PaintMode>('toggle');
-  const [sym, setSym] = useState<Symmetry>({ h: false, v: false, d: false });
+  const [sym, setSym] = useState<Symmetry>({ h: false, v: false, d: false, d2: false });
   const [staged, setStaged] = useState<Array<[number, number]>>([]);
   const [hoverCell, setHoverCell] = useState<[number, number] | null>(null);
   useEffect(() => { setStaged([]); }, [tool, selectedId]);
@@ -397,16 +400,14 @@ export function NeighborhoodsPanelContent({ mode = 'list' }: PanelContentProps =
           <div className={styles.gridContainer}>
             <div className={styles.gridControls}>
               <label className={styles.fieldLabel}>Margin</label>
-              <input
+              <NumberField
                 className={styles.numberInput}
-                type="number"
                 value={margin}
                 min={1}
                 max={50}
-                onChange={e =>
-                  updateNeighborhood(selected.id, {
-                    margin: Math.max(1, Math.min(50, Number(e.target.value))),
-                  })
+                integer
+                onNumber={n =>
+                  updateNeighborhood(selected.id, { margin: n })
                 }
               />
               <span style={{ fontSize: '0.7rem', color: '#6080a0' }}>
@@ -460,8 +461,13 @@ export function NeighborhoodsPanelContent({ mode = 'list' }: PanelContentProps =
               <button
                 className={`${styles.shapeToolButton} ${sym.d ? styles.shapeToolButtonActive : ''}`}
                 onClick={() => setSym(s => ({ ...s, d: !s.d }))}
-                title="Diagonal symmetry — every edit mirrors across the main diagonal (all three together give full 8-fold symmetry)"
-              >⤢ D</button>
+                title="Diagonal symmetry — every edit mirrors across the main diagonal (↘)"
+              >⤡ D</button>
+              <button
+                className={`${styles.shapeToolButton} ${sym.d2 ? styles.shapeToolButtonActive : ''}`}
+                onClick={() => setSym(s => ({ ...s, d2: !s.d2 }))}
+                title="Anti-diagonal symmetry — every edit mirrors across the anti-diagonal (↗); combining mirrors gives full 8-fold symmetry"
+              >⤢ D2</button>
             </div>
             <div className={styles.shapeToolHint}>{shapeHint(tool, staged.length, paintMode)}</div>
 

@@ -112,6 +112,108 @@ export function InlineNumberInput(props: InlineNumberInputProps) {
   );
 }
 
+interface NumberFieldProps {
+  /** Canonical external value. undefined/null render as an empty field. */
+  value: number | string | undefined | null;
+  /** Called with committed finite numbers, already clamped (and rounded when
+   *  `integer`). Transitional typing states (`-`, `.`, `1e-`) never commit. */
+  onNumber: (n: number) => void;
+  /** Called when the field is cleared (blur on empty). When absent, blurring
+   *  an empty/invalid field restores the last committed value instead. */
+  onClear?: () => void;
+  min?: number;
+  max?: number;
+  /** Round committed values to the nearest integer. */
+  integer?: boolean;
+  className?: string;
+  style?: React.CSSProperties;
+  placeholder?: string;
+  title?: string;
+  disabled?: boolean;
+}
+
+/**
+ * Drop-in replacement for panel `<input type="number">` sites, sharing
+ * InlineNumberInput's draft/commit model (so typing a leading `-` or a
+ * partial decimal is never wiped by the controlled-input loop) but exposing
+ * a numeric API with min/max clamping. ALL number entry in panels and the
+ * simulator should go through this (or InlineNumberInput for string-config
+ * sites) — never a raw `<input type="number">`.
+ */
+export function NumberField(props: NumberFieldProps) {
+  const external = props.value === undefined || props.value === null ? '' : String(props.value);
+  const [draft, setDraft] = useState<string>(external);
+  const lastCommittedRef = useRef<string>(external);
+
+  useEffect(() => {
+    if (external !== lastCommittedRef.current) {
+      setDraft(external);
+      lastCommittedRef.current = external;
+    }
+  }, [external]);
+
+  const clamp = (n: number): number => {
+    let v = n;
+    if (props.min !== undefined && v < props.min) v = props.min;
+    if (props.max !== undefined && v > props.max) v = props.max;
+    if (props.integer) v = Math.round(v);
+    return v;
+  };
+
+  const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value;
+    setDraft(raw);
+    if (TRANSITIONAL.has(raw)) return;
+    if (EXPONENT_PARTIAL.test(raw)) return;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    const v = clamp(n);
+    // Live-commit only values that survive clamping unchanged — otherwise
+    // typing "1" toward "15" with min=10 would snap to 10 mid-keystroke.
+    // Out-of-range drafts settle on blur.
+    if (v === n) {
+      lastCommittedRef.current = raw;
+      props.onNumber(v);
+    }
+  };
+
+  const onBlur = () => {
+    const raw = draft;
+    if (raw === '' && props.onClear) {
+      lastCommittedRef.current = '';
+      props.onClear();
+      return;
+    }
+    const n = Number(raw);
+    if (raw !== '' && Number.isFinite(n)) {
+      const v = clamp(n);
+      const canonical = String(v);
+      lastCommittedRef.current = canonical;
+      setDraft(canonical);
+      props.onNumber(v);
+    } else {
+      // Invalid / empty without onClear: restore the last committed value.
+      setDraft(lastCommittedRef.current);
+    }
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      lang="en"
+      className={props.className}
+      value={draft}
+      onChange={onChange}
+      onBlur={onBlur}
+      placeholder={props.placeholder}
+      title={props.title}
+      style={props.style}
+      disabled={props.disabled}
+    />
+  );
+}
+
 interface InlineBoolSelectProps {
   /** 'true' or 'false'; anything else renders as 'false'. */
   value: string;

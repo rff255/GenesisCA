@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import type { Attribute } from '../../model/types';
+import { NumberField } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
 
 /** Compact matrix editor for a `lookupTable` model attribute. Used in BOTH the
@@ -121,12 +122,10 @@ export function LookupTableEditor({
                   }
                   return (
                     <td key={col} style={{ padding: 1 }}>
-                      <input
+                      <NumberField
                         className={styles.numberInput}
-                        type="number"
-                        step="any"
                         value={get(row, col)}
-                        onChange={e => set(row, col, e.target.value)}
+                        onNumber={n => set(row, col, String(n))}
                         style={{ width: cellSize - 6, height: inputHeight, padding: '0 4px', fontSize: compact ? '0.62rem' : '0.66rem' }}
                       />
                     </td>
