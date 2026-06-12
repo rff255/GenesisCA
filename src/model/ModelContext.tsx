@@ -143,6 +143,10 @@ interface ModelState {
   model: CAModel;
   isDirty: boolean;
   modelVersion: number;
+  /** Name of the file the current model was loaded from / last saved to.
+   *  Display-only (shown in the top bar after the project name); never
+   *  serialized into the model. Null for new/unsaved models. */
+  loadedFileName: string | null;
 }
 
 type ModelAction =
@@ -165,8 +169,8 @@ type ModelAction =
   | { type: 'REMOVE_INDICATOR'; id: string }
   | { type: 'UPDATE_INDICATOR'; id: string; changes: Partial<Indicator> }
   | { type: 'NEW_MODEL' }
-  | { type: 'LOAD_MODEL'; model: CAModel }
-  | { type: 'MARK_SAVED' }
+  | { type: 'LOAD_MODEL'; model: CAModel; fileName?: string }
+  | { type: 'MARK_SAVED'; fileName?: string }
   | { type: 'SET_SIMULATION_STATE'; state: SimulationState | undefined }
   | { type: 'ADD_PRESET'; preset: Preset }
   | { type: 'DELETE_PRESET'; id: string }
@@ -687,7 +691,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       };
 
     case 'NEW_MODEL':
-      return { model: EMPTY_MODEL, isDirty: false, modelVersion: state.modelVersion + 1 };
+      return { model: EMPTY_MODEL, isDirty: false, modelVersion: state.modelVersion + 1, loadedFileName: null };
 
     case 'LOAD_MODEL': {
       let m = action.model;
@@ -736,11 +740,11 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // variegatedCells.faceLabels→facePalettes[0] + default square key sources.
       // Idempotent. Model-level (attributes + variegatedCells), so no macro pass.
       m = migrateLookupTables(m);
-      return { model: m, isDirty: false, modelVersion: state.modelVersion + 1 };
+      return { model: m, isDirty: false, modelVersion: state.modelVersion + 1, loadedFileName: action.fileName ?? null };
     }
 
     case 'MARK_SAVED':
-      return { ...state, isDirty: false };
+      return { ...state, isDirty: false, loadedFileName: action.fileName ?? state.loadedFileName };
 
     case 'SET_SIMULATION_STATE':
       return {
@@ -991,6 +995,8 @@ export interface ModelContextValue {
   model: CAModel;
   isDirty: boolean;
   modelVersion: number;
+  /** File the model was loaded from / last saved to (top-bar display only). */
+  loadedFileName: string | null;
   updateProperties: (changes: Partial<ModelProperties>) => void;
   addAttribute: (isModelAttribute: boolean) => void;
   removeAttribute: (id: string) => void;
@@ -1013,8 +1019,8 @@ export interface ModelContextValue {
   removeIndicator: (id: string) => void;
   updateIndicator: (id: string, changes: Partial<Indicator>) => void;
   newModel: () => void;
-  loadModel: (model: CAModel) => void;
-  markSaved: () => void;
+  loadModel: (model: CAModel, fileName?: string) => void;
+  markSaved: (fileName?: string) => void;
   setSimulationState: (state: SimulationState | undefined) => void;
   addPreset: (preset: Preset) => void;
   deletePreset: (id: string) => void;
@@ -1046,7 +1052,7 @@ const ModelContext = createContext<ModelContextValue | null>(null);
 // ---------------------------------------------------------------------------
 
 function createInitialState(): ModelState {
-  return { model: DEFAULT_MODEL, isDirty: false, modelVersion: 0 };
+  return { model: DEFAULT_MODEL, isDirty: false, modelVersion: 0, loadedFileName: null };
 }
 
 export function ModelProvider({ children }: { children: ReactNode }) {
@@ -1174,15 +1180,15 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'NEW_MODEL' });
   }, []);
   const loadModel = useCallback(
-    (model: CAModel) => {
+    (model: CAModel, fileName?: string) => {
       clearAllSavedGraphViewports();
       setSavedCurrentScope(['root']);
-      dispatch({ type: 'LOAD_MODEL', model });
+      dispatch({ type: 'LOAD_MODEL', model, fileName });
     },
     [],
   );
   const markSaved = useCallback(
-    () => dispatch({ type: 'MARK_SAVED' }),
+    (fileName?: string) => dispatch({ type: 'MARK_SAVED', fileName }),
     [],
   );
   const setSimulationState = useCallback(
@@ -1262,6 +1268,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       model: state.model,
       isDirty: state.isDirty,
       modelVersion: state.modelVersion,
+      loadedFileName: state.loadedFileName,
       updateProperties,
       addAttribute,
       removeAttribute,
@@ -1307,6 +1314,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       state.model,
       state.isDirty,
       state.modelVersion,
+      state.loadedFileName,
       updateProperties,
       addAttribute,
       removeAttribute,

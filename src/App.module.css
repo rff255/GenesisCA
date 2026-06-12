@@ -86,6 +86,32 @@
   font-style: normal;
 }
 
+.fileName {
+  color: var(--color-text-muted);
+}
+
+.toast {
+  position: fixed;
+  top: calc(var(--navbar-height) + var(--space-4));
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-8);
+  font-size: var(--font-sm);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+  pointer-events: none;
+  animation: toastIn 0.18s ease-out;
+}
+
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(-6px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
 .content {
   flex: 1;
   overflow: hidden;

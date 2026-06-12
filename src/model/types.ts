@@ -195,7 +195,11 @@ export interface ModelProperties {
   author: string;
   /** Author of the GenesisCA model file itself (the person who built the graph). */
   modelAuthor: string;
+  /** Short summary — shown on Models Library cards (UI label: "Summary"). */
   description: string;
+  /** Long-form explanation of how the rule works (UI label: "Rule Description").
+   *  Not shown on Library cards — for in-depth notes the author deems important. */
+  ruleDescription?: string;
   topology: Topology;
   boundaryTreatment: BoundaryTreatment;
   updateMode: UpdateMode;

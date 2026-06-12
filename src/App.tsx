@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ModelProvider, useModel } from './model/ModelContext';
 import { FileMenu } from './components/FileMenu';
 import { ConfirmDialog } from './components/ConfirmDialog';
@@ -16,16 +16,31 @@ function AppInner() {
   // Every tab/reload lands on the Library — it's the natural starting point for
   // picking a model to explore or fork.
   const [mode, setMode] = useState<AppMode>('library');
-  const { model, isDirty, loadModel } = useModel();
+  const { model, isDirty, loadedFileName, loadModel } = useModel();
   // Pending library-load that's waiting for an unsaved-changes confirmation.
   // Holds the requested model so the deferred onConfirm has a closed-over
   // reference; setting to null dismisses the dialog.
-  const [pendingLibLoad, setPendingLibLoad] = useState<CAModel | null>(null);
+  const [pendingLibLoad, setPendingLibLoad] = useState<{ model: CAModel; fileName?: string } | null>(null);
+  // Transient load-confirmation toast (auto-dismisses).
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<number | null>(null);
+  const showToast = (msg: string) => {
+    if (toastTimer.current != null) clearTimeout(toastTimer.current);
+    setToast(msg);
+    toastTimer.current = window.setTimeout(() => setToast(null), 3500);
+  };
+  useEffect(() => () => { if (toastTimer.current != null) clearTimeout(toastTimer.current); }, []);
 
-  const handleLoadLibraryModel = (model: CAModel) => {
-    if (isDirty) { setPendingLibLoad(model); return; }
-    loadModel(model);
-    setMode('modeler');
+  /** Shared post-load flow: land in the Simulator, confirm the load. */
+  const afterLoad = (modelName: string) => {
+    setMode('simulator');
+    showToast(`Model "${modelName}" loaded successfully.`);
+  };
+
+  const handleLoadLibraryModel = (model: CAModel, fileName?: string) => {
+    if (isDirty) { setPendingLibLoad({ model, fileName }); return; }
+    loadModel(model, fileName);
+    afterLoad(model.properties.name);
   };
 
   return (
@@ -84,9 +99,11 @@ function AppInner() {
           )}
         </div>
         <span className={styles.modelName}>
-          {model.properties.name}{isDirty && <span className={styles.dirtyIndicator}> *</span>}
+          {model.properties.name}
+          {loadedFileName && <span className={styles.fileName}> ({loadedFileName})</span>}
+          {isDirty && <span className={styles.dirtyIndicator}> *</span>}
         </span>
-        <FileMenu onNew={() => setMode('modeler')} />
+        <FileMenu onNew={() => setMode('modeler')} onLoaded={afterLoad} />
       </nav>
       <main className={styles.content}>
         {mode === 'modeler' && <ModelerView />}
@@ -104,14 +121,15 @@ function AppInner() {
           confirmLabel="Load"
           danger
           onConfirm={() => {
-            const m = pendingLibLoad;
+            const p = pendingLibLoad;
             setPendingLibLoad(null);
-            loadModel(m);
-            setMode('modeler');
+            loadModel(p.model, p.fileName);
+            afterLoad(p.model.properties.name);
           }}
           onCancel={() => setPendingLibLoad(null)}
         />
       )}
+      {toast && <div className={styles.toast}>{toast}</div>}
     </div>
   );
 }
