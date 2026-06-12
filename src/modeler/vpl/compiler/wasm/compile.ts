@@ -23,6 +23,7 @@ import type { Attribute, CAModel, GraphNode, GraphEdge } from '../../../../model
 import { getNodeDef } from '../../nodes/registry';
 import { readColorScaleStops } from '../../nodes/ColorScaleNode';
 import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/CategoricalColorNode';
+import { CURRENT_VIEWER_SENTINEL } from '../../nodes/SetColorViewerNode';
 import {
   ValType, F64, I32, OP_F64_ABS, OP_F64_ADD, OP_F64_CONVERT_I32_S, OP_F64_CONVERT_I32_U, OP_F64_DIV,
   OP_F64_EQ, OP_F64_FLOOR, OP_F64_GE, OP_F64_GT, OP_F64_LE, OP_F64_LT,
@@ -5063,24 +5064,13 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
 
   setColorViewer: ({ node, ctx, inputs }) => {
     const viewerId = (node.data.config.mappingId as string) || '';
-    const viewerInt = ctx.viewerIds[viewerId];
-    if (viewerInt === undefined) {
+    const isCurrentViewer = viewerId === CURRENT_VIEWER_SENTINEL;
+    const viewerInt = isCurrentViewer ? undefined : ctx.viewerIds[viewerId];
+    if (!isCurrentViewer && viewerInt === undefined) {
       // Viewer not in our compile-time map — skip silently (as if "if (active === unknown)" is false)
       return true;
     }
-    // Per-step hoist: viewerLocals[viewerId] holds (activeViewer == viewerInt).
-    // Falls back to inline load+compare if no cached local exists (e.g. a
-    // viewer id not pre-hoisted), so this stays safe under any compile path.
-    const cachedLocal = ctx.viewerLocals.get(viewerId);
-    if (cachedLocal !== undefined) {
-      ctx.emitter.localGet(cachedLocal);
-    } else {
-      ctx.emitter.i32Const(0);
-      ctx.emitter.i32Load(ctx.layout.activeViewerOffset, 2);
-      ctx.emitter.i32Const(viewerInt);
-      ctx.emitter.op(OP_I32_EQ);
-    }
-    ctx.emitter.ifThen(() => {
+    const emitWrites = () => {
       // Address base for color writes: i*4 + colorsOffset
       const colorByte = ctx.emitter.allocLocal(I32);
       ctx.emitter.localGet(ctx.iLocalIdx);
@@ -5108,7 +5098,26 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
       ctx.emitter.localGet(colorByte);
       ctx.emitter.i32Const(255);
       ctx.emitter.i32Store8(ctx.layout.colorsOffset + 3, 0);
-    });
+    };
+    if (isCurrentViewer) {
+      // "Current Simulator Selected": whatever pass is running IS the current
+      // viewer — write unconditionally (mirrors the JS emit with no _isV_ guard).
+      emitWrites();
+      return true;
+    }
+    // Per-step hoist: viewerLocals[viewerId] holds (activeViewer == viewerInt).
+    // Falls back to inline load+compare if no cached local exists (e.g. a
+    // viewer id not pre-hoisted), so this stays safe under any compile path.
+    const cachedLocal = ctx.viewerLocals.get(viewerId);
+    if (cachedLocal !== undefined) {
+      ctx.emitter.localGet(cachedLocal);
+    } else {
+      ctx.emitter.i32Const(0);
+      ctx.emitter.i32Load(ctx.layout.activeViewerOffset, 2);
+      ctx.emitter.i32Const(viewerInt!);
+      ctx.emitter.op(OP_I32_EQ);
+    }
+    ctx.emitter.ifThen(emitWrites);
     return true;
   },
 

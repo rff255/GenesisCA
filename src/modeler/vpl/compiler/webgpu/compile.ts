@@ -27,6 +27,7 @@ import {
 import { getNodeDef } from '../../nodes/registry';
 import { readColorScaleStops } from '../../nodes/ColorScaleNode';
 import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/CategoricalColorNode';
+import { CURRENT_VIEWER_SENTINEL } from '../../nodes/SetColorViewerNode';
 import { parseHandleId } from '../../types';
 import {
   detectWebGPUIncompatibilities, detectWebGPUModelIncompatibilities,
@@ -2711,8 +2712,9 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
 
   setColorViewer: ({ node, ctx, inputs }) => {
     const viewerId = (node.data.config.mappingId as string) || '';
-    const viewerInt = ctx.viewerIds[viewerId];
-    if (viewerInt === undefined) return true; // Unknown viewer — silently skip.
+    const isCurrentViewer = viewerId === CURRENT_VIEWER_SENTINEL;
+    const viewerInt = isCurrentViewer ? undefined : ctx.viewerIds[viewerId];
+    if (!isCurrentViewer && viewerInt === undefined) return true; // Unknown viewer — silently skip.
 
     const r = inputs['r'] ?? { expr: '0', type: 'i32' as WgslType };
     const g = inputs['g'] ?? { expr: '0', type: 'i32' as WgslType };
@@ -2725,8 +2727,17 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
 
     if (ctx.currentMappingId !== null) {
       // Inside an outputMapping shader: only write if THIS shader handles the
-      // mapping. Other mappings' SetColorViewers are skipped at compile time.
-      if (ctx.currentMappingId !== viewerId) return true;
+      // mapping (or always for "Current Simulator Selected" — the shader being
+      // dispatched IS the current viewer). Other mappings' SetColorViewers are
+      // skipped at compile time.
+      if (!isCurrentViewer && ctx.currentMappingId !== viewerId) return true;
+      ctx.lines.push(`  colors[idx] = ${packed};`);
+      return true;
+    }
+
+    if (isCurrentViewer) {
+      // Step shader, "Current Simulator Selected": no activeViewer guard —
+      // mirrors the JS/WASM unguarded emit.
       ctx.lines.push(`  colors[idx] = ${packed};`);
       return true;
     }

@@ -3,6 +3,7 @@ import { Handle, Position, useReactFlow, useUpdateNodeInternals } from '@xyflow/
 import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
 import { GROUP_OPERATOR_POSITION_OPS } from './nodes/GroupOperatorNode';
+import { CURRENT_VIEWER_SENTINEL } from './nodes/SetColorViewerNode';
 import { detectMissingConfig, detectCapabilityRequirements, detectWebGPUIncompatibilities, detectWasmIncompatibilities, countMacroSubgraphIssues } from './nodes/nodeValidation';
 import { INTERPOLATION_METHODS, INTERPOLATION_SHORT_LABELS, DEFAULT_INTERPOLATION_METHOD } from './nodes/interpolationMethods';
 import type { InterpolationMethod } from './nodes/interpolationMethods';
@@ -733,8 +734,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
       const nbr = model.neighborhoods.find(n => n.id === nodeData.config.neighborhoodId);
       collapsedLabel = attr && nbr ? `Set ${nbr.name}[${attr.name}]` : def.label;
     } else if (nodeData.nodeType === 'setColorViewer') {
-      const mapping = model.mappings.find(m => m.id === nodeData.config.mappingId);
-      collapsedLabel = mapping ? `Set A\u2192C - ${mapping.name}` : def.label;
+      if (nodeData.config.mappingId === CURRENT_VIEWER_SENTINEL) {
+        collapsedLabel = 'Set A\u2192C - Current Selected';
+      } else {
+        const mapping = model.mappings.find(m => m.id === nodeData.config.mappingId);
+        collapsedLabel = mapping ? `Set A\u2192C - ${mapping.name}` : def.label;
+      }
     } else if (nodeData.nodeType === 'inputColor') {
       const mapping = model.mappings.find(m => m.id === nodeData.config.mappingId);
       collapsedLabel = mapping ? `C\u2192A: ${mapping.name}` : def.label;
@@ -1557,6 +1562,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 onChange={e => updateConfig('mappingId', e.target.value)}
               >
                 <option value="">Select Mapping...</option>
+                <option value={CURRENT_VIEWER_SENTINEL}>Current Simulator Selected</option>
                 {model.mappings
                   .filter(m => m.isAttributeToColor)
                   .map(m => (
