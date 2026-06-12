@@ -564,8 +564,23 @@ function CaNodeComponent({ id, data }: NodeProps) {
   // Hover-to-uncollapse: temporarily expand when a connection is being dragged over
   const [hoverExpand, setHoverExpand] = useState(false);
   const onMouseEnter = useCallback(() => {
-    if (isCollapsed && isConnectingGlobal) setHoverExpand(true);
-  }, [isCollapsed]);
+    if (!isCollapsed || !isConnectingGlobal) return;
+    // Only force-expand to DISAMBIGUATE which port the wire should land on. The
+    // compatible side depends on the drag origin: dragging from an output, the
+    // wire connects to one of OUR inputs; from an input, to one of our outputs.
+    // If that side has a single category-matching port there's nothing to choose
+    // — releasing on the collapsed node lands on it directly — so stay collapsed.
+    const cf = connectingFrom;
+    if (cf) {
+      const side = cf.kind === 'input' ? outputPorts : inputPorts;
+      let compatibleCount = 0;
+      for (const p of side) {
+        if (p.category === cf.category && id !== cf.nodeId) compatibleCount++;
+      }
+      if (compatibleCount <= 1) return;
+    }
+    setHoverExpand(true);
+  }, [isCollapsed, inputPorts, outputPorts, id]);
   const onMouseLeave = useCallback(() => {
     if (hoverExpand) setHoverExpand(false);
   }, [hoverExpand]);

@@ -1754,7 +1754,20 @@ export function GraphEditorInner() {
         targetHandle,
         style: { stroke: origin.category === 'flow' ? '#66bb6a' : '#4cc9f0', strokeWidth: 2 },
       };
-      setEdges(eds => addEdge(newEdge, eds));
+      // When the drag started FROM a single-connection value input that already
+      // holds a wire, the new node's output must REPLACE it — a non-array value
+      // input accepts only one connection (the limit isValidConnection enforces
+      // for direct drops). This path bypasses isValidConnection (it builds the
+      // edge directly), so strip any existing wire into the same target handle
+      // first; otherwise the recommended-nodes menu silently double-connects.
+      const replacingSingleInput =
+        origin.kind === 'input' && origin.category === 'value' && !origin.isArray;
+      setEdges(eds => addEdge(
+        newEdge,
+        replacingSingleInput
+          ? eds.filter(e => !(e.target === targetNodeId && e.targetHandle === targetHandle))
+          : eds,
+      ));
       scheduleSync();
       return newId;
     },
@@ -1820,8 +1833,17 @@ export function GraphEditorInner() {
         targetHandle: edge.targetHandle,
         style: { stroke: edgeStrokeFor(category), strokeWidth: 2 },
       };
-      setNodes(nds => [...nds, reroute]);
-      setEdges(eds => [...eds.filter(e => e.id !== edgeId), inEdge, outEdge]);
+      // A freshly created reroute becomes the SOLE selection: deselect every
+      // other node (and edge) so the reposition drag that immediately follows the
+      // press-and-hold moves ONLY the reroute — not whatever the user happened to
+      // have selected before starting the gesture (which pressing on a wire does
+      // not otherwise clear).
+      setNodes(nds => [...nds.map(n => (n.selected ? { ...n, selected: false } : n)), reroute]);
+      setEdges(eds => [
+        ...eds.filter(e => e.id !== edgeId).map(e => (e.selected ? { ...e, selected: false } : e)),
+        inEdge,
+        outEdge,
+      ]);
       return reroute.id;
     },
     [makeRerouteNode, setNodes, setEdges],
@@ -1844,7 +1866,8 @@ export function GraphEditorInner() {
         targetHandle: handleId({ id: 'in', kind: 'input', category }),
         style: { stroke: edgeStrokeFor(category), strokeWidth: 2 },
       };
-      setNodes(nds => [...nds, reroute]);
+      // Freshly created reroute is the sole selection (see insertRerouteOnEdge).
+      setNodes(nds => [...nds.map(n => (n.selected ? { ...n, selected: false } : n)), reroute]);
       setEdges(eds => addEdge(newEdge, eds));
       scheduleSync();
     },
