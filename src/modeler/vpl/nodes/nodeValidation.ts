@@ -2,6 +2,7 @@ import type { NodeConfig, NodeTypeDef } from '../types';
 import { parseHandleId } from '../types';
 import type { CAModel } from '../../../model/types';
 import { getNodeDef } from './registry';
+import { CURRENT_VIEWER_SENTINEL } from './SetColorViewerNode';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../compiler/expression/parser';
 
 /** Return a list of human-readable issue strings for a node's configuration.
@@ -204,9 +205,16 @@ export function detectMissingConfig(
       break;
     }
 
+    case 'setColorViewer':
+      // The "Current Simulator Selected" sentinel is always valid — it targets
+      // whichever viewer is active at runtime, not a model mapping.
+      if (config.mappingId !== CURRENT_VIEWER_SENTINEL && !hasMapping(config.mappingId)) {
+        issues.push('Select a mapping');
+      }
+      break;
+
     case 'inputColor':
     case 'outputMapping':
-    case 'setColorViewer':
     case 'setCellGlyph':
       if (!hasMapping(config.mappingId)) issues.push('Select a mapping');
       break;
