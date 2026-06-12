@@ -35,6 +35,11 @@
   pointer-events: none;
 }
 
+.textWrap {
+  width: 100%;
+  height: 100%;
+}
+
 .textArea {
   width: 100%;
   height: 100%;

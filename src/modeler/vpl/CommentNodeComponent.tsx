@@ -1,4 +1,4 @@
-import { memo, useCallback, useRef } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { NodeResizer, useReactFlow } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import styles from './CommentNodeComponent.module.css';
@@ -28,6 +28,25 @@ function CommentNodeInner({ id, data, selected }: NodeProps) {
   const text = (data as Record<string, unknown>).text as string || '';
   const color = ((data as Record<string, unknown>).color as string) || DEFAULT_COLOR;
   const colorInputRef = useRef<HTMLInputElement>(null);
+  // Editing mode: the textarea is inert (node drags normally) until the user
+  // double-clicks. While editing, the `nodrag` class hands the mouse back to
+  // the textarea so click-drag / shift-click text selection work natively.
+  const autoEdit = !!(data as Record<string, unknown>).autoEdit;
+  const [editing, setEditing] = useState(autoEdit);
+  const textAreaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!editing) return;
+    const ta = textAreaRef.current;
+    if (!ta) return;
+    ta.focus();
+    if (autoEdit) {
+      ta.select();
+      // One-shot flag — clear it so it never persists into saved graphs.
+      updateNodeData(id, { ...data, autoEdit: undefined });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing]);
 
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -79,12 +98,18 @@ function CommentNodeInner({ id, data, selected }: NodeProps) {
           />
         </>
       )}
-      <textarea
-        className={styles.textArea}
-        value={text}
-        onChange={handleChange}
-        placeholder="Add a comment..."
-      />
+      <div className={styles.textWrap} onDoubleClick={() => setEditing(true)}>
+        <textarea
+          ref={textAreaRef}
+          className={editing ? `${styles.textArea} nodrag` : styles.textArea}
+          style={editing ? undefined : { pointerEvents: 'none' }}
+          value={text}
+          readOnly={!editing}
+          onChange={handleChange}
+          onBlur={() => setEditing(false)}
+          placeholder="Add a comment..."
+        />
+      </div>
     </div>
   );
 }

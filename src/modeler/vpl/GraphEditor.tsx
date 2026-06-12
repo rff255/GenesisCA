@@ -1718,8 +1718,11 @@ export function GraphEditorInner() {
       // Resolved config drives effective ports for nodes whose port set depends
       // on config (e.g., GetModelAttribute r/g/b vs value via isColorAttr).
       const resolvedCfg: Record<string, unknown> = { ...def.defaultConfig, ...(configOverrides ?? {}) };
+      // A node can be offered as compatible because SOME configuration exposes a
+      // matching port (e.g. Get Random's Options input only exists in 'options'
+      // mode) while its DEFAULT config hides it. Don't silently refuse the click
+      // in that case — add the node unwired and let the user configure it.
       const targetPort = pickCompatiblePort(def, origin, resolvedCfg);
-      if (!targetPort) return null;
       pushCurrentSnapshot();
       const newId = generateNodeId(nodesRef.current);
       const seededConfig: Record<string, string | number | boolean> = { ...def.defaultConfig };
@@ -1735,6 +1738,12 @@ export function GraphEditorInner() {
       };
       const newNode: Node = { id: newId, type: 'caNode', position, data };
       setNodes(nds => [...nds, newNode]);
+
+      if (!targetPort) {
+        // No port compatible under the default config — node added without a wire.
+        scheduleSync();
+        return newId;
+      }
 
       // Build the edge. origin.kind tells us which side the drag started from:
       // - kind === 'output': origin is the SOURCE, new node's port is the TARGET (input).
@@ -2565,7 +2574,7 @@ export function GraphEditorInner() {
         id,
         type: 'commentNode',
         position: { x: contextMenu.flowX, y: contextMenu.flowY - 40 },
-        data: { text: 'Comment' },
+        data: { text: 'Comment', autoEdit: true },
       }];
     });
     scheduleSync();
@@ -2877,18 +2886,25 @@ export function GraphEditorInner() {
     // centred on the selection.
     const BOUNDARY_GAP = 120;     // clear horizontal gap from the selection
     const EST_BOUNDARY_W = 200;   // typical boundary-node width (not yet measured)
-    const EST_BOUNDARY_H = 90;    // typical boundary-node height (for vertical centring)
-    const boundaryY = (midY - EST_BOUNDARY_H / 2) - avgY;
+    // Boundary-node height grows with its exposed ports (~22px per port row +
+    // header/padding), so estimate per side for accurate vertical centring.
+    const estBoundaryH = (portCount: number) => 46 + Math.max(1, portCount) * 22;
     const macroInputGraphNode: GraphNode = {
       id: macroInputNodeId,
       type: 'caNode',
-      position: { x: (bMinX - BOUNDARY_GAP - EST_BOUNDARY_W) - avgX, y: boundaryY },
+      position: {
+        x: (bMinX - BOUNDARY_GAP - EST_BOUNDARY_W) - avgX,
+        y: (midY - estBoundaryH(exposedInputs.length) / 2) - avgY,
+      },
       data: { nodeType: 'macroInput', config: { macroDefId: macroId } },
     };
     const macroOutputGraphNode: GraphNode = {
       id: macroOutputNodeId,
       type: 'caNode',
-      position: { x: (bMaxX + BOUNDARY_GAP) - avgX, y: boundaryY },
+      position: {
+        x: (bMaxX + BOUNDARY_GAP) - avgX,
+        y: (midY - estBoundaryH(exposedOutputs.length) / 2) - avgY,
+      },
       data: { nodeType: 'macroOutput', config: { macroDefId: macroId } },
     };
 
