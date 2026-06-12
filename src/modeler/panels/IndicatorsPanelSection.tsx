@@ -8,6 +8,7 @@ import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag } from '../vpl/graphState';
 import { useThemeTokens } from '../../styles/useThemeTokens';
 import { typeDisplayName } from '../../model/typeLabels';
+import { NumberField, InlineNumberInput } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
 
 function handleIndicatorDragStart(indicatorId: string) {
@@ -171,11 +172,10 @@ export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect }: 
                         : <option value="0">0</option>}
                     </select>
                   ) : (
-                    <input
+                    <InlineNumberInput
                       className={styles.numberInput}
-                      type="number"
                       value={selected.defaultValue || '0'}
-                      onChange={e => updateIndicator(selected.id, { defaultValue: e.target.value })}
+                      onChange={next => updateIndicator(selected.id, { defaultValue: next })}
                     />
                   )}
                 </div>
@@ -231,13 +231,13 @@ export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect }: 
                 {linkedAttr?.type === 'float' && selected.linkedAggregation === 'frequency' && (
                   <div className={styles.field}>
                     <label className={styles.fieldLabel}>Value Bins</label>
-                    <input
+                    <NumberField
                       className={styles.numberInput}
-                      type="number"
                       min={2}
                       max={100}
+                      integer
                       value={selected.binCount ?? 10}
-                      onChange={e => updateIndicator(selected.id, { binCount: Math.max(2, Math.min(100, Number(e.target.value) || 10)) })}
+                      onNumber={n => updateIndicator(selected.id, { binCount: n })}
                     />
                   </div>
                 )}
@@ -289,25 +289,25 @@ export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect }: 
                     {(selected.spatialBinMode || 'slices') === 'slices' ? (
                       <div className={styles.field}>
                         <label className={styles.fieldLabel}>Number of Slices</label>
-                        <input
+                        <NumberField
                           className={styles.numberInput}
-                          type="number"
                           min={2}
                           max={1000}
+                          integer
                           value={selected.spatialBinCount ?? 50}
-                          onChange={e => updateIndicator(selected.id, { spatialBinCount: Math.max(2, Math.min(1000, Number(e.target.value) || 50)) })}
+                          onNumber={n => updateIndicator(selected.id, { spatialBinCount: n })}
                         />
                       </div>
                     ) : (
                       <div className={styles.field}>
                         <label className={styles.fieldLabel}>{selected.xAxis === 'rows' ? 'Rows' : 'Columns'} per Bin</label>
-                        <input
+                        <NumberField
                           className={styles.numberInput}
-                          type="number"
                           min={1}
                           max={1000}
+                          integer
                           value={selected.spatialBinSize ?? 1}
-                          onChange={e => updateIndicator(selected.id, { spatialBinSize: Math.max(1, Math.min(1000, Number(e.target.value) || 1)) })}
+                          onNumber={n => updateIndicator(selected.id, { spatialBinSize: n })}
                         />
                       </div>
                     )}
@@ -413,15 +413,14 @@ function ChartDefaultsEditor({ indicator, model, onChange }: {
       && (!next.seriesColors || Object.keys(next.seriesColors).length === 0);
     onChange(empty ? undefined : next);
   };
-  const setNum = (field: 'yMin' | 'yMax' | 'yTicks') => (e: React.ChangeEvent<HTMLInputElement>) => {
+  const setNum = (field: 'yMin' | 'yMax' | 'yTicks') => (n: number) => {
     const next: IndicatorChartSettings = { ...cs, seriesColors: cs.seriesColors ? { ...cs.seriesColors } : undefined };
-    if (e.target.value === '') {
-      delete next[field];
-    } else {
-      const n = Number(e.target.value);
-      if (!Number.isFinite(n)) return;
-      next[field] = field === 'yTicks' ? Math.max(2, Math.min(11, Math.round(n))) : n;
-    }
+    next[field] = n;
+    emit(next);
+  };
+  const clearNum = (field: 'yMin' | 'yMax' | 'yTicks') => () => {
+    const next: IndicatorChartSettings = { ...cs, seriesColors: cs.seriesColors ? { ...cs.seriesColors } : undefined };
+    delete next[field];
     emit(next);
   };
   const setSeriesColor = (cat: string, color: string | null) => {
@@ -434,17 +433,16 @@ function ChartDefaultsEditor({ indicator, model, onChange }: {
   const numField = (label: string, field: 'yMin' | 'yMax' | 'yTicks', title: string, placeholder: string) => (
     <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.7rem' }} title={title}>
       <span style={{ flex: '0 0 44px', color: '#8090a0' }}>{label}</span>
-      <input
+      <NumberField
         className={styles.numberInput}
         style={{ flex: 1, minWidth: 0 }}
-        type="number"
-        step={field === 'yTicks' ? 1 : 'any'}
-        lang="en"
+        integer={field === 'yTicks'}
         min={field === 'yTicks' ? 2 : undefined}
         max={field === 'yTicks' ? 11 : undefined}
-        value={cs[field] ?? ''}
+        value={cs[field]}
         placeholder={placeholder}
-        onChange={setNum(field)}
+        onNumber={setNum(field)}
+        onClear={clearNum(field)}
       />
     </label>
   );

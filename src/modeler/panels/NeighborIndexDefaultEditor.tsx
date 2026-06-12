@@ -1,5 +1,6 @@
 import type { Attribute, Neighborhood } from '../../model/types';
 import { packNI, unpackNI, INVALID_NI } from '../vpl/compiler/niCodec';
+import { NumberField } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
 
 interface DefaultEditorProps {
@@ -151,32 +152,22 @@ export function NeighborIndexValuePicker({ value, hint, onChange, cellSize = 22 
   return (
     <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
       <span style={{ fontSize: 11, color: 'var(--color-text-secondary)', minWidth: 18 }}>dr</span>
-      <input
+      <NumberField
         className={styles.numberInput}
-        type="number"
-        step={1}
+        integer
         min={AXIS_MIN}
         max={AXIS_MAX}
         value={isSentinel ? 0 : curDr}
-        onChange={e => {
-          const raw = Number(e.target.value);
-          const dr = Number.isFinite(raw) ? clampAxis(raw) : 0;
-          onChange(packNI(dr, isSentinel ? 0 : curDc));
-        }}
+        onNumber={n => onChange(packNI(clampAxis(n), isSentinel ? 0 : curDc))}
       />
       <span style={{ fontSize: 11, color: 'var(--color-text-secondary)', minWidth: 18 }}>dc</span>
-      <input
+      <NumberField
         className={styles.numberInput}
-        type="number"
-        step={1}
+        integer
         min={AXIS_MIN}
         max={AXIS_MAX}
         value={isSentinel ? 0 : curDc}
-        onChange={e => {
-          const raw = Number(e.target.value);
-          const dc = Number.isFinite(raw) ? clampAxis(raw) : 0;
-          onChange(packNI(isSentinel ? 0 : curDr, dc));
-        }}
+        onNumber={n => onChange(packNI(isSentinel ? 0 : curDr, clampAxis(n)))}
       />
     </div>
   );

@@ -11,6 +11,7 @@ import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag } from '../vpl/graphState';
 import { typeDisplayName } from '../../model/typeLabels';
+import { NumberField, InlineNumberInput } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
 
 /** Build the drag payload for an attribute row. Cell vs Model attribute drop
@@ -313,25 +314,20 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   <option value="true">true</option>
                 </select>
               ) : selected.type === 'integer' ? (
-                <input
+                <NumberField
                   className={styles.numberInput}
-                  type="number"
-                  step={1}
+                  integer
                   value={selected.defaultValue}
-                  onChange={e =>
-                    updateAttribute(selected.id, {
-                      defaultValue: String(Math.round(Number(e.target.value) || 0)),
-                    })
+                  onNumber={n =>
+                    updateAttribute(selected.id, { defaultValue: String(n) })
                   }
                 />
               ) : selected.type === 'float' ? (
-                <input
+                <InlineNumberInput
                   className={styles.numberInput}
-                  type="number"
-                  step="any"
                   value={selected.defaultValue}
-                  onChange={e =>
-                    updateAttribute(selected.id, { defaultValue: e.target.value })
+                  onChange={next =>
+                    updateAttribute(selected.id, { defaultValue: next })
                   }
                 />
               ) : selected.type === 'color' ? (
@@ -392,26 +388,21 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                     <option value="true">true</option>
                   </select>
                 ) : selected.type === 'integer' ? (
-                  <input
+                  <NumberField
                     className={styles.numberInput}
-                    type="number"
-                    step={1}
-                    value={selected.boundaryValue ?? ''}
+                    integer
+                    value={selected.boundaryValue}
                     placeholder={`(default: ${selected.defaultValue})`}
-                    onChange={e => updateAttribute(selected.id, {
-                      boundaryValue: e.target.value === '' ? undefined : String(Math.round(Number(e.target.value) || 0)),
-                    })}
+                    onNumber={n => updateAttribute(selected.id, { boundaryValue: String(n) })}
+                    onClear={() => updateAttribute(selected.id, { boundaryValue: undefined })}
                   />
                 ) : selected.type === 'float' ? (
-                  <input
+                  <NumberField
                     className={styles.numberInput}
-                    type="number"
-                    step="any"
-                    value={selected.boundaryValue ?? ''}
+                    value={selected.boundaryValue}
                     placeholder={`(default: ${selected.defaultValue})`}
-                    onChange={e => updateAttribute(selected.id, {
-                      boundaryValue: e.target.value === '' ? undefined : e.target.value,
-                    })}
+                    onNumber={n => updateAttribute(selected.id, { boundaryValue: String(n) })}
+                    onClear={() => updateAttribute(selected.id, { boundaryValue: undefined })}
                   />
                 ) : selected.type === 'tag' ? (
                   <select
@@ -669,22 +660,19 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                             <option value="true">true</option>
                           </select>
                         ) : selected.type === 'integer' ? (
-                          <input
+                          <NumberField
                             className={styles.numberInput}
-                            type="number"
-                            step={1}
+                            integer
                             value={selected.undefinedValue ?? selected.defaultValue}
-                            onChange={e => updateAttribute(selected.id, {
-                              undefinedValue: String(Math.round(Number(e.target.value) || 0)),
+                            onNumber={n => updateAttribute(selected.id, {
+                              undefinedValue: String(n),
                             })}
                           />
                         ) : selected.type === 'float' ? (
-                          <input
+                          <InlineNumberInput
                             className={styles.numberInput}
-                            type="number"
-                            step="any"
                             value={selected.undefinedValue ?? selected.defaultValue}
-                            onChange={e => updateAttribute(selected.id, { undefinedValue: e.target.value })}
+                            onChange={next => updateAttribute(selected.id, { undefinedValue: next })}
                           />
                         ) : selected.type === 'tag' ? (
                           <select
@@ -752,26 +740,20 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
                     <div style={{ flex: 1 }}>
                       <label className={styles.fieldLabel}>Min</label>
-                      <input
+                      <NumberField
                         className={styles.numberInput}
-                        type="number"
-                        step={selected.type === 'integer' ? 1 : 'any'}
+                        integer={selected.type === 'integer'}
                         value={selected.min ?? 0}
-                        onChange={e => updateAttribute(selected.id, {
-                          min: selected.type === 'integer' ? Math.round(Number(e.target.value) || 0) : Number(e.target.value) || 0,
-                        })}
+                        onNumber={n => updateAttribute(selected.id, { min: n })}
                       />
                     </div>
                     <div style={{ flex: 1 }}>
                       <label className={styles.fieldLabel}>Max</label>
-                      <input
+                      <NumberField
                         className={styles.numberInput}
-                        type="number"
-                        step={selected.type === 'integer' ? 1 : 'any'}
+                        integer={selected.type === 'integer'}
                         value={selected.max ?? (selected.type === 'integer' ? 100 : 1)}
-                        onChange={e => updateAttribute(selected.id, {
-                          max: selected.type === 'integer' ? Math.round(Number(e.target.value) || 0) : Number(e.target.value) || 0,
-                        })}
+                        onNumber={n => updateAttribute(selected.id, { max: n })}
                       />
                     </div>
                   </div>

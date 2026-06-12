@@ -6,6 +6,7 @@ import type {
 import { IndicatorsPanelSection } from './IndicatorsPanelSection';
 import { useDetailSelection, type PanelContentProps } from '../ModelerDetailContext';
 import { useListReorder } from './useListReorder';
+import { NumberField } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
 
 function newCondId(): string {
@@ -107,26 +108,22 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
           <div className={styles.fieldRow}>
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Grid Width</label>
-              <input
+              <NumberField
                 className={styles.numberInput}
-                type="number"
                 value={properties.gridWidth}
                 min={1}
-                onChange={e =>
-                  updateProperties({ gridWidth: Number(e.target.value) || 1 })
-                }
+                integer
+                onNumber={n => updateProperties({ gridWidth: n })}
               />
             </div>
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Grid Height</label>
-              <input
+              <NumberField
                 className={styles.numberInput}
-                type="number"
                 value={properties.gridHeight}
                 min={1}
-                onChange={e =>
-                  updateProperties({ gridHeight: Number(e.target.value) || 1 })
-                }
+                integer
+                onNumber={n => updateProperties({ gridHeight: n })}
               />
             </div>
           </div>
@@ -270,18 +267,13 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
               }
             >
               <label className={styles.fieldLabel}>WebGPU stop-check interval</label>
-              <input
+              <NumberField
                 className={styles.numberInput}
-                type="number"
                 min={1}
-                step={1}
+                integer
                 disabled={!properties.useWebGPU}
                 value={properties.webgpuStopCheckInterval ?? 1}
-                onChange={e => {
-                  const n = parseInt(e.target.value, 10);
-                  const k = Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
-                  updateProperties({ webgpuStopCheckInterval: k });
-                }}
+                onNumber={n => updateProperties({ webgpuStopCheckInterval: n })}
               />
               <span style={{ color: '#888', fontSize: '0.62rem', marginTop: 2, display: 'block' }}>
                 1 = exact (default). Higher values amortize the per-step GPU stall but a stop event may surface up to K-1 generations late.
@@ -329,15 +321,14 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
               <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div className={styles.field}>
                   <label className={styles.fieldLabel}>Max Generations</label>
-                  <input
+                  <NumberField
                     className={styles.numberInput}
-                    type="number"
                     min={0}
+                    integer
                     placeholder="(no limit)"
-                    value={ec?.maxGenerations ?? ''}
-                    onChange={e => updateEndConditions({
-                      maxGenerations: e.target.value === '' ? undefined : Math.max(0, Math.round(Number(e.target.value) || 0)),
-                    })}
+                    value={ec?.maxGenerations}
+                    onNumber={n => updateEndConditions({ maxGenerations: n })}
+                    onClear={() => updateEndConditions({ maxGenerations: undefined })}
                   />
                 </div>
                 <div className={styles.field}>
@@ -410,16 +401,14 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                             </select>
                           )}
                           {isFreq && freqKind === 'integer' && (
-                            <input
+                            <NumberField
                               className={styles.numberInput}
-                              type="number"
-                              step={1}
+                              integer
                               style={{ flex: 1 }}
                               placeholder="value"
-                              value={cond.category ?? ''}
-                              onChange={e => updateIndicatorCondition(cond.id, {
-                                category: e.target.value === '' ? undefined : String(Math.round(Number(e.target.value) || 0)),
-                              })}
+                              value={cond.category}
+                              onNumber={n => updateIndicatorCondition(cond.id, { category: String(n) })}
+                              onClear={() => updateIndicatorCondition(cond.id, { category: undefined })}
                               title="Integer value to monitor (count of cells with this value)"
                             />
                           )}
@@ -461,15 +450,14 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                               ))}
                             </select>
                           ) : (
-                            <input
+                            <NumberField
                               className={styles.numberInput}
-                              type="number"
-                              step={isFreq ? 1 : (ind?.dataType === 'integer' ? 1 : 'any')}
+                              integer={isFreq || ind?.dataType === 'integer'}
                               style={{ flex: 1 }}
                               value={cond.value}
                               disabled={floatFreqDisabled}
                               placeholder={isFreq ? 'count' : undefined}
-                              onChange={e => updateIndicatorCondition(cond.id, { value: e.target.value })}
+                              onNumber={n => updateIndicatorCondition(cond.id, { value: String(n) })}
                             />
                           )}
                           <button

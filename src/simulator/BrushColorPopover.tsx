@@ -1,4 +1,5 @@
 import { useEffect, useRef, useLayoutEffect, useState } from 'react';
+import { NumberField } from '../modeler/vpl/widgets/InlineWidgets';
 import styles from './BrushColorPopover.module.css';
 
 interface Props {
@@ -77,14 +78,14 @@ export function BrushColorPopover({ x, y, color, onChange, onClose }: Props) {
       </div>
       <div className={styles.rgbRow}>
         <label className={styles.label}>R</label>
-        <input className={styles.input} type="number" min={0} max={255} value={r}
-          onChange={e => setChannel('r', Number(e.target.value))} />
+        <NumberField className={styles.input} min={0} max={255} integer value={r}
+          onNumber={n => setChannel('r', n)} />
         <label className={styles.label}>G</label>
-        <input className={styles.input} type="number" min={0} max={255} value={g}
-          onChange={e => setChannel('g', Number(e.target.value))} />
+        <NumberField className={styles.input} min={0} max={255} integer value={g}
+          onNumber={n => setChannel('g', n)} />
         <label className={styles.label}>B</label>
-        <input className={styles.input} type="number" min={0} max={255} value={b}
-          onChange={e => setChannel('b', Number(e.target.value))} />
+        <NumberField className={styles.input} min={0} max={255} integer value={b}
+          onNumber={n => setChannel('b', n)} />
       </div>
       <div className={styles.nativeRow}>
         <label className={styles.nativeLabel}>Full picker</label>

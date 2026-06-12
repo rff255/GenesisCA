@@ -6,6 +6,7 @@ import { IndicatorMultiLineChart } from './IndicatorMultiLineChart';
 import { IndicatorStackedAreaChart } from './IndicatorStackedAreaChart';
 import { IndicatorSpatialChart, compareSeriesKeys } from './IndicatorSpatialChart';
 import { SCALAR_SERIES_KEY, mergeChartSettings } from './indicatorChartSettings';
+import { NumberField } from '../modeler/vpl/widgets/InlineWidgets';
 import styles from './IndicatorDisplay.module.css';
 
 export type IndicatorVizMode = 'bars' | 'multiline' | 'stacked';
@@ -103,15 +104,14 @@ function ChartSettingsPopover({ ind, override, categories, palette, onChange, on
       && (!next.seriesColors || Object.keys(next.seriesColors).length === 0);
     onChange(empty ? null : next);
   };
-  const setNum = (field: 'yMin' | 'yMax' | 'yTicks') => (e: React.ChangeEvent<HTMLInputElement>) => {
+  const setNum = (field: 'yMin' | 'yMax' | 'yTicks') => (n: number) => {
     const next = { ...ov, seriesColors: ov.seriesColors ? { ...ov.seriesColors } : undefined };
-    if (e.target.value === '') {
-      delete next[field];
-    } else {
-      const n = Number(e.target.value);
-      if (!Number.isFinite(n)) return;
-      next[field] = field === 'yTicks' ? Math.max(2, Math.min(11, Math.round(n))) : n;
-    }
+    next[field] = n;
+    emit(next);
+  };
+  const clearNum = (field: 'yMin' | 'yMax' | 'yTicks') => () => {
+    const next = { ...ov, seriesColors: ov.seriesColors ? { ...ov.seriesColors } : undefined };
+    delete next[field];
     emit(next);
   };
   const setSeriesColor = (cat: string, color: string | null) => {
@@ -132,29 +132,29 @@ function ChartSettingsPopover({ ind, override, categories, palette, onChange, on
       </div>
       <div className={styles.settingsRow}>
         <span className={styles.settingsLabel}>Y min</span>
-        <input
-          className={styles.settingsInput} type="number" step="any" lang="en"
-          value={ov.yMin ?? ''} placeholder={numPlaceholder('yMin')}
-          onChange={setNum('yMin')}
+        <NumberField
+          className={styles.settingsInput}
+          value={ov.yMin} placeholder={numPlaceholder('yMin')}
+          onNumber={setNum('yMin')} onClear={clearNum('yMin')}
           title="Fixed Y-axis minimum — blank = dynamic (follows the data)"
         />
       </div>
       <div className={styles.settingsRow}>
         <span className={styles.settingsLabel}>Y max</span>
-        <input
-          className={styles.settingsInput} type="number" step="any" lang="en"
-          value={ov.yMax ?? ''} placeholder={numPlaceholder('yMax')}
-          onChange={setNum('yMax')}
+        <NumberField
+          className={styles.settingsInput}
+          value={ov.yMax} placeholder={numPlaceholder('yMax')}
+          onNumber={setNum('yMax')} onClear={clearNum('yMax')}
           title="Fixed Y-axis maximum — blank = dynamic (follows the data)"
         />
       </div>
       <div className={styles.settingsRow}>
         <span className={styles.settingsLabel}>Y ticks</span>
-        <input
-          className={styles.settingsInput} type="number" min={2} max={11} step={1}
-          value={ov.yTicks ?? ''}
+        <NumberField
+          className={styles.settingsInput} min={2} max={11} integer
+          value={ov.yTicks}
           placeholder={defaults?.yTicks !== undefined ? String(defaults.yTicks) : '2'}
-          onChange={setNum('yTicks')}
+          onNumber={setNum('yTicks')} onClear={clearNum('yTicks')}
           title="Number of Y-axis tick labels including min and max (2–11)"
         />
       </div>

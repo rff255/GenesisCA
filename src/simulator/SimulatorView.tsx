@@ -15,6 +15,7 @@ import { getGlyphTile } from './recording/glyphAtlas';
 import { IndicatorDisplay } from './IndicatorDisplay';
 import { BrushColorPopover } from './BrushColorPopover';
 import { ManualBrushPanel } from './ManualBrushPanel';
+import { NumberField } from '../modeler/vpl/widgets/InlineWidgets';
 import { InspectCellPopover, InspectHoverLink, type InspectPopoverState } from './InspectCellPopover';
 import { PresetSaveDialog } from './PresetSaveDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -3283,11 +3284,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           <div className={styles.sectionTitle}>Grid Dimensions</div>
           <div className={styles.fieldRow}>
             <span className={styles.statLabel}>W</span>
-            <input className={styles.brushInput} style={{ flex: 1, width: 0, minWidth: 0 }} type="number" min={1} value={simWidth}
-              onChange={e => setSimWidth(Math.max(1, Number(e.target.value) || 1))} />
+            <NumberField className={styles.brushInput} style={{ flex: 1, width: 0, minWidth: 0 }} min={1} integer value={simWidth}
+              onNumber={setSimWidth} />
             <span className={styles.statLabel}>H</span>
-            <input className={styles.brushInput} style={{ flex: 1, width: 0, minWidth: 0 }} type="number" min={1} value={simHeight}
-              onChange={e => setSimHeight(Math.max(1, Number(e.target.value) || 1))} />
+            <NumberField className={styles.brushInput} style={{ flex: 1, width: 0, minWidth: 0 }} min={1} integer value={simHeight}
+              onNumber={setSimHeight} />
           </div>
           <button className={styles.controlButton} onClick={handleApplyDimensions}>Resize</button>
           <div className={styles.fieldRow} style={{ marginTop: 6 }}>
@@ -3348,15 +3349,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                           onChange={e => handleModelAttrChange(a.id, Math.round(Number(e.target.value)))}
                           style={{ flex: 1, minWidth: 0, width: '100%' }} />
                       )}
-                      <input className={styles.brushInput} type="number" step={1}
-                        min={a.hasBounds ? a.min : undefined} max={a.hasBounds ? a.max : undefined}
+                      <NumberField className={styles.brushInput} integer
+                        min={a.hasBounds && a.min != null ? a.min : undefined}
+                        max={a.hasBounds && a.max != null ? a.max : undefined}
                         value={runtimeModelAttrs[a.id] ?? 0}
-                        onChange={e => {
-                          let v = Math.round(Number(e.target.value) || 0);
-                          if (a.hasBounds && a.min != null) v = Math.max(a.min, v);
-                          if (a.hasBounds && a.max != null) v = Math.min(a.max, v);
-                          handleModelAttrChange(a.id, v);
-                        }} />
+                        onNumber={n => handleModelAttrChange(a.id, n)} />
                     </div>
                   ) : a.type === 'float' ? (
                     <div style={{ display: 'flex', gap: 4, alignItems: 'center', flex: 2, minWidth: 0 }}>
@@ -3366,15 +3363,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                           onChange={e => handleModelAttrChange(a.id, Number(e.target.value))}
                           style={{ flex: 1, minWidth: 0, width: '100%' }} />
                       )}
-                      <input className={styles.brushInput} type="number" step="any"
-                        min={a.hasBounds ? a.min : undefined} max={a.hasBounds ? a.max : undefined}
+                      <NumberField className={styles.brushInput}
+                        min={a.hasBounds && a.min != null ? a.min : undefined}
+                        max={a.hasBounds && a.max != null ? a.max : undefined}
                         value={runtimeModelAttrs[a.id] ?? 0}
-                        onChange={e => {
-                          let v = Number(e.target.value) || 0;
-                          if (a.hasBounds && a.min != null) v = Math.max(a.min, v);
-                          if (a.hasBounds && a.max != null) v = Math.min(a.max, v);
-                          handleModelAttrChange(a.id, v);
-                        }} />
+                        onNumber={n => handleModelAttrChange(a.id, n)} />
                     </div>
                   ) : a.type === 'tag' ? (
                     <select className={styles.brushInput} style={{ width: 'auto' }}
@@ -3454,9 +3447,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                       })()}
                     </div>
                   ) : (
-                    <input className={styles.brushInput} type="number" step="any"
+                    <NumberField className={styles.brushInput}
                       value={runtimeModelAttrs[a.id] ?? 0}
-                      onChange={e => handleModelAttrChange(a.id, Number(e.target.value) || 0)} />
+                      onNumber={n => handleModelAttrChange(a.id, n)} />
                   )}
                 </div>
               ))}
@@ -3773,12 +3766,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                   };
                   return (
                     <>
-                      <input className={styles.brushInput} type="number" min={0} max={255} title="Red"
-                        value={r} onChange={e => setChannel('r', Number(e.target.value))} />
-                      <input className={styles.brushInput} type="number" min={0} max={255} title="Green"
-                        value={g} onChange={e => setChannel('g', Number(e.target.value))} />
-                      <input className={styles.brushInput} type="number" min={0} max={255} title="Blue"
-                        value={b} onChange={e => setChannel('b', Number(e.target.value))} />
+                      <NumberField className={styles.brushInput} min={0} max={255} integer title="Red"
+                        value={r} onNumber={n => setChannel('r', n)} />
+                      <NumberField className={styles.brushInput} min={0} max={255} integer title="Green"
+                        value={g} onNumber={n => setChannel('g', n)} />
+                      <NumberField className={styles.brushInput} min={0} max={255} integer title="Blue"
+                        value={b} onNumber={n => setChannel('b', n)} />
                     </>
                   );
                 })()}
@@ -3786,11 +3779,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             )}
             <div className={styles.fieldRow}>
               <span className={styles.statLabel}>W</span>
-              <input className={styles.brushInput} type="number" min={1} max={(gridWidth.current || simWidth) * 2} value={brushW}
-                onChange={e => setBrushW(Math.max(1, Number(e.target.value) || 1))} />
+              <NumberField className={styles.brushInput} min={1} max={(gridWidth.current || simWidth) * 2} integer value={brushW}
+                onNumber={setBrushW} />
               <span className={styles.statLabel}>H</span>
-              <input className={styles.brushInput} type="number" min={1} max={(gridHeight.current || simHeight) * 2} value={brushH}
-                onChange={e => setBrushH(Math.max(1, Number(e.target.value) || 1))} />
+              <NumberField className={styles.brushInput} min={1} max={(gridHeight.current || simHeight) * 2} integer value={brushH}
+                onNumber={setBrushH} />
             </div>
             <hr className={styles.divider} />
             <button
