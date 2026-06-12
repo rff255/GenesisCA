@@ -7,6 +7,7 @@ import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag } from '../vpl/graphState';
 import { useThemeTokens } from '../../styles/useThemeTokens';
+import { designTimeSeriesKeys } from '../../simulator/indicatorChartSettings';
 import { typeDisplayName } from '../../model/typeLabels';
 import { NumberField, InlineNumberInput } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
@@ -357,20 +358,6 @@ export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect }: 
     )}
     </>
   );
-}
-
-/** Design-time enumerable series keys for an indicator's charts, in the same
- *  order the charts assign palette indices (plain sort). Scalar charts use the
- *  single 'value' key; numeric frequency buckets only exist at runtime → []. */
-function designTimeSeriesKeys(ind: Indicator, model: CAModel): string[] {
-  if (ind.kind === 'standalone') return ['value'];
-  if (ind.linkedAggregation === 'total') return ['value'];
-  if (ind.dataType === 'bool') return ['false', 'true'];
-  if (ind.dataType === 'tag') {
-    const attr = model.attributes.find(a => a.id === ind.linkedAttributeId);
-    return [...(attr?.tagOptions ?? [])].sort();
-  }
-  return [];
 }
 
 const CHART_COLOR_TOKENS = [

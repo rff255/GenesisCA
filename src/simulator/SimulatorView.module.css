@@ -106,6 +106,22 @@
   min-height: 0;
 }
 
+/* Horizontal splitter between the brush and indicators sections. Sits where
+ * the adjacent-section border used to be, so it carries the divider line
+ * (the `+` border rule doesn't fire across it). */
+.rightSectionSplitter {
+  flex: 0 0 auto;
+  height: 6px;
+  cursor: row-resize;
+  border-top: 1px solid var(--color-border);
+  background: transparent;
+  transition: background var(--duration-base);
+}
+
+.rightSectionSplitter:hover {
+  background: var(--color-accent-soft);
+}
+
 .panelExpandBtnRight {
   position: absolute;
   top: var(--space-4);

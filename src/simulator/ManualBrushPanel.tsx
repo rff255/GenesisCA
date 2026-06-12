@@ -1,12 +1,15 @@
 import { useMemo } from 'react';
-import type { Attribute } from '../model/types';
+import type { Attribute, Neighborhood } from '../model/types';
 import { subAttrInfo } from '../modeler/vpl/compiler/subAttribute';
 import { InlineBoolSelect, InlineNumberInput, InlineTagSelect } from '../modeler/vpl/widgets/InlineWidgets';
+import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefaultEditor';
 import styles from './SimulatorView.module.css';
 import type { ManualBrushModelState } from './SimulatorView';
 
 interface ManualBrushPanelProps {
   cellAttributes: Attribute[];
+  /** For resolving neighborIndex attrs' hint neighborhood (grid picker). */
+  neighborhoods: Neighborhood[];
   state: ManualBrushModelState;
   onChange: (next: ManualBrushModelState) => void;
 }
@@ -29,7 +32,7 @@ function formatParentValue(parent: Attribute, raw: string): string {
 
 /** Renders one row per cell attribute: [Set checkbox] [name + sub-attr hint] [value widget].
  *  Sub-attribute hint reads as e.g. "writes only when cellType ∈ {Wire, Pulsar}". */
-export function ManualBrushPanel({ cellAttributes, state, onChange }: ManualBrushPanelProps) {
+export function ManualBrushPanel({ cellAttributes, neighborhoods, state, onChange }: ManualBrushPanelProps) {
   const model = useMemo(() => ({ attributes: cellAttributes }), [cellAttributes]);
   const setEntry = (attrId: string, patch: Partial<{ enabled: boolean; value: string }>): void => {
     const prev = state[attrId] ?? { enabled: true, value: '' };
@@ -72,11 +75,21 @@ export function ManualBrushPanel({ cellAttributes, state, onChange }: ManualBrus
                   onChange={v => setEntry(attr.id, { value: v })}
                 />
               )}
-              {(attr.type === 'integer' || attr.type === 'float' || attr.type === 'neighborIndex') && (
+              {(attr.type === 'integer' || attr.type === 'float') && (
                 <InlineNumberInput
                   value={entry.value ?? ''}
                   onChange={v => setEntry(attr.id, { value: v })}
                   step={attr.type === 'float' ? 'any' : 1}
+                />
+              )}
+              {attr.type === 'neighborIndex' && (
+                <NeighborIndexValuePicker
+                  value={(() => { const n = parseInt(entry.value ?? '', 10); return Number.isFinite(n) ? n : 0; })()}
+                  hint={attr.neighborhoodHintId
+                    ? (neighborhoods.find(n => n.id === attr.neighborhoodHintId) ?? null)
+                    : null}
+                  onChange={packed => setEntry(attr.id, { value: String(packed) })}
+                  cellSize={16}
                 />
               )}
               {attr.type === 'tag' && (

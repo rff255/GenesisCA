@@ -35,6 +35,9 @@ interface Props {
   onToggleCategory: (id: string, category: string) => void;
   /** Replace one indicator's override entry (null clears it entirely). */
   onChangeChartOverrides: (id: string, next: IndicatorChartSettings | null) => void;
+  /** Per-indicator design-time series-key order (designTimeSeriesKeys) —
+   *  keeps palette indices stable under Track Categories filtering. */
+  categoryOrders: Record<string, string[]>;
 }
 
 const CHART_COLOR_TOKENS = [
@@ -77,11 +80,14 @@ function toHexColor(c: string | undefined, fallback: string): string {
 
 /** Gear popover: edits the OVERRIDE layer (number fields blank = inherit the
  *  model default, whose value shows as the placeholder; 'auto' = dynamic). */
-function ChartSettingsPopover({ ind, override, categories, palette, onChange, onClose }: {
+function ChartSettingsPopover({ ind, override, categories, palette, categoryOrder, onChange, onClose }: {
   ind: Indicator;
   override: IndicatorChartSettings | undefined;
   categories: string[];
   palette: string[];
+  /** Design-time series order — palette default swatches use the category's
+   *  stable index here (matches the charts), runtime index as fallback. */
+  categoryOrder?: string[];
   onChange: (next: IndicatorChartSettings | null) => void;
   onClose: () => void;
 }) {
@@ -162,10 +168,12 @@ function ChartSettingsPopover({ ind, override, categories, palette, onChange, on
         <>
           <div className={styles.settingsSection}>Series colors</div>
           {categories.map((cat, ci) => {
+            const stable = categoryOrder ? categoryOrder.indexOf(cat) : -1;
+            const pi = stable >= 0 ? stable : ci;
             const overridden = ov.seriesColors?.[cat] !== undefined;
             const effective = ov.seriesColors?.[cat]
               ?? defaults?.seriesColors?.[cat]
-              ?? palette[ci % palette.length]!;
+              ?? palette[pi % palette.length]!;
             return (
               <div key={cat} className={styles.settingsRow}>
                 <span className={styles.settingsLabel} title={cat}>
@@ -210,7 +218,7 @@ function formatValue(val: number, ind: Indicator): string {
   return String(val);
 }
 
-export function IndicatorDisplay({ indicators, values, history, generation, gridWidth, gridHeight, vizModes, hiddenCategories, chartOverrides, onToggleWatch, onChartToggle, onCycleVizMode, onToggleCategory, onChangeChartOverrides }: Props) {
+export function IndicatorDisplay({ indicators, values, history, generation, gridWidth, gridHeight, vizModes, hiddenCategories, chartOverrides, onToggleWatch, onChartToggle, onCycleVizMode, onToggleCategory, onChangeChartOverrides, categoryOrders }: Props) {
   // Track *collapsed* IDs — everything is expanded by default
   const [collapsedCharts, setCollapsedCharts] = useState<Set<string>>(new Set());
   // Per-indicator custom content height (drag-to-resize)
@@ -337,6 +345,7 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
                 override={chartOverrides[ind.id]}
                 categories={seriesKeysOf(ind, val, history[ind.id])}
                 palette={palette}
+                categoryOrder={categoryOrders[ind.id]}
                 onChange={next => onChangeChartOverrides(ind.id, next)}
                 onClose={() => setGearOpenId(null)}
               />
@@ -387,6 +396,7 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
                       hidden={hiddenCategories[ind.id]}
                       onToggleCategory={cat => onToggleCategory(ind.id, cat)}
                       settings={chartFx}
+                      categoryOrder={categoryOrders[ind.id]}
                     />
                   </div>
                 );
@@ -399,6 +409,7 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
                       hidden={hiddenCategories[ind.id]}
                       onToggleCategory={cat => onToggleCategory(ind.id, cat)}
                       settings={chartFx}
+                      categoryOrder={categoryOrders[ind.id]}
                     />
                   </div>
                 );
@@ -454,6 +465,7 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
                     hidden={hiddenCategories[ind.id]}
                     onToggleCategory={cat => onToggleCategory(ind.id, cat)}
                     settings={chartFx}
+                    categoryOrder={categoryOrders[ind.id]}
                   />
                 </div>
               );

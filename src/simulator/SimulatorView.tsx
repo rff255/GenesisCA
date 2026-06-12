@@ -16,6 +16,7 @@ import { IndicatorDisplay } from './IndicatorDisplay';
 import { BrushColorPopover } from './BrushColorPopover';
 import { ManualBrushPanel } from './ManualBrushPanel';
 import { NumberField } from '../modeler/vpl/widgets/InlineWidgets';
+import { designTimeSeriesKeys } from './indicatorChartSettings';
 import { InspectCellPopover, InspectHoverLink, type InspectPopoverState } from './InspectCellPopover';
 import { PresetSaveDialog } from './PresetSaveDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -234,6 +235,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const [brushW, setBrushW] = useState((saved.current.brushW as number) ?? 1);
   const [brushH, setBrushH] = useState((saved.current.brushH as number) ?? 1);
   const [brushMapping, setBrushMapping] = useState((saved.current.brushMapping as string) ?? '');
+  // User-dragged height (px) of the right panel's brush section. null = auto
+  // (shrink to content, the default). Set via the splitter between the Input
+  // Mapping and Indicators sections; double-click resets to auto.
+  const [brushSectionH, setBrushSectionH] = useState<number | null>(
+    typeof saved.current.brushSectionH === 'number' ? saved.current.brushSectionH : null,
+  );
+  const brushSectionRef = useRef<HTMLDivElement>(null);
   // Manual Brush — per-model state: which cell attrs are being set, and to
   // what value. Persisted per-model name in localStorage (see helpers above).
   // The merge effect below seeds defaults whenever the attribute list changes.
@@ -345,7 +353,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         localStorage.setItem(SIM_SETTINGS_KEY, JSON.stringify({
           targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines,
-          infinityCanvas, indicatorVizModes, recordFormat,
+          infinityCanvas, indicatorVizModes, recordFormat, brushSectionH,
           indicatorHiddenCategories: Object.fromEntries(
             Object.entries(indicatorHiddenCategories)
               .filter(([, s]) => s.size > 0)
@@ -357,7 +365,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, infinityCanvas, indicatorVizModes, recordFormat, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -369,6 +377,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     () => model.attributes.filter(a => !a.isModelAttribute).map(a => a.id + ':' + a.type).join('|'),
     [model.attributes],
   );
+
+  // Stable design-time series order per indicator — charts key their palette
+  // indices off this so Track Categories filtering never recolors survivors.
+  const indicatorCategoryOrders = useMemo(() => {
+    const out: Record<string, string[]> = {};
+    for (const ind of model.indicators || []) out[ind.id] = designTimeSeriesKeys(ind, model);
+    return out;
+  }, [model]);
   const manualBrushModelKey = model.properties.name;
   useEffect(() => {
     const stored = loadManualBrush(manualBrushModelKey) ?? {};
@@ -3718,8 +3734,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             }}
           />
 
-          {/* Brush Section (top, shrinks to content) */}
-          <div className={`${styles.rightPanelSection} ${styles.rightSectionBrush}`}>
+          {/* Brush Section (top, shrinks to content; user-resizable when a
+              splitter to the Indicators section below is available) */}
+          <div
+            ref={brushSectionRef}
+            className={`${styles.rightPanelSection} ${styles.rightSectionBrush}`}
+            style={brushSectionH != null && (model.indicators || []).length > 0
+              ? { height: brushSectionH, flex: '0 0 auto' }
+              : undefined}
+          >
             <div className={styles.panelHeader}>
               <span className={styles.panelTitle}>Input Mapping (C{'\u2192'}A)</span>
             </div>
@@ -3749,6 +3772,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             {brushMapping === MANUAL_BRUSH_MAPPING_ID ? (
               <ManualBrushPanel
                 cellAttributes={model.attributes.filter(a => !a.isModelAttribute)}
+                neighborhoods={model.neighborhoods}
                 state={manualBrush}
                 onChange={setManualBrush}
               />
@@ -3807,6 +3831,34 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             </div>
           </div>
 
+          {/* Splitter: drag to trade brush-section height for indicators
+              height; double-click resets to auto (shrink-to-content). */}
+          {(model.indicators || []).length > 0 && (
+            <div
+              className={styles.rightSectionSplitter}
+              title="Drag to resize Input Mapping / Indicators split — double-click to reset"
+              onMouseDown={e => {
+                e.preventDefault();
+                const brushEl = brushSectionRef.current;
+                const panel = rightPanelRef.current;
+                if (!brushEl || !panel) return;
+                const startY = e.clientY;
+                const startH = brushEl.offsetHeight;
+                const maxH = panel.offsetHeight - 140; // keep the indicators usable
+                const onMove = (ev: MouseEvent) => {
+                  setBrushSectionH(Math.max(60, Math.min(maxH, startH + (ev.clientY - startY))));
+                };
+                const onUp = () => {
+                  document.removeEventListener('mousemove', onMove);
+                  document.removeEventListener('mouseup', onUp);
+                };
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+              }}
+              onDoubleClick={() => setBrushSectionH(null)}
+            />
+          )}
+
           {/* Indicators Section (bottom, fills remaining space) */}
           {(model.indicators || []).length > 0 && (
             <div className={`${styles.rightPanelSection} ${styles.rightSectionIndicators}`}>
@@ -3832,6 +3884,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 onCycleVizMode={cycleIndicatorVizMode}
                 onToggleCategory={toggleIndicatorCategory}
                 onChangeChartOverrides={changeIndicatorChartOverrides}
+                categoryOrders={indicatorCategoryOrders}
               />
               </div>
             </div>
