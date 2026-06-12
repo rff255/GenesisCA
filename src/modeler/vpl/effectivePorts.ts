@@ -18,6 +18,7 @@
 import type { PortDef, NodeTypeDef } from './types';
 import { getNodeDef } from './nodes/registry';
 import { clampVisibleCount } from './compiler/expression/parser';
+import { GROUP_OPERATOR_POSITION_OPS } from './nodes/GroupOperatorNode';
 
 export interface EffectivePorts {
   inputs: PortDef[];
@@ -121,6 +122,12 @@ export function getEffectivePorts(
     if (op !== 'between' && op !== 'notBetween') {
       inputs = inputs.filter(p => p.id !== 'y2');
     }
+  }
+
+  // GroupOperator (Group Reduce): Position output only for ops that produce one
+  if (nodeType === 'groupOperator'
+      && !GROUP_OPERATOR_POSITION_OPS.has(cfg.operation as string)) {
+    outputs = outputs.filter(p => p.id !== 'index');
   }
 
   // GroupCounting: compareHigh only for between ops

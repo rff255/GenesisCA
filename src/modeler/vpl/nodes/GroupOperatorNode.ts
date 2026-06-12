@@ -1,5 +1,9 @@
 import type { NodeTypeDef } from '../types';
 
+/** Operations whose Position output carries a real index. For every other op
+ *  the compile emits a constant -1 dummy, so the port is hidden in the UI. */
+export const GROUP_OPERATOR_POSITION_OPS = new Set(['max', 'min', 'random', 'weightedRandom']);
+
 export const GroupOperatorNode: NodeTypeDef = {
   type: 'groupOperator',
   label: 'Group Reduce',

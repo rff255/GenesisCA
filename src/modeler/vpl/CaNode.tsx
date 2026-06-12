@@ -2,6 +2,7 @@ import { memo, useCallback, useState, useMemo, useSyncExternalStore } from 'reac
 import { Handle, Position, useReactFlow } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
+import { GROUP_OPERATOR_POSITION_OPS } from './nodes/GroupOperatorNode';
 import { detectMissingConfig, detectCapabilityRequirements, detectWebGPUIncompatibilities, detectWasmIncompatibilities, countMacroSubgraphIssues } from './nodes/nodeValidation';
 import { INTERPOLATION_METHODS, INTERPOLATION_SHORT_LABELS, DEFAULT_INTERPOLATION_METHOD } from './nodes/interpolationMethods';
 import type { InterpolationMethod } from './nodes/interpolationMethods';
@@ -477,6 +478,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
     if (stOp !== 'between' && stOp !== 'notBetween') {
       inputPorts = inputPorts.filter(p => p.id !== 'y2');
     }
+  }
+
+  // GroupOperator (Group Reduce): the Position output only carries a real index
+  // for max/min/random/weightedRandom — hide it for the other ops (constant -1).
+  // Mirror of the same logic in effectivePorts.ts — they MUST stay in sync.
+  if (nodeData.nodeType === 'groupOperator'
+      && !GROUP_OPERATOR_POSITION_OPS.has(nodeData.config.operation as string)) {
+    outputPorts = outputPorts.filter(p => p.id !== 'index');
   }
 
   // GroupCounting (Count Matching): hide compareHigh unless operation is a between-family op
@@ -1827,7 +1836,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <>
               <textarea
                 className={styles.input}
-                style={{ fontFamily: 'monospace', resize: 'vertical', boxSizing: 'border-box' }}
+                style={{ fontFamily: 'monospace', resize: 'both', boxSizing: 'border-box' }}
                 rows={3}
                 value={formula}
                 placeholder="e.g. a + b*c - pow(d, 2)"
