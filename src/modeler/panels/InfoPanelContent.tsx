@@ -78,12 +78,23 @@ export function InfoPanelContent(_props: PanelContentProps = {}) {
             />
           </div>
           <div className={styles.field}>
-            <label className={styles.fieldLabel}>Description</label>
+            <label className={styles.fieldLabel}>Summary</label>
             <textarea
               className={styles.textArea}
-              rows={4}
+              rows={3}
               value={properties.description}
               onChange={e => updateProperties({ description: e.target.value })}
+              placeholder="Short summary shown on the Models Library card"
+            />
+          </div>
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>Rule Description</label>
+            <textarea
+              className={styles.textArea}
+              rows={8}
+              value={properties.ruleDescription ?? ''}
+              onChange={e => updateProperties({ ruleDescription: e.target.value })}
+              placeholder="Elaborate on how the rule works and anything else worth documenting"
             />
           </div>
           <div className={styles.field}>

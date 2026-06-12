@@ -17,7 +17,7 @@ interface LibraryEntry {
 }
 
 interface Props {
-  onLoadModel: (model: CAModel) => void;
+  onLoadModel: (model: CAModel, fileName?: string) => void;
 }
 
 // The popover width is fixed in CSS; its height is content-driven and measured
@@ -94,7 +94,7 @@ export function ModelsLibrary({ onLoadModel }: Props) {
       const r = await fetch(`${base}models/${entry.file}`);
       if (!r.ok) throw new Error(`Failed to load model (${r.status})`);
       const model = (await r.json()) as CAModel;
-      onLoadModel(model);
+      onLoadModel(model, entry.file);
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to load model.');
     }

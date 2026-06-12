@@ -35,7 +35,12 @@ function loadSaveOptions(): SaveOptions {
   return { includeControls: true, includeGrid: true, includePresets: true };
 }
 
-export function FileMenu({ onNew }: { onNew?: () => void } = {}) {
+export function FileMenu({ onNew, onLoaded }: {
+  onNew?: () => void;
+  /** Called after a .gcaproj file loads successfully (App switches to the
+   *  Simulator tab and shows the load-confirmation toast). */
+  onLoaded?: (modelName: string) => void;
+} = {}) {
   const { model, isDirty, newModel, loadModel, markSaved } = useModel();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modelRef = useRef(model);
@@ -100,7 +105,7 @@ export function FileMenu({ onNew }: { onNew?: () => void } = {}) {
     const json = serializeModel(toSerialize);
     const filename = modelFilename(latest);
     downloadJSON(json, filename);
-    markSaved();
+    markSaved(filename);
   };
 
   const handleLoad = () => {
@@ -121,7 +126,8 @@ export function FileMenu({ onNew }: { onNew?: () => void } = {}) {
     if (!file) return;
     try {
       const parsed = await readModelFile(file);
-      loadModel(parsed);
+      loadModel(parsed, file.name);
+      onLoaded?.(parsed.properties?.name ?? 'Model');
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to load file.');
     }
