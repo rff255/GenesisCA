@@ -239,6 +239,7 @@ export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect }: 
                       integer
                       value={selected.binCount ?? 10}
                       onNumber={n => updateIndicator(selected.id, { binCount: n })}
+                      onClear={() => updateIndicator(selected.id, { binCount: 10 })}
                     />
                   </div>
                 )}
@@ -297,6 +298,7 @@ export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect }: 
                           integer
                           value={selected.spatialBinCount ?? 50}
                           onNumber={n => updateIndicator(selected.id, { spatialBinCount: n })}
+                          onClear={() => updateIndicator(selected.id, { spatialBinCount: 50 })}
                         />
                       </div>
                     ) : (
@@ -309,6 +311,7 @@ export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect }: 
                           integer
                           value={selected.spatialBinSize ?? 1}
                           onNumber={n => updateIndicator(selected.id, { spatialBinSize: n })}
+                          onClear={() => updateIndicator(selected.id, { spatialBinSize: 1 })}
                         />
                       </div>
                     )}

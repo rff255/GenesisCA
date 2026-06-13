@@ -374,6 +374,10 @@ export function serializeSimState(
     brushColor: string;
     brushW: number;
     brushH: number;
+    brushShape?: string;
+    brushRadius?: number;
+    brushRingWidth?: number;
+    brushLineWidth?: number;
     brushMapping: string;
     targetFps: number;
     unlimitedFps: boolean;
@@ -417,6 +421,10 @@ export function serializeSimState(
     serialized.brushColor = uiSettings.brushColor;
     serialized.brushW = uiSettings.brushW;
     serialized.brushH = uiSettings.brushH;
+    if (uiSettings.brushShape !== undefined) serialized.brushShape = uiSettings.brushShape as SimulationState['brushShape'];
+    if (uiSettings.brushRadius !== undefined) serialized.brushRadius = uiSettings.brushRadius;
+    if (uiSettings.brushRingWidth !== undefined) serialized.brushRingWidth = uiSettings.brushRingWidth;
+    if (uiSettings.brushLineWidth !== undefined) serialized.brushLineWidth = uiSettings.brushLineWidth;
     serialized.brushMapping = uiSettings.brushMapping;
     serialized.targetFps = uiSettings.targetFps;
     serialized.unlimitedFps = uiSettings.unlimitedFps;

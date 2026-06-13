@@ -383,6 +383,12 @@ export interface SimulationState {
   brushColor?: string;
   brushW?: number;
   brushH?: number;
+  /** Brush stamp shape + per-shape params (rect uses brushW/H). String union
+   *  kept inline to avoid importing the SimulatorView component type here. */
+  brushShape?: 'rect' | 'circle' | 'ring' | 'line';
+  brushRadius?: number;
+  brushRingWidth?: number;
+  brushLineWidth?: number;
   brushMapping?: string;
   targetFps?: number;
   unlimitedFps?: boolean;
