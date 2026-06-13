@@ -214,11 +214,19 @@ interface WriteRegionMsg {
   type: 'writeRegion';
   row: number; col: number; w: number; h: number;
   attributes: Record<string, { type: string; buffer: ArrayBuffer }>;
+  /** Optional shape mask (Uint8 buffer, length w*h, row-major). When present,
+   *  only cells with mask !== 0 are written — so a non-rectangular brush
+   *  (circle/ring) pastes its shape and leaves the surrounding cells intact.
+   *  Absent = full rectangle (the historical behaviour). */
+  mask?: ArrayBuffer;
   activeViewer: string;
 }
 interface ClearRegionMsg {
   type: 'clearRegion';
   row: number; col: number; w: number; h: number;
+  /** Optional shape mask — see WriteRegionMsg. A masked clear (Ctrl+X cut)
+   *  removes only the shape's cells, matching the masked copy. */
+  mask?: ArrayBuffer;
   activeViewer: string;
 }
 interface SetUseWasmMsg {
@@ -3319,6 +3327,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'writeRegion': {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       const isAsync = updateMode === 'asynchronous';
+      // Optional shape mask: only cells with mask !== 0 are written.
+      const wMask = msg.mask ? new Uint8Array(msg.mask) : null;
       for (const attr of cellAttrs) {
         const entry = msg.attributes[attr.id];
         if (!entry) continue;
@@ -3331,10 +3341,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           const dstRow = msg.row + dr;
           if (dstRow < 0 || dstRow >= height) continue;
           for (let dc = 0; dc < msg.w; dc++) {
+            const local = dr * msg.w + dc;
+            if (wMask && wMask[local] === 0) continue;
             const dstCol = msg.col + dc;
             if (dstCol < 0 || dstCol >= width) continue;
             const i = dstRow * width + dstCol;
-            const v = src[dr * msg.w + dc]!;
+            const v = src[local]!;
             dst[i] = v;
             if (!isAsync) dstB[i] = v;
           }
@@ -3350,6 +3362,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           const dstRow = msg.row + dr;
           if (dstRow < 0 || dstRow >= height) continue;
           for (let dc = 0; dc < msg.w; dc++) {
+            if (wMask && wMask[dr * msg.w + dc] === 0) continue;
             const dstCol = msg.col + dc;
             if (dstCol < 0 || dstCol >= width) continue;
             idxs.push(dstRow * width + dstCol);
@@ -3374,6 +3387,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'clearRegion': {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       const isAsync = updateMode === 'asynchronous';
+      const cMask = msg.mask ? new Uint8Array(msg.mask) : null;
       for (const attr of cellAttrs) {
         const dv = defaultValue(attr);
         const dst = readAttrs[attr.id]!;
@@ -3382,6 +3396,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           const dstRow = msg.row + dr;
           if (dstRow < 0 || dstRow >= height) continue;
           for (let dc = 0; dc < msg.w; dc++) {
+            if (cMask && cMask[dr * msg.w + dc] === 0) continue;
             const dstCol = msg.col + dc;
             if (dstCol < 0 || dstCol >= width) continue;
             const i = dstRow * width + dstCol;
@@ -3398,6 +3413,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           const dstRow = msg.row + dr;
           if (dstRow < 0 || dstRow >= height) continue;
           for (let dc = 0; dc < msg.w; dc++) {
+            if (cMask && cMask[dr * msg.w + dc] === 0) continue;
             const dstCol = msg.col + dc;
             if (dstCol < 0 || dstCol >= width) continue;
             idxs.push(dstRow * width + dstCol);
