@@ -696,6 +696,38 @@
   border-color: var(--color-tab-active-border);
 }
 
+/* Brush shape selector (Rect / Circle / Ring / Line) — small glyph buttons,
+ * same visual language as the mapping tabs. */
+.brushShapeBtn {
+  width: 24px;
+  padding: var(--space-1) 0;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-2xs);
+  line-height: 1.2;
+  cursor: pointer;
+  transition: all var(--duration-base);
+}
+
+.brushShapeBtn:hover {
+  color: var(--color-text-primary);
+  background: var(--color-overlay-hover-weak);
+}
+
+.brushShapeBtnActive {
+  color: var(--color-text-primary);
+  background: var(--color-tab-active-bg);
+  border-color: var(--color-tab-active-border);
+}
+
+.brushShapeHint {
+  font-size: var(--font-3xs);
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
 /* --- Overlay (unlimited gens message) --- */
 
 .overlay {
