@@ -35,6 +35,103 @@ function loadSimSettings(): Record<string, unknown> {
   return {};
 }
 
+// --- Brush shapes ---
+// The brush stamp is no longer always a rectangle: circle (filled disc by
+// radius), ring (annulus: radius ± width/2), and line (two clicks on the
+// board define a segment of the given thickness) join the classic rect.
+type BrushShape = 'rect' | 'circle' | 'ring' | 'line';
+
+/** Cell offsets (dr, dc) a single brush stamp covers, relative to the cursor
+ *  cell. Rect reproduces the historical W×H loops exactly (off-centre bias on
+ *  even sizes preserved). Circle = euclidean disc d ≤ radius + 0.49; ring =
+ *  band |d − radius| ≤ width/2 (width 1 → the classic 1-cell discrete circle).
+ *  Line has no static stamp — its cells come from lineStampCells. */
+function brushShapeOffsets(
+  shape: BrushShape, bw: number, bh: number, radius: number, ringWidth: number,
+): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  if (shape === 'circle' || shape === 'ring') {
+    const r = Math.max(0, radius);
+    const halfBand = Math.max(1, ringWidth) / 2;
+    const lo = shape === 'circle' ? -1 : r - halfBand;
+    const hi = shape === 'circle' ? r + 0.49 : r + halfBand;
+    const span = Math.ceil(hi);
+    for (let dr = -span; dr <= span; dr++) {
+      for (let dc = -span; dc <= span; dc++) {
+        const d = Math.hypot(dr, dc);
+        if (d >= lo && d <= hi) out.push([dr, dc]);
+      }
+    }
+    return out;
+  }
+  if (shape === 'line') {
+    // Stamp preview while no anchor is placed: a width-sized dot.
+    const w = Math.max(1, radius); // caller passes line width via `radius`
+    const half = w / 2;
+    const span = Math.ceil(half);
+    for (let dr = -span; dr <= span; dr++) {
+      for (let dc = -span; dc <= span; dc++) {
+        if (Math.hypot(dr, dc) <= Math.max(0.49, half - 0.01)) out.push([dr, dc]);
+      }
+    }
+    return out;
+  }
+  // rect — identical coverage to the historical double loop.
+  const halfW = Math.floor((bw - 1) / 2);
+  const halfH = Math.floor((bh - 1) / 2);
+  for (let dr = -halfH; dr <= halfH + ((bh - 1) % 2); dr++) {
+    for (let dc = -halfW; dc <= halfW + ((bw - 1) % 2); dc++) {
+      out.push([dr, dc]);
+    }
+  }
+  return out;
+}
+
+/** Cells covered by a thick segment between two cell centres (capsule test:
+ *  point-to-segment distance ≤ width/2, so width 1 ≈ a 1-cell line). Returned
+ *  unwrapped — callers wrap modulo grid in infinity mode. */
+function lineStampCells(
+  a: { row: number; col: number }, b: { row: number; col: number }, width: number,
+): Array<{ row: number; col: number }> {
+  const w = Math.max(1, width);
+  const half = Math.max(0.5, w / 2);
+  const span = Math.ceil(half);
+  const minR = Math.min(a.row, b.row) - span, maxR = Math.max(a.row, b.row) + span;
+  const minC = Math.min(a.col, b.col) - span, maxC = Math.max(a.col, b.col) + span;
+  const vr = b.row - a.row, vc = b.col - a.col;
+  const lenSq = vr * vr + vc * vc;
+  const out: Array<{ row: number; col: number }> = [];
+  for (let row = minR; row <= maxR; row++) {
+    for (let col = minC; col <= maxC; col++) {
+      let d: number;
+      if (lenSq === 0) {
+        d = Math.hypot(row - a.row, col - a.col);
+      } else {
+        const t = Math.max(0, Math.min(1, ((row - a.row) * vr + (col - a.col) * vc) / lenSq));
+        d = Math.hypot(row - (a.row + t * vr), col - (a.col + t * vc));
+      }
+      if (d <= half) out.push({ row, col });
+    }
+  }
+  return out;
+}
+
+/** Silhouette edges of a set of cells — every cell edge bordering a non-member
+ *  cell, in CELL coordinate units ([x0,y0,x1,y1] with x=col, y=row; a cell's
+ *  box spans (col..col+1, row..row+1)). Scaled + translated at draw time. */
+function cellSilhouetteEdges(cells: Array<[number, number]>): Array<[number, number, number, number]> {
+  const set = new Set(cells.map(([r, c]) => r * 131072 + c));
+  const has = (r: number, c: number) => set.has(r * 131072 + c);
+  const edges: Array<[number, number, number, number]> = [];
+  for (const [r, c] of cells) {
+    if (!has(r - 1, c)) edges.push([c, r, c + 1, r]);
+    if (!has(r + 1, c)) edges.push([c, r + 1, c + 1, r + 1]);
+    if (!has(r, c - 1)) edges.push([c, r, c, r + 1]);
+    if (!has(r, c + 1)) edges.push([c + 1, r, c + 1, r + 1]);
+  }
+  return edges;
+}
+
 // --- Manual Brush ---
 // Sentinel mapping ID for the runtime-only "Manual" tab in the brush mapping
 // strip. Doesn't collide with real mapping IDs (which are nanoid-like).
@@ -234,6 +331,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const [brushColor, setBrushColor] = useState((saved.current.brushColor as string) ?? '#4cc9f0');
   const [brushW, setBrushW] = useState((saved.current.brushW as number) ?? 1);
   const [brushH, setBrushH] = useState((saved.current.brushH as number) ?? 1);
+  // Brush shape + per-shape parameters. The size row in the panel adapts:
+  // rect = W/H, circle = radius, ring = radius + width, line = width (+ the
+  // line tool takes two clicks on the board to place the segment).
+  const [brushShape, setBrushShape] = useState<BrushShape>(
+    (['rect', 'circle', 'ring', 'line'] as const).includes(saved.current.brushShape as BrushShape)
+      ? (saved.current.brushShape as BrushShape) : 'rect',
+  );
+  const [brushRadius, setBrushRadius] = useState((saved.current.brushRadius as number) ?? 3);
+  const [brushRingWidth, setBrushRingWidth] = useState((saved.current.brushRingWidth as number) ?? 1);
+  const [brushLineWidth, setBrushLineWidth] = useState((saved.current.brushLineWidth as number) ?? 1);
   const [brushMapping, setBrushMapping] = useState((saved.current.brushMapping as string) ?? '');
   // User-dragged height (px) of the right panel's brush section. null = auto
   // (shrink to content, the default). Set via the splitter between the Input
@@ -353,6 +460,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         localStorage.setItem(SIM_SETTINGS_KEY, JSON.stringify({
           targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines,
+          brushShape, brushRadius, brushRingWidth, brushLineWidth,
           infinityCanvas, indicatorVizModes, recordFormat, brushSectionH,
           indicatorHiddenCategories: Object.fromEntries(
             Object.entries(indicatorHiddenCategories)
@@ -365,7 +473,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -800,41 +908,83 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       ctx.stroke();
     }
 
-    // Draw brush cursor rectangle. In infinity mode, draw one copy per visible
-    // tile so the user always sees the brush location — using the same tile range
-    // as the bitmap loop, not a fixed 3×3 neighbourhood (which left the far tiles
-    // without an outline when the user zoomed out enough to see 4+ tiles per axis).
-    // The rect itself can extend past a tile's edge into the neighbour; emitting
-    // it on each tile naturally produces the wrap-onto-adjacent-tile visual.
+    // Draw the brush cursor as the exact cell-silhouette of the current stamp
+    // (rect / circle / ring / line preview), stroked in 'difference' composite
+    // mode so the outline shows as the NEGATIVE of whatever colors are behind
+    // it (visible on any cell palette — the Windows-cursor trick). In infinity
+    // mode one copy is drawn per visible tile (same range logic as the old
+    // rect cursor), so a stamp straddling a seam shows every overhanging copy.
     const cursor = cursorGrid.current;
     if (cursor && showBrushCursorRef.current) {
-      const bw = brushWRef.current;
-      const bh = brushHRef.current;
-      const halfW = Math.floor((bw - 1) / 2);
-      const halfH = Math.floor((bh - 1) / 2);
-      const bx = ox + (cursor.col - halfW) * scale;
-      const by = oy + (cursor.row - halfH) * scale;
-      const bWidth = bw * scale;
-      const bHeight = bh * scale;
-      ctx.strokeStyle = 'rgba(76, 201, 240, 0.7)';
-      ctx.lineWidth = 1;
+      const lineAnchor = brushShapeRef.current === 'line' ? lineAnchorRef.current : null;
+      // Silhouette edges in CELL units + the base cell they're relative to.
+      let edges: Array<[number, number, number, number]>;
+      let baseRow: number, baseCol: number;
+      let extentMinDc = 0, extentMaxDc = 0, extentMinDr = 0, extentMaxDr = 0;
+      if (lineAnchor) {
+        // Two-click line preview: anchor → cursor, at the configured thickness.
+        // In infinity mode fold to the torus-shortest path so the preview
+        // matches what paintLine will actually commit across a seam.
+        let previewEnd = cursor;
+        if (infinity && w > 0 && h > 0) {
+          let dR = cursor.row - lineAnchor.row;
+          let dC = cursor.col - lineAnchor.col;
+          if (dR > h / 2) dR -= h; else if (dR < -h / 2) dR += h;
+          if (dC > w / 2) dC -= w; else if (dC < -w / 2) dC += w;
+          previewEnd = { row: lineAnchor.row + dR, col: lineAnchor.col + dC };
+        }
+        const cells = lineStampCells(lineAnchor, previewEnd, brushLineWidthRef.current)
+          .map(c => [c.row, c.col] as [number, number]);
+        edges = cellSilhouetteEdges(cells);
+        baseRow = 0; baseCol = 0;
+        for (const c of cells) {
+          if (c[0] < extentMinDr) extentMinDr = c[0];
+          if (c[0] > extentMaxDr) extentMaxDr = c[0];
+          if (c[1] < extentMinDc) extentMinDc = c[1];
+          if (c[1] > extentMaxDc) extentMaxDc = c[1];
+        }
+      } else {
+        const offsets = currentStampOffsets();
+        edges = currentStampEdges();
+        baseRow = cursor.row; baseCol = cursor.col;
+        for (const o of offsets) {
+          if (o[0] < extentMinDr) extentMinDr = o[0];
+          if (o[0] > extentMaxDr) extentMaxDr = o[0];
+          if (o[1] < extentMinDc) extentMinDc = o[1];
+          if (o[1] > extentMaxDc) extentMaxDc = o[1];
+        }
+      }
+      const path = new Path2D();
+      for (const [ex0, ey0, ex1, ey1] of edges) {
+        path.moveTo(ox + (baseCol + ex0) * scale, oy + (baseRow + ey0) * scale);
+        path.lineTo(ox + (baseCol + ex1) * scale, oy + (baseRow + ey1) * scale);
+      }
+      ctx.save();
+      ctx.globalCompositeOperation = 'difference';
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
       if (infinity) {
-        // Extend by ceil(brushSize / gridSize) tiles on each side so a brush
-        // that spans more than one tile still draws every overhanging copy.
-        // The per-copy viewport-intersection check below culls anything off-screen.
-        const brushSpanX = Math.max(1, Math.ceil(bw / w));
-        const brushSpanY = Math.max(1, Math.ceil(bh / h));
-        for (let ty = tyMin - brushSpanY; ty <= tyMax + brushSpanY; ty++) {
-          for (let tx = txMin - brushSpanX; tx <= txMax + brushSpanX; tx++) {
+        const stampW = extentMaxDc - extentMinDc + 1;
+        const stampH = extentMaxDr - extentMinDr + 1;
+        const spanX = Math.max(1, Math.ceil(stampW / w));
+        const spanY = Math.max(1, Math.ceil(stampH / h));
+        const bx = ox + (baseCol + extentMinDc) * scale;
+        const by = oy + (baseRow + extentMinDr) * scale;
+        for (let ty = tyMin - spanY; ty <= tyMax + spanY; ty++) {
+          for (let tx = txMin - spanX; tx <= txMax + spanX; tx++) {
             const rx = bx + tx * scaledW;
             const ry = by + ty * scaledH;
-            if (rx + bWidth < 0 || rx > parentW || ry + bHeight < 0 || ry > parentH) continue;
-            ctx.strokeRect(rx, ry, bWidth, bHeight);
+            if (rx + stampW * scale < 0 || rx > parentW || ry + stampH * scale < 0 || ry > parentH) continue;
+            ctx.save();
+            ctx.translate(tx * scaledW, ty * scaledH);
+            ctx.stroke(path);
+            ctx.restore();
           }
         }
       } else {
-        ctx.strokeRect(bx, by, bWidth, bHeight);
+        ctx.stroke(path);
       }
+      ctx.restore();
     }
 
     // Middle-click autoscroll indicator: small unfilled ring + centre dot at the
@@ -1910,11 +2060,24 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const brushColorRef = useRef('#4cc9f0');
   const brushWRef = useRef(1);
   const brushHRef = useRef(1);
+  const brushShapeRef = useRef<BrushShape>('rect');
+  const brushRadiusRef = useRef(3);
+  const brushRingWidthRef = useRef(1);
+  const brushLineWidthRef = useRef(1);
+  /** First click of the two-click Line tool (grid coords); null = not staged. */
+  const lineAnchorRef = useRef<{ row: number; col: number } | null>(null);
   const activeViewerRef = useRef('');
   const brushMappingRef = useRef('');
   useEffect(() => { brushColorRef.current = brushColor; }, [brushColor]);
   useEffect(() => { brushWRef.current = brushW; }, [brushW]);
   useEffect(() => { brushHRef.current = brushH; }, [brushH]);
+  useEffect(() => { brushShapeRef.current = brushShape; }, [brushShape]);
+  useEffect(() => { brushRadiusRef.current = brushRadius; }, [brushRadius]);
+  useEffect(() => { brushRingWidthRef.current = brushRingWidth; }, [brushRingWidth]);
+  useEffect(() => { brushLineWidthRef.current = brushLineWidth; }, [brushLineWidth]);
+  // Leaving the Line tool (or switching brush tab) drops a staged first click.
+  useEffect(() => { if (brushShape !== 'line') lineAnchorRef.current = null; }, [brushShape]);
+  useEffect(() => { lineAnchorRef.current = null; }, [brushMapping]);
   useEffect(() => { activeViewerRef.current = activeViewer; }, [activeViewer]);
   // When the user switches output-mapping tabs (e.g. while paused), fire one color pass so the
   // grid reflects the new mapping immediately instead of waiting for the next step/paint/reset.
@@ -2121,32 +2284,54 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
   };
 
-  /** Collect brush-rect cells around a grid center (no message sent). In infinity
-   *  mode, individual cell coords are wrapped modulo grid size so the worker's
-   *  paint handler (which drops out-of-bounds row/col) doesn't silently lose the
-   *  cells of a brush that straddles a tile seam. */
-  const brushCellsAt = useCallback((row: number, col: number, r: number, g: number, b: number) => {
+  /** Current brush stamp offsets, cached by the shape/params signature so the
+   *  per-mousemove / per-frame consumers don't recompute the disc each call. */
+  const stampCacheRef = useRef<{
+    key: string;
+    offsets: Array<[number, number]>;
+    edges?: Array<[number, number, number, number]>;
+  } | null>(null);
+  const currentStampOffsets = useCallback((): Array<[number, number]> => {
+    const shape = brushShapeRef.current;
     const bw = brushWRef.current;
     const bh = brushHRef.current;
+    const radius = shape === 'line' ? brushLineWidthRef.current : brushRadiusRef.current;
+    const ringW = brushRingWidthRef.current;
+    const key = `${shape}|${bw}|${bh}|${radius}|${ringW}`;
+    if (stampCacheRef.current?.key !== key) {
+      stampCacheRef.current = { key, offsets: brushShapeOffsets(shape, bw, bh, radius, ringW) };
+    }
+    return stampCacheRef.current.offsets;
+  }, []);
+  /** Cursor-silhouette edges for the current stamp (computed lazily, cached
+   *  alongside the offsets — both invalidate on the same param key). */
+  const currentStampEdges = useCallback((): Array<[number, number, number, number]> => {
+    const offsets = currentStampOffsets();
+    const entry = stampCacheRef.current!;
+    if (!entry.edges) entry.edges = cellSilhouetteEdges(offsets);
+    return entry.edges;
+  }, [currentStampOffsets]);
+
+  /** Collect brush-stamp cells around a grid center (no message sent). In
+   *  infinity mode, individual cell coords are wrapped modulo grid size so the
+   *  worker's paint handler (which drops out-of-bounds row/col) doesn't
+   *  silently lose the cells of a stamp that straddles a tile seam. */
+  const brushCellsAt = useCallback((row: number, col: number, r: number, g: number, b: number) => {
     const cells: Array<{ row: number; col: number; r: number; g: number; b: number }> = [];
-    const halfW = Math.floor((bw - 1) / 2);
-    const halfH = Math.floor((bh - 1) / 2);
     const infinity = infinityCanvasRef.current && boundaryTreatmentRef.current === 'torus';
     const gw = gridWidth.current;
     const gh = gridHeight.current;
-    for (let dr = -halfH; dr <= halfH + ((bh - 1) % 2); dr++) {
-      for (let dc = -halfW; dc <= halfW + ((bw - 1) % 2); dc++) {
-        let cellRow = row + dr;
-        let cellCol = col + dc;
-        if (infinity && gw > 0 && gh > 0) {
-          cellRow = ((cellRow % gh) + gh) % gh;
-          cellCol = ((cellCol % gw) + gw) % gw;
-        }
-        cells.push({ row: cellRow, col: cellCol, r, g, b });
+    for (const [dr, dc] of currentStampOffsets()) {
+      let cellRow = row + dr;
+      let cellCol = col + dc;
+      if (infinity && gw > 0 && gh > 0) {
+        cellRow = ((cellRow % gh) + gh) % gh;
+        cellCol = ((cellCol % gw) + gw) % gw;
       }
+      cells.push({ row: cellRow, col: cellCol, r, g, b });
     }
     return cells;
-  }, []);
+  }, [currentStampOffsets]);
 
   /** Flush whatever paint cells have accumulated since the last frame. Called
    *  on the rAF boundary by the coalescer below, and synchronously by mouse-up
@@ -2249,6 +2434,48 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
   }, [screenToGrid, brushCellsAt, flushPaintBatch]);
 
+  /** Commit a Line-tool stroke: cells of a brushLineWidth-thick segment from
+   *  `from` to `to` (torus-shortest path in infinity mode), painted in one
+   *  batch through the same pending-paint pipeline as drag strokes (so the
+   *  Manual Brush branch and mapping/viewer bookkeeping apply unchanged). */
+  const paintLine = useCallback((from: { row: number; col: number }, to: { row: number; col: number }) => {
+    const { r, g, b } = hexToRgb(brushColorRef.current);
+    const infinity = infinityCanvasRef.current && boundaryTreatmentRef.current === 'torus';
+    const gw = gridWidth.current;
+    const gh = gridHeight.current;
+    let end = to;
+    if (infinity && gw > 0 && gh > 0) {
+      // Fold the delta to the torus-shortest path (mirrors paintAt's drag fold).
+      let dR = to.row - from.row;
+      let dC = to.col - from.col;
+      if (dR > gh / 2) dR -= gh; else if (dR < -gh / 2) dR += gh;
+      if (dC > gw / 2) dC -= gw; else if (dC < -gw / 2) dC += gw;
+      end = { row: from.row + dR, col: from.col + dC };
+    }
+    const raw = lineStampCells(from, end, brushLineWidthRef.current);
+    const cells = raw.map(c => {
+      let { row, col } = c;
+      if (infinity && gw > 0 && gh > 0) {
+        row = ((row % gh) + gh) % gh;
+        col = ((col % gw) + gw) % gw;
+      }
+      return { row, col, r, g, b };
+    });
+    if (cells.length === 0) return;
+    const curMapping = brushMappingRef.current;
+    const curViewer = activeViewerRef.current;
+    if (
+      pendingPaintMapping.current !== null &&
+      (pendingPaintMapping.current !== curMapping || pendingPaintViewer.current !== curViewer)
+    ) {
+      flushPaintBatch();
+    }
+    pendingPaintMapping.current = curMapping;
+    pendingPaintViewer.current = curViewer;
+    for (let i = 0; i < cells.length; i++) pendingPaintCells.current.push(cells[i]!);
+    flushPaintBatch();
+  }, [flushPaintBatch]);
+
   // Zoom/Pan/Brush event handlers
   useEffect(() => {
     const container = canvasRef.current?.parentElement;
@@ -2288,7 +2515,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       draw();
     };
 
-    const isResizingBrush = { active: false, startX: 0, startY: 0, startW: 0, startH: 0 };
+    const isResizingBrush = { active: false, startX: 0, startY: 0, startW: 0, startH: 0, startRadius: 0, startRingW: 0, startLineW: 0 };
     let canvasBrushActive = false; // true only when LMB started on canvas, not overlay
 
     // Middle-click autoscroll: rAF loop pans by (cursor - origin) each frame.
@@ -2393,12 +2620,34 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         isResizingBrush.startY = e.clientY;
         isResizingBrush.startW = brushWRef.current;
         isResizingBrush.startH = brushHRef.current;
+        isResizingBrush.startRadius = brushRadiusRef.current;
+        isResizingBrush.startRingW = brushRingWidthRef.current;
+        isResizingBrush.startLineW = brushLineWidthRef.current;
         container.style.cursor = 'nwse-resize';
+      } else if (e.button === 0 && brushShapeRef.current === 'line') {
+        // Line tool: two clicks define the segment. First click stages the
+        // anchor (no paint); second click commits the whole line in one batch.
+        // No drag-painting in this mode.
+        const cell = screenToGrid(e.clientX, e.clientY);
+        if (!cell || !Number.isFinite(cell.row) || !Number.isFinite(cell.col)) return;
+        if (!lineAnchorRef.current) {
+          lineAnchorRef.current = cell;
+        } else {
+          paintLine(lineAnchorRef.current, cell);
+          lineAnchorRef.current = null;
+        }
+        draw();
       } else if (e.button === 0) {
         // LMB = brush — set initial paint position for Bresenham interpolation
         canvasBrushActive = true;
         lastPaintGrid.current = null; // first paint call sets it
         paintAt(e.clientX, e.clientY);
+      } else if (e.button === 2 && lineAnchorRef.current) {
+        // RMB with a staged Line anchor = cancel the line (consumes the press —
+        // mirrors the neighborhood editor's right-click staging cancel).
+        e.preventDefault();
+        lineAnchorRef.current = null;
+        draw();
       } else if (e.button === 2 && (e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) && brushMappingRef.current !== MANUAL_BRUSH_MAPPING_ID) {
         // Modifier+RMB = open the in-page brush color popover at the cursor.
         // Any modifier is accepted (Ctrl, Shift, Alt, Meta) because plain Ctrl+RMB
@@ -2453,16 +2702,20 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const gridPos = screenToGrid(e.clientX, e.clientY);
       cursorGrid.current = gridPos;
       // Update the hover-coords chip — only when the integer cell or brush
-      // dimensions change, so React re-renders are coarse-grained.
-      const bw = brushWRef.current;
-      const bh = brushHRef.current;
+      // extents change, so React re-renders are coarse-grained. Extents come
+      // from the current stamp's offsets (shape-aware; cached).
       if (gridPos) {
-        const halfW = Math.floor((bw - 1) / 2);
-        const halfH = Math.floor((bh - 1) / 2);
-        const x0 = gridPos.col - halfW;
-        const y0 = gridPos.row - halfH;
-        const x1 = x0 + bw - 1;
-        const y1 = y0 + bh - 1;
+        let minDr = 0, maxDr = 0, minDc = 0, maxDc = 0;
+        for (const [dr, dc] of currentStampOffsets()) {
+          if (dr < minDr) minDr = dr;
+          if (dr > maxDr) maxDr = dr;
+          if (dc < minDc) minDc = dc;
+          if (dc > maxDc) maxDc = dc;
+        }
+        const x0 = gridPos.col + minDc;
+        const y0 = gridPos.row + minDr;
+        const x1 = gridPos.col + maxDc;
+        const y1 = gridPos.row + maxDr;
         setHoverCellInfo(prev =>
           prev && prev.col === gridPos.col && prev.row === gridPos.row
             && prev.x0 === x0 && prev.y0 === y0 && prev.x1 === x1 && prev.y1 === y1
@@ -2502,16 +2755,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         return;
       }
 
-      // Ctrl+LMB drag = resize brush
+      // Ctrl+LMB drag = resize brush. Adapts to the active shape: rect drags
+      // W (x-axis) / H (y-axis); circle drags radius; ring drags radius
+      // (x-axis) / band width (y-axis); line drags thickness.
       if (isResizingBrush.active) {
         const dx = e.clientX - isResizingBrush.startX;
         const dy = e.clientY - isResizingBrush.startY;
         const maxW = (gridWidth.current || simWidth) * 2;
         const maxH = (gridHeight.current || simHeight) * 2;
-        const newW = Math.max(1, Math.min(maxW, isResizingBrush.startW + Math.round(dx / 5)));
-        const newH = Math.max(1, Math.min(maxH, isResizingBrush.startH - Math.round(dy / 5)));
-        setBrushW(newW);
-        setBrushH(newH);
+        const shape = brushShapeRef.current;
+        if (shape === 'circle') {
+          setBrushRadius(Math.max(0, Math.min(maxW, isResizingBrush.startRadius + Math.round(dx / 5))));
+        } else if (shape === 'ring') {
+          setBrushRadius(Math.max(0, Math.min(maxW, isResizingBrush.startRadius + Math.round(dx / 5))));
+          setBrushRingWidth(Math.max(1, Math.min(maxH, isResizingBrush.startRingW - Math.round(dy / 5))));
+        } else if (shape === 'line') {
+          setBrushLineWidth(Math.max(1, Math.min(maxW, isResizingBrush.startLineW + Math.round(dx / 5))));
+        } else {
+          setBrushW(Math.max(1, Math.min(maxW, isResizingBrush.startW + Math.round(dx / 5))));
+          setBrushH(Math.max(1, Math.min(maxH, isResizingBrush.startH - Math.round(dy / 5))));
+        }
         draw();
         return;
       }
@@ -2604,7 +2867,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       autoscrollOriginRef.current = null;
       autoscrollCursorRef.current = null;
     };
-  }, [draw, paintAt, screenToGrid, flushPaintBatch, commitInspectPopover]);
+  }, [draw, paintAt, paintLine, screenToGrid, flushPaintBatch, commitInspectPopover]);
 
   // Play: kick-start the step pipeline (worker message handler chains subsequent steps)
   useEffect(() => {
@@ -2793,6 +3056,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
       if (e.key === ' ') { e.preventDefault(); handleStep(); }
       else if (e.key === 'Enter') { e.preventDefault(); setPlaying(p => !p); }
+      else if (e.key === 'Escape' && lineAnchorRef.current) {
+        // A staged Line-tool anchor consumes Escape (cancel the line) so the
+        // user doesn't accidentally reset the whole simulation.
+        e.preventDefault();
+        lineAnchorRef.current = null;
+        draw();
+      }
       else if (e.key === 'Escape' || e.key === 'Backspace') { e.preventDefault(); handleReset(); }
     };
     document.addEventListener('keydown', handler);
@@ -3802,13 +4072,58 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               </div>
             )}
             <div className={styles.fieldRow}>
-              <span className={styles.statLabel}>W</span>
-              <NumberField className={styles.brushInput} min={1} max={(gridWidth.current || simWidth) * 2} integer value={brushW}
-                onNumber={setBrushW} />
-              <span className={styles.statLabel}>H</span>
-              <NumberField className={styles.brushInput} min={1} max={(gridHeight.current || simHeight) * 2} integer value={brushH}
-                onNumber={setBrushH} />
+              <span className={styles.statLabel}>Shape</span>
+              {([
+                ['rect', '▢', 'Rectangle brush'],
+                ['circle', '●', 'Circle brush (filled disc)'],
+                ['ring', '◌', 'Ring brush (annulus)'],
+                ['line', '╱', 'Line — click two points on the board to draw a segment'],
+              ] as Array<[BrushShape, string, string]>).map(([s, glyph, tip]) => (
+                <button
+                  key={s}
+                  className={`${styles.brushShapeBtn} ${brushShape === s ? styles.brushShapeBtnActive : ''}`}
+                  onClick={() => setBrushShape(s)}
+                  title={tip}
+                >
+                  {glyph}
+                </button>
+              ))}
             </div>
+            {brushShape === 'rect' && (
+              <div className={styles.fieldRow}>
+                <span className={styles.statLabel}>W</span>
+                <NumberField className={styles.brushInput} min={1} max={(gridWidth.current || simWidth) * 2} integer value={brushW}
+                  onNumber={setBrushW} />
+                <span className={styles.statLabel}>H</span>
+                <NumberField className={styles.brushInput} min={1} max={(gridHeight.current || simHeight) * 2} integer value={brushH}
+                  onNumber={setBrushH} />
+              </div>
+            )}
+            {brushShape === 'circle' && (
+              <div className={styles.fieldRow}>
+                <span className={styles.statLabel}>Radius</span>
+                <NumberField className={styles.brushInput} min={0} max={(gridWidth.current || simWidth) * 2} integer value={brushRadius}
+                  onNumber={setBrushRadius} />
+              </div>
+            )}
+            {brushShape === 'ring' && (
+              <div className={styles.fieldRow}>
+                <span className={styles.statLabel}>Radius</span>
+                <NumberField className={styles.brushInput} min={0} max={(gridWidth.current || simWidth) * 2} integer value={brushRadius}
+                  onNumber={setBrushRadius} />
+                <span className={styles.statLabel}>Width</span>
+                <NumberField className={styles.brushInput} min={1} max={(gridWidth.current || simWidth) * 2} integer value={brushRingWidth}
+                  onNumber={setBrushRingWidth} />
+              </div>
+            )}
+            {brushShape === 'line' && (
+              <div className={styles.fieldRow}>
+                <span className={styles.statLabel}>Width</span>
+                <NumberField className={styles.brushInput} min={1} max={(gridWidth.current || simWidth) * 2} integer value={brushLineWidth}
+                  onNumber={setBrushLineWidth} />
+                <span className={styles.brushShapeHint}>click 2 points</span>
+              </div>
+            )}
             <hr className={styles.divider} />
             <button
               className={styles.controlButton}
