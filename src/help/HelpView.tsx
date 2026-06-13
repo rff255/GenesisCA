@@ -1108,14 +1108,16 @@ export function HelpView() {
           <h3 className={styles.h3}>Copy, Paste, Cut (Cell Regions)</h3>
           <p className={styles.p}>
             With the cursor over the grid, press <kbd className={styles.kbd}>Ctrl</kbd>+
-            <kbd className={styles.kbd}>C</kbd> to copy all cell attributes inside the
-            current brush rectangle. Move the cursor and press{' '}
+            <kbd className={styles.kbd}>C</kbd> to copy the cell attributes inside the
+            current <strong>brush footprint</strong> &mdash; the copy follows the brush
+            shape, so a Circle copies a disc and a Ring an annulus, not just a rectangle.
+            Move the cursor and press{' '}
             <kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>V</kbd> to
-            paste &mdash; the clipboard keeps its copy-time width and height, and its
-            top-left aligns with the top-left of the current brush rectangle so the
-            brush outline shows exactly where the paste will land.{' '}
+            paste &mdash; the clipboard keeps its copy-time shape and re-centres on the
+            cursor, stamping only the shape&apos;s cells and leaving the surrounding cells
+            untouched (so a pasted circle drops a disc, not a square).{' '}
             <kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>X</kbd>{' '}
-            copies and then resets the source region to each attribute&apos;s default
+            copies and then resets the source shape to each attribute&apos;s default
             value. Out-of-grid cells are silently skipped.
           </p>
 
@@ -1229,9 +1231,9 @@ export function HelpView() {
               <tr><td><kbd className={styles.kbd}>Shift</kbd> + right-click</td><td>Open in-page brush color picker at the cursor</td></tr>
               <tr><td><kbd className={styles.kbd}>Shift</kbd> + left-click</td><td>Open Inspect Cell popup: shows the cell's coordinates, all cell-attribute values (sub-attributes flagged as <em>undefined</em> when their parent doesn't match), and the live RGB of the active viewer. Popups are draggable, can stay open while you paint / play / step, and you can open multiple at once to compare cells. Hovering a popup highlights its cell on the grid; <kbd className={styles.kbd}>Esc</kbd> on the focused popup closes it.</td></tr>
               <tr><td><kbd className={styles.kbd}>Shift</kbd> + left-click drag</td><td>Sweep inspect: a single transient Inspect Cell popup follows the cursor cell while you drag, recycling instead of pinning a new popup per cell. Release on a different cell discards the popup; release without moving pins it (same as a plain <kbd className={styles.kbd}>Shift</kbd>+click). Useful for quickly peeking at attribute values across a region without cluttering the canvas.</td></tr>
-              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>C</kbd></td><td>Copy cell attributes under the brush</td></tr>
-              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>V</kbd></td><td>Paste clipboard, top-left aligned to the brush rectangle</td></tr>
-              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>X</kbd></td><td>Copy, then reset the source region to default attribute values</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>C</kbd></td><td>Copy the cell attributes in the brush footprint (follows the brush shape)</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>V</kbd></td><td>Paste the clipboard shape, centred on the cursor (only the shape's cells)</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>X</kbd></td><td>Copy, then reset the source shape to default attribute values</td></tr>
               <tr><td><kbd className={styles.kbd}>Space</kbd></td><td>Step (one generation; pauses if running)</td></tr>
               <tr><td><kbd className={styles.kbd}>Enter</kbd></td><td>Play / Pause</td></tr>
               <tr><td><kbd className={styles.kbd}>F</kbd></td><td>Toggle fullscreen canvas (collapses both side panels; press again to restore)</td></tr>

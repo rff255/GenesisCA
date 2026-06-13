@@ -579,14 +579,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const [presetToDelete, setPresetToDelete] = useState<Preset | null>(null);
   const [presetToOverwrite, setPresetToOverwrite] = useState<Preset | null>(null);
 
-  // Clipboard for Ctrl+C / Ctrl+V / Ctrl+X (cell-attribute region copy)
+  // Clipboard for Ctrl+C / Ctrl+V / Ctrl+X (cell-attribute region copy). The
+  // region is always read as a rectangle (the brush footprint's bounding box),
+  // but `mask` (the brush SHAPE within that box) restricts which cells paste
+  // writes — so a circle/ring brush copies & pastes its shape, not a square.
+  // `hotR`/`hotC` = the cursor's position within the box, so paste re-centres
+  // on the cursor exactly the way copy did. Absent mask/hot = full rectangle.
   const clipboardRef = useRef<{
     w: number;
     h: number;
     attributes: Record<string, { type: string; buffer: ArrayBuffer }>;
+    mask?: Uint8Array;
+    hotR?: number;
+    hotC?: number;
   } | null>(null);
-  // If set, the next regionData response should also fire a clearRegion for the source rect (Ctrl+X)
-  const pendingCutRect = useRef<{ row: number; col: number; w: number; h: number } | null>(null);
+  // Mask + hotspot captured at copy/cut time, attached to the clipboard when
+  // the worker's regionData (rectangular read) comes back.
+  const pendingCopyMeta = useRef<{ mask: Uint8Array; hotR: number; hotC: number } | null>(null);
+  // If set, the next regionData response should also fire a clearRegion for the
+  // source (Ctrl+X). Carries the same shape mask so the cut removes only the shape.
+  const pendingCutRect = useRef<{ row: number; col: number; w: number; h: number; mask?: Uint8Array } | null>(null);
 
   // Colors buffer + grid dimensions
   const colorsRef = useRef<Uint8ClampedArray | null>(null);
@@ -1332,14 +1344,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         const copy = (entry.buffer as ArrayBuffer).slice(0);
         attrs[id] = { type: entry.type, buffer: copy };
       }
-      clipboardRef.current = { w: msg.w as number, h: msg.h as number, attributes: attrs };
-      // If this was a Ctrl+X, now clear the source rectangle
+      const meta = pendingCopyMeta.current;
+      pendingCopyMeta.current = null;
+      clipboardRef.current = {
+        w: msg.w as number, h: msg.h as number, attributes: attrs,
+        mask: meta?.mask, hotR: meta?.hotR, hotC: meta?.hotC,
+      };
+      // If this was a Ctrl+X, now clear the source — masked so a circle/ring
+      // cut removes only its shape, matching the masked copy.
       if (pendingCutRect.current) {
         const rect = pendingCutRect.current;
         pendingCutRect.current = null;
         workerRef.current?.postMessage({
           type: 'clearRegion',
           row: rect.row, col: rect.col, w: rect.w, h: rect.h,
+          mask: rect.mask ? rect.mask.buffer.slice(0) : undefined,
           activeViewer: activeViewerRef.current,
         });
       }
@@ -3022,33 +3041,43 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'v' || e.key === 'x')) {
         const cur = cursorGrid.current;
         if (!cur) return;
-        const bw = brushWRef.current, bh = brushHRef.current;
-        // Top-left of the current brush rectangle (matches brushCellsAt geometry)
-        const halfW = Math.floor((bw - 1) / 2);
-        const halfH = Math.floor((bh - 1) / 2);
-        const brushRow = cur.row - halfH;
-        const brushCol = cur.col - halfW;
-        if (e.key === 'c') {
+        if (e.key === 'c' || e.key === 'x') {
           e.preventDefault();
-          workerRef.current?.postMessage({ type: 'readRegion', row: brushRow, col: brushCol, w: bw, h: bh });
-        } else if (e.key === 'x') {
-          e.preventDefault();
-          pendingCutRect.current = { row: brushRow, col: brushCol, w: bw, h: bh };
-          workerRef.current?.postMessage({ type: 'readRegion', row: brushRow, col: brushCol, w: bw, h: bh });
+          // Copy the cells the BRUSH FOOTPRINT covers (rect/circle/ring → that
+          // shape; line at a single cursor point → its width-dot). Read the
+          // footprint's bounding-box rectangle, but carry a shape mask so paste
+          // writes only the shape. hotR/hotC = cursor offset within the box.
+          const offsets = currentStampOffsets();
+          let minDr = 0, maxDr = 0, minDc = 0, maxDc = 0;
+          for (const [dr, dc] of offsets) {
+            if (dr < minDr) minDr = dr; if (dr > maxDr) maxDr = dr;
+            if (dc < minDc) minDc = dc; if (dc > maxDc) maxDc = dc;
+          }
+          const w = maxDc - minDc + 1, h = maxDr - minDr + 1;
+          const mask = new Uint8Array(w * h);
+          for (const [dr, dc] of offsets) mask[(dr - minDr) * w + (dc - minDc)] = 1;
+          const anchorRow = cur.row + minDr, anchorCol = cur.col + minDc;
+          pendingCopyMeta.current = { mask, hotR: -minDr, hotC: -minDc };
+          if (e.key === 'x') pendingCutRect.current = { row: anchorRow, col: anchorCol, w, h, mask };
+          workerRef.current?.postMessage({ type: 'readRegion', row: anchorRow, col: anchorCol, w, h });
         } else if (e.key === 'v') {
           const clip = clipboardRef.current;
           if (!clip) return;
           e.preventDefault();
-          // Paste anchor = top-left of the current brush rectangle; paste W/H = clipboard W/H
-          // Re-slice buffers so clipboard remains usable for subsequent pastes.
+          // Re-centre the clipboard's box on the cursor the same way copy did
+          // (fall back to box-centre for pre-mask clipboard data). Re-slice
+          // buffers + mask so the clipboard stays reusable for further pastes.
+          const hotR = clip.hotR ?? Math.floor((clip.h - 1) / 2);
+          const hotC = clip.hotC ?? Math.floor((clip.w - 1) / 2);
           const attrs: Record<string, { type: string; buffer: ArrayBuffer }> = {};
           for (const [id, entry] of Object.entries(clip.attributes)) {
             attrs[id] = { type: entry.type, buffer: entry.buffer.slice(0) };
           }
           workerRef.current?.postMessage({
             type: 'writeRegion',
-            row: brushRow, col: brushCol, w: clip.w, h: clip.h,
+            row: cur.row - hotR, col: cur.col - hotC, w: clip.w, h: clip.h,
             attributes: attrs,
+            mask: clip.mask ? clip.mask.buffer.slice(0) : undefined,
             activeViewer: activeViewerRef.current,
           });
         }
