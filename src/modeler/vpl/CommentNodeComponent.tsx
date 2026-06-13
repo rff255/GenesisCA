@@ -37,14 +37,32 @@ function CommentNodeInner({ id, data, selected }: NodeProps) {
 
   useEffect(() => {
     if (!editing) return;
-    const ta = textAreaRef.current;
-    if (!ta) return;
-    ta.focus();
-    if (autoEdit) {
-      ta.select();
-      // One-shot flag — clear it so it never persists into saved graphs.
-      updateNodeData(id, { ...data, autoEdit: undefined });
-    }
+    // React Flow renders a freshly-added node visibility:hidden until it has
+    // measured handle bounds, and a `focus()` during that pre-measure frame
+    // silently no-ops (the NameInputDialog gotcha) — a single rAF isn't enough
+    // because the measure can span several frames. Retry across frames until
+    // the textarea is laid out AND focus actually sticks, then select-all and
+    // clear the one-shot autoEdit flag. Capped so it can't spin forever.
+    let cancelled = false;
+    let attempts = 0;
+    const tryFocus = () => {
+      if (cancelled) return;
+      const ta = textAreaRef.current;
+      if (ta && ta.offsetParent !== null) {
+        ta.focus();
+        if (document.activeElement === ta) {
+          if (autoEdit) {
+            ta.select();
+            // One-shot — clear so it never persists into a saved graph.
+            updateNodeData(id, { ...data, autoEdit: undefined });
+          }
+          return;
+        }
+      }
+      if (++attempts < 30) requestAnimationFrame(tryFocus);
+    };
+    requestAnimationFrame(tryFocus);
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing]);
 

@@ -1826,7 +1826,10 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <>
               <textarea
                 className={styles.input}
-                style={{ fontFamily: 'monospace', resize: 'both', boxSizing: 'border-box' }}
+                // Fill the node width and never collapse narrower than it
+                // (minWidth:100%) nor shorter than ~2 rows (minHeight) — the
+                // user can still drag it LARGER in both directions.
+                style={{ fontFamily: 'monospace', resize: 'both', boxSizing: 'border-box', width: '100%', minWidth: '100%', minHeight: 44 }}
                 rows={3}
                 value={formula}
                 placeholder="e.g. a + b*c - pow(d, 2)"

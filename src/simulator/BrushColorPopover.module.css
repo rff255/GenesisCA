@@ -7,6 +7,9 @@
   box-shadow: var(--shadow-md);
   padding: var(--space-4) var(--space-5);
   min-width: 210px;
+  /* Cap width — the R/G/B fields are text inputs (their ~20ch intrinsic width
+   * would otherwise blow the grid columns out to ~400px). */
+  max-width: 240px;
   color: var(--color-text-secondary);
   font-size: var(--font-xs);
   user-select: none;
@@ -55,7 +58,9 @@
 
 .rgbRow {
   display: grid;
-  grid-template-columns: 14px 1fr 14px 1fr 14px 1fr;
+  /* minmax(0, 1fr) so the text inputs shrink to share the row evenly instead
+   * of expanding to their ~20ch intrinsic content width. */
+  grid-template-columns: 14px minmax(0, 1fr) 14px minmax(0, 1fr) 14px minmax(0, 1fr);
   gap: var(--space-2);
   align-items: center;
 }
