@@ -52,6 +52,10 @@
   resize: none;
   outline: none;
   line-height: 1.4;
+  /* React Flow nodes default to user-select:none; restore text selection so
+   * click-drag / shift-click selection AND programmatic select-all work while
+   * editing. */
+  user-select: text;
 }
 
 .textArea::placeholder {
