@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useState, useMemo, useSyncExternalStore } from 'react';
+import { memo, useCallback, useEffect, useRef, useState, useMemo, useSyncExternalStore } from 'react';
 import { Handle, Position, useReactFlow, useUpdateNodeInternals } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
@@ -566,6 +566,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
   }, []);
   /** Stop all propagation (for double-click, click handlers) */
   const stopAll = useCallback((e: React.MouseEvent) => e.stopPropagation(), []);
+  /** Size of the expression textarea at the start of a resize drag (mousedown),
+   *  so mouseup can detect a deliberate resize and persist it to config. */
+  const exprResizeStartRef = useRef<{ w: number; h: number } | null>(null);
 
   // Linked-copies badge (Blender-style): how many macro instances share this
   // node's MacroDef. Only shown at 2+ (single-user macros show nothing).
@@ -1822,20 +1825,47 @@ function CaNodeComponent({ id, data }: NodeProps) {
             }
             updateNodeData(id, { ...nodeData, config: newConfig });
           };
+          // Persisted user-resized size (px). Until the user drags the resize
+          // handle, width tracks the node (100%) and height is the default
+          // 3-row box; once resized, the explicit size is stored in config and
+          // travels in the .gcaproj so it survives reload.
+          const exprW = Number(nodeData.config._exprW) || 0;
+          const exprH = Number(nodeData.config._exprH) || 0;
           return (
             <>
               <textarea
                 className={styles.input}
-                // Fill the node width and never collapse narrower than it
-                // (minWidth:100%) nor shorter than ~2 rows (minHeight) — the
-                // user can still drag it LARGER in both directions.
-                style={{ fontFamily: 'monospace', resize: 'both', boxSizing: 'border-box', width: '100%', minWidth: '100%', minHeight: 44 }}
+                // Default: fill the node width, never collapse narrower than it
+                // (minWidth:100%) nor shorter than ~2 rows (minHeight). A user
+                // resize overrides width/height with the persisted px values;
+                // resize:both lets them keep adjusting in either direction.
+                style={{
+                  fontFamily: 'monospace', resize: 'both', boxSizing: 'border-box',
+                  width: exprW > 0 ? exprW : '100%', minWidth: '100%',
+                  height: exprH > 0 ? exprH : undefined, minHeight: 44,
+                }}
                 rows={3}
                 value={formula}
                 placeholder="e.g. a + b*c - pow(d, 2)"
                 spellCheck={false}
                 onChange={e => updateConfig('expression', e.target.value)}
-                onMouseDown={stopDrag}
+                onMouseDown={e => {
+                  stopDrag(e);
+                  const t = e.currentTarget;
+                  exprResizeStartRef.current = { w: t.offsetWidth, h: t.offsetHeight };
+                }}
+                onMouseUp={e => {
+                  const start = exprResizeStartRef.current;
+                  exprResizeStartRef.current = null;
+                  if (!start) return;
+                  const t = e.currentTarget;
+                  // Only a deliberate resize drag changes the box size — persist it.
+                  if (t.offsetWidth !== start.w || t.offsetHeight !== start.h) {
+                    updateNodeData(id, { ...nodeData, config: {
+                      ...nodeData.config, _exprW: t.offsetWidth, _exprH: t.offsetHeight,
+                    } });
+                  }
+                }}
                 onDoubleClick={stopAll}
               />
               {parseErr && (
