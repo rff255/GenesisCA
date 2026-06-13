@@ -118,12 +118,14 @@ export function HelpView() {
           <p className={styles.p}>
             The model&apos;s presentation metadata, kept in its own tab separate from the
             model&apos;s behavior: <strong>Name</strong>, <strong>Rule Author</strong>,{' '}
-            <strong>GenesisCA Project Author</strong>, <strong>Description</strong>, tags,
-            and an optional <strong>Thumbnail</strong>.
+            <strong>GenesisCA Project Author</strong>, <strong>Summary</strong>,{' '}
+            <strong>Rule Description</strong>, tags, and an optional <strong>Thumbnail</strong>.
           </p>
           <ul className={styles.list}>
             <li><strong>Rule Author</strong> &mdash; originator of the CA rule (domain expert/researcher).</li>
             <li><strong>GenesisCA Project Author</strong> &mdash; who built this particular GenesisCA project file.</li>
+            <li><strong>Summary</strong> &mdash; a short blurb; this is what appears on the model&apos;s Models Library card.</li>
+            <li><strong>Rule Description</strong> &mdash; a longer free-form field to elaborate on how the rule works and document anything else worth keeping. Not shown on Library cards.</li>
             <li><strong>Thumbnail</strong> (optional) &mdash; attach a PNG, JPEG, GIF, or WebP image (up to 2&nbsp;MB). It travels inside the <code>.gcaproj</code> file. When the model is shipped as part of the Models Library, hovering its card shows a floating preview; animated GIFs / WebPs play natively.</li>
           </ul>
 
@@ -221,11 +223,11 @@ export function HelpView() {
               become inactive / flip. Toggle is the classic behaviour (e.g. punch a hole in a
               disc by drawing a smaller circle inside it); Mark and Unmark are safe for
               repeated passes over mixed areas.</li>
-            <li><strong>Symmetry (&harr;&nbsp;H / &varr;&nbsp;V / &#x2922;&nbsp;D)</strong> &mdash;
+            <li><strong>Symmetry (&harr;&nbsp;H / &varr;&nbsp;V / &#x2921;&nbsp;D / &#x2922;&nbsp;D2)</strong> &mdash;
               independent mirror toggles: every edit (any tool, including Point) also applies
-              to its left&harr;right, top&harr;bottom, and main-diagonal mirror images. Combine
-              them freely &mdash; all three together give the full 8-fold symmetry typical of
-              MNCA neighborhoods, so you only ever draw one octant.</li>
+              to its left&harr;right, top&harr;bottom, main-diagonal, and anti-diagonal mirror
+              images. Combine them freely &mdash; any three together give the full 8-fold symmetry
+              typical of MNCA neighborhoods, so you only ever draw one octant.</li>
           </ul>
           <p className={styles.p}>
             The cells an edit would touch preview live under the cursor, color-coded by
@@ -771,7 +773,7 @@ export function HelpView() {
           <table className={styles.table}>
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
-              <tr><td>Set Color Viewer</td><td>Write RGB values for an Attribute-to-Color visualization.</td></tr>
+              <tr><td>Set Color Viewer</td><td>Write RGB values for an Attribute-to-Color visualization. Pick a specific mapping, or choose <strong>Current Simulator Selected</strong> to write to whichever viewer is active &mdash; so one color pass can serve several viewers that differ only in other respects.</td></tr>
               <tr><td>Set Cell Glyph</td><td>Overlay a Unicode character on the current cell when the named Output Mapping is active. Inputs: <strong>Glyph</strong> (Unicode codepoint, with an inline text picker), <strong>R/G/B</strong> for glyph colour. Cells with glyph=0 render no character. Glyphs only paint when the cell is at least 6 screen pixels (configurable via <code>genesisca_sim_settings.glyphMinPx</code>) — they hide gracefully at small zooms.</td></tr>
               <tr><td>Get Color Constant</td><td>Output fixed R, G, B values.</td></tr>
               <tr><td>Color Interpolate</td><td>Interpolate between two colors. Inputs: interpolation point T (0&ndash;1), From R/G/B, To R/G/B. Outputs: R, G, B. The <strong>curve</strong> dropdown controls the interpolation shape: Linear, Smoothstep, Ease-In Quadratic, Ease-Out Quadratic, Exponential, Logarithmic. Includes color picker widgets for &quot;Color From&quot; and &quot;Color To&quot; when the per-channel ports are not connected.</td></tr>
@@ -1006,9 +1008,12 @@ export function HelpView() {
             a <strong>top viewer bar</strong> for switching between visualization
             mappings, a collapsible <strong>left panel</strong> for settings (actions,
             grid dimensions, model attributes), and a collapsible <strong>right
-            panel</strong> for brush settings. Hover over any mapping tab in either bar
+            panel</strong> holding the brush settings (Input Mapping) above the
+            Indicators. Hover over any mapping tab in either bar
             to see the mapping&apos;s description as a tooltip (matches the existing
-            attribute / preset tooltips).
+            attribute / preset tooltips). When the model has indicators, a draggable
+            divider sits between the brush area and the Indicators &mdash; drag it to give
+            the indicators more room (double-click to reset it to fit-the-brush).
           </p>
 
           <h3 className={styles.h3}>Canvas Controls</h3>
@@ -1020,7 +1025,10 @@ export function HelpView() {
               distance from the anchor. Click again (any button) or press <kbd className={styles.kbd}>Esc</kbd>
               to stop.</li>
             <li><strong>Scroll wheel</strong> &mdash; Zoom in/out.</li>
-            <li><strong>Ctrl + left-click drag</strong> &mdash; Resize brush (horizontal = width, vertical = height).</li>
+            <li><strong>Ctrl + left-click drag</strong> &mdash; Resize the brush. The dragged
+              dimensions adapt to the active brush shape: Rectangle = width (horizontal) / height
+              (vertical); Circle = radius; Ring = radius (horizontal) / band width (vertical);
+              Line = thickness.</li>
             <li><strong>Zoom buttons</strong> (+/&minus;/fit/gridlines/infinity) &mdash; Bottom-left of the canvas.
               The <strong>&infin;</strong> button (only enabled on torus-boundary models) tiles the grid
               across the viewport so you can pan endlessly across the wrap seams; the brush wraps with it.</li>
@@ -1043,17 +1051,34 @@ export function HelpView() {
           <h3 className={styles.h3}>Brush Tool</h3>
           <p className={styles.p}>
             Left-click on the canvas to paint cells. Open the right panel to configure
-            brush color, width/height, and input mapping. The color picker is accompanied
+            brush color, shape, size, and input mapping. The color picker is accompanied
             by three <strong>R/G/B</strong> numeric inputs so you can set or read exact
             channel values &mdash; useful when your Input Mapping logic depends on
-            specific channel numbers. A brush cursor rectangle shows which cells will be
-            affected (toggle in the brush panel). Use <strong>Ctrl + left-click drag</strong> to
+            specific channel numbers. Use <strong>Ctrl + left-click drag</strong> to
             resize the brush interactively; <strong>Ctrl + scroll wheel</strong> cycles
             through the available Input Mappings; <strong>Shift + right-click</strong>{' '}
             opens an in-page color picker at the cursor (with R/G/B inputs plus a
             &quot;Full picker&quot; row for the native OS color dialog). Use{' '}
             <strong>Open Image</strong> in the brush panel to import a PNG/BMP/JPG as
             the starting grid state.
+          </p>
+          <p className={styles.p}>
+            <strong>Brush shapes.</strong> Pick a stamp shape in the brush panel:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Rectangle</strong> &mdash; a W&times;H block (the classic brush).</li>
+            <li><strong>Circle</strong> &mdash; a filled disc of the given <em>radius</em>.</li>
+            <li><strong>Ring</strong> &mdash; an annulus at the given <em>radius</em> and band <em>width</em>.</li>
+            <li><strong>Line</strong> &mdash; click <em>two</em> points on the board to draw a
+              segment of the chosen <em>thickness</em>. The first click stages a start anchor
+              (nothing is painted yet); the second click commits the line. Press{' '}
+              <kbd className={styles.kbd}>Esc</kbd> or right-click to cancel a staged anchor.</li>
+          </ul>
+          <p className={styles.p}>
+            A brush cursor traces the exact cells the stamp will affect. It is drawn as a
+            photographic <em>negative</em> of whatever colors are behind it (like the Windows
+            mouse cursor), so the outline stays visible over any cell palette. Toggle it with
+            <strong> Show brush cursor</strong> in the brush panel.
           </p>
 
           <h3 className={styles.h3}>Manual Brush</h3>
@@ -1062,8 +1087,9 @@ export function HelpView() {
             the right, even when the model has no Color&rarr;Attribute input mappings.
             Selecting it swaps the color picker for a per-attribute panel: one row per
             cell attribute, each with a <strong>Set</strong> checkbox and a
-            type-appropriate value widget (binary dropdown, integer/decimal number input, or
-            tag dropdown). When you paint, every cell under the brush has each checked
+            type-appropriate value widget (binary dropdown, integer/decimal number input,
+            tag dropdown, or &mdash; for a neighbor-index attribute &mdash; the same clickable
+            offset-grid picker used in the Model Attributes panel). When you paint, every cell under the brush has each checked
             attribute overwritten with its chosen value; unchecked attributes are skipped
             so you keep fine control over what gets touched. Configuration persists
             per-model name in localStorage, separate from saved projects.
@@ -1240,7 +1266,11 @@ export function HelpView() {
           <p className={styles.p}>
             Use <strong>Save</strong> to download a <code>.gcaproj</code> file, and{' '}
             <strong>Load</strong> to import one. You can also load models from the{' '}
-            <strong>Library</strong> tab.
+            <strong>Library</strong> tab. Loading a project (by file or from the Library)
+            takes you straight to the <strong>Simulator</strong> tab and shows a brief
+            confirmation that the model loaded. The top bar then shows the project name
+            with the source file name in parentheses &mdash; handy when you keep several
+            versions of the same project in different files.
           </p>
 
           <h3 className={styles.h3}>State Files (.gcastate)</h3>

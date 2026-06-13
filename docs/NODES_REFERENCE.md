@@ -208,7 +208,7 @@ exists purely to keep graphs readable without Sequence nodes. See
 
 | # | Type | Label | Description | Ports | Notes |
 |---|---|---|---|---|---|
-| 65 | `setColorViewer` | Set Color Viewer | Write R/G/B to the output mapping's color buffer. | `I: DO` (flow) `I: R` `I: G` `I: B` / — | Used in `outputMapping` chains |
+| 65 | `setColorViewer` | Set Color Viewer | Write R/G/B to the output mapping's color buffer. | `I: DO` (flow) `I: R` `I: G` `I: B` / — | Used in `outputMapping` chains. Target a specific mapping, or **Current Simulator Selected** (`mappingId = '__current__'`) to write whichever viewer is active — emits without the `activeViewer` guard on all three targets, so one Step color pass can serve several viewers |
 | 66 | `setCellGlyph` | Set Cell Glyph | Write a per-cell Unicode glyph + RGB tint to the overlay buffers. The simulator paints the glyph on top of the cell colour when zoom is sufficient. | `I: DO` (flow) `I: Glyph` (codepoint, inline glyph picker) `I: R` `I: G` `I: B` / — | Used in `outputMapping` chains. Hidden below ~6 px/cell |
 | 67 | `getColorConstant` | Color Constant | Emit a fixed RGB triple. | `O: R` `O: G` `O: B` (int) | |
 | 68 | `colorScale` | Color Scale | Map `T` to an RGB color via N colour stops with a selectable curve (linear / smoothstep / easeInQuad / easeOutQuad / exponential / logarithmic). One-click palette presets (Viridis, Magma, Plasma, Inferno, Rainbow, Heat, Cool→Warm, Cividis, Grayscale) load a full stop set. Replaces the legacy `colorInterpolation` node. | `I: T` (float) / `O: R` `O: G` `O: B` (int) | Min 2 stops; `t` outside the stop range clamps to nearest endpoint |
