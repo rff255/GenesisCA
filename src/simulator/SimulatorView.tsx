@@ -1806,7 +1806,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             modelAttrs: { ...runtimeModelAttrs }, indicators: {}, linkedAccumulators: {},
             colors: new ArrayBuffer(0),
           },
-          { activeViewer, brushColor, brushW, brushH, brushMapping, targetFps, unlimitedFps, gensPerFrame, unlimitedGens, indicatorChartOverrides },
+          { activeViewer, brushColor, brushW, brushH, brushShape, brushRadius, brushRingWidth, brushLineWidth, brushMapping, targetFps, unlimitedFps, gensPerFrame, unlimitedGens, indicatorChartOverrides },
           { grid: false, controls: true },
           { boundaryTreatment: model.properties.boundaryTreatment },
         );
@@ -1827,7 +1827,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       pendingStateSave.current = (workerState) => {
         const state = serializeSimState(
           workerState as Parameters<typeof serializeSimState>[0],
-          { activeViewer, brushColor, brushW, brushH, brushMapping, targetFps, unlimitedFps, gensPerFrame, unlimitedGens, indicatorChartOverrides },
+          { activeViewer, brushColor, brushW, brushH, brushShape, brushRadius, brushRingWidth, brushLineWidth, brushMapping, targetFps, unlimitedFps, gensPerFrame, unlimitedGens, indicatorChartOverrides },
           { grid: wantGrid, controls: wantControls },
           { boundaryTreatment: model.properties.boundaryTreatment },
         );
@@ -1841,7 +1841,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     };
     window.addEventListener('genesis-capture-sim-state', captureState);
     return () => window.removeEventListener('genesis-capture-sim-state', captureState);
-  }, [activeViewer, brushColor, brushW, brushH, brushMapping, targetFps, unlimitedFps, gensPerFrame, unlimitedGens, setSimulationState, runtimeModelAttrs, model.properties.boundaryTreatment]);
+  }, [activeViewer, brushColor, brushW, brushH, brushShape, brushRadius, brushRingWidth, brushLineWidth, brushMapping, targetFps, unlimitedFps, gensPerFrame, unlimitedGens, setSimulationState, runtimeModelAttrs, model.properties.boundaryTreatment]);
 
   // Smart init vs recompile: compare previous model to decide.
   // Full reinit for structural changes (grid size, attributes, neighborhoods, mappings, update mode).
@@ -3181,6 +3181,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           brushColor,
           brushW,
           brushH,
+          brushShape,
+          brushRadius,
+          brushRingWidth,
+          brushLineWidth,
           brushMapping,
           targetFps,
           unlimitedFps,
@@ -3336,6 +3340,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (state.brushColor != null) setBrushColor(state.brushColor);
       if (state.brushW != null) setBrushW(state.brushW);
       if (state.brushH != null) setBrushH(state.brushH);
+      if (state.brushShape != null) setBrushShape(state.brushShape);
+      if (state.brushRadius != null) setBrushRadius(state.brushRadius);
+      if (state.brushRingWidth != null) setBrushRingWidth(state.brushRingWidth);
+      if (state.brushLineWidth != null) setBrushLineWidth(state.brushLineWidth);
       if (state.brushMapping != null) setBrushMapping(state.brushMapping);
       if (state.targetFps != null) setTargetFps(state.targetFps);
       if (state.unlimitedFps != null) setUnlimitedFps(state.unlimitedFps);
@@ -4159,7 +4167,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 if (!brushEl || !panel) return;
                 const startY = e.clientY;
                 const startH = brushEl.offsetHeight;
-                const maxH = panel.offsetHeight - 140; // keep the indicators usable
+                // Clamp the cap to >= the 60px floor so on a very short panel
+                // the min doesn't silently win over a sub-60 max (which would
+                // let the brush section eat the whole panel).
+                const maxH = Math.max(60, panel.offsetHeight - 140); // keep the indicators usable
                 const onMove = (ev: MouseEvent) => {
                   setBrushSectionH(Math.max(60, Math.min(maxH, startH + (ev.clientY - startY))));
                 };

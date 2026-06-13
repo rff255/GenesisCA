@@ -12,7 +12,7 @@ export const CURRENT_VIEWER_SENTINEL = '__current__';
 export const SetColorViewerNode: NodeTypeDef = {
   type: 'setColorViewer',
   label: 'Set Color Viewer',
-  description: 'Writes the current cell\u2019s R, G, B values when the named Output Mapping is active (or whichever is selected, with "Current Simulator Selected").',
+  description: 'Writes the current cell\u2019s R, G, B values when the named Output Mapping is active. "Current Simulator Selected" instead writes to whichever viewer is active \u2014 useful in a Step color pass to reuse one graph across viewers (in a dedicated Output Mapping pass it just colors that mapping).',
   category: 'color',
   color: '#006064',
   ports: [
