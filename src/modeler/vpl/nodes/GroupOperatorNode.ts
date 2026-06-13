@@ -16,6 +16,10 @@ export const GroupOperatorNode: NodeTypeDef = {
     { id: 'index', label: 'Position', kind: 'output', category: 'value', dataType: 'integer' },
   ],
   defaultConfig: { operation: 'sum' },
+  // The Position output only carries a real index for the ops that pick one;
+  // every other op emits a constant -1, so hide it there.
+  hiddenPorts: (config) =>
+    GROUP_OPERATOR_POSITION_OPS.has(config.operation as string) ? [] : ['index'],
   compile: (nodeId, config, inputs) => {
     const values = inputs['values'] || '[]';
     const op = config.operation as string;

@@ -2,7 +2,6 @@ import { memo, useCallback, useEffect, useState, useMemo, useSyncExternalStore }
 import { Handle, Position, useReactFlow, useUpdateNodeInternals } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
-import { GROUP_OPERATOR_POSITION_OPS } from './nodes/GroupOperatorNode';
 import { CURRENT_VIEWER_SENTINEL } from './nodes/SetColorViewerNode';
 import { detectMissingConfig, detectCapabilityRequirements, detectWebGPUIncompatibilities, detectWasmIncompatibilities, countMacroSubgraphIssues } from './nodes/nodeValidation';
 import { INTERPOLATION_METHODS, INTERPOLATION_SHORT_LABELS, DEFAULT_INTERPOLATION_METHOD } from './nodes/interpolationMethods';
@@ -445,56 +444,21 @@ function CaNodeComponent({ id, data }: NodeProps) {
     });
   }
 
-  // GetModelAttribute: show R/G/B ports for color attrs, Value port for others
-  if (nodeData.nodeType === 'getModelAttribute') {
-    const isColor = nodeData.config.isColorAttr;
-    outputPorts = outputPorts.filter(p =>
-      isColor ? (p.id === 'r' || p.id === 'g' || p.id === 'b') : p.id === 'value',
-    );
-  }
-
-  // LogicOperator: hide port B when operation is NOT (unary)
-  if (nodeData.nodeType === 'logicOperator' && nodeData.config.operation === 'NOT') {
-    inputPorts = inputPorts.filter(p => p.id !== 'b');
-  }
-
-  // UpdateAttribute: hide value port for unary operations (toggle, next, previous)
-  if (nodeData.nodeType === 'updateAttribute') {
-    const op = nodeData.config.operation as string;
-    if (op === 'toggle' || op === 'next' || op === 'previous') {
-      inputPorts = inputPorts.filter(p => p.id !== 'value');
-    }
-  }
-
-  // GetRandom: probability port only for bool; options + fallback only for options mode.
-  // Mirror of the same logic in effectivePorts.ts — they MUST stay in sync.
-  if (nodeData.nodeType === 'getRandom') {
-    const rt = nodeData.config.randomType as string;
-    if (rt !== 'bool') inputPorts = inputPorts.filter(p => p.id !== 'probability');
-    if (rt !== 'options') inputPorts = inputPorts.filter(p => p.id !== 'options' && p.id !== 'fallback');
-  }
-
-  // Statement (Compare): hide y2 unless operation is a between-family op
-  if (nodeData.nodeType === 'statement') {
-    const stOp = nodeData.config.operation as string;
-    if (stOp !== 'between' && stOp !== 'notBetween') {
-      inputPorts = inputPorts.filter(p => p.id !== 'y2');
-    }
-  }
-
-  // GroupOperator (Group Reduce): the Position output only carries a real index
-  // for max/min/random/weightedRandom — hide it for the other ops (constant -1).
-  // Mirror of the same logic in effectivePorts.ts — they MUST stay in sync.
-  if (nodeData.nodeType === 'groupOperator'
-      && !GROUP_OPERATOR_POSITION_OPS.has(nodeData.config.operation as string)) {
-    outputPorts = outputPorts.filter(p => p.id !== 'index');
-  }
-
-  // GroupCounting (Count Matching): hide compareHigh unless operation is a between-family op
-  if (nodeData.nodeType === 'groupCounting') {
-    const gcOp = nodeData.config.operation as string;
-    if (gcOp !== 'between' && gcOp !== 'notBetween') {
-      inputPorts = inputPorts.filter(p => p.id !== 'compareHigh');
+  // Mode-dependent static-port hiding is declared once on each node def
+  // (def.hiddenPorts(config) → port ids to drop) and applied here AND in
+  // effectivePorts.ts via the same hook, so the rule can't drift between the
+  // two. Covers GetModelAttribute (r/g/b vs value), Logic NOT, Update
+  // Attribute / Update Indicator unary ops, Get Random (probability/options/
+  // fallback by type), Compare / Count Matching between-bounds, Group Reduce
+  // Position, Math unary Y, … Nodes that ADD/transform ports per config
+  // (switch/sequence/expression, above) keep that logic inline — this hook
+  // only removes static ports.
+  if (def?.hiddenPorts) {
+    const hidden = def.hiddenPorts(nodeData.config);
+    if (hidden.length > 0) {
+      const drop = new Set(hidden);
+      inputPorts = inputPorts.filter(p => !drop.has(p.id));
+      outputPorts = outputPorts.filter(p => !drop.has(p.id));
     }
   }
 

@@ -13,6 +13,8 @@ export const GetModelAttributeNode: NodeTypeDef = {
     { id: 'b', label: 'B', kind: 'output', category: 'value', dataType: 'integer' },
   ],
   defaultConfig: { attributeId: '', isColorAttr: false },
+  // Color attributes expose R/G/B; everything else exposes the single Value.
+  hiddenPorts: (config) => config.isColorAttr ? ['value'] : ['r', 'g', 'b'],
   compile: (nodeId, config) => {
     const attr = config.attributeId as string || 'undefined';
     if (config.isColorAttr) {

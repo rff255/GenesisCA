@@ -13,6 +13,15 @@ export const GetRandomNode: NodeTypeDef = {
     { id: 'value', label: 'Value', kind: 'output', category: 'value', dataType: 'any' },
   ],
   defaultConfig: { randomType: 'float', min: '0', max: '1' },
+  // The probability input is only for bool mode; Options + Fallback only for
+  // options mode. Hide whichever don't apply to the current random type.
+  hiddenPorts: (config) => {
+    const t = config.randomType;
+    const hidden: string[] = [];
+    if (t !== 'bool') hidden.push('probability');
+    if (t !== 'options') hidden.push('options', 'fallback');
+    return hidden;
+  },
   compile: (nodeId, config, inputVars) => {
     const type = config.randomType as string;
     const min = config.min as string || '0';

@@ -13,6 +13,9 @@ export const StatementNode: NodeTypeDef = {
     { id: 'result', label: 'Result', kind: 'output', category: 'value', dataType: 'bool' },
   ],
   defaultConfig: { operation: '==', lowOp: '>=', highOp: '<=', compareType: 'numerical' },
+  // The second bound Y₂ is only used by the between-family ops.
+  hiddenPorts: (config) =>
+    (config.operation === 'between' || config.operation === 'notBetween') ? [] : ['y2'],
   compile: (nodeId, config, inputs) => {
     const x = inputs['x'] || '0';
     const y = inputs['y'] || '0';

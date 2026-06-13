@@ -12,6 +12,8 @@ export const LogicOperatorNode: NodeTypeDef = {
     { id: 'result', label: 'Result', kind: 'output', category: 'value', dataType: 'bool' },
   ],
   defaultConfig: { operation: 'OR' },
+  // NOT is unary — hide the second operand.
+  hiddenPorts: (config) => (config.operation === 'NOT' ? ['b'] : []),
   compile: (nodeId, config, inputs) => {
     const a = inputs['a'] || 'false';
     const b = inputs['b'] || 'false';
