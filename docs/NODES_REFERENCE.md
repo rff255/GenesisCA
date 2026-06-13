@@ -163,7 +163,7 @@ exists purely to keep graphs readable without Sequence nodes. See
 
 | # | Type | Label | Description | Ports | Notes |
 |---|---|---|---|---|---|
-| 36 | `arithmeticOperator` | Math | `+ − × ÷ % sqrt pow abs max min mean`. | `I: X` `I: Y` (num) / `O: Result` | Unary ops (`sqrt`, `abs`) ignore `Y` |
+| 36 | `arithmeticOperator` | Math | `+ − × ÷ % sqrt pow abs max min mean`. | `I: X` `I: Y` (num, `Y` hidden on unary ops) / `O: Result` | Unary ops (`sqrt`, `abs`) read only `X` |
 | 37 | `expression` | Expression | Type a math formula instead of wiring many Math nodes — collapses an equation-heavy chain into one node. Operators `+ − × ÷ % ^`, functions `sqrt abs floor ceil round min max pow mod`, constants `pi` `e`. Variables come from the input ports. | dynamic `I: a…h` (1–8 ports, configurable count, each renamable) / `O: Result` | Parses to a shared AST; JS / WASM / WebGPU lockstep. Scalar-only — no array/neighbour reductions; transcendentals (`sin`/`cos`/`exp`/`log`) not yet supported |
 | 38 | `proportionMap` | Proportion Map | Linear remap `X ∈ [inMin..inMax] → [outMin..outMax]`. | `I: X`, `I: inMin`, `I: inMax`, `I: outMin`, `I: outMax` / `O: Result` | |
 | 39 | `interpolation` | Interpolate | `T ∈ [0,1] → [Min..Max]`. | `I: T`, `I: Min`, `I: Max` / `O: Result` | |

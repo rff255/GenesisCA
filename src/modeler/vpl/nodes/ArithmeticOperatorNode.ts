@@ -12,6 +12,9 @@ export const ArithmeticOperatorNode: NodeTypeDef = {
     { id: 'result', label: 'Result', kind: 'output', category: 'value', dataType: 'any' },
   ],
   defaultConfig: { operation: '+' },
+  // The unary ops (sqrt, abs) read only X — hide the Y input for them.
+  hiddenPorts: (config) =>
+    (config.operation === 'sqrt' || config.operation === 'abs') ? ['y'] : [],
   compile: (nodeId, config, inputs) => {
     const x = inputs['x'] || '0';
     const y = inputs['y'] || '0';

@@ -12,6 +12,11 @@ export const UpdateAttributeNode: NodeTypeDef = {
     { id: 'value', label: 'Value', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '1' },
   ],
   defaultConfig: { attributeId: '', operation: 'increment' },
+  // Unary ops (toggle / next / previous) read no operand — hide the Value input.
+  hiddenPorts: (config) => {
+    const op = config.operation;
+    return (op === 'toggle' || op === 'next' || op === 'previous') ? ['value'] : [];
+  },
   compile: (nodeId, config, inputs, _boundary, ctx) => {
     const attr = config.attributeId as string || '_undef';
     const value = inputs['value'] || '0';

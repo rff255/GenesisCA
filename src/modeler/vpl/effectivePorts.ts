@@ -15,10 +15,9 @@
  * here too.
  */
 
-import type { PortDef, NodeTypeDef } from './types';
+import type { PortDef, NodeTypeDef, NodeConfig } from './types';
 import { getNodeDef } from './nodes/registry';
 import { clampVisibleCount } from './compiler/expression/parser';
-import { GROUP_OPERATOR_POSITION_OPS } from './nodes/GroupOperatorNode';
 
 export interface EffectivePorts {
   inputs: PortDef[];
@@ -90,52 +89,19 @@ export function getEffectivePorts(
     });
   }
 
-  // GetModelAttribute: r/g/b vs value depending on isColorAttr
-  if (nodeType === 'getModelAttribute') {
-    const isColor = !!cfg.isColorAttr;
-    outputs = outputs.filter(p => isColor ? (p.id === 'r' || p.id === 'g' || p.id === 'b') : p.id === 'value');
-  }
-
-  // LogicOperator NOT: hide port B
-  if (nodeType === 'logicOperator' && cfg.operation === 'NOT') {
-    inputs = inputs.filter(p => p.id !== 'b');
-  }
-
-  // UpdateAttribute unary ops: hide value port
-  if (nodeType === 'updateAttribute') {
-    const op = cfg.operation as string;
-    if (op === 'toggle' || op === 'next' || op === 'previous') {
-      inputs = inputs.filter(p => p.id !== 'value');
-    }
-  }
-
-  // GetRandom: probability port only for bool; options + fallback only for options mode
-  if (nodeType === 'getRandom') {
-    const t = cfg.randomType as string;
-    if (t !== 'bool') inputs = inputs.filter(p => p.id !== 'probability');
-    if (t !== 'options') inputs = inputs.filter(p => p.id !== 'options' && p.id !== 'fallback');
-  }
-
-  // Statement (Compare): y2 only for between ops
-  if (nodeType === 'statement') {
-    const op = cfg.operation as string;
-    if (op !== 'between' && op !== 'notBetween') {
-      inputs = inputs.filter(p => p.id !== 'y2');
-    }
-  }
-
-  // GroupOperator (Group Reduce): Position output only for ops that produce one
-  if (nodeType === 'groupOperator'
-      && !GROUP_OPERATOR_POSITION_OPS.has(cfg.operation as string)) {
-    outputs = outputs.filter(p => p.id !== 'index');
-  }
-
-  // GroupCounting: compareHigh only for between ops
-  if (nodeType === 'groupCounting') {
-    const op = cfg.operation as string;
-    if (op !== 'between' && op !== 'notBetween') {
-      inputs = inputs.filter(p => p.id !== 'compareHigh');
-    }
+  // Mode-dependent static-port hiding lives DECLARATIVELY on each node def
+  // (def.hiddenPorts(config) → ids to drop) so the rule exists once instead of
+  // being duplicated here and in CaNode. Covers GetModelAttribute (r/g/b vs
+  // value), LogicOperator NOT, UpdateAttribute / Update Indicator unary ops,
+  // GetRandom (probability/options/fallback by random type), Compare / Count
+  // Matching between-bounds, Group Reduce Position, Math unary Y, etc. Applied
+  // AFTER the dynamic add/transform logic above (switch/sequence/expression),
+  // which those nodes keep inline because they ADD ports rather than remove.
+  const hidden = def.hiddenPorts?.(cfg as NodeConfig);
+  if (hidden && hidden.length > 0) {
+    const drop = new Set(hidden);
+    inputs = inputs.filter(p => !drop.has(p.id));
+    outputs = outputs.filter(p => !drop.has(p.id));
   }
 
   return { inputs, outputs };

@@ -14,6 +14,9 @@ export const GroupCountingNode: NodeTypeDef = {
     { id: 'indexes', label: 'Positions', kind: 'output', category: 'value', dataType: 'integer', isArray: true },
   ],
   defaultConfig: { operation: 'equals', lowOp: '>=', highOp: '<=' },
+  // The upper bound is only used by the between-family ops.
+  hiddenPorts: (config) =>
+    (config.operation === 'between' || config.operation === 'notBetween') ? [] : ['compareHigh'],
   compile: (nodeId, config, inputs) => {
     const valuesVar = inputs['values'] || '[]';
     const compareVar = inputs['compare'] || '0';

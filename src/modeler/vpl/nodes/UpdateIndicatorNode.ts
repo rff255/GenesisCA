@@ -12,6 +12,12 @@ export const UpdateIndicatorNode: NodeTypeDef = {
     { id: 'value', label: 'Value', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '0' },
   ],
   defaultConfig: { indicatorId: '', operation: 'increment' },
+  // Unary ops (toggle / next / previous) modify in place and read no operand —
+  // hide the Value input for them (mirrors Update Attribute).
+  hiddenPorts: (config) => {
+    const op = config.operation;
+    return (op === 'toggle' || op === 'next' || op === 'previous') ? ['value'] : [];
+  },
   compile: (nodeId, config, inputs) => {
     const idx = Number(config._indicatorIdx ?? -1);
     const value = inputs['value'] || '0';

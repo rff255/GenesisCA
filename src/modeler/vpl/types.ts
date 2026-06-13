@@ -92,6 +92,17 @@ export interface NodeTypeDef {
    *  `NodeRequirements`. Undefined = available in any model. */
   requirements?: NodeRequirements;
   ports: PortDef[];
+  /** Optional: ids of STATIC ports that carry no meaning under the current
+   *  config and should be HIDDEN in the editor (e.g. Math's `y` for the unary
+   *  `sqrt`/`abs` ops, Update Indicator's `value` for `toggle`/`next`/`previous`).
+   *  Applied as a final filter by BOTH CaNode's render path AND
+   *  `effectivePorts.getEffectivePorts`, so the rule lives once on the node def
+   *  instead of being duplicated (and risking drift) across both. Hiding is
+   *  UI-only — the compilers ignore the dead port anyway, and any pre-existing
+   *  edge into it simply goes unread. Nodes that ADD or transform ports per
+   *  config (switch/sequence/expression) keep that logic inline; this hook is
+   *  only for removing static ports. */
+  hiddenPorts?: (config: NodeConfig) => string[];
   defaultConfig: NodeConfig;
   /** Emit JS code for this node. Returns code string.
    *  `boundary` is the model's boundary treatment ('torus' | 'constant'),
