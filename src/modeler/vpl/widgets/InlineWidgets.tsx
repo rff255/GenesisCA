@@ -125,6 +125,12 @@ interface NumberFieldProps {
   max?: number;
   /** Round committed values to the nearest integer. */
   integer?: boolean;
+  /** Increment per spinner click / Arrow key / wheel notch. Default 1. */
+  step?: number;
+  /** Hide the up/down stepper buttons (keyboard + wheel still work). Default
+   *  false (buttons shown) — restores the native number-input spinbox that
+   *  was lost when these moved off `<input type="number">`. */
+  noSpinner?: boolean;
   className?: string;
   style?: React.CSSProperties;
   placeholder?: string;
@@ -139,10 +145,18 @@ interface NumberFieldProps {
  * a numeric API with min/max clamping. ALL number entry in panels and the
  * simulator should go through this (or InlineNumberInput for string-config
  * sites) — never a raw `<input type="number">`.
+ *
+ * Because the draft model requires `type="text"` (a `type="number"` input
+ * can't hold a transitional `-`), the native spinbox is gone — so we render
+ * our OWN up/down stepper column and also honour ArrowUp/ArrowDown + mouse
+ * wheel. The caller's `className` (border / background / width / flex) moves
+ * to the WRAPPER so the field's box + layout participation are preserved; the
+ * `<input>` becomes a borderless, transparent fill inside it.
  */
 export function NumberField(props: NumberFieldProps) {
   const external = props.value === undefined || props.value === null ? '' : String(props.value);
   const [draft, setDraft] = useState<string>(external);
+  const [focused, setFocused] = useState(false);
   const lastCommittedRef = useRef<string>(external);
 
   useEffect(() => {
@@ -178,6 +192,7 @@ export function NumberField(props: NumberFieldProps) {
   };
 
   const onBlur = () => {
+    setFocused(false);
     const raw = draft;
     if (raw === '' && props.onClear) {
       lastCommittedRef.current = '';
@@ -197,20 +212,117 @@ export function NumberField(props: NumberFieldProps) {
     }
   };
 
+  /** Step the value by ±step (spinner click / Arrow key / wheel), clamped. */
+  const stepBy = (dir: 1 | -1) => {
+    if (props.disabled) return;
+    const stepAmt = props.step ?? 1;
+    const baseStr = draft !== '' && Number.isFinite(Number(draft)) ? draft : lastCommittedRef.current;
+    const base = Number(baseStr);
+    let next = (Number.isFinite(base) ? base : 0) + dir * stepAmt;
+    // De-fuzz float drift to the step's decimal precision (0.1 + 0.2 → 0.3).
+    const decimals = (String(stepAmt).split('.')[1] || '').length;
+    if (decimals > 0) next = Number(next.toFixed(decimals));
+    next = clamp(next);
+    const canonical = String(next);
+    setDraft(canonical);
+    lastCommittedRef.current = canonical;
+    props.onNumber(next);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'ArrowUp') { e.preventDefault(); stepBy(1); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); stepBy(-1); }
+  };
+  const onWheel = (e: React.WheelEvent<HTMLInputElement>) => {
+    // Only when focused (matches native number inputs) so scrolling a panel
+    // doesn't accidentally change values under the cursor.
+    if (!focused) return;
+    e.preventDefault();
+    stepBy(e.deltaY < 0 ? 1 : -1);
+  };
+
+  const showSpinner = !props.noSpinner && !props.disabled;
+
   return (
-    <input
-      type="text"
-      inputMode="decimal"
-      lang="en"
+    <span
       className={props.className}
-      value={draft}
-      onChange={onChange}
-      onBlur={onBlur}
-      placeholder={props.placeholder}
-      title={props.title}
-      style={props.style}
-      disabled={props.disabled}
-    />
+      style={{
+        // The caller's className styling (border/bg/width/flex) lives here; the
+        // input is a transparent fill. padding:0 so the spinner reaches the edge.
+        display: 'inline-flex',
+        alignItems: 'stretch',
+        padding: 0,
+        overflow: 'hidden',
+        ...props.style,
+        ...(focused ? { borderColor: 'var(--color-accent)' } : {}),
+        // The caller's `:disabled` rule can't target the wrapper, so fade it here.
+        ...(props.disabled ? { opacity: 0.55 } : {}),
+      }}
+    >
+      <input
+        type="text"
+        inputMode="decimal"
+        lang="en"
+        value={draft}
+        onChange={onChange}
+        onBlur={onBlur}
+        onFocus={() => setFocused(true)}
+        onKeyDown={onKeyDown}
+        onWheel={onWheel}
+        placeholder={props.placeholder}
+        title={props.title}
+        disabled={props.disabled}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          width: '100%',
+          boxSizing: 'border-box',
+          border: 'none',
+          outline: 'none',
+          background: 'transparent',
+          color: 'inherit',
+          font: 'inherit',
+          textAlign: 'inherit',
+          padding: '2px 4px',
+        }}
+      />
+      {showSpinner && (
+        <span style={{ display: 'flex', flexDirection: 'column', flex: 'none', width: 13 }}>
+          <StepBtn dir="up" onStep={() => stepBy(1)} />
+          <StepBtn dir="down" onStep={() => stepBy(-1)} />
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** One half of the NumberField stepper. mousedown is suppressed so clicking
+ *  doesn't blur (and re-validate) the field mid-step. */
+function StepBtn({ dir, onStep }: { dir: 'up' | 'down'; onStep: () => void }) {
+  return (
+    <button
+      type="button"
+      tabIndex={-1}
+      aria-label={dir === 'up' ? 'Increment' : 'Decrement'}
+      onMouseDown={e => e.preventDefault()}
+      onClick={onStep}
+      style={{
+        flex: 1,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 0,
+        border: 'none',
+        background: 'var(--color-overlay-row, rgba(255,255,255,0.06))',
+        color: 'var(--color-text-tertiary, #9aa)',
+        cursor: 'pointer',
+        fontSize: 6,
+        lineHeight: 1,
+        minHeight: 0,
+      }}
+    >
+      {dir === 'up' ? '▲' : '▼'}
+    </button>
   );
 }
 
