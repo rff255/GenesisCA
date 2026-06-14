@@ -190,6 +190,13 @@
 
   --chart-axis:  #555555;
   --chart-label: #a0a0a0;
+
+  /* ----- Graph editor canvas (React-Flow props read via useThemeTokens) -- */
+  --color-canvas-grid:        #1a2538;        /* background dot/line grid */
+  --color-minimap-bg:         #0d1117;
+  --color-minimap-node:       #2d4059;
+  --color-minimap-node-group: rgba(45, 64, 89, 0.5);
+  --color-minimap-mask:       rgba(0, 0, 0, 0.70);
 }
 
 /* ====================================================================== */
@@ -318,4 +325,11 @@
 
   --chart-axis:  #3a3d44;
   --chart-label: #908d83;
+
+  /* ----- Graph editor canvas ----- */
+  --color-canvas-grid:        #1c1f27;        /* subtle dark grid on near-black */
+  --color-minimap-bg:         #08090b;
+  --color-minimap-node:       #2f333b;
+  --color-minimap-node-group: rgba(47, 51, 59, 0.5);
+  --color-minimap-mask:       rgba(0, 0, 0, 0.78);
 }

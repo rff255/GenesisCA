@@ -31,7 +31,19 @@ import type { GraphNode, GraphEdge } from '../../model/types';
 import type { MacroPort } from '../../model/types';
 import { computeAlignmentSnap, sameGuides } from './alignmentSnap';
 import type { AlignGuides, AlignTarget } from './alignmentSnap';
+import { useThemeTokens } from '../../styles/useThemeTokens';
 import styles from './GraphEditor.module.css';
+
+/** Canvas colors that React-Flow takes as JS props (Background grid, MiniMap)
+ *  — read via useThemeTokens so they recolor when the theme changes. Stable
+ *  identity so the hook's memo doesn't re-subscribe every render. */
+const CANVAS_TOKENS = [
+  '--color-canvas-grid',
+  '--color-minimap-bg',
+  '--color-minimap-node',
+  '--color-minimap-node-group',
+  '--color-minimap-mask',
+] as const;
 
 const nodeTypes: NodeTypes = {
   caNode: CaNode,
@@ -543,6 +555,15 @@ export function GraphEditorInner() {
   const [showGrid, setShowGrid] = useState(showGridGlobal);
   const [snapEnabled, setSnapEnabled] = useState(snapEnabledGlobal);
   const [portLabelsVisible, setPortLabelsVisible] = useState(showPortLabelsGlobal);
+  // Theme-reactive canvas colors (Background grid + MiniMap). Defaults match
+  // the Blender values so they're correct even before the tokens resolve.
+  const [
+    gridColor = '#1a2538',
+    minimapBg = '#0d1117',
+    minimapNode = '#2d4059',
+    minimapNodeGroup = 'rgba(45, 64, 89, 0.5)',
+    minimapMask = 'rgba(0, 0, 0, 0.70)',
+  ] = useThemeTokens(CANVAS_TOKENS);
   const rfInstance = useRef<ReactFlowInstance | null>(null);
   // Wrapper around <ReactFlow/> — used by the RMB-pass-through-edges effect
   // below to delegate right-button pointerdowns from edges to the pane.
@@ -3733,7 +3754,7 @@ export function GraphEditorInner() {
         }}
         proOptions={{ hideAttribution: true }}
       >
-        {showGrid && <Background color="#1a2538" gap={20} variant={BackgroundVariant.Lines} />}
+        {showGrid && <Background color={gridColor} gap={20} variant={BackgroundVariant.Lines} />}
         <AlignmentGuidesOverlay guides={alignGuides} />
         <Controls showInteractive={false} />
         {/* Canvas toggle buttons */}
@@ -3761,9 +3782,9 @@ export function GraphEditorInner() {
           </button>
         </div>
         <MiniMap
-          nodeColor={n => n.type === 'groupNode' ? 'rgba(45,64,89,0.5)' : '#2d4059'}
-          maskColor="rgba(0, 0, 0, 0.7)"
-          style={{ background: '#0d1117' }}
+          nodeColor={n => n.type === 'groupNode' ? minimapNodeGroup : minimapNode}
+          maskColor={minimapMask}
+          style={{ background: minimapBg }}
           pannable
           zoomable
           onClick={(_e, position) => {
@@ -3904,7 +3925,7 @@ export function GraphEditorInner() {
               >
                 Import Macro&hellip;
               </button>
-              <hr style={{ border: 'none', borderTop: '1px solid #2d4059', margin: '4px 0' }} />
+              <hr style={{ border: 'none', borderTop: '1px solid var(--color-border)', margin: '4px 0' }} />
               {renderQuickAddSearch('Search nodes… (Enter adds)', `No nodes${dropMenuSearch ? ' match' : ''}`)}
             </>
           )}
@@ -3975,10 +3996,10 @@ export function GraphEditorInner() {
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); handleCopy(); setContextMenu(null); }}>Copy</button>
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); handleCut(); setContextMenu(null); }}>Cut</button>
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); handlePaste(); setContextMenu(null); }}>Paste</button>
-              <hr style={{ border: 'none', borderTop: '1px solid #2d4059', margin: '4px 0' }} />
+              <hr style={{ border: 'none', borderTop: '1px solid var(--color-border)', margin: '4px 0' }} />
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); createMacroFromSelection(); }}>Create Macro</button>
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); createGroup(); }}>Create Group</button>
-              <hr style={{ border: 'none', borderTop: '1px solid #2d4059', margin: '4px 0' }} />
+              <hr style={{ border: 'none', borderTop: '1px solid var(--color-border)', margin: '4px 0' }} />
               <div className={styles.contextSubmenuTrigger}>
                 <button className={styles.contextItem}>
                   Align
@@ -4005,7 +4026,7 @@ export function GraphEditorInner() {
                   <button className={styles.contextItem} onClick={e => { e.stopPropagation(); distributeNodes('v'); }}>Vertically</button>
                 </div>
               </div>
-              <hr style={{ border: 'none', borderTop: '1px solid #2d4059', margin: '4px 0' }} />
+              <hr style={{ border: 'none', borderTop: '1px solid var(--color-border)', margin: '4px 0' }} />
               <button className={styles.contextItem} style={{ color: '#e05050' }} onClick={e => { e.stopPropagation(); deleteSelection(); }}>
                 Delete Selection
               </button>
