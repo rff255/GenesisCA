@@ -1,0 +1,26 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="GenesisCA">
+  <title>GenesisCA</title>
+  <desc>Two cells at first cleavage — the GenesisCA mark.</desc>
+  <defs>
+    <radialGradient id="tileg" cx="34%" cy="26%" r="92%">
+      <stop offset="0" stop-color="#1d2026"/>
+      <stop offset="1" stop-color="#0a0b0e"/>
+    </radialGradient>
+    <radialGradient id="cg" cx="36%" cy="30%" r="78%">
+      <stop offset="0" stop-color="#f8c96e"/>
+      <stop offset="0.58" stop-color="#e8a13a"/>
+      <stop offset="1" stop-color="#c9801f"/>
+    </radialGradient>
+    <radialGradient id="ng" cx="38%" cy="34%" r="72%">
+      <stop offset="0" stop-color="#fff3d6"/>
+      <stop offset="1" stop-color="#f0bf72"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#tileg)"/>
+  <circle cx="180" cy="256" r="118" fill="url(#cg)"/>
+  <circle cx="332" cy="256" r="118" fill="url(#cg)"/>
+  <circle cx="332" cy="256" r="118" fill="none" stroke="#a8640f" stroke-opacity="0.45" stroke-width="5"/>
+  <ellipse cx="152" cy="216" rx="32" ry="21" fill="#ffffff" opacity="0.13"/>
+  <circle cx="156" cy="244" r="30" fill="url(#ng)"/>
+  <circle cx="356" cy="244" r="30" fill="url(#ng)"/>
+</svg>

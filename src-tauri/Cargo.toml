@@ -1,0 +1,25 @@
+[package]
+name = "genesisca"
+version = "1.19.0"
+description = "IDE for modeling and simulating Cellular Automata"
+authors = ["Rodrigo F. Figueiredo"]
+edition = "2021"
+license = "GPL-3.0-only"
+
+# The frontend (this whole Vite/React app) is the UI; the Rust side is a thin
+# native host. Build with `npm run tauri build` (needs a Rust toolchain — see
+# README "Native build"). Produces .msi + NSIS .exe on Windows, .dmg / .deb /
+# .AppImage elsewhere.
+
+[lib]
+name = "genesisca_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

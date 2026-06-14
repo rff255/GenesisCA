@@ -45,7 +45,8 @@ export function HelpView() {
           <p className={styles.p}>
             The goals are <strong>accessibility</strong> (no programming required) and{' '}
             <strong>performance</strong> (grids up to 5000x5000 cells). Everything runs
-            100% in your browser &mdash; no server, no installation, no sign-up.
+            100% in your browser &mdash; no server and no sign-up &mdash; and it can be{' '}
+            <strong>installed to run offline</strong> (see below).
           </p>
           <p className={styles.p}>
             Originally created as an undergraduate final project at the Universidade Federal
@@ -62,6 +63,32 @@ export function HelpView() {
             >
               GitHub
             </a>.
+          </p>
+        </section>
+
+        {/* ============================================================ */}
+        <section id="help-install" className={styles.section}>
+          <h2 className={styles.h2}>Installing &amp; Working Offline</h2>
+          <p className={styles.p}>
+            GenesisCA is an installable <strong>Progressive Web App</strong>. In Chrome or
+            Edge, click the navbar <strong>&#x2913; Install</strong> button (it appears when
+            your browser offers installation) to add GenesisCA as a standalone desktop app
+            &mdash; its own window and icon, no browser tabs or address bar.
+          </p>
+          <p className={styles.p}>
+            Once visited, the app works <strong>fully offline</strong>: the interface, the
+            Models Library list and previews, and the simulation engine are cached locally,
+            so you can keep modeling and simulating with no connection. Library models are
+            cached the first time you open them. A short toast confirms when the app is{' '}
+            <em>ready to work offline</em>, and again when a new version is available
+            (click <strong>Reload</strong> to update).
+          </p>
+          <p className={styles.p}>
+            Your projects are never uploaded &mdash; saving still downloads a local
+            .gcaproj / .gcastate file to your computer as before. Installing also asks the
+            browser for <strong>durable storage</strong> so the offline cache isn&rsquo;t
+            evicted under disk pressure. (Installing does not raise the memory ceiling for
+            very large grids &mdash; a native desktop build for that is in progress.)
           </p>
         </section>
 
@@ -729,8 +756,8 @@ export function HelpView() {
           <table className={styles.table}>
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
-              <tr><td>Arithmetic Operator (Math)</td><td>+, -, *, /, %, sqrt, pow, abs, max, min, mean.</td></tr>
-              <tr><td>Expression</td><td>Type a math <strong>formula</strong> in a text field instead of wiring up many Math nodes &mdash; ideal for equation-heavy models. Operators <code>+ - * / % ^</code> and functions <code>sqrt abs floor ceil round min max pow mod</code>, plus the constants <code>pi</code> and <code>e</code>. Variables come from the input ports: add 1&ndash;8 ports with the <strong>+</strong> / <strong>&minus;</strong> buttons, give each a name, then reference those names in the formula (e.g. <em>u + Du*lap - u*v*v</em>). Compiles on all three targets (JS, WASM, WebGPU).</td></tr>
+              <tr><td>Arithmetic Operator (Math)</td><td>+, -, *, /, %, sqrt, pow, abs, max, min, mean, exp, log (natural), sin, cos, tan, tanh.</td></tr>
+              <tr><td>Expression</td><td>Type a math <strong>formula</strong> in a text field instead of wiring up many Math nodes &mdash; ideal for equation-heavy models. Operators <code>+ - * / % ^</code> and functions <code>sqrt abs floor ceil round min max pow mod exp log sin cos tan tanh</code> (<code>log</code> = natural log), plus the constants <code>pi</code> and <code>e</code>. Variables come from the input ports: add 1&ndash;8 ports with the <strong>+</strong> / <strong>&minus;</strong> buttons, give each a name, then reference those names in the formula (e.g. <em>u + Du*lap - u*v*v</em>). Compiles on all three targets (JS, WASM, WebGPU).</td></tr>
               <tr><td>Proportion Map</td><td>Remap a value from one range to another: <em>output = outMin + curve(t) * (outMax - outMin)</em> with <em>t = (x - inMin) / (inMax - inMin)</em>. Has 5 inputs (X, In Min, In Max, Out Min, Out Max) plus a <strong>curve</strong> dropdown: Linear, Smoothstep, Ease-In Quadratic, Ease-Out Quadratic, Exponential, Logarithmic. Linear keeps un-clamped extrapolation; non-linear curves clamp t to [0, 1].</td></tr>
               <tr><td>Interpolate</td><td>Linear interpolation: output = min + t * (max - min). Inputs: T (0&ndash;1), Min, Max.</td></tr>
               <tr><td>Compare (Statement)</td><td>Comparison operators: ==, !=, &gt;, &lt;, &gt;=, &lt;=, <strong>Between</strong>, and <strong>Not Between</strong>. The between-family ops reveal a Y&#8322; input and two picklists for the lower (&gt;= or &gt;) and upper (&lt;= or &lt;) interval sides; <em>Not Between</em> fires when the value is outside the interval. A <strong>type selector</strong> (Numerical / Binary / Tag / Neighbor Index) swaps the inline operand widgets &mdash; pick <em>Tag</em> and a tag-attribute picker appears so you can compare against a tag option without a Get Constant node (non-numerical types are equality-only). Replaces the common Compare + Compare + AND chain.</td></tr>
@@ -1194,8 +1221,8 @@ export function HelpView() {
           <p className={styles.p}>
             Press <kbd className={styles.kbd}>?</kbd> anywhere (or the navbar
             <strong> ?</strong> button) for a quick on-screen cheat sheet, and
-            <kbd className={styles.kbd}>F</kbd> (or the navbar <strong>&#x2922;</strong>
-            button) to maximize the canvas by hiding the side panels.
+            <kbd className={styles.kbd}>F</kbd> (or the <strong>&#x26F6;</strong>
+            button on the canvas) to maximize the canvas by hiding the side panels.
           </p>
 
           <h3 className={styles.h3}>Graph Editor (Modeler)</h3>

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>GenesisCA — Install / Offline plan mockup</title>
+<style>
+  body{margin:0;background:#0c0d10;color:#ecebe6;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;padding:28px;line-height:1.5}
+  h1{font-size:20px;font-weight:500;margin:0 0 4px}
+  .sub{color:#9a988e;font-size:13px;margin:0 0 24px}
+  .cap{color:#9a988e;font-size:12px;margin-top:6px}
+  section{margin:0 0 26px}
+  .frm{background:#16181d;border:1px solid #2a2d35;border-radius:12px;padding:14px 16px}
+  .nbtn{display:inline-flex;align-items:center;justify-content:center;height:24px;border:1px solid #34373f;border-radius:6px;color:#9a988e;background:transparent;font-size:12px;padding:0 7px}
+  .tab{font-size:12px;color:#9a988e;padding:2px 8px;border-radius:6px}
+  .toast{display:inline-flex;align-items:center;gap:8px;background:#16181d;border:1px solid #e8a13a;border-radius:8px;padding:9px 13px;color:#ecebe6;font-size:13px}
+  .tile{vertical-align:bottom}
+</style>
+</head>
+<body>
+<h1>GenesisCA — Install / Offline (PWA) plan</h1>
+<p class="sub">Two-cell icon set · navbar install button · offline / installed toasts · installed standalone window. Decisions: two-cell mark, offline+durable goal, PWA now + Tauri scaffold.</p>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<defs>
+<radialGradient id="cg" cx="36%" cy="30%" r="78%"><stop offset="0" stop-color="#f8c96e"/><stop offset="0.58" stop-color="#e8a13a"/><stop offset="1" stop-color="#c9801f"/></radialGradient>
+<radialGradient id="ng" cx="38%" cy="34%" r="72%"><stop offset="0" stop-color="#fff3d6"/><stop offset="1" stop-color="#f0bf72"/></radialGradient>
+<radialGradient id="tileg" cx="34%" cy="26%" r="92%"><stop offset="0" stop-color="#1d2026"/><stop offset="1" stop-color="#0a0b0e"/></radialGradient>
+<symbol id="markCore" viewBox="0 0 512 512">
+<circle cx="176" cy="256" r="126" fill="url(#cg)"/>
+<circle cx="336" cy="256" r="126" fill="url(#cg)"/>
+<circle cx="336" cy="256" r="126" fill="none" stroke="#a8640f" stroke-opacity="0.45" stroke-width="5"/>
+<ellipse cx="146" cy="214" rx="34" ry="22" fill="#ffffff" opacity="0.13"/>
+<circle cx="150" cy="242" r="33" fill="url(#ng)"/>
+<circle cx="362" cy="242" r="33" fill="url(#ng)"/>
+</symbol>
+<symbol id="iconAny" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="url(#tileg)"/><use href="#markCore"/></symbol>
+<symbol id="iconMask" viewBox="0 0 512 512"><rect width="512" height="512" fill="url(#tileg)"/><g transform="translate(74,74) scale(0.71)"><use href="#markCore"/></g><circle cx="256" cy="256" r="205" fill="none" stroke="#ffffff" stroke-opacity="0.34" stroke-width="3" stroke-dasharray="11 11"/></symbol>
+</defs>
+</svg>
+
+<section>
+<div style="display:flex;align-items:flex-end;gap:28px;flex-wrap:wrap">
+<div><svg class="tile" width="140" height="140" viewBox="0 0 512 512"><use href="#iconAny"/></svg><div class="cap">app icon · 512 / 192</div></div>
+<div><svg class="tile" width="92" height="92" viewBox="0 0 512 512"><use href="#iconMask"/></svg><div class="cap">maskable · safe zone</div></div>
+<div style="display:flex;align-items:flex-end;gap:10px">
+<svg class="tile" width="48" height="48" viewBox="0 0 512 512"><use href="#iconAny"/></svg>
+<svg class="tile" width="32" height="32" viewBox="0 0 512 512"><use href="#iconAny"/></svg>
+<svg class="tile" width="16" height="16" viewBox="0 0 512 512"><use href="#iconAny"/></svg>
+<div class="cap" style="margin:0">favicon · 48 / 32 / 16</div>
+</div>
+</div>
+</section>
+
+<section>
+<div class="frm">
+<div style="display:flex;align-items:center;gap:10px;white-space:nowrap;overflow:hidden">
+<span style="font-size:13px;font-weight:500">GenesisCA</span>
+<span style="color:#7f7e76;font-size:11px">v1.19.0</span>
+<span class="tab" style="background:rgba(232,161,58,0.16);color:#e8a13a">Modeler</span>
+<span class="tab">Simulator</span><span class="tab">Help</span><span class="tab">Library</span>
+<span style="flex:1"></span>
+<span class="nbtn">?</span>
+<span class="nbtn">⤢</span>
+<span class="nbtn">Nocturne ▾</span>
+<span class="nbtn" style="color:#e8a13a;border-color:#e8a13a;background:rgba(232,161,58,0.14);gap:5px;font-weight:500">⤓ Install</span>
+<span class="nbtn">New</span><span class="nbtn">Save</span><span class="nbtn">Load</span>
+</div>
+</div>
+<div class="cap">install button between theme switcher and file menu — shown only when the browser offers install, hidden otherwise</div>
+</section>
+
+<section style="display:flex;gap:18px;flex-wrap:wrap">
+<div><div class="toast"><span style="color:#e8a13a">◴</span>GenesisCA is ready to work offline.</div><div class="cap">on first cache · onOfflineReady</div></div>
+<div><div class="toast"><span style="color:#6abe6a">✓</span>GenesisCA installed — available offline.</div><div class="cap">after install · appinstalled</div></div>
+</section>
+
+<section>
+<div class="frm" style="padding:0;overflow:hidden;max-width:360px">
+<div style="display:flex;align-items:center;gap:9px;background:#16181d;border-bottom:1px solid #2a2d35;padding:8px 12px">
+<svg width="20" height="20" viewBox="0 0 512 512"><use href="#iconAny"/></svg>
+<span style="font-size:12.5px;font-weight:500">GenesisCA</span>
+<span style="flex:1"></span>
+<span style="color:#7f7e76">— ▢ ✕</span>
+</div>
+<div style="height:54px;background:#08090b;display:flex;align-items:center;justify-content:center;color:#44443f;font-size:12px">standalone window — no tab, address bar, or browser chrome</div>
+</div>
+<div class="cap">installed: own window + taskbar icon (PWA today; native .msi/.exe via the Tauri scaffold later)</div>
+</section>
+</body>
+</html>

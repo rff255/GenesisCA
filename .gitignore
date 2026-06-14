@@ -3,6 +3,8 @@ node_modules/
 
 # Build output
 dist/
+# vite-plugin-pwa dev service-worker output (regenerated each `npm run dev`)
+dev-dist/
 
 # Vite
 .vite/

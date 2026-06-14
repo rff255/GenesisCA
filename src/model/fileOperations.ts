@@ -203,8 +203,31 @@ export function modelFilename(model: CAModel): string {
   return `${base || 'model'}.gcaproj`;
 }
 
-export function downloadJSON(content: string, filename: string): void {
-  const blob = new Blob([content], { type: 'application/json' });
+/**
+ * Save text to a file. In the native (Tauri) shell, open a real OS "Save As"
+ * dialog and write via the host `save_text_file` command — the browser
+ * blob-download path below is silently dropped by WebView2, so the file never
+ * gets created. In the browser / installed PWA, fall back to the blob download.
+ * Returns true if a file was written, false if the user cancelled the native
+ * Save As dialog.
+ */
+async function saveTextFile(content: string, filename: string, mime: string): Promise<boolean> {
+  const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+  if (inTauri) {
+    const ext = filename.includes('.') ? filename.slice(filename.lastIndexOf('.') + 1) : '';
+    const [{ save }, { invoke }] = await Promise.all([
+      import('@tauri-apps/plugin-dialog'),
+      import('@tauri-apps/api/core'),
+    ]);
+    const path = await save({
+      defaultPath: filename,
+      filters: ext ? [{ name: ext.toUpperCase(), extensions: [ext] }] : [],
+    });
+    if (!path) return false; // user cancelled the Save As dialog
+    await invoke('save_text_file', { path, contents: content });
+    return true;
+  }
+  const blob = new Blob([content], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -213,6 +236,11 @@ export function downloadJSON(content: string, filename: string): void {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+  return true;
+}
+
+export function downloadJSON(content: string, filename: string): Promise<boolean> {
+  return saveTextFile(content, filename, 'application/json');
 }
 
 export function readModelFile(file: File): Promise<CAModel> {
@@ -491,16 +519,8 @@ export function serializePreset(
   return out;
 }
 
-export function downloadStateFile(state: SimulationState, filename: string): void {
-  const blob = new Blob([JSON.stringify(state)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+export function downloadStateFile(state: SimulationState, filename: string): Promise<boolean> {
+  return saveTextFile(JSON.stringify(state), filename, 'application/json');
 }
 
 export function readStateFile(file: File): Promise<SimulationState> {

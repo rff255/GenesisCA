@@ -1,0 +1,5 @@
+# Rust / Cargo build artifacts
+/target/
+
+# Tauri-generated schemas + platform files (regenerated on build)
+/gen/

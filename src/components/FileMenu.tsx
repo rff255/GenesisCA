@@ -104,8 +104,10 @@ export function FileMenu({ onNew, onLoaded }: {
     }
     const json = serializeModel(toSerialize);
     const filename = modelFilename(latest);
-    downloadJSON(json, filename);
-    markSaved(filename);
+    // Native (Tauri) shows a Save As dialog; only mark saved if the user picked
+    // a path (didn't cancel). Browser download always resolves true.
+    const saved = await downloadJSON(json, filename);
+    if (saved) markSaved(filename);
   };
 
   const handleLoad = () => {

@@ -3289,7 +3289,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // Also store in model context so next .gcaproj save includes it
       setSimulationState(state);
       const name = model.properties.name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '') || 'genesis';
-      downloadStateFile(state, `${name}_gen${generationRef.current}.gcastate`);
+      void downloadStateFile(state, `${name}_gen${generationRef.current}.gcastate`);
     };
     workerRef.current.postMessage({ type: 'getState' });
   };
@@ -4064,6 +4064,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             }
             style={{ opacity: model.properties.boundaryTreatment === 'torus' ? 1 : 0.4 }}
           >&infin;</button>
+          <button
+            className={styles.zoomBtn}
+            onClick={toggleCanvasFullscreen}
+            title="Fullscreen canvas (F)"
+            aria-label="Toggle canvas fullscreen"
+          >&#x26F6;</button>
         </div>
 
         {/* Right panel expand button */}

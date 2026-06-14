@@ -3780,6 +3780,14 @@ export function GraphEditorInner() {
           >
             &loz;
           </button>
+          <button
+            className={styles.toggleButton}
+            onClick={() => window.dispatchEvent(new CustomEvent('genesis-toggle-canvas-fullscreen'))}
+            title="Fullscreen canvas (F)"
+            aria-label="Toggle canvas fullscreen"
+          >
+            &#x26F6;
+          </button>
         </div>
         <MiniMap
           nodeColor={n => n.type === 'groupNode' ? minimapNodeGroup : minimapNode}
