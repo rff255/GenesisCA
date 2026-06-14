@@ -31,7 +31,7 @@ Pre-made models to explore and learn from. Enabling users to build upon classica
 ![Library](docs/Gifs/model_library.gif)
 
 ### **In-app Help**
-Detailed in-app help tab with a comprehensive tutorial and reference material regarding features, usage, shortcuts and such:
+Detailed in-app help tab with a comprehensive tutorial and reference material regarding features, usage, shortcuts and such. Press **?** anywhere (or the navbar **?** button) for a quick on-screen shortcuts cheat sheet, and **F11** to toggle fullscreen. A navbar **Theme** switcher offers two dark themes (**Blender** and **Nocturne**):
 ![Library](docs/Gifs/help.gif)
 
 ### **Example**
