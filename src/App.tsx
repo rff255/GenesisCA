@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { ModelProvider, useModel } from './model/ModelContext';
 import { FileMenu } from './components/FileMenu';
 import { ConfirmDialog } from './components/ConfirmDialog';
@@ -8,6 +9,7 @@ import { HelpView } from './help/HelpView';
 import { ModelsLibrary } from './library/ModelsLibrary';
 import { StyleReferenceView } from './styleguide/StyleReferenceView';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
+import { KeyboardShortcutsOverlay } from './components/KeyboardShortcutsOverlay';
 import type { CAModel } from './model/types';
 import styles from './App.module.css';
 
@@ -31,6 +33,40 @@ function AppInner() {
     toastTimer.current = window.setTimeout(() => setToast(null), 3500);
   };
   useEffect(() => () => { if (toastTimer.current != null) clearTimeout(toastTimer.current); }, []);
+
+  // Keyboard-shortcuts cheat-sheet overlay + real browser fullscreen. Both are
+  // surfaced as navbar buttons so the (otherwise keyboard-only) actions are
+  // discoverable from any view.
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    const onFs = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onFs);
+    return () => document.removeEventListener('fullscreenchange', onFs);
+  }, []);
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else document.documentElement.requestFullscreen().catch(() => {});
+  };
+  // `?` (Shift+/) opens the shortcuts overlay — but not while typing in a field.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '?') return;
+      const t = e.target as HTMLElement | null;
+      const tag = t?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable) return;
+      e.preventDefault();
+      setShortcutsOpen(o => !o);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  const navIconBtn: CSSProperties = {
+    background: 'transparent', border: '1px solid var(--color-widget-border)',
+    borderRadius: 'var(--radius-md)', color: 'var(--color-text-secondary)',
+    width: 28, height: 24, cursor: 'pointer', fontSize: 'var(--font-sm)', lineHeight: 1,
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  };
 
   /** Shared post-load flow: land in the Simulator, confirm the load. */
   const afterLoad = (modelName: string) => {
@@ -104,6 +140,18 @@ function AppInner() {
           {loadedFileName && <span className={styles.fileName}> ({loadedFileName})</span>}
           {isDirty && <span className={styles.dirtyIndicator}> *</span>}
         </span>
+        <button
+          style={navIconBtn}
+          title="Keyboard shortcuts (?)"
+          aria-label="Keyboard shortcuts"
+          onClick={() => setShortcutsOpen(true)}
+        >?</button>
+        <button
+          style={navIconBtn}
+          title={isFullscreen ? 'Exit fullscreen (F11)' : 'Fullscreen (F11)'}
+          aria-label="Toggle fullscreen"
+          onClick={toggleFullscreen}
+        >⤢</button>
         <ThemeSwitcher />
         <FileMenu onNew={() => setMode('modeler')} onLoaded={afterLoad} />
       </nav>
@@ -132,6 +180,7 @@ function AppInner() {
         />
       )}
       {toast && <div className={styles.toast}>{toast}</div>}
+      <KeyboardShortcutsOverlay open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
     </div>
   );
 }
