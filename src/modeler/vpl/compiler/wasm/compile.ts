@@ -23,7 +23,7 @@ import type { Attribute, CAModel, GraphNode, GraphEdge } from '../../../../model
 import { getNodeDef } from '../../nodes/registry';
 import { readColorScaleStops } from '../../nodes/ColorScaleNode';
 import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/CategoricalColorNode';
-import { CURRENT_VIEWER_SENTINEL } from '../../nodes/SetColorViewerNode';
+import { CURRENT_VIEWER_SENTINEL } from '../../nodes/SetCellLooksNode';
 import {
   ValType, F64, I32, OP_F64_ABS, OP_F64_ADD, OP_F64_CONVERT_I32_S, OP_F64_CONVERT_I32_U, OP_F64_DIV,
   OP_F64_EQ, OP_F64_FLOOR, OP_F64_GE, OP_F64_GT, OP_F64_LE, OP_F64_LT,
@@ -5006,99 +5006,78 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
     return true;
   },
 
-  setCellGlyph: ({ node, ctx, inputs }) => {
-    const viewerId = (node.data.config.mappingId as string) || '';
-    const viewerInt = ctx.viewerIds[viewerId];
-    if (viewerInt === undefined) return true; // unknown viewer — silently skip
-    if (!ctx.layout.hasGlyphs) return true;   // defensive: no glyph regions reserved
-
-    // Viewer guard — same hoisted-local pattern as setColorViewer.
-    const cachedLocal = ctx.viewerLocals.get(viewerId);
-    if (cachedLocal !== undefined) {
-      ctx.emitter.localGet(cachedLocal);
-    } else {
-      ctx.emitter.i32Const(0);
-      ctx.emitter.i32Load(ctx.layout.activeViewerOffset, 2);
-      ctx.emitter.i32Const(viewerInt);
-      ctx.emitter.op(OP_I32_EQ);
-    }
-    ctx.emitter.ifThen(() => {
-      // glyphCodes[idx]: u32 store at glyphCodesOffset + idx*4
-      const glyphByte = ctx.emitter.allocLocal(I32);
-      ctx.emitter.localGet(ctx.iLocalIdx);
-      ctx.emitter.i32Const(4);
-      ctx.emitter.op(OP_I32_MUL);
-      ctx.emitter.localTee(glyphByte);
-
-      const cp = inputs['glyph'] ?? { inline: true, value: 0, valtype: I32 };
-      pushValueAs(ctx.emitter, cp, I32);
-      ctx.emitter.i32Store(ctx.layout.glyphCodesOffset, 2);
-
-      // glyphColors[idx]: pack R | G<<8 | B<<16, store as u32.
-      ctx.emitter.localGet(glyphByte);
-      const r = inputs['r'] ?? { inline: true, value: 0, valtype: I32 };
-      const g = inputs['g'] ?? { inline: true, value: 0, valtype: I32 };
-      const b = inputs['b'] ?? { inline: true, value: 0, valtype: I32 };
-      // R & 0xFF
-      pushValueAs(ctx.emitter, r, I32);
-      ctx.emitter.i32Const(0xFF);
-      ctx.emitter.op(OP_I32_AND);
-      // | ((G & 0xFF) << 8)
-      pushValueAs(ctx.emitter, g, I32);
-      ctx.emitter.i32Const(0xFF);
-      ctx.emitter.op(OP_I32_AND);
-      ctx.emitter.i32Const(8);
-      ctx.emitter.op(OP_I32_SHL);
-      ctx.emitter.op(OP_I32_OR);
-      // | ((B & 0xFF) << 16)
-      pushValueAs(ctx.emitter, b, I32);
-      ctx.emitter.i32Const(0xFF);
-      ctx.emitter.op(OP_I32_AND);
-      ctx.emitter.i32Const(16);
-      ctx.emitter.op(OP_I32_SHL);
-      ctx.emitter.op(OP_I32_OR);
-      ctx.emitter.i32Store(ctx.layout.glyphColorsOffset, 2);
-    });
-    return true;
-  },
-
-  setColorViewer: ({ node, ctx, inputs }) => {
-    const viewerId = (node.data.config.mappingId as string) || '';
+  setCellLooks: ({ node, ctx, inputs }) => {
+    const cfg = node.data.config;
+    const useGlyph = !!cfg.useGlyph;
+    const setBg = cfg.setBackground !== false; // default true
+    const viewerId = (cfg.mappingId as string) || '';
     const isCurrentViewer = viewerId === CURRENT_VIEWER_SENTINEL;
     const viewerInt = isCurrentViewer ? undefined : ctx.viewerIds[viewerId];
     if (!isCurrentViewer && viewerInt === undefined) {
-      // Viewer not in our compile-time map — skip silently (as if "if (active === unknown)" is false)
+      // Viewer not in our compile-time map — skip silently.
       return true;
     }
+    const doBg = !useGlyph || setBg;
+    const doGlyph = useGlyph && ctx.layout.hasGlyphs;
+    if (!doBg && !doGlyph) return true;
+
     const emitWrites = () => {
-      // Address base for color writes: i*4 + colorsOffset
-      const colorByte = ctx.emitter.allocLocal(I32);
-      ctx.emitter.localGet(ctx.iLocalIdx);
-      ctx.emitter.i32Const(4);
-      ctx.emitter.op(OP_I32_MUL);
-      ctx.emitter.localTee(colorByte);
+      if (doBg) {
+        // colors[idx] RGBA — same as the former setColorViewer. R/G/B = cell color.
+        const colorByte = ctx.emitter.allocLocal(I32);
+        ctx.emitter.localGet(ctx.iLocalIdx);
+        ctx.emitter.i32Const(4);
+        ctx.emitter.op(OP_I32_MUL);
+        ctx.emitter.localTee(colorByte);
+        const r = inputs['r'] ?? { inline: true, value: 0, valtype: I32 };
+        const g = inputs['g'] ?? { inline: true, value: 0, valtype: I32 };
+        const b = inputs['b'] ?? { inline: true, value: 0, valtype: I32 };
+        pushValueAs(ctx.emitter, r, I32);
+        ctx.emitter.i32Store8(ctx.layout.colorsOffset + 0, 0);
+        ctx.emitter.localGet(colorByte);
+        pushValueAs(ctx.emitter, g, I32);
+        ctx.emitter.i32Store8(ctx.layout.colorsOffset + 1, 0);
+        ctx.emitter.localGet(colorByte);
+        pushValueAs(ctx.emitter, b, I32);
+        ctx.emitter.i32Store8(ctx.layout.colorsOffset + 2, 0);
+        ctx.emitter.localGet(colorByte);
+        ctx.emitter.i32Const(255);
+        ctx.emitter.i32Store8(ctx.layout.colorsOffset + 3, 0);
+      }
+      if (doGlyph) {
+        // glyphCodes[idx] (u32) + packed glyphColors[idx] (R|G<<8|B<<16).
+        const glyphByte = ctx.emitter.allocLocal(I32);
+        ctx.emitter.localGet(ctx.iLocalIdx);
+        ctx.emitter.i32Const(4);
+        ctx.emitter.op(OP_I32_MUL);
+        ctx.emitter.localTee(glyphByte);
+        const cp = inputs['glyph'] ?? { inline: true, value: 0, valtype: I32 };
+        pushValueAs(ctx.emitter, cp, I32);
+        ctx.emitter.i32Store(ctx.layout.glyphCodesOffset, 2);
 
-      // Channel writes — node has r/g/b inputs
-      const r = inputs['r'] ?? { inline: true, value: 0, valtype: I32 };
-      const g = inputs['g'] ?? { inline: true, value: 0, valtype: I32 };
-      const b = inputs['b'] ?? { inline: true, value: 0, valtype: I32 };
-
-      // r at offset+0
-      pushValueAs(ctx.emitter, r, I32);
-      ctx.emitter.i32Store8(ctx.layout.colorsOffset + 0, 0);
-
-      ctx.emitter.localGet(colorByte);
-      pushValueAs(ctx.emitter, g, I32);
-      ctx.emitter.i32Store8(ctx.layout.colorsOffset + 1, 0);
-
-      ctx.emitter.localGet(colorByte);
-      pushValueAs(ctx.emitter, b, I32);
-      ctx.emitter.i32Store8(ctx.layout.colorsOffset + 2, 0);
-
-      ctx.emitter.localGet(colorByte);
-      ctx.emitter.i32Const(255);
-      ctx.emitter.i32Store8(ctx.layout.colorsOffset + 3, 0);
+        ctx.emitter.localGet(glyphByte);
+        const gr = inputs['glyphR'] ?? { inline: true, value: 0, valtype: I32 };
+        const gg = inputs['glyphG'] ?? { inline: true, value: 0, valtype: I32 };
+        const gb = inputs['glyphB'] ?? { inline: true, value: 0, valtype: I32 };
+        pushValueAs(ctx.emitter, gr, I32);
+        ctx.emitter.i32Const(0xFF);
+        ctx.emitter.op(OP_I32_AND);
+        pushValueAs(ctx.emitter, gg, I32);
+        ctx.emitter.i32Const(0xFF);
+        ctx.emitter.op(OP_I32_AND);
+        ctx.emitter.i32Const(8);
+        ctx.emitter.op(OP_I32_SHL);
+        ctx.emitter.op(OP_I32_OR);
+        pushValueAs(ctx.emitter, gb, I32);
+        ctx.emitter.i32Const(0xFF);
+        ctx.emitter.op(OP_I32_AND);
+        ctx.emitter.i32Const(16);
+        ctx.emitter.op(OP_I32_SHL);
+        ctx.emitter.op(OP_I32_OR);
+        ctx.emitter.i32Store(ctx.layout.glyphColorsOffset, 2);
+      }
     };
+
     if (isCurrentViewer) {
       // "Current Simulator Selected": whatever pass is running IS the current
       // viewer — write unconditionally (mirrors the JS emit with no _isV_ guard).
@@ -5106,8 +5085,6 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
       return true;
     }
     // Per-step hoist: viewerLocals[viewerId] holds (activeViewer == viewerInt).
-    // Falls back to inline load+compare if no cached local exists (e.g. a
-    // viewer id not pre-hoisted), so this stays safe under any compile path.
     const cachedLocal = ctx.viewerLocals.get(viewerId);
     if (cachedLocal !== undefined) {
       ctx.emitter.localGet(cachedLocal);

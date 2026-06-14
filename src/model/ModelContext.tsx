@@ -32,6 +32,7 @@ import { migrateColorInterpolationNodes } from './colorScaleMigration';
 import { migrateTagConstantNodes } from './tagConstantMigration';
 import { migrateLookupTables } from './lookupTableMigration';
 import { migrateMoveSelfToNeighborNodes } from './moveSelfToNeighborMigration';
+import { migrateSetCellLooksNodes } from './setCellLooksMigration';
 import { clearAllSavedGraphViewports, setSavedCurrentScope } from '../modeler/vpl/graphState';
 
 // ---------------------------------------------------------------------------
@@ -734,6 +735,13 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // Idempotent (top-level + all macroDefs).
       {
         const r = migrateMoveSelfToNeighborNodes(m.graphNodes, m.graphEdges, m.macroDefs);
+        m = { ...m, graphNodes: r.graphNodes, graphEdges: r.graphEdges, macroDefs: r.macroDefs };
+      }
+      // Set Cell Looks migration: merge legacy setColorViewer + setCellGlyph
+      // nodes into the unified setCellLooks node (glyph nodes get useGlyph:true
+      // and their R/G/B remapped to the glyph-color ports). Idempotent.
+      {
+        const r = migrateSetCellLooksNodes(m.graphNodes, m.graphEdges, m.macroDefs);
         m = { ...m, graphNodes: r.graphNodes, graphEdges: r.graphEdges, macroDefs: r.macroDefs };
       }
       // Lookup Table migration: interactionTable→lookupTable attribute type +

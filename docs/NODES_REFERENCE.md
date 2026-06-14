@@ -4,7 +4,7 @@ This document catalogues every node in the GenesisCA Visual Programming Language
 describes the port type system, and flags redundancies or gaps. It is a working reference
 to inform future consolidation — it does **not** describe any committed refactoring.
 
-**Scope:** 69 node types across 7 categories (event, flow, data, logic, aggregation,
+**Scope:** 68 node types across 7 categories (event, flow, data, logic, aggregation,
 output, color), plus 2 hidden boundary nodes (`macroInput` / `macroOutput`). Indicator
 nodes live within the `data` (readers) and `output` (writers) categories rather than a
 category of their own. The variegated-cells and local-variable nodes appear in the editor
@@ -208,11 +208,10 @@ exists purely to keep graphs readable without Sequence nodes. See
 
 | # | Type | Label | Description | Ports | Notes |
 |---|---|---|---|---|---|
-| 65 | `setColorViewer` | Set Color Viewer | Write R/G/B to the output mapping's color buffer. | `I: DO` (flow) `I: R` `I: G` `I: B` / — | Used in `outputMapping` chains. Target a specific mapping, or **Current Simulator Selected** (`mappingId = '__current__'`) to write whichever viewer is active — emits without the `activeViewer` guard on all three targets, so one Step color pass can serve several viewers |
-| 66 | `setCellGlyph` | Set Cell Glyph | Write a per-cell Unicode glyph + RGB tint to the overlay buffers. The simulator paints the glyph on top of the cell colour when zoom is sufficient. | `I: DO` (flow) `I: Glyph` (codepoint, inline glyph picker) `I: R` `I: G` `I: B` / — | Used in `outputMapping` chains. Hidden below ~6 px/cell |
-| 67 | `getColorConstant` | Color Constant | Emit a fixed RGB triple. | `O: R` `O: G` `O: B` (int) | |
-| 68 | `colorScale` | Color Scale | Map `T` to an RGB color via N colour stops with a selectable curve (linear / smoothstep / easeInQuad / easeOutQuad / exponential / logarithmic). One-click palette presets (Viridis, Magma, Plasma, Inferno, Rainbow, Heat, Cool→Warm, Cividis, Grayscale) load a full stop set. Replaces the legacy `colorInterpolation` node. | `I: T` (float) / `O: R` `O: G` `O: B` (int) | Min 2 stops; `t` outside the stop range clamps to nearest endpoint |
-| 69 | `categoricalColor` | Categorical Color | Map an integer `Index` to a flat RGB color from an N-entry palette (no blending). Index `i` selects entry `i`; out-of-range indices use the default color. | `I: Index` (int) / `O: R` `O: G` `O: B` (int) | Discrete lookup (cf. `colorScale` which interpolates). Used by Linked Output Mappings for tag attributes |
+| 65 | `setCellLooks` | Set Cell Looks | Sets a cell's appearance for the named output mapping: a flat color (plain mode), or — with **Use glyph** — an overlaid Unicode glyph + glyph color, plus an optional cell **background** color and an optional **glyph color when zoomed out** fallback. Merges the former Set Color Viewer + Set Cell Glyph. | `I: DO` (flow) `I: R` `I: G` `I: B` (cell color) `I: Glyph` (codepoint, inline picker) `I: Glyph R` `I: Glyph G` `I: Glyph B` / — | Used in `outputMapping`/Step chains. Target a mapping, or **Current Simulator Selected** (`mappingId = '__current__'`) to write whichever viewer is active (no `activeViewer` guard, all three targets). `hiddenPorts` hides the glyph ports in plain mode and the cell-color ports when glyph mode has no background. Glyph drawn above ~6 px/cell |
+| 66 | `getColorConstant` | Color Constant | Emit a fixed RGB triple. | `O: R` `O: G` `O: B` (int) | |
+| 67 | `colorScale` | Color Scale | Map `T` to an RGB color via N colour stops with a selectable curve (linear / smoothstep / easeInQuad / easeOutQuad / exponential / logarithmic). One-click palette presets (Viridis, Magma, Plasma, Inferno, Rainbow, Heat, Cool→Warm, Cividis, Grayscale) load a full stop set. Replaces the legacy `colorInterpolation` node. | `I: T` (float) / `O: R` `O: G` `O: B` (int) | Min 2 stops; `t` outside the stop range clamps to nearest endpoint |
+| 68 | `categoricalColor` | Categorical Color | Map an integer `Index` to a flat RGB color from an N-entry palette (no blending). Index `i` selects entry `i`; out-of-range indices use the default color. | `I: Index` (int) / `O: R` `O: G` `O: B` (int) | Discrete lookup (cf. `colorScale` which interpolates). Used by Linked Output Mappings for tag attributes |
 
 ### Hidden / auto-generated
 
@@ -335,11 +334,9 @@ graph LR
   D[colorScale<br/>N stops + T]:::prod -- R,G,B --> C
   E[inputColor event]:::prod -- R,G,B --> C
 
-  C[setColorViewer]:::cons
-  F[setCellGlyph<br/>glyph + R/G/B]:::cons
-  A -- R,G,B --> F
-  B -- R,G,B --> F
-  D -- R,G,B --> F
+  C[setCellLooks<br/>cell color + opt. glyph]:::cons
+  A -- Glyph R,G,B --> C
+  D -- Glyph R,G,B --> C
 ```
 
 **Observations**
@@ -348,7 +345,7 @@ graph LR
   (or three inline widget values). This makes simple flows like "paint cell the
   brush color" verbose.
 - Color pickers are re-implemented in four nodes: `getColorConstant`, `colorScale`,
-  `categoricalColor`, and `setColorViewer` (on its R/G/B inline widgets).
+  `categoricalColor`, and `setCellLooks` (on its R/G/B inline widgets).
 - `getModelAttribute` becomes 3-port when the attribute is color-typed — a type-aware
   port set. No other node has this behaviour.
 
@@ -388,7 +385,7 @@ flowchart LR
 - **Particle / mass-conserving** rules need Realm 2: move values between cells. Requires
   `updateMode: 'asynchronous'` in model properties.
 - **Color-only mappings** (Attribute→Color) live in Realm 1 via the `outputMapping` event
-  entry point, ending in `setColorViewer`.
+  entry point, ending in `setCellLooks`.
 
 ---
 
@@ -419,7 +416,7 @@ These are **ideas**, not committed work. They inform future passes on the node s
   `getNeighborAttributeByIndex` (scalar): plural "s" indicates array, but the
   singular "ByIndex" (not "ByIndexes") muddies the pattern.
 - Colour-picker and color-channel nodes don't use a consistent vocabulary —
-  `getColorConstant` vs `setColorViewer` vs `colorScale` all refer to colors
+  `getColorConstant` vs `setCellLooks` vs `colorScale` all refer to colors
   but from different angles.
 
 ### 6.3 Consolidation proposals
@@ -543,7 +540,7 @@ can be reused across any neighborhood without ambiguity.
 **Brush + visualization for NI cell attributes** are user-defined via the standard
 mapping pipeline (Color → Attribute for the brush, Attribute → Color for the viewer):
 the user wires `inputColor.R/G/B → ... → setAttribute(NI cell attr)` for the brush
-direction and `getCellAttribute(NI) → ... → setColorViewer.R/G/B` for visualization.
+direction and `getCellAttribute(NI) → ... → setCellLooks.R/G/B` for visualization.
 No additional infrastructure is needed; NI cell attrs flow through the same
 mapping graph as any other attribute kind.
 

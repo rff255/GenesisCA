@@ -1,6 +1,6 @@
 import type { GraphNode, GraphEdge, CAModel } from '../../../model/types';
 import { getAllNodeDefs, getNodeDef } from '../nodes/registry';
-import { CURRENT_VIEWER_SENTINEL } from '../nodes/SetColorViewerNode';
+import { CURRENT_VIEWER_SENTINEL } from '../nodes/SetCellLooksNode';
 import { parseHandleId, type CompileContext } from '../types';
 import { classifyLoopInvariant } from './loopInvariant';
 import { safeId } from './identifierSafe';
@@ -1672,7 +1672,7 @@ export function compileGraph(
   for (const m of model.mappings || []) viewerIdsToHoist.add(m.id);
   const collectViewerRefs = (nodes: GraphNode[]) => {
     for (const n of nodes) {
-      if (n.data.nodeType === 'setColorViewer' || n.data.nodeType === 'setCellGlyph') {
+      if (n.data.nodeType === 'setCellLooks') {
         const mid = (n.data.config.mappingId as string) || 'default';
         // "Current Simulator Selected" emits no _isV_ guard — nothing to hoist.
         if (mid !== CURRENT_VIEWER_SENTINEL) viewerIdsToHoist.add(mid);

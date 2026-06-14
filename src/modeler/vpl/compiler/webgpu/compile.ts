@@ -27,7 +27,7 @@ import {
 import { getNodeDef } from '../../nodes/registry';
 import { readColorScaleStops } from '../../nodes/ColorScaleNode';
 import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/CategoricalColorNode';
-import { CURRENT_VIEWER_SENTINEL } from '../../nodes/SetColorViewerNode';
+import { CURRENT_VIEWER_SENTINEL } from '../../nodes/SetCellLooksNode';
 import { parseHandleId } from '../../types';
 import {
   detectWebGPUIncompatibilities, detectWebGPUModelIncompatibilities,
@@ -2678,74 +2678,58 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
     return true;
   },
 
-  setCellGlyph: ({ node, ctx, inputs }) => {
-    const viewerId = (node.data.config.mappingId as string) || '';
-    const viewerInt = ctx.viewerIds[viewerId];
-    if (viewerInt === undefined) return true; // unknown viewer — silently skip
-    if (!ctx.layout.hasGlyphs) return true;   // defensive: stub-sized regions
-
-    const cp = inputs['glyph'] ?? { expr: '0', type: 'i32' as WgslType };
-    const r = inputs['r'] ?? { expr: '0', type: 'i32' as WgslType };
-    const g = inputs['g'] ?? { expr: '0', type: 'i32' as WgslType };
-    const b = inputs['b'] ?? { expr: '0', type: 'i32' as WgslType };
-    const cpe = `u32(max(${castTo(cp, 'i32')}, 0))`;
-    const re = `u32(clamp(${castTo(r, 'i32')}, 0, 255))`;
-    const ge = `u32(clamp(${castTo(g, 'i32')}, 0, 255))`;
-    const be = `u32(clamp(${castTo(b, 'i32')}, 0, 255))`;
-    const packed = `(${re}) | ((${ge}) << 8u) | ((${be}) << 16u)`;
-
-    if (ctx.currentMappingId !== null) {
-      // Inside an outputMapping shader: only write if THIS shader's mapping is
-      // the one referenced. Mirrors setColorViewer's compile-time skip.
-      if (ctx.currentMappingId !== viewerId) return true;
-      ctx.lines.push(`  glyphCodes[idx] = ${cpe};`);
-      ctx.lines.push(`  glyphColors[idx] = ${packed};`);
-      return true;
-    }
-    // Step shader: runtime guard on activeViewer.
-    ctx.lines.push(`  if (control.activeViewer == ${viewerInt}) {`);
-    ctx.lines.push(`    glyphCodes[idx] = ${cpe};`);
-    ctx.lines.push(`    glyphColors[idx] = ${packed};`);
-    ctx.lines.push(`  }`);
-    return true;
-  },
-
-  setColorViewer: ({ node, ctx, inputs }) => {
-    const viewerId = (node.data.config.mappingId as string) || '';
+  setCellLooks: ({ node, ctx, inputs }) => {
+    const cfg = node.data.config;
+    const useGlyph = !!cfg.useGlyph;
+    const setBg = cfg.setBackground !== false; // default true
+    const viewerId = (cfg.mappingId as string) || '';
     const isCurrentViewer = viewerId === CURRENT_VIEWER_SENTINEL;
     const viewerInt = isCurrentViewer ? undefined : ctx.viewerIds[viewerId];
-    if (!isCurrentViewer && viewerInt === undefined) return true; // Unknown viewer — silently skip.
+    if (!isCurrentViewer && viewerInt === undefined) return true; // unknown viewer — skip
 
-    const r = inputs['r'] ?? { expr: '0', type: 'i32' as WgslType };
-    const g = inputs['g'] ?? { expr: '0', type: 'i32' as WgslType };
-    const b = inputs['b'] ?? { expr: '0', type: 'i32' as WgslType };
-    const re = `u32(clamp(${castTo(r, 'i32')}, 0, 255))`;
-    const ge = `u32(clamp(${castTo(g, 'i32')}, 0, 255))`;
-    const be = `u32(clamp(${castTo(b, 'i32')}, 0, 255))`;
-    // Pack RGBA into a single u32 (little-endian: R in low byte).
-    const packed = `(${re}) | ((${ge}) << 8u) | ((${be}) << 16u) | (255u << 24u)`;
+    const doBg = !useGlyph || setBg;
+    const doGlyph = useGlyph && ctx.layout.hasGlyphs;
+    if (!doBg && !doGlyph) return true;
+
+    // Build the per-cell write lines (un-indented; the emit paths below add it).
+    const writes: string[] = [];
+    if (doBg) {
+      const r = inputs['r'] ?? { expr: '0', type: 'i32' as WgslType };
+      const g = inputs['g'] ?? { expr: '0', type: 'i32' as WgslType };
+      const b = inputs['b'] ?? { expr: '0', type: 'i32' as WgslType };
+      const re = `u32(clamp(${castTo(r, 'i32')}, 0, 255))`;
+      const ge = `u32(clamp(${castTo(g, 'i32')}, 0, 255))`;
+      const be = `u32(clamp(${castTo(b, 'i32')}, 0, 255))`;
+      writes.push(`colors[idx] = (${re}) | ((${ge}) << 8u) | ((${be}) << 16u) | (255u << 24u);`);
+    }
+    if (doGlyph) {
+      const cp = inputs['glyph'] ?? { expr: '0', type: 'i32' as WgslType };
+      const gr = inputs['glyphR'] ?? { expr: '0', type: 'i32' as WgslType };
+      const gg = inputs['glyphG'] ?? { expr: '0', type: 'i32' as WgslType };
+      const gb = inputs['glyphB'] ?? { expr: '0', type: 'i32' as WgslType };
+      const cpe = `u32(max(${castTo(cp, 'i32')}, 0))`;
+      const re = `u32(clamp(${castTo(gr, 'i32')}, 0, 255))`;
+      const ge = `u32(clamp(${castTo(gg, 'i32')}, 0, 255))`;
+      const be = `u32(clamp(${castTo(gb, 'i32')}, 0, 255))`;
+      writes.push(`glyphCodes[idx] = ${cpe};`);
+      writes.push(`glyphColors[idx] = (${re}) | ((${ge}) << 8u) | ((${be}) << 16u);`);
+    }
 
     if (ctx.currentMappingId !== null) {
       // Inside an outputMapping shader: only write if THIS shader handles the
-      // mapping (or always for "Current Simulator Selected" — the shader being
-      // dispatched IS the current viewer). Other mappings' SetColorViewers are
-      // skipped at compile time.
+      // mapping (or always for "Current Simulator Selected").
       if (!isCurrentViewer && ctx.currentMappingId !== viewerId) return true;
-      ctx.lines.push(`  colors[idx] = ${packed};`);
+      for (const w of writes) ctx.lines.push(`  ${w}`);
       return true;
     }
-
     if (isCurrentViewer) {
-      // Step shader, "Current Simulator Selected": no activeViewer guard —
-      // mirrors the JS/WASM unguarded emit.
-      ctx.lines.push(`  colors[idx] = ${packed};`);
+      // Step shader, "Current Simulator Selected": no activeViewer guard.
+      for (const w of writes) ctx.lines.push(`  ${w}`);
       return true;
     }
-
-    // Step shader: guard on activeViewer so the compiled step writes the
-    // currently-active mapping's colors (matches JS behaviour).
+    // Step shader: guard on activeViewer.
     ctx.lines.push(`  if (control.activeViewer == ${viewerInt}) {`);
-    ctx.lines.push(`    colors[idx] = ${packed};`);
+    for (const w of writes) ctx.lines.push(`    ${w}`);
     ctx.lines.push(`  }`);
     return true;
   },
