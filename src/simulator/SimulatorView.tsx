@@ -3579,12 +3579,28 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // restores the user's previous layout (instead of always opening everything).
   const prePanelStateRef = useRef<{ left: boolean; right: boolean; top: boolean; bottom: boolean } | null>(null);
 
-  // F = toggle all four bars at once (true canvas fullscreen). Gated on
-  // visibility so the shortcut doesn't fire from the Modeler / Help / Library
-  // tabs (SimulatorView is always-mounted), and on no-active-text-field so the
-  // user can still type 'f' in inputs.
+  // Canvas fullscreen = toggle all four bars at once. Shared by the F key and
+  // the navbar fullscreen button (via the `genesis-toggle-canvas-fullscreen`
+  // event) so both do the same in-app maximize (not a browser-only F11). Gated
+  // on visibility (SimulatorView is always-mounted) and no-active-text-field.
   const visibleRef = useRef(visible);
   useEffect(() => { visibleRef.current = visible; }, [visible]);
+  const toggleCanvasFullscreen = useCallback(() => {
+    const anyOpen = leftPanelOpen || rightPanelOpen || topBarOpen || bottomBarOpen;
+    if (anyOpen) {
+      prePanelStateRef.current = { left: leftPanelOpen, right: rightPanelOpen, top: topBarOpen, bottom: bottomBarOpen };
+      setLeftPanelOpen(false);
+      setRightPanelOpen(false);
+      setTopBarOpen(false);
+      setBottomBarOpen(false);
+    } else {
+      const prev = prePanelStateRef.current;
+      setLeftPanelOpen(prev ? prev.left : true);
+      setRightPanelOpen(prev ? prev.right : true);
+      setTopBarOpen(prev ? prev.top : true);
+      setBottomBarOpen(prev ? prev.bottom : true);
+    }
+  }, [leftPanelOpen, rightPanelOpen, topBarOpen, bottomBarOpen]);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (!visibleRef.current) return;
@@ -3594,24 +3610,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const tag = ae?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (ae?.isContentEditable ?? false)) return;
       e.preventDefault();
-      const anyOpen = leftPanelOpen || rightPanelOpen || topBarOpen || bottomBarOpen;
-      if (anyOpen) {
-        prePanelStateRef.current = { left: leftPanelOpen, right: rightPanelOpen, top: topBarOpen, bottom: bottomBarOpen };
-        setLeftPanelOpen(false);
-        setRightPanelOpen(false);
-        setTopBarOpen(false);
-        setBottomBarOpen(false);
-      } else {
-        const prev = prePanelStateRef.current;
-        setLeftPanelOpen(prev ? prev.left : true);
-        setRightPanelOpen(prev ? prev.right : true);
-        setTopBarOpen(prev ? prev.top : true);
-        setBottomBarOpen(prev ? prev.bottom : true);
-      }
+      toggleCanvasFullscreen();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [leftPanelOpen, rightPanelOpen, topBarOpen, bottomBarOpen]);
+  }, [toggleCanvasFullscreen]);
+  useEffect(() => {
+    const onEvt = () => { if (visibleRef.current) toggleCanvasFullscreen(); };
+    window.addEventListener('genesis-toggle-canvas-fullscreen', onEvt);
+    return () => window.removeEventListener('genesis-toggle-canvas-fullscreen', onEvt);
+  }, [toggleCanvasFullscreen]);
 
   const modelAttrs = model.attributes.filter(a => a.isModelAttribute);
   const attrToColorMappings = model.mappings.filter(m => m.isAttributeToColor);

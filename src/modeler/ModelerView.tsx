@@ -153,6 +153,29 @@ export function ModelerView() {
     setActiveRightPanel(lastRightPanel);
   }, [lastRightPanel]);
 
+  // Canvas fullscreen = toggle both side panels. Shared by the F key and the
+  // navbar fullscreen button (via the `genesis-toggle-canvas-fullscreen` event)
+  // so both do the same in-app maximize (not a browser-only F11). Restores the
+  // exact previous layout (including null entries) when toggling back out.
+  const toggleCanvasFullscreen = useCallback(() => {
+    const anyOpen = activePanel != null || activeRightPanel != null;
+    if (anyOpen) {
+      prePanelStateRef.current = { left: activePanel, right: activeRightPanel };
+      setActivePanel(null);
+      setActiveRightPanel(null);
+    } else {
+      const prev = prePanelStateRef.current;
+      setActivePanel(prev ? prev.left : lastLeftPanel);
+      setActiveRightPanel(prev ? prev.right : null);
+    }
+  }, [activePanel, activeRightPanel, lastLeftPanel]);
+
+  useEffect(() => {
+    const onEvt = () => toggleCanvasFullscreen();
+    window.addEventListener('genesis-toggle-canvas-fullscreen', onEvt);
+    return () => window.removeEventListener('genesis-toggle-canvas-fullscreen', onEvt);
+  }, [toggleCanvasFullscreen]);
+
   // Ctrl+F opens Node Explorer and focuses search; Space toggles Palette;
   // Esc closes whichever right panel is open. Registered in the capture phase
   // so the Space toggle preempts the always-mounted SimulatorView's
@@ -172,20 +195,10 @@ export function ModelerView() {
         setLastRightPanel('explorer');
         setTimeout(() => explorerRef.current?.focusSearch(), 50);
       } else if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-        // F = toggle both side panels (canvas fullscreen). Restore the exact
-        // previous layout (including null entries) when toggling back out.
+        // F = toggle both side panels (canvas fullscreen).
         if (isField) return;
         e.preventDefault();
-        const anyOpen = activePanel != null || activeRightPanel != null;
-        if (anyOpen) {
-          prePanelStateRef.current = { left: activePanel, right: activeRightPanel };
-          setActivePanel(null);
-          setActiveRightPanel(null);
-        } else {
-          const prev = prePanelStateRef.current;
-          setActivePanel(prev ? prev.left : lastLeftPanel);
-          setActiveRightPanel(prev ? prev.right : null);
-        }
+        toggleCanvasFullscreen();
       } else if ((e.key === ' ' || e.code === 'Space') && !e.repeat) {
         // Skip when typing or when a button has focus (Space activates buttons).
         if (isField || tag === 'BUTTON') return;
@@ -206,7 +219,7 @@ export function ModelerView() {
     };
     document.addEventListener('keydown', handler, true);
     return () => document.removeEventListener('keydown', handler, true);
-  }, [activePanel, activeRightPanel, lastLeftPanel]);
+  }, [activeRightPanel, toggleCanvasFullscreen]);
 
   const PanelContent = activePanel ? panelComponents[activePanel] : null;
 

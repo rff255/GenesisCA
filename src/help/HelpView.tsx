@@ -1194,8 +1194,8 @@ export function HelpView() {
           <p className={styles.p}>
             Press <kbd className={styles.kbd}>?</kbd> anywhere (or the navbar
             <strong> ?</strong> button) for a quick on-screen cheat sheet, and
-            <kbd className={styles.kbd}>F11</kbd> (or the navbar <strong>&#x2922;</strong>
-            button) to toggle fullscreen for the whole app.
+            <kbd className={styles.kbd}>F</kbd> (or the navbar <strong>&#x2922;</strong>
+            button) to maximize the canvas by hiding the side panels.
           </p>
 
           <h3 className={styles.h3}>Graph Editor (Modeler)</h3>

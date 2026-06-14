@@ -38,16 +38,11 @@ function AppInner() {
   // surfaced as navbar buttons so the (otherwise keyboard-only) actions are
   // discoverable from any view.
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  useEffect(() => {
-    const onFs = () => setIsFullscreen(!!document.fullscreenElement);
-    document.addEventListener('fullscreenchange', onFs);
-    return () => document.removeEventListener('fullscreenchange', onFs);
-  }, []);
-  const toggleFullscreen = () => {
-    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-    else document.documentElement.requestFullscreen().catch(() => {});
-  };
+  // Canvas fullscreen = maximize the Modeler graph / Simulator canvas by
+  // collapsing that view's panels (same as pressing F). NOT browser F11 —
+  // that wouldn't make sense once GenesisCA ships as an installed app. The
+  // active view (ModelerView / SimulatorView) handles the toggle.
+  const toggleCanvasFullscreen = () => window.dispatchEvent(new CustomEvent('genesis-toggle-canvas-fullscreen'));
   // `?` (Shift+/) opens the shortcuts overlay — but not while typing in a field.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -146,12 +141,14 @@ function AppInner() {
           aria-label="Keyboard shortcuts"
           onClick={() => setShortcutsOpen(true)}
         >?</button>
-        <button
-          style={navIconBtn}
-          title={isFullscreen ? 'Exit fullscreen (F11)' : 'Fullscreen (F11)'}
-          aria-label="Toggle fullscreen"
-          onClick={toggleFullscreen}
-        >⤢</button>
+        {(mode === 'modeler' || mode === 'simulator') && (
+          <button
+            style={navIconBtn}
+            title="Fullscreen canvas (F)"
+            aria-label="Toggle canvas fullscreen"
+            onClick={toggleCanvasFullscreen}
+          >⤢</button>
+        )}
         <ThemeSwitcher />
         <FileMenu onNew={() => setMode('modeler')} onLoaded={afterLoad} />
       </nav>

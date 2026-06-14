@@ -19,8 +19,8 @@ const svg = (children: ReactElement) => (
 const ICONS: Record<PanelId, ReactElement> = {
   // Info — circle with an "i".
   info: svg(<><circle cx="12" cy="12" r="9" /><line x1="12" y1="11" x2="12" y2="16" /><circle cx="12" cy="7.5" r="0.6" fill="currentColor" stroke="none" /></>),
-  // Properties — sliders / adjustments.
-  properties: svg(<><line x1="4" y1="8" x2="20" y2="8" /><circle cx="9" cy="8" r="2.2" /><line x1="4" y1="16" x2="20" y2="16" /><circle cx="15" cy="16" r="2.2" /></>),
+  // Properties — cogwheel (settings).
+  properties: svg(<><circle cx="12" cy="12" r="3.4" /><path d="M12 2.5v3M12 18.5v3M4 5l2.1 2.1M17.9 16.9l2.1 2.1M2.5 12h3M18.5 12h3M4 19l2.1-2.1M17.9 7.1l2.1-2.1" /></>),
   // Attributes — a bulleted list.
   attributes: svg(<><line x1="9" y1="6" x2="20" y2="6" /><line x1="9" y1="12" x2="20" y2="12" /><line x1="9" y1="18" x2="20" y2="18" /><circle cx="4.5" cy="6" r="1" fill="currentColor" stroke="none" /><circle cx="4.5" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="4.5" cy="18" r="1" fill="currentColor" stroke="none" /></>),
   // Neighborhoods — a 3×3 grid of cells with the centre filled.
