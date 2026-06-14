@@ -1191,6 +1191,12 @@ export function HelpView() {
         {/* ============================================================ */}
         <section id="help-shortcuts" className={styles.section}>
           <h2 className={styles.h2}>Keyboard Shortcuts</h2>
+          <p className={styles.p}>
+            Press <kbd className={styles.kbd}>?</kbd> anywhere (or the navbar
+            <strong> ?</strong> button) for a quick on-screen cheat sheet, and
+            <kbd className={styles.kbd}>F11</kbd> (or the navbar <strong>&#x2922;</strong>
+            button) to toggle fullscreen for the whole app.
+          </p>
 
           <h3 className={styles.h3}>Graph Editor (Modeler)</h3>
           <table className={styles.table}>
