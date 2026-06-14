@@ -8,16 +8,16 @@
   <body>
     <script>
       // Set the theme attribute synchronously before first paint to avoid a
-      // flash. Default to "blender"; subsequent visits respect the value
+      // flash. Default to "nocturne"; subsequent visits respect the value
       // ThemeSwitcher persisted to localStorage. Unknown/stale values fall
-      // back to "blender" so `[data-theme=…]` always resolves to a real block.
+      // back to "nocturne" so `[data-theme=…]` always resolves to a real block.
       (function () {
         try {
           var t = localStorage.getItem('genesisca_theme');
           document.documentElement.dataset.theme =
-            (t === 'blender' || t === 'nocturne') ? t : 'blender';
+            (t === 'blender' || t === 'nocturne') ? t : 'nocturne';
         } catch (e) {
-          document.documentElement.dataset.theme = 'blender';
+          document.documentElement.dataset.theme = 'nocturne';
         }
       })();
     </script>
