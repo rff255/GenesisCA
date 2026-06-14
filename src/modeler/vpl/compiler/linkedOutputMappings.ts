@@ -4,7 +4,7 @@
  * For every Attribute→Color mapping marked `linked`, this synthesizes a small
  * **real** node subgraph that auto-generates the color pass:
  *
- *     getCellAttribute(attr) → colorScale | categoricalColor → setColorViewer(mapping)
+ *     getCellAttribute(attr) → colorScale | categoricalColor → setCellLooks(mapping)
  *
  * rooted at an `outputMapping` node. If the user ALSO placed an Output Mapping
  * event node for the same mapping, the auto pass is sequenced to run FIRST (via a
@@ -67,9 +67,9 @@ export function injectLinkedOutputMappings(
     }
     edges.push(valEdge(P + 'e_av', getAttrId, 'value', colorId, colorInPort));
 
-    // 2. terminal setColorViewer fed by r/g/b
+    // 2. terminal setCellLooks (plain-color mode) fed by r/g/b
     const scvId = P + 'scv';
-    nodes.push(mkNode(scvId, 'setColorViewer', { mappingId: m.id }));
+    nodes.push(mkNode(scvId, 'setCellLooks', { mappingId: m.id, useGlyph: false, setBackground: true }));
     edges.push(valEdge(P + 'e_r', colorId, 'r', scvId, 'r'));
     edges.push(valEdge(P + 'e_g', colorId, 'g', scvId, 'g'));
     edges.push(valEdge(P + 'e_b', colorId, 'b', scvId, 'b'));

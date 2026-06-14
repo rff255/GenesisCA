@@ -272,7 +272,7 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
 
     // Macros are NOT handled here — caller must expand them first. If we encounter
     // a macro node, treat it as a terminal action (its internal flow is invisible).
-    // Action nodes (setAttribute, updateIndicator, setColorViewer, stopEvent, ...)
+    // Action nodes (setAttribute, updateIndicator, setCellLooks, stopEvent, ...)
     // continue through their `next` pass-through at the SAME scope (transparent
     // continuation — no new scope, mirroring the compilers' emit position).
     walkFlowOutput(nodeId, 'next', parentScope);

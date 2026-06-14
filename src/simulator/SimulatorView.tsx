@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useModel } from '../model/ModelContext';
 import { compileGraph } from '../modeler/vpl/compiler/compile';
 import { hasGlyphsInModel } from '../modeler/vpl/compiler/glyphsUsage';
+import { CURRENT_VIEWER_SENTINEL } from '../modeler/vpl/nodes/SetCellLooksNode';
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
 import { unpackNI, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
@@ -603,12 +604,19 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // Colors buffer + grid dimensions
   const colorsRef = useRef<Uint8ClampedArray | null>(null);
   // Per-cell glyph overlay buffers (worker ships them only when the model uses
-  // setCellGlyph AND any cell has a non-zero glyph). null otherwise — the
-  // overlay path short-circuits in that case.
+  // Set Cell Looks in glyph mode AND any cell has a non-zero glyph). null
+  // otherwise — the overlay path short-circuits in that case.
   const glyphCodesRef = useRef<Uint32Array | null>(null);
   const glyphColorsRef = useRef<Uint32Array | null>(null);
   const gridWidth = useRef(0);
   const gridHeight = useRef(0);
+  // Which viewers want the zoomed-out glyph-color fallback (Set Cell Looks with
+  // useGlyph + fallbackToGlyphColor). `all` = a node used the Current-Selected
+  // sentinel (applies to every viewer). Scanned from the model below.
+  const glyphFallbackRef = useRef<{ all: boolean; ids: Set<string> }>({ all: false, ids: new Set() });
+  // Scratch canvas for the zoomed-out fallback blit (colors with glyphed cells
+  // recolored to their glyph color). Built lazily, sized to the grid.
+  const fallbackCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // Zoom/Pan state (refs to avoid re-renders on every mouse move)
   const zoomRef = useRef(1);
@@ -860,7 +868,42 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
     };
 
-    if (srcCanvasRef.current) {
+    // Zoomed-out glyph-color fallback: when cells are too small to draw glyphs
+    // AND the active viewer's Set Cell Looks asked for it, blit a bitmap where
+    // each glyphed cell is painted with its glyph color — so the macro view
+    // shows the glyph distribution instead of going blank. One composited blit
+    // (cheaper than per-cell fills for dense glyph models); the per-tile glyph
+    // overlay below stays skipped at this zoom.
+    let blitSource = srcCanvasRef.current;
+    if (!directRenderActiveRef.current && colors && srcCanvasRef.current) {
+      const codes = glyphCodesRef.current;
+      const gcols = glyphColorsRef.current;
+      const fb = glyphFallbackRef.current;
+      const wantFallback = scale < glyphMinPxRef.current && !!codes && !!gcols
+        && (fb.all || fb.ids.has(activeViewerRef.current));
+      if (wantFallback) {
+        if (!fallbackCanvasRef.current || fallbackCanvasRef.current.width !== w || fallbackCanvasRef.current.height !== h) {
+          fallbackCanvasRef.current = document.createElement('canvas');
+          fallbackCanvasRef.current.width = w;
+          fallbackCanvasRef.current.height = h;
+        }
+        const fbCtx = fallbackCanvasRef.current.getContext('2d')!;
+        const buf = new Uint8ClampedArray(colors.buffer, colors.byteOffset, w * h * 4).slice();
+        for (let i = 0; i < w * h; i++) {
+          if (codes![i] === 0) continue;
+          const packed = gcols![i]!;
+          const o = i * 4;
+          buf[o] = packed & 0xff;
+          buf[o + 1] = (packed >> 8) & 0xff;
+          buf[o + 2] = (packed >> 16) & 0xff;
+          buf[o + 3] = 255;
+        }
+        fbCtx.putImageData(new ImageData(buf, w, h), 0, 0);
+        blitSource = fallbackCanvasRef.current;
+      }
+    }
+
+    if (blitSource) {
       if (infinity) {
         // Snap each tile's left/top edges to integer pixels and derive width/height
         // from the difference with the NEXT tile's left/top. This guarantees that
@@ -873,11 +916,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           for (let tx = txMin; tx <= txMax; tx++) {
             const xLeft = Math.round(ox + tx * scaledW);
             const xRight = Math.round(ox + (tx + 1) * scaledW);
-            ctx.drawImage(srcCanvasRef.current, xLeft, yTop, xRight - xLeft, yBot - yTop);
+            ctx.drawImage(blitSource, xLeft, yTop, xRight - xLeft, yBot - yTop);
           }
         }
       } else {
-        ctx.drawImage(srcCanvasRef.current, ox, oy, scaledW, scaledH);
+        ctx.drawImage(blitSource, ox, oy, scaledW, scaledH);
       }
     }
 
@@ -2094,6 +2137,25 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   useEffect(() => { brushRadiusRef.current = brushRadius; }, [brushRadius]);
   useEffect(() => { brushRingWidthRef.current = brushRingWidth; }, [brushRingWidth]);
   useEffect(() => { brushLineWidthRef.current = brushLineWidth; }, [brushLineWidth]);
+  // Recompute which viewers want the zoomed-out glyph-color fallback whenever
+  // the graph changes (Set Cell Looks nodes with useGlyph + fallbackToGlyphColor).
+  useEffect(() => {
+    let all = false;
+    const ids = new Set<string>();
+    const scan = (nodes: typeof model.graphNodes) => {
+      for (const n of nodes) {
+        const c = n.data?.config as Record<string, unknown> | undefined;
+        if (n.data?.nodeType === 'setCellLooks' && c?.useGlyph && c?.fallbackToGlyphColor) {
+          const mid = String(c.mappingId ?? '');
+          if (mid === CURRENT_VIEWER_SENTINEL) all = true;
+          else if (mid) ids.add(mid);
+        }
+      }
+    };
+    scan(model.graphNodes);
+    for (const d of model.macroDefs || []) scan(d.nodes);
+    glyphFallbackRef.current = { all, ids };
+  }, [model.graphNodes, model.macroDefs]);
   // Leaving the Line tool (or switching brush tab) drops a staged first click.
   useEffect(() => { if (brushShape !== 'line') lineAnchorRef.current = null; }, [brushShape]);
   useEffect(() => { lineAnchorRef.current = null; }, [brushMapping]);

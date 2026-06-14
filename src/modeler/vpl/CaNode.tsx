@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState, useMemo, useSyncExterna
 import { Handle, Position, useReactFlow, useUpdateNodeInternals } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
-import { CURRENT_VIEWER_SENTINEL } from './nodes/SetColorViewerNode';
+import { CURRENT_VIEWER_SENTINEL } from './nodes/SetCellLooksNode';
 import { detectMissingConfig, detectCapabilityRequirements, detectWebGPUIncompatibilities, detectWasmIncompatibilities, countMacroSubgraphIssues } from './nodes/nodeValidation';
 import { INTERPOLATION_METHODS, INTERPOLATION_SHORT_LABELS, DEFAULT_INTERPOLATION_METHOD } from './nodes/interpolationMethods';
 import type { InterpolationMethod } from './nodes/interpolationMethods';
@@ -700,12 +700,13 @@ function CaNodeComponent({ id, data }: NodeProps) {
       const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
       const nbr = model.neighborhoods.find(n => n.id === nodeData.config.neighborhoodId);
       collapsedLabel = attr && nbr ? `Set ${nbr.name}[${attr.name}]` : def.label;
-    } else if (nodeData.nodeType === 'setColorViewer') {
+    } else if (nodeData.nodeType === 'setCellLooks') {
+      const glyphTag = nodeData.config.useGlyph ? ' + glyph' : '';
       if (nodeData.config.mappingId === CURRENT_VIEWER_SENTINEL) {
-        collapsedLabel = 'Set A\u2192C - Current Selected';
+        collapsedLabel = `Looks - Current Selected${glyphTag}`;
       } else {
         const mapping = model.mappings.find(m => m.id === nodeData.config.mappingId);
-        collapsedLabel = mapping ? `Set A\u2192C - ${mapping.name}` : def.label;
+        collapsedLabel = mapping ? `Looks - ${mapping.name}${glyphTag}` : def.label;
       }
     } else if (nodeData.nodeType === 'inputColor') {
       const mapping = model.mappings.find(m => m.id === nodeData.config.mappingId);
@@ -830,14 +831,17 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
     // Color preview dot for nodes with unconnected color inline inputs
     let collapsedColorPreview: string | undefined;
-    if (nodeData.nodeType === 'setColorViewer') {
-      const rConn = connectedInputHandles.has(handleId({ id: 'r', kind: 'input', category: 'value' }));
-      const gConn = connectedInputHandles.has(handleId({ id: 'g', kind: 'input', category: 'value' }));
-      const bConn = connectedInputHandles.has(handleId({ id: 'b', kind: 'input', category: 'value' }));
-      if (!rConn && !gConn && !bConn) {
-        const pr = parseInt(String(nodeData.config._port_r ?? '0'), 10);
-        const pg = parseInt(String(nodeData.config._port_g ?? '0'), 10);
-        const pb = parseInt(String(nodeData.config._port_b ?? '0'), 10);
+    if (nodeData.nodeType === 'setCellLooks') {
+      // Preview the dominant color: the cell color when it's painted (plain mode
+      // or glyph mode with a background), otherwise the glyph color.
+      const showsBg = !nodeData.config.useGlyph || nodeData.config.setBackground !== false;
+      const ch = showsBg ? ['r', 'g', 'b'] : ['glyphR', 'glyphG', 'glyphB'];
+      const conn = ch.some(id => connectedInputHandles.has(handleId({ id, kind: 'input', category: 'value' })));
+      if (!conn) {
+        const dflt = showsBg ? '0' : '255';
+        const pr = parseInt(String(nodeData.config[`_port_${ch[0]}`] ?? dflt), 10) || 0;
+        const pg = parseInt(String(nodeData.config[`_port_${ch[1]}`] ?? dflt), 10) || 0;
+        const pb = parseInt(String(nodeData.config[`_port_${ch[2]}`] ?? dflt), 10) || 0;
         collapsedColorPreview = `rgb(${pr},${pg},${pb})`;
       }
     } else if (nodeData.nodeType === 'colorScale') {
@@ -1512,15 +1516,55 @@ function CaNodeComponent({ id, data }: NodeProps) {
           );
         })()}
 
-        {nodeData.nodeType === 'setColorViewer' && (() => {
-          const allRgbConnected =
-            connectedInputHandles.has(handleId({ id: 'r', kind: 'input', category: 'value' })) &&
-            connectedInputHandles.has(handleId({ id: 'g', kind: 'input', category: 'value' })) &&
-            connectedInputHandles.has(handleId({ id: 'b', kind: 'input', category: 'value' }));
-          const pr = parseInt(String(nodeData.config._port_r ?? '0'), 10) || 0;
-          const pg = parseInt(String(nodeData.config._port_g ?? '0'), 10) || 0;
-          const pb = parseInt(String(nodeData.config._port_b ?? '0'), 10) || 0;
-          const hex = `#${Math.min(255, Math.max(0, pr)).toString(16).padStart(2, '0')}${Math.min(255, Math.max(0, pg)).toString(16).padStart(2, '0')}${Math.min(255, Math.max(0, pb)).toString(16).padStart(2, '0')}`;
+        {nodeData.nodeType === 'setCellLooks' && (() => {
+          const useGlyph = !!nodeData.config.useGlyph;
+          const setBg = nodeData.config.setBackground !== false;
+          const STARTER = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖', '○', '△', '★'];
+          // Color picker for a 3-channel set (cell color r/g/b OR glyph color
+          // glyphR/G/B). Hidden when all three channels are wired. One merged
+          // updateNodeData so the three keys commit together (no stale config).
+          const renderColorPicker = (ids: [string, string, string], dflt: string, title: string) => {
+            const allConn = ids.every(pid => connectedInputHandles.has(handleId({ id: pid, kind: 'input', category: 'value' })));
+            if (allConn) return null;
+            const pr = parseInt(String(nodeData.config['_port_' + ids[0]] ?? dflt), 10) || 0;
+            const pg = parseInt(String(nodeData.config['_port_' + ids[1]] ?? dflt), 10) || 0;
+            const pb = parseInt(String(nodeData.config['_port_' + ids[2]] ?? dflt), 10) || 0;
+            const hex = `#${Math.min(255, Math.max(0, pr)).toString(16).padStart(2, '0')}${Math.min(255, Math.max(0, pg)).toString(16).padStart(2, '0')}${Math.min(255, Math.max(0, pb)).toString(16).padStart(2, '0')}`;
+            return (
+              <input
+                type="color"
+                className={styles.input}
+                style={{ height: 24, padding: 1, cursor: 'pointer' }}
+                value={hex}
+                onChange={e => {
+                  const h = e.target.value;
+                  updateNodeData(id, {
+                    ...nodeData,
+                    config: {
+                      ...nodeData.config,
+                      ['_port_' + ids[0]]: String(parseInt(h.slice(1, 3), 16)),
+                      ['_port_' + ids[1]]: String(parseInt(h.slice(3, 5), 16)),
+                      ['_port_' + ids[2]]: String(parseInt(h.slice(5, 7), 16)),
+                    },
+                  });
+                }}
+                onClick={e => e.stopPropagation()}
+                title={title}
+              />
+            );
+          };
+          const checkbox = (key: string, label: string, checked: boolean, title: string) => (
+            <label
+              className="nodrag"
+              style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, cursor: 'pointer', marginTop: 4 }}
+              onMouseDown={e => e.stopPropagation()}
+              onClick={e => e.stopPropagation()}
+              title={title}
+            >
+              <input type="checkbox" checked={checked} onChange={e => updateConfig(key, e.target.checked)} />
+              {label}
+            </label>
+          );
           return (
             <>
               <select
@@ -1536,111 +1580,50 @@ function CaNodeComponent({ id, data }: NodeProps) {
                     <option key={m.id} value={m.id}>{m.name}</option>
                   ))}
               </select>
-              {!allRgbConnected && (
-                <input
-                  type="color"
-                  className={styles.input}
-                  style={{ height: 24, padding: 1, cursor: 'pointer' }}
-                  value={hex}
-                  onChange={e => {
-                    const h = e.target.value;
-                    const nr = parseInt(h.slice(1, 3), 16);
-                    const ng = parseInt(h.slice(3, 5), 16);
-                    const nb = parseInt(h.slice(5, 7), 16);
-                    updateNodeData(id, {
-                      ...nodeData,
-                      config: { ...nodeData.config, _port_r: String(nr), _port_g: String(ng), _port_b: String(nb) },
-                    });
-                  }}
-                  onClick={e => e.stopPropagation()}
-                  title="Default color (overridden per-channel by connections)"
-                />
+              {checkbox('useGlyph', 'Use glyph', useGlyph, 'Overlay a Unicode glyph on the cell (drawn when zoomed in)')}
+              {!useGlyph && renderColorPicker(['r', 'g', 'b'], '0', 'Cell color (overridden per-channel by connections)')}
+              {useGlyph && (
+                <>
+                  {checkbox('setBackground', 'Set background color', setBg, 'Also paint a flat cell color behind the glyph — shown at every zoom level')}
+                  {setBg && renderColorPicker(['r', 'g', 'b'], '0', 'Background color (overridden per-channel by connections)')}
+                  {renderColorPicker(['glyphR', 'glyphG', 'glyphB'], '255', 'Glyph color (overridden per-channel by connections)')}
+                  {!connectedInputHandles.has(handleId({ id: 'glyph', kind: 'input', category: 'value' })) && (() => {
+                    // Quick-pick starter palette across TWO rows; clicking inserts
+                    // the codepoint into _port_glyph. Hidden when Glyph is wired.
+                    const renderGlyph = (g: string) => {
+                      const cp = g.codePointAt(0) ?? 0;
+                      return (
+                        <button
+                          key={g}
+                          type="button"
+                          onClick={() => updateConfig('_port_glyph', String(cp))}
+                          style={{
+                            width: 20, height: 20, padding: 0, lineHeight: '20px',
+                            fontSize: 14, cursor: 'pointer',
+                            background: 'transparent', border: '1px solid #555',
+                            color: '#ddd', borderRadius: 2,
+                          }}
+                          title={`Insert ${g} (U+${cp.toString(16).toUpperCase().padStart(4, '0')})`}
+                        >{g}</button>
+                      );
+                    };
+                    const half = Math.ceil(STARTER.length / 2);
+                    return (
+                      <div
+                        className="nodrag"
+                        style={{ marginTop: 4 }}
+                        onMouseDown={e => e.stopPropagation()}
+                        onClick={e => e.stopPropagation()}
+                        title="Quick-pick a glyph"
+                      >
+                        <div style={{ display: 'flex', gap: 2, justifyContent: 'center' }}>{STARTER.slice(0, half).map(renderGlyph)}</div>
+                        <div style={{ display: 'flex', gap: 2, justifyContent: 'center', marginTop: 2 }}>{STARTER.slice(half).map(renderGlyph)}</div>
+                      </div>
+                    );
+                  })()}
+                  {checkbox('fallbackToGlyphColor', 'Glyph color when zoomed out', !!nodeData.config.fallbackToGlyphColor, 'When cells are too small to draw the glyph, paint each glyphed cell with its glyph color so the macro view stays meaningful')}
+                </>
               )}
-            </>
-          );
-        })()}
-
-        {nodeData.nodeType === 'setCellGlyph' && (() => {
-          const allRgbConnected =
-            connectedInputHandles.has(handleId({ id: 'r', kind: 'input', category: 'value' })) &&
-            connectedInputHandles.has(handleId({ id: 'g', kind: 'input', category: 'value' })) &&
-            connectedInputHandles.has(handleId({ id: 'b', kind: 'input', category: 'value' }));
-          const pr = parseInt(String(nodeData.config._port_r ?? '255'), 10) || 0;
-          const pg = parseInt(String(nodeData.config._port_g ?? '255'), 10) || 0;
-          const pb = parseInt(String(nodeData.config._port_b ?? '255'), 10) || 0;
-          const hex = `#${Math.min(255, Math.max(0, pr)).toString(16).padStart(2, '0')}${Math.min(255, Math.max(0, pg)).toString(16).padStart(2, '0')}${Math.min(255, Math.max(0, pb)).toString(16).padStart(2, '0')}`;
-          const glyphConnected = connectedInputHandles.has(handleId({ id: 'glyph', kind: 'input', category: 'value' }));
-          // Starter palette — clicking inserts the codepoint into _port_glyph.
-          // Hidden when the Glyph port is wired (the upstream node controls it).
-          const STARTER = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖', '○', '△', '★'];
-          return (
-            <>
-              <select
-                className={styles.select}
-                value={(nodeData.config.mappingId as string) || ''}
-                onChange={e => updateConfig('mappingId', e.target.value)}
-              >
-                <option value="">Select Mapping...</option>
-                {model.mappings
-                  .filter(m => m.isAttributeToColor)
-                  .map(m => (
-                    <option key={m.id} value={m.id}>{m.name}</option>
-                  ))}
-              </select>
-              {!allRgbConnected && (
-                <input
-                  type="color"
-                  className={styles.input}
-                  style={{ height: 24, padding: 1, cursor: 'pointer' }}
-                  value={hex}
-                  onChange={e => {
-                    const h = e.target.value;
-                    const nr = parseInt(h.slice(1, 3), 16);
-                    const ng = parseInt(h.slice(3, 5), 16);
-                    const nb = parseInt(h.slice(5, 7), 16);
-                    updateNodeData(id, {
-                      ...nodeData,
-                      config: { ...nodeData.config, _port_r: String(nr), _port_g: String(ng), _port_b: String(nb) },
-                    });
-                  }}
-                  onClick={e => e.stopPropagation()}
-                  title="Glyph color (overridden per-channel by connections)"
-                />
-              )}
-              {!glyphConnected && (() => {
-                // Render the starter palette across TWO rows so the node stays
-                // compact instead of stretching into one long single-row strip.
-                const renderGlyph = (g: string) => {
-                  const cp = g.codePointAt(0) ?? 0;
-                  return (
-                    <button
-                      key={g}
-                      type="button"
-                      onClick={() => updateConfig('_port_glyph', String(cp))}
-                      style={{
-                        width: 20, height: 20, padding: 0, lineHeight: '20px',
-                        fontSize: 14, cursor: 'pointer',
-                        background: 'transparent', border: '1px solid #555',
-                        color: '#ddd', borderRadius: 2,
-                      }}
-                      title={`Insert ${g} (U+${cp.toString(16).toUpperCase().padStart(4, '0')})`}
-                    >{g}</button>
-                  );
-                };
-                const half = Math.ceil(STARTER.length / 2);
-                return (
-                  <div
-                    className="nodrag"
-                    style={{ marginTop: 4 }}
-                    onMouseDown={e => e.stopPropagation()}
-                    onClick={e => e.stopPropagation()}
-                    title="Quick-pick a glyph"
-                  >
-                    <div style={{ display: 'flex', gap: 2, justifyContent: 'center' }}>{STARTER.slice(0, half).map(renderGlyph)}</div>
-                    <div style={{ display: 'flex', gap: 2, justifyContent: 'center', marginTop: 2 }}>{STARTER.slice(half).map(renderGlyph)}</div>
-                  </div>
-                );
-              })()}
             </>
           );
         })()}
