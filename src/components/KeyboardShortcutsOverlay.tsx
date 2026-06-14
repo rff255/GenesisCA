@@ -14,23 +14,16 @@ type Row = [keys: string, action: string];
 
 const GROUPS: { title: string; rows: Row[] }[] = [
   {
-    title: 'Global',
-    rows: [
-      ['F11', 'Toggle fullscreen'],
-      ['?', 'Show this shortcuts list'],
-    ],
-  },
-  {
     title: 'Modeler — graph',
     rows: [
       ['Space', 'Add node at cursor'],
-      ['Ctrl + F', 'Search nodes (Node Explorer)'],
-      ['F', 'Toggle side panels (fullscreen graph)'],
+      ['Ctrl + F', 'Search nodes'],
+      ['F', 'Fullscreen graph (toggle panels)'],
       ['Ctrl + Z', 'Undo'],
-      ['Ctrl + Shift + Z  /  Ctrl + Y', 'Redo'],
+      ['Ctrl + Shift + Z', 'Redo'],
       ['Ctrl + C / V / X', 'Copy / paste / cut nodes'],
       ['Ctrl + D', 'Duplicate nodes'],
-      ['Ctrl + drag', 'Align while dragging (snap to neighbors)'],
+      ['Ctrl + drag', 'Align while dragging'],
       ['Right-click', 'Context / add-node menu'],
       ['Press-hold on a wire', 'Drop a reroute point'],
     ],
@@ -41,6 +34,7 @@ const GROUPS: { title: string; rows: Row[] }[] = [
       ['Space', 'Step one generation'],
       ['Enter', 'Play / pause'],
       ['Esc', 'Reset'],
+      ['F', 'Fullscreen canvas (toggle panels)'],
       ['Ctrl + C / V / X', 'Copy / paste / cut cells'],
       ['Ctrl + wheel', 'Cycle input mappings'],
       ['Ctrl + drag', 'Resize brush'],
@@ -80,7 +74,7 @@ export function KeyboardShortcutsOverlay({ open, onClose }: { open: boolean; onC
           border: '1px solid var(--color-border)',
           borderRadius: 'var(--panel-radius)',
           boxShadow: 'var(--shadow-lg)',
-          maxWidth: 760, width: '100%', maxHeight: '85vh', overflowY: 'auto',
+          maxWidth: 560, width: '100%', maxHeight: '85vh', overflowY: 'auto',
           padding: 'var(--space-8)',
         }}
       >
@@ -97,7 +91,7 @@ export function KeyboardShortcutsOverlay({ open, onClose }: { open: boolean; onC
             }}
           >×</button>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 'var(--space-8)' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-8)', alignItems: 'start' }}>
           {GROUPS.map(group => (
             <div key={group.title}>
               <div style={{ fontSize: 'var(--font-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--color-text-tertiary)', marginBottom: 'var(--space-3)' }}>{group.title}</div>
@@ -120,6 +114,9 @@ export function KeyboardShortcutsOverlay({ open, onClose }: { open: boolean; onC
               </table>
             </div>
           ))}
+        </div>
+        <div style={{ marginTop: 'var(--space-6)', fontSize: 'var(--font-3xs)', color: 'var(--color-text-tertiary)' }}>
+          Press <kbd style={{ background: 'var(--color-bg-canvas)', border: '1px solid var(--color-widget-border)', borderRadius: 'var(--radius-sm)', padding: '0 5px', fontFamily: 'var(--font-family-mono)' }}>?</kbd> any time to toggle this list.
         </div>
       </div>
     </div>
