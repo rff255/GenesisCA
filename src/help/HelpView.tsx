@@ -254,7 +254,7 @@ export function HelpView() {
           <ul className={styles.ul}>
             <li>
               <strong>Standalone</strong> &mdash; you build the color pass by hand in the
-              graph (an Output Mapping event node feeding Set Color Viewer). This is the
+              graph (an Output Mapping event node feeding Set Cell Looks). This is the
               classic behavior.
             </li>
             <li>
@@ -521,6 +521,7 @@ export function HelpView() {
             <li><strong>Scroll wheel</strong> &mdash; Zoom in/out.</li>
             <li><strong>Left-click drag</strong> (on empty area) &mdash; Box select nodes.</li>
             <li><strong>Left-click drag</strong> (on node) &mdash; Move node.</li>
+            <li><strong>Ctrl + left-click drag</strong> (on node, comment, or group) &mdash; <strong>Align while dragging</strong>. Hold <kbd className={styles.kbd}>Ctrl</kbd> (or <kbd className={styles.kbd}>Cmd</kbd>) and the moving element snaps so its edges or center line up with nearby nodes, with dashed guide lines showing the match (PowerPoint-style). Works for a single node, a multi-selection (the selection's outer box aligns), and groups. While held it overrides snap-to-grid; release <kbd className={styles.kbd}>Ctrl</kbd> for free movement.</li>
             <li><strong>Ctrl + click</strong> &mdash; Add/remove from selection.</li>
             <li><strong>Right-click</strong> (on canvas) &mdash; Opens the add-node menu: the actions (Paste, Add Comment, Add Group, Import Macro&hellip;) on top, then a <strong>focused search box</strong> and a category-grouped node list. Type to filter, move the highlighted entry with <kbd className={styles.kbd}>&uarr;</kbd>/<kbd className={styles.kbd}>&darr;</kbd>, and press <kbd className={styles.kbd}>Enter</kbd> to add it at the click position. It's the same menu <kbd className={styles.kbd}>Space</kbd> opens at the cursor. The menu closes as soon as you press or start dragging anywhere outside it (e.g. to box-select or pan).</li>
             <li><strong>Right-click</strong> (on node) &mdash; Node options: Rename, Duplicate, Copy, Cut, Delete. On macros, Duplicate expands into a submenu (<strong>Duplicate Independent</strong> / <strong>Duplicate Linked</strong>), and they also show Enter Macro, Export Macro, and Undo Macro &mdash; plus a count badge for making linked copies independent.</li>
@@ -533,7 +534,7 @@ export function HelpView() {
 
           <h3 className={styles.h3}>Chaining Actions (NEXT / DONE)</h3>
           <p className={styles.p}>
-            Every action node (Set Attribute, Set Variable, Set Color Viewer, &hellip;) has a
+            Every action node (Set Attribute, Set Variable, Set Cell Looks, &hellip;) has a
             pass-through <strong>NEXT</strong> flow output, so executions chain
             Blueprints-style &mdash; <em>Set A &rarr; Set B &rarr; Set C</em> reads
             left-to-right instead of fanning three wires out of one DO port (which still
@@ -773,8 +774,7 @@ export function HelpView() {
           <table className={styles.table}>
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
-              <tr><td>Set Color Viewer</td><td>Write RGB values for an Attribute-to-Color visualization. Pick a specific mapping, or choose <strong>Current Simulator Selected</strong> to write to whichever viewer is active &mdash; so one color pass can serve several viewers that differ only in other respects.</td></tr>
-              <tr><td>Set Cell Glyph</td><td>Overlay a Unicode character on the current cell when the named Output Mapping is active. Inputs: <strong>Glyph</strong> (Unicode codepoint, with an inline text picker), <strong>R/G/B</strong> for glyph colour. Cells with glyph=0 render no character. Glyphs only paint when the cell is at least 6 screen pixels (configurable via <code>genesisca_sim_settings.glyphMinPx</code>) — they hide gracefully at small zooms.</td></tr>
+              <tr><td>Set Cell Looks</td><td>Sets the current cell&apos;s appearance for an Attribute-to-Color visualization. <strong>Plain mode</strong>: write R/G/B for a flat cell color. <strong>Use glyph</strong>: overlay a Unicode character (with an inline glyph picker) in its own glyph color, plus an optional <strong>background color</strong> (shown at every zoom, behind the glyph) and an optional <strong>glyph color when zoomed out</strong> (paints each glyphed cell with its glyph color once cells are too small to draw the character &mdash; configurable via <code>genesisca_sim_settings.glyphMinPx</code>, default 6 px). Cells with glyph=0 render no character. Pick a specific mapping, or choose <strong>Current Simulator Selected</strong> to write to whichever viewer is active. (Merges the former Set Color Viewer + Set Cell Glyph.)</td></tr>
               <tr><td>Get Color Constant</td><td>Output fixed R, G, B values.</td></tr>
               <tr><td>Color Interpolate</td><td>Interpolate between two colors. Inputs: interpolation point T (0&ndash;1), From R/G/B, To R/G/B. Outputs: R, G, B. The <strong>curve</strong> dropdown controls the interpolation shape: Linear, Smoothstep, Ease-In Quadratic, Ease-Out Quadratic, Exponential, Logarithmic. Includes color picker widgets for &quot;Color From&quot; and &quot;Color To&quot; when the per-channel ports are not connected.</td></tr>
               <tr><td>Categorical Color</td><td>Map an integer <strong>Index</strong> to a flat RGB color from an editable N-entry palette &mdash; <em>discrete</em>, with no blending between entries (contrast Color Scale, which interpolates). Index <code>i</code> selects palette entry <code>i</code>; out-of-range indices use the default color. Outputs R, G, B. Used internally by Linked Output Mappings for tag attributes, and available as a node for hand-built graphs.</td></tr>
@@ -1206,6 +1206,7 @@ export function HelpView() {
               <tr><td><kbd className={styles.kbd}>Delete</kbd> / <kbd className={styles.kbd}>Backspace</kbd></td><td>Delete selected nodes</td></tr>
               <tr><td>Right-click drag</td><td>Pan the canvas</td></tr>
               <tr><td>Scroll wheel</td><td>Zoom in/out</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd> + left-click drag (node)</td><td>Align while dragging: snap the moving node(s) to nearby edges/centers with dashed guide lines (overrides snap-to-grid while held)</td></tr>
               <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>F</kbd></td><td>Open Node Explorer (search &amp; focus)</td></tr>
               <tr><td><kbd className={styles.kbd}>Space</kbd></td><td>Quick add: open the add-node menu at the cursor with search focused; type, <kbd className={styles.kbd}>&uarr;</kbd>/<kbd className={styles.kbd}>&darr;</kbd> to pick, <kbd className={styles.kbd}>Enter</kbd> adds at the cursor position</td></tr>
               <tr><td><kbd className={styles.kbd}>F</kbd></td><td>Toggle fullscreen graph (collapses both side panels; press again to restore)</td></tr>

@@ -36,7 +36,7 @@ const panels: Array<{ id: RightPanelId; label: string; icon: ReactElement }> = [
 
 export function RightActivityBar({ activePanel, onTogglePanel }: RightActivityBarProps) {
   return (
-    <div className={styles.activityBar} style={{ borderRight: 'none', borderLeft: '1px solid #2d4059' }}>
+    <div className={styles.activityBar} style={{ borderRight: 'none', borderLeft: '1px solid var(--color-border)' }}>
       {panels.map(({ id, label, icon }) => (
         <button
           key={id}

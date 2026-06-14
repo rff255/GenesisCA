@@ -7,6 +7,7 @@ import { SimulatorView } from './simulator/SimulatorView';
 import { HelpView } from './help/HelpView';
 import { ModelsLibrary } from './library/ModelsLibrary';
 import { StyleReferenceView } from './styleguide/StyleReferenceView';
+import { ThemeSwitcher } from './components/ThemeSwitcher';
 import type { CAModel } from './model/types';
 import styles from './App.module.css';
 
@@ -103,6 +104,7 @@ function AppInner() {
           {loadedFileName && <span className={styles.fileName}> ({loadedFileName})</span>}
           {isDirty && <span className={styles.dirtyIndicator}> *</span>}
         </span>
+        <ThemeSwitcher />
         <FileMenu onNew={() => setMode('modeler')} onLoaded={afterLoad} />
       </nav>
       <main className={styles.content}>

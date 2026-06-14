@@ -191,3 +191,131 @@
   --chart-axis:  #555555;
   --chart-label: #a0a0a0;
 }
+
+/* ====================================================================== */
+/* NOCTURNE                                                               */
+/* Near-black (OLED-friendly) surfaces with a warm amber accent. Softer   */
+/* radii + slightly deeper shadows than Blender for a calmer, modern,     */
+/* higher-contrast feel. Overrides every COLOUR token (so nothing falls   */
+/* back to the Blender :root values) plus radii / shadows / scrollbar;    */
+/* spacing, fonts and layout widths intentionally inherit from :root.     */
+/* Node category fills are theme-independent (kept identical).            */
+/* ====================================================================== */
+
+[data-theme="nocturne"] {
+  /* ----- Surfaces ----- */
+  --color-bg-app:         #0c0d10;
+  --color-bg-canvas:      #08090b;
+  --color-bg-panel:       #16181d;
+  --color-bg-elevated:    #1d2026;
+  --color-bg-activitybar: #121317;
+
+  /* ----- Borders & dividers (slightly LIGHTER than surfaces — on near-black
+   *       a darker boundary would vanish, so definition comes from above) - */
+  --color-border:         #2a2d35;
+  --color-border-muted:   #20232a;
+  --color-border-danger:  #5a2828;
+
+  /* ----- Text (warm whites) ----- */
+  --color-text-primary:   #ecebe6;
+  --color-text-secondary: #c4c1b8;
+  --color-text-tertiary:  #908d83;
+  --color-text-muted:     #6f6c64;
+  --color-text-subtle:    #a8a59b;
+
+  /* ----- Accent (warm amber) ----- */
+  --color-accent:         #e8a13a;
+  --color-accent-hover:   #f2b255;
+  --color-accent-soft:    rgba(232, 161, 58, 0.16);
+  --color-accent-strong:  rgba(232, 161, 58, 0.42);
+
+  /* ----- Semantic (info kept a distinct calm blue, not the amber accent) - */
+  --color-danger:         #d65a5a;
+  --color-danger-hover:   #e87575;
+  --color-warning:        #f0c75a;
+  --color-success:        #6abe6a;
+  --color-info:           #5a9bd4;
+
+  /* ----- Hover overlays ----- */
+  --color-overlay-hover-weak:   rgba(255, 255, 255, 0.05);
+  --color-overlay-hover-medium: rgba(255, 255, 255, 0.09);
+  --color-overlay-row:          rgba(255, 255, 255, 0.025);
+
+  /* ----- Semantic roles — Nocturne shows the accent on active tabs (more
+   *       life than Blender's transparent tab border). ----- */
+  --color-heading:        #ecebe6;
+  --color-emphasis:       #c4c1b8;
+  --color-hover-bg:       rgba(255, 255, 255, 0.06);
+  --color-tab-active-bg:  rgba(232, 161, 58, 0.14);
+  --color-tab-active-border: #e8a13a;
+  --color-widget-border:  #262a31;
+
+  /* ----- RGB channel chips (semantic — theme-independent) ----- */
+  --color-channel-r:      #d96868;
+  --color-channel-g:      #6abe6a;
+  --color-channel-b:      #5a85c4;
+
+  /* ----- Neighborhood grid cells ----- */
+  --color-grid-active:    #e8a13a;
+  --color-grid-tagged:    #4f9c9c;
+  --color-grid-center:    #d49b1f;
+
+  /* ----- Node category fills (kept identical across themes) ----- */
+  --color-node-event:     #4f7a3a;
+  --color-node-flow:      #3a6a4a;
+  --color-node-data:      #3a5a8a;
+  --color-node-logic:     #b86b30;
+  --color-node-aggregation: #6e3a8a;
+  --color-node-output:    #a04040;
+  --color-node-color:     #2a7a6e;
+
+  /* ----- Port colours ----- */
+  --color-port-value:     #b0b0b0;
+  --color-port-flow:      #d4a04a;
+
+  /* ----- Text shadow (engraved depth still reads on near-black) ----- */
+  --text-shadow: 0 1px 0 rgba(0, 0, 0, 0.60);
+
+  /* ----- Radii (softer than Blender's near-flat — Nocturne's "more life") - */
+  --radius-sm:   3px;
+  --radius-md:   4px;
+  --radius-lg:   6px;
+  --radius-xl:   8px;
+  --radius-pill: 10px;
+
+  /* ----- Shadows (a touch deeper for depth on near-black) ----- */
+  --shadow-sm: 0 1px 3px  rgba(0, 0, 0, 0.50);
+  --shadow-md: 0 3px 8px  rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 6px 16px rgba(0, 0, 0, 0.60);
+  --shadow-button-inset: inset 0 1px 0 rgba(255, 255, 255, 0.05),
+                         inset 0 -1px 0 rgba(0, 0, 0, 0.25);
+  --shadow-input-inset:  inset 0 1px 2px rgba(0, 0, 0, 0.30);
+
+  /* ----- Transitions (a hair smoother than Blender) ----- */
+  --duration-fast: 0.10s;
+  --duration-base: 0.15s;
+
+  /* ----- Panel outer radius (softer) ----- */
+  --panel-radius: 8px;
+
+  /* ----- Scrollbars ----- */
+  --scrollbar-track:        rgba(0, 0, 0, 0.30);
+  --scrollbar-thumb:        #3a3d44;
+  --scrollbar-thumb-hover:  #4a4e56;
+  --scrollbar-thumb-active: #e8a13a;
+
+  /* ----- Chart palette (vivid enough to read on near-black) ----- */
+  --chart-color-1:  #e8a13a;
+  --chart-color-2:  #5a9bd4;
+  --chart-color-3:  #6abe6a;
+  --chart-color-4:  #d96868;
+  --chart-color-5:  #b07acc;
+  --chart-color-6:  #4fc4c4;
+  --chart-color-7:  #f0884a;
+  --chart-color-8:  #d4c96a;
+  --chart-color-9:  #9aaf6c;
+  --chart-color-10: #e07aa0;
+
+  --chart-axis:  #3a3d44;
+  --chart-label: #908d83;
+}
