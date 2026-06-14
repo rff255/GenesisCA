@@ -11,6 +11,7 @@ import {
   useReactFlow,
   ReactFlowProvider,
   useStoreApi,
+  useStore,
 } from '@xyflow/react';
 import { getNodesInside } from '@xyflow/system';
 import type { Connection, Edge, Node, NodeTypes, ReactFlowInstance, SelectionMode, IsValidConnection, OnConnectStart, OnConnectEnd, FinalConnectionState } from '@xyflow/react';
@@ -28,6 +29,8 @@ import type { ModelElementDragPayload } from './modelElementDrag';
 import { getEffectivePorts } from './effectivePorts';
 import type { GraphNode, GraphEdge } from '../../model/types';
 import type { MacroPort } from '../../model/types';
+import { computeAlignmentSnap, sameGuides } from './alignmentSnap';
+import type { AlignGuides, AlignTarget } from './alignmentSnap';
 import styles from './GraphEditor.module.css';
 
 const nodeTypes: NodeTypes = {
@@ -426,6 +429,47 @@ function nodeCenter(n: Node): { x: number; y: number } {
 }
 
 // ---------------------------------------------------------------------------
+// Ctrl-drag alignment guides (PowerPoint-style). While Ctrl/Cmd is held during
+// a node drag, the moving node(s) snap so their left/center/right edges and
+// top/center/bottom edges line up with nearby nodes, and dashed guide lines
+// surface the match. Snap distance is a screen-pixel threshold (converted to
+// flow units via the live zoom) so it feels constant at any zoom.
+// ---------------------------------------------------------------------------
+
+const ALIGN_SNAP_PX = 6;
+
+/** SVG overlay drawing the active alignment guides. Subscribes to the live
+ *  viewport transform so it isolates pan/zoom re-renders to itself (rather than
+ *  re-rendering the whole GraphEditor). Flow → container-pixel mapping mirrors
+ *  React Flow's own viewport transform (`flow * zoom + translate`). */
+function AlignmentGuidesOverlay({ guides }: { guides: AlignGuides | null }) {
+  const transform = useStore(s => s.transform);
+  if (!guides) return null;
+  const [tx, ty, zoom] = transform;
+  const X = (fx: number) => fx * zoom + tx;
+  const Y = (fy: number) => fy * zoom + ty;
+  return (
+    <svg
+      aria-hidden="true"
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 4, overflow: 'visible' }}
+    >
+      {guides.vx && (
+        <line
+          x1={X(guides.vx.x)} y1={Y(guides.vx.y0)} x2={X(guides.vx.x)} y2={Y(guides.vx.y1)}
+          stroke="var(--color-accent)" strokeWidth={1} strokeDasharray="4 3"
+        />
+      )}
+      {guides.hy && (
+        <line
+          x1={X(guides.hy.x0)} y1={Y(guides.hy.y)} x2={X(guides.hy.x1)} y2={Y(guides.hy.y)}
+          stroke="var(--color-accent)" strokeWidth={1} strokeDasharray="4 3"
+        />
+      )}
+    </svg>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Context menu types
 // ---------------------------------------------------------------------------
 
@@ -536,6 +580,50 @@ export function GraphEditorInner() {
     snapAccum: { x: number; y: number };
     members: Array<{ id: string; startX: number; startY: number }>;
   } | null>(null);
+
+  // Ctrl-held alignment snapping. `ctrlHeldRef` tracks the modifier during a
+  // drag (the mouse-move events React Flow hands us don't carry modifier
+  // state, so we read it from a document-level key listener). `alignGuides`
+  // drives the dashed overlay; `alignGuidesRef` mirrors it so the per-tick
+  // `handleNodesChange` can diff without a stale-closure read.
+  const ctrlHeldRef = useRef(false);
+  const [alignGuides, setAlignGuides] = useState<AlignGuides | null>(null);
+  const alignGuidesRef = useRef<AlignGuides | null>(null);
+  const clearAlignGuides = useCallback(() => {
+    if (alignGuidesRef.current) {
+      alignGuidesRef.current = null;
+      setAlignGuides(null);
+    }
+  }, []);
+
+  // Track Ctrl/Cmd during drags (and clear guides the moment it's released or
+  // the window loses focus). Capture phase + window scope so it sees the key
+  // regardless of focus target. ctrlKey/metaKey covers Windows/Linux + Mac.
+  useEffect(() => {
+    const sync = (e: KeyboardEvent) => {
+      const held = e.ctrlKey || e.metaKey;
+      ctrlHeldRef.current = held;
+      if (!held) clearAlignGuides();
+    };
+    const reset = () => { ctrlHeldRef.current = false; clearAlignGuides(); };
+    // Safety net: a drag that aborts without a `dragging:false` tick or an
+    // onNodeDragStop (node deleted mid-drag, multitouch cancel) would otherwise
+    // leave guides on screen until the next Ctrl release. Any pointer release
+    // clears them (a no-op when none are showing).
+    const onUp = () => clearAlignGuides();
+    window.addEventListener('keydown', sync, true);
+    window.addEventListener('keyup', sync, true);
+    window.addEventListener('blur', reset);
+    window.addEventListener('pointerup', onUp, true);
+    window.addEventListener('pointercancel', onUp, true);
+    return () => {
+      window.removeEventListener('keydown', sync, true);
+      window.removeEventListener('keyup', sync, true);
+      window.removeEventListener('blur', reset);
+      window.removeEventListener('pointerup', onUp, true);
+      window.removeEventListener('pointercancel', onUp, true);
+    };
+  }, [clearAlignGuides]);
 
   // Snapshot of the currently selected node ids, captured on RMB mousedown in
   // the capture phase BEFORE React Flow's internal handlers can collapse a
@@ -1291,6 +1379,67 @@ export function GraphEditorInner() {
         changes = [...nonSelect, ...newSelect];
       }
 
+      // Ctrl-held alignment snap (PowerPoint-style). Runs BEFORE the group-drag
+      // intercept so a snapped group position propagates to its members, and
+      // overrides the 20px grid snap on whichever axis it engages. Anchors on
+      // the UNION bbox of the moving node(s), so dragging a multi-selection
+      // aligns the selection's outer edges/centers to nearby static nodes.
+      if (ctrlHeldRef.current) {
+        type PosChange = { type: 'position'; id: string; position: { x: number; y: number }; dragging?: boolean };
+        const posChanges = changes.filter(
+          c => c.type === 'position' && (c as PosChange).position,
+        ) as PosChange[];
+        const isDrag = posChanges.some(c => c.dragging === true);
+        const isDragEnd = posChanges.some(c => c.dragging === false);
+        if (posChanges.length > 0 && (isDrag || isDragEnd)) {
+          const movingIds = new Set(posChanges.map(c => c.id));
+          // Union bbox of the moving node(s) at their NEW (already-grid-snapped) positions.
+          let uMinX = Infinity, uMinY = Infinity, uMaxX = -Infinity, uMaxY = -Infinity;
+          for (const c of posChanges) {
+            const n = nodesRef.current.find(nn => nn.id === c.id);
+            const { w, h } = n ? nodeSize(n) : { w: 200, h: 100 };
+            if (c.position.x < uMinX) uMinX = c.position.x;
+            if (c.position.y < uMinY) uMinY = c.position.y;
+            if (c.position.x + w > uMaxX) uMaxX = c.position.x + w;
+            if (c.position.y + h > uMaxY) uMaxY = c.position.y + h;
+          }
+          if (uMinX !== Infinity) {
+            const zoom = rfInstance.current?.getViewport().zoom ?? 1;
+            const thr = ALIGN_SNAP_PX / Math.max(zoom, 0.05); // screen px → flow units
+            // During a group drag the members translate WITH the group but
+            // aren't in this tick's `movingIds` yet (the group-drag intercept
+            // injects their changes below). Exclude them so the group can't
+            // snap its edges to a child that's moving along with it.
+            const groupMemberIds = groupDragRef.current
+              ? new Set(groupDragRef.current.members.map(m => m.id))
+              : null;
+            const targets: AlignTarget[] = [];
+            for (const n of nodesRef.current) {
+              if (movingIds.has(n.id) || n.type === 'rerouteNode' || groupMemberIds?.has(n.id)) continue;
+              const { w, h } = nodeSize(n);
+              targets.push({ x: n.position.x, y: n.position.y, w, h });
+            }
+            const { dx, dy, guides } = computeAlignmentSnap(
+              { minX: uMinX, minY: uMinY, maxX: uMaxX, maxY: uMaxY },
+              targets,
+              thr,
+            );
+            if (dx !== 0 || dy !== 0) {
+              changes = changes.map(c =>
+                c.type === 'position' && (c as PosChange).position && movingIds.has(c.id)
+                  ? { ...c, position: { x: (c as PosChange).position.x + dx, y: (c as PosChange).position.y + dy } }
+                  : c,
+              ) as typeof changes;
+            }
+            if (isDrag && !sameGuides(alignGuidesRef.current, guides)) {
+              alignGuidesRef.current = guides;
+              setAlignGuides(guides);
+            }
+          }
+        }
+        if (isDragEnd) clearAlignGuides();
+      }
+
       // Group drag intercept: when a group is being dragged, translate every
       // node whose center was inside the group's rect at drag-start by the
       // same per-tick delta. Membership is frozen for the drag duration so
@@ -1309,7 +1458,10 @@ export function GraphEditorInner() {
           // keeps inner nodes locked to the group regardless of render timing.
           let totalDx = groupChange.position.x - dragState.startPos.x;
           let totalDy = groupChange.position.y - dragState.startPos.y;
-          if (snapEnabled) {
+          // Skip grid rounding while Ctrl alignment is engaged — the group's
+          // position change was already alignment-snapped above, and members
+          // must follow that exact (off-grid) delta.
+          if (snapEnabled && !ctrlHeldRef.current) {
             totalDx = Math.round(totalDx / 20) * 20;
             totalDy = Math.round(totalDy / 20) * 20;
           }
@@ -1351,7 +1503,7 @@ export function GraphEditorInner() {
       );
       if (needsSync) scheduleSync();
     },
-    [onNodesChange, scheduleSync, snapEnabled],
+    [onNodesChange, scheduleSync, snapEnabled, clearAlignGuides],
   );
 
   const handleEdgesChange = useCallback(
@@ -1421,8 +1573,9 @@ export function GraphEditorInner() {
       if (groupDragRef.current?.groupId === node.id) {
         groupDragRef.current = null;
       }
+      clearAlignGuides();
     },
-    [],
+    [clearAlignGuides],
   );
 
   // --- Unified context menu ---
@@ -3581,6 +3734,7 @@ export function GraphEditorInner() {
         proOptions={{ hideAttribution: true }}
       >
         {showGrid && <Background color="#1a2538" gap={20} variant={BackgroundVariant.Lines} />}
+        <AlignmentGuidesOverlay guides={alignGuides} />
         <Controls showInteractive={false} />
         {/* Canvas toggle buttons */}
         <div className={styles.canvasToggles}>
