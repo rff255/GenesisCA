@@ -17,8 +17,8 @@ export type ThemeName = 'blender' | 'nocturne';
 export const THEME_STORAGE_KEY = 'genesisca_theme';
 
 const THEME_OPTIONS: { value: ThemeName; label: string }[] = [
-  { value: 'blender', label: 'Blender' },
   { value: 'nocturne', label: 'Nocturne' },
+  { value: 'blender', label: 'Blender' },
 ];
 
 const KNOWN = new Set<ThemeName>(THEME_OPTIONS.map(o => o.value));
@@ -35,7 +35,7 @@ function readInitialTheme(): ThemeName {
     const v = localStorage.getItem(THEME_STORAGE_KEY);
     if (isTheme(v)) return v;
   } catch { /* localStorage unavailable */ }
-  return 'blender';
+  return 'nocturne';
 }
 
 export function ThemeSwitcher() {
