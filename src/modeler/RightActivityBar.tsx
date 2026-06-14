@@ -36,13 +36,14 @@ const panels: Array<{ id: RightPanelId; label: string; icon: ReactElement }> = [
 
 export function RightActivityBar({ activePanel, onTogglePanel }: RightActivityBarProps) {
   return (
-    <div className={styles.activityBar} style={{ borderRight: 'none', borderLeft: '1px solid var(--color-border)' }}>
+    <div className={styles.activityBar}>
       {panels.map(({ id, label, icon }) => (
         <button
           key={id}
-          className={`${styles.button} ${activePanel === id ? `${styles.buttonActive} ${styles.buttonActiveRight}` : ''}`}
+          className={`${styles.button} ${activePanel === id ? styles.buttonActive : ''}`}
           onClick={() => onTogglePanel(id)}
           title={label}
+          aria-label={label}
         >
           {icon}
         </button>
