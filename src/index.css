@@ -30,6 +30,19 @@ textarea {
   font-family: inherit;
 }
 
+/* Native form-control accent (range thumb + track fill, checkbox / radio
+ * checkmark) follows the active theme everywhere. Without this, controls that
+ * don't set their own accent-color fall back to the BROWSER/OS default accent
+ * — which ignores the selected theme and even differs between machines (e.g.
+ * the model-attribute sliders showed blue on one browser, orange on another).
+ * `accent-color` resolves the CSS variable per `[data-theme]`, so it's fully
+ * theme-reactive; controls with their own accent-color simply override it. */
+input[type="range"],
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--color-accent);
+}
+
 /* Scrollbars — applied globally so every scrollable region inherits the
  * dark-theme look. WebKit/Blink rules use ::-webkit-scrollbar; Firefox
  * uses the scrollbar-* properties. */

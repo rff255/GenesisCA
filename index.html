@@ -7,11 +7,19 @@
   </head>
   <body>
     <script>
-      // Pin the theme to "blender" — the only shipped theme for now. Future
-      // theme additions will bring back a selector + persisted preference;
-      // until then the attribute is set unconditionally so `[data-theme=…]`
-      // CSS still resolves identically to `:root`.
-      document.documentElement.dataset.theme = 'blender';
+      // Set the theme attribute synchronously before first paint to avoid a
+      // flash. Default to "blender"; subsequent visits respect the value
+      // ThemeSwitcher persisted to localStorage. Unknown/stale values fall
+      // back to "blender" so `[data-theme=…]` always resolves to a real block.
+      (function () {
+        try {
+          var t = localStorage.getItem('genesisca_theme');
+          document.documentElement.dataset.theme =
+            (t === 'blender' || t === 'nocturne') ? t : 'blender';
+        } catch (e) {
+          document.documentElement.dataset.theme = 'blender';
+        }
+      })();
     </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
