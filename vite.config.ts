@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { VitePWA } from 'vite-plugin-pwa'
 import { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'fs'
 import { join, resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
@@ -143,8 +144,85 @@ function macrosLibraryPlugin(): Plugin {
   };
 }
 
-export default defineConfig(({ command }) => ({
-  plugins: [react(), modelsLibraryPlugin(), macrosLibraryPlugin()],
-  // base path only for production (GitHub Pages); dev uses root '/'
-  base: command === 'build' ? '/GenesisCA/' : '/',
-}))
+// Web App Manifest, built from the active base path so start_url / scope / id
+// and icon srcs are correct under the GitHub Pages '/GenesisCA/' subpath (and
+// '/' in dev or inside the Tauri native shell). See docs/IMPACT_MAP_PWA_INSTALL.md.
+function buildManifest(base: string) {
+  return {
+    name: 'GenesisCA',
+    short_name: 'GenesisCA',
+    description: 'IDE for modeling and simulating Cellular Automata',
+    id: base,
+    start_url: base,
+    scope: base,
+    display: 'standalone' as const,
+    orientation: 'any' as const,
+    background_color: '#0c0d10', // Nocturne --color-bg-app (no white splash flash)
+    theme_color: '#e8a13a',      // Nocturne --color-accent
+    icons: [
+      { src: `${base}pwa-192x192.png`, sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: `${base}pwa-512x512.png`, sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: `${base}maskable-icon-512x512.png`, sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+    ],
+  };
+}
+
+export default defineConfig(({ command }) => {
+  // GitHub Pages serves under '/GenesisCA/'; dev and the Tauri native shell serve
+  // at root '/'. Tauri sets TAURI_ENV_* during its beforeBuildCommand, so the
+  // native build gets base '/' (its webview loads dist/ from tauri://localhost/).
+  const base = command === 'build' && !process.env.TAURI_ENV_PLATFORM ? '/GenesisCA/' : '/';
+  return {
+    base,
+    plugins: [
+      react(),
+      modelsLibraryPlugin(),
+      macrosLibraryPlugin(),
+      // Keep VitePWA LAST: the library plugins generate models/macros index.json
+      // + thumbnails in closeBundle(); the SW precache glob must run after them.
+      VitePWA({
+        registerType: 'prompt',
+        manifest: buildManifest(base),
+        includeAssets: ['favicon.ico', 'apple-touch-icon-180x180.png', 'icon.svg'],
+        workbox: {
+          // Overriding globPatterns REPLACES Workbox's default (**/*.{js,css,html}),
+          // so re-list the shell + worker/wasm/icons, the library index, macros,
+          // and thumbnails — the lean set, fully offline on the FIRST launch.
+          // Model .gcaproj files are NOT precached (a couple embed large saved
+          // sim-states — 5–11 MB — that would bloat the first-visit download);
+          // they're runtime-cached on first open via the rule below.
+          globPatterns: [
+            '**/*.{js,css,html,ico,png,svg,woff2,wasm}',
+            'models/index.json', 'models/*.thumb.{gif,png,jpg,jpeg,webp}',
+            'macros/index.json', 'macros/*.gcamacro',
+          ],
+          navigateFallback: `${base}index.html`,
+          maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+          runtimeCaching: [
+            {
+              urlPattern: ({ url }: { url: URL }) =>
+                url.pathname.endsWith('/models/index.json') || url.pathname.endsWith('/macros/index.json'),
+              handler: 'StaleWhileRevalidate',
+              options: { cacheName: 'gca-index' },
+            },
+            {
+              urlPattern: ({ url }: { url: URL }) =>
+                url.pathname.endsWith('.gcaproj') || url.pathname.endsWith('.gcamacro'),
+              handler: 'StaleWhileRevalidate',
+              options: { cacheName: 'gca-models' },
+            },
+            {
+              urlPattern: ({ url }: { url: URL }) => /\.thumb\.(gif|png|jpe?g|webp)$/.test(url.pathname),
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'gca-thumbnails',
+                expiration: { maxEntries: 200, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              },
+            },
+          ],
+        },
+        devOptions: { enabled: true, type: 'module' },
+      }),
+    ],
+  };
+})

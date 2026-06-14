@@ -15,6 +15,42 @@
   border-bottom: 1px solid var(--color-border);
 }
 
+/* Three navbar groups: brand+actions (left), application modes (center,
+   centered in the remaining space), app controls (right). */
+.navLeft,
+.navRight {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.navLeft {
+  min-width: 0; /* allow the model name to truncate rather than shove the layout */
+  overflow: hidden; /* clip gracefully on narrow widths instead of overlapping the modes */
+}
+
+.navRight {
+  flex-shrink: 0;
+}
+
+.navCenter {
+  /* grow to fill the free space (so the modes center in it) but never shrink
+     below the buttons' width — otherwise justify-content:center would spill the
+     buttons symmetrically over the left/right groups on narrow widths. */
+  flex: 1 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  flex-wrap: nowrap; /* keep the modes on one line */
+}
+
+.logo {
+  display: block;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+}
+
 .title {
   font-size: var(--font-lg);
   font-weight: 700;
@@ -42,6 +78,8 @@
   color: var(--color-text-tertiary);
   font-size: var(--font-md);
   font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
   cursor: pointer;
   transition: color var(--duration-base), background var(--duration-base), border-color var(--duration-base);
 }
@@ -69,7 +107,6 @@
 }
 
 .modelName {
-  margin-left: auto;
   /* 0.78rem is a one-off — closest token is --font-md (0.8rem); keep literal to preserve exact look. */
   font-size: 0.78rem;
   color: var(--color-text-subtle);
@@ -77,6 +114,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
   max-width: 300px;
 }
 
