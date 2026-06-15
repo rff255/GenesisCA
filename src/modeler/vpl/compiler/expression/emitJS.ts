@@ -50,6 +50,12 @@ export function emitJS(ast: ExprAst, inputVars: Record<string, string>): string 
         case 'max':   return `Math.max(${a[0]}, ${a[1]})`;
         case 'pow':   return `Math.pow(${a[0]}, ${a[1]})`;
         case 'mod':   return `(${a[1]} !== 0 ? ${a[0]} % ${a[1]} : 0)`;
+        case 'exp':   return `Math.exp(${a[0]})`;
+        case 'log':   return `Math.log(${a[0]})`;
+        case 'sin':   return `Math.sin(${a[0]})`;
+        case 'cos':   return `Math.cos(${a[0]})`;
+        case 'tan':   return `Math.tan(${a[0]})`;
+        case 'tanh':  return `Math.tanh(${a[0]})`;
       }
       return '0';
     }

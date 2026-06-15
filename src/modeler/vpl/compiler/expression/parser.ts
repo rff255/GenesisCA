@@ -18,10 +18,10 @@
  * (precedence is actually implemented via precedence-climbing, not the literal
  * grammar above, but the binding powers match it.)
  *
- * Functions are the cross-target-safe set only: sqrt abs floor ceil round min
- * max pow mod. Transcendentals (sin/cos/exp/log) are intentionally NOT
- * supported — WASM has no native opcodes/imports for them. Adding them later
- * means new WASM env imports plus matching WGSL/JS emit.
+ * Functions: sqrt abs floor ceil round min max pow mod, plus the transcendentals
+ * exp log sin cos tan tanh (log = natural log). JS emits Math.*; WGSL uses native
+ * intrinsics; WASM has no transcendental opcodes, so exp/log/sin/cos/tan/tanh are
+ * imported from the JS host (env.exp …) alongside the existing env.pow.
  */
 
 import type { NodeConfig } from '../../types';
@@ -31,7 +31,8 @@ import type { NodeConfig } from '../../types';
 // ---------------------------------------------------------------------------
 
 export type ExprFn =
-  | 'sqrt' | 'abs' | 'floor' | 'ceil' | 'round' | 'min' | 'max' | 'pow' | 'mod';
+  | 'sqrt' | 'abs' | 'floor' | 'ceil' | 'round' | 'min' | 'max' | 'pow' | 'mod'
+  | 'exp' | 'log' | 'sin' | 'cos' | 'tan' | 'tanh';
 
 export type ExprAst =
   | { kind: 'num'; value: number }
@@ -44,6 +45,7 @@ export type ExprAst =
 const FN_ARITY: Record<ExprFn, number> = {
   sqrt: 1, abs: 1, floor: 1, ceil: 1, round: 1,
   min: 2, max: 2, pow: 2, mod: 2,
+  exp: 1, log: 1, sin: 1, cos: 1, tan: 1, tanh: 1,
 };
 
 /** Named constants resolved to numeric literals at parse time. A port named

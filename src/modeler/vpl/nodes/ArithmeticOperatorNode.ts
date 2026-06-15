@@ -1,9 +1,15 @@
 import type { NodeTypeDef } from '../types';
 
+/** Math operations that read only X (the Y input is hidden for them). Shared
+ *  with CaNode's collapsed-label formatter so the two never drift. */
+export const ARITHMETIC_UNARY_OPS = new Set([
+  'sqrt', 'abs', 'exp', 'log', 'sin', 'cos', 'tan', 'tanh',
+]);
+
 export const ArithmeticOperatorNode: NodeTypeDef = {
   type: 'arithmeticOperator',
   label: 'Math',
-  description: 'Performs arithmetic: +, -, *, /, %, sqrt, pow, abs, max, min, mean.',
+  description: 'Performs arithmetic: +, -, *, /, %, sqrt, pow, abs, max, min, mean, exp, log (natural), sin, cos, tan, tanh.',
   category: 'logic',
   color: '#b8860b',
   ports: [
@@ -12,9 +18,9 @@ export const ArithmeticOperatorNode: NodeTypeDef = {
     { id: 'result', label: 'Result', kind: 'output', category: 'value', dataType: 'any' },
   ],
   defaultConfig: { operation: '+' },
-  // The unary ops (sqrt, abs) read only X — hide the Y input for them.
+  // The unary ops read only X — hide the Y input for them.
   hiddenPorts: (config) =>
-    (config.operation === 'sqrt' || config.operation === 'abs') ? ['y'] : [],
+    ARITHMETIC_UNARY_OPS.has(config.operation as string) ? ['y'] : [],
   compile: (nodeId, config, inputs) => {
     const x = inputs['x'] || '0';
     const y = inputs['y'] || '0';
@@ -31,6 +37,12 @@ export const ArithmeticOperatorNode: NodeTypeDef = {
       case 'max':  expr = `Math.max(${x}, ${y})`; break;
       case 'min':  expr = `Math.min(${x}, ${y})`; break;
       case 'mean': expr = `((${x} + ${y}) / 2)`; break;
+      case 'exp':  expr = `Math.exp(${x})`; break;
+      case 'log':  expr = `Math.log(${x})`; break;
+      case 'sin':  expr = `Math.sin(${x})`; break;
+      case 'cos':  expr = `Math.cos(${x})`; break;
+      case 'tan':  expr = `Math.tan(${x})`; break;
+      case 'tanh': expr = `Math.tanh(${x})`; break;
       default:     expr = `(${x} + ${y})`; break;
     }
     return `const _v${nodeId} = ${expr};\n`;

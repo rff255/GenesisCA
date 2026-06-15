@@ -118,13 +118,25 @@ function cmpToF64Op(op: string): Uint8Array {
 const OP_I32_NE_OP = byte(0x47);
 const OP_I32_LE_S_OP = byte(0x4c);
 
-// Math.pow is the only math function we can't synthesise from native f64
-// intrinsics; we import it as func index 0. All other Math.* operations have
-// native WASM equivalents (sqrt = OP_F64_SQRT, abs = OP_F64_ABS, floor =
-// OP_F64_FLOOR; round is emitted as floor(x + 0.5)).
-// Exported so the Expression node's WASM emitter (compiler/expression/emitWasm.ts)
-// can emit `call pow` against the same single source of truth.
+// WASM has native f64 intrinsics for sqrt/abs/floor/ceil/min/max (round is
+// floor(x + 0.5)), but NO opcodes for pow or the transcendentals. We import
+// those from the JS host (env.pow, env.exp, …) as func indices 0..N-1; module-
+// defined functions therefore start at funcIdx NUM_IMPORTED_FUNCS. Exported so
+// the Expression node's WASM emitter (compiler/expression/emitWasm.ts) emits
+// `call <idx>` against the same single source of truth.
+// IMPORTANT: keep these indices contiguous from 0 and matching the order of the
+// import entries appended in buildOneModule's `imports` array, and the env
+// object provided in instantiateWasmModule.
 export const POW_FUNC_IDX = 0;
+export const EXP_FUNC_IDX = 1;
+export const LOG_FUNC_IDX = 2;
+export const SIN_FUNC_IDX = 3;
+export const COS_FUNC_IDX = 4;
+export const TAN_FUNC_IDX = 5;
+export const TANH_FUNC_IDX = 6;
+/** Count of imported host functions (pow + transcendentals). Module-defined
+ *  functions occupy funcIdx NUM_IMPORTED_FUNCS .. (NUM_IMPORTED_FUNCS+n-1). */
+export const NUM_IMPORTED_FUNCS = 7;
 
 // Module-level type indices (assigned in buildOneModule based on which entry
 // points are present). Imported pow lives at type 0; entry-point types start
@@ -1188,6 +1200,13 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
         pushValueAs(em, y, F64);
         em.emit(byte(0x10), leb128u(POW_FUNC_IDX)); // call POW_FUNC_IDX
         break;
+      // Unary transcendentals: imported host functions (no native WASM opcode).
+      case 'exp':  pushValueAs(em, x, F64); em.emit(byte(0x10), leb128u(EXP_FUNC_IDX));  break;
+      case 'log':  pushValueAs(em, x, F64); em.emit(byte(0x10), leb128u(LOG_FUNC_IDX));  break;
+      case 'sin':  pushValueAs(em, x, F64); em.emit(byte(0x10), leb128u(SIN_FUNC_IDX));  break;
+      case 'cos':  pushValueAs(em, x, F64); em.emit(byte(0x10), leb128u(COS_FUNC_IDX));  break;
+      case 'tan':  pushValueAs(em, x, F64); em.emit(byte(0x10), leb128u(TAN_FUNC_IDX));  break;
+      case 'tanh': pushValueAs(em, x, F64); em.emit(byte(0x10), leb128u(TANH_FUNC_IDX)); break;
       default:
         ctx.errors.push(`arithmeticOperator: unsupported op ${op}`);
         return null;
@@ -7086,24 +7105,39 @@ export function compileGraphWasm(
   //   0: pow type (f64, f64) -> f64   (imported)
   //   1: total entry point: (i32) -> ()         (step / outputMapping)
   //   2: inputColor entry: (i32, i32, i32, i32) -> ()
+  //   3: unary math type (f64) -> f64           (imported exp/log/sin/cos/tan/tanh)
   const typePow = funcType([F64, F64], [F64]);
   const typeTotal = funcType([I32], []);
   const typeIdxRgb = funcType([I32, I32, I32, I32], []);
+  const typeUnary = funcType([F64], [F64]);
+  const TYPE_IDX_UNARY = 3;
 
-  // Imports: env.mem (memory), env.pow (Math.pow)
+  // Imports: env.mem (memory) + the host math functions WASM can't synthesise.
+  // The func imports MUST appear in funcIdx order (pow, exp, log, sin, cos, tan,
+  // tanh) — see POW_FUNC_IDX..TANH_FUNC_IDX — and be mirrored in
+  // instantiateWasmModule's env object. (mem is a memory import and does not
+  // consume a function index.)
   const memImport = importEntry('env', 'mem', importMemoryDesc(layout.pages));
   const powImport = importEntry('env', 'pow', importFuncDesc(0));
+  const unaryImports = [
+    importEntry('env', 'exp', importFuncDesc(TYPE_IDX_UNARY)),
+    importEntry('env', 'log', importFuncDesc(TYPE_IDX_UNARY)),
+    importEntry('env', 'sin', importFuncDesc(TYPE_IDX_UNARY)),
+    importEntry('env', 'cos', importFuncDesc(TYPE_IDX_UNARY)),
+    importEntry('env', 'tan', importFuncDesc(TYPE_IDX_UNARY)),
+    importEntry('env', 'tanh', importFuncDesc(TYPE_IDX_UNARY)),
+  ];
 
   // funcs section: each entry is the type index of the matching code body.
   // Imported funcs come BEFORE module-defined funcs in the function index space
-  // (so funcIdx 0 = imported pow, funcIdx 1+ = our compiled functions).
+  // (funcIdx 0..NUM_IMPORTED_FUNCS-1 = imported host math; the rest = compiled).
   const funcs = exportEntries.map(e => leb128u(e.typeIdx));
-  const exports: Uint8Array[] = exportEntries.map((e, i) => exportEntry(e.name, EXPORT_FUNC, /* funcIdx */ 1 + i));
+  const exports: Uint8Array[] = exportEntries.map((e, i) => exportEntry(e.name, EXPORT_FUNC, /* funcIdx */ NUM_IMPORTED_FUNCS + i));
   const codes = exportEntries.map(e => e.body);
 
   const bytes = buildModule({
-    types: [typePow, typeTotal, typeIdxRgb],
-    imports: [memImport, powImport],
+    types: [typePow, typeTotal, typeIdxRgb, typeUnary],
+    imports: [memImport, powImport, ...unaryImports],
     funcs,
     exports,
     code: codes,
@@ -7151,7 +7185,16 @@ export async function instantiateWasmModule(
   const importObj = {
     env: {
       mem: memory,
+      // Host math functions WASM can't synthesise. Order is irrelevant here
+      // (matched by name), but every name referenced by a funcIdx in compile
+      // (POW_FUNC_IDX..TANH_FUNC_IDX) MUST be present.
       pow: Math.pow,
+      exp: Math.exp,
+      log: Math.log,
+      sin: Math.sin,
+      cos: Math.cos,
+      tan: Math.tan,
+      tanh: Math.tanh,
     },
   };
   const mod = await WebAssembly.instantiate(result.bytes, importObj);
