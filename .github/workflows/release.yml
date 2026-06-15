@@ -32,9 +32,13 @@ jobs:
           node-version: 20
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: './src-tauri -> target'
+      # NO Rust build cache here, on purpose. Tauri embeds the web frontend INTO
+      # the binary at compile time (generate_context!); a restored `target/` cache
+      # can let cargo skip the recompile that re-embeds it, shipping a STALE UI in
+      # the exe even when the source is current (GitHub Pages never hits this — it
+      # rebuilds dist/ fresh; only the native embed does). Releases are infrequent,
+      # so a clean build guarantees the exe matches the tagged source. (v1.19.0 hit
+      # exactly this: correct source, stale embedded frontend.)
       - run: npm ci
       # Builds the frontend (beforeBuildCommand) + the native binary, WITHOUT any
       # installer bundle (--no-bundle; bundle.active is also false in tauri.conf).
