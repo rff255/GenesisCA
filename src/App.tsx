@@ -45,8 +45,17 @@ function AppInner() {
     registerSW({ immediate: true });
     // Auto-granted once installed; keeps the offline cache from being evicted
     // under disk pressure. Storage durability only — does NOT raise the memory
-    // ceiling for large grids (that needs the native Tauri shell).
+    // ceiling for large grids; neither does the current Tauri shell (same
+    // Chromium/WebView2 engine) — only a native-Rust simulation would.
     navigator.storage?.persist?.().catch(() => {});
+    // Fade out + remove the static boot splash (index.html) now that React has
+    // mounted and the app shell is on screen.
+    const splash = document.getElementById('splash');
+    if (splash) {
+      splash.classList.add('splash-hide');
+      const t = window.setTimeout(() => splash.remove(), 400);
+      return () => clearTimeout(t);
+    }
   }, []);
 
   // Keyboard-shortcuts cheat-sheet overlay, surfaced as a navbar `?` button so

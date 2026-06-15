@@ -35,7 +35,7 @@ Detailed in-app help tab with a comprehensive tutorial and reference material re
 ![Library](docs/Gifs/help.gif)
 
 ### **Install & Offline**
-GenesisCA is an installable [Progressive Web App](https://web.dev/explore/progressive-web-apps). Open it in Chrome or Edge and use the navbar **⤓ Install** button (or the browser's own install affordance) to add it as a standalone desktop app — its own window and icon (no tabs or address bar) — that **runs fully offline**: the app, the Models Library, previews, and your work are served from a local cache. A native Windows installer (NSIS `setup.exe`) — a [Tauri](https://tauri.app) shell wrapping the same build — is published to the [Releases](https://github.com/rff255/GenesisCA/releases/latest) page.
+GenesisCA is an installable [Progressive Web App](https://web.dev/explore/progressive-web-apps). Open it in Chrome or Edge and use the navbar **⤓ Install** button (or the browser's own install affordance) to add it as a standalone desktop app — its own window and icon (no tabs or address bar) — that **runs fully offline**: the app, the Models Library, previews, and your work are served from a local cache. A standalone portable **`GenesisCA.exe`** — a [Tauri](https://tauri.app) shell wrapping the same build — is published to the [Releases](https://github.com/rff255/GenesisCA/releases/latest) page: download and run it directly, no install (it runs from anywhere, e.g. a USB stick).
 
 ### **Example**
 Gray-Scott Reaction-Diffusion model `[Peter Gray & Stephen K. Scott (1983)]`:
@@ -214,16 +214,16 @@ The app opens at **http://localhost:5173**.
 
 ### Native desktop build (Tauri)
 
-A [Tauri v2](https://v2.tauri.app) shell in `src-tauri/` wraps the same web build in a lightweight native window (the OS webview — WebView2 on Windows). It builds an **NSIS `setup.exe`** installer (plus a portable `GenesisCA.exe`); the cross-platform targets (`.dmg` / `.deb` / `.AppImage`) come from the same project on their respective OSes. The native version is read from `package.json`, so it always matches the web app.
+A [Tauri v2](https://v2.tauri.app) shell in `src-tauri/` wraps the same web build in a lightweight native window (the OS webview — WebView2 on Windows). It builds a **standalone portable `GenesisCA.exe`** — no installer (`bundle.active: false`); the PWA is the main install path, and the exe is for running offline from anywhere, e.g. a USB stick. The native version is read from `package.json`, so it always matches the web app.
 
 Building needs the [Rust toolchain](https://www.rust-lang.org/tools/install) (`rustup`) in addition to Node — on Windows, WebView2 ships with Windows 10/11. With Rust installed:
 
 ```bash
-npm run tauri dev     # run the app in a native window
-npm run tauri build   # produce the installer
+npm run tauri dev                  # run the app in a native window
+npm run tauri build -- --no-bundle # produce the portable exe (target/release/genesisca.exe)
 ```
 
-CI builds and publishes the Windows installer to [Releases](https://github.com/rff255/GenesisCA/releases/latest) on every `v*` tag (`.github/workflows/release.yml`).
+CI builds and publishes the portable Windows `.exe` to [Releases](https://github.com/rff255/GenesisCA/releases/latest) on every `v*` tag (`.github/workflows/release.yml`). It's unsigned, so the first run shows a Windows SmartScreen prompt — click **More info → Run anyway**.
 
 > Note: WebGPU is only guaranteed on the Windows (WebView2/Chromium) native build; macOS/Linux Tauri builds use WebKit, where the simulator falls back to the WASM/JS compile targets.
 
@@ -235,7 +235,7 @@ CI builds and publishes the Windows installer to [Releases](https://github.com/r
 - **Canvas2D** — grid rendering
 - **Web Workers** — off-thread simulation engine
 - **vite-plugin-pwa + Workbox** — installable, offline-capable PWA (service worker + manifest)
-- **Tauri v2** — native desktop shell (NSIS `.exe` installer; cross-platform capable)
+- **Tauri v2** — native desktop shell (standalone portable `.exe`; cross-platform capable)
 - **CSS Modules** — scoped component styling
 
 ---

@@ -87,8 +87,9 @@ export function HelpView() {
             .gcaproj / .gcastate file to your computer as before. Installing also asks the
             browser for <strong>durable storage</strong> so the offline cache isn&rsquo;t
             evicted under disk pressure. (Installing does not raise the memory ceiling for
-            very large grids &mdash; the native desktop build, downloadable from the project&rsquo;s
-            Releases page, is what lifts that.)
+            very large grids &mdash; and neither does the standalone desktop build downloadable
+            from the project&rsquo;s Releases page: it wraps the same browser engine, so the limit
+            is the same. It exists for offline / portable use, not more memory.)
           </p>
         </section>
 

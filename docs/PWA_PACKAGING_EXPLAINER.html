@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>GenesisCA — PWA, Installers & Offline, explained</title>
+<title>GenesisCA — PWA, the native exe & Offline, explained</title>
 <style>
   :root{
     --bg:#0c0d10; --surface:#16181d; --elev:#1d2026; --border:#2a2d35;
@@ -82,10 +82,10 @@
       <circle cx="180" cy="256" r="118" fill="url(#cg)"/><circle cx="332" cy="256" r="118" fill="url(#cg)"/>
       <circle cx="332" cy="256" r="118" fill="none" stroke="#a8640f" stroke-opacity=".45" stroke-width="5"/>
     </svg>
-    <h1>PWA, installers &amp; offline — explained</h1>
+    <h1>PWA, the native exe &amp; offline — explained</h1>
   </div>
   <p class="lead">Everything that the install / packaging work added to GenesisCA: what a PWA is, how the
-  browser PWA differs from the native installer and the standalone executable,
+  browser PWA differs from the standalone native executable,
   when each pop-up appears, and what installing actually unlocks (and what it doesn&rsquo;t).</p>
 </header>
 
@@ -93,9 +93,10 @@
   <h3>30-second version</h3>
   <p style="margin:0">There is <strong>one app</strong> (your built <code>dist/</code> folder). It can run three ways:
   in a <strong>browser tab</strong>, as an <strong>installed PWA</strong> (its own window + icon, works offline), or as a
-  <strong>native app</strong> from an installer (a real <code>.exe</code>). Installing gives you offline use, a real app window,
-  and a durable cache — but <strong>not</strong> more memory. More RAM/CPU headroom for huge grids only comes from the
-  native (Tauri) build, which escapes the browser sandbox.</p>
+  standalone <strong>native app</strong> you run directly (a portable <code>.exe</code> — no install). Installing gives you offline use, a real app window,
+  and a durable cache — but <strong>not</strong> more memory. The native (Tauri) build doesn't change that either, as it
+  stands: it wraps the <strong>same</strong> browser engine, so the memory ceiling is identical. More RAM for huge grids would
+  mean moving the simulation to native Rust — a separate, larger project.</p>
 </div>
 
 <!-- ============ 1. ONE BUILD, THREE RUNTIMES ============ -->
@@ -139,7 +140,7 @@
   <rect x="640" y="134" width="240" height="196" rx="12" fill="#16181d" stroke="#6abe6a"/>
   <rect x="640" y="134" width="240" height="34" rx="12" fill="rgba(106,190,106,0.13)"/>
   <text x="760" y="156" text-anchor="middle" fill="#6abe6a" font-size="14" font-weight="600" font-family="system-ui">Native app (Tauri)</text>
-  <text x="760" y="190" text-anchor="middle" fill="#ecebe6" font-size="12.5" font-family="system-ui">NSIS .exe installer</text>
+  <text x="760" y="190" text-anchor="middle" fill="#ecebe6" font-size="12.5" font-family="system-ui">Portable .exe — no install</text>
   <text x="760" y="212" text-anchor="middle" fill="#cfcdc5" font-size="12" font-family="system-ui">Standalone native process</text>
   <text x="760" y="232" text-anchor="middle" fill="#cfcdc5" font-size="12" font-family="system-ui">Real filesystem access</text>
   <text x="760" y="252" text-anchor="middle" fill="#cfcdc5" font-size="12" font-family="system-ui">No browser storage quota</text>
@@ -199,7 +200,7 @@ None of this requires a server — it&rsquo;s all static files.</p>
 <!-- ============ 3. PIPELINE ============ -->
 <h2>3 · The build pipeline</h2>
 <p>One command builds the web app; the PWA pieces are generated automatically; a second command wraps that exact
-output into native installers.</p>
+output into a standalone native exe.</p>
 
 <div class="fig">
 <svg viewBox="0 0 920 300" role="img" aria-label="Build pipeline from source to dist to GitHub Pages PWA and to native installers">
@@ -227,34 +228,36 @@ output into native installers.</p>
 
   <rect x="720" y="192" width="170" height="64" rx="10" fill="rgba(106,190,106,0.13)" stroke="#6abe6a"/>
   <text x="805" y="216" text-anchor="middle" fill="#6abe6a" font-size="13" font-weight="600" font-family="system-ui">npm run tauri build</text>
-  <text x="805" y="235" text-anchor="middle" fill="#cfcdc5" font-size="11" font-family="system-ui">= NSIS .exe</text>
+  <text x="805" y="235" text-anchor="middle" fill="#cfcdc5" font-size="11" font-family="system-ui">= portable .exe</text>
 
   <path d="M180 145 L228 145" fill="none" stroke="#7c7a72" stroke-width="1.5" marker-end="url(#ar3)"/>
   <path d="M420 145 L468 145" fill="none" stroke="#7c7a72" stroke-width="1.5" marker-end="url(#ar3)"/>
   <path d="M660 135 L690 135 L690 66 L718 66" fill="none" stroke="#7c7a72" stroke-width="1.5" marker-end="url(#ar3)"/>
   <path d="M660 155 L690 155 L690 224 L718 224" fill="none" stroke="#7c7a72" stroke-width="1.5" marker-end="url(#ar3)"/>
 </svg>
-<div class="figcap">The native installers wrap the <em>same</em> <code>dist/</code> — so the app is identical; only the shell around it differs.</div>
+<div class="figcap">The native exe wraps the <em>same</em> <code>dist/</code> — so the app is identical; only the shell around it differs.</div>
 </div>
 
 <!-- ============ 4. WHAT WE SHIP ============ -->
-<h2>4 · What we ship: the NSIS installer (+ a portable exe)</h2>
-<p>GenesisCA ships <strong>one</strong> installer — the NSIS <code>setup.exe</code> — plus a portable raw executable
-for quick sharing. Both contain the <strong>same</strong> app; they differ only in how it lands on your machine.</p>
+<h2>4 · What we ship: the PWA + a portable exe</h2>
+<p>The <strong>main</strong> way to install GenesisCA is the <strong>PWA</strong> (the browser &ldquo;Install&rdquo; button —
+auto-updating, cross-platform). For when you want a file you can carry, the build also produces <strong>one</strong> standalone
+<code>.exe</code> — no installer. Both run the <strong>same</strong> app.</p>
 
 <div class="grid g2">
-  <div class="card amber"><span class="tag amber">setup.exe · what we ship</span>
-    <h3>NSIS installer</h3>
-    <p><code>GenesisCA_1.19.0_x64-setup.exe</code> — the friendly &ldquo;Next → Finish&rdquo; wizard.</p>
-    <p class="mono-note">Installs <strong>per-user with no admin prompt</strong>, creates Start-menu shortcuts + an uninstaller, and fetches WebView2 if it&rsquo;s missing. This is the public download, attached to each GitHub Release.</p></div>
-  <div class="card green"><span class="tag green">.exe · portable byproduct</span>
+  <div class="card amber"><span class="tag amber">PWA · the main install</span>
+    <h3>Install from the browser</h3>
+    <p>Open the site in Chrome/Edge → <strong>⤓ Install</strong>. Own window + icon, fully offline.</p>
+    <p class="mono-note">Auto-updates silently on the next launch when a new version ships; works on Windows/Mac/Linux/Android. This is what almost everyone should use.</p></div>
+  <div class="card green"><span class="tag green">.exe · portable, for sharing</span>
     <h3>Standalone executable</h3>
-    <p><code>GenesisCA.exe</code> — the raw program; double-click and it runs.</p>
-    <p class="mono-note">No shortcuts or uninstaller, but nothing to install — handy for tossing to a friend. Always produced alongside the installer.</p></div>
+    <p><code>GenesisCA-v1.19.0.exe</code> — the raw program; double-click and it runs.</p>
+    <p class="mono-note">No installer, no shortcuts, nothing to install — runs from anywhere (e.g. a USB stick), handy for tossing to a friend. Published to each GitHub Release. (Unsigned, so the first run shows a SmartScreen &ldquo;More info → Run anyway&rdquo; prompt; it does <em>not</em> auto-update.)</p></div>
 </div>
-<p class="sub" style="margin-top:14px">We deliberately <strong>don&rsquo;t</strong> ship the third format Tauri can make — an <strong>MSI</strong> —
-because that&rsquo;s the heavier, admin-required, enterprise/IT-managed package. NSIS serves normal users better (per-user,
-no admin), so a single installer is enough.</p>
+<p class="sub" style="margin-top:14px">We deliberately <strong>don&rsquo;t</strong> ship a Windows <strong>installer</strong> (NSIS or MSI).
+The PWA already gives a real installed app — own window, icon, Start-menu entry, auto-updates — with zero download, so an installer
+would mostly add maintenance (publisher / version / signing) for little gain. The portable <code>.exe</code> covers the
+&ldquo;give it to someone offline&rdquo; case.</p>
 
 <!-- ============ 5. POPUPS ============ -->
 <h2>5 · The one pop-up that&rsquo;s left</h2>
@@ -287,12 +290,12 @@ is the <strong>browser&rsquo;s own install offer</strong>.</p>
   <tbody>
     <tr><td class="feat">Works offline</td><td class="partial">after 1st visit</td><td class="yes">yes</td><td class="yes">yes</td></tr>
     <tr><td class="feat">Own window + icon</td><td class="no">no (a tab)</td><td class="yes">yes</td><td class="yes">yes</td></tr>
-    <tr><td class="feat">Start-menu / taskbar app</td><td class="no">no</td><td class="yes">yes</td><td class="yes">yes</td></tr>
+    <tr><td class="feat">Start-menu / taskbar app</td><td class="no">no</td><td class="yes">yes</td><td class="partial">pin it yourself</td></tr>
     <tr><td class="feat">Durable cache (not evicted)</td><td class="partial">best-effort</td><td class="yes">yes (granted)</td><td class="yes">yes</td></tr>
     <tr><td class="feat">Disk storage quota</td><td colspan="2" class="partial" style="text-align:center">~60% of free disk (browser-managed)</td><td class="yes">unlimited (real files)</td></tr>
-    <tr><td class="feat">RAM / memory ceiling</td><td colspan="2" class="no" style="text-align:center">browser limit — same for both</td><td class="yes">native (much higher)</td></tr>
-    <tr><td class="feat">Real filesystem (Save As anywhere)</td><td class="no">downloads only</td><td class="no">downloads only</td><td class="yes">yes</td></tr>
-    <tr><td class="feat">How you get it</td><td class="feat" style="font-weight:400">open a URL</td><td class="feat" style="font-weight:400">browser &ldquo;Install&rdquo;</td><td class="feat" style="font-weight:400">run an installer</td></tr>
+    <tr><td class="feat">RAM / memory ceiling</td><td colspan="3" class="no" style="text-align:center">same engine, same limit — the native wrapper doesn't raise it</td></tr>
+    <tr><td class="feat">Real filesystem (Save As anywhere)</td><td class="no">downloads only</td><td class="partial">Save As via download</td><td class="yes">yes</td></tr>
+    <tr><td class="feat">How you get it</td><td class="feat" style="font-weight:400">open a URL</td><td class="feat" style="font-weight:400">browser &ldquo;Install&rdquo;</td><td class="feat" style="font-weight:400">download + run the .exe</td></tr>
   </tbody>
 </table>
 <div class="legend">
@@ -324,12 +327,14 @@ is the <strong>browser&rsquo;s own install offer</strong>.</p>
 </div>
 
 <div class="callout">
-  <h3>If the wall you hit is memory, the answer is the native build</h3>
-  <p style="margin:0">The <strong>Tauri</strong> app (the installed <code>.exe</code>) runs as a real native process outside the
-  browser&rsquo;s sandbox. That&rsquo;s what raises the memory ceiling for very large grids and gives true filesystem access with no
-  storage quota. The PWA covers offline + installability today; the native build is the path to escaping browser resource limits.
-  (One caveat: on Windows the native shell uses the same Chromium engine as Edge, so WebGPU works; on macOS/Linux it uses WebKit,
-  where the simulator falls back to the WASM/JS engines.)</p>
+  <h3>If the wall you hit is memory, installing won&rsquo;t help — and neither does today&rsquo;s native build</h3>
+  <p style="margin:0">The <strong>Tauri</strong> app wraps the <strong>same</strong> browser engine (WebView2/Chromium on
+  Windows), and the simulation still runs as the same WASM/JS inside it — so the memory ceiling (the ~4&nbsp;GiB WebAssembly limit)
+  is identical to the PWA. What the native build genuinely adds is true filesystem access with no storage quota, a toggle-free
+  native window, and standalone distribution. Actually raising the memory ceiling would require rewriting the simulation in
+  <strong>native Rust</strong> to run outside the webview — a separate, larger effort, not something the current shell delivers.
+  (Engine caveat: on Windows the shell is Chromium so WebGPU works; on macOS/Linux it&rsquo;s WebKit, where the simulator falls
+  back to the WASM/JS engines.)</p>
 </div>
 
 <p class="sub" style="margin-top:34px;text-align:center">GenesisCA · install &amp; packaging reference · see also

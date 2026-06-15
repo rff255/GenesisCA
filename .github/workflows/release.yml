@@ -1,11 +1,12 @@
-name: Release installers
+name: Release Windows exe
 
-# Desktop installers are cut on a version TAG (not every master push) so the
-# Releases page stays clean and CI minutes aren't burned per-commit. The PWA on
-# GitHub Pages keeps deploying on every master push (deploy.yml). The version is
-# bumped only at release time (single source of truth: package.json — Tauri
-# reads it via tauri.conf.json "version": "../package.json"), so the online app
-# and the latest installer always report the SAME version.
+# A standalone PORTABLE GenesisCA.exe (no installer) is cut on a version TAG (not
+# every master push) so the Releases page stays clean and CI minutes aren't burned
+# per-commit. The PWA on GitHub Pages keeps deploying on every master push
+# (deploy.yml). The version is bumped only at release time (single source of
+# truth: package.json — Tauri reads it via tauri.conf.json "version":
+# "../package.json"), so the online app and the latest exe always report the SAME
+# version.
 #
 # To cut a release:  bump the version, commit, then push a matching tag, e.g.
 #   git tag v1.20.0 && git push origin v1.20.0
@@ -19,7 +20,7 @@ on:
         required: true
 
 permissions:
-  contents: write              # create the GitHub Release + upload installer assets
+  contents: write              # create the GitHub Release + upload the exe asset
 
 jobs:
   windows:
@@ -35,18 +36,36 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
       - run: npm ci
-      # Builds the frontend (beforeBuildCommand) + the native app, then creates
-      # the Release and uploads the NSIS setup.exe (the only bundle target now).
-      - uses: tauri-apps/tauri-action@v0
+      # Builds the frontend (beforeBuildCommand) + the native binary, WITHOUT any
+      # installer bundle (--no-bundle; bundle.active is also false in tauri.conf).
+      # Output: src-tauri/target/release/genesisca.exe (the Cargo package name).
+      - run: npm run tauri build -- --no-bundle
+      # Rename to the tag so a downloaded file is self-identifying. Glob the
+      # top-level exe so this survives any Tauri binary-name change.
+      - name: Stage portable exe
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $src = Get-ChildItem src-tauri/target/release/*.exe |
+                 Where-Object { $_.Name -notlike '*setup*' } | Select-Object -First 1
+          if (-not $src) { throw "No exe found in src-tauri/target/release" }
+          Copy-Item $src.FullName "GenesisCA-$tag.exe" -Force
+          Write-Host "Staged GenesisCA-$tag.exe from $($src.Name)"
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.event.inputs.tag || github.ref_name }}
-          releaseName: 'GenesisCA ${{ github.event.inputs.tag || github.ref_name }}'
-          releaseBody: |
-            Desktop installer for Windows (NSIS). Run the `*-setup.exe` below.
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: 'GenesisCA ${{ github.event.inputs.tag || github.ref_name }}'
+          body: |
+            **Standalone portable Windows app** — download the `GenesisCA-*.exe`
+            below and run it directly. No installer; it runs from anywhere,
+            including a USB stick. First launch may show a Windows SmartScreen
+            prompt (the exe is unsigned) — click **More info → Run anyway**.
 
-            Prefer no install? Use GenesisCA right in the browser — and install it
-            as an app from there — at https://rff255.github.io/GenesisCA/
-          releaseDraft: false
+            Prefer not to download? Use GenesisCA right in your browser — and
+            install it as an app from there — at https://rff255.github.io/GenesisCA/
+          files: GenesisCA-*.exe
+          draft: false
           prerelease: false
