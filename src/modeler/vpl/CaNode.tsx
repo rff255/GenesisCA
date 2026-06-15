@@ -3,6 +3,7 @@ import { Handle, Position, useReactFlow, useUpdateNodeInternals } from '@xyflow/
 import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
 import { CURRENT_VIEWER_SENTINEL } from './nodes/SetCellLooksNode';
+import { ARITHMETIC_UNARY_OPS } from './nodes/ArithmeticOperatorNode';
 import { detectMissingConfig, detectCapabilityRequirements, detectWebGPUIncompatibilities, detectWasmIncompatibilities, countMacroSubgraphIssues } from './nodes/nodeValidation';
 import { INTERPOLATION_METHODS, INTERPOLATION_SHORT_LABELS, DEFAULT_INTERPOLATION_METHOD } from './nodes/interpolationMethods';
 import type { InterpolationMethod } from './nodes/interpolationMethods';
@@ -755,7 +756,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
       const yConn = connectedInputHandles.has(handleId({ id: 'y', kind: 'input', category: 'value' }));
       const xVal = xConn ? '?' : ((nodeData.config._port_x as string) ?? '0');
       const yVal = yConn ? '?' : ((nodeData.config._port_y as string) ?? '0');
-      const unary = op === 'sqrt' || op === 'abs';
+      const unary = ARITHMETIC_UNARY_OPS.has(op);
       collapsedLabel = unary ? `${op}(${xVal})` : `${xVal} ${op} ${yVal}`;
     } else if (nodeData.nodeType === 'expression') {
       const expr = ((nodeData.config.expression as string) ?? '').trim();
@@ -1785,6 +1786,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <option value="max">Max</option>
             <option value="min">Min</option>
             <option value="mean">Mean</option>
+            <option value="exp">Exp (eˣ)</option>
+            <option value="log">Log (ln)</option>
+            <option value="sin">Sin</option>
+            <option value="cos">Cos</option>
+            <option value="tan">Tan</option>
+            <option value="tanh">Tanh</option>
           </select>
         )}
 

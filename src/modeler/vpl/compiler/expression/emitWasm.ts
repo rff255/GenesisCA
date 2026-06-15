@@ -21,7 +21,9 @@ import {
   OP_F64_MIN, OP_F64_MAX, OP_F64_SQRT, OP_F64_ABS, OP_F64_NEG,
   OP_F64_FLOOR, OP_F64_CEIL, OP_F64_TRUNC, opCall,
 } from '../wasm/encoder';
-import { POW_FUNC_IDX } from '../wasm/compile';
+import {
+  POW_FUNC_IDX, EXP_FUNC_IDX, LOG_FUNC_IDX, SIN_FUNC_IDX, COS_FUNC_IDX, TAN_FUNC_IDX, TANH_FUNC_IDX,
+} from '../wasm/compile';
 
 const F64_ZERO: ValueRef = { inline: true, value: 0, valtype: F64 };
 
@@ -166,5 +168,12 @@ function emitCall(em: WasmEmitter, fn: ExprFn, args: LocalRef[]): LocalRef {
       return store(em);
     case 'mod':
       return emitGuardedDivMod(em, '%', args[0]!, args[1]!);
+    // Unary transcendentals: imported host functions (no native WASM opcode).
+    case 'exp':  em.localGet(args[0]!.localIdx); em.emit(opCall(EXP_FUNC_IDX));  return store(em);
+    case 'log':  em.localGet(args[0]!.localIdx); em.emit(opCall(LOG_FUNC_IDX));  return store(em);
+    case 'sin':  em.localGet(args[0]!.localIdx); em.emit(opCall(SIN_FUNC_IDX));  return store(em);
+    case 'cos':  em.localGet(args[0]!.localIdx); em.emit(opCall(COS_FUNC_IDX));  return store(em);
+    case 'tan':  em.localGet(args[0]!.localIdx); em.emit(opCall(TAN_FUNC_IDX));  return store(em);
+    case 'tanh': em.localGet(args[0]!.localIdx); em.emit(opCall(TANH_FUNC_IDX)); return store(em);
   }
 }

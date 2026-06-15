@@ -61,6 +61,12 @@ function emitWgslCall(fn: ExprFn, a: string[]): string {
     case 'max':   return `max(${a[0]}, ${a[1]})`;
     case 'pow':   return `pow(${a[0]}, ${a[1]})`;
     case 'mod':   return `select(0.0, ((${a[0]}) - trunc((${a[0]}) / (${a[1]})) * (${a[1]})), (${a[1]} != 0.0))`;
+    case 'exp':   return `exp(${a[0]})`;
+    case 'log':   return `log(${a[0]})`;
+    case 'sin':   return `sin(${a[0]})`;
+    case 'cos':   return `cos(${a[0]})`;
+    case 'tan':   return `tan(${a[0]})`;
+    case 'tanh':  return `tanh(${a[0]})`;
   }
 }
 

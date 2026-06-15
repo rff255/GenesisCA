@@ -1484,6 +1484,12 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       case 'sqrt': expr = `sqrt(${x})`; break;
       case 'abs': expr = `abs(${x})`; break;
       case 'pow': expr = `pow(${x}, ${y})`; break;
+      case 'exp': expr = `exp(${x})`; break;
+      case 'log': expr = `log(${x})`; break;
+      case 'sin': expr = `sin(${x})`; break;
+      case 'cos': expr = `cos(${x})`; break;
+      case 'tan': expr = `tan(${x})`; break;
+      case 'tanh': expr = `tanh(${x})`; break;
       default:
         ctx.errors.push(`arithmeticOperator: unsupported op ${op}`);
         return null;

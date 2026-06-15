@@ -35,7 +35,7 @@ export const ExpressionNode: NodeTypeDef = {
   label: 'Expression',
   description:
     'Type a math formula (e.g. a + b*c - pow(d,2)). Variables come from the input ports. '
-    + 'Supports + - * / % ^ and sqrt abs floor ceil round min max pow mod.',
+    + 'Supports + - * / % ^ and sqrt abs floor ceil round min max pow mod exp log sin cos tan tanh.',
   category: 'logic',
   color: '#b8860b',
   ports: [
