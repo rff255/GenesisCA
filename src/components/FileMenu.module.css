@@ -1,10 +1,13 @@
 .fileMenu {
+  position: relative;
   display: flex;
-  gap: var(--space-3);
   align-items: center;
 }
 
 .menuButton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   padding: var(--space-2) var(--space-6);
   background: transparent;
   border: 1px solid transparent;
@@ -16,10 +19,49 @@
   transition: color var(--duration-base), background var(--duration-base), border-color var(--duration-base);
 }
 
-.menuButton:hover {
+.menuButton:hover,
+.menuButtonActive {
   color: var(--color-text-secondary);
   background: var(--color-overlay-hover-weak);
   border-color: var(--color-border);
+}
+
+.caret {
+  font-size: 0.7em;
+  opacity: 0.75;
+}
+
+/* File dropdown panel — position:fixed (coords set inline from the trigger's
+   rect) so the navbar's `.navLeft { overflow: hidden }` can't clip it. */
+.dropdown {
+  position: fixed;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  min-width: 150px;
+  padding: var(--space-2);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+
+.dropdownItem {
+  text-align: left;
+  padding: var(--space-3) var(--space-6);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: var(--font-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: color var(--duration-base), background var(--duration-base);
+}
+
+.dropdownItem:hover {
+  color: var(--color-text-primary);
+  background: var(--color-overlay-hover-weak);
 }
 
 .dirtyIndicator {

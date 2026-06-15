@@ -6,7 +6,7 @@ Companion to [IMPACT_MAP_PWA_INSTALL.md](IMPACT_MAP_PWA_INSTALL.md). Illustrated
 
 - **Icon:** the **two-cell** mark (first cleavage) — amber cells on the Nocturne near-black tile; doubles as a cellular-automaton nod. Refined geometry in `PLAN_PWA_INSTALL.html`.
 - **Core goal:** **offline + durable cache** — a PWA fully covers this. (`persist()` for durability; not a memory lever.)
-- **Scope this pass:** **PWA now + Tauri scaffold.** Ship the installable offline PWA, and stand up `src-tauri/` wrapping the same `dist/` (native `.msi`/`.exe` follow-up; build needs a Rust toolchain on the machine).
+- **Scope this pass:** **PWA now + Tauri scaffold.** Ship the installable offline PWA, and stand up `src-tauri/` wrapping the same `dist/` (native `.exe` installer follow-up; build needs a Rust toolchain on the machine).
 - **SW update UX:** `registerType: 'prompt'` + an "update available — reload?" toast (consistent with the app's toast/dirty-guard philosophy).
 - **theme-color:** static Nocturne amber `#e8a13a` for v1 (live theme sync deferred).
 - **Pre-install explainer modal:** none for v1 — the browser's native prompt is the confirmation UI.
@@ -35,7 +35,7 @@ Companion to [IMPACT_MAP_PWA_INSTALL.md](IMPACT_MAP_PWA_INSTALL.md). Illustrated
     const base = (command === 'build' && !process.env.TAURI_ENV_PLATFORM) ? '/GenesisCA/' : '/'
     ```
     The manifest/SW are inert inside Tauri (native webview doesn't "install" a PWA), so this divergence is harmless.
-13. `package.json` scripts: `"tauri": "tauri"`. (`npm run tauri dev` / `npm run tauri build` produce `.msi`+NSIS `.exe`.)
+13. `package.json` scripts: `"tauri": "tauri"`. (`npm run tauri dev` / `npm run tauri build` produce the NSIS `.exe` installer.)
 14. **Prerequisite (cannot be done in-repo):** building Tauri needs the **Rust toolchain** (`rustup`/`cargo`) + WebView2 (preinstalled on Win10+). The scaffold is committed regardless; `tauri build` is run by the user once Rust is installed. Document this in the README.
 
 ## Phase 4 — Docs (keep all sources of truth in sync)

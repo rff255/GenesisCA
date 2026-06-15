@@ -116,7 +116,7 @@ export function KeyboardShortcutsOverlay({ open, onClose }: { open: boolean; onC
           ))}
         </div>
         <div style={{ marginTop: 'var(--space-6)', fontSize: 'var(--font-3xs)', color: 'var(--color-text-tertiary)' }}>
-          Press <kbd style={{ background: 'var(--color-bg-canvas)', border: '1px solid var(--color-widget-border)', borderRadius: 'var(--radius-sm)', padding: '0 5px', fontFamily: 'var(--font-family-mono)' }}>?</kbd> any time to toggle this list.
+          Press <kbd style={{ background: 'var(--color-bg-canvas)', border: '1px solid var(--color-widget-border)', borderRadius: 'var(--radius-sm)', padding: '0 5px', fontFamily: 'var(--font-family-mono)' }}>Esc</kbd> to close.
         </div>
       </div>
     </div>

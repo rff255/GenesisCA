@@ -1,0 +1,52 @@
+name: Release installers
+
+# Desktop installers are cut on a version TAG (not every master push) so the
+# Releases page stays clean and CI minutes aren't burned per-commit. The PWA on
+# GitHub Pages keeps deploying on every master push (deploy.yml). The version is
+# bumped only at release time (single source of truth: package.json — Tauri
+# reads it via tauri.conf.json "version": "../package.json"), so the online app
+# and the latest installer always report the SAME version.
+#
+# To cut a release:  bump the version, commit, then push a matching tag, e.g.
+#   git tag v1.20.0 && git push origin v1.20.0
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:           # manual run: the tag must be given explicitly, or
+    inputs:                    # the release would be named after the branch ref
+      tag:
+        description: 'Release tag, e.g. v1.20.0'
+        required: true
+
+permissions:
+  contents: write              # create the GitHub Release + upload installer assets
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+      - run: npm ci
+      # Builds the frontend (beforeBuildCommand) + the native app, then creates
+      # the Release and uploads the NSIS setup.exe (the only bundle target now).
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.event.inputs.tag || github.ref_name }}
+          releaseName: 'GenesisCA ${{ github.event.inputs.tag || github.ref_name }}'
+          releaseBody: |
+            Desktop installer for Windows (NSIS). Run the `*-setup.exe` below.
+
+            Prefer no install? Use GenesisCA right in the browser — and install it
+            as an app from there — at https://rff255.github.io/GenesisCA/
+          releaseDraft: false
+          prerelease: false

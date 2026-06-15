@@ -155,6 +155,11 @@ function buildManifest(base: string) {
     id: base,
     start_url: base,
     scope: base,
+    // Standard standalone PWA: own window + icon, no tabs/address bar, but the
+    // browser keeps a thin title bar. (window-controls-overlay was evaluated and
+    // dropped — it can't auto-hide that title bar; it only adds a per-user
+    // "hide title bar" toggle, which fails the zero-effort bar. The clean,
+    // toggle-free native header is the Tauri build instead.)
     display: 'standalone' as const,
     orientation: 'any' as const,
     background_color: '#0c0d10', // Nocturne --color-bg-app (no white splash flash)
@@ -168,10 +173,12 @@ function buildManifest(base: string) {
 }
 
 export default defineConfig(({ command }) => {
-  // GitHub Pages serves under '/GenesisCA/'; dev and the Tauri native shell serve
-  // at root '/'. Tauri sets TAURI_ENV_* during its beforeBuildCommand, so the
-  // native build gets base '/' (its webview loads dist/ from tauri://localhost/).
-  const base = command === 'build' && !process.env.TAURI_ENV_PLATFORM ? '/GenesisCA/' : '/';
+  // Only the GitHub Pages deploy serves under '/GenesisCA/' — its workflow
+  // (.github/workflows/deploy.yml) sets GHPAGES=1 for the build. Everything else
+  // — `npm run dev`, a local `npm run build` + `npm run preview`, and the Tauri
+  // native shell — uses root '/', so local dev AND preview just work at
+  // http://localhost:<port>/ with no base-path suffix to trip over.
+  const base = process.env.GHPAGES ? '/GenesisCA/' : '/';
   return {
     base,
     plugins: [
@@ -181,7 +188,10 @@ export default defineConfig(({ command }) => {
       // Keep VitePWA LAST: the library plugins generate models/macros index.json
       // + thumbnails in closeBundle(); the SW precache glob must run after them.
       VitePWA({
-        registerType: 'prompt',
+        // Silent auto-update: a new deploy is applied on the next load with no
+        // prompt. There's no in-app "check for updates" channel and the app does
+        // no online processing, so an "update available" toast would be noise.
+        registerType: 'autoUpdate',
         manifest: buildManifest(base),
         includeAssets: ['favicon.ico', 'apple-touch-icon-180x180.png', 'icon.svg'],
         workbox: {
@@ -193,8 +203,12 @@ export default defineConfig(({ command }) => {
           // they're runtime-cached on first open via the rule below.
           globPatterns: [
             '**/*.{js,css,html,ico,png,svg,woff2,wasm}',
-            'models/index.json', 'models/*.thumb.{gif,png,jpg,jpeg,webp}',
-            'macros/index.json', 'macros/*.gcamacro',
+            // Library files exist only in the BUILD output (dist/), not dev-dist,
+            // so precache them only for the build — otherwise Workbox warns they
+            // match nothing during `vite dev`.
+            ...(command === 'build'
+              ? ['models/index.json', 'models/*.thumb.{gif,png,jpg,jpeg,webp}', 'macros/index.json', 'macros/*.gcamacro']
+              : []),
           ],
           navigateFallback: `${base}index.html`,
           maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
@@ -221,6 +235,10 @@ export default defineConfig(({ command }) => {
             },
           ],
         },
+        // Run the SW under `vite dev` too, so you can install + test the PWA
+        // (offline, the install button, the WCO header) straight from
+        // `npm run dev` at http://localhost:5173/ — no build/preview needed. The
+        // library globs above are build-only, so dev emits no Workbox warnings.
         devOptions: { enabled: true, type: 'module' },
       }),
     ],

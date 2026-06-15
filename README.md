@@ -31,11 +31,11 @@ Pre-made models to explore and learn from. Enabling users to build upon classica
 ![Library](docs/Gifs/model_library.gif)
 
 ### **In-app Help**
-Detailed in-app help tab with a comprehensive tutorial and reference material regarding features, usage, shortcuts and such. Press **?** anywhere (or the navbar **?** button) for a quick on-screen shortcuts cheat sheet, and **F** (or the **⛶** button on the canvas) to maximize the canvas. A navbar **Theme** switcher offers two dark themes (**Blender** and **Nocturne**):
+Detailed in-app help tab with a comprehensive tutorial and reference material regarding features, usage, shortcuts and such. Press **?** anywhere (or the navbar keyboard-shortcuts button) for a quick on-screen shortcuts cheat sheet, and **F** (or the **⛶** button on the canvas) to maximize the canvas. A navbar **Theme** switcher offers two dark themes (**Blender** and **Nocturne**):
 ![Library](docs/Gifs/help.gif)
 
 ### **Install & Offline**
-GenesisCA is an installable [Progressive Web App](https://web.dev/explore/progressive-web-apps). Open it in Chrome or Edge and use the navbar **⤓ Install** button (or the browser's own install affordance) to add it as a standalone desktop app — its own window and icon, no browser chrome — that **runs fully offline**: the app, the Models Library, previews, and your work are served from a local cache. A native installer (`.msi`/`.exe`) is in progress via a [Tauri](https://tauri.app) shell that wraps the same build.
+GenesisCA is an installable [Progressive Web App](https://web.dev/explore/progressive-web-apps). Open it in Chrome or Edge and use the navbar **⤓ Install** button (or the browser's own install affordance) to add it as a standalone desktop app — its own window and icon (no tabs or address bar) — that **runs fully offline**: the app, the Models Library, previews, and your work are served from a local cache. A native Windows installer (NSIS `setup.exe`) — a [Tauri](https://tauri.app) shell wrapping the same build — is published to the [Releases](https://github.com/rff255/GenesisCA/releases/latest) page.
 
 ### **Example**
 Gray-Scott Reaction-Diffusion model `[Peter Gray & Stephen K. Scott (1983)]`:
@@ -214,14 +214,16 @@ The app opens at **http://localhost:5173**.
 
 ### Native desktop build (Tauri)
 
-A [Tauri v2](https://v2.tauri.app) scaffold lives in `src-tauri/`. It wraps the same web build in a lightweight native window (the OS webview — WebView2 on Windows) and produces real installers: `.msi` + NSIS `.exe` on Windows, `.dmg` / `.deb` / `.AppImage` elsewhere.
+A [Tauri v2](https://v2.tauri.app) shell in `src-tauri/` wraps the same web build in a lightweight native window (the OS webview — WebView2 on Windows). It builds an **NSIS `setup.exe`** installer (plus a portable `GenesisCA.exe`); the cross-platform targets (`.dmg` / `.deb` / `.AppImage`) come from the same project on their respective OSes. The native version is read from `package.json`, so it always matches the web app.
 
-Building it needs the [Rust toolchain](https://www.rust-lang.org/tools/install) (`rustup`) in addition to Node — on Windows, WebView2 ships with Windows 10/11. With Rust installed:
+Building needs the [Rust toolchain](https://www.rust-lang.org/tools/install) (`rustup`) in addition to Node — on Windows, WebView2 ships with Windows 10/11. With Rust installed:
 
 ```bash
 npm run tauri dev     # run the app in a native window
-npm run tauri build   # produce platform installers
+npm run tauri build   # produce the installer
 ```
+
+CI builds and publishes the Windows installer to [Releases](https://github.com/rff255/GenesisCA/releases/latest) on every `v*` tag (`.github/workflows/release.yml`).
 
 > Note: WebGPU is only guaranteed on the Windows (WebView2/Chromium) native build; macOS/Linux Tauri builds use WebKit, where the simulator falls back to the WASM/JS compile targets.
 
@@ -233,7 +235,7 @@ npm run tauri build   # produce platform installers
 - **Canvas2D** — grid rendering
 - **Web Workers** — off-thread simulation engine
 - **vite-plugin-pwa + Workbox** — installable, offline-capable PWA (service worker + manifest)
-- **Tauri v2** — native desktop shell scaffold (`.msi`/`.exe`/`.dmg`/`.AppImage`)
+- **Tauri v2** — native desktop shell (NSIS `.exe` installer; cross-platform capable)
 - **CSS Modules** — scoped component styling
 
 ---

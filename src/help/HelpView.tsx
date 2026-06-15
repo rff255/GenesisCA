@@ -79,16 +79,16 @@ export function HelpView() {
             Once visited, the app works <strong>fully offline</strong>: the interface, the
             Models Library list and previews, and the simulation engine are cached locally,
             so you can keep modeling and simulating with no connection. Library models are
-            cached the first time you open them. A short toast confirms when the app is{' '}
-            <em>ready to work offline</em>, and again when a new version is available
-            (click <strong>Reload</strong> to update).
+            cached the first time you open them, and new versions are applied automatically
+            the next time you open the app.
           </p>
           <p className={styles.p}>
             Your projects are never uploaded &mdash; saving still downloads a local
             .gcaproj / .gcastate file to your computer as before. Installing also asks the
             browser for <strong>durable storage</strong> so the offline cache isn&rsquo;t
             evicted under disk pressure. (Installing does not raise the memory ceiling for
-            very large grids &mdash; a native desktop build for that is in progress.)
+            very large grids &mdash; the native desktop build, downloadable from the project&rsquo;s
+            Releases page, is what lifts that.)
           </p>
         </section>
 
