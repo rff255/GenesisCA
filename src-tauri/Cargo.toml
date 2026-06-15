@@ -8,12 +8,15 @@ license = "GPL-3.0-only"
 
 # The frontend (this whole Vite/React app) is the UI; the Rust side is a thin
 # native host. Build with `npm run tauri build` (needs a Rust toolchain — see
-# README "Native build"). Produces an NSIS .exe installer on Windows (MSI
-# dropped), and .dmg / .deb / .AppImage on their respective OSes.
+# README "Native build"). bundle.active=false in tauri.conf.json, so this
+# produces a STANDALONE PORTABLE exe (target/release/genesisca.exe) — NO
+# installer — that runs from anywhere (e.g. a USB stick). The PWA is the main
+# install path; .github/workflows/release.yml publishes this exe to a GitHub
+# Release on a version tag.
 #
-# NOTE: the user-facing/installer version comes from package.json (tauri.conf.json
-# reads "../package.json"), NOT this [package] version — this is just the Rust
-# crate version and doesn't need to track package.json.
+# NOTE: the user-facing version comes from package.json (tauri.conf.json reads
+# "../package.json"), NOT this [package] version — this is just the Rust crate
+# version and doesn't need to track package.json.
 
 [lib]
 name = "genesisca_lib"
