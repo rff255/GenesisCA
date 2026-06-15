@@ -169,6 +169,13 @@ function buildManifest(base: string) {
       { src: `${base}pwa-512x512.png`, sizes: '512x512', type: 'image/png', purpose: 'any' },
       { src: `${base}maskable-icon-512x512.png`, sizes: '512x512', type: 'image/png', purpose: 'maskable' },
     ],
+    // Register GenesisCA as the OS handler for .gcaproj so double-clicking a
+    // project file launches the installed PWA and loads it (File Handling API —
+    // Chromium desktop + installed PWA only; a one-time permission prompt on
+    // first use). The launchQueue consumer in App.tsx receives the opened file.
+    file_handlers: [
+      { action: base, accept: { 'application/x-genesisca-project': ['.gcaproj'] } },
+    ],
   };
 }
 

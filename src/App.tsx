@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ModelProvider, useModel } from './model/ModelContext';
+import { readModelFile } from './model/fileOperations';
 import { registerSW } from 'virtual:pwa-register';
 import { FileMenu } from './components/FileMenu';
 import { InstallButton } from './components/InstallButton';
@@ -22,6 +23,10 @@ function AppInner() {
   // picking a model to explore or fork.
   const [mode, setMode] = useState<AppMode>('library');
   const { model, isDirty, loadedFileName, loadModel } = useModel();
+  // Live dirty-state ref for the once-registered file-handler consumer (below),
+  // which would otherwise capture a stale isDirty from mount.
+  const isDirtyRef = useRef(isDirty);
+  isDirtyRef.current = isDirty;
   // Pending library-load that's waiting for an unsaved-changes confirmation.
   // Holds the requested model so the deferred onConfirm has a closed-over
   // reference; setting to null dismisses the dialog.
@@ -89,6 +94,34 @@ function AppInner() {
     afterLoad(model.properties.name);
   };
 
+  // OS file association: when GenesisCA is launched by opening a .gcaproj — the
+  // PWA File Handling API, declared via manifest `file_handlers` — load that
+  // project. Chromium desktop + installed PWA only; a no-op everywhere else
+  // (browser tab, Firefox, Safari). Registered once; isDirtyRef keeps the
+  // unsaved-changes guard live for warm launches into an already-open app.
+  useEffect(() => {
+    const lq = (window as unknown as {
+      launchQueue?: { setConsumer: (cb: (p: { files: FileSystemFileHandle[] }) => void) => void };
+    }).launchQueue;
+    if (!lq) return;
+    lq.setConsumer(async ({ files }) => {
+      const handle = files && files[0];
+      if (!handle) return;
+      try {
+        const file = await handle.getFile();
+        const parsed = await readModelFile(file);
+        if (isDirtyRef.current) {
+          setPendingLibLoad({ model: parsed, fileName: file.name });
+        } else {
+          loadModel(parsed, file.name);
+          afterLoad(parsed.properties?.name ?? 'Model');
+        }
+      } catch (err) {
+        showToast(`Could not open file: ${err instanceof Error ? err.message : 'invalid project file'}`);
+      }
+    });
+  }, []);
+
   return (
     <div className={styles.app} onContextMenu={e => e.preventDefault()}>
       <nav className={styles.navbar}>
@@ -102,7 +135,7 @@ function AppInner() {
             height={22}
             draggable={false}
           />
-          <span className={styles.title}>GenesisCA <span className={styles.version}>v1.19.0</span></span>
+          <span className={styles.title}>GenesisCA <span className={styles.version}>v1.19.1</span></span>
           <FileMenu onNew={() => setMode('modeler')} onLoaded={afterLoad} />
           <button
             className={`${styles.navButton} ${mode === 'library' ? styles.navButtonActive : ''}`}
