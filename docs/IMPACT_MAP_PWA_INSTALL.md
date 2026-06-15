@@ -1,7 +1,7 @@
 # Impact Map — PWA Install + Offline Support (and the Tauri path)
 
 **Status:** Impact map (impact-map-first, pre-implementation, per project convention).
-**Goal:** Make GenesisCA an installable app with full offline support on GitHub Pages — its own window, its own icon, no browser chrome — with an honest assessment of the PWA-now vs native-later (Tauri) path.
+**Goal:** Make GenesisCA an installable app with full offline support on GitHub Pages — its own window, its own icon (no tabs/address bar) — with an honest assessment of the PWA-now vs native-later (Tauri) path.
 **Recon basis:** build/deploy, navbar UI, runtime/offline fetch surface, icon/brand palette, and library research (`vite-plugin-pwa@1.3.0` / Web App Manifest / `navigator.storage.persist()` / Tauri v2).
 
 ---
@@ -207,14 +207,14 @@ Against the three stated goals: **(1) avoid browser resource limits, (2) own Win
 | Goal | PWA delivers? | Precise truth |
 |---|---|---|
 | (1) Avoid resource limits | **Storage: yes. Memory: no.** | PWA + `persist()` improves **storage durability** + gives a generous **disk** quota (~60% of disk). It does NOT raise **RAM/heap/WASM-memory** — 25M-cell grids + `wasmMemory` are bound by V8 + the WASM32 4 GiB address space whether installed or not. |
-| (2) Own Windows app + icon | **Yes (mostly)** | Installed PWA = its own Start-menu/taskbar entry, own window (`display:standalone`, no browser chrome), own icon. A real launchable app — but installed *via the browser*, not a double-click `.exe`/`.msi`. |
+| (2) Own Windows app + icon | **Yes (mostly)** | Installed PWA = its own Start-menu/taskbar entry, own window (`display:standalone` — no tabs/address bar, though a thin title bar remains), own icon. A real launchable app — but installed *via the browser*, not a double-click installer. |
 | (3) Install to other systems | **Yes** | Any HTTPS visitor on Chrome/Edge (Win/Mac/Linux/Android) installs from the browser; iOS via Add to Home Screen. Zero distribution infra. |
 
 **The decisive distinction is memory vs storage.** If "avoid browser resource limits" means the big-grid memory ceiling, PWA does nothing for it — only a native shell escapes the tab memory model + storage quotas. If it means "stop evicting my cached models" / "guaranteed offline," PWA + `persist()` is exactly right.
 
-**Tauri v2 (the native follow-up):** wraps the unchanged `dist/` in a Rust host using the OS webview (WebView2/Chromium on Windows), emits real `.msi` (WiX, Windows-only build) + `-setup.exe` (NSIS, cross-buildable) + macOS `.dmg` + Linux `.deb`/`.rpm`/`.AppImage`. Its `fs` plugin gives true native file read/write **bypassing browser storage quotas entirely**, and the app runs as a native process not bound to a tab's memory model. ~3–10 MB bundle vs Electron's ~85 MB. **Prototype-first caveat for THIS app:** Tauri uses the host webview, so on **macOS/Linux it's WebKit, where WebGPU + some Canvas/WASM behaviors differ** — GenesisCA's WebGPU compile target may need to fall back to WASM/JS on those targets. On Windows (WebView2 = Chromium) parity with the PWA is high.
+**Tauri v2 (the native follow-up):** wraps the unchanged `dist/` in a Rust host using the OS webview (WebView2/Chromium on Windows), emits an NSIS `-setup.exe` (Windows — what GenesisCA ships) + macOS `.dmg` + Linux `.deb`/`.rpm`/`.AppImage`. Its `fs` plugin gives true native file read/write **bypassing browser storage quotas entirely**, and the app runs as a native process not bound to a tab's memory model. ~3–10 MB bundle vs Electron's ~85 MB. **Prototype-first caveat for THIS app:** Tauri uses the host webview, so on **macOS/Linux it's WebKit, where WebGPU + some Canvas/WASM behaviors differ** — GenesisCA's WebGPU compile target may need to fall back to WASM/JS on those targets. On Windows (WebView2 = Chromium) parity with the PWA is high.
 
-**One-line recommendation:** ship the PWA now (installable Windows app + own icon + cross-platform install + full offline, today, near-zero risk, reuses `dist/`); plan Tauri v2 as a follow-up if the real constraint is memory or native filesystem — same `dist/`, real `.msi`/`.exe`, native fs, no quota — and prototype WebGPU-on-WebKit before committing to non-Windows native builds.
+**One-line recommendation:** ship the PWA now (installable Windows app + own icon + cross-platform install + full offline, today, near-zero risk, reuses `dist/`); plan Tauri v2 as a follow-up if the real constraint is memory or native filesystem — same `dist/`, a real `.exe` installer, native fs, no quota — and prototype WebGPU-on-WebKit before committing to non-Windows native builds.
 
 ---
 

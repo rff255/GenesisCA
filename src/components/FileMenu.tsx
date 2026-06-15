@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useModel } from '../model/ModelContext';
 import {
   serializeModel,
@@ -47,6 +47,35 @@ export function FileMenu({ onNew, onLoaded }: {
   modelRef.current = model;
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm>(null);
+  // File dropdown open state. Closes on any outside press or Escape.
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  // The dropdown is position:fixed (measured from the trigger) so it is NOT
+  // clipped by the navbar's `.navLeft { overflow: hidden }`.
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const toggleMenu = () => {
+    if (!open && triggerRef.current) {
+      const r = triggerRef.current.getBoundingClientRect();
+      setMenuPos({ top: Math.round(r.bottom + 4), left: Math.round(r.left) });
+    }
+    setOpen(o => !o);
+  };
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  /** Close the menu, then run the chosen action. */
+  const runItem = (fn: () => void) => { setOpen(false); fn(); };
 
   const handleNew = () => {
     if (isDirty) {
@@ -137,16 +166,24 @@ export function FileMenu({ onNew, onLoaded }: {
   };
 
   return (
-    <div className={styles.fileMenu}>
-      <button className={styles.menuButton} onClick={handleNew}>
-        New
+    <div className={styles.fileMenu} ref={menuRef}>
+      <button
+        ref={triggerRef}
+        className={`${styles.menuButton} ${open ? styles.menuButtonActive : ''}`}
+        onClick={toggleMenu}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        File
+        <span className={styles.caret} aria-hidden="true">▾</span>
       </button>
-      <button className={styles.menuButton} onClick={handleSave}>
-        Save
-      </button>
-      <button className={styles.menuButton} onClick={handleLoad}>
-        Load
-      </button>
+      {open && menuPos && (
+        <div className={styles.dropdown} role="menu" style={{ top: menuPos.top, left: menuPos.left }}>
+          <button className={styles.dropdownItem} role="menuitem" onClick={() => runItem(handleNew)}>New</button>
+          <button className={styles.dropdownItem} role="menuitem" onClick={() => runItem(handleSave)}>Save</button>
+          <button className={styles.dropdownItem} role="menuitem" onClick={() => runItem(handleLoad)}>Load</button>
+        </div>
+      )}
       <input
         ref={fileInputRef}
         type="file"

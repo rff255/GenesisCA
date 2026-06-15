@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GenesisCA — PWA, Installers & Offline, explained</title>
+<style>
+  :root{
+    --bg:#0c0d10; --surface:#16181d; --elev:#1d2026; --border:#2a2d35;
+    --text:#ecebe6; --muted:#9a988e; --faint:#6c6a63;
+    --amber:#e8a13a; --amber-soft:rgba(232,161,58,0.13);
+    --blue:#5a9bd4; --blue-soft:rgba(90,155,212,0.13);
+    --green:#6abe6a; --green-soft:rgba(106,190,106,0.13);
+    --purple:#a98bd6; --purple-soft:rgba(169,139,214,0.13);
+    --red:#d65a5a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.6;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:980px;margin:0 auto;padding:40px 28px 80px}
+  h1{font-size:30px;font-weight:600;margin:0 0 6px;letter-spacing:.01em}
+  h2{font-size:21px;font-weight:600;margin:46px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+  h3{font-size:16px;font-weight:600;margin:22px 0 8px}
+  p{margin:10px 0;color:#dad8d0}
+  .sub{color:var(--muted);font-size:15px;margin:0 0 8px}
+  .lead{font-size:16px;color:#dad8d0}
+  code{background:#000;color:#f0c98a;padding:1px 6px;border-radius:5px;font-size:.86em;
+    font-family:ui-monospace,"Cascadia Code",Consolas,monospace}
+  strong{color:var(--text);font-weight:600}
+  a{color:var(--amber)}
+  .callout{background:var(--amber-soft);border:1px solid var(--amber);border-radius:12px;
+    padding:16px 18px;margin:18px 0}
+  .callout.blue{background:var(--blue-soft);border-color:var(--blue)}
+  .callout h3{margin-top:0}
+  .grid{display:grid;gap:14px}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  @media(max-width:760px){.g3,.g2{grid-template-columns:1fr}}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px}
+  .card.amber{border-color:var(--amber)} .card.blue{border-color:var(--blue)}
+  .card.green{border-color:var(--green)} .card.purple{border-color:var(--purple)}
+  .tag{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+    padding:3px 9px;border-radius:20px;margin-bottom:8px}
+  .tag.amber{background:var(--amber-soft);color:var(--amber)}
+  .tag.blue{background:var(--blue-soft);color:var(--blue)}
+  .tag.green{background:var(--green-soft);color:var(--green)}
+  .tag.purple{background:var(--purple-soft);color:var(--purple)}
+  .card h3{margin:0 0 6px;font-size:16px}
+  .card p{margin:6px 0;font-size:14px;color:#cfcdc5}
+  .fig{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px;margin:16px 0}
+  .figcap{color:var(--muted);font-size:13px;margin-top:10px;text-align:center}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.03em}
+  td.feat{color:var(--text);font-weight:500;white-space:nowrap}
+  .yes{color:var(--green);font-weight:600}
+  .no{color:var(--red)}
+  .partial{color:var(--amber)}
+  .pill{display:inline-flex;align-items:center;gap:7px;background:var(--elev);border:1px solid var(--border);
+    border-radius:8px;padding:7px 12px;font-size:13px;color:var(--text)}
+  ul{margin:8px 0;padding-left:20px;color:#cfcdc5;font-size:14px}
+  li{margin:4px 0}
+  .mono-note{font-size:13px;color:var(--muted)}
+  svg{display:block;max-width:100%;height:auto;margin:0 auto}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;justify-content:center;margin-top:12px;font-size:12.5px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:4px">
+    <svg width="34" height="34" viewBox="0 0 512 512" aria-hidden="true">
+      <defs>
+        <radialGradient id="cg" cx="36%" cy="30%" r="78%"><stop offset="0" stop-color="#f8c96e"/><stop offset=".58" stop-color="#e8a13a"/><stop offset="1" stop-color="#c9801f"/></radialGradient>
+        <radialGradient id="tg" cx="34%" cy="26%" r="92%"><stop offset="0" stop-color="#1d2026"/><stop offset="1" stop-color="#0a0b0e"/></radialGradient>
+      </defs>
+      <rect width="512" height="512" rx="110" fill="url(#tg)"/>
+      <circle cx="180" cy="256" r="118" fill="url(#cg)"/><circle cx="332" cy="256" r="118" fill="url(#cg)"/>
+      <circle cx="332" cy="256" r="118" fill="none" stroke="#a8640f" stroke-opacity=".45" stroke-width="5"/>
+    </svg>
+    <h1>PWA, installers &amp; offline — explained</h1>
+  </div>
+  <p class="lead">Everything that the install / packaging work added to GenesisCA: what a PWA is, how the
+  browser PWA differs from the native installer and the standalone executable,
+  when each pop-up appears, and what installing actually unlocks (and what it doesn&rsquo;t).</p>
+</header>
+
+<div class="callout">
+  <h3>30-second version</h3>
+  <p style="margin:0">There is <strong>one app</strong> (your built <code>dist/</code> folder). It can run three ways:
+  in a <strong>browser tab</strong>, as an <strong>installed PWA</strong> (its own window + icon, works offline), or as a
+  <strong>native app</strong> from an installer (a real <code>.exe</code>). Installing gives you offline use, a real app window,
+  and a durable cache — but <strong>not</strong> more memory. More RAM/CPU headroom for huge grids only comes from the
+  native (Tauri) build, which escapes the browser sandbox.</p>
+</div>
+
+<!-- ============ 1. ONE BUILD, THREE RUNTIMES ============ -->
+<h2>1 · One app, three ways to run it</h2>
+<p>The same code builds once into a <code>dist/</code> folder. That folder is delivered to you in three different
+&ldquo;shells,&rdquo; each with a different amount of <strong>isolation</strong> from your operating system.</p>
+
+<div class="fig">
+<svg viewBox="0 0 920 360" role="img" aria-label="One dist build feeds three runtimes: browser tab, installed PWA, and native app">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#7c7a72" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  </defs>
+  <!-- source -->
+  <rect x="360" y="20" width="200" height="58" rx="10" fill="#1d2026" stroke="#3a3d45"/>
+  <text x="460" y="44" text-anchor="middle" fill="#ecebe6" font-size="15" font-weight="600" font-family="system-ui">dist/ — your built app</text>
+  <text x="460" y="63" text-anchor="middle" fill="#9a988e" font-size="12.5" font-family="system-ui">HTML · JS · CSS · sim worker · icons</text>
+  <!-- arrows down -->
+  <path d="M460 78 L460 100 L160 100 L160 132" fill="none" stroke="#7c7a72" stroke-width="1.5" marker-end="url(#ar)"/>
+  <path d="M460 78 L460 132" fill="none" stroke="#7c7a72" stroke-width="1.5" marker-end="url(#ar)"/>
+  <path d="M460 78 L460 100 L760 100 L760 132" fill="none" stroke="#7c7a72" stroke-width="1.5" marker-end="url(#ar)"/>
+  <!-- browser tab -->
+  <rect x="40" y="134" width="240" height="196" rx="12" fill="#16181d" stroke="#5a9bd4"/>
+  <rect x="40" y="134" width="240" height="34" rx="12" fill="rgba(90,155,212,0.13)"/>
+  <text x="160" y="156" text-anchor="middle" fill="#5a9bd4" font-size="14" font-weight="600" font-family="system-ui">Browser tab</text>
+  <text x="160" y="190" text-anchor="middle" fill="#ecebe6" font-size="12.5" font-family="system-ui">Just visit the URL</text>
+  <text x="160" y="212" text-anchor="middle" fill="#cfcdc5" font-size="12" font-family="system-ui">Runs inside a browser tab</text>
+  <text x="160" y="232" text-anchor="middle" fill="#cfcdc5" font-size="12" font-family="system-ui">Shares the browser&rsquo;s process</text>
+  <text x="160" y="252" text-anchor="middle" fill="#cfcdc5" font-size="12" font-family="system-ui">Cached after first visit</text>
+  <text x="160" y="300" text-anchor="middle" fill="#9a988e" font-size="11.5" font-family="system-ui">most isolated · least integrated</text>
+  <!-- PWA -->
+  <rect x="340" y="134" width="240" height="196" rx="12" fill="#16181d" stroke="#e8a13a"/>
+  <rect x="340" y="134" width="240" height="34" rx="12" fill="rgba(232,161,58,0.13)"/>
+  <text x="460" y="156" text-anchor="middle" fill="#e8a13a" font-size="14" font-weight="600" font-family="system-ui">Installed PWA</text>
+  <text x="460" y="190" text-anchor="middle" fill="#ecebe6" font-size="12.5" font-family="system-ui">Browser &ldquo;Install&rdquo; button</text>
+  <text x="460" y="212" text-anchor="middle" fill="#cfcdc5" font-size="12" font-family="system-ui">Own window + taskbar icon</text>
+  <text x="460" y="232" text-anchor="middle" fill="#cfcdc5" font-size="12" font-family="system-ui">Works fully offline</text>
+  <text x="460" y="252" text-anchor="middle" fill="#cfcdc5" font-size="12" font-family="system-ui">Durable, protected cache</text>
+  <text x="460" y="300" text-anchor="middle" fill="#9a988e" font-size="11.5" font-family="system-ui">still web-sandboxed</text>
+  <!-- native -->
+  <rect x="640" y="134" width="240" height="196" rx="12" fill="#16181d" stroke="#6abe6a"/>
+  <rect x="640" y="134" width="240" height="34" rx="12" fill="rgba(106,190,106,0.13)"/>
+  <text x="760" y="156" text-anchor="middle" fill="#6abe6a" font-size="14" font-weight="600" font-family="system-ui">Native app (Tauri)</text>
+  <text x="760" y="190" text-anchor="middle" fill="#ecebe6" font-size="12.5" font-family="system-ui">NSIS .exe installer</text>
+  <text x="760" y="212" text-anchor="middle" fill="#cfcdc5" font-size="12" font-family="system-ui">Standalone native process</text>
+  <text x="760" y="232" text-anchor="middle" fill="#cfcdc5" font-size="12" font-family="system-ui">Real filesystem access</text>
+  <text x="760" y="252" text-anchor="middle" fill="#cfcdc5" font-size="12" font-family="system-ui">No browser storage quota</text>
+  <text x="760" y="300" text-anchor="middle" fill="#9a988e" font-size="11.5" font-family="system-ui">least isolated · most power</text>
+</svg>
+<div class="figcap">The further right you go, the less the OS &ldquo;sandboxes&rdquo; the app — and the more it can do.</div>
+</div>
+
+<!-- ============ 2. WHAT IS A PWA ============ -->
+<h2>2 · What is a PWA?</h2>
+<p>A <strong>PWA (Progressive Web App)</strong> is an ordinary website that ships two extra ingredients so a browser
+will treat it like an installable, offline-capable app:</p>
+<div class="grid g2">
+  <div class="card"><h3>① A Web App Manifest</h3>
+    <p>A small file describing the app&rsquo;s <strong>identity</strong>: name, icons, theme colour, and that it should open
+    in its own <em>standalone</em> window (no tabs / address bar). This is what lets the browser offer &ldquo;Install&rdquo;.</p></div>
+  <div class="card"><h3>② A Service Worker</h3>
+    <p>A tiny background script the browser keeps even when the app is closed. It sits between the app and the network and
+    <strong>serves files from a local cache</strong> — which is what makes the app load instantly and work with no internet.</p></div>
+</div>
+
+<div class="fig">
+<svg viewBox="0 0 760 250" role="img" aria-label="The service worker sits between the app and the cache or network">
+  <defs>
+    <marker id="ar2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#7c7a72" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  </defs>
+  <rect x="40" y="96" width="170" height="58" rx="10" fill="#1d2026" stroke="#3a3d45"/>
+  <text x="125" y="122" text-anchor="middle" fill="#ecebe6" font-size="14" font-weight="600" font-family="system-ui">GenesisCA UI</text>
+  <text x="125" y="140" text-anchor="middle" fill="#9a988e" font-size="12" font-family="system-ui">the app you see</text>
+
+  <rect x="295" y="96" width="170" height="58" rx="10" fill="rgba(232,161,58,0.13)" stroke="#e8a13a"/>
+  <text x="380" y="122" text-anchor="middle" fill="#e8a13a" font-size="14" font-weight="600" font-family="system-ui">Service Worker</text>
+  <text x="380" y="140" text-anchor="middle" fill="#cfcdc5" font-size="12" font-family="system-ui">the offline gatekeeper</text>
+
+  <rect x="560" y="36" width="170" height="54" rx="10" fill="rgba(106,190,106,0.13)" stroke="#6abe6a"/>
+  <text x="645" y="60" text-anchor="middle" fill="#6abe6a" font-size="13.5" font-weight="600" font-family="system-ui">Local cache</text>
+  <text x="645" y="78" text-anchor="middle" fill="#cfcdc5" font-size="11.5" font-family="system-ui">app + models</text>
+
+  <rect x="560" y="160" width="170" height="54" rx="10" fill="#1d2026" stroke="#5a9bd4"/>
+  <text x="645" y="184" text-anchor="middle" fill="#5a9bd4" font-size="13.5" font-weight="600" font-family="system-ui">Network</text>
+  <text x="645" y="202" text-anchor="middle" fill="#cfcdc5" font-size="11.5" font-family="system-ui">only if online</text>
+
+  <path d="M210 125 L292 125" fill="none" stroke="#7c7a72" stroke-width="1.5" marker-end="url(#ar2)"/>
+  <path d="M465 116 L558 70" fill="none" stroke="#6abe6a" stroke-width="1.5" marker-end="url(#ar2)"/>
+  <path d="M465 134 L558 185" fill="none" stroke="#7c7a72" stroke-width="1.2" stroke-dasharray="5 5" marker-end="url(#ar2)"/>
+  <text x="500" y="92" fill="#6abe6a" font-size="11.5" font-family="system-ui">cache first</text>
+  <text x="486" y="172" fill="#9a988e" font-size="11.5" font-family="system-ui">fallback</text>
+</svg>
+<div class="figcap">Every request goes through the service worker. It answers from the cache first, so the app keeps working offline.</div>
+</div>
+
+<p>In GenesisCA the cache holds the app itself, the simulation engine (the Web Worker), all the icons, the Models
+Library index, the macros, and the card thumbnails. Individual model files are cached the first time you open them.
+None of this requires a server — it&rsquo;s all static files.</p>
+
+<!-- ============ 3. PIPELINE ============ -->
+<h2>3 · The build pipeline</h2>
+<p>One command builds the web app; the PWA pieces are generated automatically; a second command wraps that exact
+output into native installers.</p>
+
+<div class="fig">
+<svg viewBox="0 0 920 300" role="img" aria-label="Build pipeline from source to dist to GitHub Pages PWA and to native installers">
+  <defs>
+    <marker id="ar3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#7c7a72" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  </defs>
+  <rect x="30" y="116" width="150" height="58" rx="10" fill="#1d2026" stroke="#3a3d45"/>
+  <text x="105" y="140" text-anchor="middle" fill="#ecebe6" font-size="13.5" font-weight="600" font-family="system-ui">Source code</text>
+  <text x="105" y="159" text-anchor="middle" fill="#9a988e" font-size="11.5" font-family="system-ui">React + TS</text>
+
+  <rect x="230" y="108" width="190" height="74" rx="10" fill="#16181d" stroke="#e8a13a"/>
+  <text x="325" y="132" text-anchor="middle" fill="#e8a13a" font-size="13.5" font-weight="600" font-family="system-ui">npm run build</text>
+  <text x="325" y="151" text-anchor="middle" fill="#cfcdc5" font-size="11.5" font-family="system-ui">tsc + Vite +</text>
+  <text x="325" y="167" text-anchor="middle" fill="#cfcdc5" font-size="11.5" font-family="system-ui">vite-plugin-pwa</text>
+
+  <rect x="470" y="108" width="190" height="74" rx="10" fill="#1d2026" stroke="#3a3d45"/>
+  <text x="565" y="130" text-anchor="middle" fill="#ecebe6" font-size="13.5" font-weight="600" font-family="system-ui">dist/</text>
+  <text x="565" y="149" text-anchor="middle" fill="#cfcdc5" font-size="11" font-family="system-ui">app + sw.js +</text>
+  <text x="565" y="165" text-anchor="middle" fill="#cfcdc5" font-size="11" font-family="system-ui">manifest + icons</text>
+
+  <rect x="720" y="34" width="170" height="64" rx="10" fill="rgba(232,161,58,0.13)" stroke="#e8a13a"/>
+  <text x="805" y="58" text-anchor="middle" fill="#e8a13a" font-size="13" font-weight="600" font-family="system-ui">GitHub Pages</text>
+  <text x="805" y="77" text-anchor="middle" fill="#cfcdc5" font-size="11" font-family="system-ui">= installable PWA</text>
+
+  <rect x="720" y="192" width="170" height="64" rx="10" fill="rgba(106,190,106,0.13)" stroke="#6abe6a"/>
+  <text x="805" y="216" text-anchor="middle" fill="#6abe6a" font-size="13" font-weight="600" font-family="system-ui">npm run tauri build</text>
+  <text x="805" y="235" text-anchor="middle" fill="#cfcdc5" font-size="11" font-family="system-ui">= NSIS .exe</text>
+
+  <path d="M180 145 L228 145" fill="none" stroke="#7c7a72" stroke-width="1.5" marker-end="url(#ar3)"/>
+  <path d="M420 145 L468 145" fill="none" stroke="#7c7a72" stroke-width="1.5" marker-end="url(#ar3)"/>
+  <path d="M660 135 L690 135 L690 66 L718 66" fill="none" stroke="#7c7a72" stroke-width="1.5" marker-end="url(#ar3)"/>
+  <path d="M660 155 L690 155 L690 224 L718 224" fill="none" stroke="#7c7a72" stroke-width="1.5" marker-end="url(#ar3)"/>
+</svg>
+<div class="figcap">The native installers wrap the <em>same</em> <code>dist/</code> — so the app is identical; only the shell around it differs.</div>
+</div>
+
+<!-- ============ 4. WHAT WE SHIP ============ -->
+<h2>4 · What we ship: the NSIS installer (+ a portable exe)</h2>
+<p>GenesisCA ships <strong>one</strong> installer — the NSIS <code>setup.exe</code> — plus a portable raw executable
+for quick sharing. Both contain the <strong>same</strong> app; they differ only in how it lands on your machine.</p>
+
+<div class="grid g2">
+  <div class="card amber"><span class="tag amber">setup.exe · what we ship</span>
+    <h3>NSIS installer</h3>
+    <p><code>GenesisCA_1.19.0_x64-setup.exe</code> — the friendly &ldquo;Next → Finish&rdquo; wizard.</p>
+    <p class="mono-note">Installs <strong>per-user with no admin prompt</strong>, creates Start-menu shortcuts + an uninstaller, and fetches WebView2 if it&rsquo;s missing. This is the public download, attached to each GitHub Release.</p></div>
+  <div class="card green"><span class="tag green">.exe · portable byproduct</span>
+    <h3>Standalone executable</h3>
+    <p><code>GenesisCA.exe</code> — the raw program; double-click and it runs.</p>
+    <p class="mono-note">No shortcuts or uninstaller, but nothing to install — handy for tossing to a friend. Always produced alongside the installer.</p></div>
+</div>
+<p class="sub" style="margin-top:14px">We deliberately <strong>don&rsquo;t</strong> ship the third format Tauri can make — an <strong>MSI</strong> —
+because that&rsquo;s the heavier, admin-required, enterprise/IT-managed package. NSIS serves normal users better (per-user,
+no admin), so a single installer is enough.</p>
+
+<!-- ============ 5. POPUPS ============ -->
+<h2>5 · The one pop-up that&rsquo;s left</h2>
+<p>GenesisCA deliberately shows almost no PWA notifications — the earlier toasts ("ready to work offline," "installed,"
+"new version available") were removed because they stated the obvious or had nothing actionable behind them. What remains
+is the <strong>browser&rsquo;s own install offer</strong>.</p>
+
+<div class="grid g2">
+  <div class="card blue">
+    <span class="tag blue">browser · install offer</span>
+    <h3>&ldquo;GenesisCA can be installed&rdquo;</h3>
+    <p><strong>When:</strong> the browser detects the app is installable (HTTPS, manifest + service worker) and you haven&rsquo;t installed it yet.</p>
+    <p><strong>What it does:</strong> offers to install. Use the browser&rsquo;s own icon, or the amber <strong>⤓ Install</strong> button in the top bar (same prompt). The button hides itself once installed — that&rsquo;s the only feedback (no toast).</p>
+  </div>
+  <div class="card">
+    <span class="tag" style="background:rgba(154,152,142,0.18);color:#9a988e">removed · and why</span>
+    <h3>The toasts we dropped</h3>
+    <p><strong>&ldquo;Ready to work offline&rdquo;</strong> — pointless: the app <em>always</em> works offline (no online processing), so it&rsquo;s never news.</p>
+    <p><strong>&ldquo;New version available — Reload&rdquo;</strong> — no in-app update channel to act on; new versions now apply <strong>silently</strong> on the next launch.</p>
+    <p><strong>&ldquo;Installed&rdquo;</strong> — the app opening in its own window already says that.</p>
+  </div>
+</div>
+
+<!-- ============ 6. WHAT INSTALL UNLOCKS ============ -->
+<h2>6 · What installing actually unlocks</h2>
+<p>This is the part most people get wrong, so here it is precisely — across all three ways to run the app:</p>
+
+<table>
+  <thead><tr><th>Capability</th><th>Browser tab</th><th>Installed PWA</th><th>Native app (Tauri)</th></tr></thead>
+  <tbody>
+    <tr><td class="feat">Works offline</td><td class="partial">after 1st visit</td><td class="yes">yes</td><td class="yes">yes</td></tr>
+    <tr><td class="feat">Own window + icon</td><td class="no">no (a tab)</td><td class="yes">yes</td><td class="yes">yes</td></tr>
+    <tr><td class="feat">Start-menu / taskbar app</td><td class="no">no</td><td class="yes">yes</td><td class="yes">yes</td></tr>
+    <tr><td class="feat">Durable cache (not evicted)</td><td class="partial">best-effort</td><td class="yes">yes (granted)</td><td class="yes">yes</td></tr>
+    <tr><td class="feat">Disk storage quota</td><td colspan="2" class="partial" style="text-align:center">~60% of free disk (browser-managed)</td><td class="yes">unlimited (real files)</td></tr>
+    <tr><td class="feat">RAM / memory ceiling</td><td colspan="2" class="no" style="text-align:center">browser limit — same for both</td><td class="yes">native (much higher)</td></tr>
+    <tr><td class="feat">Real filesystem (Save As anywhere)</td><td class="no">downloads only</td><td class="no">downloads only</td><td class="yes">yes</td></tr>
+    <tr><td class="feat">How you get it</td><td class="feat" style="font-weight:400">open a URL</td><td class="feat" style="font-weight:400">browser &ldquo;Install&rdquo;</td><td class="feat" style="font-weight:400">run an installer</td></tr>
+  </tbody>
+</table>
+<div class="legend">
+  <span><span class="dot" style="background:var(--green)"></span> full</span>
+  <span><span class="dot" style="background:var(--amber)"></span> partial / conditional</span>
+  <span><span class="dot" style="background:var(--red)"></span> not available</span>
+</div>
+
+<!-- ============ 7. MEMORY VS STORAGE ============ -->
+<h2>7 · The key takeaway: storage ≠ memory</h2>
+<div class="grid g2">
+  <div class="card amber"><span class="tag amber">what install DOES help</span>
+    <h3>Storage &amp; availability</h3>
+    <ul>
+      <li>Run fully <strong>offline</strong> with the whole library.</li>
+      <li>A real app <strong>window + icon</strong>, launchable from Start.</li>
+      <li><strong>Durable storage</strong> — installing makes the browser grant &ldquo;persistent&rdquo; storage automatically, so your cached models aren&rsquo;t evicted when the disk gets full.</li>
+      <li>A generous <strong>disk</strong> quota (~60% of free space).</li>
+    </ul>
+  </div>
+  <div class="card"><span class="tag" style="background:rgba(214,90,90,0.13);color:#d65a5a">what install does NOT do</span>
+    <h3>Memory / performance ceiling</h3>
+    <ul>
+      <li>It does <strong>not</strong> give the simulator more <strong>RAM</strong>. A 5000×5000 grid (25M cells) is bounded by the browser&rsquo;s memory limits whether or not you install.</li>
+      <li>Durable storage protects data <em>on disk</em>; it never touches the running memory budget.</li>
+      <li>The installed PWA runs in the <strong>same</strong> browser engine as the tab — no extra compute.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="callout">
+  <h3>If the wall you hit is memory, the answer is the native build</h3>
+  <p style="margin:0">The <strong>Tauri</strong> app (the installed <code>.exe</code>) runs as a real native process outside the
+  browser&rsquo;s sandbox. That&rsquo;s what raises the memory ceiling for very large grids and gives true filesystem access with no
+  storage quota. The PWA covers offline + installability today; the native build is the path to escaping browser resource limits.
+  (One caveat: on Windows the native shell uses the same Chromium engine as Edge, so WebGPU works; on macOS/Linux it uses WebKit,
+  where the simulator falls back to the WASM/JS engines.)</p>
+</div>
+
+<p class="sub" style="margin-top:34px;text-align:center">GenesisCA · install &amp; packaging reference · see also
+<code>docs/IMPACT_MAP_PWA_INSTALL.md</code> for the engineering detail.</p>
+
+</div>
+</body>
+</html>

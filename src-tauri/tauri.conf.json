@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "GenesisCA",
-  "version": "1.19.0",
+  "version": "../package.json",
   "identifier": "io.github.rff255.genesisca",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -26,7 +26,8 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "publisher": "GenesisCA",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

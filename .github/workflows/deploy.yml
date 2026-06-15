@@ -24,6 +24,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+        env:
+          GHPAGES: '1'   # serve under the /GenesisCA/ subpath on GitHub Pages
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
