@@ -47,12 +47,26 @@ function AppInner() {
   // does no online processing) and no "offline ready" toast (it ALWAYS works
   // offline, so announcing it is noise).
   useEffect(() => {
-    registerSW({ immediate: true });
-    // Auto-granted once installed; keeps the offline cache from being evicted
-    // under disk pressure. Storage durability only — does NOT raise the memory
-    // ceiling for large grids; neither does the current Tauri shell (same
-    // Chromium/WebView2 engine) — only a native-Rust simulation would.
-    navigator.storage?.persist?.().catch(() => {});
+    // The service worker is for the WEB PWA ONLY. Inside the Tauri native shell
+    // (WebView2) the app's assets are already embedded + offline, and a SW there
+    // caches the whole app into WebView2's PERSISTENT profile, then serves that
+    // STALE copy on every launch — so a freshly-built exe shows the OLD UI/models
+    // (the v1.19.x "stale exe" bug). So: register the SW on the web; in Tauri,
+    // UNREGISTER any prior SW + drop its caches so the embedded build always wins.
+    if ('__TAURI_INTERNALS__' in window) {
+      navigator.serviceWorker?.getRegistrations?.()
+        .then(rs => rs.forEach(r => r.unregister())).catch(() => {});
+      if (typeof caches !== 'undefined') {
+        caches.keys?.().then(ks => ks.forEach(k => caches.delete(k))).catch(() => {});
+      }
+    } else {
+      registerSW({ immediate: true });
+      // Auto-granted once installed; keeps the offline cache from being evicted
+      // under disk pressure. Storage durability only — does NOT raise the memory
+      // ceiling for large grids; neither does the current Tauri shell (same
+      // Chromium/WebView2 engine) — only a native-Rust simulation would.
+      navigator.storage?.persist?.().catch(() => {});
+    }
     // Fade out + remove the static boot splash (index.html) now that React has
     // mounted and the app shell is on screen.
     const splash = document.getElementById('splash');
@@ -135,7 +149,7 @@ function AppInner() {
             height={22}
             draggable={false}
           />
-          <span className={styles.title}>GenesisCA <span className={styles.version}>v1.19.1</span></span>
+          <span className={styles.title}>GenesisCA <span className={styles.version}>v1.19.2</span></span>
           <FileMenu onNew={() => setMode('modeler')} onLoaded={afterLoad} />
           <button
             className={`${styles.navButton} ${mode === 'library' ? styles.navButtonActive : ''}`}
