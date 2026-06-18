@@ -87,6 +87,17 @@ export interface Attribute {
   tableValues?: Record<string, Record<string, number>>;
 }
 
+/** 3D Grid CA: parametric named-shape spec for a 3D neighbourhood. Materialized
+ *  into `coords3d` by `generateCoords3d`. Stored alongside the materialized
+ *  coords (coords3d is the runtime source of truth) so the parametric editor can
+ *  re-tune; a cascade re-materializes on every spec edit so a stale spec can
+ *  never strand the coords. Metric: chebyshev = L∞ (Moore), manhattan = L1
+ *  (von Neumann), euclidean = L2 (sphere). */
+export type NeighborhoodShapeSpec =
+  | { kind: 'moore' | 'vonNeumann' | 'ball' | 'rangeN'; radius: number; metric?: 'chebyshev' | 'manhattan' | 'euclidean' }
+  | { kind: 'shell'; rIn: number; rOut: number }
+  | { kind: 'ring' | 'disk'; axis: 'x' | 'y' | 'z'; radius: number; width?: number };
+
 /** A neighborhood definition — list of relative offsets from the central cell */
 export interface Neighborhood {
   id: string;
@@ -100,6 +111,10 @@ export interface Neighborhood {
    *  2D layouts still size correctly). Absent → a classic 2D neighbourhood.
    *  Materialized from `shape` (PR4) by `generateCoords3d`. */
   coords3d?: Array<[number, number, number]>;
+  /** 3D Grid CA: the parametric spec that materialized `coords3d` (when the
+   *  neighbourhood was built/edited via the parametric panel rather than the
+   *  slice editor). Re-tuning the spec re-materializes `coords3d`. */
+  shape?: NeighborhoodShapeSpec;
   margin?: number;
   /** Optional tags for individual cells: coord index → tag name */
   tags?: Record<number, string>;

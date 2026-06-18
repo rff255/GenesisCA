@@ -5,6 +5,7 @@ import { niCellExprStmts } from '../compiler/niCodec';
  *  neighborhood config — each NI carries its own offset. */
 export const GetNeighborsAttrByIndexesNode: NodeTypeDef = {
   type: 'getNeighborsAttrByIndexes',
+  requirements: { lattice2d: true },  // 2-axis packed neighborIndex codec — 2D only
   label: 'Get Neighbors Attr By Indexes',
   description: 'Reads neighbor attribute values for a provided list of NeighborIndexes (each a packed dr/dc offset).',
   category: 'data',

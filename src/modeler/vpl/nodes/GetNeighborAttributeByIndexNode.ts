@@ -11,6 +11,7 @@ import { niCellExprStmts, INVALID_NI } from '../compiler/niCodec';
  *  Symmetric with `setNeighborAttributeByIndex` which guards the same way. */
 export const GetNeighborAttributeByIndexNode: NodeTypeDef = {
   type: 'getNeighborAttributeByIndex',
+  requirements: { lattice2d: true },  // 2-axis packed neighborIndex codec — 2D only
   label: 'Get Neighbor Attr By Index',
   description: 'Reads one neighbor’s attribute given a NeighborIndex (a packed dr/dc offset). If given an array of indices, reads the first one. Returns 0 when the index is the INVALID_NI sentinel.',
   category: 'data',

@@ -4,6 +4,7 @@ import type { NodeTypeDef } from '../types';
  *  decode dr/dc, conditionally negate, re-encode. No neighborhood needed. */
 export const FlipNeighborIndexNode: NodeTypeDef = {
   type: 'flipNeighborIndex',
+  requirements: { lattice2d: true },  // 2-axis packed neighborIndex codec — 2D only
   label: 'Flip Neighbor Index',
   description: 'Mirrors a NeighborIndex horizontally (negates dCol), vertically (negates dRow), or both (180° rotation).',
   category: 'data',

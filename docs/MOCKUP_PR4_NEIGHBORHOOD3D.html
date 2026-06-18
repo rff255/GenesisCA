@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>PR4 — 3D Neighbourhood editor</title>
+<style>
+  :root{--bg:#0c0d10;--panel:#16181d;--border:#2a2d34;--muted:#888;--accent:#e8a13a;--text:#d8dadf;--cell:#1c2027;--active:#4cc9f0;--center:#e8a13a;}
+  body{background:var(--bg);color:var(--text);font:13px/1.5 system-ui,sans-serif;margin:0;padding:24px;}
+  h1{font-size:18px}h2{font-size:14px;color:var(--accent);margin-top:26px}
+  .row{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;width:280px;padding:14px}
+  .lbl{font-size:11px;color:var(--muted);display:block;margin-bottom:3px}
+  select,input{background:#0e0f13;border:1px solid var(--border);color:var(--text);border-radius:5px;padding:3px 6px}
+  .pill{display:inline-block;border:1px solid var(--border);border-radius:6px;padding:3px 9px;font-size:12px;margin:2px;background:#0e0f13;cursor:pointer}
+  .pill.on{background:var(--accent);color:#000;border-color:var(--accent)}
+  .grid{display:grid;grid-template-columns:repeat(5,28px);gap:3px;margin-top:8px}
+  .gc{width:28px;height:28px;border-radius:4px;background:var(--cell);border:1px solid #2a2d34}
+  .gc.a{background:var(--active)}.gc.c{background:var(--center);border-radius:50%}
+  .note{color:var(--muted);font-size:11px;max-width:680px}
+  code{background:#0e0f13;padding:1px 5px;border-radius:4px}
+  .tag{display:inline-block;background:var(--accent);color:#000;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;margin-left:6px}
+</style></head><body>
+<h1>PR4 — 3D Neighbourhood editor <span class="tag">NEW</span></h1>
+<p class="note">In a 3D model the Neighbourhoods detail panel swaps the flat 2D grid for two modes. The 2-axis <code>neighborIndex</code> node family is hidden (its packed codec can't carry a 3rd axis) — use <em>Get Neighbors Attribute</em> / <em>Get Neighbor Attribute by Tag</em> instead.</p>
+
+<div class="row">
+  <div class="panel">
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px"><span class="pill on">Parametric</span><span class="pill">Slice editor</span> · 26 cells · moore (r=1)</div>
+    <div style="margin-bottom:8px"><span class="lbl">Shape</span><select><option>Moore (box, L∞)</option><option>von Neumann (diamond, L1)</option><option>Ball (sphere, L2)</option><option>Range-N (box radius N)</option><option>Shell (hollow sphere)</option><option>Ring / Disk (on a plane)</option></select></div>
+    <div style="margin-bottom:8px"><span class="lbl">Radius</span><input type="text" value="1" style="width:60px"></div>
+    <div class="pill on" style="margin-top:4px">Generate shape</div>
+    <div class="note" style="margin-top:6px">Industry-norm: named shape + radius (+ metric for Range-N). One dropdown reproduces Moore (L∞), von Neumann (L1) and sphere (L2). Materialized by the pure <code>generateCoords3d</code>.</div>
+  </div>
+
+  <div class="panel">
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px"><span class="pill">Parametric</span><span class="pill on">Slice editor</span> · custom</div>
+    <div style="margin-bottom:6px"><span class="lbl">Z layer (dl)</span><span class="pill">−</span> <b>+1 •</b> <span class="pill">+</span></div>
+    <div><span class="pill on">Mark</span><span class="pill">Unmark</span> &nbsp; <span class="pill">↔ H</span><span class="pill">↕ V</span><span class="pill">⇕ L</span></div>
+    <div class="grid">
+      <div class="gc"></div><div class="gc"></div><div class="gc a"></div><div class="gc"></div><div class="gc"></div>
+      <div class="gc"></div><div class="gc a"></div><div class="gc a"></div><div class="gc a"></div><div class="gc"></div>
+      <div class="gc a"></div><div class="gc a"></div><div class="gc"></div><div class="gc a"></div><div class="gc a"></div>
+      <div class="gc"></div><div class="gc a"></div><div class="gc a"></div><div class="gc a"></div><div class="gc"></div>
+      <div class="gc"></div><div class="gc"></div><div class="gc a"></div><div class="gc"></div><div class="gc"></div>
+    </div>
+    <div class="note" style="margin-top:6px">Hand-tune (dr,dc) cells one Z-layer at a time. Right-click an active cell to tag it. The three axis-plane mirrors (H=dc, V=dr, L=dl) replace the 2D D/D2 diagonals (which don't generalize to 3D). Editing clears the parametric <code>shape</code>.</div>
+  </div>
+</div>
+
+<h2>Schema + gate</h2>
+<p class="note"><code>Neighborhood.coords3d?: [dr,dc,dl][]</code> (source of truth) + <code>shape?: NeighborhoodShapeSpec</code>; <code>coords</code> stays a same-LENGTH 2D projection (stride invariant). <code>NodeRequirements.lattice2d</code> hides the whole <code>neighborIndex</code> family (Get/Set Neighbor Attribute by Index, NeighborIndexFrom*, GetAllNeighborIndexes, FilterNeighbors, JoinNeighbors, Pick[N]RandomNeighbor, …) in 3D. Variegated Cells is forced off / disabled in 3D.</p>
+</body></html>

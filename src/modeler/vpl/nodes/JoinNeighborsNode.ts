@@ -6,6 +6,7 @@ import type { NodeTypeDef } from '../types';
  *  Mirrors FilterNeighbors' two-port shape. */
 export const JoinNeighborsNode: NodeTypeDef = {
   type: 'joinNeighbors',
+  requirements: { lattice2d: true },  // 2-axis packed neighborIndex codec — 2D only
   label: 'Join Neighbors',
   description: 'Combines two neighbor index arrays via intersection or union. Outputs both the joined NI array and its element count.',
   category: 'aggregation',

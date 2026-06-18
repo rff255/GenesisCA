@@ -4,6 +4,7 @@ import type { NodeTypeDef } from '../types';
  *  configured neighborhood's coords + tags. Emits a literal i32. */
 export const NeighborIndexFromTagNode: NodeTypeDef = {
   type: 'neighborIndexFromTag',
+  requirements: { lattice2d: true },  // 2-axis packed neighborIndex codec — 2D only
   label: 'Neighbor Index (from Tag)',
   description: 'Builds a NeighborIndex pointing at the slot of the neighborhood tagged with the given name.',
   category: 'data',

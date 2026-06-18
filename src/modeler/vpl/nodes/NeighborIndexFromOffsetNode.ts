@@ -8,6 +8,7 @@ import type { NodeTypeDef } from '../types';
  *  offsets, e.g. from model attributes encoding direction). */
 export const NeighborIndexFromOffsetNode: NodeTypeDef = {
   type: 'neighborIndexFromOffset',
+  requirements: { lattice2d: true },  // 2-axis packed neighborIndex codec — 2D only
   label: 'Neighbor Index (from Offset)',
   description: 'Builds a NeighborIndex from a (dRow, dCol) offset pair. dr and dc can be wired or set via inline number widgets.',
   category: 'data',
