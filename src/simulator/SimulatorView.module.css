@@ -665,6 +665,38 @@
   background: var(--color-tab-active-bg);
 }
 
+/* --- 3D View panel toggle buttons (text labels; auto-width, unlike the
+   fixed 28px .zoomBtn). Laid out in grids so labels never squash. --- */
+.panelToggle {
+  min-width: 0;
+  padding: 4px 6px;
+  height: 24px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-size: 0.62rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: var(--shadow-button-inset);
+  transition: background var(--duration-base), border-color var(--duration-base);
+}
+.panelToggle:hover {
+  background: var(--color-overlay-hover-medium);
+  border-color: var(--color-border-muted);
+}
+.panelToggleActive {
+  color: var(--color-text-primary);
+  border-color: var(--color-tab-active-border);
+  background: var(--color-tab-active-bg);
+}
+
 /* --- Input mapping tabs (in brush panel) --- */
 
 .mappingTabs {
