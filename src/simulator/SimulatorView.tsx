@@ -4392,24 +4392,25 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             : maxDim / 2 + 1;  // camera axis
             const planeMax = plane3d.axis === 'x' ? W - 1 : plane3d.axis === 'y' ? H - 1 : D - 1;
           const row: CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' };
+          const grid2: CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 };
+          const tbtn = (active: boolean) => `${styles.panelToggle} ${active ? styles.panelToggleActive : ''}`;
           const vizBtn = (key: keyof import('./render/gl3d').Viz3D, label: string, title: string) => (
-            <button className={`${styles.zoomBtn} ${viz3d[key] ? styles.zoomBtnActive : ''}`} style={{ flex: 1, minWidth: 0 }}
-              title={title} onClick={() => setViz3d(v => ({ ...v, [key]: !v[key] }))}>{label}</button>
+            <button className={tbtn(viz3d[key])} title={title} onClick={() => setViz3d(v => ({ ...v, [key]: !v[key] }))}>{label}</button>
           );
           return (
-            <div className={styles.zoomControls} data-sim-overlay style={{ bottom: 'auto', top: 12, right: 12, left: 'auto', flexDirection: 'column', alignItems: 'stretch', minWidth: 184, gap: 6, padding: 8 }}>
+            <div className={styles.zoomControls} data-sim-overlay style={{ bottom: 'auto', top: 12, right: 12, left: 'auto', flexDirection: 'column', alignItems: 'stretch', width: 196, gap: 6, padding: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
                 onClick={() => setControls3dOpen(o => !o)} title={controls3dOpen ? 'Collapse' : 'Expand'}>
                 <span style={{ fontSize: '0.66rem', color: '#aaa', fontWeight: 600 }}>3D View</span>
                 <span style={{ fontSize: '0.7rem', color: '#aaa' }}>{controls3dOpen ? '▾' : '▸'}</span>
               </div>
               {controls3dOpen && (<>
-                <button className={styles.zoomBtn} style={{ width: '100%' }}
+                <button className={styles.panelToggle} style={{ width: '100%' }}
                   onClick={() => { cam3dRef.current = { yaw: -0.9, pitch: 0.6, dist: 1.9, target: [0, 0, 0] }; draw(); }}
                   title="Reset the orbit camera">Reset view</button>
 
-                {/* Overlays */}
-                <div style={{ display: 'flex', gap: 4 }}>
+                {/* Overlays — 2×2 grid so the labels never squash. */}
+                <div style={grid2}>
                   {vizBtn('axes', 'Axes', 'Toggle the X/Y/Z axes (red/green/blue)')}
                   {vizBtn('grid', 'Grid', 'Toggle the X,Y floor grid')}
                   {vizBtn('bounds', 'Bounds', 'Toggle the grid bounding box')}
@@ -4434,10 +4435,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 </label>
                 {clip3d.enabled && (
                   <>
-                    <div style={{ display: 'flex', gap: 4 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
                       {(['x', 'y', 'z', 'camera'] as const).map(ax => (
-                        <button key={ax} className={`${styles.zoomBtn} ${clip3d.axis === ax ? styles.zoomBtnActive : ''}`}
-                          style={{ flex: 1, minWidth: 0 }} title={ax === 'camera' ? 'Cut along the camera view axis' : `Cut along ${ax.toUpperCase()}`}
+                        <button key={ax} className={tbtn(clip3d.axis === ax)}
+                          title={ax === 'camera' ? 'Cut along the camera view axis' : `Cut along ${ax.toUpperCase()}`}
                           onClick={() => setClip3d(c => ({ ...c, axis: ax, value: 0 }))}>{ax === 'camera' ? 'View' : ax.toUpperCase()}</button>
                       ))}
                     </div>
@@ -4455,10 +4456,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 </label>
                 {plane3d.enabled && (
                   <>
-                    <div style={{ display: 'flex', gap: 4 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4 }}>
                       {(['x', 'y', 'z'] as const).map(ax => (
-                        <button key={ax} className={`${styles.zoomBtn} ${plane3d.axis === ax ? styles.zoomBtnActive : ''}`}
-                          style={{ flex: 1, minWidth: 0 }}
+                        <button key={ax} className={tbtn(plane3d.axis === ax)}
                           onClick={() => setPlane3d(p => ({ ...p, axis: ax, pos: 0 }))}>{ax.toUpperCase()}</button>
                       ))}
                     </div>
