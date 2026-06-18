@@ -14,7 +14,7 @@ function newCondId(): string {
 }
 
 export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}) {
-  const { model, updateProperties, reorderEndConditions, updateVariegatedCells } = useModel();
+  const { model, updateProperties, reorderEndConditions, updateVariegatedCells, updateTopologyMode } = useModel();
   // Indicators are a master-detail sub-section: the list lives in this panel,
   // the selected indicator's editor opens in the shared second (detail) panel.
   // Selection rides Properties' single detail slot as an `indicator:<id>` key.
@@ -22,6 +22,9 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
   const selIndId = indSel && indSel.startsWith('indicator:') ? indSel.slice(10) : null;
   const selectInd = (id: string | null) => setIndSel(id ? `indicator:${id}` : null);
   const { properties } = model;
+  // 3D Grid CA / Bond-Graph Morphogenesis (M0a) mode state.
+  const topo = model.topologyMode ?? { gridCells: true, agents: false };
+  const is3d = (properties.dimension ?? '2d') === '3d';
   const ecReorder = useListReorder(
     properties.endConditions?.indicatorConditions || [],
     reorderEndConditions,
@@ -42,7 +45,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
   // Spatial indicators (xAxis rows/columns) produce per-position-bin arrays, not
   // a scalar/category count, so they can't drive a numeric end condition.
   const isSpatialIndicator = (i: { kind: string; xAxis?: string }) =>
-    i.kind === 'linked' && (i.xAxis === 'rows' || i.xAxis === 'columns');
+    i.kind === 'linked' && (i.xAxis === 'rows' || i.xAxis === 'columns' || i.xAxis === 'layers');
   const addIndicatorCondition = () => {
     const firstIndicator = (model.indicators || []).find(i => !isSpatialIndicator(i));
     if (!firstIndicator) return;
@@ -125,6 +128,59 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 integer
                 onNumber={n => updateProperties({ gridHeight: n })}
               />
+            </div>
+            {is3d && (
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>Grid Depth</label>
+                <NumberField
+                  className={styles.numberInput}
+                  value={properties.gridDepth ?? 1}
+                  min={1}
+                  integer
+                  onNumber={n => updateProperties({ gridDepth: n })}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Dimension — 2D lattice vs a W×H×D volume (3D Grid CA milestone). */}
+          <div style={{ marginTop: 14, borderTop: '1px solid #333', paddingTop: 10 }}>
+            <label className={styles.fieldLabel} style={{ marginBottom: 4 }}>Dimension</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 2 }}>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
+                <input
+                  type="radio"
+                  name="dimension"
+                  value="2d"
+                  checked={!is3d}
+                  onChange={() => updateProperties({ dimension: '2d' })}
+                  style={{ marginTop: 2 }}
+                />
+                <span>
+                  <strong>2D (W&times;H grid)</strong>
+                  <br />
+                  <span style={{ color: '#888', fontSize: '0.66rem' }}>
+                    Classic flat lattice. Rendered with the 2D canvas.
+                  </span>
+                </span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
+                <input
+                  type="radio"
+                  name="dimension"
+                  value="3d"
+                  checked={is3d}
+                  onChange={() => updateProperties({ dimension: '3d', gridDepth: properties.gridDepth ?? 1 })}
+                  style={{ marginTop: 2 }}
+                />
+                <span>
+                  <strong>3D (W&times;H&times;D volume)</strong>
+                  <br />
+                  <span style={{ color: '#888', fontSize: '0.66rem' }}>
+                    Voxel grid with a layer (Z) axis, rendered with an orbit camera + clip plane. Direct neighbour-index nodes are gated off; use parametric / slice neighbourhoods.
+                  </span>
+                </span>
+              </label>
             </div>
           </div>
         </div>
@@ -278,6 +334,54 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
               <span style={{ color: '#888', fontSize: '0.62rem', marginTop: 2, display: 'block' }}>
                 1 = exact (default). Higher values amortize the per-step GPU stall but a stop event may surface up to K-1 generations late.
               </span>
+            </div>
+          </div>
+
+          {/* Topology — which layer(s) the model uses. Grid Cells is the classic
+              lattice CA; Bond-Graph Agents is the agent rule graph (hard-disabled
+              this milestone — coming soon). ≥1 must stay checked (reducer-enforced;
+              Grid Cells is also UI-disabled when it's the only checked one). */}
+          <div style={{ marginTop: 14, borderTop: '1px solid #333', paddingTop: 10 }}>
+            <label className={styles.fieldLabel} style={{ marginBottom: 4 }}>Topology</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 2 }}>
+              <label
+                style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: (topo.gridCells && !topo.agents) ? 'not-allowed' : 'pointer', fontSize: '0.72rem', opacity: (topo.gridCells && !topo.agents) ? 0.55 : 1 }}
+                title={(topo.gridCells && !topo.agents) ? 'At least one topology must stay enabled.' : undefined}
+              >
+                <input
+                  type="checkbox"
+                  checked={topo.gridCells}
+                  disabled={topo.gridCells && !topo.agents}
+                  onChange={e => updateTopologyMode({ gridCells: e.target.checked })}
+                  style={{ marginTop: 2 }}
+                />
+                <span>
+                  <strong>Grid Cells</strong>
+                  <br />
+                  <span style={{ color: '#888', fontSize: '0.66rem' }}>
+                    The classic lattice cellular automaton (this app's core).
+                  </span>
+                </span>
+              </label>
+              <label
+                style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'not-allowed', fontSize: '0.72rem', opacity: 0.55 }}
+                title="Coming soon — the agent rule graph is not yet available"
+              >
+                <input
+                  type="checkbox"
+                  checked={topo.agents}
+                  disabled={true}
+                  onChange={e => updateTopologyMode({ agents: e.target.checked })}
+                  style={{ marginTop: 2 }}
+                />
+                <span>
+                  <strong>Bond-Graph Agents <em>(coming soon)</em></strong>
+                  <br />
+                  <span style={{ color: '#888', fontSize: '0.66rem' }}>
+                    Off-lattice agents joined by bonds that grow and divide into shape. Not available this release.
+                  </span>
+                </span>
+              </label>
             </div>
           </div>
 

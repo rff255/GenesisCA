@@ -15,9 +15,11 @@ export const EMPTY_MODEL: CAModel = {
     asyncScheme: 'random-order',
     gridWidth: 100,
     gridHeight: 100,
+    gridDepth: 1,
     maxIterations: 1000,
     tags: [],
     useWasm: true,
+    dimension: '2d',
   },
   attributes: [],
   neighborhoods: [],
@@ -26,6 +28,7 @@ export const EMPTY_MODEL: CAModel = {
   graphNodes: [],
   graphEdges: [],
   macroDefs: [],
+  topologyMode: { gridCells: true, agents: false },
 };
 
 /** Legacy alias of EMPTY_MODEL, kept for backwards compatibility. */

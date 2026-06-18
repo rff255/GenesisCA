@@ -1,0 +1,921 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GenesisCA — Graph Cellular Automata Investigation</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#16181d; --panel2:#1c1f26; --panel3:#22262f;
+    --border:#2a2e37; --border2:#3a3f4a;
+    --ink:#e9ebee; --muted:#9aa0aa; --faint:#6b7280;
+    --accent:#e8a13a; --accent2:#f4c06a; --accent-soft:rgba(232,161,58,.13);
+    --cyan:#4cc9f0; --green:#66bb6a; --red:#e0566a; --purple:#b08cff; --pink:#f06aa8;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6;
+    background-image:radial-gradient(1100px 480px at 80% -8%,rgba(232,161,58,.07),transparent 60%),
+      radial-gradient(900px 420px at 0% 0%,rgba(76,201,240,.05),transparent 55%);}
+  a{color:var(--accent2);text-decoration:none} a:hover{text-decoration:underline}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 22px 90px}
+  header.hero{padding:64px 22px 30px;max-width:1120px;margin:0 auto}
+  .kicker{display:inline-flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--accent);border:1px solid var(--border2);background:var(--accent-soft);padding:5px 11px;border-radius:999px}
+  h1{font-size:clamp(30px,5vw,50px);line-height:1.07;margin:18px 0 10px;letter-spacing:-.02em}
+  h1 .sub{display:block;font-size:clamp(15px,2.2vw,21px);font-weight:500;color:var(--muted);margin-top:12px;letter-spacing:0}
+  .herometa{display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:22px;color:var(--faint);font-size:13px}
+  .herometa b{color:var(--muted);font-weight:600}
+  .status{display:inline-block;margin-top:18px;font-size:13px;color:var(--green);border:1px solid rgba(102,187,106,.35);
+    background:rgba(102,187,106,.08);border-radius:8px;padding:7px 12px}
+  nav.toc{position:sticky;top:0;z-index:20;background:rgba(12,13,16,.82);backdrop-filter:blur(10px);
+    border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin-top:34px}
+  nav.toc .row{max-width:1120px;margin:0 auto;padding:9px 22px;display:flex;flex-wrap:wrap;gap:5px 6px;font-size:12.5px}
+  nav.toc a{color:var(--muted);padding:5px 9px;border-radius:7px;white-space:nowrap}
+  nav.toc a:hover{color:var(--ink);background:var(--panel2);text-decoration:none}
+  section{margin-top:42px}
+  .card{background:linear-gradient(180deg,var(--panel),#131519);border:1px solid var(--border);border-radius:16px;
+    padding:26px 28px;box-shadow:0 1px 0 rgba(255,255,255,.02) inset, 0 20px 40px -30px rgba(0,0,0,.8)}
+  h2{font-size:24px;margin:0 0 4px;letter-spacing:-.01em;display:flex;align-items:baseline;gap:12px}
+  h2 .n{font-family:var(--mono);font-size:14px;color:var(--accent);border:1px solid var(--border2);
+    background:var(--accent-soft);border-radius:8px;padding:2px 9px;flex:none}
+  h2 .n.alt{color:var(--cyan);background:rgba(76,201,240,.1)}
+  .lede{color:var(--muted);font-size:15.5px;margin:6px 0 20px;max-width:80ch}
+  h3{font-size:16.5px;margin:24px 0 8px;color:var(--accent2)}
+  p{margin:10px 0;color:#d4d7dd}
+  .small{font-size:13px;color:var(--faint)}
+  figure{margin:18px 0 6px;background:#101216;border:1px solid var(--border);border-radius:12px;padding:16px}
+  figure svg{display:block;width:100%;height:auto}
+  figcaption{color:var(--muted);font-size:13px;margin-top:12px;padding-top:10px;border-top:1px dashed var(--border2)}
+  figcaption b{color:var(--ink)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  pre.code{background:#0a0c0f;border:1px solid var(--border2);border-radius:10px;padding:14px 16px;overflow:auto;
+    font-family:var(--mono);font-size:12.5px;line-height:1.55;color:#cdd3da;margin:8px 0}
+  .code .c{color:#6b7280} .code .k{color:var(--purple)} .code .s{color:var(--green)} .code .y{color:var(--accent2)}
+  .code .hl{background:rgba(232,161,58,.14);border-radius:3px;padding:0 2px}
+  .code .del{color:var(--red)} .code .add{color:var(--green)}
+  ul.clean{margin:10px 0;padding-left:0;list-style:none}
+  ul.clean li{position:relative;padding:5px 0 5px 26px;color:#d4d7dd}
+  ul.clean li::before{content:"";position:absolute;left:6px;top:13px;width:7px;height:7px;border-radius:2px;
+    background:var(--accent);transform:rotate(45deg)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--border)}
+  th{color:var(--muted);font-weight:600;font-size:12px;letter-spacing:.04em;text-transform:uppercase}
+  tr:hover td{background:rgba(255,255,255,.014)}
+  .tag{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:6px;border:1px solid var(--border2);white-space:nowrap}
+  .t-reuse{color:var(--green);border-color:rgba(102,187,106,.4);background:rgba(102,187,106,.08)}
+  .t-mod{color:var(--accent);border-color:rgba(232,161,58,.4);background:var(--accent-soft)}
+  .t-new{color:var(--cyan);border-color:rgba(76,201,240,.4);background:rgba(76,201,240,.08)}
+  .t-gate{color:var(--red);border-color:rgba(224,86,106,.4);background:rgba(224,86,106,.08)}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 16px;margin:6px 0 14px;font-size:12.5px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .callgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px}
+  @media(max-width:760px){.callgrid{grid-template-columns:1fr}}
+  .callout{border:1px solid var(--border2);border-left:3px solid var(--red);border-radius:10px;padding:13px 15px;background:#14100f}
+  .callout h4{margin:0 0 5px;font-size:14px;color:#f3a0ad}
+  .callout p{margin:0;font-size:13px;color:#cbd0d6}
+  .keyfact{border:1px solid var(--border2);border-left:3px solid var(--accent);background:linear-gradient(180deg,var(--accent-soft),transparent);
+    border-radius:10px;padding:16px 18px;margin:16px 0;font-size:15px}
+  .keyfact b{color:var(--accent2)}
+  .matrix{display:grid;grid-template-columns:repeat(auto-fill,minmax(225px,1fr));gap:10px;margin-top:8px}
+  .mgroup{background:#101216;border:1px solid var(--border);border-radius:11px;padding:13px 14px}
+  .mgroup h4{margin:0 0 9px;font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+  .mrow{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12.7px;color:#cdd2d8}
+  .mrow .tag{flex:none;width:64px;text-align:center}
+  .controls{display:flex;gap:9px;align-items:center;margin:12px 0 4px;flex-wrap:wrap}
+  .btn{font-family:var(--sans);font-size:13px;color:var(--ink);background:var(--panel3);border:1px solid var(--border2);
+    border-radius:8px;padding:7px 14px;cursor:pointer}
+  .btn:hover{border-color:var(--accent);color:var(--accent2)}
+  .btn.primary{background:var(--accent-soft);border-color:rgba(232,161,58,.5);color:var(--accent2)}
+  .pill{font-family:var(--mono);font-size:12px;color:var(--muted);padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:#101216}
+  .footer{margin-top:54px;padding-top:22px;border-top:1px solid var(--border);color:var(--faint);font-size:13px}
+  .biblio{columns:2;column-gap:30px;font-size:12.5px;color:var(--muted)}
+  @media(max-width:760px){.biblio{columns:1}}
+  .biblio div{break-inside:avoid;margin:0 0 9px;padding-left:14px;text-indent:-14px}
+  .biblio b{color:#cdd2d8}
+  .conf{display:flex;gap:3px;height:13px;border-radius:7px;overflow:hidden;border:1px solid var(--border2);margin:6px 0}
+  .conf i{display:block;height:100%}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <span class="kicker">◆ GenesisCA · Feasibility Investigation</span>
+  <h1>Graph Cellular Automata
+    <span class="sub">Expanding GenesisCA from a fixed 2-D lattice to an arbitrary-graph substrate — a new optional model mode beside Variegated&nbsp;Cells and Asynchronous update.</span>
+  </h1>
+  <div class="herometa">
+    <span><b>Companion to:</b> docs/INVESTIGATION_GRAPH_CA.md</span>
+    <span><b>Method:</b> multi-agent research + adversarial fact-check + 5-subsystem codebase audit</span>
+    <span><b>Date:</b> 2026-06-15</span>
+  </div>
+  <span class="status">● Status: research only — no implementation planned yet. This document communicates findings; it is not a commitment to build.</span>
+</header>
+
+<nav class="toc"><div class="row">
+  <a href="#concept">1 · Lattice → Graph</a>
+  <a href="#problem">2 · The core problem</a>
+  <a href="#taxonomy">3 · Rule taxonomy</a>
+  <a href="#density">4 · Degree normalization</a>
+  <a href="#topology">5 · Topology regulates dynamics</a>
+  <a href="#live">6 · Live demo</a>
+  <a href="#csr">7 · Data structure (CSR)</a>
+  <a href="#compiler">8 · Compiler change</a>
+  <a href="#render">9 · Rendering</a>
+  <a href="#impact">10 · Impact map</a>
+  <a href="#hazards">11 · Hazards</a>
+  <a href="#roadmap">12 · Roadmap</a>
+  <a href="#sdca">13 · SDCA (future)</a>
+  <a href="#lit">14 · Literature</a>
+</div></nav>
+
+<div class="wrap">
+
+<!-- TL;DR -->
+<section>
+  <div class="keyfact">
+    <b>The finding that drives everything:</b> on a variable-degree graph there is no fixed neighbor count and no canonical neighbor order, so a homogeneous rule <b>cannot be positional</b>. Every well-defined graph-CA rule must read neighbors through an <b>order-independent, degree-tolerant aggregate</b> — count, sum, density&nbsp;(sum÷degree), mean, threshold. <span style="color:var(--green)">GenesisCA's <code style="font-family:var(--mono);font-size:13px">GetNeighborsAttribute → Aggregate</code> idiom is already exactly this</span>, and its hot loop already reads neighbors through an opaque index table — so a graph mode is an <b>extension, not a rewrite</b>.
+  </div>
+</section>
+
+<!-- 1 CONCEPT -->
+<section id="concept"><div class="card">
+  <h2><span class="n">01</span> A lattice is just a special-case graph</h2>
+  <p class="lede">A classical CA is the tuple <span class="pill" style="display:inline">(D, Σ, N, τ)</span> — a regular lattice <i>D</i>, state alphabet Σ, a fixed neighborhood template <i>N</i>, and one transition function τ applied everywhere. A regular grid is simply a <b>degree-regular, vertex-transitive graph</b>: every cell has identical local structure. Replace <i>D</i> with an arbitrary graph and that regularity — fixed arity, a canonical order, the same shape at every node — disappears.</p>
+
+  <figure>
+    <svg viewBox="0 0 920 330" role="img" aria-label="A regular lattice generalizing to an arbitrary graph">
+      <!-- LEFT: lattice -->
+      <g transform="translate(20,40)">
+        <text x="0" y="-14" fill="#9aa0aa" font-size="13" font-family="var(--sans)">Regular lattice — every cell has 8 neighbors (degree 8)</text>
+        <g>
+          <!-- 5x5 grid -->
+          <!-- rows/cols of 46px cells -->
+          <!-- draw all cells -->
+          <g fill="#1a1d24" stroke="#2a2e37">
+            <rect x="0"   y="0"   width="46" height="46"/><rect x="46"  y="0"   width="46" height="46"/><rect x="92"  y="0"   width="46" height="46"/><rect x="138" y="0"   width="46" height="46"/><rect x="184" y="0"   width="46" height="46"/>
+            <rect x="0"   y="46"  width="46" height="46"/><rect x="46"  y="46"  width="46" height="46"/><rect x="92"  y="46"  width="46" height="46"/><rect x="138" y="46"  width="46" height="46"/><rect x="184" y="46"  width="46" height="46"/>
+            <rect x="0"   y="92"  width="46" height="46"/><rect x="46"  y="92"  width="46" height="46"/>                                          <rect x="138" y="92"  width="46" height="46"/><rect x="184" y="92"  width="46" height="46"/>
+            <rect x="0"   y="138" width="46" height="46"/><rect x="46"  y="138" width="46" height="46"/><rect x="92"  y="138" width="46" height="46"/><rect x="138" y="138" width="46" height="46"/><rect x="184" y="138" width="46" height="46"/>
+            <rect x="0"   y="184" width="46" height="46"/><rect x="46"  y="184" width="46" height="46"/><rect x="92"  y="184" width="46" height="46"/><rect x="138" y="184" width="46" height="46"/><rect x="184" y="184" width="46" height="46"/>
+          </g>
+          <!-- moore neighbors of center -->
+          <g fill="rgba(76,201,240,.13)" stroke="#4cc9f0" stroke-width="1.5">
+            <rect x="46" y="46" width="46" height="46"/><rect x="92" y="46" width="46" height="46"/><rect x="138" y="46" width="46" height="46"/>
+            <rect x="46" y="92" width="46" height="46"/>                                                <rect x="138" y="92" width="46" height="46"/>
+            <rect x="46" y="138" width="46" height="46"/><rect x="92" y="138" width="46" height="46"/><rect x="138" y="138" width="46" height="46"/>
+          </g>
+          <!-- center -->
+          <rect x="92" y="92" width="46" height="46" fill="rgba(232,161,58,.85)" stroke="#f4c06a" stroke-width="1.5"/>
+          <text x="115" y="121" fill="#0c0d10" font-size="13" font-weight="700" text-anchor="middle" font-family="var(--sans)">i</text>
+        </g>
+      </g>
+
+      <!-- middle arrow -->
+      <g transform="translate(300,150)">
+        <line x1="0" y1="0" x2="78" y2="0" stroke="#3a3f4a" stroke-width="2"/>
+        <path d="M78,-6 L92,0 L78,6 Z" fill="#3a3f4a"/>
+        <text x="46" y="-14" fill="#9aa0aa" font-size="12.5" text-anchor="middle" font-family="var(--sans)">generalize</text>
+      </g>
+
+      <!-- RIGHT: arbitrary graph -->
+      <g transform="translate(420,40)">
+        <text x="0" y="-14" fill="#9aa0aa" font-size="13" font-family="var(--sans)">Arbitrary graph — degree varies node to node, no canonical order</text>
+        <!-- edges -->
+        <g stroke="#3a3f4a" stroke-width="1.6">
+          <line x1="50" y1="60" x2="140" y2="30"/>   <!-- n0-n1 -->
+          <line x1="50" y1="60" x2="100" y2="130"/>  <!-- n0-n5 -->
+          <line x1="140" y1="30" x2="240" y2="70"/>  <!-- n1-n2 -->
+          <line x1="240" y1="70" x2="340" y2="40"/>  <!-- n2-n3 -->
+          <line x1="340" y1="40" x2="420" y2="95"/>  <!-- n3-n4 -->
+          <line x1="380" y1="180" x2="420" y2="95"/> <!-- n10-n4 -->
+          <line x1="300" y1="145" x2="380" y2="180"/><!-- n7-n10 -->
+          <line x1="280" y1="235" x2="380" y2="180"/><!-- n9-n10 -->
+        </g>
+        <!-- hub edges (n6) highlighted -->
+        <g stroke="#e8a13a" stroke-width="2" opacity=".85">
+          <line x1="140" y1="30" x2="200" y2="155"/> <!-- n1-n6 -->
+          <line x1="240" y1="70" x2="200" y2="155"/> <!-- n2-n6 -->
+          <line x1="100" y1="130" x2="200" y2="155"/><!-- n5-n6 -->
+          <line x1="200" y1="155" x2="300" y2="145"/><!-- n6-n7 -->
+          <line x1="200" y1="155" x2="140" y2="235"/><!-- n6-n8 -->
+          <line x1="200" y1="155" x2="280" y2="235"/><!-- n6-n9 -->
+        </g>
+        <!-- nodes -->
+        <g fill="#262b34" stroke="#4a505c" stroke-width="1.5">
+          <circle cx="50"  cy="60"  r="11"/>
+          <circle cx="140" cy="30"  r="11"/>
+          <circle cx="240" cy="70"  r="11"/>
+          <circle cx="340" cy="40"  r="11"/>
+          <circle cx="100" cy="130" r="11"/>
+          <circle cx="300" cy="145" r="11"/>
+          <circle cx="140" cy="235" r="11"/>
+          <circle cx="280" cy="235" r="11"/>
+          <circle cx="380" cy="180" r="11"/>
+        </g>
+        <!-- low-degree node n4 (green) -->
+        <circle cx="420" cy="95" r="12" fill="rgba(102,187,106,.85)" stroke="#9fe3a3" stroke-width="1.5"/>
+        <!-- hub node n6 (amber, bigger ~ degree) -->
+        <circle cx="200" cy="155" r="17" fill="rgba(232,161,58,.9)" stroke="#f4c06a" stroke-width="1.5"/>
+        <!-- labels -->
+        <text x="420" y="74" fill="#9fe3a3" font-size="11.5" text-anchor="middle" font-family="var(--sans)">degree 2</text>
+        <text x="200" y="190" fill="#f4c06a" font-size="11.5" text-anchor="middle" font-family="var(--sans)">degree 6 (hub)</text>
+      </g>
+    </svg>
+    <figcaption><b>Why it matters:</b> on the right, one node touches 6 edges, another touches 2, and there is no "up/left/3rd" slot. A rule written for the lattice's fixed 8 ordered slots is undefined here. <span class="small">(Marr &amp; Hütt 2009; O'Sullivan 2001.)</span></figcaption>
+  </figure>
+</div></section>
+
+<!-- 2 PROBLEM -->
+<section id="problem"><div class="card">
+  <h2><span class="n">02</span> The core problem → rules must be aggregate-based</h2>
+  <p class="lede">Two properties any homogeneous graph rule must have: <b>degree-robustness</b> (well-defined across the degree distribution) and <b>anonymity / permutation-invariance</b> (independent of any neighbor ordering). The resolution the whole field converges on — from Marr &amp; Hütt's "isotropy" to Grattarola's GNN message-passing — is identical: consume neighbors through an order-independent aggregate.</p>
+
+  <figure>
+    <svg viewBox="0 0 920 300" role="img" aria-label="Positional rule fails, aggregate rule works at any degree">
+      <!-- TOP: positional fails -->
+      <g transform="translate(20,26)">
+        <text x="0" y="0" fill="#e0566a" font-size="13.5" font-weight="600" font-family="var(--sans)">✕ Positional rule  τ(x₁, x₂, x₃, x₄)  — fixed slots</text>
+        <g font-family="var(--mono)" font-size="12">
+          <rect x="0"  y="14" width="40" height="34" rx="6" fill="#1a1d24" stroke="#3a3f4a"/><text x="20" y="36" fill="#cdd3da" text-anchor="middle">x₁</text>
+          <rect x="48" y="14" width="40" height="34" rx="6" fill="#1a1d24" stroke="#3a3f4a"/><text x="68" y="36" fill="#cdd3da" text-anchor="middle">x₂</text>
+          <rect x="96" y="14" width="40" height="34" rx="6" fill="#1a1d24" stroke="#3a3f4a"/><text x="116" y="36" fill="#cdd3da" text-anchor="middle">x₃</text>
+          <rect x="144" y="14" width="40" height="34" rx="6" fill="#1a1d24" stroke="#3a3f4a"/><text x="164" y="36" fill="#cdd3da" text-anchor="middle">x₄</text>
+        </g>
+        <text x="210" y="36" fill="#9aa0aa" font-size="12.5" font-family="var(--sans)">works only when every node has exactly 4 ordered neighbors</text>
+        <!-- failure: degree 6 -->
+        <g transform="translate(560,0)" font-family="var(--mono)" font-size="12">
+          <rect x="0"  y="14" width="34" height="34" rx="6" fill="#1a1d24" stroke="#3a3f4a"/>
+          <rect x="40" y="14" width="34" height="34" rx="6" fill="#1a1d24" stroke="#3a3f4a"/>
+          <rect x="80" y="14" width="34" height="34" rx="6" fill="#1a1d24" stroke="#3a3f4a"/>
+          <rect x="120" y="14" width="34" height="34" rx="6" fill="#1a1d24" stroke="#3a3f4a"/>
+          <rect x="160" y="14" width="34" height="34" rx="6" fill="rgba(224,86,106,.16)" stroke="#e0566a"/>
+          <rect x="200" y="14" width="34" height="34" rx="6" fill="rgba(224,86,106,.16)" stroke="#e0566a"/>
+          <text x="248" y="36" fill="#e0566a" text-anchor="start" font-family="var(--sans)">degree 6? slots 5,6 undefined</text>
+        </g>
+      </g>
+
+      <!-- divider -->
+      <line x1="20" y1="120" x2="900" y2="120" stroke="#22262f"/>
+
+      <!-- BOTTOM: aggregate works -->
+      <g transform="translate(20,150)">
+        <text x="0" y="0" fill="#66bb6a" font-size="13.5" font-weight="600" font-family="var(--sans)">✓ Aggregate rule  f( Σ neighbor states )  — gather → permutation-invariant reduce → update</text>
+        <!-- many neighbors converge to a funnel -->
+        <g stroke="#3a3f4a" stroke-width="1.4">
+          <line x1="60" y1="40" x2="250" y2="78"/>
+          <line x1="60" y1="64" x2="250" y2="84"/>
+          <line x1="60" y1="88" x2="250" y2="90"/>
+          <line x1="60" y1="112" x2="250" y2="96"/>
+          <line x1="60" y1="20" x2="250" y2="72"/>
+          <line x1="60" y1="136" x2="250" y2="102"/>
+        </g>
+        <g fill="#262b34" stroke="#4a505c" stroke-width="1.4">
+          <circle cx="55" cy="20" r="9"/><circle cx="55" cy="44" r="9"/><circle cx="55" cy="68" r="9"/>
+          <circle cx="55" cy="92" r="9"/><circle cx="55" cy="116" r="9"/><circle cx="55" cy="140" r="9"/>
+        </g>
+        <text x="55" y="166" fill="#6b7280" font-size="11" text-anchor="middle" font-family="var(--sans)">any degree</text>
+        <!-- aggregate node -->
+        <rect x="252" y="62" width="150" height="46" rx="10" fill="rgba(76,201,240,.1)" stroke="#4cc9f0"/>
+        <text x="327" y="80" fill="#9fe0f7" font-size="12.5" text-anchor="middle" font-family="var(--sans)">Σ / count / mean</text>
+        <text x="327" y="98" fill="#6b7280" font-size="11" text-anchor="middle" font-family="var(--sans)">order-independent</text>
+        <!-- arrow to update -->
+        <line x1="402" y1="85" x2="468" y2="85" stroke="#3a3f4a" stroke-width="2"/><path d="M468,79 L482,85 L468,91 Z" fill="#3a3f4a"/>
+        <rect x="484" y="62" width="150" height="46" rx="10" fill="var(--accent-soft)" stroke="#e8a13a"/>
+        <text x="559" y="80" fill="#f4c06a" font-size="12.5" text-anchor="middle" font-family="var(--sans)">threshold / map</text>
+        <text x="559" y="98" fill="#6b7280" font-size="11" text-anchor="middle" font-family="var(--sans)">→ next state</text>
+        <text x="700" y="89" fill="#9aa0aa" font-size="12.5" font-family="var(--sans)">degree-robust by construction</text>
+      </g>
+    </svg>
+    <figcaption><b>This is the GNCA / message-passing view</b> (Grattarola, Livi &amp; Alippi, NeurIPS 2021; Gilmer et al. 2017): a graph-CA step = one round of <i>gather → permutation-invariant aggregate → update</i>. GenesisCA's existing neighbor pipeline is already this exact shape.</figcaption>
+  </figure>
+</div></section>
+
+<!-- 3 TAXONOMY -->
+<section id="taxonomy"><div class="card">
+  <h2><span class="n">03</span> Which existing nodes survive — the rule taxonomy</h2>
+  <p class="lede">The literature taxonomy maps cleanly onto GenesisCA's palette and tells us <i>exactly</i> which nodes port to a graph and which must be gated off.</p>
+  <table>
+    <thead><tr><th>Rule family</th><th>GenesisCA mapping</th><th style="width:130px">Graph-safe?</th></tr></thead>
+    <tbody>
+      <tr><td><b>Totalistic</b> — f(neighbor total)</td><td><code>GetNeighborsAttribute → Aggregate(Sum/Count/Average)</code></td><td><span class="tag t-reuse">✓ inherently</span></td></tr>
+      <tr><td><b>Outer-totalistic</b> — f(total, own state) · e.g. Game of Life</td><td>+ <code>GetCellAttribute</code> on self</td><td><span class="tag t-reuse">✓ inherently</span></td></tr>
+      <tr><td><b>Threshold / majority</b> — cutoff κ on density</td><td>density → <code>Compare ≥ κ</code></td><td><span class="tag t-reuse">✓ (needs density)</span></td></tr>
+      <tr><td><b>Normalized / density</b> — sum ÷ degree</td><td><code>Average</code> or new <code>NeighborDensity</code></td><td><span class="tag t-reuse">✓ portability device</span></td></tr>
+      <tr><td><b>Fixed-arity / offset / lookup-table</b> — f(neighbor at slot k)</td><td><code>GetNeighborAttributeByIndex</code>, neighborhood tags, variegated faces</td><td><span class="tag t-gate">✕ gate off</span></td></tr>
+    </tbody>
+  </table>
+  <div class="legend" style="margin-top:14px">
+    <span><span class="dot" style="background:var(--green)"></span> ports to graphs unchanged (reads neighbors as an unordered set)</span>
+    <span><span class="dot" style="background:var(--red)"></span> assumes a fixed count &amp; a canonical order → disabled in graph mode</span>
+  </div>
+  <p class="small">For d=2 the density taxonomy recovers exactly the <b>64 outer-totalistic elementary CA rules</b>; a 0/1-exchange symmetry collapses them to <b>34 distinct rules</b>, of which <b>14 are "topologically sensitive"</b> and <b>4 (ECA 37, 108, 109, 133) change Wolfram class</b> under rewiring — verified verbatim from Marr &amp; Hütt 2009, and the ready-made demo seeds for §5.</p>
+</div></section>
+
+<!-- 4 DENSITY -->
+<section id="density"><div class="card">
+  <h2><span class="n">04</span> The degree-normalization device</h2>
+  <p class="lede">A <i>raw count</i> threshold means different things at different degrees: "3 live neighbors" is the whole neighborhood at degree 3 but a tenth of it at degree 30. Dividing by the local degree — <span class="pill" style="display:inline">ρᵢ = (1/dᵢ) · Σⱼ xⱼ</span> — makes one rule portable across the whole graph. <b>This is the single most load-bearing property of the feature</b>, so a <code>NeighborDensity</code> node should be first-class.</p>
+
+  <figure>
+    <svg viewBox="0 0 920 300" role="img" aria-label="Raw count threshold is not degree-portable; density is">
+      <!-- axes -->
+      <g transform="translate(70,30)">
+        <line x1="0" y1="0" x2="0" y2="210" stroke="#3a3f4a"/>
+        <line x1="0" y1="210" x2="780" y2="210" stroke="#3a3f4a"/>
+        <text x="-44" y="8" fill="#9aa0aa" font-size="11" font-family="var(--sans)">fraction</text>
+        <text x="-30" y="105" fill="#9aa0aa" font-size="11" font-family="var(--sans)" transform="rotate(-90,-30,105)">of neighborhood</text>
+        <text x="390" y="240" fill="#9aa0aa" font-size="12" text-anchor="middle" font-family="var(--sans)">node degree  d  →</text>
+        <!-- y gridlines 0,0.5,1 -->
+        <line x1="0" y1="0" x2="780" y2="0" stroke="#1c1f26"/><text x="-10" y="4" fill="#6b7280" font-size="10" text-anchor="end">1.0</text>
+        <line x1="0" y1="105" x2="780" y2="105" stroke="#1c1f26"/><text x="-10" y="109" fill="#6b7280" font-size="10" text-anchor="end">0.5</text>
+        <text x="-10" y="213" fill="#6b7280" font-size="10" text-anchor="end">0</text>
+        <!-- x ticks d=2..30 mapped x = (d-2)/28*780 -->
+        <text x="0" y="226" fill="#6b7280" font-size="10" text-anchor="middle">2</text>
+        <text x="195" y="226" fill="#6b7280" font-size="10" text-anchor="middle">9</text>
+        <text x="390" y="226" fill="#6b7280" font-size="10" text-anchor="middle">16</text>
+        <text x="585" y="226" fill="#6b7280" font-size="10" text-anchor="middle">23</text>
+        <text x="780" y="226" fill="#6b7280" font-size="10" text-anchor="middle">30</text>
+
+        <!-- density line constant 0.5 (green) -->
+        <line x1="0" y1="105" x2="780" y2="105" stroke="#66bb6a" stroke-width="2.5"/>
+        <circle cx="780" cy="105" r="4" fill="#66bb6a"/>
+        <text x="600" y="96" fill="#9fe3a3" font-size="12" font-family="var(--sans)">density ρ ≥ 0.5  — portable, constant</text>
+
+        <!-- raw count=3 fraction = 3/d (amber), x=(d-2)/28*780, y=210-(3/d)*210 ; clamp at d=3 ->1.0 -->
+        <!-- points d=3..30 -->
+        <polyline fill="none" stroke="#e8a13a" stroke-width="2.5"
+          points="27.9,0 55.7,52.5 83.6,84 111.4,105 139.3,120 167.1,131.3 195,140 222.9,147 250.7,152.7 278.6,157.5 306.4,161.5 334.3,165 362.1,168 390,170.6 445.7,175 501.4,178.5 557.1,181.3 612.9,183.6 668.6,185.4 724.3,187 780,188.6"/>
+        <circle cx="27.9" cy="0" r="4" fill="#e8a13a"/>
+        <text x="120" y="100" fill="#f4c06a" font-size="12" font-family="var(--sans)">raw count ≥ 3  — plummets as d grows</text>
+      </g>
+    </svg>
+    <figcaption><b>Read:</b> a fixed count of 3 (amber) is the entire neighborhood at d=3 but ~10% of it at d=30 — silently changing behavior across a heterogeneous graph. Density 0.5 (green) means the same thing everywhere. <span class="small">Marr &amp; Hütt also show complex-pattern capacity peaks around degree ≈ 4 and decays as neighborhoods grow — denser graphs tend to look "boring."</span></figcaption>
+  </figure>
+</div></section>
+
+<!-- 5 TOPOLOGY REGULATES -->
+<section id="topology"><div class="card">
+  <h2><span class="n">05</span> The headline payoff — "hold the rule, swap the topology"</h2>
+  <p class="lede">Because the rule stays <i>formally fixed</i> while the graph changes, dynamical change is attributable to topology alone. Running the <b>same compiled rule</b> on a ring vs. a small-world vs. a scale-free graph can move the system between Wolfram complexity classes. This is a genuine differentiator for a CA IDE and the natural MVP demo.</p>
+
+  <figure>
+    <svg viewBox="0 0 920 250" role="img" aria-label="Same rule on three topologies yields different dynamics">
+      <!-- RING -->
+      <g transform="translate(120,110)">
+        <g stroke="#3a3f4a" stroke-width="1.5" fill="none">
+          <polygon points="0,-58 50,-29 50,29 0,58 -50,29 -50,-29" stroke="#3a3f4a"/>
+        </g>
+        <g fill="#262b34" stroke="#4a505c" stroke-width="1.4">
+          <circle cx="0" cy="-58" r="8"/><circle cx="50" cy="-29" r="8"/><circle cx="50" cy="29" r="8"/>
+          <circle cx="0" cy="58" r="8"/><circle cx="-50" cy="29" r="8"/><circle cx="-50" cy="-29" r="8"/>
+        </g>
+        <text x="0" y="92" fill="#cdd3da" font-size="13" text-anchor="middle" font-family="var(--sans)" font-weight="600">Ring (regular)</text>
+        <text x="0" y="110" fill="#66bb6a" font-size="11.5" text-anchor="middle" font-family="var(--sans)">→ Class II · periodic</text>
+      </g>
+      <!-- SMALL-WORLD -->
+      <g transform="translate(460,110)">
+        <g stroke="#3a3f4a" stroke-width="1.5">
+          <polygon points="0,-58 50,-29 50,29 0,58 -50,29 -50,-29" fill="none"/>
+        </g>
+        <!-- rewired shortcuts -->
+        <g stroke="#e8a13a" stroke-width="1.8" opacity=".8">
+          <line x1="0" y1="-58" x2="0" y2="58"/>
+          <line x1="-50" y1="-29" x2="50" y2="29"/>
+        </g>
+        <g fill="#262b34" stroke="#4a505c" stroke-width="1.4">
+          <circle cx="0" cy="-58" r="8"/><circle cx="50" cy="-29" r="8"/><circle cx="50" cy="29" r="8"/>
+          <circle cx="0" cy="58" r="8"/><circle cx="-50" cy="29" r="8"/><circle cx="-50" cy="-29" r="8"/>
+        </g>
+        <text x="0" y="92" fill="#cdd3da" font-size="13" text-anchor="middle" font-family="var(--sans)" font-weight="600">Small-world (rewired)</text>
+        <text x="0" y="110" fill="#e8a13a" font-size="11.5" text-anchor="middle" font-family="var(--sans)">→ Class IV · complex</text>
+      </g>
+      <!-- SCALE-FREE -->
+      <g transform="translate(790,110)">
+        <g stroke="#3a3f4a" stroke-width="1.5">
+          <line x1="0" y1="0" x2="0" y2="-58"/><line x1="0" y1="0" x2="52" y2="-22"/><line x1="0" y1="0" x2="48" y2="30"/>
+          <line x1="0" y1="0" x2="-50" y2="-26"/><line x1="0" y1="0" x2="-46" y2="32"/><line x1="0" y1="0" x2="6" y2="60"/>
+          <line x1="0" y1="-58" x2="52" y2="-22"/>
+        </g>
+        <g fill="#262b34" stroke="#4a505c" stroke-width="1.4">
+          <circle cx="0" cy="-58" r="7"/><circle cx="52" cy="-22" r="7"/><circle cx="48" cy="30" r="7"/>
+          <circle cx="-50" cy="-26" r="7"/><circle cx="-46" cy="32" r="7"/><circle cx="6" cy="60" r="7"/>
+        </g>
+        <circle cx="0" cy="0" r="14" fill="rgba(232,161,58,.9)" stroke="#f4c06a" stroke-width="1.5"/>
+        <text x="0" y="92" fill="#cdd3da" font-size="13" text-anchor="middle" font-family="var(--sans)" font-weight="600">Scale-free (hub)</text>
+        <text x="0" y="110" fill="#e0566a" font-size="11.5" text-anchor="middle" font-family="var(--sans)">→ Class III · chaotic</text>
+      </g>
+    </svg>
+    <figcaption>Illustrative outcomes. The <b>compiled update rule is identical in all three</b> — only the adjacency reloads. ECA 37/108/109/133 are confirmed class-changers and make one-click demo presets. <span class="small">(Marr &amp; Hütt 2005/2009; class labels are illustrative, not per-graph claims.)</span></figcaption>
+  </figure>
+</div></section>
+
+<!-- 6 LIVE -->
+<section id="live"><div class="card">
+  <h2><span class="n alt">06</span> Live demo — a CA running on a graph</h2>
+  <p class="lede">A small <b>majority / threshold rule</b> on a fixed graph. Each node's next state = 1 if more than half its neighbors are "on" (a degree-normalized aggregate; ties keep state). Node <span style="color:var(--accent2)">colour = state</span> — exactly how GenesisCA's per-cell <code>colors</code> buffer would feed a graph renderer. Node <span style="color:#9aa0aa">size ∝ degree</span>.</p>
+  <div class="controls">
+    <button class="btn primary" id="gca-play">▶ Play</button>
+    <button class="btn" id="gca-step">⏭ Step</button>
+    <button class="btn" id="gca-reset">↺ Randomize</button>
+    <span class="pill">generation <b id="gca-gen" style="color:var(--accent2)">0</b></span>
+    <span class="pill">on: <b id="gca-on" style="color:var(--green)">—</b></span>
+  </div>
+  <figure style="background:#0a0c0f">
+    <svg id="gca-svg" viewBox="0 0 920 300" role="img" aria-label="Live majority-rule cellular automaton on a graph"></svg>
+    <figcaption>Pure illustration of the runtime contract: <b>one colour per node, updated from an unordered neighbor aggregate</b>. The same compiled-rule pipeline GenesisCA already uses per cell would drive this — only the neighbor-iteration preamble changes (§8).</figcaption>
+  </figure>
+</div></section>
+
+<!-- 7 CSR -->
+<section id="csr"><div class="card">
+  <h2><span class="n alt">07</span> How to store varying neighborhoods — CSR adjacency</h2>
+  <p class="lede">Today the engine builds a <b>dense, uniform-stride table</b> (<code>total × nSz</code>) — every cell has the same neighbor count. A graph needs a <b>ragged</b> structure: <b>Compressed Sparse Row</b> = a per-node offset array + one flat neighbor array. Node <i>i</i>'s neighbors are <code>colIndices[ rowOffsets[i] .. rowOffsets[i+1] ]</code>. The SoA per-attribute state arrays are unchanged.</p>
+
+  <figure>
+    <svg viewBox="0 0 920 320" role="img" aria-label="A small graph encoded as CSR rowOffsets and colIndices arrays">
+      <!-- graph -->
+      <g transform="translate(40,30)">
+        <text x="0" y="-6" fill="#9aa0aa" font-size="12.5" font-family="var(--sans)">6-node graph (node 2 highlighted)</text>
+        <g stroke="#3a3f4a" stroke-width="1.6">
+          <line x1="40" y1="40" x2="150" y2="20"/>   <!-- 0-1 -->
+          <line x1="40" y1="40" x2="120" y2="120"/>  <!-- 0-2 -->
+          <line x1="150" y1="20" x2="120" y2="120"/> <!-- 1-2 -->
+          <line x1="150" y1="20" x2="230" y2="95"/>  <!-- 1-3 -->
+          <line x1="120" y1="120" x2="230" y2="95"/> <!-- 2-3 -->
+          <line x1="230" y1="95" x2="220" y2="200"/> <!-- 3-4 -->
+          <line x1="220" y1="200" x2="110" y2="210"/><!-- 4-5 -->
+          <line x1="120" y1="120" x2="110" y2="210"/><!-- 2-5 -->
+        </g>
+        <!-- node 2 edges highlighted -->
+        <g stroke="#e8a13a" stroke-width="2.4" opacity=".9">
+          <line x1="120" y1="120" x2="40" y2="40"/>
+          <line x1="120" y1="120" x2="150" y2="20"/>
+          <line x1="120" y1="120" x2="230" y2="95"/>
+          <line x1="120" y1="120" x2="110" y2="210"/>
+        </g>
+        <g font-family="var(--mono)" font-size="12" font-weight="700">
+          <circle cx="40"  cy="40"  r="14" fill="#262b34" stroke="#4a505c"/><text x="40"  y="44"  fill="#cdd3da" text-anchor="middle">0</text>
+          <circle cx="150" cy="20"  r="14" fill="#262b34" stroke="#4a505c"/><text x="150" y="24"  fill="#cdd3da" text-anchor="middle">1</text>
+          <circle cx="120" cy="120" r="16" fill="rgba(232,161,58,.9)" stroke="#f4c06a"/><text x="120" y="125" fill="#0c0d10" text-anchor="middle">2</text>
+          <circle cx="230" cy="95"  r="14" fill="#262b34" stroke="#4a505c"/><text x="230" y="99"  fill="#cdd3da" text-anchor="middle">3</text>
+          <circle cx="220" cy="200" r="14" fill="#262b34" stroke="#4a505c"/><text x="220" y="204" fill="#cdd3da" text-anchor="middle">4</text>
+          <circle cx="110" cy="210" r="14" fill="#262b34" stroke="#4a505c"/><text x="110" y="214" fill="#cdd3da" text-anchor="middle">5</text>
+        </g>
+      </g>
+
+      <!-- arrays -->
+      <g transform="translate(340,40)" font-family="var(--mono)" font-size="12.5">
+        <text x="0" y="0" fill="#4cc9f0" font-size="12.5" font-family="var(--sans)">rowOffsets  (length N+1)</text>
+        <g>
+          <!-- 7 cells: 0 2 5 9 12 14 16 -->
+          <rect x="0"   y="10" width="48" height="32" rx="5" fill="#101216" stroke="#3a3f4a"/><text x="24"  y="31" fill="#cdd3da" text-anchor="middle">0</text>
+          <rect x="48"  y="10" width="48" height="32" rx="5" fill="#101216" stroke="#3a3f4a"/><text x="72"  y="31" fill="#cdd3da" text-anchor="middle">2</text>
+          <rect x="96"  y="10" width="48" height="32" rx="5" fill="rgba(232,161,58,.16)" stroke="#e8a13a"/><text x="120" y="31" fill="#f4c06a" text-anchor="middle">5</text>
+          <rect x="144" y="10" width="48" height="32" rx="5" fill="rgba(232,161,58,.16)" stroke="#e8a13a"/><text x="168" y="31" fill="#f4c06a" text-anchor="middle">9</text>
+          <rect x="192" y="10" width="48" height="32" rx="5" fill="#101216" stroke="#3a3f4a"/><text x="216" y="31" fill="#cdd3da" text-anchor="middle">12</text>
+          <rect x="240" y="10" width="48" height="32" rx="5" fill="#101216" stroke="#3a3f4a"/><text x="264" y="31" fill="#cdd3da" text-anchor="middle">14</text>
+          <rect x="288" y="10" width="48" height="32" rx="5" fill="#101216" stroke="#3a3f4a"/><text x="312" y="31" fill="#cdd3da" text-anchor="middle">16</text>
+          <g font-family="var(--sans)" font-size="9.5" fill="#6b7280">
+            <text x="24" y="56" text-anchor="middle">i=0</text><text x="120" y="56" text-anchor="middle">i=2</text><text x="168" y="56" text-anchor="middle">i=3</text>
+          </g>
+        </g>
+        <!-- slice brackets for node 2: offsets 5..9 -->
+        <text x="0" y="92" fill="#4cc9f0" font-size="12.5" font-family="var(--sans)">colIndices  (length E)</text>
+        <g transform="translate(0,102)">
+          <!-- 16 cells -->
+          <!-- values: 1,2, 0,2,3, 0,1,3,5, 1,2,4, 3,5, 2,4  ; node2 slice = indices 5..8 -->
+          <g>
+            <rect x="0"   y="0" width="34" height="30" rx="4" fill="#101216" stroke="#3a3f4a"/><text x="17"  y="20" fill="#cdd3da" text-anchor="middle">1</text>
+            <rect x="34"  y="0" width="34" height="30" rx="4" fill="#101216" stroke="#3a3f4a"/><text x="51"  y="20" fill="#cdd3da" text-anchor="middle">2</text>
+            <rect x="68"  y="0" width="34" height="30" rx="4" fill="#101216" stroke="#3a3f4a"/><text x="85"  y="20" fill="#cdd3da" text-anchor="middle">0</text>
+            <rect x="102" y="0" width="34" height="30" rx="4" fill="#101216" stroke="#3a3f4a"/><text x="119" y="20" fill="#cdd3da" text-anchor="middle">2</text>
+            <rect x="136" y="0" width="34" height="30" rx="4" fill="#101216" stroke="#3a3f4a"/><text x="153" y="20" fill="#cdd3da" text-anchor="middle">3</text>
+            <!-- node 2 slice (idx 5..8): 0,1,3,5 -->
+            <rect x="170" y="0" width="34" height="30" rx="4" fill="rgba(232,161,58,.18)" stroke="#e8a13a"/><text x="187" y="20" fill="#f4c06a" text-anchor="middle">0</text>
+            <rect x="204" y="0" width="34" height="30" rx="4" fill="rgba(232,161,58,.18)" stroke="#e8a13a"/><text x="221" y="20" fill="#f4c06a" text-anchor="middle">1</text>
+            <rect x="238" y="0" width="34" height="30" rx="4" fill="rgba(232,161,58,.18)" stroke="#e8a13a"/><text x="255" y="20" fill="#f4c06a" text-anchor="middle">3</text>
+            <rect x="272" y="0" width="34" height="30" rx="4" fill="rgba(232,161,58,.18)" stroke="#e8a13a"/><text x="289" y="20" fill="#f4c06a" text-anchor="middle">5</text>
+            <!-- rest -->
+            <rect x="306" y="0" width="34" height="30" rx="4" fill="#101216" stroke="#3a3f4a"/><text x="323" y="20" fill="#cdd3da" text-anchor="middle">1</text>
+            <rect x="340" y="0" width="34" height="30" rx="4" fill="#101216" stroke="#3a3f4a"/><text x="357" y="20" fill="#cdd3da" text-anchor="middle">2</text>
+            <rect x="374" y="0" width="34" height="30" rx="4" fill="#101216" stroke="#3a3f4a"/><text x="391" y="20" fill="#cdd3da" text-anchor="middle">4</text>
+            <rect x="408" y="0" width="34" height="30" rx="4" fill="#101216" stroke="#3a3f4a"/><text x="425" y="20" fill="#cdd3da" text-anchor="middle">3</text>
+            <rect x="442" y="0" width="34" height="30" rx="4" fill="#101216" stroke="#3a3f4a"/><text x="459" y="20" fill="#cdd3da" text-anchor="middle">5</text>
+            <rect x="476" y="0" width="34" height="30" rx="4" fill="#101216" stroke="#3a3f4a"/><text x="493" y="20" fill="#cdd3da" text-anchor="middle">2</text>
+            <rect x="510" y="0" width="34" height="30" rx="4" fill="#101216" stroke="#3a3f4a"/><text x="527" y="20" fill="#cdd3da" text-anchor="middle">4</text>
+          </g>
+          <path d="M170,38 L170,46 L306,46 L306,38" fill="none" stroke="#e8a13a" stroke-width="1.3"/>
+          <text x="238" y="60" fill="#f4c06a" font-size="11" text-anchor="middle" font-family="var(--sans)">neighbors of node 2 = colIndices[5 .. 9] = {0,1,3,5}</text>
+        </g>
+      </g>
+    </svg>
+    <figcaption><b>Compute = segmented reduction / SpMV.</b> The sync step is a pull/gather (read neighbor states, write only your own buffer) — double-buffers exactly like today, no atomics. For scale-free hubs use merge-path load balancing; for parallel async use graph colouring. <span class="small">(CSR is textbook; Merrill–Garland 2016, Gunrock; avoid ELLPACK padding for hubs.)</span></figcaption>
+  </figure>
+
+  <div class="grid2" style="margin-top:6px">
+    <div class="mgroup"><h4 style="color:#e0566a">Today — dense &amp; uniform</h4>
+      <p class="small" style="margin:0">One <code>Int32Array</code> of size <code>total × nSz</code> per neighborhood. Every cell has the <i>same</i> count. Built by <code>buildNeighborIndices()</code> from <code>(dr,dc)</code> offsets + torus modulo. <span style="color:var(--red)">No way to express variable degree.</span></p></div>
+    <div class="mgroup"><h4 style="color:#4cc9f0">Graph — ragged CSR</h4>
+      <p class="small" style="margin:0"><code>rowOffsets[N+1]</code> + <code>colIndices[E]</code>, loaded from the model's adjacency. Variable degree, no padding. The hot loop already reads through an opaque index table — <span style="color:var(--green)">only the stride changes.</span></p></div>
+  </div>
+</div></section>
+
+<!-- 8 COMPILER -->
+<section id="compiler"><div class="card">
+  <h2><span class="n alt">08</span> The compiler change (all three targets, in lockstep)</h2>
+  <p class="lede">The neighbor read is already table-indirected, so there is <b>no coordinate math in the hot loop to rewrite</b>. The only grid coupling at the read site is the constant stride <code>idx * nSz</code>. It becomes a data-dependent CSR slice.</p>
+  <div class="grid2">
+    <div>
+      <p class="small" style="color:#e0566a;margin:0 0 4px">▼ Lattice — uniform stride</p>
+      <pre class="code"><span class="c">// every cell: exactly nSz neighbors</span>
+<span class="k">const</span> _nb = idx * <span class="hl">nSz_nbr</span>;
+<span class="k">for</span> (<span class="k">let</span> n = 0; n &lt; <span class="hl">nSz_nbr</span>; n++) {
+  <span class="k">const</span> _ni = nIdx_nbr[_nb + n];
+  sum += r_state[_ni];
+}</pre>
+    </div>
+    <div>
+      <p class="small" style="color:#66bb6a;margin:0 0 4px">▼ Graph — CSR slice (variable degree)</p>
+      <pre class="code"><span class="c">// each cell: its own neighbor range</span>
+<span class="k">const</span> _nb = <span class="add">rowOffsets_nbr[idx]</span>;
+<span class="k">const</span> _ne = <span class="add">rowOffsets_nbr[idx+1]</span>;
+<span class="k">for</span> (<span class="k">let</span> k = _nb; k &lt; _ne; k++) {
+  <span class="k">const</span> _ni = colIndices_nbr[k];
+  sum += r_state[_ni];
+}</pre>
+    </div>
+  </div>
+  <ul class="clean" style="margin-top:14px">
+    <li><b>Scratch arrays</b> (GetNeighbors/FilterNeighbors) size to <code>maxDegree</code>, not a constant — and <code>maxDegree</code> must be a derived-on-change single source of truth (stale value → memory corruption).</li>
+    <li><b>The "neighbor index" value type</b> stops being a packed <code>(dr,dc)</code> offset and becomes a <b>node id</b> — resolved via <code>colIndices[offset+k]</code>, not <code>row±dr / col±dc</code> arithmetic. WASM/WebGPU must <i>bypass</i> (not just swap) their baked grid-width/height literals.</li>
+    <li><b>Node ids capped below <code>0x80000000</code></b> so they never collide with the <code>INVALID_NI</code> "no neighbor" sentinel.</li>
+    <li>Exit gate: the existing cross-target <b>byte-shape parity check</b> (diff JS step code vs WASM bytes vs WGSL) on a small graph model.</li>
+  </ul>
+</div></section>
+
+<!-- 9 RENDER -->
+<section id="render"><div class="card">
+  <h2><span class="n alt">09</span> Visualizing the graph — reuse the state buffer, replace the geometry</h2>
+  <p class="lede">The lattice renderer's speed comes from blitting <i>one</i> <code>ImageData</code> for the whole grid — fundamentally incompatible with per-node drawing. But the worker's per-cell <code>colors</code> buffer (one RGBA per node) and the index-keyed inspect/paint protocol are <b>reused unchanged</b>. A sibling <code>drawGraph()</code> path is chosen by topology.</p>
+
+  <figure>
+    <svg viewBox="0 0 920 280" role="img" aria-label="Shared color buffer feeding two render paths">
+      <!-- worker -->
+      <g transform="translate(40,90)">
+        <rect x="0" y="0" width="230" height="100" rx="12" fill="rgba(102,187,106,.07)" stroke="#66bb6a"/>
+        <text x="115" y="26" fill="#9fe3a3" font-size="13.5" font-weight="700" text-anchor="middle" font-family="var(--sans)">Web Worker</text>
+        <text x="115" y="48" fill="#cdd3da" font-size="11.5" text-anchor="middle" font-family="var(--mono)">colors  (1 RGBA / node)</text>
+        <text x="115" y="68" fill="#cdd3da" font-size="11.5" text-anchor="middle" font-family="var(--mono)">inspect / paint by index</text>
+        <text x="115" y="88" fill="#66bb6a" font-size="10.5" text-anchor="middle" font-family="var(--sans)">✓ NO CHANGE — shared contract</text>
+      </g>
+      <!-- split arrows -->
+      <g stroke="#3a3f4a" stroke-width="2" fill="none">
+        <path d="M270,120 C320,120 330,70 380,70"/>
+        <path d="M270,160 C320,160 330,210 380,210"/>
+      </g>
+      <path d="M374,64 L388,70 L374,76 Z" fill="#3a3f4a"/>
+      <path d="M374,204 L388,210 L374,216 Z" fill="#3a3f4a"/>
+      <!-- lattice path -->
+      <g transform="translate(390,40)">
+        <rect x="0" y="0" width="220" height="60" rx="11" fill="#16181d" stroke="#3a3f4a"/>
+        <text x="110" y="25" fill="#cdd3da" font-size="12.5" text-anchor="middle" font-family="var(--sans)" font-weight="600">2-D path · <tspan fill="#9aa0aa">existing</tspan></text>
+        <text x="110" y="44" fill="#9aa0aa" font-size="11" text-anchor="middle" font-family="var(--mono)">ImageData → 1 drawImage</text>
+      </g>
+      <!-- graph path -->
+      <g transform="translate(390,180)">
+        <rect x="0" y="0" width="220" height="60" rx="11" fill="rgba(76,201,240,.08)" stroke="#4cc9f0"/>
+        <text x="110" y="25" fill="#9fe0f7" font-size="12.5" text-anchor="middle" font-family="var(--sans)" font-weight="600">graph path · <tspan fill="#4cc9f0">new drawGraph()</tspan></text>
+        <text x="110" y="44" fill="#9aa0aa" font-size="11" text-anchor="middle" font-family="var(--mono)">nodes + edges, instanced</text>
+      </g>
+      <!-- notes -->
+      <g transform="translate(650,40)" font-family="var(--sans)" font-size="11.5" fill="#9aa0aa">
+        <text x="0" y="14">• one-shot force layout (ForceAtlas2 / d3-force),</text>
+        <text x="0" y="32">&nbsp;&nbsp;off main thread, cached — never re-layout per gen</text>
+        <text x="0" y="58">• GPU colour-coded picking (node id by readback)</text>
+        <text x="0" y="84">• node size ∝ degree · edge LOD at zoom-out</text>
+        <text x="0" y="110">• node-selection replaces the geometric brush</text>
+        <text x="0" y="200" fill="#f4c06a">⚠ graph render needs colours on the main thread</text>
+        <text x="0" y="218" fill="#f4c06a">&nbsp;&nbsp;every frame → disables direct-render skip</text>
+      </g>
+    </svg>
+    <figcaption><b>Dealing with varying neighborhoods, visually:</b> encode degree as node radius, bundle hub edges, drop edges/labels below a zoom threshold. Picking via <code>screenToCellId</code> abstraction (current floor-division is the 2-D impl; nearest-node / GPU pick is the graph impl) — <code>cellIdx → nodeId</code> is essentially free downstream.</figcaption>
+  </figure>
+</div></section>
+
+<!-- 10 IMPACT MAP -->
+<section id="impact"><div class="card">
+  <h2><span class="n">10</span> Subsystem impact map</h2>
+  <p class="lede">Every touch-point, grouped, colour-coded by the kind of change. The reuse (green) column is the encouraging story: the state engine, color pipeline, and inspect/paint protocol largely carry over.</p>
+  <div class="legend">
+    <span><span class="dot" style="background:var(--green)"></span> reuse as-is</span>
+    <span><span class="dot" style="background:var(--accent)"></span> modify</span>
+    <span><span class="dot" style="background:var(--cyan)"></span> new</span>
+    <span><span class="dot" style="background:var(--red)"></span> gate off</span>
+  </div>
+  <div class="matrix">
+    <div class="mgroup"><h4>Schema &amp; state</h4>
+      <div class="mrow"><span class="tag t-new">new</span> GraphTopologyConfig (CSR, positions)</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> reducer + cascades + migration</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> Properties toggle (Execution)</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> capability gate <code>graph?/lattice?</code></div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span> SoA attribute storage</div>
+    </div>
+    <div class="mgroup"><h4>Engine &amp; compilers</h4>
+      <div class="mrow"><span class="tag t-mod">modify</span> buildNeighborIndices → CSR</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> JS / WASM / WebGPU neighbor emit</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> niCodec → node-id</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> async hazard / CSE re-verify</div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span> compile-once / run-per-cell</div>
+    </div>
+    <div class="mgroup"><h4>Nodes</h4>
+      <div class="mrow"><span class="tag t-new">new</span> GetDegree · NeighborDensity</div>
+      <div class="mrow"><span class="tag t-new">new</span> node-id identity on InitEvent</div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span> Aggregate / Filter / GroupOps</div>
+      <div class="mrow"><span class="tag t-gate">off</span> offset / tag / ByIndex nodes</div>
+      <div class="mrow"><span class="tag t-gate">off</span> variegated / orientation</div>
+    </div>
+    <div class="mgroup"><h4>Rendering &amp; interaction</h4>
+      <div class="mrow"><span class="tag t-new">new</span> drawGraph() + layout worker</div>
+      <div class="mrow"><span class="tag t-new">new</span> nearest-node / GPU picking</div>
+      <div class="mrow"><span class="tag t-new">new</span> node-selection painting</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> inspector NI decode</div>
+      <div class="mrow"><span class="tag t-gate">off</span> gridlines · infinity · image-import</div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span> colors buffer · paint message</div>
+    </div>
+    <div class="mgroup"><h4>Files &amp; export</h4>
+      <div class="mrow"><span class="tag t-mod">modify</span> .gcaproj serialize CSR/positions</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> .gcastate nodeCount validation</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> recording (canvas, not raster)</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> presentation .html export</div>
+      <div class="mrow"><span class="tag t-new">new</span> GraphML/GEXF import</div>
+    </div>
+    <div class="mgroup"><h4>Indicators &amp; misc</h4>
+      <div class="mrow"><span class="tag t-gate">off</span> spatial (rows/cols) indicators</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> manual brush NI picker</div>
+      <div class="mrow"><span class="tag t-gate">off</span> region copy / paste</div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span> linked / standalone indicators</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> Neighborhoods → edge-types panel</div>
+    </div>
+  </div>
+</div></section>
+
+<!-- 11 HAZARDS -->
+<section id="hazards"><div class="card">
+  <h2><span class="n">11</span> Silent-corruption hazards to pin first</h2>
+  <p class="lede">From the adversarial review — these fail <i>quietly</i> (wrong results / memory corruption), not loudly, so they must be contracts decided up front.</p>
+  <div class="callgrid">
+    <div class="callout"><h4>maxDegree lifecycle</h4><p>Scratch is sized to max degree. A stale value after Regenerate/Import overflows scratch — the exact class as the Amphiphile NI-poisoning bug. Make it derived-on-change, re-uploaded to the worker, re-baked into WASM.</p></div>
+    <div class="callout"><h4>node-id ⟂ INVALID_NI</h4><p><code>INVALID_NI = 0x80000000</code> is a valid-looking i32. Cap node ids below it or the "no neighbor" sentinel collides with a real node (25M &lt; 2³¹, so harmless in practice — but must be documented at the codec).</p></div>
+    <div class="callout"><h4>reinit guard</h4><p><code>attrsStructurallyEqual</code> decides full-reinit vs soft-recompile. Topology fields aren't in its compared set today — a "Regenerate" could soft-recompile and run the <i>old</i> CSR. Add topology to the guard.</p></div>
+    <div class="callout"><h4>graph .gcastate load</h4><p><code>applySimulationState</code> validates <code>gridWidth/gridHeight</code> before loading. A graph snapshot has <code>nodeCount</code>; mismatches must be rejected cleanly, not silently abort (no try/catch around deserialize today).</p></div>
+  </div>
+  <p class="small" style="margin-top:14px"><b>One source of truth for the mode:</b> drive everything off <code>graphTopology?.enabled</code> (mirror <code>variegatedCells</code>); leave the dead <code>topology</code> enum derived/display-only. Add worker-side mutual-exclusion safety nets (graph ⟂ variegated, graph ⟂ WebGPU until later) for hand-edited files.</p>
+</div></section>
+
+<!-- 12 ROADMAP -->
+<section id="roadmap"><div class="card">
+  <h2><span class="n">12</span> If it were built — a phased roadmap</h2>
+  <p class="lede">Sequenced so the headline demo (Phase 3) lands early. <span style="color:var(--accent2)">MVP = Phases 1–5</span>; SDCA (Phase 6) is a separate, deliberate decision. <b>Currently parked at "research only."</b></p>
+
+  <figure>
+    <svg viewBox="0 0 920 290" role="img" aria-label="Phased roadmap timeline">
+      <!-- axis -->
+      <line x1="40" y1="250" x2="900" y2="250" stroke="#2a2e37"/>
+      <!-- MVP bracket -->
+      <path d="M150,32 L150,22 L760,22 L760,32" fill="none" stroke="#e8a13a" stroke-width="1.4" opacity=".7"/>
+      <text x="455" y="16" fill="#f4c06a" font-size="11.5" text-anchor="middle" font-family="var(--sans)">MVP — static graph CA</text>
+
+      <!-- bars: x = 40 + i*span -->
+      <!-- helper geometry: each phase block -->
+      <g font-family="var(--sans)">
+        <!-- P0 -->
+        <rect x="40"  y="60"  width="100" height="40" rx="8" fill="#1c1f26" stroke="#3a3f4a"/>
+        <text x="90"  y="78"  fill="#cdd3da" font-size="11.5" text-anchor="middle" font-weight="600">Phase 0</text>
+        <text x="90"  y="93"  fill="#6b7280" font-size="9.5" text-anchor="middle">decisions</text>
+        <!-- P1 -->
+        <rect x="150" y="60"  width="120" height="40" rx="8" fill="rgba(76,201,240,.08)" stroke="#4cc9f0"/>
+        <text x="210" y="78"  fill="#9fe0f7" font-size="11.5" text-anchor="middle" font-weight="600">Phase 1</text>
+        <text x="210" y="93"  fill="#6b7280" font-size="9.5" text-anchor="middle">data model · generators</text>
+        <!-- P2 -->
+        <rect x="150" y="108" width="200" height="40" rx="8" fill="rgba(76,201,240,.08)" stroke="#4cc9f0"/>
+        <text x="250" y="126" fill="#9fe0f7" font-size="11.5" text-anchor="middle" font-weight="600">Phase 2</text>
+        <text x="250" y="141" fill="#6b7280" font-size="9.5" text-anchor="middle">engine + JS compiler (headless)</text>
+        <!-- P3 highlighted -->
+        <rect x="280" y="156" width="240" height="44" rx="8" fill="var(--accent-soft)" stroke="#e8a13a" stroke-width="1.6"/>
+        <text x="400" y="175" fill="#f4c06a" font-size="12" text-anchor="middle" font-weight="700">Phase 3 — WASM + render</text>
+        <text x="400" y="191" fill="#cdd3da" font-size="9.8" text-anchor="middle">★ "swap topology, same rule" demo</text>
+        <!-- P4 -->
+        <rect x="430" y="60"  width="200" height="40" rx="8" fill="#1c1f26" stroke="#3a3f4a"/>
+        <text x="530" y="78"  fill="#cdd3da" font-size="11.5" text-anchor="middle" font-weight="600">Phase 4</text>
+        <text x="530" y="93"  fill="#6b7280" font-size="9.5" text-anchor="middle">force layout · scale render</text>
+        <!-- P5 -->
+        <rect x="560" y="108" width="200" height="40" rx="8" fill="#1c1f26" stroke="#3a3f4a"/>
+        <text x="660" y="126" fill="#cdd3da" font-size="11.5" text-anchor="middle" font-weight="600">Phase 5</text>
+        <text x="660" y="141" fill="#6b7280" font-size="9.5" text-anchor="middle">WebGPU · GraphML · export</text>
+        <!-- P6 separate dashed -->
+        <rect x="775" y="60"  width="120" height="140" rx="8" fill="rgba(176,140,255,.07)" stroke="#b08cff" stroke-dasharray="5 4"/>
+        <text x="835" y="120" fill="#c9b3ff" font-size="11.5" text-anchor="middle" font-weight="700">Phase 6</text>
+        <text x="835" y="137" fill="#9aa0aa" font-size="9.5" text-anchor="middle">SDCA</text>
+        <text x="835" y="151" fill="#6b7280" font-size="9" text-anchor="middle">(dynamic</text>
+        <text x="835" y="163" fill="#6b7280" font-size="9" text-anchor="middle">topology)</text>
+      </g>
+      <text x="40" y="278" fill="#6b7280" font-size="10.5" font-family="var(--sans)">earlier</text>
+      <text x="900" y="278" fill="#6b7280" font-size="10.5" text-anchor="end" font-family="var(--sans)">later · more ambitious</text>
+    </svg>
+    <figcaption>Each phase exits on the cross-target byte-shape parity check. Phase 3 is the value inflection: the moment a user can change a graph generator and watch identical rule logic produce different dynamics.</figcaption>
+  </figure>
+</div></section>
+
+<!-- 13 SDCA -->
+<section id="sdca"><div class="card">
+  <h2><span class="n">13</span> The ambitious tier — Structurally Dynamic CA</h2>
+  <p class="lede">SDCA (Ilachinski &amp; Halpern 1987) make the <b>topology itself a dynamical object</b>: a second "link rule" adds and removes edges as a function of cell states — a dual coupling between value dynamics and structure dynamics. This is a different beast and is deliberately scoped <i>out</i> of MVP.</p>
+  <figure>
+    <svg viewBox="0 0 920 190" role="img" aria-label="Structurally dynamic CA: edges added and removed by rules">
+      <g transform="translate(0,20)">
+        <!-- T -->
+        <g transform="translate(120,70)">
+          <g stroke="#3a3f4a" stroke-width="1.6"><line x1="-60" y1="0" x2="0" y2="-50"/><line x1="0" y1="-50" x2="60" y2="0"/><line x1="-60" y1="0" x2="0" y2="50"/></g>
+          <g fill="#262b34" stroke="#4a505c" stroke-width="1.4"><circle cx="-60" cy="0" r="11"/><circle cx="0" cy="-50" r="11"/><circle cx="60" cy="0" r="11"/><circle cx="0" cy="50" r="11"/></g>
+          <text x="0" y="92" fill="#9aa0aa" font-size="12" text-anchor="middle" font-family="var(--sans)">time T</text>
+        </g>
+        <line x1="230" y1="90" x2="300" y2="90" stroke="#3a3f4a" stroke-width="2"/><path d="M300,84 L314,90 L300,96 Z" fill="#3a3f4a"/>
+        <text x="272" y="78" fill="#9aa0aa" font-size="11" text-anchor="middle" font-family="var(--sans)">link rule</text>
+        <!-- T+1 -->
+        <g transform="translate(430,70)">
+          <g stroke="#3a3f4a" stroke-width="1.6"><line x1="-60" y1="0" x2="0" y2="-50"/><line x1="0" y1="-50" x2="60" y2="0"/></g>
+          <!-- decoupled edge (dashed red) -->
+          <line x1="-60" y1="0" x2="0" y2="50" stroke="#e0566a" stroke-width="1.6" stroke-dasharray="4 4" opacity=".7"/>
+          <!-- coupled new edge (green) -->
+          <line x1="60" y1="0" x2="0" y2="50" stroke="#66bb6a" stroke-width="2.2"/>
+          <g fill="#262b34" stroke="#4a505c" stroke-width="1.4"><circle cx="-60" cy="0" r="11"/><circle cx="0" cy="-50" r="11"/><circle cx="60" cy="0" r="11"/><circle cx="0" cy="50" r="11"/></g>
+          <text x="0" y="92" fill="#9aa0aa" font-size="12" text-anchor="middle" font-family="var(--sans)">time T+1</text>
+        </g>
+        <!-- legend -->
+        <g transform="translate(580,40)" font-family="var(--sans)" font-size="12">
+          <line x1="0" y1="0" x2="26" y2="0" stroke="#66bb6a" stroke-width="2.2"/><text x="34" y="4" fill="#9fe3a3">coupler — adds an edge</text>
+          <line x1="0" y1="26" x2="26" y2="26" stroke="#e0566a" stroke-width="1.6" stroke-dasharray="4 4"/><text x="34" y="30" fill="#f3a0ad">decoupler — removes an edge</text>
+          <text x="0" y="58" fill="#9aa0aa">Needs a <tspan fill="#cdd3da">mutable</tspan> adjacency (PCSR/CSR++),</text>
+          <text x="0" y="76" fill="#9aa0aa">double-buffered topology under sync,</text>
+          <text x="0" y="94" fill="#9aa0aa">conflict semantics under async,</text>
+          <text x="0" y="112" fill="#9aa0aa">+ a hysteresis trick to stop edge flicker.</text>
+        </g>
+      </g>
+    </svg>
+    <figcaption>Plain CSR is the <i>worst</i> structure for mutation (O(E) edge insert), so wanting SDCA eventually changes the adjacency-representation decision now — the one reason the scope question matters before any code. <span class="small">(Ilachinski &amp; Halpern 1987; Halpern 1989; Nowotny &amp; Requardt 2006 for the hysteresis trick; Singh 2025 for a modern adjacency-matrix template.)</span></figcaption>
+  </figure>
+</div></section>
+
+<!-- 14 LITERATURE -->
+<section id="lit"><div class="card">
+  <h2><span class="n">14</span> Literature foundations &amp; citation confidence</h2>
+  <p class="lede">Four loosely-connected traditions converge on the same aggregate principle. ~40 citations were fact-checked against arXiv / DOI / publisher.</p>
+
+  <figure>
+    <svg viewBox="0 0 920 210" role="img" aria-label="Four literature lineages converging on the aggregate principle">
+      <g font-family="var(--sans)">
+        <!-- four sources -->
+        <g>
+          <rect x="20"  y="20" width="200" height="34" rx="8" fill="#16181d" stroke="#3a3f4a"/><text x="120" y="42" fill="#cdd3da" font-size="11.5" text-anchor="middle">Formal CA-on-graphs · Wolfram → Marr &amp; Hütt</text>
+          <rect x="20"  y="62" width="200" height="34" rx="8" fill="#16181d" stroke="#3a3f4a"/><text x="120" y="84" fill="#cdd3da" font-size="11.5" text-anchor="middle">Automata / Boolean nets · Kauffman, Goles</text>
+          <rect x="20"  y="104" width="200" height="34" rx="8" fill="#16181d" stroke="#3a3f4a"/><text x="120" y="126" fill="#cdd3da" font-size="11.5" text-anchor="middle">Structurally dynamic · Ilachinski &amp; Halpern</text>
+          <rect x="20"  y="146" width="200" height="34" rx="8" fill="#16181d" stroke="#3a3f4a"/><text x="120" y="168" fill="#cdd3da" font-size="11.5" text-anchor="middle">Learned / GNN · Grattarola, Mordvintsev</text>
+        </g>
+        <!-- arrows -->
+        <g stroke="#3a3f4a" stroke-width="1.6" fill="none">
+          <path d="M220,37 C330,37 360,95 470,100"/>
+          <path d="M220,79 C330,79 360,98 470,102"/>
+          <path d="M220,121 C330,121 360,104 470,103"/>
+          <path d="M220,163 C330,163 360,110 470,106"/>
+        </g>
+        <!-- principle -->
+        <rect x="470" y="74" width="260" height="62" rx="12" fill="var(--accent-soft)" stroke="#e8a13a"/>
+        <text x="600" y="100" fill="#f4c06a" font-size="13" text-anchor="middle" font-weight="700">The aggregate principle</text>
+        <text x="600" y="120" fill="#cdd3da" font-size="11" text-anchor="middle">order-independent · degree-tolerant</text>
+        <!-- to genesisca -->
+        <line x1="730" y1="105" x2="788" y2="105" stroke="#3a3f4a" stroke-width="2"/><path d="M788,99 L802,105 L788,111 Z" fill="#3a3f4a"/>
+        <rect x="804" y="80" width="96" height="50" rx="11" fill="rgba(102,187,106,.09)" stroke="#66bb6a"/>
+        <text x="852" y="100" fill="#9fe3a3" font-size="11.5" text-anchor="middle" font-weight="700">GenesisCA</text>
+        <text x="852" y="117" fill="#9aa0aa" font-size="9.5" text-anchor="middle">already fits</text>
+      </g>
+    </svg>
+    <figcaption>Citation confidence across all topics:</figcaption>
+  </figure>
+  <div class="conf">
+    <i style="background:#66bb6a;flex:37"></i><i style="background:#e8a13a;flex:3"></i><i style="background:#e0566a;flex:2"></i>
+  </div>
+  <div class="legend" style="margin-top:2px">
+    <span><span class="dot" style="background:var(--green)"></span> ~37 confirmed (arXiv/DOI/publisher)</span>
+    <span><span class="dot" style="background:var(--accent)"></span> 3 uncertain (thesis / blog / library docs)</span>
+    <span><span class="dot" style="background:var(--red)"></span> 2 metadata-corrected (author/year — substance intact)</span>
+  </div>
+
+  <h3>Anchor works</h3>
+  <div class="biblio">
+    <div><b>Marr &amp; Hütt (2009)</b> Outer-totalistic cellular automata on graphs. <i>Phys. Lett. A</i> 373(5). arXiv:0812.2408. — the foundational formalism.</div>
+    <div><b>Marr &amp; Hütt (2005)</b> Topology regulates pattern formation capacity of binary CA on graphs. <i>Physica A</i> 354.</div>
+    <div><b>Grattarola, Livi &amp; Alippi (2021)</b> Learning Graph Cellular Automata. <i>NeurIPS 34</i>. arXiv:2110.14237.</div>
+    <div><b>Mordvintsev et al. (2020)</b> Growing Neural Cellular Automata. <i>Distill</i>.</div>
+    <div><b>Gilmer et al. (2017)</b> Neural Message Passing for Quantum Chemistry. <i>ICML</i>.</div>
+    <div><b>Kauffman (1969)</b> Metabolic stability… random genetic nets. <i>J. Theor. Biol.</i> 22(3).</div>
+    <div><b>Goles &amp; Martínez (1990)</b> Neural and Automata Networks. Kluwer.</div>
+    <div><b>Ilachinski &amp; Halpern (1987)</b> Structurally Dynamic Cellular Automata. <i>Complex Systems</i> 1(3).</div>
+    <div><b>Watts &amp; Strogatz (1998)</b> Collective dynamics of 'small-world' networks. <i>Nature</i> 393.</div>
+    <div><b>Barabási &amp; Albert (1999)</b> Emergence of scaling in random networks. <i>Science</i> 286.</div>
+    <div><b>Pastor-Satorras et al. (2015)</b> Epidemic processes in complex networks. <i>Rev. Mod. Phys.</i> 87.</div>
+    <div><b>Fruchterman &amp; Reingold (1991)</b> Graph Drawing by Force-Directed Placement. <i>SP&amp;E</i> 21(11).</div>
+    <div><b>Jacomy et al. (2014)</b> ForceAtlas2. <i>PLOS ONE</i> 9(6).</div>
+    <div><b>Merrill &amp; Garland (2016)</b> Merge-Based Parallel SpMV. <i>SC '16</i>.</div>
+    <div><b>Wang et al. (2016/17)</b> Gunrock: GPU Graph Analytics. <i>PPoPP / TOPC</i>.</div>
+    <div><b>Alabandi &amp; Burtscher (2022)</b> Improving Parallel Graph Coloring. <i>ACM TOPC</i> 9(3).</div>
+  </div>
+  <p class="small" style="margin-top:12px">Full annotated bibliography (~40 works) in <b>docs/INVESTIGATION_GRAPH_CA.md §13</b>.</p>
+</div></section>
+
+<div class="footer">
+  <p><b>GenesisCA — Graph Cellular Automata investigation.</b> Companion visual to <code>docs/INVESTIGATION_GRAPH_CA.md</code>. Self-contained (inline SVG/CSS/JS, no external assets). Status: research reference — no implementation planned.</p>
+</div>
+
+</div><!-- /wrap -->
+
+<script>
+(function(){
+  "use strict";
+  // ---- Live majority-rule CA on a fixed small graph ----
+  var svg = document.getElementById('gca-svg');
+  if(!svg) return;
+  var NS="http://www.w3.org/2000/svg";
+  // fixed layout (x,y) within 920x300 viewBox
+  var pos=[
+    [120,150],[200,70],[260,170],[340,80],[400,200],[470,110],[540,210],
+    [600,90],[670,180],[740,80],[790,200],[840,120],[300,250],[560,40]
+  ];
+  var edges=[
+    [0,1],[0,2],[1,2],[1,3],[2,3],[2,12],[3,5],[3,13],[4,2],[4,6],
+    [5,6],[5,7],[6,8],[7,8],[7,9],[8,10],[9,11],[10,11],[9,13],[6,12],[8,11]
+  ];
+  var N=pos.length;
+  var adj=[]; for(var i=0;i<N;i++) adj.push([]);
+  edges.forEach(function(e){ adj[e[0]].push(e[1]); adj[e[1]].push(e[0]); });
+  var deg=adj.map(function(a){return a.length;});
+  var state=new Array(N), nextState=new Array(N), gen=0;
+  // deterministic pseudo-random seed (no Date/Math.random dependency for repeatability is fine; Math.random ok here)
+  function randomize(){
+    for(var i=0;i<N;i++) state[i]= Math.random()<0.45?1:0;
+    gen=0; render();
+  }
+  function step(){
+    for(var i=0;i<N;i++){
+      var on=0, a=adj[i];
+      for(var k=0;k<a.length;k++) on+= state[a[k]];
+      var dens = a.length? on/a.length : 0;
+      nextState[i] = dens>0.5 ? 1 : (dens<0.5 ? 0 : state[i]); // majority, tie keeps
+    }
+    var t=state; state=nextState; nextState=t;
+    gen++; render();
+  }
+  var nodeEls=[];
+  function build(){
+    // edges
+    edges.forEach(function(e){
+      var l=document.createElementNS(NS,'line');
+      l.setAttribute('x1',pos[e[0]][0]); l.setAttribute('y1',pos[e[0]][1]);
+      l.setAttribute('x2',pos[e[1]][0]); l.setAttribute('y2',pos[e[1]][1]);
+      l.setAttribute('stroke','#2f3540'); l.setAttribute('stroke-width','1.5');
+      svg.appendChild(l);
+    });
+    // nodes
+    for(var i=0;i<N;i++){
+      var c=document.createElementNS(NS,'circle');
+      var r=7+Math.min(deg[i],6)*1.6;
+      c.setAttribute('cx',pos[i][0]); c.setAttribute('cy',pos[i][1]); c.setAttribute('r',r);
+      c.setAttribute('stroke','#0c0d10'); c.setAttribute('stroke-width','1.5');
+      svg.appendChild(c); nodeEls.push(c);
+    }
+  }
+  function render(){
+    var on=0;
+    for(var i=0;i<N;i++){
+      nodeEls[i].setAttribute('fill', state[i]? '#e8a13a':'#2a3038');
+      nodeEls[i].setAttribute('stroke', state[i]? '#f4c06a':'#3a414c');
+      on+=state[i];
+    }
+    var g=document.getElementById('gca-gen'); if(g) g.textContent=gen;
+    var o=document.getElementById('gca-on'); if(o) o.textContent=on+' / '+N;
+  }
+  var timer=null;
+  function play(){ if(timer) return; var b=document.getElementById('gca-play'); if(b){b.textContent='❚❚ Pause';b.classList.remove('primary');} timer=setInterval(step,950); }
+  function pause(){ if(timer){clearInterval(timer);timer=null;} var b=document.getElementById('gca-play'); if(b){b.textContent='▶ Play';b.classList.add('primary');} }
+  document.getElementById('gca-play').addEventListener('click',function(){ timer?pause():play(); });
+  document.getElementById('gca-step').addEventListener('click',function(){ pause(); step(); });
+  document.getElementById('gca-reset').addEventListener('click',function(){ pause(); randomize(); });
+  build(); randomize();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GenesisCA — Bond-Graph Morphogenesis Investigation</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#16181d; --panel2:#1c1f26; --panel3:#22262f;
+    --border:#2a2e37; --border2:#3a3f4a;
+    --ink:#e9ebee; --muted:#9aa0aa; --faint:#6b7280;
+    --accent:#e8a13a; --accent2:#f4c06a; --accent-soft:rgba(232,161,58,.13);
+    --cyan:#4cc9f0; --green:#66bb6a; --red:#e0566a; --purple:#b08cff; --pink:#f06aa8;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6;
+    background-image:radial-gradient(1100px 480px at 80% -8%,rgba(232,161,58,.07),transparent 60%),
+      radial-gradient(900px 420px at 0% 0%,rgba(76,201,240,.05),transparent 55%);}
+  a{color:var(--accent2);text-decoration:none} a:hover{text-decoration:underline}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 22px 90px}
+  header.hero{padding:64px 22px 30px;max-width:1120px;margin:0 auto}
+  .kicker{display:inline-flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--accent);border:1px solid var(--border2);background:var(--accent-soft);padding:5px 11px;border-radius:999px}
+  h1{font-size:clamp(30px,5vw,50px);line-height:1.07;margin:18px 0 10px;letter-spacing:-.02em}
+  h1 .sub{display:block;font-size:clamp(15px,2.2vw,21px);font-weight:500;color:var(--muted);margin-top:12px;letter-spacing:0}
+  .herometa{display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:22px;color:var(--faint);font-size:13px}
+  .herometa b{color:var(--muted);font-weight:600}
+  .status{display:inline-block;margin-top:18px;font-size:13px;color:var(--green);border:1px solid rgba(102,187,106,.35);
+    background:rgba(102,187,106,.08);border-radius:8px;padding:7px 12px}
+  nav.toc{position:sticky;top:0;z-index:20;background:rgba(12,13,16,.82);backdrop-filter:blur(10px);
+    border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin-top:34px}
+  nav.toc .row{max-width:1120px;margin:0 auto;padding:9px 22px;display:flex;flex-wrap:wrap;gap:5px 6px;font-size:12.5px}
+  nav.toc a{color:var(--muted);padding:5px 9px;border-radius:7px;white-space:nowrap}
+  nav.toc a:hover{color:var(--ink);background:var(--panel2);text-decoration:none}
+  section{margin-top:42px}
+  .card{background:linear-gradient(180deg,var(--panel),#131519);border:1px solid var(--border);border-radius:16px;
+    padding:26px 28px;box-shadow:0 1px 0 rgba(255,255,255,.02) inset, 0 20px 40px -30px rgba(0,0,0,.8)}
+  h2{font-size:24px;margin:0 0 4px;letter-spacing:-.01em;display:flex;align-items:baseline;gap:12px}
+  h2 .n{font-family:var(--mono);font-size:14px;color:var(--accent);border:1px solid var(--border2);
+    background:var(--accent-soft);border-radius:8px;padding:2px 9px;flex:none}
+  h2 .n.alt{color:var(--cyan);background:rgba(76,201,240,.1)}
+  .lede{color:var(--muted);font-size:15.5px;margin:6px 0 20px;max-width:80ch}
+  h3{font-size:16.5px;margin:24px 0 8px;color:var(--accent2)}
+  p{margin:10px 0;color:#d4d7dd}
+  .small{font-size:13px;color:var(--faint)}
+  figure{margin:18px 0 6px;background:#101216;border:1px solid var(--border);border-radius:12px;padding:16px}
+  figure svg{display:block;width:100%;height:auto}
+  figcaption{color:var(--muted);font-size:13px;margin-top:12px;padding-top:10px;border-top:1px dashed var(--border2)}
+  figcaption b{color:var(--ink)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  pre.code{background:#0a0c0f;border:1px solid var(--border2);border-radius:10px;padding:14px 16px;overflow:auto;
+    font-family:var(--mono);font-size:12.5px;line-height:1.55;color:#cdd3da;margin:8px 0}
+  .code .c{color:#6b7280} .code .k{color:var(--purple)} .code .s{color:var(--green)} .code .y{color:var(--accent2)}
+  .code .hl{background:rgba(232,161,58,.14);border-radius:3px;padding:0 2px}
+  ul.clean{margin:10px 0;padding-left:0;list-style:none}
+  ul.clean li{position:relative;padding:5px 0 5px 26px;color:#d4d7dd}
+  ul.clean li::before{content:"";position:absolute;left:6px;top:13px;width:7px;height:7px;border-radius:2px;
+    background:var(--accent);transform:rotate(45deg)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px;letter-spacing:.04em;text-transform:uppercase}
+  tr:hover td{background:rgba(255,255,255,.014)}
+  .tag{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:6px;border:1px solid var(--border2);white-space:nowrap}
+  .t-reuse{color:var(--green);border-color:rgba(102,187,106,.4);background:rgba(102,187,106,.08)}
+  .t-mod{color:var(--accent);border-color:rgba(232,161,58,.4);background:var(--accent-soft)}
+  .t-new{color:var(--cyan);border-color:rgba(76,201,240,.4);background:rgba(76,201,240,.08)}
+  .t-gate{color:var(--red);border-color:rgba(224,86,106,.4);background:rgba(224,86,106,.08)}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 16px;margin:6px 0 14px;font-size:12.5px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .callgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px}
+  @media(max-width:760px){.callgrid{grid-template-columns:1fr}}
+  .callout{border:1px solid var(--border2);border-left:3px solid var(--red);border-radius:10px;padding:13px 15px;background:#14100f}
+  .callout h4{margin:0 0 5px;font-size:14px;color:#f3a0ad}
+  .callout p{margin:0;font-size:13px;color:#cbd0d6}
+  .keyfact{border:1px solid var(--border2);border-left:3px solid var(--accent);background:linear-gradient(180deg,var(--accent-soft),transparent);
+    border-radius:10px;padding:16px 18px;margin:16px 0;font-size:15px}
+  .keyfact b{color:var(--accent2)}
+  .matrix{display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:10px;margin-top:8px}
+  .mgroup{background:#101216;border:1px solid var(--border);border-radius:11px;padding:13px 14px}
+  .mgroup h4{margin:0 0 9px;font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+  .mrow{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12.5px;color:#cdd2d8}
+  .mrow .tag{flex:none;width:54px;text-align:center}
+  .controls{display:flex;gap:9px;align-items:center;margin:12px 0 4px;flex-wrap:wrap}
+  .btn{font-family:var(--sans);font-size:13px;color:var(--ink);background:var(--panel3);border:1px solid var(--border2);
+    border-radius:8px;padding:7px 14px;cursor:pointer}
+  .btn:hover{border-color:var(--accent);color:var(--accent2)}
+  .btn.primary{background:var(--accent-soft);border-color:rgba(232,161,58,.5);color:var(--accent2)}
+  .slider{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+  .slider input{width:108px}
+  .pill{font-family:var(--mono);font-size:12px;color:var(--muted);padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:#101216}
+  .footer{margin-top:54px;padding-top:22px;border-top:1px solid var(--border);color:var(--faint);font-size:13px}
+  .biblio{columns:2;column-gap:30px;font-size:12.5px;color:var(--muted)}
+  @media(max-width:760px){.biblio{columns:1}}
+  .biblio div{break-inside:avoid;margin:0 0 9px;padding-left:14px;text-indent:-14px}
+  .biblio b{color:#cdd2d8}
+  .cvwrap{display:flex;justify-content:center;margin:6px 0}
+  #bondCanvas{border:1px solid var(--border2);border-radius:8px;background:#0a0c0f;width:min(540px,92vw);height:auto;touch-action:none}
+  input[type=range]{accent-color:var(--accent)}
+  .hud{display:flex;flex-wrap:wrap;gap:6px 10px;margin:8px 0;font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .hud b{color:var(--accent2);font-weight:600}
+  .verdict{border:1px solid rgba(102,187,106,.4);border-left:3px solid var(--green);background:rgba(102,187,106,.06);
+    border-radius:10px;padding:16px 18px;margin:16px 0;font-size:14.5px;color:#d4d7dd}
+  .verdict b{color:#9fe3a3}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <span class="kicker">◆ GenesisCA · Feasibility Investigation</span>
+  <h1>Bond-Graph Morphogenesis
+    <span class="sub">Cells <b style="color:var(--accent2);font-weight:600">glued</b> into a programmable, dynamic connection topology, dividing along a <b style="color:var(--accent2);font-weight:600">physically-realizable geometric axis</b>, and folding into multicellular shape through <b style="color:var(--accent2);font-weight:600">mechano-chemical feedback</b> — the extension that makes the center-based mode build real tissue.</span>
+  </h1>
+  <div class="herometa">
+    <span><b>Companion to:</b> docs/INVESTIGATION_BOND_GRAPH_MORPHOGENESIS.md</span>
+    <span><b>Extends:</b> INVESTIGATION_CENTER_BASED.md</span>
+    <span><b>Method:</b> 3 morphogenesis papers + division-plane &amp; bond/vertex/L-system lineage (fact-checked) + codebase delta audit</span>
+    <span><b>Date:</b> 2026-06-16</span>
+  </div>
+  <span class="status">● Status: research only — a feasibility synthesis + Impact-Map delta. Not a commitment to build; no code changed.</span>
+</header>
+
+<nav class="toc"><div class="row">
+  <a href="#tiers">1 · Four tiers</a>
+  <a href="#realizations">2 · Bonds vs vertex</a>
+  <a href="#division">3 · Geometry-driven division</a>
+  <a href="#demo">4 · Live demo</a>
+  <a href="#feedback">5 · Mechano-chemical autonomy</a>
+  <a href="#impact">6 · Impact-map delta</a>
+  <a href="#roadmap">7 · Verdict &amp; roadmap</a>
+  <a href="#hazards">8 · Hazards</a>
+  <a href="#lit">9 · Literature</a>
+</div></nav>
+
+<div class="wrap">
+
+<!-- TL;DR -->
+<section>
+  <div class="keyfact">
+    <b>The finding that drives everything:</b> the goal — cells that glue together, divide, and form 3D multicellular shape — is <b>not one model</b> but a <b>synthesis of four separable tiers</b>: <b>(I)</b> center-based agent mechanics (the substrate), <b>(II)</b> an explicit dynamic <b>bond graph</b> (the "glue" — persistent labelled edges, not whoever-is-near), <b>(III)</b> <b>division as a geometry-driven graph-rewrite</b> (a physically-realizable split axis; bonds inherited by which daughter ends up on each partner's side), and <b>(IV)</b> a reaction-diffusion field + curvature feedback (the <i>autonomy</i> that makes branching <i>emerge</i>). Each tier maps to a real, verified primary paper.
+  </div>
+  <div class="verdict">
+    <b>Substrate verdict:</b> there are two faithful realizations of "the connection topology." <b>(A) center-based + an explicit bond graph</b> (soft spheres + labelled dynamic edges) — lighter, fits GenesisCA's per-cell compiler, GPU-native, 3D-clean, delivers glued chains/clusters/branching — <b>build this first</b>. <b>(B) a vertex model</b> (cells share faces; the face network <i>is</i> the topology made geometric) — true deformable shape + gap-free tiling + real curvature, but the per-cell-step compiler <i>partially breaks</i> because the integrated degree of freedom is a <i>shared vertex</i>. The one honest catch: a soft sphere has <b>no shape</b>, so the <i>faithful</i> Hertwig long-axis division lives in (B); (A) gets a well-grounded <b>tension-axis proxy</b>. Build (A); reach for (B) when shape-driven sheet mechanics becomes non-negotiable.
+  </div>
+</section>
+
+<!-- 1 FOUR TIERS -->
+<section id="tiers"><div class="card">
+  <h2><span class="n">01</span> The vision is a synthesis of four tiers</h2>
+  <p class="lede">None of the four is speculative — each is a separable layer the literature already treats independently, and each is a real differentiator. Built bottom-up, every tier is independently demonstrable.</p>
+
+  <figure>
+    <svg viewBox="0 0 920 372" role="img" aria-label="The four tiers of bond-graph morphogenesis stacked from substrate to autonomy">
+      <text x="460" y="24" fill="#9aa0aa" font-size="13" text-anchor="middle" font-family="var(--sans)">each tier adds one capability the one below cannot express — built bottom-up</text>
+      <!-- tier IV top -->
+      <g transform="translate(150,44)">
+        <rect x="0" y="0" width="620" height="64" rx="10" fill="rgba(176,140,255,.09)" stroke="#b08cff"/>
+        <text x="16" y="26" fill="#c9b3ff" font-size="14" font-weight="700" font-family="var(--sans)">IV · reaction-diffusion field + curvature feedback</text>
+        <text x="16" y="48" fill="#9aa0aa" font-size="12" font-family="var(--sans)">cells sense the shape they build &amp; steer → branching/tubulation EMERGE (Okuda; Hirashima; Nelson)</text>
+        <text x="604" y="38" fill="#b08cff" font-size="11" text-anchor="end" font-family="var(--mono)">autonomy</text>
+      </g>
+      <!-- tier III -->
+      <g transform="translate(120,120)">
+        <rect x="0" y="0" width="680" height="64" rx="10" fill="rgba(232,161,58,.10)" stroke="#e8a13a"/>
+        <text x="16" y="26" fill="#f4c06a" font-size="14" font-weight="700" font-family="var(--sans)">III · geometry-driven DIVISION-as-rewrite</text>
+        <text x="16" y="48" fill="#9aa0aa" font-size="12" font-family="var(--sans)">split along a physically-realizable axis; bonds inherited by geometry (Hertwig→Minc→Bosveld→Okuda)</text>
+        <text x="664" y="38" fill="#e8a13a" font-size="11" text-anchor="end" font-family="var(--mono)">structured growth</text>
+      </g>
+      <!-- tier II -->
+      <g transform="translate(90,196)">
+        <rect x="0" y="0" width="740" height="64" rx="10" fill="rgba(76,201,240,.10)" stroke="#4cc9f0"/>
+        <text x="16" y="26" fill="#7fd6f4" font-size="14" font-weight="700" font-family="var(--sans)">II · explicit dynamic BOND graph — the "glue"</text>
+        <text x="16" y="48" fill="#9aa0aa" font-size="12" font-family="var(--sans)">persistent labelled edges that survive separation &amp; break by rule (PhysiCell springs; CC3D FocalPointPlasticity)</text>
+        <text x="724" y="38" fill="#4cc9f0" font-size="11" text-anchor="end" font-family="var(--mono)">connectivity</text>
+      </g>
+      <!-- tier I base -->
+      <g transform="translate(60,272)">
+        <rect x="0" y="0" width="800" height="64" rx="10" fill="rgba(102,187,106,.10)" stroke="#66bb6a"/>
+        <text x="16" y="26" fill="#8fd193" font-size="14" font-weight="700" font-family="var(--sans)">I · center-based agent mechanics — the substrate</text>
+        <text x="16" y="48" fill="#9aa0aa" font-size="12" font-family="var(--sans)">soft-sphere agents · overdamped force integration · growth · death · dynamic adjacency · 3D · GPU (the CB doc)</text>
+        <text x="784" y="38" fill="#66bb6a" font-size="11" text-anchor="end" font-family="var(--mono)">substrate</text>
+      </g>
+    </svg>
+    <figcaption><b>Remove any one and a capability vanishes.</b> The bond graph (II) turns a gas of spheres into a connected aggregate; geometry-driven division (III) makes growth <i>structured</i> (elongate/fold along mechanical axes, not balloon); the field + curvature loop (IV) makes the whole thing <i>autonomous</i>. <span class="small">Tier I — the center-based substrate — is itself research-only and unbuilt, so every "reuse" below is <i>reuse-of-planned</i>.</span></figcaption>
+  </figure>
+</div></section>
+
+<!-- 2 REALIZATIONS -->
+<section id="realizations"><div class="card">
+  <h2><span class="n">02</span> Two ways to make "the connection topology" concrete</h2>
+  <p class="lede">"Cells glued into a dynamic topology" has two faithful realizations, differing on one axis: <b>is a connection an explicit edge between cell centres, or the shared geometry of two cells' boundaries?</b> That axis decides fit, cost, and what shape you can build.</p>
+
+  <div class="grid2">
+    <figure>
+      <svg viewBox="0 0 440 290" role="img" aria-label="Realization A: explicit bond graph over center-based soft spheres">
+        <text x="220" y="20" fill="#7fd6f4" font-size="13.5" text-anchor="middle" font-weight="700" font-family="var(--sans)">(A) center-based + bond graph</text>
+        <!-- soft spheres with explicit bond lines -->
+        <g>
+          <line x1="150" y1="110" x2="220" y2="95" stroke="#4cc9f0" stroke-width="3"/>
+          <line x1="220" y1="95" x2="290" y2="120" stroke="#4cc9f0" stroke-width="3"/>
+          <line x1="220" y1="95" x2="235" y2="170" stroke="#4cc9f0" stroke-width="3"/>
+          <line x1="150" y1="110" x2="160" y2="185" stroke="#4cc9f0" stroke-width="3"/>
+          <line x1="160" y1="185" x2="235" y2="170" stroke="#4cc9f0" stroke-width="3"/>
+          <circle cx="150" cy="110" r="26" fill="rgba(232,161,58,.85)" stroke="#0c0d10"/>
+          <circle cx="220" cy="95" r="28" fill="rgba(232,161,58,.85)" stroke="#0c0d10"/>
+          <circle cx="290" cy="120" r="24" fill="rgba(76,201,240,.8)" stroke="#0c0d10"/>
+          <circle cx="160" cy="185" r="25" fill="rgba(76,201,240,.8)" stroke="#0c0d10"/>
+          <circle cx="235" cy="170" r="27" fill="rgba(232,161,58,.85)" stroke="#0c0d10"/>
+        </g>
+        <text x="220" y="238" fill="#9aa0aa" font-size="11.5" text-anchor="middle" font-family="var(--sans)">a cell = centre + radius + a <tspan fill="#4cc9f0">bond list</tspan></text>
+        <text x="220" y="256" fill="#66bb6a" font-size="11.5" text-anchor="middle" font-family="var(--sans)">fits the per-cell IR · GPU-native · 3D-clean</text>
+        <text x="220" y="274" fill="#e0566a" font-size="11.5" text-anchor="middle" font-family="var(--sans)">but NO true cell shape (a sphere)</text>
+      </svg>
+      <figcaption><b>Recommended first target.</b> Each cell sums its own forces over <i>two</i> sets — distance candidates + its persistent bonds — still one agent, one net force, one position write. The per-cell step survives almost intact.</figcaption>
+    </figure>
+    <figure>
+      <svg viewBox="0 0 440 290" role="img" aria-label="Realization B: vertex model where cells share faces">
+        <text x="220" y="20" fill="#f4c06a" font-size="13.5" text-anchor="middle" font-weight="700" font-family="var(--sans)">(B) vertex model</text>
+        <!-- shared-edge polygons -->
+        <g stroke="#3a3f4a" stroke-width="2" fill="none">
+          <polygon points="150,60 215,52 235,110 190,150 138,120" fill="rgba(232,161,58,.18)"/>
+          <polygon points="215,52 285,70 300,128 235,110" fill="rgba(76,201,240,.16)"/>
+          <polygon points="235,110 300,128 280,190 210,200 190,150" fill="rgba(232,161,58,.14)"/>
+          <polygon points="138,120 190,150 210,200 150,212 110,165" fill="rgba(76,201,240,.13)"/>
+        </g>
+        <!-- vertices shared by 3 cells -->
+        <g fill="#e0566a">
+          <circle cx="235" cy="110" r="5.5"/><circle cx="190" cy="150" r="5.5"/><circle cx="215" cy="52" r="5"/><circle cx="138" cy="120" r="5"/>
+        </g>
+        <text x="247" y="106" fill="#f3a0ad" font-size="10" font-family="var(--mono)">v</text>
+        <text x="220" y="244" fill="#9aa0aa" font-size="11.5" text-anchor="middle" font-family="var(--sans)">shared faces ARE the topology · real shape</text>
+        <text x="220" y="262" fill="#e0566a" font-size="11.5" text-anchor="middle" font-family="var(--sans)">a <tspan fill="#f3a0ad">vertex</tspan> belongs to ~3 cells → no per-cell owner</text>
+        <text x="220" y="280" fill="#9aa0aa" font-size="11.5" text-anchor="middle" font-family="var(--sans)">per-cell energy → per-vertex force breaks the IR</text>
+      </svg>
+      <figcaption><b>The eventual true-shape target, not first.</b> The same property that makes adjacency free — <i>the shared face IS the connection</i> — is the one that makes the integrated DOF (a vertex) belong to many cells, breaking the per-cell-step compiler worse than CPM or center-based did. Plus T1/T2 mesh surgery (a degenerate-polygon silent-corruption class).</figcaption>
+    </figure>
+  </div>
+</div></section>
+
+<!-- 3 DIVISION -->
+<section id="division"><div class="card">
+  <h2><span class="n">03</span> Division is a geometry-driven rewrite — not a free choice</h2>
+  <p class="lede">The centrepiece, and the place to be most precise. A dividing cell does <b>not</b> freely partition which bonds go to which daughter (no physical plane can keep 10 neighbours on one side and 2 on the other). The split is a <b>physically-realizable axis</b>; bond inheritance <i>follows</i> from the geometry.</p>
+
+  <figure>
+    <svg viewBox="0 0 920 318" role="img" aria-label="Geometry-driven division: compute a tension axis, split perpendicular, reattach bonds by side of the plane">
+      <!-- panel 1: parent with neighbour tensions -->
+      <g transform="translate(20,30)">
+        <text x="130" y="0" fill="#f4c06a" font-size="13" text-anchor="middle" font-weight="700" font-family="var(--sans)">1 · compute the axis</text>
+        <!-- neighbours pulling -->
+        <g stroke="#4cc9f0" stroke-width="2.5">
+          <line x1="130" y1="120" x2="48" y2="92"/><line x1="130" y1="120" x2="212" y2="100"/>
+          <line x1="130" y1="120" x2="92" y2="186"/><line x1="130" y1="120" x2="176" y2="184"/>
+        </g>
+        <!-- stretched (tense) bonds bolder/amber -->
+        <line x1="130" y1="120" x2="40" y2="120" stroke="#e8a13a" stroke-width="4.5"/>
+        <line x1="130" y1="120" x2="222" y2="120" stroke="#e8a13a" stroke-width="4.5"/>
+        <g fill="rgba(76,201,240,.6)" stroke="#0c0d10">
+          <circle cx="48" cy="92" r="13"/><circle cx="212" cy="100" r="13"/><circle cx="92" cy="186" r="13"/><circle cx="176" cy="184" r="13"/>
+        </g>
+        <circle cx="40" cy="120" r="14" fill="rgba(232,161,58,.55)" stroke="#0c0d10"/>
+        <circle cx="222" cy="120" r="14" fill="rgba(232,161,58,.55)" stroke="#0c0d10"/>
+        <circle cx="130" cy="120" r="30" fill="rgba(232,161,58,.9)" stroke="#f4c06a" stroke-width="2"/>
+        <!-- axis arrow -->
+        <line x1="86" y1="120" x2="174" y2="120" stroke="#fff" stroke-width="1.5" stroke-dasharray="3 3"/>
+        <text x="130" y="232" fill="#9aa0aa" font-size="10.5" text-anchor="middle" font-family="var(--sans)">m̂ = principal eigenvector of the</text>
+        <text x="130" y="247" fill="#e8a13a" font-size="10.5" text-anchor="middle" font-family="var(--mono)">Σ tension·(r̂⊗r̂)</text>
+        <text x="130" y="262" fill="#9aa0aa" font-size="10.5" text-anchor="middle" font-family="var(--sans)">tensor — the STRETCH axis</text>
+      </g>
+      <!-- arrow -->
+      <g transform="translate(285,150)"><line x1="0" y1="0" x2="34" y2="0" stroke="#3a3f4a" stroke-width="2"/><path d="M34,-6 L48,0 L34,6 Z" fill="#3a3f4a"/></g>
+      <!-- panel 2: split plane perpendicular -->
+      <g transform="translate(350,30)">
+        <text x="130" y="0" fill="#f4c06a" font-size="13" text-anchor="middle" font-weight="700" font-family="var(--sans)">2 · split ⟂ m̂</text>
+        <line x1="130" y1="56" x2="130" y2="184" stroke="#e0566a" stroke-width="2.5" stroke-dasharray="6 4"/>
+        <text x="146" y="62" fill="#f3a0ad" font-size="10" font-family="var(--sans)">plane</text>
+        <circle cx="92" cy="120" r="26" fill="rgba(232,161,58,.9)" stroke="#f4c06a"/>
+        <circle cx="168" cy="120" r="26" fill="rgba(232,161,58,.7)" stroke="#f4c06a"/>
+        <text x="92" y="125" fill="#0c0d10" font-size="13" font-weight="700" text-anchor="middle" font-family="var(--mono)">a</text>
+        <text x="168" y="125" fill="#0c0d10" font-size="13" font-weight="700" text-anchor="middle" font-family="var(--mono)">b</text>
+        <text x="130" y="232" fill="#9aa0aa" font-size="10.5" text-anchor="middle" font-family="var(--sans)">two daughters placed along m̂,</text>
+        <text x="130" y="247" fill="#9aa0aa" font-size="10.5" text-anchor="middle" font-family="var(--sans)">repulsion relaxes them apart</text>
+      </g>
+      <!-- arrow -->
+      <g transform="translate(615,150)"><line x1="0" y1="0" x2="34" y2="0" stroke="#3a3f4a" stroke-width="2"/><path d="M34,-6 L48,0 L34,6 Z" fill="#3a3f4a"/></g>
+      <!-- panel 3: bonds reattach by side -->
+      <g transform="translate(680,30)">
+        <text x="120" y="0" fill="#f4c06a" font-size="13" text-anchor="middle" font-weight="700" font-family="var(--sans)">3 · bonds by geometry</text>
+        <line x1="78" y1="120" x2="162" y2="120" stroke="#66bb6a" stroke-width="3"/>
+        <line x1="78" y1="120" x2="24" y2="92" stroke="#4cc9f0" stroke-width="2.5"/>
+        <line x1="78" y1="120" x2="40" y2="184" stroke="#4cc9f0" stroke-width="2.5"/>
+        <line x1="162" y1="120" x2="216" y2="100" stroke="#4cc9f0" stroke-width="2.5"/>
+        <line x1="162" y1="120" x2="200" y2="186" stroke="#4cc9f0" stroke-width="2.5"/>
+        <g fill="rgba(76,201,240,.6)" stroke="#0c0d10"><circle cx="24" cy="92" r="12"/><circle cx="40" cy="184" r="12"/><circle cx="216" cy="100" r="12"/><circle cx="200" cy="186" r="12"/></g>
+        <circle cx="78" cy="120" r="24" fill="rgba(232,161,58,.9)" stroke="#f4c06a"/>
+        <circle cx="162" cy="120" r="24" fill="rgba(232,161,58,.7)" stroke="#f4c06a"/>
+        <text x="78" y="125" fill="#0c0d10" font-size="12" font-weight="700" text-anchor="middle" font-family="var(--mono)">a</text>
+        <text x="162" y="125" fill="#0c0d10" font-size="12" font-weight="700" text-anchor="middle" font-family="var(--mono)">b</text>
+        <text x="120" y="232" fill="#9aa0aa" font-size="10.5" text-anchor="middle" font-family="var(--sans)">each partner → the <tspan fill="#4cc9f0">nearer</tspan> daughter;</text>
+        <text x="120" y="247" fill="#66bb6a" font-size="10.5" text-anchor="middle" font-family="var(--sans)">one new a–b bond. Deterministic.</text>
+      </g>
+    </svg>
+    <figcaption><b>The correction, stated plainly.</b> The split axis is a <i>computed vector</i> (the mechanical tension axis — Campinho/Wyatt/Nestor-Bergmann; the faithful shape long-axis needs the vertex model). Bond inheritance is then forced by which side of the plane each partner sits on — <code style="font-family:var(--mono)">sign(dot(offset, m̂))</code> — never a free choice. <span class="small">An unweighted neighbour-packing tensor would point at the <i>short</i> axis — weight by bond <i>tension</i>, not by packing.</span></figcaption>
+  </figure>
+</div></section>
+
+<!-- 4 LIVE DEMO -->
+<section id="demo"><div class="card">
+  <h2><span class="n alt">04</span> Live demo — glue, grow, divide along the tension axis</h2>
+  <p class="lede">A 2D bond-graph model running in your browser: soft cells <b>repel on overlap</b>, <b>glue</b> to neighbours (bonds drawn as lines), <b>grow</b>, and <b>divide along their tension axis</b> — daughters inherit bonds by geometry. Watch a few seed cells grow into a <i>connected</i> tissue, not a gas of spheres. Two adhesion types sort while staying bonded.</p>
+
+  <div class="controls">
+    <button class="btn primary" id="bd-play">▶ Play</button>
+    <button class="btn" id="bd-step">Step ×20</button>
+    <button class="btn" id="bd-seed">Reseed</button>
+    <button class="btn" id="bd-burst">Divide burst</button>
+    <label class="slider">division <input type="range" id="bd-div" min="0" max="100" value="28"><span id="bd-divv" class="pill" style="display:inline">on</span></label>
+    <label class="slider">adhesion <input type="range" id="bd-adh" min="0" max="100" value="55"><span id="bd-adhv" class="pill" style="display:inline">0.55</span></label>
+  </div>
+  <div class="hud">
+    <span>cells <b id="bd-n">—</b></span><span>bonds <b id="bd-b">—</b></span><span>mean degree <b id="bd-deg">—</b></span>
+    <span>components <b id="bd-comp">—</b></span><span>step <b id="bd-t">0</b></span><span id="bd-stab" style="color:var(--green)">● stable</span>
+  </div>
+  <div class="cvwrap"><canvas id="bondCanvas" width="540" height="380"></canvas></div>
+  <div class="legend">
+    <span><span class="dot" style="background:#e8a13a"></span>type A (sticky)</span>
+    <span><span class="dot" style="background:#4cc9f0"></span>type B</span>
+    <span><span class="dot" style="background:#66bb6a"></span>bond (line = glue; brighter = under tension)</span>
+  </div>
+  <figcaption class="small" style="border-top:1px dashed var(--border2);padding-top:10px">Overdamped forward-Euler; bonds form on contact (hysteresis: form&nbsp;&lt;&nbsp;break), break under strain; division computes the tension-axis eigenvector, places two daughters along it, and reattaches each bond to the nearer daughter. Parameters were tuned for visible, <i>stable</i> behaviour (no position blow-up). This is the §3 recipe, live.</figcaption>
+</div></section>
+
+<!-- 5 FEEDBACK -->
+<section id="feedback"><div class="card">
+  <h2><span class="n">05</span> Mechano-chemical feedback — the autonomy layer</h2>
+  <p class="lede">Tiers I–III give a glued, dividing aggregate that grows along mechanical axes. <b>Tier IV is what makes morphogenesis autonomous</b> — branching/tubulation <i>emerge from coupling, not a script</i>. All three papers converge here: the rule must sense the shape it is building and steer.</p>
+
+  <figure>
+    <svg viewBox="0 0 920 268" role="img" aria-label="The closed mechano-chemical feedback loop coupling geometry, field, and cell behaviour">
+      <!-- closed loop of 4 nodes -->
+      <g font-family="var(--sans)">
+        <!-- nodes -->
+        <g>
+          <rect x="60" y="100" width="150" height="62" rx="10" fill="rgba(102,187,106,.10)" stroke="#66bb6a"/>
+          <text x="135" y="128" fill="#8fd193" font-size="13" font-weight="700" text-anchor="middle">geometry</text>
+          <text x="135" y="146" fill="#9aa0aa" font-size="10.5" text-anchor="middle">shape · curvature · packing</text>
+        </g>
+        <g>
+          <rect x="385" y="24" width="150" height="62" rx="10" fill="rgba(176,140,255,.10)" stroke="#b08cff"/>
+          <text x="460" y="52" fill="#c9b3ff" font-size="13" font-weight="700" text-anchor="middle">field</text>
+          <text x="460" y="70" fill="#9aa0aa" font-size="10.5" text-anchor="middle">diffuses along bonds (∝ contact)</text>
+        </g>
+        <g>
+          <rect x="710" y="100" width="150" height="62" rx="10" fill="rgba(232,161,58,.10)" stroke="#e8a13a"/>
+          <text x="785" y="128" fill="#f4c06a" font-size="13" font-weight="700" text-anchor="middle">cell behaviour</text>
+          <text x="785" y="146" fill="#9aa0aa" font-size="10.5" text-anchor="middle">grow · divide · die · migrate</text>
+        </g>
+        <g>
+          <rect x="385" y="176" width="150" height="62" rx="10" fill="rgba(76,201,240,.10)" stroke="#4cc9f0"/>
+          <text x="460" y="204" fill="#7fd6f4" font-size="13" font-weight="700" text-anchor="middle">deformation</text>
+          <text x="460" y="222" fill="#9aa0aa" font-size="10.5" text-anchor="middle">forces move cells → new shape</text>
+        </g>
+        <!-- arrows clockwise -->
+        <g stroke="#3a3f4a" stroke-width="2" fill="#3a3f4a">
+          <line x1="205" y1="112" x2="382" y2="66"/><path d="M382,66 l-13,-1 l6,11 z"/>
+          <line x1="538" y1="66" x2="712" y2="112"/><path d="M712,112 l-12,-6 l-1,13 z"/>
+          <line x1="712" y1="150" x2="538" y2="196"/><path d="M538,196 l13,1 l-6,-11 z"/>
+          <line x1="382" y1="208" x2="208" y2="150"/><path d="M208,150 l12,6 l1,-13 z"/>
+        </g>
+        <!-- loop labels -->
+        <text x="300" y="78" fill="#b08cff" font-size="10.5" text-anchor="middle" font-family="var(--mono)">sculpts gradient</text>
+        <text x="640" y="78" fill="#e8a13a" font-size="10.5" text-anchor="middle" font-family="var(--mono)">activator→growth</text>
+        <text x="640" y="190" fill="#4cc9f0" font-size="10.5" text-anchor="middle" font-family="var(--mono)">mechanics</text>
+        <text x="300" y="190" fill="#66bb6a" font-size="10.5" text-anchor="middle" font-family="var(--mono)">re-sense curvature</text>
+      </g>
+      <text x="460" y="131" fill="#6b7280" font-size="11" text-anchor="middle" font-family="var(--mono)">one closed loop</text>
+    </svg>
+    <figcaption><b>The self-organization axiom (Nelson; Hirashima).</b> The regulated quantity must be the same one the cell senses and acts on. Okuda/Eiraku's discrete Turing field <i>diffuses cell-to-cell along the connection graph, weighted by contact area</i> — so geometry feeds chemistry for free; the patterning-vs-deformation time-scale ratio (γ,χ) selects undulation → tubulation → branching. <span class="small">Curvature feedback needs a <b>mandatory time-lag</b> (a slow actuator lagging a fast sensor) — a symmetric loop just flattens and stalls.</span></figcaption>
+  </figure>
+</div></section>
+
+<!-- 6 IMPACT -->
+<section id="impact"><div class="card">
+  <h2><span class="n">06</span> Impact-map delta — what bonds add on top of the center-based mode</h2>
+  <p class="lede">Only the additions <i>beyond</i> the center-based doc's 50-row map. Its agent tier, force driver, <code style="font-family:var(--mono)">maxCells</code>/free-list, distance-neighbour rebuild, division/death, entity renderer and <code style="font-family:var(--mono)">lookupTable</code> adhesion are the prerequisite substrate, reused (it too is unbuilt — "reuse-of-planned").</p>
+  <div class="legend">
+    <span><span class="dot" style="background:#4cc9f0"></span>new</span><span><span class="dot" style="background:#e8a13a"></span>modify</span>
+    <span><span class="dot" style="background:#66bb6a"></span>reuse</span><span><span class="dot" style="background:#e0566a"></span>⚠ silent-corruption hazard</span>
+  </div>
+  <div class="matrix">
+    <div class="mgroup"><h4>Bond-graph tier</h4>
+      <div class="mrow"><span class="tag t-new">new</span>persistent ragged bond store (maxBonds/agent)</div>
+      <div class="mrow"><span class="tag t-new">new</span>post-step structural mutation (single store)</div>
+      <div class="mrow"><span class="tag t-gate">⚠ new</span>dangling-bond ABI: epoch + break-on-death</div>
+      <div class="mrow"><span class="tag t-new">new</span>FormBond / BreakBond (MoveSelfToNeighbor shape)</div>
+      <div class="mrow"><span class="tag t-gate">⚠ new</span>hysteresis (form &lt; break) anti-flicker</div>
+      <div class="mrow"><span class="tag t-mod">mod</span>per-bond spring in the vector reduction</div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span>bond-spring matrix = lookupTable</div>
+    </div>
+    <div class="mgroup"><h4>Geometry-driven division</h4>
+      <div class="mrow"><span class="tag t-new">new</span>tension-axis eigensolve (2×2, +fallback)</div>
+      <div class="mrow"><span class="tag t-new">new</span>GetBondDegree / NeighbourDensity reads</div>
+      <div class="mrow"><span class="tag t-gate">⚠ new</span>geometric bond reattachment (riskiest)</div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span>tension-weighting model attribute</div>
+      <div class="mrow"><span class="tag t-new">new</span>morphogen split (concentration-preserving)</div>
+    </div>
+    <div class="mgroup"><h4>Field + curvature</h4>
+      <div class="mrow"><span class="tag t-new">new</span>SampleField / SecreteToField</div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span>Gierer-Meinhardt = Gray-Scott Laplacian</div>
+      <div class="mrow"><span class="tag t-new">new</span>GetCurvature (bond-fan anisotropy)</div>
+      <div class="mrow"><span class="tag t-gate">⚠ new</span>curvature macro: fast sensor + slow actuator</div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span>(γ,χ) morphology slider</div>
+    </div>
+    <div class="mgroup"><h4>Authoring / UX (net-new)</h4>
+      <div class="mrow"><span class="tag t-new">new</span>initial-bond seeding</div>
+      <div class="mrow"><span class="tag t-new">new</span>bond-graph indicators (degree, components)</div>
+      <div class="mrow"><span class="tag t-new">new</span>glue/cut brush + inspector bond table</div>
+      <div class="mrow"><span class="tag t-mod">mod</span>save/load ragged bonds over free-list</div>
+      <div class="mrow"><span class="tag t-mod">mod</span>recording / HTML-export / 3D bond layer</div>
+    </div>
+  </div>
+  <p class="small">The genuinely new work concentrates in the <b>persistent bond tier + its ABI</b>, the <b>geometric division-rewrite</b>, and the <b>curvature hysteresis loop</b>. The per-bond force reuses the center-based vector reduction; the adhesion/bond matrix reuses <code style="font-family:var(--mono)">lookupTable</code>; the field reuses Gray-Scott; the mode-wiring reuses the variegated-cells recipe.</p>
+</div></section>
+
+<!-- 7 ROADMAP -->
+<section id="roadmap"><div class="card">
+  <h2><span class="n">07</span> Verdict &amp; roadmap</h2>
+  <div class="verdict" style="margin-top:6px">
+    <b>Build (A) center-based + explicit bond graph first.</b> It fits the compile paradigm, is GPU-native and 3D-clean, reuses the center-based force machinery + <code style="font-family:var(--mono)">lookupTable</code> adhesion, and delivers the headline shapes: aggregates → chains → clusters → branching. Treat (B) vertex as a deliberate later engine behind a shared engine-agnostic IR — reached <i>sooner</i> if faithful geometric long-axis division and true folding shape become non-negotiable (they are exactly what (A) cannot do).
+  </div>
+  <figure>
+    <svg viewBox="0 0 920 210" role="img" aria-label="Phased roadmap from the bond tier to 3D, with v1 and v2 split">
+      <line x1="40" y1="96" x2="880" y2="96" stroke="#2a2e37" stroke-width="2"/>
+      <!-- v1 bracket -->
+      <rect x="60" y="58" width="330" height="76" rx="8" fill="rgba(102,187,106,.05)" stroke="rgba(102,187,106,.3)"/>
+      <text x="225" y="50" fill="#66bb6a" font-size="11" text-anchor="middle" font-family="var(--mono)">v1 — glued-divide differentiator (no field)</text>
+      <rect x="430" y="58" width="320" height="76" rx="8" fill="rgba(176,140,255,.05)" stroke="rgba(176,140,255,.3)"/>
+      <text x="590" y="50" fill="#b08cff" font-size="11" text-anchor="middle" font-family="var(--mono)">v2 — autonomy (field + curvature)</text>
+      <!-- phase dots -->
+      <g font-family="var(--sans)" text-anchor="middle">
+        <circle cx="120" cy="96" r="8" fill="#4cc9f0"/><text x="120" y="120" fill="#7fd6f4" font-size="11.5" font-weight="700">B1</text><text x="120" y="136" fill="#9aa0aa" font-size="10">bond tier</text>
+        <circle cx="290" cy="96" r="8" fill="#e8a13a"/><text x="290" y="120" fill="#f4c06a" font-size="11.5" font-weight="700">B2 ★</text><text x="290" y="136" fill="#9aa0aa" font-size="10">division-rewrite</text>
+        <circle cx="500" cy="96" r="8" fill="#b08cff"/><text x="500" y="120" fill="#c9b3ff" font-size="11.5" font-weight="700">B3</text><text x="500" y="136" fill="#9aa0aa" font-size="10">field + branching</text>
+        <circle cx="660" cy="96" r="8" fill="#b08cff"/><text x="660" y="120" fill="#c9b3ff" font-size="11.5" font-weight="700">B4</text><text x="660" y="136" fill="#9aa0aa" font-size="10">curvature loop</text>
+        <circle cx="820" cy="96" r="8" fill="#66bb6a"/><text x="820" y="120" fill="#8fd193" font-size="11.5" font-weight="700">B5</text><text x="820" y="136" fill="#9aa0aa" font-size="10">WebGPU + 3D</text>
+      </g>
+      <text x="290" y="180" fill="#6b7280" font-size="10.5" text-anchor="middle" font-family="var(--sans)">★ the v1 headline: a glued cluster that grows &amp; divides along its tension axis</text>
+      <text x="460" y="198" fill="#6b7280" font-size="10.5" text-anchor="middle" font-family="var(--sans)">(B) vertex engine — deferred, behind the shared IR, only for shape-driven sheet mechanics</text>
+    </svg>
+    <figcaption><b>Each phase has a visible demo</b> and validates statistically (sorting/cluster metrics, division-axis alignment vs the tension field, branch count/spacing vs the (γ,χ) regime) against Okuda/Nelson canonical morphologies — not bit-exact parity.</figcaption>
+  </figure>
+</div></section>
+
+<!-- 8 HAZARDS -->
+<section id="hazards"><div class="card">
+  <h2><span class="n">08</span> Silent-corruption hazards (decide up front)</h2>
+  <p class="lede">These fail <i>quietly</i> — each is a real bug class the design must close before any build, surfaced by adversarial critique.</p>
+  <div class="callgrid">
+    <div class="callout"><h4>The division reattachment triple-hazard</h4><p>Division mutates partners' bond lists, creates the daughter-daughter bond, AND seeds overlapping daughters at once — hitting <code style="font-family:var(--mono)">maxBonds</code> overflow, the stale-partner invariant, and post-division Δt overshoot simultaneously. Reject the whole division on overflow; clamp Δt to the combined worst case.</p></div>
+    <div class="callout"><h4>Dangling bond / free-list ABI</h4><p>A dead agent's slot is recycled; a surviving bond holding a raw <code style="font-family:var(--mono)">partnerId</code> silently springs to a stranger. Needs a <code style="font-family:var(--mono)">partnerEpoch</code> slot-generation tag, "break all bonds on death", and a per-step (not just on-load) stale sweep.</p></div>
+    <div class="callout" style="border-left-color:var(--accent)"><h4 style="color:var(--accent2)">Short-range stability invariant</h4><p>An attractive Hookean bond with no floor pulls bonded centres together (l→0, the direction blows up). The soft-sphere repulsion <i>must</i> dominate attraction at short range — an explicit required invariant, not an assumption.</p></div>
+    <div class="callout" style="border-left-color:var(--accent)"><h4 style="color:var(--accent2)">Hysteresis &amp; the division axis</h4><p>Equal bond form/break thresholds flicker every step (form &lt; break is mandatory). And weight the division-axis tensor by bond <i>tension</i>, not uniform packing — the packing principal axis is usually the cell's <i>short</i> axis (divides backwards).</p></div>
+  </div>
+</div></section>
+
+<!-- 9 LITERATURE -->
+<section id="lit"><div class="card">
+  <h2><span class="n">09</span> Literature (the delta — fact-checked)</h2>
+  <p class="small">The center-based substrate bibliography lives in INVESTIGATION_CENTER_BASED.md. Below are only the works grounding this delta. ✓ confirmed · ~ paper real, some metadata unverified.</p>
+  <div class="biblio">
+    <div>✓ <b>Okuda, Miura, Inoue, Adachi &amp; Eiraku (2018)</b> Combining Turing and 3D vertex models … <i>Sci. Rep.</i> 8:2386. — <span class="small">The synthesis blueprint: vertex mesh + discrete Gierer-Meinhardt field; division ⟂ longest axis, faces partitioned by side; (γ,χ) selects undulation/tubulation/branching.</span></div>
+    <div>✓ <b>Vikran &amp; Hirashima (2025)</b> Curvature feedback for repetitive tissue morphogenesis. <i>Sem. Cell Dev. Biol.</i> 173:103633. — <span class="small">Morphogenetic motifs as L-system rewrites; curvature as the master sense→act→re-sense cue; the mandatory actuator time-lag/hysteresis.</span></div>
+    <div>✓ <b>Nelson (2009)</b> Geometric control of tissue morphogenesis. <i>BBA Mol. Cell Res.</i> 1793(5):903–910. — <span class="small">Geometry sculpts the morphogen + stress fields that instruct cells; chemoattraction vs autocrine chemorepulsion branching.</span></div>
+    <div>✓ <b>Hertwig (1884)</b> the long-axis rule — division ⟂ longest interphase axis.</div>
+    <div>✓ <b>Minc, Burgess &amp; Chang (2011)</b> Influence of Cell Geometry on Division-Plane Positioning. <i>Cell</i> 144(3):414–426. — <span class="small">Axis = principal eigenvector of cell geometry.</span></div>
+    <div>✓ <b>Bosveld et al. (2016)</b> Tricellular junctions … orient mitosis. <i>Nature</i> 530:495–498. — <span class="small">Neighbour-packing geometry is the spindle-orienting sensor.</span></div>
+    <div>✓ <b>Wyatt et al. (2015)</b> … divisions oriented along the long cell axis. <i>PNAS</i> 112(18):5726. — <span class="small">Long-axis divisions dissipate stress → homeostatic packing.</span></div>
+    <div>✓ <b>Campinho et al. (2013)</b> Tension-oriented cell divisions … zebrafish epiboly. <i>Nat. Cell Biol.</i> 15:1405. — <span class="small">Divisions orient along, and relax, tension.</span></div>
+    <div>~ <b>Scarpa/Mao et al. (2017)</b> E-cadherin &amp; LGN align divisions with tension … <i>PNAS</i>. — <span class="small">Tension can override shape (the blend knob). Author list ~ unverified.</span></div>
+    <div>✓ <b>Nestor-Bergmann et al. (2019)</b> Decoupling shape vs stress in mitosis. <i>Cell Rep.</i> 26(8):2088. — <span class="small">Shape axis ≈ stress axis; orientation by shape, rate by stress.</span></div>
+    <div>✓ <b>Besson &amp; Dumais (2011)</b> Universal rule for symmetric division of plant cells. <i>PNAS</i> 108(15):6294. — <span class="small">Probabilistic shortest-wall rule (the optional stochasticity).</span></div>
+    <div>✓ <b>Ghaffarizadeh et al. (2018)</b> PhysiCell. <i>PLOS Comput. Biol.</i> 14(2):e1005991. — <span class="small">The base center-based engine; later spring-adhesion = the explicit-bond precedent.</span></div>
+    <div>✓ <b>CompuCell3D FocalPointPlasticity</b> (Reference Manual). — <span class="small">The canonical explicit-link data model: per-link L, λ, MaxDistance, MaxNumberOfJunctions, create/delete through mitosis.</span></div>
+    <div>✓ <b>Fletcher, Osterfield, Baker &amp; Shvartsman (2014)</b> Vertex models of epithelial morphogenesis. <i>Biophys. J.</i> 106(11):2291. — <span class="small">The vertex standard: division, T1, T2.</span></div>
+    <div>✓ <b>Merks, Guravage, Inzé &amp; Beemster (2011)</b> VirtualLeaf. <i>Plant Physiol.</i> 155(2):656. — <span class="small">Geometry-driven division that partitions the parent's walls between daughters — the wall analogue of bond reattachment.</span></div>
+    <div>✓ <b>Prusinkiewicz &amp; Lindenmayer (1990)</b> The Algorithmic Beauty of Plants (map L-systems, ch. 7). — <span class="small">The theoretical origin of division-as-graph-rewrite.</span></div>
+  </div>
+</div></section>
+
+<div class="footer">
+  Companion to <b>docs/INVESTIGATION_BOND_GRAPH_MORPHOGENESIS.md</b>. Extends INVESTIGATION_CENTER_BASED.md; references INVESTIGATION_GRAPH_CA.md (the SDCA/mutable-topology tier) &amp; INVESTIGATION_CPM.md (the engine-agnostic-IR recommendation). Status: research reference — no implementation planned. The live demo is illustrative, not the production engine.
+</div>
+
+</div>
+
+<script>
+(function(){
+  var cv = document.getElementById('bondCanvas'); if(!cv) return;
+  var ctx = cv.getContext('2d');
+  var W = cv.width, H = cv.height;
+  var P = { adh:0.55, divProb:0.28, maxCells:240, rTarget:9.5, rSeed:7,
+            kRep:0.9, kBond:0.18, kAdh:0.06, dt:0.5, growth:0.012,
+            formDist:3.0, breakDist:10.0, maxBonds:6, divAge:90, noise:0.18 };
+  var cells = [];   // {x,y,type,r,age}
+  var bonds = [];   // {a,b,L}  (indices into cells)
+  var step = 0, running = false, raf = 0;
+
+  function rand(a,b){ return a + Math.random()*(b-a); }
+  function seed(n){
+    cells = []; bonds = []; step = 0;
+    var cx = W/2, cy = H/2;
+    for (var i=0;i<n;i++){
+      var ang = Math.random()*6.2832, rr = Math.sqrt(Math.random())*46;
+      cells.push({ x: cx+Math.cos(ang)*rr, y: cy+Math.sin(ang)*rr,
+                   type: Math.random()<0.5?0:1, r: P.rSeed, age: rand(0,P.divAge*0.6) });
+    }
+    formBondsAll();
+    draw();
+  }
+  function hasBond(i,j){ for(var k=0;k<bonds.length;k++){ var b=bonds[k]; if((b.a===i&&b.b===j)||(b.a===j&&b.b===i)) return true; } return false; }
+  function degree(i){ var d=0; for(var k=0;k<bonds.length;k++){ if(bonds[k].a===i||bonds[k].b===i) d++; } return d; }
+  function formBondsAll(){
+    for (var i=0;i<cells.length;i++) for (var j=i+1;j<cells.length;j++){
+      var ci=cells[i], cj=cells[j], dx=cj.x-ci.x, dy=cj.y-ci.y, d=Math.hypot(dx,dy);
+      if (d < ci.r+cj.r+P.formDist && !hasBond(i,j) && degree(i)<P.maxBonds && degree(j)<P.maxBonds)
+        bonds.push({a:i,b:j, L:Math.max(d, ci.r+cj.r)});
+    }
+  }
+
+  function physics(){
+    var n = cells.length;
+    var fx = new Float64Array(n), fy = new Float64Array(n);
+    // pairwise repulsion + weak adhesion (O(n^2), n small)
+    for (var i=0;i<n;i++){
+      var ci = cells[i];
+      for (var j=i+1;j<n;j++){
+        var cj = cells[j], dx=cj.x-ci.x, dy=cj.y-ci.y, d=Math.hypot(dx,dy)+1e-6;
+        var sum = ci.r+cj.r, cut = sum+P.breakDist;
+        if (d > cut) continue;
+        var ux=dx/d, uy=dy/d;
+        if (d < sum){ var f = P.kRep*(sum-d); fx[i]-=f*ux; fy[i]-=f*uy; fx[j]+=f*ux; fy[j]+=f*uy; }
+        else { // adhesion only between same type (sorting), short range
+          if (ci.type===cj.type){ var fa = P.kAdh*P.adh*(sum/d - sum/cut); if(fa>0){ fx[i]+=fa*ux; fy[i]+=fa*uy; fx[j]-=fa*ux; fy[j]-=fa*uy; } }
+        }
+      }
+    }
+    // bond springs
+    for (var k=0;k<bonds.length;k++){
+      var b=bonds[k], a=cells[b.a], c=cells[b.b];
+      var dx=c.x-a.x, dy=c.y-a.y, d=Math.hypot(dx,dy)+1e-6, ux=dx/d, uy=dy/d;
+      var f = P.kBond*(d-b.L); fx[b.a]+=f*ux; fy[b.a]+=f*uy; fx[b.b]-=f*ux; fy[b.b]-=f*uy;
+    }
+    for (var i2=0;i2<n;i2++){
+      var c2=cells[i2];
+      c2.x += P.dt*fx[i2] + rand(-P.noise,P.noise);
+      c2.y += P.dt*fy[i2] + rand(-P.noise,P.noise);
+      // soft walls
+      var m=14; if(c2.x<m){c2.x=m;} if(c2.x>W-m){c2.x=W-m;} if(c2.y<m){c2.y=m;} if(c2.y>H-m){c2.y=H-m;}
+      if (c2.r < P.rTarget) c2.r += P.growth;
+      c2.age++;
+    }
+  }
+
+  // 2x2 symmetric principal/minor eigenvector
+  function eig2(a,b,d){
+    var tr=a+d, det=a*d-b*b, disc=Math.sqrt(Math.max(0,tr*tr/4-det));
+    var l1=tr/2+disc; // major
+    var vx, vy;
+    if (Math.abs(b)>1e-9){ vx=l1-d; vy=b; } else { if(a>=d){vx=1;vy=0;}else{vx=0;vy=1;} }
+    var nrm=Math.hypot(vx,vy)+1e-9;
+    return { mx:vx/nrm, my:vy/nrm };
+  }
+
+  function divide(i){
+    if (cells.length>=P.maxCells) return;
+    var c = cells[i];
+    // tension tensor over stretched bonds
+    var a=0,b=0,d=0, wsum=0;
+    var pa=0,pb=0,pd=0; // packing tensor (fallback)
+    for (var k=0;k<bonds.length;k++){
+      var bd=bonds[k]; var other=-1;
+      if(bd.a===i) other=bd.b; else if(bd.b===i) other=bd.a; else continue;
+      var o=cells[other], dx=o.x-c.x, dy=o.y-c.y, dist=Math.hypot(dx,dy)+1e-6, ux=dx/dist, uy=dy/dist;
+      pa+=ux*ux; pb+=ux*uy; pd+=uy*uy;
+      var w=Math.max(0,(dist-bd.L)); // tensile stretch
+      a+=w*ux*ux; b+=w*ux*uy; d+=w*uy*uy; wsum+=w;
+    }
+    var mx,my;
+    if (wsum>1e-4){ var e=eig2(a,b,d); mx=e.mx; my=e.my; }           // tension long axis
+    else if (pa+pd>1e-4){ var e2=eig2(pa,pb,pd); mx=-e2.my; my=e2.mx; } // minor (density gap)
+    else { var ang=Math.random()*6.2832; mx=Math.cos(ang); my=Math.sin(ang); }
+    // two daughters along m̂
+    var eps = c.r*0.7, ni=cells.length;
+    var ax=c.x - mx*eps, ay=c.y - my*eps, bx=c.x + mx*eps, by=c.y + my*eps;
+    var rD = c.r*0.72;
+    cells[i] = { x:ax, y:ay, type:c.type, r:rD, age:0 };               // daughter a (keeps index i)
+    cells.push({ x:bx, y:by, type:c.type, r:rD, age:0 });              // daughter b = index ni
+    // reattach each parent bond to the nearer daughter by side of plane
+    for (var k2=0;k2<bonds.length;k2++){
+      var bd2=bonds[k2], other2=-1;
+      if(bd2.a===i) other2=bd2.b; else if(bd2.b===i) other2=bd2.a; else continue;
+      var o2=cells[other2], side=( (o2.x-c.x)*mx + (o2.y-c.y)*my );
+      if (side>0){ if(bd2.a===i)bd2.a=ni; else bd2.b=ni; }            // belongs to daughter b
+      // else stays on daughter a (index i)
+    }
+    bonds.push({a:i, b:ni, L:eps*2});                                  // new a-b bond
+  }
+
+  function structural(){
+    // break over-strained bonds (hysteresis: break > form)
+    for (var k=bonds.length-1;k>=0;k--){
+      var b=bonds[k], a=cells[b.a], c=cells[b.b];
+      var d=Math.hypot(c.x-a.x, c.y-a.y);
+      if (d > a.r+c.r+P.breakDist) bonds.splice(k,1);
+    }
+    // form on contact
+    formBondsAll();
+    // division
+    if (P.divProb>0){
+      for (var i=cells.length-1;i>=0;i--){
+        var c=cells[i];
+        if (c.age>P.divAge && c.r>=P.rTarget*0.92 && Math.random()<P.divProb*0.04 && cells.length<P.maxCells){
+          divide(i);
+        }
+      }
+    }
+  }
+
+  function components(){
+    var n=cells.length, par=new Int32Array(n); for(var i=0;i<n;i++)par[i]=i;
+    function find(x){ while(par[x]!==x){par[x]=par[par[x]];x=par[x];} return x; }
+    for(var k=0;k<bonds.length;k++){ var ra=find(bonds[k].a), rb=find(bonds[k].b); if(ra!==rb)par[ra]=rb; }
+    var s={}; for(var i2=0;i2<n;i2++)s[find(i2)]=1; return Object.keys(s).length;
+  }
+
+  var COL = ['#e8a13a','#4cc9f0'];
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    // bonds
+    for (var k=0;k<bonds.length;k++){
+      var b=bonds[k], a=cells[b.a], c=cells[b.b]; if(!a||!c) continue;
+      var d=Math.hypot(c.x-a.x,c.y-a.y), strain=Math.max(0,Math.min(1,(d-b.L)/14));
+      ctx.strokeStyle='rgba(102,187,106,'+(0.35+0.55*strain)+')';
+      ctx.lineWidth=1.4+1.6*strain;
+      ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(c.x,c.y); ctx.stroke();
+    }
+    // cells
+    for (var i=0;i<cells.length;i++){
+      var c=cells[i];
+      ctx.beginPath(); ctx.arc(c.x,c.y,c.r,0,6.2832);
+      ctx.fillStyle=COL[c.type]; ctx.globalAlpha=0.92; ctx.fill(); ctx.globalAlpha=1;
+      ctx.lineWidth=1; ctx.strokeStyle='rgba(10,12,15,.8)'; ctx.stroke();
+    }
+    updateHud();
+  }
+  function meanDegree(){ if(!cells.length)return 0; return (2*bonds.length/cells.length); }
+  function updateHud(){
+    set('bd-n',cells.length); set('bd-b',bonds.length);
+    set('bd-deg',meanDegree().toFixed(2)); set('bd-comp',components()); set('bd-t',step);
+    var bad=0; for(var i=0;i<cells.length;i++){ if(!isFinite(cells[i].x)||!isFinite(cells[i].y))bad++; }
+    var el=document.getElementById('bd-stab');
+    if(el){ if(bad){ el.textContent='● UNSTABLE'; el.style.color='var(--red)'; } else { el.textContent='● stable'; el.style.color='var(--green)'; } }
+  }
+  function set(id,v){ var e=document.getElementById(id); if(e)e.textContent=v; }
+
+  function runSteps(n){
+    for (var s=0;s<n;s++){ physics(); structural(); step++; }
+    draw();
+    var ok=true; for(var i=0;i<cells.length;i++){ if(!isFinite(cells[i].x))ok=false; }
+    return { n:cells.length, bonds:bonds.length, deg:+meanDegree().toFixed(3), comp:components(), ok:ok };
+  }
+  function frame(){ if(!running)return; runSteps(2); raf=requestAnimationFrame(frame); }
+
+  // controls
+  document.getElementById('bd-play').onclick=function(){
+    running=!running; this.textContent=running?'❚❚ Pause':'▶ Play';
+    if(running) frame(); else cancelAnimationFrame(raf);
+  };
+  document.getElementById('bd-step').onclick=function(){ runSteps(20); };
+  document.getElementById('bd-seed').onclick=function(){ seed(26); };
+  document.getElementById('bd-burst').onclick=function(){
+    var c0=cells.length; for(var i=0;i<cells.length && cells.length<c0+12;i++){ if(Math.random()<0.5) divide(i); } draw();
+  };
+  var divS=document.getElementById('bd-div'), divV=document.getElementById('bd-divv');
+  divS.oninput=function(){ P.divProb=(+divS.value)/100; divV.textContent=P.divProb>0?P.divProb.toFixed(2):'off'; };
+  var adhS=document.getElementById('bd-adh'), adhV=document.getElementById('bd-adhv');
+  adhS.oninput=function(){ P.adh=(+adhS.value)/100; adhV.textContent=P.adh.toFixed(2); };
+
+  window.__bondDemo = { seed:seed, runSteps:runSteps, divide:divide, get cells(){return cells;}, get bonds(){return bonds;}, P:P, meanDegree:meanDegree, components:components };
+  seed(26);
+})();
+</script>
+
+</body>
+</html>

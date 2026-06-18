@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GenesisCA — Bond-Graph Morphogenesis Implementation Plan</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#16181d; --panel2:#1c1f26; --panel3:#22262f;
+    --border:#2a2e37; --border2:#3a3f4a;
+    --ink:#e9ebee; --muted:#9aa0aa; --faint:#6b7280;
+    --accent:#e8a13a; --accent2:#f4c06a; --accent-soft:rgba(232,161,58,.13);
+    --cyan:#4cc9f0; --green:#66bb6a; --red:#e0566a; --purple:#b08cff; --pink:#f06aa8;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6;
+    background-image:radial-gradient(1100px 480px at 80% -8%,rgba(232,161,58,.07),transparent 60%),
+      radial-gradient(900px 420px at 0% 0%,rgba(76,201,240,.05),transparent 55%);}
+  a{color:var(--accent2);text-decoration:none} a:hover{text-decoration:underline}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 22px 90px}
+  header.hero{padding:64px 22px 30px;max-width:1120px;margin:0 auto}
+  .kicker{display:inline-flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--accent);border:1px solid var(--border2);background:var(--accent-soft);padding:5px 11px;border-radius:999px}
+  h1{font-size:clamp(30px,5vw,50px);line-height:1.07;margin:18px 0 10px;letter-spacing:-.02em}
+  h1 .sub{display:block;font-size:clamp(15px,2.2vw,21px);font-weight:500;color:var(--muted);margin-top:12px;letter-spacing:0}
+  .herometa{display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:22px;color:var(--faint);font-size:13px}
+  .herometa b{color:var(--muted);font-weight:600}
+  .status{display:inline-block;margin-top:18px;font-size:13px;color:var(--green);border:1px solid rgba(102,187,106,.35);
+    background:rgba(102,187,106,.08);border-radius:8px;padding:7px 12px}
+  nav.toc{position:sticky;top:0;z-index:20;background:rgba(12,13,16,.82);backdrop-filter:blur(10px);
+    border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin-top:34px}
+  nav.toc .row{max-width:1120px;margin:0 auto;padding:9px 22px;display:flex;flex-wrap:wrap;gap:5px 6px;font-size:12.5px}
+  nav.toc a{color:var(--muted);padding:5px 9px;border-radius:7px;white-space:nowrap}
+  nav.toc a:hover{color:var(--ink);background:var(--panel2);text-decoration:none}
+  section{margin-top:42px}
+  .card{background:linear-gradient(180deg,var(--panel),#131519);border:1px solid var(--border);border-radius:16px;
+    padding:26px 28px;box-shadow:0 1px 0 rgba(255,255,255,.02) inset, 0 20px 40px -30px rgba(0,0,0,.8)}
+  h2{font-size:24px;margin:0 0 4px;letter-spacing:-.01em;display:flex;align-items:baseline;gap:12px}
+  h2 .n{font-family:var(--mono);font-size:14px;color:var(--accent);border:1px solid var(--border2);
+    background:var(--accent-soft);border-radius:8px;padding:2px 9px;flex:none}
+  h2 .n.alt{color:var(--cyan);background:rgba(76,201,240,.1)}
+  .lede{color:var(--muted);font-size:15.5px;margin:6px 0 20px;max-width:82ch}
+  h3{font-size:16.5px;margin:24px 0 8px;color:var(--accent2)}
+  p{margin:10px 0;color:#d4d7dd}
+  .small{font-size:13px;color:var(--faint)}
+  code{font-family:var(--mono);font-size:.92em;color:#cdd3da;background:#0c0e12;border:1px solid var(--border);border-radius:4px;padding:.5px 5px}
+  figure{margin:18px 0 6px;background:#101216;border:1px solid var(--border);border-radius:12px;padding:16px}
+  figure svg{display:block;width:100%;height:auto}
+  figcaption{color:var(--muted);font-size:13px;margin-top:12px;padding-top:10px;border-top:1px dashed var(--border2)}
+  figcaption b{color:var(--ink)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  ul.clean{margin:10px 0;padding-left:0;list-style:none}
+  ul.clean li{position:relative;padding:5px 0 5px 26px;color:#d4d7dd}
+  ul.clean li::before{content:"";position:absolute;left:6px;top:13px;width:7px;height:7px;border-radius:2px;
+    background:var(--accent);transform:rotate(45deg)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px;letter-spacing:.04em;text-transform:uppercase}
+  tr:hover td{background:rgba(255,255,255,.014)}
+  .tag{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:6px;border:1px solid var(--border2);white-space:nowrap}
+  .t-reuse{color:var(--green);border-color:rgba(102,187,106,.4);background:rgba(102,187,106,.08)}
+  .t-mod{color:var(--accent);border-color:rgba(232,161,58,.4);background:var(--accent-soft)}
+  .t-new{color:var(--cyan);border-color:rgba(76,201,240,.4);background:rgba(76,201,240,.08)}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 16px;margin:6px 0 14px;font-size:12.5px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .callout{border:1px solid var(--border2);border-left:3px solid var(--red);border-radius:10px;padding:13px 15px;background:#14100f}
+  .callout h4{margin:0 0 5px;font-size:14px;color:#f3a0ad}
+  .callout p{margin:0;font-size:13px;color:#cbd0d6}
+  .keyfact{border:1px solid var(--border2);border-left:3px solid var(--accent);background:linear-gradient(180deg,var(--accent-soft),transparent);
+    border-radius:10px;padding:16px 18px;margin:16px 0;font-size:15px}
+  .keyfact b{color:var(--accent2)}
+  .verdict{border:1px solid rgba(102,187,106,.4);border-left:3px solid var(--green);background:rgba(102,187,106,.06);
+    border-radius:10px;padding:16px 18px;margin:16px 0;font-size:14.5px;color:#d4d7dd}
+  .verdict b{color:#9fe3a3}
+  .controls{display:flex;gap:9px;align-items:center;margin:12px 0 4px;flex-wrap:wrap}
+  .btn{font-family:var(--sans);font-size:13px;color:var(--ink);background:var(--panel3);border:1px solid var(--border2);
+    border-radius:8px;padding:7px 14px;cursor:pointer}
+  .btn:hover{border-color:var(--accent);color:var(--accent2)}
+  .btn.primary{background:var(--accent-soft);border-color:rgba(232,161,58,.5);color:var(--accent2)}
+  select.sel{font-family:var(--sans);font-size:13px;color:var(--ink);background:var(--panel3);border:1px solid var(--border2);border-radius:8px;padding:6px 8px}
+  .pill{font-family:var(--mono);font-size:12px;color:var(--muted);padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:#101216}
+  .cvwrap{display:flex;justify-content:center;margin:6px 0}
+  canvas.sim{border:1px solid var(--border2);border-radius:8px;background:#070809;width:min(560px,92vw);height:auto;touch-action:none}
+  .hud{display:flex;flex-wrap:wrap;gap:6px 10px;margin:8px 0;font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .hud b{color:var(--accent2);font-weight:600}
+  input[type=range]{accent-color:var(--accent)}
+  .footer{margin-top:54px;padding-top:22px;border-top:1px solid var(--border);color:var(--faint);font-size:13px}
+  .matrix{display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:10px;margin-top:8px}
+  .mgroup{background:#101216;border:1px solid var(--border);border-radius:11px;padding:13px 14px}
+  .mgroup h4{margin:0 0 9px;font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+  .mrow{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12.5px;color:#cdd2d8}
+  .mrow .tag{flex:none;width:46px;text-align:center}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <span class="kicker">◆ GenesisCA · Implementation Plan</span>
+  <h1>Building Bond-Graph Morphogenesis
+    <span class="sub">How the user <b style="color:var(--accent2);font-weight:600">authors rules</b> (and influences division over their own attributes), how cells couple to an <b style="color:var(--accent2);font-weight:600">external environment</b>, how the <b style="color:var(--accent2);font-weight:600">simulator interaction</b> &amp; <b style="color:var(--accent2);font-weight:600">3D navigation</b> work — plus a phased build plan.</span>
+  </h1>
+  <div class="herometa">
+    <span><b>Companion to:</b> docs/PLAN_BOND_GRAPH_MORPHOGENESIS.md</span>
+    <span><b>Builds on:</b> INVESTIGATION_BOND_GRAPH_MORPHOGENESIS · INVESTIGATION_CENTER_BASED</span>
+    <span><b>Method:</b> 5-subsystem codebase audit + 2 research topics (fact-checked) + adversarial critique</span>
+    <span><b>Date:</b> 2026-06-17</span>
+  </div>
+  <span class="status">● Status: research / implementation plan — not yet a commitment to build. Two live demos below are illustrative, not the production engine.</span>
+</header>
+
+<nav class="toc"><div class="row">
+  <a href="#rules">1 · Rule authoring</a>
+  <a href="#division">2 · Division control</a>
+  <a href="#demo2d">3 · Demo: environment</a>
+  <a href="#env">4 · External environment</a>
+  <a href="#interact">5 · Simulator interaction</a>
+  <a href="#demo3d">6 · Demo: 3D viewer</a>
+  <a href="#render3d">7 · 3D architecture</a>
+  <a href="#new">8 · What's genuinely new</a>
+  <a href="#roadmap">9 · Roadmap</a>
+</div></nav>
+
+<div class="wrap">
+
+<!-- TL;DR -->
+<section>
+  <div class="keyfact">
+    <b>The build at a glance:</b> bond-graph morphogenesis is an <b>additive extension of the authoring model</b> — the user composes rules exactly as they build a Game-of-Life rule today (read nodes → <code>Compare</code>/<code>AND</code>/math → flow nodes), hung off <b>new event roots</b> (a per-agent <b>Behaviour</b> step, a <b>Division</b> event, a <b>Bond-Contact</b> event, a <b>Field</b> step). The user owns <b>every predicate and all attribute math</b>; the engine owns <b>all the irreversible geometry</b> (the division axis, bond reattachment, force integration, diffusion). It is <i>not</i> free on the compiler/engine side, though — the agent loop on WASM/WebGPU, the structural engine phase, and the agent+bond serializer are genuinely new (§8).
+  </div>
+  <div class="verdict">
+    <b>The freedom you asked about:</b> to make division depend on attributes you defined, you wire <code>GetCellAttribute(yourAttr) → Compare → Conditional → DivideCell</code> — and you choose the axis <i>source</i> (tension / random / field-gradient) and the daughter inheritance, but <b>not</b> the physically-impossible per-bond partition (that follows from the geometry of the cut). Environment couples in the <i>same</i> graph: a <code>SampleField</code>/<code>FieldGradient</code> read sits next to your attribute reads, so "divide only where nutrient is high, toward the gradient" is one wired predicate. The two demos below show this live in 2D and 3D.
+  </div>
+</section>
+
+<!-- 1 RULE AUTHORING -->
+<section id="rules"><div class="card">
+  <h2><span class="n">01</span> How the user authors rules — the event roots</h2>
+  <p class="lede">No new authoring <i>concept</i> is introduced. Today you hang rules off singleton "event" roots (<code>Step</code>, <code>InitEvent</code>, <code>OutputMapping</code>). Bond-graph morphogenesis adds four more, each a place to attach ordinary node-graph rules over your own attributes plus a handful of new <i>sense</i> nodes.</p>
+
+  <figure>
+    <svg viewBox="0 0 920 300" role="img" aria-label="The four new event roots and the read and flow nodes that attach to them">
+      <text x="460" y="22" fill="#9aa0aa" font-size="13" text-anchor="middle" font-family="var(--sans)">four new event roots — you wire rules onto each, exactly like Step today</text>
+      <!-- four roots -->
+      <g font-family="var(--sans)">
+        <g><rect x="40" y="48" width="200" height="74" rx="10" fill="rgba(102,187,106,.10)" stroke="#66bb6a"/>
+          <text x="56" y="72" fill="#8fd193" font-size="14" font-weight="700">Behaviour step</text>
+          <text x="56" y="92" fill="#9aa0aa" font-size="11">per agent, per generation</text>
+          <text x="56" y="110" fill="#6b7280" font-size="10.5" font-family="var(--mono)">grow · divide · die · migrate · secrete</text></g>
+        <g><rect x="260" y="48" width="200" height="74" rx="10" fill="rgba(232,161,58,.10)" stroke="#e8a13a"/>
+          <text x="276" y="72" fill="#f4c06a" font-size="14" font-weight="700">Division event</text>
+          <text x="276" y="92" fill="#9aa0aa" font-size="11">per daughter, at division</text>
+          <text x="276" y="110" fill="#6b7280" font-size="10.5" font-family="var(--mono)">daughterIndex · asymmetric inherit</text></g>
+        <g><rect x="480" y="48" width="200" height="74" rx="10" fill="rgba(76,201,240,.10)" stroke="#4cc9f0"/>
+          <text x="496" y="72" fill="#7fd6f4" font-size="14" font-weight="700">Bond-contact event</text>
+          <text x="496" y="92" fill="#9aa0aa" font-size="11">per candidate pair</text>
+          <text x="496" y="110" fill="#6b7280" font-size="10.5" font-family="var(--mono)">form / break policy</text></g>
+        <g><rect x="700" y="48" width="180" height="74" rx="10" fill="rgba(176,140,255,.10)" stroke="#b08cff"/>
+          <text x="716" y="72" fill="#c9b3ff" font-size="14" font-weight="700">Field step</text>
+          <text x="716" y="92" fill="#9aa0aa" font-size="11">per voxel (a grid)</text>
+          <text x="716" y="110" fill="#6b7280" font-size="10.5" font-family="var(--mono)">reaction-diffusion</text></g>
+      </g>
+      <!-- read/flow node strips -->
+      <g font-family="var(--sans)">
+        <text x="40" y="166" fill="#9aa0aa" font-size="12" font-weight="600">NEW read nodes (sense) — drop into any Compare/math, like an attribute read</text>
+        <g font-family="var(--mono)" font-size="11.5">
+          <g><rect x="40" y="178" width="138" height="26" rx="6" fill="#101216" stroke="#3a3f4a"/><text x="50" y="195" fill="#cdd3da">GetBondDegree</text></g>
+          <g><rect x="188" y="178" width="120" height="26" rx="6" fill="#101216" stroke="#3a3f4a"/><text x="198" y="195" fill="#cdd3da">GetCurvature</text></g>
+          <g><rect x="318" y="178" width="128" height="26" rx="6" fill="#101216" stroke="#3a3f4a"/><text x="328" y="195" fill="#cdd3da">SampleField</text></g>
+          <g><rect x="456" y="178" width="134" height="26" rx="6" fill="#101216" stroke="#3a3f4a"/><text x="466" y="195" fill="#cdd3da">FieldGradient</text></g>
+          <g><rect x="600" y="178" width="142" height="26" rx="6" fill="#101216" stroke="#3a3f4a"/><text x="610" y="195" fill="#cdd3da">NeighbourDensity</text></g>
+          <g><rect x="752" y="178" width="128" height="26" rx="6" fill="#101216" stroke="#3a3f4a"/><text x="762" y="195" fill="#cdd3da">GetSelfPos</text></g>
+        </g>
+        <text x="40" y="234" fill="#9aa0aa" font-size="12" font-weight="600">NEW flow nodes (act) — emit an engine-validated REQUEST; the engine owns what follows</text>
+        <g font-family="var(--mono)" font-size="11.5">
+          <g><rect x="40" y="246" width="106" height="26" rx="6" fill="rgba(232,161,58,.10)" stroke="#e8a13a"/><text x="50" y="263" fill="#f4c06a">DivideCell</text></g>
+          <g><rect x="156" y="246" width="86" height="26" rx="6" fill="rgba(224,86,106,.10)" stroke="#e0566a"/><text x="166" y="263" fill="#f3a0ad">KillCell</text></g>
+          <g><rect x="252" y="246" width="100" height="26" rx="6" fill="rgba(76,201,240,.10)" stroke="#4cc9f0"/><text x="262" y="263" fill="#7fd6f4">FormBond</text></g>
+          <g><rect x="362" y="246" width="100" height="26" rx="6" fill="rgba(76,201,240,.10)" stroke="#4cc9f0"/><text x="372" y="263" fill="#7fd6f4">BreakBond</text></g>
+          <g><rect x="472" y="246" width="128" height="26" rx="6" fill="rgba(102,187,106,.10)" stroke="#66bb6a"/><text x="482" y="263" fill="#8fd193">SetTargetRadius</text></g>
+          <g><rect x="610" y="246" width="124" height="26" rx="6" fill="rgba(176,140,255,.10)" stroke="#b08cff"/><text x="620" y="263" fill="#c9b3ff">SecreteToField</text></g>
+        </g>
+      </g>
+    </svg>
+    <figcaption><b>Everything between the sense and the act is the node graph you already know.</b> The read nodes emit a value (<code>const _v&lt;id&gt; = buffer[idx]</code>) exactly like <code>GetCellAttribute</code>; the flow nodes write a request the engine validates and applies in a post-step structural phase. <span class="small">The agent loop variable is named <code>idx</code> so all ~25 existing <code>idx</code>-keyed nodes work unchanged (Decision D-IDX).</span></figcaption>
+  </figure>
+</div></section>
+
+<!-- 2 DIVISION CONTROL -->
+<section id="division"><div class="card">
+  <h2><span class="n">02</span> Influencing division with your own attributes</h2>
+  <p class="lede">Your literal request: <i>"divide when age &gt; T and size &gt; X, orient by tension, give daughter A more of attribute Q."</i> Here it is as a wired graph — every connective node (<code>GetCellAttribute</code>, <code>Compare</code>, <code>AND</code>, <code>Conditional</code>) ships today; only <code>DivideCell</code> + the Division root are new.</p>
+
+  <figure>
+    <svg viewBox="0 0 920 286" role="img" aria-label="A worked division rule: when age greater than T and size greater than X, divide oriented by tension; daughter A gets more of attribute Q">
+      <g font-family="var(--mono)" font-size="11.5">
+        <!-- WHEN gate -->
+        <text x="20" y="22" fill="#8fd193" font-size="12.5" font-family="var(--sans)" font-weight="700">Graph 1 — the WHEN gate (on Behaviour step)</text>
+        <g>
+          <rect x="20" y="38" width="150" height="24" rx="5" fill="#101216" stroke="#3a3f4a"/><text x="28" y="54" fill="#cdd3da">GetCellAttr(age)</text>
+          <rect x="20" y="74" width="150" height="24" rx="5" fill="#101216" stroke="#3a3f4a"/><text x="28" y="90" fill="#cdd3da">GetCellAttr(size)</text>
+          <rect x="210" y="38" width="120" height="24" rx="5" fill="#101216" stroke="#3a3f4a"/><text x="218" y="54" fill="#f4c06a">Compare &gt; T</text>
+          <rect x="210" y="74" width="120" height="24" rx="5" fill="#101216" stroke="#3a3f4a"/><text x="218" y="90" fill="#f4c06a">Compare &gt; X</text>
+          <rect x="372" y="56" width="86" height="24" rx="5" fill="#101216" stroke="#3a3f4a"/><text x="380" y="72" fill="#b08cff">AND</text>
+          <rect x="500" y="56" width="118" height="24" rx="5" fill="#101216" stroke="#3a3f4a"/><text x="508" y="72" fill="#7fd6f4">Conditional</text>
+          <rect x="660" y="56" width="232" height="30" rx="6" fill="rgba(232,161,58,.12)" stroke="#e8a13a"/>
+          <text x="672" y="71" fill="#f4c06a">DivideCell</text><text x="672" y="83" fill="#9aa0aa" font-size="9.5">{ axisSource: "tension" }</text>
+        </g>
+        <g stroke="#3a3f4a" stroke-width="1.4" fill="none">
+          <path d="M170,50 L210,50"/><path d="M170,86 L210,86"/>
+          <path d="M330,50 L350,50 L350,64 L372,64"/><path d="M330,86 L350,86 L350,72 L372,72"/>
+          <path d="M458,68 L500,68"/><path d="M618,68 L660,68"/>
+        </g>
+        <text x="672" y="104" fill="#66bb6a" font-size="10" font-family="var(--sans)">→ then ── divide</text>
+        <!-- divider -->
+        <line x1="20" y1="128" x2="900" y2="128" stroke="#2a2e37" stroke-dasharray="4 4"/>
+        <!-- daughter assignment -->
+        <text x="20" y="152" fill="#8fd193" font-size="12.5" font-family="var(--sans)" font-weight="700">Graph 2 — daughter A gets more Q (on Division event)</text>
+        <g>
+          <rect x="20" y="170" width="174" height="24" rx="5" fill="rgba(232,161,58,.10)" stroke="#e8a13a"/><text x="28" y="186" fill="#f4c06a">out: daughterIndex</text>
+          <rect x="232" y="170" width="120" height="24" rx="5" fill="#101216" stroke="#3a3f4a"/><text x="240" y="186" fill="#f4c06a">Compare == 0</text>
+          <rect x="392" y="146" width="250" height="24" rx="5" fill="#101216" stroke="#3a3f4a"/><text x="400" y="162" fill="#8fd193">then: SetAttr(Q = motherQ·0.7)</text>
+          <rect x="392" y="194" width="250" height="24" rx="5" fill="#101216" stroke="#3a3f4a"/><text x="400" y="210" fill="#8fd193">else: SetAttr(Q = motherQ·0.3)</text>
+        </g>
+        <g stroke="#3a3f4a" stroke-width="1.4" fill="none">
+          <path d="M194,182 L232,182"/><path d="M352,182 L372,182 L372,158 L392,158"/><path d="M352,182 L372,182 L372,206 L392,206"/>
+        </g>
+      </g>
+      <!-- freedoms/guardrails strip -->
+      <g font-family="var(--sans)">
+        <rect x="660" y="150" width="232" height="116" rx="10" fill="#0e1014" stroke="#2a2e37"/>
+        <text x="676" y="170" fill="#f4c06a" font-size="12" font-weight="700">You choose · engine owns</text>
+        <text x="676" y="190" fill="#8fd193" font-size="10.5">✓ when / whether / how-much</text>
+        <text x="676" y="206" fill="#8fd193" font-size="10.5">✓ axis SOURCE (tension/rand/field)</text>
+        <text x="676" y="222" fill="#8fd193" font-size="10.5">✓ daughter inheritance</text>
+        <text x="676" y="242" fill="#f3a0ad" font-size="10.5">✗ the physical split plane</text>
+        <text x="676" y="258" fill="#f3a0ad" font-size="10.5">✗ which bond goes where</text>
+      </g>
+    </svg>
+    <figcaption><b>The freedom/guardrail boundary.</b> You author arbitrary attribute math for the predicate and pick the axis <i>source</i>; the engine computes the physically-realizable axis (the tension-tensor eigenvector), splits the cell, and reattaches each bond to the daughter on its side of the cut — so you can never request a topology no real cleavage could produce. <span class="small">If no Division graph is wired, both daughters inherit verbatim and <code>DivideCell.asymmetry</code> splits size.</span></figcaption>
+  </figure>
+</div></section>
+
+<!-- 3 DEMO 2D -->
+<section id="demo2d"><div class="card">
+  <h2><span class="n alt">03</span> Live demo — rules + environment drive morphogenesis</h2>
+  <p class="lede">A 2D bond-graph model with a diffusing <b>nutrient field</b> (blue heatmap) cells <b>consume</b>. Division is <b>gated</b> by local nutrient and <b>oriented</b> by the chosen mode — so with the field on, the colony climbs toward the source and spreads into a front; with it off, growth is isotropic. This is the rule-authoring + environment coupling, live.</p>
+  <div class="controls">
+    <button class="btn primary" id="b2play">▶ Play</button>
+    <button class="btn" id="b2seed">Reseed</button>
+    <label class="small">division axis&nbsp;<select class="sel" id="b2orient"><option value="grad">toward nutrient</option><option value="tension">tension</option><option value="rand">random</option></select></label>
+    <button class="btn" id="b2field">Field: on</button>
+  </div>
+  <div class="hud">
+    <span>cells <b id="b2n">—</b></span><span>bonds <b id="b2b">—</b></span><span>mean height <b id="b2y">—</b></span><span id="b2stab" style="color:var(--green)">● stable</span>
+  </div>
+  <div class="cvwrap"><canvas id="cv2" class="sim" width="540" height="380"></canvas></div>
+  <div class="legend">
+    <span><span class="dot" style="background:#e8a13a"></span>type A</span><span><span class="dot" style="background:#4cc9f0"></span>type B</span>
+    <span><span class="dot" style="background:#66bb6a"></span>bond</span><span><span class="dot" style="background:#7888ff"></span>nutrient field</span>
+  </div>
+  <figcaption class="small" style="border-top:1px dashed var(--border2);padding-top:10px"><b>Note:</b> the nutrient field here is <i>itself a small cellular automaton</i> (diffusion + a top source + per-cell consumption = a CA rule) — in the real system you'd author that rule with the full CA modeler (§4). The cells are suspended on top: the <code>SampleField</code>-gated division rule lets only nutrient-rich front cells divide, so the colony grows toward the source. Switch the axis to "tension" or "random" for the orientation freedom; toggle the field off to see growth lose its direction. The engine owns the physics; your two rule graphs (field CA + cells) own when/where.</figcaption>
+</div></section>
+
+<!-- 4 ENVIRONMENT -->
+<section id="env"><div class="card">
+  <h2><span class="n">04</span> How the external environment couples in</h2>
+  <p class="lede">Three environment channels feed the <i>same</i> rule graph as ordinary value reads — there is no special "environment phase." A cell's rule can read its own attributes, its bonds' state, <i>and</i> the field/global env all in one predicate.</p>
+
+  <figure>
+    <svg viewBox="0 0 920 286" role="img" aria-label="Three environment channels feeding the per-cell rule: a reaction-diffusion field, global model-attribute sliders, and interactive painting">
+      <!-- center: the rule graph -->
+      <rect x="360" y="110" width="200" height="66" rx="10" fill="rgba(232,161,58,.10)" stroke="#e8a13a"/>
+      <text x="460" y="137" fill="#f4c06a" font-size="14" font-weight="700" text-anchor="middle" font-family="var(--sans)">your per-cell rule</text>
+      <text x="460" y="158" fill="#9aa0aa" font-size="11" text-anchor="middle" font-family="var(--sans)">grow / divide / die / migrate</text>
+      <!-- field -->
+      <g><rect x="60" y="40" width="200" height="72" rx="10" fill="rgba(176,140,255,.10)" stroke="#b08cff"/>
+        <text x="76" y="62" fill="#c9b3ff" font-size="13" font-weight="700" font-family="var(--sans)">field = a cellular automaton</text>
+        <text x="76" y="80" fill="#9aa0aa" font-size="10.5" font-family="var(--sans)">you author its rule with the full CA modeler</text>
+        <text x="76" y="97" fill="#9aa0aa" font-size="10.5" font-family="var(--mono)">gather: SampleField · FieldGradient</text>
+        <text x="76" y="111" fill="#9aa0aa" font-size="10.5" font-family="var(--mono)">scatter: SecreteToField (cell → field)</text></g>
+      <!-- global -->
+      <g><rect x="60" y="124" width="200" height="60" rx="10" fill="rgba(76,201,240,.10)" stroke="#4cc9f0"/>
+        <text x="76" y="148" fill="#7fd6f4" font-size="13" font-weight="700" font-family="var(--sans)">global model-attrs</text>
+        <text x="76" y="168" fill="#9aa0aa" font-size="11" font-family="var(--sans)">nutrient / temp / gravity sliders</text></g>
+      <!-- interactive -->
+      <g><rect x="60" y="196" width="200" height="60" rx="10" fill="rgba(102,187,106,.10)" stroke="#66bb6a"/>
+        <text x="76" y="220" fill="#8fd193" font-size="13" font-weight="700" font-family="var(--sans)">interactive paint</text>
+        <text x="76" y="240" fill="#9aa0aa" font-size="11" font-family="var(--sans)">brush a source / sink / wound live</text></g>
+      <!-- arrows in -->
+      <g stroke="#3a3f4a" stroke-width="1.8" fill="#3a3f4a">
+        <path d="M260,80 C320,90 330,120 358,128"/><path d="M358,128 l-13,-2 l5,-10 z"/>
+        <path d="M260,150 L358,144"/><path d="M358,144 l-12,-5 l0,11 z"/>
+        <path d="M260,222 C320,210 332,180 358,160"/><path d="M358,160 l-6,11 l11,1 z"/>
+      </g>
+      <!-- arrow out: behaviour -> deformation -> back to field via geometry -->
+      <g stroke="#e8a13a" stroke-width="1.8" fill="#e8a13a">
+        <path d="M560,143 L640,143"/><path d="M640,143 l-12,-5 l0,11 z"/>
+      </g>
+      <rect x="648" y="112" width="210" height="62" rx="10" fill="#0e1014" stroke="#2a2e37"/>
+      <text x="753" y="136" fill="#cdd3da" font-size="12.5" text-anchor="middle" font-family="var(--sans)">deformation moves cells →</text>
+      <text x="753" y="155" fill="#9aa0aa" font-size="11" text-anchor="middle" font-family="var(--sans)">geometry reshapes the field</text>
+      <path d="M753,174 C753,230 560,250 460,180" stroke="#66bb6a" stroke-width="1.6" stroke-dasharray="5 4" fill="none"/>
+      <text x="600" y="248" fill="#66bb6a" font-size="11" font-family="var(--sans)">the closed mechano-chemical loop — autonomy</text>
+    </svg>
+    <figcaption><b>The big simplification — the field is a normal CA you author.</b> Rather than a bespoke field subsystem, the environment is a <i>regular GenesisCA lattice cellular automaton</i>: you define its rule, attributes, init and colours with the full existing modeler (you could even drop cells onto an imported model like Gray-Scott). It inherits the whole mature engine — initialization, brush-painting, image import, visualization, indicators, save/load — <b>for free</b>. The cells are suspended on top with their own rule graph; the only new glue is the <b>scatter/gather bridge</b> (cells deposit into a field source attribute; cells read the field value + gradient). This is the PhysiCell + BioFVM split, with GenesisCA's CA as the field solver. <span class="small">Global sliders perturb a running sim with no recompile; the paint brush injects a source/sink/wound live.</span></figcaption>
+  </figure>
+</div></section>
+
+<!-- 5 INTERACTION -->
+<section id="interact"><div class="card">
+  <h2><span class="n">05</span> Simulator interaction — brushing cells &amp; bonds</h2>
+  <p class="lede">Picking switches from floor-division (<code>row*w+col</code>) to <b>nearest-agent</b> hit-test behind a <code>Picker</code> seam — the one main-thread change. Then cells and bonds each get their own brush modes; the index-keyed paint/inspect message protocol is reused.</p>
+
+  <div class="grid2">
+    <figure>
+      <svg viewBox="0 0 440 250" role="img" aria-label="Cell brush modes: seed, paint an attribute, kill, set type">
+        <text x="220" y="20" fill="#f4c06a" font-size="13.5" text-anchor="middle" font-weight="700" font-family="var(--sans)">cell brush</text>
+        <g>
+          <circle cx="120" cy="100" r="20" fill="rgba(232,161,58,.85)" stroke="#0c0d10"/>
+          <circle cx="170" cy="120" r="22" fill="rgba(232,161,58,.85)" stroke="#0c0d10"/>
+          <circle cx="150" cy="160" r="19" fill="rgba(76,201,240,.8)" stroke="#0c0d10"/>
+          <circle cx="210" cy="150" r="21" fill="rgba(232,161,58,.85)" stroke="#0c0d10"/>
+          <!-- brush ring -->
+          <circle cx="165" cy="130" r="58" fill="none" stroke="#fff" stroke-width="1.5" stroke-dasharray="4 4" opacity=".55"/>
+        </g>
+        <g font-family="var(--sans)" font-size="11.5" fill="#cdd2d8">
+          <text x="300" y="90">▸ seed agents</text>
+          <text x="300" y="114">▸ paint an attribute</text>
+          <text x="300" y="138">▸ kill agents</text>
+          <text x="300" y="162">▸ set cell type</text>
+        </g>
+        <text x="220" y="232" fill="#6b7280" font-size="10.5" text-anchor="middle" font-family="var(--sans)">reuses the rAF paint coalescer + paintManual message</text>
+      </svg>
+      <figcaption><b>Reuses today's paint pipeline.</b> The brush footprint becomes "agents within radius r of the cursor"; the worker message carries agent ids instead of cell indices.</figcaption>
+    </figure>
+    <figure>
+      <svg viewBox="0 0 440 250" role="img" aria-label="Bond brush modes: drag to connect two agents, pick a bond to cut, region glue or cut">
+        <text x="220" y="20" fill="#7fd6f4" font-size="13.5" text-anchor="middle" font-weight="700" font-family="var(--sans)">bond brush</text>
+        <g>
+          <line x1="110" y1="110" x2="200" y2="100" stroke="#66bb6a" stroke-width="3"/>
+          <line x1="200" y1="100" x2="250" y2="150" stroke="#e0566a" stroke-width="3" stroke-dasharray="4 3"/>
+          <circle cx="110" cy="110" r="18" fill="rgba(232,161,58,.8)" stroke="#0c0d10"/>
+          <circle cx="200" cy="100" r="20" fill="rgba(232,161,58,.8)" stroke="#0c0d10"/>
+          <circle cx="250" cy="150" r="18" fill="rgba(76,201,240,.75)" stroke="#0c0d10"/>
+          <!-- scissors mark on dashed -->
+          <text x="232" y="132" fill="#f3a0ad" font-size="13" font-family="var(--sans)">✂</text>
+        </g>
+        <g font-family="var(--sans)" font-size="11.5" fill="#cdd2d8">
+          <text x="300" y="90">▸ drag to glue two</text>
+          <text x="300" y="114">▸ pick a bond → cut</text>
+          <text x="300" y="138">▸ region glue / cut</text>
+          <text x="300" y="162">▸ inspector: bond list</text>
+        </g>
+        <text x="220" y="232" fill="#6b7280" font-size="10.5" text-anchor="middle" font-family="var(--sans)">a second pick target (bond segments) + new worker messages</text>
+      </svg>
+      <figcaption><b>Bonds are a second pick target.</b> Drag-to-connect resolves two nearest agents → a <code>formBond</code> request; a click near a segment picks the bond → <code>breakBond</code>; the inspector gains an agent's bond sub-table + per-bond strain.</figcaption>
+    </figure>
+  </div>
+</div></section>
+
+<!-- 6 DEMO 3D -->
+<section id="demo3d"><div class="card">
+  <h2><span class="n alt">06</span> Live demo — the 3D cell + bond viewer (drag to orbit)</h2>
+  <p class="lede"><b>Drag to rotate, scroll to zoom.</b> A 3D soft-cell aggregate that glues into a connected tissue and divides along its 3D tension axis — shaded, depth-sorted instanced spheres + depth-sorted bonds. "Slice" clips the front half so you can see <i>inside</i> the tissue. This is the navigation model the production WebGL renderer would deliver at scale.</p>
+  <div class="controls">
+    <button class="btn primary" id="b3play">▶ Play</button>
+    <button class="btn" id="b3seed">Reseed</button>
+    <button class="btn" id="b3slice">Slice: off</button>
+    <button class="btn" id="b3rot">Auto-rotate: on</button>
+  </div>
+  <div class="hud"><span>cells <b id="b3n">—</b></span><span>bonds <b id="b3b">—</b></span><span id="b3stab" style="color:var(--green)">● stable</span><span class="small">drag = orbit · wheel = zoom</span></div>
+  <div class="cvwrap"><canvas id="cv3" class="sim" width="560" height="420"></canvas></div>
+  <figcaption class="small" style="border-top:1px dashed var(--border2);padding-top:10px">A self-contained software-3D renderer (no WebGL) — instanced shaded spheres, depth-sorted painter's algorithm, depth-cued bonds, mouse-orbit + zoom + slice. The production path (§7) is WebGL2 instanced spheres + bond tubes for 10⁴–10⁵ cells; the <i>interaction model</i> (orbit, zoom, slice, pick) is exactly this.</figcaption>
+</div></section>
+
+<!-- 7 3D ARCHITECTURE -->
+<section id="render3d"><div class="card">
+  <h2><span class="n">07</span> 3D visualization architecture &amp; navigation</h2>
+  <p class="lede">3D is honestly a <b>wholesale new renderer</b> — but it sits behind the same <code>draw()</code> / source-canvas seam the WebGPU OffscreenCanvas direct-render path already proves, and the per-agent <code>colors</code> buffer + index-keyed inspector are reused as-is.</p>
+  <figure>
+    <svg viewBox="0 0 920 232" role="img" aria-label="The rendering seam: a 2D entity renderer and a 3D WebGL renderer both behind the same draw seam, reusing the colors buffer">
+      <rect x="40" y="86" width="170" height="60" rx="10" fill="#0e1014" stroke="#2a2e37"/>
+      <text x="125" y="110" fill="#cdd3da" font-size="12.5" text-anchor="middle" font-family="var(--sans)">worker: per-agent</text>
+      <text x="125" y="129" fill="#9aa0aa" font-size="11" text-anchor="middle" font-family="var(--mono)">positions · colors · bonds</text>
+      <path d="M210,116 L260,116" stroke="#3a3f4a" stroke-width="2" fill="#3a3f4a"/><path d="M260,116 l-12,-5 l0,11 z"/>
+      <rect x="262" y="92" width="120" height="48" rx="9" fill="rgba(232,161,58,.08)" stroke="#e8a13a"/>
+      <text x="322" y="121" fill="#f4c06a" font-size="12.5" text-anchor="middle" font-family="var(--mono)">draw() seam</text>
+      <!-- 2D branch -->
+      <g><rect x="440" y="40" width="200" height="64" rx="10" fill="rgba(102,187,106,.10)" stroke="#66bb6a"/>
+        <text x="540" y="63" fill="#8fd193" font-size="13" font-weight="700" text-anchor="middle" font-family="var(--sans)">2D entity renderer</text>
+        <text x="540" y="83" fill="#9aa0aa" font-size="10.5" text-anchor="middle" font-family="var(--sans)">circles + bond lines · Canvas2D</text>
+        <text x="540" y="98" fill="#66bb6a" font-size="10" text-anchor="middle" font-family="var(--sans)">reuses colors buffer · ships first</text></g>
+      <!-- 3D branch -->
+      <g><rect x="440" y="128" width="200" height="74" rx="10" fill="rgba(76,201,240,.10)" stroke="#4cc9f0"/>
+        <text x="540" y="151" fill="#7fd6f4" font-size="13" font-weight="700" text-anchor="middle" font-family="var(--sans)">WebGL2 3D renderer</text>
+        <text x="540" y="171" fill="#9aa0aa" font-size="10.5" text-anchor="middle" font-family="var(--sans)">instanced spheres + bond tubes</text>
+        <text x="540" y="186" fill="#9aa0aa" font-size="10.5" text-anchor="middle" font-family="var(--sans)">10⁴–10⁵ agents · LOD impostors</text>
+        <text x="540" y="199" fill="#4cc9f0" font-size="10" text-anchor="middle" font-family="var(--sans)">wholesale new (honest)</text></g>
+      <path d="M384,108 L438,76" stroke="#3a3f4a" stroke-width="2" fill="#3a3f4a"/><path d="M438,76 l-11,1 l5,9 z"/>
+      <path d="M384,124 L438,158" stroke="#3a3f4a" stroke-width="2" fill="#3a3f4a"/><path d="M438,158 l-11,-2 l1,11 z"/>
+      <!-- navigation chips -->
+      <g font-family="var(--sans)" font-size="11">
+        <text x="680" y="60" fill="#9aa0aa" font-weight="600">navigation</text>
+        <g fill="#cdd2d8">
+          <text x="680" y="82">▸ orbit / trackball camera</text>
+          <text x="680" y="104">▸ scroll zoom · pan</text>
+          <text x="680" y="126">▸ clip-plane slice (see inside)</text>
+          <text x="680" y="148">▸ GPU colour-id picking</text>
+          <text x="680" y="170">▸ depth cueing · LOD</text>
+        </g>
+      </g>
+    </svg>
+    <figcaption><b>Reuse where it's real, new where it isn't.</b> The colours buffer (one RGBA per agent — the same the compiled colour pass writes) and the index-keyed inspector carry over to both renderers. The lattice <code>ImageData</code> one-blit does not — entity rendering draws N primitives, which (as the Graph-CA investigation found) also disables the WebGPU direct-render colour-skip, so budget an instanced GPU path from the start.</figcaption>
+  </figure>
+</div></section>
+
+<!-- 8 NET NEW -->
+<section id="new"><div class="card">
+  <h2><span class="n">08</span> What's genuinely new vs reused (honesty ledger)</h2>
+  <p class="lede">The reusable part is the node-graph <i>vocabulary</i> + the index-keyed interaction protocol. The loop shape on WASM/WebGPU, the structural engine phase, and the serializer are <b>new</b> — costed honestly here so the roadmap is realistic.</p>
+  <div class="legend"><span><span class="dot" style="background:#66bb6a"></span>reuses shipping code</span><span><span class="dot" style="background:#4cc9f0"></span>genuinely new</span><span><span class="dot" style="background:#e8a13a"></span>modify</span></div>
+  <div class="matrix">
+    <div class="mgroup"><h4>Reuses (real, shipping)</h4>
+      <div class="mrow"><span class="tag t-reuse">reuse</span>node-graph value/flow vocabulary</div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span>JS compiler root/flow-chain</div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span>index-keyed inspect/paint protocol</div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span>lookupTable adhesion matrix</div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span>model-attr live sliders</div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span>Gray-Scott field graph (at 1:1 res)</div>
+    </div>
+    <div class="mgroup"><h4>Genuinely NEW (cost it)</h4>
+      <div class="mrow"><span class="tag t-new">new</span>agent loop on WASM + WebGPU</div>
+      <div class="mrow"><span class="tag t-new">new</span>post-step structural engine phase</div>
+      <div class="mrow"><span class="tag t-new">new</span>agent + bond serializer (+ remap)</div>
+      <div class="mrow"><span class="tag t-new">new</span>engine buffers (pos/radius/bondCount)</div>
+      <div class="mrow"><span class="tag t-new">new</span>WebGL2 3D renderer</div>
+    </div>
+    <div class="mgroup"><h4>Decisions taken</h4>
+      <div class="mrow"><span class="tag t-mod">D-IDX</span>agent loop var = <code>idx</code></div>
+      <div class="mrow"><span class="tag t-mod">D-TGT</span>v1 = JS-reference-only</div>
+      <div class="mrow"><span class="tag t-mod">D-FLD</span>field = 1:1 main-grid res</div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span>indicators → iterate live agents</div>
+      <div class="mrow"><span class="tag t-mod">mod</span>presentation export (post-v1)</div>
+    </div>
+  </div>
+  <div class="callout" style="margin-top:14px;border-left-color:var(--accent)"><h4 style="color:var(--accent2)">The biggest risk, named</h4><p>Do not cost the milestones against "verbatim template reuse." The single largest body of work — a non-lattice, free-list, continuous-position, ragged-bond agent loop on three targets + the structural engine phase + the serializer — is new. v1 ships JS-only to bound that (D-TARGET); WASM/WebGPU are explicit later milestones.</p></div>
+</div></section>
+
+<!-- 9 ROADMAP -->
+<section id="roadmap"><div class="card">
+  <h2><span class="n">09</span> Phased roadmap (each milestone has a visible demo)</h2>
+  <figure>
+    <svg viewBox="0 0 920 200" role="img" aria-label="Six milestones from soft spheres to 3D, with v1 ending at chemotactic branching">
+      <line x1="40" y1="92" x2="880" y2="92" stroke="#2a2e37" stroke-width="2"/>
+      <rect x="56" y="56" width="540" height="74" rx="8" fill="rgba(102,187,106,.05)" stroke="rgba(102,187,106,.3)"/>
+      <text x="326" y="48" fill="#66bb6a" font-size="11" text-anchor="middle" font-family="var(--mono)">v1 — JS-reference target (Decision D-TARGET)</text>
+      <g font-family="var(--sans)" text-anchor="middle">
+        <circle cx="110" cy="92" r="8" fill="#66bb6a"/><text x="110" y="116" fill="#8fd193" font-size="11.5" font-weight="700">M1</text><text x="110" y="132" fill="#9aa0aa" font-size="9.5">spheres + force</text>
+        <circle cx="240" cy="92" r="8" fill="#4cc9f0"/><text x="240" y="116" fill="#7fd6f4" font-size="11.5" font-weight="700">M2</text><text x="240" y="132" fill="#9aa0aa" font-size="9.5">glue + brush</text>
+        <circle cx="370" cy="92" r="8" fill="#e8a13a"/><text x="370" y="116" fill="#f4c06a" font-size="11.5" font-weight="700">M3 ★</text><text x="370" y="132" fill="#9aa0aa" font-size="9.5">division rules</text>
+        <circle cx="500" cy="92" r="8" fill="#b08cff"/><text x="500" y="116" fill="#c9b3ff" font-size="11.5" font-weight="700">M4</text><text x="500" y="132" fill="#9aa0aa" font-size="9.5">field + branch</text>
+        <circle cx="650" cy="92" r="8" fill="#b08cff"/><text x="650" y="116" fill="#c9b3ff" font-size="11.5" font-weight="700">M5</text><text x="650" y="132" fill="#9aa0aa" font-size="9.5">curvature + WASM</text>
+        <circle cx="800" cy="92" r="8" fill="#4cc9f0"/><text x="800" y="116" fill="#7fd6f4" font-size="11.5" font-weight="700">M6</text><text x="800" y="132" fill="#9aa0aa" font-size="9.5">WebGL2 3D</text>
+      </g>
+      <text x="370" y="168" fill="#6b7280" font-size="10.5" text-anchor="middle" font-family="var(--sans)">★ the headline: a glued cluster that grows &amp; divides along its tension axis, rules over your own attributes</text>
+      <text x="725" y="186" fill="#6b7280" font-size="10.5" text-anchor="middle" font-family="var(--sans)">WASM port + 3D renderer are explicit later milestones — not assumed free</text>
+    </svg>
+    <figcaption><b>M1</b> soft spheres push apart (2D circles) · <b>M2</b> cells glue into chains/clusters, glue/cut brush · <b>M3 ★</b> grow + divide along the tension axis, division rules authored over your attributes · <b>M4</b> the field + chemotactic branching (Demo 03) · <b>M5</b> curvature feedback + the WASM port · <b>M6</b> WebGL2 3D + orbit (Demo 06). Each validates statistically (sorting/cluster metrics, division-axis alignment, branch count) against Okuda/Nelson morphologies.</figcaption>
+  </figure>
+</div></section>
+
+<div class="footer">
+  Companion to <b>docs/PLAN_BOND_GRAPH_MORPHOGENESIS.md</b>. Builds on INVESTIGATION_BOND_GRAPH_MORPHOGENESIS.md + INVESTIGATION_CENTER_BASED.md. Status: implementation plan, research only — no code written. The two demos are illustrative software models, not the production engine.
+</div>
+
+</div>
+
+<script>
+/* ===== Demo 03 — 2D environment-driven morphogenesis ===== */
+(function(){
+var cv=document.getElementById('cv2');if(!cv)return;var ctx=cv.getContext('2d'),W=cv.width,H=cv.height;
+var GX=60,GY=42,CW=W/GX,CH=H/GY;
+var P={maxCells:520,rT:6,rSeed:4.5,kRep:0.95,kBond:0.16,kAdh:0.05,dt:0.5,growth:0.012,formD:2.4,breakD:8,maxBonds:6,divAge:60,divProb:0.85,noise:0.1,diff:0.18,decay:0.00012,consume:0.16,chemo:1.3};
+var cells=[],bonds=[],f=new Float32Array(GX*GY),step=0,running=false,raf=0,fieldOn=true,orient='grad';
+function rnd(a,b){return a+Math.random()*(b-a);}function fi(gx,gy){return gy*GX+gx;}
+function sampleF(x,y){var gx=Math.max(0,Math.min(GX-1,x/CW|0)),gy=Math.max(0,Math.min(GY-1,y/CH|0));return f[fi(gx,gy)];}
+function gradF(x,y){var gx=Math.max(1,Math.min(GX-2,x/CW|0)),gy=Math.max(1,Math.min(GY-2,y/CH|0));return[f[fi(gx+1,gy)]-f[fi(gx-1,gy)],f[fi(gx,gy+1)]-f[fi(gx,gy-1)]];}
+function seed(n){cells=[];bonds=[];step=0;f=new Float32Array(GX*GY);var cx=W/2,cy=H*0.55;for(var i=0;i<n;i++)cells.push({x:cx+rnd(-24,24),y:cy+rnd(-10,10),type:Math.random()<0.5?0:1,r:P.rSeed,age:rnd(0,P.divAge*0.5)});formAll();draw();}
+function has(i,j){for(var k=0;k<bonds.length;k++){var b=bonds[k];if((b.a==i&&b.b==j)||(b.a==j&&b.b==i))return true;}return false;}
+function deg(i){var d=0;for(var k=0;k<bonds.length;k++)if(bonds[k].a==i||bonds[k].b==i)d++;return d;}
+function formAll(){for(var i=0;i<cells.length;i++)for(var j=i+1;j<cells.length;j++){var a=cells[i],b=cells[j],dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy);if(d<a.r+b.r+P.formD&&!has(i,j)&&deg(i)<P.maxBonds&&deg(j)<P.maxBonds)bonds.push({a:i,b:j,L:Math.max(d,a.r+b.r)});}}
+function diffuse(){for(var gx=0;gx<GX;gx++)f[fi(gx,0)]=1.0;var nf=new Float32Array(GX*GY);for(var gy=1;gy<GY-1;gy++)for(var gx=1;gx<GX-1;gx++){var c=f[fi(gx,gy)];nf[fi(gx,gy)]=c+P.diff*(f[fi(gx-1,gy)]+f[fi(gx+1,gy)]+f[fi(gx,gy-1)]+f[fi(gx,gy+1)]-4*c)-P.decay;}for(var gx2=0;gx2<GX;gx2++){nf[fi(gx2,0)]=1.0;nf[fi(gx2,GY-1)]=f[fi(gx2,GY-1)];}for(var gy2=0;gy2<GY;gy2++){nf[fi(0,gy2)]=f[fi(1,gy2)];nf[fi(GX-1,gy2)]=f[fi(GX-2,gy2)];}f=nf;for(var i=0;i<cells.length;i++){var c2=cells[i],gx=Math.max(0,Math.min(GX-1,c2.x/CW|0)),gy=Math.max(0,Math.min(GY-1,c2.y/CH|0));f[fi(gx,gy)]=Math.max(0,f[fi(gx,gy)]-P.consume);}}
+function physics(){var n=cells.length,fx=new Float64Array(n),fy=new Float64Array(n);for(var i=0;i<n;i++){var a=cells[i];for(var j=i+1;j<n;j++){var b=cells[j],dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)+1e-6,sum=a.r+b.r,cut=sum+P.breakD;if(d>cut)continue;var ux=dx/d,uy=dy/d;if(d<sum){var ff=P.kRep*(sum-d);fx[i]-=ff*ux;fy[i]-=ff*uy;fx[j]+=ff*ux;fy[j]+=ff*uy;}else if(a.type==b.type){var fa=P.kAdh*(sum/d-sum/cut);if(fa>0){fx[i]+=fa*ux;fy[i]+=fa*uy;fx[j]-=fa*ux;fy[j]-=fa*uy;}}}}for(var k=0;k<bonds.length;k++){var bd=bonds[k],a=cells[bd.a],c=cells[bd.b],dx=c.x-a.x,dy=c.y-a.y,d=Math.hypot(dx,dy)+1e-6,ux=dx/d,uy=dy/d,ff=P.kBond*(d-bd.L);fx[bd.a]+=ff*ux;fy[bd.a]+=ff*uy;fx[bd.b]-=ff*ux;fy[bd.b]-=ff*uy;}for(var i2=0;i2<n;i2++){var c2=cells[i2];if(fieldOn){var g=gradF(c2.x,c2.y);fx[i2]+=P.chemo*g[0]*40;fy[i2]+=P.chemo*g[1]*40;}c2.x+=P.dt*fx[i2]+rnd(-P.noise,P.noise);c2.y+=P.dt*fy[i2]+rnd(-P.noise,P.noise);var m=10;if(c2.x<m)c2.x=m;if(c2.x>W-m)c2.x=W-m;if(c2.y<m)c2.y=m;if(c2.y>H-m)c2.y=H-m;if(c2.r<P.rT)c2.r+=P.growth;c2.age++;}}
+function eig2(a,b,d){var tr=a+d,det=a*d-b*b,disc=Math.sqrt(Math.max(0,tr*tr/4-det)),l1=tr/2+disc,vx,vy;if(Math.abs(b)>1e-9){vx=l1-d;vy=b;}else{if(a>=d){vx=1;vy=0;}else{vx=0;vy=1;}}var nn=Math.hypot(vx,vy)+1e-9;return[vx/nn,vy/nn];}
+function divide(i){if(cells.length>=P.maxCells)return;var c=cells[i],mx,my;if(orient==='grad'&&fieldOn){var g=gradF(c.x,c.y),gn=Math.hypot(g[0],g[1]);if(gn>1e-5){mx=g[0]/gn;my=g[1]/gn;}else{var an=Math.random()*6.283;mx=Math.cos(an);my=Math.sin(an);}}else if(orient==='tension'){var a=0,b=0,d=0,ws=0;for(var k=0;k<bonds.length;k++){var bd=bonds[k],o=-1;if(bd.a==i)o=bd.b;else if(bd.b==i)o=bd.a;else continue;var oc=cells[o],dx=oc.x-c.x,dy=oc.y-c.y,dd=Math.hypot(dx,dy)+1e-6,ux=dx/dd,uy=dy/dd,w=Math.max(0,dd-bd.L);a+=w*ux*ux;b+=w*ux*uy;d+=w*uy*uy;ws+=w;}if(ws>1e-4){var e=eig2(a,b,d);mx=e[0];my=e[1];}else{var an=Math.random()*6.283;mx=Math.cos(an);my=Math.sin(an);}}else{var an=Math.random()*6.283;mx=Math.cos(an);my=Math.sin(an);}var eps=c.r*0.7,ni=cells.length,rD=c.r*0.72;cells[i]={x:c.x-mx*eps,y:c.y-my*eps,type:c.type,r:rD,age:0};cells.push({x:c.x+mx*eps,y:c.y+my*eps,type:c.type,r:rD,age:0});for(var k2=0;k2<bonds.length;k2++){var bd2=bonds[k2],o2=-1;if(bd2.a==i)o2=bd2.b;else if(bd2.b==i)o2=bd2.a;else continue;var oc2=cells[o2],side=(oc2.x-c.x)*mx+(oc2.y-c.y)*my;if(side>0){if(bd2.a==i)bd2.a=ni;else bd2.b=ni;}}bonds.push({a:i,b:ni,L:eps*2});}
+function structural(){for(var k=bonds.length-1;k>=0;k--){var b=bonds[k],a=cells[b.a],c=cells[b.b];if(Math.hypot(c.x-a.x,c.y-a.y)>a.r+c.r+P.breakD)bonds.splice(k,1);}formAll();for(var i=cells.length-1;i>=0;i--){var c=cells[i],gate=fieldOn?(0.28+0.72*sampleF(c.x,c.y)):1;if(c.age>P.divAge&&c.r>=P.rT*0.85&&Math.random()<P.divProb*gate*0.05&&cells.length<P.maxCells)divide(i);}}
+var COL=['#e8a13a','#4cc9f0'];
+function draw(){ctx.clearRect(0,0,W,H);if(fieldOn){for(var gy=0;gy<GY;gy++)for(var gx=0;gx<GX;gx++){var v=f[fi(gx,gy)];if(v>0.02){ctx.fillStyle='rgba(120,140,255,'+(0.20*v)+')';ctx.fillRect(gx*CW,gy*CH,CW+1,CH+1);}}}for(var k=0;k<bonds.length;k++){var b=bonds[k],a=cells[b.a],c=cells[b.b];if(!a||!c)continue;ctx.strokeStyle='rgba(102,187,106,.5)';ctx.lineWidth=1.3;ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(c.x,c.y);ctx.stroke();}for(var i=0;i<cells.length;i++){var c=cells[i];ctx.beginPath();ctx.arc(c.x,c.y,c.r,0,6.283);ctx.fillStyle=COL[c.type];ctx.globalAlpha=.92;ctx.fill();ctx.globalAlpha=1;ctx.lineWidth=1;ctx.strokeStyle='rgba(10,12,15,.8)';ctx.stroke();}var my=0;for(var i2=0;i2<cells.length;i2++)my+=cells[i2].y;my/=(cells.length||1);
+  set('b2n',cells.length);set('b2b',bonds.length);set('b2y',(H-my).toFixed(0));var el=document.getElementById('b2stab');var ok=!cells.length||isFinite(cells[0].x);if(el){el.textContent=ok?'● stable':'● UNSTABLE';el.style.color=ok?'var(--green)':'var(--red)';}}
+function set(id,v){var e=document.getElementById(id);if(e)e.textContent=v;}
+function frame(){if(!running)return;diffuse();physics();structural();step++;draw();raf=requestAnimationFrame(frame);}
+document.getElementById('b2play').onclick=function(){running=!running;this.textContent=running?'❚❚ Pause':'▶ Play';if(running)frame();else cancelAnimationFrame(raf);};
+document.getElementById('b2seed').onclick=function(){seed(20);};
+document.getElementById('b2field').onclick=function(){fieldOn=!fieldOn;this.textContent='Field: '+(fieldOn?'on':'off');draw();};
+document.getElementById('b2orient').onchange=function(){orient=this.value;};
+window.__bg2d=function(n){for(var s=0;s<n;s++){diffuse();physics();structural();}draw();return{cells:cells.length,bonds:bonds.length};};
+seed(20);
+})();
+
+/* ===== Demo 06 — 3D cell + bond viewer (orbit) ===== */
+(function(){
+var cv=document.getElementById('cv3');if(!cv)return;var ctx=cv.getContext('2d'),W=cv.width,H=cv.height;
+var P={maxCells:210,rT:5.2,rSeed:4,kRep:0.95,kBond:0.16,kAdh:0.05,dt:0.5,growth:0.01,formD:2.2,breakD:7,maxBonds:7,divAge:70,divProb:0.30,noise:0.12};
+var cells=[],bonds=[],running=false,raf=0,cam={yaw:0.6,pitch:-0.35,dist:210,f:600},auto=true,slice=false;
+function rnd(a,b){return a+Math.random()*(b-a);}
+function seed(n){cells=[];bonds=[];for(var i=0;i<n;i++){var th=Math.random()*6.283,ph=Math.acos(2*Math.random()-1),rr=Math.cbrt(Math.random())*22;cells.push({x:rr*Math.sin(ph)*Math.cos(th),y:rr*Math.sin(ph)*Math.sin(th),z:rr*Math.cos(ph),type:Math.random()<0.5?0:1,r:P.rSeed,age:rnd(0,P.divAge*0.6)});}formAll();draw();}
+function has(i,j){for(var k=0;k<bonds.length;k++){var b=bonds[k];if((b.a==i&&b.b==j)||(b.a==j&&b.b==i))return true;}return false;}
+function deg(i){var d=0;for(var k=0;k<bonds.length;k++)if(bonds[k].a==i||bonds[k].b==i)d++;return d;}
+function formAll(){for(var i=0;i<cells.length;i++)for(var j=i+1;j<cells.length;j++){var a=cells[i],b=cells[j],dx=b.x-a.x,dy=b.y-a.y,dz=b.z-a.z,d=Math.sqrt(dx*dx+dy*dy+dz*dz);if(d<a.r+b.r+P.formD&&!has(i,j)&&deg(i)<P.maxBonds&&deg(j)<P.maxBonds)bonds.push({a:i,b:j,L:Math.max(d,a.r+b.r)});}}
+function physics(){var n=cells.length,fx=new Float64Array(n),fy=new Float64Array(n),fz=new Float64Array(n);for(var i=0;i<n;i++){var a=cells[i];for(var j=i+1;j<n;j++){var b=cells[j],dx=b.x-a.x,dy=b.y-a.y,dz=b.z-a.z,d=Math.sqrt(dx*dx+dy*dy+dz*dz)+1e-6,sum=a.r+b.r,cut=sum+P.breakD;if(d>cut)continue;var ux=dx/d,uy=dy/d,uz=dz/d;if(d<sum){var f=P.kRep*(sum-d);fx[i]-=f*ux;fy[i]-=f*uy;fz[i]-=f*uz;fx[j]+=f*ux;fy[j]+=f*uy;fz[j]+=f*uz;}else if(a.type==b.type){var fa=P.kAdh*(sum/d-sum/cut);if(fa>0){fx[i]+=fa*ux;fy[i]+=fa*uy;fz[i]+=fa*uz;fx[j]-=fa*ux;fy[j]-=fa*uy;fz[j]-=fa*uz;}}}}for(var k=0;k<bonds.length;k++){var bd=bonds[k],a=cells[bd.a],c=cells[bd.b],dx=c.x-a.x,dy=c.y-a.y,dz=c.z-a.z,d=Math.sqrt(dx*dx+dy*dy+dz*dz)+1e-6,ux=dx/d,uy=dy/d,uz=dz/d,f=P.kBond*(d-bd.L);fx[bd.a]+=f*ux;fy[bd.a]+=f*uy;fz[bd.a]+=f*uz;fx[bd.b]-=f*ux;fy[bd.b]-=f*uy;fz[bd.b]-=f*uz;}for(var i2=0;i2<n;i2++){var c2=cells[i2];c2.x+=P.dt*fx[i2]+rnd(-P.noise,P.noise);c2.y+=P.dt*fy[i2]+rnd(-P.noise,P.noise);c2.z+=P.dt*fz[i2]+rnd(-P.noise,P.noise);if(c2.r<P.rT)c2.r+=P.growth;c2.age++;}}
+function principal3(M){var v=[1,0.3,0.2];for(var it=0;it<8;it++){var x=M[0]*v[0]+M[1]*v[1]+M[2]*v[2],y=M[1]*v[0]+M[3]*v[1]+M[4]*v[2],z=M[2]*v[0]+M[4]*v[1]+M[5]*v[2];var n=Math.sqrt(x*x+y*y+z*z)+1e-9;v=[x/n,y/n,z/n];}return v;}
+function divide(i){if(cells.length>=P.maxCells)return;var c=cells[i],M=[0,0,0,0,0,0],ws=0,pM=[0,0,0,0,0,0],ps=0;for(var k=0;k<bonds.length;k++){var bd=bonds[k],o=-1;if(bd.a==i)o=bd.b;else if(bd.b==i)o=bd.a;else continue;var oc=cells[o],dx=oc.x-c.x,dy=oc.y-c.y,dz=oc.z-c.z,dd=Math.sqrt(dx*dx+dy*dy+dz*dz)+1e-6,ux=dx/dd,uy=dy/dd,uz=dz/dd;pM[0]+=ux*ux;pM[1]+=ux*uy;pM[2]+=ux*uz;pM[3]+=uy*uy;pM[4]+=uy*uz;pM[5]+=uz*uz;ps++;var w=Math.max(0,dd-bd.L);M[0]+=w*ux*ux;M[1]+=w*ux*uy;M[2]+=w*ux*uz;M[3]+=w*uy*uy;M[4]+=w*uy*uz;M[5]+=w*uz*uz;ws+=w;}var m;if(ws>1e-4)m=principal3(M);else if(ps>0.5)m=principal3(pM);else{var t=Math.random()*6.283,p=Math.acos(2*Math.random()-1);m=[Math.sin(p)*Math.cos(t),Math.sin(p)*Math.sin(t),Math.cos(p)];}var eps=c.r*0.7,ni=cells.length,rD=c.r*0.72;cells[i]={x:c.x-m[0]*eps,y:c.y-m[1]*eps,z:c.z-m[2]*eps,type:c.type,r:rD,age:0};cells.push({x:c.x+m[0]*eps,y:c.y+m[1]*eps,z:c.z+m[2]*eps,type:c.type,r:rD,age:0});for(var k2=0;k2<bonds.length;k2++){var bd2=bonds[k2],o2=-1;if(bd2.a==i)o2=bd2.b;else if(bd2.b==i)o2=bd2.a;else continue;var oc2=cells[o2],side=(oc2.x-c.x)*m[0]+(oc2.y-c.y)*m[1]+(oc2.z-c.z)*m[2];if(side>0){if(bd2.a==i)bd2.a=ni;else bd2.b=ni;}}bonds.push({a:i,b:ni,L:eps*2});}
+function structural(){for(var k=bonds.length-1;k>=0;k--){var b=bonds[k],a=cells[b.a],c=cells[b.b];if(Math.sqrt((c.x-a.x)*(c.x-a.x)+(c.y-a.y)*(c.y-a.y)+(c.z-a.z)*(c.z-a.z))>a.r+c.r+P.breakD)bonds.splice(k,1);}formAll();for(var i=cells.length-1;i>=0;i--){var c=cells[i];if(c.age>P.divAge&&c.r>=P.rT*0.9&&Math.random()<P.divProb*0.04&&cells.length<P.maxCells)divide(i);}}
+function proj(p){var cy=Math.cos(cam.yaw),sy=Math.sin(cam.yaw),x1=p.x*cy-p.z*sy,z1=p.x*sy+p.z*cy,cp=Math.cos(cam.pitch),sp=Math.sin(cam.pitch),y2=p.y*cp-z1*sp,z2=p.y*sp+z1*cp,camD=cam.dist-z2;if(camD<10)camD=10;var s=cam.f/camD;return{sx:W/2+x1*s,sy:H/2-y2*s,s:s,d:camD,zc:z1};}
+var COL=[[232,161,58],[76,201,240]];
+function draw(){ctx.fillStyle='#070809';ctx.fillRect(0,0,W,H);var pr=cells.map(function(c){var q=proj(c);q.r=c.r*q.s;q.type=c.type;return q;});var list=[];for(var i=0;i<cells.length;i++){if(slice&&pr[i].zc>4)continue;list.push({t:1,i:i,d:pr[i].d});}for(var k=0;k<bonds.length;k++){if(slice&&(pr[bonds[k].a].zc>4||pr[bonds[k].b].zc>4))continue;list.push({t:0,k:k,d:(pr[bonds[k].a].d+pr[bonds[k].b].d)/2});}list.sort(function(p,q){return q.d-p.d;});var dmin=1e9,dmax=-1e9;for(var i=0;i<pr.length;i++){if(pr[i].d<dmin)dmin=pr[i].d;if(pr[i].d>dmax)dmax=pr[i].d;}for(var n=0;n<list.length;n++){var it=list[n];if(it.t==0){var a=pr[bonds[it.k].a],b=pr[bonds[it.k].b],br=1-(it.d-dmin)/(dmax-dmin+1);ctx.strokeStyle='rgba(120,200,140,'+(0.16+0.4*br)+')';ctx.lineWidth=0.8+1.4*br;ctx.beginPath();ctx.moveTo(a.sx,a.sy);ctx.lineTo(b.sx,b.sy);ctx.stroke();}else{var q=pr[it.i],col=COL[q.type],br=0.45+0.55*(1-(q.d-dmin)/(dmax-dmin+1)),g=ctx.createRadialGradient(q.sx-q.r*0.35,q.sy-q.r*0.35,q.r*0.1,q.sx,q.sy,q.r);g.addColorStop(0,'rgb('+Math.min(255,col[0]*br+70|0)+','+Math.min(255,col[1]*br+70|0)+','+Math.min(255,col[2]*br+70|0)+')');g.addColorStop(1,'rgb('+(col[0]*br*0.5|0)+','+(col[1]*br*0.5|0)+','+(col[2]*br*0.5|0)+')');ctx.fillStyle=g;ctx.beginPath();ctx.arc(q.sx,q.sy,q.r,0,6.283);ctx.fill();}}
+  set('b3n',cells.length);set('b3b',bonds.length);var el=document.getElementById('b3stab');var ok=!cells.length||isFinite(cells[0].x);if(el){el.textContent=ok?'● stable':'● UNSTABLE';el.style.color=ok?'var(--green)':'var(--red)';}}
+function set(id,v){var e=document.getElementById(id);if(e)e.textContent=v;}
+function frame(){if(auto)cam.yaw+=0.006;if(running){physics();structural();physics();structural();}draw();if(running||auto)raf=requestAnimationFrame(frame);else raf=0;}
+var drag=false,lx=0,ly=0;
+cv.addEventListener('pointerdown',function(e){drag=true;lx=e.clientX;ly=e.clientY;if(auto){auto=false;document.getElementById('b3rot').textContent='Auto-rotate: off';if(!running){cancelAnimationFrame(raf);raf=0;}}});
+window.addEventListener('pointermove',function(e){if(!drag)return;cam.yaw+=(e.clientX-lx)*0.01;cam.pitch=Math.max(-1.5,Math.min(1.5,cam.pitch+(e.clientY-ly)*0.01));lx=e.clientX;ly=e.clientY;if(!running&&!auto)draw();});
+window.addEventListener('pointerup',function(){drag=false;});
+cv.addEventListener('wheel',function(e){e.preventDefault();cam.dist=Math.max(80,Math.min(480,cam.dist*(e.deltaY>0?1.08:0.93)));if(!running&&!auto)draw();},{passive:false});
+document.getElementById('b3play').onclick=function(){running=!running;this.textContent=running?'❚❚ Pause':'▶ Play';if((running||auto)&&!raf)frame();};
+document.getElementById('b3seed').onclick=function(){seed(24);};
+document.getElementById('b3slice').onclick=function(){slice=!slice;this.textContent='Slice: '+(slice?'on':'off');draw();};
+document.getElementById('b3rot').onclick=function(){auto=!auto;this.textContent='Auto-rotate: '+(auto?'on':'off');if(auto&&!raf)frame();};
+window.__bg3d=function(n){for(var s=0;s<n;s++){physics();structural();}draw();return{cells:cells.length,bonds:bonds.length};};
+seed(24);frame();
+})();
+</script>
+
+</body>
+</html>

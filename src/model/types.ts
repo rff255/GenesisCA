@@ -150,6 +150,11 @@ export interface Mapping {
 
 export type BoundaryTreatment = 'constant' | 'torus';
 export type Topology = '2d-grid';
+/** Lattice dimensionality. `2d` (default/absent) is the classic W×H grid;
+ *  `3d` makes the lattice a W×H×D volume (the 3D Grid CA milestone). The
+ *  engine is dimension-agnostic (`total = W*H*D`, a 3-tuple offset table, a
+ *  `_layer` decode); only the renderer differs. */
+export type Dimension = '2d' | '3d';
 export type UpdateMode = 'synchronous' | 'asynchronous';
 export type AsyncScheme = 'random-order' | 'random-independent' | 'cyclic';
 
@@ -206,6 +211,9 @@ export interface ModelProperties {
   asyncScheme: AsyncScheme;
   gridWidth: number;
   gridHeight: number;
+  /** 3D Grid CA: number of layers along Z. Absent / `1` → `W*H*1 === W*H`,
+   *  byte-identical to the 2D engine. Only meaningful when `dimension === '3d'`. */
+  gridDepth?: number;
   maxIterations: number;
   tags: string[];
   /** Optional preview image (PNG/JPEG/GIF/WebP, <=2 MB) as a data URL. Shown
@@ -232,6 +240,10 @@ export interface ModelProperties {
    *  a stop event firing at gen 47 may surface at gen 48–54. JS / WASM
    *  ignore this. */
   webgpuStopCheckInterval?: number;
+  /** 3D Grid CA: lattice dimensionality. Absent → `'2d'` (legacy + every
+   *  existing file). When `'3d'`, the grid is `gridWidth × gridHeight × gridDepth`
+   *  and the simulator uses the WebGL2 voxel renderer. */
+  dimension?: Dimension;
 }
 
 /** A serialized node in the update rules graph */
@@ -282,9 +294,10 @@ export type AccumulationMode = 'per-generation' | 'accumulated';
 /** Indicator X-axis. `generation` (default/absent) is the classic time-history
  *  behavior. `rows` / `columns` turn the indicator into a live spatial histogram
  *  (a chromatogram): the per-step value becomes `Record<seriesKey, number[]>`,
- *  each array indexed by position bin along the chosen axis. Spatial is a
- *  cell-aggregation, so it is only valid on **linked** indicators. */
-export type IndicatorXAxis = 'generation' | 'rows' | 'columns';
+ *  each array indexed by position bin along the chosen axis. `layers` is the
+ *  3D-only Z-axis sibling of `rows`/`columns` (bins by `Math.floor(i/(W*H))`).
+ *  Spatial is a cell-aggregation, so it is only valid on **linked** indicators. */
+export type IndicatorXAxis = 'generation' | 'rows' | 'columns' | 'layers';
 
 /** Spatial position-binning mode. `slices` divides the axis into a fixed number
  *  of equal bands (relative — survives grid resize). `absolute` uses a fixed
@@ -372,6 +385,8 @@ export interface SimulationState {
   generation?: number;
   width?: number;
   height?: number;
+  /** 3D Grid CA: layer count. Absent → 1 (a 2D snapshot, byte-identical). */
+  depth?: number;
   attributes?: Record<string, SerializedTypedArray>;
   indicators?: Record<string, number>;
   linkedAccumulators?: Record<string, number | Record<string, number>>;
@@ -402,6 +417,9 @@ export interface SimulationState {
   boundaryTreatment?: BoundaryTreatment;
   gridWidth?: number;
   gridHeight?: number;
+  /** 3D Grid CA: layer count, restored alongside gridWidth/gridHeight so a
+   *  preset can carry its volume dimensions. Absent → 1. */
+  gridDepth?: number;
   /** Lookup-table model attribute overrides. Outer key = attribute id; inner
    *  table maps `rowLabel -> colLabel -> float`. Saved in presets so a preset
    *  can swap an entire parameter set (e.g. the 8 Kier 1996 amphiphile sets)
@@ -517,6 +535,16 @@ export interface Variable {
   attributeId?: string;
 }
 
+/** Bond-Graph Morphogenesis: which topology layer(s) the model uses. At least
+ *  one must be true (reducer-enforced). `gridCells` is the classic lattice CA;
+ *  `agents` is the bond-graph agent layer (UI rendered but hard-disabled this
+ *  milestone — "coming soon"). NB: distinct from the legacy `ModelProperties.topology`
+ *  string enum — leave that untouched. */
+export interface TopologyMode {
+  gridCells: boolean;
+  agents: boolean;
+}
+
 /** Complete CA model definition */
 export interface CAModel {
   schemaVersion: number;
@@ -537,4 +565,8 @@ export interface CAModel {
   /** Variegated Cells feature config. Absent / `enabled: false` → engine and
    *  UI behave as if the feature didn't exist. See `VariegatedCellsConfig`. */
   variegatedCells?: VariegatedCellsConfig;
+  /** Bond-Graph Morphogenesis topology selection. Absent →
+   *  `{ gridCells: true, agents: false }` (the LOAD_MODEL migration seeds it).
+   *  ≥1 flag must be true (reducer-enforced). */
+  topologyMode?: TopologyMode;
 }

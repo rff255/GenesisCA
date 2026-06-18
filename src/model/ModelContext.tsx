@@ -24,6 +24,7 @@ import type {
   SimulationState,
   Variable,
   VariegatedCellsConfig,
+  TopologyMode,
 } from './types';
 import { DEFAULT_MODEL, EMPTY_MODEL } from './defaultModel';
 import { defaultTagColor } from '../modeler/vpl/compiler/linkedOutputMappings';
@@ -189,7 +190,8 @@ type ModelAction =
   | { type: 'ADD_FACE_PATTERN' }
   | { type: 'REMOVE_FACE_PATTERN'; id: string }
   | { type: 'UPDATE_FACE_PATTERN'; id: string; changes: Partial<FacePattern> }
-  | { type: 'DUPLICATE_FACE_PATTERN'; sourceId: string };
+  | { type: 'DUPLICATE_FACE_PATTERN'; sourceId: string }
+  | { type: 'UPDATE_TOPOLOGY_MODE'; changes: Partial<TopologyMode> };
 
 // ---------------------------------------------------------------------------
 // Reducer
@@ -708,6 +710,11 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // v1.8: rename/add — silently drop legacy `goal`, default new `modelAuthor` to ''.
       if ('goal' in m.properties) delete (m.properties as unknown as Record<string, unknown>).goal;
       if (m.properties.modelAuthor === undefined) m.properties.modelAuthor = '';
+      // 3D Grid CA / Bond-Graph Morphogenesis (M0a): default the new mode fields
+      // so every legacy file loads as the top-left mode-matrix cell (2D grid).
+      if (!m.properties.dimension) m.properties.dimension = '2d';
+      if (m.properties.gridDepth === undefined) m.properties.gridDepth = 1;
+      if (!m.topologyMode) m.topologyMode = { gridCells: true, agents: false };
       for (const n of m.neighborhoods) { n.margin ??= 2; n.includeCentralCell ??= false; }
       for (const a of m.attributes) {
         if (a.type === 'tag' && !a.tagOptions) a.tagOptions = [];
@@ -899,6 +906,13 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       };
     }
 
+    case 'UPDATE_TOPOLOGY_MODE': {
+      const current: TopologyMode = state.model.topologyMode ?? { gridCells: true, agents: false };
+      const next = { ...current, ...action.changes };
+      if (!next.gridCells && !next.agents) return state;  // reject all-false (defense-in-depth; UI also gates)
+      return { ...state, isDirty: true, model: { ...state.model, topologyMode: next } };
+    }
+
     case 'ADD_FACE_PATTERN': {
       const current: VariegatedCellsConfig = state.model.variegatedCells ?? {
         enabled: false, sourceAttributeId: '', facePalettes: [], facePatterns: [],
@@ -1051,6 +1065,9 @@ export interface ModelContextValue {
   removeVariable: (id: string) => void;
   updateVariable: (id: string, changes: Partial<Variable>) => void;
   reorderVariables: (newOrder: string[]) => void;
+  /** Bond-Graph Morphogenesis topology selection (Grid Cells / Agents). ≥1
+   *  flag enforced by the reducer. */
+  updateTopologyMode: (changes: Partial<TopologyMode>) => void;
 }
 
 const ModelContext = createContext<ModelContextValue | null>(null);
@@ -1270,6 +1287,9 @@ export function ModelProvider({ children }: { children: ReactNode }) {
   const reorderVariables = useCallback(
     (newOrder: string[]) => dispatch({ type: 'REORDER_VARIABLES', newOrder }), [],
   );
+  const updateTopologyMode = useCallback(
+    (changes: Partial<TopologyMode>) => dispatch({ type: 'UPDATE_TOPOLOGY_MODE', changes }), [],
+  );
 
   const value = useMemo<ModelContextValue>(
     () => ({
@@ -1317,6 +1337,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       removeVariable,
       updateVariable,
       reorderVariables,
+      updateTopologyMode,
     }),
     [
       state.model,
@@ -1363,6 +1384,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       removeVariable,
       updateVariable,
       reorderVariables,
+      updateTopologyMode,
     ],
   );
 
