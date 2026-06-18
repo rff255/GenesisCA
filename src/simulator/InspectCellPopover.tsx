@@ -63,6 +63,10 @@ function decodeAttrValue(v: number | undefined, attr: Attribute): string {
       const packed = v | 0;
       if (packed === INVALID_NI) return 'INVALID_NI (no neighbor)';
       const { dr, dc } = unpackNI(packed);
+      // 3D Grid CA: the neighborIndex codec packs exactly two 16-bit offsets
+      // (dr, dc) — there is NO third (dl) axis. The 3-axis codec redesign is
+      // deferred (the neighborIndex node family is gated off in 3D models), so
+      // there is no `dl` to show here. See PLAN_BG_DIMENSIONS_AND_MODES §6.5.
       return `(dr ${dr}, dc ${dc})`;
     }
     default: return formatFloat(v);

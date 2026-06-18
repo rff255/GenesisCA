@@ -22,6 +22,8 @@ interface Props {
    *  row/column positions. */
   gridWidth: number;
   gridHeight: number;
+  /** 3D Grid CA: layer count, for the 'layers' spatial axis. Absent → 1. */
+  gridDepth?: number;
   vizModes: Record<string, IndicatorVizMode>;
   /** Per-indicator set of legend categories the user has hidden (Lines/Stack). */
   hiddenCategories: Record<string, Set<string>>;
@@ -56,7 +58,7 @@ function seriesKeysOf(
   hist: number[] | Record<string, number[]> | undefined,
 ): string[] {
   if (typeof val === 'number' || ind.kind === 'standalone') return [SCALAR_SERIES_KEY];
-  const isSpatial = ind.kind === 'linked' && (ind.xAxis === 'rows' || ind.xAxis === 'columns');
+  const isSpatial = ind.kind === 'linked' && (ind.xAxis === 'rows' || ind.xAxis === 'columns' || ind.xAxis === 'layers');
   const keys = new Set<string>();
   if (val && typeof val === 'object') for (const k of Object.keys(val)) keys.add(k);
   if (hist && !Array.isArray(hist)) for (const k of Object.keys(hist)) keys.add(k);
@@ -218,7 +220,7 @@ function formatValue(val: number, ind: Indicator): string {
   return String(val);
 }
 
-export function IndicatorDisplay({ indicators, values, history, generation, gridWidth, gridHeight, vizModes, hiddenCategories, chartOverrides, onToggleWatch, onChartToggle, onCycleVizMode, onToggleCategory, onChangeChartOverrides, categoryOrders }: Props) {
+export function IndicatorDisplay({ indicators, values, history, generation, gridWidth, gridHeight, gridDepth = 1, vizModes, hiddenCategories, chartOverrides, onToggleWatch, onChartToggle, onCycleVizMode, onToggleCategory, onChangeChartOverrides, categoryOrders }: Props) {
   // Track *collapsed* IDs — everything is expanded by default
   const [collapsedCharts, setCollapsedCharts] = useState<Set<string>>(new Set());
   // Per-indicator custom content height (drag-to-resize)
@@ -282,7 +284,7 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
         const isExpanded = !collapsedCharts.has(ind.id);
         // Spatial (xAxis rows/columns) sends Record<seriesKey, number[]> — also
         // typeof 'object', so it must be split out from the frequency branch.
-        const isSpatial = ind.kind === 'linked' && (ind.xAxis === 'rows' || ind.xAxis === 'columns');
+        const isSpatial = ind.kind === 'linked' && (ind.xAxis === 'rows' || ind.xAxis === 'columns' || ind.xAxis === 'layers');
         const isScalar = val !== undefined && typeof val === 'number';
         const isFreq = val !== undefined && typeof val === 'object' && !isSpatial;
         // Effective chart settings: model defaults ⊕ simulator overrides.
@@ -456,8 +458,8 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
             {isWatched && isSpatial && isExpanded && val !== undefined && (() => {
               const h = heights[ind.id] ?? 160;
               const spatialData = typeof val === 'object' ? (val as Record<string, number[]>) : {};
-              const axis = ind.xAxis === 'columns' ? 'columns' : 'rows';
-              const axisLength = axis === 'rows' ? gridHeight : gridWidth;
+              const axis = ind.xAxis === 'columns' ? 'columns' : ind.xAxis === 'layers' ? 'layers' : 'rows';
+              const axisLength = axis === 'rows' ? gridHeight : axis === 'layers' ? gridDepth : gridWidth;
               return (
                 <div className={styles.sparklineWrap} style={{ height: h }}>
                   <IndicatorSpatialChart

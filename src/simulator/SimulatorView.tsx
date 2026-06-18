@@ -3586,11 +3586,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const s = p.state;
     const hasGrid = s.width != null && s.height != null && s.attributes != null && s.colors != null;
     const boundaryChanged = !!s.boundaryTreatment && s.boundaryTreatment !== model.properties.boundaryTreatment;
+    const sD = s.gridDepth ?? s.depth ?? 1;
     const dimsFromState = s.gridWidth != null && s.gridHeight != null
-      ? { w: s.gridWidth, h: s.gridHeight }
-      : hasGrid ? { w: s.width!, h: s.height! } : null;
+      ? { w: s.gridWidth, h: s.gridHeight, d: sD }
+      : hasGrid ? { w: s.width!, h: s.height!, d: sD } : null;
     const dimsChanged = dimsFromState != null
-      && (dimsFromState.w !== gridWidth.current || dimsFromState.h !== gridHeight.current);
+      && (dimsFromState.w !== gridWidth.current || dimsFromState.h !== gridHeight.current || dimsFromState.d !== gridDepth.current);
     if ((boundaryChanged || dimsChanged) && playing) setPlaying(false);
     applySimulationState(p.state);
   };
@@ -3643,11 +3644,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // worker reinit; the pending-restore mechanism then applies the grid/control
     // state after the new worker finishes its first step.
     const boundaryChanged = state.boundaryTreatment && state.boundaryTreatment !== model.properties.boundaryTreatment;
+    // 3D Grid CA: carry depth (gridDepth ?? depth ?? 1) so a depth change adapts
+    // the model + triggers the structural reinit.
+    const stateDepth = state.gridDepth ?? state.depth ?? 1;
     const dimsFromState = state.gridWidth != null && state.gridHeight != null
-      ? { w: state.gridWidth, h: state.gridHeight }
-      : hasGrid ? { w: state.width!, h: state.height! } : null;
+      ? { w: state.gridWidth, h: state.gridHeight, d: stateDepth }
+      : hasGrid ? { w: state.width!, h: state.height!, d: stateDepth } : null;
     const dimsChanged = dimsFromState != null
-      && (dimsFromState.w !== gridWidth.current || dimsFromState.h !== gridHeight.current);
+      && (dimsFromState.w !== gridWidth.current || dimsFromState.h !== gridHeight.current || dimsFromState.d !== gridDepth.current);
     if (boundaryChanged || dimsChanged) {
       pendingSimStateRestore.current = state;
       const changes: Partial<import('../model/types').ModelProperties> = {};
@@ -3655,6 +3659,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (dimsChanged) {
         changes.gridWidth = dimsFromState!.w;
         changes.gridHeight = dimsFromState!.h;
+        changes.gridDepth = dimsFromState!.d;
+        // A depth>1 state implies a 3D model; flip the current model to 3D so the
+        // engine actually allocates the volume (.gcastate carries no `dimension`).
+        if (dimsFromState!.d > 1) changes.dimension = '3d';
       }
       updateProperties(changes);
       return;
@@ -3715,10 +3723,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // Restore grid state if present
     if (!hasGrid) return;
 
-    // Validate dimensions match the current grid
-    if (state.width !== gridWidth.current || state.height !== gridHeight.current) {
+    // Validate dimensions match the current grid (incl. depth for 3D).
+    const sDepth = state.depth ?? state.gridDepth ?? 1;
+    if (state.width !== gridWidth.current || state.height !== gridHeight.current || sDepth !== gridDepth.current) {
+      // Show the 3rd dim only when either side is a volume.
+      const show3 = sDepth > 1 || gridDepth.current > 1;
+      const fmt = (w: number | undefined, h: number | undefined, d: number) => show3 ? `${w}\u00D7${h}\u00D7${d}` : `${w}\u00D7${h}`;
       setCompileError(
-        `State dimensions (${state.width}\u00D7${state.height}) do not match current grid (${gridWidth.current}\u00D7${gridHeight.current}). Resize the grid first or load a matching state file.`,
+        `State dimensions (${fmt(state.width, state.height, sDepth)}) do not match current grid (${fmt(gridWidth.current, gridHeight.current, gridDepth.current)}). Resize the grid first or load a matching state file.`,
       );
       return;
     }
@@ -3734,7 +3746,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
     // Convert serialized attributes back to ArrayBuffers for worker
     const attrBuffers: Record<string, { type: string; buffer: ArrayBuffer }> = {};
-    const total = state.width! * state.height!;
+    // 3D Grid CA: attr buffers were serialized at length W*H*D — deserialize at
+    // the same length or a 3D grid loads truncated to its first layer.
+    const total = state.width! * state.height! * (state.depth ?? state.gridDepth ?? 1);
     for (const [id, entry] of Object.entries(state.attributes!)) {
       // Backward-compat: files saved before `neighborIndex: 'int32'` was added
       // to ATTR_TYPE_MAP in fileOperations.ts wrote NI cell-attr buffers with
@@ -4582,6 +4596,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 generation={generation}
                 gridWidth={gridWidth.current || simWidth}
                 gridHeight={gridHeight.current || simHeight}
+                gridDepth={gridDepth.current || 1}
                 vizModes={indicatorVizModes}
                 hiddenCategories={indicatorHiddenCategories}
                 chartOverrides={indicatorChartOverrides}

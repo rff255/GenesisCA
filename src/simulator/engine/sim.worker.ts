@@ -1238,7 +1238,7 @@ function runStep(): void {
     // branch can't sum). They're also written AFTER this loop (see
     // computeSpatialIndicators below), so they aren't in linkedResults yet; the
     // guard is belt-and-suspenders against future reordering.
-    if (def.xAxis === 'rows' || def.xAxis === 'columns') continue;
+    if (def.xAxis === 'rows' || def.xAxis === 'columns' || def.xAxis === 'layers') continue;
     if (!(def.id in linkedResults)) continue;
     if (def.accumulationMode === 'accumulated') {
       const cur = linkedResults[def.id]!;
@@ -1540,7 +1540,7 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
   if (!fullAttrs) {
     for (const d of linkedDefs) {
       if (!d.watched || !d.attrId) continue;
-      const isSpatial = d.xAxis === 'rows' || d.xAxis === 'columns';
+      const isSpatial = d.xAxis === 'rows' || d.xAxis === 'columns' || d.xAxis === 'layers';
       // Spatial indicators are CPU-only (excluded from buildReductionPlan), so
       // they always need their source attr (and parent, for sub-attrs) on the
       // CPU — even if a sibling generation-axis indicator over the same attr is
@@ -1994,7 +1994,7 @@ function initIndicators(defs: IndicatorDef[]): void {
         spatialBinSize: ind.spatialBinSize,
         trackedValues: ind.trackedValues,
       });
-      if (ind.xAxis === 'rows' || ind.xAxis === 'columns') hasSpatialIndicators = true;
+      if (ind.xAxis === 'rows' || ind.xAxis === 'columns' || ind.xAxis === 'layers') hasSpatialIndicators = true;
     }
   }
 }
@@ -2125,13 +2125,14 @@ function computeLinkedIndicatorsFromBuffer(): void {
 function computeSpatialIndicators(): void {
   for (const def of linkedDefs) {
     if (!def.watched) continue;
-    if (def.xAxis !== 'rows' && def.xAxis !== 'columns') continue;
+    // 3D Grid CA: 'layers' is the Z spatial axis (bins by floor(i/(W*H))).
+    if (def.xAxis !== 'rows' && def.xAxis !== 'columns' && def.xAxis !== 'layers') continue;
     const arr = readAttrs[def.attrId ?? ''];
     if (!arr || !def.attrType || !def.aggregation) continue;
     if (width < 1 || height < 1) continue;
 
     // --- Resolve the position-bin count + a per-cell position\u2192bin mapper. ---
-    const axisLen = def.xAxis === 'rows' ? height : width;
+    const axisLen = def.xAxis === 'layers' ? depth : def.xAxis === 'rows' ? height : width;
     const mode = def.spatialBinMode === 'absolute' ? 'absolute' : 'slices';
     let binSize = 1;
     let B: number;
@@ -2142,10 +2143,15 @@ function computeSpatialIndicators(): void {
       B = Math.max(2, Math.min(axisLen, Math.floor(def.spatialBinCount ?? 50)));
     }
     if (B < 1) continue;
-    const xRows = def.xAxis === 'rows';
+    const xAxis = def.xAxis;  // 'rows' | 'columns' | 'layers'
+    const WH = width * height;
     const posBin = (i: number): number => {
-      const row = Math.floor(i / width);
-      const pos = xRows ? row : i - row * width;
+      // 3D-correct decode (layer/row/col within the layer); 2D reduces to it.
+      const layer = Math.floor(i / WH);
+      const rem = i - layer * WH;
+      const row = Math.floor(rem / width);
+      const col = rem - row * width;
+      const pos = xAxis === 'layers' ? layer : xAxis === 'rows' ? row : col;
       let b = mode === 'absolute'
         ? Math.floor(pos / binSize)
         : Math.floor((pos / axisLen) * B);
@@ -3195,7 +3201,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         for (const { idx, id } of standaloneIds) indicatorsSnapshot[id] = cachedIndicators[idx]!;
         const response: Record<string, unknown> = {
           type: 'state',
-          generation, width, height,
+          generation, width, height, depth,   // 3D Grid CA: echo depth so save doesn't truncate
           attributes: attrBuffers,
           modelAttrs: { ...cachedModelAttrs },
           indicators: indicatorsSnapshot,

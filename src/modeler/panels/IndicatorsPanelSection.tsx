@@ -271,11 +271,15 @@ export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect }: 
                       <option value="generation">Generation (over time)</option>
                       <option value="rows">Rows (spatial)</option>
                       <option value="columns">Columns (spatial)</option>
+                      {/* 3D Grid CA: the Z spatial axis, only for 3D models. */}
+                      {model.properties.dimension === '3d' && (
+                        <option value="layers">Layers (spatial, 3D)</option>
+                      )}
                     </select>
                   </div>
                 )}
 
-                {linkedAttr && (selected.xAxis === 'rows' || selected.xAxis === 'columns') && (
+                {linkedAttr && (selected.xAxis === 'rows' || selected.xAxis === 'columns' || selected.xAxis === 'layers') && (
                   <>
                     <div className={styles.field}>
                       <label className={styles.fieldLabel}>Bin Mode</label>
@@ -285,7 +289,7 @@ export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect }: 
                         onChange={e => updateIndicator(selected.id, { spatialBinMode: e.target.value as SpatialBinMode })}
                       >
                         <option value="slices">Slices (relative count)</option>
-                        <option value="absolute">Absolute ({selected.xAxis === 'rows' ? 'rows' : 'columns'} per bin)</option>
+                        <option value="absolute">Absolute ({selected.xAxis === 'rows' ? 'rows' : selected.xAxis === 'layers' ? 'layers' : 'columns'} per bin)</option>
                       </select>
                     </div>
                     {(selected.spatialBinMode || 'slices') === 'slices' ? (
@@ -303,7 +307,7 @@ export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect }: 
                       </div>
                     ) : (
                       <div className={styles.field}>
-                        <label className={styles.fieldLabel}>{selected.xAxis === 'rows' ? 'Rows' : 'Columns'} per Bin</label>
+                        <label className={styles.fieldLabel}>{selected.xAxis === 'rows' ? 'Rows' : selected.xAxis === 'layers' ? 'Layers' : 'Columns'} per Bin</label>
                         <NumberField
                           className={styles.numberInput}
                           min={1}
