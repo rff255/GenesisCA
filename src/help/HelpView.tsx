@@ -1063,14 +1063,25 @@ export function HelpView() {
           <h3 className={styles.h3}>The 3D Viewport</h3>
           <p className={styles.p}>
             3D models render in a WebGL2 voxel view: each live cell is a small cube
-            (transparent cells are skipped). <strong>Drag</strong> with the left mouse to
-            orbit, <strong>scroll</strong> to zoom, and <strong>Shift-drag</strong> (or
-            middle-drag) to pan. The on-canvas <strong>3D View</strong> panel adds a
-            <strong>Clip plane</strong> (choose an axis and slide it to cut away the front
-            and see inside &mdash; the primary way to look into a dense volume), an
+            (transparent cells are skipped). <strong>Middle-drag</strong> (or
+            <strong>Alt+left-drag</strong>) to orbit, <strong>scroll</strong> to zoom, and
+            hold <strong>Shift</strong> while orbiting to pan &mdash; Blender-style, with Z
+            up. <strong>Ctrl/Cmd-click</strong> a cell to inspect it. The on-canvas
+            <strong>3D View</strong> panel adds toggleable <strong>Axes / Grid / Bounds / a
+            corner Gizmo</strong>, <strong>Auto-orbit</strong> (+ speed), a
+            <strong>Clip plane</strong> (axis X/Y/Z or the camera view, slid to cut away the
+            front and see inside &mdash; the primary way to look into a dense volume), an
             <strong>Alpha blend</strong> toggle for translucent cells, and
-            <strong>Reset view</strong>. <strong>Shift-click</strong> a cell to inspect it;
-            a plain click paints a single voxel with the current brush.
+            <strong>Reset view</strong>.
+          </p>
+          <p className={styles.p}>
+            <strong>Painting in 3D</strong> uses an <strong>interaction plane</strong>: enable
+            <strong>Brush plane</strong> in the 3D View panel and pick its axis + position. A
+            plain <strong>left-drag</strong> then ray-traces onto that slice and stamps the
+            current brush <strong>shape and size</strong> (Rectangle / Circle / Ring, or a
+            Line's width-dot) flat in the plane &mdash; exactly like the 2D brush, including
+            drag interpolation and torus wrap. A top-down view of the Z plane paints just like
+            a 2D CA.
           </p>
           <h3 className={styles.h3}>Transparency &amp; Indicators</h3>
           <ul className={styles.list}>

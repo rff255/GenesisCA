@@ -646,8 +646,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // 3D pick → inspector. Set below `commitInspectPopover` (which is declared
   // later in the component); the pointer effect calls it via this ref.
   const openInspect3dRef = useRef<((idx: number, x: number, y: number) => void) | null>(null);
-  // 3D paint: set below flushPaintBatch; the pointer effect calls it on LMB-click.
-  const paint3dRef = useRef<((idx: number) => void) | null>(null);
+  // 3D paint: set below flushPaintBatch; the pointer effect calls it on LMB-drag
+  // with the picked plane cell. It stamps the current brush shape onto the plane.
+  const paint3dRef = useRef<((layer: number, row: number, col: number) => void) | null>(null);
+  // Last plane cell painted in the current 3D stroke — drives Bresenham
+  // interpolation so a fast drag doesn't leave gaps between stamps. Reset on
+  // pointer-down / -up (and implicitly when the plane changes mid-stroke).
+  const last3dHitRef = useRef<{ layer: number; row: number; col: number } | null>(null);
   // 3D control UI state (mirrored into the refs the renderer reads).
   const [clip3d, setClip3d] = useState<{ enabled: boolean; axis: 'x' | 'y' | 'z' | 'camera'; value: number }>(
     { enabled: false, axis: 'z', value: 0 },
@@ -2242,10 +2247,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (!r || !plane3dEnabledRef.current) return;
       const rect = glc.getBoundingClientRect();
       const hit = r.pickOnPlane(clientX - rect.left, clientY - rect.top, rect.width, rect.height, pl.axis, pl.pos);
-      if (hit) {
-        const idx = (hit.layer * gridHeight.current + hit.row) * gridWidth.current + hit.col;
-        paint3dRef.current?.(idx);
-      }
+      if (hit) paint3dRef.current?.(hit.layer, hit.row, hit.col);
     };
     const onDown = (e: PointerEvent) => {
       if ((e.target as HTMLElement)?.closest?.('[data-sim-overlay]')) return;
@@ -2254,7 +2256,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const orbitBtn = e.button === 1 || (e.button === 0 && e.altKey);
       if (orbitBtn) active = e.shiftKey ? 'pan' : 'orbit';
       else if (e.button === 0 && (e.ctrlKey || e.metaKey)) active = null; // handled on up (inspect)
-      else if (e.button === 0) { active = 'brush'; brushAt(e.clientX, e.clientY); }
+      else if (e.button === 0) { active = 'brush'; last3dHitRef.current = null; brushAt(e.clientX, e.clientY); }
       else active = null;
       glc.setPointerCapture?.(e.pointerId);
       e.preventDefault();
@@ -2284,7 +2286,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         const idx = gl3dRef.current.pick(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
         if (idx >= 0) openInspect3dRef.current?.(idx, e.clientX, e.clientY);
       }
+      // Commit the final coalesced stamp synchronously (the rAF may not have
+      // fired yet on a quick click-release), mirroring the 2D mouse-up path.
+      if (active === 'brush') flushPaintBatch();
       active = null;
+      last3dHitRef.current = null;
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
@@ -2322,6 +2328,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       return gl3dRef.current.pick(px, py, glc.clientWidth || 1, glc.clientHeight || 1);
     };
     W.__sim3dRenderer = () => gl3dRef.current;
+    // Drive the plane-brush stamp directly (synthetic pointer drags can't reach
+    // pickOnPlane). Pass a plane cell (layer,row,col); set reset=true to start a
+    // fresh stroke (clears the interpolation anchor).
+    W.__sim3dPaint = (layer: number, row: number, col: number, reset?: boolean) => {
+      if (reset) last3dHitRef.current = null;
+      paint3dRef.current?.(layer, row, col);
+    };
   }, [is3D, draw]);
 
   // 3D Grid CA: mirror the control state into the renderer refs + redraw.
@@ -2710,19 +2723,84 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     workerRef.current?.postMessage({ type: 'paint', cells, mappingId, activeViewer: viewer });
   }, []);
 
-  // 3D Grid CA: paint a single picked cell. Decodes the flat index → row/col/layer,
-  // enqueues it with the current brush colour + mapping, and flushes immediately.
-  paint3dRef.current = (idx: number) => {
-    const w = gridWidth.current, wh = w * gridHeight.current;
-    const layer = Math.floor(idx / wh);
-    const rem = idx - layer * wh;
-    const row = Math.floor(rem / w);
-    const col = rem - row * w;
+  // 3D Grid CA: stamp the current brush shape onto the interaction plane around
+  // the picked cell, exactly like the 2D brush stamps around the cursor. The
+  // 2D stamp offsets `(dRow, dCol)` map onto the plane's two FREE grid axes (the
+  // two that aren't the plane's fixed axis), so a Circle/Ring/Rect footprint
+  // lies flat in the slice. A drag interpolates (Bresenham across the two free
+  // axes) between successive picks so fast strokes don't leave gaps. Torus
+  // models wrap the free axes; bounded models rely on the worker's inBounds3d
+  // clip. Mirrors brushCellsAt + paintAt's Bresenham, lifted to 3 axes.
+  paint3dRef.current = (hitLayer: number, hitRow: number, hitCol: number) => {
+    const W = gridWidth.current, H = gridHeight.current, Dd = gridDepth.current;
+    const axis = plane3dRef.current.axis;
+    const torus = boundaryTreatmentRef.current === 'torus';
     const { r, g, b } = hexToRgb(brushColorRef.current);
+    const offsets = currentStampOffsets();
+    const wrap = (v: number, n: number): number => (torus && n > 0 ? ((v % n) + n) % n : v);
+
+    // The plane's two free axes (and their grid sizes), in (free1, free2) order.
+    // free1 ← stamp dRow, free2 ← stamp dCol. The fixed axis stays at the pick.
+    //   z-plane (layer fixed) → (row, col)  — identical to the 2D mapping
+    //   y-plane (row fixed)   → (layer, col)
+    //   x-plane (col fixed)   → (layer, row)
+    const stampAt = (L: number, R: number, C: number): void => {
+      for (const [dr, dc] of offsets) {
+        let cl = L, cr = R, cc = C;
+        if (axis === 'z') { cr = wrap(R + dr, H); cc = wrap(C + dc, W); }
+        else if (axis === 'y') { cl = wrap(L + dr, Dd); cc = wrap(C + dc, W); }
+        else { cl = wrap(L + dr, Dd); cr = wrap(R + dc, H); }
+        pendingPaintCells.current.push({ row: cr, col: cc, layer: cl, r, g, b });
+      }
+    };
+
     pendingPaintMapping.current = brushMappingRef.current;
     pendingPaintViewer.current = activeViewerRef.current;
-    pendingPaintCells.current.push({ row, col, layer, r, g, b });
-    flushPaintBatch();
+
+    // Free-axis coords of this pick (f1 ← dRow axis, f2 ← dCol axis).
+    //   z → (row, col)   y → (layer, col)   x → (layer, row)
+    const curF1 = axis === 'z' ? hitRow : hitLayer;
+    const curF2 = axis === 'x' ? hitRow : hitCol;
+    const toCell = (f1: number, f2: number): [number, number, number] =>
+      axis === 'z' ? [plane3dRef.current.pos, f1, f2]
+      : axis === 'y' ? [f1, plane3dRef.current.pos, f2]
+      : [f1, f2, plane3dRef.current.pos];
+
+    const prev = last3dHitRef.current;
+    const prevF: { f1: number; f2: number } | null = prev
+      ? (axis === 'z' ? { f1: prev.row, f2: prev.col }
+        : axis === 'y' ? { f1: prev.layer, f2: prev.col }
+        : { f1: prev.layer, f2: prev.row })
+      : null;
+
+    if (prevF && (prevF.f1 !== curF1 || prevF.f2 !== curF2)) {
+      // Bresenham across the two free axes; stamp at every intermediate cell.
+      let f1 = prevF.f1, f2 = prevF.f2;
+      const dAbs1 = Math.abs(curF1 - f1), dAbs2 = Math.abs(curF2 - f2);
+      const s1 = curF1 >= f1 ? 1 : -1, s2 = curF2 >= f2 ? 1 : -1;
+      let err = dAbs1 - dAbs2;
+      // Skip the starting cell (already stamped on the previous call); include the end.
+      for (;;) {
+        const e2 = 2 * err;
+        if (e2 > -dAbs2) { err -= dAbs2; f1 += s1; }
+        if (e2 < dAbs1) { err += dAbs1; f2 += s2; }
+        const [L, R, C] = toCell(f1, f2);
+        stampAt(L, R, C);
+        if (f1 === curF1 && f2 === curF2) break;
+      }
+    } else {
+      const [L, R, C] = toCell(curF1, curF2);
+      stampAt(L, R, C);
+    }
+
+    last3dHitRef.current = { layer: hitLayer, row: hitRow, col: hitCol };
+    // Coalesce to one worker round-trip per frame (matches the 2D paintAt path):
+    // pointermove fires far faster than the frame rate, and each stamp can be
+    // hundreds of cells, so flushing synchronously per move floods the worker.
+    // onUp forces a final synchronous flush so the last partial stroke lands.
+    if (pendingPaintRaf.current == null) {
+      pendingPaintRaf.current = requestAnimationFrame(flushPaintBatch);
+    }
   };
 
   /** Paint with Bresenham interpolation from last painted position to current.
