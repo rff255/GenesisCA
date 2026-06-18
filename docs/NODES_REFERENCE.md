@@ -132,7 +132,7 @@ exists purely to keep graphs readable without Sequence nodes. See
 
 ### 3.3 Data readers — `data`
 
-> **3D Grid CA note:** the whole **`neighborIndex` node family** — `getNeighborAttributeByIndex`, `setNeighborAttributeByIndex`, `neighborIndexFromOffset`/`FromTag`, `flip`/`breakDownNeighborIndex`, `getAllNeighborIndexes`, `getNeighborIndexesByTags`, `getNeighborsAttrByIndexes`, `filterNeighbors`, `joinNeighbors`, `pick[N]RandomNeighbor` — carries the `requirements.lattice2d` gate: its packed 2-axis codec (`(dr, dc)`) can't represent a 3D offset, so these nodes are **hidden in 3D models**. Use **Get Neighbors Attribute** / **Get Neighbor Attribute by Tag** (flat coord index) instead — both are dimension-agnostic.
+> **3D Grid CA note:** the whole **`neighborIndex` node family** — `getNeighborAttributeByIndex`, `setNeighborAttributeByIndex`, `neighborIndexFromOffset`/`FromTag`, `flip`/`breakDownNeighborIndex`, `getAllNeighborIndexes`, `getNeighborIndexesByTags`, `getNeighborsAttrByIndexes`, `filterNeighbors`, `joinNeighbors`, `pick[N]RandomNeighbor` — works in **both 2D and 3D**. The packed NI codec is dimension-aware: 2D packs two 16-bit offsets `(dr, dc)`; 3D packs three 10-bit offsets `(dr, dc, dl)` (±511 per axis). `neighborIndexFromOffset` and `breakDownNeighborIndex` expose a third `dl` (layer) port that appears only in 3D models. (These nodes were 2D-only before the 3-axis codec landed on all three compile targets.)
 
 | # | Type | Label | Description | Ports | Notes |
 |---|---|---|---|---|---|
