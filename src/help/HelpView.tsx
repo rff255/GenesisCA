@@ -7,6 +7,7 @@ const sections = [
   { id: 'modeler', label: 'The Modeler' },
   { id: 'nodes', label: 'Node Types Reference' },
   { id: 'macros', label: 'The Macro System' },
+  { id: '3dgridca', label: '3D Grid CA' },
   { id: 'simulator', label: 'The Simulator' },
   { id: 'shortcuts', label: 'Keyboard Shortcuts' },
   { id: 'fileformat', label: 'File Format' },
@@ -1019,6 +1020,69 @@ export function HelpView() {
             node before the action) compile correctly because element/index-dependent expressions
             emit inside the loop block where those variables are in scope. Available on JS, WASM,
             and WebGPU.
+          </p>
+        </section>
+
+        {/* ============================================================ */}
+        <section id="help-3dgridca" className={styles.section}>
+          <h2 className={styles.h2}>3D Grid CA</h2>
+          <p className={styles.p}>
+            GenesisCA models are 2D by default &mdash; a flat <code>W&times;H</code> grid.
+            Flipping <strong>Dimension</strong> to <strong>3D</strong> in
+            Properties&nbsp;&rarr;&nbsp;Structure turns the lattice into a
+            <code>W&times;H&times;D</code> <strong>volume</strong> (a Grid&nbsp;Depth field
+            appears). Everything you already know carries over: attributes, the rule
+            graph, indicators, and all three compile targets (JavaScript / WebAssembly /
+            WebGPU). A 2D model is unaffected &mdash; it compiles exactly as before.
+          </p>
+          <h3 className={styles.h3}>3D Neighbourhoods</h3>
+          <p className={styles.p}>
+            In a 3D model the Neighborhoods panel offers two editors:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Parametric (primary)</strong> &mdash; pick a named shape
+              (Moore box, von&nbsp;Neumann diamond, Ball/sphere, Range-N, Shell, or a
+              planar Ring/Disk) and a radius; a metric selector (L&infin; / L1 / L2)
+              reproduces the box / diamond / sphere families. Click <em>Generate shape</em>
+              to materialize the 3D offsets.</li>
+            <li><strong>Slice editor</strong> &mdash; step through the Z layers and
+              toggle individual <code>(row, col)</code> cells at each layer, with three
+              axis-plane mirrors (H / V / L) and right-click per-cell tags, for hand-tuned
+              shapes.</li>
+          </ul>
+          <p className={styles.p}>
+            The direct <em>NeighborIndex</em> node family (Get/Set Neighbor Attribute By
+            Index, etc.) is hidden in 3D &mdash; its packed coordinate carries only two
+            axes. Use <strong>Get Neighbors Attribute</strong> or <strong>Get Neighbor
+            Attribute by Tag</strong> instead (both work in any dimension).
+          </p>
+          <h3 className={styles.h3}>The 3D Viewport</h3>
+          <p className={styles.p}>
+            3D models render in a WebGL2 voxel view: each live cell is a small cube
+            (transparent cells are skipped). <strong>Drag</strong> with the left mouse to
+            orbit, <strong>scroll</strong> to zoom, and <strong>Shift-drag</strong> (or
+            middle-drag) to pan. The on-canvas <strong>3D View</strong> panel adds a
+            <strong>Clip plane</strong> (choose an axis and slide it to cut away the front
+            and see inside &mdash; the primary way to look into a dense volume), an
+            <strong>Alpha blend</strong> toggle for translucent cells, and
+            <strong>Reset view</strong>. <strong>Shift-click</strong> a cell to inspect it;
+            a plain click paints a single voxel with the current brush.
+          </p>
+          <h3 className={styles.h3}>Transparency &amp; Indicators</h3>
+          <ul className={styles.list}>
+            <li><strong>Authorable alpha</strong> &mdash; the <strong>Set Cell Looks</strong>
+              node gained an <code>A</code> (alpha) input (default 255 = opaque). Drive it
+              from a cell attribute so dead/empty cells become transparent and the
+              renderer skips them &mdash; that's how you see structure inside the volume.</li>
+            <li><strong>Layers indicator axis</strong> &mdash; a linked indicator's X-axis
+              can be set to <strong>Layers</strong> (the Z sibling of Rows/Columns),
+              plotting value per Z-position bin.</li>
+          </ul>
+          <p className={styles.p}>
+            Saving a 3D model (<code>.gcaproj</code>) or a state snapshot
+            (<code>.gcastate</code>) round-trips the full volume and the depth.
+            <em>Variegated Cells</em> and the WebGPU compute target are 2D-only and are
+            disabled in 3D (3D runs on WebAssembly or JavaScript).
           </p>
         </section>
 
