@@ -1068,24 +1068,28 @@ export function HelpView() {
             <strong>scroll</strong> to zoom, and hold <strong>Shift</strong> while orbiting to
             pan &mdash; Blender-style, with Z up. Click the <strong>corner gizmo</strong>'s
             coloured axis tips (X/Y/Z, both ends) to snap to the six main views.
-            <strong>Ctrl/Cmd-click</strong> a cell to inspect it. The on-canvas
-            <strong>3D View</strong> panel adds toggleable <strong>Axes / Grid / Bounds / the
-            corner Gizmo</strong>, <strong>Auto-orbit</strong> (+ speed), a
+            <strong>Shift</strong> (or Ctrl/Cmd) <strong>+ left-click</strong> a cell to inspect
+            it. The on-canvas <strong>3D View</strong> panel adds toggleable <strong>Axes / Grid
+            / Bounds / the corner Gizmo</strong>, <strong>Auto-orbit</strong> (+ speed), a
             <strong>Clip plane</strong> (axis X/Y/Z or the camera view, slid to cut away the
             front and see inside &mdash; the primary way to look into a dense volume), an
-            <strong>Alpha blend</strong> toggle for translucent cells, and
-            <strong>Reset view</strong>.
+            <strong>Alpha blend</strong> toggle for translucent cells, a
+            <strong>Background</strong> colour (off = transparent), and
+            <strong>Reset view</strong>. The left panel's <strong>Grid Dimensions</strong> gains
+            a <strong>Depth</strong> field to resize the volume's layers. (Empty cells default to
+            transparent, so an in-progress model doesn't fill the whole volume with voxels.)
           </p>
           <p className={styles.p}>
             <strong>Painting in 3D</strong> uses an <strong>interaction plane</strong>: enable
             <strong>Brush plane</strong> in the 3D View panel and pick its axis + position. The
             plane shows its <strong>bounds and a grid</strong> so you can see exactly where it
-            sits, and the hovered cell is outlined by a small <strong>cube cursor</strong>. A
-            plain <strong>left-drag</strong> then ray-traces onto that slice and stamps the
-            current brush <strong>shape and size</strong> (Rectangle / Circle / Ring, or a
-            Line's width-dot) flat in the plane &mdash; exactly like the 2D brush, including
-            drag interpolation and torus wrap. A top-down view of the Z plane paints just like
-            a 2D CA.
+            sits, and the hovered cells are outlined by a <strong>cube cursor matching the full
+            brush footprint</strong>. A plain <strong>left-drag</strong> then ray-traces onto
+            that slice and stamps the current brush <strong>shape and size</strong> (Rectangle /
+            Circle / Ring) flat in the plane &mdash; exactly like the 2D brush, including drag
+            interpolation and torus wrap. The <strong>Line</strong> tool takes two clicks on the
+            plane (first sets an anchor, second draws the segment). A top-down view of the Z
+            plane paints just like a 2D CA.
           </p>
           <h3 className={styles.h3}>Transparency &amp; Indicators</h3>
           <ul className={styles.list}>
