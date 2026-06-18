@@ -137,6 +137,7 @@ exists purely to keep graphs readable without Sequence nodes. See
 | # | Type | Label | Description | Ports | Notes |
 |---|---|---|---|---|---|
 | 12 | `getCellAttribute` | Get Cell Attribute | Read current cell's attribute. | `O: Value` (any) | Requires `attributeId` |
+| 12a | `getCellPosition` | Get Cell Position | Outputs the current cell's grid coordinates — a controlled, own-cell-only break of locality (spatial gradients, region rules, coordinate-aware Output Mappings). | `O: Row` (int) `O: Col` (int) `O: Layer` (int, 3D only) | Multi-output; `Layer` hidden in 2D. No config. `NEVER_INVARIANT` (per-cell). Works in every event. |
 | 13 | `getModelAttribute` | Get Model Attribute | Read global model-level attribute. | `O: Value` OR `O: R/G/B` (if attr is a color) | Requires model-level `attributeId` |
 | 14 | `getNeighborsAttribute` | Get Neighbors Attribute | Read attr of **every** neighbor → array. | `O: Values` (arr) | Requires `neighborhoodId` + `attributeId`; allocates a scratch array per cell |
 | 15 | `getNeighborAttributeByIndex` | Get Neighbor Attr By Index | Read **one** neighbor by index. | `I: INDEX` (NI) / `O: Value` | Requires `neighborhoodId` + `attributeId`; read-only so sync-safe. Index port retyped to `neighborIndex`. |
