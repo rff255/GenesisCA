@@ -119,6 +119,21 @@ fEdge(initNode, 'do', writeSeed, 'do');
 vEdge(seed, 'result', writeSeed, 'value');
 
 // =============================================================================
+// OUTPUT MAPPING — explicit, so dead cells get alpha 0 (culled by the 3D
+// voxel renderer) and live cells are opaque green. alpha = alive * 255.
+// =============================================================================
+const omNode = node('outputMapping', { mappingId: 'life' }, 0, 14);
+const omAlive = node('getCellAttribute', { attributeId: 'alive' }, 0, 16);
+const omAlpha = node('arithmeticOperator', { operation: '*', _port_y: '255' }, 1, 16); // alive * 255
+vEdge(omAlive, 'value', omAlpha, 'x');
+const looks = node('setCellLooks', {
+  mappingId: 'life', useGlyph: false, setBackground: true, fallbackToGlyphColor: false,
+  _port_r: '110', _port_g: '226', _port_b: '140',
+}, 2, 15);
+fEdge(omNode, 'do', looks, 'do');
+vEdge(omAlpha, 'result', looks, 'a');
+
+// =============================================================================
 // B. NON-GRAPH MODEL PARTS
 // =============================================================================
 const properties = {
@@ -160,13 +175,8 @@ const neighborhoods = [
 
 const mappings = [
   { id: 'life', name: 'Alive / Dead', isAttributeToColor: true,
-    description: 'Dead cells dark, live cells green. Linked output mapping on the Alive attribute.',
-    redDescription: 'Alive', greenDescription: 'Alive', blueDescription: 'Alive',
-    linked: true, linkedAttributeId: 'alive',
-    linkedColors: { gradient: [
-      { position: 0, r: 13, g: 17, b: 23 },
-      { position: 1, r: 110, g: 226, b: 140 },
-    ] } },
+    description: 'Live cells opaque green; dead cells fully transparent (alpha 0) so the 3D voxel renderer culls them and you can see the structure.',
+    redDescription: 'Green (live)', greenDescription: 'Green (live)', blueDescription: 'Green (live)' },
 ];
 
 // =============================================================================

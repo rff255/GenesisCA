@@ -288,34 +288,16 @@
       "id": "life",
       "name": "Alive / Dead",
       "isAttributeToColor": true,
-      "description": "Dead cells dark, live cells green. Linked output mapping on the Alive attribute.",
-      "redDescription": "Alive",
-      "greenDescription": "Alive",
-      "blueDescription": "Alive",
-      "linked": true,
-      "linkedAttributeId": "alive",
-      "linkedColors": {
-        "gradient": [
-          {
-            "position": 0,
-            "r": 13,
-            "g": 17,
-            "b": 23
-          },
-          {
-            "position": 1,
-            "r": 110,
-            "g": 226,
-            "b": 140
-          }
-        ]
-      }
+      "description": "Live cells opaque green; dead cells fully transparent (alpha 0) so the 3D voxel renderer culls them and you can see the structure.",
+      "redDescription": "Green (live)",
+      "greenDescription": "Green (live)",
+      "blueDescription": "Green (live)"
     }
   ],
   "indicators": [],
   "graphNodes": [
     {
-      "id": "nmqj4ltk40iv3",
+      "id": "nmqj59dvruqgw",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -327,7 +309,7 @@
       }
     },
     {
-      "id": "nmqj4ltk4tzyo",
+      "id": "nmqj59dvrquaj",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -341,7 +323,7 @@
       }
     },
     {
-      "id": "nmqj4ltk4le43",
+      "id": "nmqj59dvr0b4z",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -356,7 +338,7 @@
       }
     },
     {
-      "id": "nmqj4ltk46s9i",
+      "id": "nmqj59dvr3tif",
       "type": "caNode",
       "position": {
         "x": 230,
@@ -370,7 +352,7 @@
       }
     },
     {
-      "id": "nmqj4ltk4uktj",
+      "id": "nmqj59dvrr9rh",
       "type": "caNode",
       "position": {
         "x": 460,
@@ -389,7 +371,7 @@
       }
     },
     {
-      "id": "nmqj4ltk4wj2z",
+      "id": "nmqj59dvr18ey",
       "type": "caNode",
       "position": {
         "x": 460,
@@ -405,7 +387,7 @@
       }
     },
     {
-      "id": "nmqj4ltk4umy2",
+      "id": "nmqj59dvrk7tm",
       "type": "caNode",
       "position": {
         "x": 690,
@@ -419,7 +401,7 @@
       }
     },
     {
-      "id": "nmqj4ltk4fhvn",
+      "id": "nmqj59dvr97ng",
       "type": "caNode",
       "position": {
         "x": 690,
@@ -433,7 +415,7 @@
       }
     },
     {
-      "id": "nmqj4ltk4qxi3",
+      "id": "nmqj59dvrv260",
       "type": "caNode",
       "position": {
         "x": 920,
@@ -447,7 +429,7 @@
       }
     },
     {
-      "id": "nmqj4ltk4d2tj",
+      "id": "nmqj59dvrbp1w",
       "type": "caNode",
       "position": {
         "x": 1150,
@@ -461,7 +443,7 @@
       }
     },
     {
-      "id": "nmqj4ltk54da1",
+      "id": "nmqj59dvr57e2",
       "type": "caNode",
       "position": {
         "x": 1380,
@@ -475,7 +457,7 @@
       }
     },
     {
-      "id": "nmqj4ltk57c11",
+      "id": "nmqj59dvrqibw",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -487,7 +469,7 @@
       }
     },
     {
-      "id": "nmqj4ltk5zbfe",
+      "id": "nmqj59dvrwvbn",
       "type": "caNode",
       "position": {
         "x": 230,
@@ -506,7 +488,7 @@
       }
     },
     {
-      "id": "nmqj4ltk5r1e5",
+      "id": "nmqj59dvr3wce",
       "type": "caNode",
       "position": {
         "x": 230,
@@ -521,7 +503,7 @@
       }
     },
     {
-      "id": "nmqj4ltk57f89",
+      "id": "nmqj59dvrgfhb",
       "type": "caNode",
       "position": {
         "x": 460,
@@ -535,7 +517,7 @@
       }
     },
     {
-      "id": "nmqj4ltk5wq3w",
+      "id": "nmqj59dvr8f7h",
       "type": "caNode",
       "position": {
         "x": 690,
@@ -547,127 +529,211 @@
           "attributeId": "alive"
         }
       }
+    },
+    {
+      "id": "nmqj59dvrx6il",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 1260
+      },
+      "data": {
+        "nodeType": "outputMapping",
+        "config": {
+          "mappingId": "life"
+        }
+      }
+    },
+    {
+      "id": "nmqj59dvrwvoy",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 1440
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "alive"
+        }
+      }
+    },
+    {
+      "id": "nmqj59dvrxyd9",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 1440
+      },
+      "data": {
+        "nodeType": "arithmeticOperator",
+        "config": {
+          "operation": "*",
+          "_port_y": "255"
+        }
+      }
+    },
+    {
+      "id": "nmqj59dvrh2ve",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 1350
+      },
+      "data": {
+        "nodeType": "setCellLooks",
+        "config": {
+          "mappingId": "life",
+          "useGlyph": false,
+          "setBackground": true,
+          "fallbackToGlyphColor": false,
+          "_port_r": "110",
+          "_port_g": "226",
+          "_port_b": "140"
+        }
+      }
     }
   ],
   "graphEdges": [
     {
-      "id": "emqj4ltk4glr9",
-      "source": "nmqj4ltk4le43",
-      "target": "nmqj4ltk46s9i",
+      "id": "emqj59dvrk9vb",
+      "source": "nmqj59dvr0b4z",
+      "target": "nmqj59dvr3tif",
       "sourceHandle": "output_value_values",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "emqj4ltk4gve1",
-      "source": "nmqj4ltk46s9i",
-      "target": "nmqj4ltk4uktj",
+      "id": "emqj59dvrzzgd",
+      "source": "nmqj59dvr3tif",
+      "target": "nmqj59dvrr9rh",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "emqj4ltk41b3q",
-      "source": "nmqj4ltk46s9i",
-      "target": "nmqj4ltk4wj2z",
+      "id": "emqj59dvrcj2o",
+      "source": "nmqj59dvr3tif",
+      "target": "nmqj59dvr18ey",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "emqj4ltk4faw9",
-      "source": "nmqj4ltk4tzyo",
-      "target": "nmqj4ltk4umy2",
+      "id": "emqj59dvrvju6",
+      "source": "nmqj59dvrquaj",
+      "target": "nmqj59dvrk7tm",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "emqj4ltk4lf04",
-      "source": "nmqj4ltk4uktj",
-      "target": "nmqj4ltk4umy2",
+      "id": "emqj59dvrcjoa",
+      "source": "nmqj59dvrr9rh",
+      "target": "nmqj59dvrk7tm",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "emqj4ltk4ee4t",
-      "source": "nmqj4ltk4tzyo",
-      "target": "nmqj4ltk4fhvn",
+      "id": "emqj59dvrnhn2",
+      "source": "nmqj59dvrquaj",
+      "target": "nmqj59dvr97ng",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "emqj4ltk4o0g2",
-      "source": "nmqj4ltk4fhvn",
-      "target": "nmqj4ltk4qxi3",
+      "id": "emqj59dvrrvlk",
+      "source": "nmqj59dvr97ng",
+      "target": "nmqj59dvrv260",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "emqj4ltk4ngsl",
-      "source": "nmqj4ltk4wj2z",
-      "target": "nmqj4ltk4qxi3",
+      "id": "emqj59dvrmv7e",
+      "source": "nmqj59dvr18ey",
+      "target": "nmqj59dvrv260",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "emqj4ltk498n3",
-      "source": "nmqj4ltk4umy2",
-      "target": "nmqj4ltk4d2tj",
+      "id": "emqj59dvrod5d",
+      "source": "nmqj59dvrk7tm",
+      "target": "nmqj59dvrbp1w",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "emqj4ltk5lr35",
-      "source": "nmqj4ltk4qxi3",
-      "target": "nmqj4ltk4d2tj",
+      "id": "emqj59dvrzjx3",
+      "source": "nmqj59dvrv260",
+      "target": "nmqj59dvrbp1w",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "emqj4ltk5amy6",
-      "source": "nmqj4ltk40iv3",
-      "target": "nmqj4ltk54da1",
+      "id": "emqj59dvrk91h",
+      "source": "nmqj59dvruqgw",
+      "target": "nmqj59dvr57e2",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "emqj4ltk5t7o9",
-      "source": "nmqj4ltk4d2tj",
-      "target": "nmqj4ltk54da1",
+      "id": "emqj59dvr9ye1",
+      "source": "nmqj59dvrbp1w",
+      "target": "nmqj59dvr57e2",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "emqj4ltk5k3sm",
-      "source": "nmqj4ltk57c11",
-      "target": "nmqj4ltk5zbfe",
+      "id": "emqj59dvrzlby",
+      "source": "nmqj59dvrqibw",
+      "target": "nmqj59dvrwvbn",
       "sourceHandle": "output_value_z",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "emqj4ltk5kwf7",
-      "source": "nmqj4ltk5zbfe",
-      "target": "nmqj4ltk57f89",
+      "id": "emqj59dvr5li9",
+      "source": "nmqj59dvrwvbn",
+      "target": "nmqj59dvrgfhb",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "emqj4ltk5b1qv",
-      "source": "nmqj4ltk5r1e5",
-      "target": "nmqj4ltk57f89",
+      "id": "emqj59dvr7njx",
+      "source": "nmqj59dvr3wce",
+      "target": "nmqj59dvrgfhb",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "emqj4ltk5rweh",
-      "source": "nmqj4ltk57c11",
-      "target": "nmqj4ltk5wq3w",
+      "id": "emqj59dvrxidl",
+      "source": "nmqj59dvrqibw",
+      "target": "nmqj59dvr8f7h",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "emqj4ltk508oe",
-      "source": "nmqj4ltk57f89",
-      "target": "nmqj4ltk5wq3w",
+      "id": "emqj59dvrygtu",
+      "source": "nmqj59dvrgfhb",
+      "target": "nmqj59dvr8f7h",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_value"
+    },
+    {
+      "id": "emqj59dvri0ws",
+      "source": "nmqj59dvrwvoy",
+      "target": "nmqj59dvrxyd9",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "emqj59dvr37gf",
+      "source": "nmqj59dvrx6il",
+      "target": "nmqj59dvrh2ve",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emqj59dvrjkuv",
+      "source": "nmqj59dvrxyd9",
+      "target": "nmqj59dvrh2ve",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
     }
   ],
   "macroDefs": [],

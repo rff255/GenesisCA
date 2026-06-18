@@ -10,6 +10,7 @@ import { resolveKeyLabels } from '../modeler/vpl/compiler/variegation';
 import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefaultEditor';
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
+import { Gl3DRenderer } from './render/gl3d';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
 import { getGlyphTile } from './recording/glyphAtlas';
@@ -622,6 +623,29 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const glyphColorsRef = useRef<Uint32Array | null>(null);
   const gridWidth = useRef(0);
   const gridHeight = useRef(0);
+  // 3D Grid CA: layer count, kept in lockstep with gridWidth/gridHeight at every
+  // assignment site. 1 → 2D.
+  const gridDepth = useRef(1);
+  // 3D Grid CA: WebGL2 voxel renderer state. `is3D` drives the render path; the
+  // GL renderer + camera/clip/alpha are read via refs (draw() is useCallback([])).
+  const is3D = (model.properties.dimension ?? '2d') === '3d';
+  const is3dRef = useRef(is3D);
+  is3dRef.current = is3D;
+  const glCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const gl3dRef = useRef<import('./render/gl3d').Gl3DRenderer | null>(null);
+  const cam3dRef = useRef<import('./render/gl3d').Camera3D>({ yaw: 0.7, pitch: 0.5, dist: 1.7, panX: 0, panY: 0 });
+  const clip3dRef = useRef<import('./render/gl3d').ClipPlane3D>({ enabled: false, axis: 'z', value: 0 });
+  const alpha3dRef = useRef(false);
+  // 3D pick → inspector. Set below `commitInspectPopover` (which is declared
+  // later in the component); the pointer effect calls it via this ref.
+  const openInspect3dRef = useRef<((idx: number, x: number, y: number) => void) | null>(null);
+  // 3D paint: set below flushPaintBatch; the pointer effect calls it on LMB-click.
+  const paint3dRef = useRef<((idx: number) => void) | null>(null);
+  // 3D control UI state (mirrored into the refs the renderer reads).
+  const [clip3d, setClip3d] = useState<{ enabled: boolean; axis: 'x' | 'y' | 'z'; value: number }>(
+    { enabled: false, axis: 'z', value: 0 },
+  );
+  const [alpha3d, setAlpha3d] = useState(false);
   // Which viewers want the zoomed-out glyph-color fallback (Set Cell Looks with
   // useGlyph + fallbackToGlyphColor). `all` = a node used the Current-Selected
   // sentinel (applies to every viewer). Scanned from the model below.
@@ -650,7 +674,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // partial batch isn't lost. Different mappingIds within one batch are
   // flushed eagerly (rare in practice — only when the user changes brush
   // mid-drag, which already breaks the Bresenham line at lastPaintGrid reset).
-  const pendingPaintCells = useRef<Array<{ row: number; col: number; r: number; g: number; b: number }>>([]);
+  const pendingPaintCells = useRef<Array<{ row: number; col: number; layer?: number; r: number; g: number; b: number }>>([]);
   const pendingPaintMapping = useRef<string | null>(null);
   const pendingPaintViewer = useRef<string>('');
   const pendingPaintRaf = useRef<number | null>(null);
@@ -753,6 +777,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
   // Draw using ImageData + zoom/pan transform
   const draw = useCallback(() => {
+    // 3D Grid CA: render the voxel volume via WebGL2 instead of the 2D blit.
+    // Everything is read via refs (this callback has empty deps + ~20 call sites).
+    if (is3dRef.current && gl3dRef.current) {
+      const r = gl3dRef.current;
+      const glc = glCanvasRef.current;
+      const colors3d = colorsRef.current;
+      const w3 = gridWidth.current, h3 = gridHeight.current, d3 = gridDepth.current;
+      if (!glc || !colors3d || !w3 || !h3) return;
+      const cssW = glc.clientWidth || glc.parentElement?.clientWidth || 500;
+      const cssH = glc.clientHeight || glc.parentElement?.clientHeight || 500;
+      r.resize(cssW, cssH, window.devicePixelRatio || 1);
+      r.setGrid(w3, h3, d3);
+      r.setAlphaBlend(alpha3dRef.current);
+      r.setClipPlane(clip3dRef.current);
+      r.setCamera(cam3dRef.current, r.canvasWidth / (r.canvasHeight || 1));
+      r.uploadColors(colors3d, w3 * h3 * d3);
+      r.render();
+      fpsFrames.current++;
+      return;
+    }
     const canvas = canvasRef.current;
     const colors = colorsRef.current;
     const w = gridWidth.current;
@@ -1317,7 +1361,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         // - Direct render: srcCanvas was transferred to the worker, so the
         //   2D context is unavailable. The worker (when recording) ships
         //   colors in the stepped message; we build ImageData directly.
-        if (recordingRef.current) {
+        if (recordingRef.current && is3dRef.current && gl3dRef.current) {
+          // 3D Grid CA: capture the WebGL2 display canvas (display resolution,
+          // not grid resolution). The first frame fixes the size; the encoders
+          // accept arbitrary ImageData sizes.
+          const px = gl3dRef.current.readPixels();
+          const expected = recordedFrames.current[0];
+          if (!expected || (px.width === expected.width && px.height === expected.height)) {
+            recordedFrames.current.push(new ImageData(px.data, px.width, px.height));
+            recordCountRef.current += 1;
+          }
+          if (recordCountRef.current > 0 && now - lastRecordCountSet.current >= 200) {
+            setRecordFrameCount(recordCountRef.current);
+            lastRecordCountSet.current = now;
+          }
+        } else if (recordingRef.current) {
           const w = gridWidth.current, h = gridHeight.current;
           const stepColors = colorsRef.current;
           // Defensive dimension check: never push a frame whose size doesn't
@@ -1584,9 +1642,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // user edits an attribute or mapping while pan/zoom-focused on a region)
     // — resetting in that case throws the user back to a fresh view every
     // edit, breaking the back-and-forth tweak workflow.
-    const dimsChanged = gridWidth.current !== w || gridHeight.current !== h;
+    // 3D Grid CA: derive the layer count the same way the init message does
+    // (dimension 3d ? gridDepth : 1) so the renderer + getState/save agree.
+    const d3 = model.properties.dimension === '3d' ? Math.max(1, model.properties.gridDepth ?? 1) : 1;
+    const dimsChanged = gridWidth.current !== w || gridHeight.current !== h || gridDepth.current !== d3;
     gridWidth.current = w;
     gridHeight.current = h;
+    gridDepth.current = d3;
     setSimWidth(w);
     setSimHeight(h);
     if (dimsChanged) {
@@ -2123,6 +2185,114 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     return () => window.removeEventListener('resize', draw);
   }, [draw]);
 
+  // 3D Grid CA: create / dispose the WebGL2 voxel renderer when entering / leaving
+  // a 3D model. The renderer binds to the sibling GL canvas; draw() routes to it
+  // via is3dRef. A fresh render is kicked once it's ready.
+  useEffect(() => {
+    if (!is3D) {
+      if (gl3dRef.current) { gl3dRef.current.dispose(); gl3dRef.current = null; }
+      return;
+    }
+    const glc = glCanvasRef.current;
+    if (!glc) return;
+    try {
+      gl3dRef.current = new Gl3DRenderer(glc);
+      gl3dRef.current.setGrid(gridWidth.current, gridHeight.current, gridDepth.current);
+      draw();
+    } catch (e) {
+      console.error('[gl3d] init failed', e);
+      gl3dRef.current = null;
+    }
+    return () => { if (gl3dRef.current) { gl3dRef.current.dispose(); gl3dRef.current = null; } };
+  }, [is3D, draw]);
+
+  // 3D Grid CA: pointer handlers on the GL canvas — LMB-drag orbit, wheel zoom,
+  // MMB / Shift+LMB pan, Shift+LMB-click (no drag) opens the cell inspector via
+  // colour-id pick. Attached only while 3D; reads camera through cam3dRef.
+  useEffect(() => {
+    if (!is3D) return;
+    const glc = glCanvasRef.current;
+    if (!glc) return;
+    let dragging = false;
+    let mode: 'orbit' | 'pan' = 'orbit';
+    let lastX = 0, lastY = 0, downX = 0, downY = 0, moved = false;
+    const onDown = (e: PointerEvent) => {
+      if ((e.target as HTMLElement)?.closest?.('[data-sim-overlay]')) return;
+      dragging = true; moved = false;
+      lastX = downX = e.clientX; lastY = downY = e.clientY;
+      mode = (e.button === 1 || e.shiftKey) ? 'pan' : 'orbit';
+      glc.setPointerCapture?.(e.pointerId);
+      e.preventDefault();
+    };
+    const onMove = (e: PointerEvent) => {
+      if (!dragging) return;
+      const dx = e.clientX - lastX, dy = e.clientY - lastY;
+      lastX = e.clientX; lastY = e.clientY;
+      if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 3) moved = true;
+      const cam = cam3dRef.current;
+      if (mode === 'orbit') {
+        cam.yaw += dx * 0.01;
+        cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch + dy * 0.01));
+      } else {
+        const k = cam.dist * 0.0025 * Math.max(gridWidth.current, gridHeight.current, gridDepth.current);
+        cam.panX -= dx * k; cam.panY += dy * k;
+      }
+      draw();
+    };
+    const onUp = (e: PointerEvent) => {
+      if (!dragging) return;
+      dragging = false;
+      glc.releasePointerCapture?.(e.pointerId);
+      // No-drag click: Shift → inspect the picked cell; plain LMB → paint it
+      // (3D v1 paints a single cell — radius-1 — via colour-id pick).
+      if (!moved && gl3dRef.current && mode !== 'pan') {
+        const rect = glc.getBoundingClientRect();
+        const idx = gl3dRef.current.pick(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
+        if (idx >= 0) {
+          if (e.shiftKey) openInspect3dRef.current?.(idx, e.clientX, e.clientY);
+          else paint3dRef.current?.(idx);
+        }
+      }
+    };
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const cam = cam3dRef.current;
+      cam.dist = Math.max(0.2, Math.min(20, cam.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
+      draw();
+    };
+    glc.addEventListener('pointerdown', onDown);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    glc.addEventListener('wheel', onWheel, { passive: false });
+    return () => {
+      glc.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      glc.removeEventListener('wheel', onWheel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [is3D, draw]);
+
+  // 3D Grid CA: DEV hooks for headless verification (synthetic pointer events
+  // don't drive canvas drags — mirror window.__simWorker).
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const W = window as unknown as Record<string, unknown>;
+    W.__sim3dCamera = cam3dRef.current;
+    W.__sim3dClip = clip3dRef.current;
+    W.__sim3dRedraw = () => draw();
+    W.__sim3dPick = (px: number, py: number) => {
+      const glc = glCanvasRef.current;
+      if (!gl3dRef.current || !glc) return -2;
+      return gl3dRef.current.pick(px, py, glc.clientWidth || 1, glc.clientHeight || 1);
+    };
+    W.__sim3dRenderer = () => gl3dRef.current;
+  }, [is3D, draw]);
+
+  // 3D Grid CA: mirror the clip/alpha control state into the renderer refs + redraw.
+  useEffect(() => { clip3dRef.current = clip3d; draw(); }, [clip3d, draw]);
+  useEffect(() => { alpha3dRef.current = alpha3d; draw(); }, [alpha3d, draw]);
+
   // Pause simulation when leaving tab, redraw when coming back
   useEffect(() => {
     if (visible) {
@@ -2338,6 +2508,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     setFocusedInspectIdx(idx);
   }, []);
 
+  // 3D Grid CA: open the inspector for a picked flat cell index. Decodes the
+  // index → (row, col) within its layer for the label; the popover fetches cell
+  // data by cellIdx (the worker's inspectCells keys on the flat index).
+  openInspect3dRef.current = (idx: number, x: number, y: number) => {
+    const w = gridWidth.current, wh = w * gridHeight.current;
+    const layer = Math.floor(idx / wh);
+    const rem = idx - layer * wh;
+    const row = Math.floor(rem / w);
+    const col = rem - row * w;
+    commitInspectPopover(idx, row, col, x, y);
+  };
+
   /** Convert screen coords to grid cell coords. In infinity mode, wraps via
    *  modulo so painting / hovering across tile seams hits the correct cell. */
   const screenToGrid = useCallback((clientX: number, clientY: number): { row: number; col: number } | null => {
@@ -2463,12 +2645,28 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         sets.push({ attrId: attr.id, value: encodeAttrValue(attr, entry.value) });
       }
       if (sets.length === 0) return; // nothing enabled — a no-op stroke
-      const trimmedCells = cells.map(c => ({ row: c.row, col: c.col }));
+      // Carry `layer` (3D Grid CA) so a 3D manual paint hits the right voxel.
+      const trimmedCells = cells.map(c => ({ row: c.row, col: c.col, layer: c.layer }));
       workerRef.current?.postMessage({ type: 'paintManual', cells: trimmedCells, sets, activeViewer: viewer });
       return;
     }
     workerRef.current?.postMessage({ type: 'paint', cells, mappingId, activeViewer: viewer });
   }, []);
+
+  // 3D Grid CA: paint a single picked cell. Decodes the flat index → row/col/layer,
+  // enqueues it with the current brush colour + mapping, and flushes immediately.
+  paint3dRef.current = (idx: number) => {
+    const w = gridWidth.current, wh = w * gridHeight.current;
+    const layer = Math.floor(idx / wh);
+    const rem = idx - layer * wh;
+    const row = Math.floor(rem / w);
+    const col = rem - row * w;
+    const { r, g, b } = hexToRgb(brushColorRef.current);
+    pendingPaintMapping.current = brushMappingRef.current;
+    pendingPaintViewer.current = activeViewerRef.current;
+    pendingPaintCells.current.push({ row, col, layer, r, g, b });
+    flushPaintBatch();
+  };
 
   /** Paint with Bresenham interpolation from last painted position to current.
    *  In infinity (torus tiling) mode, the line walks the SHORTER wrap path: the
@@ -3264,6 +3462,20 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       a.click();
       URL.revokeObjectURL(url);
     };
+    // 3D Grid CA: screenshot the WebGL2 display canvas (display resolution, not
+    // grid resolution — a volume has no grid-res analogue). preserveDrawingBuffer
+    // is on; re-render first so the buffer is current.
+    if (is3dRef.current && gl3dRef.current) {
+      draw();
+      const px = gl3dRef.current.readPixels();
+      const off = document.createElement('canvas');
+      off.width = px.width; off.height = px.height;
+      const ctx = off.getContext('2d');
+      if (!ctx) return;
+      ctx.putImageData(new ImageData(px.data, px.width, px.height), 0, 0);
+      off.toBlob(blob => { if (blob) downloadBlob(blob); }, 'image/png');
+      return;
+    }
     if (directRenderActiveRef.current) {
       if (!workerRef.current || !w || !h) return;
       screenshotPendingRef.current = ({ w: cw, h: ch, colors }) => {
@@ -3911,7 +4123,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           title={leftPanelOpen ? 'Close settings' : 'Open settings'}
           data-sim-overlay
         >{leftPanelOpen ? '‹' : '›'}</button>
-        <canvas ref={canvasRef} className={styles.canvas} />
+        <canvas ref={canvasRef} className={styles.canvas} style={is3D ? { display: 'none' } : undefined} />
+        {/* 3D Grid CA: WebGL2 voxel canvas, shown only for 3D models. Its own
+            pointer handlers (orbit/zoom/pan + colour-id pick) are attached in a
+            dedicated effect since draw() routes here via is3dRef. */}
+        <canvas ref={glCanvasRef} className={styles.canvas} style={is3D ? undefined : { display: 'none' }} />
 
         {/* Top-left stats (discreet, no background) */}
         <div className={styles.statsOverlay} data-sim-overlay>
@@ -4094,6 +4310,45 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             aria-label="Toggle canvas fullscreen"
           >&#x26F6;</button>
         </div>
+
+        {/* 3D Grid CA: voxel-view controls (clip/slice plane = PRIMARY see-inside,
+            opt-in alpha blend, reset camera). Shown only for 3D models. */}
+        {is3D && (() => {
+          const ext = clip3d.axis === 'x' ? (model.properties.gridWidth - 1) / 2
+            : clip3d.axis === 'y' ? (model.properties.gridHeight - 1) / 2
+            : ((model.properties.gridDepth ?? 1) - 1) / 2;
+          return (
+            <div className={styles.zoomControls} data-sim-overlay style={{ bottom: 'auto', top: 12, right: 12, left: 'auto', flexDirection: 'column', alignItems: 'stretch', minWidth: 168, gap: 6, padding: 8 }}>
+              <div style={{ fontSize: '0.66rem', color: '#aaa', fontWeight: 600 }}>3D View</div>
+              <button className={styles.zoomBtn} style={{ width: '100%' }}
+                onClick={() => { cam3dRef.current = { yaw: 0.7, pitch: 0.5, dist: 1.7, panX: 0, panY: 0 }; draw(); }}
+                title="Reset the orbit camera">Reset view</button>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}>
+                <input type="checkbox" checked={clip3d.enabled}
+                  onChange={e => setClip3d(c => ({ ...c, enabled: e.target.checked, value: e.target.checked ? 0 : c.value }))} />
+                Clip plane (see inside)
+              </label>
+              {clip3d.enabled && (
+                <>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {(['x', 'y', 'z'] as const).map(ax => (
+                      <button key={ax} className={`${styles.zoomBtn} ${clip3d.axis === ax ? styles.zoomBtnActive : ''}`}
+                        style={{ flex: 1 }} onClick={() => setClip3d(c => ({ ...c, axis: ax, value: 0 }))}>{ax.toUpperCase()}</button>
+                    ))}
+                  </div>
+                  <input type="range" min={-ext} max={ext} step={0.5} value={clip3d.value}
+                    onChange={e => setClip3d(c => ({ ...c, value: Number(e.target.value) }))}
+                    style={{ width: '100%' }} title="Slice position" />
+                </>
+              )}
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
+                title="Blend translucent cells back-to-front (opt-in; opaque is the default)">
+                <input type="checkbox" checked={alpha3d} onChange={e => setAlpha3d(e.target.checked)} />
+                Alpha blend
+              </label>
+            </div>
+          );
+        })()}
 
         {/* Right panel expand button */}
         {!rightPanelOpen && (
