@@ -653,6 +653,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // interpolation so a fast drag doesn't leave gaps between stamps. Reset on
   // pointer-down / -up (and implicitly when the plane changes mid-stroke).
   const last3dHitRef = useRef<{ layer: number; row: number; col: number } | null>(null);
+  // Hovered brush-plane cell — rendered as a wireframe cube cursor. null = none.
+  const hover3dRef = useRef<{ layer: number; row: number; col: number } | null>(null);
   // 3D control UI state (mirrored into the refs the renderer reads).
   const [clip3d, setClip3d] = useState<{ enabled: boolean; axis: 'x' | 'y' | 'z' | 'camera'; value: number }>(
     { enabled: false, axis: 'z', value: 0 },
@@ -808,6 +810,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       r.setAlphaBlend(alpha3dRef.current);
       r.setClipPlane(clip3dRef.current);
       r.setViz(viz3dRef.current);
+      r.setBrushPlane(plane3dEnabledRef.current ? { axis: plane3dRef.current.axis, pos: plane3dRef.current.pos } : null);
+      r.setHoverCell(plane3dEnabledRef.current ? hover3dRef.current : null);
       r.setCamera(cam3dRef.current, r.canvasWidth / (r.canvasHeight || 1));
       r.uploadColors(colors3d, w3 * h3 * d3);
       r.render();
@@ -2249,12 +2253,46 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const hit = r.pickOnPlane(clientX - rect.left, clientY - rect.top, rect.width, rect.height, pl.axis, pl.pos);
       if (hit) paint3dRef.current?.(hit.layer, hit.row, hit.col);
     };
+    type Cell = { layer: number; row: number; col: number };
+    const sameCell = (a: Cell | null, b: Cell | null): boolean =>
+      a === b || (!!a && !!b && a.layer === b.layer && a.row === b.row && a.col === b.col);
+    // Track the hovered brush-plane cell for the wireframe cube cursor. Returns
+    // true when the hovered cell CHANGED (so the caller only redraws then — a
+    // full GL re-render per raw pointermove is wasteful on large volumes).
+    const updateHover = (clientX: number, clientY: number): boolean => {
+      const r = gl3dRef.current; const pl = plane3dRef.current;
+      let hit: Cell | null = null;
+      if (r && plane3dEnabledRef.current) {
+        const rect = glc.getBoundingClientRect();
+        hit = r.pickOnPlane(clientX - rect.left, clientY - rect.top, rect.width, rect.height, pl.axis, pl.pos);
+      }
+      if (sameCell(hit, hover3dRef.current)) return false;
+      hover3dRef.current = hit;
+      return true;
+    };
+    // Snap the camera to one of the 6 main POVs (Blender-style gizmo click).
+    // eye sits on the +sign·axis side looking at the target; pitch ±1.49 (just
+    // shy of the pole) for top/bottom so the camera basis stays non-degenerate.
+    const setPov = (axis: 'x' | 'y' | 'z', sign: 1 | -1) => {
+      const cam = cam3dRef.current;
+      if (axis === 'x') { cam.yaw = sign > 0 ? 0 : Math.PI; cam.pitch = 0; }
+      else if (axis === 'y') { cam.yaw = sign > 0 ? Math.PI / 2 : -Math.PI / 2; cam.pitch = 0; }
+      else { cam.pitch = sign > 0 ? 1.49 : -1.49; }  // top / bottom — keep current yaw
+      draw();
+    };
     const onDown = (e: PointerEvent) => {
       if ((e.target as HTMLElement)?.closest?.('[data-sim-overlay]')) return;
+      // Clicking the corner gizmo snaps to that POV (highest priority — no drag).
+      if (e.button === 0 && gl3dRef.current) {
+        const rect = glc.getBoundingClientRect();
+        const g = gl3dRef.current.gizmoHitTest(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
+        if (g) { setPov(g.axis, g.sign); active = null; e.preventDefault(); return; }
+      }
       moved = false;
       lastX = downX = e.clientX; lastY = downY = e.clientY;
       const orbitBtn = e.button === 1 || (e.button === 0 && e.altKey);
       if (orbitBtn) active = e.shiftKey ? 'pan' : 'orbit';
+      else if (e.button === 2) active = 'pan';  // RMB pan (RMB is otherwise unused in 3D)
       else if (e.button === 0 && (e.ctrlKey || e.metaKey)) active = null; // handled on up (inspect)
       else if (e.button === 0) { active = 'brush'; last3dHitRef.current = null; brushAt(e.clientX, e.clientY); }
       else active = null;
@@ -2262,7 +2300,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       e.preventDefault();
     };
     const onMove = (e: PointerEvent) => {
-      if (!active) return;
+      if (!active) {
+        // Idle hover: update the cube cursor; redraw only when the cell changes.
+        if (updateHover(e.clientX, e.clientY)) draw();
+        return;
+      }
       const dx = e.clientX - lastX, dy = e.clientY - lastY;
       lastX = e.clientX; lastY = e.clientY;
       if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 3) moved = true;
@@ -2275,9 +2317,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         panCamera(cam, dx, dy, scale);
       } else if (active === 'brush') {
         brushAt(e.clientX, e.clientY);
+        updateHover(e.clientX, e.clientY);  // cursor follows the brush
       }
       draw();
     };
+    const onLeave = () => { if (hover3dRef.current) { hover3dRef.current = null; draw(); } };
     const onUp = (e: PointerEvent) => {
       glc.releasePointerCapture?.(e.pointerId);
       // Ctrl/Cmd+LMB click (no drag) → inspect the picked cell.
@@ -2304,12 +2348,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     window.addEventListener('pointerup', onUp);
     glc.addEventListener('wheel', onWheel, { passive: false });
     glc.addEventListener('contextmenu', onCtx);
+    glc.addEventListener('pointerleave', onLeave);
     return () => {
       glc.removeEventListener('pointerdown', onDown);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       glc.removeEventListener('wheel', onWheel);
       glc.removeEventListener('contextmenu', onCtx);
+      glc.removeEventListener('pointerleave', onLeave);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [is3D, draw]);

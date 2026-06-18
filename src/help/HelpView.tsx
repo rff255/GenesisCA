@@ -1064,10 +1064,12 @@ export function HelpView() {
           <p className={styles.p}>
             3D models render in a WebGL2 voxel view: each live cell is a small cube
             (transparent cells are skipped). <strong>Middle-drag</strong> (or
-            <strong>Alt+left-drag</strong>) to orbit, <strong>scroll</strong> to zoom, and
-            hold <strong>Shift</strong> while orbiting to pan &mdash; Blender-style, with Z
-            up. <strong>Ctrl/Cmd-click</strong> a cell to inspect it. The on-canvas
-            <strong>3D View</strong> panel adds toggleable <strong>Axes / Grid / Bounds / a
+            <strong>Alt+left-drag</strong>, or <strong>right-drag</strong>) to orbit/pan,
+            <strong>scroll</strong> to zoom, and hold <strong>Shift</strong> while orbiting to
+            pan &mdash; Blender-style, with Z up. Click the <strong>corner gizmo</strong>'s
+            coloured axis tips (X/Y/Z, both ends) to snap to the six main views.
+            <strong>Ctrl/Cmd-click</strong> a cell to inspect it. The on-canvas
+            <strong>3D View</strong> panel adds toggleable <strong>Axes / Grid / Bounds / the
             corner Gizmo</strong>, <strong>Auto-orbit</strong> (+ speed), a
             <strong>Clip plane</strong> (axis X/Y/Z or the camera view, slid to cut away the
             front and see inside &mdash; the primary way to look into a dense volume), an
@@ -1076,7 +1078,9 @@ export function HelpView() {
           </p>
           <p className={styles.p}>
             <strong>Painting in 3D</strong> uses an <strong>interaction plane</strong>: enable
-            <strong>Brush plane</strong> in the 3D View panel and pick its axis + position. A
+            <strong>Brush plane</strong> in the 3D View panel and pick its axis + position. The
+            plane shows its <strong>bounds and a grid</strong> so you can see exactly where it
+            sits, and the hovered cell is outlined by a small <strong>cube cursor</strong>. A
             plain <strong>left-drag</strong> then ray-traces onto that slice and stamps the
             current brush <strong>shape and size</strong> (Rectangle / Circle / Ring, or a
             Line's width-dot) flat in the plane &mdash; exactly like the 2D brush, including

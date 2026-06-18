@@ -253,8 +253,9 @@ precision highp float;
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aColor;
 uniform mat4 uMVP;
+uniform float uPointSize;   // only affects gl.POINTS draws; ignored for LINES
 out vec3 vCol;
-void main(){ vCol = aColor; gl_Position = uMVP * vec4(aPos, 1.0); }`;
+void main(){ vCol = aColor; gl_PointSize = uPointSize; gl_Position = uMVP * vec4(aPos, 1.0); }`;
 const LINE_FS = `#version 300 es
 precision highp float;
 in vec3 vCol; out vec4 o;
@@ -290,6 +291,10 @@ export class Gl3DRenderer {
   private camForward: [number, number, number] = [0, 0, -1];
   private camDir: [number, number, number] = [0, 0, 1];  // target → eye (for the gizmo)
   private viz: Viz3D = { axes: false, grid: false, bounds: false, gizmo: true };
+  /** Brush interaction plane (bounds + grid indicator). null = not shown. */
+  private brushPlane: { axis: 'x' | 'y' | 'z'; pos: number } | null = null;
+  /** Hovered cell — drawn as a wireframe cube cursor. null = no hover. */
+  private hoverCell: { layer: number; row: number; col: number } | null = null;
   /** Line overlay (axes/grid/bounds) + gizmo pipeline. */
   private lineProg: WebGLProgram;
   private lineVao: WebGLVertexArrayObject;
@@ -340,6 +345,8 @@ export class Gl3DRenderer {
   setAlphaBlend(on: boolean): void { this.alphaBlend = on; }
   setClipPlane(clip: ClipPlane3D): void { this.clip = clip; }
   setViz(viz: Viz3D): void { this.viz = viz; }
+  setBrushPlane(p: { axis: 'x' | 'y' | 'z'; pos: number } | null): void { this.brushPlane = p; }
+  setHoverCell(c: { layer: number; row: number; col: number } | null): void { this.hoverCell = c; }
 
   /** Compute the view-projection matrix from the Z-up orbit camera. */
   setCamera(cam: Camera3D, aspect: number): void {
@@ -444,6 +451,7 @@ export class Gl3DRenderer {
     gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     this.renderOverlays();   // axes / grid / bounds (behind the voxels)
+    this.renderBrushPlane(); // brush interaction-plane bounds + grid (depth-tested)
     if (this.instanceCount > 0) {
       gl.useProgram(this.prog);
       gl.bindVertexArray(this.vao);
@@ -462,7 +470,23 @@ export class Gl3DRenderer {
       gl.disable(gl.BLEND);
       gl.bindVertexArray(null);
     }
+    this.renderHoverCube();  // wireframe cube cursor on the hovered cell (on top)
     this.renderGizmo();      // corner orientation widget (always on top)
+  }
+
+  /** Draw a coloured line list (pos+color interleaved, 6 floats/vertex) through
+   *  the line program with the current MVP. `mode` is gl.LINES or gl.POINTS. */
+  private drawLines(verts: Float32Array, mode: number, mvp: Mat4, pointSize = 1): void {
+    if (verts.length === 0) return;
+    const gl = this.gl;
+    gl.useProgram(this.lineProg);
+    gl.bindVertexArray(this.lineVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.DYNAMIC_DRAW);
+    gl.uniformMatrix4fv(gl.getUniformLocation(this.lineProg, 'uMVP'), false, mvp);
+    gl.uniform1f(gl.getUniformLocation(this.lineProg, 'uPointSize'), pointSize);
+    gl.drawArrays(mode, 0, verts.length / 6);
+    gl.bindVertexArray(null);
   }
 
   /** Build + draw the axes / grid / bounds line overlays (Z-up world space). */
@@ -495,43 +519,154 @@ export class Gl3DRenderer {
       seg(0, -L, 0, 0, L, 0, 0.34, 0.82, 0.40);  // Y green
       seg(0, 0, -L, 0, 0, L, 0.36, 0.55, 0.95);  // Z blue
     }
-    if (v.length === 0) return;
-    const verts = new Float32Array(v);
-    gl.useProgram(this.lineProg);
-    gl.bindVertexArray(this.lineVao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.DYNAMIC_DRAW);
-    gl.uniformMatrix4fv(gl.getUniformLocation(this.lineProg, 'uMVP'), false, this.mvp);
-    gl.drawArrays(gl.LINES, 0, verts.length / 6);
-    gl.bindVertexArray(null);
+    this.drawLines(new Float32Array(v), gl.LINES, this.mvp);
+  }
+
+  /** Brush interaction-plane indicator: a bright bounded rectangle + a grid on
+   *  the slice the brush paints into, so the user sees exactly where the plane
+   *  sits in the volume. Depth-tested (voxels in front occlude it). */
+  private renderBrushPlane(): void {
+    const p = this.brushPlane;
+    if (!p) return;
+    const gl = this.gl;
+    const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
+    const x0 = -hx - 0.5, x1 = hx + 0.5, y0 = -hy - 0.5, y1 = hy + 0.5, z0 = -hz - 0.5, z1 = hz + 0.5;
+    const v: number[] = [];
+    // bright edge colour + dimmer interior grid (cyan, distinct from the bounds box)
+    const er = 0.30, eg = 0.78, eb = 0.92;   // rectangle edges
+    const gr = 0.18, gg = 0.42, gb = 0.52;   // interior grid
+    const seg = (ax: number, ay: number, az: number, bx: number, by: number, bz: number, r: number, g: number, b: number) =>
+      v.push(ax, ay, az, r, g, b, bx, by, bz, r, g, b);
+    if (p.axis === 'z') {
+      const z = hz - p.pos;  // world Z of the layer (layer increases downward)
+      const sx = Math.max(1, Math.ceil(this.W / 100)), sy = Math.max(1, Math.ceil(this.H / 100));
+      for (let i = 0; i <= this.W; i += sx) { const x = x0 + i; seg(x, y0, z, x, y1, z, gr, gg, gb); }
+      for (let j = 0; j <= this.H; j += sy) { const y = y0 + j; seg(x0, y, z, x1, y, z, gr, gg, gb); }
+      seg(x0, y0, z, x1, y0, z, er, eg, eb); seg(x1, y0, z, x1, y1, z, er, eg, eb);
+      seg(x1, y1, z, x0, y1, z, er, eg, eb); seg(x0, y1, z, x0, y0, z, er, eg, eb);
+    } else if (p.axis === 'y') {
+      const y = p.pos - hy;  // world Y of the row
+      const sx = Math.max(1, Math.ceil(this.W / 100)), sz = Math.max(1, Math.ceil(this.D / 100));
+      for (let i = 0; i <= this.W; i += sx) { const x = x0 + i; seg(x, y, z0, x, y, z1, gr, gg, gb); }
+      for (let k = 0; k <= this.D; k += sz) { const z = z0 + k; seg(x0, y, z, x1, y, z, gr, gg, gb); }
+      seg(x0, y, z0, x1, y, z0, er, eg, eb); seg(x1, y, z0, x1, y, z1, er, eg, eb);
+      seg(x1, y, z1, x0, y, z1, er, eg, eb); seg(x0, y, z1, x0, y, z0, er, eg, eb);
+    } else {
+      const x = p.pos - hx;  // world X of the column
+      const sy = Math.max(1, Math.ceil(this.H / 100)), sz = Math.max(1, Math.ceil(this.D / 100));
+      for (let j = 0; j <= this.H; j += sy) { const y = y0 + j; seg(x, y, z0, x, y, z1, gr, gg, gb); }
+      for (let k = 0; k <= this.D; k += sz) { const z = z0 + k; seg(x, y0, z, x, y1, z, gr, gg, gb); }
+      seg(x, y0, z0, x, y1, z0, er, eg, eb); seg(x, y1, z0, x, y1, z1, er, eg, eb);
+      seg(x, y1, z1, x, y0, z1, er, eg, eb); seg(x, y0, z1, x, y0, z0, er, eg, eb);
+    }
+    this.drawLines(new Float32Array(v), gl.LINES, this.mvp);
+  }
+
+  /** Wireframe-cube cursor on the hovered cell. Drawn with depth test OFF so it
+   *  reads as an always-visible cursor (like the 2D negative-silhouette brush). */
+  private renderHoverCube(): void {
+    const c = this.hoverCell;
+    if (!c) return;
+    const gl = this.gl;
+    const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
+    const cx = c.col - hx, cy = c.row - hy, cz = hz - c.layer;  // Z-up cell centre
+    const h = 0.56;  // slightly larger than the 0.92-scaled cube so it frames the cell
+    const xs = [cx - h, cx + h], ys = [cy - h, cy + h], zs = [cz - h, cz + h];
+    const r = 1.0, g = 0.85, b = 0.2;  // amber cursor
+    const v: number[] = [];
+    const corner = (i: number): [number, number, number] => [xs[i & 1]!, ys[(i >> 1) & 1]!, zs[(i >> 2) & 1]!];
+    const EDGES = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
+    for (const [a, bb] of EDGES) {
+      const A = corner(a!), B = corner(bb!);
+      v.push(A[0], A[1], A[2], r, g, b, B[0], B[1], B[2], r, g, b);
+    }
+    gl.disable(gl.DEPTH_TEST);
+    this.drawLines(new Float32Array(v), gl.LINES, this.mvp);
+    gl.enable(gl.DEPTH_TEST);
   }
 
   /** Corner orientation gizmo: 3 colored axes rotating with the camera. */
+  /** Pixel size of the square corner-gizmo viewport (device px). */
+  private gizmoSizePx(): number {
+    const gl = this.gl;
+    return Math.max(48, Math.round(Math.min(gl.canvas.width, gl.canvas.height) * 0.16));
+  }
+  /** Orthographic view-projection used to draw + hit-test the gizmo. */
+  private gizmoMatrix(): Mat4 {
+    const d = this.camDir, r = 3;
+    const view = mat4LookAt([d[0] * r, d[1] * r, d[2] * r], [0, 0, 0], WORLD_UP);
+    const proj = mat4Ortho(-1.6, 1.6, -1.6, 1.6, -10, 10);
+    return mat4Mul(proj, view);
+  }
+
+  /** The 6 gizmo endpoints: a unit dir + bright (front) / dim (back) colours.
+   *  Shared by the renderer and the click hit-test so they stay aligned. */
+  private static readonly GIZMO_ENDS: ReadonlyArray<{ axis: 'x' | 'y' | 'z'; sign: 1 | -1; v: [number, number, number]; c: [number, number, number] }> = [
+    { axis: 'x', sign: 1, v: [1, 0, 0], c: [0.90, 0.27, 0.27] },
+    { axis: 'x', sign: -1, v: [-1, 0, 0], c: [0.50, 0.20, 0.20] },
+    { axis: 'y', sign: 1, v: [0, 1, 0], c: [0.34, 0.82, 0.40] },
+    { axis: 'y', sign: -1, v: [0, -1, 0], c: [0.20, 0.46, 0.25] },
+    { axis: 'z', sign: 1, v: [0, 0, 1], c: [0.40, 0.58, 0.96] },
+    { axis: 'z', sign: -1, v: [0, 0, -1], c: [0.22, 0.34, 0.58] },
+  ];
+
+  /** Corner orientation gizmo: 6 colored ± axis stubs + endpoint dots, rotating
+   *  with the camera. Clickable (gizmoHitTest) to snap to the 6 main POVs. */
   private renderGizmo(): void {
     if (!this.viz.gizmo) return;
     const gl = this.gl;
-    const S = Math.max(48, Math.round(Math.min(gl.canvas.width, gl.canvas.height) * 0.16));
+    const S = this.gizmoSizePx();
     gl.viewport(10, 10, S, S);
     gl.disable(gl.DEPTH_TEST);
-    const d = this.camDir, r = 3;
-    const view = mat4LookAt([d[0] * r, d[1] * r, d[2] * r], [0, 0, 0], WORLD_UP);
-    const proj = mat4Ortho(-1.5, 1.5, -1.5, 1.5, -10, 10);
-    const giz = mat4Mul(proj, view);
-    const L = 1;
-    const verts = new Float32Array([
-      0, 0, 0, 0.90, 0.27, 0.27, L, 0, 0, 0.90, 0.27, 0.27,
-      0, 0, 0, 0.34, 0.82, 0.40, 0, L, 0, 0.34, 0.82, 0.40,
-      0, 0, 0, 0.36, 0.55, 0.95, 0, 0, L, 0.36, 0.55, 0.95,
-    ]);
-    gl.useProgram(this.lineProg);
-    gl.bindVertexArray(this.lineVao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.DYNAMIC_DRAW);
-    gl.uniformMatrix4fv(gl.getUniformLocation(this.lineProg, 'uMVP'), false, giz);
-    gl.drawArrays(gl.LINES, 0, 6);
-    gl.bindVertexArray(null);
+    const giz = this.gizmoMatrix();
+    const lines: number[] = [];
+    const pts: number[] = [];
+    for (const e of Gl3DRenderer.GIZMO_ENDS) {
+      lines.push(0, 0, 0, e.c[0], e.c[1], e.c[2], e.v[0], e.v[1], e.v[2], e.c[0], e.c[1], e.c[2]);
+      pts.push(e.v[0], e.v[1], e.v[2], e.c[0], e.c[1], e.c[2]);
+    }
+    this.drawLines(new Float32Array(lines), gl.LINES, giz);
+    this.drawLines(new Float32Array(pts), gl.POINTS, giz, Math.max(6, S * 0.14));
     gl.enable(gl.DEPTH_TEST);
     gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+  }
+
+  /** Hit-test a click (CSS px, top-left origin) against the corner gizmo. Returns
+   *  the clicked axis endpoint (for snapping to that POV) or null if the click is
+   *  outside the gizmo / not near an endpoint. Edge-on (overlapping) endpoints
+   *  tie-break to the one facing the camera. */
+  gizmoHitTest(cssX: number, cssY: number, cssW: number, cssH: number): { axis: 'x' | 'y' | 'z'; sign: 1 | -1 } | null {
+    if (!this.viz.gizmo) return null;
+    const gl = this.gl;
+    const dpr = gl.canvas.width / Math.max(1, cssW);
+    const S = this.gizmoSizePx();
+    // Click in drawing-buffer pixels, bottom-left origin (matches the viewport).
+    const dx = cssX * dpr, dy = (cssH - cssY) * dpr;
+    if (dx < 10 || dx > 10 + S || dy < 10 || dy > 10 + S) return null;
+    const gxN = ((dx - 10) / S) * 2 - 1, gyN = ((dy - 10) / S) * 2 - 1;
+    const giz = this.gizmoMatrix();
+    const projXY = (vx: number, vy: number, vz: number): [number, number] => {
+      const x = giz[0]! * vx + giz[4]! * vy + giz[8]! * vz + giz[12]!;
+      const y = giz[1]! * vx + giz[5]! * vy + giz[9]! * vz + giz[13]!;
+      const w = giz[3]! * vx + giz[7]! * vy + giz[11]! * vz + giz[15]! || 1;
+      return [x / w, y / w];
+    };
+    let best: { axis: 'x' | 'y' | 'z'; sign: 1 | -1 } | null = null;
+    let bestDist = 0.55;  // NDC radius threshold within the gizmo viewport
+    let bestFacing = -2;
+    for (const e of Gl3DRenderer.GIZMO_ENDS) {
+      const [nx, ny] = projXY(e.v[0], e.v[1], e.v[2]);
+      const dist = Math.hypot(nx - gxN, ny - gyN);
+      if (dist > 0.55) continue;
+      // camDir points target→eye; an endpoint facing the viewer has dir·camDir>0.
+      const facing = e.v[0] * this.camDir[0] + e.v[1] * this.camDir[1] + e.v[2] * this.camDir[2];
+      if (dist < bestDist - 0.1 || (Math.abs(dist - bestDist) <= 0.1 && facing > bestFacing)) {
+        best = { axis: e.axis, sign: e.sign };
+        bestDist = Math.min(bestDist, dist);
+        bestFacing = facing;
+      }
+    }
+    return best;
   }
 
   /** Ray-pick the world-space cell the cursor's ray hits on a given plane. Used
