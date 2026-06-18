@@ -1,3 +1,5 @@
+import type { CAModel } from '../../model/types';
+
 /** Data types that flow through value ports.
  *
  *  `neighborIndex` is a packed `i32` carrying `((dr + 128) << 8) | ((dc + 128) & 0xFF)` —
@@ -78,6 +80,12 @@ export interface NodeRequirements {
   async?: boolean;
   /** Requires `model.variegatedCells?.enabled === true`. */
   variegated?: boolean;
+  /** 3D Grid CA: requires a 2D lattice (`dimension !== '3d'`). Set on the
+   *  `neighborIndex` family (the 2-axis packNI codec has no third offset), so
+   *  those nodes are hidden from the palette / add-node menu in 3D models and
+   *  badged if present. `getNeighborAttributeByTag` (flat coord index) is the
+   *  3D substitute. */
+  lattice2d?: boolean;
 }
 
 /** Definition of a node type */
@@ -102,7 +110,7 @@ export interface NodeTypeDef {
    *  edge into it simply goes unread. Nodes that ADD or transform ports per
    *  config (switch/sequence/expression) keep that logic inline; this hook is
    *  only for removing static ports. */
-  hiddenPorts?: (config: NodeConfig) => string[];
+  hiddenPorts?: (config: NodeConfig, model?: CAModel) => string[];
   defaultConfig: NodeConfig;
   /** Emit JS code for this node. Returns code string.
    *  `boundary` is the model's boundary treatment ('torus' | 'constant'),

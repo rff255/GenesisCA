@@ -455,7 +455,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
   // (switch/sequence/expression, above) keep that logic inline — this hook
   // only removes static ports.
   if (def?.hiddenPorts) {
-    const hidden = def.hiddenPorts(nodeData.config);
+    const hidden = def.hiddenPorts(nodeData.config, model);
     if (hidden.length > 0) {
       const drop = new Set(hidden);
       inputPorts = inputPorts.filter(p => !drop.has(p.id));

@@ -181,6 +181,18 @@ function withEffectiveNeighborhoods(model: CAModel): CAModel {
     ...model,
     neighborhoods: model.neighborhoods.map(n => {
       if (!n.includeCentralCell) return n;
+      // 3D Grid CA: a 3D neighbourhood carries coords3d as the source of truth
+      // and a same-length 2D `coords` projection. The central cell must be
+      // appended to BOTH so the stride invariant (coords.length ===
+      // coords3d.length) holds. Guard against an already-listed centre.
+      if (n.coords3d) {
+        if (n.coords3d.some(([dr, dc, dl]) => dr === 0 && dc === 0 && dl === 0)) return n;
+        return {
+          ...n,
+          coords: [...n.coords, [0, 0] as [number, number]],
+          coords3d: [...n.coords3d, [0, 0, 0] as [number, number, number]],
+        };
+      }
       // Guard against a hand-edited file that already lists [0,0] — never
       // double-count the central cell.
       if (n.coords.some(([r, c]) => r === 0 && c === 0)) return n;
@@ -1684,10 +1696,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (model.properties.useWebGPU && !webgpuResult.error && offscreenSupported) {
       pendingCanvasAttach.current = true;
     }
+    // 3D Grid CA: effective layer count. Only honour gridDepth when the model
+    // is actually 3D — this keeps the worker's `depth` in lockstep with the
+    // compilers' `is3d` (both key on dimension==='3d') so a hand-edited
+    // `dimension:'2d', gridDepth:8` file can't desync the baked total.
+    const d = model.properties.dimension === '3d' ? Math.max(1, model.properties.gridDepth ?? 1) : 1;
     const initMsg: Record<string, unknown> = {
       type: 'init',
       width: w,
       height: h,
+      depth: d,
       attributes: model.attributes.map(a => ({
         id: a.id, type: a.type,
         isModelAttribute: a.isModelAttribute, defaultValue: a.defaultValue,
@@ -1697,7 +1715,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         parentValues: a.parentValues,
         undefinedValue: a.undefinedValue,
       })),
-      neighborhoods: effModel.neighborhoods.map(n => ({ id: n.id, coords: n.coords })),
+      neighborhoods: effModel.neighborhoods.map(n => ({ id: n.id, coords: n.coords, coords3d: n.coords3d })),
       boundaryTreatment: model.properties.boundaryTreatment,
       updateMode: model.properties.updateMode || 'synchronous',
       asyncScheme: model.properties.asyncScheme || 'random-order',

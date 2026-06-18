@@ -45,6 +45,11 @@ interface AttrDef {
 interface NeighborhoodDef {
   id: string;
   coords: Array<[number, number]>;
+  /** 3D Grid CA: present on a 3D neighbourhood — entries are `[dr, dc, dl]`
+   *  (row, col, layer offsets). When present it is the source of truth for the
+   *  offset-table loop; `coords` stays populated (the 2D projection) so the
+   *  stride (`coords.length`) and the 2D fallbacks still resolve. */
+  coords3d?: Array<[number, number, number]>;
 }
 
 interface FacePatternDef {
@@ -77,6 +82,8 @@ interface InitMsg {
   type: 'init';
   width: number;
   height: number;
+  /** 3D Grid CA: layer count. Absent → 1 (a 2D grid, byte-identical). */
+  depth?: number;
   attributes: AttrDef[];
   neighborhoods: NeighborhoodDef[];
   boundaryTreatment: string;
@@ -139,7 +146,8 @@ interface InitMsg {
 interface StepMsg { type: 'step'; count: number; activeViewer: string; skipColorPass?: boolean }
 interface PaintMsg {
   type: 'paint';
-  cells: Array<{ row: number; col: number; r: number; g: number; b: number }>;
+  /** `layer` (absent → 0) is the 3D Z coordinate; 2D paints omit it. */
+  cells: Array<{ row: number; col: number; layer?: number; r: number; g: number; b: number }>;
   mappingId: string;
   activeViewer: string;
 }
@@ -152,7 +160,7 @@ interface PaintMsg {
  *  schema-declared `parentValues`. */
 interface PaintManualMsg {
   type: 'paintManual';
-  cells: Array<{ row: number; col: number }>;
+  cells: Array<{ row: number; col: number; layer?: number }>;
   /** Only attributes the user marked "Set". Pre-encoded by the UI using
    *  encodeAttrValue() so the worker doesn't repeat the string→number switch. */
   sets: Array<{ attrId: string; value: number }>;
@@ -213,6 +221,8 @@ interface ReadRegionMsg {
 interface WriteRegionMsg {
   type: 'writeRegion';
   row: number; col: number; w: number; h: number;
+  /** 3D Grid CA: target layer for the 2D stamp (absent → 0). */
+  layer?: number;
   attributes: Record<string, { type: string; buffer: ArrayBuffer }>;
   /** Optional shape mask (Uint8 buffer, length w*h, row-major). When present,
    *  only cells with mask !== 0 are written — so a non-rectangular brush
@@ -224,6 +234,8 @@ interface WriteRegionMsg {
 interface ClearRegionMsg {
   type: 'clearRegion';
   row: number; col: number; w: number; h: number;
+  /** 3D Grid CA: target layer for the 2D stamp (absent → 0). */
+  layer?: number;
   /** Optional shape mask — see WriteRegionMsg. A masked clear (Ctrl+X cut)
    *  removes only the shape's cells, matching the masked copy. */
   mask?: ArrayBuffer;
@@ -280,8 +292,20 @@ type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | RandomizeMsg | 
 
 let width = 0;
 let height = 0;
+/** 3D Grid CA: layer count along Z. 1 → a 2D grid (total = W*H, byte-identical). */
+let depth = 1;
 let total = 0;
 let cellAttrs: AttrDef[] = [];
+
+/** Flatten a 3D cell coordinate to its SoA index. In 2D (depth===1, layer===0)
+ *  this is `row*width+col`, byte-identical to the historical 2D math. */
+function cellIndexOf(layer: number, row: number, col: number): number {
+  return (layer * height + row) * width + col;
+}
+/** 3D-aware in-bounds test for a paint/region cell. In 2D, layer 0 always passes. */
+function inBounds3d(layer: number, row: number, col: number): boolean {
+  return layer >= 0 && layer < depth && row >= 0 && row < height && col >= 0 && col < width;
+}
 let modelAttrsList: AttrDef[] = [];
 let indicatorsList: IndicatorDef[] = [];
 let neighborhoods: NeighborhoodDef[] = [];
@@ -748,7 +772,7 @@ function boundaryCellValue(attr: AttrDef): number {
 // ---------------------------------------------------------------------------
 
 function initGrid(): void {
-  total = width * height;
+  total = width * height * depth;   // 3D Grid CA: depth===1 → W*H (2D byte-identical)
   attrsA = {};
   attrsB = {};
   const isAsync = updateMode === 'asynchronous';
@@ -879,32 +903,42 @@ function buildNeighborIndices(): void {
   if (!wasmMemory || !wasmLayout) return;
   const buf = wasmMemory.buffer;
   for (const nbr of neighborhoods) {
-    const nbrSize = nbr.coords.length;
+    // 3D Grid CA: the offset table gains a `layer` dimension and reads 3-tuple
+    // offsets when present. The STRIDE stays `coords.length` (=== coords3d.length
+    // for a 3D nbr) so every downstream `nIdx_<nbr>[idx*nSz+k]` consumer is
+    // byte-compatible and 3D-for-free. In 2D (depth===1, no coords3d) the inner
+    // arithmetic reduces to the historical `row*width+col` form.
+    const coords3d = nbr.coords3d;
+    const nbrSize = coords3d ? coords3d.length : nbr.coords.length;
     // Index table is a view over wasmMemory at the layout offset — shared with WASM step.
     const indices = new Int32Array(buf, wasmLayout.nbrIndexOffset[nbr.id]!, total * nbrSize);
 
-    for (let row = 0; row < height; row++) {
-      for (let col = 0; col < width; col++) {
-        const cellIdx = row * width + col;
-        for (let n = 0; n < nbrSize; n++) {
-          const [dr, dc] = nbr.coords[n]!;
-          let nRow = row + dr;
-          let nCol = col + dc;
+    for (let layer = 0; layer < depth; layer++) {
+      for (let row = 0; row < height; row++) {
+        for (let col = 0; col < width; col++) {
+          const cellIdx = (layer * height + row) * width + col;
+          for (let n = 0; n < nbrSize; n++) {
+            const c = coords3d ? coords3d[n]! : nbr.coords[n]!;
+            const dr = c[0], dc = c[1], dl = (c as number[])[2] ?? 0;
+            let nLayer = layer + dl;
+            let nRow = row + dr;
+            let nCol = col + dc;
 
-          if (nRow < 0 || nRow >= height || nCol < 0 || nCol >= width) {
-            if (boundaryTreatment === 'torus') {
-              nRow = ((nRow % height) + height) % height;
-              nCol = ((nCol % width) + width) % width;
-            } else {
-              // Constant: point to cell 0 (will be filled with defaults)
-              // We use a sentinel approach: index -1 means "use default"
-              // But typed arrays can't store -1, so we use total as sentinel
-              indices[cellIdx * nbrSize + n] = total; // sentinel
-              continue;
+            if (nLayer < 0 || nLayer >= depth || nRow < 0 || nRow >= height || nCol < 0 || nCol >= width) {
+              if (boundaryTreatment === 'torus') {
+                nLayer = ((nLayer % depth) + depth) % depth;
+                nRow = ((nRow % height) + height) % height;
+                nCol = ((nCol % width) + width) % width;
+              } else {
+                // Constant: typed arrays can't store -1, so `total` is the
+                // sentinel (the +1 cell holds the boundary value).
+                indices[cellIdx * nbrSize + n] = total; // sentinel
+                continue;
+              }
             }
-          }
 
-          indices[cellIdx * nbrSize + n] = nRow * width + nCol;
+            indices[cellIdx * nbrSize + n] = (nLayer * height + nRow) * width + nCol;
+          }
         }
       }
     }
@@ -935,12 +969,15 @@ let activeViewer = '';
 
 /** Build args for the loop-wrapped step function (called once per step, not per cell) */
 function buildLoopArgs(): unknown[] {
-  const args: unknown[] = [total, width, height];
+  // 3D Grid CA: `depth` + `WH` follow W/H ONLY for a 3D grid (depth > 1),
+  // matching the compiler's buildLoopParams (gated on is3dModel === dimension
+  // 3d && gridDepth > 1, which is exactly depth > 1 here). 2D args byte-identical.
+  const args: unknown[] = depth > 1 ? [total, width, height, depth, width * height] : [total, width, height];
   for (const attr of cellAttrs) args.push(readAttrs[attr.id]);
   for (const attr of cellAttrs) args.push(writeAttrs[attr.id]);
   for (const nbr of neighborhoods) {
     args.push(nbrIndices[nbr.id]);
-    args.push(nbr.coords.length);
+    args.push(nbr.coords3d ? nbr.coords3d.length : nbr.coords.length);
   }
   args.push(cachedModelAttrs, colors, activeViewer, cachedIndicators, linkedResults, rngState, stopFlag);
   // Glyph buffers — always present in the param list to keep arity stable;
@@ -964,12 +1001,13 @@ function buildLoopArgs(): unknown[] {
 
 /** Build args for a per-cell function (InputColor) */
 function buildCellArgs(idx: number): unknown[] {
-  const args: unknown[] = [idx, total, width, height];
+  // 3D Grid CA: D + WH only for a 3D grid (mirrors buildCellParams). 2D byte-identical.
+  const args: unknown[] = depth > 1 ? [idx, total, width, height, depth, width * height] : [idx, total, width, height];
   for (const attr of cellAttrs) args.push(readAttrs[attr.id]);
   for (const attr of cellAttrs) args.push(writeAttrs[attr.id]);
   for (const nbr of neighborhoods) {
     args.push(nbrIndices[nbr.id]);
-    args.push(nbr.coords.length);
+    args.push(nbr.coords3d ? nbr.coords3d.length : nbr.coords.length);
   }
   args.push(cachedModelAttrs, colors, activeViewer, cachedIndicators, linkedResults, rngState, stopFlag);
   // Glyph buffers — always present in the param list to keep arity stable;
@@ -2336,6 +2374,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'init': {
       width = msg.width;
       height = msg.height;
+      depth = msg.depth ?? 1;   // 3D Grid CA: absent → 1 (2D)
       cellAttrs = msg.attributes.filter(a => !a.isModelAttribute);
       modelAttrsList = msg.attributes.filter(a => a.isModelAttribute);
       indicatorsList = msg.indicators || [];
@@ -2517,8 +2556,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
 
       const paintApply = (): void => {
         for (const c of msg.cells) {
-          if (c.row < 0 || c.row >= height || c.col < 0 || c.col >= width) continue;
-          const idx = c.row * width + c.col;
+          const lyr = c.layer ?? 0;
+          if (!inBounds3d(lyr, c.row, c.col)) continue;
+          const idx = cellIndexOf(lyr, c.row, c.col);
 
           if (wasmIcFn) {
             // WASM InputColor writes via baked-in attrWriteOffset.
@@ -2555,8 +2595,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           // evolved state we mustn't clobber with the stale CPU mirror.
           const idxs: number[] = [];
           for (const c of msg.cells) {
-            if (c.row < 0 || c.row >= height || c.col < 0 || c.col >= width) continue;
-            idxs.push(c.row * width + c.col);
+            const lyr = c.layer ?? 0;
+            if (!inBounds3d(lyr, c.row, c.col)) continue;
+            idxs.push(cellIndexOf(lyr, c.row, c.col));
           }
           patchWebGPUCells(idxs);
           uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
@@ -2619,8 +2660,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
 
       const applyManual = (): void => {
         for (const c of msg.cells) {
-          if (c.row < 0 || c.row >= height || c.col < 0 || c.col >= width) continue;
-          const idx = c.row * width + c.col;
+          const lyr = c.layer ?? 0;
+          if (!inBounds3d(lyr, c.row, c.col)) continue;
+          const idx = cellIndexOf(lyr, c.row, c.col);
           for (const { s, info } of setEntries) {
             if (info) {
               const pv = brushParentOverride.has(info.parentId)
@@ -2645,8 +2687,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         if (webgpuPaint && webgpuRuntime) {
           const idxs: number[] = [];
           for (const c of msg.cells) {
-            if (c.row < 0 || c.row >= height || c.col < 0 || c.col >= width) continue;
-            idxs.push(c.row * width + c.col);
+            const lyr = c.layer ?? 0;
+            if (!inBounds3d(lyr, c.row, c.col)) continue;
+            idxs.push(cellIndexOf(lyr, c.row, c.col));
           }
           patchWebGPUCells(idxs);
           uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
@@ -3327,9 +3370,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'writeRegion': {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       const isAsync = updateMode === 'asynchronous';
+      // 3D Grid CA: the 2D stamp lands on layer `msg.layer` (absent → 0).
+      const wLayer = msg.layer ?? 0;
       // Optional shape mask: only cells with mask !== 0 are written.
       const wMask = msg.mask ? new Uint8Array(msg.mask) : null;
-      for (const attr of cellAttrs) {
+      if (wLayer >= 0 && wLayer < depth) for (const attr of cellAttrs) {
         const entry = msg.attributes[attr.id];
         if (!entry) continue;
         // Rebuild typed view over the transferred buffer
@@ -3345,7 +3390,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             if (wMask && wMask[local] === 0) continue;
             const dstCol = msg.col + dc;
             if (dstCol < 0 || dstCol >= width) continue;
-            const i = dstRow * width + dstCol;
+            const i = cellIndexOf(wLayer, dstRow, dstCol);
             const v = src[local]!;
             dst[i] = v;
             if (!isAsync) dstB[i] = v;
@@ -3358,14 +3403,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // Patch only the cells in the write region; leave the rest of the GPU
         // buffer alone so any in-flight evolved state isn't clobbered.
         const idxs: number[] = [];
-        for (let dr = 0; dr < msg.h; dr++) {
+        if (wLayer >= 0 && wLayer < depth) for (let dr = 0; dr < msg.h; dr++) {
           const dstRow = msg.row + dr;
           if (dstRow < 0 || dstRow >= height) continue;
           for (let dc = 0; dc < msg.w; dc++) {
             if (wMask && wMask[dr * msg.w + dc] === 0) continue;
             const dstCol = msg.col + dc;
             if (dstCol < 0 || dstCol >= width) continue;
-            idxs.push(dstRow * width + dstCol);
+            idxs.push(cellIndexOf(wLayer, dstRow, dstCol));
           }
         }
         patchWebGPUCells(idxs);
@@ -3387,8 +3432,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'clearRegion': {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       const isAsync = updateMode === 'asynchronous';
+      const cLayer = msg.layer ?? 0;   // 3D Grid CA: target layer (absent → 0)
       const cMask = msg.mask ? new Uint8Array(msg.mask) : null;
-      for (const attr of cellAttrs) {
+      if (cLayer >= 0 && cLayer < depth) for (const attr of cellAttrs) {
         const dv = defaultValue(attr);
         const dst = readAttrs[attr.id]!;
         const dstB = writeAttrs[attr.id]!;
@@ -3399,7 +3445,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             if (cMask && cMask[dr * msg.w + dc] === 0) continue;
             const dstCol = msg.col + dc;
             if (dstCol < 0 || dstCol >= width) continue;
-            const i = dstRow * width + dstCol;
+            const i = cellIndexOf(cLayer, dstRow, dstCol);
             dst[i] = dv;
             if (!isAsync) dstB[i] = dv;
           }
@@ -3409,14 +3455,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       if (webgpuClear && webgpuRuntime) {
         // Patch only the cleared region; preserve the rest of the GPU state.
         const idxs: number[] = [];
-        for (let dr = 0; dr < msg.h; dr++) {
+        if (cLayer >= 0 && cLayer < depth) for (let dr = 0; dr < msg.h; dr++) {
           const dstRow = msg.row + dr;
           if (dstRow < 0 || dstRow >= height) continue;
           for (let dc = 0; dc < msg.w; dc++) {
             if (cMask && cMask[dr * msg.w + dc] === 0) continue;
             const dstCol = msg.col + dc;
             if (dstCol < 0 || dstCol >= width) continue;
-            idxs.push(dstRow * width + dstCol);
+            idxs.push(cellIndexOf(cLayer, dstRow, dstCol));
           }
         }
         patchWebGPUCells(idxs);
