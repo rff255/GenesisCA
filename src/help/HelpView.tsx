@@ -939,11 +939,14 @@ export function HelpView() {
           <h3 className={styles.h3}>NeighborIndex Type</h3>
           <p className={styles.p}>
             <strong>NeighborIndex</strong> (NI) is a typed handle that carries a relative
-            (dRow, dCol) offset to a neighbor cell. The runtime representation is a packed i32:
-            dRow in the upper 16 bits, dCol in the lower 16 bits, both sign-extended on decode.
-            An NI is <strong>position-only</strong> &mdash; it does not belong to any specific
-            neighborhood, so wires through filter / pick / iterate / set chains without ever needing
-            a "which neighborhood is this from?" question.
+            offset to a neighbor cell &mdash; (dRow, dCol) on a 2D grid, or (dRow, dCol, dLayer)
+            on a 3D volume. The runtime representation is a packed i32: in 2D, dRow in the upper
+            16 bits and dCol in the lower 16; in 3D, three sign-extended 10-bit fields
+            (dRow, dCol, dLayer, &plusmn;511 each). The compiler picks the codec automatically per
+            model, so the same graph works in either dimension. An NI is
+            <strong>position-only</strong> &mdash; it does not belong to any specific neighborhood,
+            so wires through filter / pick / iterate / set chains without ever needing a "which
+            neighborhood is this from?" question.
           </p>
           <p className={styles.p}>
             The "no neighbor" sentinel is <code>INVALID_NI = 0x80000000</code> (i32 min). Producers
@@ -977,17 +980,18 @@ export function HelpView() {
             <li><strong>Pick N Random Neighbors</strong> &mdash; pick N distinct elements without
               replacement (partial Fisher-Yates).</li>
             <li><strong>Neighbor Index (from Offset)</strong> &mdash; build a NI from a (dRow, dCol)
-              pair. dr and dc are input ports with inline number widgets, so they can be either
-              typed or wired from any computation (e.g. a model attribute encoding direction).</li>
+              pair, plus a <em>dLayer</em> port in 3D models. dr/dc/dl are input ports with inline
+              number widgets, so they can be either typed or wired from any computation (e.g. a
+              model attribute encoding direction).</li>
             <li><strong>Neighbor Index (from Tag)</strong> &mdash; build a NI from a tag name in the
               neighborhood&apos;s tags map. Compile-time-resolved.</li>
             <li><strong>Flip Neighbor Index</strong> &mdash; mirror a NI horizontally (negate dCol),
               vertically (negate dRow), or both (180&deg; rotation). Pure bit math; no neighborhood
               needed.</li>
             <li><strong>Break Down Neighbor Index</strong> &mdash; inverse of <em>Neighbor Index
-              (from Offset)</em>. Unpacks a NI into its two integer outputs <em>dr</em> and
-              <em>dc</em>, for per-axis arithmetic on computed NIs (e.g. inspecting the direction
-              returned by Pick Random Neighbor).</li>
+              (from Offset)</em>. Unpacks a NI into its integer outputs <em>dr</em> and <em>dc</em>
+              (plus <em>dl</em> in 3D), for per-axis arithmetic on computed NIs (e.g. inspecting the
+              direction returned by Pick Random Neighbor).</li>
             <li><strong>Get Array Element</strong> / <strong>Array Length</strong> &mdash; generic indexed
               access and size for any array (NI[] or otherwise). Pair Get Array Element with the
               <em>Position(s)</em> outputs of Count Matching / Group Reduce to recover the NI of the
