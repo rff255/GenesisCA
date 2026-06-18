@@ -56,21 +56,76 @@ export function emitBindings(layout: WebGPULayout): string {
   // attribute's boundary value at upload time.
   const gw = layout.gridWidth;
   const gh = layout.gridHeight;
+  const gd = layout.gridDepth;             // 3D Grid CA: layer count (1 → 2D)
+  const wh = gw * gh;                       // cells per layer
   const isTorus = layout.boundaryTreatment === 'torus';
-  const nbrCellIdxFn = isTorus ? `
-fn nbrCellIdx(cellIdx: u32, baseOffset: u32, k: i32) -> i32 {
-  let dr: i32 = nbrOffsets[baseOffset + u32(k) * 2u];
-  let dc: i32 = nbrOffsets[baseOffset + u32(k) * 2u + 1u];
+  // The NI-codec helper `nbrCellIdxFromNi` (packed 2-axis dr/dc) is emitted
+  // verbatim in its 2D form: the whole neighborIndex node family is gated off in
+  // 3D, so it is never CALLED there (dead in a 3D shader). Keeping it byte-for-byte
+  // identical preserves the 2D pipeline-cache hash.
+  const nbrCellIdxFromNiFn = isTorus ? `
+// Wave A.6: variant for packed (dr, dc) NIs. dr in upper 16 bits, dc in lower.
+fn nbrCellIdxFromNi(cellIdx: u32, ni: i32) -> i32 {
+  let dr: i32 = ni >> 16;
+  let dc: i32 = (ni << 16) >> 16;
   let row: i32 = i32(cellIdx) / ${gw};
   let col: i32 = i32(cellIdx) % ${gw};
   let nr: i32 = ((row + dr) % ${gh} + ${gh}) % ${gh};
   let nc: i32 = ((col + dc) % ${gw} + ${gw}) % ${gw};
   return nr * ${gw} + nc;
-}
-// Wave A.6: variant for packed (dr, dc) NIs. dr in upper 16 bits, dc in lower.
+}` : `
 fn nbrCellIdxFromNi(cellIdx: u32, ni: i32) -> i32 {
   let dr: i32 = ni >> 16;
   let dc: i32 = (ni << 16) >> 16;
+  let row: i32 = i32(cellIdx) / ${gw};
+  let col: i32 = i32(cellIdx) % ${gw};
+  let nr: i32 = row + dr;
+  let nc: i32 = col + dc;
+  if (nr < 0 || nr >= ${gh} || nc < 0 || nc >= ${gw}) {
+    return ${layout.sentinelIndex};
+  }
+  return nr * ${gw} + nc;
+}`;
+  // `nbrCellIdx` (offset-table neighbours, used by getNeighborsAttribute etc.) —
+  // 2D emits the verbatim 2-axis helper (byte-identical); 3D reads a 3rd offset
+  // (stride 3) and wraps/clamps the layer.
+  let nbrCellIdxCore: string;
+  if (gd > 1) {
+    nbrCellIdxCore = isTorus ? `
+fn nbrCellIdx(cellIdx: u32, baseOffset: u32, k: i32) -> i32 {
+  let dr: i32 = nbrOffsets[baseOffset + u32(k) * 3u];
+  let dc: i32 = nbrOffsets[baseOffset + u32(k) * 3u + 1u];
+  let dl: i32 = nbrOffsets[baseOffset + u32(k) * 3u + 2u];
+  let layer: i32 = i32(cellIdx) / ${wh};
+  let rem: i32 = i32(cellIdx) - layer * ${wh};
+  let row: i32 = rem / ${gw};
+  let col: i32 = rem % ${gw};
+  let nl: i32 = ((layer + dl) % ${gd} + ${gd}) % ${gd};
+  let nr: i32 = ((row + dr) % ${gh} + ${gh}) % ${gh};
+  let nc: i32 = ((col + dc) % ${gw} + ${gw}) % ${gw};
+  return (nl * ${gh} + nr) * ${gw} + nc;
+}` : `
+fn nbrCellIdx(cellIdx: u32, baseOffset: u32, k: i32) -> i32 {
+  let dr: i32 = nbrOffsets[baseOffset + u32(k) * 3u];
+  let dc: i32 = nbrOffsets[baseOffset + u32(k) * 3u + 1u];
+  let dl: i32 = nbrOffsets[baseOffset + u32(k) * 3u + 2u];
+  let layer: i32 = i32(cellIdx) / ${wh};
+  let rem: i32 = i32(cellIdx) - layer * ${wh};
+  let row: i32 = rem / ${gw};
+  let col: i32 = rem % ${gw};
+  let nl: i32 = layer + dl;
+  let nr: i32 = row + dr;
+  let nc: i32 = col + dc;
+  if (nl < 0 || nl >= ${gd} || nr < 0 || nr >= ${gh} || nc < 0 || nc >= ${gw}) {
+    return ${layout.sentinelIndex};
+  }
+  return (nl * ${gh} + nr) * ${gw} + nc;
+}`;
+  } else {
+    nbrCellIdxCore = isTorus ? `
+fn nbrCellIdx(cellIdx: u32, baseOffset: u32, k: i32) -> i32 {
+  let dr: i32 = nbrOffsets[baseOffset + u32(k) * 2u];
+  let dc: i32 = nbrOffsets[baseOffset + u32(k) * 2u + 1u];
   let row: i32 = i32(cellIdx) / ${gw};
   let col: i32 = i32(cellIdx) % ${gw};
   let nr: i32 = ((row + dr) % ${gh} + ${gh}) % ${gh};
@@ -88,20 +143,9 @@ fn nbrCellIdx(cellIdx: u32, baseOffset: u32, k: i32) -> i32 {
     return ${layout.sentinelIndex};
   }
   return nr * ${gw} + nc;
-}
-// Wave A.6: variant for packed (dr, dc) NIs. dr in upper 16 bits, dc in lower.
-fn nbrCellIdxFromNi(cellIdx: u32, ni: i32) -> i32 {
-  let dr: i32 = ni >> 16;
-  let dc: i32 = (ni << 16) >> 16;
-  let row: i32 = i32(cellIdx) / ${gw};
-  let col: i32 = i32(cellIdx) % ${gw};
-  let nr: i32 = row + dr;
-  let nc: i32 = col + dc;
-  if (nr < 0 || nr >= ${gh} || nc < 0 || nc >= ${gw}) {
-    return ${layout.sentinelIndex};
-  }
-  return nr * ${gw} + nc;
 }`;
+  }
+  const nbrCellIdxFn = nbrCellIdxCore + nbrCellIdxFromNiFn;
 
   return `// === Bindings ===
 struct Control {

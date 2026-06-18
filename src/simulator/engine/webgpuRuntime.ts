@@ -796,15 +796,27 @@ export function uploadNeighborOffsets(rt: WebGPURuntime): void {
   if (!rt.nbrOffsetsBuf) return;
   const buf = new Uint8Array(rt.layout.nbrBytes);
   const view = new DataView(buf.buffer);
+  // 3D Grid CA: a 3D layout packs 3 i32 per neighbour (dRow, dCol, dLayer),
+  // matching the encoder's `* 3u` stride; 2D packs 2 (dRow, dCol).
+  const is3d = rt.layout.gridDepth > 1;
   for (const n of rt.layout.nbrs) {
-    // Each neighbour contributes 2 i32s: (dRow, dCol). `wordOffset` is the
-    // starting i32-element index inside the buffer for this neighbourhood —
-    // matches what the compiler emits as `baseOffset` for `nbrCellIdx`.
+    // `wordOffset` is the starting i32-element index inside the buffer for this
+    // neighbourhood — matches what the compiler emits as `baseOffset`.
     let off = n.byteOffset;
-    for (let k = 0; k < n.coords.length; k++) {
-      const pair = n.coords[k]!;
-      view.setInt32(off, pair[0] | 0, true); off += 4;
-      view.setInt32(off, pair[1] | 0, true); off += 4;
+    if (is3d) {
+      const c3 = n.coords3d ?? n.coords.map(c => [c[0], c[1], 0] as [number, number, number]);
+      for (let k = 0; k < c3.length; k++) {
+        const t = c3[k]!;
+        view.setInt32(off, t[0] | 0, true); off += 4;
+        view.setInt32(off, t[1] | 0, true); off += 4;
+        view.setInt32(off, (t[2] ?? 0) | 0, true); off += 4;
+      }
+    } else {
+      for (let k = 0; k < n.coords.length; k++) {
+        const pair = n.coords[k]!;
+        view.setInt32(off, pair[0] | 0, true); off += 4;
+        view.setInt32(off, pair[1] | 0, true); off += 4;
+      }
     }
   }
   rt.device.queue.writeBuffer(rt.nbrOffsetsBuf, 0, buf);

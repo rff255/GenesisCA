@@ -2163,6 +2163,25 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
   initEvent: ({ node, ctx }) => {
     const W = ctx.layout.gridWidth;
     const H = ctx.layout.gridHeight;
+    const D = ctx.layout.gridDepth;
+    // 3D Grid CA: when 3D, y is the row WITHIN the layer ((idx % WH)/W) and z is
+    // the layer (idx / WH). 2D (D===1) emits the verbatim x = idx%W, y = idx/W.
+    if (D > 1) {
+      const WH = W * H;
+      const x = emitLet(ctx, 'i32', `i32(idx % ${W}u)`, 'init_x');
+      const y = emitLet(ctx, 'i32', `i32((idx % ${WH}u) / ${W}u)`, 'init_y');
+      const z = emitLet(ctx, 'i32', `i32(idx / ${WH}u)`, 'init_z');
+      const maxX = emitLet(ctx, 'i32', `${W - 1}`, 'init_mx');
+      const maxY = emitLet(ctx, 'i32', `${H - 1}`, 'init_my');
+      const maxZ = emitLet(ctx, 'i32', `${D - 1}`, 'init_mz');
+      setCachedPort(ctx, node.id, 'x', x);
+      setCachedPort(ctx, node.id, 'y', y);
+      setCachedPort(ctx, node.id, 'z', z);
+      setCachedPort(ctx, node.id, 'maxX', maxX);
+      setCachedPort(ctx, node.id, 'maxY', maxY);
+      setCachedPort(ctx, node.id, 'maxZ', maxZ);
+      return x;
+    }
     // x = idx % W; y = idx / W (as i32); maxX = W-1; maxY = H-1.
     const x = emitLet(ctx, 'i32', `i32(idx % ${W}u)`, 'init_x');
     const y = emitLet(ctx, 'i32', `i32(idx / ${W}u)`, 'init_y');
