@@ -5,7 +5,6 @@ import { niCellExprStmts } from '../compiler/niCodec';
  *  neighborhood config — each NI carries its own offset. */
 export const GetNeighborsAttrByIndexesNode: NodeTypeDef = {
   type: 'getNeighborsAttrByIndexes',
-  requirements: { lattice2d: true },  // 2-axis packed neighborIndex codec — 2D only
   label: 'Get Neighbors Attr By Indexes',
   description: 'Reads neighbor attribute values for a provided list of NeighborIndexes (each a packed dr/dc offset).',
   category: 'data',
@@ -21,7 +20,7 @@ export const GetNeighborsAttrByIndexesNode: NodeTypeDef = {
     const ni = `_ni${nodeId}`;
     const niVar = `_niv${nodeId}`;
     const vl = `_v${nodeId}_valsLen`;
-    const { stmts, cellExpr } = niCellExprStmts(niVar, boundary || 'torus', `${nodeId}_e`);
+    const { stmts, cellExpr } = niCellExprStmts(niVar, boundary || 'torus', `${nodeId}_e`, ctx?.is3d);
     // Sub-attribute iteration: skip neighbors whose parent doesn't match (the
     // values output excludes them entirely). Regular attrs read unconditionally.
     const guard = ctx ? ctx.parentMatchesExpr(attr, cellExpr) : null;

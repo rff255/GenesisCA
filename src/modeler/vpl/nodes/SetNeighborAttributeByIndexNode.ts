@@ -9,7 +9,7 @@ export const SetNeighborAttributeByIndexNode: NodeTypeDef = {
   description: 'Writes a value to one neighbor’s attribute at the given NeighborIndex (a packed dr/dc offset). Accepts an array of indices to write to multiple neighbors. Async-only.',
   category: 'output',
   color: '#4a148c',
-  requirements: { async: true, lattice2d: true },
+  requirements: { async: true },
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
     { id: 'next', label: 'NEXT', kind: 'output', category: 'flow' },
@@ -17,13 +17,13 @@ export const SetNeighborAttributeByIndexNode: NodeTypeDef = {
     { id: 'value', label: 'Value', kind: 'input', category: 'value', dataType: 'any', inlineWidget: 'number', defaultValue: '0' },
   ],
   defaultConfig: { attributeId: '' },
-  compile: (nodeId, config, inputs, boundary) => {
+  compile: (nodeId, config, inputs, boundary, ctx) => {
     const attr = config.attributeId as string || '_undef';
     const index = inputs['index'] || '0';
     const value = inputs['value'] || '0';
     const b = boundary || 'torus';
-    const arrAccess = niCellExprStmts(`_eli${nodeId}`, b, `${nodeId}_a`);
-    const sclAccess = niCellExprStmts(`_idx${nodeId}`, b, `${nodeId}_s`);
+    const arrAccess = niCellExprStmts(`_eli${nodeId}`, b, `${nodeId}_a`, ctx?.is3d);
+    const sclAccess = niCellExprStmts(`_idx${nodeId}`, b, `${nodeId}_s`, ctx?.is3d);
     return [
       `const _idx${nodeId} = (${index}) | 0;`,
       `if (Array.isArray(${index})) {`,

@@ -47,7 +47,7 @@ export const MoveSelfToNeighborNode: NodeTypeDef = {
     { id: 'targetNI', label: 'Target NI', kind: 'input', category: 'value', dataType: 'neighborIndex' },
   ],
   defaultConfig: { payloadCount: 1, operation: 'copyTo', nonReceiving: 'defaults', includeOrientation: false },
-  compile: (_nodeId, config, inputs, boundary) => {
+  compile: (_nodeId, config, inputs, boundary, ctx) => {
     const payloadCount = Math.max(1, Number(config.payloadCount) || 1);
     const operation = (config.operation as string) || 'copyTo';
     const resetSource = ((config.nonReceiving as string) || 'defaults') === 'defaults';
@@ -64,7 +64,7 @@ export const MoveSelfToNeighborNode: NodeTypeDef = {
     // Resolve target cell index ONCE. Used by every transfer.
     const niLocal = `_msn_ni_${_nodeId}`;
     lines.push(`const ${niLocal} = (${ni}) | 0;`);
-    const cellAccess = niCellExprStmts(niLocal, b, `${_nodeId}_msn`);
+    const cellAccess = niCellExprStmts(niLocal, b, `${_nodeId}_msn`, ctx?.is3d);
     lines.push(cellAccess.stmts);
     const nbr = cellAccess.cellExpr;
     lines.push(`if (${niLocal} !== ${0x80000000 | 0} && ${nbr} < total) {`);

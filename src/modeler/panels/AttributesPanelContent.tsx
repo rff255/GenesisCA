@@ -88,6 +88,8 @@ function handleRowDragEnd() {
 
 export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}) {
   const { model, addAttribute, removeAttribute, updateAttribute, reorderAttributes } = useModel();
+  // 3D Grid CA: neighborIndex attribute values pack 3 axes in a 3D model.
+  const is3dModel = model.properties.dimension === '3d' && (model.properties.gridDepth ?? 1) > 1;
   // One discriminated selection slot for this panel: `attr:<id>` or `var:<id>`.
   // Attributes and Local Variables share the single second detail panel, so
   // selecting one kind clears the other.
@@ -359,6 +361,7 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   attribute={selected}
                   onChange={cfg => updateAttribute(selected.id, cfg)}
                   neighborhoods={model.neighborhoods}
+                  is3d={is3dModel}
                 />
               ) : (
                 <input
@@ -423,6 +426,7 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                     onChange={cfg => updateAttribute(selected.id, cfg)}
                     neighborhoods={model.neighborhoods}
                     mode="boundary"
+                    is3d={is3dModel}
                   />
                 ) : (
                   <input
@@ -693,6 +697,7 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                             onChange={cfg => updateAttribute(selected.id, cfg)}
                             neighborhoods={model.neighborhoods}
                             mode="undefined"
+                            is3d={is3dModel}
                           />
                         ) : (
                           <input

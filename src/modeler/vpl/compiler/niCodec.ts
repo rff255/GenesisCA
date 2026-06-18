@@ -25,6 +25,12 @@
 /** Sentinel "no neighbor" NeighborIndex value. */
 export const INVALID_NI = 0x80000000 | 0; // -2147483648 as i32
 
+/** Lightweight 3D-model check for node files (avoids a circular import of
+ *  `is3dModel` from compile.ts). Mirrors that predicate: dimension 3d + depth>1. */
+export function is3dModelLike(model?: { properties?: { dimension?: string; gridDepth?: number } }): boolean {
+  return model?.properties?.dimension === '3d' && (model?.properties?.gridDepth ?? 1) > 1;
+}
+
 /** Node types whose array output is an NI[] (list of packed (dr, dc) NIs).
  *  Used by `arrayElement` to pick the right out-of-range default —
  *  `INVALID_NI` for NI[], plain `0` (or `false` / `0.0`) for value[] sources
@@ -52,22 +58,58 @@ export function unpackNI(packed: number): { dr: number; dc: number } {
 }
 
 // ---------------------------------------------------------------------------
+// 3D Grid CA — three-axis NI codec (packed `(dr, dc, dl)` i32).
+//
+// 2D uses 16 bits per axis (±32767); a third axis doesn't fit, so 3D packs THREE
+// 10-bit two's-complement fields (±511 — ample for any neighbourhood offset):
+//   bits 20-29 = dr, bits 10-19 = dc, bits 0-9 = dl.
+// Bit 31 stays free, so `INVALID_NI = 0x80000000` remains a valid sentinel in
+// BOTH encodings (consumers compare the bit pattern BEFORE decoding). The
+// compiler picks the 2D or 3D encoding per model (is3dModel); a 2D model emits
+// the verbatim 16-bit codec, so 2D output is byte-identical.
+// ---------------------------------------------------------------------------
+
+/** Pack `(dr, dc, dl)` integer offsets into a single i32 (10 bits/axis). */
+export function packNI3(dr: number, dc: number, dl: number): number {
+  return (((dr & 0x3FF) << 20) | ((dc & 0x3FF) << 10) | (dl & 0x3FF)) | 0;
+}
+
+/** Unpack a 3D NI value into `(dr, dc, dl)` (sign-extended 10-bit fields). */
+export function unpackNI3(packed: number): { dr: number; dc: number; dl: number } {
+  return {
+    dr: (packed << 2) >> 22,
+    dc: (packed << 12) >> 22,
+    dl: (packed << 22) >> 22,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // JS code-gen helpers — emit expressions that operate on packed NI values at
 // runtime in the compiled step / inputColor / outputMapping functions.
 // ---------------------------------------------------------------------------
 
-/** Emit a JS expression that decodes the dr (row offset) of a packed NI. */
-export function niDrExpr(niExpr: string): string {
-  return `((${niExpr}) >> 16)`;
+/** Emit a JS expression that decodes the dr (row offset) of a packed NI.
+ *  `is3d` switches to the 10-bit field at bits 20-29. */
+export function niDrExpr(niExpr: string, is3d = false): string {
+  return is3d ? `(((${niExpr}) << 2) >> 22)` : `((${niExpr}) >> 16)`;
 }
 
 /** Emit a JS expression that decodes the dc (column offset) of a packed NI. */
-export function niDcExpr(niExpr: string): string {
-  return `((${niExpr} << 16) >> 16)`;
+export function niDcExpr(niExpr: string, is3d = false): string {
+  return is3d ? `(((${niExpr}) << 12) >> 22)` : `((${niExpr} << 16) >> 16)`;
 }
 
-/** Emit a JS expression that packs `(drExpr, dcExpr)` into an NI value. */
-export function niPackExpr(drExpr: string, dcExpr: string): string {
+/** Emit a JS expression that decodes the dl (layer offset) of a packed 3D NI. */
+export function niDlExpr(niExpr: string): string {
+  return `(((${niExpr}) << 22) >> 22)`;
+}
+
+/** Emit a JS expression that packs `(drExpr, dcExpr[, dlExpr])` into an NI value.
+ *  When `is3d`, packs three 10-bit fields (dlExpr defaults to 0). */
+export function niPackExpr(drExpr: string, dcExpr: string, is3d = false, dlExpr = '0'): string {
+  if (is3d) {
+    return `(((((${drExpr}) & 0x3FF) << 20) | (((${dcExpr}) & 0x3FF) << 10) | ((${dlExpr}) & 0x3FF)) | 0)`;
+  }
   return `(((((${drExpr}) & 0xFFFF) << 16) | ((${dcExpr}) & 0xFFFF)) | 0)`;
 }
 
@@ -94,7 +136,34 @@ export function niCellExprStmts(
   niExpr: string,
   boundary: 'torus' | 'constant',
   idSuffix: string,
+  is3d = false,
 ): { stmts: string; cellExpr: string } {
+  if (is3d) {
+    // 3D: decode (dr, dc, dl) 10-bit fields; resolve via _layer/_row/_col + WH.
+    const dr = `((${niExpr}) << 2) >> 22`;
+    const dc = `((${niExpr}) << 12) >> 22`;
+    const dl = `((${niExpr}) << 22) >> 22`;
+    if (boundary === 'torus') {
+      return {
+        stmts: [
+          `const _al${idSuffix} = ((_layer + (${dl})) % D + D) % D;`,
+          `const _ar${idSuffix} = ((_row + (${dr})) % H + H) % H;`,
+          `const _ac${idSuffix} = ((_col + (${dc})) % W + W) % W;`,
+          `const _aix${idSuffix} = (_al${idSuffix} * H + _ar${idSuffix}) * W + _ac${idSuffix};`,
+        ].join(' '),
+        cellExpr: `_aix${idSuffix}`,
+      };
+    }
+    return {
+      stmts: [
+        `const _al${idSuffix} = _layer + (${dl});`,
+        `const _ar${idSuffix} = _row + (${dr});`,
+        `const _ac${idSuffix} = _col + (${dc});`,
+        `const _aix${idSuffix} = (_al${idSuffix} >= 0 && _al${idSuffix} < D && _ar${idSuffix} >= 0 && _ar${idSuffix} < H && _ac${idSuffix} >= 0 && _ac${idSuffix} < W) ? (_al${idSuffix} * H + _ar${idSuffix}) * W + _ac${idSuffix} : total;`,
+      ].join(' '),
+      cellExpr: `_aix${idSuffix}`,
+    };
+  }
   if (boundary === 'torus') {
     return {
       stmts: [

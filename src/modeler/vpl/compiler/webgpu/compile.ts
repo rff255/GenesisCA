@@ -33,7 +33,7 @@ import {
   detectWebGPUIncompatibilities, detectWebGPUModelIncompatibilities,
 } from '../../nodes/nodeValidation';
 import { getInlineValue, parseInlineNum } from '../inlinePort';
-import { INVALID_NI, packNI, NI_ARRAY_PRODUCERS } from '../niCodec';
+import { INVALID_NI, packNI, packNI3, NI_ARRAY_PRODUCERS } from '../niCodec';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } from '../sinkAnalysis';
 import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { injectLinkedOutputMappings } from '../linkedOutputMappings';
@@ -807,13 +807,19 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     const nbrId = node.data.config.neighborhoodId as string;
     const nbr = ctx.model.neighborhoods.find(n => n.id === nbrId);
     if (!nbr) { ctx.errors.push(`getAllNeighborIndexes: unknown neighborhood ${nbrId}`); return null; }
-    const arr = allocArray(ctx, 'i32', 'arrAllNbr', nbr.coords.length);
-    for (let k = 0; k < nbr.coords.length; k++) {
-      const [dr, dc] = nbr.coords[k]!;
-      const pk = packNI(dr, dc);
+    // 3D Grid CA: pack 3-axis offsets from coords3d; 2D packs the verbatim
+    // 2-axis codec (byte-identical). gridDepth>1 is the layout-level 3D predicate.
+    const is3d = ctx.layout.gridDepth > 1;
+    const coords3d = nbr.coords3d ?? [];
+    const len = is3d ? coords3d.length : nbr.coords.length;
+    const arr = allocArray(ctx, 'i32', 'arrAllNbr', len);
+    for (let k = 0; k < len; k++) {
+      const pk = is3d
+        ? packNI3(coords3d[k]![0], coords3d[k]![1], coords3d[k]![2])
+        : packNI(nbr.coords[k]![0], nbr.coords[k]![1]);
       ctx.lines.push(`  ${arr.name}[${k}] = ${pk};`);
     }
-    ctx.lines.push(`  ${arr.lenName} = ${nbr.coords.length};`);
+    ctx.lines.push(`  ${arr.lenName} = ${len};`);
     return arr;
   },
 
@@ -1308,6 +1314,17 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     const dcRef = inputs['dc'] ?? { expr: '0', type: 'i32' as WgslType };
     const drI = castTo(drRef, 'i32');
     const dcI = castTo(dcRef, 'i32');
+    if (ctx.layout.gridDepth > 1) {
+      // 3D: pack three 10-bit fields (dr<<20 | dc<<10 | dl).
+      const dlRef = inputs['dl'] ?? { expr: '0', type: 'i32' as WgslType };
+      const dlI = castTo(dlRef, 'i32');
+      return emitLet(
+        ctx,
+        'i32',
+        `(((${drI}) & 0x3FF) << 20) | (((${dcI}) & 0x3FF) << 10) | ((${dlI}) & 0x3FF)`,
+        'nio',
+      );
+    }
     return emitLet(
       ctx,
       'i32',
@@ -1330,6 +1347,16 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     const inExpr = castTo(idxRef, 'i32');
     const inName = fresh(ctx, 'bdnIn');
     ctx.lines.push(`  let ${inName}: i32 = ${inExpr};`);
+    if (ctx.layout.gridDepth > 1) {
+      // 3D: 10-bit dr/dc/dl. (i32 `>>` is arithmetic — sign-extends.)
+      const drRef = emitLet(ctx, 'i32', `((${inName}) << 2) >> 22`, 'bdnDr');
+      const dcRef = emitLet(ctx, 'i32', `((${inName}) << 12) >> 22`, 'bdnDc');
+      const dlRef = emitLet(ctx, 'i32', `((${inName}) << 22) >> 22`, 'bdnDl');
+      setCachedPort(ctx, node.id, 'dr', drRef);
+      setCachedPort(ctx, node.id, 'dc', dcRef);
+      setCachedPort(ctx, node.id, 'dl', dlRef);
+      return drRef;
+    }
     const drRef = emitLet(ctx, 'i32', `(${inName}) >> 16`, 'bdnDr');
     const dcRef = emitLet(ctx, 'i32', `((${inName}) << 16) >> 16`, 'bdnDc');
     setCachedPort(ctx, node.id, 'dr', drRef);
@@ -1348,6 +1375,18 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     const inExpr = castTo(idxRef, 'i32');
     const inName = fresh(ctx, 'flipIn');
     ctx.lines.push(`  let ${inName}: i32 = ${inExpr};`);
+    if (ctx.layout.gridDepth > 1) {
+      // 3D: decode 10-bit dr/dc/dl, negate dr/dc as configured, dl passes through.
+      const drExpr = flipDr ? `(-(((${inName}) << 2) >> 22))` : `(((${inName}) << 2) >> 22)`;
+      const dcExpr = flipDc ? `(-(((${inName}) << 12) >> 22))` : `(((${inName}) << 12) >> 22)`;
+      const dlExpr = `(((${inName}) << 22) >> 22)`;
+      return emitLet(
+        ctx,
+        'i32',
+        `(((${drExpr}) & 0x3FF) << 20) | (((${dcExpr}) & 0x3FF) << 10) | ((${dlExpr}) & 0x3FF)`,
+        'flipR',
+      );
+    }
     const drExpr = flipDr ? `(-((${inName}) >> 16))` : `((${inName}) >> 16)`;
     const dcExpr = flipDc ? `(-(((${inName}) << 16) >> 16))` : `(((${inName}) << 16) >> 16)`;
     return emitLet(

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Attribute } from '../model/types';
-import { unpackNI, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
+import { unpackNI, unpackNI3, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
 import styles from './InspectCellPopover.module.css';
 
 export type InspectPopoverState = {
@@ -19,6 +19,8 @@ interface Props {
   /** Variegated-cells orientation (0..3 = N/E/S/W head direction). null when
    *  the model isn't variegated or the worker hasn't published it yet. */
   orientation: number | null;
+  /** 3D Grid CA: decode neighborIndex attribute values with the 3-axis codec. */
+  is3d?: boolean;
   pulse: boolean;
   focused: boolean;
   totalOpen: number;
@@ -47,7 +49,7 @@ function formatFloat(v: number): string {
   return fixed.replace(/0+$/, '').replace(/\.$/, '.0');
 }
 
-function decodeAttrValue(v: number | undefined, attr: Attribute): string {
+function decodeAttrValue(v: number | undefined, attr: Attribute, is3d: boolean): string {
   if (v === undefined) return '—';
   switch (attr.type) {
     case 'bool': return v ? 'true' : 'false';
@@ -62,11 +64,13 @@ function decodeAttrValue(v: number | undefined, attr: Attribute): string {
     case 'neighborIndex': {
       const packed = v | 0;
       if (packed === INVALID_NI) return 'INVALID_NI (no neighbor)';
+      // 3D Grid CA: a 3D model packs three 10-bit offsets (dr, dc, dl); a 2D
+      // model packs two 16-bit offsets (dr, dc). Decode with the matching codec.
+      if (is3d) {
+        const { dr, dc, dl } = unpackNI3(packed);
+        return `(dr ${dr}, dc ${dc}, dl ${dl})`;
+      }
       const { dr, dc } = unpackNI(packed);
-      // 3D Grid CA: the neighborIndex codec packs exactly two 16-bit offsets
-      // (dr, dc) — there is NO third (dl) axis. The 3-axis codec redesign is
-      // deferred (the neighborIndex node family is gated off in 3D models), so
-      // there is no `dl` to show here. See PLAN_BG_DIMENSIONS_AND_MODES §6.5.
       return `(dr ${dr}, dc ${dc})`;
     }
     default: return formatFloat(v);
@@ -89,7 +93,7 @@ function parentMatches(parent: Attribute, parentValue: number | undefined, paren
 }
 
 export function InspectCellPopover({
-  popover, cellAttrs, values, color, orientation, pulse, focused, totalOpen,
+  popover, cellAttrs, values, color, orientation, is3d = false, pulse, focused, totalOpen,
   onClose, onCloseAll, onFocus, onDragEnd, onHoverEnter, onHoverLeave, onRectMeasure,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -227,7 +231,7 @@ export function InspectCellPopover({
         )}
         {cellAttrs.map(attr => {
           const rawValue = values?.[attr.id];
-          const rawText = decodeAttrValue(rawValue, attr);
+          const rawText = decodeAttrValue(rawValue, attr, is3d);
           let undefinedOverlay = false;
           if (attr.parentAttributeId) {
             const parent = attrById[attr.parentAttributeId];

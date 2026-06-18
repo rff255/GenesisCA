@@ -2,7 +2,6 @@ import type { NodeTypeDef } from '../types';
 
 export const PickRandomNeighborNode: NodeTypeDef = {
   type: 'pickRandomNeighbor',
-  requirements: { lattice2d: true },  // 2-axis packed neighborIndex codec — 2D only
   label: 'Pick Random Neighbor',
   description: 'Picks one element at random from a NeighborIndex array (e.g. the result of Filter Neighbors). Returns INVALID_NI (0x80000000) if the array is empty.',
   category: 'aggregation',
