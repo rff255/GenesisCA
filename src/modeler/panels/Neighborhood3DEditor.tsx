@@ -14,6 +14,7 @@
 import { useState } from 'react';
 import type { Neighborhood, NeighborhoodShapeSpec } from '../../model/types';
 import { generateCoords3d, coords2dProjection, describeShape, type Coord3 } from './neighborhood3d';
+import { NeighborhoodPreview3D } from './NeighborhoodPreview3D';
 import { NumberField } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
 
@@ -149,6 +150,9 @@ export function Neighborhood3DEditor({
           {selected.shape ? ` · ${describeShape(selected.shape)}` : ' · custom'}
         </span>
       </div>
+
+      {/* Live 3D preview — centre cell (amber) + neighbours (green), drag to orbit. */}
+      <NeighborhoodPreview3D coords3d={coords3d} includeCentral={!!selected.includeCentralCell} />
 
       {editorMode === 'parametric' && (
         <div className={styles.fieldGroup}>
