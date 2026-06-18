@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useModel } from '../model/ModelContext';
 import { compileGraph } from '../modeler/vpl/compiler/compile';
 import { hasGlyphsInModel } from '../modeler/vpl/compiler/glyphsUsage';
@@ -10,7 +10,7 @@ import { resolveKeyLabels } from '../modeler/vpl/compiler/variegation';
 import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefaultEditor';
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
-import { Gl3DRenderer } from './render/gl3d';
+import { Gl3DRenderer, panCamera } from './render/gl3d';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
 import { getGlyphTile } from './recording/glyphAtlas';
@@ -633,19 +633,30 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   is3dRef.current = is3D;
   const glCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const gl3dRef = useRef<import('./render/gl3d').Gl3DRenderer | null>(null);
-  const cam3dRef = useRef<import('./render/gl3d').Camera3D>({ yaw: 0.7, pitch: 0.5, dist: 1.7, panX: 0, panY: 0 });
+  // Z-up Blender-style orbit camera. Default 3/4 view looking down onto the XY plane.
+  const cam3dRef = useRef<import('./render/gl3d').Camera3D>({ yaw: -0.9, pitch: 0.6, dist: 1.9, target: [0, 0, 0] });
   const clip3dRef = useRef<import('./render/gl3d').ClipPlane3D>({ enabled: false, axis: 'z', value: 0 });
   const alpha3dRef = useRef(false);
+  const viz3dRef = useRef<import('./render/gl3d').Viz3D>({ axes: false, grid: false, bounds: true, gizmo: true });
+  // Interaction plane: LMB-brush ray-traces onto this slicing plane.
+  const plane3dRef = useRef<{ axis: 'x' | 'y' | 'z'; pos: number }>({ axis: 'z', pos: 0 });
+  const plane3dEnabledRef = useRef(false);
+  // Auto-orbit (rAF loop increments yaw).
+  const orbit3dRef = useRef<{ on: boolean; speed: number }>({ on: false, speed: 0.4 });
   // 3D pick → inspector. Set below `commitInspectPopover` (which is declared
   // later in the component); the pointer effect calls it via this ref.
   const openInspect3dRef = useRef<((idx: number, x: number, y: number) => void) | null>(null);
   // 3D paint: set below flushPaintBatch; the pointer effect calls it on LMB-click.
   const paint3dRef = useRef<((idx: number) => void) | null>(null);
   // 3D control UI state (mirrored into the refs the renderer reads).
-  const [clip3d, setClip3d] = useState<{ enabled: boolean; axis: 'x' | 'y' | 'z'; value: number }>(
+  const [clip3d, setClip3d] = useState<{ enabled: boolean; axis: 'x' | 'y' | 'z' | 'camera'; value: number }>(
     { enabled: false, axis: 'z', value: 0 },
   );
   const [alpha3d, setAlpha3d] = useState(false);
+  const [viz3d, setViz3d] = useState<import('./render/gl3d').Viz3D>({ axes: false, grid: false, bounds: true, gizmo: true });
+  const [plane3d, setPlane3d] = useState<{ enabled: boolean; axis: 'x' | 'y' | 'z'; pos: number }>({ enabled: false, axis: 'z', pos: 0 });
+  const [orbit3d, setOrbit3d] = useState<{ on: boolean; speed: number }>({ on: false, speed: 0.4 });
+  const [controls3dOpen, setControls3dOpen] = useState(true);
   // Which viewers want the zoomed-out glyph-color fallback (Set Cell Looks with
   // useGlyph + fallbackToGlyphColor). `all` = a node used the Current-Selected
   // sentinel (applies to every viewer). Scanned from the model below.
@@ -791,6 +802,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       r.setGrid(w3, h3, d3);
       r.setAlphaBlend(alpha3dRef.current);
       r.setClipPlane(clip3dRef.current);
+      r.setViz(viz3dRef.current);
       r.setCamera(cam3dRef.current, r.canvasWidth / (r.canvasHeight || 1));
       r.uploadColors(colors3d, w3 * h3 * d3);
       r.render();
@@ -2206,69 +2218,87 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     return () => { if (gl3dRef.current) { gl3dRef.current.dispose(); gl3dRef.current = null; } };
   }, [is3D, draw]);
 
-  // 3D Grid CA: pointer handlers on the GL canvas — LMB-drag orbit, wheel zoom,
-  // MMB / Shift+LMB pan, Shift+LMB-click (no drag) opens the cell inspector via
-  // colour-id pick. Attached only while 3D; reads camera through cam3dRef.
+  // 3D Grid CA: GL-canvas pointer handlers, Blender-flavoured.
+  //   • MMB-drag OR Alt+LMB-drag           → orbit (Z-up)
+  //   • Shift+MMB OR Shift+Alt+LMB drag    → pan (screen-space, tracks the view)
+  //   • wheel                              → dolly zoom
+  //   • Ctrl+LMB click                     → inspect the picked cell
+  //   • plain LMB drag/click               → brush onto the interaction plane
+  //   (LMB free for brushing is why orbit is on MMB / Alt+LMB, like Blender.)
   useEffect(() => {
     if (!is3D) return;
     const glc = glCanvasRef.current;
     if (!glc) return;
-    let dragging = false;
-    let mode: 'orbit' | 'pan' = 'orbit';
+    let active: 'orbit' | 'pan' | 'brush' | null = null;
     let lastX = 0, lastY = 0, downX = 0, downY = 0, moved = false;
+    const maxDim = () => Math.max(gridWidth.current, gridHeight.current, gridDepth.current, 1);
+    const brushAt = (clientX: number, clientY: number) => {
+      const r = gl3dRef.current; const pl = plane3dRef.current;
+      if (!r || !plane3dEnabledRef.current) return;
+      const rect = glc.getBoundingClientRect();
+      const hit = r.pickOnPlane(clientX - rect.left, clientY - rect.top, rect.width, rect.height, pl.axis, pl.pos);
+      if (hit) {
+        const idx = (hit.layer * gridHeight.current + hit.row) * gridWidth.current + hit.col;
+        paint3dRef.current?.(idx);
+      }
+    };
     const onDown = (e: PointerEvent) => {
       if ((e.target as HTMLElement)?.closest?.('[data-sim-overlay]')) return;
-      dragging = true; moved = false;
+      moved = false;
       lastX = downX = e.clientX; lastY = downY = e.clientY;
-      mode = (e.button === 1 || e.shiftKey) ? 'pan' : 'orbit';
+      const orbitBtn = e.button === 1 || (e.button === 0 && e.altKey);
+      if (orbitBtn) active = e.shiftKey ? 'pan' : 'orbit';
+      else if (e.button === 0 && (e.ctrlKey || e.metaKey)) active = null; // handled on up (inspect)
+      else if (e.button === 0) { active = 'brush'; brushAt(e.clientX, e.clientY); }
+      else active = null;
       glc.setPointerCapture?.(e.pointerId);
       e.preventDefault();
     };
     const onMove = (e: PointerEvent) => {
-      if (!dragging) return;
+      if (!active) return;
       const dx = e.clientX - lastX, dy = e.clientY - lastY;
       lastX = e.clientX; lastY = e.clientY;
       if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 3) moved = true;
       const cam = cam3dRef.current;
-      if (mode === 'orbit') {
-        cam.yaw += dx * 0.01;
+      if (active === 'orbit') {
+        cam.yaw -= dx * 0.01;
         cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch + dy * 0.01));
-      } else {
-        const k = cam.dist * 0.0025 * Math.max(gridWidth.current, gridHeight.current, gridDepth.current);
-        cam.panX -= dx * k; cam.panY += dy * k;
+      } else if (active === 'pan') {
+        const scale = cam.dist * maxDim() / (glc.clientHeight || 500);
+        panCamera(cam, dx, dy, scale);
+      } else if (active === 'brush') {
+        brushAt(e.clientX, e.clientY);
       }
       draw();
     };
     const onUp = (e: PointerEvent) => {
-      if (!dragging) return;
-      dragging = false;
       glc.releasePointerCapture?.(e.pointerId);
-      // No-drag click: Shift → inspect the picked cell; plain LMB → paint it
-      // (3D v1 paints a single cell — radius-1 — via colour-id pick).
-      if (!moved && gl3dRef.current && mode !== 'pan') {
+      // Ctrl/Cmd+LMB click (no drag) → inspect the picked cell.
+      if (!moved && e.button === 0 && (e.ctrlKey || e.metaKey) && gl3dRef.current) {
         const rect = glc.getBoundingClientRect();
         const idx = gl3dRef.current.pick(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
-        if (idx >= 0) {
-          if (e.shiftKey) openInspect3dRef.current?.(idx, e.clientX, e.clientY);
-          else paint3dRef.current?.(idx);
-        }
+        if (idx >= 0) openInspect3dRef.current?.(idx, e.clientX, e.clientY);
       }
+      active = null;
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const cam = cam3dRef.current;
-      cam.dist = Math.max(0.2, Math.min(20, cam.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
+      cam.dist = Math.max(0.2, Math.min(40, cam.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
       draw();
     };
+    const onCtx = (e: MouseEvent) => e.preventDefault();  // RMB shouldn't pop the page menu
     glc.addEventListener('pointerdown', onDown);
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     glc.addEventListener('wheel', onWheel, { passive: false });
+    glc.addEventListener('contextmenu', onCtx);
     return () => {
       glc.removeEventListener('pointerdown', onDown);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       glc.removeEventListener('wheel', onWheel);
+      glc.removeEventListener('contextmenu', onCtx);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [is3D, draw]);
@@ -2289,9 +2319,31 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     W.__sim3dRenderer = () => gl3dRef.current;
   }, [is3D, draw]);
 
-  // 3D Grid CA: mirror the clip/alpha control state into the renderer refs + redraw.
+  // 3D Grid CA: mirror the control state into the renderer refs + redraw.
   useEffect(() => { clip3dRef.current = clip3d; draw(); }, [clip3d, draw]);
   useEffect(() => { alpha3dRef.current = alpha3d; draw(); }, [alpha3d, draw]);
+  useEffect(() => { viz3dRef.current = viz3d; draw(); }, [viz3d, draw]);
+  useEffect(() => {
+    plane3dRef.current = { axis: plane3d.axis, pos: plane3d.pos };
+    plane3dEnabledRef.current = plane3d.enabled;
+    draw();
+  }, [plane3d, draw]);
+  useEffect(() => { orbit3dRef.current = orbit3d; }, [orbit3d]);
+
+  // 3D Grid CA: auto-orbit loop — spins the camera while enabled (and 3D + visible).
+  useEffect(() => {
+    if (!is3D || !orbit3d.on) return;
+    let raf = 0; let last = 0;
+    const tick = (ts: number) => {
+      if (!visibleRef.current) { raf = requestAnimationFrame(tick); return; }
+      const dt = last ? (ts - last) / 1000 : 0; last = ts;
+      cam3dRef.current.yaw += orbit3dRef.current.speed * dt;
+      draw();
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [is3D, orbit3d, draw]);
 
   // Pause simulation when leaving tab, redraw when coming back
   useEffect(() => {
@@ -4325,41 +4377,98 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           >&#x26F6;</button>
         </div>
 
-        {/* 3D Grid CA: voxel-view controls (clip/slice plane = PRIMARY see-inside,
-            opt-in alpha blend, reset camera). Shown only for 3D models. */}
+        {/* 3D Grid CA: collapsible voxel-view controls. Shown only for 3D models. */}
         {is3D && (() => {
-          const ext = clip3d.axis === 'x' ? (model.properties.gridWidth - 1) / 2
-            : clip3d.axis === 'y' ? (model.properties.gridHeight - 1) / 2
-            : ((model.properties.gridDepth ?? 1) - 1) / 2;
+          const W = model.properties.gridWidth, H = model.properties.gridHeight, D = model.properties.gridDepth ?? 1;
+          const maxDim = Math.max(W, H, D);
+          const clipExt = clip3d.axis === 'x' ? (W - 1) / 2 + 0.5
+            : clip3d.axis === 'y' ? (H - 1) / 2 + 0.5
+            : clip3d.axis === 'z' ? (D - 1) / 2 + 0.5
+            : maxDim / 2 + 1;  // camera axis
+            const planeMax = plane3d.axis === 'x' ? W - 1 : plane3d.axis === 'y' ? H - 1 : D - 1;
+          const row: CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' };
+          const vizBtn = (key: keyof import('./render/gl3d').Viz3D, label: string, title: string) => (
+            <button className={`${styles.zoomBtn} ${viz3d[key] ? styles.zoomBtnActive : ''}`} style={{ flex: 1, minWidth: 0 }}
+              title={title} onClick={() => setViz3d(v => ({ ...v, [key]: !v[key] }))}>{label}</button>
+          );
           return (
-            <div className={styles.zoomControls} data-sim-overlay style={{ bottom: 'auto', top: 12, right: 12, left: 'auto', flexDirection: 'column', alignItems: 'stretch', minWidth: 168, gap: 6, padding: 8 }}>
-              <div style={{ fontSize: '0.66rem', color: '#aaa', fontWeight: 600 }}>3D View</div>
-              <button className={styles.zoomBtn} style={{ width: '100%' }}
-                onClick={() => { cam3dRef.current = { yaw: 0.7, pitch: 0.5, dist: 1.7, panX: 0, panY: 0 }; draw(); }}
-                title="Reset the orbit camera">Reset view</button>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}>
-                <input type="checkbox" checked={clip3d.enabled}
-                  onChange={e => setClip3d(c => ({ ...c, enabled: e.target.checked, value: e.target.checked ? 0 : c.value }))} />
-                Clip plane (see inside)
-              </label>
-              {clip3d.enabled && (
-                <>
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    {(['x', 'y', 'z'] as const).map(ax => (
-                      <button key={ax} className={`${styles.zoomBtn} ${clip3d.axis === ax ? styles.zoomBtnActive : ''}`}
-                        style={{ flex: 1 }} onClick={() => setClip3d(c => ({ ...c, axis: ax, value: 0 }))}>{ax.toUpperCase()}</button>
-                    ))}
-                  </div>
-                  <input type="range" min={-ext} max={ext} step={0.5} value={clip3d.value}
-                    onChange={e => setClip3d(c => ({ ...c, value: Number(e.target.value) }))}
-                    style={{ width: '100%' }} title="Slice position" />
-                </>
-              )}
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }}
-                title="Blend translucent cells back-to-front (opt-in; opaque is the default)">
-                <input type="checkbox" checked={alpha3d} onChange={e => setAlpha3d(e.target.checked)} />
-                Alpha blend
-              </label>
+            <div className={styles.zoomControls} data-sim-overlay style={{ bottom: 'auto', top: 12, right: 12, left: 'auto', flexDirection: 'column', alignItems: 'stretch', minWidth: 184, gap: 6, padding: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
+                onClick={() => setControls3dOpen(o => !o)} title={controls3dOpen ? 'Collapse' : 'Expand'}>
+                <span style={{ fontSize: '0.66rem', color: '#aaa', fontWeight: 600 }}>3D View</span>
+                <span style={{ fontSize: '0.7rem', color: '#aaa' }}>{controls3dOpen ? '▾' : '▸'}</span>
+              </div>
+              {controls3dOpen && (<>
+                <button className={styles.zoomBtn} style={{ width: '100%' }}
+                  onClick={() => { cam3dRef.current = { yaw: -0.9, pitch: 0.6, dist: 1.9, target: [0, 0, 0] }; draw(); }}
+                  title="Reset the orbit camera">Reset view</button>
+
+                {/* Overlays */}
+                <div style={{ display: 'flex', gap: 4 }}>
+                  {vizBtn('axes', 'Axes', 'Toggle the X/Y/Z axes (red/green/blue)')}
+                  {vizBtn('grid', 'Grid', 'Toggle the X,Y floor grid')}
+                  {vizBtn('bounds', 'Bounds', 'Toggle the grid bounding box')}
+                  {vizBtn('gizmo', 'Gizmo', 'Toggle the corner orientation widget')}
+                </div>
+
+                {/* Auto-orbit */}
+                <label style={row} title="Slowly spin the camera around the volume">
+                  <input type="checkbox" checked={orbit3d.on} onChange={e => setOrbit3d(o => ({ ...o, on: e.target.checked }))} />
+                  Auto-orbit
+                  {orbit3d.on && (
+                    <input type="range" min={0.05} max={2} step={0.05} value={orbit3d.speed} style={{ flex: 1 }}
+                      title="Orbit speed (rad/s)" onChange={e => setOrbit3d(o => ({ ...o, speed: Number(e.target.value) }))} />
+                  )}
+                </label>
+
+                {/* Clip / slice plane */}
+                <label style={row}>
+                  <input type="checkbox" checked={clip3d.enabled}
+                    onChange={e => setClip3d(c => ({ ...c, enabled: e.target.checked, value: e.target.checked ? 0 : c.value }))} />
+                  Clip plane (see inside)
+                </label>
+                {clip3d.enabled && (
+                  <>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      {(['x', 'y', 'z', 'camera'] as const).map(ax => (
+                        <button key={ax} className={`${styles.zoomBtn} ${clip3d.axis === ax ? styles.zoomBtnActive : ''}`}
+                          style={{ flex: 1, minWidth: 0 }} title={ax === 'camera' ? 'Cut along the camera view axis' : `Cut along ${ax.toUpperCase()}`}
+                          onClick={() => setClip3d(c => ({ ...c, axis: ax, value: 0 }))}>{ax === 'camera' ? 'View' : ax.toUpperCase()}</button>
+                      ))}
+                    </div>
+                    <input type="range" min={-clipExt} max={clipExt} step={0.5} value={clip3d.value}
+                      onChange={e => setClip3d(c => ({ ...c, value: Number(e.target.value) }))}
+                      style={{ width: '100%' }} title="Slice position" />
+                  </>
+                )}
+
+                {/* Interaction plane (brush target) */}
+                <label style={row} title="LMB-brush ray-traces onto this plane; pick a cell on its slice">
+                  <input type="checkbox" checked={plane3d.enabled}
+                    onChange={e => setPlane3d(p => ({ ...p, enabled: e.target.checked }))} />
+                  Brush plane
+                </label>
+                {plane3d.enabled && (
+                  <>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      {(['x', 'y', 'z'] as const).map(ax => (
+                        <button key={ax} className={`${styles.zoomBtn} ${plane3d.axis === ax ? styles.zoomBtnActive : ''}`}
+                          style={{ flex: 1, minWidth: 0 }}
+                          onClick={() => setPlane3d(p => ({ ...p, axis: ax, pos: 0 }))}>{ax.toUpperCase()}</button>
+                      ))}
+                    </div>
+                    <input type="range" min={0} max={planeMax} step={1} value={plane3d.pos}
+                      onChange={e => setPlane3d(p => ({ ...p, pos: Number(e.target.value) }))}
+                      style={{ width: '100%' }} title={`Plane at ${plane3d.axis}=${plane3d.pos}`} />
+                  </>
+                )}
+
+                {/* Alpha blend */}
+                <label style={row} title="Blend translucent cells back-to-front (opt-in; opaque is the default)">
+                  <input type="checkbox" checked={alpha3d} onChange={e => setAlpha3d(e.target.checked)} />
+                  Alpha blend
+                </label>
+              </>)}
             </div>
           );
         })()}
