@@ -1912,8 +1912,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // restore them.
     if (model.simulationState && !pendingSimStateRestore.current) {
       const s = model.simulationState;
+      // 3D Grid CA: include DEPTH in the match (a snapshot is laid out for a
+      // specific W×H×D). Without this a gridDepth edit slips through as
+      // "compatible", the stale snapshot is re-armed, and applySimulationState's
+      // adapt branch reverted the depth — the dimension-reset loop in 3D.
+      const sDepth = s.gridDepth ?? s.depth ?? 1;
       const dimsMatch = (s.width == null && s.height == null)
-        || (s.width === w && s.height === h);
+        ? sDepth === d3
+        : (s.width === w && s.height === h && sDepth === d3);
       // Stored states from before boundary was tracked have no
       // `boundaryTreatment` field — treat as compatible (don't pre-emptively
       // drop them). Newer snapshots are stamped on save.
@@ -3717,7 +3723,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     e.target.value = '';
     try {
       const state = await readStateFile(file);
-      applySimulationState(state);
+      applySimulationState(state, { adaptDims: true });  // explicit file load — its dims are authoritative
     } catch (err) {
       setCompileError(String(err));
     }
@@ -3774,7 +3780,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const dimsChanged = dimsFromState != null
       && (dimsFromState.w !== gridWidth.current || dimsFromState.h !== gridHeight.current || dimsFromState.d !== gridDepth.current);
     if ((boundaryChanged || dimsChanged) && playing) setPlaying(false);
-    applySimulationState(p.state);
+    applySimulationState(p.state, { adaptDims: true });  // explicit preset load — its dims are authoritative
   };
 
   const handleDeletePreset = (p: Preset) => {
@@ -3804,8 +3810,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     workerRef.current.postMessage({ type: 'getState' });
   };
 
-  const applySimulationState = useCallback((state: SimulationState) => {
+  const applySimulationState = useCallback((state: SimulationState, opts?: { adaptDims?: boolean }) => {
     if (!workerRef.current) return;
+    // adaptDims: may this restore CHANGE the model's grid dims / boundary to match
+    // the snapshot? True only for AUTHORITATIVE loads (a .gcastate file or a preset
+    // the user explicitly opened — there the saved dims are what the user wants).
+    // The embedded auto-restore (pendingSimStateRestore, fired after a structural
+    // reinit) passes false: the model is the source of truth there, so a snapshot
+    // whose dims no longer match was invalidated by a user edit and must be DROPPED,
+    // never used to revert the edit. (Reverting was the dimension-reset loop.)
+    const adaptDims = opts?.adaptDims ?? false;
 
     // Wave A.6: standalone .gcastate files saved by pre-A.6 builds carry no
     // schemaVersion and may hold slot-index NI cell-attr arrays. Migrate
@@ -3834,6 +3848,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const dimsChanged = dimsFromState != null
       && (dimsFromState.w !== gridWidth.current || dimsFromState.h !== gridHeight.current || dimsFromState.d !== gridDepth.current);
     if (boundaryChanged || dimsChanged) {
+      if (!adaptDims) {
+        // Embedded auto-restore of a snapshot that no longer matches the model's
+        // grid → the user edited the dimensions / boundary after load. Drop the
+        // stale snapshot (the model wins) instead of reverting the edit. Clearing
+        // it from the model stops it re-arming on every subsequent structural edit.
+        pendingSimStateRestore.current = null;
+        if (model.simulationState) setSimulationState(undefined);
+        return;
+      }
       pendingSimStateRestore.current = state;
       const changes: Partial<import('../model/types').ModelProperties> = {};
       if (boundaryChanged) changes.boundaryTreatment = state.boundaryTreatment!;
@@ -3967,7 +3990,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
 
     workerRef.current.postMessage(loadMsg);
-  }, [model.properties.boundaryTreatment, updateProperties]);
+  }, [model.properties.boundaryTreatment, model.simulationState, updateProperties, setSimulationState]);
 
   // F5: Apply dimension override
   const handleApplyDimensions = () => {
