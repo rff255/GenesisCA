@@ -33,8 +33,8 @@ export interface WebGPULayoutAttr {
 export interface WebGPULayoutNbr {
   id: string;
   size: number;        // neighbour count per cell (= coords.length)
-  /** Element count in the offsets buffer for this neighbourhood. = size * 2
-   *  (one i32 each for dRow, dCol, per neighbour offset). */
+  /** Element count in the offsets buffer for this neighbourhood. = size * stride
+   *  (stride = 2 in 2D: dRow, dCol; 3 in 3D: dRow, dCol, dLayer). */
   count: number;
   /** Offset within the nbrOffsets buffer, in bytes. */
   byteOffset: number;
@@ -42,8 +42,11 @@ export interface WebGPULayoutNbr {
    *  Compiler emits this as the `baseOffset` arg to `nbrCellIdx`. */
   wordOffset: number;
   /** Pre-flattened relative coords [dRow, dCol] per neighbour — uploaded
-   *  verbatim into the offsets buffer at `byteOffset`. */
+   *  verbatim into the offsets buffer at `byteOffset`. 2D. */
   coords: Array<[number, number]>;
+  /** 3D Grid CA: [dRow, dCol, dLayer] per neighbour, present iff the layout is
+   *  3D (gridDepth > 1). uploadNeighborOffsets packs these as 3 i32/neighbour. */
+  coords3d?: Array<[number, number, number]>;
 }
 
 /** Per-lookup-table location within the varAux buffer. */
@@ -59,7 +62,7 @@ export interface WebGPUInteractionTableLayout {
 }
 
 export interface WebGPULayout {
-  /** Total cells in the grid (width * height). */
+  /** Total cells in the grid (width * height * depth). */
   total: number;
   /** total + 1 when boundary is "constant", else total. Sentinel slot is `total`. */
   cellsPerAttr: number;
@@ -69,6 +72,10 @@ export interface WebGPULayout {
    *  modulo math defined. */
   gridWidth: number;
   gridHeight: number;
+  /** 3D Grid CA: layer count. 1 → 2D (the `nbrCellIdx`/decode helpers emit the
+   *  verbatim 2-axis form, byte-identical). >1 → the 3D `nbrCellIdx` (reads a
+   *  3rd offset, wraps/clamps the layer) and the per-cell layer/row/col decode. */
+  gridDepth: number;
   /** Boundary mode (selects which `nbrCellIdx` helper variant the encoder
    *  emits — torus wraps, constant returns the sentinel). */
   boundaryTreatment: 'torus' | 'constant';
@@ -150,7 +157,11 @@ export interface WebGPULayout {
 export function computeWebGPULayout(model: CAModel): WebGPULayout {
   const gridWidth = Math.max(1, model.properties.gridWidth || 1);
   const gridHeight = Math.max(1, model.properties.gridHeight || 1);
-  const total = gridWidth * gridHeight;
+  // 3D Grid CA: honour gridDepth only in a 3D model (mirrors the JS/WASM/worker
+  // predicate so the baked `total` bound can't desync). gridDepth === 1 → 2D fast path.
+  const gridDepth = model.properties.dimension === '3d' ? Math.max(1, model.properties.gridDepth || 1) : 1;
+  const total = gridWidth * gridHeight * gridDepth;
+  const is3d = gridDepth > 1;
   const isConstantBoundary = model.properties.boundaryTreatment === 'constant';
   const cellsPerAttr = isConstantBoundary ? total + 1 : total;
   const sentinelIndex = isConstantBoundary ? total : -1;
@@ -200,19 +211,30 @@ export function computeWebGPULayout(model: CAModel): WebGPULayout {
   // `size × 2` i32 entries — pairs of (dRow, dCol). The shader-side
   // `nbrCellIdx` helper reads these and computes the linear cell index inline,
   // applying the boundary rule. Total bytes are independent of grid size.
+  // 3D Grid CA: 3 i32 per neighbour (dRow, dCol, dLayer) when the model is 3D,
+  // else 2 (dRow, dCol). The shader-side nbrCellIdx reads the matching stride.
+  const nbrStride = is3d ? 3 : 2;
   let nbrCursor = 0;
   const nbrs: WebGPULayoutNbr[] = (model.neighborhoods || []).map(n => {
-    const size = n.coords.length;
-    const count = size * 2;
+    // coords3d is the 3D source of truth; fall back to the 2D coords (dl = 0)
+    // when a 3D model has a 2D-only neighbourhood. size = neighbour COUNT.
+    const src3d: Array<[number, number, number]> = is3d
+      ? (n.coords3d && n.coords3d.length
+          ? n.coords3d.map(c => [(c[0] | 0), (c[1] | 0), (c[2] | 0)] as [number, number, number])
+          : n.coords.map(c => [(c[0] | 0), (c[1] | 0), 0] as [number, number, number]))
+      : [];
+    const size = is3d ? src3d.length : n.coords.length;
+    const count = size * nbrStride;
     const bytes = count * 4;
-    // Defensive clone: (a) coerce each pair into a fresh tuple so later edits
-    // to the model's coords array can't mutate the layout view, (b) coerce
-    // each component to int32 so non-integer junk in a saved file lands as 0.
+    // Defensive clone: coerce each component to int32 so non-integer junk in a
+    // saved file lands as 0, and freeze a fresh tuple so model edits can't mutate
+    // the layout view.
     const coords: Array<[number, number]> = n.coords.map(c => [(c[0] | 0), (c[1] | 0)]);
     const entry: WebGPULayoutNbr = {
       id: n.id, size, count,
       byteOffset: nbrCursor, wordOffset: nbrCursor / 4,
       coords,
+      ...(is3d ? { coords3d: src3d } : {}),
     };
     nbrCursor += bytes;
     return entry;
@@ -292,6 +314,7 @@ export function computeWebGPULayout(model: CAModel): WebGPULayout {
     sentinelIndex,
     gridWidth,
     gridHeight,
+    gridDepth,
     boundaryTreatment,
     attrsBytes,
     attrs,
