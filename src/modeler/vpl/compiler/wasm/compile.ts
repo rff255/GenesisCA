@@ -5077,7 +5077,11 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
         pushValueAs(ctx.emitter, b, I32);
         ctx.emitter.i32Store8(ctx.layout.colorsOffset + 2, 0);
         ctx.emitter.localGet(colorByte);
-        ctx.emitter.i32Const(255);
+        // Cell alpha (default inline 255 → i32Const(255), byte-identical).
+        // i32Store8 truncates to the low byte, matching r/g/b's existing
+        // out-of-range behaviour (JS clamps via Uint8ClampedArray — same caveat).
+        const a = inputs['a'] ?? { inline: true, value: 255, valtype: I32 };
+        pushValueAs(ctx.emitter, a, I32);
         ctx.emitter.i32Store8(ctx.layout.colorsOffset + 3, 0);
       }
       if (doGlyph) {
