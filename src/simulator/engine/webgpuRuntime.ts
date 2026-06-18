@@ -494,7 +494,10 @@ fn presentColors(@builtin(global_invocation_id) gid: vec3<u32>) {
   let g = f32((packed >>  8u) & 0xffu) / 255.0;
   let b = f32((packed >> 16u) & 0xffu) / 255.0;
   let a = f32((packed >> 24u) & 0xffu) / 255.0;
-  textureStore(canvasOut, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(r, g, b, a));
+  // Authorable RGBA alpha (PR7): the canvas is configured 'premultiplied', so
+  // write premultiplied RGB. For the default a=1.0 this is identity (r,g,b,1) —
+  // every existing opaque model renders unchanged; sub-255 alpha now blends.
+  textureStore(canvasOut, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(r * a, g * a, b * a, a));
 }
 `;
 }
@@ -513,7 +516,10 @@ export function setupDirectRender(rt: WebGPURuntime): void {
     device: rt.device,
     format,
     usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_DST,
-    alphaMode: 'opaque',
+    // PR7: 'premultiplied' so authored sub-255 alpha shows through (matches the
+    // 2D canvas's source-over compositing). The present shader writes premultiplied
+    // RGB; default a=255 → identity, so existing opaque models are unchanged.
+    alphaMode: 'premultiplied',
   });
   rt.canvasContext = ctx;
   rt.canvasFormat = format;

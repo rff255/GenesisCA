@@ -21,22 +21,30 @@ import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 
 export interface CompileAllResult {
-  js: { stepCode: string; error: string | null };
+  js: { stepCode: string; fullCode: string; error: string | null };
   wasm: { total: number; bytesLen: number; bytesJoined: string; error: string | null };
   webgpu: { shaderCode: string; error: string | null };
 }
 
 export function compileAll(model: CAModel): CompileAllResult {
   const out: CompileAllResult = {
-    js: { stepCode: '', error: null },
+    js: { stepCode: '', fullCode: '', error: null },
     wasm: { total: 0, bytesLen: 0, bytesJoined: '', error: null },
     webgpu: { shaderCode: '', error: null },
   };
-  // JS
+  // JS — capture step + initCode + all inputColor + all outputMapping code so
+  // OM/IC/init emits (e.g. setCellLooks colour writes) are searchable.
   try {
-    const js = compileGraph(model.graphNodes, model.graphEdges, model);
+    const js = compileGraph(model.graphNodes, model.graphEdges, model) as {
+      stepCode?: string; initCode?: string; error?: string;
+      inputColorCodes?: Array<{ code: string }>; outputMappingCodes?: Array<{ code: string }>;
+    };
     out.js.stepCode = js.stepCode || '';
-    out.js.error = (js as { error?: string }).error || null;
+    const parts = [js.stepCode || '', js.initCode || ''];
+    for (const ic of js.inputColorCodes || []) parts.push(ic.code);
+    for (const om of js.outputMappingCodes || []) parts.push(om.code);
+    out.js.fullCode = parts.join('\n');
+    out.js.error = js.error || null;
   } catch (e) {
     out.js.error = String((e as Error)?.message || e);
   }

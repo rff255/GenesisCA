@@ -43,6 +43,10 @@ export const SetCellLooksNode: NodeTypeDef = {
     { id: 'r', label: 'R', kind: 'input', category: 'value', dataType: 'integer', inlineWidget: 'number', defaultValue: '0' },
     { id: 'g', label: 'G', kind: 'input', category: 'value', dataType: 'integer', inlineWidget: 'number', defaultValue: '0' },
     { id: 'b', label: 'B', kind: 'input', category: 'value', dataType: 'integer', inlineWidget: 'number', defaultValue: '0' },
+    // Cell alpha (0 = fully transparent, 255 = opaque). Default 255 keeps every
+    // existing model byte-identical. Used by the 3D voxel renderer to cull /
+    // blend cells; the 2D canvas composites it source-over too.
+    { id: 'a', label: 'A', kind: 'input', category: 'value', dataType: 'integer', inlineWidget: 'number', defaultValue: '255' },
     // Glyph (codepoint) + glyph color.
     { id: 'glyph', label: 'Glyph', kind: 'input', category: 'value', dataType: 'integer', inlineWidget: 'glyph', defaultValue: '0' },
     { id: 'glyphR', label: 'Glyph R', kind: 'input', category: 'value', dataType: 'integer', inlineWidget: 'number', defaultValue: '255' },
@@ -53,8 +57,8 @@ export const SetCellLooksNode: NodeTypeDef = {
   hiddenPorts: (config) => {
     const useGlyph = !!config.useGlyph;
     if (!useGlyph) return ['glyph', 'glyphR', 'glyphG', 'glyphB'];
-    // glyph mode — hide the cell-color ports unless the background is enabled.
-    return config.setBackground === false ? ['r', 'g', 'b'] : [];
+    // glyph mode — hide the cell-color ports (incl. alpha) unless the background is enabled.
+    return config.setBackground === false ? ['r', 'g', 'b', 'a'] : [];
   },
   compile: (nodeId, config, inputs) => {
     void nodeId;
@@ -62,7 +66,7 @@ export const SetCellLooksNode: NodeTypeDef = {
     const useGlyph = !!config.useGlyph;
     const setBg = config.setBackground !== false; // default true
     const writeBg = (!useGlyph || setBg)
-      ? `colors[colorIdx] = ${inputs['r'] || '0'}; colors[colorIdx+1] = ${inputs['g'] || '0'}; colors[colorIdx+2] = ${inputs['b'] || '0'}; colors[colorIdx+3] = 255;`
+      ? `colors[colorIdx] = ${inputs['r'] || '0'}; colors[colorIdx+1] = ${inputs['g'] || '0'}; colors[colorIdx+2] = ${inputs['b'] || '0'}; colors[colorIdx+3] = ${inputs['a'] || '255'};`
       : '';
     let writeGlyph = '';
     if (useGlyph) {

@@ -2725,7 +2725,12 @@ const FLOW_NODE_EMITTERS: Record<string, NodeFlowEmitter> = {
       const re = `u32(clamp(${castTo(r, 'i32')}, 0, 255))`;
       const ge = `u32(clamp(${castTo(g, 'i32')}, 0, 255))`;
       const be = `u32(clamp(${castTo(b, 'i32')}, 0, 255))`;
-      writes.push(`colors[idx] = (${re}) | ((${ge}) << 8u) | ((${be}) << 16u) | (255u << 24u);`);
+      // Cell alpha. Default (unwired / inline 255) emits the verbatim
+      // `(255u << 24u)` so an unchanged model's shader stays byte-identical;
+      // any other input clamps to 0..255 like r/g/b.
+      const a = inputs['a'];
+      const ae = (!a || a.expr === '255') ? '255u' : `u32(clamp(${castTo(a, 'i32')}, 0, 255))`;
+      writes.push(`colors[idx] = (${re}) | ((${ge}) << 8u) | ((${be}) << 16u) | (${ae} << 24u);`);
     }
     if (doGlyph) {
       const cp = inputs['glyph'] ?? { expr: '0', type: 'i32' as WgslType };
