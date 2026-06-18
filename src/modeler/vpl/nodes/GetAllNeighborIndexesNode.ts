@@ -5,7 +5,6 @@ import type { NodeTypeDef } from '../types';
  *  a JSON array of i32s. */
 export const GetAllNeighborIndexesNode: NodeTypeDef = {
   type: 'getAllNeighborIndexes',
-  requirements: { lattice2d: true },  // 2-axis packed neighborIndex codec — 2D only
   label: 'Get All Neighbor Indexes',
   description: 'Returns the full NeighborIndex array of a neighborhood — every slot as a packed (dr, dc). Bootstrap for filterNeighbors / forEachInArray chains without needing tags.',
   category: 'data',

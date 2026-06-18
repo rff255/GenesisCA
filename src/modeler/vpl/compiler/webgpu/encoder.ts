@@ -59,11 +59,45 @@ export function emitBindings(layout: WebGPULayout): string {
   const gd = layout.gridDepth;             // 3D Grid CA: layer count (1 → 2D)
   const wh = gw * gh;                       // cells per layer
   const isTorus = layout.boundaryTreatment === 'torus';
-  // The NI-codec helper `nbrCellIdxFromNi` (packed 2-axis dr/dc) is emitted
-  // verbatim in its 2D form: the whole neighborIndex node family is gated off in
-  // 3D, so it is never CALLED there (dead in a 3D shader). Keeping it byte-for-byte
-  // identical preserves the 2D pipeline-cache hash.
-  const nbrCellIdxFromNiFn = isTorus ? `
+  // The NI-codec helper `nbrCellIdxFromNi` resolves a packed offset NI to a cell
+  // index. 2D = 2-axis (dr<<16|dc); 3D = three 10-bit fields (dr<<20|dc<<10|dl)
+  // resolved via the layer. The 2D branch is byte-for-byte identical to the
+  // pre-3D emit so the 2D pipeline-cache hash is preserved.
+  let nbrCellIdxFromNiFn: string;
+  if (gd > 1) {
+    nbrCellIdxFromNiFn = isTorus ? `
+// 3D Grid CA: packed (dr, dc, dl) NIs — three sign-extended 10-bit fields.
+fn nbrCellIdxFromNi(cellIdx: u32, ni: i32) -> i32 {
+  let dr: i32 = (ni << 2) >> 22;
+  let dc: i32 = (ni << 12) >> 22;
+  let dl: i32 = (ni << 22) >> 22;
+  let layer: i32 = i32(cellIdx) / ${wh};
+  let rem: i32 = i32(cellIdx) - layer * ${wh};
+  let row: i32 = rem / ${gw};
+  let col: i32 = rem % ${gw};
+  let nl: i32 = ((layer + dl) % ${gd} + ${gd}) % ${gd};
+  let nr: i32 = ((row + dr) % ${gh} + ${gh}) % ${gh};
+  let nc: i32 = ((col + dc) % ${gw} + ${gw}) % ${gw};
+  return (nl * ${gh} + nr) * ${gw} + nc;
+}` : `
+fn nbrCellIdxFromNi(cellIdx: u32, ni: i32) -> i32 {
+  let dr: i32 = (ni << 2) >> 22;
+  let dc: i32 = (ni << 12) >> 22;
+  let dl: i32 = (ni << 22) >> 22;
+  let layer: i32 = i32(cellIdx) / ${wh};
+  let rem: i32 = i32(cellIdx) - layer * ${wh};
+  let row: i32 = rem / ${gw};
+  let col: i32 = rem % ${gw};
+  let nl: i32 = layer + dl;
+  let nr: i32 = row + dr;
+  let nc: i32 = col + dc;
+  if (nl < 0 || nl >= ${gd} || nr < 0 || nr >= ${gh} || nc < 0 || nc >= ${gw}) {
+    return ${layout.sentinelIndex};
+  }
+  return (nl * ${gh} + nr) * ${gw} + nc;
+}`;
+  } else {
+    nbrCellIdxFromNiFn = isTorus ? `
 // Wave A.6: variant for packed (dr, dc) NIs. dr in upper 16 bits, dc in lower.
 fn nbrCellIdxFromNi(cellIdx: u32, ni: i32) -> i32 {
   let dr: i32 = ni >> 16;
@@ -86,6 +120,7 @@ fn nbrCellIdxFromNi(cellIdx: u32, ni: i32) -> i32 {
   }
   return nr * ${gw} + nc;
 }`;
+  }
   // `nbrCellIdx` (offset-table neighbours, used by getNeighborsAttribute etc.) —
   // 2D emits the verbatim 2-axis helper (byte-identical); 3D reads a 3rd offset
   // (stride 3) and wraps/clamps the layer.

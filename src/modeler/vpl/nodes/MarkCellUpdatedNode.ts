@@ -26,11 +26,11 @@ export const MarkCellUpdatedNode: NodeTypeDef = {
     { id: 'index', label: 'Index', kind: 'input', category: 'value', dataType: 'neighborIndex' },
   ],
   defaultConfig: {},
-  compile: (nodeId, _config, inputs, boundary) => {
+  compile: (nodeId, _config, inputs, boundary, ctx) => {
     const index = inputs['index'] || '0';
     const b = boundary || 'torus';
-    const arrAccess = niCellExprStmts(`_mci${nodeId}`, b, `${nodeId}_a`);
-    const sclAccess = niCellExprStmts(`_mcs${nodeId}`, b, `${nodeId}_s`);
+    const arrAccess = niCellExprStmts(`_mci${nodeId}`, b, `${nodeId}_a`, ctx?.is3d);
+    const sclAccess = niCellExprStmts(`_mcs${nodeId}`, b, `${nodeId}_s`, ctx?.is3d);
     return [
       `const _mcs${nodeId} = (${index}) | 0;`,
       `if (Array.isArray(${index})) {`,

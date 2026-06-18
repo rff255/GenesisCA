@@ -34,7 +34,7 @@ import {
   buildModule, byte, exportEntry, EXPORT_FUNC, funcType, importEntry,
   importFuncDesc, importMemoryDesc, leb128u,
 } from './encoder';
-import { INVALID_NI, packNI, NI_ARRAY_PRODUCERS } from '../niCodec';
+import { INVALID_NI, packNI, packNI3, NI_ARRAY_PRODUCERS } from '../niCodec';
 import {
   WasmEmitter, ArrayRef, LocalRef, ValueRef, pushValueAs,
 } from './emitter';
@@ -333,8 +333,58 @@ function pushNiCellIdx(ctx: WasmCompileCtx, niLocal: number): void {
   const em = ctx.emitter;
   const W = ctx.model.properties.gridWidth;
   const H = ctx.model.properties.gridHeight;
-  const total = W * H;
   const boundary = ctx.model.properties.boundaryTreatment;
+
+  // 3D Grid CA: decode the 10-bit (dr, dc, dl) fields and resolve via layer.
+  // Mirrors niCodec.niCellExprStmts' 3D branch exactly. layerLocalIdx >= 0 is
+  // the 3D predicate (set only for a 3D-volume entry; 2D leaves it -1 and falls
+  // through to the byte-identical 2-axis path below).
+  if (ctx.layerLocalIdx >= 0) {
+    const D = Math.max(1, ctx.model.properties.gridDepth ?? 1);
+    const total3d = W * H * D;
+    const nl = em.allocLocal(I32);
+    const nr = em.allocLocal(I32);
+    const nc = em.allocLocal(I32);
+    // newLayer = layer + ((ni << 22) >> 22)
+    em.localGet(ctx.layerLocalIdx);
+    em.localGet(niLocal); em.i32Const(22); em.op(OP_I32_SHL); em.i32Const(22); em.op(OP_I32_SHR_S);
+    em.op(OP_I32_ADD); em.localSet(nl);
+    // newRow = row + ((ni << 2) >> 22)
+    em.localGet(ctx.rowLocalIdx);
+    em.localGet(niLocal); em.i32Const(2); em.op(OP_I32_SHL); em.i32Const(22); em.op(OP_I32_SHR_S);
+    em.op(OP_I32_ADD); em.localSet(nr);
+    // newCol = col + ((ni << 12) >> 22)
+    em.localGet(ctx.colLocalIdx);
+    em.localGet(niLocal); em.i32Const(12); em.op(OP_I32_SHL); em.i32Const(22); em.op(OP_I32_SHR_S);
+    em.op(OP_I32_ADD); em.localSet(nc);
+    if (boundary === 'torus') {
+      // wrap each axis: ((x % S) + S) % S
+      em.localGet(nl); em.i32Const(D); em.op(OP_I32_REM_S); em.i32Const(D); em.op(OP_I32_ADD); em.i32Const(D); em.op(OP_I32_REM_S); em.localSet(nl);
+      em.localGet(nr); em.i32Const(H); em.op(OP_I32_REM_S); em.i32Const(H); em.op(OP_I32_ADD); em.i32Const(H); em.op(OP_I32_REM_S); em.localSet(nr);
+      em.localGet(nc); em.i32Const(W); em.op(OP_I32_REM_S); em.i32Const(W); em.op(OP_I32_ADD); em.i32Const(W); em.op(OP_I32_REM_S); em.localSet(nc);
+      // result = (nl * H + nr) * W + nc
+      em.localGet(nl); em.i32Const(H); em.op(OP_I32_MUL); em.localGet(nr); em.op(OP_I32_ADD);
+      em.i32Const(W); em.op(OP_I32_MUL); em.localGet(nc); em.op(OP_I32_ADD);
+    } else {
+      // constant: out-of-bounds (any axis) → total3d (sentinel cell)
+      // a = (nl * H + nr) * W + nc
+      em.localGet(nl); em.i32Const(H); em.op(OP_I32_MUL); em.localGet(nr); em.op(OP_I32_ADD);
+      em.i32Const(W); em.op(OP_I32_MUL); em.localGet(nc); em.op(OP_I32_ADD);
+      // b = total3d
+      em.i32Const(total3d);
+      // cond = 0<=nl<D && 0<=nr<H && 0<=nc<W
+      em.localGet(nl); em.i32Const(0); em.op(OP_I32_GE_S);
+      em.localGet(nl); em.i32Const(D); em.op(OP_I32_LT_S); em.op(OP_I32_AND);
+      em.localGet(nr); em.i32Const(0); em.op(OP_I32_GE_S); em.op(OP_I32_AND);
+      em.localGet(nr); em.i32Const(H); em.op(OP_I32_LT_S); em.op(OP_I32_AND);
+      em.localGet(nc); em.i32Const(0); em.op(OP_I32_GE_S); em.op(OP_I32_AND);
+      em.localGet(nc); em.i32Const(W); em.op(OP_I32_LT_S); em.op(OP_I32_AND);
+      em.op(OP_SELECT);
+    }
+    return;
+  }
+
+  const total = W * H;
   const newRow = em.allocLocal(I32);
   const newCol = em.allocLocal(I32);
   // newRow = row + (ni >> 16)
@@ -845,6 +895,14 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     const drRef = inputs['dr'] ?? { inline: true, value: 0, valtype: I32 };
     const dcRef = inputs['dc'] ?? { inline: true, value: 0, valtype: I32 };
     const em = ctx.emitter;
+    if (ctx.layerLocalIdx >= 0) {
+      // 3D: pack three 10-bit fields (dr<<20 | dc<<10 | dl).
+      const dlRef = inputs['dl'] ?? { inline: true, value: 0, valtype: I32 };
+      pushValueAs(em, drRef, I32); em.i32Const(0x3FF); em.op(OP_I32_AND); em.i32Const(20); em.op(OP_I32_SHL);
+      pushValueAs(em, dcRef, I32); em.i32Const(0x3FF); em.op(OP_I32_AND); em.i32Const(10); em.op(OP_I32_SHL); em.op(OP_I32_OR);
+      pushValueAs(em, dlRef, I32); em.i32Const(0x3FF); em.op(OP_I32_AND); em.op(OP_I32_OR);
+      return storeResult(em, I32);
+    }
     // (dr & 0xFFFF) << 16
     pushValueAs(em, drRef, I32);
     em.i32Const(0xFFFF); em.op(OP_I32_AND);
@@ -875,14 +933,27 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     const inLocal = em.allocLocal(I32);
     pushValueAs(em, idxRef, I32);
     em.localSet(inLocal);
-    // dr = ni >> 16 (arithmetic right-shift — sign-extends)
+    const is3d = ctx.layerLocalIdx >= 0;
     const drLocal = em.allocLocal(I32);
-    em.localGet(inLocal); em.i32Const(16); em.op(OP_I32_SHR_S);
-    em.localSet(drLocal);
-    // dc = (ni << 16) >> 16 (shl16 then arithmetic shr16 — sign-extends low 16)
     const dcLocal = em.allocLocal(I32);
-    em.localGet(inLocal); em.i32Const(16); em.op(OP_I32_SHL); em.i32Const(16); em.op(OP_I32_SHR_S);
-    em.localSet(dcLocal);
+    if (is3d) {
+      // 3D: dr = (ni << 2) >> 22; dc = (ni << 12) >> 22; dl = (ni << 22) >> 22.
+      em.localGet(inLocal); em.i32Const(2); em.op(OP_I32_SHL); em.i32Const(22); em.op(OP_I32_SHR_S);
+      em.localSet(drLocal);
+      em.localGet(inLocal); em.i32Const(12); em.op(OP_I32_SHL); em.i32Const(22); em.op(OP_I32_SHR_S);
+      em.localSet(dcLocal);
+      const dlLocal = em.allocLocal(I32);
+      em.localGet(inLocal); em.i32Const(22); em.op(OP_I32_SHL); em.i32Const(22); em.op(OP_I32_SHR_S);
+      em.localSet(dlLocal);
+      setCachedPort(ctx, node.id, 'dl', { localIdx: dlLocal, valtype: I32 });
+    } else {
+      // dr = ni >> 16 (arithmetic right-shift — sign-extends)
+      em.localGet(inLocal); em.i32Const(16); em.op(OP_I32_SHR_S);
+      em.localSet(drLocal);
+      // dc = (ni << 16) >> 16 (shl16 then arithmetic shr16 — sign-extends low 16)
+      em.localGet(inLocal); em.i32Const(16); em.op(OP_I32_SHL); em.i32Const(16); em.op(OP_I32_SHR_S);
+      em.localSet(dcLocal);
+    }
     const drRef: LocalRef = { localIdx: drLocal, valtype: I32 };
     const dcRef: LocalRef = { localIdx: dcLocal, valtype: I32 };
     setCachedPort(ctx, node.id, 'dr', drRef);
@@ -902,6 +973,25 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     const inLocal = em.allocLocal(I32);
     pushValueAs(em, idxRef, I32);
     em.localSet(inLocal);
+    if (ctx.layerLocalIdx >= 0) {
+      // 3D: decode 10-bit dr/dc/dl, negate dr/dc as configured, dl passes through.
+      const drLocal = em.allocLocal(I32);
+      em.localGet(inLocal); em.i32Const(2); em.op(OP_I32_SHL); em.i32Const(22); em.op(OP_I32_SHR_S);
+      em.localSet(drLocal);
+      const dcLocal = em.allocLocal(I32);
+      em.localGet(inLocal); em.i32Const(12); em.op(OP_I32_SHL); em.i32Const(22); em.op(OP_I32_SHR_S);
+      em.localSet(dcLocal);
+      // (flippedDr & 0x3FF) << 20
+      if (flipDr) { em.i32Const(0); em.localGet(drLocal); em.op(OP_I32_SUB); } else { em.localGet(drLocal); }
+      em.i32Const(0x3FF); em.op(OP_I32_AND); em.i32Const(20); em.op(OP_I32_SHL);
+      // | (flippedDc & 0x3FF) << 10
+      if (flipDc) { em.i32Const(0); em.localGet(dcLocal); em.op(OP_I32_SUB); } else { em.localGet(dcLocal); }
+      em.i32Const(0x3FF); em.op(OP_I32_AND); em.i32Const(10); em.op(OP_I32_SHL); em.op(OP_I32_OR);
+      // | (dl & 0x3FF) — dl unchanged: (ni << 22) >> 22, masked
+      em.localGet(inLocal); em.i32Const(22); em.op(OP_I32_SHL); em.i32Const(22); em.op(OP_I32_SHR_S);
+      em.i32Const(0x3FF); em.op(OP_I32_AND); em.op(OP_I32_OR);
+      return storeResult(em, I32);
+    }
     // Decode dr/dc into locals
     const drLocal = em.allocLocal(I32);
     em.localGet(inLocal); em.i32Const(16); em.op(OP_I32_SHR_S);
@@ -3926,10 +4016,17 @@ const ARRAY_NODE_EMITTERS: Record<string, NodeArrayEmitter> = {
     const nbrId = node.data.config.neighborhoodId as string;
     const nbr = ctx.model.neighborhoods.find(n => n.id === nbrId);
     if (!nbr) { ctx.errors.push(`getAllNeighborIndexes: unknown neighborhood ${nbrId}`); return null; }
-    const arr = allocArrayInScratchConst(ctx, nbr.coords.length, I32, 4);
-    for (let k = 0; k < nbr.coords.length; k++) {
-      const [dr, dc] = nbr.coords[k]!;
-      const packed = packNI(dr, dc);
+    // 3D Grid CA: pack 3-axis offsets from coords3d; 2D packs the verbatim
+    // 2-axis codec from coords (byte-identical). layerLocalIdx>=0 is the
+    // model-level 3D predicate (mirrors is3dModel).
+    const is3d = ctx.layerLocalIdx >= 0;
+    const coords3d = nbr.coords3d ?? [];
+    const len = is3d ? coords3d.length : nbr.coords.length;
+    const arr = allocArrayInScratchConst(ctx, len, I32, 4);
+    for (let k = 0; k < len; k++) {
+      let packed: number;
+      if (is3d) { const c = coords3d[k]!; packed = packNI3(c[0], c[1], c[2]); }
+      else { const [dr, dc] = nbr.coords[k]!; packed = packNI(dr, dc); }
       ctx.emitter.i32Const(k * 4);
       ctx.emitter.localGet(arr.offsetLocal);
       ctx.emitter.op(OP_I32_ADD);
@@ -6966,6 +7063,22 @@ export function compileGraphWasm(
   // tag indexes for getNeighborIndexesByTags. Both are no-ops if the JS
   // compiler already filled them in.
   const indicatorIdxMap = new Map((model.indicators || []).map((ind, i) => [ind.id, i] as const));
+  // 3D Grid CA: pack offsets with the 3-axis codec from coords3d when the model
+  // is 3D; 2D packs the verbatim 2-axis codec (byte-identical). Mirrors the JS
+  // pre-pass `packCoord`. Producing PACKED NIs here (not bare slot indices) is
+  // required: the array emitter / every NI consumer treats these values as
+  // packed offsets — slot indices were a latent bug masked when the JS compiler
+  // happened to resolve the config first.
+  const wasmNiIs3d = model.properties.dimension === '3d' && (model.properties.gridDepth ?? 1) > 1;
+  const packCoordWasm = (nbr: { coords: Array<[number, number]>; coords3d?: Array<[number, number, number]> } | undefined, slot: number): number => {
+    if (!nbr || slot < 0) return INVALID_NI;
+    if (wasmNiIs3d) { const c = nbr.coords3d?.[slot]; return c ? packNI3(c[0], c[1], c[2]) : INVALID_NI; }
+    const c = nbr.coords[slot]; return c ? packNI(c[0], c[1]) : INVALID_NI;
+  };
+  const tagSlot = (nbr: { tags?: Record<number, string> } | undefined, tagName: string): number => {
+    const tagEntry = nbr?.tags ? Object.entries(nbr.tags).find(([, name]) => name === tagName) : undefined;
+    return tagEntry !== undefined ? Number(tagEntry[0]) : -1;
+  };
   const resolveIndicatorAndTags = (nodes: GraphNode[]) => {
     for (const node of nodes) {
       const t = node.data.nodeType;
@@ -6976,19 +7089,20 @@ export function compileGraphWasm(
           node.data.config._indicatorIdx = idx !== undefined ? idx : -1;
         }
       }
-      if (t === 'getNeighborIndexesByTags' && !node.data.config._resolvedTagIndexes) {
+      if (t === 'getNeighborIndexesByTags') {
         const nbrId = node.data.config.neighborhoodId as string;
         const nbr = model.neighborhoods.find(n => n.id === nbrId);
         const tagCount = Number(node.data.config.tagCount) || 0;
-        const indices: number[] = [];
+        const packed: number[] = [];
         for (let i = 0; i < tagCount; i++) {
-          const tagName = node.data.config[`tag_${i}_name`] as string;
-          const tagEntry = nbr?.tags
-            ? Object.entries(nbr.tags).find(([, name]) => name === tagName)
-            : undefined;
-          indices.push(tagEntry !== undefined ? Number(tagEntry[0]) : 0);
+          packed.push(packCoordWasm(nbr, tagSlot(nbr, node.data.config[`tag_${i}_name`] as string)));
         }
-        node.data.config._resolvedTagIndexes = JSON.stringify(indices);
+        node.data.config._resolvedTagIndexes = JSON.stringify(packed);
+      }
+      if (t === 'neighborIndexFromTag') {
+        const nbrId = node.data.config.neighborhoodId as string;
+        const nbr = model.neighborhoods.find(n => n.id === nbrId);
+        node.data.config._resolvedPacked = packCoordWasm(nbr, tagSlot(nbr, node.data.config.tagName as string));
       }
     }
   };

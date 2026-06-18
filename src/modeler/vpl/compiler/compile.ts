@@ -6,7 +6,7 @@ import { classifyLoopInvariant } from './loopInvariant';
 import { safeId } from './identifierSafe';
 import { detectFusableConsumers, type FusionResult } from './fusion';
 import { getInlineValue } from './inlinePort';
-import { INVALID_NI, packNI, NI_ARRAY_PRODUCERS } from './niCodec';
+import { INVALID_NI, packNI, packNI3, NI_ARRAY_PRODUCERS } from './niCodec';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId } from './sinkAnalysis';
 import { canonicalizeAccessorEdges } from './accessorCSE';
 import { injectLinkedOutputMappings } from './linkedOutputMappings';
@@ -413,6 +413,7 @@ function compileRoot(
       if (!attr) return '0';
       return attrValueLiteralJS(attr, attr.defaultValue);
     },
+    is3d: model ? is3dModel(model) : false,  // 3D Grid CA: NI-codec nodes pick the 3-axis codec
   };
 
   const compiled = new Set<string>();
@@ -1395,7 +1396,15 @@ export function compileGraph(
 
   const { nodeMap, inputToSource, inputToSources, flowOutputToTargets } = buildAdjacency(graphNodes, graphEdges);
 
-  // Pre-resolve neighborhood tag names to indices for GetNeighborAttributeByTag nodes
+  // Pre-resolve neighborhood tag names to indices for GetNeighborAttributeByTag nodes.
+  // 3D Grid CA: pack offsets with the 3-axis codec from coords3d when the model
+  // is 3D (2D packs the verbatim 2-axis codec → byte-identical).
+  const niIs3d = is3dModel(model);
+  const packCoord = (nbr: { coords: Array<[number, number]>; coords3d?: Array<[number, number, number]> } | undefined, slot: number): number => {
+    if (!nbr || slot < 0) return INVALID_NI;
+    if (niIs3d) { const c = nbr.coords3d?.[slot]; return c ? packNI3(c[0], c[1], c[2]) : INVALID_NI; }
+    const c = nbr.coords[slot]; return c ? packNI(c[0], c[1]) : INVALID_NI;
+  };
   for (const node of graphNodes) {
     if (node.data.nodeType === 'getNeighborAttributeByTag') {
       const nbrId = node.data.config.neighborhoodId as string;
@@ -1419,8 +1428,7 @@ export function compileGraph(
           ? Object.entries(nbr.tags).find(([, name]) => name === tagName)
           : undefined;
         const slot = tagEntry !== undefined ? Number(tagEntry[0]) : -1;
-        const coord = (slot >= 0 && nbr) ? nbr.coords[slot] : undefined;
-        packed.push(coord ? packNI(coord[0]!, coord[1]!) : INVALID_NI);
+        packed.push(packCoord(nbr, slot));
       }
       node.data.config._resolvedTagIndexes = JSON.stringify(packed);
     }
@@ -1436,19 +1444,16 @@ export function compileGraph(
         ? Object.entries(nbr.tags).find(([, name]) => name === tagName)
         : undefined;
       const slot = tagEntry !== undefined ? Number(tagEntry[0]) : -1;
-      const coord = (slot >= 0 && nbr) ? nbr.coords[slot] : undefined;
-      node.data.config._resolvedPacked = coord
-        ? packNI(coord[0]!, coord[1]!)
-        : INVALID_NI;
+      node.data.config._resolvedPacked = packCoord(nbr, slot);
     }
     if (node.data.nodeType === 'getAllNeighborIndexes') {
-      // Wave A.6: pre-resolve packed (dr, dc) for every slot of the
-      // configured neighborhood. Emit becomes a literal array of i32s.
+      // Wave A.6: pre-resolve packed offsets for every slot. 3D packs from
+      // coords3d (3-axis); 2D from coords (2-axis, byte-identical).
       const nbrId = node.data.config.neighborhoodId as string;
       const nbr = model.neighborhoods.find(n => n.id === nbrId);
-      const packed: number[] = nbr
-        ? nbr.coords.map(([dr, dc]) => packNI(dr, dc))
-        : [];
+      const len = nbr ? (niIs3d ? (nbr.coords3d?.length ?? 0) : nbr.coords.length) : 0;
+      const packed: number[] = [];
+      for (let i = 0; i < len; i++) packed.push(packCoord(nbr, i));
       node.data.config._resolvedPackedAll = JSON.stringify(packed);
     }
     // Wave A.6: arrayElement out-of-range default depends on whether the

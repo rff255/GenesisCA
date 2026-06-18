@@ -12,6 +12,8 @@ interface ManualBrushPanelProps {
   neighborhoods: Neighborhood[];
   state: ManualBrushModelState;
   onChange: (next: ManualBrushModelState) => void;
+  /** 3D Grid CA: neighborIndex attrs pack 3 axes — the picker adds a dl stepper. */
+  is3d?: boolean;
 }
 
 /** Format a parentValues entry for the sub-attribute hint. Tag parents map
@@ -32,7 +34,7 @@ function formatParentValue(parent: Attribute, raw: string): string {
 
 /** Renders one row per cell attribute: [Set checkbox] [name + sub-attr hint] [value widget].
  *  Sub-attribute hint reads as e.g. "writes only when cellType ∈ {Wire, Pulsar}". */
-export function ManualBrushPanel({ cellAttributes, neighborhoods, state, onChange }: ManualBrushPanelProps) {
+export function ManualBrushPanel({ cellAttributes, neighborhoods, state, onChange, is3d = false }: ManualBrushPanelProps) {
   const model = useMemo(() => ({ attributes: cellAttributes }), [cellAttributes]);
   const setEntry = (attrId: string, patch: Partial<{ enabled: boolean; value: string }>): void => {
     const prev = state[attrId] ?? { enabled: true, value: '' };
@@ -88,6 +90,7 @@ export function ManualBrushPanel({ cellAttributes, neighborhoods, state, onChang
                   hint={attr.neighborhoodHintId
                     ? (neighborhoods.find(n => n.id === attr.neighborhoodHintId) ?? null)
                     : null}
+                  is3d={is3d}
                   onChange={packed => setEntry(attr.id, { value: String(packed) })}
                   cellSize={16}
                 />

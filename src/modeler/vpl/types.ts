@@ -61,6 +61,10 @@ export interface CompileContext {
    *  string (e.g., '0' for tag index 0, '1.5' for float). Falls back to a
    *  type-appropriate zero. */
   defaultValueLiteral(attrId: string): string;
+  /** 3D Grid CA: true when the model is a 3D volume (dimension==='3d' && depth>1).
+   *  NI-codec nodes use it to pick the 3-axis pack/unpack + the `_layer`/`WH`
+   *  cell-resolution. Absent/false → the 2D 16-bit codec (byte-identical). */
+  is3d?: boolean;
 }
 
 /** Capability requirements for a node type. A node whose requirements aren't
@@ -80,11 +84,12 @@ export interface NodeRequirements {
   async?: boolean;
   /** Requires `model.variegatedCells?.enabled === true`. */
   variegated?: boolean;
-  /** 3D Grid CA: requires a 2D lattice (`dimension !== '3d'`). Set on the
-   *  `neighborIndex` family (the 2-axis packNI codec has no third offset), so
-   *  those nodes are hidden from the palette / add-node menu in 3D models and
-   *  badged if present. `getNeighborAttributeByTag` (flat coord index) is the
-   *  3D substitute. */
+  /** 3D Grid CA: requires a 2D lattice (`dimension !== '3d'`). Generic 2D-only
+   *  capability gate — a node carrying it is hidden from the palette / add-node
+   *  menu in 3D models and badged if present. **Currently no node sets this**:
+   *  the `neighborIndex` family was un-gated once the 3-axis (dr, dc, dl) codec
+   *  landed on all three targets (it now packs three 10-bit fields in 3D). The
+   *  flag is kept as infrastructure for any future genuinely-2D-only node. */
   lattice2d?: boolean;
 }
 

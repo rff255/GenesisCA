@@ -1,12 +1,13 @@
 import type { NodeTypeDef } from '../types';
+import { niDrExpr, niDcExpr, niDlExpr, niPackExpr } from '../compiler/niCodec';
 
-/** Wave A.6: NIs are packed (dr, dc) i32. Flipping is pure bit math —
- *  decode dr/dc, conditionally negate, re-encode. No neighborhood needed. */
+/** NIs are packed offsets. Flipping is pure bit math — decode the offsets,
+ *  conditionally negate, re-encode. In 3D the layer offset (dl) passes through
+ *  unchanged (the flips are in the XY plane). No neighborhood needed. */
 export const FlipNeighborIndexNode: NodeTypeDef = {
   type: 'flipNeighborIndex',
-  requirements: { lattice2d: true },  // 2-axis packed neighborIndex codec — 2D only
   label: 'Flip Neighbor Index',
-  description: 'Mirrors a NeighborIndex horizontally (negates dCol), vertically (negates dRow), or both (180° rotation).',
+  description: 'Mirrors a NeighborIndex horizontally (negates dCol), vertically (negates dRow), or both (180° rotation). In 3D the layer offset is preserved.',
   category: 'data',
   color: '#b71c1c',
   ports: [
@@ -14,16 +15,18 @@ export const FlipNeighborIndexNode: NodeTypeDef = {
     { id: 'value', label: 'Value', kind: 'output', category: 'value', dataType: 'neighborIndex' },
   ],
   defaultConfig: { mode: 'horizontal' },
-  compile: (nodeId, config, inputs) => {
+  compile: (nodeId, config, inputs, _boundary, ctx) => {
     const idx = inputs['index'] || '0';
     const mode = (config.mode as string) || 'horizontal';
     const flipDr = mode === 'vertical' || mode === 'both';
     const flipDc = mode === 'horizontal' || mode === 'both';
-    const drExpr = flipDr ? `(-(_fIn${nodeId} >> 16))` : `(_fIn${nodeId} >> 16)`;
-    const dcExpr = flipDc ? `(-((_fIn${nodeId} << 16) >> 16))` : `((_fIn${nodeId} << 16) >> 16)`;
+    const v = `_fIn${nodeId}`;
+    const is3d = !!ctx?.is3d;
+    const drExpr = flipDr ? `(-(${niDrExpr(v, is3d)}))` : niDrExpr(v, is3d);
+    const dcExpr = flipDc ? `(-(${niDcExpr(v, is3d)}))` : niDcExpr(v, is3d);
     return [
-      `const _fIn${nodeId} = (${idx}) | 0;`,
-      `const _v${nodeId} = (((((${drExpr}) & 0xFFFF) << 16) | ((${dcExpr}) & 0xFFFF)) | 0);`,
+      `const ${v} = (${idx}) | 0;`,
+      `const _v${nodeId} = ${niPackExpr(drExpr, dcExpr, is3d, is3d ? niDlExpr(v) : '0')};`,
     ].join(' ') + '\n';
   },
 };

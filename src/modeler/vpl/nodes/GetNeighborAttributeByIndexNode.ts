@@ -11,7 +11,6 @@ import { niCellExprStmts, INVALID_NI } from '../compiler/niCodec';
  *  Symmetric with `setNeighborAttributeByIndex` which guards the same way. */
 export const GetNeighborAttributeByIndexNode: NodeTypeDef = {
   type: 'getNeighborAttributeByIndex',
-  requirements: { lattice2d: true },  // 2-axis packed neighborIndex codec — 2D only
   label: 'Get Neighbor Attr By Index',
   description: 'Reads one neighbor’s attribute given a NeighborIndex (a packed dr/dc offset). If given an array of indices, reads the first one. Returns 0 when the index is the INVALID_NI sentinel.',
   category: 'data',
@@ -25,7 +24,7 @@ export const GetNeighborAttributeByIndexNode: NodeTypeDef = {
     const attr = config.attributeId as string || '_undef';
     const index = inputs['index'] || '0';
     const niExpr = `_ni${nodeId}`;
-    const { stmts, cellExpr } = niCellExprStmts(niExpr, boundary || 'torus', `${nodeId}`);
+    const { stmts, cellExpr } = niCellExprStmts(niExpr, boundary || 'torus', `${nodeId}`, ctx?.is3d);
     // Accept either a scalar or an array (taking element 0). Empty array →
     // INVALID_NI, which the guard below maps to a 0 fallback. Wrap the access
     // in an IIFE so we can keep `_v${nodeId}` as a const at the call-site

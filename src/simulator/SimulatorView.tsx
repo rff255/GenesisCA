@@ -5,7 +5,7 @@ import { hasGlyphsInModel } from '../modeler/vpl/compiler/glyphsUsage';
 import { CURRENT_VIEWER_SENTINEL } from '../modeler/vpl/nodes/SetCellLooksNode';
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
-import { unpackNI, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
+import { unpackNI, unpackNI3, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
 import { resolveKeyLabels } from '../modeler/vpl/compiler/variegation';
 import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefaultEditor';
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
@@ -4104,20 +4104,22 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                     (() => {
                       const raw = runtimeModelAttrs[a.id] ?? 0;
                       const value = raw === INVALID_NI ? 0 : (raw | 0);
+                      const is3d = model.properties.dimension === '3d' && (model.properties.gridDepth ?? 1) > 1;
                       const hint = a.neighborhoodHintId
                         ? (model.neighborhoods.find(n => n.id === a.neighborhoodHintId) ?? null)
                         : null;
-                      const { dr, dc } = unpackNI(value);
+                      const dec = is3d ? unpackNI3(value) : { ...unpackNI(value), dl: 0 };
                       return (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 2, minWidth: 0, alignItems: 'flex-end' }}>
                           <NeighborIndexValuePicker
                             value={value}
                             hint={hint}
+                            is3d={is3d}
                             onChange={packed => handleModelAttrChange(a.id, packed)}
                             cellSize={18}
                           />
                           <span style={{ fontSize: 10, color: '#7a8a9a' }}>
-                            (dr {dr}, dc {dc})
+                            (dr {dec.dr}, dc {dec.dc}{is3d ? `, dl ${(dec as { dl?: number }).dl ?? 0}` : ''})
                           </span>
                         </div>
                       );
@@ -4564,6 +4566,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 neighborhoods={model.neighborhoods}
                 state={manualBrush}
                 onChange={setManualBrush}
+                is3d={model.properties.dimension === '3d' && (model.properties.gridDepth ?? 1) > 1}
               />
             ) : (
               <div className={styles.fieldRow}>
@@ -4746,6 +4749,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           values={inspectDataRef.current.get(p.cellIdx) ?? null}
           color={inspectColorsRef.current.get(p.cellIdx) ?? null}
           orientation={inspectOrientationsRef.current.get(p.cellIdx) ?? null}
+          is3d={model.properties.dimension === '3d' && (model.properties.gridDepth ?? 1) > 1}
           pulse={pulseInspectIdx === p.cellIdx}
           focused={focusedInspectIdx === p.cellIdx}
           totalOpen={inspectPopovers.length}
@@ -4786,6 +4790,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           values={inspectDataRef.current.get(sweepInspector.cellIdx) ?? null}
           color={inspectColorsRef.current.get(sweepInspector.cellIdx) ?? null}
           orientation={inspectOrientationsRef.current.get(sweepInspector.cellIdx) ?? null}
+          is3d={model.properties.dimension === '3d' && (model.properties.gridDepth ?? 1) > 1}
           pulse={false}
           focused={false}
           totalOpen={inspectPopovers.length + 1}
