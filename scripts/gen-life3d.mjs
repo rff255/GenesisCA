@@ -141,9 +141,8 @@ const properties = {
   dimension: '3d',
   maxIterations: 100000,
   tags: ['3D', 'Life', 'totalistic', 'Bays', 'voxel'],
-  // 3D Grid CA: JS target while only the JS engine is 3D-ported (PR2/PR3).
-  // PR5 flips this to true (WASM default) once WASM 3D parity is verified.
-  useWasm: false,
+  // 3D Grid CA: WASM (default target) — verified at JS↔WASM parity in PR5.
+  useWasm: true,
 };
 
 const attributes = [

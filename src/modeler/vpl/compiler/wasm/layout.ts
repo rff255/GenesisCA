@@ -407,9 +407,21 @@ export function computeLayoutFromModel(
 ): MemoryLayout {
   const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
   const modelAttrs = model.attributes.filter(a => a.isModelAttribute);
-  const neighborhoods = model.neighborhoods.map(n => ({ id: n.id, coords: n.coords as Array<[number, number]> }));
+  // 3D Grid CA: the nbr region is sized by neighbour COUNT (the stride). For a
+  // 3D neighbourhood coords3d is the source of truth (coords stays a same-length
+  // projection); fall back to a coords3d-derived 2D list so a hand-edited file
+  // with empty `coords` but populated `coords3d` still sizes the region correctly.
+  const neighborhoods = model.neighborhoods.map(n => ({
+    id: n.id,
+    coords: (n.coords && n.coords.length
+      ? n.coords
+      : (n.coords3d ?? []).map(c => [c[0], c[1]] as [number, number])) as Array<[number, number]>,
+  }));
   const indicators = (model.indicators || []).map(i => ({ id: i.id, kind: i.kind }));
-  const total = model.properties.gridWidth * model.properties.gridHeight;
+  // 3D Grid CA: total = W*H*D (only honour gridDepth in a 3D model — mirrors the
+  // worker's `depth` derivation so the baked `total` literal can't desync).
+  const depth = model.properties.dimension === '3d' ? Math.max(1, model.properties.gridDepth ?? 1) : 1;
+  const total = model.properties.gridWidth * model.properties.gridHeight * depth;
   const isAsync = model.properties.updateMode === 'asynchronous';
   let variegated: VariegatedLayoutInputs | undefined;
   if (model.variegatedCells?.enabled) {

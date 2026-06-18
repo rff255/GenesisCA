@@ -1113,6 +1113,11 @@ Makes the lattice a **`W×H×D` volume** end-to-end: schema, all three compile t
 - **Variegation forced off in 3D**: the Properties variegated checkbox is disabled + the 3D dimension radio dispatches `updateVariegatedCells({enabled:false})`. Mockup: [docs/MOCKUP_PR4_NEIGHBORHOOD3D.html](docs/MOCKUP_PR4_NEIGHBORHOOD3D.html).
 - **Verified** (UI via preview_eval): 3D model neighbourhood detail shows Parametric/Slice editor; Generate (Moore r1) → 26 cells; Slice editor renders Z-layer + H/V/L mirrors + grid; all 13 NI nodes `isNodeAvailable===false` in 3D, the safe neighbour nodes true.
 
+### PR5 — WASM 3D port (done; lockstep)
+- **Layout** ([wasm/layout.ts](src/modeler/vpl/compiler/wasm/layout.ts)): `computeLayoutFromModel` total = `W*H*depth` (depth honoured only in a 3D model — mirrors the worker). `computeMemoryLayout` keeps its `total` param (the worker already passes `W*H*D` from initGrid). The `neighborhoods` mapper falls back to a `coords3d`-derived 2D list when `coords` is empty (robust nbr-region sizing).
+- **Emitter** ([wasm/compile.ts](src/modeler/vpl/compiler/wasm/compile.ts)): `is3dEntry = dimension==='3d' && gridDepth>1` (per entry). `layerLocal`/`remLocal` allocated ONLY when 3D (so a 2D module's local count + bytes are byte-identical). `emitBody` emits the 3D `layer=idx/WH; rem=idx-layer*WH; row=rem/W; col=rem-row*W` decode when 3D, else the verbatim 2D `row=idx/W; col` two-block. `ctx.layerLocalIdx` (-1 in 2D) feeds the InitEvent `z`/`maxZ` outputs (added to the `initEvent` value emitter, gated on `layerLocalIdx >= 0`). `pushNiCellIdx` (2-axis NI) + the variegated facing emitters are UNTOUCHED (2D-gated).
+- **Verified**: `computeLayoutFromModel(Life3D).total===13824`, WASM compiles clean; a 2D model's WASM `bytesLen===2157` matches the pre-3D baseline (byte-identical). The **real WASM worker** on Life3D: generation advances 0→1, 3723 cells evolve, **0 mismatches** vs the independent Bays 5766 (JS↔WASM exact parity). Life3D flipped to `useWasm:true`.
+
 ---
 
 ## Reroute Links (wire reroute points)
