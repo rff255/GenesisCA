@@ -16,6 +16,7 @@
  */
 
 import type { PortDef, NodeTypeDef, NodeConfig } from './types';
+import type { CAModel } from '../../model/types';
 import { getNodeDef } from './nodes/registry';
 import { clampVisibleCount } from './compiler/expression/parser';
 
@@ -27,6 +28,7 @@ export interface EffectivePorts {
 export function getEffectivePorts(
   nodeType: string,
   config: Record<string, unknown> | undefined,
+  model?: CAModel,
 ): EffectivePorts {
   const def = getNodeDef(nodeType);
   if (!def) return { inputs: [], outputs: [] };
@@ -97,7 +99,7 @@ export function getEffectivePorts(
   // Matching between-bounds, Group Reduce Position, Math unary Y, etc. Applied
   // AFTER the dynamic add/transform logic above (switch/sequence/expression),
   // which those nodes keep inline because they ADD ports rather than remove.
-  const hidden = def.hiddenPorts?.(cfg as NodeConfig);
+  const hidden = def.hiddenPorts?.(cfg as NodeConfig, model);
   if (hidden && hidden.length > 0) {
     const drop = new Set(hidden);
     inputs = inputs.filter(p => !drop.has(p.id));

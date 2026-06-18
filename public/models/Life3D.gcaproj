@@ -1,0 +1,678 @@
+{
+  "schemaVersion": 2,
+  "properties": {
+    "name": "Life3D",
+    "author": "Carter Bays (3D Life rule 5766)",
+    "modelAuthor": "Rodrigo F. Figueiredo",
+    "description": "3D Game of Life on a 24x24x24 torus, Carter Bays' classic 5766 rule: a live cell survives with 5-7 live neighbours (of 26), a dead cell is born with exactly 6. Reset seeds a randomized slab of central layers, then press Play to watch structures bloom and dissolve through the volume. Orbit the camera and pull the clip plane to see inside.",
+    "topology": "2d-grid",
+    "boundaryTreatment": "torus",
+    "updateMode": "synchronous",
+    "asyncScheme": "random-order",
+    "gridWidth": 24,
+    "gridHeight": 24,
+    "gridDepth": 24,
+    "dimension": "3d",
+    "maxIterations": 100000,
+    "tags": [
+      "3D",
+      "Life",
+      "totalistic",
+      "Bays",
+      "voxel"
+    ],
+    "useWasm": false
+  },
+  "attributes": [
+    {
+      "id": "alive",
+      "name": "Alive",
+      "type": "bool",
+      "description": "Whether the cell is alive (1) or dead (0).",
+      "isModelAttribute": false,
+      "defaultValue": "false"
+    }
+  ],
+  "neighborhoods": [
+    {
+      "id": "moore3d",
+      "name": "Moore 3D (26)",
+      "description": "All 26 cells in the 3x3x3 cube around the centre (3D Moore neighbourhood).",
+      "coords": [
+        [
+          -1,
+          -1
+        ],
+        [
+          -1,
+          0
+        ],
+        [
+          -1,
+          1
+        ],
+        [
+          0,
+          -1
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          -1
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          -1,
+          -1
+        ],
+        [
+          -1,
+          0
+        ],
+        [
+          -1,
+          1
+        ],
+        [
+          0,
+          -1
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          -1
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          -1,
+          -1
+        ],
+        [
+          -1,
+          0
+        ],
+        [
+          -1,
+          1
+        ],
+        [
+          0,
+          -1
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          -1
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          1
+        ]
+      ],
+      "coords3d": [
+        [
+          -1,
+          -1,
+          -1
+        ],
+        [
+          -1,
+          0,
+          -1
+        ],
+        [
+          -1,
+          1,
+          -1
+        ],
+        [
+          0,
+          -1,
+          -1
+        ],
+        [
+          0,
+          0,
+          -1
+        ],
+        [
+          0,
+          1,
+          -1
+        ],
+        [
+          1,
+          -1,
+          -1
+        ],
+        [
+          1,
+          0,
+          -1
+        ],
+        [
+          1,
+          1,
+          -1
+        ],
+        [
+          -1,
+          -1,
+          0
+        ],
+        [
+          -1,
+          0,
+          0
+        ],
+        [
+          -1,
+          1,
+          0
+        ],
+        [
+          0,
+          -1,
+          0
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          1,
+          -1,
+          0
+        ],
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          1,
+          1,
+          0
+        ],
+        [
+          -1,
+          -1,
+          1
+        ],
+        [
+          -1,
+          0,
+          1
+        ],
+        [
+          -1,
+          1,
+          1
+        ],
+        [
+          0,
+          -1,
+          1
+        ],
+        [
+          0,
+          0,
+          1
+        ],
+        [
+          0,
+          1,
+          1
+        ],
+        [
+          1,
+          -1,
+          1
+        ],
+        [
+          1,
+          0,
+          1
+        ],
+        [
+          1,
+          1,
+          1
+        ]
+      ],
+      "margin": 1,
+      "shape": {
+        "kind": "moore",
+        "radius": 1
+      }
+    }
+  ],
+  "mappings": [
+    {
+      "id": "life",
+      "name": "Alive / Dead",
+      "isAttributeToColor": true,
+      "description": "Dead cells dark, live cells green. Linked output mapping on the Alive attribute.",
+      "redDescription": "Alive",
+      "greenDescription": "Alive",
+      "blueDescription": "Alive",
+      "linked": true,
+      "linkedAttributeId": "alive",
+      "linkedColors": {
+        "gradient": [
+          {
+            "position": 0,
+            "r": 13,
+            "g": 17,
+            "b": 23
+          },
+          {
+            "position": 1,
+            "r": 110,
+            "g": 226,
+            "b": 140
+          }
+        ]
+      }
+    }
+  ],
+  "indicators": [],
+  "graphNodes": [
+    {
+      "id": "nmqj3fid6o68h",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "step",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmqj3fid6ha64",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 180
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "alive"
+        }
+      }
+    },
+    {
+      "id": "nmqj3fid6s17s",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 360
+      },
+      "data": {
+        "nodeType": "getNeighborsAttribute",
+        "config": {
+          "neighborhoodId": "moore3d",
+          "attributeId": "alive"
+        }
+      }
+    },
+    {
+      "id": "nmqj3fid637rr",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 360
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "sum"
+        }
+      }
+    },
+    {
+      "id": "nmqj3fid61av6",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 270
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "between",
+          "lowOp": ">=",
+          "highOp": "<=",
+          "compareType": "numerical",
+          "_port_y": "5",
+          "_port_y2": "7"
+        }
+      }
+    },
+    {
+      "id": "nmqj3fid6a7zh",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 450
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "==",
+          "compareType": "numerical",
+          "_port_y": "6"
+        }
+      }
+    },
+    {
+      "id": "nmqj3fid6b31o",
+      "type": "caNode",
+      "position": {
+        "x": 690,
+        "y": 180
+      },
+      "data": {
+        "nodeType": "logicOperator",
+        "config": {
+          "operation": "AND"
+        }
+      }
+    },
+    {
+      "id": "nmqj3fid6jwtc",
+      "type": "caNode",
+      "position": {
+        "x": 690,
+        "y": 450
+      },
+      "data": {
+        "nodeType": "logicOperator",
+        "config": {
+          "operation": "NOT"
+        }
+      }
+    },
+    {
+      "id": "nmqj3fid6zpdi",
+      "type": "caNode",
+      "position": {
+        "x": 920,
+        "y": 450
+      },
+      "data": {
+        "nodeType": "logicOperator",
+        "config": {
+          "operation": "AND"
+        }
+      }
+    },
+    {
+      "id": "nmqj3fid6bh4x",
+      "type": "caNode",
+      "position": {
+        "x": 1150,
+        "y": 270
+      },
+      "data": {
+        "nodeType": "logicOperator",
+        "config": {
+          "operation": "OR"
+        }
+      }
+    },
+    {
+      "id": "nmqj3fid65ctt",
+      "type": "caNode",
+      "position": {
+        "x": 1380,
+        "y": 270
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive"
+        }
+      }
+    },
+    {
+      "id": "nmqj3fid65eba",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 810
+      },
+      "data": {
+        "nodeType": "initEvent",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmqj3fid6bxme",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 810
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "between",
+          "lowOp": ">=",
+          "highOp": "<=",
+          "compareType": "numerical",
+          "_port_y": "9",
+          "_port_y2": "14"
+        }
+      }
+    },
+    {
+      "id": "nmqj3fid6qpav",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 990
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "randomType": "bool",
+          "_port_probability": "0.32"
+        }
+      }
+    },
+    {
+      "id": "nmqj3fid6cjlw",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 900
+      },
+      "data": {
+        "nodeType": "logicOperator",
+        "config": {
+          "operation": "AND"
+        }
+      }
+    },
+    {
+      "id": "nmqj3fid6mx5v",
+      "type": "caNode",
+      "position": {
+        "x": 690,
+        "y": 900
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive"
+        }
+      }
+    }
+  ],
+  "graphEdges": [
+    {
+      "id": "emqj3fid67od5",
+      "source": "nmqj3fid6s17s",
+      "target": "nmqj3fid637rr",
+      "sourceHandle": "output_value_values",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "emqj3fid6mbfu",
+      "source": "nmqj3fid637rr",
+      "target": "nmqj3fid61av6",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "emqj3fid6gl0n",
+      "source": "nmqj3fid637rr",
+      "target": "nmqj3fid6a7zh",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "emqj3fid6epir",
+      "source": "nmqj3fid6ha64",
+      "target": "nmqj3fid6b31o",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emqj3fid63rnb",
+      "source": "nmqj3fid61av6",
+      "target": "nmqj3fid6b31o",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emqj3fid61ubs",
+      "source": "nmqj3fid6ha64",
+      "target": "nmqj3fid6jwtc",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emqj3fid6g5sf",
+      "source": "nmqj3fid6jwtc",
+      "target": "nmqj3fid6zpdi",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emqj3fid6arhs",
+      "source": "nmqj3fid6a7zh",
+      "target": "nmqj3fid6zpdi",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emqj3fid6bwwq",
+      "source": "nmqj3fid6b31o",
+      "target": "nmqj3fid6bh4x",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emqj3fid6x0n3",
+      "source": "nmqj3fid6zpdi",
+      "target": "nmqj3fid6bh4x",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emqj3fid60ta9",
+      "source": "nmqj3fid6o68h",
+      "target": "nmqj3fid65ctt",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emqj3fid6ho33",
+      "source": "nmqj3fid6bh4x",
+      "target": "nmqj3fid65ctt",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "emqj3fid6xwn5",
+      "source": "nmqj3fid65eba",
+      "target": "nmqj3fid6bxme",
+      "sourceHandle": "output_value_z",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "emqj3fid69iqs",
+      "source": "nmqj3fid6bxme",
+      "target": "nmqj3fid6cjlw",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emqj3fid69agn",
+      "source": "nmqj3fid6qpav",
+      "target": "nmqj3fid6cjlw",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emqj3fid600pg",
+      "source": "nmqj3fid65eba",
+      "target": "nmqj3fid6mx5v",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emqj3fid6pikq",
+      "source": "nmqj3fid6cjlw",
+      "target": "nmqj3fid6mx5v",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    }
+  ],
+  "macroDefs": [],
+  "topologyMode": {
+    "gridCells": true,
+    "agents": false
+  }
+}

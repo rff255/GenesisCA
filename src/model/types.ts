@@ -93,6 +93,13 @@ export interface Neighborhood {
   name: string;
   description: string;
   coords: Array<[number, number]>;
+  /** 3D Grid CA: when present, this neighbourhood lives in a W×H×D volume and
+   *  these `[dr, dc, dl]` 3-tuples are the source of truth for the offset table.
+   *  `coords` stays populated as a same-LENGTH 2D projection (so the stride
+   *  invariant `coords.length === coords3d.length` holds and the WASM/WebGPU
+   *  2D layouts still size correctly). Absent → a classic 2D neighbourhood.
+   *  Materialized from `shape` (PR4) by `generateCoords3d`. */
+  coords3d?: Array<[number, number, number]>;
   margin?: number;
   /** Optional tags for individual cells: coord index → tag name */
   tags?: Record<number, string>;

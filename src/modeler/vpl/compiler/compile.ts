@@ -1129,6 +1129,33 @@ function compileRoot(
 // Build parameter lists from model (without idx — loop is inside)
 // ---------------------------------------------------------------------------
 
+/** 3D Grid CA: a model runs the 3D engine iff it is dimensioned 3D AND has more
+ *  than one layer. A 1-layer 3D model uses the 2D fast path (a 1-layer volume IS
+ *  a 2D grid). The worker derives its `depth` from the SAME predicate
+ *  (dimension==='3d' ? gridDepth : 1) so the baked/passed `total` can't desync. */
+export function is3dModel(model: CAModel): boolean {
+  return model.properties.dimension === '3d' && (model.properties.gridDepth ?? 1) > 1;
+}
+
+/** Per-cell coordinate-decode preamble. 2D (D===1) emits the verbatim 2-line
+ *  form so existing models compile byte-identically; 3D adds the `_layer`/`_rem`
+ *  decode (reads the precomputed `WH` param). `_row`/`_col` keep their names —
+ *  NI / sub-attr emitters read them. `indent` matches the emit site. */
+function decodeCoordLines(is3d: boolean, indent: string): string[] {
+  if (is3d) {
+    return [
+      `${indent}const _layer = (idx / WH) | 0;`,
+      `${indent}const _rem = idx - _layer * WH;`,
+      `${indent}const _row = (_rem / W) | 0;`,
+      `${indent}const _col = _rem - _row * W;`,
+    ];
+  }
+  return [
+    `${indent}const _row = (idx / W) | 0;`,
+    `${indent}const _col = idx - _row * W;`,
+  ];
+}
+
 function buildLoopParams(model: CAModel): {
   params: string;
   cellAttrs: Array<{ id: string; type: string }>;
@@ -1142,7 +1169,11 @@ function buildLoopParams(model: CAModel): {
     .map(a => ({ id: a.id, type: a.type }));
   const neighborhoods = model.neighborhoods.map(n => ({ id: n.id }));
 
-  const parts: string[] = ['total', 'W', 'H'];
+  // 3D Grid CA: `D` (layer count) + `WH` (W*H, precomputed to avoid a per-cell
+  // recompute) follow W/H — but ONLY for a 3D model, so a 2D step's signature
+  // (and the worker's buildLoopArgs, gated on the SAME predicate) stays
+  // byte-identical to the pre-3D code. The decode below reads them only when 3D.
+  const parts: string[] = is3dModel(model) ? ['total', 'W', 'H', 'D', 'WH'] : ['total', 'W', 'H'];
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
@@ -1167,7 +1198,9 @@ function buildCellParams(model: CAModel): string {
   const neighborhoods = model.neighborhoods;
   const variegated = !!model.variegatedCells?.enabled;
   const hasLookupTables = model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable');
-  const parts: string[] = ['idx', 'total', 'W', 'H'];
+  // 3D Grid CA: D + WH follow W/H only for a 3D model (mirrors buildLoopParams +
+  // the worker's buildCellArgs). 2D signature byte-identical.
+  const parts: string[] = is3dModel(model) ? ['idx', 'total', 'W', 'H', 'D', 'WH'] : ['idx', 'total', 'W', 'H'];
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   for (const n of neighborhoods) { parts.push(`nIdx_${n.id}`); parts.push(`nSz_${n.id}`); }
@@ -1616,6 +1649,8 @@ export function compileGraph(
 
   const { params: loopParams, cellAttrs } = buildLoopParams(model);
   const cellParams = buildCellParams(model);
+  // 3D Grid CA: drives the per-cell coordinate decode at every entry point.
+  const is3d = is3dModel(model);
 
   // Per-attribute sub-attribute info (null for regular attrs).
   const subAttrInfoById = new Map<string, ReturnType<typeof subAttrInfo>>();
@@ -1722,8 +1757,8 @@ export function compileGraph(
         // Wave A.6: per-cell (row, col) decoded from idx — used by NI access
         // helpers (filterNeighbors, get/setNeighborAttributeByIndex, etc.).
         // Two ops per cell, amortised across all NI accesses in the cell body.
-        '    const _row = (idx / W) | 0;',
-        '    const _col = idx - _row * W;',
+        // 3D Grid CA: adds the _layer/_rem decode when the model is 3D.
+        ...decodeCoordLines(is3d, '    '),
         ...variableBlocks.inLoopReset,
         ...valueLines,
         '',
@@ -1748,8 +1783,7 @@ export function compileGraph(
         '  for (let idx = 0; idx < total; idx++) {',
         '    const colorIdx = idx * 4;',
         // Wave A.6: per-cell (row, col) decoded from idx — see async branch comment.
-        '    const _row = (idx / W) | 0;',
-        '    const _col = idx - _row * W;',
+        ...decodeCoordLines(is3d, '    '),
         // Sub-attribute conditional copy: scrub non-matching cells to defaultValue,
         // copy from r_ to w_ for matching cells. Replaces the bulk .set() that
         // regular attrs use. User rule writes later overwrite w_ as needed.
@@ -1794,8 +1828,7 @@ export function compileGraph(
       `(function(_r, _g, _b, ${cellParams}) {`,
       '  const colorIdx = idx * 4;',
       // Wave A.6: per-cell (row, col) decoded from idx for NI access helpers.
-      '  const _row = (idx / W) | 0;',
-      '  const _col = idx - _row * W;',
+      ...decodeCoordLines(is3d, '  '),
       ...icCopyLines,
       `  const _v${icNode.id}_r = _r; const _v${icNode.id}_g = _g; const _v${icNode.id}_b = _b;`,
       '  let _rs = _rngState[0] || 0x12345678;',
@@ -1816,7 +1849,7 @@ export function compileGraph(
   const outputMappingCodes: Array<{ mappingId: string; code: string }> = [];
 
   // Output mapping uses sync-style loop params (no order) regardless of updateMode
-  const omParamParts: string[] = ['total', 'W', 'H'];
+  const omParamParts: string[] = is3d ? ['total', 'W', 'H', 'D', 'WH'] : ['total', 'W', 'H'];
   for (const a of cellAttrs) omParamParts.push(`r_${a.id}`);
   for (const a of cellAttrs) omParamParts.push(`w_${a.id}`);
   const neighborhoods = model.neighborhoods.map(n => ({ id: n.id }));
@@ -1842,8 +1875,7 @@ export function compileGraph(
       '  for (let idx = 0; idx < total; idx++) {',
       '    const colorIdx = idx * 4;',
       // Wave A.6: per-cell (row, col) decoded from idx for NI access helpers.
-      '    const _row = (idx / W) | 0;',
-      '    const _col = idx - _row * W;',
+      ...decodeCoordLines(is3d, '    '),
       ...valueLines,
       '',
       ...flowLines,
@@ -1883,12 +1915,16 @@ export function compileGraph(
       ...initBulkCopy,
       '  for (let idx = 0; idx < total; idx++) {',
       '    const colorIdx = idx * 4;',
-      '    const _row = (idx / W) | 0;',
-      '    const _col = idx - _row * W;',
+      ...decodeCoordLines(is3d, '    '),
       `    const _v${initId}_x = _col;`,
       `    const _v${initId}_y = _row;`,
       `    const _v${initId}_maxX = W - 1;`,
       `    const _v${initId}_maxY = H - 1;`,
+      // 3D Grid CA: expose the layer (z) + maxZ to the InitEvent's z/maxZ ports.
+      ...(is3d ? [
+        `    const _v${initId}_z = _layer;`,
+        `    const _v${initId}_maxZ = D - 1;`,
+      ] : []),
       ...subAttrSyncCopyLines,
       ...valueLines,
       '',
