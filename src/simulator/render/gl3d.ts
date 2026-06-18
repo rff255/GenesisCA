@@ -293,8 +293,11 @@ export class Gl3DRenderer {
   private viz: Viz3D = { axes: false, grid: false, bounds: false, gizmo: true };
   /** Brush interaction plane (bounds + grid indicator). null = not shown. */
   private brushPlane: { axis: 'x' | 'y' | 'z'; pos: number } | null = null;
-  /** Hovered cell — drawn as a wireframe cube cursor. null = no hover. */
-  private hoverCell: { layer: number; row: number; col: number } | null = null;
+  /** Hovered brush FOOTPRINT — every cell the brush would affect, drawn as
+   *  wireframe cube cursors. Empty = no hover. */
+  private hoverCells: ReadonlyArray<{ layer: number; row: number; col: number }> = [];
+  /** Canvas clear colour [r,g,b,a] 0..1. Default transparent (shows the page). */
+  private bgColor: [number, number, number, number] = [0, 0, 0, 0];
   /** Line overlay (axes/grid/bounds) + gizmo pipeline. */
   private lineProg: WebGLProgram;
   private lineVao: WebGLVertexArrayObject;
@@ -346,7 +349,10 @@ export class Gl3DRenderer {
   setClipPlane(clip: ClipPlane3D): void { this.clip = clip; }
   setViz(viz: Viz3D): void { this.viz = viz; }
   setBrushPlane(p: { axis: 'x' | 'y' | 'z'; pos: number } | null): void { this.brushPlane = p; }
-  setHoverCell(c: { layer: number; row: number; col: number } | null): void { this.hoverCell = c; }
+  /** Set the hovered brush footprint (every affected cell). Pass [] to clear. */
+  setHoverCells(cells: ReadonlyArray<{ layer: number; row: number; col: number }>): void { this.hoverCells = cells; }
+  /** Canvas background. `null` → transparent (page shows through). */
+  setBackgroundColor(c: [number, number, number, number] | null): void { this.bgColor = c ?? [0, 0, 0, 0]; }
 
   /** Compute the view-projection matrix from the Z-up orbit camera. */
   setCamera(cam: Camera3D, aspect: number): void {
@@ -449,6 +455,7 @@ export class Gl3DRenderer {
   render(): void {
     const gl = this.gl;
     gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+    gl.clearColor(this.bgColor[0], this.bgColor[1], this.bgColor[2], this.bgColor[3]);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     this.renderOverlays();   // axes / grid / bounds (behind the voxels)
     this.renderBrushPlane(); // brush interaction-plane bounds + grid (depth-tested)
@@ -470,7 +477,7 @@ export class Gl3DRenderer {
       gl.disable(gl.BLEND);
       gl.bindVertexArray(null);
     }
-    this.renderHoverCube();  // wireframe cube cursor on the hovered cell (on top)
+    this.renderHoverCells(); // wireframe cube cursors on the brush footprint (on top)
     this.renderGizmo();      // corner orientation widget (always on top)
   }
 
@@ -562,30 +569,33 @@ export class Gl3DRenderer {
     this.drawLines(new Float32Array(v), gl.LINES, this.mvp);
   }
 
-  /** Wireframe-cube cursor on the hovered cell. Drawn with depth test OFF so it
-   *  reads as an always-visible cursor (like the 2D negative-silhouette brush). */
-  private renderHoverCube(): void {
-    const c = this.hoverCell;
-    if (!c) return;
+  /** Wireframe-cube cursors on the brush FOOTPRINT (every cell the brush would
+   *  affect). Drawn with depth test OFF so they read as an always-visible cursor
+   *  (like the 2D negative-silhouette brush), one cube per affected cell so the
+   *  exact shape/size of the brush is visible before clicking. */
+  private renderHoverCells(): void {
+    const cells = this.hoverCells;
+    if (cells.length === 0) return;
     const gl = this.gl;
     const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
-    const cx = c.col - hx, cy = c.row - hy, cz = hz - c.layer;  // Z-up cell centre
     const h = 0.56;  // slightly larger than the 0.92-scaled cube so it frames the cell
-    const xs = [cx - h, cx + h], ys = [cy - h, cy + h], zs = [cz - h, cz + h];
     const r = 1.0, g = 0.85, b = 0.2;  // amber cursor
-    const v: number[] = [];
-    const corner = (i: number): [number, number, number] => [xs[i & 1]!, ys[(i >> 1) & 1]!, zs[(i >> 2) & 1]!];
     const EDGES = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
-    for (const [a, bb] of EDGES) {
-      const A = corner(a!), B = corner(bb!);
-      v.push(A[0], A[1], A[2], r, g, b, B[0], B[1], B[2], r, g, b);
+    const v: number[] = [];
+    for (const c of cells) {
+      const cx = c.col - hx, cy = c.row - hy, cz = hz - c.layer;  // Z-up cell centre
+      const xs = [cx - h, cx + h], ys = [cy - h, cy + h], zs = [cz - h, cz + h];
+      const corner = (i: number): [number, number, number] => [xs[i & 1]!, ys[(i >> 1) & 1]!, zs[(i >> 2) & 1]!];
+      for (const [a, bb] of EDGES) {
+        const A = corner(a!), B = corner(bb!);
+        v.push(A[0], A[1], A[2], r, g, b, B[0], B[1], B[2], r, g, b);
+      }
     }
     gl.disable(gl.DEPTH_TEST);
     this.drawLines(new Float32Array(v), gl.LINES, this.mvp);
     gl.enable(gl.DEPTH_TEST);
   }
 
-  /** Corner orientation gizmo: 3 colored axes rotating with the camera. */
   /** Pixel size of the square corner-gizmo viewport (device px). */
   private gizmoSizePx(): number {
     const gl = this.gl;

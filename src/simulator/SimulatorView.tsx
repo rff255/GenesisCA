@@ -139,6 +139,9 @@ function cellSilhouetteEdges(cells: Array<[number, number]>): Array<[number, num
 // strip. Doesn't collide with real mapping IDs (which are nanoid-like).
 export const MANUAL_BRUSH_MAPPING_ID = '__manual__';
 
+/** Stable empty footprint array (avoids a new [] per frame when 3D hover is off). */
+const EMPTY_HOVER_CELLS: ReadonlyArray<{ layer: number; row: number; col: number }> = [];
+
 export interface ManualBrushAttrEntry {
   enabled: boolean;
   /** Canonical string encoding, identical to Attribute.defaultValue. */
@@ -574,6 +577,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // F5: Simulator dimension overrides
   const [simWidth, setSimWidth] = useState(100);
   const [simHeight, setSimHeight] = useState(100);
+  const [simDepth, setSimDepth] = useState(1);  // 3D Grid CA: resize-panel depth
 
   // F6: Image import pending state
   const pendingImageImport = useRef<Uint8ClampedArray | null>(null);
@@ -653,8 +657,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // interpolation so a fast drag doesn't leave gaps between stamps. Reset on
   // pointer-down / -up (and implicitly when the plane changes mid-stroke).
   const last3dHitRef = useRef<{ layer: number; row: number; col: number } | null>(null);
-  // Hovered brush-plane cell — rendered as a wireframe cube cursor. null = none.
+  // Hovered brush-plane cell (change-detection) + the full brush FOOTPRINT it
+  // expands to (the cells the renderer outlines as the cube cursor).
   const hover3dRef = useRef<{ layer: number; row: number; col: number } | null>(null);
+  const hoverCells3dRef = useRef<ReadonlyArray<{ layer: number; row: number; col: number }>>([]);
+  // 3D Line tool: first click stages a plane-cell anchor (no paint); the second
+  // click draws the capsule line between them. null = no staged anchor.
+  const line3dAnchorRef = useRef<{ layer: number; row: number; col: number } | null>(null);
+  // 3D canvas background colour fed to the renderer ([r,g,b,a] 0..1, null = transparent).
+  const bg3dRef = useRef<[number, number, number, number] | null>(null);
   // 3D control UI state (mirrored into the refs the renderer reads).
   const [clip3d, setClip3d] = useState<{ enabled: boolean; axis: 'x' | 'y' | 'z' | 'camera'; value: number }>(
     { enabled: false, axis: 'z', value: 0 },
@@ -663,6 +674,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const [viz3d, setViz3d] = useState<import('./render/gl3d').Viz3D>({ axes: false, grid: false, bounds: true, gizmo: true });
   const [plane3d, setPlane3d] = useState<{ enabled: boolean; axis: 'x' | 'y' | 'z'; pos: number }>({ enabled: false, axis: 'z', pos: 0 });
   const [orbit3d, setOrbit3d] = useState<{ on: boolean; speed: number }>({ on: false, speed: 0.4 });
+  // 3D canvas background. `enabled` false = transparent (page shows through);
+  // when enabled, `color` (hex) fills the canvas opaquely.
+  const [bg3d, setBg3d] = useState<{ enabled: boolean; color: string }>({ enabled: false, color: '#0c0d10' });
   const [controls3dOpen, setControls3dOpen] = useState(true);
   // Which viewers want the zoomed-out glyph-color fallback (Set Cell Looks with
   // useGlyph + fallbackToGlyphColor). `all` = a node used the Current-Selected
@@ -811,7 +825,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       r.setClipPlane(clip3dRef.current);
       r.setViz(viz3dRef.current);
       r.setBrushPlane(plane3dEnabledRef.current ? { axis: plane3dRef.current.axis, pos: plane3dRef.current.pos } : null);
-      r.setHoverCell(plane3dEnabledRef.current ? hover3dRef.current : null);
+      r.setHoverCells(plane3dEnabledRef.current ? hoverCells3dRef.current : EMPTY_HOVER_CELLS);
+      r.setBackgroundColor(bg3dRef.current);
       r.setCamera(cam3dRef.current, r.canvasWidth / (r.canvasHeight || 1));
       r.uploadColors(colors3d, w3 * h3 * d3);
       r.render();
@@ -1614,7 +1629,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   };
 
   // Reusable worker initializer (used by structural effect and dimension/image apply)
-  const initWorkerWithDimensions = useCallback((w: number, h: number) => {
+  const initWorkerWithDimensions = useCallback((w: number, h: number, dOverride?: number) => {
     // If a recording is in progress, abandon it before tearing down the
     // worker. Otherwise the captured frames (sized to the OUTGOING worker's
     // grid) would mix with future captures (sized to the INCOMING worker's
@@ -1663,15 +1678,19 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // user edits an attribute or mapping while pan/zoom-focused on a region)
     // — resetting in that case throws the user back to a fresh view every
     // edit, breaking the back-and-forth tweak workflow.
-    // 3D Grid CA: derive the layer count the same way the init message does
-    // (dimension 3d ? gridDepth : 1) so the renderer + getState/save agree.
-    const d3 = model.properties.dimension === '3d' ? Math.max(1, model.properties.gridDepth ?? 1) : 1;
+    // 3D Grid CA: derive the layer count. `dOverride` (from the simulator resize
+    // panel) wins; otherwise from the model (dimension 3d ? gridDepth : 1) so the
+    // renderer + getState/save agree.
+    const d3 = dOverride != null
+      ? Math.max(1, dOverride)
+      : (model.properties.dimension === '3d' ? Math.max(1, model.properties.gridDepth ?? 1) : 1);
     const dimsChanged = gridWidth.current !== w || gridHeight.current !== h || gridDepth.current !== d3;
     gridWidth.current = w;
     gridHeight.current = h;
     gridDepth.current = d3;
     setSimWidth(w);
     setSimHeight(h);
+    setSimDepth(d3);
     if (dimsChanged) {
       zoomRef.current = 1;
       panRef.current = { x: 0, y: 0 };
@@ -1709,9 +1728,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // check — without this override the shader rejects half the cells after a
     // resize-to-larger and the simulator looks half-frozen.
     const effModel = withEffectiveNeighborhoods(model);
-    const dimsModel = (model.properties.gridWidth === w && model.properties.gridHeight === h)
+    // 3D Grid CA: the resize panel can also override depth (d3 above). Bake
+    // gridDepth + dimension into the compiler model too so WebGPU's baked `total`
+    // and the 3D decode match (WASM takes total at runtime, but the codec/decode
+    // still keys off dimension/gridDepth).
+    const modelDepth = model.properties.dimension === '3d' ? Math.max(1, model.properties.gridDepth ?? 1) : 1;
+    const dimsModel = (model.properties.gridWidth === w && model.properties.gridHeight === h && modelDepth === d3)
       ? effModel
-      : { ...effModel, properties: { ...effModel.properties, gridWidth: w, gridHeight: h } };
+      : { ...effModel, properties: { ...effModel.properties, gridWidth: w, gridHeight: h, gridDepth: d3, dimension: d3 > 1 ? '3d' as const : effModel.properties.dimension } };
     // Viewer→int mapping is target-agnostic — the worker needs it for
     // uploadActiveViewer regardless of which compile target is active. WGSL
     // SetColorViewer-in-step writes are guarded on `control.activeViewer ==
@@ -1784,11 +1808,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (model.properties.useWebGPU && !webgpuResult.error && offscreenSupported && !is3D) {
       pendingCanvasAttach.current = true;
     }
-    // 3D Grid CA: effective layer count. Only honour gridDepth when the model
-    // is actually 3D — this keeps the worker's `depth` in lockstep with the
-    // compilers' `is3d` (both key on dimension==='3d') so a hand-edited
-    // `dimension:'2d', gridDepth:8` file can't desync the baked total.
-    const d = model.properties.dimension === '3d' ? Math.max(1, model.properties.gridDepth ?? 1) : 1;
+    // 3D Grid CA: effective layer count = d3 computed above (honours a resize-
+    // panel dOverride; otherwise the model's depth, only when dimension==='3d' so
+    // the worker's `depth` stays in lockstep with the compilers' `is3d`).
+    const d = d3;
     const initMsg: Record<string, unknown> = {
       type: 'init',
       width: w,
@@ -2079,10 +2102,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // arg there); only WebGPU exhibits the bug.
       const curW = gridWidth.current;
       const curH = gridHeight.current;
+      // 3D Grid CA: also carry the live DEPTH. A simulator-panel depth-resize
+      // sets gridDepth.current WITHOUT touching model.properties.gridDepth, so on
+      // a soft recompile the model's depth is stale — WebGPU would bake
+      // total = W*H*staleDepth and freeze every layer past it. Mirror the
+      // full-reinit dimsModel (W/H + gridDepth + dimension).
+      const curD = gridDepth.current;
+      const modelDepth = model.properties.dimension === '3d' ? Math.max(1, model.properties.gridDepth ?? 1) : 1;
       const effModel = withEffectiveNeighborhoods(model);
-      const dimsModel = (model.properties.gridWidth === curW && model.properties.gridHeight === curH)
+      const dimsModel = (model.properties.gridWidth === curW && model.properties.gridHeight === curH && modelDepth === curD)
         ? effModel
-        : { ...effModel, properties: { ...effModel.properties, gridWidth: curW, gridHeight: curH } };
+        : { ...effModel, properties: { ...effModel.properties, gridWidth: curW, gridHeight: curH, gridDepth: curD, dimension: curD > 1 ? '3d' as const : effModel.properties.dimension } };
       const result = compileGraph(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
       // Show Code follows the selected target — same dispatch as compileModel().
       if (dimsModel.properties.useWebGPU) {
@@ -2249,31 +2279,57 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (!is3D) return;
     const glc = glCanvasRef.current;
     if (!glc) return;
-    let active: 'orbit' | 'pan' | 'brush' | null = null;
+    let active: 'orbit' | 'pan' | 'brush' | 'inspect' | null = null;
     let lastX = 0, lastY = 0, downX = 0, downY = 0, moved = false;
     const maxDim = () => Math.max(gridWidth.current, gridHeight.current, gridDepth.current, 1);
-    const brushAt = (clientX: number, clientY: number) => {
+    type Cell = { layer: number; row: number; col: number };
+    const pickCell = (clientX: number, clientY: number): Cell | null => {
       const r = gl3dRef.current; const pl = plane3dRef.current;
-      if (!r || !plane3dEnabledRef.current) return;
+      if (!r || !plane3dEnabledRef.current) return null;
       const rect = glc.getBoundingClientRect();
-      const hit = r.pickOnPlane(clientX - rect.left, clientY - rect.top, rect.width, rect.height, pl.axis, pl.pos);
+      return r.pickOnPlane(clientX - rect.left, clientY - rect.top, rect.width, rect.height, pl.axis, pl.pos);
+    };
+    const brushAt = (clientX: number, clientY: number) => {
+      const hit = pickCell(clientX, clientY);
       if (hit) paint3dRef.current?.(hit.layer, hit.row, hit.col);
     };
-    type Cell = { layer: number; row: number; col: number };
+    // Capsule-line footprint on the plane (anchor→end), reusing the 2D
+    // lineStampCells in the plane's free-axis coords, then mapped to 3D cells.
+    const lineFootprint = (anchor: Cell, end: Cell, width: number): Cell[] => {
+      const axis = plane3dRef.current.axis, pos = plane3dRef.current.pos;
+      const aF: [number, number] = axis === 'z' ? [anchor.row, anchor.col] : axis === 'y' ? [anchor.layer, anchor.col] : [anchor.layer, anchor.row];
+      const eF: [number, number] = axis === 'z' ? [end.row, end.col] : axis === 'y' ? [end.layer, end.col] : [end.layer, end.row];
+      const cells = lineStampCells({ row: aF[0], col: aF[1] }, { row: eF[0], col: eF[1] }, width);
+      const center: Cell = axis === 'z' ? { layer: pos, row: 0, col: 0 } : axis === 'y' ? { layer: 0, row: pos, col: 0 } : { layer: 0, row: 0, col: pos };
+      return mapStampToPlane(center, cells.map(c => [c.row, c.col] as [number, number]));
+    };
+    const paintLine3d = (anchor: Cell, end: Cell) => {
+      const { r, g, b } = hexToRgb(brushColorRef.current);
+      pendingPaintMapping.current = brushMappingRef.current;
+      pendingPaintViewer.current = activeViewerRef.current;
+      for (const c of lineFootprint(anchor, end, brushLineWidthRef.current)) {
+        pendingPaintCells.current.push({ row: c.row, col: c.col, layer: c.layer, r, g, b });
+      }
+      flushPaintBatch();
+    };
+    // The brush footprint to highlight at a hovered cell: the line preview while a
+    // Line anchor is staged, otherwise the current shape's stamp.
+    const footprintFor = (hit: Cell): ReadonlyArray<Cell> =>
+      (brushShapeRef.current === 'line' && line3dAnchorRef.current)
+        ? lineFootprint(line3dAnchorRef.current, hit, brushLineWidthRef.current)
+        : mapStampToPlane(hit, currentStampOffsets());
     const sameCell = (a: Cell | null, b: Cell | null): boolean =>
       a === b || (!!a && !!b && a.layer === b.layer && a.row === b.row && a.col === b.col);
-    // Track the hovered brush-plane cell for the wireframe cube cursor. Returns
-    // true when the hovered cell CHANGED (so the caller only redraws then — a
-    // full GL re-render per raw pointermove is wasteful on large volumes).
+    // Track the hovered brush-plane cell + its FOOTPRINT (the cells the brush would
+    // affect). Returns true when something changed (caller redraws only then — a
+    // full GL re-render per raw pointermove is wasteful on large volumes). A staged
+    // Line always recomputes (the preview grows with the cursor).
     const updateHover = (clientX: number, clientY: number): boolean => {
-      const r = gl3dRef.current; const pl = plane3dRef.current;
-      let hit: Cell | null = null;
-      if (r && plane3dEnabledRef.current) {
-        const rect = glc.getBoundingClientRect();
-        hit = r.pickOnPlane(clientX - rect.left, clientY - rect.top, rect.width, rect.height, pl.axis, pl.pos);
-      }
-      if (sameCell(hit, hover3dRef.current)) return false;
+      const hit = pickCell(clientX, clientY);
+      const lineStaging = brushShapeRef.current === 'line' && !!line3dAnchorRef.current;
+      if (!lineStaging && sameCell(hit, hover3dRef.current)) return false;
       hover3dRef.current = hit;
+      hoverCells3dRef.current = hit ? footprintFor(hit) : EMPTY_HOVER_CELLS;
       return true;
     };
     // Snap the camera to one of the 6 main POVs (Blender-style gizmo click).
@@ -2288,6 +2344,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     };
     const onDown = (e: PointerEvent) => {
       if ((e.target as HTMLElement)?.closest?.('[data-sim-overlay]')) return;
+      // Move keyboard focus off any text field so the transport shortcuts
+      // (Enter/Space/Esc) work after clicking the canvas — the canvas isn't
+      // focusable and the e.preventDefault() below would otherwise leave focus on
+      // the last-edited input, where the shortcut handler bails.
+      const ae = document.activeElement as HTMLElement | null;
+      if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT')) ae.blur();
       // Clicking the corner gizmo snaps to that POV (highest priority — no drag).
       if (e.button === 0 && gl3dRef.current) {
         const rect = glc.getBoundingClientRect();
@@ -2298,16 +2360,31 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       lastX = downX = e.clientX; lastY = downY = e.clientY;
       const orbitBtn = e.button === 1 || (e.button === 0 && e.altKey);
       if (orbitBtn) active = e.shiftKey ? 'pan' : 'orbit';
-      else if (e.button === 2) active = 'pan';  // RMB pan (RMB is otherwise unused in 3D)
-      else if (e.button === 0 && (e.ctrlKey || e.metaKey)) active = null; // handled on up (inspect)
+      else if (e.button === 2) {
+        // RMB cancels a staged Line anchor; otherwise it pans (RMB is otherwise unused).
+        if (line3dAnchorRef.current) { line3dAnchorRef.current = null; active = null; updateHover(e.clientX, e.clientY); draw(); }
+        else active = 'pan';
+      }
+      else if (e.button === 0 && (e.shiftKey || e.ctrlKey || e.metaKey)) active = 'inspect'; // Shift/Ctrl+LMB → inspect (on up)
+      else if (e.button === 0 && brushShapeRef.current === 'line') {
+        // Line tool: two clicks. First stages a plane-cell anchor (no paint); the
+        // second draws the capsule line between them. No drag-paint in this mode.
+        active = null;
+        const hit = pickCell(e.clientX, e.clientY);
+        if (hit) {
+          if (!line3dAnchorRef.current) line3dAnchorRef.current = hit;
+          else { paintLine3d(line3dAnchorRef.current, hit); line3dAnchorRef.current = null; }
+          updateHover(e.clientX, e.clientY); draw();
+        }
+      }
       else if (e.button === 0) { active = 'brush'; last3dHitRef.current = null; brushAt(e.clientX, e.clientY); }
       else active = null;
       glc.setPointerCapture?.(e.pointerId);
       e.preventDefault();
     };
     const onMove = (e: PointerEvent) => {
-      if (!active) {
-        // Idle hover: update the cube cursor; redraw only when the cell changes.
+      if (!active || active === 'inspect') {
+        // Idle / inspect-armed: update the footprint cursor (redraw on change).
         if (updateHover(e.clientX, e.clientY)) draw();
         return;
       }
@@ -2327,11 +2404,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
       draw();
     };
-    const onLeave = () => { if (hover3dRef.current) { hover3dRef.current = null; draw(); } };
+    const onLeave = () => {
+      if (hover3dRef.current || hoverCells3dRef.current.length) {
+        hover3dRef.current = null; hoverCells3dRef.current = EMPTY_HOVER_CELLS; draw();
+      }
+    };
     const onUp = (e: PointerEvent) => {
       glc.releasePointerCapture?.(e.pointerId);
-      // Ctrl/Cmd+LMB click (no drag) → inspect the picked cell.
-      if (!moved && e.button === 0 && (e.ctrlKey || e.metaKey) && gl3dRef.current) {
+      // Shift/Ctrl/Cmd+LMB click (no drag) → inspect the picked cell.
+      if (active === 'inspect' && !moved && gl3dRef.current) {
         const rect = glc.getBoundingClientRect();
         const idx = gl3dRef.current.pick(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
         if (idx >= 0) openInspect3dRef.current?.(idx, e.clientX, e.clientY);
@@ -2396,9 +2477,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   useEffect(() => {
     plane3dRef.current = { axis: plane3d.axis, pos: plane3d.pos };
     plane3dEnabledRef.current = plane3d.enabled;
+    line3dAnchorRef.current = null;  // a staged Line anchor is meaningless on a moved plane
     draw();
   }, [plane3d, draw]);
   useEffect(() => { orbit3dRef.current = orbit3d; }, [orbit3d]);
+  useEffect(() => {
+    if (bg3d.enabled) {
+      const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(bg3d.color.trim());
+      bg3dRef.current = m
+        ? [parseInt(m[1]!, 16) / 255, parseInt(m[2]!, 16) / 255, parseInt(m[3]!, 16) / 255, 1]
+        : [0, 0, 0, 1];
+    } else {
+      bg3dRef.current = null;  // transparent
+    }
+    draw();
+  }, [bg3d, draw]);
 
   // 3D Grid CA: auto-orbit loop — spins the camera while enabled (and 3D + visible).
   useEffect(() => {
@@ -2472,8 +2565,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     glyphFallbackRef.current = { all, ids };
   }, [model.graphNodes, model.macroDefs]);
   // Leaving the Line tool (or switching brush tab) drops a staged first click.
-  useEffect(() => { if (brushShape !== 'line') lineAnchorRef.current = null; }, [brushShape]);
-  useEffect(() => { lineAnchorRef.current = null; }, [brushMapping]);
+  useEffect(() => { if (brushShape !== 'line') { lineAnchorRef.current = null; line3dAnchorRef.current = null; } }, [brushShape]);
+  useEffect(() => { lineAnchorRef.current = null; line3dAnchorRef.current = null; }, [brushMapping]);
   useEffect(() => { activeViewerRef.current = activeViewer; }, [activeViewer]);
   // When the user switches output-mapping tabs (e.g. while paused), fire one color pass so the
   // grid reflects the new mapping immediately instead of waiting for the next step/paint/reset.
@@ -2775,6 +2868,29 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     workerRef.current?.postMessage({ type: 'paint', cells, mappingId, activeViewer: viewer });
   }, []);
 
+  // 3D Grid CA: map 2D brush-stamp offsets (dRow,dCol) onto the current brush
+  // plane's two FREE grid axes around a centre cell (whose fixed-axis coord is the
+  // plane position), torus-wrapping the free axes. The SINGLE source of truth for
+  // both the paint stamp (paint3dRef) and the hover-footprint cursor / line
+  // preview — so what you see highlighted is exactly what gets painted.
+  //   z-plane (layer fixed) → dRow→row, dCol→col (identical to 2D)
+  //   y-plane (row fixed)   → dRow→layer, dCol→col
+  //   x-plane (col fixed)   → dRow→layer, dCol→row
+  const mapStampToPlane = useCallback(
+    (center: { layer: number; row: number; col: number }, offsets: ReadonlyArray<[number, number]>) => {
+      const W = gridWidth.current, H = gridHeight.current, Dd = gridDepth.current;
+      const axis = plane3dRef.current.axis;
+      const torus = boundaryTreatmentRef.current === 'torus';
+      const wrap = (v: number, n: number): number => (torus && n > 0 ? ((v % n) + n) % n : v);
+      const out: Array<{ layer: number; row: number; col: number }> = [];
+      for (const [dr, dc] of offsets) {
+        if (axis === 'z') out.push({ layer: center.layer, row: wrap(center.row + dr, H), col: wrap(center.col + dc, W) });
+        else if (axis === 'y') out.push({ layer: wrap(center.layer + dr, Dd), row: center.row, col: wrap(center.col + dc, W) });
+        else out.push({ layer: wrap(center.layer + dr, Dd), row: wrap(center.row + dc, H), col: center.col });
+      }
+      return out;
+    }, []);
+
   // 3D Grid CA: stamp the current brush shape onto the interaction plane around
   // the picked cell, exactly like the 2D brush stamps around the cursor. The
   // 2D stamp offsets `(dRow, dCol)` map onto the plane's two FREE grid axes (the
@@ -2784,25 +2900,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // models wrap the free axes; bounded models rely on the worker's inBounds3d
   // clip. Mirrors brushCellsAt + paintAt's Bresenham, lifted to 3 axes.
   paint3dRef.current = (hitLayer: number, hitRow: number, hitCol: number) => {
-    const W = gridWidth.current, H = gridHeight.current, Dd = gridDepth.current;
     const axis = plane3dRef.current.axis;
-    const torus = boundaryTreatmentRef.current === 'torus';
     const { r, g, b } = hexToRgb(brushColorRef.current);
     const offsets = currentStampOffsets();
-    const wrap = (v: number, n: number): number => (torus && n > 0 ? ((v % n) + n) % n : v);
-
-    // The plane's two free axes (and their grid sizes), in (free1, free2) order.
-    // free1 ← stamp dRow, free2 ← stamp dCol. The fixed axis stays at the pick.
-    //   z-plane (layer fixed) → (row, col)  — identical to the 2D mapping
-    //   y-plane (row fixed)   → (layer, col)
-    //   x-plane (col fixed)   → (layer, row)
+    // mapStampToPlane maps each offset onto the plane's free axes (+ torus wrap).
     const stampAt = (L: number, R: number, C: number): void => {
-      for (const [dr, dc] of offsets) {
-        let cl = L, cr = R, cc = C;
-        if (axis === 'z') { cr = wrap(R + dr, H); cc = wrap(C + dc, W); }
-        else if (axis === 'y') { cl = wrap(L + dr, Dd); cc = wrap(C + dc, W); }
-        else { cl = wrap(L + dr, Dd); cr = wrap(R + dc, H); }
-        pendingPaintCells.current.push({ row: cr, col: cc, layer: cl, r, g, b });
+      for (const c of mapStampToPlane({ layer: L, row: R, col: C }, offsets)) {
+        pendingPaintCells.current.push({ row: c.row, col: c.col, layer: c.layer, r, g, b });
       }
     };
 
@@ -3555,11 +3659,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
       if (e.key === ' ') { e.preventDefault(); handleStep(); }
       else if (e.key === 'Enter') { e.preventDefault(); setPlaying(p => !p); }
-      else if (e.key === 'Escape' && lineAnchorRef.current) {
-        // A staged Line-tool anchor consumes Escape (cancel the line) so the
-        // user doesn't accidentally reset the whole simulation.
+      else if (e.key === 'Escape' && (lineAnchorRef.current || line3dAnchorRef.current)) {
+        // A staged Line-tool anchor (2D or 3D) consumes Escape (cancel the line)
+        // so the user doesn't accidentally reset the whole simulation.
         e.preventDefault();
         lineAnchorRef.current = null;
+        line3dAnchorRef.current = null;
         draw();
       }
       else if (e.key === 'Escape' || e.key === 'Backspace') { e.preventDefault(); handleReset(); }
@@ -3996,7 +4101,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const handleApplyDimensions = () => {
     const w = Math.max(1, simWidth);
     const h = Math.max(1, simHeight);
-    initWorkerWithDimensions(w, h);
+    // 3D Grid CA: also resize depth (the panel shows a Depth field in 3D).
+    initWorkerWithDimensions(w, h, is3D ? Math.max(1, simDepth) : undefined);
   };
 
   // F6: Import image as starting point
@@ -4135,6 +4241,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             <span className={styles.statLabel}>H</span>
             <NumberField className={styles.brushInput} style={{ flex: 1, width: 0, minWidth: 0 }} min={1} integer value={simHeight}
               onNumber={setSimHeight} />
+            {is3D && <>
+              <span className={styles.statLabel} title="Layers (3D depth)">D</span>
+              <NumberField className={styles.brushInput} style={{ flex: 1, width: 0, minWidth: 0 }} min={1} integer value={simDepth}
+                onNumber={setSimDepth} />
+            </>}
           </div>
           <button className={styles.controlButton} onClick={handleApplyDimensions}>Resize</button>
           <div className={styles.fieldRow} style={{ marginTop: 6 }}>
@@ -4621,6 +4732,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 <label style={row} title="Blend translucent cells back-to-front (opt-in; opaque is the default)">
                   <input type="checkbox" checked={alpha3d} onChange={e => setAlpha3d(e.target.checked)} />
                   Alpha blend
+                </label>
+                {/* Background colour */}
+                <label style={row} title="Fill the 3D canvas with a solid colour (off = transparent)">
+                  <input type="checkbox" checked={bg3d.enabled} onChange={e => setBg3d(b => ({ ...b, enabled: e.target.checked }))} />
+                  Background
+                  <input type="color" value={bg3d.color}
+                    onChange={e => setBg3d({ enabled: true, color: e.target.value })}
+                    style={{ width: 28, height: 18, marginLeft: 'auto', cursor: 'pointer', border: 'none', background: 'none', padding: 0, opacity: bg3d.enabled ? 1 : 0.5 }} />
                 </label>
               </>)}
             </div>

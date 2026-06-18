@@ -1735,6 +1735,12 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
 
 
 function writeDefaultColors(): void {
+  // 3D Grid CA: the default/fallback coloring is FULLY TRANSPARENT (alpha 0) so
+  // the voxel renderer instances ZERO cells — a model with no explicit Output
+  // Mapping (or before its first colour pass) doesn't pay to build a full opaque
+  // volume on every recompile/init that the simulation would just erase. 2D keeps
+  // the visible fallback below (the flat canvas needs something to show).
+  if (depth > 1) { colors.fill(0); return; }
   // Fallback coloring: first bool attr determines color
   const firstBool = cellAttrs.find(a => a.type === 'bool');
   if (!firstBool) {
