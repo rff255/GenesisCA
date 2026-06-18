@@ -51,6 +51,53 @@ function mat4LookAt(eye: [number, number, number], center: [number, number, numb
   m[15] = 1;
   return m;
 }
+function mat4Ortho(l: number, r: number, b: number, t: number, n: number, f: number): Mat4 {
+  const m = new Float32Array(16);
+  m[0] = 2 / (r - l); m[5] = 2 / (t - b); m[10] = -2 / (f - n);
+  m[12] = -(r + l) / (r - l); m[13] = -(t + b) / (t - b); m[14] = -(f + n) / (f - n); m[15] = 1;
+  return m;
+}
+/** 4×4 inverse (returns null if singular). */
+function mat4Invert(m: Mat4): Mat4 | null {
+  const a = m;
+  const b00 = a[0]! * a[5]! - a[1]! * a[4]!, b01 = a[0]! * a[6]! - a[2]! * a[4]!;
+  const b02 = a[0]! * a[7]! - a[3]! * a[4]!, b03 = a[1]! * a[6]! - a[2]! * a[5]!;
+  const b04 = a[1]! * a[7]! - a[3]! * a[5]!, b05 = a[2]! * a[7]! - a[3]! * a[6]!;
+  const b06 = a[8]! * a[13]! - a[9]! * a[12]!, b07 = a[8]! * a[14]! - a[10]! * a[12]!;
+  const b08 = a[8]! * a[15]! - a[11]! * a[12]!, b09 = a[9]! * a[14]! - a[10]! * a[13]!;
+  const b10 = a[9]! * a[15]! - a[11]! * a[13]!, b11 = a[10]! * a[15]! - a[11]! * a[14]!;
+  let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+  if (!det) return null;
+  det = 1 / det;
+  const o = new Float32Array(16);
+  o[0] = (a[5]! * b11 - a[6]! * b10 + a[7]! * b09) * det;
+  o[1] = (a[2]! * b10 - a[1]! * b11 - a[3]! * b09) * det;
+  o[2] = (a[13]! * b05 - a[14]! * b04 + a[15]! * b03) * det;
+  o[3] = (a[10]! * b04 - a[9]! * b05 - a[11]! * b03) * det;
+  o[4] = (a[6]! * b08 - a[4]! * b11 - a[7]! * b07) * det;
+  o[5] = (a[0]! * b11 - a[2]! * b08 + a[3]! * b07) * det;
+  o[6] = (a[14]! * b02 - a[12]! * b05 - a[15]! * b01) * det;
+  o[7] = (a[8]! * b05 - a[10]! * b02 + a[11]! * b01) * det;
+  o[8] = (a[4]! * b10 - a[5]! * b08 + a[7]! * b06) * det;
+  o[9] = (a[1]! * b08 - a[0]! * b10 - a[3]! * b06) * det;
+  o[10] = (a[12]! * b04 - a[13]! * b02 + a[15]! * b00) * det;
+  o[11] = (a[9]! * b02 - a[8]! * b04 - a[11]! * b00) * det;
+  o[12] = (a[5]! * b07 - a[4]! * b09 - a[6]! * b06) * det;
+  o[13] = (a[0]! * b09 - a[1]! * b07 + a[2]! * b06) * det;
+  o[14] = (a[13]! * b01 - a[12]! * b03 - a[14]! * b00) * det;
+  o[15] = (a[8]! * b03 - a[9]! * b01 + a[10]! * b00) * det;
+  return o;
+}
+/** Unproject an NDC point through inv(MVP) → world (perspective divide). */
+function unproject(invMVP: Mat4, x: number, y: number, z: number): [number, number, number] | null {
+  const m = invMVP;
+  const ox = m[0]! * x + m[4]! * y + m[8]! * z + m[12]!;
+  const oy = m[1]! * x + m[5]! * y + m[9]! * z + m[13]!;
+  const oz = m[2]! * x + m[6]! * y + m[10]! * z + m[14]!;
+  const ow = m[3]! * x + m[7]! * y + m[11]! * z + m[15]!;
+  if (!ow) return null;
+  return [ox / ow, oy / ow, oz / ow];
+}
 function mat4Mul(a: Mat4, b: Mat4): Mat4 {
   const o = new Float32Array(16);
   for (let r = 0; r < 4; r++)
@@ -59,8 +106,44 @@ function mat4Mul(a: Mat4, b: Mat4): Mat4 {
   return o;
 }
 
-export interface Camera3D { yaw: number; pitch: number; dist: number; panX: number; panY: number; }
-export interface ClipPlane3D { enabled: boolean; axis: 'x' | 'y' | 'z'; value: number; }
+// Z-up orbit camera (Blender convention): the XY plane is the horizon (the 2D-CA
+// plane), Z is vertical with layer increasing DOWNWARD, so a top-down view shows
+// the grid like a 2D CA. `target` is the orbit pivot (moved by screen-space pan);
+// `dist` is a multiple of the largest grid dimension.
+export interface Camera3D { yaw: number; pitch: number; dist: number; target: [number, number, number]; }
+// Clip/slice plane. `axis` 'x'|'y'|'z' cuts along a grid axis; 'camera' cuts along
+// the current view direction (peel toward the viewer).
+export interface ClipPlane3D { enabled: boolean; axis: 'x' | 'y' | 'z' | 'camera'; value: number; }
+/** Toggleable scene overlays. */
+export interface Viz3D { axes: boolean; grid: boolean; bounds: boolean; gizmo: boolean; }
+
+const WORLD_UP: [number, number, number] = [0, 0, 1];
+
+/** Camera basis (forward/right/up) from yaw/pitch in the Z-up convention. */
+function cameraBasis(cam: Camera3D): { dir: [number, number, number]; right: [number, number, number]; up: [number, number, number] } {
+  const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
+  // Direction from target → eye.
+  const dir: [number, number, number] = [cp * cy, cp * sy, sp];
+  // forward = -dir; right = normalize(forward × worldUp); up = right × forward.
+  const fx = -dir[0], fy = -dir[1], fz = -dir[2];
+  let rx = fy * WORLD_UP[2] - fz * WORLD_UP[1];
+  let ry = fz * WORLD_UP[0] - fx * WORLD_UP[2];
+  let rz = fx * WORLD_UP[1] - fy * WORLD_UP[0];
+  const rl = Math.hypot(rx, ry, rz) || 1; rx /= rl; ry /= rl; rz /= rl;
+  const ux = ry * fz - rz * fy, uy = rz * fx - rx * fz, uz = rx * fy - ry * fx;
+  return { dir, right: [rx, ry, rz], up: [ux, uy, uz] };
+}
+
+/** Screen-space pan: move the camera target along the camera's right/up axes so
+ *  panning tracks the current viewpoint (not a fixed world plane). `scale` maps
+ *  pixels → world units (caller passes ~dist*dim/viewportHeight). */
+export function panCamera(cam: Camera3D, dxPx: number, dyPx: number, scale: number): void {
+  const { right, up } = cameraBasis(cam);
+  cam.target[0] += (-dxPx * right[0] + dyPx * up[0]) * scale;
+  cam.target[1] += (-dxPx * right[1] + dyPx * up[1]) * scale;
+  cam.target[2] += (-dxPx * right[2] + dyPx * up[2]) * scale;
+}
 
 // 36-vertex unit cube centred at origin (side 1), with per-vertex face normals.
 // pos.xyz then normal.xyz, 6 floats/vertex.
@@ -95,7 +178,8 @@ void main() {
   float rem = aCellIndex - layer * uWH;
   float row = floor(rem / uW);
   float col = rem - row * uW;
-  vec3 centre = vec3(col - uHalf.x, row - uHalf.y, layer - uHalf.z);
+  // Z-up: XY is the horizon plane; layer increases DOWNWARD (layer 0 on top).
+  vec3 centre = vec3(col - uHalf.x, row - uHalf.y, uHalf.z - layer);
   vWorld = centre;
   vColor = aColor;
   vNormal = aNormal;
@@ -108,12 +192,13 @@ in vec4 vColor;
 in vec3 vNormal;
 in vec3 vWorld;
 uniform int uClipEnabled;   // 0/1
-uniform int uClipAxis;      // 0=x 1=y 2=z
-uniform float uClipValue;   // world-space cut along the axis (cells beyond are hidden)
+uniform int uClipAxis;      // 0=x 1=y 2=z 3=camera-view-axis
+uniform float uClipValue;   // cut position (cells beyond are hidden)
+uniform vec3 uClipForward;  // camera forward (for axis 3)
 out vec4 outColor;
 void main() {
   if (uClipEnabled == 1) {
-    float w = uClipAxis == 0 ? vWorld.x : (uClipAxis == 1 ? vWorld.y : vWorld.z);
+    float w = uClipAxis == 0 ? vWorld.x : uClipAxis == 1 ? vWorld.y : uClipAxis == 2 ? vWorld.z : dot(vWorld, uClipForward);
     if (w > uClipValue) { discard; }
   }
   // Flat directional shade by face normal so the cubes read as solid volume.
@@ -130,10 +215,11 @@ in vec3 vWorldP;
 uniform int uClipEnabled;
 uniform int uClipAxis;
 uniform float uClipValue;
+uniform vec3 uClipForward;
 out vec4 outColor;
 void main() {
   if (uClipEnabled == 1) {
-    float w = uClipAxis == 0 ? vWorldP.x : (uClipAxis == 1 ? vWorldP.y : vWorldP.z);
+    float w = uClipAxis == 0 ? vWorldP.x : uClipAxis == 1 ? vWorldP.y : uClipAxis == 2 ? vWorldP.z : dot(vWorldP, uClipForward);
     if (w > uClipValue) { discard; }
   }
   float idx = vPickIdx;
@@ -155,11 +241,24 @@ void main() {
   float rem = aCellIndex - layer * uWH;
   float row = floor(rem / uW);
   float col = rem - row * uW;
-  vec3 centre = vec3(col - uHalf.x, row - uHalf.y, layer - uHalf.z);
+  vec3 centre = vec3(col - uHalf.x, row - uHalf.y, uHalf.z - layer);
   vWorldP = centre;
   vPickIdx = aCellIndex;
   gl_Position = uMVP * vec4(aPos * uCubeScale + centre, 1.0);
 }`;
+
+// Unlit coloured-line program for the axes / grid / bounds overlays + the gizmo.
+const LINE_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aColor;
+uniform mat4 uMVP;
+out vec3 vCol;
+void main(){ vCol = aColor; gl_Position = uMVP * vec4(aPos, 1.0); }`;
+const LINE_FS = `#version 300 es
+precision highp float;
+in vec3 vCol; out vec4 o;
+void main(){ o = vec4(vCol, 1.0); }`;
 
 function compileProgram(gl: WebGL2RenderingContext, vsSrc: string, fsSrc: string): WebGLProgram {
   const vs = gl.createShader(gl.VERTEX_SHADER)!;
@@ -188,6 +287,13 @@ export class Gl3DRenderer {
   private alphaBlend = false;
   private clip: ClipPlane3D = { enabled: false, axis: 'z', value: 0 };
   private mvp: Mat4 = mat4Identity();
+  private camForward: [number, number, number] = [0, 0, -1];
+  private camDir: [number, number, number] = [0, 0, 1];  // target → eye (for the gizmo)
+  private viz: Viz3D = { axes: false, grid: false, bounds: false, gizmo: true };
+  /** Line overlay (axes/grid/bounds) + gizmo pipeline. */
+  private lineProg: WebGLProgram;
+  private lineVao: WebGLVertexArrayObject;
+  private lineBuf: WebGLBuffer;
   /** Pick FBO. */
   private pickFbo: WebGLFramebuffer | null = null;
   private pickTex: WebGLTexture | null = null;
@@ -215,6 +321,15 @@ export class Gl3DRenderer {
     gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 20, 0); gl.vertexAttribDivisor(2, 1);
     gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 20, 4); gl.vertexAttribDivisor(3, 1);
     gl.bindVertexArray(null);
+    // Line pipeline (axes/grid/bounds/gizmo): pos(3) + color(3), stride 24.
+    this.lineProg = compileProgram(gl, LINE_VS, LINE_FS);
+    this.lineVao = gl.createVertexArray()!;
+    this.lineBuf = gl.createBuffer()!;
+    gl.bindVertexArray(this.lineVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuf);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 24, 12);
+    gl.bindVertexArray(null);
     gl.enable(gl.DEPTH_TEST);
     gl.clearColor(0, 0, 0, 0);
   }
@@ -224,16 +339,18 @@ export class Gl3DRenderer {
   }
   setAlphaBlend(on: boolean): void { this.alphaBlend = on; }
   setClipPlane(clip: ClipPlane3D): void { this.clip = clip; }
+  setViz(viz: Viz3D): void { this.viz = viz; }
 
-  /** Compute the view-projection matrix from the orbit camera + canvas aspect. */
+  /** Compute the view-projection matrix from the Z-up orbit camera. */
   setCamera(cam: Camera3D, aspect: number): void {
     const r = cam.dist * Math.max(this.W, this.H, this.D);
-    const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
-    const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
-    const eye: [number, number, number] = [r * cp * sy + cam.panX, r * sp + cam.panY, r * cp * cy];
-    const target: [number, number, number] = [cam.panX, cam.panY, 0];
-    const proj = mat4Perspective(Math.PI / 4, aspect || 1, 0.1, r * 8 + 100);
-    const view = mat4LookAt(eye, target, [0, 1, 0]);
+    const { dir } = cameraBasis(cam);
+    const t = cam.target;
+    const eye: [number, number, number] = [t[0] + r * dir[0], t[1] + r * dir[1], t[2] + r * dir[2]];
+    this.camForward = [-dir[0], -dir[1], -dir[2]];
+    this.camDir = dir;
+    const proj = mat4Perspective(Math.PI / 4, aspect || 1, 0.05, r * 8 + 100);
+    const view = mat4LookAt(eye, [t[0], t[1], t[2]], WORLD_UP);
     this.mvp = mat4Mul(proj, view);
   }
 
@@ -285,7 +402,7 @@ export class Gl3DRenderer {
       const rem = idx - layer * WH;
       const row = Math.floor(rem / W);
       const col = rem - row * W;
-      const cx = col - hx, cy = row - hy, cz = layer - hz;
+      const cx = col - hx, cy = row - hy, cz = hz - layer;  // Z-up
       // clip-space w (depth proxy): row3 of MVP · centre
       keys[k] = m[2]! * cx + m[6]! * cy + m[10]! * cz + m[14]!;
     }
@@ -308,8 +425,10 @@ export class Gl3DRenderer {
     gl.uniform3f(gl.getUniformLocation(prog, 'uHalf'), (this.W - 1) / 2, (this.H - 1) / 2, (this.D - 1) / 2);
     gl.uniform1f(gl.getUniformLocation(prog, 'uCubeScale'), 0.92);
     gl.uniform1i(gl.getUniformLocation(prog, 'uClipEnabled'), this.clip.enabled ? 1 : 0);
-    gl.uniform1i(gl.getUniformLocation(prog, 'uClipAxis'), this.clip.axis === 'x' ? 0 : this.clip.axis === 'y' ? 1 : 2);
+    const axisN = this.clip.axis === 'x' ? 0 : this.clip.axis === 'y' ? 1 : this.clip.axis === 'z' ? 2 : 3;
+    gl.uniform1i(gl.getUniformLocation(prog, 'uClipAxis'), axisN);
     gl.uniform1f(gl.getUniformLocation(prog, 'uClipValue'), this.clip.value);
+    gl.uniform3f(gl.getUniformLocation(prog, 'uClipForward'), this.camForward[0], this.camForward[1], this.camForward[2]);
   }
 
   /** Resize the drawing buffer to match the canvas display size × dpr. */
@@ -324,23 +443,124 @@ export class Gl3DRenderer {
     const gl = this.gl;
     gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    if (this.instanceCount === 0) return;
-    gl.useProgram(this.prog);
-    gl.bindVertexArray(this.vao);
-    this.setCommonUniforms(gl, this.prog);
-    if (this.alphaBlend) {
-      this.sortBackToFront();
-      gl.enable(gl.BLEND);
-      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-      gl.depthMask(false);
-    } else {
-      gl.disable(gl.BLEND);
+    this.renderOverlays();   // axes / grid / bounds (behind the voxels)
+    if (this.instanceCount > 0) {
+      gl.useProgram(this.prog);
+      gl.bindVertexArray(this.vao);
+      this.setCommonUniforms(gl, this.prog);
+      if (this.alphaBlend) {
+        this.sortBackToFront();
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.depthMask(false);
+      } else {
+        gl.disable(gl.BLEND);
+        gl.depthMask(true);
+      }
+      gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.instanceCount);
       gl.depthMask(true);
+      gl.disable(gl.BLEND);
+      gl.bindVertexArray(null);
     }
-    gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, this.instanceCount);
-    gl.depthMask(true);
-    gl.disable(gl.BLEND);
+    this.renderGizmo();      // corner orientation widget (always on top)
+  }
+
+  /** Build + draw the axes / grid / bounds line overlays (Z-up world space). */
+  private renderOverlays(): void {
+    if (!this.viz.axes && !this.viz.grid && !this.viz.bounds) return;
+    const gl = this.gl;
+    const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
+    const x0 = -hx - 0.5, x1 = hx + 0.5, y0 = -hy - 0.5, y1 = hy + 0.5, z0 = -hz - 0.5, z1 = hz + 0.5;
+    const v: number[] = [];
+    const seg = (ax: number, ay: number, az: number, bx: number, by: number, bz: number, r: number, g: number, b: number) =>
+      v.push(ax, ay, az, r, g, b, bx, by, bz, r, g, b);
+    if (this.viz.grid) {
+      const c = 0.26, g = 0.28, bl = 0.34;
+      const sx = Math.max(1, Math.ceil(this.W / 100)), sy = Math.max(1, Math.ceil(this.H / 100));
+      for (let i = 0; i <= this.W; i += sx) { const x = x0 + i; seg(x, y0, z0, x, y1, z0, c, g, bl); }
+      for (let j = 0; j <= this.H; j += sy) { const y = y0 + j; seg(x0, y, z0, x1, y, z0, c, g, bl); }
+    }
+    if (this.viz.bounds) {
+      const c = 0.42, g = 0.45, bl = 0.55;
+      seg(x0, y0, z0, x1, y0, z0, c, g, bl); seg(x1, y0, z0, x1, y1, z0, c, g, bl);
+      seg(x1, y1, z0, x0, y1, z0, c, g, bl); seg(x0, y1, z0, x0, y0, z0, c, g, bl);
+      seg(x0, y0, z1, x1, y0, z1, c, g, bl); seg(x1, y0, z1, x1, y1, z1, c, g, bl);
+      seg(x1, y1, z1, x0, y1, z1, c, g, bl); seg(x0, y1, z1, x0, y0, z1, c, g, bl);
+      seg(x0, y0, z0, x0, y0, z1, c, g, bl); seg(x1, y0, z0, x1, y0, z1, c, g, bl);
+      seg(x1, y1, z0, x1, y1, z1, c, g, bl); seg(x0, y1, z0, x0, y1, z1, c, g, bl);
+    }
+    if (this.viz.axes) {
+      const L = Math.max(hx, hy, hz) + 1.5;
+      seg(-L, 0, 0, L, 0, 0, 0.90, 0.27, 0.27);  // X red
+      seg(0, -L, 0, 0, L, 0, 0.34, 0.82, 0.40);  // Y green
+      seg(0, 0, -L, 0, 0, L, 0.36, 0.55, 0.95);  // Z blue
+    }
+    if (v.length === 0) return;
+    const verts = new Float32Array(v);
+    gl.useProgram(this.lineProg);
+    gl.bindVertexArray(this.lineVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.DYNAMIC_DRAW);
+    gl.uniformMatrix4fv(gl.getUniformLocation(this.lineProg, 'uMVP'), false, this.mvp);
+    gl.drawArrays(gl.LINES, 0, verts.length / 6);
     gl.bindVertexArray(null);
+  }
+
+  /** Corner orientation gizmo: 3 colored axes rotating with the camera. */
+  private renderGizmo(): void {
+    if (!this.viz.gizmo) return;
+    const gl = this.gl;
+    const S = Math.max(48, Math.round(Math.min(gl.canvas.width, gl.canvas.height) * 0.16));
+    gl.viewport(10, 10, S, S);
+    gl.disable(gl.DEPTH_TEST);
+    const d = this.camDir, r = 3;
+    const view = mat4LookAt([d[0] * r, d[1] * r, d[2] * r], [0, 0, 0], WORLD_UP);
+    const proj = mat4Ortho(-1.5, 1.5, -1.5, 1.5, -10, 10);
+    const giz = mat4Mul(proj, view);
+    const L = 1;
+    const verts = new Float32Array([
+      0, 0, 0, 0.90, 0.27, 0.27, L, 0, 0, 0.90, 0.27, 0.27,
+      0, 0, 0, 0.34, 0.82, 0.40, 0, L, 0, 0.34, 0.82, 0.40,
+      0, 0, 0, 0.36, 0.55, 0.95, 0, 0, L, 0.36, 0.55, 0.95,
+    ]);
+    gl.useProgram(this.lineProg);
+    gl.bindVertexArray(this.lineVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.DYNAMIC_DRAW);
+    gl.uniformMatrix4fv(gl.getUniformLocation(this.lineProg, 'uMVP'), false, giz);
+    gl.drawArrays(gl.LINES, 0, 6);
+    gl.bindVertexArray(null);
+    gl.enable(gl.DEPTH_TEST);
+    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+  }
+
+  /** Ray-pick the world-space cell the cursor's ray hits on a given plane. Used
+   *  by the "interaction plane" brush: unproject the cursor to a world ray and
+   *  intersect the axis-aligned plane at `planePos` along `planeAxis`, returning
+   *  the nearest in-bounds cell (or null). cssX/cssY are top-left CSS pixels. */
+  pickOnPlane(cssX: number, cssY: number, cssW: number, cssH: number, planeAxis: 'x' | 'y' | 'z', planePos: number):
+    { layer: number; row: number; col: number } | null {
+    const inv = mat4Invert(this.mvp);
+    if (!inv) return null;
+    // NDC at the near + far planes → world ray.
+    const ndcX = (cssX / cssW) * 2 - 1;
+    const ndcY = 1 - (cssY / cssH) * 2;
+    const near = unproject(inv, ndcX, ndcY, -1);
+    const far = unproject(inv, ndcX, ndcY, 1);
+    if (!near || !far) return null;
+    const dir = [far[0] - near[0], far[1] - near[1], far[2] - near[2]];
+    // Plane: world coord along the chosen axis == planeWorld. Map planePos (a
+    // grid index) → world. For 'z' (layer) the mapping is hz - layer.
+    const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
+    const ai = planeAxis === 'x' ? 0 : planeAxis === 'y' ? 1 : 2;
+    const planeWorld = planeAxis === 'x' ? planePos - hx : planeAxis === 'y' ? planePos - hy : hz - planePos;
+    if (Math.abs(dir[ai]!) < 1e-6) return null;
+    const t = (planeWorld - near[ai]!) / dir[ai]!;
+    if (t < 0) return null;
+    const wx = near[0]! + dir[0]! * t, wy = near[1]! + dir[1]! * t, wz = near[2]! + dir[2]! * t;
+    const col = Math.round(wx + hx), row = Math.round(wy + hy), layer = Math.round(hz - wz);
+    if (col < 0 || col >= this.W || row < 0 || row >= this.H || layer < 0 || layer >= this.D) return null;
+    return { layer, row, col };
   }
 
   private ensurePickFbo(w: number, h: number): void {
@@ -416,9 +636,12 @@ export class Gl3DRenderer {
     const gl = this.gl;
     gl.deleteProgram(this.prog);
     gl.deleteProgram(this.pickProg);
+    gl.deleteProgram(this.lineProg);
     gl.deleteVertexArray(this.vao);
+    gl.deleteVertexArray(this.lineVao);
     gl.deleteBuffer(this.cubeBuf);
     gl.deleteBuffer(this.instBuf);
+    gl.deleteBuffer(this.lineBuf);
     if (this.pickFbo) { gl.deleteFramebuffer(this.pickFbo); gl.deleteTexture(this.pickTex!); gl.deleteRenderbuffer(this.pickDepth!); }
   }
 }
