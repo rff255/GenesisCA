@@ -160,6 +160,10 @@ interface WasmCompileCtx {
    *  packed (dr, dc) NI values. -1 when not initialised (non-loop entry point). */
   rowLocalIdx: number;
   colLocalIdx: number;
+  /** 3D Grid CA: layer (z) of the current cell, decoded as `idx / (W*H)` once
+   *  per iteration. -1 in a 2D model (no `_layer` decode emitted). Read by the
+   *  InitEvent `z`/`maxZ` outputs. */
+  layerLocalIdx: number;
   /** Memoised value-node compile results for this per-cell pass.
    *  Keyed by nodeId → portId → LocalRef. Default port id is 'value'.
    *  Multi-output value nodes (getColorConstant, colorScale,
@@ -2070,6 +2074,19 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     setCachedPort(ctx, node.id, 'y', { localIdx: yLoc, valtype: I32 });
     setCachedPort(ctx, node.id, 'maxX', { localIdx: maxXLoc, valtype: I32 });
     setCachedPort(ctx, node.id, 'maxY', { localIdx: maxYLoc, valtype: I32 });
+    // 3D Grid CA: z = layer, maxZ = D-1 (only in a 3D model — layerLocalIdx is
+    // -1 in 2D, where the z/maxZ ports are hidden so nothing reads them).
+    if (ctx.layerLocalIdx >= 0) {
+      const D = Math.max(1, ctx.model.properties.gridDepth ?? 1);
+      const zLoc = ctx.emitter.allocLocal(I32);
+      ctx.emitter.localGet(ctx.layerLocalIdx);
+      ctx.emitter.localSet(zLoc);
+      const maxZLoc = ctx.emitter.allocLocal(I32);
+      ctx.emitter.i32Const(D - 1);
+      ctx.emitter.localSet(maxZLoc);
+      setCachedPort(ctx, node.id, 'z', { localIdx: zLoc, valtype: I32 });
+      setCachedPort(ctx, node.id, 'maxZ', { localIdx: maxZLoc, valtype: I32 });
+    }
     return { localIdx: xLoc, valtype: I32 };
   },
 
@@ -6384,6 +6401,12 @@ function compileEntry(
   // time constant in the emit.
   const rowLocal = emitter.allocLocal(I32);
   const colLocal = emitter.allocLocal(I32);
+  // 3D Grid CA: layer (z) + remainder locals, allocated ONLY for a 3D model so a
+  // 2D module's local count (and therefore its bytes) is byte-identical. is3dEntry
+  // mirrors the JS `is3dModel` predicate (dimension 3d && gridDepth > 1).
+  const is3dEntry = model.properties.dimension === '3d' && (model.properties.gridDepth ?? 1) > 1;
+  const layerLocal = is3dEntry ? emitter.allocLocal(I32) : -1;
+  const remLocal = is3dEntry ? emitter.allocLocal(I32) : -1;
 
   // paramRefs: register InputColor's r/g/b outputs as param-backed locals.
   // These are ALWAYS i32 in the param signature.
@@ -6416,6 +6439,7 @@ function compileEntry(
     iLocalIdx: iLocal,
     rowLocalIdx: rowLocal,
     colLocalIdx: colLocal,
+    layerLocalIdx: layerLocal,
     valueLocals: new Map(),
     arrayRefs: new Map(),
     byteOffsetLocals: new Map(),
@@ -6450,6 +6474,9 @@ function compileEntry(
   const invariantSnapshot = new Map<string, Map<string, LocalRef>>();
 
   const W = model.properties.gridWidth;
+  // 3D Grid CA: WH precomputed for the per-cell layer/row/col decode (only used
+  // when is3dEntry). 2D models never reference these.
+  const WH3d = W * model.properties.gridHeight;
   // Collect every distinct attribute itemBytes value (1=bool, 4=int/tag, 8=float)
   // that appears in the cell-attr layout. Used by `initByteOffsetLocals` to
   // pre-emit `idx * itemBytes` cache locals at cell-top — see the comment on
@@ -6558,17 +6585,46 @@ function compileEntry(
 
     // Wave A.6: compute row/col from idx once per cell. Used by NI access
     // emitters to decode packed (dr, dc) NIs into cell indices inline.
-    //   row = idx / W; col = idx - row * W;
-    emitter.localGet(iLocal);
-    emitter.i32Const(W);
-    emitter.op(OP_I32_DIV_S);
-    emitter.localSet(rowLocal);
-    emitter.localGet(iLocal);
-    emitter.localGet(rowLocal);
-    emitter.i32Const(W);
-    emitter.op(OP_I32_MUL);
-    emitter.op(OP_I32_SUB);
-    emitter.localSet(colLocal);
+    //   2D: row = idx / W; col = idx - row * W;
+    // 3D Grid CA: layer = idx / WH; rem = idx - layer*WH; row = rem / W;
+    //   col = rem - row*W. Gated on is3dEntry so 2D bytes are byte-identical.
+    if (is3dEntry) {
+      // layer = idx / WH
+      emitter.localGet(iLocal);
+      emitter.i32Const(WH3d);
+      emitter.op(OP_I32_DIV_S);
+      emitter.localSet(layerLocal);
+      // rem = idx - layer*WH
+      emitter.localGet(iLocal);
+      emitter.localGet(layerLocal);
+      emitter.i32Const(WH3d);
+      emitter.op(OP_I32_MUL);
+      emitter.op(OP_I32_SUB);
+      emitter.localSet(remLocal);
+      // row = rem / W
+      emitter.localGet(remLocal);
+      emitter.i32Const(W);
+      emitter.op(OP_I32_DIV_S);
+      emitter.localSet(rowLocal);
+      // col = rem - row*W
+      emitter.localGet(remLocal);
+      emitter.localGet(rowLocal);
+      emitter.i32Const(W);
+      emitter.op(OP_I32_MUL);
+      emitter.op(OP_I32_SUB);
+      emitter.localSet(colLocal);
+    } else {
+      emitter.localGet(iLocal);
+      emitter.i32Const(W);
+      emitter.op(OP_I32_DIV_S);
+      emitter.localSet(rowLocal);
+      emitter.localGet(iLocal);
+      emitter.localGet(rowLocal);
+      emitter.i32Const(W);
+      emitter.op(OP_I32_MUL);
+      emitter.op(OP_I32_SUB);
+      emitter.localSet(colLocal);
+    }
 
     // Re-register paramRefs after the cache clear (they're stable across cells).
     if (opts.paramOutputs) {
