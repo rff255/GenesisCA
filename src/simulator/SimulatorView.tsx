@@ -666,6 +666,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const line3dAnchorRef = useRef<{ layer: number; row: number; col: number } | null>(null);
   // 3D canvas background colour fed to the renderer ([r,g,b,a] 0..1, null = transparent).
   const bg3dRef = useRef<[number, number, number, number] | null>(null);
+  // 3D perf: the colors buffer last uploaded to the voxel renderer. The worker
+  // hands a FRESH buffer on every `stepped`, so identity changes iff colours
+  // changed — camera-only redraws (orbit/pan/auto-orbit/hover) reuse the GPU
+  // instance buffer and skip the O(total) scan+upload. Reset (null) whenever the
+  // renderer is recreated or the colours buffer is cleared, to force a re-upload.
+  const lastUploadedColors3dRef = useRef<Uint8ClampedArray | null>(null);
   // 3D control UI state (mirrored into the refs the renderer reads).
   const [clip3d, setClip3d] = useState<{ enabled: boolean; axis: 'x' | 'y' | 'z' | 'camera'; value: number }>(
     { enabled: false, axis: 'z', value: 0 },
@@ -828,7 +834,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       r.setHoverCells(plane3dEnabledRef.current ? hoverCells3dRef.current : EMPTY_HOVER_CELLS);
       r.setBackgroundColor(bg3dRef.current);
       r.setCamera(cam3dRef.current, r.canvasWidth / (r.canvasHeight || 1));
-      r.uploadColors(colors3d, w3 * h3 * d3);
+      // 3D perf: only re-scan + re-upload the (potentially millions of) cells when
+      // the colours actually changed (a new buffer from a `stepped` message).
+      // Camera-only redraws reuse the existing GPU instance buffer.
+      if (colors3d !== lastUploadedColors3dRef.current) {
+        r.uploadColors(colors3d, w3 * h3 * d3);
+        lastUploadedColors3dRef.current = colors3d;
+      }
       r.render();
       fpsFrames.current++;
       return;
@@ -1656,6 +1668,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // applies to inspect-cell maps (a stale entry keyed by a no-longer-
     // -valid cellIdx). srcCanvas is rebuilt on the next draw when needed.
     colorsRef.current = null;
+    lastUploadedColors3dRef.current = null;  // colours cleared → force a re-upload after reinit
     glyphCodesRef.current = null;
     glyphColorsRef.current = null;
     inspectDataRef.current.clear();
@@ -2260,6 +2273,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     try {
       gl3dRef.current = new Gl3DRenderer(glc);
       gl3dRef.current.setGrid(gridWidth.current, gridHeight.current, gridDepth.current);
+      lastUploadedColors3dRef.current = null;  // fresh renderer → force the next upload
       draw();
     } catch (e) {
       console.error('[gl3d] init failed', e);
