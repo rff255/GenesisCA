@@ -1916,6 +1916,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const needsFullInit = !prev || !workerRef.current
       || prev.properties.gridWidth !== model.properties.gridWidth
       || prev.properties.gridHeight !== model.properties.gridHeight
+      // 3D Grid CA (B2): depth/dimension change the lattice size (total = W*H*D)
+      // and the baked WASM/WebGPU `total` literal — a soft recompile would keep
+      // the stale W*H buffers, so force a full reinit.
+      || (prev.properties.gridDepth ?? 1) !== (model.properties.gridDepth ?? 1)
+      || (prev.properties.dimension ?? '2d') !== (model.properties.dimension ?? '2d')
       || prev.properties.boundaryTreatment !== model.properties.boundaryTreatment
       || prev.properties.updateMode !== model.properties.updateMode
       || prev.properties.asyncScheme !== model.properties.asyncScheme

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PR1 — Dimension + Topology (Properties → Structure/Execution)</title>
+<style>
+  :root { --bg:#0c0d10; --panel:#16181d; --border:#2a2d34; --muted:#888; --accent:#e8a13a; --text:#d8dadf; }
+  body { background:var(--bg); color:var(--text); font:13px/1.5 system-ui, sans-serif; margin:0; padding:24px; }
+  h1 { font-size:18px; font-weight:600; }
+  h2 { font-size:14px; color:var(--accent); margin-top:28px; }
+  .row { display:flex; gap:24px; flex-wrap:wrap; align-items:flex-start; }
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:10px; width:300px; padding:14px; }
+  .sectionTitle { text-transform:uppercase; letter-spacing:.06em; font-size:11px; color:var(--muted); margin-bottom:8px; }
+  .field { margin-bottom:10px; }
+  .fieldLabel { display:block; font-size:11px; color:var(--muted); margin-bottom:3px; }
+  input[type=text], select { width:80px; background:#0e0f13; border:1px solid var(--border); color:var(--text); border-radius:5px; padding:3px 6px; }
+  .opt { display:flex; gap:6px; align-items:flex-start; font-size:12px; margin:5px 0; }
+  .opt small { color:var(--muted); font-size:10.5px; display:block; }
+  .divider { border-top:1px solid #333; margin:14px 0 10px; }
+  .disabled { opacity:.55; cursor:not-allowed; }
+  .added { outline:2px solid var(--accent); outline-offset:3px; border-radius:6px; }
+  .tag { display:inline-block; background:var(--accent); color:#000; font-size:9px; font-weight:700; padding:1px 5px; border-radius:4px; vertical-align:middle; margin-left:6px; }
+  .note { color:var(--muted); font-size:11px; max-width:640px; }
+</style>
+</head>
+<body>
+<h1>PR1 — M0a: Dimension radio + Topology checkboxes <span class="tag">NEW</span></h1>
+<p class="note">Two new clusters in the modeler <strong>Properties</strong> tab. The Dimension radio joins the <strong>Structure</strong> section (with a Grid Depth field that appears only in 3D); the Topology checkboxes join the <strong>Execution</strong> section above Variegated Cells. Bond-Graph Agents is rendered but hard-disabled this milestone. No behaviour change for existing models — every legacy file migrates to 2D&nbsp;grid.</p>
+
+<div class="row">
+  <div class="panel">
+    <div class="sectionTitle">Structure</div>
+    <div class="field"><span class="fieldLabel">Boundary Treatment</span><select><option>Torus</option></select></div>
+    <div style="display:flex; gap:10px;">
+      <div class="field"><span class="fieldLabel">Grid Width</span><input type="text" value="100"></div>
+      <div class="field"><span class="fieldLabel">Grid Height</span><input type="text" value="100"></div>
+    </div>
+    <div class="divider"></div>
+    <div class="added">
+      <span class="fieldLabel" style="margin-bottom:4px;">Dimension</span>
+      <label class="opt"><input type="radio" name="d" checked><span><strong>2D (W&times;H grid)</strong><small>Classic flat lattice. Rendered with the 2D canvas.</small></span></label>
+      <label class="opt"><input type="radio" name="d"><span><strong>3D (W&times;H&times;D volume)</strong><small>Voxel grid with a Z axis, orbit camera + clip plane. Direct neighbour-index nodes gated off; use parametric / slice neighbourhoods.</small></span></label>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="sectionTitle">Structure <span style="color:var(--accent)">(3D selected)</span></div>
+    <div style="display:flex; gap:10px;">
+      <div class="field"><span class="fieldLabel">Grid Width</span><input type="text" value="32"></div>
+      <div class="field"><span class="fieldLabel">Grid Height</span><input type="text" value="32"></div>
+      <div class="field added"><span class="fieldLabel">Grid Depth</span><input type="text" value="32"></div>
+    </div>
+    <div class="divider"></div>
+    <span class="fieldLabel" style="margin-bottom:4px;">Dimension</span>
+    <label class="opt"><input type="radio" name="d2"><span><strong>2D</strong></span></label>
+    <label class="opt"><input type="radio" name="d2" checked><span><strong>3D (W&times;H&times;D volume)</strong></span></label>
+  </div>
+
+  <div class="panel">
+    <div class="sectionTitle">Execution</div>
+    <div class="field"><span class="fieldLabel">Update Mode</span><small style="color:var(--muted)">Synchronous / Asynchronous…</small></div>
+    <div class="divider"></div>
+    <div class="field"><span class="fieldLabel">Compile Target</span><small style="color:var(--muted)">WebAssembly / WebGPU / JS…</small></div>
+    <div class="divider"></div>
+    <div class="added">
+      <span class="fieldLabel" style="margin-bottom:4px;">Topology</span>
+      <label class="opt disabled" title="At least one topology must stay enabled."><input type="checkbox" checked disabled><span><strong>Grid Cells</strong><small>The classic lattice cellular automaton (this app's core).</small></span></label>
+      <label class="opt disabled" title="Coming soon"><input type="checkbox" disabled><span><strong>Bond-Graph Agents <em>(coming soon)</em></strong><small>Off-lattice agents joined by bonds that grow and divide into shape. Not available this release.</small></span></label>
+    </div>
+    <div class="divider"></div>
+    <label class="opt"><input type="checkbox"><span><strong>Use Variegated Cells</strong></span></label>
+  </div>
+</div>
+
+<h2>Schema + migration</h2>
+<p class="note">
+  <code>ModelProperties.dimension?: '2d'|'3d'</code> (absent&nbsp;&rarr;&nbsp;'2d'),
+  <code>ModelProperties.gridDepth?: number</code> (absent&nbsp;&rarr;&nbsp;1, so <code>W*H*1 === W*H</code> byte-identical),
+  <code>CAModel.topologyMode?: { gridCells, agents }</code> (absent&nbsp;&rarr;&nbsp;<code>{gridCells:true, agents:false}</code>).
+  The <code>LOAD_MODEL</code> reducer seeds all three; the <code>UPDATE_TOPOLOGY_MODE</code> reducer rejects an all-false selection (&ge;1 invariant). Distinct from the legacy <code>ModelProperties.topology:'2d-grid'</code> string enum, which is untouched.
+</p>
+</body>
+</html>

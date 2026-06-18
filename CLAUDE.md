@@ -1083,6 +1083,20 @@ First-class, user-facing color node: input `index` (int), multi-output `r`/`g`/`
 
 ---
 
+## 3D Grid CA (milestone, in progress — branch `grid_3d`)
+
+Makes the lattice a **`W×H×D` volume** end-to-end: schema, all three compile targets, 3D neighbourhood editing, authorable RGBA alpha, a WebGL2 voxel renderer, and the save/load + indicators + inspector consumer-scan. Runbook: [docs/HANDOFF_3D_GRID_CA.md](docs/HANDOFF_3D_GRID_CA.md). The engine 3-ification is incremental (`total = W*H*D`, a 3-tuple offset table, a `_layer` decode, **stride stays `coords.length`** so neighbour access is 3D-for-free); the renderer is wholesale new. **`gridDepth===1` / `dimension==='2d'` is the byte-identical 2D fast path on all three targets** (every existing model + legacy file compiles verbatim). Out of scope: bond-graph agents (UI checkbox hard-disabled), variegation-in-3D (2D-locked, V-tab elided in 3D), the 3-axis `neighborIndex` codec (gated off in 3D).
+
+### M0a — schema + mode UI (PR1, done)
+- **Schema (all additive/optional — old files load unchanged):** `ModelProperties.dimension?: '2d'|'3d'` (absent → `'2d'`), `ModelProperties.gridDepth?: number` (absent → `1`), `CAModel.topologyMode?: { gridCells, agents }` (absent → `{gridCells:true, agents:false}`), `SimulationState.depth?`/`gridDepth?`, `IndicatorXAxis += 'layers'`. **NB the naming collision:** the new checkbox object is `topologyMode`; the legacy `ModelProperties.topology: '2d-grid'` string enum is UNTOUCHED.
+- **Migration** ([ModelContext.tsx](src/model/ModelContext.tsx) `LOAD_MODEL`): seeds `dimension`/`gridDepth`/`topologyMode` defaults beside the existing additive guards.
+- **Reducer:** `UPDATE_TOPOLOGY_MODE` (clone of `UPDATE_VARIEGATED_CELLS`) rejects an all-false selection (≥1 invariant). `updateTopologyMode` callback is wired into BOTH the context value object AND the useMemo dep array (miss either → stale closure).
+- **UI** ([PropertiesPanelContent.tsx](src/modeler/panels/PropertiesPanelContent.tsx)): Dimension radio in the Structure section (3D reveals a Grid Depth `NumberField`); Topology checkboxes in the Execution section above Variegated (Grid Cells UI-disabled when it's the only checked one; Bond-Graph Agents hard-`disabled` + "coming soon"). Mockup: [docs/MOCKUP_PR1_DIMENSION_TOPOLOGY.html](docs/MOCKUP_PR1_DIMENSION_TOPOLOGY.html).
+- **B2 (critical):** `gridDepth` + `dimension` are in the `needsFullInit` structural-reinit trigger ([SimulatorView.tsx](src/simulator/SimulatorView.tsx)) — a depth/dimension change must force a full worker reinit (a soft recompile keeps the stale `W*H` buffers + a diverging baked `total`).
+- **DEV harness** ([src/dev/compileHarness.ts](src/dev/compileHarness.ts)): `compileAll(model)` compiles on all 3 targets through the real call signatures (`compileGraphWasm` needs `(nodes, edges, model, layout, viewerIds)`; WASM layout via `computeLayoutFromModel`, viewerIds via `buildViewerIds`) and returns `{js.stepCode, wasm.bytesJoined, webgpu.shaderCode}` for the cross-target byte-identity checks. `migrateForHarness` applies the LOAD_MODEL guards to a raw `.gcaproj`. Not imported by production. Use via cache-busted `import('/src/dev/compileHarness.ts?t='+Date.now())` in `preview_eval`.
+
+---
+
 ## Reroute Links (wire reroute points)
 
 Movable relay dots placed on a wire (Blender / Unreal blueprint style) so users can bend connections around nodes and fan one output out to many consumers without long crossing wires. Two layers, deliberately decoupled.

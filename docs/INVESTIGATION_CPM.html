@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GenesisCA — Cellular Potts Model / Morphogenesis Investigation</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#16181d; --panel2:#1c1f26; --panel3:#22262f;
+    --border:#2a2e37; --border2:#3a3f4a;
+    --ink:#e9ebee; --muted:#9aa0aa; --faint:#6b7280;
+    --accent:#e8a13a; --accent2:#f4c06a; --accent-soft:rgba(232,161,58,.13);
+    --cyan:#4cc9f0; --green:#66bb6a; --red:#e0566a; --purple:#b08cff; --pink:#f06aa8;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6;
+    background-image:radial-gradient(1100px 480px at 80% -8%,rgba(232,161,58,.07),transparent 60%),
+      radial-gradient(900px 420px at 0% 0%,rgba(76,201,240,.05),transparent 55%);}
+  a{color:var(--accent2);text-decoration:none} a:hover{text-decoration:underline}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 22px 90px}
+  header.hero{padding:64px 22px 30px;max-width:1120px;margin:0 auto}
+  .kicker{display:inline-flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--accent);border:1px solid var(--border2);background:var(--accent-soft);padding:5px 11px;border-radius:999px}
+  h1{font-size:clamp(30px,5vw,50px);line-height:1.07;margin:18px 0 10px;letter-spacing:-.02em}
+  h1 .sub{display:block;font-size:clamp(15px,2.2vw,21px);font-weight:500;color:var(--muted);margin-top:12px;letter-spacing:0}
+  .herometa{display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:22px;color:var(--faint);font-size:13px}
+  .herometa b{color:var(--muted);font-weight:600}
+  .status{display:inline-block;margin-top:18px;font-size:13px;color:var(--green);border:1px solid rgba(102,187,106,.35);
+    background:rgba(102,187,106,.08);border-radius:8px;padding:7px 12px}
+  nav.toc{position:sticky;top:0;z-index:20;background:rgba(12,13,16,.82);backdrop-filter:blur(10px);
+    border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin-top:34px}
+  nav.toc .row{max-width:1120px;margin:0 auto;padding:9px 22px;display:flex;flex-wrap:wrap;gap:5px 6px;font-size:12.5px}
+  nav.toc a{color:var(--muted);padding:5px 9px;border-radius:7px;white-space:nowrap}
+  nav.toc a:hover{color:var(--ink);background:var(--panel2);text-decoration:none}
+  section{margin-top:42px}
+  .card{background:linear-gradient(180deg,var(--panel),#131519);border:1px solid var(--border);border-radius:16px;
+    padding:26px 28px;box-shadow:0 1px 0 rgba(255,255,255,.02) inset, 0 20px 40px -30px rgba(0,0,0,.8)}
+  h2{font-size:24px;margin:0 0 4px;letter-spacing:-.01em;display:flex;align-items:baseline;gap:12px}
+  h2 .n{font-family:var(--mono);font-size:14px;color:var(--accent);border:1px solid var(--border2);
+    background:var(--accent-soft);border-radius:8px;padding:2px 9px;flex:none}
+  h2 .n.alt{color:var(--cyan);background:rgba(76,201,240,.1)}
+  .lede{color:var(--muted);font-size:15.5px;margin:6px 0 20px;max-width:80ch}
+  h3{font-size:16.5px;margin:24px 0 8px;color:var(--accent2)}
+  p{margin:10px 0;color:#d4d7dd}
+  .small{font-size:13px;color:var(--faint)}
+  figure{margin:18px 0 6px;background:#101216;border:1px solid var(--border);border-radius:12px;padding:16px}
+  figure svg{display:block;width:100%;height:auto}
+  figcaption{color:var(--muted);font-size:13px;margin-top:12px;padding-top:10px;border-top:1px dashed var(--border2)}
+  figcaption b{color:var(--ink)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  pre.code{background:#0a0c0f;border:1px solid var(--border2);border-radius:10px;padding:14px 16px;overflow:auto;
+    font-family:var(--mono);font-size:12.5px;line-height:1.55;color:#cdd3da;margin:8px 0}
+  .code .c{color:#6b7280} .code .k{color:var(--purple)} .code .s{color:var(--green)} .code .y{color:var(--accent2)}
+  .code .hl{background:rgba(232,161,58,.14);border-radius:3px;padding:0 2px}
+  .code .del{color:var(--red)} .code .add{color:var(--green)}
+  ul.clean{margin:10px 0;padding-left:0;list-style:none}
+  ul.clean li{position:relative;padding:5px 0 5px 26px;color:#d4d7dd}
+  ul.clean li::before{content:"";position:absolute;left:6px;top:13px;width:7px;height:7px;border-radius:2px;
+    background:var(--accent);transform:rotate(45deg)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px;letter-spacing:.04em;text-transform:uppercase}
+  tr:hover td{background:rgba(255,255,255,.014)}
+  .tag{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:6px;border:1px solid var(--border2);white-space:nowrap}
+  .t-reuse{color:var(--green);border-color:rgba(102,187,106,.4);background:rgba(102,187,106,.08)}
+  .t-mod{color:var(--accent);border-color:rgba(232,161,58,.4);background:var(--accent-soft)}
+  .t-new{color:var(--cyan);border-color:rgba(76,201,240,.4);background:rgba(76,201,240,.08)}
+  .t-gate{color:var(--red);border-color:rgba(224,86,106,.4);background:rgba(224,86,106,.08)}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 16px;margin:6px 0 14px;font-size:12.5px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .callgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px}
+  @media(max-width:760px){.callgrid{grid-template-columns:1fr}}
+  .callout{border:1px solid var(--border2);border-left:3px solid var(--red);border-radius:10px;padding:13px 15px;background:#14100f}
+  .callout h4{margin:0 0 5px;font-size:14px;color:#f3a0ad}
+  .callout p{margin:0;font-size:13px;color:#cbd0d6}
+  .keyfact{border:1px solid var(--border2);border-left:3px solid var(--accent);background:linear-gradient(180deg,var(--accent-soft),transparent);
+    border-radius:10px;padding:16px 18px;margin:16px 0;font-size:15px}
+  .keyfact b{color:var(--accent2)}
+  .matrix{display:grid;grid-template-columns:repeat(auto-fill,minmax(225px,1fr));gap:10px;margin-top:8px}
+  .mgroup{background:#101216;border:1px solid var(--border);border-radius:11px;padding:13px 14px}
+  .mgroup h4{margin:0 0 9px;font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+  .mrow{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12.7px;color:#cdd2d8}
+  .mrow .tag{flex:none;width:64px;text-align:center}
+  .controls{display:flex;gap:9px;align-items:center;margin:12px 0 4px;flex-wrap:wrap}
+  .btn{font-family:var(--sans);font-size:13px;color:var(--ink);background:var(--panel3);border:1px solid var(--border2);
+    border-radius:8px;padding:7px 14px;cursor:pointer}
+  .btn:hover{border-color:var(--accent);color:var(--accent2)}
+  .btn.primary{background:var(--accent-soft);border-color:rgba(232,161,58,.5);color:var(--accent2)}
+  .pill{font-family:var(--mono);font-size:12px;color:var(--muted);padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:#101216}
+  .footer{margin-top:54px;padding-top:22px;border-top:1px solid var(--border);color:var(--faint);font-size:13px}
+  .biblio{columns:2;column-gap:30px;font-size:12.5px;color:var(--muted)}
+  @media(max-width:760px){.biblio{columns:1}}
+  .biblio div{break-inside:avoid;margin:0 0 9px;padding-left:14px;text-indent:-14px}
+  .biblio b{color:#cdd2d8}
+  .conf{display:flex;gap:3px;height:13px;border-radius:7px;overflow:hidden;border:1px solid var(--border2);margin:6px 0}
+  .conf i{display:block;height:100%}
+  .cvwrap{display:flex;justify-content:center;margin:6px 0}
+  #cpm-canvas{image-rendering:pixelated;border:1px solid var(--border2);border-radius:8px;background:#101216;width:min(440px,86vw);height:auto}
+  input[type=range]{accent-color:var(--accent)}
+  .verdict{border:1px solid rgba(102,187,106,.4);border-left:3px solid var(--green);background:rgba(102,187,106,.06);
+    border-radius:10px;padding:16px 18px;margin:16px 0;font-size:14.5px;color:#d4d7dd}
+  .verdict b{color:#9fe3a3}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <span class="kicker">◆ GenesisCA · Feasibility Investigation</span>
+  <h1>Cellular Potts &amp; Morphogenesis
+    <span class="sub">Extending GenesisCA from a deterministic one-cell-per-site lattice CA to the <b style="color:var(--accent2);font-weight:600">Cellular Potts (Glazier–Graner–Hogeweg)</b> model — <b style="color:var(--accent2);font-weight:600">many sites per cell, stochastic energy minimization</b> — as a first substrate for cell&nbsp;division, morphogenesis, and (eventually) 3D.</span>
+  </h1>
+  <div class="herometa">
+    <span><b>Companion to:</b> docs/INVESTIGATION_CPM.md</span>
+    <span><b>Method:</b> 21-agent research workflow + adversarial fact-check + 5-subsystem codebase audit</span>
+    <span><b>Date:</b> 2026-06-16</span>
+  </div>
+  <span class="status">● Status: research only — no implementation planned yet. This document communicates findings; it is not a commitment to build.</span>
+</header>
+
+<nav class="toc"><div class="row">
+  <a href="#extended">1 · Extended cells</a>
+  <a href="#energy">2 · The Hamiltonian</a>
+  <a href="#metropolis">3 · Metropolis dynamics</a>
+  <a href="#live">4 · Live demo</a>
+  <a href="#state">5 · Two-level state</a>
+  <a href="#engine">6 · Engine fit</a>
+  <a href="#substrate">7 · Substrate choice</a>
+  <a href="#render">8 · Rendering</a>
+  <a href="#impact">9 · Impact map</a>
+  <a href="#hazards">10 · Hazards</a>
+  <a href="#roadmap">11 · Roadmap</a>
+  <a href="#lit">12 · Literature</a>
+</div></nav>
+
+<div class="wrap">
+
+<!-- TL;DR -->
+<section>
+  <div class="keyfact">
+    <b>The finding that drives everything:</b> CPM is <b>not</b> a cellular automaton in GenesisCA's sense and <b>cannot</b> be expressed by the engine's defining trick — "compile the node graph to a per-cell step, call it once per generation." CPM is <b>stochastic Metropolis energy-minimization on extended cells</b>: one biological cell spans <i>many</i> lattice sites, and the update proposes copying a neighbour's cell-ID into a boundary site and accepts it with probability <code style="font-family:var(--mono)">min(1, e<sup>−ΔH/T</sup>)</code>. The recommendation is a <b>hybrid</b>: a new worker-side Metropolis <i>driver</i> owns the loop, the per-cell-ID bookkeeping and the accept/reject, while the node graph is repurposed to compute <i>only the scalar ΔH</i>. <span style="color:var(--green)">~60–70% of GenesisCA's stack still carries over</span> — async single-buffer dynamics, the SoA grid, the <code>colors</code> blit, and the <code>lookupTable</code> type that <i>is</i> the adhesion J-matrix.
+  </div>
+  <div class="verdict">
+    <b>Substrate verdict (the user's real question):</b> the goal is cell <b>division + morphogenesis + rich per-cell rules + dynamic adjacency, ultimately in 3D</b> — CPM is a <i>candidate</i>, not the goal. Recommendation: <b>start with CPM</b> (lowest friction for this lattice/SoA/compile stack; free deformable shape <i>and</i> free implicit adjacency; easy division; incremental 3D engine; Artistoo proves browser CPM works) — <b>but keep the per-cell IR engine-agnostic</b> so an off-lattice <b>center-based</b> model (PhysiCell-style) can be the natural second engine for division-heavy 3D populations. CPM is the <i>wrong</i> tool for confluent epithelial sheet-mechanics (that is vertex territory), and its Monte-Carlo dynamics are non-physical (broken detailed balance — Voss-Böhme 2012). CPM-<i>first</i>, not CPM-<i>only</i>.
+  </div>
+</section>
+
+<!-- 1 EXTENDED CELLS -->
+<section id="extended"><div class="card">
+  <h2><span class="n">01</span> One biological cell = many lattice sites</h2>
+  <p class="lede">In GenesisCA today a "cell" <b>is</b> a lattice site: one state per site, updated synchronously. In CPM a lattice site holds a <b>spin</b> <span class="pill" style="display:inline">σ(x)</span> = the integer <b>ID of the biological cell</b> occupying it, and a biological cell is a <b>connected domain of many same-σ sites</b>. A second map <span class="pill" style="display:inline">τ(σ)</span> gives each cell a <i>type</i>; σ=0 is medium. Cells are spatially <b>extended and deformable</b> — that is what makes shape, division and morphogenesis expressible.</p>
+
+  <figure>
+    <svg viewBox="0 0 920 330" role="img" aria-label="GenesisCA one-cell-per-site lattice versus CPM extended multi-site cells">
+      <!-- LEFT: classic CA -->
+      <g transform="translate(20,42)">
+        <text x="0" y="-16" fill="#9aa0aa" font-size="13" font-family="var(--sans)">GenesisCA today — 1 cell = 1 site</text>
+        <g font-family="var(--mono)" font-size="11">
+          <!-- 5x5 of alternating states -->
+          <g>
+            <rect x="0" y="0" width="46" height="46" fill="#2a3038" stroke="#2a2e37"/><rect x="46" y="0" width="46" height="46" fill="#e8a13a" stroke="#2a2e37"/><rect x="92" y="0" width="46" height="46" fill="#2a3038" stroke="#2a2e37"/><rect x="138" y="0" width="46" height="46" fill="#2a3038" stroke="#2a2e37"/><rect x="184" y="0" width="46" height="46" fill="#e8a13a" stroke="#2a2e37"/>
+            <rect x="0" y="46" width="46" height="46" fill="#e8a13a" stroke="#2a2e37"/><rect x="46" y="46" width="46" height="46" fill="#2a3038" stroke="#2a2e37"/><rect x="92" y="46" width="46" height="46" fill="#e8a13a" stroke="#2a2e37"/><rect x="138" y="46" width="46" height="46" fill="#2a3038" stroke="#2a2e37"/><rect x="184" y="46" width="46" height="46" fill="#2a3038" stroke="#2a2e37"/>
+            <rect x="0" y="92" width="46" height="46" fill="#2a3038" stroke="#2a2e37"/><rect x="46" y="92" width="46" height="46" fill="#2a3038" stroke="#2a2e37"/><rect x="92" y="92" width="46" height="46" fill="#2a3038" stroke="#2a2e37"/><rect x="138" y="92" width="46" height="46" fill="#e8a13a" stroke="#2a2e37"/><rect x="184" y="92" width="46" height="46" fill="#2a3038" stroke="#2a2e37"/>
+            <rect x="0" y="138" width="46" height="46" fill="#e8a13a" stroke="#2a2e37"/><rect x="46" y="138" width="46" height="46" fill="#2a3038" stroke="#2a2e37"/><rect x="92" y="138" width="46" height="46" fill="#2a3038" stroke="#2a2e37"/><rect x="138" y="138" width="46" height="46" fill="#2a3038" stroke="#2a2e37"/><rect x="184" y="138" width="46" height="46" fill="#e8a13a" stroke="#2a2e37"/>
+            <rect x="0" y="184" width="46" height="46" fill="#2a3038" stroke="#2a2e37"/><rect x="46" y="184" width="46" height="46" fill="#e8a13a" stroke="#2a2e37"/><rect x="92" y="184" width="46" height="46" fill="#2a3038" stroke="#2a2e37"/><rect x="138" y="184" width="46" height="46" fill="#2a3038" stroke="#2a2e37"/><rect x="184" y="184" width="46" height="46" fill="#2a3038" stroke="#2a2e37"/>
+          </g>
+        </g>
+        <text x="115" y="250" fill="#9aa0aa" font-size="11.5" text-anchor="middle" font-family="var(--sans)">each cell = one state; rule rewrites it each generation</text>
+      </g>
+
+      <!-- middle arrow -->
+      <g transform="translate(300,160)">
+        <line x1="0" y1="0" x2="78" y2="0" stroke="#3a3f4a" stroke-width="2"/>
+        <path d="M78,-6 L92,0 L78,6 Z" fill="#3a3f4a"/>
+        <text x="46" y="-12" fill="#9aa0aa" font-size="12" text-anchor="middle" font-family="var(--sans)">Potts</text>
+      </g>
+
+      <!-- RIGHT: CPM extended cells -->
+      <g transform="translate(420,42)">
+        <text x="0" y="-16" fill="#9aa0aa" font-size="13" font-family="var(--sans)">CPM — 1 cell = many sites (σ = cell ID, τ = type)</text>
+        <!-- a 10x5 lattice where blobs of equal sigma form cells, 2 types -->
+        <g stroke="#0c0d10" stroke-width="0.6">
+          <!-- cell 1 (type A amber) -->
+          <g fill="#e8a13a">
+            <rect x="0" y="0" width="23" height="23"/><rect x="23" y="0" width="23" height="23"/><rect x="0" y="23" width="23" height="23"/><rect x="23" y="23" width="23" height="23"/><rect x="46" y="0" width="23" height="23"/><rect x="0" y="46" width="23" height="23"/>
+          </g>
+          <!-- cell 2 (type A amber, darker outline) -->
+          <g fill="#c8842a">
+            <rect x="69" y="0" width="23" height="23"/><rect x="92" y="0" width="23" height="23"/><rect x="69" y="23" width="23" height="23"/><rect x="92" y="23" width="23" height="23"/><rect x="115" y="0" width="23" height="23"/><rect x="115" y="23" width="23" height="23"/>
+          </g>
+          <!-- cell 3 (type B cyan) -->
+          <g fill="#4cc9f0">
+            <rect x="46" y="23" width="23" height="23"/><rect x="46" y="46" width="23" height="23"/><rect x="69" y="46" width="23" height="23"/><rect x="23" y="46" width="23" height="23"/><rect x="46" y="69" width="23" height="23"/><rect x="69" y="69" width="23" height="23"/>
+          </g>
+          <!-- cell 4 (type B cyan, darker) -->
+          <g fill="#3a9ec0">
+            <rect x="92" y="46" width="23" height="23"/><rect x="115" y="46" width="23" height="23"/><rect x="92" y="69" width="23" height="23"/><rect x="115" y="69" width="23" height="23"/><rect x="138" y="46" width="23" height="23"/><rect x="138" y="69" width="23" height="23"/>
+          </g>
+          <!-- medium fills the rest -->
+          <g fill="#16181d">
+            <rect x="138" y="0" width="23" height="23"/><rect x="161" y="0" width="23" height="23"/><rect x="161" y="23" width="23" height="23"/><rect x="138" y="23" width="23" height="23"/>
+            <rect x="0" y="69" width="23" height="23"/><rect x="23" y="69" width="23" height="23"/><rect x="0" y="92" width="23" height="23"/><rect x="23" y="92" width="23" height="23"/><rect x="46" y="92" width="23" height="23"/><rect x="69" y="92" width="23" height="23"/><rect x="92" y="92" width="23" height="23"/><rect x="115" y="92" width="23" height="23"/><rect x="138" y="92" width="23" height="23"/><rect x="161" y="92" width="23" height="23"/><rect x="161" y="46" width="23" height="23"/><rect x="161" y="69" width="23" height="23"/>
+          </g>
+        </g>
+        <!-- labels -->
+        <text x="34" y="14" fill="#0c0d10" font-size="10" font-weight="700" text-anchor="middle" font-family="var(--mono)">σ=1</text>
+        <text x="92" y="14" fill="#0c0d10" font-size="10" font-weight="700" text-anchor="middle" font-family="var(--mono)">σ=2</text>
+        <text x="54" y="60" fill="#0c0d10" font-size="10" font-weight="700" text-anchor="middle" font-family="var(--mono)">σ=3</text>
+        <text x="115" y="60" fill="#0c0d10" font-size="10" font-weight="700" text-anchor="middle" font-family="var(--mono)">σ=4</text>
+        <text x="172" y="86" fill="#6b7280" font-size="9.5" text-anchor="middle" font-family="var(--mono)">σ=0</text>
+        <g font-family="var(--sans)" font-size="11.5">
+          <rect x="0" y="128" width="13" height="13" fill="#e8a13a"/><text x="20" y="139" fill="#cdd3da">type A cells</text>
+          <rect x="120" y="128" width="13" height="13" fill="#4cc9f0"/><text x="140" y="139" fill="#cdd3da">type B cells</text>
+          <rect x="240" y="128" width="13" height="13" fill="#16181d" stroke="#3a3f4a"/><text x="260" y="139" fill="#cdd3da">medium (σ=0)</text>
+        </g>
+        <text x="0" y="178" fill="#9aa0aa" font-size="11.5" font-family="var(--sans)">each cell = a connected blob of sites; shape is emergent &amp; deformable</text>
+      </g>
+    </svg>
+    <figcaption><b>Why it matters:</b> a cell with <i>extent</i> can grow, deform, divide, and present a <i>membrane</i> — none of which a one-site cell can. But it introduces a level GenesisCA has never had: a <b>per-biological-cell object</b> (its type, current volume, perimeter, centroid) that is <i>not</i> per-site and <i>not</i> a global scalar. <span class="small">(Graner &amp; Glazier 1992; Glazier &amp; Graner 1993.)</span></figcaption>
+  </figure>
+</div></section>
+
+<!-- 2 HAMILTONIAN -->
+<section id="energy"><div class="card">
+  <h2><span class="n">02</span> The model is an <i>energy</i>, not a rule</h2>
+  <p class="lede">CPM has no transition function. It defines a Hamiltonian <span class="pill" style="display:inline">H</span> and evolves by <b>minimising it stochastically</b>. The engine never computes global <i>H</i> — it computes a <b>local ΔH</b> for a single proposed copy, summed over independent terms. That ΔH is exactly what a node graph can compute.</p>
+
+  <figure>
+    <svg viewBox="0 0 920 300" role="img" aria-label="The three core Hamiltonian terms: adhesion, volume, perimeter">
+      <!-- ADHESION -->
+      <g transform="translate(20,30)">
+        <text x="130" y="0" fill="#f4c06a" font-size="13.5" text-anchor="middle" font-weight="700" font-family="var(--sans)">Adhesion / contact</text>
+        <text x="130" y="18" fill="#9aa0aa" font-size="11" text-anchor="middle" font-family="var(--mono)">Σ J(τ,τ′)·(1−δ)</text>
+        <!-- two touching cells, interface highlighted -->
+        <g transform="translate(35,34)" stroke="#0c0d10" stroke-width="0.6">
+          <g fill="#e8a13a"><rect x="0" y="0" width="24" height="24"/><rect x="24" y="0" width="24" height="24"/><rect x="0" y="24" width="24" height="24"/><rect x="24" y="24" width="24" height="24"/><rect x="0" y="48" width="24" height="24"/><rect x="24" y="48" width="24" height="24"/></g>
+          <g fill="#4cc9f0"><rect x="48" y="0" width="24" height="24"/><rect x="72" y="0" width="24" height="24"/><rect x="48" y="24" width="24" height="24"/><rect x="72" y="24" width="24" height="24"/><rect x="48" y="48" width="24" height="24"/><rect x="72" y="48" width="24" height="24"/></g>
+        </g>
+        <line x1="83" y1="64" x2="83" y2="136" stroke="#e0566a" stroke-width="3"/>
+        <text x="130" y="156" fill="#9aa0aa" font-size="10.5" text-anchor="middle" font-family="var(--sans)">cost only on <tspan fill="#f3a0ad">unlike-cell interfaces</tspan>;</text>
+        <text x="130" y="171" fill="#9aa0aa" font-size="10.5" text-anchor="middle" font-family="var(--sans)">lower J = stronger sticking → sorting</text>
+        <text x="130" y="190" fill="#66bb6a" font-size="10.5" text-anchor="middle" font-family="var(--sans)">no per-cell state · cheapest term</text>
+      </g>
+      <!-- VOLUME -->
+      <g transform="translate(330,30)">
+        <text x="130" y="0" fill="#f4c06a" font-size="13.5" text-anchor="middle" font-weight="700" font-family="var(--sans)">Volume constraint</text>
+        <text x="130" y="18" fill="#9aa0aa" font-size="11" text-anchor="middle" font-family="var(--mono)">λ_V·(v − V_target)²</text>
+        <!-- spring: a blob with target ring -->
+        <circle cx="130" cy="98" r="44" fill="none" stroke="#3a3f4a" stroke-width="1.6" stroke-dasharray="5 4"/>
+        <text x="130" y="50" fill="#6b7280" font-size="10" text-anchor="middle" font-family="var(--sans)">V_target</text>
+        <circle cx="130" cy="98" r="30" fill="rgba(232,161,58,.85)" stroke="#f4c06a"/>
+        <!-- spring arrows pushing in/out -->
+        <g stroke="#66bb6a" stroke-width="1.6">
+          <line x1="174" y1="98" x2="162" y2="98"/><path d="M162,94 L156,98 L162,102 Z" fill="#66bb6a"/>
+          <line x1="86" y1="98" x2="98" y2="98"/><path d="M98,94 L104,98 L98,102 Z" fill="#66bb6a"/>
+        </g>
+        <text x="130" y="171" fill="#9aa0aa" font-size="10.5" text-anchor="middle" font-family="var(--sans)">a "spring" toward target size →</text>
+        <text x="130" y="190" fill="#e8a13a" font-size="10.5" text-anchor="middle" font-family="var(--sans)">needs per-cell <tspan font-family="var(--mono)">volume[id]</tspan> (±1 / flip)</text>
+      </g>
+      <!-- PERIMETER -->
+      <g transform="translate(640,30)">
+        <text x="130" y="0" fill="#f4c06a" font-size="13.5" text-anchor="middle" font-weight="700" font-family="var(--sans)">Surface / perimeter</text>
+        <text x="130" y="18" fill="#9aa0aa" font-size="11" text-anchor="middle" font-family="var(--mono)">λ_S·(s − S_target)²</text>
+        <!-- blob with outlined border -->
+        <g transform="translate(94,40)" stroke="#0c0d10" stroke-width="0.6">
+          <g fill="rgba(76,201,240,.85)">
+            <rect x="24" y="0" width="24" height="24"/><rect x="0" y="24" width="24" height="24"/><rect x="24" y="24" width="24" height="24"/><rect x="48" y="24" width="24" height="24"/><rect x="24" y="48" width="24" height="24"/>
+          </g>
+        </g>
+        <!-- highlight border edges -->
+        <g stroke="#f4c06a" stroke-width="2.5" fill="none">
+          <path d="M118,40 L142,40 M142,40 L142,64 M142,64 L166,64 M166,64 L166,88 M166,88 L142,88 M142,88 L142,112 M142,112 L118,112 M118,112 L118,88 M118,88 L94,88 M94,88 L94,64 M94,64 L118,64 M118,64 L118,40"/>
+        </g>
+        <text x="130" y="171" fill="#9aa0aa" font-size="10.5" text-anchor="middle" font-family="var(--sans)">membrane elasticity / stiffness;</text>
+        <text x="130" y="190" fill="#e0566a" font-size="10.5" text-anchor="middle" font-family="var(--sans)">one flip can touch &gt;2 cells → costlier</text>
+      </g>
+    </svg>
+    <figcaption><b>The crux for the engine:</b> every term that depends on a cumulative per-cell quantity (volume, perimeter, centroid) pairs a <code>deltaH</code> that <i>reads</i> cached scalars with a <code>postSetpix</code> updater that maintains them <b>incrementally (±1)</b>. Recomputing volume by scanning the grid each attempt is O(total) — catastrophic at 25 M sites. Extensions (chemotaxis, the Act migration model, length) add to the same ΔH. <span class="small">(Term forms verified verbatim against Artistoo <code>src/hamiltonian/*.js</code> and the CompuCell3D manual.)</span></figcaption>
+  </figure>
+</div></section>
+
+<!-- 3 METROPOLIS -->
+<section id="metropolis"><div class="card">
+  <h2><span class="n">03</span> The dynamics — a Metropolis copy attempt</h2>
+  <p class="lede">One elementary move: pick a random <b>target</b> boundary site, pick a random <b>source</b> from its neighbours, propose copying the source's cell-ID into the target, score ΔH, and accept with the Boltzmann gate. <b>N</b> attempts = one <b>Monte-Carlo Step (MCS)</b> = one "generation". It is intrinsically <b>sequential</b> (each accept mutates state the next attempt reads) and <b>stochastic</b>.</p>
+
+  <div class="grid2">
+    <figure>
+      <svg viewBox="0 0 440 300" role="img" aria-label="A single copy attempt at a cell boundary">
+        <text x="220" y="20" fill="#9aa0aa" font-size="12.5" text-anchor="middle" font-family="var(--sans)">copy attempt at a boundary</text>
+        <g transform="translate(90,44)" stroke="#0c0d10" stroke-width="0.8">
+          <g fill="#e8a13a"><rect x="0" y="0" width="36" height="36"/><rect x="0" y="36" width="36" height="36"/><rect x="0" y="72" width="36" height="36"/><rect x="36" y="0" width="36" height="36"/><rect x="36" y="72" width="36" height="36"/></g>
+          <g fill="#4cc9f0"><rect x="72" y="0" width="36" height="36"/><rect x="108" y="0" width="36" height="36"/><rect x="72" y="36" width="36" height="36"/><rect x="108" y="36" width="36" height="36"/><rect x="72" y="72" width="36" height="36"/><rect x="108" y="72" width="36" height="36"/></g>
+          <!-- target site (boundary, currently cyan) -->
+          <rect x="36" y="36" width="36" height="36" fill="#4cc9f0" stroke="#f4c06a" stroke-width="3"/>
+        </g>
+        <!-- arrow source->target -->
+        <g stroke="#66bb6a" stroke-width="2">
+          <line x1="186" y1="98" x2="150" y2="98"/><path d="M150,92 L142,98 L150,104 Z" fill="#66bb6a"/>
+        </g>
+        <text x="180" y="86" fill="#9fe3a3" font-size="10.5" font-family="var(--mono)">σ(src)→σ(tgt)</text>
+        <text x="126" y="200" fill="#f4c06a" font-size="11" text-anchor="middle" font-family="var(--sans)">target site (boundary)</text>
+        <text x="126" y="216" fill="#9aa0aa" font-size="10.5" text-anchor="middle" font-family="var(--sans)">the amber cell tries to extend into it</text>
+        <text x="126" y="236" fill="#6b7280" font-size="10" text-anchor="middle" font-family="var(--sans)">interior copies (same σ) = ΔH 0 = skipped</text>
+      </svg>
+      <figcaption><b>Boundary-only:</b> on a packed tissue most sites are interior no-ops, so real engines keep a <code>borderpixels</code> set (O(1) sample) — per-MCS cost scales with <i>boundary length</i>, not area. The biggest perf lever.</figcaption>
+    </figure>
+
+    <figure>
+      <svg viewBox="0 0 440 300" role="img" aria-label="Acceptance probability versus delta H for two temperatures">
+        <text x="220" y="18" fill="#9aa0aa" font-size="12.5" text-anchor="middle" font-family="var(--sans)">accept probability  P = min(1, e^(−ΔH/T))</text>
+        <!-- axes -->
+        <line x1="60" y1="40" x2="60" y2="248" stroke="#3a3f4a"/>
+        <line x1="60" y1="248" x2="410" y2="248" stroke="#3a3f4a"/>
+        <text x="22" y="48" fill="#6b7280" font-size="10" font-family="var(--mono)">1.0</text>
+        <text x="22" y="252" fill="#6b7280" font-size="10" font-family="var(--mono)">0.0</text>
+        <text x="135" y="266" fill="#6b7280" font-size="10" font-family="var(--mono)">ΔH=0</text>
+        <text x="400" y="266" fill="#6b7280" font-size="10" text-anchor="end" font-family="var(--mono)">ΔH→+</text>
+        <!-- ΔH=0 vertical guide -->
+        <line x1="135" y1="40" x2="135" y2="248" stroke="#2a2e37" stroke-dasharray="3 3"/>
+        <!-- favourable region label -->
+        <text x="97" y="36" fill="#66bb6a" font-size="9.5" text-anchor="middle" font-family="var(--sans)">always accept</text>
+        <!-- T=4 (gentle): flat to ΔH0 then exp decay -->
+        <polyline fill="none" stroke="#4cc9f0" stroke-width="2.4" points="60,48 135,48 178,98 220,134 262,164 304,186 346,202 388,214"/>
+        <text x="392" y="210" fill="#4cc9f0" font-size="11" font-family="var(--sans)">T high</text>
+        <!-- T=1 (steep) -->
+        <polyline fill="none" stroke="#e8a13a" stroke-width="2.4" points="60,48 135,48 156,123 178,193 200,225 222,238 410,245"/>
+        <text x="250" y="232" fill="#f4c06a" font-size="11" font-family="var(--sans)">T low</text>
+      </svg>
+      <figcaption><b>Temperature is not heat</b> — it is a membrane-fluctuation amplitude. <code>T→0</code> freezes into the first local minimum; large <code>T</code> dissolves cells into noise; the right <code>T</code> escapes shallow minima to reach sorted/morphogenetic states. The single least-intuitive parameter — it needs a default + a tooltip.</figcaption>
+    </figure>
+  </div>
+
+  <div class="callout" style="border-left-color:var(--accent);background:#14110c;margin-top:8px">
+    <h4 style="color:var(--accent2)">Connectivity is a correctness requirement, not polish</h4>
+    <p>A naive copy can split a cell into disconnected islands (biologically meaningless). A <b>local</b> connectivity test on the flipping site's own neighbourhood (Durand &amp; Guesnet 2016) forbids fragmentation at <i>all</i> temperatures, runs faster than the standard algorithm, and is cheap enough to belong in the very first milestone — without it the cell-sorting demo can shatter into specks.</p>
+  </div>
+</div></section>
+
+<!-- 4 LIVE -->
+<section id="live"><div class="card">
+  <h2><span class="n alt">04</span> Live demo — Metropolis cell sorting</h2>
+  <p class="lede">A real (small) CPM running in your browser: ~36 cells of two types in a compact aggregate, an adhesion <b>J-matrix</b> + a <b>volume constraint</b>, the Metropolis accept/reject. With like-cells sticking and unlike-cells repelling, the mixed aggregate <b>spontaneously sorts</b> — the founding Graner–Glazier 1992 result, with <i>no</i> "seek your own kind" rule. Drag <b>T</b> to feel the fluctuation amplitude; toggle colour to see cells by <b>type</b> vs by <b>individual ID</b>.</p>
+  <div class="controls">
+    <button class="btn primary" id="cpm-play">▶ Play</button>
+    <button class="btn" id="cpm-step">⏭ Step (1 MCS)</button>
+    <button class="btn" id="cpm-reset">↺ Reseed (randomize)</button>
+    <button class="btn" id="cpm-color">Colour: type</button>
+    <span class="pill">MCS <b id="cpm-mcs" style="color:var(--accent2)">0</b></span>
+    <span class="pill">T <b id="cpm-temp-val" style="color:var(--accent2)">10</b> <input type="range" id="cpm-temp" min="1" max="30" step="1" value="10" style="vertical-align:middle;width:120px"></span>
+  </div>
+  <figure style="background:#0a0c0f">
+    <div class="cvwrap"><canvas id="cpm-canvas" width="448" height="448" aria-label="Live cellular Potts cell-sorting simulation"></canvas></div>
+    <figcaption>Pure illustration of the engine contract: a <b>per-site spin lattice</b> + a <b>per-cell-ID volume accumulator</b>, driven by a propose→ΔH→accept loop. This is the exact shape of the proposed worker-side Metropolis driver; in GenesisCA the ΔH would come from a compiled node graph instead of the hardcoded terms here. <span class="small">(Adhesion + volume only; no perimeter/connectivity guard — kept minimal. J-values are illustrative; watch type A and type B segregate.)</span></figcaption>
+  </figure>
+</div></section>
+
+<!-- 5 TWO-LEVEL STATE -->
+<section id="state"><div class="card">
+  <h2><span class="n">05</span> Two-level state — the structure GenesisCA lacks</h2>
+  <p class="lede">CPM needs <b>two</b> state tiers: a per-<b>site</b> spin field (which GenesisCA already has — it's an integer cell attribute) <i>and</i> a per-<b>biological-cell</b> object table (type, current/target volume, perimeter, centroid) indexed by cell ID. The second tier <b>does not exist today</b> — every attribute is per-site or a single global scalar. This is the central new data structure.</p>
+
+  <figure>
+    <svg viewBox="0 0 920 290" role="img" aria-label="Per-site spin lattice plus per-cell-ID accumulator table">
+      <!-- spin lattice -->
+      <g transform="translate(30,40)">
+        <text x="0" y="-10" fill="#4cc9f0" font-size="12.5" font-family="var(--sans)">per-SITE spin σ(x)  ·  Int32Array[total]  (reuse — an integer cell attribute)</text>
+        <g font-family="var(--mono)" font-size="11" stroke="#0c0d10" stroke-width="0.6">
+          <g fill="#e8a13a"><rect x="0" y="0" width="30" height="30"/><rect x="30" y="0" width="30" height="30"/><rect x="0" y="30" width="30" height="30"/></g>
+          <g fill="#4cc9f0"><rect x="60" y="0" width="30" height="30"/><rect x="90" y="0" width="30" height="30"/><rect x="60" y="30" width="30" height="30"/><rect x="90" y="30" width="30" height="30"/></g>
+          <g fill="#e8a13a"><rect x="30" y="30" width="30" height="30"/></g>
+          <g fill="#16181d"><rect x="120" y="0" width="30" height="30"/><rect x="120" y="30" width="30" height="30"/><rect x="0" y="60" width="30" height="30"/><rect x="30" y="60" width="30" height="30"/></g>
+          <g fill="#4cc9f0"><rect x="60" y="60" width="30" height="30"/><rect x="90" y="60" width="30" height="30"/><rect x="120" y="60" width="30" height="30"/></g>
+        </g>
+        <g font-family="var(--mono)" font-size="10" fill="#0c0d10" font-weight="700">
+          <text x="15" y="19" text-anchor="middle">1</text><text x="45" y="19" text-anchor="middle">1</text><text x="15" y="49" text-anchor="middle">1</text><text x="45" y="49" text-anchor="middle">1</text>
+          <text x="75" y="19" text-anchor="middle">3</text><text x="105" y="19" text-anchor="middle">3</text><text x="75" y="49" text-anchor="middle">3</text><text x="105" y="49" text-anchor="middle">3</text>
+          <text x="75" y="79" text-anchor="middle">3</text><text x="105" y="79" text-anchor="middle">3</text>
+        </g>
+        <g font-family="var(--mono)" font-size="10" fill="#6b7280"><text x="135" y="19" text-anchor="middle">0</text><text x="135" y="49" text-anchor="middle">0</text><text x="15" y="79" text-anchor="middle">0</text><text x="45" y="79" text-anchor="middle">0</text><text x="135" y="79" text-anchor="middle">3</text></g>
+        <text x="75" y="118" fill="#9aa0aa" font-size="10.5" text-anchor="middle" font-family="var(--sans)">value = which cell occupies the site</text>
+      </g>
+      <!-- arrow -->
+      <g transform="translate(300,130)"><text x="40" y="-6" fill="#9aa0aa" font-size="11" text-anchor="middle" font-family="var(--sans)">indexed by σ</text><line x1="0" y1="0" x2="70" y2="0" stroke="#3a3f4a" stroke-width="2"/><path d="M70,-6 L84,0 L70,6 Z" fill="#3a3f4a"/></g>
+      <!-- accumulator table -->
+      <g transform="translate(410,40)">
+        <text x="0" y="-10" fill="#e8a13a" font-size="12.5" font-family="var(--sans)">per-CELL-ID object table  ·  length maxCells  (NEW — maintained incrementally)</text>
+        <g font-family="var(--mono)" font-size="11">
+          <!-- header -->
+          <g fill="#9aa0aa" font-size="10"><text x="20" y="14">id</text><text x="70" y="14">type</text><text x="140" y="14">vol</text><text x="210" y="14">V_tgt</text><text x="290" y="14">perim</text><text x="370" y="14">centroid</text></g>
+          <line x1="0" y1="20" x2="470" y2="20" stroke="#2a2e37"/>
+          <g fill="#cdd3da">
+            <text x="20" y="40">0</text><text x="70" y="40" fill="#6b7280">medium</text><text x="140" y="40" fill="#6b7280">—</text><text x="210" y="40" fill="#6b7280">—</text><text x="290" y="40" fill="#6b7280">—</text><text x="370" y="40" fill="#6b7280">—</text>
+            <text x="20" y="62" fill="#f4c06a">1</text><text x="70" y="62" fill="#f4c06a">A</text><text x="140" y="62">63</text><text x="210" y="62">64</text><text x="290" y="62">31</text><text x="370" y="62">(7.1, 9.4)</text>
+            <text x="20" y="84" fill="#9fe0f7">3</text><text x="70" y="84" fill="#9fe0f7">B</text><text x="140" y="84">66</text><text x="210" y="84">64</text><text x="290" y="84">33</text><text x="370" y="84">(12.8, 6.2)</text>
+            <text x="20" y="106" fill="#6b7280">…</text>
+          </g>
+        </g>
+        <rect x="0" y="48" width="470" height="22" fill="rgba(232,161,58,.08)" stroke="rgba(232,161,58,.4)" rx="3"/>
+        <rect x="0" y="70" width="470" height="22" fill="rgba(76,201,240,.07)" stroke="rgba(76,201,240,.35)" rx="3"/>
+        <text x="0" y="142" fill="#9aa0aa" font-size="10.5" font-family="var(--sans)">on each accepted flip: <tspan fill="#cdd3da" font-family="var(--mono)">vol[src]++ ; vol[oldTgt]--</tspan>  (never re-scan the grid)</text>
+        <text x="0" y="160" fill="#9aa0aa" font-size="10.5" font-family="var(--sans)">cell ID 0 = medium · free-list recycles IDs on death/division</text>
+      </g>
+    </svg>
+    <figcaption>The J adhesion matrix is a free reuse: a <b>tag×tag <code>lookupTable</code></b> keyed by cell <i>type</i> on both axes (the chromatography model already uses this exact shape) — <b>no new attribute type</b>. <code>T</code>, <code>λ_V</code>, <code>λ_S</code> are bounded <b>model attributes</b> with sliders. <span class="small">(Accumulator memory: JS arrays in Phase 2, promoted to a baked <code>wasmMemory</code> region from the WASM phase so the compiled <code>GetCellVolume</code> reads it directly.)</span></figcaption>
+  </figure>
+</div></section>
+
+<!-- 6 ENGINE FIT -->
+<section id="engine"><div class="card">
+  <h2><span class="n">06</span> Engine fit — why it must be a hybrid</h2>
+  <p class="lede">GenesisCA's whole speed story is "compile the graph to a per-cell step, call it once per generation." A per-site compiled function <b>cannot</b> express a CPM move: it can't read per-cell-ID volume, can't transactionally commit a write + two accumulator updates, and the loop shape is wrong (propose/accept, not sweep-once). The answer mirrors the Graph-CA investigation's "CSR vs dead topology" finding: <b>keep the graph as the authoring surface, add a new engine path to drive it.</b></p>
+
+  <figure>
+    <svg viewBox="0 0 920 300" role="img" aria-label="Compile-per-cell-step versus a bespoke Metropolis driver fed by a delta-H graph">
+      <!-- LEFT: today -->
+      <g transform="translate(20,40)">
+        <rect x="0" y="0" width="270" height="210" rx="12" fill="#101216" stroke="#3a3f4a"/>
+        <text x="135" y="26" fill="#9aa0aa" font-size="13" text-anchor="middle" font-weight="700" font-family="var(--sans)">Today — per-cell step</text>
+        <rect x="24" y="44" width="222" height="40" rx="8" fill="#16181d" stroke="#2a2e37"/>
+        <text x="135" y="69" fill="#cdd3da" font-size="11.5" text-anchor="middle" font-family="var(--mono)">compile graph → step()</text>
+        <text x="135" y="104" fill="#9aa0aa" font-size="11" text-anchor="middle" font-family="var(--sans)">for each cell: write its next state</text>
+        <rect x="24" y="120" width="222" height="34" rx="8" fill="rgba(224,86,106,.08)" stroke="rgba(224,86,106,.4)"/>
+        <text x="135" y="142" fill="#f3a0ad" font-size="11" text-anchor="middle" font-family="var(--sans)">✗ no per-cell-ID volume</text>
+        <rect x="24" y="160" width="222" height="34" rx="8" fill="rgba(224,86,106,.08)" stroke="rgba(224,86,106,.4)"/>
+        <text x="135" y="182" fill="#f3a0ad" font-size="11" text-anchor="middle" font-family="var(--sans)">✗ no transactional accept</text>
+      </g>
+      <!-- arrow -->
+      <g transform="translate(300,140)"><line x1="0" y1="0" x2="40" y2="0" stroke="#3a3f4a" stroke-width="2"/><path d="M40,-6 L54,0 L40,6 Z" fill="#3a3f4a"/></g>
+      <!-- RIGHT: hybrid -->
+      <g transform="translate(370,30)">
+        <rect x="0" y="0" width="540" height="240" rx="12" fill="rgba(102,187,106,.05)" stroke="#66bb6a"/>
+        <text x="270" y="24" fill="#9fe3a3" font-size="13" text-anchor="middle" font-weight="700" font-family="var(--sans)">Recommended — hybrid</text>
+        <!-- driver box -->
+        <rect x="24" y="40" width="250" height="178" rx="10" fill="#101216" stroke="#3a3f4a"/>
+        <text x="149" y="62" fill="#f4c06a" font-size="12" text-anchor="middle" font-weight="700" font-family="var(--sans)">worker Metropolis driver</text>
+        <g font-family="var(--mono)" font-size="10.5" fill="#cdd3da">
+          <text x="40" y="86">pick target / source</text>
+          <text x="40" y="106">ΔH = energyFn(…)  ◄──</text>
+          <text x="40" y="126">accept e^(−ΔH/T)?</text>
+          <text x="40" y="146">commit spin + vol±1</text>
+          <text x="40" y="166">connectivity guard</text>
+          <text x="40" y="186">post-MCS: grow/divide</text>
+        </g>
+        <text x="149" y="208" fill="#9aa0aa" font-size="9.5" text-anchor="middle" font-family="var(--sans)">owns loop · accumulators · accept</text>
+        <!-- energy graph box -->
+        <rect x="300" y="64" width="216" height="120" rx="10" fill="rgba(76,201,240,.07)" stroke="#4cc9f0"/>
+        <text x="408" y="86" fill="#9fe0f7" font-size="12" text-anchor="middle" font-weight="700" font-family="var(--sans)">ΔH energy graph</text>
+        <text x="408" y="108" fill="#cdd3da" font-size="10.5" text-anchor="middle" font-family="var(--mono)">new event root</text>
+        <text x="408" y="126" fill="#9aa0aa" font-size="10" text-anchor="middle" font-family="var(--sans)">Adhesion (J) + Volume</text>
+        <text x="408" y="142" fill="#9aa0aa" font-size="10" text-anchor="middle" font-family="var(--sans)">+ Perimeter + Chemotaxis</text>
+        <text x="408" y="162" fill="#66bb6a" font-size="10" text-anchor="middle" font-family="var(--sans)">reuses value-node library</text>
+        <text x="408" y="178" fill="#66bb6a" font-size="10" text-anchor="middle" font-family="var(--sans)">→ returns one scalar</text>
+        <!-- callback arrow -->
+        <g stroke="#4cc9f0" stroke-width="1.6" stroke-dasharray="4 3"><line x1="300" y1="110" x2="276" y2="106"/><path d="M282,102 L272,106 L282,110 Z" fill="#4cc9f0"/></g>
+      </g>
+    </svg>
+    <figcaption><b>The driver calls the compiled ΔH graph per attempt</b> (the graph is a pure, read-only value function — no in-graph commit). Division / growth / death are <i>post-MCS structural events</i> triggered by graph nodes but executed by the engine. The energy terms are <i>naturally</i> a node graph — Artistoo's pluggable <code>Constraint.deltaH(...)</code> design proves it — so hardcoding them would waste GenesisCA's value proposition.</figcaption>
+  </figure>
+</div></section>
+
+<!-- 7 SUBSTRATE -->
+<section id="substrate"><div class="card">
+  <h2><span class="n">07</span> Is CPM the right substrate? (the user's real question)</h2>
+  <p class="lede">The goal is division + morphogenesis + rich per-cell rules + dynamic adjacency, <b>ultimately in 3D</b> — not "CPM" per se. The literature gives a near-perfect head-to-head (Osborne et al. 2017 implement five families in one framework). There is no single winner; the families are complementary. For <i>GenesisCA's specific architecture</i>, CPM is the best <b>first</b> substrate — with a known ceiling.</p>
+
+  <table>
+    <thead><tr><th>Substrate</th><th>Cell shape</th><th>Division</th><th>Adjacency / topology</th><th>3D</th><th>Browser</th><th>Fit to GenesisCA's stack</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b style="color:var(--accent2)">Cellular Potts</b></td>
+        <td>emergent, deformable</td>
+        <td>easy (split pixels, relabel)</td>
+        <td><b style="color:var(--green)">implicit &amp; free</b> (which IDs touch)</td>
+        <td>same kernel, rescale</td>
+        <td><b style="color:var(--green)">Artistoo (proven)</b></td>
+        <td><b style="color:var(--green)">highest</b> — it <i>is</i> lattice CA + Metropolis + energy + per-cell bookkeeping</td>
+      </tr>
+      <tr>
+        <td><b>Vertex model</b></td>
+        <td>explicit polygons/polyhedra</td>
+        <td>mid (insert edge)</td>
+        <td>explicit mesh; needs T1/T2 ops</td>
+        <td><span style="color:var(--red)">"most challenging to extend to 3D"</span></td>
+        <td>none mature</td>
+        <td>low — mesh + topology ops alien to a lattice engine</td>
+      </tr>
+      <tr>
+        <td><b>Center-based / off-lattice</b> (PhysiCell)</td>
+        <td>none (spheres)</td>
+        <td><b style="color:var(--green)">trivial</b> (place 2 daughters)</td>
+        <td>distance / Voronoi graph</td>
+        <td><b style="color:var(--green)">native</b></td>
+        <td>none at scale</td>
+        <td>medium — different engine, but <i>ideal</i> rich-per-cell + division story</td>
+      </tr>
+      <tr>
+        <td><b>Subcellular element</b></td>
+        <td>full deformable</td>
+        <td>duplicate cloud</td>
+        <td>distance-based</td>
+        <td>native</td>
+        <td>none</td>
+        <td>low — many elements/cell; overkill for browser</td>
+      </tr>
+      <tr>
+        <td><b>Phase-field</b></td>
+        <td>beautiful deformable</td>
+        <td>PDE</td>
+        <td>implicit (field overlap)</td>
+        <td>native</td>
+        <td>none</td>
+        <td>low — one PDE field <i>per cell</i>; heaviest option</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callgrid" style="margin-top:14px">
+    <div class="verdict" style="margin:0">
+      <b>Why CPM first.</b> It reuses ~60–70% of GenesisCA's lattice/SoA/compile/async stack; it gives <i>free deformable shape</i> AND <i>free dynamic adjacency</i> (two explicit requirements) at the cost of physical rigour; division is easy and 3D is an <i>incremental engine</i> change; and Artistoo is the only proven zero-install browser engine in any family — a behavioural oracle to validate against.
+    </div>
+    <div class="callout" style="margin:0">
+      <h4>…but know the ceiling</h4>
+      <p>CPM's Monte-Carlo dynamics are non-physical (broken detailed balance → cell extinction without a guard, Voss-Böhme 2012; one <code>T</code> couples many effects). It is the <b>wrong tool for confluent epithelial sheet-mechanics</b> (folding, T1 intercalation — vertex territory). For huge dispersed 3D populations with rich phenotype logic + trivial division, <b>center-based (PhysiCell-style) is the better complementary engine</b>.</p>
+    </div>
+  </div>
+  <p class="small" style="margin-top:8px"><b>Design consequence:</b> keep the node graph + per-cell IR <b>engine-agnostic</b> so the same "per-cell update + per-cell attributes" nodes can later compile to a force-integration step (center-based), not only a lattice copy-attempt. CPM-first does not foreclose the off-lattice second engine — it gets <i>something morphogenetic on screen</i> fastest.</p>
+</div></section>
+
+<!-- 8 RENDER -->
+<section id="render"><div class="card">
+  <h2><span class="n alt">08</span> Rendering — mostly reused (CPM is still a 2-D lattice)</h2>
+  <p class="lede">Unlike Graph CA, CPM keeps the 2-D lattice, so the renderer is <b>~70–80% reused</b>: the worker fills one RGBA per site into the <code>colors</code> buffer and <code>SimulatorView</code> blits it as <code>ImageData</code>. Colouring a site by its cell-ID or type is just an ordinary Output Mapping. The new work is localised and additive.</p>
+  <div class="grid2">
+    <div>
+      <h3 style="margin-top:6px">Reused as-is</h3>
+      <ul class="clean">
+        <li><code>colors</code> buffer + <code>ImageData</code>/<code>drawImage</code> blit, zoom/pan, infinity tiling</li>
+        <li>Output-Mapping / viewer-tab pipeline (colour by cell-ID or type)</li>
+        <li>Brush seeding, per-site inspector (cell-ID/type/volume rows appear for free)</li>
+        <li>Recording (captures whatever <code>draw()</code> produces)</li>
+      </ul>
+    </div>
+    <div>
+      <h3 style="margin-top:6px">New render work</h3>
+      <ul class="clean">
+        <li><b>Membrane drawing</b> — stroke an edge where a neighbour's cell-ID differs (gridlines are <i>not</i> membranes)</li>
+        <li><b>Colour-by-cell-ID at scale</b> — a runtime hash-id→RGB mode (the fixed-count <code>categoricalColor</code> can't map hundreds of IDs)</li>
+        <li><b>Chemical-field heatmap overlay</b> — a composited second blit (follows the glyph-fallback pattern)</li>
+        <li><b>Centroid / track markers</b> — new; needs the per-cell centroid reduction</li>
+        <li><b>3-D renderer</b> — the only wholesale rewrite (Canvas2D is hard-wired), but well-isolated behind <code>draw()</code>/<code>colors</code></li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout" style="border-left-color:var(--accent);background:#14110c">
+    <h4 style="color:var(--accent2)">"3D is incremental" — for the engine, not the renderer</h4>
+    <p>The 3-D <i>engine</i> is the same Hamiltonian + Monte-Carlo kernel (only a bigger stencil + parameter rescale). The 3-D <i>renderer</i> is a wholesale new (WebGL/WebGPU) volumetric path. Never quote one half of that without the other.</p>
+  </div>
+</div></section>
+
+<!-- 9 IMPACT MAP -->
+<section id="impact"><div class="card">
+  <h2><span class="n">09</span> Subsystem impact map</h2>
+  <p class="lede">Every touch-point, colour-coded. The reuse (green) story is encouraging: the SoA engine, async single-buffer substrate, colors/blit pipeline, inspect/paint protocol, <code>lookupTable</code> J-matrix, model-attribute sliders and indicators largely carry over. The concentrated <i>new</i> work is the per-cell-ID tier, the Metropolis driver, and division/fields.</p>
+  <div class="legend">
+    <span><span class="dot" style="background:var(--green)"></span> reuse as-is</span>
+    <span><span class="dot" style="background:var(--accent)"></span> modify</span>
+    <span><span class="dot" style="background:var(--cyan)"></span> new</span>
+    <span><span class="dot" style="background:var(--red)"></span> gate off</span>
+  </div>
+  <div class="matrix">
+    <div class="mgroup"><h4>Schema &amp; state</h4>
+      <div class="mrow"><span class="tag t-new">new</span> CpmConfig sub-object + cell-object tier</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> UPDATE_CPM reducer + cascades + migration</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> Properties CPM toggle (forces async)</div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span> SoA per-site spin (integer attr)</div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span> <code>lookupTable</code> = J-matrix</div>
+    </div>
+    <div class="mgroup"><h4>Engine &amp; driver</h4>
+      <div class="mrow"><span class="tag t-new">new</span> Metropolis driver (propose/accept)</div>
+      <div class="mrow"><span class="tag t-new">new</span> per-cell-ID accumulators + free-list</div>
+      <div class="mrow"><span class="tag t-new">new</span> boundary sampler + connectivity guard</div>
+      <div class="mrow"><span class="tag t-new">new</span> division / growth / death events</div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span> async single-buffer + orderArray</div>
+    </div>
+    <div class="mgroup"><h4>Compiler &amp; nodes</h4>
+      <div class="mrow"><span class="tag t-new">new</span> ΔH energy event root</div>
+      <div class="mrow"><span class="tag t-new">new</span> GetCellVolume/Perimeter/Type</div>
+      <div class="mrow"><span class="tag t-new">new</span> DivideCell · SetCellTargetVolume</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> <code>requirements.cpm</code> capability gate</div>
+      <div class="mrow"><span class="tag t-gate">off</span> WebGPU (sequential accept/reject)</div>
+    </div>
+    <div class="mgroup"><h4>Rendering &amp; interaction</h4>
+      <div class="mrow"><span class="tag t-new">new</span> membrane edge-draw pass</div>
+      <div class="mrow"><span class="tag t-new">new</span> hash-id→RGB colour mode</div>
+      <div class="mrow"><span class="tag t-new">new</span> chemical-field overlay (Phase 5)</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> brush/paint → accumulator hook</div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span> colors blit · viewer tabs · inspector</div>
+    </div>
+    <div class="mgroup"><h4>Files &amp; export</h4>
+      <div class="mrow"><span class="tag t-mod">modify</span> ATTR_TYPE_MAP += object-tier kinds</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> SimulationState += cell table + free-list</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> .gcastate cellCount validation</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> presentation export ships the driver</div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span> recording (renders draw())</div>
+    </div>
+    <div class="mgroup"><h4>Misc / unchanged</h4>
+      <div class="mrow"><span class="tag t-reuse">reuse</span> undo/redo · macros (authoring layer)</div>
+      <div class="mrow"><span class="tag t-reuse">reuse</span> end conditions (per-MCS)</div>
+      <div class="mrow"><span class="tag t-gate">off</span> StopEvent in ΔH root (no flow sink)</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> manual brush (accumulator hook)</div>
+      <div class="mrow"><span class="tag t-mod">modify</span> cell copy/paste (ID remap) or gate off</div>
+    </div>
+  </div>
+</div></section>
+
+<!-- 10 HAZARDS -->
+<section id="hazards"><div class="card">
+  <h2><span class="n">10</span> Silent-corruption hazards to pin first</h2>
+  <p class="lede">From the adversarial review — these fail <i>quietly</i> (wrong ΔH / corrupt round-trip), not loudly, so they must be contracts decided up front.</p>
+  <div class="callgrid">
+    <div class="callout"><h4>paint → accumulator desync (highest priority)</h4><p>Every mid-run spin mutation — <code>paint</code>, <code>paintManual</code>, <code>importImage</code>, <code>writeRegion</code>, <code>clearRegion</code>, cell paste — must incrementally patch (or re-scan) the per-cell-ID volume/perimeter/centroid, or every later ΔH runs against stale volumes and cells decay/explode. Brush is <i>modify</i>, not reuse.</p></div>
+    <div class="callout"><h4>maxCells lifecycle &amp; overflow</h4><p>Accumulator arrays are sized once. Default <code>maxCells = clamp(seedIDs×4, 256, cap)</code>; a division that would overflow is <i>rejected + surfaced</i>, never silent. Growing it mid-run is a structural reinit — add it to the <code>attrsStructurallyEqual</code> guard (the Amphiphile NI-poisoning class).</p></div>
+    <div class="callout"><h4>accumulator memory location (WASM fork)</h4><p>JS arrays in Phase 2; from the WASM phase they must be a <b>baked <code>wasmMemory</code> region</b> (so the compiled <code>GetCellVolume</code> reads them at a fixed offset) accessed via views with the copy-into-never-reassign discipline. A JS-only array would strand the WASM target.</p></div>
+    <div class="callout"><h4>ATTR_TYPE_MAP &amp; .gcastate</h4><p>A missing <code>ATTR_TYPE_MAP</code> entry for an object-tier array silently mislabels it <code>float64</code> and corrupts the round-trip. And <code>applySimulationState</code> must validate <code>cellCount</code>/<code>maxCells</code>, rejecting mismatches cleanly (no try/catch around deserialize → a throw aborts the whole load).</p></div>
+  </div>
+  <p class="small" style="margin-top:14px"><b>One source of truth for the mode:</b> drive everything off <code>cpm.enabled</code>; leave the dead <code>topology</code> enum derived/display-only (verified: zero branch sites). Add worker-side mutual-exclusion safety nets (CPM ⟂ WebGPU; CPM forces async) for hand-edited files, mirroring the existing <code>useWasm</code>/<code>useWebGPU</code> net.</p>
+</div></section>
+
+<!-- 11 ROADMAP -->
+<section id="roadmap"><div class="card">
+  <h2><span class="n">11</span> If it were built — a phased roadmap</h2>
+  <p class="lede">Sequenced so the headline demo — <span style="color:var(--accent2)">2-D cell sorting from differential adhesion</span> (the Graner–Glazier 1992 founding result) — lands at Phase 2, the unambiguous correctness test. <b>Currently parked at "research only."</b></p>
+  <figure>
+    <svg viewBox="0 0 920 280" role="img" aria-label="Phased roadmap timeline">
+      <line x1="40" y1="244" x2="900" y2="244" stroke="#2a2e37"/>
+      <path d="M150,30 L150,20 L700,20 L700,30" fill="none" stroke="#e8a13a" stroke-width="1.4" opacity=".7"/>
+      <text x="425" y="14" fill="#f4c06a" font-size="11.5" text-anchor="middle" font-family="var(--sans)">core CPM — sorting → division</text>
+      <g font-family="var(--sans)">
+        <!-- P0 -->
+        <rect x="40" y="56" width="96" height="40" rx="8" fill="#1c1f26" stroke="#3a3f4a"/>
+        <text x="88" y="74" fill="#cdd3da" font-size="11.5" text-anchor="middle" font-weight="600">Phase 0–1</text>
+        <text x="88" y="89" fill="#6b7280" font-size="9.3" text-anchor="middle">data model · tier</text>
+        <!-- P2 highlighted -->
+        <rect x="150" y="56" width="220" height="44" rx="8" fill="var(--accent-soft)" stroke="#e8a13a" stroke-width="1.6"/>
+        <text x="260" y="74" fill="#f4c06a" font-size="12" text-anchor="middle" font-weight="700">Phase 2 — driver + JS</text>
+        <text x="260" y="91" fill="#cdd3da" font-size="9.5" text-anchor="middle">★ 2-D cell sorting · connectivity</text>
+        <!-- P3 -->
+        <rect x="150" y="110" width="240" height="40" rx="8" fill="rgba(76,201,240,.08)" stroke="#4cc9f0"/>
+        <text x="270" y="128" fill="#9fe0f7" font-size="11.5" text-anchor="middle" font-weight="600">Phase 3 — WASM + perimeter</text>
+        <text x="270" y="143" fill="#6b7280" font-size="9.3" text-anchor="middle">membranes · colour-by-ID</text>
+        <!-- P4 -->
+        <rect x="410" y="56" width="220" height="44" rx="8" fill="rgba(102,187,106,.08)" stroke="#66bb6a"/>
+        <text x="520" y="74" fill="#9fe3a3" font-size="12" text-anchor="middle" font-weight="700">Phase 4 — division</text>
+        <text x="520" y="91" fill="#cdd3da" font-size="9.5" text-anchor="middle">growth · mitosis · death (morphogenesis)</text>
+        <!-- P5 -->
+        <rect x="430" y="110" width="230" height="40" rx="8" fill="#1c1f26" stroke="#3a3f4a"/>
+        <text x="545" y="128" fill="#cdd3da" font-size="11.5" text-anchor="middle" font-weight="600">Phase 5 — chemical fields</text>
+        <text x="545" y="143" fill="#6b7280" font-size="9.3" text-anchor="middle">reaction-diffusion · chemotaxis · Act</text>
+        <!-- P6 -->
+        <rect x="700" y="56" width="190" height="94" rx="8" fill="rgba(176,140,255,.07)" stroke="#b08cff" stroke-dasharray="5 4"/>
+        <text x="795" y="96" fill="#c9b3ff" font-size="11.5" text-anchor="middle" font-weight="700">Phase 6 — 3D</text>
+        <text x="795" y="114" fill="#9aa0aa" font-size="9.3" text-anchor="middle">same kernel · new renderer</text>
+        <text x="795" y="128" fill="#6b7280" font-size="8.8" text-anchor="middle">(WebGPU checkerboard later)</text>
+      </g>
+      <text x="40" y="270" fill="#6b7280" font-size="10.5" font-family="var(--sans)">earlier · validated vs Artistoo</text>
+      <text x="900" y="270" fill="#6b7280" font-size="10.5" text-anchor="end" font-family="var(--sans)">later · more ambitious</text>
+    </svg>
+    <figcaption>Validate each phase against literature benchmarks (sorting → growth+division → chemotaxis morphogenesis) using Artistoo as a <b>behavioural oracle</b>, not bit-exact cross-target parity (WGSL f32 + per-cell RNG already preclude that, and parallel CPM intentionally matches statistics, not trajectories).</figcaption>
+  </figure>
+</div></section>
+
+<!-- 12 LITERATURE -->
+<section id="lit"><div class="card">
+  <h2><span class="n">12</span> Literature foundations &amp; citation confidence</h2>
+  <p class="lede">Seven research topics, each independently fact-checked against arXiv / DOI / PubMed / publisher; Artistoo's implementation claims verified against its GitHub source. <b>Verdict: HIGH reliability</b> — every load-bearing technical claim survived adversarial scrutiny.</p>
+
+  <figure>
+    <svg viewBox="0 0 920 200" role="img" aria-label="Literature lineage converging on the CPM energy-minimization model">
+      <g font-family="var(--sans)">
+        <g>
+          <rect x="20" y="20" width="210" height="32" rx="8" fill="#16181d" stroke="#3a3f4a"/><text x="125" y="41" fill="#cdd3da" font-size="11" text-anchor="middle">q-state Potts / Ising · Wu 1982</text>
+          <rect x="20" y="60" width="210" height="32" rx="8" fill="#16181d" stroke="#3a3f4a"/><text x="125" y="81" fill="#cdd3da" font-size="11" text-anchor="middle">Differential adhesion · Steinberg</text>
+          <rect x="20" y="100" width="210" height="32" rx="8" fill="#16181d" stroke="#3a3f4a"/><text x="125" y="121" fill="#cdd3da" font-size="11" text-anchor="middle">Metropolis MC · Metropolis 1953</text>
+          <rect x="20" y="140" width="210" height="32" rx="8" fill="#16181d" stroke="#3a3f4a"/><text x="125" y="161" fill="#cdd3da" font-size="11" text-anchor="middle">CompuCell3D / Morpheus / Artistoo</text>
+        </g>
+        <g stroke="#3a3f4a" stroke-width="1.6" fill="none">
+          <path d="M230,36 C330,36 360,86 460,92"/>
+          <path d="M230,76 C330,76 360,90 460,95"/>
+          <path d="M230,116 C330,116 360,100 460,100"/>
+          <path d="M230,156 C330,156 360,110 460,106"/>
+        </g>
+        <rect x="460" y="74" width="250" height="56" rx="12" fill="var(--accent-soft)" stroke="#e8a13a"/>
+        <text x="585" y="98" fill="#f4c06a" font-size="13" text-anchor="middle" font-weight="700">Cellular Potts (GGH)</text>
+        <text x="585" y="118" fill="#cdd3da" font-size="10.5" text-anchor="middle">energy minimization via Monte Carlo</text>
+        <line x1="710" y1="102" x2="768" y2="102" stroke="#3a3f4a" stroke-width="2"/><path d="M768,96 L782,102 L768,108 Z" fill="#3a3f4a"/>
+        <rect x="784" y="78" width="116" height="48" rx="11" fill="rgba(102,187,106,.09)" stroke="#66bb6a"/>
+        <text x="842" y="98" fill="#9fe3a3" font-size="11.5" text-anchor="middle" font-weight="700">GenesisCA</text>
+        <text x="842" y="115" fill="#9aa0aa" font-size="9.3" text-anchor="middle">~60–70% reuse</text>
+      </g>
+    </svg>
+    <figcaption>Citation confidence across all topics:</figcaption>
+  </figure>
+  <div class="conf">
+    <i style="background:#66bb6a;flex:23"></i><i style="background:#e0566a;flex:2"></i>
+  </div>
+  <div class="legend" style="margin-top:2px">
+    <span><span class="dot" style="background:var(--green)"></span> ~23 anchor works confirmed (arXiv/DOI/PubMed; Artistoo internals vs GitHub)</span>
+    <span><span class="dot" style="background:var(--red)"></span> 2 metadata-corrected (a conflated Popławski cite; a wrong Chen-2007 DOI — both papers real)</span>
+  </div>
+
+  <h3>Anchor works</h3>
+  <div class="biblio">
+    <div><b>Graner &amp; Glazier (1992)</b> Simulation of biological cell sorting using a 2-D extended Potts model. <i>Phys. Rev. Lett.</i> 69(13). — the founding CPM paper.</div>
+    <div><b>Glazier &amp; Graner (1993)</b> Simulation of the differential adhesion driven rearrangement of biological cells. <i>Phys. Rev. E</i> 47(3).</div>
+    <div><b>Steinberg (1963)</b> Reconstruction of tissues by dissociated cells. <i>Science</i> 141(3579). — the Differential Adhesion Hypothesis.</div>
+    <div><b>Metropolis et al. (1953)</b> Equation of state calculations by fast computing machines. <i>J. Chem. Phys.</i> 21(6).</div>
+    <div><b>Wu (1982)</b> The Potts model. <i>Rev. Mod. Phys.</i> 54(1).</div>
+    <div><b>Durand &amp; Guesnet (2016)</b> An efficient CPM algorithm that forbids cell fragmentation. <i>Comput. Phys. Commun.</i> 208. arXiv:1609.03832. — local connectivity test.</div>
+    <div><b>Savill &amp; Hogeweg (1997)</b> Modelling morphogenesis: from single cells to crawling slugs. <i>J. Theor. Biol.</i> 184(3). — the first CPM–PDE coupling.</div>
+    <div><b>Niculescu, Textor &amp; de Boer (2015)</b> Crawling and gliding: a model for shape-driven cell migration. <i>PLoS Comput. Biol.</i> 11(10). — the Act model.</div>
+    <div><b>Marée &amp; Hogeweg (2001)</b> How amoeboids self-organize into a fruiting body. <i>PNAS</i> 98(7). — landmark CPM morphogenesis.</div>
+    <div><b>Merks et al. (2008)</b> Contact-inhibited chemotaxis in blood-vessel growth. <i>PLoS Comput. Biol.</i> 4(9). — CPM angiogenesis.</div>
+    <div><b>Hirashima, Rens &amp; Merks (2017)</b> CPM of complex multicellular behaviors in tissue morphogenesis. <i>Dev. Growth Differ.</i> 59(5). — tutorial review.</div>
+    <div><b>Wortel &amp; Textor (2021)</b> Artistoo: build, share &amp; explore cell/tissue simulations in the browser. <i>eLife</i> 10:e61288. — <i>the</i> browser-CPM existence proof + architectural template.</div>
+    <div><b>Swat et al. (2012)</b> Multi-scale modeling of tissues using CompuCell3D. <i>Methods Cell Biol.</i> 110. — the de-facto feature spec (Mitosis plugin, 3D).</div>
+    <div><b>Starruß et al. (2014)</b> Morpheus: a user-friendly multiscale modeling environment. <i>Bioinformatics</i> 30(9). — no-code declarative CPM; spiritual analogue.</div>
+    <div><b>Tapia &amp; D'Souza (2011)</b> Parallelizing the CPM on GPUs. <i>Comput. Phys. Commun.</i> 182(4). — checkerboard + atomic CAS.</div>
+    <div><b>Sultan et al. (2023)</b> A parallelized CPM at tissue scale. arXiv:2312.09317. — GPU CPM; waiting-time-distribution bias analysis.</div>
+    <div><b>Osborne et al. (2017)</b> Comparing individual-based approaches to modelling multicellular tissues. <i>PLoS Comput. Biol.</i> 13(2). — the five-family head-to-head.</div>
+    <div><b>Fletcher et al. (2014)</b> Vertex models of epithelial morphogenesis. <i>Biophys. J.</i> 106(11). — the vertex standard (T1/T2).</div>
+    <div><b>Ghaffarizadeh et al. (2018)</b> PhysiCell: physics-based cell simulator for 3-D systems. <i>PLoS Comput. Biol.</i> 14(2). — off-lattice center-based; richest per-cell state.</div>
+    <div><b>Voss-Böhme (2012)</b> Multi-scale modeling in morphogenesis: a critical analysis of the CPM. <i>PLoS One</i> 7(9). — the essential ceiling caveat.</div>
+    <div><b>Mirams et al. (2013)</b> Chaste: open-source library for computational biology. <i>PLoS Comput. Biol.</i> 9(3). — "swappable spatial engines" precedent.</div>
+  </div>
+  <p class="small" style="margin-top:12px">Full annotated bibliography (~25 works) in <b>docs/INVESTIGATION_CPM.md §13</b>.</p>
+</div></section>
+
+<div class="footer">
+  <p><b>GenesisCA — Cellular Potts Model / morphogenesis investigation.</b> Companion visual to <code>docs/INVESTIGATION_CPM.md</code>. Self-contained (inline SVG/CSS/JS, no external assets). Status: research reference — no implementation planned.</p>
+</div>
+
+</div><!-- /wrap -->
+
+<script>
+(function(){
+  "use strict";
+  var cv = document.getElementById('cpm-canvas'); if(!cv) return;
+  var ctx = cv.getContext('2d'); ctx.imageSmoothingEnabled = false;
+  var W = 64, H = 64, N = W*H;
+  var off = document.createElement('canvas'); off.width = W; off.height = H;
+  var octx = off.getContext('2d');
+  var img = octx.createImageData(W, H);
+
+  // --- state ---
+  var spin = new Int32Array(N);   // cell id per site (0 = medium)
+  var ctype = [0];                // type per cell id (index 0 = medium)
+  var vol = [0];                  // current volume per cell id
+  var vtgt = [0];                 // target volume per cell id
+  // adhesion J by type: 0 medium, 1 = A, 2 = B  (symmetric; tuned to sort, B toward core)
+  var J = [[0,14,16],[14,2,11],[16,11,2]];
+  var lambda = 1.0;
+  var T = 10;
+  var mcs = 0;
+  var colorMode = 'type';
+
+  function typeColor(t){ if(t===1) return [232,161,58]; if(t===2) return [76,201,240]; return [18,20,26]; }
+  function idColor(id){ if(id===0) return [18,20,26]; var h=(id*2654435761)>>>0; return [70+(h&127), 70+((h>>8)&127), 85+((h>>16)&127)]; }
+
+  function seed(){
+    spin.fill(0); ctype = [0]; vol = [0]; vtgt = [0]; mcs = 0;
+    var blk = 4, lo = 8, hi = 56, n = 0;       // 48x48 aggregate of 4x4 blocks => 12x12 = 144 small cells (liquid-like)
+    for(var by=lo; by<hi; by+=blk){
+      for(var bx=lo; bx<hi; bx+=blk){
+        n++; var id = n;
+        ctype[id] = (Math.random()<0.5) ? 1 : 2;
+        vol[id] = 0;
+        for(var y=by; y<by+blk; y++) for(var x=bx; x<bx+blk; x++){ spin[y*W+x] = id; vol[id]++; }
+        vtgt[id] = vol[id];
+      }
+    }
+    render();
+  }
+
+  function spinAt(j){ return j<0 ? 0 : spin[j]; }
+  // 4-neighbours (von Neumann), out-of-grid = medium (-1 sentinel)
+  function nbr(i, k){
+    var x = i % W, y = (i / W) | 0;
+    if(k===0) return x>0   ? i-1 : -1;
+    if(k===1) return x<W-1 ? i+1 : -1;
+    if(k===2) return y>0   ? i-W : -1;
+    return            y<H-1 ? i+W : -1;
+  }
+
+  function deltaH(tgt, newSpin){
+    var oldSpin = spin[tgt], adh = 0, k, ns, before, after;
+    var tOld = ctype[oldSpin], tNew = ctype[newSpin];
+    for(k=0; k<4; k++){
+      ns = spinAt(nbr(tgt,k));
+      before = (ns !== oldSpin) ? J[tOld][ctype[ns]] : 0;
+      after  = (ns !== newSpin) ? J[tNew][ctype[ns]] : 0;
+      adh += after - before;
+    }
+    var dv = 0, v, w;
+    if(newSpin !== 0){ v = vol[newSpin] - vtgt[newSpin]; dv += lambda*((v+1)*(v+1) - v*v); }
+    if(oldSpin !== 0){ w = vol[oldSpin] - vtgt[oldSpin]; dv += lambda*((w-1)*(w-1) - w*w); }
+    return adh + dv;
+  }
+
+  function attempt(){
+    var tgt = (Math.random()*N) | 0;
+    var src = nbr(tgt, (Math.random()*4)|0);
+    var newSpin = spinAt(src);
+    var oldSpin = spin[tgt];
+    if(newSpin === oldSpin) return;          // interior / no-op
+    var dH = deltaH(tgt, newSpin);
+    if(dH <= 0 || Math.random() < Math.exp(-dH / T)){
+      if(oldSpin !== 0) vol[oldSpin]--;
+      if(newSpin !== 0) vol[newSpin]++;
+      spin[tgt] = newSpin;
+    }
+  }
+
+  function mcsStep(){ for(var k=0; k<N; k++) attempt(); mcs++; }
+
+  function render(){
+    var d = img.data, i, id, c, o;
+    for(i=0; i<N; i++){
+      id = spin[i];
+      c = (colorMode==='type') ? typeColor(ctype[id]) : idColor(id);
+      o = i*4; d[o]=c[0]; d[o+1]=c[1]; d[o+2]=c[2]; d[o+3]=255;
+    }
+    octx.putImageData(img, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0,0,cv.width,cv.height);
+    ctx.drawImage(off, 0,0,W,H, 0,0,cv.width,cv.height);
+    var g = document.getElementById('cpm-mcs'); if(g) g.textContent = mcs;
+  }
+
+  var timer = null;
+  function frame(){ mcsStep(); mcsStep(); render(); }   // 2 MCS/frame on Play for snappier sorting
+  function play(){ if(timer) return; var b=document.getElementById('cpm-play'); if(b){ b.textContent='❚❚ Pause'; b.classList.remove('primary'); } timer=setInterval(frame, 45); }
+  function pause(){ if(timer){ clearInterval(timer); timer=null; } var b=document.getElementById('cpm-play'); if(b){ b.textContent='▶ Play'; b.classList.add('primary'); } }
+  document.getElementById('cpm-play').addEventListener('click', function(){ timer ? pause() : play(); });
+  document.getElementById('cpm-step').addEventListener('click', function(){ pause(); mcsStep(); render(); });
+  document.getElementById('cpm-reset').addEventListener('click', function(){ pause(); seed(); });
+  var ts = document.getElementById('cpm-temp');
+  if(ts) ts.addEventListener('input', function(){ T = parseFloat(ts.value); var l=document.getElementById('cpm-temp-val'); if(l) l.textContent = T.toFixed(0); });
+  var cb = document.getElementById('cpm-color');
+  if(cb) cb.addEventListener('click', function(){ colorMode = (colorMode==='type') ? 'id' : 'type'; cb.textContent = (colorMode==='type') ? 'Colour: type' : 'Colour: cell ID'; render(); });
+
+  seed();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GenesisCA — Center-Based / Off-Lattice (agent) Investigation</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#16181d; --panel2:#1c1f26; --panel3:#22262f;
+    --border:#2a2e37; --border2:#3a3f4a;
+    --ink:#e9ebee; --muted:#9aa0aa; --faint:#6b7280;
+    --accent:#e8a13a; --accent2:#f4c06a; --accent-soft:rgba(232,161,58,.13);
+    --cyan:#4cc9f0; --green:#66bb6a; --red:#e0566a; --purple:#b08cff; --pink:#f06aa8;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6;
+    background-image:radial-gradient(1100px 480px at 80% -8%,rgba(232,161,58,.07),transparent 60%),
+      radial-gradient(900px 420px at 0% 0%,rgba(76,201,240,.05),transparent 55%);}
+  a{color:var(--accent2);text-decoration:none} a:hover{text-decoration:underline}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 22px 90px}
+  header.hero{padding:64px 22px 30px;max-width:1120px;margin:0 auto}
+  .kicker{display:inline-flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--accent);border:1px solid var(--border2);background:var(--accent-soft);padding:5px 11px;border-radius:999px}
+  h1{font-size:clamp(30px,5vw,50px);line-height:1.07;margin:18px 0 10px;letter-spacing:-.02em}
+  h1 .sub{display:block;font-size:clamp(15px,2.2vw,21px);font-weight:500;color:var(--muted);margin-top:12px;letter-spacing:0}
+  .herometa{display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:22px;color:var(--faint);font-size:13px}
+  .herometa b{color:var(--muted);font-weight:600}
+  .status{display:inline-block;margin-top:18px;font-size:13px;color:var(--green);border:1px solid rgba(102,187,106,.35);
+    background:rgba(102,187,106,.08);border-radius:8px;padding:7px 12px}
+  nav.toc{position:sticky;top:0;z-index:20;background:rgba(12,13,16,.82);backdrop-filter:blur(10px);
+    border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin-top:34px}
+  nav.toc .row{max-width:1120px;margin:0 auto;padding:9px 22px;display:flex;flex-wrap:wrap;gap:5px 6px;font-size:12.5px}
+  nav.toc a{color:var(--muted);padding:5px 9px;border-radius:7px;white-space:nowrap}
+  nav.toc a:hover{color:var(--ink);background:var(--panel2);text-decoration:none}
+  section{margin-top:42px}
+  .card{background:linear-gradient(180deg,var(--panel),#131519);border:1px solid var(--border);border-radius:16px;
+    padding:26px 28px;box-shadow:0 1px 0 rgba(255,255,255,.02) inset, 0 20px 40px -30px rgba(0,0,0,.8)}
+  h2{font-size:24px;margin:0 0 4px;letter-spacing:-.01em;display:flex;align-items:baseline;gap:12px}
+  h2 .n{font-family:var(--mono);font-size:14px;color:var(--accent);border:1px solid var(--border2);
+    background:var(--accent-soft);border-radius:8px;padding:2px 9px;flex:none}
+  h2 .n.alt{color:var(--cyan);background:rgba(76,201,240,.1)}
+  .lede{color:var(--muted);font-size:15.5px;margin:6px 0 20px;max-width:80ch}
+  h3{font-size:16.5px;margin:24px 0 8px;color:var(--accent2)}
+  p{margin:10px 0;color:#d4d7dd}
+  .small{font-size:13px;color:var(--faint)}
+  figure{margin:18px 0 6px;background:#101216;border:1px solid var(--border);border-radius:12px;padding:16px}
+  figure svg{display:block;width:100%;height:auto}
+  figcaption{color:var(--muted);font-size:13px;margin-top:12px;padding-top:10px;border-top:1px dashed var(--border2)}
+  figcaption b{color:var(--ink)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  pre.code{background:#0a0c0f;border:1px solid var(--border2);border-radius:10px;padding:14px 16px;overflow:auto;
+    font-family:var(--mono);font-size:12.5px;line-height:1.55;color:#cdd3da;margin:8px 0}
+  .code .c{color:#6b7280} .code .k{color:var(--purple)} .code .s{color:var(--green)} .code .y{color:var(--accent2)}
+  .code .hl{background:rgba(232,161,58,.14);border-radius:3px;padding:0 2px}
+  .code .del{color:var(--red)} .code .add{color:var(--green)}
+  ul.clean{margin:10px 0;padding-left:0;list-style:none}
+  ul.clean li{position:relative;padding:5px 0 5px 26px;color:#d4d7dd}
+  ul.clean li::before{content:"";position:absolute;left:6px;top:13px;width:7px;height:7px;border-radius:2px;
+    background:var(--accent);transform:rotate(45deg)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px;letter-spacing:.04em;text-transform:uppercase}
+  tr:hover td{background:rgba(255,255,255,.014)}
+  .tag{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:6px;border:1px solid var(--border2);white-space:nowrap}
+  .t-reuse{color:var(--green);border-color:rgba(102,187,106,.4);background:rgba(102,187,106,.08)}
+  .t-mod{color:var(--accent);border-color:rgba(232,161,58,.4);background:var(--accent-soft)}
+  .t-new{color:var(--cyan);border-color:rgba(76,201,240,.4);background:rgba(76,201,240,.08)}
+  .t-gate{color:var(--red);border-color:rgba(224,86,106,.4);background:rgba(224,86,106,.08)}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 16px;margin:6px 0 14px;font-size:12.5px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .callgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px}
+  @media(max-width:760px){.callgrid{grid-template-columns:1fr}}
+  .callout{border:1px solid var(--border2);border-left:3px solid var(--red);border-radius:10px;padding:13px 15px;background:#14100f}
+  .callout h4{margin:0 0 5px;font-size:14px;color:#f3a0ad}
+  .callout p{margin:0;font-size:13px;color:#cbd0d6}
+  .callout.amber{border-left-color:var(--accent)} .callout.amber h4{color:var(--accent2)}
+  .keyfact{border:1px solid var(--border2);border-left:3px solid var(--accent);background:linear-gradient(180deg,var(--accent-soft),transparent);
+    border-radius:10px;padding:16px 18px;margin:16px 0;font-size:15px}
+  .keyfact b{color:var(--accent2)}
+  .matrix{display:grid;grid-template-columns:repeat(auto-fill,minmax(225px,1fr));gap:10px;margin-top:8px}
+  .mgroup{background:#101216;border:1px solid var(--border);border-radius:11px;padding:13px 14px}
+  .mgroup h4{margin:0 0 9px;font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+  .mrow{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12.7px;color:#cdd2d8}
+  .mrow .tag{flex:none;width:64px;text-align:center}
+  .controls{display:flex;gap:9px;align-items:center;margin:12px 0 4px;flex-wrap:wrap}
+  .btn{font-family:var(--sans);font-size:13px;color:var(--ink);background:var(--panel3);border:1px solid var(--border2);
+    border-radius:8px;padding:7px 14px;cursor:pointer}
+  .btn:hover{border-color:var(--accent);color:var(--accent2)}
+  .btn.primary{background:var(--accent-soft);border-color:rgba(232,161,58,.5);color:var(--accent2)}
+  .pill{font-family:var(--mono);font-size:12px;color:var(--muted);padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:#101216}
+  .footer{margin-top:54px;padding-top:22px;border-top:1px solid var(--border);color:var(--faint);font-size:13px}
+  .biblio{columns:2;column-gap:30px;font-size:12.5px;color:var(--muted)}
+  @media(max-width:760px){.biblio{columns:1}}
+  .biblio div{break-inside:avoid;margin:0 0 9px;padding-left:14px;text-indent:-14px}
+  .biblio b{color:#cdd2d8}
+  .conf{display:flex;gap:3px;height:13px;border-radius:7px;overflow:hidden;border:1px solid var(--border2);margin:6px 0}
+  .conf i{display:block;height:100%}
+  .cvwrap{display:flex;flex-direction:column;align-items:center;margin:6px 0}
+  #cb-canvas{border:1px solid var(--border2);border-radius:8px;background:#0a0c0f;width:min(520px,92vw);height:auto;touch-action:none}
+  input[type=range]{accent-color:var(--accent);width:130px}
+  .sliderrow{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--muted);margin:5px 0}
+  .sliderrow b{color:var(--ink);font-family:var(--mono);font-size:12px;min-width:38px;text-align:right}
+  .demohud{display:flex;gap:16px;flex-wrap:wrap;font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-top:8px}
+  .demohud b{color:var(--accent2)}
+  .verdict{border:1px solid rgba(102,187,106,.4);border-left:3px solid var(--green);background:rgba(102,187,106,.06);
+    border-radius:10px;padding:16px 18px;margin:16px 0;font-size:14.5px;color:#d4d7dd}
+  .verdict b{color:#9fe3a3}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <span class="kicker">◆ GenesisCA · Feasibility Investigation</span>
+  <h1>Center-Based &amp; Off-Lattice Cells
+    <span class="sub">Extending GenesisCA from a deterministic one-cell-per-site lattice CA to a population of <b style="color:var(--accent2);font-weight:600">agents at continuous positions</b>, interacting by <b style="color:var(--accent2);font-weight:600">pairwise mechanical forces</b>, with <b style="color:var(--accent2);font-weight:600">division &amp; death as first-class events</b> — the most direct substrate for cell&nbsp;division, morphogenesis and (natively) 3D.</span>
+  </h1>
+  <div class="herometa">
+    <span><b>Companion to:</b> docs/INVESTIGATION_CENTER_BASED.md</span>
+    <span><b>Completes:</b> the substrate comparison begun in INVESTIGATION_CPM.md</span>
+    <span><b>Method:</b> multi-agent research workflow + adversarial fact-check + 5-subsystem codebase audit</span>
+    <span><b>Date:</b> 2026-06-16</span>
+  </div>
+  <span class="status">● Status: research only — no implementation planned yet. This document communicates findings; it is not a commitment to build.</span>
+</header>
+
+<nav class="toc"><div class="row">
+  <a href="#nolattice">1 · No lattice</a>
+  <a href="#force">2 · The force law</a>
+  <a href="#overdamped">3 · Overdamped step</a>
+  <a href="#live">4 · Live demo</a>
+  <a href="#neighbours">5 · Dynamic neighbours</a>
+  <a href="#tier">6 · The agent tier</a>
+  <a href="#enginefit">7 · Engine fit</a>
+  <a href="#substrate">8 · Substrate verdict</a>
+  <a href="#impact">9 · Impact map</a>
+  <a href="#hazards">10 · Hazards</a>
+  <a href="#roadmap">11 · Roadmap</a>
+  <a href="#lit">12 · Literature</a>
+</div></nav>
+
+<div class="wrap">
+
+<!-- TL;DR -->
+<section>
+  <div class="keyfact">
+    <b>The finding that drives everything (and it is the <i>opposite</i> of CPM's):</b> for the Cellular Potts Model, GenesisCA's defining trick — "compile the node graph to a per-cell step, call it once per generation" — <b>broke</b> (a per-site graph can't express a stochastic accept/reject chain). For center-based it largely <b>holds</b>: each agent independently <b>sums its own neighbour forces and integrates its own position</b> — a genuine, embarrassingly-parallel per-cell step, and a <b>strong WebGPU fit</b>. The honest nuance: "fits the <i>paradigm</i>" ≠ "free reuse of the current <i>emit</i>" — the compiled loop body bakes lattice geometry (<code style="font-family:var(--mono)">colorIdx = idx*4</code>, decode <code style="font-family:var(--mono)">(row,col)</code>), and the pairwise force is a <b>vector</b> sum <code style="font-family:var(--mono)">Σ F(d)·r̂</code> that is genuinely new emit (not the scalar <code>Aggregate</code>). Recommendation: a <b>hybrid that leans heavily on the per-cell compiler</b> — a new worker-side <i>force-integration driver</i> owns the dynamic population, the per-step neighbour rebuild, and division/death; the node graph computes one agent's net force + behaviour.
+  </div>
+  <div class="verdict">
+    <b>Substrate verdict (completing the comparison with CPM):</b> the user's goal is <b>division + morphogenesis + rich per-cell rules + dynamic adjacency, ultimately in 3D</b>. <b>Center-based is the more direct match to that goal</b> — division is trivial (append two agents), per-cell state is the richest of any family (PhysiCell Phenotype + Cell_Functions), adjacency is dynamic/distance-based by construction, 3D is a dimensionality switch. <b>CPM is the lower-friction <i>first build</i> for this codebase</b> (it keeps the lattice/blit/async ≈ 60–70% runtime reuse); center-based reuses <i>less</i> of the runtime substrate but <b>fits the compile paradigm better and is GPU-native</b>. <b>Both recommend one shared engine-agnostic per-cell IR</b> so the second engine is additive. <b>Ceiling, stated bluntly:</b> there is <b>no cell shape</b> (points + radius — wrong tool for folding epithelia / T1 intercalation = vertex territory); the post-division timestep is a silent geometric-corruption hazard; and <b>no zero-install browser center-based engine exists</b> (Artistoo is CPM/CA-only) — so this is novel territory, an engineering risk, not a research one.
+  </div>
+</section>
+
+<!-- 1 NO LATTICE -->
+<section id="nolattice"><div class="card">
+  <h2><span class="n">01</span> There is no lattice — cells are points in continuous space</h2>
+  <p class="lede">In GenesisCA today a "cell" <b>is</b> a grid site (its position is implicit in its index <span class="pill" style="display:inline">row·W+col</span>). CPM keeps the lattice but spreads one cell over <i>many</i> sites. Center-based <b>abandons the lattice entirely</b>: a cell is a <b>point</b> <span class="pill" style="display:inline">xᵢ ∈ ℝ²</span> (later ℝ³) with a <b>radius</b> — a soft sphere. <code>total = W×H</code> becomes a <b>dynamic agent count</b> that grows by division.</p>
+
+  <figure>
+    <svg viewBox="0 0 940 300" role="img" aria-label="Lattice CA versus CPM extended cells versus center-based continuous-position agents">
+      <!-- LEFT classic CA -->
+      <g transform="translate(20,40)">
+        <text x="95" y="-14" fill="#9aa0aa" font-size="12.5" text-anchor="middle" font-family="var(--sans)">CA — 1 cell = 1 site</text>
+        <g stroke="#2a2e37" stroke-width="1">
+          <rect x="0" y="0" width="38" height="38" fill="#2a3038"/><rect x="38" y="0" width="38" height="38" fill="#e8a13a"/><rect x="76" y="0" width="38" height="38" fill="#2a3038"/><rect x="114" y="0" width="38" height="38" fill="#2a3038"/><rect x="152" y="0" width="38" height="38" fill="#e8a13a"/>
+          <rect x="0" y="38" width="38" height="38" fill="#e8a13a"/><rect x="38" y="38" width="38" height="38" fill="#2a3038"/><rect x="76" y="38" width="38" height="38" fill="#e8a13a"/><rect x="114" y="38" width="38" height="38" fill="#2a3038"/><rect x="152" y="38" width="38" height="38" fill="#2a3038"/>
+          <rect x="0" y="76" width="38" height="38" fill="#2a3038"/><rect x="38" y="76" width="38" height="38" fill="#2a3038"/><rect x="76" y="76" width="38" height="38" fill="#e8a13a"/><rect x="114" y="76" width="38" height="38" fill="#2a3038"/><rect x="152" y="76" width="38" height="38" fill="#e8a13a"/>
+          <rect x="0" y="114" width="38" height="38" fill="#2a3038"/><rect x="38" y="114" width="38" height="38" fill="#e8a13a"/><rect x="76" y="114" width="38" height="38" fill="#2a3038"/><rect x="114" y="114" width="38" height="38" fill="#2a3038"/><rect x="152" y="114" width="38" height="38" fill="#2a3038"/>
+        </g>
+        <text x="95" y="178" fill="#6b7280" font-size="10.5" text-anchor="middle" font-family="var(--mono)">position implicit in index</text>
+      </g>
+      <!-- middle CPM -->
+      <g transform="translate(335,40)">
+        <text x="95" y="-14" fill="#9aa0aa" font-size="12.5" text-anchor="middle" font-family="var(--sans)">CPM — 1 cell = many sites</text>
+        <g stroke="#0c0d10" stroke-width="0.6">
+          <g fill="#e8a13a"><rect x="0" y="0" width="19" height="19"/><rect x="19" y="0" width="19" height="19"/><rect x="0" y="19" width="19" height="19"/><rect x="19" y="19" width="19" height="19"/><rect x="38" y="0" width="19" height="19"/><rect x="0" y="38" width="19" height="19"/></g>
+          <g fill="#4cc9f0"><rect x="57" y="19" width="19" height="19"/><rect x="76" y="19" width="19" height="19"/><rect x="57" y="38" width="19" height="19"/><rect x="76" y="38" width="19" height="19"/><rect x="95" y="38" width="19" height="19"/><rect x="57" y="57" width="19" height="19"/></g>
+          <g fill="#c8842a"><rect x="114" y="0" width="19" height="19"/><rect x="133" y="0" width="19" height="19"/><rect x="114" y="19" width="19" height="19"/><rect x="152" y="0" width="19" height="19"/></g>
+          <g fill="#16181d"><rect x="0" y="57" width="19" height="19"/><rect x="19" y="57" width="19" height="19"/><rect x="38" y="57" width="19" height="19"/><rect x="38" y="38" width="19" height="19"/><rect x="19" y="38" width="19" height="19"/><rect x="95" y="0" width="19" height="19"/><rect x="76" y="0" width="19" height="19"/><rect x="95" y="19" width="19" height="19"/><rect x="114" y="38" width="19" height="19"/><rect x="133" y="19" width="19" height="19"/><rect x="76" y="57" width="19" height="19"/><rect x="95" y="57" width="19" height="19"/><rect x="114" y="57" width="19" height="19"/><rect x="133" y="38" width="19" height="19"/><rect x="152" y="19" width="19" height="19"/></g>
+        </g>
+        <text x="95" y="178" fill="#6b7280" font-size="10.5" text-anchor="middle" font-family="var(--mono)">emergent deformable shape</text>
+      </g>
+      <!-- RIGHT center-based -->
+      <g transform="translate(650,40)">
+        <text x="135" y="-14" fill="#f4c06a" font-size="12.5" text-anchor="middle" font-weight="700" font-family="var(--sans)">Center-based — 1 cell = a point + radius</text>
+        <rect x="0" y="-2" width="270" height="158" fill="#0a0c0f" stroke="#22262f" rx="6"/>
+        <!-- soft spheres at continuous positions -->
+        <g>
+          <circle cx="60" cy="44" r="20" fill="rgba(232,161,58,.85)" stroke="#f4c06a"/>
+          <circle cx="98" cy="66" r="20" fill="rgba(232,161,58,.85)" stroke="#f4c06a"/>
+          <circle cx="74" cy="96" r="20" fill="rgba(232,161,58,.85)" stroke="#f4c06a"/>
+          <circle cx="150" cy="58" r="20" fill="rgba(76,201,240,.85)" stroke="#4cc9f0"/>
+          <circle cx="186" cy="80" r="20" fill="rgba(76,201,240,.85)" stroke="#4cc9f0"/>
+          <circle cx="148" cy="104" r="20" fill="rgba(76,201,240,.85)" stroke="#4cc9f0"/>
+          <circle cx="210" cy="44" r="14" fill="rgba(76,201,240,.55)" stroke="#4cc9f0" stroke-dasharray="3 3"/>
+        </g>
+        <!-- a centre dot + radius marker on one -->
+        <circle cx="60" cy="44" r="2" fill="#0c0d10"/>
+        <line x1="60" y1="44" x2="80" y2="44" stroke="#0c0d10" stroke-width="1.2"/>
+        <text x="70" y="38" fill="#0c0d10" font-size="9" text-anchor="middle" font-family="var(--mono)">R</text>
+        <text x="135" y="146" fill="#6b7280" font-size="10.5" text-anchor="middle" font-family="var(--mono)">x ∈ ℝ², explicit · count grows</text>
+      </g>
+    </svg>
+    <figcaption><b>Why it matters:</b> every fundamental assumption of GenesisCA's engine — a fixed <code>W×H</code> grid, one SoA typed array per attribute indexed by site, a precomputed neighbour-index table — is <i>gone</i>. The position becomes <b>first-class state</b>, "neighbour" becomes a <b>distance query</b>, and the population is <b>dynamic</b>. <span class="small">(Verified firsthand: <code>total = width*height</code> at sim.worker.ts:751; the dense neighbour table at sim.worker.ts:877-913.)</span></figcaption>
+  </figure>
+</div></section>
+
+<!-- 2 FORCE LAW -->
+<section id="force"><div class="card">
+  <h2><span class="n">02</span> The dynamics are a pairwise force law, not a rule</h2>
+  <p class="lede">Two cells interact through a <b>repulsion-then-adhesion</b> force over their centre-distance <span class="pill" style="display:inline">d</span>: strong <b>volume-exclusion repulsion</b> when they overlap (<span class="pill" style="display:inline">d &lt; s</span>), weaker <b>adhesion</b> over a short contact range, and <b>zero</b> beyond the cutoff <span class="pill" style="display:inline">r_max</span>. Differential adhesion (like-cells stick more) is all you need for sorting.</p>
+
+  <figure>
+    <svg viewBox="0 0 900 320" role="img" aria-label="The pairwise force as a function of centre-to-centre distance: repulsion, adhesion well, cutoff">
+      <!-- axes -->
+      <g transform="translate(70,30)">
+        <line x1="0" y1="130" x2="740" y2="130" stroke="#3a3f4a" stroke-width="1.2"/>
+        <line x1="0" y1="10" x2="0" y2="250" stroke="#3a3f4a" stroke-width="1.2"/>
+        <text x="-12" y="20" fill="#9aa0aa" font-size="12" text-anchor="end" font-family="var(--mono)">F</text>
+        <text x="735" y="152" fill="#9aa0aa" font-size="12" font-family="var(--mono)">d</text>
+        <text x="-12" y="134" fill="#6b7280" font-size="11" text-anchor="end" font-family="var(--mono)">0</text>
+        <text x="34" y="22" fill="#66bb6a" font-size="11" text-anchor="middle" font-family="var(--sans)">repulsion</text>
+        <text x="34" y="36" fill="#6b7280" font-size="9.5" text-anchor="middle" font-family="var(--sans)">(push apart)</text>
+        <text x="420" y="246" fill="#e0566a" font-size="11" text-anchor="middle" font-family="var(--sans)">adhesion (pull together)</text>
+        <!-- rest length s marker -->
+        <line x1="210" y1="14" x2="210" y2="246" stroke="#3a3f4a" stroke-width="1" stroke-dasharray="4 4"/>
+        <text x="210" y="266" fill="#f4c06a" font-size="11" text-anchor="middle" font-family="var(--mono)">s (rest)</text>
+        <!-- r_max marker -->
+        <line x1="600" y1="14" x2="600" y2="246" stroke="#3a3f4a" stroke-width="1" stroke-dasharray="4 4"/>
+        <text x="600" y="266" fill="#f4c06a" font-size="11" text-anchor="middle" font-family="var(--mono)">r_max</text>
+        <!-- the force curve: steep positive repulsion for d<s, dips negative (adhesion well) for s<d<r_max, zero after -->
+        <path d="M 20 18 C 70 40, 150 120, 210 130 C 270 140, 320 196, 400 198 C 480 200, 560 150, 600 130 L 740 130"
+          fill="none" stroke="#e8a13a" stroke-width="2.6"/>
+        <!-- zero-force line continuation emphasised -->
+        <line x1="600" y1="130" x2="740" y2="130" stroke="#66bb6a" stroke-width="2.6"/>
+        <!-- region shading -->
+        <rect x="0" y="14" width="210" height="116" fill="rgba(102,187,106,.05)"/>
+        <rect x="210" y="130" width="390" height="80" fill="rgba(224,86,106,.05)"/>
+        <text x="105" y="118" fill="#66bb6a" font-size="10" text-anchor="middle" font-family="var(--mono)">d &lt; s</text>
+        <text x="690" y="118" fill="#66bb6a" font-size="10" text-anchor="middle" font-family="var(--mono)">d ≥ r_max → 0</text>
+      </g>
+    </svg>
+    <figcaption><b>The catalogue of force laws</b> (linear/Hookean, GLS, cubic, piecewise-quadratic, Hertz/JKR) differ in the exact curve shape and — critically — in the <b>timestep they tolerate</b>: cubic is the most restrictive, GLS the most permissive (the recommended default). The force is <b>authored as nodes</b> in GenesisCA (a <code>Compare</code>/<code>Statement</code> for the rest-length break + <code>Interpolation</code>/arithmetic per branch) — but the <b>per-pair node outputs a scalar magnitude <code>F(d)</code></b>; the engine owns the direction <code>r̂</code> and the vector sum. <span class="small">(Force-law catalogue + the GLS-permissive / cubic-restrictive ordering: Mathias et&nbsp;al. 2020; CBMOS 2022 — verified.)</span></figcaption>
+  </figure>
+</div></section>
+
+<!-- 3 OVERDAMPED -->
+<section id="overdamped"><div class="card">
+  <h2><span class="n">03</span> The overdamped step — sum forces, move</h2>
+  <p class="lede">At cellular scales inertia is negligible (very low Reynolds number), so Newton's law collapses to a <b>force balance</b>: <span class="pill" style="display:inline">η·dxᵢ/dt = Σⱼ Fᵢⱼ</span>. Integrated by forward Euler: <span class="pill" style="display:inline">xᵢ ← xᵢ + (Δt/η)·Σⱼ Fᵢⱼ</span>. Every agent reads the <i>frozen old positions</i> and writes a new one — <b>synchronous, double-buffered positions</b> (NOT CPM's async single buffer).</p>
+
+  <div class="grid2">
+    <figure>
+      <svg viewBox="0 0 420 280" role="img" aria-label="One cell summing pairwise forces from neighbours into a net displacement">
+        <!-- central cell -->
+        <circle cx="210" cy="150" r="26" fill="rgba(232,161,58,.85)" stroke="#f4c06a"/>
+        <circle cx="210" cy="150" r="2.4" fill="#0c0d10"/>
+        <!-- neighbours -->
+        <circle cx="118" cy="92" r="22" fill="rgba(76,201,240,.5)" stroke="#4cc9f0"/>
+        <circle cx="300" cy="84" r="22" fill="rgba(76,201,240,.5)" stroke="#4cc9f0"/>
+        <circle cx="318" cy="196" r="22" fill="rgba(76,201,240,.5)" stroke="#4cc9f0"/>
+        <circle cx="150" cy="214" r="22" fill="rgba(76,201,240,.5)" stroke="#4cc9f0"/>
+        <!-- per-neighbour force arrows on the central cell -->
+        <g stroke="#66bb6a" stroke-width="2" fill="#66bb6a">
+          <line x1="210" y1="150" x2="258" y2="180"/><path d="M258,180 l-12,-1 l5,-9 z"/>
+          <line x1="210" y1="150" x2="172" y2="186"/><path d="M172,186 l9,-7 l3,9 z"/>
+          <line x1="210" y1="150" x2="170" y2="120"/><path d="M170,120 l11,2 l-6,8 z"/>
+          <line x1="210" y1="150" x2="244" y2="118"/><path d="M244,118 l-11,1 l4,-9 z"/>
+        </g>
+        <!-- net displacement (resultant) -->
+        <line x1="210" y1="150" x2="244" y2="206" stroke="#e8a13a" stroke-width="3.4"/>
+        <path d="M244,206 l-13,-2 l5,-10 z" fill="#e8a13a"/>
+        <text x="262" y="214" fill="#f4c06a" font-size="12" font-family="var(--mono)">ΣF / η</text>
+        <text x="210" y="262" fill="#9aa0aa" font-size="11.5" text-anchor="middle" font-family="var(--sans)">net force → overdamped displacement</text>
+      </svg>
+      <figcaption><b>This is a genuine per-cell step</b> — and embarrassingly parallel (no cross-cell write contention in the force pass). That is exactly why it is a <b>strong GPU fit</b>, the inverse of CPM's sequential accept/reject.</figcaption>
+    </figure>
+    <figure>
+      <svg viewBox="0 0 420 280" role="img" aria-label="Cell division: one mother becomes two overlapping daughters that relax apart">
+        <text x="210" y="22" fill="#9aa0aa" font-size="12.5" text-anchor="middle" font-family="var(--sans)">division — the morphogenesis payoff</text>
+        <!-- mother -->
+        <g transform="translate(70,150)">
+          <circle cx="0" cy="0" r="28" fill="rgba(232,161,58,.85)" stroke="#f4c06a"/>
+          <text x="0" y="58" fill="#6b7280" font-size="10.5" text-anchor="middle" font-family="var(--sans)">mother</text>
+        </g>
+        <!-- arrow -->
+        <g transform="translate(118,150)"><line x1="0" y1="0" x2="34" y2="0" stroke="#3a3f4a" stroke-width="2"/><path d="M34,-5 l10,5 l-10,5 z" fill="#3a3f4a"/></g>
+        <!-- daughters overlapping -->
+        <g transform="translate(208,150)">
+          <circle cx="-12" cy="0" r="21" fill="rgba(232,161,58,.7)" stroke="#f4c06a"/>
+          <circle cx="12" cy="0" r="21" fill="rgba(232,161,58,.7)" stroke="#f4c06a"/>
+          <text x="0" y="58" fill="#6b7280" font-size="10.5" text-anchor="middle" font-family="var(--sans)">2 daughters (overlap)</text>
+        </g>
+        <!-- arrow -->
+        <g transform="translate(256,150)"><line x1="0" y1="0" x2="34" y2="0" stroke="#3a3f4a" stroke-width="2"/><path d="M34,-5 l10,5 l-10,5 z" fill="#3a3f4a"/></g>
+        <!-- relaxed -->
+        <g transform="translate(352,150)">
+          <circle cx="-22" cy="0" r="22" fill="rgba(232,161,58,.85)" stroke="#f4c06a"/>
+          <circle cx="22" cy="0" r="22" fill="rgba(232,161,58,.85)" stroke="#f4c06a"/>
+          <text x="0" y="58" fill="#6b7280" font-size="10.5" text-anchor="middle" font-family="var(--sans)">repulsion relaxes</text>
+        </g>
+      </svg>
+      <figcaption><b>Division is trivial here</b> (the draw of this family): append two daughters a hair apart along a mitotic axis, let the repulsion force resolve them. It <b>grows the agent count</b> — easy off-lattice, awkward on a grid. <b>The hazard:</b> the overlapping daughters create stiff forces, so a too-large <code>Δt</code> overshoots (silent geometric drift, §10).</figcaption>
+    </figure>
+  </div>
+</div></section>
+
+<!-- 4 LIVE DEMO -->
+<section id="live"><div class="card">
+  <h2><span class="n alt">04</span> Live demo — soft spheres that repel, adhere, sort &amp; divide</h2>
+  <p class="lede">A real 2D overlapping-spheres engine running in your browser: ~N soft cells of two types, integrated by overdamped forward Euler over a uniform-grid neighbour search, with a per-type adhesion matrix. <b>Differential adhesion alone makes the two colours sort</b> into separated domains; turn on division to watch the cluster grow. (This is the headline demo a Phase-2 implementation would target — easier and more visually compelling than CPM's.)</p>
+
+  <div class="cvwrap">
+    <canvas id="cb-canvas" width="520" height="380"></canvas>
+  </div>
+  <div class="controls">
+    <button class="btn primary" id="cb-play">▶ Play</button>
+    <button class="btn" id="cb-reset">↻ Reset (mixed)</button>
+    <button class="btn" id="cb-burst">✦ Divide burst</button>
+  </div>
+  <div class="sliderrow">adhesion differential (like-sticks-to-like) <input type="range" id="cb-adh" min="0" max="100" value="78"><b id="cb-adhv">0.78</b></div>
+  <div class="sliderrow">motility (fluctuation that lets cells re-sort) <input type="range" id="cb-mot" min="0" max="100" value="34"><b id="cb-motv">0.34</b></div>
+  <div class="sliderrow">division rate per step <input type="range" id="cb-div" min="0" max="100" value="0"><b id="cb-divv">0.000</b></div>
+  <div class="demohud">
+    <span>agents <b id="cb-n">0</b></span>
+    <span>step <b id="cb-step">0</b></span>
+    <span>sorting index <b id="cb-sort">0.50</b></span>
+    <span id="cb-stab" style="color:var(--green)">● stable</span>
+  </div>
+  <figcaption style="margin-top:14px"><b>What you are watching:</b> the <b>sorting index</b> (fraction of touching pairs that are the same type) climbs from ~0.5 (random mix) toward ~0.9 as the two populations segregate — purely from the adhesion matrix, with no "seek-like-cells" rule. The physics is exactly the recommended v1: a uniform-grid neighbour rebuild each step, a piecewise repulsion/adhesion force, overdamped Euler, and division that appends daughters. <span class="small">(The all-pairs/grid split, the GLS-permissive default, and the CBMOS rest-length/cutoff are the §6/§13 recommendations made tangible.)</span></figcaption>
+</div></section>
+
+<!-- 5 NEIGHBOURS -->
+<section id="neighbours"><div class="card">
+  <h2><span class="n">05</span> Dynamic adjacency — computed every step from positions</h2>
+  <p class="lede">"Who is adjacent to whom" is <b>derived from positions and re-derived every step</b> as cells move and divide — the user's "dynamic spatiality/adjacency" requirement, delivered natively. The standard solution (from molecular dynamics) is a <b>uniform grid / cell-list</b>: bin the world into boxes of edge ≥ <code>r_max</code>, test only the home box + neighbours — <code>O(N)</code> at biological densities. <b>This per-step rebuild is the single biggest genuinely-new runtime cost.</b></p>
+
+  <figure>
+    <svg viewBox="0 0 900 290" role="img" aria-label="Uniform-grid spatial hash binning continuous-position agents into boxes for O(N) neighbour search">
+      <g transform="translate(40,30)">
+        <!-- the binning grid (NOT the simulation lattice — a search acceleration structure) -->
+        <g stroke="#22262f" stroke-width="1">
+          <rect x="0" y="0" width="360" height="230" fill="#0a0c0f"/>
+          <line x1="72" y1="0" x2="72" y2="230"/><line x1="144" y1="0" x2="144" y2="230"/><line x1="216" y1="0" x2="216" y2="230"/><line x1="288" y1="0" x2="288" y2="230"/>
+          <line x1="0" y1="57.5" x2="360" y2="57.5"/><line x1="0" y1="115" x2="360" y2="115"/><line x1="0" y1="172.5" x2="360" y2="172.5"/>
+        </g>
+        <!-- query cell + its 9-box stencil highlighted -->
+        <rect x="144" y="57.5" width="72" height="57.5" fill="rgba(232,161,58,.10)"/>
+        <rect x="72" y="0" width="216" height="172.5" fill="none" stroke="#e8a13a" stroke-width="1.4" stroke-dasharray="5 4"/>
+        <!-- agents scattered -->
+        <g>
+          <circle cx="180" cy="86" r="9" fill="rgba(232,161,58,.9)" stroke="#f4c06a"/>
+          <circle cx="120" cy="40" r="9" fill="rgba(76,201,240,.7)" stroke="#4cc9f0"/>
+          <circle cx="240" cy="60" r="9" fill="rgba(76,201,240,.7)" stroke="#4cc9f0"/>
+          <circle cx="100" cy="130" r="9" fill="rgba(76,201,240,.7)" stroke="#4cc9f0"/>
+          <circle cx="250" cy="150" r="9" fill="rgba(76,201,240,.7)" stroke="#4cc9f0"/>
+          <circle cx="320" cy="40" r="9" fill="rgba(120,128,140,.5)" stroke="#6b7280"/>
+          <circle cx="40" cy="200" r="9" fill="rgba(120,128,140,.5)" stroke="#6b7280"/>
+          <circle cx="330" cy="210" r="9" fill="rgba(120,128,140,.5)" stroke="#6b7280"/>
+        </g>
+        <text x="180" y="262" fill="#9aa0aa" font-size="11.5" text-anchor="middle" font-family="var(--sans)">box edge ≥ r_max → test home box + 8 neighbours only</text>
+      </g>
+      <!-- the CSR-like flattening -->
+      <g transform="translate(450,40)">
+        <text x="0" y="0" fill="#f4c06a" font-size="12.5" font-weight="700" font-family="var(--sans)">→ flatten to a ragged neighbour list</text>
+        <text x="0" y="22" fill="#9aa0aa" font-size="11.5" font-family="var(--sans)">the continuous-space analogue of the lattice <tspan font-family="var(--mono)" fill="#cdd2d8">nIdx_/nSz_</tspan> tables</text>
+        <g font-family="var(--mono)" font-size="11.5">
+          <rect x="0" y="40" width="380" height="34" fill="#101216" stroke="#22262f" rx="4"/>
+          <text x="10" y="61" fill="#cdd2d8">candIdx[] = </text>
+          <text x="92" y="61" fill="#e8a13a">3 7 1 · 4 9 · 2 · 0 5 8 …</text>
+          <rect x="0" y="86" width="380" height="34" fill="#101216" stroke="#22262f" rx="4"/>
+          <text x="10" y="107" fill="#cdd2d8">start/len[i] = </text>
+          <text x="100" y="107" fill="#4cc9f0">(0,3) (3,2) (5,1) (6,3) …</text>
+        </g>
+        <text x="0" y="150" fill="#9aa0aa" font-size="11.5" font-family="var(--sans)">variable degree per agent → the compiled step</text>
+        <text x="0" y="167" fill="#9aa0aa" font-size="11.5" font-family="var(--sans)">reads it through the Graph-CA stride→offset emit.</text>
+        <text x="0" y="200" fill="#e0566a" font-size="11" font-family="var(--sans)">⚠ scratch must size to maxDegree + a runtime guard:</text>
+        <text x="0" y="216" fill="#9aa0aa" font-size="11" font-family="var(--sans)">OS cells gain MORE neighbours under compression.</text>
+      </g>
+    </svg>
+    <figcaption><b>Two sub-families differ here:</b> <b>overlapping-spheres</b> (distance cutoff — the recommended v1, GPU-friendly, what every performance engine picks) vs <b>Voronoi/Delaunay</b> (neighbours = shared triangulation edges — a global structure that mutates every step, hostile to a per-agent GPU kernel — defer it). <span class="small">(Uniform-grid / 27-box / box-from-largest-agent: BioDynaMo, verified. "Spatial search is the most expensive step": Dmitrenok 2016, verified.)</span></figcaption>
+  </figure>
+</div></section>
+
+<!-- 6 AGENT TIER -->
+<section id="tier"><div class="card">
+  <h2><span class="n">06</span> The agent object tier — the central new data structure</h2>
+  <p class="lede">Per-agent state — continuous position, radius, type, arbitrary attributes, lineage, cycle phase — has <b>no home</b> in today's two-tier schema (per-site arrays / global scalars). This is the same per-cell-object tier the CPM investigation specified — but here it is <b>the whole state</b>. Stored <b>SoA</b> (one typed array per attribute, length <code>maxCells</code>) with a <b>free-list</b> that recycles dead slots on division/death.</p>
+
+  <figure>
+    <svg viewBox="0 0 900 250" role="img" aria-label="The per-agent struct-of-arrays store with a free-list for recycling slots on death and division">
+      <g font-family="var(--mono)" font-size="11.5">
+        <!-- SoA columns -->
+        <g transform="translate(30,40)">
+          <text x="0" y="-12" fill="#9aa0aa" font-size="12" font-family="var(--sans)">SoA — one array per attribute, length = maxCells</text>
+          <!-- header row -->
+          <g fill="#6b7280">
+            <text x="14" y="14">slot</text><text x="74" y="14">x</text><text x="134" y="14">y</text><text x="186" y="14">r</text><text x="232" y="14">type</text><text x="296" y="14">alive</text>
+          </g>
+          <!-- rows -->
+          <g>
+            <rect x="0" y="22" width="360" height="26" fill="#101216" stroke="#22262f"/>
+            <text x="14" y="40" fill="#6b7280">0</text><text x="64" y="40" fill="#cdd2d8">12.4</text><text x="124" y="40" fill="#cdd2d8">88.1</text><text x="180" y="40" fill="#cdd2d8">9.0</text><text x="236" y="40" fill="#e8a13a">A</text><text x="300" y="40" fill="#66bb6a">1</text>
+            <rect x="0" y="48" width="360" height="26" fill="#0e1014" stroke="#22262f"/>
+            <text x="14" y="66" fill="#6b7280">1</text><text x="64" y="66" fill="#cdd2d8">40.7</text><text x="124" y="66" fill="#cdd2d8">15.2</text><text x="180" y="66" fill="#cdd2d8">9.0</text><text x="236" y="66" fill="#4cc9f0">B</text><text x="300" y="66" fill="#66bb6a">1</text>
+            <rect x="0" y="74" width="360" height="26" fill="#161013" stroke="#3a2a2e"/>
+            <text x="14" y="92" fill="#6b7280">2</text><text x="64" y="92" fill="#6b7280">—</text><text x="124" y="92" fill="#6b7280">—</text><text x="180" y="92" fill="#6b7280">—</text><text x="236" y="92" fill="#6b7280">—</text><text x="300" y="92" fill="#e0566a">0</text>
+            <rect x="0" y="100" width="360" height="26" fill="#0e1014" stroke="#22262f"/>
+            <text x="14" y="118" fill="#6b7280">3</text><text x="64" y="118" fill="#cdd2d8">71.9</text><text x="124" y="118" fill="#cdd2d8">52.6</text><text x="180" y="118" fill="#cdd2d8">6.3</text><text x="236" y="118" fill="#e8a13a">A</text><text x="300" y="118" fill="#66bb6a">1</text>
+            <rect x="0" y="126" width="360" height="26" fill="#161013" stroke="#3a2a2e"/>
+            <text x="14" y="144" fill="#6b7280">4</text><text x="64" y="144" fill="#6b7280">—</text><text x="124" y="144" fill="#6b7280">—</text><text x="180" y="144" fill="#6b7280">—</text><text x="236" y="144" fill="#6b7280">—</text><text x="300" y="144" fill="#e0566a">0</text>
+          </g>
+        </g>
+        <!-- free-list -->
+        <g transform="translate(440,60)">
+          <text x="0" y="-4" fill="#9aa0aa" font-size="12" font-family="var(--sans)">free-list (dead slots, recycled)</text>
+          <rect x="0" y="8" width="200" height="30" fill="#161013" stroke="#3a2a2e" rx="5"/>
+          <text x="14" y="28" fill="#e0566a">[ 2, 4 ]</text>
+          <text x="100" y="28" fill="#6b7280">← reuse on birth</text>
+          <!-- division -->
+          <g transform="translate(0,70)">
+            <text x="0" y="0" fill="#f4c06a" font-size="12" font-weight="700" font-family="var(--sans)">division</text>
+            <text x="0" y="20" fill="#9aa0aa" font-size="11">mother slot + 1 free slot</text>
+            <text x="0" y="36" fill="#9aa0aa" font-size="11">overflow past maxCells →</text>
+            <text x="0" y="52" fill="#e0566a" font-size="11">rejected + surfaced (never wrap)</text>
+          </g>
+        </g>
+      </g>
+    </svg>
+    <figcaption><b>The <code>maxCells</code> ceiling is a silent-corruption hazard inherited from the CPM analysis:</b> the arrays are allocated <b>once at init</b> and never resized, so <code>maxCells</code> is an over-allocated ceiling; a division that would exceed it is <b>rejected and surfaced</b>, never wrapped into a live id. <b>Continuous positions are pure floats</b> → <code>Float64Array</code>, which already round-trips (<code>float64</code> is in <code>ATTR_TYPE_MAP</code>) — so no new serialization kind for the common case. <span class="small">(Reuses CPM §5.2; SoA layout per ya||a's GPU design.)</span></figcaption>
+  </figure>
+</div></section>
+
+<!-- 7 ENGINE FIT -->
+<section id="enginefit"><div class="card">
+  <h2><span class="n">07</span> Engine fit — a hybrid that leans on the per-cell compiler</h2>
+  <p class="lede">The recommendation: a worker-side <b>force-integration driver</b> owns the population loop, the per-step neighbour rebuild, the position double-buffer, and division/death; the <b>node graph computes one agent's net force + behaviour</b>. This is a <i>lighter</i> hybrid than CPM's (which demoted the graph to a pure scalar) — but the force <i>emit</i> is genuinely new, not free reuse.</p>
+
+  <figure>
+    <svg viewBox="0 0 900 250" role="img" aria-label="The force-integration driver orchestrating the compiled per-agent step, and the WebGPU one-thread-per-agent mapping">
+      <!-- driver box -->
+      <g transform="translate(30,30)">
+        <rect x="0" y="0" width="300" height="190" fill="#101216" stroke="#3a3f4a" rx="10"/>
+        <text x="150" y="24" fill="#f4c06a" font-size="12.5" font-weight="700" text-anchor="middle" font-family="var(--sans)">worker-side force driver (NEW)</text>
+        <g font-family="var(--mono)" font-size="10.5" fill="#9aa0aa">
+          <text x="16" y="50">1 · rebuild uniform-grid neighbours</text>
+          <text x="16" y="72">2 · force pass → compiled step</text>
+          <text x="16" y="94">3 · swap position buffers</text>
+          <text x="16" y="116">4 · division / growth / death</text>
+        </g>
+        <!-- embedded compiled step -->
+        <rect x="14" y="128" width="272" height="48" fill="#0a0c0f" stroke="#4cc9f0" rx="6"/>
+        <text x="150" y="147" fill="#4cc9f0" font-size="10.5" text-anchor="middle" font-family="var(--mono)">compiled per-agent step (the node graph)</text>
+        <text x="150" y="166" fill="#cdd2d8" font-size="10" text-anchor="middle" font-family="var(--mono)">ΣF over neighbours · behaviour flags</text>
+      </g>
+      <!-- WebGPU mapping -->
+      <g transform="translate(380,30)">
+        <text x="250" y="14" fill="#66bb6a" font-size="12.5" font-weight="700" text-anchor="middle" font-family="var(--sans)">WebGPU — one thread per agent (STRONG fit)</text>
+        <g>
+          <rect x="40" y="34" width="60" height="40" fill="rgba(102,187,106,.12)" stroke="#66bb6a" rx="5"/>
+          <rect x="115" y="34" width="60" height="40" fill="rgba(102,187,106,.12)" stroke="#66bb6a" rx="5"/>
+          <rect x="190" y="34" width="60" height="40" fill="rgba(102,187,106,.12)" stroke="#66bb6a" rx="5"/>
+          <rect x="265" y="34" width="60" height="40" fill="rgba(102,187,106,.12)" stroke="#66bb6a" rx="5"/>
+          <rect x="340" y="34" width="60" height="40" fill="rgba(102,187,106,.12)" stroke="#66bb6a" rx="5"/>
+          <text x="70" y="58" fill="#cdd2d8" font-size="10" text-anchor="middle" font-family="var(--mono)">agent</text>
+          <text x="145" y="58" fill="#cdd2d8" font-size="10" text-anchor="middle" font-family="var(--mono)">agent</text>
+          <text x="220" y="58" fill="#cdd2d8" font-size="10" text-anchor="middle" font-family="var(--mono)">agent</text>
+          <text x="295" y="58" fill="#cdd2d8" font-size="10" text-anchor="middle" font-family="var(--mono)">agent</text>
+          <text x="370" y="58" fill="#cdd2d8" font-size="10" text-anchor="middle" font-family="var(--mono)">agent</text>
+        </g>
+        <text x="220" y="100" fill="#9aa0aa" font-size="10.5" text-anchor="middle" font-family="var(--sans)">no cross-cell write contention in the force pass (cf. ya||a)</text>
+        <text x="220" y="132" fill="#e0566a" font-size="10.5" text-anchor="middle" font-family="var(--sans)">division/death stay worker-side (over-alloc + compaction)</text>
+        <text x="220" y="158" fill="#6b7280" font-size="10" text-anchor="middle" font-family="var(--sans)">positions-in-attrs ping-pong: Phase-5-unverified vs the dynamic count</text>
+      </g>
+    </svg>
+    <figcaption><b>The honesty ledger.</b> <span class="tag t-reuse">reuse</span> mode-wiring template · SoA mechanism · worker protocol · sequential RNG · model-attr sliders · <code>lookupTable</code> adhesion matrix · index-keyed colours <i>render</i> contract · indicator pattern · the per-pair scalar <b>magnitude</b> math <code>F(d)</code>. <span class="tag t-new">new emit</span> the <b>vector</b> force reduction <code>Σ F(d)·r̂</code> (NOT the scalar <code>Aggregate</code>) + <code>GetNeighborPosition</code> (continuous coords <code>GetNeighborsAttribute</code> can't supply) + the compiled Output-Mapping colour pass that bakes <code>idx*4</code>. <b>Verdict: the per-cell <i>paradigm</i> fits; the force <i>emit</i> is new on all three targets — a far thinner change than CPM's bespoke driver, but not zero.</b></figcaption>
+  </figure>
+</div></section>
+
+<!-- 8 SUBSTRATE -->
+<section id="substrate"><div class="card">
+  <h2><span class="n">08</span> Substrate verdict — center-based vs CPM vs vertex</h2>
+  <p class="lede">With both deep analyses in hand: there is no single winner — the families are complementary — but for the user's <i>specific</i> goal (division-heavy, rich-phenotype, eventually-3D populations where the interesting thing is the <b>population</b>, not each cell's shape), <b>center-based is the better target</b>, CPM is the better <b>first build</b> for this codebase, and one engine-agnostic IR should serve both.</p>
+
+  <figure style="padding:0;background:none;border:none;overflow-x:auto">
+  <table style="min-width:760px">
+    <thead><tr><th>Substrate</th><th>Cell shape</th><th>Division</th><th>Adjacency</th><th>Per-cell state</th><th>3D</th><th>Browser proof</th><th>GPU fit</th><th>Fit to GenesisCA stack</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b style="color:var(--accent2)">Center-based</b></td>
+        <td><span class="tag t-gate">none (points)</span></td>
+        <td><span class="tag t-reuse">trivial</span></td>
+        <td><span class="tag t-reuse">distance / dynamic</span></td>
+        <td><span class="tag t-reuse">richest</span></td>
+        <td><span class="tag t-reuse">native</span></td>
+        <td><span class="tag t-gate">none</span></td>
+        <td><span class="tag t-reuse">strong</span></td>
+        <td><span class="tag t-mod">medium-high — step survives</span></td>
+      </tr>
+      <tr>
+        <td><b style="color:var(--cyan)">Cellular Potts</b></td>
+        <td><span class="tag t-reuse">deformable</span></td>
+        <td><span class="tag t-reuse">easy</span></td>
+        <td><span class="tag t-reuse">implicit/free</span></td>
+        <td><span class="tag t-mod">per-site + per-ID</span></td>
+        <td><span class="tag t-reuse">rescale</span></td>
+        <td><span class="tag t-reuse">Artistoo</span></td>
+        <td><span class="tag t-gate">poor (sequential)</span></td>
+        <td><span class="tag t-reuse">highest</span></td>
+      </tr>
+      <tr>
+        <td>Vertex</td>
+        <td><span class="tag t-reuse">explicit polygons</span></td>
+        <td><span class="tag t-mod">mid</span></td>
+        <td><span class="tag t-mod">mesh + T1/T2</span></td>
+        <td><span class="tag t-mod">cell + edge</span></td>
+        <td><span class="tag t-gate">"most challenging"</span></td>
+        <td><span class="tag t-gate">none</span></td>
+        <td><span class="tag t-gate">poor</span></td>
+        <td><span class="tag t-gate">low — mesh alien</span></td>
+      </tr>
+    </tbody>
+  </table>
+  </figure>
+
+  <div class="callgrid" style="margin-top:18px">
+    <div class="callout amber"><h4>When center-based wins</h4><p>Division-heavy populations, rich per-cell phenotype logic, 3D, GPU scale, sorting/spheroid/crypt morphogenesis. It is the substrate the literature <i>built for</i> the user's goal.</p></div>
+    <div class="callout amber"><h4>When CPM wins</h4><p>Fastest morphogenetic demo on the existing lattice/blit/async stack; deformable shape on a budget; the only family with a proven browser engine. CPM-<i>first</i> ships something sooner.</p></div>
+    <div class="callout"><h4>Center-based's ceiling (blunt)</h4><p><b>No cell shape.</b> Points + radius can't fold an epithelium, do T1 intercalation, or apical constriction — that is <b>vertex/CPM</b> territory. And the post-division <code>Δt</code> is a silent geometric-drift hazard.</p></div>
+    <div class="callout"><h4>The browser finding</h4><p><b>No Artistoo-equivalent exists.</b> Every center-based engine (PhysiCell, Chaste, CBMOS, ya||a, Tissue Forge) is native; their web stories are server-side cloud. A GenesisCA mode would be <b>a first, not a me-too</b> — engineering risk, not research risk.</p></div>
+  </div>
+</div></section>
+
+<!-- 9 IMPACT -->
+<section id="impact"><div class="card">
+  <h2><span class="n">09</span> Subsystem Impact Map</h2>
+  <p class="lede">The encouraging story: the mode-wiring template, the SoA state mechanism, the worker protocol, the sequential RNG, the value-node math library, the <code>lookupTable</code> adhesion matrix, the model-attribute sliders, the index-keyed colour/inspect contract, and the indicator-reduction pattern all carry over. The concentrated new work is the agent tier, the force driver, the per-step neighbour rebuild, division/death, and the entity renderer.</p>
+  <div class="legend">
+    <span><span class="dot" style="background:var(--green)"></span> reuse as-is</span>
+    <span><span class="dot" style="background:var(--accent)"></span> modify</span>
+    <span><span class="dot" style="background:var(--cyan)"></span> new</span>
+    <span><span class="dot" style="background:var(--red)"></span> gate off</span>
+  </div>
+  <div class="matrix">
+    <div class="mgroup"><h4>Schema &amp; state</h4>
+      <div class="mrow"><span class="tag t-new">new</span> <code>centerBased</code> config sub-object</div>
+      <div class="mrow"><span class="tag t-new">new</span> per-agent SoA tier + free-list</div>
+      <div class="mrow"><span class="tag t-mod">mod</span> reducer + cascade (variegated template)</div>
+      <div class="mrow"><span class="tag t-mod">mod</span> <code>topology</code> → off-lattice discriminator</div>
+    </div>
+    <div class="mgroup"><h4>Engine &amp; driver</h4>
+      <div class="mrow"><span class="tag t-new">new</span> force-integration driver</div>
+      <div class="mrow"><span class="tag t-new">new</span> per-step uniform-grid rebuild</div>
+      <div class="mrow"><span class="tag t-new">new</span> division / growth / death</div>
+      <div class="mrow"><span class="tag t-new">new</span> initial seeding (v1 blocker)</div>
+      <div class="mrow"><span class="tag t-gate">off</span> <code>orderArray</code> (sync, not async)</div>
+      <div class="mrow"><span class="tag t-reuse">use</span> sequential xorshift32 RNG</div>
+    </div>
+    <div class="mgroup"><h4>Compiler &amp; nodes</h4>
+      <div class="mrow"><span class="tag t-new">new</span> force/behaviour event root</div>
+      <div class="mrow"><span class="tag t-new">new</span> vector force reduction + GetNeighborPos</div>
+      <div class="mrow"><span class="tag t-mod">mod</span> loop body: geometry → agent iter</div>
+      <div class="mrow"><span class="tag t-mod">mod</span> variable-degree neighbour emit</div>
+      <div class="mrow"><span class="tag t-reuse">use</span> scalar F(d) math · lookupInteraction</div>
+    </div>
+    <div class="mgroup"><h4>Rendering &amp; interaction</h4>
+      <div class="mrow"><span class="tag t-new">new</span> <code>drawAgents()</code> circle renderer</div>
+      <div class="mrow"><span class="tag t-new">new</span> nearest-centre picking</div>
+      <div class="mrow"><span class="tag t-mod">mod</span> Output-Mapping colour pass (idx*4)</div>
+      <div class="mrow"><span class="tag t-gate">off</span> grid blit · gridlines · brush</div>
+      <div class="mrow"><span class="tag t-reuse">use</span> colours buffer → pixels contract</div>
+    </div>
+    <div class="mgroup"><h4>Files &amp; export</h4>
+      <div class="mrow"><span class="tag t-mod">mod</span> SimulationState += agent table</div>
+      <div class="mrow"><span class="tag t-mod">mod</span> <code>.gcastate</code> validation (agent count)</div>
+      <div class="mrow"><span class="tag t-mod">mod</span> reinit guard += maxCells</div>
+      <div class="mrow"><span class="tag t-mod">mod</span> presentation export (ship driver)</div>
+      <div class="mrow"><span class="tag t-gate">off</span> copy/paste (v1)</div>
+    </div>
+    <div class="mgroup"><h4>WebGPU (Phase 5)</h4>
+      <div class="mrow"><span class="tag t-new">new</span> force kernel (hash→sort→gather)</div>
+      <div class="mrow"><span class="tag t-reuse">use</span> per-cell PCG RNG (natural here)</div>
+      <div class="mrow"><span class="tag t-mod">mod</span> division/compaction worker-side</div>
+      <div class="mrow"><span class="tag t-reuse">use</span> accessor-CSE (sync ⇒ valid)</div>
+    </div>
+  </div>
+  <p class="small" style="margin-top:14px">Full 50-row map with file:line refs in <b>INVESTIGATION_CENTER_BASED.md §11</b>. Every cited location was verified firsthand or by the codebase audit.</p>
+</div></section>
+
+<!-- 10 HAZARDS -->
+<section id="hazards"><div class="card">
+  <h2><span class="n">10</span> Silent-corruption hazards — decide up front</h2>
+  <p class="lede">Like the CPM and Graph-CA investigations, the dangerous failures are the ones that fail <i>quietly</i> — wrong geometry or stale state, not a crash. Four to pin down before any build.</p>
+  <div class="callgrid">
+    <div class="callout"><h4>① Timestep / monotonicity</h4><p>A "stable" but too-large <code>Δt</code> <b>after division</b> (overlapping daughters → stiff forces → forward-Euler overshoot) silently corrupts geometry. The default <i>is</i> the guard: auto-clamp <code>Δt ← min(Δt_user, 0.4·Δt*_mono)</code>, GLS force law, <code>s=1</code>, <code>r_max≈1.5</code>, <code>η=1</code>. (Mathias 2020.)</p></div>
+    <div class="callout"><h4>② maxCells lifecycle</h4><p>The agent arrays are sized once. A stale <code>maxCells</code> after a division burst → overflow / wrong agent corrupted. Derived-on-change, re-baked into the WASM layout, in the reinit guard; overflow <b>rejected + surfaced</b>, never wrapped (the Amphiphile NI-poisoning class).</p></div>
+    <div class="callout"><h4>③ Neighbour-scratch overflow</h4><p>OS cells gain <b>more</b> neighbours under compression — so a fixed compile-time <code>maxDegree</code> overflows <i>exactly</i> when a cluster packs tight. Size generously + a runtime clamp/warning, never a bare fixed stride.</p></div>
+    <div class="callout"><h4>④ Sync ≠ async &amp; alive-mask</h4><p>Center-based double-buffers <b>positions</b> and does <b>not</b> use <code>orderArray</code> — don't import CPM's async single-buffer model. And the free-list leaves holes, so every per-agent loop (force, behaviour, indicators) must consult an <b>alive-mask</b>, not a dense <code>liveAgentCount</code> bound.</p></div>
+  </div>
+</div></section>
+
+<!-- 11 ROADMAP -->
+<section id="roadmap"><div class="card">
+  <h2><span class="n">11</span> Phased roadmap (if it were built)</h2>
+  <p class="lede">Sequenced so the headline demo — <b>2D adhesion-driven sorting + division of soft spheres</b> (exactly the live demo above) — lands early. Currently parked at "research only."</p>
+  <figure>
+    <svg viewBox="0 0 900 230" role="img" aria-label="Phased roadmap timeline from data model through 3D">
+      <line x1="40" y1="40" x2="860" y2="40" stroke="#3a3f4a" stroke-width="2"/>
+      <g font-family="var(--sans)">
+        <!-- nodes -->
+        <g><circle cx="80" cy="40" r="7" fill="#e8a13a"/><text x="80" y="24" fill="#f4c06a" font-size="12" text-anchor="middle" font-weight="700">P0-1</text><text x="80" y="66" fill="#9aa0aa" font-size="10.5" text-anchor="middle">data model</text><text x="80" y="80" fill="#9aa0aa" font-size="10.5" text-anchor="middle">+ agent tier</text></g>
+        <g><circle cx="240" cy="40" r="9" fill="#4cc9f0"/><text x="240" y="24" fill="#4cc9f0" font-size="12" text-anchor="middle" font-weight="700">P2 ★</text><text x="240" y="66" fill="#cdd2d8" font-size="10.5" text-anchor="middle">driver + JS force</text><text x="240" y="80" fill="#cdd2d8" font-size="10.5" text-anchor="middle">sorting + division</text></g>
+        <g><circle cx="410" cy="40" r="7" fill="#e8a13a"/><text x="410" y="24" fill="#f4c06a" font-size="12" text-anchor="middle" font-weight="700">P3</text><text x="410" y="66" fill="#9aa0aa" font-size="10.5" text-anchor="middle">WASM + 2nd-order</text><text x="410" y="80" fill="#9aa0aa" font-size="10.5" text-anchor="middle">entity renderer</text></g>
+        <g><circle cx="560" cy="40" r="7" fill="#e8a13a"/><text x="560" y="24" fill="#f4c06a" font-size="12" text-anchor="middle" font-weight="700">P4</text><text x="560" y="66" fill="#9aa0aa" font-size="10.5" text-anchor="middle">growth + death</text><text x="560" y="80" fill="#9aa0aa" font-size="10.5" text-anchor="middle">phenotype + Verlet</text></g>
+        <g><circle cx="710" cy="40" r="7" fill="#66bb6a"/><text x="710" y="24" fill="#66bb6a" font-size="12" text-anchor="middle" font-weight="700">P5</text><text x="710" y="66" fill="#9aa0aa" font-size="10.5" text-anchor="middle">WebGPU kernel</text><text x="710" y="80" fill="#9aa0aa" font-size="10.5" text-anchor="middle">microenvironment</text></g>
+        <g><circle cx="850" cy="40" r="7" fill="#b08cff"/><text x="850" y="24" fill="#b08cff" font-size="12" text-anchor="middle" font-weight="700">P6</text><text x="850" y="66" fill="#9aa0aa" font-size="10.5" text-anchor="middle">3D — new</text><text x="850" y="80" fill="#9aa0aa" font-size="10.5" text-anchor="middle">WebGL renderer</text></g>
+      </g>
+      <!-- headline callout -->
+      <g transform="translate(150,118)">
+        <rect x="0" y="0" width="600" height="86" fill="#101216" stroke="#3a3f4a" rx="9"/>
+        <text x="20" y="26" fill="#4cc9f0" font-size="12.5" font-weight="700" font-family="var(--sans)">★ Phase 2 headline (the live demo above)</text>
+        <text x="20" y="48" fill="#cdd2d8" font-size="11.5" font-family="var(--sans)">Two adhesive types sort into separated domains while cells divide into a relaxing cluster —</text>
+        <text x="20" y="66" fill="#cdd2d8" font-size="11.5" font-family="var(--sans)">the unambiguous correctness test, easier &amp; more compelling than CPM's. Validate statistically.</text>
+      </g>
+    </svg>
+    <figcaption><b>3D is incremental for the <i>engine</i> (the force law gains a z) but a wholesale new renderer</b> — Canvas2D is hard-wired; the existing WebGPU OffscreenCanvas direct-render seam proves an alternate renderer can sit behind the same colours+positions contract. "3D is easy" is true of the engine, not the renderer. <span class="small">(Validate against Meineke crypt, Drasdo/Höhme 2D→3D spheroid, Galle regulated epithelium — published parametrized rule sets.)</span></figcaption>
+  </figure>
+</div></section>
+
+<!-- 12 LITERATURE -->
+<section id="lit"><div class="card">
+  <h2><span class="n">12</span> Literature foundations &amp; reliability</h2>
+  <p class="lede">A 25-year developmental/biophysical literature, fact-checked against arXiv / DOI / PubMed / publisher. <b>Overall reliability: HIGH</b> — every load-bearing technical claim survived adversarial scrutiny, several verbatim.</p>
+
+  <h3>Citation confidence</h3>
+  <div class="conf" title="High confidence">
+    <i style="background:var(--green);flex:88"></i>
+    <i style="background:var(--accent);flex:9"></i>
+    <i style="background:var(--red);flex:3"></i>
+  </div>
+  <p class="small"><b style="color:var(--green)">Confirmed (88%)</b> — Meineke 2001, Drasdo/Höhme 2005, Osborne 2017 (OS/VT definitions + OS-more-neighbours), Mathias 2020 (stability/monotonicity bounds, "stability isn't enough" post-division), PhysiCell 2018, BioFVM 2016, BioDynaMo (uniform grid), CBMOS (all-pairs, s=1/rA=1.5), ya||a (pairwise-only-for-GPU), Artistoo (CPM/CA-only). <b style="color:var(--accent2)">Caveats (9%)</b> — the no-browser-engine headline is a negative-existence claim (marked uncertain by nature); ya||a's exact pipeline phrasing + Chaste BoxCollection internals not re-confirmable verbatim. <b style="color:#f3a0ad">Corrected (3%)</b> — two author bylines fabricated-then-corrected (Osborne <i>not</i> "Lee de Mora"; LinG3D = Hu/Ojwang'/Olumoyin/Rejniak); both papers real with correct venue/DOI.</p>
+
+  <h3>Anchor works</h3>
+  <div class="biblio">
+    <div><b>Meineke, Potten &amp; Loeffler (2001)</b> Cell migration in the intestinal crypt: a lattice-free model. <i>Cell Prolif.</i> 34(4):253–266. — founding Voronoi/Delaunay cell-centre model.</div>
+    <div><b>Drasdo &amp; Höhme (2005)</b> A single-cell-based model of tumor growth. <i>Phys. Biol.</i> 2(3):133–147. — founding overlapping-spheres lineage.</div>
+    <div><b>Van Liedekerke, Palm, Jagiella &amp; Drasdo (2015)</b> Simulating tissue mechanics with agent-based models. <i>Comput. Particle Mech.</i> 2(4):401–444. — the canonical taxonomy/review.</div>
+    <div><b>Osborne, Fletcher, Pitt-Francis, Maini &amp; Gavaghan (2017)</b> Comparing individual-based approaches… <i>PLOS Comput. Biol.</i> 13(2):e1005387. — the five-family head-to-head (Chaste).</div>
+    <div><b>Pathmanathan et al. (2009)</b> A computational study of discrete mechanical tissue models. <i>Phys. Biol.</i> 6(3):036001. — force-law comparison.</div>
+    <div><b>Mathias, Coulier, Bouchnita &amp; Hellander (2020)</b> Impact of Force Function Formulations… <i>Bull. Math. Biol.</i> 82(10):132. — the definitive numerics: stability + monotonicity bounds, post-division hazard.</div>
+    <div><b>Mathias, Coulier &amp; Hellander (2022)</b> CBMOS: a GPU-enabled framework… <i>BMC Bioinformatics</i> 23:55. — pluggable forces/solvers; deliberate all-pairs; s=1.0, rA=1.5.</div>
+    <div><b>Ghaffarizadeh, Heiland, Friedman, Mumenthaler &amp; Macklin (2018)</b> PhysiCell. <i>PLOS Comput. Biol.</i> 14(2):e1005991. — the reference simulator (Phenotype + Cell_Functions; "does not model cell morphology").</div>
+    <div><b>Johnson et al. (2023/2025)</b> Human-interpretable grammar for multicellular models. bioRxiv → <i>Cell</i> 188(17). — the no-code cell-behavior rules layer.</div>
+    <div><b>Ghaffarizadeh, Friedman &amp; Macklin (2016)</b> BioFVM. <i>Bioinformatics</i> 32(8):1256–1258. — the diffusion solver (implicit LOD/Thomas).</div>
+    <div><b>Breitwieser et al. (2022)</b> BioDynaMo. <i>Bioinformatics</i> 38(2):453–460. — uniform-grid environment; ~10⁹ agents.</div>
+    <div><b>Germann, Marin-Riera &amp; Sharpe (2019)</b> ya||a. <i>Cell Systems</i> 8(3):261–266. — pairwise-only forces for the GPU (the WebGPU blueprint).</div>
+    <div><b>Cooper, Baker, … Osborne, Pitt-Francis, Maini &amp; Gavaghan (2020)</b> Chaste. <i>JOSS</i> 5(47):1848. — one API spanning CA/CPM/OS/Voronoi/vertex.</div>
+    <div><b>Wortel &amp; Textor (2021)</b> Artistoo. <i>eLife</i> 10:e61288. — the pure-JS browser proof, for <b>CPM + CA only</b> (the no-browser-center-based finding).</div>
+    <div><b>Fletcher, Osterfield, Baker &amp; Shvartsman (2014)</b> Vertex models of epithelial morphogenesis. <i>Biophys. J.</i> 106(11):2291–2304. — the cell-shape sheet-mechanics tool center-based is NOT.</div>
+  </div>
+  <p class="small" style="margin-top:12px">Full annotated bibliography (with §2.8 reliability note) in <b>INVESTIGATION_CENTER_BASED.md §14</b>.</p>
+</div></section>
+
+<div class="footer">
+  <p><b>GenesisCA — Center-Based / Off-Lattice (agent) mode investigation.</b> Self-contained companion to <code>docs/INVESTIGATION_CENTER_BASED.md</code>; the third in the substrate series after <code>INVESTIGATION_GRAPH_CA</code> and <code>INVESTIGATION_CPM</code>. Status: research reference — no implementation planned. Produced by a multi-agent research workflow (parallel codebase audit + sequential fact-checked literature review + synthesis + adversarial critique); load-bearing codebase claims verified firsthand.</p>
+</div>
+
+</div>
+
+<script>
+(function(){
+  var cv = document.getElementById('cb-canvas');
+  if(!cv) return;
+  var ctx = cv.getContext('2d');
+  var W = cv.width, H = cv.height;
+
+  // ---- tunable parameters (tuned empirically; see figcaption) ----
+  var P = {
+    rad: 8.5,        // draw radius
+    rest: 18,        // rest length s (contact distance, ~2*rad)
+    rmaxFac: 1.85,   // r_max = rmaxFac * rest
+    kRep: 0.85,      // repulsion stiffness
+    adhBase: 0.30,   // baseline adhesion magnitude
+    adhDiff: 0.78,   // differential (0..1): like-like gets +adhDiff*adhBase extra, cross gets less
+    dt: 0.6,
+    motility: 0.34,  // random fluctuation
+    divRate: 0.0,    // per-agent division probability per step
+    maxCells: 360,
+    wallK: 0.05
+  };
+  var COL = ['#e8a13a', '#4cc9f0'];
+  var agents = [];           // {x,y,t}
+  var running = false, raf = null, step = 0;
+
+  function seed(n){
+    agents = [];
+    var cx = W/2, cy = H/2, R = Math.min(W,H)*0.34;
+    // deterministic-ish jitter without Math.random forbidden tokens? Math.random is fine in a delivered HTML file (not the workflow script).
+    for(var i=0;i<n;i++){
+      var a = Math.random()*Math.PI*2, r = Math.sqrt(Math.random())*R;
+      agents.push({x: cx+Math.cos(a)*r, y: cy+Math.sin(a)*r, t: (Math.random()<0.5?0:1)});
+    }
+    step = 0;
+  }
+
+  function adh(ti,tj){
+    // differential adhesion: like-like sticks more than cross
+    var like = (ti===tj);
+    return P.adhBase * (like ? (1 + P.adhDiff) : (1 - P.adhDiff*0.92));
+  }
+
+  function buildGrid(rmax){
+    var cs = rmax;
+    var cols = Math.max(1, Math.ceil(W/cs)), rows = Math.max(1, Math.ceil(H/cs));
+    var grid = new Array(cols*rows);
+    for(var i=0;i<agents.length;i++){
+      var a = agents[i];
+      var gx = Math.floor(a.x/cs), gy = Math.floor(a.y/cs);
+      if(gx<0)gx=0; if(gy<0)gy=0; if(gx>=cols)gx=cols-1; if(gy>=rows)gy=rows-1;
+      var k = gy*cols+gx;
+      (grid[k] || (grid[k]=[])).push(i);
+    }
+    return {grid:grid, cols:cols, rows:rows, cs:cs};
+  }
+
+  function physics(){
+    var s = P.rest, rmax = P.rmaxFac*s;
+    var g = buildGrid(rmax);
+    var n = agents.length;
+    var fx = new Float64Array(n), fy = new Float64Array(n);
+    for(var i=0;i<n;i++){
+      var a = agents[i];
+      var gx = Math.floor(a.x/g.cs), gy = Math.floor(a.y/g.cs);
+      if(gx<0)gx=0; if(gy<0)gy=0; if(gx>=g.cols)gx=g.cols-1; if(gy>=g.rows)gy=g.rows-1;
+      for(var oy=-1;oy<=1;oy++){
+        for(var ox=-1;ox<=1;ox++){
+          var nx=gx+ox, ny=gy+oy;
+          if(nx<0||ny<0||nx>=g.cols||ny>=g.rows) continue;
+          var bucket = g.grid[ny*g.cols+nx];
+          if(!bucket) continue;
+          for(var bi=0;bi<bucket.length;bi++){
+            var j = bucket[bi];
+            if(j<=i) continue;
+            var b = agents[j];
+            var dx = a.x-b.x, dy = a.y-b.y;
+            var d = Math.sqrt(dx*dx+dy*dy);
+            if(d>=rmax || d<1e-6) continue;
+            var ux = dx/d, uy = dy/d;
+            var fmag;
+            if(d < s){ fmag = P.kRep*(s-d); }                          // repulsion (push apart)
+            else {                                                     // adhesion (pull together)
+              var tt = (d-s)/(rmax-s);
+              fmag = -adh(a.t,b.t)*Math.sin(Math.PI*tt)*s*0.5;
+            }
+            fx[i]+=fmag*ux; fy[i]+=fmag*uy;
+            fx[j]-=fmag*ux; fy[j]-=fmag*uy;
+          }
+        }
+      }
+    }
+    var m = P.rad+2;
+    var blew = false;
+    for(var i2=0;i2<n;i2++){
+      var c = agents[i2];
+      var vx = fx[i2], vy = fy[i2];
+      if(c.x<m) vx += P.wallK*(m-c.x);
+      if(c.x>W-m) vx -= P.wallK*(c.x-(W-m));
+      if(c.y<m) vy += P.wallK*(m-c.y);
+      if(c.y>H-m) vy -= P.wallK*(c.y-(H-m));
+      vx += (Math.random()-0.5)*P.motility*s;
+      vy += (Math.random()-0.5)*P.motility*s;
+      c.x += P.dt*vx; c.y += P.dt*vy;
+      if(!isFinite(c.x)||!isFinite(c.y)) blew = true;
+      if(c.x<2)c.x=2; if(c.x>W-2)c.x=W-2; if(c.y<2)c.y=2; if(c.y>H-2)c.y=H-2;
+    }
+    // division
+    if(P.divRate>0 && agents.length<P.maxCells){
+      var births = [];
+      for(var i3=0;i3<agents.length;i3++){
+        if(Math.random()<P.divRate && (agents.length+births.length)<P.maxCells){
+          var mo = agents[i3];
+          var ang = Math.random()*Math.PI*2, e = P.rad*0.55;
+          mo.x -= Math.cos(ang)*e; mo.y -= Math.sin(ang)*e;
+          births.push({x: mo.x+Math.cos(ang)*2*e, y: mo.y+Math.sin(ang)*2*e, t: mo.t});
+        }
+      }
+      for(var bk=0;bk<births.length;bk++) agents.push(births[bk]);
+    }
+    step++;
+    return !blew;
+  }
+
+  function sortingIndex(){
+    var s = P.rest, rmax = P.rmaxFac*s, g = buildGrid(rmax);
+    var same=0, tot=0;
+    for(var i=0;i<agents.length;i++){
+      var a = agents[i];
+      var gx = Math.floor(a.x/g.cs), gy = Math.floor(a.y/g.cs);
+      if(gx<0)gx=0; if(gy<0)gy=0; if(gx>=g.cols)gx=g.cols-1; if(gy>=g.rows)gy=g.rows-1;
+      for(var oy=-1;oy<=1;oy++){
+        for(var ox=-1;ox<=1;ox++){
+          var nx=gx+ox, ny=gy+oy;
+          if(nx<0||ny<0||nx>=g.cols||ny>=g.rows) continue;
+          var bucket = g.grid[ny*g.cols+nx]; if(!bucket) continue;
+          for(var bi=0;bi<bucket.length;bi++){
+            var j = bucket[bi]; if(j<=i) continue; var b = agents[j];
+            var dx=a.x-b.x, dy=a.y-b.y; var d=Math.sqrt(dx*dx+dy*dy);
+            if(d < s*1.35){ tot++; if(a.t===b.t) same++; }
+          }
+        }
+      }
+    }
+    return tot ? same/tot : 0.5;
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    for(var i=0;i<agents.length;i++){
+      var a = agents[i];
+      ctx.beginPath();
+      ctx.arc(a.x, a.y, P.rad, 0, Math.PI*2);
+      ctx.fillStyle = COL[a.t];
+      ctx.globalAlpha = 0.9; ctx.fill(); ctx.globalAlpha = 1;
+    }
+  }
+
+  var elN = document.getElementById('cb-n');
+  var elStep = document.getElementById('cb-step');
+  var elSort = document.getElementById('cb-sort');
+  var elStab = document.getElementById('cb-stab');
+  var sortEMA = 0.5;
+  function hud(ok){
+    elN.textContent = agents.length;
+    elStep.textContent = step;
+    sortEMA = sortEMA*0.85 + sortingIndex()*0.15;
+    elSort.textContent = sortEMA.toFixed(2);
+    if(ok){ elStab.textContent = '● stable'; elStab.style.color = 'var(--green)'; }
+    else { elStab.textContent = '● unstable — Δt too large'; elStab.style.color = 'var(--red)'; }
+  }
+
+  function frame(){
+    var ok = true;
+    // a few physics sub-steps per rendered frame for snappier dynamics
+    for(var k=0;k<2;k++){ if(!physics()) ok=false; }
+    draw(); hud(ok);
+    if(running) raf = requestAnimationFrame(frame);
+  }
+
+  // expose for tuning/verification
+  window.__cbDemo = {
+    get P(){ return P; },
+    get agents(){ return agents; },
+    seed: seed, physics: physics, sortingIndex: sortingIndex, draw: draw,
+    runSteps: function(nsteps){ var ok=true; for(var i=0;i<nsteps;i++){ if(!physics())ok=false; } draw(); hud(ok); return {ok:ok, sort:sortingIndex(), n:agents.length}; }
+  };
+
+  // controls
+  var playBtn = document.getElementById('cb-play');
+  playBtn.addEventListener('click', function(){
+    running = !running;
+    playBtn.textContent = running ? '❚❚ Pause' : '▶ Play';
+    if(running) raf = requestAnimationFrame(frame);
+    else if(raf) cancelAnimationFrame(raf);
+  });
+  document.getElementById('cb-reset').addEventListener('click', function(){
+    seed(170); sortEMA = 0.5; draw(); hud(true);
+  });
+  document.getElementById('cb-burst').addEventListener('click', function(){
+    var add = Math.min(60, P.maxCells - agents.length);
+    for(var i=0;i<add;i++){
+      var mo = agents[(Math.random()*agents.length)|0];
+      if(!mo) break;
+      var ang = Math.random()*Math.PI*2, e = P.rad*0.6;
+      agents.push({x: mo.x+Math.cos(ang)*e, y: mo.y+Math.sin(ang)*e, t: mo.t});
+    }
+    draw(); hud(true);
+  });
+  var adhS = document.getElementById('cb-adh'), adhV = document.getElementById('cb-adhv');
+  adhS.addEventListener('input', function(){ P.adhDiff = adhS.value/100; adhV.textContent = P.adhDiff.toFixed(2); });
+  var motS = document.getElementById('cb-mot'), motV = document.getElementById('cb-motv');
+  motS.addEventListener('input', function(){ P.motility = motS.value/100; motV.textContent = P.motility.toFixed(2); });
+  var divS = document.getElementById('cb-div'), divV = document.getElementById('cb-divv');
+  divS.addEventListener('input', function(){ P.divRate = (divS.value/100)*0.02; divV.textContent = P.divRate.toFixed(3); });
+
+  // init
+  seed(170); draw(); hud(true);
+})();
+</script>
+
+</body>
+</html>
