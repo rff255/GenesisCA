@@ -12,6 +12,7 @@ import { niCellExprStmts } from '../compiler/niCodec';
  *  `arrayLength` node when they care about "how many neighbors matched". */
 export const FilterNeighborsNode: NodeTypeDef = {
   type: 'filterNeighbors',
+  requirements: { lattice2d: true },  // 2-axis packed neighborIndex codec — 2D only
   label: 'Filter Neighbors',
   description: 'Keeps NeighborIndices whose attribute passes the comparison. Outputs both the filtered NI array and its element count. Requires an Indexes input (e.g., from Get All Neighbor Indexes).',
   category: 'aggregation',

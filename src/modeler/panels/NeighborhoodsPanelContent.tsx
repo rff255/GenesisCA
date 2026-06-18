@@ -7,6 +7,7 @@ import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag } from '../vpl/graphState';
 import { NumberField } from '../vpl/widgets/InlineWidgets';
+import { Neighborhood3DEditor } from './Neighborhood3DEditor';
 import styles from './PanelContent.module.css';
 
 function handleNeighborhoodDragStart(neighborhoodId: string) {
@@ -201,6 +202,9 @@ export function NeighborhoodsPanelContent({ mode = 'list' }: PanelContentProps =
   const { model, addNeighborhood, duplicateNeighborhood, removeNeighborhood, updateNeighborhood, reorderNeighborhoods } =
     useModel();
   const [selectedId, setSelectedId] = useDetailSelection('neighborhoods');
+  // 3D Grid CA: in a 3D model the detail editor swaps the flat 2D grid for the
+  // parametric + slice-stack editor (the 2-axis grid can't express a 3D offset).
+  const is3d = model.properties.dimension === '3d';
 
   const neighborhoods = model.neighborhoods;
 
@@ -397,6 +401,11 @@ export function NeighborhoodsPanelContent({ mode = 'list' }: PanelContentProps =
             </div>
           </div>
 
+          {is3d && (
+            <Neighborhood3DEditor selected={selected} updateNeighborhood={updateNeighborhood} />
+          )}
+
+          {!is3d && (
           <div className={styles.gridContainer}>
             <div className={styles.gridControls}>
               <label className={styles.fieldLabel}>Margin</label>
@@ -551,6 +560,7 @@ export function NeighborhoodsPanelContent({ mode = 'list' }: PanelContentProps =
               })}
             </div>
           </div>
+          )}
 
           {/* Cell Tags */}
           <div className={styles.fieldGroup} style={{ marginTop: 8 }}>
@@ -560,12 +570,16 @@ export function NeighborhoodsPanelContent({ mode = 'list' }: PanelContentProps =
             </span>
               {Object.entries(selected.tags || {}).map(([idxStr, tagVal]) => {
                 const idx = Number(idxStr);
+                // 3D Grid CA: tags index coords3d (the 3-tuple source of truth);
+                // fall back to the 2D coords for a 2D neighbourhood.
+                const coord3 = is3d ? selected.coords3d?.[idx] : undefined;
                 const coord = selected.coords[idx];
-                if (!coord) return null;
+                if (!coord3 && !coord) return null;
+                const label = coord3 ? `[${coord3[0]},${coord3[1]},${coord3[2]}]` : `[${coord![0]},${coord![1]}]`;
                 return (
                   <div key={idxStr} style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 2 }}>
-                    <span style={{ fontSize: '0.65rem', color: '#6080a0', width: 36, flexShrink: 0 }}>
-                      [{coord[0]},{coord[1]}]
+                    <span style={{ fontSize: '0.65rem', color: '#6080a0', width: 48, flexShrink: 0 }}>
+                      {label}
                     </span>
                     <input
                       className={styles.textInput}

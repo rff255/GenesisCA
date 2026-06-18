@@ -9,7 +9,7 @@ export const SetNeighborAttributeByIndexNode: NodeTypeDef = {
   description: 'Writes a value to one neighbor’s attribute at the given NeighborIndex (a packed dr/dc offset). Accepts an array of indices to write to multiple neighbors. Async-only.',
   category: 'output',
   color: '#4a148c',
-  requirements: { async: true },
+  requirements: { async: true, lattice2d: true },
   ports: [
     { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
     { id: 'next', label: 'NEXT', kind: 'output', category: 'flow' },

@@ -6,6 +6,7 @@ import type { NodeTypeDef } from '../types';
  *  logic (independent dRow / dCol arithmetic, dispatching on direction, etc.). */
 export const BreakDownNeighborIndexNode: NodeTypeDef = {
   type: 'breakDownNeighborIndex',
+  requirements: { lattice2d: true },  // 2-axis packed neighborIndex codec — 2D only
   label: 'Break Down Neighbor Index',
   description: 'Unpacks a NeighborIndex into its (dRow, dCol) offset components.',
   category: 'data',

@@ -170,7 +170,11 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   name="dimension"
                   value="3d"
                   checked={is3d}
-                  onChange={() => updateProperties({ dimension: '3d', gridDepth: properties.gridDepth ?? 1 })}
+                  onChange={() => {
+                    // Variegated Cells is 2D-only — force it off when going 3D.
+                    if (model.variegatedCells?.enabled) updateVariegatedCells({ enabled: false });
+                    updateProperties({ dimension: '3d', gridDepth: properties.gridDepth ?? 1 });
+                  }}
                   style={{ marginTop: 2 }}
                 />
                 <span>
@@ -390,18 +394,22 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
               default; flipping on doesn't break existing models (the field
               is additive on CAModel). */}
           <div style={{ marginTop: 14, borderTop: '1px solid #333', paddingTop: 10 }}>
-            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
+            <label
+              style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: is3d ? 'not-allowed' : 'pointer', fontSize: '0.72rem', opacity: is3d ? 0.55 : 1 }}
+              title={is3d ? 'Variegated Cells is 2D-only (the orientation/face geometry is square-lattice).' : undefined}
+            >
               <input
                 type="checkbox"
-                checked={!!model.variegatedCells?.enabled}
+                checked={!is3d && !!model.variegatedCells?.enabled}
+                disabled={is3d}
                 onChange={e => updateVariegatedCells({ enabled: e.target.checked })}
                 style={{ marginTop: 2 }}
               />
               <span>
-                <strong>Use Variegated Cells (Directional Interactions)</strong>
+                <strong>Use Variegated Cells (Directional Interactions){is3d ? ' — 2D only' : ''}</strong>
                 <br />
                 <span style={{ color: '#888', fontSize: '0.66rem' }}>
-                  Adds a per-cell orientation (0-3 = 90&deg; rotations) and face-pattern labels for directional rules (chemistry CA, micelle formation, chiral models). Configure face patterns in the dedicated <strong>Variegated Cells</strong> panel (V) on the left sidebar.
+                  Adds a per-cell orientation (0-3 = 90&deg; rotations) and face-pattern labels for directional rules (chemistry CA, micelle formation, chiral models). Configure face patterns in the dedicated <strong>Variegated Cells</strong> panel (V) on the left sidebar.{is3d ? ' Not available in 3D models.' : ''}
                 </span>
               </span>
             </label>

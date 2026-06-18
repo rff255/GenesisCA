@@ -2,6 +2,7 @@ import type { NodeTypeDef } from '../types';
 
 export const GetNeighborIndexesByTagsNode: NodeTypeDef = {
   type: 'getNeighborIndexesByTags',
+  requirements: { lattice2d: true },  // 2-axis packed neighborIndex codec — 2D only
   label: 'Get Neighbor Indexes By Tags',
   description: 'Returns the neighborhood indices that match the given tag names.',
   category: 'data',

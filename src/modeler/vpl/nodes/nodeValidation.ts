@@ -450,6 +450,13 @@ export function detectCapabilityRequirements(
   if (def.requirements.variegated && !model.variegatedCells?.enabled) {
     issues.push(`"${def.label}" requires Variegated Cells enabled. Enable it in Model Properties > Execution.`);
   }
+  // 3D Grid CA: the packed `neighborIndex` codec carries only two axes (dr, dc),
+  // so the whole 2-axis NI-value family is invalid in a 3D model. Use the
+  // whole-neighbourhood nodes (Get Neighbors Attribute / Get Neighbor Attribute
+  // by Tag) instead — they resolve flat 3D indices.
+  if (def.requirements.lattice2d && model.properties.dimension === '3d') {
+    issues.push(`"${def.label}" uses the 2-axis neighbour-index codec, which can't represent a 3D offset. In a 3D model use Get Neighbors Attribute or Get Neighbor Attribute by Tag instead.`);
+  }
   return issues;
 }
 
@@ -460,6 +467,7 @@ export function isNodeAvailable(def: NodeTypeDef, model: CAModel): boolean {
   if (!def.requirements) return true;
   if (def.requirements.async && model.properties.updateMode !== 'asynchronous') return false;
   if (def.requirements.variegated && !model.variegatedCells?.enabled) return false;
+  if (def.requirements.lattice2d && model.properties.dimension === '3d') return false;
   return true;
 }
 
