@@ -1128,6 +1128,17 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return storeResult(ctx.emitter, attrValType(attr.type));
   },
 
+  // Get Cell Position — expose the per-cell row/col/layer locals (decoded in
+  // emitBody) as multi-output ports. Zero-cost: cache the EXISTING locals (no
+  // copy). layer only exists in 3D (layerLocalIdx >= 0).
+  getCellPosition: ({ node, ctx }) => {
+    const rowRef: LocalRef = { localIdx: ctx.rowLocalIdx, valtype: I32 };
+    setCachedPort(ctx, node.id, 'row', rowRef);
+    setCachedPort(ctx, node.id, 'col', { localIdx: ctx.colLocalIdx, valtype: I32 });
+    if (ctx.layerLocalIdx >= 0) setCachedPort(ctx, node.id, 'layer', { localIdx: ctx.layerLocalIdx, valtype: I32 });
+    return rowRef;  // default 'value' port → row (parity with other multi-output emitters)
+  },
+
   getModelAttribute: ({ node, ctx }) => {
     const attrId = node.data.config.attributeId as string;
     const isColor = !!node.data.config.isColorAttr;

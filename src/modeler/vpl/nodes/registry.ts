@@ -12,6 +12,7 @@ import { GetAllFacingLabelsNode } from './GetAllFacingLabelsNode';
 import { LookupInteractionNode } from './LookupInteractionNode';
 import { InteractionTableMapNode } from './InteractionTableMapNode';
 import { GetCellAttributeNode } from './GetCellAttributeNode';
+import { GetCellPositionNode } from './GetCellPositionNode';
 import { GetNeighborsAttributeNode } from './GetNeighborsAttributeNode';
 import { GetConstantNode } from './GetConstantNode';
 import { GetModelAttributeNode } from './GetModelAttributeNode';
@@ -85,6 +86,7 @@ const ALL_NODES: NodeTypeDef[] = [
   SwitchNode,
   // Data
   GetCellAttributeNode,
+  GetCellPositionNode,
   GetModelAttributeNode,
   GetNeighborsAttributeNode,
   GetNeighborAttributeByIndexNode,

@@ -97,6 +97,12 @@ const NEVER_INVARIANT = new Set<string>([
   // undefined. (Models that route index only into arrayElement/setArrayElement
   // dodged this because those consumers also read a never-invariant variable.)
   'forEachInArray',
+  // Get Cell Position reads the per-cell `_row`/`_col`/`_layer` locals (decoded
+  // inside the loop). It has NO value inputs, so the composite rule would
+  // classify it vacuously invariant and hoist it to the function preamble —
+  // BEFORE those locals exist (ReferenceError `_row is not defined`). It is
+  // per-cell by construction; never hoist.
+  'getCellPosition',
 ]);
 
 export function classifyLoopInvariant(

@@ -2232,6 +2232,21 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     setCachedPort(ctx, node.id, 'maxY', maxY);
     return x;
   },
+
+  // -- Get Cell Position (multi-output: row, col, layer) -------------------
+  // The current cell's grid coordinates, computed from the invocation `idx`
+  // (always in scope). 3D: row is WITHIN the layer ((idx%WH)/W), layer = idx/WH.
+  getCellPosition: ({ node, ctx }) => {
+    const W = ctx.layout.gridWidth, H = ctx.layout.gridHeight, D = ctx.layout.gridDepth;
+    const col = emitLet(ctx, 'i32', `i32(idx % ${W}u)`, 'cpCol');
+    const row = D > 1
+      ? emitLet(ctx, 'i32', `i32((idx % ${W * H}u) / ${W}u)`, 'cpRow')
+      : emitLet(ctx, 'i32', `i32(idx / ${W}u)`, 'cpRow');
+    setCachedPort(ctx, node.id, 'row', row);
+    setCachedPort(ctx, node.id, 'col', col);
+    if (D > 1) setCachedPort(ctx, node.id, 'layer', emitLet(ctx, 'i32', `i32(idx / ${W * H}u)`, 'cpLayer'));
+    return row;  // default 'value' port → row
+  },
 };
 
 // ---------------------------------------------------------------------------
