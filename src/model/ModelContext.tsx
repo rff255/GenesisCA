@@ -715,6 +715,12 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       if (!m.properties.dimension) m.properties.dimension = '2d';
       if (m.properties.gridDepth === undefined) m.properties.gridDepth = 1;
       if (!m.topologyMode) m.topologyMode = { gridCells: true, agents: false };
+      // 3D Grid CA: the 3D voxel renderer needs the CPU colors buffer, which the
+      // WebGPU direct-render path skips. Force a 3D model onto WASM/JS.
+      if (m.properties.dimension === '3d' && m.properties.useWebGPU) {
+        m.properties.useWebGPU = false;
+        m.properties.useWasm = true;
+      }
       for (const n of m.neighborhoods) { n.margin ??= 2; n.includeCentralCell ??= false; }
       for (const a of m.attributes) {
         if (a.type === 'tag' && !a.tagOptions) a.tagOptions = [];

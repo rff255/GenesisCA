@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>PR8 — WebGL2 3D voxel renderer</title>
+<style>
+  :root{--bg:#0c0d10;--panel:#16181d;--border:#2a2d34;--muted:#888;--accent:#e8a13a;--text:#d8dadf;}
+  body{background:var(--bg);color:var(--text);font:13px/1.5 system-ui,sans-serif;margin:0;padding:24px}
+  h1{font-size:18px}h2{font-size:14px;color:var(--accent);margin-top:24px}
+  .stage{position:relative;width:560px;height:360px;background:radial-gradient(circle at 50% 40%, #14171d, #0a0b0e);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+  svg{display:block}
+  .ctl{position:absolute;top:12px;right:12px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:8px;width:168px;font-size:11px;display:flex;flex-direction:column;gap:6px}
+  .btn{background:#0e0f13;border:1px solid var(--border);border-radius:5px;color:var(--text);padding:3px 6px;text-align:center;font-size:11px}
+  .row{display:flex;gap:4px}.row .btn{flex:1}.on{background:var(--accent);color:#000;border-color:var(--accent)}
+  input[type=range]{width:100%}
+  .zoom{position:absolute;bottom:12px;left:12px;display:flex;flex-direction:column;gap:4px}
+  .zb{width:26px;height:26px;background:var(--panel);border:1px solid var(--border);border-radius:5px;color:var(--text);display:flex;align-items:center;justify-content:center}
+  .note{color:var(--muted);font-size:11px;max-width:680px}
+  code{background:#0e0f13;padding:1px 5px;border-radius:4px}
+  .tag{display:inline-block;background:var(--accent);color:#000;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;margin-left:6px}
+</style></head><body>
+<h1>PR8 — WebGL2 3D voxel renderer <span class="tag">NEW</span></h1>
+<p class="note">A 3D model swaps the 2D canvas for a sibling WebGL2 canvas. Instanced unit cubes (one per <em>alive</em>, alpha&gt;0 cell — the full volume is NEVER instanced), an orbit camera, and a clip/slice plane as the PRIMARY see-inside (fragment <code>discard</code>, not depth-sort). Colour-id picking feeds the same paint/inspect protocol.</p>
+
+<div class="stage">
+  <svg width="560" height="360" viewBox="0 0 560 360">
+    <!-- a little iso voxel cluster -->
+    <g transform="translate(250,180)">
+      <!-- draw a 4x4 staggered set of cubes -->
+      <g id="cubes"></g>
+    </g>
+    <script>
+      const svg=document.currentScript.parentNode, g=svg.querySelector('#cubes');
+      function cube(x,y,s,c){const t=`translate(${x},${y})`;const top=`<polygon points='0,0 ${s},${-s*.5} ${2*s},0 ${s},${s*.5}' fill='${c}' opacity='.95'/>`;const l=`<polygon points='0,0 ${s},${s*.5} ${s},${s*1.5} 0,${s}' fill='${shade(c,.7)}'/>`;const r=`<polygon points='${2*s},0 ${s},${s*.5} ${s},${s*1.5} ${2*s},${s}' fill='${shade(c,.55)}'/>`;return `<g transform='${t}'>${top}${l}${r}</g>`;}
+      function shade(hex,f){const n=parseInt(hex.slice(1),16);const r=((n>>16)&255)*f|0,gg=((n>>8)&255)*f|0,b=(n&255)*f|0;return `rgb(${r},${gg},${b})`;}
+      let html='';const S=26;
+      for(let z=0;z<3;z++)for(let y=0;y<3;y++)for(let x=0;x<3;x++){if((x+y+z)%2)continue;const px=(x-z)*S-(y? S*0.0:0);const py=(x+z)*S*0.5 - y*S;html+=cube(px,py,S,'#6ee28c');}
+      g.innerHTML=html;
+    </script>
+  </svg>
+  <div class="ctl">
+    <div style="color:#aaa;font-weight:600">3D View</div>
+    <div class="btn">Reset view</div>
+    <label><input type="checkbox" checked> Clip plane (see inside)</label>
+    <div class="row"><div class="btn">X</div><div class="btn">Y</div><div class="btn on">Z</div></div>
+    <input type="range" value="40">
+    <label><input type="checkbox"> Alpha blend</label>
+  </div>
+  <div class="zoom"><div class="zb">+</div><div class="zb">&minus;</div><div class="zb">&#x2922;</div><div class="zb">&#x26F6;</div></div>
+</div>
+
+<h2>Architecture</h2>
+<p class="note">
+  <code>src/simulator/render/gl3d.ts</code> — <code>Gl3DRenderer</code>: a 36-vertex unit cube + per-instance <code>[cellIndex, r, g, b, a]</code> (the vertex shader decodes x/y/z from the flat index via <code>uW</code>/<code>uWH</code>). <code>uploadColors</code> compacts only alpha&gt;0 cells. Orbit camera (yaw/pitch/dist/pan). Clip plane = fragment <code>discard</code> past a bounded axis cut. Opt-in per-cell alpha = GL blend + back-to-front instance sort. Colour-id pick = a second FBO pass encoding <code>idx</code> as RGB, nearest cube wins via depth, <code>readPixels</code> at the cursor (Y-flipped).
+</p>
+<p class="note">
+  <strong>SimulatorView seam:</strong> a sibling <code>&lt;canvas ref=glCanvasRef&gt;</code> (2D canvas hidden when 3D). <code>draw()</code> (useCallback([]), ~20 call sites) branches on <code>is3dRef</code> and reads camera/clip/alpha/depth via refs. Pointer effect: LMB-drag orbit, wheel zoom, MMB/Shift pan; no-drag LMB = paint the picked voxel (radius-1), Shift+click = inspect. Screenshot + recording read the GL display buffer (display resolution). <strong>WebGPU is forced off in 3D</strong> (the GL renderer needs the CPU colors buffer that WebGPU direct-render skips). DEV hooks: <code>window.__sim3dCamera / __sim3dClip / __sim3dPick / __sim3dRenderer / __sim3dRedraw</code>.
+</p>
+</body></html>
