@@ -173,11 +173,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   onChange={() => {
                     // Variegated Cells is 2D-only — force it off when going 3D.
                     if (model.variegatedCells?.enabled) updateVariegatedCells({ enabled: false });
-                    // The 3D voxel renderer needs CPU colors — WebGPU direct-render
-                    // skips them, so force WASM/JS when entering 3D.
-                    const props: Record<string, unknown> = { dimension: '3d', gridDepth: properties.gridDepth ?? 1 };
-                    if (properties.useWebGPU) { props.useWebGPU = false; props.useWasm = true; }
-                    updateProperties(props);
+                    updateProperties({ dimension: '3d', gridDepth: properties.gridDepth ?? 1 });
                   }}
                   style={{ marginTop: 2 }}
                 />
@@ -284,23 +280,19 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   </span>
                 </span>
               </label>
-              <label
-                style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: is3d ? 'not-allowed' : 'pointer', fontSize: '0.72rem', opacity: is3d ? 0.55 : 1 }}
-                title={is3d ? 'WebGPU is unavailable for 3D models — the 3D voxel renderer needs the CPU colors buffer that WebGPU direct-render skips.' : undefined}
-              >
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
                 <input
                   type="radio"
                   name="compileTarget"
-                  checked={!is3d && !!properties.useWebGPU}
-                  disabled={is3d}
+                  checked={!!properties.useWebGPU}
                   onChange={() => updateProperties({ useWebGPU: true, useWasm: false, updateMode: 'synchronous' })}
                   style={{ marginTop: 2 }}
                 />
                 <span>
-                  <strong>WebGPU (sync only){is3d ? ' — 2D only' : ''}</strong>
+                  <strong>WebGPU (sync only)</strong>
                   <br />
                   <span style={{ color: '#888', fontSize: '0.66rem' }}>
-                    WGSL compute shaders on the GPU — designed for very large grids and math-heavy per-cell work. Requires synchronous update mode. Browser must support WebGPU (Chrome 127+, Firefox 141+, Safari 17.4+).
+                    WGSL compute shaders on the GPU — designed for very large grids and math-heavy per-cell work. Requires synchronous update mode. Browser must support WebGPU (Chrome 127+, Firefox 141+, Safari 17.4+).{is3d ? ' In 3D, the GPU runs the simulation while the voxel renderer reads colours back each step.' : ''}
                   </span>
                 </span>
               </label>

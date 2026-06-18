@@ -1767,7 +1767,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // Mark that we want to attach a canvas once the worker reports ready.
     // The actual transferControlToOffscreen + postMessage('attachCanvas')
     // happens in the useWebGPUStatus handler.
-    if (model.properties.useWebGPU && !webgpuResult.error && offscreenSupported) {
+    // 3D Grid CA: do NOT attach the canvas in 3D — WebGPU direct-render writes to
+    // the OffscreenCanvas and skips the CPU colors readback, but the WebGL2 voxel
+    // renderer needs that colors buffer. Skipping the attach keeps WebGPU on the
+    // readback path (colors shipped via `stepped`), so WebGPU COMPUTE still runs
+    // and the GL renderer draws from colorsRef.
+    if (model.properties.useWebGPU && !webgpuResult.error && offscreenSupported && !is3D) {
       pendingCanvasAttach.current = true;
     }
     // 3D Grid CA: effective layer count. Only honour gridDepth when the model
