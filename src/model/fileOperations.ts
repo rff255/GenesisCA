@@ -390,6 +390,8 @@ export function serializeSimState(
     generation: number;
     width: number;
     height: number;
+    /** 3D Grid CA: layer count. Absent → 1. */
+    depth?: number;
     attributes: Record<string, { type: string; buffer: ArrayBuffer }>;
     modelAttrs: Record<string, number>;
     indicators: Record<string, number>;
@@ -423,6 +425,7 @@ export function serializeSimState(
   if (modelStructure?.boundaryTreatment) serialized.boundaryTreatment = modelStructure.boundaryTreatment;
   serialized.gridWidth = workerState.width;
   serialized.gridHeight = workerState.height;
+  serialized.gridDepth = workerState.depth ?? 1;   // 3D Grid CA
   if (wantGrid) {
     // Saved grid state is a starting configuration — NOT a run snapshot.
     // We deliberately skip `generation`, `indicators`, and `linkedAccumulators`
@@ -431,6 +434,7 @@ export function serializeSimState(
     // older files (loader ignores them).
     serialized.width = workerState.width;
     serialized.height = workerState.height;
+    serialized.depth = workerState.depth ?? 1;   // 3D Grid CA
     serialized.attributes = {};
     serialized.colors = arrayBufferToBase64(workerState.colors);
     for (const [id, entry] of Object.entries(workerState.attributes)) {
@@ -473,6 +477,7 @@ export function serializePreset(
     generation: number;
     width: number;
     height: number;
+    depth?: number;   // 3D Grid CA
     attributes: Record<string, { type: string; buffer: ArrayBuffer }>;
     modelAttrs: Record<string, number>;
     indicators: Record<string, number>;
@@ -496,6 +501,7 @@ export function serializePreset(
   if (modelStructure?.boundaryTreatment) out.boundaryTreatment = modelStructure.boundaryTreatment;
   out.gridWidth = workerState.width;
   out.gridHeight = workerState.height;
+  out.gridDepth = workerState.depth ?? 1;   // 3D Grid CA
   if (modelStructure?.interactionTables && Object.keys(modelStructure.interactionTables).length > 0) {
     out.interactionTables = modelStructure.interactionTables;
   }
@@ -504,6 +510,7 @@ export function serializePreset(
     // for the same reason as serializeSimState above.
     out.width = workerState.width;
     out.height = workerState.height;
+    out.depth = workerState.depth ?? 1;   // 3D Grid CA
     out.attributes = {};
     out.colors = arrayBufferToBase64(workerState.colors);
     for (const [id, entry] of Object.entries(workerState.attributes)) {
@@ -533,6 +540,9 @@ export function readStateFile(file: File): Promise<SimulationState> {
           reject(new Error('Invalid state file: missing required fields.'));
           return;
         }
+        // 3D Grid CA: older files have no depth → a 2D (depth-1) snapshot.
+        if (state.depth === undefined) state.depth = 1;
+        if (state.gridDepth === undefined) state.gridDepth = state.depth;
         resolve(state);
       } catch {
         reject(new Error('Failed to parse state file. Is it valid JSON?'));

@@ -11,8 +11,9 @@ interface Props {
    *  bin (all arrays the same length = bin count). One curve per series — the
    *  chromatogram shape. */
   data: Record<string, number[]>;
-  /** Which grid axis the position bins span. Drives the X-axis label. */
-  axis: 'rows' | 'columns';
+  /** Which grid axis the position bins span. Drives the X-axis label.
+   *  'layers' is the 3D Grid CA Z axis. */
+  axis: 'rows' | 'columns' | 'layers';
   /** Grid length along `axis` (rows for 'rows', columns for 'columns'). Used to
    *  label the X-axis endpoints with real positions; falls back to bin indices
    *  when absent. */
@@ -115,7 +116,7 @@ export function IndicatorSpatialChart({ data, axis, axisLength, height, hidden, 
   const binCount = categories.reduce((m, k) => Math.max(m, (data[k] || []).length), 0);
   const legendHeight = 14;
   const plotHeight = Math.max(20, height - legendHeight);
-  const axisName = axis === 'rows' ? 'row' : 'column';
+  const axisName = axis === 'rows' ? 'row' : axis === 'layers' ? 'layer' : 'column';
 
   useEffect(() => {
     const canvas = canvasRef.current;

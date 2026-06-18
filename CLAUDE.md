@@ -195,7 +195,9 @@ genesis-ca/
 │   │   │   ├── InfoPanelContent.tsx      # Info tab: model presentation metadata (name/authors/description/thumbnail/tags)
 │   │   │   ├── PropertiesPanelContent.tsx # Properties tab: Structure / Execution / Indicators (list)
 │   │   │   ├── AttributesPanelContent.tsx
-│   │   │   ├── NeighborhoodsPanelContent.tsx
+│   │   │   ├── NeighborhoodsPanelContent.tsx  # (3D: renders Neighborhood3DEditor)
+│   │   │   ├── Neighborhood3DEditor.tsx   # 3D Grid CA: parametric + slice-stack neighbourhood editor
+│   │   │   ├── neighborhood3d.ts          # 3D Grid CA: pure generateCoords3d (named shapes + metric)
 │   │   │   ├── MappingsPanelContent.tsx
 │   │   │   └── PalettePanelContent.tsx  # Palette tab: nodes + default + project macros
 │   │   └── vpl/                      # Visual Programming Language editor
@@ -222,9 +224,13 @@ genesis-ca/
 │   │   ├── SimulatorView.tsx         # Canvas rendering, zoom/pan, brush tool
 │   │   ├── IndicatorDisplay.tsx      # Indicator values display in simulator
 │   │   ├── indicatorChartSettings.ts # Chart-settings merge/axis/tick helpers (gear popover)
+│   │   ├── render/
+│   │   │   └── gl3d.ts               # 3D Grid CA: WebGL2 voxel renderer (instanced cubes, orbit, clip, pick)
 │   │   └── engine/
 │   │       ├── SimEngine.ts          # Fallback engine (reference only)
-│   │       └── sim.worker.ts         # Web Worker — owns grid, runs steps
+│   │       └── sim.worker.ts         # Web Worker — owns grid (3D: total=W*H*D), runs steps
+│   ├── dev/
+│   │   └── compileHarness.ts        # DEV-only cross-target compile harness (byte-identity checks)
 │   ├── help/
 │   │   └── HelpView.tsx              # In-app comprehensive Help tab
 │   ├── library/
@@ -1137,6 +1143,12 @@ Makes the lattice a **`W×H×D` volume** end-to-end: schema, all three compile t
 - **WebGPU forced off in 3D**: the GL renderer needs the CPU `colors` buffer, which WebGPU direct-render skips. The LOAD_MODEL migration + the Properties 3D radio force `useWasm` (and the WebGPU compile-target radio is disabled in 3D).
 - **Verified** (readPixels-based per the handoff — preview_screenshot times out on heavy pages): Life3D loads → renderer inits; `instanceCount` = alive-cell count (culling); orbit changes the rendered pixels; clip plane reduces visible pixels then restores; `pick(centre)` returns a valid cell, `pick(corner)` returns -1; the worker 3D `paint` sets exactly the target voxel; 3D controls + GL-canvas-visible / 2D-hidden confirmed.
 - **Minor follow-up**: the brush-shape selector (Rect/Circle/Ring/Line) is still shown in 3D though 3D paints single cells (cosmetic — the shape is ignored by the single-voxel pick-paint). Mockup: [docs/MOCKUP_PR8_VOXEL_RENDERER.html](docs/MOCKUP_PR8_VOXEL_RENDERER.html).
+
+### PR9 — save/load + indicators + inspector 3D consumer-scan (done)
+- **Save/load** ([fileOperations.ts](src/model/fileOperations.ts)): the worker getState payload echoes `depth` ([sim.worker.ts](src/simulator/engine/sim.worker.ts)); `serializeSimState`/`serializePreset` write `gridDepth` (always) + `depth` (inside the grid block); `readStateFile` normalizes `depth`/`gridDepth` → 1 for legacy files. `applySimulationState` deserializes at `total = W*H*depth` (a 3D state would otherwise truncate to its first layer), threads `depth` through `dimsFromState`/`dimsChanged` (adapting the model + flipping it to `dimension:'3d'` when `depth>1`), and the hard dim-validation rejects a depth mismatch with a `W×H×D` message (3rd dim shown only when either side is a volume). The preset-load dim check mirrors it. **`gridDepth.current`** is set beside `gridWidth/Height.current` (init + applySimulationState).
+- **Spatial `'layers'` axis**: `computeSpatialIndicators` ([sim.worker.ts](src/simulator/engine/sim.worker.ts)) accepts `xAxis==='layers'` (axisLen = depth; the posBin decode is now 3D-correct — layer=⌊i/WH⌋, row/col within the layer — behaviour-identical in 2D); the `hasSpatialIndicators` gate + the post-loop linked-skip + the WebGPU-reduction-skip all include `'layers'`. `IndicatorSpatialChart` widens `axis` to `'layers'` (axisName 'layer'); `IndicatorDisplay` gained a `gridDepth` prop (axisLength = depth for layers) + its three `isSpatial` checks include `'layers'`; the IndicatorsPanelSection X-axis dropdown offers **Layers (spatial, 3D)** only when `dimension==='3d'`. **Verified**: a per-layer frequency indicator's `true` series matches an independent re-bin by ⌊i/WH⌋ with 0 mismatches.
+- **Inspector** ([InspectCellPopover.tsx](src/simulator/InspectCellPopover.tsx)): the `neighborIndex` value decode stays 2-axis `(dr, dc)` with a TODO pointing at the deferred 3-axis NI codec (PLAN §6.5) — the NI family is gated off in 3D, so there's no `dl` to show.
+- **Verified**: 3D getState `depth=24`; serialized `gridDepth/depth=24` + the `alive` buffer base64-decodes to the full 13824 bytes (not truncated to W*H); spatial-layers 0 mismatches. `ATTR_TYPE_MAP` needs no change (a longer buffer base64's automatically).
 
 ---
 
