@@ -227,9 +227,15 @@ fn rand_f32(cell: u32) -> f32 {
 /** Wrap a per-cell body in a compute-shader entry point with workgroup-size 64.
  *  Caller passes the inner body assuming `idx: u32` is the linear cell index. */
 export function emitEntryPoint(name: string, total: number, body: string): string {
+  // The host tiles the per-cell dispatch into a 2-D workgroup grid (see
+  // dispatchCells in webgpuRuntime) so it never exceeds
+  // maxComputeWorkgroupsPerDimension (65535). Recover the linear cell index
+  // from the 2-D global id: idx = gid.y * (num_workgroups.x * 64) + gid.x.
+  // For grids that fit one dimension num_workgroups.y == 1 → gid.y == 0 →
+  // idx == gid.x, identical to a flat 1-D dispatch.
   return `@compute @workgroup_size(64)
-fn ${name}(@builtin(global_invocation_id) gid: vec3<u32>) {
-  let idx: u32 = gid.x;
+fn ${name}(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {
+  let idx: u32 = gid.y * (nwg.x * 64u) + gid.x;
   if (idx >= ${total}u) { return; }
 ${body}
 }

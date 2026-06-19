@@ -143,9 +143,11 @@ export function emitReductionShader(plan: ReductionPlan, total: number): string 
   for (const e of plan.entries) {
     const slot = (off: number) => `${e.slotOffset + off}u`;
     const wordExpr = e.attrWordOffset === 0 ? `attrsRead[idx]` : `attrsRead[${e.attrWordOffset}u + idx]`;
+    // 2-D dispatch tiling (see dispatchCells / emitEntryPoint): recover the
+    // linear cell index so reductions don't silently no-op past 65535*64 cells.
     lines.push(`@compute @workgroup_size(64)`);
-    lines.push(`fn ${e.entry}(@builtin(global_invocation_id) gid: vec3<u32>) {`);
-    lines.push(`  let idx: u32 = gid.x;`);
+    lines.push(`fn ${e.entry}(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {`);
+    lines.push(`  let idx: u32 = gid.y * (nwg.x * 64u) + gid.x;`);
     lines.push(`  if (idx >= ${total}u) { return; }`);
     lines.push(`  let raw : u32 = ${wordExpr};`);
     if (e.aggregation === 'total') {

@@ -624,6 +624,25 @@ export function setupReductionPipelines(rt: WebGPURuntime, linkedDefs: LinkedDef
 
 const REDUCE_WG = 64;
 
+/** WebGPU caps `dispatchWorkgroups` at `maxComputeWorkgroupsPerDimension`
+ *  (65535 — the hardware/spec ceiling, even when we request the adapter max).
+ *  A flat 1-D per-cell dispatch (`ceil(total/64)` groups) therefore SILENTLY
+ *  fails — no error, the kernel just never runs — once `total > 65535*64 ≈
+ *  4.19M` cells, which blanks the whole WebGPU sim on big 2D grids (e.g. the
+ *  5000×5000 target = 25M) AND any 3D volume past ~4.2M cells. Fix: tile the
+ *  dispatch into a 2-D workgroup grid. The per-cell shaders recover the linear
+ *  index as `gid.y * (num_workgroups.x * 64) + gid.x` (see emitEntryPoint /
+ *  the reduction shader). For grids that fit one dimension (≤ 65535*WG cells)
+ *  this dispatches `(groups, 1)` — `gid.y == 0`, so `idx == gid.x`, identical
+ *  to the old 1-D path. */
+const MAX_WG_PER_DIM = 65535;
+function dispatchCells(pass: GPUComputePassEncoder, total: number, wg: number): void {
+  const groups = Math.max(1, Math.ceil(total / wg));
+  const x = Math.min(groups, MAX_WG_PER_DIM);
+  const y = Math.ceil(groups / MAX_WG_PER_DIM);
+  pass.dispatchWorkgroups(x, y);
+}
+
 /** Zero the reductions buffer + dispatch every reduction kernel. The
  *  reductions buffer is re-zeroed every step so accumulation across
  *  generations stays a worker-side decision (per-gen vs accumulated). */
@@ -639,12 +658,11 @@ export function dispatchReductions(rt: WebGPURuntime): void {
   const enc = rt.device.createCommandEncoder({ label: 'reduce-enc' });
   const pass = enc.beginComputePass({ label: 'reduce-pass' });
   pass.setBindGroup(0, bg);
-  const groups = Math.ceil(rt.layout.total / REDUCE_WG);
   for (const e of rt.reductionPlan.entries) {
     const pipe = rt.reductionPipelines.get(e.entry);
     if (!pipe) continue;
     pass.setPipeline(pipe);
-    pass.dispatchWorkgroups(Math.max(1, groups));
+    dispatchCells(pass, rt.layout.total, REDUCE_WG);
   }
   pass.end();
   rt.device.queue.submit([enc.finish()]);
@@ -934,8 +952,7 @@ export function dispatchStep(rt: WebGPURuntime): void {
   const pass = enc.beginComputePass({ label: 'step-pass' });
   pass.setPipeline(rt.stepPipeline);
   pass.setBindGroup(0, rt.bindGroup);
-  const groups = Math.ceil(rt.layout.total / WORKGROUP_SIZE);
-  pass.dispatchWorkgroups(Math.max(1, groups));
+  dispatchCells(pass, rt.layout.total, WORKGROUP_SIZE);
   pass.end();
   rt.device.queue.submit([enc.finish()]);
   // Swap orientation. The buffer that was just written becomes "current read"
@@ -959,8 +976,7 @@ export function dispatchInit(rt: WebGPURuntime): boolean {
   const pass = enc.beginComputePass({ label: 'init-pass' });
   pass.setPipeline(rt.initPipeline);
   pass.setBindGroup(0, rt.bindGroup);
-  const groups = Math.ceil(rt.layout.total / WORKGROUP_SIZE);
-  pass.dispatchWorkgroups(Math.max(1, groups));
+  dispatchCells(pass, rt.layout.total, WORKGROUP_SIZE);
   pass.end();
   rt.device.queue.submit([enc.finish()]);
   // Same swap as step: init writes land in attrsWriteBuf; flip so subsequent
@@ -1042,8 +1058,7 @@ export function dispatchOutputMapping(rt: WebGPURuntime, mappingId: string): boo
   const pass = enc.beginComputePass({ label: 'om-pass' });
   pass.setPipeline(pipe);
   pass.setBindGroup(0, rt.bindGroup);
-  const groups = Math.ceil(rt.layout.total / WORKGROUP_SIZE);
-  pass.dispatchWorkgroups(Math.max(1, groups));
+  dispatchCells(pass, rt.layout.total, WORKGROUP_SIZE);
   pass.end();
   rt.device.queue.submit([enc.finish()]);
   return true;
@@ -1067,8 +1082,7 @@ export function dispatchColorPassAndPresent(rt: WebGPURuntime, mappingId: string
     const omPass = enc.beginComputePass({ label: 'om-pass' });
     omPass.setPipeline(pipe);
     omPass.setBindGroup(0, rt.bindGroup);
-    const groups = Math.ceil(rt.layout.total / WORKGROUP_SIZE);
-    omPass.dispatchWorkgroups(Math.max(1, groups));
+    dispatchCells(omPass, rt.layout.total, WORKGROUP_SIZE);
     omPass.end();
   }
   if (wantPresent) {
