@@ -89,6 +89,47 @@ function brushShapeOffsets(
   return out;
 }
 
+/** 3D ("extrapolated") brush-stamp offsets — `(dRow, dCol, dLayer)` for a
+ *  VOLUMETRIC brush: Circle → solid sphere, Ring → spherical shell, Rect → a box
+ *  (the row size also drives the layer extent). The 3rd value offsets the plane's
+ *  FIXED axis (mapped by mapStampToPlane), so a flat disc becomes a ball etc. */
+function brushShapeOffsets3d(
+  shape: BrushShape, bw: number, bh: number, radius: number, ringWidth: number,
+): Array<[number, number, number]> {
+  const out: Array<[number, number, number]> = [];
+  if (shape === 'circle' || shape === 'ring') {
+    const r = Math.max(0, radius);
+    const halfBand = Math.max(1, ringWidth) / 2;
+    const lo = shape === 'circle' ? -1 : r - halfBand;
+    const hi = shape === 'circle' ? r + 0.49 : r + halfBand;
+    const span = Math.ceil(hi);
+    for (let dl = -span; dl <= span; dl++)
+      for (let dr = -span; dr <= span; dr++)
+        for (let dc = -span; dc <= span; dc++) {
+          const d = Math.hypot(dr, dc, dl);
+          if (d >= lo && d <= hi) out.push([dr, dc, dl]);
+        }
+    return out;
+  }
+  if (shape === 'line') {
+    // Volumetric preview dot = a small ball of the line's width.
+    const half = Math.max(0.5, Math.max(1, radius) / 2);
+    const span = Math.ceil(half);
+    for (let dl = -span; dl <= span; dl++)
+      for (let dr = -span; dr <= span; dr++)
+        for (let dc = -span; dc <= span; dc++)
+          if (Math.hypot(dr, dc, dl) <= Math.max(0.49, half - 0.01)) out.push([dr, dc, dl]);
+    return out;
+  }
+  // rect → box: bw (col) × bh (row) × bh (layer); off-centre bias mirrors the 2D rect.
+  const halfW = Math.floor((bw - 1) / 2), halfH = Math.floor((bh - 1) / 2);
+  for (let dl = -halfH; dl <= halfH + ((bh - 1) % 2); dl++)
+    for (let dr = -halfH; dr <= halfH + ((bh - 1) % 2); dr++)
+      for (let dc = -halfW; dc <= halfW + ((bw - 1) % 2); dc++)
+        out.push([dr, dc, dl]);
+  return out;
+}
+
 /** Cells covered by a thick segment between two cell centres (capsule test:
  *  point-to-segment distance ≤ width/2, so width 1 ≈ a 1-cell line). Returned
  *  unwrapped — callers wrap modulo grid in infinity mode. */
@@ -358,6 +399,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const [brushRadius, setBrushRadius] = useState((saved.current.brushRadius as number) ?? 3);
   const [brushRingWidth, setBrushRingWidth] = useState((saved.current.brushRingWidth as number) ?? 1);
   const [brushLineWidth, setBrushLineWidth] = useState((saved.current.brushLineWidth as number) ?? 1);
+  // 3D Grid CA: when true, the brush shape is VOLUMETRIC (sphere/box/shell)
+  // instead of a flat footprint on the interaction plane ("Extrapolate plane").
+  const [brush3dVolume, setBrush3dVolume] = useState<boolean>(!!saved.current.brush3dVolume);
   const [brushMapping, setBrushMapping] = useState((saved.current.brushMapping as string) ?? '');
   // User-dragged height (px) of the right panel's brush section. null = auto
   // (shrink to content, the default). Set via the splitter between the Input
@@ -477,7 +521,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         localStorage.setItem(SIM_SETTINGS_KEY, JSON.stringify({
           targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines,
-          brushShape, brushRadius, brushRingWidth, brushLineWidth,
+          brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume,
           infinityCanvas, indicatorVizModes, recordFormat, brushSectionH,
           indicatorHiddenCategories: Object.fromEntries(
             Object.entries(indicatorHiddenCategories)
@@ -490,7 +534,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -664,6 +708,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // 3D Line tool: first click stages a plane-cell anchor (no paint); the second
   // click draws the capsule line between them. null = no staged anchor.
   const line3dAnchorRef = useRef<{ layer: number; row: number; col: number } | null>(null);
+  // 3D inspect highlight — the cell whose inspect popover is being hovered (the
+  // 2D connector line doesn't track 3D projection, so 3D highlights the cell
+  // instead). Empty = none.
+  const inspectHighlight3dRef = useRef<ReadonlyArray<{ layer: number; row: number; col: number }>>([]);
   // 3D canvas background colour fed to the renderer ([r,g,b,a] 0..1, null = transparent).
   const bg3dRef = useRef<[number, number, number, number] | null>(null);
   // 3D perf: the colors buffer last uploaded to the voxel renderer. The worker
@@ -832,6 +880,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       r.setViz(viz3dRef.current);
       r.setBrushPlane(plane3dEnabledRef.current ? { axis: plane3dRef.current.axis, pos: plane3dRef.current.pos } : null);
       r.setHoverCells(plane3dEnabledRef.current ? hoverCells3dRef.current : EMPTY_HOVER_CELLS);
+      r.setInspectCells(inspectHighlight3dRef.current);
       r.setBackgroundColor(bg3dRef.current);
       r.setCamera(cam3dRef.current, r.canvasWidth / (r.canvasHeight || 1));
       // 3D perf: only re-scan + re-upload the (potentially millions of) cells when
@@ -2293,8 +2342,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (!is3D) return;
     const glc = glCanvasRef.current;
     if (!glc) return;
-    let active: 'orbit' | 'pan' | 'brush' | 'inspect' | null = null;
+    let active: 'orbit' | 'pan' | 'brush' | 'inspect' | 'resize' | null = null;
     let lastX = 0, lastY = 0, downX = 0, downY = 0, moved = false;
+    // Ctrl+LMB-drag brush resize (mirrors the 2D canvas): captured at drag start.
+    const resizeStart = { x: 0, y: 0, w: 0, h: 0, radius: 0, ringW: 0, lineW: 0 };
     const maxDim = () => Math.max(gridWidth.current, gridHeight.current, gridDepth.current, 1);
     type Cell = { layer: number; row: number; col: number };
     const pickCell = (clientX: number, clientY: number): Cell | null => {
@@ -2315,6 +2366,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const eF: [number, number] = axis === 'z' ? [end.row, end.col] : axis === 'y' ? [end.layer, end.col] : [end.layer, end.row];
       const cells = lineStampCells({ row: aF[0], col: aF[1] }, { row: eF[0], col: eF[1] }, width);
       const center: Cell = axis === 'z' ? { layer: pos, row: 0, col: 0 } : axis === 'y' ? { layer: 0, row: pos, col: 0 } : { layer: 0, row: 0, col: pos };
+      // "Extrapolate plane": extrude the capsule along the FIXED axis (into depth)
+      // by ±⌊width/2⌋ so the line becomes a 3D tube instead of a flat ribbon.
+      if (brush3dVolumeRef.current) {
+        const half = Math.floor(width / 2);
+        const off: Array<[number, number, number]> = [];
+        for (const c of cells) for (let dl = -half; dl <= half; dl++) off.push([c.row, c.col, dl]);
+        return mapStampToPlane(center, off);
+      }
       return mapStampToPlane(center, cells.map(c => [c.row, c.col] as [number, number]));
     };
     const paintLine3d = (anchor: Cell, end: Cell) => {
@@ -2331,7 +2390,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const footprintFor = (hit: Cell): ReadonlyArray<Cell> =>
       (brushShapeRef.current === 'line' && line3dAnchorRef.current)
         ? lineFootprint(line3dAnchorRef.current, hit, brushLineWidthRef.current)
-        : mapStampToPlane(hit, currentStampOffsets());
+        : mapStampToPlane(hit, currentStampOffsets3d());
     const sameCell = (a: Cell | null, b: Cell | null): boolean =>
       a === b || (!!a && !!b && a.layer === b.layer && a.row === b.row && a.col === b.col);
     // Track the hovered brush-plane cell + its FOOTPRINT (the cells the brush would
@@ -2365,7 +2424,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const ae = document.activeElement as HTMLElement | null;
       if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT')) ae.blur();
       // Clicking the corner gizmo snaps to that POV (highest priority — no drag).
-      if (e.button === 0 && gl3dRef.current) {
+      // Plain LMB only: a modifier means the user wants resize (Ctrl/Cmd), inspect
+      // (Shift), or orbit (Alt), which must work even when the press lands on the
+      // tiny gizmo region — so don't let the gizmo swallow a modified gesture.
+      if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && gl3dRef.current) {
         const rect = glc.getBoundingClientRect();
         const g = gl3dRef.current.gizmoHitTest(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
         if (g) { setPov(g.axis, g.sign); active = null; e.preventDefault(); return; }
@@ -2379,7 +2441,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         if (line3dAnchorRef.current) { line3dAnchorRef.current = null; active = null; updateHover(e.clientX, e.clientY); draw(); }
         else active = 'pan';
       }
-      else if (e.button === 0 && (e.shiftKey || e.ctrlKey || e.metaKey)) active = 'inspect'; // Shift/Ctrl+LMB → inspect (on up)
+      else if (e.button === 0 && (e.ctrlKey || e.metaKey)) {
+        // Ctrl/Cmd+LMB drag → resize the active brush shape (like the 2D canvas).
+        active = 'resize';
+        resizeStart.x = e.clientX; resizeStart.y = e.clientY;
+        resizeStart.w = brushWRef.current; resizeStart.h = brushHRef.current;
+        resizeStart.radius = brushRadiusRef.current; resizeStart.ringW = brushRingWidthRef.current;
+        resizeStart.lineW = brushLineWidthRef.current;
+      }
+      else if (e.button === 0 && e.shiftKey) active = 'inspect'; // Shift+LMB → inspect (on up)
       else if (e.button === 0 && brushShapeRef.current === 'line') {
         // Line tool: two clicks. First stages a plane-cell anchor (no paint); the
         // second draws the capsule line between them. No drag-paint in this mode.
@@ -2397,14 +2467,36 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       e.preventDefault();
     };
     const onMove = (e: PointerEvent) => {
+      // Track drag distance BEFORE the inspect-armed early-return, so onUp can
+      // discard a Shift+LMB that turned into a drag (mirrors the 2D sweep
+      // inspector's `!moved` discard) instead of pinning a popover at release.
+      if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 3) moved = true;
       if (!active || active === 'inspect') {
         // Idle / inspect-armed: update the footprint cursor (redraw on change).
         if (updateHover(e.clientX, e.clientY)) draw();
         return;
       }
+      if (active === 'resize') {
+        // dx grows the primary size; dy (up) grows the secondary. Mirrors the 2D
+        // canvas's Ctrl-drag resize, then the hover footprint follows on redraw.
+        const totDx = e.clientX - resizeStart.x, totDy = e.clientY - resizeStart.y;
+        const maxW = (gridWidth.current || simWidth) * 2, maxH = (gridHeight.current || simHeight) * 2;
+        const shape = brushShapeRef.current;
+        if (shape === 'circle') setBrushRadius(Math.max(0, Math.min(maxW, resizeStart.radius + Math.round(totDx / 5))));
+        else if (shape === 'ring') {
+          setBrushRadius(Math.max(0, Math.min(maxW, resizeStart.radius + Math.round(totDx / 5))));
+          setBrushRingWidth(Math.max(1, Math.min(maxH, resizeStart.ringW - Math.round(totDy / 5))));
+        } else if (shape === 'line') setBrushLineWidth(Math.max(1, Math.min(maxW, resizeStart.lineW + Math.round(totDx / 5))));
+        else {
+          setBrushW(Math.max(1, Math.min(maxW, resizeStart.w + Math.round(totDx / 5))));
+          setBrushH(Math.max(1, Math.min(maxH, resizeStart.h - Math.round(totDy / 5))));
+        }
+        updateHover(e.clientX, e.clientY);  // footprint cursor reflects the new size
+        draw();
+        return;
+      }
       const dx = e.clientX - lastX, dy = e.clientY - lastY;
       lastX = e.clientX; lastY = e.clientY;
-      if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 3) moved = true;
       const cam = cam3dRef.current;
       if (active === 'orbit') {
         cam.yaw -= dx * 0.01;
@@ -2425,7 +2517,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     };
     const onUp = (e: PointerEvent) => {
       glc.releasePointerCapture?.(e.pointerId);
-      // Shift/Ctrl/Cmd+LMB click (no drag) → inspect the picked cell.
+      // Shift+LMB click (no drag) → inspect the picked cell.
       if (active === 'inspect' && !moved && gl3dRef.current) {
         const rect = glc.getBoundingClientRect();
         const idx = gl3dRef.current.pick(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
@@ -2439,6 +2531,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      // Ctrl/Cmd+wheel is reserved for cycling Input Mappings (handled by the
+      // parent container's handleWheel) — return WITHOUT stopPropagation so the
+      // event still bubbles there; don't ALSO zoom the camera. Plain wheel = zoom,
+      // and we stopPropagation so it doesn't bubble to the (inert in 3D) 2D-zoom
+      // handler and trigger a redundant draw().
+      if (e.ctrlKey || e.metaKey) return;
+      e.stopPropagation();
       const cam = cam3dRef.current;
       cam.dist = Math.max(0.2, Math.min(40, cam.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
       draw();
@@ -2548,6 +2647,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const brushRadiusRef = useRef(3);
   const brushRingWidthRef = useRef(1);
   const brushLineWidthRef = useRef(1);
+  const brush3dVolumeRef = useRef(false);
   /** First click of the two-click Line tool (grid coords); null = not staged. */
   const lineAnchorRef = useRef<{ row: number; col: number } | null>(null);
   const activeViewerRef = useRef('');
@@ -2559,6 +2659,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   useEffect(() => { brushRadiusRef.current = brushRadius; }, [brushRadius]);
   useEffect(() => { brushRingWidthRef.current = brushRingWidth; }, [brushRingWidth]);
   useEffect(() => { brushLineWidthRef.current = brushLineWidth; }, [brushLineWidth]);
+  useEffect(() => { brush3dVolumeRef.current = brush3dVolume; }, [brush3dVolume]);
   // Recompute which viewers want the zoomed-out glyph-color fallback whenever
   // the graph changes (Set Cell Looks nodes with useGlyph + fallbackToGlyphColor).
   useEffect(() => {
@@ -2643,6 +2744,20 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // cellIdx; bumping inspectDataVersion forces a re-render of all popovers.
   const [inspectPopovers, setInspectPopovers] = useState<InspectPopoverState[]>([]);
   const [hoveredInspectIdx, setHoveredInspectIdx] = useState<number | null>(null);
+  // 3D: highlight the inspected cell whose popover the user is hovering (the 2D
+  // connector line is hidden in 3D — it can't track the projection).
+  useEffect(() => {
+    if (is3D && hoveredInspectIdx != null) {
+      const w = gridWidth.current, wh = w * gridHeight.current;
+      const layer = Math.floor(hoveredInspectIdx / wh);
+      const rem = hoveredInspectIdx - layer * wh;
+      const row = Math.floor(rem / w);
+      inspectHighlight3dRef.current = [{ layer, row, col: rem - row * w }];
+    } else {
+      inspectHighlight3dRef.current = [];
+    }
+    if (is3D) draw();
+  }, [hoveredInspectIdx, is3D, draw]);
   const [pulseInspectIdx, setPulseInspectIdx] = useState<number | null>(null);
   const [focusedInspectIdx, setFocusedInspectIdx] = useState<number | null>(null);
   const inspectDataRef = useRef<Map<number, Record<string, number>>>(new Map());
@@ -2818,6 +2933,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
     return stampCacheRef.current.offsets;
   }, []);
+  /** 3D Grid CA: the stamp offsets the 3D brush uses. Flat footprint (2-tuples,
+   *  dl=0 → on the plane) unless "Extrapolate plane" is on, where it's the
+   *  VOLUMETRIC shape (3-tuples). Cached by shape/param key. */
+  const stamp3dCacheRef = useRef<{ key: string; offsets: Array<[number, number, number]> } | null>(null);
+  const currentStampOffsets3d = useCallback((): ReadonlyArray<readonly number[]> => {
+    if (!brush3dVolumeRef.current) return currentStampOffsets();
+    const shape = brushShapeRef.current, bw = brushWRef.current, bh = brushHRef.current;
+    const radius = shape === 'line' ? brushLineWidthRef.current : brushRadiusRef.current;
+    const ringW = brushRingWidthRef.current;
+    const key = `v|${shape}|${bw}|${bh}|${radius}|${ringW}`;
+    if (stamp3dCacheRef.current?.key !== key) {
+      stamp3dCacheRef.current = { key, offsets: brushShapeOffsets3d(shape, bw, bh, radius, ringW) };
+    }
+    return stamp3dCacheRef.current.offsets;
+  }, [currentStampOffsets]);
   /** Cursor-silhouette edges for the current stamp (computed lazily, cached
    *  alongside the offsets — both invalidate on the same param key). */
   const currentStampEdges = useCallback((): Array<[number, number, number, number]> => {
@@ -2891,16 +3021,19 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   //   y-plane (row fixed)   → dRow→layer, dCol→col
   //   x-plane (col fixed)   → dRow→layer, dCol→row
   const mapStampToPlane = useCallback(
-    (center: { layer: number; row: number; col: number }, offsets: ReadonlyArray<[number, number]>) => {
+    (center: { layer: number; row: number; col: number }, offsets: ReadonlyArray<readonly number[]>) => {
       const W = gridWidth.current, H = gridHeight.current, Dd = gridDepth.current;
       const axis = plane3dRef.current.axis;
       const torus = boundaryTreatmentRef.current === 'torus';
       const wrap = (v: number, n: number): number => (torus && n > 0 ? ((v % n) + n) % n : v);
       const out: Array<{ layer: number; row: number; col: number }> = [];
-      for (const [dr, dc] of offsets) {
-        if (axis === 'z') out.push({ layer: center.layer, row: wrap(center.row + dr, H), col: wrap(center.col + dc, W) });
-        else if (axis === 'y') out.push({ layer: wrap(center.layer + dr, Dd), row: center.row, col: wrap(center.col + dc, W) });
-        else out.push({ layer: wrap(center.layer + dr, Dd), row: wrap(center.row + dc, H), col: center.col });
+      for (const off of offsets) {
+        // `dl` (3rd offset, 0 in flat mode) offsets the plane's FIXED axis → a
+        // VOLUMETRIC ("extrapolated") brush. dl=0 reproduces the flat footprint.
+        const dr = off[0]!, dc = off[1]!, dl = off.length > 2 ? off[2]! : 0;
+        if (axis === 'z') out.push({ layer: wrap(center.layer + dl, Dd), row: wrap(center.row + dr, H), col: wrap(center.col + dc, W) });
+        else if (axis === 'y') out.push({ layer: wrap(center.layer + dr, Dd), row: wrap(center.row + dl, H), col: wrap(center.col + dc, W) });
+        else out.push({ layer: wrap(center.layer + dr, Dd), row: wrap(center.row + dc, H), col: wrap(center.col + dl, W) });
       }
       return out;
     }, []);
@@ -2916,8 +3049,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   paint3dRef.current = (hitLayer: number, hitRow: number, hitCol: number) => {
     const axis = plane3dRef.current.axis;
     const { r, g, b } = hexToRgb(brushColorRef.current);
-    const offsets = currentStampOffsets();
+    const offsets = currentStampOffsets3d();
     // mapStampToPlane maps each offset onto the plane's free axes (+ torus wrap).
+    // In volumetric ("Extrapolate plane") mode the offsets carry a 3rd `dl` that
+    // mapStampToPlane applies to the FIXED axis, so the shape grows into depth.
     const stampAt = (L: number, R: number, C: number): void => {
       for (const c of mapStampToPlane({ layer: L, row: R, col: C }, offsets)) {
         pendingPaintCells.current.push({ row: c.row, col: c.col, layer: c.layer, r, g, b });
@@ -4926,6 +5061,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 <span className={styles.brushShapeHint}>click 2 points</span>
               </div>
             )}
+            {is3D && (
+              <label className={styles.checkRow} title="When on, the brush shape becomes a 3D solid (sphere / shell / box / tube) that paints cells through the depth, not just a flat footprint on the interaction plane.">
+                <input type="checkbox" checked={brush3dVolume} onChange={e => setBrush3dVolume(e.target.checked)} />
+                Extrapolate plane (volumetric brush)
+              </label>
+            )}
             <hr className={styles.divider} />
             <button
               className={styles.controlButton}
@@ -5083,7 +5224,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           onRectMeasure={(rect) => { sweepRectRef.current = rect; }}
         />
       )}
-      {hoveredInspectIdx != null && (() => {
+      {!is3D && hoveredInspectIdx != null && (() => {
         const p = inspectPopovers.find(pp => pp.cellIdx === hoveredInspectIdx);
         if (!p) return null;
         const cell = gridToScreen(p.row, p.col);
@@ -5098,10 +5239,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           />
         );
       })()}
-      {sweepInspector && (() => {
+      {!is3D && sweepInspector && (() => {
         // Always draw the link line + cell outline for the transient sweep
         // popover — it's the user's primary feedback for which cell is being
-        // inspected as they drag the cursor around.
+        // inspected as they drag the cursor around. (2D only — the 3D inspector
+        // highlights the cell in the volume instead.)
         const cell = gridToScreen(sweepInspector.row, sweepInspector.col);
         if (!cell) return null;
         return (

@@ -1068,10 +1068,16 @@ export function HelpView() {
             <strong>Alt+left-drag</strong>, or <strong>right-drag</strong>) to orbit/pan,
             <strong>scroll</strong> to zoom, and hold <strong>Shift</strong> while orbiting to
             pan &mdash; Blender-style, with Z up. Click the <strong>corner gizmo</strong>'s
-            coloured axis tips (X/Y/Z, both ends) to snap to the six main views.
-            <strong>Shift</strong> (or Ctrl/Cmd) <strong>+ left-click</strong> a cell to inspect
-            it. The on-canvas <strong>3D View</strong> panel adds toggleable <strong>Axes / Grid
-            / Bounds / the corner Gizmo</strong>, <strong>Auto-orbit</strong> (+ speed), a
+            coloured axis tips (X/Y/Z, both ends) to snap to the six main views; the gizmo is
+            depth-sorted and labelled <strong>C / R / D</strong> (column / row / depth) so you can
+            read the orientation at a glance. <strong>Shift + left-click</strong> a cell to inspect
+            it &mdash; in 3D the inspected cell is <strong>highlighted in the volume</strong> while
+            you hover its popup (there's no 2D connector line). <strong>Ctrl/Cmd + left-drag</strong>
+            resizes the active brush, and <strong>Ctrl/Cmd + scroll</strong> cycles the Input
+            Mapping (it no longer also zooms). The on-canvas <strong>3D View</strong> panel adds
+            toggleable <strong>Axes / Grid / Bounds / the corner Gizmo</strong> (the Axes start at
+            the <code>(0,0,0)</code> origin corner and grow toward +column / +row / +depth),
+            <strong>Auto-orbit</strong> (+ speed), a
             <strong>Clip plane</strong> (axis X/Y/Z or the camera view, slid to cut away the
             front and see inside &mdash; the primary way to look into a dense volume), an
             <strong>Alpha blend</strong> toggle for translucent cells, a
@@ -1090,7 +1096,10 @@ export function HelpView() {
             Circle / Ring) flat in the plane &mdash; exactly like the 2D brush, including drag
             interpolation and torus wrap. The <strong>Line</strong> tool takes two clicks on the
             plane (first sets an anchor, second draws the segment). A top-down view of the Z
-            plane paints just like a 2D CA.
+            plane paints just like a 2D CA. Tick <strong>Extrapolate plane (volumetric
+            brush)</strong> to make the shape a 3D solid instead of a flat footprint &mdash; a
+            Circle becomes a sphere, a Ring a spherical shell, a Rectangle a box, and a Line a
+            tube &mdash; so one stroke paints through the depth.
           </p>
           <h3 className={styles.h3}>Transparency &amp; Indicators</h3>
           <ul className={styles.list}>
@@ -1105,8 +1114,9 @@ export function HelpView() {
           <p className={styles.p}>
             Saving a 3D model (<code>.gcaproj</code>) or a state snapshot
             (<code>.gcastate</code>) round-trips the full volume and the depth.
-            <em>Variegated Cells</em> and the WebGPU compute target are 2D-only and are
-            disabled in 3D (3D runs on WebAssembly or JavaScript).
+            <em>Variegated Cells</em> is 2D-only and is disabled in 3D, but all three compile
+            targets work in 3D &mdash; JavaScript, WebAssembly, and WebGPU (under WebGPU the GPU
+            runs the simulation and the voxel renderer reads the colours back each step).
           </p>
         </section>
 

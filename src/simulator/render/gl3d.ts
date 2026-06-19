@@ -296,6 +296,8 @@ export class Gl3DRenderer {
   /** Hovered brush FOOTPRINT — every cell the brush would affect, drawn as
    *  wireframe cube cursors. Empty = no hover. */
   private hoverCells: ReadonlyArray<{ layer: number; row: number; col: number }> = [];
+  /** Inspected cells to highlight (e.g. on inspect-dialog hover). Empty = none. */
+  private inspectCells: ReadonlyArray<{ layer: number; row: number; col: number }> = [];
   /** Canvas clear colour [r,g,b,a] 0..1. Default transparent (shows the page). */
   private bgColor: [number, number, number, number] = [0, 0, 0, 0];
   /** Line overlay (axes/grid/bounds) + gizmo pipeline. */
@@ -351,6 +353,8 @@ export class Gl3DRenderer {
   setBrushPlane(p: { axis: 'x' | 'y' | 'z'; pos: number } | null): void { this.brushPlane = p; }
   /** Set the hovered brush footprint (every affected cell). Pass [] to clear. */
   setHoverCells(cells: ReadonlyArray<{ layer: number; row: number; col: number }>): void { this.hoverCells = cells; }
+  /** Set the inspected cells to highlight (white cube). Pass [] to clear. */
+  setInspectCells(cells: ReadonlyArray<{ layer: number; row: number; col: number }>): void { this.inspectCells = cells; }
   /** Canvas background. `null` → transparent (page shows through). */
   setBackgroundColor(c: [number, number, number, number] | null): void { this.bgColor = c ?? [0, 0, 0, 0]; }
 
@@ -521,10 +525,27 @@ export class Gl3DRenderer {
       seg(x1, y1, z0, x1, y1, z1, c, g, bl); seg(x0, y1, z0, x0, y1, z1, c, g, bl);
     }
     if (this.viz.axes) {
-      const L = Math.max(hx, hy, hz) + 1.5;
-      seg(-L, 0, 0, L, 0, 0, 0.90, 0.27, 0.27);  // X red
-      seg(0, -L, 0, 0, L, 0, 0.34, 0.82, 0.40);  // Y green
-      seg(0, 0, -L, 0, 0, L, 0.36, 0.55, 0.95);  // Z blue
+      // Origin = cell (0,0,0)'s world centre (the volume CORNER, not the middle):
+      // col=X grows +x, row=Y grows +y, layer/depth=Z grows DOWNWARD (world -z).
+      // Draw each axis from the origin toward its positive direction + an arrowhead.
+      const ox = -hx, oy = -hy, oz = hz;
+      const ext = 1.2;
+      const axis = (ex: number, ey: number, ez: number, r: number, g: number, b: number) => {
+        seg(ox, oy, oz, ex, ey, ez, r, g, b);
+        const dx = ex - ox, dy = ey - oy, dz = ez - oz;
+        const len = Math.hypot(dx, dy, dz) || 1;
+        const ux = dx / len, uy = dy / len, uz = dz / len;
+        // a perpendicular for the 2-pronged arrowhead (world-up unless axis ∥ up)
+        let px = -uy, py = ux, pz = 0;
+        if (Math.hypot(px, py, pz) < 0.1) { px = 0; py = -uz; pz = uy; }
+        const pl = Math.hypot(px, py, pz) || 1; px /= pl; py /= pl; pz /= pl;
+        const hl = 0.7;
+        seg(ex, ey, ez, ex - ux * hl + px * hl * 0.5, ey - uy * hl + py * hl * 0.5, ez - uz * hl + pz * hl * 0.5, r, g, b);
+        seg(ex, ey, ez, ex - ux * hl - px * hl * 0.5, ey - uy * hl - py * hl * 0.5, ez - uz * hl - pz * hl * 0.5, r, g, b);
+      };
+      axis(hx + ext, oy, oz, 0.90, 0.27, 0.27);                 // +col (X, red)
+      axis(ox, hy + ext, oz, 0.34, 0.82, 0.40);                 // +row (Y, green)
+      axis(ox, oy, oz - (this.D - 1) - ext, 0.36, 0.55, 0.95);  // +depth (Z, blue) — downward
     }
     this.drawLines(new Float32Array(v), gl.LINES, this.mvp);
   }
@@ -569,28 +590,29 @@ export class Gl3DRenderer {
     this.drawLines(new Float32Array(v), gl.LINES, this.mvp);
   }
 
-  /** Wireframe-cube cursors on the brush FOOTPRINT (every cell the brush would
-   *  affect). Drawn with depth test OFF so they read as an always-visible cursor
-   *  (like the 2D negative-silhouette brush), one cube per affected cell so the
-   *  exact shape/size of the brush is visible before clicking. */
-  private renderHoverCells(): void {
-    const cells = this.hoverCells;
-    if (cells.length === 0) return;
-    const gl = this.gl;
+  /** Append the 12 wireframe edges of the cube framing a cell to `out`. */
+  private pushCellCube(out: number[], c: { layer: number; row: number; col: number }, col: [number, number, number], h = 0.56): void {
     const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
-    const h = 0.56;  // slightly larger than the 0.92-scaled cube so it frames the cell
-    const r = 1.0, g = 0.85, b = 0.2;  // amber cursor
+    const cx = c.col - hx, cy = c.row - hy, cz = hz - c.layer;  // Z-up cell centre
+    const xs = [cx - h, cx + h], ys = [cy - h, cy + h], zs = [cz - h, cz + h];
+    const corner = (i: number): [number, number, number] => [xs[i & 1]!, ys[(i >> 1) & 1]!, zs[(i >> 2) & 1]!];
     const EDGES = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
-    const v: number[] = [];
-    for (const c of cells) {
-      const cx = c.col - hx, cy = c.row - hy, cz = hz - c.layer;  // Z-up cell centre
-      const xs = [cx - h, cx + h], ys = [cy - h, cy + h], zs = [cz - h, cz + h];
-      const corner = (i: number): [number, number, number] => [xs[i & 1]!, ys[(i >> 1) & 1]!, zs[(i >> 2) & 1]!];
-      for (const [a, bb] of EDGES) {
-        const A = corner(a!), B = corner(bb!);
-        v.push(A[0], A[1], A[2], r, g, b, B[0], B[1], B[2], r, g, b);
-      }
+    const [r, g, b] = col;
+    for (const [a, bb] of EDGES) {
+      const A = corner(a!), B = corner(bb!);
+      out.push(A[0], A[1], A[2], r, g, b, B[0], B[1], B[2], r, g, b);
     }
+  }
+
+  /** Wireframe-cube cursors on the brush FOOTPRINT (amber, every cell the brush
+   *  would affect) + the inspected cells (white). Drawn with depth test OFF so
+   *  they read as an always-visible cursor / highlight. */
+  private renderHoverCells(): void {
+    if (this.hoverCells.length === 0 && this.inspectCells.length === 0) return;
+    const gl = this.gl;
+    const v: number[] = [];
+    for (const c of this.hoverCells) this.pushCellCube(v, c, [1.0, 0.85, 0.2]);     // amber brush cursor
+    for (const c of this.inspectCells) this.pushCellCube(v, c, [0.95, 0.97, 1.0], 0.6); // white inspect highlight
     gl.disable(gl.DEPTH_TEST);
     this.drawLines(new Float32Array(v), gl.LINES, this.mvp);
     gl.enable(gl.DEPTH_TEST);
@@ -620,14 +642,34 @@ export class Gl3DRenderer {
     { axis: 'z', sign: -1, v: [0, 0, -1], c: [0.22, 0.34, 0.58] },
   ];
 
-  /** Corner orientation gizmo: 6 colored ± axis stubs + endpoint dots, rotating
-   *  with the camera. Clickable (gizmoHitTest) to snap to the 6 main POVs. */
+  /** Stroke glyphs for the gizmo axis letters (polylines in a unit cell, y-up).
+   *  Col=C (x), Row=R (y), Depth=D (z). */
+  private static readonly GLYPHS: Record<string, number[][][]> = {
+    C: [[[.28, .42], [-.18, .42], [-.3, .2], [-.3, -.2], [-.18, -.42], [.28, -.42]]],
+    R: [[[-.28, -.45], [-.28, .45], [.16, .45], [.28, .3], [.28, .1], [.16, -.02], [-.28, -.02]], [[-.04, -.02], [.28, -.45]]],
+    D: [[[-.28, -.45], [-.28, .45], [.05, .45], [.26, .22], [.26, -.22], [.05, -.45], [-.28, -.45]]],
+  };
+  /** Positive-axis labels: tip dir + colour + glyph (row/col/depth). */
+  private static readonly GIZMO_LABELS: ReadonlyArray<{ v: [number, number, number]; c: [number, number, number]; glyph: string }> = [
+    { v: [1, 0, 0], c: [0.96, 0.55, 0.55], glyph: 'C' },   // +X → Col
+    { v: [0, 1, 0], c: [0.55, 0.92, 0.62], glyph: 'R' },   // +Y → Row
+    { v: [0, 0, 1], c: [0.62, 0.74, 1.0], glyph: 'D' },    // +Z → Depth
+  ];
+
+  /** Corner orientation gizmo: 6 colored ± axis stubs + endpoint dots + R/C/D
+   *  letters on the positive tips, depth-correct so a back axis can't draw over a
+   *  front one. Rotates with the camera; clickable (gizmoHitTest) for the 6 POVs. */
   private renderGizmo(): void {
     if (!this.viz.gizmo) return;
     const gl = this.gl;
     const S = this.gizmoSizePx();
     gl.viewport(10, 10, S, S);
-    gl.disable(gl.DEPTH_TEST);
+    // Depth-correct self-occlusion: clear ONLY the gizmo region's depth (scissor),
+    // then draw with depth test ON so the nearer (front) axes occlude the back ones.
+    gl.enable(gl.SCISSOR_TEST); gl.scissor(10, 10, S, S);
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.enable(gl.DEPTH_TEST);
     const giz = this.gizmoMatrix();
     const lines: number[] = [];
     const pts: number[] = [];
@@ -637,6 +679,29 @@ export class Gl3DRenderer {
     }
     this.drawLines(new Float32Array(lines), gl.LINES, giz);
     this.drawLines(new Float32Array(pts), gl.POINTS, giz, Math.max(6, S * 0.14));
+    // Axis letters: project each positive tip → NDC, draw the glyph there with an
+    // identity MVP (NDC coords), depth OFF so it's always legible on top. Skip a
+    // letter whose tip faces away from the camera (it'd clutter the gizmo centre).
+    gl.disable(gl.DEPTH_TEST);
+    const m = giz;
+    const sz = 0.24;
+    const letters: number[] = [];
+    for (const lab of Gl3DRenderer.GIZMO_LABELS) {
+      const facing = lab.v[0] * this.camDir[0] + lab.v[1] * this.camDir[1] + lab.v[2] * this.camDir[2];
+      if (facing < -0.15) continue;  // tip is behind — skip its letter
+      const vx = lab.v[0], vy = lab.v[1], vz = lab.v[2];
+      const w = (m[3]! * vx + m[7]! * vy + m[11]! * vz + m[15]!) || 1;
+      const nx = ((m[0]! * vx + m[4]! * vy + m[8]! * vz + m[12]!) / w) * 1.22;
+      const ny = ((m[1]! * vx + m[5]! * vy + m[9]! * vz + m[13]!) / w) * 1.22;
+      const [r, g, b] = lab.c;
+      for (const stroke of Gl3DRenderer.GLYPHS[lab.glyph]!) {
+        for (let i = 0; i < stroke.length - 1; i++) {
+          letters.push(nx + stroke[i]![0]! * sz, ny + stroke[i]![1]! * sz, 0, r, g, b,
+            nx + stroke[i + 1]![0]! * sz, ny + stroke[i + 1]![1]! * sz, 0, r, g, b);
+        }
+      }
+    }
+    this.drawLines(new Float32Array(letters), gl.LINES, mat4Identity());  // identity → NDC
     gl.enable(gl.DEPTH_TEST);
     gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
   }
