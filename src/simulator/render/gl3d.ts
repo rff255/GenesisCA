@@ -107,9 +107,12 @@ function mat4Mul(a: Mat4, b: Mat4): Mat4 {
 }
 
 // Z-up orbit camera (Blender convention): the XY plane is the horizon (the 2D-CA
-// plane), Z is vertical with layer increasing DOWNWARD, so a top-down view shows
-// the grid like a 2D CA. `target` is the orbit pivot (moved by screen-space pan);
-// `dist` is a multiple of the largest grid dimension.
+// plane), Z is vertical with layer/depth increasing DOWNWARD, so a top-down view
+// shows the grid like the 2D CA — col→+X (right), row→-Y (DOWN the screen),
+// depth→-Z (into the screen). At the ±Depth POV the view is parallel to Z, so
+// setCamera swaps in a Y-up (the "roll" that keeps row pointing down). `target`
+// is the orbit pivot (moved by screen-space pan); `dist` is a multiple of the
+// largest grid dimension.
 export interface Camera3D { yaw: number; pitch: number; dist: number; target: [number, number, number]; }
 // Clip/slice plane. `axis` 'x'|'y'|'z' cuts along a grid axis; 'camera' cuts along
 // the current view direction (peel toward the viewer).
@@ -178,8 +181,10 @@ void main() {
   float rem = aCellIndex - layer * uWH;
   float row = floor(rem / uW);
   float col = rem - row * uW;
-  // Z-up: XY is the horizon plane; layer increases DOWNWARD (layer 0 on top).
-  vec3 centre = vec3(col - uHalf.x, row - uHalf.y, uHalf.z - layer);
+  // Z-up. col→+X (right); row→-Y so a top-down view matches the 2D CA (row
+  // increases DOWN the screen); layer/depth→-Z (into the screen / downward,
+  // layer 0 on top).
+  vec3 centre = vec3(col - uHalf.x, uHalf.y - row, uHalf.z - layer);
   vWorld = centre;
   vColor = aColor;
   vNormal = aNormal;
@@ -241,7 +246,7 @@ void main() {
   float rem = aCellIndex - layer * uWH;
   float row = floor(rem / uW);
   float col = rem - row * uW;
-  vec3 centre = vec3(col - uHalf.x, row - uHalf.y, uHalf.z - layer);
+  vec3 centre = vec3(col - uHalf.x, uHalf.y - row, uHalf.z - layer);
   vWorldP = centre;
   vPickIdx = aCellIndex;
   gl_Position = uMVP * vec4(aPos * uCubeScale + centre, 1.0);
@@ -367,7 +372,15 @@ export class Gl3DRenderer {
     this.camForward = [-dir[0], -dir[1], -dir[2]];
     this.camDir = dir;
     const proj = mat4Perspective(Math.PI / 4, aspect || 1, 0.05, r * 8 + 100);
-    const view = mat4LookAt(eye, [t[0], t[1], t[2]], WORLD_UP);
+    // Camera "roll" at the ±Depth POVs: looking down/up the Z (depth) axis makes
+    // WORLD_UP (+Z) parallel to the view → lookAt degenerate. Override with a
+    // Y-up so the top view matches the 2D CA (look down -Z → up +Y → col-right,
+    // row-down) and the bottom view mirrors it (look up +Z → up -Y). General
+    // orbit (clamped to |pitch|≤1.5 → |fwd.z|≤0.997) keeps WORLD_UP.
+    const up: [number, number, number] = Math.abs(this.camForward[2]) > 0.999
+      ? [0, this.camForward[2] > 0 ? -1 : 1, 0]
+      : WORLD_UP;
+    const view = mat4LookAt(eye, [t[0], t[1], t[2]], up);
     this.mvp = mat4Mul(proj, view);
   }
 
@@ -419,7 +432,7 @@ export class Gl3DRenderer {
       const rem = idx - layer * WH;
       const row = Math.floor(rem / W);
       const col = rem - row * W;
-      const cx = col - hx, cy = row - hy, cz = hz - layer;  // Z-up
+      const cx = col - hx, cy = hy - row, cz = hz - layer;  // Z-up (row→-Y)
       // clip-space w (depth proxy): row3 of MVP · centre
       keys[k] = m[2]! * cx + m[6]! * cy + m[10]! * cz + m[14]!;
     }
@@ -526,9 +539,10 @@ export class Gl3DRenderer {
     }
     if (this.viz.axes) {
       // Origin = cell (0,0,0)'s world centre (the volume CORNER, not the middle):
-      // col=X grows +x, row=Y grows +y, layer/depth=Z grows DOWNWARD (world -z).
+      // col→+X (right), row→-Y (DOWN the screen in the top view), layer/depth→-Z
+      // (into the screen / downward). cell(0,0,0) world = (-hx, +hy, +hz).
       // Draw each axis from the origin toward its positive direction + an arrowhead.
-      const ox = -hx, oy = -hy, oz = hz;
+      const ox = -hx, oy = hy, oz = hz;
       const ext = 1.2;
       const axis = (ex: number, ey: number, ez: number, r: number, g: number, b: number) => {
         seg(ox, oy, oz, ex, ey, ez, r, g, b);
@@ -543,9 +557,9 @@ export class Gl3DRenderer {
         seg(ex, ey, ez, ex - ux * hl + px * hl * 0.5, ey - uy * hl + py * hl * 0.5, ez - uz * hl + pz * hl * 0.5, r, g, b);
         seg(ex, ey, ez, ex - ux * hl - px * hl * 0.5, ey - uy * hl - py * hl * 0.5, ez - uz * hl - pz * hl * 0.5, r, g, b);
       };
-      axis(hx + ext, oy, oz, 0.90, 0.27, 0.27);                 // +col (X, red)
-      axis(ox, hy + ext, oz, 0.34, 0.82, 0.40);                 // +row (Y, green)
-      axis(ox, oy, oz - (this.D - 1) - ext, 0.36, 0.55, 0.95);  // +depth (Z, blue) — downward
+      axis(hx + ext, oy, oz, 0.90, 0.27, 0.27);                 // +col → +X (red, right)
+      axis(ox, -hy - ext, oz, 0.34, 0.82, 0.40);                // +row → -Y (green, down-screen)
+      axis(ox, oy, oz - (this.D - 1) - ext, 0.36, 0.55, 0.95);  // +depth → -Z (blue, into screen)
     }
     this.drawLines(new Float32Array(v), gl.LINES, this.mvp);
   }
@@ -573,7 +587,7 @@ export class Gl3DRenderer {
       seg(x0, y0, z, x1, y0, z, er, eg, eb); seg(x1, y0, z, x1, y1, z, er, eg, eb);
       seg(x1, y1, z, x0, y1, z, er, eg, eb); seg(x0, y1, z, x0, y0, z, er, eg, eb);
     } else if (p.axis === 'y') {
-      const y = p.pos - hy;  // world Y of the row
+      const y = hy - p.pos;  // world Y of the row (row→-Y)
       const sx = Math.max(1, Math.ceil(this.W / 100)), sz = Math.max(1, Math.ceil(this.D / 100));
       for (let i = 0; i <= this.W; i += sx) { const x = x0 + i; seg(x, y, z0, x, y, z1, gr, gg, gb); }
       for (let k = 0; k <= this.D; k += sz) { const z = z0 + k; seg(x0, y, z, x1, y, z, gr, gg, gb); }
@@ -593,7 +607,7 @@ export class Gl3DRenderer {
   /** Append the 12 wireframe edges of the cube framing a cell to `out`. */
   private pushCellCube(out: number[], c: { layer: number; row: number; col: number }, col: [number, number, number], h = 0.56): void {
     const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
-    const cx = c.col - hx, cy = c.row - hy, cz = hz - c.layer;  // Z-up cell centre
+    const cx = c.col - hx, cy = hy - c.row, cz = hz - c.layer;  // Z-up cell centre (row→-Y)
     const xs = [cx - h, cx + h], ys = [cy - h, cy + h], zs = [cz - h, cz + h];
     const corner = (i: number): [number, number, number] => [xs[i & 1]!, ys[(i >> 1) & 1]!, zs[(i >> 2) & 1]!];
     const EDGES = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
@@ -651,9 +665,9 @@ export class Gl3DRenderer {
   };
   /** Positive-axis labels: tip dir + colour + glyph (row/col/depth). */
   private static readonly GIZMO_LABELS: ReadonlyArray<{ v: [number, number, number]; c: [number, number, number]; glyph: string }> = [
-    { v: [1, 0, 0], c: [0.96, 0.55, 0.55], glyph: 'C' },   // +X → Col
-    { v: [0, 1, 0], c: [0.55, 0.92, 0.62], glyph: 'R' },   // +Y → Row
-    { v: [0, 0, 1], c: [0.62, 0.74, 1.0], glyph: 'D' },    // +Z → Depth
+    { v: [1, 0, 0], c: [0.96, 0.55, 0.55], glyph: 'C' },    // +col → +X
+    { v: [0, -1, 0], c: [0.55, 0.92, 0.62], glyph: 'R' },   // +row → -Y
+    { v: [0, 0, -1], c: [0.62, 0.74, 1.0], glyph: 'D' },    // +depth → -Z
   ];
 
   /** Corner orientation gizmo: 6 colored ± axis stubs + endpoint dots + R/C/D
@@ -679,25 +693,28 @@ export class Gl3DRenderer {
     }
     this.drawLines(new Float32Array(lines), gl.LINES, giz);
     this.drawLines(new Float32Array(pts), gl.POINTS, giz, Math.max(6, S * 0.14));
-    // Axis letters: project each positive tip → NDC, draw the glyph there with an
-    // identity MVP (NDC coords), depth OFF so it's always legible on top. Skip a
-    // letter whose tip faces away from the camera (it'd clutter the gizmo centre).
+    // Axis letters (C/R/D on +col/+row/+depth): project each tip → gizmo NDC, then
+    // nudge the glyph a CONSTANT radial offset beyond the tip so it sits just
+    // outside the endpoint dot at a stable size/position from every angle. Drawn
+    // with an identity MVP (NDC coords) + depth OFF so all three stay legible —
+    // no back-face culling (that was the "letters disappear at some angles" bug).
     gl.disable(gl.DEPTH_TEST);
     const m = giz;
-    const sz = 0.24;
+    const sz = 0.26;          // glyph half-size in gizmo NDC (uniform)
+    const pushOut = 0.24;     // radial nudge beyond the tip (tip projects to ~0.63)
     const letters: number[] = [];
     for (const lab of Gl3DRenderer.GIZMO_LABELS) {
-      const facing = lab.v[0] * this.camDir[0] + lab.v[1] * this.camDir[1] + lab.v[2] * this.camDir[2];
-      if (facing < -0.15) continue;  // tip is behind — skip its letter
       const vx = lab.v[0], vy = lab.v[1], vz = lab.v[2];
       const w = (m[3]! * vx + m[7]! * vy + m[11]! * vz + m[15]!) || 1;
-      const nx = ((m[0]! * vx + m[4]! * vy + m[8]! * vz + m[12]!) / w) * 1.22;
-      const ny = ((m[1]! * vx + m[5]! * vy + m[9]! * vz + m[13]!) / w) * 1.22;
+      let px = (m[0]! * vx + m[4]! * vy + m[8]! * vz + m[12]!) / w;
+      let py = (m[1]! * vx + m[5]! * vy + m[9]! * vz + m[13]!) / w;
+      const len = Math.hypot(px, py) || 1;
+      px += (px / len) * pushOut; py += (py / len) * pushOut;
       const [r, g, b] = lab.c;
       for (const stroke of Gl3DRenderer.GLYPHS[lab.glyph]!) {
         for (let i = 0; i < stroke.length - 1; i++) {
-          letters.push(nx + stroke[i]![0]! * sz, ny + stroke[i]![1]! * sz, 0, r, g, b,
-            nx + stroke[i + 1]![0]! * sz, ny + stroke[i + 1]![1]! * sz, 0, r, g, b);
+          letters.push(px + stroke[i]![0]! * sz, py + stroke[i]![1]! * sz, 0, r, g, b,
+            px + stroke[i + 1]![0]! * sz, py + stroke[i + 1]![1]! * sz, 0, r, g, b);
         }
       }
     }
@@ -763,12 +780,13 @@ export class Gl3DRenderer {
     // grid index) → world. For 'z' (layer) the mapping is hz - layer.
     const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
     const ai = planeAxis === 'x' ? 0 : planeAxis === 'y' ? 1 : 2;
-    const planeWorld = planeAxis === 'x' ? planePos - hx : planeAxis === 'y' ? planePos - hy : hz - planePos;
+    // row→-Y world mapping: world_y = hy - row, so the row plane sits at hy - pos.
+    const planeWorld = planeAxis === 'x' ? planePos - hx : planeAxis === 'y' ? hy - planePos : hz - planePos;
     if (Math.abs(dir[ai]!) < 1e-6) return null;
     const t = (planeWorld - near[ai]!) / dir[ai]!;
     if (t < 0) return null;
     const wx = near[0]! + dir[0]! * t, wy = near[1]! + dir[1]! * t, wz = near[2]! + dir[2]! * t;
-    const col = Math.round(wx + hx), row = Math.round(wy + hy), layer = Math.round(hz - wz);
+    const col = Math.round(wx + hx), row = Math.round(hy - wy), layer = Math.round(hz - wz);
     if (col < 0 || col >= this.W || row < 0 || row >= this.H || layer < 0 || layer >= this.D) return null;
     return { layer, row, col };
   }

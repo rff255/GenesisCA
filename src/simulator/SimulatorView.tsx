@@ -94,7 +94,7 @@ function brushShapeOffsets(
  *  (the row size also drives the layer extent). The 3rd value offsets the plane's
  *  FIXED axis (mapped by mapStampToPlane), so a flat disc becomes a ball etc. */
 function brushShapeOffsets3d(
-  shape: BrushShape, bw: number, bh: number, radius: number, ringWidth: number,
+  shape: BrushShape, bw: number, bh: number, radius: number, ringWidth: number, boxDepth: number,
 ): Array<[number, number, number]> {
   const out: Array<[number, number, number]> = [];
   if (shape === 'circle' || shape === 'ring') {
@@ -121,9 +121,9 @@ function brushShapeOffsets3d(
           if (Math.hypot(dr, dc, dl) <= Math.max(0.49, half - 0.01)) out.push([dr, dc, dl]);
     return out;
   }
-  // rect → box: bw (col) × bh (row) × bh (layer); off-centre bias mirrors the 2D rect.
-  const halfW = Math.floor((bw - 1) / 2), halfH = Math.floor((bh - 1) / 2);
-  for (let dl = -halfH; dl <= halfH + ((bh - 1) % 2); dl++)
+  // rect → box: bw (col) × bh (row) × boxDepth (layer); off-centre bias mirrors the 2D rect.
+  const halfW = Math.floor((bw - 1) / 2), halfH = Math.floor((bh - 1) / 2), halfD = Math.floor((boxDepth - 1) / 2);
+  for (let dl = -halfD; dl <= halfD + ((boxDepth - 1) % 2); dl++)
     for (let dr = -halfH; dr <= halfH + ((bh - 1) % 2); dr++)
       for (let dc = -halfW; dc <= halfW + ((bw - 1) % 2); dc++)
         out.push([dr, dc, dl]);
@@ -402,6 +402,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // 3D Grid CA: when true, the brush shape is VOLUMETRIC (sphere/box/shell)
   // instead of a flat footprint on the interaction plane ("Extrapolate plane").
   const [brush3dVolume, setBrush3dVolume] = useState<boolean>(!!saved.current.brush3dVolume);
+  // 3D Grid CA: depth (number of layers) of the VOLUMETRIC box brush — independent
+  // of the row size (H), so a box can be e.g. wide+tall+shallow.
+  const [brushBoxDepth, setBrushBoxDepth] = useState<number>((saved.current.brushBoxDepth as number) ?? 3);
   const [brushMapping, setBrushMapping] = useState((saved.current.brushMapping as string) ?? '');
   // User-dragged height (px) of the right panel's brush section. null = auto
   // (shrink to content, the default). Set via the splitter between the Input
@@ -521,7 +524,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         localStorage.setItem(SIM_SETTINGS_KEY, JSON.stringify({
           targetFps, unlimitedFps, gensPerFrame, unlimitedGens,
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines,
-          brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume,
+          brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
           infinityCanvas, indicatorVizModes, recordFormat, brushSectionH,
           indicatorHiddenCategories: Object.fromEntries(
             Object.entries(indicatorHiddenCategories)
@@ -534,7 +537,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -2405,14 +2408,44 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       hoverCells3dRef.current = hit ? footprintFor(hit) : EMPTY_HOVER_CELLS;
       return true;
     };
-    // Snap the camera to one of the 6 main POVs (Blender-style gizmo click).
-    // eye sits on the +sign·axis side looking at the target; pitch ±1.49 (just
-    // shy of the pole) for top/bottom so the camera basis stays non-degenerate.
+    // 3D sweep inspect: while Shift+LMB is held and dragged, a SINGLE transient
+    // popover (sweepInspector) shows the front-most voxel under the cursor — its
+    // data refreshes as you sweep, and the cell is highlighted in the volume —
+    // without pinning a popover per cell (mirrors the 2D sweep inspector). The
+    // popover stays anchored at the press point (no 2D connector line in 3D); the
+    // highlight tracks the cursor. Picks the rendered voxel via the colour-id
+    // `pick()` (what the user sees), not the interaction plane.
+    const sweepPick3d = (clientX: number, clientY: number, isDown: boolean): void => {
+      const r = gl3dRef.current;
+      if (!r) return;
+      const rect = glc.getBoundingClientRect();
+      const idx = r.pick(clientX - rect.left, clientY - rect.top, rect.width, rect.height);
+      if (idx < 0) return;  // cursor not over a voxel — keep showing the last cell
+      const W = gridWidth.current, WH = W * gridHeight.current;
+      const layer = Math.floor(idx / WH), rem = idx - layer * WH, row = Math.floor(rem / W), col = rem - row * W;
+      const prev = sweepInspectorRef.current;
+      if (!prev || prev.cellIdx !== idx) {
+        // Anchor x/y at the press point (isDown) and keep it as the cursor sweeps.
+        const x = isDown || !prev ? clientX : prev.x;
+        const y = isDown || !prev ? clientY : prev.y;
+        const next: InspectPopoverState = { cellIdx: idx, row, col, x, y };
+        sweepInspectorRef.current = next;
+        setSweepInspector(next);
+      }
+      inspectHighlight3dRef.current = [{ layer, row, col }];
+    };
+    // Snap the camera so the clicked axis tip points INTO the screen (look ALONG
+    // it). The gizmo labels C/R/D sit on +col(+X) / +row(-Y) / +depth(-Z), so
+    // clicking D (the -Z tip) gives the TOP / 2D-matching view (look straight
+    // down -Z). dir = target→eye = -tipV, where the clicked stub is tipV =
+    // sign·unit(axis). For depth, pitch = ±π/2 EXACTLY — the renderer's pole-up
+    // override then rolls the camera so row stays pointing down (top) / up
+    // (bottom). yaw is kept for the depth POVs (dir is ±Z regardless of yaw).
     const setPov = (axis: 'x' | 'y' | 'z', sign: 1 | -1) => {
       const cam = cam3dRef.current;
-      if (axis === 'x') { cam.yaw = sign > 0 ? 0 : Math.PI; cam.pitch = 0; }
-      else if (axis === 'y') { cam.yaw = sign > 0 ? Math.PI / 2 : -Math.PI / 2; cam.pitch = 0; }
-      else { cam.pitch = sign > 0 ? 1.49 : -1.49; }  // top / bottom — keep current yaw
+      if (axis === 'x') { cam.yaw = sign > 0 ? Math.PI : 0; cam.pitch = 0; }
+      else if (axis === 'y') { cam.yaw = sign > 0 ? -Math.PI / 2 : Math.PI / 2; cam.pitch = 0; }
+      else { cam.pitch = sign > 0 ? -Math.PI / 2 : Math.PI / 2; }  // +Z tip→bottom, -Z(D)→top
       draw();
     };
     const onDown = (e: PointerEvent) => {
@@ -2449,7 +2482,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         resizeStart.radius = brushRadiusRef.current; resizeStart.ringW = brushRingWidthRef.current;
         resizeStart.lineW = brushLineWidthRef.current;
       }
-      else if (e.button === 0 && e.shiftKey) active = 'inspect'; // Shift+LMB → inspect (on up)
+      else if (e.button === 0 && e.shiftKey) { active = 'inspect'; sweepPick3d(e.clientX, e.clientY, true); draw(); } // Shift+LMB → sweep inspect (drag) / pin (click)
       else if (e.button === 0 && brushShapeRef.current === 'line') {
         // Line tool: two clicks. First stages a plane-cell anchor (no paint); the
         // second draws the capsule line between them. No drag-paint in this mode.
@@ -2473,7 +2506,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 3) moved = true;
       if (!active || active === 'inspect') {
         // Idle / inspect-armed: update the footprint cursor (redraw on change).
-        if (updateHover(e.clientX, e.clientY)) draw();
+        let changed = updateHover(e.clientX, e.clientY);
+        // Inspect-armed drag → sweep the front voxel under the cursor.
+        if (active === 'inspect') { sweepPick3d(e.clientX, e.clientY, false); changed = true; }
+        if (changed) draw();
         return;
       }
       if (active === 'resize') {
@@ -2517,11 +2553,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     };
     const onUp = (e: PointerEvent) => {
       glc.releasePointerCapture?.(e.pointerId);
-      // Shift+LMB click (no drag) → inspect the picked cell.
-      if (active === 'inspect' && !moved && gl3dRef.current) {
-        const rect = glc.getBoundingClientRect();
-        const idx = gl3dRef.current.pick(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
-        if (idx >= 0) openInspect3dRef.current?.(idx, e.clientX, e.clientY);
+      if (active === 'inspect') {
+        // End of a sweep: discard the transient popover + its highlight. A no-drag
+        // release PINS the cell (single persistent inspect popover); a drag just
+        // discards (mirrors the 2D sweep inspector's `!moved` rule).
+        if (sweepInspectorRef.current) { sweepInspectorRef.current = null; setSweepInspector(null); }
+        inspectHighlight3dRef.current = [];
+        if (!moved && gl3dRef.current) {
+          const rect = glc.getBoundingClientRect();
+          const idx = gl3dRef.current.pick(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
+          if (idx >= 0) openInspect3dRef.current?.(idx, e.clientX, e.clientY);
+        }
+        draw();
       }
       // Commit the final coalesced stamp synchronously (the rAF may not have
       // fired yet on a quick click-release), mirroring the 2D mouse-up path.
@@ -2648,6 +2691,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const brushRingWidthRef = useRef(1);
   const brushLineWidthRef = useRef(1);
   const brush3dVolumeRef = useRef(false);
+  const brushBoxDepthRef = useRef(3);
   /** First click of the two-click Line tool (grid coords); null = not staged. */
   const lineAnchorRef = useRef<{ row: number; col: number } | null>(null);
   const activeViewerRef = useRef('');
@@ -2660,6 +2704,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   useEffect(() => { brushRingWidthRef.current = brushRingWidth; }, [brushRingWidth]);
   useEffect(() => { brushLineWidthRef.current = brushLineWidth; }, [brushLineWidth]);
   useEffect(() => { brush3dVolumeRef.current = brush3dVolume; }, [brush3dVolume]);
+  useEffect(() => { brushBoxDepthRef.current = brushBoxDepth; }, [brushBoxDepth]);
   // Recompute which viewers want the zoomed-out glyph-color fallback whenever
   // the graph changes (Set Cell Looks nodes with useGlyph + fallbackToGlyphColor).
   useEffect(() => {
@@ -2941,10 +2986,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (!brush3dVolumeRef.current) return currentStampOffsets();
     const shape = brushShapeRef.current, bw = brushWRef.current, bh = brushHRef.current;
     const radius = shape === 'line' ? brushLineWidthRef.current : brushRadiusRef.current;
-    const ringW = brushRingWidthRef.current;
-    const key = `v|${shape}|${bw}|${bh}|${radius}|${ringW}`;
+    const ringW = brushRingWidthRef.current, boxD = brushBoxDepthRef.current;
+    const key = `v|${shape}|${bw}|${bh}|${radius}|${ringW}|${boxD}`;
     if (stamp3dCacheRef.current?.key !== key) {
-      stamp3dCacheRef.current = { key, offsets: brushShapeOffsets3d(shape, bw, bh, radius, ringW) };
+      stamp3dCacheRef.current = { key, offsets: brushShapeOffsets3d(shape, bw, bh, radius, ringW, boxD) };
     }
     return stamp3dCacheRef.current.offsets;
   }, [currentStampOffsets]);
@@ -5064,8 +5109,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             {is3D && (
               <label className={styles.checkRow} title="When on, the brush shape becomes a 3D solid (sphere / shell / box / tube) that paints cells through the depth, not just a flat footprint on the interaction plane.">
                 <input type="checkbox" checked={brush3dVolume} onChange={e => setBrush3dVolume(e.target.checked)} />
-                Extrapolate plane (volumetric brush)
+                Volumetric Brush
               </label>
+            )}
+            {is3D && brush3dVolume && brushShape === 'rect' && (
+              <div className={styles.fieldRow}>
+                <span className={styles.statLabel}>Depth</span>
+                <NumberField className={styles.brushInput} min={1} max={(gridDepth.current || simDepth) * 2} integer value={brushBoxDepth}
+                  onNumber={setBrushBoxDepth} />
+                <span className={styles.brushShapeHint}>layers</span>
+              </div>
             )}
             <hr className={styles.divider} />
             <button
