@@ -342,9 +342,10 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
           </div>
 
           {/* Topology — which layer(s) the model uses. Grid Cells is the classic
-              lattice CA; Bond-Graph Agents is the agent rule graph (hard-disabled
-              this milestone — coming soon). ≥1 must stay checked (reducer-enforced;
-              Grid Cells is also UI-disabled when it's the only checked one). */}
+              lattice CA; Bond-Graph Agents is the off-lattice agent rule graph
+              (a second graph, switchable via the sub-tab strip above the canvas).
+              ≥1 must stay checked (reducer-enforced; whichever is the only checked
+              one is also UI-disabled so the user can't uncheck the last one). */}
           <div style={{ marginTop: 14, borderTop: '1px solid #333', paddingTop: 10 }}>
             <label className={styles.fieldLabel} style={{ marginBottom: 4 }}>Topology</label>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 2 }}>
@@ -368,21 +369,21 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 </span>
               </label>
               <label
-                style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'not-allowed', fontSize: '0.72rem', opacity: 0.55 }}
-                title="Coming soon — the agent rule graph is not yet available"
+                style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: (topo.agents && !topo.gridCells) ? 'not-allowed' : 'pointer', fontSize: '0.72rem', opacity: (topo.agents && !topo.gridCells) ? 0.55 : 1 }}
+                title={(topo.agents && !topo.gridCells) ? 'At least one topology must stay enabled.' : undefined}
               >
                 <input
                   type="checkbox"
                   checked={topo.agents}
-                  disabled={true}
+                  disabled={topo.agents && !topo.gridCells}
                   onChange={e => updateTopologyMode({ agents: e.target.checked })}
                   style={{ marginTop: 2 }}
                 />
                 <span>
-                  <strong>Bond-Graph Agents <em>(coming soon)</em></strong>
+                  <strong>Bond-Graph Agents</strong>
                   <br />
                   <span style={{ color: '#888', fontSize: '0.66rem' }}>
-                    Off-lattice agents joined by bonds that grow and divide into shape. Not available this release.
+                    Off-lattice agents that float in continuous space, joined by bonds that grow and divide into shape (morphogenesis). Adds a second <strong>Agents</strong> rule graph (switch graphs from the tab strip above the canvas). Runs on the Debug / Reference (JS) engine this release.
                   </span>
                 </span>
               </label>

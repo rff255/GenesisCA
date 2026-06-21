@@ -4,6 +4,7 @@ import type { CAModel } from '../../../model/types';
 import { getNodeDef } from './registry';
 import { CURRENT_VIEWER_SENTINEL } from './SetCellLooksNode';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../compiler/expression/parser';
+import { getActiveGraphKind } from '../graphState';
 
 /** Return a list of human-readable issue strings for a node's configuration.
  *  Empty array = node is fully configured.
@@ -457,6 +458,14 @@ export function detectCapabilityRequirements(
   if (def.requirements.lattice2d && model.properties.dimension === '3d') {
     issues.push(`"${def.label}" uses the 2-axis neighbour-index codec, which can't represent a 3D offset. In a 3D model use Get Neighbors Attribute or Get Neighbor Attribute by Tag instead.`);
   }
+  // Bond-Graph Agents: agent-world nodes need the Agents topology enabled. The
+  // active-sub-tab half of the gate (`lattice` hidden on the Agents graph,
+  // `bondGraph` hidden on the Cells graph) lives in `isNodeAvailable` via the
+  // `activeGraphKind` module global — it can't be expressed from `(nodeType,
+  // model)` alone, so the validation badge only flags the model-level half.
+  if (def.requirements.bondGraph && !model.topologyMode?.agents) {
+    issues.push(`"${def.label}" requires the Bond-Graph Agents topology. Enable it in Model Properties > Execution > Topology.`);
+  }
   return issues;
 }
 
@@ -468,6 +477,17 @@ export function isNodeAvailable(def: NodeTypeDef, model: CAModel): boolean {
   if (def.requirements.async && model.properties.updateMode !== 'asynchronous') return false;
   if (def.requirements.variegated && !model.variegatedCells?.enabled) return false;
   if (def.requirements.lattice2d && model.properties.dimension === '3d') return false;
+  // Bond-Graph Agents: gate by BOTH the model topology AND the active sub-tab.
+  // An agent node needs the Agents topology enabled and is only offered while
+  // the user edits the Agents graph; a lattice node is hidden on the Agents
+  // graph. The active-graph kind is a module global (default `'cells'`), so a
+  // single-graph model is unaffected.
+  const kind = getActiveGraphKind();
+  if (def.requirements.bondGraph) {
+    if (!model.topologyMode?.agents) return false;
+    if (kind === 'cells') return false;
+  }
+  if (def.requirements.lattice && kind === 'agents') return false;
   return true;
 }
 
@@ -541,16 +561,44 @@ export function detectWasmIncompatibilities(
   return [];
 }
 
-/** Top-level model check — async + WebGPU is incompatible. Returns a
- *  human-readable message when the combination is invalid, else null.
- *  Intended for the Properties panel's status line and the
+/** Bond-Graph Agents: the agent engine is JS-reference-only for v1 (Decision
+ *  D-TARGET) — the agent loop + structural-phase reads are not yet ported to
+ *  the WASM/WebGPU emitters. A model with the Agents topology enabled is
+ *  force-restricted to the JS (Debug/Reference) compile target. Returns the
+ *  restriction message when a non-JS target is selected on an agent model, else
+ *  null. The simulator's compile path consumes this to force the JS target (so
+ *  it's an enforcement, not just a badge), and the Properties status line shows
+ *  it. The CELL field path is unaffected — only the AGENT engine forces JS. */
+export function detectAgentTargetRestriction(model: CAModel): string | null {
+  if (!model.topologyMode?.agents) return null;
+  if (model.properties.useWebGPU || model.properties.useWasm) {
+    return 'Bond-Graph Agents run on the Debug / Reference (JS) engine this release. WebAssembly and WebGPU agent compilation are a later milestone — the simulator will use the JS target.';
+  }
+  return null;
+}
+
+/** Top-level model check — async + WebGPU is incompatible, and an agent model
+ *  forces JS. Returns a human-readable message when the WebGPU target is
+ *  invalid, else null. Intended for the Properties panel's status line and the
  *  WebGPU-compile entry point. */
 export function detectWebGPUModelIncompatibilities(model: CAModel): string | null {
   if (!model.properties.useWebGPU) return null;
+  // Agents force JS (D-TARGET) — surfaces before the async check so an agent
+  // model on WebGPU reads the right reason.
+  const agentRestriction = detectAgentTargetRestriction(model);
+  if (agentRestriction) return agentRestriction;
   if (model.properties.updateMode === 'asynchronous') {
     return 'WebGPU target requires synchronous update mode. Switch to Synchronous in Model Properties or change target.';
   }
   return null;
+}
+
+/** Top-level model check for the WASM target — currently only the agent-model
+ *  force-JS restriction (the WASM target otherwise covers the full lattice
+ *  node catalogue). Mirrors `detectWebGPUModelIncompatibilities`. */
+export function detectWasmModelIncompatibilities(model: CAModel): string | null {
+  if (!model.properties.useWasm) return null;
+  return detectAgentTargetRestriction(model);
 }
 
 /** Detect a connection-kind hazard between two ports.

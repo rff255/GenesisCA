@@ -45,6 +45,33 @@ export function setIsConnecting(val: boolean) {
 }
 
 // ---------------------------------------------------------------------------
+// Bond-Graph Agents: which rule graph the user is editing (Cells vs Agents).
+// A module global (like currentModelElementDrag) so the Palette, the unified
+// quick-add menu, and the connection-drop menu can gate the node list by the
+// active sub-tab WITHOUT prop-drilling through every consumer. ModelerView
+// owns the React state (persisted in modelerUiState) and pushes it here; the
+// gating reads it via `getActiveGraphKind()`. Default `'cells'` so a 1-graph
+// model (the overwhelming majority) behaves exactly as before.
+// ---------------------------------------------------------------------------
+
+export type ActiveGraphKind = 'cells' | 'agents';
+let activeGraphKindGlobal: ActiveGraphKind = 'cells';
+const activeGraphKindListeners = new Set<() => void>();
+
+export function getActiveGraphKind(): ActiveGraphKind {
+  return activeGraphKindGlobal;
+}
+export function subscribeActiveGraphKind(fn: () => void): () => void {
+  activeGraphKindListeners.add(fn);
+  return () => { activeGraphKindListeners.delete(fn); };
+}
+export function setActiveGraphKind(val: ActiveGraphKind): void {
+  if (activeGraphKindGlobal === val) return;
+  activeGraphKindGlobal = val;
+  activeGraphKindListeners.forEach(fn => fn());
+}
+
+// ---------------------------------------------------------------------------
 // Canvas view settings (port labels / grid / snap) — persisted.
 // GraphEditor unmounts on every Modeler → Simulator tab switch, so its local
 // useState seeds from these module globals; the globals themselves write
