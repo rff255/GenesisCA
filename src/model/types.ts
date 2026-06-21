@@ -559,12 +559,68 @@ export interface Variable {
 
 /** Bond-Graph Morphogenesis: which topology layer(s) the model uses. At least
  *  one must be true (reducer-enforced). `gridCells` is the classic lattice CA;
- *  `agents` is the bond-graph agent layer (UI rendered but hard-disabled this
- *  milestone — "coming soon"). NB: distinct from the legacy `ModelProperties.topology`
- *  string enum — leave that untouched. */
+ *  `agents` is the bond-graph agent layer (off-lattice floating cells joined by
+ *  bonds that grow + divide). NB: distinct from the legacy
+ *  `ModelProperties.topology` string enum — leave that untouched. */
 export interface TopologyMode {
   gridCells: boolean;
   agents: boolean;
+}
+
+/** Bond-Graph Agents (center-based off-lattice cells) configuration.
+ *
+ *  Present on a model whose `topologyMode.agents` is on (seeded by the reducer
+ *  when the user enables the topology). Every numeric field is either an
+ *  over-allocated ceiling (allocated once at init) or a live-tunable force /
+ *  bond parameter; when absent the engine substitutes a documented default
+ *  (`CENTER_BASED_DEFAULTS` in `model/centerBased.ts`), so a hand-authored or
+ *  partially-populated file always runs. `maxAgents` / `maxBonds` overflow
+ *  REJECTS + surfaces (never wraps — the Amphiphile-NI-poisoning class). */
+export interface CenterBasedConfig {
+  /** Master toggle — mirrors `topologyMode.agents`. Kept so the config can
+   *  carry data while the topology is toggled off (like VariegatedCellsConfig). */
+  enabled: boolean;
+  /** Over-allocated agent-slot ceiling (allocate-once at init). */
+  maxAgents: number;
+  /** Per-agent bond-slot ceiling — the ragged bond store's stride. */
+  maxBonds: number;
+  /** Continuous world width. In a grid+agents model the field grid (W×H cells)
+   *  maps onto these bounds 1:1; in an agents-only model these ARE the bounds. */
+  worldWidth: number;
+  /** Continuous world height. */
+  worldHeight: number;
+  /** 3D world depth (Phase E — agents are 2D in v1). */
+  worldDepth?: number;
+  // --- Force integrator (engine-owned soft-sphere; all live-tunable) ---
+  /** Repulsion stiffness μ_R (volume exclusion). */
+  repulsionStiffness?: number;
+  /** Free-agent adhesion stiffness μ_A (0 = cohesion comes from bonds only). */
+  adhesionStiffness?: number;
+  /** Interaction cutoff as a multiple of the contact distance (`r_max / s`). */
+  interactionRange?: number;
+  /** Overdamped drag coefficient η. */
+  drag?: number;
+  /** User timestep Δt — auto-clamped against the monotonicity bound at init /
+   *  on any force-param change. */
+  timeStep?: number;
+  // --- Seeding (Reset + seed-brush defaults) ---
+  /** Agents seeded on Reset (0 = the author seeds via the brush / Init Event). */
+  seedCount?: number;
+  /** Default agent radius (the rest contact distance between two agents is the
+   *  sum of their radii). */
+  defaultRadius?: number;
+  // --- Bonds (Phase B) ---
+  /** `lookupTable` model-attribute id giving per-type-pair bond stiffness λ +
+   *  rest length L. Absent → a single global λ/L from `bondStiffness`/`bondRestLength`. */
+  bondSpringMatrixId?: string;
+  /** Global bond stiffness λ used when no spring matrix is set. */
+  bondStiffness?: number;
+  /** Global bond rest length L used when no spring matrix is set. */
+  bondRestLength?: number;
+  /** Auto-form distance d_form (engine hysteresis requires d_form < d_break). */
+  formDistance?: number;
+  /** Auto-break distance d_break. */
+  breakDistance?: number;
 }
 
 /** Complete CA model definition */
@@ -577,6 +633,12 @@ export interface CAModel {
   indicators: Indicator[];
   graphNodes: GraphNode[];
   graphEdges: GraphEdge[];
+  /** Bond-Graph Agents: the SECOND rule graph (the off-lattice agent behaviour
+   *  rule). `graphNodes`/`graphEdges` above is the Grid-Cells (lattice) graph
+   *  and is unchanged (zero migration). Absent / empty in every legacy file +
+   *  in any non-agent model. `macroDefs` is SHARED by both graphs. */
+  agentGraphNodes?: GraphNode[];
+  agentGraphEdges?: GraphEdge[];
   macroDefs: MacroDef[];
   /** Local Variables — per-cell mutable storage referenced by getVariable /
    *  setVariable / setArrayElement nodes. Empty / absent → no variables in
@@ -591,4 +653,8 @@ export interface CAModel {
    *  `{ gridCells: true, agents: false }` (the LOAD_MODEL migration seeds it).
    *  ≥1 flag must be true (reducer-enforced). */
   topologyMode?: TopologyMode;
+  /** Bond-Graph Agents config (force law, ceilings, world bounds, bond params).
+   *  Seeded when `topologyMode.agents` is enabled; absent / `enabled: false` →
+   *  the agent engine is dormant. See `CenterBasedConfig`. */
+  centerBased?: CenterBasedConfig;
 }

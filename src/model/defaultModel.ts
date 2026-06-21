@@ -27,6 +27,8 @@ export const EMPTY_MODEL: CAModel = {
   indicators: [],
   graphNodes: [],
   graphEdges: [],
+  agentGraphNodes: [],
+  agentGraphEdges: [],
   macroDefs: [],
   topologyMode: { gridCells: true, agents: false },
 };
