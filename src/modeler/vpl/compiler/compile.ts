@@ -64,7 +64,7 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
 // Compile a single root's subgraph (per-cell body)
 // ---------------------------------------------------------------------------
 
-const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'categoricalColor', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels', 'getCellPosition']);
+const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'categoricalColor', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels', 'getCellPosition', 'behaviourStep', 'divisionEvent', 'getSelfPosition']);
 
 /** Check if a node's data uses multi-output variable naming */
 function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
@@ -1136,6 +1136,15 @@ function compileRoot(
  *  (dimension==='3d' ? gridDepth : 1) so the baked/passed `total` can't desync. */
 export function is3dModel(model: CAModel): boolean {
   return model.properties.dimension === '3d' && (model.properties.gridDepth ?? 1) > 1;
+}
+
+/** Bond-Graph Agents: a model runs the agent engine iff its `topologyMode.agents`
+ *  flag is on. The single agent chokepoint — shared by the worker (which derives
+ *  whether to allocate the agent SoA + run the agent driver) and the compiler
+ *  (which compiles the agent rule graph). Distinct from `topologyMode.gridCells`
+ *  (the lattice field); a model may have both. */
+export function isAgentModel(model: CAModel): boolean {
+  return model.topologyMode?.agents === true;
 }
 
 /** Per-cell coordinate-decode preamble. 2D (D===1) emits the verbatim 2-line

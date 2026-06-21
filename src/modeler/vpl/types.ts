@@ -91,6 +91,17 @@ export interface NodeRequirements {
    *  landed on all three targets (it now packs three 10-bit fields in 3D). The
    *  flag is kept as infrastructure for any future genuinely-2D-only node. */
   lattice2d?: boolean;
+  /** Bond-Graph Agents: an AGENT-world node (behaviourStep, GetSelfPosition,
+   *  DivideAgent, FormBond, AffectCellsUnder, …). Available only when the model
+   *  has `topologyMode.agents` enabled AND the user is editing the Agents rule
+   *  graph (the active sub-tab is `'agents'`). Hidden everywhere else. */
+  bondGraph?: boolean;
+  /** Bond-Graph Agents: a LATTICE-world node (grid / neighbourhood reads, the
+   *  classic CA set) that has no meaning in an agent rule graph. Hidden when the
+   *  user is editing the Agents rule graph (active sub-tab `'agents'`). A node
+   *  with neither `bondGraph` nor `lattice` is available in both graphs (e.g.
+   *  arithmetic, Get Constant — pure value plumbing). */
+  lattice?: boolean;
 }
 
 /** Definition of a node type */

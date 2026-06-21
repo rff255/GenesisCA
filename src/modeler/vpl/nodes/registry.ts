@@ -1,6 +1,7 @@
 import type { NodeTypeDef } from '../types';
 import { StepNode } from './StepNode';
 import { InitEventNode } from './InitEventNode';
+import { BehaviourStepNode } from './BehaviourStepNode';
 import { GetOrientationNode } from './GetOrientationNode';
 import { SetOrientationNode } from './SetOrientationNode';
 import { GetFacingOrientationNode } from './GetFacingOrientationNode';
@@ -78,6 +79,8 @@ const ALL_NODES: NodeTypeDef[] = [
   InputColorNode,
   OutputMappingNode,
   StopEventNode,
+  // Bond-Graph Agents — agent rule-graph event roots (gated by requirements.bondGraph)
+  BehaviourStepNode,
   // Flow
   ConditionalNode,
   SequenceNode,
