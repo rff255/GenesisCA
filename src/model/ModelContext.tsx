@@ -25,8 +25,10 @@ import type {
   Variable,
   VariegatedCellsConfig,
   TopologyMode,
+  CenterBasedConfig,
 } from './types';
 import { DEFAULT_MODEL, EMPTY_MODEL } from './defaultModel';
+import { defaultCenterBasedConfig } from './centerBased';
 import { defaultTagColor } from '../modeler/vpl/compiler/linkedOutputMappings';
 import { cloneMacroWithFreshIds } from './macroImport';
 import { migrateColorInterpolationNodes } from './colorScaleMigration';
@@ -164,6 +166,8 @@ type ModelAction =
   | { type: 'REMOVE_MAPPING'; id: string }
   | { type: 'UPDATE_MAPPING'; id: string; changes: Partial<Mapping> }
   | { type: 'SET_GRAPH'; nodes: GraphNode[]; edges: GraphEdge[] }
+  | { type: 'SET_AGENT_GRAPH'; nodes: GraphNode[]; edges: GraphEdge[] }
+  | { type: 'UPDATE_CENTER_BASED'; changes: Partial<CenterBasedConfig> }
   | { type: 'ADD_MACRO'; macro: MacroDef }
   | { type: 'UPDATE_MACRO'; id: string; changes: Partial<MacroDef> }
   | { type: 'REMOVE_MACRO'; id: string }
@@ -617,6 +621,30 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         },
       };
 
+    case 'SET_AGENT_GRAPH':
+      // Bond-Graph Agents: write-back for the SECOND (agent) rule graph. The
+      // GraphEditor's scheduleSync forks to this when the Agents sub-tab is
+      // active (mirrors SET_GRAPH for the Cells graph).
+      return {
+        ...state,
+        isDirty: true,
+        model: {
+          ...state.model,
+          agentGraphNodes: action.nodes,
+          agentGraphEdges: action.edges,
+        },
+      };
+
+    case 'UPDATE_CENTER_BASED': {
+      // Bond-Graph Agents config (force law, ceilings, world bounds, bonds).
+      // Seed a default when absent so the first edit lands on a full object.
+      const current: CenterBasedConfig = state.model.centerBased ?? defaultCenterBasedConfig();
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, centerBased: { ...current, ...action.changes } },
+      };
+    }
+
     case 'ADD_MACRO':
       return {
         ...state,
@@ -715,6 +743,12 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       if (!m.properties.dimension) m.properties.dimension = '2d';
       if (m.properties.gridDepth === undefined) m.properties.gridDepth = 1;
       if (!m.topologyMode) m.topologyMode = { gridCells: true, agents: false };
+      // Bond-Graph Agents: default the second (agent) rule graph so every legacy
+      // file loads with empty agent arrays. centerBased is seeded only when the
+      // Agents topology is on (a non-agent file leaves it absent).
+      if (!m.agentGraphNodes) m.agentGraphNodes = [];
+      if (!m.agentGraphEdges) m.agentGraphEdges = [];
+      if (m.topologyMode.agents && !m.centerBased) m.centerBased = defaultCenterBasedConfig();
       for (const n of m.neighborhoods) { n.margin ??= 2; n.includeCentralCell ??= false; }
       for (const a of m.attributes) {
         if (a.type === 'tag' && !a.tagOptions) a.tagOptions = [];
@@ -723,6 +757,16 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // child positions (relative to a group) back to absolute and drop
       // data.parentId. Visual layout is preserved.
       m = migrateLegacyParentIds(m);
+      // Bond-Graph Agents — migration scope decision: the 5 node-migrators below
+      // (colorInterpolation, tagConstant, moveSelfToNeighbor, setCellLooks-merge,
+      // lookupTables) operate on `graphNodes` + `macroDefs` only, NOT
+      // `agentGraphNodes`. Rationale: every node type they upgrade is a LEGACY
+      // node that predates `agentGraphNodes` (which is brand-new this milestone),
+      // so an agent graph can never contain one from an old file, and a newly
+      // authored agent graph already uses the current node shapes. If a FUTURE
+      // migration ever targets a node type usable in agent graphs (e.g. a new
+      // setCellLooks revision — setCellLooks IS used for agent appearance), it
+      // MUST also scan `agentGraphNodes`, or stale config strands there.
       // Color Scale migration: rewrite legacy colorInterpolation nodes to
       // the new colorScale shape (top-level + all macroDefs). Idempotent.
       {
@@ -910,7 +954,20 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       const current: TopologyMode = state.model.topologyMode ?? { gridCells: true, agents: false };
       const next = { ...current, ...action.changes };
       if (!next.gridCells && !next.agents) return state;  // reject all-false (defense-in-depth; UI also gates)
-      return { ...state, isDirty: true, model: { ...state.model, topologyMode: next } };
+      // Seed the agent config + the (empty) agent graph the first time Agents is
+      // enabled, so the Properties config section + the Agents sub-tab have
+      // something to bind to. Disabling Agents keeps the data (mirrors how
+      // variegated data persists) — re-enabling restores it.
+      const model = { ...state.model, topologyMode: next };
+      if (next.agents) {
+        if (!model.centerBased) model.centerBased = defaultCenterBasedConfig();
+        else if (!model.centerBased.enabled) model.centerBased = { ...model.centerBased, enabled: true };
+        if (!model.agentGraphNodes) model.agentGraphNodes = [];
+        if (!model.agentGraphEdges) model.agentGraphEdges = [];
+      } else if (model.centerBased?.enabled) {
+        model.centerBased = { ...model.centerBased, enabled: false };
+      }
+      return { ...state, isDirty: true, model };
     }
 
     case 'ADD_FACE_PATTERN': {
@@ -1031,6 +1088,11 @@ export interface ModelContextValue {
   removeMapping: (id: string) => void;
   updateMapping: (id: string, changes: Partial<Mapping>) => void;
   setGraph: (nodes: GraphNode[], edges: GraphEdge[]) => void;
+  /** Bond-Graph Agents: write-back for the agent rule graph (the second graph). */
+  setAgentGraph: (nodes: GraphNode[], edges: GraphEdge[]) => void;
+  /** Bond-Graph Agents: partial update of the center-based config (force law,
+   *  ceilings, world bounds, bond params). Seeds the object when absent. */
+  updateCenterBased: (changes: Partial<CenterBasedConfig>) => void;
   addMacro: (macro: MacroDef) => void;
   /** Deep-clones a MacroDef with fresh IDs and adds it to the project.
    *  Returns the new macroDef id (for referencing from a MacroNode). */
@@ -1158,6 +1220,16 @@ export function ModelProvider({ children }: { children: ReactNode }) {
   const setGraph = useCallback(
     (nodes: GraphNode[], edges: GraphEdge[]) =>
       dispatch({ type: 'SET_GRAPH', nodes, edges }),
+    [],
+  );
+  const setAgentGraph = useCallback(
+    (nodes: GraphNode[], edges: GraphEdge[]) =>
+      dispatch({ type: 'SET_AGENT_GRAPH', nodes, edges }),
+    [],
+  );
+  const updateCenterBased = useCallback(
+    (changes: Partial<CenterBasedConfig>) =>
+      dispatch({ type: 'UPDATE_CENTER_BASED', changes }),
     [],
   );
   const addMacro = useCallback(
@@ -1309,6 +1381,8 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       removeMapping,
       updateMapping,
       setGraph,
+      setAgentGraph,
+      updateCenterBased,
       addMacro,
       importMacro,
       updateMacro,
@@ -1356,6 +1430,8 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       removeMapping,
       updateMapping,
       setGraph,
+      setAgentGraph,
+      updateCenterBased,
       addMacro,
       importMacro,
       updateMacro,
