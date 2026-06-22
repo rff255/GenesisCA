@@ -437,6 +437,11 @@ function initAgents(): void {
   // for a future agents-only model where there's no grid to define the frame.)
   agentStore.worldWidth = width;
   agentStore.worldHeight = height;
+  // The agent world depth IS the grid `depth` (1:1, B2) — the SAME local the grid
+  // derives (`= dimension==='3d' ? max(1,gridDepth) : 1`). This is the engine's
+  // single 3D predicate: `store.worldDepth > 1 ⟺ is3dModel(model)`. Do NOT read
+  // the dormant config.worldDepth (S6) — that would reintroduce the desync B2 warns of.
+  agentStore.worldDepth = depth;
   const seedCount = Math.max(0, Math.floor(cbNum(centerBasedConfig, 'seedCount')));
   if (seedCount > 0) {
     const r = cbNum(centerBasedConfig, 'defaultRadius');
@@ -525,7 +530,13 @@ function runDivisionEvent(events: Array<{ mother: number; a: number; b: number; 
 /** Args for the compiled divisionEvent function — a SINGLE-agent function (not
  *  loop-wrapped): the daughter slot `idx`, its `daughterIndex` (0/1), the engine
  *  axis defaults, then the same engine buffers + user attrs the behaviour fn
- *  gets. MIRRORS `buildDivisionParams` in compile.ts. */
+ *  gets. MIRRORS `buildDivisionParams` in compile.ts.
+ *
+ *  MIRROR invariant (B1/B2): the trailing 3D block (`s.z, s.vz, s.divideAxisZ,
+ *  s.worldDepth` — NO `forceZ`, division is force-read-only) is pushed ONLY when
+ *  `s.worldDepth > 1`, exactly when `buildDivisionParams` pushes its 3D params
+ *  under `is3dModel(model)`. `is3dModel(model) ⟺ s.worldDepth > 1` — edit BOTH
+ *  together or every arg shifts one slot. */
 function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, axisX: number, axisY: number): unknown[] {
   const args: unknown[] = [
     idx, daughterIndex, axisX, axisY,
@@ -542,13 +553,21 @@ function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, ax
   // Closed feedback: the CELL field arrays + grid dims (same as buildAgentLoopArgs).
   args.push(width, height, total, boundaryTreatment === 'torus' ? 1 : 0);
   for (const spec of s.attrSpecs) args.push(readAttrs[spec.id]);
+  // Trailing 3D block (B1) — pushed ONLY when 3D (NO forceZ; division reads
+  // forces, never writes them). MIRRORS buildDivisionParams's `is3d` block.
+  if (s.worldDepth > 1) args.push(s.z, s.vz, s.divideAxisZ, s.worldDepth);
   return args;
 }
 
 /** Build the args for the compiled behaviourStep function. MIRRORS
  *  `buildAgentLoopParams` in compile.ts EXACTLY (same order). Single-buffer
  *  agent attrs (attrWrite aliases attrRead). Called once per step (the spread
- *  is fine — the function is loop-wrapped, not per-agent). */
+ *  is fine — the function is loop-wrapped, not per-agent).
+ *
+ *  MIRROR invariant (B1/B2): the trailing 3D block (`s.z, s.vz, s.forceZ,
+ *  s.divideAxisZ, s.worldDepth`) is pushed ONLY when `s.worldDepth > 1`, exactly
+ *  when `buildAgentLoopParams` pushes its 3D params under `is3dModel(model)`.
+ *  `is3dModel(model) ⟺ s.worldDepth > 1` — edit BOTH together. */
 function buildAgentLoopArgs(s: AgentStore): unknown[] {
   const hash = currentAgentHash;
   const args: unknown[] = [
@@ -570,6 +589,9 @@ function buildAgentLoopArgs(s: AgentStore): unknown[] {
   // SoA sized total, distinct from the agent attrRead) + the field grid dims.
   args.push(width, height, total, boundaryTreatment === 'torus' ? 1 : 0);
   for (const spec of s.attrSpecs) args.push(readAttrs[spec.id]);
+  // Trailing 3D block (B1) — pushed ONLY when 3D. MIRRORS buildAgentLoopParams's
+  // `is3d` block (z, vz, forceZ, divideAxisZ, worldDepth).
+  if (s.worldDepth > 1) args.push(s.z, s.vz, s.forceZ, s.divideAxisZ, s.worldDepth);
   return args;
 }
 
@@ -2411,6 +2433,29 @@ function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode
     // eslint-disable-next-line no-eval
     agentDivisionFn = divisionCode ? (eval(divisionCode) as Function) : null;
   } catch (e) { agentDivisionFn = null; self.postMessage({ type: 'error', message: '[agents] division compile failed: ' + ((e as Error)?.message || e) }); }
+
+  // DEV ABI-arity assertion (E3, MANDATORY) — the single highest-value safety net
+  // for the B1 desync class. A compiled agent fn's `.length` (its declared param
+  // count, from buildAgentLoop/DivisionParams) MUST equal the arg count the worker
+  // passes (buildAgentLoop/DivisionArgs). A one-sided 3D-block edit shifts every
+  // arg one slot WITHOUT a type error — only this arity check catches it. Division
+  // takes 4 leading scalars (idx/daughterIndex/axisX/axisY) before the mirrored
+  // buffers, so its arg count is built with placeholder scalars.
+  if (import.meta.env?.DEV && agentStore) {
+    const s = agentStore;
+    if (agentBehaviourFn) {
+      const want = buildAgentLoopArgs(s).length;
+      if (agentBehaviourFn.length !== want) {
+        self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: behaviour fn declares ${agentBehaviourFn.length} params but buildAgentLoopArgs passes ${want} (buildAgentLoopParams↔buildAgentLoopArgs out of lockstep — the B1 hazard).` });
+      }
+    }
+    if (agentDivisionFn) {
+      const want = buildDivisionArgs(s, 0, 0, 0, 0).length;
+      if (agentDivisionFn.length !== want) {
+        self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: division fn declares ${agentDivisionFn.length} params but buildDivisionArgs passes ${want} (buildDivisionParams↔buildDivisionArgs out of lockstep — the B1 hazard).` });
+      }
+    }
+  }
 }
 
 /** Run the per-cell Init function for the entire grid (one cell per
@@ -2920,9 +2965,13 @@ function sendColors(): void {
       agentsPayload.alive.buffer, agentsPayload.colors.buffer, agentsPayload.type.buffer,
       agentsPayload.bonds.buffer,
     );
+    // z/vz are length-0 placeholders in 2D (the A1 snapshot gate) — transfer them
+    // only when 3D populated them, else an empty buffer is harmlessly cheap but
+    // we skip it for symmetry with the gate.
+    if (agentsPayload.z.length > 0) agentTransfers.push(agentsPayload.z.buffer, agentsPayload.vz.buffer);
   } else if (agentStore) {
     // Empty store — still tell the main thread so it clears any stale agents.
-    agentsPayload = { highWater: 0, liveCount: 0, x: new Float64Array(0), y: new Float64Array(0), vx: new Float64Array(0), vy: new Float64Array(0), radius: new Float64Array(0), alive: new Uint8Array(0), colors: new Uint8ClampedArray(0), type: new Int32Array(0), bonds: new Int32Array(0) };
+    agentsPayload = { highWater: 0, liveCount: 0, x: new Float64Array(0), y: new Float64Array(0), z: new Float64Array(0), vx: new Float64Array(0), vy: new Float64Array(0), vz: new Float64Array(0), radius: new Float64Array(0), alive: new Uint8Array(0), colors: new Uint8ClampedArray(0), type: new Int32Array(0), bonds: new Int32Array(0) };
   }
 
   // P7 — when WebGPU direct render is active, the OffscreenCanvas already
@@ -3860,7 +3909,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         if (id < 0) {
           self.postMessage({ type: 'agentOverflow', message: `Agent capacity reached (maxAgents=${agentStore.maxAgents}).` });
         } else {
-          initAgentSlot(agentStore, id, msg.x, msg.y, msg.radius ?? cbNum(centerBasedConfig, 'defaultRadius'), msg.agentType ?? 0, id);
+          // z=0 for now — the createAgent msg has no z (the 2D brush/seam); PR5's
+          // 3D agent brush adds `msg.z` and threads it here.
+          initAgentSlot(agentStore, id, msg.x, msg.y, 0, msg.radius ?? cbNum(centerBasedConfig, 'defaultRadius'), msg.agentType ?? 0, id);
           runAgentColorPass();
         }
       }

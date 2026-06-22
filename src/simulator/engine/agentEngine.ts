@@ -54,17 +54,35 @@ export interface AgentStore {
   maxBonds: number;
   worldWidth: number;
   worldHeight: number;
+  /** Agent world depth — `gridDepth` (the agent world IS the grid 1:1). `1` in a
+   *  2D model (the byte-identical 2D fast path); `>1` runs the 3D agent engine.
+   *  The single agent-engine 3D predicate (`worldDepth > 1`) — the engine analogue
+   *  of the compiler's `is3dModel(model)`; the MIRROR invariant (B2) is
+   *  `is3dModel(model) ⟺ store.worldDepth > 1`. Set in `initAgents` from the SAME
+   *  grid `depth` local (do NOT read the dormant `CenterBasedConfig.worldDepth`).
+   *  Placeholder `1` until then; NOT serialized (re-derived from `gridDepth`). */
+  worldDepth: number;
 
   // --- engine geometry (Float64) ---
   x: Float64Array; y: Float64Array;
+  /** z-axis (3D agents). Always allocated; in a 2D model these stay 0 (the
+   *  2D-ZERO invariant — `initAgentSlot` zeroes them, the 2D force/division
+   *  branches never touch them), so the 2D numeric output is bit-identical. */
+  z: Float64Array;
   /** Position double-buffer (overdamped Euler reads x/y, writes xNext/yNext, swaps). */
   xNext: Float64Array; yNext: Float64Array;
+  /** z double-buffer (3D; always-allocated, 2D-ZERO in 2D). */
+  zNext: Float64Array;
   /** Velocity (persisted when `momentum > 0` — boids/flocking; 0 = overdamped). */
   vx: Float64Array; vy: Float64Array;
+  /** z velocity (3D; always-allocated, 2D-ZERO in 2D). */
+  vz: Float64Array;
   /** Per-step net force accumulator. Reset to 0 each step; the behaviour graph's
    *  Apply Force adds into it BEFORE the engine soft-sphere + bond springs, so
    *  the force law is graph-authorable on top of (or instead of) the engine's. */
   forceX: Float64Array; forceY: Float64Array;
+  /** z force accumulator (3D; always-allocated, 2D-ZERO in 2D). */
+  forceZ: Float64Array;
   radius: Float64Array; targetRadius: Float64Array;
   age: Float64Array;
 
@@ -91,6 +109,9 @@ export interface AgentStore {
   divideRequest: Uint8Array;
   divideAxisX: Float64Array;
   divideAxisY: Float64Array;
+  /** z component of the requested division axis (3D; transient, always-allocated,
+   *  NOT serialized — like `divideRequest`/`divideAxisX`). 2D-ZERO in 2D. */
+  divideAxisZ: Float64Array;
   divideAsym: Float64Array;
   killRequest: Uint8Array;
   /** Form-bond request: partner id + 1 (0 = none), with the rest length L and
@@ -152,14 +173,23 @@ export function createAgentStore(config: CenterBasedConfig, attrSpecs: AgentAttr
 
   return {
     config, maxAgents, maxBonds, worldWidth, worldHeight,
+    // worldDepth placeholder — initAgents overwrites it with the grid `depth`
+    // local (the 3D predicate). Do NOT read config.worldDepth here (S6): the
+    // dormant CenterBasedConfig.worldDepth stays ignored — reading it reintroduces
+    // the exact baked/passed desync B2 warns against.
+    worldDepth: 1,
     x: new Float64Array(maxAgents),
     y: new Float64Array(maxAgents),
+    z: new Float64Array(maxAgents),
     xNext: new Float64Array(maxAgents),
     yNext: new Float64Array(maxAgents),
+    zNext: new Float64Array(maxAgents),
     vx: new Float64Array(maxAgents),
     vy: new Float64Array(maxAgents),
+    vz: new Float64Array(maxAgents),
     forceX: new Float64Array(maxAgents),
     forceY: new Float64Array(maxAgents),
+    forceZ: new Float64Array(maxAgents),
     radius: new Float64Array(maxAgents),
     targetRadius: new Float64Array(maxAgents),
     age: new Float64Array(maxAgents),
@@ -177,6 +207,7 @@ export function createAgentStore(config: CenterBasedConfig, attrSpecs: AgentAttr
     divideRequest: new Uint8Array(maxAgents),
     divideAxisX: new Float64Array(maxAgents),
     divideAxisY: new Float64Array(maxAgents),
+    divideAxisZ: new Float64Array(maxAgents),
     divideAsym: new Float64Array(maxAgents),
     killRequest: new Uint8Array(maxAgents),
     bondFormReq: new Int32Array(maxAgents),
@@ -227,11 +258,12 @@ export function allocAgentSlot(store: AgentStore): number {
  *  job via freeAgentSlot on death). */
 export function initAgentSlot(
   store: AgentStore, id: number,
-  x: number, y: number, radius: number, type: number, lineage: number,
+  x: number, y: number, z: number, radius: number, type: number, lineage: number,
 ): void {
-  store.x[id] = x; store.y[id] = y;
-  store.xNext[id] = x; store.yNext[id] = y;
-  store.vx[id] = 0; store.vy[id] = 0;
+  store.x[id] = x; store.y[id] = y; store.z[id] = z;
+  store.xNext[id] = x; store.yNext[id] = y; store.zNext[id] = z;
+  store.vx[id] = 0; store.vy[id] = 0; store.vz[id] = 0;
+  store.forceZ[id] = 0;
   store.radius[id] = radius; store.targetRadius[id] = radius;
   store.age[id] = 0;
   store.type[id] = type; store.lineage[id] = lineage;
@@ -270,13 +302,13 @@ export function freeAgentSlot(store: AgentStore, id: number): void {
 /** Seed N agents. Each spec gives a position (+ optional radius/type/lineage);
  *  attributes initialise to their defaults. Returns the ids actually created
  *  (short of `specs.length` if the ceiling is hit — the worker surfaces that). */
-export interface AgentSeedSpec { x: number; y: number; radius?: number; type?: number; lineage?: number }
+export interface AgentSeedSpec { x: number; y: number; z?: number; radius?: number; type?: number; lineage?: number }
 export function seedAgents(store: AgentStore, specs: AgentSeedSpec[], defaultRadius: number): number[] {
   const ids: number[] = [];
   for (const s of specs) {
     const id = allocAgentSlot(store);
     if (id < 0) break; // ceiling
-    initAgentSlot(store, id, s.x, s.y, s.radius ?? defaultRadius, s.type ?? 0, s.lineage ?? id);
+    initAgentSlot(store, id, s.x, s.y, s.z ?? 0, s.radius ?? defaultRadius, s.type ?? 0, s.lineage ?? id);
     ids.push(id);
   }
   return ids;
@@ -303,9 +335,15 @@ export interface AgentRenderSnapshot {
   liveCount: number;
   x: Float64Array;
   y: Float64Array;
+  /** z (3D agents). Sliced only in 3D (`worldDepth > 1`); in 2D it's a length-0
+   *  placeholder so the renderer draws at z=0 with no per-step alloc/transfer
+   *  regression (A1 — vx/vy already pay that cost; z/vz don't need to in 2D). */
+  z: Float64Array;
   /** Velocity (for heading indicators / flocking diagnostics). */
   vx: Float64Array;
   vy: Float64Array;
+  /** z velocity (3D; length-0 placeholder in 2D — see `z`). */
+  vz: Float64Array;
   radius: Float64Array;
   alive: Uint8Array;
   colors: Uint8ClampedArray;
@@ -557,8 +595,10 @@ export function divideAgent(
   if (torus) { ax = ((ax % W) + W) % W; ay = ((ay % H) + H) % H; bx = ((bx % W) + W) % W; by = ((by % H) + H) % H; }
   else { ax = ax < 0 ? 0 : ax > W ? W : ax; ay = ay < 0 ? 0 : ay > H ? H : ay; bx = bx < 0 ? 0 : bx > W ? W : bx; by = by < 0 ? 0 : by > H ? H : by; }
 
-  // 5. daughter B (new slot) — inherit mother's type/lineage/attrs/colour
-  initAgentSlot(store, newId, bx, by, rB, store.type[i]!, store.lineage[i]!);
+  // 5. daughter B (new slot) — inherit mother's type/lineage/attrs/colour. The z
+  // arm is the mother's z for now (2D-ZERO in 2D); PR2 relocates daughter B to
+  // `bz` along the 3D tension axis.
+  initAgentSlot(store, newId, bx, by, store.z[i]!, rB, store.type[i]!, store.lineage[i]!);
   for (const spec of store.attrSpecs) {
     store.attrRead[spec.id]![newId] = store.attrRead[spec.id]![i]!;
   }
@@ -646,13 +686,19 @@ export function buildSpatialHash(store: AgentStore, binSize: number, W: number, 
 
 export function snapshotAgentsForRender(store: AgentStore): AgentRenderSnapshot {
   const hw = store.highWater;
+  // A1: gate z/vz on worldDepth > 1 so 2D models pay NO extra per-step alloc/
+  // transfer for the (always-zero) z arm. 2D → length-0 placeholders (renderer
+  // reads z=0). 3D slices them like x/y/vx/vy.
+  const is3d = store.worldDepth > 1;
   return {
     highWater: hw,
     liveCount: store.liveCount,
     x: store.x.slice(0, hw),
     y: store.y.slice(0, hw),
+    z: is3d ? store.z.slice(0, hw) : new Float64Array(0),
     vx: store.vx.slice(0, hw),
     vy: store.vy.slice(0, hw),
+    vz: is3d ? store.vz.slice(0, hw) : new Float64Array(0),
     radius: store.radius.slice(0, hw),
     alive: store.alive.slice(0, hw),
     colors: store.colors.slice(0, hw * 4),
@@ -676,6 +722,11 @@ export interface AgentStatePayload {
   freeTop: number;
   maxBonds: number;
   x: ArrayBuffer; y: ArrayBuffer; radius: ArrayBuffer; targetRadius: ArrayBuffer;
+  /** z / z-velocity (3D agents). Always written when the store is 3D; absent on
+   *  a legacy pre-z 2D save → `deserializeAgentStore` leaves z/vz at 0 (the
+   *  `if (p.z)` additive-load guard). `worldDepth` is NOT serialized (re-derived
+   *  from `gridDepth` on load). */
+  z?: ArrayBuffer; vz?: ArrayBuffer;
   age: ArrayBuffer; type: ArrayBuffer; lineage: ArrayBuffer; alive: ArrayBuffer; epoch: ArrayBuffer;
   freeList: ArrayBuffer;
   bondCount: ArrayBuffer; bondPartner: ArrayBuffer; bondPartnerEpoch: ArrayBuffer;
@@ -697,9 +748,14 @@ export function serializeAgentStore(store: AgentStore, transfers: ArrayBuffer[])
   }
   const freeListCopy = store.freeList.slice(0, store.freeTop);
   transfers.push(freeListCopy.buffer);
+  // z/vz: written only in 3D (worldDepth > 1) — a 2D save omits them and loads
+  // back at z=0 via the deserialize `if (p.z)` guard, so 2D getState/.gcastate
+  // pays no extra always-zero buffer (matches the snapshot A1 gate).
+  const is3d = store.worldDepth > 1;
   return {
     highWater: hw, liveCount: store.liveCount, freeTop: store.freeTop, maxBonds: store.maxBonds,
     x: sl(store.x, hw), y: sl(store.y, hw), radius: sl(store.radius, hw), targetRadius: sl(store.targetRadius, hw),
+    ...(is3d ? { z: sl(store.z, hw), vz: sl(store.vz, hw) } : {}),
     age: sl(store.age, hw), type: sl(store.type, hw), lineage: sl(store.lineage, hw),
     alive: sl(store.alive, hw), epoch: sl(store.epoch, hw),
     freeList: freeListCopy.buffer,
@@ -732,6 +788,11 @@ export function deserializeAgentStore(store: AgentStore, p: AgentStatePayload): 
   // clear the live region first so stale holes don't linger past hw
   store.alive.fill(0); store.bondPartner.fill(-1); store.bondCount.fill(0);
   copyInto(store.x, p.x, Float64Array as never); copyInto(store.y, p.y, Float64Array as never);
+  // z/vz: additive-load guard (the grid's `depth ?? 1` discipline). A legacy
+  // pre-z 2D save omits them → leave the freshly-allocated store's z/vz at 0.
+  store.z.fill(0); store.vz.fill(0);
+  if (p.z) copyInto(store.z, p.z, Float64Array as never);
+  if (p.vz) copyInto(store.vz, p.vz, Float64Array as never);
   copyInto(store.radius, p.radius, Float64Array as never); copyInto(store.targetRadius, p.targetRadius, Float64Array as never);
   copyInto(store.age, p.age, Float64Array as never);
   copyInto(store.type, p.type, Int32Array as never); copyInto(store.lineage, p.lineage, Int32Array as never);

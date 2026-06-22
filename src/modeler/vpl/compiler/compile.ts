@@ -2015,8 +2015,16 @@ export interface AgentCompileResult {
  *  wrapped): the daughter slot `idx`, its `daughterIndex`/axis defaults, then the
  *  same engine geometry/identity buffers + user attrs the behaviour fn gets
  *  (minus the loop control / request / bond buffers it doesn't need). The
- *  worker's `buildDivisionArgs` MIRRORS this. */
+ *  worker's `buildDivisionArgs` MIRRORS this.
+ *
+ *  MIRROR invariant (B1/B2): the trailing 3D block (`_agentZ, _agentVZ,
+ *  _divideAxisZ, _fieldD` — NO `_agentForceZ`, division is force-read-only) is
+ *  pushed ONLY when `is3dModel(model)`, and `buildDivisionArgs` pushes the
+ *  mirror args ONLY when `s.worldDepth > 1`. These are the SAME condition
+ *  (`is3dModel(model) ⟺ s.worldDepth > 1`), so the 2D arg/param lists stay
+ *  byte-identical — edit BOTH together or every value shifts one slot. */
 function buildDivisionParams(model: CAModel): string {
+  const is3d = is3dModel(model);
   const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
   const parts: string[] = [
     'idx', '__daughterIndex', '__axisDefaultX', '__axisDefaultY',
@@ -2039,6 +2047,10 @@ function buildDivisionParams(model: CAModel): string {
   // so fieldGradient/sampleField/readCellsUnder are division-safe too.
   parts.push('_fieldW', '_fieldH', '_fieldTotal', '_fieldBoundaryTorus');
   for (const a of cellAttrs) parts.push(`_field_${a.id}`);
+  // Trailing 3D block (B1) — pushed ONLY when 3D so the 2D param list is
+  // byte-identical. NO `_agentForceZ` (division reads forces, never writes them).
+  // `_fieldD` is the world depth (= worldDepth = gridDepth, 1:1).
+  if (is3d) parts.push('_agentZ', '_agentVZ', '_divideAxisZ', '_fieldD');
   return parts.join(', ');
 }
 
@@ -2047,8 +2059,16 @@ function buildDivisionParams(model: CAModel): string {
  *  otherwise (the 3D `dimsModel`/`total` bug class), so edit BOTH together.
  *  Engine-owned buffers use `_agent*` names; user attrs ride `r_<id>`/`w_<id>`
  *  (single buffer — the worker passes the same array for both — so own-agent
- *  read-modify-write sees immediate writes). */
+ *  read-modify-write sees immediate writes).
+ *
+ *  MIRROR invariant (B1/B2): the trailing 3D block (`_agentZ, _agentVZ,
+ *  _agentForceZ, _divideAxisZ, _fieldD`) is pushed ONLY when `is3dModel(model)`,
+ *  and `buildAgentLoopArgs` pushes the mirror args ONLY when `s.worldDepth > 1`.
+ *  These are the SAME condition (`is3dModel(model) ⟺ s.worldDepth > 1`), so the
+ *  2D arg/param lists stay byte-identical — a one-sided edit shifts every value
+ *  one slot. */
 export function buildAgentLoopParams(model: CAModel): { params: string; cellAttrs: Array<{ id: string; type: string }> } {
+  const is3d = is3dModel(model);
   const cellAttrs = model.attributes
     .filter(a => !a.isModelAttribute)
     .map(a => ({ id: a.id, type: a.type }));
@@ -2081,6 +2101,11 @@ export function buildAgentLoopParams(model: CAModel): { params: string; cellAttr
   // read them (gather after the cell step). The field IS the lattice CA (D-FIELD).
   parts.push('_fieldW', '_fieldH', '_fieldTotal', '_fieldBoundaryTorus');
   for (const a of cellAttrs) parts.push(`_field_${a.id}`);
+  // Trailing 3D block (B1) — pushed ONLY when 3D so the 2D param list is
+  // byte-identical. `_agentForceZ` (Apply Force z arm) + `_divideAxisZ` (request
+  // write) + `_fieldD` (world depth). No redundant `_fieldWH` param: the 3D field
+  // nodes emit `_fieldW*_fieldH` inline (D1) rather than threading a fifth dim.
+  if (is3d) parts.push('_agentZ', '_agentVZ', '_agentForceZ', '_divideAxisZ', '_fieldD');
   return { params: parts.join(', '), cellAttrs };
 }
 
