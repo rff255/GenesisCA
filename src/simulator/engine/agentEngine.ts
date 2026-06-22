@@ -432,6 +432,150 @@ export function snapshotBonds(store: AgentStore): Int32Array {
 }
 
 // ---------------------------------------------------------------------------
+// Division — the tension-axis cell split (the morphogenesis headline). The
+// division axis is the net-stretch direction of the agent's bonds (a 2×2
+// closed-form symmetric eigensolve), so a glued cluster elongates + divides
+// along its MECHANICAL axis, and partner bonds are inherited by geometry (each
+// goes to the nearer daughter). Engine-owned — the graph never sees the per-bond
+// partition (the freedom/guardrail boundary). All overflow REJECTS the WHOLE
+// division (never a half-rewired partner — the riskiest single bug).
+// ---------------------------------------------------------------------------
+
+/** Principal eigenvector (largest eigenvalue) of the symmetric 2×2 tensor
+ *  [[a,b],[b,c]], as a unit vector. The `b≈0` diagonal case picks the dominant
+ *  axis directly. */
+function principalEig2x2(a: number, b: number, c: number): [number, number] {
+  const lambda = (a + c) / 2 + Math.sqrt(((a - c) / 2) ** 2 + b * b);
+  if (Math.abs(b) > 1e-9) {
+    const vx = b, vy = lambda - a;
+    const n = Math.hypot(vx, vy) || 1;
+    return [vx / n, vy / n];
+  }
+  return a >= c ? [1, 0] : [0, 1];
+}
+
+/** The tension-axis unit vector m̂ for a dividing agent: the principal
+ *  eigenvector of `M = Σ_k max(0, λ_k(l_k − L_k))·(r̂_k ⊗ r̂_k)` over its bonds
+ *  (stretched bonds only). Degenerate fallback (no tension): the MINOR
+ *  eigenvector of the unweighted packing tensor `Σ r̂_k⊗r̂_k` (divide into the
+ *  lowest-density gap); no bonds → a deterministic spread-out pseudo-axis. */
+function tensionAxis(store: AgentStore, i: number, torus: boolean, W: number, H: number): [number, number] {
+  const mb = store.maxBonds, base = i * mb, n = store.bondCount[i]!;
+  const cx = store.x[i]!, cy = store.y[i]!;
+  const halfW = W / 2, halfH = H / 2;
+  let a = 0, b = 0, c = 0, sumW = 0;
+  let a2 = 0, b2 = 0, c2 = 0;
+  for (let k = 0; k < n; k++) {
+    const p = store.bondPartner[base + k]!;
+    if (p < 0 || !store.alive[p]) continue;
+    let dx = store.x[p]! - cx, dy = store.y[p]! - cy;
+    if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
+    const l = Math.hypot(dx, dy);
+    if (l < 1e-9) continue;
+    const rx = dx / l, ry = dy / l;
+    const w = Math.max(0, store.bondStiffness[base + k]! * (l - store.bondRestLength[base + k]!));
+    a += w * rx * rx; b += w * rx * ry; c += w * ry * ry; sumW += w;
+    a2 += rx * rx; b2 += rx * ry; c2 += ry * ry;
+  }
+  if (sumW > 1e-9) return principalEig2x2(a, b, c);
+  if (a2 + c2 > 1e-9) { const [px, py] = principalEig2x2(a2, b2, c2); return [-py, px]; } // minor = perpendicular
+  const ang = i * 2.399963229728653; // golden angle — deterministic spread for free agents
+  return [Math.cos(ang), Math.sin(ang)];
+}
+
+/** Divide agent `i` along its tension axis. Returns the new daughter's id, or a
+ *  negative rejection code (-1 = maxAgents full, -2 = a daughter's bond list
+ *  would overflow). On rejection the agent is UNCHANGED (no half-division). The
+ *  mother slot becomes daughter A; a free-list slot becomes daughter B. Each
+ *  partner bond goes to the nearer daughter; a daughter-daughter bond is added
+ *  when the mother was bonded (a free agent's daughters separate). Daughters
+ *  inherit the mother's attributes verbatim (the divisionEvent graph can
+ *  reassign them afterwards). */
+export function divideAgent(
+  store: AgentStore, i: number,
+  axisX: number, axisY: number, asym: number,
+  defaultLambda: number, torus: boolean, W: number, H: number,
+  outAxis?: number[],
+): number {
+  if (!store.alive[i]) return -1;
+  const mb = store.maxBonds;
+  const cx = store.x[i]!, cy = store.y[i]!;
+  const halfW = W / 2, halfH = H / 2;
+
+  // 1. axis — explicit override if wired (finite + non-zero), else the eigensolve
+  let mx: number, my: number;
+  if (Number.isFinite(axisX) && Number.isFinite(axisY) && (axisX !== 0 || axisY !== 0)) {
+    const n = Math.hypot(axisX, axisY) || 1; mx = axisX / n; my = axisY / n;
+  } else {
+    [mx, my] = tensionAxis(store, i, torus, W, H);
+  }
+  if (outAxis) { outAxis[0] = mx; outAxis[1] = my; }
+
+  // 2. classify each mother bond by which daughter's side the partner is on
+  const base = i * mb, n = store.bondCount[i]!;
+  const sides: boolean[] = []; // true = side A (+m̂)
+  let sideGE = 0, sideLT = 0;
+  for (let k = 0; k < n; k++) {
+    const p = store.bondPartner[base + k]!;
+    let dx = store.x[p]! - cx, dy = store.y[p]! - cy;
+    if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
+    const side = dx * mx + dy * my >= 0;
+    sides.push(side);
+    if (side) sideGE++; else sideLT++;
+  }
+  const addDaughterBond = n > 0;
+  // 3. capacity pre-check — reject the WHOLE division on overflow (A keeps its
+  //    side + the daughter bond; B gets its side + the daughter bond).
+  const aFinal = sideGE + (addDaughterBond ? 1 : 0);
+  const bFinal = sideLT + (addDaughterBond ? 1 : 0);
+  if (aFinal > mb || bFinal > mb) return -2;
+  const newId = allocAgentSlot(store);
+  if (newId < 0) return -1;
+
+  // 4. geometry — split the area by asymmetry, place daughters along ±m̂
+  const r = store.radius[i]!;
+  const aFrac = Math.min(1, Math.max(0, asym));
+  const rA = r * Math.sqrt(Math.max(1e-4, aFrac));
+  const rB = r * Math.sqrt(Math.max(1e-4, 1 - aFrac));
+  const off = r; // daughter centre separation
+  let ax = cx + 0.5 * off * mx, ay = cy + 0.5 * off * my;
+  let bx = cx - 0.5 * off * mx, by = cy - 0.5 * off * my;
+  if (torus) { ax = ((ax % W) + W) % W; ay = ((ay % H) + H) % H; bx = ((bx % W) + W) % W; by = ((by % H) + H) % H; }
+  else { ax = ax < 0 ? 0 : ax > W ? W : ax; ay = ay < 0 ? 0 : ay > H ? H : ay; bx = bx < 0 ? 0 : bx > W ? W : bx; by = by < 0 ? 0 : by > H ? H : by; }
+
+  // 5. daughter B (new slot) — inherit mother's type/lineage/attrs/colour
+  initAgentSlot(store, newId, bx, by, rB, store.type[i]!, store.lineage[i]!);
+  for (const spec of store.attrSpecs) {
+    store.attrRead[spec.id]![newId] = store.attrRead[spec.id]![i]!;
+  }
+  store.targetRadius[newId] = store.targetRadius[i]!;
+  for (let c = 0; c < 4; c++) store.colors[newId * 4 + c] = store.colors[i * 4 + c]!;
+
+  // 6. daughter A — reuse mother slot i; shrink + relocate, reset age, clear request
+  store.x[i] = ax; store.y[i] = ay; store.xNext[i] = ax; store.yNext[i] = ay;
+  store.radius[i] = rA;
+  store.age[i] = 0;
+  store.divideRequest[i] = 0;
+
+  // 7. reattach — move side-B partners' bonds from A(i) to B(newId)
+  const snap: Array<{ p: number; L: number; lam: number; typ: number }> = [];
+  for (let k = 0; k < n; k++) {
+    snap.push({ p: store.bondPartner[base + k]!, L: store.bondRestLength[base + k]!, lam: store.bondStiffness[base + k]!, typ: store.bondTypeLabel[base + k]! });
+  }
+  for (let k = 0; k < n; k++) {
+    if (!sides[k]) {
+      const s = snap[k]!;
+      breakBond(store, i, s.p);
+      formBond(store, newId, s.p, s.L, s.lam, s.typ);
+    }
+  }
+  // 8. daughter-daughter bond (tissue stays connected; free agents separate)
+  if (addDaughterBond) formBond(store, i, newId, rA + rB, defaultLambda);
+
+  return newId;
+}
+
+// ---------------------------------------------------------------------------
 // Uniform spatial hash — the O(N) neighbour structure for the force driver.
 // Bins the world into a CSR-style grid (binStart prefix-sums + binAgents grouped
 // by bin) so each agent tests only its own bin + the 8 (2D) adjacent bins

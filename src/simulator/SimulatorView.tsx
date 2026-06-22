@@ -877,7 +877,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
   // don't behave); PR-A3 wires the real compileAgentGraph over
   // model.agentGraphNodes (the behaviourStep loop + value-outs + force hooks).
-  const compileAgentModel = useCallback((): { behaviourCode?: string; initCode?: string; colorViewer: string } => {
+  const compileAgentModel = useCallback((): { behaviourCode?: string; initCode?: string; divisionCode?: string; colorViewer: string } => {
     if (!model.topologyMode?.agents) return { colorViewer: '' };
     const firstViewer = model.mappings.find(mp => mp.isAttributeToColor);
     const colorViewer = firstViewer?.id ?? '';
@@ -888,7 +888,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // eslint-disable-next-line no-console
       console.warn('[agents] compile:', ag.error);
     }
-    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, colorViewer };
+    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, colorViewer };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.mappings]);
 
@@ -2063,6 +2063,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       centerBased: model.centerBased,
       agentBehaviourCode: agentResult.behaviourCode,
       agentInitCode: agentResult.initCode,
+      agentDivisionCode: agentResult.divisionCode,
       agentColorViewer: agentResult.colorViewer,
     };
     // Canvas transfer is deferred to the useWebGPUStatus handler — see
@@ -2401,6 +2402,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         // center-based config so the worker re-clamps Δt and re-binds behaviourFn.
         agentBehaviourCode: agentResult.behaviourCode,
         agentInitCode: agentResult.initCode,
+        agentDivisionCode: agentResult.divisionCode,
         centerBased: model.centerBased,
       });
       // If user has the model toggle on, ensure useWasm is set (recompile doesn't carry useWasm by default).
