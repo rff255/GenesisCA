@@ -609,6 +609,9 @@ export interface CenterBasedConfig {
   /** Default agent radius (the rest contact distance between two agents is the
    *  sum of their radii). */
   defaultRadius?: number;
+  /** Radius units per step an agent's radius ramps toward its target radius
+   *  (set by Set Target Radius). Phase C couples it to the cell cycle. */
+  growthRate?: number;
   // --- Bonds (Phase B) ---
   /** `lookupTable` model-attribute id giving per-type-pair bond stiffness λ +
    *  rest length L. Absent → a single global λ/L from `bondStiffness`/`bondRestLength`. */

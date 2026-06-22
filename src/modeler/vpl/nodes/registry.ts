@@ -2,6 +2,11 @@ import type { NodeTypeDef } from '../types';
 import { StepNode } from './StepNode';
 import { InitEventNode } from './InitEventNode';
 import { BehaviourStepNode } from './BehaviourStepNode';
+import { GetSelfPositionNode } from './GetSelfPositionNode';
+import { GetRadiusNode } from './GetRadiusNode';
+import { GetBondDegreeNode } from './GetBondDegreeNode';
+import { NeighbourDensityNode } from './NeighbourDensityNode';
+import { SetTargetRadiusNode } from './SetTargetRadiusNode';
 import { GetOrientationNode } from './GetOrientationNode';
 import { SetOrientationNode } from './SetOrientationNode';
 import { GetFacingOrientationNode } from './GetFacingOrientationNode';
@@ -79,8 +84,14 @@ const ALL_NODES: NodeTypeDef[] = [
   InputColorNode,
   OutputMappingNode,
   StopEventNode,
-  // Bond-Graph Agents — agent rule-graph event roots (gated by requirements.bondGraph)
+  // Bond-Graph Agents — agent rule-graph event roots + read/request nodes
+  // (gated by requirements.bondGraph; visible only on the Agents sub-tab).
   BehaviourStepNode,
+  GetSelfPositionNode,
+  GetRadiusNode,
+  GetBondDegreeNode,
+  NeighbourDensityNode,
+  SetTargetRadiusNode,
   // Flow
   ConditionalNode,
   SequenceNode,
