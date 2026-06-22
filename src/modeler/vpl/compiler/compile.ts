@@ -2120,6 +2120,7 @@ export function compileAgentGraph(
     '  let _rs = _rngState[0] || 0x12345678;',
     '  for (let idx = 0; idx < highWater; idx++) {',
     '    if (!_alive[idx]) continue;',
+    '    const colorIdx = idx * 4;', // Set Cell Looks colours the agent (s.colors)
     ...variableBlocks.inLoopReset,
     // behaviourStep value-out preamble — the agent's own geometry/identity.
     `    const _v${bsId}_myX = _agentX[idx];`,
@@ -2153,6 +2154,7 @@ export function compileAgentGraph(
       ...divScratch,
       ...divVars.preLoop,
       ...divVars.inLoopReset.map(l => l.trimStart()).map(l => '  ' + l),
+      '  const colorIdx = idx * 4;', // Set Cell Looks on a daughter (s.colors)
       // value-out preamble — alias the positional params to the node's port vars.
       `  const _v${dId}_daughterIndex = __daughterIndex;`,
       `  const _v${dId}_axisDefaultX = __axisDefaultX;`,
