@@ -5,6 +5,7 @@ import { BehaviourStepNode } from './BehaviourStepNode';
 import { GetSelfPositionNode } from './GetSelfPositionNode';
 import { GetRadiusNode } from './GetRadiusNode';
 import { GetBondDegreeNode } from './GetBondDegreeNode';
+import { GetCurvatureNode } from './GetCurvatureNode';
 import { NeighbourDensityNode } from './NeighbourDensityNode';
 import { SetTargetRadiusNode } from './SetTargetRadiusNode';
 import { FormBondNode } from './FormBondNode';
@@ -109,6 +110,7 @@ const ALL_NODES: NodeTypeDef[] = [
   GetSelfPositionNode,
   GetRadiusNode,
   GetBondDegreeNode,
+  GetCurvatureNode,
   NeighbourDensityNode,
   SetTargetRadiusNode,
   // Agent neighbour access + graph-authored forces (boids / flocking / signalling)
