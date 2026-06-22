@@ -1,0 +1,534 @@
+{
+  "schemaVersion": 1,
+  "properties": {
+    "name": "Morphogenesis — Differential Tissue",
+    "description": "Developmental tissue with agent specialization: asymmetric division (self-renewal + differentiation), contact inhibition, and a colour-coded maturity gradient — a self-limiting tissue, not a uniform blob.",
+    "ruleDescription": "Each cell has a maturity (lineage depth). Division is asymmetric (Division Event): daughter 0 keeps the mother maturity (self-renewal), daughter 1 advances. A cell divides only while grown, uncrowded (Neighbour Density cap — contact inhibition) and uncommitted (maturity < 5). A persistent stem pool proliferates at the edge; cells differentiate inward; terminal cells stop. Colour = maturity stage.",
+    "author": "",
+    "projectAuthor": "",
+    "tags": [
+      "agents",
+      "morphogenesis",
+      "differentiation",
+      "stem cells",
+      "tissue"
+    ],
+    "dimension": "2d",
+    "gridWidth": 90,
+    "gridHeight": 90,
+    "gridDepth": 1,
+    "topology": "2d-grid",
+    "boundaryTreatment": "constant",
+    "useWasm": false,
+    "useWebGPU": false
+  },
+  "topologyMode": {
+    "gridCells": true,
+    "agents": true
+  },
+  "centerBased": {
+    "enabled": true,
+    "maxAgents": 2200,
+    "maxBonds": 6,
+    "worldWidth": 90,
+    "worldHeight": 90,
+    "seedCount": 5,
+    "defaultRadius": 1.6,
+    "growthRate": 0.04,
+    "repulsionStiffness": 2.5,
+    "adhesionStiffness": 0.4,
+    "interactionRange": 1.5,
+    "drag": 1,
+    "timeStep": 0.1,
+    "momentum": 0,
+    "maxSpeed": 0,
+    "neighbourQueryRadius": 5,
+    "customForcesOnly": false,
+    "autoBond": true,
+    "bondStiffness": 1,
+    "bondRestLength": 2,
+    "formDistance": 1.2,
+    "breakDistance": 2.2
+  },
+  "attributes": [
+    {
+      "id": "maturity",
+      "name": "maturity",
+      "type": "integer",
+      "description": "Lineage depth / differentiation stage (0 = stem).",
+      "defaultValue": "0",
+      "hasRange": true,
+      "min": 0,
+      "max": 8
+    }
+  ],
+  "modelAttributes": [],
+  "neighborhoods": [],
+  "mappings": [],
+  "variables": [],
+  "indicators": [],
+  "graphNodes": [
+    {
+      "id": "nmqoz5rbfv4i3",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "step",
+        "config": {}
+      }
+    }
+  ],
+  "graphEdges": [],
+  "agentGraphNodes": [
+    {
+      "id": "amqoz5rbeli9z",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 380
+      },
+      "data": {
+        "nodeType": "behaviourStep",
+        "config": {}
+      }
+    },
+    {
+      "id": "amqoz5rbeazjn",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 380
+      },
+      "data": {
+        "nodeType": "setTargetRadius",
+        "config": {
+          "_port_value": "3"
+        }
+      }
+    },
+    {
+      "id": "amqoz5rberoo6",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 760
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "maturity"
+        }
+      }
+    },
+    {
+      "id": "amqoz5rbe4i5f",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 760
+      },
+      "data": {
+        "nodeType": "categoricalColor",
+        "config": {
+          "count": 6,
+          "entry_0_r": "46",
+          "entry_0_g": "170",
+          "entry_0_b": "95",
+          "entry_1_r": "120",
+          "entry_1_g": "190",
+          "entry_1_b": "70",
+          "entry_2_r": "205",
+          "entry_2_g": "205",
+          "entry_2_b": "55",
+          "entry_3_r": "235",
+          "entry_3_g": "160",
+          "entry_3_b": "45",
+          "entry_4_r": "225",
+          "entry_4_g": "105",
+          "entry_4_b": "55",
+          "entry_5_r": "200",
+          "entry_5_g": "60",
+          "entry_5_b": "60",
+          "default_r": "150",
+          "default_g": "35",
+          "default_b": "90"
+        }
+      }
+    },
+    {
+      "id": "amqoz5rbet17t",
+      "type": "caNode",
+      "position": {
+        "x": 690,
+        "y": 475
+      },
+      "data": {
+        "nodeType": "setCellLooks",
+        "config": {
+          "mappingId": "__current__",
+          "useGlyph": false,
+          "setBackground": true,
+          "fallbackToGlyphColor": false
+        }
+      }
+    },
+    {
+      "id": "amqoz5rbe7t59",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": ">=",
+          "_port_y": "2.9",
+          "compareType": "numerical"
+        }
+      }
+    },
+    {
+      "id": "amqoz5rbe7cl9",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 133
+      },
+      "data": {
+        "nodeType": "neighbourDensity",
+        "config": {}
+      }
+    },
+    {
+      "id": "amqoz5rbey9ve",
+      "type": "caNode",
+      "position": {
+        "x": 690,
+        "y": 133
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "<",
+          "_port_y": "6",
+          "compareType": "numerical"
+        }
+      }
+    },
+    {
+      "id": "amqoz5rbfjqlv",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 247
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "<",
+          "_port_y": "6",
+          "compareType": "numerical"
+        }
+      }
+    },
+    {
+      "id": "amqoz5rbfhima",
+      "type": "caNode",
+      "position": {
+        "x": 920,
+        "y": 66.5
+      },
+      "data": {
+        "nodeType": "logicOperator",
+        "config": {
+          "operation": "AND"
+        }
+      }
+    },
+    {
+      "id": "amqoz5rbf62uu",
+      "type": "caNode",
+      "position": {
+        "x": 1150,
+        "y": 142.5
+      },
+      "data": {
+        "nodeType": "logicOperator",
+        "config": {
+          "operation": "AND"
+        }
+      }
+    },
+    {
+      "id": "amqoz5rbf6c3g",
+      "type": "caNode",
+      "position": {
+        "x": 1380,
+        "y": 380
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {}
+      }
+    },
+    {
+      "id": "amqoz5rbfj48t",
+      "type": "caNode",
+      "position": {
+        "x": 1610,
+        "y": 380
+      },
+      "data": {
+        "nodeType": "divideAgent",
+        "config": {
+          "axisSource": "tension",
+          "_port_asymmetry": "0.5"
+        }
+      }
+    },
+    {
+      "id": "amqoz5rbfawza",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 1330
+      },
+      "data": {
+        "nodeType": "divisionEvent",
+        "config": {}
+      }
+    },
+    {
+      "id": "amqoz5rbf6654",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 1520
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "maturity"
+        }
+      }
+    },
+    {
+      "id": "amqoz5rbfdiha",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 1520
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "a+1",
+          "visibleCount": 1
+        }
+      }
+    },
+    {
+      "id": "amqoz5rbfcdjm",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 1235
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": ">=",
+          "_port_y": "1",
+          "compareType": "numerical"
+        }
+      }
+    },
+    {
+      "id": "amqoz5rbftk57",
+      "type": "caNode",
+      "position": {
+        "x": 690,
+        "y": 1330
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {}
+      }
+    },
+    {
+      "id": "amqoz5rbf1cly",
+      "type": "caNode",
+      "position": {
+        "x": 920,
+        "y": 1330
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "maturity"
+        }
+      }
+    }
+  ],
+  "agentGraphEdges": [
+    {
+      "id": "emqoz5rbetdav",
+      "source": "amqoz5rbeli9z",
+      "target": "amqoz5rbeazjn",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emqoz5rbe4zva",
+      "source": "amqoz5rberoo6",
+      "target": "amqoz5rbe4i5f",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_index"
+    },
+    {
+      "id": "emqoz5rbezc64",
+      "source": "amqoz5rbe4i5f",
+      "target": "amqoz5rbet17t",
+      "sourceHandle": "output_value_r",
+      "targetHandle": "input_value_r"
+    },
+    {
+      "id": "emqoz5rbehs00",
+      "source": "amqoz5rbe4i5f",
+      "target": "amqoz5rbet17t",
+      "sourceHandle": "output_value_g",
+      "targetHandle": "input_value_g"
+    },
+    {
+      "id": "emqoz5rbe3w47",
+      "source": "amqoz5rbe4i5f",
+      "target": "amqoz5rbet17t",
+      "sourceHandle": "output_value_b",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emqoz5rbeuy5l",
+      "source": "amqoz5rbeazjn",
+      "target": "amqoz5rbet17t",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emqoz5rbewaam",
+      "source": "amqoz5rbeli9z",
+      "target": "amqoz5rbe7t59",
+      "sourceHandle": "output_value_myRadius",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "emqoz5rbekq02",
+      "source": "amqoz5rbe7cl9",
+      "target": "amqoz5rbey9ve",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "emqoz5rbffe6q",
+      "source": "amqoz5rberoo6",
+      "target": "amqoz5rbfjqlv",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "emqoz5rbfrj8d",
+      "source": "amqoz5rbe7t59",
+      "target": "amqoz5rbfhima",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emqoz5rbfobmh",
+      "source": "amqoz5rbey9ve",
+      "target": "amqoz5rbfhima",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emqoz5rbfjz6q",
+      "source": "amqoz5rbfhima",
+      "target": "amqoz5rbf62uu",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emqoz5rbfa4zm",
+      "source": "amqoz5rbfjqlv",
+      "target": "amqoz5rbf62uu",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emqoz5rbfnvmc",
+      "source": "amqoz5rbf62uu",
+      "target": "amqoz5rbf6c3g",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "emqoz5rbfh6wv",
+      "source": "amqoz5rbet17t",
+      "target": "amqoz5rbf6c3g",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "emqoz5rbfg9rd",
+      "source": "amqoz5rbf6c3g",
+      "target": "amqoz5rbfj48t",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emqoz5rbfmwhw",
+      "source": "amqoz5rbf6654",
+      "target": "amqoz5rbfdiha",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emqoz5rbfktrj",
+      "source": "amqoz5rbfawza",
+      "target": "amqoz5rbfcdjm",
+      "sourceHandle": "output_value_daughterIndex",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "emqoz5rbf5x9d",
+      "source": "amqoz5rbfcdjm",
+      "target": "amqoz5rbftk57",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "emqoz5rbfbbtz",
+      "source": "amqoz5rbfawza",
+      "target": "amqoz5rbftk57",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "emqoz5rbfkx8x",
+      "source": "amqoz5rbfdiha",
+      "target": "amqoz5rbf1cly",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "emqoz5rbfrgsn",
+      "source": "amqoz5rbftk57",
+      "target": "amqoz5rbf1cly",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    }
+  ],
+  "macroDefs": []
+}
