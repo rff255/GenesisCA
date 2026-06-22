@@ -21,13 +21,24 @@ import type { NodeTypeDef } from '../types';
 export const BehaviourStepNode: NodeTypeDef = {
   type: 'behaviourStep',
   label: 'Behaviour Step',
-  description: 'Agent entry point that runs once per agent each generation. Root of the Bond-Graph Agents update flow.',
+  description: 'Agent entry point that runs once per agent each generation. Root of the Bond-Graph Agents update flow. Outputs the agent’s own geometry/identity.',
   category: 'event',
   color: '#7e57c2',
   requirements: { bondGraph: true },
   ports: [
     { id: 'do', label: 'DO', kind: 'output', category: 'flow' },
+    { id: 'myX', label: 'X', kind: 'output', category: 'value', dataType: 'float' },
+    { id: 'myY', label: 'Y', kind: 'output', category: 'value', dataType: 'float' },
+    { id: 'myZ', label: 'Z', kind: 'output', category: 'value', dataType: 'float' },
+    { id: 'myRadius', label: 'Radius', kind: 'output', category: 'value', dataType: 'float' },
+    { id: 'myArea', label: 'Area', kind: 'output', category: 'value', dataType: 'float' },
+    { id: 'myBondDegree', label: 'Bond Degree', kind: 'output', category: 'value', dataType: 'integer' },
+    { id: 'myAge', label: 'Age', kind: 'output', category: 'value', dataType: 'integer' },
+    { id: 'myType', label: 'Type', kind: 'output', category: 'value', dataType: 'integer' },
   ],
+  // myZ only exists in a 3D-agent model (Phase E). Hidden in 2D (the compiler
+  // emits no _agentZ decode there).
+  hiddenPorts: () => ['myZ'],
   defaultConfig: {},
   compile: () => '',  // Root — the agent compiler emits the per-agent loop specially.
 };

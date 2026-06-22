@@ -103,6 +103,23 @@ const NEVER_INVARIANT = new Set<string>([
   // BEFORE those locals exist (ReferenceError `_row is not defined`). It is
   // per-cell by construction; never hoist.
   'getCellPosition',
+  // Bond-Graph Agents: the agent event roots' value-outs (behaviourStep.myX/…,
+  // divisionEvent.daughterIndex/…) are per-AGENT (read `_agentX[idx]` etc. in
+  // the loop preamble), and the agent read nodes read per-agent engine buffers
+  // (`_agentRadius[idx]`, `_agentBondCount[idx]`, …). Each is per-agent by
+  // construction — hoisting a consumer above the agent loop would reference the
+  // per-agent locals before they exist. Same reasoning as getCellPosition.
+  'behaviourStep',
+  'divisionEvent',
+  'bondContactEvent',
+  'getSelfPosition',
+  'getRadius',
+  'getBondDegree',
+  'neighbourDensity',
+  'getCurvature',
+  'sampleField',
+  'fieldGradient',
+  'readCellsUnder',
 ]);
 
 export function classifyLoopInvariant(

@@ -124,10 +124,14 @@ export function createAgentStore(config: CenterBasedConfig, attrSpecs: AgentAttr
     const kind = agentAttrKind(spec.type);
     attrKind[spec.id] = kind;
     const r = makeArray(kind, maxAgents);
-    const w = makeArray(kind, maxAgents);
-    if (spec.defaultValue !== 0) { r.fill(spec.defaultValue); w.fill(spec.defaultValue); }
+    if (spec.defaultValue !== 0) r.fill(spec.defaultValue);
     attrRead[spec.id] = r;
-    attrWrite[spec.id] = w;
+    // SINGLE buffer for agent attributes: an agent reads + writes only its OWN
+    // attrs (no neighbour-attr reads in the agent graph), so write aliases read
+    // — an own-agent read-modify-write sees its write immediately, the natural
+    // imperative semantics. (Positions ARE double-buffered for synchronous force
+    // integration; that's separate, engine-owned x/y ↔ xNext/yNext.)
+    attrWrite[spec.id] = r;
   }
 
   const bondPartner = new Int32Array(maxAgents * maxBonds).fill(-1);

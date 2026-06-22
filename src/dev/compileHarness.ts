@@ -15,7 +15,7 @@
 // string-compared for byte equality.
 
 import type { CAModel } from '../model/types';
-import { compileGraph } from '../modeler/vpl/compiler/compile';
+import { compileGraph, compileAgentGraph } from '../modeler/vpl/compiler/compile';
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
@@ -24,6 +24,10 @@ export interface CompileAllResult {
   js: { stepCode: string; fullCode: string; error: string | null };
   wasm: { total: number; bytesLen: number; bytesJoined: string; error: string | null };
   webgpu: { shaderCode: string; error: string | null };
+  /** Bond-Graph Agents: the compiled agent behaviour loop (JS-only). Empty for
+   *  a non-agent model. Asserted on for the agent-loop shape checks (idx <
+   *  highWater / !_alive / no _row / no colorIdx). */
+  agent: { behaviourCode: string; error: string | null };
 }
 
 export function compileAll(model: CAModel): CompileAllResult {
@@ -31,6 +35,7 @@ export function compileAll(model: CAModel): CompileAllResult {
     js: { stepCode: '', fullCode: '', error: null },
     wasm: { total: 0, bytesLen: 0, bytesJoined: '', error: null },
     webgpu: { shaderCode: '', error: null },
+    agent: { behaviourCode: '', error: null },
   };
   // JS — capture step + initCode + all inputColor + all outputMapping code so
   // OM/IC/init emits (e.g. setCellLooks colour writes) are searchable.
@@ -68,6 +73,14 @@ export function compileAll(model: CAModel): CompileAllResult {
     out.webgpu.error = (wg as { error?: string }).error || null;
   } catch (e) {
     out.webgpu.error = String((e as Error)?.message || e);
+  }
+  // Bond-Graph Agents — compile the agent rule graph (JS-only).
+  try {
+    const ag = compileAgentGraph(model.agentGraphNodes || [], model.agentGraphEdges || [], model);
+    out.agent.behaviourCode = ag.behaviourCode || '';
+    out.agent.error = ag.error || null;
+  } catch (e) {
+    out.agent.error = String((e as Error)?.message || e);
   }
   return out;
 }
