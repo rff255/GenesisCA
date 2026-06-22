@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mockup — Agents Phase 2 (torus fix · brush overhaul · independent targets)</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#15171c; --panel2:#1b1e24; --border:#2a2e37; --border2:#3a3f4a;
+    --text:#e6e9ef; --muted:#8b93a3; --accent:#e8a13a; --accent-soft:#2a2113;
+    --cyan:#4cc9f0; --green:#66bb6a; --pink:#ec407a; --purple:#7e57c2; --teal:#00897b;
+    --bad:#e35d6a; --good:#3ddc84;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 -apple-system,Segoe UI,Roboto,sans-serif;padding:34px}
+  .wrap{max-width:1120px;margin:0 auto}
+  h1{font-size:25px;margin:0 0 4px}
+  h2{font-size:19px;margin:40px 0 6px;padding-top:18px;border-top:1px solid var(--border)}
+  h3{font-size:15px;margin:22px 0 8px;color:var(--accent)}
+  .sub{color:var(--muted);margin:0 0 8px}
+  .tag{display:inline-block;background:var(--accent-soft);color:var(--accent);border:1px solid #4a3a18;border-radius:999px;padding:3px 11px;font-size:12px;font-weight:600;margin-bottom:14px}
+  .muted{color:var(--muted)}
+  code{background:#0f1115;border:1px solid var(--border);border-radius:5px;padding:1px 5px;font-size:12.5px;color:#cdd4e0}
+  .row{display:flex;gap:18px;flex-wrap:wrap}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:11px;padding:16px 18px;flex:1;min-width:280px}
+  .card h4{margin:0 0 8px;font-size:14px}
+  .pill{display:inline-block;border-radius:999px;padding:1px 9px;font-size:11px;font-weight:700;color:#0c0d10}
+  .before{border-left:3px solid var(--bad)}
+  .after{border-left:3px solid var(--good)}
+  .lbl-bad{color:var(--bad);font-weight:700}
+  .lbl-good{color:var(--good);font-weight:700}
+  .diagram{background:var(--panel2);border:1px solid var(--border);border-radius:11px;padding:14px;margin:14px 0}
+  svg{display:block;width:100%;height:auto}
+  ul{margin:6px 0;padding-left:20px}
+  li{margin:3px 0}
+  .legend{font-size:12px;color:var(--muted);margin-top:6px}
+  .kbd{background:#0f1115;border:1px solid var(--border2);border-bottom-width:2px;border-radius:5px;padding:1px 7px;font-size:12px}
+  /* mock UI bits */
+  .panelmock{background:var(--panel);border:1px solid var(--border2);border-radius:9px;padding:12px;width:300px}
+  .ptitle{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px}
+  .modebtns{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:11px}
+  .mbtn{border:1px solid var(--border2);background:transparent;color:var(--muted);border-radius:7px;padding:4px 9px;font-size:12px}
+  .mbtn.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+  .ctrlrow{display:flex;align-items:center;justify-content:space-between;margin:7px 0;font-size:12.5px}
+  .num{display:inline-flex;align-items:center;border:1px solid var(--border2);border-radius:6px;background:#0f1115}
+  .num input{width:46px;border:0;background:transparent;color:var(--text);text-align:right;padding:3px 6px;font:inherit}
+  .num .stp{display:flex;flex-direction:column;border-left:1px solid var(--border2)}
+  .num .stp span{font-size:8px;line-height:9px;padding:0 5px;color:var(--muted)}
+  .radio{display:flex;align-items:center;gap:7px;margin:5px 0;font-size:12.5px}
+  .dot{width:13px;height:13px;border-radius:50%;border:2px solid var(--border2);flex:none}
+  .dot.sel{border-color:var(--accent);background:radial-gradient(circle,var(--accent) 0 4px,transparent 5px)}
+  .dim{opacity:.45}
+  .badge{font-size:10px;border:1px solid var(--border2);border-radius:5px;padding:0 5px;color:var(--muted)}
+  .inspector{background:var(--panel);border:1px solid var(--accent);border-radius:9px;padding:11px 13px;width:230px;box-shadow:0 6px 22px rgba(0,0,0,.5)}
+  .inspector .ir{display:flex;justify-content:space-between;font-size:12px;margin:2px 0}
+  .inspector .ir .k{color:var(--muted)}
+  .inspector hr{border:0;border-top:1px solid var(--border);margin:7px 0}
+  .foot{margin-top:40px;color:var(--muted);font-size:12.5px;border-top:1px solid var(--border);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <span class="tag">GenesisCA · Bond-Graph Agents · Phase 2 mockup</span>
+  <h1>Agents Phase 2 — illustrated plan</h1>
+  <p class="sub">Three workstreams, accompanying <code>docs/HANDOFF_AGENTS_PHASE2.md</code>: ① torus-correct neighbour math, ② the agent-brush overhaul, ③ independent grid/agent compile targets. Mockups per the CLAUDE.md "illustrated plan for UI/behaviour changes" rule.</p>
+
+  <!-- ============================================================ -->
+  <h2>① Torus-correct neighbour math <span class="muted" style="font-size:13px">(behaviour change — PR1)</span></h2>
+  <p class="sub">The engine wraps every relative vector; <code>Get Nearby Agents</code> returns the correct cross-seam list. But the boids graph reads <em>raw</em> positions (<code>Get Agent Position</code>) and subtracts them itself — so near a seam the vectors point the long way. Fix: a new <code>Get Agent Offset</code> primitive (torus-shortest displacement) the graph routes cohesion/separation through.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 1080 320" font-family="sans-serif">
+    <!-- BEFORE -->
+    <text x="20" y="24" fill="#e35d6a" font-size="14" font-weight="700">BEFORE — raw position subtraction (buggy)</text>
+    <text x="20" y="42" fill="#8b93a3" font-size="11.5">boundary pair 6 apart across the seam → pulled together THE LONG WAY · reproduced |vx| ≈ 0.82 toward centre</text>
+    <g transform="translate(20,55)">
+      <rect x="0" y="0" width="480" height="190" rx="8" fill="#0f1115" stroke="#2a2e37"/>
+      <!-- seam markers -->
+      <line x1="6" y1="0" x2="6" y2="190" stroke="#e35d6a" stroke-width="2" stroke-dasharray="4 4"/>
+      <line x1="474" y1="0" x2="474" y2="190" stroke="#e35d6a" stroke-width="2" stroke-dasharray="4 4"/>
+      <text x="14" y="184" fill="#5b6472" font-size="10">x=0 seam</text>
+      <text x="406" y="184" fill="#5b6472" font-size="10">x=W seam</text>
+      <!-- agent P near left, Q near right -->
+      <circle cx="30" cy="95" r="11" fill="#4cc9f0"/><text x="30" y="99" fill="#0c0d10" font-size="11" text-anchor="middle" font-weight="700">P</text>
+      <circle cx="450" cy="95" r="11" fill="#7e57c2"/><text x="450" y="99" fill="#fff" font-size="11" text-anchor="middle" font-weight="700">Q</text>
+      <!-- wrong long-way arrows toward centre -->
+      <line x1="44" y1="95" x2="210" y2="95" stroke="#e35d6a" stroke-width="3" marker-end="url(#arBad)"/>
+      <line x1="436" y1="95" x2="270" y2="95" stroke="#e35d6a" stroke-width="3" marker-end="url(#arBad)"/>
+      <text x="240" y="70" fill="#e35d6a" font-size="11" text-anchor="middle">cohesion pulls both</text>
+      <text x="240" y="84" fill="#e35d6a" font-size="11" text-anchor="middle">to grid centre (Δx≈114)</text>
+      <text x="240" y="120" fill="#5b6472" font-size="10" text-anchor="middle">true gap is 6 across the seam →</text>
+      <text x="240" y="133" fill="#5b6472" font-size="10" text-anchor="middle">they should REPEL across it</text>
+    </g>
+    <!-- AFTER -->
+    <text x="560" y="24" fill="#3ddc84" font-size="14" font-weight="700">AFTER — Get Agent Offset (wrap-shortest)</text>
+    <text x="560" y="42" fill="#8b93a3" font-size="11.5">P→Q offset dX ≈ +2 ACROSS the seam → correct separation, like a mid-grid pair</text>
+    <g transform="translate(560,55)">
+      <rect x="0" y="0" width="480" height="190" rx="8" fill="#0f1115" stroke="#2a2e37"/>
+      <line x1="6" y1="0" x2="6" y2="190" stroke="#3ddc84" stroke-width="2" stroke-dasharray="4 4"/>
+      <line x1="474" y1="0" x2="474" y2="190" stroke="#3ddc84" stroke-width="2" stroke-dasharray="4 4"/>
+      <circle cx="30" cy="95" r="11" fill="#4cc9f0"/><text x="30" y="99" fill="#0c0d10" font-size="11" text-anchor="middle" font-weight="700">P</text>
+      <circle cx="450" cy="95" r="11" fill="#7e57c2"/><text x="450" y="99" fill="#fff" font-size="11" text-anchor="middle" font-weight="700">Q</text>
+      <!-- correct: P feels Q across the LEFT seam (Q wraps to just left of P); separation pushes P right -->
+      <path d="M30 95 q -28 0 -28 -30" fill="none" stroke="#3ddc84" stroke-width="2.5" stroke-dasharray="3 3"/>
+      <path d="M474 65 q 28 0 28 30 q 0 30 -22 30" fill="none" stroke="#3ddc84" stroke-width="2.5" stroke-dasharray="3 3"/>
+      <text x="240" y="40" fill="#3ddc84" font-size="11" text-anchor="middle">Q is 2 units LEFT of P (via wrap)</text>
+      <line x1="44" y1="110" x2="92" y2="110" stroke="#3ddc84" stroke-width="3" marker-end="url(#arGood)"/>
+      <line x1="436" y1="110" x2="388" y2="110" stroke="#3ddc84" stroke-width="3" marker-end="url(#arGood)"/>
+      <text x="240" y="125" fill="#3ddc84" font-size="11" text-anchor="middle">separation pushes them apart</text>
+      <text x="240" y="139" fill="#3ddc84" font-size="11" text-anchor="middle">across the seam (correct)</text>
+    </g>
+    <defs>
+      <marker id="arBad" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e35d6a"/></marker>
+      <marker id="arGood" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#3ddc84"/></marker>
+    </defs>
+    <!-- node schematic -->
+    <g transform="translate(20,262)">
+      <rect x="0" y="0" width="280" height="46" rx="8" fill="#15171c" stroke="#5e35b1"/>
+      <text x="12" y="19" fill="#b39ddb" font-size="12" font-weight="700">Get Agent Offset</text>
+      <text x="12" y="36" fill="#8b93a3" font-size="10.5">in: Agent  ·  out: dX, dY, Distance (torus-shortest)</text>
+      <circle cx="272" cy="16" r="3" fill="#4cc9f0"/><circle cx="272" cy="28" r="3" fill="#4cc9f0"/><circle cx="272" cy="40" r="3" fill="#4cc9f0"/>
+    </g>
+    <text x="320" y="280" fill="#8b93a3" font-size="11.5">+ fix <tspan fill="#cdd4e0">Get Curvature</tspan>'s raw bonded-partner subtraction (same wrap)</text>
+    <text x="320" y="298" fill="#8b93a3" font-size="11.5">+ expand <tspan fill="#cdd4e0">buildDivisionParams</tspan>/<tspan fill="#cdd4e0">buildDivisionArgs</tspan> so the node is division-safe</text>
+  </svg>
+  <div class="legend">Keep <code>Get Agent Position</code> raw (it's an absolute position, for field seeding). The new node is JS-only until Phase F (PR6/PR7) — like every agent node today.</div>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2>② Agent-brush overhaul <span class="muted" style="font-size:13px">(UI — PR2/PR3/PR4)</span></h2>
+  <div class="row">
+    <div class="card before"><h4><span class="lbl-bad">Before</span> — single-click only</h4>
+      <div class="modebtns" style="margin-top:4px">
+        <span class="mbtn on">Seed</span><span class="mbtn">Kill</span><span class="mbtn">Glue</span><span class="mbtn">Cut</span><span class="mbtn">Paint Field</span>
+      </div>
+      <div class="mbtn" style="display:inline-block">Clear all agents</div>
+      <ul class="muted" style="margin-top:10px">
+        <li>One agent per Seed click — no radius, no cluster</li>
+        <li>No drag-to-seed (mousemove paint never fires)</li>
+        <li>No seed type/attributes; new agents are type 0</li>
+        <li>Kill = nearest only; no region cull</li>
+        <li>No cursor feedback; glue anchor invisible</li>
+        <li>No way to inspect an agent</li>
+      </ul>
+    </div>
+    <div class="card after"><h4><span class="lbl-good">After</span> — a real brush</h4>
+      <div class="panelmock" style="width:auto">
+        <div class="ptitle">Agent Brush</div>
+        <div class="modebtns">
+          <span class="mbtn on">Seed</span><span class="mbtn">Kill</span><span class="mbtn">Move</span><span class="mbtn">Glue</span><span class="mbtn">Cut</span><span class="mbtn">Inspect</span><span class="mbtn">Bond&nbsp;paint</span><span class="mbtn">Paint&nbsp;Field</span>
+        </div>
+        <div class="ctrlrow"><span>Radius</span><span class="num"><input value="8"><span class="stp"><span>▲</span><span>▼</span></span></span></div>
+        <div class="ctrlrow"><span>Density <span class="muted">(agents/u²)</span></span><span class="num"><input value="0.05"><span class="stp"><span>▲</span><span>▼</span></span></span></div>
+        <div class="ctrlrow"><span>Drag spacing</span><span class="num"><input value="6"><span class="stp"><span>▲</span><span>▼</span></span></span></div>
+        <hr style="border:0;border-top:1px solid var(--border);margin:9px 0">
+        <div class="ptitle" style="margin-bottom:6px">Seed config <span class="badge">PR3</span></div>
+        <div class="ctrlrow"><span>Type</span><span class="num" style="padding:2px 8px">stem ▾</span></div>
+        <div class="ctrlrow"><span class="muted">maturity</span><span class="num"><input value="0"><span class="stp"><span>▲</span><span>▼</span></span></span></div>
+        <div class="ctrlrow"><span class="muted">☑ randomize orientation</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:16px">
+    <div class="card" style="flex:1.3">
+      <h4>Canvas cursor states <span class="badge">PR2</span></h4>
+      <div class="diagram" style="margin:8px 0 0">
+      <svg viewBox="0 0 640 200" font-family="sans-serif">
+        <rect x="0" y="0" width="640" height="200" rx="8" fill="#0f1115" stroke="#2a2e37"/>
+        <!-- some existing agents -->
+        <g fill="#3a7">
+          <circle cx="120" cy="70" r="6"/><circle cx="150" cy="100" r="6"/><circle cx="100" cy="120" r="6"/>
+          <circle cx="420" cy="90" r="6"/><circle cx="455" cy="110" r="6"/><circle cx="400" cy="120" r="6"/>
+        </g>
+        <!-- seed radius ring (difference-composite negative silhouette) -->
+        <circle cx="130" cy="95" r="42" fill="none" stroke="#fff" stroke-width="1.6" stroke-dasharray="2 3"/>
+        <text x="130" y="155" fill="#8b93a3" font-size="11" text-anchor="middle">Seed: radius ring (negative silhouette)</text>
+        <!-- hover highlight + glue anchor + dashed line -->
+        <circle cx="420" cy="90" r="10" fill="none" stroke="var(--accent)" stroke-width="2.5"/>
+        <circle cx="455" cy="110" r="9" fill="none" stroke="#4cc9f0" stroke-width="2"/>
+        <line x1="420" y1="90" x2="540" y2="60" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <circle cx="540" cy="60" r="3" fill="var(--accent)"/>
+        <text x="430" y="160" fill="#8b93a3" font-size="11" text-anchor="middle">Glue: anchor ring + dashed line to cursor; hover-highlight target</text>
+      </svg>
+      </div>
+      <div class="legend">Cursor reuses the cell brush's <code>difference</code>-composite negative-silhouette trick; redraw only on hovered-agent / cursor-cell change (never per raw move).</div>
+    </div>
+    <div class="card" style="flex:.9">
+      <h4>Agent inspector <span class="badge">PR3</span></h4>
+      <p class="muted" style="margin:2px 0 10px"><span class="kbd">Shift</span>+click an agent → popover. Data via a one-shot <code>getAgentState&nbsp;{id}</code> worker round-trip (the snapshot lacks attr values).</p>
+      <div class="inspector">
+        <div class="ir"><span class="k">agent #</span><span>317</span></div>
+        <div class="ir"><span class="k">position</span><span>58.3, 41.9</span></div>
+        <div class="ir"><span class="k">velocity</span><span>0.71, −0.12</span></div>
+        <div class="ir"><span class="k">radius</span><span>1.60</span></div>
+        <div class="ir"><span class="k">type</span><span>2</span></div>
+        <div class="ir"><span class="k">bond degree</span><span>5</span></div>
+        <div class="ir"><span class="k">density</span><span>6</span></div>
+        <hr>
+        <div class="ir"><span class="k">maturity</span><span>3</span></div>
+        <div class="ir"><span class="k">cellType</span><span>transit</span></div>
+      </div>
+    </div>
+  </div>
+  <p class="muted" style="font-size:12.5px;margin-top:10px"><strong>PR4 (nice-to-have):</strong> <em>Move</em> drags a picked agent (new <code>moveAgents</code> message); <em>Bond paint</em> auto-glues agents the stroke passes near (<code>formBondBatch</code>, only if shipped).</p>
+
+  <!-- ============================================================ -->
+  <h2>③ Independent compile targets <span class="muted" style="font-size:13px">(UI + plumbing — PR5/PR6/PR7)</span></h2>
+  <p class="sub">"Does it make sense?" — <span class="lbl-good">Yes.</span> The grid target (<code>useWasm</code>/<code>useWebGPU</code>) and a new <em>agent</em> target become independent. PR5 ships the selection UI + a GPU-grid↔CPU-agent field bridge with JS agents; PR6/PR7 port the agent loop to WASM/WebGPU (the user's "WebGPU diffusion + WASM async agents" needs PR6).</p>
+  <div class="row">
+    <div class="card" style="flex:.85">
+      <h4>Properties → Bond-Graph Agents</h4>
+      <div class="panelmock" style="width:auto;margin-top:4px">
+        <div class="ptitle">Compile Target <span class="muted" style="font-size:10px">(grid)</span></div>
+        <div class="radio"><span class="dot">　</span> WebAssembly</div>
+        <div class="radio"><span class="dot sel">　</span> WebGPU <span class="muted">— chemical diffusion</span></div>
+        <div class="radio"><span class="dot">　</span> Debug / Reference (JS)</div>
+        <hr style="border:0;border-top:1px solid var(--border);margin:11px 0">
+        <div class="ptitle">Agent Compile Target <span class="badge">new</span></div>
+        <div class="radio"><span class="dot sel">　</span> Debug / Reference (JS)</div>
+        <div class="radio dim"><span class="dot">　</span> WebAssembly <span class="badge">coming soon · PR6</span></div>
+        <div class="radio dim"><span class="dot">　</span> WebGPU <span class="badge">coming soon · PR7</span></div>
+        <div class="muted" style="font-size:11px;margin-top:8px">Independent of the grid target — the grid and agents can run on different engines.</div>
+      </div>
+    </div>
+    <div class="card" style="flex:1.15">
+      <h4>One generation — the dual-target loop (PR6 example: WebGPU grid + WASM agents)</h4>
+      <div class="diagram" style="margin:8px 0 0">
+      <svg viewBox="0 0 560 250" font-family="sans-serif">
+        <!-- agent step -->
+        <rect x="14" y="30" width="200" height="96" rx="9" fill="#15171c" stroke="#7e57c2"/>
+        <text x="114" y="52" fill="#e6e9ef" font-size="13" font-weight="700" text-anchor="middle">AGENT STEP (WASM)</text>
+        <text x="114" y="71" fill="#8b93a3" font-size="10.5" text-anchor="middle">gather field → behave</text>
+        <text x="114" y="86" fill="#8b93a3" font-size="10.5" text-anchor="middle">forces · structural phase</text>
+        <text x="114" y="101" fill="#8b93a3" font-size="10.5" text-anchor="middle">deposit → field (readAttrs)</text>
+        <!-- cell step -->
+        <rect x="346" y="30" width="200" height="96" rx="9" fill="#15171c" stroke="#4cc9f0"/>
+        <text x="446" y="52" fill="#e6e9ef" font-size="13" font-weight="700" text-anchor="middle">CELL STEP (WebGPU)</text>
+        <text x="446" y="71" fill="#8b93a3" font-size="10.5" text-anchor="middle">diffuse + decay the field</text>
+        <text x="446" y="86" fill="#8b93a3" font-size="10.5" text-anchor="middle">on the GPU (compute)</text>
+        <text x="446" y="101" fill="#8b93a3" font-size="10.5" text-anchor="middle">gpuOwnsAttrs = true</text>
+        <!-- bridge -->
+        <rect x="234" y="44" width="92" height="68" rx="8" fill="#11140f" stroke="#e8a13a" stroke-dasharray="4 3"/>
+        <text x="280" y="64" fill="#e8a13a" font-size="10.5" font-weight="700" text-anchor="middle">field bridge</text>
+        <text x="280" y="80" fill="#8b93a3" font-size="9.5" text-anchor="middle">GPU→CPU readback</text>
+        <text x="280" y="93" fill="#8b93a3" font-size="9.5" text-anchor="middle">before gather;</text>
+        <text x="280" y="105" fill="#8b93a3" font-size="9.5" text-anchor="middle">CPU→GPU upload</text>
+        <!-- arrows -->
+        <line x1="214" y1="78" x2="232" y2="78" stroke="#e8a13a" stroke-width="2" marker-end="url(#arA)"/>
+        <line x1="326" y1="78" x2="344" y2="78" stroke="#e8a13a" stroke-width="2" marker-end="url(#arA)"/>
+        <path d="M446 126 V160 H114 V128" fill="none" stroke="#5b6472" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arG)"/>
+        <text x="280" y="153" fill="#5b6472" font-size="10.5" text-anchor="middle">next generation</text>
+        <!-- no-bridge note -->
+        <text x="280" y="200" fill="#8b93a3" font-size="11" text-anchor="middle">Bridge runs ONLY when residency differs AND the model is a field model.</text>
+        <text x="280" y="216" fill="#8b93a3" font-size="11" text-anchor="middle">WASM grid + WASM agents share <tspan fill="#cdd4e0">wasmMemory</tspan> → zero bridge.</text>
+        <text x="280" y="232" fill="#8b93a3" font-size="11" text-anchor="middle">No-field model on a GPU grid → zero readback.</text>
+        <defs>
+          <marker id="arA" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e8a13a"/></marker>
+          <marker id="arG" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5b6472"/></marker>
+        </defs>
+      </svg>
+      </div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <div class="card">
+      <h4>Feasibility (G = grid · A = agent)</h4>
+      <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+        <tr style="color:var(--muted)"><td></td><td style="padding:4px">JS agent</td><td style="padding:4px">WASM agent</td><td style="padding:4px">WebGPU agent</td></tr>
+        <tr><td class="muted" style="padding:4px">JS grid</td><td style="color:var(--good)">✅ today</td><td>⚙ PR6</td><td>⚙ PR7</td></tr>
+        <tr><td class="muted" style="padding:4px">WASM grid</td><td style="color:var(--good)">✅ today</td><td style="color:var(--accent)">⚙ PR6 · cleanest</td><td>⚙ PR7</td></tr>
+        <tr><td class="muted" style="padding:4px">WebGPU grid</td><td style="color:var(--cyan)">🔵 PR5</td><td>⚙ PR6+bridge</td><td>🟣 PR7</td></tr>
+      </table>
+      <div class="legend">PR5 = WebGPU grid + JS agents (with the field-readback bridge) — no agent-loop port needed.</div>
+    </div>
+  </div>
+
+  <div class="foot">
+    Companion to <code>docs/HANDOFF_AGENTS_PHASE2.md</code> · branch <code>agents_floating_cells</code> · the torus bug is reproduced (boundary pair converges the long way at |vx|≈0.82 vs mid pair 0.20) · nothing pushed.
+  </div>
+</div>
+</body>
+</html>
