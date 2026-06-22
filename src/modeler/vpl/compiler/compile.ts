@@ -1956,6 +1956,119 @@ export function compileGraph(
   return { stepCode, initCode, inputColorCodes, outputMappingCodes, stopMessages, error };
 }
 
+// ===========================================================================
+// Bond-Graph Agents — the agent rule-graph compiler (JS-reference, v1).
+//
+// A sibling to compileGraph that compiles `model.agentGraphNodes` rooted at the
+// `behaviourStep` node into the per-agent loop. The agent loop variable is
+// `idx` (Decision D-IDX), so every attribute-read node lands on the agent SoA
+// (`r_<id>[idx]`) with ZERO node change. The loop bound is `highWater` (NOT
+// `total`) with a `!_alive[idx]` skip, and there is NO row/col decode + NO
+// `colorIdx = idx*4` (agents are entity-rendered; the structural phase + the
+// engine own position/radius). Engine geometry/identity is exposed through the
+// behaviourStep value-out preamble (`_v<id>_myX = _agentX[idx]`, …) — read by
+// the agent read nodes; SetAttribute/GetCellAttribute can only touch the user
+// `r_/w_` attribute arrays (the N4 guardrail).
+// ===========================================================================
+
+export interface AgentCompileResult {
+  /** The per-agent behaviour function source (loop-wrapped). Empty when there's
+   *  no behaviourStep root or on error. */
+  behaviourCode: string;
+  /** Reserved (agent Init Event) — empty in v1. */
+  initCode: string;
+  error?: string;
+}
+
+/** The behaviourStep function signature. The worker's `buildAgentLoopArgs`
+ *  MIRRORS this exactly (same order + gating) — the two silently desync
+ *  otherwise (the 3D `dimsModel`/`total` bug class), so edit BOTH together.
+ *  Engine-owned buffers use `_agent*` names; user attrs ride `r_<id>`/`w_<id>`
+ *  (single buffer — the worker passes the same array for both — so own-agent
+ *  read-modify-write sees immediate writes). */
+export function buildAgentLoopParams(model: CAModel): { params: string; cellAttrs: Array<{ id: string; type: string }> } {
+  const cellAttrs = model.attributes
+    .filter(a => !a.isModelAttribute)
+    .map(a => ({ id: a.id, type: a.type }));
+  const parts: string[] = [
+    '_alive', 'highWater',
+    // engine geometry / identity / reductions (read by behaviourStep preamble +
+    // the agent read nodes)
+    '_agentX', '_agentY', '_agentRadius', '_agentTargetRadius', '_agentAge',
+    '_agentType', '_agentLineage', '_agentBondCount', '_agentDensity',
+    // request buffers written by DivideAgent / KillAgent (Phase C)
+    '_divideRequest', '_divideAxisX', '_divideAxisY', '_divideAsym', '_killRequest',
+    // ragged bond store + stride (Phase B: ForEachBond / FormBond)
+    '_bondPartner', '_bondPartnerEpoch', '_bondRestLength', '_bondStiffness', '_bondTypeLabel', 'maxBonds',
+  ];
+  for (const a of cellAttrs) parts.push(`r_${a.id}`);
+  for (const a of cellAttrs) parts.push(`w_${a.id}`);
+  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
+  return { params: parts.join(', '), cellAttrs };
+}
+
+export function compileAgentGraph(
+  agentNodes: GraphNode[],
+  agentEdges: GraphEdge[],
+  model?: CAModel,
+): AgentCompileResult {
+  if (!model) return { behaviourCode: '', initCode: '', error: 'Model required.' };
+
+  // Flatten macros, strip reroutes, then accessor-CSE (agents are sync, so CSE
+  // is sound) — same front-end pipeline the cell compiler runs.
+  {
+    const expanded = expandMacros(agentNodes, agentEdges, model);
+    if (expanded.error) return { behaviourCode: '', initCode: '', error: expanded.error };
+    agentNodes = expanded.nodes;
+    agentEdges = expanded.edges;
+  }
+  ({ nodes: agentNodes, edges: agentEdges } = collapseReroutes(agentNodes, agentEdges));
+  agentEdges = canonicalizeAccessorEdges(agentNodes, agentEdges, model);
+
+  const behaviourNode = agentNodes.find(n => n.data.nodeType === 'behaviourStep');
+  if (!behaviourNode) {
+    return { behaviourCode: '', initCode: '', error: 'No Behaviour Step node in the agent graph.' };
+  }
+
+  const { nodeMap, inputToSource, inputToSources, flowOutputToTargets } = buildAdjacency(agentNodes, agentEdges);
+  const loopInvariant = classifyLoopInvariant(agentNodes, inputToSource);
+  // Agents are sync (no async hazards) — empty fusion-hazard set.
+  const fusion = detectFusableConsumers(agentNodes, agentEdges, inputToSources, inputToSource, model, new Set<string>());
+
+  const { valueLines, preLoopValueLines, flowLines, scratchNodes } = compileRoot(
+    behaviourNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets,
+    loopInvariant, fusion, agentNodes, agentEdges, model,
+  );
+  const scratchDecls = scratchNodes.map(s => buildScratchDecl(s, model));
+  const { params } = buildAgentLoopParams(model);
+  const bsId = behaviourNode.id;
+
+  const behaviourCode = [
+    `(function(${params}) {`,
+    ...scratchDecls,
+    ...preLoopValueLines,
+    '  let _rs = _rngState[0] || 0x12345678;',
+    '  for (let idx = 0; idx < highWater; idx++) {',
+    '    if (!_alive[idx]) continue;',
+    // behaviourStep value-out preamble — the agent's own geometry/identity.
+    `    const _v${bsId}_myX = _agentX[idx];`,
+    `    const _v${bsId}_myY = _agentY[idx];`,
+    `    const _v${bsId}_myRadius = _agentRadius[idx];`,
+    `    const _v${bsId}_myArea = Math.PI * _agentRadius[idx] * _agentRadius[idx];`,
+    `    const _v${bsId}_myBondDegree = _agentBondCount[idx];`,
+    `    const _v${bsId}_myAge = _agentAge[idx];`,
+    `    const _v${bsId}_myType = _agentType[idx];`,
+    ...valueLines,
+    '',
+    ...flowLines,
+    '  }',
+    '  _rngState[0] = _rs;',
+    '})',
+  ].join('\n');
+
+  return { behaviourCode, initCode: '' };
+}
+
 /**
  * Compile graph and create executable functions.
  */

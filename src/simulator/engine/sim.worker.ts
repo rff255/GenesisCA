@@ -185,7 +185,7 @@ interface PaintManualMsg {
 }
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[] }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; centerBased?: CenterBasedConfig }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -415,21 +415,155 @@ function initAgents(): void {
     }
     seedAgents(agentStore, specs, r);
   }
+  clampAgentDt();
 }
 
-/** Refresh per-agent colours. PR-A2: agent colours are the default per-type
- *  palette set on slot init, so this is a no-op placeholder. PR-A3 runs the
- *  compiled agent colour pass (behaviourStep → Set Cell Looks) over
- *  `agentBehaviourFn` for the `agentColorViewer` here. */
+/** Refresh per-agent colours after a mutation (seed / paint / kill) without
+ *  advancing the simulation. Agent colours are written by the behaviourStep's
+ *  Set Cell Looks during a step; between steps a freshly-seeded agent shows its
+ *  default-palette colour (set on slot init) until the next step recolours it.
+ *  So this is intentionally a no-op (running the behaviour fn here would advance
+ *  the rule + force the position double-buffer). */
 function runAgentColorPass(): void {
-  // PR-A3: dispatch agentBehaviourFn's colour writes for agentColorViewer.
-  void agentBehaviourFn; void agentColorViewer;
+  void agentColorViewer;
 }
 
-/** Run the agent Init Event once per seeded agent on Reset. PR-A2: no-op
- *  (agentInitFn is null until the agent compile path ships). */
+/** Run the agent Init Event once per seeded agent on Reset. v1 has no agent
+ *  Init Event root (agents init to their attribute defaults on seed), so this
+ *  is a no-op placeholder. */
 function runAgentInit(): void {
-  void agentInitFn; // PR-A3
+  void agentInitFn;
+}
+
+/** Build the args for the compiled behaviourStep function. MIRRORS
+ *  `buildAgentLoopParams` in compile.ts EXACTLY (same order). Single-buffer
+ *  agent attrs (attrWrite aliases attrRead). Called once per step (the spread
+ *  is fine — the function is loop-wrapped, not per-agent). */
+function buildAgentLoopArgs(s: AgentStore): unknown[] {
+  const args: unknown[] = [
+    s.alive, s.highWater,
+    s.x, s.y, s.radius, s.targetRadius, s.age, s.type, s.lineage, s.bondCount, s.density,
+    s.divideRequest, s.divideAxisX, s.divideAxisY, s.divideAsym, s.killRequest,
+    s.bondPartner, s.bondPartnerEpoch, s.bondRestLength, s.bondStiffness, s.bondTypeLabel, s.maxBonds,
+  ];
+  for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
+  for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
+  args.push(cachedModelAttrs, s.colors, activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS);
+  return args;
+}
+
+/** Re-derive the clamped force-integration timestep from the live config.
+ *  Mathias-2020 monotonicity bound: for a linear spring `F = μ(d−s)`,
+ *  `Δt*_mono = 1/(2·μ_eff)`, so `Δt ← min(Δt_user, 0.4·Δt*_mono) = 0.2/μ_eff`
+ *  with `μ_eff = μ_R + λ_max`. Must be re-evaluated on any force / bond-λ
+ *  parameter change (the silent-drift hazard). */
+function clampAgentDt(): void {
+  if (!agentStore || !centerBasedConfig) return;
+  const muR = cbNum(centerBasedConfig, 'repulsionStiffness');
+  const lambda = cbNum(centerBasedConfig, 'bondStiffness');
+  const muEff = Math.max(1e-6, muR + lambda);
+  agentStore.dt = Math.min(cbNum(centerBasedConfig, 'timeStep'), 0.2 / muEff);
+}
+
+/** One agent generation: density reductions → compiled behaviour → engine force
+ *  integration (soft-sphere repulsion + bond springs, overdamped Euler with a
+ *  synchronous position double-buffer) → world-bounds wrap/clamp → age. The
+ *  structural phase (division / growth / death) lands in Phase C. v1 uses the
+ *  literature-sanctioned all-pairs O(N²) force loop (the JS/Debug-Reference
+ *  first build); a uniform spatial hash is the Phase F performance path. */
+function runAgentStep(): void {
+  const s = agentStore;
+  if (!s) return;
+  const cfg = centerBasedConfig;
+  const muR = cbNum(cfg, 'repulsionStiffness');
+  const muA = cbNum(cfg, 'adhesionStiffness');
+  const range = cbNum(cfg, 'interactionRange');
+  const eta = Math.max(1e-6, cbNum(cfg, 'drag'));
+  const torus = boundaryTreatment === 'torus';
+  const W = s.worldWidth, H = s.worldHeight;
+  const dt = s.dt;
+  const hw = s.highWater;
+  const x = s.x, y = s.y, rad = s.radius, alive = s.alive;
+
+  // Pass A — neighbour density (count within the interaction cutoff). Read by
+  // the NeighbourDensity node; computed BEFORE behaviour so the rule sees it.
+  for (let i = 0; i < hw; i++) {
+    if (!alive[i]) { s.density[i] = 0; continue; }
+    const xi = x[i]!, yi = y[i]!, ri = rad[i]!;
+    let dens = 0;
+    for (let j = 0; j < hw; j++) {
+      if (j === i || !alive[j]) continue;
+      let dx = x[j]! - xi, dy = y[j]! - yi;
+      if (torus) { if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W; if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H; }
+      const cut = range * (ri + rad[j]!);
+      if (dx * dx + dy * dy < cut * cut) dens++;
+    }
+    s.density[i] = dens;
+  }
+
+  // Compiled behaviour — reads density / position / attrs, writes attrs /
+  // colours / division+kill+bond requests. Reads OLD positions (pre-integration).
+  if (agentBehaviourFn) {
+    try {
+      agentBehaviourFn(...buildAgentLoopArgs(s));
+    } catch (e) {
+      self.postMessage({ type: 'error', message: '[agents] behaviour run failed: ' + ((e as Error)?.message || e) });
+      agentBehaviourFn = null;
+    }
+  }
+
+  // Pass B — net force (soft-sphere repulsion/adhesion + bond springs),
+  // overdamped Euler into the xNext/yNext double-buffer.
+  const xN = s.xNext, yN = s.yNext;
+  const maxBonds = s.maxBonds;
+  for (let i = 0; i < hw; i++) {
+    if (!alive[i]) { xN[i] = x[i]!; yN[i] = y[i]!; continue; }
+    const xi = x[i]!, yi = y[i]!, ri = rad[i]!;
+    let fx = 0, fy = 0;
+    for (let j = 0; j < hw; j++) {
+      if (j === i || !alive[j]) continue;
+      let dx = x[j]! - xi, dy = y[j]! - yi;
+      if (torus) { if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W; if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H; }
+      const d2 = dx * dx + dy * dy;
+      const sij = ri + rad[j]!;
+      const rmax = range * sij;
+      if (d2 === 0 || d2 >= rmax * rmax) continue;
+      const d = Math.sqrt(d2);
+      const inv = 1 / d;
+      // F<0 (d<s) → repulsion (away from j); F>0 (d>s) → adhesion (toward j).
+      const F = (d < sij) ? muR * (d - sij) : muA * (d - sij);
+      fx += F * dx * inv; fy += F * dy * inv;
+    }
+    // Bond springs λ(l−L)·r̂ — no-op until bonds exist (bondCount[i]===0). The
+    // partnerEpoch check is the dangling-bond ABI (a recycled slot's stale bond
+    // reads epoch-mismatch and is skipped).
+    const bc = s.bondCount[i]!;
+    if (bc > 0) {
+      const base = i * maxBonds;
+      for (let k = 0; k < bc; k++) {
+        const p = s.bondPartner[base + k]!;
+        if (p < 0 || p >= hw || !alive[p]) continue;
+        if (s.bondPartnerEpoch[base + k] !== s.epoch[p]) continue;
+        let dx = x[p]! - xi, dy = y[p]! - yi;
+        if (torus) { if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W; if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H; }
+        const d2b = dx * dx + dy * dy;
+        if (d2b === 0) continue;
+        const d = Math.sqrt(d2b);
+        const inv = 1 / d;
+        const F = s.bondStiffness[base + k]! * (d - s.bondRestLength[base + k]!);
+        fx += F * dx * inv; fy += F * dy * inv;
+      }
+    }
+    let nx = xi + (dt / eta) * fx;
+    let ny = yi + (dt / eta) * fy;
+    if (torus) { nx = ((nx % W) + W) % W; ny = ((ny % H) + H) % H; }
+    else { nx = nx < 0 ? 0 : nx > W ? W : nx; ny = ny < 0 ? 0 : ny > H ? H : ny; }
+    xN[i] = nx; yN[i] = ny;
+    s.age[i] = s.age[i]! + 1;
+  }
+  // Commit positions (synchronous double-buffer swap).
+  const tmpX = s.x; s.x = s.xNext; s.xNext = tmpX;
+  const tmpY = s.y; s.y = s.yNext; s.yNext = tmpY;
 }
 // Async-only: per-cell Uint8 view at wasmLayout.skippedOffset. Set by
 // `markCellUpdated` (via the compiled step in JS mode, or `i32.store8` in
@@ -2618,7 +2752,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
 
     case 'step': {
       const webgpuActive = useWebGPU && webgpuRuntime?.stepReady;
-      if (!stepFn && !webgpuActive) {
+      // Bond-Graph Agents: an agent model can step even with a trivial (or
+      // absent) cell step — the agent engine drives the generation.
+      if (!stepFn && !webgpuActive && !agentStore) {
         self.postMessage({ type: 'error', message: 'No compiled step function.' });
         return;
       }
@@ -2676,7 +2812,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
 
       let stoppedByEvent: string | null = null;
       for (let i = 0; i < msg.count; i++) {
-        runStep();
+        // Bond-Graph Agents: one generation = the cell step + the agent step.
+        // (Phase D's runGeneration formalises the deposit→cell→gather→behave
+        // ordering for the closed field feedback; v1 runs cells then agents.)
+        if (stepFn) runStep();
+        if (agentStore) runAgentStep();
         const rawStop = stopFlag[0] ?? 0;
         if (rawStop !== 0) {
           const idx = rawStop - 1;
@@ -2685,7 +2825,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           break;
         }
       }
-      if (!msg.skipColorPass) runColorPass();
+      if (stepFn && !msg.skipColorPass) runColorPass();
       sendColors();
       if (stoppedByEvent !== null) {
         self.postMessage({ type: 'stopEvent', message: stoppedByEvent });
@@ -2959,6 +3099,15 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         syncActiveViewerToMemory();
       }
       compileFns(msg.stepCode, msg.inputColorCodes, (msg as RecompileMsg).outputMappingCodes || [], (msg as RecompileMsg).initCode || '');
+      // Bond-Graph Agents: recompile the agent behaviour fn (graph-only edit, no
+      // reinit). The store + populations persist (a maxAgents/maxBonds change
+      // forces a full reinit instead). Live force/bond params re-clamp Δt.
+      {
+        const rc = msg as RecompileMsg;
+        if (rc.centerBased) centerBasedConfig = rc.centerBased;
+        compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode);
+        clampAgentDt();
+      }
       // Variegated Cells: re-fill the facePatternLookup + interaction-table
       // regions in wasmMemory. The regions themselves stay at the same
       // offsets (no reallocation — initGrid sized them at init time from the

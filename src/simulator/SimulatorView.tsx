@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useModel } from '../model/ModelContext';
-import { compileGraph } from '../modeler/vpl/compiler/compile';
+import { compileGraph, compileAgentGraph } from '../modeler/vpl/compiler/compile';
 import { hasGlyphsInModel } from '../modeler/vpl/compiler/glyphsUsage';
 import { CURRENT_VIEWER_SENTINEL } from '../modeler/vpl/nodes/SetCellLooksNode';
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
@@ -879,9 +879,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // model.agentGraphNodes (the behaviourStep loop + value-outs + force hooks).
   const compileAgentModel = useCallback((): { behaviourCode?: string; initCode?: string; colorViewer: string } => {
     if (!model.topologyMode?.agents) return { colorViewer: '' };
-    // PR-A3 will compile model.agentGraphNodes here.
     const firstViewer = model.mappings.find(mp => mp.isAttributeToColor);
-    return { colorViewer: firstViewer?.id ?? '' };
+    const colorViewer = firstViewer?.id ?? '';
+    const ag = compileAgentGraph(model.agentGraphNodes || [], model.agentGraphEdges || [], model);
+    if (ag.error) {
+      // Surface alongside the cells compile error (Show Code / status). A bare
+      // behaviourStep with no flow is fine (empty behaviourCode, no error).
+      // eslint-disable-next-line no-console
+      console.warn('[agents] compile:', ag.error);
+    }
+    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, colorViewer };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.mappings]);
 
@@ -2272,10 +2279,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const curD = gridDepth.current;
       const modelDepth = model.properties.dimension === '3d' ? Math.max(1, model.properties.gridDepth ?? 1) : 1;
       const effModel = withEffectiveNeighborhoods(model);
-      const dimsModel = (model.properties.gridWidth === curW && model.properties.gridHeight === curH && modelDepth === curD)
+      let dimsModel = (model.properties.gridWidth === curW && model.properties.gridHeight === curH && modelDepth === curD)
         ? effModel
         : { ...effModel, properties: { ...effModel.properties, gridWidth: curW, gridHeight: curH, gridDepth: curD, dimension: curD > 1 ? '3d' as const : effModel.properties.dimension } };
+      // Bond-Graph Agents (D-TARGET): force JS for an agent model (the whole
+      // model — agent driver + cell field — runs on JS in v1).
+      if (model.topologyMode?.agents && (dimsModel.properties.useWasm || dimsModel.properties.useWebGPU)) {
+        dimsModel = { ...dimsModel, properties: { ...dimsModel.properties, useWasm: false, useWebGPU: false } };
+      }
       const result = compileGraph(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
+      // Bond-Graph Agents: recompile the agent graph too (graph-only edit path).
+      const agentResult = compileAgentModel();
       // Show Code follows the selected target — same dispatch as compileModel().
       if (dimsModel.properties.useWebGPU) {
         try {
@@ -2366,15 +2380,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         webgpuEntryPoints: webgpuResult.error ? undefined : webgpuResult.entryPoints,
         webgpuLayout: webgpuResult.error ? undefined : webgpuResult.layout,
         webgpuStopCheckInterval: Math.max(1, Math.floor(model.properties.webgpuStopCheckInterval ?? 1)),
+        // Bond-Graph Agents: ship the recompiled agent behaviour + the live
+        // center-based config so the worker re-clamps Δt and re-binds behaviourFn.
+        agentBehaviourCode: agentResult.behaviourCode,
+        agentInitCode: agentResult.initCode,
+        centerBased: model.centerBased,
       });
-      // If user has the model toggle on, ensure useWasm is set (recompile doesn't carry useWasm by default)
+      // If user has the model toggle on, ensure useWasm is set (recompile doesn't carry useWasm by default).
+      // Bond-Graph Agents force JS (D-TARGET), so dimsModel already cleared the flags.
       workerRef.current?.postMessage({
         type: 'setUseWasm',
-        enabled: !!model.properties.useWasm && !wasmResult.error,
+        enabled: !!dimsModel.properties.useWasm && !wasmResult.error,
       });
       workerRef.current?.postMessage({
         type: 'setUseWebGPU',
-        enabled: !!model.properties.useWebGPU && !webgpuResult.error,
+        enabled: !!dimsModel.properties.useWebGPU && !webgpuResult.error,
       });
       // Sync indicator definitions when they change (not included in recompile message)
       if (prev && prev.indicators !== model.indicators) {
