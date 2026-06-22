@@ -23,7 +23,13 @@ import {
 import { decodeReductions, gpuHandledIds, gpuHandledAttrIds } from './webgpuReduce';
 import { encodeAttrValue } from '../../model/attrValueEncoding';
 import { subAttrInfo, parentValueToInt } from '../../modeler/vpl/compiler/subAttribute';
-import type { Attribute } from '../../model/types';
+import type { Attribute, CenterBasedConfig } from '../../model/types';
+import { cbNum } from '../../model/centerBased';
+import {
+  createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot,
+  snapshotAgentsForRender, serializeAgentStore, deserializeAgentStore,
+  type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec,
+} from './agentEngine';
 
 interface AttrDef {
   id: string;
@@ -141,6 +147,17 @@ interface InitMsg {
   /** True when the model uses setCellGlyph anywhere — drives allocation of
    *  the per-cell glyph overlay regions (codes + colours) in wasmMemory. */
   hasGlyphs?: boolean;
+  /** Bond-Graph Agents: when true, the worker allocates the agent engine (the
+   *  co-resident agent SoA + bond store) from `centerBased`. The lattice grid
+   *  is always allocated too (agents are additive on top — v1 requires a grid). */
+  agents?: boolean;
+  centerBased?: CenterBasedConfig;
+  /** Compiled agent rule-graph functions (Bond-Graph Agents, JS-only v1).
+   *  `behaviourFn` runs once per agent each generation; division/bond fns land
+   *  in later PRs. Absent → agents are inert (seed + render only). */
+  agentBehaviourCode?: string;
+  agentInitCode?: string;
+  agentColorViewer?: string;
 }
 
 interface StepMsg { type: 'step'; count: number; activeViewer: string; skipColorPass?: boolean }
@@ -210,6 +227,8 @@ interface LoadStateMsg {
   modelAttrs: Record<string, number>;
   colors: ArrayBuffer;
   orderArray?: ArrayBuffer;
+  /** Bond-Graph Agents: the agent SoA + bond store snapshot (PR-B1). */
+  agents?: AgentStatePayload;
   activeViewer: string;
 }
 
@@ -284,7 +303,34 @@ interface SetInspectCellsMsg { type: 'setInspectCells'; cellIdxs: number[] }
  *  content despite dispatching a present internally). Idempotent + cheap. */
 interface RefreshDisplayMsg { type: 'refreshDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg;
+// --- Bond-Graph Agents messages ---
+/** Lay down N agents (the seed brush / Reset / headless seeding). Positions are
+ *  in continuous WORLD coordinates. Overflow past maxAgents is reported back. */
+interface SeedAgentsMsg {
+  type: 'seedAgents';
+  agents: Array<{ x: number; y: number; radius?: number; type?: number; lineage?: number }>;
+  activeViewer: string;
+}
+/** Allocate a single agent (free-list first). REJECTS + surfaces on overflow. */
+interface CreateAgentMsg {
+  type: 'createAgent';
+  x: number; y: number; radius?: number; agentType?: number;
+  activeViewer: string;
+}
+/** Kill the agents at the given ids (the kill brush). */
+interface KillAgentsMsg { type: 'killAgents'; ids: number[]; activeViewer: string }
+/** Write user attributes onto the agents at the given ids (the agent paint
+ *  brush). Values pre-encoded via encodeAttrValue (like paintManual). */
+interface PaintAgentsMsg {
+  type: 'paintAgents';
+  ids: number[];
+  sets: Array<{ attrId: string; value: number }>;
+  activeViewer: string;
+}
+/** Remove ALL agents (Reset). */
+interface ClearAgentsMsg { type: 'clearAgents'; activeViewer: string }
+
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -325,6 +371,66 @@ let nbrIndices: Record<string, Int32Array> = {};
 
 let colors: Uint8ClampedArray = new Uint8ClampedArray(0);
 let orderArray: Int32Array | null = null;
+
+// --- Bond-Graph Agents (co-resident agent engine; JS-only v1) ---
+let agentStore: AgentStore | null = null;
+let agentsEnabled = false;
+let centerBasedConfig: CenterBasedConfig | null = null;
+/** Compiled agent behaviour function (runs once per agent each generation).
+ *  Null until the agent compile path ships it (PR-A2.5/A3). */
+let agentBehaviourFn: Function | null = null;
+let agentInitFn: Function | null = null;
+let agentColorViewer = '';
+
+/** Build the agent attribute specs (the non-model cell attributes double as
+ *  per-agent attributes via D-IDX) with their resolved default values. */
+function buildAgentAttrSpecs(): AgentAttrSpec[] {
+  return cellAttrs.map(a => ({ id: a.id, type: a.type, defaultValue: defaultValue(a) }));
+}
+
+/** Allocate (or re-allocate) the agent store from the current config + attrs.
+ *  Called on init when the model has the Agents topology. Seeds the configured
+ *  initial agent count. */
+function initAgents(): void {
+  if (!agentsEnabled || !centerBasedConfig) { agentStore = null; return; }
+  agentStore = createAgentStore(centerBasedConfig, buildAgentAttrSpecs());
+  // The agent world IS the grid coordinate frame (1:1, Decision D-FIELD): agent
+  // (x,y) are in CELL units so they map onto the grid + the screen with the same
+  // transform the cell blit uses. (worldWidth/Height in the config are reserved
+  // for a future agents-only model where there's no grid to define the frame.)
+  agentStore.worldWidth = width;
+  agentStore.worldHeight = height;
+  const seedCount = Math.max(0, Math.floor(cbNum(centerBasedConfig, 'seedCount')));
+  if (seedCount > 0) {
+    const r = cbNum(centerBasedConfig, 'defaultRadius');
+    const specs: AgentSeedSpec[] = [];
+    // Deterministic-ish lattice-perturb fill in the world rectangle.
+    const ww = agentStore.worldWidth, wh = agentStore.worldHeight;
+    const cols = Math.max(1, Math.ceil(Math.sqrt(seedCount * (ww / wh))));
+    const spacing = ww / (cols + 1);
+    for (let i = 0; i < seedCount; i++) {
+      const cx = (i % cols + 1) * spacing;
+      const cy = (Math.floor(i / cols) + 1) * spacing;
+      specs.push({ x: Math.min(ww, cx), y: Math.min(wh, cy), radius: r });
+    }
+    seedAgents(agentStore, specs, r);
+  }
+}
+
+/** Refresh per-agent colours. PR-A2: agent colours are the default per-type
+ *  palette set on slot init, so this is a no-op placeholder. PR-A3 runs the
+ *  compiled agent colour pass (behaviourStep → Set Cell Looks) over
+ *  `agentBehaviourFn` for the `agentColorViewer` here. */
+function runAgentColorPass(): void {
+  // PR-A3: dispatch agentBehaviourFn's colour writes for agentColorViewer.
+  void agentBehaviourFn; void agentColorViewer;
+}
+
+/** Run the agent Init Event once per seeded agent on Reset. PR-A2: no-op
+ *  (agentInitFn is null until the agent compile path ships). */
+function runAgentInit(): void {
+  void agentInitFn; // PR-A3
+}
 // Async-only: per-cell Uint8 view at wasmLayout.skippedOffset. Set by
 // `markCellUpdated` (via the compiled step in JS mode, or `i32.store8` in
 // WASM mode), tested at the top of each cell iteration, cleared before
@@ -1849,6 +1955,21 @@ function compileFns(
   }
 }
 
+/** Bond-Graph Agents: compile the agent rule-graph functions (JS-only v1). The
+ *  behaviour function runs once per LIVE agent each generation over `idx <
+ *  highWater`. Absent code → null (agents seed + render but don't behave, the
+ *  PR-A2 state). */
+function compileAgentFns(behaviourCode?: string, initCode?: string): void {
+  try {
+    // eslint-disable-next-line no-eval
+    agentBehaviourFn = behaviourCode ? (eval(behaviourCode) as Function) : null;
+  } catch (e) { agentBehaviourFn = null; self.postMessage({ type: 'error', message: '[agents] behaviour compile failed: ' + ((e as Error)?.message || e) }); }
+  try {
+    // eslint-disable-next-line no-eval
+    agentInitFn = initCode ? (eval(initCode) as Function) : null;
+  } catch { agentInitFn = null; }
+}
+
 /** Run the per-cell Init function for the entire grid (one cell per
  *  iteration). Sync mode swaps r/w buffers after, so subsequent reads from
  *  readAttrs see the init-time writes. Async mode shares a single buffer so
@@ -2343,6 +2464,22 @@ function sendColors(): void {
     }
   }
 
+  // Bond-Graph Agents — attach a render snapshot (copies of the live region)
+  // so the entity renderer + nearest-agent picker have current positions every
+  // frame. Cheap (maxAgents is small); copies, so the engine keeps its SoA.
+  let agentsPayload: ReturnType<typeof snapshotAgentsForRender> | undefined;
+  const agentTransfers: ArrayBuffer[] = [];
+  if (agentStore && agentStore.highWater > 0) {
+    agentsPayload = snapshotAgentsForRender(agentStore);
+    agentTransfers.push(
+      agentsPayload.x.buffer, agentsPayload.y.buffer, agentsPayload.radius.buffer,
+      agentsPayload.alive.buffer, agentsPayload.colors.buffer, agentsPayload.type.buffer,
+    );
+  } else if (agentStore) {
+    // Empty store — still tell the main thread so it clears any stale agents.
+    agentsPayload = { highWater: 0, liveCount: 0, x: new Float64Array(0), y: new Float64Array(0), radius: new Float64Array(0), alive: new Uint8Array(0), colors: new Uint8ClampedArray(0), type: new Int32Array(0) };
+  }
+
   // P7 — when WebGPU direct render is active, the OffscreenCanvas already
   // holds the latest frame; skip the colors transfer entirely. Main-thread
   // draw() detects this and only does the zoom/pan composite. Exception:
@@ -2351,11 +2488,11 @@ function sendColors(): void {
   if (webgpuRuntime?.directRender && !recording) {
     if (glyphsPayload) {
       self.postMessage(
-        { type: 'stepped', generation, indicators, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors },
-        { transfer: [glyphsPayload.codes.buffer, glyphsPayload.colors.buffer] },
+        { type: 'stepped', generation, indicators, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload },
+        { transfer: [glyphsPayload.codes.buffer, glyphsPayload.colors.buffer, ...agentTransfers] },
       );
     } else {
-      self.postMessage({ type: 'stepped', generation, indicators });
+      self.postMessage({ type: 'stepped', generation, indicators, agents: agentsPayload }, { transfer: agentTransfers });
     }
     postInspectCellsData();
     return;
@@ -2363,13 +2500,13 @@ function sendColors(): void {
   const copy = new Uint8ClampedArray(colors);
   if (glyphsPayload) {
     self.postMessage(
-      { type: 'stepped', generation, colors: copy, indicators, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors },
-      { transfer: [copy.buffer, glyphsPayload.codes.buffer, glyphsPayload.colors.buffer] },
+      { type: 'stepped', generation, colors: copy, indicators, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload },
+      { transfer: [copy.buffer, glyphsPayload.codes.buffer, glyphsPayload.colors.buffer, ...agentTransfers] },
     );
   } else {
     self.postMessage(
-      { type: 'stepped', generation, colors: copy, indicators },
-      { transfer: [copy.buffer] },
+      { type: 'stepped', generation, colors: copy, indicators, agents: agentsPayload },
+      { transfer: [copy.buffer, ...agentTransfers] },
     );
   }
   postInspectCellsData();
@@ -2436,6 +2573,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // Int32Array views (single source of truth).
       initVariegation(msg.variegated, msg.interactionTables);
       compileFns(msg.stepCode, msg.inputColorCodes, msg.outputMappingCodes || [], msg.initCode || '');
+      // Bond-Graph Agents — allocate the co-resident agent engine (additive on
+      // top of the always-present grid). The agent behaviour/init functions are
+      // compiled by compileAgentFns; absent in PR-A2 (agents seed + render only).
+      agentsEnabled = !!msg.agents;
+      centerBasedConfig = msg.centerBased ?? null;
+      agentColorViewer = msg.agentColorViewer || '';
+      initAgents();
+      compileAgentFns(msg.agentBehaviourCode, msg.agentInitCode);
       stopMessages = msg.stopMessages || [];
       webgpuStopCheckInterval = Math.max(1, Math.floor(msg.webgpuStopCheckInterval ?? 1));
       // Mutual exclusion safety net: a saved file or hand-edited JSON could
@@ -2760,6 +2905,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'reset': {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       resetGrid();
+      // Bond-Graph Agents — Reset re-seeds the agent population (clear + re-seed
+      // the configured initial count + the agent Init Event, PR-A3). Re-allocates
+      // the store from the live config so a config edit (maxAgents/seedCount/…)
+      // takes effect on Reset.
+      if (agentsEnabled) { initAgents(); runAgentInit(); runAgentColorPass(); }
       // Init Event runs once per cell on Reset only (not on Randomize, not on
       // Load State). When present, it modifies attrs in place AFTER defaults
       // have been applied and BEFORE the color pass / GPU upload.
@@ -3191,6 +3341,66 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       break;
     }
 
+    // --- Bond-Graph Agents ---
+    case 'seedAgents': {
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
+      if (agentStore) {
+        const dr = cbNum(centerBasedConfig, 'defaultRadius');
+        const ids = seedAgents(agentStore, msg.agents.map(a => ({ x: a.x, y: a.y, radius: a.radius, type: a.type, lineage: a.lineage })), dr);
+        if (ids.length < msg.agents.length) {
+          self.postMessage({ type: 'agentOverflow', message: `Agent capacity reached (maxAgents=${agentStore.maxAgents}). ${msg.agents.length - ids.length} agent(s) not created.` });
+        }
+        runAgentColorPass();
+      }
+      sendColors();
+      break;
+    }
+    case 'createAgent': {
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
+      if (agentStore) {
+        const id = allocAgentSlot(agentStore);
+        if (id < 0) {
+          self.postMessage({ type: 'agentOverflow', message: `Agent capacity reached (maxAgents=${agentStore.maxAgents}).` });
+        } else {
+          initAgentSlot(agentStore, id, msg.x, msg.y, msg.radius ?? cbNum(centerBasedConfig, 'defaultRadius'), msg.agentType ?? 0, id);
+          runAgentColorPass();
+        }
+      }
+      sendColors();
+      break;
+    }
+    case 'killAgents': {
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
+      if (agentStore) {
+        for (const id of msg.ids) if (id >= 0 && id < agentStore.highWater) freeAgentSlot(agentStore, id);
+        runAgentColorPass();
+      }
+      sendColors();
+      break;
+    }
+    case 'paintAgents': {
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
+      if (agentStore) {
+        for (const id of msg.ids) {
+          if (id < 0 || id >= agentStore.highWater || !agentStore.alive[id]) continue;
+          for (const s of msg.sets) {
+            const r = agentStore.attrRead[s.attrId]; const w = agentStore.attrWrite[s.attrId];
+            if (r) r[id] = s.value;
+            if (w) w[id] = s.value;
+          }
+        }
+        runAgentColorPass();
+      }
+      sendColors();
+      break;
+    }
+    case 'clearAgents': {
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
+      if (agentStore) clearAgents(agentStore);
+      sendColors();
+      break;
+    }
+
     case 'getState': {
       const sendNow = () => {
         const attrBuffers: Record<string, { type: string; buffer: ArrayBuffer }> = {};
@@ -3218,6 +3428,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           const orderCopy = orderArray.slice();
           response.orderArray = orderCopy.buffer;
           transfers.push(orderCopy.buffer);
+        }
+        // Bond-Graph Agents: serialize the holey agent table + ragged bond
+        // store + free-list (transferred). PR-B1 hardens the dangling-bond ABI.
+        if (agentStore) {
+          response.agents = serializeAgentStore(agentStore, transfers);
         }
         self.postMessage(response, { transfer: transfers });
       };
@@ -3315,6 +3530,18 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
 
       // Rebuild neighbor indices for constant boundary sentinel
       buildNeighborIndices();
+
+      // Bond-Graph Agents: restore the agent SoA + bond store. Reject LOUDLY on
+      // a structural mismatch (the holey/ragged store can't be silently
+      // mis-strided) rather than aborting the whole load.
+      if (msg.agents && agentStore) {
+        try {
+          deserializeAgentStore(agentStore, msg.agents);
+          runAgentColorPass();
+        } catch (e) {
+          self.postMessage({ type: 'error', message: '[agents] load failed: ' + ((e as Error)?.message || e) });
+        }
+      }
 
       // Sync restored state to GPU when WebGPU is active.
       if (useWebGPU && webgpuRuntime?.stepReady) {

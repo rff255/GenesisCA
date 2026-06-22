@@ -11,6 +11,7 @@ import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefault
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { Gl3DRenderer, panCamera } from './render/gl3d';
+import type { AgentRenderSnapshot } from './engine/agentEngine';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
 import { getGlyphTile } from './recording/glyphAtlas';
@@ -682,6 +683,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const is3D = (model.properties.dimension ?? '2d') === '3d';
   const is3dRef = useRef(is3D);
   is3dRef.current = is3D;
+  // Bond-Graph Agents: the live agent render snapshot (from the worker `stepped`
+  // message), the per-render flag, and the seed/brush configuration. The agent
+  // world is the grid coordinate frame (1:1), so agent (x,y) map to screen with
+  // the same transform the cell blit uses.
+  const isAgentModel = !!model.topologyMode?.agents;
+  const isAgentModelRef = useRef(isAgentModel);
+  isAgentModelRef.current = isAgentModel;
+  const agentsRef = useRef<AgentRenderSnapshot | null>(null);
   const glCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const gl3dRef = useRef<import('./render/gl3d').Gl3DRenderer | null>(null);
   // Z-up Blender-style orbit camera. Default 3/4 view looking down onto the XY plane.
@@ -864,6 +873,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model.graphNodes, model.graphEdges, model.neighborhoods, model.indicators, model.properties.useWasm, model.properties.useWebGPU, buildFullCode]);
 
+  // Bond-Graph Agents: compile the agent rule graph (the second graph). JS-only
+  // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
+  // don't behave); PR-A3 wires the real compileAgentGraph over
+  // model.agentGraphNodes (the behaviourStep loop + value-outs + force hooks).
+  const compileAgentModel = useCallback((): { behaviourCode?: string; initCode?: string; colorViewer: string } => {
+    if (!model.topologyMode?.agents) return { colorViewer: '' };
+    // PR-A3 will compile model.agentGraphNodes here.
+    const firstViewer = model.mappings.find(mp => mp.isAttributeToColor);
+    return { colorViewer: firstViewer?.id ?? '' };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.mappings]);
+
   // Draw using ImageData + zoom/pan transform
   const draw = useCallback(() => {
     // 3D Grid CA: render the voxel volume via WebGL2 instead of the 2D blit.
@@ -1024,6 +1045,44 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
     };
 
+    // Bond-Graph Agents — overlay the live agents as filled circles on top of
+    // the grid. Agent (x,y) are in CELL units (the agent world is the grid
+    // frame 1:1), so they share the cell→screen transform: cx = ox + x*scale.
+    // Radius scales with the cell pixel size. Drawn over the colour blit; tiled
+    // in infinity mode like the grid.
+    const drawAgentsOverlay = () => {
+      if (!isAgentModelRef.current) return;
+      const snap = agentsRef.current;
+      if (!snap || snap.highWater === 0) return;
+      const { x: ax, y: ay, radius: ar, alive: aal, colors: acol, highWater: hw } = snap;
+      const stamp = (tileOx: number, tileOy: number) => {
+        for (let i = 0; i < hw; i++) {
+          if (!aal[i]) continue;
+          const cx = tileOx + ax[i]! * scale;
+          const cy = tileOy + ay[i]! * scale;
+          const rad = Math.max(1.2, ar[i]! * scale);
+          if (cx + rad < 0 || cx - rad > parentW || cy + rad < 0 || cy - rad > parentH) continue;
+          const c = i * 4;
+          ctx.beginPath();
+          ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(${acol[c]},${acol[c + 1]},${acol[c + 2]},${acol[c + 3]! / 255})`;
+          ctx.fill();
+          if (rad >= 2) {
+            ctx.lineWidth = Math.max(0.5, rad * 0.14);
+            ctx.strokeStyle = 'rgba(0,0,0,0.40)';
+            ctx.stroke();
+          }
+        }
+      };
+      if (infinity) {
+        for (let ty = tyMin; ty <= tyMax; ty++)
+          for (let tx = txMin; tx <= txMax; tx++)
+            stamp(ox + tx * scaledW, oy + ty * scaledH);
+      } else {
+        stamp(ox, oy);
+      }
+    };
+
     // Zoomed-out glyph-color fallback: when cells are too small to draw glyphs
     // AND the active viewer's Set Cell Looks asked for it, blit a bitmap where
     // each glyphed cell is painted with its glyph color — so the macro view
@@ -1118,6 +1177,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
       ctx.stroke();
     }
+
+    // Bond-Graph Agents — draw the agent circles on top of the grid + gridlines,
+    // below the brush cursor.
+    drawAgentsOverlay();
 
     // Draw the brush cursor as the exact cell-silhouette of the current stamp
     // (rect / circle / ring / line preview), stroked in 'difference' composite
@@ -1350,6 +1413,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
     if (msg.type === 'stepped') {
       colorsRef.current = msg.colors as Uint8ClampedArray;
+      // Bond-Graph Agents: stash the latest agent render snapshot (positions /
+      // radius / alive / colours) for drawAgents + nearest-agent picking. Sent
+      // every frame for an agent model; absent for a lattice-only model.
+      if (msg.agents !== undefined) agentsRef.current = msg.agents as AgentRenderSnapshot | null;
       // Glyph overlay buffers — undefined when the model has no setCellGlyph
       // OR when every cell's glyph code is 0 this frame. Clearing to null in
       // the latter case lets the overlay skip the loop entirely (no need to
@@ -1728,6 +1795,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     inspectOrientationsRef.current.clear();
     srcCanvasRef.current = null;
     const result = compileModel();
+    // Bond-Graph Agents: compile the agent rule graph (JS-only v1). PR-A2 ships
+    // a placeholder (agents are inert — seed + render only); PR-A3 wires the
+    // real compileAgentGraph (behaviourStep loop + force driver hooks).
+    const agentResult = compileAgentModel();
     const firstViewer = model.mappings.find(m => m.isAttributeToColor);
     const viewer = firstViewer?.id ?? '';
     setActiveViewer(viewer);
@@ -1798,9 +1869,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // and the 3D decode match (WASM takes total at runtime, but the codec/decode
     // still keys off dimension/gridDepth).
     const modelDepth = model.properties.dimension === '3d' ? Math.max(1, model.properties.gridDepth ?? 1) : 1;
-    const dimsModel = (model.properties.gridWidth === w && model.properties.gridHeight === h && modelDepth === d3)
+    let dimsModel = (model.properties.gridWidth === w && model.properties.gridHeight === h && modelDepth === d3)
       ? effModel
       : { ...effModel, properties: { ...effModel.properties, gridWidth: w, gridHeight: h, gridDepth: d3, dimension: d3 > 1 ? '3d' as const : effModel.properties.dimension } };
+    // Bond-Graph Agents (Decision D-TARGET): the agent engine is JS-reference-
+    // only in v1, so an agent model runs ENTIRELY on JS — both the agent driver
+    // AND the cell field. Force the compile target to JS here (the single
+    // enforcement chokepoint) so wasmResult/webgpuResult skip + the init flags
+    // ship JS. WASM/WebGPU agent compilation is the later Phase F milestone.
+    const agentForceJS = !!model.topologyMode?.agents;
+    if (agentForceJS && (dimsModel.properties.useWasm || dimsModel.properties.useWebGPU)) {
+      dimsModel = { ...dimsModel, properties: { ...dimsModel.properties, useWasm: false, useWebGPU: false } };
+    }
     // Viewer→int mapping is target-agnostic — the worker needs it for
     // uploadActiveViewer regardless of which compile target is active. WGSL
     // SetColorViewer-in-step writes are guarded on `control.activeViewer ==
@@ -1812,7 +1892,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // when WASM isn't active, and avoids surfacing WASM-only errors when the
     // user is on JS or WebGPU.
     const wasmResult = (() => {
-      if (!model.properties.useWasm) {
+      if (!dimsModel.properties.useWasm) {
         return { bytes: new Uint8Array(), minMemoryPages: 1, error: '', viewerIds, exports: [] };
       }
       try {
@@ -1829,7 +1909,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // Skip the WebGPU compile when the user hasn't selected the WebGPU target.
       // Otherwise, async-only nodes etc. produce a shader error that the worker
       // would surface as a popup even though the model is running on JS/WASM.
-      if (!model.properties.useWebGPU) {
+      if (!dimsModel.properties.useWebGPU) {
         return { shaderCode: '', entryPoints: { step: 'step', outputMappings: [] as Array<{ mappingId: string; entry: string }> }, layout: null as never, error: '' };
       }
       try {
@@ -1870,7 +1950,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // renderer needs that colors buffer. Skipping the attach keeps WebGPU on the
     // readback path (colors shipped via `stepped`), so WebGPU COMPUTE still runs
     // and the GL renderer draws from colorsRef.
-    if (model.properties.useWebGPU && !webgpuResult.error && offscreenSupported && !is3D) {
+    if (dimsModel.properties.useWebGPU && !webgpuResult.error && offscreenSupported && !is3D) {
       pendingCanvasAttach.current = true;
     }
     // 3D Grid CA: effective layer count = d3 computed above (honours a resize-
@@ -1940,17 +2020,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       wasmStepError: wasmResult.error,
       wasmExports: wasmResult.exports,
       viewerIds: wasmResult.viewerIds,
-      useWasm: !!model.properties.useWasm,
+      useWasm: !!dimsModel.properties.useWasm,
       webgpuShaderCode: webgpuResult.error ? undefined : webgpuResult.shaderCode,
       webgpuShaderError: webgpuResult.error,
       webgpuEntryPoints: webgpuResult.error ? undefined : webgpuResult.entryPoints,
       webgpuLayout: webgpuResult.error ? undefined : webgpuResult.layout,
-      useWebGPU: !!model.properties.useWebGPU,
+      useWebGPU: !!dimsModel.properties.useWebGPU,
       webgpuStopCheckInterval: Math.max(1, Math.floor(model.properties.webgpuStopCheckInterval ?? 1)),
       // Glyph overlay regions are only allocated when the graph actually uses
       // setCellGlyph. Worker reads this BEFORE initGrid so layout reserves the
       // matching memory (and the views are non-null).
       hasGlyphs: hasGlyphsInModel(model),
+      // Bond-Graph Agents: allocate the agent engine when the model has the
+      // Agents topology. The agent world is the grid coordinate frame (1:1), so
+      // agents are additive on top of the always-present grid. The compiled
+      // agent behaviour/init code is attached by the agent compile path (A3).
+      agents: !!model.topologyMode?.agents,
+      centerBased: model.centerBased,
+      agentBehaviourCode: agentResult.behaviourCode,
+      agentInitCode: agentResult.initCode,
+      agentColorViewer: agentResult.colorViewer,
     };
     // Canvas transfer is deferred to the useWebGPUStatus handler — see
     // pendingCanvasAttach above. The init message never carries webgpuCanvas
@@ -2132,7 +2221,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       || prev.mappings !== model.mappings
       // Glyph regions are allocated at init time; changing whether the model
       // uses setCellGlyph requires re-laying out wasmMemory.
-      || hasGlyphsInModel(prev) !== hasGlyphsInModel(model);
+      || hasGlyphsInModel(prev) !== hasGlyphsInModel(model)
+      // Bond-Graph Agents: toggling the Agents topology allocates / frees the
+      // agent engine; changing the SoA ceilings (maxAgents / maxBonds) resizes
+      // its arrays — both need a full reinit (a soft recompile keeps the stale
+      // store). Live force/bond params (handled via recompile / updateModelAttrs)
+      // do NOT force a reinit.
+      || !!prev.topologyMode?.agents !== !!model.topologyMode?.agents
+      || (prev.centerBased?.maxAgents ?? 0) !== (model.centerBased?.maxAgents ?? 0)
+      || (prev.centerBased?.maxBonds ?? 0) !== (model.centerBased?.maxBonds ?? 0);
 
     if (needsFullInit) {
       workerRef.current?.terminate();
@@ -2953,6 +3050,53 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     return { x: rect.left + ox + col * scale, y: rect.top + oy + row * scale, cellSize: scale };
   }, []);
 
+  // Bond-Graph Agents — continuous-position (fractional cell = world) coordinate
+  // of a screen point, for seeding + nearest-agent picking. Unlike screenToGrid
+  // it does NOT floor (agents live between cells). Torus-wraps in infinity mode.
+  const screenToWorld = useCallback((clientX: number, clientY: number): { x: number; y: number; scale: number } | null => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.parentElement!.getBoundingClientRect();
+    const w = gridWidth.current, h = gridHeight.current;
+    if (w === 0 || h === 0) return null;
+    const baseScale = Math.min(rect.width / w, rect.height / h);
+    const scale = baseScale * zoomRef.current;
+    const ox = (rect.width - w * scale) / 2 + panRef.current.x;
+    const oy = (rect.height - h * scale) / 2 + panRef.current.y;
+    let x = (clientX - rect.left - ox) / scale;
+    let y = (clientY - rect.top - oy) / scale;
+    const infinity = infinityCanvasRef.current && boundaryTreatmentRef.current === 'torus';
+    if (infinity) { x = ((x % w) + w) % w; y = ((y % h) + h) % h; }
+    return { x, y, scale };
+  }, []);
+
+  // Nearest LIVE agent under a screen point (within its radius). Returns its id
+  // or -1. O(highWater) scan — fine at the v1 agent counts (PR-A3 could swap in
+  // the force driver's spatial hash for very large populations).
+  const pickAgentAt = useCallback((clientX: number, clientY: number): number => {
+    const snap = agentsRef.current;
+    if (!snap || snap.highWater === 0) return -1;
+    const wpt = screenToWorld(clientX, clientY);
+    if (!wpt) return -1;
+    let best = -1, bestD2 = Infinity;
+    for (let i = 0; i < snap.highWater; i++) {
+      if (!snap.alive[i]) continue;
+      const dx = snap.x[i]! - wpt.x, dy = snap.y[i]! - wpt.y;
+      const d2 = dx * dx + dy * dy;
+      const r = snap.radius[i]!;
+      if (d2 <= r * r && d2 < bestD2) { bestD2 = d2; best = i; }
+    }
+    return best;
+  }, [screenToWorld]);
+
+  // Post a seed-agents message for a list of world positions. PR-A4 wires this
+  // into a proper brush; PR-A2 exposes it via the DEV hook + a simple control.
+  const seedAgentsAt = useCallback((pts: Array<{ x: number; y: number; type?: number }>) => {
+    const worker = workerRef.current;
+    if (!worker || !isAgentModelRef.current) return;
+    worker.postMessage({ type: 'seedAgents', agents: pts, activeViewer: activeViewerRef.current });
+  }, []);
+
   /** Parse hex color to RGB */
   const hexToRgb = (hex: string) => {
     const n = parseInt(hex.replace('#', ''), 16);
@@ -3396,6 +3540,23 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         sweepMovedRef.current = false;
         sweepInspectorRef.current = inspector;
         setSweepInspector(inspector);
+        return;
+      }
+
+      // Bond-Graph Agents — Alt+LMB seeds an agent at the cursor; Alt+Shift+LMB
+      // kills the agent under the cursor. (PR-A4 replaces this with a proper
+      // Agent brush panel; this keeps an agent model interactive in the
+      // meantime.) Only active for an agent model.
+      if (e.button === 0 && e.altKey && isAgentModelRef.current) {
+        e.preventDefault();
+        if (e.shiftKey) {
+          const id = pickAgentAt(e.clientX, e.clientY);
+          const worker = workerRef.current;
+          if (id >= 0 && worker) worker.postMessage({ type: 'killAgents', ids: [id], activeViewer: activeViewerRef.current });
+        } else {
+          const wpt = screenToWorld(e.clientX, e.clientY);
+          if (wpt) seedAgentsAt([{ x: wpt.x, y: wpt.y }]);
+        }
         return;
       }
 
