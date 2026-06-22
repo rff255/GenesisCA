@@ -160,6 +160,12 @@ interface InitMsg {
   agentInitCode?: string;
   agentDivisionCode?: string;
   agentColorViewer?: string;
+  /** PR5 (C-D1): true when the agent graph reads/writes the cell field
+   *  (sampleField / fieldGradient / readCellsUnder / affectCellsUnder /
+   *  secreteToField). Drives the WebGPU-grid field bridge: only a field model
+   *  needs the per-generation attrs CPU↔GPU readback/upload around runAgentStep
+   *  (a no-field model's agent loop never touches `readAttrs`). */
+  agentUsesField?: boolean;
 }
 
 interface StepMsg { type: 'step'; count: number; activeViewer: string; skipColorPass?: boolean }
@@ -187,7 +193,7 @@ interface PaintManualMsg {
 }
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; centerBased?: CenterBasedConfig }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; centerBased?: CenterBasedConfig; agentUsesField?: boolean }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -395,6 +401,10 @@ let orderArray: Int32Array | null = null;
 // --- Bond-Graph Agents (co-resident agent engine; JS-only v1) ---
 let agentStore: AgentStore | null = null;
 let agentsEnabled = false;
+/** PR5 (C-D1): true when the agent graph touches the cell field. Gates the
+ *  WebGPU-grid field bridge (CPU↔GPU attrs readback/upload around runAgentStep).
+ *  A no-field model leaves it false → 0 per-step readbacks. */
+let agentUsesField = false;
 let centerBasedConfig: CenterBasedConfig | null = null;
 /** Compiled agent behaviour function (runs once per agent each generation).
  *  Null until the agent compile path ships it (PR-A2.5/A3). */
@@ -3012,6 +3022,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // top of the always-present grid). The agent behaviour/init functions are
       // compiled by compileAgentFns; absent in PR-A2 (agents seed + render only).
       agentsEnabled = !!msg.agents;
+      agentUsesField = !!msg.agentUsesField;
       centerBasedConfig = msg.centerBased ?? null;
       agentColorViewer = msg.agentColorViewer || '';
       initAgents();
@@ -3077,6 +3088,31 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           // would advance past it).
           const k = Math.max(1, webgpuStopCheckInterval | 0);
           for (let i = 0; i < msg.count; i++) {
+            // Bond-Graph Agents on a WebGPU grid (PR5 — independent targets,
+            // C-D1). ONE generation = the closed agent↔grid loop, same ordering
+            // as the JS/WASM branch (agents step BEFORE the cell step), but with
+            // the field RESIDENCY bridge: under WebGPU the cell attrs are
+            // GPU-resident after a step (gpuOwnsAttrs), so a field model must
+            // pull them down before the agents gather, then push the agents'
+            // deposit back up before the GPU cell step consumes it.
+            //   field model:  GPU→CPU readback → runAgentStep (gather+deposit on
+            //                  readAttrs) → CPU→GPU upload → runStepWebGPU.
+            //   no-field model: just runAgentStep (writes only the agent SoA +
+            //                  colors) → runStepWebGPU. ZERO readbacks.
+            // The JS/WASM per-generation loop is left LITERALLY unchanged — the
+            // bridge lives ONLY here (the WebGPU branch is already async, so the
+            // `await ensureCpuAttrsFresh()` fits; you cannot await in the sync
+            // JS/WASM `for` loop). Two paths, never one.
+            if (agentStore && webgpuRuntime) {
+              if (agentUsesField && gpuOwnsAttrs) {
+                await ensureCpuAttrsFresh();        // GPU→CPU; flips gpuOwnsAttrs=false
+              }
+              runAgentStep();                        // gather reads readAttrs (fresh); deposit writes readAttrs
+              if (agentUsesField) {
+                uploadAttrs(webgpuRuntime, readAttrs); // CPU→GPU, before the cell step
+                gpuOwnsAttrs = false;
+              }
+            }
             runStepWebGPU();
             const isLast = i === msg.count - 1;
             const shouldCheck = stopMessages.length > 0 && (k === 1 || isLast || (i % k) === (k - 1));
@@ -3411,6 +3447,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       {
         const rc = msg as RecompileMsg;
         if (rc.centerBased) centerBasedConfig = rc.centerBased;
+        if (rc.agentUsesField !== undefined) agentUsesField = !!rc.agentUsesField;
         compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode, rc.agentDivisionCode);
         clampAgentDt();
       }

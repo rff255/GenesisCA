@@ -650,6 +650,12 @@ export interface CenterBasedConfig {
    *  cluster; explicit Form Bond / Break Bond nodes + the glue brush give
    *  per-rule control on top. */
   autoBond?: boolean;
+  /** Agent-engine compile target, INDEPENDENT of the grid target
+   *  (model.properties.useWasm/useWebGPU). 'js' (default) until Phase F ports
+   *  compileAgentGraph to WASM/WebGPU. Grid and agents can differ:
+   *  e.g. grid='webgpu' (diffusion) + agentTarget='wasm' (async agents).
+   *  Resolved (and clamped to what's implemented) via `agentTargetOf`. */
+  agentTarget?: 'js' | 'wasm' | 'webgpu';
 }
 
 /** Complete CA model definition */

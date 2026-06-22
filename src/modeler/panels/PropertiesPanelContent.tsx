@@ -422,6 +422,42 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
             return (
               <div style={{ marginTop: 14, borderTop: '1px solid #333', paddingTop: 10 }}>
                 <label className={styles.fieldLabel} style={{ marginBottom: 6, color: '#b58fd6' }}>Bond-Graph Agents</label>
+                {/* Agent Compile Target — INDEPENDENT of the grid's Compile
+                    Target radio above. The agent engine runs on JS this release;
+                    WASM/WebGPU are Phase F (rendered disabled). PR5: changing it
+                    forces a recompile + a full reinit (agentTarget is in
+                    needsFullInit). */}
+                <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '6px 0 4px' }}>Agent Compile Target</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 2, marginBottom: 4 }}>
+                  {([
+                    ['js', 'Debug / Reference (JS)', 'Plain JavaScript agent engine — full node coverage. The agent loop is O(N) via the spatial hash.', false],
+                    ['wasm', 'WebAssembly', 'coming soon (Phase F)', true],
+                    ['webgpu', 'WebGPU', 'coming soon (Phase F)', true],
+                  ] as const).map(([val, title, hint, disabled]) => (
+                    <label
+                      key={val}
+                      style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: disabled ? 'not-allowed' : 'pointer', fontSize: '0.72rem', opacity: disabled ? 0.5 : 1 }}
+                      title={disabled ? 'Not yet implemented — the agent loop is JS-only this release (Phase F ports it to WASM/WebGPU).' : undefined}
+                    >
+                      <input
+                        type="radio"
+                        name="agentCompileTarget"
+                        disabled={disabled}
+                        checked={(cb?.agentTarget ?? 'js') === val}
+                        onChange={() => updateCenterBased({ agentTarget: val })}
+                        style={{ marginTop: 2 }}
+                      />
+                      <span>
+                        <strong>{title}</strong>
+                        <br />
+                        <span style={{ color: '#888', fontSize: '0.66rem' }}>{hint}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                <span style={{ color: '#888', fontSize: '0.62rem', display: 'block', marginBottom: 4 }}>
+                  Independent of the grid's Compile Target. The grid and agents can run on different targets (e.g. WebGPU grid diffusion + WASM agents).
+                </span>
                 <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '6px 0 4px' }}>Capacity</div>
                 {Row('Max Agents', NF('maxAgents', { min: 1, integer: true }), 'Over-allocated ceiling; overflow rejects (never wraps). Changing it re-inits the engine.')}
                 {Row('Max Bonds / Agent', NF('maxBonds', { min: 1, integer: true }))}

@@ -1027,6 +1027,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.mappings]);
 
+  // PR5 (C-D1) — does the agent graph touch the cell field? Scan the agent
+  // graph for any of the five field nodes (sampleField / fieldGradient /
+  // readCellsUnder / affectCellsUnder / secreteToField). The worker uses this
+  // to decide whether a WebGPU-grid step needs the per-generation field
+  // CPU↔GPU bridge: a no-field model never reads/writes `readAttrs` from the
+  // agent loop, so it skips the readback/upload entirely.
+  const agentUsesField = useCallback((): boolean => {
+    if (!model.topologyMode?.agents) return false;
+    const FIELD_NODE_TYPES = new Set(['sampleField', 'fieldGradient', 'readCellsUnder', 'affectCellsUnder', 'secreteToField']);
+    return (model.agentGraphNodes || []).some(n => FIELD_NODE_TYPES.has(n.data?.nodeType as string));
+  }, [model.agentGraphNodes, model.topologyMode?.agents]);
+
   // Draw using ImageData + zoom/pan transform
   const draw = useCallback(() => {
     // 3D Grid CA: render the voxel volume via WebGL2 instead of the 2D blit.
@@ -2104,16 +2116,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     let dimsModel = (model.properties.gridWidth === w && model.properties.gridHeight === h && modelDepth === d3)
       ? effModel
       : { ...effModel, properties: { ...effModel.properties, gridWidth: w, gridHeight: h, gridDepth: d3, dimension: d3 > 1 ? '3d' as const : effModel.properties.dimension } };
-    // Bond-Graph Agents target policy: the agent ENGINE/driver always runs on
-    // JS (Phase F ports it to WASM later). The CELL FIELD, however, MAY use
-    // WASM — its attrs are wasmMemory VIEWS the JS agent loop reads/writes
-    // directly (the field bridge shares the buffer with the WASM step), so a
-    // field-heavy morphogenesis model gets the fast diffusion path while agents
-    // stay JS. WebGPU is still forced off for agent models: it keeps cell attrs
-    // GPU-resident, which the JS agent can't read without a per-step readback.
-    if (model.topologyMode?.agents && dimsModel.properties.useWebGPU) {
-      dimsModel = { ...dimsModel, properties: { ...dimsModel.properties, useWebGPU: false } };
-    }
+    // Bond-Graph Agents target policy (PR5 — independent targets): the GRID
+    // target (useWasm/useWebGPU) now flows through UNMODIFIED for agent models.
+    // The agent ENGINE/driver still runs on JS (agentTargetOf clamps to 'js'
+    // until Phase F), but the grid CA can be JS / WASM / WebGPU. For a WebGPU
+    // grid + JS agents, the worker's WebGPU step branch interleaves runAgentStep
+    // and (for field models) bridges attrs CPU↔GPU per generation. The old
+    // `useWebGPU = false` force-disable hack is GONE — the bridge replaces it.
     // Viewer→int mapping is target-agnostic — the worker needs it for
     // uploadActiveViewer regardless of which compile target is active. WGSL
     // SetColorViewer-in-step writes are guarded on `control.activeViewer ==
@@ -2183,7 +2192,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // renderer needs that colors buffer. Skipping the attach keeps WebGPU on the
     // readback path (colors shipped via `stepped`), so WebGPU COMPUTE still runs
     // and the GL renderer draws from colorsRef.
-    if (dimsModel.properties.useWebGPU && !webgpuResult.error && offscreenSupported && !is3D) {
+    //
+    // Bond-Graph Agents (PR5, C-D2): same gate, same reason — an agent model on
+    // a WebGPU grid MUST stay on the colors-READBACK render path. The agent
+    // overlay (drawAgentsOverlay) is a main-thread composite on top of the cell
+    // colors blit, and WebGPU *direct* render writes straight to the
+    // OffscreenCanvas, skipping the per-step colors readback the overlay needs.
+    // Costs a modest per-step colors readback for agent+WebGPU models — accepted.
+    const agentModel = !!model.topologyMode?.agents;
+    if (dimsModel.properties.useWebGPU && !webgpuResult.error && offscreenSupported && !is3D && !agentModel) {
       pendingCanvasAttach.current = true;
     }
     // 3D Grid CA: effective layer count = d3 computed above (honours a resize-
@@ -2274,6 +2291,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       agentInitCode: agentResult.initCode,
       agentDivisionCode: agentResult.divisionCode,
       agentColorViewer: agentResult.colorViewer,
+      // PR5 (C-D1): whether the agent graph reads/writes the cell field. Drives
+      // the WebGPU-grid field bridge (a no-field model does 0 per-step
+      // readbacks). Cheap boolean — leave the JS/WASM grid path untouched.
+      agentUsesField: agentUsesField(),
     };
     // Canvas transfer is deferred to the useWebGPUStatus handler — see
     // pendingCanvasAttach above. The init message never carries webgpuCanvas
@@ -2463,7 +2484,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // do NOT force a reinit.
       || !!prev.topologyMode?.agents !== !!model.topologyMode?.agents
       || (prev.centerBased?.maxAgents ?? 0) !== (model.centerBased?.maxAgents ?? 0)
-      || (prev.centerBased?.maxBonds ?? 0) !== (model.centerBased?.maxBonds ?? 0);
+      || (prev.centerBased?.maxBonds ?? 0) !== (model.centerBased?.maxBonds ?? 0)
+      // PR5: the Agent Compile Target is independent of the grid target. Changing
+      // it switches the agent driver's memory residency (Phase F: JS↔WASM↔WebGPU),
+      // so it needs a full reinit, not a soft recompile (mirrors useWasm/useWebGPU).
+      || (prev.centerBased?.agentTarget ?? 'js') !== (model.centerBased?.agentTarget ?? 'js');
 
     if (needsFullInit) {
       workerRef.current?.terminate();
@@ -2509,12 +2534,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       let dimsModel = (model.properties.gridWidth === curW && model.properties.gridHeight === curH && modelDepth === curD)
         ? effModel
         : { ...effModel, properties: { ...effModel.properties, gridWidth: curW, gridHeight: curH, gridDepth: curD, dimension: curD > 1 ? '3d' as const : effModel.properties.dimension } };
-      // Bond-Graph Agents: cell field MAY use WASM (shared wasmMemory views);
-      // WebGPU forced off (GPU-resident attrs the JS agent can't read). See the
-      // init-path comment for the full rationale.
-      if (model.topologyMode?.agents && dimsModel.properties.useWebGPU) {
-        dimsModel = { ...dimsModel, properties: { ...dimsModel.properties, useWebGPU: false } };
-      }
+      // Bond-Graph Agents (PR5 — independent targets): the grid target flows
+      // through unmodified for agent models too. The old `useWebGPU = false`
+      // force-disable hack is GONE — the worker's WebGPU step branch bridges the
+      // field CPU↔GPU per generation. See the init-path comment for rationale.
       const result = compileGraph(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
       // Bond-Graph Agents: recompile the agent graph too (graph-only edit path).
       const agentResult = compileAgentModel();
@@ -2614,9 +2637,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         agentInitCode: agentResult.initCode,
         agentDivisionCode: agentResult.divisionCode,
         centerBased: model.centerBased,
+        // PR5 (C-D1): re-detect on a graph-only edit (field nodes added/removed).
+        agentUsesField: agentUsesField(),
       });
       // If user has the model toggle on, ensure useWasm is set (recompile doesn't carry useWasm by default).
-      // Bond-Graph Agents force JS (D-TARGET), so dimsModel already cleared the flags.
+      // PR5: the grid target now flows through for agent models too (the
+      // force-JS hack is gone), so these reflect dimsModel's real flags.
       workerRef.current?.postMessage({
         type: 'setUseWasm',
         enabled: !!dimsModel.properties.useWasm && !wasmResult.error,

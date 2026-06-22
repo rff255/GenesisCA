@@ -55,3 +55,23 @@ export function cbNum(cfg: CenterBasedConfig | undefined | null, key: CenterBase
   const v = cfg ? (cfg as unknown as Record<string, unknown>)[key] : undefined;
   return typeof v === 'number' && Number.isFinite(v) ? v : CENTER_BASED_DEFAULTS[key];
 }
+
+/** Resolve the agent-engine compile target, CLAMPED to what's actually
+ *  implemented. The agent loop (`compileAgentGraph`) emits JS only until Phase F
+ *  ports it to WASM (PR6) / WebGPU (PR7), so anything other than `'js'` is a
+ *  hard dependency on a compiler that does not exist yet. This is the C-D4
+ *  file-load safety net (mirrors the grid's worker-side useWasm/useWebGPU
+ *  demotion): a hand-edited `agentTarget:'wasm'`/`'webgpu'` config can never
+ *  dispatch to a non-existent `compileAgentGraphWasm`/`compileAgentGraphWebGPU`.
+ *  PR6/PR7 widen the allow-set as each port lands. INDEPENDENT of the grid
+ *  target — the grid can be WebGPU while agents resolve to JS. */
+export function agentTargetOf(cfg: CenterBasedConfig | undefined | null): 'js' | 'wasm' | 'webgpu' {
+  const t = cfg?.agentTarget;
+  if (t === 'js') return 'js';
+  if (t === 'wasm' || t === 'webgpu') {
+    // eslint-disable-next-line no-console
+    console.warn(`[agents] agentTarget='${t}' not yet implemented (Phase F) — clamping to 'js'.`);
+    return 'js';
+  }
+  return 'js';
+}
