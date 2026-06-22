@@ -1,4 +1,5 @@
 import type { NodeTypeDef } from '../types';
+import { is3dModelLike } from '../compiler/niCodec';
 
 /** Get Self Position — the agent's own continuous position (Bond-Graph Agents).
  *  The agent analogue of Get Cell Position: a controlled own-state read so an
@@ -18,7 +19,9 @@ export const GetSelfPositionNode: NodeTypeDef = {
     { id: 'y', label: 'Y', kind: 'output', category: 'value', dataType: 'float' },
     { id: 'z', label: 'Z', kind: 'output', category: 'value', dataType: 'float' },
   ],
-  hiddenPorts: () => ['z'],
+  // Z only exists in a 3D-agent model (the compiler emits no _agentZ decode in 2D).
+  hiddenPorts: (_config, model) => (is3dModelLike(model) ? [] : ['z']),
   defaultConfig: {},
-  compile: (nodeId) => `const _v${nodeId}_x = _agentX[idx]; const _v${nodeId}_y = _agentY[idx];\n`,
+  compile: (nodeId, _config, _inputs, _boundary, ctx) =>
+    `const _v${nodeId}_x = _agentX[idx]; const _v${nodeId}_y = _agentY[idx];${ctx?.is3d ? ` const _v${nodeId}_z = _agentZ[idx];` : ''}\n`,
 };

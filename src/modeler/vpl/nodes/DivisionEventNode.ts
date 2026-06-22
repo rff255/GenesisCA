@@ -1,4 +1,5 @@
 import type { NodeTypeDef } from '../types';
+import { is3dModelLike } from '../compiler/niCodec';
 
 /** Division Event — the per-daughter assignment entry point (Bond-Graph Agents).
  *  Runs ONCE for each of the two daughters right after a division, so the user
@@ -22,8 +23,14 @@ export const DivisionEventNode: NodeTypeDef = {
     { id: 'daughterIndex', label: 'Daughter #', kind: 'output', category: 'value', dataType: 'integer' },
     { id: 'axisDefaultX', label: 'Axis X', kind: 'output', category: 'value', dataType: 'float' },
     { id: 'axisDefaultY', label: 'Axis Y', kind: 'output', category: 'value', dataType: 'float' },
+    { id: 'axisDefaultZ', label: 'Axis Z', kind: 'output', category: 'value', dataType: 'float' },
     { id: 'myArea', label: 'Area', kind: 'output', category: 'value', dataType: 'float' },
   ],
+  // axisDefaultZ only exists in a 3D-agent model. Unlike axisDefaultX/Y (scalar
+  // division-fn params), it is NOT a param — the compiler emits its
+  // `_v<id>_axisDefaultZ` preamble by reading the `_divideAxisZ[idx]` buffer
+  // (compile.ts ~:2207), gated on `is3d`.
+  hiddenPorts: (_config, model) => (is3dModelLike(model) ? [] : ['axisDefaultZ']),
   defaultConfig: {},
   compile: () => '', // Root — the agent compiler emits the single-agent division function.
 };

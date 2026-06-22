@@ -1,4 +1,5 @@
 import type { NodeTypeDef } from '../types';
+import { is3dModelLike } from '../compiler/niCodec';
 
 /** Get Velocity — an agent's current velocity (Vx, Vy) (Bond-Graph Agents).
  *  Reads SELF when the Agent input is unwired, or a SPECIFIC agent when fed a
@@ -15,10 +16,13 @@ export const GetVelocityNode: NodeTypeDef = {
     { id: 'agentId', label: 'Agent', kind: 'input', category: 'value', dataType: 'integer' },
     { id: 'vx', label: 'Vx', kind: 'output', category: 'value', dataType: 'float' },
     { id: 'vy', label: 'Vy', kind: 'output', category: 'value', dataType: 'float' },
+    { id: 'vz', label: 'Vz', kind: 'output', category: 'value', dataType: 'float' },
   ],
+  // Vz only exists in a 3D-agent model.
+  hiddenPorts: (_config, model) => (is3dModelLike(model) ? [] : ['vz']),
   defaultConfig: {},
-  compile: (nodeId, _config, inputs) => {
+  compile: (nodeId, _config, inputs, _boundary, ctx) => {
     const a = inputs['agentId'] ? `((${inputs['agentId']}) | 0)` : 'idx';
-    return `const __gv${nodeId}=${a}; const _v${nodeId}_vx = _agentVX[__gv${nodeId}]; const _v${nodeId}_vy = _agentVY[__gv${nodeId}];\n`;
+    return `const __gv${nodeId}=${a}; const _v${nodeId}_vx = _agentVX[__gv${nodeId}]; const _v${nodeId}_vy = _agentVY[__gv${nodeId}];${ctx?.is3d ? ` const _v${nodeId}_vz = _agentVZ[__gv${nodeId}];` : ''}\n`;
   },
 };

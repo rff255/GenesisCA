@@ -1,4 +1,5 @@
 import type { NodeTypeDef } from '../types';
+import { is3dModelLike } from '../compiler/niCodec';
 
 /** Divide Agent — request that this agent divide into two daughters (Bond-Graph
  *  Agents). Applied in the post-step structural phase: the engine splits the
@@ -27,9 +28,12 @@ export const DivideAgentNode: NodeTypeDef = {
     { id: 'next', label: 'NEXT', kind: 'output', category: 'flow' },
     { id: 'axisX', label: 'Axis X', kind: 'input', category: 'value', dataType: 'float' },
     { id: 'axisY', label: 'Axis Y', kind: 'input', category: 'value', dataType: 'float' },
+    { id: 'axisZ', label: 'Axis Z', kind: 'input', category: 'value', dataType: 'float' },
     { id: 'asymmetry', label: 'Asymmetry', kind: 'input', category: 'value', dataType: 'float', inlineWidget: 'number', defaultValue: '0.5' },
   ],
+  // Axis Z only exists in a 3D-agent model.
+  hiddenPorts: (_config, model) => (is3dModelLike(model) ? [] : ['axisZ']),
   defaultConfig: { axisSource: 'tension' },
-  compile: (_nodeId, _config, inputs) =>
-    `_divideRequest[idx] = 1; _divideAxisX[idx] = ${inputs['axisX'] ?? 'NaN'}; _divideAxisY[idx] = ${inputs['axisY'] ?? 'NaN'}; _divideAsym[idx] = ${inputs['asymmetry'] || '0.5'};\n`,
+  compile: (_nodeId, _config, inputs, _boundary, ctx) =>
+    `_divideRequest[idx] = 1; _divideAxisX[idx] = ${inputs['axisX'] ?? 'NaN'}; _divideAxisY[idx] = ${inputs['axisY'] ?? 'NaN'};${ctx?.is3d ? ` _divideAxisZ[idx] = ${inputs['axisZ'] ?? 'NaN'};` : ''} _divideAsym[idx] = ${inputs['asymmetry'] || '0.5'};\n`,
 };
