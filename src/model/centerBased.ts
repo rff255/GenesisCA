@@ -47,7 +47,7 @@ export function defaultCenterBasedConfig(): CenterBasedConfig {
 }
 
 /** Resolve a numeric config field to its value or the engine default. */
-export function cbNum(cfg: CenterBasedConfig | undefined, key: CenterBasedNumericKey): number {
+export function cbNum(cfg: CenterBasedConfig | undefined | null, key: CenterBasedNumericKey): number {
   const v = cfg ? (cfg as unknown as Record<string, unknown>)[key] : undefined;
   return typeof v === 'number' && Number.isFinite(v) ? v : CENTER_BASED_DEFAULTS[key];
 }
