@@ -1,5 +1,19 @@
 # HANDOFF — Build the Bond-Graph AGENTS (floating cells) milestone for GenesisCA
 
+> ## ✅ STATUS: Phases A–D SHIPPED (branch `agents_floating_cells`)
+> The agent substrate (A), bonds (B), division/growth/death (C), and the closed
+> agent↔grid feedback (D) are **implemented, verified, and committed** (13 commits,
+> one per phase + polish + docs; lattice CA path byte-identical on every commit;
+> full `npm run build` green). The headline morphogenesis works — see the shipped
+> **Morphogenesis — Growing Tissue** library model and the implementation summary
+> [docs/SUMMARY_AGENTS_FLOATING_CELLS.html](SUMMARY_AGENTS_FLOATING_CELLS.html)
+> (read its "Assumptions & decisions" section — several runbook ambiguities were
+> resolved pragmatically for v1). The CLAUDE.md "Bond-Graph Agents — Floating
+> Cells" section is the maintained source of truth. **Still open:** Phase E (3D
+> agents), Phase F (WASM/WebGPU lockstep), `Get Curvature`, `bondContactEvent`,
+> the `.gcastate` file-format agent persistence, and a graph-authorable per-pair
+> force law. The phased PR plan below is retained as historical record.
+
 > **You (the next session) are being handed a fully-scoped, phased, build-ready ticket.** A prior investigation + plan effort produced three design docs ([INVESTIGATION_BOND_GRAPH_MORPHOGENESIS.md](INVESTIGATION_BOND_GRAPH_MORPHOGENESIS.md), [PLAN_BOND_GRAPH_MORPHOGENESIS.md](PLAN_BOND_GRAPH_MORPHOGENESIS.md), [PLAN_BG_DIMENSIONS_AND_MODES.md](PLAN_BG_DIMENSIONS_AND_MODES.md)) and a subsystem-by-subsystem build-depth audit of the **current, post-3D** codebase. The design is **settled** — do not re-derive it; it is cited (`file:line`) below. This document is your **runbook**: an ordered, *phased* list of PRs, each with a concrete change, files+symbols, a runnable acceptance test, and a risk note.
 >
 > This mirrors [docs/HANDOFF_3D_GRID_CA.md](HANDOFF_3D_GRID_CA.md) in tone and structure — a runbook, not an essay. That milestone **shipped** (its PR1–PR9 mapped 1:1 to commits, plus a 3-axis NeighborIndex codec, WebGPU-in-3D, a Get Cell Position node, and 7 rounds of 3D-viewport polish). So the codebase **already has** the foundation the agents reuse: the `dimension`/`gridDepth`/`topologyMode` schema, the `gl3d.ts` WebGL2 voxel renderer, authorable RGBA alpha, the 3D interaction-plane brush, the 3-axis NI codec. **This is the largest net-new subsystem GenesisCA has ever added** — scope it honestly and ship it phased.
