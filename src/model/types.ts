@@ -621,6 +621,10 @@ export interface CenterBasedConfig {
   // --- Seeding (Reset + seed-brush defaults) ---
   /** Agents seeded on Reset (0 = the author seeds via the brush / Init Event). */
   seedCount?: number;
+  /** Initial seeding layout. 'compact' (default) = a centred packed blob (the
+   *  morphogenesis starting point). 'scatter' = uniformly random across the
+   *  world (dispersed populations — flocking, chemotaxis aggregation). */
+  seedPattern?: 'compact' | 'scatter';
   /** Default agent radius (the rest contact distance between two agents is the
    *  sum of their radii). */
   defaultRadius?: number;

@@ -1912,14 +1912,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     let dimsModel = (model.properties.gridWidth === w && model.properties.gridHeight === h && modelDepth === d3)
       ? effModel
       : { ...effModel, properties: { ...effModel.properties, gridWidth: w, gridHeight: h, gridDepth: d3, dimension: d3 > 1 ? '3d' as const : effModel.properties.dimension } };
-    // Bond-Graph Agents (Decision D-TARGET): the agent engine is JS-reference-
-    // only in v1, so an agent model runs ENTIRELY on JS — both the agent driver
-    // AND the cell field. Force the compile target to JS here (the single
-    // enforcement chokepoint) so wasmResult/webgpuResult skip + the init flags
-    // ship JS. WASM/WebGPU agent compilation is the later Phase F milestone.
-    const agentForceJS = !!model.topologyMode?.agents;
-    if (agentForceJS && (dimsModel.properties.useWasm || dimsModel.properties.useWebGPU)) {
-      dimsModel = { ...dimsModel, properties: { ...dimsModel.properties, useWasm: false, useWebGPU: false } };
+    // Bond-Graph Agents target policy: the agent ENGINE/driver always runs on
+    // JS (Phase F ports it to WASM later). The CELL FIELD, however, MAY use
+    // WASM — its attrs are wasmMemory VIEWS the JS agent loop reads/writes
+    // directly (the field bridge shares the buffer with the WASM step), so a
+    // field-heavy morphogenesis model gets the fast diffusion path while agents
+    // stay JS. WebGPU is still forced off for agent models: it keeps cell attrs
+    // GPU-resident, which the JS agent can't read without a per-step readback.
+    if (model.topologyMode?.agents && dimsModel.properties.useWebGPU) {
+      dimsModel = { ...dimsModel, properties: { ...dimsModel.properties, useWebGPU: false } };
     }
     // Viewer→int mapping is target-agnostic — the worker needs it for
     // uploadActiveViewer regardless of which compile target is active. WGSL
@@ -2316,10 +2317,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       let dimsModel = (model.properties.gridWidth === curW && model.properties.gridHeight === curH && modelDepth === curD)
         ? effModel
         : { ...effModel, properties: { ...effModel.properties, gridWidth: curW, gridHeight: curH, gridDepth: curD, dimension: curD > 1 ? '3d' as const : effModel.properties.dimension } };
-      // Bond-Graph Agents (D-TARGET): force JS for an agent model (the whole
-      // model — agent driver + cell field — runs on JS in v1).
-      if (model.topologyMode?.agents && (dimsModel.properties.useWasm || dimsModel.properties.useWebGPU)) {
-        dimsModel = { ...dimsModel, properties: { ...dimsModel.properties, useWasm: false, useWebGPU: false } };
+      // Bond-Graph Agents: cell field MAY use WASM (shared wasmMemory views);
+      // WebGPU forced off (GPU-resident attrs the JS agent can't read). See the
+      // init-path comment for the full rationale.
+      if (model.topologyMode?.agents && dimsModel.properties.useWebGPU) {
+        dimsModel = { ...dimsModel, properties: { ...dimsModel.properties, useWebGPU: false } };
       }
       const result = compileGraph(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
       // Bond-Graph Agents: recompile the agent graph too (graph-only edit path).
