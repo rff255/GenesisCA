@@ -28,7 +28,7 @@ import { cbNum } from '../../model/centerBased';
 import {
   createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot,
   snapshotAgentsForRender, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
-  formBond, breakBond, sweepStaleBonds,
+  formBond, breakBond, sweepStaleBonds, divideAgent,
   type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec,
 } from './agentEngine';
 
@@ -158,6 +158,7 @@ interface InitMsg {
    *  in later PRs. Absent → agents are inert (seed + render only). */
   agentBehaviourCode?: string;
   agentInitCode?: string;
+  agentDivisionCode?: string;
   agentColorViewer?: string;
 }
 
@@ -186,7 +187,7 @@ interface PaintManualMsg {
 }
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; centerBased?: CenterBasedConfig }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; centerBased?: CenterBasedConfig }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -385,6 +386,9 @@ let centerBasedConfig: CenterBasedConfig | null = null;
  *  Null until the agent compile path ships it (PR-A2.5/A3). */
 let agentBehaviourFn: Function | null = null;
 let agentInitFn: Function | null = null;
+/** Compiled Division Event function (single-agent; runs per daughter after a
+ *  division). Null when the agent graph has no divisionEvent root. */
+let agentDivisionFn: Function | null = null;
 let agentColorViewer = '';
 
 /** Build the agent attribute specs (the non-model cell attributes double as
@@ -438,6 +442,43 @@ function runAgentColorPass(): void {
  *  is a no-op placeholder. */
 function runAgentInit(): void {
   void agentInitFn;
+}
+
+/** Run the Division Event graph per daughter so the user can reassign daughter
+ *  attributes (asymmetric inheritance). Daughters already inherited the mother's
+ *  attributes VERBATIM in `divideAgent` (daughter A reuses the mother slot, so
+ *  its attrs ARE the mother's; daughter B was copied), so a divisionEvent like
+ *  "daughter 0: energy = energy·0.7" reads the inherited value and rewrites it.
+ *  daughterIndex 0 = A (the reused mother slot), 1 = B (the new slot). */
+function runDivisionEvent(events: Array<{ mother: number; a: number; b: number; axisX: number; axisY: number }>): void {
+  if (!agentDivisionFn || !agentStore) return;
+  const fn = agentDivisionFn;
+  const s = agentStore;
+  for (const ev of events) {
+    try {
+      fn(...buildDivisionArgs(s, ev.a, 0, ev.axisX, ev.axisY));
+      fn(...buildDivisionArgs(s, ev.b, 1, ev.axisX, ev.axisY));
+    } catch (e) {
+      self.postMessage({ type: 'error', message: '[agents] division event failed: ' + ((e as Error)?.message || e) });
+      agentDivisionFn = null;
+      break;
+    }
+  }
+}
+
+/** Args for the compiled divisionEvent function — a SINGLE-agent function (not
+ *  loop-wrapped): the daughter slot `idx`, its `daughterIndex` (0/1), the engine
+ *  axis defaults, then the same engine buffers + user attrs the behaviour fn
+ *  gets. MIRRORS `buildDivisionParams` in compile.ts. */
+function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, axisX: number, axisY: number): unknown[] {
+  const args: unknown[] = [
+    idx, daughterIndex, axisX, axisY,
+    s.x, s.y, s.radius, s.targetRadius, s.age, s.type, s.lineage, s.bondCount, s.density,
+  ];
+  for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
+  for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
+  args.push(cachedModelAttrs, s.colors, activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS);
+  return args;
 }
 
 /** Build the args for the compiled behaviourStep function. MIRRORS
@@ -646,6 +687,33 @@ function runAgentStructuralPhase(): void {
     const br = s.bondBreakReq[i]!;
     if (br > 0) { breakBond(s, i, br - 1); s.bondBreakReq[i] = 0; }
   }
+
+  // 1b. Death — recycle killed agents (breaks all bonds + bumps the epoch).
+  for (let i = 0; i < hw; i++) {
+    if (alive[i] && s.killRequest[i]) freeAgentSlot(s, i);
+  }
+
+  // 1c. Division — split flagged agents along their tension axis. Iterate only
+  //     the pre-division population (the daughters land beyond `hw` and aren't
+  //     re-divided this step). Overflow rejects the WHOLE division + surfaces a
+  //     one-shot notice. The divisionEvent graph (if any) reassigns daughter
+  //     attributes; collect (mother, daughterA, daughterB) for it.
+  const divideEvents: Array<{ mother: number; a: number; b: number; axisX: number; axisY: number }> = [];
+  let divideOverflow = false;
+  const outAxis: number[] = [0, 0];
+  for (let i = 0; i < hw; i++) {
+    if (!alive[i] || !s.divideRequest[i]) continue;
+    const axisX = s.divideAxisX[i]!, axisY = s.divideAxisY[i]!;
+    const asym = s.divideAsym[i]! || 0.5;
+    s.divideRequest[i] = 0;
+    const newId = divideAgent(s, i, axisX, axisY, asym, lambda, torus, W, H, outAxis);
+    if (newId < 0) { divideOverflow = true; continue; }
+    divideEvents.push({ mother: i, a: i, b: newId, axisX: outAxis[0]!, axisY: outAxis[1]! });
+  }
+  if (divideOverflow) {
+    self.postMessage({ type: 'agentOverflow', message: `Agent or bond capacity reached during division (maxAgents=${s.maxAgents}, maxBonds=${s.maxBonds}). Some divisions were skipped.` });
+  }
+  if (divideEvents.length > 0) runDivisionEvent(divideEvents);
 
   // 2. Auto-bond by distance (opt-in, hysteresis): form a bond between any two
   //    unbonded agents within formDistance×contact; break bonds stretched past
@@ -2228,7 +2296,7 @@ function compileFns(
  *  behaviour function runs once per LIVE agent each generation over `idx <
  *  highWater`. Absent code → null (agents seed + render but don't behave, the
  *  PR-A2 state). */
-function compileAgentFns(behaviourCode?: string, initCode?: string): void {
+function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode?: string): void {
   try {
     // eslint-disable-next-line no-eval
     agentBehaviourFn = behaviourCode ? (eval(behaviourCode) as Function) : null;
@@ -2237,6 +2305,10 @@ function compileAgentFns(behaviourCode?: string, initCode?: string): void {
     // eslint-disable-next-line no-eval
     agentInitFn = initCode ? (eval(initCode) as Function) : null;
   } catch { agentInitFn = null; }
+  try {
+    // eslint-disable-next-line no-eval
+    agentDivisionFn = divisionCode ? (eval(divisionCode) as Function) : null;
+  } catch (e) { agentDivisionFn = null; self.postMessage({ type: 'error', message: '[agents] division compile failed: ' + ((e as Error)?.message || e) }); }
 }
 
 /** Run the per-cell Init function for the entire grid (one cell per
@@ -2850,7 +2922,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       centerBasedConfig = msg.centerBased ?? null;
       agentColorViewer = msg.agentColorViewer || '';
       initAgents();
-      compileAgentFns(msg.agentBehaviourCode, msg.agentInitCode);
+      compileAgentFns(msg.agentBehaviourCode, msg.agentInitCode, msg.agentDivisionCode);
       stopMessages = msg.stopMessages || [];
       webgpuStopCheckInterval = Math.max(1, Math.floor(msg.webgpuStopCheckInterval ?? 1));
       // Mutual exclusion safety net: a saved file or hand-edited JSON could
@@ -3241,7 +3313,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       {
         const rc = msg as RecompileMsg;
         if (rc.centerBased) centerBasedConfig = rc.centerBased;
-        compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode);
+        compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode, rc.agentDivisionCode);
         clampAgentDt();
       }
       // Variegated Cells: re-fill the facePatternLookup + interaction-table

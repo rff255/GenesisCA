@@ -2005,7 +2005,28 @@ export interface AgentCompileResult {
   behaviourCode: string;
   /** Reserved (agent Init Event) — empty in v1. */
   initCode: string;
+  /** The single-agent Division Event function (runs per daughter). Empty when
+   *  there's no divisionEvent root. */
+  divisionCode: string;
   error?: string;
+}
+
+/** The divisionEvent function signature — a SINGLE-agent function (NOT loop-
+ *  wrapped): the daughter slot `idx`, its `daughterIndex`/axis defaults, then the
+ *  same engine geometry/identity buffers + user attrs the behaviour fn gets
+ *  (minus the loop control / request / bond buffers it doesn't need). The
+ *  worker's `buildDivisionArgs` MIRRORS this. */
+function buildDivisionParams(model: CAModel): string {
+  const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
+  const parts: string[] = [
+    'idx', '__daughterIndex', '__axisDefaultX', '__axisDefaultY',
+    '_agentX', '_agentY', '_agentRadius', '_agentTargetRadius', '_agentAge',
+    '_agentType', '_agentLineage', '_agentBondCount', '_agentDensity',
+  ];
+  for (const a of cellAttrs) parts.push(`r_${a.id}`);
+  for (const a of cellAttrs) parts.push(`w_${a.id}`);
+  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
+  return parts.join(', ');
 }
 
 /** The behaviourStep function signature. The worker's `buildAgentLoopArgs`
@@ -2042,13 +2063,13 @@ export function compileAgentGraph(
   agentEdges: GraphEdge[],
   model?: CAModel,
 ): AgentCompileResult {
-  if (!model) return { behaviourCode: '', initCode: '', error: 'Model required.' };
+  if (!model) return { behaviourCode: '', initCode: '', divisionCode: '', error: 'Model required.' };
 
   // Flatten macros, strip reroutes, then accessor-CSE (agents are sync, so CSE
   // is sound) — same front-end pipeline the cell compiler runs.
   {
     const expanded = expandMacros(agentNodes, agentEdges, model);
-    if (expanded.error) return { behaviourCode: '', initCode: '', error: expanded.error };
+    if (expanded.error) return { behaviourCode: '', initCode: '', divisionCode: '', error: expanded.error };
     agentNodes = expanded.nodes;
     agentEdges = expanded.edges;
   }
@@ -2057,7 +2078,7 @@ export function compileAgentGraph(
 
   const behaviourNode = agentNodes.find(n => n.data.nodeType === 'behaviourStep');
   if (!behaviourNode) {
-    return { behaviourCode: '', initCode: '', error: 'No Behaviour Step node in the agent graph.' };
+    return { behaviourCode: '', initCode: '', divisionCode: '', error: 'No Behaviour Step node in the agent graph.' };
   }
 
   const { nodeMap, inputToSource, inputToSources, flowOutputToTargets } = buildAdjacency(agentNodes, agentEdges);
@@ -2096,7 +2117,35 @@ export function compileAgentGraph(
     '})',
   ].join('\n');
 
-  return { behaviourCode, initCode: '' };
+  // --- Division Event (single-agent function, runs per daughter) ---
+  let divisionCode = '';
+  const divNode = agentNodes.find(n => n.data.nodeType === 'divisionEvent');
+  if (divNode) {
+    const dv = compileRoot(
+      divNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets,
+      loopInvariant, fusion, agentNodes, agentEdges, model,
+    );
+    const divScratch = dv.scratchNodes.map(s => buildScratchDecl(s, model));
+    const dId = divNode.id;
+    divisionCode = [
+      `(function(${buildDivisionParams(model)}) {`,
+      ...divScratch,
+      // value-out preamble — alias the positional params to the node's port vars.
+      `  const _v${dId}_daughterIndex = __daughterIndex;`,
+      `  const _v${dId}_axisDefaultX = __axisDefaultX;`,
+      `  const _v${dId}_axisDefaultY = __axisDefaultY;`,
+      `  const _v${dId}_myArea = Math.PI * _agentRadius[idx] * _agentRadius[idx];`,
+      '  let _rs = _rngState[0] || 0x12345678;',
+      ...dv.preLoopValueLines,
+      ...dv.valueLines,
+      '',
+      ...dv.flowLines,
+      '  _rngState[0] = _rs;',
+      '})',
+    ].join('\n');
+  }
+
+  return { behaviourCode, initCode: '', divisionCode };
 }
 
 /**

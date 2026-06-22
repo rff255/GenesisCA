@@ -10,6 +10,9 @@ import { SetTargetRadiusNode } from './SetTargetRadiusNode';
 import { FormBondNode } from './FormBondNode';
 import { BreakBondNode } from './BreakBondNode';
 import { ForEachBondNode } from './ForEachBondNode';
+import { DivideAgentNode } from './DivideAgentNode';
+import { KillAgentNode } from './KillAgentNode';
+import { DivisionEventNode } from './DivisionEventNode';
 import { GetOrientationNode } from './GetOrientationNode';
 import { SetOrientationNode } from './SetOrientationNode';
 import { GetFacingOrientationNode } from './GetFacingOrientationNode';
@@ -90,6 +93,7 @@ const ALL_NODES: NodeTypeDef[] = [
   // Bond-Graph Agents — agent rule-graph event roots + read/request nodes
   // (gated by requirements.bondGraph; visible only on the Agents sub-tab).
   BehaviourStepNode,
+  DivisionEventNode,
   GetSelfPositionNode,
   GetRadiusNode,
   GetBondDegreeNode,
@@ -98,6 +102,8 @@ const ALL_NODES: NodeTypeDef[] = [
   FormBondNode,
   BreakBondNode,
   ForEachBondNode,
+  DivideAgentNode,
+  KillAgentNode,
   // Flow
   ConditionalNode,
   SequenceNode,
