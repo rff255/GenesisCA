@@ -3368,6 +3368,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             // bridge lives ONLY here (the WebGPU branch is already async, so the
             // `await ensureCpuAttrsFresh()` fits; you cannot await in the sync
             // JS/WASM `for` loop). Two paths, never one.
+            // GAP-2 (3D cost): readAttrs is now sized `total = W*H*D`, so for a
+            // 3D-agent + WebGPU-grid FIELD model this readback + re-upload moves
+            // D× more bytes PER STEP than the 2D case (the whole W*H*D field down
+            // then up every generation). Field-heavy 3D-agent models pay a D×
+            // per-step residency tax on WebGPU — prefer JS/WASM agents there, or a
+            // shallow depth, until a same-device zero-copy field lands (Phase F).
             if (agentStore && webgpuRuntime) {
               if (agentUsesField && gpuOwnsAttrs) {
                 await ensureCpuAttrsFresh();        // GPU→CPU; flips gpuOwnsAttrs=false

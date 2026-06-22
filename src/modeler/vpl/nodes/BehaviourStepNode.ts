@@ -1,4 +1,5 @@
 import type { NodeTypeDef } from '../types';
+import { is3dModelLike } from '../compiler/niCodec';
 
 /** Behaviour Step — the agent-world per-agent update entry point (Bond-Graph
  *  Agents). The agent analogue of the lattice `Generation Step`: the compiler
@@ -36,9 +37,10 @@ export const BehaviourStepNode: NodeTypeDef = {
     { id: 'myAge', label: 'Age', kind: 'output', category: 'value', dataType: 'integer' },
     { id: 'myType', label: 'Type', kind: 'output', category: 'value', dataType: 'integer' },
   ],
-  // myZ only exists in a 3D-agent model (Phase E). Hidden in 2D (the compiler
-  // emits no _agentZ decode there).
-  hiddenPorts: () => ['myZ'],
+  // myZ only exists in a 3D-agent model. Hidden in 2D (the compiler emits no
+  // _agentZ decode / `_v<id>_myZ` preamble there — that emit is compile-side in
+  // compileAgentGraph, since this node's compile is () => '').
+  hiddenPorts: (_config, model) => (is3dModelLike(model) ? [] : ['myZ']),
   defaultConfig: {},
   compile: () => '',  // Root — the agent compiler emits the per-agent loop specially.
 };

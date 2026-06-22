@@ -2144,6 +2144,7 @@ export function compileAgentGraph(
   const scratchDecls = scratchNodes.map(s => buildScratchDecl(s, model));
   const { params } = buildAgentLoopParams(model);
   const bsId = behaviourNode.id;
+  const is3d = is3dModel(model);  // 3D: un-hide the agent-node z ports + emit the z preamble.
   // Local Variables — per-agent scratch (the agent analogue of the cell-step
   // injection). Array allocations hoist to function scope; scalar lets + array
   // fills reset at the top of every agent iteration. Used heavily by flocking
@@ -2163,6 +2164,9 @@ export function compileAgentGraph(
     // behaviourStep value-out preamble — the agent's own geometry/identity.
     `    const _v${bsId}_myX = _agentX[idx];`,
     `    const _v${bsId}_myY = _agentY[idx];`,
+    // myZ (3D only — S12: the value-out is emitted compile-side, not in the node
+    // file whose compile() is () => '', mirroring InitEvent's z/maxZ-in-the-decode).
+    ...(is3d ? [`    const _v${bsId}_myZ = _agentZ[idx];`] : []),
     `    const _v${bsId}_myRadius = _agentRadius[idx];`,
     `    const _v${bsId}_myArea = Math.PI * _agentRadius[idx] * _agentRadius[idx];`,
     `    const _v${bsId}_myBondDegree = _agentBondCount[idx];`,
@@ -2197,6 +2201,10 @@ export function compileAgentGraph(
       `  const _v${dId}_daughterIndex = __daughterIndex;`,
       `  const _v${dId}_axisDefaultX = __axisDefaultX;`,
       `  const _v${dId}_axisDefaultY = __axisDefaultY;`,
+      // axisDefaultZ (3D only) — NOT a scalar param like X/Y; it rides the
+      // `_divideAxisZ` BUFFER, stamped onto both daughters at the division site
+      // (worker buildDivisionArgs ABI note ~:547). Read it from the buffer here.
+      ...(is3d ? [`  const _v${dId}_axisDefaultZ = _divideAxisZ[idx];`] : []),
       `  const _v${dId}_myArea = Math.PI * _agentRadius[idx] * _agentRadius[idx];`,
       '  let _rs = _rngState[0] || 0x12345678;',
       ...dv.preLoopValueLines,
