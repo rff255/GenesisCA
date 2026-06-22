@@ -1,0 +1,536 @@
+{
+  "schemaVersion": 1,
+  "properties": {
+    "name": "Morphogenesis — 3D Tissue",
+    "description": "Developmental tissue in a 3D volume: asymmetric division (self-renewal + differentiation), contact inhibition, and a colour-coded maturity gradient — a self-limiting 3D tissue dividing along its mechanical (tension) axis.",
+    "ruleDescription": "The 3D analog of Differential Tissue. Each cell has a maturity (lineage depth). Division is asymmetric (Division Event): daughter 0 keeps the mother maturity (self-renewal), daughter 1 advances. A cell divides only while grown, uncrowded (Neighbour Density cap — contact inhibition) and uncommitted (maturity < 5). Cells divide along the engine 3×3 tension-axis eigensolve, growing a connected 3D tissue. Colour = maturity stage.",
+    "author": "",
+    "projectAuthor": "",
+    "tags": [
+      "agents",
+      "morphogenesis",
+      "3d",
+      "differentiation",
+      "stem cells",
+      "tissue"
+    ],
+    "dimension": "3d",
+    "gridWidth": 60,
+    "gridHeight": 60,
+    "gridDepth": 40,
+    "topology": "2d-grid",
+    "boundaryTreatment": "constant",
+    "useWasm": false,
+    "useWebGPU": false
+  },
+  "topologyMode": {
+    "gridCells": true,
+    "agents": true
+  },
+  "centerBased": {
+    "enabled": true,
+    "maxAgents": 4000,
+    "maxBonds": 12,
+    "worldWidth": 60,
+    "worldHeight": 60,
+    "seedCount": 5,
+    "defaultRadius": 1.6,
+    "growthRate": 0.04,
+    "repulsionStiffness": 2.5,
+    "adhesionStiffness": 0.4,
+    "interactionRange": 1.5,
+    "drag": 1,
+    "timeStep": 0.1,
+    "momentum": 0,
+    "maxSpeed": 0,
+    "neighbourQueryRadius": 5,
+    "customForcesOnly": false,
+    "autoBond": true,
+    "bondStiffness": 1,
+    "bondRestLength": 2,
+    "formDistance": 1.2,
+    "breakDistance": 2.2,
+    "seedPattern": "compact"
+  },
+  "attributes": [
+    {
+      "id": "maturity",
+      "name": "maturity",
+      "type": "integer",
+      "description": "Lineage depth / differentiation stage (0 = stem).",
+      "defaultValue": "0",
+      "hasRange": true,
+      "min": 0,
+      "max": 8
+    }
+  ],
+  "modelAttributes": [],
+  "neighborhoods": [],
+  "mappings": [],
+  "variables": [],
+  "indicators": [],
+  "graphNodes": [
+    {
+      "id": "nmqps6oscq6c8",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "step",
+        "config": {}
+      }
+    }
+  ],
+  "graphEdges": [],
+  "agentGraphNodes": [
+    {
+      "id": "amqps6osbabkc",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 380
+      },
+      "data": {
+        "nodeType": "behaviourStep",
+        "config": {}
+      }
+    },
+    {
+      "id": "amqps6osbr1iv",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 380
+      },
+      "data": {
+        "nodeType": "setTargetRadius",
+        "config": {
+          "_port_value": "3"
+        }
+      }
+    },
+    {
+      "id": "amqps6oscsqxx",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 760
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "maturity"
+        }
+      }
+    },
+    {
+      "id": "amqps6oscrgl3",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 760
+      },
+      "data": {
+        "nodeType": "categoricalColor",
+        "config": {
+          "count": 6,
+          "entry_0_r": "46",
+          "entry_0_g": "170",
+          "entry_0_b": "95",
+          "entry_1_r": "120",
+          "entry_1_g": "190",
+          "entry_1_b": "70",
+          "entry_2_r": "205",
+          "entry_2_g": "205",
+          "entry_2_b": "55",
+          "entry_3_r": "235",
+          "entry_3_g": "160",
+          "entry_3_b": "45",
+          "entry_4_r": "225",
+          "entry_4_g": "105",
+          "entry_4_b": "55",
+          "entry_5_r": "200",
+          "entry_5_g": "60",
+          "entry_5_b": "60",
+          "default_r": "150",
+          "default_g": "35",
+          "default_b": "90"
+        }
+      }
+    },
+    {
+      "id": "amqps6osc9usr",
+      "type": "caNode",
+      "position": {
+        "x": 690,
+        "y": 475
+      },
+      "data": {
+        "nodeType": "setCellLooks",
+        "config": {
+          "mappingId": "__current__",
+          "useGlyph": false,
+          "setBackground": true,
+          "fallbackToGlyphColor": false
+        }
+      }
+    },
+    {
+      "id": "amqps6osc5mr2",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": ">=",
+          "_port_y": "2.9",
+          "compareType": "numerical"
+        }
+      }
+    },
+    {
+      "id": "amqps6osch3ru",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 133
+      },
+      "data": {
+        "nodeType": "neighbourDensity",
+        "config": {}
+      }
+    },
+    {
+      "id": "amqps6osc4l3k",
+      "type": "caNode",
+      "position": {
+        "x": 690,
+        "y": 133
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "<",
+          "_port_y": "10",
+          "compareType": "numerical"
+        }
+      }
+    },
+    {
+      "id": "amqps6osc28mr",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 247
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "<",
+          "_port_y": "6",
+          "compareType": "numerical"
+        }
+      }
+    },
+    {
+      "id": "amqps6oscnm59",
+      "type": "caNode",
+      "position": {
+        "x": 920,
+        "y": 66.5
+      },
+      "data": {
+        "nodeType": "logicOperator",
+        "config": {
+          "operation": "AND"
+        }
+      }
+    },
+    {
+      "id": "amqps6osc03y7",
+      "type": "caNode",
+      "position": {
+        "x": 1150,
+        "y": 142.5
+      },
+      "data": {
+        "nodeType": "logicOperator",
+        "config": {
+          "operation": "AND"
+        }
+      }
+    },
+    {
+      "id": "amqps6oscrtoy",
+      "type": "caNode",
+      "position": {
+        "x": 1380,
+        "y": 380
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {}
+      }
+    },
+    {
+      "id": "amqps6oscfq2n",
+      "type": "caNode",
+      "position": {
+        "x": 1610,
+        "y": 380
+      },
+      "data": {
+        "nodeType": "divideAgent",
+        "config": {
+          "axisSource": "tension",
+          "_port_asymmetry": "0.5"
+        }
+      }
+    },
+    {
+      "id": "amqps6oscof86",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 1330
+      },
+      "data": {
+        "nodeType": "divisionEvent",
+        "config": {}
+      }
+    },
+    {
+      "id": "amqps6osc5qsj",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 1520
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "maturity"
+        }
+      }
+    },
+    {
+      "id": "amqps6osc8ho2",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 1520
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "a+1",
+          "visibleCount": 1
+        }
+      }
+    },
+    {
+      "id": "amqps6osco3p7",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 1235
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": ">=",
+          "_port_y": "1",
+          "compareType": "numerical"
+        }
+      }
+    },
+    {
+      "id": "amqps6oscvmb3",
+      "type": "caNode",
+      "position": {
+        "x": 690,
+        "y": 1330
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {}
+      }
+    },
+    {
+      "id": "amqps6oscp64t",
+      "type": "caNode",
+      "position": {
+        "x": 920,
+        "y": 1330
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "maturity"
+        }
+      }
+    }
+  ],
+  "agentGraphEdges": [
+    {
+      "id": "emqps6osctl7p",
+      "source": "amqps6osbabkc",
+      "target": "amqps6osbr1iv",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emqps6osc81gy",
+      "source": "amqps6oscsqxx",
+      "target": "amqps6oscrgl3",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_index"
+    },
+    {
+      "id": "emqps6oscswv6",
+      "source": "amqps6oscrgl3",
+      "target": "amqps6osc9usr",
+      "sourceHandle": "output_value_r",
+      "targetHandle": "input_value_r"
+    },
+    {
+      "id": "emqps6osc2mj2",
+      "source": "amqps6oscrgl3",
+      "target": "amqps6osc9usr",
+      "sourceHandle": "output_value_g",
+      "targetHandle": "input_value_g"
+    },
+    {
+      "id": "emqps6oscsp7i",
+      "source": "amqps6oscrgl3",
+      "target": "amqps6osc9usr",
+      "sourceHandle": "output_value_b",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emqps6osc6amb",
+      "source": "amqps6osbr1iv",
+      "target": "amqps6osc9usr",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emqps6oscdd9e",
+      "source": "amqps6osbabkc",
+      "target": "amqps6osc5mr2",
+      "sourceHandle": "output_value_myRadius",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "emqps6osc2v4l",
+      "source": "amqps6osch3ru",
+      "target": "amqps6osc4l3k",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "emqps6oscvht3",
+      "source": "amqps6oscsqxx",
+      "target": "amqps6osc28mr",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "emqps6oscntwk",
+      "source": "amqps6osc5mr2",
+      "target": "amqps6oscnm59",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emqps6osct4xz",
+      "source": "amqps6osc4l3k",
+      "target": "amqps6oscnm59",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emqps6oscx8re",
+      "source": "amqps6oscnm59",
+      "target": "amqps6osc03y7",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emqps6osc8zpl",
+      "source": "amqps6osc28mr",
+      "target": "amqps6osc03y7",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emqps6osc158m",
+      "source": "amqps6osc03y7",
+      "target": "amqps6oscrtoy",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "emqps6osc6zvl",
+      "source": "amqps6osc9usr",
+      "target": "amqps6oscrtoy",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "emqps6oscpf5y",
+      "source": "amqps6oscrtoy",
+      "target": "amqps6oscfq2n",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emqps6oscsweg",
+      "source": "amqps6osc5qsj",
+      "target": "amqps6osc8ho2",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emqps6oscw6v4",
+      "source": "amqps6oscof86",
+      "target": "amqps6osco3p7",
+      "sourceHandle": "output_value_daughterIndex",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "emqps6osc6wyn",
+      "source": "amqps6osco3p7",
+      "target": "amqps6oscvmb3",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "emqps6oscolkb",
+      "source": "amqps6oscof86",
+      "target": "amqps6oscvmb3",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "emqps6oscqrqc",
+      "source": "amqps6osc8ho2",
+      "target": "amqps6oscp64t",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "emqps6oscf952",
+      "source": "amqps6oscvmb3",
+      "target": "amqps6oscp64t",
+      "sourceHandle": "output_flow_then",
+      "targetHandle": "input_flow_do"
+    }
+  ],
+  "macroDefs": []
+}

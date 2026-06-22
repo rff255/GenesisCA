@@ -506,15 +506,165 @@ function principalEig2x2(a: number, b: number, c: number): [number, number] {
   return a >= c ? [1, 0] : [0, 1];
 }
 
+// ---------------------------------------------------------------------------
+// 3×3 symmetric eigensolve (B6, the 3D division headline) — a PARALLEL branch
+// to principalEig2x2, NOT a reducing generalisation (a reducing solver risks
+// float-drift in the 2D path, so the 2D code stays the verbatim 2×2). The
+// method is the analytic Cardano/Smith trigonometric closed form: branchless-
+// deterministic (no Jacobi sweep-count nondeterminism), O(1).
+//
+//   B6-FATAL: the `acos` argument `r` MUST be clamped to [-1,1] BEFORE the call
+//   — float round-off pushes |r| slightly past 1 for a symmetric (e.g. a clean
+//   z-axis-line) tensor, `acos(>1) = NaN`, and the daughter is placed at NaN
+//   with no error. principalEig3x3 AND minorEig3x3 share the SAME clamp (they
+//   route through `eigsSorted3x3`, the single sorted-eigenvalue helper), so the
+//   sibling can't re-derive φ without it.
+// ---------------------------------------------------------------------------
+
+/** The three eigenvalues of the symmetric 3×3 `[[a,d,f],[d,b,e],[f,e,c]]`,
+ *  sorted DESCENDING `[eMax, eMid, eMin]`. Smith's analytic trig form. Returns
+ *  `null` for an (already-)diagonal tensor (the off-diagonal energy is below
+ *  threshold) so the caller picks the dominant diagonal axis directly. */
+function eigsSorted3x3(a: number, b: number, c: number, d: number, e: number, f: number): [number, number, number] | null {
+  // p1 = sum of squared off-diagonals. Below threshold ⇒ the matrix is diagonal
+  // (B3: loosened from 1e-18 to 1e-15 — engine-critique). The caller short-circuits.
+  const p1 = d * d + e * e + f * f;
+  if (p1 < 1e-15) return null;
+  const q = (a + b + c) / 3;                       // mean eigenvalue = trace/3
+  const p2 = (a - q) * (a - q) + (b - q) * (b - q) + (c - q) * (c - q) + 2 * p1;
+  const p = Math.sqrt(p2 / 6) || 1e-12;
+  // B = (1/p)·(M − q·I); r = det(B)/2.
+  const ba = (a - q) / p, bb = (b - q) / p, bc = (c - q) / p;
+  const bd = d / p, be = e / p, bf = f / p;
+  const detB =
+    ba * (bb * bc - be * be) -
+    bd * (bd * bc - be * bf) +
+    bf * (bd * be - bb * bf);
+  let r = detB / 2;
+  // B6-FATAL: clamp BEFORE acos — the #1 NaN source.
+  if (r < -1) r = -1; else if (r > 1) r = 1;
+  const phi = Math.acos(r) / 3;
+  const eig1 = q + 2 * p * Math.cos(phi);                       // largest
+  const eig3 = q + 2 * p * Math.cos(phi + (2 * Math.PI) / 3);   // smallest
+  const eig2 = 3 * q - eig1 - eig3;                             // trace − the other two
+  return [eig1, eig2, eig3];
+}
+
+/** Unit eigenvector of the symmetric 3×3 `[[a,d,f],[d,b,e],[f,e,c]]` for a given
+ *  eigenvalue λ: the largest-norm cross-product of two rows of `(M − λ·I)` (any
+ *  two rows span the eigenvector's orthogonal complement; their cross product is
+ *  the eigenvector — pick the most numerically robust pair). Isotropic / repeated
+ *  degenerate case (all three cross-products ≈ 0) ⇒ a deterministic axis. */
+function eigvec3x3(a: number, b: number, c: number, d: number, e: number, f: number, lambda: number): [number, number, number] {
+  // Rows of (M − λI):
+  const r0x = a - lambda, r0y = d, r0z = f;
+  const r1x = d, r1y = b - lambda, r1z = e;
+  const r2x = f, r2y = e, r2z = c - lambda;
+  // Three candidate cross-products (one per row pair); take the largest-norm.
+  const cross = (ax: number, ay: number, az: number, bx: number, by: number, bz: number): [number, number, number] =>
+    [ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx];
+  const c01 = cross(r0x, r0y, r0z, r1x, r1y, r1z);
+  const c02 = cross(r0x, r0y, r0z, r2x, r2y, r2z);
+  const c12 = cross(r1x, r1y, r1z, r2x, r2y, r2z);
+  const n01 = c01[0] * c01[0] + c01[1] * c01[1] + c01[2] * c01[2];
+  const n02 = c02[0] * c02[0] + c02[1] * c02[1] + c02[2] * c02[2];
+  const n12 = c12[0] * c12[0] + c12[1] * c12[1] + c12[2] * c12[2];
+  let best = c01, bn = n01;
+  if (n02 > bn) { best = c02; bn = n02; }
+  if (n12 > bn) { best = c12; bn = n12; }
+  if (bn < 1e-18) return [0, 0, 1]; // isotropic / repeated eigenvalue → deterministic axis
+  const n = Math.sqrt(bn);
+  return [best[0] / n, best[1] / n, best[2] / n];
+}
+
+/** Principal eigenvector (LARGEST eigenvalue) of the symmetric 3×3
+ *  `[[a,d,f],[d,b,e],[f,e,c]]`, as a unit vector. Diagonal tensor ⇒ the dominant
+ *  diagonal axis. Repeated-largest-eigenvalue degeneracy ⇒ an arbitrary-but-
+ *  deterministic axis within the degenerate plane (eigvec3x3's cross-product
+ *  fallback). */
+function principalEig3x3(a: number, b: number, c: number, d: number, e: number, f: number): [number, number, number] {
+  const eigs = eigsSorted3x3(a, b, c, d, e, f);
+  if (!eigs) return a >= b && a >= c ? [1, 0, 0] : b >= c ? [0, 1, 0] : [0, 0, 1];
+  return eigvec3x3(a, b, c, d, e, f, eigs[0]);
+}
+
+/** Minor eigenvector (SMALLEST eigenvalue) of the symmetric 3×3 — the sibling of
+ *  principalEig3x3 for the degenerate "no tension" packing-gap fallback (divide
+ *  into the lowest-density direction). Shares `eigsSorted3x3`'s `acos` clamp
+ *  (B6-FATAL — a sibling that re-derived φ without the clamp would NaN
+ *  independently). Diagonal tensor ⇒ the least-dominant diagonal axis. */
+function minorEig3x3(a: number, b: number, c: number, d: number, e: number, f: number): [number, number, number] {
+  const eigs = eigsSorted3x3(a, b, c, d, e, f);
+  if (!eigs) return a <= b && a <= c ? [1, 0, 0] : b <= c ? [0, 1, 0] : [0, 0, 1];
+  // F-1: repeated-smallest-eigenvalue degeneracy (eMid ≈ eMin) — e.g. a rank-1
+  // packing tensor Σ r̂⊗r̂ from a single bond, where (M − eMin·I) is rank-deficient
+  // and eigvec3x3's cross-product fallback can return its isotropic [0,0,1] default
+  // (NOT actually in the degenerate eigenspace → a geometrically-wrong axis). The
+  // minor eigenspace is the plane orthogonal to the (well-defined) principal axis,
+  // so pick ANY unit vector orthogonal to principalEig3x3's result.
+  const span = Math.abs(eigs[0]) + Math.abs(eigs[2]) || 1;
+  if (Math.abs(eigs[1] - eigs[2]) < 1e-7 * span) {
+    const [px, py, pz] = principalEig3x3(a, b, c, d, e, f);
+    // Cross the principal axis with whichever world axis is least parallel to it
+    // (largest cross-product norm) for a numerically robust orthogonal vector.
+    const ax = Math.abs(px) <= Math.abs(py) && Math.abs(px) <= Math.abs(pz)
+      ? [1, 0, 0]
+      : Math.abs(py) <= Math.abs(pz) ? [0, 1, 0] : [0, 0, 1];
+    const ox = py * ax[2]! - pz * ax[1]!;
+    const oy = pz * ax[0]! - px * ax[2]!;
+    const oz = px * ax[1]! - py * ax[0]!;
+    const on = Math.sqrt(ox * ox + oy * oy + oz * oz) || 1;
+    return [ox / on, oy / on, oz / on];
+  }
+  return eigvec3x3(a, b, c, d, e, f, eigs[2]);
+}
+
 /** The tension-axis unit vector m̂ for a dividing agent: the principal
  *  eigenvector of `M = Σ_k max(0, λ_k(l_k − L_k))·(r̂_k ⊗ r̂_k)` over its bonds
  *  (stretched bonds only). Degenerate fallback (no tension): the MINOR
  *  eigenvector of the unweighted packing tensor `Σ r̂_k⊗r̂_k` (divide into the
  *  lowest-density gap); no bonds → a deterministic spread-out pseudo-axis. */
-function tensionAxis(store: AgentStore, i: number, torus: boolean, W: number, H: number): [number, number] {
+function tensionAxis(store: AgentStore, i: number, torus: boolean, W: number, H: number, D: number): [number, number, number] {
   const mb = store.maxBonds, base = i * mb, n = store.bondCount[i]!;
   const cx = store.x[i]!, cy = store.y[i]!;
   const halfW = W / 2, halfH = H / 2;
+  if (D > 1) {
+    // 3D: accumulate the 6-component symmetric tensor Σ w·(r̂⊗r̂) + the unweighted
+    // packing tensor Σ r̂⊗r̂; pick the principal (tension) or minor (packing-gap)
+    // eigenvector. The free-agent fallback is an INDEX-ONLY Fibonacci-sphere
+    // direction (no highWater dependence — that would break replay).
+    const cz = store.z[i]!, halfD = D / 2;
+    // M = [[a,d,f],[d,b,e],[f,e,c]]; M2 = the unweighted sibling.
+    let a = 0, b = 0, c = 0, d = 0, e = 0, f = 0, sumW = 0;
+    let a2 = 0, b2 = 0, c2 = 0, d2 = 0, e2 = 0, f2 = 0;
+    for (let k = 0; k < n; k++) {
+      const p = store.bondPartner[base + k]!;
+      if (p < 0 || !store.alive[p]) continue;
+      let dx = store.x[p]! - cx, dy = store.y[p]! - cy, dz = store.z[p]! - cz;
+      if (torus) {
+        if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
+        if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H;
+        if (dz > halfD) dz -= D; else if (dz < -halfD) dz += D;
+      }
+      const l = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (l < 1e-9) continue;
+      const rx = dx / l, ry = dy / l, rz = dz / l;
+      const w = Math.max(0, store.bondStiffness[base + k]! * (l - store.bondRestLength[base + k]!));
+      a += w * rx * rx; b += w * ry * ry; c += w * rz * rz;
+      d += w * rx * ry; e += w * ry * rz; f += w * rx * rz; sumW += w;
+      a2 += rx * rx; b2 += ry * ry; c2 += rz * rz; d2 += rx * ry; e2 += ry * rz; f2 += rx * rz;
+    }
+    if (sumW > 1e-9) return principalEig3x3(a, b, c, d, e, f);
+    if (a2 + b2 + c2 > 1e-9) return minorEig3x3(a2, b2, c2, d2, e2, f2); // divide into lowest-density gap
+    // Free agent: a deterministic point on the unit sphere (golden-angle spiral),
+    // indexed ONLY by the agent id i (replay-stable).
+    const ga = 2.399963229728653; // golden angle
+    const zz = 1 - (2 * (i + 0.5)) / Math.max(1, store.maxAgents); // ∈ (-1, 1)
+    const rr = Math.sqrt(Math.max(0, 1 - zz * zz));
+    const th = ga * i;
+    return [Math.cos(th) * rr, Math.sin(th) * rr, zz];
+  }
+  // --- 2D: the EXACT current code, verbatim (the constant-0 z appended) ---
   let a = 0, b = 0, c = 0, sumW = 0;
   let a2 = 0, b2 = 0, c2 = 0;
   for (let k = 0; k < n; k++) {
@@ -529,10 +679,10 @@ function tensionAxis(store: AgentStore, i: number, torus: boolean, W: number, H:
     a += w * rx * rx; b += w * rx * ry; c += w * ry * ry; sumW += w;
     a2 += rx * rx; b2 += rx * ry; c2 += ry * ry;
   }
-  if (sumW > 1e-9) return principalEig2x2(a, b, c);
-  if (a2 + c2 > 1e-9) { const [px, py] = principalEig2x2(a2, b2, c2); return [-py, px]; } // minor = perpendicular
+  if (sumW > 1e-9) { const [mx, my] = principalEig2x2(a, b, c); return [mx, my, 0]; }
+  if (a2 + c2 > 1e-9) { const [px, py] = principalEig2x2(a2, b2, c2); return [-py, px, 0]; } // minor = perpendicular
   const ang = i * 2.399963229728653; // golden angle — deterministic spread for free agents
-  return [Math.cos(ang), Math.sin(ang)];
+  return [Math.cos(ang), Math.sin(ang), 0];
 }
 
 /** Divide agent `i` along its tension axis. Returns the new daughter's id, or a
@@ -545,23 +695,33 @@ function tensionAxis(store: AgentStore, i: number, torus: boolean, W: number, H:
  *  reassign them afterwards). */
 export function divideAgent(
   store: AgentStore, i: number,
-  axisX: number, axisY: number, asym: number,
-  defaultLambda: number, torus: boolean, W: number, H: number,
+  axisX: number, axisY: number, axisZ: number, asym: number,
+  defaultLambda: number, torus: boolean, W: number, H: number, D: number,
   outAxis?: number[],
 ): number {
   if (!store.alive[i]) return -1;
+  const is3d = D > 1;
   const mb = store.maxBonds;
-  const cx = store.x[i]!, cy = store.y[i]!;
-  const halfW = W / 2, halfH = H / 2;
+  const cx = store.x[i]!, cy = store.y[i]!, cz = store.z[i]!;
+  const halfW = W / 2, halfH = H / 2, halfD = D / 2;
 
   // 1. axis — explicit override if wired (finite + non-zero), else the eigensolve
-  let mx: number, my: number;
-  if (Number.isFinite(axisX) && Number.isFinite(axisY) && (axisX !== 0 || axisY !== 0)) {
-    const n = Math.hypot(axisX, axisY) || 1; mx = axisX / n; my = axisY / n;
+  let mx: number, my: number, mz: number;
+  if (is3d) {
+    if (Number.isFinite(axisX) && Number.isFinite(axisY) && Number.isFinite(axisZ) && (axisX !== 0 || axisY !== 0 || axisZ !== 0)) {
+      const n = Math.sqrt(axisX * axisX + axisY * axisY + axisZ * axisZ) || 1; mx = axisX / n; my = axisY / n; mz = axisZ / n;
+    } else {
+      [mx, my, mz] = tensionAxis(store, i, torus, W, H, D);
+    }
   } else {
-    [mx, my] = tensionAxis(store, i, torus, W, H);
+    mz = 0;
+    if (Number.isFinite(axisX) && Number.isFinite(axisY) && (axisX !== 0 || axisY !== 0)) {
+      const n = Math.hypot(axisX, axisY) || 1; mx = axisX / n; my = axisY / n;
+    } else {
+      [mx, my] = tensionAxis(store, i, torus, W, H, 1);
+    }
   }
-  if (outAxis) { outAxis[0] = mx; outAxis[1] = my; }
+  if (outAxis) { outAxis[0] = mx; outAxis[1] = my; outAxis[2] = mz; }
 
   // 2. classify each mother bond by which daughter's side the partner is on
   const base = i * mb, n = store.bondCount[i]!;
@@ -570,8 +730,19 @@ export function divideAgent(
   for (let k = 0; k < n; k++) {
     const p = store.bondPartner[base + k]!;
     let dx = store.x[p]! - cx, dy = store.y[p]! - cy;
-    if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
-    const side = dx * mx + dy * my >= 0;
+    let side: boolean;
+    if (is3d) {
+      let dz = store.z[p]! - cz;
+      if (torus) {
+        if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
+        if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H;
+        if (dz > halfD) dz -= D; else if (dz < -halfD) dz += D;
+      }
+      side = dx * mx + dy * my + dz * mz >= 0;
+    } else {
+      if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
+      side = dx * mx + dy * my >= 0;
+    }
     sides.push(side);
     if (side) sideGE++; else sideLT++;
   }
@@ -592,13 +763,20 @@ export function divideAgent(
   const off = r; // daughter centre separation
   let ax = cx + 0.5 * off * mx, ay = cy + 0.5 * off * my;
   let bx = cx - 0.5 * off * mx, by = cy - 0.5 * off * my;
-  if (torus) { ax = ((ax % W) + W) % W; ay = ((ay % H) + H) % H; bx = ((bx % W) + W) % W; by = ((by % H) + H) % H; }
-  else { ax = ax < 0 ? 0 : ax > W ? W : ax; ay = ay < 0 ? 0 : ay > H ? H : ay; bx = bx < 0 ? 0 : bx > W ? W : bx; by = by < 0 ? 0 : by > H ? H : by; }
+  // z placement (3D); az/bz stay = cz in 2D (2D-ZERO — store.z is 0).
+  let az = cz, bz = cz;
+  if (is3d) { az = cz + 0.5 * off * mz; bz = cz - 0.5 * off * mz; }
+  if (torus) {
+    ax = ((ax % W) + W) % W; ay = ((ay % H) + H) % H; bx = ((bx % W) + W) % W; by = ((by % H) + H) % H;
+    if (is3d) { az = ((az % D) + D) % D; bz = ((bz % D) + D) % D; }
+  } else {
+    ax = ax < 0 ? 0 : ax > W ? W : ax; ay = ay < 0 ? 0 : ay > H ? H : ay; bx = bx < 0 ? 0 : bx > W ? W : bx; by = by < 0 ? 0 : by > H ? H : by;
+    if (is3d) { az = az < 0 ? 0 : az > D ? D : az; bz = bz < 0 ? 0 : bz > D ? D : bz; }
+  }
 
-  // 5. daughter B (new slot) — inherit mother's type/lineage/attrs/colour. The z
-  // arm is the mother's z for now (2D-ZERO in 2D); PR2 relocates daughter B to
-  // `bz` along the 3D tension axis.
-  initAgentSlot(store, newId, bx, by, store.z[i]!, rB, store.type[i]!, store.lineage[i]!);
+  // 5. daughter B (new slot) — inherit mother's type/lineage/attrs/colour. z = bz
+  // (the mother's z in 2D, the −½·off·m̂ offset in 3D).
+  initAgentSlot(store, newId, bx, by, bz, rB, store.type[i]!, store.lineage[i]!);
   for (const spec of store.attrSpecs) {
     store.attrRead[spec.id]![newId] = store.attrRead[spec.id]![i]!;
   }
@@ -607,6 +785,7 @@ export function divideAgent(
 
   // 6. daughter A — reuse mother slot i; shrink + relocate, reset age, clear request
   store.x[i] = ax; store.y[i] = ay; store.xNext[i] = ax; store.yNext[i] = ay;
+  if (is3d) { store.z[i] = az; store.zNext[i] = az; }
   store.radius[i] = rA;
   store.age[i] = 0;
   store.divideRequest[i] = 0;
@@ -645,7 +824,12 @@ export function divideAgent(
 
 export interface SpatialHash {
   nBinsX: number; nBinsY: number;
+  /** 3D bin count along z (1 in 2D — the query sites read `nBinsZ > 1` to switch
+   *  to the 3×3×3 stencil). */
+  nBinsZ: number;
   binSizeX: number; binSizeY: number;
+  /** z bin edge (1 in 2D, unused). */
+  binSizeZ: number;
   binStart: Int32Array;   // length nBins+1 (prefix sums)
   binAgents: Int32Array;  // length liveCount (agent ids grouped by bin)
 }
@@ -654,12 +838,18 @@ export interface SpatialHash {
 interface HashScratch { binStart: Int32Array; binAgents: Int32Array; cursor: Int32Array; }
 const hashScratchMap = new WeakMap<AgentStore, HashScratch>();
 
-export function buildSpatialHash(store: AgentStore, binSize: number, W: number, H: number): SpatialHash | null {
+export function buildSpatialHash(store: AgentStore, binSize: number, W: number, H: number, D: number): SpatialHash | null {
+  const is3d = D > 1;
   const nBinsX = Math.floor(W / binSize);
   const nBinsY = Math.floor(H / binSize);
-  if (nBinsX < 3 || nBinsY < 3) return null; // tiny world → all-pairs fallback
+  // 3D adds a z-axis bin requirement: a shallow volume (D < 3·binSize → nBinsZ<3)
+  // falls back to all-pairs even in a large W×H model (F1 — documented; PR7b
+  // inherits the same threshold). nBinsZ stays 1 in 2D (no z-axis binning).
+  const nBinsZ = is3d ? Math.floor(D / binSize) : 1;
+  if (nBinsX < 3 || nBinsY < 3 || (is3d && nBinsZ < 3)) return null; // tiny world → all-pairs fallback
   const binSizeX = W / nBinsX, binSizeY = H / nBinsY; // exact tiling, ≥ binSize
-  const nBins = nBinsX * nBinsY;
+  const binSizeZ = is3d ? D / nBinsZ : 1;
+  const nBins = nBinsX * nBinsY * nBinsZ;
   const hw = store.highWater;
 
   let sc = hashScratchMap.get(store);
@@ -670,18 +860,26 @@ export function buildSpatialHash(store: AgentStore, binSize: number, W: number, 
   const binStart = sc.binStart, binAgents = sc.binAgents, cursor = sc.cursor;
   binStart.fill(0, 0, nBins + 1);
 
-  const x = store.x, y = store.y, alive = store.alive;
-  const binOf = (i: number): number => {
-    let bx = (x[i]! / binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
-    let by = (y[i]! / binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
-    return by * nBinsX + bx;
-  };
+  const x = store.x, y = store.y, z = store.z, alive = store.alive;
+  // binOf — verbatim `by*nBinsX+bx` in 2D, z-major `(bz*nBinsY+by)*nBinsX+bx` in 3D.
+  const binOf = is3d
+    ? (i: number): number => {
+        let bx = (x[i]! / binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
+        let by = (y[i]! / binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
+        let bz = (z[i]! / binSizeZ) | 0; if (bz < 0) bz = 0; else if (bz >= nBinsZ) bz = nBinsZ - 1;
+        return (bz * nBinsY + by) * nBinsX + bx;
+      }
+    : (i: number): number => {
+        let bx = (x[i]! / binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
+        let by = (y[i]! / binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
+        return by * nBinsX + bx;
+      };
   // count → prefix sum → fill
   for (let i = 0; i < hw; i++) { if (!alive[i]) continue; binStart[binOf(i) + 1]!++; }
   for (let b = 0; b < nBins; b++) { binStart[b + 1]! += binStart[b]!; cursor[b] = binStart[b]!; }
   for (let i = 0; i < hw; i++) { if (!alive[i]) continue; const b = binOf(i); binAgents[cursor[b]!++] = i; }
 
-  return { nBinsX, nBinsY, binSizeX, binSizeY, binStart, binAgents };
+  return { nBinsX, nBinsY, nBinsZ, binSizeX, binSizeY, binSizeZ, binStart, binAgents };
 }
 
 export function snapshotAgentsForRender(store: AgentStore): AgentRenderSnapshot {
