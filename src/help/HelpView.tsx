@@ -1197,6 +1197,30 @@ export function HelpView() {
               give them different attribute values (asymmetric inheritance).</li>
             <li><strong>Kill Agent</strong> &mdash; remove the agent (apoptosis); all its bonds
               are broken safely.</li>
+            <li><strong>Get Velocity / Get Curvature</strong> &mdash; the agent's current velocity
+              (for flocking), and its local membrane curvature (0 = flat/interior, →1 = a convex
+              edge or tip &mdash; for curvature-dependent behaviour).</li>
+          </ul>
+          <h3 className={styles.h3}>Sensing Other Agents &amp; Authoring Forces (Flocking)</h3>
+          <p className={styles.p}>
+            Agents sense their neighbours and the rule graph <strong>authors the forces</strong> &mdash;
+            the off-lattice analogue of reading neighbours on the grid:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Get Nearby Agents</strong> &mdash; the list of other agents within a
+              radius (the agent analogue of <em>Get All Neighbor Indexes</em>). Iterate it with
+              <strong> For Each In Array</strong>, then read each with <strong>Get Agent Position /
+              Attribute / Radius / Get Velocity</strong>, bond to it, or steer from it.</li>
+            <li><strong>Apply Force</strong> &mdash; add a force vector to the agent; the engine
+              integrates the sum of all your Apply Force contributions (plus its built-in
+              soft-sphere repulsion + bond springs, unless <em>Custom forces only</em> is set). This
+              is how you build <strong>boids</strong> (separation + alignment + cohesion),
+              <strong> chemotaxis</strong> (force up a Field Gradient), or self-propulsion. With
+              <strong> Momentum</strong> &gt; 0 the force changes velocity (flocking inertia).</li>
+            <li><strong>Set Agent Attribute</strong> &mdash; write an attribute on another agent by
+              id (signal a neighbour). And because Get Nearby Agents now supplies a target,
+              <strong> Form Bond</strong> is fully graph-driven &mdash; bond to compatible
+              neighbours by type/state.</li>
           </ul>
           <h3 className={styles.h3}>The Cell CA as a Morphogen Field (Closed Feedback)</h3>
           <p className={styles.p}>
@@ -1231,22 +1255,33 @@ export function HelpView() {
               past them <strong>rejects</strong> the new agent/bond (it never wraps or corrupts).
               Changing a ceiling re-initialises the engine.</li>
             <li><strong>Seeding</strong> &mdash; the <strong>Seed Count</strong> laid down on
-              Reset (0 = seed by hand) and the <strong>Default Radius</strong>.</li>
+              Reset (0 = seed by hand), the <strong>Default Radius</strong>, and the
+              <strong> Seed Pattern</strong> (a compact centred blob for tissue, or scattered
+              across the world for flocking / aggregation).</li>
             <li><strong>Forces</strong> &mdash; the soft-sphere law: <strong>Repulsion</strong>
               (volume exclusion), <strong>Adhesion</strong> (free-agent stickiness),
               <strong> Interaction Range</strong>, <strong>Drag</strong>,
-              <strong> Time Step</strong> (auto-clamped for stability), and
-              <strong> Growth Rate</strong>.</li>
+              <strong> Time Step</strong> (auto-clamped for stability),
+              <strong> Growth Rate</strong>, plus the flocking knobs &mdash;
+              <strong> Momentum</strong> (velocity persistence: 0 = overdamped tissue, ~0.9 =
+              flocking inertia), <strong>Max Speed</strong>, <strong>Custom forces only</strong>
+              (skip the engine soft-sphere), and <strong>Neighbour Query Radius</strong>.</li>
             <li><strong>Bonds</strong> &mdash; <strong>Auto-bond by distance</strong> (on/off),
               <strong> Bond Stiffness</strong>, and the <strong>Form / Break Distances</strong>
               (a hysteresis band so bonds don't flicker).</li>
           </ul>
           <p className={styles.p}>
-            In the Simulator, <strong>Alt + left-click</strong> seeds an agent and
-            <strong> Alt + Shift + left-click</strong> kills the nearest one. The library ships a
-            <strong> Morphogenesis &mdash; Growing Tissue</strong> sample: 12 seed cells grow into
-            a ~1500-cell bonded tissue that divides along its tension axis &mdash; load it to see
-            the whole pipeline at work.
+            In the Simulator, the <strong>Agent Brush</strong> overlay (top-left) lets you
+            <strong> Seed</strong> / <strong>Kill</strong> agents, <strong>Glue</strong> /
+            <strong> Cut</strong> bonds between two clicked agents, <strong>Paint Field</strong>
+            (the normal cell brush), and <strong>Clear all agents</strong>. The library ships four
+            samples: <strong>Morphogenesis &mdash; Growing Tissue</strong> (12 → ~1500 cells
+            dividing along the tension axis), <strong>Morphogenesis &mdash; Differential
+            Tissue</strong> (asymmetric division + a maturity gradient + contact inhibition = cell
+            <em> specialization</em>), <strong>Boids &mdash; Flocking</strong> (separation +
+            alignment + cohesion), and <strong>Chemotaxis &mdash; Aggregation</strong> (secrete a
+            chemical, the grid diffuses it, agents climb the gradient and aggregate) &mdash; load
+            any to see the pipeline at work.
           </p>
         </section>
 
