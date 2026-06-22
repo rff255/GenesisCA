@@ -123,6 +123,7 @@ const NEVER_INVARIANT = new Set<string>([
   // Agent neighbour access — all read per-agent engine buffers / the hash.
   'getNearbyAgents',
   'getAgentPosition',
+  'getAgentOffset',
   'getAgentAttribute',
   'getAgentRadius',
   'getVelocity',

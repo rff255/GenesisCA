@@ -64,7 +64,7 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
 // Compile a single root's subgraph (per-cell body)
 // ---------------------------------------------------------------------------
 
-const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'categoricalColor', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels', 'getCellPosition', 'behaviourStep', 'divisionEvent', 'getSelfPosition', 'forEachBond', 'fieldGradient', 'getAgentPosition', 'getVelocity']);
+const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'categoricalColor', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels', 'getCellPosition', 'behaviourStep', 'divisionEvent', 'getSelfPosition', 'forEachBond', 'fieldGradient', 'getAgentPosition', 'getAgentOffset', 'getVelocity']);
 
 /** Check if a node's data uses multi-output variable naming */
 function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
@@ -2020,12 +2020,25 @@ function buildDivisionParams(model: CAModel): string {
   const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
   const parts: string[] = [
     'idx', '__daughterIndex', '__axisDefaultX', '__axisDefaultY',
+    // engine buffers any agent READ node may touch — division is single-agent
+    // (non-loop), so the loop-control / request / hash buffers are intentionally
+    // OMITTED, but `_alive`/`highWater` (bonded-partner liveness scan) + velocity
+    // + the bond store + the field block ARE included so getAgentOffset /
+    // getCurvature / fieldGradient / getVelocity / the neighbour-access reads are
+    // division-safe (C-T1). These MIRROR buildAgentLoopParams's positions.
+    '_alive', 'highWater',
     '_agentX', '_agentY', '_agentRadius', '_agentTargetRadius', '_agentAge',
     '_agentType', '_agentLineage', '_agentBondCount', '_agentDensity',
+    '_agentVX', '_agentVY',
+    '_bondPartner', 'maxBonds',
   ];
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
+  // Closed feedback: the CELL field arrays + grid dims (same as buildAgentLoopParams)
+  // so fieldGradient/sampleField/readCellsUnder are division-safe too.
+  parts.push('_fieldW', '_fieldH', '_fieldTotal', '_fieldBoundaryTorus');
+  for (const a of cellAttrs) parts.push(`_field_${a.id}`);
   return parts.join(', ');
 }
 

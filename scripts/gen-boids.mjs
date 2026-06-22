@@ -65,17 +65,19 @@ fEdge(bs, 'do', fe, 'do');
 vEdge(nb, 'agents', fe, 'array');
 
 // --- per-neighbour reads ---
-const gp = node('getAgentPosition', {}, 3, 5);
-vEdge(fe, 'element', gp, 'agentId');
-const gv = node('getVelocity', {}, 3, 6.2);
+// Torus-shortest displacement self→neighbour (dX, dY, Distance). Using the
+// offset (NOT raw position subtraction) keeps cohesion/separation wrap-correct
+// across the seam.
+const go = node('getAgentOffset', {}, 3, 5);     // dX,dY,Distance self→neighbour
+vEdge(fe, 'element', go, 'agentId');
+const gv = node('getVelocity', {}, 3, 6.2);       // unchanged (alignment)
 vEdge(fe, 'element', gv, 'agentId');
 
-// Inverse-distance separation contribution: (self - nbr) / (d² + 1).
-//   a=nbrX b=nbrY c=myX d=myY  (default port names — the formula uses a/b/c/d)
-const exSepX = node('expression', { expression: '(c-a)/((c-a)*(c-a)+(d-b)*(d-b)+1)', visibleCount: 4 }, 3, 7.4);
-vEdge(gp, 'x', exSepX, 'a'); vEdge(gp, 'y', exSepX, 'b'); vEdge(bs, 'myX', exSepX, 'c'); vEdge(bs, 'myY', exSepX, 'd');
-const exSepY = node('expression', { expression: '(d-b)/((c-a)*(c-a)+(d-b)*(d-b)+1)', visibleCount: 4 }, 3, 8.6);
-vEdge(gp, 'x', exSepY, 'a'); vEdge(gp, 'y', exSepY, 'b'); vEdge(bs, 'myX', exSepY, 'c'); vEdge(bs, 'myY', exSepY, 'd');
+// Separation = −offset / (d² + 1)  (push AWAY, inverse-distance).  a=dX b=dY
+const exSepX = node('expression', { expression: '-a/(a*a+b*b+1)', visibleCount: 2 }, 3, 7.4);
+vEdge(go, 'dx', exSepX, 'a'); vEdge(go, 'dy', exSepX, 'b');
+const exSepY = node('expression', { expression: '-b/(a*a+b*b+1)', visibleCount: 2 }, 3, 8.6);
+vEdge(go, 'dx', exSepY, 'a'); vEdge(go, 'dy', exSepY, 'b');
 
 // Accumulator chain in the loop body: var = var + contribution.
 // accum(varId, srcNode, srcPort) → the setVariable node (chain its flow).
@@ -91,10 +93,10 @@ function accum(varId, srcNode, srcPort, inlineB) {
   return sv;
 }
 const acCnt = accum('cnt', null, null, '1');
-const acSX = accum('sumX', gp, 'x');
-const acSY = accum('sumY', gp, 'y');
-const acVX = accum('sumVX', gv, 'vx');
-const acVY = accum('sumVY', gv, 'vy');
+const acSX = accum('sumX', go, 'dx');   // Σ (nbr − self) X   (offset, not raw position)
+const acSY = accum('sumY', go, 'dy');   // Σ (nbr − self) Y
+const acVX = accum('sumVX', gv, 'vx');  // unchanged
+const acVY = accum('sumVY', gv, 'vy');  // unchanged
 const acPX = accum('sepX', exSepX, 'result');
 const acPY = accum('sepY', exSepY, 'result');
 // body flow chain
@@ -124,13 +126,22 @@ vEdge(gvSelf, 'vx', exSpeed, 'a'); vEdge(gvSelf, 'vy', exSpeed, 'b');
 
 // Force = cohesion (toward centroid) + alignment (match neighbours' mean
 // velocity) + separation + self-propulsion toward a cruise speed.
-//   a=Σpos b=count c=myPos d=Σvel e=Σsep f=myVel g=speed
+// `sumX/n` is now the MEAN OFFSET to the local centroid (Σ of torus-correct
+// (nbr−self) vectors / n), so cohesion needs NO myX subtraction.
+//   a=Σoffset b=count d=Σvel e=Σsep f=myVel g=speed   (slot c stays unwired/0)
 const KCOH = 0.005, KALI = 0.45, KSEP = 0.7, KPROP = 0.12, CRUISE = 0.7;
-const FFORM = `((a/max(b,1)-c)*${KCOH} + (d/max(b,1)-f)*${KALI} + e*${KSEP})*min(b,1) + (${CRUISE}/max(g,0.001)-1)*f*${KPROP}`;
-const exFX = node('expression', { expression: FFORM, visibleCount: 7 }, 8, 1.5);
-vEdge(gSumX, 'value', exFX, 'a'); vEdge(gCnt, 'value', exFX, 'b'); vEdge(bs, 'myX', exFX, 'c'); vEdge(gVX, 'value', exFX, 'd'); vEdge(gSepX, 'value', exFX, 'e'); vEdge(gvSelf, 'vx', exFX, 'f'); vEdge(exSpeed, 'result', exFX, 'g');
-const exFY = node('expression', { expression: FFORM, visibleCount: 7 }, 8, 3.5);
-vEdge(gSumY, 'value', exFY, 'a'); vEdge(gCnt, 'value', exFY, 'b'); vEdge(bs, 'myY', exFY, 'c'); vEdge(gVY, 'value', exFY, 'd'); vEdge(gSepY, 'value', exFY, 'e'); vEdge(gvSelf, 'vy', exFY, 'f'); vEdge(exSpeed, 'result', exFY, 'g');
+const FFORM2 = `((a/max(b,1))*${KCOH} + (d/max(b,1)-f)*${KALI} + e*${KSEP})*min(b,1)`
+             + ` + (${CRUISE}/max(g,0.001)-1)*f*${KPROP}`;
+const exFX = node('expression', { expression: FFORM2, visibleCount: 7 }, 8, 1.5);
+vEdge(gSumX, 'value', exFX, 'a'); vEdge(gCnt, 'value', exFX, 'b');
+vEdge(gVX, 'value', exFX, 'd'); vEdge(gSepX, 'value', exFX, 'e');
+vEdge(gvSelf, 'vx', exFX, 'f'); vEdge(exSpeed, 'result', exFX, 'g');
+// NOTE: the old `vEdge(bs, 'myX', exFX, 'c')` is REMOVED (cohesion no longer
+// subtracts self). Slot `c` stays unwired→0; the formula does not reference it.
+const exFY = node('expression', { expression: FFORM2, visibleCount: 7 }, 8, 3.5);
+vEdge(gSumY, 'value', exFY, 'a'); vEdge(gCnt, 'value', exFY, 'b');
+vEdge(gVY, 'value', exFY, 'd'); vEdge(gSepY, 'value', exFY, 'e');
+vEdge(gvSelf, 'vy', exFY, 'f'); vEdge(exSpeed, 'result', exFY, 'g');
 
 const af = node('applyForce', {}, 9, 2.5);
 vEdge(exFX, 'result', af, 'fx');

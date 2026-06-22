@@ -21,6 +21,7 @@ import { AffectCellsUnderNode } from './AffectCellsUnderNode';
 import { SecreteToFieldNode } from './SecreteToFieldNode';
 import { GetNearbyAgentsNode } from './GetNearbyAgentsNode';
 import { GetAgentPositionNode } from './GetAgentPositionNode';
+import { GetAgentOffsetNode } from './GetAgentOffsetNode';
 import { GetAgentAttributeNode } from './GetAgentAttributeNode';
 import { GetAgentRadiusNode } from './GetAgentRadiusNode';
 import { GetVelocityNode } from './GetVelocityNode';
@@ -116,6 +117,7 @@ const ALL_NODES: NodeTypeDef[] = [
   // Agent neighbour access + graph-authored forces (boids / flocking / signalling)
   GetNearbyAgentsNode,
   GetAgentPositionNode,
+  GetAgentOffsetNode,
   GetAgentAttributeNode,
   GetAgentRadiusNode,
   GetVelocityNode,
