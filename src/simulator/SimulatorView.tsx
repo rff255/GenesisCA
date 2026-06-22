@@ -691,6 +691,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const isAgentModelRef = useRef(isAgentModel);
   isAgentModelRef.current = isAgentModel;
   const agentsRef = useRef<AgentRenderSnapshot | null>(null);
+  // Agent brush: the LMB action on the canvas for an agent model. 'paint' falls
+  // through to the normal cell brush (field painting). Glue/Cut stage a first
+  // agent on the first click, then bond/unbond it to the second.
+  type AgentBrushMode = 'seed' | 'kill' | 'glue' | 'cut' | 'paint';
+  const [agentBrushMode, setAgentBrushMode] = useState<AgentBrushMode>('seed');
+  const agentBrushModeRef = useRef<AgentBrushMode>('seed');
+  agentBrushModeRef.current = agentBrushMode;
+  const agentGlueAnchorRef = useRef<number>(-1);
   const glCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const gl3dRef = useRef<import('./render/gl3d').Gl3DRenderer | null>(null);
   // Z-up Blender-style orbit camera. Default 3/4 view looking down onto the XY plane.
@@ -1104,6 +1112,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             stamp(ox + tx * scaledW, oy + ty * scaledH);
       } else {
         stamp(ox, oy);
+      }
+      // Glue/Cut staged-anchor ring (the first-clicked agent awaiting a second).
+      const anchor = agentGlueAnchorRef.current;
+      if (anchor >= 0 && anchor < hw && aal[anchor]) {
+        const cx = ox + ax[anchor]! * scale, cy = oy + ay[anchor]! * scale;
+        const rad = Math.max(2, ar[anchor]! * scale) + 3;
+        ctx.beginPath(); ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(232, 161, 58, 0.95)'; ctx.lineWidth = 2; ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([]);
       }
     };
 
@@ -3582,21 +3598,38 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         return;
       }
 
-      // Bond-Graph Agents — Alt+LMB seeds an agent at the cursor; Alt+Shift+LMB
-      // kills the agent under the cursor. (PR-A4 replaces this with a proper
-      // Agent brush panel; this keeps an agent model interactive in the
-      // meantime.) Only active for an agent model.
-      if (e.button === 0 && e.altKey && isAgentModelRef.current) {
+      // Bond-Graph Agents — the agent brush. Plain LMB on the canvas performs
+      // the selected mode (Seed / Kill / Glue / Cut); 'paint' falls through to
+      // the normal cell brush (field painting). Shift+LMB still inspects, Ctrl+LMB
+      // still resizes (those are checked below), so the agent brush only takes a
+      // plain, unmodified left click.
+      if (e.button === 0 && !e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey
+          && isAgentModelRef.current && agentBrushModeRef.current !== 'paint') {
         e.preventDefault();
-        if (e.shiftKey) {
-          const id = pickAgentAt(e.clientX, e.clientY);
-          const worker = workerRef.current;
-          if (id >= 0 && worker) worker.postMessage({ type: 'killAgents', ids: [id], activeViewer: activeViewerRef.current });
-        } else {
+        const worker = workerRef.current;
+        const mode = agentBrushModeRef.current;
+        if (mode === 'seed') {
           const wpt = screenToWorld(e.clientX, e.clientY);
           if (wpt) seedAgentsAt([{ x: wpt.x, y: wpt.y }]);
+        } else if (mode === 'kill') {
+          const id = pickAgentAt(e.clientX, e.clientY);
+          if (id >= 0 && worker) worker.postMessage({ type: 'killAgents', ids: [id], activeViewer: activeViewerRef.current });
+        } else if (mode === 'glue' || mode === 'cut') {
+          const id = pickAgentAt(e.clientX, e.clientY);
+          if (id < 0) { agentGlueAnchorRef.current = -1; draw(); return; }
+          if (agentGlueAnchorRef.current < 0) {
+            agentGlueAnchorRef.current = id; // stage the first agent
+          } else if (agentGlueAnchorRef.current !== id && worker) {
+            worker.postMessage({ type: mode === 'glue' ? 'formBond' : 'breakBond', a: agentGlueAnchorRef.current, b: id, activeViewer: activeViewerRef.current });
+            agentGlueAnchorRef.current = -1;
+          }
+          draw();
         }
         return;
+      }
+      // RMB / Escape cancels a staged glue/cut anchor.
+      if (isAgentModelRef.current && agentGlueAnchorRef.current >= 0 && (e.button === 2)) {
+        agentGlueAnchorRef.current = -1; draw();
       }
 
       if (e.button === 0 && e.ctrlKey) {
@@ -4866,7 +4899,37 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               : <span title="Brush footprint at the hovered cell">Cells ({hoverCellInfo.x0},{hoverCellInfo.y0}) {'\u2192'} ({hoverCellInfo.x1},{hoverCellInfo.y1})</span>
           )}
           {recording && <span style={{ color: '#e05050' }}>{'\u23FA'} REC {recordFrameCount}f</span>}
+          {isAgentModel && agentsRef.current && <span title="Live agents">{'\u25CF'} {agentsRef.current.liveCount} agents</span>}
         </div>
+
+        {/* Bond-Graph Agents brush \u2014 the LMB action on the canvas. 'Paint Field'
+            falls through to the normal cell brush. Glue/Cut stage the first
+            agent, then bond/unbond to the second (RMB cancels). */}
+        {isAgentModel && (
+          <div data-sim-overlay style={{ position: 'absolute', top: 44, left: 8, zIndex: 6, display: 'flex', flexDirection: 'column', gap: 4, background: 'var(--color-bg-panel)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: 6, fontSize: '0.66rem' }}>
+            <span style={{ color: 'var(--color-text-muted)', fontWeight: 600, letterSpacing: '0.04em' }}>AGENT BRUSH</span>
+            <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', maxWidth: 150 }}>
+              {(['seed', 'kill', 'glue', 'cut', 'paint'] as const).map(m => (
+                <button
+                  key={m}
+                  onClick={() => { setAgentBrushMode(m); agentGlueAnchorRef.current = -1; }}
+                  title={m === 'seed' ? 'Click to add an agent' : m === 'kill' ? 'Click an agent to remove it' : m === 'glue' ? 'Click two agents to bond them' : m === 'cut' ? 'Click two bonded agents to unbond them' : 'Click to paint the cell field (normal brush)'}
+                  style={{
+                    padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', textTransform: 'capitalize',
+                    border: '1px solid ' + (agentBrushMode === m ? 'var(--color-accent)' : 'var(--color-widget-border)'),
+                    background: agentBrushMode === m ? 'var(--color-accent-soft)' : 'transparent',
+                    color: agentBrushMode === m ? 'var(--color-accent)' : 'var(--color-text-muted)',
+                    fontWeight: 600, fontSize: '0.64rem',
+                  }}
+                >{m === 'paint' ? 'Paint Field' : m}</button>
+              ))}
+            </div>
+            <button
+              onClick={() => workerRef.current?.postMessage({ type: 'clearAgents', activeViewer: activeViewerRef.current })}
+              style={{ padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
+            >Clear all agents</button>
+          </div>
+        )}
 
         {/* Top overlay: small attached ear (its own pill) + viewer bar pill,
             wrapped together so the ear reads as a separate widget adjacent to
