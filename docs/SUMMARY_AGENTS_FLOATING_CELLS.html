@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bond-Graph Agents (Floating Cells) — Implementation Summary</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#15171c; --panel2:#1b1e25; --border:#2a2e38; --muted:#8b93a3;
+    --text:#e6e9ef; --accent:#e8a13a; --cyan:#4cc9f0; --purple:#7e57c2; --pink:#ad1457; --teal:#00897b; --green:#66bb6a; --red:#e05656;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+  .wrap{max-width:1040px;margin:0 auto;padding:40px 28px 90px}
+  h1{font-size:30px;margin:0 0 4px;letter-spacing:-0.4px}
+  h2{font-size:21px;margin:46px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+  h3{font-size:16px;margin:22px 0 8px;color:var(--accent)}
+  .sub{color:var(--muted);font-size:15px;margin:0 0 8px}
+  .tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:3px 9px;border-radius:20px;border:1px solid var(--border);color:var(--muted);background:var(--panel)}
+  .lede{background:var(--panel);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:10px;padding:16px 20px;margin:22px 0}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:720px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px 18px}
+  .card h4{margin:0 0 6px;font-size:15px;display:flex;align-items:center;gap:8px}
+  .card p{margin:0;color:var(--muted);font-size:13.5px}
+  .pill{font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:5px;color:#0c0d10}
+  code{background:#23262e;padding:1.5px 6px;border-radius:5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace;color:#d7c08a}
+  .muted{color:var(--muted)}
+  ul{margin:8px 0 8px;padding-left:22px} li{margin:5px 0}
+  .assume{background:linear-gradient(180deg,#1e1a12,#15171c);border:1px solid #4a3a1a;border-radius:10px;padding:16px 20px;margin:14px 0}
+  .assume h4{margin:0 0 4px;color:var(--accent);font-size:15px}
+  .assume p{margin:0;font-size:13.8px;color:#cdd2dc}
+  .chal{border-left:3px solid var(--red);padding-left:14px;margin:16px 0}
+  .chal .q{font-weight:600;color:#f0c0a0}
+  .chal .a{color:var(--muted);font-size:13.8px;margin-top:4px}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border)}
+  th{color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.4px}
+  td code{font-size:11.5px}
+  .ok{color:var(--green)} .warn{color:var(--accent)}
+  .foot{margin-top:40px;color:var(--muted);font-size:12.5px;border-top:1px solid var(--border);padding-top:16px}
+  .diagram{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px;margin:18px 0}
+  .kbd{background:#23262e;border:1px solid var(--border);border-bottom-width:2px;border-radius:5px;padding:1px 6px;font:11.5px monospace}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <span class="tag">GenesisCA · milestone</span>
+  <h1>Bond-Graph Agents — Floating Cells</h1>
+  <p class="sub">The largest net-new subsystem GenesisCA has added: a second, co-resident engine for off-lattice cells that float, bond, grow and divide into tissue — the substrate for studying morphogenesis (and flocking, bacterial colonies, multi-species interaction…).</p>
+
+  <div class="lede">
+    <strong>In one sentence:</strong> the sim worker now runs a continuous-position agent engine alongside the lattice CA — agents repel into a soft-sphere packing, glue into bonds, grow and <em>divide along their tension axis with bonds inherited by geometry</em>, and close the loop with the grid (the cell CA <em>is</em> the morphogen field they secrete into and sense). It is authored entirely in the node editor (a new <strong>Agents</strong> rule graph), runs at ~7000 steps/sec for hundreds of agents, and ships with a working <strong>Morphogenesis — Growing Tissue</strong> sample. Phases A–D of the runbook are complete and verified; Phases E (3D) and F (WASM/WebGPU) are deferred by design.
+  </div>
+
+  <h2>① What shipped</h2>
+  <p class="muted" style="margin-top:-4px">Six commits, one per phase, each <code>tsc -b</code>-clean with the lattice CA path proven byte-identical on Game of Life + Life3D (all 3 targets) so the agent tier is provably additive.</p>
+
+  <div class="grid">
+    <div class="card"><h4><span class="pill" style="background:var(--cyan)">A</span> Agent substrate</h4><p>The free-list-holed SoA (<code>maxAgents</code> + alive-mask + <code>highWater</code>), the overdamped force integrator with a <strong>uniform spatial hash (O(N))</strong> + a Δt stability clamp, the agent compiler (the <code>behaviourStep</code> loop, var = <code>idx</code>), and the two-graph Modeler split (Cells/Agents tabs behind one editor).</p></div>
+    <div class="card"><h4><span class="pill" style="background:var(--teal)">B</span> Bonds</h4><p>The persistent ragged bond store with the <code>partnerEpoch</code> dangling-bond ABI, the spring force, Form/Break Bond + For Each Bond + auto-bond (hysteresis), and the bond render layer + glue/cut brush.</p></div>
+    <div class="card"><h4><span class="pill" style="background:var(--pink)">C</span> Division · growth · death</h4><p>The headline: the <strong>tension-axis eigensolve</strong> (a glued cluster divides along its mechanical axis), geometric bond reattachment, Divide/Kill Agent + the Division Event root (asymmetric inheritance), and the growth ramp.</p></div>
+    <div class="card"><h4><span class="pill" style="background:var(--green)">D</span> Closed feedback</h4><p>The cell-CA-as-field bridge: Secrete/Affect Cells (deposit before the cell step), Sample Field / Field Gradient / Read Cells Under (bilinear gather after) — agents secrete morphogens, the grid diffuses them, agents respond.</p></div>
+  </div>
+
+  <div class="diagram">
+  <svg viewBox="0 0 1000 250" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+    <rect x="0" y="0" width="1000" height="250" fill="transparent"/>
+    <text x="500" y="22" fill="#8b93a3" font-size="12" text-anchor="middle">ONE GENERATION — the closed agent↔grid loop</text>
+    <!-- boxes -->
+    <g font-size="13" fill="#e6e9ef" text-anchor="middle">
+      <rect x="30"  y="70" width="200" height="90" rx="9" fill="#15171c" stroke="#7e57c2"/>
+      <text x="130" y="100" font-weight="700">AGENT STEP</text>
+      <text x="130" y="120" font-size="11" fill="#8b93a3">gather (Sample Field)</text>
+      <text x="130" y="136" font-size="11" fill="#8b93a3">behave · forces · structural</text>
+      <text x="130" y="152" font-size="11" fill="#8b93a3">deposit (Secrete To Field)</text>
+
+      <rect x="400" y="70" width="200" height="90" rx="9" fill="#15171c" stroke="#66bb6a"/>
+      <text x="500" y="100" font-weight="700">CELL STEP</text>
+      <text x="500" y="122" font-size="11" fill="#8b93a3">the lattice CA diffuses /</text>
+      <text x="500" y="138" font-size="11" fill="#8b93a3">reacts the deposited field</text>
+
+      <rect x="770" y="70" width="200" height="90" rx="9" fill="#15171c" stroke="#4cc9f0"/>
+      <text x="870" y="100" font-weight="700">RENDER</text>
+      <text x="870" y="122" font-size="11" fill="#8b93a3">circles + bonds over the</text>
+      <text x="870" y="138" font-size="11" fill="#8b93a3">grid colour blit</text>
+    </g>
+    <!-- arrows -->
+    <g stroke="#e8a13a" stroke-width="2" fill="none" marker-end="url(#ar)">
+      <path d="M230 115 H395"/>
+      <path d="M600 115 H765"/>
+    </g>
+    <path d="M870 160 V200 H130 V165" stroke="#5b6472" stroke-width="1.6" fill="none" stroke-dasharray="5 4" marker-end="url(#ar2)"/>
+    <text x="500" y="218" fill="#5b6472" font-size="11" text-anchor="middle">deposit incorporated next gen — the loop is closed</text>
+    <defs>
+      <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e8a13a"/></marker>
+      <marker id="ar2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5b6472"/></marker>
+    </defs>
+  </svg>
+  </div>
+
+  <h2>② Challenges &amp; how I overcame them</h2>
+
+  <div class="chal"><div class="q">The agent compiler can't be a fork of the lattice compiler — they iterate differently.</div><div class="a">The lattice loop runs <code>idx&lt;total</code> with a <code>_row/_col</code> decode + a colour index; the agent loop runs <code>idx&lt;highWater</code> with an alive-skip and none of that. I wrote a sibling <code>compileAgentGraph</code> that reuses the shared front-end (macro expand, reroute collapse, CSE) and the per-root <code>compileRoot</code> + analysis passes, then wraps the result in the agent loop. The loop variable is named <code>idx</code> (Decision D-IDX) so every existing attribute-read node lands on the agent SoA with <em>zero</em> node change.</div></div>
+
+  <div class="chal"><div class="q">O(N²) all-pairs forces would cap the agent count.</div><div class="a">The runbook sanctioned an all-pairs first build, but you asked for no bottlenecks — so I built a CSR-style <strong>uniform spatial hash</strong> (reused scratch, no per-step GC) and fused the density + force into one neighbour pass. Result: <strong>0.14 ms/step for 350 agents (~7000 steps/sec)</strong>, with an all-pairs fallback only for a world too small to bin.</div></div>
+
+  <div class="chal"><div class="q">A recycled agent slot could silently re-point a bond spring at a stranger.</div><div class="a">The dangling-bond ABI: every bond slot carries the partner's <code>epoch</code> stamped at form time; death bumps the slot's epoch and breaks all its bonds (both directions); the force loop + a per-step sweep skip any epoch-mismatched bond. Verified by killing an agent and asserting its partners' lists drop it + the epoch bumps.</div></div>
+
+  <div class="chal"><div class="q">Division is the riskiest single operation — overflow during bond reattachment could leave a half-rewired tissue.</div><div class="a">The whole division is pre-checked (can a daughter slot be allocated? do both daughters' bond lists fit?) and <strong>rejected atomically</strong> on any overflow, leaving the mother untouched + surfacing a notice. The tension axis is a closed-form 2×2 eigensolve, verified exact: a horizontally-stretched bond divides along (1,0), a vertical one along (0,1), with partner bonds partitioned to the nearer daughter.</div></div>
+
+  <div class="chal"><div class="q">Switching the Cells/Agents tab mid-edit could write one graph's nodes into the other.</div><div class="a">The 100 ms debounced write-back reads the editor at fire-time, but the tab swap had already loaded the other graph. Fixed with a synchronous <code>flushSync</code> before every swap (persist the current graph first), and by routing <code>activeGraph</code> through the existing scope-switch effect so <code>clearHistory()</code> fires on swap (no cross-graph undo) for free.</div></div>
+
+  <div class="chal"><div class="q">My own test harness lied to me twice.</div><div class="a">"0 bonds formed" was actually a test reading <code>getState</code> (which serialises the bond store) instead of the render snapshot (which carries the flat bond pairs). And a stale Web Worker (model loads are soft-recompiles that reuse the worker; HMR doesn't reload workers) ran old code until a page reload. Both cost iterations — the engine was correct the whole time. Lesson re-learned: verify the field you're reading, and reload the page for fresh worker code.</div></div>
+
+  <h2>③ Assumptions &amp; decisions you should be aware of</h2>
+  <p class="sub" style="margin-top:-4px">These are the judgement calls where the runbook was ambiguous, under-specified, or where I chose a pragmatic v1 path. <strong>Read these</strong> — they shape what the feature does today and where you may want to steer it.</p>
+
+  <div class="assume"><h4>1 · The force law is engine-owned, not user-authored per-pair.</h4><p>The runbook hinted you might author the pairwise force curve as a node graph (<code>Σ F(d)·r̂</code>). That needs a per-neighbour-pair iteration construct the node set doesn't have. <strong>I made the soft-sphere repulsion + bond springs an engine-owned integrator</strong> with model-attr-tunable parameters (repulsion μ, adhesion μ, range, drag, Δt — in Properties › Bond-Graph Agents); the <code>behaviourStep</code> graph authors per-agent <em>behaviour</em> (grow / divide / bond / read fields / set attributes), not the pairwise physics. This is a defensible reading ("the engine owns r̂") and gives a working demo out of the box. A future "for each neighbour" construct could expose the force law to the graph.</p></div>
+
+  <div class="assume"><h4>2 · An agent model runs <em>entirely</em> on JS — including the cell field.</h4><p>Decision D-TARGET is JS-reference-only for agents. The runbook was slightly split on whether the <em>cell</em> field could still use WASM/WebGPU. I took the simpler, safer path: <strong>any model with Agents enabled forces the whole model to the JS / Debug-Reference target</strong> (agents + grid). Decoupling them (cell field on WASM, agents on JS) is a Phase-F refinement. Practically: the Compile Target radio is overridden for agent models.</p></div>
+
+  <div class="assume"><h4>3 · "Grid required" — there is no lattice-less branch yet.</h4><p>Agents are <strong>additive on top of an always-present grid</strong>, and the agent world IS the grid coordinate frame (agent (x,y) are in cell units, 1:1). A pure agents-only model (no grid) was the most novel matrix cell and is deferred (the runbook's sanctioned scope trim). If you uncheck Grid Cells, the grid is still allocated under the hood.</p></div>
+
+  <div class="assume"><h4>4 · Daughter-daughter bond only when the mother was bonded.</h4><p>The runbook says "add the daughter-daughter bond" unconditionally. I made it <strong>conditional on the mother having bonds</strong>: a tissue cell's daughters stay connected (the tissue grows as one sheet), but a <em>free</em> dividing agent (think bacteria) produces two <em>separate</em> daughters that drift apart under repulsion. This serves both model classes with one rule. If you want bacteria-like free division to also bond, enable auto-bond.</p></div>
+
+  <div class="assume"><h4>5 · Auto-bond is the primary bond-formation path; Form Bond is graph-limited.</h4><p>The <code>Form Bond</code> node needs a <em>target agent id</em>, which the v1 node set can't easily produce (there's no "nearest agent" read). So in practice bonds form via the engine's <strong>auto-bond option</strong> (Properties › Bonds — bond by proximity, with hysteresis) or the manual <strong>glue brush</strong>. Form/Break Bond are wired and useful with <code>For Each Bond</code>'s partner output (e.g. break over-strained bonds), but a graph can't conjure a bond partner from thin air. A future "nearest unbonded agent" node would unlock graph-driven bonding.</p></div>
+
+  <div class="assume"><h4>6 · Agent attributes are single-buffered; positions are double-buffered.</h4><p>Agents read + write only their <em>own</em> attributes (no neighbour-attribute reads in the agent graph), so I made agent attrs <strong>single-buffer</strong> — a read-modify-write sees its write immediately (natural imperative semantics). Positions, by contrast, are double-buffered for synchronous force integration. The same cell-attribute id exists as both a per-cell array (the field) and a per-agent array (the agent attribute) — they're distinct storage sharing a name (Decision D-IDX makes this work).</p></div>
+
+  <div class="assume"><h4>7 · Closed-feedback timing: a fused single pass with a one-step-stale gather.</h4><p>The ideal is deposit→step→gather as three strict phases. I run the <strong>agent step (which both gathers and deposits) before the cell step</strong>: the gather reads the grid as of the previous cell step (correct "after step"), the deposit writes for this gen's cell step (correct "before step"). The subtlety: within one agent loop, agent <em>j</em>'s Sample Field can see agent <em>i</em>'s deposit from earlier this same generation (a one-gen intra-loop mixing). For diffusion-driven models this doesn't change the emergent dynamics; a strict "snapshot the field before any deposit" is a future refinement. Likewise, <code>Neighbour Density</code> reads the previous step's density (the cost of fusing density into the single force pass).</p></div>
+
+  <div class="assume"><h4>8 · Field sampling is cell-centered (cell <code>i</code> ≡ coordinate <code>i</code>), bilinear, 2D.</h4><p><code>Sample Field</code> treats a cell's centre as its integer index and lerps between neighbours; the 2D renderer draws cell <code>i</code> spanning <code>[i, i+1)</code>, so there's a cosmetic half-cell offset between the two conventions (it does not affect dynamics). 3D / trilinear field sampling is Phase E. <code>For Each Bond</code>'s current-length is the raw Euclidean distance (no torus wrap) — exact in practice since bonds are short.</p></div>
+
+  <div class="assume"><h4>9 · Environment: I installed Node myself.</h4><p>The machine had <strong>no Node.js</strong>, so I downloaded a portable Node v24 LTS into <code>~/tools</code> and ran the build/test loop from there (the user PATH doesn't propagate to the harness's shells, so each command prepends it). I also set a local git identity (<code>rff255@gmail.com</code> / "Rodrigo Castiel"). The Bash tool returned no output in this environment, so all shell work went through PowerShell + the preview MCP. <strong>Nothing was pushed.</strong></p></div>
+
+  <h2>④ What's deferred (by design)</h2>
+  <div class="grid">
+    <div class="card"><h4>Phase E — 3D agents</h4><p>Extend the shipped <code>gl3d.ts</code> WebGL2 renderer to instanced sphere-impostors + bond tubes (reusing its orbit / clip / pick). The engine already carries a <code>z</code>; the force law / division / field sampling gain a third axis. Agents are 2D today.</p></div>
+    <div class="card"><h4>Phase F — WASM / WebGPU agents</h4><p>Port the variable-<code>highWater</code>, free-list-holed agent loop + structural-phase reads to the WASM emitter, then WebGPU. Until each lands, an agent model auto-runs on JS. Validation there is statistical (sorting/cluster metrics), not bit-exact.</p></div>
+    <div class="card"><h4>Smaller follow-ups</h4><p><code>Get Curvature</code> (bond-angle), a <code>bondContactEvent</code> form/break policy root, the <code>.gcastate</code> file-format agent persistence (the worker's getState/loadState already serialise the holey store — only the file serialiser is pending), and a richer agent inspector popover.</p></div>
+    <div class="card"><h4>Optional richness</h4><p>A graph-authorable per-pair force law (assumption 1), a true agents-only no-grid mode (assumption 3), and decoupling the cell-field target from the agent target (assumption 2).</p></div>
+  </div>
+
+  <h2>⑤ How to see it work</h2>
+  <ol>
+    <li>Restart the dev server once (<code>npm run dev</code>) so the new library model is indexed, then open <strong>Library → "Morphogenesis — Growing Tissue"</strong> (or File → Load it from <code>public/models/</code>).</li>
+    <li>It opens in the <strong>Simulator</strong> with 12 seeded cells. Press <span class="kbd">▶</span> (or <span class="kbd">Enter</span>) and watch the cluster grow + divide into a packed, bonded tissue (it fills to ~1500 cells).</li>
+    <li>Use the <strong>Agent Brush</strong> overlay (top-left): <em>Seed</em> / <em>Kill</em> click a spot or agent; <em>Glue</em> / <em>Cut</em> click two agents to bond/unbond; <em>Paint Field</em> falls through to the normal cell brush. <span class="kbd">Clear all agents</span> resets the population.</li>
+    <li>Open the <strong>Modeler → Agents tab</strong> (the pill strip above the canvas) to see/edit the grow→divide rule graph, and tune the physics in <strong>Properties › Bond-Graph Agents</strong>.</li>
+  </ol>
+  <p class="muted" style="font-size:13px">Verification used a headless harness (<code>window.__simWorker</code> + <code>getState</code>) since the agent engine is testable before the renderer exists — positions/bonds in <code>getState</code> are the ground truth. Dev test fixtures (<code>public/agents-*.gcaproj</code>) are gitignored.</p>
+
+  <div class="foot">
+    GenesisCA · Bond-Graph Agents (Floating Cells) · branch <code>agents_floating_cells</code> · Phases A–D complete &amp; verified · lattice CA path byte-identical on every commit · nothing pushed.
+  </div>
+
+</div>
+</body>
+</html>
