@@ -418,17 +418,29 @@ function initAgents(): void {
     const r = cbNum(centerBasedConfig, 'defaultRadius');
     const ww = agentStore.worldWidth, wh = agentStore.worldHeight;
     const specs: AgentSeedSpec[] = [];
-    // A compact, centred cluster (spacing just above contact, so the agents
-    // settle into a packed blob and auto-bond into a tissue) — the morphogenesis
-    // starting point. For a dispersed "gas", seed via the brush instead.
-    const spacing = 2.1 * r;
-    const cols = Math.max(1, Math.ceil(Math.sqrt(seedCount)));
-    const blockW = (cols - 1) * spacing;
-    const rows = Math.ceil(seedCount / cols);
-    const blockH = (rows - 1) * spacing;
-    const ox = ww / 2 - blockW / 2, oy = wh / 2 - blockH / 2;
-    for (let i = 0; i < seedCount; i++) {
-      specs.push({ x: ox + (i % cols) * spacing, y: oy + Math.floor(i / cols) * spacing, radius: r });
+    if (centerBasedConfig.seedPattern === 'scatter') {
+      // Dispersed: uniformly random across the world (flocking, chemotaxis
+      // aggregation — populations that START spread and self-organize). Seeding
+      // is a one-time setup, not part of the replayable step, so Math.random is
+      // fine here (unlike the deterministic per-step xorshift stream).
+      const margin = 2 * r;
+      const sx = Math.max(0, ww - 2 * margin), sy = Math.max(0, wh - 2 * margin);
+      for (let i = 0; i < seedCount; i++) {
+        specs.push({ x: margin + Math.random() * sx, y: margin + Math.random() * sy, radius: r });
+      }
+    } else {
+      // A compact, centred cluster (spacing just above contact, so the agents
+      // settle into a packed blob and auto-bond into a tissue) — the
+      // morphogenesis starting point.
+      const spacing = 2.1 * r;
+      const cols = Math.max(1, Math.ceil(Math.sqrt(seedCount)));
+      const blockW = (cols - 1) * spacing;
+      const rows = Math.ceil(seedCount / cols);
+      const blockH = (rows - 1) * spacing;
+      const ox = ww / 2 - blockW / 2, oy = wh / 2 - blockH / 2;
+      for (let i = 0; i < seedCount; i++) {
+        specs.push({ x: ox + (i % cols) * spacing, y: oy + Math.floor(i / cols) * spacing, radius: r });
+      }
     }
     seedAgents(agentStore, specs, r);
   }
