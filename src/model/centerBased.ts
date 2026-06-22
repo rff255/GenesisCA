@@ -69,6 +69,10 @@ export function agentTargetOf(cfg: CenterBasedConfig | undefined | null): 'js' |
   const t = cfg?.agentTarget;
   if (t === 'js') return 'js';
   if (t === 'wasm' || t === 'webgpu') {
+    // Phase F widens this allow-set as each port lands: PR6 deletes the `'wasm'`
+    // clamp arm (returns 'wasm'); PR7 deletes the `'webgpu'` arm. This is the
+    // ONLY agentTargetOf edit in the whole milestone, and it lives in PR6/PR7
+    // (NOT PR1 — the clamp already exists, PR1 only verifies + documents it).
     // eslint-disable-next-line no-console
     console.warn(`[agents] agentTarget='${t}' not yet implemented (Phase F) — clamping to 'js'.`);
     return 'js';
