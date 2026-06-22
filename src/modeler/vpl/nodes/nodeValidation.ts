@@ -73,6 +73,16 @@ export function detectMissingConfig(
       if (!hasCellAttr(config.attributeId)) issues.push('Select a cell attribute');
       break;
 
+    // Bond-Graph Agents — the field-bridge nodes read/write a cell attribute
+    // (the morphogen field), so attributeId is required or they emit `_field__undef`.
+    case 'sampleField':
+    case 'fieldGradient':
+    case 'readCellsUnder':
+    case 'affectCellsUnder':
+    case 'secreteToField':
+      if (!hasCellAttr(config.attributeId)) issues.push('Select a field (cell) attribute');
+      break;
+
     case 'getNeighborsAttribute':
     case 'setNeighborhoodAttribute':
       // Wave A.6: nodes that walk a configured neighborhood — both nbrId

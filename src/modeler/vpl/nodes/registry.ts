@@ -13,6 +13,11 @@ import { ForEachBondNode } from './ForEachBondNode';
 import { DivideAgentNode } from './DivideAgentNode';
 import { KillAgentNode } from './KillAgentNode';
 import { DivisionEventNode } from './DivisionEventNode';
+import { SampleFieldNode } from './SampleFieldNode';
+import { FieldGradientNode } from './FieldGradientNode';
+import { ReadCellsUnderNode } from './ReadCellsUnderNode';
+import { AffectCellsUnderNode } from './AffectCellsUnderNode';
+import { SecreteToFieldNode } from './SecreteToFieldNode';
 import { GetOrientationNode } from './GetOrientationNode';
 import { SetOrientationNode } from './SetOrientationNode';
 import { GetFacingOrientationNode } from './GetFacingOrientationNode';
@@ -104,6 +109,12 @@ const ALL_NODES: NodeTypeDef[] = [
   ForEachBondNode,
   DivideAgentNode,
   KillAgentNode,
+  // Closed feedback — the agent↔grid field bridge (the cell CA is the field).
+  SampleFieldNode,
+  FieldGradientNode,
+  ReadCellsUnderNode,
+  AffectCellsUnderNode,
+  SecreteToFieldNode,
   // Flow
   ConditionalNode,
   SequenceNode,
