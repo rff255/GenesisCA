@@ -496,6 +496,10 @@ function buildAgentLoopArgs(s: AgentStore): unknown[] {
   for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
   for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
   args.push(cachedModelAttrs, s.colors, activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS);
+  // Closed feedback (Phase D): the cell field arrays (readAttrs[id] = the CELL
+  // SoA sized total, distinct from the agent attrRead) + the field grid dims.
+  args.push(width, height, total, boundaryTreatment === 'torus' ? 1 : 0);
+  for (const spec of s.attrSpecs) args.push(readAttrs[spec.id]);
   return args;
 }
 
@@ -3020,11 +3024,16 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
 
       let stoppedByEvent: string | null = null;
       for (let i = 0; i < msg.count; i++) {
-        // Bond-Graph Agents: one generation = the cell step + the agent step.
-        // (Phase D's runGeneration formalises the deposit→cell→gather→behave
-        // ordering for the closed field feedback; v1 runs cells then agents.)
-        if (stepFn) runStep();
+        // Bond-Graph Agents — one generation = the closed agent↔grid loop:
+        //  (gather) agents SampleField the grid as of the previous cell step,
+        //  (behave) run behaviourStep + integrate forces + the structural phase,
+        //  (deposit) AffectCellsUnder / SecreteToField write the cell READ
+        //   buffer — THEN the cell CA steps, incorporating the deposit (its
+        //  w.set(r) copy carries it; a diffusion rule spreads it). So the agent
+        //  step runs BEFORE the cell step (Decision D-FIELD: the field IS the
+        //  lattice CA, only the scatter/gather bridge is new).
         if (agentStore) runAgentStep();
+        if (stepFn) runStep();
         const rawStop = stopFlag[0] ?? 0;
         if (rawStop !== 0) {
           const idx = rawStop - 1;

@@ -64,7 +64,7 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
 // Compile a single root's subgraph (per-cell body)
 // ---------------------------------------------------------------------------
 
-const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'categoricalColor', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels', 'getCellPosition', 'behaviourStep', 'divisionEvent', 'getSelfPosition', 'forEachBond']);
+const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'categoricalColor', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels', 'getCellPosition', 'behaviourStep', 'divisionEvent', 'getSelfPosition', 'forEachBond', 'fieldGradient']);
 
 /** Check if a node's data uses multi-output variable naming */
 function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
@@ -2055,6 +2055,13 @@ export function buildAgentLoopParams(model: CAModel): { params: string; cellAttr
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);
   parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
+  // Closed feedback (Phase D): the CELL field arrays (`_field_<id>` = the cell
+  // read buffer, sized W*H — DISTINCT from the agent `r_<id>` sized maxAgents)
+  // + the field grid dims. AffectCellsUnder / SecreteToField write into them
+  // (deposit before the cell step); SampleField / FieldGradient / ReadCellsUnder
+  // read them (gather after the cell step). The field IS the lattice CA (D-FIELD).
+  parts.push('_fieldW', '_fieldH', '_fieldTotal', '_fieldBoundaryTorus');
+  for (const a of cellAttrs) parts.push(`_field_${a.id}`);
   return { params: parts.join(', '), cellAttrs };
 }
 
