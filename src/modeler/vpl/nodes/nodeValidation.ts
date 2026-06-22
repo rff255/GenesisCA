@@ -83,6 +83,12 @@ export function detectMissingConfig(
       if (!hasCellAttr(config.attributeId)) issues.push('Select a field (cell) attribute');
       break;
 
+    // Bond-Graph Agents — neighbour-attribute read/write need an attribute.
+    case 'getAgentAttribute':
+    case 'setAgentAttribute':
+      if (!hasCellAttr(config.attributeId)) issues.push('Select an agent attribute');
+      break;
+
     case 'getNeighborsAttribute':
     case 'setNeighborhoodAttribute':
       // Wave A.6: nodes that walk a configured neighborhood — both nbrId

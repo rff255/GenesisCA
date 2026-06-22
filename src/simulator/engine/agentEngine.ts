@@ -59,6 +59,12 @@ export interface AgentStore {
   x: Float64Array; y: Float64Array;
   /** Position double-buffer (overdamped Euler reads x/y, writes xNext/yNext, swaps). */
   xNext: Float64Array; yNext: Float64Array;
+  /** Velocity (persisted when `momentum > 0` — boids/flocking; 0 = overdamped). */
+  vx: Float64Array; vy: Float64Array;
+  /** Per-step net force accumulator. Reset to 0 each step; the behaviour graph's
+   *  Apply Force adds into it BEFORE the engine soft-sphere + bond springs, so
+   *  the force law is graph-authorable on top of (or instead of) the engine's. */
+  forceX: Float64Array; forceY: Float64Array;
   radius: Float64Array; targetRadius: Float64Array;
   age: Float64Array;
 
@@ -150,6 +156,10 @@ export function createAgentStore(config: CenterBasedConfig, attrSpecs: AgentAttr
     y: new Float64Array(maxAgents),
     xNext: new Float64Array(maxAgents),
     yNext: new Float64Array(maxAgents),
+    vx: new Float64Array(maxAgents),
+    vy: new Float64Array(maxAgents),
+    forceX: new Float64Array(maxAgents),
+    forceY: new Float64Array(maxAgents),
     radius: new Float64Array(maxAgents),
     targetRadius: new Float64Array(maxAgents),
     age: new Float64Array(maxAgents),
@@ -221,6 +231,7 @@ export function initAgentSlot(
 ): void {
   store.x[id] = x; store.y[id] = y;
   store.xNext[id] = x; store.yNext[id] = y;
+  store.vx[id] = 0; store.vy[id] = 0;
   store.radius[id] = radius; store.targetRadius[id] = radius;
   store.age[id] = 0;
   store.type[id] = type; store.lineage[id] = lineage;
@@ -292,6 +303,9 @@ export interface AgentRenderSnapshot {
   liveCount: number;
   x: Float64Array;
   y: Float64Array;
+  /** Velocity (for heading indicators / flocking diagnostics). */
+  vx: Float64Array;
+  vy: Float64Array;
   radius: Float64Array;
   alive: Uint8Array;
   colors: Uint8ClampedArray;
@@ -637,6 +651,8 @@ export function snapshotAgentsForRender(store: AgentStore): AgentRenderSnapshot 
     liveCount: store.liveCount,
     x: store.x.slice(0, hw),
     y: store.y.slice(0, hw),
+    vx: store.vx.slice(0, hw),
+    vy: store.vy.slice(0, hw),
     radius: store.radius.slice(0, hw),
     alive: store.alive.slice(0, hw),
     colors: store.colors.slice(0, hw * 4),

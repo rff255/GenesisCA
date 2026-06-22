@@ -29,7 +29,7 @@ import {
   createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot,
   snapshotAgentsForRender, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
   formBond, breakBond, sweepStaleBonds, divideAgent,
-  type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec,
+  type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec, type SpatialHash,
 } from './agentEngine';
 
 interface AttrDef {
@@ -386,6 +386,10 @@ let centerBasedConfig: CenterBasedConfig | null = null;
  *  Null until the agent compile path ships it (PR-A2.5/A3). */
 let agentBehaviourFn: Function | null = null;
 let agentInitFn: Function | null = null;
+/** The current-step spatial hash, built BEFORE the behaviour fn so Get Nearby
+ *  Agents can query it, then reused by the force pass. Null for a tiny world. */
+let currentAgentHash: SpatialHash | null = null;
+const EMPTY_I32 = new Int32Array(0);
 /** Compiled Division Event function (single-agent; runs per daughter after a
  *  division). Null when the agent graph has no divisionEvent root. */
 let agentDivisionFn: Function | null = null;
@@ -490,9 +494,15 @@ function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, ax
  *  agent attrs (attrWrite aliases attrRead). Called once per step (the spread
  *  is fine — the function is loop-wrapped, not per-agent). */
 function buildAgentLoopArgs(s: AgentStore): unknown[] {
+  const hash = currentAgentHash;
   const args: unknown[] = [
     s.alive, s.highWater,
     s.x, s.y, s.radius, s.targetRadius, s.age, s.type, s.lineage, s.bondCount, s.density,
+    s.vx, s.vy, s.forceX, s.forceY,
+    // spatial hash (null → _hashValid 0, the emit falls back to all-pairs)
+    hash ? 1 : 0,
+    hash ? hash.binStart : EMPTY_I32, hash ? hash.binAgents : EMPTY_I32,
+    hash ? hash.nBinsX : 0, hash ? hash.nBinsY : 0, hash ? hash.binSizeX : 1, hash ? hash.binSizeY : 1,
     s.divideRequest, s.divideAxisX, s.divideAxisY, s.divideAsym, s.killRequest,
     s.bondPartner, s.bondPartnerEpoch, s.bondRestLength, s.bondStiffness, s.bondTypeLabel, s.maxBonds,
     s.bondFormReq, s.bondFormL, s.bondFormK, s.bondBreakReq,
@@ -542,11 +552,30 @@ function runAgentStep(): void {
   const hw = s.highWater;
   const x = s.x, y = s.y, rad = s.radius, alive = s.alive;
   const maxBonds = s.maxBonds;
+  const momentum = Math.max(0, Math.min(0.999, cbNum(cfg, 'momentum')));
+  const maxSpeed = Math.max(0, cbNum(cfg, 'maxSpeed'));
+  const engineForces = !cfg?.customForcesOnly;
 
-  // Compiled behaviour FIRST (reads positions + the PREVIOUS step's density —
-  // a one-step lag, the cost of fusing density into the single neighbour pass
-  // below; densities change slowly so it's a fine approximation). Writes attrs /
-  // colours / division+kill+bond requests. Reads OLD positions.
+  // Reset the per-step force accumulator (Apply Force adds into it during
+  // behaviour) BEFORE behaviour runs.
+  s.forceX.fill(0, 0, hw); s.forceY.fill(0, 0, hw);
+
+  // Build the uniform spatial hash from current positions — O(N) neighbour
+  // lookups instead of O(N²). Built BEFORE behaviour so Get Nearby Agents can
+  // query it, then reused by the force pass. null for a world too small to tile
+  // (≥3 bins/axis); the all-pairs fallback runs there. The interaction range OR
+  // a larger Get-Nearby query radius sets the bin edge — sized generously so the
+  // 3×3 stencil covers both the soft-sphere cutoff AND typical neighbour queries.
+  let maxR = cbNum(cfg, 'defaultRadius');
+  for (let i = 0; i < hw; i++) { if (alive[i] && rad[i]! > maxR) maxR = rad[i]!; }
+  const binEdge = Math.max(range * 2 * maxR, cbNum(cfg, 'neighbourQueryRadius'));
+  const hash = buildSpatialHash(s, Math.max(1e-3, binEdge), W, H);
+  currentAgentHash = hash;
+
+  // Compiled behaviour (reads positions + the PREVIOUS step's density — a
+  // one-step lag, the cost of fusing density into the single neighbour pass;
+  // densities change slowly so it's a fine approximation; queries the hash via
+  // Get Nearby Agents). Writes attrs / colours / forces / div+kill+bond requests.
   if (agentBehaviourFn) {
     try {
       agentBehaviourFn(...buildAgentLoopArgs(s));
@@ -556,23 +585,19 @@ function runAgentStep(): void {
     }
   }
 
-  // Build the uniform spatial hash from current positions — O(N) neighbour
-  // lookups instead of O(N²). null for a world too small to tile (≥3 bins/axis);
-  // then the all-pairs fallback runs (correct + cheap at that scale). The max
-  // radius sets the bin edge so the 3×3 stencil covers every interacting pair.
-  let maxR = cbNum(cfg, 'defaultRadius');
-  for (let i = 0; i < hw; i++) { if (alive[i] && rad[i]! > maxR) maxR = rad[i]!; }
-  const hash = buildSpatialHash(s, Math.max(1e-3, range * 2 * maxR), W, H);
-
-  // Single neighbour pass: soft-sphere repulsion/adhesion + bond springs +
-  // density (for next step), overdamped Euler into the xNext/yNext double-buffer.
+  // Single neighbour pass: graph-authored force (forceX/Y from Apply Force) +
+  // soft-sphere repulsion/adhesion (unless customForcesOnly) + bond springs +
+  // density (for next step), integrated into the xNext/yNext double-buffer.
   const xN = s.xNext, yN = s.yNext;
+  const vxArr = s.vx, vyArr = s.vy;
   for (let i = 0; i < hw; i++) {
     if (!alive[i]) { xN[i] = x[i]!; yN[i] = y[i]!; continue; }
     const xi = x[i]!, yi = y[i]!, ri = rad[i]!;
-    let fx = 0, fy = 0, dens = 0;
+    // Start from the graph-authored force (Apply Force wrote it this step).
+    let fx = s.forceX[i]!, fy = s.forceY[i]!, dens = 0;
 
-    // --- pairwise repulsion/adhesion over candidate neighbours ---
+    // --- neighbour pass: always counts density; applies soft-sphere force only
+    // when engineForces (customForcesOnly skips the built-in repulsion) ---
     if (hash) {
       const nBinsX = hash.nBinsX, nBinsY = hash.nBinsY;
       const binStart = hash.binStart, binAgents = hash.binAgents;
@@ -595,10 +620,12 @@ function runAgentStep(): void {
             const rmax = range * sij;
             if (d2 === 0 || d2 >= rmax * rmax) continue;
             dens++;
-            const d = Math.sqrt(d2);
-            const F = ((d < sij) ? muR : muA) * (d - sij);
-            const k = F / d;
-            fx += k * dx; fy += k * dy;
+            if (engineForces) {
+              const d = Math.sqrt(d2);
+              const F = ((d < sij) ? muR : muA) * (d - sij);
+              const k = F / d;
+              fx += k * dx; fy += k * dy;
+            }
           }
         }
       }
@@ -612,10 +639,12 @@ function runAgentStep(): void {
         const rmax = range * sij;
         if (d2 === 0 || d2 >= rmax * rmax) continue;
         dens++;
-        const d = Math.sqrt(d2);
-        const F = ((d < sij) ? muR : muA) * (d - sij);
-        const k = F / d;
-        fx += k * dx; fy += k * dy;
+        if (engineForces) {
+          const d = Math.sqrt(d2);
+          const F = ((d < sij) ? muR : muA) * (d - sij);
+          const k = F / d;
+          fx += k * dx; fy += k * dy;
+        }
       }
     }
     s.density[i] = dens;
@@ -641,9 +670,18 @@ function runAgentStep(): void {
       }
     }
 
-    // overdamped Euler + world bounds
-    let nx = xi + (dt / eta) * fx;
-    let ny = yi + (dt / eta) * fy;
+    // Integrate: velocity = momentum·velocity + (Δt/η)·force; position += velocity.
+    // momentum 0 ⇒ vx = (Δt/η)·fx, the original overdamped step (byte-identical
+    // for tissue); momentum > 0 carries inertia (flocking). Optional speed cap.
+    let vxi = momentum * vxArr[i]! + (dt / eta) * fx;
+    let vyi = momentum * vyArr[i]! + (dt / eta) * fy;
+    if (maxSpeed > 0) {
+      const sp = Math.sqrt(vxi * vxi + vyi * vyi);
+      if (sp > maxSpeed) { const sc = maxSpeed / sp; vxi *= sc; vyi *= sc; }
+    }
+    vxArr[i] = vxi; vyArr[i] = vyi;
+    let nx = xi + vxi;
+    let ny = yi + vyi;
     if (torus) { nx = ((nx % W) + W) % W; ny = ((ny % H) + H) % H; }
     else { nx = nx < 0 ? 0 : nx > W ? W : nx; ny = ny < 0 ? 0 : ny > H ? H : ny; }
     xN[i] = nx; yN[i] = ny;
@@ -2821,13 +2859,14 @@ function sendColors(): void {
   if (agentStore && agentStore.highWater > 0) {
     agentsPayload = snapshotAgentsForRender(agentStore);
     agentTransfers.push(
-      agentsPayload.x.buffer, agentsPayload.y.buffer, agentsPayload.radius.buffer,
+      agentsPayload.x.buffer, agentsPayload.y.buffer, agentsPayload.vx.buffer, agentsPayload.vy.buffer,
+      agentsPayload.radius.buffer,
       agentsPayload.alive.buffer, agentsPayload.colors.buffer, agentsPayload.type.buffer,
       agentsPayload.bonds.buffer,
     );
   } else if (agentStore) {
     // Empty store — still tell the main thread so it clears any stale agents.
-    agentsPayload = { highWater: 0, liveCount: 0, x: new Float64Array(0), y: new Float64Array(0), radius: new Float64Array(0), alive: new Uint8Array(0), colors: new Uint8ClampedArray(0), type: new Int32Array(0), bonds: new Int32Array(0) };
+    agentsPayload = { highWater: 0, liveCount: 0, x: new Float64Array(0), y: new Float64Array(0), vx: new Float64Array(0), vy: new Float64Array(0), radius: new Float64Array(0), alive: new Uint8Array(0), colors: new Uint8ClampedArray(0), type: new Int32Array(0), bonds: new Int32Array(0) };
   }
 
   // P7 — when WebGPU direct render is active, the OffscreenCanvas already

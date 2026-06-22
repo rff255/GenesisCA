@@ -1,0 +1,31 @@
+import type { NodeTypeDef } from '../types';
+
+/** Set Agent Attribute — write an attribute on ANOTHER agent by id (Bond-Graph
+ *  Agents). The agent analogue of Set Neighbor Attribute By Index: signal a
+ *  neighbour (mark it contacted, push a value onto it, transfer a resource). Feed
+ *  a neighbour id from Get Nearby Agents / For Each Bond.
+ *
+ *  Agent attributes are single-buffered, so the write is immediately visible —
+ *  this is an ASYNC-style write (the result can depend on agent iteration order
+ *  when several agents write the same target in one step). Use commutative
+ *  patterns (accumulate, max) when order matters. The id is range-guarded. */
+export const SetAgentAttributeNode: NodeTypeDef = {
+  type: 'setAgentAttribute',
+  label: 'Set Agent Attribute',
+  description: "Write an attribute on another agent by id (signal a neighbour). Immediate (async-style) write.",
+  category: 'output',
+  color: '#4527a0',
+  requirements: { bondGraph: true },
+  ports: [
+    { id: 'do', label: 'DO', kind: 'input', category: 'flow' },
+    { id: 'next', label: 'NEXT', kind: 'output', category: 'flow' },
+    { id: 'agentId', label: 'Agent', kind: 'input', category: 'value', dataType: 'integer' },
+    { id: 'value', label: 'Value', kind: 'input', category: 'value', dataType: 'float', inlineWidget: 'number', defaultValue: '0' },
+  ],
+  defaultConfig: { attributeId: '' },
+  compile: (_nodeId, config, inputs) => {
+    const attr = config.attributeId as string || '_undef';
+    const a = `((${inputs['agentId'] || '-1'}) | 0)`;
+    return `{ const __sa=${a}; if(__sa>=0&&__sa<highWater&&_alive[__sa]) w_${attr}[__sa] = ${inputs['value'] || '0'}; }\n`;
+  },
+};

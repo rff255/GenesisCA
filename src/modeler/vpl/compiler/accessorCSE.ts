@@ -87,6 +87,16 @@ const NEVER_PURE_TYPES = new Set<string>([
   'pickNRandomNeighbors',
   // Mutable mid-cell via SetIndicator/UpdateIndicator.
   'getIndicator',
+  // Local Variables: `_var_<id>` is mutable mid-cell/-agent via SetVariable /
+  // SetArrayElement. CSE-merging two reads of the SAME scalar variable at
+  // different program points would collapse them to one read at their common
+  // (dominating) scope — fatal for an in-loop accumulator (`v = v + x`), whose
+  // read MUST re-evaluate each iteration. Exactly the getIndicator rationale.
+  'getVariable',
+  // Bond-Graph Agents: a neighbour's attribute can be mutated mid-step by
+  // Set Agent Attribute (immediate single-buffer write), so two reads of the
+  // same neighbour attribute are not interchangeable.
+  'getAgentAttribute',
   // Entry-point nodes — their "outputs" are external function params.
   'step',
   'initEvent',

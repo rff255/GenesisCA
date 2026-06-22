@@ -603,6 +603,21 @@ export interface CenterBasedConfig {
   /** User timestep Δt — auto-clamped against the monotonicity bound at init /
    *  on any force-param change. */
   timeStep?: number;
+  /** Velocity persistence ∈ [0,1). 0 = overdamped (tissue — velocity not
+   *  carried, byte-identical to the original integrator); ~0.9 gives inertia
+   *  for flocking/boids (agents keep moving + steer). */
+  momentum?: number;
+  /** Optional speed cap (per step). 0 / absent = uncapped. Boids use it to keep
+   *  a roughly constant cruising speed. */
+  maxSpeed?: number;
+  /** When true, the engine's built-in soft-sphere repulsion/adhesion is OFF —
+   *  ALL motion comes from the graph's Apply Force (pure custom-force models
+   *  like boids). Bond springs still apply. */
+  customForcesOnly?: boolean;
+  /** The radius (cell units) Get Nearby Agents queries are expected to use. It
+   *  sizes the spatial-hash bin so a query within this radius is covered by the
+   *  3×3 bin stencil (a larger value = larger bins = more candidates per bin). */
+  neighbourQueryRadius?: number;
   // --- Seeding (Reset + seed-brush defaults) ---
   /** Agents seeded on Reset (0 = the author seeds via the brush / Init Event). */
   seedCount?: number;
