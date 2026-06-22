@@ -7,6 +7,9 @@ import { GetRadiusNode } from './GetRadiusNode';
 import { GetBondDegreeNode } from './GetBondDegreeNode';
 import { NeighbourDensityNode } from './NeighbourDensityNode';
 import { SetTargetRadiusNode } from './SetTargetRadiusNode';
+import { FormBondNode } from './FormBondNode';
+import { BreakBondNode } from './BreakBondNode';
+import { ForEachBondNode } from './ForEachBondNode';
 import { GetOrientationNode } from './GetOrientationNode';
 import { SetOrientationNode } from './SetOrientationNode';
 import { GetFacingOrientationNode } from './GetFacingOrientationNode';
@@ -92,6 +95,9 @@ const ALL_NODES: NodeTypeDef[] = [
   GetBondDegreeNode,
   NeighbourDensityNode,
   SetTargetRadiusNode,
+  FormBondNode,
+  BreakBondNode,
+  ForEachBondNode,
   // Flow
   ConditionalNode,
   SequenceNode,

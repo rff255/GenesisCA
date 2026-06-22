@@ -120,6 +120,10 @@ const NEVER_INVARIANT = new Set<string>([
   'sampleField',
   'fieldGradient',
   'readCellsUnder',
+  // ForEachBond's per-iteration outputs (partnerId/restLength/currentLength/index)
+  // vary per bond — any consumer must stay inside the bond loop (same reasoning
+  // as forEachInArray).
+  'forEachBond',
 ]);
 
 export function classifyLoopInvariant(

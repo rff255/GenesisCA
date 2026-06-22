@@ -29,9 +29,9 @@ export const CENTER_BASED_DEFAULTS = {
   defaultRadius: 0.5,        // → contact distance 1.0 between two default agents
   growthRate: 0.02,          // radius units per step toward targetRadius
   bondStiffness: 1.0,        // λ when no spring matrix
-  bondRestLength: 1.0,       // L when no spring matrix
-  formDistance: 1.2,         // d_form
-  breakDistance: 1.7,        // d_break (> d_form — hysteresis)
+  bondRestLength: 1.0,       // L when no spring matrix (else = contact distance)
+  formDistance: 1.1,         // d_form, × contact distance (auto-bond within)
+  breakDistance: 1.6,        // d_break, × contact distance (> d_form — hysteresis)
 } as const;
 
 export type CenterBasedNumericKey = keyof typeof CENTER_BASED_DEFAULTS;
