@@ -28,7 +28,7 @@ import { cbNum } from '../../model/centerBased';
 import {
   createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot,
   snapshotAgentsForRender, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
-  formBond, breakBond, sweepStaleBonds, divideAgent,
+  formBond, breakBond, hasBond, sweepStaleBonds, divideAgent,
   type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec, type SpatialHash,
 } from './agentEngine';
 
@@ -311,8 +311,22 @@ interface RefreshDisplayMsg { type: 'refreshDisplay' }
 interface SeedAgentsMsg {
   type: 'seedAgents';
   agents: Array<{ x: number; y: number; radius?: number; type?: number; lineage?: number }>;
+  /** PR3 seed config: per-attribute initial values (pre-encoded via
+   *  encodeAttrValue, like paintManual) applied to each newly-seeded agent. */
+  sets?: Array<{ attrId: string; value: number }>;
   activeViewer: string;
 }
+/** On-demand single-agent inspector read (NOT a fattened render snapshot). The
+ *  worker replies with an `agentState` message carrying geometry/velocity/type
+ *  + per-agent attribute values + the bond list. A non-live id replies null. */
+interface GetAgentStateMsg { type: 'getAgentState'; id: number }
+/** Move agents to new world positions (the Move brush). Writes x/y AND
+ *  xNext/yNext so the next integration doesn't snap back; wraps/clamps to the
+ *  world per `torus`. */
+interface MoveAgentsMsg { type: 'moveAgents'; moves: Array<{ id: number; x: number; y: number }>; torus: boolean; activeViewer: string }
+/** Form many bonds at once (the Bond-paint brush). Loops formBond; idempotent
+ *  (an existing bond is not duplicated). */
+interface FormBondBatchMsg { type: 'formBondBatch'; pairs: Array<[number, number]>; activeViewer: string }
 /** Allocate a single agent (free-list first). REJECTS + surfaces on overflow. */
 interface CreateAgentMsg {
   type: 'createAgent';
@@ -336,7 +350,7 @@ interface FormBondMsg { type: 'formBond'; a: number; b: number; activeViewer: st
 /** Manual cut: break the bond between two agents (the cut brush). */
 interface BreakBondMsg { type: 'breakBond'; a: number; b: number; activeViewer: string }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -455,6 +469,18 @@ function initAgents(): void {
  *  the rule + force the position double-buffer). */
 function runAgentColorPass(): void {
   void agentColorViewer;
+}
+
+/** Write per-attribute values onto one agent (read + write buffers). Shared by
+ *  the paintAgents handler and the seedAgents `sets` post-init loop. Values are
+ *  pre-encoded numerics (encodeAttrValue UI-side, like paintManual). */
+function applyAgentSets(store: AgentStore, id: number, sets: Array<{ attrId: string; value: number }>): void {
+  if (id < 0 || id >= store.highWater || !store.alive[id]) return;
+  for (const s of sets) {
+    const r = store.attrRead[s.attrId]; const w = store.attrWrite[s.attrId];
+    if (r) r[id] = s.value;
+    if (w) w[id] = s.value;
+  }
 }
 
 /** Run the agent Init Event once per seeded agent on Reset. v1 has no agent
@@ -3779,6 +3805,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         if (ids.length < msg.agents.length) {
           self.postMessage({ type: 'agentOverflow', message: `Agent capacity reached (maxAgents=${agentStore.maxAgents}). ${msg.agents.length - ids.length} agent(s) not created.` });
         }
+        // PR3 seed config: write the per-attribute initial values onto each new
+        // agent (read + write buffers — single-buffer, so they alias, but mirror
+        // the paintAgents shape for clarity / future double-buffering).
+        if (msg.sets && msg.sets.length > 0) {
+          for (const id of ids) applyAgentSets(agentStore, id, msg.sets);
+        }
         runAgentColorPass();
       }
       sendColors();
@@ -3810,14 +3842,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'paintAgents': {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       if (agentStore) {
-        for (const id of msg.ids) {
-          if (id < 0 || id >= agentStore.highWater || !agentStore.alive[id]) continue;
-          for (const s of msg.sets) {
-            const r = agentStore.attrRead[s.attrId]; const w = agentStore.attrWrite[s.attrId];
-            if (r) r[id] = s.value;
-            if (w) w[id] = s.value;
-          }
-        }
+        for (const id of msg.ids) applyAgentSets(agentStore, id, msg.sets);
         runAgentColorPass();
       }
       sendColors();
@@ -3841,6 +3866,70 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'breakBond': {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       if (agentStore) breakBond(agentStore, msg.a, msg.b);
+      sendColors();
+      break;
+    }
+    case 'getAgentState': {
+      // On-demand single-agent inspector read. NOT a fattened render snapshot —
+      // one tiny round-trip per inspect click (per §3 gotcha #7). A non-live id
+      // replies with `live: false`.
+      const id = msg.id;
+      if (!agentStore || id < 0 || id >= agentStore.highWater || !agentStore.alive[id]) {
+        self.postMessage({ type: 'agentState', id, live: false });
+        break;
+      }
+      const s = agentStore;
+      const attrs: Record<string, number> = {};
+      for (const spec of s.attrSpecs) { const a = s.attrRead[spec.id]; if (a) attrs[spec.id] = a[id]!; }
+      // Live bond partner ids (epoch-checked, same discipline as hasBond/render).
+      const base = id * s.maxBonds, nb = s.bondCount[id]!;
+      const bonds: number[] = [];
+      for (let k = 0; k < nb; k++) {
+        const p = s.bondPartner[base + k]!;
+        if (p >= 0 && s.alive[p] && s.epoch[p] === s.bondPartnerEpoch[base + k]) bonds.push(p);
+      }
+      self.postMessage({
+        type: 'agentState', id, live: true,
+        x: s.x[id]!, y: s.y[id]!, vx: s.vx[id]!, vy: s.vy[id]!,
+        radius: s.radius[id]!, agentType: s.type[id]!, lineage: s.lineage[id]!,
+        age: s.age[id]!, bondDegree: s.bondCount[id]!, density: s.density[id]!,
+        attrs, bonds,
+      });
+      break;
+    }
+    case 'moveAgents': {
+      // Move brush: write x/y AND xNext/yNext so the next integration doesn't
+      // snap the agent back. Wrap/clamp to the world per the model boundary.
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
+      if (agentStore) {
+        const s = agentStore, W = s.worldWidth, H = s.worldHeight;
+        for (const m of msg.moves) {
+          const id = m.id;
+          if (id < 0 || id >= s.highWater || !s.alive[id]) continue;
+          let x = m.x, y = m.y;
+          if (msg.torus) { x = ((x % W) + W) % W; y = ((y % H) + H) % H; }
+          else { x = Math.max(0, Math.min(W, x)); y = Math.max(0, Math.min(H, y)); }
+          s.x[id] = x; s.y[id] = y; s.xNext[id] = x; s.yNext[id] = y;
+        }
+        runAgentColorPass();
+      }
+      sendColors();
+      break;
+    }
+    case 'formBondBatch': {
+      // Bond-paint brush: form many bonds at once. formBond is idempotent (it
+      // rejects a duplicate via hasBond internally) — re-batching the same pair
+      // does not double-bond.
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
+      if (agentStore) {
+        const s = agentStore, lambda = cbNum(centerBasedConfig, 'bondStiffness');
+        for (const [a, b] of msg.pairs) {
+          if (a < 0 || b < 0 || a >= s.highWater || b >= s.highWater || a === b) continue;
+          if (!s.alive[a] || !s.alive[b] || hasBond(s, a, b)) continue;
+          const L = s.radius[a]! + s.radius[b]!;
+          formBond(s, a, b, L, lambda);
+        }
+      }
       sendColors();
       break;
     }

@@ -26,6 +26,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { serializeSimState, serializePreset, downloadStateFile, readStateFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2 } from '../model/fileOperations';
 import type { Attribute, CAModel, IndicatorChartSettings, Preset, SimulationState } from '../model/types';
 import { encodeAttrValue } from '../model/attrValueEncoding';
+import { cbNum } from '../model/centerBased';
 import styles from './SimulatorView.module.css';
 
 const SIM_SETTINGS_KEY = 'genesisca_sim_settings';
@@ -191,6 +192,19 @@ export interface ManualBrushAttrEntry {
 }
 export type ManualBrushModelState = Record<string /* attrId */, ManualBrushAttrEntry>;
 
+/** Bond-Graph Agents — the `getAgentState` inspector response (on-demand, NOT
+ *  a per-frame snapshot field). `live: false` for a dead/out-of-range id. */
+export interface AgentStateResponse {
+  type: 'agentState';
+  id: number;
+  live: boolean;
+  x?: number; y?: number; vx?: number; vy?: number;
+  radius?: number; agentType?: number; lineage?: number; age?: number;
+  bondDegree?: number; density?: number;
+  attrs?: Record<string, number>;
+  bonds?: number[];
+}
+
 const MANUAL_BRUSH_KEY_PREFIX = 'genesisca_manual_brush_v1:';
 function manualBrushStorageKey(modelName: string): string {
   // Models don't have a stable id field, so we key on the user-visible name.
@@ -210,6 +224,28 @@ function loadManualBrush(modelName: string): ManualBrushModelState | null {
 function saveManualBrush(modelName: string, state: ManualBrushModelState): void {
   try {
     localStorage.setItem(manualBrushStorageKey(modelName), JSON.stringify(state));
+  } catch { /* localStorage full */ }
+}
+
+// Bond-Graph Agents — seed-config attribute values are per-model (attr ids are
+// model-specific), so they get their own localStorage key, separate from the
+// global genesisca_sim_settings (which holds the radius/density/spacing/type).
+const AGENT_SEED_KEY_PREFIX = 'genesisca_agent_seed_v1:';
+function agentSeedStorageKey(modelName: string): string {
+  return AGENT_SEED_KEY_PREFIX + (modelName.trim() || '__unnamed__');
+}
+function loadAgentSeed(modelName: string): ManualBrushModelState | null {
+  try {
+    const raw = localStorage.getItem(agentSeedStorageKey(modelName));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as ManualBrushModelState;
+  } catch { /* ignore */ }
+  return null;
+}
+function saveAgentSeed(modelName: string, state: ManualBrushModelState): void {
+  try {
+    localStorage.setItem(agentSeedStorageKey(modelName), JSON.stringify(state));
   } catch { /* localStorage full */ }
 }
 
@@ -420,6 +456,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const [manualBrush, setManualBrush] = useState<ManualBrushModelState>({});
   const manualBrushRef = useRef<ManualBrushModelState>({});
   useEffect(() => { manualBrushRef.current = manualBrush; }, [manualBrush]);
+  // Bond-Graph Agents — seed-config per-attribute initial values (same shape +
+  // merge discipline as Manual Brush; per-model persisted). Unchecked rows seed
+  // the engine default; the enabled ones become the seedAgents `sets` payload.
+  const [agentSeedAttrs, setAgentSeedAttrs] = useState<ManualBrushModelState>({});
+  const agentSeedAttrsRef = useRef<ManualBrushModelState>({});
+  useEffect(() => { agentSeedAttrsRef.current = agentSeedAttrs; }, [agentSeedAttrs]);
   const [showBrushCursor, setShowBrushCursor] = useState((saved.current.showBrushCursor as boolean) ?? true);
   const [showGridlines, setShowGridlines] = useState((saved.current.showGridlines as boolean) ?? false);
   // Infinity canvas: when the model uses torus boundary, the grid tiles into the
@@ -497,6 +539,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     return {};
   });
 
+  // Bond-Graph Agents — brush sizing (world units). Radius drives the seed/kill
+  // disc; density = agents per unit² in the seeded cluster; spacing = the
+  // drag-stream step; type = the seed Type. Persisted in genesisca_sim_settings.
+  // (Declared before the persist effect that serialises them.)
+  const [agentBrushRadius, setAgentBrushRadius] = useState<number>((saved.current.agentBrushRadius as number) ?? 8);
+  const [agentSeedDensity, setAgentSeedDensity] = useState<number>((saved.current.agentSeedDensity as number) ?? 0.05);
+  const [agentSeedSpacing, setAgentSeedSpacing] = useState<number>((saved.current.agentSeedSpacing as number) ?? 6);
+  const [agentSeedType, setAgentSeedType] = useState<number>((saved.current.agentSeedType as number) ?? 0);
+  // PR3 — agent inspector: a single on-demand popover (one at a time).
+  const [agentInspect, setAgentInspect] = useState<{ id: number; x: number; y: number } | null>(null);
+  const [agentState, setAgentState] = useState<AgentStateResponse | null>(null);
+
   // GIF / WebM recording state
   const [recording, setRecording] = useState(false);
   const recordingRef = useRef(false);
@@ -527,6 +581,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines,
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
           infinityCanvas, indicatorVizModes, recordFormat, brushSectionH,
+          agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentSeedType,
           indicatorHiddenCategories: Object.fromEntries(
             Object.entries(indicatorHiddenCategories)
               .filter(([, s]) => s.size > 0)
@@ -538,7 +593,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentSeedType, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -582,6 +637,41 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const t = setTimeout(() => saveManualBrush(manualBrushModelKey, manualBrush), 300);
     return () => clearTimeout(t);
   }, [manualBrushModelKey, manualBrush]);
+
+  // Agent seed config — same signature-keyed merge + persistence as Manual
+  // Brush. Default `enabled: false` so seeding uses the engine attribute
+  // defaults unless the user explicitly opts a row in.
+  useEffect(() => {
+    const stored = loadAgentSeed(manualBrushModelKey) ?? {};
+    const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
+    const next: ManualBrushModelState = {};
+    for (const a of cellAttrs) {
+      if (a.type === 'color' || a.type === 'lookupTable') continue;
+      const prev = stored[a.id];
+      next[a.id] = prev
+        ? { enabled: !!prev.enabled, value: typeof prev.value === 'string' ? prev.value : (a.defaultValue ?? '') }
+        : { enabled: false, value: a.defaultValue ?? '' };
+    }
+    setAgentSeedAttrs(next);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manualBrushModelKey, cellAttrSig]);
+  useEffect(() => {
+    const t = setTimeout(() => saveAgentSeed(manualBrushModelKey, agentSeedAttrs), 300);
+    return () => clearTimeout(t);
+  }, [manualBrushModelKey, agentSeedAttrs]);
+
+  // Agent inspector — low-Hz live refresh while a popover is pinned (re-request
+  // getAgentState at ~3 Hz, NOT per-stepped, so multiple-popover round-trips
+  // don't compound — per §3 gotcha #7). The dispatch routes the response into
+  // setAgentState via onAgentStateRef.
+  useEffect(() => {
+    if (!agentInspect) return;
+    const id = agentInspect.id;
+    const poll = setInterval(() => {
+      workerRef.current?.postMessage({ type: 'getAgentState', id });
+    }, 333);
+    return () => clearInterval(poll);
+  }, [agentInspect]);
 
   const cycleIndicatorVizMode = useCallback((id: string) => {
     setIndicatorVizModes(prev => {
@@ -694,11 +784,36 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // Agent brush: the LMB action on the canvas for an agent model. 'paint' falls
   // through to the normal cell brush (field painting). Glue/Cut stage a first
   // agent on the first click, then bond/unbond it to the second.
-  type AgentBrushMode = 'seed' | 'kill' | 'glue' | 'cut' | 'paint';
+  type AgentBrushMode = 'seed' | 'kill' | 'glue' | 'cut' | 'move' | 'bond' | 'paint';
   const [agentBrushMode, setAgentBrushMode] = useState<AgentBrushMode>('seed');
   const agentBrushModeRef = useRef<AgentBrushMode>('seed');
   agentBrushModeRef.current = agentBrushMode;
   const agentGlueAnchorRef = useRef<number>(-1);
+  const agentBrushRadiusRef = useRef(agentBrushRadius); agentBrushRadiusRef.current = agentBrushRadius;
+  const agentSeedDensityRef = useRef(agentSeedDensity); agentSeedDensityRef.current = agentSeedDensity;
+  const agentSeedSpacingRef = useRef(agentSeedSpacing); agentSeedSpacingRef.current = agentSeedSpacing;
+  const agentSeedTypeRef = useRef(agentSeedType); agentSeedTypeRef.current = agentSeedType;
+  const [agentSeedConfigOpen, setAgentSeedConfigOpen] = useState(false);
+  // Live cursor world position (for the agent brush ring) + the hovered agent
+  // id (change-detected so we don't full-redraw on every raw mousemove).
+  const agentCursorWorldRef = useRef<{ x: number; y: number } | null>(null);
+  const agentHoverIdRef = useRef<number>(-1);
+  // PR4 — Move brush: the agent currently being dragged (-1 = none) + its
+  // pre-drag position (for the RMB-cancel revert). Own rAF token (C-B4).
+  const draggingAgentRef = useRef<number>(-1);
+  const draggingAgentStartRef = useRef<{ x: number; y: number } | null>(null);
+  const pendingMoveRef = useRef<{ id: number; x: number; y: number } | null>(null);
+  const pendingMoveRaf = useRef<number | null>(null);
+  // PR4 — Bond-paint: the set of pairs queued from the current stroke (dedup'd).
+  const pendingBondPairs = useRef<Set<string>>(new Set());
+  const agentInspectRef = useRef<{ id: number; x: number; y: number } | null>(null);
+  agentInspectRef.current = agentInspect;
+  // Reassigned each render; the message dispatch calls it when an `agentState`
+  // response arrives. Declared as a ref so the dispatch closure stays stable.
+  const onAgentStateRef = useRef<(r: AgentStateResponse) => void>(() => {});
+  onAgentStateRef.current = (r: AgentStateResponse) => {
+    if (agentInspectRef.current && agentInspectRef.current.id === r.id) setAgentState(r);
+  };
   const glCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const gl3dRef = useRef<import('./render/gl3d').Gl3DRenderer | null>(null);
   // Z-up Blender-style orbit camera. Default 3/4 view looking down onto the XY plane.
@@ -784,6 +899,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const pendingPaintMapping = useRef<string | null>(null);
   const pendingPaintViewer = useRef<string>('');
   const pendingPaintRaf = useRef<number | null>(null);
+  // Bond-Graph Agents — drag-to-seed coalescing. A SEPARATE buffer + rAF token
+  // from the paint batcher (C-B4): flushPaintBatch posts paint/paintManual, and
+  // a shared cancelAnimationFrame token would clobber the other. `pendingSeedSets`
+  // carries the encoded attr values (PR3 seed config) for the batch.
+  const pendingSeedPoints = useRef<Array<{ x: number; y: number; type?: number }>>([]);
+  const pendingSeedSets = useRef<Array<{ attrId: string; value: number }> | null>(null);
+  const pendingSeedRaf = useRef<number | null>(null);
+  // True only while a seed/kill agent-brush drag started on the canvas (mirrors
+  // canvasBrushActive for the cell brush). Cleared on overlay-bail AND pointer-up.
+  const canvasAgentBrushActive = useRef(false);
+  // Last cursor world point of the current seed drag (for the spacing throttle).
+  const lastSeedWorldRef = useRef<{ x: number; y: number } | null>(null);
 
   // FPS + Gens/s tracking
   const fpsFrames = useRef(0);
@@ -1072,12 +1199,20 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const { x: ax, y: ay, radius: ar, alive: aal, colors: acol, highWater: hw, bonds } = snap;
       // Bond layer — drawn UNDER the agent circles (one batched stroke path).
       if (bonds && bonds.length > 0) {
+        const torusB = boundaryTreatmentRef.current === 'torus';
         const drawBonds = (tileOx: number, tileOy: number) => {
           ctx.beginPath();
           for (let b = 0; b < bonds.length; b += 2) {
             const i = bonds[b]!, j = bonds[b + 1]!;
+            // Draw j relative to i along the torus-shortest path so a seam-
+            // crossing bond is a short segment, not a long line across the grid.
+            let jx = ax[j]!, jy = ay[j]!;
+            if (torusB && w > 0 && h > 0) {
+              if (jx - ax[i]! > w / 2) jx -= w; else if (jx - ax[i]! < -w / 2) jx += w;
+              if (jy - ay[i]! > h / 2) jy -= h; else if (jy - ay[i]! < -h / 2) jy += h;
+            }
             ctx.moveTo(tileOx + ax[i]! * scale, tileOy + ay[i]! * scale);
-            ctx.lineTo(tileOx + ax[j]! * scale, tileOy + ay[j]! * scale);
+            ctx.lineTo(tileOx + jx * scale, tileOy + jy * scale);
           }
           ctx.strokeStyle = 'rgba(230, 230, 245, 0.55)';
           ctx.lineWidth = Math.max(1, scale * 0.18);
@@ -1113,11 +1248,50 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } else {
         stamp(ox, oy);
       }
-      // Glue/Cut staged-anchor ring (the first-clicked agent awaiting a second).
+      const cursorW = agentCursorWorldRef.current;
+      const mode = agentBrushModeRef.current;
+      // Hovered-agent highlight (kill = warm/red, glue/cut = accent). On-change
+      // redraws keep this cheap; the pick is the live cursor's nearest agent.
+      const hover = agentHoverIdRef.current;
+      if (hover >= 0 && hover < hw && aal[hover]) {
+        const cx = ox + ax[hover]! * scale, cy = oy + ay[hover]! * scale;
+        const rad = Math.max(2, ar[hover]! * scale) + 2;
+        ctx.beginPath(); ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+        ctx.strokeStyle = mode === 'kill' ? 'rgba(240, 90, 90, 0.95)' : 'rgba(76, 201, 240, 0.95)';
+        ctx.lineWidth = 2; ctx.stroke();
+      }
+      // Brush radius ring at the cursor (seed / kill modes), drawn as the
+      // negative silhouette via the 'difference' composite + white so it's
+      // visible on any palette (the Windows-cursor trick). Tiled in infinity.
+      if (cursorW && (mode === 'seed' || mode === 'kill') && agentBrushRadiusRef.current > 0) {
+        const rr = agentBrushRadiusRef.current * scale;
+        const drawRing = (tileOx: number, tileOy: number) => {
+          const cx = tileOx + cursorW.x * scale, cy = tileOy + cursorW.y * scale;
+          if (cx + rr < 0 || cx - rr > parentW || cy + rr < 0 || cy - rr > parentH) return;
+          ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.stroke();
+        };
+        ctx.save();
+        ctx.globalCompositeOperation = 'difference';
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash(mode === 'kill' ? [5, 4] : []);
+        if (infinity) {
+          for (let ty = tyMin; ty <= tyMax; ty++) for (let tx = txMin; tx <= txMax; tx++) drawRing(ox + tx * scaledW, oy + ty * scaledH);
+        } else { drawRing(ox, oy); }
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+      // Glue/Cut staged-anchor ring (the first-clicked agent awaiting a second)
+      // + a dashed line to the cursor so the staging is visible.
       const anchor = agentGlueAnchorRef.current;
       if (anchor >= 0 && anchor < hw && aal[anchor]) {
         const cx = ox + ax[anchor]! * scale, cy = oy + ay[anchor]! * scale;
         const rad = Math.max(2, ar[anchor]! * scale) + 3;
+        if (cursorW) {
+          ctx.beginPath(); ctx.moveTo(cx, cy);
+          ctx.lineTo(ox + cursorW.x * scale, oy + cursorW.y * scale);
+          ctx.strokeStyle = 'rgba(232, 161, 58, 0.6)'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([]);
+        }
         ctx.beginPath(); ctx.arc(cx, cy, rad, 0, Math.PI * 2);
         ctx.strokeStyle = 'rgba(232, 161, 58, 0.95)'; ctx.lineWidth = 2; ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([]);
       }
@@ -1361,6 +1535,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // simulation should auto-pause. Evaluated after each `stepped` message.
   const [endConditionNotice, setEndConditionNotice] = useState<string | null>(null);
   const endNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Bond-Graph Agents — transient toast for engine notices the worker posts
+  // (e.g. `agentOverflow` when a cluster/drag seed hits maxAgents). Distinct
+  // from endConditionNotice: it does NOT pause the simulation; it auto-dismisses.
+  const [agentNotice, setAgentNotice] = useState<string | null>(null);
+  const agentNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showAgentNotice = useCallback((message: string) => {
+    setAgentNotice(message);
+    if (agentNoticeTimer.current) clearTimeout(agentNoticeTimer.current);
+    agentNoticeTimer.current = setTimeout(() => setAgentNotice(null), 3500);
+  }, []);
   const evalEndConditions = useCallback((gen: number, indicatorValues: Record<string, number | Record<string, number> | Record<string, number[]>>): string | null => {
     const ec = endConditionsRef.current;
     if (!ec || !ec.enabled) return null;
@@ -1646,6 +1830,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       setEndConditionNotice(String(msg.message ?? 'Stop condition reached'));
       if (endNoticeTimer.current) clearTimeout(endNoticeTimer.current);
       endNoticeTimer.current = setTimeout(() => setEndConditionNotice(null), 4000);
+    } else if (msg.type === 'agentOverflow') {
+      // Bond-Graph Agents: the worker hit maxAgents/maxBonds during seed or
+      // division. Surface it as a transient toast (does NOT pause). Without
+      // this branch the worker's overflow posts were silently dropped.
+      showAgentNotice(String(msg.message ?? 'Agent capacity reached'));
+    } else if (msg.type === 'agentState') {
+      // Bond-Graph Agents: response to a `getAgentState {id}` inspector request.
+      onAgentStateRef.current(msg as unknown as AgentStateResponse);
     } else if (msg.type === 'error') {
       setCompileError(msg.message as string);
       pendingStep.current = false;
@@ -3136,22 +3328,214 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const wpt = screenToWorld(clientX, clientY);
     if (!wpt) return -1;
     let best = -1, bestD2 = Infinity;
+    const W = gridWidth.current, H = gridHeight.current;
+    const torus = boundaryTreatmentRef.current === 'torus';
+    // Widen the hit test to a minimum pickable WORLD radius (~4 screen px) so
+    // tiny agents stay clickable (inspect/glue/cut) — "nearest within max radius".
+    const minPickWorld = 4 / Math.max(0.0001, wpt.scale);
     for (let i = 0; i < snap.highWater; i++) {
       if (!snap.alive[i]) continue;
-      const dx = snap.x[i]! - wpt.x, dy = snap.y[i]! - wpt.y;
+      let dx = snap.x[i]! - wpt.x, dy = snap.y[i]! - wpt.y;
+      if (torus && W > 0 && H > 0) {
+        if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W;
+        if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H;
+      }
       const d2 = dx * dx + dy * dy;
-      const r = snap.radius[i]!;
-      if (d2 <= r * r && d2 < bestD2) { bestD2 = d2; best = i; }
+      const pickR = Math.max(snap.radius[i]!, minPickWorld);
+      if (d2 <= pickR * pickR && d2 < bestD2) { bestD2 = d2; best = i; }
     }
     return best;
   }, [screenToWorld]);
 
-  // Post a seed-agents message for a list of world positions. PR-A4 wires this
-  // into a proper brush; PR-A2 exposes it via the DEV hook + a simple control.
-  const seedAgentsAt = useCallback((pts: Array<{ x: number; y: number; type?: number }>) => {
+  // Post a seed-agents message for a list of world positions. Optional `sets`
+  // carries the encoded per-attribute initial values from the seed-config panel
+  // (PR3); the worker applies them to each new agent after the engine seed.
+  const seedAgentsAt = useCallback((pts: Array<{ x: number; y: number; type?: number }>, sets?: Array<{ attrId: string; value: number }>) => {
+    const worker = workerRef.current;
+    if (!worker || !isAgentModelRef.current || pts.length === 0) return;
+    worker.postMessage({ type: 'seedAgents', agents: pts, sets: sets && sets.length > 0 ? sets : undefined, activeViewer: activeViewerRef.current });
+  }, []);
+
+  // Bond-Graph Agents — sample N jittered cluster points in a disc of `radius`
+  // around `center` (world units), via a sunflower (Vogel) spiral so they don't
+  // stack. N = density · π · r² (≥1 inside the disc). Boundary-correct (C-B7):
+  // the agent world IS the grid 1:1, so when the model is a torus we wrap each
+  // point with ((v%n)+n)%n; for a bounded model we clamp into [0, n) (so a click
+  // near the edge still seeds a partial disc rather than spilling out of bounds).
+  // NOT brushShapeOffsets — that returns integer CELL offsets; agents need
+  // continuous jittered positions.
+  const agentSeedPoints = useCallback((center: { x: number; y: number }, radius: number, density: number): Array<{ x: number; y: number }> => {
+    const W = gridWidth.current, H = gridHeight.current;
+    if (W <= 0 || H <= 0) return [];
+    const torus = boundaryTreatmentRef.current === 'torus';
+    const r = Math.max(0, radius);
+    const n = Math.max(1, Math.round(density * Math.PI * r * r));
+    const pts: Array<{ x: number; y: number }> = [];
+    const golden = Math.PI * (3 - Math.sqrt(5)); // ~2.39996 rad
+    for (let i = 0; i < n; i++) {
+      // Sunflower spiral: evenly-distributed radii (sqrt) + golden-angle rotation.
+      const rr = n === 1 ? 0 : r * Math.sqrt((i + 0.5) / n);
+      const a = i * golden;
+      let x = center.x + rr * Math.cos(a);
+      let y = center.y + rr * Math.sin(a);
+      if (torus) {
+        x = ((x % W) + W) % W;
+        y = ((y % H) + H) % H;
+      } else {
+        // Drop points that fall outside the bounded world (a partial disc near
+        // an edge), rather than clamping them into a degenerate edge stack.
+        if (x < 0 || x >= W || y < 0 || y >= H) continue;
+      }
+      pts.push({ x, y });
+    }
+    return pts;
+  }, []);
+
+  // Encode the currently-enabled seed-config attributes into the `sets` payload
+  // (mirrors flushPaintBatch's Manual Brush branch). Empty when nothing enabled.
+  const agentSeedSetsRef = useRef<() => Array<{ attrId: string; value: number }>>(() => []);
+  agentSeedSetsRef.current = () => {
+    const brush = agentSeedAttrsRef.current;
+    const sets: Array<{ attrId: string; value: number }> = [];
+    for (const attr of cellAttrsRef.current) {
+      const entry = brush[attr.id];
+      if (!entry || !entry.enabled) continue;
+      sets.push({ attrId: attr.id, value: encodeAttrValue(attr, entry.value) });
+    }
+    return sets;
+  };
+
+  // Flush whatever seed points have accumulated since the last frame as ONE
+  // seedAgents message. Own buffer + token (C-B4); cancel-on-flush so only one
+  // rAF is in flight. Called on the rAF boundary by the drag handler and
+  // synchronously on pointer-up.
+  const flushSeedBatch = useCallback(() => {
+    if (pendingSeedRaf.current != null) {
+      cancelAnimationFrame(pendingSeedRaf.current);
+      pendingSeedRaf.current = null;
+    }
+    const pts = pendingSeedPoints.current;
+    if (pts.length === 0) return;
+    pendingSeedPoints.current = [];
+    const sets = pendingSeedSets.current ?? undefined;
+    pendingSeedSets.current = null;
+    seedAgentsAt(pts, sets);
+  }, [seedAgentsAt]);
+
+  // Bond-Graph Agents — open the on-demand agent inspector for a picked id and
+  // fire the first getAgentState request. The low-Hz poll (effect below) keeps
+  // it fresh while pinned.
+  const openAgentInspector = useCallback((id: number, clientX: number, clientY: number) => {
+    if (id < 0) return;
+    setAgentInspect({ id, x: clientX, y: clientY });
+    setAgentState(null);
+    workerRef.current?.postMessage({ type: 'getAgentState', id });
+  }, []);
+
+  // Bond-Graph Agents — kill every live agent within the brush radius of a
+  // screen point (torus-aware distance). No new worker message: collect the ids
+  // from the current render snapshot and post the existing killAgents. Radius 0
+  // falls back to the single-nearest pick (pickAgentAt).
+  const killAgentsInRadius = useCallback((clientX: number, clientY: number) => {
     const worker = workerRef.current;
     if (!worker || !isAgentModelRef.current) return;
-    worker.postMessage({ type: 'seedAgents', agents: pts, activeViewer: activeViewerRef.current });
+    const radius = agentBrushRadiusRef.current;
+    if (radius <= 0) {
+      const id = pickAgentAt(clientX, clientY);
+      if (id >= 0) worker.postMessage({ type: 'killAgents', ids: [id], activeViewer: activeViewerRef.current });
+      return;
+    }
+    const snap = agentsRef.current;
+    if (!snap || snap.highWater === 0) return;
+    const wpt = screenToWorld(clientX, clientY);
+    if (!wpt) return;
+    const W = gridWidth.current, H = gridHeight.current;
+    const torus = boundaryTreatmentRef.current === 'torus';
+    const r2 = radius * radius;
+    const ids: number[] = [];
+    for (let i = 0; i < snap.highWater; i++) {
+      if (!snap.alive[i]) continue;
+      let dx = snap.x[i]! - wpt.x, dy = snap.y[i]! - wpt.y;
+      if (torus && W > 0 && H > 0) {
+        if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W;
+        if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H;
+      }
+      if (dx * dx + dy * dy <= r2) ids.push(i);
+    }
+    if (ids.length > 0) worker.postMessage({ type: 'killAgents', ids, activeViewer: activeViewerRef.current });
+  }, [pickAgentAt, screenToWorld]);
+
+  // PR4 — Move brush: flush the latest dragged-agent position as a moveAgents
+  // message (own rAF token, C-B4).
+  const flushMoveBatch = useCallback(() => {
+    if (pendingMoveRaf.current != null) { cancelAnimationFrame(pendingMoveRaf.current); pendingMoveRaf.current = null; }
+    const m = pendingMoveRef.current;
+    if (!m) return;
+    pendingMoveRef.current = null;
+    workerRef.current?.postMessage({ type: 'moveAgents', moves: [m], torus: boundaryTreatmentRef.current === 'torus', activeViewer: activeViewerRef.current });
+  }, []);
+
+  // PR4 — Bond-paint: scan the agents within the brush radius of a screen point
+  // and queue every adjacent pair within formDistance·contact that isn't already
+  // bonded (the engine's auto-bond threshold). Pairs are dedup'd in a Set keyed
+  // by the ordered id pair; flushed on pointer-up.
+  const scanBondPairsAt = useCallback((clientX: number, clientY: number) => {
+    const snap = agentsRef.current;
+    if (!snap || snap.highWater === 0) return;
+    const wpt = screenToWorld(clientX, clientY);
+    if (!wpt) return;
+    const W = gridWidth.current, H = gridHeight.current;
+    const torus = boundaryTreatmentRef.current === 'torus';
+    const cb = model.centerBased;
+    const fMul = cbNum(cb, 'formDistance');
+    const brushR = agentBrushRadiusRef.current;
+    // Existing bonds from the render snapshot (skip re-queueing them).
+    const bonded = new Set<string>();
+    const bonds = snap.bonds;
+    if (bonds) for (let b = 0; b < bonds.length; b += 2) {
+      const i = bonds[b]!, j = bonds[b + 1]!;
+      bonded.add(i < j ? `${i}:${j}` : `${j}:${i}`);
+    }
+    const torusDist2 = (i: number, j: number): number => {
+      let dx = snap.x[i]! - snap.x[j]!, dy = snap.y[i]! - snap.y[j]!;
+      if (torus && W > 0 && H > 0) {
+        if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W;
+        if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H;
+      }
+      return dx * dx + dy * dy;
+    };
+    // Collect agents under the brush, then queue near pairs among them.
+    const under: number[] = [];
+    for (let i = 0; i < snap.highWater; i++) {
+      if (!snap.alive[i]) continue;
+      let dx = snap.x[i]! - wpt.x, dy = snap.y[i]! - wpt.y;
+      if (torus && W > 0 && H > 0) {
+        if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W;
+        if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H;
+      }
+      if (dx * dx + dy * dy <= brushR * brushR) under.push(i);
+    }
+    for (let a = 0; a < under.length; a++) {
+      for (let b = a + 1; b < under.length; b++) {
+        const i = under[a]!, j = under[b]!;
+        const key = i < j ? `${i}:${j}` : `${j}:${i}`;
+        if (bonded.has(key) || pendingBondPairs.current.has(key)) continue;
+        // Per-pair contact distance = sum of the two radii (mirrors the engine's
+        // auto-bond: form within formDistance × contact).
+        const thr = fMul * (snap.radius[i]! + snap.radius[j]!);
+        if (torusDist2(i, j) <= thr * thr) pendingBondPairs.current.add(key);
+      }
+    }
+  }, [screenToWorld, model.centerBased]);
+
+  const flushBondBatch = useCallback(() => {
+    const pairs: Array<[number, number]> = [];
+    for (const key of pendingBondPairs.current) {
+      const [a, b] = key.split(':').map(Number);
+      pairs.push([a!, b!]);
+    }
+    pendingBondPairs.current.clear();
+    if (pairs.length > 0) workerRef.current?.postMessage({ type: 'formBondBatch', pairs, activeViewer: activeViewerRef.current });
   }, []);
 
   /** Parse hex color to RGB */
@@ -3559,7 +3943,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const handleMouseDown = (e: MouseEvent) => {
       // Ignore events from overlay controls (transport bar, viewer bar, etc.)
       const target = e.target as HTMLElement;
-      if (target.closest('[data-sim-overlay]')) { canvasBrushActive = false; return; }
+      if (target.closest('[data-sim-overlay]')) { canvasBrushActive = false; canvasAgentBrushActive.current = false; return; }
 
       // Middle-click toggles autoscroll mode. Any other button while autoscroll
       // is active just exits and consumes the click — matches browser autoscroll
@@ -3583,6 +3967,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         // transient popover and discards it on release — quick-peek across a
         // region without accumulating popovers.
         e.preventDefault();
+        // Bond-Graph Agents — Shift+LMB over an agent opens the AGENT inspector
+        // (claimed INSIDE this branch, before the cell sweep — C-B2). Falls
+        // through to the cell sweep when no agent is under the cursor.
+        if (isAgentModelRef.current) {
+          const aid = pickAgentAt(e.clientX, e.clientY);
+          if (aid >= 0) { openAgentInspector(aid, e.clientX, e.clientY); return; }
+        }
         const cell = screenToGrid(e.clientX, e.clientY);
         // Guard against the brief window where the canvas hasn't been laid out
         // (parent rect 0×0 → scale 0 → NaN row/col). `!cell` only catches the
@@ -3612,10 +4003,23 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         const mode = agentBrushModeRef.current;
         if (mode === 'seed') {
           const wpt = screenToWorld(e.clientX, e.clientY);
-          if (wpt) seedAgentsAt([{ x: wpt.x, y: wpt.y }]);
+          if (wpt) {
+            const sets = agentSeedSetsRef.current();
+            const r = agentBrushRadiusRef.current;
+            const pts = r > 0
+              ? agentSeedPoints({ x: wpt.x, y: wpt.y }, r, agentSeedDensityRef.current).map(p => ({ ...p, type: agentSeedTypeRef.current }))
+              : [{ x: wpt.x, y: wpt.y, type: agentSeedTypeRef.current }];
+            // Enqueue into the drag buffer (so a click that becomes a drag keeps
+            // accumulating into the same batch) and arm the rAF flush.
+            pendingSeedSets.current = sets;
+            for (const p of pts) pendingSeedPoints.current.push(p);
+            if (pendingSeedRaf.current == null) pendingSeedRaf.current = requestAnimationFrame(flushSeedBatch);
+            canvasAgentBrushActive.current = true;
+            lastSeedWorldRef.current = { x: wpt.x, y: wpt.y };
+          }
         } else if (mode === 'kill') {
-          const id = pickAgentAt(e.clientX, e.clientY);
-          if (id >= 0 && worker) worker.postMessage({ type: 'killAgents', ids: [id], activeViewer: activeViewerRef.current });
+          killAgentsInRadius(e.clientX, e.clientY);
+          canvasAgentBrushActive.current = true;
         } else if (mode === 'glue' || mode === 'cut') {
           const id = pickAgentAt(e.clientX, e.clientY);
           if (id < 0) { agentGlueAnchorRef.current = -1; draw(); return; }
@@ -3626,12 +4030,38 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             agentGlueAnchorRef.current = -1;
           }
           draw();
+        } else if (mode === 'move') {
+          // PR4 — pick an agent to drag. Snapshot its pre-drag pos for the
+          // RMB-cancel revert.
+          const id = pickAgentAt(e.clientX, e.clientY);
+          if (id >= 0) {
+            const snap = agentsRef.current;
+            draggingAgentRef.current = id;
+            draggingAgentStartRef.current = snap ? { x: snap.x[id]!, y: snap.y[id]! } : null;
+            canvasAgentBrushActive.current = true;
+          }
+        } else if (mode === 'bond') {
+          // PR4 — bond-paint: start a stroke; pairs are scanned + queued on drag,
+          // flushed on pointer-up.
+          pendingBondPairs.current.clear();
+          canvasAgentBrushActive.current = true;
+          scanBondPairsAt(e.clientX, e.clientY);
         }
         return;
       }
-      // RMB / Escape cancels a staged glue/cut anchor.
-      if (isAgentModelRef.current && agentGlueAnchorRef.current >= 0 && (e.button === 2)) {
-        agentGlueAnchorRef.current = -1; draw();
+      // RMB / Escape cancels a staged glue/cut anchor OR a Move drag (revert).
+      if (isAgentModelRef.current && (e.button === 2)) {
+        if (draggingAgentRef.current >= 0) {
+          if (pendingMoveRaf.current != null) { cancelAnimationFrame(pendingMoveRaf.current); pendingMoveRaf.current = null; }
+          pendingMoveRef.current = null;
+          const id = draggingAgentRef.current, start = draggingAgentStartRef.current;
+          if (start) workerRef.current?.postMessage({ type: 'moveAgents', moves: [{ id, x: start.x, y: start.y }], torus: boundaryTreatmentRef.current === 'torus', activeViewer: activeViewerRef.current });
+          draggingAgentRef.current = -1; draggingAgentStartRef.current = null;
+          canvasAgentBrushActive.current = false;
+          e.preventDefault();
+        } else if (agentGlueAnchorRef.current >= 0) {
+          agentGlueAnchorRef.current = -1; draw();
+        }
       }
 
       if (e.button === 0 && e.ctrlKey) {
@@ -3749,6 +4179,74 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
       if (!isPanning.current && !(e.buttons & 1) && !isResizingBrush.active) draw();
 
+      // Bond-Graph Agents — track the cursor world point + hovered agent for the
+      // brush cursor (radius ring + agent highlight). Redraw ONLY when the
+      // hovered agent or cursor cell changes (the on-change pattern — never a
+      // full GL/canvas redraw per raw move). The cursor-cell change is already
+      // covered by setHoverCellInfo above; here we additionally redraw when the
+      // hovered AGENT changes so the highlight tracks.
+      if (isAgentModelRef.current) {
+        const mode = agentBrushModeRef.current;
+        const radiusMode = mode === 'seed' || mode === 'kill' || mode === 'glue' || mode === 'cut';
+        if (radiusMode) {
+          const wpt = screenToWorld(e.clientX, e.clientY);
+          agentCursorWorldRef.current = wpt ? { x: wpt.x, y: wpt.y } : null;
+          const prevHover = agentHoverIdRef.current;
+          const hover = (mode === 'kill' || mode === 'glue' || mode === 'cut') ? pickAgentAt(e.clientX, e.clientY) : -1;
+          agentHoverIdRef.current = hover;
+          if (hover !== prevHover) draw();
+        }
+        // Drag-to-seed / drag-kill / drag-move / drag-bond while the agent brush
+        // is active (LMB held).
+        if (canvasAgentBrushActive.current && (e.buttons & 1)) {
+          if (mode === 'kill') {
+            killAgentsInRadius(e.clientX, e.clientY);
+          } else if (mode === 'move' && draggingAgentRef.current >= 0) {
+            const wpt = screenToWorld(e.clientX, e.clientY);
+            if (wpt) {
+              pendingMoveRef.current = { id: draggingAgentRef.current, x: wpt.x, y: wpt.y };
+              if (pendingMoveRaf.current == null) pendingMoveRaf.current = requestAnimationFrame(flushMoveBatch);
+            }
+          } else if (mode === 'bond') {
+            scanBondPairsAt(e.clientX, e.clientY);
+          } else if (mode === 'seed') {
+            const wpt = screenToWorld(e.clientX, e.clientY);
+            const last = lastSeedWorldRef.current;
+            if (wpt && last) {
+              const W = gridWidth.current, H = gridHeight.current;
+              const torus = boundaryTreatmentRef.current === 'torus';
+              let dx = wpt.x - last.x, dy = wpt.y - last.y;
+              if (torus && W > 0 && H > 0) {
+                if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W;
+                if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H;
+              }
+              const dist = Math.hypot(dx, dy);
+              const spacing = Math.max(0.5, agentSeedSpacingRef.current);
+              if (dist >= spacing) {
+                const steps = Math.floor(dist / spacing);
+                const r = agentBrushRadiusRef.current;
+                const density = agentSeedDensityRef.current;
+                const ty = agentSeedTypeRef.current;
+                let lastX = last.x, lastY = last.y;
+                for (let s = 1; s <= steps; s++) {
+                  const t = (s * spacing) / dist;
+                  let cx = last.x + dx * t, cy = last.y + dy * t;
+                  if (torus && W > 0 && H > 0) { cx = ((cx % W) + W) % W; cy = ((cy % H) + H) % H; }
+                  const cluster = r > 0
+                    ? agentSeedPoints({ x: cx, y: cy }, r, density).map(p => ({ ...p, type: ty }))
+                    : [{ x: cx, y: cy, type: ty }];
+                  for (const p of cluster) pendingSeedPoints.current.push(p);
+                  lastX = cx; lastY = cy;
+                }
+                pendingSeedSets.current = agentSeedSetsRef.current();
+                lastSeedWorldRef.current = { x: lastX, y: lastY };
+                if (pendingSeedRaf.current == null) pendingSeedRaf.current = requestAnimationFrame(flushSeedBatch);
+              }
+            }
+          }
+        }
+      }
+
       // Shift+LMB sweep: update the transient inspector to follow the cursor
       // cell, and detect movement off the start cell (= sweep, not click).
       // Releasing Shift mid-drag cancels the sweep entirely.
@@ -3834,6 +4332,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         }
         return;
       }
+      // Bond-Graph Agents — end of a seed/kill agent-brush drag: flush the last
+      // partial seed batch synchronously and clear the active flag (S1 — a drag
+      // that started on canvas and ends anywhere must not leave it stuck).
+      if (canvasAgentBrushActive.current) {
+        canvasAgentBrushActive.current = false;
+        lastSeedWorldRef.current = null;
+        flushSeedBatch();
+        flushMoveBatch();
+        flushBondBatch();
+        if (draggingAgentRef.current >= 0) { draggingAgentRef.current = -1; draggingAgentStartRef.current = null; }
+      }
       isPanning.current = false;
       isResizingBrush.active = false;
       canvasBrushActive = false;
@@ -3889,7 +4398,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       autoscrollOriginRef.current = null;
       autoscrollCursorRef.current = null;
     };
-  }, [draw, paintAt, paintLine, screenToGrid, flushPaintBatch, commitInspectPopover]);
+  }, [draw, paintAt, paintLine, screenToGrid, flushPaintBatch, commitInspectPopover, screenToWorld, pickAgentAt, seedAgentsAt, agentSeedPoints, flushSeedBatch, killAgentsInRadius, openAgentInspector, flushMoveBatch, scanBondPairsAt, flushBondBatch]);
 
   // Play: kick-start the step pipeline (worker message handler chains subsequent steps)
   useEffect(() => {
@@ -4906,16 +5415,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
         {/* Bond-Graph Agents brush \u2014 the LMB action on the canvas. 'Paint Field'
             falls through to the normal cell brush. Glue/Cut stage the first
-            agent, then bond/unbond to the second (RMB cancels). */}
+            agent, then bond/unbond to the second (RMB cancels). Seed/Kill carry
+            a radius/cluster; Move drags an agent; Bond auto-glues near pairs. */}
         {isAgentModel && (
-          <div data-sim-overlay style={{ position: 'absolute', top: 44, left: 8, zIndex: 6, display: 'flex', flexDirection: 'column', gap: 4, background: 'var(--color-bg-panel)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: 6, fontSize: '0.66rem' }}>
+          <div data-sim-overlay style={{ position: 'absolute', top: 44, left: 8, zIndex: 6, display: 'flex', flexDirection: 'column', gap: 4, background: 'var(--color-bg-panel)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: 6, fontSize: '0.66rem', maxWidth: 220 }}>
             <span style={{ color: 'var(--color-text-muted)', fontWeight: 600, letterSpacing: '0.04em' }}>AGENT BRUSH</span>
-            <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', maxWidth: 150 }}>
-              {(['seed', 'kill', 'glue', 'cut', 'paint'] as const).map(m => (
+            <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', maxWidth: 210 }}>
+              {(['seed', 'kill', 'glue', 'cut', 'move', 'bond', 'paint'] as const).map(m => (
                 <button
                   key={m}
-                  onClick={() => { setAgentBrushMode(m); agentGlueAnchorRef.current = -1; }}
-                  title={m === 'seed' ? 'Click to add an agent' : m === 'kill' ? 'Click an agent to remove it' : m === 'glue' ? 'Click two agents to bond them' : m === 'cut' ? 'Click two bonded agents to unbond them' : 'Click to paint the cell field (normal brush)'}
+                  onClick={() => { setAgentBrushMode(m); agentGlueAnchorRef.current = -1; draw(); }}
+                  title={m === 'seed' ? 'Click/drag to seed a cluster of agents' : m === 'kill' ? 'Click/drag to remove agents within the radius' : m === 'glue' ? 'Click two agents to bond them' : m === 'cut' ? 'Click two bonded agents to unbond them' : m === 'move' ? 'Drag an agent to a new position (RMB cancels)' : m === 'bond' ? 'Drag over near agents to auto-bond them' : 'Click to paint the cell field (normal brush)'}
                   style={{
                     padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', textTransform: 'capitalize',
                     border: '1px solid ' + (agentBrushMode === m ? 'var(--color-accent)' : 'var(--color-widget-border)'),
@@ -4926,10 +5436,116 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 >{m === 'paint' ? 'Paint Field' : m}</button>
               ))}
             </div>
+            {/* Radius / density / spacing \u2014 shown for the radius modes. */}
+            {(agentBrushMode === 'seed' || agentBrushMode === 'kill' || agentBrushMode === 'bond') && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Radius</span>
+                  <NumberField value={agentBrushRadius} onNumber={v => setAgentBrushRadius(v)} min={0} step={1} />
+                </label>
+                {agentBrushMode === 'seed' && (<>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Density</span>
+                    <NumberField value={agentSeedDensity} onNumber={v => setAgentSeedDensity(Math.max(0, v))} min={0} step={0.01} />
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Spacing</span>
+                    <NumberField value={agentSeedSpacing} onNumber={v => setAgentSeedSpacing(Math.max(0.5, v))} min={0.5} step={1} />
+                  </label>
+                </>)}
+              </div>
+            )}
+            {/* Seed config (Type + per-attribute initial values). */}
+            {agentBrushMode === 'seed' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <button
+                  onClick={() => setAgentSeedConfigOpen(v => !v)}
+                  style={{ alignSelf: 'flex-start', padding: '2px 6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
+                  title="Type + initial attribute values for seeded agents"
+                >{agentSeedConfigOpen ? '\u25be' : '\u25b8'} Seed config</button>
+                {agentSeedConfigOpen && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span style={{ width: 32, color: 'var(--color-text-muted)' }}>Type</span>
+                      <NumberField value={agentSeedType} onNumber={v => setAgentSeedType(Math.max(0, Math.round(v)))} min={0} step={1} integer />
+                    </label>
+                    <ManualBrushPanel
+                      cellAttributes={model.attributes.filter(a => !a.isModelAttribute && a.type !== 'color' && a.type !== 'lookupTable')}
+                      neighborhoods={model.neighborhoods}
+                      state={agentSeedAttrs}
+                      onChange={setAgentSeedAttrs}
+                      is3d={is3D}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
             <button
               onClick={() => workerRef.current?.postMessage({ type: 'clearAgents', activeViewer: activeViewerRef.current })}
               style={{ padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
             >Clear all agents</button>
+          </div>
+        )}
+
+        {/* Bond-Graph Agents \u2014 agent inspector popover (on-demand getAgentState). */}
+        {agentInspect && (
+          <div
+            data-sim-overlay
+            style={{
+              position: 'fixed', left: Math.min(agentInspect.x + 12, window.innerWidth - 220), top: Math.min(agentInspect.y + 12, window.innerHeight - 200),
+              zIndex: 40, minWidth: 180, maxWidth: 240,
+              background: 'var(--color-bg-panel)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)',
+              padding: 8, fontSize: '0.7rem', boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <strong style={{ color: 'var(--color-accent)' }}>Agent #{agentInspect.id}</strong>
+              <button onClick={() => { setAgentInspect(null); setAgentState(null); }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.85rem', lineHeight: 1 }} title="Close">{'\u00d7'}</button>
+            </div>
+            {!agentState || !agentState.live ? (
+              <div style={{ color: 'var(--color-text-muted)' }}>{agentState && !agentState.live ? 'Agent no longer exists.' : 'Loading\u2026'}</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div>pos ({agentState.x!.toFixed(2)}, {agentState.y!.toFixed(2)})</div>
+                <div>|v| {Math.hypot(agentState.vx ?? 0, agentState.vy ?? 0).toFixed(3)}</div>
+                <div>radius {agentState.radius!.toFixed(3)}</div>
+                <div>type {agentState.agentType}</div>
+                <div>bonds {agentState.bondDegree}</div>
+                <div>density {agentState.density!.toFixed(3)}</div>
+                {agentState.attrs && Object.keys(agentState.attrs).length > 0 && (
+                  <div style={{ marginTop: 4, borderTop: '1px solid var(--color-border-muted)', paddingTop: 4 }}>
+                    {model.attributes.filter(a => !a.isModelAttribute && agentState!.attrs![a.id] !== undefined).map(a => (
+                      <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                        <span style={{ color: 'var(--color-text-muted)' }} title={a.description || undefined}>{a.name}</span>
+                        <span>{a.type === 'bool' ? (agentState!.attrs![a.id] ? 'true' : 'false')
+                          : a.type === 'tag' ? (a.tagOptions?.[agentState!.attrs![a.id]! | 0] ?? `(${agentState!.attrs![a.id]! | 0})`)
+                          : a.type === 'integer' ? String(agentState!.attrs![a.id]! | 0)
+                          : agentState!.attrs![a.id]!.toFixed(3)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Bond-Graph Agents \u2014 transient engine-notice toast (e.g. agentOverflow). */}
+        {agentNotice && (
+          <div
+            data-sim-overlay
+            style={{
+              position: 'absolute', left: '50%', top: 54, transform: 'translateX(-50%)',
+              background: 'rgba(232, 161, 58, 0.95)', color: '#0d1117',
+              padding: '6px 14px', borderRadius: 6,
+              fontSize: '0.78rem', fontWeight: 500,
+              boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+              zIndex: 21, pointerEvents: 'none',
+              display: 'flex', alignItems: 'center', gap: 8,
+            }}
+          >
+            <span style={{ fontSize: '0.95rem' }}>{'\u26a0'}</span>
+            <span>{agentNotice}</span>
           </div>
         )}
 

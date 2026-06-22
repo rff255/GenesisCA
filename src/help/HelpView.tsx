@@ -1276,11 +1276,17 @@ export function HelpView() {
               (a hysteresis band so bonds don't flicker).</li>
           </ul>
           <p className={styles.p}>
-            In the Simulator, the <strong>Agent Brush</strong> overlay (top-left) lets you
-            <strong> Seed</strong> / <strong>Kill</strong> agents, <strong>Glue</strong> /
-            <strong> Cut</strong> bonds between two clicked agents, <strong>Paint Field</strong>
-            (the normal cell brush), and <strong>Clear all agents</strong>. The library ships four
-            samples: <strong>Morphogenesis &mdash; Growing Tissue</strong> (12 → ~1500 cells
+            In the Simulator, the <strong>Agent Brush</strong> overlay (top-left) has modes
+            <strong> Seed</strong> (paint a jittered disc of agents &mdash; set the
+            <em> Radius</em>, <em>Density</em> and drag <em>Spacing</em>; the <em>Seed config</em>
+            section sets the new agents' type + initial attribute values), <strong>Kill</strong>
+            (cull everything in the radius), <strong>Move</strong> (drag an agent; right-click
+            cancels), <strong>Glue</strong> / <strong>Cut</strong> (bond/unbond two clicked
+            agents), <strong>Bond&nbsp;paint</strong> (auto-glue agents a stroke passes near),
+            <strong> Inspect</strong> (<span className={styles.kbd}>Shift</span>+click an agent for
+            a popover of its position, velocity, type, bond degree and attribute values), and
+            <strong> Paint&nbsp;Field</strong> (the normal cell brush). <strong>Clear all
+            agents</strong> empties the population. The library ships four samples: <strong>Morphogenesis &mdash; Growing Tissue</strong> (12 → ~1500 cells
             dividing along the tension axis), <strong>Morphogenesis &mdash; Differential
             Tissue</strong> (asymmetric division + a maturity gradient + contact inhibition = cell
             <em> specialization</em>), <strong>Boids &mdash; Flocking</strong> (separation +
