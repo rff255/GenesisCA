@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 2,
+  "properties": {
+    "name": "Morphogenesis — Growing Tissue",
+    "author": "Bond-Graph Agents",
+    "modelAuthor": "GenesisCA",
+    "description": "Off-lattice agents (floating cells) glued by bonds that grow and divide along their tension axis into a connected tissue.",
+    "ruleDescription": "A Bond-Graph Agents model. A small central cluster of agents auto-bonds into a tissue. Each agent grows toward a target radius; when grown, it divides along its TENSION AXIS (the net-stretch direction of its bonds — a closed-form eigensolve), and the engine inherits the parent's bonds by geometry (each partner goes to the nearer daughter, plus a daughter-daughter bond). The result is an emergent, mechanically-organised sheet that elongates along its load axis — the center-based / vertex-model substrate behind tissue morphogenesis. Switch to the Agents rule graph (the tab above the canvas) to see/edit the grow→divide rule; tune the force + bond + growth parameters in Properties › Bond-Graph Agents.",
+    "topology": "2d-grid",
+    "boundaryTreatment": "torus",
+    "updateMode": "synchronous",
+    "asyncScheme": "random-order",
+    "gridWidth": 100,
+    "gridHeight": 100,
+    "gridDepth": 1,
+    "maxIterations": 1000,
+    "tags": ["agents", "morphogenesis", "bonds", "division", "tissue"],
+    "dimension": "2d",
+    "useWasm": false
+  },
+  "attributes": [
+    { "id": "age", "name": "age", "type": "float", "description": "Cell-cycle age", "isModelAttribute": false, "defaultValue": "0" }
+  ],
+  "neighborhoods": [],
+  "mappings": [],
+  "indicators": [],
+  "graphNodes": [
+    { "id": "step1", "type": "caNode", "position": { "x": 0, "y": 0 }, "data": { "nodeType": "step", "config": {} } }
+  ],
+  "graphEdges": [],
+  "agentGraphNodes": [
+    { "id": "bs1", "type": "caNode", "position": { "x": 0, "y": 0 }, "data": { "nodeType": "behaviourStep", "config": {} } },
+    { "id": "str", "type": "caNode", "position": { "x": 360, "y": 0 }, "data": { "nodeType": "setTargetRadius", "config": { "_port_value": "3" } } },
+    { "id": "cmp", "type": "caNode", "position": { "x": 360, "y": 220 }, "data": { "nodeType": "statement", "config": { "operation": ">=", "_port_y": "2.9", "compareType": "numerical" } } },
+    { "id": "cond", "type": "caNode", "position": { "x": 720, "y": 0 }, "data": { "nodeType": "conditional", "config": {} } },
+    { "id": "div", "type": "caNode", "position": { "x": 1040, "y": 0 }, "data": { "nodeType": "divideAgent", "config": { "axisSource": "tension", "_port_asymmetry": "0.5" } } }
+  ],
+  "agentGraphEdges": [
+    { "id": "e1", "source": "bs1", "target": "str", "sourceHandle": "output_flow_do", "targetHandle": "input_flow_do" },
+    { "id": "e2", "source": "bs1", "target": "cmp", "sourceHandle": "output_value_myRadius", "targetHandle": "input_value_x" },
+    { "id": "e3", "source": "str", "target": "cond", "sourceHandle": "output_flow_next", "targetHandle": "input_flow_check" },
+    { "id": "e4", "source": "cmp", "target": "cond", "sourceHandle": "output_value_result", "targetHandle": "input_value_condition" },
+    { "id": "e5", "source": "cond", "target": "div", "sourceHandle": "output_flow_then", "targetHandle": "input_flow_do" }
+  ],
+  "macroDefs": [],
+  "topologyMode": { "gridCells": true, "agents": true },
+  "centerBased": {
+    "enabled": true,
+    "maxAgents": 1500,
+    "maxBonds": 10,
+    "worldWidth": 100,
+    "worldHeight": 100,
+    "seedCount": 12,
+    "defaultRadius": 1.6,
+    "growthRate": 0.035,
+    "repulsionStiffness": 2.0,
+    "adhesionStiffness": 0.0,
+    "interactionRange": 1.5,
+    "drag": 1.0,
+    "timeStep": 0.1,
+    "autoBond": true,
+    "bondStiffness": 1.2,
+    "formDistance": 1.15,
+    "breakDistance": 1.8
+  }
+}

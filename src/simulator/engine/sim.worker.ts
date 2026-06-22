@@ -412,15 +412,19 @@ function initAgents(): void {
   const seedCount = Math.max(0, Math.floor(cbNum(centerBasedConfig, 'seedCount')));
   if (seedCount > 0) {
     const r = cbNum(centerBasedConfig, 'defaultRadius');
-    const specs: AgentSeedSpec[] = [];
-    // Deterministic-ish lattice-perturb fill in the world rectangle.
     const ww = agentStore.worldWidth, wh = agentStore.worldHeight;
-    const cols = Math.max(1, Math.ceil(Math.sqrt(seedCount * (ww / wh))));
-    const spacing = ww / (cols + 1);
+    const specs: AgentSeedSpec[] = [];
+    // A compact, centred cluster (spacing just above contact, so the agents
+    // settle into a packed blob and auto-bond into a tissue) — the morphogenesis
+    // starting point. For a dispersed "gas", seed via the brush instead.
+    const spacing = 2.1 * r;
+    const cols = Math.max(1, Math.ceil(Math.sqrt(seedCount)));
+    const blockW = (cols - 1) * spacing;
+    const rows = Math.ceil(seedCount / cols);
+    const blockH = (rows - 1) * spacing;
+    const ox = ww / 2 - blockW / 2, oy = wh / 2 - blockH / 2;
     for (let i = 0; i < seedCount; i++) {
-      const cx = (i % cols + 1) * spacing;
-      const cy = (Math.floor(i / cols) + 1) * spacing;
-      specs.push({ x: Math.min(ww, cx), y: Math.min(wh, cy), radius: r });
+      specs.push({ x: ox + (i % cols) * spacing, y: oy + Math.floor(i / cols) * spacing, radius: r });
     }
     seedAgents(agentStore, specs, r);
   }

@@ -7,6 +7,8 @@ import { IndicatorsPanelSection } from './IndicatorsPanelSection';
 import { useDetailSelection, type PanelContentProps } from '../ModelerDetailContext';
 import { useListReorder } from './useListReorder';
 import { NumberField } from '../vpl/widgets/InlineWidgets';
+import { cbNum } from '../../model/centerBased';
+import type { CenterBasedNumericKey } from '../../model/centerBased';
 import styles from './PanelContent.module.css';
 
 function newCondId(): string {
@@ -14,7 +16,7 @@ function newCondId(): string {
 }
 
 export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}) {
-  const { model, updateProperties, reorderEndConditions, updateVariegatedCells, updateTopologyMode } = useModel();
+  const { model, updateProperties, reorderEndConditions, updateVariegatedCells, updateTopologyMode, updateCenterBased } = useModel();
   // Indicators are a master-detail sub-section: the list lives in this panel,
   // the selected indicator's editor opens in the shared second (detail) panel.
   // Selection rides Properties' single detail slot as an `indicator:<id>` key.
@@ -389,6 +391,61 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
               </label>
             </div>
           </div>
+
+          {/* Bond-Graph Agents config — shown when the Agents topology is on.
+              Capacity ceilings (allocated once; overflow rejects), the seed
+              population, the soft-sphere force law, growth, and bonds. Every
+              field is live-tunable except the ceilings (a maxAgents/maxBonds
+              change re-allocates → a worker reinit). */}
+          {topo.agents && (() => {
+            const cb = model.centerBased;
+            const num = (k: CenterBasedNumericKey) => cbNum(cb, k);
+            const NF = (k: CenterBasedNumericKey, opts?: { min?: number; max?: number; step?: number; integer?: boolean }) => (
+              <NumberField
+                className={styles.numberInput}
+                value={num(k)}
+                min={opts?.min}
+                max={opts?.max}
+                step={opts?.step}
+                integer={opts?.integer}
+                onNumber={n => updateCenterBased({ [k]: n })}
+              />
+            );
+            const Row = (label: string, field: React.ReactNode, hint?: string) => (
+              <div style={{ marginBottom: 8 }}>
+                <label className={styles.fieldLabel} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <span>{label}</span>{field}
+                </label>
+                {hint && <span style={{ color: '#888', fontSize: '0.62rem', display: 'block' }}>{hint}</span>}
+              </div>
+            );
+            return (
+              <div style={{ marginTop: 14, borderTop: '1px solid #333', paddingTop: 10 }}>
+                <label className={styles.fieldLabel} style={{ marginBottom: 6, color: '#b58fd6' }}>Bond-Graph Agents</label>
+                <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '6px 0 4px' }}>Capacity</div>
+                {Row('Max Agents', NF('maxAgents', { min: 1, integer: true }), 'Over-allocated ceiling; overflow rejects (never wraps). Changing it re-inits the engine.')}
+                {Row('Max Bonds / Agent', NF('maxBonds', { min: 1, integer: true }))}
+                <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '8px 0 4px' }}>Seeding</div>
+                {Row('Seed Count', NF('seedCount', { min: 0, integer: true }), 'Agents laid down on Reset (0 = seed via the brush).')}
+                {Row('Default Radius', NF('defaultRadius', { min: 0.01, step: 0.1 }))}
+                <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '8px 0 4px' }}>Forces</div>
+                {Row('Repulsion μ', NF('repulsionStiffness', { min: 0, step: 0.1 }), 'Volume-exclusion stiffness.')}
+                {Row('Adhesion μ', NF('adhesionStiffness', { min: 0, step: 0.1 }), 'Free-agent stickiness (0 = cohesion via bonds only).')}
+                {Row('Interaction Range', NF('interactionRange', { min: 1, step: 0.1 }), '× contact distance — the force cutoff.')}
+                {Row('Drag η', NF('drag', { min: 0.01, step: 0.1 }))}
+                {Row('Time Step Δt', NF('timeStep', { min: 0.001, step: 0.05 }), 'Auto-clamped against the stability bound.')}
+                {Row('Growth Rate', NF('growthRate', { min: 0, step: 0.01 }), 'Radius units/step toward the target radius.')}
+                <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '8px 0 4px' }}>Bonds</div>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem', marginBottom: 6 }}>
+                  <input type="checkbox" checked={!!cb?.autoBond} onChange={e => updateCenterBased({ autoBond: e.target.checked })} style={{ marginTop: 2 }} />
+                  <span><strong>Auto-bond by distance</strong><br /><span style={{ color: '#888', fontSize: '0.66rem' }}>Bond agents within the form distance; break past the break distance (hysteresis). The simplest path to a glued cluster.</span></span>
+                </label>
+                {Row('Bond Stiffness λ', NF('bondStiffness', { min: 0, step: 0.1 }))}
+                {Row('Form Distance', NF('formDistance', { min: 1, step: 0.05 }), '× contact (auto-bond within).')}
+                {Row('Break Distance', NF('breakDistance', { min: 1, step: 0.05 }), '× contact (> form — hysteresis).')}
+              </div>
+            );
+          })()}
 
           {/* Variegated Cells — gates the per-cell orientation buffer + the
               variegated node palette + a dedicated sidebar panel. Off by
