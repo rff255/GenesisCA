@@ -446,6 +446,7 @@ function initAgents(): void {
   if (seedCount > 0) {
     const r = cbNum(centerBasedConfig, 'defaultRadius');
     const ww = agentStore.worldWidth, wh = agentStore.worldHeight;
+    const is3d = agentStore.worldDepth > 1, D = agentStore.worldDepth;
     const specs: AgentSeedSpec[] = [];
     if (centerBasedConfig.seedPattern === 'scatter') {
       // Dispersed: uniformly random across the world (flocking, chemotaxis
@@ -454,8 +455,39 @@ function initAgents(): void {
       // fine here (unlike the deterministic per-step xorshift stream).
       const margin = 2 * r;
       const sx = Math.max(0, ww - 2 * margin), sy = Math.max(0, wh - 2 * margin);
-      for (let i = 0; i < seedCount; i++) {
-        specs.push({ x: margin + Math.random() * sx, y: margin + Math.random() * sy, radius: r });
+      if (is3d) {
+        const sz = Math.max(0, D - 2 * margin);
+        for (let i = 0; i < seedCount; i++) {
+          specs.push({ x: margin + Math.random() * sx, y: margin + Math.random() * sy, z: margin + Math.random() * sz, radius: r });
+        }
+      } else {
+        for (let i = 0; i < seedCount; i++) {
+          specs.push({ x: margin + Math.random() * sx, y: margin + Math.random() * sy, radius: r });
+        }
+      }
+    } else if (is3d) {
+      // 3D compact = a sphere-clipped cubic lattice centred on the world (the
+      // morphogenesis starting blob, the analog of the 2D centred square). Build
+      // a cubic lattice (OVERSIZED to side+1 per F2 so the ball-clip still leaves
+      // ≥ seedCount candidates), clip to a ball, sort by distance-to-centre, take
+      // the nearest seedCount.
+      const spacing = 2.1 * r;
+      const side = Math.max(1, Math.ceil(Math.cbrt(seedCount)) + 1); // F2 oversize
+      const cx = ww / 2, cy = wh / 2, cz = D / 2;
+      const half = (side - 1) / 2;
+      const cand: Array<{ x: number; y: number; z: number; d2: number }> = [];
+      for (let lz = 0; lz < side; lz++) for (let ly = 0; ly < side; ly++) for (let lx = 0; lx < side; lx++) {
+        const px = cx + (lx - half) * spacing;
+        const py = cy + (ly - half) * spacing;
+        const pz = cz + (lz - half) * spacing;
+        const ddx = px - cx, ddy = py - cy, ddz = pz - cz;
+        const d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+        cand.push({ x: px, y: py, z: pz, d2 });
+      }
+      cand.sort((u, v) => u.d2 - v.d2);
+      for (let i = 0; i < seedCount && i < cand.length; i++) {
+        const c = cand[i]!;
+        specs.push({ x: c.x, y: c.y, z: c.z, radius: r });
       }
     } else {
       // A compact, centred cluster (spacing just above contact, so the agents
@@ -510,7 +542,12 @@ function runAgentInit(): void {
  *  attributes VERBATIM in `divideAgent` (daughter A reuses the mother slot, so
  *  its attrs ARE the mother's; daughter B was copied), so a divisionEvent like
  *  "daughter 0: energy = energy·0.7" reads the inherited value and rewrites it.
- *  daughterIndex 0 = A (the reused mother slot), 1 = B (the new slot). */
+ *  daughterIndex 0 = A (the reused mother slot), 1 = B (the new slot).
+ *
+ *  ABI note (z-axis): the divisionEvent's `axisDefaultZ` value-out rides the
+ *  `s.divideAxisZ` BUFFER arg (stamped onto both daughters at the division site,
+ *  sim.worker.ts ~:1004), NOT a scalar — unlike `axisX`/`axisY`, which ARE passed
+ *  as the scalar args below. Keep that asymmetry in mind when editing the ABI. */
 function runDivisionEvent(events: Array<{ mother: number; a: number; b: number; axisX: number; axisY: number }>): void {
   if (!agentDivisionFn || !agentStore) return;
   const fn = agentDivisionFn;
@@ -608,6 +645,17 @@ function clampAgentDt(): void {
   agentStore.dt = Math.min(cbNum(centerBasedConfig, 'timeStep'), 0.2 / muEff);
 }
 
+/** Commit the position double-buffer (x ↔ xNext, y ↔ yNext, and z ↔ zNext in
+ *  3D). ROUTED through this ONE helper (S11) so PR6's reference-swap→copy-into
+ *  conversion (B10/AW-SWAP, needed under wasmMemory views) edits a single
+ *  function, not four scattered lines. For the JS target a reference swap is
+ *  free; PR6 changes only this body for the WASM target. */
+function swapPositions(s: AgentStore, is3d: boolean): void {
+  const tmpX = s.x; s.x = s.xNext; s.xNext = tmpX;
+  const tmpY = s.y; s.y = s.yNext; s.yNext = tmpY;
+  if (is3d) { const tmpZ = s.z; s.z = s.zNext; s.zNext = tmpZ; }
+}
+
 /** One agent generation: density reductions → compiled behaviour → engine force
  *  integration (soft-sphere repulsion + bond springs, overdamped Euler with a
  *  synchronous position double-buffer) → world-bounds wrap/clamp → age. The
@@ -622,21 +670,23 @@ function runAgentStep(): void {
   const muA = cbNum(cfg, 'adhesionStiffness');
   const range = cbNum(cfg, 'interactionRange');
   const eta = Math.max(1e-6, cbNum(cfg, 'drag'));
-  const torus = boundaryTreatment === 'torus';
+  const torus = boundaryTreatment === 'torus';   // z wraps iff x/y wrap (B7/C1 — ONE flag, all 3 axes)
   const W = s.worldWidth, H = s.worldHeight;
   const halfW = W / 2, halfH = H / 2;
+  const is3d = s.worldDepth > 1, D = s.worldDepth, halfD = D / 2;
   const dt = s.dt;
   const growthRate = Math.max(0, cbNum(cfg, 'growthRate'));
   const hw = s.highWater;
-  const x = s.x, y = s.y, rad = s.radius, alive = s.alive;
+  const x = s.x, y = s.y, z = s.z, rad = s.radius, alive = s.alive;
   const maxBonds = s.maxBonds;
   const momentum = Math.max(0, Math.min(0.999, cbNum(cfg, 'momentum')));
   const maxSpeed = Math.max(0, cbNum(cfg, 'maxSpeed'));
   const engineForces = !cfg?.customForcesOnly;
 
   // Reset the per-step force accumulator (Apply Force adds into it during
-  // behaviour) BEFORE behaviour runs.
-  s.forceX.fill(0, 0, hw); s.forceY.fill(0, 0, hw);
+  // behaviour) BEFORE behaviour runs. forceZ is a memset of an always-zero-in-2D
+  // array — byte-irrelevant for 2D, used by the 3D arm.
+  s.forceX.fill(0, 0, hw); s.forceY.fill(0, 0, hw); s.forceZ.fill(0, 0, hw);
 
   // Build the uniform spatial hash from current positions — O(N) neighbour
   // lookups instead of O(N²). Built BEFORE behaviour so Get Nearby Agents can
@@ -647,7 +697,7 @@ function runAgentStep(): void {
   let maxR = cbNum(cfg, 'defaultRadius');
   for (let i = 0; i < hw; i++) { if (alive[i] && rad[i]! > maxR) maxR = rad[i]!; }
   const binEdge = Math.max(range * 2 * maxR, cbNum(cfg, 'neighbourQueryRadius'));
-  const hash = buildSpatialHash(s, Math.max(1e-3, binEdge), W, H);
+  const hash = buildSpatialHash(s, Math.max(1e-3, binEdge), W, H, D);
   currentAgentHash = hash;
 
   // Compiled behaviour (reads positions + the PREVIOUS step's density — a
@@ -663,118 +713,237 @@ function runAgentStep(): void {
     }
   }
 
-  // Single neighbour pass: graph-authored force (forceX/Y from Apply Force) +
+  // Single neighbour pass: graph-authored force (forceX/Y[/Z] from Apply Force) +
   // soft-sphere repulsion/adhesion (unless customForcesOnly) + bond springs +
-  // density (for next step), integrated into the xNext/yNext double-buffer.
-  const xN = s.xNext, yN = s.yNext;
-  const vxArr = s.vx, vyArr = s.vy;
-  for (let i = 0; i < hw; i++) {
-    if (!alive[i]) { xN[i] = x[i]!; yN[i] = y[i]!; continue; }
-    const xi = x[i]!, yi = y[i]!, ri = rad[i]!;
-    // Start from the graph-authored force (Apply Force wrote it this step).
-    let fx = s.forceX[i]!, fy = s.forceY[i]!, dens = 0;
+  // density (for next step), integrated into the xNext/yNext[/zNext] double-buffer.
+  // Branched on `is3d` ONCE (not per-line): the 2D else-branch is the EXACT
+  // current code, verbatim (the grid's literal-verbatim-2D-fast-path lesson — a
+  // branchless always-0-dz body would change the 2D arithmetic + stencil count).
+  if (is3d) {
+    const xN = s.xNext, yN = s.yNext, zN = s.zNext;
+    const vxArr = s.vx, vyArr = s.vy, vzArr = s.vz;
+    for (let i = 0; i < hw; i++) {
+      if (!alive[i]) { xN[i] = x[i]!; yN[i] = y[i]!; zN[i] = z[i]!; continue; }
+      const xi = x[i]!, yi = y[i]!, zi = z[i]!, ri = rad[i]!;
+      let fx = s.forceX[i]!, fy = s.forceY[i]!, fz = s.forceZ[i]!, dens = 0;
 
-    // --- neighbour pass: always counts density; applies soft-sphere force only
-    // when engineForces (customForcesOnly skips the built-in repulsion) ---
-    if (hash) {
-      const nBinsX = hash.nBinsX, nBinsY = hash.nBinsY;
-      const binStart = hash.binStart, binAgents = hash.binAgents;
-      let bx = (xi / hash.binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
-      let by = (yi / hash.binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
-      for (let ddy = -1; ddy <= 1; ddy++) {
-        for (let ddx = -1; ddx <= 1; ddx++) {
-          let nbx = bx + ddx, nby = by + ddy;
-          if (torus) { nbx = ((nbx % nBinsX) + nBinsX) % nBinsX; nby = ((nby % nBinsY) + nBinsY) % nBinsY; }
-          else { if (nbx < 0 || nbx >= nBinsX || nby < 0 || nby >= nBinsY) continue; }
-          const b = nby * nBinsX + nbx;
-          const end = binStart[b + 1]!;
-          for (let p = binStart[b]!; p < end; p++) {
-            const j = binAgents[p]!;
-            if (j === i) continue;
-            let dx = x[j]! - xi, dy = y[j]! - yi;
-            if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
-            const d2 = dx * dx + dy * dy;
-            const sij = ri + rad[j]!;
-            const rmax = range * sij;
-            if (d2 === 0 || d2 >= rmax * rmax) continue;
-            dens++;
-            if (engineForces) {
-              const d = Math.sqrt(d2);
-              const F = ((d < sij) ? muR : muA) * (d - sij);
-              const k = F / d;
-              fx += k * dx; fy += k * dy;
+      // --- neighbour pass: 3×3×3 stencil over the z-major hash, torus-wrapped ---
+      if (hash) {
+        const nBinsX = hash.nBinsX, nBinsY = hash.nBinsY, nBinsZ = hash.nBinsZ;
+        const binStart = hash.binStart, binAgents = hash.binAgents;
+        let bx = (xi / hash.binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
+        let by = (yi / hash.binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
+        let bz = (zi / hash.binSizeZ) | 0; if (bz < 0) bz = 0; else if (bz >= nBinsZ) bz = nBinsZ - 1;
+        for (let ddz = -1; ddz <= 1; ddz++) {
+          for (let ddy = -1; ddy <= 1; ddy++) {
+            for (let ddx = -1; ddx <= 1; ddx++) {
+              let nbx = bx + ddx, nby = by + ddy, nbz = bz + ddz;
+              if (torus) { nbx = ((nbx % nBinsX) + nBinsX) % nBinsX; nby = ((nby % nBinsY) + nBinsY) % nBinsY; nbz = ((nbz % nBinsZ) + nBinsZ) % nBinsZ; }
+              else { if (nbx < 0 || nbx >= nBinsX || nby < 0 || nby >= nBinsY || nbz < 0 || nbz >= nBinsZ) continue; }
+              const b = (nbz * nBinsY + nby) * nBinsX + nbx;
+              const end = binStart[b + 1]!;
+              for (let p = binStart[b]!; p < end; p++) {
+                const j = binAgents[p]!;
+                if (j === i) continue;
+                let dx = x[j]! - xi, dy = y[j]! - yi, dz = z[j]! - zi;
+                if (torus) {
+                  if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
+                  if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H;
+                  if (dz > halfD) dz -= D; else if (dz < -halfD) dz += D;
+                }
+                const d2 = dx * dx + dy * dy + dz * dz;
+                const sij = ri + rad[j]!;
+                const rmax = range * sij;
+                if (d2 === 0 || d2 >= rmax * rmax) continue;
+                dens++;
+                if (engineForces) {
+                  const d = Math.sqrt(d2);
+                  const F = ((d < sij) ? muR : muA) * (d - sij);
+                  const k = F / d;
+                  fx += k * dx; fy += k * dy; fz += k * dz;
+                }
+              }
             }
           }
         }
+      } else {
+        for (let j = 0; j < hw; j++) {
+          if (j === i || !alive[j]) continue;
+          let dx = x[j]! - xi, dy = y[j]! - yi, dz = z[j]! - zi;
+          if (torus) {
+            if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
+            if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H;
+            if (dz > halfD) dz -= D; else if (dz < -halfD) dz += D;
+          }
+          const d2 = dx * dx + dy * dy + dz * dz;
+          const sij = ri + rad[j]!;
+          const rmax = range * sij;
+          if (d2 === 0 || d2 >= rmax * rmax) continue;
+          dens++;
+          if (engineForces) {
+            const d = Math.sqrt(d2);
+            const F = ((d < sij) ? muR : muA) * (d - sij);
+            const k = F / d;
+            fx += k * dx; fy += k * dy; fz += k * dz;
+          }
+        }
       }
-    } else {
-      for (let j = 0; j < hw; j++) {
-        if (j === i || !alive[j]) continue;
-        let dx = x[j]! - xi, dy = y[j]! - yi;
-        if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
-        const d2 = dx * dx + dy * dy;
-        const sij = ri + rad[j]!;
-        const rmax = range * sij;
-        if (d2 === 0 || d2 >= rmax * rmax) continue;
-        dens++;
-        if (engineForces) {
-          const d = Math.sqrt(d2);
-          const F = ((d < sij) ? muR : muA) * (d - sij);
+      s.density[i] = dens;
+
+      // --- bond springs λ(l−L)·r̂ over the 3-vector (dangling-bond epoch ABI) ---
+      const bc = s.bondCount[i]!;
+      if (bc > 0) {
+        const base = i * maxBonds;
+        for (let bk = 0; bk < bc; bk++) {
+          const p = s.bondPartner[base + bk]!;
+          if (p < 0 || p >= hw || !alive[p]) continue;
+          if (s.bondPartnerEpoch[base + bk] !== s.epoch[p]) continue;
+          let dx = x[p]! - xi, dy = y[p]! - yi, dz = z[p]! - zi;
+          if (torus) {
+            if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
+            if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H;
+            if (dz > halfD) dz -= D; else if (dz < -halfD) dz += D;
+          }
+          const d2b = dx * dx + dy * dy + dz * dz;
+          if (d2b === 0) continue;
+          const d = Math.sqrt(d2b);
+          const F = s.bondStiffness[base + bk]! * (d - s.bondRestLength[base + bk]!);
+          const k = F / d;
+          fx += k * dx; fy += k * dy; fz += k * dz;
+        }
+      }
+
+      // Integrate (3-vector); momentum 0 ⇒ overdamped; optional 3D-speed cap.
+      let vxi = momentum * vxArr[i]! + (dt / eta) * fx;
+      let vyi = momentum * vyArr[i]! + (dt / eta) * fy;
+      let vzi = momentum * vzArr[i]! + (dt / eta) * fz;
+      if (maxSpeed > 0) {
+        const sp = Math.sqrt(vxi * vxi + vyi * vyi + vzi * vzi);
+        if (sp > maxSpeed) { const sc = maxSpeed / sp; vxi *= sc; vyi *= sc; vzi *= sc; }
+      }
+      vxArr[i] = vxi; vyArr[i] = vyi; vzArr[i] = vzi;
+      let nx = xi + vxi, ny = yi + vyi, nz = zi + vzi;
+      if (torus) { nx = ((nx % W) + W) % W; ny = ((ny % H) + H) % H; nz = ((nz % D) + D) % D; }
+      else { nx = nx < 0 ? 0 : nx > W ? W : nx; ny = ny < 0 ? 0 : ny > H ? H : ny; nz = nz < 0 ? 0 : nz > D ? D : nz; }
+      xN[i] = nx; yN[i] = ny; zN[i] = nz;
+      s.age[i] = s.age[i]! + 1;
+      const tr = s.targetRadius[i]!;
+      const cur = s.radius[i]!;
+      if (tr !== cur) {
+        const dd = tr - cur;
+        s.radius[i] = Math.abs(dd) <= growthRate ? tr : cur + Math.sign(dd) * growthRate;
+      }
+    }
+  } else {
+    const xN = s.xNext, yN = s.yNext;
+    const vxArr = s.vx, vyArr = s.vy;
+    for (let i = 0; i < hw; i++) {
+      if (!alive[i]) { xN[i] = x[i]!; yN[i] = y[i]!; continue; }
+      const xi = x[i]!, yi = y[i]!, ri = rad[i]!;
+      // Start from the graph-authored force (Apply Force wrote it this step).
+      let fx = s.forceX[i]!, fy = s.forceY[i]!, dens = 0;
+
+      // --- neighbour pass: always counts density; applies soft-sphere force only
+      // when engineForces (customForcesOnly skips the built-in repulsion) ---
+      if (hash) {
+        const nBinsX = hash.nBinsX, nBinsY = hash.nBinsY;
+        const binStart = hash.binStart, binAgents = hash.binAgents;
+        let bx = (xi / hash.binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
+        let by = (yi / hash.binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
+        for (let ddy = -1; ddy <= 1; ddy++) {
+          for (let ddx = -1; ddx <= 1; ddx++) {
+            let nbx = bx + ddx, nby = by + ddy;
+            if (torus) { nbx = ((nbx % nBinsX) + nBinsX) % nBinsX; nby = ((nby % nBinsY) + nBinsY) % nBinsY; }
+            else { if (nbx < 0 || nbx >= nBinsX || nby < 0 || nby >= nBinsY) continue; }
+            const b = nby * nBinsX + nbx;
+            const end = binStart[b + 1]!;
+            for (let p = binStart[b]!; p < end; p++) {
+              const j = binAgents[p]!;
+              if (j === i) continue;
+              let dx = x[j]! - xi, dy = y[j]! - yi;
+              if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
+              const d2 = dx * dx + dy * dy;
+              const sij = ri + rad[j]!;
+              const rmax = range * sij;
+              if (d2 === 0 || d2 >= rmax * rmax) continue;
+              dens++;
+              if (engineForces) {
+                const d = Math.sqrt(d2);
+                const F = ((d < sij) ? muR : muA) * (d - sij);
+                const k = F / d;
+                fx += k * dx; fy += k * dy;
+              }
+            }
+          }
+        }
+      } else {
+        for (let j = 0; j < hw; j++) {
+          if (j === i || !alive[j]) continue;
+          let dx = x[j]! - xi, dy = y[j]! - yi;
+          if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
+          const d2 = dx * dx + dy * dy;
+          const sij = ri + rad[j]!;
+          const rmax = range * sij;
+          if (d2 === 0 || d2 >= rmax * rmax) continue;
+          dens++;
+          if (engineForces) {
+            const d = Math.sqrt(d2);
+            const F = ((d < sij) ? muR : muA) * (d - sij);
+            const k = F / d;
+            fx += k * dx; fy += k * dy;
+          }
+        }
+      }
+      s.density[i] = dens;
+
+      // --- bond springs λ(l−L)·r̂ (no-op until bonds exist). The partnerEpoch
+      // check is the dangling-bond ABI — a recycled slot's stale bond reads
+      // epoch-mismatch and is skipped. ---
+      const bc = s.bondCount[i]!;
+      if (bc > 0) {
+        const base = i * maxBonds;
+        for (let bk = 0; bk < bc; bk++) {
+          const p = s.bondPartner[base + bk]!;
+          if (p < 0 || p >= hw || !alive[p]) continue;
+          if (s.bondPartnerEpoch[base + bk] !== s.epoch[p]) continue;
+          let dx = x[p]! - xi, dy = y[p]! - yi;
+          if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
+          const d2b = dx * dx + dy * dy;
+          if (d2b === 0) continue;
+          const d = Math.sqrt(d2b);
+          const F = s.bondStiffness[base + bk]! * (d - s.bondRestLength[base + bk]!);
           const k = F / d;
           fx += k * dx; fy += k * dy;
         }
       }
-    }
-    s.density[i] = dens;
 
-    // --- bond springs λ(l−L)·r̂ (no-op until bonds exist). The partnerEpoch
-    // check is the dangling-bond ABI — a recycled slot's stale bond reads
-    // epoch-mismatch and is skipped. ---
-    const bc = s.bondCount[i]!;
-    if (bc > 0) {
-      const base = i * maxBonds;
-      for (let bk = 0; bk < bc; bk++) {
-        const p = s.bondPartner[base + bk]!;
-        if (p < 0 || p >= hw || !alive[p]) continue;
-        if (s.bondPartnerEpoch[base + bk] !== s.epoch[p]) continue;
-        let dx = x[p]! - xi, dy = y[p]! - yi;
-        if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
-        const d2b = dx * dx + dy * dy;
-        if (d2b === 0) continue;
-        const d = Math.sqrt(d2b);
-        const F = s.bondStiffness[base + bk]! * (d - s.bondRestLength[base + bk]!);
-        const k = F / d;
-        fx += k * dx; fy += k * dy;
+      // Integrate: velocity = momentum·velocity + (Δt/η)·force; position += velocity.
+      // momentum 0 ⇒ vx = (Δt/η)·fx, the original overdamped step (byte-identical
+      // for tissue); momentum > 0 carries inertia (flocking). Optional speed cap.
+      let vxi = momentum * vxArr[i]! + (dt / eta) * fx;
+      let vyi = momentum * vyArr[i]! + (dt / eta) * fy;
+      if (maxSpeed > 0) {
+        const sp = Math.sqrt(vxi * vxi + vyi * vyi);
+        if (sp > maxSpeed) { const sc = maxSpeed / sp; vxi *= sc; vyi *= sc; }
+      }
+      vxArr[i] = vxi; vyArr[i] = vyi;
+      let nx = xi + vxi;
+      let ny = yi + vyi;
+      if (torus) { nx = ((nx % W) + W) % W; ny = ((ny % H) + H) % H; }
+      else { nx = nx < 0 ? 0 : nx > W ? W : nx; ny = ny < 0 ? 0 : ny > H ? H : ny; }
+      xN[i] = nx; yN[i] = ny;
+      s.age[i] = s.age[i]! + 1;
+      // Growth: ramp radius toward the target set by Set Target Radius.
+      const tr = s.targetRadius[i]!;
+      const cur = s.radius[i]!;
+      if (tr !== cur) {
+        const dd = tr - cur;
+        s.radius[i] = Math.abs(dd) <= growthRate ? tr : cur + Math.sign(dd) * growthRate;
       }
     }
-
-    // Integrate: velocity = momentum·velocity + (Δt/η)·force; position += velocity.
-    // momentum 0 ⇒ vx = (Δt/η)·fx, the original overdamped step (byte-identical
-    // for tissue); momentum > 0 carries inertia (flocking). Optional speed cap.
-    let vxi = momentum * vxArr[i]! + (dt / eta) * fx;
-    let vyi = momentum * vyArr[i]! + (dt / eta) * fy;
-    if (maxSpeed > 0) {
-      const sp = Math.sqrt(vxi * vxi + vyi * vyi);
-      if (sp > maxSpeed) { const sc = maxSpeed / sp; vxi *= sc; vyi *= sc; }
-    }
-    vxArr[i] = vxi; vyArr[i] = vyi;
-    let nx = xi + vxi;
-    let ny = yi + vyi;
-    if (torus) { nx = ((nx % W) + W) % W; ny = ((ny % H) + H) % H; }
-    else { nx = nx < 0 ? 0 : nx > W ? W : nx; ny = ny < 0 ? 0 : ny > H ? H : ny; }
-    xN[i] = nx; yN[i] = ny;
-    s.age[i] = s.age[i]! + 1;
-    // Growth: ramp radius toward the target set by Set Target Radius.
-    const tr = s.targetRadius[i]!;
-    const cur = s.radius[i]!;
-    if (tr !== cur) {
-      const dd = tr - cur;
-      s.radius[i] = Math.abs(dd) <= growthRate ? tr : cur + Math.sign(dd) * growthRate;
-    }
   }
-  // Commit positions (synchronous double-buffer swap).
-  const tmpX = s.x; s.x = s.xNext; s.xNext = tmpX;
-  const tmpY = s.y; s.y = s.yNext; s.yNext = tmpY;
+  // Commit positions (synchronous double-buffer swap; S11 helper — z swapped in 3D).
+  swapPositions(s, is3d);
 
   // Post-step structural phase: bond form/break (Phase B), division + growth +
   // death (Phase C). Mutates the bond/agent topology on the SETTLED state.
@@ -791,6 +960,7 @@ function runAgentStructuralPhase(): void {
   const cfg = centerBasedConfig;
   const torus = boundaryTreatment === 'torus';
   const W = s.worldWidth, H = s.worldHeight, halfW = W / 2, halfH = H / 2;
+  const is3d = s.worldDepth > 1, D = s.worldDepth;
   const hw = s.highWater;
   const x = s.x, y = s.y, rad = s.radius, alive = s.alive;
   const lambda = cbNum(cfg, 'bondStiffness');
@@ -824,14 +994,19 @@ function runAgentStructuralPhase(): void {
   //     attributes; collect (mother, daughterA, daughterB) for it.
   const divideEvents: Array<{ mother: number; a: number; b: number; axisX: number; axisY: number }> = [];
   let divideOverflow = false;
-  const outAxis: number[] = [0, 0];
+  const outAxis: number[] = [0, 0, 0];
   for (let i = 0; i < hw; i++) {
     if (!alive[i] || !s.divideRequest[i]) continue;
     const axisX = s.divideAxisX[i]!, axisY = s.divideAxisY[i]!;
+    // z component of the requested axis (0 in 2D — divideAxisZ is 2D-ZERO).
+    const axisZ = is3d ? s.divideAxisZ[i]! : 0;
     const asym = s.divideAsym[i]! || 0.5;
     s.divideRequest[i] = 0;
-    const newId = divideAgent(s, i, axisX, axisY, asym, lambda, torus, W, H, outAxis);
+    const newId = divideAgent(s, i, axisX, axisY, axisZ, asym, lambda, torus, W, H, D, outAxis);
     if (newId < 0) { divideOverflow = true; continue; }
+    // Stamp the RESOLVED axis (engine eigensolve or the explicit override) onto
+    // both daughters so the divisionEvent's `divideAxisZ` buffer reads it (3D).
+    if (is3d) { s.divideAxisZ[i] = outAxis[2]!; s.divideAxisZ[newId] = outAxis[2]!; }
     divideEvents.push({ mother: i, a: i, b: newId, axisX: outAxis[0]!, axisY: outAxis[1]! });
   }
   if (divideOverflow) {
@@ -846,29 +1021,58 @@ function runAgentStructuralPhase(): void {
     const fMul = cbNum(cfg, 'formDistance');
     const bMul = cbNum(cfg, 'breakDistance');
     // form pass — scan candidate pairs via the hash
+    const z = s.z, halfD = D / 2;
     let maxR = cbNum(cfg, 'defaultRadius');
     for (let i = 0; i < hw; i++) { if (alive[i] && rad[i]! > maxR) maxR = rad[i]!; }
-    const hash = buildSpatialHash(s, Math.max(1e-3, bMul * 2 * maxR), W, H);
+    const hash = buildSpatialHash(s, Math.max(1e-3, bMul * 2 * maxR), W, H, D);
     const tryForm = (i: number, j: number) => {
       if (j <= i || !alive[j]) return;
       let dx = x[j]! - x[i]!, dy = y[j]! - y[i]!;
-      if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
       const contact = rad[i]! + rad[j]!;
-      const d = Math.sqrt(dx * dx + dy * dy);
+      let d: number;
+      if (is3d) {
+        let dz = z[j]! - z[i]!;
+        if (torus) {
+          if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
+          if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H;
+          if (dz > halfD) dz -= D; else if (dz < -halfD) dz += D;
+        }
+        d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      } else {
+        if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
+        d = Math.sqrt(dx * dx + dy * dy);
+      }
       if (d < fMul * contact) formBond(s, i, j, contact, lambda);
     };
     if (hash) {
-      const { nBinsX, nBinsY, binStart, binAgents, binSizeX, binSizeY } = hash;
-      for (let i = 0; i < hw; i++) {
-        if (!alive[i]) continue;
-        let bx = (x[i]! / binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
-        let by = (y[i]! / binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
-        for (let ddy = -1; ddy <= 1; ddy++) for (let ddx = -1; ddx <= 1; ddx++) {
-          let nbx = bx + ddx, nby = by + ddy;
-          if (torus) { nbx = ((nbx % nBinsX) + nBinsX) % nBinsX; nby = ((nby % nBinsY) + nBinsY) % nBinsY; }
-          else { if (nbx < 0 || nbx >= nBinsX || nby < 0 || nby >= nBinsY) continue; }
-          const b = nby * nBinsX + nbx;
-          for (let p = binStart[b]!; p < binStart[b + 1]!; p++) tryForm(i, binAgents[p]!);
+      const { nBinsX, nBinsY, nBinsZ, binStart, binAgents, binSizeX, binSizeY, binSizeZ } = hash;
+      if (nBinsZ > 1) {
+        // 3D form pass — 3×3×3 stencil over the z-major hash, torus-wrapped.
+        for (let i = 0; i < hw; i++) {
+          if (!alive[i]) continue;
+          let bx = (x[i]! / binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
+          let by = (y[i]! / binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
+          let bz = (z[i]! / binSizeZ) | 0; if (bz < 0) bz = 0; else if (bz >= nBinsZ) bz = nBinsZ - 1;
+          for (let ddz = -1; ddz <= 1; ddz++) for (let ddy = -1; ddy <= 1; ddy++) for (let ddx = -1; ddx <= 1; ddx++) {
+            let nbx = bx + ddx, nby = by + ddy, nbz = bz + ddz;
+            if (torus) { nbx = ((nbx % nBinsX) + nBinsX) % nBinsX; nby = ((nby % nBinsY) + nBinsY) % nBinsY; nbz = ((nbz % nBinsZ) + nBinsZ) % nBinsZ; }
+            else { if (nbx < 0 || nbx >= nBinsX || nby < 0 || nby >= nBinsY || nbz < 0 || nbz >= nBinsZ) continue; }
+            const b = (nbz * nBinsY + nby) * nBinsX + nbx;
+            for (let p = binStart[b]!; p < binStart[b + 1]!; p++) tryForm(i, binAgents[p]!);
+          }
+        }
+      } else {
+        for (let i = 0; i < hw; i++) {
+          if (!alive[i]) continue;
+          let bx = (x[i]! / binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
+          let by = (y[i]! / binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
+          for (let ddy = -1; ddy <= 1; ddy++) for (let ddx = -1; ddx <= 1; ddx++) {
+            let nbx = bx + ddx, nby = by + ddy;
+            if (torus) { nbx = ((nbx % nBinsX) + nBinsX) % nBinsX; nby = ((nby % nBinsY) + nBinsY) % nBinsY; }
+            else { if (nbx < 0 || nbx >= nBinsX || nby < 0 || nby >= nBinsY) continue; }
+            const b = nby * nBinsX + nbx;
+            for (let p = binStart[b]!; p < binStart[b + 1]!; p++) tryForm(i, binAgents[p]!);
+          }
         }
       }
     } else {
@@ -882,9 +1086,21 @@ function runAgentStructuralPhase(): void {
         const p = s.bondPartner[base + k]!;
         if (p <= i || !alive[p]) continue; // handle each pair once (from the lower id)
         let dx = x[p]! - x[i]!, dy = y[p]! - y[i]!;
-        if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
         const contact = rad[i]! + rad[p]!;
-        if (Math.sqrt(dx * dx + dy * dy) > bMul * contact) breakBond(s, i, p);
+        let dd: number;
+        if (is3d) {
+          let dz = z[p]! - z[i]!;
+          if (torus) {
+            if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
+            if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H;
+            if (dz > halfD) dz -= D; else if (dz < -halfD) dz += D;
+          }
+          dd = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        } else {
+          if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
+          dd = Math.sqrt(dx * dx + dy * dy);
+        }
+        if (dd > bMul * contact) breakBond(s, i, p);
       }
     }
   }
