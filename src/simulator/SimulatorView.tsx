@@ -1061,7 +1061,24 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (!isAgentModelRef.current) return;
       const snap = agentsRef.current;
       if (!snap || snap.highWater === 0) return;
-      const { x: ax, y: ay, radius: ar, alive: aal, colors: acol, highWater: hw } = snap;
+      const { x: ax, y: ay, radius: ar, alive: aal, colors: acol, highWater: hw, bonds } = snap;
+      // Bond layer — drawn UNDER the agent circles (one batched stroke path).
+      if (bonds && bonds.length > 0) {
+        const drawBonds = (tileOx: number, tileOy: number) => {
+          ctx.beginPath();
+          for (let b = 0; b < bonds.length; b += 2) {
+            const i = bonds[b]!, j = bonds[b + 1]!;
+            ctx.moveTo(tileOx + ax[i]! * scale, tileOy + ay[i]! * scale);
+            ctx.lineTo(tileOx + ax[j]! * scale, tileOy + ay[j]! * scale);
+          }
+          ctx.strokeStyle = 'rgba(230, 230, 245, 0.55)';
+          ctx.lineWidth = Math.max(1, scale * 0.18);
+          ctx.stroke();
+        };
+        if (infinity) {
+          for (let ty = tyMin; ty <= tyMax; ty++) for (let tx = txMin; tx <= txMax; tx++) drawBonds(ox + tx * scaledW, oy + ty * scaledH);
+        } else { drawBonds(ox, oy); }
+      }
       const stamp = (tileOx: number, tileOy: number) => {
         for (let i = 0; i < hw; i++) {
           if (!aal[i]) continue;

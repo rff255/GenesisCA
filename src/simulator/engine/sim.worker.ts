@@ -28,6 +28,7 @@ import { cbNum } from '../../model/centerBased';
 import {
   createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot,
   snapshotAgentsForRender, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
+  formBond, breakBond, sweepStaleBonds,
   type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec,
 } from './agentEngine';
 
@@ -329,8 +330,12 @@ interface PaintAgentsMsg {
 }
 /** Remove ALL agents (Reset). */
 interface ClearAgentsMsg { type: 'clearAgents'; activeViewer: string }
+/** Manual glue: bond two agents (the glue brush). */
+interface FormBondMsg { type: 'formBond'; a: number; b: number; activeViewer: string }
+/** Manual cut: break the bond between two agents (the cut brush). */
+interface BreakBondMsg { type: 'breakBond'; a: number; b: number; activeViewer: string }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -445,6 +450,7 @@ function buildAgentLoopArgs(s: AgentStore): unknown[] {
     s.x, s.y, s.radius, s.targetRadius, s.age, s.type, s.lineage, s.bondCount, s.density,
     s.divideRequest, s.divideAxisX, s.divideAxisY, s.divideAsym, s.killRequest,
     s.bondPartner, s.bondPartnerEpoch, s.bondRestLength, s.bondStiffness, s.bondTypeLabel, s.maxBonds,
+    s.bondFormReq, s.bondFormL, s.bondFormK, s.bondBreakReq,
   ];
   for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
   for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
@@ -604,6 +610,95 @@ function runAgentStep(): void {
   // Commit positions (synchronous double-buffer swap).
   const tmpX = s.x; s.x = s.xNext; s.xNext = tmpX;
   const tmpY = s.y; s.y = s.yNext; s.yNext = tmpY;
+
+  // Post-step structural phase: bond form/break (Phase B), division + growth +
+  // death (Phase C). Mutates the bond/agent topology on the SETTLED state.
+  runAgentStructuralPhase();
+}
+
+/** Post-step structural phase — the only place the bond / agent topology is
+ *  mutated (Decision: mutate on the settled state, never mid-force-loop). Bond
+ *  form/break requests (FormBond / BreakBond) → auto-bond by distance (with
+ *  hysteresis) → stale-bond sweep → [division + death land in Phase C]. */
+function runAgentStructuralPhase(): void {
+  const s = agentStore;
+  if (!s) return;
+  const cfg = centerBasedConfig;
+  const torus = boundaryTreatment === 'torus';
+  const W = s.worldWidth, H = s.worldHeight, halfW = W / 2, halfH = H / 2;
+  const hw = s.highWater;
+  const x = s.x, y = s.y, rad = s.radius, alive = s.alive;
+  const lambda = cbNum(cfg, 'bondStiffness');
+
+  // 1. Apply explicit bond requests written by FormBond / BreakBond this step.
+  for (let i = 0; i < hw; i++) {
+    if (!alive[i]) { s.bondFormReq[i] = 0; s.bondBreakReq[i] = 0; continue; }
+    const fr = s.bondFormReq[i]!;
+    if (fr > 0) {
+      const p = fr - 1;
+      if (p >= 0 && p < hw && alive[p]) {
+        const L = s.bondFormL[i]! > 0 ? s.bondFormL[i]! : (rad[i]! + rad[p]!);
+        const K = s.bondFormK[i]! > 0 ? s.bondFormK[i]! : lambda;
+        formBond(s, i, p, L, K);
+      }
+      s.bondFormReq[i] = 0;
+    }
+    const br = s.bondBreakReq[i]!;
+    if (br > 0) { breakBond(s, i, br - 1); s.bondBreakReq[i] = 0; }
+  }
+
+  // 2. Auto-bond by distance (opt-in, hysteresis): form a bond between any two
+  //    unbonded agents within formDistance×contact; break bonds stretched past
+  //    breakDistance×contact. Uses the spatial hash → O(N).
+  if (cfg?.autoBond) {
+    const fMul = cbNum(cfg, 'formDistance');
+    const bMul = cbNum(cfg, 'breakDistance');
+    // form pass — scan candidate pairs via the hash
+    let maxR = cbNum(cfg, 'defaultRadius');
+    for (let i = 0; i < hw; i++) { if (alive[i] && rad[i]! > maxR) maxR = rad[i]!; }
+    const hash = buildSpatialHash(s, Math.max(1e-3, bMul * 2 * maxR), W, H);
+    const tryForm = (i: number, j: number) => {
+      if (j <= i || !alive[j]) return;
+      let dx = x[j]! - x[i]!, dy = y[j]! - y[i]!;
+      if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
+      const contact = rad[i]! + rad[j]!;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < fMul * contact) formBond(s, i, j, contact, lambda);
+    };
+    if (hash) {
+      const { nBinsX, nBinsY, binStart, binAgents, binSizeX, binSizeY } = hash;
+      for (let i = 0; i < hw; i++) {
+        if (!alive[i]) continue;
+        let bx = (x[i]! / binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
+        let by = (y[i]! / binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
+        for (let ddy = -1; ddy <= 1; ddy++) for (let ddx = -1; ddx <= 1; ddx++) {
+          let nbx = bx + ddx, nby = by + ddy;
+          if (torus) { nbx = ((nbx % nBinsX) + nBinsX) % nBinsX; nby = ((nby % nBinsY) + nBinsY) % nBinsY; }
+          else { if (nbx < 0 || nbx >= nBinsX || nby < 0 || nby >= nBinsY) continue; }
+          const b = nby * nBinsX + nbx;
+          for (let p = binStart[b]!; p < binStart[b + 1]!; p++) tryForm(i, binAgents[p]!);
+        }
+      }
+    } else {
+      for (let i = 0; i < hw; i++) { if (!alive[i]) continue; for (let j = i + 1; j < hw; j++) tryForm(i, j); }
+    }
+    // break pass — drop bonds stretched past breakDistance×contact
+    for (let i = 0; i < hw; i++) {
+      if (!alive[i]) continue;
+      const base = i * s.maxBonds;
+      for (let k = s.bondCount[i]! - 1; k >= 0; k--) {
+        const p = s.bondPartner[base + k]!;
+        if (p <= i || !alive[p]) continue; // handle each pair once (from the lower id)
+        let dx = x[p]! - x[i]!, dy = y[p]! - y[i]!;
+        if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
+        const contact = rad[i]! + rad[p]!;
+        if (Math.sqrt(dx * dx + dy * dy) > bMul * contact) breakBond(s, i, p);
+      }
+    }
+  }
+
+  // 3. Stale-bond sweep (defence-in-depth on the dangling-bond ABI).
+  sweepStaleBonds(s);
 }
 // Async-only: per-cell Uint8 view at wasmLayout.skippedOffset. Set by
 // `markCellUpdated` (via the compiled step in JS mode, or `i32.store8` in
@@ -2648,10 +2743,11 @@ function sendColors(): void {
     agentTransfers.push(
       agentsPayload.x.buffer, agentsPayload.y.buffer, agentsPayload.radius.buffer,
       agentsPayload.alive.buffer, agentsPayload.colors.buffer, agentsPayload.type.buffer,
+      agentsPayload.bonds.buffer,
     );
   } else if (agentStore) {
     // Empty store — still tell the main thread so it clears any stale agents.
-    agentsPayload = { highWater: 0, liveCount: 0, x: new Float64Array(0), y: new Float64Array(0), radius: new Float64Array(0), alive: new Uint8Array(0), colors: new Uint8ClampedArray(0), type: new Int32Array(0) };
+    agentsPayload = { highWater: 0, liveCount: 0, x: new Float64Array(0), y: new Float64Array(0), radius: new Float64Array(0), alive: new Uint8Array(0), colors: new Uint8ClampedArray(0), type: new Int32Array(0), bonds: new Int32Array(0) };
   }
 
   // P7 — when WebGPU direct render is active, the OffscreenCanvas already
@@ -3586,6 +3682,21 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'clearAgents': {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       if (agentStore) clearAgents(agentStore);
+      sendColors();
+      break;
+    }
+    case 'formBond': {
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
+      if (agentStore && msg.a >= 0 && msg.b >= 0 && msg.a < agentStore.highWater && msg.b < agentStore.highWater) {
+        const L = agentStore.radius[msg.a]! + agentStore.radius[msg.b]!;
+        formBond(agentStore, msg.a, msg.b, L, cbNum(centerBasedConfig, 'bondStiffness'));
+      }
+      sendColors();
+      break;
+    }
+    case 'breakBond': {
+      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
+      if (agentStore) breakBond(agentStore, msg.a, msg.b);
       sendColors();
       break;
     }

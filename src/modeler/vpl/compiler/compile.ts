@@ -64,7 +64,7 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
 // Compile a single root's subgraph (per-cell body)
 // ---------------------------------------------------------------------------
 
-const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'categoricalColor', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels', 'getCellPosition', 'behaviourStep', 'divisionEvent', 'getSelfPosition']);
+const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'categoricalColor', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels', 'getCellPosition', 'behaviourStep', 'divisionEvent', 'getSelfPosition', 'forEachBond']);
 
 /** Check if a node's data uses multi-output variable naming */
 function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
@@ -530,12 +530,9 @@ function compileRoot(
    *  walking BOTH ports, value nodes that only read the loop counter (e.g.
    *  ArrayElement[index] on parallel arrays) land in cell-top scope and
    *  reference an undeclared loop-counter variable at runtime. */
-  function findElementDependents(forEachNodeId: string): Set<string> {
+  function findElementDependents(forEachNodeId: string, seedPorts: string[] = ['element', 'index']): Set<string> {
     const result = new Set<string>();
-    const queue: Array<{ nodeId: string; portId: string }> = [
-      { nodeId: forEachNodeId, portId: 'element' },
-      { nodeId: forEachNodeId, portId: 'index' },
-    ];
+    const queue: Array<{ nodeId: string; portId: string }> = seedPorts.map(p => ({ nodeId: forEachNodeId, portId: p }));
     while (queue.length > 0) {
       const src = queue.shift()!;
       const enqueueConsumer = (consumerId: string) => {
@@ -984,6 +981,37 @@ function compileRoot(
         // Merge with any outer body's dependents — a value chain can be dependent
         // on multiple nested elements; either-scope dependents emit at the inner-
         // most body that sees them.
+        bodyDependents = new Set([...(savedDeps ?? []), ...ownDeps]);
+        bodyTarget = flowLines;
+        bodyIndent = indent + '  ';
+        bodyCompiled = new Set(savedCompiled);
+        compileFlowChain(node.id, 'body', indent + '  ');
+        bodyTarget = savedTarget;
+        bodyIndent = savedIndent;
+        bodyDependents = savedDeps;
+        bodyCompiled = savedCompiled;
+        flowLines.push(`${indent}}`);
+      } else if (node.data.nodeType === 'forEachBond') {
+        // Bond-Graph Agents: iterate the current agent's ragged bond list. No
+        // array input — the bonds come from the engine store via the agent loop
+        // params. Per-iteration value-outs: partnerId / restLength / currentLength
+        // / index. (currentLength is the raw Euclidean distance — torus wrap is
+        // not applied; bonds are short-range so this is exact in practice.)
+        const feb = `_feb${node.id}`;
+        const base = `_bb${node.id}`;
+        const pid = `_v${node.id}_partnerId`;
+        flowLines.push(`${indent}for (let ${feb} = 0; ${feb} < _agentBondCount[idx]; ${feb}++) {`);
+        flowLines.push(`${indent}  const ${base} = idx * maxBonds + ${feb};`);
+        flowLines.push(`${indent}  const ${pid} = _bondPartner[${base}];`);
+        flowLines.push(`${indent}  const _v${node.id}_restLength = _bondRestLength[${base}];`);
+        flowLines.push(`${indent}  const _v${node.id}_currentLength = Math.hypot(_agentX[${pid}] - _agentX[idx], _agentY[${pid}] - _agentY[idx]);`);
+        flowLines.push(`${indent}  const _v${node.id}_index = ${feb};`);
+        flushBranchValues(`${node.id}:body`, flowLines, indent + '  ');
+        const savedTarget = bodyTarget;
+        const savedIndent = bodyIndent;
+        const savedDeps = bodyDependents;
+        const savedCompiled = bodyCompiled;
+        const ownDeps = findElementDependents(node.id, ['partnerId', 'restLength', 'currentLength', 'index']);
         bodyDependents = new Set([...(savedDeps ?? []), ...ownDeps]);
         bodyTarget = flowLines;
         bodyIndent = indent + '  ';
@@ -1998,8 +2026,10 @@ export function buildAgentLoopParams(model: CAModel): { params: string; cellAttr
     '_agentType', '_agentLineage', '_agentBondCount', '_agentDensity',
     // request buffers written by DivideAgent / KillAgent (Phase C)
     '_divideRequest', '_divideAxisX', '_divideAxisY', '_divideAsym', '_killRequest',
-    // ragged bond store + stride (Phase B: ForEachBond / FormBond)
+    // ragged bond store + stride (ForEachBond / the spring force)
     '_bondPartner', '_bondPartnerEpoch', '_bondRestLength', '_bondStiffness', '_bondTypeLabel', 'maxBonds',
+    // bond form/break request buffers written by FormBond / BreakBond
+    '_bondFormReq', '_bondFormL', '_bondFormK', '_bondBreakReq',
   ];
   for (const a of cellAttrs) parts.push(`r_${a.id}`);
   for (const a of cellAttrs) parts.push(`w_${a.id}`);

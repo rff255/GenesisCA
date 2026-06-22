@@ -620,10 +620,17 @@ export interface CenterBasedConfig {
   bondStiffness?: number;
   /** Global bond rest length L used when no spring matrix is set. */
   bondRestLength?: number;
-  /** Auto-form distance d_form (engine hysteresis requires d_form < d_break). */
+  /** Auto-form distance d_form, as a multiple of the two agents' contact
+   *  distance (sum of radii). Engine hysteresis requires d_form < d_break. */
   formDistance?: number;
-  /** Auto-break distance d_break. */
+  /** Auto-break distance d_break (same units as formDistance). */
   breakDistance?: number;
+  /** When true, the engine automatically bonds any two unbonded agents that
+   *  come within `formDistance` and breaks bonds stretched past `breakDistance`
+   *  (the hysteresis prevents per-step flicker). The simplest path to a glued
+   *  cluster; explicit Form Bond / Break Bond nodes + the glue brush give
+   *  per-rule control on top. */
+  autoBond?: boolean;
 }
 
 /** Complete CA model definition */

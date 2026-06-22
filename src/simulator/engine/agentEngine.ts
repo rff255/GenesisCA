@@ -81,12 +81,20 @@ export interface AgentStore {
   bondStiffness: Float64Array;   // λ
   bondTypeLabel: Int32Array;     // bond class
 
-  // --- request buffers the graph writes (validated + applied post-step; PR-C/D) ---
+  // --- request buffers the graph writes (validated + applied post-step; PR-B/C/D) ---
   divideRequest: Uint8Array;
   divideAxisX: Float64Array;
   divideAxisY: Float64Array;
   divideAsym: Float64Array;
   killRequest: Uint8Array;
+  /** Form-bond request: partner id + 1 (0 = none), with the rest length L and
+   *  stiffness λ to use. One form request per agent per step (most rules form one
+   *  bond/step; repeated steps form more). */
+  bondFormReq: Int32Array;
+  bondFormL: Float64Array;
+  bondFormK: Float64Array;
+  /** Break-bond request: partner id + 1 (0 = none). */
+  bondBreakReq: Int32Array;
 
   // --- per-agent RGBA appearance (written by the agent colour pass; PR-A3) ---
   colors: Uint8ClampedArray;
@@ -161,6 +169,10 @@ export function createAgentStore(config: CenterBasedConfig, attrSpecs: AgentAttr
     divideAxisY: new Float64Array(maxAgents),
     divideAsym: new Float64Array(maxAgents),
     killRequest: new Uint8Array(maxAgents),
+    bondFormReq: new Int32Array(maxAgents),
+    bondFormL: new Float64Array(maxAgents),
+    bondFormK: new Float64Array(maxAgents),
+    bondBreakReq: new Int32Array(maxAgents),
     colors: new Uint8ClampedArray(maxAgents * 4),
     attrSpecs,
     attrRead, attrWrite, attrKind,
@@ -232,12 +244,14 @@ export function initAgentSlot(
  *  a partner's spring at a stranger. */
 export function freeAgentSlot(store: AgentStore, id: number): void {
   if (!store.alive[id]) return;
+  // Break ALL bonds to/from this agent FIRST (removes it from every partner's
+  // list) — must run while still marked alive so the partner lookup works.
+  breakAllBonds(store, id);
   store.alive[id] = 0;
-  store.epoch[id] = (store.epoch[id]! + 1) | 0;
+  store.epoch[id] = (store.epoch[id]! + 1) | 0;   // bump epoch → any stale bond is swept
   store.bondCount[id] = 0;
-  const base = id * store.maxBonds;
-  for (let k = 0; k < store.maxBonds; k++) store.bondPartner[base + k] = -1;
   store.divideRequest[id] = 0; store.killRequest[id] = 0;
+  store.bondFormReq[id] = 0; store.bondBreakReq[id] = 0;
   store.freeList[store.freeTop++] = id;
   store.liveCount--;
 }
@@ -282,6 +296,139 @@ export interface AgentRenderSnapshot {
   alive: Uint8Array;
   colors: Uint8ClampedArray;
   type: Int32Array;
+  /** Flat [a, b, a, b, …] live bond index pairs (empty when no bonds). */
+  bonds: Int32Array;
+}
+
+// ---------------------------------------------------------------------------
+// Bonds — the persistent ragged store mutation API. Bonds are SYMMETRIC (both
+// agents carry a slot), so form/break touch both lists. The partnerEpoch is
+// stamped from the partner's current epoch at form time → a recycled slot (its
+// epoch bumped on death) reads epoch-mismatch in the force loop + the stale
+// sweep and is skipped (the dangling-bond ABI). maxBonds overflow REJECTS (the
+// bond is simply not formed) — never wraps.
+// ---------------------------------------------------------------------------
+
+/** Is there a LIVE bond between a and b in a's list? */
+export function hasBond(store: AgentStore, a: number, b: number): boolean {
+  const base = a * store.maxBonds;
+  const n = store.bondCount[a]!;
+  for (let k = 0; k < n; k++) if (store.bondPartner[base + k] === b) return true;
+  return false;
+}
+
+/** Add a bond slot to agent `a`'s list pointing at `b`. Internal (one direction). */
+function addBondSlot(store: AgentStore, a: number, b: number, L: number, lambda: number, typeLabel: number): boolean {
+  const n = store.bondCount[a]!;
+  if (n >= store.maxBonds) return false; // overflow → reject
+  const base = a * store.maxBonds + n;
+  store.bondPartner[base] = b;
+  store.bondPartnerEpoch[base] = store.epoch[b]!;
+  store.bondRestLength[base] = L;
+  store.bondStiffness[base] = lambda;
+  store.bondTypeLabel[base] = typeLabel;
+  store.bondCount[a] = n + 1;
+  return true;
+}
+
+/** Form a symmetric bond a↔b. No-op (returns false) if already bonded, self, a
+ *  dead agent, or EITHER list is full (atomic — neither side is half-added). */
+export function formBond(store: AgentStore, a: number, b: number, L: number, lambda: number, typeLabel = 0): boolean {
+  if (a === b || a < 0 || b < 0 || !store.alive[a] || !store.alive[b]) return false;
+  if (hasBond(store, a, b)) return false;
+  if (store.bondCount[a]! >= store.maxBonds || store.bondCount[b]! >= store.maxBonds) return false;
+  addBondSlot(store, a, b, L, lambda, typeLabel);
+  addBondSlot(store, b, a, L, lambda, typeLabel);
+  return true;
+}
+
+/** Remove the bond slot pointing at `b` from `a`'s list (swap-remove). Internal. */
+function removeBondSlot(store: AgentStore, a: number, b: number): boolean {
+  const base = a * store.maxBonds;
+  const n = store.bondCount[a]!;
+  for (let k = 0; k < n; k++) {
+    if (store.bondPartner[base + k] === b) {
+      const last = n - 1;
+      if (k !== last) {
+        store.bondPartner[base + k] = store.bondPartner[base + last]!;
+        store.bondPartnerEpoch[base + k] = store.bondPartnerEpoch[base + last]!;
+        store.bondRestLength[base + k] = store.bondRestLength[base + last]!;
+        store.bondStiffness[base + k] = store.bondStiffness[base + last]!;
+        store.bondTypeLabel[base + k] = store.bondTypeLabel[base + last]!;
+      }
+      store.bondPartner[base + last] = -1;
+      store.bondCount[a] = last;
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Break the symmetric bond a↔b (both directions). */
+export function breakBond(store: AgentStore, a: number, b: number): boolean {
+  if (a < 0 || b < 0) return false;
+  const r1 = removeBondSlot(store, a, b);
+  const r2 = removeBondSlot(store, b, a);
+  return r1 || r2;
+}
+
+/** Break ALL bonds attached to agent `a` (both directions). Called on death so
+ *  no partner keeps a slot pointing at a recycled agent. */
+export function breakAllBonds(store: AgentStore, a: number): void {
+  const base = a * store.maxBonds;
+  const n = store.bondCount[a]!;
+  for (let k = 0; k < n; k++) {
+    const p = store.bondPartner[base + k]!;
+    if (p >= 0) removeBondSlot(store, p, a);
+    store.bondPartner[base + k] = -1;
+  }
+  store.bondCount[a] = 0;
+}
+
+/** Per-step stale-bond sweep — drop any slot whose partner is dead OR whose
+ *  stamped epoch no longer matches the partner's (a recycled slot). Cheap
+ *  defence-in-depth on top of break-on-death + the force-loop epoch check. */
+export function sweepStaleBonds(store: AgentStore): void {
+  const hw = store.highWater, mb = store.maxBonds;
+  for (let a = 0; a < hw; a++) {
+    if (!store.alive[a]) continue;
+    const base = a * mb;
+    let n = store.bondCount[a]!;
+    for (let k = 0; k < n; ) {
+      const p = store.bondPartner[base + k]!;
+      const stale = p < 0 || p >= hw || !store.alive[p] || store.bondPartnerEpoch[base + k] !== store.epoch[p];
+      if (stale) {
+        const last = n - 1;
+        if (k !== last) {
+          store.bondPartner[base + k] = store.bondPartner[base + last]!;
+          store.bondPartnerEpoch[base + k] = store.bondPartnerEpoch[base + last]!;
+          store.bondRestLength[base + k] = store.bondRestLength[base + last]!;
+          store.bondStiffness[base + k] = store.bondStiffness[base + last]!;
+          store.bondTypeLabel[base + k] = store.bondTypeLabel[base + last]!;
+        }
+        store.bondPartner[base + last] = -1;
+        n = last;
+      } else { k++; }
+    }
+    store.bondCount[a] = n;
+  }
+}
+
+/** Snapshot the live bonds as flat [a, b] index pairs (a < b, deduped) for the
+ *  bond render layer. Cheap; only built when there are bonds. */
+export function snapshotBonds(store: AgentStore): Int32Array {
+  const hw = store.highWater, mb = store.maxBonds;
+  const pairs: number[] = [];
+  for (let a = 0; a < hw; a++) {
+    if (!store.alive[a]) continue;
+    const base = a * mb;
+    const n = store.bondCount[a]!;
+    for (let k = 0; k < n; k++) {
+      const b = store.bondPartner[base + k]!;
+      if (b > a && store.alive[b]) { pairs.push(a, b); } // a<b dedupes the symmetric pair
+    }
+  }
+  return Int32Array.from(pairs);
 }
 
 // ---------------------------------------------------------------------------
@@ -350,6 +497,7 @@ export function snapshotAgentsForRender(store: AgentStore): AgentRenderSnapshot 
     alive: store.alive.slice(0, hw),
     colors: store.colors.slice(0, hw * 4),
     type: store.type.slice(0, hw),
+    bonds: snapshotBonds(store),
   };
 }
 
