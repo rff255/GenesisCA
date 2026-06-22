@@ -18,6 +18,13 @@ import { FieldGradientNode } from './FieldGradientNode';
 import { ReadCellsUnderNode } from './ReadCellsUnderNode';
 import { AffectCellsUnderNode } from './AffectCellsUnderNode';
 import { SecreteToFieldNode } from './SecreteToFieldNode';
+import { GetNearbyAgentsNode } from './GetNearbyAgentsNode';
+import { GetAgentPositionNode } from './GetAgentPositionNode';
+import { GetAgentAttributeNode } from './GetAgentAttributeNode';
+import { GetAgentRadiusNode } from './GetAgentRadiusNode';
+import { GetVelocityNode } from './GetVelocityNode';
+import { ApplyForceNode } from './ApplyForceNode';
+import { SetAgentAttributeNode } from './SetAgentAttributeNode';
 import { GetOrientationNode } from './GetOrientationNode';
 import { SetOrientationNode } from './SetOrientationNode';
 import { GetFacingOrientationNode } from './GetFacingOrientationNode';
@@ -104,6 +111,14 @@ const ALL_NODES: NodeTypeDef[] = [
   GetBondDegreeNode,
   NeighbourDensityNode,
   SetTargetRadiusNode,
+  // Agent neighbour access + graph-authored forces (boids / flocking / signalling)
+  GetNearbyAgentsNode,
+  GetAgentPositionNode,
+  GetAgentAttributeNode,
+  GetAgentRadiusNode,
+  GetVelocityNode,
+  ApplyForceNode,
+  SetAgentAttributeNode,
   FormBondNode,
   BreakBondNode,
   ForEachBondNode,

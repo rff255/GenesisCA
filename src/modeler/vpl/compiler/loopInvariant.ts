@@ -120,6 +120,12 @@ const NEVER_INVARIANT = new Set<string>([
   'sampleField',
   'fieldGradient',
   'readCellsUnder',
+  // Agent neighbour access — all read per-agent engine buffers / the hash.
+  'getNearbyAgents',
+  'getAgentPosition',
+  'getAgentAttribute',
+  'getAgentRadius',
+  'getVelocity',
   // ForEachBond's per-iteration outputs (partnerId/restLength/currentLength/index)
   // vary per bond — any consumer must stay inside the bond loop (same reasoning
   // as forEachInArray).

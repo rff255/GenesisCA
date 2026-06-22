@@ -25,6 +25,9 @@ export const CENTER_BASED_DEFAULTS = {
   interactionRange: 1.5,     // r_max / s
   drag: 1.0,                 // η
   timeStep: 0.1,             // Δt_user (pre-clamp)
+  momentum: 0.0,             // 0 = overdamped (tissue); ~0.9 = flocking inertia
+  maxSpeed: 0.0,             // 0 = uncapped
+  neighbourQueryRadius: 5.0, // sizes the spatial-hash bin so Get Nearby Agents within this radius is covered by the 3×3 stencil
   seedCount: 0,
   defaultRadius: 0.5,        // → contact distance 1.0 between two default agents
   growthRate: 0.02,          // radius units per step toward targetRadius

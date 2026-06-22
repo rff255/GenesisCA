@@ -320,6 +320,14 @@ export function computeVolatileHoist(input: VolatileHoistInput): VolatileHoistRe
     for (const srcId of valueInputSources(flowNodeId)) volatileCone(srcId, acc);
     for (const [key, targets] of flowOutputToTargets) {
       if (!key.startsWith(`${flowNodeId}:`)) continue;
+      // SKIP the `next` continuation: it runs AFTER this node at the SAME scope
+      // (walkNode already pushed its targets as separate scope members), so a
+      // volatile used only in the next-chain belongs to that later sibling — not
+      // to this node. Without this skip, a value read AFTER a loop (forEach.next
+      // → consumer) is wrongly attributed to the loop and emitted BEFORE it,
+      // reading the loop's accumulators at their initial (pre-loop) value.
+      const portId = key.slice(flowNodeId.length + 1);
+      if (portId === 'next') continue;
       for (const t of targets) for (const v of usedVolatiles(t.nodeId)) acc.add(v);
     }
     return acc;

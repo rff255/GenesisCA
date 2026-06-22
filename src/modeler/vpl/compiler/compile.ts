@@ -64,7 +64,7 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
 // Compile a single root's subgraph (per-cell body)
 // ---------------------------------------------------------------------------
 
-const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'categoricalColor', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels', 'getCellPosition', 'behaviourStep', 'divisionEvent', 'getSelfPosition', 'forEachBond', 'fieldGradient']);
+const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'categoricalColor', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels', 'getCellPosition', 'behaviourStep', 'divisionEvent', 'getSelfPosition', 'forEachBond', 'fieldGradient', 'getAgentPosition', 'getVelocity']);
 
 /** Check if a node's data uses multi-output variable naming */
 function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
@@ -2045,6 +2045,12 @@ export function buildAgentLoopParams(model: CAModel): { params: string; cellAttr
     // the agent read nodes)
     '_agentX', '_agentY', '_agentRadius', '_agentTargetRadius', '_agentAge',
     '_agentType', '_agentLineage', '_agentBondCount', '_agentDensity',
+    // velocity (read by Get Velocity) + the per-step force accumulator (Apply
+    // Force adds in; the engine adds its soft-sphere + bond springs after)
+    '_agentVX', '_agentVY', '_agentForceX', '_agentForceY',
+    // the uniform spatial hash (Get Nearby Agents queries it); _fieldW/_fieldH/
+    // _fieldBoundaryTorus (below) double as the agent world bounds (1:1)
+    '_hashValid', '_hashBinStart', '_hashBinAgents', '_hashNBinsX', '_hashNBinsY', '_hashBinSizeX', '_hashBinSizeY',
     // request buffers written by DivideAgent / KillAgent (Phase C)
     '_divideRequest', '_divideAxisX', '_divideAxisY', '_divideAsym', '_killRequest',
     // ragged bond store + stride (ForEachBond / the spring force)
@@ -2100,14 +2106,21 @@ export function compileAgentGraph(
   const scratchDecls = scratchNodes.map(s => buildScratchDecl(s, model));
   const { params } = buildAgentLoopParams(model);
   const bsId = behaviourNode.id;
+  // Local Variables — per-agent scratch (the agent analogue of the cell-step
+  // injection). Array allocations hoist to function scope; scalar lets + array
+  // fills reset at the top of every agent iteration. Used heavily by flocking
+  // (per-agent neighbour accumulators) + differential-division models.
+  const variableBlocks = buildVariableJS(model);
 
   const behaviourCode = [
     `(function(${params}) {`,
     ...scratchDecls,
+    ...variableBlocks.preLoop,
     ...preLoopValueLines,
     '  let _rs = _rngState[0] || 0x12345678;',
     '  for (let idx = 0; idx < highWater; idx++) {',
     '    if (!_alive[idx]) continue;',
+    ...variableBlocks.inLoopReset,
     // behaviourStep value-out preamble — the agent's own geometry/identity.
     `    const _v${bsId}_myX = _agentX[idx];`,
     `    const _v${bsId}_myY = _agentY[idx];`,
@@ -2134,9 +2147,12 @@ export function compileAgentGraph(
     );
     const divScratch = dv.scratchNodes.map(s => buildScratchDecl(s, model));
     const dId = divNode.id;
+    const divVars = buildVariableJS(model);
     divisionCode = [
       `(function(${buildDivisionParams(model)}) {`,
       ...divScratch,
+      ...divVars.preLoop,
+      ...divVars.inLoopReset.map(l => l.trimStart()).map(l => '  ' + l),
       // value-out preamble — alias the positional params to the node's port vars.
       `  const _v${dId}_daughterIndex = __daughterIndex;`,
       `  const _v${dId}_axisDefaultX = __axisDefaultX;`,
