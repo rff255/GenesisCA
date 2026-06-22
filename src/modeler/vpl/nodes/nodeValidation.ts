@@ -469,10 +469,40 @@ export function detectCapabilityRequirements(
   return issues;
 }
 
+/** Bond-Graph Agents: node types that are LATTICE-only (no meaning in an agent
+ *  rule graph) — the cell event roots, the neighbour / neighbour-index family,
+ *  neighbourhood writes, and Get Cell Position (agents use Get Self Position).
+ *  Hidden on the Agents sub-tab. Kept as a set (rather than a per-node
+ *  `requirements.lattice` flag on ~20 files) so the lattice/agent boundary lives
+ *  in one place; the `requirements.lattice` flag still works for any future
+ *  per-node case. Nodes NOT here and NOT `bondGraph` are universal (arithmetic,
+ *  Get/Set Attribute over the shared attributes via D-IDX, conditionals, Get
+ *  Random, Set Cell Looks, …) — available in BOTH graphs. */
+export const LATTICE_ONLY_TYPES = new Set<string>([
+  // cell event roots (the agent graph is rooted at behaviourStep)
+  'step', 'initEvent', 'inputColor', 'outputMapping',
+  // neighbour + neighbour-index access (agents have no lattice neighbourhood)
+  'getNeighborsAttribute', 'getNeighborAttributeByIndex', 'getNeighborAttributeByTag',
+  'getNeighborIndexesByTags', 'getNeighborsAttrByIndexes', 'getAllNeighborIndexes',
+  'neighborIndexFromOffset', 'neighborIndexFromTag', 'flipNeighborIndex',
+  'breakDownNeighborIndex', 'pickRandomNeighbor', 'pickNRandomNeighbors',
+  'filterNeighbors', 'joinNeighbors',
+  // neighbourhood writes
+  'setNeighborhoodAttribute', 'setNeighborAttributeByIndex', 'markCellUpdated',
+  // cell position (agents use Get Self Position)
+  'getCellPosition',
+]);
+
 /** True when a node type can be added to / kept in the current model. Used to
  *  hide unavailable nodes from the palette and Add-Node menu. Mirrors
  *  `detectCapabilityRequirements(...).length === 0`. */
 export function isNodeAvailable(def: NodeTypeDef, model: CAModel): boolean {
+  // Bond-Graph Agents: hide lattice-only nodes on the Agents sub-tab (checked
+  // FIRST, before the no-requirements early return, since these nodes carry no
+  // `requirements` object). The active-graph kind is a module global (default
+  // `'cells'`), so a single-graph model is unaffected.
+  const kind = getActiveGraphKind();
+  if (kind === 'agents' && LATTICE_ONLY_TYPES.has(def.type)) return false;
   if (!def.requirements) return true;
   if (def.requirements.async && model.properties.updateMode !== 'asynchronous') return false;
   if (def.requirements.variegated && !model.variegatedCells?.enabled) return false;
@@ -480,9 +510,7 @@ export function isNodeAvailable(def: NodeTypeDef, model: CAModel): boolean {
   // Bond-Graph Agents: gate by BOTH the model topology AND the active sub-tab.
   // An agent node needs the Agents topology enabled and is only offered while
   // the user edits the Agents graph; a lattice node is hidden on the Agents
-  // graph. The active-graph kind is a module global (default `'cells'`), so a
-  // single-graph model is unaffected.
-  const kind = getActiveGraphKind();
+  // graph.
   if (def.requirements.bondGraph) {
     if (!model.topologyMode?.agents) return false;
     if (kind === 'cells') return false;

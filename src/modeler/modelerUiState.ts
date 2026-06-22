@@ -16,10 +16,16 @@ export const modelerUiState: {
   lastLeftPanel: PanelId;
   lastRightPanel: RightPanelId;
   selectedByPanel: Partial<Record<PanelId, string | null>>;
+  /** Bond-Graph Agents: which rule graph the editor is showing (Cells vs the
+   *  Agents graph). Persists across a Modeler↔Simulator round-trip (GraphEditor
+   *  unmounts and reseeds from here). Macro navigation does NOT reset it (entering
+   *  a macro from the Agents graph returns to the Agents graph). */
+  activeGraph: 'cells' | 'agents';
 } = {
   activePanel: 'properties',
   activeRightPanel: null,
   lastLeftPanel: 'properties',
   lastRightPanel: 'palette',
   selectedByPanel: {},
+  activeGraph: 'cells',
 };

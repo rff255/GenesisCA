@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { useModel } from '../../model/ModelContext';
 import { useDetailSelection, type PanelContentProps } from '../ModelerDetailContext';
 import type { Attribute, AttributeType, CAModel, LookupKeySource } from '../../model/types';
@@ -9,7 +9,7 @@ import { NeighborIndexDefaultEditor } from './NeighborIndexDefaultEditor';
 import { VariablesPanelSection } from './VariablesPanelSection';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
-import { setCurrentModelElementDrag } from '../vpl/graphState';
+import { setCurrentModelElementDrag, subscribeActiveGraphKind, getActiveGraphKind } from '../vpl/graphState';
 import { typeDisplayName } from '../../model/typeLabels';
 import { NumberField, InlineNumberInput } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
@@ -88,6 +88,11 @@ function handleRowDragEnd() {
 
 export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}) {
   const { model, addAttribute, removeAttribute, updateAttribute, reorderAttributes } = useModel();
+  // Bond-Graph Agents: the same cell attributes double as per-agent attributes
+  // (Decision D-IDX). On the Agents sub-tab the section header reads "Agent
+  // Attributes" — UI-only, the ids are unchanged. (Re-renders on sub-tab swap.)
+  const activeGraphKind = useSyncExternalStore(subscribeActiveGraphKind, getActiveGraphKind);
+  const cellAttrLabel = (activeGraphKind === 'agents' && model.topologyMode?.agents) ? 'Agent Attributes' : 'Cell Attributes';
   // 3D Grid CA: neighborIndex attribute values pack 3 axes in a 3D model.
   const is3dModel = model.properties.dimension === '3d' && (model.properties.gridDepth ?? 1) > 1;
   // One discriminated selection slot for this panel: `attr:<id>` or `var:<id>`.
@@ -140,7 +145,7 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
     <>
       {mode !== 'detail' && (<>
       <div className={styles.section}>
-        <div className={styles.sectionTitle}>Cell Attributes</div>
+        <div className={styles.sectionTitle}>{cellAttrLabel}</div>
         <div className={styles.list} data-reorder-list>
           {cellAttrs.map((attr, i) => {
             const isDragging = cellReorder.dragState?.id === attr.id;

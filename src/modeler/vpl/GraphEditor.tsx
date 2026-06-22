@@ -57,8 +57,14 @@ const nodeTypes: NodeTypes = {
 // ---------------------------------------------------------------------------
 
 let clipboard: { nodes: GraphNode[]; edges: GraphEdge[] } | null = null;
+// Bond-Graph Agents: the graph kind the clipboard was copied FROM, so a paste
+// into the other graph kind (a lattice node into the Agents graph, or vice
+// versa) is rejected — the node sets are disjoint and would carry a validation
+// badge / fail to compile.
+let clipboardGraphKind: 'cells' | 'agents' = 'cells';
 
-import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag, setQuickAddApi } from './graphState';
+import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag, setQuickAddApi, setActiveGraphKind, type ActiveGraphKind } from './graphState';
+import { modelerUiState } from '../modelerUiState';
 import type { QuickAddPayload } from './graphState';
 import { detectEdgeHazard, isNodeAvailable } from './nodes/nodeValidation';
 import { pushSnapshot, undo, redo, pushToRedo, pushToUndo, clearHistory } from './graphHistory';
@@ -503,9 +509,30 @@ interface ContextMenuState {
 // ---------------------------------------------------------------------------
 
 export function GraphEditorInner() {
-  const { model, modelVersion, setGraph, addMacro, importMacro, updateMacro, removeMacro } = useModel();
-  const [nodes, setNodes, onNodesChange] = useNodesState(toRFNodes(model.graphNodes));
-  const [edges, setEdges, onEdgesChange] = useEdgesState(toRFEdges(model.graphEdges));
+  const { model, modelVersion, setGraph, setAgentGraph, addMacro, importMacro, updateMacro, removeMacro } = useModel();
+  // Bond-Graph Agents: which rule graph is shown (Cells vs Agents). Seeded from
+  // the persisted snapshot (GraphEditor unmounts on a Simulator round-trip), and
+  // clamped to 'cells' if the Agents topology is off. The graph-swap effect +
+  // scheduleSync fork on this; the sub-tab strip sets it. The graphState global
+  // mirror drives the palette / quick-add gating + the 'Agent Attributes' label.
+  const agentsTopo = !!model.topologyMode?.agents;
+  const [activeGraph, setActiveGraphState] = useState<ActiveGraphKind>(() =>
+    (agentsTopo && modelerUiState.activeGraph === 'agents') ? 'agents' : 'cells');
+  // Keep the module global + the persisted snapshot in lockstep with local state
+  // (the palette + Attributes panel read the global without prop-drilling).
+  useEffect(() => {
+    setActiveGraphKind(activeGraph);
+    modelerUiState.activeGraph = activeGraph;
+  }, [activeGraph]);
+  // scheduleSync / flushSync read the active graph via a ref so a root-scope
+  // edit routes to SET_GRAPH (cells) vs SET_AGENT_GRAPH (agents) at fire time.
+  const activeGraphRef = useRef(activeGraph);
+  useEffect(() => { activeGraphRef.current = activeGraph; }, [activeGraph]);
+  const initialGraph = (activeGraph === 'agents')
+    ? { nodes: model.agentGraphNodes ?? [], edges: model.agentGraphEdges ?? [] }
+    : { nodes: model.graphNodes, edges: model.graphEdges };
+  const [nodes, setNodes, onNodesChange] = useNodesState(toRFNodes(initialGraph.nodes));
+  const [edges, setEdges, onEdgesChange] = useEdgesState(toRFEdges(initialGraph.edges));
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   // Pending bulk-delete waiting for user confirmation. We close the context
   // menu first (UX), then surface a custom ConfirmDialog instead of blocking
@@ -728,12 +755,39 @@ export function GraphEditorInner() {
       const gn = toGraphNodes(nodesRef.current);
       const ge = toGraphEdges(edgesRef.current);
       if (!scopeId || scopeId === 'root') {
-        setGraph(gn, ge);
+        // Root scope writes back to the ACTIVE graph (Cells vs Agents); macro
+        // scopes write to the shared macroDef regardless of which graph is active.
+        if (activeGraphRef.current === 'agents') setAgentGraph(gn, ge);
+        else setGraph(gn, ge);
       } else {
         updateMacro(scopeId, { nodes: gn, edges: ge });
       }
     }, 100);
-  }, [setGraph, updateMacro]);
+  }, [setGraph, setAgentGraph, updateMacro]);
+
+  // Bond-Graph Agents: flush any pending debounced write-back SYNCHRONOUSLY,
+  // routed to the CURRENT active graph. Called before swapping the Cells/Agents
+  // sub-tab so the edits in flight land in the graph they were made in (without
+  // this, the 100 ms-later scheduleSync would read the editor AFTER the swap
+  // already loaded the OTHER graph's nodes, corrupting both).
+  const flushSync = useCallback(() => {
+    if (syncTimer.current) { clearTimeout(syncTimer.current); syncTimer.current = null; }
+    const scopeId = currentScopeRef.current[currentScopeRef.current.length - 1];
+    if (!scopeId || scopeId === 'root') {
+      const gn = toGraphNodes(nodesRef.current);
+      const ge = toGraphEdges(edgesRef.current);
+      if (activeGraphRef.current === 'agents') setAgentGraph(gn, ge);
+      else setGraph(gn, ge);
+    }
+    // Macro scope: the shared macroDef is already debounce-written; no need to
+    // flush on a graph swap (the swap stays within the macro until popped).
+  }, [setGraph, setAgentGraph]);
+
+  const setActiveGraph = useCallback((g: ActiveGraphKind) => {
+    if (g === activeGraphRef.current) return;
+    flushSync();             // persist the current graph's edits BEFORE swapping
+    setActiveGraphState(g);
+  }, [flushSync]);
 
   useEffect(() => {
     return () => { if (syncTimer.current) clearTimeout(syncTimer.current); };
@@ -1057,12 +1111,19 @@ export function GraphEditorInner() {
     };
   }, [setNodes, rfStore]);
 
-  // Switch displayed graph when scope changes
+  // Switch displayed graph when scope OR the active graph (Cells/Agents) changes.
+  // Routing `activeGraph` through THIS effect (not a separate one) gives the
+  // clearHistory()-on-swap guard for free — Ctrl+Z after an Agents→Cells switch
+  // can't apply an agent-graph snapshot onto the cells graph (Decision R2).
   useEffect(() => {
     const scopeId = currentScope[currentScope.length - 1] ?? 'root';
     if (!scopeId || scopeId === 'root') {
-      setNodes(toRFNodes(model.graphNodes));
-      setEdges(toRFEdges(model.graphEdges));
+      // Root scope shows the ACTIVE graph (Cells vs the Agents graph).
+      const [nds, eds] = activeGraph === 'agents'
+        ? [model.agentGraphNodes ?? [], model.agentGraphEdges ?? []]
+        : [model.graphNodes, model.graphEdges];
+      setNodes(toRFNodes(nds));
+      setEdges(toRFEdges(eds));
     } else {
       const macroDef = (model.macroDefs || []).find(m => m.id === scopeId);
       if (macroDef) {
@@ -1083,7 +1144,14 @@ export function GraphEditorInner() {
       else rfInstance.current?.fitView();
     }, 50);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentScope, modelVersion]);
+  }, [currentScope, modelVersion, activeGraph]);
+
+  // Bond-Graph Agents: if the Agents topology is turned off while the Agents
+  // sub-tab is active, auto-switch back to the Cells graph (the pill elides; a
+  // hidden graph would strand the user). Mirrors the variegated V-tab auto-switch.
+  useEffect(() => {
+    if (activeGraph === 'agents' && !model.topologyMode?.agents) setActiveGraph('cells');
+  }, [activeGraph, model.topologyMode?.agents, setActiveGraph]);
 
   // Capture-phase mousedown on the viewport: snapshot the current multi-node
   // selection BEFORE React Flow's internal handlers run, so onNodeContextMenu
@@ -2474,10 +2542,15 @@ export function GraphEditorInner() {
       edges.filter(e => selectedIds.has(e.source) && selectedIds.has(e.target)),
     );
     clipboard = { nodes: copyNodes, edges: copyEdges };
+    clipboardGraphKind = activeGraphRef.current;
   }, [nodes, edges]);
 
   const handlePaste = useCallback(() => {
     if (!clipboard || clipboard.nodes.length === 0) return;
+    // Bond-Graph Agents: reject a cross-graph paste — the lattice + agent node
+    // sets are disjoint, so a lattice node pasted into the Agents graph (or vice
+    // versa) would carry a validation badge and fail to compile.
+    if (clipboardGraphKind !== activeGraphRef.current) return;
     // Singleton: filter out Step / Init Event nodes if one already exists in the graph
     const hasStepInGraph = nodesRef.current.some(
       n => (n.data as Record<string, unknown>)?.nodeType === 'step',
@@ -3682,6 +3755,34 @@ export function GraphEditorInner() {
         style={{ display: 'none' }}
         onChange={handleMacroFileSelected}
       />
+      {/* Bond-Graph Agents — Cells / Agents sub-tab strip. Only when the Agents
+          topology is on; pills shown only for CHECKED topologies. Switching at
+          root scope swaps the edited graph; inside a macro it pops to root first
+          (the macro is shared, but the swap targets the root graph). */}
+      {agentsTopo && currentScope.length <= 1 && (
+        <div className={styles.graphTabs}>
+          {model.topologyMode?.gridCells && (
+            <button
+              className={`${styles.graphTab} ${activeGraph === 'cells' ? styles.graphTabActive : ''}`}
+              onClick={() => setActiveGraph('cells')}
+              title="The lattice cellular automaton (the field)"
+            >
+              <span className={styles.graphTabDot} style={{ background: '#4cc9f0' }} />
+              Cells
+            </button>
+          )}
+          {model.topologyMode?.agents && (
+            <button
+              className={`${styles.graphTab} ${activeGraph === 'agents' ? styles.graphTabActive : ''}`}
+              onClick={() => setActiveGraph('agents')}
+              title="The off-lattice agent behaviour rule (Bond-Graph Agents)"
+            >
+              <span className={styles.graphTabDot} style={{ background: '#7e57c2' }} />
+              Agents
+            </button>
+          )}
+        </div>
+      )}
       {currentScope.length > 1 && (
         <div className={styles.breadcrumb}>
           {currentScope.map((scopeId, i) => {

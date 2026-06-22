@@ -71,20 +71,24 @@ function patchNodes(
   return changed ? result : nodes;
 }
 
-/** Apply patchNodes to both graphNodes and all macroDef subgraphs */
+/** Apply patchNodes to the Cells graph, the Agents graph, AND all macroDef
+ *  subgraphs. Bond-Graph Agents: scanning `agentGraphNodes` too is what keeps a
+ *  deleted attribute / neighbourhood / mapping from stranding a `_undef` config
+ *  in the agent graph (the same cascade bug class the cells graph has). */
 function patchAllNodes(
   model: CAModel,
   pred: (cfg: Record<string, string | number | boolean>, nodeType: string) => boolean,
   patch: (cfg: Record<string, string | number | boolean>, nodeType: string) => Record<string, string | number | boolean>,
-): { graphNodes: GraphNode[]; macroDefs: MacroDef[] } {
+): { graphNodes: GraphNode[]; agentGraphNodes: GraphNode[]; macroDefs: MacroDef[] } {
   const graphNodes = patchNodes(model.graphNodes, pred, patch);
+  const agentGraphNodes = patchNodes(model.agentGraphNodes ?? [], pred, patch);
   let macrosChanged = false;
   const macroDefs = (model.macroDefs || []).map(m => {
     const patched = patchNodes(m.nodes, pred, patch);
     if (patched !== m.nodes) { macrosChanged = true; return { ...m, nodes: patched }; }
     return m;
   });
-  return { graphNodes, macroDefs: macrosChanged ? macroDefs : (model.macroDefs || []) };
+  return { graphNodes, agentGraphNodes, macroDefs: macrosChanged ? macroDefs : (model.macroDefs || []) };
 }
 
 /** Clear a config field to '' if it matches a deleted ID */
@@ -288,14 +292,14 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // Clear stale attributeId and tagAttributeId references in node configs
       const a1 = clearDeletedId(modelAfterFilter, 'attributeId', action.id);
       const a2 = patchAllNodes(
-        { ...modelAfterFilter, graphNodes: a1.graphNodes, macroDefs: a1.macroDefs },
+        { ...modelAfterFilter, graphNodes: a1.graphNodes, agentGraphNodes: a1.agentGraphNodes, macroDefs: a1.macroDefs },
         cfg => cfg.tagAttributeId === action.id,
         cfg => { cfg.tagAttributeId = ''; return cfg; },
       );
       return {
         ...state,
         isDirty: true,
-        model: { ...modelAfterFilter, graphNodes: a2.graphNodes, macroDefs: a2.macroDefs },
+        model: { ...modelAfterFilter, graphNodes: a2.graphNodes, agentGraphNodes: a2.agentGraphNodes, macroDefs: a2.macroDefs },
       };
     }
 
@@ -444,7 +448,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         );
         return {
           ...state, isDirty: true,
-          model: { ...remappedModel, graphNodes: patched.graphNodes, macroDefs: patched.macroDefs },
+          model: { ...remappedModel, graphNodes: patched.graphNodes, agentGraphNodes: patched.agentGraphNodes, macroDefs: patched.macroDefs },
         };
       }
 
@@ -550,7 +554,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       const nbrPatch = clearDeletedId(mAfterNbr, 'neighborhoodId', action.id);
       return {
         ...state, isDirty: true,
-        model: { ...mAfterNbr, graphNodes: nbrPatch.graphNodes, macroDefs: nbrPatch.macroDefs },
+        model: { ...mAfterNbr, graphNodes: nbrPatch.graphNodes, agentGraphNodes: nbrPatch.agentGraphNodes, macroDefs: nbrPatch.macroDefs },
       };
     }
 
@@ -594,7 +598,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       const mapPatch = clearDeletedId(mAfterMap, 'mappingId', action.id);
       return {
         ...state, isDirty: true,
-        model: { ...mAfterMap, graphNodes: mapPatch.graphNodes, macroDefs: mapPatch.macroDefs },
+        model: { ...mAfterMap, graphNodes: mapPatch.graphNodes, agentGraphNodes: mapPatch.agentGraphNodes, macroDefs: mapPatch.macroDefs },
       };
     }
 
@@ -705,7 +709,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       const indPatch = clearDeletedId(mAfterInd, 'indicatorId', action.id);
       return {
         ...state, isDirty: true,
-        model: { ...mAfterInd, graphNodes: indPatch.graphNodes, macroDefs: indPatch.macroDefs },
+        model: { ...mAfterInd, graphNodes: indPatch.graphNodes, agentGraphNodes: indPatch.agentGraphNodes, macroDefs: indPatch.macroDefs },
       };
     }
 
@@ -913,7 +917,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       const patch = clearDeletedId(mAfter, 'variableId', action.id);
       return {
         ...state, isDirty: true,
-        model: { ...mAfter, graphNodes: patch.graphNodes, macroDefs: patch.macroDefs },
+        model: { ...mAfter, graphNodes: patch.graphNodes, agentGraphNodes: patch.agentGraphNodes, macroDefs: patch.macroDefs },
       };
     }
 

@@ -183,6 +183,60 @@
   background: transparent;
 }
 
+/* Bond-Graph Agents — Cells / Agents sub-tab strip (top-centre of the graph
+   area, a sibling of the macro breadcrumb). Only shown when the Agents topology
+   is enabled, so a single-graph model is visually unchanged. */
+.graphTabs {
+  position: absolute;
+  top: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.graphTab {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--color-text-muted);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  cursor: pointer;
+  padding: var(--space-1) var(--space-4);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.graphTab:hover {
+  color: var(--color-text-primary);
+  background: var(--color-hover-bg);
+}
+
+.graphTabActive {
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent);
+  cursor: default;
+}
+
+.graphTabActive:hover {
+  background: var(--color-accent-soft);
+}
+
+.graphTabDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
 /* Override React Flow dark theme */
 
 :global(.react-flow) {
