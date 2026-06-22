@@ -4,7 +4,7 @@ This document catalogues every node in the GenesisCA Visual Programming Language
 describes the port type system, and flags redundancies or gaps. It is a working reference
 to inform future consolidation — it does **not** describe any committed refactoring.
 
-**Scope:** 85 node types across 7 categories (event, flow, data, logic, aggregation,
+**Scope:** 93 node types across 7 categories (event, flow, data, logic, aggregation,
 output, color), plus 2 hidden boundary nodes (`macroInput` / `macroOutput`). Indicator
 nodes live within the `data` (readers) and `output` (writers) categories rather than a
 category of their own. The variegated-cells, local-variable, and Bond-Graph-Agent nodes
@@ -253,6 +253,14 @@ exists purely to keep graphs readable without Sequence nodes. See
 | 83 | `killAgent` | Kill Agent | `output` | Request that this agent die — the slot is recycled, ALL its bonds (both directions) are broken, and its slot epoch is bumped (the dangling-bond ABI). | `I: DO` (flow) / `O: NEXT` (flow) | Applied post-step. For apoptosis / necrosis. NOT async-only |
 | 84 | `affectCellsUnder` | Affect Cells Under | `output` | Write a **cell attribute (the field)** over a radius of cells under the agent (set / add / subtract / max / min). The agent analogue of a brush stamp; the closed-feedback **deposit**. | `I: DO` `I: Value` (float, inline) `I: Radius` (float, inline) / `O: NEXT` (flow) | Requires `attributeId` + `op`. Writes the cell **read** buffer `_field_<attr>` BEFORE the cell step (so the grid rule incorporates it). Many agents → one cell resolved by the sequential agent loop applying each op in order |
 | 85 | `secreteToField` | Secrete To Field | `output` | Deposit a `rate` into a cell attribute at the agent's continuous position via a bilinear 4-cell splat (negative rate = consume). The smooth sub-cell sibling of Affect Cells Under. | `I: DO` `I: Rate` (float, inline) / `O: NEXT` (flow) | Requires `attributeId`. Writes the cell read buffer in the deposit phase; the splat accumulates (many agents → one cell sums) |
+| 86 | `getNearbyAgents` | Get Nearby Agents | `data` | The list of OTHER agents within a radius — the agent analogue of Get All Neighbor Indexes. Iterate with For Each In Array, then read/bond/steer. Queried against the per-step uniform spatial hash (O(N)). | `I: Radius` (float, inline) / `O: Agents` (int **array**) | Per-agent (never hoisted). Query radius ≤ the model's Neighbour Query Radius so the hash bins cover it |
+| 87 | `getAgentPosition` | Get Agent Position | `data` | A specific agent's `(X, Y)` by id — feed a neighbour id from Get Nearby Agents / For Each Bond for relative vectors (cohesion/separation). | `I: Agent` (int) / `O: X` `O: Y` (float) | Multi-output |
+| 88 | `getAgentAttribute` | Get Agent Attribute | `data` | Read a specific agent's attribute by id (the agent analogue of Get Neighbor Attribute By Index) — differential adhesion, contact inhibition, signalling. | `I: Agent` (int) / `O: Value` (any) | Requires `attributeId`. CSE-impure (a neighbour write can mutate it) |
+| 89 | `getAgentRadius` | Get Agent Radius | `data` | A specific agent's radius by id — for size-aware neighbour interactions. | `I: Agent` (int) / `O: Radius` (float) | — |
+| 90 | `getVelocity` | Get Velocity | `data` | An agent's velocity `(Vx, Vy)` — self if the Agent input is empty, else a neighbour's (average them for boids alignment). Meaningful when momentum > 0. | `I: Agent` (int, optional) / `O: Vx` `O: Vy` (float) | Multi-output |
+| 91 | `getCurvature` | Get Curvature | `data` | Local membrane curvature of a bonded agent: the magnitude of the mean unit-vector to its bonded partners, in [0, 1] (~0 = flat/interior, →1 = convex edge/tip; 0 for < 2 bonds). | `O: Curvature` (float) | Drives curvature-dependent behaviour (edge cells differentiating differently, tip growth) |
+| 92 | `applyForce` | Apply Force | `output` | Add a force vector to the agent this step — the GRAPH authors the physics. The engine integrates the sum of all Apply Force contributions plus its soft-sphere + bond springs (unless Custom forces only). Build flocking, chemotaxis, propulsion. | `I: DO` `I: Force X` `I: Force Y` (float, inline) / `O: NEXT` (flow) | With momentum > 0 it changes velocity (inertia); with 0 it directly displaces (overdamped). NOT async-only |
+| 93 | `setAgentAttribute` | Set Agent Attribute | `output` | Write an attribute on ANOTHER agent by id (the agent analogue of Set Neighbor Attribute By Index) — signal a neighbour. | `I: DO` `I: Agent` (int) `I: Value` (float, inline) / `O: NEXT` (flow) | Requires `attributeId`. Immediate single-buffer (async-style) write — use commutative patterns when order matters; id range-guarded |
 
 ### Hidden / auto-generated
 
