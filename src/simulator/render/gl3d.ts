@@ -120,6 +120,22 @@ export interface ClipPlane3D { enabled: boolean; axis: 'x' | 'y' | 'z' | 'camera
 /** Toggleable scene overlays. */
 export interface Viz3D { axes: boolean; grid: boolean; bounds: boolean; gizmo: boolean; }
 
+/** Bond-Graph Agents — the subset of the per-`stepped` render snapshot the 3D
+ *  renderer needs. Positions are in continuous WORLD (cell) coordinates. `z` is a
+ *  length-0 placeholder in 2D-agent models (RR-0 — the renderer reads `z[i] ?? 0`
+ *  so it ships against the 2D engine), so it's typed as a maybe-empty array. */
+export interface AgentSnapshot3D {
+  highWater: number;
+  x: Float64Array;
+  y: Float64Array;
+  z: Float64Array;
+  radius: Float64Array;
+  alive: Uint8Array;
+  colors: Uint8ClampedArray;
+  /** Flat [a, b, a, b, …] live bond index pairs (empty when no bonds). */
+  bonds: Int32Array;
+}
+
 const WORLD_UP: [number, number, number] = [0, 0, 1];
 
 /** Camera basis (forward/right/up) from yaw/pitch in the Z-up convention. */
@@ -266,6 +282,128 @@ precision highp float;
 in vec3 vCol; out vec4 o;
 void main(){ o = vec4(vCol, 1.0); }`;
 
+// ---------------------------------------------------------------------------
+// Bond-Graph Agents — sphere impostors (PR5). Agents have CONTINUOUS world
+// positions + a per-agent radius, so they can't reuse the cube-instance path
+// (which decodes x/y/z from a flat CELL index). Each agent is a camera-facing
+// billboard quad (2 triangles, 4 verts) ray-cast in the fragment shader into a
+// sphere: the FS discards outside the unit disc, derives the analytic sphere
+// normal for a Lambert shade, and WRITES gl_FragDepth so the impostors
+// depth-interleave with the voxel cubes + each other. Per-instance buffer is
+// [x, y, z, radius, r, g, b, a] × 8 floats (stride 32). The world centre uses
+// the SAME Z-up remap as the cube path: vec3(ax-uHalf.x, uHalf.y-ay, uHalf.z-az).
+// ---------------------------------------------------------------------------
+const SPHERE_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 aCorner;      // unit quad corner in [-1,1]
+layout(location=1) in vec3 aPos;         // agent world position (col,row,layer space)
+layout(location=2) in float aRadius;     // agent radius (cell units)
+layout(location=3) in vec4 aColor;       // rgba 0..1
+uniform mat4 uMVP;
+uniform vec3 uHalf;                       // half-extents (W-1)/2 etc.
+uniform vec3 uCamRight;                   // camera right (world)
+uniform vec3 uCamUp;                      // camera up (world)
+out vec3 vCentre;                         // sphere centre (world, for the FS raycast)
+out float vRadius;
+out vec2 vUV;                             // quad-local coord in [-1,1]
+out vec4 vColor;
+void main() {
+  // Z-up remap: a sphere at agent (ax,ay,az) sits in the voxel cube at cell
+  // (layer=az,row=ay,col=ax) — col→+X, row→-Y, layer→-Z.
+  vec3 centre = vec3(aPos.x - uHalf.x, uHalf.y - aPos.y, uHalf.z - aPos.z);
+  vCentre = centre;
+  vRadius = aRadius;
+  vUV = aCorner;
+  vColor = aColor;
+  // Billboard: expand the quad in the camera plane by the radius.
+  vec3 world = centre + (uCamRight * aCorner.x + uCamUp * aCorner.y) * aRadius;
+  gl_Position = uMVP * vec4(world, 1.0);
+}`;
+const SPHERE_FS = `#version 300 es
+precision highp float;
+in vec3 vCentre;
+in float vRadius;
+in vec2 vUV;
+in vec4 vColor;
+uniform mat4 uMVP;
+uniform vec3 uCamForward;                 // camera forward (world; -dir)
+uniform vec3 uCamRight;
+uniform vec3 uCamUp;
+uniform int uClipEnabled;
+uniform int uClipAxis;
+uniform float uClipValue;
+uniform vec3 uClipForward;
+out vec4 outColor;
+void main() {
+  float r2 = dot(vUV, vUV);
+  if (r2 > 1.0) { discard; }              // outside the unit disc → not on the sphere
+  float zc = sqrt(1.0 - r2);              // height above the billboard plane (unit)
+  // Analytic surface normal + the surface world point (centre + radius·n).
+  vec3 n = normalize(uCamRight * vUV.x + uCamUp * vUV.y - uCamForward * zc);
+  vec3 surf = vCentre + n * vRadius;
+  // Clip the surface point with the SAME test the voxel FS uses.
+  if (uClipEnabled == 1) {
+    float w = uClipAxis == 0 ? surf.x : uClipAxis == 1 ? surf.y : uClipAxis == 2 ? surf.z : dot(surf, uClipForward);
+    if (w > uClipValue) { discard; }
+  }
+  // Re-project the surface point so the impostor depth-interleaves with cubes.
+  vec4 clip = uMVP * vec4(surf, 1.0);
+  gl_FragDepth = (clip.z / clip.w) * 0.5 + 0.5;
+  vec3 L = normalize(vec3(0.4, 0.8, 0.6));
+  float lum = 0.45 + 0.55 * max(0.0, dot(n, L));
+  outColor = vec4(vColor.rgb * lum, vColor.a);
+}`;
+// Agent pick pass: encode gl_InstanceID+1 into RGB (the COMPACTED instance index,
+// NOT the slot id — SimulatorView maps it back via instanceToSlot). Raycast disc
+// + gl_FragDepth so the nearest agent wins, mirroring the colour shade above.
+const SPHERE_PICK_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 aCorner;
+layout(location=1) in vec3 aPos;
+layout(location=2) in float aRadius;
+uniform mat4 uMVP;
+uniform vec3 uHalf;
+uniform vec3 uCamRight;
+uniform vec3 uCamUp;
+out vec3 vCentre;
+out float vRadius;
+out vec2 vUV;
+flat out float vPickId;
+void main() {
+  vec3 centre = vec3(aPos.x - uHalf.x, uHalf.y - aPos.y, uHalf.z - aPos.z);
+  vCentre = centre;
+  vRadius = aRadius;
+  vUV = aCorner;
+  vPickId = float(gl_InstanceID + 1);
+  vec3 world = centre + (uCamRight * aCorner.x + uCamUp * aCorner.y) * aRadius;
+  gl_Position = uMVP * vec4(world, 1.0);
+}`;
+const SPHERE_PICK_FS = `#version 300 es
+precision highp float;
+in vec3 vCentre;
+in float vRadius;
+in vec2 vUV;
+flat in float vPickId;
+uniform mat4 uMVP;
+uniform vec3 uCamForward;
+uniform vec3 uCamRight;
+uniform vec3 uCamUp;
+out vec4 outColor;
+void main() {
+  float r2 = dot(vUV, vUV);
+  if (r2 > 1.0) { discard; }
+  float zc = sqrt(1.0 - r2);
+  vec3 n = normalize(uCamRight * vUV.x + uCamUp * vUV.y - uCamForward * zc);
+  vec3 surf = vCentre + n * vRadius;
+  vec4 clip = uMVP * vec4(surf, 1.0);
+  gl_FragDepth = (clip.z / clip.w) * 0.5 + 0.5;
+  float idx = vPickId;
+  float r = mod(idx, 256.0);
+  float g = mod(floor(idx / 256.0), 256.0);
+  float b = mod(floor(idx / 65536.0), 256.0);
+  outColor = vec4(r / 255.0, g / 255.0, b / 255.0, 1.0);
+}`;
+
 function compileProgram(gl: WebGL2RenderingContext, vsSrc: string, fsSrc: string): WebGLProgram {
   const vs = gl.createShader(gl.VERTEX_SHADER)!;
   gl.shaderSource(vs, vsSrc); gl.compileShader(vs);
@@ -295,6 +433,10 @@ export class Gl3DRenderer {
   private mvp: Mat4 = mat4Identity();
   private camForward: [number, number, number] = [0, 0, -1];
   private camDir: [number, number, number] = [0, 0, 1];  // target → eye (for the gizmo)
+  // Camera right/up basis (world), stashed each setCamera so the sphere
+  // billboards face the camera (a stale basis points the impostors wrong).
+  private camRight: [number, number, number] = [1, 0, 0];
+  private camUp: [number, number, number] = [0, 1, 0];
   private viz: Viz3D = { axes: false, grid: false, bounds: false, gizmo: true };
   /** Brush interaction plane (bounds + grid indicator). null = not shown. */
   private brushPlane: { axis: 'x' | 'y' | 'z'; pos: number } | null = null;
@@ -316,6 +458,22 @@ export class Gl3DRenderer {
   private pickW = 0; private pickH = 0;
   /** Public for SimulatorView verification / DEV hooks. */
   instanceCount = 0;
+  // --- Bond-Graph Agents (PR5): sphere-impostor + bond-line pipelines. ---
+  private sphereProg: WebGLProgram;
+  private spherePickProg: WebGLProgram;
+  private sphereVao: WebGLVertexArrayObject;
+  private quadBuf: WebGLBuffer;          // static unit-quad corners (4 verts)
+  private agentInstBuf: WebGLBuffer;     // [x,y,z,radius,r,g,b,a] × 8 floats / agent
+  private agentInstCapacity = 0;         // floats allocated in agentInstBuf
+  private agentInstData: Float32Array = new Float32Array(0);
+  private agentAlphaBlend = false;
+  /** Bond endpoint line list (Z-up remapped), rebuilt each uploadAgents. */
+  private bondVerts: Float32Array = new Float32Array(0);
+  /** Hovered / inspected agent ids (compacted instance indices) to ring. */
+  private hoverAgents: ReadonlyArray<{ x: number; y: number; z: number; radius: number }> = [];
+  private inspectAgents: ReadonlyArray<{ x: number; y: number; z: number; radius: number }> = [];
+  /** Visible agent count (= ALIVE agents uploaded). DEV/verification. */
+  agentInstanceCount = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', { antialias: true, alpha: true, preserveDrawingBuffer: true });
@@ -345,6 +503,22 @@ export class Gl3DRenderer {
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0);
     gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 24, 12);
     gl.bindVertexArray(null);
+    // Sphere-impostor pipeline (Bond-Graph Agents): a static unit quad (4 verts,
+    // TRIANGLE_STRIP) + the per-instance [x,y,z,radius,r,g,b,a] buffer (stride 32).
+    this.sphereProg = compileProgram(gl, SPHERE_VS, SPHERE_FS);
+    this.spherePickProg = compileProgram(gl, SPHERE_PICK_VS, SPHERE_PICK_FS);
+    this.sphereVao = gl.createVertexArray()!;
+    this.quadBuf = gl.createBuffer()!;
+    this.agentInstBuf = gl.createBuffer()!;
+    gl.bindVertexArray(this.sphereVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 8, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.agentInstBuf);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 32, 0); gl.vertexAttribDivisor(1, 1);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 32, 12); gl.vertexAttribDivisor(2, 1);
+    gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 32, 16); gl.vertexAttribDivisor(3, 1);
+    gl.bindVertexArray(null);
     gl.enable(gl.DEPTH_TEST);
     gl.clearColor(0, 0, 0, 0);
   }
@@ -366,11 +540,17 @@ export class Gl3DRenderer {
   /** Compute the view-projection matrix from the Z-up orbit camera. */
   setCamera(cam: Camera3D, aspect: number): void {
     const r = cam.dist * Math.max(this.W, this.H, this.D);
-    const { dir } = cameraBasis(cam);
+    const basis = cameraBasis(cam);
+    const dir = basis.dir;
     const t = cam.target;
     const eye: [number, number, number] = [t[0] + r * dir[0], t[1] + r * dir[1], t[2] + r * dir[2]];
     this.camForward = [-dir[0], -dir[1], -dir[2]];
     this.camDir = dir;
+    // Stash the camera right/up basis so the sphere billboards face the camera.
+    // cameraBasis already returns right/up for forward = -dir (re-derived every
+    // setCamera — orbit changes them, a stale basis points the impostors wrong).
+    this.camRight = basis.right;
+    this.camUp = basis.up;
     const proj = mat4Perspective(Math.PI / 4, aspect || 1, 0.05, r * 8 + 100);
     // Camera "roll" at the ±Depth POVs: looking down/up the Z (depth) axis makes
     // WORLD_UP (+Z) parallel to the view → lookAt degenerate. Override with a
@@ -448,6 +628,203 @@ export class Gl3DRenderer {
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, sorted);
   }
 
+  // ------------------------------------------------------------------------
+  // Bond-Graph Agents (PR5): sphere-impostor + bond-line upload / render / pick.
+  // ------------------------------------------------------------------------
+  setAgentAlphaBlend(on: boolean): void { this.agentAlphaBlend = on; }
+  /** Highlight rings for the hovered / inspected agents (world geometry).
+   *  Pass [] to clear. Drawn as wireframe rings with depth OFF (always visible). */
+  setHoverAgents(agents: ReadonlyArray<{ x: number; y: number; z: number; radius: number }>): void { this.hoverAgents = agents; }
+  setInspectAgents(agents: ReadonlyArray<{ x: number; y: number; z: number; radius: number }>): void { this.inspectAgents = agents; }
+
+  /** Compact the ALIVE agents from the render snapshot into the per-instance
+   *  buffer ([x,y,z,radius,r,g,b,a]) and (re)build the bond endpoint line list.
+   *  Walks `alive` ASCENDING — the SAME direction `pickAgent`'s instance ids
+   *  count, so `instanceToSlot` can map an instance index back to a slot. Reads
+   *  `z[i] ?? 0` (RR-0) so it ships against the 2D engine (flat layer-0 sheet). */
+  uploadAgents(snap: AgentSnapshot3D, torus: boolean): number {
+    const hw = snap.highWater;
+    const need = hw * 8;
+    if (this.agentInstData.length < need) this.agentInstData = new Float32Array(need);
+    const d = this.agentInstData;
+    const hasZ = snap.z.length > 0;
+    let n = 0;
+    for (let i = 0; i < hw; i++) {
+      if (!snap.alive[i]) continue;
+      const o = n * 8;
+      d[o] = snap.x[i]!;
+      d[o + 1] = snap.y[i]!;
+      d[o + 2] = hasZ ? snap.z[i]! : 0;
+      d[o + 3] = snap.radius[i]!;
+      const c = i * 4;
+      d[o + 4] = snap.colors[c]! / 255;
+      d[o + 5] = snap.colors[c + 1]! / 255;
+      d[o + 6] = snap.colors[c + 2]! / 255;
+      d[o + 7] = snap.colors[c + 3]! / 255;
+      n++;
+    }
+    this.agentInstanceCount = n;
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.agentInstBuf);
+    if (this.agentInstCapacity < n * 8) {
+      gl.bufferData(gl.ARRAY_BUFFER, d, gl.DYNAMIC_DRAW);
+      this.agentInstCapacity = d.length;
+    } else {
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, d.subarray(0, n * 8));
+    }
+    // Bonds: Z-up remapped endpoint pairs. Fold across the ±W/±H/±D seams when the
+    // model is a torus so a seam-crossing bond draws as a short segment (RR-G4).
+    const bonds = snap.bonds;
+    if (bonds && bonds.length > 0) {
+      const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
+      const verts = new Float32Array(bonds.length * 6);  // 2 endpoints × 6 floats / pair
+      const W = this.W, H = this.H, Dd = this.D;
+      let p = 0;
+      const col: [number, number, number] = [0.90, 0.90, 0.96];
+      for (let b = 0; b < bonds.length; b += 2) {
+        const i = bonds[b]!, j = bonds[b + 1]!;
+        const ix = snap.x[i]!, iy = snap.y[i]!, iz = hasZ ? snap.z[i]! : 0;
+        let jx = snap.x[j]!, jy = snap.y[j]!, jz = hasZ ? snap.z[j]! : 0;
+        if (torus) {
+          if (jx - ix > W / 2) jx -= W; else if (jx - ix < -W / 2) jx += W;
+          if (jy - iy > H / 2) jy -= H; else if (jy - iy < -H / 2) jy += H;
+          if (Dd > 1) { if (jz - iz > Dd / 2) jz -= Dd; else if (jz - iz < -Dd / 2) jz += Dd; }
+        }
+        verts[p++] = ix - hx; verts[p++] = hy - iy; verts[p++] = hz - iz; verts[p++] = col[0]; verts[p++] = col[1]; verts[p++] = col[2];
+        verts[p++] = jx - hx; verts[p++] = hy - jy; verts[p++] = hz - jz; verts[p++] = col[0]; verts[p++] = col[1]; verts[p++] = col[2];
+      }
+      this.bondVerts = verts;
+    } else {
+      this.bondVerts = new Float32Array(0);
+    }
+    return n;
+  }
+
+  /** Back-to-front sort of the agent instance buffer (alpha blend, Option A).
+   *  Mirrors the cube sortBackToFront but reads the world position directly. */
+  private sortAgentsBackToFront(): void {
+    const n = this.agentInstanceCount;
+    if (n < 2) return;
+    const d = this.agentInstData;
+    const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
+    const m = this.mvp;
+    const keys = new Float32Array(n);
+    for (let k = 0; k < n; k++) {
+      const o = k * 8;
+      const cx = d[o]! - hx, cy = hy - d[o + 1]!, cz = hz - d[o + 2]!;  // Z-up
+      keys[k] = m[2]! * cx + m[6]! * cy + m[10]! * cz + m[14]!;
+    }
+    const order = Array.from({ length: n }, (_, k) => k).sort((a, b) => keys[b]! - keys[a]!);
+    const sorted = new Float32Array(n * 8);
+    for (let k = 0; k < n; k++) sorted.set(d.subarray(order[k]! * 8, order[k]! * 8 + 8), k * 8);
+    d.set(sorted.subarray(0, n * 8));
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.agentInstBuf);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, sorted);
+  }
+
+  /** Sphere-shader uniforms (the camera billboard basis + half-extents + clip). */
+  private setSphereUniforms(gl: WebGL2RenderingContext, prog: WebGLProgram): void {
+    gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'uMVP'), false, this.mvp);
+    gl.uniform3f(gl.getUniformLocation(prog, 'uHalf'), (this.W - 1) / 2, (this.H - 1) / 2, (this.D - 1) / 2);
+    gl.uniform3f(gl.getUniformLocation(prog, 'uCamRight'), this.camRight[0], this.camRight[1], this.camRight[2]);
+    gl.uniform3f(gl.getUniformLocation(prog, 'uCamUp'), this.camUp[0], this.camUp[1], this.camUp[2]);
+    gl.uniform3f(gl.getUniformLocation(prog, 'uCamForward'), this.camForward[0], this.camForward[1], this.camForward[2]);
+    gl.uniform1i(gl.getUniformLocation(prog, 'uClipEnabled'), this.clip.enabled ? 1 : 0);
+    const axisN = this.clip.axis === 'x' ? 0 : this.clip.axis === 'y' ? 1 : this.clip.axis === 'z' ? 2 : 3;
+    gl.uniform1i(gl.getUniformLocation(prog, 'uClipAxis'), axisN);
+    gl.uniform1f(gl.getUniformLocation(prog, 'uClipValue'), this.clip.value);
+    gl.uniform3f(gl.getUniformLocation(prog, 'uClipForward'), this.camForward[0], this.camForward[1], this.camForward[2]);
+  }
+
+  /** Draw the bond lines (UNDER the spheres, depth-tested). */
+  private renderBonds(): void {
+    if (this.bondVerts.length === 0) return;
+    this.drawLines(this.bondVerts, this.gl.LINES, this.mvp);
+  }
+
+  /** Draw the agent sphere impostors via instanced billboards. Opaque agents
+   *  render depth-write-on; translucent agents (alpha blend) sort back-to-front
+   *  + depth-write-off (Option A — the cube path's blend rule). */
+  private renderAgents(): void {
+    if (this.agentInstanceCount === 0) return;
+    const gl = this.gl;
+    gl.useProgram(this.sphereProg);
+    gl.bindVertexArray(this.sphereVao);
+    this.setSphereUniforms(gl, this.sphereProg);
+    if (this.agentAlphaBlend) {
+      this.sortAgentsBackToFront();
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.depthMask(false);
+    } else {
+      gl.disable(gl.BLEND);
+      gl.depthMask(true);
+    }
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.agentInstanceCount);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+    gl.bindVertexArray(null);
+  }
+
+  /** Wireframe rings for hovered (amber) / inspected (white) agents, billboarded
+   *  in the camera plane, drawn with depth OFF so they read as an always-visible
+   *  cursor / highlight (mirrors renderHoverCells for voxels). */
+  private renderAgentRings(): void {
+    if (this.hoverAgents.length === 0 && this.inspectAgents.length === 0) return;
+    const gl = this.gl;
+    const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
+    const v: number[] = [];
+    const ring = (a: { x: number; y: number; z: number; radius: number }, col: [number, number, number]) => {
+      const cx = a.x - hx, cy = hy - a.y, cz = hz - a.z;       // Z-up centre
+      const rr = a.radius * 1.35 + 0.25;                       // a touch outside the sphere
+      const SEG = 24;
+      let pxw = cx + this.camRight[0] * rr, pyw = cy + this.camRight[1] * rr, pzw = cz + this.camRight[2] * rr;
+      for (let s = 1; s <= SEG; s++) {
+        const ang = (s / SEG) * Math.PI * 2;
+        const ca = Math.cos(ang) * rr, sa = Math.sin(ang) * rr;
+        const nx = cx + this.camRight[0] * ca + this.camUp[0] * sa;
+        const ny = cy + this.camRight[1] * ca + this.camUp[1] * sa;
+        const nz = cz + this.camRight[2] * ca + this.camUp[2] * sa;
+        v.push(pxw, pyw, pzw, col[0], col[1], col[2], nx, ny, nz, col[0], col[1], col[2]);
+        pxw = nx; pyw = ny; pzw = nz;
+      }
+    };
+    for (const a of this.hoverAgents) ring(a, [1.0, 0.85, 0.2]);
+    for (const a of this.inspectAgents) ring(a, [0.95, 0.97, 1.0]);
+    gl.disable(gl.DEPTH_TEST);
+    this.drawLines(new Float32Array(v), gl.LINES, this.mvp);
+    gl.enable(gl.DEPTH_TEST);
+  }
+
+  /** Colour-id pick of the nearest agent sphere under (px, py) CSS px (top-left).
+   *  Returns the COMPACTED instance index (0-based), or -1 for the background.
+   *  SimulatorView's instanceToSlot maps it back to the engine slot id. */
+  pickAgent(px: number, py: number, cssW: number, cssH: number): number {
+    if (this.agentInstanceCount === 0) return -1;
+    const gl = this.gl;
+    const w = gl.canvas.width, h = gl.canvas.height;
+    this.ensurePickFbo(w, h);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.pickFbo);
+    gl.viewport(0, 0, w, h);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.useProgram(this.spherePickProg);
+    gl.bindVertexArray(this.sphereVao);
+    this.setSphereUniforms(gl, this.spherePickProg);
+    gl.disable(gl.BLEND); gl.depthMask(true);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.agentInstanceCount);
+    gl.bindVertexArray(null);
+    const bx = Math.floor(px / cssW * w);
+    const by = Math.floor((1 - py / cssH) * h);
+    const out = new Uint8Array(4);
+    gl.readPixels(Math.max(0, Math.min(w - 1, bx)), Math.max(0, Math.min(h - 1, by)), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, out);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (out[3] === 0) return -1;
+    const id = out[0]! | (out[1]! << 8) | (out[2]! << 16);
+    return id - 1;  // shader encoded instanceID+1
+  }
+
   private setCommonUniforms(gl: WebGL2RenderingContext, prog: WebGLProgram): void {
     gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'uMVP'), false, this.mvp);
     gl.uniform1f(gl.getUniformLocation(prog, 'uW'), this.W);
@@ -494,6 +871,11 @@ export class Gl3DRenderer {
       gl.disable(gl.BLEND);
       gl.bindVertexArray(null);
     }
+    // Bond-Graph Agents: bonds first (depth-tested, UNDER the spheres), then the
+    // sphere impostors (depth-interleave with the voxel cubes via gl_FragDepth).
+    this.renderBonds();
+    this.renderAgents();
+    this.renderAgentRings(); // hovered/inspected agent rings (depth OFF, on top)
     this.renderHoverCells(); // wireframe cube cursors on the brush footprint (on top)
     this.renderGizmo();      // corner orientation widget (always on top)
   }
@@ -865,11 +1247,16 @@ export class Gl3DRenderer {
     gl.deleteProgram(this.prog);
     gl.deleteProgram(this.pickProg);
     gl.deleteProgram(this.lineProg);
+    gl.deleteProgram(this.sphereProg);
+    gl.deleteProgram(this.spherePickProg);
     gl.deleteVertexArray(this.vao);
     gl.deleteVertexArray(this.lineVao);
+    gl.deleteVertexArray(this.sphereVao);
     gl.deleteBuffer(this.cubeBuf);
     gl.deleteBuffer(this.instBuf);
     gl.deleteBuffer(this.lineBuf);
+    gl.deleteBuffer(this.quadBuf);
+    gl.deleteBuffer(this.agentInstBuf);
     if (this.pickFbo) { gl.deleteFramebuffer(this.pickFbo); gl.deleteTexture(this.pickTex!); gl.deleteRenderbuffer(this.pickDepth!); }
   }
 }

@@ -316,7 +316,7 @@ interface RefreshDisplayMsg { type: 'refreshDisplay' }
  *  in continuous WORLD coordinates. Overflow past maxAgents is reported back. */
 interface SeedAgentsMsg {
   type: 'seedAgents';
-  agents: Array<{ x: number; y: number; radius?: number; type?: number; lineage?: number }>;
+  agents: Array<{ x: number; y: number; z?: number; radius?: number; type?: number; lineage?: number }>;
   /** PR3 seed config: per-attribute initial values (pre-encoded via
    *  encodeAttrValue, like paintManual) applied to each newly-seeded agent. */
   sets?: Array<{ attrId: string; value: number }>;
@@ -329,7 +329,7 @@ interface GetAgentStateMsg { type: 'getAgentState'; id: number }
 /** Move agents to new world positions (the Move brush). Writes x/y AND
  *  xNext/yNext so the next integration doesn't snap back; wraps/clamps to the
  *  world per `torus`. */
-interface MoveAgentsMsg { type: 'moveAgents'; moves: Array<{ id: number; x: number; y: number }>; torus: boolean; activeViewer: string }
+interface MoveAgentsMsg { type: 'moveAgents'; moves: Array<{ id: number; x: number; y: number; z?: number }>; torus: boolean; activeViewer: string }
 /** Form many bonds at once (the Bond-paint brush). Loops formBond; idempotent
  *  (an existing bond is not duplicated). */
 interface FormBondBatchMsg { type: 'formBondBatch'; pairs: Array<[number, number]>; activeViewer: string }
@@ -4109,7 +4109,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       if (agentStore) {
         const dr = cbNum(centerBasedConfig, 'defaultRadius');
-        const ids = seedAgents(agentStore, msg.agents.map(a => ({ x: a.x, y: a.y, radius: a.radius, type: a.type, lineage: a.lineage })), dr);
+        const ids = seedAgents(agentStore, msg.agents.map(a => ({ x: a.x, y: a.y, z: a.z, radius: a.radius, type: a.type, lineage: a.lineage })), dr);
         if (ids.length < msg.agents.length) {
           self.postMessage({ type: 'agentOverflow', message: `Agent capacity reached (maxAgents=${agentStore.maxAgents}). ${msg.agents.length - ids.length} agent(s) not created.` });
         }
@@ -4200,7 +4200,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       }
       self.postMessage({
         type: 'agentState', id, live: true,
-        x: s.x[id]!, y: s.y[id]!, vx: s.vx[id]!, vy: s.vy[id]!,
+        x: s.x[id]!, y: s.y[id]!, z: s.worldDepth > 1 ? s.z[id]! : undefined,
+        vx: s.vx[id]!, vy: s.vy[id]!, vz: s.worldDepth > 1 ? s.vz[id]! : undefined,
         radius: s.radius[id]!, agentType: s.type[id]!, lineage: s.lineage[id]!,
         age: s.age[id]!, bondDegree: s.bondCount[id]!, density: s.density[id]!,
         attrs, bonds,
@@ -4212,7 +4213,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // snap the agent back. Wrap/clamp to the world per the model boundary.
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       if (agentStore) {
-        const s = agentStore, W = s.worldWidth, H = s.worldHeight;
+        const s = agentStore, W = s.worldWidth, H = s.worldHeight, D = s.worldDepth;
+        const is3d = D > 1;
         for (const m of msg.moves) {
           const id = m.id;
           if (id < 0 || id >= s.highWater || !s.alive[id]) continue;
@@ -4220,6 +4222,13 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           if (msg.torus) { x = ((x % W) + W) % W; y = ((y % H) + H) % H; }
           else { x = Math.max(0, Math.min(W, x)); y = Math.max(0, Math.min(H, y)); }
           s.x[id] = x; s.y[id] = y; s.xNext[id] = x; s.yNext[id] = y;
+          // 3D move brush carries a z; wrap/clamp it on the depth axis (2D omits z
+          // → the always-0 z arm stays untouched, byte-identical to before).
+          if (is3d && m.z !== undefined) {
+            let z = m.z;
+            if (msg.torus) z = ((z % D) + D) % D; else z = Math.max(0, Math.min(D, z));
+            s.z[id] = z; s.zNext[id] = z;
+          }
         }
         runAgentColorPass();
       }
