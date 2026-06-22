@@ -284,6 +284,61 @@ export interface AgentRenderSnapshot {
   type: Int32Array;
 }
 
+// ---------------------------------------------------------------------------
+// Uniform spatial hash — the O(N) neighbour structure for the force driver.
+// Bins the world into a CSR-style grid (binStart prefix-sums + binAgents grouped
+// by bin) so each agent tests only its own bin + the 8 (2D) adjacent bins
+// instead of every other agent. Box edge ≥ the max pair-interaction distance,
+// so the 3×3 stencil is guaranteed to find every interacting pair. Returns null
+// for a world too small to tile into ≥3 bins per axis (the caller falls back to
+// the all-pairs O(N²) loop, which is correct + cheap at that scale).
+//
+// Reuses scratch buffers across steps (no per-step GC of the agent-sized
+// binAgents array) — the binStart array is small (nBins+1) and reallocated when
+// nBins changes (maxRadius growth shifts the bin size).
+// ---------------------------------------------------------------------------
+
+export interface SpatialHash {
+  nBinsX: number; nBinsY: number;
+  binSizeX: number; binSizeY: number;
+  binStart: Int32Array;   // length nBins+1 (prefix sums)
+  binAgents: Int32Array;  // length liveCount (agent ids grouped by bin)
+}
+
+/** Per-store reusable scratch so the hash doesn't allocate every step. */
+interface HashScratch { binStart: Int32Array; binAgents: Int32Array; cursor: Int32Array; }
+const hashScratchMap = new WeakMap<AgentStore, HashScratch>();
+
+export function buildSpatialHash(store: AgentStore, binSize: number, W: number, H: number): SpatialHash | null {
+  const nBinsX = Math.floor(W / binSize);
+  const nBinsY = Math.floor(H / binSize);
+  if (nBinsX < 3 || nBinsY < 3) return null; // tiny world → all-pairs fallback
+  const binSizeX = W / nBinsX, binSizeY = H / nBinsY; // exact tiling, ≥ binSize
+  const nBins = nBinsX * nBinsY;
+  const hw = store.highWater;
+
+  let sc = hashScratchMap.get(store);
+  if (!sc || sc.binStart.length < nBins + 1 || sc.binAgents.length < store.maxAgents) {
+    sc = { binStart: new Int32Array(nBins + 1), binAgents: new Int32Array(store.maxAgents), cursor: new Int32Array(nBins) };
+    hashScratchMap.set(store, sc);
+  }
+  const binStart = sc.binStart, binAgents = sc.binAgents, cursor = sc.cursor;
+  binStart.fill(0, 0, nBins + 1);
+
+  const x = store.x, y = store.y, alive = store.alive;
+  const binOf = (i: number): number => {
+    let bx = (x[i]! / binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
+    let by = (y[i]! / binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
+    return by * nBinsX + bx;
+  };
+  // count → prefix sum → fill
+  for (let i = 0; i < hw; i++) { if (!alive[i]) continue; binStart[binOf(i) + 1]!++; }
+  for (let b = 0; b < nBins; b++) { binStart[b + 1]! += binStart[b]!; cursor[b] = binStart[b]!; }
+  for (let i = 0; i < hw; i++) { if (!alive[i]) continue; const b = binOf(i); binAgents[cursor[b]!++] = i; }
+
+  return { nBinsX, nBinsY, binSizeX, binSizeY, binStart, binAgents };
+}
+
 export function snapshotAgentsForRender(store: AgentStore): AgentRenderSnapshot {
   const hw = store.highWater;
   return {

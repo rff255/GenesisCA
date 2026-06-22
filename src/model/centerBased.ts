@@ -27,6 +27,7 @@ export const CENTER_BASED_DEFAULTS = {
   timeStep: 0.1,             // Δt_user (pre-clamp)
   seedCount: 0,
   defaultRadius: 0.5,        // → contact distance 1.0 between two default agents
+  growthRate: 0.02,          // radius units per step toward targetRadius
   bondStiffness: 1.0,        // λ when no spring matrix
   bondRestLength: 1.0,       // L when no spring matrix
   formDistance: 1.2,         // d_form

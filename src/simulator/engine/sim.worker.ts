@@ -27,7 +27,7 @@ import type { Attribute, CenterBasedConfig } from '../../model/types';
 import { cbNum } from '../../model/centerBased';
 import {
   createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot,
-  snapshotAgentsForRender, serializeAgentStore, deserializeAgentStore,
+  snapshotAgentsForRender, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
   type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec,
 } from './agentEngine';
 
@@ -481,28 +481,17 @@ function runAgentStep(): void {
   const eta = Math.max(1e-6, cbNum(cfg, 'drag'));
   const torus = boundaryTreatment === 'torus';
   const W = s.worldWidth, H = s.worldHeight;
+  const halfW = W / 2, halfH = H / 2;
   const dt = s.dt;
+  const growthRate = Math.max(0, cbNum(cfg, 'growthRate'));
   const hw = s.highWater;
   const x = s.x, y = s.y, rad = s.radius, alive = s.alive;
+  const maxBonds = s.maxBonds;
 
-  // Pass A — neighbour density (count within the interaction cutoff). Read by
-  // the NeighbourDensity node; computed BEFORE behaviour so the rule sees it.
-  for (let i = 0; i < hw; i++) {
-    if (!alive[i]) { s.density[i] = 0; continue; }
-    const xi = x[i]!, yi = y[i]!, ri = rad[i]!;
-    let dens = 0;
-    for (let j = 0; j < hw; j++) {
-      if (j === i || !alive[j]) continue;
-      let dx = x[j]! - xi, dy = y[j]! - yi;
-      if (torus) { if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W; if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H; }
-      const cut = range * (ri + rad[j]!);
-      if (dx * dx + dy * dy < cut * cut) dens++;
-    }
-    s.density[i] = dens;
-  }
-
-  // Compiled behaviour — reads density / position / attrs, writes attrs /
-  // colours / division+kill+bond requests. Reads OLD positions (pre-integration).
+  // Compiled behaviour FIRST (reads positions + the PREVIOUS step's density —
+  // a one-step lag, the cost of fusing density into the single neighbour pass
+  // below; densities change slowly so it's a fine approximation). Writes attrs /
+  // colours / division+kill+bond requests. Reads OLD positions.
   if (agentBehaviourFn) {
     try {
       agentBehaviourFn(...buildAgentLoopArgs(s));
@@ -512,54 +501,105 @@ function runAgentStep(): void {
     }
   }
 
-  // Pass B — net force (soft-sphere repulsion/adhesion + bond springs),
-  // overdamped Euler into the xNext/yNext double-buffer.
+  // Build the uniform spatial hash from current positions — O(N) neighbour
+  // lookups instead of O(N²). null for a world too small to tile (≥3 bins/axis);
+  // then the all-pairs fallback runs (correct + cheap at that scale). The max
+  // radius sets the bin edge so the 3×3 stencil covers every interacting pair.
+  let maxR = cbNum(cfg, 'defaultRadius');
+  for (let i = 0; i < hw; i++) { if (alive[i] && rad[i]! > maxR) maxR = rad[i]!; }
+  const hash = buildSpatialHash(s, Math.max(1e-3, range * 2 * maxR), W, H);
+
+  // Single neighbour pass: soft-sphere repulsion/adhesion + bond springs +
+  // density (for next step), overdamped Euler into the xNext/yNext double-buffer.
   const xN = s.xNext, yN = s.yNext;
-  const maxBonds = s.maxBonds;
   for (let i = 0; i < hw; i++) {
     if (!alive[i]) { xN[i] = x[i]!; yN[i] = y[i]!; continue; }
     const xi = x[i]!, yi = y[i]!, ri = rad[i]!;
-    let fx = 0, fy = 0;
-    for (let j = 0; j < hw; j++) {
-      if (j === i || !alive[j]) continue;
-      let dx = x[j]! - xi, dy = y[j]! - yi;
-      if (torus) { if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W; if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H; }
-      const d2 = dx * dx + dy * dy;
-      const sij = ri + rad[j]!;
-      const rmax = range * sij;
-      if (d2 === 0 || d2 >= rmax * rmax) continue;
-      const d = Math.sqrt(d2);
-      const inv = 1 / d;
-      // F<0 (d<s) → repulsion (away from j); F>0 (d>s) → adhesion (toward j).
-      const F = (d < sij) ? muR * (d - sij) : muA * (d - sij);
-      fx += F * dx * inv; fy += F * dy * inv;
+    let fx = 0, fy = 0, dens = 0;
+
+    // --- pairwise repulsion/adhesion over candidate neighbours ---
+    if (hash) {
+      const nBinsX = hash.nBinsX, nBinsY = hash.nBinsY;
+      const binStart = hash.binStart, binAgents = hash.binAgents;
+      let bx = (xi / hash.binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
+      let by = (yi / hash.binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
+      for (let ddy = -1; ddy <= 1; ddy++) {
+        for (let ddx = -1; ddx <= 1; ddx++) {
+          let nbx = bx + ddx, nby = by + ddy;
+          if (torus) { nbx = ((nbx % nBinsX) + nBinsX) % nBinsX; nby = ((nby % nBinsY) + nBinsY) % nBinsY; }
+          else { if (nbx < 0 || nbx >= nBinsX || nby < 0 || nby >= nBinsY) continue; }
+          const b = nby * nBinsX + nbx;
+          const end = binStart[b + 1]!;
+          for (let p = binStart[b]!; p < end; p++) {
+            const j = binAgents[p]!;
+            if (j === i) continue;
+            let dx = x[j]! - xi, dy = y[j]! - yi;
+            if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
+            const d2 = dx * dx + dy * dy;
+            const sij = ri + rad[j]!;
+            const rmax = range * sij;
+            if (d2 === 0 || d2 >= rmax * rmax) continue;
+            dens++;
+            const d = Math.sqrt(d2);
+            const F = ((d < sij) ? muR : muA) * (d - sij);
+            const k = F / d;
+            fx += k * dx; fy += k * dy;
+          }
+        }
+      }
+    } else {
+      for (let j = 0; j < hw; j++) {
+        if (j === i || !alive[j]) continue;
+        let dx = x[j]! - xi, dy = y[j]! - yi;
+        if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
+        const d2 = dx * dx + dy * dy;
+        const sij = ri + rad[j]!;
+        const rmax = range * sij;
+        if (d2 === 0 || d2 >= rmax * rmax) continue;
+        dens++;
+        const d = Math.sqrt(d2);
+        const F = ((d < sij) ? muR : muA) * (d - sij);
+        const k = F / d;
+        fx += k * dx; fy += k * dy;
+      }
     }
-    // Bond springs λ(l−L)·r̂ — no-op until bonds exist (bondCount[i]===0). The
-    // partnerEpoch check is the dangling-bond ABI (a recycled slot's stale bond
-    // reads epoch-mismatch and is skipped).
+    s.density[i] = dens;
+
+    // --- bond springs λ(l−L)·r̂ (no-op until bonds exist). The partnerEpoch
+    // check is the dangling-bond ABI — a recycled slot's stale bond reads
+    // epoch-mismatch and is skipped. ---
     const bc = s.bondCount[i]!;
     if (bc > 0) {
       const base = i * maxBonds;
-      for (let k = 0; k < bc; k++) {
-        const p = s.bondPartner[base + k]!;
+      for (let bk = 0; bk < bc; bk++) {
+        const p = s.bondPartner[base + bk]!;
         if (p < 0 || p >= hw || !alive[p]) continue;
-        if (s.bondPartnerEpoch[base + k] !== s.epoch[p]) continue;
+        if (s.bondPartnerEpoch[base + bk] !== s.epoch[p]) continue;
         let dx = x[p]! - xi, dy = y[p]! - yi;
-        if (torus) { if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W; if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H; }
+        if (torus) { if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W; if (dy > halfH) dy -= H; else if (dy < -halfH) dy += H; }
         const d2b = dx * dx + dy * dy;
         if (d2b === 0) continue;
         const d = Math.sqrt(d2b);
-        const inv = 1 / d;
-        const F = s.bondStiffness[base + k]! * (d - s.bondRestLength[base + k]!);
-        fx += F * dx * inv; fy += F * dy * inv;
+        const F = s.bondStiffness[base + bk]! * (d - s.bondRestLength[base + bk]!);
+        const k = F / d;
+        fx += k * dx; fy += k * dy;
       }
     }
+
+    // overdamped Euler + world bounds
     let nx = xi + (dt / eta) * fx;
     let ny = yi + (dt / eta) * fy;
     if (torus) { nx = ((nx % W) + W) % W; ny = ((ny % H) + H) % H; }
     else { nx = nx < 0 ? 0 : nx > W ? W : nx; ny = ny < 0 ? 0 : ny > H ? H : ny; }
     xN[i] = nx; yN[i] = ny;
     s.age[i] = s.age[i]! + 1;
+    // Growth: ramp radius toward the target set by Set Target Radius.
+    const tr = s.targetRadius[i]!;
+    const cur = s.radius[i]!;
+    if (tr !== cur) {
+      const dd = tr - cur;
+      s.radius[i] = Math.abs(dd) <= growthRate ? tr : cur + Math.sign(dd) * growthRate;
+    }
   }
   // Commit positions (synchronous double-buffer swap).
   const tmpX = s.x; s.x = s.xNext; s.xNext = tmpX;
