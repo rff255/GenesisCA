@@ -1254,10 +1254,17 @@ engine soft-sphere, join by **bonds**, **grow**, and **divide along their tensio
 axis** into a connected tissue, with a **closed agent↔grid feedback** (the cell
 CA *is* the morphogen field). The largest net-new subsystem GenesisCA has added.
 **The agent ENGINE/driver runs on JS** (Phase F ports it to WASM later); the
-**CELL FIELD MAY use WASM** (Decision D-TARGET, now relaxed — `readAttrs` are
-wasmMemory views the JS agent reads/writes directly, so a field-heavy model gets
-the fast diffusion path while agents stay JS; only WebGPU is forced off — its
-attrs are GPU-resident). 2D only (3D agents = Phase E). Three shipped samples
+**GRID/CELL FIELD has an INDEPENDENT compile target** (Decision D-TARGET, fully
+relaxed in Phase 2). A WASM grid shares `wasmMemory` views with the JS agent (no
+bridge — the agent reads/writes `readAttrs` directly). A **WebGPU grid** now works
+too (e.g. chemical diffusion on the GPU) via a per-step **field-readback bridge**:
+when the agent graph uses the field, the worker reads the GPU attrs back to CPU
+before the agent gather and uploads the deposit before the cell step — so the grid
+gets the GPU fast path while agents stay JS. The independent agent target lives on
+`CenterBasedConfig.agentTarget` (`'js'` default; WASM/WebGPU agent loops are
+Phase F — `agentTargetOf` clamps to `'js'` until they land). The JS/WASM step loop
+is byte-identical (the agent interleave is ONLY in the WebGPU step branch). 2D only
+(3D agents = Phase E). Three shipped samples
 exercise the breadth: **Boids — Flocking** (neighbour access + Apply Force +
 momentum), **Morphogenesis — Differential Tissue** (asymmetric division +
 maturity + contact inhibition = specialization, not a uniform blob), **Chemotaxis
