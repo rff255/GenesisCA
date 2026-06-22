@@ -1,7 +1,8 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useModel } from '../../model/ModelContext';
 import { getNodeDefsByCategory } from '../vpl/nodes/registry';
 import { isNodeAvailable } from '../vpl/nodes/nodeValidation';
+import { subscribeActiveGraphKind, getActiveGraphKind } from '../vpl/graphState';
 import type { NodeTypeDef } from '../vpl/types';
 import type { GraphNode } from '../../model/types';
 import { NodePreview, MacroPreview } from './NodePreview';
@@ -79,6 +80,9 @@ interface PalettePanelContentProps {
 export const PalettePanelContent = forwardRef<PaletteHandle, PalettePanelContentProps>(
   function PalettePanelContent({ onQuickAdd, onQuickAddCancel }, ref) {
   const { model } = useModel();
+  // Bond-Graph Agents: re-render (re-filter the node list) when the active
+  // sub-tab (Cells/Agents) changes — isNodeAvailable gates by it.
+  useSyncExternalStore(subscribeActiveGraphKind, getActiveGraphKind);
   const [search, setSearch] = useState('');
   // Keyboard-driven selection through the flat list of visible items. There is
   // always a selection (index 0 after every filter change) so Space → type →
