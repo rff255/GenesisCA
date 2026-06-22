@@ -1210,7 +1210,12 @@ export function HelpView() {
             <li><strong>Get Nearby Agents</strong> &mdash; the list of other agents within a
               radius (the agent analogue of <em>Get All Neighbor Indexes</em>). Iterate it with
               <strong> For Each In Array</strong>, then read each with <strong>Get Agent Position /
-              Attribute / Radius / Get Velocity</strong>, bond to it, or steer from it.</li>
+              Offset / Attribute / Radius / Get Velocity</strong>, bond to it, or steer from it.</li>
+            <li><strong>Get Agent Offset</strong> &mdash; the <em>torus-shortest</em> displacement
+              (dX, dY) and Distance from this agent to a neighbour. Use this &mdash; not raw
+              position subtraction (<em>Get Agent Position</em> minus your own) &mdash; for
+              cohesion, separation, and "steer toward a neighbour" so the vectors stay correct
+              across a wrapped (torus) boundary.</li>
             <li><strong>Apply Force</strong> &mdash; add a force vector to the agent; the engine
               integrates the sum of all your Apply Force contributions (plus its built-in
               soft-sphere repulsion + bond springs, unless <em>Custom forces only</em> is set). This

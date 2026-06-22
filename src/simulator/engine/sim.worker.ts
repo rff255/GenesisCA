@@ -493,11 +493,19 @@ function runDivisionEvent(events: Array<{ mother: number; a: number; b: number; 
 function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, axisX: number, axisY: number): unknown[] {
   const args: unknown[] = [
     idx, daughterIndex, axisX, axisY,
+    // MIRRORS buildDivisionParams — engine buffers agent-read nodes need to be
+    // division-safe (C-T1): liveness + geometry + velocity + bond store + field.
+    s.alive, s.highWater,
     s.x, s.y, s.radius, s.targetRadius, s.age, s.type, s.lineage, s.bondCount, s.density,
+    s.vx, s.vy,
+    s.bondPartner, s.maxBonds,
   ];
   for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
   for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
   args.push(cachedModelAttrs, s.colors, activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS);
+  // Closed feedback: the CELL field arrays + grid dims (same as buildAgentLoopArgs).
+  args.push(width, height, total, boundaryTreatment === 'torus' ? 1 : 0);
+  for (const spec of s.attrSpecs) args.push(readAttrs[spec.id]);
   return args;
 }
 
