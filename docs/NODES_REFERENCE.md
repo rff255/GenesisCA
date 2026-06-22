@@ -4,11 +4,12 @@ This document catalogues every node in the GenesisCA Visual Programming Language
 describes the port type system, and flags redundancies or gaps. It is a working reference
 to inform future consolidation — it does **not** describe any committed refactoring.
 
-**Scope:** 68 node types across 7 categories (event, flow, data, logic, aggregation,
+**Scope:** 85 node types across 7 categories (event, flow, data, logic, aggregation,
 output, color), plus 2 hidden boundary nodes (`macroInput` / `macroOutput`). Indicator
 nodes live within the `data` (readers) and `output` (writers) categories rather than a
-category of their own. The variegated-cells and local-variable nodes appear in the editor
-only when their respective model feature is enabled.
+category of their own. The variegated-cells, local-variable, and Bond-Graph-Agent nodes
+appear in the editor only when their respective model feature is enabled (the 17 agent
+nodes — §3.8 — only in a Bond-Graph-Agents model, and only on its Agents sub-tab).
 
 **Editor-only constructs** (not counted above, no computation): comments, groups, and
 **reroute points**. A reroute is a movable relay dot placed on a wire (Blender / Unreal
@@ -215,6 +216,43 @@ exists purely to keep graphs readable without Sequence nodes. See
 | 66 | `getColorConstant` | Color Constant | Emit a fixed RGB triple. | `O: R` `O: G` `O: B` (int) | |
 | 67 | `colorScale` | Color Scale | Map `T` to an RGB color via N colour stops with a selectable curve (linear / smoothstep / easeInQuad / easeOutQuad / exponential / logarithmic). One-click palette presets (Viridis, Magma, Plasma, Inferno, Rainbow, Heat, Cool→Warm, Cividis, Grayscale) load a full stop set. Replaces the legacy `colorInterpolation` node. | `I: T` (float) / `O: R` `O: G` `O: B` (int) | Min 2 stops; `t` outside the stop range clamps to nearest endpoint |
 | 68 | `categoricalColor` | Categorical Color | Map an integer `Index` to a flat RGB color from an N-entry palette (no blending). Index `i` selects entry `i`; out-of-range indices use the default color. | `I: Index` (int) / `O: R` `O: G` `O: B` (int) | Discrete lookup (cf. `colorScale` which interpolates). Used by Linked Output Mappings for tag attributes |
+
+### 3.8 Bond-Graph Agents — `agent` family
+
+> **Bond-Graph Agents note:** these 17 nodes form a second, off-lattice rule world.
+> They carry `requirements: { bondGraph: true }`, so they appear in the editor **only** in
+> a model with the **Bond-Graph Agents** topology enabled, and **only on its Agents
+> sub-tab** (`isNodeAvailable` keys on the active graph kind). Conversely the lattice-bound
+> nodes — the cell event roots, the whole `neighborIndex` family, the neighbourhood writers,
+> and `getCellPosition` — carry `requirements: { lattice }` and are hidden on the Agents tab.
+> Universal nodes (arithmetic, conditionals, `getCellAttribute`/`setAttribute` over the
+> shared attributes, `getRandom`, `setCellLooks`, …) appear in **both** graphs. The agent
+> nodes are **JS-reference-only for v1** — a Bond-Graph-Agents model is force-restricted to
+> the JavaScript (Debug / Reference) compile target (no WASM/WebGPU agent emit yet), and is
+> 2D-only (the `Z` outputs on Behaviour Step / Get Self Position are hidden until 3D agents
+> ship). The agent loop variable is `idx` (Decision D-IDX), so attribute reads/writes land
+> on the agent Structure-of-Arrays with no node change. The category column below is the
+> node's real `category` (so it colour-codes like its lattice siblings).
+
+| # | Type | Label | Category | Description | Ports | Notes |
+|---|---|---|---|---|---|---|
+| 69 | `behaviourStep` | Behaviour Step | `event` | The per-agent update entry point — the agent analogue of `step`. The compiler loops `idx < highWater` over the agent SoA (skipping dead slots) and runs the DO flow once per live agent each generation. | `O: DO` (flow), `O: X` `O: Y` (float), `O: Radius` `O: Area` (float), `O: Bond Degree` `O: Age` `O: Type` (int); 3D exposes `O: Z` | Singleton (one per Agents graph). Value-outs resolve via the `_v<id>_<port>` convention. `Z` hidden in 2D |
+| 70 | `divisionEvent` | Division Event | `event` | Runs once per daughter right after a division, so daughters can be given different attribute values (asymmetric inheritance). Both daughters start with the mother's attributes; `Set Attribute` here overwrites them. | `O: DO` (flow), `O: Daughter #` (int), `O: Axis X` `O: Axis Y` (float), `O: Area` (float) | Singleton. `Daughter #` 0 = reused mother slot, 1 = new slot; `Axis X/Y` = the engine's chosen division axis |
+| 71 | `getSelfPosition` | Get Self Position | `data` | The agent's own continuous position in the world frame — a controlled own-state read (the agent analogue of `getCellPosition`). | `O: X` `O: Y` (float); 3D adds `O: Z` | Multi-output; reads engine buffers `_agentX`/`_agentY` at `idx`. `Z` hidden in 2D |
+| 72 | `getRadius` | Get Radius | `data` | The agent's current radius (engine-owned; grown via Set Target Radius). | `O: Radius` (float) | `getCellAttribute` cannot target it (engine buffer, the N4 guardrail) |
+| 73 | `getBondDegree` | Get Bond Degree | `data` | The number of **live** bonds the agent currently has. First-class engine reduction — NOT an Average over the ragged bond list. | `O: Degree` (int) | Reads `_agentBondCount[idx]` |
+| 74 | `neighbourDensity` | Neighbour Density | `data` | How many **other** agents are within the interaction cutoff (local crowding). First-class — distinct from bond degree (a free agent has density but no bonds). | `O: Density` (int) | Reads `_agentDensity[idx]` (recomputed each step, one step stale) |
+| 75 | `sampleField` | Sample Field | `data` | Bilinearly read a **cell attribute (the morphogen field)** at the agent's continuous position — cell-centered sampling. The closed-feedback gather. | `O: Value` (float) | Requires `attributeId`; reads the cell read buffer `_field_<attr>` after the cell step |
+| 76 | `fieldGradient` | Field Gradient | `data` | The `(∂x, ∂y)` spatial gradient of a cell attribute at the agent's position (central differences of the bilinear field). For chemotaxis / gradient-aligned division. | `O: ∂x` `O: ∂y` (float) | Requires `attributeId`; multi-output. Wire into Divide Agent's axis to cleave up/down a gradient |
+| 77 | `readCellsUnder` | Read Cells Under | `data` | Aggregate a cell attribute (mean / sum / max / min) over the cells within a radius under the agent — the disc sibling of Sample Field's point read. | `I: Radius` (float, inline) / `O: Value` (float) | Requires `attributeId` + `reduce` config |
+| 78 | `setTargetRadius` | Set Target Radius | `output` | Set the radius the agent grows toward; the engine ramps the actual radius each step (at the model's growth rate). A grown agent is what divides. | `I: DO` `I: Target` (float, inline) / `O: NEXT` (flow) | Writes the engine request buffer `_agentTargetRadius[idx]` — no async hazard |
+| 79 | `formBond` | Form Bond | `output` | Request a (symmetric) bond between this agent and a target agent — applied in the post-step structural phase. No-op if already bonded, the target is dead, or either list is full. | `I: DO` `I: Target` (int) `I: Rest Length` `I: Stiffness` (float, inline) / `O: NEXT` (flow) | NOT async-only. Rest Length 0 = contact distance; Stiffness 0 = the model's λ. Auto-bond forms bonds by distance with no node |
+| 80 | `breakBond` | Break Bond | `output` | Request that the bond between this agent and a target be removed (symmetric) — applied post-step. | `I: DO` `I: Target` (int) / `O: NEXT` (flow) | Typically fed by `forEachBond`'s `Partner` (e.g. break over-strained bonds) |
+| 81 | `forEachBond` | For Each Bond | `flow` | Iterate this agent's bonds, running BODY once per live bond — the agent analogue of For Each In Array over the ragged bond store (no array input). | `I: DO` (flow) / `O: DONE` `O: BODY` (flow), `O: Partner` (int), `O: Rest Length` `O: Current Length` (float), `O: Index` (int) | Multi-output; the compiler emits the bond loop in `compileFlowChain`. DONE is the first output |
+| 82 | `divideAgent` | Divide Agent | `output` | Request the agent divide into two daughters along its **tension axis** (the net-stretch direction of its bonds — a closed-form 2×2 eigensolve). Partner bonds are inherited by geometry; a daughter–daughter bond is added. | `I: DO` `I: Axis X` `I: Axis Y` (float) `I: Asymmetry` (float, inline) / `O: NEXT` (flow) | Applied post-step. Overflow (maxAgents / maxBonds) rejects the **whole** division (never half-divided). Wire Axis X/Y to override (e.g. up a gradient); `axisSource` is "tension" (a sphere has no shape long-axis) |
+| 83 | `killAgent` | Kill Agent | `output` | Request that this agent die — the slot is recycled, ALL its bonds (both directions) are broken, and its slot epoch is bumped (the dangling-bond ABI). | `I: DO` (flow) / `O: NEXT` (flow) | Applied post-step. For apoptosis / necrosis. NOT async-only |
+| 84 | `affectCellsUnder` | Affect Cells Under | `output` | Write a **cell attribute (the field)** over a radius of cells under the agent (set / add / subtract / max / min). The agent analogue of a brush stamp; the closed-feedback **deposit**. | `I: DO` `I: Value` (float, inline) `I: Radius` (float, inline) / `O: NEXT` (flow) | Requires `attributeId` + `op`. Writes the cell **read** buffer `_field_<attr>` BEFORE the cell step (so the grid rule incorporates it). Many agents → one cell resolved by the sequential agent loop applying each op in order |
+| 85 | `secreteToField` | Secrete To Field | `output` | Deposit a `rate` into a cell attribute at the agent's continuous position via a bilinear 4-cell splat (negative rate = consume). The smooth sub-cell sibling of Affect Cells Under. | `I: DO` `I: Rate` (float, inline) / `O: NEXT` (flow) | Requires `attributeId`. Writes the cell read buffer in the deposit phase; the splat accumulates (many agents → one cell sums) |
 
 ### Hidden / auto-generated
 

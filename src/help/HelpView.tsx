@@ -8,6 +8,7 @@ const sections = [
   { id: 'nodes', label: 'Node Types Reference' },
   { id: 'macros', label: 'The Macro System' },
   { id: '3dgridca', label: '3D Grid CA' },
+  { id: 'agents', label: 'Bond-Graph Agents' },
   { id: 'simulator', label: 'The Simulator' },
   { id: 'shortcuts', label: 'Keyboard Shortcuts' },
   { id: 'fileformat', label: 'File Format' },
@@ -1121,6 +1122,131 @@ export function HelpView() {
             <em>Variegated Cells</em> is 2D-only and is disabled in 3D, but all three compile
             targets work in 3D &mdash; JavaScript, WebAssembly, and WebGPU (under WebGPU the GPU
             runs the simulation and the voxel renderer reads the colours back each step).
+          </p>
+        </section>
+
+        {/* ============================================================ */}
+        <section id="help-agents" className={styles.section}>
+          <h2 className={styles.h2}>Bond-Graph Agents (Floating Cells)</h2>
+          <p className={styles.p}>
+            Every model so far is a <em>lattice</em> CA: cells sit on a fixed grid.
+            <strong> Bond-Graph Agents</strong> add a second kind of cell that
+            <strong> floats in continuous space</strong> &mdash; an off-lattice "agent"
+            with an <code>(x, y)</code> position, a radius, and bonds to other agents.
+            Agents push each other apart (soft-sphere repulsion), can be joined by springs
+            (<strong>bonds</strong>), <strong>grow</strong> toward a target size, and
+            <strong> divide</strong> into a connected tissue. It's how you model
+            <strong> morphogenesis</strong> &mdash; tissue that grows into shape &mdash;
+            rather than a pattern on a fixed grid.
+          </p>
+          <p className={styles.p}>
+            Agents are <strong>additive</strong>: a model keeps its grid and gains the agents
+            on top, so the two engines run side by side. This release runs the agent engine on
+            the <strong>JavaScript (Debug / Reference)</strong> compile target (an agents model
+            selects it automatically) and is <strong>2D</strong>; the grid CA is unaffected.
+          </p>
+          <h3 className={styles.h3}>Enabling Agents</h3>
+          <p className={styles.p}>
+            In <strong>Properties &rarr; Execution &rarr; Topology</strong>, tick
+            <strong> Bond-Graph Agents</strong> (alongside <strong>Grid Cells</strong> &mdash;
+            at least one must stay on). A <strong>Bond-Graph Agents</strong> config block
+            appears below, and a <strong>Cells / Agents</strong> tab strip appears above the
+            graph canvas.
+          </p>
+          <h3 className={styles.h3}>The Two-Graph Workflow (Cells vs Agents)</h3>
+          <p className={styles.p}>
+            With Agents on you author <strong>two rule graphs</strong> behind the same editor,
+            switched by the <strong>Cells / Agents</strong> tabs:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Cells</strong> &mdash; the familiar grid CA (the per-cell
+              <code> Generation Step</code>, neighbourhoods, color mappings).</li>
+            <li><strong>Agents</strong> &mdash; the per-agent behaviour, rooted at a
+              <strong> Behaviour Step</strong> node that runs once per agent each generation.</li>
+          </ul>
+          <p className={styles.p}>
+            The palette adapts to the active tab: agent nodes show only on
+            <strong> Agents</strong>, grid/neighbourhood nodes only on <strong>Cells</strong>,
+            and universal nodes (math, conditionals, <strong>Get / Set Attribute</strong> over
+            the shared attributes, <strong>Set Cell Looks</strong>) in both. The cell attributes
+            <strong> double as agent attributes</strong> &mdash; the same <code>Get Cell
+            Attribute</code> / <code>Set Attribute</code> nodes read and write an agent's own
+            state on the Agents tab. <em>Macros are shared</em> between the two graphs.
+          </p>
+          <h3 className={styles.h3}>Key Agent Nodes</h3>
+          <ul className={styles.list}>
+            <li><strong>Behaviour Step</strong> &mdash; the per-agent entry root (one per Agents
+              graph). Outputs the agent's own <code>X</code> / <code>Y</code> /
+              <code> Radius</code> / <code>Area</code> / <code>Bond Degree</code> /
+              <code> Age</code> / <code>Type</code>.</li>
+            <li><strong>Get Self Position / Get Radius / Get Bond Degree / Neighbour Density</strong>
+              &mdash; read the agent's geometry and its local crowding (how many other agents are
+              within interaction range).</li>
+            <li><strong>Set Target Radius</strong> &mdash; set the size the agent grows toward;
+              the engine ramps the actual radius each step. A grown agent is what divides.</li>
+            <li><strong>Form Bond / Break Bond / For Each Bond</strong> &mdash; create or remove a
+              spring between two agents, or iterate this agent's bonds (exposing the partner,
+              rest length, and current length) to act per-bond (e.g. break an over-stretched
+              bond). Bonds can also form <strong>automatically by distance</strong> (the
+              Auto-bond option), the simplest path to a glued cluster.</li>
+            <li><strong>Divide Agent</strong> &mdash; split the agent into two daughters along its
+              <strong> tension axis</strong> (the net-stretch direction of its bonds), so a glued
+              cluster cleaves along its mechanical axis. Each bond is handed to the nearer
+              daughter and a daughter&ndash;daughter bond keeps the tissue connected. A
+              <strong> Division Event</strong> root (optional) runs once per daughter so you can
+              give them different attribute values (asymmetric inheritance).</li>
+            <li><strong>Kill Agent</strong> &mdash; remove the agent (apoptosis); all its bonds
+              are broken safely.</li>
+          </ul>
+          <h3 className={styles.h3}>The Cell CA as a Morphogen Field (Closed Feedback)</h3>
+          <p className={styles.p}>
+            The two engines close a loop: <strong>every grid cell attribute doubles as a
+            diffusible "field"</strong> the agents both sense and shape. There is no separate
+            field system &mdash; it's just the grid CA.
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Agents deposit</strong> into the field &mdash;
+              <strong> Secrete To Field</strong> adds (or, with a negative rate, consumes) a
+              value at the agent's position; <strong>Affect Cells Under</strong> writes a cell
+              attribute over a radius (set / add / max / &hellip;).</li>
+            <li><strong>The grid CA diffuses</strong> it &mdash; an ordinary cell rule spreads the
+              deposited morphogen across the lattice.</li>
+            <li><strong>Agents sense</strong> the result &mdash; <strong>Sample Field</strong>
+              reads the field at the agent's continuous position, <strong>Field Gradient</strong>
+              gives its direction (for chemotaxis, or to steer a division axis), and
+              <strong> Read Cells Under</strong> aggregates it over a disc.</li>
+          </ul>
+          <p className={styles.p}>
+            So agents secrete morphogens, the grid diffuses them, and agents respond &mdash; the
+            basis of stigmergy, chemotaxis, and hypoxia-driven branching.
+          </p>
+          <h3 className={styles.h3}>The Config Panel</h3>
+          <p className={styles.p}>
+            The <strong>Bond-Graph Agents</strong> block (Properties, shown when Agents is on)
+            controls:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Capacity</strong> &mdash; <strong>Max Agents</strong> and
+              <strong> Max Bonds / Agent</strong>. These are over-allocated ceilings; running
+              past them <strong>rejects</strong> the new agent/bond (it never wraps or corrupts).
+              Changing a ceiling re-initialises the engine.</li>
+            <li><strong>Seeding</strong> &mdash; the <strong>Seed Count</strong> laid down on
+              Reset (0 = seed by hand) and the <strong>Default Radius</strong>.</li>
+            <li><strong>Forces</strong> &mdash; the soft-sphere law: <strong>Repulsion</strong>
+              (volume exclusion), <strong>Adhesion</strong> (free-agent stickiness),
+              <strong> Interaction Range</strong>, <strong>Drag</strong>,
+              <strong> Time Step</strong> (auto-clamped for stability), and
+              <strong> Growth Rate</strong>.</li>
+            <li><strong>Bonds</strong> &mdash; <strong>Auto-bond by distance</strong> (on/off),
+              <strong> Bond Stiffness</strong>, and the <strong>Form / Break Distances</strong>
+              (a hysteresis band so bonds don't flicker).</li>
+          </ul>
+          <p className={styles.p}>
+            In the Simulator, <strong>Alt + left-click</strong> seeds an agent and
+            <strong> Alt + Shift + left-click</strong> kills the nearest one. The library ships a
+            <strong> Morphogenesis &mdash; Growing Tissue</strong> sample: 12 seed cells grow into
+            a ~1500-cell bonded tissue that divides along its tension axis &mdash; load it to see
+            the whole pipeline at work.
           </p>
         </section>
 
