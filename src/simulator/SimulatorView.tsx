@@ -184,6 +184,7 @@ export const MANUAL_BRUSH_MAPPING_ID = '__manual__';
 
 /** Stable empty footprint array (avoids a new [] per frame when 3D hover is off). */
 const EMPTY_HOVER_CELLS: ReadonlyArray<{ layer: number; row: number; col: number }> = [];
+const EMPTY_AGENT_RINGS: ReadonlyArray<{ x: number; y: number; z: number; radius: number }> = [];
 
 export interface ManualBrushAttrEntry {
   enabled: boolean;
@@ -198,7 +199,7 @@ export interface AgentStateResponse {
   type: 'agentState';
   id: number;
   live: boolean;
-  x?: number; y?: number; vx?: number; vy?: number;
+  x?: number; y?: number; z?: number; vx?: number; vy?: number; vz?: number;
   radius?: number; agentType?: number; lineage?: number; age?: number;
   bondDegree?: number; density?: number;
   attrs?: Record<string, number>;
@@ -855,6 +856,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // instance buffer and skip the O(total) scan+upload. Reset (null) whenever the
   // renderer is recreated or the colours buffer is cleared, to force a re-upload.
   const lastUploadedColors3dRef = useRef<Uint8ClampedArray | null>(null);
+  // 3D agents (PR5): the render snapshot last uploaded to the sphere pipeline.
+  // The worker posts a FRESH snapshot object each `stepped` (the .slice gives new
+  // buffers), so identity changes iff agent positions/colours changed — a
+  // camera-only redraw reuses the GPU instance buffer. Reset on renderer recreate.
+  const lastUploadedAgentSnapRef = useRef<AgentRenderSnapshot | null>(null);
+  // 3D agent hover/inspect highlight rings (the sphere analog of
+  // hoverCells3dRef/inspectHighlight3dRef for voxels). Empty = none.
+  const hoverAgents3dRef = useRef<ReadonlyArray<{ x: number; y: number; z: number; radius: number }>>([]);
+  const inspectAgents3dRef = useRef<ReadonlyArray<{ x: number; y: number; z: number; radius: number }>>([]);
   // 3D control UI state (mirrored into the refs the renderer reads).
   const [clip3d, setClip3d] = useState<{ enabled: boolean; axis: 'x' | 'y' | 'z' | 'camera'; value: number }>(
     { enabled: false, axis: 'z', value: 0 },
@@ -1067,6 +1077,23 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (colors3d !== lastUploadedColors3dRef.current) {
         r.uploadColors(colors3d, w3 * h3 * d3);
         lastUploadedColors3dRef.current = colors3d;
+      }
+      // Bond-Graph Agents (PR5): overlay the agent spheres + bonds via the
+      // instanced sphere-impostor pipeline. Only re-compact the SoA when the
+      // snapshot identity changed (a new `stepped` buffer); camera-only frames
+      // reuse the GPU instance buffer. highWater===0 → 0 instances directly.
+      if (isAgentModelRef.current) {
+        const snap = agentsRef.current;
+        r.setAgentAlphaBlend(alpha3dRef.current);
+        if (!snap || snap.highWater === 0) {
+          r.agentInstanceCount = 0;
+          lastUploadedAgentSnapRef.current = snap ?? null;
+        } else if (snap !== lastUploadedAgentSnapRef.current) {
+          r.uploadAgents(snap, boundaryTreatmentRef.current === 'torus');
+          lastUploadedAgentSnapRef.current = snap;
+        }
+        r.setHoverAgents(hoverAgents3dRef.current);
+        r.setInspectAgents(inspectAgents3dRef.current);
       }
       r.render();
       fpsFrames.current++;
@@ -2032,6 +2059,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // -valid cellIdx). srcCanvas is rebuilt on the next draw when needed.
     colorsRef.current = null;
     lastUploadedColors3dRef.current = null;  // colours cleared → force a re-upload after reinit
+    lastUploadedAgentSnapRef.current = null; // agents cleared → force a re-upload after reinit
     glyphCodesRef.current = null;
     glyphColorsRef.current = null;
     inspectDataRef.current.clear();
@@ -2698,6 +2726,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       gl3dRef.current = new Gl3DRenderer(glc);
       gl3dRef.current.setGrid(gridWidth.current, gridHeight.current, gridDepth.current);
       lastUploadedColors3dRef.current = null;  // fresh renderer → force the next upload
+      lastUploadedAgentSnapRef.current = null; // fresh renderer → re-upload agents too
       draw();
     } catch (e) {
       console.error('[gl3d] init failed', e);
@@ -2705,6 +2734,73 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
     return () => { if (gl3dRef.current) { gl3dRef.current.dispose(); gl3dRef.current = null; } };
   }, [is3D, draw]);
+
+  // Bond-Graph Agents (PR5, 3D) — map a renderer pick INSTANCE index back to the
+  // engine SLOT id. uploadAgents compacts ALIVE agents ascending (skip !alive),
+  // and the sphere pick encodes gl_InstanceID+1, so the inst-th compacted agent
+  // is the inst-th alive slot in ascending order. Returns -1 if out of range.
+  const instanceToSlot = useCallback((snap: AgentRenderSnapshot, inst: number): number => {
+    if (inst < 0) return -1;
+    let n = 0;
+    for (let i = 0; i < snap.highWater; i++) {
+      if (!snap.alive[i]) continue;
+      if (n === inst) return i;
+      n++;
+    }
+    return -1;
+  }, []);
+
+  // Bond-Graph Agents (PR5, 3D) — seed points around a plane cell, with a per-
+  // point z. Flat mode lays a Vogel disc IN the brush plane (the picked cell's
+  // fixed-axis coordinate is the constant 3rd axis); volumetric mode lays a 3D
+  // ball. Returns continuous {x,y,z} world positions, torus-wrapped / bounds-
+  // clipped per the model boundary. Mirrors agentSeedPoints' 2D disc.
+  const agentSeedPoints3d = useCallback((center: { x: number; y: number; z: number }, radius: number, density: number, ball: boolean): Array<{ x: number; y: number; z: number }> => {
+    const W = gridWidth.current, H = gridHeight.current, Dd = gridDepth.current;
+    if (W <= 0 || H <= 0) return [];
+    const torus = boundaryTreatmentRef.current === 'torus';
+    const r = Math.max(0, radius);
+    const axis = plane3dRef.current.axis;
+    const pts: Array<{ x: number; y: number; z: number }> = [];
+    const wrapClip = (p: { x: number; y: number; z: number }): { x: number; y: number; z: number } | null => {
+      let { x, y, z } = p;
+      if (torus) {
+        x = ((x % W) + W) % W; y = ((y % H) + H) % H; if (Dd > 0) z = ((z % Dd) + Dd) % Dd;
+      } else if (x < 0 || x >= W || y < 0 || y >= H || z < 0 || z >= Dd) return null;
+      return { x, y, z };
+    };
+    if (ball) {
+      // 3D ball: N ≈ density·(4/3)πr³ via a Fibonacci-sphere shell scan at jittered
+      // radii (cheap, even-ish), clipped to the sphere.
+      const n = Math.max(1, Math.round(density * (4 / 3) * Math.PI * r * r * r));
+      const golden = Math.PI * (3 - Math.sqrt(5));
+      for (let i = 0; i < n; i++) {
+        const rr = n === 1 ? 0 : r * Math.cbrt((i + 0.5) / n);
+        const yk = 1 - (2 * (i + 0.5)) / n;          // [-1,1]
+        const rad = Math.sqrt(Math.max(0, 1 - yk * yk));
+        const a = i * golden;
+        const wp = wrapClip({ x: center.x + rr * rad * Math.cos(a), y: center.y + rr * yk, z: center.z + rr * rad * Math.sin(a) });
+        if (wp) pts.push(wp);
+      }
+      return pts;
+    }
+    // Flat disc IN the plane: the Vogel disc lives in the two FREE axes; the plane's
+    // FIXED axis is held at the picked cell's coordinate.
+    const n = Math.max(1, Math.round(density * Math.PI * r * r));
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    for (let i = 0; i < n; i++) {
+      const rr = n === 1 ? 0 : r * Math.sqrt((i + 0.5) / n);
+      const a = i * golden;
+      const u = rr * Math.cos(a), v = rr * Math.sin(a);
+      // z-plane → free (y,x); y-plane → free (z,x); x-plane → free (z,y).
+      const cand = axis === 'z' ? { x: center.x + v, y: center.y + u, z: center.z }
+        : axis === 'y' ? { x: center.x + v, y: center.y, z: center.z + u }
+        : { x: center.x, y: center.y + v, z: center.z + u };
+      const wp = wrapClip(cand);
+      if (wp) pts.push(wp);
+    }
+    return pts;
+  }, []);
 
   // 3D Grid CA: GL-canvas pointer handlers, Blender-flavoured.
   //   • MMB-drag OR Alt+LMB-drag           → orbit (Z-up)
@@ -2717,8 +2813,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (!is3D) return;
     const glc = glCanvasRef.current;
     if (!glc) return;
-    let active: 'orbit' | 'pan' | 'brush' | 'inspect' | 'resize' | null = null;
+    let active: 'orbit' | 'pan' | 'brush' | 'inspect' | 'resize' | 'agentSeed' | 'agentKill' | 'agentMove' | null = null;
     let lastX = 0, lastY = 0, downX = 0, downY = 0, moved = false;
+    // PR5 3D agent move: the agent picked at drag-start (-1 = none).
+    let agentDragId = -1;
     // Ctrl+LMB-drag brush resize (mirrors the 2D canvas): captured at drag start.
     const resizeStart = { x: 0, y: 0, w: 0, h: 0, radius: 0, ringW: 0, lineW: 0 };
     const maxDim = () => Math.max(gridWidth.current, gridHeight.current, gridDepth.current, 1);
@@ -2778,6 +2876,83 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (!lineStaging && sameCell(hit, hover3dRef.current)) return false;
       hover3dRef.current = hit;
       hoverCells3dRef.current = hit ? footprintFor(hit) : EMPTY_HOVER_CELLS;
+      return true;
+    };
+    // ---- Bond-Graph Agents (PR5): the 3D agent brush + inspect. ----
+    // Resolve the agent slot under the cursor via the renderer's sphere pick FBO
+    // (instance index → slot). null if no agent hit. Refreshes the camera +
+    // snapshot before the pick (RR-G9 — the pick reads the live GPU state).
+    const pickAgent3d = (clientX: number, clientY: number): number => {
+      const r = gl3dRef.current, snap = agentsRef.current;
+      if (!r || !snap || snap.highWater === 0) return -1;
+      draw();  // ensure the renderer's instance buffer + camera are current
+      const rect = glc.getBoundingClientRect();
+      const inst = r.pickAgent(clientX - rect.left, clientY - rect.top, rect.width, rect.height);
+      return instanceToSlot(snap, inst);
+    };
+    // Seed agents on the brush plane: pick the plane cell, lay a ball (volumetric)
+    // / flat disc around it with per-point z, post seedAgents with the seed sets.
+    const seedAgents3d = (clientX: number, clientY: number) => {
+      const hit = pickCell(clientX, clientY);
+      if (!hit) return;
+      const pts = agentSeedPoints3d(
+        { x: hit.col, y: hit.row, z: hit.layer },
+        agentBrushRadiusRef.current,
+        agentSeedDensityRef.current,
+        brush3dVolumeRef.current,
+      );
+      if (pts.length === 0) return;
+      const sets = agentSeedSetsRef.current();
+      seedAgentsAt(pts.map(p => ({ x: p.x, y: p.y, z: p.z, type: agentSeedTypeRef.current })), sets);
+    };
+    // Kill agents within the brush radius around the picked plane cell (3D
+    // distance), collected from the snapshot → killAgents. Radius 0 → nearest.
+    const killAgents3d = (clientX: number, clientY: number) => {
+      const worker = workerRef.current, snap = agentsRef.current;
+      if (!worker || !snap || snap.highWater === 0) return;
+      const radius = agentBrushRadiusRef.current;
+      if (radius <= 0) {
+        const id = pickAgent3d(clientX, clientY);
+        if (id >= 0) worker.postMessage({ type: 'killAgents', ids: [id], activeViewer: activeViewerRef.current });
+        return;
+      }
+      const hit = pickCell(clientX, clientY);
+      if (!hit) return;
+      const W = gridWidth.current, H = gridHeight.current, Dd = gridDepth.current;
+      const torus = boundaryTreatmentRef.current === 'torus';
+      const hasZ = snap.z.length > 0;
+      const r2 = radius * radius;
+      const ids: number[] = [];
+      for (let i = 0; i < snap.highWater; i++) {
+        if (!snap.alive[i]) continue;
+        let dx = snap.x[i]! - hit.col, dy = snap.y[i]! - hit.row, dz = (hasZ ? snap.z[i]! : 0) - hit.layer;
+        if (torus) {
+          if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W;
+          if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H;
+          if (Dd > 1) { if (dz > Dd / 2) dz -= Dd; else if (dz < -Dd / 2) dz += Dd; }
+        }
+        if (dx * dx + dy * dy + dz * dz <= r2) ids.push(i);
+      }
+      if (ids.length > 0) worker.postMessage({ type: 'killAgents', ids, activeViewer: activeViewerRef.current });
+    };
+    // Update the hovered-agent highlight ring (kill/glue/cut/move modes). Returns
+    // true when the highlighted set changed (so the caller redraws on-change only,
+    // never per raw move — the pick is an FBO round-trip + GPU sync, RR-G8).
+    const updateAgentHover = (clientX: number, clientY: number): boolean => {
+      const snap = agentsRef.current;
+      const mode = agentBrushModeRef.current;
+      const want = mode === 'kill' || mode === 'glue' || mode === 'cut' || mode === 'move';
+      if (!want || !snap) {
+        if (hoverAgents3dRef.current.length === 0) return false;
+        hoverAgents3dRef.current = EMPTY_AGENT_RINGS; return true;
+      }
+      const id = pickAgent3d(clientX, clientY);
+      const prev = hoverAgents3dRef.current;
+      if (id < 0) { if (prev.length === 0) return false; hoverAgents3dRef.current = EMPTY_AGENT_RINGS; return true; }
+      const hasZ = snap.z.length > 0;
+      const ring = { x: snap.x[id]!, y: snap.y[id]!, z: hasZ ? snap.z[id]! : 0, radius: snap.radius[id]! };
+      if (prev.length === 1 && prev[0]!.x === ring.x && prev[0]!.y === ring.y && prev[0]!.z === ring.z) return false;
+      hoverAgents3dRef.current = [ring];
       return true;
     };
     // 3D sweep inspect: while Shift+LMB is held and dragged, a SINGLE transient
@@ -2854,7 +3029,35 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         resizeStart.radius = brushRadiusRef.current; resizeStart.ringW = brushRingWidthRef.current;
         resizeStart.lineW = brushLineWidthRef.current;
       }
-      else if (e.button === 0 && e.shiftKey) { active = 'inspect'; sweepPick3d(e.clientX, e.clientY, true); draw(); } // Shift+LMB → sweep inspect (drag) / pin (click)
+      else if (e.button === 0 && e.shiftKey) {
+        // Shift+LMB → inspect. In an agent model, pick the AGENT first; if none is
+        // hit, fall through to the cell-plane sweep inspect (the grid below).
+        if (isAgentModelRef.current) {
+          const id = pickAgent3d(e.clientX, e.clientY);
+          if (id >= 0) {
+            active = null;
+            openAgentInspector(id, e.clientX, e.clientY);
+            const snap = agentsRef.current!;
+            const hasZ = snap.z.length > 0;
+            inspectAgents3dRef.current = [{ x: snap.x[id]!, y: snap.y[id]!, z: hasZ ? snap.z[id]! : 0, radius: snap.radius[id]! }];
+            draw();
+            glc.setPointerCapture?.(e.pointerId); e.preventDefault(); return;
+          }
+        }
+        active = 'inspect'; sweepPick3d(e.clientX, e.clientY, true); draw();
+      } // Shift+LMB → sweep inspect (drag) / pin (click)
+      else if (e.button === 0 && isAgentModelRef.current && agentBrushModeRef.current !== 'paint') {
+        // Plain LMB on an agent model: the agent brush (seed/kill/move). Glue/Cut/
+        // Bond are 2D-only stop-gaps; in 3D they collapse to a single-pick move.
+        const mode = agentBrushModeRef.current;
+        if (mode === 'kill') { active = 'agentKill'; killAgents3d(e.clientX, e.clientY); }
+        else if (mode === 'move') {
+          const id = pickAgent3d(e.clientX, e.clientY);
+          if (id >= 0) { active = 'agentMove'; agentDragId = id; }
+          else active = null;
+        }
+        else { active = 'agentSeed'; seedAgents3d(e.clientX, e.clientY); }  // seed (default) + glue/cut/bond fallback
+      }
       else if (e.button === 0 && brushShapeRef.current === 'line') {
         // Line tool: two clicks. First stages a plane-cell anchor (no paint); the
         // second draws the capsule line between them. No drag-paint in this mode.
@@ -2879,6 +3082,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (!active || active === 'inspect') {
         // Idle / inspect-armed: update the footprint cursor (redraw on change).
         let changed = updateHover(e.clientX, e.clientY);
+        // Agent model: also update the hovered-agent ring (kill/glue/cut/move).
+        if (!active && isAgentModelRef.current) changed = updateAgentHover(e.clientX, e.clientY) || changed;
         // Inspect-armed drag → sweep the front voxel under the cursor.
         if (active === 'inspect') { sweepPick3d(e.clientX, e.clientY, false); changed = true; }
         if (changed) draw();
@@ -2903,6 +3108,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         draw();
         return;
       }
+      // Agent brush drags: seed / kill along the drag, or drag-move the picked
+      // agent on the brush plane (plane-constrained — pickCell gives x/y/z).
+      if (active === 'agentSeed') { seedAgents3d(e.clientX, e.clientY); draw(); return; }
+      if (active === 'agentKill') { killAgents3d(e.clientX, e.clientY); updateAgentHover(e.clientX, e.clientY); draw(); return; }
+      if (active === 'agentMove') {
+        const hit = pickCell(e.clientX, e.clientY);
+        if (hit && agentDragId >= 0) {
+          workerRef.current?.postMessage({ type: 'moveAgents', moves: [{ id: agentDragId, x: hit.col, y: hit.row, z: hit.layer }], torus: boundaryTreatmentRef.current === 'torus', activeViewer: activeViewerRef.current });
+          // Track the dragged agent with the hover ring at the new plane position
+          // (the snapshot's real position arrives on the next stepped frame).
+          const snap = agentsRef.current;
+          hoverAgents3dRef.current = [{ x: hit.col, y: hit.row, z: hit.layer, radius: snap?.radius[agentDragId] ?? 1 }];
+        }
+        draw(); return;
+      }
       const dx = e.clientX - lastX, dy = e.clientY - lastY;
       lastX = e.clientX; lastY = e.clientY;
       const cam = cam3dRef.current;
@@ -2919,8 +3139,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       draw();
     };
     const onLeave = () => {
-      if (hover3dRef.current || hoverCells3dRef.current.length) {
-        hover3dRef.current = null; hoverCells3dRef.current = EMPTY_HOVER_CELLS; draw();
+      if (hover3dRef.current || hoverCells3dRef.current.length || hoverAgents3dRef.current.length) {
+        hover3dRef.current = null; hoverCells3dRef.current = EMPTY_HOVER_CELLS; hoverAgents3dRef.current = EMPTY_AGENT_RINGS; draw();
       }
     };
     const onUp = (e: PointerEvent) => {
@@ -2941,6 +3161,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // Commit the final coalesced stamp synchronously (the rAF may not have
       // fired yet on a quick click-release), mirroring the 2D mouse-up path.
       if (active === 'brush') flushPaintBatch();
+      // Agent move: clear the drag state + the inspect ring (the snapshot's new
+      // position arrives on the next stepped frame).
+      if (active === 'agentMove') { agentDragId = -1; inspectAgents3dRef.current = []; draw(); }
       active = null;
       last3dHitRef.current = null;
     };
@@ -2996,7 +3219,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (reset) last3dHitRef.current = null;
       paint3dRef.current?.(layer, row, col);
     };
-  }, [is3D, draw]);
+    // Bond-Graph Agents (PR5): the renderer's visible agent instance count, and a
+    // headless agent pick (CSS px → engine slot id via instanceToSlot).
+    W.__sim3dAgentCount = () => gl3dRef.current?.agentInstanceCount ?? -1;
+    W.__sim3dPickAgent = (px: number, py: number) => {
+      const glc = glCanvasRef.current, snap = agentsRef.current;
+      if (!gl3dRef.current || !glc || !snap) return -2;
+      draw();
+      const inst = gl3dRef.current.pickAgent(px, py, glc.clientWidth || 1, glc.clientHeight || 1);
+      return instanceToSlot(snap, inst);
+    };
+  }, [is3D, draw, instanceToSlot]);
 
   // 3D Grid CA: mirror the control state into the renderer refs + redraw.
   useEffect(() => { clip3dRef.current = clip3d; draw(); }, [clip3d, draw]);
@@ -3175,6 +3408,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
     if (is3D) draw();
   }, [hoveredInspectIdx, is3D, draw]);
+  // 3D agent inspect ring: clear the white highlight when the agent inspector
+  // popover closes (the onDown Shift+LMB path sets it on open).
+  useEffect(() => {
+    if (is3D && !agentInspect && inspectAgents3dRef.current.length) {
+      inspectAgents3dRef.current = []; draw();
+    }
+  }, [agentInspect, is3D, draw]);
   const [pulseInspectIdx, setPulseInspectIdx] = useState<number | null>(null);
   const [focusedInspectIdx, setFocusedInspectIdx] = useState<number | null>(null);
   const inspectDataRef = useRef<Map<number, Record<string, number>>>(new Map());
@@ -3376,7 +3616,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // Post a seed-agents message for a list of world positions. Optional `sets`
   // carries the encoded per-attribute initial values from the seed-config panel
   // (PR3); the worker applies them to each new agent after the engine seed.
-  const seedAgentsAt = useCallback((pts: Array<{ x: number; y: number; type?: number }>, sets?: Array<{ attrId: string; value: number }>) => {
+  const seedAgentsAt = useCallback((pts: Array<{ x: number; y: number; z?: number; type?: number }>, sets?: Array<{ attrId: string; value: number }>) => {
     const worker = workerRef.current;
     if (!worker || !isAgentModelRef.current || pts.length === 0) return;
     worker.postMessage({ type: 'seedAgents', agents: pts, sets: sets && sets.length > 0 ? sets : undefined, activeViewer: activeViewerRef.current });
@@ -5532,8 +5772,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               <div style={{ color: 'var(--color-text-muted)' }}>{agentState && !agentState.live ? 'Agent no longer exists.' : 'Loading\u2026'}</div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <div>pos ({agentState.x!.toFixed(2)}, {agentState.y!.toFixed(2)})</div>
-                <div>|v| {Math.hypot(agentState.vx ?? 0, agentState.vy ?? 0).toFixed(3)}</div>
+                <div>pos ({agentState.x!.toFixed(2)}, {agentState.y!.toFixed(2)}{agentState.z !== undefined ? `, ${agentState.z.toFixed(2)}` : ''})</div>
+                <div>|v| {Math.hypot(agentState.vx ?? 0, agentState.vy ?? 0, agentState.vz ?? 0).toFixed(3)}</div>
                 <div>radius {agentState.radius!.toFixed(3)}</div>
                 <div>type {agentState.agentType}</div>
                 <div>bonds {agentState.bondDegree}</div>

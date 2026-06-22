@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PR5 — 3D Agent Renderer (sphere impostors + bonds + brush/inspect)</title>
+<style>
+  :root {
+    --bg: #0c0d10; --panel: #15171c; --border: #2a2e37; --muted: #8a9099;
+    --text: #d8dde5; --accent: #e8a13a; --cyan: #4cc9f0; --green: #66bb6a;
+    --red: #f05a5a; --amber: #ffd83a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, Segoe UI, Roboto, sans-serif; padding: 28px; }
+  h1 { font-size: 21px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 28px 0 10px; color: var(--accent);
+    border-bottom: 1px solid var(--border); padding-bottom: 5px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .row { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start; }
+  .card { background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px; }
+  .cap { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  code { background: #1d2027; padding: 1px 5px; border-radius: 4px;
+    color: var(--cyan); font-size: 12.5px; }
+  ul { margin: 6px 0; padding-left: 20px; }
+  li { margin: 3px 0; }
+  table { border-collapse: collapse; margin-top: 6px; font-size: 12.5px; }
+  td, th { border: 1px solid var(--border); padding: 5px 10px; text-align: left; }
+  th { color: var(--accent); }
+  .key { color: var(--amber); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; margin-right: 16px; font-size: 12.5px; }
+  .sw { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+</style>
+</head>
+<body>
+<h1>PR5 — 3D Agent Renderer</h1>
+<p class="sub">Instanced sphere impostors + bond lines + agent pick, built ON the gl3d.ts
+camera/clip/pick framework. 2D agent models keep the byte-identical Canvas2D
+<code>drawAgentsOverlay</code> — the single fork is <code>is3dRef.current</code> at <code>draw()</code>.</p>
+
+<div class="row">
+  <div class="card">
+    <svg width="420" height="320" viewBox="0 0 420 320" xmlns="http://www.w3.org/2000/svg">
+      <rect x="0" y="0" width="420" height="320" fill="#0a0b0e" rx="8"/>
+      <g stroke="#6b7280" stroke-width="1" fill="none" opacity="0.55">
+        <path d="M70 70 L300 50 L370 110 L140 130 Z"/>
+        <path d="M70 240 L300 220 L370 280 L140 300 Z"/>
+        <path d="M70 70 L70 240 M300 50 L300 220 M370 110 L370 280 M140 130 L140 300"/>
+      </g>
+      <g stroke="#e6e6f5" stroke-width="2" opacity="0.55">
+        <line x1="175" y1="150" x2="225" y2="135"/>
+        <line x1="225" y1="135" x2="265" y2="170"/>
+        <line x1="175" y1="150" x2="210" y2="190"/>
+        <line x1="210" y1="190" x2="265" y2="170"/>
+        <line x1="225" y1="135" x2="270" y2="120"/>
+      </g>
+      <defs>
+        <radialGradient id="sph" cx="38%" cy="34%" r="72%">
+          <stop offset="0%" stop-color="#fff" stop-opacity="0.5"/>
+          <stop offset="55%" stop-color="#4cc9f0" stop-opacity="1"/>
+          <stop offset="100%" stop-color="#1c5a78" stop-opacity="1"/>
+        </radialGradient>
+        <radialGradient id="sph2" cx="38%" cy="34%" r="72%">
+          <stop offset="0%" stop-color="#fff" stop-opacity="0.5"/>
+          <stop offset="55%" stop-color="#66bb6a" stop-opacity="1"/>
+          <stop offset="100%" stop-color="#2c5a2e" stop-opacity="1"/>
+        </radialGradient>
+      </defs>
+      <circle cx="175" cy="150" r="20" fill="url(#sph)"/>
+      <circle cx="225" cy="135" r="22" fill="url(#sph2)"/>
+      <circle cx="265" cy="170" r="18" fill="url(#sph)"/>
+      <circle cx="210" cy="190" r="17" fill="url(#sph2)"/>
+      <circle cx="270" cy="120" r="15" fill="url(#sph)"/>
+      <circle cx="225" cy="135" r="30" fill="none" stroke="#ffd83a" stroke-width="2"/>
+      <g transform="translate(36,284)">
+        <line x1="0" y1="0" x2="22" y2="0" stroke="#e64545" stroke-width="2"/>
+        <line x1="0" y1="0" x2="0" y2="18" stroke="#56d16a" stroke-width="2"/>
+        <line x1="0" y1="0" x2="-13" y2="-12" stroke="#5f93f5" stroke-width="2"/>
+        <text x="26" y="4" fill="#f5a0a0" font-size="9">C</text>
+        <text x="-4" y="30" fill="#8be29c" font-size="9">R</text>
+        <text x="-22" y="-14" fill="#9ebcff" font-size="9">D</text>
+      </g>
+    </svg>
+    <div class="cap">Render order: overlays &rarr; brush plane &rarr; voxel cubes &rarr;
+      <b>agent bonds &rarr; agent spheres</b> &rarr; hover/cursor &rarr; gizmo. Spheres
+      write <code>gl_FragDepth</code> so they depth-interleave with voxel cubes; the amber
+      ring (hover) draws with depth OFF.</div>
+  </div>
+
+  <div class="card" style="max-width:340px">
+    <h2 style="margin-top:0">Sphere impostor</h2>
+    <ul>
+      <li>2 triangles / agent (TRIANGLE_STRIP, 4 verts), static quad VBO + per-instance
+        <code>[x,y,z,radius,r,g,b,a]</code> (8 floats, stride 32, divisor 1).</li>
+      <li><span class="key">SPHERE_VS</span> expands the quad along
+        <code>uCamRight</code>/<code>uCamUp</code> by <code>radius</code>; carries the
+        Z-up world centre + radius to the FS.</li>
+      <li><span class="key">SPHERE_FS</span> discards outside the unit disc, derives the
+        analytic normal (Lambert shade), writes <code>gl_FragDepth</code> from the
+        re-projected surface point, applies the SAME clip test as the voxel FS.</li>
+      <li><b>B1-renderer:</b> <code>setCamera</code> stashes
+        <code>this.camRight/camUp</code> from <code>cameraBasis(cam)</code> every call.</li>
+    </ul>
+    <div class="legend" style="margin-top:8px">
+      <span><span class="sw" style="background:#4cc9f0"></span>agent (per-type colour)</span>
+      <span><span class="sw" style="background:none;border:2px solid #ffd83a"></span>hover ring</span>
+      <span><span class="sw" style="background:none;border:2px solid #f2f7ff"></span>inspect ring</span>
+    </div>
+  </div>
+</div>
+
+<h2>Z-up remap (the invariant)</h2>
+<p>A sphere at continuous agent <code>(ax,ay,az)</code> &rarr;
+<code>vec3(ax-uHalf.x, uHalf.y-ay, uHalf.z-az)</code> — col&rarr;+X, row&rarr;-Y, layer&rarr;-Z —
+so a sphere at <code>(c,r,l)</code> sits inside the voxel cube at cell
+<code>(layer=l, row=r, col=c)</code>. The bond endpoints, the rings, and the back-to-front
+sort all use the same remap.</p>
+
+<h2>Pick (instance index &ne; slot id)</h2>
+<p><code>SPHERE_PICK_VS/FS</code> encodes <code>gl_InstanceID+1</code> into the reused pick
+FBO (raycast disc + <code>gl_FragDepth</code> &rarr; nearest agent wins).
+<code>pickAgent(px,py)</code> returns the <b>compacted instance index</b>; SimulatorView's
+<code>instanceToSlot(snap, inst)</code> walks <code>snap.alive</code> <b>ascending</b> —
+the SAME direction <code>uploadAgents</code> compacts — to recover the engine slot.
+Throttled to on-change (an FBO round-trip is a GPU sync).</p>
+
+<h2>3D agent brush + inspect (the editor seam)</h2>
+<table>
+  <tr><th>Gesture</th><th>Action</th></tr>
+  <tr><td>plain LMB (mode = seed)</td><td><code>pickOnPlane</code> &rarr; ball / flat disc on the brush plane &rarr; <code>seedAgents</code> with per-point z</td></tr>
+  <tr><td>plain LMB (mode = kill)</td><td>3D-radius collect from the snapshot &rarr; <code>killAgents</code></td></tr>
+  <tr><td>plain LMB (mode = move)</td><td><code>pickAgent</code> &rarr; drag on the plane &rarr; <code>moveAgents</code> (x/y/z)</td></tr>
+  <tr><td>Shift + LMB</td><td><code>pickAgent</code> &rarr; <code>getAgentState</code> round-trip + white ring; falls through to the cell-plane pick when no agent hit</td></tr>
+  <tr><td>MMB / Alt+LMB / RMB</td><td>orbit / pan (unchanged grid camera)</td></tr>
+</table>
+<p style="color:var(--muted);font-size:12.5px">The seed plane IS <code>plane3dRef</code>. The
+inspector popover is <code>position:fixed</code> (no 2D connector line in 3D — B14): the
+hovered cell is highlighted in-volume instead. Recording/screenshot capture spheres+bonds
+for free via <code>gl3d.readPixels()</code> (<code>preserveDrawingBuffer:true</code>).</p>
+
+<h2>2D path stays byte-identical</h2>
+<p>For a 2D agent model <code>is3dRef.current === false</code> at <code>draw()</code>, so the
+Canvas2D <code>drawAgentsOverlay</code> runs and the GL renderer is never constructed —
+pixel-identical to baseline. PR5 touches no compiler, so the lattice byte-identity holds by
+construction.</p>
+</body>
+</html>
