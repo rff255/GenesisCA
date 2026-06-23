@@ -351,12 +351,16 @@ interface PaintAgentsMsg {
 }
 /** Remove ALL agents (Reset). */
 interface ClearAgentsMsg { type: 'clearAgents'; activeViewer: string }
+/** AW-MEM (PR6a) DEV-only: force the AgentStore onto a WebAssembly.Memory (views
+ *  at baked offsets) even for the `js` target, then re-init agents — the
+ *  JS-on-views proof. */
+interface SetAgentWasmBackedMsg { type: '__setAgentWasmBacked'; wasmBacked: boolean }
 /** Manual glue: bond two agents (the glue brush). */
 interface FormBondMsg { type: 'formBond'; a: number; b: number; activeViewer: string }
 /** Manual cut: break the bond between two agents (the cut brush). */
 interface BreakBondMsg { type: 'breakBond'; a: number; b: number; activeViewer: string }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -419,6 +423,14 @@ const EMPTY_I32 = new Int32Array(0);
 let agentDivisionFn: Function | null = null;
 let agentColorViewer = '';
 
+/** AW-MEM (PR6a) — DEV-only override that forces the AgentStore onto a
+ *  WebAssembly.Memory (views at baked offsets) even for the `js` target, so the
+ *  JS-on-views PROOF can run before any WASM emit (PR6b). Set via the
+ *  `__setAgentWasmBacked` DEV message (then re-init). Off in production — the
+ *  default JS-default path is plain typed arrays. PR6b sets `wasmBacked` from
+ *  `agentTargetOf === 'wasm'` instead of this flag. */
+let agentWasmBackedDev = false;
+
 /** Build the agent attribute specs (the non-model cell attributes double as
  *  per-agent attributes via D-IDX) with their resolved default values. */
 function buildAgentAttrSpecs(): AgentAttrSpec[] {
@@ -430,7 +442,10 @@ function buildAgentAttrSpecs(): AgentAttrSpec[] {
  *  initial agent count. */
 function initAgents(): void {
   if (!agentsEnabled || !centerBasedConfig) { agentStore = null; return; }
-  agentStore = createAgentStore(centerBasedConfig, buildAgentAttrSpecs());
+  // AW-MEM (PR6a): the DEV proof can force the store onto a WebAssembly.Memory
+  // (views at baked offsets) for the `js` target to prove the relocation is
+  // behaviour-identical. PR6b sets this from `agentTargetOf === 'wasm'`.
+  agentStore = createAgentStore(centerBasedConfig, buildAgentAttrSpecs(), { wasmBacked: agentWasmBackedDev });
   // The agent world IS the grid coordinate frame (1:1, Decision D-FIELD): agent
   // (x,y) are in CELL units so they map onto the grid + the screen with the same
   // transform the cell blit uses. (worldWidth/Height in the config are reserved
@@ -646,11 +661,22 @@ function clampAgentDt(): void {
 }
 
 /** Commit the position double-buffer (x ↔ xNext, y ↔ yNext, and z ↔ zNext in
- *  3D). ROUTED through this ONE helper (S11) so PR6's reference-swap→copy-into
- *  conversion (B10/AW-SWAP, needed under wasmMemory views) edits a single
- *  function, not four scattered lines. For the JS target a reference swap is
- *  free; PR6 changes only this body for the WASM target. */
+ *  3D). ROUTED through this ONE helper (S11) so the reference-swap→copy-into
+ *  conversion (B10/AW-SWAP) lives in a single function.
+ *
+ *  AW-SWAP (B10): under a wasmMemory-backed store the SoA arrays are VIEWS at
+ *  baked offsets, so a reference swap (`s.x = s.xNext`) would orphan the
+ *  WASM-baked `agentX` offset from the JS reference. There we COPY-INTO
+ *  (`x.set(xNext)`) so `agentX` stays at a stable offset. The copy is safe
+ *  because the next step's force loop fully overwrites the whole live xNext
+ *  region (alive AND dead branches both write `xN[i]`) before any read of x.
+ *  For the default (plain-array) store the cheap reference swap is kept. */
 function swapPositions(s: AgentStore, is3d: boolean): void {
+  if (s.wasmBacked) {
+    s.x.set(s.xNext); s.y.set(s.yNext);
+    if (is3d) s.z.set(s.zNext);
+    return;
+  }
   const tmpX = s.x; s.x = s.xNext; s.xNext = tmpX;
   const tmpY = s.y; s.y = s.yNext; s.yNext = tmpY;
   if (is3d) { const tmpZ = s.z; s.z = s.zNext; s.zNext = tmpZ; }
@@ -4161,6 +4187,16 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'clearAgents': {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       if (agentStore) clearAgents(agentStore);
+      sendColors();
+      break;
+    }
+    case '__setAgentWasmBacked': {
+      // AW-MEM (PR6a) DEV proof: toggle the WebAssembly.Memory backing and
+      // re-init agents (re-runs init/seed → fresh deterministic state). The
+      // caller then steps + getStates to compare bit-for-bit against the
+      // plain-array backing. No-op in production (never sent).
+      agentWasmBackedDev = !!msg.wasmBacked;
+      if (agentsEnabled) { initAgents(); runAgentInit(); runAgentColorPass(); }
       sendColors();
       break;
     }
