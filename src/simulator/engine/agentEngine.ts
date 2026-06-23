@@ -97,6 +97,56 @@ export interface AgentMemoryLayout {
   freeListOffset: number;
   /** Per-user-attr region offset, typed by the spec's kind. */
   attrOffset: Record<string, number>;
+  // --- AW-RNG + AW-HASH (PR6b-2) control region. The worker writes these cells
+  // BEFORE each WASM `behaviour` call; the WASM loop reads them. ---
+  /** RNG state cell (Uint32, length 1) — the shared xorshift32 `_rs`. The worker
+   *  copies the global `rngState[0]` in before the call + reads it back after, so
+   *  the WASM loop advances the SAME stream the JS loop would (B13 bit-parity). */
+  rngStateOffset: number;
+  /** AW-HASH: the per-step spatial hash, copied into agent-memory views each step
+   *  (S10 — a per-step O(nBins + liveCount) copy). `binStart` reserves
+   *  `maxHashBins + 1` Int32; `binAgents` reserves `maxAgents` Int32. A step whose
+   *  live `nBins + 1` exceeds `maxHashBins + 1` falls back to JS for that step
+   *  (the worker's fits-check) — never silently wrong. */
+  maxHashBins: number;
+  hashBinStartOffset: number;
+  hashBinAgentsOffset: number;
+  /** Per-behaviour neighbour-query scratch (PR6b-2): `getNearbyAgents` writes the
+   *  matched agent-id array here (Int32). Reserves `nearbyScratchSlots` buffers of
+   *  `maxAgents` Int32 each (one per `getNearbyAgents` node, assigned at compile
+   *  time); slot `k` starts at `nearbyScratchOffset + k*maxAgents*4`. A graph with
+   *  more `getNearbyAgents` nodes than slots fails the WASM gate → JS fallback. */
+  nearbyScratchSlots: number;
+  nearbyScratchOffset: number;
+}
+
+/** The number of `getNearbyAgents` scratch buffers the wasmBacked agent layout
+ *  reserves. A graph exceeding it is rejected by `isAgentGraphWasmSupported`
+ *  (→ JS fallback), never silently corrupted. */
+export const AGENT_NEARBY_SCRATCH_SLOTS = 4;
+
+/** AW-HASH reserve bound. The spatial-hash bin count is `nBinsX*nBinsY*nBinsZ`
+ *  with `nBinsAxis = floor(worldAxis / binEdge)` and a per-step `binEdge =
+ *  max(interactionRange*2*maxRadius, neighbourQueryRadius)`. Since `maxRadius`
+ *  only ever GROWS the bin edge (→ FEWER bins), the worst case (most bins) is the
+ *  SMALLEST possible bin edge, governed by the default radius + the neighbour
+ *  query radius. We reserve from that minimum edge (capped) so the runtime hash
+ *  always fits; a degenerate config that still overflows hits the worker's
+ *  fits-check + JS fallback. Pure — mirrors how the worker computes `binEdge`. */
+export function computeAgentMaxHashBins(
+  worldWidth: number, worldHeight: number, worldDepth: number,
+  interactionRange: number, defaultRadius: number, neighbourQueryRadius: number,
+): number {
+  const is3d = worldDepth > 1;
+  // The minimum bin edge across a run (maxRadius ≥ defaultRadius only grows it).
+  const minEdge = Math.max(1e-3, interactionRange * 2 * defaultRadius, neighbourQueryRadius);
+  const nx = Math.max(1, Math.floor(worldWidth / minEdge));
+  const ny = Math.max(1, Math.floor(worldHeight / minEdge));
+  const nz = is3d ? Math.max(1, Math.floor(worldDepth / minEdge)) : 1;
+  // Hard cap so a pathological config can't reserve gigabytes; the fits-check
+  // falls back to JS beyond it.
+  const HARD_CAP = 1 << 20; // 1,048,576 bins
+  return Math.min(HARD_CAP, nx * ny * nz);
 }
 
 const AGENT_F64_FIELDS = [
@@ -132,6 +182,11 @@ export function computeAgentMemoryLayout(
   maxAgents: number,
   maxBonds: number,
   attrSpecs: AgentAttrSpec[],
+  /** AW-HASH reserve (PR6b-2): the max spatial-hash bin count the WASM behaviour
+   *  may read. Appended at the END of the layout (after attrs) so every existing
+   *  region offset is byte-identical — the drift-test (no hash) path is
+   *  unaffected. 0 ⇒ no hash region (a behaviour that never queries the hash). */
+  maxHashBins = 0,
 ): AgentMemoryLayout {
   let off = 0;
   const f64: Record<string, number> = {};
@@ -186,9 +241,35 @@ export function computeAgentMemoryLayout(
     off += maxAgents * ib;
   }
 
+  // --- AW-RNG + AW-HASH control region (appended last → existing offsets stable) ---
+  // RNG state cell (Uint32, length 1, 4-aligned).
+  off = alignTo(off, 4);
+  const rngStateOffset = off;
+  off += 4;
+  // Hash binStart (Int32, length maxHashBins + 1) + binAgents (Int32, length
+  // maxAgents). Both 4-aligned. Reserve 0 when maxHashBins===0 (no hash).
+  off = alignTo(off, 4);
+  const hashBinStartOffset = off;
+  off += (maxHashBins + 1) * 4;
+  off = alignTo(off, 4);
+  const hashBinAgentsOffset = off;
+  off += maxAgents * 4;
+  // getNearbyAgents per-node scratch (Int32, AGENT_NEARBY_SCRATCH_SLOTS × maxAgents).
+  // Only reserved when there's a hash region (maxHashBins>0) — a behaviour that
+  // never queries the hash never calls getNearbyAgents.
+  off = alignTo(off, 4);
+  const nearbyScratchSlots = maxHashBins > 0 ? AGENT_NEARBY_SCRATCH_SLOTS : 0;
+  const nearbyScratchOffset = off;
+  off += nearbyScratchSlots * maxAgents * 4;
+
   const totalBytes = alignTo(off, 8);
   const pages = Math.max(1, Math.ceil(totalBytes / 65536));
-  return { totalBytes, pages, maxAgents, maxBonds, f64, i32, u8, bondI32, bondF64, colorsOffset, freeListOffset, attrOffset };
+  return {
+    totalBytes, pages, maxAgents, maxBonds, f64, i32, u8, bondI32, bondF64,
+    colorsOffset, freeListOffset, attrOffset,
+    rngStateOffset, maxHashBins, hashBinStartOffset, hashBinAgentsOffset,
+    nearbyScratchSlots, nearbyScratchOffset,
+  };
 }
 
 export interface AgentStore {
@@ -315,6 +396,11 @@ export interface CreateAgentStoreOpts {
    *  WASM minimal set writes no user attrs, so the mode is moot — kept aliased).
    *  Default false ⇒ single-buffer (async, byte-identical to pre-feature). */
   syncAttrs?: boolean;
+  /** AW-HASH reserve (PR6b-2): the max spatial-hash bin count the wasmBacked
+   *  layout reserves room for (binStart = maxHashBins+1 Int32). Only meaningful
+   *  under `wasmBacked` (the WASM behaviour reads the in-memory hash). 0 (default)
+   *  ⇒ no hash region (the minimal drift-test behaviour never queries it). */
+  maxHashBins?: number;
 }
 
 /** Allocate the agent store once from the model's center-based config + agent
@@ -354,7 +440,7 @@ export function createAgentStore(
   let attrArr: (id: string, kind: AgentAttrKind) => AgentTypedArray;
 
   if (wasmBacked) {
-    layout = computeAgentMemoryLayout(maxAgents, maxBonds, attrSpecs);
+    layout = computeAgentMemoryLayout(maxAgents, maxBonds, attrSpecs, Math.max(0, Math.floor(opts?.maxHashBins ?? 0)));
     memory = new WebAssembly.Memory({ initial: layout.pages });
     const buf = memory.buffer;
     f64 = (name) => new Float64Array(buf, layout!.f64[name]!, maxAgents);
