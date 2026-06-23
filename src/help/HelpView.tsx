@@ -1141,9 +1141,22 @@ export function HelpView() {
           </p>
           <p className={styles.p}>
             Agents are <strong>additive</strong>: a model keeps its grid and gains the agents
-            on top, so the two engines run side by side. This release runs the agent engine on
-            the <strong>JavaScript (Debug / Reference)</strong> compile target (an agents model
-            selects it automatically) and is <strong>2D</strong>; the grid CA is unaffected.
+            on top, so the two engines run side by side, in <strong>2D or 3D</strong> (a 3D model
+            renders agents as shaded spheres with bond tubes in the voxel viewport). The grid CA
+            is unaffected.
+          </p>
+          <p className={styles.p}>
+            The agent engine&rsquo;s <strong>compile target</strong> and <strong>update mode</strong>
+            are set in <strong>Properties &rarr; Bond-Graph Agents</strong>, <em>independently of
+            the grid&rsquo;s</em> &mdash; so you can run a synchronous grid rule with asynchronous
+            agents, and vice versa. <strong>Compile Target:</strong> <strong>JavaScript</strong>
+            (full node coverage) or <strong>WebAssembly</strong> (for the supported node subset;
+            falls back to JS otherwise); WebGPU agents are coming. <strong>Update Mode:</strong>
+            <strong> Asynchronous</strong> (default &mdash; a <em>Set Agent Attribute</em> to a
+            neighbour is immediately visible to a later agent this step) or <strong>Synchronous</strong>
+            (every agent reads the previous step; attribute writes are swapped in at the step&rsquo;s
+            end &mdash; the snapshot/parallel semantics the GPU path will need). Positions are
+            snapshot-integrated in both modes.
           </p>
           <h3 className={styles.h3}>Enabling Agents</h3>
           <p className={styles.p}>
