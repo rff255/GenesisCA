@@ -23,9 +23,11 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # Custom domain genesisca.online serves at the ROOT, so build with base '/'
+      # (do NOT set GHPAGES — that switches base to the '/GenesisCA/' subpath, which
+      # only applies if the custom domain is removed and the bare github.io URL is
+      # used directly). public/CNAME pins the domain so each deploy keeps it.
       - run: npm run build
-        env:
-          GHPAGES: '1'   # serve under the /GenesisCA/ subpath on GitHub Pages
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
