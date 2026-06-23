@@ -180,11 +180,12 @@ function buildManifest(base: string) {
 }
 
 export default defineConfig(({ command }) => {
-  // Only the GitHub Pages deploy serves under '/GenesisCA/' — its workflow
-  // (.github/workflows/deploy.yml) sets GHPAGES=1 for the build. Everything else
-  // — `npm run dev`, a local `npm run build` + `npm run preview`, and the Tauri
-  // native shell — uses root '/', so local dev AND preview just work at
-  // http://localhost:<port>/ with no base-path suffix to trip over.
+  // The production site is served at the ROOT of the custom domain
+  // (https://genesisca.online/, pinned by public/CNAME), so the deploy now builds
+  // with base '/' — the same as `npm run dev`, local `build` + `preview`, and the
+  // Tauri native shell. GHPAGES is an opt-in fallback: set it to rebuild under the
+  // '/GenesisCA/' subpath ONLY if the custom domain is removed and the bare
+  // github.io project URL (rff255.github.io/GenesisCA/) is used directly.
   const base = process.env.GHPAGES ? '/GenesisCA/' : '/';
   return {
     base,

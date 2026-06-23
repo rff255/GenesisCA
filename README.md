@@ -2,7 +2,7 @@
 
 An IDE for modeling and simulating Cellular Automata, built as a self-contained browser application.
 
-**[Launch GenesisCA](https://rff255.github.io/GenesisCA/)** — runs entirely in your browser, no installation required.
+**[Launch GenesisCA](https://genesisca.online)** — runs entirely in your browser, no installation required.
 
 ---
 
