@@ -11,6 +11,8 @@ import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefault
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { Gl3DRenderer, panCamera } from './render/gl3d';
+import { agentTargetOf } from '../model/centerBased';
+import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported } from '../modeler/vpl/compiler/agentWasm/compile';
 import type { AgentRenderSnapshot } from './engine/agentEngine';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
@@ -1022,8 +1024,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
   // don't behave); PR-A3 wires the real compileAgentGraph over
   // model.agentGraphNodes (the behaviourStep loop + value-outs + force hooks).
-  const compileAgentModel = useCallback((): { behaviourCode?: string; initCode?: string; divisionCode?: string; colorViewer: string } => {
-    if (!model.topologyMode?.agents) return { colorViewer: '' };
+  const compileAgentModel = useCallback((): { behaviourCode?: string; initCode?: string; divisionCode?: string; colorViewer: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array } => {
+    if (!model.topologyMode?.agents) return { colorViewer: '', agentTarget: 'js' };
     const firstViewer = model.mappings.find(mp => mp.isAttributeToColor);
     const colorViewer = firstViewer?.id ?? '';
     const ag = compileAgentGraph(model.agentGraphNodes || [], model.agentGraphEdges || [], model);
@@ -1033,9 +1035,33 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // eslint-disable-next-line no-console
       console.warn('[agents] compile:', ag.error);
     }
-    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, colorViewer };
+    // PR6b-1 — resolve the agent compile target. The WASM agent loop exists for
+    // the supported node subset (the architecture skeleton); the gate clamps to
+    // JS otherwise. When 'wasm', compile the agent module here (we have the
+    // model) and ship the bytes to the worker — mirroring how lattice
+    // `wasmStepBytes` are sent. The JS behaviourCode is ALWAYS sent too (the
+    // worker keeps it as the fallback + for Show Code).
+    let agentTarget = agentTargetOf(model.centerBased, isAgentGraphWasmSupported(model));
+    let agentWasmBytes: Uint8Array | undefined;
+    if (agentTarget === 'wasm') {
+      try {
+        const r = compileAgentGraphWasmForModel(model);
+        if (r.error || r.bytes.length === 0) {
+          // eslint-disable-next-line no-console
+          console.warn('[agents] WASM compile fell back to JS:', r.error);
+          agentTarget = 'js';
+        } else {
+          agentWasmBytes = r.bytes;
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[agents] WASM compile threw, falling back to JS:', e);
+        agentTarget = 'js';
+      }
+    }
+    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, colorViewer, agentTarget, agentWasmBytes };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.mappings]);
+  }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.mappings, model.centerBased]);
 
   // PR5 (C-D1) — does the agent graph touch the cell field? Scan the agent
   // graph for any of the five field nodes (sampleField / fieldGradient /
@@ -2323,6 +2349,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // the WebGPU-grid field bridge (a no-field model does 0 per-step
       // readbacks). Cheap boolean — leave the JS/WASM grid path untouched.
       agentUsesField: agentUsesField(),
+      // PR6b-1: the resolved agent compile target + the compiled WASM agent loop
+      // bytes (only when 'wasm'). The worker backs the AgentStore on a
+      // WebAssembly.Memory + runs the WASM behaviour fn instead of the JS one;
+      // the JS behaviourCode above stays as the fallback.
+      agentTarget: agentResult.agentTarget,
+      agentWasmBytes: agentResult.agentWasmBytes,
     };
     // Canvas transfer is deferred to the useWebGPUStatus handler — see
     // pendingCanvasAttach above. The init message never carries webgpuCanvas
@@ -2667,6 +2699,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         centerBased: model.centerBased,
         // PR5 (C-D1): re-detect on a graph-only edit (field nodes added/removed).
         agentUsesField: agentUsesField(),
+        // PR6b-1: re-resolve the agent target + ship the WASM bytes on recompile.
+        agentTarget: agentResult.agentTarget,
+        agentWasmBytes: agentResult.agentWasmBytes,
       });
       // If user has the model toggle on, ensure useWasm is set (recompile doesn't carry useWasm by default).
       // PR5: the grid target now flows through for agent models too (the

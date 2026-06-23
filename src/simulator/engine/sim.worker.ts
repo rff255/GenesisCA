@@ -31,6 +31,7 @@ import {
   formBond, breakBond, hasBond, sweepStaleBonds, divideAgent,
   type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec, type SpatialHash,
 } from './agentEngine';
+import { instantiateAgentWasm } from '../../modeler/vpl/compiler/agentWasm/compile';
 
 interface AttrDef {
   id: string;
@@ -166,6 +167,15 @@ interface InitMsg {
    *  needs the per-generation attrs CPU↔GPU readback/upload around runAgentStep
    *  (a no-field model's agent loop never touches `readAttrs`). */
   agentUsesField?: boolean;
+  /** PR6b-1: the resolved agent compile target ('js' default). When 'wasm' the
+   *  worker backs the AgentStore on a WebAssembly.Memory (views at baked offsets)
+   *  and runs the compiled `agentWasmBytes` behaviour loop instead of the JS one.
+   *  The clamp lives in `agentTargetOf` (SimulatorView) — the worker trusts it. */
+  agentTarget?: 'js' | 'wasm' | 'webgpu';
+  /** PR6b-1: the compiled agent-behaviour WASM module bytes (only when
+   *  `agentTarget === 'wasm'`). Instantiated against the agent store's memory +
+   *  the host math funcs; absent → the JS behaviour fn runs. */
+  agentWasmBytes?: Uint8Array;
 }
 
 interface StepMsg { type: 'step'; count: number; activeViewer: string; skipColorPass?: boolean }
@@ -193,7 +203,7 @@ interface PaintManualMsg {
 }
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; centerBased?: CenterBasedConfig; agentUsesField?: boolean }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -431,6 +441,19 @@ let agentColorViewer = '';
  *  `agentTargetOf === 'wasm'` instead of this flag. */
 let agentWasmBackedDev = false;
 
+/** PR6b-1 — the resolved agent compile target. 'wasm' backs the AgentStore on a
+ *  WebAssembly.Memory + runs the compiled WASM behaviour loop; otherwise the JS
+ *  `agentBehaviourFn` runs. SimulatorView resolves this via `agentTargetOf` +
+ *  the WASM-support gate, so the worker trusts it. */
+let agentTarget: 'js' | 'wasm' | 'webgpu' = 'js';
+/** PR6b-1 — the compiled agent WASM module bytes (pending instantiation against
+ *  the agent store's memory). Held so `initAgents` (which (re)allocates the
+ *  store + its memory) can instantiate against the FRESH memory. */
+let pendingAgentWasmBytes: Uint8Array | null = null;
+/** PR6b-1 — the instantiated WASM `behaviour(highWater)` export (null on the JS
+ *  target / before instantiation / on a failed instantiate → JS fallback). */
+let agentBehaviourWasmFn: ((highWater: number) => void) | null = null;
+
 /** Build the agent attribute specs (the non-model cell attributes double as
  *  per-agent attributes via D-IDX) with their resolved default values. */
 function buildAgentAttrSpecs(): AgentAttrSpec[] {
@@ -441,11 +464,19 @@ function buildAgentAttrSpecs(): AgentAttrSpec[] {
  *  Called on init when the model has the Agents topology. Seeds the configured
  *  initial agent count. */
 function initAgents(): void {
-  if (!agentsEnabled || !centerBasedConfig) { agentStore = null; return; }
-  // AW-MEM (PR6a): the DEV proof can force the store onto a WebAssembly.Memory
-  // (views at baked offsets) for the `js` target to prove the relocation is
-  // behaviour-identical. PR6b sets this from `agentTargetOf === 'wasm'`.
-  agentStore = createAgentStore(centerBasedConfig, buildAgentAttrSpecs(), { wasmBacked: agentWasmBackedDev });
+  if (!agentsEnabled || !centerBasedConfig) { agentStore = null; agentBehaviourWasmFn = null; return; }
+  // AW-MEM (PR6a/PR6b-1): back the store on a WebAssembly.Memory (views at baked
+  // offsets) when the agent target is 'wasm' (so the WASM behaviour loop reads/
+  // writes the SAME bytes the JS engine does) OR when the DEV proof flag forces
+  // the JS-on-views path. computeAgentMemoryLayout (shared with the compiler)
+  // bakes the offsets; the compiler emitted reads/writes against the same layout.
+  const wantWasmBacked = agentTarget === 'wasm' || agentWasmBackedDev;
+  // Re-allocating the store creates a FRESH WebAssembly.Memory; any previously
+  // instantiated WASM behaviour fn pointed at the OLD memory → drop it. The
+  // caller (init / reset / recompile) re-instantiates via
+  // instantiateAgentWasmIfNeeded against the fresh memory.
+  agentBehaviourWasmFn = null;
+  agentStore = createAgentStore(centerBasedConfig, buildAgentAttrSpecs(), { wasmBacked: wantWasmBacked });
   // The agent world IS the grid coordinate frame (1:1, Decision D-FIELD): agent
   // (x,y) are in CELL units so they map onto the grid + the screen with the same
   // transform the cell blit uses. (worldWidth/Height in the config are reserved
@@ -521,6 +552,29 @@ function initAgents(): void {
     seedAgents(agentStore, specs, r);
   }
   clampAgentDt();
+}
+
+/** PR6b-1 — instantiate the compiled agent WASM module against the FRESH agent
+ *  store memory (allocated by `initAgents` → `createAgentStore({ wasmBacked })`).
+ *  Async (WebAssembly.instantiate). On any failure the worker stays on the JS
+ *  behaviour fn (the clamp keeps JS safe). Re-runs whenever the store / bytes
+ *  change. Posts an error message on a hard failure for visibility. */
+function instantiateAgentWasmIfNeeded(): void {
+  agentBehaviourWasmFn = null;
+  const store = agentStore;
+  if (agentTarget !== 'wasm' || !pendingAgentWasmBytes || !store || !store.wasmBacked || !store.memory) return;
+  const bytes = pendingAgentWasmBytes;
+  const mem = store.memory;
+  void (async () => {
+    try {
+      const inst = await instantiateAgentWasm(bytes, mem);
+      // Guard against a re-init that swapped the store out from under us.
+      if (agentStore === store && agentTarget === 'wasm') agentBehaviourWasmFn = inst.behaviour;
+    } catch (e) {
+      agentBehaviourWasmFn = null;
+      self.postMessage({ type: 'error', message: '[agents] WASM instantiate failed, falling back to JS: ' + ((e as Error)?.message || e) });
+    }
+  })();
 }
 
 /** Refresh per-agent colours after a mutation (seed / paint / kill) without
@@ -730,7 +784,21 @@ function runAgentStep(): void {
   // one-step lag, the cost of fusing density into the single neighbour pass;
   // densities change slowly so it's a fine approximation; queries the hash via
   // Get Nearby Agents). Writes attrs / colours / forces / div+kill+bond requests.
-  if (agentBehaviourFn) {
+  // PR6b-1: dispatch the behaviour loop on the agent target. The WASM loop reads/
+  // writes the SAME store memory at the baked offsets (AW-MEM), so the force
+  // pass / structural phase BELOW is UNCHANGED — it reads the same views. The
+  // WASM `behaviour` takes only `highWater` (the per-step scalars live in the
+  // shared memory; the minimal model needs no hash args — AW-HASH). On any WASM
+  // failure `agentBehaviourWasmFn` is nulled and we fall back to the JS fn.
+  if (agentBehaviourWasmFn) {
+    try {
+      agentBehaviourWasmFn(s.highWater);
+    } catch (e) {
+      self.postMessage({ type: 'error', message: '[agents] WASM behaviour run failed, falling back to JS: ' + ((e as Error)?.message || e) });
+      agentBehaviourWasmFn = null;
+      if (agentBehaviourFn) { try { agentBehaviourFn(...buildAgentLoopArgs(s)); } catch { agentBehaviourFn = null; } }
+    }
+  } else if (agentBehaviourFn) {
     try {
       agentBehaviourFn(...buildAgentLoopArgs(s));
     } catch (e) {
@@ -3316,8 +3384,13 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       agentUsesField = !!msg.agentUsesField;
       centerBasedConfig = msg.centerBased ?? null;
       agentColorViewer = msg.agentColorViewer || '';
+      // PR6b-1: resolve the agent target + stash the WASM bytes BEFORE initAgents
+      // (which reads agentTarget to decide whether to back the store on memory).
+      agentTarget = (msg.agentWasmBytes && msg.agentTarget === 'wasm') ? 'wasm' : (msg.agentTarget ?? 'js');
+      pendingAgentWasmBytes = msg.agentWasmBytes ?? null;
       initAgents();
       compileAgentFns(msg.agentBehaviourCode, msg.agentInitCode, msg.agentDivisionCode);
+      instantiateAgentWasmIfNeeded();
       stopMessages = msg.stopMessages || [];
       webgpuStopCheckInterval = Math.max(1, Math.floor(msg.webgpuStopCheckInterval ?? 1));
       // Mutual exclusion safety net: a saved file or hand-edited JSON could
@@ -3688,7 +3761,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // the configured initial count + the agent Init Event, PR-A3). Re-allocates
       // the store from the live config so a config edit (maxAgents/seedCount/…)
       // takes effect on Reset.
-      if (agentsEnabled) { initAgents(); runAgentInit(); runAgentColorPass(); }
+      if (agentsEnabled) { initAgents(); instantiateAgentWasmIfNeeded(); runAgentInit(); runAgentColorPass(); }
       // Init Event runs once per cell on Reset only (not on Randomize, not on
       // Load State). When present, it modifies attrs in place AFTER defaults
       // have been applied and BEFORE the color pass / GPU upload.
@@ -3746,6 +3819,17 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         if (rc.centerBased) centerBasedConfig = rc.centerBased;
         if (rc.agentUsesField !== undefined) agentUsesField = !!rc.agentUsesField;
         compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode, rc.agentDivisionCode);
+        // PR6b-1: re-resolve the agent target. If the backing requirement
+        // changes (JS↔WASM, since wasm needs the store on a WebAssembly.Memory),
+        // re-init the store so its arrays sit on (or off) the memory; otherwise
+        // a graph-only edit keeps the population. Then (re-)instantiate the WASM
+        // behaviour loop against the (possibly fresh) store memory.
+        const newTarget: 'js' | 'wasm' | 'webgpu' = (rc.agentWasmBytes && rc.agentTarget === 'wasm') ? 'wasm' : (rc.agentTarget ?? 'js');
+        pendingAgentWasmBytes = rc.agentWasmBytes ?? null;
+        const backingChanged = (newTarget === 'wasm') !== (agentStore?.wasmBacked ?? false) && !agentWasmBackedDev;
+        agentTarget = newTarget;
+        if (agentsEnabled && backingChanged) { initAgents(); runAgentInit(); runAgentColorPass(); }
+        instantiateAgentWasmIfNeeded();
         clampAgentDt();
       }
       // Variegated Cells: re-fill the facePatternLookup + interaction-table
@@ -4196,7 +4280,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // caller then steps + getStates to compare bit-for-bit against the
       // plain-array backing. No-op in production (never sent).
       agentWasmBackedDev = !!msg.wasmBacked;
-      if (agentsEnabled) { initAgents(); runAgentInit(); runAgentColorPass(); }
+      if (agentsEnabled) { initAgents(); instantiateAgentWasmIfNeeded(); runAgentInit(); runAgentColorPass(); }
       sendColors();
       break;
     }

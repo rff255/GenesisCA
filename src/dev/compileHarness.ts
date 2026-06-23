@@ -19,15 +19,21 @@ import { compileGraph, compileAgentGraph } from '../modeler/vpl/compiler/compile
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
+import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported } from '../modeler/vpl/compiler/agentWasm/compile';
 
 export interface CompileAllResult {
   js: { stepCode: string; fullCode: string; error: string | null };
   wasm: { total: number; bytesLen: number; bytesJoined: string; error: string | null };
   webgpu: { shaderCode: string; error: string | null };
-  /** Bond-Graph Agents: the compiled agent behaviour loop (JS-only). Empty for
-   *  a non-agent model. Asserted on for the agent-loop shape checks (idx <
-   *  highWater / !_alive / no _row / no colorIdx). */
-  agent: { behaviourCode: string; error: string | null };
+  /** Bond-Graph Agents: the compiled agent behaviour loop (JS) + the PR6b-1 WASM
+   *  agent-loop skeleton. Empty for a non-agent model. `wasm.supported` is the
+   *  `isAgentGraphWasmSupported` gate; `wasm.bytesJoined` is the joined byte
+   *  string for the JS↔WASM byte-shape + parity checks. */
+  agent: {
+    behaviourCode: string;
+    error: string | null;
+    wasm: { supported: boolean; bytesLen: number; bytesJoined: string; supportedTypes: string[]; error: string | null };
+  };
 }
 
 export function compileAll(model: CAModel): CompileAllResult {
@@ -35,7 +41,7 @@ export function compileAll(model: CAModel): CompileAllResult {
     js: { stepCode: '', fullCode: '', error: null },
     wasm: { total: 0, bytesLen: 0, bytesJoined: '', error: null },
     webgpu: { shaderCode: '', error: null },
-    agent: { behaviourCode: '', error: null },
+    agent: { behaviourCode: '', error: null, wasm: { supported: false, bytesLen: 0, bytesJoined: '', supportedTypes: [], error: null } },
   };
   // JS — capture step + initCode + all inputColor + all outputMapping code so
   // OM/IC/init emits (e.g. setCellLooks colour writes) are searchable.
@@ -74,13 +80,26 @@ export function compileAll(model: CAModel): CompileAllResult {
   } catch (e) {
     out.webgpu.error = String((e as Error)?.message || e);
   }
-  // Bond-Graph Agents — compile the agent rule graph (JS-only).
+  // Bond-Graph Agents — compile the agent rule graph (JS).
   try {
     const ag = compileAgentGraph(model.agentGraphNodes || [], model.agentGraphEdges || [], model);
     out.agent.behaviourCode = ag.behaviourCode || '';
     out.agent.error = ag.error || null;
   } catch (e) {
     out.agent.error = String((e as Error)?.message || e);
+  }
+  // Bond-Graph Agents — the PR6b-1 WASM agent-loop skeleton.
+  try {
+    out.agent.wasm.supported = isAgentGraphWasmSupported(model);
+    if (model.topologyMode?.agents && model.centerBased) {
+      const r = compileAgentGraphWasmForModel(model);
+      out.agent.wasm.bytesLen = r.bytes.length;
+      out.agent.wasm.bytesJoined = Array.from(r.bytes).join(',');
+      out.agent.wasm.supportedTypes = r.supportedTypes;
+      out.agent.wasm.error = r.error || null;
+    }
+  } catch (e) {
+    out.agent.wasm.error = String((e as Error)?.message || e);
   }
   return out;
 }

@@ -65,16 +65,32 @@ export function cbNum(cfg: CenterBasedConfig | undefined | null, key: CenterBase
  *  dispatch to a non-existent `compileAgentGraphWasm`/`compileAgentGraphWebGPU`.
  *  PR6/PR7 widen the allow-set as each port lands. INDEPENDENT of the grid
  *  target — the grid can be WebGPU while agents resolve to JS. */
-export function agentTargetOf(cfg: CenterBasedConfig | undefined | null): 'js' | 'wasm' | 'webgpu' {
+export function agentTargetOf(
+  cfg: CenterBasedConfig | undefined | null,
+  /** PR6b-1: the result of `isAgentGraphWasmSupported(model)`. When the user
+   *  selected `'wasm'`, the target resolves to `'wasm'` ONLY if the agent graph
+   *  uses the WASM-supported node subset; otherwise it clamps to `'js'`. Default
+   *  `false` (e.g. callers that have no model handy / pre-PR6b call sites) keeps
+   *  the original always-clamp behaviour. */
+  wasmSupported = false,
+): 'js' | 'wasm' | 'webgpu' {
   const t = cfg?.agentTarget;
   if (t === 'js') return 'js';
-  if (t === 'wasm' || t === 'webgpu') {
-    // Phase F widens this allow-set as each port lands: PR6 deletes the `'wasm'`
-    // clamp arm (returns 'wasm'); PR7 deletes the `'webgpu'` arm. This is the
-    // ONLY agentTargetOf edit in the whole milestone, and it lives in PR6/PR7
-    // (NOT PR1 — the clamp already exists, PR1 only verifies + documents it).
+  if (t === 'wasm') {
+    // PR6b-1: the WASM agent loop exists for the supported node subset (the
+    // architecture skeleton — getSelfPosition/getRadius/applyForce/
+    // setTargetRadius + the layout-agnostic value/flow utility nodes). Run on
+    // WASM only when the whole agent graph is supported; otherwise the clamp
+    // keeps JS safe. PR6b-2/3 widen `isAgentGraphWasmSupported`'s set.
+    if (wasmSupported) return 'wasm';
     // eslint-disable-next-line no-console
-    console.warn(`[agents] agentTarget='${t}' not yet implemented (Phase F) — clamping to 'js'.`);
+    console.warn(`[agents] agentTarget='wasm' but the agent graph uses nodes not yet ported to the WASM agent loop — clamping to 'js'.`);
+    return 'js';
+  }
+  if (t === 'webgpu') {
+    // PR7 deletes this arm when the WebGPU agent loop lands.
+    // eslint-disable-next-line no-console
+    console.warn(`[agents] agentTarget='webgpu' not yet implemented (Phase F PR7) — clamping to 'js'.`);
     return 'js';
   }
   return 'js';
