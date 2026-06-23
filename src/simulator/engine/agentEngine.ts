@@ -48,6 +48,149 @@ function makeArray(kind: AgentAttrKind, len: number): AgentTypedArray {
  *  agent attributes; each carries its id + runtime type + default value). */
 export interface AgentAttrSpec { id: string; type: string; defaultValue: number }
 
+// ===========================================================================
+// AW-MEM (PR6a) — the agent SoA on a single WebAssembly.Memory.
+//
+// To let the eventual WASM agent behaviour (PR6b) read the agent state at FIXED
+// baked offsets, the whole AgentStore SoA can live as typed-array VIEWS over one
+// WebAssembly.Memory. This is OPT-IN (`createAgentStore(cfg, specs, { wasmBacked
+// })`): the default (plain typed arrays) is the byte-untouched JS-default path
+// with ZERO blast radius. When `wasmBacked`, the SAME arrays are views over
+// `memory.buffer` at the offsets `computeAgentMemoryLayout` bakes — so the JS
+// engine code (`store.x[i]`, …) is bit-identical on either backing, and PR6b's
+// WASM module reads `agentX` etc. at the stable offset.
+//
+// Alignment mirrors the lattice WASM layout (wasm/layout.ts computeMemoryLayout):
+// each region starts 8-byte aligned for Float64, 4-byte for Int32, 1-byte for
+// Uint8 (we still 8-align Float64 regions and keep Int32 4-aligned; Uint8 needs
+// no alignment but we keep the running offset monotonic). Regions are
+// non-overlapping within `totalBytes`, rounded up to a 64 KB page boundary.
+//
+// View discipline (B10): a baked-offset view CANNOT be reassigned (`store.x =
+// new Float64Array(...)` would orphan the WASM-baked offset). Under wasmBacked,
+// the position double-buffer swap copies-into (`x.set(xNext)`) instead of the
+// cheap reference swap — see `swapPositions` in the worker. All other engine
+// mutation is element-wise (in-place), so it's view-safe on both backings.
+// ===========================================================================
+
+/** Per-region byte offsets of the agent SoA on a WebAssembly.Memory + the total
+ *  byte count and page count. Field names mirror the AgentStore arrays so the
+ *  view-construction loop in `createAgentStore` is mechanical. */
+export interface AgentMemoryLayout {
+  totalBytes: number;
+  pages: number;
+  maxAgents: number;
+  maxBonds: number;
+  /** Per-agent Float64 fields (length maxAgents, stride 8). */
+  f64: Record<string, number>;
+  /** Per-agent Int32 fields (length maxAgents, stride 4). */
+  i32: Record<string, number>;
+  /** Per-agent Uint8 fields (length maxAgents, stride 1). */
+  u8: Record<string, number>;
+  /** Ragged bond Int32 fields (length maxAgents*maxBonds). */
+  bondI32: Record<string, number>;
+  /** Ragged bond Float64 fields (length maxAgents*maxBonds). */
+  bondF64: Record<string, number>;
+  /** colors region (Uint8Clamped, length maxAgents*4). */
+  colorsOffset: number;
+  /** freeList region (Int32, length maxAgents). */
+  freeListOffset: number;
+  /** Per-user-attr region offset, typed by the spec's kind. */
+  attrOffset: Record<string, number>;
+}
+
+const AGENT_F64_FIELDS = [
+  'x', 'y', 'z', 'xNext', 'yNext', 'zNext', 'vx', 'vy', 'vz',
+  'forceX', 'forceY', 'forceZ', 'radius', 'targetRadius', 'age',
+  'divideAxisX', 'divideAxisY', 'divideAxisZ', 'divideAsym',
+  'bondFormL', 'bondFormK',
+  'density',
+] as const;
+const AGENT_I32_FIELDS = [
+  'type', 'lineage', 'epoch', 'bondCount',
+  'bondFormReq', 'bondBreakReq',
+] as const;
+const AGENT_U8_FIELDS = ['alive', 'divideRequest', 'killRequest'] as const;
+const AGENT_BOND_I32_FIELDS = ['bondPartner', 'bondPartnerEpoch', 'bondTypeLabel'] as const;
+const AGENT_BOND_F64_FIELDS = ['bondRestLength', 'bondStiffness'] as const;
+
+function alignTo(off: number, align: number): number {
+  return Math.ceil(off / align) * align;
+}
+
+/** Byte width of an agent-attribute kind (uint8→1, int32→4, float64→8). */
+function attrKindBytes(kind: AgentAttrKind): number {
+  return kind === 'uint8' ? 1 : kind === 'int32' ? 4 : 8;
+}
+
+/** Compute the byte layout of the agent SoA on a WebAssembly.Memory. Pure (no
+ *  allocation). Every per-agent Float64 region is 8-byte aligned, Int32 4-byte,
+ *  Uint8 1-byte; ragged bond regions are sized maxAgents*maxBonds; colors is
+ *  maxAgents*4; each user attr gets its own region typed by its spec kind. All
+ *  regions are non-overlapping within `totalBytes`. */
+export function computeAgentMemoryLayout(
+  maxAgents: number,
+  maxBonds: number,
+  attrSpecs: AgentAttrSpec[],
+): AgentMemoryLayout {
+  let off = 0;
+  const f64: Record<string, number> = {};
+  const i32: Record<string, number> = {};
+  const u8: Record<string, number> = {};
+  const bondI32: Record<string, number> = {};
+  const bondF64: Record<string, number> = {};
+  const attrOffset: Record<string, number> = {};
+
+  // Per-agent Float64 (8-aligned, maxAgents*8 each)
+  for (const name of AGENT_F64_FIELDS) {
+    off = alignTo(off, 8);
+    f64[name] = off;
+    off += maxAgents * 8;
+  }
+  // Per-agent Int32 (4-aligned, maxAgents*4 each)
+  for (const name of AGENT_I32_FIELDS) {
+    off = alignTo(off, 4);
+    i32[name] = off;
+    off += maxAgents * 4;
+  }
+  // Ragged bond Int32 (4-aligned, maxAgents*maxBonds*4 each)
+  for (const name of AGENT_BOND_I32_FIELDS) {
+    off = alignTo(off, 4);
+    bondI32[name] = off;
+    off += maxAgents * maxBonds * 4;
+  }
+  // Ragged bond Float64 (8-aligned, maxAgents*maxBonds*8 each)
+  for (const name of AGENT_BOND_F64_FIELDS) {
+    off = alignTo(off, 8);
+    bondF64[name] = off;
+    off += maxAgents * maxBonds * 8;
+  }
+  // freeList (Int32, maxAgents*4)
+  off = alignTo(off, 4);
+  const freeListOffset = off;
+  off += maxAgents * 4;
+  // Per-agent Uint8 (1-aligned, maxAgents each)
+  for (const name of AGENT_U8_FIELDS) {
+    u8[name] = off;
+    off += maxAgents;
+  }
+  // colors (Uint8 RGBA, maxAgents*4)
+  const colorsOffset = off;
+  off += maxAgents * 4;
+  // User attributes — one region per spec, aligned + sized by its kind.
+  for (const spec of attrSpecs) {
+    const kind = agentAttrKind(spec.type);
+    const ib = attrKindBytes(kind);
+    off = alignTo(off, ib);
+    attrOffset[spec.id] = off;
+    off += maxAgents * ib;
+  }
+
+  const totalBytes = alignTo(off, 8);
+  const pages = Math.max(1, Math.ceil(totalBytes / 65536));
+  return { totalBytes, pages, maxAgents, maxBonds, f64, i32, u8, bondI32, bondF64, colorsOffset, freeListOffset, attrOffset };
+}
+
 export interface AgentStore {
   config: CenterBasedConfig;
   maxAgents: number;
@@ -140,25 +283,91 @@ export interface AgentStore {
 
   // --- integration ---
   dt: number;          // current (clamped) timestep
+
+  // --- AW-MEM (PR6a): the WebAssembly.Memory backing (opt-in). ---
+  /** True when every SoA array above is a VIEW over `memory.buffer` at the
+   *  `layout`'s baked offsets (so PR6b's WASM module reads the same bytes).
+   *  False (the default) ⇒ the arrays are plain typed arrays (the JS-default
+   *  path). Drives the `swapPositions` copy-into-vs-reference-swap discipline. */
+  wasmBacked: boolean;
+  /** The agent memory (only when `wasmBacked`). PR6b passes this as `env.mem`. */
+  memory?: WebAssembly.Memory;
+  /** The baked byte layout (only when `wasmBacked`). */
+  layout?: AgentMemoryLayout;
 }
 
+/** Options for `createAgentStore`. `wasmBacked` (default false) relocates the
+ *  whole SoA onto a single WebAssembly.Memory as views at baked offsets (AW-MEM,
+ *  PR6a) — PR6b passes this for the WASM target. Default false = plain typed
+ *  arrays (the byte-untouched JS-default path). */
+export interface CreateAgentStoreOpts { wasmBacked?: boolean }
+
 /** Allocate the agent store once from the model's center-based config + agent
- *  attribute specs. All arrays are plain JS typed arrays (agents are JS-only in
- *  v1 — they sidestep the wasmMemory-view discipline; the Phase F WASM port
- *  bakes them as views). */
-export function createAgentStore(config: CenterBasedConfig, attrSpecs: AgentAttrSpec[]): AgentStore {
+ *  attribute specs. By default all arrays are plain JS typed arrays (the
+ *  JS-default path, byte-untouched). With `{ wasmBacked: true }` the SAME arrays
+ *  are VIEWS over one WebAssembly.Memory at `computeAgentMemoryLayout`'s baked
+ *  offsets — so the JS engine code reads them bit-identically while PR6b's WASM
+ *  module reads them at fixed offsets. */
+export function createAgentStore(
+  config: CenterBasedConfig,
+  attrSpecs: AgentAttrSpec[],
+  opts?: CreateAgentStoreOpts,
+): AgentStore {
   const maxAgents = Math.max(1, Math.floor(cbNum(config, 'maxAgents')));
   const maxBonds = Math.max(1, Math.floor(cbNum(config, 'maxBonds')));
   const worldWidth = cbNum(config, 'worldWidth');
   const worldHeight = cbNum(config, 'worldHeight');
 
+  const attrKind: Record<string, AgentAttrKind> = {};
+  for (const spec of attrSpecs) attrKind[spec.id] = agentAttrKind(spec.type);
+
+  const wasmBacked = !!opts?.wasmBacked;
+  let memory: WebAssembly.Memory | undefined;
+  let layout: AgentMemoryLayout | undefined;
+
+  // Array factories: plain (default) OR views over one WebAssembly.Memory.
+  let f64: (name: typeof AGENT_F64_FIELDS[number]) => Float64Array;
+  let i32: (name: typeof AGENT_I32_FIELDS[number]) => Int32Array;
+  let u8: (name: typeof AGENT_U8_FIELDS[number]) => Uint8Array;
+  let bondI32: (name: typeof AGENT_BOND_I32_FIELDS[number]) => Int32Array;
+  let bondF64: (name: typeof AGENT_BOND_F64_FIELDS[number]) => Float64Array;
+  let freeListArr: () => Int32Array;
+  let colorsArr: () => Uint8ClampedArray;
+  let attrArr: (id: string, kind: AgentAttrKind) => AgentTypedArray;
+
+  if (wasmBacked) {
+    layout = computeAgentMemoryLayout(maxAgents, maxBonds, attrSpecs);
+    memory = new WebAssembly.Memory({ initial: layout.pages });
+    const buf = memory.buffer;
+    f64 = (name) => new Float64Array(buf, layout!.f64[name]!, maxAgents);
+    i32 = (name) => new Int32Array(buf, layout!.i32[name]!, maxAgents);
+    u8 = (name) => new Uint8Array(buf, layout!.u8[name]!, maxAgents);
+    bondI32 = (name) => new Int32Array(buf, layout!.bondI32[name]!, maxAgents * maxBonds);
+    bondF64 = (name) => new Float64Array(buf, layout!.bondF64[name]!, maxAgents * maxBonds);
+    freeListArr = () => new Int32Array(buf, layout!.freeListOffset, maxAgents);
+    colorsArr = () => new Uint8ClampedArray(buf, layout!.colorsOffset, maxAgents * 4);
+    attrArr = (id, kind) => {
+      const o = layout!.attrOffset[id]!;
+      if (kind === 'uint8') return new Uint8Array(buf, o, maxAgents);
+      if (kind === 'int32') return new Int32Array(buf, o, maxAgents);
+      return new Float64Array(buf, o, maxAgents);
+    };
+  } else {
+    f64 = () => new Float64Array(maxAgents);
+    i32 = () => new Int32Array(maxAgents);
+    u8 = () => new Uint8Array(maxAgents);
+    bondI32 = () => new Int32Array(maxAgents * maxBonds);
+    bondF64 = () => new Float64Array(maxAgents * maxBonds);
+    freeListArr = () => new Int32Array(maxAgents);
+    colorsArr = () => new Uint8ClampedArray(maxAgents * 4);
+    attrArr = (_id, kind) => makeArray(kind, maxAgents);
+  }
+
   const attrRead: Record<string, AgentTypedArray> = {};
   const attrWrite: Record<string, AgentTypedArray> = {};
-  const attrKind: Record<string, AgentAttrKind> = {};
   for (const spec of attrSpecs) {
-    const kind = agentAttrKind(spec.type);
-    attrKind[spec.id] = kind;
-    const r = makeArray(kind, maxAgents);
+    const kind = attrKind[spec.id]!;
+    const r = attrArr(spec.id, kind);
     if (spec.defaultValue !== 0) r.fill(spec.defaultValue);
     attrRead[spec.id] = r;
     // SINGLE buffer for agent attributes: an agent reads + writes only its OWN
@@ -169,7 +378,7 @@ export function createAgentStore(config: CenterBasedConfig, attrSpecs: AgentAttr
     attrWrite[spec.id] = r;
   }
 
-  const bondPartner = new Int32Array(maxAgents * maxBonds).fill(-1);
+  const bondPartner = bondI32('bondPartner').fill(-1);
 
   return {
     config, maxAgents, maxBonds, worldWidth, worldHeight,
@@ -178,50 +387,53 @@ export function createAgentStore(config: CenterBasedConfig, attrSpecs: AgentAttr
     // dormant CenterBasedConfig.worldDepth stays ignored — reading it reintroduces
     // the exact baked/passed desync B2 warns against.
     worldDepth: 1,
-    x: new Float64Array(maxAgents),
-    y: new Float64Array(maxAgents),
-    z: new Float64Array(maxAgents),
-    xNext: new Float64Array(maxAgents),
-    yNext: new Float64Array(maxAgents),
-    zNext: new Float64Array(maxAgents),
-    vx: new Float64Array(maxAgents),
-    vy: new Float64Array(maxAgents),
-    vz: new Float64Array(maxAgents),
-    forceX: new Float64Array(maxAgents),
-    forceY: new Float64Array(maxAgents),
-    forceZ: new Float64Array(maxAgents),
-    radius: new Float64Array(maxAgents),
-    targetRadius: new Float64Array(maxAgents),
-    age: new Float64Array(maxAgents),
-    type: new Int32Array(maxAgents),
-    lineage: new Int32Array(maxAgents),
-    alive: new Uint8Array(maxAgents),
-    epoch: new Int32Array(maxAgents),
-    bondCount: new Int32Array(maxAgents),
-    density: new Float64Array(maxAgents),
+    x: f64('x'),
+    y: f64('y'),
+    z: f64('z'),
+    xNext: f64('xNext'),
+    yNext: f64('yNext'),
+    zNext: f64('zNext'),
+    vx: f64('vx'),
+    vy: f64('vy'),
+    vz: f64('vz'),
+    forceX: f64('forceX'),
+    forceY: f64('forceY'),
+    forceZ: f64('forceZ'),
+    radius: f64('radius'),
+    targetRadius: f64('targetRadius'),
+    age: f64('age'),
+    type: i32('type'),
+    lineage: i32('lineage'),
+    alive: u8('alive'),
+    epoch: i32('epoch'),
+    bondCount: i32('bondCount'),
+    density: f64('density'),
     bondPartner,
-    bondPartnerEpoch: new Int32Array(maxAgents * maxBonds),
-    bondRestLength: new Float64Array(maxAgents * maxBonds),
-    bondStiffness: new Float64Array(maxAgents * maxBonds),
-    bondTypeLabel: new Int32Array(maxAgents * maxBonds),
-    divideRequest: new Uint8Array(maxAgents),
-    divideAxisX: new Float64Array(maxAgents),
-    divideAxisY: new Float64Array(maxAgents),
-    divideAxisZ: new Float64Array(maxAgents),
-    divideAsym: new Float64Array(maxAgents),
-    killRequest: new Uint8Array(maxAgents),
-    bondFormReq: new Int32Array(maxAgents),
-    bondFormL: new Float64Array(maxAgents),
-    bondFormK: new Float64Array(maxAgents),
-    bondBreakReq: new Int32Array(maxAgents),
-    colors: new Uint8ClampedArray(maxAgents * 4),
+    bondPartnerEpoch: bondI32('bondPartnerEpoch'),
+    bondRestLength: bondF64('bondRestLength'),
+    bondStiffness: bondF64('bondStiffness'),
+    bondTypeLabel: bondI32('bondTypeLabel'),
+    divideRequest: u8('divideRequest'),
+    divideAxisX: f64('divideAxisX'),
+    divideAxisY: f64('divideAxisY'),
+    divideAxisZ: f64('divideAxisZ'),
+    divideAsym: f64('divideAsym'),
+    killRequest: u8('killRequest'),
+    bondFormReq: i32('bondFormReq'),
+    bondFormL: f64('bondFormL'),
+    bondFormK: f64('bondFormK'),
+    bondBreakReq: i32('bondBreakReq'),
+    colors: colorsArr(),
     attrSpecs,
     attrRead, attrWrite, attrKind,
     highWater: 0,
     liveCount: 0,
-    freeList: new Int32Array(maxAgents),
+    freeList: freeListArr(),
     freeTop: 0,
     dt: cbNum(config, 'timeStep'),
+    wasmBacked,
+    memory,
+    layout,
   };
 }
 
