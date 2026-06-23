@@ -9,6 +9,7 @@ import { useListReorder } from './useListReorder';
 import { NumberField } from '../vpl/widgets/InlineWidgets';
 import { cbNum } from '../../model/centerBased';
 import type { CenterBasedNumericKey } from '../../model/centerBased';
+import { isAgentGraphWasmSupported } from '../vpl/compiler/agentWasm/compile';
 import styles from './PanelContent.module.css';
 
 function newCondId(): string {
@@ -399,6 +400,11 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
               change re-allocates → a worker reinit). */}
           {topo.agents && (() => {
             const cb = model.centerBased;
+            // Live WASM-target support for the CURRENT agent graph (PR6b-1 covers a
+            // minimal node subset; PR6b-2/3 widen it). When false, picking WASM is
+            // honest but the engine falls back to JS (agentTargetOf clamps).
+            const agentWasmSupported = isAgentGraphWasmSupported(model);
+            const agentSync = (cb?.agentUpdateMode ?? 'async') === 'sync';
             const num = (k: CenterBasedNumericKey) => cbNum(cb, k);
             const NF = (k: CenterBasedNumericKey, opts?: { min?: number; max?: number; step?: number; integer?: boolean }) => (
               <NumberField
@@ -422,22 +428,52 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
             return (
               <div style={{ marginTop: 14, borderTop: '1px solid #333', paddingTop: 10 }}>
                 <label className={styles.fieldLabel} style={{ marginBottom: 6, color: '#b58fd6' }}>Bond-Graph Agents</label>
-                {/* Agent Compile Target — INDEPENDENT of the grid's Compile
-                    Target radio above. The agent engine runs on JS this release;
-                    WASM/WebGPU are Phase F (rendered disabled). PR5: changing it
-                    forces a recompile + a full reinit (agentTarget is in
+                {/* Agent Update Mode — INDEPENDENT of the grid's Update Mode radio
+                    above. The user can run a synchronous grid rule with async
+                    agents, and vice versa. Changing it re-allocates the attribute
+                    buffers (double- vs single-buffered) → a full reinit (it's in
                     needsFullInit). */}
+                <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '6px 0 4px' }}>Agent Update Mode</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 2, marginBottom: 4 }}>
+                  {([
+                    ['async', 'Asynchronous', 'Single-buffered attributes — a Set Agent Attribute to a neighbour is immediately visible to a later agent this step (sequential).'],
+                    ['sync', 'Synchronous', 'Double-buffered attributes — every agent reads the previous step; writes are swapped in at the step’s end (parallel / snapshot semantics; required by the forthcoming WebGPU agent target).'],
+                  ] as const).map(([val, title, hint]) => (
+                    <label key={val} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
+                      <input
+                        type="radio"
+                        name="agentUpdateMode"
+                        checked={(cb?.agentUpdateMode ?? 'async') === val}
+                        onChange={() => updateCenterBased({ agentUpdateMode: val })}
+                        style={{ marginTop: 2 }}
+                      />
+                      <span><strong>{title}</strong><br /><span style={{ color: '#888', fontSize: '0.66rem' }}>{hint}</span></span>
+                    </label>
+                  ))}
+                </div>
+                <span style={{ color: '#888', fontSize: '0.62rem', display: 'block', marginBottom: 4 }}>
+                  Independent of the grid&apos;s Update Mode. Positions are snapshot-integrated in both modes; this governs attribute read/write visibility.
+                </span>
+
+                {/* Agent Compile Target — INDEPENDENT of the grid's Compile Target
+                    radio above. JS = full node coverage. WASM is live for the
+                    supported node subset (PR6b-1; falls back to JS otherwise).
+                    WebGPU is Phase F (PR7). Changing it forces a full reinit. */}
                 <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '6px 0 4px' }}>Agent Compile Target</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 2, marginBottom: 4 }}>
                   {([
                     ['js', 'Debug / Reference (JS)', 'Plain JavaScript agent engine — full node coverage. The agent loop is O(N) via the spatial hash.', false],
-                    ['wasm', 'WebAssembly', 'coming soon (Phase F)', true],
-                    ['webgpu', 'WebGPU', 'coming soon (Phase F)', true],
+                    ['wasm', 'WebAssembly', agentWasmSupported
+                      ? 'This agent graph runs on WebAssembly (the supported node subset). Independent of the grid target.'
+                      : 'Selectable, but this graph uses nodes not yet ported to the WASM agent loop, so it falls back to JS (more coverage lands in Phase F).', false],
+                    ['webgpu', 'WebGPU', agentSync
+                      ? 'coming soon (Phase F PR7) — runs agents in parallel on the GPU.'
+                      : 'coming soon (Phase F PR7) — will require Synchronous agent update mode (GPU runs agents in parallel).', true],
                   ] as const).map(([val, title, hint, disabled]) => (
                     <label
                       key={val}
                       style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: disabled ? 'not-allowed' : 'pointer', fontSize: '0.72rem', opacity: disabled ? 0.5 : 1 }}
-                      title={disabled ? 'Not yet implemented — the agent loop is JS-only this release (Phase F ports it to WASM/WebGPU).' : undefined}
+                      title={disabled ? 'WebGPU agents are not yet implemented (Phase F PR7).' : undefined}
                     >
                       <input
                         type="radio"
@@ -456,7 +492,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   ))}
                 </div>
                 <span style={{ color: '#888', fontSize: '0.62rem', display: 'block', marginBottom: 4 }}>
-                  Independent of the grid's Compile Target. The grid and agents can run on different targets (e.g. WebGPU grid diffusion + WASM agents).
+                  Independent of the grid&apos;s Compile Target. The grid and agents can run on different targets (e.g. WebGPU grid diffusion + WASM agents).
                 </span>
                 <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '6px 0 4px' }}>Capacity</div>
                 {Row('Max Agents', NF('maxAgents', { min: 1, integer: true }), 'Over-allocated ceiling; overflow rejects (never wraps). Changing it re-inits the engine.')}

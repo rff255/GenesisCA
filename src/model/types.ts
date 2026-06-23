@@ -656,6 +656,20 @@ export interface CenterBasedConfig {
    *  e.g. grid='webgpu' (diffusion) + agentTarget='wasm' (async agents).
    *  Resolved (and clamped to what's implemented) via `agentTargetOf`. */
   agentTarget?: 'js' | 'wasm' | 'webgpu';
+  /** Agent update synchronicity, INDEPENDENT of the grid's
+   *  `model.properties.updateMode`. The user can run a synchronous grid rule
+   *  with asynchronous agents, and vice versa.
+   *  - `'async'` (DEFAULT — byte-identical to pre-feature behaviour): the agent
+   *    attribute buffers are single-buffered (`attrWrite` aliases `attrRead`), so
+   *    a `Set Agent Attribute` write to a neighbour is IMMEDIATELY visible to a
+   *    later agent in the same step (sequential semantics).
+   *  - `'sync'`: the attribute buffers are double-buffered — every agent reads the
+   *    PREVIOUS step's attributes and writes go to a separate buffer swapped in at
+   *    the end of the step (parallel/snapshot semantics; the prerequisite for the
+   *    forthcoming WebGPU agent target, which runs agents in parallel). Positions
+   *    are snapshot-integrated in BOTH modes (the force law reads one position
+   *    snapshot); this flag governs the ATTRIBUTE read/write visibility. */
+  agentUpdateMode?: 'sync' | 'async';
 }
 
 /** Complete CA model definition */

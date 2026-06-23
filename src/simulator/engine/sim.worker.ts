@@ -29,6 +29,7 @@ import {
   createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot,
   snapshotAgentsForRender, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
   formBond, breakBond, hasBond, sweepStaleBonds, divideAgent,
+  primeAgentAttrWrite, swapAgentAttrs,
   type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec, type SpatialHash,
 } from './agentEngine';
 import { instantiateAgentWasm } from '../../modeler/vpl/compiler/agentWasm/compile';
@@ -476,7 +477,13 @@ function initAgents(): void {
   // caller (init / reset / recompile) re-instantiates via
   // instantiateAgentWasmIfNeeded against the fresh memory.
   agentBehaviourWasmFn = null;
-  agentStore = createAgentStore(centerBasedConfig, buildAgentAttrSpecs(), { wasmBacked: wantWasmBacked });
+  // Agent update synchronicity (INDEPENDENT of the grid's `updateMode`): 'sync'
+  // double-buffers the agent attribute arrays (read previous / write next, swapped
+  // at step end — parallel/snapshot semantics, the WebGPU-agent prerequisite),
+  // 'async' (default) single-buffers them (immediate writes). Only honoured on the
+  // non-wasmBacked JS path (createAgentStore gates `syncAttrs` on `!wasmBacked`).
+  const wantSyncAttrs = centerBasedConfig.agentUpdateMode === 'sync';
+  agentStore = createAgentStore(centerBasedConfig, buildAgentAttrSpecs(), { wasmBacked: wantWasmBacked, syncAttrs: wantSyncAttrs });
   // The agent world IS the grid coordinate frame (1:1, Decision D-FIELD): agent
   // (x,y) are in CELL units so they map onto the grid + the screen with the same
   // transform the cell blit uses. (worldWidth/Height in the config are reserved
@@ -784,6 +791,12 @@ function runAgentStep(): void {
   // one-step lag, the cost of fusing density into the single neighbour pass;
   // densities change slowly so it's a fine approximation; queries the hash via
   // Get Nearby Agents). Writes attrs / colours / forces / div+kill+bond requests.
+  // Sync update mode (independent of the grid): prime the write buffer = a clone
+  // of the read buffer, so attributes the behaviour doesn't touch carry over and
+  // the behaviour reads the PREVIOUS step's attrs while writing the next. No-op in
+  // async mode (single buffer) — byte-identical to pre-feature.
+  primeAgentAttrWrite(s);
+
   // PR6b-1: dispatch the behaviour loop on the agent target. The WASM loop reads/
   // writes the SAME store memory at the baked offsets (AW-MEM), so the force
   // pass / structural phase BELOW is UNCHANGED — it reads the same views. The
@@ -806,6 +819,11 @@ function runAgentStep(): void {
       agentBehaviourFn = null;
     }
   }
+
+  // Sync update mode: swap the double-buffered attrs in, so the values the
+  // behaviour just wrote become the live (read) buffer for the structural phase,
+  // the render snapshot, and the next step. No-op in async mode.
+  swapAgentAttrs(s);
 
   // Single neighbour pass: graph-authored force (forceX/Y[/Z] from Apply Force) +
   // soft-sphere repulsion/adhesion (unless customForcesOnly) + bond springs +

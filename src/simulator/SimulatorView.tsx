@@ -2548,7 +2548,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // PR5: the Agent Compile Target is independent of the grid target. Changing
       // it switches the agent driver's memory residency (Phase F: JS↔WASM↔WebGPU),
       // so it needs a full reinit, not a soft recompile (mirrors useWasm/useWebGPU).
-      || (prev.centerBased?.agentTarget ?? 'js') !== (model.centerBased?.agentTarget ?? 'js');
+      || (prev.centerBased?.agentTarget ?? 'js') !== (model.centerBased?.agentTarget ?? 'js')
+      // The Agent Update Mode (sync/async — independent of the grid's updateMode)
+      // changes the attribute-buffer allocation (double- vs single-buffered) in
+      // createAgentStore, so it needs a full reinit too.
+      || (prev.centerBased?.agentUpdateMode ?? 'async') !== (model.centerBased?.agentUpdateMode ?? 'async');
 
     if (needsFullInit) {
       workerRef.current?.terminate();
