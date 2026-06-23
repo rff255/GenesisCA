@@ -294,13 +294,28 @@ export interface AgentStore {
   memory?: WebAssembly.Memory;
   /** The baked byte layout (only when `wasmBacked`). */
   layout?: AgentMemoryLayout;
+  /** True when the agent attribute buffers are DOUBLE-buffered (sync update mode):
+   *  `attrWrite` is a SEPARATE array from `attrRead`, so the behaviour reads the
+   *  previous step (`attrRead`) and writes the next (`attrWrite`), swapped in at
+   *  the step's end (`swapAgentAttrs`). False (default / async) ⇒ `attrWrite`
+   *  aliases `attrRead` (immediate writes). Only ever true on the non-wasmBacked
+   *  (JS) path — the WASM minimal emitter set writes no user attrs, so the mode is
+   *  moot there. */
+  syncAttrs: boolean;
 }
 
 /** Options for `createAgentStore`. `wasmBacked` (default false) relocates the
  *  whole SoA onto a single WebAssembly.Memory as views at baked offsets (AW-MEM,
  *  PR6a) — PR6b passes this for the WASM target. Default false = plain typed
  *  arrays (the byte-untouched JS-default path). */
-export interface CreateAgentStoreOpts { wasmBacked?: boolean }
+export interface CreateAgentStoreOpts {
+  wasmBacked?: boolean;
+  /** Sync agent update mode: allocate `attrWrite` as a SEPARATE buffer from
+   *  `attrRead` (double-buffered attributes). Ignored under `wasmBacked` (the
+   *  WASM minimal set writes no user attrs, so the mode is moot — kept aliased).
+   *  Default false ⇒ single-buffer (async, byte-identical to pre-feature). */
+  syncAttrs?: boolean;
+}
 
 /** Allocate the agent store once from the model's center-based config + agent
  *  attribute specs. By default all arrays are plain JS typed arrays (the
@@ -322,6 +337,9 @@ export function createAgentStore(
   for (const spec of attrSpecs) attrKind[spec.id] = agentAttrKind(spec.type);
 
   const wasmBacked = !!opts?.wasmBacked;
+  // Sync attrs only ever apply on the non-wasmBacked (JS) path (the WASM minimal
+  // emitter set writes no user attrs, so double-buffering would be dead memory).
+  const syncAttrs = !!opts?.syncAttrs && !wasmBacked;
   let memory: WebAssembly.Memory | undefined;
   let layout: AgentMemoryLayout | undefined;
 
@@ -370,12 +388,20 @@ export function createAgentStore(
     const r = attrArr(spec.id, kind);
     if (spec.defaultValue !== 0) r.fill(spec.defaultValue);
     attrRead[spec.id] = r;
-    // SINGLE buffer for agent attributes: an agent reads + writes only its OWN
-    // attrs (no neighbour-attr reads in the agent graph), so write aliases read
-    // — an own-agent read-modify-write sees its write immediately, the natural
-    // imperative semantics. (Positions ARE double-buffered for synchronous force
-    // integration; that's separate, engine-owned x/y ↔ xNext/yNext.)
-    attrWrite[spec.id] = r;
+    // ASYNC (default): SINGLE buffer — write aliases read, so an own-agent
+    // read-modify-write AND a Set Agent Attribute to a neighbour are immediately
+    // visible (sequential semantics).
+    // SYNC: DOUBLE buffer — `attrWrite` is a separate array; the behaviour reads
+    // the previous step (`attrRead`) and writes the next (`attrWrite`), swapped at
+    // the step's end. (Positions are snapshot-integrated in BOTH modes via the
+    // engine-owned x/y ↔ xNext/yNext — that's separate from this attribute flag.)
+    if (syncAttrs) {
+      const w = attrArr(spec.id, kind);
+      if (spec.defaultValue !== 0) w.fill(spec.defaultValue);
+      attrWrite[spec.id] = w;
+    } else {
+      attrWrite[spec.id] = r;
+    }
   }
 
   const bondPartner = bondI32('bondPartner').fill(-1);
@@ -434,7 +460,34 @@ export function createAgentStore(
     wasmBacked,
     memory,
     layout,
+    syncAttrs,
   };
+}
+
+/** Sync update mode — copy `attrRead → attrWrite` for every user attribute, so the
+ *  write buffer starts as a clone of the read buffer and attributes the behaviour
+ *  doesn't touch carry over. Call BEFORE the behaviour. No-op when the store isn't
+ *  double-buffered (async / wasmBacked). */
+export function primeAgentAttrWrite(store: AgentStore): void {
+  if (!store.syncAttrs) return;
+  for (const spec of store.attrSpecs) {
+    const r = store.attrRead[spec.id]!, w = store.attrWrite[spec.id]!;
+    (w as unknown as { set(a: ArrayLike<number>): void }).set(r as unknown as ArrayLike<number>);
+  }
+}
+
+/** Sync update mode — swap `attrRead ↔ attrWrite` for every user attribute, so the
+ *  values the behaviour just wrote become the live (read) buffer for the structural
+ *  phase, the render snapshot, and the next step. Call AFTER the behaviour. No-op
+ *  when not double-buffered. (Plain reference swap — the buffers are distinct JS
+ *  arrays, never wasmBacked views, so no copy-into discipline is needed.) */
+export function swapAgentAttrs(store: AgentStore): void {
+  if (!store.syncAttrs) return;
+  for (const spec of store.attrSpecs) {
+    const r = store.attrRead[spec.id]!;
+    store.attrRead[spec.id] = store.attrWrite[spec.id]!;
+    store.attrWrite[spec.id] = r;
+  }
 }
 
 /** A small, distinguishable default palette so agents of different `type` are
