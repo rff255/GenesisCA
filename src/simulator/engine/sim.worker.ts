@@ -29,7 +29,7 @@ import {
   createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot,
   snapshotAgentsForRender, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
   formBond, breakBond, hasBond, sweepStaleBonds, divideAgent,
-  primeAgentAttrWrite, swapAgentAttrs,
+  primeAgentAttrWrite, swapAgentAttrs, computeAgentMaxHashBins,
   type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec, type SpatialHash,
 } from './agentEngine';
 import { instantiateAgentWasm } from '../../modeler/vpl/compiler/agentWasm/compile';
@@ -238,6 +238,8 @@ interface IndicatorDef {
 
 interface UpdateIndicatorsMsg { type: 'updateIndicators'; indicators: IndicatorDef[]; attributes: AttrDef[] }
 interface GetStateMsg { type: 'getState' }
+/** DEV/test-only: force the shared xorshift32 RNG seed (PR6b-2 bit-parity test). */
+interface SetRngSeedMsg { type: 'setRngSeed'; seed: number }
 interface LoadStateMsg {
   type: 'loadState';
   width: number;
@@ -371,7 +373,7 @@ interface FormBondMsg { type: 'formBond'; a: number; b: number; activeViewer: st
 /** Manual cut: break the bond between two agents (the cut brush). */
 interface BreakBondMsg { type: 'breakBond'; a: number; b: number; activeViewer: string }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -451,9 +453,15 @@ let agentTarget: 'js' | 'wasm' | 'webgpu' = 'js';
  *  the agent store's memory). Held so `initAgents` (which (re)allocates the
  *  store + its memory) can instantiate against the FRESH memory. */
 let pendingAgentWasmBytes: Uint8Array | null = null;
-/** PR6b-1 — the instantiated WASM `behaviour(highWater)` export (null on the JS
- *  target / before instantiation / on a failed instantiate → JS fallback). */
-let agentBehaviourWasmFn: ((highWater: number) => void) | null = null;
+/** PR6b-2 — the instantiated WASM `behaviour(...)` export (null on the JS target /
+ *  before instantiation / on a failed instantiate → JS fallback). Signature:
+ *  `(highWater, hashValid, nBinsX, nBinsY, nBinsZ, binSizeX, binSizeY, binSizeZ,
+ *  fieldW, fieldH, fieldD, fieldTorus)` — mirrors `compileAgentGraphWasm`'s
+ *  behaviour params. */
+let agentBehaviourWasmFn: ((...args: number[]) => void) | null = null;
+/** AW-HASH fits-check: warn once when the per-step hash overflows the WASM reserve
+ *  (the step then runs on JS — never silently wrong). */
+let agentWasmHashOverflowWarned = false;
 
 /** Build the agent attribute specs (the non-model cell attributes double as
  *  per-agent attributes via D-IDX) with their resolved default values. */
@@ -483,7 +491,20 @@ function initAgents(): void {
   // 'async' (default) single-buffers them (immediate writes). Only honoured on the
   // non-wasmBacked JS path (createAgentStore gates `syncAttrs` on `!wasmBacked`).
   const wantSyncAttrs = centerBasedConfig.agentUpdateMode === 'sync';
-  agentStore = createAgentStore(centerBasedConfig, buildAgentAttrSpecs(), { wasmBacked: wantWasmBacked, syncAttrs: wantSyncAttrs });
+  // AW-HASH (PR6b-2): reserve room in the agent memory for the per-step spatial
+  // hash the WASM behaviour reads. The bound is derived from the ACTUAL grid (=
+  // agent world) dims + the force config — the SAME formula the compiler uses
+  // (agentMaxHashBinsForModel), so the worker's store layout matches the compiled
+  // module's offsets. Only meaningful under wasmBacked; 0 otherwise.
+  const agentMaxHashBins = wantWasmBacked
+    ? computeAgentMaxHashBins(
+        width, height, depth,
+        cbNum(centerBasedConfig, 'interactionRange'),
+        cbNum(centerBasedConfig, 'defaultRadius'),
+        cbNum(centerBasedConfig, 'neighbourQueryRadius'),
+      )
+    : 0;
+  agentStore = createAgentStore(centerBasedConfig, buildAgentAttrSpecs(), { wasmBacked: wantWasmBacked, syncAttrs: wantSyncAttrs, maxHashBins: agentMaxHashBins });
   // The agent world IS the grid coordinate frame (1:1, Decision D-FIELD): agent
   // (x,y) are in CELL units so they map onto the grid + the screen with the same
   // transform the cell blit uses. (worldWidth/Height in the config are reserved
@@ -797,21 +818,59 @@ function runAgentStep(): void {
   // async mode (single buffer) — byte-identical to pre-feature.
   primeAgentAttrWrite(s);
 
-  // PR6b-1: dispatch the behaviour loop on the agent target. The WASM loop reads/
-  // writes the SAME store memory at the baked offsets (AW-MEM), so the force
-  // pass / structural phase BELOW is UNCHANGED — it reads the same views. The
-  // WASM `behaviour` takes only `highWater` (the per-step scalars live in the
-  // shared memory; the minimal model needs no hash args — AW-HASH). On any WASM
-  // failure `agentBehaviourWasmFn` is nulled and we fall back to the JS fn.
-  if (agentBehaviourWasmFn) {
-    try {
-      agentBehaviourWasmFn(s.highWater);
-    } catch (e) {
-      self.postMessage({ type: 'error', message: '[agents] WASM behaviour run failed, falling back to JS: ' + ((e as Error)?.message || e) });
-      agentBehaviourWasmFn = null;
-      if (agentBehaviourFn) { try { agentBehaviourFn(...buildAgentLoopArgs(s)); } catch { agentBehaviourFn = null; } }
+  // PR6b-2: dispatch the behaviour loop on the agent target. The WASM loop reads/
+  // writes the SAME store memory at the baked offsets (AW-MEM), so the force pass /
+  // structural phase BELOW is UNCHANGED — it reads the same views.
+  //
+  // AW-RNG + AW-HASH: before the WASM call we (1) write the global `rngState[0]`
+  // into the in-memory RNG cell (the WASM loop advances it + writes it back — JS
+  // bit-parity, B13), and (2) COPY the per-step spatial hash (binStart/binAgents)
+  // into the reserved in-memory views (S10) when it fits the layout's reserve;
+  // the hash DIMENSIONS ride the call args. If the hash overflows the reserve
+  // (the fits-check), we fall back to JS for this step (never silently wrong).
+  let ranWasm = false;
+  if (agentBehaviourWasmFn && s.wasmBacked && s.memory && s.layout) {
+    const fits = !hash || (hash.nBinsX * hash.nBinsY * hash.nBinsZ + 1) <= (s.layout.maxHashBins + 1);
+    if (!fits) {
+      // The hash exceeded the AW-HASH reserve — run this step on the JS fn (the
+      // WASM module's binStart view can't hold it). Loud once, then per-step quiet.
+      if (!agentWasmHashOverflowWarned) {
+        agentWasmHashOverflowWarned = true;
+        self.postMessage({ type: 'error', message: `[agents] spatial hash (${hash!.nBinsX * hash!.nBinsY * hash!.nBinsZ} bins) exceeds the WASM reserve (${s.layout.maxHashBins}); this step runs on JS.` });
+      }
+      if (agentBehaviourFn) { try { agentBehaviourFn(...buildAgentLoopArgs(s)); ranWasm = true; } catch { agentBehaviourFn = null; } }
+    } else {
+      try {
+        const buf = s.memory.buffer;
+        const L = s.layout;
+        // (1) seed the RNG cell from the shared stream.
+        new Uint32Array(buf, L.rngStateOffset, 1)[0] = rngState[0]!;
+        // (2) copy the hash into the reserved views (only the live prefix). The
+        // hash DIMS go as args (no per-step memory write for the scalars).
+        let hashValid = 0, nBinsX = 0, nBinsY = 0, nBinsZ = 0, binSizeX = 1, binSizeY = 1, binSizeZ = 1;
+        if (hash) {
+          hashValid = 1;
+          nBinsX = hash.nBinsX; nBinsY = hash.nBinsY; nBinsZ = hash.nBinsZ;
+          binSizeX = hash.binSizeX; binSizeY = hash.binSizeY; binSizeZ = hash.binSizeZ;
+          const nBins = nBinsX * nBinsY * nBinsZ;
+          const dstStart = new Int32Array(buf, L.hashBinStartOffset, nBins + 1);
+          dstStart.set(hash.binStart.subarray(0, nBins + 1));
+          // binAgents holds liveCount entries grouped by bin (= binStart[nBins]).
+          const used = hash.binStart[nBins]!;
+          if (used > 0) new Int32Array(buf, L.hashBinAgentsOffset, used).set(hash.binAgents.subarray(0, used));
+        }
+        agentBehaviourWasmFn(s.highWater, hashValid, nBinsX, nBinsY, nBinsZ, binSizeX, binSizeY, binSizeZ, W, H, D, torus ? 1 : 0);
+        // (3) read the advanced RNG state back so the shared stream stays in lockstep.
+        rngState[0] = new Uint32Array(buf, L.rngStateOffset, 1)[0]!;
+        ranWasm = true;
+      } catch (e) {
+        self.postMessage({ type: 'error', message: '[agents] WASM behaviour run failed, falling back to JS: ' + ((e as Error)?.message || e) });
+        agentBehaviourWasmFn = null;
+        if (agentBehaviourFn) { try { agentBehaviourFn(...buildAgentLoopArgs(s)); ranWasm = true; } catch { agentBehaviourFn = null; } }
+      }
     }
-  } else if (agentBehaviourFn) {
+  }
+  if (!ranWasm && agentBehaviourFn) {
     try {
       agentBehaviourFn(...buildAgentLoopArgs(s));
     } catch (e) {
@@ -4388,6 +4447,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         }
       }
       sendColors();
+      break;
+    }
+
+    case 'setRngSeed': {
+      // DEV/test-only: force the shared xorshift32 seed so a JS-target run and a
+      // WASM-target run advance the identical stream (the PR6b-2 bit-parity test).
+      // Harmless in production (never sent by the app).
+      rngState[0] = ((msg as { seed?: number }).seed ?? 0x12345678) >>> 0 || 0x12345678;
       break;
     }
 
