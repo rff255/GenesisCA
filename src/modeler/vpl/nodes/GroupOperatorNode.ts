@@ -91,8 +91,11 @@ export const GroupOperatorNode: NodeTypeDef = {
     switch (op) {
       case 'mul':  expr = `${values}.reduce((s,v) => s * v, 1)`; break;
       case 'mean': expr = `(${values}.reduce((s,v) => s + v, 0) / (${values}.length || 1))`; break;
-      case 'and':  expr = `${values}.every(Boolean)`; break;
-      case 'or':   expr = `${values}.some(Boolean)`; break;
+      // and/or return a BOOLEAN as numeric 1/0 (project bool convention; matches
+      // the i32 1/0 the WASM emitter returns — JS `.every/.some` yield true/false
+      // which would mismatch a strict-=== consumer on the WASM/WebGPU targets).
+      case 'and':  expr = `(${values}.every(Boolean) ? 1 : 0)`; break;
+      case 'or':   expr = `(${values}.some(Boolean) ? 1 : 0)`; break;
       default:     expr = `${values}.reduce((s,v) => s + v, 0)`; break; // sum
     }
     return `const _v${nodeId}_index = -1; const _v${nodeId}_result = ${expr};\n`;

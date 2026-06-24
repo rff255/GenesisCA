@@ -238,7 +238,11 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
       return;
     }
 
-    if (type === 'forEachInArray') {
+    if (type === 'forEachInArray' || type === 'forEachBond') {
+      // forEachBond (Bond-Graph Agents) iterates the ragged bond store; same
+      // scope shape as forEachInArray — a body scope + a `next` at parent scope.
+      // Without this branch a Local-Variable accumulator mutated inside a bond
+      // loop is emitted ABOVE the loop (CELL_TOP fallback) and reads pre-loop state.
       const bodyS = `${nodeId}:body`;
       registerScope(bodyS, parentScope, { kind: 'forEachBody', flowNodeId: nodeId });
       walkFlowOutput(nodeId, 'body', bodyS);
@@ -427,14 +431,59 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
         { nodeId: node.id, portId: 'element' },
         { nodeId: node.id, portId: 'index' },
       ]));
+    } else if (node.data.nodeType === 'forEachBond') {
+      // Bond-Graph Agents: forEachBond's per-iteration outputs. A value derived
+      // from any of these must stay pinned inside the bond loop (not hoisted).
+      elementDependentsByForEach.set(node.id, forwardValueConsumersMulti([
+        { nodeId: node.id, portId: 'partnerId' },
+        { nodeId: node.id, portId: 'restLength' },
+        { nodeId: node.id, portId: 'currentLength' },
+        { nodeId: node.id, portId: 'index' },
+      ]));
     }
+  }
+
+  /** RNG nodes have a per-iteration SIDE EFFECT (they advance the shared `_rs`
+   *  stream and must draw a fresh value each iteration). A value whose subtree
+   *  contains one MUST NOT be hoisted out of a Loop/ForEach body, or every
+   *  iteration reuses the same draw (the Agent Init Event spawn-with-random bug).
+   *  Computed as a backward closure over the value DAG (self OR any value-input
+   *  source is RNG). getVariable mutability is handled separately by volatileHoist. */
+  const RNG_TYPES = new Set<string>(['getRandom', 'pickRandomNeighbor', 'pickNRandomNeighbors', 'pickRandomAgent', 'pickNRandomAgents']);
+  const loopPinnedMemo = new Map<string, boolean>();
+  function isLoopPinned(nodeId: string): boolean {
+    const cached = loopPinnedMemo.get(nodeId);
+    if (cached !== undefined) return cached;
+    loopPinnedMemo.set(nodeId, false); // cycle guard
+    const node = adj.nodeMap.get(nodeId);
+    if (!node) return false;
+    const t = node.data.nodeType;
+    let pinned = RNG_TYPES.has(t)
+      || (t === 'groupOperator' && (node.data.config.operation === 'random' || node.data.config.operation === 'weightedRandom'))
+      || (t === 'aggregate' && node.data.config.operation === 'random');
+    if (!pinned) {
+      for (const [key, source] of adj.inputToSource) {
+        if (!key.startsWith(`${nodeId}:`)) continue;
+        if (isLoopPinned(source.nodeId)) { pinned = true; break; }
+      }
+      if (!pinned) for (const [key, sources] of adj.inputToSources) {
+        if (!key.startsWith(`${nodeId}:`)) continue;
+        let hit = false;
+        for (const s of sources) if (isLoopPinned(s.nodeId)) { hit = true; break; }
+        if (hit) { pinned = true; break; }
+      }
+    }
+    loopPinnedMemo.set(nodeId, pinned);
+    return pinned;
   }
 
   /** Walk up from `scope` past loop/forEach bodies where `valueId` isn't forced
    *  to live there. For Loop nodes the only iteration variable (`_li`) has no
-   *  value output, so nothing can depend on it — always hoist past. For ForEach,
-   *  hoist only when the value isn't in the body's elementDependents set. */
+   *  value output, so nothing can depend on it — hoist past UNLESS the value's
+   *  subtree contains an RNG node (per-iteration side effect). For ForEach, hoist
+   *  only when the value isn't element-dependent AND isn't RNG-pinned. */
   function hoistPastLoops(valueId: string, scope: ScopeId): ScopeId {
+    if (isLoopPinned(valueId)) return scope;   // RNG: keep in its innermost loop body
     let current = scope;
     while (current !== CELL_TOP) {
       const k = scopeKind.get(current);

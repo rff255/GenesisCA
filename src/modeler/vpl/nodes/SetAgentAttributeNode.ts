@@ -23,9 +23,15 @@ export const SetAgentAttributeNode: NodeTypeDef = {
     { id: 'value', label: 'Value', kind: 'input', category: 'value', dataType: 'float', inlineWidget: 'number', defaultValue: '0' },
   ],
   defaultConfig: { attributeId: '' },
-  compile: (_nodeId, config, inputs) => {
+  compile: (_nodeId, config, inputs, _boundary, ctx) => {
     const attr = config.attributeId as string || '_undef';
     const a = `((${inputs['agentId'] || '-1'}) | 0)`;
-    return `{ const __sa=${a}; if(__sa>=0&&__sa<highWater&&_alive[__sa]) w_${attr}[__sa] = ${inputs['value'] || '0'}; }\n`;
+    // Generic Agent Platform: in the Agent Init Event a Created agent is STAGED
+    // (alive=0) until Add Agent To World, so the live-agent guard is relaxed to
+    // range-only there; in behaviour/division it requires a live agent.
+    const guard = ctx?.agentRoot === 'init'
+      ? `__sa>=0&&__sa<_agentMaxAgents`
+      : `__sa>=0&&__sa<highWater&&_alive[__sa]`;
+    return `{ const __sa=${a}; if(${guard}) w_${attr}[__sa] = ${inputs['value'] || '0'}; }\n`;
   },
 };

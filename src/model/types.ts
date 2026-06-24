@@ -62,6 +62,17 @@ export interface Attribute {
   /** Sub-attributes only: the value returned by a read when the parent's value
    *  is NOT in `parentValues`. Same string encoding as `defaultValue`. */
   undefinedValue?: string;
+  /** Generic Agent Platform: CELL attributes only — whether floating agents may
+   *  access this cell attribute (the environment/field) via the field-bridge
+   *  nodes. `'none'` (absent ⇒ none) = invisible to agents; `'read'` = Sample
+   *  Field / Field Gradient / Read Cells Under may target it; `'readWrite'` =
+   *  also Affect Cells Under / Secrete To Field. CA cells can NEVER read agent
+   *  attributes — that is structural (the cell compilers never see
+   *  `agentAttributes`), so there is no inverse flag. Inert on agent attributes
+   *  (those live in `CAModel.agentAttributes`, are agent-only, and always
+   *  accessible to agents). Gates ONLY the field channel — the agent's own state
+   *  lives on `agentAttributes`, never on a cell attribute. */
+  agentAccess?: 'none' | 'read' | 'readWrite';
   /** Variegated Cells: when this attribute is the variegation source (its id
    *  matches `model.variegatedCells.sourceAttributeId`), this map assigns a
    *  `FacePattern.id` to each `tagOption` string. Tag values without an entry
@@ -688,11 +699,27 @@ export interface CAModel {
    *  in any non-agent model. `macroDefs` is SHARED by both graphs. */
   agentGraphNodes?: GraphNode[];
   agentGraphEdges?: GraphEdge[];
+  /** Generic Agent Platform: the AGENT attribute set — agent-only per-agent
+   *  state, a SEPARATE id-space from `attributes` (the cell/model attributes).
+   *  Agents read/write these (own state via Get/Set Attribute on the Agents
+   *  graph, other agents via Get/Set Agent Attribute by id); CA cells can never
+   *  access them. Always `isModelAttribute: false` (globals are still the shared
+   *  model attributes, read via Get Model Attribute). Absent/empty in every
+   *  legacy file + non-agent model. Resolved everywhere via `agentAttrsOf` in
+   *  `model/attributeScope.ts`. The `_field_<id>` bridge stays keyed by the CELL
+   *  attributes (`cellFieldAttrsOf`), so the two id-spaces never collide. */
+  agentAttributes?: Attribute[];
   macroDefs: MacroDef[];
   /** Local Variables — per-cell mutable storage referenced by getVariable /
    *  setVariable / setArrayElement nodes. Empty / absent → no variables in
    *  the model. */
   variables?: Variable[];
+  /** Generic Agent Platform: the AGENT local-variable set — per-agent scratch
+   *  storage for the Agents rule graph, a SEPARATE id-space from `variables`
+   *  (the cell variables). The agent behaviour/division/init loops resolve their
+   *  Get/Set Variable nodes against this list; the cell step uses `variables`.
+   *  Absent/empty in every legacy file + non-agent model. */
+  agentVariables?: Variable[];
   simulationState?: SimulationState;
   presets?: Preset[];
   /** Variegated Cells feature config. Absent / `enabled: false` → engine and

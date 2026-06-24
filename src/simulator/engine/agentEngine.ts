@@ -650,6 +650,16 @@ export function freeAgentSlot(store: AgentStore, id: number): void {
   store.liveCount--;
 }
 
+/** Generic Agent Platform: free a STAGED slot — a Create Agent that was never
+ *  Added To World (alive=0, no bonds, liveCount NOT counted). `freeAgentSlot`
+ *  early-returns on dead slots, so the Init Event's leak sweep uses this instead:
+ *  bump the epoch (defensive) + push the slot back onto the free-list. */
+export function freeStagedSlot(store: AgentStore, id: number): void {
+  if (id < 0 || id >= store.maxAgents || store.alive[id]) return;
+  store.epoch[id] = (store.epoch[id]! + 1) | 0;
+  if (store.freeTop < store.maxAgents) store.freeList[store.freeTop++] = id;
+}
+
 /** Seed N agents. Each spec gives a position (+ optional radius/type/lineage);
  *  attributes initialise to their defaults. Returns the ids actually created
  *  (short of `specs.length` if the ceiling is hit — the worker surfaces that). */

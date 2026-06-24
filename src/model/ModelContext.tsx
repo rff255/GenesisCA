@@ -36,6 +36,8 @@ import { migrateTagConstantNodes } from './tagConstantMigration';
 import { migrateLookupTables } from './lookupTableMigration';
 import { migrateMoveSelfToNeighborNodes } from './moveSelfToNeighborMigration';
 import { migrateSetCellLooksNodes } from './setCellLooksMigration';
+import { migrateAgentAttributeSplit } from './agentAttributeSplitMigration';
+import { migrateVariableScopeSplit } from './variableScopeMigration';
 import { clearAllSavedGraphViewports, setSavedCurrentScope } from '../modeler/vpl/graphState';
 
 // ---------------------------------------------------------------------------
@@ -162,6 +164,10 @@ type ModelAction =
   | { type: 'ADD_ATTRIBUTE'; isModelAttribute: boolean }
   | { type: 'REMOVE_ATTRIBUTE'; id: string }
   | { type: 'UPDATE_ATTRIBUTE'; id: string; changes: Partial<Attribute> }
+  // Generic Agent Platform: the AGENT attribute set (CAModel.agentAttributes).
+  | { type: 'ADD_AGENT_ATTRIBUTE' }
+  | { type: 'REMOVE_AGENT_ATTRIBUTE'; id: string }
+  | { type: 'UPDATE_AGENT_ATTRIBUTE'; id: string; changes: Partial<Attribute> }
   | { type: 'ADD_NEIGHBORHOOD' }
   | { type: 'DUPLICATE_NEIGHBORHOOD'; sourceId: string }
   | { type: 'REMOVE_NEIGHBORHOOD'; id: string }
@@ -190,10 +196,11 @@ type ModelAction =
   | { type: 'REORDER_MAPPINGS'; newOrder: string[] }
   | { type: 'REORDER_INDICATORS'; newOrder: string[] }
   | { type: 'REORDER_END_CONDITIONS'; newOrder: string[] }
-  | { type: 'ADD_VARIABLE' }
-  | { type: 'REMOVE_VARIABLE'; id: string }
-  | { type: 'UPDATE_VARIABLE'; id: string; changes: Partial<Variable> }
-  | { type: 'REORDER_VARIABLES'; newOrder: string[] }
+  // Generic Agent Platform: variable actions carry a `target` (cell | agent).
+  | { type: 'ADD_VARIABLE'; target?: 'cell' | 'agent' }
+  | { type: 'REMOVE_VARIABLE'; id: string; target?: 'cell' | 'agent' }
+  | { type: 'UPDATE_VARIABLE'; id: string; changes: Partial<Variable>; target?: 'cell' | 'agent' }
+  | { type: 'REORDER_VARIABLES'; newOrder: string[]; target?: 'cell' | 'agent' }
   | { type: 'UPDATE_VARIEGATED_CELLS'; changes: Partial<VariegatedCellsConfig> }
   | { type: 'ADD_FACE_PATTERN' }
   | { type: 'REMOVE_FACE_PATTERN'; id: string }
@@ -279,6 +286,13 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
           ? { ...v, attributeId: undefined, dataType: 'integer' as const }
           : v,
       );
+      // Same cascade for AGENT variables — a tag-typed agent variable bound to
+      // the removed attribute would otherwise keep a dangling attributeId.
+      const agentVariables = (state.model.agentVariables || []).map(v =>
+        v.attributeId === action.id
+          ? { ...v, attributeId: undefined, dataType: 'integer' as const }
+          : v,
+      );
       // Linked Output Mappings cascade: a mapping linked to the removed attribute
       // is fully unlinked (so it falls back to a Standalone empty pass, not a
       // dangling read). The transform also guards this, but clearing keeps the
@@ -288,7 +302,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
           ? { ...m, linked: false, linkedAttributeId: undefined, linkedColors: undefined, linkedMin: undefined, linkedMax: undefined }
           : m,
       );
-      const modelAfterFilter = { ...state.model, attributes: filteredAttrs, variegatedCells, variables, mappings: mappingsAfterRemove };
+      const modelAfterFilter = { ...state.model, attributes: filteredAttrs, variegatedCells, variables, agentVariables, mappings: mappingsAfterRemove };
       // Clear stale attributeId and tagAttributeId references in node configs
       const a1 = clearDeletedId(modelAfterFilter, 'attributeId', action.id);
       const a2 = patchAllNodes(
@@ -409,6 +423,12 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
             ? { ...v, initialValue: remap(v.initialValue) }
             : v,
         );
+        // Same remap for AGENT variables bound to this tag attribute.
+        const remappedAgentVariables = (updatedModel.agentVariables || []).map(v =>
+          v.attributeId === attrId && v.dataType === 'tag'
+            ? { ...v, initialValue: remap(v.initialValue) }
+            : v,
+        );
         // Linked Output Mappings cascade: remap per-tag colors by the same
         // indexMap (renamed/reordered options keep their color; deleted options
         // drop out; newly-added options get the transform's default color).
@@ -423,7 +443,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
           });
           return { ...m, linkedColors: { ...m.linkedColors, tag: nextTag } };
         });
-        const remappedModel = { ...updatedModel, attributes: remappedAttrs, variables: remappedVariables, mappings: remappedMappings };
+        const remappedModel = { ...updatedModel, attributes: remappedAttrs, variables: remappedVariables, agentVariables: remappedAgentVariables, mappings: remappedMappings };
         const patched = patchAllNodes(
           remappedModel,
           (cfg, nt) => {
@@ -432,6 +452,10 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
             // setAttribute/setNeighborhood/setNeighborByIndex with this tag attr
             if ((nt === 'setAttribute' || nt === 'setNeighborhoodAttribute' || nt === 'setNeighborAttributeByIndex')
                 && cfg.attributeId === attrId) return true;
+            // Compare (statement) in tag mode stores its operands as tag INDICES
+            // in _port_x/_port_y/_port_y2 — remap them too, else a tag reorder
+            // silently compares the wrong option.
+            if (nt === 'statement' && cfg.compareType === 'tag' && cfg.tagAttributeId === attrId) return true;
             return false;
           },
           (cfg, nt) => {
@@ -442,6 +466,11 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
             }
             if (nt === 'setAttribute' || nt === 'setNeighborhoodAttribute' || nt === 'setNeighborAttributeByIndex') {
               if (cfg._port_value !== undefined) cfg._port_value = remap(cfg._port_value);
+            }
+            if (nt === 'statement') {
+              if (cfg._port_x !== undefined) cfg._port_x = remap(cfg._port_x);
+              if (cfg._port_y !== undefined) cfg._port_y = remap(cfg._port_y);
+              if (cfg._port_y2 !== undefined) cfg._port_y2 = remap(cfg._port_y2);
             }
             return cfg;
           },
@@ -478,6 +507,12 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
             ? { ...v, attributeId: undefined, dataType: 'integer' as const }
             : v,
         );
+        // Same detach for AGENT variables.
+        const agentVariables = (updatedModel.agentVariables || []).map(v =>
+          v.attributeId === action.id && v.dataType === 'tag' && newType !== 'tag'
+            ? { ...v, attributeId: undefined, dataType: 'integer' as const }
+            : v,
+        );
         // Linked Output Mappings: tag/bool → other type invalidates the palette;
         // reset colors/domain but keep the link (transform regenerates defaults).
         const mappings = updatedModel.mappings.map(m =>
@@ -485,7 +520,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
             ? { ...m, linkedColors: undefined, linkedMin: undefined, linkedMax: undefined }
             : m,
         );
-        return { ...state, isDirty: true, model: { ...updatedModel, attributes: detached, variables, mappings } };
+        return { ...state, isDirty: true, model: { ...updatedModel, attributes: detached, variables, agentVariables, mappings } };
       }
 
       // Linked Output Mappings: any other attribute type change (e.g. float↔integer)
@@ -500,6 +535,87 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         return { ...state, isDirty: true, model: { ...updatedModel, mappings } };
       }
 
+      return { ...state, isDirty: true, model: updatedModel };
+    }
+
+    // ---- Generic Agent Platform: agent attribute set (separate id-space) ----
+    case 'ADD_AGENT_ATTRIBUTE': {
+      const newAttr: Attribute = {
+        id: generateId('agent_attribute'),
+        name: 'agent_attribute',
+        type: 'float',
+        description: '',
+        isModelAttribute: false,
+        defaultValue: '0',
+      };
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, agentAttributes: [...(state.model.agentAttributes || []), newAttr] },
+      };
+    }
+
+    case 'REMOVE_AGENT_ATTRIBUTE': {
+      const filtered = (state.model.agentAttributes || []).filter(a => a.id !== action.id);
+      const modelAfter = { ...state.model, agentAttributes: filtered };
+      // Clear stale attributeId / tagAttributeId references (scans both graphs +
+      // macros) so a removed agent attribute doesn't strand `_undef` in the
+      // agent graph.
+      const a1 = clearDeletedId(modelAfter, 'attributeId', action.id);
+      const a2 = patchAllNodes(
+        { ...modelAfter, graphNodes: a1.graphNodes, agentGraphNodes: a1.agentGraphNodes, macroDefs: a1.macroDefs },
+        cfg => cfg.tagAttributeId === action.id,
+        cfg => { cfg.tagAttributeId = ''; return cfg; },
+      );
+      return {
+        ...state, isDirty: true,
+        model: { ...modelAfter, graphNodes: a2.graphNodes, agentGraphNodes: a2.agentGraphNodes, macroDefs: a2.macroDefs },
+      };
+    }
+
+    case 'UPDATE_AGENT_ATTRIBUTE': {
+      const oldAttr = (state.model.agentAttributes || []).find(a => a.id === action.id);
+      const updatedModel = {
+        ...state.model,
+        agentAttributes: (state.model.agentAttributes || []).map(a =>
+          a.id === action.id ? { ...a, ...action.changes } : a),
+      };
+      // Tag-options remap for agent-graph node configs (getConstant / switch /
+      // setAttribute|setAgentAttribute inline values). patchAllNodes scans both
+      // graphs; the cell graph never references an agent-attribute id, so only the
+      // agent graph is affected.
+      if (oldAttr && action.changes.tagOptions && oldAttr.tagOptions) {
+        const oldOpts = oldAttr.tagOptions, newOpts = action.changes.tagOptions;
+        const indexMap = new Map<number, number>();
+        for (let oi = 0; oi < oldOpts.length; oi++) {
+          const ni = newOpts.indexOf(oldOpts[oi]!);
+          indexMap.set(oi, ni >= 0 ? ni : 0);
+        }
+        const remap = (val: string | number | boolean | undefined): string =>
+          String(indexMap.get(Number(val) || 0) ?? 0);
+        const attrId = action.id;
+        const patched = patchAllNodes(
+          updatedModel,
+          (cfg, nt) =>
+            (nt === 'getConstant' && cfg.constType === 'tag' && cfg.tagAttributeId === attrId) ||
+            (nt === 'switch' && cfg.tagAttributeId === attrId && cfg.valueType === 'tag') ||
+            ((nt === 'setAttribute' || nt === 'setAgentAttribute' || nt === 'setAgentsAttribute' || nt === 'updateAttribute') && cfg.attributeId === attrId),
+          (cfg, nt) => {
+            if (nt === 'getConstant') cfg.constValue = remap(cfg.constValue);
+            if (nt === 'switch') {
+              const cc = Number(cfg.caseCount) || 0;
+              for (let i = 0; i < cc; i++) cfg[`case_${i}_value`] = remap(cfg[`case_${i}_value`]);
+            }
+            if ((nt === 'setAttribute' || nt === 'setAgentAttribute' || nt === 'setAgentsAttribute') && cfg._port_value !== undefined) {
+              cfg._port_value = remap(cfg._port_value);
+            }
+            return cfg;
+          },
+        );
+        return {
+          ...state, isDirty: true,
+          model: { ...updatedModel, graphNodes: patched.graphNodes, agentGraphNodes: patched.agentGraphNodes, macroDefs: patched.macroDefs },
+        };
+      }
       return { ...state, isDirty: true, model: updatedModel };
     }
 
@@ -736,6 +852,8 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       if (!m.macroDefs) m.macroDefs = [];
       if (!m.indicators) m.indicators = [];
       if (!m.variables) m.variables = [];
+      // Generic Agent Platform: the agent local-variable set (separate id-space).
+      if (!m.agentVariables) m.agentVariables = [];
       if (!m.properties.tags) m.properties.tags = [];
       if (!m.properties.updateMode) m.properties.updateMode = 'synchronous';
       if (!m.properties.asyncScheme) m.properties.asyncScheme = 'random-order';
@@ -752,6 +870,10 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // Agents topology is on (a non-agent file leaves it absent).
       if (!m.agentGraphNodes) m.agentGraphNodes = [];
       if (!m.agentGraphEdges) m.agentGraphEdges = [];
+      // Generic Agent Platform: the agent attribute set (separate id-space).
+      // Absent in every legacy file; the split migration below populates it for
+      // legacy agent models that stored per-agent state in cell attributes.
+      if (!m.agentAttributes) m.agentAttributes = [];
       if (m.topologyMode.agents && !m.centerBased) m.centerBased = defaultCenterBasedConfig();
       for (const n of m.neighborhoods) { n.margin ??= 2; n.includeCentralCell ??= false; }
       for (const a of m.attributes) {
@@ -803,6 +925,14 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // variegatedCells.faceLabels→facePalettes[0] + default square key sources.
       // Idempotent. Model-level (attributes + variegatedCells), so no macro pass.
       m = migrateLookupTables(m);
+      // Generic Agent Platform: split legacy agent-state cell attributes into
+      // the dedicated agentAttributes[] set + set agentAccess on cell attrs the
+      // agent graph reads/writes as a field. No-op for non-agent + already-split
+      // models. MUST run AFTER the node migrations (it reads agent-graph configs).
+      m = migrateAgentAttributeSplit(m);
+      // Move agent-referenced cell variables into the agent variable set (so the
+      // agent loop's Get/Set Variable resolve). No-op for non-agent + already-split.
+      m = migrateVariableScopeSplit(m);
       return { model: m, isDirty: false, modelVersion: state.modelVersion + 1, loadedFileName: action.fileName ?? null };
     }
 
@@ -895,7 +1025,9 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
     }
 
     case 'ADD_VARIABLE': {
-      const current = state.model.variables || [];
+      // Generic Agent Platform: target the cell or agent variable set.
+      const key = action.target === 'agent' ? 'agentVariables' : 'variables';
+      const current = state.model[key] || [];
       const newVar: Variable = {
         id: generateId('variable'),
         name: `var_${current.length + 1}`,
@@ -905,14 +1037,15 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       };
       return {
         ...state, isDirty: true,
-        model: { ...state.model, variables: [...current, newVar] },
+        model: { ...state.model, [key]: [...current, newVar] },
       };
     }
 
     case 'REMOVE_VARIABLE': {
+      const key = action.target === 'agent' ? 'agentVariables' : 'variables';
       const mAfter: CAModel = {
         ...state.model,
-        variables: (state.model.variables || []).filter(v => v.id !== action.id),
+        [key]: (state.model[key] || []).filter(v => v.id !== action.id),
       };
       const patch = clearDeletedId(mAfter, 'variableId', action.id);
       return {
@@ -922,25 +1055,27 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
     }
 
     case 'UPDATE_VARIABLE': {
-      const current = state.model.variables || [];
+      const key = action.target === 'agent' ? 'agentVariables' : 'variables';
+      const current = state.model[key] || [];
       // When kind changes from array→scalar, drop `length`. When dataType is no
       // longer tag, drop `attributeId`. Lets the inspector "settle" without the
       // user manually clearing now-irrelevant fields.
-      const variables = current.map(v => {
+      const next = current.map(v => {
         if (v.id !== action.id) return v;
-        const next: Variable = { ...v, ...action.changes };
-        if (next.kind === 'scalar') delete next.length;
-        else if (next.length === undefined) next.length = 4;
-        if (next.dataType !== 'tag') delete next.attributeId;
-        return next;
+        const updated: Variable = { ...v, ...action.changes };
+        if (updated.kind === 'scalar') delete updated.length;
+        else if (updated.length === undefined) updated.length = 4;
+        if (updated.dataType !== 'tag') delete updated.attributeId;
+        return updated;
       });
-      return { ...state, isDirty: true, model: { ...state.model, variables } };
+      return { ...state, isDirty: true, model: { ...state.model, [key]: next } };
     }
 
     case 'REORDER_VARIABLES': {
+      const key = action.target === 'agent' ? 'agentVariables' : 'variables';
       return {
         ...state, isDirty: true,
-        model: { ...state.model, variables: reorderById(state.model.variables || [], action.newOrder) },
+        model: { ...state.model, [key]: reorderById(state.model[key] || [], action.newOrder) },
       };
     }
 
@@ -1084,6 +1219,10 @@ export interface ModelContextValue {
   addAttribute: (isModelAttribute: boolean) => void;
   removeAttribute: (id: string) => void;
   updateAttribute: (id: string, changes: Partial<Attribute>) => void;
+  /** Generic Agent Platform: agent attribute set (CAModel.agentAttributes). */
+  addAgentAttribute: () => void;
+  removeAgentAttribute: (id: string) => void;
+  updateAgentAttribute: (id: string, changes: Partial<Attribute>) => void;
   addNeighborhood: () => void;
   duplicateNeighborhood: (sourceId: string) => void;
   removeNeighborhood: (id: string) => void;
@@ -1127,10 +1266,10 @@ export interface ModelContextValue {
   removeFacePattern: (id: string) => void;
   updateFacePattern: (id: string, changes: Partial<FacePattern>) => void;
   /** Local Variables — per-cell scratch storage. */
-  addVariable: () => void;
-  removeVariable: (id: string) => void;
-  updateVariable: (id: string, changes: Partial<Variable>) => void;
-  reorderVariables: (newOrder: string[]) => void;
+  addVariable: (target?: 'cell' | 'agent') => void;
+  removeVariable: (id: string, target?: 'cell' | 'agent') => void;
+  updateVariable: (id: string, changes: Partial<Variable>, target?: 'cell' | 'agent') => void;
+  reorderVariables: (newOrder: string[], target?: 'cell' | 'agent') => void;
   /** Bond-Graph Morphogenesis topology selection (Grid Cells / Agents). ≥1
    *  flag enforced by the reducer. */
   updateTopologyMode: (changes: Partial<TopologyMode>) => void;
@@ -1188,6 +1327,13 @@ export function ModelProvider({ children }: { children: ReactNode }) {
   const updateAttribute = useCallback(
     (id: string, changes: Partial<Attribute>) =>
       dispatch({ type: 'UPDATE_ATTRIBUTE', id, changes }),
+    [],
+  );
+  const addAgentAttribute = useCallback(() => dispatch({ type: 'ADD_AGENT_ATTRIBUTE' }), []);
+  const removeAgentAttribute = useCallback((id: string) => dispatch({ type: 'REMOVE_AGENT_ATTRIBUTE', id }), []);
+  const updateAgentAttribute = useCallback(
+    (id: string, changes: Partial<Attribute>) =>
+      dispatch({ type: 'UPDATE_AGENT_ATTRIBUTE', id, changes }),
     [],
   );
   const addNeighborhood = useCallback(
@@ -1352,16 +1498,16 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'UPDATE_FACE_PATTERN', id, changes }),
     [],
   );
-  const addVariable = useCallback(() => dispatch({ type: 'ADD_VARIABLE' }), []);
+  const addVariable = useCallback((target?: 'cell' | 'agent') => dispatch({ type: 'ADD_VARIABLE', target }), []);
   const removeVariable = useCallback(
-    (id: string) => dispatch({ type: 'REMOVE_VARIABLE', id }), [],
+    (id: string, target?: 'cell' | 'agent') => dispatch({ type: 'REMOVE_VARIABLE', id, target }), [],
   );
   const updateVariable = useCallback(
-    (id: string, changes: Partial<Variable>) =>
-      dispatch({ type: 'UPDATE_VARIABLE', id, changes }), [],
+    (id: string, changes: Partial<Variable>, target?: 'cell' | 'agent') =>
+      dispatch({ type: 'UPDATE_VARIABLE', id, changes, target }), [],
   );
   const reorderVariables = useCallback(
-    (newOrder: string[]) => dispatch({ type: 'REORDER_VARIABLES', newOrder }), [],
+    (newOrder: string[], target?: 'cell' | 'agent') => dispatch({ type: 'REORDER_VARIABLES', newOrder, target }), [],
   );
   const updateTopologyMode = useCallback(
     (changes: Partial<TopologyMode>) => dispatch({ type: 'UPDATE_TOPOLOGY_MODE', changes }), [],
@@ -1377,6 +1523,9 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       addAttribute,
       removeAttribute,
       updateAttribute,
+      addAgentAttribute,
+      removeAgentAttribute,
+      updateAgentAttribute,
       addNeighborhood,
       duplicateNeighborhood,
       removeNeighborhood,
@@ -1426,6 +1575,9 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       addAttribute,
       removeAttribute,
       updateAttribute,
+      addAgentAttribute,
+      removeAgentAttribute,
+      updateAgentAttribute,
       addNeighborhood,
       duplicateNeighborhood,
       removeNeighborhood,

@@ -87,12 +87,17 @@ function handleRowDragEnd() {
 }
 
 export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}) {
-  const { model, addAttribute, removeAttribute, updateAttribute, reorderAttributes } = useModel();
-  // Bond-Graph Agents: the same cell attributes double as per-agent attributes
-  // (Decision D-IDX). On the Agents sub-tab the section header reads "Agent
-  // Attributes" — UI-only, the ids are unchanged. (Re-renders on sub-tab swap.)
+  const {
+    model, addAttribute, removeAttribute: removeAttributeRaw, updateAttribute: updateAttributeRaw, reorderAttributes,
+    addAgentAttribute, removeAgentAttribute, updateAgentAttribute,
+  } = useModel();
+  // Generic Agent Platform: on the Agents sub-tab the primary list shows the
+  // AGENT attribute set (model.agentAttributes — a separate id-space), with its
+  // own +Add / edit / delete; the Cells sub-tab shows cell attributes (+ an
+  // Agent Access control). (Re-renders on sub-tab swap via the external store.)
   const activeGraphKind = useSyncExternalStore(subscribeActiveGraphKind, getActiveGraphKind);
-  const cellAttrLabel = (activeGraphKind === 'agents' && model.topologyMode?.agents) ? 'Agent Attributes' : 'Cell Attributes';
+  const agentMode = activeGraphKind === 'agents' && !!model.topologyMode?.agents;
+  const cellAttrLabel = agentMode ? 'Agent Attributes' : 'Cell Attributes';
   // 3D Grid CA: neighborIndex attribute values pack 3 axes in a 3D model.
   const is3dModel = model.properties.dimension === '3d' && (model.properties.gridDepth ?? 1) > 1;
   // One discriminated selection slot for this panel: `attr:<id>` or `var:<id>`.
@@ -105,11 +110,16 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
   const selectAttr = (id: string | null) => setSel(id ? `attr:${id}` : null);
   const selectVar = (id: string | null) => setSel(id ? `var:${id}` : null);
 
-  const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
+  const agentAttrList = model.agentAttributes ?? [];
+  // The PRIMARY list (top section): agent attrs on the Agents tab, cell attrs
+  // otherwise. The Model Attributes section (below) is shared in both.
+  const cellAttrs = agentMode ? agentAttrList : model.attributes.filter(a => !a.isModelAttribute);
   const modelAttrs = model.attributes.filter(a => a.isModelAttribute);
 
   // Independent reorder within each group — preserve the other group's order in the combined array.
+  // Agent attributes have no reorder reducer yet, so reorder is a no-op in agent mode.
   const cellReorder = useListReorder(cellAttrs, newOrder => {
+    if (agentMode) return;
     const map = new Map(cellAttrs.map(a => [a.id, a]));
     reorderAttributes([...newOrder.map(id => map.get(id)!).filter(Boolean), ...modelAttrs].map(a => a.id));
   });
@@ -118,7 +128,7 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
     reorderAttributes([...cellAttrs, ...newOrder.map(id => map.get(id)!).filter(Boolean)].map(a => a.id));
   });
 
-  // Auto-select & scroll to newly added items
+  // Auto-select & scroll to newly added items (cell/model attrs AND agent attrs).
   const prevAttrCount = useRef(model.attributes.length);
   useEffect(() => {
     if (model.attributes.length > prevAttrCount.current) {
@@ -132,7 +142,33 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
     }
     prevAttrCount.current = model.attributes.length;
   }, [model.attributes]);
-  const selected = selAttrId ? model.attributes.find(a => a.id === selAttrId) : undefined;
+  const prevAgentAttrCount = useRef(agentAttrList.length);
+  useEffect(() => {
+    if (agentAttrList.length > prevAgentAttrCount.current) {
+      const newItem = agentAttrList[agentAttrList.length - 1];
+      if (newItem) {
+        selectAttr(newItem.id);
+        setTimeout(() => {
+          document.getElementById(`attr-${newItem.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }, 50);
+      }
+    }
+    prevAgentAttrCount.current = agentAttrList.length;
+  }, [agentAttrList]);
+
+  // Generic Agent Platform: the selected attribute may be an AGENT attribute
+  // (separate id-space) or a cell/model attribute. Resolve from both, and route
+  // edits/deletes to the right reducer so the detail editor's many
+  // updateAttribute(selected.id, …) call sites stay unchanged.
+  const selected = selAttrId
+    ? (agentAttrList.find(a => a.id === selAttrId) ?? model.attributes.find(a => a.id === selAttrId))
+    : undefined;
+  const selectedIsAgent = !!selAttrId && agentAttrList.some(a => a.id === selAttrId);
+  const updateAttribute = (id: string, changes: Partial<Attribute>) =>
+    (selectedIsAgent ? updateAgentAttribute : updateAttributeRaw)(id, changes);
+  const removeAttribute = (id: string) =>
+    (selectedIsAgent ? removeAgentAttribute : removeAttributeRaw)(id);
+  const addPrimary = () => (agentMode ? addAgentAttribute() : addAttribute(false));
 
   const handleDelete = () => {
     if (selAttrId) {
@@ -179,9 +215,9 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
         <div className={styles.buttonRow}>
           <button
             className={styles.addButton}
-            onClick={() => addAttribute(false)}
+            onClick={addPrimary}
           >
-            + Add Cell Attribute
+            {agentMode ? '+ Add Agent Attribute' : '+ Add Cell Attribute'}
           </button>
           <button className={styles.deleteButton} onClick={handleDelete}>
             Delete
@@ -289,6 +325,24 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 {selected.isModelAttribute && <option value="lookupTable">Lookup Table</option>}
               </select>
             </div>
+            {/* Generic Agent Platform: whether floating agents may read/write this
+                cell attribute (the environment/field) via the field-bridge nodes.
+                Cell attributes only, and only when the model has agents. */}
+            {!selected.isModelAttribute && !selectedIsAgent && model.topologyMode?.agents && (
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>Agent access</label>
+                <select
+                  className={styles.selectInput}
+                  value={selected.agentAccess ?? 'none'}
+                  onChange={e => updateAttribute(selected.id, { agentAccess: e.target.value as 'none' | 'read' | 'readWrite' })}
+                  title="Whether agents can read (Sample/Read Field) or read+write (Affect/Secrete) this cell attribute"
+                >
+                  <option value="none">None</option>
+                  <option value="read">Read</option>
+                  <option value="readWrite">Read &amp; Write</option>
+                </select>
+              </div>
+            )}
             {selected.type === 'lookupTable' && (
               <div className={styles.field}>
                 <label className={styles.fieldLabel}>Lookup Table</label>
@@ -381,7 +435,7 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
 
             </>)}
             {/* Boundary Value — cell attributes only, shown when boundary treatment is constant. */}
-            {!selected.isModelAttribute && model.properties.boundaryTreatment === 'constant' && (
+            {!selected.isModelAttribute && !selectedIsAgent && model.properties.boundaryTreatment === 'constant' && (
               <div className={styles.field}>
                 <label className={styles.fieldLabel} title="Value held by out-of-grid cells when boundary is constant. Blank = use Default Value.">
                   Boundary Value
@@ -530,7 +584,9 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
             {/* Sub-Attribute — cell attributes only. A sub-attribute is "only well-defined"
                 on cells whose parent attribute (tag or bool) holds one of the configured
                 parent values. Reads on non-matching cells return the undefinedValue. */}
-            {!selected.isModelAttribute && (() => {
+            {/* Sub-attributes are a cell-only concept (agents have no parent-cell
+                relationship), so hide the editor for agent attributes. */}
+            {!selected.isModelAttribute && !selectedIsAgent && (() => {
               const validParents = model.attributes.filter(a =>
                 !a.isModelAttribute &&
                 a.id !== selected.id &&

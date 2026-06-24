@@ -40,6 +40,25 @@ export function detectMissingConfig(
   const hasCellAttr = (id: unknown) =>
     typeof id === 'string' && id.length > 0 &&
     model.attributes.some(a => a.id === id && !a.isModelAttribute);
+  // Generic Agent Platform: the agent attribute set (separate id-space).
+  const hasAgentAttr = (id: unknown) =>
+    typeof id === 'string' && id.length > 0 &&
+    (model.agentAttributes ?? []).some(a => a.id === id);
+  // getCellAttribute/setAttribute/updateAttribute are UNIVERSAL — they read/write
+  // the OWN cell on the Cells graph (a cell attr) or the OWN agent on the Agents
+  // graph (an agent attr). The node carries no graph-kind, so accept EITHER id;
+  // the (graph-aware) dropdown prevents picking the wrong one.
+  const hasOwnAttr = (id: unknown) => hasCellAttr(id) || hasAgentAttr(id);
+  /** A cell attribute the agents may read via the field bridge (agentAccess
+   *  read|readWrite). */
+  const hasFieldReadAttr = (id: unknown) =>
+    typeof id === 'string' && id.length > 0 &&
+    model.attributes.some(a => a.id === id && !a.isModelAttribute &&
+      (a.agentAccess === 'read' || a.agentAccess === 'readWrite'));
+  /** A cell attribute the agents may write via the field bridge (readWrite). */
+  const hasFieldWriteAttr = (id: unknown) =>
+    typeof id === 'string' && id.length > 0 &&
+    model.attributes.some(a => a.id === id && !a.isModelAttribute && a.agentAccess === 'readWrite');
   const hasModelAttr = (id: unknown) =>
     typeof id === 'string' && id.length > 0 &&
     model.attributes.some(a => a.id === id && a.isModelAttribute);
@@ -61,7 +80,8 @@ export function detectMissingConfig(
 
   switch (nodeType) {
     case 'getCellAttribute':
-      if (!hasCellAttr(config.attributeId)) issues.push('Select a cell attribute');
+      // Universal: a cell attr (Cells graph) OR an agent attr (Agents graph).
+      if (!hasOwnAttr(config.attributeId)) issues.push('Select an attribute');
       break;
 
     case 'getModelAttribute':
@@ -70,23 +90,57 @@ export function detectMissingConfig(
 
     case 'setAttribute':
     case 'updateAttribute':
-      if (!hasCellAttr(config.attributeId)) issues.push('Select a cell attribute');
+      // Universal: a cell attr (Cells graph) OR an agent attr (Agents graph).
+      if (!hasOwnAttr(config.attributeId)) issues.push('Select an attribute');
       break;
 
-    // Bond-Graph Agents — the field-bridge nodes read/write a cell attribute
-    // (the morphogen field), so attributeId is required or they emit `_field__undef`.
+    // Generic Agent Platform — field-bridge READ nodes: the cell attribute must
+    // be agent-readable (agentAccess read|readWrite), or the field channel param
+    // isn't threaded and the emit references `_field__undef`.
     case 'sampleField':
     case 'fieldGradient':
     case 'readCellsUnder':
+      if (!hasCellAttr(config.attributeId)) issues.push('Select a field (cell) attribute');
+      else if (!hasFieldReadAttr(config.attributeId)) issues.push('This cell attribute is not agent-accessible — set its Agent access to Read or Read & Write');
+      break;
+    // Field-bridge WRITE nodes: the cell attribute must be agent-writable (readWrite).
     case 'affectCellsUnder':
     case 'secreteToField':
       if (!hasCellAttr(config.attributeId)) issues.push('Select a field (cell) attribute');
+      else if (!hasFieldWriteAttr(config.attributeId)) issues.push('This cell attribute is read-only to agents — set its Agent access to Read & Write');
       break;
 
-    // Bond-Graph Agents — neighbour-attribute read/write need an attribute.
+    // Generic Agent Platform — other-agent attribute read/write (by id) + the
+    // agent-equivalent gather / filter / write-many nodes. All target the AGENT
+    // attribute set.
     case 'getAgentAttribute':
     case 'setAgentAttribute':
-      if (!hasCellAttr(config.attributeId)) issues.push('Select an agent attribute');
+      // Single-agent (scalar agentId) — only the attribute is required.
+      if (!hasAgentAttr(config.attributeId)) issues.push('Select an agent attribute');
+      break;
+
+    case 'getAgentsAttribute':
+    case 'setAgentsAttribute':
+    case 'filterAgents':
+      // Array-consuming: an unconnected Agents input falls back to `[]` and
+      // silently produces an empty/no-op result (mirrors the lattice Filter /
+      // Get-Neighbors-Attr badge).
+      if (!hasAgentAttr(config.attributeId)) issues.push('Select an agent attribute');
+      if (isInputConnected('agents') === false) {
+        issues.push('Connect an Agents input (e.g. from Get Nearby Agents or Get Bonded Agents)');
+      }
+      break;
+
+    case 'joinAgents':
+      if (isInputConnected('a') === false) issues.push('Connect input A');
+      if (isInputConnected('b') === false) issues.push('Connect input B');
+      break;
+
+    case 'pickRandomAgent':
+    case 'pickNRandomAgents':
+      if (isInputConnected('agents') === false) {
+        issues.push('Connect an Agents input (e.g. from Get Nearby Agents or Filter Agents)');
+      }
       break;
 
     case 'getNeighborsAttribute':
@@ -334,7 +388,13 @@ export function detectMissingConfig(
     case 'setVariable':
     case 'setArrayElement': {
       const variableId = config.variableId;
-      const variables = model.variables || [];
+      // Generic Agent Platform: resolve against the active graph's variable set
+      // (agent graph → agentVariables, cell graph → variables). The two are
+      // disjoint id-spaces; checking both avoids a false "no longer exists" badge
+      // when this validation runs without a definite graph context.
+      const variables = getActiveGraphKind() === 'agents'
+        ? (model.agentVariables || [])
+        : (model.variables || []);
       if (typeof variableId !== 'string' || variableId.length === 0) {
         issues.push('Select a Local Variable');
       } else {
@@ -467,12 +527,13 @@ export function detectCapabilityRequirements(
   if (def.requirements.variegated && !model.variegatedCells?.enabled) {
     issues.push(`"${def.label}" requires Variegated Cells enabled. Enable it in Model Properties > Execution.`);
   }
-  // 3D Grid CA: the packed `neighborIndex` codec carries only two axes (dr, dc),
-  // so the whole 2-axis NI-value family is invalid in a 3D model. Use the
-  // whole-neighbourhood nodes (Get Neighbors Attribute / Get Neighbor Attribute
-  // by Tag) instead — they resolve flat 3D indices.
+  // Generic 2D-only gate. (Currently NO node sets `lattice2d`: the neighborIndex
+  // family was un-gated once the 3-axis (dr, dc, dl) codec landed on all three
+  // targets in PR10 — it now packs three 10-bit fields in 3D. The flag is kept
+  // as generic 2D-only infrastructure, so the message must NOT claim a 2-axis-NI
+  // reason that PR10 made false.)
   if (def.requirements.lattice2d && model.properties.dimension === '3d') {
-    issues.push(`"${def.label}" uses the 2-axis neighbour-index codec, which can't represent a 3D offset. In a 3D model use Get Neighbors Attribute or Get Neighbor Attribute by Tag instead.`);
+    issues.push(`"${def.label}" requires a 2D lattice and isn't available in a 3D model.`);
   }
   // Bond-Graph Agents: agent-world nodes need the Agents topology enabled. The
   // active-sub-tab half of the gate (`lattice` hidden on the Agents graph,
@@ -612,7 +673,12 @@ export function detectWasmIncompatibilities(
  *  restriction message when a non-JS target is selected on an agent model, else
  *  null. The simulator's compile path consumes this to force the JS target (so
  *  it's an enforcement, not just a badge), and the Properties status line shows
- *  it. The CELL field path is unaffected — only the AGENT engine forces JS. */
+ *  it. The CELL field path is unaffected — only the AGENT engine forces JS.
+ *
+ *  DEPRECATED / UNUSED: no longer wired into any compile gate. Agents now run on
+ *  WASM too (resolved via `agentTargetOf` on `model.centerBased.agentTarget`) and
+ *  the GRID target is independent, so this grid-flag-keyed restriction is obsolete.
+ *  Its only remaining caller is the (also-unused) detectWasmModelIncompatibilities. */
 export function detectAgentTargetRestriction(model: CAModel): string | null {
   if (!model.topologyMode?.agents) return null;
   if (model.properties.useWebGPU || model.properties.useWasm) {
@@ -621,16 +687,20 @@ export function detectAgentTargetRestriction(model: CAModel): string | null {
   return null;
 }
 
-/** Top-level model check — async + WebGPU is incompatible, and an agent model
- *  forces JS. Returns a human-readable message when the WebGPU target is
- *  invalid, else null. Intended for the Properties panel's status line and the
- *  WebGPU-compile entry point. */
+/** Top-level model check for the WebGPU GRID/cell-field target. Returns a
+ *  human-readable message when the WebGPU target is invalid, else null.
+ *  Intended for the Properties panel's status line and the WebGPU-compile entry
+ *  point.
+ *
+ *  NOTE: this does NOT block an agents model. The GRID/cell-field compile target
+ *  (useWebGPU/useWasm) is INDEPENDENT of the agent engine's target — a WebGPU
+ *  grid runs the cell CA on the GPU while agents stay JS (resolved separately
+ *  via `agentTargetOf` on `model.centerBased.agentTarget`). Routing the old
+ *  agent-forces-JS restriction in here silently negated that shipped feature, so
+ *  it was removed (the restriction keyed off the GRID flags, not the agent
+ *  target). */
 export function detectWebGPUModelIncompatibilities(model: CAModel): string | null {
   if (!model.properties.useWebGPU) return null;
-  // Agents force JS (D-TARGET) — surfaces before the async check so an agent
-  // model on WebGPU reads the right reason.
-  const agentRestriction = detectAgentTargetRestriction(model);
-  if (agentRestriction) return agentRestriction;
   if (model.properties.updateMode === 'asynchronous') {
     return 'WebGPU target requires synchronous update mode. Switch to Synchronous in Model Properties or change target.';
   }

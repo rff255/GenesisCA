@@ -1388,8 +1388,18 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
       ctx.emitter.emit(byte(0x73)); // OP_I32_XOR
       return storeResult(ctx.emitter, I32);
     }
+    // Normalise BOTH operands to 0/1 before the bitwise op (mirrors the XOR path
+    // above). Without this, a non-0/1 'any' source — which the editor's port
+    // rules permit into this bool input — would give a raw bitwise result that
+    // disagrees with JS (`a && b`) and WebGPU (`castTo bool`): e.g. a=1,b=4 AND
+    // → `1 & 4` = 0 (false) on WASM vs truthy on JS/WebGPU. (a != 0) &/| (b != 0)
+    // yields 1/0 and matches the other two targets for all inputs.
     pushValueAs(ctx.emitter, a, I32);
+    ctx.emitter.i32Const(0);
+    ctx.emitter.op(OP_I32_NE_OP);
     pushValueAs(ctx.emitter, b, I32);
+    ctx.emitter.i32Const(0);
+    ctx.emitter.op(OP_I32_NE_OP);
     switch (op) {
       case 'AND': ctx.emitter.op(OP_I32_AND); break;
       case 'OR':  ctx.emitter.op(OP_I32_OR); break;
@@ -2960,12 +2970,19 @@ function emitAggregateOrCount(
                 ctx.emitter.op(OP_F64_MAX);
                 ctx.emitter.localSet(accLocal);
                 break;
+              // Normalise the (raw i32) element to 0/1 before the bitwise fold so
+              // a non-0/1 array element (e.g. an int/tag attr value) matches the
+              // JS truthiness semantics + WebGPU's bool accumulator. acc stays 0/1.
               case 'and':
+                ctx.emitter.i32Const(0);
+                ctx.emitter.op(OP_I32_NE_OP);
                 ctx.emitter.localGet(accLocal);
                 ctx.emitter.op(OP_I32_AND);
                 ctx.emitter.localSet(accLocal);
                 break;
               case 'or':
+                ctx.emitter.i32Const(0);
+                ctx.emitter.op(OP_I32_NE_OP);
                 ctx.emitter.localGet(accLocal);
                 ctx.emitter.op(OP_I32_OR);
                 ctx.emitter.localSet(accLocal);
@@ -3636,9 +3653,13 @@ function emitArrayAggregate(
               em.localGet(accLocal); em.op(OP_F64_MIN); em.localSet(accLocal); break;
             case 'max':
               em.localGet(accLocal); em.op(OP_F64_MAX); em.localSet(accLocal); break;
+            // Normalise the raw i32 element to 0/1 before the bitwise fold (see
+            // the nbr-path aggregate) so a non-0/1 array element matches JS/WebGPU.
             case 'and':
+              em.i32Const(0); em.op(OP_I32_NE_OP);
               em.localGet(accLocal); em.op(OP_I32_AND); em.localSet(accLocal); break;
             case 'or':
+              em.i32Const(0); em.op(OP_I32_NE_OP);
               em.localGet(accLocal); em.op(OP_I32_OR); em.localSet(accLocal); break;
           }
         }
@@ -3930,12 +3951,18 @@ function emitScalarAggregate(
           ctx.emitter.op(OP_F64_MAX);
           ctx.emitter.localSet(accLocal);
           break;
+        // Normalise the raw i32 source to 0/1 before the bitwise fold (see the
+        // nbr-path aggregate) so a non-0/1 scalar source matches JS/WebGPU.
         case 'and':
+          ctx.emitter.i32Const(0);
+          ctx.emitter.op(OP_I32_NE_OP);
           ctx.emitter.localGet(accLocal);
           ctx.emitter.op(OP_I32_AND);
           ctx.emitter.localSet(accLocal);
           break;
         case 'or':
+          ctx.emitter.i32Const(0);
+          ctx.emitter.op(OP_I32_NE_OP);
           ctx.emitter.localGet(accLocal);
           ctx.emitter.op(OP_I32_OR);
           ctx.emitter.localSet(accLocal);

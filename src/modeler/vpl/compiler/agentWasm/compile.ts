@@ -56,6 +56,7 @@
 // ===========================================================================
 
 import type { GraphNode, GraphEdge, CAModel } from '../../../../model/types';
+import { agentAttrsOf } from '../../../../model/attributeScope';
 import {
   I32, F64,
   leb128u,
@@ -456,7 +457,11 @@ function emitGuardedDiv(ctx: AgentWasmCtx, node: GraphNode): void {
 function emitCompare(ctx: AgentWasmCtx, node: GraphNode): void {
   const em = ctx.em;
   const cfg = node.data.config as Record<string, unknown> | undefined;
-  const op = (cfg?.['operator'] as string) ?? '==';
+  // The Compare (`statement`) node stores its operator under `operation` (see
+  // StatementNode.defaultConfig / its JS compile) — NOT `operator`. Reading the
+  // wrong key made every non-equality op fall through to `==` on the WASM agent
+  // target (silent divergence from the JS agent path).
+  const op = (cfg?.['operation'] as string) ?? '==';
   pushValueInputF64(ctx, node, 'x', 0);
   pushValueInputF64(ctx, node, 'y', 0);
   switch (op) {
@@ -998,7 +1003,10 @@ export function isAgentGraphWasmSupported(model: CAModel | undefined | null): bo
     const cfg = (n.data.config ?? {}) as Record<string, unknown>;
     if (t === 'getNearbyAgents') nearbyCount++;
     if (t === 'statement') {
-      const op = cfg['operator'] as string | undefined;
+      // `operation`, not `operator` (matches emitCompare + StatementNode). The
+      // wrong key meant the between/notBetween reject never fired → a between
+      // Compare reached emitCompare (which has no between path) and emitted ==.
+      const op = cfg['operation'] as string | undefined;
       if (op && /between/i.test(op)) return false;
       const compareType = cfg['compareType'] as string | undefined;
       if (compareType && compareType !== 'numerical') return false;
@@ -1016,9 +1024,11 @@ export function isAgentGraphWasmSupported(model: CAModel | undefined | null): bo
   // Local Variables: only SCALAR variables are supported (array variables +
   // setArrayElement are PR6b-3). If the model has any array variable AND a
   // getVariable/setVariable touches it, the agent graph can't be safely compiled.
-  // Conservative: reject when any model variable is an array (the agent graph may
-  // reference it).
-  const hasArrayVar = (model.variables ?? []).some(v => v.kind === 'array');
+  // Conservative: reject when any AGENT variable is an array (the agent graph may
+  // reference it). Generic Agent Platform: the agent graph resolves variables
+  // against agentVariables — a cell-only array variable no longer blocks the
+  // agent WASM compile (the documented false-positive fix).
+  const hasArrayVar = (model.agentVariables ?? []).some(v => v.kind === 'array');
   const usesVar = flat.nodes.some(n => n.data.nodeType === 'getVariable' || n.data.nodeType === 'setVariable');
   if (hasArrayVar && usesVar) return false;
   // forEachInArray's array input must come from getNearbyAgents (the only
@@ -1115,8 +1125,9 @@ export function compileAgentGraphWasm(
     em.i32Const(0); em.i32Load(agentLayout.rngStateOffset, 2); em.localSet(rsLocal);
     em.localGet(rsLocal); em.op(OP_I32_EQZ);
     em.ifThen(() => { em.i32Const(0x12345678); em.localSet(rsLocal); });
-    // Local Variables — one f64 local per SCALAR variable (reset per agent at loop top).
-    for (const v of (model.variables ?? [])) {
+    // Local Variables — one f64 local per SCALAR AGENT variable (reset per agent
+    // at loop top). The agent graph's variables live on model.agentVariables.
+    for (const v of (model.agentVariables ?? [])) {
       if (v.kind !== 'scalar') continue;
       ctx.varLocals.set(v.id, em.allocLocal(F64));
     }
@@ -1133,8 +1144,8 @@ export function compileAgentGraphWasm(
         // the alive==0 case just falls through to idx++).
         em.i32Const(agentLayout.u8['alive']!); em.localGet(idxLocal); em.op(OP_I32_ADD); em.i32Load8U();
         em.ifThen(() => {
-          // reset scalar Local Variables to initialValue
-          for (const v of (model.variables ?? [])) {
+          // reset scalar Local Variables to initialValue (agent variable set)
+          for (const v of (model.agentVariables ?? [])) {
             if (v.kind !== 'scalar') continue;
             const l = ctx.varLocals.get(v.id)!;
             em.f64Const(variableInitNum(v));
@@ -1225,8 +1236,11 @@ export function agentMaxHashBinsForModel(model: CAModel): number {
 export function compileAgentGraphWasmForModel(model: CAModel): AgentWasmResult {
   const cfg = model.centerBased;
   if (!cfg) return { bytes: new Uint8Array(), pages: 1, layout: computeAgentMemoryLayout(1, 1, []), supportedTypes: [], error: 'No centerBased config.' };
-  const specs: AgentAttrSpec[] = (model.attributes ?? [])
-    .filter(a => !a.isModelAttribute)
+  // Generic Agent Platform: the agent SoA + the baked memory offsets are keyed by
+  // the AGENT attribute set (agentAttrsOf), the SAME ordered list the worker's
+  // buildAgentAttrSpecs uses — they MUST match byte-for-byte or the WASM behaviour
+  // reads/writes land on wrong-attribute bytes (the baked-offset lockstep).
+  const specs: AgentAttrSpec[] = agentAttrsOf(model)
     .map(a => ({ id: a.id, type: a.type, defaultValue: 0 }));
   const maxAgents = Math.max(1, Math.floor((cfg.maxAgents as number) ?? 2000));
   const maxBonds = Math.max(1, Math.floor((cfg.maxBonds as number) ?? 8));

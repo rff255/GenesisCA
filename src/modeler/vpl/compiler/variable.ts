@@ -2,7 +2,7 @@
  *  storage referenced by getVariable / setVariable / setArrayElement nodes).
  *  See `Variable` in `src/model/types.ts` for the schema. */
 
-import type { CAModel, Variable } from '../../../model/types';
+import type { Variable } from '../../../model/types';
 
 /** Encode a Variable's initialValue (or any string value matching its
  *  dataType) as a JS numeric literal. Mirrors `attrValueLiteralJS` for
@@ -41,8 +41,7 @@ export function variableLocalName(variableId: string): string {
  *  Lifetime: per-cell, per-step. Each cell sees a fresh copy with the
  *  initialValue at the start of its computation; user writes mutate the
  *  copy; nothing carries across to the next cell or the next step. */
-export function buildVariableJS(model: CAModel): { preLoop: string[]; inLoopReset: string[] } {
-  const variables = model.variables || [];
+export function buildVariableJS(variables: Variable[]): { preLoop: string[]; inLoopReset: string[] } {
   if (variables.length === 0) return { preLoop: [], inLoopReset: [] };
   const preLoop: string[] = [];
   const inLoopReset: string[] = [];

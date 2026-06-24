@@ -4,11 +4,11 @@ This document catalogues every node in the GenesisCA Visual Programming Language
 describes the port type system, and flags redundancies or gaps. It is a working reference
 to inform future consolidation — it does **not** describe any committed refactoring.
 
-**Scope:** 94 node types across 7 categories (event, flow, data, logic, aggregation,
+**Scope:** 108 node types across 7 categories (event, flow, data, logic, aggregation,
 output, color), plus 2 hidden boundary nodes (`macroInput` / `macroOutput`). Indicator
 nodes live within the `data` (readers) and `output` (writers) categories rather than a
 category of their own. The variegated-cells, local-variable, and Bond-Graph-Agent nodes
-appear in the editor only when their respective model feature is enabled (the 17 agent
+appear in the editor only when their respective model feature is enabled (the 40 agent
 nodes — §3.8 — only in a Bond-Graph-Agents model, and only on its Agents sub-tab).
 
 **Editor-only constructs** (not counted above, no computation): comments, groups, and
@@ -219,7 +219,7 @@ exists purely to keep graphs readable without Sequence nodes. See
 
 ### 3.8 Bond-Graph Agents — `agent` family
 
-> **Bond-Graph Agents note:** these 17 nodes form a second, off-lattice rule world.
+> **Bond-Graph Agents note:** these 40 nodes form a second, off-lattice rule world.
 > They carry `requirements: { bondGraph: true }`, so they appear in the editor **only** in
 > a model with the **Bond-Graph Agents** topology enabled, and **only on its Agents
 > sub-tab** (`isNodeAvailable` keys on the active graph kind). Conversely the lattice-bound
@@ -262,6 +262,20 @@ exists purely to keep graphs readable without Sequence nodes. See
 | 91 | `getCurvature` | Get Curvature | `data` | Local membrane curvature of a bonded agent: the magnitude of the mean unit-vector to its bonded partners, in [0, 1] (~0 = flat/interior, →1 = convex edge/tip; 0 for < 2 bonds). | `O: Curvature` (float) | Drives curvature-dependent behaviour (edge cells differentiating differently, tip growth) |
 | 92 | `applyForce` | Apply Force | `output` | Add a force vector to the agent this step — the GRAPH authors the physics. The engine integrates the sum of all Apply Force contributions plus its soft-sphere + bond springs (unless Custom forces only). Build flocking, chemotaxis, propulsion. | `I: DO` `I: Force X` `I: Force Y` (float, inline) / `O: NEXT` (flow) | With momentum > 0 it changes velocity (inertia); with 0 it directly displaces (overdamped). NOT async-only |
 | 93 | `setAgentAttribute` | Set Agent Attribute | `output` | Write an attribute on ANOTHER agent by id (the agent analogue of Set Neighbor Attribute By Index) — signal a neighbour. | `I: DO` `I: Agent` (int) `I: Value` (float, inline) / `O: NEXT` (flow) | Requires `attributeId`. Immediate single-buffer (async-style) write — use commutative patterns when order matters; id range-guarded |
+| 95 | `getBondedAgents` | Get Bonded Agents | `data` | This agent's bonded partners as an id array — the data sibling of For Each Bond. Filter / join / aggregate them exactly like Get Nearby Agents. | `O: Agents` (int **array**) | Per-agent (never hoisted). Reads the ragged bond store, keeping live partners only |
+| 96 | `filterAgents` | Filter Agents | `aggregation` | Keep the agents in an id array whose AGENT attribute passes a comparison — the agent analogue of Filter Neighbors over plain ids (no NeighborIndex codec). | `I: Agents` (int **array**) `I: Compare` (any, inline) / `O: Filtered` (int **array**), `O: Count` (int) | Multi-output. Requires `attributeId` + `operation` (==, !=, >, <, >=, <=); reads the agent SoA at `r_<attr>[id]` |
+| 97 | `joinAgents` | Join Agents | `aggregation` | Combine two agent id arrays by union (all unique) or intersection (in both) — e.g. nearby ∪ bonded, or nearby ∩ of-my-type. | `I: A` (int **array**) `I: B` (int **array**) / `O: Result` (int **array**), `O: Count` (int) | Multi-output. Requires `operation` (union / intersection); the empty sentinel is `-1` |
+| 98 | `pickRandomAgent` | Pick Random Agent | `aggregation` | Pick one id at random from an agent id array (e.g. Get Nearby / Filter Agents). The agent analogue of Pick Random Neighbor. | `I: Agents` (int **array**) / `O: Agent` (int) | Returns `-1` when empty. Shares the same `_rs` xorshift32 stream as Get Random (reproducible). Per-agent, impure |
+| 99 | `pickNRandomAgents` | Pick N Random Agents | `aggregation` | Pick up to N distinct ids at random from an agent id array (without replacement) — partial Fisher-Yates. | `I: Agents` (int **array**) `I: N` (int, inline) / `O: Picked` (int **array**) | Returns at most `min(N, input.length)` ids. Shares the `_rs` stream. Per-agent, impure |
+| 100 | `getAgentsAttribute` | Get Agents Attribute | `data` | The keystone gather: read one AGENT attribute over a whole id array → a values array (the agent analogue of Get Neighbors Attr By Indexes). Pipe into Aggregate / Group Counting. | `I: Agents` (int **array**) / `O: Values` (any **array**) | Requires `attributeId`; reads `r_<attr>[id]` per id. Makes a totalistic CA over a grid of agents composable. Per-agent, impure |
+| 101 | `setAgentsAttribute` | Set Agents Attribute | `output` | Write one attribute on EVERY agent in an id array — the write-many companion to Set Agent Attribute. Feed it Get Nearby / Bonded / Filter Agents to signal a whole group. | `I: DO` `I: Agents` (int **array**) `I: Value` (float, inline) / `O: NEXT` (flow) | Requires `attributeId`. Immediate (async-style) writes, each id range + alive guarded |
+| 102 | `setVelocity` | Set Velocity | `output` | Set this agent's velocity directly — the momentum companion to Apply Force (seeds the integration velocity rather than accumulating a force). | `I: DO` `I: Vx` `I: Vy` (float, inline) / `O: NEXT` (flow) | Only meaningful when the model's Momentum > 0 (overdamped mode recomputes velocity from the force each step — use Apply Force there). Writes `_agentVX/VY[idx]` |
+| 103 | `agentInit` | Agent Init Event | `event` | A once-per-Reset setup root for the Agents graph (the agent analogue of the cell Init Event). Wire a Loop inside DO and spawn the initial population with Create Agent → set-by-handle → Add Agent To World. | `O: DO` (flow), `O: World Width` `O: World Height` (float), `O: Seed Index Base` (int) | Singleton. Runs exactly once (NOT per-agent, no `idx`); composes additively with the config `seedCount`. Multi-output |
+| 104 | `createAgent` | Create Agent | `output` | Phase 1 of the two-phase spawn — allocate a STAGED agent (`alive=0`) at a position and return its `Handle` (the new id, or `-1` on overflow) so you can set its attributes before committing. | `I: DO` `I: X` `I: Y` (float, inline) `I: Radius` (float, inline) `I: Type` (int, inline) / `O: NEXT` (flow), `O: Handle` (int) | Only meaningful inside the Agent Init Event (v1 is init-only). Multi-output. A handle never Added is swept back to the free-list at the end of init |
+| 105 | `addAgentToWorld` | Add Agent To World | `output` | Phase 2 of the two-phase spawn — commit a staged agent (from Create Agent's handle), marking it live (`alive=1`, liveCount++) so the simulation processes it. | `I: DO` `I: Handle` (int) / `O: NEXT` (flow) | Only meaningful inside the Agent Init Event. Calls the `_agentAddToWorld` host closure |
+| 106 | `setAgentPosition` | Set Agent Position | `output` | Set an agent's position by id — a spawn helper for a staged Create Agent handle (also works on a live agent). | `I: DO` `I: Agent` (int) `I: X` `I: Y` (float, inline) / `O: NEXT` (flow) | In the Init Event the guard is range-only (a staged agent is `alive=0`); elsewhere it requires a live agent |
+| 107 | `setAgentRadius` | Set Agent Radius | `output` | Set an agent's radius (and growth target) by id — a spawn helper for a staged Create Agent handle (also works on a live agent). | `I: DO` `I: Agent` (int) `I: Radius` (float, inline) / `O: NEXT` (flow) | Writes both `_agentRadius` and `_agentTargetRadius` so the growth ramp doesn't drag it away |
+| 108 | `setAgentType` | Set Agent Type | `output` | Set an agent's integer type by id — a spawn helper for a staged Create Agent handle (also works on a live agent). | `I: DO` `I: Agent` (int) `I: Type` (int, inline) / `O: NEXT` (flow) | The type drives the default colour palette and can be read by other agents (Get Agent Attribute / type-based rules) |
 
 ### Hidden / auto-generated
 

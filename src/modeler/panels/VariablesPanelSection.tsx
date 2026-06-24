@@ -1,11 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { useModel } from '../../model/ModelContext';
 import type { VariableDataType, VariableKind } from '../../model/types';
 import { useListReorder } from './useListReorder';
 import type { PanelMode } from '../ModelerDetailContext';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
-import { setCurrentModelElementDrag } from '../vpl/graphState';
+import { setCurrentModelElementDrag, subscribeActiveGraphKind, getActiveGraphKind } from '../vpl/graphState';
 import { typeDisplayName } from '../../model/typeLabels';
 import { NumberField, InlineNumberInput } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
@@ -36,9 +36,22 @@ export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
   selectedId: string | null;
   onSelect: (id: string | null) => void;
 }) {
-  const { model, addVariable, removeVariable, updateVariable, reorderVariables } = useModel();
-  const variables = model.variables || [];
-  const reorder = useListReorder(variables, reorderVariables);
+  const {
+    model, addVariable: addVariableRaw, removeVariable: removeVariableRaw,
+    updateVariable: updateVariableRaw, reorderVariables,
+  } = useModel();
+  // Generic Agent Platform: the Agents sub-tab edits the AGENT variable set
+  // (model.agentVariables, separate id-space); the Cells sub-tab edits the cell
+  // variables. All mutations carry the matching `target`; local wrappers keep the
+  // call sites below unchanged.
+  const activeGraphKind = useSyncExternalStore(subscribeActiveGraphKind, getActiveGraphKind);
+  const agentMode = activeGraphKind === 'agents' && !!model.topologyMode?.agents;
+  const target: 'cell' | 'agent' = agentMode ? 'agent' : 'cell';
+  const addVariable = () => addVariableRaw(target);
+  const removeVariable = (id: string) => removeVariableRaw(id, target);
+  const updateVariable = (id: string, changes: Parameters<typeof updateVariableRaw>[1]) => updateVariableRaw(id, changes, target);
+  const variables = (agentMode ? model.agentVariables : model.variables) || [];
+  const reorder = useListReorder(variables, (newOrder: string[]) => reorderVariables(newOrder, target));
 
   const prevCount = useRef(variables.length);
   useEffect(() => {
@@ -66,7 +79,7 @@ export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
     <>
       {mode !== 'detail' && (
       <div className={styles.section}>
-      <div className={styles.sectionTitle}>Local Variables</div>
+      <div className={styles.sectionTitle}>{agentMode ? 'Agent Variables' : 'Local Variables'}</div>
       <div className={styles.sectionHelp}>
         Per-cell scratch storage referenced by Get / Set Variable nodes. Each
         cell sees a fresh copy initialised to the variable's Initial Value at
