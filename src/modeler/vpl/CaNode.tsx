@@ -27,6 +27,7 @@ import {
   compatibleHandlesForDrag,
   subscribeCompatibleHandlesForDrag,
   handleKey,
+  getActiveGraphKind,
 } from './graphState';
 
 /** Snapshot getter for useSyncExternalStore — must return a stable reference
@@ -197,6 +198,13 @@ function CaNodeComponent({ id, data }: NodeProps) {
   const nodeData = data as CaNodeData;
   const def = getNodeDef(nodeData.nodeType);
   const { model, updateMacro, importMacro } = useModel();
+  // Generic Agent Platform: the OWN-attribute dropdowns (Get/Set/Update Attribute)
+  // list the AGENT attribute set on the Agents graph and the CELL attribute set on
+  // the Cells graph. Nodes are remounted on graph swap, so reading the kind at
+  // render time is correct.
+  const ownAttrList = getActiveGraphKind() === 'agents'
+    ? (model.agentAttributes ?? [])
+    : model.attributes.filter(a => !a.isModelAttribute);
   const { updateNodeData } = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
   // Subscribe to port-label toggle so memoized CaNodes re-render when it changes
@@ -525,9 +533,18 @@ function CaNodeComponent({ id, data }: NodeProps) {
       model.mappings,
       model.indicators,
       model.macroDefs,
+      // detectMissingConfig reads variables/agentVariables/agentAttributes and
+      // detectCapabilityRequirements reads topologyMode/dimension — without these
+      // deps the memoized badge goes stale on a Local-Variable kind change, an
+      // agent-attribute edit, or a topology/dimension toggle.
+      model.variables,
+      model.agentVariables,
+      model.agentAttributes,
+      model.topologyMode,
       model.properties.useWebGPU,
       model.properties.useWasm,
       model.properties.updateMode,
+      model.properties.dimension,
       model.variegatedCells?.enabled,
       connectionHazards,
       connectedInputHandles,
@@ -1012,11 +1029,56 @@ function CaNodeComponent({ id, data }: NodeProps) {
             onChange={e => updateConfig('attributeId', e.target.value)}
           >
             <option value="">Select...</option>
-            {model.attributes
-              .filter(a => !a.isModelAttribute)
-              .map(a => (
+            {ownAttrList.map(a => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+        )}
+
+        {/* Generic Agent Platform — the agent gather / filter / write-many nodes
+            target the AGENT attribute set (by id). Filter Agents adds an op. */}
+        {(nodeData.nodeType === 'getAgentsAttribute'
+          || nodeData.nodeType === 'setAgentsAttribute'
+          || nodeData.nodeType === 'filterAgents'
+          || nodeData.nodeType === 'getAgentAttribute'
+          || nodeData.nodeType === 'setAgentAttribute') && (
+          <>
+            <select
+              className={styles.select}
+              value={(nodeData.config.attributeId as string) || ''}
+              onChange={e => updateConfig('attributeId', e.target.value)}
+            >
+              <option value="">Agent attribute...</option>
+              {(model.agentAttributes ?? []).map(a => (
                 <option key={a.id} value={a.id}>{a.name}</option>
               ))}
+            </select>
+            {nodeData.nodeType === 'filterAgents' && (
+              <select
+                className={styles.select}
+                value={(nodeData.config.operation as string) || 'equals'}
+                onChange={e => updateConfig('operation', e.target.value)}
+              >
+                <option value="equals">==</option>
+                <option value="notEquals">!=</option>
+                <option value="greater">&gt;</option>
+                <option value="lesser">&lt;</option>
+                <option value="greaterEqual">&gt;=</option>
+                <option value="lesserEqual">&lt;=</option>
+              </select>
+            )}
+          </>
+        )}
+
+        {/* Generic Agent Platform — Join Agents op. */}
+        {nodeData.nodeType === 'joinAgents' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.operation as string) || 'union'}
+            onChange={e => updateConfig('operation', e.target.value)}
+          >
+            <option value="union">Union</option>
+            <option value="intersection">Intersection</option>
           </select>
         )}
 
@@ -1374,16 +1436,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
             onChange={e => updateConfig('attributeId', e.target.value)}
           >
             <option value="">Select...</option>
-            {model.attributes
-              .filter(a => !a.isModelAttribute)
-              .map(a => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
+            {ownAttrList.map(a => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
           </select>
         )}
 
         {nodeData.nodeType === 'updateAttribute' && (() => {
-          const selAttr = model.attributes.find(a => a.id === nodeData.config.attributeId);
+          const selAttr = ownAttrList.find(a => a.id === nodeData.config.attributeId);
           const dt = selAttr?.type || 'integer';
           const opsByType: Record<string, Array<{ value: string; label: string }>> = {
             bool: [{ value: 'toggle', label: 'Toggle' }, { value: 'or', label: 'OR' }, { value: 'and', label: 'AND' }],
@@ -1398,7 +1458,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 className={styles.select}
                 value={(nodeData.config.attributeId as string) || ''}
                 onChange={e => {
-                  const attr = model.attributes.find(a => a.id === e.target.value);
+                  const attr = ownAttrList.find(a => a.id === e.target.value);
                   const newDt = attr?.type || 'integer';
                   const firstOp = (opsByType[newDt] ?? opsByType.integer)![0]!.value;
                   const newConfig: NodeConfig = { ...nodeData.config, attributeId: e.target.value, operation: firstOp };
@@ -1409,11 +1469,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 }}
               >
                 <option value="">Select...</option>
-                {model.attributes
-                  .filter(a => !a.isModelAttribute)
-                  .map(a => (
-                    <option key={a.id} value={a.id}>{a.name}</option>
-                  ))}
+                {ownAttrList.map(a => (
+                  <option key={a.id} value={a.id}>{a.name}</option>
+                ))}
               </select>
               <select
                 className={styles.select}
@@ -1450,7 +1508,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
           // arrays, GetVariable accepts either.
           const wantArray = nodeData.nodeType === 'setArrayElement';
           const wantScalar = nodeData.nodeType === 'setVariable';
-          const matching = (model.variables || []).filter(v => {
+          // Generic Agent Platform: the Agents graph lists the agent variable set.
+          const varList = getActiveGraphKind() === 'agents' ? (model.agentVariables || []) : (model.variables || []);
+          const matching = varList.filter(v => {
             if (wantArray) return v.kind === 'array';
             if (wantScalar) return v.kind === 'scalar';
             return true;

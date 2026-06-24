@@ -1,0 +1,659 @@
+{
+  "schemaVersion": 1,
+  "properties": {
+    "name": "Game of Life on Agents",
+    "description": "Conway's Game of Life running on a grid of AGENTS — the genericity proof of the agent platform. A totalistic CA rule via Get Nearby Agents → Get Agents Attribute → Aggregate, with the grid spawned by the Agent Init Event.",
+    "ruleDescription": "Each static agent counts its live Moore neighbours (Get Nearby Agents within radius 1.5 → Get Agents Attribute(alive) → Aggregate sum) and applies the Game of Life rule (born on 3, survive on 2–3). The W×H grid is spawned in the Agent Init Event with Create Agent / Add Agent To World; agents are pinned (customForcesOnly + momentum 0) and updated synchronously.",
+    "author": "Conway",
+    "modelAuthor": "",
+    "tags": [
+      "agents",
+      "game-of-life",
+      "totalistic",
+      "genericity"
+    ],
+    "dimension": "2d",
+    "gridWidth": 32,
+    "gridHeight": 32,
+    "gridDepth": 1,
+    "topology": "2d-grid",
+    "boundaryTreatment": "torus",
+    "updateMode": "synchronous",
+    "asyncScheme": "random-order",
+    "maxIterations": 0,
+    "useWasm": false,
+    "useWebGPU": false
+  },
+  "topologyMode": {
+    "gridCells": true,
+    "agents": true
+  },
+  "centerBased": {
+    "enabled": true,
+    "maxAgents": 1040,
+    "maxBonds": 2,
+    "worldWidth": 32,
+    "worldHeight": 32,
+    "seedCount": 0,
+    "seedPattern": "scatter",
+    "defaultRadius": 0.45,
+    "growthRate": 0,
+    "repulsionStiffness": 0,
+    "adhesionStiffness": 0,
+    "interactionRange": 1.5,
+    "drag": 1,
+    "timeStep": 0.5,
+    "momentum": 0,
+    "maxSpeed": 0,
+    "neighbourQueryRadius": 2,
+    "customForcesOnly": true,
+    "autoBond": false,
+    "agentUpdateMode": "sync"
+  },
+  "attributes": [],
+  "agentAttributes": [
+    {
+      "id": "alive",
+      "name": "alive",
+      "type": "bool",
+      "description": "Game of Life cell state",
+      "isModelAttribute": false,
+      "defaultValue": "false"
+    }
+  ],
+  "neighborhoods": [],
+  "mappings": [
+    {
+      "id": "viz",
+      "name": "Life",
+      "description": "Alive = green",
+      "isAttributeToColor": true,
+      "redDescription": "",
+      "greenDescription": "",
+      "blueDescription": ""
+    }
+  ],
+  "variables": [],
+  "agentVariables": [
+    {
+      "id": "i",
+      "name": "i",
+      "description": "spawn counter",
+      "kind": "scalar",
+      "dataType": "integer",
+      "initialValue": "0"
+    }
+  ],
+  "indicators": [],
+  "graphNodes": [
+    {
+      "id": "n1h35zq",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "step",
+        "config": {}
+      }
+    }
+  ],
+  "graphEdges": [],
+  "agentGraphNodes": [
+    {
+      "id": "a0xis6",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "agentInit",
+        "config": {}
+      }
+    },
+    {
+      "id": "a1gjx5",
+      "type": "caNode",
+      "position": {
+        "x": 220,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "loop",
+        "config": {
+          "_port_count": "1024"
+        }
+      }
+    },
+    {
+      "id": "a3p1hs",
+      "type": "caNode",
+      "position": {
+        "x": 440,
+        "y": -135
+      },
+      "data": {
+        "nodeType": "getVariable",
+        "config": {
+          "variableId": "i"
+        }
+      }
+    },
+    {
+      "id": "a4w27s",
+      "type": "caNode",
+      "position": {
+        "x": 660,
+        "y": -180
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "(a % 32) + 0.5",
+          "visibleCount": 1
+        }
+      }
+    },
+    {
+      "id": "a6asx1",
+      "type": "caNode",
+      "position": {
+        "x": 660,
+        "y": -90
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "floor(a / 32) + 0.5",
+          "visibleCount": 1
+        }
+      }
+    },
+    {
+      "id": "a8zm3c",
+      "type": "caNode",
+      "position": {
+        "x": 880,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "createAgent",
+        "config": {
+          "_port_radius": "0.45",
+          "_port_type": "0"
+        }
+      }
+    },
+    {
+      "id": "ab7j2k",
+      "type": "caNode",
+      "position": {
+        "x": 880,
+        "y": 135
+      },
+      "data": {
+        "nodeType": "getRandom",
+        "config": {
+          "randomType": "bool",
+          "_port_probability": "0.30"
+        }
+      }
+    },
+    {
+      "id": "ac9ty6",
+      "type": "caNode",
+      "position": {
+        "x": 1100,
+        "y": 45
+      },
+      "data": {
+        "nodeType": "setAgentAttribute",
+        "config": {
+          "attributeId": "alive"
+        }
+      }
+    },
+    {
+      "id": "afbg5o",
+      "type": "caNode",
+      "position": {
+        "x": 1320,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "addAgentToWorld",
+        "config": {}
+      }
+    },
+    {
+      "id": "ahxpz5",
+      "type": "caNode",
+      "position": {
+        "x": 1100,
+        "y": 225
+      },
+      "data": {
+        "nodeType": "getVariable",
+        "config": {
+          "variableId": "i"
+        }
+      }
+    },
+    {
+      "id": "ain6vt",
+      "type": "caNode",
+      "position": {
+        "x": 1320,
+        "y": 225
+      },
+      "data": {
+        "nodeType": "arithmeticOperator",
+        "config": {
+          "operation": "add",
+          "_port_y": "1"
+        }
+      }
+    },
+    {
+      "id": "aky6sz",
+      "type": "caNode",
+      "position": {
+        "x": 1540,
+        "y": 225
+      },
+      "data": {
+        "nodeType": "setVariable",
+        "config": {
+          "variableId": "i"
+        }
+      }
+    },
+    {
+      "id": "aqqte9",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 540
+      },
+      "data": {
+        "nodeType": "behaviourStep",
+        "config": {}
+      }
+    },
+    {
+      "id": "ardrr1",
+      "type": "caNode",
+      "position": {
+        "x": 220,
+        "y": 405
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "alive"
+        }
+      }
+    },
+    {
+      "id": "asocyx",
+      "type": "caNode",
+      "position": {
+        "x": 220,
+        "y": 540
+      },
+      "data": {
+        "nodeType": "getNearbyAgents",
+        "config": {
+          "_port_radius": "1.5"
+        }
+      }
+    },
+    {
+      "id": "at88f6",
+      "type": "caNode",
+      "position": {
+        "x": 440,
+        "y": 540
+      },
+      "data": {
+        "nodeType": "getAgentsAttribute",
+        "config": {
+          "attributeId": "alive"
+        }
+      }
+    },
+    {
+      "id": "avq8me",
+      "type": "caNode",
+      "position": {
+        "x": 660,
+        "y": 540
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "sum"
+        }
+      }
+    },
+    {
+      "id": "axppj1",
+      "type": "caNode",
+      "position": {
+        "x": 880,
+        "y": 450
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "==",
+          "compareType": "numerical",
+          "_port_y": "3"
+        }
+      }
+    },
+    {
+      "id": "az9wbi",
+      "type": "caNode",
+      "position": {
+        "x": 880,
+        "y": 630
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "==",
+          "compareType": "numerical",
+          "_port_y": "2"
+        }
+      }
+    },
+    {
+      "id": "a11pad4",
+      "type": "caNode",
+      "position": {
+        "x": 1100,
+        "y": 585
+      },
+      "data": {
+        "nodeType": "logicOperator",
+        "config": {
+          "operation": "AND"
+        }
+      }
+    },
+    {
+      "id": "a14ux5g",
+      "type": "caNode",
+      "position": {
+        "x": 1320,
+        "y": 540
+      },
+      "data": {
+        "nodeType": "logicOperator",
+        "config": {
+          "operation": "OR"
+        }
+      }
+    },
+    {
+      "id": "a178wtv",
+      "type": "caNode",
+      "position": {
+        "x": 1540,
+        "y": 540
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "alive"
+        }
+      }
+    },
+    {
+      "id": "a196ps4",
+      "type": "caNode",
+      "position": {
+        "x": 1760,
+        "y": 675
+      },
+      "data": {
+        "nodeType": "categoricalColor",
+        "config": {
+          "count": 2,
+          "entry_0_r": 22,
+          "entry_0_g": 24,
+          "entry_0_b": 34,
+          "entry_1_r": 90,
+          "entry_1_g": 225,
+          "entry_1_b": 140,
+          "default_r": 0,
+          "default_g": 0,
+          "default_b": 0
+        }
+      }
+    },
+    {
+      "id": "a1be62v",
+      "type": "caNode",
+      "position": {
+        "x": 1980,
+        "y": 585
+      },
+      "data": {
+        "nodeType": "setCellLooks",
+        "config": {
+          "mappingId": "__current__"
+        }
+      }
+    }
+  ],
+  "agentGraphEdges": [
+    {
+      "id": "e22465",
+      "source": "a0xis6",
+      "target": "a1gjx5",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "e520oq",
+      "source": "a3p1hs",
+      "target": "a4w27s",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "e75ite",
+      "source": "a3p1hs",
+      "target": "a6asx1",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "e9hj76",
+      "source": "a4w27s",
+      "target": "a8zm3c",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "eaqfuw",
+      "source": "a6asx1",
+      "target": "a8zm3c",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "edft9n",
+      "source": "a8zm3c",
+      "target": "ac9ty6",
+      "sourceHandle": "output_value_handle",
+      "targetHandle": "input_value_agentId"
+    },
+    {
+      "id": "eejexz",
+      "source": "ab7j2k",
+      "target": "ac9ty6",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "eguf9j",
+      "source": "a8zm3c",
+      "target": "afbg5o",
+      "sourceHandle": "output_value_handle",
+      "targetHandle": "input_value_handle"
+    },
+    {
+      "id": "ejmvlb",
+      "source": "ahxpz5",
+      "target": "ain6vt",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "elmukg",
+      "source": "ain6vt",
+      "target": "aky6sz",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "emod23",
+      "source": "a1gjx5",
+      "target": "a8zm3c",
+      "sourceHandle": "output_flow_body",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "ensn0t",
+      "source": "a8zm3c",
+      "target": "ac9ty6",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "eogc6n",
+      "source": "ac9ty6",
+      "target": "afbg5o",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "epy4id",
+      "source": "afbg5o",
+      "target": "aky6sz",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "eutoi7",
+      "source": "asocyx",
+      "target": "at88f6",
+      "sourceHandle": "output_value_agents",
+      "targetHandle": "input_value_agents"
+    },
+    {
+      "id": "ew6zpo",
+      "source": "at88f6",
+      "target": "avq8me",
+      "sourceHandle": "output_value_values",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "eympqg",
+      "source": "avq8me",
+      "target": "axppj1",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "e10crlm",
+      "source": "avq8me",
+      "target": "az9wbi",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "e12s5l9",
+      "source": "az9wbi",
+      "target": "a11pad4",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "e13nelq",
+      "source": "ardrr1",
+      "target": "a11pad4",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "e150ged",
+      "source": "axppj1",
+      "target": "a14ux5g",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "e16zk1s",
+      "source": "a11pad4",
+      "target": "a14ux5g",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "e184wk1",
+      "source": "a14ux5g",
+      "target": "a178wtv",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "e1ag4bj",
+      "source": "a14ux5g",
+      "target": "a196ps4",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_index"
+    },
+    {
+      "id": "e1c6fxu",
+      "source": "a196ps4",
+      "target": "a1be62v",
+      "sourceHandle": "output_value_r",
+      "targetHandle": "input_value_r"
+    },
+    {
+      "id": "e1dvf17",
+      "source": "a196ps4",
+      "target": "a1be62v",
+      "sourceHandle": "output_value_g",
+      "targetHandle": "input_value_g"
+    },
+    {
+      "id": "e1evqbo",
+      "source": "a196ps4",
+      "target": "a1be62v",
+      "sourceHandle": "output_value_b",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "e1fbnx8",
+      "source": "aqqte9",
+      "target": "a178wtv",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "e1gfav1",
+      "source": "a178wtv",
+      "target": "a1be62v",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    }
+  ],
+  "macroDefs": []
+}

@@ -335,6 +335,22 @@ function computeDefaultModelAttrs(attributes: Attribute[]): Record<string, numbe
  *  interaction-table edit fired — even though none of those touch buffer layout.
  *  This structural compare keeps the existing "reinit on shape change" semantic
  *  while letting live-tunable updates flow through without disturbing the grid. */
+/** Serialize an Attribute to the worker's AttrDef shape (init + recompile). Shared
+ *  by the cell-attribute and agent-attribute payloads so they never diverge.
+ *  `agentAccess` rides cell attributes (drives the worker's fieldSpecs). */
+function toAttrDefMsg(a: Attribute) {
+  return {
+    id: a.id, type: a.type,
+    isModelAttribute: a.isModelAttribute, defaultValue: a.defaultValue,
+    boundaryValue: a.boundaryValue,
+    tagOptions: a.tagOptions,
+    parentAttributeId: a.parentAttributeId,
+    parentValues: a.parentValues,
+    undefinedValue: a.undefinedValue,
+    agentAccess: a.agentAccess,
+  };
+}
+
 function attrsStructurallyEqual(prev: Attribute[], curr: Attribute[]): boolean {
   if (prev === curr) return true;
   if (prev.length !== curr.length) return false;
@@ -346,6 +362,10 @@ function attrsStructurallyEqual(prev: Attribute[], curr: Attribute[]): boolean {
     if (a.isModelAttribute !== b.isModelAttribute) return false;
     if (a.defaultValue !== b.defaultValue) return false;
     if (a.boundaryValue !== b.boundaryValue) return false;
+    // Generic Agent Platform: the agent field-access permission drives fieldSpecs
+    // (which cell attrs are threaded as `_field_` into the agent loop) — a change
+    // alters the agent loop signature, so it needs a full worker reinit.
+    if ((a.agentAccess ?? 'none') !== (b.agentAccess ?? 'none')) return false;
     if (a.parentAttributeId !== b.parentAttributeId) return false;
     if (a.undefinedValue !== b.undefinedValue) return false;
     if (a.neighborhoodHintId !== b.neighborhoodHintId) return false;
@@ -1024,11 +1044,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
   // don't behave); PR-A3 wires the real compileAgentGraph over
   // model.agentGraphNodes (the behaviourStep loop + value-outs + force hooks).
-  const compileAgentModel = useCallback((): { behaviourCode?: string; initCode?: string; divisionCode?: string; colorViewer: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array } => {
-    if (!model.topologyMode?.agents) return { colorViewer: '', agentTarget: 'js' };
+  const compileAgentModel = useCallback((stopIdxBase = 0): { behaviourCode?: string; initCode?: string; divisionCode?: string; stopMessages: string[]; colorViewer: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array } => {
+    if (!model.topologyMode?.agents) return { colorViewer: '', agentTarget: 'js', stopMessages: [] };
     const firstViewer = model.mappings.find(mp => mp.isAttributeToColor);
     const colorViewer = firstViewer?.id ?? '';
-    const ag = compileAgentGraph(model.agentGraphNodes || [], model.agentGraphEdges || [], model);
+    // FIX 4: offset the agent stop indices by the cell graph's stop count so the
+    // shared worker stopMessages array `[...cell, ...agent]` aligns 1-based.
+    const ag = compileAgentGraph(model.agentGraphNodes || [], model.agentGraphEdges || [], model, stopIdxBase);
     if (ag.error) {
       // Surface alongside the cells compile error (Show Code / status). A bare
       // behaviourStep with no flow is fine (empty behaviourCode, no error).
@@ -1059,9 +1081,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         agentTarget = 'js';
       }
     }
-    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, colorViewer, agentTarget, agentWasmBytes };
+    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, stopMessages: ag.stopMessages, colorViewer, agentTarget, agentWasmBytes };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.mappings, model.centerBased]);
+  }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.agentAttributes, model.mappings, model.centerBased]);
 
   // PR5 (C-D1) — does the agent graph touch the cell field? Scan the agent
   // graph for any of the five field nodes (sampleField / fieldGradient /
@@ -1072,8 +1094,30 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const agentUsesField = useCallback((): boolean => {
     if (!model.topologyMode?.agents) return false;
     const FIELD_NODE_TYPES = new Set(['sampleField', 'fieldGradient', 'readCellsUnder', 'affectCellsUnder', 'secreteToField']);
-    return (model.agentGraphNodes || []).some(n => FIELD_NODE_TYPES.has(n.data?.nodeType as string));
-  }, [model.agentGraphNodes, model.topologyMode?.agents]);
+    // The agent compiler flattens macros up front (expandMacros), so a field node
+    // placed INSIDE a macro instance still emits field reads/writes. Scan macro
+    // bodies recursively too — otherwise the WebGPU-grid field bridge (the
+    // readback/upload around runAgentStep) is skipped and SampleField reads stale
+    // / deposits are discarded. `seen` guards against macro recursion.
+    const macroDefs = model.macroDefs || [];
+    const seen = new Set<string>();
+    const scan = (nodes?: typeof model.agentGraphNodes): boolean => {
+      for (const n of nodes || []) {
+        const t = n.data?.nodeType as string;
+        if (FIELD_NODE_TYPES.has(t)) return true;
+        if (t === 'macro') {
+          const defId = (n.data?.config as Record<string, unknown> | undefined)?.macroDefId as string | undefined;
+          if (defId && !seen.has(defId)) {
+            seen.add(defId);
+            const def = macroDefs.find(d => d.id === defId);
+            if (def && scan(def.nodes as typeof model.agentGraphNodes)) return true;
+          }
+        }
+      }
+      return false;
+    };
+    return scan(model.agentGraphNodes);
+  }, [model.agentGraphNodes, model.topologyMode?.agents, model.macroDefs]);
 
   // Draw using ImageData + zoom/pan transform
   const draw = useCallback(() => {
@@ -1841,7 +1885,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           // stop-recording reset.
           const expected = recordedFrames.current[0];
           let frame: ImageData | null = null;
-          if (directRenderActiveRef.current && stepColors && w && h && stepColors.length >= w * h * 4) {
+          if (isAgentModelRef.current && canvasRef.current && !directRenderActiveRef.current) {
+            // Generic Agent Platform: agents are drawn as an overlay on the
+            // DISPLAY canvas (drawAgentsOverlay, after the grid blit), so the
+            // grid-resolution srcCanvas would miss them. Capture the display
+            // canvas (display resolution) so GIF/WebM recordings include agents.
+            const dc = canvasRef.current;
+            let dctx: CanvasRenderingContext2D | null = null;
+            try { dctx = dc.getContext('2d'); } catch { /* transferred / WebGL */ }
+            if (dctx && dc.width > 0 && dc.height > 0) frame = dctx.getImageData(0, 0, dc.width, dc.height);
+          } else if (directRenderActiveRef.current && stepColors && w && h && stepColors.length >= w * h * 4) {
             // stepColors is the freshly-readback'd Uint8ClampedArray from
             // worker (only present in stepped when recording is active).
             // Copy it before buffering since later steps reuse the slot.
@@ -2093,10 +2146,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     inspectOrientationsRef.current.clear();
     srcCanvasRef.current = null;
     const result = compileModel();
-    // Bond-Graph Agents: compile the agent rule graph (JS-only v1). PR-A2 ships
-    // a placeholder (agents are inert — seed + render only); PR-A3 wires the
-    // real compileAgentGraph (behaviourStep loop + force driver hooks).
-    const agentResult = compileAgentModel();
+    // Generic Agent Platform: compile the agent rule graph. Offset the agent stop
+    // indices by the cell graph's stop-message count (shared _stopFlag + messages).
+    const agentResult = compileAgentModel(result.stopMessages.length);
     const firstViewer = model.mappings.find(m => m.isAttributeToColor);
     const viewer = firstViewer?.id ?? '';
     setActiveViewer(viewer);
@@ -2266,15 +2318,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       width: w,
       height: h,
       depth: d,
-      attributes: model.attributes.map(a => ({
-        id: a.id, type: a.type,
-        isModelAttribute: a.isModelAttribute, defaultValue: a.defaultValue,
-        boundaryValue: a.boundaryValue,
-        tagOptions: a.tagOptions,
-        parentAttributeId: a.parentAttributeId,
-        parentValues: a.parentValues,
-        undefinedValue: a.undefinedValue,
-      })),
+      attributes: model.attributes.map(toAttrDefMsg),
+      // Generic Agent Platform: the AGENT attribute set (separate id-space).
+      agentAttributes: (model.agentAttributes ?? []).map(toAttrDefMsg),
       neighborhoods: effModel.neighborhoods.map(n => ({ id: n.id, coords: n.coords, coords3d: n.coords3d })),
       boundaryTreatment: model.properties.boundaryTreatment,
       updateMode: model.properties.updateMode || 'synchronous',
@@ -2283,7 +2329,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       initCode: result.initCode,
       inputColorCodes: result.inputColorCodes,
       outputMappingCodes: result.outputMappingCodes,
-      stopMessages: result.stopMessages,
+      // FIX 4: cell + agent stop messages share one array (the agent indices were
+      // offset by the cell count at compile time).
+      stopMessages: [...result.stopMessages, ...agentResult.stopMessages],
       activeViewer: viewer,
       // Variegated Cells: orientation buffer + face-pattern lookup + the
       // interaction-table payload. The worker only allocates these when
@@ -2468,6 +2516,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             generation: 0,
             width: gridWidth.current,
             height: gridHeight.current,
+            // Record the real depth so a 3D controls-only save serializes
+            // gridDepth correctly — without it serializeSimState defaults
+            // gridDepth to 1 and the reload drop-guard discards the embedded
+            // controls on a 3D model (dimension mismatch).
+            depth: gridDepth.current,
             attributes: {},
             modelAttrs: { ...runtimeModelAttrs }, indicators: {}, linkedAccumulators: {},
             colors: new ArrayBuffer(0),
@@ -2552,7 +2605,19 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // The Agent Update Mode (sync/async — independent of the grid's updateMode)
       // changes the attribute-buffer allocation (double- vs single-buffered) in
       // createAgentStore, so it needs a full reinit too.
-      || (prev.centerBased?.agentUpdateMode ?? 'async') !== (model.centerBased?.agentUpdateMode ?? 'async');
+      || (prev.centerBased?.agentUpdateMode ?? 'async') !== (model.centerBased?.agentUpdateMode ?? 'async')
+      // Generic Agent Platform: the AGENT attribute set drives the agent SoA +
+      // the baked agent-WASM memory offsets — adding/removing/retyping one resizes
+      // the store, so it needs a full reinit (a soft recompile keeps the stale SoA).
+      || !attrsStructurallyEqual(prev.agentAttributes ?? [], model.agentAttributes ?? [])
+      // Indicators are reserved exactly 8 bytes each in the baked wasmMemory
+      // layout (no headroom), with rngState / order / scratch immediately after.
+      // A soft recompile re-bakes the WASM module against the NEW indicator count
+      // but reuses the OLD-sized wasmMemory → the cachedIndicators view would
+      // overrun into rngState/order and the new module's baked offsets desync. So
+      // a change in the indicator COUNT forces a full reinit (rebuilds the layout
+      // + memory); same-count edits still ride the soft recompile + updateIndicators.
+      || (prev.indicators?.length ?? 0) !== (model.indicators?.length ?? 0);
 
     if (needsFullInit) {
       workerRef.current?.terminate();
@@ -2604,7 +2669,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // field CPU↔GPU per generation. See the init-path comment for rationale.
       const result = compileGraph(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
       // Bond-Graph Agents: recompile the agent graph too (graph-only edit path).
-      const agentResult = compileAgentModel();
+      const agentResult = compileAgentModel(result.stopMessages.length);
       // Show Code follows the selected target — same dispatch as compileModel().
       if (dimsModel.properties.useWebGPU) {
         try {
@@ -2683,7 +2748,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             colLabels: resolveKeyLabels(a.colKeySource, model),
             values: a.tableValues || {},
           })),
-        stopMessages: result.stopMessages,
+        stopMessages: [...result.stopMessages, ...agentResult.stopMessages],
         updateMode: model.properties.updateMode,
         asyncScheme: model.properties.asyncScheme,
         wasmStepBytes: wasmResult.error ? undefined : wasmResult.bytes,
@@ -5024,6 +5089,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         off.toBlob(blob => { if (blob) downloadBlob(blob); }, 'image/png');
       };
       workerRef.current.postMessage({ type: 'requestColorsSnapshot', tag: 'screenshot' });
+      return;
+    }
+    // Generic Agent Platform: agent models composite the agent overlay onto the
+    // DISPLAY canvas, so screenshot that (display resolution) to include agents.
+    if (isAgentModelRef.current && canvasRef.current && !directRenderActiveRef.current) {
+      draw();
+      canvasRef.current.toBlob(blob => { if (blob) downloadBlob(blob); }, 'image/png');
       return;
     }
     const src = srcCanvasRef.current;

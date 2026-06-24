@@ -1180,11 +1180,26 @@ export function HelpView() {
           <p className={styles.p}>
             The palette adapts to the active tab: agent nodes show only on
             <strong> Agents</strong>, grid/neighbourhood nodes only on <strong>Cells</strong>,
-            and universal nodes (math, conditionals, <strong>Get / Set Attribute</strong> over
-            the shared attributes, <strong>Set Cell Looks</strong>) in both. The cell attributes
-            <strong> double as agent attributes</strong> &mdash; the same <code>Get Cell
-            Attribute</code> / <code>Set Attribute</code> nodes read and write an agent's own
-            state on the Agents tab. <em>Macros are shared</em> between the two graphs.
+            and universal nodes (math, conditionals, <strong>Get / Set Attribute</strong>,
+            <strong> Set Cell Looks</strong>) in both. <em>Macros are shared</em> between the two
+            graphs.
+          </p>
+          <h3 className={styles.h3}>Agent Attributes &amp; Variables (separate from the grid)</h3>
+          <p className={styles.p}>
+            Agents have their <strong>own state</strong>, distinct from the grid&rsquo;s. On the
+            <strong> Agents</strong> tab the <strong>Attributes</strong> panel lists
+            <strong> Agent Attributes</strong> (per-agent fields with their own +Add), and the
+            <strong> Local Variables</strong> there are agent-scoped. <code>Get / Set / Update
+            Attribute</code> on the Agents tab read and write the agent&rsquo;s own attributes;
+            <code> Get / Set Agent Attribute</code> read and write <em>another</em> agent&rsquo;s
+            attribute by id.
+          </p>
+          <p className={styles.p}>
+            Agents sit <strong>above</strong> the CA: they can read and write grid cells (the field
+            bridge below), but grid cells can <strong>never</strong> read agent state. To let agents
+            touch a cell attribute, set its <strong>Agent access</strong> (in the cell attribute&rsquo;s
+            editor) to <strong>Readable</strong> (field reads) or <strong>Readable &amp; writable</strong>
+            (field reads + writes). Cell attributes with access <em>None</em> stay invisible to agents.
           </p>
           <h3 className={styles.h3}>Key Agent Nodes</h3>
           <ul className={styles.list}>
@@ -1240,6 +1255,38 @@ export function HelpView() {
               <strong> Form Bond</strong> is fully graph-driven &mdash; bond to compatible
               neighbours by type/state.</li>
           </ul>
+          <h3 className={styles.h3}>Working with Sets of Agents</h3>
+          <p className={styles.p}>
+            The off-lattice analogues of the grid&rsquo;s neighbour-array nodes &mdash; build,
+            filter, and reduce <strong>lists of agent ids</strong> (from Get Nearby Agents or
+            Get Bonded Agents):
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Get Bonded Agents</strong> &mdash; this agent&rsquo;s bonded partners as an
+              id list (the data sibling of <em>For Each Bond</em>).</li>
+            <li><strong>Filter Agents / Join Agents</strong> &mdash; keep agents matching a predicate,
+              or union/intersect two id lists (each outputs the result list + its count).</li>
+            <li><strong>Pick Random Agent / Pick N Random Agents</strong> &mdash; sample one or N ids
+              from a list.</li>
+            <li><strong>Get Agents Attribute</strong> &mdash; gather one attribute over a whole id
+              list into a value array (feed <strong>Aggregate</strong> / <strong>Group Counting</strong>
+              to count or sum a neighbourhood &mdash; this is what makes a <em>totalistic</em> rule on
+              agents possible). <strong>Set Agents Attribute</strong> writes one attribute across a
+              list. <strong>Set Velocity</strong> sets an agent&rsquo;s velocity directly (needs
+              Momentum &gt; 0).</li>
+          </ul>
+          <h3 className={styles.h3}>Spawning Agents (the Agent Init Event)</h3>
+          <p className={styles.p}>
+            Beyond the <em>Seed Count</em> the engine lays down on Reset, you can spawn the population
+            <strong> from the graph</strong>. The <strong>Agent Init Event</strong> root runs
+            <strong> once</strong> (on first load and on Reset, before the first behaviour step). Loop
+            over its <code>DO</code> chain and, per iteration, build an agent with <strong>Create
+            Agent</strong> (position / radius / type &rarr; an agent <em>handle</em>), set its initial
+            attributes (<em>Set Agent Attribute</em> / <em>Set Agent Position / Radius / Type</em> on the
+            handle), then commit it with <strong>Add Agent To World</strong>. This is how you place an
+            exact grid of agents, a procedural pattern, or a randomised population &mdash; running past
+            <em> Max Agents</em> simply skips the extra Create (it never wraps).
+          </p>
           <h3 className={styles.h3}>The Cell CA as a Morphogen Field (Closed Feedback)</h3>
           <p className={styles.p}>
             The two engines close a loop: <strong>every grid cell attribute doubles as a

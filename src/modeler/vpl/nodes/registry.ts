@@ -20,6 +20,20 @@ import { ReadCellsUnderNode } from './ReadCellsUnderNode';
 import { AffectCellsUnderNode } from './AffectCellsUnderNode';
 import { SecreteToFieldNode } from './SecreteToFieldNode';
 import { GetNearbyAgentsNode } from './GetNearbyAgentsNode';
+import { GetBondedAgentsNode } from './GetBondedAgentsNode';
+import { AgentInitNode } from './AgentInitNode';
+import { CreateAgentNode } from './CreateAgentNode';
+import { AddAgentToWorldNode } from './AddAgentToWorldNode';
+import { SetAgentPositionNode } from './SetAgentPositionNode';
+import { SetAgentRadiusNode } from './SetAgentRadiusNode';
+import { SetAgentTypeNode } from './SetAgentTypeNode';
+import { FilterAgentsNode } from './FilterAgentsNode';
+import { JoinAgentsNode } from './JoinAgentsNode';
+import { PickRandomAgentNode } from './PickRandomAgentNode';
+import { PickNRandomAgentsNode } from './PickNRandomAgentsNode';
+import { GetAgentsAttributeNode } from './GetAgentsAttributeNode';
+import { SetAgentsAttributeNode } from './SetAgentsAttributeNode';
+import { SetVelocityNode } from './SetVelocityNode';
 import { GetAgentPositionNode } from './GetAgentPositionNode';
 import { GetAgentOffsetNode } from './GetAgentOffsetNode';
 import { GetAgentAttributeNode } from './GetAgentAttributeNode';
@@ -108,6 +122,14 @@ const ALL_NODES: NodeTypeDef[] = [
   // (gated by requirements.bondGraph; visible only on the Agents sub-tab).
   BehaviourStepNode,
   DivisionEventNode,
+  // Generic Agent Platform — the once-per-reset Agent Init Event + the two-phase
+  // graph-authored spawn (Create → set by id → Add).
+  AgentInitNode,
+  CreateAgentNode,
+  AddAgentToWorldNode,
+  SetAgentPositionNode,
+  SetAgentRadiusNode,
+  SetAgentTypeNode,
   GetSelfPositionNode,
   GetRadiusNode,
   GetBondDegreeNode,
@@ -116,13 +138,23 @@ const ALL_NODES: NodeTypeDef[] = [
   SetTargetRadiusNode,
   // Agent neighbour access + graph-authored forces (boids / flocking / signalling)
   GetNearbyAgentsNode,
+  GetBondedAgentsNode,
   GetAgentPositionNode,
   GetAgentOffsetNode,
   GetAgentAttributeNode,
   GetAgentRadiusNode,
   GetVelocityNode,
   ApplyForceNode,
+  SetVelocityNode,
   SetAgentAttributeNode,
+  // Generic Agent Platform — agent-equivalent array / set ops (nearby + bonded
+  // sources → filter / join / pick / gather / set-many).
+  FilterAgentsNode,
+  JoinAgentsNode,
+  PickRandomAgentNode,
+  PickNRandomAgentsNode,
+  GetAgentsAttributeNode,
+  SetAgentsAttributeNode,
   FormBondNode,
   BreakBondNode,
   ForEachBondNode,

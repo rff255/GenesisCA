@@ -205,7 +205,10 @@ export function computeVolatileHoist(input: VolatileHoistInput): VolatileHoistRe
       const e = `${nodeId}:else`; reg(e, scope); walkOutput(nodeId, 'else', e);
     } else if (type === 'loop') {
       const b = `${nodeId}:body`; reg(b, scope); walkOutput(nodeId, 'body', b);
-    } else if (type === 'forEachInArray') {
+    } else if (type === 'forEachInArray' || type === 'forEachBond') {
+      // forEachBond (Bond-Graph Agents) opens a body scope like forEachInArray —
+      // a getVariable-derived value used inside the bond loop must be pinned to
+      // the body, not hoisted above it.
       const b = `${nodeId}:body`; reg(b, scope); walkOutput(nodeId, 'body', b);
     } else if (type === 'switch') {
       const caseCount = Number(node.data.config.caseCount) || 0;

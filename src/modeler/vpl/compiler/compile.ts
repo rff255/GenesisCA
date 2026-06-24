@@ -1,4 +1,5 @@
 import type { GraphNode, GraphEdge, CAModel } from '../../../model/types';
+import { agentAttrsOf, cellFieldAttrsOf } from '../../../model/attributeScope';
 import { getAllNodeDefs, getNodeDef } from '../nodes/registry';
 import { CURRENT_VIEWER_SENTINEL } from '../nodes/SetCellLooksNode';
 import { parseHandleId, type CompileContext } from '../types';
@@ -64,7 +65,11 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
 // Compile a single root's subgraph (per-cell body)
 // ---------------------------------------------------------------------------
 
-const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'categoricalColor', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels', 'getCellPosition', 'behaviourStep', 'divisionEvent', 'getSelfPosition', 'forEachBond', 'fieldGradient', 'getAgentPosition', 'getAgentOffset', 'getVelocity']);
+const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'categoricalColor', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels', 'getCellPosition', 'behaviourStep', 'divisionEvent', 'getSelfPosition', 'forEachBond', 'fieldGradient', 'getAgentPosition', 'getAgentOffset', 'getVelocity',
+  // Generic Agent Platform spawn/init: the Agent Init Event's value-outs
+  // (worldWidth/worldHeight/seedIndexBase) + Create Agent's `handle` resolve via
+  // the `_v<id>_<port>` convention.
+  'agentInit', 'createAgent']);
 
 /** Check if a node's data uses multi-output variable naming */
 function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
@@ -77,6 +82,9 @@ function isMultiOutput(data: { nodeType: string; config: Record<string, string |
   // convention.
   if (data.nodeType === 'filterNeighbors') return true;
   if (data.nodeType === 'joinNeighbors') return true;
+  // Generic Agent Platform: Filter/Join Agents are multi-output (result + count).
+  if (data.nodeType === 'filterAgents') return true;
+  if (data.nodeType === 'joinAgents') return true;
   return false;
 }
 
@@ -157,9 +165,9 @@ function buildFusedAggregateJS(aggId: string, op: string, nbrId: string, attrId:
  * -1 (matching the existing non-fused emit). For max/min: track running index
  * alongside running value. For random: pick uniform index, then look up.
  *
- * Note: `and`/`or` here return JS booleans (true/false) to match the existing
- * `arr.every(Boolean)` / `arr.some(Boolean)` semantics — this differs from
- * `Aggregate`'s and/or which returns 0/1 numerics.
+ * Note: `and`/`or` return numeric 1/0 (a truthiness break-loop, matching
+ * `Aggregate`'s and/or and the WASM/WebGPU integer convention) — NOT JS booleans,
+ * which would mismatch a strict-=== consumer on the WASM target.
  */
 function buildFusedGroupOperatorJS(nodeId: string, op: string, nbrId: string, attrId: string): string {
   const sz = `nSz_${nbrId}`;
@@ -176,9 +184,9 @@ function buildFusedGroupOperatorJS(nodeId: string, op: string, nbrId: string, at
     case 'mean':
       return `${head} let _v${nodeId}_s = 0; for (let ${i} = 0; ${i} < ${sz}; ${i}++) _v${nodeId}_s += ${elemAt(i)}; const ${result} = _v${nodeId}_s / (${sz} || 1); const ${idx} = -1;`;
     case 'and':
-      return `${head} let ${result} = true; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (!${elemAt(i)}) { ${result} = false; break; } const ${idx} = -1;`;
+      return `${head} let ${result} = 1; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (!${elemAt(i)}) { ${result} = 0; break; } const ${idx} = -1;`;
     case 'or':
-      return `${head} let ${result} = false; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (${elemAt(i)}) { ${result} = true; break; } const ${idx} = -1;`;
+      return `${head} let ${result} = 0; for (let ${i} = 0; ${i} < ${sz}; ${i}++) if (${elemAt(i)}) { ${result} = 1; break; } const ${idx} = -1;`;
     case 'max':
       return `${head} let ${idx} = 0; let ${result} = ${elemAt('0')}; for (let ${i} = 1; ${i} < ${sz}; ${i}++) { const ${e} = ${elemAt(i)}; if (${e} > ${result}) { ${result} = ${e}; ${idx} = ${i}; } }`;
     case 'min':
@@ -414,6 +422,12 @@ function compileRoot(
       return attrValueLiteralJS(attr, attr.defaultValue);
     },
     is3d: model ? is3dModel(model) : false,  // 3D Grid CA: NI-codec nodes pick the 3-axis codec
+    // Generic Agent Platform: tag the agent root so the by-id setters relax the
+    // live-agent guard in the init context (staged agents are alive=0 until Add).
+    agentRoot: rootNode.data.nodeType === 'agentInit' ? 'init'
+      : rootNode.data.nodeType === 'behaviourStep' ? 'behaviour'
+      : rootNode.data.nodeType === 'divisionEvent' ? 'division'
+      : undefined,
   };
 
   const compiled = new Set<string>();
@@ -591,6 +605,10 @@ function compileRoot(
     if (sourceNode?.data.nodeType === 'getNeighborsAttrByIndexes') {
       return `_v${sourceNodeId}_vals`;
     }
+    // Generic Agent Platform: Get Agents Attribute gathers into _v{id}_vals too.
+    if (sourceNode?.data.nodeType === 'getAgentsAttribute') {
+      return `_v${sourceNodeId}_vals`;
+    }
     // InteractionTableMap also outputs to _v{id}_vals
     if (sourceNode?.data.nodeType === 'interactionTableMap') {
       return `_v${sourceNodeId}_vals`;
@@ -613,9 +631,9 @@ function compileRoot(
     if (sourceNode?.data.nodeType === 'forEachInArray' && sourcePortId === 'index') {
       return `_fei${sourceNodeId}`;
     }
-    // pickNRandomNeighbors writes its output to the _result scratch array (the _work
-    // scratch is internal and never read by downstream nodes).
-    if (sourceNode?.data.nodeType === 'pickNRandomNeighbors') {
+    // pickNRandomNeighbors / pickNRandomAgents write to the _result scratch array
+    // (the _work scratch is internal and never read by downstream nodes).
+    if (sourceNode?.data.nodeType === 'pickNRandomNeighbors' || sourceNode?.data.nodeType === 'pickNRandomAgents') {
       return `_v${sourceNodeId}_result`;
     }
     return `_v${sourceNodeId}`;
@@ -755,16 +773,17 @@ function compileRoot(
     if (needsIndexes) {
       scratchNodes.push({ scratchVarName: `_v${nodeId}_indexes`, initExpr: '[]' });
     }
-    if (node.data.nodeType === 'getNeighborsAttrByIndexes' || node.data.nodeType === 'interactionTableMap') {
+    if (node.data.nodeType === 'getNeighborsAttrByIndexes' || node.data.nodeType === 'interactionTableMap'
+        || node.data.nodeType === 'getAgentsAttribute') {
       scratchNodes.push({ scratchVarName: `_v${nodeId}_vals`, initExpr: '[]' });
     }
-    if (node.data.nodeType === 'filterNeighbors') {
+    if (node.data.nodeType === 'filterNeighbors' || node.data.nodeType === 'filterAgents') {
       scratchNodes.push({ scratchVarName: `_v${nodeId}_result`, initExpr: '[]' });
     }
-    if (node.data.nodeType === 'joinNeighbors') {
+    if (node.data.nodeType === 'joinNeighbors' || node.data.nodeType === 'joinAgents') {
       scratchNodes.push({ scratchVarName: `_v${nodeId}_result`, initExpr: '[]' });
     }
-    if (node.data.nodeType === 'pickNRandomNeighbors') {
+    if (node.data.nodeType === 'pickNRandomNeighbors' || node.data.nodeType === 'pickNRandomAgents') {
       scratchNodes.push({ scratchVarName: `_v${nodeId}_work`, initExpr: '[]' });
       scratchNodes.push({ scratchVarName: `_v${nodeId}_result`, initExpr: '[]' });
     }
@@ -1022,6 +1041,20 @@ function compileRoot(
         bodyDependents = savedDeps;
         bodyCompiled = savedCompiled;
         flowLines.push(`${indent}}`);
+      } else if (node.data.nodeType === 'createAgent') {
+        // Generic Agent Platform: Create Agent is a flow node with a VALUE output
+        // (`handle`) consumed by sibling flow nodes (Add Agent To World, the by-id
+        // setters) — like forEachBond's value-outs. Declare it at the flow position
+        // so it's in scope downstream: `const _v<id>_handle = _agentCreate(x,y,r,t)`.
+        // `_agentCreate` is a host closure (init params); it allocs + stages a slot.
+        const inP = (pid: string, dflt: string): string => {
+          const s = inputToSource.get(`${node.id}:${pid}`);
+          if (s) { compileValueNode(s.nodeId); return varName(s.nodeId, s.portId); }
+          const port = def.ports.find(p => p.id === pid);
+          const inline = port ? getInlineValue(port, node.data.config) : undefined;
+          return inline ?? dflt;
+        };
+        flowLines.push(`${indent}const _v${node.id}_handle = _agentCreate(${inP('x', '0')}, ${inP('y', '0')}, ${inP('radius', '1')}, ${inP('type', '0')});`);
       } else if (node.data.nodeType === 'switch') {
         const switchMode = (node.data.config.mode as string) || 'conditions';
         const firstMatchOnly = node.data.config.firstMatchOnly !== false;
@@ -1775,7 +1808,7 @@ export function compileGraph(
     // Local Variables: per-cell scratch storage. Array variables get one
     // typed-array buffer allocated outside the loop (reused per cell), reset
     // to initialValue at cell-top. Scalar variables become per-cell `let`s.
-    const variableBlocks = buildVariableJS(model);
+    const variableBlocks = buildVariableJS(model.variables || []);
 
     // Build linked indicator aggregation code (injected into the loop)
     const linked = buildLinkedIndicatorCode(model);
@@ -2008,6 +2041,10 @@ export interface AgentCompileResult {
   /** The single-agent Division Event function (runs per daughter). Empty when
    *  there's no divisionEvent root. */
   divisionCode: string;
+  /** Generic Agent Platform (FIX 4): per-stop-event-node messages from the AGENT
+   *  graph (indexed by `_stopIdx - 1`). Merged into the worker's `stopMessages`
+   *  alongside the cell graph's so an agent Stop Event surfaces its message. */
+  stopMessages: string[];
   error?: string;
 }
 
@@ -2025,7 +2062,10 @@ export interface AgentCompileResult {
  *  byte-identical — edit BOTH together or every value shifts one slot. */
 function buildDivisionParams(model: CAModel): string {
   const is3d = is3dModel(model);
-  const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
+  // Generic Agent Platform: r_/w_ ← agent attributes; _field_ ← agent-accessible
+  // cell attributes (mirrors buildAgentLoopParams; ABI-mirrored in buildDivisionArgs).
+  const agentAttrs = agentAttrsOf(model);
+  const fieldAttrs = cellFieldAttrsOf(model);
   const parts: string[] = [
     'idx', '__daughterIndex', '__axisDefaultX', '__axisDefaultY',
     // engine buffers any agent READ node may touch — division is single-agent
@@ -2040,13 +2080,16 @@ function buildDivisionParams(model: CAModel): string {
     '_agentVX', '_agentVY',
     '_bondPartner', 'maxBonds',
   ];
-  for (const a of cellAttrs) parts.push(`r_${a.id}`);
-  for (const a of cellAttrs) parts.push(`w_${a.id}`);
+  for (const a of agentAttrs) parts.push(`r_${a.id}`);
+  for (const a of agentAttrs) parts.push(`w_${a.id}`);
   parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
-  // Closed feedback: the CELL field arrays + grid dims (same as buildAgentLoopParams)
-  // so fieldGradient/sampleField/readCellsUnder are division-safe too.
+  // PR3 FIX 1 — Lookup Tables (pinned slot, mirrors buildAgentLoopParams).
+  if (model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable')) parts.push('_lookupTables');
+  // Closed feedback: the agent-accessible CELL field arrays + grid dims (same as
+  // buildAgentLoopParams) so fieldGradient/sampleField/readCellsUnder are
+  // division-safe too.
   parts.push('_fieldW', '_fieldH', '_fieldTotal', '_fieldBoundaryTorus');
-  for (const a of cellAttrs) parts.push(`_field_${a.id}`);
+  for (const a of fieldAttrs) parts.push(`_field_${a.id}`);
   // Trailing 3D block (B1) — pushed ONLY when 3D so the 2D param list is
   // byte-identical. NO `_agentForceZ` (division reads forces, never writes them).
   // `_fieldD` is the world depth (= worldDepth = gridDepth, 1:1).
@@ -2067,11 +2110,38 @@ function buildDivisionParams(model: CAModel): string {
  *  These are the SAME condition (`is3dModel(model) ⟺ s.worldDepth > 1`), so the
  *  2D arg/param lists stay byte-identical — a one-sided edit shifts every value
  *  one slot. */
-export function buildAgentLoopParams(model: CAModel): { params: string; cellAttrs: Array<{ id: string; type: string }> } {
+/** The Agent Init Event function signature — a once-per-reset SETUP function
+ *  (NOT loop-wrapped, NO per-agent `idx`). The worker's `buildAgentInitArgs`
+ *  MIRRORS this exactly. Leads with the host closures (`_agentCreate` /
+ *  `_agentAddToWorld`) + `_agentMaxAgents` (the by-id setters' range guard), then
+ *  the writable geometry buffers, the agent attr buffers, the global/rng/field
+ *  block, and `_agentSeedBase` (highWater before the Init Event = the
+ *  seedIndexBase value-out). 2D-only this milestone (agents are 2D). */
+function buildAgentInitParams(model: CAModel): string {
+  const agentAttrs = agentAttrsOf(model);
+  const fieldAttrs = cellFieldAttrsOf(model);
+  const parts: string[] = [
+    '_agentCreate', '_agentAddToWorld', '_agentMaxAgents',
+    '_agentX', '_agentY', '_agentRadius', '_agentTargetRadius', '_agentType', '_agentAge', '_agentLineage', '_agentVX', '_agentVY',
+  ];
+  for (const a of agentAttrs) parts.push(`r_${a.id}`);
+  for (const a of agentAttrs) parts.push(`w_${a.id}`);
+  parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
+  if (model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable')) parts.push('_lookupTables');
+  parts.push('_fieldW', '_fieldH', '_fieldTotal', '_fieldBoundaryTorus');
+  for (const a of fieldAttrs) parts.push(`_field_${a.id}`);
+  parts.push('_agentSeedBase');
+  return parts.join(', ');
+}
+
+export function buildAgentLoopParams(model: CAModel): { params: string; agentAttrs: Array<{ id: string; type: string }> } {
   const is3d = is3dModel(model);
-  const cellAttrs = model.attributes
-    .filter(a => !a.isModelAttribute)
-    .map(a => ({ id: a.id, type: a.type }));
+  // Generic Agent Platform: the own-agent channel (r_/w_) is the AGENT attribute
+  // set; the field channel (_field_) is the agent-ACCESSIBLE CELL attribute set.
+  // Disjoint id-spaces (D-AGENT-ATTRS / D-CELL-AGENT-ACCESS) — both ends of the
+  // ABI mirror derive from attributeScope so they cannot drift in order.
+  const agentAttrs = agentAttrsOf(model).map(a => ({ id: a.id, type: a.type }));
+  const fieldAttrs = cellFieldAttrsOf(model);
   const parts: string[] = [
     '_alive', 'highWater',
     // engine geometry / identity / reductions (read by behaviourStep preamble +
@@ -2091,50 +2161,103 @@ export function buildAgentLoopParams(model: CAModel): { params: string; cellAttr
     // bond form/break request buffers written by FormBond / BreakBond
     '_bondFormReq', '_bondFormL', '_bondFormK', '_bondBreakReq',
   ];
-  for (const a of cellAttrs) parts.push(`r_${a.id}`);
-  for (const a of cellAttrs) parts.push(`w_${a.id}`);
+  for (const a of agentAttrs) parts.push(`r_${a.id}`);
+  for (const a of agentAttrs) parts.push(`w_${a.id}`);
   parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
+  // PR3 FIX 1 — Lookup Tables in the agent loop (pinned slot: after glyphColors,
+  // before the _field_ block), gated on the model having any lookupTable model
+  // attr so a no-table model's signature is unchanged. ABI-mirrored in
+  // buildAgentLoopArgs (worker pushes cachedInteractionTables in this slot).
+  if (model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable')) parts.push('_lookupTables');
   // Closed feedback (Phase D): the CELL field arrays (`_field_<id>` = the cell
   // read buffer, sized W*H — DISTINCT from the agent `r_<id>` sized maxAgents)
-  // + the field grid dims. AffectCellsUnder / SecreteToField write into them
-  // (deposit before the cell step); SampleField / FieldGradient / ReadCellsUnder
-  // read them (gather after the cell step). The field IS the lattice CA (D-FIELD).
+  // + the field grid dims. Only the agent-ACCESSIBLE cell attrs are threaded
+  // (cellFieldAttrsOf) — the agentAccess permission prunes the signature.
+  // AffectCellsUnder / SecreteToField write into them (deposit before the cell
+  // step); SampleField / FieldGradient / ReadCellsUnder read them (gather after).
   parts.push('_fieldW', '_fieldH', '_fieldTotal', '_fieldBoundaryTorus');
-  for (const a of cellAttrs) parts.push(`_field_${a.id}`);
+  for (const a of fieldAttrs) parts.push(`_field_${a.id}`);
   // Trailing 3D block (B1) — pushed ONLY when 3D so the 2D param list is
   // byte-identical. `_agentForceZ` (Apply Force z arm) + `_divideAxisZ` (request
   // write) + `_fieldD` (world depth). No redundant `_fieldWH` param: the 3D field
   // nodes emit `_fieldW*_fieldH` inline (D1) rather than threading a fifth dim.
-  if (is3d) parts.push('_agentZ', '_agentVZ', '_agentForceZ', '_divideAxisZ', '_fieldD');
-  return { params: parts.join(', '), cellAttrs };
+  // The Z hash dims (`_hashNBinsZ`/`_hashBinSizeZ`) join the 3D block so Get
+  // Nearby Agents can do a 3×3×3 stencil + the 3D bin index in 3D (the 2D hash
+  // dims above are always present). ABI-mirrored at the END of buildAgentLoopArgs's
+  // 3D block. 2D omits them (the node's 2D branch never references them).
+  if (is3d) parts.push('_agentZ', '_agentVZ', '_agentForceZ', '_divideAxisZ', '_fieldD', '_hashNBinsZ', '_hashBinSizeZ');
+  return { params: parts.join(', '), agentAttrs };
 }
 
 export function compileAgentGraph(
   agentNodes: GraphNode[],
   agentEdges: GraphEdge[],
   model?: CAModel,
+  /** FIX 4: the worker shares ONE `_stopFlag` + `stopMessages` array between the
+   *  cell and agent graphs. The agent graph's stop indices are offset by the cell
+   *  graph's stop-message count so `[...cellStops, ...agentStops]` aligns 1-based. */
+  stopIdxBase = 0,
 ): AgentCompileResult {
-  if (!model) return { behaviourCode: '', initCode: '', divisionCode: '', error: 'Model required.' };
+  if (!model) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], error: 'Model required.' };
 
-  // Flatten macros, strip reroutes, then accessor-CSE (agents are sync, so CSE
-  // is sound) — same front-end pipeline the cell compiler runs.
+  // Flatten macros, strip reroutes — same front-end pipeline the cell compiler runs.
   {
     const expanded = expandMacros(agentNodes, agentEdges, model);
-    if (expanded.error) return { behaviourCode: '', initCode: '', divisionCode: '', error: expanded.error };
+    if (expanded.error) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], error: expanded.error };
     agentNodes = expanded.nodes;
     agentEdges = expanded.edges;
   }
   ({ nodes: agentNodes, edges: agentEdges } = collapseReroutes(agentNodes, agentEdges));
-  agentEdges = canonicalizeAccessorEdges(agentNodes, agentEdges, model);
+  // D-ASYNC-CSE: accessor-CSE is sound only in SYNC agent mode. The DEFAULT agent
+  // update mode is 'async' (single-buffered agent attrs — a getCellAttribute /
+  // getAgentAttribute read can change after an intervening Set*Attribute write
+  // within the same step), so gate CSE off there, mirroring the lattice async gate.
+  const agentSync = model.centerBased?.agentUpdateMode === 'sync';
+  if (agentSync) agentEdges = canonicalizeAccessorEdges(agentNodes, agentEdges, model);
+
+  // FIX 2 — pre-resolve indicator ids to numeric indices over the AGENT graph
+  // (compileGraph does this only for the cell graph). Without it get/set/update
+  // Indicator emit `_indicators[-1]`.
+  {
+    const indicatorIdxMap = new Map((model.indicators || []).map((ind, i) => [ind.id, i] as const));
+    for (const node of agentNodes) {
+      const t = node.data.nodeType;
+      if (t === 'getIndicator' || t === 'setIndicator' || t === 'updateIndicator') {
+        const idx = indicatorIdxMap.get(node.data.config.indicatorId as string);
+        node.data.config._indicatorIdx = idx !== undefined ? idx : -1;
+      }
+    }
+  }
+  // FIX 4 — collect agent Stop Event messages + assign 1-based _stopIdx.
+  const stopMessages: string[] = [];
+  for (const node of agentNodes) {
+    if (node.data.nodeType === 'stopEvent') {
+      stopMessages.push(String(node.data.config.message ?? 'Stop condition reached'));
+      node.data.config._stopIdx = stopIdxBase + stopMessages.length;
+    }
+  }
+  // FIX 3 — the Set Cell Looks viewer-comparison hoist (`_isV_<safeId>`). Without
+  // it a real (non-__current__) mappingId references an undefined identifier and
+  // the eval'd behaviour fn throws (worker dies → generation stuck at 0).
+  const viewerIdsToHoist = new Set<string>();
+  for (const m of model.mappings || []) viewerIdsToHoist.add(m.id);
+  for (const n of agentNodes) {
+    if (n.data.nodeType === 'setCellLooks') {
+      const mid = (n.data.config.mappingId as string) || 'default';
+      if (mid !== CURRENT_VIEWER_SENTINEL) viewerIdsToHoist.add(mid);
+    }
+  }
+  const viewerHoistLines = Array.from(viewerIdsToHoist).map(
+    id => `  const _isV_${safeId(id)} = activeViewer === ${JSON.stringify(id)};`,
+  );
 
   const behaviourNode = agentNodes.find(n => n.data.nodeType === 'behaviourStep');
   if (!behaviourNode) {
-    return { behaviourCode: '', initCode: '', divisionCode: '', error: 'No Behaviour Step node in the agent graph.' };
+    return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages, error: 'No Behaviour Step node in the agent graph.' };
   }
 
   const { nodeMap, inputToSource, inputToSources, flowOutputToTargets } = buildAdjacency(agentNodes, agentEdges);
   const loopInvariant = classifyLoopInvariant(agentNodes, inputToSource);
-  // Agents are sync (no async hazards) — empty fusion-hazard set.
   const fusion = detectFusableConsumers(agentNodes, agentEdges, inputToSources, inputToSource, model, new Set<string>());
 
   const { valueLines, preLoopValueLines, flowLines, scratchNodes } = compileRoot(
@@ -2148,12 +2271,14 @@ export function compileAgentGraph(
   // Local Variables — per-agent scratch (the agent analogue of the cell-step
   // injection). Array allocations hoist to function scope; scalar lets + array
   // fills reset at the top of every agent iteration. Used heavily by flocking
-  // (per-agent neighbour accumulators) + differential-division models.
-  const variableBlocks = buildVariableJS(model);
+  // (per-agent neighbour accumulators) + differential-division models. The AGENT
+  // variable set (separate id-space from the cell variables).
+  const variableBlocks = buildVariableJS(model.agentVariables || []);
 
   const behaviourCode = [
     `(function(${params}) {`,
     ...scratchDecls,
+    ...viewerHoistLines,   // FIX 3 — Set Cell Looks _isV_ hoist (once per step)
     ...variableBlocks.preLoop,
     ...preLoopValueLines,
     '  let _rs = _rngState[0] || 0x12345678;',
@@ -2190,10 +2315,11 @@ export function compileAgentGraph(
     );
     const divScratch = dv.scratchNodes.map(s => buildScratchDecl(s, model));
     const dId = divNode.id;
-    const divVars = buildVariableJS(model);
+    const divVars = buildVariableJS(model.agentVariables || []);
     divisionCode = [
       `(function(${buildDivisionParams(model)}) {`,
       ...divScratch,
+      ...viewerHoistLines,   // FIX 3 — Set Cell Looks _isV_ hoist in the division fn too
       ...divVars.preLoop,
       ...divVars.inLoopReset.map(l => l.trimStart()).map(l => '  ' + l),
       '  const colorIdx = idx * 4;', // Set Cell Looks on a daughter (s.colors)
@@ -2216,7 +2342,39 @@ export function compileAgentGraph(
     ].join('\n');
   }
 
-  return { behaviourCode, initCode: '', divisionCode };
+  // --- Agent Init Event (once-per-reset SETUP function — NOT loop-wrapped) ---
+  let initCode = '';
+  const initNode = agentNodes.find(n => n.data.nodeType === 'agentInit');
+  if (initNode) {
+    const iv = compileRoot(
+      initNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets,
+      loopInvariant, fusion, agentNodes, agentEdges, model,
+    );
+    const initScratch = iv.scratchNodes.map(s => buildScratchDecl(s, model));
+    const iId = initNode.id;
+    const initVars = buildVariableJS(model.agentVariables || []);
+    initCode = [
+      `(function(${buildAgentInitParams(model)}) {`,
+      ...initScratch,
+      ...viewerHoistLines,            // FIX 3 — Set Cell Looks _isV_ hoist in init too
+      ...initVars.preLoop,
+      // Local Variable scalar `let`s + array fills — run ONCE (no per-agent loop).
+      ...initVars.inLoopReset.map(l => l.trimStart()).map(l => '  ' + l),
+      // value-out preamble — world bounds + the seed index base (highWater pre-init).
+      `  const _v${iId}_worldWidth = _fieldW;`,
+      `  const _v${iId}_worldHeight = _fieldH;`,
+      `  const _v${iId}_seedIndexBase = _agentSeedBase;`,
+      '  let _rs = _rngState[0] || 0x12345678;',
+      ...iv.preLoopValueLines,
+      ...iv.valueLines,
+      '',
+      ...iv.flowLines,
+      '  _rngState[0] = _rs;',
+      '})',
+    ].join('\n');
+  }
+
+  return { behaviourCode, initCode, divisionCode, stopMessages };
 }
 
 /**

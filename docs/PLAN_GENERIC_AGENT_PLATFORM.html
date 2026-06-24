@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Generic Agent Platform — agent attributes, field-access permissions, full node catalogue, graph-authored spawning</title>
+<style>
+  :root{
+    --bg:#1c1f26; --panel:#282c34; --panel2:#21252b; --bd:#3a3f4b; --bd2:#4a5160;
+    --txt:#d7dae0; --muted:#8b93a3; --faint:#6b7280; --accent:#4c9eff; --accentbg:#13325a;
+    --green:#4caf50; --cyan:#4cc9f0; --teal:#1d9e75; --blue:#378add; --amber:#ef9f27;
+    --agent:#c678dd; --agentbg:#3a2a42; --red:#e06c75; --redbg:#3a2a2c; --spawn:#7e57c2;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--txt);padding:30px;line-height:1.5;}
+  h1{font-size:21px;font-weight:600;margin:0 0 4px;}
+  h2{font-size:13px;font-weight:600;color:var(--muted);margin:40px 0 14px;text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid var(--bd);padding-bottom:6px;}
+  p.lead{color:var(--muted);max-width:940px;margin:0 0 10px;font-size:14px;}
+  .meta{color:var(--faint);font-size:12px;margin:0 0 6px;}
+  .cols{display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;}
+  .col{flex:1 1 300px;min-width:280px;}
+  .tag{display:inline-block;font-size:10.5px;padding:2px 9px;border-radius:10px;border:1px solid var(--bd2);color:var(--muted);margin-bottom:10px;}
+  .tag.before{border-color:#5a3a3a;color:#d99;}
+  .tag.after{border-color:#3a5a40;color:#9d9;}
+  .panel{background:var(--panel2);border:1px solid var(--bd);border-radius:9px;overflow:hidden;}
+  .ptitle{padding:7px 12px;background:var(--panel);border-bottom:1px solid var(--bd);font-size:12px;color:var(--muted);text-align:center;}
+  .eartabs{display:flex;gap:6px;padding:8px 10px;background:var(--bg);border-bottom:1px solid var(--bd);}
+  .ear{font-size:11px;padding:3px 11px;border-radius:12px;border:1px solid var(--bd2);color:var(--muted);background:var(--panel);}
+  .ear.on{background:var(--accentbg);border-color:var(--accent);color:#cfe2ff;}
+  .ear.onA{background:var(--agentbg);border-color:var(--agent);color:#e7c8f4;}
+  .sect{font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);padding:9px 12px 3px;}
+  .row{display:flex;align-items:center;gap:9px;padding:6px 12px;font-size:12.5px;border-bottom:1px solid #20242b;}
+  .row .dot{width:9px;height:9px;border-radius:50%;flex:none;}
+  .row .nm{flex:1;}
+  .row .ty{font-size:10px;color:var(--faint);border:1px solid var(--bd);border-radius:4px;padding:0 5px;}
+  .row.add{font-size:12px;}
+  .row.add.C{color:var(--accent);} .row.add.A{color:var(--agent);}
+  .access{font-size:9.5px;border-radius:8px;padding:1px 7px;margin-left:auto;}
+  .access.none{background:#2c2f36;color:var(--faint);}
+  .access.read{background:#1f3a2c;color:#9fe0bb;}
+  .access.rw{background:#3a3320;color:#f0d089;}
+  .seg{display:inline-flex;border:1px solid var(--bd2);border-radius:7px;overflow:hidden;}
+  .seg span{padding:3px 10px;font-size:10.5px;color:var(--muted);border-right:1px solid var(--bd2);}
+  .seg span:last-child{border-right:0;}
+  .seg span.on{background:#3a3320;color:#f0d089;}
+  .legend{margin-top:14px;font-size:13px;color:var(--muted);max-width:940px;}
+  .legend b{color:var(--txt);font-weight:600;}
+  code{background:var(--panel);border:1px solid var(--bd);border-radius:4px;padding:1px 5px;font-size:11.5px;color:#cdd3dd;font-family:ui-monospace,Menlo,Consolas,monospace;}
+  kbd{background:var(--panel);border:1px solid var(--bd2);border-bottom-width:2px;border-radius:4px;padding:1px 6px;font-size:11px;color:var(--txt);}
+  .ncard{display:flex;align-items:center;gap:8px;background:var(--panel2);border:1px solid var(--bd);border-radius:7px;padding:7px 10px;font-size:12px;margin-bottom:7px;}
+  .ncard .dot{width:9px;height:9px;border-radius:50%;flex:none;}
+  .ncard .sub{font-size:10px;color:var(--faint);}
+  .ncard .b{font-size:9px;color:#1c1f26;border-radius:8px;padding:0 6px;font-weight:700;margin-left:auto;}
+  .b.new{background:var(--agent);} .b.fix{background:var(--amber);} .b.re{background:var(--cyan);}
+  .grp{font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);margin:14px 0 7px;}
+  .note-box{background:var(--panel2);border:1px solid var(--bd);border-left:3px solid var(--amber);border-radius:6px;padding:11px 14px;margin:14px 0;font-size:12.5px;color:var(--muted);max-width:940px;}
+  .note-box.bad{border-left-color:var(--red);}
+  .note-box b{color:var(--txt);}
+  /* flow chips */
+  .flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0;}
+  .chip{background:var(--panel2);border:1px solid var(--bd2);border-radius:7px;padding:6px 11px;font-size:12px;}
+  .chip.spawn{border-color:#5a4468;background:#2a2233;color:#d9b8ec;}
+  .chip.flowroot{border-color:#7a3a52;background:#33222a;color:#f0aebf;}
+  .chip.loop{border-color:#3a5a40;background:#22301f;color:#a7e0bf;}
+  .ar{color:var(--green);font-weight:700;}
+  table.eq{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:6px;}
+  table.eq td{border:1px solid var(--bd);padding:7px 10px;vertical-align:top;}
+  table.eq td.l{color:var(--muted);width:34%;} table.eq td.a{color:#e7c8f4;width:34%;} td.n{color:var(--faint);font-size:11px;}
+  .abi{display:flex;gap:14px;flex-wrap:wrap;}
+  .abicol{flex:1 1 220px;background:var(--panel2);border:1px solid var(--bd);border-radius:8px;padding:10px 12px;}
+  .abicol h4{margin:0 0 8px;font-size:11px;color:var(--muted);text-transform:uppercase;}
+  .slot{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10.5px;padding:3px 7px;border-radius:4px;margin:3px 0;border:1px solid var(--bd);}
+  .slot.a{background:var(--agentbg);color:#e7c8f4;border-color:#5a4468;}
+  .slot.c{background:var(--accentbg);color:#bdd9ff;border-color:#2c4a78;}
+  .slot.s{background:var(--panel);color:var(--muted);}
+</style>
+</head>
+<body>
+  <h1>Generic Agent Platform</h1>
+  <p class="lead">Agents become first-class authorable entities. They own their <b>own attributes</b> and <b>own local
+    variables</b>; they read/write the CA grid (the environment/field) under a per-cell-attribute <b>agent-access
+    permission</b>; they reach for the <b>full node catalogue</b> (nearby + bonded sources, filter/join/gather/pick/
+    set-many) — enough to replicate a totalistic CA on a grid of agents <em>and</em> author stigmergy models; and the
+    user <b>spawns them from the graph</b> (Create → set → Add) in a once-only Agent Init Event.</p>
+  <p class="meta">Companion to <code>docs/PLAN_GENERIC_AGENT_PLATFORM.md</code>. Plan only. SUPERSEDES the earlier
+    <code>scope: cell|agent|both</code> discriminator — "shared" attributes make no sense (no 1:1 cell↔agent).</p>
+
+  <!-- 1. THE RELATIONSHIP -->
+  <h2>1 · Agents sit ABOVE the CA (the access model)</h2>
+  <div class="note-box"><b>Agents → CA: yes. CA → agents: never.</b> Agents read the grid (sense the environment) and
+    write back (deposit/consume) through the <b>field bridge</b>, gated per cell attribute by an <code>agentAccess</code>
+    permission (<span class="access none" style="margin:0">none</span> / <span class="access read" style="margin:0">read</span>
+    / <span class="access rw" style="margin:0">read&amp;write</span>). CA cells can <b>never</b> read agent attributes —
+    that's structural (the cell compilers never see <code>agentAttributes</code>). Agent attributes are accessed only by
+    other agents (own-state, or another agent by id).</p>
+  </div>
+
+  <!-- 2. ATTRIBUTES TAB -->
+  <h2>2 · Attributes tab — three independent sets</h2>
+  <div class="cols">
+    <div class="col">
+      <span class="tag after">Cells tab</span>
+      <div class="panel">
+        <div class="ptitle">Attributes</div>
+        <div class="eartabs"><span class="ear on">Cells ▸</span><span class="ear onA">Agents</span></div>
+        <div class="sect">Cell Attributes <span style="text-transform:none;font-style:italic;color:var(--faint)">(the environment / field)</span></div>
+        <div class="row"><span class="dot" style="background:var(--blue)"></span><span class="nm">chemical</span><span class="access rw">read&amp;write</span></div>
+        <div class="row"><span class="dot" style="background:var(--blue)"></span><span class="nm">terrain</span><span class="access read">read</span></div>
+        <div class="row"><span class="dot" style="background:var(--blue)"></span><span class="nm">scratch</span><span class="access none">none</span></div>
+        <div class="row add C">+ Add Cell Attribute</div>
+      </div>
+      <p style="color:var(--muted);font-size:12px;margin-top:10px;">Each cell attribute carries an <b>Agent access</b>
+        control (below). Field nodes' dropdowns filter to the permitted set.</p>
+    </div>
+    <div class="col">
+      <span class="tag after">Agents tab</span>
+      <div class="panel">
+        <div class="ptitle">Attributes</div>
+        <div class="eartabs"><span class="ear on">Cells</span><span class="ear onA">Agents ▸</span></div>
+        <div class="sect">Agent Attributes <span style="text-transform:none;font-style:italic;color:var(--faint)">(agent-only state)</span></div>
+        <div class="row"><span class="dot" style="background:var(--agent)"></span><span class="nm">energy</span><span class="ty">float</span></div>
+        <div class="row"><span class="dot" style="background:var(--agent)"></span><span class="nm">carrying</span><span class="ty">bool</span></div>
+        <div class="row"><span class="dot" style="background:var(--agent)"></span><span class="nm">species</span><span class="ty">tag</span></div>
+        <div class="row add A">+ Add Agent Attribute</div>
+      </div>
+      <p style="color:var(--muted);font-size:12px;margin-top:10px;">A parallel <code>agentAttributes[]</code> array.
+        Agents read/write these via Get/Set Attribute (own) + Get/Set Agent Attribute (by id). Never visible to cells.</p>
+    </div>
+    <div class="col">
+      <span class="tag after">Per cell-attr control</span>
+      <div class="panel">
+        <div class="ptitle">Edit: chemical (cell)</div>
+        <div style="padding:11px 12px;">
+          <div class="row" style="border:0;padding:4px 0;"><span class="nm">Type</span><span class="ty">float</span></div>
+          <div class="row" style="border:0;padding:4px 0;"><span class="nm">Agent access</span></div>
+          <div class="seg" style="margin:2px 0 8px;"><span>None</span><span>Read</span><span class="on">Read &amp; Write</span></div>
+          <p style="font-size:11px;color:var(--faint);margin:0;">read&nbsp;⇒ Sample Field / Read Cells Under / Field
+            Gradient may target it. read&amp;write&nbsp;⇒ also Affect Cells Under / Secrete To Field.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="note-box"><b>Migration (no behaviour change for the 4 shipped models).</b> Cell attributes used by the
+    agent graph only as <em>agent state</em> (<code>getCellAttribute</code>/<code>setAttribute</code>) MOVE to
+    <code>agentAttributes</code> (Tissue's <code>maturity</code>); cell attributes used as a <em>field</em>
+    (<code>secreteToField</code>/<code>sampleField</code>) STAY + get <code>agentAccess</code> (Chemotaxis's
+    <code>chemical</code> ⇒ read&amp;write); an attr used as BOTH is DUPLICATED. Cell-graph usage never triggers a move.</div>
+
+  <!-- 3. VARIABLES -->
+  <h2>3 · Local Variables — a parallel agent set</h2>
+  <p class="lead">Like attributes, agent variables are a separate array <code>agentVariables[]</code>; the Agents tab's
+    Local Variables section sources them. A load-time migration moves agent-referenced cell variables across (the boids
+    accumulators), which also fixes the agent-WASM array-var false-positive.</p>
+
+  <!-- 4. NODE CATALOGUE -->
+  <h2>4 · The comprehensive agent node catalogue</h2>
+  <div class="cols">
+    <div class="col" style="flex:1 1 320px;">
+      <div class="grp">Sources + set-ops over agent-id arrays (NEW)</div>
+      <div class="ncard"><span class="dot" style="background:var(--agent)"></span>Get Nearby Agents <span class="sub">radius → id[]</span><span class="b re">has</span></div>
+      <div class="ncard"><span class="dot" style="background:var(--agent)"></span>Get Bonded Agents <span class="sub">bonded partners → id[]</span><span class="b new">NEW</span></div>
+      <div class="ncard"><span class="dot" style="background:var(--agent)"></span>Filter Agents <span class="sub">≈ Filter Neighbors</span><span class="b new">NEW</span></div>
+      <div class="ncard"><span class="dot" style="background:var(--agent)"></span>Join Agents <span class="sub">union / intersection</span><span class="b new">NEW</span></div>
+      <div class="ncard"><span class="dot" style="background:var(--agent)"></span>Pick Random / N Agents <span class="sub">≈ Pick Random/N Neighbor</span><span class="b new">NEW</span></div>
+      <div class="ncard"><span class="dot" style="background:var(--agent)"></span>Get Agents Attribute <span class="sub">keystone gather → typed[]</span><span class="b new">NEW</span></div>
+      <div class="ncard"><span class="dot" style="background:var(--agent)"></span>Set Agents Attribute <span class="sub">write-many</span><span class="b new">NEW</span></div>
+    </div>
+    <div class="col" style="flex:1 1 320px;">
+      <div class="grp">Spawn + movement (NEW)</div>
+      <div class="ncard"><span class="dot" style="background:var(--spawn)"></span>Agent Init Event <span class="sub">once per Reset — loop &amp; spawn</span><span class="b new">NEW</span></div>
+      <div class="ncard"><span class="dot" style="background:var(--spawn)"></span>Create Agent → Add Agent To World <span class="sub">two-phase spawn</span><span class="b new">NEW</span></div>
+      <div class="ncard"><span class="dot" style="background:var(--spawn)"></span>Set Agent Position / Radius / Type <span class="sub">by id (stage)</span><span class="b new">NEW</span></div>
+      <div class="ncard"><span class="dot" style="background:var(--spawn)"></span>Set Velocity <span class="sub">momentum companion (needs momentum&gt;0)</span><span class="b new">NEW</span></div>
+      <div class="grp">Broken-in-agents today → fixed (PR3)</div>
+      <div class="ncard"><span class="dot" style="background:var(--teal)"></span>Set Cell Looks <span class="sub">real mappingId crashes today</span><span class="b fix">FIX</span></div>
+      <div class="ncard"><span class="dot" style="background:var(--cyan)"></span>Table Lookup · Indicators · Stop Event <span class="sub">unthreaded params / pre-resolve</span><span class="b fix">FIX</span></div>
+    </div>
+    <div class="col" style="flex:1 1 280px;">
+      <div class="grp">Already work in agents</div>
+      <div class="ncard"><span class="dot" style="background:var(--amber)"></span>Math · Expression · Compare · Logic</div>
+      <div class="ncard"><span class="dot" style="background:var(--green)"></span>Conditional · Switch · Loop · For Each · Sequence</div>
+      <div class="ncard"><span class="dot" style="background:var(--cyan)"></span>Aggregate · Group Count · Group Reduce</div>
+      <div class="ncard"><span class="dot" style="background:var(--agent)"></span>Apply Force · Form/Break Bond · Divide · Kill · Grow</div>
+      <div class="ncard"><span class="dot" style="background:var(--agent)"></span>Sample/Read/Affect/Secrete Field (env)</div>
+      <div class="grp">No agent meaning (hidden on Agents)</div>
+      <div class="ncard" style="opacity:.55;border-style:dashed;"><span class="dot" style="background:var(--blue)"></span>Neighbour-by-Tag · NI codec · neighbourhood writes · Get Cell Position · variegated/facing · cell roots</div>
+    </div>
+  </div>
+  <table class="eq">
+    <tr><td class="l"><b>Lattice node</b></td><td class="a"><b>Agent equivalent</b></td><td class="n"><b>How</b></td></tr>
+    <tr><td class="l">Get Neighbors Attribute</td><td class="a"><span class="ar">→</span> Get Agents Attribute (NEW)</td><td class="n">gather one attribute over a nearby/bonded id[]</td></tr>
+    <tr><td class="l">Get / Set Neighbor Attribute by Index</td><td class="a"><span class="ar">✓</span> Get / Set Agent Attribute</td><td class="n">already shipped — by agent id</td></tr>
+    <tr><td class="l">Filter / Join / Pick Neighbors</td><td class="a"><span class="ar">→</span> Filter / Join / Pick Agents (NEW)</td><td class="n">same machinery, int ids, −1 sentinel</td></tr>
+    <tr><td class="l">Get Cell Position</td><td class="a"><span class="ar">✓</span> Get Self Position</td><td class="n">continuous world X/Y</td></tr>
+    <tr><td class="l">Init Event (per-cell)</td><td class="a"><span class="ar">→</span> Agent Init Event (NEW, once)</td><td class="n">loop + Create Agent inside</td></tr>
+  </table>
+
+  <!-- 5. SPAWN FLOW -->
+  <h2>5 · Graph-authored spawning + the Agent Init Event</h2>
+  <p class="lead">The Init Event runs <b>once per Reset</b> — a zero-agent setup function (no per-agent <code>idx</code>).
+    The user loops and spawns; Create Agent returns a real id used by the Set-by-id nodes; Add Agent To World commits.</p>
+  <div class="flow">
+    <span class="chip flowroot">Agent Init Event</span><span class="ar">→</span>
+    <span class="chip loop">Loop(N)</span><span class="ar">→</span>
+    <span class="chip spawn">Create Agent (x,y,type) → id</span><span class="ar">→</span>
+    <span class="chip spawn">Set Agent Attribute(id, …)</span><span class="ar">→</span>
+    <span class="chip spawn">Add Agent To World(id)</span>
+  </div>
+  <div class="note-box bad"><b>Engine-safety (from the adversarial review).</b>
+    (B1/B2) The spawn / staged-request buffers are <b>JS-store-only</b> fields — they must NOT enter
+    <code>computeAgentMemoryLayout</code>'s fixed field arrays (that would shift every baked WASM offset and break the
+    shipped JS↔WASM bit-parity); spawn clamps the graph to JS, so the store is non-wasm-backed anyway.
+    (B3/B4) The Init Event is a once-only setup fn, NOT a clone of <code>divisionEvent</code>'s per-agent body; it gets
+    its own <code>buildAgentInitParams↔Args</code> ABI pair and fires on <b>Reset only, not recompile</b>.
+    (B5) A graph-spawned agent is <b>unbondable the same step</b> (the bond-request pass precedes spawn-apply) — bond it
+    next generation. In-behaviour Create stages a deferred request applied in the structural phase (mirroring Divide).</div>
+
+  <!-- 6. ANT MODEL -->
+  <h2>6 · Acceptance target — ant necrophoresis (stigmergy)</h2>
+  <p class="lead">Ants = agents (<code>carrying</code> bool); corpses = a <code>corpse</code> cell field
+    (<code>agentAccess: read&amp;write</code>). Pick-up/drop probability is sigmoidal in local corpse density — dense piles
+    attract drops (autocatalytic), so piles self-enhance. Pure stigmergy: agents interact only through the field.</p>
+  <div class="flow">
+    <span class="chip flowroot">Behaviour Step</span><span class="ar">→</span>
+    <span class="chip">Apply Force (random walk)</span><span class="ar">→</span>
+    <span class="chip">Read Cells Under(corpse) → density</span><span class="ar">→</span>
+    <span class="chip loop">if carrying?</span>
+  </div>
+  <div class="flow" style="margin-left:24px;">
+    <span style="color:var(--faint);font-size:11px;">empty-handed:</span>
+    <span class="chip">pPick = 1/(1+e^(k(density−d0)))</span><span class="ar">→</span>
+    <span class="chip spawn">Affect Cells Under(corpse −1)</span><span class="ar">→</span>
+    <span class="chip">Set carrying=true</span>
+  </div>
+  <div class="flow" style="margin-left:24px;">
+    <span style="color:var(--faint);font-size:11px;">carrying:</span>
+    <span class="chip">pDrop = 1/(1+e^(−k(density−d1)))</span><span class="ar">→</span>
+    <span class="chip spawn">Affect Cells Under(corpse +1)</span><span class="ar">→</span>
+    <span class="chip">Set carrying=false</span>
+  </div>
+  <p style="color:var(--muted);font-size:12px;margin-top:8px;">Acceptance: a uniform corpse field concentrates into piles
+    over time (the spatial-frequency histogram goes flat → clustered). The <b>Game-of-Life-on-agents</b> sample (a static
+    grid: Get Nearby Agents → Get Agents Attribute → Group Count → GoL rule → Set alive, with
+    <code>customForcesOnly:true</code> + <code>momentum:0</code>) is the genericity proof.</p>
+
+  <!-- 7. ABI -->
+  <h2>7 · The #1 hazard — three ABI-mirror pairs</h2>
+  <p class="lead">Each compiler param list has a worker arg list that must match slot-for-slot. The agent attribute split
+    means TWO same-typed lists now drive the signature (<code>agentAttrsOf</code> for <code>r_</code>/<code>w_</code>,
+    <code>cellFieldAttrsOf</code> for <code>_field_</code>) — an ORDER swap the count guard can't see. Both sides import
+    the shared <code>attributeScope.ts</code> helpers so order can't drift.</p>
+  <div class="abi">
+    <div class="abicol"><h4>behaviour ↔ args</h4>
+      <div class="slot s">_alive, highWater, _agent*</div>
+      <div class="slot a">r_&lt;id&gt; / w_&lt;id&gt; ← agentAttrsOf</div>
+      <div class="slot s">modelAttrs … glyphColors</div>
+      <div class="slot s">_lookupTables (FIX1, pinned)</div>
+      <div class="slot c">_field_&lt;id&gt; ← cellFieldAttrsOf</div>
+    </div>
+    <div class="abicol"><h4>division ↔ args</h4>
+      <div class="slot s">idx, _alive, highWater, _agent*</div>
+      <div class="slot a">r_/w_ ← agentAttrsOf</div>
+      <div class="slot s">…control… + _lookupTables</div>
+      <div class="slot c">_field_ ← cellFieldAttrsOf</div>
+    </div>
+    <div class="abicol"><h4>agentInit ↔ args (NEW)</h4>
+      <div class="slot s">geometry buffers + control boxes</div>
+      <div class="slot s">_agentStage / _agentInitSlot closures</div>
+      <div class="slot s">_lookupTables</div>
+      <div class="slot c">_field_ ← cellFieldAttrsOf</div>
+      <div class="slot a">r_/w_ ← agentAttrsOf</div>
+    </div>
+  </div>
+
+  <p class="legend" style="margin-top:26px;"><b>Phasing.</b>
+    <kbd>PR1</kbd> agentAttributes + the agentAccess permission + migration (HIGH — ABI) ·
+    <kbd>PR2</kbd> agentVariables (MEDIUM) ·
+    <kbd>PR3</kbd> the 4 universal-node fixes + the 8 new array/movement nodes + async-CSE + macro gate (MEDIUM) ·
+    <kbd>PR4</kbd> Create/Add + the by-id setters + the Agent Init Event (HIGH) ·
+    <kbd>PR5</kbd> the GoL-on-agents + ant-necrophoresis samples + docs.
+    Deferred: agent-WASM emit for the new nodes, WebGPU agents, 3D agents.
+    PR2 + PR3-fixes may land before PR1/PR4; PR1/PR4 fold in blockers B1–B5 first.</p>
+</body>
+</html>

@@ -97,6 +97,13 @@ const NEVER_PURE_TYPES = new Set<string>([
   // Set Agent Attribute (immediate single-buffer write), so two reads of the
   // same neighbour attribute are not interchangeable.
   'getAgentAttribute',
+  // Generic Agent Platform — impure agent-equivalent ops: the gathers read
+  // mutable agent attrs (Set Agents Attribute), Get Bonded Agents reads the
+  // mutable bond store, and the picks consume the shared RNG stream.
+  'getAgentsAttribute',
+  'getBondedAgents',
+  'pickRandomAgent',
+  'pickNRandomAgents',
   // Entry-point nodes — their "outputs" are external function params.
   'step',
   'initEvent',

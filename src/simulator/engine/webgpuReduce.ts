@@ -87,9 +87,11 @@ export function buildReductionPlan(linkedDefs: LinkedDef[], layout: WebGPULayout
   for (const d of linkedDefs) {
     if (!d.watched) continue;
     if (!d.attrId || !d.attrType || !d.aggregation) continue;
-    // Spatial indicators (xAxis rows/columns) are position histograms computed
-    // on the CPU (computeSpatialIndicators) — no GPU reduction shader path.
-    if (d.xAxis === 'rows' || d.xAxis === 'columns') continue;
+    // Spatial indicators (xAxis rows/columns/layers) are position histograms
+    // computed on the CPU (computeSpatialIndicators) — no GPU reduction shader
+    // path. 'layers' (3D) MUST be skipped here too, else the GPU reduction
+    // decode overwrites the per-layer chromatogram with a generation-axis scalar.
+    if (d.xAxis === 'rows' || d.xAxis === 'columns' || d.xAxis === 'layers') continue;
     // Sub-attribute aggregation requires a parent_match guard inside the
     // reduction shader (cells where the parent doesn't match must not
     // contribute). The current binding set doesn't expose parent metadata;

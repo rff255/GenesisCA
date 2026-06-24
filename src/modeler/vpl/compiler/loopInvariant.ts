@@ -127,6 +127,14 @@ const NEVER_INVARIANT = new Set<string>([
   'getAgentAttribute',
   'getAgentRadius',
   'getVelocity',
+  // Generic Agent Platform — the agent-equivalent array / set ops are all
+  // per-agent (they read the current agent's bonds / id-arrays / attrs / the RNG).
+  'getBondedAgents',
+  'filterAgents',
+  'joinAgents',
+  'pickRandomAgent',
+  'pickNRandomAgents',
+  'getAgentsAttribute',
   // ForEachBond's per-iteration outputs (partnerId/restLength/currentLength/index)
   // vary per bond — any consumer must stay inside the bond loop (same reasoning
   // as forEachInArray).

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { useModel } from '../model/ModelContext';
 import type { CAModel } from '../model/types';
@@ -17,7 +17,7 @@ import { VariegatedCellsPanelContent } from './panels/VariegatedCellsPanelConten
 import { GraphEditorInner } from './vpl/GraphEditor';
 import { NodeExplorer } from './vpl/NodeExplorer';
 import type { NodeExplorerHandle } from './vpl/NodeExplorer';
-import { quickAddApi } from './vpl/graphState';
+import { quickAddApi, subscribeActiveGraphKind, getActiveGraphKind } from './vpl/graphState';
 import type { QuickAddPayload } from './vpl/graphState';
 import { modelerUiState } from './modelerUiState';
 import styles from './ModelerView.module.css';
@@ -48,8 +48,13 @@ const panelComponents: Record<PanelId, React.ComponentType<PanelContentProps>> =
 const MASTER_DETAIL_PANELS = new Set<PanelId>(['properties', 'attributes', 'neighborhoods', 'mappings']);
 
 /** Display name of the active panel's selected item, or null if nothing is
- *  selected / the id no longer resolves (so the detail panel hides on delete). */
-function selectedItemName(model: CAModel, panel: PanelId, id: string | null): string | null {
+ *  selected / the id no longer resolves (so the detail panel hides on delete).
+ *  `agentMode` (the Agents sub-tab is active) makes the Attributes panel resolve
+ *  AGENT attributes / variables — without it an agent-attribute selection never
+ *  resolves and the detail editor panel stays hidden (the bug). The Agents tab
+ *  still shows the SHARED Model Attributes section, so an agent-attr lookup falls
+ *  through to model.attributes for a model attr selected there. */
+function selectedItemName(model: CAModel, panel: PanelId, id: string | null, agentMode: boolean): string | null {
   if (!id) return null;
   if (panel === 'properties') {
     // Indicators are the only master-detail sub-section in Properties.
@@ -58,8 +63,20 @@ function selectedItemName(model: CAModel, panel: PanelId, id: string | null): st
   }
   if (panel === 'attributes') {
     // Discriminated `attr:<id>` / `var:<id>` — Local Variables share this panel.
-    if (id.startsWith('var:')) return (model.variables ?? []).find(v => v.id === id.slice(4))?.name ?? null;
+    if (id.startsWith('var:')) {
+      const varId = id.slice(4);
+      const list = agentMode ? (model.agentVariables ?? []) : (model.variables ?? []);
+      return list.find(v => v.id === varId)?.name ?? null;
+    }
     const attrId = id.startsWith('attr:') ? id.slice(5) : id;
+    if (agentMode) {
+      // Agents tab: the primary list is agentAttributes; the SHARED Model
+      // Attributes section is also shown, so fall through to MODEL attrs only
+      // (a cell attr — not listed here — must not resolve on this tab).
+      const hit = (model.agentAttributes ?? []).find(a => a.id === attrId)
+        ?? model.attributes.find(a => a.id === attrId && a.isModelAttribute);
+      return hit?.name ?? null;
+    }
     return model.attributes.find(a => a.id === attrId)?.name ?? null;
   }
   if (panel === 'neighborhoods') return model.neighborhoods.find(n => n.id === id)?.name ?? null;
@@ -75,6 +92,12 @@ const rightPanelTitles: Record<RightPanelId, string> = {
 export function ModelerView() {
   const { model } = useModel();
   const variegatedEnabled = !!model.variegatedCells?.enabled;
+  // Generic Agent Platform: the Attributes panel shows AGENT attributes/variables
+  // on the Agents sub-tab. The detail-panel resolution (selectedItemName) must
+  // know this so an agent-attribute selection resolves (else its editor never
+  // mounts). Mirrors AttributesPanelContent's `agentMode`.
+  const activeGraphKind = useSyncExternalStore(subscribeActiveGraphKind, getActiveGraphKind);
+  const attrAgentMode = activeGraphKind === 'agents' && !!model.topologyMode?.agents;
   // Seed from the module-level snapshot so the modeler layout survives the
   // unmount that happens when switching to the Simulator / another top-level tab.
   const [activePanel, setActivePanel] = useState<PanelId | null>(modelerUiState.activePanel);
@@ -228,7 +251,7 @@ export function ModelerView() {
   const detailPanelId = activePanel && MASTER_DETAIL_PANELS.has(activePanel) ? activePanel : null;
   const DetailContent = detailPanelId ? panelComponents[detailPanelId] : null;
   const detailItemName = detailPanelId
-    ? selectedItemName(model, detailPanelId, selectedByPanel[detailPanelId] ?? null)
+    ? selectedItemName(model, detailPanelId, selectedByPanel[detailPanelId] ?? null, attrAgentMode)
     : null;
 
   return (

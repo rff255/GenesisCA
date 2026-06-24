@@ -26,7 +26,7 @@ import { subAttrInfo, parentValueToInt } from '../../modeler/vpl/compiler/subAtt
 import type { Attribute, CenterBasedConfig } from '../../model/types';
 import { cbNum } from '../../model/centerBased';
 import {
-  createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot,
+  createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot, freeStagedSlot,
   snapshotAgentsForRender, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
   formBond, breakBond, hasBond, sweepStaleBonds, divideAgent,
   primeAgentAttrWrite, swapAgentAttrs, computeAgentMaxHashBins,
@@ -49,6 +49,10 @@ interface AttrDef {
   parentAttributeId?: string;
   parentValues?: string[];
   undefinedValue?: string;
+  /** Generic Agent Platform: cell attributes only — the agent field-access
+   *  permission. Drives `fieldSpecs` (which cell attrs are threaded as
+   *  `_field_<id>` into the agent loop). Inert on agent attributes. */
+  agentAccess?: 'none' | 'read' | 'readWrite';
 }
 
 interface NeighborhoodDef {
@@ -94,6 +98,10 @@ interface InitMsg {
   /** 3D Grid CA: layer count. Absent → 1 (a 2D grid, byte-identical). */
   depth?: number;
   attributes: AttrDef[];
+  /** Generic Agent Platform: the AGENT attribute set (agent-only per-agent state,
+   *  a separate id-space from `attributes`). Drives the agent SoA (buildAgentAttrSpecs
+   *  maps these) + the `r_`/`w_` channel. Absent → empty (no agent attrs). */
+  agentAttributes?: AttrDef[];
   neighborhoods: NeighborhoodDef[];
   boundaryTreatment: string;
   updateMode: string;
@@ -385,6 +393,14 @@ let height = 0;
 let depth = 1;
 let total = 0;
 let cellAttrs: AttrDef[] = [];
+/** Generic Agent Platform: the AGENT attribute set (agent-only per-agent state).
+ *  buildAgentAttrSpecs maps these → the agent SoA; the agent loop's r_/w_ channel
+ *  is keyed by them. A SEPARATE id-space from cellAttrs. */
+let agentAttrs: AttrDef[] = [];
+/** Generic Agent Platform: the agent-ACCESSIBLE cell attributes (agentAccess !==
+ *  'none'). Drives the `_field_<id>` channel of the agent loop (args read from
+ *  `readAttrs`, the CELL SoA). Mirrors `cellFieldAttrsOf` in the compiler. */
+let fieldSpecs: AttrDef[] = [];
 
 /** Flatten a 3D cell coordinate to its SoA index. In 2D (depth===1, layer===0)
  *  this is `row*width+col`, byte-identical to the historical 2D math. */
@@ -466,7 +482,11 @@ let agentWasmHashOverflowWarned = false;
 /** Build the agent attribute specs (the non-model cell attributes double as
  *  per-agent attributes via D-IDX) with their resolved default values. */
 function buildAgentAttrSpecs(): AgentAttrSpec[] {
-  return cellAttrs.map(a => ({ id: a.id, type: a.type, defaultValue: defaultValue(a) }));
+  // Generic Agent Platform: the agent SoA is keyed by the AGENT attribute set
+  // (a separate id-space), NOT the cell attributes. KEYSTONE of the attribute
+  // split — this drives createAgentStore + computeAgentMemoryLayout + the
+  // agent-WASM spec, all of which must derive from the SAME ordered list.
+  return agentAttrs.map(a => ({ id: a.id, type: a.type, defaultValue: defaultValue(a) }));
 }
 
 /** Allocate (or re-allocate) the agent store from the current config + attrs.
@@ -627,11 +647,74 @@ function applyAgentSets(store: AgentStore, id: number, sets: Array<{ attrId: str
   }
 }
 
-/** Run the agent Init Event once per seeded agent on Reset. v1 has no agent
- *  Init Event root (agents init to their attribute defaults on seed), so this
- *  is a no-op placeholder. */
+/** Build the args for the compiled Agent Init Event function (a once-per-reset
+ *  SETUP function — NOT loop-wrapped). MIRRORS `buildAgentInitParams` in compile.ts
+ *  EXACTLY: the host closures + maxAgents, the writable geometry buffers, the agent
+ *  attr buffers, the global/rng/field block, then `_agentSeedBase`. */
+function buildAgentInitArgs(
+  s: AgentStore,
+  agentCreate: (x: number, y: number, radius: number, type: number) => number,
+  agentAddToWorld: (id: number) => void,
+  seedBase: number,
+): unknown[] {
+  const args: unknown[] = [
+    agentCreate, agentAddToWorld, s.maxAgents,
+    s.x, s.y, s.radius, s.targetRadius, s.type, s.age, s.lineage, s.vx, s.vy,
+  ];
+  for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
+  for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
+  args.push(cachedModelAttrs, s.colors, activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS);
+  if (hasLookupTables) args.push(cachedInteractionTables);
+  args.push(width, height, total, boundaryTreatment === 'torus' ? 1 : 0);
+  for (const spec of fieldSpecs) args.push(readAttrs[spec.id]);
+  args.push(seedBase);
+  return args;
+}
+
+/** Run the Agent Init Event once on Reset (Generic Agent Platform). It runs on a
+ *  FRESH store (initAgents() always precedes it), so no double-spawn. The user
+ *  loops + Create Agent / Add Agent To World to seed the initial population on top
+ *  of the config `seedCount` baseline. Host closures encapsulate the engine
+ *  interaction; Create stages a slot (alive=0), Add commits it; a Create without
+ *  an Add is swept back to the free-list (no leak). */
 function runAgentInit(): void {
-  void agentInitFn;
+  if (!agentInitFn || !agentStore) return;
+  const s = agentStore;
+  const seedBase = s.highWater;   // the seedIndexBase value-out
+  const created: number[] = [];
+  let overflowed = false;
+  const agentCreate = (x: number, y: number, radius: number, type: number): number => {
+    const id = allocAgentSlot(s);
+    if (id < 0) { overflowed = true; return -1; }
+    initAgentSlot(s, id, x, y, 0, radius || cbNum(centerBasedConfig!, 'defaultRadius'), (type | 0), id);
+    s.alive[id] = 0; s.liveCount--;   // STAGE (un-commit the alloc until Add To World)
+    created.push(id);
+    return id;
+  };
+  const agentAddToWorld = (id: number): void => {
+    if (id >= 0 && id < s.maxAgents && !s.alive[id]) { s.alive[id] = 1; s.liveCount++; }
+  };
+  try {
+    (agentInitFn as (...a: unknown[]) => void)(...buildAgentInitArgs(s, agentCreate, agentAddToWorld, seedBase));
+  } catch (e) {
+    self.postMessage({ type: 'error', message: '[agents] init event failed: ' + ((e as Error)?.message || e) });
+  }
+  // Leak sweep: free any Created-but-not-Added slot (still staged at alive=0).
+  for (const id of created) if (!s.alive[id]) freeStagedSlot(s, id);
+  // Sync xNext=x for live agents so a Set Agent Position override propagates
+  // through the first integration step (initAgentSlot set xNext at Create time).
+  for (let i = 0; i < s.highWater; i++) { if (s.alive[i]) { s.xNext[i] = s.x[i]!; s.yNext[i] = s.y[i]!; } }
+  // Sync agent mode double-buffers the attributes: the Init Event's Set Attribute
+  // / Set Agent Attribute wrote the WRITE buffer, but the first behaviour step (and
+  // getState / the first colour pass) read the READ buffer. Copy write→read so the
+  // init-built state is the readable initial state. (No-op in async: r aliases w.)
+  if (s.syncAttrs) {
+    for (const spec of s.attrSpecs) {
+      const r = s.attrRead[spec.id], w = s.attrWrite[spec.id];
+      if (r && w && r !== w) for (let i = 0; i < s.highWater; i++) r[i] = w[i]!;
+    }
+  }
+  if (overflowed) self.postMessage({ type: 'agentOverflow', message: `Agent capacity reached during Init Event (maxAgents=${s.maxAgents}). Some Create Agent calls were skipped.` });
 }
 
 /** Run the Division Event graph per daughter so the user can reassign daughter
@@ -684,9 +767,13 @@ function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, ax
   for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
   for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
   args.push(cachedModelAttrs, s.colors, activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS);
-  // Closed feedback: the CELL field arrays + grid dims (same as buildAgentLoopArgs).
+  // PR3 FIX 1 — Lookup Tables (pinned slot, mirrors buildDivisionParams).
+  if (hasLookupTables) args.push(cachedInteractionTables);
+  // Closed feedback: the agent-accessible CELL field arrays (readAttrs[id], the
+  // CELL SoA — distinct from the agent s.attrRead) + grid dims. fieldSpecs mirrors
+  // the compiler's cellFieldAttrsOf (NOT s.attrSpecs, which is the AGENT set).
   args.push(width, height, total, boundaryTreatment === 'torus' ? 1 : 0);
-  for (const spec of s.attrSpecs) args.push(readAttrs[spec.id]);
+  for (const spec of fieldSpecs) args.push(readAttrs[spec.id]);
   // Trailing 3D block (B1) — pushed ONLY when 3D (NO forceZ; division reads
   // forces, never writes them). MIRRORS buildDivisionParams's `is3d` block.
   if (s.worldDepth > 1) args.push(s.z, s.vz, s.divideAxisZ, s.worldDepth);
@@ -719,13 +806,18 @@ function buildAgentLoopArgs(s: AgentStore): unknown[] {
   for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
   for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
   args.push(cachedModelAttrs, s.colors, activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS);
-  // Closed feedback (Phase D): the cell field arrays (readAttrs[id] = the CELL
-  // SoA sized total, distinct from the agent attrRead) + the field grid dims.
+  // PR3 FIX 1 — Lookup Tables (pinned slot, mirrors buildAgentLoopParams).
+  if (hasLookupTables) args.push(cachedInteractionTables);
+  // Closed feedback (Phase D): the agent-accessible cell field arrays (readAttrs[id]
+  // = the CELL SoA sized total, distinct from the agent attrRead) + grid dims.
+  // fieldSpecs mirrors cellFieldAttrsOf (NOT s.attrSpecs, the AGENT set).
   args.push(width, height, total, boundaryTreatment === 'torus' ? 1 : 0);
-  for (const spec of s.attrSpecs) args.push(readAttrs[spec.id]);
+  for (const spec of fieldSpecs) args.push(readAttrs[spec.id]);
   // Trailing 3D block (B1) — pushed ONLY when 3D. MIRRORS buildAgentLoopParams's
-  // `is3d` block (z, vz, forceZ, divideAxisZ, worldDepth).
-  if (s.worldDepth > 1) args.push(s.z, s.vz, s.forceZ, s.divideAxisZ, s.worldDepth);
+  // `is3d` block (z, vz, forceZ, divideAxisZ, worldDepth, then the Z hash dims so
+  // Get Nearby Agents can do a 3D query). When hash is null the 3D query is
+  // unreachable (_hashValid 0 → all-pairs), so the 1-fallbacks are unused.
+  if (s.worldDepth > 1) args.push(s.z, s.vz, s.forceZ, s.divideAxisZ, s.worldDepth, hash ? hash.nBinsZ : 1, hash ? hash.binSizeZ : 1);
   return args;
 }
 
@@ -2175,16 +2267,47 @@ function runStep(): void {
   // live in the imported memory and offsets are baked into the module.
   if (callWasm) {
     (fn as (t: number) => void)(total);
-    // WASM step doesn't emit the per-loop linked-indicator aggregation the
-    // JS step does. Compute it directly from the shared buffer so frequency /
-    // total linked indicators are populated and end conditions / charts work
-    // in WASM mode too.
-    if (linkedDefs.length > 0) computeLinkedIndicatorsFromBuffer();
   } else {
     fn(...buildLoopArgs());
   }
 
-  // Handle linked indicator accumulation (skip when no linked indicators)
+  // Post-step buffer management (sync mode only — async uses single buffer).
+  // Done BEFORE the linked-indicator compute below: on WASM-sync the w→r copy
+  // must land first so readAttrs holds the JUST-COMPUTED generation (it
+  // otherwise held gen N-1, lagging the JS embed which reads the write buffer).
+  if (isSync) {
+    if (callWasm) {
+      // WASM wrote new gen to attrWriteOffset (= attrsB). Bulk-copy w → r so
+      // the next step (whichever mode) sees the new gen at readAttrs = attrsA.
+      // We cannot use the JS ref-swap trick because WASM's offsets are baked.
+      for (const attr of cellAttrs) {
+        (attrsA[attr.id] as Uint8Array).set(attrsB[attr.id] as Uint8Array);
+      }
+      // Refs stay canonical (readAttrs = attrsA, writeAttrs = attrsB).
+    } else {
+      // JS step uses positional r/w args so ref swap suffices (no copy).
+      const tmp = readAttrs;
+      readAttrs = writeAttrs;
+      writeAttrs = tmp;
+    }
+    // Variegated Cells: orientation views live at fixed offsets in wasmMemory,
+    // so a JS-style ref swap can't bring writes into the read view. Same
+    // problem on WASM — the read/write offsets are baked. Bulk-copy w → r so
+    // the next step (and the output mapping) sees the new orientations.
+    if (orientationReadView && orientationWriteView && orientationReadView !== orientationWriteView) {
+      orientationReadView.set(orientationWriteView);
+    }
+  }
+
+  // WASM step doesn't emit the per-loop linked-indicator aggregation the JS step
+  // does (the JS embed reads the write buffer = the new gen). Compute it from the
+  // shared buffer AFTER the w→r copy above, so readAttrs holds the new generation
+  // on both sync (post-copy) and async (single buffer) — matching the JS embed.
+  // (Was previously computed before the copy → read gen N-1 in WASM sync mode.)
+  if (callWasm && linkedDefs.length > 0) computeLinkedIndicatorsFromBuffer();
+
+  // Handle linked indicator accumulation (skip when no linked indicators).
+  // Runs AFTER the compute above so it accumulates the new generation's values.
   for (let _li = 0; _li < linkedDefs.length; _li++) {
     const def = linkedDefs[_li]!;
     // Spatial indicators are always a live per-step snapshot — never
@@ -2207,31 +2330,6 @@ function runStep(): void {
         linkedAccumulators[def.id] = prev;
         linkedResults[def.id] = { ...prev };
       }
-    }
-  }
-
-  // Post-step buffer management (sync mode only — async uses single buffer)
-  if (isSync) {
-    if (callWasm) {
-      // WASM wrote new gen to attrWriteOffset (= attrsB). Bulk-copy w → r so
-      // the next step (whichever mode) sees the new gen at readAttrs = attrsA.
-      // We cannot use the JS ref-swap trick because WASM's offsets are baked.
-      for (const attr of cellAttrs) {
-        (attrsA[attr.id] as Uint8Array).set(attrsB[attr.id] as Uint8Array);
-      }
-      // Refs stay canonical (readAttrs = attrsA, writeAttrs = attrsB).
-    } else {
-      // JS step uses positional r/w args so ref swap suffices (no copy).
-      const tmp = readAttrs;
-      readAttrs = writeAttrs;
-      writeAttrs = tmp;
-    }
-    // Variegated Cells: orientation views live at fixed offsets in wasmMemory,
-    // so a JS-style ref swap can't bring writes into the read view. Same
-    // problem on WASM — the read/write offsets are baked. Bulk-copy w → r so
-    // the next step (and the output mapping) sees the new orientations.
-    if (orientationReadView && orientationWriteView && orientationReadView !== orientationWriteView) {
-      orientationReadView.set(orientationWriteView);
     }
   }
   // Spatial indicators (chromatogram): recompute the live per-position histogram
@@ -2815,7 +2913,7 @@ function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode
   try {
     // eslint-disable-next-line no-eval
     agentInitFn = initCode ? (eval(initCode) as Function) : null;
-  } catch { agentInitFn = null; }
+  } catch (e) { agentInitFn = null; self.postMessage({ type: 'error', message: '[agents] init compile failed: ' + ((e as Error)?.message || e) }); }
   try {
     // eslint-disable-next-line no-eval
     agentDivisionFn = divisionCode ? (eval(divisionCode) as Function) : null;
@@ -2840,6 +2938,15 @@ function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode
       const want = buildDivisionArgs(s, 0, 0, 0, 0).length;
       if (agentDivisionFn.length !== want) {
         self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: division fn declares ${agentDivisionFn.length} params but buildDivisionArgs passes ${want} (buildDivisionParams↔buildDivisionArgs out of lockstep — the B1 hazard).` });
+      }
+    }
+    if (agentInitFn) {
+      // The Agent Init Event is the third ABI pair (buildAgentInitParams ↔
+      // buildAgentInitArgs). Dummy closures/seedBase just count the arg array —
+      // buildAgentInitArgs never calls them while building the list.
+      const want = buildAgentInitArgs(s, () => 0, () => {}, 0).length;
+      if (agentInitFn.length !== want) {
+        self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: init fn declares ${agentInitFn.length} params but buildAgentInitArgs passes ${want} (buildAgentInitParams↔buildAgentInitArgs out of lockstep — the B1 hazard).` });
       }
     }
   }
@@ -3084,10 +3191,15 @@ function computeLinkedIndicatorsFromBuffer(): void {
         if (v > mx) mx = v;
         counted++;
       }
-      if (!Number.isFinite(mn) || !Number.isFinite(mx) || mn === mx) {
+      if (!Number.isFinite(mn) || !Number.isFinite(mx)) {
+        // No matching / degenerate range (e.g. no cells) \u2014 single bucket.
         linkedResults[def.id] = { [`${(mn || 0).toFixed(2)}\u2013${(mn || 0).toFixed(2)}`]: counted };
         continue;
       }
+      // Finite all-equal field: widen the range and bin normally so the histogram
+      // shape matches the JS-embedded path (compile.ts) + the spatial branch \u2014
+      // the single-bucket collapse here used to diverge from JS for a uniform field.
+      if (mn === mx) mx = mn + 1;
       const range = mx - mn;
       const step = range / bins;
       const counts: number[] = new Array(bins).fill(0);
@@ -3406,6 +3518,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       height = msg.height;
       depth = msg.depth ?? 1;   // 3D Grid CA: absent → 1 (2D)
       cellAttrs = msg.attributes.filter(a => !a.isModelAttribute);
+      // Generic Agent Platform: the AGENT attribute set (separate id-space) +
+      // the agent-accessible cell attrs (the field channel). fieldSpecs mirrors
+      // the compiler's cellFieldAttrsOf so the _field_ args stay in ABI lockstep.
+      agentAttrs = msg.agentAttributes ?? [];
+      fieldSpecs = cellAttrs.filter(a => a.agentAccess === 'read' || a.agentAccess === 'readWrite');
       modelAttrsList = msg.attributes.filter(a => a.isModelAttribute);
       indicatorsList = msg.indicators || [];
       neighborhoods = msg.neighborhoods;
@@ -3468,6 +3585,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       initAgents();
       compileAgentFns(msg.agentBehaviourCode, msg.agentInitCode, msg.agentDivisionCode);
       instantiateAgentWasmIfNeeded();
+      // Generic Agent Platform: run the Agent Init Event ONCE on this fresh store
+      // (after the fns are compiled), so graph-authored seeding (Create Agent /
+      // Add Agent To World) lays down the initial population on first load too —
+      // not only on Reset. initAgents() above laid the seedCount baseline first.
+      // (The cell Init Event runs below, AFTER the compile target is resolved.)
+      if (agentsEnabled) runAgentInit();
       stopMessages = msg.stopMessages || [];
       webgpuStopCheckInterval = Math.max(1, Math.floor(msg.webgpuStopCheckInterval ?? 1));
       // Mutual exclusion safety net: a saved file or hand-edited JSON could
@@ -3498,7 +3621,29 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         destroyWebGPURuntime(webgpuRuntime);
         webgpuRuntime = null;
       }
-      writeDefaultColors();
+      // Cell Init Event runs ONCE per cell on first load too (not only on Reset),
+      // so a model whose initial state is procedurally generated (e.g. a seeded
+      // field, an orientation pattern) shows that state on load instead of a blank
+      // default grid. Placed AFTER the compile-target resolution above (useWasm /
+      // wasmInitFn / webgpuRuntime) so it dispatches the CORRECT target's init —
+      // calling it earlier could fire a stale WASM init left over from a previous
+      // model. initGrid() already applied the cell defaults, so the Init Event
+      // seeds on top of them. An embedded simulationState still wins:
+      // pendingSimStateRestore overwrites this after the first stepped message.
+      // (WebGPU init is async — stepReady is false here — so runInit takes the
+      // JS/WASM path; the WebGPU-ready handler uploads the seeded CPU attrs.)
+      const loadHadInit = initFn !== null || (useWasm && wasmInitFn !== null);
+      runInit();
+      // Recompute colors so the seeded state shows on load instead of the
+      // defaults. Run ONLY the Output Mapping colour pass (never a step — that
+      // would advance the generation on load) when the active viewer has one;
+      // otherwise the default-colour fallback. WebGPU defers to its ready handler
+      // (which uploads the seeded CPU attrs + dispatches its own colour pass).
+      if (loadHadInit && !useWebGPU && outputMappingFns.some(f => f.mappingId === activeViewer)) {
+        runColorPass();
+      } else {
+        writeDefaultColors();
+      }
       sendColors();
       break;
     }

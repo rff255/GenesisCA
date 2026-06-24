@@ -171,8 +171,8 @@ interface CompileCtx {
   /** Errors accumulated; non-empty means compile failed for this entry. */
   errors: string[];
   /** When emitting an outputMapping shader, this is the mappingId being
-   *  emitted. setColorViewer for OTHER mappings becomes a no-op (compile-time
-   *  skipped). When emitting the step shader, this is null and setColorViewer
+   *  emitted. setCellLooks for OTHER mappings becomes a no-op (compile-time
+   *  skipped). When emitting the step shader, this is null and setCellLooks
    *  guards on `control.activeViewer == viewerInt`. */
   currentMappingId: string | null;
   /** Toggle: write to attrsWrite (step) vs no writes (outputMapping). Used by
@@ -3576,7 +3576,7 @@ function analyzeAlwaysWritten(
       const attrId = node.data.config.attributeId as string;
       if (attrId) out.add(attrId);
     }
-    // Other flow nodes (setIndicator, updateIndicator, setColorViewer,
+    // Other flow nodes (setIndicator, updateIndicator, setCellLooks,
     // stopEvent, setNeighborhoodAttribute*, setNeighborAttributeByIndex*,
     // updateAttribute) don't guarantee a cell-attr slot is initialised by
     // setAttribute.

@@ -89,8 +89,8 @@ export interface WebGPULayout {
   /** Bytes for the colors buffer (RGBA8 = 4 per cell). */
   colorsBytes: number;
 
-  /** True when any `setCellGlyph` node exists in the graph. When false the
-   *  glyph regions are stub-sized (16 bytes) so the bind group still has
+  /** True when any `setCellLooks` node with useGlyph exists in the graph. When
+   *  false the glyph regions are stub-sized (16 bytes) so the bind group still has
    *  something to attach for the unconditional bindings 9 & 10, but no
    *  meaningful storage is reserved. */
   hasGlyphs: boolean;
