@@ -20,7 +20,7 @@ export function NeighborhoodPreview3D({ coords3d, includeCentral }: { coords3d: 
     if (!c) return;
     try {
       const r = new Gl3DRenderer(c);
-      r.setViz({ axes: true, grid: false, bounds: true, gizmo: true });
+      r.setViz({ axes: true, grid: false, bounds: true, gizmo: true, voxels: true, agents: true });
       rRef.current = r;
     } catch { rRef.current = null; }
     return () => { rRef.current?.dispose(); rRef.current = null; };

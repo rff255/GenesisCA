@@ -1082,9 +1082,11 @@ export function HelpView() {
             The on-canvas <strong>3D View</strong> panel adds
             toggleable <strong>Axes / Grid / Bounds / the corner Gizmo</strong> (the Axes start at
             the <code>(0,0,0)</code> origin corner and grow toward +column / +row / +depth),
-            <strong>Auto-orbit</strong> (+ speed), a
-            <strong>Clip plane</strong> (axis X/Y/Z or the camera view, slid to cut away the
-            front and see inside &mdash; the primary way to look into a dense volume), an
+            <strong>Auto-orbit</strong> (+ a speed slider that spans negative&rarr;positive, so the
+            camera can spin either way; 0 = stopped), a
+            <strong>Clip interval</strong> (axis X/Y/Z or the camera view, with <em>two</em> handles
+            &mdash; From and To &mdash; that cut from both sides, so you control exactly how thick a
+            slab of the volume stays visible; clips voxels, agent spheres <em>and</em> bonds), an
             <strong>Alpha blend</strong> toggle for translucent cells, a
             <strong>Background</strong> colour (off = transparent), and
             <strong>Reset view</strong>. The left panel's <strong>Grid Dimensions</strong> gains
@@ -1133,11 +1135,16 @@ export function HelpView() {
             <strong> Bond-Graph Agents</strong> add a second kind of cell that
             <strong> floats in continuous space</strong> &mdash; an off-lattice "agent"
             with an <code>(x, y)</code> position, a radius, and bonds to other agents.
-            Agents push each other apart (soft-sphere repulsion), can be joined by springs
+            By default agents move only by the forces <em>your rule graph</em> applies
+            (Apply Force / Set Velocity) &mdash; ideal for flocking, chemotaxis, or a
+            grid-of-agents. Tick <strong>Use bonding physics</strong> (Properties &rarr;
+            Bond-Graph Agents) to switch on the built-in center-based engine: agents then push
+            each other apart (soft-sphere repulsion), can be joined by springs
             (<strong>bonds</strong>), <strong>grow</strong> toward a target size, and
-            <strong> divide</strong> into a connected tissue. It's how you model
-            <strong> morphogenesis</strong> &mdash; tissue that grows into shape &mdash;
-            rather than a pattern on a fixed grid.
+            <strong> divide</strong> into a connected tissue &mdash; how you model
+            <strong> morphogenesis</strong> (tissue that grows into shape). With it off, none of
+            those automatic behaviours apply, so an agent model that has nothing to do with bonds
+            stays clean.
           </p>
           <p className={styles.p}>
             Agents are <strong>additive</strong>: a model keeps its grid and gains the agents
@@ -1323,20 +1330,28 @@ export function HelpView() {
               Reset (0 = seed by hand), the <strong>Default Radius</strong>, and the
               <strong> Seed Pattern</strong> (a compact centred blob for tissue, or scattered
               across the world for flocking / aggregation).</li>
-            <li><strong>Forces</strong> &mdash; the soft-sphere law: <strong>Repulsion</strong>
-              (volume exclusion), <strong>Adhesion</strong> (free-agent stickiness),
-              <strong> Interaction Range</strong>, <strong>Drag</strong>,
-              <strong> Time Step</strong> (auto-clamped for stability),
-              <strong> Growth Rate</strong>, plus the flocking knobs &mdash;
-              <strong> Momentum</strong> (velocity persistence: 0 = overdamped tissue, ~0.9 =
-              flocking inertia), <strong>Max Speed</strong>, <strong>Custom forces only</strong>
-              (skip the engine soft-sphere), and <strong>Neighbour Query Radius</strong>.</li>
-            <li><strong>Bonds</strong> &mdash; <strong>Auto-bond by distance</strong> (on/off),
-              <strong> Bond Stiffness</strong>, and the <strong>Form / Break Distances</strong>
-              (a hysteresis band so bonds don't flicker).</li>
+            <li><strong>Motion</strong> (always shown &mdash; it governs how <em>your</em> forces
+              integrate) &mdash; <strong>Momentum</strong> (velocity persistence: 0 = overdamped
+              tissue, ~0.9 = flocking inertia), <strong>Max Speed</strong>, <strong>Neighbour
+              Query Radius</strong> (sizes the spatial hash so Get Nearby Agents within it stays
+              fast), <strong>Time Step</strong> (auto-clamped for stability) and
+              <strong> Drag</strong>.</li>
+            <li><strong>Use bonding physics</strong> &mdash; the master toggle for the built-in
+              engine, <strong>off by default</strong> when you enable Agents. Turn it on to reveal:
+              <strong> Forces</strong> (the soft-sphere law: <strong>Repulsion</strong>,
+              <strong> Adhesion</strong>, <strong>Interaction Range</strong>, <strong>Growth
+              Rate</strong>) and <strong>Bonds</strong> (<strong>Auto-bond by distance</strong>,
+              <strong> Bond Stiffness</strong>, and the <strong>Form / Break Distances</strong> &mdash;
+              a hysteresis band so bonds don't flicker). With it off, none of those engine forces
+              run &mdash; agents move only by your Apply Force / Set Velocity.</li>
           </ul>
           <p className={styles.p}>
-            In the Simulator, the <strong>Agent Brush</strong> overlay (top-left) has modes
+            In the Simulator, the <strong>Agents</strong> panel (docked in the right side panel)
+            holds a <strong>Layers</strong> grid &mdash; independently <strong>Show</strong> (render)
+            and <strong>Simulate</strong> (step) the <em>CA grid</em> and the <em>agents</em>, so you
+            can freeze one layer and watch the other, or hide a layer to declutter (freezing agents
+            also stops their cell-field deposits) &mdash; and the <strong>Agent Brush</strong> with
+            modes
             <strong> Seed</strong> (paint a jittered disc of agents &mdash; set the
             <em> Radius</em>, <em>Density</em> and drag <em>Spacing</em>; the <em>Seed config</em>
             section sets the new agents' type + initial attribute values), <strong>Kill</strong>

@@ -7,7 +7,7 @@ import { IndicatorsPanelSection } from './IndicatorsPanelSection';
 import { useDetailSelection, type PanelContentProps } from '../ModelerDetailContext';
 import { useListReorder } from './useListReorder';
 import { NumberField } from '../vpl/widgets/InlineWidgets';
-import { cbNum } from '../../model/centerBased';
+import { cbNum, usesBondingPhysics } from '../../model/centerBased';
 import type { CenterBasedNumericKey } from '../../model/centerBased';
 import { isAgentGraphWasmSupported } from '../vpl/compiler/agentWasm/compile';
 import styles from './PanelContent.module.css';
@@ -400,6 +400,12 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
               change re-allocates → a worker reinit). */}
           {topo.agents && (() => {
             const cb = model.centerBased;
+            // "Use bonding physics" master toggle (req 10): when off, the engine
+            // applies NO built-in forces (soft-sphere / springs / growth / auto-bond)
+            // and the Forces + Bonds rows are hidden — agents move only by the
+            // graph's Apply Force / Set Velocity. Resolved with the customForcesOnly
+            // back-compat fallback so loaded files reflect their real behaviour.
+            const bonding = usesBondingPhysics(cb);
             // Live WASM-target support for the CURRENT agent graph (PR6b-1 covers a
             // minimal node subset; PR6b-2/3 widen it). When false, picking WASM is
             // honest but the engine falls back to JS (agentTargetOf clamps).
@@ -500,21 +506,37 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '8px 0 4px' }}>Seeding</div>
                 {Row('Seed Count', NF('seedCount', { min: 0, integer: true }), 'Agents laid down on Reset (0 = seed via the brush).')}
                 {Row('Default Radius', NF('defaultRadius', { min: 0.01, step: 0.1 }))}
-                <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '8px 0 4px' }}>Forces</div>
-                {Row('Repulsion μ', NF('repulsionStiffness', { min: 0, step: 0.1 }), 'Volume-exclusion stiffness.')}
-                {Row('Adhesion μ', NF('adhesionStiffness', { min: 0, step: 0.1 }), 'Free-agent stickiness (0 = cohesion via bonds only).')}
-                {Row('Interaction Range', NF('interactionRange', { min: 1, step: 0.1 }), '× contact distance — the force cutoff.')}
-                {Row('Drag η', NF('drag', { min: 0.01, step: 0.1 }))}
+                {/* Motion — the velocity integrator; relevant to EVERY agent model
+                    (a custom-force boids model lives entirely here), so always shown. */}
+                <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '8px 0 4px' }}>Motion</div>
+                {Row('Momentum', NF('momentum', { min: 0, max: 0.999, step: 0.05 }), '0 = overdamped (tissue); ~0.9 = flocking inertia.')}
+                {Row('Max Speed', NF('maxSpeed', { min: 0, step: 0.1 }), 'Per-step speed cap (0 = uncapped).')}
+                {Row('Neighbour Query Radius', NF('neighbourQueryRadius', { min: 1, step: 0.5 }), 'Get Nearby Agents radius the spatial-hash bin is sized to cover.')}
                 {Row('Time Step Δt', NF('timeStep', { min: 0.001, step: 0.05 }), 'Auto-clamped against the stability bound.')}
-                {Row('Growth Rate', NF('growthRate', { min: 0, step: 0.01 }), 'Radius units/step toward the target radius.')}
-                <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '8px 0 4px' }}>Bonds</div>
-                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem', marginBottom: 6 }}>
-                  <input type="checkbox" checked={!!cb?.autoBond} onChange={e => updateCenterBased({ autoBond: e.target.checked })} style={{ marginTop: 2 }} />
-                  <span><strong>Auto-bond by distance</strong><br /><span style={{ color: '#888', fontSize: '0.66rem' }}>Bond agents within the form distance; break past the break distance (hysteresis). The simplest path to a glued cluster.</span></span>
+                {Row('Drag η', NF('drag', { min: 0.01, step: 0.1 }), 'Overdamped drag (scales force → velocity).')}
+
+                {/* Use bonding physics master toggle (req 10). OFF = no engine
+                    forces (agents move only by graph forces); the Forces + Bonds
+                    rows below appear only when ON. */}
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem', margin: '12px 0 4px' }}>
+                  <input type="checkbox" checked={bonding} onChange={e => updateCenterBased({ useBondingPhysics: e.target.checked })} style={{ marginTop: 2 }} />
+                  <span><strong>Use bonding physics</strong><br /><span style={{ color: '#888', fontSize: '0.66rem' }}>Engine soft-sphere repulsion / adhesion + bond springs + growth + auto-bond. Off = agents move only by graph-authored Apply Force / Set Velocity (the &quot;agents that have nothing to do with bonds&quot; case).</span></span>
                 </label>
-                {Row('Bond Stiffness λ', NF('bondStiffness', { min: 0, step: 0.1 }))}
-                {Row('Form Distance', NF('formDistance', { min: 1, step: 0.05 }), '× contact (auto-bond within).')}
-                {Row('Break Distance', NF('breakDistance', { min: 1, step: 0.05 }), '× contact (> form — hysteresis).')}
+                {bonding && (<>
+                  <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '8px 0 4px' }}>Forces</div>
+                  {Row('Repulsion μ', NF('repulsionStiffness', { min: 0, step: 0.1 }), 'Volume-exclusion stiffness.')}
+                  {Row('Adhesion μ', NF('adhesionStiffness', { min: 0, step: 0.1 }), 'Free-agent stickiness (0 = cohesion via bonds only).')}
+                  {Row('Interaction Range', NF('interactionRange', { min: 1, step: 0.1 }), '× contact distance — the force cutoff.')}
+                  {Row('Growth Rate', NF('growthRate', { min: 0, step: 0.01 }), 'Radius units/step toward the target radius.')}
+                  <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '8px 0 4px' }}>Bonds</div>
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem', marginBottom: 6 }}>
+                    <input type="checkbox" checked={!!cb?.autoBond} onChange={e => updateCenterBased({ autoBond: e.target.checked })} style={{ marginTop: 2 }} />
+                    <span><strong>Auto-bond by distance</strong><br /><span style={{ color: '#888', fontSize: '0.66rem' }}>Bond agents within the form distance; break past the break distance (hysteresis). The simplest path to a glued cluster.</span></span>
+                  </label>
+                  {Row('Bond Stiffness λ', NF('bondStiffness', { min: 0, step: 0.1 }))}
+                  {Row('Form Distance', NF('formDistance', { min: 1, step: 0.05 }), '× contact (auto-bond within).')}
+                  {Row('Break Distance', NF('breakDistance', { min: 1, step: 0.05 }), '× contact (> form — hysteresis).')}
+                </>)}
               </div>
             );
           })()}

@@ -623,8 +623,21 @@ export interface CenterBasedConfig {
   maxSpeed?: number;
   /** When true, the engine's built-in soft-sphere repulsion/adhesion is OFF —
    *  ALL motion comes from the graph's Apply Force (pure custom-force models
-   *  like boids). Bond springs still apply. */
+   *  like boids). LEGACY: superseded by `useBondingPhysics` (the inverse master
+   *  toggle). Read only as the back-compat fallback in `usesBondingPhysics()`
+   *  when `useBondingPhysics` is absent — so old `.gcaproj` files load unchanged. */
   customForcesOnly?: boolean;
+  /** Master "use bonding physics" toggle (the inverse of `customForcesOnly`).
+   *  When ON, the full center-based engine runs: soft-sphere repulsion/adhesion +
+   *  bond springs + the growth ramp + auto-bond. When OFF, NONE of those engine
+   *  forces apply — agents move only by graph-authored Apply Force / Set Velocity
+   *  (+ explicit division/death/Form-Bond nodes), the "agents that have nothing to
+   *  do with bonds" case. DEFAULT OFF for a freshly-enabled Agents topology (so
+   *  enabling agents no longer silently turns on growth/repulsion/adhesion).
+   *  Resolved via `usesBondingPhysics(cfg) = useBondingPhysics ?? !customForcesOnly`
+   *  — when absent (legacy files) it falls back to the old `!customForcesOnly`
+   *  semantics, reproducing every existing model with NO migration. */
+  useBondingPhysics?: boolean;
   /** The radius (cell units) Get Nearby Agents queries are expected to use. It
    *  sizes the spatial-hash bin so a query within this radius is covered by the
    *  3×3 bin stencil (a larger value = larger bins = more candidates per bin). */

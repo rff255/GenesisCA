@@ -570,6 +570,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const [agentSeedDensity, setAgentSeedDensity] = useState<number>((saved.current.agentSeedDensity as number) ?? 0.05);
   const [agentSeedSpacing, setAgentSeedSpacing] = useState<number>((saved.current.agentSeedSpacing as number) ?? 6);
   const [agentSeedType, setAgentSeedType] = useState<number>((saved.current.agentSeedType as number) ?? 0);
+  // Layer toggles (req 1 + 7): independently SHOW (render) and SIMULATE (run the
+  // step) the CA grid + the agents. Show toggles are render-only (2D + 3D);
+  // Simulate toggles gate runStep / runAgentStep in the worker (setSimLayers).
+  // Persisted; refs for the draw() / worker hot paths. Default true → no change.
+  const [showCaGrid, setShowCaGrid] = useState<boolean>((saved.current.showCaGrid as boolean) ?? true);
+  const [showAgents, setShowAgents] = useState<boolean>((saved.current.showAgents as boolean) ?? true);
+  const [simulateCells, setSimulateCells] = useState<boolean>((saved.current.simulateCells as boolean) ?? true);
+  const [simulateAgents, setSimulateAgents] = useState<boolean>((saved.current.simulateAgents as boolean) ?? true);
+  const showCaGridRef = useRef(showCaGrid); showCaGridRef.current = showCaGrid;
+  const showAgentsRef = useRef(showAgents); showAgentsRef.current = showAgents;
+  const simulateCellsRef = useRef(simulateCells); simulateCellsRef.current = simulateCells;
+  const simulateAgentsRef = useRef(simulateAgents); simulateAgentsRef.current = simulateAgents;
   // PR3 — agent inspector: a single on-demand popover (one at a time).
   const [agentInspect, setAgentInspect] = useState<{ id: number; x: number; y: number } | null>(null);
   const [agentState, setAgentState] = useState<AgentStateResponse | null>(null);
@@ -605,6 +617,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
           infinityCanvas, indicatorVizModes, recordFormat, brushSectionH,
           agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentSeedType,
+          showCaGrid, showAgents, simulateCells, simulateAgents,
           indicatorHiddenCategories: Object.fromEntries(
             Object.entries(indicatorHiddenCategories)
               .filter(([, s]) => s.size > 0)
@@ -616,7 +629,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentSeedType, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentSeedType, showCaGrid, showAgents, simulateCells, simulateAgents, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -841,9 +854,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const gl3dRef = useRef<import('./render/gl3d').Gl3DRenderer | null>(null);
   // Z-up Blender-style orbit camera. Default 3/4 view looking down onto the XY plane.
   const cam3dRef = useRef<import('./render/gl3d').Camera3D>({ yaw: -0.9, pitch: 0.6, dist: 1.9, target: [0, 0, 0] });
-  const clip3dRef = useRef<import('./render/gl3d').ClipPlane3D>({ enabled: false, axis: 'z', value: 0 });
+  const clip3dRef = useRef<import('./render/gl3d').ClipPlane3D>({ enabled: false, axis: 'z', lo: 0, hi: 0 });
   const alpha3dRef = useRef(false);
-  const viz3dRef = useRef<import('./render/gl3d').Viz3D>({ axes: false, grid: false, bounds: true, gizmo: true });
+  // voxels/agents are driven from showCaGrid/showAgents below (the render-layer
+  // toggles); the panel only edits axes/grid/bounds/gizmo. draw() overrides the two.
+  const viz3dRef = useRef<import('./render/gl3d').Viz3D>({ axes: false, grid: false, bounds: true, gizmo: true, voxels: true, agents: true });
   // Interaction plane: LMB-brush ray-traces onto this slicing plane.
   const plane3dRef = useRef<{ axis: 'x' | 'y' | 'z'; pos: number }>({ axis: 'z', pos: 0 });
   const plane3dEnabledRef = useRef(false);
@@ -888,11 +903,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const hoverAgents3dRef = useRef<ReadonlyArray<{ x: number; y: number; z: number; radius: number }>>([]);
   const inspectAgents3dRef = useRef<ReadonlyArray<{ x: number; y: number; z: number; radius: number }>>([]);
   // 3D control UI state (mirrored into the refs the renderer reads).
-  const [clip3d, setClip3d] = useState<{ enabled: boolean; axis: 'x' | 'y' | 'z' | 'camera'; value: number }>(
-    { enabled: false, axis: 'z', value: 0 },
+  // Clip INTERVAL [lo, hi] (world coords) — two cuts, the slab between them visible.
+  const [clip3d, setClip3d] = useState<{ enabled: boolean; axis: 'x' | 'y' | 'z' | 'camera'; lo: number; hi: number }>(
+    { enabled: false, axis: 'z', lo: 0, hi: 0 },
   );
   const [alpha3d, setAlpha3d] = useState(false);
-  const [viz3d, setViz3d] = useState<import('./render/gl3d').Viz3D>({ axes: false, grid: false, bounds: true, gizmo: true });
+  const [viz3d, setViz3d] = useState<import('./render/gl3d').Viz3D>({ axes: false, grid: false, bounds: true, gizmo: true, voxels: true, agents: true });
   const [plane3d, setPlane3d] = useState<{ enabled: boolean; axis: 'x' | 'y' | 'z'; pos: number }>({ enabled: false, axis: 'z', pos: 0 });
   const [orbit3d, setOrbit3d] = useState<{ on: boolean; speed: number }>({ on: false, speed: 0.4 });
   // 3D canvas background. `enabled` false = transparent (page shows through);
@@ -1135,7 +1151,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       r.setGrid(w3, h3, d3);
       r.setAlphaBlend(alpha3dRef.current);
       r.setClipPlane(clip3dRef.current);
-      r.setViz(viz3dRef.current);
+      // Render-layer toggles (req 7): voxels/agents come from the show refs, not
+      // the panel's viz3d (which only edits axes/grid/bounds/gizmo). Gating the
+      // DRAW (in render()), not the upload below, keeps the GPU buffers current.
+      // Forced visible for a non-agent model (the toggles are global but only
+      // editable on an agent model — else a stale `false` would blank the grid).
+      r.setViz({ ...viz3dRef.current, voxels: !isAgentModelRef.current || showCaGridRef.current, agents: !isAgentModelRef.current || showAgentsRef.current });
       r.setBrushPlane(plane3dEnabledRef.current ? { axis: plane3dRef.current.axis, pos: plane3dRef.current.pos } : null);
       r.setHoverCells(plane3dEnabledRef.current ? hoverCells3dRef.current : EMPTY_HOVER_CELLS);
       r.setInspectCells(inspectHighlight3dRef.current);
@@ -1441,7 +1462,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
     }
 
-    if (blitSource) {
+    // Render-layer toggle (req 7): when the CA grid is hidden, skip the colour
+    // blit (+ glyphs + gridlines below), leaving the cleared canvas so the agents
+    // draw on a blank background. Forced visible for a non-agent model (the toggle
+    // is global but only editable on an agent model).
+    const showGrid2d = !isAgentModelRef.current || showCaGridRef.current;
+    if (showGrid2d && blitSource) {
       if (infinity) {
         // Snap each tile's left/top edges to integer pixels and derive width/height
         // from the difference with the NEXT tile's left/top. This guarantees that
@@ -1463,10 +1489,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
 
     // Glyph overlay (after colour blit, before gridlines + cursor).
-    drawGlyphOverlay();
+    if (showGrid2d) drawGlyphOverlay();
 
     // Draw gridlines when zoomed in enough (cells >= 4px)
-    if (showGridlinesRef.current && scale >= 4) {
+    if (showGrid2d && showGridlinesRef.current && scale >= 4) {
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
       ctx.lineWidth = 0.5;
       ctx.beginPath();
@@ -1502,8 +1528,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
 
     // Bond-Graph Agents — draw the agent circles on top of the grid + gridlines,
-    // below the brush cursor.
-    drawAgentsOverlay();
+    // below the brush cursor. Render-layer toggle (req 7): skip when agents hidden.
+    if (showAgentsRef.current) drawAgentsOverlay();
 
     // Draw the brush cursor as the exact cell-silhouette of the current stamp
     // (rect / circle / ring / line preview), stroked in 'difference' composite
@@ -2410,6 +2436,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // through to the readback path until attachCanvas arrives.
     worker.postMessage(initMsg);
     workerRef.current = worker;
+    // Re-publish the runtime layer-freeze toggles to the fresh worker (a reinit
+    // resets the worker's defaults to true; the live effect below doesn't re-fire
+    // on a worker swap). Forced true for a non-agent model (the toggles are global
+    // but only editable on an agent model). Cheap; default true → no-op.
+    const effSimCells = !isAgentModelRef.current || simulateCellsRef.current;
+    const effSimAgents = !isAgentModelRef.current || simulateAgentsRef.current;
+    if (!effSimCells || !effSimAgents) {
+      worker.postMessage({ type: 'setSimLayers', simulateCells: effSimCells, simulateAgents: effSimAgents });
+    }
     // Re-publish any open inspect-popup subscriptions to the fresh worker so
     // values keep streaming after a recompile / hard re-init.
     if (inspectCellIdxsRef.current.length > 0) {
@@ -3357,6 +3392,37 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
     draw();
   }, [bg3d, draw]);
+
+  // Layer SHOW toggles (req 7): repaint when render-layer visibility changes. The
+  // refs (showCaGridRef/showAgentsRef) are updated at declaration; draw() reads them
+  // (3D voxels/agents via viz override; 2D blit/overlay gating).
+  useEffect(() => { draw(); }, [showCaGrid, showAgents, draw]);
+  // Layer SIMULATE toggles (req 1): publish the freeze flags to the worker on
+  // change (a worker reinit re-publishes via initWorkerWithDimensions). The toggles
+  // are GLOBAL settings but only editable on an agent model's Layers panel — so for
+  // a NON-agent model they're forced true (`!isAgentModel || flag`), or a stale
+  // `false` from a prior agent model would silently freeze the grid with no UI to
+  // recover. Default true → no-op.
+  useEffect(() => {
+    workerRef.current?.postMessage({ type: 'setSimLayers', simulateCells: !isAgentModel || simulateCells, simulateAgents: !isAgentModel || simulateAgents });
+  }, [simulateCells, simulateAgents, isAgentModel]);
+  // Clip / brush-plane re-clamp on a simulator resize (req 2): when the live grid
+  // dims shrink, pull lo/hi/pos back into the new world extent so a stale handle
+  // can't point outside the volume (the slider maxes already track the live dims).
+  useEffect(() => {
+    const W = gridWidth.current || simWidth, H = gridHeight.current || simHeight, D = is3D ? (gridDepth.current || simDepth) : 1;
+    const ext = (ax: 'x' | 'y' | 'z' | 'camera') => ax === 'x' ? (W - 1) / 2 + 0.5 : ax === 'y' ? (H - 1) / 2 + 0.5 : ax === 'z' ? (D - 1) / 2 + 0.5 : Math.max(W, H, D) / 2 + 1;
+    setClip3d(c => {
+      const e = ext(c.axis);
+      const lo = Math.max(-e, Math.min(e, c.lo)), hi = Math.max(-e, Math.min(e, c.hi));
+      return (lo === c.lo && hi === c.hi) ? c : { ...c, lo, hi };
+    });
+    setPlane3d(p => {
+      const max = p.axis === 'x' ? W - 1 : p.axis === 'y' ? H - 1 : D - 1;
+      const pos = Math.max(0, Math.min(max, p.pos));
+      return pos === p.pos ? p : { ...p, pos };
+    });
+  }, [simWidth, simHeight, simDepth, is3D]);
 
   // 3D Grid CA: auto-orbit loop — spins the camera while enabled (and 3D + visible).
   useEffect(() => {
@@ -5790,79 +5856,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           {isAgentModel && agentsRef.current && <span title="Live agents">{'\u25CF'} {agentsRef.current.liveCount} agents</span>}
         </div>
 
-        {/* Bond-Graph Agents brush \u2014 the LMB action on the canvas. 'Paint Field'
-            falls through to the normal cell brush. Glue/Cut stage the first
-            agent, then bond/unbond to the second (RMB cancels). Seed/Kill carry
-            a radius/cluster; Move drags an agent; Bond auto-glues near pairs. */}
-        {isAgentModel && (
-          <div data-sim-overlay style={{ position: 'absolute', top: 44, left: 8, zIndex: 6, display: 'flex', flexDirection: 'column', gap: 4, background: 'var(--color-bg-panel)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: 6, fontSize: '0.66rem', maxWidth: 220 }}>
-            <span style={{ color: 'var(--color-text-muted)', fontWeight: 600, letterSpacing: '0.04em' }}>AGENT BRUSH</span>
-            <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', maxWidth: 210 }}>
-              {(['seed', 'kill', 'glue', 'cut', 'move', 'bond', 'paint'] as const).map(m => (
-                <button
-                  key={m}
-                  onClick={() => { setAgentBrushMode(m); agentGlueAnchorRef.current = -1; draw(); }}
-                  title={m === 'seed' ? 'Click/drag to seed a cluster of agents' : m === 'kill' ? 'Click/drag to remove agents within the radius' : m === 'glue' ? 'Click two agents to bond them' : m === 'cut' ? 'Click two bonded agents to unbond them' : m === 'move' ? 'Drag an agent to a new position (RMB cancels)' : m === 'bond' ? 'Drag over near agents to auto-bond them' : 'Click to paint the cell field (normal brush)'}
-                  style={{
-                    padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', textTransform: 'capitalize',
-                    border: '1px solid ' + (agentBrushMode === m ? 'var(--color-accent)' : 'var(--color-widget-border)'),
-                    background: agentBrushMode === m ? 'var(--color-accent-soft)' : 'transparent',
-                    color: agentBrushMode === m ? 'var(--color-accent)' : 'var(--color-text-muted)',
-                    fontWeight: 600, fontSize: '0.64rem',
-                  }}
-                >{m === 'paint' ? 'Paint Field' : m}</button>
-              ))}
-            </div>
-            {/* Radius / density / spacing \u2014 shown for the radius modes. */}
-            {(agentBrushMode === 'seed' || agentBrushMode === 'kill' || agentBrushMode === 'bond') && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Radius</span>
-                  <NumberField value={agentBrushRadius} onNumber={v => setAgentBrushRadius(v)} min={0} step={1} />
-                </label>
-                {agentBrushMode === 'seed' && (<>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Density</span>
-                    <NumberField value={agentSeedDensity} onNumber={v => setAgentSeedDensity(Math.max(0, v))} min={0} step={0.01} />
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Spacing</span>
-                    <NumberField value={agentSeedSpacing} onNumber={v => setAgentSeedSpacing(Math.max(0.5, v))} min={0.5} step={1} />
-                  </label>
-                </>)}
-              </div>
-            )}
-            {/* Seed config (Type + per-attribute initial values). */}
-            {agentBrushMode === 'seed' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                <button
-                  onClick={() => setAgentSeedConfigOpen(v => !v)}
-                  style={{ alignSelf: 'flex-start', padding: '2px 6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
-                  title="Type + initial attribute values for seeded agents"
-                >{agentSeedConfigOpen ? '\u25be' : '\u25b8'} Seed config</button>
-                {agentSeedConfigOpen && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <span style={{ width: 32, color: 'var(--color-text-muted)' }}>Type</span>
-                      <NumberField value={agentSeedType} onNumber={v => setAgentSeedType(Math.max(0, Math.round(v)))} min={0} step={1} integer />
-                    </label>
-                    <ManualBrushPanel
-                      cellAttributes={model.attributes.filter(a => !a.isModelAttribute && a.type !== 'color' && a.type !== 'lookupTable')}
-                      neighborhoods={model.neighborhoods}
-                      state={agentSeedAttrs}
-                      onChange={setAgentSeedAttrs}
-                      is3d={is3D}
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-            <button
-              onClick={() => workerRef.current?.postMessage({ type: 'clearAgents', activeViewer: activeViewerRef.current })}
-              style={{ padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
-            >Clear all agents</button>
-          </div>
-        )}
+        {/* Bond-Graph Agents brush + the Layers toggles now live DOCKED in the
+            right side panel (req 4) \u2014 see the "Agents" rightPanelSection below. */}
 
         {/* Bond-Graph Agents \u2014 agent inspector popover (on-demand getAgentState). */}
         {agentInspect && (
@@ -6096,13 +6091,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
         {/* 3D Grid CA: collapsible voxel-view controls. Shown only for 3D models. */}
         {is3D && (() => {
-          const W = model.properties.gridWidth, H = model.properties.gridHeight, D = model.properties.gridDepth ?? 1;
+          // Live grid dims (req 2): the simulator Resize button updates the live
+          // refs/state but NOT model.properties, so derive the slider maxes from the
+          // live source (mirroring the brush-size fields), not the stale model props.
+          const W = gridWidth.current || simWidth, H = gridHeight.current || simHeight, D = is3D ? (gridDepth.current || simDepth) : 1;
           const maxDim = Math.max(W, H, D);
-          const clipExt = clip3d.axis === 'x' ? (W - 1) / 2 + 0.5
-            : clip3d.axis === 'y' ? (H - 1) / 2 + 0.5
-            : clip3d.axis === 'z' ? (D - 1) / 2 + 0.5
+          const clipExtFor = (ax: 'x' | 'y' | 'z' | 'camera') => ax === 'x' ? (W - 1) / 2 + 0.5
+            : ax === 'y' ? (H - 1) / 2 + 0.5
+            : ax === 'z' ? (D - 1) / 2 + 0.5
             : maxDim / 2 + 1;  // camera axis
-            const planeMax = plane3d.axis === 'x' ? W - 1 : plane3d.axis === 'y' ? H - 1 : D - 1;
+          const clipExt = clipExtFor(clip3d.axis);
+          const planeMax = plane3d.axis === 'x' ? W - 1 : plane3d.axis === 'y' ? H - 1 : D - 1;
           const row: CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' };
           const grid2: CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 };
           const tbtn = (active: boolean) => `${styles.panelToggle} ${active ? styles.panelToggleActive : ''}`;
@@ -6129,21 +6128,24 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                   {vizBtn('gizmo', 'Gizmo', 'Toggle the corner orientation widget')}
                 </div>
 
-                {/* Auto-orbit */}
-                <label style={row} title="Slowly spin the camera around the volume">
+                {/* Auto-orbit — speed spans negative→positive so the camera can
+                    spin either way (req 3); 0 = stopped. */}
+                <label style={row} title="Slowly spin the camera around the volume (drag left of centre to reverse)">
                   <input type="checkbox" checked={orbit3d.on} onChange={e => setOrbit3d(o => ({ ...o, on: e.target.checked }))} />
                   Auto-orbit
                   {orbit3d.on && (
-                    <input type="range" min={0.05} max={2} step={0.05} value={orbit3d.speed} style={{ flex: 1 }}
-                      title="Orbit speed (rad/s)" onChange={e => setOrbit3d(o => ({ ...o, speed: Number(e.target.value) }))} />
+                    <input type="range" min={-2} max={2} step={0.05} value={orbit3d.speed} style={{ flex: 1 }}
+                      title="Orbit speed (rad/s; negative = reverse)" onChange={e => setOrbit3d(o => ({ ...o, speed: Number(e.target.value) }))} />
                   )}
                 </label>
 
-                {/* Clip / slice plane */}
+                {/* Clip interval (slab) — two cuts; the band [From, To] stays visible (req 6). */}
                 <label style={row}>
                   <input type="checkbox" checked={clip3d.enabled}
-                    onChange={e => setClip3d(c => ({ ...c, enabled: e.target.checked, value: e.target.checked ? 0 : c.value }))} />
-                  Clip plane (see inside)
+                    onChange={e => setClip3d(c => e.target.checked
+                      ? { ...c, enabled: true, lo: -clipExtFor(c.axis), hi: 0 }
+                      : { ...c, enabled: false })} />
+                  Clip interval (see inside)
                 </label>
                 {clip3d.enabled && (
                   <>
@@ -6151,12 +6153,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                       {(['x', 'y', 'z', 'camera'] as const).map(ax => (
                         <button key={ax} className={tbtn(clip3d.axis === ax)}
                           title={ax === 'camera' ? 'Cut along the camera view axis' : `Cut along ${ax.toUpperCase()}`}
-                          onClick={() => setClip3d(c => ({ ...c, axis: ax, value: 0 }))}>{ax === 'camera' ? 'View' : ax.toUpperCase()}</button>
+                          onClick={() => setClip3d(c => ({ ...c, axis: ax, lo: -clipExtFor(ax), hi: 0 }))}>{ax === 'camera' ? 'View' : ax.toUpperCase()}</button>
                       ))}
                     </div>
-                    <input type="range" min={-clipExt} max={clipExt} step={0.5} value={clip3d.value}
-                      onChange={e => setClip3d(c => ({ ...c, value: Number(e.target.value) }))}
-                      style={{ width: '100%' }} title="Slice position" />
+                    <div style={{ fontSize: '0.6rem', color: '#888' }}>From</div>
+                    <input type="range" min={-clipExt} max={clipExt} step={0.5} value={clip3d.lo}
+                      onChange={e => setClip3d(c => { const lo = Number(e.target.value); return { ...c, lo, hi: Math.max(lo, c.hi) }; })}
+                      style={{ width: '100%' }} title="Slab near bound" />
+                    <div style={{ fontSize: '0.6rem', color: '#888' }}>To</div>
+                    <input type="range" min={-clipExt} max={clipExt} step={0.5} value={clip3d.hi}
+                      onChange={e => setClip3d(c => { const hi = Number(e.target.value); return { ...c, hi, lo: Math.min(hi, c.lo) }; })}
+                      style={{ width: '100%' }} title="Slab far bound" />
                   </>
                 )}
 
@@ -6459,6 +6466,107 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 onChangeChartOverrides={changeIndicatorChartOverrides}
                 categoryOrders={indicatorCategoryOrders}
               />
+              </div>
+            </div>
+          )}
+
+          {/* Agents Section (req 4 + 1 + 7): the docked agent brush + the Layers
+              show/simulate toggles. Replaces the old floating canvas overlay. */}
+          {isAgentModel && (
+            <div className={styles.rightPanelSection}>
+              <div className={styles.panelHeader}>
+                <span className={styles.panelTitle}>Agents</span>
+              </div>
+              <div className={styles.rightPanelSectionBody} style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 380, overflowY: 'auto' }}>
+                {/* Layers — independently SHOW (render) and SIMULATE (run the step)
+                    the CA grid + the agents. Freezing agents also stops their cell
+                    deposit (it lives inside the agent step). */}
+                <div>
+                  <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Layers</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr', gap: '4px 8px', alignItems: 'center', fontSize: '0.68rem' }}>
+                    <span />
+                    <span style={{ color: 'var(--color-text-muted)', textAlign: 'center', fontSize: '0.6rem' }}>Show</span>
+                    <span style={{ color: 'var(--color-text-muted)', textAlign: 'center', fontSize: '0.6rem' }}>Simulate</span>
+                    <span>CA grid</span>
+                    <span style={{ textAlign: 'center' }}><input type="checkbox" checked={showCaGrid} onChange={e => setShowCaGrid(e.target.checked)} title="Render the CA grid" /></span>
+                    <span style={{ textAlign: 'center' }}><input type="checkbox" checked={simulateCells} onChange={e => setSimulateCells(e.target.checked)} title="Run the cell step (freeze the grid when off)" /></span>
+                    <span>Agents</span>
+                    <span style={{ textAlign: 'center' }}><input type="checkbox" checked={showAgents} onChange={e => setShowAgents(e.target.checked)} title="Render the agents + bonds" /></span>
+                    <span style={{ textAlign: 'center' }}><input type="checkbox" checked={simulateAgents} onChange={e => setSimulateAgents(e.target.checked)} title="Run the agent step (freeze agents — and their cell deposits — when off)" /></span>
+                  </div>
+                </div>
+
+                {/* Brush — the LMB action on the canvas. 'Paint Field' falls through
+                    to the normal cell brush; Glue/Cut stage the first agent then
+                    bond/unbond to the second (RMB cancels); Seed/Kill carry a
+                    radius/cluster; Move drags an agent; Bond auto-glues near pairs. */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.66rem' }}>
+                  <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Brush</div>
+                  <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                    {(['seed', 'kill', 'glue', 'cut', 'move', 'bond', 'paint'] as const).map(m => (
+                      <button
+                        key={m}
+                        onClick={() => { setAgentBrushMode(m); agentGlueAnchorRef.current = -1; draw(); }}
+                        title={m === 'seed' ? 'Click/drag to seed a cluster of agents' : m === 'kill' ? 'Click/drag to remove agents within the radius' : m === 'glue' ? 'Click two agents to bond them' : m === 'cut' ? 'Click two bonded agents to unbond them' : m === 'move' ? 'Drag an agent to a new position (RMB cancels)' : m === 'bond' ? 'Drag over near agents to auto-bond them' : 'Click to paint the cell field (normal brush)'}
+                        style={{
+                          padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', textTransform: 'capitalize',
+                          border: '1px solid ' + (agentBrushMode === m ? 'var(--color-accent)' : 'var(--color-widget-border)'),
+                          background: agentBrushMode === m ? 'var(--color-accent-soft)' : 'transparent',
+                          color: agentBrushMode === m ? 'var(--color-accent)' : 'var(--color-text-muted)',
+                          fontWeight: 600, fontSize: '0.64rem',
+                        }}
+                      >{m === 'paint' ? 'Paint Field' : m}</button>
+                    ))}
+                  </div>
+                  {/* Radius / density / spacing — shown for the radius modes. */}
+                  {(agentBrushMode === 'seed' || agentBrushMode === 'kill' || agentBrushMode === 'bond') && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Radius</span>
+                        <NumberField value={agentBrushRadius} onNumber={v => setAgentBrushRadius(v)} min={0} step={1} />
+                      </label>
+                      {agentBrushMode === 'seed' && (<>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Density</span>
+                          <NumberField value={agentSeedDensity} onNumber={v => setAgentSeedDensity(Math.max(0, v))} min={0} step={0.01} />
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Spacing</span>
+                          <NumberField value={agentSeedSpacing} onNumber={v => setAgentSeedSpacing(Math.max(0.5, v))} min={0.5} step={1} />
+                        </label>
+                      </>)}
+                    </div>
+                  )}
+                  {/* Seed config (Type + per-attribute initial values). */}
+                  {agentBrushMode === 'seed' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      <button
+                        onClick={() => setAgentSeedConfigOpen(v => !v)}
+                        style={{ alignSelf: 'flex-start', padding: '2px 6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
+                        title="Type + initial attribute values for seeded agents"
+                      >{agentSeedConfigOpen ? '▾' : '▸'} Seed config</button>
+                      {agentSeedConfigOpen && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <span style={{ width: 32, color: 'var(--color-text-muted)' }}>Type</span>
+                            <NumberField value={agentSeedType} onNumber={v => setAgentSeedType(Math.max(0, Math.round(v)))} min={0} step={1} integer />
+                          </label>
+                          <ManualBrushPanel
+                            cellAttributes={model.attributes.filter(a => !a.isModelAttribute && a.type !== 'color' && a.type !== 'lookupTable')}
+                            neighborhoods={model.neighborhoods}
+                            state={agentSeedAttrs}
+                            onChange={setAgentSeedAttrs}
+                            is3d={is3D}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <button
+                    onClick={() => workerRef.current?.postMessage({ type: 'clearAgents', activeViewer: activeViewerRef.current })}
+                    style={{ alignSelf: 'flex-start', padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
+                  >Clear all agents</button>
+                </div>
               </div>
             </div>
           )}
