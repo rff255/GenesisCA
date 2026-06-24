@@ -24,7 +24,7 @@ import { decodeReductions, gpuHandledIds, gpuHandledAttrIds } from './webgpuRedu
 import { encodeAttrValue } from '../../model/attrValueEncoding';
 import { subAttrInfo, parentValueToInt } from '../../modeler/vpl/compiler/subAttribute';
 import type { Attribute, CenterBasedConfig } from '../../model/types';
-import { cbNum } from '../../model/centerBased';
+import { cbNum, usesBondingPhysics } from '../../model/centerBased';
 import {
   createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot, freeStagedSlot,
   snapshotAgentsForRender, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
@@ -380,8 +380,13 @@ interface SetAgentWasmBackedMsg { type: '__setAgentWasmBacked'; wasmBacked: bool
 interface FormBondMsg { type: 'formBond'; a: number; b: number; activeViewer: string }
 /** Manual cut: break the bond between two agents (the cut brush). */
 interface BreakBondMsg { type: 'breakBond'; a: number; b: number; activeViewer: string }
+/** Runtime per-layer "simulate" toggles (the simulator Layers panel). Gates the
+ *  cell step (`runStep`/`runStepWebGPU`) and/or the agent step (`runAgentStep`) in
+ *  the generation loop WITHOUT a recompile, so the user can freeze either layer and
+ *  watch the other evolve. Both default true → byte-identical to no message. */
+interface SetSimLayersMsg { type: 'setSimLayers'; simulateCells: boolean; simulateAgents: boolean }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -434,6 +439,11 @@ let orderArray: Int32Array | null = null;
 // --- Bond-Graph Agents (co-resident agent engine; JS-only v1) ---
 let agentStore: AgentStore | null = null;
 let agentsEnabled = false;
+/** Runtime per-layer "simulate" toggles (the simulator Layers panel; setSimLayers
+ *  message). Default true → the generation loop runs both the cell step and the
+ *  agent step exactly as before. The user can freeze either layer mid-run. */
+let simulateCells = true;
+let simulateAgents = true;
 /** PR5 (C-D1): true when the agent graph touches the cell field. Gates the
  *  WebGPU-grid field bridge (CPU↔GPU attrs readback/upload around runAgentStep).
  *  A no-field model leaves it false → 0 per-step readbacks. */
@@ -858,14 +868,22 @@ function swapPositions(s: AgentStore, is3d: boolean): void {
 
 /** One agent generation: density reductions → compiled behaviour → engine force
  *  integration (soft-sphere repulsion + bond springs, overdamped Euler with a
- *  synchronous position double-buffer) → world-bounds wrap/clamp → age. The
- *  structural phase (division / growth / death) lands in Phase C. v1 uses the
- *  literature-sanctioned all-pairs O(N²) force loop (the JS/Debug-Reference
- *  first build); a uniform spatial hash is the Phase F performance path. */
+ *  synchronous position double-buffer) → world-bounds wrap/clamp → age, then the
+ *  structural phase (division / growth / death). Neighbour gathering is O(N) via a
+ *  uniform CSR spatial hash (buildSpatialHash, built once below and reused by the
+ *  force pass + Get Nearby Agents); the all-pairs loop is only a fallback for a
+ *  world too small to tile (<3 bins/axis). */
 function runAgentStep(): void {
   const s = agentStore;
   if (!s) return;
   const cfg = centerBasedConfig;
+  // "Use bonding physics" master toggle (req 10): when OFF, the engine applies NO
+  // built-in forces — no soft-sphere repulsion/adhesion, no bond springs, no growth
+  // ramp, no auto-bond — so agents move only by graph-authored Apply Force / Set
+  // Velocity. Resolved with the customForcesOnly back-compat fallback so legacy
+  // files are byte-identical (their bonding-physics models keep all four; their
+  // custom-force models never used springs/growth/auto-bond anyway).
+  const bonding = usesBondingPhysics(cfg);
   const muR = cbNum(cfg, 'repulsionStiffness');
   const muA = cbNum(cfg, 'adhesionStiffness');
   const range = cbNum(cfg, 'interactionRange');
@@ -875,13 +893,16 @@ function runAgentStep(): void {
   const halfW = W / 2, halfH = H / 2;
   const is3d = s.worldDepth > 1, D = s.worldDepth, halfD = D / 2;
   const dt = s.dt;
-  const growthRate = Math.max(0, cbNum(cfg, 'growthRate'));
+  // Growth ramps radius→targetRadius only under bonding physics (req 10). A rate of
+  // 0 makes the ramp a no-op (`cur + sign*0 === cur` for tr≠cur), so this freezes
+  // growth without touching the ramp blocks below.
+  const growthRate = bonding ? Math.max(0, cbNum(cfg, 'growthRate')) : 0;
   const hw = s.highWater;
   const x = s.x, y = s.y, z = s.z, rad = s.radius, alive = s.alive;
   const maxBonds = s.maxBonds;
   const momentum = Math.max(0, Math.min(0.999, cbNum(cfg, 'momentum')));
   const maxSpeed = Math.max(0, cbNum(cfg, 'maxSpeed'));
-  const engineForces = !cfg?.customForcesOnly;
+  const engineForces = bonding;
 
   // Reset the per-step force accumulator (Apply Force adds into it during
   // behaviour) BEFORE behaviour runs. forceZ is a memset of an always-zero-in-2D
@@ -1054,8 +1075,9 @@ function runAgentStep(): void {
       s.density[i] = dens;
 
       // --- bond springs λ(l−L)·r̂ over the 3-vector (dangling-bond epoch ABI) ---
+      // Gated on bonding physics (req 10): with it off, formed bonds carry no force.
       const bc = s.bondCount[i]!;
-      if (bc > 0) {
+      if (bonding && bc > 0) {
         const base = i * maxBonds;
         for (let bk = 0; bk < bc; bk++) {
           const p = s.bondPartner[base + bk]!;
@@ -1161,9 +1183,9 @@ function runAgentStep(): void {
 
       // --- bond springs λ(l−L)·r̂ (no-op until bonds exist). The partnerEpoch
       // check is the dangling-bond ABI — a recycled slot's stale bond reads
-      // epoch-mismatch and is skipped. ---
+      // epoch-mismatch and is skipped. Gated on bonding physics (req 10). ---
       const bc = s.bondCount[i]!;
-      if (bc > 0) {
+      if (bonding && bc > 0) {
         const base = i * maxBonds;
         for (let bk = 0; bk < bc; bk++) {
           const p = s.bondPartner[base + bk]!;
@@ -1279,8 +1301,9 @@ function runAgentStructuralPhase(): void {
 
   // 2. Auto-bond by distance (opt-in, hysteresis): form a bond between any two
   //    unbonded agents within formDistance×contact; break bonds stretched past
-  //    breakDistance×contact. Uses the spatial hash → O(N).
-  if (cfg?.autoBond) {
+  //    breakDistance×contact. Uses the spatial hash → O(N). Gated on bonding
+  //    physics (req 10) as well as its own autoBond flag.
+  if (usesBondingPhysics(cfg) && cfg?.autoBond) {
     const fMul = cbNum(cfg, 'formDistance');
     const bMul = cbNum(cfg, 'breakDistance');
     // form pass — scan candidate pairs via the hash
@@ -3695,7 +3718,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             // then up every generation). Field-heavy 3D-agent models pay a D×
             // per-step residency tax on WebGPU — prefer JS/WASM agents there, or a
             // shallow depth, until a same-device zero-copy field lands (Phase F).
-            if (agentStore && webgpuRuntime) {
+            if (agentStore && simulateAgents && webgpuRuntime) {
               if (agentUsesField && gpuOwnsAttrs) {
                 await ensureCpuAttrsFresh();        // GPU→CPU; flips gpuOwnsAttrs=false
               }
@@ -3705,7 +3728,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
                 gpuOwnsAttrs = false;
               }
             }
-            runStepWebGPU();
+            if (simulateCells) runStepWebGPU();      // Layers panel: freeze the cell step
             const isLast = i === msg.count - 1;
             const shouldCheck = stopMessages.length > 0 && (k === 1 || isLast || (i % k) === (k - 1));
             if (shouldCheck) {
@@ -3749,8 +3772,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         //  w.set(r) copy carries it; a diffusion rule spreads it). So the agent
         //  step runs BEFORE the cell step (Decision D-FIELD: the field IS the
         //  lattice CA, only the scatter/gather bridge is new).
-        if (agentStore) runAgentStep();
-        if (stepFn) runStep();
+        // Layers panel (req 1): freeze either layer at runtime. Freezing agents
+        // also stops their cell-field deposit (it lives inside runAgentStep).
+        if (agentStore && simulateAgents) runAgentStep();
+        if (stepFn && simulateCells) runStep();
         const rawStop = stopFlag[0] ?? 0;
         if (rawStop !== 0) {
           const idx = rawStop - 1;
@@ -4153,6 +4178,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
 
     case 'setRecording': {
       recording = !!msg.enabled;
+      break;
+    }
+
+    case 'setSimLayers': {
+      // Runtime per-layer freeze (Layers panel). Takes effect on the next step
+      // batch; both default true so a never-sent message keeps current behaviour.
+      simulateCells = !!msg.simulateCells;
+      simulateAgents = !!msg.simulateAgents;
       break;
     }
 

@@ -39,7 +39,12 @@ export const CENTER_BASED_DEFAULTS = {
 
 export type CenterBasedNumericKey = keyof typeof CENTER_BASED_DEFAULTS;
 
-/** A fresh default config (used when the user enables the Agents topology). */
+/** A fresh default config (used when the user enables the Agents topology).
+ *  `useBondingPhysics: false` is the deliberate NEW default — enabling agents no
+ *  longer silently turns on the engine soft-sphere repulsion/adhesion + growth +
+ *  auto-bond; the user opts in via the "Use bonding physics" toggle. (Legacy files
+ *  that lack the field resolve through `usesBondingPhysics`'s `!customForcesOnly`
+ *  fallback, so their behaviour is preserved with no migration.) */
 export function defaultCenterBasedConfig(): CenterBasedConfig {
   return {
     enabled: true,
@@ -47,7 +52,20 @@ export function defaultCenterBasedConfig(): CenterBasedConfig {
     maxBonds: CENTER_BASED_DEFAULTS.maxBonds,
     worldWidth: CENTER_BASED_DEFAULTS.worldWidth,
     worldHeight: CENTER_BASED_DEFAULTS.worldHeight,
+    useBondingPhysics: false,
   };
+}
+
+/** Resolve the "use bonding physics" master toggle. When true, the engine runs the
+ *  full center-based soft-sphere + bond springs + growth ramp + auto-bond; when
+ *  false, agents move ONLY by graph-authored forces (the custom-force / boids case).
+ *  The `?? !customForcesOnly` fallback is the back-compat bridge: a legacy config
+ *  that predates `useBondingPhysics` resolves to the old `engineForces =
+ *  !customForcesOnly` semantics, so every existing `.gcaproj` keeps its behaviour
+ *  with NO migration (absent both ⇒ `!undefined` ⇒ true ⇒ engine physics on, as
+ *  before). The worker reads this in `runAgentStep` / `runAgentStructuralPhase`. */
+export function usesBondingPhysics(cfg: CenterBasedConfig | undefined | null): boolean {
+  return cfg?.useBondingPhysics ?? !cfg?.customForcesOnly;
 }
 
 /** Resolve a numeric config field to its value or the engine default. */

@@ -114,11 +114,15 @@ function mat4Mul(a: Mat4, b: Mat4): Mat4 {
 // is the orbit pivot (moved by screen-space pan); `dist` is a multiple of the
 // largest grid dimension.
 export interface Camera3D { yaw: number; pitch: number; dist: number; target: [number, number, number]; }
-// Clip/slice plane. `axis` 'x'|'y'|'z' cuts along a grid axis; 'camera' cuts along
-// the current view direction (peel toward the viewer).
-export interface ClipPlane3D { enabled: boolean; axis: 'x' | 'y' | 'z' | 'camera'; value: number; }
-/** Toggleable scene overlays. */
-export interface Viz3D { axes: boolean; grid: boolean; bounds: boolean; gizmo: boolean; }
+// Clip/slice INTERVAL (slab). `axis` 'x'|'y'|'z' cuts along a grid axis; 'camera'
+// cuts along the current view direction (peel toward the viewer). A fragment at
+// world-coord `w` along the axis is kept iff `lo <= w <= hi` — two cuts (one from
+// each side), so the user clips from both directions and the gap = visible
+// thickness. `lo`/`hi` are in the SAME world space as the cube/sphere centres.
+export interface ClipPlane3D { enabled: boolean; axis: 'x' | 'y' | 'z' | 'camera'; lo: number; hi: number; }
+/** Toggleable scene overlays + render-layer visibility. `voxels`/`agents` gate the
+ *  CA-grid voxel pass and the agent (bond + sphere) pass in render(). */
+export interface Viz3D { axes: boolean; grid: boolean; bounds: boolean; gizmo: boolean; voxels: boolean; agents: boolean; }
 
 /** Bond-Graph Agents — the subset of the per-`stepped` render snapshot the 3D
  *  renderer needs. Positions are in continuous WORLD (cell) coordinates. `z` is a
@@ -214,13 +218,14 @@ in vec3 vNormal;
 in vec3 vWorld;
 uniform int uClipEnabled;   // 0/1
 uniform int uClipAxis;      // 0=x 1=y 2=z 3=camera-view-axis
-uniform float uClipValue;   // cut position (cells beyond are hidden)
+uniform float uClipLo;      // slab near bound (cells outside [lo,hi] are hidden)
+uniform float uClipHi;      // slab far bound
 uniform vec3 uClipForward;  // camera forward (for axis 3)
 out vec4 outColor;
 void main() {
   if (uClipEnabled == 1) {
     float w = uClipAxis == 0 ? vWorld.x : uClipAxis == 1 ? vWorld.y : uClipAxis == 2 ? vWorld.z : dot(vWorld, uClipForward);
-    if (w > uClipValue) { discard; }
+    if (w < uClipLo || w > uClipHi) { discard; }
   }
   // Flat directional shade by face normal so the cubes read as solid volume.
   vec3 L = normalize(vec3(0.4, 0.8, 0.6));
@@ -235,13 +240,14 @@ flat in float vPickIdx;
 in vec3 vWorldP;
 uniform int uClipEnabled;
 uniform int uClipAxis;
-uniform float uClipValue;
+uniform float uClipLo;
+uniform float uClipHi;
 uniform vec3 uClipForward;
 out vec4 outColor;
 void main() {
   if (uClipEnabled == 1) {
     float w = uClipAxis == 0 ? vWorldP.x : uClipAxis == 1 ? vWorldP.y : uClipAxis == 2 ? vWorldP.z : dot(vWorldP, uClipForward);
-    if (w > uClipValue) { discard; }
+    if (w < uClipLo || w > uClipHi) { discard; }
   }
   float idx = vPickIdx;
   float r = mod(idx, 256.0);
@@ -268,7 +274,10 @@ void main() {
   gl_Position = uMVP * vec4(aPos * uCubeScale + centre, 1.0);
 }`;
 
-// Unlit coloured-line program for the axes / grid / bounds overlays + the gizmo.
+// Unlit coloured-line program for the axes / grid / bounds overlays + the gizmo +
+// the agent bonds. Carries the vertex's world position so the BOND pass can apply
+// the SAME clip interval as the voxels/spheres (uClipEnabled is 0 for every other
+// overlay, which is drawn in world OR gizmo-NDC space — see drawLines).
 const LINE_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec3 aPos;
@@ -276,11 +285,25 @@ layout(location=1) in vec3 aColor;
 uniform mat4 uMVP;
 uniform float uPointSize;   // only affects gl.POINTS draws; ignored for LINES
 out vec3 vCol;
-void main(){ vCol = aColor; gl_PointSize = uPointSize; gl_Position = uMVP * vec4(aPos, 1.0); }`;
+out vec3 vWorldL;           // world pos (for the optional bond clip)
+void main(){ vCol = aColor; vWorldL = aPos; gl_PointSize = uPointSize; gl_Position = uMVP * vec4(aPos, 1.0); }`;
 const LINE_FS = `#version 300 es
 precision highp float;
-in vec3 vCol; out vec4 o;
-void main(){ o = vec4(vCol, 1.0); }`;
+in vec3 vCol;
+in vec3 vWorldL;
+uniform int uClipEnabled;   // 0 for every overlay except the bond pass
+uniform int uClipAxis;
+uniform float uClipLo;
+uniform float uClipHi;
+uniform vec3 uClipForward;
+out vec4 o;
+void main(){
+  if (uClipEnabled == 1) {
+    float w = uClipAxis == 0 ? vWorldL.x : uClipAxis == 1 ? vWorldL.y : uClipAxis == 2 ? vWorldL.z : dot(vWorldL, uClipForward);
+    if (w < uClipLo || w > uClipHi) { discard; }
+  }
+  o = vec4(vCol, 1.0);
+}`;
 
 // ---------------------------------------------------------------------------
 // Bond-Graph Agents — sphere impostors (PR5). Agents have CONTINUOUS world
@@ -331,7 +354,8 @@ uniform vec3 uCamRight;
 uniform vec3 uCamUp;
 uniform int uClipEnabled;
 uniform int uClipAxis;
-uniform float uClipValue;
+uniform float uClipLo;
+uniform float uClipHi;
 uniform vec3 uClipForward;
 out vec4 outColor;
 void main() {
@@ -341,10 +365,10 @@ void main() {
   // Analytic surface normal + the surface world point (centre + radius·n).
   vec3 n = normalize(uCamRight * vUV.x + uCamUp * vUV.y - uCamForward * zc);
   vec3 surf = vCentre + n * vRadius;
-  // Clip the surface point with the SAME test the voxel FS uses.
+  // Clip the surface point with the SAME interval test the voxel FS uses.
   if (uClipEnabled == 1) {
     float w = uClipAxis == 0 ? surf.x : uClipAxis == 1 ? surf.y : uClipAxis == 2 ? surf.z : dot(surf, uClipForward);
-    if (w > uClipValue) { discard; }
+    if (w < uClipLo || w > uClipHi) { discard; }
   }
   // Re-project the surface point so the impostor depth-interleaves with cubes.
   vec4 clip = uMVP * vec4(surf, 1.0);
@@ -388,6 +412,11 @@ uniform mat4 uMVP;
 uniform vec3 uCamForward;
 uniform vec3 uCamRight;
 uniform vec3 uCamUp;
+uniform int uClipEnabled;
+uniform int uClipAxis;
+uniform float uClipLo;
+uniform float uClipHi;
+uniform vec3 uClipForward;
 out vec4 outColor;
 void main() {
   float r2 = dot(vUV, vUV);
@@ -395,6 +424,11 @@ void main() {
   float zc = sqrt(1.0 - r2);
   vec3 n = normalize(uCamRight * vUV.x + uCamUp * vUV.y - uCamForward * zc);
   vec3 surf = vCentre + n * vRadius;
+  // Clip-aware picking: a clipped agent must not be pickable (matches SPHERE_FS).
+  if (uClipEnabled == 1) {
+    float w = uClipAxis == 0 ? surf.x : uClipAxis == 1 ? surf.y : uClipAxis == 2 ? surf.z : dot(surf, uClipForward);
+    if (w < uClipLo || w > uClipHi) { discard; }
+  }
   vec4 clip = uMVP * vec4(surf, 1.0);
   gl_FragDepth = (clip.z / clip.w) * 0.5 + 0.5;
   float idx = vPickId;
@@ -429,7 +463,7 @@ export class Gl3DRenderer {
   private instData: Float32Array = new Float32Array(0);
   private W = 1; private H = 1; private D = 1;
   private alphaBlend = false;
-  private clip: ClipPlane3D = { enabled: false, axis: 'z', value: 0 };
+  private clip: ClipPlane3D = { enabled: false, axis: 'z', lo: 0, hi: 0 };
   private mvp: Mat4 = mat4Identity();
   private camForward: [number, number, number] = [0, 0, -1];
   private camDir: [number, number, number] = [0, 0, 1];  // target → eye (for the gizmo)
@@ -437,7 +471,7 @@ export class Gl3DRenderer {
   // billboards face the camera (a stale basis points the impostors wrong).
   private camRight: [number, number, number] = [1, 0, 0];
   private camUp: [number, number, number] = [0, 1, 0];
-  private viz: Viz3D = { axes: false, grid: false, bounds: false, gizmo: true };
+  private viz: Viz3D = { axes: false, grid: false, bounds: false, gizmo: true, voxels: true, agents: true };
   /** Brush interaction plane (bounds + grid indicator). null = not shown. */
   private brushPlane: { axis: 'x' | 'y' | 'z'; pos: number } | null = null;
   /** Hovered brush FOOTPRINT — every cell the brush would affect, drawn as
@@ -733,14 +767,16 @@ export class Gl3DRenderer {
     gl.uniform1i(gl.getUniformLocation(prog, 'uClipEnabled'), this.clip.enabled ? 1 : 0);
     const axisN = this.clip.axis === 'x' ? 0 : this.clip.axis === 'y' ? 1 : this.clip.axis === 'z' ? 2 : 3;
     gl.uniform1i(gl.getUniformLocation(prog, 'uClipAxis'), axisN);
-    gl.uniform1f(gl.getUniformLocation(prog, 'uClipValue'), this.clip.value);
+    gl.uniform1f(gl.getUniformLocation(prog, 'uClipLo'), this.clip.lo);
+    gl.uniform1f(gl.getUniformLocation(prog, 'uClipHi'), this.clip.hi);
     gl.uniform3f(gl.getUniformLocation(prog, 'uClipForward'), this.camForward[0], this.camForward[1], this.camForward[2]);
   }
 
-  /** Draw the bond lines (UNDER the spheres, depth-tested). */
+  /** Draw the bond lines (depth-tested). Pass the active clip so bonds respect the
+   *  clip interval like the voxels/spheres (the only LINE-program draw that does). */
   private renderBonds(): void {
     if (this.bondVerts.length === 0) return;
-    this.drawLines(this.bondVerts, this.gl.LINES, this.mvp);
+    this.drawLines(this.bondVerts, this.gl.LINES, this.mvp, 1, this.clip.enabled ? this.clip : null);
   }
 
   /** Draw the agent sphere impostors via instanced billboards. Opaque agents
@@ -834,7 +870,8 @@ export class Gl3DRenderer {
     gl.uniform1i(gl.getUniformLocation(prog, 'uClipEnabled'), this.clip.enabled ? 1 : 0);
     const axisN = this.clip.axis === 'x' ? 0 : this.clip.axis === 'y' ? 1 : this.clip.axis === 'z' ? 2 : 3;
     gl.uniform1i(gl.getUniformLocation(prog, 'uClipAxis'), axisN);
-    gl.uniform1f(gl.getUniformLocation(prog, 'uClipValue'), this.clip.value);
+    gl.uniform1f(gl.getUniformLocation(prog, 'uClipLo'), this.clip.lo);
+    gl.uniform1f(gl.getUniformLocation(prog, 'uClipHi'), this.clip.hi);
     gl.uniform3f(gl.getUniformLocation(prog, 'uClipForward'), this.camForward[0], this.camForward[1], this.camForward[2]);
   }
 
@@ -853,7 +890,9 @@ export class Gl3DRenderer {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     this.renderOverlays();   // axes / grid / bounds (behind the voxels)
     this.renderBrushPlane(); // brush interaction-plane bounds + grid (depth-tested)
-    if (this.instanceCount > 0) {
+    // CA-grid voxels — gated by viz.voxels (render-layer toggle, req 7). The DRAW
+    // is gated, not the upload, so the GPU buffer stays current for re-enable.
+    if (this.viz.voxels && this.instanceCount > 0) {
       gl.useProgram(this.prog);
       gl.bindVertexArray(this.vao);
       this.setCommonUniforms(gl, this.prog);
@@ -871,18 +910,31 @@ export class Gl3DRenderer {
       gl.disable(gl.BLEND);
       gl.bindVertexArray(null);
     }
-    // Bond-Graph Agents: bonds first (depth-tested, UNDER the spheres), then the
-    // sphere impostors (depth-interleave with the voxel cubes via gl_FragDepth).
-    this.renderBonds();
-    this.renderAgents();
-    this.renderAgentRings(); // hovered/inspected agent rings (depth OFF, on top)
+    // Bond-Graph Agents (gated by viz.agents, req 7). Agents are drawn ON TOP of
+    // the grid (req 8): clear the depth buffer after the voxels so the agent
+    // spheres + bonds always render over the CA-grid voxels — like the 2D view,
+    // where the grid is the static background the agents navigate — while still
+    // depth-sorting among THEMSELVES (gl_FragDepth) and clipping to the slab.
+    if (this.viz.agents) {
+      // Clear depth ONLY when there is agent/bond geometry to draw (a non-agent 3D
+      // model has none → no wasted clear, no behaviour change).
+      if (this.agentInstanceCount > 0 || this.bondVerts.length > 0) {
+        gl.clear(gl.DEPTH_BUFFER_BIT);
+        this.renderBonds();    // bonds first (depth-tested UNDER the spheres)
+        this.renderAgents();   // sphere impostors
+      }
+      this.renderAgentRings(); // hovered/inspected agent rings (depth OFF, on top)
+    }
     this.renderHoverCells(); // wireframe cube cursors on the brush footprint (on top)
     this.renderGizmo();      // corner orientation widget (always on top)
   }
 
   /** Draw a coloured line list (pos+color interleaved, 6 floats/vertex) through
-   *  the line program with the current MVP. `mode` is gl.LINES or gl.POINTS. */
-  private drawLines(verts: Float32Array, mode: number, mvp: Mat4, pointSize = 1): void {
+   *  the line program with the current MVP. `mode` is gl.LINES or gl.POINTS. When
+   *  `clip` is non-null the world-space vertices are clipped by the same interval
+   *  as the voxels/spheres (used for the bond pass; every other overlay passes
+   *  null so it is never clipped). */
+  private drawLines(verts: Float32Array, mode: number, mvp: Mat4, pointSize = 1, clip: ClipPlane3D | null = null): void {
     if (verts.length === 0) return;
     const gl = this.gl;
     gl.useProgram(this.lineProg);
@@ -891,6 +943,15 @@ export class Gl3DRenderer {
     gl.bufferData(gl.ARRAY_BUFFER, verts, gl.DYNAMIC_DRAW);
     gl.uniformMatrix4fv(gl.getUniformLocation(this.lineProg, 'uMVP'), false, mvp);
     gl.uniform1f(gl.getUniformLocation(this.lineProg, 'uPointSize'), pointSize);
+    if (clip && clip.enabled) {
+      gl.uniform1i(gl.getUniformLocation(this.lineProg, 'uClipEnabled'), 1);
+      gl.uniform1i(gl.getUniformLocation(this.lineProg, 'uClipAxis'), clip.axis === 'x' ? 0 : clip.axis === 'y' ? 1 : clip.axis === 'z' ? 2 : 3);
+      gl.uniform1f(gl.getUniformLocation(this.lineProg, 'uClipLo'), clip.lo);
+      gl.uniform1f(gl.getUniformLocation(this.lineProg, 'uClipHi'), clip.hi);
+      gl.uniform3f(gl.getUniformLocation(this.lineProg, 'uClipForward'), this.camForward[0], this.camForward[1], this.camForward[2]);
+    } else {
+      gl.uniform1i(gl.getUniformLocation(this.lineProg, 'uClipEnabled'), 0);
+    }
     gl.drawArrays(mode, 0, verts.length / 6);
     gl.bindVertexArray(null);
   }

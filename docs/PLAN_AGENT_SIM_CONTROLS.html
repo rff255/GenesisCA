@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan — Agent & 3D-Simulator control overhaul</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#16181d; --panel2:#1d2026; --border:#2a2e37;
+    --text:#d6d9e0; --muted:#8b909c; --accent:#e8a13a; --accentSoft:#3a2e18;
+    --cyan:#4cc9f0; --green:#66bb6a; --red:#e05050; --purple:#b58fd6;
+    --radius:8px; font-family:-apple-system,Segoe UI,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);line-height:1.5;padding:28px 22px 80px}
+  h1{font-size:1.5rem;margin:0 0 4px}
+  h2{font-size:1.05rem;margin:34px 0 10px;color:var(--accent);border-bottom:1px solid var(--border);padding-bottom:6px}
+  .sub{color:var(--muted);margin:0 0 20px;font-size:.9rem}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:16px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px}
+  .card h3{margin:0 0 8px;font-size:.92rem;display:flex;align-items:center;gap:8px}
+  .num{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:var(--accentSoft);color:var(--accent);font-size:.72rem;font-weight:700;flex:none}
+  .card p{margin:0 0 8px;font-size:.82rem;color:var(--text)}
+  .card .muted{color:var(--muted);font-size:.76rem}
+  code{background:var(--panel2);padding:1px 5px;border-radius:4px;font-size:.78rem;color:var(--cyan)}
+  .ba{display:flex;gap:12px;flex-wrap:wrap;margin-top:8px}
+  .mock{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:10px;flex:1;min-width:150px}
+  .mock .ttl{font-size:.62rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:8px;font-weight:700}
+  .tag{display:inline-block;font-size:.6rem;padding:1px 6px;border-radius:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+  .tag.before{background:#3a1f1f;color:#e69b9b}
+  .tag.after{background:#1f3a24;color:#9be6a8}
+  .row{display:flex;align-items:center;gap:8px;font-size:.74rem;padding:4px 0}
+  .chk{width:14px;height:14px;border:1.5px solid var(--muted);border-radius:3px;flex:none;display:inline-flex;align-items:center;justify-content:center;font-size:.7rem}
+  .chk.on{background:var(--accent);border-color:var(--accent);color:#161616}
+  .pill{padding:3px 9px;border-radius:5px;border:1px solid var(--border);font-size:.66rem;color:var(--muted);cursor:default}
+  .pill.on{border-color:var(--accent);background:var(--accentSoft);color:var(--accent);font-weight:600}
+  .slider{height:6px;border-radius:3px;background:var(--panel);position:relative;margin:6px 0 2px;border:1px solid var(--border)}
+  .slider .fill{position:absolute;top:0;bottom:0;background:var(--accentSoft);border-radius:3px}
+  .slider .h{position:absolute;top:50%;width:12px;height:12px;border-radius:50%;background:var(--accent);transform:translate(-50%,-50%);border:2px solid #161616}
+  table{width:100%;border-collapse:collapse;font-size:.78rem;margin-top:6px}
+  td,th{border:1px solid var(--border);padding:6px 9px;text-align:left}
+  th{background:var(--panel2);color:var(--muted);font-weight:600;font-size:.7rem;text-transform:uppercase;letter-spacing:.04em}
+  .legend{font-size:.72rem;color:var(--muted);margin-top:8px}
+  svg{display:block}
+</style>
+</head>
+<body>
+<h1>Agent &amp; 3D-Simulator control overhaul</h1>
+<p class="sub">10 fixes to the Bond-Graph-Agents / 3D-grid simulator. Lattice &amp; non-agent models are byte-identical — every change is additive &amp; gated.</p>
+
+<h2>① + ⑦  Layer "Show / Simulate" panel <span style="font-size:.7rem;color:var(--muted)">(new — in the right panel, agent models)</span></h2>
+<div class="grid">
+  <div class="card">
+    <h3><span class="num">1</span> Freeze either layer · <span class="num">7</span> Hide either layer</h3>
+    <p>A compact 2×2 grid: independently <b>Simulate</b> (run the step) and <b>Show</b> (render) the CA grid and the agents. Freezing agents stops them from moving <em>and</em> from depositing into cells.</p>
+    <div class="mock" style="max-width:260px">
+      <div class="ttl">Layers</div>
+      <table style="margin:0">
+        <tr><th></th><th style="text-align:center">Show</th><th style="text-align:center">Simulate</th></tr>
+        <tr><td>CA grid</td><td style="text-align:center"><span class="chk on">✓</span></td><td style="text-align:center"><span class="chk on">✓</span></td></tr>
+        <tr><td>Agents</td><td style="text-align:center"><span class="chk on">✓</span></td><td style="text-align:center"><span class="chk">&nbsp;</span></td></tr>
+      </table>
+      <div class="legend">↑ agents frozen (watch the grid evolve undisturbed)</div>
+    </div>
+  </div>
+  <div class="card">
+    <h3><span class="num">4</span> Agent brush — docked</h3>
+    <div class="ba">
+      <div class="mock"><div class="ttl"><span class="tag before">before</span> floating</div>
+        <svg width="100%" height="92" viewBox="0 0 160 92">
+          <rect x="0" y="0" width="160" height="92" rx="4" fill="#0c0d10" stroke="#2a2e37"/>
+          <rect x="8" y="8" width="62" height="46" rx="4" fill="#16181d" stroke="#e8a13a"/>
+          <text x="12" y="20" fill="#8b909c" font-size="6">AGENT BRUSH</text>
+          <rect x="12" y="26" width="22" height="9" rx="2" fill="#3a2e18" stroke="#e8a13a"/>
+          <rect x="38" y="26" width="22" height="9" rx="2" fill="#1d2026" stroke="#2a2e37"/>
+          <circle cx="110" cy="55" r="20" fill="#1d2026" stroke="#2a2e37"/>
+          <text x="84" y="86" fill="#8b909c" font-size="6">…overlaps the canvas</text>
+        </svg>
+      </div>
+      <div class="mock"><div class="ttl"><span class="tag after">after</span> right panel</div>
+        <svg width="100%" height="92" viewBox="0 0 160 92">
+          <rect x="0" y="0" width="118" height="92" fill="#0c0d10" stroke="#2a2e37"/>
+          <circle cx="58" cy="46" r="22" fill="#1d2026" stroke="#2a2e37"/>
+          <rect x="118" y="0" width="42" height="92" fill="#16181d" stroke="#2a2e37"/>
+          <text x="122" y="14" fill="#8b909c" font-size="5.5">Agents</text>
+          <rect x="122" y="20" width="34" height="8" rx="2" fill="#3a2e18" stroke="#e8a13a"/>
+          <rect x="122" y="31" width="34" height="8" rx="2" fill="#1d2026" stroke="#2a2e37"/>
+          <rect x="122" y="44" width="34" height="8" rx="2" fill="#1d2026" stroke="#2a2e37"/>
+        </svg>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h2>⑤ + ⑥  Clip plane → clip interval, now clips bonds too</h2>
+<div class="grid">
+  <div class="card">
+    <h3><span class="tag before">before</span> single half-space</h3>
+    <p class="muted">One cut: <code>discard where w &gt; value</code>. Bonds (LINE program, no clip uniform) ignore it entirely.</p>
+    <svg width="100%" height="120" viewBox="0 0 240 120">
+      <defs><linearGradient id="g1" x1="0" x2="1"><stop offset="0" stop-color="#1d2026"/><stop offset="1" stop-color="#16181d"/></linearGradient></defs>
+      <rect x="0" y="0" width="240" height="120" fill="url(#g1)"/>
+      <g opacity="0.85">
+        <rect x="20" y="30" width="22" height="22" fill="#4cc9f0" opacity=".5"/>
+        <rect x="48" y="30" width="22" height="22" fill="#4cc9f0" opacity=".5"/>
+        <rect x="76" y="30" width="22" height="22" fill="#4cc9f0" opacity=".5"/>
+        <rect x="20" y="58" width="22" height="22" fill="#4cc9f0" opacity=".5"/>
+        <rect x="48" y="58" width="22" height="22" fill="#4cc9f0" opacity=".5"/>
+        <rect x="76" y="58" width="22" height="22" fill="#4cc9f0" opacity=".5"/>
+      </g>
+      <line x1="110" y1="10" x2="110" y2="110" stroke="#e05050" stroke-width="2" stroke-dasharray="4 3"/>
+      <text x="114" y="22" fill="#e05050" font-size="8">cut</text>
+      <circle cx="60" cy="44" r="8" fill="#66bb6a"/><circle cx="170" cy="44" r="8" fill="#66bb6a"/>
+      <line x1="60" y1="44" x2="170" y2="44" stroke="#e6e6f0" stroke-width="2"/>
+      <text x="128" y="100" fill="#e05050" font-size="8">bond crosses the cut, not clipped ✗</text>
+    </svg>
+  </div>
+  <div class="card">
+    <h3><span class="tag after">after</span> interval slab [lo … hi]</h3>
+    <p class="muted"><code>discard where w &lt; lo || w &gt; hi</code> in voxel + sphere + <b>bond</b> shaders. Two handles set the visible thickness.</p>
+    <svg width="100%" height="120" viewBox="0 0 240 120">
+      <rect x="0" y="0" width="240" height="120" fill="url(#g1)"/>
+      <rect x="70" y="6" width="100" height="108" fill="#4cc9f0" opacity=".06"/>
+      <line x1="70" y1="6" x2="70" y2="114" stroke="#e8a13a" stroke-width="2"/>
+      <line x1="170" y1="6" x2="170" y2="114" stroke="#e8a13a" stroke-width="2"/>
+      <text x="60" y="16" fill="#e8a13a" font-size="8">lo</text><text x="172" y="16" fill="#e8a13a" font-size="8">hi</text>
+      <g opacity="0.9">
+        <rect x="76" y="44" width="22" height="22" fill="#4cc9f0" opacity=".75"/>
+        <rect x="104" y="44" width="22" height="22" fill="#4cc9f0" opacity=".75"/>
+        <rect x="132" y="44" width="22" height="22" fill="#4cc9f0" opacity=".75"/>
+      </g>
+      <circle cx="118" cy="80" r="8" fill="#66bb6a"/><circle cx="150" cy="80" r="8" fill="#66bb6a"/>
+      <line x1="118" y1="80" x2="150" y2="80" stroke="#e6e6f0" stroke-width="2"/>
+      <text x="80" y="104" fill="#9be6a8" font-size="8">slab visible · bonds clipped ✓</text>
+    </svg>
+    <div class="mock" style="margin-top:8px"><div class="ttl">Clip — axis Z</div>
+      <div style="font-size:.66rem;color:var(--muted)">From</div>
+      <div class="slider"><div class="fill" style="left:30%;right:30%"></div><div class="h" style="left:30%"></div><div class="h" style="left:70%"></div></div>
+      <div style="font-size:.66rem;color:var(--muted);text-align:right">To</div>
+    </div>
+  </div>
+</div>
+
+<h2>⑧  Agents always drawn on top (3D)</h2>
+<div class="card">
+  <p>Like the 2D view (grid = background the agents navigate), the 3D agents+bonds now draw on top of the voxels. Implementation: clear the depth buffer between the voxel pass and the agent pass — agents still depth-sort among themselves.</p>
+  <svg width="100%" height="90" viewBox="0 0 420 90">
+    <rect x="20" y="20" width="40" height="40" fill="#4cc9f0" opacity=".4"/>
+    <rect x="44" y="36" width="40" height="40" fill="#4cc9f0" opacity=".4"/>
+    <circle cx="64" cy="40" r="16" fill="#66bb6a"/>
+    <text x="20" y="86" fill="#8b909c" font-size="9">voxels → clear depth → agents+bonds (on top)</text>
+    <text x="150" y="44" fill="#8b909c" font-size="10">render():  voxels  ·  <tspan fill="#e8a13a">gl.clear(DEPTH)</tspan>  ·  bonds  ·  spheres</text>
+  </svg>
+</div>
+
+<h2>② + ③  Resize-aware slider maxes · reversible auto-orbit</h2>
+<div class="grid">
+  <div class="card">
+    <h3><span class="num">2</span> Clip / brush-plane maxes track resize</h3>
+    <p class="muted">Read live <code>gridWidth.current || simWidth</code> (like the brush-size fields) instead of the stale <code>model.properties.gridWidth</code>; re-clamp <code>lo/hi/pos</code> on a dims change.</p>
+  </div>
+  <div class="card">
+    <h3><span class="num">3</span> Auto-orbit both directions</h3>
+    <p class="muted">Speed slider <code>min: 0.05 → −2</code> (0 = stopped). <code>yaw += speed·dt</code> reverses for negative speed.</p>
+    <div class="mock"><div class="ttl">Auto-orbit speed</div>
+      <div class="slider"><div class="fill" style="left:50%;right:30%"></div><div class="h" style="left:70%"></div></div>
+      <div style="display:flex;justify-content:space-between;font-size:.62rem;color:var(--muted)"><span>← reverse</span><span>0</span><span>forward →</span></div>
+    </div>
+  </div>
+</div>
+
+<h2>⑩  "Use bonding physics" master toggle (Properties → Bond-Graph Agents)</h2>
+<div class="grid">
+  <div class="card">
+    <h3>Default OFF when enabling Agents</h3>
+    <p>Agents no longer come with automatic repulsion / adhesion / growth / auto-bond. OFF = move only by graph forces (Apply Force / Set Velocity). ON = the full center-based tissue engine + the Forces &amp; Bonds rows appear.</p>
+    <p class="muted"><code>usesBondingPhysics = useBondingPhysics ?? !customForcesOnly</code> — back-compat reproduces every existing model with no migration.</p>
+  </div>
+  <div class="card">
+    <div class="ba">
+      <div class="mock"><div class="ttl">OFF (default)</div>
+        <div class="row"><span class="chk">&nbsp;</span> Use bonding physics</div>
+        <div class="muted" style="font-size:.66rem;padding-left:22px">Motion: momentum, max speed, query radius…<br><span style="opacity:.5">(Forces &amp; Bonds hidden)</span></div>
+      </div>
+      <div class="mock"><div class="ttl">ON</div>
+        <div class="row"><span class="chk on">✓</span> Use bonding physics</div>
+        <div class="muted" style="font-size:.66rem;padding-left:22px">Forces: repulsion μ, adhesion μ, range, growth<br>Bonds: auto-bond, stiffness, form/break dist</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h2>⑨  Nearby-agent gathering — already efficient (verify + document)</h2>
+<div class="card">
+  <p>Nearby-agent queries already use a <b>uniform CSR spatial hash</b> — O(N), 3D-aware (z-major bins, 3×3×3 stencil), reused scratch — in all four sites:</p>
+  <table>
+    <tr><th>Query site</th><th>Structure</th></tr>
+    <tr><td>Get Nearby Agents (JS emit)</td><td>spatial hash + all-pairs fallback</td></tr>
+    <tr><td>Get Nearby Agents (WASM emit)</td><td>same hash, copied into agent memory</td></tr>
+    <tr><td>Force-pass neighbour loop</td><td>3×3(×3) stencil over the hash</td></tr>
+    <tr><td>Auto-bond form pass</td><td>second hash on settled positions</td></tr>
+  </table>
+  <p class="muted" style="margin-top:10px">A uniform grid is the right structure for near-uniform agent density (an octree wins only for highly clustered/sparse data &amp; has worse cache behaviour). <b>No structural change</b> — only fix the stale <code>sim.worker.ts:863</code> comment that still claims "all-pairs O(N²)".</p>
+</div>
+
+</body>
+</html>
