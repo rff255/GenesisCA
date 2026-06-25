@@ -719,9 +719,13 @@ function buildAgentWebGPUIfNeeded(): void {
   // and the readWrite subset preserves that order = cellFieldWriteAttrsOf.
   const fieldReadAttrs = fieldSpecs.map(s => s.id);
   const fieldWriteAttrs = fieldSpecs.filter(s => s.agentAccess === 'readWrite').map(s => s.id);
+  // G4 — the user AGENT attribute ids (the agent SoA runs Get/Set Attribute target).
+  // MUST match the order the SHADER compiled against (agentAttrsOf = store.attrSpecs).
+  const agentAttrIds = store.attrSpecs.map(sp => sp.id);
   const layout = computeAgentWebGPULayout(
     pendingAgentWebgpuMaxAgents || store.maxAgents, pendingAgentWebgpuMaxHashBins,
     { readAttrs: fieldReadAttrs, writeAttrs: fieldWriteAttrs, gridWidth: width, gridHeight: height },
+    agentAttrIds,
   );
   const token = ++agentWebgpuBuildToken;
   agentWebgpuHashOverflowWarned = false;
@@ -1472,13 +1476,16 @@ async function runAgentStepWebGPU(): Promise<boolean> {
     uploadAgentField(rt, readArrays, writeArrays);
   }
 
-  // Dispatch behaviour → force, then commit. The behaviour shader does NOT touch
-  // user attrs in the Boids subset, so `swapAgentAttrs` swaps the (unchanged)
-  // write buffer in exactly as the JS path does (sync mode; no-op in async).
+  // Dispatch behaviour → force, then commit. `readbackAgentStep` reads the GPU's
+  // post-step user-agent-attribute runs back into `s.attrWrite` (the "next" buffer),
+  // so the swap MUST follow it (sync mode: read previous / write next, then swap;
+  // no-op in async where attrWrite aliases attrRead). It ALSO reads back the
+  // structural-request runs (divide/bond/kill) into the engine's CPU arrays so the
+  // structural phase below applies them, and the packed colours into `s.colors`.
   try {
     dispatchAgentStep(rt, hw);
+    await readbackAgentStep(rt, s);   // x/y (from xNext/yNext) + vx/vy/radius/density/age + attrs→attrWrite + requests + colours
     swapAgentAttrs(s);
-    await readbackAgentStep(rt, s);   // commits x/y (from xNext/yNext) + vx/vy/radius/density/age
     if (hasFieldBridge && rt.layout.fieldWriteLen > 0) {
       // The deposit accumulator holds the evolved field → copy into readAttrs so
       // the cell step (runStep) reads it (its w.set(r) carries it; diffusion spreads).
@@ -1496,9 +1503,11 @@ async function runAgentStepWebGPU(): Promise<boolean> {
     return false;
   }
 
-  // The structural phase runs on the settled CPU state (no-op for Boids). Bonds /
-  // division are excluded from the WebGPU agent target by the gate, so this only
-  // advances auto-bond/sweep (also no-ops without bonds).
+  // The structural phase runs CPU-side on the settled state (G4). It reads the
+  // request arrays `readbackAgentStep` just filled from the GPU: division splits
+  // flagged agents along their tension axis (the eigensolve stays CPU on every
+  // target), bonds form/break, killed agents recycle, and the divisionEvent fn
+  // (also CPU/JS) reassigns daughters. A no-op for Boids (no structural requests).
   runAgentStructuralPhase();
   return true;
 }

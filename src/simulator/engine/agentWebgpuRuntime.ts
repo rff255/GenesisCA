@@ -31,7 +31,9 @@
 
 import type { AgentStore } from './agentEngine';
 import type { AgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/layout';
-import { AGENT_GPU_F32_FIELDS, AGENT_GPU_I32_FIELDS } from '../../modeler/vpl/compiler/agentWebgpu/layout';
+import { AGENT_GPU_F32_FIELDS, AGENT_GPU_I32_FIELDS, AGENT_GPU_REQUEST_FIELDS } from '../../modeler/vpl/compiler/agentWebgpu/layout';
+
+const REQUEST_FIELD_SET: ReadonlySet<string> = new Set(AGENT_GPU_REQUEST_FIELDS);
 
 // Workgroup size — MUST match the `@workgroup_size(64)` in both agent shaders.
 const AGENT_WG = 64;
@@ -289,10 +291,22 @@ export function uploadAgentSoA(rt: AgentWebGPURuntime, s: AgentStore): void {
   };
   for (const field of AGENT_GPU_F32_FIELDS) {
     const base = L.f32Base[field]!;
+    // The structural-request runs (G4) are uploaded as 0 — a fresh request slate
+    // each step (the behaviour shader sets the flag, the worker reads it back).
+    if (REQUEST_FIELD_SET.has(field)) { for (let i = 0; i < ma; i++) f[base + i] = 0; continue; }
     const src = f32Src[field];
     if (!src) continue;
     for (let i = 0; i < hw; i++) f[base + i] = src[i]!;
     // leave [hw, ma) at 0 (dead slots never read in the shader's alive guard)
+    for (let i = hw; i < ma; i++) f[base + i] = 0;
+  }
+  // User AGENT attributes (G4) — upload from the read buffer (the values the
+  // behaviour shader's Get Attribute reads; Set Attribute writes them back).
+  for (const id of L.agentAttrIds) {
+    const base = L.agentAttrBase[id]!;
+    const src = s.attrRead[id] as ArrayLike<number> | undefined;
+    if (!src) { for (let i = 0; i < ma; i++) f[base + i] = 0; continue; }
+    for (let i = 0; i < hw; i++) f[base + i] = src[i]!;
     for (let i = hw; i < ma; i++) f[base + i] = 0;
   }
   rt.device.queue.writeBuffer(rt.agentF32Buf, 0, f.buffer, f.byteOffset, f.byteLength);
@@ -527,20 +541,36 @@ function acquireStaging(rt: AgentWebGPURuntime, byteSize: number): PooledBuffer 
 /** Read the f32 agent SoA back + commit the evolved fields into the CPU store.
  *  `xNext/yNext` → `x/y` (the GPU force pass wrote the integrated position into
  *  the Next slots; we commit them as the new live position, the JS `swapPositions`
- *  analogue) and `vx/vy/radius/density/age` are read in place. */
+ *  analogue) and `vx/vy/radius/density/age` are read in place.
+ *
+ *  G4: ALSO reads back (a) the structural-request runs → the engine's CPU request
+ *  arrays (`divideRequest`/`bondFormReq`/`killRequest`/…) so `runAgentStructuralPhase`
+ *  applies them CPU-side; (b) the user agent-attribute runs → `s.attrWrite[id]`
+ *  (the "next" buffer — the caller swaps it in AFTER this readback); and (c) the
+ *  packed `agentColors` → `s.colors` (per-agent RGBA for the render snapshot). */
 export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): Promise<void> {
   const L = rt.layout, hw = s.highWater;
-  const byteLen = f32Bytes(L);
-  const pooled = acquireStaging(rt, byteLen);
-  const staging = pooled.buffer;
+  const f32ByteLen = f32Bytes(L);
+  const colByteLen = colorsBytes(L);
+  const pooledF = acquireStaging(rt, f32ByteLen);
+  const stagingF = pooledF.buffer;
+  const pooledC = acquireStaging(rt, colByteLen);
+  const stagingC = pooledC.buffer;
   const enc = rt.device.createCommandEncoder({ label: 'agent-readback-enc' });
-  enc.copyBufferToBuffer(rt.agentF32Buf, 0, staging, 0, byteLen);
+  enc.copyBufferToBuffer(rt.agentF32Buf, 0, stagingF, 0, f32ByteLen);
+  enc.copyBufferToBuffer(rt.agentColorsBuf, 0, stagingC, 0, colByteLen);
   rt.device.queue.submit([enc.finish()]);
-  await staging.mapAsync(GPUMapMode.READ, 0, byteLen);
-  const f = new Float32Array(staging.getMappedRange(0, byteLen));
+  await stagingF.mapAsync(GPUMapMode.READ, 0, f32ByteLen);
+  await stagingC.mapAsync(GPUMapMode.READ, 0, colByteLen);
+  const f = new Float32Array(stagingF.getMappedRange(0, f32ByteLen));
+  const col = new Uint32Array(stagingC.getMappedRange(0, colByteLen));
   const xB = L.f32Base['xNext']!, yB = L.f32Base['yNext']!;
   const vxB = L.f32Base['vx']!, vyB = L.f32Base['vy']!;
   const radB = L.f32Base['radius']!, denB = L.f32Base['density']!, ageB = L.f32Base['age']!;
+  // Structural-request bases (G4) — match AGENT_GPU_REQUEST_FIELDS / the emitters.
+  const drB = L.f32Base['divideRequest']!, daxB = L.f32Base['divideAxisX']!, dayB = L.f32Base['divideAxisY']!;
+  const dasymB = L.f32Base['divideAsym']!, bfrB = L.f32Base['bondFormReq']!, bflB = L.f32Base['bondFormL']!;
+  const bfkB = L.f32Base['bondFormK']!, bbrB = L.f32Base['bondBreakReq']!, krB = L.f32Base['killRequest']!;
   for (let i = 0; i < hw; i++) {
     if (!s.alive[i]) continue;
     s.x[i] = f[xB + i]!; s.y[i] = f[yB + i]!;
@@ -549,9 +579,29 @@ export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): 
     s.radius[i] = f[radB + i]!;
     s.density[i] = f[denB + i]!;
     s.age[i] = f[ageB + i]!;
+    // Structural requests — round flags to ints (the engine arrays are Uint8/Int32).
+    s.divideRequest[i] = f[drB + i]! >= 0.5 ? 1 : 0;
+    s.divideAxisX[i] = f[daxB + i]!; s.divideAxisY[i] = f[dayB + i]!;
+    s.divideAsym[i] = f[dasymB + i]!;
+    s.bondFormReq[i] = Math.round(f[bfrB + i]!);
+    s.bondFormL[i] = f[bflB + i]!; s.bondFormK[i] = f[bfkB + i]!;
+    s.bondBreakReq[i] = Math.round(f[bbrB + i]!);
+    s.killRequest[i] = f[krB + i]! >= 0.5 ? 1 : 0;
+    // Per-agent packed RGBA → the snapshot colour buffer (s.colors is Uint8 RGBA).
+    const c = col[i]! >>> 0, ci = i * 4;
+    s.colors[ci] = c & 0xff; s.colors[ci + 1] = (c >>> 8) & 0xff;
+    s.colors[ci + 2] = (c >>> 16) & 0xff; s.colors[ci + 3] = (c >>> 24) & 0xff;
   }
-  staging.unmap();
-  pooled.inUse = false;
+  // User AGENT attributes → the WRITE buffer (the caller swaps read↔write after).
+  for (const id of L.agentAttrIds) {
+    const base = L.agentAttrBase[id]!;
+    const dst = s.attrWrite[id] as { [i: number]: number } | undefined;
+    if (!dst) continue;
+    const isInt = s.attrKind[id] !== 'float64';
+    for (let i = 0; i < hw; i++) { if (!s.alive[i]) continue; dst[i] = isInt ? Math.round(f[base + i]!) : f[base + i]!; }
+  }
+  stagingF.unmap(); stagingC.unmap();
+  pooledF.inUse = false; pooledC.inUse = false;
 }
 
 // ---------------------------------------------------------------------------
