@@ -485,6 +485,11 @@ let pendingAgentWasmBytes: Uint8Array | null = null;
  *  fieldW, fieldH, fieldD, fieldTorus)` — mirrors `compileAgentGraphWasm`'s
  *  behaviour params. */
 let agentBehaviourWasmFn: ((...args: number[]) => void) | null = null;
+/** W1 — the WASM force-pass export (soft-sphere + bond springs + integration). Set
+ *  alongside agentBehaviourWasmFn; null on a behaviour-only module. When present
+ *  (and the behaviour ran on WASM with the hash copied in this step), runAgentStep
+ *  runs this INSTEAD of the JS force loop — the boost. */
+let agentForcePassWasmFn: ((...args: number[]) => void) | null = null;
 /** AW-HASH fits-check: warn once when the per-step hash overflows the WASM reserve
  *  (the step then runs on JS — never silently wrong). */
 let agentWasmHashOverflowWarned = false;
@@ -503,7 +508,7 @@ function buildAgentAttrSpecs(): AgentAttrSpec[] {
  *  Called on init when the model has the Agents topology. Seeds the configured
  *  initial agent count. */
 function initAgents(): void {
-  if (!agentsEnabled || !centerBasedConfig) { agentStore = null; agentBehaviourWasmFn = null; return; }
+  if (!agentsEnabled || !centerBasedConfig) { agentStore = null; agentBehaviourWasmFn = null; agentForcePassWasmFn = null; return; }
   // AW-MEM (PR6a/PR6b-1): back the store on a WebAssembly.Memory (views at baked
   // offsets) when the agent target is 'wasm' (so the WASM behaviour loop reads/
   // writes the SAME bytes the JS engine does) OR when the DEV proof flag forces
@@ -511,10 +516,11 @@ function initAgents(): void {
   // bakes the offsets; the compiler emitted reads/writes against the same layout.
   const wantWasmBacked = agentTarget === 'wasm' || agentWasmBackedDev;
   // Re-allocating the store creates a FRESH WebAssembly.Memory; any previously
-  // instantiated WASM behaviour fn pointed at the OLD memory → drop it. The
-  // caller (init / reset / recompile) re-instantiates via
+  // instantiated WASM behaviour / force-pass fn pointed at the OLD memory → drop
+  // it. The caller (init / reset / recompile) re-instantiates via
   // instantiateAgentWasmIfNeeded against the fresh memory.
   agentBehaviourWasmFn = null;
+  agentForcePassWasmFn = null;
   // Agent update synchronicity (INDEPENDENT of the grid's `updateMode`): 'sync'
   // double-buffers the agent attribute arrays (read previous / write next, swapped
   // at step end — parallel/snapshot semantics, the WebGPU-agent prerequisite),
@@ -619,6 +625,7 @@ function initAgents(): void {
  *  change. Posts an error message on a hard failure for visibility. */
 function instantiateAgentWasmIfNeeded(): void {
   agentBehaviourWasmFn = null;
+  agentForcePassWasmFn = null;
   const store = agentStore;
   if (agentTarget !== 'wasm' || !pendingAgentWasmBytes || !store || !store.wasmBacked || !store.memory) return;
   const bytes = pendingAgentWasmBytes;
@@ -627,9 +634,13 @@ function instantiateAgentWasmIfNeeded(): void {
     try {
       const inst = await instantiateAgentWasm(bytes, mem);
       // Guard against a re-init that swapped the store out from under us.
-      if (agentStore === store && agentTarget === 'wasm') agentBehaviourWasmFn = inst.behaviour;
+      if (agentStore === store && agentTarget === 'wasm') {
+        agentBehaviourWasmFn = inst.behaviour;
+        agentForcePassWasmFn = inst.forcePass;  // W1 — null on a behaviour-only module
+      }
     } catch (e) {
       agentBehaviourWasmFn = null;
+      agentForcePassWasmFn = null;
       self.postMessage({ type: 'error', message: '[agents] WASM instantiate failed, falling back to JS: ' + ((e as Error)?.message || e) });
     }
   })();
@@ -933,7 +944,9 @@ function runAgentStep(): void {
 
   // PR6b-2: dispatch the behaviour loop on the agent target. The WASM loop reads/
   // writes the SAME store memory at the baked offsets (AW-MEM), so the force pass /
-  // structural phase BELOW is UNCHANGED — it reads the same views.
+  // structural phase BELOW reads the same views. (W1: the force pass itself may now
+  // also run on WASM — see the forcePass dispatch after swapAgentAttrs; the
+  // structural phase + hash build always stay JS.)
   //
   // AW-RNG + AW-HASH: before the WASM call we (1) write the global `rngState[0]`
   // into the in-memory RNG cell (the WASM loop advances it + writes it back — JS
@@ -942,6 +955,11 @@ function runAgentStep(): void {
   // the hash DIMENSIONS ride the call args. If the hash overflows the reserve
   // (the fits-check), we fall back to JS for this step (never silently wrong).
   let ranWasm = false;
+  // W1 — force-pass eligibility + the hash dims it reuses. The WASM force pass can
+  // only run when the WASM behaviour ran this step (so the in-memory hash was
+  // copied in + the store is wasmBacked). Captured in the success branch below.
+  let forcePassReady = false;
+  let fpHashValid = 0, fpNBinsX = 0, fpNBinsY = 0, fpNBinsZ = 0, fpBinSizeX = 1, fpBinSizeY = 1, fpBinSizeZ = 1;
   if (agentBehaviourWasmFn && s.wasmBacked && s.memory && s.layout) {
     const fits = !hash || (hash.nBinsX * hash.nBinsY * hash.nBinsZ + 1) <= (s.layout.maxHashBins + 1);
     if (!fits) {
@@ -976,9 +994,15 @@ function runAgentStep(): void {
         // (3) read the advanced RNG state back so the shared stream stays in lockstep.
         rngState[0] = new Uint32Array(buf, L.rngStateOffset, 1)[0]!;
         ranWasm = true;
+        // W1 — the in-memory hash is now valid for the SAME step, so the WASM force
+        // pass may reuse it. Stash the dims it needs (mirrors the behaviour's).
+        forcePassReady = true;
+        fpHashValid = hashValid; fpNBinsX = nBinsX; fpNBinsY = nBinsY; fpNBinsZ = nBinsZ;
+        fpBinSizeX = binSizeX; fpBinSizeY = binSizeY; fpBinSizeZ = binSizeZ;
       } catch (e) {
         self.postMessage({ type: 'error', message: '[agents] WASM behaviour run failed, falling back to JS: ' + ((e as Error)?.message || e) });
         agentBehaviourWasmFn = null;
+        agentForcePassWasmFn = null;  // W1 — drop the force pass too; this step runs fully on JS
         if (agentBehaviourFn) { try { agentBehaviourFn(...buildAgentLoopArgs(s)); ranWasm = true; } catch { agentBehaviourFn = null; } }
       }
     }
@@ -997,13 +1021,40 @@ function runAgentStep(): void {
   // the render snapshot, and the next step. No-op in async mode.
   swapAgentAttrs(s);
 
+  // W1 — THE FORCE PASS (the boost). When the WASM behaviour ran this step AND a
+  // force-pass export exists, run the WASM force integrator INSTEAD of the JS loop
+  // below — it reads/writes the SAME store memory (xNext/yNext[/zNext], vx/vy[/vz],
+  // density, radius) at the baked offsets, reusing the in-memory hash already
+  // copied in for the behaviour. f64 throughout ⇒ JS↔WASM bit-exact. Mirrored
+  // scalar-config ABI (see emitForcePass): the order here MUST match FORCE_PASS_PARAMS.
+  let ranForceWasm = false;
+  if (forcePassReady && agentForcePassWasmFn) {
+    try {
+      const dtOverEta = dt / eta;
+      agentForcePassWasmFn(
+        s.highWater, fpHashValid, fpNBinsX, fpNBinsY, fpNBinsZ,
+        fpBinSizeX, fpBinSizeY, fpBinSizeZ,
+        dtOverEta, muR, muA, range, momentum, maxSpeed, growthRate,
+        W, H, D, bonding ? 1 : 0, torus ? 1 : 0,
+      );
+      ranForceWasm = true;
+    } catch (e) {
+      self.postMessage({ type: 'error', message: '[agents] WASM force pass failed, falling back to JS: ' + ((e as Error)?.message || e) });
+      agentForcePassWasmFn = null;  // drop it; the JS loop below runs this step
+    }
+  }
+
   // Single neighbour pass: graph-authored force (forceX/Y[/Z] from Apply Force) +
   // soft-sphere repulsion/adhesion (unless customForcesOnly) + bond springs +
   // density (for next step), integrated into the xNext/yNext[/zNext] double-buffer.
   // Branched on `is3d` ONCE (not per-line): the 2D else-branch is the EXACT
   // current code, verbatim (the grid's literal-verbatim-2D-fast-path lesson — a
   // branchless always-0-dz body would change the 2D arithmetic + stencil count).
-  if (is3d) {
+  // SKIPPED when the WASM force pass ran this step (W1).
+  if (ranForceWasm) {
+    // nothing — the WASM force pass already wrote xNext/yNext[/zNext], vx/vy[/vz],
+    // density, radius, and age into the store memory. swapPositions commits below.
+  } else if (is3d) {
     const xN = s.xNext, yN = s.yNext, zN = s.zNext;
     const vxArr = s.vx, vyArr = s.vy, vzArr = s.vz;
     for (let i = 0; i < hw; i++) {

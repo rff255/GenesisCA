@@ -63,21 +63,36 @@ offsets + scalar args.
 
 ### WASM track (the real, low-risk boost)
 
-- **W1 — WASM force-pass export (the boost lever; the delta vs the handoff).**
-  Add a `forcePass(...)` WASM export (a sibling of `behaviour`) emitting the engine
-  force loop in WASM: reset force → 3×3(×3) hash-stencil neighbour pass (soft-sphere
-  repulsion/adhesion + density) → bond springs → velocity integration (momentum,
-  maxSpeed, drag, dt) → write `xNext/yNext[/zNext]`. Reads the wasmBacked store at the
-  `computeAgentMemoryLayout` offsets (zero glue); a **mirrored scalar-config ABI**
-  (`dt, muR, muA, range, eta, momentum, maxSpeed, growthRate, bonding-flag, W/H/D,
-  torus`). Gated on the new `useBondingPhysics` master toggle, exactly like the JS pass.
-  **Why first:** biggest win, lowest risk (element-wise, view-safe), zero new glue,
-  boosts the already-WASM Boids immediately, and establishes the "engine code in WASM"
-  pattern. *Note: this extends the handoff's PR6, which intentionally kept the force
-  pass in JS to minimise the WASM surface — we port it because the user's goal is a
-  CA-grid-level speedup and the mapping shows it's the cap.* **Acceptance:** JS↔WASM
-  bit-parity (f64) on Boids/Tissue over N steps; the force pass produces byte-identical
-  `xNext/yNext`; 2D-agent + lattice byte-identity unchanged.
+- **W1 — WASM force-pass export (the boost lever; the delta vs the handoff). ✅ DONE
+  (bit-parity verified; perf finding below).**
+  Added a `forcePass(...)` WASM export (a sibling of `behaviour` in the SAME agent
+  module) emitting the engine force loop in WASM: 3×3(×3) hash-stencil neighbour pass
+  (soft-sphere repulsion/adhesion + density) → bond springs → velocity integration
+  (momentum, maxSpeed, drag, dt) → write `xNext/yNext[/zNext]` → growth ramp. Reads the
+  wasmBacked store at the `computeAgentMemoryLayout` offsets (zero glue); a **mirrored
+  scalar-config ABI** (`FORCE_PASS_PARAMS` ↔ `runAgentStep`'s `agentForcePassWasmFn(...)`
+  call: `highWater/hash dims` i32 + `binSize` f64 + `dtOverEta, muR, muA, range, momentum,
+  maxSpeed, growthRate, W, H, D` f64 + `bonding, torus` i32). Gated (via the worker's
+  resolved `growthRate`/`bonding`) on the `useBondingPhysics` master toggle, exactly like
+  the JS pass. The hash build + structural phase STAY in JS; the torus wrap uses a host
+  `env.fmod` import (the only bit-exact path — WASM has no f64 rem; the inline
+  reconstruction + the "skip in-range" fast path both diverged at ~1e-12).
+  **Acceptance — MET:** JS↔WASM **bit-parity** (f64, 0 diffs / maxAbs 0) across
+  12 variants {2D,3D}×{hash, all-pairs, torus, clamp, soft-sphere on/off, maxSpeed, growth}
+  + an end-to-end behaviour+force composition test (0 diffs / 50 steps); `tsc` + build
+  clean; **lattice + JS-agent byte-identity by construction** (only `agentWasm/compile.ts`
+  + `sim.worker.ts` touched — the lattice/JS-agent compilers are untouched).
+  **PERF FINDING (honest — the lever is small on this engine):** the measured
+  force-integrator-only speedup (Node V8, hash build excluded) is **~1.0–1.25×**, NOT the
+  hypothesised ~2–4×. V8 already JITs this tight monomorphic numeric loop near-optimally;
+  the host-fmod boundary crossing (once per agent) erases part of the torus-case win. So
+  W1 is bit-exact zero-regression infrastructure with a modest win (clamp + large-count),
+  but the agent loop simply isn't a JS bottleneck at interactive counts (the spatial hash
+  already makes it O(N)). The CA-grid-level speedup the goal sought is not realisable here
+  — neither the force pass nor a WebGPU port changes that for the typical few-thousand-agent
+  case. (Worker-V8 / very-large-counts may differ from Node; a live-browser Boids smoke on
+  `agentTarget:'wasm'` is the one unverified check — the preview served the main repo, not
+  this worktree.)
 
 - **W2 — complete the WASM behaviour coverage (the handoff's PR6c/PR6d → Tissue +
   Chemotaxis on WASM).** Widen `AGENT_WASM_SUPPORTED_TYPES`: the field-bridge nodes
