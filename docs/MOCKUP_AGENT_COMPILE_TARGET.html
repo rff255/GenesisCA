@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mockup — Agent Compile Target (WASM + WebGPU)</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#16181d; --panel2:#1d2026; --border:#2a2e37;
+    --text:#d6d9e0; --muted:#8b909c; --accent:#e8a13a; --accentSoft:#3a2e18;
+    --cyan:#4cc9f0; --green:#66bb6a; --red:#e05050; --purple:#b58fd6;
+    --radius:8px; font-family:-apple-system,Segoe UI,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);line-height:1.5;padding:28px 22px 80px}
+  h1{font-size:1.5rem;margin:0 0 4px}
+  h2{font-size:1.05rem;margin:32px 0 10px;color:var(--accent);border-bottom:1px solid var(--border);padding-bottom:6px}
+  .sub{color:var(--muted);margin:0 0 20px;font-size:.9rem}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px}
+  .card h3{margin:0 0 10px;font-size:.92rem}
+  code{background:var(--panel2);padding:1px 5px;border-radius:4px;font-size:.78rem;color:var(--cyan)}
+  .radio{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:12px 14px;max-width:360px}
+  .radio .ttl{font-size:.62rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:10px;font-weight:700}
+  .opt{display:flex;gap:8px;align-items:flex-start;padding:6px 0}
+  .dot{width:13px;height:13px;border-radius:50%;border:2px solid var(--muted);flex:none;margin-top:3px}
+  .opt.on .dot{border-color:var(--accent);background:radial-gradient(circle,var(--accent) 40%,transparent 45%)}
+  .opt.dis{opacity:.5}
+  .opt .lbl{font-size:.8rem;font-weight:600}
+  .opt .hint{font-size:.68rem;color:var(--muted);font-weight:400}
+  .tag{display:inline-block;font-size:.56rem;padding:1px 6px;border-radius:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;vertical-align:middle;margin-left:6px}
+  .tag.live{background:#1f3a24;color:#9be6a8}
+  .tag.partial{background:#3a3320;color:#e8d09b}
+  .tag.soon{background:#23304a;color:#9bc0e6}
+  table{width:100%;border-collapse:collapse;font-size:.8rem;margin-top:6px}
+  td,th{border:1px solid var(--border);padding:7px 9px;text-align:left}
+  th{background:var(--panel2);color:var(--muted);font-weight:600;font-size:.7rem;text-transform:uppercase;letter-spacing:.04em}
+  .y{color:var(--green);font-weight:700}.n{color:var(--red);font-weight:700}.p{color:var(--accent);font-weight:700}
+  .legend{font-size:.72rem;color:var(--muted);margin-top:8px}
+  svg{display:block}
+  .bar{height:26px;border-radius:4px;display:flex;align-items:center;padding:0 8px;font-size:.72rem;font-weight:700;color:#0c0d10;margin:4px 0}
+</style>
+</head>
+<body>
+<h1>Agent Compile Target — full WASM + WebGPU</h1>
+<p class="sub">Properties → Bond-Graph Agents → <b>Agent Compile Target</b>. Independent of the grid's target — a WebGPU grid can run WASM agents, etc.</p>
+
+<h2>The radio (after)</h2>
+<div class="grid">
+  <div>
+    <div class="radio">
+      <div class="ttl">Agent Compile Target</div>
+      <div class="opt"><span class="dot"></span><span><span class="lbl">Debug / Reference (JS)</span><br><span class="hint">Full node coverage. O(N) via the spatial hash. ~2000 boids @ 174 steps/sec.</span></span></div>
+      <div class="opt on"><span class="dot"></span><span><span class="lbl">WebAssembly <span class="tag live">full</span></span><br><span class="hint">Behaviour + force pass + division on WASM. JS↔WASM bit-parity (f64). ~2–4×; ceiling ~40k agents.</span></span></div>
+      <div class="opt"><span class="dot"></span><span><span class="lbl">WebGPU <span class="tag soon">scale</span></span><br><span class="hint">Behaviour+force on the GPU; structural phase on CPU. Sync agents only, f32 (statistical parity). Wins past ~10k agents.</span></span></div>
+    </div>
+    <p class="legend">Today: WASM is <b>partial</b> (behaviour only; force pass still JS) and WebGPU is disabled. This plan makes both fully selectable.</p>
+  </div>
+  <div class="card">
+    <h3>What runs where — before → after</h3>
+    <table>
+      <tr><th>Agent-step piece</th><th>JS</th><th>WASM today</th><th>WASM after</th><th>WebGPU after</th></tr>
+      <tr><td>Behaviour rule</td><td class="y">JS</td><td class="y">WASM</td><td class="y">WASM</td><td class="y">GPU</td></tr>
+      <tr><td><b>Force integrator</b></td><td class="y">JS</td><td class="n">JS</td><td class="y">WASM</td><td class="y">GPU</td></tr>
+      <tr><td>Spatial-hash build</td><td>JS</td><td>JS</td><td class="p">JS→WASM*</td><td>CPU→upload</td></tr>
+      <tr><td>Structural phase</td><td>JS</td><td>JS</td><td>JS</td><td>CPU (by design)</td></tr>
+      <tr><td>Coverage</td><td>all</td><td class="p">Boids</td><td class="y">all</td><td class="y">all</td></tr>
+    </table>
+    <p class="legend">* W3, optional. The <b>force integrator</b> is the boost lever — it's the hottest per-step code and is JS even on the WASM target today.</p>
+  </div>
+</div>
+
+<h2>The two-layer architecture (what each target must replicate)</h2>
+<div class="card">
+  <svg width="100%" height="190" viewBox="0 0 760 190">
+    <!-- compiled per-agent fns -->
+    <rect x="10" y="14" width="350" height="162" rx="8" fill="#16181d" stroke="#2a2e37"/>
+    <text x="24" y="34" fill="#e8a13a" font-size="11" font-weight="700">Compiled per-agent fns (per target)</text>
+    <rect x="24" y="44" width="150" height="26" rx="4" fill="#1d2026" stroke="#4cc9f0"/><text x="34" y="61" fill="#d6d9e0" font-size="10">behaviour()</text>
+    <rect x="186" y="44" width="160" height="26" rx="4" fill="#1d2026" stroke="#4cc9f0"/><text x="196" y="61" fill="#d6d9e0" font-size="10">division() · init()</text>
+    <text x="24" y="92" fill="#8b909c" font-size="9.5">JS: new Function · WASM: behaviour/division exports</text>
+    <text x="24" y="106" fill="#8b909c" font-size="9.5">WebGPU: WGSL compute (sibling agentWebgpu/ dir)</text>
+    <text x="24" y="130" fill="#66bb6a" font-size="9.5">Front-end shared: expandMacros → reroute → CSE → find behaviourStep</text>
+    <text x="24" y="144" fill="#66bb6a" font-size="9.5">Universal nodes reuse the lattice WASM/WGSL emitters (D-IDX)</text>
+    <text x="24" y="164" fill="#8b909c" font-size="9.5">~24 net-new agent-node emitters (field/array/structural-request)</text>
+
+    <!-- arrow -->
+    <path d="M362 95 L398 95" stroke="#8b909c" stroke-width="2" marker-end="url(#a)"/>
+    <defs><marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#8b909c"/></marker></defs>
+
+    <!-- pure engine -->
+    <rect x="400" y="14" width="350" height="162" rx="8" fill="#16181d" stroke="#2a2e37"/>
+    <text x="414" y="34" fill="#e8a13a" font-size="11" font-weight="700">Pure engine (shared)</text>
+    <rect x="414" y="44" width="150" height="26" rx="4" fill="#1d2026" stroke="#e8a13a"/><text x="424" y="61" fill="#d6d9e0" font-size="10">force integrator ⚡</text>
+    <rect x="576" y="44" width="160" height="26" rx="4" fill="#1d2026" stroke="#2a2e37"/><text x="586" y="61" fill="#d6d9e0" font-size="10">spatial hash</text>
+    <rect x="414" y="80" width="322" height="26" rx="4" fill="#1d2026" stroke="#2a2e37"/><text x="424" y="97" fill="#d6d9e0" font-size="10">structural phase (division eigensolve · bonds · death) — stays CPU</text>
+    <text x="414" y="128" fill="#e8a13a" font-size="9.5">⚡ The force integrator is the WASM boost (W1) — today it's JS</text>
+    <text x="414" y="142" fill="#8b909c" font-size="9.5">even on the WASM target. The wasmBacked AgentStore lets a WASM</text>
+    <text x="414" y="156" fill="#8b909c" font-size="9.5">force-pass read the SAME bytes (zero glue) — offsets + scalar args.</text>
+  </svg>
+</div>
+
+<h2>Expected speedup (honest)</h2>
+<div class="grid">
+  <div class="card">
+    <h3>Throughput vs JS (relative)</h3>
+    <div style="font-size:.72rem;color:var(--muted);margin-bottom:2px">JS (baseline)</div>
+    <div class="bar" style="width:20%;background:#4a5161;color:#d6d9e0">1×</div>
+    <div style="font-size:.72rem;color:var(--muted);margin-bottom:2px">WASM (behaviour only — today)</div>
+    <div class="bar" style="width:32%;background:#7a6a3a;color:#d6d9e0">~1.6×</div>
+    <div style="font-size:.72rem;color:var(--muted);margin-bottom:2px">WASM (+ force pass — W1)</div>
+    <div class="bar" style="width:60%;background:var(--accent)">~2–4×</div>
+    <div style="font-size:.72rem;color:var(--muted);margin-bottom:2px">WebGPU @ 100k agents</div>
+    <div class="bar" style="width:100%;background:var(--green)">~10–100×</div>
+    <p class="legend">Indicative. WASM is predictable (no GC/JIT cliffs). WebGPU only pulls ahead at large counts.</p>
+  </div>
+  <div class="card">
+    <h3>The crossover (why WebGPU is a scale play)</h3>
+    <table>
+      <tr><th>Agent count</th><th>Fastest target</th><th>Why</th></tr>
+      <tr><td>≤ 2k</td><td class="y">JS / WASM</td><td>already interactive; GPU round-trip not worth it</td></tr>
+      <tr><td>2k – 10k</td><td class="p">WASM</td><td>force pass on WASM; CPU structural round-trip still cheap</td></tr>
+      <tr><td>10k – 1M</td><td class="y">WebGPU</td><td>parallel behaviour+force; structural round-trip amortised</td></tr>
+    </table>
+    <p class="legend">The structural phase (division/bonds/death) is CPU on every target → its per-step SoA round-trip (~6–7 MB at 10k) is the GPU crossover gate.</p>
+  </div>
+</div>
+
+<h2>Execution order</h2>
+<div class="card">
+  <p style="margin:0;font-size:.85rem">
+    <b style="color:var(--accent)">W1</b> WASM force-pass export (the boost) →
+    <b style="color:var(--accent)">W2</b> WASM coverage (Tissue + Chemotaxis on WASM) →
+    <b style="color:var(--muted)">W3/W4</b> optional WASM hash + benchmark →
+    <b style="color:var(--cyan)">G1…G6</b> WebGPU (the handoff PR7, deferral candidate).
+  </p>
+  <p class="legend">Per-PR: JS↔WASM bit-parity (gold standard) · WebGPU statistical parity · lattice + 2D-agent byte-identity unchanged. Full specs: <code>docs/HANDOFF_CAPSTONE_3D_AGENTS_PHASE_F.md</code> §2.</p>
+</div>
+
+</body>
+</html>
