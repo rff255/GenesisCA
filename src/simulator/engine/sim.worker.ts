@@ -33,6 +33,12 @@ import {
   type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec, type SpatialHash,
 } from './agentEngine';
 import { instantiateAgentWasm } from '../../modeler/vpl/compiler/agentWasm/compile';
+import { computeAgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/layout';
+import {
+  createAgentWebGPURuntime, destroyAgentWebGPURuntime, uploadAgentSoA, uploadAgentHash,
+  uploadAgentControl, uploadAgentForceControl, dispatchAgentStep, readbackAgentStep,
+  type AgentWebGPURuntime,
+} from './agentWebgpuRuntime';
 
 interface AttrDef {
   id: string;
@@ -185,6 +191,18 @@ interface InitMsg {
    *  `agentTarget === 'wasm'`). Instantiated against the agent store's memory +
    *  the host math funcs; absent → the JS behaviour fn runs. */
   agentWasmBytes?: Uint8Array;
+  /** PR7 G3-runtime: the compiled WebGPU agent shaders (only when
+   *  `agentTarget === 'webgpu'`). The behaviour shader is the per-agent loop; the
+   *  force shader is the standalone integrator. The worker builds a dedicated
+   *  agent WebGPU runtime + dispatches both per step. Absent / any failure → the
+   *  JS behaviour fn + JS force loop run. */
+  agentWebgpuBehaviourShader?: string;
+  agentWebgpuForceShader?: string;
+  /** The GPU agent layout dims (maxAgents + the hash reserve) — the worker
+   *  re-derives the GPU SoA layout from these so the upload offsets match the
+   *  compiled shaders. */
+  agentWebgpuMaxAgents?: number;
+  agentWebgpuMaxHashBins?: number;
 }
 
 interface StepMsg { type: 'step'; count: number; activeViewer: string; skipColorPass?: boolean }
@@ -212,7 +230,7 @@ interface PaintManualMsg {
 }
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -494,6 +512,39 @@ let agentForcePassWasmFn: ((...args: number[]) => void) | null = null;
  *  (the step then runs on JS — never silently wrong). */
 let agentWasmHashOverflowWarned = false;
 
+/** PR7 G3-runtime — the dedicated agent WebGPU runtime (its own device, separate
+ *  from the grid's `webgpuRuntime`). When `agentTarget === 'webgpu'` AND this is
+ *  non-null, runAgentStep dispatches the behaviour + force compute shaders on the
+ *  GPU instead of the JS loop. Any device/compile failure nulls it → JS fallback. */
+let agentWebgpuRuntime: AgentWebGPURuntime | null = null;
+/** The pending WebGPU agent shaders + layout dims (held so init/recompile can
+ *  build the runtime asynchronously against the current store). */
+let pendingAgentWebgpuBehaviour: string | null = null;
+let pendingAgentWebgpuForce: string | null = null;
+let pendingAgentWebgpuMaxAgents = 0;
+let pendingAgentWebgpuMaxHashBins = 0;
+/** Warn once when the per-step hash overflows the GPU reserve (step runs on JS). */
+let agentWebgpuHashOverflowWarned = false;
+/** A monotonic build token: only the most-recent async runtime build commits (an
+ *  earlier in-flight build whose token is stale is discarded, like the WASM
+ *  orphan-on-reinit discipline). */
+let agentWebgpuBuildToken = 0;
+
+/** Resolve the incoming agent target to one whose required payload actually
+ *  arrived. 'wasm' needs the module bytes; 'webgpu' needs both shaders. A target
+ *  missing its payload demotes to 'js' (the always-runnable fallback) — the
+ *  worker-side safety net mirroring the grid's useWasm/useWebGPU demotion. */
+function resolveAgentTarget(
+  t: 'js' | 'wasm' | 'webgpu' | undefined,
+  wasmBytes: Uint8Array | undefined,
+  webgpuBehaviour: string | undefined,
+  webgpuForce: string | undefined,
+): 'js' | 'wasm' | 'webgpu' {
+  if (t === 'wasm') return wasmBytes ? 'wasm' : 'js';
+  if (t === 'webgpu') return (webgpuBehaviour && webgpuForce) ? 'webgpu' : 'js';
+  return 'js';
+}
+
 /** Build the agent attribute specs (the non-model cell attributes double as
  *  per-agent attributes via D-IDX) with their resolved default values. */
 function buildAgentAttrSpecs(): AgentAttrSpec[] {
@@ -508,6 +559,9 @@ function buildAgentAttrSpecs(): AgentAttrSpec[] {
  *  Called on init when the model has the Agents topology. Seeds the configured
  *  initial agent count. */
 function initAgents(): void {
+  // Re-allocating the store invalidates any GPU agent runtime bound to the old
+  // store/dims — drop it (buildAgentWebGPUIfNeeded rebuilds against the fresh one).
+  if (agentWebgpuRuntime) { destroyAgentWebGPURuntime(agentWebgpuRuntime); agentWebgpuRuntime = null; }
   if (!agentsEnabled || !centerBasedConfig) { agentStore = null; agentBehaviourWasmFn = null; agentForcePassWasmFn = null; return; }
   // AW-MEM (PR6a/PR6b-1): back the store on a WebAssembly.Memory (views at baked
   // offsets) when the agent target is 'wasm' (so the WASM behaviour loop reads/
@@ -642,6 +696,38 @@ function instantiateAgentWasmIfNeeded(): void {
       agentBehaviourWasmFn = null;
       agentForcePassWasmFn = null;
       self.postMessage({ type: 'error', message: '[agents] WASM instantiate failed, falling back to JS: ' + ((e as Error)?.message || e) });
+    }
+  })();
+}
+
+/** PR7 G3-runtime — (re)build the dedicated agent WebGPU runtime. Async (device
+ *  acquisition + pipeline compilation). On any failure the worker stays on the JS
+ *  behaviour fn + JS force loop (the clamp keeps JS safe). A monotonic build token
+ *  discards a stale in-flight build (the orphan-on-reinit discipline). Called from
+ *  init / reset / recompile when the agent target is 'webgpu'. */
+function buildAgentWebGPUIfNeeded(): void {
+  // Drop any prior runtime first (a re-init may have swapped the store/dims).
+  if (agentWebgpuRuntime) { destroyAgentWebGPURuntime(agentWebgpuRuntime); agentWebgpuRuntime = null; }
+  const store = agentStore;
+  if (agentTarget !== 'webgpu' || !pendingAgentWebgpuBehaviour || !pendingAgentWebgpuForce || !store) return;
+  const behaviour = pendingAgentWebgpuBehaviour;
+  const force = pendingAgentWebgpuForce;
+  const layout = computeAgentWebGPULayout(pendingAgentWebgpuMaxAgents || store.maxAgents, pendingAgentWebgpuMaxHashBins);
+  const token = ++agentWebgpuBuildToken;
+  agentWebgpuHashOverflowWarned = false;
+  void (async () => {
+    try {
+      const rt = await createAgentWebGPURuntime(behaviour, force, layout);
+      // Guard against a re-init that swapped the store / changed the target /
+      // launched a newer build while this one was in flight.
+      if (agentStore === store && agentTarget === 'webgpu' && token === agentWebgpuBuildToken) {
+        agentWebgpuRuntime = rt;
+      } else {
+        destroyAgentWebGPURuntime(rt);
+      }
+    } catch (e) {
+      agentWebgpuRuntime = null;
+      self.postMessage({ type: 'error', message: '[agents] WebGPU runtime build failed, falling back to JS: ' + ((e as Error)?.message || e) });
     }
   })();
 }
@@ -1284,6 +1370,95 @@ function runAgentStep(): void {
   // Post-step structural phase: bond form/break (Phase B), division + growth +
   // death (Phase C). Mutates the bond/agent topology on the SETTLED state.
   runAgentStructuralPhase();
+}
+
+/** PR7 G3-runtime — one agent generation on the WebGPU agent target. The GPU
+ *  sibling of `runAgentStep`'s WASM dispatch: the CPU does the prep (reset forces,
+ *  build the spatial hash, prime the sync attr buffer), uploads the SoA + hash,
+ *  dispatches the behaviour then the force shader, and reads `x/y/vx/vy/radius/
+ *  density/age` back into the CPU store — then the structural phase runs CPU-side
+ *  on the settled state (a no-op for the Boids headline: no bonds / division).
+ *  ASYNC (the readback awaits a `mapAsync`); the caller awaits it inside the step
+ *  batch loop. Returns whether the GPU path actually ran (false → the caller runs
+ *  the JS `runAgentStep()` for this step). The force pass + bond springs + the
+ *  hash BUILD stay CPU-mirror with the JS path; the gate keeps bonds/division out
+ *  of WebGPU-target graphs so the GPU force pass is exact for those models. */
+async function runAgentStepWebGPU(): Promise<boolean> {
+  const s = agentStore;
+  const rt = agentWebgpuRuntime;
+  if (!s || !rt || !rt.ready) return false;
+  const cfg = centerBasedConfig;
+  const bonding = usesBondingPhysics(cfg);
+  const muR = cbNum(cfg, 'repulsionStiffness');
+  const muA = cbNum(cfg, 'adhesionStiffness');
+  const range = cbNum(cfg, 'interactionRange');
+  const eta = Math.max(1e-6, cbNum(cfg, 'drag'));
+  const torus = boundaryTreatment === 'torus';
+  const W = s.worldWidth, H = s.worldHeight;
+  const growthRate = bonding ? Math.max(0, cbNum(cfg, 'growthRate')) : 0;
+  const hw = s.highWater;
+  const alive = s.alive, rad = s.radius;
+  const momentum = Math.max(0, Math.min(0.999, cbNum(cfg, 'momentum')));
+  const maxSpeed = Math.max(0, cbNum(cfg, 'maxSpeed'));
+  const dt = s.dt;
+
+  // Reset the per-step force accumulator (Apply Force adds into it on the GPU).
+  s.forceX.fill(0, 0, hw); s.forceY.fill(0, 0, hw);
+
+  // Build the uniform spatial hash CPU-side (same as the JS path) — the GPU
+  // behaviour + force passes query it. 2D (the WebGPU agent gate rejects 3D).
+  let maxR = cbNum(cfg, 'defaultRadius');
+  for (let i = 0; i < hw; i++) { if (alive[i] && rad[i]! > maxR) maxR = rad[i]!; }
+  const binEdge = Math.max(range * 2 * maxR, cbNum(cfg, 'neighbourQueryRadius'));
+  const hash = buildSpatialHash(s, Math.max(1e-3, binEdge), W, H, s.worldDepth);
+  currentAgentHash = hash;
+
+  // Prime the sync attr write buffer (no-op in async agent mode). Keeps the CPU
+  // attr-buffer invariant the structural phase / snapshot read.
+  primeAgentAttrWrite(s);
+
+  // Upload the hash + the SoA; bail (→ JS) if the hash overflows the GPU reserve.
+  const hashFits = uploadAgentHash(rt, hash);
+  const hashValid = hashFits && hash ? 1 : 0;
+  if (hash && !hashFits) {
+    if (!agentWebgpuHashOverflowWarned) {
+      agentWebgpuHashOverflowWarned = true;
+      self.postMessage({ type: 'error', message: `[agents] spatial hash (${hash.nBinsX * hash.nBinsY * hash.nBinsZ} bins) exceeds the WebGPU reserve (${rt.layout.maxHashBins}); this step runs on JS.` });
+    }
+    return false;
+  }
+  uploadAgentSoA(rt, s);
+  uploadAgentControl(rt, {
+    highWater: hw, hashValid, nBinsX: hash ? hash.nBinsX : 0, nBinsY: hash ? hash.nBinsY : 0,
+    fieldTorus: torus ? 1 : 0,
+    binSizeX: hash ? hash.binSizeX : 1, binSizeY: hash ? hash.binSizeY : 1,
+    fieldW: W, fieldH: H,
+  });
+  uploadAgentForceControl(rt, hw, {
+    hashValid, nBinsX: hash ? hash.nBinsX : 0, nBinsY: hash ? hash.nBinsY : 0,
+    binSizeX: hash ? hash.binSizeX : 1, binSizeY: hash ? hash.binSizeY : 1,
+    dtOverEta: dt / eta, muR, muA, range, momentum, maxSpeed, growthRate,
+    fieldW: W, fieldH: H, bonding: bonding ? 1 : 0, torus: torus ? 1 : 0,
+  });
+
+  // Dispatch behaviour → force, then commit. The behaviour shader does NOT touch
+  // user attrs in the Boids subset, so `swapAgentAttrs` swaps the (unchanged)
+  // write buffer in exactly as the JS path does (sync mode; no-op in async).
+  try {
+    dispatchAgentStep(rt, hw);
+    swapAgentAttrs(s);
+    await readbackAgentStep(rt, s);   // commits x/y (from xNext/yNext) + vx/vy/radius/density/age
+  } catch (e) {
+    self.postMessage({ type: 'error', message: '[agents] WebGPU step failed, falling back to JS: ' + ((e as Error)?.message || e) });
+    destroyAgentWebGPURuntime(agentWebgpuRuntime); agentWebgpuRuntime = null;
+    return false;
+  }
+
+  // The structural phase runs on the settled CPU state (no-op for Boids). Bonds /
+  // division are excluded from the WebGPU agent target by the gate, so this only
+  // advances auto-bond/sweep (also no-ops without bonds).
+  runAgentStructuralPhase();
+  return true;
 }
 
 /** Post-step structural phase — the only place the bond / agent topology is
@@ -3652,13 +3827,20 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       agentUsesField = !!msg.agentUsesField;
       centerBasedConfig = msg.centerBased ?? null;
       agentColorViewer = msg.agentColorViewer || '';
-      // PR6b-1: resolve the agent target + stash the WASM bytes BEFORE initAgents
-      // (which reads agentTarget to decide whether to back the store on memory).
-      agentTarget = (msg.agentWasmBytes && msg.agentTarget === 'wasm') ? 'wasm' : (msg.agentTarget ?? 'js');
+      // PR6b-1 / PR7: resolve the agent target + stash the per-target payload
+      // BEFORE initAgents (which reads agentTarget to decide whether to back the
+      // store on WebAssembly.Memory). 'wasm' needs bytes; 'webgpu' needs the two
+      // shaders — a target missing its payload demotes to 'js'.
+      agentTarget = resolveAgentTarget(msg.agentTarget, msg.agentWasmBytes, msg.agentWebgpuBehaviourShader, msg.agentWebgpuForceShader);
       pendingAgentWasmBytes = msg.agentWasmBytes ?? null;
+      pendingAgentWebgpuBehaviour = msg.agentWebgpuBehaviourShader ?? null;
+      pendingAgentWebgpuForce = msg.agentWebgpuForceShader ?? null;
+      pendingAgentWebgpuMaxAgents = msg.agentWebgpuMaxAgents ?? 0;
+      pendingAgentWebgpuMaxHashBins = msg.agentWebgpuMaxHashBins ?? 0;
       initAgents();
       compileAgentFns(msg.agentBehaviourCode, msg.agentInitCode, msg.agentDivisionCode);
       instantiateAgentWasmIfNeeded();
+      buildAgentWebGPUIfNeeded();
       // Generic Agent Platform: run the Agent Init Event ONCE on this fresh store
       // (after the fns are compiled), so graph-authored seeding (Create Agent /
       // Add Agent To World) lays down the initial population on first load too —
@@ -3809,6 +3991,39 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         })().catch(e => {
           const m = (e instanceof Error) ? e.message : String(e);
           self.postMessage({ type: 'error', message: '[webgpu] step pipeline failed: ' + m });
+        });
+        break;
+      }
+
+      // PR7 G3-runtime — JS/WASM grid + WebGPU agents (the Boids headline). The
+      // agent step is ASYNC on the GPU (the readback awaits a mapAsync), which the
+      // synchronous `for` loop below cannot await — so route to an async copy of
+      // the batch loop here. The cell grid still steps synchronously (runStep,
+      // not runStepWebGPU — the grid target is JS/WASM in this branch). On any GPU
+      // failure the agent step returns false and the JS runAgentStep() runs for
+      // that step (so this stays correct even mid-batch).
+      if (agentStore && agentTarget === 'webgpu' && agentWebgpuRuntime) {
+        (async () => {
+          let stoppedByEvent: string | null = null;
+          for (let i = 0; i < msg.count; i++) {
+            if (simulateAgents) {
+              const ran = await runAgentStepWebGPU();
+              if (!ran) runAgentStep();   // GPU bailed (hash overflow / failure) → JS this step
+            }
+            if (stepFn && simulateCells) runStep();
+            const rawStop = stopFlag[0] ?? 0;
+            if (rawStop !== 0) {
+              const idx = rawStop - 1;
+              stoppedByEvent = stopMessages[idx] ?? `Stop event #${idx}`;
+              stopFlag[0] = 0;
+              break;
+            }
+          }
+          if (stepFn && !msg.skipColorPass) runColorPass();
+          sendColors();
+          if (stoppedByEvent !== null) self.postMessage({ type: 'stopEvent', message: stoppedByEvent });
+        })().catch(e => {
+          self.postMessage({ type: 'error', message: '[agents] WebGPU step batch failed: ' + ((e as Error)?.message || e) });
         });
         break;
       }
@@ -4059,7 +4274,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // the configured initial count + the agent Init Event, PR-A3). Re-allocates
       // the store from the live config so a config edit (maxAgents/seedCount/…)
       // takes effect on Reset.
-      if (agentsEnabled) { initAgents(); instantiateAgentWasmIfNeeded(); runAgentInit(); runAgentColorPass(); }
+      if (agentsEnabled) { initAgents(); instantiateAgentWasmIfNeeded(); buildAgentWebGPUIfNeeded(); runAgentInit(); runAgentColorPass(); }
       // Init Event runs once per cell on Reset only (not on Randomize, not on
       // Load State). When present, it modifies attrs in place AFTER defaults
       // have been applied and BEFORE the color pass / GPU upload.
@@ -4117,17 +4332,24 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         if (rc.centerBased) centerBasedConfig = rc.centerBased;
         if (rc.agentUsesField !== undefined) agentUsesField = !!rc.agentUsesField;
         compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode, rc.agentDivisionCode);
-        // PR6b-1: re-resolve the agent target. If the backing requirement
-        // changes (JS↔WASM, since wasm needs the store on a WebAssembly.Memory),
-        // re-init the store so its arrays sit on (or off) the memory; otherwise
-        // a graph-only edit keeps the population. Then (re-)instantiate the WASM
-        // behaviour loop against the (possibly fresh) store memory.
-        const newTarget: 'js' | 'wasm' | 'webgpu' = (rc.agentWasmBytes && rc.agentTarget === 'wasm') ? 'wasm' : (rc.agentTarget ?? 'js');
+        // PR6b-1 / PR7: re-resolve the agent target + stash the per-target payload.
+        // If the WASM backing requirement changes (JS/WebGPU ↔ WASM, since wasm
+        // needs the store on a WebAssembly.Memory), re-init the store so its arrays
+        // sit on (or off) the memory; otherwise a graph-only edit keeps the
+        // population. Then (re-)instantiate the WASM loop or (re-)build the WebGPU
+        // runtime against the (possibly fresh) store. (JS↔WebGPU does NOT change
+        // the backing — the GPU has its own buffers — so the population persists.)
+        const newTarget = resolveAgentTarget(rc.agentTarget, rc.agentWasmBytes, rc.agentWebgpuBehaviourShader, rc.agentWebgpuForceShader);
         pendingAgentWasmBytes = rc.agentWasmBytes ?? null;
+        pendingAgentWebgpuBehaviour = rc.agentWebgpuBehaviourShader ?? null;
+        pendingAgentWebgpuForce = rc.agentWebgpuForceShader ?? null;
+        pendingAgentWebgpuMaxAgents = rc.agentWebgpuMaxAgents ?? 0;
+        pendingAgentWebgpuMaxHashBins = rc.agentWebgpuMaxHashBins ?? 0;
         const backingChanged = (newTarget === 'wasm') !== (agentStore?.wasmBacked ?? false) && !agentWasmBackedDev;
         agentTarget = newTarget;
         if (agentsEnabled && backingChanged) { initAgents(); runAgentInit(); runAgentColorPass(); }
         instantiateAgentWasmIfNeeded();
+        buildAgentWebGPUIfNeeded();
         clampAgentDt();
       }
       // Variegated Cells: re-fill the facePatternLookup + interaction-table
@@ -4586,7 +4808,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // caller then steps + getStates to compare bit-for-bit against the
       // plain-array backing. No-op in production (never sent).
       agentWasmBackedDev = !!msg.wasmBacked;
-      if (agentsEnabled) { initAgents(); instantiateAgentWasmIfNeeded(); runAgentInit(); runAgentColorPass(); }
+      if (agentsEnabled) { initAgents(); instantiateAgentWasmIfNeeded(); buildAgentWebGPUIfNeeded(); runAgentInit(); runAgentColorPass(); }
       sendColors();
       break;
     }

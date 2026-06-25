@@ -143,7 +143,7 @@ Execute the handoff **PR7** as written. Summary (full spec in the handoff §2 PR
   binding-count fallback notice + the scale benchmark. **Sync agents only** (one
   sentence, no async gate — agents are always single-buffer).
 
-### WebGPU track — STATUS (PR7 G1+G2+G3 landed; G3-runtime + G4/G5/G6 deferred)
+### WebGPU track — STATUS (PR7 G1+G2+G3 + G3-runtime + G6 DONE — Boids flocks on WebGPU; G4/G5/PR7c deferred)
 
 - **G1+G2 — DONE + on-device-verified.** `src/modeler/vpl/compiler/agentWebgpu/{layout.ts,compile.ts}`
   — the SEPARATE WebGPU agent-loop compiler (the GPU sibling of `agentWasm/compile.ts`).
@@ -167,16 +167,27 @@ Execute the handoff **PR7** as written. Summary (full spec in the handoff §2 PR
   BUILD stay CPU/JS (the GPU SoA carries no bond store; the gate excludes bonded models,
   so for the Boids headline the force pass is exact). Verified: compiles 0 errors on a
   real device.
-- **G3-runtime + G6 — DEFERRED (next session).** The per-step upload/dispatch/readback
-  wiring (`webgpuRuntime.ts` agent buffers + the two pipelines + `sim.worker.ts`
-  dispatch) and the `agentTargetOf` `{js,wasm,webgpu}` widen + the Properties-radio
-  enable. **Not shipped because it could not be end-to-end browser-verified in the
-  isolated worktree** (no worktree `node_modules`; the shared main-repo dev-server
-  worker can't be safely overwritten to test live agent dispatch). Per §4 the
-  disciplined outcome is to ship the on-device-verified compiler + force shader and
-  hand off the runtime — never ship unverified GPU runtime code. **G4** (structural
-  round-trip → Tissue) + **G5** (field bridge → Chemotaxis) remain after the Boids
-  runtime works.
+- **G3-runtime + G6 — DONE + live-verified.** `src/simulator/engine/agentWebgpuRuntime.ts`
+  — a SELF-CONTAINED agent WebGPU runtime (its own device, separate from the grid's
+  `webgpuRuntime.ts`): `createAgentWebGPURuntime` (device + the two pipelines over 8
+  buffers, the behaviour 7-binding + force 4-binding bind groups), `uploadAgentSoA` /
+  `uploadAgentHash` / `uploadAgentControl` / `uploadAgentForceControl` (the two uniforms
+  mirror the shader structs + `FORCE_PASS_PARAMS`), `dispatchAgentStep` (behaviour then
+  force, `dispatchCells(maxAgents,64)`), `readbackAgentStep` (commits `xNext/yNext→x/y`
+  + `vx/vy/radius/density/age` into the CPU store), `seedAgentRng` (once at creation; the
+  GPU advances in place). The worker's `runAgentStepWebGPU()` (async) is the GPU sibling
+  of `runAgentStep`'s WASM dispatch; the step handler routes a JS/WASM-grid + WebGPU-agents
+  model (Boids) to an async copy of the batch loop. `agentTargetOf` widened to
+  `{js,wasm,webgpu}` (3rd arg `webgpuSupported`); the Properties radio is enabled +
+  reflects live support. **Live-verified in the browser**: Boids on `agentTarget:'webgpu'`
+  — 260 agents flock (velocity polarization 0.01 → 0.998 over ~200 steps, stable over
+  400+, 0 worker errors), render as cyan dots; gate `true`, `agentTargetOf===webgpu`,
+  shader 5780 chars. Lattice + JS-agent + WASM-agent byte-identity by construction
+  (`git diff --stat` touches only `centerBased.ts`/`PropertiesPanelContent.tsx`/
+  `SimulatorView.tsx`/`sim.worker.ts` + the new runtime — the compilers are untouched).
+- **G4** (structural round-trip → Tissue) + **G5** (field bridge → Chemotaxis) + **PR7c**
+  (zero-copy / atomics) — STILL DEFERRED; the gate clamps bonded/division/field agent
+  graphs to JS.
 
 ### Scale benchmark (the headline number) — JS vs WASM, force integrator
 
