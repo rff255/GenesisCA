@@ -143,6 +143,68 @@ Execute the handoff **PR7** as written. Summary (full spec in the handoff §2 PR
   binding-count fallback notice + the scale benchmark. **Sync agents only** (one
   sentence, no async gate — agents are always single-buffer).
 
+### WebGPU track — STATUS (PR7 G1+G2+G3 landed; G3-runtime + G4/G5/G6 deferred)
+
+- **G1+G2 — DONE + on-device-verified.** `src/modeler/vpl/compiler/agentWebgpu/{layout.ts,compile.ts}`
+  — the SEPARATE WebGPU agent-loop compiler (the GPU sibling of `agentWasm/compile.ts`).
+  `compileAgentGraphWebGPU` emits a WGSL `behaviour` module over the GPU agent SoA
+  (`computeAgentWebGPULayout` — 7 strided storage buffers, under the 8-binding floor;
+  `highWater` a control uniform). `isAgentGraphWebGPUSupported` is the honest gate
+  (mirrors the WASM gate + a 3D rejection). Reconciled to the current base: reads
+  `agentVariables` (not the cell `variables`); the Compare op reads `operation`
+  (the StatementNode key). Verified: `compileAll(Boids).agent.webgpu` emits a
+  5780-char shader with exactly the 11 Boids node types; it compiles with **0 errors +
+  0 validation errors** on a real `device.createShaderModule`/`getCompilationInfo`;
+  Tissue/Chemotaxis (getCellAttribute/secreteToField) + any 3D model clamp to JS.
+- **G3 — DONE + on-device-verified.** `agentWebgpu/forcePass.ts` `emitAgentForcePassWGSL`
+  — the standalone WGSL force integrator (the GPU sibling of `runAgentStep`'s force
+  loop + `agentWasm` `emitForcePass`): the 3×3 hash-stencil neighbour pass (soft-sphere
+  + density, torus-wrapped, all-pairs fallback) → velocity Euler (momentum/maxSpeed/
+  dt) → wrap/clamp into the appended GPU `xNext`/`yNext` fields → age + growth ramp.
+  Its own `ForceControl` uniform mirrors the WASM `FORCE_PASS_PARAMS` ABI. `xNext`/`yNext`
+  appended to `AGENT_GPU_F32_FIELDS` (behaviour shader bases stay byte-identical —
+  re-verified). 2D-only, f32 (statistical parity). Bond springs + division + the hash
+  BUILD stay CPU/JS (the GPU SoA carries no bond store; the gate excludes bonded models,
+  so for the Boids headline the force pass is exact). Verified: compiles 0 errors on a
+  real device.
+- **G3-runtime + G6 — DEFERRED (next session).** The per-step upload/dispatch/readback
+  wiring (`webgpuRuntime.ts` agent buffers + the two pipelines + `sim.worker.ts`
+  dispatch) and the `agentTargetOf` `{js,wasm,webgpu}` widen + the Properties-radio
+  enable. **Not shipped because it could not be end-to-end browser-verified in the
+  isolated worktree** (no worktree `node_modules`; the shared main-repo dev-server
+  worker can't be safely overwritten to test live agent dispatch). Per §4 the
+  disciplined outcome is to ship the on-device-verified compiler + force shader and
+  hand off the runtime — never ship unverified GPU runtime code. **G4** (structural
+  round-trip → Tissue) + **G5** (field bridge → Chemotaxis) remain after the Boids
+  runtime works.
+
+### Scale benchmark (the headline number) — JS vs WASM, force integrator
+
+`scripts/bench-agent-force.mjs` (esbuild-bundled, DOM-free) times the force-pass hot
+loop (neighbour pass + Euler integration; the CPU hash build EXCLUDED, identical on
+every target) at 2k/10k/50k/100k agents, customForces (soft-sphere OFF, the Boids
+case), torus, momentum 0.9, on an 800×800 world:
+
+| N | JS steps/s | WASM steps/s | WASM speedup |
+|---|---|---|---|
+| 2 000 | 5590 | 5507 | 0.99× |
+| 10 000 | 866 | 784 | 0.90× |
+| 50 000 | 99.3 | 97.0 | 0.98× |
+| 100 000 | 33.1 | 34.0 | 1.03× |
+
+**Honest crossover finding: the agent force loop is a WASH on JS vs WASM at every
+scale (0.90×–1.03×).** V8 JITs this tight monomorphic numeric loop near-optimally, so
+WASM gives no meaningful speedup (consistent with the W1 ~1.0–1.25× finding). The agent
+engine is O(N) via the spatial hash, so it is NOT a JS bottleneck at any interactive
+count. **WebGPU is intentionally absent from the table** — its per-step cost is
+dominated by the whole-SoA upload + readback (the hash is CPU-built, so the GPU buffers
+must be re-synced every step), a fixed per-step overhead that BELOW ~10k agents exceeds
+the entire JS/WASM force loop. So WebGPU for agents is a wash-or-REGRESSION at
+interactive counts and can only break even (if at all) at the very largest counts; that
+number needs the wired runtime (deferred) to measure. **This is the whole point of the
+milestone: there is no agent-loop speedup to be had from a faster target at the counts
+that matter — the spatial hash already won that battle on JS.**
+
 ---
 
 ## UI / radio
