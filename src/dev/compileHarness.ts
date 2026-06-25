@@ -20,6 +20,7 @@ import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported } from '../modeler/vpl/compiler/agentWasm/compile';
+import { compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported } from '../modeler/vpl/compiler/agentWebgpu/compile';
 
 export interface CompileAllResult {
   js: { stepCode: string; fullCode: string; error: string | null };
@@ -33,6 +34,10 @@ export interface CompileAllResult {
     behaviourCode: string;
     error: string | null;
     wasm: { supported: boolean; bytesLen: number; bytesJoined: string; supportedTypes: string[]; error: string | null };
+    /** PR7/G1+G2 — the WebGPU agent behaviour SHADER (WGSL source). `supported`
+     *  is the `isAgentGraphWebGPUSupported` gate; `shaderCode` is the emitted
+     *  WGSL module (empty for a non-agent / unsupported model). */
+    webgpu: { supported: boolean; shaderCode: string; supportedTypes: string[]; error: string | null };
   };
 }
 
@@ -41,7 +46,11 @@ export function compileAll(model: CAModel): CompileAllResult {
     js: { stepCode: '', fullCode: '', error: null },
     wasm: { total: 0, bytesLen: 0, bytesJoined: '', error: null },
     webgpu: { shaderCode: '', error: null },
-    agent: { behaviourCode: '', error: null, wasm: { supported: false, bytesLen: 0, bytesJoined: '', supportedTypes: [], error: null } },
+    agent: {
+      behaviourCode: '', error: null,
+      wasm: { supported: false, bytesLen: 0, bytesJoined: '', supportedTypes: [], error: null },
+      webgpu: { supported: false, shaderCode: '', supportedTypes: [], error: null },
+    },
   };
   // JS — capture step + initCode + all inputColor + all outputMapping code so
   // OM/IC/init emits (e.g. setCellLooks colour writes) are searchable.
@@ -100,6 +109,18 @@ export function compileAll(model: CAModel): CompileAllResult {
     }
   } catch (e) {
     out.agent.wasm.error = String((e as Error)?.message || e);
+  }
+  // Bond-Graph Agents — the PR7/G1+G2 WebGPU agent-loop behaviour shader.
+  try {
+    out.agent.webgpu.supported = isAgentGraphWebGPUSupported(model);
+    if (model.topologyMode?.agents && model.centerBased) {
+      const r = compileAgentGraphWebGPUForModel(model);
+      out.agent.webgpu.shaderCode = r.shaderCode;
+      out.agent.webgpu.supportedTypes = r.supportedTypes;
+      out.agent.webgpu.error = r.error || null;
+    }
+  } catch (e) {
+    out.agent.webgpu.error = String((e as Error)?.message || e);
   }
   return out;
 }
