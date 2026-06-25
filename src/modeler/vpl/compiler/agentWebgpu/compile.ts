@@ -53,6 +53,8 @@ import { collapseReroutes } from '../rerouteCollapse';
 import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { cellFieldAttrsOf, cellFieldWriteAttrsOf, agentAttrsOf } from '../../../../model/attributeScope';
 import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/CategoricalColorNode';
+import { readColorScaleStops } from '../../nodes/ColorScaleNode';
+import { resolveKeyLabels } from '../variegation';
 import { computeAgentWebGPULayout, type AgentWebGPULayout } from './layout';
 
 /** The node types this compiler can emit to WGSL. A model whose agent graph uses
@@ -63,22 +65,31 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   // event roots
   'behaviourStep',
   // self reads
-  'getSelfPosition', 'getRadius', 'getBondDegree', 'neighbourDensity',
+  'getSelfPosition', 'getRadius', 'getBondDegree', 'neighbourDensity', 'getCurvature',
   // neighbour access
   'getNearbyAgents', 'forEachInArray', 'getAgentOffset', 'getVelocity',
   'getAgentPosition', 'getAgentRadius', 'getAgentAttribute',
-  // agent-array tier (id/value arrays + aggregate over them)
-  'getAgentsAttribute', 'filterAgents', 'joinAgents',
-  'pickRandomAgent', 'pickNRandomAgents', 'aggregate',
-  // local variables (SCALAR only)
-  'getVariable', 'setVariable',
-  // agent attributes (Get/Set Attribute on the agent SoA — G4)
-  'getCellAttribute', 'setAttribute',
+  // agent-array tier (id/value arrays + aggregate/group-reduce over them)
+  'getAgentsAttribute', 'setAgentsAttribute', 'filterAgents', 'joinAgents',
+  'pickRandomAgent', 'pickNRandomAgents', 'getBondedAgents',
+  'aggregate', 'groupOperator', 'groupCounting', 'groupStatement',
+  // bonds
+  'forEachBond',
+  // local variables (scalar + array)
+  'getVariable', 'setVariable', 'setArrayElement',
+  // array accessors
+  'arrayElement', 'arrayLength',
+  // agent attributes (Get/Set/Update Attribute on the agent SoA)
+  'getCellAttribute', 'setAttribute', 'updateAttribute', 'setAgentAttribute',
+  'setVelocity', 'setAgentPosition', 'setAgentRadius', 'setAgentType',
   // field bridge (G5 — the closed agent↔grid morphogen feedback)
   'sampleField', 'fieldGradient', 'readCellsUnder',
   'affectCellsUnder', 'secreteToField',
-  // colour (G4 — Set Cell Looks per-agent + the categorical palette)
-  'categoricalColor', 'setCellLooks',
+  // colour + tables + model attrs
+  'categoricalColor', 'setCellLooks', 'getColorConstant', 'colorScale',
+  'getModelAttribute', 'lookupInteraction', 'proportionMap', 'interpolation', 'valueSwitch',
+  // indicators
+  'getIndicator', 'setIndicator', 'updateIndicator',
   // structural writes (G4 — the post-step CPU structural phase reads the requests)
   'divideAgent', 'formBond', 'breakBond', 'killAgent',
   // writes
@@ -86,7 +97,7 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   // value/flow utility
   'getConstant', 'arithmeticOperator', 'expression', 'statement', 'logicOperator', 'getRandom',
   // flow
-  'conditional', 'sequence',
+  'conditional', 'sequence', 'switch', 'loop',
 ]);
 
 /** Max agent-array-producer nodes (getNearbyAgents / getAgentsAttribute /
@@ -103,6 +114,9 @@ export interface AgentWebGPUResult {
   layout: AgentWebGPULayout;
   /** The node types the compiler actually emitted (diagnostics + the gate). */
   supportedTypes: string[];
+  /** True when the behaviour body writes the i32 SoA (setAgentType) → the runtime
+   *  must bind agentI32 as `storage` (read_write) + read the i32 SoA back. */
+  usesI32Write?: boolean;
   error?: string;
 }
 
@@ -188,6 +202,9 @@ interface AgentWgpuCtx {
   agentAttrType: Map<string, string>;
   /** Scalar Local-Variable id → its WGSL var name (`var<function>`, reset per agent). */
   varNames: Map<string, string>;
+  /** Array Local-Variable id → its WGSL var name + fixed length (`var<function>
+   *  array<f32, N>`, reset per agent). */
+  arrayVarNames: Map<string, { name: string; len: number }>;
   /** Cache: `${nodeId}:${portId}` → its ValueRef. Cleared on scope change. */
   valueCache: Map<string, ValueRef>;
   /** Cache: `${nodeId}:${portId}` → its AgentArrayRef. Cleared on scope change
@@ -201,6 +218,13 @@ interface AgentWgpuCtx {
   /** Active forEach iteration locals (innermost last). `elemType` is the source
    *  array's element type (i32 for id arrays, f32 for value arrays). */
   forEachStack: Array<{ nodeId: string; elemName: string; idxName: string; elemType: WgslType }>;
+  /** Set when the behaviour body writes the i32 SoA (setAgentType) — the agentI32
+   *  binding is then declared `read_write` (else `read`, the Boids-byte-identical
+   *  default). */
+  usesI32Write: boolean;
+  /** Active forEachBond iteration frames — the per-iteration value-output WGSL
+   *  expressions (partnerId / restLength / currentLength / index). */
+  forEachBondStack: Array<{ nodeId: string; partner: string; rest: string; cur: string; index: string }>;
 }
 
 function fresh(ctx: AgentWgpuCtx, hint: string): string {
@@ -307,6 +331,15 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
         : { expr: frame.elemName, type: frame.elemType };
       break;
     }
+    case 'forEachBond': {
+      const frame = ctx.forEachBondStack.find(f => f.nodeId === nodeId);
+      if (!frame) { result = { expr: '0', type: 'i32' }; break; }
+      result = portId === 'restLength' ? { expr: frame.rest, type: 'f32' }
+        : portId === 'currentLength' ? { expr: frame.cur, type: 'f32' }
+        : portId === 'index' ? { expr: frame.index, type: 'i32' }
+        : { expr: frame.partner, type: 'i32' }; // partnerId
+      break;
+    }
     case 'behaviourStep': {
       result = emitBehaviourStep(ctx, portId);
       break;
@@ -343,8 +376,76 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
       result = emitCategoricalColor(ctx, node, portId);
       break;
     }
+    case 'getColorConstant': {
+      result = emitGetColorConstant(ctx, node, portId);
+      break;
+    }
     case 'getConstant': {
       result = { expr: wgslFloatLit(readConstantValue(node)), type: 'f32' };
+      break;
+    }
+    case 'getModelAttribute': {
+      result = emitGetModelAttribute(ctx, node, portId);
+      break;
+    }
+    case 'proportionMap': {
+      result = emitProportionMap(ctx, node);
+      break;
+    }
+    case 'interpolation': {
+      const t = inF32(ctx, node, 't', 0.5);
+      const mn = inF32(ctx, node, 'min', 0);
+      const mx = inF32(ctx, node, 'max', 1);
+      result = emitLet(ctx, 'f32', `(${mn} + ${t} * (${mx} - ${mn}))`, 'lerp');
+      break;
+    }
+    case 'colorScale': {
+      result = emitColorScale(ctx, node, portId);
+      break;
+    }
+    case 'valueSwitch': {
+      const cond = `(${inF32(ctx, node, 'condition', 0)} != 0.0)`;
+      const ifV = inF32(ctx, node, 'ifValue', 1);
+      const elV = inF32(ctx, node, 'elseValue', 0);
+      result = emitLet(ctx, 'f32', `select(${elV}, ${ifV}, ${cond})`, 'vsel');
+      break;
+    }
+    case 'arrayElement': {
+      result = emitArrayElement(ctx, node);
+      break;
+    }
+    case 'arrayLength': {
+      result = emitArrayLength(ctx, node);
+      break;
+    }
+    case 'getIndicator': {
+      result = emitGetIndicator(ctx, node);
+      break;
+    }
+    case 'getBondedAgents': {
+      // scalar request (no scalar output) — defer to array path.
+      compileArrayNode(ctx, node.id, 'agents');
+      result = { expr: '0', type: 'i32' };
+      break;
+    }
+    case 'getCurvature': {
+      result = emitGetCurvature(ctx, node);
+      break;
+    }
+    case 'groupOperator': {
+      result = emitGroupOperator(ctx, node, portId);
+      break;
+    }
+    case 'groupCounting': {
+      result = emitGroupCounting(ctx, node);
+      break;
+    }
+    case 'groupStatement': {
+      result = emitGroupStatement(ctx, node);
+      break;
+    }
+    case 'lookupInteraction': {
+      result = emitLookupInteraction(ctx, node);
       break;
     }
     case 'arithmeticOperator': {
@@ -743,6 +844,366 @@ function emitReadCellsUnder(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
 }
 
 // ---------------------------------------------------------------------------
+// Universal value emitters (no new GPU bindings) — ported from the lattice WGSL
+// compiler, adapted to the agent loop's idx-based SoA addressing.
+// ---------------------------------------------------------------------------
+
+/** Resolve a `getVariable` node whose variable is an ARRAY → its WGSL var name +
+ *  fixed length (null when it's a scalar variable or unknown). */
+function resolveArrayVar(ctx: AgentWgpuCtx, getVarNode: GraphNode): { name: string; len: number } | null {
+  const variableId = (getVarNode.data.config?.['variableId'] as string) || '';
+  return variableId ? (ctx.arrayVarNames.get(variableId) ?? null) : null;
+}
+
+/** Get Color Constant — three integer literals (multi-output r/g/b). */
+function emitGetColorConstant(ctx: AgentWgpuCtx, node: GraphNode, portId: string): ValueRef {
+  const cached = ctx.valueCache.get(`${node.id}:r`);
+  if (cached !== undefined) return ctx.valueCache.get(`${node.id}:${portId}`) ?? cached;
+  const cfg = node.data.config as Record<string, unknown> | undefined;
+  const r = parseInt(String(cfg?.['r'] ?? '0'), 10) || 0;
+  const g = parseInt(String(cfg?.['g'] ?? '0'), 10) || 0;
+  const b = parseInt(String(cfg?.['b'] ?? '0'), 10) || 0;
+  const refs: Record<string, ValueRef> = {
+    r: emitLet(ctx, 'i32', `${r | 0}`, 'gcr'),
+    g: emitLet(ctx, 'i32', `${g | 0}`, 'gcg'),
+    b: emitLet(ctx, 'i32', `${b | 0}`, 'gcb'),
+  };
+  for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
+  return refs[portId] ?? refs['r']!;
+}
+
+/** WGSL interpolation-curve expr (mirrors the lattice `wgslInterpolationCurveExpr`). */
+function curveExpr(tExpr: string, method: string): string {
+  if (method === 'linear') return `(${tExpr})`;
+  const tcl = `clamp((${tExpr}), 0.0, 1.0)`;
+  switch (method) {
+    case 'smoothstep': return `(${tcl}) * (${tcl}) * (3.0 - 2.0 * (${tcl}))`;
+    case 'easeInQuad': return `(${tcl}) * (${tcl})`;
+    case 'easeOutQuad': return `(1.0 - (1.0 - (${tcl})) * (1.0 - (${tcl})))`;
+    case 'exponential': return `select(0.0, pow(2.0, 10.0 * ((${tcl}) - 1.0)), (${tcl}) > 0.0)`;
+    case 'logarithmic': return `select(1.0, (1.0 - pow(2.0, -10.0 * (${tcl}))), (${tcl}) < 1.0)`;
+    default: return `(${tcl})`;
+  }
+}
+
+/** Proportion Map — remap x from [inMin,inMax] to [outMin,outMax] via a curve. */
+function emitProportionMap(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
+  const x = inF32(ctx, node, 'x', 0);
+  const inMin = inF32(ctx, node, 'inMin', 0);
+  const inMax = inF32(ctx, node, 'inMax', 1);
+  const outMin = inF32(ctx, node, 'outMin', 0);
+  const outMax = inF32(ctx, node, 'outMax', 1);
+  const method = (node.data.config?.['method'] as string) || 'linear';
+  const span = emitLet(ctx, 'f32', `(${inMax} - ${inMin})`, 'pmSp');
+  const tRaw = emitLet(ctx, 'f32', `select(0.0, ((${x}) - (${inMin})) / ${span.expr}, (${span.expr} != 0.0))`, 'pmt');
+  const tCurve = emitLet(ctx, 'f32', curveExpr(tRaw.expr, method), 'pmc');
+  return emitLet(ctx, 'f32', `select((${outMin}), ((${outMin}) + ${tCurve.expr} * ((${outMax}) - (${outMin}))), (${span.expr} != 0.0))`, 'pm');
+}
+
+/** Color Scale — multi-stop gradient → integer r/g/b (multi-output). Mirrors the
+ *  lattice WGSL colorScale exactly. */
+function emitColorScale(ctx: AgentWgpuCtx, node: GraphNode, portId: string): ValueRef {
+  const cached = ctx.valueCache.get(`${node.id}:r`);
+  if (cached !== undefined) return ctx.valueCache.get(`${node.id}:${portId}`) ?? cached;
+  const t = inF32(ctx, node, 't', 0.5);
+  const method = (node.data.config?.['method'] as string) || 'linear';
+  const stops = readColorScaleStops(node.data.config as Record<string, string | number | boolean>);
+  const f32Lit = (n: number) => Number.isInteger(n) ? `${n}.0` : `${n}`;
+  const tName = fresh(ctx, 'cst');
+  ctx.lines.push(`  let ${tName}: f32 = ${t};`);
+  const rName = fresh(ctx, 'csr'), gName = fresh(ctx, 'csg'), bName = fresh(ctx, 'csb');
+  ctx.lines.push(`  var ${rName}: i32; var ${gName}: i32; var ${bName}: i32;`);
+  const writeConst = (r: number, g: number, b: number) => `${rName} = ${r | 0}; ${gName} = ${g | 0}; ${bName} = ${b | 0};`;
+  if (stops.length === 0) {
+    ctx.lines.push(`  ${writeConst(0, 0, 0)}`);
+  } else if (stops.length === 1) {
+    const s = stops[0]!;
+    ctx.lines.push(`  ${writeConst(s.r, s.g, s.b)}`);
+  } else {
+    const first = stops[0]!, last = stops[stops.length - 1]!;
+    ctx.lines.push(`  if (${tName} <= ${f32Lit(first.p)}) { ${writeConst(first.r, first.g, first.b)} }`);
+    for (let i = 0; i < stops.length - 1; i++) {
+      const a = stops[i]!, b = stops[i + 1]!;
+      if (b.p === a.p) continue;
+      const localExpr = `((${tName} - ${f32Lit(a.p)}) / ${f32Lit(b.p - a.p)})`;
+      const curved = curveExpr(localExpr, method);
+      const rExpr = `i32(floor(${f32Lit(a.r)} + (${curved}) * ${f32Lit(b.r - a.r)} + 0.5))`;
+      const gExpr = `i32(floor(${f32Lit(a.g)} + (${curved}) * ${f32Lit(b.g - a.g)} + 0.5))`;
+      const bExpr = `i32(floor(${f32Lit(a.b)} + (${curved}) * ${f32Lit(b.b - a.b)} + 0.5))`;
+      ctx.lines.push(`  else if (${tName} < ${f32Lit(b.p)}) { ${rName} = ${rExpr}; ${gName} = ${gExpr}; ${bName} = ${bExpr}; }`);
+    }
+    ctx.lines.push(`  else { ${writeConst(last.r, last.g, last.b)} }`);
+  }
+  const refs: Record<string, ValueRef> = {
+    r: { expr: rName, type: 'i32' }, g: { expr: gName, type: 'i32' }, b: { expr: bName, type: 'i32' },
+  };
+  for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
+  return refs[portId] ?? refs['r']!;
+}
+
+/** Get Array Element — `arr[position]` with a bounds-guarded fallback (0). The
+ *  source is an agent-array producer OR an array Local Variable. */
+function emitArrayElement(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
+  const pos = castTo(resolveValueInput(ctx, node, 'position', 0), 'i32');
+  const src = ctx.adj.inputToSource.get(`${node.id}:array`);
+  if (!src) return emitLet(ctx, 'f32', '0.0', 'ae');
+  const srcNode = ctx.adj.nodeMap.get(src.nodeId);
+  // Array Local Variable source.
+  if (srcNode?.data.nodeType === 'getVariable') {
+    const av = resolveArrayVar(ctx, srcNode);
+    if (av) {
+      const i = fresh(ctx, 'aeI');
+      ctx.lines.push(`  let ${i}: i32 = ${pos};`);
+      return emitLet(ctx, 'f32', `select(0.0, ${av.name}[${i}], (${i} >= 0 && ${i} < ${av.len}))`, 'ae');
+    }
+  }
+  // Agent-array producer source.
+  const arr = compileArrayNode(ctx, src.nodeId, src.portId);
+  const i = fresh(ctx, 'aeI');
+  ctx.lines.push(`  let ${i}: i32 = ${pos};`);
+  const elemT = arr.elemType === 'i32' ? 'i32' : 'f32';
+  const zero = elemT === 'i32' ? '0' : '0.0';
+  return emitLet(ctx, elemT as WgslType, `select(${zero}, ${arr.arrName}[${i}], (${i} >= 0 && ${i} < ${arr.lenName}))`, 'ae');
+}
+
+/** Get Array Length — the source array's length local (or the array-var length). */
+function emitArrayLength(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
+  const src = ctx.adj.inputToSource.get(`${node.id}:array`);
+  if (!src) return emitLet(ctx, 'i32', '0', 'al');
+  const srcNode = ctx.adj.nodeMap.get(src.nodeId);
+  if (srcNode?.data.nodeType === 'getVariable') {
+    const av = resolveArrayVar(ctx, srcNode);
+    if (av) return emitLet(ctx, 'i32', `${av.len}`, 'al');
+  }
+  const arr = compileArrayNode(ctx, src.nodeId, src.portId);
+  return emitLet(ctx, 'i32', arr.lenName, 'al');
+}
+
+/** Get Curvature — mean unit-vector magnitude to bonded partners (torus-folded).
+ *  Reads the bond store. <2 bonds → 0. Mirrors GetCurvatureNode's JS emit. */
+function emitGetCurvature(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
+  void node;
+  const out = fresh(ctx, 'curv');
+  const bc = fresh(ctx, 'cvBc'), base = fresh(ctx, 'cvBase'), sx = fresh(ctx, 'cvSx'), sy = fresh(ctx, 'cvSy'), cnt = fresh(ctx, 'cvCnt');
+  const k = fresh(ctx, 'cvK'), p = fresh(ctx, 'cvP'), dx = fresh(ctx, 'cvDx'), dy = fresh(ctx, 'cvDy'), d = fresh(ctx, 'cvD');
+  ctx.lines.push(`  var ${out}: f32 = 0.0;`);
+  ctx.lines.push(`  { let ${bc}: i32 = ${i32At(ctx, 'bondCount', 'idx')};`);
+  ctx.lines.push(`    if (${bc} >= 2) {`);
+  ctx.lines.push(`      let ${base}: u32 = idx * u32(control.maxBonds) * 2u;`);
+  ctx.lines.push(`      var ${sx}: f32 = 0.0; var ${sy}: f32 = 0.0; var ${cnt}: i32 = 0;`);
+  ctx.lines.push(`      for (var ${k}: i32 = 0; ${k} < ${bc}; ${k} = ${k} + 1) {`);
+  ctx.lines.push(`        let ${p}: i32 = bondStore[${base} + u32(${k}) * 2u];`);
+  ctx.lines.push(`        if (${p} >= 0 && ${p} < i32(control.highWater) && agentAlive[${p}] != 0u) {`);
+  ctx.lines.push(`          var ${dx}: f32 = ${f32At(ctx, 'x', `u32(${p})`)} - ${f32At(ctx, 'x', 'idx')};`);
+  ctx.lines.push(`          var ${dy}: f32 = ${f32At(ctx, 'y', `u32(${p})`)} - ${f32At(ctx, 'y', 'idx')};`);
+  ctx.lines.push(`          if (control.fieldTorus != 0u) {`);
+  ctx.lines.push(`            let _hw = control.fieldW * 0.5; let _hh = control.fieldH * 0.5;`);
+  ctx.lines.push(`            if (${dx} > _hw) { ${dx} = ${dx} - control.fieldW; } else if (${dx} < -_hw) { ${dx} = ${dx} + control.fieldW; }`);
+  ctx.lines.push(`            if (${dy} > _hh) { ${dy} = ${dy} - control.fieldH; } else if (${dy} < -_hh) { ${dy} = ${dy} + control.fieldH; }`);
+  ctx.lines.push(`          }`);
+  ctx.lines.push(`          let ${d}: f32 = sqrt(${dx} * ${dx} + ${dy} * ${dy});`);
+  ctx.lines.push(`          if (${d} > 1e-9) { ${sx} = ${sx} + ${dx} / ${d}; ${sy} = ${sy} + ${dy} / ${d}; ${cnt} = ${cnt} + 1; }`);
+  ctx.lines.push(`        }`);
+  ctx.lines.push(`      }`);
+  ctx.lines.push(`      if (${cnt} > 0) { ${out} = sqrt(${sx} * ${sx} + ${sy} * ${sy}) / f32(${cnt}); }`);
+  ctx.lines.push(`    }`);
+  ctx.lines.push(`  }`);
+  return { expr: out, type: 'f32' };
+}
+
+/** Get Model Attribute — read a model attribute from the `auxF32` buffer (the
+ *  agent path's modelAttrs region). Color attrs are multi-output (r/g/b). */
+function emitGetModelAttribute(ctx: AgentWgpuCtx, node: GraphNode, portId: string): ValueRef {
+  const attr = (node.data.config?.['attributeId'] as string) || '_undef';
+  const isColor = !!node.data.config?.['isColorAttr'];
+  if (isColor) {
+    const cached = ctx.valueCache.get(`${node.id}:r`);
+    if (cached !== undefined) return ctx.valueCache.get(`${node.id}:${portId}`) ?? cached;
+    const refs: Record<string, ValueRef> = {
+      r: emitLet(ctx, 'f32', auxRead(ctx, `${attr}_r`), 'mar'),
+      g: emitLet(ctx, 'f32', auxRead(ctx, `${attr}_g`), 'mag'),
+      b: emitLet(ctx, 'f32', auxRead(ctx, `${attr}_b`), 'mab'),
+    };
+    for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
+    return refs[portId] ?? refs['r']!;
+  }
+  return emitLet(ctx, 'f32', auxRead(ctx, attr), 'ma');
+}
+
+/** Read a scalar model-attribute slot from the auxF32 buffer (0 if absent). */
+function auxRead(ctx: AgentWgpuCtx, key: string): string {
+  const off = ctx.layout.modelAttrSlot?.[key];
+  if (off === undefined) return '0.0';
+  return off === 0 ? `auxF32[0]` : `auxF32[${off}u]`;
+}
+
+/** Table Lookup — index a Lookup Table by (row, col) → a float from the auxF32
+ *  table region. Row-major `tableBase + row*colCount + col`. */
+function emitLookupInteraction(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
+  const tableId = (node.data.config?.['tableId'] as string) || (node.data.config?.['attributeId'] as string) || '';
+  const tbl = ctx.layout.lookupTables?.[tableId];
+  if (!tbl) return emitLet(ctx, 'f32', '0.0', 'li');
+  const row = castTo(resolveValueInput(ctx, node, 'row', 0), 'i32');
+  const col = castTo(resolveValueInput(ctx, node, 'col', 0), 'i32');
+  const r = fresh(ctx, 'liR'), c = fresh(ctx, 'liC'), o = fresh(ctx, 'liO');
+  ctx.lines.push(`  let ${r}: i32 = clamp(${row}, 0, ${tbl.rowCount - 1});`);
+  ctx.lines.push(`  let ${c}: i32 = clamp(${col}, 0, ${tbl.colCount - 1});`);
+  ctx.lines.push(`  let ${o}: u32 = ${tbl.base}u + u32(${r}) * ${tbl.colCount}u + u32(${c});`);
+  return emitLet(ctx, 'f32', `auxF32[${o}]`, 'li');
+}
+
+/** Get Indicator — read a standalone indicator from the `indicators` atomic
+ *  buffer (bitcast per the indicator's dataType). */
+function emitGetIndicator(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
+  const slot = node.data.config?.['_indicatorIdx'];
+  const off = typeof slot === 'number' ? slot : -1;
+  if (off < 0) return emitLet(ctx, 'f32', '0.0', 'gi');
+  const isInt = node.data.config?.['_indicatorIsInt'] === true;
+  const word = `atomicLoad(&indicators[${off}u])`;
+  return isInt
+    ? emitLet(ctx, 'f32', `f32(bitcast<i32>(${word}))`, 'gi')
+    : emitLet(ctx, 'f32', `bitcast<f32>(${word})`, 'gi');
+}
+
+/** Group Reduce (groupOperator) over a single agent-array source. sum / product /
+ *  min / max / average / count / weightedRandom. median + uniform random reject at
+ *  the gate (no sort / per-cell pick path — like the lattice WebGPU). Multi-output
+ *  (result + index/position). */
+function emitGroupOperator(ctx: AgentWgpuCtx, node: GraphNode, portId: string): ValueRef {
+  const cachedResult = ctx.valueCache.get(`${node.id}:result`);
+  if (cachedResult !== undefined) {
+    if (portId === 'index' || portId === 'position') return ctx.valueCache.get(`${node.id}:index`) ?? { expr: '-1', type: 'i32' };
+    return cachedResult;
+  }
+  let op = (node.data.config?.['operation'] as string) || 'sum';
+  if (op === 'mul') op = 'product';
+  if (op === 'mean') op = 'average';
+  const src = ctx.adj.inputToSource.get(`${node.id}:values`);
+  const resName = fresh(ctx, 'goR'), idxName = fresh(ctx, 'goI');
+  ctx.lines.push(`  var ${resName}: f32 = 0.0; var ${idxName}: i32 = -1;`);
+  if (src) {
+    const srcNode = ctx.adj.nodeMap.get(src.nodeId);
+    if (srcNode && isAgentArrayProducer(srcNode.data.nodeType)) {
+      const arr = compileArrayNode(ctx, src.nodeId, src.portId);
+      const k = fresh(ctx, 'goK'), ev = fresh(ctx, 'goV'), cnt = fresh(ctx, 'goCnt'), sum = fresh(ctx, 'goSum');
+      const best = fresh(ctx, 'goBest');
+      ctx.lines.push(`  { var ${cnt}: i32 = 0; var ${sum}: f32 = 0.0; var ${best}: f32 = 0.0;`);
+      if (op === 'weightedRandom') {
+        // cumulative-sum weighted pick (mirrors the lattice WGSL weightedRandom).
+        const tot = fresh(ctx, 'goTot');
+        ctx.lines.push(`    var ${tot}: f32 = 0.0;`);
+        ctx.lines.push(`    for (var ${k}: i32 = 0; ${k} < ${arr.lenName}; ${k} = ${k} + 1) { ${tot} = ${tot} + max(0.0, f32(${arr.arrName}[${k}])); }`);
+        const u = fresh(ctx, 'goU'), acc2 = fresh(ctx, 'goAcc');
+        ctx.lines.push(`    let ${u}: f32 = rand_f32(idx) * ${tot};`);
+        ctx.lines.push(`    var ${acc2}: f32 = 0.0;`);
+        ctx.lines.push(`    if (${tot} > 0.0) {`);
+        ctx.lines.push(`      for (var ${k}: i32 = 0; ${k} < ${arr.lenName}; ${k} = ${k} + 1) { ${acc2} = ${acc2} + max(0.0, f32(${arr.arrName}[${k}])); if (${u} < ${acc2}) { ${idxName} = ${k}; ${resName} = f32(${arr.arrName}[${k}]); break; } }`);
+        ctx.lines.push(`      if (${idxName} < 0 && ${arr.lenName} > 0) { ${idxName} = ${arr.lenName} - 1; ${resName} = f32(${arr.arrName}[${arr.lenName} - 1]); }`);
+        ctx.lines.push(`    }`);
+      } else {
+        const initBest = op === 'product' ? '1.0' : op === 'min' ? '3.4028235e38' : op === 'max' ? '-3.4028235e38' : '0.0';
+        ctx.lines.push(`    ${best} = ${initBest};`);
+        ctx.lines.push(`    for (var ${k}: i32 = 0; ${k} < ${arr.lenName}; ${k} = ${k} + 1) {`);
+        ctx.lines.push(`      let ${ev}: f32 = f32(${arr.arrName}[${k}]);`);
+        if (op === 'sum' || op === 'average') ctx.lines.push(`      ${sum} = ${sum} + ${ev};`);
+        else if (op === 'product') ctx.lines.push(`      ${best} = ${best} * ${ev};`);
+        else if (op === 'min') ctx.lines.push(`      if (${ev} < ${best}) { ${best} = ${ev}; ${idxName} = ${k}; }`);
+        else if (op === 'max') ctx.lines.push(`      if (${ev} > ${best}) { ${best} = ${ev}; ${idxName} = ${k}; }`);
+        ctx.lines.push(`      ${cnt} = ${cnt} + 1;`);
+        ctx.lines.push(`    }`);
+        if (op === 'sum') ctx.lines.push(`    ${resName} = ${sum};`);
+        else if (op === 'average') ctx.lines.push(`    ${resName} = select(0.0, ${sum} / f32(${cnt}), ${cnt} > 0);`);
+        else if (op === 'count') ctx.lines.push(`    ${resName} = f32(${cnt});`);
+        else ctx.lines.push(`    ${resName} = select(0.0, ${best}, ${cnt} > 0);`);
+      }
+      ctx.lines.push(`  }`);
+    }
+  }
+  const refs: Record<string, ValueRef> = {
+    result: { expr: resName, type: 'f32' }, index: { expr: idxName, type: 'i32' },
+  };
+  ctx.valueCache.set(`${node.id}:result`, refs['result']!);
+  ctx.valueCache.set(`${node.id}:index`, refs['index']!);
+  ctx.valueCache.set(`${node.id}:position`, refs['index']!);
+  return (portId === 'index' || portId === 'position') ? refs['index']! : refs['result']!;
+}
+
+/** Group Counting — count array elements passing a comparison (scalar output). */
+function emitGroupCounting(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
+  const op = (node.data.config?.['operation'] as string) || 'equals';
+  const v1 = inF32(ctx, node, 'value', 0);
+  const v2 = inF32(ctx, node, 'value2', 0);
+  const src = ctx.adj.inputToSource.get(`${node.id}:values`);
+  const cnt = fresh(ctx, 'gcCnt');
+  ctx.lines.push(`  var ${cnt}: i32 = 0;`);
+  if (src) {
+    const srcNode = ctx.adj.nodeMap.get(src.nodeId);
+    if (srcNode && isAgentArrayProducer(srcNode.data.nodeType)) {
+      const arr = compileArrayNode(ctx, src.nodeId, src.portId);
+      const k = fresh(ctx, 'gcK'), ev = fresh(ctx, 'gcV');
+      ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${arr.lenName}; ${k} = ${k} + 1) {`);
+      ctx.lines.push(`    let ${ev}: f32 = f32(${arr.arrName}[${k}]);`);
+      ctx.lines.push(`    if (${groupCompareExpr(op, ev, v1, v2)}) { ${cnt} = ${cnt} + 1; }`);
+      ctx.lines.push(`  }`);
+    }
+  }
+  return { expr: cnt, type: 'i32' };
+}
+
+/** Group Statement — boolean predicate over an array (allIs/anyIs/noneIs/hasA/
+ *  allGreater/anyGreater/allLesser/anyLesser). Each op = (a per-element predicate)
+ *  combined with all/any/none semantics. */
+function emitGroupStatement(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
+  const op = (node.data.config?.['operation'] as string) || 'anyIs';
+  const v1 = inF32(ctx, node, 'value', 0);
+  const src = ctx.adj.inputToSource.get(`${node.id}:values`);
+  const res = fresh(ctx, 'gsR');
+  // ALL → start true, break-false on a failing element; ANY/HAS → start false,
+  // break-true on a passing element; NONE → start true, break-false on a match.
+  const isAll = /^all/.test(op);
+  const isNone = op === 'noneIs';
+  const startTrue = isAll || isNone;
+  ctx.lines.push(`  var ${res}: bool = ${startTrue ? 'true' : 'false'};`);
+  if (src) {
+    const srcNode = ctx.adj.nodeMap.get(src.nodeId);
+    if (srcNode && isAgentArrayProducer(srcNode.data.nodeType)) {
+      const arr = compileArrayNode(ctx, src.nodeId, src.portId);
+      const k = fresh(ctx, 'gsK'), ev = fresh(ctx, 'gsV');
+      const elemPred = groupStatementElemCmp(op, ev, v1);
+      ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${arr.lenName}; ${k} = ${k} + 1) {`);
+      ctx.lines.push(`    let ${ev}: f32 = f32(${arr.arrName}[${k}]);`);
+      if (isNone) ctx.lines.push(`    if (${elemPred}) { ${res} = false; break; }`);
+      else if (isAll) ctx.lines.push(`    if (!(${elemPred})) { ${res} = false; break; }`);
+      else ctx.lines.push(`    if (${elemPred}) { ${res} = true; break; }`);
+      ctx.lines.push(`  }`);
+    }
+  }
+  return emitLet(ctx, 'f32', `select(0.0, 1.0, ${res})`, 'gs');
+}
+
+/** A comparison expr for groupCounting (==/!=/>/</.../between). */
+function groupCompareExpr(op: string, e: string, v1: string, v2: string): string {
+  switch (op) {
+    case 'notEquals': return `${e} != ${v1}`;
+    case 'greater': return `${e} > ${v1}`;
+    case 'lesser': return `${e} < ${v1}`;
+    case 'greaterEqual': return `${e} >= ${v1}`;
+    case 'lesserEqual': return `${e} <= ${v1}`;
+    case 'between': return `(${e} >= ${v1} && ${e} <= ${v2})`;
+    case 'notBetween': return `(${e} < ${v1} || ${e} > ${v2})`;
+    default: return `${e} == ${v1}`; // equals
+  }
+}
+
+/** The per-element predicate for groupStatement (the "is" / "Greater" / "Lesser"
+ *  comparison; the all/any/none combinator is applied by the caller). */
+function groupStatementElemCmp(op: string, e: string, v1: string): string {
+  if (/Greater/.test(op)) return `${e} > ${v1}`;
+  if (/Lesser/.test(op)) return `${e} < ${v1}`;
+  return `${e} == ${v1}`; // allIs / anyIs / noneIs / hasA
+}
+
+// ---------------------------------------------------------------------------
 // Agent-array tier — the keystone id/value array path (GoL-on-agents et al).
 //
 // The id-array producers (getNearbyAgents / filterAgents / joinAgents /
@@ -758,6 +1219,7 @@ function emitReadCellsUnder(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
  *  / `aggregate.values` / `pickRandomAgent.agents` source MUST be one of these. */
 const AGENT_ARRAY_PRODUCERS: ReadonlySet<string> = new Set<string>([
   'getNearbyAgents', 'getAgentsAttribute', 'filterAgents', 'joinAgents', 'pickNRandomAgents',
+  'getBondedAgents',
 ]);
 
 function isAgentArrayProducer(nodeType: string): boolean {
@@ -789,6 +1251,7 @@ function compileArrayNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Ag
     case 'filterAgents': ref = emitFilterAgents(ctx, node); break;
     case 'joinAgents': ref = emitJoinAgents(ctx, node); break;
     case 'pickNRandomAgents': ref = emitPickNRandomAgents(ctx, node); break;
+    case 'getBondedAgents': ref = emitGetBondedAgents(ctx, node); break;
     default:
       throw new Error(`agentWebgpu: unsupported array node '${type}'`);
   }
@@ -834,6 +1297,23 @@ function emitGetAgentsAttribute(ctx: AgentWgpuCtx, node: GraphNode): AgentArrayR
     ctx.lines.push(`  }`);
   }
   return { arrName, lenName, elemType: 'f32' };
+}
+
+/** Get Bonded Agents — this agent's bonded partners as an id array (the data
+ *  sibling of For Each Bond). Reads the ragged `bondStore` + `bondCount`. */
+function emitGetBondedAgents(ctx: AgentWgpuCtx, node: GraphNode): AgentArrayRef {
+  const { arrName } = arraySlotName(ctx, node.id);
+  const lenName = fresh(ctx, 'gbaLen');
+  const bc = fresh(ctx, 'gbaBc'), base = fresh(ctx, 'gbaBase'), k = fresh(ctx, 'gbaK'), p = fresh(ctx, 'gbaP');
+  ctx.lines.push(`  var ${lenName}: i32 = 0;`);
+  ctx.lines.push(`  { let ${bc}: i32 = ${i32At(ctx, 'bondCount', 'idx')};`);
+  ctx.lines.push(`    let ${base}: u32 = idx * u32(control.maxBonds) * 2u;`);
+  ctx.lines.push(`    for (var ${k}: i32 = 0; ${k} < ${bc}; ${k} = ${k} + 1) {`);
+  ctx.lines.push(`      let ${p}: i32 = bondStore[${base} + u32(${k}) * 2u];`);
+  ctx.lines.push(`      if (${p} >= 0 && ${p} < i32(control.highWater) && agentAlive[${p}] != 0u) { ${arrName}[${lenName}] = ${p}; ${lenName} = ${lenName} + 1; }`);
+  ctx.lines.push(`    }`);
+  ctx.lines.push(`  }`);
+  return { arrName, lenName, elemType: 'i32' };
 }
 
 /** Filter Agents — keep the ids whose AGENT attribute passes the comparison →
@@ -1055,6 +1535,18 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
+    case 'setArrayElement': {
+      const variableId = (node.data.config?.['variableId'] as string) || '';
+      const av = variableId ? ctx.arrayVarNames.get(variableId) : undefined;
+      if (av) {
+        const i = castTo(resolveValueInput(ctx, node, 'index', 0), 'i32');
+        const v = inF32(ctx, node, 'value', 0);
+        const iL = fresh(ctx, 'saeI');
+        ctx.lines.push(`  { let ${iL}: i32 = ${i}; if (${iL} >= 0 && ${iL} < ${av.len}) { ${av.name}[${iL}] = ${v}; } }`);
+      }
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
     case 'setAttribute': {
       // Write the AGENT SoA (agentAttrsOf): `agentF32[attrBase + idx] = value`.
       // int/tag/bool attrs round to the nearest integer (the JS Int32/Uint8 store).
@@ -1066,6 +1558,136 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
         if (t !== 'float') v = `round(${v})`;
         ctx.lines.push(`  ${f32At(ctx, attr, 'idx')} = ${v};`);
       }
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'updateAttribute': {
+      // In-place modify THIS agent's attribute (increment/decrement/min/max/…).
+      const attr = (node.data.config?.['attributeId'] as string) || '_undef';
+      const base = ctx.layout.agentAttrBase[attr];
+      if (base !== undefined) {
+        const op = (node.data.config?.['operation'] as string) || 'increment';
+        const cur = f32At(ctx, attr, 'idx');
+        const tagLen = Number(node.data.config?.['_tagLen']) || 1;
+        let expr: string;
+        switch (op) {
+          case 'decrement': expr = `${cur} - ${inF32(ctx, node, 'value', 1)}`; break;
+          case 'max': expr = `max(${cur}, ${inF32(ctx, node, 'value', 0)})`; break;
+          case 'min': expr = `min(${cur}, ${inF32(ctx, node, 'value', 0)})`; break;
+          case 'toggle': expr = `select(1.0, 0.0, ${cur} != 0.0)`; break;
+          case 'or': expr = `select(${cur}, 1.0, ${inF32(ctx, node, 'value', 0)} != 0.0)`; break;
+          case 'and': expr = `select(0.0, ${cur}, ${inF32(ctx, node, 'value', 0)} != 0.0)`; break;
+          case 'next': expr = `f32((i32(round(${cur})) + 1) % ${tagLen})`; break;
+          case 'previous': expr = `f32(((i32(round(${cur})) - 1) % ${tagLen} + ${tagLen}) % ${tagLen})`; break;
+          default: expr = `${cur} + ${inF32(ctx, node, 'value', 1)}`; break; // increment
+        }
+        const t = ctx.agentAttrType.get(attr) || 'float';
+        const wrapped = t !== 'float' ? `round(${expr})` : `(${expr})`;
+        ctx.lines.push(`  ${f32At(ctx, attr, 'idx')} = ${wrapped};`);
+      }
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'setVelocity': {
+      ctx.lines.push(`  ${f32At(ctx, 'vx', 'idx')} = ${inF32(ctx, node, 'vx', 0)};`);
+      ctx.lines.push(`  ${f32At(ctx, 'vy', 'idx')} = ${inF32(ctx, node, 'vy', 0)};`);
+      if (ctx.is3d) ctx.lines.push(`  ${f32At(ctx, 'vz', 'idx')} = ${inF32(ctx, node, 'vz', 0)};`);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'setAgentAttribute': {
+      // Write ANOTHER agent's attribute by id (signal a neighbour). Range-guarded.
+      const attr = (node.data.config?.['attributeId'] as string) || '_undef';
+      const base = ctx.layout.agentAttrBase[attr];
+      if (base !== undefined) {
+        const id = castTo(resolveValueInput(ctx, node, 'agentId', -1), 'i32');
+        const t = ctx.agentAttrType.get(attr) || 'float';
+        let v = inF32(ctx, node, 'value', 0);
+        if (t !== 'float') v = `round(${v})`;
+        const sa = fresh(ctx, 'saa');
+        ctx.lines.push(`  { let ${sa}: i32 = ${id}; if (${sa} >= 0 && ${sa} < i32(control.highWater) && agentAlive[${sa}] != 0u) { ${f32At(ctx, attr, `u32(${sa})`)} = ${v}; } }`);
+      }
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'setAgentsAttribute': {
+      // Write a whole id-array's attribute (write-many).
+      const attr = (node.data.config?.['attributeId'] as string) || '_undef';
+      const base = ctx.layout.agentAttrBase[attr];
+      const inArr = resolveInputArray(ctx, node, 'agents');
+      if (base !== undefined && inArr) {
+        const t = ctx.agentAttrType.get(attr) || 'float';
+        let v = inF32(ctx, node, 'value', 0);
+        if (t !== 'float') v = `round(${v})`;
+        const k = fresh(ctx, 'sasK'), id = fresh(ctx, 'sasId'), vL = fresh(ctx, 'sasV');
+        ctx.lines.push(`  { let ${vL}: f32 = ${v};`);
+        ctx.lines.push(`    for (var ${k}: i32 = 0; ${k} < ${inArr.lenName}; ${k} = ${k} + 1) {`);
+        ctx.lines.push(`      let ${id}: i32 = ${arrLoad(inArr, k)};`);
+        ctx.lines.push(`      if (${id} >= 0 && ${id} < i32(control.highWater) && agentAlive[${id}] != 0u) { ${f32At(ctx, attr, `u32(${id})`)} = ${vL}; }`);
+        ctx.lines.push(`    }`);
+        ctx.lines.push(`  }`);
+      }
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'setAgentPosition': {
+      const id = castTo(resolveValueInput(ctx, node, 'agentId', -1), 'i32');
+      const sp = fresh(ctx, 'sp');
+      ctx.lines.push(`  { let ${sp}: i32 = ${id}; if (${sp} >= 0 && ${sp} < i32(control.highWater) && agentAlive[${sp}] != 0u) {`);
+      ctx.lines.push(`    ${f32At(ctx, 'x', `u32(${sp})`)} = ${inF32(ctx, node, 'x', 0)}; ${f32At(ctx, 'y', `u32(${sp})`)} = ${inF32(ctx, node, 'y', 0)};`);
+      if (ctx.is3d) ctx.lines.push(`    ${f32At(ctx, 'z', `u32(${sp})`)} = ${inF32(ctx, node, 'z', 0)};`);
+      ctx.lines.push(`  } }`);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'setAgentRadius': {
+      const id = castTo(resolveValueInput(ctx, node, 'agentId', -1), 'i32');
+      const sr = fresh(ctx, 'sr'), rv = fresh(ctx, 'srV');
+      ctx.lines.push(`  { let ${sr}: i32 = ${id}; let ${rv}: f32 = ${inF32(ctx, node, 'radius', 1)};`);
+      ctx.lines.push(`    if (${sr} >= 0 && ${sr} < i32(control.highWater) && agentAlive[${sr}] != 0u) { ${f32At(ctx, 'radius', `u32(${sr})`)} = ${rv}; ${f32At(ctx, 'targetRadius', `u32(${sr})`)} = ${rv}; } }`);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'setAgentType': {
+      // type lives in agentI32 (binding 1 = read_write so this can write it; the
+      // worker reads it back from the i32 SoA after the dispatch).
+      const id = castTo(resolveValueInput(ctx, node, 'agentId', -1), 'i32');
+      const tv = castTo(resolveValueInput(ctx, node, 'type', 0), 'i32');
+      const st = fresh(ctx, 'st');
+      ctx.lines.push(`  { let ${st}: i32 = ${id}; if (${st} >= 0 && ${st} < i32(control.highWater) && agentAlive[${st}] != 0u) { ${i32At(ctx, 'type', `u32(${st})`)} = ${tv}; } }`);
+      ctx.usesI32Write = true;
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'setIndicator': {
+      const slot = node.data.config?.['_indicatorIdx'];
+      const off = typeof slot === 'number' ? slot : -1;
+      if (off >= 0) {
+        const isInt = node.data.config?.['_indicatorIsInt'] === true;
+        const v = inF32(ctx, node, 'value', 0);
+        const bits = isInt ? `bitcast<u32>(i32(round(${v})))` : `bitcast<u32>(${v})`;
+        ctx.lines.push(`  atomicStore(&indicators[${off}u], ${bits});`);
+      }
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'updateIndicator': {
+      emitUpdateIndicator(ctx, node);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'forEachBond': {
+      emitForEachBond(ctx, node);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'switch': {
+      emitSwitch(ctx, node);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'loop': {
+      emitLoop(ctx, node);
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
@@ -1342,6 +1964,150 @@ function emitAllPairs(ctx: AgentWgpuCtx, test: (jExpr: string) => void): void {
 /** forEachInArray over ANY agent-array producer (getNearbyAgents / filterAgents /
  *  joinAgents / pickNRandomAgents = i32 id arrays, getAgentsAttribute = an f32
  *  values array). The per-iteration `element` is the array's `elemType`. */
+/** Update Indicator — atomic in-place modify of a standalone indicator (the
+ *  `indicators` atomic<u32> buffer). inc/dec/max/min (int via atomicAdd/Max/Min;
+ *  float via a CAS loop) + or/and (bool). toggle/next/previous reject at the gate
+ *  (order-dependent — same as the lattice WebGPU). Mirrors the lattice emit. */
+function emitUpdateIndicator(ctx: AgentWgpuCtx, node: GraphNode): void {
+  const slot = node.data.config?.['_indicatorIdx'];
+  const off = typeof slot === 'number' ? slot : -1;
+  if (off < 0) return;
+  const op = (node.data.config?.['operation'] as string) || 'increment';
+  const isInt = node.data.config?.['_indicatorIsInt'] === true;
+  if (op === 'or' || op === 'and') {
+    const vb = `(${inF32(ctx, node, 'value', 0)} != 0.0)`;
+    if (op === 'or') ctx.lines.push(`  if (${vb}) { atomicOr(&indicators[${off}u], 1u); }`);
+    else ctx.lines.push(`  if (!${vb}) { atomicAnd(&indicators[${off}u], 0u); }`);
+    return;
+  }
+  if (isInt && (op === 'increment' || op === 'decrement')) {
+    const vi = castTo(resolveValueInput(ctx, node, 'value', op === 'increment' ? 1 : 1), 'i32');
+    const sign = op === 'increment' ? '' : '-';
+    ctx.lines.push(`  atomicAdd(&indicators[${off}u], bitcast<u32>(${sign}(${vi})));`);
+    return;
+  }
+  if (isInt && (op === 'max' || op === 'min')) {
+    const vi = castTo(resolveValueInput(ctx, node, 'value', 0), 'i32');
+    const fn = op === 'max' ? 'atomicMax' : 'atomicMin';
+    ctx.lines.push(`  ${fn}(&indicators[${off}u], bitcast<u32>(${vi}));`);
+    return;
+  }
+  // float CAS loop.
+  const vf = inF32(ctx, node, 'value', op === 'increment' || op === 'decrement' ? 1 : 0);
+  let fnExpr: string;
+  switch (op) {
+    case 'decrement': fnExpr = `(_old_f - (${vf}))`; break;
+    case 'max': fnExpr = `max(_old_f, (${vf}))`; break;
+    case 'min': fnExpr = `min(_old_f, (${vf}))`; break;
+    default: fnExpr = `(_old_f + (${vf}))`; break; // increment
+  }
+  ctx.lines.push(`  loop {`);
+  ctx.lines.push(`    let _old_u: u32 = atomicLoad(&indicators[${off}u]);`);
+  ctx.lines.push(`    let _old_f: f32 = bitcast<f32>(_old_u);`);
+  ctx.lines.push(`    let _new_u: u32 = bitcast<u32>(${fnExpr});`);
+  ctx.lines.push(`    let _r = atomicCompareExchangeWeak(&indicators[${off}u], _old_u, _new_u);`);
+  ctx.lines.push(`    if (_r.exchanged) { break; }`);
+  ctx.lines.push(`  }`);
+}
+
+/** For Each Bond — iterate this agent's ragged bond list (reads `bondStore`).
+ *  Exposes partnerId / restLength / currentLength / index per iteration. */
+function emitForEachBond(ctx: AgentWgpuCtx, node: GraphNode): void {
+  const bc = fresh(ctx, 'febBc'), base = fresh(ctx, 'febBase'), k = fresh(ctx, 'febK');
+  const partner = fresh(ctx, 'febP'), rest = fresh(ctx, 'febRest'), cur = fresh(ctx, 'febCur');
+  const dx = fresh(ctx, 'febDx'), dy = fresh(ctx, 'febDy');
+  ctx.lines.push(`  { let ${bc}: i32 = ${i32At(ctx, 'bondCount', 'idx')};`);
+  ctx.lines.push(`    let ${base}: u32 = idx * u32(control.maxBonds) * 2u;`);
+  ctx.lines.push(`    for (var ${k}: i32 = 0; ${k} < ${bc}; ${k} = ${k} + 1) {`);
+  ctx.lines.push(`      let ${partner}: i32 = bondStore[${base} + u32(${k}) * 2u];`);
+  ctx.lines.push(`      let ${rest}: f32 = bitcast<f32>(bondStore[${base} + u32(${k}) * 2u + 1u]);`);
+  ctx.lines.push(`      var ${cur}: f32 = 0.0;`);
+  ctx.lines.push(`      if (${partner} >= 0 && ${partner} < i32(control.highWater)) {`);
+  ctx.lines.push(`        var ${dx}: f32 = ${f32At(ctx, 'x', `u32(${partner})`)} - ${f32At(ctx, 'x', 'idx')};`);
+  ctx.lines.push(`        var ${dy}: f32 = ${f32At(ctx, 'y', `u32(${partner})`)} - ${f32At(ctx, 'y', 'idx')};`);
+  ctx.lines.push(`        if (control.fieldTorus != 0u) {`);
+  ctx.lines.push(`          let _hw = control.fieldW * 0.5; let _hh = control.fieldH * 0.5;`);
+  ctx.lines.push(`          if (${dx} > _hw) { ${dx} = ${dx} - control.fieldW; } else if (${dx} < -_hw) { ${dx} = ${dx} + control.fieldW; }`);
+  ctx.lines.push(`          if (${dy} > _hh) { ${dy} = ${dy} - control.fieldH; } else if (${dy} < -_hh) { ${dy} = ${dy} + control.fieldH; }`);
+  ctx.lines.push(`        }`);
+  ctx.lines.push(`        ${cur} = sqrt(${dx} * ${dx} + ${dy} * ${dy});`);
+  ctx.lines.push(`      }`);
+  ctx.forEachBondStack.push({ nodeId: node.id, partner, rest, cur, index: k });
+  clearVolatileCache(ctx);
+  compileFlowChain(ctx, node.id, 'body');
+  ctx.forEachBondStack.pop();
+  ctx.lines.push(`    }`);
+  ctx.lines.push(`  }`);
+  clearVolatileCache(ctx);
+}
+
+/** Switch — multi-way branch. Conditions mode (per-case bool inputs) or value mode
+ *  (compare a value against per-case constants/inputs). Mirrors the lattice WGSL
+ *  switch (if/else-if chain for firstMatchOnly; independent ifs otherwise). */
+function emitSwitch(ctx: AgentWgpuCtx, node: GraphNode): void {
+  const cfg = node.data.config as Record<string, unknown> | undefined;
+  const mode = (cfg?.['mode'] as string) || 'conditions';
+  const firstMatchOnly = cfg?.['firstMatchOnly'] !== false;
+  const valType = (cfg?.['valueType'] as string) || 'integer';
+  const caseCount = Number(cfg?.['caseCount']) || 0;
+  const hasDefault = ctx.adj.flowOutputToTargets.has(`${node.id}:default`);
+  if (caseCount === 0) { compileFlowChain(ctx, node.id, 'default'); return; }
+  // The compared value (value mode).
+  let valueRef: ValueRef | null = null;
+  if (mode === 'value') valueRef = resolveValueInput(ctx, node, 'value', 0);
+  const caseConds: string[] = [];
+  for (let ci = 0; ci < caseCount; ci++) {
+    if (mode === 'conditions') {
+      const condSrc = ctx.adj.inputToSource.get(`${node.id}:case_${ci}_cond`);
+      if (condSrc) caseConds.push(castTo(compileValueNode(ctx, condSrc.nodeId, condSrc.portId), 'bool'));
+      else caseConds.push(cfg?.[`_port_case_${ci}_cond`] === 'true' ? 'true' : 'false');
+    } else {
+      const caseValSrc = ctx.adj.inputToSource.get(`${node.id}:case_${ci}_val`);
+      let caseVal: ValueRef;
+      if (caseValSrc) caseVal = compileValueNode(ctx, caseValSrc.nodeId, caseValSrc.portId);
+      else {
+        const raw = cfg?.[`_port_case_${ci}_val`] ?? cfg?.[`case_${ci}_value`] ?? 0;
+        const num = parseFloat(String(raw));
+        const n = Number.isFinite(num) ? num : 0;
+        caseVal = valType === 'float' ? { expr: `${n}.0`, type: 'f32' } : { expr: `${n | 0}`, type: 'i32' };
+      }
+      const rawOp = (cfg?.[`case_${ci}_op`] as string) || '==';
+      const op = rawOp === '===' ? '==' : rawOp === '!==' ? '!=' : rawOp;
+      const wt: WgslType = valType === 'float' ? 'f32' : 'i32';
+      caseConds.push(`(${castTo(valueRef!, wt)} ${op} ${castTo(caseVal, wt)})`);
+    }
+  }
+  if (firstMatchOnly) {
+    const open = (ci: number): void => {
+      if (ci >= caseCount) { if (hasDefault) compileFlowChain(ctx, node.id, 'default'); return; }
+      ctx.lines.push(`  if (${caseConds[ci]}) {`);
+      compileFlowChain(ctx, node.id, `case_${ci}`);
+      ctx.lines.push(`  } else {`);
+      open(ci + 1);
+      ctx.lines.push(`  }`);
+    };
+    open(0);
+  } else {
+    for (let ci = 0; ci < caseCount; ci++) {
+      ctx.lines.push(`  if (${caseConds[ci]}) {`);
+      compileFlowChain(ctx, node.id, `case_${ci}`);
+      ctx.lines.push(`  }`);
+    }
+    if (hasDefault) compileFlowChain(ctx, node.id, 'default');
+  }
+}
+
+/** Loop — repeat BODY `count` times. */
+function emitLoop(ctx: AgentWgpuCtx, node: GraphNode): void {
+  const cnt = castTo(resolveValueInput(ctx, node, 'count', 1), 'i32');
+  const li = fresh(ctx, 'lpI');
+  ctx.lines.push(`  for (var ${li}: i32 = 0; ${li} < ${cnt}; ${li} = ${li} + 1) {`);
+  clearVolatileCache(ctx);
+  compileFlowChain(ctx, node.id, 'body');
+  ctx.lines.push(`  }`);
+  clearVolatileCache(ctx);
+}
+
 function emitForEach(ctx: AgentWgpuCtx, node: GraphNode): void {
   const arr = resolveInputArray(ctx, node, 'array');
   if (!arr) return; // no array wired → body + done skipped (JS parity)
@@ -1378,7 +2144,7 @@ function clearVolatileCache(ctx: AgentWgpuCtx): void {
 function computeVolatile(ctx: AgentWgpuCtx): void {
   const { nodeMap, inputToSource } = ctx.adj;
   const volatileSet = new Set<string>();
-  for (const [, node] of nodeMap) if (node.data.nodeType === 'forEachInArray') volatileSet.add(node.id);
+  for (const [, node] of nodeMap) if (node.data.nodeType === 'forEachInArray' || node.data.nodeType === 'forEachBond') volatileSet.add(node.id);
   let changed = true;
   while (changed) {
     changed = false;
@@ -1450,8 +2216,6 @@ function behaviourReachableNodeIds(nodes: GraphNode[], edges: GraphEdge[]): Set<
  *  (worldDepth>1) are the 3D port (G-future) — clamp to JS for now. */
 export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): boolean {
   if (!model || !model.topologyMode?.agents) return false;
-  // 3D agents are NOT yet ported to WebGPU (the 2D Boids scale target first).
-  if (is3dModel(model)) return false;
   const nodes = model.agentGraphNodes ?? [];
   const edges = model.agentGraphEdges ?? [];
   if (!nodes.some(n => n.data.nodeType === 'behaviourStep')) return false;
@@ -1474,13 +2238,26 @@ export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): 
     const cfg = (n.data.config ?? {}) as Record<string, unknown>;
     if (isAgentArrayProducer(t)) arrayProducerCount++;
     if (t === 'aggregate') {
-      // median / random / weightedRandom need a sort / RNG-pick path the agent
-      // shader doesn't have (same as the lattice WebGPU aggregate). Clamp to JS.
+      // median / uniform-random need a sort / RNG-pick path the agent shader
+      // doesn't have (the lone genuinely-fundamental aggregate cases, same as the
+      // lattice WebGPU grid). sum/product/min/max/average/and/or ARE supported.
       let op = (cfg['operation'] as string) || 'sum';
       if (op === 'mul') op = 'product';
       if (op === 'mean') op = 'average';
-      if (op !== 'sum' && op !== 'product' && op !== 'min' && op !== 'max'
-        && op !== 'average' && op !== 'and' && op !== 'or') return false;
+      if (op === 'median' || op === 'random') return false;
+    }
+    if (t === 'groupOperator') {
+      // Same fundamentals as aggregate: median + uniform random reject (no sort /
+      // per-cell pick path). weightedRandom IS supported (cumulative-sum pick).
+      const op = (cfg['operation'] as string) || 'sum';
+      if (op === 'median' || op === 'random') return false;
+    }
+    if (t === 'updateIndicator') {
+      // toggle/next/previous are order-dependent under parallel writers (the lone
+      // node-op-level fundamental, same as the lattice WebGPU grid). inc/dec/max/
+      // min/or/and ARE supported via atomics.
+      const op = (cfg['operation'] as string) || 'increment';
+      if (op === 'toggle' || op === 'next' || op === 'previous') return false;
     }
     if (t === 'statement') {
       // `operation`, not `operator` (matches emitCompare + StatementNode). The
@@ -1490,10 +2267,6 @@ export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): 
       if (op && /between/i.test(op)) return false;
       const compareType = cfg['compareType'] as string | undefined;
       if (compareType && compareType !== 'numerical') return false;
-    }
-    if (t === 'getConstant') {
-      const ct = cfg['constType'] as string | undefined;
-      if (ct && ct !== 'integer' && ct !== 'float' && ct !== 'bool') return false;
     }
     if (t === 'getRandom') {
       const rt = (cfg['randomType'] as string) || (cfg['mode'] as string);
@@ -1506,15 +2279,10 @@ export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): 
     }
   }
   if (arrayProducerCount > AGENT_WEBGPU_NEARBY_SLOTS) return false;
-  // SCALAR Local Variables only (array variables are a future port). The agent
-  // graph resolves variables against `agentVariables` (the Generic Agent
-  // Platform's separate agent-variable id-space), NOT the cell `variables`.
-  const hasArrayVar = (model.agentVariables ?? []).some(v => v.kind === 'array');
-  const usesVar = reachNodes.some(n => n.data.nodeType === 'getVariable' || n.data.nodeType === 'setVariable');
-  if (hasArrayVar && usesVar) return false;
-  // Every array input (forEachInArray.array / aggregate.values / pick*.agents /
-  // getAgentsAttribute.agents / filter/join inputs) must come from an agent-array
-  // producer (the array tier never sees a non-producer array source).
+  // Every array input (forEachInArray.array / aggregate|group*.values / pick*.agents
+  // / getAgentsAttribute|setAgentsAttribute.agents / filter/join inputs) must come
+  // from an agent-array producer OR an array Local Variable (the array tier never
+  // sees a non-producer non-variable array source).
   const map = new Map(reachNodes.map(n => [n.id, n] as const));
   const ARRAY_INPUT_PORTS = new Set(['array', 'values', 'agents', 'a', 'b']);
   for (const e of flat.edges) {
@@ -1526,15 +2294,23 @@ export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): 
     // Only the agent-array consumers gate their array inputs (a scalar node with a
     // coincidental 'a'/'b' port — e.g. logicOperator.a/b — is NOT array-typed).
     const isArrayConsumer = ct === 'forEachInArray'
-      || (ct === 'aggregate' && tgt.portId === 'values')
+      || ((ct === 'aggregate' || ct === 'groupOperator' || ct === 'groupCounting' || ct === 'groupStatement') && tgt.portId === 'values')
       || (ct === 'pickRandomAgent' && tgt.portId === 'agents')
       || (ct === 'pickNRandomAgents' && tgt.portId === 'agents')
       || (ct === 'getAgentsAttribute' && tgt.portId === 'agents')
+      || (ct === 'setAgentsAttribute' && tgt.portId === 'agents')
       || (ct === 'filterAgents' && tgt.portId === 'agents')
-      || (ct === 'joinAgents' && (tgt.portId === 'a' || tgt.portId === 'b'));
+      || (ct === 'joinAgents' && (tgt.portId === 'a' || tgt.portId === 'b'))
+      || (ct === 'arrayElement' && tgt.portId === 'array')
+      || (ct === 'arrayLength' && tgt.portId === 'array');
     if (!isArrayConsumer) continue;
     const srcNode = map.get(e.source);
-    if (srcNode && !isAgentArrayProducer(srcNode.data.nodeType)) return false;
+    if (!srcNode) continue;
+    // Array Local Variable (a getVariable on an array variable) is a valid array
+    // source for arrayElement / arrayLength / forEach.
+    const isArrayVarSrc = srcNode.data.nodeType === 'getVariable'
+      && (model.agentVariables ?? []).some(v => v.id === (srcNode.data.config?.['variableId'] as string) && v.kind === 'array');
+    if (!isAgentArrayProducer(srcNode.data.nodeType) && !isArrayVarSrc) return false;
   }
   return true;
 }
@@ -1561,6 +2337,10 @@ function emitControlStruct(): string {
   binSizeY   : f32,
   fieldW     : f32,
   fieldH     : f32,
+  maxBonds   : u32,
+  nBinsZ     : u32,
+  binSizeZ   : f32,
+  fieldD     : f32,
 };`;
 }
 
@@ -1635,11 +2415,13 @@ export function compileAgentGraphWebGPU(
 ): AgentWebGPUResult {
   const empty = (error: string): AgentWebGPUResult => ({ shaderCode: '', layout, supportedTypes: [], error });
   if (!model.topologyMode?.agents) return empty('Agents topology not enabled.');
-  if (is3dModel(model)) return empty('agentWebgpu: 3D agents are not yet ported to WebGPU (clamps to JS).');
 
   const flat = flattenAgentGraph(agentNodes, agentEdges, model);
   if (flat.error) return empty(flat.error);
   const nodes = flat.nodes, edges = flat.edges;
+  // Bake the indicator slot + int-flag onto each indicator node (the WebGPU agent
+  // compiler is self-sufficient — it does NOT rely on the JS agent pre-resolve).
+  preResolveIndicators(nodes, model);
 
   const behaviourNode = nodes.find(n => n.data.nodeType === 'behaviourStep');
   if (!behaviourNode) return empty('No Behaviour Step node in the agent graph.');
@@ -1662,19 +2444,22 @@ export function compileAgentGraphWebGPU(
   const agentAttrType = new Map<string, string>();
   for (const a of agentAttrsOf(model)) agentAttrType.set(a.id, a.type);
   const ctx: AgentWgpuCtx = {
-    adj, layout, is3d: false,
+    adj, layout, is3d: layout.gridDepth > 1,
     lines: [], uid: 0,
     agentAttrType,
     varNames: new Map<string, string>(),
+    arrayVarNames: new Map<string, { name: string; len: number }>(),
     valueCache: new Map<string, ValueRef>(),
     arrayCache: new Map<string, AgentArrayRef>(),
     volatileNodes: new Set<string>(),
     arrayScratchSlot: new Map<string, { slot: number; elemType: WgslType }>(),
     forEachStack: [],
+    forEachBondStack: [],
+    usesI32Write: false,
   };
 
   // Assign array-producer scratch slots (separate i32 + f32 `var<function>` pools)
-  // + name the scalar variables. The agent graph's Local Variables live on
+  // + name the variables. The agent graph's Local Variables live on
   // `agentVariables` (the separate agent-variable id-space), NOT the cell `variables`.
   let i32Slots = 0, f32Slots = 0;
   for (const n of nodes) {
@@ -1685,18 +2470,25 @@ export function compileAgentGraphWebGPU(
     else ctx.arrayScratchSlot.set(n.id, { slot: i32Slots++, elemType });
   }
   for (const v of (model.agentVariables ?? [])) {
-    if (v.kind !== 'scalar') continue;
-    ctx.varNames.set(v.id, `_var${v.id.replace(/[^a-zA-Z0-9_]/g, '_')}`);
+    const sanitised = `_var${v.id.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+    if (v.kind === 'array') ctx.arrayVarNames.set(v.id, { name: sanitised, len: Math.max(1, Math.floor(Number(v.length) || 1)) });
+    else ctx.varNames.set(v.id, sanitised);
   }
 
   computeVolatile(ctx);
 
   // --- emit the per-agent body ---
   try {
-    // reset scalar Local Variables to their initialValue (per agent).
+    // reset Local Variables to their initialValue (per agent).
     for (const v of (model.agentVariables ?? [])) {
-      if (v.kind !== 'scalar') continue;
-      ctx.lines.push(`  ${ctx.varNames.get(v.id)!} = ${wgslFloatLit(variableInitNum(v))};`);
+      if (v.kind === 'array') {
+        const av = ctx.arrayVarNames.get(v.id)!;
+        const init = wgslFloatLit(variableInitNum(v));
+        const aiL = `_avi${v.id.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+        ctx.lines.push(`  for (var ${aiL}: i32 = 0; ${aiL} < ${av.len}; ${aiL} = ${aiL} + 1) { ${av.name}[${aiL}] = ${init}; }`);
+      } else {
+        ctx.lines.push(`  ${ctx.varNames.get(v.id)!} = ${wgslFloatLit(variableInitNum(v))};`);
+      }
     }
     compileFlowChain(ctx, behaviourNode.id, 'do');
   } catch (e) {
@@ -1715,8 +2507,12 @@ export function compileAgentGraphWebGPU(
   }
   const varDecls: string[] = [];
   for (const v of (model.agentVariables ?? [])) {
-    if (v.kind !== 'scalar') continue;
-    varDecls.push(`  var<function> ${ctx.varNames.get(v.id)!}: f32 = 0.0;`);
+    if (v.kind === 'array') {
+      const av = ctx.arrayVarNames.get(v.id)!;
+      varDecls.push(`  var<function> ${av.name}: array<f32, ${av.len}>;`);
+    } else {
+      varDecls.push(`  var<function> ${ctx.varNames.get(v.id)!}: f32 = 0.0;`);
+    }
   }
 
   // Field bridge bindings (G5) — only present when the model has agent-accessible
@@ -1728,15 +2524,27 @@ export function compileAgentGraphWebGPU(
   const fieldBindingLines: string[] = [];
   if (hasFieldRead) fieldBindingLines.push('@group(0) @binding(7) var<storage, read>       fieldRead    : array<f32>;');
   if (hasFieldWrite) fieldBindingLines.push('@group(0) @binding(8) var<storage, read_write> fieldDeposit : array<atomic<u32>>;');
-  // Each carries its OWN leading newline so the no-field case inserts NOTHING (a
+  // Universal-node bindings (Generic Agent Platform) — appended after the field
+  // bindings. Each present only when its region is non-empty, so a model that uses
+  // none keeps the byte-identical pre-coverage template.
+  const hasAux = layout.auxF32Len > 0;             // model attrs + lookup tables
+  const hasIndicators = layout.indicatorCount > 0;  // indicators atomic buffer
+  const hasBondStore = layout.bondStoreLen > 0;     // ragged bond store
+  if (hasAux) fieldBindingLines.push('@group(0) @binding(9) var<storage, read>       auxF32      : array<f32>;');
+  if (hasIndicators) fieldBindingLines.push('@group(0) @binding(10) var<storage, read_write> indicators : array<atomic<u32>>;');
+  if (hasBondStore) fieldBindingLines.push('@group(0) @binding(11) var<storage, read>       bondStore   : array<i32>;');
+  // Each carries its OWN leading newline so the no-extra case inserts NOTHING (a
   // no-field Boids shader is then byte-identical to the pre-G5 template).
   const fieldBindings = fieldBindingLines.length > 0 ? '\n' + fieldBindingLines.join('\n') : '';
   const fieldHelpers = (hasFieldRead || hasFieldWrite) ? '\n' + emitFieldHelpers() : '';
+  // agentI32 is read_write ONLY when a setAgentType wrote it (the worker selects
+  // the matching bind-group layout from the result's `usesI32Write` flag).
+  const i32Access = ctx.usesI32Write ? 'read_write' : 'read      ';
 
   const shaderCode = `${emitControlStruct()}
 
 @group(0) @binding(0) var<storage, read_write> agentF32    : array<f32>;
-@group(0) @binding(1) var<storage, read>       agentI32    : array<i32>;
+@group(0) @binding(1) var<storage, ${i32Access}> agentI32    : array<i32>;
 @group(0) @binding(2) var<storage, read>       agentAlive  : array<u32>;
 @group(0) @binding(3) var<storage, read>       hashBins    : array<i32>;
 @group(0) @binding(4) var<uniform>             control     : Control;
@@ -1757,19 +2565,66 @@ ${ctx.lines.join('\n')}
 }
 `;
 
-  return { shaderCode, layout, supportedTypes: [...seen] };
+  return { shaderCode, layout, supportedTypes: [...seen], usesI32Write: ctx.usesI32Write };
+}
+
+/** Bake `_indicatorIdx` + `_indicatorIsInt` onto each indicator node (the agent
+ *  WebGPU compiler is self-sufficient — it does NOT depend on the JS agent
+ *  pre-resolve running first). The slot is the index into the model's indicator
+ *  list (the SAME order the worker uploads the indicators buffer). */
+function preResolveIndicators(nodes: GraphNode[], model: CAModel): void {
+  const inds = model.indicators ?? [];
+  const slotOf = new Map<string, number>();
+  inds.forEach((ind, i) => slotOf.set(ind.id, i));
+  const isIntOf = new Map<string, boolean>();
+  for (const ind of inds) {
+    isIntOf.set(ind.id, ind.kind === 'standalone' && (ind.dataType === 'integer' || ind.dataType === 'tag'));
+  }
+  for (const n of nodes) {
+    if (n.data.nodeType !== 'getIndicator' && n.data.nodeType !== 'setIndicator' && n.data.nodeType !== 'updateIndicator') continue;
+    const id = (n.data.config?.['indicatorId'] as string) || '';
+    const slot = slotOf.get(id);
+    if (slot === undefined) continue;
+    n.data.config = { ...(n.data.config ?? {}), _indicatorIdx: slot, _indicatorIsInt: isIntOf.get(id) === true };
+  }
 }
 
 /** Build the field-bridge layout spec from a model (G5) — the ordered
  *  agent-accessible cell-attr id lists + grid dims, mirroring the compiler's
- *  `cellFieldAttrsOf` / `cellFieldWriteAttrsOf` (= the worker's `fieldSpecs`). */
+ *  `cellFieldAttrsOf` / `cellFieldWriteAttrsOf` (= the worker's `fieldSpecs`). 3D
+ *  passes gridDepth so the field index becomes layer·W·H + row·W + col. */
 export function agentWebGPUFieldSpecOf(model: CAModel) {
+  const is3d = is3dModel(model);
   return {
     readAttrs: cellFieldAttrsOf(model).map(a => a.id),
     writeAttrs: cellFieldWriteAttrsOf(model).map(a => a.id),
     gridWidth: Math.max(1, Math.floor((model.properties.gridWidth as number) || 100)),
     gridHeight: Math.max(1, Math.floor((model.properties.gridHeight as number) || 100)),
+    gridDepth: is3d ? Math.max(1, Math.floor((model.properties.gridDepth as number) || 1)) : 1,
   };
+}
+
+/** Build the universal-node `AgentWebGPUExtras` for a model — the model-attribute
+ *  keys (scalar + the 3 color sub-keys), the lookup-table dims, the indicator
+ *  count, the bond capacity, and the world depth. */
+export function agentWebGPUExtrasOf(model: CAModel) {
+  const modelAttrKeys: string[] = [];
+  for (const a of model.attributes ?? []) {
+    if (!a.isModelAttribute) continue;
+    if (a.type === 'color') { modelAttrKeys.push(`${a.id}_r`, `${a.id}_g`, `${a.id}_b`); }
+    else modelAttrKeys.push(a.id);
+  }
+  const lookupTables: Array<{ id: string; rowCount: number; colCount: number }> = [];
+  for (const a of model.attributes ?? []) {
+    if (a.type !== 'lookupTable') continue;
+    const rowCount = Math.max(1, resolveKeyLabels(a.rowKeySource, model).length);
+    const colCount = Math.max(1, resolveKeyLabels(a.colKeySource, model).length);
+    lookupTables.push({ id: a.id, rowCount, colCount });
+  }
+  const indicatorCount = (model.indicators ?? []).length;
+  const maxBonds = Math.max(0, Math.floor((model.centerBased?.maxBonds as number) ?? 0));
+  const gridDepth = is3dModel(model) ? Math.max(1, Math.floor((model.properties.gridDepth as number) || 1)) : 1;
+  return { modelAttrKeys, lookupTables, indicatorCount, maxBonds, gridDepth };
 }
 
 /** Convenience for the DEV harness: derive the GPU agent layout from a model +
@@ -1781,6 +2636,7 @@ export function compileAgentGraphWebGPUForModel(model: CAModel): AgentWebGPUResu
     agentMaxHashBinsForModelGPU(model),
     agentWebGPUFieldSpecOf(model),
     agentAttrsOf(model).map(a => a.id),
+    agentWebGPUExtrasOf(model),
   );
   if (!cfg) return { shaderCode: '', layout, supportedTypes: [], error: 'No centerBased config.' };
   return compileAgentGraphWebGPU(model.agentGraphNodes ?? [], model.agentGraphEdges ?? [], model, layout);

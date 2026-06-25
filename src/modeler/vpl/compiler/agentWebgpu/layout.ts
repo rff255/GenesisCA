@@ -169,6 +169,34 @@ export interface AgentWebGPULayout {
   fieldReadLen: number;
   /** Total elements in `fieldDeposit`. 0 ⇒ no field write nodes. */
   fieldWriteLen: number;
+
+  // --- universal-node bindings (Generic Agent Platform: full WebGPU coverage) ---
+  /** 3D world depth (1 ⇒ 2D fast path). Drives the z fields + the 3×3×3 hash
+   *  stencil + trilinear field sampling. */
+  gridDepth: number;
+  /** Model-attribute key → its element slot in the `auxF32` buffer (Get Model
+   *  Attribute). Color attrs occupy 3 slots keyed `<id>_r`/`_g`/`_b`. */
+  modelAttrSlot: Record<string, number>;
+  /** Lookup-table id → its base/dims within `auxF32` (Table Lookup). Row-major. */
+  lookupTables: Record<string, { base: number; rowCount: number; colCount: number }>;
+  /** Total f32 elements in the `auxF32` buffer (model attrs + lookup tables).
+   *  0 ⇒ no aux buffer (no Get Model Attribute / Table Lookup). */
+  auxF32Len: number;
+  /** Ordered model-attribute keys (the upload order, mirroring modelAttrSlot). */
+  modelAttrKeys: string[];
+  /** Ordered lookup-table ids (the upload order). */
+  lookupTableIds: string[];
+  /** Number of indicator slots (the `indicators` atomic<u32> buffer length).
+   *  0 ⇒ no indicators binding. */
+  indicatorCount: number;
+  /** Per-agent bond capacity (the ragged `bondStore` stride, in bond slots). 0 ⇒
+   *  no bond store buffer (no Get Bonded Agents / For Each Bond / Get Curvature).
+   *  The store interleaves `[partnerId, restLengthBits]` per slot, so an agent's
+   *  bond k is at `bondStore[idx·maxBonds·2 + k·2]` (partner) / `+1` (rest f32-bits). */
+  maxBonds: number;
+  /** Total i32 elements in the `bondStore` buffer (= maxAgents · maxBonds · 2).
+   *  0 ⇒ no bond store binding. */
+  bondStoreLen: number;
 }
 
 export interface AgentWebGPUFieldSpec {
@@ -178,6 +206,25 @@ export interface AgentWebGPUFieldSpec {
   writeAttrs: string[];
   gridWidth: number;
   gridHeight: number;
+  /** 3D world depth (default 1 ⇒ 2D; the field index becomes layer·W·H + row·W + col). */
+  gridDepth?: number;
+}
+
+/** Universal-node bindings the agent shader may reference (Generic Agent
+ *  Platform). All optional/additive — a Boids model passes none, so its layout +
+ *  shader stay byte-identical. */
+export interface AgentWebGPUExtras {
+  /** Ordered model-attribute keys (scalar attrs as `<id>`; color attrs as the
+   *  three `<id>_r`/`_g`/`_b` keys). Each gets one f32 slot in `auxF32`. */
+  modelAttrKeys?: string[];
+  /** Lookup tables (id → row/col dims). Appended to `auxF32` after the model attrs. */
+  lookupTables?: Array<{ id: string; rowCount: number; colCount: number }>;
+  /** Number of standalone-indicator slots (the `indicators` atomic buffer). */
+  indicatorCount?: number;
+  /** Per-agent bond capacity (the ragged bond store stride). 0/absent ⇒ no store. */
+  maxBonds?: number;
+  /** 3D world depth (1 ⇒ 2D). */
+  gridDepth?: number;
 }
 
 /** Compute the GPU agent storage layout. Pure (no GPU calls). The optional
@@ -186,16 +233,24 @@ export interface AgentWebGPUFieldSpec {
  *  `agentAttrIds` (G4) lists the USER agent attributes — each gets a run in
  *  `agentF32` appended after the static fields (so the no-attr Boids layout is
  *  byte-identical). */
+/** The 3D-only per-agent f32 fields, appended AFTER the 2D fields + the request
+ *  fields when gridDepth>1 (so the 2D field bases stay byte-identical). */
+export const AGENT_GPU_F32_FIELDS_3D = ['z', 'vz', 'forceZ', 'zNext', 'divideAxisZ'] as const;
+
 export function computeAgentWebGPULayout(
   maxAgents: number,
   maxHashBins = 0,
   field?: AgentWebGPUFieldSpec,
   agentAttrIds: string[] = [],
+  extras: AgentWebGPUExtras = {},
 ): AgentWebGPULayout {
   const ma = Math.max(1, Math.floor(maxAgents));
+  const gd = Math.max(1, Math.floor(extras.gridDepth ?? field?.gridDepth ?? 1));
   const f32Base: Record<string, number> = {};
   let off = 0;
   for (const f of AGENT_GPU_F32_FIELDS) { f32Base[f] = off; off += ma; }
+  // 3D z fields — appended after the static 2D fields (2D layout byte-identical).
+  if (gd > 1) { for (const f of AGENT_GPU_F32_FIELDS_3D) { f32Base[f] = off; off += ma; } }
   // User agent attributes — one run each, appended after the static fields.
   const agentAttrBase: Record<string, number> = {};
   for (const id of agentAttrIds) { f32Base[id] = off; agentAttrBase[id] = off; off += ma; }
@@ -211,10 +266,10 @@ export function computeAgentWebGPULayout(
   const hashBinAgentsBase = hb > 0 ? hb + 1 : 0;
   const hashLen = hb > 0 ? hb + 1 + ma : 0;
 
-  // --- field bridge layout ---
+  // --- field bridge layout (3D-aware: fieldTotal = W·H·D) ---
   const gridWidth = Math.max(1, Math.floor(field?.gridWidth ?? 1));
   const gridHeight = Math.max(1, Math.floor(field?.gridHeight ?? 1));
-  const fieldTotal = gridWidth * gridHeight;
+  const fieldTotal = gridWidth * gridHeight * gd;
   const fieldReadAttrs = field?.readAttrs ?? [];
   const fieldWriteAttrs = field?.writeAttrs ?? [];
   const fieldReadBase: Record<string, number> = {};
@@ -226,6 +281,26 @@ export function computeAgentWebGPULayout(
   for (const id of fieldWriteAttrs) { fieldWriteBase[id] = fo; fo += fieldTotal; }
   const fieldWriteLen = fo;
 
+  // --- auxF32 (model attrs + lookup tables) ---
+  const modelAttrKeys = extras.modelAttrKeys ?? [];
+  const lookupTablesIn = extras.lookupTables ?? [];
+  const modelAttrSlot: Record<string, number> = {};
+  let auxOff = 0;
+  for (const key of modelAttrKeys) { modelAttrSlot[key] = auxOff; auxOff += 1; }
+  const lookupTables: Record<string, { base: number; rowCount: number; colCount: number }> = {};
+  const lookupTableIds: string[] = [];
+  for (const t of lookupTablesIn) {
+    lookupTables[t.id] = { base: auxOff, rowCount: t.rowCount, colCount: t.colCount };
+    lookupTableIds.push(t.id);
+    auxOff += t.rowCount * t.colCount;
+  }
+  const auxF32Len = auxOff;
+
+  const indicatorCount = Math.max(0, Math.floor(extras.indicatorCount ?? 0));
+  const maxBonds = Math.max(0, Math.floor(extras.maxBonds ?? 0));
+  // Interleaved [partner, restBits] per bond slot ⇒ 2 i32 per slot.
+  const bondStoreLen = maxBonds > 0 ? ma * maxBonds * 2 : 0;
+
   return {
     maxAgents: ma, maxHashBins: hb,
     f32Base, i32Base, agentAttrIds: [...agentAttrIds], agentAttrBase, f32Len, i32Len,
@@ -233,5 +308,8 @@ export function computeAgentWebGPULayout(
     gridWidth, gridHeight, fieldTotal,
     fieldReadAttrs, fieldWriteAttrs, fieldReadBase, fieldWriteBase,
     fieldReadLen, fieldWriteLen,
+    gridDepth: gd, modelAttrSlot, lookupTables, auxF32Len,
+    modelAttrKeys: [...modelAttrKeys], lookupTableIds,
+    indicatorCount, maxBonds, bondStoreLen,
   };
 }
