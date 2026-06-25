@@ -66,7 +66,10 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   'getSelfPosition', 'getRadius', 'getBondDegree', 'neighbourDensity',
   // neighbour access
   'getNearbyAgents', 'forEachInArray', 'getAgentOffset', 'getVelocity',
-  'getAgentPosition', 'getAgentRadius',
+  'getAgentPosition', 'getAgentRadius', 'getAgentAttribute',
+  // agent-array tier (id/value arrays + aggregate over them)
+  'getAgentsAttribute', 'filterAgents', 'joinAgents',
+  'pickRandomAgent', 'pickNRandomAgents', 'aggregate',
   // local variables (SCALAR only)
   'getVariable', 'setVariable',
   // agent attributes (Get/Set Attribute on the agent SoA — G4)
@@ -86,11 +89,12 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   'conditional', 'sequence',
 ]);
 
-/** Max getNearbyAgents nodes a single shader can host. Each gets its own
- *  per-thread `var<function>` id array sized `maxAgents` — a tight register
- *  budget on the GPU, so keep it small (a graph exceeding it clamps to JS, like
- *  the WASM path's AGENT_NEARBY_SCRATCH_SLOTS=4). */
-export const AGENT_WEBGPU_NEARBY_SLOTS = 4;
+/** Max agent-array-producer nodes (getNearbyAgents / getAgentsAttribute /
+ *  filterAgents / joinAgents / pickNRandomAgents) a single shader can host. Each
+ *  gets its own per-thread `var<function>` array sized `maxAgents` — a tight
+ *  register/stack budget on the GPU, so keep the TOTAL small (a graph exceeding
+ *  it clamps to JS, like the WASM path's AGENT_NEARBY_SCRATCH_SLOTS=4). */
+export const AGENT_WEBGPU_NEARBY_SLOTS = 6;
 
 export interface AgentWebGPUResult {
   /** The WGSL module source (empty on error / unsupported). */
@@ -110,6 +114,9 @@ export interface AgentWebGPUResult {
 interface Adjacency {
   nodeMap: Map<string, GraphNode>;
   inputToSource: Map<string, { nodeId: string; portId: string }>;
+  /** ALL sources for a value input port (the isArray ports — e.g. aggregate.values
+   *  — accept multiple connections). `${target}:${portId}` → ordered source list. */
+  inputToSources: Map<string, Array<{ nodeId: string; portId: string }>>;
   flowOutputToTargets: Map<string, Array<{ nodeId: string; portId: string }>>;
 }
 
@@ -124,13 +131,19 @@ function buildAdjacency(nodes: GraphNode[], edges: GraphEdge[]): Adjacency {
   const nodeMap = new Map<string, GraphNode>();
   for (const n of nodes) nodeMap.set(n.id, n);
   const inputToSource = new Map<string, { nodeId: string; portId: string }>();
+  const inputToSources = new Map<string, Array<{ nodeId: string; portId: string }>>();
   const flowOutputToTargets = new Map<string, Array<{ nodeId: string; portId: string }>>();
   for (const e of edges) {
     const src = parseHandle(e.sourceHandle);
     const tgt = parseHandle(e.targetHandle);
     if (!src || !tgt) continue;
     if (tgt.category === 'value') {
-      inputToSource.set(`${e.target}:${tgt.portId}`, { nodeId: e.source, portId: src.portId });
+      const key = `${e.target}:${tgt.portId}`;
+      // First-wins single source (back-compat with the scalar-input resolvers).
+      if (!inputToSource.has(key)) inputToSource.set(key, { nodeId: e.source, portId: src.portId });
+      const arr = inputToSources.get(key) ?? [];
+      arr.push({ nodeId: e.source, portId: src.portId });
+      inputToSources.set(key, arr);
     } else {
       const key = `${e.source}:${src.portId}`;
       const arr = flowOutputToTargets.get(key) ?? [];
@@ -138,7 +151,7 @@ function buildAdjacency(nodes: GraphNode[], edges: GraphEdge[]): Adjacency {
       flowOutputToTargets.set(key, arr);
     }
   }
-  return { nodeMap, inputToSource, flowOutputToTargets };
+  return { nodeMap, inputToSource, inputToSources, flowOutputToTargets };
 }
 
 // ---------------------------------------------------------------------------
@@ -148,6 +161,19 @@ function buildAdjacency(nodes: GraphNode[], edges: GraphEdge[]): Adjacency {
 // scope boundaries (the agent-iteration top + each forEach iteration) so a value
 // reading a per-iteration `element`/`index` re-emits per iteration.
 // ---------------------------------------------------------------------------
+
+/** A reference to an agent id/value array materialised in a per-thread (function-
+ *  scope) WGSL `var<function> arr<slot>: array<T, maxAgents>` + a length local.
+ *  Consumers iterate `0..lenName` and read `arrName[k]`. The GPU sibling of the JS
+ *  `_v<id>_result`/`_v<id>_vals` scratch arrays — every agent-array producer
+ *  (getNearbyAgents / getAgentsAttribute / filterAgents / joinAgents / pickN…)
+ *  emits into one of these slots. `elemType` distinguishes id arrays (`i32`, the
+ *  agent index space) from value arrays (`f32`, gathered attr values). */
+interface AgentArrayRef {
+  arrName: string;
+  lenName: string;
+  elemType: WgslType;
+}
 
 interface AgentWgpuCtx {
   adj: Adjacency;
@@ -164,12 +190,17 @@ interface AgentWgpuCtx {
   varNames: Map<string, string>;
   /** Cache: `${nodeId}:${portId}` → its ValueRef. Cleared on scope change. */
   valueCache: Map<string, ValueRef>;
+  /** Cache: `${nodeId}:${portId}` → its AgentArrayRef. Cleared on scope change
+   *  (re-emitted per forEach iteration when volatile, like the value cache). */
+  arrayCache: Map<string, AgentArrayRef>;
   /** Node ids whose cached value MUST NOT persist across a forEach iteration. */
   volatileNodes: Set<string>;
-  /** getNearbyAgents node id → its assigned scratch slot index. */
-  nearbyScratchSlot: Map<string, number>;
-  /** Active forEach iteration locals (innermost last). */
-  forEachStack: Array<{ nodeId: string; elemName: string; idxName: string }>;
+  /** Array-producing node id → its assigned `var<function>` scratch slot index.
+   *  Each `i32` (id arrays) or `f32` (value arrays) producer gets its own slot. */
+  arrayScratchSlot: Map<string, { slot: number; elemType: WgslType }>;
+  /** Active forEach iteration locals (innermost last). `elemType` is the source
+   *  array's element type (i32 for id arrays, f32 for value arrays). */
+  forEachStack: Array<{ nodeId: string; elemName: string; idxName: string; elemType: WgslType }>;
 }
 
 function fresh(ctx: AgentWgpuCtx, hint: string): string {
@@ -273,7 +304,7 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
       if (!frame) { result = { expr: '0', type: 'i32' }; break; }
       result = portId === 'index'
         ? { expr: frame.idxName, type: 'i32' }
-        : { expr: frame.elemName, type: 'i32' };
+        : { expr: frame.elemName, type: frame.elemType };
       break;
     }
     case 'behaviourStep': {
@@ -359,6 +390,33 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
       const aName = src ? emitAgentId(ctx, node, 'agentId') : 'idx';
       const field = portId === 'vy' ? 'vy' : 'vx';
       result = emitLet(ctx, 'f32', f32At(ctx, field, aName), 'gv');
+      break;
+    }
+    case 'getAgentAttribute': {
+      // Read a SPECIFIC agent's attribute by id → `agentF32[attrBase + id]`.
+      const attr = (node.data.config?.['attributeId'] as string) || '_undef';
+      const base = ctx.layout.agentAttrBase[attr];
+      const aName = emitAgentId(ctx, node, 'agentId');
+      result = base === undefined
+        ? { expr: '0.0', type: 'f32' }
+        : emitLet(ctx, 'f32', f32At(ctx, attr, aName), 'gaa1');
+      break;
+    }
+    case 'aggregate': {
+      result = emitAggregate(ctx, node);
+      break;
+    }
+    case 'pickRandomAgent': {
+      result = emitPickRandomAgent(ctx, node);
+      break;
+    }
+    case 'filterAgents':
+    case 'joinAgents': {
+      // The `count` port is the only scalar output; `result` is an array. A scalar
+      // request for either resolves the array (caching count) then returns count.
+      // (A consumer reading `result` goes through compileArrayNode, not here.)
+      compileArrayNode(ctx, node.id, 'result');
+      result = ctx.valueCache.get(`${node.id}:count`) ?? { expr: '0', type: 'i32' };
       break;
     }
     case 'getAgentOffset': {
@@ -685,6 +743,287 @@ function emitReadCellsUnder(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
 }
 
 // ---------------------------------------------------------------------------
+// Agent-array tier — the keystone id/value array path (GoL-on-agents et al).
+//
+// The id-array producers (getNearbyAgents / filterAgents / joinAgents /
+// pickNRandomAgents) and the value-array producer (getAgentsAttribute) each
+// materialise into their own `var<function> arr<slot>` + a length local
+// (`AgentArrayRef`). Consumers — forEachInArray (flow), aggregate (value),
+// pickRandomAgent (value) — read `arrName[0..lenName]`. Mirrors the JS agent
+// emitters' `_v<id>_result`/`_v<id>_vals` scratch arrays, minus the NeighborIndex
+// codec (elements are plain agent ids, -1 = empty sentinel). 2D Boids subset.
+// ---------------------------------------------------------------------------
+
+/** The set of node types that emit an `AgentArrayRef`. A `forEachInArray.array`
+ *  / `aggregate.values` / `pickRandomAgent.agents` source MUST be one of these. */
+const AGENT_ARRAY_PRODUCERS: ReadonlySet<string> = new Set<string>([
+  'getNearbyAgents', 'getAgentsAttribute', 'filterAgents', 'joinAgents', 'pickNRandomAgents',
+]);
+
+function isAgentArrayProducer(nodeType: string): boolean {
+  return AGENT_ARRAY_PRODUCERS.has(nodeType);
+}
+
+/** The `var<function>` array name for a producer's assigned scratch slot. */
+function arraySlotName(ctx: AgentWgpuCtx, nodeId: string): { arrName: string; elemType: WgslType } {
+  const s = ctx.arrayScratchSlot.get(nodeId);
+  if (!s) throw new Error(`agentWebgpu: no array scratch slot for ${nodeId}`);
+  return { arrName: `arr${s.elemType}${s.slot}`, elemType: s.elemType };
+}
+
+/** Compile an agent-array-producing node → its `AgentArrayRef` (memoised in the
+ *  array cache; re-emitted per forEach iteration when volatile). */
+function compileArrayNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): AgentArrayRef {
+  const key = `${nodeId}:${portId}`;
+  const cached = ctx.arrayCache.get(key);
+  if (cached !== undefined) return cached;
+
+  const node = ctx.adj.nodeMap.get(nodeId);
+  if (!node) throw new Error(`agentWebgpu: missing array node ${nodeId}`);
+  const type = node.data.nodeType;
+
+  let ref: AgentArrayRef;
+  switch (type) {
+    case 'getNearbyAgents': ref = emitNearbyFill(ctx, node); break;
+    case 'getAgentsAttribute': ref = emitGetAgentsAttribute(ctx, node); break;
+    case 'filterAgents': ref = emitFilterAgents(ctx, node); break;
+    case 'joinAgents': ref = emitJoinAgents(ctx, node); break;
+    case 'pickNRandomAgents': ref = emitPickNRandomAgents(ctx, node); break;
+    default:
+      throw new Error(`agentWebgpu: unsupported array node '${type}'`);
+  }
+  ctx.arrayCache.set(key, ref);
+  return ref;
+}
+
+/** Resolve an array input port → its source `AgentArrayRef` (single source; the
+ *  array tier never multi-sources an array input — that's the scalar aggregate
+ *  fold). Returns null when the port is unwired (the caller handles the empty
+ *  case the way the JS `|| '[]'` default does). */
+function resolveInputArray(ctx: AgentWgpuCtx, node: GraphNode, portId: string): AgentArrayRef | null {
+  const src = ctx.adj.inputToSource.get(`${node.id}:${portId}`);
+  if (!src) return null;
+  const srcNode = ctx.adj.nodeMap.get(src.nodeId);
+  if (!srcNode || !isAgentArrayProducer(srcNode.data.nodeType)) {
+    throw new Error(`agentWebgpu: array input "${portId}" must come from an agent-array producer (got ${srcNode?.data.nodeType}).`);
+  }
+  return compileArrayNode(ctx, src.nodeId, src.portId);
+}
+
+/** Get Agents Attribute — gather ONE agent attribute over an id-array → a values
+ *  array. The KEYSTONE (fed by getNearbyAgents, consumed by aggregate). Skips
+ *  empty(-1)/out-of-range/dead ids (the JS guard), so the output length is the
+ *  live-id count. Reads the agent SoA at `agentF32[attrBase + id]` (f32 storage;
+ *  int/tag/bool round-trip exactly). */
+function emitGetAgentsAttribute(ctx: AgentWgpuCtx, node: GraphNode): AgentArrayRef {
+  const attr = (node.data.config?.['attributeId'] as string) || '_undef';
+  const inArr = resolveInputArray(ctx, node, 'agents');
+  const { arrName } = arraySlotName(ctx, node.id);
+  const lenName = fresh(ctx, 'gaaLen');
+  ctx.lines.push(`  var ${lenName}: i32 = 0;`);
+  if (inArr) {
+    const base = ctx.layout.agentAttrBase[attr];
+    const k = fresh(ctx, 'gaaK'), id = fresh(ctx, 'gaaId');
+    ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${inArr.lenName}; ${k} = ${k} + 1) {`);
+    ctx.lines.push(`    let ${id}: i32 = ${arrLoad(inArr, k)};`);
+    ctx.lines.push(`    if (${id} >= 0 && ${id} < i32(control.highWater) && agentAlive[${id}] != 0u) {`);
+    // Unknown attr → push 0.0 (parity with the value-node fallback).
+    const val = base === undefined ? '0.0' : f32At(ctx, attr, `u32(${id})`);
+    ctx.lines.push(`      ${arrName}[${lenName}] = ${val}; ${lenName} = ${lenName} + 1;`);
+    ctx.lines.push(`    }`);
+    ctx.lines.push(`  }`);
+  }
+  return { arrName, lenName, elemType: 'f32' };
+}
+
+/** Filter Agents — keep the ids whose AGENT attribute passes the comparison →
+ *  the filtered id array + a count. Skips empty/dead/out-of-range ids before the
+ *  comparison (the JS guard). Multi-output (result + count): cache the count port
+ *  as a ValueRef. */
+function emitFilterAgents(ctx: AgentWgpuCtx, node: GraphNode): AgentArrayRef {
+  const attr = (node.data.config?.['attributeId'] as string) || '_undef';
+  const op = (node.data.config?.['operation'] as string) || 'equals';
+  const inArr = resolveInputArray(ctx, node, 'agents');
+  const cmp = inF32(ctx, node, 'compare', 0);
+  const { arrName } = arraySlotName(ctx, node.id);
+  const cntName = fresh(ctx, 'faCnt');
+  ctx.lines.push(`  var ${cntName}: i32 = 0;`);
+  if (inArr) {
+    const base = ctx.layout.agentAttrBase[attr];
+    const k = fresh(ctx, 'faK'), id = fresh(ctx, 'faId');
+    ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${inArr.lenName}; ${k} = ${k} + 1) {`);
+    ctx.lines.push(`    let ${id}: i32 = ${arrLoad(inArr, k)};`);
+    ctx.lines.push(`    if (${id} >= 0 && ${id} < i32(control.highWater) && agentAlive[${id}] != 0u) {`);
+    const elem = base === undefined ? '0.0' : f32At(ctx, attr, `u32(${id})`);
+    const ev = fresh(ctx, 'faV');
+    ctx.lines.push(`      let ${ev}: f32 = ${elem};`);
+    let cond: string;
+    switch (op) {
+      case 'notEquals':    cond = `${ev} != ${cmp}`; break;
+      case 'greater':      cond = `${ev} > ${cmp}`; break;
+      case 'lesser':       cond = `${ev} < ${cmp}`; break;
+      case 'greaterEqual': cond = `${ev} >= ${cmp}`; break;
+      case 'lesserEqual':  cond = `${ev} <= ${cmp}`; break;
+      default:             cond = `${ev} == ${cmp}`; break; // equals
+    }
+    ctx.lines.push(`      if (${cond}) { ${arrName}[${cntName}] = ${id}; ${cntName} = ${cntName} + 1; }`);
+    ctx.lines.push(`    }`);
+    ctx.lines.push(`  }`);
+  }
+  // count port (multi-output).
+  ctx.valueCache.set(`${node.id}:count`, { expr: cntName, type: 'i32' });
+  return { arrName, lenName: cntName, elemType: 'i32' };
+}
+
+/** Join Agents — union (default) or intersection of two id-arrays, excluding the
+ *  -1 empty sentinel. Dedup via a linear "already present?" scan over the output
+ *  (no Set on the GPU — the arrays are small, neighbour-sized). Multi-output
+ *  (result + count). */
+function emitJoinAgents(ctx: AgentWgpuCtx, node: GraphNode): AgentArrayRef {
+  const op = (node.data.config?.['operation'] as string) || 'union';
+  const aArr = resolveInputArray(ctx, node, 'a');
+  const bArr = resolveInputArray(ctx, node, 'b');
+  const { arrName } = arraySlotName(ctx, node.id);
+  const cntName = fresh(ctx, 'jaCnt');
+  ctx.lines.push(`  var ${cntName}: i32 = 0;`);
+  // Linear membership scan over the current output (dedup helper, inlined).
+  const seenInOut = (xExpr: string): string => {
+    // Returns a boolean expr; emits a scan loop into a local. WGSL has no inline
+    // "any", so emit a small flagged loop.
+    const flag = fresh(ctx, 'jaSeen'), si = fresh(ctx, 'jaSi');
+    ctx.lines.push(`      var ${flag}: bool = false;`);
+    ctx.lines.push(`      for (var ${si}: i32 = 0; ${si} < ${cntName}; ${si} = ${si} + 1) { if (${arrName}[${si}] == ${xExpr}) { ${flag} = true; break; } }`);
+    return flag;
+  };
+  if (op === 'intersection') {
+    // ids in BOTH a and b (deduped), excluding -1.
+    if (aArr && bArr) {
+      const k = fresh(ctx, 'jaK'), x = fresh(ctx, 'jaX'), bk = fresh(ctx, 'jaBk'), inB = fresh(ctx, 'jaInB');
+      ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${aArr.lenName}; ${k} = ${k} + 1) {`);
+      ctx.lines.push(`    let ${x}: i32 = ${arrLoad(aArr, k)};`);
+      ctx.lines.push(`    if (${x} != -1) {`);
+      ctx.lines.push(`      var ${inB}: bool = false;`);
+      ctx.lines.push(`      for (var ${bk}: i32 = 0; ${bk} < ${bArr.lenName}; ${bk} = ${bk} + 1) { if (${arrLoad(bArr, bk)} == ${x}) { ${inB} = true; break; } }`);
+      const seen = seenInOut(x);
+      ctx.lines.push(`      if (${inB} && !${seen}) { ${arrName}[${cntName}] = ${x}; ${cntName} = ${cntName} + 1; }`);
+      ctx.lines.push(`    }`);
+      ctx.lines.push(`  }`);
+    }
+  } else {
+    // union — all unique ids across a and b, excluding -1.
+    for (const src of [aArr, bArr]) {
+      if (!src) continue;
+      const k = fresh(ctx, 'jaK'), x = fresh(ctx, 'jaX');
+      ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${src.lenName}; ${k} = ${k} + 1) {`);
+      ctx.lines.push(`    let ${x}: i32 = ${arrLoad(src, k)};`);
+      ctx.lines.push(`    if (${x} != -1) {`);
+      const seen = seenInOut(x);
+      ctx.lines.push(`      if (!${seen}) { ${arrName}[${cntName}] = ${x}; ${cntName} = ${cntName} + 1; }`);
+      ctx.lines.push(`    }`);
+      ctx.lines.push(`  }`);
+    }
+  }
+  ctx.valueCache.set(`${node.id}:count`, { expr: cntName, type: 'i32' });
+  return { arrName, lenName: cntName, elemType: 'i32' };
+}
+
+/** Pick N Random Agents — pick up to N distinct ids without replacement (partial
+ *  Fisher-Yates). Per-agent PCG RNG (statistical parity, NOT the JS shared
+ *  xorshift32 — the documented WebGPU constraint). Copies the input into the
+ *  scratch slot as a work buffer, then shuffles the first K. */
+function emitPickNRandomAgents(ctx: AgentWgpuCtx, node: GraphNode): AgentArrayRef {
+  const inArr = resolveInputArray(ctx, node, 'agents');
+  const nExpr = castTo(resolveValueInput(ctx, node, 'n', 1), 'i32');
+  const { arrName } = arraySlotName(ctx, node.id);
+  const lenName = fresh(ctx, 'pnLen');
+  ctx.lines.push(`  var ${lenName}: i32 = 0;`);
+  if (inArr) {
+    // copy input into the work/result slot
+    const total = fresh(ctx, 'pnTot'), cp = fresh(ctx, 'pnCp');
+    ctx.lines.push(`  let ${total}: i32 = ${inArr.lenName};`);
+    ctx.lines.push(`  for (var ${cp}: i32 = 0; ${cp} < ${total}; ${cp} = ${cp} + 1) { ${arrName}[${cp}] = ${arrLoad(inArr, cp)}; }`);
+    const kCnt = fresh(ctx, 'pnK');
+    ctx.lines.push(`  let ${kCnt}: i32 = clamp(${nExpr}, 0, ${total});`);
+    const i = fresh(ctx, 'pnI'), j = fresh(ctx, 'pnJ'), tmp = fresh(ctx, 'pnTmp');
+    ctx.lines.push(`  for (var ${i}: i32 = 0; ${i} < ${kCnt}; ${i} = ${i} + 1) {`);
+    ctx.lines.push(`    let ${j}: i32 = ${i} + i32(rand_f32(idx) * f32(${total} - ${i}));`);
+    ctx.lines.push(`    let ${tmp}: i32 = ${arrName}[${i}]; ${arrName}[${i}] = ${arrName}[${j}]; ${arrName}[${j}] = ${tmp};`);
+    ctx.lines.push(`  }`);
+    ctx.lines.push(`  ${lenName} = ${kCnt};`);
+  }
+  return { arrName, lenName, elemType: 'i32' };
+}
+
+/** Load element k of an `AgentArrayRef` (the WGSL `arrName[k]` expr). */
+function arrLoad(arr: AgentArrayRef, kExpr: string): string {
+  return `${arr.arrName}[${kExpr}]`;
+}
+
+/** Aggregate over a single agent-array source → a reduced scalar. sum / product /
+ *  min / max / average / and / or (median / random reject at the gate, like the
+ *  lattice WebGPU aggregate). */
+function emitAggregate(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
+  let op = (node.data.config?.['operation'] as string) || 'sum';
+  if (op === 'mul') op = 'product';
+  if (op === 'mean') op = 'average';
+  const src = ctx.adj.inputToSource.get(`${node.id}:values`);
+  if (!src) return emitLet(ctx, 'f32', '0.0', 'agg');
+  const srcNode = ctx.adj.nodeMap.get(src.nodeId);
+  if (!srcNode || !isAgentArrayProducer(srcNode.data.nodeType)) {
+    throw new Error(`agentWebgpu: aggregate "values" must come from an agent-array producer (got ${srcNode?.data.nodeType}).`);
+  }
+  const arr = compileArrayNode(ctx, src.nodeId, src.portId);
+
+  // and / or: a flagged short-circuit loop (and: empty → 1; or: empty → 0; JS parity).
+  if (op === 'and' || op === 'or') {
+    const flag = fresh(ctx, 'aggBool');
+    ctx.lines.push(`  var ${flag}: f32 = ${op === 'and' ? '1.0' : '0.0'};`);
+    const bk = fresh(ctx, 'aggBk');
+    ctx.lines.push(`  for (var ${bk}: i32 = 0; ${bk} < ${arr.lenName}; ${bk} = ${bk} + 1) {`);
+    if (op === 'and') ctx.lines.push(`    if (f32(${arrLoad(arr, bk)}) == 0.0) { ${flag} = 0.0; break; }`);
+    else ctx.lines.push(`    if (f32(${arrLoad(arr, bk)}) != 0.0) { ${flag} = 1.0; break; }`);
+    ctx.lines.push(`  }`);
+    return { expr: flag, type: 'f32' };
+  }
+
+  const acc = fresh(ctx, 'aggAcc');
+  let init: string;
+  if (op === 'product') init = '1.0';
+  else if (op === 'min') init = '3.4028235e38';
+  else if (op === 'max') init = '-3.4028235e38';
+  else init = '0.0'; // sum + average
+  ctx.lines.push(`  var ${acc}: f32 = ${init};`);
+  const k = fresh(ctx, 'aggK'), ev = fresh(ctx, 'aggV');
+  ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${arr.lenName}; ${k} = ${k} + 1) {`);
+  ctx.lines.push(`    let ${ev}: f32 = f32(${arrLoad(arr, k)});`);
+  switch (op) {
+    case 'product': ctx.lines.push(`    ${acc} = ${acc} * ${ev};`); break;
+    case 'min': ctx.lines.push(`    ${acc} = min(${acc}, ${ev});`); break;
+    case 'max': ctx.lines.push(`    ${acc} = max(${acc}, ${ev});`); break;
+    default: ctx.lines.push(`    ${acc} = ${acc} + ${ev};`); break; // sum + average accumulate
+  }
+  ctx.lines.push(`  }`);
+  if (op === 'average') {
+    const out = fresh(ctx, 'aggAvg');
+    ctx.lines.push(`  let ${out}: f32 = select(0.0, ${acc} / f32(${arr.lenName}), ${arr.lenName} > 0);`);
+    return { expr: out, type: 'f32' };
+  }
+  return { expr: acc, type: 'f32' };
+}
+
+/** Pick Random Agent — one id at random from an id-array (-1 when empty). Per-agent
+ *  PCG RNG (statistical parity vs the JS shared xorshift32). */
+function emitPickRandomAgent(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
+  const arr = resolveInputArray(ctx, node, 'agents');
+  const out = fresh(ctx, 'pra');
+  if (!arr) { ctx.lines.push(`  let ${out}: i32 = -1;`); return { expr: out, type: 'i32' }; }
+  const pick = fresh(ctx, 'praP');
+  ctx.lines.push(`  let ${pick}: i32 = i32(rand_f32(idx) * f32(${arr.lenName}));`);
+  ctx.lines.push(`  let ${out}: i32 = select(-1, ${arrLoad(arr, pick)}, ${arr.lenName} > 0);`);
+  return { expr: out, type: 'i32' };
+}
+
+// ---------------------------------------------------------------------------
 // Flow emission.
 // ---------------------------------------------------------------------------
 
@@ -917,10 +1256,9 @@ function emitSetCellLooks(ctx: AgentWgpuCtx, node: GraphNode): void {
 // ---------------------------------------------------------------------------
 
 /** Emit the getNearbyAgents fill into its scratch slot; return the slot's array
- *  var name + the length local. */
-function emitNearbyFill(ctx: AgentWgpuCtx, naNode: GraphNode): { arrName: string; lenName: string } {
-  const slot = ctx.nearbyScratchSlot.get(naNode.id)!;
-  const arrName = `nearby${slot}`;        // the per-thread var array (declared at fn top)
+ *  var name + the length local as an `AgentArrayRef`. */
+function emitNearbyFill(ctx: AgentWgpuCtx, naNode: GraphNode): AgentArrayRef {
+  const { arrName } = arraySlotName(ctx, naNode.id); // the per-thread var array (declared at fn top)
   const lenName = fresh(ctx, 'naLen');
   const r2 = fresh(ctx, 'naR2'), xi = fresh(ctx, 'naXi'), yi = fresh(ctx, 'naYi');
   const qr = castTo(resolveValueInput(ctx, naNode, 'radius', 5), 'f32');
@@ -954,7 +1292,7 @@ function emitNearbyFill(ctx: AgentWgpuCtx, naNode: GraphNode): { arrName: string
   ctx.lines.push(`  } else {`);
   emitAllPairs(ctx, test);
   ctx.lines.push(`  }`);
-  return { arrName, lenName };
+  return { arrName, lenName, elemType: 'i32' };
 }
 
 /** The 3×3 hash-bin stencil over the in-buffer binStart/binAgents (CSR), torus-
@@ -1001,19 +1339,17 @@ function emitAllPairs(ctx: AgentWgpuCtx, test: (jExpr: string) => void): void {
   ctx.lines.push(`  }`);
 }
 
-/** forEachInArray over a getNearbyAgents source. */
+/** forEachInArray over ANY agent-array producer (getNearbyAgents / filterAgents /
+ *  joinAgents / pickNRandomAgents = i32 id arrays, getAgentsAttribute = an f32
+ *  values array). The per-iteration `element` is the array's `elemType`. */
 function emitForEach(ctx: AgentWgpuCtx, node: GraphNode): void {
-  const src = ctx.adj.inputToSource.get(`${node.id}:array`);
-  if (!src) return; // no array wired → body + done skipped (JS parity)
-  const naNode = ctx.adj.nodeMap.get(src.nodeId);
-  if (!naNode || naNode.data.nodeType !== 'getNearbyAgents') {
-    throw new Error(`agentWebgpu: forEachInArray array input must be getNearbyAgents (got ${naNode?.data.nodeType}).`);
-  }
-  const { arrName, lenName } = emitNearbyFill(ctx, naNode);
+  const arr = resolveInputArray(ctx, node, 'array');
+  if (!arr) return; // no array wired → body + done skipped (JS parity)
+  const wt = arr.elemType === 'f32' ? 'f32' : arr.elemType === 'i32' ? 'i32' : 'bool';
   const fi = fresh(ctx, 'fei'), elem = fresh(ctx, 'feElem');
-  ctx.lines.push(`  for (var ${fi}: i32 = 0; ${fi} < ${lenName}; ${fi} = ${fi} + 1) {`);
-  ctx.lines.push(`    let ${elem}: i32 = ${arrName}[${fi}];`);
-  ctx.forEachStack.push({ nodeId: node.id, elemName: elem, idxName: fi });
+  ctx.lines.push(`  for (var ${fi}: i32 = 0; ${fi} < ${arr.lenName}; ${fi} = ${fi} + 1) {`);
+  ctx.lines.push(`    let ${elem}: ${wt} = ${arrLoad(arr, fi)};`);
+  ctx.forEachStack.push({ nodeId: node.id, elemName: elem, idxName: fi, elemType: arr.elemType });
   clearVolatileCache(ctx);
   compileFlowChain(ctx, node.id, 'body');
   ctx.forEachStack.pop();
@@ -1021,11 +1357,16 @@ function emitForEach(ctx: AgentWgpuCtx, node: GraphNode): void {
   clearVolatileCache(ctx);
 }
 
-/** Drop cached values for volatile nodes so they re-emit at the next use. */
+/** Drop cached values + array-refs for volatile nodes so they re-emit at the next
+ *  use (re-fill the scratch slot per forEach iteration). */
 function clearVolatileCache(ctx: AgentWgpuCtx): void {
   for (const k of [...ctx.valueCache.keys()]) {
     const nid = k.slice(0, k.lastIndexOf(':'));
     if (ctx.volatileNodes.has(nid)) ctx.valueCache.delete(k);
+  }
+  for (const k of [...ctx.arrayCache.keys()]) {
+    const nid = k.slice(0, k.lastIndexOf(':'));
+    if (ctx.volatileNodes.has(nid)) ctx.arrayCache.delete(k);
   }
 }
 
@@ -1125,13 +1466,22 @@ export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): 
   const reachable = behaviourReachableNodeIds(flat.nodes, flat.edges);
   const reachNodes = flat.nodes.filter(n => reachable.has(n.id));
 
-  let nearbyCount = 0;
+  let arrayProducerCount = 0;
   for (const n of reachNodes) {
     const t = n.data.nodeType;
     if (t === 'macroInput' || t === 'macroOutput' || t === 'macro') return false;
     if (!AGENT_WEBGPU_SUPPORTED_TYPES.has(t)) return false;
     const cfg = (n.data.config ?? {}) as Record<string, unknown>;
-    if (t === 'getNearbyAgents') nearbyCount++;
+    if (isAgentArrayProducer(t)) arrayProducerCount++;
+    if (t === 'aggregate') {
+      // median / random / weightedRandom need a sort / RNG-pick path the agent
+      // shader doesn't have (same as the lattice WebGPU aggregate). Clamp to JS.
+      let op = (cfg['operation'] as string) || 'sum';
+      if (op === 'mul') op = 'product';
+      if (op === 'mean') op = 'average';
+      if (op !== 'sum' && op !== 'product' && op !== 'min' && op !== 'max'
+        && op !== 'average' && op !== 'and' && op !== 'or') return false;
+    }
     if (t === 'statement') {
       // `operation`, not `operator` (matches emitCompare + StatementNode). The
       // wrong key meant the between/notBetween reject never fired → a between
@@ -1155,24 +1505,36 @@ export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): 
       if (cfg['useGlyph'] && cfg['setBackground'] === false) return false;
     }
   }
-  if (nearbyCount > AGENT_WEBGPU_NEARBY_SLOTS) return false;
+  if (arrayProducerCount > AGENT_WEBGPU_NEARBY_SLOTS) return false;
   // SCALAR Local Variables only (array variables are a future port). The agent
   // graph resolves variables against `agentVariables` (the Generic Agent
   // Platform's separate agent-variable id-space), NOT the cell `variables`.
   const hasArrayVar = (model.agentVariables ?? []).some(v => v.kind === 'array');
   const usesVar = reachNodes.some(n => n.data.nodeType === 'getVariable' || n.data.nodeType === 'setVariable');
   if (hasArrayVar && usesVar) return false;
-  // forEachInArray's array input must come from getNearbyAgents (behaviour subtree only).
+  // Every array input (forEachInArray.array / aggregate.values / pick*.agents /
+  // getAgentsAttribute.agents / filter/join inputs) must come from an agent-array
+  // producer (the array tier never sees a non-producer array source).
   const map = new Map(reachNodes.map(n => [n.id, n] as const));
+  const ARRAY_INPUT_PORTS = new Set(['array', 'values', 'agents', 'a', 'b']);
   for (const e of flat.edges) {
     const tgt = parseHandle(e.targetHandle);
-    if (tgt && tgt.category === 'value' && tgt.portId === 'array') {
-      const consumer = map.get(e.target);
-      if (consumer?.data.nodeType === 'forEachInArray') {
-        const srcNode = map.get(e.source);
-        if (srcNode && srcNode.data.nodeType !== 'getNearbyAgents') return false;
-      }
-    }
+    if (!tgt || tgt.category !== 'value' || !ARRAY_INPUT_PORTS.has(tgt.portId)) continue;
+    const consumer = map.get(e.target);
+    if (!consumer) continue;
+    const ct = consumer.data.nodeType;
+    // Only the agent-array consumers gate their array inputs (a scalar node with a
+    // coincidental 'a'/'b' port — e.g. logicOperator.a/b — is NOT array-typed).
+    const isArrayConsumer = ct === 'forEachInArray'
+      || (ct === 'aggregate' && tgt.portId === 'values')
+      || (ct === 'pickRandomAgent' && tgt.portId === 'agents')
+      || (ct === 'pickNRandomAgents' && tgt.portId === 'agents')
+      || (ct === 'getAgentsAttribute' && tgt.portId === 'agents')
+      || (ct === 'filterAgents' && tgt.portId === 'agents')
+      || (ct === 'joinAgents' && (tgt.portId === 'a' || tgt.portId === 'b'));
+    if (!isArrayConsumer) continue;
+    const srcNode = map.get(e.source);
+    if (srcNode && !isAgentArrayProducer(srcNode.data.nodeType)) return false;
   }
   return true;
 }
@@ -1287,14 +1649,14 @@ export function compileAgentGraphWebGPU(
   // roots are compiled separately on CPU/JS (G4), so they're excluded here.
   const reachable = behaviourReachableNodeIds(nodes, edges);
   const seen = new Set<string>();
-  let nearbyCount = 0;
+  let arrayProducerCount = 0;
   for (const n of nodes) {
     if (!reachable.has(n.id)) continue;
     seen.add(n.data.nodeType);
     if (!AGENT_WEBGPU_SUPPORTED_TYPES.has(n.data.nodeType)) return empty(`agentWebgpu: unsupported node '${n.data.nodeType}' (falls back to JS).`);
-    if (n.data.nodeType === 'getNearbyAgents') nearbyCount++;
+    if (isAgentArrayProducer(n.data.nodeType)) arrayProducerCount++;
   }
-  if (nearbyCount > AGENT_WEBGPU_NEARBY_SLOTS) return empty(`agentWebgpu: too many getNearbyAgents (${nearbyCount} > ${AGENT_WEBGPU_NEARBY_SLOTS} slots).`);
+  if (arrayProducerCount > AGENT_WEBGPU_NEARBY_SLOTS) return empty(`agentWebgpu: too many agent-array producers (${arrayProducerCount} > ${AGENT_WEBGPU_NEARBY_SLOTS} slots).`);
 
   const adj = buildAdjacency(nodes, edges);
   const agentAttrType = new Map<string, string>();
@@ -1305,16 +1667,23 @@ export function compileAgentGraphWebGPU(
     agentAttrType,
     varNames: new Map<string, string>(),
     valueCache: new Map<string, ValueRef>(),
+    arrayCache: new Map<string, AgentArrayRef>(),
     volatileNodes: new Set<string>(),
-    nearbyScratchSlot: new Map<string, number>(),
+    arrayScratchSlot: new Map<string, { slot: number; elemType: WgslType }>(),
     forEachStack: [],
   };
 
-  // Assign getNearbyAgents scratch slots + name the scalar variables. The agent
-  // graph's Local Variables live on `agentVariables` (the separate agent-variable
-  // id-space), NOT the cell `variables`.
-  let slot = 0;
-  for (const n of nodes) if (reachable.has(n.id) && n.data.nodeType === 'getNearbyAgents') ctx.nearbyScratchSlot.set(n.id, slot++);
+  // Assign array-producer scratch slots (separate i32 + f32 `var<function>` pools)
+  // + name the scalar variables. The agent graph's Local Variables live on
+  // `agentVariables` (the separate agent-variable id-space), NOT the cell `variables`.
+  let i32Slots = 0, f32Slots = 0;
+  for (const n of nodes) {
+    if (!reachable.has(n.id) || !isAgentArrayProducer(n.data.nodeType)) continue;
+    // getAgentsAttribute → f32 (gathered attr values); all others → i32 (id arrays).
+    const elemType: WgslType = n.data.nodeType === 'getAgentsAttribute' ? 'f32' : 'i32';
+    if (elemType === 'f32') ctx.arrayScratchSlot.set(n.id, { slot: f32Slots++, elemType });
+    else ctx.arrayScratchSlot.set(n.id, { slot: i32Slots++, elemType });
+  }
   for (const v of (model.agentVariables ?? [])) {
     if (v.kind !== 'scalar') continue;
     ctx.varNames.set(v.id, `_var${v.id.replace(/[^a-zA-Z0-9_]/g, '_')}`);
@@ -1335,9 +1704,14 @@ export function compileAgentGraphWebGPU(
   }
 
   // --- assemble the WGSL module ---
+  // Array-producer scratch pools: one `var<function>` array per assigned slot
+  // (`arri32<n>` for id arrays, `arrf32<n>` for gathered value arrays).
   const nearbyDecls: string[] = [];
-  for (let i = 0; i < slot; i++) {
-    nearbyDecls.push(`  var<function> nearby${i}: array<i32, ${layout.maxAgents}>;`);
+  for (let i = 0; i < i32Slots; i++) {
+    nearbyDecls.push(`  var<function> arri32${i}: array<i32, ${layout.maxAgents}>;`);
+  }
+  for (let i = 0; i < f32Slots; i++) {
+    nearbyDecls.push(`  var<function> arrf32${i}: array<f32, ${layout.maxAgents}>;`);
   }
   const varDecls: string[] = [];
   for (const v of (model.agentVariables ?? [])) {
