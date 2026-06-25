@@ -582,6 +582,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const showAgentsRef = useRef(showAgents); showAgentsRef.current = showAgents;
   const simulateCellsRef = useRef(simulateCells); simulateCellsRef.current = simulateCells;
   const simulateAgentsRef = useRef(simulateAgents); simulateAgentsRef.current = simulateAgents;
+  // Brush TARGET — does the LMB brush affect the CA grid or the agents? (Only
+  // meaningful for an agent model; the toggle lives in the Agents panel.) Replaces
+  // the old "Paint Field" agent-brush mode: 'grid' = the cell brush (Input Mapping
+  // above) paints cells; 'agents' = the agent brush (seed/kill/move/…) acts on
+  // agents. Persisted; a ref drives the pointer/cursor hot paths.
+  const [brushTarget, setBrushTarget] = useState<'grid' | 'agents'>((saved.current.brushTarget as 'grid' | 'agents') ?? 'agents');
+  const brushTargetRef = useRef(brushTarget); brushTargetRef.current = brushTarget;
   // PR3 — agent inspector: a single on-demand popover (one at a time).
   const [agentInspect, setAgentInspect] = useState<{ id: number; x: number; y: number } | null>(null);
   const [agentState, setAgentState] = useState<AgentStateResponse | null>(null);
@@ -617,7 +624,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
           infinityCanvas, indicatorVizModes, recordFormat, brushSectionH,
           agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentSeedType,
-          showCaGrid, showAgents, simulateCells, simulateAgents,
+          showCaGrid, showAgents, simulateCells, simulateAgents, brushTarget,
           indicatorHiddenCategories: Object.fromEntries(
             Object.entries(indicatorHiddenCategories)
               .filter(([, s]) => s.size > 0)
@@ -629,7 +636,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentSeedType, showCaGrid, showAgents, simulateCells, simulateAgents, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentSeedType, showCaGrid, showAgents, simulateCells, simulateAgents, brushTarget, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -820,7 +827,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // Agent brush: the LMB action on the canvas for an agent model. 'paint' falls
   // through to the normal cell brush (field painting). Glue/Cut stage a first
   // agent on the first click, then bond/unbond it to the second.
-  type AgentBrushMode = 'seed' | 'kill' | 'glue' | 'cut' | 'move' | 'bond' | 'paint';
+  // The agent-brush sub-modes (only active when brushTarget === 'agents'). The old
+  // 'paint' mode is gone — painting the CA grid is now `brushTarget === 'grid'`.
+  type AgentBrushMode = 'seed' | 'kill' | 'glue' | 'cut' | 'move' | 'bond';
   const [agentBrushMode, setAgentBrushMode] = useState<AgentBrushMode>('seed');
   const agentBrushModeRef = useRef<AgentBrushMode>('seed');
   agentBrushModeRef.current = agentBrushMode;
@@ -1383,7 +1392,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // Hovered-agent highlight (kill = warm/red, glue/cut = accent). On-change
       // redraws keep this cheap; the pick is the live cursor's nearest agent.
       const hover = agentHoverIdRef.current;
-      if (hover >= 0 && hover < hw && aal[hover]) {
+      if (brushTargetRef.current === 'agents' && hover >= 0 && hover < hw && aal[hover]) {
         const cx = ox + ax[hover]! * scale, cy = oy + ay[hover]! * scale;
         const rad = Math.max(2, ar[hover]! * scale) + 2;
         ctx.beginPath(); ctx.arc(cx, cy, rad, 0, Math.PI * 2);
@@ -1393,7 +1402,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // Brush radius ring at the cursor (seed / kill modes), drawn as the
       // negative silhouette via the 'difference' composite + white so it's
       // visible on any palette (the Windows-cursor trick). Tiled in infinity.
-      if (cursorW && (mode === 'seed' || mode === 'kill') && agentBrushRadiusRef.current > 0) {
+      if (brushTargetRef.current === 'agents' && cursorW && (mode === 'seed' || mode === 'kill') && agentBrushRadiusRef.current > 0) {
         const rr = agentBrushRadiusRef.current * scale;
         const drawRing = (tileOx: number, tileOy: number) => {
           const cx = tileOx + cursorW.x * scale, cy = tileOy + cursorW.y * scale;
@@ -1537,8 +1546,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // it (visible on any cell palette — the Windows-cursor trick). In infinity
     // mode one copy is drawn per visible tile (same range logic as the old
     // rect cursor), so a stamp straddling a seam shows every overhanging copy.
+    // Cell brush cursor — hidden on an agent model when the brush targets agents
+    // (the agent radius ring is shown instead), so the two cursors never overlap.
     const cursor = cursorGrid.current;
-    if (cursor && showBrushCursorRef.current) {
+    if (cursor && showBrushCursorRef.current && (!isAgentModelRef.current || brushTargetRef.current === 'grid')) {
       const lineAnchor = brushShapeRef.current === 'line' ? lineAnchorRef.current : null;
       // Silhouette edges in CELL units + the base cell they're relative to.
       let edges: Array<[number, number, number, number]>;
@@ -3080,7 +3091,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const updateAgentHover = (clientX: number, clientY: number): boolean => {
       const snap = agentsRef.current;
       const mode = agentBrushModeRef.current;
-      const want = mode === 'kill' || mode === 'glue' || mode === 'cut' || mode === 'move';
+      const want = brushTargetRef.current === 'agents' && (mode === 'kill' || mode === 'glue' || mode === 'cut' || mode === 'move');
       if (!want || !snap) {
         if (hoverAgents3dRef.current.length === 0) return false;
         hoverAgents3dRef.current = EMPTY_AGENT_RINGS; return true;
@@ -3185,9 +3196,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         }
         active = 'inspect'; sweepPick3d(e.clientX, e.clientY, true); draw();
       } // Shift+LMB → sweep inspect (drag) / pin (click)
-      else if (e.button === 0 && isAgentModelRef.current && agentBrushModeRef.current !== 'paint') {
-        // Plain LMB on an agent model: the agent brush (seed/kill/move). Glue/Cut/
-        // Bond are 2D-only stop-gaps; in 3D they collapse to a single-pick move.
+      else if (e.button === 0 && isAgentModelRef.current && brushTargetRef.current === 'agents') {
+        // Plain LMB with the brush targeting agents: the agent brush (seed/kill/
+        // move). Glue/Cut/Bond are 2D-only stop-gaps; in 3D they collapse to a
+        // single-pick move. (brushTarget==='grid' falls through to cell painting.)
         const mode = agentBrushModeRef.current;
         if (mode === 'kill') { active = 'agentKill'; killAgents3d(e.clientX, e.clientY); }
         else if (mode === 'move') {
@@ -4428,12 +4440,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
 
       // Bond-Graph Agents — the agent brush. Plain LMB on the canvas performs
-      // the selected mode (Seed / Kill / Glue / Cut); 'paint' falls through to
-      // the normal cell brush (field painting). Shift+LMB still inspects, Ctrl+LMB
-      // still resizes (those are checked below), so the agent brush only takes a
-      // plain, unmodified left click.
+      // the selected mode (Seed / Kill / Glue / Cut) when the brush targets agents;
+      // brushTarget==='grid' falls through to the normal cell brush. Shift+LMB still
+      // inspects, Ctrl+LMB still resizes (those are checked below), so the agent
+      // brush only takes a plain, unmodified left click.
       if (e.button === 0 && !e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey
-          && isAgentModelRef.current && agentBrushModeRef.current !== 'paint') {
+          && isAgentModelRef.current && brushTargetRef.current === 'agents') {
         e.preventDefault();
         const worker = workerRef.current;
         const mode = agentBrushModeRef.current;
@@ -4621,7 +4633,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // full GL/canvas redraw per raw move). The cursor-cell change is already
       // covered by setHoverCellInfo above; here we additionally redraw when the
       // hovered AGENT changes so the highlight tracks.
-      if (isAgentModelRef.current) {
+      if (isAgentModelRef.current && brushTargetRef.current === 'agents') {
         const mode = agentBrushModeRef.current;
         const radiusMode = mode === 'seed' || mode === 'kill' || mode === 'glue' || mode === 'cut';
         if (radiusMode) {
@@ -6250,8 +6262,28 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             }}
           />
 
-          {/* Brush Section (top, shrinks to content; user-resizable when a
-              splitter to the Indicators section below is available) */}
+          {/* Brush target switch — at the TOP of the panel (agent models only):
+              does the LMB brush affect the CA grid or the agents? Each layer's
+              brush details below appear ONLY when that layer is selected. */}
+          {isAgentModel && (
+            <div style={{ padding: '8px 10px 2px' }}>
+              <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Brush affects</div>
+              <div style={{ display: 'flex', border: '1px solid var(--color-widget-border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
+                {(['grid', 'agents'] as const).map(t => (
+                  <button key={t}
+                    onClick={() => { setBrushTarget(t); agentGlueAnchorRef.current = -1; draw(); }}
+                    title={t === 'grid' ? 'LMB paints the CA grid (the Input Mapping brush below)' : 'LMB acts on the agents (seed / kill / move / glue / cut / bond)'}
+                    style={{ flex: 1, padding: '4px 8px', cursor: 'pointer', border: 'none', borderRight: t === 'grid' ? '1px solid var(--color-widget-border)' : 'none', background: brushTarget === t ? 'var(--color-accent-soft)' : 'transparent', color: brushTarget === t ? 'var(--color-accent)' : 'var(--color-text-muted)', fontWeight: 600, fontSize: '0.66rem' }}
+                  >{t === 'grid' ? 'CA Grid' : 'Agents'}</button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Brush Section (top, shrinks to content; user-resizable when a splitter
+              to the Indicators section below is available). Shown only when the
+              brush targets the CA grid (or on a non-agent model). */}
+          {(!isAgentModel || brushTarget === 'grid') && (
           <div
             ref={brushSectionRef}
             className={`${styles.rightPanelSection} ${styles.rightSectionBrush}`}
@@ -6406,10 +6438,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             </div>
             </div>
           </div>
+          )}
 
-          {/* Splitter: drag to trade brush-section height for indicators
-              height; double-click resets to auto (shrink-to-content). */}
-          {(model.indicators || []).length > 0 && (
+          {/* Splitter: drag to trade brush-section height for indicators height;
+              double-click resets to auto. Only when the cell brush is visible. */}
+          {(!isAgentModel || brushTarget === 'grid') && (model.indicators || []).length > 0 && (
             <div
               className={styles.rightSectionSplitter}
               title="Drag to resize Input Mapping / Indicators split — double-click to reset"
@@ -6496,18 +6529,19 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                   </div>
                 </div>
 
-                {/* Brush — the LMB action on the canvas. 'Paint Field' falls through
-                    to the normal cell brush; Glue/Cut stage the first agent then
-                    bond/unbond to the second (RMB cancels); Seed/Kill carry a
-                    radius/cluster; Move drags an agent; Bond auto-glues near pairs. */}
+                {/* Brush — the LMB agent action, shown only when the brush targets
+                    agents (the "Brush affects" switch lives at the TOP of the panel).
+                    Glue/Cut stage the first agent then bond/unbond to the second (RMB
+                    cancels); Seed/Kill carry a radius/cluster; Move drags an agent. */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.66rem' }}>
-                  <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Brush</div>
+                  {brushTarget === 'agents' && (<>
+                  <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Agent brush</div>
                   <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-                    {(['seed', 'kill', 'glue', 'cut', 'move', 'bond', 'paint'] as const).map(m => (
+                    {(['seed', 'kill', 'glue', 'cut', 'move', 'bond'] as const).map(m => (
                       <button
                         key={m}
                         onClick={() => { setAgentBrushMode(m); agentGlueAnchorRef.current = -1; draw(); }}
-                        title={m === 'seed' ? 'Click/drag to seed a cluster of agents' : m === 'kill' ? 'Click/drag to remove agents within the radius' : m === 'glue' ? 'Click two agents to bond them' : m === 'cut' ? 'Click two bonded agents to unbond them' : m === 'move' ? 'Drag an agent to a new position (RMB cancels)' : m === 'bond' ? 'Drag over near agents to auto-bond them' : 'Click to paint the cell field (normal brush)'}
+                        title={m === 'seed' ? 'Click/drag to seed a cluster of agents' : m === 'kill' ? 'Click/drag to remove agents within the radius' : m === 'glue' ? 'Click two agents to bond them' : m === 'cut' ? 'Click two bonded agents to unbond them' : m === 'move' ? 'Drag an agent to a new position (RMB cancels)' : 'Drag over near agents to auto-bond them'}
                         style={{
                           padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', textTransform: 'capitalize',
                           border: '1px solid ' + (agentBrushMode === m ? 'var(--color-accent)' : 'var(--color-widget-border)'),
@@ -6515,7 +6549,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                           color: agentBrushMode === m ? 'var(--color-accent)' : 'var(--color-text-muted)',
                           fontWeight: 600, fontSize: '0.64rem',
                         }}
-                      >{m === 'paint' ? 'Paint Field' : m}</button>
+                      >{m}</button>
                     ))}
                   </div>
                   {/* Radius / density / spacing — shown for the radius modes. */}
@@ -6562,6 +6596,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                       )}
                     </div>
                   )}
+                  </>)}
                   <button
                     onClick={() => workerRef.current?.postMessage({ type: 'clearAgents', activeViewer: activeViewerRef.current })}
                     style={{ alignSelf: 'flex-start', padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
