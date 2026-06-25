@@ -14,6 +14,7 @@ import { Gl3DRenderer, panCamera } from './render/gl3d';
 import { agentTargetOf } from '../model/centerBased';
 import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported } from '../modeler/vpl/compiler/agentWasm/compile';
 import { compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported } from '../modeler/vpl/compiler/agentWebgpu/compile';
+import type { AgentWebGPULayout } from '../modeler/vpl/compiler/agentWebgpu/layout';
 import { emitAgentForcePassWGSL } from '../modeler/vpl/compiler/agentWebgpu/forcePass';
 import type { AgentRenderSnapshot } from './engine/agentEngine';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
@@ -1071,7 +1072,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
   // don't behave); PR-A3 wires the real compileAgentGraph over
   // model.agentGraphNodes (the behaviourStep loop + value-outs + force hooks).
-  const compileAgentModel = useCallback((stopIdxBase = 0): { behaviourCode?: string; initCode?: string; divisionCode?: string; stopMessages: string[]; colorViewer: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number } => {
+  const compileAgentModel = useCallback((stopIdxBase = 0): { behaviourCode?: string; initCode?: string; divisionCode?: string; stopMessages: string[]; colorViewer: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean } => {
     if (!model.topologyMode?.agents) return { colorViewer: '', agentTarget: 'js', stopMessages: [] };
     const firstViewer = model.mappings.find(mp => mp.isAttributeToColor);
     const colorViewer = firstViewer?.id ?? '';
@@ -1096,6 +1097,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     let agentWebgpuForceShader: string | undefined;
     let agentWebgpuMaxAgents: number | undefined;
     let agentWebgpuMaxHashBins: number | undefined;
+    let agentWebgpuLayout: AgentWebGPULayout | undefined;
+    let agentWebgpuUsesI32Write: boolean | undefined;
     if (agentTarget === 'wasm') {
       try {
         const r = compileAgentGraphWasmForModel(model);
@@ -1129,6 +1132,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           agentWebgpuForceShader = emitAgentForcePassWGSL(r.layout);
           agentWebgpuMaxAgents = r.layout.maxAgents;
           agentWebgpuMaxHashBins = r.layout.maxHashBins;
+          // Ship the FULL layout (it carries the universal-node region bases —
+          // auxF32 / indicators / bondStore / the 3D z fields) so the worker binds
+          // + uploads against the EXACT layout the shader compiled to (no recompute
+          // mismatch). + the i32-write flag (setAgentType → read_write agentI32).
+          agentWebgpuLayout = r.layout;
+          agentWebgpuUsesI32Write = r.usesI32Write;
         }
       } catch (e) {
         // eslint-disable-next-line no-console
@@ -1136,7 +1145,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         agentTarget = 'js';
       }
     }
-    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, stopMessages: ag.stopMessages, colorViewer, agentTarget, agentWasmBytes, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins };
+    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, stopMessages: ag.stopMessages, colorViewer, agentTarget, agentWasmBytes, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentWebgpuUsesI32Write };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.agentAttributes, model.mappings, model.centerBased]);
 
@@ -2478,6 +2487,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       agentWebgpuForceShader: agentResult.agentWebgpuForceShader,
       agentWebgpuMaxAgents: agentResult.agentWebgpuMaxAgents,
       agentWebgpuMaxHashBins: agentResult.agentWebgpuMaxHashBins,
+      agentWebgpuLayout: agentResult.agentWebgpuLayout,
+      agentWebgpuUsesI32Write: agentResult.agentWebgpuUsesI32Write,
     };
     // Canvas transfer is deferred to the useWebGPUStatus handler — see
     // pendingCanvasAttach above. The init message never carries webgpuCanvas
