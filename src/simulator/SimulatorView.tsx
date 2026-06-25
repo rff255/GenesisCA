@@ -13,6 +13,8 @@ import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { Gl3DRenderer, panCamera } from './render/gl3d';
 import { agentTargetOf } from '../model/centerBased';
 import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported } from '../modeler/vpl/compiler/agentWasm/compile';
+import { compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported } from '../modeler/vpl/compiler/agentWebgpu/compile';
+import { emitAgentForcePassWGSL } from '../modeler/vpl/compiler/agentWebgpu/forcePass';
 import type { AgentRenderSnapshot } from './engine/agentEngine';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
@@ -1069,7 +1071,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
   // don't behave); PR-A3 wires the real compileAgentGraph over
   // model.agentGraphNodes (the behaviourStep loop + value-outs + force hooks).
-  const compileAgentModel = useCallback((stopIdxBase = 0): { behaviourCode?: string; initCode?: string; divisionCode?: string; stopMessages: string[]; colorViewer: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array } => {
+  const compileAgentModel = useCallback((stopIdxBase = 0): { behaviourCode?: string; initCode?: string; divisionCode?: string; stopMessages: string[]; colorViewer: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number } => {
     if (!model.topologyMode?.agents) return { colorViewer: '', agentTarget: 'js', stopMessages: [] };
     const firstViewer = model.mappings.find(mp => mp.isAttributeToColor);
     const colorViewer = firstViewer?.id ?? '';
@@ -1088,8 +1090,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // model) and ship the bytes to the worker — mirroring how lattice
     // `wasmStepBytes` are sent. The JS behaviourCode is ALWAYS sent too (the
     // worker keeps it as the fallback + for Show Code).
-    let agentTarget = agentTargetOf(model.centerBased, isAgentGraphWasmSupported(model));
+    let agentTarget = agentTargetOf(model.centerBased, isAgentGraphWasmSupported(model), isAgentGraphWebGPUSupported(model));
     let agentWasmBytes: Uint8Array | undefined;
+    let agentWebgpuBehaviourShader: string | undefined;
+    let agentWebgpuForceShader: string | undefined;
+    let agentWebgpuMaxAgents: number | undefined;
+    let agentWebgpuMaxHashBins: number | undefined;
     if (agentTarget === 'wasm') {
       try {
         const r = compileAgentGraphWasmForModel(model);
@@ -1105,8 +1111,32 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         console.warn('[agents] WASM compile threw, falling back to JS:', e);
         agentTarget = 'js';
       }
+    } else if (agentTarget === 'webgpu') {
+      // PR7 G3-runtime: compile the behaviour shader (the GPU agent loop) + the
+      // standalone force-pass shader here (we have the model), and ship both WGSL
+      // strings + the GPU agent layout dims to the worker, which builds the
+      // dedicated agent WebGPU runtime + dispatches both passes per step. The JS
+      // behaviourCode above stays as the fallback (any device/compile failure
+      // demotes to JS in the worker).
+      try {
+        const r = compileAgentGraphWebGPUForModel(model);
+        if (r.error || !r.shaderCode) {
+          // eslint-disable-next-line no-console
+          console.warn('[agents] WebGPU compile fell back to JS:', r.error);
+          agentTarget = 'js';
+        } else {
+          agentWebgpuBehaviourShader = r.shaderCode;
+          agentWebgpuForceShader = emitAgentForcePassWGSL(r.layout);
+          agentWebgpuMaxAgents = r.layout.maxAgents;
+          agentWebgpuMaxHashBins = r.layout.maxHashBins;
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[agents] WebGPU compile threw, falling back to JS:', e);
+        agentTarget = 'js';
+      }
     }
-    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, stopMessages: ag.stopMessages, colorViewer, agentTarget, agentWasmBytes };
+    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, stopMessages: ag.stopMessages, colorViewer, agentTarget, agentWasmBytes, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.agentAttributes, model.mappings, model.centerBased]);
 
@@ -2440,6 +2470,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // the JS behaviourCode above stays as the fallback.
       agentTarget: agentResult.agentTarget,
       agentWasmBytes: agentResult.agentWasmBytes,
+      // PR7 G3-runtime: when the agent target resolves to 'webgpu', ship the two
+      // compiled WGSL shaders + the GPU agent layout dims. The worker builds a
+      // dedicated agent WebGPU runtime (its own device) + dispatches both passes
+      // per step; any failure demotes to the JS behaviour fn.
+      agentWebgpuBehaviourShader: agentResult.agentWebgpuBehaviourShader,
+      agentWebgpuForceShader: agentResult.agentWebgpuForceShader,
+      agentWebgpuMaxAgents: agentResult.agentWebgpuMaxAgents,
+      agentWebgpuMaxHashBins: agentResult.agentWebgpuMaxHashBins,
     };
     // Canvas transfer is deferred to the useWebGPUStatus handler — see
     // pendingCanvasAttach above. The init message never carries webgpuCanvas
@@ -2817,6 +2855,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         // PR6b-1: re-resolve the agent target + ship the WASM bytes on recompile.
         agentTarget: agentResult.agentTarget,
         agentWasmBytes: agentResult.agentWasmBytes,
+        // PR7 G3-runtime: re-ship the WebGPU agent shaders on recompile.
+        agentWebgpuBehaviourShader: agentResult.agentWebgpuBehaviourShader,
+        agentWebgpuForceShader: agentResult.agentWebgpuForceShader,
+        agentWebgpuMaxAgents: agentResult.agentWebgpuMaxAgents,
+        agentWebgpuMaxHashBins: agentResult.agentWebgpuMaxHashBins,
       });
       // If user has the model toggle on, ensure useWasm is set (recompile doesn't carry useWasm by default).
       // PR5: the grid target now flows through for agent models too (the

@@ -10,6 +10,7 @@ import { NumberField } from '../vpl/widgets/InlineWidgets';
 import { cbNum, usesBondingPhysics } from '../../model/centerBased';
 import type { CenterBasedNumericKey } from '../../model/centerBased';
 import { isAgentGraphWasmSupported } from '../vpl/compiler/agentWasm/compile';
+import { isAgentGraphWebGPUSupported } from '../vpl/compiler/agentWebgpu/compile';
 import styles from './PanelContent.module.css';
 
 function newCondId(): string {
@@ -410,7 +411,10 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
             // minimal node subset; PR6b-2/3 widen it). When false, picking WASM is
             // honest but the engine falls back to JS (agentTargetOf clamps).
             const agentWasmSupported = isAgentGraphWasmSupported(model);
-            const agentSync = (cb?.agentUpdateMode ?? 'async') === 'sync';
+            // PR7: live WebGPU-target support for the CURRENT agent graph (the
+            // Boids node subset, 2D only). When false, picking WebGPU is honest
+            // but the engine falls back to JS (agentTargetOf clamps).
+            const agentWebgpuSupported = isAgentGraphWebGPUSupported(model);
             const num = (k: CenterBasedNumericKey) => cbNum(cb, k);
             const NF = (k: CenterBasedNumericKey, opts?: { min?: number; max?: number; step?: number; integer?: boolean }) => (
               <NumberField
@@ -463,8 +467,10 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
 
                 {/* Agent Compile Target — INDEPENDENT of the grid's Compile Target
                     radio above. JS = full node coverage. WASM is live for the
-                    supported node subset (PR6b-1; falls back to JS otherwise).
-                    WebGPU is Phase F (PR7). Changing it forces a full reinit. */}
+                    supported node subset (PR6b; falls back to JS otherwise). WebGPU
+                    (PR7) is live for the Boids node subset (2D); the worker builds a
+                    dedicated agent GPU runtime + dispatches behaviour + force shaders
+                    per step, else falls back to JS. */}
                 <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '6px 0 4px' }}>Agent Compile Target</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 2, marginBottom: 4 }}>
                   {([
@@ -472,14 +478,14 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                     ['wasm', 'WebAssembly', agentWasmSupported
                       ? 'This agent graph runs on WebAssembly (the supported node subset). Independent of the grid target.'
                       : 'Selectable, but this graph uses nodes not yet ported to the WASM agent loop, so it falls back to JS (more coverage lands in Phase F).', false],
-                    ['webgpu', 'WebGPU', agentSync
-                      ? 'coming soon (Phase F PR7) — runs agents in parallel on the GPU.'
-                      : 'coming soon (Phase F PR7) — will require Synchronous agent update mode (GPU runs agents in parallel).', true],
+                    ['webgpu', 'WebGPU', agentWebgpuSupported
+                      ? 'This agent graph runs on WebGPU (the Boids node subset, 2D) — the behaviour + force passes dispatch on the GPU. Independent of the grid target; falls back to JS if WebGPU is unavailable.'
+                      : 'Selectable, but this graph uses nodes not yet ported to the WebGPU agent loop (or is 3D), so it falls back to JS (bonds / division / field stay CPU).', false],
                   ] as const).map(([val, title, hint, disabled]) => (
                     <label
                       key={val}
                       style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: disabled ? 'not-allowed' : 'pointer', fontSize: '0.72rem', opacity: disabled ? 0.5 : 1 }}
-                      title={disabled ? 'WebGPU agents are not yet implemented (Phase F PR7).' : undefined}
+                      title={undefined}
                     >
                       <input
                         type="radio"
