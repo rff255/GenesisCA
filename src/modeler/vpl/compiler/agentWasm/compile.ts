@@ -64,10 +64,10 @@ import {
   exportEntry, EXPORT_FUNC,
   importEntry, importMemoryDesc, importFuncDesc,
   OP_I32_ADD, OP_I32_SUB, OP_I32_MUL, OP_I32_REM_S,
-  OP_I32_GE_S, OP_I32_GT_S, OP_I32_LT_S, OP_I32_NE, OP_I32_EQZ,
+  OP_I32_GE_S, OP_I32_GT_S, OP_I32_LT_S, OP_I32_NE, OP_I32_EQ, OP_I32_EQZ,
   OP_I32_AND, OP_I32_OR, OP_I32_XOR, OP_I32_SHL, OP_I32_SHR_U,
   OP_F64_ADD, OP_F64_SUB, OP_F64_MUL, OP_F64_DIV,
-  OP_F64_ABS, OP_F64_SQRT, OP_F64_MIN, OP_F64_MAX, OP_F64_FLOOR,
+  OP_F64_ABS, OP_F64_NEG, OP_F64_SQRT, OP_F64_MIN, OP_F64_MAX, OP_F64_FLOOR,
   OP_F64_EQ, OP_F64_NE, OP_F64_LT, OP_F64_GT, OP_F64_LE, OP_F64_GE,
   OP_F64_CONVERT_I32_S, OP_F64_CONVERT_I32_U, OP_I32_TRUNC_F64_S,
   opCall,
@@ -969,6 +969,491 @@ function computeVolatile(ctx: AgentWasmCtx): void {
   ctx.volatileNodes = volatileSet;
 }
 
+// ===========================================================================
+// W1 — the WASM FORCE PASS (the boost lever).
+//
+// The agent force integrator — the engine code that, today, runs in JS even on
+// the WASM agent target. It is the HOTTEST per-step code (the per-neighbour-pair
+// double loop), so porting it to WASM is the cap on the WASM agent speedup.
+//
+// This emits a SECOND export `forcePass` in the SAME agent module, reading/writing
+// the wasmBacked AgentStore at the `computeAgentMemoryLayout` baked offsets — the
+// SAME memory the JS engine reads (zero glue; the JS typed arrays are views over
+// it). It runs RIGHT AFTER the behaviour (same step), reusing the in-memory hash
+// the worker already copied in for `getNearbyAgents` (no extra copy).
+//
+// It is a faithful byte-for-byte port of `runAgentStep`'s force loop
+// (sim.worker.ts) — the 3×3(×3) neighbour stencil (soft-sphere repulsion/adhesion
+// + density) → bond springs → velocity integration (momentum, maxSpeed, drag, dt)
+// → xNext/yNext[/zNext] → growth ramp. f64 throughout, so JS↔WASM is bit-exact.
+//
+// The structural phase + the hash build STAY in JS (run once per step, not per
+// neighbour-pair). The position double-buffer swap stays in `swapPositions`
+// (a copy-into under wasmBacked views, B10).
+//
+// MIRRORED SCALAR-CONFIG ABI (the worker MIRRORS this in runAgentStep — see
+// buildForcePassArgs there; the param↔arg pair is the silent-desync class):
+//   (highWater, hashValid, nBinsX, nBinsY, nBinsZ : i32,
+//    binSizeX, binSizeY, binSizeZ : f64,
+//    dtOverEta, muR, muA, range, momentum, maxSpeed, growthRate : f64,
+//    W, H, D : f64, bonding, torus : i32)
+// `dtOverEta = dt / eta` is passed PRECOMPUTED (one division, bit-identical to JS's
+// per-iteration `(dt / eta)` since the operands are step-constant). `bonding`
+// gates BOTH the soft-sphere force (JS `engineForces`) AND the bond springs AND
+// the growth ramp (JS passes `growthRate=0` when off, but the gate keeps it tidy).
+// ===========================================================================
+
+/** The 22 force-pass params (the worker mirrors this order exactly). */
+const FORCE_PASS_PARAMS: ('i32' | 'f64')[] = [
+  'i32', 'i32', 'i32', 'i32', 'i32',     // highWater, hashValid, nBinsX, nBinsY, nBinsZ
+  'f64', 'f64', 'f64',                   // binSizeX, binSizeY, binSizeZ
+  'f64', 'f64', 'f64', 'f64', 'f64', 'f64', 'f64', // dtOverEta, muR, muA, range, momentum, maxSpeed, growthRate
+  'f64', 'f64', 'f64',                   // W, H, D
+  'i32', 'i32',                          // bonding, torus
+];
+
+interface ForcePassParamIdx {
+  highWater: number; hashValid: number; nBinsX: number; nBinsY: number; nBinsZ: number;
+  binSizeX: number; binSizeY: number; binSizeZ: number;
+  dtOverEta: number; muR: number; muA: number; range: number;
+  momentum: number; maxSpeed: number; growthRate: number;
+  W: number; H: number; D: number;
+  bonding: number; torus: number;
+}
+
+/** Emit the force-pass function body onto `em`. Reads the wasmBacked AgentStore at
+ *  `layout` offsets; `is3d` selects the 3-axis branch (2D is the verbatim 2D fast
+ *  path — a separate code path, NOT a branchless always-0-dz body, mirroring the
+ *  JS loop's `if (is3d)` split so the 2D arithmetic + stencil count are identical).
+ *  `fmodFuncIdx` is the host `env.fmod = (a,b)=>a%b` import — used for the torus
+ *  position wrap so it is BIT-EXACT to JS's native `%` (WASM has no f64 rem opcode;
+ *  reconstructing `a - trunc(a/b)*b` rounds twice and would drift). */
+function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean, P: ForcePassParamIdx, fmodFuncIdx: number): void {
+  const L = layout;
+  const aliveOff = L.u8['alive']!;
+  // half-spans: halfW = W / 2 (mirrors JS `W / 2` exactly).
+  const halfW = em.allocLocal(F64); em.localGet(P.W); em.f64Const(2); em.op(OP_F64_DIV); em.localSet(halfW);
+  const halfH = em.allocLocal(F64); em.localGet(P.H); em.f64Const(2); em.op(OP_F64_DIV); em.localSet(halfH);
+  const halfD = em.allocLocal(F64); if (is3d) { em.localGet(P.D); em.f64Const(2); em.op(OP_F64_DIV); em.localSet(halfD); } else { em.f64Const(0); em.localSet(halfD); }
+
+  const i = em.allocLocal(I32);
+
+  // Per-agent scratch locals (reused each iteration).
+  const xi = em.allocLocal(F64), yi = em.allocLocal(F64), zi = em.allocLocal(F64), ri = em.allocLocal(F64);
+  const fx = em.allocLocal(F64), fy = em.allocLocal(F64), fz = em.allocLocal(F64);
+  const dens = em.allocLocal(F64);
+  const bx = em.allocLocal(I32), by = em.allocLocal(I32), bz = em.allocLocal(I32);
+  const ddx = em.allocLocal(I32), ddy = em.allocLocal(I32), ddz = em.allocLocal(I32);
+  const nbx = em.allocLocal(I32), nby = em.allocLocal(I32), nbz = em.allocLocal(I32);
+  const bidx = em.allocLocal(I32), pL = em.allocLocal(I32), endL = em.allocLocal(I32), jL = em.allocLocal(I32);
+  const dx = em.allocLocal(F64), dy = em.allocLocal(F64), dz = em.allocLocal(F64);
+  const d2 = em.allocLocal(F64), sij = em.allocLocal(F64), rmax = em.allocLocal(F64), d = em.allocLocal(F64), Fl = em.allocLocal(F64), kl = em.allocLocal(F64);
+  const bc = em.allocLocal(I32), baseB = em.allocLocal(I32), bk = em.allocLocal(I32), pp = em.allocLocal(I32);
+  const vxi = em.allocLocal(F64), vyi = em.allocLocal(F64), vzi = em.allocLocal(F64), sp = em.allocLocal(F64), sc = em.allocLocal(F64);
+  const nx = em.allocLocal(F64), ny = em.allocLocal(F64), nz = em.allocLocal(F64);
+  const tr = em.allocLocal(F64), cur = em.allocLocal(F64), dd = em.allocLocal(F64), stepRad = em.allocLocal(F64);
+
+  const off = {
+    x: L.f64['x']!, y: L.f64['y']!, z: L.f64['z']!,
+    xN: L.f64['xNext']!, yN: L.f64['yNext']!, zN: L.f64['zNext']!,
+    vx: L.f64['vx']!, vy: L.f64['vy']!, vz: L.f64['vz']!,
+    fX: L.f64['forceX']!, fY: L.f64['forceY']!, fZ: L.f64['forceZ']!,
+    rad: L.f64['radius']!, tgt: L.f64['targetRadius']!, age: L.f64['age']!, dens: L.f64['density']!,
+  };
+
+  // --- the torus fold of a delta `dLocal` against span `spanLocal` + its half
+  //     `halfLocal`: if (d > halfSpan) d -= span; else if (d < -halfSpan) d += span.
+  const foldDelta = (dLocal: number, spanLocal: number, halfLocal: number) => {
+    em.localGet(dLocal); em.localGet(halfLocal); em.op(OP_F64_GT);
+    em.ifThenElse(
+      () => { em.localGet(dLocal); em.localGet(spanLocal); em.op(OP_F64_SUB); em.localSet(dLocal); },
+      () => {
+        em.localGet(dLocal); em.localGet(halfLocal); em.op(OP_F64_NEG); em.op(OP_F64_LT);
+        em.ifThen(() => { em.localGet(dLocal); em.localGet(spanLocal); em.op(OP_F64_ADD); em.localSet(dLocal); });
+      },
+    );
+  };
+
+  // --- the candidate body for neighbour j held in `jL` (soft-sphere + density). It
+  //     computes dx/dy[/dz] (torus-folded), d2, the cutoff, density++, and the
+  //     graph-`engineForces`-gated soft-sphere force into fx/fy[/fz]. Mirrors the
+  //     JS inner block verbatim. `skipSelf` controls whether to skip j===i (hash:
+  //     yes; the JS hash path also skips dead j implicitly via the bin membership,
+  //     so no alive check here — bins only hold alive agents; the all-pairs path
+  //     adds the alive check before calling this). ---
+  const candidate = (skipDead: boolean) => {
+    // if (j === i) skip (the hash + all-pairs both skip self)
+    em.localGet(jL); em.localGet(i); em.op(OP_I32_NE);
+    em.ifThen(() => {
+      const run = () => {
+        // dx = x[j]-xi; dy = y[j]-yi [; dz = z[j]-zi]
+        pushF64Elem(em, off.x, jL); em.localGet(xi); em.op(OP_F64_SUB); em.localSet(dx);
+        pushF64Elem(em, off.y, jL); em.localGet(yi); em.op(OP_F64_SUB); em.localSet(dy);
+        if (is3d) { pushF64Elem(em, off.z, jL); em.localGet(zi); em.op(OP_F64_SUB); em.localSet(dz); }
+        em.localGet(P.torus);
+        em.ifThen(() => {
+          foldDelta(dx, P.W, halfW);
+          foldDelta(dy, P.H, halfH);
+          if (is3d) foldDelta(dz, P.D, halfD);
+        });
+        // d2 = dx*dx + dy*dy [+ dz*dz]
+        em.localGet(dx); em.localGet(dx); em.op(OP_F64_MUL);
+        em.localGet(dy); em.localGet(dy); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+        if (is3d) { em.localGet(dz); em.localGet(dz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); }
+        em.localSet(d2);
+        // sij = ri + rad[j]; rmax = range * sij
+        em.localGet(ri); pushF64Elem(em, off.rad, jL); em.op(OP_F64_ADD); em.localSet(sij);
+        em.localGet(P.range); em.localGet(sij); em.op(OP_F64_MUL); em.localSet(rmax);
+        // if (d2 === 0 || d2 >= rmax*rmax) continue; — i.e. only proceed when
+        //   d2 !== 0 && d2 < rmax*rmax
+        em.localGet(d2); em.f64Const(0); em.op(OP_F64_NE);                  // d2 != 0
+        em.localGet(d2); em.localGet(rmax); em.localGet(rmax); em.op(OP_F64_MUL); em.op(OP_F64_LT); // d2 < rmax^2
+        em.op(OP_I32_AND);
+        em.ifThen(() => {
+          // dens++
+          em.localGet(dens); em.f64Const(1); em.op(OP_F64_ADD); em.localSet(dens);
+          // if (engineForces=bonding) { d = sqrt(d2); F = ((d<sij)?muR:muA)*(d-sij); k=F/d; fx+=k*dx; ... }
+          em.localGet(P.bonding);
+          em.ifThen(() => {
+            em.localGet(d2); em.op(OP_F64_SQRT); em.localSet(d);
+            // F = ((d < sij) ? muR : muA) * (d - sij)
+            em.localGet(d); em.localGet(sij); em.op(OP_F64_LT);
+            em.ifThenElse(
+              () => { em.localGet(P.muR); em.localSet(Fl); },
+              () => { em.localGet(P.muA); em.localSet(Fl); },
+            );
+            em.localGet(Fl); em.localGet(d); em.localGet(sij); em.op(OP_F64_SUB); em.op(OP_F64_MUL); em.localSet(Fl);
+            // k = F / d
+            em.localGet(Fl); em.localGet(d); em.op(OP_F64_DIV); em.localSet(kl);
+            // fx += k*dx; fy += k*dy [; fz += k*dz]
+            em.localGet(fx); em.localGet(kl); em.localGet(dx); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(fx);
+            em.localGet(fy); em.localGet(kl); em.localGet(dy); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(fy);
+            if (is3d) { em.localGet(fz); em.localGet(kl); em.localGet(dz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(fz); }
+          });
+        });
+      };
+      if (skipDead) {
+        // all-pairs path: if (!alive[j]) skip
+        em.localGet(jL); em.i32Const(aliveOff); em.op(OP_I32_ADD); em.i32Load8U();
+        em.ifThen(run);
+      } else {
+        run();
+      }
+    });
+  };
+
+  // --- a 1-D wrap/range helper for a neighbour-bin coordinate already in `nbLocal`:
+  //     torus → ((nb % n) + n) % n; else range-check sets a `skip` flag.            ---
+  const wrapBin = (nbLocal: number, nLocal: number, skipLocal: number) => {
+    em.localGet(P.torus);
+    em.ifThenElse(
+      () => { wrapMod(em, nbLocal, nLocal); },
+      () => { rangeBad(em, nbLocal, nLocal, skipLocal); },
+    );
+  };
+
+  // --- store-address helper: push (regionOffset + i*8) as the f64 store address. ---
+  const addr = (regionOffset: number, idxLocal: number) => pushF64ElemAddr(em, regionOffset, idxLocal);
+
+  // ===== the per-agent loop =====
+  em.i32Const(0); em.localSet(i);
+  em.block(() => {
+    em.loop(() => {
+      em.localGet(i); em.localGet(P.highWater); em.op(OP_I32_GE_S); em.brIf(1);
+      // if (alive[i]) { <body> } else { xN[i]=x[i]; yN[i]=y[i]; [zN[i]=z[i];] }
+      em.i32Const(aliveOff); em.localGet(i); em.op(OP_I32_ADD); em.i32Load8U();
+      em.ifThenElse(
+        () => emitForceBody(),
+        () => {
+          // dead: copy current position into the next buffer (so swapPositions keeps it)
+          addr(off.xN, i); pushF64Elem(em, off.x, i); em.f64Store();
+          addr(off.yN, i); pushF64Elem(em, off.y, i); em.f64Store();
+          if (is3d) { addr(off.zN, i); pushF64Elem(em, off.z, i); em.f64Store(); }
+        },
+      );
+      em.localGet(i); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(i);
+      em.br(0);
+    });
+  });
+
+  // --- the live-agent force body (factored so the loop stays readable) ---
+  function emitForceBody(): void {
+    // xi=x[i]; yi=y[i]; [zi=z[i];] ri=rad[i]
+    pushF64Elem(em, off.x, i); em.localSet(xi);
+    pushF64Elem(em, off.y, i); em.localSet(yi);
+    if (is3d) { pushF64Elem(em, off.z, i); em.localSet(zi); }
+    pushF64Elem(em, off.rad, i); em.localSet(ri);
+    // fx=forceX[i]; fy=forceY[i]; [fz=forceZ[i];] dens=0
+    pushF64Elem(em, off.fX, i); em.localSet(fx);
+    pushF64Elem(em, off.fY, i); em.localSet(fy);
+    if (is3d) { pushF64Elem(em, off.fZ, i); em.localSet(fz); }
+    em.f64Const(0); em.localSet(dens);
+
+    // --- neighbour pass: hash stencil when hashValid, else all-pairs ---
+    em.localGet(P.hashValid);
+    em.ifThenElse(
+      () => emitForceStencil(),
+      () => {
+        // all-pairs: for (j=0; j<highWater; j++) candidate(skipDead=true)
+        em.i32Const(0); em.localSet(jL);
+        em.block(() => {
+          em.loop(() => {
+            em.localGet(jL); em.localGet(P.highWater); em.op(OP_I32_GE_S); em.brIf(1);
+            candidate(true);
+            em.localGet(jL); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(jL);
+            em.br(0);
+          });
+        });
+      },
+    );
+    // density[i] = dens
+    addr(off.dens, i); em.localGet(dens); em.f64Store();
+
+    // --- bond springs (gated on bonding && bondCount>0) ---
+    // bc = bondCount[i]
+    em.localGet(i); em.i32Const(4); em.op(OP_I32_MUL); em.i32Const(L.i32['bondCount']!); em.op(OP_I32_ADD); em.i32Load(); em.localSet(bc);
+    em.localGet(P.bonding);
+    em.localGet(bc); em.i32Const(0); em.op(OP_I32_GT_S);
+    em.op(OP_I32_AND);
+    em.ifThen(() => emitBondSprings());
+
+    // --- integrate: vxi = momentum*vx[i] + dtOverEta*fx; ... ; maxSpeed cap ---
+    em.localGet(P.momentum); pushF64Elem(em, off.vx, i); em.op(OP_F64_MUL); em.localGet(P.dtOverEta); em.localGet(fx); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(vxi);
+    em.localGet(P.momentum); pushF64Elem(em, off.vy, i); em.op(OP_F64_MUL); em.localGet(P.dtOverEta); em.localGet(fy); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(vyi);
+    if (is3d) { em.localGet(P.momentum); pushF64Elem(em, off.vz, i); em.op(OP_F64_MUL); em.localGet(P.dtOverEta); em.localGet(fz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(vzi); }
+    // if (maxSpeed > 0) { sp = sqrt(v·v); if (sp > maxSpeed) { sc = maxSpeed/sp; v *= sc } }
+    em.localGet(P.maxSpeed); em.f64Const(0); em.op(OP_F64_GT);
+    em.ifThen(() => {
+      em.localGet(vxi); em.localGet(vxi); em.op(OP_F64_MUL);
+      em.localGet(vyi); em.localGet(vyi); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+      if (is3d) { em.localGet(vzi); em.localGet(vzi); em.op(OP_F64_MUL); em.op(OP_F64_ADD); }
+      em.op(OP_F64_SQRT); em.localSet(sp);
+      em.localGet(sp); em.localGet(P.maxSpeed); em.op(OP_F64_GT);
+      em.ifThen(() => {
+        em.localGet(P.maxSpeed); em.localGet(sp); em.op(OP_F64_DIV); em.localSet(sc);
+        em.localGet(vxi); em.localGet(sc); em.op(OP_F64_MUL); em.localSet(vxi);
+        em.localGet(vyi); em.localGet(sc); em.op(OP_F64_MUL); em.localSet(vyi);
+        if (is3d) { em.localGet(vzi); em.localGet(sc); em.op(OP_F64_MUL); em.localSet(vzi); }
+      });
+    });
+    // vx[i]=vxi; ...
+    addr(off.vx, i); em.localGet(vxi); em.f64Store();
+    addr(off.vy, i); em.localGet(vyi); em.f64Store();
+    if (is3d) { addr(off.vz, i); em.localGet(vzi); em.f64Store(); }
+
+    // nx = xi + vxi; ny = yi + vyi; [nz = zi + vzi;]
+    em.localGet(xi); em.localGet(vxi); em.op(OP_F64_ADD); em.localSet(nx);
+    em.localGet(yi); em.localGet(vyi); em.op(OP_F64_ADD); em.localSet(ny);
+    if (is3d) { em.localGet(zi); em.localGet(vzi); em.op(OP_F64_ADD); em.localSet(nz); }
+    // torus wrap or clamp
+    em.localGet(P.torus);
+    em.ifThenElse(
+      () => {
+        wrapPos(nx, P.W);
+        wrapPos(ny, P.H);
+        if (is3d) wrapPos(nz, P.D);
+      },
+      () => {
+        clampPos(nx, P.W);
+        clampPos(ny, P.H);
+        if (is3d) clampPos(nz, P.D);
+      },
+    );
+    // xN[i]=nx; yN[i]=ny; [zN[i]=nz;]
+    addr(off.xN, i); em.localGet(nx); em.f64Store();
+    addr(off.yN, i); em.localGet(ny); em.f64Store();
+    if (is3d) { addr(off.zN, i); em.localGet(nz); em.f64Store(); }
+
+    // age[i] = age[i] + 1
+    addr(off.age, i); pushF64Elem(em, off.age, i); em.f64Const(1); em.op(OP_F64_ADD); em.f64Store();
+
+    // growth: tr=targetRadius[i]; cur=radius[i]; if (tr !== cur) { dd=tr-cur;
+    //   radius[i] = abs(dd)<=growthRate ? tr : cur + sign(dd)*growthRate }
+    pushF64Elem(em, off.tgt, i); em.localSet(tr);
+    pushF64Elem(em, off.rad, i); em.localSet(cur);
+    em.localGet(tr); em.localGet(cur); em.op(OP_F64_NE);
+    em.ifThen(() => {
+      em.localGet(tr); em.localGet(cur); em.op(OP_F64_SUB); em.localSet(dd);
+      // stepRad = abs(dd) <= growthRate ? tr : cur + sign(dd)*growthRate
+      em.localGet(dd); em.op(OP_F64_ABS); em.localGet(P.growthRate); em.op(OP_F64_LE);
+      em.ifThenElse(
+        () => { em.localGet(tr); em.localSet(stepRad); },
+        () => {
+          // sign(dd) — dd != 0 here, so dd>0 ? +growthRate : -growthRate
+          em.localGet(dd); em.f64Const(0); em.op(OP_F64_GT);
+          em.ifThenElse(
+            () => { em.localGet(cur); em.localGet(P.growthRate); em.op(OP_F64_ADD); em.localSet(stepRad); },
+            () => { em.localGet(cur); em.localGet(P.growthRate); em.op(OP_F64_SUB); em.localSet(stepRad); },
+          );
+        },
+      );
+      addr(off.rad, i); em.localGet(stepRad); em.f64Store();
+    });
+  }
+
+  // --- the 3×3(×3) hash stencil over the in-memory binStart/binAgents ---
+  function emitForceStencil(): void {
+    const binStartOff = L.hashBinStartOffset, binAgentsOff = L.hashBinAgentsOffset;
+    // bx = clamp((xi/binSizeX)|0, 0, nBinsX-1); same by[,bz]
+    clampToBin(xi, P.binSizeX, P.nBinsX, bx);
+    clampToBin(yi, P.binSizeY, P.nBinsY, by);
+    if (is3d) clampToBin(zi, P.binSizeZ, P.nBinsZ, bz); else { em.i32Const(0); em.localSet(bz); }
+
+    const innerBin = () => {
+      // nbx = bx+ddx; nby = by+ddy; [nbz = bz+ddz]
+      em.localGet(bx); em.localGet(ddx); em.op(OP_I32_ADD); em.localSet(nbx);
+      em.localGet(by); em.localGet(ddy); em.op(OP_I32_ADD); em.localSet(nby);
+      if (is3d) { em.localGet(bz); em.localGet(ddz); em.op(OP_I32_ADD); em.localSet(nbz); }
+      const skipL = em.allocLocal(I32); em.i32Const(0); em.localSet(skipL);
+      wrapBin(nbx, P.nBinsX, skipL);
+      wrapBin(nby, P.nBinsY, skipL);
+      if (is3d) wrapBin(nbz, P.nBinsZ, skipL);
+      em.localGet(skipL); em.op(OP_I32_EQZ);
+      em.ifThen(() => {
+        // b = is3d ? (nbz*nBinsY + nby)*nBinsX + nbx : nby*nBinsX + nbx
+        if (is3d) {
+          em.localGet(nbz); em.localGet(P.nBinsY); em.op(OP_I32_MUL); em.localGet(nby); em.op(OP_I32_ADD);
+          em.localGet(P.nBinsX); em.op(OP_I32_MUL); em.localGet(nbx); em.op(OP_I32_ADD); em.localSet(bidx);
+        } else {
+          em.localGet(nby); em.localGet(P.nBinsX); em.op(OP_I32_MUL); em.localGet(nbx); em.op(OP_I32_ADD); em.localSet(bidx);
+        }
+        // p = binStart[b]; end = binStart[b+1]
+        em.localGet(bidx); em.i32Const(4); em.op(OP_I32_MUL); em.i32Const(binStartOff); em.op(OP_I32_ADD); em.i32Load(); em.localSet(pL);
+        em.localGet(bidx); em.i32Const(1); em.op(OP_I32_ADD); em.i32Const(4); em.op(OP_I32_MUL); em.i32Const(binStartOff); em.op(OP_I32_ADD); em.i32Load(); em.localSet(endL);
+        em.block(() => {
+          em.loop(() => {
+            em.localGet(pL); em.localGet(endL); em.op(OP_I32_GE_S); em.brIf(1);
+            // j = binAgents[p]
+            em.localGet(pL); em.i32Const(4); em.op(OP_I32_MUL); em.i32Const(binAgentsOff); em.op(OP_I32_ADD); em.i32Load(); em.localSet(jL);
+            candidate(false);
+            em.localGet(pL); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(pL);
+            em.br(0);
+          });
+        });
+      });
+    };
+
+    // for (ddz in [-1,1]) for (ddy) for (ddx) innerBin    (ddz fixed 0 in 2D)
+    const ddLoop = (varL: number, body: () => void) => {
+      em.i32Const(-1); em.localSet(varL);
+      em.block(() => {
+        em.loop(() => {
+          em.localGet(varL); em.i32Const(1); em.op(OP_I32_GT_S); em.brIf(1);
+          body();
+          em.localGet(varL); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(varL);
+          em.br(0);
+        });
+      });
+    };
+    if (is3d) ddLoop(ddz, () => ddLoop(ddy, () => ddLoop(ddx, innerBin)));
+    else { em.i32Const(0); em.localSet(ddz); ddLoop(ddy, () => ddLoop(ddx, innerBin)); }
+  }
+
+  // bIdx-out: store clamp((coord/size)|0, 0, n-1) into outLocal.
+  function clampToBin(coordL: number, sizeL: number, nL: number, outLocal: number): void {
+    em.localGet(coordL); em.localGet(sizeL); em.op(OP_F64_DIV); em.f64ToI32(); em.localSet(outLocal);
+    em.localGet(outLocal); em.i32Const(0); em.op(OP_I32_LT_S);
+    em.ifThenElse(
+      () => { em.i32Const(0); em.localSet(outLocal); },
+      () => {
+        em.localGet(outLocal); em.localGet(nL); em.op(OP_I32_GE_S);
+        em.ifThen(() => { em.localGet(nL); em.i32Const(1); em.op(OP_I32_SUB); em.localSet(outLocal); });
+      },
+    );
+  }
+
+  // --- bond springs over the agent's bond list (mirrors the JS bond block) ---
+  function emitBondSprings(): void {
+    // base = i * maxBonds
+    em.localGet(i); em.i32Const(L.maxBonds); em.op(OP_I32_MUL); em.localSet(baseB);
+    const bpOff = L.bondI32['bondPartner']!, bpeOff = L.bondI32['bondPartnerEpoch']!;
+    const brlOff = L.bondF64['bondRestLength']!, bstOff = L.bondF64['bondStiffness']!;
+    const epochOff = L.i32['epoch']!;
+    em.i32Const(0); em.localSet(bk);
+    em.block(() => {
+      em.loop(() => {
+        em.localGet(bk); em.localGet(bc); em.op(OP_I32_GE_S); em.brIf(1);
+        // p = bondPartner[base+bk]
+        em.localGet(baseB); em.localGet(bk); em.op(OP_I32_ADD); em.i32Const(4); em.op(OP_I32_MUL); em.i32Const(bpOff); em.op(OP_I32_ADD); em.i32Load(); em.localSet(pp);
+        // if (p >= 0 && p < highWater && alive[p]) { ... }  (else: just skip → bk++)
+        em.localGet(pp); em.i32Const(0); em.op(OP_I32_GE_S);
+        em.localGet(pp); em.localGet(P.highWater); em.op(OP_I32_LT_S); em.op(OP_I32_AND);
+        em.ifThen(() => {
+          em.localGet(pp); em.i32Const(aliveOff); em.op(OP_I32_ADD); em.i32Load8U();
+          em.ifThen(() => {
+            // if (bondPartnerEpoch[base+bk] === epoch[p]) { ... }
+            em.localGet(baseB); em.localGet(bk); em.op(OP_I32_ADD); em.i32Const(4); em.op(OP_I32_MUL); em.i32Const(bpeOff); em.op(OP_I32_ADD); em.i32Load();
+            em.localGet(pp); em.i32Const(4); em.op(OP_I32_MUL); em.i32Const(epochOff); em.op(OP_I32_ADD); em.i32Load();
+            em.op(OP_I32_EQ); // (need OP_I32_EQ)
+            em.ifThen(() => {
+              // dx=x[p]-xi; dy=y[p]-yi; [dz=z[p]-zi]
+              pushF64Elem(em, off.x, pp); em.localGet(xi); em.op(OP_F64_SUB); em.localSet(dx);
+              pushF64Elem(em, off.y, pp); em.localGet(yi); em.op(OP_F64_SUB); em.localSet(dy);
+              if (is3d) { pushF64Elem(em, off.z, pp); em.localGet(zi); em.op(OP_F64_SUB); em.localSet(dz); }
+              em.localGet(P.torus);
+              em.ifThen(() => { foldDelta(dx, P.W, halfW); foldDelta(dy, P.H, halfH); if (is3d) foldDelta(dz, P.D, halfD); });
+              // d2b = dx*dx + dy*dy [+ dz*dz]; if (d2b === 0) skip
+              em.localGet(dx); em.localGet(dx); em.op(OP_F64_MUL);
+              em.localGet(dy); em.localGet(dy); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+              if (is3d) { em.localGet(dz); em.localGet(dz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); }
+              em.localSet(d2);
+              em.localGet(d2); em.f64Const(0); em.op(OP_F64_NE);
+              em.ifThen(() => {
+                em.localGet(d2); em.op(OP_F64_SQRT); em.localSet(d);
+                // F = bondStiffness[base+bk] * (d - bondRestLength[base+bk])
+                em.localGet(baseB); em.localGet(bk); em.op(OP_I32_ADD); em.i32Const(8); em.op(OP_I32_MUL); em.i32Const(bstOff); em.op(OP_I32_ADD); em.f64Load();
+                em.localGet(d);
+                em.localGet(baseB); em.localGet(bk); em.op(OP_I32_ADD); em.i32Const(8); em.op(OP_I32_MUL); em.i32Const(brlOff); em.op(OP_I32_ADD); em.f64Load();
+                em.op(OP_F64_SUB);
+                em.op(OP_F64_MUL); em.localSet(Fl);
+                // k = F / d; fx += k*dx; ...
+                em.localGet(Fl); em.localGet(d); em.op(OP_F64_DIV); em.localSet(kl);
+                em.localGet(fx); em.localGet(kl); em.localGet(dx); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(fx);
+                em.localGet(fy); em.localGet(kl); em.localGet(dy); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(fy);
+                if (is3d) { em.localGet(fz); em.localGet(kl); em.localGet(dz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(fz); }
+              });
+            });
+          });
+        });
+        em.localGet(bk); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(bk);
+        em.br(0);
+      });
+    });
+  }
+
+  // wrap a position local into [0, span): nx = ((nx % W) + W) % W — JS native `%`
+  // (exact fmod), reproduced via the host `env.fmod` import so it is BIT-EXACT.
+  //
+  // NB: a "skip the wrap when n ∈ [0, span)" fast path is NOT bit-exact — for a
+  // non-power-of-2 span, JS's `(n + W)` rounds, so `((n % W) + W) % W` does NOT
+  // equal `n` in the low bits even for an in-range n. The unconditional host-fmod
+  // is the only path that matches JS exactly (verified: the fast path diverged at
+  // ~1e-12). WASM has no f64 rem opcode; an inline musl-style i64 fmod would avoid
+  // the host call but needs ~15 new i64 encoder ops — deferred (the wrap is once
+  // per agent, not per neighbour pair, so its cost is secondary).
+  function wrapPos(nLocal: number, spanLocal: number): void {
+    fmod(nLocal, spanLocal);                 // n = n % span
+    em.localGet(nLocal); em.localGet(spanLocal); em.op(OP_F64_ADD); em.localSet(nLocal); // n += span
+    fmod(nLocal, spanLocal);                 // n = n % span
+  }
+  // n = n % span  (JS `%` — exact fmod via the host import; WASM has no f64 rem).
+  function fmod(nLocal: number, spanLocal: number): void {
+    em.localGet(nLocal); em.localGet(spanLocal); em.emit(opCall(fmodFuncIdx));
+    em.localSet(nLocal);
+  }
+  // clamp a position local into [0, span]: n = n<0?0 : n>span?span : n
+  function clampPos(nLocal: number, spanLocal: number): void {
+    em.localGet(nLocal); em.f64Const(0); em.op(OP_F64_LT);
+    em.ifThenElse(
+      () => { em.f64Const(0); em.localSet(nLocal); },
+      () => {
+        em.localGet(nLocal); em.localGet(spanLocal); em.op(OP_F64_GT);
+        em.ifThen(() => { em.localGet(spanLocal); em.localSet(nLocal); });
+      },
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // The gate + the top-level compile.
 // ---------------------------------------------------------------------------
@@ -1167,23 +1652,53 @@ export function compileAgentGraphWasm(
     return empty(String((e as Error)?.message || e));
   }
 
-  // --- assemble the module ---
   const body = em.buildBody();
+
+  // --- W1: the FORCE PASS function body (a SECOND func in this module) ---
+  // The force pass needs an 8th host import `env.fmod = (a,b)=>a%b` (exact JS `%`
+  // for the bit-exact torus position wrap — WASM has no f64 rem opcode). It is
+  // APPENDED to the import list at funcIdx NUM_IMPORTED_FUNCS (= 7) so the existing
+  // pow..tanh func indices (0..6) — which the behaviour body's opCall refers to —
+  // are UNCHANGED. The two module-defined funcs then sit at funcIdx 8 (behaviour)
+  // and 9 (forcePass).
+  const FMOD_FUNC_IDX = NUM_IMPORTED_FUNCS; // = 7
+  const NUM_IMPORTED_FUNCS_FORCE = NUM_IMPORTED_FUNCS + 1; // 8 (incl. fmod)
+  const fpEm = new WasmEmitter(FORCE_PASS_PARAMS.length);
+  const FP: ForcePassParamIdx = {
+    highWater: 0, hashValid: 1, nBinsX: 2, nBinsY: 3, nBinsZ: 4,
+    binSizeX: 5, binSizeY: 6, binSizeZ: 7,
+    dtOverEta: 8, muR: 9, muA: 10, range: 11, momentum: 12, maxSpeed: 13, growthRate: 14,
+    W: 15, H: 16, D: 17, bonding: 18, torus: 19,
+  };
+  let forceBody: Uint8Array;
+  try {
+    emitForcePass(fpEm, agentLayout, is3d, FP, FMOD_FUNC_IDX);
+    forceBody = fpEm.buildBody();
+  } catch (e) {
+    return empty('agentWasm forcePass: ' + String((e as Error)?.message || e));
+  }
+
+  // --- assemble the module ---
   const memImport = importEntry('env', 'mem', importMemoryDesc(agentLayout.pages));
-  const typeBehaviour = funcType(PARAMS.map(p => (p === 'i32' ? I32 : F64)), []); // type 0
-  const typePow = funcType([F64, F64], [F64]);   // type 1 — pow
-  const typeUnary = funcType([F64], [F64]);       // type 2 — exp/log/sin/cos/tan/tanh
-  const TYPE_BEHAVIOUR = 0, TYPE_POW = 1, TYPE_UNARY = 2;
+  const typeBehaviour = funcType(PARAMS.map(p => (p === 'i32' ? I32 : F64)), []);          // type 0
+  const typePow = funcType([F64, F64], [F64]);                                              // type 1 — pow / fmod
+  const typeUnary = funcType([F64], [F64]);                                                 // type 2 — exp/log/sin/cos/tan/tanh
+  const typeForce = funcType(FORCE_PASS_PARAMS.map(p => (p === 'i32' ? I32 : F64)), []);    // type 3 — forcePass
+  const TYPE_BEHAVIOUR = 0, TYPE_POW = 1, TYPE_UNARY = 2, TYPE_FORCE = 3;
   const powImport = importEntry('env', 'pow', importFuncDesc(TYPE_POW));
   const unaryNames = ['exp', 'log', 'sin', 'cos', 'tan', 'tanh'];
   const unaryImports = unaryNames.map(nm => importEntry('env', nm, importFuncDesc(TYPE_UNARY)));
+  const fmodImport = importEntry('env', 'fmod', importFuncDesc(TYPE_POW)); // (f64,f64)->f64
 
   const bytes = buildModule({
-    types: [typeBehaviour, typePow, typeUnary],
-    imports: [memImport, powImport, ...unaryImports],
-    funcs: [leb128u(TYPE_BEHAVIOUR)],
-    exports: [exportEntry('behaviour', EXPORT_FUNC, NUM_IMPORTED_FUNCS + 0)],
-    code: [body],
+    types: [typeBehaviour, typePow, typeUnary, typeForce],
+    imports: [memImport, powImport, ...unaryImports, fmodImport],
+    funcs: [leb128u(TYPE_BEHAVIOUR), leb128u(TYPE_FORCE)],
+    exports: [
+      exportEntry('behaviour', EXPORT_FUNC, NUM_IMPORTED_FUNCS_FORCE + 0),
+      exportEntry('forcePass', EXPORT_FUNC, NUM_IMPORTED_FUNCS_FORCE + 1),
+    ],
+    code: [body, forceBody],
   });
 
   return { bytes, pages: agentLayout.pages, layout: agentLayout, supportedTypes: [...seen] };
@@ -1199,20 +1714,28 @@ function variableInitNum(v: { dataType: string; initialValue?: string }): number
 
 /** Instantiate the agent WASM module against the agent store's memory + the host
  *  math funcs. Returns the `behaviour(...)` export (the worker calls it with the
- *  per-step hash dimensions). */
+ *  per-step hash dimensions) AND the W1 `forcePass(...)` export (the soft-sphere +
+ *  bond-spring + integration force loop — null on a legacy/behaviour-only module
+ *  that didn't export it). `fmod` is the exact JS `%` the force pass uses for the
+ *  bit-exact torus position wrap. */
 export async function instantiateAgentWasm(
   bytes: Uint8Array,
   memory: WebAssembly.Memory,
-): Promise<{ behaviour: (...args: number[]) => void }> {
+): Promise<{ behaviour: (...args: number[]) => void; forcePass: ((...args: number[]) => void) | null }> {
   const importObj = {
     env: {
       mem: memory,
       pow: Math.pow, exp: Math.exp, log: Math.log,
       sin: Math.sin, cos: Math.cos, tan: Math.tan, tanh: Math.tanh,
+      // The force pass's torus position wrap uses JS native `%` (exact fmod).
+      fmod: (a: number, b: number): number => a % b,
     },
   };
   const mod = await WebAssembly.instantiate(bytes, importObj);
-  return { behaviour: mod.instance.exports.behaviour as (...args: number[]) => void };
+  return {
+    behaviour: mod.instance.exports.behaviour as (...args: number[]) => void,
+    forcePass: (mod.instance.exports.forcePass as ((...args: number[]) => void) | undefined) ?? null,
+  };
 }
 
 /** The per-model max hash-bin reserve, derived from the grid (= agent world)
