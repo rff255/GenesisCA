@@ -245,7 +245,8 @@ function inF32(ctx: AgentWgpuCtx, node: GraphNode, portId: string, fallback: num
 
 /** Resolve a value input ONLY when wired (no inline-widget fallback). Returns the
  *  f32 expr or `undefined` (the caller supplies its own default — e.g. the divide
- *  axis defaults to NaN = "engine-resolved tension axis", matching the JS emit). */
+ *  axis defaults to (0,0) = "engine-resolved tension axis", behaviour-equivalent to
+ *  the JS path's NaN default; see the divideAgent emitter for why not a NaN). */
 function resolveOptionalF32(ctx: AgentWgpuCtx, node: GraphNode, portId: string): string | undefined {
   const src = ctx.adj.inputToSource.get(`${node.id}:${portId}`);
   if (!src) return undefined;
@@ -736,12 +737,17 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
     }
     case 'divideAgent': {
       // Flag a division request (the CPU structural phase reads it back). The
-      // axes default to NaN (= "engine-resolved tension axis", the JS default).
+      // axes default to (0,0) = "engine-resolved tension axis": divideAgent()
+      // resolves the tension axis whenever the axis is non-finite OR (0,0)
+      // (agentEngine.ts `axisX !== 0 || axisY !== 0`), so (0,0) is byte-equivalent
+      // to the JS path's NaN default. We must NOT emit a NaN literal/bitcast here —
+      // WGSL/Naga constant-folds `bitcast<f32>(0x7fc00000u)` into a NaN constant and
+      // rejects it ("value nan cannot be represented as 'f32'"), failing the shader.
       ctx.lines.push(`  ${f32At(ctx, 'divideRequest', 'idx')} = 1.0;`);
       const ax = resolveOptionalF32(ctx, node, 'axisX');
       const ay = resolveOptionalF32(ctx, node, 'axisY');
-      ctx.lines.push(`  ${f32At(ctx, 'divideAxisX', 'idx')} = ${ax ?? 'bitcast<f32>(0x7fc00000u)'};`); // NaN
-      ctx.lines.push(`  ${f32At(ctx, 'divideAxisY', 'idx')} = ${ay ?? 'bitcast<f32>(0x7fc00000u)'};`);
+      ctx.lines.push(`  ${f32At(ctx, 'divideAxisX', 'idx')} = ${ax ?? '0.0'};`);
+      ctx.lines.push(`  ${f32At(ctx, 'divideAxisY', 'idx')} = ${ay ?? '0.0'};`);
       ctx.lines.push(`  ${f32At(ctx, 'divideAsym', 'idx')} = ${inF32(ctx, node, 'asymmetry', 0.5)};`);
       compileFlowChain(ctx, node.id, 'next');
       break;
