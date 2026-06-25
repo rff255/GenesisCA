@@ -2170,6 +2170,130 @@ function clearVolatileCache(ctx: AgentWgpuCtx): void {
 // reads a forEach element/index (don't cache across a forEach iteration).
 // ---------------------------------------------------------------------------
 
+/** Node types whose value output is IMPURE / stateful / array / per-iteration, so
+ *  they must NOT be hoisted to function-top by preEmitAgentValues (they stay inline
+ *  / re-emit per branch / per forEach iteration). Everything else (math / compare /
+ *  field reads / model attrs / SoA reads) is pure within a step and safe to hoist. */
+const AGENT_VALUE_NO_HOIST: ReadonlySet<string> = new Set<string>([
+  'getRandom',                              // RNG side effect (per-branch draw)
+  'getVariable',                            // mutable Local Variable storage
+  'getAgentAttribute',                      // a neighbour write can mutate it
+  'getIndicator',                           // mutable indicator storage
+  'forEachInArray', 'forEachBond',          // per-iteration element refs
+  // array producers (use scratch — emitted via compileArrayNode, not here)
+  'getNearbyAgents', 'getAgentsAttribute', 'filterAgents', 'joinAgents',
+  'pickNRandomAgents', 'pickRandomAgent', 'getBondedAgents',
+  // aggregate/group* read array scratch (their fold is fine inline at use site)
+  'aggregate', 'groupOperator', 'groupCounting', 'groupStatement',
+  // arrayElement/arrayLength may read array-var/producer scratch — keep inline
+  'arrayElement', 'arrayLength',
+]);
+
+/** Pre-emit the PURE, non-volatile value cone of the behaviour flow tree at
+ *  function-top scope (so cross-branch pure values are declared in a dominating
+ *  scope — WGSL is block-scoped). Walks every flow node's value inputs (DAG), and
+ *  for each source that is pure (not in AGENT_VALUE_NO_HOIST) and non-volatile and
+ *  whose entire input cone is also hoistable, calls compileValueNode at top. Does
+ *  NOT descend into forEach/forEachBond BODIES (those flow-outputs carry
+ *  per-iteration values). Idempotent via the value cache. */
+function preEmitAgentValues(ctx: AgentWgpuCtx, rootId: string): void {
+  const { nodeMap, inputToSource, inputToSources, flowOutputToTargets } = ctx.adj;
+  // The set of OUTPUT ports each node actually feeds (so a multi-output value node
+  // like getSelfPosition / fieldGradient / colorScale pre-emits exactly the ports
+  // that cross branches — a single compileValueNode caches the others anyway, but
+  // a multi-output whose `value` default differs from the consumed port needs the
+  // consumed port emitted at top). Built from inputToSource/inputToSources (the
+  // source port is the producer's output port).
+  const usedOutPorts = new Map<string, Set<string>>();
+  const addOut = (nodeId: string, portId: string) => {
+    let set = usedOutPorts.get(nodeId); if (!set) { set = new Set(); usedOutPorts.set(nodeId, set); }
+    set.add(portId);
+  };
+  for (const [, src] of inputToSource) addOut(src.nodeId, src.portId);
+  for (const [, srcs] of inputToSources) for (const s of srcs) addOut(s.nodeId, s.portId);
+  // Memoised "is this value node fully hoistable?" (pure + non-volatile + all
+  // value inputs hoistable). Cycle-guarded.
+  const hoistable = new Map<string, boolean>();
+  const inProgress = new Set<string>();
+  const isHoistable = (id: string): boolean => {
+    const cached = hoistable.get(id);
+    if (cached !== undefined) return cached;
+    if (inProgress.has(id)) return false; // cycle → not hoistable
+    const node = nodeMap.get(id);
+    if (!node) return false;
+    if (AGENT_VALUE_NO_HOIST.has(node.data.nodeType)) { hoistable.set(id, false); return false; }
+    if (ctx.volatileNodes.has(id)) { hoistable.set(id, false); return false; }
+    inProgress.add(id);
+    let ok = true;
+    for (const [key, src] of inputToSource) {
+      if (!key.startsWith(`${id}:`)) continue;
+      if (!isHoistable(src.nodeId)) { ok = false; break; }
+    }
+    if (ok) for (const [key, srcs] of inputToSources) {
+      if (!key.startsWith(`${id}:`)) continue;
+      for (const s of srcs) if (!isHoistable(s.nodeId)) { ok = false; break; }
+      if (!ok) break;
+    }
+    inProgress.delete(id);
+    hoistable.set(id, ok);
+    return ok;
+  };
+  // Pre-emit every hoistable node in a value cone (a non-hoistable node still has
+  // hoistable SUB-sources — e.g. `compare(getRandom, expression(readCellsUnder))`:
+  // the compare + expression aren't hoistable (getRandom taints them) but the
+  // readCellsUnder IS, and IT is what crosses branches). Recurse the value DAG and
+  // emit each hoistable node once.
+  const emitConeVisited = new Set<string>();
+  const emitCone = (nodeId: string) => {
+    if (emitConeVisited.has(nodeId)) return;
+    emitConeVisited.add(nodeId);
+    const node = nodeMap.get(nodeId);
+    if (!node) return;
+    if (isHoistable(nodeId)) {
+      const ports = usedOutPorts.get(nodeId);
+      if (ports && ports.size > 0) for (const p of ports) compileValueNode(ctx, nodeId, p);
+      else compileValueNode(ctx, nodeId, 'value');
+    }
+    // Recurse into the value inputs regardless (a non-hoistable node guards a
+    // hoistable sub-cone). Stop at forEach element / array producers — their
+    // outputs are per-iteration / scratch, never top-hoistable.
+    if (AGENT_VALUE_NO_HOIST.has(node.data.nodeType) && (node.data.nodeType === 'forEachInArray' || node.data.nodeType === 'forEachBond')) return;
+    for (const [key, src] of inputToSource) {
+      if (!key.startsWith(`${nodeId}:`)) continue;
+      emitCone(src.nodeId);
+    }
+    for (const [key, srcs] of inputToSources) {
+      if (!key.startsWith(`${nodeId}:`)) continue;
+      for (const s of srcs) emitCone(s.nodeId);
+    }
+  };
+  // Walk the flow tree (NOT into forEach/forEachBond bodies) → for every flow
+  // node's value-input cone, pre-emit the hoistable nodes.
+  const visited = new Set<string>();
+  const walk = (nodeId: string) => {
+    if (visited.has(nodeId)) return;
+    visited.add(nodeId);
+    const node = nodeMap.get(nodeId);
+    if (!node) return;
+    for (const [key, src] of inputToSource) {
+      if (!key.startsWith(`${nodeId}:`)) continue;
+      emitCone(src.nodeId);
+    }
+    for (const [key, srcs] of inputToSources) {
+      if (!key.startsWith(`${nodeId}:`)) continue;
+      for (const s of srcs) emitCone(s.nodeId);
+    }
+    const skipPort = (node.data.nodeType === 'forEachInArray' || node.data.nodeType === 'forEachBond') ? 'body' : null;
+    for (const [key, targets] of flowOutputToTargets) {
+      if (!key.startsWith(`${nodeId}:`)) continue;
+      const port = key.slice(nodeId.length + 1);
+      if (skipPort && port === skipPort) continue;
+      for (const t of targets) walk(t.nodeId);
+    }
+  };
+  walk(rootId);
+}
+
 function computeVolatile(ctx: AgentWgpuCtx): void {
   const { nodeMap, inputToSource } = ctx.adj;
   const volatileSet = new Set<string>();
@@ -2524,6 +2648,15 @@ export function compileAgentGraphWebGPU(
         ctx.lines.push(`  ${ctx.varNames.get(v.id)!} = ${wgslFloatLit(variableInitNum(v))};`);
       }
     }
+    // Pre-emit the PURE, non-volatile value cone of the behaviour root at
+    // function-top scope. WGSL `let`/`var` are block-scoped, so a pure value read
+    // in MULTIPLE sibling branches (e.g. a readCellsUnder result tested in both a
+    // switch case AND the default) must be declared in a dominating scope — else
+    // the cache returns a name declared inside the first branch and the sibling
+    // branch sees an "unresolved value". Pre-emitting at top makes the cache serve
+    // every branch. Skipped: volatile (forEach-element-derived) values + RNG /
+    // array-producer / mutable-storage reads (those stay inline / per-iteration).
+    preEmitAgentValues(ctx, behaviourNode.id);
     compileFlowChain(ctx, behaviourNode.id, 'do');
   } catch (e) {
     return empty(String((e as Error)?.message || e));
