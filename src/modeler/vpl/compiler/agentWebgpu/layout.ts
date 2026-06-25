@@ -58,6 +58,25 @@ export const AGENT_GPU_F32_FIELDS = [
   'x', 'y', 'vx', 'vy', 'radius', 'targetRadius', 'age',
   'forceX', 'forceY', 'density',
   'xNext', 'yNext',
+  // --- G4: the structural-write request buffers (read_write so the behaviour
+  //     shader can flag a division / bond / kill; the worker reads these back
+  //     into the engine's CPU request arrays BEFORE runAgentStructuralPhase).
+  //     Stored as f32 in the SAME agentF32 buffer (binding 0) so G4 adds ZERO
+  //     new bindings: the flags are small integers (0/1, an agent id + 1) exact
+  //     in f32 up to 2^24, and the axis/asymmetry/restLength/stiffness are already
+  //     float. The worker re-uploads them as 0 each step (the request is per-step).
+  'divideRequest', 'divideAxisX', 'divideAxisY', 'divideAsym',
+  'bondFormReq', 'bondFormL', 'bondFormK', 'bondBreakReq',
+  'killRequest',
+] as const;
+
+/** The structural-request f32 fields the worker round-trips (subset of
+ *  AGENT_GPU_F32_FIELDS appended for G4). Uploaded as 0 each step (a fresh request
+ *  slate) and read back into the engine's CPU request arrays after the dispatch. */
+export const AGENT_GPU_REQUEST_FIELDS = [
+  'divideRequest', 'divideAxisX', 'divideAxisY', 'divideAsym',
+  'bondFormReq', 'bondFormL', 'bondFormK', 'bondBreakReq',
+  'killRequest',
 ] as const;
 
 /** Per-agent i32 fields (identity / reductions the behaviour reads). */
@@ -108,11 +127,19 @@ export interface AgentWebGPULayout {
   /** Max spatial-hash bins (binStart length = maxHashBins+1). 0 ⇒ no hash region
    *  (the behaviour never queries the hash). */
   maxHashBins: number;
-  /** f32 field name → its element base offset in the `agentF32` array. */
+  /** f32 field name → its element base offset in the `agentF32` array. INCLUDES
+   *  the static geometry/force/request fields AND the per-USER-agent-attribute runs
+   *  (G4 — Get/Set Attribute on an agent attribute). */
   f32Base: Record<string, number>;
   /** i32 field name → its element base offset in the `agentI32` array. */
   i32Base: Record<string, number>;
-  /** Number of f32 elements in `agentF32` (= AGENT_GPU_F32_FIELDS.length * maxAgents). */
+  /** Ordered USER agent-attribute ids stored in `agentF32` (`agentAttrsOf`). The
+   *  attr's element k is `agentF32[attrBase[id] + k]`. f32 storage (the GPU has no
+   *  f64); int/tag/bool values round-trip exactly up to 2^24 (rounded on write). */
+  agentAttrIds: string[];
+  /** Agent-attr id → its element base offset in `agentF32` (= f32Base[id]). */
+  agentAttrBase: Record<string, number>;
+  /** Number of f32 elements in `agentF32` (= total field runs * maxAgents). */
   f32Len: number;
   /** Number of i32 elements in `agentI32`. */
   i32Len: number;
@@ -155,16 +182,23 @@ export interface AgentWebGPUFieldSpec {
 
 /** Compute the GPU agent storage layout. Pure (no GPU calls). The optional
  *  `field` spec wires the closed agent↔grid feedback (Sample/Secrete/etc.);
- *  absent ⇒ no field buffers (the byte-identical no-field Boids layout). */
+ *  absent ⇒ no field buffers (the byte-identical no-field Boids layout).
+ *  `agentAttrIds` (G4) lists the USER agent attributes — each gets a run in
+ *  `agentF32` appended after the static fields (so the no-attr Boids layout is
+ *  byte-identical). */
 export function computeAgentWebGPULayout(
   maxAgents: number,
   maxHashBins = 0,
   field?: AgentWebGPUFieldSpec,
+  agentAttrIds: string[] = [],
 ): AgentWebGPULayout {
   const ma = Math.max(1, Math.floor(maxAgents));
   const f32Base: Record<string, number> = {};
   let off = 0;
   for (const f of AGENT_GPU_F32_FIELDS) { f32Base[f] = off; off += ma; }
+  // User agent attributes — one run each, appended after the static fields.
+  const agentAttrBase: Record<string, number> = {};
+  for (const id of agentAttrIds) { f32Base[id] = off; agentAttrBase[id] = off; off += ma; }
   const f32Len = off;
 
   const i32Base: Record<string, number> = {};
@@ -194,7 +228,7 @@ export function computeAgentWebGPULayout(
 
   return {
     maxAgents: ma, maxHashBins: hb,
-    f32Base, i32Base, f32Len, i32Len,
+    f32Base, i32Base, agentAttrIds: [...agentAttrIds], agentAttrBase, f32Len, i32Len,
     hashBinStartBase, hashBinAgentsBase, hashLen,
     gridWidth, gridHeight, fieldTotal,
     fieldReadAttrs, fieldWriteAttrs, fieldReadBase, fieldWriteBase,
