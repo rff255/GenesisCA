@@ -76,6 +76,11 @@ export interface AgentWebGPURuntime {
   rngStateBuf: GPUBuffer;     // u32/agent (read_write)
   agentColorsBuf: GPUBuffer;  // u32/agent (read_write)
   forceControlBuf: GPUBuffer; // force ForceControl (uniform)
+  /** G5 field bridge — the read-only field snapshot (binding 7) + the atomic
+   *  deposit accumulator (binding 8). null when the model has no agent-accessible
+   *  cell attrs (the no-field Boids case). */
+  fieldReadBuf: GPUBuffer | null;
+  fieldDepositBuf: GPUBuffer | null;
 
   // --- pipelines ---
   behaviourPipeline: GPUComputePipeline;
@@ -91,6 +96,9 @@ export interface AgentWebGPURuntime {
   aliveUpload: Uint32Array;
   /** maxHashBins + 1 + maxAgents i32 scratch for the hash upload. */
   hashUpload: Int32Array;
+  /** G5 — scratch CPU buffers for the field read snapshot + the deposit init/readback. */
+  fieldReadUpload: Float32Array;
+  fieldDepositUpload: Float32Array;
 }
 
 function isWebGPUAvailable(): boolean {
@@ -175,37 +183,44 @@ export async function createAgentWebGPURuntime(
   const rngStateBuf = mk('agentRngState', rngBytes(layout), STORAGE);
   const agentColorsBuf = mk('agentColors', colorsBytes(layout), STORAGE);
   const forceControlBuf = mk('agentForceControl', FORCE_CONTROL_BYTES, UNIFORM);
+  // G5 field bridge — created only when the model has agent-accessible cell attrs.
+  const hasFieldRead = layout.fieldReadLen > 0;
+  const hasFieldWrite = layout.fieldWriteLen > 0;
+  const fieldReadBuf = hasFieldRead ? mk('agentFieldRead', Math.max(4, layout.fieldReadLen * 4), STORAGE_RO) : null;
+  const fieldDepositBuf = hasFieldWrite ? mk('agentFieldDeposit', Math.max(4, layout.fieldWriteLen * 4), STORAGE) : null;
 
-  // --- behaviour pipeline (7 bindings: agentF32 rw, agentI32 r, agentAlive r,
-  //     hashBins r, control uniform, rngState rw, agentColors rw) ---
-  const behaviourBGL = device.createBindGroupLayout({
-    label: 'agent-behaviour-bgl',
-    entries: [
-      { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
-      { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-      { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-      { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-      { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
-      { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
-      { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
-    ],
-  });
+  // --- behaviour pipeline (7 base bindings + the conditional field bridge
+  //     bindings 7 (fieldRead) / 8 (fieldDeposit, atomic)) ---
+  const behaviourEntries: GPUBindGroupLayoutEntry[] = [
+    { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+    { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+    { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+    { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+    { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+    { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+    { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+  ];
+  if (fieldReadBuf) behaviourEntries.push({ binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
+  if (fieldDepositBuf) behaviourEntries.push({ binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
+  const behaviourBGL = device.createBindGroupLayout({ label: 'agent-behaviour-bgl', entries: behaviourEntries });
   const behaviourPL = device.createPipelineLayout({ label: 'agent-behaviour-pl', bindGroupLayouts: [behaviourBGL] });
   const behaviourPipeline = await device.createComputePipelineAsync({
     label: 'agent-behaviour', layout: behaviourPL,
     compute: { module: behaviourModule, entryPoint: 'behaviour' },
   });
+  const behaviourBgEntries: GPUBindGroupEntry[] = [
+    { binding: 0, resource: { buffer: agentF32Buf } },
+    { binding: 1, resource: { buffer: agentI32Buf } },
+    { binding: 2, resource: { buffer: agentAliveBuf } },
+    { binding: 3, resource: { buffer: hashBinsBuf } },
+    { binding: 4, resource: { buffer: controlBuf } },
+    { binding: 5, resource: { buffer: rngStateBuf } },
+    { binding: 6, resource: { buffer: agentColorsBuf } },
+  ];
+  if (fieldReadBuf) behaviourBgEntries.push({ binding: 7, resource: { buffer: fieldReadBuf } });
+  if (fieldDepositBuf) behaviourBgEntries.push({ binding: 8, resource: { buffer: fieldDepositBuf } });
   const behaviourBindGroup = device.createBindGroup({
-    label: 'agent-behaviour-bg', layout: behaviourBGL,
-    entries: [
-      { binding: 0, resource: { buffer: agentF32Buf } },
-      { binding: 1, resource: { buffer: agentI32Buf } },
-      { binding: 2, resource: { buffer: agentAliveBuf } },
-      { binding: 3, resource: { buffer: hashBinsBuf } },
-      { binding: 4, resource: { buffer: controlBuf } },
-      { binding: 5, resource: { buffer: rngStateBuf } },
-      { binding: 6, resource: { buffer: agentColorsBuf } },
-    ],
+    label: 'agent-behaviour-bg', layout: behaviourBGL, entries: behaviourBgEntries,
   });
 
   // --- force pipeline (4 bindings: agentF32 rw, agentAlive r, hashBins r, fc uniform) ---
@@ -237,12 +252,15 @@ export async function createAgentWebGPURuntime(
     device, adapter, layout, ready: true,
     agentF32Buf, agentI32Buf, agentAliveBuf, hashBinsBuf,
     controlBuf, rngStateBuf, agentColorsBuf, forceControlBuf,
+    fieldReadBuf, fieldDepositBuf,
     behaviourPipeline, forcePipeline, behaviourBindGroup, forceBindGroup,
     stagingPool: new Map(),
     f32Upload: new Float32Array(layout.f32Len),
     i32Upload: new Int32Array(layout.i32Len),
     aliveUpload: new Uint32Array(layout.maxAgents),
     hashUpload: new Int32Array(Math.max(1, layout.hashLen)),
+    fieldReadUpload: new Float32Array(Math.max(1, layout.fieldReadLen)),
+    fieldDepositUpload: new Float32Array(Math.max(1, layout.fieldWriteLen)),
   };
   // Seed the per-agent RNG once (the GPU advances it in place across steps).
   seedAgentRng(rt, 0x1234abcd);
@@ -387,6 +405,78 @@ export function uploadAgentForceControl(rt: AgentWebGPURuntime, highWater: numbe
 }
 
 // ---------------------------------------------------------------------------
+// Field bridge (G5) — upload the cell field snapshot + init the deposit buffer,
+// then read the deposit back into the cell read buffer after the step.
+// ---------------------------------------------------------------------------
+
+/** A per-cell field array (the worker's `readAttrs[id]`, a typed array sized
+ *  `fieldTotal`). The runtime reads/writes the first `fieldTotal` elements. */
+export type FieldArray = ArrayLike<number> & { [i: number]: number };
+
+/** Upload the cell field snapshot into `fieldRead` AND prime the atomic
+ *  `fieldDeposit` accumulator with the SAME values (so `add` accumulates onto the
+ *  current field, `set`/`max`/`min` start from it). `readArrays` are the
+ *  agent-readable cell-attr arrays in `layout.fieldReadAttrs` order; `writeArrays`
+ *  the writable subset in `layout.fieldWriteAttrs` order. */
+export function uploadAgentField(
+  rt: AgentWebGPURuntime,
+  readArrays: Record<string, FieldArray>,
+  writeArrays: Record<string, FieldArray>,
+): void {
+  const L = rt.layout, total = L.fieldTotal;
+  if (rt.fieldReadBuf && L.fieldReadLen > 0) {
+    const fr = rt.fieldReadUpload;
+    for (const id of L.fieldReadAttrs) {
+      const base = L.fieldReadBase[id]!;
+      const src = readArrays[id];
+      if (!src) { for (let i = 0; i < total; i++) fr[base + i] = 0; continue; }
+      for (let i = 0; i < total; i++) fr[base + i] = src[i]!;
+    }
+    rt.device.queue.writeBuffer(rt.fieldReadBuf, 0, fr.buffer, fr.byteOffset, L.fieldReadLen * 4);
+  }
+  if (rt.fieldDepositBuf && L.fieldWriteLen > 0) {
+    // Prime the deposit accumulator with the current field (f32 — the atomic CAS
+    // reads it back as bitcast<f32>, so the byte pattern must be the f32 value).
+    const fd = rt.fieldDepositUpload;
+    for (const id of L.fieldWriteAttrs) {
+      const base = L.fieldWriteBase[id]!;
+      const src = writeArrays[id];
+      if (!src) { for (let i = 0; i < total; i++) fd[base + i] = 0; continue; }
+      for (let i = 0; i < total; i++) fd[base + i] = src[i]!;
+    }
+    rt.device.queue.writeBuffer(rt.fieldDepositBuf, 0, fd.buffer, fd.byteOffset, L.fieldWriteLen * 4);
+  }
+}
+
+/** Read the deposit accumulator back and write the evolved field into the cell
+ *  read buffers (BEFORE the cell CA step incorporates it). The deposit holds
+ *  f32-bitcast values; we read them as Float32 and copy into the (possibly f64)
+ *  cell arrays. */
+export async function readbackAgentField(
+  rt: AgentWebGPURuntime,
+  writeArrays: Record<string, FieldArray & { [i: number]: number }>,
+): Promise<void> {
+  const L = rt.layout, total = L.fieldTotal;
+  if (!rt.fieldDepositBuf || L.fieldWriteLen === 0) return;
+  const byteLen = Math.max(4, L.fieldWriteLen * 4);
+  const pooled = acquireStaging(rt, byteLen);
+  const staging = pooled.buffer;
+  const enc = rt.device.createCommandEncoder({ label: 'agent-field-readback-enc' });
+  enc.copyBufferToBuffer(rt.fieldDepositBuf, 0, staging, 0, byteLen);
+  rt.device.queue.submit([enc.finish()]);
+  await staging.mapAsync(GPUMapMode.READ, 0, byteLen);
+  const f = new Float32Array(staging.getMappedRange(0, byteLen));
+  for (const id of L.fieldWriteAttrs) {
+    const base = L.fieldWriteBase[id]!;
+    const dst = writeArrays[id];
+    if (!dst) continue;
+    for (let i = 0; i < total; i++) dst[i] = f[base + i]!;
+  }
+  staging.unmap();
+  pooled.inUse = false;
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch.
 // ---------------------------------------------------------------------------
 
@@ -473,8 +563,9 @@ export function destroyAgentWebGPURuntime(rt: AgentWebGPURuntime | null): void {
   const bufs = [
     rt.agentF32Buf, rt.agentI32Buf, rt.agentAliveBuf, rt.hashBinsBuf,
     rt.controlBuf, rt.rngStateBuf, rt.agentColorsBuf, rt.forceControlBuf,
+    rt.fieldReadBuf, rt.fieldDepositBuf,
   ];
-  for (const b of bufs) { try { b.destroy(); } catch { /* non-fatal */ } }
+  for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
   for (const bucket of rt.stagingPool.values()) for (const e of bucket) { try { e.buffer.destroy(); } catch { /* non-fatal */ } }
   rt.stagingPool.clear();
   rt.ready = false;

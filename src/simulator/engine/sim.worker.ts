@@ -37,7 +37,8 @@ import { computeAgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu
 import {
   createAgentWebGPURuntime, destroyAgentWebGPURuntime, uploadAgentSoA, uploadAgentHash,
   uploadAgentControl, uploadAgentForceControl, dispatchAgentStep, readbackAgentStep,
-  type AgentWebGPURuntime,
+  uploadAgentField, readbackAgentField,
+  type AgentWebGPURuntime, type FieldArray,
 } from './agentWebgpuRuntime';
 
 interface AttrDef {
@@ -712,7 +713,16 @@ function buildAgentWebGPUIfNeeded(): void {
   if (agentTarget !== 'webgpu' || !pendingAgentWebgpuBehaviour || !pendingAgentWebgpuForce || !store) return;
   const behaviour = pendingAgentWebgpuBehaviour;
   const force = pendingAgentWebgpuForce;
-  const layout = computeAgentWebGPULayout(pendingAgentWebgpuMaxAgents || store.maxAgents, pendingAgentWebgpuMaxHashBins);
+  // G5 field bridge — the agent-accessible cell-attr id lists + grid dims. MUST
+  // match the order the SHADER was compiled against (cellFieldAttrsOf /
+  // cellFieldWriteAttrsOf): fieldSpecs IS cellFieldAttrsOf (same filter order),
+  // and the readWrite subset preserves that order = cellFieldWriteAttrsOf.
+  const fieldReadAttrs = fieldSpecs.map(s => s.id);
+  const fieldWriteAttrs = fieldSpecs.filter(s => s.agentAccess === 'readWrite').map(s => s.id);
+  const layout = computeAgentWebGPULayout(
+    pendingAgentWebgpuMaxAgents || store.maxAgents, pendingAgentWebgpuMaxHashBins,
+    { readAttrs: fieldReadAttrs, writeAttrs: fieldWriteAttrs, gridWidth: width, gridHeight: height },
+  );
   const token = ++agentWebgpuBuildToken;
   agentWebgpuHashOverflowWarned = false;
   void (async () => {
@@ -1428,6 +1438,9 @@ async function runAgentStepWebGPU(): Promise<boolean> {
     return false;
   }
   uploadAgentSoA(rt, s);
+  // The agent world IS the grid coordinate frame 1:1, so fieldW/fieldH double as
+  // BOTH the world bounds (getNearbyAgents / getAgentOffset torus wrap) AND the
+  // field grid dims (the field index = row·fieldW + col). W===width, H===height.
   uploadAgentControl(rt, {
     highWater: hw, hashValid, nBinsX: hash ? hash.nBinsX : 0, nBinsY: hash ? hash.nBinsY : 0,
     fieldTorus: torus ? 1 : 0,
@@ -1441,6 +1454,24 @@ async function runAgentStepWebGPU(): Promise<boolean> {
     fieldW: W, fieldH: H, bonding: bonding ? 1 : 0, torus: torus ? 1 : 0,
   });
 
+  // G5 field bridge — upload the cell field snapshot + prime the atomic deposit
+  // accumulator, run the GPU behaviour (which samples fieldRead + atomic-deposits
+  // into fieldDeposit), then read the deposit back into the cell READ buffer
+  // (readAttrs[id]) BEFORE the cell CA step incorporates it (Decision D-FIELD).
+  // `fieldSpecs` is the agent-readable set; the readWrite subset is deposited.
+  const hasFieldBridge = rt.layout.fieldReadLen > 0 || rt.layout.fieldWriteLen > 0;
+  if (hasFieldBridge) {
+    const readArrays: Record<string, FieldArray> = {};
+    const writeArrays: Record<string, FieldArray> = {};
+    for (const spec of fieldSpecs) {
+      const arr = readAttrs[spec.id] as unknown as FieldArray | undefined;
+      if (!arr) continue;
+      readArrays[spec.id] = arr;
+      if (spec.agentAccess === 'readWrite') writeArrays[spec.id] = arr;
+    }
+    uploadAgentField(rt, readArrays, writeArrays);
+  }
+
   // Dispatch behaviour → force, then commit. The behaviour shader does NOT touch
   // user attrs in the Boids subset, so `swapAgentAttrs` swaps the (unchanged)
   // write buffer in exactly as the JS path does (sync mode; no-op in async).
@@ -1448,6 +1479,17 @@ async function runAgentStepWebGPU(): Promise<boolean> {
     dispatchAgentStep(rt, hw);
     swapAgentAttrs(s);
     await readbackAgentStep(rt, s);   // commits x/y (from xNext/yNext) + vx/vy/radius/density/age
+    if (hasFieldBridge && rt.layout.fieldWriteLen > 0) {
+      // The deposit accumulator holds the evolved field → copy into readAttrs so
+      // the cell step (runStep) reads it (its w.set(r) carries it; diffusion spreads).
+      const writeArrays: Record<string, FieldArray & { [i: number]: number }> = {};
+      for (const spec of fieldSpecs) {
+        if (spec.agentAccess !== 'readWrite') continue;
+        const arr = readAttrs[spec.id] as unknown as (FieldArray & { [i: number]: number }) | undefined;
+        if (arr) writeArrays[spec.id] = arr;
+      }
+      await readbackAgentField(rt, writeArrays);
+    }
   } catch (e) {
     self.postMessage({ type: 'error', message: '[agents] WebGPU step failed, falling back to JS: ' + ((e as Error)?.message || e) });
     destroyAgentWebGPURuntime(agentWebgpuRuntime); agentWebgpuRuntime = null;
