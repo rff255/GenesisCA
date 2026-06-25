@@ -75,14 +75,13 @@ export function cbNum(cfg: CenterBasedConfig | undefined | null, key: CenterBase
 }
 
 /** Resolve the agent-engine compile target, CLAMPED to what's actually
- *  implemented. The agent loop (`compileAgentGraph`) emits JS only until Phase F
- *  ports it to WASM (PR6) / WebGPU (PR7), so anything other than `'js'` is a
- *  hard dependency on a compiler that does not exist yet. This is the C-D4
+ *  implemented. The agent loop (`compileAgentGraph`) emits JS by default; WASM
+ *  (PR6) and WebGPU (PR7) run only the supported node subsets. This is the C-D4
  *  file-load safety net (mirrors the grid's worker-side useWasm/useWebGPU
  *  demotion): a hand-edited `agentTarget:'wasm'`/`'webgpu'` config can never
- *  dispatch to a non-existent `compileAgentGraphWasm`/`compileAgentGraphWebGPU`.
- *  PR6/PR7 widen the allow-set as each port lands. INDEPENDENT of the grid
- *  target — the grid can be WebGPU while agents resolve to JS. */
+ *  dispatch to a compiler the model's graph doesn't support — it falls back to a
+ *  safe target. INDEPENDENT of the grid target — the grid can be WASM while
+ *  agents resolve to WebGPU, or vice versa. */
 export function agentTargetOf(
   cfg: CenterBasedConfig | undefined | null,
   /** PR6b-1: the result of `isAgentGraphWasmSupported(model)`. When the user
@@ -91,24 +90,31 @@ export function agentTargetOf(
    *  `false` (e.g. callers that have no model handy / pre-PR6b call sites) keeps
    *  the original always-clamp behaviour. */
   wasmSupported = false,
+  /** PR7: the result of `isAgentGraphWebGPUSupported(model)`. When the user
+   *  selected `'webgpu'`, the target resolves to `'webgpu'` ONLY if the agent
+   *  graph uses the WebGPU-supported (Boids) node subset; otherwise it clamps to
+   *  `'js'` (NOT 'wasm' — keep the fallback simple + always-runnable). Default
+   *  `false` so pre-PR7 callers keep clamping a `'webgpu'` config to JS. */
+  webgpuSupported = false,
 ): 'js' | 'wasm' | 'webgpu' {
   const t = cfg?.agentTarget;
   if (t === 'js') return 'js';
   if (t === 'wasm') {
-    // PR6b-1: the WASM agent loop exists for the supported node subset (the
-    // architecture skeleton — getSelfPosition/getRadius/applyForce/
-    // setTargetRadius + the layout-agnostic value/flow utility nodes). Run on
+    // PR6b: the WASM agent loop exists for the supported node subset. Run on
     // WASM only when the whole agent graph is supported; otherwise the clamp
-    // keeps JS safe. PR6b-2/3 widen `isAgentGraphWasmSupported`'s set.
+    // keeps JS safe.
     if (wasmSupported) return 'wasm';
     // eslint-disable-next-line no-console
     console.warn(`[agents] agentTarget='wasm' but the agent graph uses nodes not yet ported to the WASM agent loop — clamping to 'js'.`);
     return 'js';
   }
   if (t === 'webgpu') {
-    // PR7 deletes this arm when the WebGPU agent loop lands.
+    // PR7: the WebGPU agent loop (behaviour + force shaders) exists for the Boids
+    // node subset. Run on WebGPU only when the whole agent graph is supported;
+    // otherwise clamp to JS (the always-runnable fallback).
+    if (webgpuSupported) return 'webgpu';
     // eslint-disable-next-line no-console
-    console.warn(`[agents] agentTarget='webgpu' not yet implemented (Phase F PR7) — clamping to 'js'.`);
+    console.warn(`[agents] agentTarget='webgpu' but the agent graph uses nodes not yet ported to the WebGPU agent loop (or is 3D) — clamping to 'js'.`);
     return 'js';
   }
   return 'js';
