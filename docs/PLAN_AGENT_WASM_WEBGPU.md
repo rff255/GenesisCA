@@ -207,7 +207,7 @@ Execute the handoff **PR7** as written. Summary (full spec in the handoff §2 PR
   binding-count fallback notice + the scale benchmark. **Sync agents only** (one
   sentence, no async gate — agents are always single-buffer).
 
-### WebGPU track — STATUS (PR7 G1+G2+G3 + G3-runtime + G6 DONE — Boids flocks on WebGPU; G4/G5/PR7c deferred)
+### WebGPU track — STATUS (PR7 G1+G2+G3 + G3-runtime + G6 + G5 + G4 DONE — Boids / Chemotaxis / Tissue all run on WebGPU; PR7c deferred)
 
 - **G1+G2 — DONE + on-device-verified.** `src/modeler/vpl/compiler/agentWebgpu/{layout.ts,compile.ts}`
   — the SEPARATE WebGPU agent-loop compiler (the GPU sibling of `agentWasm/compile.ts`).
@@ -280,12 +280,40 @@ Execute the handoff **PR7** as written. Summary (full spec in the handoff §2 PR
   WebGPU re-verified still flocks (polarization 0.998), and the no-field shader +
   lattice + JS/WASM-agent paths are byte-identical (`git diff --stat` = only
   `agentWebgpu/{compile,layout}.ts` + `agentWebgpuRuntime.ts` + `sim.worker.ts`).
-- **G4** (structural round-trip → Tissue) + **PR7c** (zero-copy / atomics) — STILL
-  DEFERRED; the gate clamps bonded/division agent graphs to JS. The field bridge is
-  no longer a deferral (Chemotaxis runs on WebGPU); what remains for full WebGPU
-  agent coverage is the structural phase (bonds/division/death → Tissue), the
-  agent-array tier (getAgentsAttribute/filter/join/picks), getCellAttribute/
-  getAgentAttribute, and 3D agents.
+- **G4 — DONE (the CPU structural round-trip → Tissue on WebGPU).** The behaviour
+  shader now emits the structural-WRITE nodes (`divideAgent`/`formBond`/`breakBond`/
+  `killAgent`) as per-agent REQUEST-FLAG stores into the GPU agent SoA, plus the
+  universal nodes Tissue's behaviour uses: `getCellAttribute`/`setAttribute` on a
+  per-AGENT attribute (a new `agentF32` run per `agentAttrsOf` id — f32, int/tag
+  round to the nearest), `categoricalColor` (multi-output palette select),
+  `setCellLooks` (per-agent packed `agentColors[idx]`, plain mode), `neighbourDensity`
+  + `getBondDegree` (engine reductions). The runtime uploads the agent attrs (0 the
+  request runs each step) and reads the request runs back into the engine's CPU
+  arrays (`divideRequest`/`bondFormReq`/`killRequest`/…), the attrs back into
+  `s.attrWrite`, and the packed colours into `s.colors`, BEFORE the existing
+  (target-independent) `runAgentStructuralPhase` + `runDivisionEvent` run CPU-side
+  on the settled state — the division eigensolve + the divisionEvent fn stay JS on
+  every target (no WGSL division shader). The gate now only checks the
+  BEHAVIOUR-REACHABLE node set (the divisionEvent / agentInit roots are compiled
+  separately on CPU/JS), so a Tissue graph runs on WebGPU even though its
+  divisionEvent subtree uses nodes the shader can't emit. **Zero new bindings** —
+  the request + agent-attr runs ride the existing `agentF32` buffer (binding 0).
+  Lattice + JS/WASM-agent + the no-structural-node Boids/Chemotaxis WebGPU shaders
+  are byte-identical by construction (the request/attr runs only emit when a
+  structural / Get-Set-Attribute node is reached). Verified: tsc + build clean; the
+  Tissue WebGPU shader compiles (gate `true`, target `webgpu`, the divideRequest
+  flag store + maturity read/write at the right offsets + the categorical palette +
+  the agentColors write all present); Boids + Chemotaxis still gate `true` /
+  compile (no request emit); the engine structural primitives consume the
+  request values (a NaN GPU axis → the eigensolve resolves a finite tension axis,
+  division grows the store, bonds partition). **NOT yet live-verified in a browser**
+  (the running preview serves the main repo, not this worktree; no headless WebGPU
+  in Node) — a browser smoke (load Tissue on `agentTarget:'webgpu'`, Play, confirm
+  the count rises + maturity differentiates) is the one remaining check.
+- **PR7c** (zero-copy / atomics) — STILL DEFERRED. What remains for full WebGPU
+  agent coverage: the agent-array tier (getAgentsAttribute/filter/join/picks),
+  getAgentAttribute (a SPECIFIC agent's attr by id), 3D agents, and the per-agent
+  glyph buffers (a glyph setCellLooks clamps to JS).
 
 ### Scale benchmark (the headline number) — JS vs WASM, force integrator
 
