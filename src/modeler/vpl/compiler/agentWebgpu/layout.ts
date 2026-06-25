@@ -68,6 +68,41 @@ export const AGENT_GPU_I32_FIELDS = [
 export type AgentGpuF32Field = (typeof AGENT_GPU_F32_FIELDS)[number];
 export type AgentGpuI32Field = (typeof AGENT_GPU_I32_FIELDS)[number];
 
+// ===========================================================================
+// G5 — the field bridge (the closed agent↔grid morphogen feedback).
+//
+// The behaviour shader reads (Sample Field / Field Gradient / Read Cells Under)
+// and writes (Affect Cells Under / Secrete To Field) CELL attributes the model
+// marks `agentAccess`. Each accessible attribute occupies a contiguous run of
+// `fieldTotal = W·H` f32 elements (the GPU mirror of the worker's per-cell
+// `readAttrs[id]` array). TWO strided buffers (bindings 7 + 8 — below the
+// behaviour's 7 ⇒ a field model uses 9 bindings, still under the conservative-
+// adapter cap once `requiredLimits` raises maxStorageBuffersPerShaderStage):
+//
+//   binding 7  fieldRead    : array<f32>          — a READ-ONLY snapshot of the
+//                                                  cell field at step start. ALL
+//                                                  agents read the same pre-deposit
+//                                                  values (a true snapshot — a
+//                                                  documented difference vs the JS
+//                                                  path, where a sequential agent
+//                                                  reads other agents' same-step
+//                                                  deposits; harmless for diffusion).
+//   binding 8  fieldDeposit : array<atomic<u32>>  — the deposit accumulator,
+//                                                  f32-bitcast-as-u32 + an atomic-CAS
+//                                                  loop per op (set/add/subtract/
+//                                                  max/min) so parallel agents
+//                                                  writing the same cell don't race.
+//                                                  Initialised each step to the
+//                                                  field (so `add` accumulates onto
+//                                                  it, `set`/`max`/`min` start from
+//                                                  it), then read back into the cell
+//                                                  read buffer BEFORE the cell step.
+//
+// `fieldReadAttrs` / `fieldWriteAttrs` are the ordered id lists (the bridge ABI —
+// the worker uploads/reads back per-attr at `fieldBase[id]`). 2D only (the field
+// index is `row·W + col`); a 3D agent model clamps to JS at the gate.
+// ===========================================================================
+
 export interface AgentWebGPULayout {
   maxAgents: number;
   /** Max spatial-hash bins (binStart length = maxHashBins+1). 0 ⇒ no hash region
@@ -87,10 +122,45 @@ export interface AgentWebGPULayout {
   hashBinAgentsBase: number;
   /** Total i32 elements in `hashBins`. */
   hashLen: number;
+
+  // --- field bridge (G5) ---
+  /** Grid width (cells per row). The field index is `row·gridWidth + col`. */
+  gridWidth: number;
+  /** Grid height (rows). */
+  gridHeight: number;
+  /** Cells per attribute run = gridWidth·gridHeight. */
+  fieldTotal: number;
+  /** Ordered cell-attr ids agents may READ (the `fieldRead` buffer runs). */
+  fieldReadAttrs: string[];
+  /** Ordered cell-attr ids agents may WRITE (the `fieldDeposit` buffer runs). */
+  fieldWriteAttrs: string[];
+  /** Attr id → its element base offset in the `fieldRead` array. */
+  fieldReadBase: Record<string, number>;
+  /** Attr id → its element base offset in the `fieldDeposit` array. */
+  fieldWriteBase: Record<string, number>;
+  /** Total f32 elements in `fieldRead`. 0 ⇒ no field bridge (no field buffers). */
+  fieldReadLen: number;
+  /** Total elements in `fieldDeposit`. 0 ⇒ no field write nodes. */
+  fieldWriteLen: number;
 }
 
-/** Compute the GPU agent storage layout. Pure (no GPU calls). */
-export function computeAgentWebGPULayout(maxAgents: number, maxHashBins = 0): AgentWebGPULayout {
+export interface AgentWebGPUFieldSpec {
+  /** Ordered cell-attr ids agents may READ (agentAccess read | readWrite). */
+  readAttrs: string[];
+  /** Ordered cell-attr ids agents may WRITE (agentAccess readWrite). */
+  writeAttrs: string[];
+  gridWidth: number;
+  gridHeight: number;
+}
+
+/** Compute the GPU agent storage layout. Pure (no GPU calls). The optional
+ *  `field` spec wires the closed agent↔grid feedback (Sample/Secrete/etc.);
+ *  absent ⇒ no field buffers (the byte-identical no-field Boids layout). */
+export function computeAgentWebGPULayout(
+  maxAgents: number,
+  maxHashBins = 0,
+  field?: AgentWebGPUFieldSpec,
+): AgentWebGPULayout {
   const ma = Math.max(1, Math.floor(maxAgents));
   const f32Base: Record<string, number> = {};
   let off = 0;
@@ -107,9 +177,27 @@ export function computeAgentWebGPULayout(maxAgents: number, maxHashBins = 0): Ag
   const hashBinAgentsBase = hb > 0 ? hb + 1 : 0;
   const hashLen = hb > 0 ? hb + 1 + ma : 0;
 
+  // --- field bridge layout ---
+  const gridWidth = Math.max(1, Math.floor(field?.gridWidth ?? 1));
+  const gridHeight = Math.max(1, Math.floor(field?.gridHeight ?? 1));
+  const fieldTotal = gridWidth * gridHeight;
+  const fieldReadAttrs = field?.readAttrs ?? [];
+  const fieldWriteAttrs = field?.writeAttrs ?? [];
+  const fieldReadBase: Record<string, number> = {};
+  let fo = 0;
+  for (const id of fieldReadAttrs) { fieldReadBase[id] = fo; fo += fieldTotal; }
+  const fieldReadLen = fo;
+  const fieldWriteBase: Record<string, number> = {};
+  fo = 0;
+  for (const id of fieldWriteAttrs) { fieldWriteBase[id] = fo; fo += fieldTotal; }
+  const fieldWriteLen = fo;
+
   return {
     maxAgents: ma, maxHashBins: hb,
     f32Base, i32Base, f32Len, i32Len,
     hashBinStartBase, hashBinAgentsBase, hashLen,
+    gridWidth, gridHeight, fieldTotal,
+    fieldReadAttrs, fieldWriteAttrs, fieldReadBase, fieldWriteBase,
+    fieldReadLen, fieldWriteLen,
   };
 }
