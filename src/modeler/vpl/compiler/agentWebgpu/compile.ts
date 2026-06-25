@@ -51,7 +51,8 @@ import { is3dModel } from '../compile';
 import { expandMacros } from '../macroExpand';
 import { collapseReroutes } from '../rerouteCollapse';
 import { canonicalizeAccessorEdges } from '../accessorCSE';
-import { cellFieldAttrsOf, cellFieldWriteAttrsOf } from '../../../../model/attributeScope';
+import { cellFieldAttrsOf, cellFieldWriteAttrsOf, agentAttrsOf } from '../../../../model/attributeScope';
+import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/CategoricalColorNode';
 import { computeAgentWebGPULayout, type AgentWebGPULayout } from './layout';
 
 /** The node types this compiler can emit to WGSL. A model whose agent graph uses
@@ -62,15 +63,21 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   // event roots
   'behaviourStep',
   // self reads
-  'getSelfPosition', 'getRadius',
+  'getSelfPosition', 'getRadius', 'getBondDegree', 'neighbourDensity',
   // neighbour access
   'getNearbyAgents', 'forEachInArray', 'getAgentOffset', 'getVelocity',
   'getAgentPosition', 'getAgentRadius',
   // local variables (SCALAR only)
   'getVariable', 'setVariable',
+  // agent attributes (Get/Set Attribute on the agent SoA — G4)
+  'getCellAttribute', 'setAttribute',
   // field bridge (G5 — the closed agent↔grid morphogen feedback)
   'sampleField', 'fieldGradient', 'readCellsUnder',
   'affectCellsUnder', 'secreteToField',
+  // colour (G4 — Set Cell Looks per-agent + the categorical palette)
+  'categoricalColor', 'setCellLooks',
+  // structural writes (G4 — the post-step CPU structural phase reads the requests)
+  'divideAgent', 'formBond', 'breakBond', 'killAgent',
   // writes
   'applyForce', 'setTargetRadius',
   // value/flow utility
@@ -150,6 +157,9 @@ interface AgentWgpuCtx {
   lines: string[];
   /** unique-name counter. */
   uid: number;
+  /** Agent-attr id → its data type (bool/integer/float/tag), for int-rounding on
+   *  a Set Attribute write (the GPU SoA is f32). */
+  agentAttrType: Map<string, string>;
   /** Scalar Local-Variable id → its WGSL var name (`var<function>`, reset per agent). */
   varNames: Map<string, string>;
   /** Cache: `${nodeId}:${portId}` → its ValueRef. Cleared on scope change. */
@@ -233,6 +243,15 @@ function inF32(ctx: AgentWgpuCtx, node: GraphNode, portId: string, fallback: num
   return castTo(resolveValueInput(ctx, node, portId, fallback), 'f32');
 }
 
+/** Resolve a value input ONLY when wired (no inline-widget fallback). Returns the
+ *  f32 expr or `undefined` (the caller supplies its own default — e.g. the divide
+ *  axis defaults to NaN = "engine-resolved tension axis", matching the JS emit). */
+function resolveOptionalF32(ctx: AgentWgpuCtx, node: GraphNode, portId: string): string | undefined {
+  const src = ctx.adj.inputToSource.get(`${node.id}:${portId}`);
+  if (!src) return undefined;
+  return castTo(compileValueNode(ctx, src.nodeId, src.portId), 'f32');
+}
+
 // ---------------------------------------------------------------------------
 // Value emission.
 // ---------------------------------------------------------------------------
@@ -267,6 +286,29 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
     }
     case 'getRadius': {
       result = emitLet(ctx, 'f32', f32At(ctx, 'radius', 'idx'), 'rad');
+      break;
+    }
+    case 'getBondDegree': {
+      result = emitLet(ctx, 'f32', `f32(${i32At(ctx, 'bondCount', 'idx')})`, 'bd');
+      break;
+    }
+    case 'neighbourDensity': {
+      // The engine reduction `density` (other agents within the cutoff), read as f32.
+      result = emitLet(ctx, 'f32', f32At(ctx, 'density', 'idx'), 'nd');
+      break;
+    }
+    case 'getCellAttribute': {
+      // On the agent graph, Get Cell Attribute reads the AGENT SoA (agentAttrsOf):
+      // `agentF32[attrBase + idx]` (f32 storage; int/tag/bool round-trip exactly).
+      const attr = (node.data.config?.['attributeId'] as string) || '_undef';
+      const base = ctx.layout.agentAttrBase[attr];
+      result = base === undefined
+        ? { expr: '0.0', type: 'f32' }
+        : emitLet(ctx, 'f32', f32At(ctx, attr, 'idx'), 'ga');
+      break;
+    }
+    case 'categoricalColor': {
+      result = emitCategoricalColor(ctx, node, portId);
       break;
     }
     case 'getConstant': {
@@ -488,6 +530,39 @@ function emitGetRandom(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   return emitLet(ctx, 'f32', `(${r} * ${wgslFloatLit(maxN - minN)} + ${wgslFloatLit(minN)})`, 'rf');
 }
 
+/** Categorical Color — integer index → flat RGB from an N-entry palette (no
+ *  blending). Multi-output (r/g/b); emit the select chain once into shared `var`
+ *  locals + cache all ports. Mirrors the lattice WGSL categoricalColor. */
+function emitCategoricalColor(ctx: AgentWgpuCtx, node: GraphNode, portId: string): ValueRef {
+  const cachedSibling = ctx.valueCache.get(`${node.id}:r`);
+  if (cachedSibling !== undefined) return ctx.valueCache.get(`${node.id}:${portId}`) ?? cachedSibling;
+  const idx = castTo(resolveValueInput(ctx, node, 'index', 0), 'i32');
+  const entries = readCategoricalEntries(node.data.config as Record<string, string | number | boolean>);
+  const d = readCategoricalDefault(node.data.config as Record<string, string | number | boolean>);
+  const rName = fresh(ctx, 'ccr'), gName = fresh(ctx, 'ccg'), bName = fresh(ctx, 'ccb');
+  ctx.lines.push(`  var ${rName}: i32; var ${gName}: i32; var ${bName}: i32;`);
+  const writeConst = (r: number, g: number, b: number) =>
+    `${rName} = ${r | 0}; ${gName} = ${g | 0}; ${bName} = ${b | 0};`;
+  if (entries.length === 0) {
+    ctx.lines.push(`  ${writeConst(d.r, d.g, d.b)}`);
+  } else {
+    const kName = fresh(ctx, 'cck');
+    ctx.lines.push(`  let ${kName}: i32 = ${idx};`);
+    entries.forEach((e, i) => {
+      const head = i === 0 ? `if (${kName} == ${i})` : `else if (${kName} == ${i})`;
+      ctx.lines.push(`  ${head} { ${writeConst(e.r, e.g, e.b)} }`);
+    });
+    ctx.lines.push(`  else { ${writeConst(d.r, d.g, d.b)} }`);
+  }
+  const refs: Record<string, ValueRef> = {
+    r: { expr: rName, type: 'i32' },
+    g: { expr: gName, type: 'i32' },
+    b: { expr: bName, type: 'i32' },
+  };
+  for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
+  return refs[portId] ?? refs['r']!;
+}
+
 /** Get Agent Offset — torus-shortest (dX, dY) + Distance from self to a target.
  *  Multi-output: one emit pass into shared locals; cache all ports. */
 function compileAgentOffset(ctx: AgentWgpuCtx, node: GraphNode, portId: string): ValueRef {
@@ -640,6 +715,57 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
+    case 'setAttribute': {
+      // Write the AGENT SoA (agentAttrsOf): `agentF32[attrBase + idx] = value`.
+      // int/tag/bool attrs round to the nearest integer (the JS Int32/Uint8 store).
+      const attr = (node.data.config?.['attributeId'] as string) || '_undef';
+      const base = ctx.layout.agentAttrBase[attr];
+      if (base !== undefined) {
+        const t = ctx.agentAttrType.get(attr) || 'float';
+        let v = inF32(ctx, node, 'value', 0);
+        if (t !== 'float') v = `round(${v})`;
+        ctx.lines.push(`  ${f32At(ctx, attr, 'idx')} = ${v};`);
+      }
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'setCellLooks': {
+      emitSetCellLooks(ctx, node);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'divideAgent': {
+      // Flag a division request (the CPU structural phase reads it back). The
+      // axes default to NaN (= "engine-resolved tension axis", the JS default).
+      ctx.lines.push(`  ${f32At(ctx, 'divideRequest', 'idx')} = 1.0;`);
+      const ax = resolveOptionalF32(ctx, node, 'axisX');
+      const ay = resolveOptionalF32(ctx, node, 'axisY');
+      ctx.lines.push(`  ${f32At(ctx, 'divideAxisX', 'idx')} = ${ax ?? 'bitcast<f32>(0x7fc00000u)'};`); // NaN
+      ctx.lines.push(`  ${f32At(ctx, 'divideAxisY', 'idx')} = ${ay ?? 'bitcast<f32>(0x7fc00000u)'};`);
+      ctx.lines.push(`  ${f32At(ctx, 'divideAsym', 'idx')} = ${inF32(ctx, node, 'asymmetry', 0.5)};`);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'formBond': {
+      // `_bondFormReq = (target | 0) + 1` (0 = no request); restLength / stiffness.
+      const tgt = castTo(resolveValueInput(ctx, node, 'targetAgent', -1), 'i32');
+      ctx.lines.push(`  ${f32At(ctx, 'bondFormReq', 'idx')} = f32(${tgt} + 1);`);
+      ctx.lines.push(`  ${f32At(ctx, 'bondFormL', 'idx')} = ${inF32(ctx, node, 'restLength', 0)};`);
+      ctx.lines.push(`  ${f32At(ctx, 'bondFormK', 'idx')} = ${inF32(ctx, node, 'stiffness', 0)};`);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'breakBond': {
+      const tgt = castTo(resolveValueInput(ctx, node, 'targetAgent', -1), 'i32');
+      ctx.lines.push(`  ${f32At(ctx, 'bondBreakReq', 'idx')} = f32(${tgt} + 1);`);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'killAgent': {
+      ctx.lines.push(`  ${f32At(ctx, 'killRequest', 'idx')} = 1.0;`);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
     case 'sequence': {
       const cfg = node.data.config as Record<string, unknown> | undefined;
       const count = Math.max(1, Number(cfg?.['sequenceCount']) || 1);
@@ -750,6 +876,29 @@ function emitSecreteToField(ctx: AgentWgpuCtx, node: GraphNode): void {
   ctx.lines.push(`  ${splat(y1, x0, `(1.0 - ${tx}) * ${ty}`)}`);
   ctx.lines.push(`  ${splat(y1, x1, `${tx} * ${ty}`)}`);
   ctx.lines.push(`  }`);
+}
+
+/** Set Cell Looks — colour THIS agent (per-agent RGBA into `agentColors[idx]`,
+ *  packed `r | g<<8 | b<<16 | a<<24`, mirroring the lattice WGSL setCellLooks).
+ *  PLAIN mode only on the agent GPU path (glyphs need the per-cell glyph buffers,
+ *  which the agent GPU SoA doesn't carry — a glyph setCellLooks clamps the model
+ *  to JS via the gate). The agent loop's "viewer" is always the current pass, so
+ *  the `__current__` sentinel + any concrete mapping write unconditionally (the
+ *  worker dispatches one behaviour pass; there's no per-mapping viewer guard on
+ *  the agent colour buffer). */
+function emitSetCellLooks(ctx: AgentWgpuCtx, node: GraphNode): void {
+  const cfg = node.data.config as Record<string, unknown> | undefined;
+  const useGlyph = !!cfg?.['useGlyph'];
+  const setBg = cfg?.['setBackground'] !== false; // default true
+  const doBg = !useGlyph || setBg;
+  if (!doBg) return; // glyph-only (no background) → no agent-colour write on GPU
+  const re = `u32(clamp(${castTo(resolveValueInput(ctx, node, 'r', 0), 'i32')}, 0, 255))`;
+  const ge = `u32(clamp(${castTo(resolveValueInput(ctx, node, 'g', 0), 'i32')}, 0, 255))`;
+  const be = `u32(clamp(${castTo(resolveValueInput(ctx, node, 'b', 0), 'i32')}, 0, 255))`;
+  const aSrc = ctx.adj.inputToSource.get(`${node.id}:a`);
+  const aInline = getInlineNum(node, 'a', 255);
+  const ae = (!aSrc && aInline === 255) ? '255u' : `u32(clamp(${castTo(resolveValueInput(ctx, node, 'a', 255), 'i32')}, 0, 255))`;
+  ctx.lines.push(`  agentColors[idx] = (${re}) | ((${ge}) << 8u) | ((${be}) << 16u) | (${ae} << 24u);`);
 }
 
 // ---------------------------------------------------------------------------
@@ -911,6 +1060,44 @@ function flattenAgentGraph(nodes: GraphNode[], edges: GraphEdge[], model: CAMode
   return { nodes: n, edges: e };
 }
 
+/** The set of node ids reachable from the `behaviourStep` root (its `do` flow
+ *  chain + every transitive value input). ONLY these nodes are emitted to the
+ *  WebGPU behaviour shader — the `divisionEvent` + `agentInit` roots are compiled
+ *  SEPARATELY on CPU/JS (target-independent), so a Tissue graph that contains
+ *  (e.g.) an `expression` only inside its divisionEvent subtree must NOT make the
+ *  gate reject the model. Mirrors how the JS/WASM compilers walk one root at a time. */
+function behaviourReachableNodeIds(nodes: GraphNode[], edges: GraphEdge[]): Set<string> {
+  const adj = buildAdjacency(nodes, edges);
+  const root = nodes.find(x => x.data.nodeType === 'behaviourStep');
+  const reached = new Set<string>();
+  if (!root) return reached;
+  // value-input cone of a node.
+  const pullValues = (nodeId: string) => {
+    const stack = [nodeId];
+    while (stack.length) {
+      const id = stack.pop()!;
+      for (const [key, src] of adj.inputToSource) {
+        if (!key.startsWith(`${id}:`)) continue;
+        if (!reached.has(src.nodeId)) { reached.add(src.nodeId); stack.push(src.nodeId); }
+      }
+    }
+  };
+  // flow walk from the root (depth-first over every flow output port).
+  const visitFlow = new Set<string>();
+  const walkFlow = (nodeId: string) => {
+    if (visitFlow.has(nodeId)) return;
+    visitFlow.add(nodeId);
+    reached.add(nodeId);
+    pullValues(nodeId);
+    for (const [key, targets] of adj.flowOutputToTargets) {
+      if (!key.startsWith(`${nodeId}:`)) continue;
+      for (const t of targets) walkFlow(t.nodeId);
+    }
+  };
+  walkFlow(root.id);
+  return reached;
+}
+
 /** TRUE iff the (flattened) agent graph is entirely emittable to WGSL. Mirrors
  *  `isAgentGraphWasmSupported` but adds the WebGPU-specific rejections: 3D agents
  *  (worldDepth>1) are the 3D port (G-future) — clamp to JS for now. */
@@ -924,8 +1111,16 @@ export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): 
   const flat = flattenAgentGraph(nodes, edges, model);
   if (flat.error) return false;
 
+  // ONLY the behaviour-reachable nodes are emitted to the WebGPU shader (the
+  // divisionEvent + agentInit roots are compiled separately on CPU/JS — G4). So
+  // a Tissue graph whose divisionEvent subtree uses a node the shader can't emit
+  // (e.g. an extra setAttribute on a daughter) still runs on WebGPU. Macros are
+  // already flattened, so a leftover macro boundary node is a structural error.
+  const reachable = behaviourReachableNodeIds(flat.nodes, flat.edges);
+  const reachNodes = flat.nodes.filter(n => reachable.has(n.id));
+
   let nearbyCount = 0;
-  for (const n of flat.nodes) {
+  for (const n of reachNodes) {
     const t = n.data.nodeType;
     if (t === 'macroInput' || t === 'macroOutput' || t === 'macro') return false;
     if (!AGENT_WEBGPU_SUPPORTED_TYPES.has(t)) return false;
@@ -948,23 +1143,28 @@ export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): 
       const rt = (cfg['randomType'] as string) || (cfg['mode'] as string);
       if (rt === 'options') return false;
     }
+    if (t === 'setCellLooks') {
+      // Glyph mode needs the per-cell glyph buffers, which the agent GPU SoA does
+      // not carry — a glyph (no-background) setCellLooks clamps the model to JS.
+      if (cfg['useGlyph'] && cfg['setBackground'] === false) return false;
+    }
   }
   if (nearbyCount > AGENT_WEBGPU_NEARBY_SLOTS) return false;
   // SCALAR Local Variables only (array variables are a future port). The agent
   // graph resolves variables against `agentVariables` (the Generic Agent
   // Platform's separate agent-variable id-space), NOT the cell `variables`.
   const hasArrayVar = (model.agentVariables ?? []).some(v => v.kind === 'array');
-  const usesVar = flat.nodes.some(n => n.data.nodeType === 'getVariable' || n.data.nodeType === 'setVariable');
+  const usesVar = reachNodes.some(n => n.data.nodeType === 'getVariable' || n.data.nodeType === 'setVariable');
   if (hasArrayVar && usesVar) return false;
-  // forEachInArray's array input must come from getNearbyAgents.
-  const map = new Map(flat.nodes.map(n => [n.id, n] as const));
+  // forEachInArray's array input must come from getNearbyAgents (behaviour subtree only).
+  const map = new Map(reachNodes.map(n => [n.id, n] as const));
   for (const e of flat.edges) {
     const tgt = parseHandle(e.targetHandle);
     if (tgt && tgt.category === 'value' && tgt.portId === 'array') {
       const consumer = map.get(e.target);
       if (consumer?.data.nodeType === 'forEachInArray') {
         const srcNode = map.get(e.source);
-        if (srcNode?.data.nodeType !== 'getNearbyAgents') return false;
+        if (srcNode && srcNode.data.nodeType !== 'getNearbyAgents') return false;
       }
     }
   }
@@ -1077,9 +1277,13 @@ export function compileAgentGraphWebGPU(
   if (!behaviourNode) return empty('No Behaviour Step node in the agent graph.');
 
   // Gate (defensive — the caller already checked isAgentGraphWebGPUSupported).
+  // ONLY the behaviour-reachable nodes are emitted; the divisionEvent / agentInit
+  // roots are compiled separately on CPU/JS (G4), so they're excluded here.
+  const reachable = behaviourReachableNodeIds(nodes, edges);
   const seen = new Set<string>();
   let nearbyCount = 0;
   for (const n of nodes) {
+    if (!reachable.has(n.id)) continue;
     seen.add(n.data.nodeType);
     if (!AGENT_WEBGPU_SUPPORTED_TYPES.has(n.data.nodeType)) return empty(`agentWebgpu: unsupported node '${n.data.nodeType}' (falls back to JS).`);
     if (n.data.nodeType === 'getNearbyAgents') nearbyCount++;
@@ -1087,9 +1291,12 @@ export function compileAgentGraphWebGPU(
   if (nearbyCount > AGENT_WEBGPU_NEARBY_SLOTS) return empty(`agentWebgpu: too many getNearbyAgents (${nearbyCount} > ${AGENT_WEBGPU_NEARBY_SLOTS} slots).`);
 
   const adj = buildAdjacency(nodes, edges);
+  const agentAttrType = new Map<string, string>();
+  for (const a of agentAttrsOf(model)) agentAttrType.set(a.id, a.type);
   const ctx: AgentWgpuCtx = {
     adj, layout, is3d: false,
     lines: [], uid: 0,
+    agentAttrType,
     varNames: new Map<string, string>(),
     valueCache: new Map<string, ValueRef>(),
     volatileNodes: new Set<string>(),
@@ -1101,7 +1308,7 @@ export function compileAgentGraphWebGPU(
   // graph's Local Variables live on `agentVariables` (the separate agent-variable
   // id-space), NOT the cell `variables`.
   let slot = 0;
-  for (const n of nodes) if (n.data.nodeType === 'getNearbyAgents') ctx.nearbyScratchSlot.set(n.id, slot++);
+  for (const n of nodes) if (reachable.has(n.id) && n.data.nodeType === 'getNearbyAgents') ctx.nearbyScratchSlot.set(n.id, slot++);
   for (const v of (model.agentVariables ?? [])) {
     if (v.kind !== 'scalar') continue;
     ctx.varNames.set(v.id, `_var${v.id.replace(/[^a-zA-Z0-9_]/g, '_')}`);
@@ -1193,6 +1400,7 @@ export function compileAgentGraphWebGPUForModel(model: CAModel): AgentWebGPUResu
     Math.max(1, Math.floor((cfg?.maxAgents as number) ?? 2000)),
     agentMaxHashBinsForModelGPU(model),
     agentWebGPUFieldSpecOf(model),
+    agentAttrsOf(model).map(a => a.id),
   );
   if (!cfg) return { shaderCode: '', layout, supportedTypes: [], error: 'No centerBased config.' };
   return compileAgentGraphWebGPU(model.agentGraphNodes ?? [], model.agentGraphEdges ?? [], model, layout);

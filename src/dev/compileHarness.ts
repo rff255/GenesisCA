@@ -15,6 +15,8 @@
 // string-compared for byte equality.
 
 import type { CAModel } from '../model/types';
+import { migrateAgentAttributeSplit } from '../model/agentAttributeSplitMigration';
+import { migrateVariableScopeSplit } from '../model/variableScopeMigration';
 import { compileGraph, compileAgentGraph } from '../modeler/vpl/compiler/compile';
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
@@ -142,5 +144,11 @@ export function migrateForHarness(m: CAModel): CAModel {
   if (m.properties.gridDepth === undefined) m.properties.gridDepth = 1;
   if (!m.topologyMode) m.topologyMode = { gridCells: true, agents: false };
   for (const n of m.neighborhoods) { n.margin ??= 2; n.includeCentralCell ??= false; }
+  // Generic Agent Platform — mirror LOAD_MODEL: split legacy agent-state cell
+  // attributes into agentAttributes[] (+ agentAccess on field attrs) and move
+  // agent-referenced cell variables into the agent variable set. No-op for
+  // non-agent / already-split models.
+  m = migrateAgentAttributeSplit(m);
+  m = migrateVariableScopeSplit(m);
   return m;
 }
