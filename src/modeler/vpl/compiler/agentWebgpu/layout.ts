@@ -46,10 +46,18 @@
 /** Per-agent f32 fields, in SoA order. Each occupies a contiguous run of
  *  `maxAgents` f32 elements; field `name`'s element k is `agentF32[base + k]`.
  *  Keep geometry first so a future 3D port appends z fields at the END (existing
- *  2D field bases stay stable — the grid's "append-only" discipline). */
+ *  2D field bases stay stable — the grid's "append-only" discipline).
+ *
+ *  `xNext`/`yNext` (G3, the force pass) are APPENDED at the end so the behaviour
+ *  shader's field bases (compiled against the original list) stay byte-identical
+ *  — the force pass reads x/y (the start-of-step snapshot, so a neighbour read is
+ *  never half-updated) and writes the integrated position into xNext/yNext; the
+ *  worker reads those back into the engine's xNext/yNext and `swapPositions`
+ *  commits, exactly mirroring the JS/WASM double-buffer. */
 export const AGENT_GPU_F32_FIELDS = [
   'x', 'y', 'vx', 'vy', 'radius', 'targetRadius', 'age',
   'forceX', 'forceY', 'density',
+  'xNext', 'yNext',
 ] as const;
 
 /** Per-agent i32 fields (identity / reductions the behaviour reads). */
