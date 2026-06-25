@@ -249,9 +249,43 @@ Execute the handoff **PR7** as written. Summary (full spec in the handoff §2 PR
   shader 5780 chars. Lattice + JS-agent + WASM-agent byte-identity by construction
   (`git diff --stat` touches only `centerBased.ts`/`PropertiesPanelContent.tsx`/
   `SimulatorView.tsx`/`sim.worker.ts` + the new runtime — the compilers are untouched).
-- **G4** (structural round-trip → Tissue) + **G5** (field bridge → Chemotaxis) + **PR7c**
-  (zero-copy / atomics) — STILL DEFERRED; the gate clamps bonded/division/field agent
-  graphs to JS.
+- **G5 — DONE + live-verified (the field bridge → Chemotaxis on WebGPU).**
+  `agentWebgpu/{layout.ts,compile.ts}` + `agentWebgpuRuntime.ts` + `sim.worker.ts`:
+  the closed agent↔grid morphogen feedback now runs on the WebGPU agent target.
+  The behaviour shader gains TWO conditional field bindings — `fieldRead` (binding
+  7, a READ-ONLY snapshot of the cell field at step start; all agents read the
+  same pre-deposit values = a true snapshot, a documented difference vs the JS
+  path's sequential partial-deposit read, harmless for diffusion) + `fieldDeposit`
+  (binding 8, `array<atomic<u32>>`, an f32-bitcast atomic-CAS accumulator per op
+  set/add/sub/max/min so parallel agents writing the same cell don't race). The 5
+  field-node WGSL emitters (`sampleField` / `fieldGradient` central-diff /
+  `readCellsUnder` r-disk aggregate via `fieldSampleBilinear`; `affectCellsUnder`
+  r-disk + `secreteToField` 4-cell bilinear splat via `fieldDepositCell`) mirror the
+  JS emitters' 2D math. The runtime adds the two buffers (created only when the
+  model has agent-accessible cell attrs → a no-field Boids shader is BYTE-IDENTICAL,
+  5780 chars) + `uploadAgentField` (snapshot → fieldRead, prime fieldDeposit with
+  the current field) + `readbackAgentField` (deposit → the cell read buffer). The
+  worker's `runAgentStepWebGPU` does the CPU round-trip: upload the field BEFORE
+  the dispatch, read the deposit back into `readAttrs[id]` AFTER (gated on
+  `fieldReadLen||fieldWriteLen > 0`) so the cell CA step incorporates it (Decision
+  D-FIELD). `isAgentGraphWebGPUSupported` now accepts the 5 field nodes; the worker
+  derives the field spec from `fieldSpecs` (= `cellFieldAttrsOf`, the readWrite
+  subset = `cellFieldWriteAttrsOf`), the SAME order the shader compiled against.
+  **Live-verified in the browser**: Chemotaxis on `agentTarget:'webgpu'` —
+  gate `true`, `agentTargetOf===webgpu`; the field BUILDS (chemical max 0 → ~33,
+  all 10k cells non-zero) and the 220 agents AGGREGATE (122/169 occupied bins →
+  ~70, sum-of-squares ~512 → ~1000 = ~2× clustering density), 0 worker errors;
+  rendered as viridis hotspots + clustered cyan agents (statistical parity with the
+  JS path — clustering trend, NOT bit-exact, the f32/PCG constraint). Boids on
+  WebGPU re-verified still flocks (polarization 0.998), and the no-field shader +
+  lattice + JS/WASM-agent paths are byte-identical (`git diff --stat` = only
+  `agentWebgpu/{compile,layout}.ts` + `agentWebgpuRuntime.ts` + `sim.worker.ts`).
+- **G4** (structural round-trip → Tissue) + **PR7c** (zero-copy / atomics) — STILL
+  DEFERRED; the gate clamps bonded/division agent graphs to JS. The field bridge is
+  no longer a deferral (Chemotaxis runs on WebGPU); what remains for full WebGPU
+  agent coverage is the structural phase (bonds/division/death → Tissue), the
+  agent-array tier (getAgentsAttribute/filter/join/picks), getCellAttribute/
+  getAgentAttribute, and 3D agents.
 
 ### Scale benchmark (the headline number) — JS vs WASM, force integrator
 
