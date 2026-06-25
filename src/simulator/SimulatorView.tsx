@@ -6262,20 +6262,42 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             }}
           />
 
-          {/* Brush target switch — at the TOP of the panel (agent models only):
-              does the LMB brush affect the CA grid or the agents? Each layer's
-              brush details below appear ONLY when that layer is selected. */}
+          {/* Common controls (agent models) — at the TOP of the panel, ABOVE the
+              "Brush affects" switch, because they apply to BOTH targets. The Layers
+              matrix governs rendering + simulation of the CA grid AND the agents;
+              the switch then divides these shared controls from the target-specific
+              brush details below (Input Mapping for CA Grid, Agent Brush for Agents). */}
           {isAgentModel && (
-            <div style={{ padding: '8px 10px 2px' }}>
-              <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Brush affects</div>
-              <div style={{ display: 'flex', border: '1px solid var(--color-widget-border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
-                {(['grid', 'agents'] as const).map(t => (
-                  <button key={t}
-                    onClick={() => { setBrushTarget(t); agentGlueAnchorRef.current = -1; draw(); }}
-                    title={t === 'grid' ? 'LMB paints the CA grid (the Input Mapping brush below)' : 'LMB acts on the agents (seed / kill / move / glue / cut / bond)'}
-                    style={{ flex: 1, padding: '4px 8px', cursor: 'pointer', border: 'none', borderRight: t === 'grid' ? '1px solid var(--color-widget-border)' : 'none', background: brushTarget === t ? 'var(--color-accent-soft)' : 'transparent', color: brushTarget === t ? 'var(--color-accent)' : 'var(--color-text-muted)', fontWeight: 600, fontSize: '0.66rem' }}
-                  >{t === 'grid' ? 'CA Grid' : 'Agents'}</button>
-                ))}
+            <div style={{ padding: '8px 10px 2px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {/* Layers — independently SHOW (render) and SIMULATE (run the step) the
+                  CA grid + the agents. Shared by both brush targets. */}
+              <div>
+                <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Layers</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr', gap: '4px 8px', alignItems: 'center', fontSize: '0.68rem' }}>
+                  <span />
+                  <span style={{ color: 'var(--color-text-muted)', textAlign: 'center', fontSize: '0.6rem' }}>Show</span>
+                  <span style={{ color: 'var(--color-text-muted)', textAlign: 'center', fontSize: '0.6rem' }}>Simulate</span>
+                  <span>CA grid</span>
+                  <span style={{ textAlign: 'center' }}><input type="checkbox" checked={showCaGrid} onChange={e => setShowCaGrid(e.target.checked)} title="Render the CA grid" /></span>
+                  <span style={{ textAlign: 'center' }}><input type="checkbox" checked={simulateCells} onChange={e => setSimulateCells(e.target.checked)} title="Run the cell step (freeze the grid when off)" /></span>
+                  <span>Agents</span>
+                  <span style={{ textAlign: 'center' }}><input type="checkbox" checked={showAgents} onChange={e => setShowAgents(e.target.checked)} title="Render the agents + bonds" /></span>
+                  <span style={{ textAlign: 'center' }}><input type="checkbox" checked={simulateAgents} onChange={e => setSimulateAgents(e.target.checked)} title="Run the agent step (freeze agents — and their cell deposits — when off)" /></span>
+                </div>
+              </div>
+              {/* Brush affects — which layer the LMB brush targets. The brush details
+                  below appear only for the selected target. */}
+              <div>
+                <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Brush affects</div>
+                <div style={{ display: 'flex', border: '1px solid var(--color-widget-border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
+                  {(['grid', 'agents'] as const).map(t => (
+                    <button key={t}
+                      onClick={() => { setBrushTarget(t); agentGlueAnchorRef.current = -1; draw(); }}
+                      title={t === 'grid' ? 'LMB paints the CA grid (the Input Mapping brush below)' : 'LMB acts on the agents (seed / kill / move / glue / cut / bond)'}
+                      style={{ flex: 1, padding: '4px 8px', cursor: 'pointer', border: 'none', borderRight: t === 'grid' ? '1px solid var(--color-widget-border)' : 'none', background: brushTarget === t ? 'var(--color-accent-soft)' : 'transparent', color: brushTarget === t ? 'var(--color-accent)' : 'var(--color-text-muted)', fontWeight: 600, fontSize: '0.66rem' }}
+                    >{t === 'grid' ? 'CA Grid' : 'Agents'}</button>
+                  ))}
+                </div>
               </div>
             </div>
           )}
@@ -6503,39 +6525,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             </div>
           )}
 
-          {/* Agents Section (req 4 + 1 + 7): the docked agent brush + the Layers
-              show/simulate toggles. Replaces the old floating canvas overlay. */}
-          {isAgentModel && (
+          {/* Agent Brush section — the target-specific brush details when the brush
+              targets agents (parallel to the Input Mapping section for the CA Grid
+              target). The shared Layers matrix + the Brush-affects switch moved to
+              the common controls at the TOP of the panel. */}
+          {isAgentModel && brushTarget === 'agents' && (
             <div className={styles.rightPanelSection}>
               <div className={styles.panelHeader}>
-                <span className={styles.panelTitle}>Agents</span>
+                <span className={styles.panelTitle}>Agent Brush</span>
               </div>
-              <div className={styles.rightPanelSectionBody} style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 380, overflowY: 'auto' }}>
-                {/* Layers — independently SHOW (render) and SIMULATE (run the step)
-                    the CA grid + the agents. Freezing agents also stops their cell
-                    deposit (it lives inside the agent step). */}
-                <div>
-                  <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Layers</div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr', gap: '4px 8px', alignItems: 'center', fontSize: '0.68rem' }}>
-                    <span />
-                    <span style={{ color: 'var(--color-text-muted)', textAlign: 'center', fontSize: '0.6rem' }}>Show</span>
-                    <span style={{ color: 'var(--color-text-muted)', textAlign: 'center', fontSize: '0.6rem' }}>Simulate</span>
-                    <span>CA grid</span>
-                    <span style={{ textAlign: 'center' }}><input type="checkbox" checked={showCaGrid} onChange={e => setShowCaGrid(e.target.checked)} title="Render the CA grid" /></span>
-                    <span style={{ textAlign: 'center' }}><input type="checkbox" checked={simulateCells} onChange={e => setSimulateCells(e.target.checked)} title="Run the cell step (freeze the grid when off)" /></span>
-                    <span>Agents</span>
-                    <span style={{ textAlign: 'center' }}><input type="checkbox" checked={showAgents} onChange={e => setShowAgents(e.target.checked)} title="Render the agents + bonds" /></span>
-                    <span style={{ textAlign: 'center' }}><input type="checkbox" checked={simulateAgents} onChange={e => setSimulateAgents(e.target.checked)} title="Run the agent step (freeze agents — and their cell deposits — when off)" /></span>
-                  </div>
-                </div>
-
-                {/* Brush — the LMB agent action, shown only when the brush targets
-                    agents (the "Brush affects" switch lives at the TOP of the panel).
-                    Glue/Cut stage the first agent then bond/unbond to the second (RMB
-                    cancels); Seed/Kill carry a radius/cluster; Move drags an agent. */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.66rem' }}>
-                  {brushTarget === 'agents' && (<>
-                  <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Agent brush</div>
+              <div className={styles.rightPanelSectionBody} style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.66rem', maxHeight: 380, overflowY: 'auto' }}>
                   <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
                     {(['seed', 'kill', 'glue', 'cut', 'move', 'bond'] as const).map(m => (
                       <button
@@ -6596,12 +6595,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                       )}
                     </div>
                   )}
-                  </>)}
                   <button
                     onClick={() => workerRef.current?.postMessage({ type: 'clearAgents', activeViewer: activeViewerRef.current })}
                     style={{ alignSelf: 'flex-start', padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
                   >Clear all agents</button>
-                </div>
               </div>
             </div>
           )}
