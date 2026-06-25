@@ -30,7 +30,71 @@ ceiling.** Set expectations accordingly:
 
 The "big boost like the CA grid" is most directly delivered by the **WASM force-pass
 port (W2)** — and at very large counts by WebGPU. For typical research/teaching counts
-(hundreds–few thousand), JS is already interactive.
+(hundreds–few thousand), JS is already interactive. **But the boost grows with rule
+complexity:** the Boids benchmark measures the *trivial* engine force loop (V8 JITs it
+near-optimally, so WASM ≈ JS there). A **heavy per-agent behaviour graph** (a
+chromatography-in-agents rule — interaction tables, many neighbour reads, conditionals)
+is the case where WASM pulls ahead of JS and WebGPU pulls ahead of both, exactly as on
+the grid. Benchmark a heavy rule, not Boids.
+
+---
+
+## FULL-COVERAGE MANDATE (every node, every target — no permanent subset)
+
+**Hard requirement (user directive): every node must run on every compile target.** The
+per-target "supported subset" gates (`AGENT_WASM_SUPPORTED_TYPES`,
+`AGENT_WEBGPU_SUPPORTED_TYPES`, `isAgentGraph{Wasm,WebGPU}Supported`) are a **staging
+artifact of incremental porting — they must shrink to zero**, not be a permanent
+restriction on what the user can model. The end state matches the CA grid: pick any
+target, model freely.
+
+Audit conclusion (every node × target classified):
+- **WASM (grid + agents): full coverage is achievable for EVERY node, bit-parity (f64).**
+  WASM-grid is *already* full coverage (nothing rejected). WASM-agents is the Boids
+  subset only because the rest is **not-yet-ported**, never un-portable.
+- **WebGPU (grid + agents): full coverage in SYNC mode, f32 (statistical parity).** Every
+  node runs; the structural phase (division/bonds/death/auto-bond) + division-event +
+  field deposit execute **CPU-side via the readback→CPU→re-upload round-trip** — the user
+  KEEPS those nodes, they just run on the CPU within the GPU pipeline (the
+  GPU-particle-system-with-CPU-emission architecture). No node is removed.
+
+The **only legitimately-fundamental exclusions** (mode/precision, NOT node bans — they
+stay, exactly as on the grid today):
+1. **Async update mode on WebGPU** (grid) — async = "a write is visible to a later cell
+   *this* step," fundamentally serial, no parallel-GPU representation. A *model-mode*
+   gate (the user keeps async by picking WASM/JS). NB: there are **no async-only AGENT
+   nodes**, so this doesn't even constrain agents — the WebGPU agent path just runs in
+   sync agent mode.
+2. **`updateIndicator` toggle/next/previous on WebGPU** (grid) — order-dependent
+   non-commutative mutation of one shared accumulator by parallel writers; the lone
+   genuinely node-op-level fundamental case. (or/and/max/min/inc/dec ARE supported via
+   atomics.)
+3. **f32 precision + per-cell PCG RNG on WebGPU** (grid + agents) — statistical parity,
+   not bit-exact; bars no node.
+
+### The not-yet-ported worklist (this is what "full coverage" requires)
+- **WASM agents — port the whole catalogue** (bit-parity): the structural-WRITE nodes
+  (`formBond`/`breakBond`/`killAgent`/`divideAgent`) are **trivial** — they emit a
+  request-flag store into the shared wasmBacked memory; the heavy mutation is already the
+  CPU structural phase. Then the not-yet-ported emitters: the **field bridge**
+  (sampleField/fieldGradient/readCellsUnder/affectCellsUnder/secreteToField),
+  `getCellAttribute`/`getAgentAttribute`, the **agent-array tier**
+  (getBondedAgents/filter/join/pickRandom(N)/getAgentsAttribute/setAgentsAttribute),
+  per-agent SoA r/w (setVelocity/setAgent*), `forEachBond` + getBondDegree/
+  neighbourDensity/getCurvature, the **division-event + agent-init** modules (2nd/3rd
+  compiled fns), array Local Variables, and the **universal nodes** (aggregate/switch/
+  loop/setCellLooks/getModelAttribute/indicators/colorScale/…) — all have working
+  lattice emitters; the agent compiler just doesn't dispatch them yet (idx-based SoA
+  addressing is the only change). **Relax the `≤4 getNearbyAgents` + `forEach-source must
+  be getNearbyAgents` structural gates** too.
+- **WebGPU agents — wire the runtime (in progress), then port the same catalogue**
+  (structural/field via the CPU round-trip; the array tier + universal nodes via the
+  lattice WGSL emitters; **3D agents** = the mechanical 2D→3D port the WASM agent loop
+  already has). f32 is the only intrinsic difference.
+- **WebGPU grid — close the two not-yet-ported gaps:** `aggregate.median` (a bounded
+  per-thread WGSL sort over the existing `var<function>` scratch) and `aggregate/
+  groupOperator` uniform `random` (reuse the per-cell PCG + the `weightedRandom`
+  materialise path). Both are per-cell-local + order-independent + already on WASM.
 
 ---
 
