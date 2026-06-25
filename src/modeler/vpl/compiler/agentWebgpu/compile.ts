@@ -345,7 +345,7 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
       break;
     }
     case 'getSelfPosition': {
-      const field = portId === 'y' ? 'y' : portId === 'z' ? 'y' /* 2D: z N/A */ : 'x';
+      const field = portId === 'y' ? 'y' : portId === 'z' ? (ctx.is3d ? 'z' : 'y') : 'x';
       result = emitLet(ctx, 'f32', f32At(ctx, field, 'idx'), 'sp');
       break;
     }
@@ -476,7 +476,7 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
     }
     case 'getAgentPosition': {
       const aName = emitAgentId(ctx, node, 'agentId');
-      const field = portId === 'y' ? 'y' : 'x';
+      const field = portId === 'y' ? 'y' : portId === 'z' ? (ctx.is3d ? 'z' : 'y') : 'x';
       result = emitLet(ctx, 'f32', f32At(ctx, field, aName), 'gp');
       break;
     }
@@ -489,7 +489,7 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
       // self when agentId is unwired (JS: `inputs.agentId ? (...|0) : idx`).
       const src = ctx.adj.inputToSource.get(`${node.id}:agentId`);
       const aName = src ? emitAgentId(ctx, node, 'agentId') : 'idx';
-      const field = portId === 'vy' ? 'vy' : 'vx';
+      const field = portId === 'vy' ? 'vy' : portId === 'vz' ? (ctx.is3d ? 'vz' : 'vy') : 'vx';
       result = emitLet(ctx, 'f32', f32At(ctx, field, aName), 'gv');
       break;
     }
@@ -726,22 +726,30 @@ function emitCategoricalColor(ctx: AgentWgpuCtx, node: GraphNode, portId: string
 /** Get Agent Offset — torus-shortest (dX, dY) + Distance from self to a target.
  *  Multi-output: one emit pass into shared locals; cache all ports. */
 function compileAgentOffset(ctx: AgentWgpuCtx, node: GraphNode, portId: string): ValueRef {
+  const is3d = ctx.is3d;
   const cachedSibling = ctx.valueCache.get(`${node.id}:dx`);
   if (cachedSibling !== undefined) return ctx.valueCache.get(`${node.id}:${portId}`) ?? cachedSibling;
   const aName = emitAgentId(ctx, node, 'agentId');
-  const dx = fresh(ctx, 'odx'), dy = fresh(ctx, 'ody'), dist = fresh(ctx, 'odist');
+  const dx = fresh(ctx, 'odx'), dy = fresh(ctx, 'ody'), dz = fresh(ctx, 'odz'), dist = fresh(ctx, 'odist');
   ctx.lines.push(`  var ${dx}: f32 = ${f32At(ctx, 'x', aName)} - ${f32At(ctx, 'x', 'idx')};`);
   ctx.lines.push(`  var ${dy}: f32 = ${f32At(ctx, 'y', aName)} - ${f32At(ctx, 'y', 'idx')};`);
-  // torus fold over the world bounds (control.fieldW / fieldH / fieldTorus).
+  if (is3d) ctx.lines.push(`  var ${dz}: f32 = ${f32At(ctx, 'z', aName)} - ${f32At(ctx, 'z', 'idx')};`);
+  // torus fold over the world bounds (control.fieldW / fieldH / fieldD / fieldTorus).
   ctx.lines.push(`  if (control.fieldTorus != 0u) {`);
   ctx.lines.push(`    let _hW = control.fieldW * 0.5; let _hH = control.fieldH * 0.5;`);
   ctx.lines.push(`    if (${dx} > _hW) { ${dx} = ${dx} - control.fieldW; } else if (${dx} < -_hW) { ${dx} = ${dx} + control.fieldW; }`);
   ctx.lines.push(`    if (${dy} > _hH) { ${dy} = ${dy} - control.fieldH; } else if (${dy} < -_hH) { ${dy} = ${dy} + control.fieldH; }`);
+  if (is3d) {
+    ctx.lines.push(`    let _hD = control.fieldD * 0.5;`);
+    ctx.lines.push(`    if (${dz} > _hD) { ${dz} = ${dz} - control.fieldD; } else if (${dz} < -_hD) { ${dz} = ${dz} + control.fieldD; }`);
+  }
   ctx.lines.push(`  }`);
-  ctx.lines.push(`  let ${dist}: f32 = sqrt(${dx} * ${dx} + ${dy} * ${dy});`);
+  const distMag = is3d ? `${dx} * ${dx} + ${dy} * ${dy} + ${dz} * ${dz}` : `${dx} * ${dx} + ${dy} * ${dy}`;
+  ctx.lines.push(`  let ${dist}: f32 = sqrt(${distMag});`);
   const refs: Record<string, ValueRef> = {
     dx: { expr: dx, type: 'f32' },
     dy: { expr: dy, type: 'f32' },
+    dz: { expr: is3d ? dz : '0.0', type: 'f32' },
     distance: { expr: dist, type: 'f32' },
   };
   for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
@@ -1520,6 +1528,7 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
     case 'applyForce': {
       ctx.lines.push(`  ${f32At(ctx, 'forceX', 'idx')} = ${f32At(ctx, 'forceX', 'idx')} + ${inF32(ctx, node, 'fx', 0)};`);
       ctx.lines.push(`  ${f32At(ctx, 'forceY', 'idx')} = ${f32At(ctx, 'forceY', 'idx')} + ${inF32(ctx, node, 'fy', 0)};`);
+      if (ctx.is3d) ctx.lines.push(`  ${f32At(ctx, 'forceZ', 'idx')} = ${f32At(ctx, 'forceZ', 'idx')} + ${inF32(ctx, node, 'fz', 0)};`);
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
@@ -1880,14 +1889,16 @@ function emitSetCellLooks(ctx: AgentWgpuCtx, node: GraphNode): void {
 /** Emit the getNearbyAgents fill into its scratch slot; return the slot's array
  *  var name + the length local as an `AgentArrayRef`. */
 function emitNearbyFill(ctx: AgentWgpuCtx, naNode: GraphNode): AgentArrayRef {
+  const is3d = ctx.is3d;
   const { arrName } = arraySlotName(ctx, naNode.id); // the per-thread var array (declared at fn top)
   const lenName = fresh(ctx, 'naLen');
-  const r2 = fresh(ctx, 'naR2'), xi = fresh(ctx, 'naXi'), yi = fresh(ctx, 'naYi');
+  const r2 = fresh(ctx, 'naR2'), xi = fresh(ctx, 'naXi'), yi = fresh(ctx, 'naYi'), zi = fresh(ctx, 'naZi');
   const qr = castTo(resolveValueInput(ctx, naNode, 'radius', 5), 'f32');
   ctx.lines.push(`  var ${lenName}: i32 = 0;`);
   ctx.lines.push(`  let ${r2}: f32 = (${qr}) * (${qr});`);
   ctx.lines.push(`  let ${xi}: f32 = ${f32At(ctx, 'x', 'idx')};`);
   ctx.lines.push(`  let ${yi}: f32 = ${f32At(ctx, 'y', 'idx')};`);
+  if (is3d) ctx.lines.push(`  let ${zi}: f32 = ${f32At(ctx, 'z', 'idx')};`);
 
   // The candidate test, applied to a candidate u32 id `j`. Pushes j into the
   // scratch array + bumps len when (j != idx && alive[j] && torus-folded d2 <= r2).
@@ -1895,62 +1906,80 @@ function emitNearbyFill(ctx: AgentWgpuCtx, naNode: GraphNode): AgentArrayRef {
     const j = fresh(ctx, 'naJ');
     ctx.lines.push(`  { let ${j}: u32 = ${jExpr};`);
     ctx.lines.push(`    if (${j} != idx && agentAlive[${j}] != 0u) {`);
-    const dx = fresh(ctx, 'naDx'), dy = fresh(ctx, 'naDy');
+    const dx = fresh(ctx, 'naDx'), dy = fresh(ctx, 'naDy'), dz = fresh(ctx, 'naDz');
     ctx.lines.push(`      var ${dx}: f32 = ${f32At(ctx, 'x', j)} - ${xi};`);
     ctx.lines.push(`      var ${dy}: f32 = ${f32At(ctx, 'y', j)} - ${yi};`);
+    if (is3d) ctx.lines.push(`      var ${dz}: f32 = ${f32At(ctx, 'z', j)} - ${zi};`);
     ctx.lines.push(`      if (control.fieldTorus != 0u) {`);
     ctx.lines.push(`        let _hW = control.fieldW * 0.5; let _hH = control.fieldH * 0.5;`);
     ctx.lines.push(`        if (${dx} > _hW) { ${dx} = ${dx} - control.fieldW; } else if (${dx} < -_hW) { ${dx} = ${dx} + control.fieldW; }`);
     ctx.lines.push(`        if (${dy} > _hH) { ${dy} = ${dy} - control.fieldH; } else if (${dy} < -_hH) { ${dy} = ${dy} + control.fieldH; }`);
+    if (is3d) {
+      ctx.lines.push(`        let _hD = control.fieldD * 0.5;`);
+      ctx.lines.push(`        if (${dz} > _hD) { ${dz} = ${dz} - control.fieldD; } else if (${dz} < -_hD) { ${dz} = ${dz} + control.fieldD; }`);
+    }
     ctx.lines.push(`      }`);
-    ctx.lines.push(`      if (${dx} * ${dx} + ${dy} * ${dy} <= ${r2} && ${lenName} < i32(control.maxAgents)) {`);
+    const d2 = is3d ? `${dx} * ${dx} + ${dy} * ${dy} + ${dz} * ${dz}` : `${dx} * ${dx} + ${dy} * ${dy}`;
+    ctx.lines.push(`      if (${d2} <= ${r2} && ${lenName} < i32(control.maxAgents)) {`);
     ctx.lines.push(`        ${arrName}[${lenName}] = i32(${j}); ${lenName} = ${lenName} + 1;`);
     ctx.lines.push(`      }`);
     ctx.lines.push(`    } }`);
   };
 
   ctx.lines.push(`  if (control.hashValid != 0u) {`);
-  emitHashStencil(ctx, test, xi, yi);
+  emitHashStencil(ctx, test, xi, yi, zi);
   ctx.lines.push(`  } else {`);
   emitAllPairs(ctx, test);
   ctx.lines.push(`  }`);
   return { arrName, lenName, elemType: 'i32' };
 }
 
-/** The 3×3 hash-bin stencil over the in-buffer binStart/binAgents (CSR), torus-
- *  wrapped like the JS emit. Calls `test(jExpr)` for each candidate. 2D only. */
-function emitHashStencil(ctx: AgentWgpuCtx, test: (jExpr: string) => void, xi: string, yi: string): void {
+/** The 3×3 (2D) / 3×3×3 (3D) hash-bin stencil over the in-buffer binStart/binAgents
+ *  (CSR), torus-wrapped like the JS/WASM emit. Calls `test(jExpr)` per candidate.
+ *  The 3D bin index is `(nbz·nBinsY + nby)·nBinsX + nbx`. */
+function emitHashStencil(ctx: AgentWgpuCtx, test: (jExpr: string) => void, xi: string, yi: string, zi: string): void {
+  const is3d = ctx.is3d;
   const bsBase = ctx.layout.hashBinStartBase;
   const baBase = ctx.layout.hashBinAgentsBase;
   const binStartAt = (e: string) => bsBase === 0 ? `hashBins[${e}]` : `hashBins[${bsBase}u + ${e}]`;
   const binAgentsAt = (e: string) => baBase === 0 ? `hashBins[${e}]` : `hashBins[${baBase}u + ${e}]`;
-  const bx = fresh(ctx, 'naBx'), by = fresh(ctx, 'naBy');
-  // bx = clamp((xi/binSizeX)|0, 0, nBinsX-1)
+  const bx = fresh(ctx, 'naBx'), by = fresh(ctx, 'naBy'), bz = fresh(ctx, 'naBz');
   ctx.lines.push(`  var ${bx}: i32 = i32(${xi} / control.binSizeX);`);
   ctx.lines.push(`  ${bx} = clamp(${bx}, 0, i32(control.nBinsX) - 1);`);
   ctx.lines.push(`  var ${by}: i32 = i32(${yi} / control.binSizeY);`);
   ctx.lines.push(`  ${by} = clamp(${by}, 0, i32(control.nBinsY) - 1);`);
-  const ey = fresh(ctx, 'naEy'), ex = fresh(ctx, 'naEx');
+  if (is3d) {
+    ctx.lines.push(`  var ${bz}: i32 = i32(${zi} / control.binSizeZ);`);
+    ctx.lines.push(`  ${bz} = clamp(${bz}, 0, i32(control.nBinsZ) - 1);`);
+  }
+  const ez = fresh(ctx, 'naEz'), ey = fresh(ctx, 'naEy'), ex = fresh(ctx, 'naEx');
+  if (is3d) ctx.lines.push(`  for (var ${ez}: i32 = -1; ${ez} <= 1; ${ez} = ${ez} + 1) {`);
   ctx.lines.push(`  for (var ${ey}: i32 = -1; ${ey} <= 1; ${ey} = ${ey} + 1) {`);
   ctx.lines.push(`  for (var ${ex}: i32 = -1; ${ex} <= 1; ${ex} = ${ex} + 1) {`);
-  const nbx = fresh(ctx, 'naNbx'), nby = fresh(ctx, 'naNby'), skip = fresh(ctx, 'naSkip');
+  const nbx = fresh(ctx, 'naNbx'), nby = fresh(ctx, 'naNby'), nbz = fresh(ctx, 'naNbz'), skip = fresh(ctx, 'naSkip');
   ctx.lines.push(`    var ${nbx}: i32 = ${bx} + ${ex}; var ${nby}: i32 = ${by} + ${ey}; var ${skip}: bool = false;`);
+  if (is3d) ctx.lines.push(`    var ${nbz}: i32 = ${bz} + ${ez};`);
   ctx.lines.push(`    if (control.fieldTorus != 0u) {`);
   ctx.lines.push(`      ${nbx} = ((${nbx} % i32(control.nBinsX)) + i32(control.nBinsX)) % i32(control.nBinsX);`);
   ctx.lines.push(`      ${nby} = ((${nby} % i32(control.nBinsY)) + i32(control.nBinsY)) % i32(control.nBinsY);`);
+  if (is3d) ctx.lines.push(`      ${nbz} = ((${nbz} % i32(control.nBinsZ)) + i32(control.nBinsZ)) % i32(control.nBinsZ);`);
   ctx.lines.push(`    } else {`);
-  ctx.lines.push(`      if (${nbx} < 0 || ${nbx} >= i32(control.nBinsX) || ${nby} < 0 || ${nby} >= i32(control.nBinsY)) { ${skip} = true; }`);
+  const oob3d = is3d ? ` || ${nbz} < 0 || ${nbz} >= i32(control.nBinsZ)` : '';
+  ctx.lines.push(`      if (${nbx} < 0 || ${nbx} >= i32(control.nBinsX) || ${nby} < 0 || ${nby} >= i32(control.nBinsY)${oob3d}) { ${skip} = true; }`);
   ctx.lines.push(`    }`);
   ctx.lines.push(`    if (!${skip}) {`);
   const b = fresh(ctx, 'naB'), p = fresh(ctx, 'naP'), end = fresh(ctx, 'naEnd');
-  ctx.lines.push(`      let ${b}: i32 = ${nby} * i32(control.nBinsX) + ${nbx};`);
+  const binIdx = is3d
+    ? `(${nbz} * i32(control.nBinsY) + ${nby}) * i32(control.nBinsX) + ${nbx}`
+    : `${nby} * i32(control.nBinsX) + ${nbx}`;
+  ctx.lines.push(`      let ${b}: i32 = ${binIdx};`);
   ctx.lines.push(`      let ${p}_start: i32 = ${binStartAt(`u32(${b})`)};`);
   ctx.lines.push(`      let ${end}: i32 = ${binStartAt(`u32(${b}) + 1u`)};`);
   ctx.lines.push(`      for (var ${p}: i32 = ${p}_start; ${p} < ${end}; ${p} = ${p} + 1) {`);
   test(`u32(${binAgentsAt(`u32(${p})`)})`);
   ctx.lines.push(`      }`);
   ctx.lines.push(`    }`);
-  ctx.lines.push(`  } }`);
+  ctx.lines.push(is3d ? `  } } }` : `  } }`);
 }
 
 /** All-pairs fallback: for (all=0; all<highWater; all++) test(all). */
@@ -2277,6 +2306,11 @@ export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): 
       // not carry — a glyph (no-background) setCellLooks clamps the model to JS.
       if (cfg['useGlyph'] && cfg['setBackground'] === false) return false;
     }
+    // The field bridge (sample/affect/secrete/etc.) WGSL helpers use the 2D cell
+    // index `row·W + col` + bilinear; the 3D trilinear path is not yet ported, so
+    // a 3D model that touches the field clamps to JS. (Non-field 3D agents — Boids/
+    // GoL-on-agents — DO run on WebGPU.)
+    if (is3dModel(model) && (t === 'sampleField' || t === 'fieldGradient' || t === 'readCellsUnder' || t === 'affectCellsUnder' || t === 'secreteToField')) return false;
   }
   if (arrayProducerCount > AGENT_WEBGPU_NEARBY_SLOTS) return false;
   // Every array input (forEachInArray.array / aggregate|group*.values / pick*.agents

@@ -31,7 +31,7 @@
 
 import type { AgentStore } from './agentEngine';
 import type { AgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/layout';
-import { AGENT_GPU_F32_FIELDS, AGENT_GPU_I32_FIELDS, AGENT_GPU_REQUEST_FIELDS } from '../../modeler/vpl/compiler/agentWebgpu/layout';
+import { AGENT_GPU_F32_FIELDS, AGENT_GPU_F32_FIELDS_3D, AGENT_GPU_I32_FIELDS, AGENT_GPU_REQUEST_FIELDS } from '../../modeler/vpl/compiler/agentWebgpu/layout';
 
 const REQUEST_FIELD_SET: ReadonlySet<string> = new Set(AGENT_GPU_REQUEST_FIELDS);
 
@@ -58,6 +58,10 @@ export interface AgentForceDispatchParams {
   fieldH: number;
   bonding: number;
   torus: number;
+  /** 3D extents (default 1 ⇒ 2D — the z stencil / integration is gated off). */
+  nBinsZ?: number;
+  binSizeZ?: number;
+  fieldD?: number;
 }
 
 interface PooledBuffer { buffer: GPUBuffer; size: number; inUse: boolean }
@@ -68,6 +72,9 @@ export interface AgentWebGPURuntime {
   layout: AgentWebGPULayout;
   /** True once buffers + pipelines are live and a step can dispatch. */
   ready: boolean;
+  /** True when the behaviour writes the i32 SoA (setAgentType) → readback pulls
+   *  the i32 type run back into the CPU store. */
+  usesI32Write: boolean;
 
   // --- storage / uniform buffers (shared by the two pipelines) ---
   agentF32Buf: GPUBuffer;     // f32 SoA (read_write)
@@ -83,6 +90,12 @@ export interface AgentWebGPURuntime {
    *  cell attrs (the no-field Boids case). */
   fieldReadBuf: GPUBuffer | null;
   fieldDepositBuf: GPUBuffer | null;
+  /** Universal-node bindings (Generic Agent Platform). null when the model uses
+   *  none. auxF32 (9) = model attrs + lookup tables; indicators (10) = the atomic
+   *  standalone-indicator buffer; bondStore (11) = the interleaved ragged bonds. */
+  auxF32Buf: GPUBuffer | null;
+  indicatorsBuf: GPUBuffer | null;
+  bondStoreBuf: GPUBuffer | null;
 
   // --- pipelines ---
   behaviourPipeline: GPUComputePipeline;
@@ -117,10 +130,10 @@ function aliveBytes(layout: AgentWebGPULayout): number { return Math.max(4, layo
 function hashBytes(layout: AgentWebGPULayout): number { return Math.max(4, Math.max(1, layout.hashLen) * 4); }
 function rngBytes(layout: AgentWebGPULayout): number { return Math.max(4, layout.maxAgents * 4); }
 function colorsBytes(layout: AgentWebGPULayout): number { return Math.max(4, layout.maxAgents * 4); }
-// Control: 6×u32 + 4×f32 = 40 → round to 16-byte alignment (48). ForceControl:
+// Control: 8×u32 + 6×f32 = 56 → round to 16-byte alignment (64). ForceControl:
 // 6×u32 + 11×f32 = 68 → round to 80. WebGPU requires uniform-struct size be a
 // multiple of 16; over-allocating to the next 16 is safe.
-const CONTROL_BYTES = 48;
+const CONTROL_BYTES = 64;
 const FORCE_CONTROL_BYTES = 80;
 
 // ---------------------------------------------------------------------------
@@ -135,6 +148,7 @@ export async function createAgentWebGPURuntime(
   behaviourShader: string,
   forceShader: string,
   layout: AgentWebGPULayout,
+  usesI32Write = false,
 ): Promise<AgentWebGPURuntime> {
   if (!isWebGPUAvailable()) throw new Error('navigator.gpu is unavailable in this context');
   const gpu = (navigator as Navigator & { gpu: GPU }).gpu;
@@ -178,7 +192,8 @@ export async function createAgentWebGPURuntime(
   const UNIFORM = GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST;
 
   const agentF32Buf = mk('agentF32', f32Bytes(layout), STORAGE);
-  const agentI32Buf = mk('agentI32', i32Bytes(layout), STORAGE_RO);
+  // agentI32 needs COPY_SRC (readback) + read_write storage when setAgentType writes it.
+  const agentI32Buf = mk('agentI32', i32Bytes(layout), usesI32Write ? STORAGE : STORAGE_RO);
   const agentAliveBuf = mk('agentAlive', aliveBytes(layout), STORAGE_RO);
   const hashBinsBuf = mk('agentHashBins', hashBytes(layout), STORAGE_RO);
   const controlBuf = mk('agentControl', CONTROL_BYTES, UNIFORM);
@@ -190,12 +205,22 @@ export async function createAgentWebGPURuntime(
   const hasFieldWrite = layout.fieldWriteLen > 0;
   const fieldReadBuf = hasFieldRead ? mk('agentFieldRead', Math.max(4, layout.fieldReadLen * 4), STORAGE_RO) : null;
   const fieldDepositBuf = hasFieldWrite ? mk('agentFieldDeposit', Math.max(4, layout.fieldWriteLen * 4), STORAGE) : null;
+  // Universal-node bindings — created only when their region is non-empty (so a
+  // Boids model with none keeps the byte-identical bind-group layout).
+  const hasAux = layout.auxF32Len > 0;
+  const hasIndicators = layout.indicatorCount > 0;
+  const hasBondStore = layout.bondStoreLen > 0;
+  const auxF32Buf = hasAux ? mk('agentAuxF32', Math.max(4, layout.auxF32Len * 4), STORAGE_RO) : null;
+  const indicatorsBuf = hasIndicators ? mk('agentIndicators', Math.max(4, layout.indicatorCount * 4), STORAGE) : null;
+  const bondStoreBuf = hasBondStore ? mk('agentBondStore', Math.max(4, layout.bondStoreLen * 4), STORAGE_RO) : null;
+  // agentI32 is read_write only when the shader writes it (setAgentType).
+  const i32WritesI32 = !!usesI32Write;
 
-  // --- behaviour pipeline (7 base bindings + the conditional field bridge
-  //     bindings 7 (fieldRead) / 8 (fieldDeposit, atomic)) ---
+  // --- behaviour pipeline (7 base bindings + the conditional field/universal
+  //     bindings 7..11) ---
   const behaviourEntries: GPUBindGroupLayoutEntry[] = [
     { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
-    { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+    { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: i32WritesI32 ? 'storage' : 'read-only-storage' } },
     { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
     { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
     { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
@@ -204,6 +229,9 @@ export async function createAgentWebGPURuntime(
   ];
   if (fieldReadBuf) behaviourEntries.push({ binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
   if (fieldDepositBuf) behaviourEntries.push({ binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
+  if (auxF32Buf) behaviourEntries.push({ binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
+  if (indicatorsBuf) behaviourEntries.push({ binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
+  if (bondStoreBuf) behaviourEntries.push({ binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } });
   const behaviourBGL = device.createBindGroupLayout({ label: 'agent-behaviour-bgl', entries: behaviourEntries });
   const behaviourPL = device.createPipelineLayout({ label: 'agent-behaviour-pl', bindGroupLayouts: [behaviourBGL] });
   const behaviourPipeline = await device.createComputePipelineAsync({
@@ -221,6 +249,9 @@ export async function createAgentWebGPURuntime(
   ];
   if (fieldReadBuf) behaviourBgEntries.push({ binding: 7, resource: { buffer: fieldReadBuf } });
   if (fieldDepositBuf) behaviourBgEntries.push({ binding: 8, resource: { buffer: fieldDepositBuf } });
+  if (auxF32Buf) behaviourBgEntries.push({ binding: 9, resource: { buffer: auxF32Buf } });
+  if (indicatorsBuf) behaviourBgEntries.push({ binding: 10, resource: { buffer: indicatorsBuf } });
+  if (bondStoreBuf) behaviourBgEntries.push({ binding: 11, resource: { buffer: bondStoreBuf } });
   const behaviourBindGroup = device.createBindGroup({
     label: 'agent-behaviour-bg', layout: behaviourBGL, entries: behaviourBgEntries,
   });
@@ -251,10 +282,11 @@ export async function createAgentWebGPURuntime(
   });
 
   const rt: AgentWebGPURuntime = {
-    device, adapter, layout, ready: true,
+    device, adapter, layout, ready: true, usesI32Write: i32WritesI32,
     agentF32Buf, agentI32Buf, agentAliveBuf, hashBinsBuf,
     controlBuf, rngStateBuf, agentColorsBuf, forceControlBuf,
     fieldReadBuf, fieldDepositBuf,
+    auxF32Buf, indicatorsBuf, bondStoreBuf,
     behaviourPipeline, forcePipeline, behaviourBindGroup, forceBindGroup,
     stagingPool: new Map(),
     f32Upload: new Float32Array(layout.f32Len),
@@ -284,16 +316,23 @@ export function uploadAgentSoA(rt: AgentWebGPURuntime, s: AgentStore): void {
   const L = rt.layout, ma = L.maxAgents, hw = s.highWater;
   const f = rt.f32Upload, ix = rt.i32Upload, al = rt.aliveUpload;
   // f32 fields — map the CPU store array → the strided run at f32Base[field].
+  // The 3D z fields are present in the layout (and the store) only when gridDepth>1.
   const f32Src: Record<string, Float64Array> = {
     x: s.x, y: s.y, vx: s.vx, vy: s.vy, radius: s.radius, targetRadius: s.targetRadius,
     age: s.age, forceX: s.forceX, forceY: s.forceY, density: s.density,
     xNext: s.xNext, yNext: s.yNext,
+    z: s.z, vz: s.vz, forceZ: s.forceZ, zNext: s.zNext,
   };
-  for (const field of AGENT_GPU_F32_FIELDS) {
-    const base = L.f32Base[field]!;
-    // The structural-request runs (G4) are uploaded as 0 — a fresh request slate
-    // each step (the behaviour shader sets the flag, the worker reads it back).
-    if (REQUEST_FIELD_SET.has(field)) { for (let i = 0; i < ma; i++) f[base + i] = 0; continue; }
+  const f32Fields: readonly string[] = L.gridDepth > 1
+    ? [...AGENT_GPU_F32_FIELDS, ...AGENT_GPU_F32_FIELDS_3D]
+    : AGENT_GPU_F32_FIELDS;
+  for (const field of f32Fields) {
+    const base = L.f32Base[field];
+    if (base === undefined) continue;
+    // The structural-request runs (G4 — incl. the 3D divideAxisZ) are uploaded as
+    // 0 — a fresh request slate each step (the shader sets the flag, the worker
+    // reads it back). divideAxisZ has no CPU source array here, so it falls through.
+    if (REQUEST_FIELD_SET.has(field) || field === 'divideAxisZ') { for (let i = 0; i < ma; i++) f[base + i] = 0; continue; }
     const src = f32Src[field];
     if (!src) continue;
     for (let i = 0; i < hw; i++) f[base + i] = src[i]!;
@@ -367,14 +406,18 @@ export function uploadAgentHash(
   return true;
 }
 
-/** Write the behaviour Control uniform (highWater + hash dims + world bounds). */
+/** Write the behaviour Control uniform (highWater + hash dims + world bounds +
+ *  bond capacity + the 3D hash/field extents). Field order MIRRORS
+ *  `emitControlStruct` in compile.ts. */
 export function uploadAgentControl(
   rt: AgentWebGPURuntime,
   p: { highWater: number; hashValid: number; nBinsX: number; nBinsY: number;
-       fieldTorus: number; binSizeX: number; binSizeY: number; fieldW: number; fieldH: number },
+       fieldTorus: number; binSizeX: number; binSizeY: number; fieldW: number; fieldH: number;
+       nBinsZ?: number; binSizeZ?: number; fieldD?: number },
 ): void {
   // struct Control { highWater:u32, maxAgents:u32, hashValid:u32, nBinsX:u32,
-  //   nBinsY:u32, fieldTorus:u32, binSizeX:f32, binSizeY:f32, fieldW:f32, fieldH:f32 }
+  //   nBinsY:u32, fieldTorus:u32, binSizeX:f32, binSizeY:f32, fieldW:f32, fieldH:f32,
+  //   maxBonds:u32, nBinsZ:u32, binSizeZ:f32, fieldD:f32 }
   const ab = new ArrayBuffer(CONTROL_BYTES);
   const u = new Uint32Array(ab), fl = new Float32Array(ab);
   u[0] = p.highWater >>> 0;
@@ -387,7 +430,109 @@ export function uploadAgentControl(
   fl[7] = p.binSizeY;
   fl[8] = p.fieldW;
   fl[9] = p.fieldH;
+  u[10] = (rt.layout.maxBonds >>> 0);
+  u[11] = (p.nBinsZ ?? 1) >>> 0;
+  fl[12] = p.binSizeZ ?? 1;
+  fl[13] = p.fieldD ?? 1;
   rt.device.queue.writeBuffer(rt.controlBuf, 0, ab);
+}
+
+/** Upload the model attributes + lookup tables into the auxF32 buffer (the upload
+ *  order MUST match the layout's `modelAttrKeys` then `lookupTableIds`). `attrs` is
+ *  the worker's `cachedModelAttrs` (keys = scalar id / `<id>_r|_g|_b`); `tables` is
+ *  per-table row-major f32 data keyed by table id. No-op without an aux buffer. */
+export function uploadAgentAux(
+  rt: AgentWebGPURuntime,
+  attrs: Record<string, number>,
+  tables: Record<string, ArrayLike<number>>,
+): void {
+  const L = rt.layout;
+  if (!rt.auxF32Buf || L.auxF32Len === 0) return;
+  const f = new Float32Array(L.auxF32Len);
+  for (const key of L.modelAttrKeys) {
+    const off = L.modelAttrSlot[key];
+    if (off === undefined) continue;
+    const v = attrs[key];
+    f[off] = typeof v === 'number' ? v : 0;
+  }
+  for (const id of L.lookupTableIds) {
+    const tl = L.lookupTables[id];
+    if (!tl) continue;
+    const data = tables[id];
+    const n = tl.rowCount * tl.colCount;
+    for (let i = 0; i < n; i++) f[tl.base + i] = data ? (data[i] ?? 0) : 0;
+  }
+  rt.device.queue.writeBuffer(rt.auxF32Buf, 0, f.buffer, f.byteOffset, f.byteLength);
+}
+
+/** Upload the standalone-indicator values into the indicators atomic buffer
+ *  (int/tag → bitcast<i32>; everything else → bitcast<f32>). `vals[slot]` is the
+ *  per-slot value (the SAME order the compiler resolved `_indicatorIdx`); `isInt`
+ *  flags the int/tag slots. No-op without an indicators buffer. */
+export function uploadAgentIndicators(
+  rt: AgentWebGPURuntime,
+  vals: Float64Array | number[],
+  isInt: boolean[],
+): void {
+  const L = rt.layout;
+  if (!rt.indicatorsBuf || L.indicatorCount === 0) return;
+  const u = new Uint32Array(L.indicatorCount);
+  const fbuf = new Float32Array(1), fview = new Uint32Array(fbuf.buffer);
+  for (let i = 0; i < L.indicatorCount; i++) {
+    const v = (vals[i] ?? 0) as number;
+    if (isInt[i]) u[i] = (Math.round(v) | 0) >>> 0;
+    else { fbuf[0] = v; u[i] = fview[0]!; }
+  }
+  rt.device.queue.writeBuffer(rt.indicatorsBuf, 0, u.buffer, u.byteOffset, u.byteLength);
+}
+
+/** Read the standalone-indicator atomic buffer back into `out[slot]` (decoded per
+ *  the `isInt` flag). No-op without an indicators buffer. */
+export async function readbackAgentIndicators(
+  rt: AgentWebGPURuntime,
+  out: Float64Array | number[],
+  isInt: boolean[],
+): Promise<void> {
+  const L = rt.layout;
+  if (!rt.indicatorsBuf || L.indicatorCount === 0) return;
+  const byteLen = Math.max(4, L.indicatorCount * 4);
+  const pooled = acquireStaging(rt, byteLen);
+  const staging = pooled.buffer;
+  const enc = rt.device.createCommandEncoder({ label: 'agent-ind-readback-enc' });
+  enc.copyBufferToBuffer(rt.indicatorsBuf, 0, staging, 0, byteLen);
+  rt.device.queue.submit([enc.finish()]);
+  await staging.mapAsync(GPUMapMode.READ, 0, byteLen);
+  const u = new Uint32Array(staging.getMappedRange(0, byteLen));
+  const ibuf = new Int32Array(1), iview = new Uint32Array(ibuf.buffer);
+  const fbuf = new Float32Array(1), fview = new Uint32Array(fbuf.buffer);
+  for (let i = 0; i < L.indicatorCount; i++) {
+    if (isInt[i]) { iview[0] = u[i]!; out[i] = ibuf[0]!; }
+    else { fview[0] = u[i]!; out[i] = fbuf[0]!; }
+  }
+  staging.unmap();
+  pooled.inUse = false;
+}
+
+/** Upload the ragged bond store (interleaved [partnerId, restLengthBits] per slot,
+ *  stride `maxBonds·2`). `s` is the CPU AgentStore (its parallel bondPartner /
+ *  bondRestLength arrays at stride `maxBonds`). No-op without a bond store. */
+export function uploadAgentBondStore(rt: AgentWebGPURuntime, s: AgentStore): void {
+  const L = rt.layout, mb = L.maxBonds;
+  if (!rt.bondStoreBuf || L.bondStoreLen === 0 || mb === 0) return;
+  const out = new Int32Array(L.bondStoreLen);
+  const rb = new Float32Array(1), rv = new Int32Array(rb.buffer);
+  const partner = s.bondPartner, rest = s.bondRestLength;
+  const sStride = s.maxBonds; // the CPU store stride (== mb, but read it explicitly)
+  const hw = s.highWater;
+  const cap = Math.min(mb, sStride);
+  for (let i = 0; i < hw; i++) {
+    const sBase = i * sStride, gBase = i * mb * 2;
+    for (let k = 0; k < cap; k++) {
+      out[gBase + k * 2] = partner[sBase + k]!;
+      rb[0] = rest[sBase + k]!; out[gBase + k * 2 + 1] = rv[0]!;
+    }
+  }
+  rt.device.queue.writeBuffer(rt.bondStoreBuf, 0, out.buffer, out.byteOffset, out.byteLength);
 }
 
 /** Write the force-pass ForceControl uniform. Field order MIRRORS
@@ -415,6 +560,9 @@ export function uploadAgentForceControl(rt: AgentWebGPURuntime, highWater: numbe
   fl[14] = fp.growthRate;
   fl[15] = fp.fieldW;
   fl[16] = fp.fieldH;
+  u[17] = (fp.nBinsZ ?? 1) >>> 0;
+  fl[18] = fp.binSizeZ ?? 1;
+  fl[19] = fp.fieldD ?? 1;
   rt.device.queue.writeBuffer(rt.forceControlBuf, 0, ab);
 }
 
@@ -552,21 +700,29 @@ export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): 
   const L = rt.layout, hw = s.highWater;
   const f32ByteLen = f32Bytes(L);
   const colByteLen = colorsBytes(L);
+  const wantI32 = rt.usesI32Write;
+  const i32ByteLen = i32Bytes(L);
   const pooledF = acquireStaging(rt, f32ByteLen);
   const stagingF = pooledF.buffer;
   const pooledC = acquireStaging(rt, colByteLen);
   const stagingC = pooledC.buffer;
+  const pooledI = wantI32 ? acquireStaging(rt, i32ByteLen) : null;
   const enc = rt.device.createCommandEncoder({ label: 'agent-readback-enc' });
   enc.copyBufferToBuffer(rt.agentF32Buf, 0, stagingF, 0, f32ByteLen);
   enc.copyBufferToBuffer(rt.agentColorsBuf, 0, stagingC, 0, colByteLen);
+  if (pooledI) enc.copyBufferToBuffer(rt.agentI32Buf, 0, pooledI.buffer, 0, i32ByteLen);
   rt.device.queue.submit([enc.finish()]);
   await stagingF.mapAsync(GPUMapMode.READ, 0, f32ByteLen);
   await stagingC.mapAsync(GPUMapMode.READ, 0, colByteLen);
+  if (pooledI) await pooledI.buffer.mapAsync(GPUMapMode.READ, 0, i32ByteLen);
   const f = new Float32Array(stagingF.getMappedRange(0, f32ByteLen));
   const col = new Uint32Array(stagingC.getMappedRange(0, colByteLen));
   const xB = L.f32Base['xNext']!, yB = L.f32Base['yNext']!;
   const vxB = L.f32Base['vx']!, vyB = L.f32Base['vy']!;
   const radB = L.f32Base['radius']!, denB = L.f32Base['density']!, ageB = L.f32Base['age']!;
+  // 3D z fields (present only when gridDepth>1).
+  const is3d = L.gridDepth > 1;
+  const zB = is3d ? L.f32Base['zNext']! : -1, vzB = is3d ? L.f32Base['vz']! : -1;
   // Structural-request bases (G4) — match AGENT_GPU_REQUEST_FIELDS / the emitters.
   const drB = L.f32Base['divideRequest']!, daxB = L.f32Base['divideAxisX']!, dayB = L.f32Base['divideAxisY']!;
   const dasymB = L.f32Base['divideAsym']!, bfrB = L.f32Base['bondFormReq']!, bflB = L.f32Base['bondFormL']!;
@@ -576,6 +732,7 @@ export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): 
     s.x[i] = f[xB + i]!; s.y[i] = f[yB + i]!;
     s.xNext[i] = f[xB + i]!; s.yNext[i] = f[yB + i]!;
     s.vx[i] = f[vxB + i]!; s.vy[i] = f[vyB + i]!;
+    if (is3d) { s.z[i] = f[zB + i]!; s.zNext[i] = f[zB + i]!; s.vz[i] = f[vzB + i]!; }
     s.radius[i] = f[radB + i]!;
     s.density[i] = f[denB + i]!;
     s.age[i] = f[ageB + i]!;
@@ -600,6 +757,13 @@ export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): 
     const isInt = s.attrKind[id] !== 'float64';
     for (let i = 0; i < hw; i++) { if (!s.alive[i]) continue; dst[i] = isInt ? Math.round(f[base + i]!) : f[base + i]!; }
   }
+  // i32 type (setAgentType) → the CPU store (the worker reads it next step).
+  if (pooledI) {
+    const ix = new Int32Array(pooledI.buffer.getMappedRange(0, i32ByteLen));
+    const typeB = L.i32Base['type']!;
+    for (let i = 0; i < hw; i++) { if (!s.alive[i]) continue; s.type[i] = ix[typeB + i]!; }
+    pooledI.buffer.unmap(); pooledI.inUse = false;
+  }
   stagingF.unmap(); stagingC.unmap();
   pooledF.inUse = false; pooledC.inUse = false;
 }
@@ -614,6 +778,7 @@ export function destroyAgentWebGPURuntime(rt: AgentWebGPURuntime | null): void {
     rt.agentF32Buf, rt.agentI32Buf, rt.agentAliveBuf, rt.hashBinsBuf,
     rt.controlBuf, rt.rngStateBuf, rt.agentColorsBuf, rt.forceControlBuf,
     rt.fieldReadBuf, rt.fieldDepositBuf,
+    rt.auxF32Buf, rt.indicatorsBuf, rt.bondStoreBuf,
   ];
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
   for (const bucket of rt.stagingPool.values()) for (const e of bucket) { try { e.buffer.destroy(); } catch { /* non-fatal */ } }
