@@ -33,11 +33,12 @@ import {
   type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec, type SpatialHash,
 } from './agentEngine';
 import { instantiateAgentWasm } from '../../modeler/vpl/compiler/agentWasm/compile';
-import { computeAgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/layout';
+import { computeAgentWebGPULayout, type AgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/layout';
 import {
   createAgentWebGPURuntime, destroyAgentWebGPURuntime, uploadAgentSoA, uploadAgentHash,
   uploadAgentControl, uploadAgentForceControl, dispatchAgentStep, readbackAgentStep,
   uploadAgentField, readbackAgentField,
+  uploadAgentAux, uploadAgentIndicators, readbackAgentIndicators, uploadAgentBondStore,
   type AgentWebGPURuntime, type FieldArray,
 } from './agentWebgpuRuntime';
 
@@ -204,6 +205,16 @@ interface InitMsg {
    *  compiled shaders. */
   agentWebgpuMaxAgents?: number;
   agentWebgpuMaxHashBins?: number;
+  /** The FULL GPU agent layout the shaders compiled against (carries the
+   *  universal-node region bases — auxF32 / indicators / bondStore / 3D z fields).
+   *  The worker binds + uploads against this EXACT layout (no recompute mismatch). */
+  agentWebgpuLayout?: AgentWebGPULayout;
+  /** True when the behaviour writes the i32 SoA (setAgentType) → the runtime binds
+   *  agentI32 read_write + reads the type run back. */
+  agentWebgpuUsesI32Write?: boolean;
+  /** Which universal bindings the shader actually declares (so the runtime binds
+   *  matching entries — a declared-but-unused global is stripped → bind mismatch). */
+  agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean };
 }
 
 interface StepMsg { type: 'step'; count: number; activeViewer: string; skipColorPass?: boolean }
@@ -231,7 +242,7 @@ interface PaintManualMsg {
 }
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -524,6 +535,9 @@ let pendingAgentWebgpuBehaviour: string | null = null;
 let pendingAgentWebgpuForce: string | null = null;
 let pendingAgentWebgpuMaxAgents = 0;
 let pendingAgentWebgpuMaxHashBins = 0;
+let pendingAgentWebgpuLayout: AgentWebGPULayout | null = null;
+let pendingAgentWebgpuUsesI32Write = false;
+let pendingAgentWebgpuUsage: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } = {};
 /** Warn once when the per-step hash overflows the GPU reserve (step runs on JS). */
 let agentWebgpuHashOverflowWarned = false;
 /** A monotonic build token: only the most-recent async runtime build commits (an
@@ -722,16 +736,21 @@ function buildAgentWebGPUIfNeeded(): void {
   // G4 — the user AGENT attribute ids (the agent SoA runs Get/Set Attribute target).
   // MUST match the order the SHADER compiled against (agentAttrsOf = store.attrSpecs).
   const agentAttrIds = store.attrSpecs.map(sp => sp.id);
-  const layout = computeAgentWebGPULayout(
+  // Prefer the FULL layout shipped from SimulatorView (it carries the universal-node
+  // region bases the shader compiled to — auxF32 / indicators / bondStore / 3D z
+  // fields). Fall back to a recompute (legacy path) if it's absent.
+  const layout = pendingAgentWebgpuLayout ?? computeAgentWebGPULayout(
     pendingAgentWebgpuMaxAgents || store.maxAgents, pendingAgentWebgpuMaxHashBins,
     { readAttrs: fieldReadAttrs, writeAttrs: fieldWriteAttrs, gridWidth: width, gridHeight: height },
     agentAttrIds,
   );
+  const i32Write = pendingAgentWebgpuUsesI32Write;
+  const usage = pendingAgentWebgpuUsage;
   const token = ++agentWebgpuBuildToken;
   agentWebgpuHashOverflowWarned = false;
   void (async () => {
     try {
-      const rt = await createAgentWebGPURuntime(behaviour, force, layout);
+      const rt = await createAgentWebGPURuntime(behaviour, force, layout, i32Write, usage);
       // Guard against a re-init that swapped the store / changed the target /
       // launched a newer build while this one was in flight.
       if (agentStore === store && agentTarget === 'webgpu' && token === agentWebgpuBuildToken) {
@@ -1397,6 +1416,13 @@ function runAgentStep(): void {
  *  the JS `runAgentStep()` for this step). The force pass + bond springs + the
  *  hash BUILD stay CPU-mirror with the JS path; the gate keeps bonds/division out
  *  of WebGPU-target graphs so the GPU force pass is exact for those models. */
+/** Per-indicator-slot int/tag flag (the same order the compiler resolved
+ *  `_indicatorIdx` = the index into `indicatorsList`). int/tag standalone
+ *  indicators are bitcast<i32>; everything else bitcast<f32>. */
+function agentWebgpuIndicatorIsInt(): boolean[] {
+  return indicatorsList.map(ind => ind.kind === 'standalone' && (ind.dataType === 'integer' || ind.dataType === 'tag'));
+}
+
 async function runAgentStepWebGPU(): Promise<boolean> {
   const s = agentStore;
   const rt = agentWebgpuRuntime;
@@ -1442,6 +1468,20 @@ async function runAgentStepWebGPU(): Promise<boolean> {
     return false;
   }
   uploadAgentSoA(rt, s);
+  // Universal-node uploads (Generic Agent Platform) — present only when the layout
+  // reserved their region (a no-extra Boids model uploads none).
+  if (rt.layout.auxF32Len > 0) {
+    const tables: Record<string, ArrayLike<number>> = {};
+    for (const id of rt.layout.lookupTableIds) {
+      const t = cachedInteractionTables[id];
+      if (t) tables[id] = t;
+    }
+    uploadAgentAux(rt, cachedModelAttrs as Record<string, number>, tables);
+  }
+  if (rt.layout.indicatorCount > 0) {
+    uploadAgentIndicators(rt, cachedIndicators, agentWebgpuIndicatorIsInt());
+  }
+  if (rt.layout.bondStoreLen > 0) uploadAgentBondStore(rt, s);
   // The agent world IS the grid coordinate frame 1:1, so fieldW/fieldH double as
   // BOTH the world bounds (getNearbyAgents / getAgentOffset torus wrap) AND the
   // field grid dims (the field index = row·fieldW + col). W===width, H===height.
@@ -1450,12 +1490,14 @@ async function runAgentStepWebGPU(): Promise<boolean> {
     fieldTorus: torus ? 1 : 0,
     binSizeX: hash ? hash.binSizeX : 1, binSizeY: hash ? hash.binSizeY : 1,
     fieldW: W, fieldH: H,
+    nBinsZ: hash ? hash.nBinsZ : 1, binSizeZ: hash ? hash.binSizeZ : 1, fieldD: s.worldDepth,
   });
   uploadAgentForceControl(rt, hw, {
     hashValid, nBinsX: hash ? hash.nBinsX : 0, nBinsY: hash ? hash.nBinsY : 0,
     binSizeX: hash ? hash.binSizeX : 1, binSizeY: hash ? hash.binSizeY : 1,
     dtOverEta: dt / eta, muR, muA, range, momentum, maxSpeed, growthRate,
     fieldW: W, fieldH: H, bonding: bonding ? 1 : 0, torus: torus ? 1 : 0,
+    nBinsZ: hash ? hash.nBinsZ : 1, binSizeZ: hash ? hash.binSizeZ : 1, fieldD: s.worldDepth,
   });
 
   // G5 field bridge — upload the cell field snapshot + prime the atomic deposit
@@ -1486,6 +1528,13 @@ async function runAgentStepWebGPU(): Promise<boolean> {
     dispatchAgentStep(rt, hw);
     await readbackAgentStep(rt, s);   // x/y (from xNext/yNext) + vx/vy/radius/density/age + attrs→attrWrite + requests + colours
     swapAgentAttrs(s);
+    if (rt.layout.indicatorCount > 0) {
+      // The behaviour shader mutated the indicators atomic buffer (Set/Update
+      // Indicator) — read them back into cachedIndicators so the sendColors path
+      // ships the new values (the agent indicators ride the same buffer the cell
+      // step uses; here the GPU owns them for the agent step).
+      await readbackAgentIndicators(rt, cachedIndicators, agentWebgpuIndicatorIsInt());
+    }
     if (hasFieldBridge && rt.layout.fieldWriteLen > 0) {
       // The deposit accumulator holds the evolved field → copy into readAttrs so
       // the cell step (runStep) reads it (its w.set(r) carries it; diffusion spreads).
@@ -3888,6 +3937,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       pendingAgentWebgpuForce = msg.agentWebgpuForceShader ?? null;
       pendingAgentWebgpuMaxAgents = msg.agentWebgpuMaxAgents ?? 0;
       pendingAgentWebgpuMaxHashBins = msg.agentWebgpuMaxHashBins ?? 0;
+      pendingAgentWebgpuLayout = msg.agentWebgpuLayout ?? null;
+      pendingAgentWebgpuUsesI32Write = msg.agentWebgpuUsesI32Write ?? false;
+      pendingAgentWebgpuUsage = msg.agentWebgpuUsage ?? {};
       initAgents();
       compileAgentFns(msg.agentBehaviourCode, msg.agentInitCode, msg.agentDivisionCode);
       instantiateAgentWasmIfNeeded();
@@ -4396,6 +4448,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         pendingAgentWebgpuForce = rc.agentWebgpuForceShader ?? null;
         pendingAgentWebgpuMaxAgents = rc.agentWebgpuMaxAgents ?? 0;
         pendingAgentWebgpuMaxHashBins = rc.agentWebgpuMaxHashBins ?? 0;
+        pendingAgentWebgpuLayout = rc.agentWebgpuLayout ?? null;
+        pendingAgentWebgpuUsesI32Write = rc.agentWebgpuUsesI32Write ?? false;
+        pendingAgentWebgpuUsage = rc.agentWebgpuUsage ?? {};
         const backingChanged = (newTarget === 'wasm') !== (agentStore?.wasmBacked ?? false) && !agentWasmBackedDev;
         agentTarget = newTarget;
         if (agentsEnabled && backingChanged) { initAgents(); runAgentInit(); runAgentColorPass(); }

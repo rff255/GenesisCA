@@ -1157,12 +1157,16 @@ export function HelpView() {
             are set in <strong>Properties &rarr; Bond-Graph Agents</strong>, <em>independently of
             the grid&rsquo;s</em> &mdash; so you can run a synchronous grid rule with asynchronous
             agents, and vice versa. <strong>Compile Target:</strong> <strong>JavaScript</strong>
-            (full node coverage) or <strong>WebAssembly</strong> (for the supported node subset;
-            falls back to JS otherwise); WebGPU agents are coming. <strong>Update Mode:</strong>
+            (full node coverage), <strong>WebAssembly</strong> (for the supported node subset;
+            falls back to JS otherwise), or <strong>WebGPU</strong> (the whole agent-node
+            catalogue runs on the GPU &mdash; Boids 2D/3D, flocking, chemotaxis via the field
+            bridge, growing/dividing tissue, even Game of Life on agents; only a few
+            order-dependent or glyph operations fall back to JS, and statistical &mdash; not
+            bit-exact &mdash; parity applies as on the grid). <strong>Update Mode:</strong>
             <strong> Asynchronous</strong> (default &mdash; a <em>Set Agent Attribute</em> to a
             neighbour is immediately visible to a later agent this step) or <strong>Synchronous</strong>
             (every agent reads the previous step; attribute writes are swapped in at the step&rsquo;s
-            end &mdash; the snapshot/parallel semantics the GPU path will need). Positions are
+            end &mdash; the snapshot/parallel semantics the GPU path uses). Positions are
             snapshot-integrated in both modes.
           </p>
           <h3 className={styles.h3}>Enabling Agents</h3>

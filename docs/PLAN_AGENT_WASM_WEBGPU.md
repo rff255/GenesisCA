@@ -310,10 +310,53 @@ Execute the handoff **PR7** as written. Summary (full spec in the handoff §2 PR
   (the running preview serves the main repo, not this worktree; no headless WebGPU
   in Node) — a browser smoke (load Tissue on `agentTarget:'webgpu'`, Play, confirm
   the count rises + maturity differentiates) is the one remaining check.
-- **PR7c** (zero-copy / atomics) — STILL DEFERRED. What remains for full WebGPU
-  agent coverage: the agent-array tier (getAgentsAttribute/filter/join/picks),
-  getAgentAttribute (a SPECIFIC agent's attr by id), 3D agents, and the per-agent
-  glyph buffers (a glyph setCellLooks clamps to JS).
+- **WHOLE-TARGET PORT — DONE + GPU-live-verified (the full-coverage push).** The
+  WebGPU agent compiler now accepts **71** node types — the FULL agent-graph
+  catalogue minus the genuine fundamentals. Added (over G1-G5): the rest of the
+  agent-array tier (`getBondedAgents` + the existing filter/join/picks), `getCurvature`,
+  `forEachBond`, the agent setters (`setVelocity`/`setAgentAttribute`/
+  `setAgentsAttribute`/`setAgentPosition`/`setAgentRadius`/`setAgentType`),
+  `updateAttribute`, the **universal** value/flow nodes (`groupOperator`
+  [sum/product/min/max/avg/count/weightedRandom], `groupCounting`, `groupStatement`,
+  `switch`, `loop`, `valueSwitch`, `getModelAttribute`, `lookupInteraction`,
+  `proportionMap`, `interpolation`, `colorScale`, `getColorConstant`, `arrayElement`,
+  `arrayLength`, `getConstant` tag, `getIndicator`/`setIndicator`/`updateIndicator`
+  [atomics]), **array Local Variables** + `setArrayElement`, and **3D agents** (the
+  z fields + 3×3×3 hash stencil + 3D force pass + dz torus fold + z velocity, gated
+  on `gridDepth>1`; the 2D path stays byte-identical). New conditional GPU bindings:
+  `auxF32` (9, model attrs + lookup tables), `indicators` (10, atomic), `bondStore`
+  (11, interleaved `[partner, restBits]`) + agentI32 made read_write for
+  `setAgentType` — each DECLARED + bound ONLY when an emitter references it (a
+  declared-but-unused storage global is stripped by Naga → bind-group mismatch). A
+  `preEmitAgentValues` pass hoists the PURE value cone to function-top (cross-branch
+  WGSL scoping). The `emitLogic` OR→AND case-mismatch bug (the GoL all-die) is fixed.
+  **The FINAL `isAgentGraphWebGPUSupported` reject set — only the documented fundamentals:**
+  (1) `aggregate`/`groupOperator` `median` + uniform `random` (no sort / per-cell
+  pick path — same as the lattice WebGPU grid; `weightedRandom` IS supported);
+  (2) `updateIndicator` `toggle`/`next`/`previous` (order-dependent under parallel
+  writers — same as the grid); (3) a GLYPH `setCellLooks` (no per-agent glyph
+  buffers in the GPU SoA — the documented carve-out); (4) the **field nodes in 3D**
+  (the trilinear sample/deposit path is not yet ported — 2D field bridge works, a
+  documented follow-up); (5) > 6 agent-array producers (the per-thread `var<function>`
+  register budget). The orientation/variegation nodes never reach the Agents graph
+  (variegation is grid-only); `stopEvent` on the agent behaviour stays deferred (it
+  needs a GPU stopFlag round-trip + the `_stopIdx` offset — matching the WASM agent
+  path, which also lacks it; no sample uses it). **GPU-LIVE-verified in the browser**
+  (real `device.createShaderModule` + the running worker on `agentTarget:'webgpu'`,
+  0 worker errors, NO JS fallback): **Boids 2D** flocks (polarization 0.999); **3D
+  Boids** flocks (3D pol 0.023→0.982, z positions span the volume); **Chemotaxis**
+  aggregates (occupied bins 174→106, sum-of-squares 318→670 ≈ 2× clustering via the
+  field bridge); **GoL-on-agents** evolves like Conway (344→155→107 alive,
+  stabilising into still-lifes/blinkers — the OR-bug fix); **Tissue** grows
+  5→274 agents / 745 bonds with maturity differentiation (7 distinct colours,
+  self-limiting); **Ant Necrophoresis** runs 0-error and matches the JS baseline.
+  Lattice grid (2D+3D, all 3 targets) + JS/WASM-agent byte-identity by construction
+  (`git diff --stat` touches ONLY `agentWebgpu/{compile,forcePass,layout}.ts` +
+  `agentWebgpuRuntime.ts` + the SimulatorView/worker agent-webgpu wiring — no lattice
+  or JS/WASM-agent compiler).
+- **PR7c** (zero-copy / atomics) — STILL DEFERRED (a perf optimisation, not a
+  coverage gap). Remaining coverage gaps: the 3D field bridge (trilinear) + the
+  per-agent glyph buffers (both documented above).
 
 ### Scale benchmark (the headline number) — JS vs WASM, force integrator
 
