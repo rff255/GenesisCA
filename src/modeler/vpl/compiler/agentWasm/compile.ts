@@ -2573,7 +2573,8 @@ function emitTorusDeltaFold(ctx: AgentWasmCtx, dL: number, halfL: number, pushFu
     em.ifThenElse(
       () => { em.localGet(dL); pushFull(); em.op(OP_F64_SUB); em.localSet(dL); },
       () => {
-        em.localGet(dL); em.localGet(halfL); em.f64Const(0); em.op(OP_F64_SUB); em.op(OP_F64_LT); // d < -half
+        // d < -half  →  push d, then (0 - half) [f64.sub is a-b, so 0,half → -half], then LT
+        em.localGet(dL); em.f64Const(0); em.localGet(halfL); em.op(OP_F64_SUB); em.op(OP_F64_LT);
         em.ifThen(() => { em.localGet(dL); pushFull(); em.op(OP_F64_ADD); em.localSet(dL); });
       },
     );
@@ -2669,25 +2670,39 @@ function emitSampleFieldAt(ctx: AgentWasmCtx, fieldId: string, pushPX: () => voi
   const omty = em.allocLocal(F64); em.f64Const(1); em.localGet(ty); em.op(OP_F64_SUB); em.localSet(omty);
 
   if (ctx.is3d && pushPZ) {
-    // 3D: 8-corner trilinear sample. Each corner = f[idx]*wx*wy*wz; sum all 8.
+    // 3D: 8-corner trilinear sample via the SAME NESTED lerp the JS node uses
+    // (SampleFieldNode 3D): c00..c11 = lerp_x; c0/c1 = lerp_y; result = lerp_z.
+    // (NB: a flat Σ c·wx·wy·wz is mathematically equal but NOT bit-identical to
+    // the nested form — JS rounds the nested lerps; matching it keeps bit-parity.)
     const fz = em.allocLocal(F64); pushPZ(); em.localSet(fz);
     const z0 = em.allocLocal(I32); em.localGet(fz); em.op(OP_F64_FLOOR); em.f64ToI32(); em.localSet(z0);
     const tz = em.allocLocal(F64); em.localGet(fz); em.localGet(z0); em.i32ToF64(); em.op(OP_F64_SUB); em.localSet(tz);
     const z1 = em.allocLocal(I32); em.localGet(z0); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(z1);
     emitFieldWrapCoord(ctx, z0, 'z'); emitFieldWrapCoord(ctx, z1, 'z');
-    const omtz = em.allocLocal(F64); em.f64Const(1); em.localGet(tz); em.op(OP_F64_SUB); em.localSet(omtz);
-    const sample3 = (lL: number, yL: number, xL: number, wA: number, wB: number, wC: number) => {
+    // read corner value f[(lay*H+row)*W+col] into a fresh local
+    const corner = (lL: number, yL: number, xL: number): number => {
       const ci = em.allocLocal(I32); emitFieldIdx(ctx, yL, xL, lL); em.localSet(ci);
-      pushF64Elem(em, fOff, ci); em.localGet(wA); em.op(OP_F64_MUL); em.localGet(wB); em.op(OP_F64_MUL); em.localGet(wC); em.op(OP_F64_MUL);
+      const v = em.allocLocal(F64); pushF64Elem(em, fOff, ci); em.localSet(v); return v;
     };
-    sample3(z0, y0, x0, omtx, omty, omtz);
-    sample3(z0, y0, x1, tx,   omty, omtz); em.op(OP_F64_ADD);
-    sample3(z0, y1, x0, omtx, ty,   omtz); em.op(OP_F64_ADD);
-    sample3(z0, y1, x1, tx,   ty,   omtz); em.op(OP_F64_ADD);
-    sample3(z1, y0, x0, omtx, omty, tz);   em.op(OP_F64_ADD);
-    sample3(z1, y0, x1, tx,   omty, tz);   em.op(OP_F64_ADD);
-    sample3(z1, y1, x0, omtx, ty,   tz);   em.op(OP_F64_ADD);
-    sample3(z1, y1, x1, tx,   ty,   tz);   em.op(OP_F64_ADD);
+    const c000 = corner(z0, y0, x0), c100 = corner(z0, y0, x1), c010 = corner(z0, y1, x0), c110 = corner(z0, y1, x1);
+    const c001 = corner(z1, y0, x0), c101 = corner(z1, y0, x1), c011 = corner(z1, y1, x0), c111 = corner(z1, y1, x1);
+    // lerp_x: cXY = cA*(1-tx) + cB*tx
+    const lerpX = (cA: number, cB: number): number => {
+      const out = em.allocLocal(F64);
+      em.localGet(cA); em.localGet(omtx); em.op(OP_F64_MUL);
+      em.localGet(cB); em.localGet(tx); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(out); return out;
+    };
+    const c00 = lerpX(c000, c100), c10 = lerpX(c010, c110), c01 = lerpX(c001, c101), c11 = lerpX(c011, c111);
+    // lerp_y: cZ = cA*(1-ty) + cB*ty
+    const lerpY = (cA: number, cB: number): number => {
+      const out = em.allocLocal(F64);
+      em.localGet(cA); em.localGet(omty); em.op(OP_F64_MUL);
+      em.localGet(cB); em.localGet(ty); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(out); return out;
+    };
+    const c0 = lerpY(c00, c10), c1 = lerpY(c01, c11);
+    // lerp_z: result = c0*(1-tz) + c1*tz   (left on the stack)
+    em.localGet(c0); em.f64Const(1); em.localGet(tz); em.op(OP_F64_SUB); em.op(OP_F64_MUL);
+    em.localGet(c1); em.localGet(tz); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
     return;
   }
 
