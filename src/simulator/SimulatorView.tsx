@@ -1072,7 +1072,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
   // don't behave); PR-A3 wires the real compileAgentGraph over
   // model.agentGraphNodes (the behaviourStep loop + value-outs + force hooks).
-  const compileAgentModel = useCallback((stopIdxBase = 0): { behaviourCode?: string; initCode?: string; divisionCode?: string; stopMessages: string[]; colorViewer: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean } => {
+  const compileAgentModel = useCallback((stopIdxBase = 0): { behaviourCode?: string; initCode?: string; divisionCode?: string; stopMessages: string[]; colorViewer: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } } => {
     if (!model.topologyMode?.agents) return { colorViewer: '', agentTarget: 'js', stopMessages: [] };
     const firstViewer = model.mappings.find(mp => mp.isAttributeToColor);
     const colorViewer = firstViewer?.id ?? '';
@@ -1099,6 +1099,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     let agentWebgpuMaxHashBins: number | undefined;
     let agentWebgpuLayout: AgentWebGPULayout | undefined;
     let agentWebgpuUsesI32Write: boolean | undefined;
+    let agentWebgpuUsage: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } | undefined;
     if (agentTarget === 'wasm') {
       try {
         const r = compileAgentGraphWasmForModel(model);
@@ -1138,6 +1139,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           // mismatch). + the i32-write flag (setAgentType → read_write agentI32).
           agentWebgpuLayout = r.layout;
           agentWebgpuUsesI32Write = r.usesI32Write;
+          agentWebgpuUsage = { usesBondStore: r.usesBondStore, usesIndicators: r.usesIndicators, usesAux: r.usesAux };
         }
       } catch (e) {
         // eslint-disable-next-line no-console
@@ -1145,7 +1147,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         agentTarget = 'js';
       }
     }
-    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, stopMessages: ag.stopMessages, colorViewer, agentTarget, agentWasmBytes, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentWebgpuUsesI32Write };
+    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, stopMessages: ag.stopMessages, colorViewer, agentTarget, agentWasmBytes, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentWebgpuUsesI32Write, agentWebgpuUsage };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.agentAttributes, model.mappings, model.centerBased]);
 
@@ -2489,6 +2491,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       agentWebgpuMaxHashBins: agentResult.agentWebgpuMaxHashBins,
       agentWebgpuLayout: agentResult.agentWebgpuLayout,
       agentWebgpuUsesI32Write: agentResult.agentWebgpuUsesI32Write,
+      agentWebgpuUsage: agentResult.agentWebgpuUsage,
     };
     // Canvas transfer is deferred to the useWebGPUStatus handler — see
     // pendingCanvasAttach above. The init message never carries webgpuCanvas

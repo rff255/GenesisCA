@@ -212,6 +212,9 @@ interface InitMsg {
   /** True when the behaviour writes the i32 SoA (setAgentType) → the runtime binds
    *  agentI32 read_write + reads the type run back. */
   agentWebgpuUsesI32Write?: boolean;
+  /** Which universal bindings the shader actually declares (so the runtime binds
+   *  matching entries — a declared-but-unused global is stripped → bind mismatch). */
+  agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean };
 }
 
 interface StepMsg { type: 'step'; count: number; activeViewer: string; skipColorPass?: boolean }
@@ -239,7 +242,7 @@ interface PaintManualMsg {
 }
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -534,6 +537,7 @@ let pendingAgentWebgpuMaxAgents = 0;
 let pendingAgentWebgpuMaxHashBins = 0;
 let pendingAgentWebgpuLayout: AgentWebGPULayout | null = null;
 let pendingAgentWebgpuUsesI32Write = false;
+let pendingAgentWebgpuUsage: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } = {};
 /** Warn once when the per-step hash overflows the GPU reserve (step runs on JS). */
 let agentWebgpuHashOverflowWarned = false;
 /** A monotonic build token: only the most-recent async runtime build commits (an
@@ -741,11 +745,12 @@ function buildAgentWebGPUIfNeeded(): void {
     agentAttrIds,
   );
   const i32Write = pendingAgentWebgpuUsesI32Write;
+  const usage = pendingAgentWebgpuUsage;
   const token = ++agentWebgpuBuildToken;
   agentWebgpuHashOverflowWarned = false;
   void (async () => {
     try {
-      const rt = await createAgentWebGPURuntime(behaviour, force, layout, i32Write);
+      const rt = await createAgentWebGPURuntime(behaviour, force, layout, i32Write, usage);
       // Guard against a re-init that swapped the store / changed the target /
       // launched a newer build while this one was in flight.
       if (agentStore === store && agentTarget === 'webgpu' && token === agentWebgpuBuildToken) {
@@ -3934,6 +3939,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       pendingAgentWebgpuMaxHashBins = msg.agentWebgpuMaxHashBins ?? 0;
       pendingAgentWebgpuLayout = msg.agentWebgpuLayout ?? null;
       pendingAgentWebgpuUsesI32Write = msg.agentWebgpuUsesI32Write ?? false;
+      pendingAgentWebgpuUsage = msg.agentWebgpuUsage ?? {};
       initAgents();
       compileAgentFns(msg.agentBehaviourCode, msg.agentInitCode, msg.agentDivisionCode);
       instantiateAgentWasmIfNeeded();
@@ -4444,6 +4450,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         pendingAgentWebgpuMaxHashBins = rc.agentWebgpuMaxHashBins ?? 0;
         pendingAgentWebgpuLayout = rc.agentWebgpuLayout ?? null;
         pendingAgentWebgpuUsesI32Write = rc.agentWebgpuUsesI32Write ?? false;
+        pendingAgentWebgpuUsage = rc.agentWebgpuUsage ?? {};
         const backingChanged = (newTarget === 'wasm') !== (agentStore?.wasmBacked ?? false) && !agentWasmBackedDev;
         agentTarget = newTarget;
         if (agentsEnabled && backingChanged) { initAgents(); runAgentInit(); runAgentColorPass(); }

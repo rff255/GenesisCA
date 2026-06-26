@@ -117,6 +117,11 @@ export interface AgentWebGPUResult {
   /** True when the behaviour body writes the i32 SoA (setAgentType) → the runtime
    *  must bind agentI32 as `storage` (read_write) + read the i32 SoA back. */
   usesI32Write?: boolean;
+  /** Which universal bindings the shader actually USES (declared only when used,
+   *  so the runtime binds matching entries — see the binding-declaration note). */
+  usesBondStore?: boolean;
+  usesIndicators?: boolean;
+  usesAux?: boolean;
   error?: string;
 }
 
@@ -222,6 +227,13 @@ interface AgentWgpuCtx {
    *  binding is then declared `read_write` (else `read`, the Boids-byte-identical
    *  default). */
   usesI32Write: boolean;
+  /** Set when an emitter actually REFERENCES a universal binding — the binding is
+   *  declared (and bound by the runtime) ONLY when used, so a model whose layout
+   *  RESERVES a region (e.g. maxBonds>0) but whose graph never touches it does NOT
+   *  declare an unused storage global (Naga strips it → a bind-group mismatch). */
+  usesBondStore: boolean;
+  usesIndicators: boolean;
+  usesAux: boolean;
   /** Active forEachBond iteration frames — the per-iteration value-output WGSL
    *  expressions (partnerId / restLength / currentLength / index). */
   forEachBondStack: Array<{ nodeId: string; partner: string; rest: string; cur: string; index: string }>;
@@ -633,10 +645,13 @@ function emitCompare(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   return emitLet(ctx, 'f32', `select(0.0, 1.0, ${cond})`, 'cmp');
 }
 
-/** Logic node — AND/OR/XOR/NOT over boolean (non-zero) f32 inputs → 1.0/0.0. */
+/** Logic node — AND/OR/XOR/NOT over boolean (non-zero) f32 inputs → 1.0/0.0. The
+ *  LogicOperatorNode stores its op UPPERCASE ('AND'/'OR'/'XOR'/'NOT'), so lowercase
+ *  before matching — otherwise 'OR'/'XOR'/'NOT' fall through to AND (the GoL-on-
+ *  agents all-die bug: every OR-births rule silently became an AND). */
 function emitLogic(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   const cfg = node.data.config as Record<string, unknown> | undefined;
-  const op = (cfg?.['operation'] as string) ?? 'and';
+  const op = ((cfg?.['operation'] as string) ?? 'and').toLowerCase();
   const a = `(${inF32(ctx, node, 'a', 0)} != 0.0)`;
   if (op === 'not') return emitLet(ctx, 'f32', `select(0.0, 1.0, !${a})`, 'lg');
   const b = `(${inF32(ctx, node, 'b', 0)} != 0.0)`;
@@ -991,6 +1006,7 @@ function emitArrayLength(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
  *  Reads the bond store. <2 bonds → 0. Mirrors GetCurvatureNode's JS emit. */
 function emitGetCurvature(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   void node;
+  ctx.usesBondStore = true;
   const out = fresh(ctx, 'curv');
   const bc = fresh(ctx, 'cvBc'), base = fresh(ctx, 'cvBase'), sx = fresh(ctx, 'cvSx'), sy = fresh(ctx, 'cvSy'), cnt = fresh(ctx, 'cvCnt');
   const k = fresh(ctx, 'cvK'), p = fresh(ctx, 'cvP'), dx = fresh(ctx, 'cvDx'), dy = fresh(ctx, 'cvDy'), d = fresh(ctx, 'cvD');
@@ -1042,6 +1058,7 @@ function emitGetModelAttribute(ctx: AgentWgpuCtx, node: GraphNode, portId: strin
 function auxRead(ctx: AgentWgpuCtx, key: string): string {
   const off = ctx.layout.modelAttrSlot?.[key];
   if (off === undefined) return '0.0';
+  ctx.usesAux = true;
   return off === 0 ? `auxF32[0]` : `auxF32[${off}u]`;
 }
 
@@ -1051,6 +1068,7 @@ function emitLookupInteraction(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   const tableId = (node.data.config?.['tableId'] as string) || (node.data.config?.['attributeId'] as string) || '';
   const tbl = ctx.layout.lookupTables?.[tableId];
   if (!tbl) return emitLet(ctx, 'f32', '0.0', 'li');
+  ctx.usesAux = true;
   const row = castTo(resolveValueInput(ctx, node, 'row', 0), 'i32');
   const col = castTo(resolveValueInput(ctx, node, 'col', 0), 'i32');
   const r = fresh(ctx, 'liR'), c = fresh(ctx, 'liC'), o = fresh(ctx, 'liO');
@@ -1066,6 +1084,7 @@ function emitGetIndicator(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   const slot = node.data.config?.['_indicatorIdx'];
   const off = typeof slot === 'number' ? slot : -1;
   if (off < 0) return emitLet(ctx, 'f32', '0.0', 'gi');
+  ctx.usesIndicators = true;
   const isInt = node.data.config?.['_indicatorIsInt'] === true;
   const word = `atomicLoad(&indicators[${off}u])`;
   return isInt
@@ -1310,6 +1329,7 @@ function emitGetAgentsAttribute(ctx: AgentWgpuCtx, node: GraphNode): AgentArrayR
 /** Get Bonded Agents — this agent's bonded partners as an id array (the data
  *  sibling of For Each Bond). Reads the ragged `bondStore` + `bondCount`. */
 function emitGetBondedAgents(ctx: AgentWgpuCtx, node: GraphNode): AgentArrayRef {
+  ctx.usesBondStore = true;
   const { arrName } = arraySlotName(ctx, node.id);
   const lenName = fresh(ctx, 'gbaLen');
   const bc = fresh(ctx, 'gbaBc'), base = fresh(ctx, 'gbaBase'), k = fresh(ctx, 'gbaK'), p = fresh(ctx, 'gbaP');
@@ -1672,6 +1692,7 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       const slot = node.data.config?.['_indicatorIdx'];
       const off = typeof slot === 'number' ? slot : -1;
       if (off >= 0) {
+        ctx.usesIndicators = true;
         const isInt = node.data.config?.['_indicatorIsInt'] === true;
         const v = inF32(ctx, node, 'value', 0);
         const bits = isInt ? `bitcast<u32>(i32(round(${v})))` : `bitcast<u32>(${v})`;
@@ -2001,6 +2022,7 @@ function emitUpdateIndicator(ctx: AgentWgpuCtx, node: GraphNode): void {
   const slot = node.data.config?.['_indicatorIdx'];
   const off = typeof slot === 'number' ? slot : -1;
   if (off < 0) return;
+  ctx.usesIndicators = true;
   const op = (node.data.config?.['operation'] as string) || 'increment';
   const isInt = node.data.config?.['_indicatorIsInt'] === true;
   if (op === 'or' || op === 'and') {
@@ -2042,6 +2064,7 @@ function emitUpdateIndicator(ctx: AgentWgpuCtx, node: GraphNode): void {
 /** For Each Bond — iterate this agent's ragged bond list (reads `bondStore`).
  *  Exposes partnerId / restLength / currentLength / index per iteration. */
 function emitForEachBond(ctx: AgentWgpuCtx, node: GraphNode): void {
+  ctx.usesBondStore = true;
   const bc = fresh(ctx, 'febBc'), base = fresh(ctx, 'febBase'), k = fresh(ctx, 'febK');
   const partner = fresh(ctx, 'febP'), rest = fresh(ctx, 'febRest'), cur = fresh(ctx, 'febCur');
   const dx = fresh(ctx, 'febDx'), dy = fresh(ctx, 'febDy');
@@ -2614,6 +2637,7 @@ export function compileAgentGraphWebGPU(
     forEachStack: [],
     forEachBondStack: [],
     usesI32Write: false,
+    usesBondStore: false, usesIndicators: false, usesAux: false,
   };
 
   // Assign array-producer scratch slots (separate i32 + f32 `var<function>` pools)
@@ -2692,11 +2716,15 @@ export function compileAgentGraphWebGPU(
   if (hasFieldRead) fieldBindingLines.push('@group(0) @binding(7) var<storage, read>       fieldRead    : array<f32>;');
   if (hasFieldWrite) fieldBindingLines.push('@group(0) @binding(8) var<storage, read_write> fieldDeposit : array<atomic<u32>>;');
   // Universal-node bindings (Generic Agent Platform) — appended after the field
-  // bindings. Each present only when its region is non-empty, so a model that uses
-  // none keeps the byte-identical pre-coverage template.
-  const hasAux = layout.auxF32Len > 0;             // model attrs + lookup tables
-  const hasIndicators = layout.indicatorCount > 0;  // indicators atomic buffer
-  const hasBondStore = layout.bondStoreLen > 0;     // ragged bond store
+  // bindings. Declared ONLY when an emitter actually REFERENCED the binding (NOT
+  // merely when the layout reserved the region): a global declared but unused is
+  // stripped by Naga, so its bind-group entry would mismatch the pipeline's
+  // reflected layout (the GoL-on-agents all-die bug — maxBonds>0 reserved a bond
+  // store that the totalistic rule never touches). The runtime reads the SAME
+  // usage flags (shipped on the result) to bind matching entries.
+  const hasAux = ctx.usesAux && layout.auxF32Len > 0;             // model attrs + lookup tables
+  const hasIndicators = ctx.usesIndicators && layout.indicatorCount > 0;  // indicators atomic buffer
+  const hasBondStore = ctx.usesBondStore && layout.bondStoreLen > 0;     // ragged bond store
   if (hasAux) fieldBindingLines.push('@group(0) @binding(9) var<storage, read>       auxF32      : array<f32>;');
   if (hasIndicators) fieldBindingLines.push('@group(0) @binding(10) var<storage, read_write> indicators : array<atomic<u32>>;');
   if (hasBondStore) fieldBindingLines.push('@group(0) @binding(11) var<storage, read>       bondStore   : array<i32>;');
@@ -2732,7 +2760,10 @@ ${ctx.lines.join('\n')}
 }
 `;
 
-  return { shaderCode, layout, supportedTypes: [...seen], usesI32Write: ctx.usesI32Write };
+  return {
+    shaderCode, layout, supportedTypes: [...seen], usesI32Write: ctx.usesI32Write,
+    usesBondStore: hasBondStore, usesIndicators: hasIndicators, usesAux: hasAux,
+  };
 }
 
 /** Bake `_indicatorIdx` + `_indicatorIsInt` onto each indicator node (the agent
