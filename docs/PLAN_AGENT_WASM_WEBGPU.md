@@ -158,16 +158,67 @@ offsets + scalar args.
   `agentTarget:'wasm'` is the one unverified check — the preview served the main repo, not
   this worktree.)
 
-- **W2 — complete the WASM behaviour coverage (the handoff's PR6c/PR6d → Tissue +
-  Chemotaxis on WASM).** Widen `AGENT_WASM_SUPPORTED_TYPES`: the field-bridge nodes
-  (sampleField/fieldGradient/readCellsUnder/affectCellsUnder/secreteToField — needs the
-  agent module to see the **cell field bytes**, the case-(b) copy bridge per the handoff,
-  with the documented Chemotaxis perf-regression note), `getCellAttribute` /
-  `getAgentAttribute`, **array** Local Variables + `setArrayElement`, the array tier
-  (getAgentsAttribute/filter/join/getBondedAgents/picks), and the **division-event** +
-  **agent-init** WASM modules (the 2nd/3rd exports). **Acceptance:** Tissue + Chemotaxis
-  run on WASM with JS bit-parity (division daughters match — the eigensolve stays JS for
-  both targets); the gate no longer clamps them.
+- **W2 — complete the WASM behaviour coverage (the WHOLE-CATALOGUE port → Tissue +
+  Chemotaxis + everything on WASM). ✅ DONE (JS↔WASM bit-parity verified on all 8
+  agent samples; the gate reject set is now ZERO; HEAVY-rule benchmark shows the 2-5×
+  boost).** The SEPARATE `agentWasm/compile.ts` now emits the FULL agent-graph
+  catalogue (the gate `isAgentGraphWasmSupported` accepts every agent graph, clamped
+  only by the per-node array-scratch-slot budget — a structural gate, not a node ban).
+  Added (over the PR6b-2 Boids subset): the **field bridge** (sampleField/fieldGradient/
+  readCellsUnder/affectCellsUnder/secreteToField — 2D bilinear, torus-folded), the
+  **agent-array tier** (getAgentsAttribute/filterAgents/joinAgents/pickRandom(N)/
+  getBondedAgents + aggregate/groupOperator[median+uniform-random incl.]/groupCounting/
+  groupStatement over arrays), `getCellAttribute`/`getAgentAttribute`/`setAttribute`/
+  `updateAttribute` on the agent SoA, the **structural-WRITE** nodes (divideAgent/
+  formBond/breakBond/killAgent → request-flag stores into shared memory), the **setters**
+  (setVelocity/setAgentAttribute/setAgentsAttribute/setAgentPosition/Radius/Type), the
+  **bond/self reads** (forEachBond/getCurvature/getBondDegree/neighbourDensity), the
+  **universal** value/flow nodes (switch/loop/valueSwitch/getModelAttribute/lookupInteraction/
+  interactionTableMap/proportionMap/interpolation/colorScale/categoricalColor/getColorConstant/
+  arrayElement/arrayLength + indicators get/set/updateIndicator[ALL ops incl toggle/next/prev]/
+  setCellLooks[plain]), and **array Local Variables** + setArrayElement.
+  - **Architecture** (mirrors the WebGPU G4/G5 decisions): the WASM module = the
+    BEHAVIOUR loop ONLY. The `divisionEvent` + `agentInit` roots stay JS-on-CPU
+    (target-independent — the worker runs them over the SAME wasmBacked memory, bit-
+    exact). The gate checks ONLY the **behaviour-reachable** node set (`behaviourReachableNodeIds`),
+    so a Tissue graph runs on WASM even though its divisionEvent subtree uses CPU-only nodes.
+  - **External regions in agent memory.** The cell field arrays (`_field_<id>`), model
+    attrs, indicators, lookup tables ride NEW reserved regions in the wasmBacked
+    `computeAgentMemoryLayout` (`AgentLayoutExtras`: scratch/modelAttr/indicators/lookup/
+    field + the sync-attr write region). The worker copies them IN before the WASM call
+    (`copyAgentExternalRegionsIn`) and the field deposit + indicators back OUT after
+    (`copyAgentExternalRegionsOut`) — Decision D-FIELD. **Layout lockstep** (the +64-cell
+    bug): the store's layout MUST equal the compiler's (same maxHashBins + extras); the
+    worker derives `fieldTotal` from the live grid dims, the compiler from the model — they
+    agree.
+  - **Sync agent mode under wasmBacked**: a distinct `attrWriteOffset` region; `swapAgentAttrs`
+    copies-into under wasmBacked (the B10 view discipline — a reference swap would orphan the
+    baked offset). The behaviour reads attrRead, writes attrWrite; the worker primes + swaps.
+  - **Three parity bugs the harness caught + fixed**: (1) the `emitLogic` UPPERCASE-op bug
+    (`'OR'`/`'XOR'`/`'NOT'` fell through to AND — the GoL-on-agents all-die, same as the
+    WebGPU port); (2) `emitSampleFieldAt`/`emitSecreteToField` DOUBLE-wrapped a shared corner
+    coordinate (now `emitFieldWrapCoord` wraps each axis ONCE); (3) **the field sample-before-
+    deposit order** — JS sink-hoists pure values to cell-top so a field read sees the
+    PRE-deposit field; the WASM `preEmitAgentValues` pass (the WASM analogue of the WebGPU
+    `preEmitAgentValues`) now hoists the pure non-volatile value cone to agent-loop-top,
+    matching JS exactly. (4) `i32.trunc_sat_f64_s` for the f64→i32 value conversions so a
+    NaN/Inf intermediate (aggregate.max over empty → -Inf; sin/sqrt) does NOT trap (the JS
+    `x|0` returns a finite value; for finite in-range it's bit-identical to plain truncation).
+  - **Acceptance — MET:** JS↔WASM **bit-parity on ALL 8 agent samples** (Drift Test, Boids,
+    Chemotaxis, GoL-on-agents, Ant Necrophoresis, the 3 Tissues) — 0 mismatches over 150
+    steps, headless (Node) AND browser-verified (the Chemotaxis field bridge BIT-IDENTICAL
+    in the real Chromium WASM engine); `tsc` + build clean; **lattice + JS-agent + WebGPU-
+    agent byte-identity by construction** (`git diff --stat` vs the merge base = only
+    `agentWasm/compile.ts` + `agentEngine.ts` + `sim.worker.ts` + `SimulatorView.tsx` + the
+    `i32.trunc_sat` encoder const). All 8 samples compile + instantiate in the browser WASM
+    engine.
+  - **PERF — THE BOOST MATERIALIZES (unlike the Boids force loop).** The HEAVY per-agent-rule
+    benchmark (`scripts/bench-agent-behaviour.mjs` — a chromatography-in-agents-style rule:
+    nearby gather → 3 aggregates → a Lookup Table → 2 expressions → 2 compares → 2 conditionals)
+    times the BEHAVIOUR fn JS vs WASM: **5.0× at 500 agents, 2.8× at 2000, 2.1× at 8000**.
+    So the user's hypothesis holds: WASM pulls ahead of JS as per-agent RULE COMPLEXITY grows,
+    exactly like the CA grid — the trivial Boids force loop was a wash (W1), but a heavy
+    behaviour rule shows a solid 2-5× speedup.
 
 - **W3 (optional) — hash build in WASM.** Eliminate the per-step JS `buildSpatialHash`
   + the AW-HASH copy-in with a WASM bin-count → prefix-sum → scatter. Lower priority —
