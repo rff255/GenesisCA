@@ -144,11 +144,22 @@ const FORCE_CONTROL_BYTES = 80;
  *  force shaders, allocate the buffers, build the two bind groups + pipelines.
  *  Throws on any WGSL compile error / device failure (the worker catches +
  *  falls back to JS). */
+/** Which universal bindings the behaviour shader actually declares (from the
+ *  compile result). The runtime binds matching entries ONLY for the used ones (a
+ *  declared-but-unused storage global is stripped by Naga → a bind-group mismatch).
+ *  Defaults to the region presence (the legacy path) when not provided. */
+export interface AgentRuntimeUsage {
+  usesBondStore?: boolean;
+  usesIndicators?: boolean;
+  usesAux?: boolean;
+}
+
 export async function createAgentWebGPURuntime(
   behaviourShader: string,
   forceShader: string,
   layout: AgentWebGPULayout,
   usesI32Write = false,
+  usage: AgentRuntimeUsage = {},
 ): Promise<AgentWebGPURuntime> {
   if (!isWebGPUAvailable()) throw new Error('navigator.gpu is unavailable in this context');
   const gpu = (navigator as Navigator & { gpu: GPU }).gpu;
@@ -205,11 +216,14 @@ export async function createAgentWebGPURuntime(
   const hasFieldWrite = layout.fieldWriteLen > 0;
   const fieldReadBuf = hasFieldRead ? mk('agentFieldRead', Math.max(4, layout.fieldReadLen * 4), STORAGE_RO) : null;
   const fieldDepositBuf = hasFieldWrite ? mk('agentFieldDeposit', Math.max(4, layout.fieldWriteLen * 4), STORAGE) : null;
-  // Universal-node bindings — created only when their region is non-empty (so a
-  // Boids model with none keeps the byte-identical bind-group layout).
-  const hasAux = layout.auxF32Len > 0;
-  const hasIndicators = layout.indicatorCount > 0;
-  const hasBondStore = layout.bondStoreLen > 0;
+  // Universal-node bindings — created only when the SHADER actually uses them
+  // (the compiler's usage flags), NOT merely when the layout reserved the region:
+  // an unused storage global is stripped by Naga, so binding it here would mismatch
+  // the pipeline's reflected layout (the GoL-on-agents all-die bug). Fall back to
+  // the region presence when no usage was provided (legacy callers).
+  const hasAux = (usage.usesAux ?? layout.auxF32Len > 0) && layout.auxF32Len > 0;
+  const hasIndicators = (usage.usesIndicators ?? layout.indicatorCount > 0) && layout.indicatorCount > 0;
+  const hasBondStore = (usage.usesBondStore ?? layout.bondStoreLen > 0) && layout.bondStoreLen > 0;
   const auxF32Buf = hasAux ? mk('agentAuxF32', Math.max(4, layout.auxF32Len * 4), STORAGE_RO) : null;
   const indicatorsBuf = hasIndicators ? mk('agentIndicators', Math.max(4, layout.indicatorCount * 4), STORAGE) : null;
   const bondStoreBuf = hasBondStore ? mk('agentBondStore', Math.max(4, layout.bondStoreLen * 4), STORAGE_RO) : null;
