@@ -213,11 +213,10 @@ export function HelpView() {
               is invisible (reads always go through the parent-check guard).
               The compiler injects the guards automatically; no graph changes
               are needed. Supported on all three compile targets (JS, WASM,
-              WebGPU) across every node in the catalogue. The only edge cases
-              are Aggregate median and GroupOperator random on WebGPU &mdash;
-              not because of sub-attributes, but because WebGPU doesn&apos;t
-              implement those two ops at all; the worker falls back to JS for
-              models that use them.
+              WebGPU) across every node in the catalogue &mdash; including
+              Aggregate median and GroupOperator random, which now run on the
+              WebGPU grid too (the WebGPU grid sorts in a per-thread WGSL loop
+              and draws from its per-cell RNG).
             </li>
           </ul>
 
@@ -779,7 +778,7 @@ export function HelpView() {
             <tbody>
               <tr><td>Group Counting</td><td>Count neighbors matching a condition (equals, not equals, greater, lesser). Also supports <strong>Between</strong> and <strong>Not Between</strong> for interval counts &mdash; reveals a Compare High input and two picklists for the interval sides; <em>Not Between</em> counts elements outside the interval.</td></tr>
               <tr><td>Group Statement</td><td>Check if all/none/any neighbors satisfy a condition.</td></tr>
-              <tr><td>Group Operator</td><td>Reduce an array: sum, product, max, min, mean, median, AND, OR, pick <em>random</em>, or <em>weighted random</em>. Min/max/random/weighted-random also output the picked <em>position</em>. <em>Weighted Random</em> treats the array as weights and returns the picked weight + index (empty/zero-sum &rarr; index &minus;1); always advances the RNG. (Median and uniform random are JS/WASM-only &mdash; rejected on WebGPU.)</td></tr>
+              <tr><td>Group Operator</td><td>Reduce an array: sum, product, max, min, mean, median, AND, OR, pick <em>random</em>, or <em>weighted random</em>. Min/max/random/weighted-random also output the picked <em>position</em>. <em>Weighted Random</em> treats the array as weights and returns the picked weight + index (empty/zero-sum &rarr; index &minus;1); always advances the RNG. Every op runs on all three grid targets (the WebGPU grid sorts median in a per-thread loop and picks random from its per-cell RNG &mdash; the random index differs cross-target by f32/RNG design).</td></tr>
               <tr><td>Aggregate</td><td>Accepts multiple value connections on a single input port. Operations: Sum, Product, Max, Min, Average, Median. Use to combine values from different sources without needing arrays.</td></tr>
             </tbody>
           </table>
