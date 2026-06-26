@@ -801,7 +801,10 @@ function emitCompare(ctx: AgentWasmCtx, node: GraphNode): void {
 function emitLogic(ctx: AgentWasmCtx, node: GraphNode): void {
   const em = ctx.em;
   const cfg = node.data.config as Record<string, unknown> | undefined;
-  const op = (cfg?.['operation'] as string) ?? 'and';
+  // LogicOperatorNode stores its op UPPERCASE ('AND'/'OR'/'XOR'/'NOT') — lowercase
+  // it so 'OR'/'XOR'/'NOT' don't fall through to AND (the GoL-on-agents all-die bug,
+  // the same one the WebGPU agent port hit).
+  const op = ((cfg?.['operation'] as string) ?? 'and').toLowerCase();
   const pushBool = (port: string) => { pushValueInputF64(ctx, node, port, 0); em.f64Const(0); em.op(OP_F64_NE); };
   if (op === 'not') { pushBool('a'); em.op(OP_I32_EQZ); }
   else {
@@ -2399,9 +2402,9 @@ function emitSecreteToField(ctx: AgentWasmCtx, node: GraphNode): void {
   const ty = em.allocLocal(F64); em.localGet(fy); em.localGet(y0); em.i32ToF64(); em.op(OP_F64_SUB); em.localSet(ty);
   const x1 = em.allocLocal(I32); em.localGet(x0); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(x1);
   const y1 = em.allocLocal(I32); em.localGet(y0); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(y1);
-  // torus wrap or clamp each
-  emitFieldWrapXY(ctx, x0, y0); emitFieldWrapXY(ctx, x1, y1);
-  emitFieldWrapXY(ctx, x0, y1); emitFieldWrapXY(ctx, x1, y0);
+  // Wrap/clamp EACH coordinate EXACTLY ONCE (x via _fieldW, y via _fieldH).
+  emitFieldWrapCoord(ctx, x0, true); emitFieldWrapCoord(ctx, x1, true);
+  emitFieldWrapCoord(ctx, y0, false); emitFieldWrapCoord(ctx, y1, false);
   // weights: (1-tx)*(1-ty), tx*(1-ty), (1-tx)*ty, tx*ty
   const omtx = em.allocLocal(F64); em.f64Const(1); em.localGet(tx); em.op(OP_F64_SUB); em.localSet(omtx);
   const omty = em.allocLocal(F64); em.f64Const(1); em.localGet(ty); em.op(OP_F64_SUB); em.localSet(omty);
@@ -2418,13 +2421,16 @@ function emitSecreteToField(ctx: AgentWasmCtx, node: GraphNode): void {
   splat(x1, y1, tx, ty);
 }
 
-/** Wrap or clamp (xL, yL) i32 locals into the field grid (torus / clamp). */
-function emitFieldWrapXY(ctx: AgentWasmCtx, xL: number, yL: number): void {
+/** Wrap or clamp a SINGLE i32 coordinate `cL` against `_fieldW` (isX) / `_fieldH`
+ *  exactly ONCE (torus → wrap; else → clamp). NB: a previous version wrapped (x,y)
+ *  pairs, which double-wrapped a coordinate shared between two corner samples. */
+function emitFieldWrapCoord(ctx: AgentWasmCtx, cL: number, isX: boolean): void {
   const em = ctx.em;
+  const pushDim = isX ? () => pushFieldWInt(ctx) : () => pushFieldHInt(ctx);
   em.localGet(ctx.fieldTorusLocal);
   em.ifThenElse(
-    () => { wrapModInt(em, xL, () => pushFieldWInt(ctx)); wrapModInt(em, yL, () => pushFieldHInt(ctx)); },
-    () => { clampInt(em, xL, () => pushFieldWInt(ctx)); clampInt(em, yL, () => pushFieldHInt(ctx)); },
+    () => { wrapModInt(em, cL, pushDim); },
+    () => { clampInt(em, cL, pushDim); },
   );
 }
 
@@ -2502,8 +2508,9 @@ function emitSampleFieldAt(ctx: AgentWasmCtx, fieldId: string, pushPX: () => voi
   const ty = em.allocLocal(F64); em.localGet(fy); em.localGet(y0); em.i32ToF64(); em.op(OP_F64_SUB); em.localSet(ty);
   const x1 = em.allocLocal(I32); em.localGet(x0); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(x1);
   const y1 = em.allocLocal(I32); em.localGet(y0); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(y1);
-  emitFieldWrapXY(ctx, x0, y0); emitFieldWrapXY(ctx, x1, y1);
-  emitFieldWrapXY(ctx, x0, y1); emitFieldWrapXY(ctx, x1, y0);
+  // Wrap/clamp EACH coordinate EXACTLY ONCE (x via _fieldW, y via _fieldH).
+  emitFieldWrapCoord(ctx, x0, true); emitFieldWrapCoord(ctx, x1, true);
+  emitFieldWrapCoord(ctx, y0, false); emitFieldWrapCoord(ctx, y1, false);
   // f[y0*W+x0]*(1-tx)*(1-ty) + f[y0*W+x1]*tx*(1-ty) + f[y1*W+x0]*(1-tx)*ty + f[y1*W+x1]*tx*ty
   const omtx = em.allocLocal(F64); em.f64Const(1); em.localGet(tx); em.op(OP_F64_SUB); em.localSet(omtx);
   const omty = em.allocLocal(F64); em.f64Const(1); em.localGet(ty); em.op(OP_F64_SUB); em.localSet(omty);
@@ -2850,21 +2857,27 @@ function clearVolatileCache(ctx: AgentWasmCtx): void {
 // ---------------------------------------------------------------------------
 
 function computeVolatile(ctx: AgentWasmCtx): void {
-  const { nodeMap, inputToSource } = ctx.adj;
-  // Seeds: ONLY forEachInArray (its per-iteration element/index outputs). A node
-  // is volatile iff it transitively reads a forEach element/index — its cached
-  // value must be dropped at each forEach iteration boundary so it re-emits with
-  // the current element. getRandom / getVariable are NOT inherently volatile (they
-  // emit once per agent + cache); they become volatile only if they read element/
-  // index (they don't in the supported shapes). This mirrors the JS compiler's
-  // forEach-element-dependent analysis.
+  const { nodeMap, inputToSource, inputToSources } = ctx.adj;
+  // Seeds: forEachInArray / forEachBond (per-iteration element/index/partner) AND
+  // getVariable (mutable Local Variable storage). A node is volatile iff it
+  // transitively reads one of these — its cached value is dropped at each
+  // forEach/forEachBond iteration boundary so it re-emits with the current element,
+  // and a getVariable-reader is never cell-top-hoisted (the value mutates).
   const volatileSet = new Set<string>();
-  for (const [, node] of nodeMap) if (node.data.nodeType === 'forEachInArray') volatileSet.add(node.id);
+  for (const [, node] of nodeMap) {
+    const t = node.data.nodeType;
+    if (t === 'forEachInArray' || t === 'forEachBond' || t === 'getVariable') volatileSet.add(node.id);
+  }
   let changed = true;
   while (changed) {
     changed = false;
     for (const [, node] of nodeMap) {
       if (volatileSet.has(node.id)) continue;
+      for (const [key, srcs] of inputToSources) {
+        if (!key.startsWith(`${node.id}:`)) continue;
+        if (srcs.some(s => volatileSet.has(s.nodeId))) { volatileSet.add(node.id); changed = true; break; }
+      }
+      if (changed) continue;
       for (const [key, src] of inputToSource) {
         if (!key.startsWith(`${node.id}:`)) continue;
         if (volatileSet.has(src.nodeId)) { volatileSet.add(node.id); changed = true; break; }
@@ -2872,6 +2885,76 @@ function computeVolatile(ctx: AgentWasmCtx): void {
     }
   }
   ctx.volatileNodes = volatileSet;
+}
+
+/** Value node types that must NOT be hoisted to cell-top (RNG side effect, mutable
+ *  storage reads, per-iteration refs, array producers + their reducers). Everything
+ *  else (incl. the field reads sampleField/fieldGradient/readCellsUnder, matching
+ *  the JS sink-hoist) is hoistable. */
+const AGENT_VALUE_NO_HOIST: ReadonlySet<string> = new Set<string>([
+  'getRandom', 'getVariable', 'getAgentAttribute', 'getIndicator',
+  'forEachInArray', 'forEachBond',
+  'getNearbyAgents', 'getAgentsAttribute', 'filterAgents', 'joinAgents',
+  'pickNRandomAgents', 'pickRandomAgent', 'getBondedAgents',
+  'aggregate', 'groupOperator', 'groupCounting', 'groupStatement',
+  'arrayElement', 'arrayLength',
+]);
+
+/** Pre-emit the PURE, non-volatile value cone of the behaviour flow tree at the
+ *  AGENT-LOOP-TOP (so a value that reads mutable field/attr storage is captured
+ *  BEFORE any in-body write mutates it — matching JS's sink-hoist of pure values,
+ *  the field-bridge "sample before deposit" semantics). Caches each value in
+ *  `valueCache`; the flow chain then reads the cached value. Cycle-guarded. */
+function preEmitAgentValues(ctx: AgentWasmCtx, rootId: string): void {
+  const { nodeMap, inputToSource, inputToSources, flowOutputToTargets } = ctx.adj;
+  const usedOutPorts = new Map<string, Set<string>>();
+  const addOut = (nodeId: string, portId: string) => { let s = usedOutPorts.get(nodeId); if (!s) { s = new Set(); usedOutPorts.set(nodeId, s); } s.add(portId); };
+  for (const [, src] of inputToSource) addOut(src.nodeId, src.portId);
+  for (const [, srcs] of inputToSources) for (const s of srcs) addOut(s.nodeId, s.portId);
+  const hoistable = new Map<string, boolean>();
+  const inProgress = new Set<string>();
+  const isHoistable = (id: string): boolean => {
+    const cached = hoistable.get(id); if (cached !== undefined) return cached;
+    if (inProgress.has(id)) return false;
+    const node = nodeMap.get(id); if (!node) return false;
+    if (AGENT_VALUE_NO_HOIST.has(node.data.nodeType)) { hoistable.set(id, false); return false; }
+    if (ctx.volatileNodes.has(id)) { hoistable.set(id, false); return false; }
+    inProgress.add(id);
+    let ok = true;
+    for (const [key, src] of inputToSource) { if (!key.startsWith(`${id}:`)) continue; if (!isHoistable(src.nodeId)) { ok = false; break; } }
+    if (ok) for (const [key, srcs] of inputToSources) { if (!key.startsWith(`${id}:`)) continue; for (const s of srcs) if (!isHoistable(s.nodeId)) { ok = false; break; } if (!ok) break; }
+    inProgress.delete(id);
+    hoistable.set(id, ok); return ok;
+  };
+  const emitConeVisited = new Set<string>();
+  const emitCone = (nodeId: string) => {
+    if (emitConeVisited.has(nodeId)) return;
+    emitConeVisited.add(nodeId);
+    const node = nodeMap.get(nodeId); if (!node) return;
+    if (isHoistable(nodeId)) {
+      const ports = usedOutPorts.get(nodeId);
+      if (ports && ports.size > 0) for (const p of ports) compileValueNode(ctx, nodeId, p);
+      else compileValueNode(ctx, nodeId, 'value');
+    }
+    if (node.data.nodeType === 'forEachInArray' || node.data.nodeType === 'forEachBond') return;
+    for (const [key, src] of inputToSource) { if (!key.startsWith(`${nodeId}:`)) continue; emitCone(src.nodeId); }
+    for (const [key, srcs] of inputToSources) { if (!key.startsWith(`${nodeId}:`)) continue; for (const s of srcs) emitCone(s.nodeId); }
+  };
+  const visited = new Set<string>();
+  const walk = (nodeId: string) => {
+    if (visited.has(nodeId)) return; visited.add(nodeId);
+    const node = nodeMap.get(nodeId); if (!node) return;
+    for (const [key, src] of inputToSource) { if (!key.startsWith(`${nodeId}:`)) continue; emitCone(src.nodeId); }
+    for (const [key, srcs] of inputToSources) { if (!key.startsWith(`${nodeId}:`)) continue; for (const s of srcs) emitCone(s.nodeId); }
+    const skipPort = (node.data.nodeType === 'forEachInArray' || node.data.nodeType === 'forEachBond') ? 'body' : null;
+    for (const [key, targets] of flowOutputToTargets) {
+      if (!key.startsWith(`${nodeId}:`)) continue;
+      const port = key.slice(nodeId.length + 1);
+      if (skipPort && port === skipPort) continue;
+      for (const t of targets) walk(t.nodeId);
+    }
+  };
+  walk(rootId);
 }
 
 // ===========================================================================
@@ -3605,6 +3688,10 @@ export function compileAgentGraphWasm(
           // clear the value/array caches each iteration (locals are recomputed per agent)
           ctx.valueCache.clear();
           ctx.arrayCache.clear();
+          // Pre-emit the PURE value cone at agent-loop-top (matches JS's sink-hoist:
+          // a field/attr read is captured BEFORE any in-body write mutates it — the
+          // field-bridge "sample before deposit" semantics).
+          preEmitAgentValues(ctx, behaviourNode.id);
           // run the behaviour flow chain
           compileFlowChain(ctx, behaviourNode.id, 'do');
         });
