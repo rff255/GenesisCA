@@ -704,7 +704,10 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
     }
     case 'sampleField': {
       const fieldId = (node.data.config?.['attributeId'] as string) || '';
-      result = f64Result(() => emitSampleFieldAt(ctx, fieldId, () => pushF64Elem(em, ctx.layout.f64['x']!, ctx.idxLocal), () => pushF64Elem(em, ctx.layout.f64['y']!, ctx.idxLocal)));
+      result = f64Result(() => emitSampleFieldAt(ctx, fieldId,
+        () => pushF64Elem(em, ctx.layout.f64['x']!, ctx.idxLocal),
+        () => pushF64Elem(em, ctx.layout.f64['y']!, ctx.idxLocal),
+        ctx.is3d ? () => pushF64Elem(em, ctx.layout.f64['z']!, ctx.idxLocal) : undefined));
       break;
     }
     case 'fieldGradient': {
@@ -2371,15 +2374,26 @@ function emitSetCellLooks(ctx: AgentWasmCtx, node: GraphNode): void {
 // --- field bridge writes (closed agent↔grid feedback) ---
 
 /** Push field cell flat index `(row*_fieldW + col)` for integer row/col locals. */
-function emitFieldIdx(ctx: AgentWasmCtx, rowLocal: number, colLocal: number): void {
+/** Push the flat field index. 2D = `row·W + col`; 3D = `(layer·H + row)·W + col`
+ *  (= layer·W·H + row·W + col — the grid's `(layer*H+row)*W+col`). `layerLocal`
+ *  must be supplied for a 3D model; it's ignored in 2D. */
+function emitFieldIdx(ctx: AgentWasmCtx, rowLocal: number, colLocal: number, layerLocal = -1): void {
   const em = ctx.em;
+  if (ctx.is3d) {
+    // (layer*H + row)*W + col
+    em.localGet(layerLocal); pushFieldHInt(ctx); em.op(OP_I32_MUL); em.localGet(rowLocal); em.op(OP_I32_ADD);
+    pushFieldWInt(ctx); em.op(OP_I32_MUL); em.localGet(colLocal); em.op(OP_I32_ADD);
+    return;
+  }
   em.localGet(rowLocal); pushFieldWInt(ctx); em.op(OP_I32_MUL); em.localGet(colLocal); em.op(OP_I32_ADD);
 }
 /** Push `_fieldW` as an i32 (it rides the behaviour as an f64 param). */
 function pushFieldWInt(ctx: AgentWasmCtx): void { ctx.em.localGet(ctx.fieldWLocal); ctx.em.f64ToI32(); }
 function pushFieldHInt(ctx: AgentWasmCtx): void { ctx.em.localGet(ctx.fieldHLocal); ctx.em.f64ToI32(); }
+function pushFieldDInt(ctx: AgentWasmCtx): void { ctx.em.localGet(ctx.fieldDLocal); ctx.em.f64ToI32(); }
 
-/** Affect Cells Under — r-disk write (set/add/sub/max/min) into the field. 2D. */
+/** Affect Cells Under — r-disk (2D) / r-sphere (3D) write (set/add/sub/max/min)
+ *  into the field. */
 function emitAffectCellsUnder(ctx: AgentWasmCtx, node: GraphNode): void {
   const em = ctx.em;
   const fieldId = (node.data.config?.['attributeId'] as string) || '';
@@ -2391,7 +2405,7 @@ function emitAffectCellsUnder(ctx: AgentWasmCtx, node: GraphNode): void {
   const r = em.allocLocal(F64); pushValueInputF64(ctx, node, 'radius', 1); em.localSet(r);
   const v = em.allocLocal(F64); pushValueInputF64(ctx, node, 'value', 1); em.localSet(v);
   const r2 = em.allocLocal(F64); em.localGet(r); em.localGet(r); em.op(OP_F64_MUL); em.localSet(r2);
-  emitDiskLoop(ctx, cx, cy, r, r2, (ciLocal) => {
+  const applyBody = (ciLocal: number) => {
     // apply op: field[ci] = op(field[ci], v)
     em.localGet(ciLocal); em.i32Const(8); em.op(OP_I32_MUL); em.i32Const(fOff); em.op(OP_I32_ADD);  // addr
     switch (op) {
@@ -2402,10 +2416,18 @@ function emitAffectCellsUnder(ctx: AgentWasmCtx, node: GraphNode): void {
       default: pushF64Elem(em, fOff, ciLocal); em.localGet(v); em.op(OP_F64_ADD); break; // add
     }
     em.f64Store();
-  });
+  };
+  if (ctx.is3d) {
+    const cz = em.allocLocal(F64); pushF64Elem(em, ctx.layout.f64['z']!, ctx.idxLocal); em.localSet(cz);
+    emitSphereLoop(ctx, cx, cy, cz, r, r2, applyBody);
+  } else {
+    emitDiskLoop(ctx, cx, cy, r, r2, applyBody);
+  }
 }
 
-/** Secrete To Field — 4-cell bilinear splat (`+= rate*weight`). 2D. */
+/** Secrete To Field — 2D 4-cell bilinear / 3D 8-cell trilinear splat
+ *  (`+= rate*weight`). The weights sum to 1, so the total deposit is `rate`.
+ *  Mirrors SecreteToFieldNode's JS (index `(z*H+y)*W+x` in 3D). */
 function emitSecreteToField(ctx: AgentWasmCtx, node: GraphNode): void {
   const em = ctx.em;
   const fieldId = (node.data.config?.['attributeId'] as string) || '';
@@ -2422,11 +2444,38 @@ function emitSecreteToField(ctx: AgentWasmCtx, node: GraphNode): void {
   const x1 = em.allocLocal(I32); em.localGet(x0); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(x1);
   const y1 = em.allocLocal(I32); em.localGet(y0); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(y1);
   // Wrap/clamp EACH coordinate EXACTLY ONCE (x via _fieldW, y via _fieldH).
-  emitFieldWrapCoord(ctx, x0, true); emitFieldWrapCoord(ctx, x1, true);
-  emitFieldWrapCoord(ctx, y0, false); emitFieldWrapCoord(ctx, y1, false);
+  emitFieldWrapCoord(ctx, x0, 'x'); emitFieldWrapCoord(ctx, x1, 'x');
+  emitFieldWrapCoord(ctx, y0, 'y'); emitFieldWrapCoord(ctx, y1, 'y');
   // weights: (1-tx)*(1-ty), tx*(1-ty), (1-tx)*ty, tx*ty
   const omtx = em.allocLocal(F64); em.f64Const(1); em.localGet(tx); em.op(OP_F64_SUB); em.localSet(omtx);
   const omty = em.allocLocal(F64); em.f64Const(1); em.localGet(ty); em.op(OP_F64_SUB); em.localSet(omty);
+
+  if (ctx.is3d) {
+    // 3D: an 8-cell trilinear splat. z0/z1 + tz/omtz; weight gets a 3rd factor.
+    const fz = em.allocLocal(F64); pushF64Elem(em, ctx.layout.f64['z']!, ctx.idxLocal); em.localSet(fz);
+    const z0 = em.allocLocal(I32); em.localGet(fz); em.op(OP_F64_FLOOR); em.f64ToI32(); em.localSet(z0);
+    const tz = em.allocLocal(F64); em.localGet(fz); em.localGet(z0); em.i32ToF64(); em.op(OP_F64_SUB); em.localSet(tz);
+    const z1 = em.allocLocal(I32); em.localGet(z0); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(z1);
+    emitFieldWrapCoord(ctx, z0, 'z'); emitFieldWrapCoord(ctx, z1, 'z');
+    const omtz = em.allocLocal(F64); em.f64Const(1); em.localGet(tz); em.op(OP_F64_SUB); em.localSet(omtz);
+    const splat3 = (lL: number, yL: number, xL: number, wA: number, wB: number, wC: number) => {
+      const ci = em.allocLocal(I32); emitFieldIdx(ctx, yL, xL, lL); em.localSet(ci);
+      em.localGet(ci); em.i32Const(8); em.op(OP_I32_MUL); em.i32Const(fOff); em.op(OP_I32_ADD);   // addr
+      pushF64Elem(em, fOff, ci);
+      em.localGet(rate); em.localGet(wA); em.op(OP_F64_MUL); em.localGet(wB); em.op(OP_F64_MUL); em.localGet(wC); em.op(OP_F64_MUL);
+      em.op(OP_F64_ADD); em.f64Store();
+    };
+    splat3(z0, y0, x0, omtx, omty, omtz);
+    splat3(z0, y0, x1, tx,   omty, omtz);
+    splat3(z0, y1, x0, omtx, ty,   omtz);
+    splat3(z0, y1, x1, tx,   ty,   omtz);
+    splat3(z1, y0, x0, omtx, omty, tz);
+    splat3(z1, y0, x1, tx,   omty, tz);
+    splat3(z1, y1, x0, omtx, ty,   tz);
+    splat3(z1, y1, x1, tx,   ty,   tz);
+    return;
+  }
+
   const splat = (xL: number, yL: number, wA: number, wB: number) => {
     const ci = em.allocLocal(I32); emitFieldIdx(ctx, yL, xL); em.localSet(ci);
     em.localGet(ci); em.i32Const(8); em.op(OP_I32_MUL); em.i32Const(fOff); em.op(OP_I32_ADD);   // addr
@@ -2440,12 +2489,13 @@ function emitSecreteToField(ctx: AgentWasmCtx, node: GraphNode): void {
   splat(x1, y1, tx, ty);
 }
 
-/** Wrap or clamp a SINGLE i32 coordinate `cL` against `_fieldW` (isX) / `_fieldH`
- *  exactly ONCE (torus → wrap; else → clamp). NB: a previous version wrapped (x,y)
- *  pairs, which double-wrapped a coordinate shared between two corner samples. */
-function emitFieldWrapCoord(ctx: AgentWasmCtx, cL: number, isX: boolean): void {
+/** Wrap or clamp a SINGLE i32 coordinate `cL` against a field axis dimension
+ *  (`'x'`→`_fieldW`, `'y'`→`_fieldH`, `'z'`→`_fieldD`) exactly ONCE (torus → wrap;
+ *  else → clamp). NB: a previous version wrapped (x,y) pairs, which double-wrapped a
+ *  coordinate shared between two corner samples. */
+function emitFieldWrapCoord(ctx: AgentWasmCtx, cL: number, axis: 'x' | 'y' | 'z'): void {
   const em = ctx.em;
-  const pushDim = isX ? () => pushFieldWInt(ctx) : () => pushFieldHInt(ctx);
+  const pushDim = axis === 'x' ? () => pushFieldWInt(ctx) : axis === 'y' ? () => pushFieldHInt(ctx) : () => pushFieldDInt(ctx);
   em.localGet(ctx.fieldTorusLocal);
   em.ifThenElse(
     () => { wrapModInt(em, cL, pushDim); },
@@ -2511,11 +2561,96 @@ function emitDiskLoop(ctx: AgentWasmCtx, cx: number, cy: number, _r: number, r2:
   }); });
 }
 
+/** Fold a per-axis delta `dL` to the torus-shortest distance against half-dim
+ *  `halfL` / full-dim `pushFull` — `if(d>half)d-=full; else if(d<-half)d+=full;`
+ *  — but ONLY when `_fieldBoundaryTorus` (else the raw delta). Mirrors the 3D JS
+ *  membership fold (so an r-sphere near a seam wraps correctly). */
+function emitTorusDeltaFold(ctx: AgentWasmCtx, dL: number, halfL: number, pushFull: () => void): void {
+  const em = ctx.em;
+  em.localGet(ctx.fieldTorusLocal);
+  em.ifThen(() => {
+    em.localGet(dL); em.localGet(halfL); em.op(OP_F64_GT);
+    em.ifThenElse(
+      () => { em.localGet(dL); pushFull(); em.op(OP_F64_SUB); em.localSet(dL); },
+      () => {
+        // d < -half  →  push d, then (0 - half) [f64.sub is a-b, so 0,half → -half], then LT
+        em.localGet(dL); em.f64Const(0); em.localGet(halfL); em.op(OP_F64_SUB); em.op(OP_F64_LT);
+        em.ifThen(() => { em.localGet(dL); pushFull(); em.op(OP_F64_ADD); em.localSet(dL); });
+      },
+    );
+  });
+}
+
+/** Iterate the integer cells in the euclidean r-SPHERE around (cx,cy,cz) (3D
+ *  sibling of emitDiskLoop), calling `body(ciLocal)` per in-sphere cell with the
+ *  3D index. The membership delta folds to the torus-SHORTEST distance (matching
+ *  ReadCellsUnder/AffectCellsUnder's 3D JS), then col/row/lay are wrapped/skipped. */
+function emitSphereLoop(ctx: AgentWasmCtx, cx: number, cy: number, cz: number, _r: number, r2: number, body: (ciLocal: number) => void): void {
+  const em = ctx.em;
+  const cmin = em.allocLocal(I32); em.localGet(cx); em.localGet(_r); em.op(OP_F64_SUB); em.op(OP_F64_FLOOR); em.f64ToI32(); em.localSet(cmin);
+  const cmax = em.allocLocal(I32); em.localGet(cx); em.localGet(_r); em.op(OP_F64_ADD); em.op(OP_F64_CEIL); em.f64ToI32(); em.localSet(cmax);
+  const rmin = em.allocLocal(I32); em.localGet(cy); em.localGet(_r); em.op(OP_F64_SUB); em.op(OP_F64_FLOOR); em.f64ToI32(); em.localSet(rmin);
+  const rmax = em.allocLocal(I32); em.localGet(cy); em.localGet(_r); em.op(OP_F64_ADD); em.op(OP_F64_CEIL); em.f64ToI32(); em.localSet(rmax);
+  const lmin = em.allocLocal(I32); em.localGet(cz); em.localGet(_r); em.op(OP_F64_SUB); em.op(OP_F64_FLOOR); em.f64ToI32(); em.localSet(lmin);
+  const lmax = em.allocLocal(I32); em.localGet(cz); em.localGet(_r); em.op(OP_F64_ADD); em.op(OP_F64_CEIL); em.f64ToI32(); em.localSet(lmax);
+  // half-dims (f64) for the torus-shortest membership fold
+  const hW = em.allocLocal(F64); pushFieldWInt(ctx); em.i32ToF64(); em.f64Const(2); em.op(OP_F64_DIV); em.localSet(hW);
+  const hH = em.allocLocal(F64); pushFieldHInt(ctx); em.i32ToF64(); em.f64Const(2); em.op(OP_F64_DIV); em.localSet(hH);
+  const hD = em.allocLocal(F64); pushFieldDInt(ctx); em.i32ToF64(); em.f64Const(2); em.op(OP_F64_DIV); em.localSet(hD);
+  const ll = em.allocLocal(I32); em.localGet(lmin); em.localSet(ll);
+  em.block(() => { em.loop(() => {
+    em.localGet(ll); em.localGet(lmax); em.op(OP_I32_GT_S); em.brIf(1);
+    const rr = em.allocLocal(I32); em.localGet(rmin); em.localSet(rr);
+    em.block(() => { em.loop(() => {
+      em.localGet(rr); em.localGet(rmax); em.op(OP_I32_GT_S); em.brIf(1);
+      const cc = em.allocLocal(I32); em.localGet(cmin); em.localSet(cc);
+      em.block(() => { em.loop(() => {
+        em.localGet(cc); em.localGet(cmax); em.op(OP_I32_GT_S); em.brIf(1);
+        // dx=cc-cx; dy=rr-cy; dz=ll-cz; (torus-fold each); if dx²+dy²+dz²<=r2 { … }
+        const dx = em.allocLocal(F64); em.localGet(cc); em.i32ToF64(); em.localGet(cx); em.op(OP_F64_SUB); em.localSet(dx);
+        const dy = em.allocLocal(F64); em.localGet(rr); em.i32ToF64(); em.localGet(cy); em.op(OP_F64_SUB); em.localSet(dy);
+        const dz = em.allocLocal(F64); em.localGet(ll); em.i32ToF64(); em.localGet(cz); em.op(OP_F64_SUB); em.localSet(dz);
+        emitTorusDeltaFold(ctx, dx, hW, () => { pushFieldWInt(ctx); em.i32ToF64(); });
+        emitTorusDeltaFold(ctx, dy, hH, () => { pushFieldHInt(ctx); em.i32ToF64(); });
+        emitTorusDeltaFold(ctx, dz, hD, () => { pushFieldDInt(ctx); em.i32ToF64(); });
+        em.localGet(dx); em.localGet(dx); em.op(OP_F64_MUL);
+        em.localGet(dy); em.localGet(dy); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+        em.localGet(dz); em.localGet(dz); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+        em.localGet(r2); em.op(OP_F64_LE);
+        em.ifThen(() => {
+          const col = em.allocLocal(I32); em.localGet(cc); em.localSet(col);
+          const row = em.allocLocal(I32); em.localGet(rr); em.localSet(row);
+          const lay = em.allocLocal(I32); em.localGet(ll); em.localSet(lay);
+          const skip = em.allocLocal(I32); em.i32Const(0); em.localSet(skip);
+          em.localGet(ctx.fieldTorusLocal);
+          em.ifThenElse(
+            () => { wrapModInt(em, col, () => pushFieldWInt(ctx)); wrapModInt(em, row, () => pushFieldHInt(ctx)); wrapModInt(em, lay, () => pushFieldDInt(ctx)); },
+            () => {
+              em.localGet(col); em.i32Const(0); em.op(OP_I32_LT_S); em.localGet(col); pushFieldWInt(ctx); em.op(OP_I32_GE_S); em.op(OP_I32_OR);
+              em.localGet(row); em.i32Const(0); em.op(OP_I32_LT_S); em.localGet(row); pushFieldHInt(ctx); em.op(OP_I32_GE_S); em.op(OP_I32_OR);
+              em.op(OP_I32_OR);
+              em.localGet(lay); em.i32Const(0); em.op(OP_I32_LT_S); em.localGet(lay); pushFieldDInt(ctx); em.op(OP_I32_GE_S); em.op(OP_I32_OR);
+              em.op(OP_I32_OR); em.ifThen(() => { em.i32Const(1); em.localSet(skip); });
+            },
+          );
+          em.localGet(skip); em.op(OP_I32_EQZ);
+          em.ifThen(() => { const ci = em.allocLocal(I32); emitFieldIdx(ctx, row, col, lay); em.localSet(ci); body(ci); });
+        });
+        em.localGet(cc); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(cc); em.br(0);
+      }); });
+      em.localGet(rr); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(rr); em.br(0);
+    }); });
+    em.localGet(ll); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(ll); em.br(0);
+  }); });
+}
+
 // --- field bridge reads (sampleField / fieldGradient / readCellsUnder) ---
 
-/** Bilinear sample of field `fieldId` at the f64 position pushed by pushPX/pushPY.
- *  Leaves the f64 on the stack. Mirrors SampleFieldNode's 2D math. */
-function emitSampleFieldAt(ctx: AgentWasmCtx, fieldId: string, pushPX: () => void, pushPY: () => void): void {
+/** Bilinear (2D) / trilinear (3D) sample of field `fieldId` at the f64 position
+ *  pushed by pushPX/pushPY(/pushPZ). Leaves the f64 on the stack. Mirrors
+ *  SampleFieldNode's math (index `(z*H+y)*W+x` in 3D). In a 3D model `pushPZ` MUST
+ *  be supplied (the field nodes pass the agent z / a z-shifted z). */
+function emitSampleFieldAt(ctx: AgentWasmCtx, fieldId: string, pushPX: () => void, pushPY: () => void, pushPZ?: () => void): void {
   const em = ctx.em;
   const fOff = ctx.layout.fieldOffset[fieldId];
   if (fOff === undefined) { em.f64Const(0); return; }
@@ -2528,11 +2663,49 @@ function emitSampleFieldAt(ctx: AgentWasmCtx, fieldId: string, pushPX: () => voi
   const x1 = em.allocLocal(I32); em.localGet(x0); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(x1);
   const y1 = em.allocLocal(I32); em.localGet(y0); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(y1);
   // Wrap/clamp EACH coordinate EXACTLY ONCE (x via _fieldW, y via _fieldH).
-  emitFieldWrapCoord(ctx, x0, true); emitFieldWrapCoord(ctx, x1, true);
-  emitFieldWrapCoord(ctx, y0, false); emitFieldWrapCoord(ctx, y1, false);
+  emitFieldWrapCoord(ctx, x0, 'x'); emitFieldWrapCoord(ctx, x1, 'x');
+  emitFieldWrapCoord(ctx, y0, 'y'); emitFieldWrapCoord(ctx, y1, 'y');
   // f[y0*W+x0]*(1-tx)*(1-ty) + f[y0*W+x1]*tx*(1-ty) + f[y1*W+x0]*(1-tx)*ty + f[y1*W+x1]*tx*ty
   const omtx = em.allocLocal(F64); em.f64Const(1); em.localGet(tx); em.op(OP_F64_SUB); em.localSet(omtx);
   const omty = em.allocLocal(F64); em.f64Const(1); em.localGet(ty); em.op(OP_F64_SUB); em.localSet(omty);
+
+  if (ctx.is3d && pushPZ) {
+    // 3D: 8-corner trilinear sample via the SAME NESTED lerp the JS node uses
+    // (SampleFieldNode 3D): c00..c11 = lerp_x; c0/c1 = lerp_y; result = lerp_z.
+    // (NB: a flat Σ c·wx·wy·wz is mathematically equal but NOT bit-identical to
+    // the nested form — JS rounds the nested lerps; matching it keeps bit-parity.)
+    const fz = em.allocLocal(F64); pushPZ(); em.localSet(fz);
+    const z0 = em.allocLocal(I32); em.localGet(fz); em.op(OP_F64_FLOOR); em.f64ToI32(); em.localSet(z0);
+    const tz = em.allocLocal(F64); em.localGet(fz); em.localGet(z0); em.i32ToF64(); em.op(OP_F64_SUB); em.localSet(tz);
+    const z1 = em.allocLocal(I32); em.localGet(z0); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(z1);
+    emitFieldWrapCoord(ctx, z0, 'z'); emitFieldWrapCoord(ctx, z1, 'z');
+    // read corner value f[(lay*H+row)*W+col] into a fresh local
+    const corner = (lL: number, yL: number, xL: number): number => {
+      const ci = em.allocLocal(I32); emitFieldIdx(ctx, yL, xL, lL); em.localSet(ci);
+      const v = em.allocLocal(F64); pushF64Elem(em, fOff, ci); em.localSet(v); return v;
+    };
+    const c000 = corner(z0, y0, x0), c100 = corner(z0, y0, x1), c010 = corner(z0, y1, x0), c110 = corner(z0, y1, x1);
+    const c001 = corner(z1, y0, x0), c101 = corner(z1, y0, x1), c011 = corner(z1, y1, x0), c111 = corner(z1, y1, x1);
+    // lerp_x: cXY = cA*(1-tx) + cB*tx
+    const lerpX = (cA: number, cB: number): number => {
+      const out = em.allocLocal(F64);
+      em.localGet(cA); em.localGet(omtx); em.op(OP_F64_MUL);
+      em.localGet(cB); em.localGet(tx); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(out); return out;
+    };
+    const c00 = lerpX(c000, c100), c10 = lerpX(c010, c110), c01 = lerpX(c001, c101), c11 = lerpX(c011, c111);
+    // lerp_y: cZ = cA*(1-ty) + cB*ty
+    const lerpY = (cA: number, cB: number): number => {
+      const out = em.allocLocal(F64);
+      em.localGet(cA); em.localGet(omty); em.op(OP_F64_MUL);
+      em.localGet(cB); em.localGet(ty); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.localSet(out); return out;
+    };
+    const c0 = lerpY(c00, c10), c1 = lerpY(c01, c11);
+    // lerp_z: result = c0*(1-tz) + c1*tz   (left on the stack)
+    em.localGet(c0); em.f64Const(1); em.localGet(tz); em.op(OP_F64_SUB); em.op(OP_F64_MUL);
+    em.localGet(c1); em.localGet(tz); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+    return;
+  }
+
   const sample = (xL: number, yL: number, wA: number, wB: number) => {
     const ci = em.allocLocal(I32); emitFieldIdx(ctx, yL, xL); em.localSet(ci);
     pushF64Elem(em, fOff, ci); em.localGet(wA); em.op(OP_F64_MUL); em.localGet(wB); em.op(OP_F64_MUL);
@@ -2543,12 +2716,27 @@ function emitSampleFieldAt(ctx: AgentWasmCtx, fieldId: string, pushPX: () => voi
   sample(x1, y1, tx, ty); em.op(OP_F64_ADD);
 }
 
-/** Field Gradient — central differences (±0.5) → dx/dy. Multi-output. */
+/** Field Gradient — central differences (±0.5) → dx/dy (+dz in 3D). Multi-output. */
 function emitFieldGradient(ctx: AgentWasmCtx, node: GraphNode, portId: string): ValueRef {
   const em = ctx.em;
   const fieldId = (node.data.config?.['attributeId'] as string) || '';
   const cx = em.allocLocal(F64); pushF64Elem(em, ctx.layout.f64['x']!, ctx.idxLocal); em.localSet(cx);
   const cy = em.allocLocal(F64); pushF64Elem(em, ctx.layout.f64['y']!, ctx.idxLocal); em.localSet(cy);
+  if (ctx.is3d) {
+    const cz = em.allocLocal(F64); pushF64Elem(em, ctx.layout.f64['z']!, ctx.idxLocal); em.localSet(cz);
+    const sampleAt = (dxv: number, dyv: number, dzv: number): void => {
+      emitSampleFieldAt(ctx, fieldId,
+        () => { em.localGet(cx); if (dxv !== 0) { em.f64Const(dxv); em.op(OP_F64_ADD); } },
+        () => { em.localGet(cy); if (dyv !== 0) { em.f64Const(dyv); em.op(OP_F64_ADD); } },
+        () => { em.localGet(cz); if (dzv !== 0) { em.f64Const(dzv); em.op(OP_F64_ADD); } });
+    };
+    const dxL = em.allocLocal(F64); sampleAt(0.5, 0, 0); sampleAt(-0.5, 0, 0); em.op(OP_F64_SUB); em.localSet(dxL);
+    const dyL = em.allocLocal(F64); sampleAt(0, 0.5, 0); sampleAt(0, -0.5, 0); em.op(OP_F64_SUB); em.localSet(dyL);
+    const dzL = em.allocLocal(F64); sampleAt(0, 0, 0.5); sampleAt(0, 0, -0.5); em.op(OP_F64_SUB); em.localSet(dzL);
+    const dxRef: LocalRef = { localIdx: dxL, valtype: F64 }, dyRef: LocalRef = { localIdx: dyL, valtype: F64 }, dzRef: LocalRef = { localIdx: dzL, valtype: F64 };
+    setCachedPort(ctx, node.id, 'dx', dxRef); setCachedPort(ctx, node.id, 'dy', dyRef); setCachedPort(ctx, node.id, 'dz', dzRef);
+    return portId === 'dz' ? dzRef : portId === 'dy' ? dyRef : dxRef;
+  }
   const sampleAt = (dxv: number, dyv: number): void => {
     emitSampleFieldAt(ctx, fieldId,
       () => { em.localGet(cx); if (dxv !== 0) { em.f64Const(dxv); em.op(OP_F64_ADD); } },
@@ -2561,7 +2749,7 @@ function emitFieldGradient(ctx: AgentWasmCtx, node: GraphNode, portId: string): 
   return portId === 'dy' ? dyRef : dxRef;
 }
 
-/** Read Cells Under — r-disk aggregate (mean/sum/max/min). 2D. */
+/** Read Cells Under — r-disk (2D) / r-sphere (3D) aggregate (mean/sum/max/min). */
 function emitReadCellsUnder(ctx: AgentWasmCtx, node: GraphNode): void {
   const em = ctx.em;
   const fieldId = (node.data.config?.['attributeId'] as string) || '';
@@ -2575,7 +2763,7 @@ function emitReadCellsUnder(ctx: AgentWasmCtx, node: GraphNode): void {
   const acc = em.allocLocal(F64); const n = em.allocLocal(I32); em.i32Const(0); em.localSet(n);
   const init = reduce === 'max' ? -Infinity : reduce === 'min' ? Infinity : 0;
   em.f64Const(init); em.localSet(acc);
-  emitDiskLoop(ctx, cx, cy, r, r2, (ciLocal) => {
+  const reduceBody = (ciLocal: number) => {
     const val = em.allocLocal(F64); pushF64Elem(em, fOff, ciLocal); em.localSet(val);
     switch (reduce) {
       case 'max': em.localGet(acc); em.localGet(val); em.op(OP_F64_MAX); em.localSet(acc); break;
@@ -2583,7 +2771,13 @@ function emitReadCellsUnder(ctx: AgentWasmCtx, node: GraphNode): void {
       default: em.localGet(acc); em.localGet(val); em.op(OP_F64_ADD); em.localSet(acc); break; // sum/mean
     }
     em.localGet(n); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(n);
-  });
+  };
+  if (ctx.is3d) {
+    const cz = em.allocLocal(F64); pushF64Elem(em, ctx.layout.f64['z']!, ctx.idxLocal); em.localSet(cz);
+    emitSphereLoop(ctx, cx, cy, cz, r, r2, reduceBody);
+  } else {
+    emitDiskLoop(ctx, cx, cy, r, r2, reduceBody);
+  }
   // finish: mean → n>0?acc/n:0 ; max/min → n>0?acc:0 ; sum → acc. NB:
   // WasmEmitter.ifThenElse uses an EMPTY block type, so the branches may NOT leave
   // a value on the stack — store into a result local + reload.
@@ -3531,14 +3725,11 @@ export function isAgentGraphWasmSupported(model: CAModel | undefined | null): bo
   if (!behaviourNode) return false;
   const reachable = behaviourReachableNodeIds(behaviourNode, adj);
 
-  // The WASM-agent field-bridge emitters (sampleField/fieldGradient/readCellsUnder/
-  // affectCellsUnder/secreteToField) are 2D-only (`emitFieldIdx` = row·W + col, no
-  // layer). In a 3D model they'd silently sample/deposit on the z=0 slice, so a 3D
-  // field model clamps to JS (which IS 3D-correct — SampleFieldNode etc. have the
-  // trilinear path). Non-field 3D agents (Boids/GoL/the 3D neighbour query) run on
-  // WASM unchanged. (The WebGPU agent target already supports 3D field — gap C.)
-  const fieldNodeTypes = new Set(['sampleField', 'fieldGradient', 'readCellsUnder', 'affectCellsUnder', 'secreteToField']);
-  const is3d = is3dModel(model);
+  // The WASM-agent field bridge (sampleField/fieldGradient/readCellsUnder/
+  // affectCellsUnder/secreteToField) is now FULLY 3D: the emitters branch on
+  // `ctx.is3d` (trilinear sample/gradient + r-sphere read/affect + 8-cell splat,
+  // index `(layer*H+row)*W+col`), matching the JS field nodes. So a 3D-field model
+  // runs on WASM — no field-in-3D clamp.
 
   let nearbyArrayProducers = 0;
   for (const id of reachable) {
@@ -3546,7 +3737,6 @@ export function isAgentGraphWasmSupported(model: CAModel | undefined | null): bo
     const t = n.data.nodeType;
     if (t === 'macroInput' || t === 'macroOutput' || t === 'macro') return false;
     if (!AGENT_WASM_SUPPORTED_TYPES.has(t)) return false;
-    if (is3d && fieldNodeTypes.has(t)) return false; // 3D field → JS (3D-correct)
     if (t === 'getNearbyAgents') nearbyArrayProducers++;
   }
   // The per-node scratch-slot budget (only getNearbyAgents uses reserved slots).
