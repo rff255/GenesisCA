@@ -3043,11 +3043,17 @@ function agentMaxHashBinsForModelGPU(model: CAModel): number {
   const cfg = model.centerBased;
   const W = (model.properties.gridWidth as number) || 100;
   const H = (model.properties.gridHeight as number) || 100;
+  // The agent world depth IS the grid depth (1:1, B2) — 3D only when is3dModel.
+  const D = is3dModel(model) ? Math.max(1, Math.floor((model.properties.gridDepth as number) || 1)) : 1;
   const range = (cfg?.interactionRange as number) ?? 1.5;
   const dr = (cfg?.defaultRadius as number) ?? 0.5;
   const nq = (cfg?.neighbourQueryRadius as number) ?? 5;
   const minEdge = Math.max(1e-3, range * 2 * dr, nq);
   const nx = Math.max(1, Math.floor(W / minEdge));
   const ny = Math.max(1, Math.floor(H / minEdge));
-  return Math.min(1 << 20, nx * ny);
+  // The Z axis MUST be counted in 3D (mirrors computeAgentMaxHashBins) — without
+  // nz the reserve undersizes the 3×3×3 hash and every step overflows → JS
+  // fallback (the 3D-field-bridge bug). 2D (D=1) → nz=1 → byte-identical reserve.
+  const nz = D > 1 ? Math.max(1, Math.floor(D / minEdge)) : 1;
+  return Math.min(1 << 20, nx * ny * nz);
 }
