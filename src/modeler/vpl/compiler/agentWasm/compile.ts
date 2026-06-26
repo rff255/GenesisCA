@@ -1477,9 +1477,9 @@ function emitPickNRandomAgents(ctx: AgentWasmCtx, node: GraphNode): AgentArrayRe
   const inArr = resolveInputArray(ctx, node, 'agents');
   if (!inArr) { const lenL = em.allocLocal(I32); em.i32Const(0); em.localSet(lenL); return allocScratch(ctx, lenL, 4, false); }
   const n = em.allocLocal(I32); pushValueAs(em, resolveValueInput(ctx, node, 'n', 1), I32); em.localSet(n);
-  // k = min(max(n,0), len)
+  // k = min(max(n,0), len). ifThenElse blocks are empty-type → store into k inside.
   const k = em.allocLocal(I32);
-  em.localGet(n); em.i32Const(0); em.op(OP_I32_GT_S); em.ifThenElse(() => em.localGet(n), () => em.i32Const(0)); em.localSet(k);
+  em.localGet(n); em.i32Const(0); em.op(OP_I32_GT_S); em.ifThenElse(() => { em.localGet(n); em.localSet(k); }, () => { em.i32Const(0); em.localSet(k); });
   em.localGet(k); em.localGet(inArr.lenLocal); em.op(OP_I32_GT_S); em.ifThen(() => { em.localGet(inArr.lenLocal); em.localSet(k); });
   // work = copy of input (i32)
   const work = allocScratch(ctx, inArr.lenLocal, 4, false);
@@ -2558,16 +2558,20 @@ function emitReadCellsUnder(ctx: AgentWasmCtx, node: GraphNode): void {
     }
     em.localGet(n); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(n);
   });
-  // finish: mean → n>0?acc/n:0 ; max/min → n>0?acc:0 ; sum → acc
+  // finish: mean → n>0?acc/n:0 ; max/min → n>0?acc:0 ; sum → acc. NB:
+  // WasmEmitter.ifThenElse uses an EMPTY block type, so the branches may NOT leave
+  // a value on the stack — store into a result local + reload.
+  const res = em.allocLocal(F64);
   if (reduce === 'mean') {
     em.localGet(n); em.i32Const(0); em.op(OP_I32_GT_S);
-    em.ifThenElse(() => { em.localGet(acc); em.localGet(n); em.i32ToF64(); em.op(OP_F64_DIV); }, () => em.f64Const(0));
+    em.ifThenElse(() => { em.localGet(acc); em.localGet(n); em.i32ToF64(); em.op(OP_F64_DIV); em.localSet(res); }, () => { em.f64Const(0); em.localSet(res); });
   } else if (reduce === 'max' || reduce === 'min') {
     em.localGet(n); em.i32Const(0); em.op(OP_I32_GT_S);
-    em.ifThenElse(() => em.localGet(acc), () => em.f64Const(0));
+    em.ifThenElse(() => { em.localGet(acc); em.localSet(res); }, () => { em.f64Const(0); em.localSet(res); });
   } else {
-    em.localGet(acc);
+    em.localGet(acc); em.localSet(res);
   }
+  em.localGet(res);
 }
 
 /** `_agentForceX[idx] += <pushVal()>`. */
