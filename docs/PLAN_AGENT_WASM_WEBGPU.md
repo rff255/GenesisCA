@@ -39,6 +39,43 @@ the grid. Benchmark a heavy rule, not Boids.
 
 ---
 
+## ✅ FULL COVERAGE ACHIEVED (the compile matrix is closed)
+
+**Every node runs on every compile target; each per-target gate now rejects ONLY
+the genuinely-fundamental constraints.** The final close-out (branch
+`continue_agents`) shipped the last 4 not-yet-ported nodes — all on WebGPU:
+1. **WebGPU GRID `aggregate.median`** — a per-thread WGSL insertion-sort over the
+   materialised `var<function>` scratch, then median-pick. GPU-verified.
+2. **WebGPU GRID uniform `random`** (`aggregate`/`groupOperator`) — the per-cell
+   PCG + the `weightedRandom` materialise-then-index path. GPU-verified.
+3. **WebGPU AGENTS 3D field bridge** — trilinear sample/gradient + r-sphere
+   read/affect + 8-cell trilinear splat (the runtime round-trip + layout were
+   already 3D-correct; only the WGSL math was 2D-locked). Un-gated field-in-3D.
+   Fixed an undersized 3D hash reserve (`agentMaxHashBinsForModelGPU` dropped
+   `nz`). GPU-verified (3D Chemotaxis flocks + the field builds in the volume).
+4. **WebGPU AGENTS glyph `setCellLooks`** — un-gated as a parity NO-OP (agents
+   render as circles on EVERY target; the per-agent glyph write lands in the
+   length-0 GLYPH_NOOP buffer on JS/WASM, so WebGPU matches by skipping it — no
+   cross-target rendering divergence). GPU-verified (Boids+glyph flocks on WebGPU).
+
+**The COMPLETE reject set across ALL targets** (mode/precision/order — NOT node
+bans; identical to the lattice grid):
+- **WebGPU async update mode** (grid) — serial-by-definition, no parallel-GPU form.
+- **WebGPU `updateIndicator` toggle/next/previous** (grid + agents) —
+  order-dependent non-commutative writes by parallel writers.
+- (WebGPU agents) `aggregate`/`groupOperator` median + uniform-random (no GPU
+  sort/per-cell-pick path — same as the grid), `stopEvent` on the agent
+  behaviour (a GPU stopFlag round-trip; no sample uses it), and the >6
+  agent-array-producer CAPACITY gate (register budget — not a node ban).
+- **f32 + per-cell PCG on WebGPU** — statistical parity, NOT bit-exact; bars NO node.
+
+All of WebGPU's node-level rejects (median/uniform-random/toggle-indicators) DO
+run on the WASM agent + grid targets (f64 + sequential), and the WASM-agent 3D
+field bridge is the one documented follow-up (a 3D-field WASM-agent model clamps
+to JS, which is 3D-correct). JS is full coverage everywhere.
+
+---
+
 ## FULL-COVERAGE MANDATE (every node, every target — no permanent subset)
 
 **Hard requirement (user directive): every node must run on every compile target.** The

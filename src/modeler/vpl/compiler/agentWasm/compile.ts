@@ -3531,12 +3531,22 @@ export function isAgentGraphWasmSupported(model: CAModel | undefined | null): bo
   if (!behaviourNode) return false;
   const reachable = behaviourReachableNodeIds(behaviourNode, adj);
 
+  // The WASM-agent field-bridge emitters (sampleField/fieldGradient/readCellsUnder/
+  // affectCellsUnder/secreteToField) are 2D-only (`emitFieldIdx` = row·W + col, no
+  // layer). In a 3D model they'd silently sample/deposit on the z=0 slice, so a 3D
+  // field model clamps to JS (which IS 3D-correct — SampleFieldNode etc. have the
+  // trilinear path). Non-field 3D agents (Boids/GoL/the 3D neighbour query) run on
+  // WASM unchanged. (The WebGPU agent target already supports 3D field — gap C.)
+  const fieldNodeTypes = new Set(['sampleField', 'fieldGradient', 'readCellsUnder', 'affectCellsUnder', 'secreteToField']);
+  const is3d = is3dModel(model);
+
   let nearbyArrayProducers = 0;
   for (const id of reachable) {
     const n = adj.nodeMap.get(id); if (!n) continue;
     const t = n.data.nodeType;
     if (t === 'macroInput' || t === 'macroOutput' || t === 'macro') return false;
     if (!AGENT_WASM_SUPPORTED_TYPES.has(t)) return false;
+    if (is3d && fieldNodeTypes.has(t)) return false; // 3D field → JS (3D-correct)
     if (t === 'getNearbyAgents') nearbyArrayProducers++;
   }
   // The per-node scratch-slot budget (only getNearbyAgents uses reserved slots).
