@@ -2029,18 +2029,21 @@ function emitSecreteToField(ctx: AgentWgpuCtx, node: GraphNode): void {
 
 /** Set Cell Looks — colour THIS agent (per-agent RGBA into `agentColors[idx]`,
  *  packed `r | g<<8 | b<<16 | a<<24`, mirroring the lattice WGSL setCellLooks).
- *  PLAIN mode only on the agent GPU path (glyphs need the per-cell glyph buffers,
- *  which the agent GPU SoA doesn't carry — a glyph setCellLooks clamps the model
- *  to JS via the gate). The agent loop's "viewer" is always the current pass, so
- *  the `__current__` sentinel + any concrete mapping write unconditionally (the
- *  worker dispatches one behaviour pass; there's no per-mapping viewer guard on
- *  the agent colour buffer). */
+ *  The agent render draws filled circles only (no glyph overlay on ANY target),
+ *  so this writes ONLY the background colour: plain mode always, glyph mode when
+ *  `setBackground` is on. A glyph-WITHOUT-background setCellLooks is a no-op here
+ *  — the SAME no-op as JS/WASM (where the per-agent glyph write lands in the
+ *  length-0 GLYPH_NOOP buffer), so cross-target parity holds and the node never
+ *  clamps the model off WebGPU. The agent loop's "viewer" is always the current
+ *  pass, so the `__current__` sentinel + any concrete mapping write
+ *  unconditionally (the worker dispatches one behaviour pass; there's no
+ *  per-mapping viewer guard on the agent colour buffer). */
 function emitSetCellLooks(ctx: AgentWgpuCtx, node: GraphNode): void {
   const cfg = node.data.config as Record<string, unknown> | undefined;
   const useGlyph = !!cfg?.['useGlyph'];
   const setBg = cfg?.['setBackground'] !== false; // default true
   const doBg = !useGlyph || setBg;
-  if (!doBg) return; // glyph-only (no background) → no agent-colour write on GPU
+  if (!doBg) return; // glyph-only (no background) → no agent-colour write (no-op, == JS/WASM)
   const re = `u32(clamp(${castTo(resolveValueInput(ctx, node, 'r', 0), 'i32')}, 0, 255))`;
   const ge = `u32(clamp(${castTo(resolveValueInput(ctx, node, 'g', 0), 'i32')}, 0, 255))`;
   const be = `u32(clamp(${castTo(resolveValueInput(ctx, node, 'b', 0), 'i32')}, 0, 255))`;
@@ -2600,11 +2603,15 @@ export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): 
       const rt = (cfg['randomType'] as string) || (cfg['mode'] as string);
       if (rt === 'options') return false;
     }
-    if (t === 'setCellLooks') {
-      // Glyph mode needs the per-cell glyph buffers, which the agent GPU SoA does
-      // not carry — a glyph (no-background) setCellLooks clamps the model to JS.
-      if (cfg['useGlyph'] && cfg['setBackground'] === false) return false;
-    }
+    // setCellLooks glyph mode: the AGENT render path (drawAgentsOverlay) draws
+    // filled circles only — NO glyph overlay on ANY target. On JS/WASM a glyph
+    // setCellLooks writes the per-AGENT glyph buffer, which for agents is the
+    // length-0 GLYPH_NOOP buffer (a silently-dropped write) — i.e. a no-op. So a
+    // glyph setCellLooks is HARMLESS, not a fundamental: it must NOT clamp the
+    // model to JS. emitSetCellLooks writes the background colour when
+    // setBackground (matching JS) and skips the glyph codepoint write (the
+    // agent SoA has no glyph buffers — same no-op as JS/WASM, so cross-target
+    // parity is preserved). No reject here.
     // The field bridge (sample/affect/secrete/etc.) now emits a 3D trilinear /
     // r-sphere path when gridDepth>1 (gap C), so a 3D field model runs on WebGPU
     // too — no field-in-3D clamp remains.
