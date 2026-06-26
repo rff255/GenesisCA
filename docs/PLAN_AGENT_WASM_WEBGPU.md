@@ -70,9 +70,14 @@ bans; identical to the lattice grid):
 - **f32 + per-cell PCG on WebGPU** — statistical parity, NOT bit-exact; bars NO node.
 
 All of WebGPU's node-level rejects (median/uniform-random/toggle-indicators) DO
-run on the WASM agent + grid targets (f64 + sequential), and the WASM-agent 3D
-field bridge is the one documented follow-up (a 3D-field WASM-agent model clamps
-to JS, which is 3D-correct). JS is full coverage everywhere.
+run on the WASM agent + grid targets (f64 + sequential). **The WASM-agent 3D
+field bridge is now DONE** (was the one documented follow-up): all 5 field
+emitters branch on `ctx.is3d` — trilinear sample/gradient + r-sphere read/affect
++ 8-cell trilinear splat, index `(layer·H+row)·W+col` — mirroring the JS field
+nodes with JS↔WASM bit-parity; the field-in-3D clamp is removed. (Two bugs the
+comprehensive 3D-field parity harness caught + fixed: the 3D sample needed the
+JS NESTED lerp not a flat sum, and `emitTorusDeltaFold` had its `-half` operands
+reversed.) JS is full coverage everywhere.
 
 ---
 
@@ -202,7 +207,9 @@ offsets + scalar args.
   catalogue (the gate `isAgentGraphWasmSupported` accepts every agent graph, clamped
   only by the per-node array-scratch-slot budget — a structural gate, not a node ban).
   Added (over the PR6b-2 Boids subset): the **field bridge** (sampleField/fieldGradient/
-  readCellsUnder/affectCellsUnder/secreteToField — 2D bilinear, torus-folded), the
+  readCellsUnder/affectCellsUnder/secreteToField — 2D bilinear, torus-folded; the
+  **3D trilinear/r-sphere port is now DONE too** — see the WASM-agent 3D-field note
+  above), the
   **agent-array tier** (getAgentsAttribute/filterAgents/joinAgents/pickRandom(N)/
   getBondedAgents + aggregate/groupOperator[median+uniform-random incl.]/groupCounting/
   groupStatement over arrays), `getCellAttribute`/`getAgentAttribute`/`setAttribute`/
