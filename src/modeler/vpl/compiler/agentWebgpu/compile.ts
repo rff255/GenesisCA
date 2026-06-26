@@ -280,6 +280,17 @@ function fieldWriteBaseOf(ctx: AgentWgpuCtx, attrId: string): number {
   return ctx.layout.fieldWriteBase[attrId] ?? 0;
 }
 
+/** A `fieldRead` sample at continuous (px, py[, pz]) — bilinear in 2D, trilinear
+ *  in 3D. The 3D form threads the agent's z at `pzExpr` (default the agent's own
+ *  z) so Sample/Gradient stay single-source. */
+function fieldSampleCall(ctx: AgentWgpuCtx, base: number, pxExpr: string, pyExpr: string, pzExpr?: string): string {
+  if (ctx.is3d) {
+    const pz = pzExpr ?? f32At(ctx, 'z', 'idx');
+    return `fieldSampleTrilinear(${base}u, ${pxExpr}, ${pyExpr}, ${pz})`;
+  }
+  return `fieldSampleBilinear(${base}u, ${pxExpr}, ${pyExpr})`;
+}
+
 // ---------------------------------------------------------------------------
 // Inline-widget fallback for an unwired value input.
 // ---------------------------------------------------------------------------
@@ -789,16 +800,18 @@ function fieldAttrId(node: GraphNode): string {
   return typeof id === 'string' && id.length > 0 ? id : '_undef';
 }
 
-/** Sample Field — bilinearly read the field at the agent's (x, y). */
+/** Sample Field — bilinearly (2D) / trilinearly (3D) read the field at the
+ *  agent's (x, y[, z]). */
 function emitSampleField(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   const attr = fieldAttrId(node);
   const base = ctx.layout.fieldReadBase[attr] ?? 0;
   const px = f32At(ctx, 'x', 'idx'), py = f32At(ctx, 'y', 'idx');
-  return emitLet(ctx, 'f32', `fieldSampleBilinear(${base}u, ${px}, ${py})`, 'sf');
+  return emitLet(ctx, 'f32', fieldSampleCall(ctx, base, px, py), 'sf');
 }
 
-/** Field Gradient — central differences (±0.5 cell) of the bilinear field.
- *  Multi-output (∂x, ∂y); emit both into shared locals + cache all ports. */
+/** Field Gradient — central differences (±0.5 cell) of the bilinear/trilinear
+ *  field. Multi-output (∂x, ∂y[, ∂z] in 3D); emit into shared locals + cache
+ *  all ports. */
 function compileFieldGradient(ctx: AgentWgpuCtx, node: GraphNode, portId: string): ValueRef {
   const cachedSibling = ctx.valueCache.get(`${node.id}:dx`);
   if (cachedSibling !== undefined) return ctx.valueCache.get(`${node.id}:${portId}`) ?? cachedSibling;
@@ -806,18 +819,26 @@ function compileFieldGradient(ctx: AgentWgpuCtx, node: GraphNode, portId: string
   const base = ctx.layout.fieldReadBase[attr] ?? 0;
   const px = f32At(ctx, 'x', 'idx'), py = f32At(ctx, 'y', 'idx');
   const dxN = fresh(ctx, 'gdx'), dyN = fresh(ctx, 'gdy');
-  ctx.lines.push(`  let ${dxN}: f32 = fieldSampleBilinear(${base}u, ${px} + 0.5, ${py}) - fieldSampleBilinear(${base}u, ${px} - 0.5, ${py});`);
-  ctx.lines.push(`  let ${dyN}: f32 = fieldSampleBilinear(${base}u, ${px}, ${py} + 0.5) - fieldSampleBilinear(${base}u, ${px}, ${py} - 0.5);`);
+  ctx.lines.push(`  let ${dxN}: f32 = ${fieldSampleCall(ctx, base, `${px} + 0.5`, py)} - ${fieldSampleCall(ctx, base, `${px} - 0.5`, py)};`);
+  ctx.lines.push(`  let ${dyN}: f32 = ${fieldSampleCall(ctx, base, px, `${py} + 0.5`)} - ${fieldSampleCall(ctx, base, px, `${py} - 0.5`)};`);
   const refs: Record<string, ValueRef> = {
     dx: { expr: dxN, type: 'f32' },
     dy: { expr: dyN, type: 'f32' },
   };
+  if (ctx.is3d) {
+    const pz = f32At(ctx, 'z', 'idx');
+    const dzN = fresh(ctx, 'gdz');
+    ctx.lines.push(`  let ${dzN}: f32 = ${fieldSampleCall(ctx, base, px, py, `${pz} + 0.5`)} - ${fieldSampleCall(ctx, base, px, py, `${pz} - 0.5`)};`);
+    refs['dz'] = { expr: dzN, type: 'f32' };
+  }
   for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
   return refs[portId] ?? refs['dx']!;
 }
 
-/** Read Cells Under — aggregate (mean/sum/max/min) the field over an r-disk
- *  under the agent. Reads the `fieldRead` snapshot. 2D. */
+/** Read Cells Under — aggregate (mean/sum/max/min) the field over an r-disk (2D)
+ *  / r-sphere (3D) under the agent. Reads the `fieldRead` snapshot. The 3D path
+ *  adds a layer loop + 3D torus-shortest membership (the sphere wraps near the
+ *  z-seam) + the 3D field index, mirroring ReadCellsUnderNode's 3D JS. */
 function emitReadCellsUnder(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   const attr = fieldAttrId(node);
   const cfg = node.data.config as Record<string, unknown> | undefined;
@@ -828,35 +849,83 @@ function emitReadCellsUnder(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   const acc = fresh(ctx, 'rcuA'), n = fresh(ctx, 'rcuN'), rr = fresh(ctx, 'rcuR2');
   const cxL = fresh(ctx, 'rcuCx'), cyL = fresh(ctx, 'rcuCy'), rL = fresh(ctx, 'rcuRad');
   const init = reduce === 'max' ? '-3.4028235e38' : reduce === 'min' ? '3.4028235e38' : '0.0';
-  ctx.lines.push(`  let ${cxL}: f32 = ${cx}; let ${cyL}: f32 = ${cy}; let ${rL}: f32 = ${r};`);
-  ctx.lines.push(`  var ${acc}: f32 = ${init}; var ${n}: i32 = 0; let ${rr}: f32 = ${rL} * ${rL};`);
-  const cmin = fresh(ctx, 'rcuCmin'), cmax = fresh(ctx, 'rcuCmax'), rmin = fresh(ctx, 'rcuRmin'), rmax = fresh(ctx, 'rcuRmax');
-  ctx.lines.push(`  let ${cmin}: i32 = i32(floor(${cxL} - ${rL})); let ${cmax}: i32 = i32(ceil(${cxL} + ${rL}));`);
-  ctx.lines.push(`  let ${rmin}: i32 = i32(floor(${cyL} - ${rL})); let ${rmax}: i32 = i32(ceil(${cyL} + ${rL}));`);
-  const ri = fresh(ctx, 'rcuRi'), ci = fresh(ctx, 'rcuCi');
-  ctx.lines.push(`  for (var ${ri}: i32 = ${rmin}; ${ri} <= ${rmax}; ${ri} = ${ri} + 1) {`);
-  ctx.lines.push(`  for (var ${ci}: i32 = ${cmin}; ${ci} <= ${cmax}; ${ci} = ${ci} + 1) {`);
-  const ddx = fresh(ctx, 'rcuDx'), ddy = fresh(ctx, 'rcuDy');
-  ctx.lines.push(`    let ${ddx}: f32 = f32(${ci}) - ${cxL}; let ${ddy}: f32 = f32(${ri}) - ${cyL};`);
-  ctx.lines.push(`    if (${ddx} * ${ddx} + ${ddy} * ${ddy} <= ${rr}) {`);
-  const col = fresh(ctx, 'rcuCol'), row = fresh(ctx, 'rcuRow'), inb = fresh(ctx, 'rcuIn');
-  ctx.lines.push(`      var ${col}: i32 = ${ci}; var ${row}: i32 = ${ri}; var ${inb}: bool = true;`);
-  ctx.lines.push(`      if (control.fieldTorus != 0u) {`);
-  ctx.lines.push(`        ${col} = ((${col} % i32(control.fieldW)) + i32(control.fieldW)) % i32(control.fieldW);`);
-  ctx.lines.push(`        ${row} = ((${row} % i32(control.fieldH)) + i32(control.fieldH)) % i32(control.fieldH);`);
-  ctx.lines.push(`      } else {`);
-  ctx.lines.push(`        if (${col} < 0 || ${col} >= i32(control.fieldW) || ${row} < 0 || ${row} >= i32(control.fieldH)) { ${inb} = false; }`);
-  ctx.lines.push(`      }`);
-  ctx.lines.push(`      if (${inb}) {`);
-  const val = fresh(ctx, 'rcuVal');
-  ctx.lines.push(`        let ${val}: f32 = ${fieldReadAt(ctx, attr, `u32(${row}) * u32(control.fieldW) + u32(${col})`)};`);
-  if (reduce === 'max') ctx.lines.push(`        if (${val} > ${acc}) { ${acc} = ${val}; }`);
-  else if (reduce === 'min') ctx.lines.push(`        if (${val} < ${acc}) { ${acc} = ${val}; }`);
-  else ctx.lines.push(`        ${acc} = ${acc} + ${val};`);
-  ctx.lines.push(`        ${n} = ${n} + 1;`);
-  ctx.lines.push(`      }`);
-  ctx.lines.push(`    }`);
-  ctx.lines.push(`  } }`);
+  const accumLine = (val: string) => {
+    if (reduce === 'max') ctx.lines.push(`        if (${val} > ${acc}) { ${acc} = ${val}; }`);
+    else if (reduce === 'min') ctx.lines.push(`        if (${val} < ${acc}) { ${acc} = ${val}; }`);
+    else ctx.lines.push(`        ${acc} = ${acc} + ${val};`);
+    ctx.lines.push(`        ${n} = ${n} + 1;`);
+  };
+
+  if (ctx.is3d) {
+    const cz = f32At(ctx, 'z', 'idx');
+    const czL = fresh(ctx, 'rcuCz');
+    ctx.lines.push(`  let ${cxL}: f32 = ${cx}; let ${cyL}: f32 = ${cy}; let ${czL}: f32 = ${cz}; let ${rL}: f32 = ${r};`);
+    ctx.lines.push(`  var ${acc}: f32 = ${init}; var ${n}: i32 = 0; let ${rr}: f32 = ${rL} * ${rL};`);
+    const W = `f32(control.fieldW)`, H = `f32(control.fieldH)`, D = `f32(control.fieldD)`;
+    const hW = fresh(ctx, 'rcuHw'), hH = fresh(ctx, 'rcuHh'), hD = fresh(ctx, 'rcuHd');
+    ctx.lines.push(`  let ${hW}: f32 = ${W} * 0.5; let ${hH}: f32 = ${H} * 0.5; let ${hD}: f32 = ${D} * 0.5;`);
+    const cmin = fresh(ctx, 'rcuCmin'), cmax = fresh(ctx, 'rcuCmax'), rmin = fresh(ctx, 'rcuRmin'), rmax = fresh(ctx, 'rcuRmax'), lmin = fresh(ctx, 'rcuLmin'), lmax = fresh(ctx, 'rcuLmax');
+    ctx.lines.push(`  let ${cmin}: i32 = i32(floor(${cxL} - ${rL})); let ${cmax}: i32 = i32(ceil(${cxL} + ${rL}));`);
+    ctx.lines.push(`  let ${rmin}: i32 = i32(floor(${cyL} - ${rL})); let ${rmax}: i32 = i32(ceil(${cyL} + ${rL}));`);
+    ctx.lines.push(`  let ${lmin}: i32 = i32(floor(${czL} - ${rL})); let ${lmax}: i32 = i32(ceil(${czL} + ${rL}));`);
+    const li = fresh(ctx, 'rcuLi'), ri = fresh(ctx, 'rcuRi'), ci = fresh(ctx, 'rcuCi');
+    ctx.lines.push(`  for (var ${li}: i32 = ${lmin}; ${li} <= ${lmax}; ${li} = ${li} + 1) {`);
+    ctx.lines.push(`  for (var ${ri}: i32 = ${rmin}; ${ri} <= ${rmax}; ${ri} = ${ri} + 1) {`);
+    ctx.lines.push(`  for (var ${ci}: i32 = ${cmin}; ${ci} <= ${cmax}; ${ci} = ${ci} + 1) {`);
+    const ddx = fresh(ctx, 'rcuDx'), ddy = fresh(ctx, 'rcuDy'), ddz = fresh(ctx, 'rcuDz');
+    ctx.lines.push(`    var ${ddx}: f32 = f32(${ci}) - ${cxL}; var ${ddy}: f32 = f32(${ri}) - ${cyL}; var ${ddz}: f32 = f32(${li}) - ${czL};`);
+    // torus-shortest fold of the membership offsets (matches the 3D JS)
+    ctx.lines.push(`    if (control.fieldTorus != 0u) {`);
+    ctx.lines.push(`      if (${ddx} > ${hW}) { ${ddx} = ${ddx} - ${W}; } else if (${ddx} < -${hW}) { ${ddx} = ${ddx} + ${W}; }`);
+    ctx.lines.push(`      if (${ddy} > ${hH}) { ${ddy} = ${ddy} - ${H}; } else if (${ddy} < -${hH}) { ${ddy} = ${ddy} + ${H}; }`);
+    ctx.lines.push(`      if (${ddz} > ${hD}) { ${ddz} = ${ddz} - ${D}; } else if (${ddz} < -${hD}) { ${ddz} = ${ddz} + ${D}; }`);
+    ctx.lines.push(`    }`);
+    ctx.lines.push(`    if (${ddx} * ${ddx} + ${ddy} * ${ddy} + ${ddz} * ${ddz} <= ${rr}) {`);
+    const col = fresh(ctx, 'rcuCol'), row = fresh(ctx, 'rcuRow'), lay = fresh(ctx, 'rcuLay'), inb = fresh(ctx, 'rcuIn');
+    ctx.lines.push(`      var ${col}: i32 = ${ci}; var ${row}: i32 = ${ri}; var ${lay}: i32 = ${li}; var ${inb}: bool = true;`);
+    ctx.lines.push(`      if (control.fieldTorus != 0u) {`);
+    ctx.lines.push(`        ${col} = ((${col} % i32(control.fieldW)) + i32(control.fieldW)) % i32(control.fieldW);`);
+    ctx.lines.push(`        ${row} = ((${row} % i32(control.fieldH)) + i32(control.fieldH)) % i32(control.fieldH);`);
+    ctx.lines.push(`        ${lay} = ((${lay} % i32(control.fieldD)) + i32(control.fieldD)) % i32(control.fieldD);`);
+    ctx.lines.push(`      } else {`);
+    ctx.lines.push(`        if (${col} < 0 || ${col} >= i32(control.fieldW) || ${row} < 0 || ${row} >= i32(control.fieldH) || ${lay} < 0 || ${lay} >= i32(control.fieldD)) { ${inb} = false; }`);
+    ctx.lines.push(`      }`);
+    ctx.lines.push(`      if (${inb}) {`);
+    const val = fresh(ctx, 'rcuVal');
+    // 3D field index = (lay·H + row)·W + col.
+    ctx.lines.push(`        let ${val}: f32 = ${fieldReadAt(ctx, attr, `(u32(${lay}) * u32(control.fieldH) + u32(${row})) * u32(control.fieldW) + u32(${col})`)};`);
+    accumLine(val);
+    ctx.lines.push(`      }`);
+    ctx.lines.push(`    }`);
+    ctx.lines.push(`  } } }`);
+  } else {
+    ctx.lines.push(`  let ${cxL}: f32 = ${cx}; let ${cyL}: f32 = ${cy}; let ${rL}: f32 = ${r};`);
+    ctx.lines.push(`  var ${acc}: f32 = ${init}; var ${n}: i32 = 0; let ${rr}: f32 = ${rL} * ${rL};`);
+    const cmin = fresh(ctx, 'rcuCmin'), cmax = fresh(ctx, 'rcuCmax'), rmin = fresh(ctx, 'rcuRmin'), rmax = fresh(ctx, 'rcuRmax');
+    ctx.lines.push(`  let ${cmin}: i32 = i32(floor(${cxL} - ${rL})); let ${cmax}: i32 = i32(ceil(${cxL} + ${rL}));`);
+    ctx.lines.push(`  let ${rmin}: i32 = i32(floor(${cyL} - ${rL})); let ${rmax}: i32 = i32(ceil(${cyL} + ${rL}));`);
+    const ri = fresh(ctx, 'rcuRi'), ci = fresh(ctx, 'rcuCi');
+    ctx.lines.push(`  for (var ${ri}: i32 = ${rmin}; ${ri} <= ${rmax}; ${ri} = ${ri} + 1) {`);
+    ctx.lines.push(`  for (var ${ci}: i32 = ${cmin}; ${ci} <= ${cmax}; ${ci} = ${ci} + 1) {`);
+    const ddx = fresh(ctx, 'rcuDx'), ddy = fresh(ctx, 'rcuDy');
+    ctx.lines.push(`    let ${ddx}: f32 = f32(${ci}) - ${cxL}; let ${ddy}: f32 = f32(${ri}) - ${cyL};`);
+    ctx.lines.push(`    if (${ddx} * ${ddx} + ${ddy} * ${ddy} <= ${rr}) {`);
+    const col = fresh(ctx, 'rcuCol'), row = fresh(ctx, 'rcuRow'), inb = fresh(ctx, 'rcuIn');
+    ctx.lines.push(`      var ${col}: i32 = ${ci}; var ${row}: i32 = ${ri}; var ${inb}: bool = true;`);
+    ctx.lines.push(`      if (control.fieldTorus != 0u) {`);
+    ctx.lines.push(`        ${col} = ((${col} % i32(control.fieldW)) + i32(control.fieldW)) % i32(control.fieldW);`);
+    ctx.lines.push(`        ${row} = ((${row} % i32(control.fieldH)) + i32(control.fieldH)) % i32(control.fieldH);`);
+    ctx.lines.push(`      } else {`);
+    ctx.lines.push(`        if (${col} < 0 || ${col} >= i32(control.fieldW) || ${row} < 0 || ${row} >= i32(control.fieldH)) { ${inb} = false; }`);
+    ctx.lines.push(`      }`);
+    ctx.lines.push(`      if (${inb}) {`);
+    const val = fresh(ctx, 'rcuVal');
+    ctx.lines.push(`        let ${val}: f32 = ${fieldReadAt(ctx, attr, `u32(${row}) * u32(control.fieldW) + u32(${col})`)};`);
+    accumLine(val);
+    ctx.lines.push(`      }`);
+    ctx.lines.push(`    }`);
+    ctx.lines.push(`  } }`);
+  }
   // finish: mean → acc/n; max/min → (n>0?acc:0); sum → acc.
   let finishExpr: string;
   if (reduce === 'mean') finishExpr = `select(0.0, ${acc} / f32(${n}), ${n} > 0)`;
@@ -1801,9 +1870,11 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
   }
 }
 
-/** Affect Cells Under — write the field over an r-disk under the agent. The op
- *  (set/add/subtract/max/min) goes through the atomic `fieldDeposit` accumulator
- *  via `fieldDepositCell` so parallel agents don't race. 2D. */
+/** Affect Cells Under — write the field over an r-disk (2D) / r-sphere (3D)
+ *  under the agent. The op (set/add/subtract/max/min) goes through the atomic
+ *  `fieldDeposit` accumulator via `fieldDepositCell` so parallel agents don't
+ *  race. The 3D path adds a layer loop + 3D torus-shortest membership + the 3D
+ *  index, mirroring AffectCellsUnderNode's 3D JS. */
 function emitAffectCellsUnder(ctx: AgentWgpuCtx, node: GraphNode): void {
   const attr = fieldAttrId(node);
   if (ctx.layout.fieldWriteBase[attr] === undefined) return; // not a write field → no-op
@@ -1815,6 +1886,48 @@ function emitAffectCellsUnder(ctx: AgentWgpuCtx, node: GraphNode): void {
   const r = castTo(resolveValueInput(ctx, node, 'radius', 1), 'f32');
   const cx = f32At(ctx, 'x', 'idx'), cy = f32At(ctx, 'y', 'idx');
   const cxL = fresh(ctx, 'acuCx'), cyL = fresh(ctx, 'acuCy'), rL = fresh(ctx, 'acuR'), vL = fresh(ctx, 'acuV'), rr = fresh(ctx, 'acuR2');
+
+  if (ctx.is3d) {
+    const cz = f32At(ctx, 'z', 'idx');
+    const czL = fresh(ctx, 'acuCz');
+    ctx.lines.push(`  { let ${cxL}: f32 = ${cx}; let ${cyL}: f32 = ${cy}; let ${czL}: f32 = ${cz}; let ${rL}: f32 = ${r}; let ${vL}: f32 = ${v}; let ${rr}: f32 = ${rL} * ${rL};`);
+    const W = `f32(control.fieldW)`, H = `f32(control.fieldH)`, D = `f32(control.fieldD)`;
+    const hW = fresh(ctx, 'acuHw'), hH = fresh(ctx, 'acuHh'), hD = fresh(ctx, 'acuHd');
+    ctx.lines.push(`  let ${hW}: f32 = ${W} * 0.5; let ${hH}: f32 = ${H} * 0.5; let ${hD}: f32 = ${D} * 0.5;`);
+    const cmin = fresh(ctx, 'acuCmin'), cmax = fresh(ctx, 'acuCmax'), rmin = fresh(ctx, 'acuRmin'), rmax = fresh(ctx, 'acuRmax'), lmin = fresh(ctx, 'acuLmin'), lmax = fresh(ctx, 'acuLmax');
+    ctx.lines.push(`  let ${cmin}: i32 = i32(floor(${cxL} - ${rL})); let ${cmax}: i32 = i32(ceil(${cxL} + ${rL}));`);
+    ctx.lines.push(`  let ${rmin}: i32 = i32(floor(${cyL} - ${rL})); let ${rmax}: i32 = i32(ceil(${cyL} + ${rL}));`);
+    ctx.lines.push(`  let ${lmin}: i32 = i32(floor(${czL} - ${rL})); let ${lmax}: i32 = i32(ceil(${czL} + ${rL}));`);
+    const li = fresh(ctx, 'acuLi'), ri = fresh(ctx, 'acuRi'), ci = fresh(ctx, 'acuCi');
+    ctx.lines.push(`  for (var ${li}: i32 = ${lmin}; ${li} <= ${lmax}; ${li} = ${li} + 1) {`);
+    ctx.lines.push(`  for (var ${ri}: i32 = ${rmin}; ${ri} <= ${rmax}; ${ri} = ${ri} + 1) {`);
+    ctx.lines.push(`  for (var ${ci}: i32 = ${cmin}; ${ci} <= ${cmax}; ${ci} = ${ci} + 1) {`);
+    const ddx = fresh(ctx, 'acuDx'), ddy = fresh(ctx, 'acuDy'), ddz = fresh(ctx, 'acuDz');
+    ctx.lines.push(`    var ${ddx}: f32 = f32(${ci}) - ${cxL}; var ${ddy}: f32 = f32(${ri}) - ${cyL}; var ${ddz}: f32 = f32(${li}) - ${czL};`);
+    ctx.lines.push(`    if (control.fieldTorus != 0u) {`);
+    ctx.lines.push(`      if (${ddx} > ${hW}) { ${ddx} = ${ddx} - ${W}; } else if (${ddx} < -${hW}) { ${ddx} = ${ddx} + ${W}; }`);
+    ctx.lines.push(`      if (${ddy} > ${hH}) { ${ddy} = ${ddy} - ${H}; } else if (${ddy} < -${hH}) { ${ddy} = ${ddy} + ${H}; }`);
+    ctx.lines.push(`      if (${ddz} > ${hD}) { ${ddz} = ${ddz} - ${D}; } else if (${ddz} < -${hD}) { ${ddz} = ${ddz} + ${D}; }`);
+    ctx.lines.push(`    }`);
+    ctx.lines.push(`    if (${ddx} * ${ddx} + ${ddy} * ${ddy} + ${ddz} * ${ddz} <= ${rr}) {`);
+    const col = fresh(ctx, 'acuCol'), row = fresh(ctx, 'acuRow'), lay = fresh(ctx, 'acuLay'), inb = fresh(ctx, 'acuIn');
+    ctx.lines.push(`      var ${col}: i32 = ${ci}; var ${row}: i32 = ${ri}; var ${lay}: i32 = ${li}; var ${inb}: bool = true;`);
+    ctx.lines.push(`      if (control.fieldTorus != 0u) {`);
+    ctx.lines.push(`        ${col} = ((${col} % i32(control.fieldW)) + i32(control.fieldW)) % i32(control.fieldW);`);
+    ctx.lines.push(`        ${row} = ((${row} % i32(control.fieldH)) + i32(control.fieldH)) % i32(control.fieldH);`);
+    ctx.lines.push(`        ${lay} = ((${lay} % i32(control.fieldD)) + i32(control.fieldD)) % i32(control.fieldD);`);
+    ctx.lines.push(`      } else {`);
+    ctx.lines.push(`        if (${col} < 0 || ${col} >= i32(control.fieldW) || ${row} < 0 || ${row} >= i32(control.fieldH) || ${lay} < 0 || ${lay} >= i32(control.fieldD)) { ${inb} = false; }`);
+    ctx.lines.push(`      }`);
+    ctx.lines.push(`      if (${inb}) {`);
+    ctx.lines.push(`        let _ci: u32 = ${wBase}u + (u32(${lay}) * u32(control.fieldH) + u32(${row})) * u32(control.fieldW) + u32(${col});`);
+    ctx.lines.push(`        fieldDepositCell(_ci, ${vL}, ${opCode}u);`);
+    ctx.lines.push(`      }`);
+    ctx.lines.push(`    }`);
+    ctx.lines.push(`  } } } }`);
+    return;
+  }
+
   ctx.lines.push(`  { let ${cxL}: f32 = ${cx}; let ${cyL}: f32 = ${cy}; let ${rL}: f32 = ${r}; let ${vL}: f32 = ${v}; let ${rr}: f32 = ${rL} * ${rL};`);
   const cmin = fresh(ctx, 'acuCmin'), cmax = fresh(ctx, 'acuCmax'), rmin = fresh(ctx, 'acuRmin'), rmax = fresh(ctx, 'acuRmax');
   ctx.lines.push(`  let ${cmin}: i32 = i32(floor(${cxL} - ${rL})); let ${cmax}: i32 = i32(ceil(${cxL} + ${rL}));`);
@@ -1841,8 +1954,9 @@ function emitAffectCellsUnder(ctx: AgentWgpuCtx, node: GraphNode): void {
   ctx.lines.push(`  } } }`);
 }
 
-/** Secrete To Field — bilinear 4-cell splat deposit at the agent's position. The
- *  4 weights sum to 1, so the total deposit is `rate`. Additive (op=add). 2D. */
+/** Secrete To Field — bilinear 4-cell (2D) / trilinear 8-cell (3D) splat deposit
+ *  at the agent's position. The weights sum to 1, so the total deposit is `rate`.
+ *  Additive (op=add). The 3D path mirrors SecreteToFieldNode's 8-cell splat. */
 function emitSecreteToField(ctx: AgentWgpuCtx, node: GraphNode): void {
   const attr = fieldAttrId(node);
   if (ctx.layout.fieldWriteBase[attr] === undefined) return; // not a write field → no-op
@@ -1850,6 +1964,44 @@ function emitSecreteToField(ctx: AgentWgpuCtx, node: GraphNode): void {
   const rate = castTo(resolveValueInput(ctx, node, 'rate', 1), 'f32');
   const fx = f32At(ctx, 'x', 'idx'), fy = f32At(ctx, 'y', 'idx');
   const fxL = fresh(ctx, 'stfX'), fyL = fresh(ctx, 'stfY'), rt = fresh(ctx, 'stfR');
+
+  if (ctx.is3d) {
+    const fz = f32At(ctx, 'z', 'idx');
+    const fzL = fresh(ctx, 'stfZ');
+    ctx.lines.push(`  { let ${fxL}: f32 = ${fx}; let ${fyL}: f32 = ${fy}; let ${fzL}: f32 = ${fz}; let ${rt}: f32 = ${rate};`);
+    const x0 = fresh(ctx, 'stfX0'), y0 = fresh(ctx, 'stfY0'), z0 = fresh(ctx, 'stfZ0');
+    const x1 = fresh(ctx, 'stfX1'), y1 = fresh(ctx, 'stfY1'), z1 = fresh(ctx, 'stfZ1');
+    const tx = fresh(ctx, 'stfTx'), ty = fresh(ctx, 'stfTy'), tz = fresh(ctx, 'stfTz');
+    ctx.lines.push(`  var ${x0}: i32 = i32(floor(${fxL})); var ${y0}: i32 = i32(floor(${fyL})); var ${z0}: i32 = i32(floor(${fzL}));`);
+    ctx.lines.push(`  let ${tx}: f32 = ${fxL} - f32(${x0}); let ${ty}: f32 = ${fyL} - f32(${y0}); let ${tz}: f32 = ${fzL} - f32(${z0});`);
+    ctx.lines.push(`  var ${x1}: i32 = ${x0} + 1; var ${y1}: i32 = ${y0} + 1; var ${z1}: i32 = ${z0} + 1;`);
+    ctx.lines.push(`  if (control.fieldTorus != 0u) {`);
+    ctx.lines.push(`    ${x0} = ((${x0} % i32(control.fieldW)) + i32(control.fieldW)) % i32(control.fieldW);`);
+    ctx.lines.push(`    ${x1} = ((${x1} % i32(control.fieldW)) + i32(control.fieldW)) % i32(control.fieldW);`);
+    ctx.lines.push(`    ${y0} = ((${y0} % i32(control.fieldH)) + i32(control.fieldH)) % i32(control.fieldH);`);
+    ctx.lines.push(`    ${y1} = ((${y1} % i32(control.fieldH)) + i32(control.fieldH)) % i32(control.fieldH);`);
+    ctx.lines.push(`    ${z0} = ((${z0} % i32(control.fieldD)) + i32(control.fieldD)) % i32(control.fieldD);`);
+    ctx.lines.push(`    ${z1} = ((${z1} % i32(control.fieldD)) + i32(control.fieldD)) % i32(control.fieldD);`);
+    ctx.lines.push(`  } else {`);
+    ctx.lines.push(`    ${x0} = clamp(${x0}, 0, i32(control.fieldW) - 1); ${x1} = clamp(${x1}, 0, i32(control.fieldW) - 1);`);
+    ctx.lines.push(`    ${y0} = clamp(${y0}, 0, i32(control.fieldH) - 1); ${y1} = clamp(${y1}, 0, i32(control.fieldH) - 1);`);
+    ctx.lines.push(`    ${z0} = clamp(${z0}, 0, i32(control.fieldD) - 1); ${z1} = clamp(${z1}, 0, i32(control.fieldD) - 1);`);
+    ctx.lines.push(`  }`);
+    const W = `u32(control.fieldW)`, WH = `(u32(control.fieldW) * u32(control.fieldH))`;
+    const splat3 = (layV: string, rowV: string, colV: string, wExpr: string) =>
+      `fieldDepositCell(${wBase}u + u32(${layV}) * ${WH} + u32(${rowV}) * ${W} + u32(${colV}), ${rt} * (${wExpr}), 4u);`;
+    ctx.lines.push(`  ${splat3(z0, y0, x0, `(1.0 - ${tx}) * (1.0 - ${ty}) * (1.0 - ${tz})`)}`);
+    ctx.lines.push(`  ${splat3(z0, y0, x1, `${tx} * (1.0 - ${ty}) * (1.0 - ${tz})`)}`);
+    ctx.lines.push(`  ${splat3(z0, y1, x0, `(1.0 - ${tx}) * ${ty} * (1.0 - ${tz})`)}`);
+    ctx.lines.push(`  ${splat3(z0, y1, x1, `${tx} * ${ty} * (1.0 - ${tz})`)}`);
+    ctx.lines.push(`  ${splat3(z1, y0, x0, `(1.0 - ${tx}) * (1.0 - ${ty}) * ${tz}`)}`);
+    ctx.lines.push(`  ${splat3(z1, y0, x1, `${tx} * (1.0 - ${ty}) * ${tz}`)}`);
+    ctx.lines.push(`  ${splat3(z1, y1, x0, `(1.0 - ${tx}) * ${ty} * ${tz}`)}`);
+    ctx.lines.push(`  ${splat3(z1, y1, x1, `${tx} * ${ty} * ${tz}`)}`);
+    ctx.lines.push(`  }`);
+    return;
+  }
+
   ctx.lines.push(`  { let ${fxL}: f32 = ${fx}; let ${fyL}: f32 = ${fy}; let ${rt}: f32 = ${rate};`);
   const x0 = fresh(ctx, 'stfX0'), y0 = fresh(ctx, 'stfY0'), x1 = fresh(ctx, 'stfX1'), y1 = fresh(ctx, 'stfY1');
   const tx = fresh(ctx, 'stfTx'), ty = fresh(ctx, 'stfTy');
@@ -2453,11 +2605,9 @@ export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): 
       // not carry — a glyph (no-background) setCellLooks clamps the model to JS.
       if (cfg['useGlyph'] && cfg['setBackground'] === false) return false;
     }
-    // The field bridge (sample/affect/secrete/etc.) WGSL helpers use the 2D cell
-    // index `row·W + col` + bilinear; the 3D trilinear path is not yet ported, so
-    // a 3D model that touches the field clamps to JS. (Non-field 3D agents — Boids/
-    // GoL-on-agents — DO run on WebGPU.)
-    if (is3dModel(model) && (t === 'sampleField' || t === 'fieldGradient' || t === 'readCellsUnder' || t === 'affectCellsUnder' || t === 'secreteToField')) return false;
+    // The field bridge (sample/affect/secrete/etc.) now emits a 3D trilinear /
+    // r-sphere path when gridDepth>1 (gap C), so a 3D field model runs on WebGPU
+    // too — no field-in-3D clamp remains.
   }
   if (arrayProducerCount > AGENT_WEBGPU_NEARBY_SLOTS) return false;
   // Every array input (forEachInArray.array / aggregate|group*.values / pick*.agents
@@ -2525,11 +2675,65 @@ function emitControlStruct(): string {
 };`;
 }
 
-/** The field-bridge WGSL helpers (G5): a 2D cell-centered bilinear READ of the
- *  read-only `fieldRead` snapshot, and an f32-bitcast atomic-CAS deposit into
- *  `fieldDeposit` (set/sub/max/min/add per opcode) so parallel agents writing the
- *  same cell don't race. `base` is the attr's element offset in the buffer. */
-function emitFieldHelpers(): string {
+/** The field-bridge WGSL helpers (G5): a cell-centered bilinear (2D) / trilinear
+ *  (3D) READ of the read-only `fieldRead` snapshot, and an f32-bitcast atomic-CAS
+ *  deposit into `fieldDeposit` (set/sub/max/min/add per opcode) so parallel agents
+ *  writing the same cell don't race. `base` is the attr's element offset in the
+ *  buffer. The 3D `fieldSampleTrilinear` mirrors SampleFieldNode's 8-corner read
+ *  (index = (z·H + y)·W + x). 2D models emit ONLY the bilinear helper (byte-
+ *  identical to pre-3D); 3D models emit ONLY the trilinear one (the field nodes
+ *  call `fieldSampleField(base, px, py)` either way — see emitFieldSampleCall). */
+function emitFieldHelpers(is3d: boolean): string {
+  const deposit = `fn fieldDepositCell(ci: u32, v: f32, op: u32) {
+  // op: 0=set, 1=subtract, 2=max, 3=min, 4=add. f32-bitcast CAS loop.
+  loop {
+    let oldBits: u32 = atomicLoad(&fieldDeposit[ci]);
+    let oldV: f32 = bitcast<f32>(oldBits);
+    var nv: f32 = oldV + v;
+    if (op == 0u) { nv = v; }
+    else if (op == 1u) { nv = oldV - v; }
+    else if (op == 2u) { nv = max(oldV, v); }
+    else if (op == 3u) { nv = min(oldV, v); }
+    let res = atomicCompareExchangeWeak(&fieldDeposit[ci], oldBits, bitcast<u32>(nv));
+    if (res.exchanged) { break; }
+  }
+}`;
+  if (is3d) {
+    // Trilinear (8-corner) sample at the agent's continuous (px, py, agentZ).
+    // agentZ is fetched per call (the field nodes pass it through `pz`).
+    return `fn fieldSampleTrilinear(base: u32, px: f32, py: f32, pz: f32) -> f32 {
+  let W: i32 = i32(control.fieldW); let H: i32 = i32(control.fieldH); let D: i32 = i32(control.fieldD);
+  var x0: i32 = i32(floor(px)); var y0: i32 = i32(floor(py)); var z0: i32 = i32(floor(pz));
+  let tx: f32 = px - f32(x0); let ty: f32 = py - f32(y0); let tz: f32 = pz - f32(z0);
+  var x1: i32 = x0 + 1; var y1: i32 = y0 + 1; var z1: i32 = z0 + 1;
+  if (control.fieldTorus != 0u) {
+    x0 = ((x0 % W) + W) % W; x1 = ((x1 % W) + W) % W;
+    y0 = ((y0 % H) + H) % H; y1 = ((y1 % H) + H) % H;
+    z0 = ((z0 % D) + D) % D; z1 = ((z1 % D) + D) % D;
+  } else {
+    x0 = clamp(x0, 0, W - 1); x1 = clamp(x1, 0, W - 1);
+    y0 = clamp(y0, 0, H - 1); y1 = clamp(y1, 0, H - 1);
+    z0 = clamp(z0, 0, D - 1); z1 = clamp(z1, 0, D - 1);
+  }
+  let uW: u32 = u32(W); let uWH: u32 = u32(W) * u32(H);
+  let c000: f32 = fieldRead[base + u32(z0) * uWH + u32(y0) * uW + u32(x0)];
+  let c100: f32 = fieldRead[base + u32(z0) * uWH + u32(y0) * uW + u32(x1)];
+  let c010: f32 = fieldRead[base + u32(z0) * uWH + u32(y1) * uW + u32(x0)];
+  let c110: f32 = fieldRead[base + u32(z0) * uWH + u32(y1) * uW + u32(x1)];
+  let c001: f32 = fieldRead[base + u32(z1) * uWH + u32(y0) * uW + u32(x0)];
+  let c101: f32 = fieldRead[base + u32(z1) * uWH + u32(y0) * uW + u32(x1)];
+  let c011: f32 = fieldRead[base + u32(z1) * uWH + u32(y1) * uW + u32(x0)];
+  let c111: f32 = fieldRead[base + u32(z1) * uWH + u32(y1) * uW + u32(x1)];
+  let c00: f32 = c000 * (1.0 - tx) + c100 * tx;
+  let c10: f32 = c010 * (1.0 - tx) + c110 * tx;
+  let c01: f32 = c001 * (1.0 - tx) + c101 * tx;
+  let c11: f32 = c011 * (1.0 - tx) + c111 * tx;
+  let c0: f32 = c00 * (1.0 - ty) + c10 * ty;
+  let c1: f32 = c01 * (1.0 - ty) + c11 * ty;
+  return c0 * (1.0 - tz) + c1 * tz;
+}
+${deposit}`;
+  }
   return `fn fieldSampleBilinear(base: u32, px: f32, py: f32) -> f32 {
   let W: i32 = i32(control.fieldW); let H: i32 = i32(control.fieldH);
   var x0: i32 = i32(floor(px)); var y0: i32 = i32(floor(py));
@@ -2550,20 +2754,7 @@ function emitFieldHelpers(): string {
   return c00 * (1.0 - tx) * (1.0 - ty) + c10 * tx * (1.0 - ty)
        + c01 * (1.0 - tx) * ty + c11 * tx * ty;
 }
-fn fieldDepositCell(ci: u32, v: f32, op: u32) {
-  // op: 0=set, 1=subtract, 2=max, 3=min, 4=add. f32-bitcast CAS loop.
-  loop {
-    let oldBits: u32 = atomicLoad(&fieldDeposit[ci]);
-    let oldV: f32 = bitcast<f32>(oldBits);
-    var nv: f32 = oldV + v;
-    if (op == 0u) { nv = v; }
-    else if (op == 1u) { nv = oldV - v; }
-    else if (op == 2u) { nv = max(oldV, v); }
-    else if (op == 3u) { nv = min(oldV, v); }
-    let res = atomicCompareExchangeWeak(&fieldDeposit[ci], oldBits, bitcast<u32>(nv));
-    if (res.exchanged) { break; }
-  }
-}`;
+${deposit}`;
 }
 
 /** The PCG RNG helpers (per-agent stream keyed by `idx` — the lattice grid model). */
@@ -2731,7 +2922,7 @@ export function compileAgentGraphWebGPU(
   // Each carries its OWN leading newline so the no-extra case inserts NOTHING (a
   // no-field Boids shader is then byte-identical to the pre-G5 template).
   const fieldBindings = fieldBindingLines.length > 0 ? '\n' + fieldBindingLines.join('\n') : '';
-  const fieldHelpers = (hasFieldRead || hasFieldWrite) ? '\n' + emitFieldHelpers() : '';
+  const fieldHelpers = (hasFieldRead || hasFieldWrite) ? '\n' + emitFieldHelpers(ctx.is3d) : '';
   // agentI32 is read_write ONLY when a setAgentType wrote it (the worker selects
   // the matching bind-group layout from the result's `usesI32Write` flag).
   const i32Access = ctx.usesI32Write ? 'read_write' : 'read      ';
