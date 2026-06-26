@@ -270,6 +270,11 @@ export const OP_F64_MAX = byte(0xa5);
 export const OP_I32_TRUNC_F64_S = byte(0xaa);
 export const OP_F64_CONVERT_I32_S = byte(0xb7);
 export const OP_F64_CONVERT_I32_U = byte(0xb8);
+// Saturating f64→i32 (0xfc 0x02): NaN→0, out-of-range→INT_MIN/MAX (NON-TRAPPING,
+// unlike OP_I32_TRUNC_F64_S which traps). Used where the f64 may be NaN/±Inf (e.g.
+// an aggregate.max over an empty array → -Inf, an expression with sin/sqrt) and JS
+// `x | 0` / `Math.floor` would have returned a finite value instead of trapping.
+export const OP_I32_TRUNC_SAT_F64_S = concat(byte(0xfc), leb128u(2));
 
 // Select (i32-cond, picks val1 if cond non-zero, val2 otherwise)
 export const OP_SELECT = byte(0x1b);

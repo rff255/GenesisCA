@@ -63,16 +63,16 @@ import {
   funcType, buildModule,
   exportEntry, EXPORT_FUNC,
   importEntry, importMemoryDesc, importFuncDesc,
-  OP_I32_ADD, OP_I32_SUB, OP_I32_MUL, OP_I32_REM_S,
+  OP_I32_ADD, OP_I32_SUB, OP_I32_MUL, OP_I32_REM_S, OP_I32_DIV_S,
   OP_I32_GE_S, OP_I32_GT_S, OP_I32_LT_S, OP_I32_NE, OP_I32_EQ, OP_I32_EQZ,
   OP_I32_AND, OP_I32_OR, OP_I32_XOR, OP_I32_SHL, OP_I32_SHR_U,
   OP_F64_ADD, OP_F64_SUB, OP_F64_MUL, OP_F64_DIV,
-  OP_F64_ABS, OP_F64_NEG, OP_F64_SQRT, OP_F64_MIN, OP_F64_MAX, OP_F64_FLOOR,
+  OP_F64_ABS, OP_F64_NEG, OP_F64_SQRT, OP_F64_MIN, OP_F64_MAX, OP_F64_FLOOR, OP_F64_CEIL,
   OP_F64_EQ, OP_F64_NE, OP_F64_LT, OP_F64_GT, OP_F64_LE, OP_F64_GE,
-  OP_F64_CONVERT_I32_S, OP_F64_CONVERT_I32_U, OP_I32_TRUNC_F64_S,
+  OP_F64_CONVERT_I32_S, OP_F64_CONVERT_I32_U, OP_I32_TRUNC_F64_S, OP_I32_TRUNC_SAT_F64_S, OP_SELECT,
   opCall,
 } from '../wasm/encoder';
-import { WasmEmitter, pushValueAs, type ValueRef, type LocalRef } from '../wasm/emitter';
+import { WasmEmitter, isInline, type ValueRef, type LocalRef } from '../wasm/emitter';
 import { POW_FUNC_IDX, EXP_FUNC_IDX, LOG_FUNC_IDX, SIN_FUNC_IDX, COS_FUNC_IDX, TAN_FUNC_IDX, TANH_FUNC_IDX, NUM_IMPORTED_FUNCS } from '../wasm/compile';
 import { emitWasm } from '../expression/emitWasm';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
@@ -80,32 +80,73 @@ import { is3dModel } from '../compile';
 import { expandMacros } from '../macroExpand';
 import { collapseReroutes } from '../rerouteCollapse';
 import { canonicalizeAccessorEdges } from '../accessorCSE';
+import { resolveKeyLabels } from '../variegation';
+import { readColorScaleStops, type ColorScaleStop } from '../../nodes/ColorScaleNode';
+import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/CategoricalColorNode';
+import { cellFieldAttrsOf } from '../../../../model/attributeScope';
 import {
   computeAgentMemoryLayout, computeAgentMaxHashBins, AGENT_NEARBY_SCRATCH_SLOTS,
-  type AgentAttrSpec, type AgentMemoryLayout,
+  type AgentAttrSpec, type AgentMemoryLayout, type AgentLayoutExtras,
+  agentAttrKind,
 } from '../../../../simulator/engine/agentEngine';
 
-/** The node types PR6b-2 can emit to WASM. A model whose agent graph uses ONLY
- *  these (after macro-expansion / reroute-collapse / CSE) runs on the WASM
- *  target; anything else FALLS BACK to JS (the clamp stays the safe default).
- *  Keep this the SINGLE source of truth so the gate + the emitter dispatch never
- *  drift. */
+/** The node types the WASM agent compiler can emit. FULL-COVERAGE: a model whose
+ *  agent graph uses ONLY these (after macro-expansion / reroute-collapse / CSE) runs
+ *  on the WASM target with JS bit-parity (f64). The reject set is now EMPTY — WASM
+ *  is Turing-complete + f64, so no node is un-portable. Keep this the SINGLE source
+ *  of truth so the gate + the emitter dispatch never drift.
+ *
+ *  The only remaining structural gate (not a node ban) is the per-node scratch-slot
+ *  budget for agent-array producers (AGENT_NEARBY_SCRATCH_SLOTS) — a graph with too
+ *  many simultaneous array producers falls back to JS (never silently corrupted). */
 export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
-  // event roots
+  // event roots (divisionEvent + agentInit are CPU/JS — see AGENT_WASM_CPU_ROOT_TYPES)
   'behaviourStep',
-  // self reads (SoA geometry)
-  'getSelfPosition', 'getRadius',
-  // neighbour access (PR6b-2)
+  // self reads (SoA geometry + engine reductions)
+  'getSelfPosition', 'getRadius', 'getBondDegree', 'neighbourDensity', 'getCurvature',
+  // neighbour access
   'getNearbyAgents', 'forEachInArray', 'getAgentOffset', 'getVelocity',
-  'getAgentPosition', 'getAgentRadius',
-  // local variables (SCALAR only — array variables + setArrayElement are PR6b-3)
-  'getVariable', 'setVariable',
+  'getAgentPosition', 'getAgentRadius', 'getAgentAttribute',
+  // agent-array tier
+  'getAgentsAttribute', 'setAgentsAttribute', 'filterAgents', 'joinAgents',
+  'pickRandomAgent', 'pickNRandomAgents', 'getBondedAgents',
+  'aggregate', 'groupOperator', 'groupCounting', 'groupStatement',
+  // bonds
+  'forEachBond',
+  // local variables (scalar + array)
+  'getVariable', 'setVariable', 'setArrayElement',
+  // array accessors
+  'arrayElement', 'arrayLength',
+  // agent attributes (Get/Set/Update Attribute on the agent SoA)
+  'getCellAttribute', 'setAttribute', 'updateAttribute', 'setAgentAttribute',
+  'setVelocity', 'setAgentPosition', 'setAgentRadius', 'setAgentType',
+  // structural writes (the post-step CPU structural phase reads the requests)
+  'divideAgent', 'formBond', 'breakBond', 'killAgent',
+  // field bridge (the closed agent↔grid morphogen feedback)
+  'sampleField', 'fieldGradient', 'readCellsUnder', 'affectCellsUnder', 'secreteToField',
+  // colour + tables + model attrs
+  'categoricalColor', 'setCellLooks', 'getColorConstant', 'colorScale',
+  'getModelAttribute', 'lookupInteraction', 'interactionTableMap',
+  'proportionMap', 'interpolation', 'valueSwitch',
+  // indicators
+  'getIndicator', 'setIndicator', 'updateIndicator',
   // writes (SoA / request)
   'applyForce', 'setTargetRadius',
   // layout-agnostic value/flow utility (operate on the f64 stack / locals)
   'getConstant', 'arithmeticOperator', 'expression', 'statement', 'logicOperator', 'getRandom',
   // flow
-  'conditional', 'sequence',
+  'conditional', 'sequence', 'switch', 'loop',
+]);
+
+/** Node types that may appear in the agent graph but are compiled on JS-on-CPU
+ *  (NOT in the WASM behaviour module): the `divisionEvent` + `agentInit` ENTRY
+ *  ROOTS and their spawn nodes. The worker runs `agentDivisionFn` / `agentInitFn`
+ *  (JS) over the SAME wasmBacked memory the WASM behaviour reads — target-
+ *  independent, bit-exact (mirrors how the WebGPU agent target keeps divisionEvent
+ *  + agentInit on the CPU). The gate accepts them iff they're outside the
+ *  BEHAVIOUR-reachable node set (the divisionEvent/agentInit subtrees). */
+export const AGENT_WASM_CPU_ROOT_TYPES: ReadonlySet<string> = new Set<string>([
+  'divisionEvent', 'agentInit', 'createAgent', 'addAgentToWorld',
 ]);
 
 export interface AgentWasmResult {
@@ -128,8 +169,10 @@ export interface AgentWasmResult {
 
 interface Adjacency {
   nodeMap: Map<string, GraphNode>;
-  /** value input port `${nodeId}:${portId}` → its single source `{nodeId, portId}`. */
+  /** value input port `${nodeId}:${portId}` → its single (first-wins) source. */
   inputToSource: Map<string, { nodeId: string; portId: string }>;
+  /** ALL sources for a value input port (isArray ports accept many connections). */
+  inputToSources: Map<string, Array<{ nodeId: string; portId: string }>>;
   /** flow output port `${nodeId}:${portId}` → the ordered target node ids. */
   flowOutputToTargets: Map<string, Array<{ nodeId: string; portId: string }>>;
 }
@@ -145,13 +188,18 @@ function buildAdjacency(nodes: GraphNode[], edges: GraphEdge[]): Adjacency {
   const nodeMap = new Map<string, GraphNode>();
   for (const n of nodes) nodeMap.set(n.id, n);
   const inputToSource = new Map<string, { nodeId: string; portId: string }>();
+  const inputToSources = new Map<string, Array<{ nodeId: string; portId: string }>>();
   const flowOutputToTargets = new Map<string, Array<{ nodeId: string; portId: string }>>();
   for (const e of edges) {
     const src = parseHandle(e.sourceHandle);
     const tgt = parseHandle(e.targetHandle);
     if (!src || !tgt) continue;
     if (tgt.category === 'value') {
-      inputToSource.set(`${e.target}:${tgt.portId}`, { nodeId: e.source, portId: src.portId });
+      const key = `${e.target}:${tgt.portId}`;
+      if (!inputToSource.has(key)) inputToSource.set(key, { nodeId: e.source, portId: src.portId });
+      const arr = inputToSources.get(key) ?? [];
+      arr.push({ nodeId: e.source, portId: src.portId });
+      inputToSources.set(key, arr);
     } else {
       const key = `${e.source}:${src.portId}`;
       const arr = flowOutputToTargets.get(key) ?? [];
@@ -159,7 +207,7 @@ function buildAdjacency(nodes: GraphNode[], edges: GraphEdge[]): Adjacency {
       flowOutputToTargets.set(key, arr);
     }
   }
-  return { nodeMap, inputToSource, flowOutputToTargets };
+  return { nodeMap, inputToSource, inputToSources, flowOutputToTargets };
 }
 
 // ---------------------------------------------------------------------------
@@ -177,33 +225,58 @@ function buildAdjacency(nodes: GraphNode[], edges: GraphEdge[]): Adjacency {
 // cache entries on forEach-body entry, and by NOT caching getVariable reads.
 // ---------------------------------------------------------------------------
 
+/** A reference to an array materialised in agent-memory scratch. `offsetLocal` is
+ *  the i32 byte offset of element 0; `lenLocal` is the element count; `elemBytes`
+ *  is 4 (i32 id/value arrays) or 8 (f64 value arrays). The WASM analogue of the JS
+ *  `_v<id>_result` / `_v<id>_vals` scratch arrays. */
+interface AgentArrayRef {
+  offsetLocal: number;
+  lenLocal: number;
+  elemBytes: number;
+  /** true → the elements are f64 (gathered float attr values); else i32. */
+  isF64: boolean;
+}
+
 interface AgentWasmCtx {
   adj: Adjacency;
   layout: AgentMemoryLayout;
+  model: CAModel;
   is3d: boolean;
   em: WasmEmitter;
   /** RNG local (i32) holding the live xorshift32 `_rs`. */
   rsLocal: number;
-  /** loop var `idx` (i32, behaviour) — for division it's param 0. */
+  /** loop var `idx` (i32, behaviour). */
   idxLocal: number;
   /** Scalar Local-Variable id → its f64 local. Reset to initialValue at loop top. */
   varLocals: Map<string, number>;
+  /** Array Local-Variable id → its scratch ArrayRef (one bump-alloc per agent). */
+  arrayVarLocals: Map<string, AgentArrayRef>;
   /** Cache: `${nodeId}:${portId}` → its ValueRef. Cleared on scope change. */
   valueCache: Map<string, ValueRef>;
+  /** Cache: `${nodeId}:${portId}` → its ArrayRef (array-producer outputs). */
+  arrayCache: Map<string, AgentArrayRef>;
   /** Node ids whose cached value MUST NOT persist across a forEach iteration
    *  (they transitively depend on a forEach element/index or a getVariable). */
   volatileNodes: Set<string>;
   /** getNearbyAgents node id → its assigned scratch slot index (0..slots-1). */
   nearbyScratchSlot: Map<string, number>;
+  /** Per-agent bump-pointer scratch top (i32 byte offset). Reset to scratchBase at
+   *  loop top; advanced past each array alloc. */
+  scratchTopLocal: number;
   /** The current forEach iteration locals, innermost last (for nested loops — the
    *  supported set is single-level, but kept general). Each entry exposes the
    *  forEach node id + its element (i32 local) + index (i32 local). */
   forEachStack: Array<{ nodeId: string; elemLocal: number; idxLocal: number }>;
+  /** The current forEachBond iteration locals (partnerId/restLength/currentLength
+   *  /index per-iteration), keyed by the forEachBond node id. */
+  forEachBondStack: Array<{ nodeId: string; partnerLocal: number; restLocal: number; curLocal: number; idxLocal: number }>;
   // --- behaviour PARAM indices (read directly as locals — see the signature) ---
   highWaterLocal: number; hashValidLocal: number;
   nBinsXLocal: number; nBinsYLocal: number; nBinsZLocal: number;
   binSizeXLocal: number; binSizeYLocal: number; binSizeZLocal: number;
   fieldWLocal: number; fieldHLocal: number; fieldDLocal: number; fieldTorusLocal: number;
+  /** Field total (W*H*D) as an i32 local (param). Used by field-bridge index math. */
+  fieldTotalLocal: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +298,85 @@ function pushF64Elem(em: WasmEmitter, regionOffset: number, agentI32Local: numbe
   em.f64Load();
 }
 
+/** Push a value onto the stack (load from local, or push constant). */
+function pushValue(em: WasmEmitter, v: ValueRef): void {
+  if (isInline(v)) { if (v.valtype === I32) em.i32Const(v.value | 0); else em.f64Const(v.value); }
+  else em.localGet(v.localIdx);
+}
+
+/** Push a value as the requested valtype. The f64→i32 path uses SATURATING
+ *  truncation (NaN→0, ±Inf→saturate) so a NaN/Inf intermediate (an aggregate.max
+ *  over an empty array → -Inf, an expression with sin/sqrt) does NOT TRAP — unlike
+ *  the shared `pushValueAs`'s `i32.trunc_f64_s`. For finite in-range values it is
+ *  bit-identical to plain truncation (so the verified bit-parity is preserved). */
+function pushValueAs(em: WasmEmitter, v: ValueRef, want: typeof I32 | typeof F64): void {
+  pushValue(em, v);
+  if (v.valtype !== want) {
+    if (want === F64) em.op(OP_F64_CONVERT_I32_S);
+    else em.op(OP_I32_TRUNC_SAT_F64_S);
+  }
+}
+
+/** Push the byte address of an i32 element at `regionOffset + agentLocal*4`. */
+function pushI32ElemAddr(em: WasmEmitter, regionOffset: number, agentI32Local: number): void {
+  em.localGet(agentI32Local); em.i32Const(4); em.op(OP_I32_MUL);
+  em.i32Const(regionOffset); em.op(OP_I32_ADD);
+}
+/** Load a per-agent Int32 at `regionOffset + agentLocal*4` onto the stack. */
+function pushI32Elem(em: WasmEmitter, regionOffset: number, agentI32Local: number): void {
+  pushI32ElemAddr(em, regionOffset, agentI32Local);
+  em.i32Load();
+}
+
+// ---------------------------------------------------------------------------
+// Multi-output port cache + array scratch (the agent-array tier infra).
+// ---------------------------------------------------------------------------
+
+/** Register a named-port output (multi-output nodes). Keyed `${nodeId}:${portId}`. */
+function setCachedPort(ctx: AgentWasmCtx, nodeId: string, portId: string, ref: ValueRef): void {
+  ctx.valueCache.set(`${nodeId}:${portId}`, ref);
+}
+
+/** Bump-allocate an array of `lenLocal` elements (`elemBytes` each) in the per-agent
+ *  scratch region. Returns offset/len locals. The scratchTop bump is unrolled into
+ *  the emit stream so each agent gets a fresh slab (reset at loop top). */
+function allocScratch(ctx: AgentWasmCtx, lenLocal: number, elemBytes: number, isF64: boolean): AgentArrayRef {
+  const em = ctx.em;
+  const offsetLocal = em.allocLocal(I32);
+  // offset = scratchTop;  scratchTop += len * elemBytes (8-align so f64 stays aligned)
+  em.localGet(ctx.scratchTopLocal); em.localSet(offsetLocal);
+  em.localGet(ctx.scratchTopLocal);
+  em.localGet(lenLocal); em.i32Const(elemBytes); em.op(OP_I32_MUL);
+  em.op(OP_I32_ADD);
+  // round up to 8
+  em.i32Const(7); em.op(OP_I32_ADD); em.i32Const(-8); em.op(OP_I32_AND);
+  em.localSet(ctx.scratchTopLocal);
+  return { offsetLocal, lenLocal, elemBytes, isF64 };
+}
+
+/** Push array element `k` (i32 local `kLocal`) of `arr` onto the stack as f64. */
+function pushArrayElemF64(em: WasmEmitter, arr: AgentArrayRef, kLocal: number): void {
+  em.localGet(arr.offsetLocal);
+  em.localGet(kLocal); em.i32Const(arr.elemBytes); em.op(OP_I32_MUL);
+  em.op(OP_I32_ADD);
+  if (arr.elemBytes === 8) em.f64Load();
+  else { em.i32Load(); em.i32ToF64(); }
+}
+/** Push array element `k` of `arr` onto the stack as i32 (id arrays). */
+function pushArrayElemI32(em: WasmEmitter, arr: AgentArrayRef, kLocal: number): void {
+  em.localGet(arr.offsetLocal);
+  em.localGet(kLocal); em.i32Const(arr.elemBytes); em.op(OP_I32_MUL);
+  em.op(OP_I32_ADD);
+  if (arr.elemBytes === 8) { em.f64Load(); em.f64ToI32(); }
+  else em.i32Load();
+}
+/** Store element `k` of `arr` (value already on stack as the elem type). */
+function storeArrayElemAddr(em: WasmEmitter, arr: AgentArrayRef, kLocal: number): void {
+  em.localGet(arr.offsetLocal);
+  em.localGet(kLocal); em.i32Const(arr.elemBytes); em.op(OP_I32_MUL);
+  em.op(OP_I32_ADD);
+}
+
 // ---------------------------------------------------------------------------
 // Inline-widget fallback for an unwired value input.
 // ---------------------------------------------------------------------------
@@ -242,6 +394,19 @@ function getInlineNum(node: GraphNode, portId: string, fallback: number): number
   return fallback;
 }
 
+/** Parse a raw inline-widget value (string/number) → number, with `true`/`false`
+ *  coercion (matching the cell WASM compiler's parseInlineNum). */
+function parseInlineNum(raw: unknown, fallback: number): number {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string') {
+    if (raw === 'true') return 1;
+    if (raw === 'false') return 0;
+    const n = parseFloat(raw);
+    if (Number.isFinite(n)) return n;
+  }
+  return fallback;
+}
+
 /** Resolve a value input port to a ValueRef (an f64 unless the source is an i32
  *  producer like a forEach element/index). Wired → the source node's cached/
  *  freshly-emitted output; unwired → the inline-widget constant (f64). */
@@ -255,6 +420,55 @@ function resolveValueInput(ctx: AgentWasmCtx, node: GraphNode, portId: string, f
 function pushValueInputF64(ctx: AgentWasmCtx, node: GraphNode, portId: string, fallback: number): void {
   pushValueAs(ctx.em, resolveValueInput(ctx, node, portId, fallback), F64);
 }
+
+// ---------------------------------------------------------------------------
+// Agent-attribute (r_/w_) + cell-field (_field_) memory access. Agent attrs are
+// stored typed (bool→u8 0/1, int/tag→i32, float→f64) at `attrOffset` (read) +
+// `attrWriteOffset` (sync-mode write). A read yields the JS-bit-parity f64 value;
+// a write stores the f64 stack value truncated/floored to the kind (matching JS's
+// typed-array store semantics).
+// ---------------------------------------------------------------------------
+
+function agentAttrKindOf(ctx: AgentWasmCtx, attrId: string): 'uint8' | 'int32' | 'float64' {
+  const a = agentAttrsOf(ctx.model).find(x => x.id === attrId);
+  return a ? agentAttrKind(a.type) : 'float64';
+}
+
+/** Push the f64 value of agent attribute `attrId` at agent `agentLocal` (READ
+ *  buffer). Bool→u8, int/tag→i32, float→f64 (matching the JS typed array read). */
+function pushAgentAttrReadF64(ctx: AgentWasmCtx, attrId: string, agentLocal: number): void {
+  const em = ctx.em;
+  const kind = agentAttrKindOf(ctx, attrId);
+  const off = ctx.layout.attrOffset[attrId];
+  if (off === undefined) { em.f64Const(0); return; }
+  if (kind === 'uint8') { em.localGet(agentLocal); em.i32Const(off); em.op(OP_I32_ADD); em.i32Load8U(); em.i32ToF64(); }
+  else if (kind === 'int32') { pushI32Elem(em, off, agentLocal); em.i32ToF64(); }
+  else pushF64Elem(em, off, agentLocal);
+}
+
+/** Store the f64 stack value (already pushed by the caller) into agent attr
+ *  `attrId`'s WRITE region at `agentLocal`. The store ADDRESS is pushed first; the
+ *  caller pushes the value; this calls the store op. So the call pattern is:
+ *    pushAgentAttrWriteAddr(...); <push value f64>; emitAgentAttrStore(...). */
+function pushAgentAttrWriteAddr(ctx: AgentWasmCtx, attrId: string, agentLocal: number): void {
+  const em = ctx.em;
+  const kind = agentAttrKindOf(ctx, attrId);
+  const off = (ctx.layout.syncAttrs ? ctx.layout.attrWriteOffset[attrId] : ctx.layout.attrOffset[attrId]) ?? 0;
+  if (kind === 'float64') { em.localGet(agentLocal); em.i32Const(8); em.op(OP_I32_MUL); em.i32Const(off); em.op(OP_I32_ADD); }
+  else if (kind === 'int32') { em.localGet(agentLocal); em.i32Const(4); em.op(OP_I32_MUL); em.i32Const(off); em.op(OP_I32_ADD); }
+  else { em.localGet(agentLocal); em.i32Const(off); em.op(OP_I32_ADD); }
+}
+/** Emit the store op for agent attr `attrId` (address + f64 value already on the
+ *  stack). For int/bool the f64 value is truncated to i32 (JS typed-array store
+ *  semantics: `arr[i] = x` truncates toward zero). */
+function emitAgentAttrStore(ctx: AgentWasmCtx, attrId: string): void {
+  const em = ctx.em;
+  const kind = agentAttrKindOf(ctx, attrId);
+  if (kind === 'float64') em.f64Store();
+  else if (kind === 'int32') { em.f64ToI32(); em.i32Store(); }
+  else { em.f64ToI32(); em.i32Store8(); }   // bool: store the low byte (0/1)
+}
+
 
 // ---------------------------------------------------------------------------
 // Value emission.
@@ -293,9 +507,8 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
       // cleared each iteration, so caching the live local here is safe.
       const frame = ctx.forEachStack.find(f => f.nodeId === nodeId);
       if (!frame) { result = { inline: true, value: 0, valtype: I32 }; break; }
-      result = portId === 'index'
-        ? { localIdx: frame.idxLocal, valtype: I32 }
-        : { localIdx: frame.elemLocal, valtype: I32 };
+      if (portId === 'index') result = { localIdx: frame.idxLocal, valtype: I32 };
+      else result = { localIdx: frame.elemLocal, valtype: forEachElemIsF64.get(nodeId) ? F64 : I32 };
       break;
     }
     case 'behaviourStep': {
@@ -379,6 +592,133 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
       result = compileAgentOffset(ctx, node, portId);
       break;
     }
+    case 'getBondDegree': {
+      result = f64Result(() => { pushI32Elem(em, ctx.layout.i32['bondCount']!, ctx.idxLocal); em.i32ToF64(); });
+      break;
+    }
+    case 'neighbourDensity': {
+      result = f64Result(() => pushF64Elem(em, ctx.layout.f64['density']!, ctx.idxLocal));
+      break;
+    }
+    case 'getCurvature': {
+      result = f64Result(() => emitCurvature(ctx));
+      break;
+    }
+    case 'getAgentAttribute': {
+      const attrId = (node.data.config?.['attributeId'] as string) || '';
+      const aLocal = emitAgentIdLocal(ctx, node, 'agentId');
+      // JS: `r_<attr>[(agentId|0)]` — NO range guard (matches GetAgentAttributeNode).
+      result = f64Result(() => pushAgentAttrReadF64(ctx, attrId, aLocal));
+      break;
+    }
+    case 'getCellAttribute': {
+      // On the AGENT graph this reads the AGENT SoA at idx (D-IDX). r_<attr>[idx].
+      const attrId = (node.data.config?.['attributeId'] as string) || '';
+      result = f64Result(() => pushAgentAttrReadF64(ctx, attrId, ctx.idxLocal));
+      break;
+    }
+    case 'getModelAttribute': {
+      result = emitGetModelAttribute(ctx, node, portId);
+      break;
+    }
+    case 'getIndicator': {
+      const idxN = (node.data.config?.['_indicatorIdx'] as number) ?? -1;
+      result = f64Result(() => {
+        if (idxN < 0) { em.f64Const(0); return; }
+        em.i32Const(ctx.layout.indicatorsOffset + idxN * 8); em.f64Load();
+      });
+      break;
+    }
+    case 'forEachBond': {
+      const frame = ctx.forEachBondStack.find(f => f.nodeId === nodeId);
+      if (!frame) { result = { inline: true, value: 0, valtype: F64 }; break; }
+      if (portId === 'partnerId') result = { localIdx: frame.partnerLocal, valtype: I32 };
+      else if (portId === 'restLength') result = { localIdx: frame.restLocal, valtype: F64 };
+      else if (portId === 'currentLength') result = { localIdx: frame.curLocal, valtype: F64 };
+      else result = { localIdx: frame.idxLocal, valtype: I32 };
+      break;
+    }
+    case 'lookupInteraction': {
+      result = f64Result(() => emitLookupInteraction(ctx, node));
+      break;
+    }
+    case 'proportionMap': {
+      result = f64Result(() => emitProportionMap(ctx, node));
+      break;
+    }
+    case 'interpolation': {
+      result = f64Result(() => {
+        const mn = resolveValueInput(ctx, node, 'min', 0);
+        const t = resolveValueInput(ctx, node, 't', 0.5);
+        const mx = resolveValueInput(ctx, node, 'max', 1);
+        // min + t*(max-min)
+        pushValueAs(em, mn, F64);
+        pushValueAs(em, t, F64);
+        pushValueAs(em, mx, F64); pushValueAs(em, mn, F64); em.op(OP_F64_SUB);
+        em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+      });
+      break;
+    }
+    case 'valueSwitch': {
+      // scalar mode: cond ? ifValue : elseValue (array mode handled in compileArrayNode).
+      result = f64Result(() => {
+        pushValueInputF64(ctx, node, 'ifValue', 0);
+        pushValueInputF64(ctx, node, 'elseValue', 0);
+        const cond = resolveValueInput(ctx, node, 'condition', 0);
+        pushValueAs(em, cond, F64); em.f64Const(0); em.op(OP_F64_NE);   // i32 cond
+        em.op(OP_SELECT);
+      });
+      break;
+    }
+    case 'colorScale': {
+      result = emitColorScale(ctx, node, portId);
+      break;
+    }
+    case 'categoricalColor': {
+      result = emitCategoricalColor(ctx, node, portId);
+      break;
+    }
+    case 'getColorConstant': {
+      result = emitGetColorConstant(ctx, node, portId);
+      break;
+    }
+    case 'arrayLength': {
+      const arr = resolveInputArray(ctx, node, 'array');
+      result = arr ? { localIdx: arr.lenLocal, valtype: I32 } : { inline: true, value: 0, valtype: I32 };
+      break;
+    }
+    case 'arrayElement': {
+      result = emitArrayElement(ctx, node);
+      break;
+    }
+    case 'aggregate':
+    case 'groupCounting':
+    case 'groupOperator':
+    case 'groupStatement': {
+      result = emitArrayReduce(ctx, node, portId);
+      break;
+    }
+    case 'pickRandomAgent': {
+      result = f64Result(() => emitPickRandomAgent(ctx, node));
+      break;
+    }
+    case 'sampleField': {
+      const fieldId = (node.data.config?.['attributeId'] as string) || '';
+      result = f64Result(() => emitSampleFieldAt(ctx, fieldId, () => pushF64Elem(em, ctx.layout.f64['x']!, ctx.idxLocal), () => pushF64Elem(em, ctx.layout.f64['y']!, ctx.idxLocal)));
+      break;
+    }
+    case 'fieldGradient': {
+      result = emitFieldGradient(ctx, node, portId);
+      break;
+    }
+    case 'readCellsUnder': {
+      result = f64Result(() => emitReadCellsUnder(ctx, node));
+      break;
+    }
+    case 'setVelocity': case 'setAgentAttribute': case 'setAgentPosition':
+    case 'setAgentRadius': case 'setAgentType': case 'setAgentsAttribute':
+      // These are FLOW nodes — should never reach here as a value source.
+      throw new Error(`agentWasm: '${type}' is a flow node, not a value source`);
     default:
       throw new Error(`agentWasm: unsupported value node '${type}'`);
   }
@@ -480,7 +820,10 @@ function emitCompare(ctx: AgentWasmCtx, node: GraphNode): void {
 function emitLogic(ctx: AgentWasmCtx, node: GraphNode): void {
   const em = ctx.em;
   const cfg = node.data.config as Record<string, unknown> | undefined;
-  const op = (cfg?.['operation'] as string) ?? 'and';
+  // LogicOperatorNode stores its op UPPERCASE ('AND'/'OR'/'XOR'/'NOT') — lowercase
+  // it so 'OR'/'XOR'/'NOT' don't fall through to AND (the GoL-on-agents all-die bug,
+  // the same one the WebGPU agent port hit).
+  const op = ((cfg?.['operation'] as string) ?? 'and').toLowerCase();
   const pushBool = (port: string) => { pushValueInputF64(ctx, node, port, 0); em.f64Const(0); em.op(OP_F64_NE); };
   if (op === 'not') { pushBool('a'); em.op(OP_I32_EQZ); }
   else {
@@ -613,9 +956,970 @@ function foldTorus(em: WasmEmitter, dLocal: number, spanLocal: number): void {
   );
 }
 
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// Universal value emitters (model attrs / lookup / proportion map / colours /
+// curvature / array accessors / array reduce). All bit-parity with the JS node
+// emitters.
+// ===========================================================================
+
+/** Interpolation curve — leaves the curved t (f64) in a fresh local; returns it.
+ *  Bit-identical to the lattice WASM `emitInterpolationCurveWasm`. */
+function emitInterpCurve(em: WasmEmitter, tRawLoc: number, method: string): number {
+  const out = em.allocLocal(F64);
+  if (method === 'linear') { em.localGet(tRawLoc); em.localSet(out); return out; }
+  const tcl = em.allocLocal(F64);
+  em.f64Const(0); em.f64Const(1); em.localGet(tRawLoc); em.op(OP_F64_MIN); em.op(OP_F64_MAX); em.localSet(tcl);
+  switch (method) {
+    case 'smoothstep':
+      em.localGet(tcl); em.localGet(tcl); em.op(OP_F64_MUL);
+      em.f64Const(3); em.f64Const(2); em.localGet(tcl); em.op(OP_F64_MUL); em.op(OP_F64_SUB);
+      em.op(OP_F64_MUL); em.localSet(out); break;
+    case 'easeInQuad':
+      em.localGet(tcl); em.localGet(tcl); em.op(OP_F64_MUL); em.localSet(out); break;
+    case 'easeOutQuad':
+      em.f64Const(1); em.f64Const(1); em.localGet(tcl); em.op(OP_F64_SUB);
+      em.f64Const(1); em.localGet(tcl); em.op(OP_F64_SUB); em.op(OP_F64_MUL); em.op(OP_F64_SUB); em.localSet(out); break;
+    case 'exponential':
+      em.localGet(tcl); em.f64Const(0); em.op(OP_F64_GT);
+      em.ifThenElse(
+        () => { em.f64Const(2); em.f64Const(10); em.localGet(tcl); em.f64Const(1); em.op(OP_F64_SUB); em.op(OP_F64_MUL); em.emit(opCall(POW_FUNC_IDX)); em.localSet(out); },
+        () => { em.f64Const(0); em.localSet(out); },
+      ); break;
+    case 'logarithmic':
+      em.localGet(tcl); em.f64Const(1); em.op(OP_F64_LT);
+      em.ifThenElse(
+        () => { em.f64Const(1); em.f64Const(2); em.f64Const(-10); em.localGet(tcl); em.op(OP_F64_MUL); em.emit(opCall(POW_FUNC_IDX)); em.op(OP_F64_SUB); em.localSet(out); },
+        () => { em.f64Const(1); em.localSet(out); },
+      ); break;
+    default: em.localGet(tcl); em.localSet(out); break;
+  }
+  return out;
+}
+
+/** Get Model Attribute — multi-output (R/G/B for color attrs, else Value). Reads
+ *  the in-memory copy at `modelAttrOffset[key]`. */
+function emitGetModelAttribute(ctx: AgentWasmCtx, node: GraphNode, portId: string): ValueRef {
+  const em = ctx.em;
+  const cfg = node.data.config as Record<string, unknown>;
+  const attr = (cfg['attributeId'] as string) || '';
+  const readKey = (key: string): LocalRef => {
+    const off = ctx.layout.modelAttrOffset[key];
+    em.i32Const(0); if (off === undefined) em.f64Const(0); else em.f64Load(off, 3);
+    const l = em.allocLocal(F64); em.localSet(l); return { localIdx: l, valtype: F64 };
+  };
+  if (cfg['isColorAttr']) {
+    const r = readKey(attr + '_r'), g = readKey(attr + '_g'), b = readKey(attr + '_b');
+    setCachedPort(ctx, node.id, 'r', r); setCachedPort(ctx, node.id, 'g', g); setCachedPort(ctx, node.id, 'b', b);
+    return portId === 'g' ? g : portId === 'b' ? b : r;
+  }
+  return readKey(attr);
+}
+
+/** Table Lookup — `_lookupTables[id][row*colCount+col]` (0 when oob/unset). */
+function emitLookupInteraction(ctx: AgentWasmCtx, node: GraphNode): void {
+  const em = ctx.em;
+  const cfg = node.data.config as Record<string, unknown>;
+  const tableId = (cfg['tableId'] as string) || '';
+  const off = tableId ? ctx.layout.lookupTableOffset[tableId] : undefined;
+  if (off === undefined) { em.f64Const(0); return; }
+  const colCount = ctx.layout.lookupTableCols[tableId] || 1;
+  const tableCells = lookupTableCells(ctx, tableId);
+  const la = em.allocLocal(I32); pushValueAs(em, resolveValueInput(ctx, node, 'labelA', 0), I32); em.localSet(la);
+  const lb = em.allocLocal(I32); pushValueAs(em, resolveValueInput(ctx, node, 'labelB', 0), I32); em.localSet(lb);
+  const cell = em.allocLocal(I32);
+  em.localGet(la); em.i32Const(colCount); em.op(OP_I32_MUL); em.localGet(lb); em.op(OP_I32_ADD); em.localSet(cell);
+  // if (cell >= 0 && cell < tableCells) load else 0
+  const res = em.allocLocal(F64); em.f64Const(0); em.localSet(res);
+  em.localGet(cell); em.i32Const(0); em.op(OP_I32_GE_S);
+  em.localGet(cell); em.i32Const(tableCells); em.op(OP_I32_LT_S); em.op(OP_I32_AND);
+  em.ifThen(() => {
+    em.localGet(cell); em.i32Const(8); em.op(OP_I32_MUL); em.i32Const(off); em.op(OP_I32_ADD); em.f64Load();
+    em.localSet(res);
+  });
+  em.localGet(res);
+}
+
+/** The reserved cell count (rows*cols) of a lookup table — for the oob bound check
+ *  (mirrors JS `|| 0` for an out-of-range index). Derived from the model's row/col
+ *  key sources by the same `resolveLookupTableDims` the layout extras use. */
+function lookupTableCells(ctx: AgentWasmCtx, tableId: string): number {
+  const dims = resolveLookupTableDims(ctx.model, tableId);
+  return dims ? dims.rows * dims.cols : 0;
+}
+
+/** A lookupTable model attr's (rows, cols) from its row/col key sources. */
+function resolveLookupTableDims(model: CAModel, tableId: string): { rows: number; cols: number } | null {
+  const attr = model.attributes.find(a => a.id === tableId && a.isModelAttribute && a.type === 'lookupTable');
+  if (!attr) return null;
+  const a = attr as unknown as { rowKeySource?: unknown; colKeySource?: unknown };
+  const rows = resolveKeyLabels(a.rowKeySource as Parameters<typeof resolveKeyLabels>[0], model).length;
+  const cols = resolveKeyLabels(a.colKeySource as Parameters<typeof resolveKeyLabels>[0], model).length;
+  return { rows, cols };
+}
+
+/** Proportion Map — `outMin + curve(t) * (outMax - outMin)` (guarded zero span). */
+function emitProportionMap(ctx: AgentWasmCtx, node: GraphNode): void {
+  const em = ctx.em;
+  const method = (node.data.config['method'] as string) || 'linear';
+  const x = em.allocLocal(F64); pushValueInputF64(ctx, node, 'x', 0); em.localSet(x);
+  const inMin = em.allocLocal(F64); pushValueInputF64(ctx, node, 'inMin', 0); em.localSet(inMin);
+  const inMax = em.allocLocal(F64); pushValueInputF64(ctx, node, 'inMax', 1); em.localSet(inMax);
+  const outMin = em.allocLocal(F64); pushValueInputF64(ctx, node, 'outMin', 0); em.localSet(outMin);
+  const outMax = em.allocLocal(F64); pushValueInputF64(ctx, node, 'outMax', 1); em.localSet(outMax);
+  const span = em.allocLocal(F64); em.localGet(inMax); em.localGet(inMin); em.op(OP_F64_SUB); em.localSet(span);
+  const res = em.allocLocal(F64);
+  // span !== 0 ? outMin + curve((x-inMin)/span)*(outMax-outMin) : outMin
+  em.localGet(span); em.f64Const(0); em.op(OP_F64_NE);
+  em.ifThenElse(
+    () => {
+      const tRaw = em.allocLocal(F64);
+      em.localGet(x); em.localGet(inMin); em.op(OP_F64_SUB); em.localGet(span); em.op(OP_F64_DIV); em.localSet(tRaw);
+      const cv = emitInterpCurve(em, tRaw, method);
+      em.localGet(outMin); em.localGet(cv); em.localGet(outMax); em.localGet(outMin); em.op(OP_F64_SUB); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+      em.localSet(res);
+    },
+    () => { em.localGet(outMin); em.localSet(res); },
+  );
+  em.localGet(res);
+}
+
+/** Color Scale — multi-output R/G/B. Bit-identical to the lattice WASM emit. */
+function emitColorScale(ctx: AgentWasmCtx, node: GraphNode, portId: string): ValueRef {
+  const em = ctx.em;
+  const cfg = node.data.config as Record<string, string | number | boolean>;
+  const method = (cfg['method'] as string) || 'linear';
+  const stops = readColorScaleStops(cfg);
+  const rLoc = em.allocLocal(I32), gLoc = em.allocLocal(I32), bLoc = em.allocLocal(I32);
+  const writeConst = (r: number, g: number, b: number) => {
+    em.i32Const(r | 0); em.localSet(rLoc); em.i32Const(g | 0); em.localSet(gLoc); em.i32Const(b | 0); em.localSet(bLoc);
+  };
+  if (stops.length === 0) writeConst(0, 0, 0);
+  else if (stops.length === 1) writeConst(stops[0]!.r, stops[0]!.g, stops[0]!.b);
+  else {
+    const tLoc = em.allocLocal(F64); pushValueInputF64(ctx, node, 't', 0.5); em.localSet(tLoc);
+    const writeSeg = (a: ColorScaleStop, b: ColorScaleStop) => {
+      const lt = em.allocLocal(F64);
+      em.localGet(tLoc); em.f64Const(a.p); em.op(OP_F64_SUB); em.f64Const(b.p - a.p); em.op(OP_F64_DIV); em.localSet(lt);
+      const cv = emitInterpCurve(em, lt, method);
+      const chan = (ac: number, bc: number, dst: number) => {
+        em.f64Const(ac); em.localGet(cv); em.f64Const(bc - ac); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+        em.f64Const(0.5); em.op(OP_F64_ADD); em.op(OP_F64_FLOOR); em.f64ToI32(); em.localSet(dst);
+      };
+      chan(a.r, b.r, rLoc); chan(a.g, b.g, gLoc); chan(a.b, b.b, bLoc);
+    };
+    const first = stops[0]!;
+    em.localGet(tLoc); em.f64Const(first.p); em.op(OP_F64_LE);
+    em.ifThenElse(
+      () => writeConst(first.r, first.g, first.b),
+      () => {
+        const buildChain = (i: number) => {
+          if (i >= stops.length - 1) { const last = stops[stops.length - 1]!; writeConst(last.r, last.g, last.b); return; }
+          const a = stops[i]!, b = stops[i + 1]!;
+          if (b.p === a.p) { buildChain(i + 1); return; }
+          em.localGet(tLoc); em.f64Const(b.p); em.op(OP_F64_LT);
+          em.ifThenElse(() => writeSeg(a, b), () => buildChain(i + 1));
+        };
+        buildChain(0);
+      },
+    );
+  }
+  const rRef: LocalRef = { localIdx: rLoc, valtype: I32 }, gRef: LocalRef = { localIdx: gLoc, valtype: I32 }, bRef: LocalRef = { localIdx: bLoc, valtype: I32 };
+  setCachedPort(ctx, node.id, 'r', rRef); setCachedPort(ctx, node.id, 'g', gRef); setCachedPort(ctx, node.id, 'b', bRef);
+  return portId === 'g' ? gRef : portId === 'b' ? bRef : rRef;
+}
+
+/** Categorical Color — multi-output R/G/B (N-way integer-compare select). */
+function emitCategoricalColor(ctx: AgentWasmCtx, node: GraphNode, portId: string): ValueRef {
+  const em = ctx.em;
+  const cfg = node.data.config as Record<string, string | number | boolean>;
+  const entries = readCategoricalEntries(cfg);
+  const d = readCategoricalDefault(cfg);
+  const rLoc = em.allocLocal(I32), gLoc = em.allocLocal(I32), bLoc = em.allocLocal(I32);
+  const writeConst = (r: number, g: number, b: number) => { em.i32Const(r | 0); em.localSet(rLoc); em.i32Const(g | 0); em.localSet(gLoc); em.i32Const(b | 0); em.localSet(bLoc); };
+  if (entries.length === 0) writeConst(d.r, d.g, d.b);
+  else {
+    const kLoc = em.allocLocal(I32); pushValueAs(em, resolveValueInput(ctx, node, 'index', 0), I32); em.localSet(kLoc);
+    const buildChain = (i: number) => {
+      if (i >= entries.length) { writeConst(d.r, d.g, d.b); return; }
+      const e = entries[i]!;
+      em.localGet(kLoc); em.i32Const(i); em.op(OP_I32_EQ);
+      em.ifThenElse(() => writeConst(e.r, e.g, e.b), () => buildChain(i + 1));
+    };
+    buildChain(0);
+  }
+  const rRef: LocalRef = { localIdx: rLoc, valtype: I32 }, gRef: LocalRef = { localIdx: gLoc, valtype: I32 }, bRef: LocalRef = { localIdx: bLoc, valtype: I32 };
+  setCachedPort(ctx, node.id, 'r', rRef); setCachedPort(ctx, node.id, 'g', gRef); setCachedPort(ctx, node.id, 'b', bRef);
+  return portId === 'g' ? gRef : portId === 'b' ? bRef : rRef;
+}
+
+/** Color Constant — three inline i32 channels. */
+function emitGetColorConstant(ctx: AgentWasmCtx, node: GraphNode, portId: string): ValueRef {
+  const cfg = node.data.config as Record<string, unknown>;
+  const r = parseInt(String(cfg['r'] ?? '0'), 10) || 0;
+  const g = parseInt(String(cfg['g'] ?? '0'), 10) || 0;
+  const b = parseInt(String(cfg['b'] ?? '0'), 10) || 0;
+  const rRef: ValueRef = { inline: true, value: r, valtype: I32 };
+  const gRef: ValueRef = { inline: true, value: g, valtype: I32 };
+  const bRef: ValueRef = { inline: true, value: b, valtype: I32 };
+  setCachedPort(ctx, node.id, 'r', rRef); setCachedPort(ctx, node.id, 'g', gRef); setCachedPort(ctx, node.id, 'b', bRef);
+  return portId === 'g' ? gRef : portId === 'b' ? bRef : rRef;
+}
+
+/** Get Curvature — mean unit-vector magnitude to bonded partners (torus-folded). */
+function emitCurvature(ctx: AgentWasmCtx): void {
+  const em = ctx.em, L = ctx.layout;
+  const idx = ctx.idxLocal;
+  const bc = em.allocLocal(I32); pushI32Elem(em, L.i32['bondCount']!, idx); em.localSet(bc);
+  const res = em.allocLocal(F64); em.f64Const(0); em.localSet(res);
+  // if (bc >= 2) { ... }
+  em.localGet(bc); em.i32Const(2); em.op(OP_I32_GE_S);
+  em.ifThen(() => {
+    const base = em.allocLocal(I32); em.localGet(idx); em.i32Const(L.maxBonds); em.op(OP_I32_MUL); em.localSet(base);
+    const sx = em.allocLocal(F64), sy = em.allocLocal(F64), sz = em.allocLocal(F64), cnt = em.allocLocal(I32);
+    em.f64Const(0); em.localSet(sx); em.f64Const(0); em.localSet(sy); em.f64Const(0); em.localSet(sz); em.i32Const(0); em.localSet(cnt);
+    const k = em.allocLocal(I32); em.i32Const(0); em.localSet(k);
+    const bpOff = L.bondI32['bondPartner']!;
+    const xi = em.allocLocal(F64), yi = em.allocLocal(F64), zi = em.allocLocal(F64);
+    pushF64Elem(em, L.f64['x']!, idx); em.localSet(xi);
+    pushF64Elem(em, L.f64['y']!, idx); em.localSet(yi);
+    if (ctx.is3d) { pushF64Elem(em, L.f64['z']!, idx); em.localSet(zi); }
+    em.block(() => {
+      em.loop(() => {
+        em.localGet(k); em.localGet(bc); em.op(OP_I32_GE_S); em.brIf(1);
+        const p = em.allocLocal(I32);
+        em.localGet(base); em.localGet(k); em.op(OP_I32_ADD); em.i32Const(4); em.op(OP_I32_MUL); em.i32Const(bpOff); em.op(OP_I32_ADD); em.i32Load(); em.localSet(p);
+        // if (p >= 0 && p < highWater && alive[p]) { ... }
+        em.localGet(p); em.i32Const(0); em.op(OP_I32_GE_S);
+        em.localGet(p); em.localGet(ctx.highWaterLocal); em.op(OP_I32_LT_S); em.op(OP_I32_AND);
+        em.ifThen(() => {
+          em.localGet(p); em.i32Const(L.u8['alive']!); em.op(OP_I32_ADD); em.i32Load8U();
+          em.ifThen(() => {
+            const dx = em.allocLocal(F64), dy = em.allocLocal(F64), dz = em.allocLocal(F64);
+            pushF64Elem(em, L.f64['x']!, p); em.localGet(xi); em.op(OP_F64_SUB); em.localSet(dx);
+            pushF64Elem(em, L.f64['y']!, p); em.localGet(yi); em.op(OP_F64_SUB); em.localSet(dy);
+            if (ctx.is3d) { pushF64Elem(em, L.f64['z']!, p); em.localGet(zi); em.op(OP_F64_SUB); em.localSet(dz); }
+            em.localGet(ctx.fieldTorusLocal);
+            em.ifThen(() => {
+              foldTorus(em, dx, ctx.fieldWLocal); foldTorus(em, dy, ctx.fieldHLocal);
+              if (ctx.is3d) foldTorus(em, dz, ctx.fieldDLocal);
+            });
+            const d = em.allocLocal(F64);
+            em.localGet(dx); em.localGet(dx); em.op(OP_F64_MUL);
+            em.localGet(dy); em.localGet(dy); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+            if (ctx.is3d) { em.localGet(dz); em.localGet(dz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); }
+            em.op(OP_F64_SQRT); em.localSet(d);
+            // if (d > 1e-9) { sx += dx/d; sy += dy/d; [sz += dz/d;] cnt++ }
+            em.localGet(d); em.f64Const(1e-9); em.op(OP_F64_GT);
+            em.ifThen(() => {
+              em.localGet(sx); em.localGet(dx); em.localGet(d); em.op(OP_F64_DIV); em.op(OP_F64_ADD); em.localSet(sx);
+              em.localGet(sy); em.localGet(dy); em.localGet(d); em.op(OP_F64_DIV); em.op(OP_F64_ADD); em.localSet(sy);
+              if (ctx.is3d) { em.localGet(sz); em.localGet(dz); em.localGet(d); em.op(OP_F64_DIV); em.op(OP_F64_ADD); em.localSet(sz); }
+              em.localGet(cnt); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(cnt);
+            });
+          });
+        });
+        em.localGet(k); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(k);
+        em.br(0);
+      });
+    });
+    // res = cnt > 0 ? hypot(sx,sy[,sz]) / cnt : 0
+    em.localGet(cnt); em.i32Const(0); em.op(OP_I32_GT_S);
+    em.ifThen(() => {
+      em.localGet(sx); em.localGet(sx); em.op(OP_F64_MUL);
+      em.localGet(sy); em.localGet(sy); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+      if (ctx.is3d) { em.localGet(sz); em.localGet(sz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); }
+      em.op(OP_F64_SQRT);
+      em.localGet(cnt); em.i32ToF64(); em.op(OP_F64_DIV);
+      em.localSet(res);
+    });
+  });
+  em.localGet(res);
+}
+
+// ===========================================================================
+// Array tier — agent-id / value arrays in scratch. The producers fill a scratch
+// slab; consumers (aggregate / group reduce / arrayElement) loop over it.
+// ===========================================================================
+
+const AGENT_ARRAY_PRODUCERS = new Set<string>([
+  'getNearbyAgents', 'getBondedAgents', 'getAgentsAttribute',
+  'filterAgents', 'joinAgents', 'pickNRandomAgents', 'getVariable',
+]);
+
+/** Resolve a value input port that carries an ARRAY. Returns the producer's
+ *  AgentArrayRef, OR (for multi-source scalars) materialises them into a fresh
+ *  scratch f64 array. Returns null if no array source. */
+function resolveInputArray(ctx: AgentWasmCtx, node: GraphNode, portId: string): AgentArrayRef | null {
+  const sources = ctx.adj.inputToSources.get(`${node.id}:${portId}`) ?? [];
+  if (sources.length === 0) {
+    // possibly a single source recorded only in inputToSource
+    const single = ctx.adj.inputToSource.get(`${node.id}:${portId}`);
+    if (!single) return null;
+    return compileArrayNode(ctx, single.nodeId, single.portId);
+  }
+  if (sources.length === 1) {
+    const s = sources[0]!;
+    const src = ctx.adj.nodeMap.get(s.nodeId);
+    if (src && AGENT_ARRAY_PRODUCERS.has(src.data.nodeType)) {
+      return compileArrayNode(ctx, s.nodeId, s.portId);
+    }
+    // a single SCALAR source → a length-1 array (matches JS `[scalar]`).
+    return materialiseScalars(ctx, [s]);
+  }
+  // multiple scalar sources → a scratch f64 array (matches JS `[s0, s1, ...]`).
+  return materialiseScalars(ctx, sources);
+}
+
+/** Materialise a list of scalar sources into a fresh f64 scratch array. */
+function materialiseScalars(ctx: AgentWasmCtx, sources: Array<{ nodeId: string; portId: string }>): AgentArrayRef {
+  const em = ctx.em;
+  const lenLocal = em.allocLocal(I32); em.i32Const(sources.length); em.localSet(lenLocal);
+  const arr = allocScratch(ctx, lenLocal, 8, true);
+  sources.forEach((s, i) => {
+    const idxL = em.allocLocal(I32); em.i32Const(i); em.localSet(idxL);
+    storeArrayElemAddr(em, arr, idxL);
+    pushValueAs(em, compileValueNode(ctx, s.nodeId, s.portId), F64);
+    em.f64Store();
+  });
+  return arr;
+}
+
+/** Compile an array-producing node + return its ArrayRef (memoised, like values). */
+function compileArrayNode(ctx: AgentWasmCtx, nodeId: string, portId: string): AgentArrayRef {
+  const key = `${nodeId}:${portId === 'result' || portId === 'value' || portId === 'agents' || portId === 'values' || portId === 'picked' ? 'arr' : portId}`;
+  const cached = ctx.arrayCache.get(key);
+  if (cached !== undefined) return cached;
+  const node = ctx.adj.nodeMap.get(nodeId);
+  if (!node) throw new Error(`agentWasm: missing array node ${nodeId}`);
+  const type = node.data.nodeType;
+  let ref: AgentArrayRef;
+  switch (type) {
+    case 'getNearbyAgents': {
+      const { baseLocal, lenLocal } = emitNearbyFill(ctx, node);
+      ref = { offsetLocal: baseLocal, lenLocal, elemBytes: 4, isF64: false };
+      break;
+    }
+    case 'getBondedAgents': ref = emitBondedAgents(ctx, node); break;
+    case 'getAgentsAttribute': ref = emitAgentsAttribute(ctx, node); break;
+    case 'filterAgents': ref = emitFilterAgents(ctx, node); break;
+    case 'joinAgents': ref = emitJoinAgents(ctx, node); break;
+    case 'pickNRandomAgents': ref = emitPickNRandomAgents(ctx, node); break;
+    case 'getVariable': {
+      const variableId = (node.data.config?.['variableId'] as string) || '';
+      const v = ctx.arrayVarLocals.get(variableId);
+      if (!v) { const lenL = ctx.em.allocLocal(I32); ctx.em.i32Const(0); ctx.em.localSet(lenL); ref = allocScratch(ctx, lenL, 8, true); }
+      else ref = v;
+      break;
+    }
+    case 'valueSwitch': ref = emitValueSwitchArray(ctx, node); break;
+    default:
+      throw new Error(`agentWasm: '${type}' is not an array producer`);
+  }
+  ctx.arrayCache.set(key, ref);
+  return ref;
+}
+
+/** Get Bonded Agents — this agent's live bonded partner ids. */
+function emitBondedAgents(ctx: AgentWasmCtx, _node: GraphNode): AgentArrayRef {
+  const em = ctx.em, L = ctx.layout;
+  const bc = em.allocLocal(I32); pushI32Elem(em, L.i32['bondCount']!, ctx.idxLocal); em.localSet(bc);
+  // worst-case len = bondCount; allocate scratch sized maxBonds (an upper bound)
+  const cap = em.allocLocal(I32); em.i32Const(L.maxBonds); em.localSet(cap);
+  const arr = allocScratch(ctx, cap, 4, false);
+  const lenLocal = em.allocLocal(I32); em.i32Const(0); em.localSet(lenLocal);
+  const base = em.allocLocal(I32); em.localGet(ctx.idxLocal); em.i32Const(L.maxBonds); em.op(OP_I32_MUL); em.localSet(base);
+  const bpOff = L.bondI32['bondPartner']!;
+  const k = em.allocLocal(I32); em.i32Const(0); em.localSet(k);
+  em.block(() => {
+    em.loop(() => {
+      em.localGet(k); em.localGet(bc); em.op(OP_I32_GE_S); em.brIf(1);
+      const p = em.allocLocal(I32);
+      em.localGet(base); em.localGet(k); em.op(OP_I32_ADD); em.i32Const(4); em.op(OP_I32_MUL); em.i32Const(bpOff); em.op(OP_I32_ADD); em.i32Load(); em.localSet(p);
+      // if (p >= 0 && p < highWater && alive[p]) scratch[len++] = p
+      em.localGet(p); em.i32Const(0); em.op(OP_I32_GE_S);
+      em.localGet(p); em.localGet(ctx.highWaterLocal); em.op(OP_I32_LT_S); em.op(OP_I32_AND);
+      em.ifThen(() => {
+        em.localGet(p); em.i32Const(L.u8['alive']!); em.op(OP_I32_ADD); em.i32Load8U();
+        em.ifThen(() => {
+          storeArrayElemAddr(em, arr, lenLocal); em.localGet(p); em.i32Store();
+          em.localGet(lenLocal); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(lenLocal);
+        });
+      });
+      em.localGet(k); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(k);
+      em.br(0);
+    });
+  });
+  return { offsetLocal: arr.offsetLocal, lenLocal, elemBytes: 4, isF64: false };
+}
+
+/** Get Agents Attribute — gather one attr over an id array → an f64 value array.
+ *  Skips empty(-1)/dead/oob ids (matches the JS guard). */
+function emitAgentsAttribute(ctx: AgentWasmCtx, node: GraphNode): AgentArrayRef {
+  const em = ctx.em;
+  const attrId = (node.data.config?.['attributeId'] as string) || '';
+  const inArr = resolveInputArray(ctx, node, 'agents');
+  if (!inArr) { const lenL = em.allocLocal(I32); em.i32Const(0); em.localSet(lenL); return allocScratch(ctx, lenL, 8, true); }
+  const out = allocScratch(ctx, inArr.lenLocal, 8, true);
+  const outLen = em.allocLocal(I32); em.i32Const(0); em.localSet(outLen);
+  const gi = em.allocLocal(I32); em.i32Const(0); em.localSet(gi);
+  em.block(() => {
+    em.loop(() => {
+      em.localGet(gi); em.localGet(inArr.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+      const a = em.allocLocal(I32); pushArrayElemI32(em, inArr, gi); em.localSet(a);
+      // if (a >= 0 && a < highWater && alive[a]) out[outLen++] = r_attr[a]
+      em.localGet(a); em.i32Const(0); em.op(OP_I32_GE_S);
+      em.localGet(a); em.localGet(ctx.highWaterLocal); em.op(OP_I32_LT_S); em.op(OP_I32_AND);
+      em.ifThen(() => {
+        em.localGet(a); em.i32Const(ctx.layout.u8['alive']!); em.op(OP_I32_ADD); em.i32Load8U();
+        em.ifThen(() => {
+          storeArrayElemAddr(em, out, outLen);
+          pushAgentAttrReadF64(ctx, attrId, a);
+          em.f64Store();
+          em.localGet(outLen); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(outLen);
+        });
+      });
+      em.localGet(gi); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(gi);
+      em.br(0);
+    });
+  });
+  return { offsetLocal: out.offsetLocal, lenLocal: outLen, elemBytes: 8, isF64: true };
+}
+
+/** Filter Agents — keep ids whose attribute satisfies the comparison. Multi-output
+ *  (result + count). */
+function emitFilterAgents(ctx: AgentWasmCtx, node: GraphNode): AgentArrayRef {
+  const em = ctx.em;
+  const cfg = node.data.config as Record<string, unknown>;
+  const attrId = (cfg['attributeId'] as string) || '';
+  const op = (cfg['operation'] as string) || 'equals';
+  const inArr = resolveInputArray(ctx, node, 'agents');
+  if (!inArr) { const lenL = em.allocLocal(I32); em.i32Const(0); em.localSet(lenL); const e = allocScratch(ctx, lenL, 4, false); setCachedPort(ctx, node.id, 'count', { localIdx: lenL, valtype: I32 }); return e; }
+  const out = allocScratch(ctx, inArr.lenLocal, 4, false);
+  const outLen = em.allocLocal(I32); em.i32Const(0); em.localSet(outLen);
+  const cmp = em.allocLocal(F64); pushValueInputF64(ctx, node, 'compare', 0); em.localSet(cmp);
+  const fi = em.allocLocal(I32); em.i32Const(0); em.localSet(fi);
+  em.block(() => {
+    em.loop(() => {
+      em.localGet(fi); em.localGet(inArr.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+      const a = em.allocLocal(I32); pushArrayElemI32(em, inArr, fi); em.localSet(a);
+      em.localGet(a); em.i32Const(0); em.op(OP_I32_GE_S);
+      em.localGet(a); em.localGet(ctx.highWaterLocal); em.op(OP_I32_LT_S); em.op(OP_I32_AND);
+      em.ifThen(() => {
+        em.localGet(a); em.i32Const(ctx.layout.u8['alive']!); em.op(OP_I32_ADD); em.i32Load8U();
+        em.ifThen(() => {
+          // attr OP cmp ?
+          pushAgentAttrReadF64(ctx, attrId, a); em.localGet(cmp); emitCompareOp(em, op);
+          em.ifThen(() => {
+            storeArrayElemAddr(em, out, outLen); em.localGet(a); em.i32Store();
+            em.localGet(outLen); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(outLen);
+          });
+        });
+      });
+      em.localGet(fi); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(fi);
+      em.br(0);
+    });
+  });
+  setCachedPort(ctx, node.id, 'count', { localIdx: outLen, valtype: I32 });
+  return { offsetLocal: out.offsetLocal, lenLocal: outLen, elemBytes: 4, isF64: false };
+}
+
+/** Join Agents — union / intersection of two id arrays (dedup, skip -1). */
+function emitJoinAgents(ctx: AgentWasmCtx, node: GraphNode): AgentArrayRef {
+  const em = ctx.em;
+  const op = (node.data.config?.['operation'] as string) || 'union';
+  const a = resolveInputArray(ctx, node, 'a');
+  const b = resolveInputArray(ctx, node, 'b');
+  const aLen = a ? a.lenLocal : (() => { const l = em.allocLocal(I32); em.i32Const(0); em.localSet(l); return l; })();
+  const bLen = b ? b.lenLocal : (() => { const l = em.allocLocal(I32); em.i32Const(0); em.localSet(l); return l; })();
+  // worst-case capacity = aLen + bLen
+  const cap = em.allocLocal(I32); em.localGet(aLen); em.localGet(bLen); em.op(OP_I32_ADD); em.localSet(cap);
+  const out = allocScratch(ctx, cap, 4, false);
+  const outLen = em.allocLocal(I32); em.i32Const(0); em.localSet(outLen);
+  // contains(x): linear scan of out[0..outLen)
+  const containsOut = (xLocal: number): void => {
+    // pushes i32 1/0
+    const found = em.allocLocal(I32); em.i32Const(0); em.localSet(found);
+    const c = em.allocLocal(I32); em.i32Const(0); em.localSet(c);
+    em.block(() => { em.loop(() => {
+      em.localGet(c); em.localGet(outLen); em.op(OP_I32_GE_S); em.brIf(1);
+      const e = em.allocLocal(I32); pushArrayElemI32(em, out, c); em.localSet(e);
+      em.localGet(e); em.localGet(xLocal); em.op(OP_I32_EQ);
+      em.ifThen(() => { em.i32Const(1); em.localSet(found); });
+      em.localGet(c); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(c);
+      em.br(0);
+    }); });
+    em.localGet(found);
+  };
+  const containsArr = (arr: AgentArrayRef, xLocal: number): void => {
+    const found = em.allocLocal(I32); em.i32Const(0); em.localSet(found);
+    const c = em.allocLocal(I32); em.i32Const(0); em.localSet(c);
+    em.block(() => { em.loop(() => {
+      em.localGet(c); em.localGet(arr.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+      const e = em.allocLocal(I32); pushArrayElemI32(em, arr, c); em.localSet(e);
+      em.localGet(e); em.localGet(xLocal); em.op(OP_I32_EQ);
+      em.ifThen(() => { em.i32Const(1); em.localSet(found); });
+      em.localGet(c); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(c);
+      em.br(0);
+    }); });
+    em.localGet(found);
+  };
+  const pushFrom = (arr: AgentArrayRef | null, requireInOther: AgentArrayRef | null) => {
+    if (!arr) return;
+    const k = em.allocLocal(I32); em.i32Const(0); em.localSet(k);
+    em.block(() => { em.loop(() => {
+      em.localGet(k); em.localGet(arr.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+      const x = em.allocLocal(I32); pushArrayElemI32(em, arr, k); em.localSet(x);
+      // if (x !== -1 && !contains(out, x) && (requireInOther ? contains(other,x) : true))
+      em.localGet(x); em.i32Const(-1); em.op(OP_I32_NE);
+      em.ifThen(() => {
+        containsOut(x); em.op(OP_I32_EQZ);
+        em.ifThen(() => {
+          const doPush = () => { storeArrayElemAddr(em, out, outLen); em.localGet(x); em.i32Store(); em.localGet(outLen); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(outLen); };
+          if (requireInOther) { containsArr(requireInOther, x); em.ifThen(doPush); }
+          else doPush();
+        });
+      });
+      em.localGet(k); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(k);
+      em.br(0);
+    }); });
+  };
+  if (op === 'intersection') {
+    // for each x in a, if x in b → push
+    pushFrom(a, b);
+  } else {
+    pushFrom(a, null); pushFrom(b, null);
+  }
+  setCachedPort(ctx, node.id, 'count', { localIdx: outLen, valtype: I32 });
+  return { offsetLocal: out.offsetLocal, lenLocal: outLen, elemBytes: 4, isF64: false };
+}
+
+/** Pick N Random Agents — partial Fisher-Yates over the shared `_rs` stream. */
+function emitPickNRandomAgents(ctx: AgentWasmCtx, node: GraphNode): AgentArrayRef {
+  const em = ctx.em, rs = ctx.rsLocal;
+  const inArr = resolveInputArray(ctx, node, 'agents');
+  if (!inArr) { const lenL = em.allocLocal(I32); em.i32Const(0); em.localSet(lenL); return allocScratch(ctx, lenL, 4, false); }
+  const n = em.allocLocal(I32); pushValueAs(em, resolveValueInput(ctx, node, 'n', 1), I32); em.localSet(n);
+  // k = min(max(n,0), len). ifThenElse blocks are empty-type → store into k inside.
+  const k = em.allocLocal(I32);
+  em.localGet(n); em.i32Const(0); em.op(OP_I32_GT_S); em.ifThenElse(() => { em.localGet(n); em.localSet(k); }, () => { em.i32Const(0); em.localSet(k); });
+  em.localGet(k); em.localGet(inArr.lenLocal); em.op(OP_I32_GT_S); em.ifThen(() => { em.localGet(inArr.lenLocal); em.localSet(k); });
+  // work = copy of input (i32)
+  const work = allocScratch(ctx, inArr.lenLocal, 4, false);
+  const ci = em.allocLocal(I32); em.i32Const(0); em.localSet(ci);
+  em.block(() => { em.loop(() => {
+    em.localGet(ci); em.localGet(inArr.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+    storeArrayElemAddr(em, work, ci); pushArrayElemI32(em, inArr, ci); em.i32Store();
+    em.localGet(ci); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(ci);
+    em.br(0);
+  }); });
+  const out = allocScratch(ctx, k, 4, false);
+  const pi = em.allocLocal(I32); em.i32Const(0); em.localSet(pi);
+  em.block(() => { em.loop(() => {
+    em.localGet(pi); em.localGet(k); em.op(OP_I32_GE_S); em.brIf(1);
+    emitRngAdvance(em, rs);
+    // j = pi + floor((rs/2^32) * (len - pi))
+    const j = em.allocLocal(I32);
+    em.localGet(rs); em.op(OP_F64_CONVERT_I32_U); em.f64Const(4294967296); em.op(OP_F64_DIV);
+    em.localGet(inArr.lenLocal); em.localGet(pi); em.op(OP_I32_SUB); em.i32ToF64(); em.op(OP_F64_MUL); em.op(OP_F64_FLOOR); em.f64ToI32();
+    em.localGet(pi); em.op(OP_I32_ADD); em.localSet(j);
+    // swap work[pi] <-> work[j]
+    const tmp = em.allocLocal(I32); pushArrayElemI32(em, work, pi); em.localSet(tmp);
+    storeArrayElemAddr(em, work, pi); pushArrayElemI32(em, work, j); em.i32Store();
+    storeArrayElemAddr(em, work, j); em.localGet(tmp); em.i32Store();
+    // out[pi] = work[pi]
+    storeArrayElemAddr(em, out, pi); pushArrayElemI32(em, work, pi); em.i32Store();
+    em.localGet(pi); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(pi);
+    em.br(0);
+  }); });
+  return { offsetLocal: out.offsetLocal, lenLocal: k, elemBytes: 4, isF64: false };
+}
+
+/** valueSwitch array mode — zero-copy OP_SELECT of the two branch arrays. */
+function emitValueSwitchArray(ctx: AgentWasmCtx, node: GraphNode): AgentArrayRef {
+  const em = ctx.em;
+  const ifA = resolveInputArray(ctx, node, 'ifValue');
+  const elA = resolveInputArray(ctx, node, 'elseValue');
+  if (!ifA || !elA) {
+    const lenL = em.allocLocal(I32); em.i32Const(0); em.localSet(lenL);
+    return allocScratch(ctx, lenL, 8, true);
+  }
+  const cond = em.allocLocal(I32);
+  pushValueAs(em, resolveValueInput(ctx, node, 'condition', 0), F64); em.f64Const(0); em.op(OP_F64_NE); em.localSet(cond);
+  const offL = em.allocLocal(I32), lenL = em.allocLocal(I32);
+  em.localGet(ifA.offsetLocal); em.localGet(elA.offsetLocal); em.localGet(cond); em.op(OP_SELECT); em.localSet(offL);
+  em.localGet(ifA.lenLocal); em.localGet(elA.lenLocal); em.localGet(cond); em.op(OP_SELECT); em.localSet(lenL);
+  return { offsetLocal: offL, lenLocal: lenL, elemBytes: ifA.elemBytes, isF64: ifA.isF64 };
+}
+
+/** Advance the shared xorshift32 `_rs` (in-register), JS-bit-parity (13/17/5). */
+function emitRngAdvance(em: WasmEmitter, rs: number): void {
+  em.localGet(rs); em.localGet(rs); em.i32Const(13); em.op(OP_I32_SHL); em.op(OP_I32_XOR); em.localSet(rs);
+  em.localGet(rs); em.localGet(rs); em.i32Const(17); em.op(OP_I32_SHR_U); em.op(OP_I32_XOR); em.localSet(rs);
+  em.localGet(rs); em.localGet(rs); em.i32Const(5); em.op(OP_I32_SHL); em.op(OP_I32_XOR); em.localSet(rs);
+}
+
+/** Emit an f64 comparison op (a, b already on stack) → i32 1/0. Op names match the
+ *  filter / compare nodes. */
+function emitCompareOp(em: WasmEmitter, op: string): void {
+  switch (op) {
+    case 'notEquals': case '!=': em.op(OP_F64_NE); break;
+    case 'greater': case '>': em.op(OP_F64_GT); break;
+    case 'lesser': case '<': em.op(OP_F64_LT); break;
+    case 'greaterEqual': case '>=': em.op(OP_F64_GE); break;
+    case 'lesserEqual': case '<=': em.op(OP_F64_LE); break;
+    default: em.op(OP_F64_EQ); break;   // equals / ==
+  }
+}
+
+/** Pick Random Agent — uniform pick from an id array (-1 when empty). */
+function emitPickRandomAgent(ctx: AgentWasmCtx, node: GraphNode): void {
+  const em = ctx.em, rs = ctx.rsLocal;
+  emitRngAdvance(em, rs);
+  const inArr = resolveInputArray(ctx, node, 'agents');
+  const res = em.allocLocal(F64); em.f64Const(-1); em.localSet(res);
+  if (!inArr) { em.localGet(res); return; }
+  em.localGet(inArr.lenLocal); em.i32Const(0); em.op(OP_I32_GT_S);
+  em.ifThen(() => {
+    const pick = em.allocLocal(I32);
+    em.localGet(rs); em.op(OP_F64_CONVERT_I32_U); em.f64Const(4294967296); em.op(OP_F64_DIV);
+    em.localGet(inArr.lenLocal); em.i32ToF64(); em.op(OP_F64_MUL); em.op(OP_F64_FLOOR); em.f64ToI32(); em.localSet(pick);
+    pushArrayElemI32(em, inArr, pick); em.i32ToF64(); em.localSet(res);
+  });
+  em.localGet(res);
+}
+
+/** Get Array Element — `arr[index]` (0/-1 default oob, matching JS). */
+function emitArrayElement(ctx: AgentWasmCtx, node: GraphNode): ValueRef {
+  const em = ctx.em;
+  const arr = resolveInputArray(ctx, node, 'array');
+  const idxL = em.allocLocal(I32); pushValueAs(em, resolveValueInput(ctx, node, 'position', 0), I32); em.localSet(idxL);
+  const res = em.allocLocal(F64); em.f64Const(0); em.localSet(res);
+  if (!arr) return { localIdx: res, valtype: F64 };
+  em.localGet(idxL); em.i32Const(0); em.op(OP_I32_GE_S);
+  em.localGet(idxL); em.localGet(arr.lenLocal); em.op(OP_I32_LT_S); em.op(OP_I32_AND);
+  em.ifThen(() => { pushArrayElemF64(em, arr, idxL); em.localSet(res); });
+  return { localIdx: res, valtype: F64 };
+}
+
+/** Aggregate / Group Reduce / Group Counting / Group Statement over an array. The
+ *  array `values` is resolved via resolveInputArray. Bit-parity with the JS nodes
+ *  (op-by-op). groupOperator is multi-output (result + index/position). */
+function emitArrayReduce(ctx: AgentWasmCtx, node: GraphNode, portId: string): ValueRef {
+  const em = ctx.em;
+  const type = node.data.nodeType;
+  const cfg = node.data.config as Record<string, unknown>;
+  const op = (cfg['operation'] as string) || 'sum';
+  const arr = resolveInputArray(ctx, node, type === 'groupStatement' || type === 'groupCounting' ? 'values' : 'values');
+  const empty = (): AgentArrayRef => { const lenL = em.allocLocal(I32); em.i32Const(0); em.localSet(lenL); return allocScratch(ctx, lenL, 8, true); };
+  const a = arr ?? empty();
+
+  if (type === 'groupOperator') return emitGroupOperator(ctx, node, a, op, portId);
+  if (type === 'groupStatement') return { localIdx: emitGroupStatement(ctx, node, a, op), valtype: F64 };
+  if (type === 'groupCounting') return { localIdx: emitGroupCounting(ctx, node, a, op), valtype: F64 };
+  // aggregate
+  return { localIdx: emitAggregate(ctx, a, op), valtype: F64 };
+}
+
+/** Aggregate (sum/product/max/min/average/median/and/or) — f64 result. */
+function emitAggregate(ctx: AgentWasmCtx, a: AgentArrayRef, op: string): number {
+  const em = ctx.em;
+  const acc = em.allocLocal(F64);
+  const i = em.allocLocal(I32);
+  const loopAccum = (init: number, body: () => void) => {
+    em.f64Const(init); em.localSet(acc);
+    em.i32Const(0); em.localSet(i);
+    em.block(() => { em.loop(() => {
+      em.localGet(i); em.localGet(a.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+      body();
+      em.localGet(i); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(i);
+      em.br(0);
+    }); });
+  };
+  switch (op) {
+    case 'product': loopAccum(1, () => { em.localGet(acc); pushArrayElemF64(em, a, i); em.op(OP_F64_MUL); em.localSet(acc); }); break;
+    case 'max': loopAccum(-Infinity, () => { em.localGet(acc); pushArrayElemF64(em, a, i); em.op(OP_F64_MAX); em.localSet(acc); }); break;
+    case 'min': loopAccum(Infinity, () => { em.localGet(acc); pushArrayElemF64(em, a, i); em.op(OP_F64_MIN); em.localSet(acc); }); break;
+    case 'average': {
+      loopAccum(0, () => { em.localGet(acc); pushArrayElemF64(em, a, i); em.op(OP_F64_ADD); em.localSet(acc); });
+      // acc = len>0 ? acc/len : 0
+      em.localGet(a.lenLocal); em.i32Const(0); em.op(OP_I32_GT_S);
+      em.ifThenElse(() => { em.localGet(acc); em.localGet(a.lenLocal); em.i32ToF64(); em.op(OP_F64_DIV); em.localSet(acc); }, () => { em.f64Const(0); em.localSet(acc); });
+      break;
+    }
+    case 'and': {
+      // acc=1; loop: if (!arr[i]) { acc=0; break }
+      em.f64Const(1); em.localSet(acc); em.i32Const(0); em.localSet(i);
+      em.block(() => { em.loop(() => {
+        em.localGet(i); em.localGet(a.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+        pushArrayElemF64(em, a, i); em.f64Const(0); em.op(OP_F64_EQ);
+        em.ifThen(() => { em.f64Const(0); em.localSet(acc); em.br(2); });
+        em.localGet(i); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(i); em.br(0);
+      }); });
+      break;
+    }
+    case 'or': {
+      em.f64Const(0); em.localSet(acc); em.i32Const(0); em.localSet(i);
+      em.block(() => { em.loop(() => {
+        em.localGet(i); em.localGet(a.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+        pushArrayElemF64(em, a, i); em.f64Const(0); em.op(OP_F64_NE);
+        em.ifThen(() => { em.f64Const(1); em.localSet(acc); em.br(2); });
+        em.localGet(i); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(i); em.br(0);
+      }); });
+      break;
+    }
+    case 'median': emitMedian(ctx, a, acc); break;
+    default: loopAccum(0, () => { em.localGet(acc); pushArrayElemF64(em, a, i); em.op(OP_F64_ADD); em.localSet(acc); }); break;
+  }
+  return acc;
+}
+
+/** Median — copy to a fresh f64 scratch, insertion-sort, take the middle (the JS
+ *  `slice().sort((a,b)=>a-b)` + even/odd average). */
+function emitMedian(ctx: AgentWasmCtx, a: AgentArrayRef, accLocal: number): void {
+  const em = ctx.em;
+  const work = allocScratch(ctx, a.lenLocal, 8, true);
+  const ci = em.allocLocal(I32); em.i32Const(0); em.localSet(ci);
+  em.block(() => { em.loop(() => {
+    em.localGet(ci); em.localGet(a.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+    storeArrayElemAddr(em, work, ci); pushArrayElemF64(em, a, ci); em.f64Store();
+    em.localGet(ci); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(ci); em.br(0);
+  }); });
+  // insertion sort work[0..len)
+  const ii = em.allocLocal(I32), jj = em.allocLocal(I32), key = em.allocLocal(F64), cur = em.allocLocal(F64);
+  em.i32Const(1); em.localSet(ii);
+  em.block(() => { em.loop(() => {
+    em.localGet(ii); em.localGet(a.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+    pushArrayElemF64(em, work, ii); em.localSet(key);
+    em.localGet(ii); em.i32Const(1); em.op(OP_I32_SUB); em.localSet(jj);
+    em.block(() => { em.loop(() => {
+      // while (jj >= 0 && work[jj] > key)
+      em.localGet(jj); em.i32Const(0); em.op(OP_I32_LT_S); em.brIf(1);
+      pushArrayElemF64(em, work, jj); em.localSet(cur);
+      em.localGet(cur); em.localGet(key); em.op(OP_F64_LE); em.brIf(1);
+      // work[jj+1] = work[jj]
+      const jp = em.allocLocal(I32); em.localGet(jj); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(jp);
+      storeArrayElemAddr(em, work, jp); em.localGet(cur); em.f64Store();
+      em.localGet(jj); em.i32Const(1); em.op(OP_I32_SUB); em.localSet(jj);
+      em.br(0);
+    }); });
+    const jp2 = em.allocLocal(I32); em.localGet(jj); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(jp2);
+    storeArrayElemAddr(em, work, jp2); em.localGet(key); em.f64Store();
+    em.localGet(ii); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(ii); em.br(0);
+  }); });
+  // acc = len===0 ? 0 : (len%2===0 ? (w[len/2-1]+w[len/2])/2 : w[(len-1)/2])
+  em.f64Const(0); em.localSet(accLocal);
+  em.localGet(a.lenLocal); em.i32Const(0); em.op(OP_I32_GT_S);
+  em.ifThen(() => {
+    const half = em.allocLocal(I32); em.localGet(a.lenLocal); em.i32Const(2); em.op(OP_I32_DIV_S); em.localSet(half);
+    em.localGet(a.lenLocal); em.i32Const(2); em.op(OP_I32_REM_S); em.i32Const(0); em.op(OP_I32_EQ);
+    em.ifThenElse(
+      () => {
+        const hm1 = em.allocLocal(I32); em.localGet(half); em.i32Const(1); em.op(OP_I32_SUB); em.localSet(hm1);
+        pushArrayElemF64(em, work, hm1); pushArrayElemF64(em, work, half); em.op(OP_F64_ADD); em.f64Const(2); em.op(OP_F64_DIV); em.localSet(accLocal);
+      },
+      () => {
+        const mid = em.allocLocal(I32); em.localGet(a.lenLocal); em.i32Const(1); em.op(OP_I32_SUB); em.i32Const(2); em.op(OP_I32_DIV_S); em.localSet(mid);
+        pushArrayElemF64(em, work, mid); em.localSet(accLocal);
+      },
+    );
+  });
+}
+
+/** Group Reduce — multi-output (result + index). Bit-parity with GroupOperatorNode. */
+function emitGroupOperator(ctx: AgentWasmCtx, node: GraphNode, a: AgentArrayRef, op: string, portId: string): ValueRef {
+  const em = ctx.em, rs = ctx.rsLocal;
+  const resLoc = em.allocLocal(F64), idxLoc = em.allocLocal(I32);
+  const finish = (): ValueRef => {
+    setCachedPort(ctx, node.id, 'result', { localIdx: resLoc, valtype: F64 });
+    setCachedPort(ctx, node.id, 'index', { localIdx: idxLoc, valtype: I32 });
+    setCachedPort(ctx, node.id, 'position', { localIdx: idxLoc, valtype: I32 });
+    return portId === 'index' || portId === 'position' ? { localIdx: idxLoc, valtype: I32 } : { localIdx: resLoc, valtype: F64 };
+  };
+  if (op === 'random') {
+    emitRngAdvance(em, rs);
+    em.i32Const(-1); em.localSet(idxLoc); em.f64Const(0); em.localSet(resLoc);
+    em.localGet(a.lenLocal); em.i32Const(0); em.op(OP_I32_GT_S);
+    em.ifThen(() => {
+      em.localGet(rs); em.op(OP_F64_CONVERT_I32_U); em.f64Const(4294967296); em.op(OP_F64_DIV);
+      em.localGet(a.lenLocal); em.i32ToF64(); em.op(OP_F64_MUL); em.op(OP_F64_FLOOR); em.f64ToI32(); em.localSet(idxLoc);
+      pushArrayElemF64(em, a, idxLoc); em.localSet(resLoc);
+    });
+    return finish();
+  }
+  if (op === 'weightedRandom') {
+    emitRngAdvance(em, rs);
+    const sum = em.allocLocal(F64); em.f64Const(0); em.localSet(sum);
+    const gi = em.allocLocal(I32); em.i32Const(0); em.localSet(gi);
+    em.block(() => { em.loop(() => {
+      em.localGet(gi); em.localGet(a.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+      em.localGet(sum); pushArrayElemF64(em, a, gi); em.op(OP_F64_ADD); em.localSet(sum);
+      em.localGet(gi); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(gi); em.br(0);
+    }); });
+    em.i32Const(-1); em.localSet(idxLoc); em.f64Const(0); em.localSet(resLoc);
+    em.localGet(sum); em.f64Const(0); em.op(OP_F64_GT);
+    em.ifThen(() => {
+      const u = em.allocLocal(F64); em.localGet(rs); em.op(OP_F64_CONVERT_I32_U); em.f64Const(4294967296); em.op(OP_F64_DIV); em.localGet(sum); em.op(OP_F64_MUL); em.localSet(u);
+      const acc = em.allocLocal(F64); em.f64Const(0); em.localSet(acc);
+      const gj = em.allocLocal(I32); em.i32Const(0); em.localSet(gj);
+      em.block(() => { em.loop(() => {
+        em.localGet(gj); em.localGet(a.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+        em.localGet(acc); pushArrayElemF64(em, a, gj); em.op(OP_F64_ADD); em.localSet(acc);
+        em.localGet(u); em.localGet(acc); em.op(OP_F64_LT);
+        em.ifThen(() => { em.localGet(gj); em.localSet(idxLoc); pushArrayElemF64(em, a, gj); em.localSet(resLoc); em.br(2); });
+        em.localGet(gj); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(gj); em.br(0);
+      }); });
+      // fallback: if (idx < 0) idx = len-1; result = arr[len-1]
+      em.localGet(idxLoc); em.i32Const(0); em.op(OP_I32_LT_S);
+      em.ifThen(() => {
+        const lm1 = em.allocLocal(I32); em.localGet(a.lenLocal); em.i32Const(1); em.op(OP_I32_SUB); em.localSet(lm1);
+        em.localGet(lm1); em.localSet(idxLoc); pushArrayElemF64(em, a, lm1); em.localSet(resLoc);
+      });
+    });
+    return finish();
+  }
+  if (op === 'max' || op === 'min') {
+    const cmp = op === 'max' ? OP_F64_GT : OP_F64_LT;
+    em.i32Const(0); em.localSet(idxLoc);
+    const gi = em.allocLocal(I32); em.i32Const(1); em.localSet(gi);
+    em.block(() => { em.loop(() => {
+      em.localGet(gi); em.localGet(a.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+      pushArrayElemF64(em, a, gi); pushArrayElemF64(em, a, idxLoc); em.op(cmp);
+      em.ifThen(() => { em.localGet(gi); em.localSet(idxLoc); });
+      em.localGet(gi); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(gi); em.br(0);
+    }); });
+    // result = arr[idx] (when empty, idx stays 0 and arr[0] is oob → 0; JS reads undefined
+    // → NaN, but the position-ops are hidden/unused on empty; mirror len>0 guard)
+    em.f64Const(0); em.localSet(resLoc);
+    em.localGet(a.lenLocal); em.i32Const(0); em.op(OP_I32_GT_S);
+    em.ifThen(() => { pushArrayElemF64(em, a, idxLoc); em.localSet(resLoc); });
+    return finish();
+  }
+  // sum/mul/mean/and/or — index = -1
+  em.i32Const(-1); em.localSet(idxLoc);
+  const acc = em.allocLocal(F64);
+  const i = em.allocLocal(I32);
+  const reduce = (init: number, mulCombine: boolean, addCombine: boolean) => {
+    em.f64Const(init); em.localSet(acc); em.i32Const(0); em.localSet(i);
+    em.block(() => { em.loop(() => {
+      em.localGet(i); em.localGet(a.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+      em.localGet(acc); pushArrayElemF64(em, a, i); em.op(mulCombine ? OP_F64_MUL : OP_F64_ADD); em.localSet(acc);
+      em.localGet(i); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(i); em.br(0);
+    }); });
+    void addCombine;
+  };
+  switch (op) {
+    case 'mul': reduce(1, true, false); break;
+    case 'mean': {
+      reduce(0, false, true);
+      // acc / (len || 1)
+      const denom = em.allocLocal(F64);
+      em.localGet(a.lenLocal); em.i32Const(0); em.op(OP_I32_GT_S);
+      em.ifThenElse(() => { em.localGet(a.lenLocal); em.i32ToF64(); em.localSet(denom); }, () => { em.f64Const(1); em.localSet(denom); });
+      em.localGet(acc); em.localGet(denom); em.op(OP_F64_DIV); em.localSet(acc);
+      break;
+    }
+    case 'and': {
+      // every(Boolean) ? 1 : 0
+      em.f64Const(1); em.localSet(acc); em.i32Const(0); em.localSet(i);
+      em.block(() => { em.loop(() => {
+        em.localGet(i); em.localGet(a.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+        pushArrayElemF64(em, a, i); em.f64Const(0); em.op(OP_F64_EQ);
+        em.ifThen(() => { em.f64Const(0); em.localSet(acc); em.br(2); });
+        em.localGet(i); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(i); em.br(0);
+      }); });
+      break;
+    }
+    case 'or': {
+      em.f64Const(0); em.localSet(acc); em.i32Const(0); em.localSet(i);
+      em.block(() => { em.loop(() => {
+        em.localGet(i); em.localGet(a.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+        pushArrayElemF64(em, a, i); em.f64Const(0); em.op(OP_F64_NE);
+        em.ifThen(() => { em.f64Const(1); em.localSet(acc); em.br(2); });
+        em.localGet(i); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(i); em.br(0);
+      }); });
+      break;
+    }
+    default: reduce(0, false, true); break;  // sum
+  }
+  em.localGet(acc); em.localSet(resLoc);
+  return finish();
+}
+
+/** Group Counting — count elements satisfying the comparison op. */
+function emitGroupCounting(ctx: AgentWasmCtx, node: GraphNode, a: AgentArrayRef, op: string): number {
+  const em = ctx.em;
+  const cfg = node.data.config as Record<string, unknown>;
+  const cnt = em.allocLocal(I32); em.i32Const(0); em.localSet(cnt);
+  const i = em.allocLocal(I32); em.i32Const(0); em.localSet(i);
+  const lo = em.allocLocal(F64); pushValueInputF64(ctx, node, 'value', 0); em.localSet(lo);
+  const hi = em.allocLocal(F64);
+  const isBetween = op === 'between' || op === 'notBetween';
+  if (isBetween) { pushValueInputF64(ctx, node, 'value2', 0); em.localSet(hi); }
+  void cfg;
+  em.block(() => { em.loop(() => {
+    em.localGet(i); em.localGet(a.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+    const v = em.allocLocal(F64); pushArrayElemF64(em, a, i); em.localSet(v);
+    emitCountPredicate(em, v, lo, hi, op);
+    em.ifThen(() => { em.localGet(cnt); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(cnt); });
+    em.localGet(i); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(i); em.br(0);
+  }); });
+  const res = em.allocLocal(F64); em.localGet(cnt); em.i32ToF64(); em.localSet(res);
+  return res;
+}
+
+/** Push i32 1/0 for the count predicate (v vs lo[/hi]). */
+function emitCountPredicate(em: WasmEmitter, v: number, lo: number, hi: number, op: string): void {
+  switch (op) {
+    case 'notEquals': em.localGet(v); em.localGet(lo); em.op(OP_F64_NE); break;
+    case 'greater': em.localGet(v); em.localGet(lo); em.op(OP_F64_GT); break;
+    case 'lesser': em.localGet(v); em.localGet(lo); em.op(OP_F64_LT); break;
+    case 'greaterEqual': em.localGet(v); em.localGet(lo); em.op(OP_F64_GE); break;
+    case 'lesserEqual': em.localGet(v); em.localGet(lo); em.op(OP_F64_LE); break;
+    case 'between': // lo <= v <= hi
+      em.localGet(v); em.localGet(lo); em.op(OP_F64_GE);
+      em.localGet(v); em.localGet(hi); em.op(OP_F64_LE); em.op(OP_I32_AND); break;
+    case 'notBetween': // v < lo || v > hi
+      em.localGet(v); em.localGet(lo); em.op(OP_F64_LT);
+      em.localGet(v); em.localGet(hi); em.op(OP_F64_GT); em.op(OP_I32_OR); break;
+    default: em.localGet(v); em.localGet(lo); em.op(OP_F64_EQ); break; // equals
+  }
+}
+
+/** Group Statement — allIs/noneIs/hasA/allGreater/anyGreater/allLesser/anyLesser. */
+function emitGroupStatement(ctx: AgentWasmCtx, node: GraphNode, a: AgentArrayRef, op: string): number {
+  const em = ctx.em;
+  const thr = em.allocLocal(F64); pushValueInputF64(ctx, node, 'value', 0); em.localSet(thr);
+  const acc = em.allocLocal(I32);
+  const i = em.allocLocal(I32);
+  // "all" ops start 1 (AND each match); "any"/hasA start 0 (OR each match).
+  const isAll = op === 'allIs' || op === 'noneIs' || op === 'allGreater' || op === 'allLesser';
+  em.i32Const(isAll ? 1 : 0); em.localSet(acc);
+  em.i32Const(0); em.localSet(i);
+  const matchPred = (v: number) => {
+    switch (op) {
+      case 'allIs': em.localGet(v); em.localGet(thr); em.op(OP_F64_EQ); break;
+      case 'noneIs': em.localGet(v); em.localGet(thr); em.op(OP_F64_NE); break;
+      case 'hasA': em.localGet(v); em.localGet(thr); em.op(OP_F64_EQ); break;
+      case 'allGreater': case 'anyGreater': em.localGet(v); em.localGet(thr); em.op(OP_F64_GT); break;
+      case 'allLesser': case 'anyLesser': em.localGet(v); em.localGet(thr); em.op(OP_F64_LT); break;
+      default: em.localGet(v); em.localGet(thr); em.op(OP_F64_EQ); break;
+    }
+  };
+  em.block(() => { em.loop(() => {
+    em.localGet(i); em.localGet(a.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+    const v = em.allocLocal(F64); pushArrayElemF64(em, a, i); em.localSet(v);
+    const m = em.allocLocal(I32); matchPred(v); em.localSet(m);
+    if (isAll) { em.localGet(acc); em.localGet(m); em.op(OP_I32_AND); em.localSet(acc); }
+    else { em.localGet(acc); em.localGet(m); em.op(OP_I32_OR); em.localSet(acc); }
+    em.localGet(i); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(i); em.br(0);
+  }); });
+  const res = em.allocLocal(F64); em.localGet(acc); em.i32ToF64(); em.localSet(res);
+  return res;
+}
+
+// ===========================================================================
 // Flow emission.
-// ---------------------------------------------------------------------------
+// ===========================================================================
 
 function compileFlowChain(ctx: AgentWasmCtx, nodeId: string, portId: string): void {
   const targets = ctx.adj.flowOutputToTargets.get(`${nodeId}:${portId}`) ?? [];
@@ -672,9 +1976,628 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
+    case 'forEachBond': {
+      emitForEachBond(ctx, node);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'switch': {
+      emitSwitch(ctx, node);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'loop': {
+      emitLoop(ctx, node);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'setVelocity': {
+      pushF64ElemAddr(em, ctx.layout.f64['vx']!, ctx.idxLocal); pushValueInputF64(ctx, node, 'vx', 0); em.f64Store();
+      pushF64ElemAddr(em, ctx.layout.f64['vy']!, ctx.idxLocal); pushValueInputF64(ctx, node, 'vy', 0); em.f64Store();
+      if (ctx.is3d) { pushF64ElemAddr(em, ctx.layout.f64['vz']!, ctx.idxLocal); pushValueInputF64(ctx, node, 'vz', 0); em.f64Store(); }
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'setAgentAttribute': {
+      const attrId = (node.data.config?.['attributeId'] as string) || '';
+      emitGuardedAgentWrite(ctx, node, 'agentId', (aLocal) => {
+        pushAgentAttrWriteAddr(ctx, attrId, aLocal);
+        pushValueInputF64(ctx, node, 'value', 0);
+        emitAgentAttrStore(ctx, attrId);
+      });
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'setAgentsAttribute': {
+      emitSetAgentsAttribute(ctx, node);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'setAgentPosition': {
+      emitGuardedAgentWrite(ctx, node, 'agentId', (aLocal) => {
+        pushF64ElemAddr(em, ctx.layout.f64['x']!, aLocal); pushValueInputF64(ctx, node, 'x', 0); em.f64Store();
+        pushF64ElemAddr(em, ctx.layout.f64['y']!, aLocal); pushValueInputF64(ctx, node, 'y', 0); em.f64Store();
+      });
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'setAgentRadius': {
+      emitGuardedAgentWrite(ctx, node, 'agentId', (aLocal) => {
+        const rv = em.allocLocal(F64); pushValueInputF64(ctx, node, 'radius', 1); em.localSet(rv);
+        pushF64ElemAddr(em, ctx.layout.f64['radius']!, aLocal); em.localGet(rv); em.f64Store();
+        pushF64ElemAddr(em, ctx.layout.f64['targetRadius']!, aLocal); em.localGet(rv); em.f64Store();
+      });
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'setAgentType': {
+      emitGuardedAgentWrite(ctx, node, 'agentId', (aLocal) => {
+        pushI32ElemAddr(em, ctx.layout.i32['type']!, aLocal);
+        pushValueAs(em, resolveValueInput(ctx, node, 'type', 0), I32);
+        em.i32Store();
+      });
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'setAttribute': {
+      // On the AGENT graph: write the agent SoA at idx (D-IDX). w_<attr>[idx].
+      const attrId = (node.data.config?.['attributeId'] as string) || '';
+      pushAgentAttrWriteAddr(ctx, attrId, ctx.idxLocal);
+      pushValueInputF64(ctx, node, 'value', 0);
+      emitAgentAttrStore(ctx, attrId);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'updateAttribute': {
+      emitUpdateAttribute(ctx, node);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'setArrayElement': {
+      emitSetArrayElement(ctx, node);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'divideAgent': {
+      // _divideRequest[idx]=1; _divideAxisX[idx]=<axisX|NaN>; ...; _divideAsym[idx]=<asym|0.5>
+      em.localGet(ctx.idxLocal); em.i32Const(ctx.layout.u8['divideRequest']!); em.op(OP_I32_ADD); em.i32Const(1); em.i32Store8();
+      emitAxisWrite(ctx, node, 'axisX', ctx.layout.f64['divideAxisX']!);
+      emitAxisWrite(ctx, node, 'axisY', ctx.layout.f64['divideAxisY']!);
+      if (ctx.is3d) emitAxisWrite(ctx, node, 'axisZ', ctx.layout.f64['divideAxisZ']!);
+      pushF64ElemAddr(em, ctx.layout.f64['divideAsym']!, ctx.idxLocal); pushValueInputF64(ctx, node, 'asymmetry', 0.5); em.f64Store();
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'formBond': {
+      // _bondFormReq[idx] = (target|0)+1; _bondFormL[idx]=restLength; _bondFormK[idx]=stiffness
+      pushI32ElemAddr(em, ctx.layout.i32['bondFormReq']!, ctx.idxLocal);
+      pushValueAs(em, resolveValueInput(ctx, node, 'targetAgent', -1), I32); em.i32Const(1); em.op(OP_I32_ADD); em.i32Store();
+      pushF64ElemAddr(em, ctx.layout.f64['bondFormL']!, ctx.idxLocal); pushValueInputF64(ctx, node, 'restLength', 0); em.f64Store();
+      pushF64ElemAddr(em, ctx.layout.f64['bondFormK']!, ctx.idxLocal); pushValueInputF64(ctx, node, 'stiffness', 0); em.f64Store();
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'breakBond': {
+      pushI32ElemAddr(em, ctx.layout.i32['bondBreakReq']!, ctx.idxLocal);
+      pushValueAs(em, resolveValueInput(ctx, node, 'targetAgent', -1), I32); em.i32Const(1); em.op(OP_I32_ADD); em.i32Store();
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'killAgent': {
+      em.localGet(ctx.idxLocal); em.i32Const(ctx.layout.u8['killRequest']!); em.op(OP_I32_ADD); em.i32Const(1); em.i32Store8();
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'setIndicator': {
+      const idxN = (node.data.config?.['_indicatorIdx'] as number) ?? -1;
+      if (idxN >= 0) { em.i32Const(0); pushValueInputF64(ctx, node, 'value', 0); em.f64Store(ctx.layout.indicatorsOffset + idxN * 8, 3); }
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'updateIndicator': {
+      emitUpdateIndicator(ctx, node);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'setCellLooks': {
+      emitSetCellLooks(ctx, node);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'affectCellsUnder': {
+      emitAffectCellsUnder(ctx, node);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
+    case 'secreteToField': {
+      emitSecreteToField(ctx, node);
+      compileFlowChain(ctx, node.id, 'next');
+      break;
+    }
     default:
       throw new Error(`agentWasm: unsupported flow node '${type}'`);
   }
+}
+
+/** Resolve `agentId`, guard (range + alive in behaviour; range-only in init), run
+ *  `body(aLocal)` inside the guard. */
+function emitGuardedAgentWrite(ctx: AgentWasmCtx, node: GraphNode, portId: string, body: (aLocal: number) => void): void {
+  const em = ctx.em;
+  const a = em.allocLocal(I32); pushValueAs(em, resolveValueInput(ctx, node, portId, -1), I32); em.localSet(a);
+  // behaviour: a >= 0 && a < highWater && alive[a]
+  em.localGet(a); em.i32Const(0); em.op(OP_I32_GE_S);
+  em.localGet(a); em.localGet(ctx.highWaterLocal); em.op(OP_I32_LT_S); em.op(OP_I32_AND);
+  em.ifThen(() => {
+    em.localGet(a); em.i32Const(ctx.layout.u8['alive']!); em.op(OP_I32_ADD); em.i32Load8U();
+    em.ifThen(() => body(a));
+  });
+}
+
+/** Divide-axis write: `_divideAxisX[idx] = <wired ? value : NaN>`. The engine
+ *  resolves the tension axis whenever the axis is non-finite OR (0,0), so an
+ *  unwired axis matches JS's NaN default. */
+function emitAxisWrite(ctx: AgentWasmCtx, node: GraphNode, portId: string, regionOffset: number): void {
+  const em = ctx.em;
+  pushF64ElemAddr(em, regionOffset, ctx.idxLocal);
+  const src = ctx.adj.inputToSource.get(`${node.id}:${portId}`);
+  if (src) pushValueAs(em, compileValueNode(ctx, src.nodeId, src.portId), F64);
+  else em.f64Const(NaN);
+  em.f64Store();
+}
+
+/** Set Agents Attribute — write-many over an id array (guarded). */
+function emitSetAgentsAttribute(ctx: AgentWasmCtx, node: GraphNode): void {
+  const em = ctx.em;
+  const attrId = (node.data.config?.['attributeId'] as string) || '';
+  const arr = resolveInputArray(ctx, node, 'agents');
+  if (!arr) return;
+  const v = em.allocLocal(F64); pushValueInputF64(ctx, node, 'value', 0); em.localSet(v);
+  const si = em.allocLocal(I32); em.i32Const(0); em.localSet(si);
+  em.block(() => { em.loop(() => {
+    em.localGet(si); em.localGet(arr.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+    const a = em.allocLocal(I32); pushArrayElemI32(em, arr, si); em.localSet(a);
+    em.localGet(a); em.i32Const(0); em.op(OP_I32_GE_S);
+    em.localGet(a); em.localGet(ctx.highWaterLocal); em.op(OP_I32_LT_S); em.op(OP_I32_AND);
+    em.ifThen(() => {
+      em.localGet(a); em.i32Const(ctx.layout.u8['alive']!); em.op(OP_I32_ADD); em.i32Load8U();
+      em.ifThen(() => { pushAgentAttrWriteAddr(ctx, attrId, a); em.localGet(v); emitAgentAttrStore(ctx, attrId); });
+    });
+    em.localGet(si); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(si); em.br(0);
+  }); });
+}
+
+/** Set Array Element — `var[index] = value` (bounds-checked). */
+function emitSetArrayElement(ctx: AgentWasmCtx, node: GraphNode): void {
+  const em = ctx.em;
+  const variableId = (node.data.config?.['variableId'] as string) || '';
+  const arr = ctx.arrayVarLocals.get(variableId);
+  if (!arr) return;
+  const i = em.allocLocal(I32); pushValueAs(em, resolveValueInput(ctx, node, 'index', 0), I32); em.localSet(i);
+  em.localGet(i); em.i32Const(0); em.op(OP_I32_GE_S);
+  em.localGet(i); em.localGet(arr.lenLocal); em.op(OP_I32_LT_S); em.op(OP_I32_AND);
+  em.ifThen(() => {
+    storeArrayElemAddr(em, arr, i);
+    pushValueInputF64(ctx, node, 'value', 0);
+    if (arr.elemBytes === 8) em.f64Store(); else { em.f64ToI32(); em.i32Store(); }
+  });
+}
+
+/** Update Attribute — in-place modify the agent SoA attr (read-modify-write on the
+ *  WRITE buffer, matching the lattice UpdateAttribute). */
+function emitUpdateAttribute(ctx: AgentWasmCtx, node: GraphNode): void {
+  const em = ctx.em;
+  const cfg = node.data.config as Record<string, unknown>;
+  const attrId = (cfg['attributeId'] as string) || '';
+  const op = (cfg['operation'] as string) || 'increment';
+  const kind = agentAttrKindOf(ctx, attrId);
+  // current value (read from the WRITE buffer = the just-written value, matching JS w_<attr>[idx])
+  const readCur = (): void => {
+    const off = (ctx.layout.syncAttrs ? ctx.layout.attrWriteOffset[attrId] : ctx.layout.attrOffset[attrId]) ?? 0;
+    if (kind === 'uint8') { em.localGet(ctx.idxLocal); em.i32Const(off); em.op(OP_I32_ADD); em.i32Load8U(); em.i32ToF64(); }
+    else if (kind === 'int32') { pushI32Elem(em, off, ctx.idxLocal); em.i32ToF64(); }
+    else pushF64Elem(em, off, ctx.idxLocal);
+  };
+  const cur = em.allocLocal(F64); readCur(); em.localSet(cur);
+  const next = em.allocLocal(F64);
+  const tagLen = Number(cfg['_tagLen']) || 1;
+  switch (op) {
+    case 'increment': em.localGet(cur); pushValueInputF64(ctx, node, 'value', 1); em.op(OP_F64_ADD); em.localSet(next); break;
+    case 'decrement': em.localGet(cur); pushValueInputF64(ctx, node, 'value', 1); em.op(OP_F64_SUB); em.localSet(next); break;
+    case 'max': em.localGet(cur); pushValueInputF64(ctx, node, 'value', 0); em.op(OP_F64_MAX); em.localSet(next); break;
+    case 'min': em.localGet(cur); pushValueInputF64(ctx, node, 'value', 0); em.op(OP_F64_MIN); em.localSet(next); break;
+    case 'toggle': em.localGet(cur); em.f64Const(0); em.op(OP_F64_EQ); em.i32ToF64(); em.localSet(next); break;
+    case 'next': // (cur + 1) % tagLen
+      em.localGet(cur); em.f64ToI32(); em.i32Const(1); em.op(OP_I32_ADD); em.i32Const(tagLen); em.op(OP_I32_REM_S); em.i32ToF64(); em.localSet(next); break;
+    case 'previous': // (cur - 1 + tagLen) % tagLen
+      em.localGet(cur); em.f64ToI32(); em.i32Const(1); em.op(OP_I32_SUB); em.i32Const(tagLen); em.op(OP_I32_ADD); em.i32Const(tagLen); em.op(OP_I32_REM_S); em.i32ToF64(); em.localSet(next); break;
+    case 'or': em.localGet(cur); em.f64Const(0); em.op(OP_F64_NE); pushValueInputF64(ctx, node, 'value', 0); em.f64Const(0); em.op(OP_F64_NE); em.op(OP_I32_OR); em.i32ToF64(); em.localSet(next); break;
+    case 'and': em.localGet(cur); em.f64Const(0); em.op(OP_F64_NE); pushValueInputF64(ctx, node, 'value', 0); em.f64Const(0); em.op(OP_F64_NE); em.op(OP_I32_AND); em.i32ToF64(); em.localSet(next); break;
+    default: em.localGet(cur); em.localSet(next); break;
+  }
+  pushAgentAttrWriteAddr(ctx, attrId, ctx.idxLocal); em.localGet(next); emitAgentAttrStore(ctx, attrId);
+}
+
+/** Update Indicator — all ops (the agent loop is sequential, so toggle/next/prev
+ *  are well-defined, unlike WebGPU's parallel writers). */
+function emitUpdateIndicator(ctx: AgentWasmCtx, node: GraphNode): void {
+  const em = ctx.em;
+  const cfg = node.data.config as Record<string, unknown>;
+  const idxN = (cfg['_indicatorIdx'] as number) ?? -1;
+  if (idxN < 0) return;
+  const op = (cfg['operation'] as string) || 'increment';
+  const off = ctx.layout.indicatorsOffset + idxN * 8;
+  const tagLen = Number(cfg['_tagLen']) || 1;
+  const cur = em.allocLocal(F64); em.i32Const(0); em.f64Load(off, 3); em.localSet(cur);
+  const next = em.allocLocal(F64);
+  switch (op) {
+    case 'increment': em.localGet(cur); pushValueInputF64(ctx, node, 'value', 1); em.op(OP_F64_ADD); em.localSet(next); break;
+    case 'decrement': em.localGet(cur); pushValueInputF64(ctx, node, 'value', 1); em.op(OP_F64_SUB); em.localSet(next); break;
+    case 'max': em.localGet(cur); pushValueInputF64(ctx, node, 'value', 0); em.op(OP_F64_MAX); em.localSet(next); break;
+    case 'min': em.localGet(cur); pushValueInputF64(ctx, node, 'value', 0); em.op(OP_F64_MIN); em.localSet(next); break;
+    case 'toggle': em.localGet(cur); em.f64Const(0); em.op(OP_F64_EQ); em.i32ToF64(); em.localSet(next); break;
+    case 'next': em.localGet(cur); em.f64ToI32(); em.i32Const(1); em.op(OP_I32_ADD); em.i32Const(tagLen); em.op(OP_I32_REM_S); em.i32ToF64(); em.localSet(next); break;
+    case 'previous': em.localGet(cur); em.f64ToI32(); em.i32Const(1); em.op(OP_I32_SUB); em.i32Const(tagLen); em.op(OP_I32_ADD); em.i32Const(tagLen); em.op(OP_I32_REM_S); em.i32ToF64(); em.localSet(next); break;
+    case 'or': em.localGet(cur); em.f64Const(0); em.op(OP_F64_NE); pushValueInputF64(ctx, node, 'value', 0); em.f64Const(0); em.op(OP_F64_NE); em.op(OP_I32_OR); em.i32ToF64(); em.localSet(next); break;
+    case 'and': em.localGet(cur); em.f64Const(0); em.op(OP_F64_NE); pushValueInputF64(ctx, node, 'value', 0); em.f64Const(0); em.op(OP_F64_NE); em.op(OP_I32_AND); em.i32ToF64(); em.localSet(next); break;
+    default: em.localGet(cur); em.localSet(next); break;
+  }
+  em.i32Const(0); em.localGet(next); em.f64Store(off, 3);
+}
+
+/** For Each Bond — iterate the agent's bond list, exposing partnerId/restLength/
+ *  currentLength/index per iteration. Mirrors ForEachBondNode's flow emit (no
+ *  epoch re-check — the engine's post-step sweep keeps the list clean). */
+function emitForEachBond(ctx: AgentWasmCtx, node: GraphNode): void {
+  const em = ctx.em, L = ctx.layout;
+  const bc = em.allocLocal(I32); pushI32Elem(em, L.i32['bondCount']!, ctx.idxLocal); em.localSet(bc);
+  const feb = em.allocLocal(I32); em.i32Const(0); em.localSet(feb);
+  const partnerL = em.allocLocal(I32), restL = em.allocLocal(F64), curL = em.allocLocal(F64), idxL = em.allocLocal(I32);
+  ctx.forEachBondStack.push({ nodeId: node.id, partnerLocal: partnerL, restLocal: restL, curLocal: curL, idxLocal: idxL });
+  const base = em.allocLocal(I32); em.localGet(ctx.idxLocal); em.i32Const(L.maxBonds); em.op(OP_I32_MUL); em.localSet(base);
+  const bpOff = L.bondI32['bondPartner']!, brlOff = L.bondF64['bondRestLength']!;
+  const xi = em.allocLocal(F64), yi = em.allocLocal(F64);
+  pushF64Elem(em, L.f64['x']!, ctx.idxLocal); em.localSet(xi);
+  pushF64Elem(em, L.f64['y']!, ctx.idxLocal); em.localSet(yi);
+  em.block(() => { em.loop(() => {
+    em.localGet(feb); em.localGet(bc); em.op(OP_I32_GE_S); em.brIf(1);
+    const bb = em.allocLocal(I32); em.localGet(base); em.localGet(feb); em.op(OP_I32_ADD); em.localSet(bb);
+    // partnerId = bondPartner[bb]
+    em.localGet(bb); em.i32Const(4); em.op(OP_I32_MUL); em.i32Const(bpOff); em.op(OP_I32_ADD); em.i32Load(); em.localSet(partnerL);
+    // restLength = bondRestLength[bb]
+    em.localGet(bb); em.i32Const(8); em.op(OP_I32_MUL); em.i32Const(brlOff); em.op(OP_I32_ADD); em.f64Load(); em.localSet(restL);
+    // currentLength = hypot(x[partner]-xi, y[partner]-yi)  (2D, no torus — short bonds, matches JS)
+    const dx = em.allocLocal(F64), dy = em.allocLocal(F64);
+    pushF64Elem(em, L.f64['x']!, partnerL); em.localGet(xi); em.op(OP_F64_SUB); em.localSet(dx);
+    pushF64Elem(em, L.f64['y']!, partnerL); em.localGet(yi); em.op(OP_F64_SUB); em.localSet(dy);
+    em.localGet(dx); em.localGet(dx); em.op(OP_F64_MUL); em.localGet(dy); em.localGet(dy); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.op(OP_F64_SQRT); em.localSet(curL);
+    // index = feb
+    em.localGet(feb); em.localSet(idxL);
+    clearVolatileCache(ctx);
+    compileFlowChain(ctx, node.id, 'body');
+    em.localGet(feb); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(feb);
+    em.br(0);
+  }); });
+  ctx.forEachBondStack.pop();
+  clearVolatileCache(ctx);
+}
+
+/** Switch — conditions / value mode, firstMatchOnly chain or independent ifs.
+ *  Mirrors the lattice WASM switch emit. */
+function emitSwitch(ctx: AgentWasmCtx, node: GraphNode): void {
+  const em = ctx.em;
+  const cfg = node.data.config as Record<string, unknown>;
+  const mode = (cfg['mode'] as string) || 'conditions';
+  const firstMatchOnly = cfg['firstMatchOnly'] !== false;
+  const valType = (cfg['valueType'] as string) || 'integer';
+  const caseCount = Number(cfg['caseCount']) || 0;
+  const hasDefault = ctx.adj.flowOutputToTargets.has(`${node.id}:default`);
+  if (caseCount === 0) { compileFlowChain(ctx, node.id, 'default'); return; }
+  let valueRef: ValueRef | null = null;
+  if (mode === 'value') {
+    const src = ctx.adj.inputToSource.get(`${node.id}:value`);
+    valueRef = src ? compileValueNode(ctx, src.nodeId, src.portId) : { inline: true, value: parseInlineNum(cfg['_port_value'], 0), valtype: valType === 'float' ? F64 : I32 };
+  }
+  const caseConds: ValueRef[] = [];
+  for (let ci = 0; ci < caseCount; ci++) {
+    if (mode === 'conditions') {
+      const condSrc = ctx.adj.inputToSource.get(`${node.id}:case_${ci}_cond`);
+      if (condSrc) caseConds.push(compileValueNode(ctx, condSrc.nodeId, condSrc.portId));
+      else caseConds.push({ inline: true, value: cfg[`_port_case_${ci}_cond`] === 'true' ? 1 : 0, valtype: I32 });
+    } else {
+      const caseValSrc = ctx.adj.inputToSource.get(`${node.id}:case_${ci}_val`);
+      let caseValRef: ValueRef;
+      if (caseValSrc) caseValRef = compileValueNode(ctx, caseValSrc.nodeId, caseValSrc.portId);
+      else { const raw = cfg[`_port_case_${ci}_val`] ?? cfg[`case_${ci}_value`] ?? 0; const num = parseFloat(String(raw)); caseValRef = { inline: true, value: Number.isFinite(num) ? num : 0, valtype: valType === 'float' ? F64 : I32 }; }
+      const resLocal = em.allocLocal(I32);
+      const cmpOp = (cfg[`case_${ci}_op`] as string) || '==';
+      if (valType === 'tag' || valType === 'integer' || valType === 'neighborIndex') {
+        pushValueAs(em, valueRef!, F64); pushValueAs(em, caseValRef, F64); emitCompareOp(em, cmpOp);
+      } else {
+        pushValueAs(em, valueRef!, F64); pushValueAs(em, caseValRef, F64); emitCompareOp(em, cmpOp);
+      }
+      em.localSet(resLocal);
+      caseConds.push({ localIdx: resLocal, valtype: I32 });
+    }
+  }
+  if (firstMatchOnly) {
+    const open = (ci: number): void => {
+      if (ci >= caseCount) { if (hasDefault) compileFlowChain(ctx, node.id, 'default'); return; }
+      pushValueAs(em, caseConds[ci]!, I32);
+      em.ifThenElse(() => compileFlowChain(ctx, node.id, `case_${ci}`), () => open(ci + 1));
+    };
+    open(0);
+  } else {
+    const matched = em.allocLocal(I32); em.i32Const(0); em.localSet(matched);
+    for (let ci = 0; ci < caseCount; ci++) {
+      pushValueAs(em, caseConds[ci]!, I32);
+      em.ifThen(() => { em.i32Const(1); em.localSet(matched); compileFlowChain(ctx, node.id, `case_${ci}`); });
+    }
+    if (hasDefault) { em.localGet(matched); em.op(OP_I32_EQZ); em.ifThen(() => compileFlowChain(ctx, node.id, 'default')); }
+  }
+}
+
+/** Loop — run BODY `count` times. */
+function emitLoop(ctx: AgentWasmCtx, node: GraphNode): void {
+  const em = ctx.em;
+  const cnt = em.allocLocal(I32); pushValueAs(em, resolveValueInput(ctx, node, 'count', 1), I32); em.localSet(cnt);
+  const li = em.allocLocal(I32); em.i32Const(0); em.localSet(li);
+  em.block(() => { em.loop(() => {
+    em.localGet(li); em.localGet(cnt); em.op(OP_I32_GE_S); em.brIf(1);
+    compileFlowChain(ctx, node.id, 'body');
+    em.localGet(li); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(li); em.br(0);
+  }); });
+}
+
+/** Set Cell Looks — agent appearance. Writes the agent colors buffer (s.colors at
+ *  colorsOffset, idx*4). PLAIN mode only (glyph is rejected by the gate — no
+ *  per-agent glyph buffers). Written unconditionally (the agent overlay is single-
+ *  viewer; same decision as the WebGPU agent port). */
+function emitSetCellLooks(ctx: AgentWasmCtx, node: GraphNode): void {
+  const em = ctx.em;
+  const cfg = node.data.config as Record<string, unknown>;
+  const useGlyph = !!cfg['useGlyph'];
+  const setBg = cfg['setBackground'] !== false;
+  if (!(!useGlyph || setBg)) return; // glyph-only with no background → nothing to write here
+  const colorByte = em.allocLocal(I32); em.localGet(ctx.idxLocal); em.i32Const(4); em.op(OP_I32_MUL); em.localSet(colorByte);
+  const off = ctx.layout.colorsOffset;
+  const writeChan = (port: string, def: number, lane: number) => {
+    em.localGet(colorByte); em.i32Const(off + lane); em.op(OP_I32_ADD);
+    pushValueAs(em, resolveValueInput(ctx, node, port, def), I32);
+    em.i32Store8();
+  };
+  writeChan('r', 0, 0); writeChan('g', 0, 1); writeChan('b', 0, 2); writeChan('a', 255, 3);
+}
+
+// --- field bridge writes (closed agent↔grid feedback) ---
+
+/** Push field cell flat index `(row*_fieldW + col)` for integer row/col locals. */
+function emitFieldIdx(ctx: AgentWasmCtx, rowLocal: number, colLocal: number): void {
+  const em = ctx.em;
+  em.localGet(rowLocal); pushFieldWInt(ctx); em.op(OP_I32_MUL); em.localGet(colLocal); em.op(OP_I32_ADD);
+}
+/** Push `_fieldW` as an i32 (it rides the behaviour as an f64 param). */
+function pushFieldWInt(ctx: AgentWasmCtx): void { ctx.em.localGet(ctx.fieldWLocal); ctx.em.f64ToI32(); }
+function pushFieldHInt(ctx: AgentWasmCtx): void { ctx.em.localGet(ctx.fieldHLocal); ctx.em.f64ToI32(); }
+
+/** Affect Cells Under — r-disk write (set/add/sub/max/min) into the field. 2D. */
+function emitAffectCellsUnder(ctx: AgentWasmCtx, node: GraphNode): void {
+  const em = ctx.em;
+  const fieldId = (node.data.config?.['attributeId'] as string) || '';
+  const fOff = ctx.layout.fieldOffset[fieldId];
+  if (fOff === undefined) { compileFieldNoop(ctx); return; }
+  const op = (node.data.config?.['op'] as string) || 'add';
+  const cx = em.allocLocal(F64); pushF64Elem(em, ctx.layout.f64['x']!, ctx.idxLocal); em.localSet(cx);
+  const cy = em.allocLocal(F64); pushF64Elem(em, ctx.layout.f64['y']!, ctx.idxLocal); em.localSet(cy);
+  const r = em.allocLocal(F64); pushValueInputF64(ctx, node, 'radius', 1); em.localSet(r);
+  const v = em.allocLocal(F64); pushValueInputF64(ctx, node, 'value', 1); em.localSet(v);
+  const r2 = em.allocLocal(F64); em.localGet(r); em.localGet(r); em.op(OP_F64_MUL); em.localSet(r2);
+  emitDiskLoop(ctx, cx, cy, r, r2, (ciLocal) => {
+    // apply op: field[ci] = op(field[ci], v)
+    em.localGet(ciLocal); em.i32Const(8); em.op(OP_I32_MUL); em.i32Const(fOff); em.op(OP_I32_ADD);  // addr
+    switch (op) {
+      case 'set': em.localGet(v); break;
+      case 'subtract': pushF64Elem(em, fOff, ciLocal); em.localGet(v); em.op(OP_F64_SUB); break;
+      case 'max': pushF64Elem(em, fOff, ciLocal); em.localGet(v); em.op(OP_F64_MAX); break;
+      case 'min': pushF64Elem(em, fOff, ciLocal); em.localGet(v); em.op(OP_F64_MIN); break;
+      default: pushF64Elem(em, fOff, ciLocal); em.localGet(v); em.op(OP_F64_ADD); break; // add
+    }
+    em.f64Store();
+  });
+}
+
+/** Secrete To Field — 4-cell bilinear splat (`+= rate*weight`). 2D. */
+function emitSecreteToField(ctx: AgentWasmCtx, node: GraphNode): void {
+  const em = ctx.em;
+  const fieldId = (node.data.config?.['attributeId'] as string) || '';
+  const fOff = ctx.layout.fieldOffset[fieldId];
+  if (fOff === undefined) { compileFieldNoop(ctx); return; }
+  const fx = em.allocLocal(F64); pushF64Elem(em, ctx.layout.f64['x']!, ctx.idxLocal); em.localSet(fx);
+  const fy = em.allocLocal(F64); pushF64Elem(em, ctx.layout.f64['y']!, ctx.idxLocal); em.localSet(fy);
+  const rate = em.allocLocal(F64); pushValueInputF64(ctx, node, 'rate', 1); em.localSet(rate);
+  // x0 = floor(fx); tx = fx - x0; x1 = x0+1; (same y)
+  const x0 = em.allocLocal(I32); em.localGet(fx); em.op(OP_F64_FLOOR); em.f64ToI32(); em.localSet(x0);
+  const y0 = em.allocLocal(I32); em.localGet(fy); em.op(OP_F64_FLOOR); em.f64ToI32(); em.localSet(y0);
+  const tx = em.allocLocal(F64); em.localGet(fx); em.localGet(x0); em.i32ToF64(); em.op(OP_F64_SUB); em.localSet(tx);
+  const ty = em.allocLocal(F64); em.localGet(fy); em.localGet(y0); em.i32ToF64(); em.op(OP_F64_SUB); em.localSet(ty);
+  const x1 = em.allocLocal(I32); em.localGet(x0); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(x1);
+  const y1 = em.allocLocal(I32); em.localGet(y0); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(y1);
+  // Wrap/clamp EACH coordinate EXACTLY ONCE (x via _fieldW, y via _fieldH).
+  emitFieldWrapCoord(ctx, x0, true); emitFieldWrapCoord(ctx, x1, true);
+  emitFieldWrapCoord(ctx, y0, false); emitFieldWrapCoord(ctx, y1, false);
+  // weights: (1-tx)*(1-ty), tx*(1-ty), (1-tx)*ty, tx*ty
+  const omtx = em.allocLocal(F64); em.f64Const(1); em.localGet(tx); em.op(OP_F64_SUB); em.localSet(omtx);
+  const omty = em.allocLocal(F64); em.f64Const(1); em.localGet(ty); em.op(OP_F64_SUB); em.localSet(omty);
+  const splat = (xL: number, yL: number, wA: number, wB: number) => {
+    const ci = em.allocLocal(I32); emitFieldIdx(ctx, yL, xL); em.localSet(ci);
+    em.localGet(ci); em.i32Const(8); em.op(OP_I32_MUL); em.i32Const(fOff); em.op(OP_I32_ADD);   // addr
+    pushF64Elem(em, fOff, ci);
+    em.localGet(rate); em.localGet(wA); em.op(OP_F64_MUL); em.localGet(wB); em.op(OP_F64_MUL);
+    em.op(OP_F64_ADD); em.f64Store();
+  };
+  splat(x0, y0, omtx, omty);
+  splat(x1, y0, tx, omty);
+  splat(x0, y1, omtx, ty);
+  splat(x1, y1, tx, ty);
+}
+
+/** Wrap or clamp a SINGLE i32 coordinate `cL` against `_fieldW` (isX) / `_fieldH`
+ *  exactly ONCE (torus → wrap; else → clamp). NB: a previous version wrapped (x,y)
+ *  pairs, which double-wrapped a coordinate shared between two corner samples. */
+function emitFieldWrapCoord(ctx: AgentWasmCtx, cL: number, isX: boolean): void {
+  const em = ctx.em;
+  const pushDim = isX ? () => pushFieldWInt(ctx) : () => pushFieldHInt(ctx);
+  em.localGet(ctx.fieldTorusLocal);
+  em.ifThenElse(
+    () => { wrapModInt(em, cL, pushDim); },
+    () => { clampInt(em, cL, pushDim); },
+  );
+}
+
+/** `n = ((n % m) + m) % m`. */
+function wrapModInt(em: WasmEmitter, nL: number, pushM: () => void): void {
+  em.localGet(nL); pushM(); em.op(OP_I32_REM_S); pushM(); em.op(OP_I32_ADD); pushM(); em.op(OP_I32_REM_S); em.localSet(nL);
+}
+/** `n = n<0?0 : n>=m?m-1 : n`. */
+function clampInt(em: WasmEmitter, nL: number, pushM: () => void): void {
+  em.localGet(nL); em.i32Const(0); em.op(OP_I32_LT_S);
+  em.ifThenElse(
+    () => { em.i32Const(0); em.localSet(nL); },
+    () => { em.localGet(nL); pushM(); em.op(OP_I32_GE_S); em.ifThen(() => { pushM(); em.i32Const(1); em.op(OP_I32_SUB); em.localSet(nL); }); },
+  );
+}
+
+function compileFieldNoop(_ctx: AgentWasmCtx): void { /* no field region → no-op */ }
+
+/** Iterate the integer cells in the euclidean disc of radius `r` around (cx,cy),
+ *  calling `body(ciLocal)` for each in-disc cell (torus-wrapped/clamped col/row).
+ *  Mirrors AffectCellsUnder/ReadCellsUnder's 2D scan. */
+function emitDiskLoop(ctx: AgentWasmCtx, cx: number, cy: number, _r: number, r2: number, body: (ciLocal: number) => void): void {
+  const em = ctx.em;
+  const cmin = em.allocLocal(I32); em.localGet(cx); em.localGet(_r); em.op(OP_F64_SUB); em.op(OP_F64_FLOOR); em.f64ToI32(); em.localSet(cmin);
+  const cmax = em.allocLocal(I32); em.localGet(cx); em.localGet(_r); em.op(OP_F64_ADD); em.op(OP_F64_CEIL); em.f64ToI32(); em.localSet(cmax);
+  const rmin = em.allocLocal(I32); em.localGet(cy); em.localGet(_r); em.op(OP_F64_SUB); em.op(OP_F64_FLOOR); em.f64ToI32(); em.localSet(rmin);
+  const rmax = em.allocLocal(I32); em.localGet(cy); em.localGet(_r); em.op(OP_F64_ADD); em.op(OP_F64_CEIL); em.f64ToI32(); em.localSet(rmax);
+  const rr = em.allocLocal(I32); em.localGet(rmin); em.localSet(rr);
+  em.block(() => { em.loop(() => {
+    em.localGet(rr); em.localGet(rmax); em.op(OP_I32_GT_S); em.brIf(1);
+    const cc = em.allocLocal(I32); em.localGet(cmin); em.localSet(cc);
+    em.block(() => { em.loop(() => {
+      em.localGet(cc); em.localGet(cmax); em.op(OP_I32_GT_S); em.brIf(1);
+      // dx = cc - cx; dy = rr - cy; if (dx*dx+dy*dy <= r2) { wrap/clamp; body }
+      const dx = em.allocLocal(F64); em.localGet(cc); em.i32ToF64(); em.localGet(cx); em.op(OP_F64_SUB); em.localSet(dx);
+      const dy = em.allocLocal(F64); em.localGet(rr); em.i32ToF64(); em.localGet(cy); em.op(OP_F64_SUB); em.localSet(dy);
+      em.localGet(dx); em.localGet(dx); em.op(OP_F64_MUL); em.localGet(dy); em.localGet(dy); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+      em.localGet(r2); em.op(OP_F64_LE);
+      em.ifThen(() => {
+        const col = em.allocLocal(I32); em.localGet(cc); em.localSet(col);
+        const row = em.allocLocal(I32); em.localGet(rr); em.localSet(row);
+        // torus → wrap; else if out of range, skip (use a skip flag)
+        const skip = em.allocLocal(I32); em.i32Const(0); em.localSet(skip);
+        em.localGet(ctx.fieldTorusLocal);
+        em.ifThenElse(
+          () => { wrapModInt(em, col, () => pushFieldWInt(ctx)); wrapModInt(em, row, () => pushFieldHInt(ctx)); },
+          () => {
+            em.localGet(col); em.i32Const(0); em.op(OP_I32_LT_S); em.localGet(col); pushFieldWInt(ctx); em.op(OP_I32_GE_S); em.op(OP_I32_OR);
+            em.localGet(row); em.i32Const(0); em.op(OP_I32_LT_S); em.localGet(row); pushFieldHInt(ctx); em.op(OP_I32_GE_S); em.op(OP_I32_OR);
+            em.op(OP_I32_OR); em.ifThen(() => { em.i32Const(1); em.localSet(skip); });
+          },
+        );
+        em.localGet(skip); em.op(OP_I32_EQZ);
+        em.ifThen(() => { const ci = em.allocLocal(I32); emitFieldIdx(ctx, row, col); em.localSet(ci); body(ci); });
+      });
+      em.localGet(cc); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(cc); em.br(0);
+    }); });
+    em.localGet(rr); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(rr); em.br(0);
+  }); });
+}
+
+// --- field bridge reads (sampleField / fieldGradient / readCellsUnder) ---
+
+/** Bilinear sample of field `fieldId` at the f64 position pushed by pushPX/pushPY.
+ *  Leaves the f64 on the stack. Mirrors SampleFieldNode's 2D math. */
+function emitSampleFieldAt(ctx: AgentWasmCtx, fieldId: string, pushPX: () => void, pushPY: () => void): void {
+  const em = ctx.em;
+  const fOff = ctx.layout.fieldOffset[fieldId];
+  if (fOff === undefined) { em.f64Const(0); return; }
+  const fx = em.allocLocal(F64); pushPX(); em.localSet(fx);
+  const fy = em.allocLocal(F64); pushPY(); em.localSet(fy);
+  const x0 = em.allocLocal(I32); em.localGet(fx); em.op(OP_F64_FLOOR); em.f64ToI32(); em.localSet(x0);
+  const y0 = em.allocLocal(I32); em.localGet(fy); em.op(OP_F64_FLOOR); em.f64ToI32(); em.localSet(y0);
+  const tx = em.allocLocal(F64); em.localGet(fx); em.localGet(x0); em.i32ToF64(); em.op(OP_F64_SUB); em.localSet(tx);
+  const ty = em.allocLocal(F64); em.localGet(fy); em.localGet(y0); em.i32ToF64(); em.op(OP_F64_SUB); em.localSet(ty);
+  const x1 = em.allocLocal(I32); em.localGet(x0); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(x1);
+  const y1 = em.allocLocal(I32); em.localGet(y0); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(y1);
+  // Wrap/clamp EACH coordinate EXACTLY ONCE (x via _fieldW, y via _fieldH).
+  emitFieldWrapCoord(ctx, x0, true); emitFieldWrapCoord(ctx, x1, true);
+  emitFieldWrapCoord(ctx, y0, false); emitFieldWrapCoord(ctx, y1, false);
+  // f[y0*W+x0]*(1-tx)*(1-ty) + f[y0*W+x1]*tx*(1-ty) + f[y1*W+x0]*(1-tx)*ty + f[y1*W+x1]*tx*ty
+  const omtx = em.allocLocal(F64); em.f64Const(1); em.localGet(tx); em.op(OP_F64_SUB); em.localSet(omtx);
+  const omty = em.allocLocal(F64); em.f64Const(1); em.localGet(ty); em.op(OP_F64_SUB); em.localSet(omty);
+  const sample = (xL: number, yL: number, wA: number, wB: number) => {
+    const ci = em.allocLocal(I32); emitFieldIdx(ctx, yL, xL); em.localSet(ci);
+    pushF64Elem(em, fOff, ci); em.localGet(wA); em.op(OP_F64_MUL); em.localGet(wB); em.op(OP_F64_MUL);
+  };
+  sample(x0, y0, omtx, omty);
+  sample(x1, y0, tx, omty); em.op(OP_F64_ADD);
+  sample(x0, y1, omtx, ty); em.op(OP_F64_ADD);
+  sample(x1, y1, tx, ty); em.op(OP_F64_ADD);
+}
+
+/** Field Gradient — central differences (±0.5) → dx/dy. Multi-output. */
+function emitFieldGradient(ctx: AgentWasmCtx, node: GraphNode, portId: string): ValueRef {
+  const em = ctx.em;
+  const fieldId = (node.data.config?.['attributeId'] as string) || '';
+  const cx = em.allocLocal(F64); pushF64Elem(em, ctx.layout.f64['x']!, ctx.idxLocal); em.localSet(cx);
+  const cy = em.allocLocal(F64); pushF64Elem(em, ctx.layout.f64['y']!, ctx.idxLocal); em.localSet(cy);
+  const sampleAt = (dxv: number, dyv: number): void => {
+    emitSampleFieldAt(ctx, fieldId,
+      () => { em.localGet(cx); if (dxv !== 0) { em.f64Const(dxv); em.op(OP_F64_ADD); } },
+      () => { em.localGet(cy); if (dyv !== 0) { em.f64Const(dyv); em.op(OP_F64_ADD); } });
+  };
+  const dxL = em.allocLocal(F64); sampleAt(0.5, 0); sampleAt(-0.5, 0); em.op(OP_F64_SUB); em.localSet(dxL);
+  const dyL = em.allocLocal(F64); sampleAt(0, 0.5); sampleAt(0, -0.5); em.op(OP_F64_SUB); em.localSet(dyL);
+  const dxRef: LocalRef = { localIdx: dxL, valtype: F64 }, dyRef: LocalRef = { localIdx: dyL, valtype: F64 };
+  setCachedPort(ctx, node.id, 'dx', dxRef); setCachedPort(ctx, node.id, 'dy', dyRef);
+  return portId === 'dy' ? dyRef : dxRef;
+}
+
+/** Read Cells Under — r-disk aggregate (mean/sum/max/min). 2D. */
+function emitReadCellsUnder(ctx: AgentWasmCtx, node: GraphNode): void {
+  const em = ctx.em;
+  const fieldId = (node.data.config?.['attributeId'] as string) || '';
+  const fOff = ctx.layout.fieldOffset[fieldId];
+  if (fOff === undefined) { em.f64Const(0); return; }
+  const reduce = (node.data.config?.['reduce'] as string) || 'mean';
+  const cx = em.allocLocal(F64); pushF64Elem(em, ctx.layout.f64['x']!, ctx.idxLocal); em.localSet(cx);
+  const cy = em.allocLocal(F64); pushF64Elem(em, ctx.layout.f64['y']!, ctx.idxLocal); em.localSet(cy);
+  const r = em.allocLocal(F64); pushValueInputF64(ctx, node, 'radius', 2); em.localSet(r);
+  const r2 = em.allocLocal(F64); em.localGet(r); em.localGet(r); em.op(OP_F64_MUL); em.localSet(r2);
+  const acc = em.allocLocal(F64); const n = em.allocLocal(I32); em.i32Const(0); em.localSet(n);
+  const init = reduce === 'max' ? -Infinity : reduce === 'min' ? Infinity : 0;
+  em.f64Const(init); em.localSet(acc);
+  emitDiskLoop(ctx, cx, cy, r, r2, (ciLocal) => {
+    const val = em.allocLocal(F64); pushF64Elem(em, fOff, ciLocal); em.localSet(val);
+    switch (reduce) {
+      case 'max': em.localGet(acc); em.localGet(val); em.op(OP_F64_MAX); em.localSet(acc); break;
+      case 'min': em.localGet(acc); em.localGet(val); em.op(OP_F64_MIN); em.localSet(acc); break;
+      default: em.localGet(acc); em.localGet(val); em.op(OP_F64_ADD); em.localSet(acc); break; // sum/mean
+    }
+    em.localGet(n); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(n);
+  });
+  // finish: mean → n>0?acc/n:0 ; max/min → n>0?acc:0 ; sum → acc. NB:
+  // WasmEmitter.ifThenElse uses an EMPTY block type, so the branches may NOT leave
+  // a value on the stack — store into a result local + reload.
+  const res = em.allocLocal(F64);
+  if (reduce === 'mean') {
+    em.localGet(n); em.i32Const(0); em.op(OP_I32_GT_S);
+    em.ifThenElse(() => { em.localGet(acc); em.localGet(n); em.i32ToF64(); em.op(OP_F64_DIV); em.localSet(res); }, () => { em.f64Const(0); em.localSet(res); });
+  } else if (reduce === 'max' || reduce === 'min') {
+    em.localGet(n); em.i32Const(0); em.op(OP_I32_GT_S);
+    em.ifThenElse(() => { em.localGet(acc); em.localSet(res); }, () => { em.f64Const(0); em.localSet(res); });
+  } else {
+    em.localGet(acc); em.localSet(res);
+  }
+  em.localGet(res);
 }
 
 /** `_agentForceX[idx] += <pushVal()>`. */
@@ -895,30 +2818,30 @@ function emitAllPairs(ctx: AgentWasmCtx, test: (jL: number) => void): void {
   });
 }
 
-/** forEachInArray over a getNearbyAgents source. Fills the scratch, then loops
- *  `for (fi=0; fi<len; fi++) { element = scratch[fi]; index = fi; <body>; }`.
+/** forEachInArray over ANY array producer (id arrays from getNearbyAgents /
+ *  getBondedAgents / filter / join / picks, OR value arrays from getAgentsAttribute
+ *  / array variables). Resolves the array ONCE (before the loop), then loops
+ *  `for (fi=0; fi<len; fi++) { element = arr[fi]; index = fi; <body>; }`.
  *  The body's value cache is cleared each iteration for volatile (element/index-
- *  dependent) nodes — modelled by marking the forEach node's element/index
- *  consumers volatile + clearing their cache entries around the loop. */
+ *  dependent) nodes. The `element` port carries the array element type (id arrays →
+ *  i32, value arrays → f64). */
 function emitForEach(ctx: AgentWasmCtx, node: GraphNode): void {
   const em = ctx.em;
-  const src = ctx.adj.inputToSource.get(`${node.id}:array`);
-  if (!src) return; // no array wired → body + done skipped (JS parity)
-  const naNode = ctx.adj.nodeMap.get(src.nodeId);
-  if (!naNode || naNode.data.nodeType !== 'getNearbyAgents') {
-    throw new Error(`agentWasm: forEachInArray array input must be getNearbyAgents (got ${naNode?.data.nodeType}).`);
-  }
-  const { baseLocal, lenLocal } = emitNearbyFill(ctx, naNode);
+  const arr = resolveInputArray(ctx, node, 'array');
+  if (!arr) return; // no array wired → body + done skipped (JS parity)
   const fiL = em.allocLocal(I32); em.i32Const(0); em.localSet(fiL);
-  const elemL = em.allocLocal(I32);
-  // expose element/index locals for the body
+  // element type follows the array: f64 value arrays use an f64 local, id arrays i32.
+  const elemL = em.allocLocal(arr.isF64 ? F64 : I32);
   ctx.forEachStack.push({ nodeId: node.id, elemLocal: elemL, idxLocal: fiL });
+  // forEach node's element port is currently registered as i32 in compileValueNode;
+  // when the array is f64 we mark the element f64 by recording it on the frame.
+  forEachElemIsF64.set(node.id, arr.isF64);
   em.block(() => {
     em.loop(() => {
-      em.localGet(fiL); em.localGet(lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
-      // element = scratch[fi]
-      em.localGet(baseLocal); em.localGet(fiL); em.i32Const(4); em.op(OP_I32_MUL); em.op(OP_I32_ADD); em.i32Load(); em.localSet(elemL);
-      // clear volatile caches so body values re-emit with the current element/index
+      em.localGet(fiL); em.localGet(arr.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+      // element = arr[fi]
+      if (arr.isF64) { pushArrayElemF64(em, arr, fiL); em.localSet(elemL); }
+      else { pushArrayElemI32(em, arr, fiL); em.localSet(elemL); }
       clearVolatileCache(ctx);
       compileFlowChain(ctx, node.id, 'body');
       em.localGet(fiL); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(fiL);
@@ -926,14 +2849,22 @@ function emitForEach(ctx: AgentWasmCtx, node: GraphNode): void {
     });
   });
   ctx.forEachStack.pop();
+  forEachElemIsF64.delete(node.id);
   clearVolatileCache(ctx);
 }
 
-/** Drop cached values for volatile nodes so they re-emit at the next use. */
+/** Per-forEach: whether its `element` is an f64 value (value array) or i32 id. */
+const forEachElemIsF64 = new Map<string, boolean>();
+
+/** Drop cached values + arrays for volatile nodes so they re-emit at the next use. */
 function clearVolatileCache(ctx: AgentWasmCtx): void {
   for (const k of [...ctx.valueCache.keys()]) {
     const nid = k.slice(0, k.lastIndexOf(':'));
     if (ctx.volatileNodes.has(nid)) ctx.valueCache.delete(k);
+  }
+  for (const k of [...ctx.arrayCache.keys()]) {
+    const nid = k.slice(0, k.lastIndexOf(':'));
+    if (ctx.volatileNodes.has(nid)) ctx.arrayCache.delete(k);
   }
 }
 
@@ -945,21 +2876,27 @@ function clearVolatileCache(ctx: AgentWasmCtx): void {
 // ---------------------------------------------------------------------------
 
 function computeVolatile(ctx: AgentWasmCtx): void {
-  const { nodeMap, inputToSource } = ctx.adj;
-  // Seeds: ONLY forEachInArray (its per-iteration element/index outputs). A node
-  // is volatile iff it transitively reads a forEach element/index — its cached
-  // value must be dropped at each forEach iteration boundary so it re-emits with
-  // the current element. getRandom / getVariable are NOT inherently volatile (they
-  // emit once per agent + cache); they become volatile only if they read element/
-  // index (they don't in the supported shapes). This mirrors the JS compiler's
-  // forEach-element-dependent analysis.
+  const { nodeMap, inputToSource, inputToSources } = ctx.adj;
+  // Seeds: forEachInArray / forEachBond (per-iteration element/index/partner) AND
+  // getVariable (mutable Local Variable storage). A node is volatile iff it
+  // transitively reads one of these — its cached value is dropped at each
+  // forEach/forEachBond iteration boundary so it re-emits with the current element,
+  // and a getVariable-reader is never cell-top-hoisted (the value mutates).
   const volatileSet = new Set<string>();
-  for (const [, node] of nodeMap) if (node.data.nodeType === 'forEachInArray') volatileSet.add(node.id);
+  for (const [, node] of nodeMap) {
+    const t = node.data.nodeType;
+    if (t === 'forEachInArray' || t === 'forEachBond' || t === 'getVariable') volatileSet.add(node.id);
+  }
   let changed = true;
   while (changed) {
     changed = false;
     for (const [, node] of nodeMap) {
       if (volatileSet.has(node.id)) continue;
+      for (const [key, srcs] of inputToSources) {
+        if (!key.startsWith(`${node.id}:`)) continue;
+        if (srcs.some(s => volatileSet.has(s.nodeId))) { volatileSet.add(node.id); changed = true; break; }
+      }
+      if (changed) continue;
       for (const [key, src] of inputToSource) {
         if (!key.startsWith(`${node.id}:`)) continue;
         if (volatileSet.has(src.nodeId)) { volatileSet.add(node.id); changed = true; break; }
@@ -967,6 +2904,76 @@ function computeVolatile(ctx: AgentWasmCtx): void {
     }
   }
   ctx.volatileNodes = volatileSet;
+}
+
+/** Value node types that must NOT be hoisted to cell-top (RNG side effect, mutable
+ *  storage reads, per-iteration refs, array producers + their reducers). Everything
+ *  else (incl. the field reads sampleField/fieldGradient/readCellsUnder, matching
+ *  the JS sink-hoist) is hoistable. */
+const AGENT_VALUE_NO_HOIST: ReadonlySet<string> = new Set<string>([
+  'getRandom', 'getVariable', 'getAgentAttribute', 'getIndicator',
+  'forEachInArray', 'forEachBond',
+  'getNearbyAgents', 'getAgentsAttribute', 'filterAgents', 'joinAgents',
+  'pickNRandomAgents', 'pickRandomAgent', 'getBondedAgents',
+  'aggregate', 'groupOperator', 'groupCounting', 'groupStatement',
+  'arrayElement', 'arrayLength',
+]);
+
+/** Pre-emit the PURE, non-volatile value cone of the behaviour flow tree at the
+ *  AGENT-LOOP-TOP (so a value that reads mutable field/attr storage is captured
+ *  BEFORE any in-body write mutates it — matching JS's sink-hoist of pure values,
+ *  the field-bridge "sample before deposit" semantics). Caches each value in
+ *  `valueCache`; the flow chain then reads the cached value. Cycle-guarded. */
+function preEmitAgentValues(ctx: AgentWasmCtx, rootId: string): void {
+  const { nodeMap, inputToSource, inputToSources, flowOutputToTargets } = ctx.adj;
+  const usedOutPorts = new Map<string, Set<string>>();
+  const addOut = (nodeId: string, portId: string) => { let s = usedOutPorts.get(nodeId); if (!s) { s = new Set(); usedOutPorts.set(nodeId, s); } s.add(portId); };
+  for (const [, src] of inputToSource) addOut(src.nodeId, src.portId);
+  for (const [, srcs] of inputToSources) for (const s of srcs) addOut(s.nodeId, s.portId);
+  const hoistable = new Map<string, boolean>();
+  const inProgress = new Set<string>();
+  const isHoistable = (id: string): boolean => {
+    const cached = hoistable.get(id); if (cached !== undefined) return cached;
+    if (inProgress.has(id)) return false;
+    const node = nodeMap.get(id); if (!node) return false;
+    if (AGENT_VALUE_NO_HOIST.has(node.data.nodeType)) { hoistable.set(id, false); return false; }
+    if (ctx.volatileNodes.has(id)) { hoistable.set(id, false); return false; }
+    inProgress.add(id);
+    let ok = true;
+    for (const [key, src] of inputToSource) { if (!key.startsWith(`${id}:`)) continue; if (!isHoistable(src.nodeId)) { ok = false; break; } }
+    if (ok) for (const [key, srcs] of inputToSources) { if (!key.startsWith(`${id}:`)) continue; for (const s of srcs) if (!isHoistable(s.nodeId)) { ok = false; break; } if (!ok) break; }
+    inProgress.delete(id);
+    hoistable.set(id, ok); return ok;
+  };
+  const emitConeVisited = new Set<string>();
+  const emitCone = (nodeId: string) => {
+    if (emitConeVisited.has(nodeId)) return;
+    emitConeVisited.add(nodeId);
+    const node = nodeMap.get(nodeId); if (!node) return;
+    if (isHoistable(nodeId)) {
+      const ports = usedOutPorts.get(nodeId);
+      if (ports && ports.size > 0) for (const p of ports) compileValueNode(ctx, nodeId, p);
+      else compileValueNode(ctx, nodeId, 'value');
+    }
+    if (node.data.nodeType === 'forEachInArray' || node.data.nodeType === 'forEachBond') return;
+    for (const [key, src] of inputToSource) { if (!key.startsWith(`${nodeId}:`)) continue; emitCone(src.nodeId); }
+    for (const [key, srcs] of inputToSources) { if (!key.startsWith(`${nodeId}:`)) continue; for (const s of srcs) emitCone(s.nodeId); }
+  };
+  const visited = new Set<string>();
+  const walk = (nodeId: string) => {
+    if (visited.has(nodeId)) return; visited.add(nodeId);
+    const node = nodeMap.get(nodeId); if (!node) return;
+    for (const [key, src] of inputToSource) { if (!key.startsWith(`${nodeId}:`)) continue; emitCone(src.nodeId); }
+    for (const [key, srcs] of inputToSources) { if (!key.startsWith(`${nodeId}:`)) continue; for (const s of srcs) emitCone(s.nodeId); }
+    const skipPort = (node.data.nodeType === 'forEachInArray' || node.data.nodeType === 'forEachBond') ? 'body' : null;
+    for (const [key, targets] of flowOutputToTargets) {
+      if (!key.startsWith(`${nodeId}:`)) continue;
+      const port = key.slice(nodeId.length + 1);
+      if (skipPort && port === skipPort) continue;
+      for (const t of targets) walk(t.nodeId);
+    }
+  };
+  walk(rootId);
 }
 
 // ===========================================================================
@@ -1468,67 +3475,72 @@ function flattenAgentGraph(nodes: GraphNode[], edges: GraphEdge[], model: CAMode
   return { nodes: n, edges: e };
 }
 
-/** TRUE iff EVERY node in the (flattened) agent graph is in the supported set AND
- *  the model has Agents enabled AND the structural constraints hold (≤ the
- *  reserved getNearbyAgents scratch slots; forEach arrays come from
- *  getNearbyAgents; only SCALAR Local Variables; getRandom is not options-mode). */
+/** The set of node ids reachable from the behaviourStep root (its `do` flow chain
+ *  + the transitive value cone of every reached node). The gate + the compiler
+ *  check ONLY these — the divisionEvent / agentInit roots run on JS-on-CPU. */
+function behaviourReachableNodeIds(behaviourNode: GraphNode, adj: Adjacency): Set<string> {
+  const reachable = new Set<string>();
+  const visitValue = (nodeId: string): void => {
+    if (reachable.has(nodeId)) return;
+    reachable.add(nodeId);
+    // walk all value inputs (static + dynamic) of this node
+    for (const [key, sources] of adj.inputToSources) {
+      if (!key.startsWith(`${nodeId}:`)) continue;
+      for (const s of sources) visitValue(s.nodeId);
+    }
+  };
+  const visitFlow = (nodeId: string): void => {
+    if (reachable.has(nodeId)) {
+      // a node may be reached as flow AND value; still walk its flow outputs once.
+    }
+    reachable.add(nodeId);
+    // value inputs
+    for (const [key, sources] of adj.inputToSources) {
+      if (!key.startsWith(`${nodeId}:`)) continue;
+      for (const s of sources) visitValue(s.nodeId);
+    }
+    // flow outputs
+    for (const [key, targets] of adj.flowOutputToTargets) {
+      if (!key.startsWith(`${nodeId}:`)) continue;
+      for (const t of targets) if (!reachable.has(t.nodeId)) visitFlow(t.nodeId);
+    }
+  };
+  reachable.add(behaviourNode.id);
+  for (const [key, targets] of adj.flowOutputToTargets) {
+    if (!key.startsWith(`${behaviourNode.id}:`)) continue;
+    for (const t of targets) visitFlow(t.nodeId);
+  }
+  return reachable;
+}
+
+/** TRUE iff the model has Agents enabled AND every BEHAVIOUR-reachable node is in
+ *  the supported set (or a CPU-root type for the divisionEvent/agentInit subtrees,
+ *  which never appear in the behaviour-reachable set). FULL coverage: the reject
+ *  set is empty — only the per-node array-scratch-slot budget (a structural gate,
+ *  not a node ban) can clamp to JS. */
 export function isAgentGraphWasmSupported(model: CAModel | undefined | null): boolean {
   if (!model || !model.topologyMode?.agents) return false;
   const nodes = model.agentGraphNodes ?? [];
   const edges = model.agentGraphEdges ?? [];
-  if (!nodes.some(n => n.data.nodeType === 'behaviourStep')) return false;
+  const behaviour = nodes.find(n => n.data.nodeType === 'behaviourStep');
+  if (!behaviour) return false;
   const flat = flattenAgentGraph(nodes, edges, model);
   if (flat.error) return false;
+  const adj = buildAdjacency(flat.nodes, flat.edges);
+  const behaviourNode = flat.nodes.find(n => n.data.nodeType === 'behaviourStep');
+  if (!behaviourNode) return false;
+  const reachable = behaviourReachableNodeIds(behaviourNode, adj);
 
-  let nearbyCount = 0;
-  for (const n of flat.nodes) {
+  let nearbyArrayProducers = 0;
+  for (const id of reachable) {
+    const n = adj.nodeMap.get(id); if (!n) continue;
     const t = n.data.nodeType;
     if (t === 'macroInput' || t === 'macroOutput' || t === 'macro') return false;
     if (!AGENT_WASM_SUPPORTED_TYPES.has(t)) return false;
-    const cfg = (n.data.config ?? {}) as Record<string, unknown>;
-    if (t === 'getNearbyAgents') nearbyCount++;
-    if (t === 'statement') {
-      // `operation`, not `operator` (matches emitCompare + StatementNode). The
-      // wrong key meant the between/notBetween reject never fired → a between
-      // Compare reached emitCompare (which has no between path) and emitted ==.
-      const op = cfg['operation'] as string | undefined;
-      if (op && /between/i.test(op)) return false;
-      const compareType = cfg['compareType'] as string | undefined;
-      if (compareType && compareType !== 'numerical') return false;
-    }
-    if (t === 'getConstant') {
-      const ct = cfg['constType'] as string | undefined;
-      if (ct && ct !== 'integer' && ct !== 'float' && ct !== 'bool') return false;
-    }
-    if (t === 'getRandom') {
-      const rt = (cfg['randomType'] as string) || (cfg['mode'] as string);
-      if (rt === 'options') return false; // options mode (array source) is PR6b-3
-    }
+    if (t === 'getNearbyAgents') nearbyArrayProducers++;
   }
-  if (nearbyCount > AGENT_NEARBY_SCRATCH_SLOTS) return false;
-  // Local Variables: only SCALAR variables are supported (array variables +
-  // setArrayElement are PR6b-3). If the model has any array variable AND a
-  // getVariable/setVariable touches it, the agent graph can't be safely compiled.
-  // Conservative: reject when any AGENT variable is an array (the agent graph may
-  // reference it). Generic Agent Platform: the agent graph resolves variables
-  // against agentVariables — a cell-only array variable no longer blocks the
-  // agent WASM compile (the documented false-positive fix).
-  const hasArrayVar = (model.agentVariables ?? []).some(v => v.kind === 'array');
-  const usesVar = flat.nodes.some(n => n.data.nodeType === 'getVariable' || n.data.nodeType === 'setVariable');
-  if (hasArrayVar && usesVar) return false;
-  // forEachInArray's array input must come from getNearbyAgents (the only
-  // supported array producer).
-  const map = new Map(flat.nodes.map(n => [n.id, n] as const));
-  for (const e of flat.edges) {
-    const tgt = parseHandle(e.targetHandle);
-    if (tgt && tgt.category === 'value' && tgt.portId === 'array') {
-      const consumer = map.get(e.target);
-      if (consumer?.data.nodeType === 'forEachInArray') {
-        const srcNode = map.get(e.source);
-        if (srcNode?.data.nodeType !== 'getNearbyAgents') return false;
-      }
-    }
-  }
+  // The per-node scratch-slot budget (only getNearbyAgents uses reserved slots).
+  if (nearbyArrayProducers > AGENT_NEARBY_SCRATCH_SLOTS) return false;
   return true;
 }
 
@@ -1552,18 +3564,38 @@ export function compileAgentGraphWasm(
   const behaviourNode = nodes.find(n => n.data.nodeType === 'behaviourStep');
   if (!behaviourNode) return empty('No Behaviour Step node in the agent graph.');
 
+  // Pre-resolve indicator ids → numeric indices over the agent graph (mirrors
+  // compileAgentGraph's FIX 2). Without it get/set/update Indicator emit index -1.
+  {
+    const indicatorIdxMap = new Map((model.indicators || []).map((ind, i) => [ind.id, i] as const));
+    for (const n of nodes) {
+      const t = n.data.nodeType;
+      if (t === 'getIndicator' || t === 'setIndicator' || t === 'updateIndicator') {
+        const idx = indicatorIdxMap.get(n.data.config.indicatorId as string);
+        n.data.config._indicatorIdx = idx !== undefined ? idx : -1;
+      }
+    }
+  }
+
+  const adj = buildAdjacency(nodes, edges);
+  const is3d = is3dModel(model);
+
+  // The behaviour-reachable node set (the behaviourStep.do chain + its value cone).
+  // The gate (caller) only checks THESE — the divisionEvent / agentInit roots are
+  // compiled separately on JS-on-CPU (target-independent), so a Tissue graph runs
+  // on WASM even though its divisionEvent subtree uses CPU-only nodes.
+  const reachable = behaviourReachableNodeIds(behaviourNode, adj);
+
   // Gate (defensive — the caller already checked isAgentGraphWasmSupported).
   const seen = new Set<string>();
   let nearbyCount = 0;
-  for (const n of nodes) {
+  for (const id of reachable) {
+    const n = adj.nodeMap.get(id); if (!n) continue;
     seen.add(n.data.nodeType);
     if (!AGENT_WASM_SUPPORTED_TYPES.has(n.data.nodeType)) return empty(`agentWasm: unsupported node '${n.data.nodeType}' (falls back to JS).`);
     if (n.data.nodeType === 'getNearbyAgents') nearbyCount++;
   }
   if (nearbyCount > agentLayout.nearbyScratchSlots) return empty(`agentWasm: too many getNearbyAgents (${nearbyCount} > ${agentLayout.nearbyScratchSlots} reserved slots).`);
-
-  const adj = buildAdjacency(nodes, edges);
-  const is3d = is3dModel(model);
 
   // Behaviour signature (the worker's call MIRRORS this — see runAgentStep):
   //   (highWater, hashValid, nBinsX, nBinsY, nBinsZ : i32,
@@ -1578,22 +3610,27 @@ export function compileAgentGraphWasm(
   const P_fieldW = 8, P_fieldH = 9, P_fieldD = 10, P_fieldTorus = 11;
 
   const ctx: AgentWasmCtx = {
-    adj, layout: agentLayout, is3d, em,
+    adj, layout: agentLayout, model, is3d, em,
     rsLocal: -1, idxLocal: -1,
     varLocals: new Map<string, number>(),
+    arrayVarLocals: new Map<string, AgentArrayRef>(),
     valueCache: new Map<string, ValueRef>(),
+    arrayCache: new Map<string, AgentArrayRef>(),
     volatileNodes: new Set<string>(),
     nearbyScratchSlot: new Map<string, number>(),
+    scratchTopLocal: -1,
     forEachStack: [],
+    forEachBondStack: [],
     fieldWLocal: P_fieldW, fieldHLocal: P_fieldH, fieldDLocal: P_fieldD, fieldTorusLocal: P_fieldTorus,
+    fieldTotalLocal: -1,
     highWaterLocal: P_highWater, hashValidLocal: P_hashValid,
     nBinsXLocal: P_nBinsX, nBinsYLocal: P_nBinsY, nBinsZLocal: P_nBinsZ,
     binSizeXLocal: P_binSizeX, binSizeYLocal: P_binSizeY, binSizeZLocal: P_binSizeZ,
   };
 
-  // Assign getNearbyAgents scratch slots.
+  // Assign getNearbyAgents scratch slots (reachable only).
   let slot = 0;
-  for (const n of nodes) if (n.data.nodeType === 'getNearbyAgents') ctx.nearbyScratchSlot.set(n.id, slot++);
+  for (const id of reachable) { const n = adj.nodeMap.get(id); if (n?.data.nodeType === 'getNearbyAgents') ctx.nearbyScratchSlot.set(n.id, slot++); }
 
   // Volatility analysis (don't cache element/index/getVariable-derived values).
   computeVolatile(ctx);
@@ -1616,6 +3653,23 @@ export function compileAgentGraphWasm(
       if (v.kind !== 'scalar') continue;
       ctx.varLocals.set(v.id, em.allocLocal(F64));
     }
+    // Array Local Variables — a fixed scratch slab per variable (offset + len
+    // locals); reset to initialValue each agent at loop top. Allocated at the
+    // FRONT of the scratch region so the bump-pointer scratch (resolveInputArray)
+    // starts above them.
+    ctx.scratchTopLocal = em.allocLocal(I32);
+    const arrayVars = (model.agentVariables ?? []).filter(v => v.kind === 'array');
+    em.i32Const(agentLayout.scratchOffset); em.localSet(ctx.scratchTopLocal);
+    for (const v of arrayVars) {
+      const len = Math.max(0, Number(v.length) || 0);
+      const elemBytes = agentAttrKind(v.dataType) === 'float64' ? 8 : 4;
+      const lenLocal = em.allocLocal(I32); em.i32Const(len); em.localSet(lenLocal);
+      const ref = allocScratch(ctx, lenLocal, elemBytes, elemBytes === 8);
+      ctx.arrayVarLocals.set(v.id, ref);
+    }
+    // The bump-pointer scratch base = scratchTop AFTER the array vars (reset each
+    // agent). Snapshot it as a constant local.
+    const scratchBaseLocal = em.allocLocal(I32); em.localGet(ctx.scratchTopLocal); em.localSet(scratchBaseLocal);
     const idxLocal = em.allocLocal(I32);
     ctx.idxLocal = idxLocal;
 
@@ -1636,8 +3690,27 @@ export function compileAgentGraphWasm(
             em.f64Const(variableInitNum(v));
             em.localSet(l);
           }
-          // clear the value cache each iteration (locals are recomputed per agent)
+          // reset the bump-pointer scratch top above the array-var region
+          em.localGet(scratchBaseLocal); em.localSet(ctx.scratchTopLocal);
+          // refill array Local Variables with their uniform initial value
+          for (const v of arrayVars) {
+            const ref = ctx.arrayVarLocals.get(v.id)!;
+            const init = variableInitNum(v);
+            const fi = em.allocLocal(I32); em.i32Const(0); em.localSet(fi);
+            em.block(() => { em.loop(() => {
+              em.localGet(fi); em.localGet(ref.lenLocal); em.op(OP_I32_GE_S); em.brIf(1);
+              storeArrayElemAddr(em, ref, fi);
+              if (ref.elemBytes === 8) { em.f64Const(init); em.f64Store(); } else { em.i32Const(init | 0); em.i32Store(); }
+              em.localGet(fi); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(fi); em.br(0);
+            }); });
+          }
+          // clear the value/array caches each iteration (locals are recomputed per agent)
           ctx.valueCache.clear();
+          ctx.arrayCache.clear();
+          // Pre-emit the PURE value cone at agent-loop-top (matches JS's sink-hoist:
+          // a field/attr read is captured BEFORE any in-body write mutates it — the
+          // field-bridge "sample before deposit" semantics).
+          preEmitAgentValues(ctx, behaviourNode.id);
           // run the behaviour flow chain
           compileFlowChain(ctx, behaviourNode.id, 'do');
         });
@@ -1753,9 +3826,52 @@ export function agentMaxHashBinsForModel(model: CAModel): number {
   return computeAgentMaxHashBins(W, H, D, range, dr, nq);
 }
 
+/** The model-attribute keys (color attrs expand to id_r/id_g/id_b) — the order the
+ *  worker copies `cachedModelAttrs` into the in-memory region. */
+function modelAttrKeysOf(model: CAModel): string[] {
+  const keys: string[] = [];
+  for (const a of model.attributes) {
+    if (!a.isModelAttribute) continue;
+    if (a.type === 'color') { keys.push(a.id + '_r', a.id + '_g', a.id + '_b'); }
+    else if (a.type !== 'lookupTable') keys.push(a.id);
+  }
+  return keys;
+}
+
+/** Build the FULL-COVERAGE agent layout extras (model attrs / indicators / lookup
+ *  tables / cell fields / array scratch) from the model. The compiler + worker call
+ *  the SAME helper so the baked offsets match (the lockstep invariant). */
+export function buildAgentLayoutExtras(model: CAModel): AgentLayoutExtras {
+  const is3d = is3dModel(model);
+  const W = (model.properties.gridWidth as number) || 100;
+  const H = (model.properties.gridHeight as number) || 100;
+  const D = is3d ? ((model.properties.gridDepth as number) || 1) : 1;
+  const fieldIds = cellFieldAttrsOf(model).map(a => a.id);
+  const lookupTables: Record<string, { rows: number; cols: number }> = {};
+  for (const a of model.attributes) {
+    if (a.isModelAttribute && a.type === 'lookupTable') {
+      const dims = resolveLookupTableDims(model, a.id);
+      if (dims) lookupTables[a.id] = dims;
+    }
+  }
+  const maxAgents = Math.max(1, Math.floor((model.centerBased?.maxAgents as number) ?? 2000));
+  // Generous per-agent array-scratch bound: 16 arrays of up to maxAgents f64 each
+  // (each array producer / array var reuses the slab per agent; chained producers
+  // sum, so 16× covers realistic graphs; the bump pointer never grows unbounded).
+  const scratchBytes = maxAgents * 8 * 16;
+  return {
+    scratchBytes,
+    modelAttrKeys: modelAttrKeysOf(model),
+    indicatorCount: (model.indicators ?? []).length,
+    lookupTables,
+    fieldIds,
+    fieldTotal: W * H * D,
+  };
+}
+
 /** Convenience for the DEV harness: derive the agent memory layout from a model's
  *  center-based config + cell-attr specs, then compile. Mirrors how the worker
- *  builds the layout via `createAgentStore({ wasmBacked: true })`. */
+ *  builds the layout via `createAgentStore({ wasmBacked: true, layoutExtras })`. */
 export function compileAgentGraphWasmForModel(model: CAModel): AgentWasmResult {
   const cfg = model.centerBased;
   if (!cfg) return { bytes: new Uint8Array(), pages: 1, layout: computeAgentMemoryLayout(1, 1, []), supportedTypes: [], error: 'No centerBased config.' };
@@ -1768,6 +3884,7 @@ export function compileAgentGraphWasmForModel(model: CAModel): AgentWasmResult {
   const maxAgents = Math.max(1, Math.floor((cfg.maxAgents as number) ?? 2000));
   const maxBonds = Math.max(1, Math.floor((cfg.maxBonds as number) ?? 8));
   const maxHashBins = agentMaxHashBinsForModel(model);
-  const layout = computeAgentMemoryLayout(maxAgents, maxBonds, specs, maxHashBins);
+  const extras: AgentLayoutExtras = { ...buildAgentLayoutExtras(model), syncAttrs: model.centerBased?.agentUpdateMode === 'sync' };
+  const layout = computeAgentMemoryLayout(maxAgents, maxBonds, specs, maxHashBins, extras);
   return compileAgentGraphWasm(model.agentGraphNodes ?? [], model.agentGraphEdges ?? [], model, layout);
 }

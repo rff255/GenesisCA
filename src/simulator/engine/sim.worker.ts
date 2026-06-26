@@ -31,6 +31,7 @@ import {
   formBond, breakBond, hasBond, sweepStaleBonds, divideAgent,
   primeAgentAttrWrite, swapAgentAttrs, computeAgentMaxHashBins,
   type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec, type SpatialHash,
+  type AgentLayoutExtras,
 } from './agentEngine';
 import { instantiateAgentWasm } from '../../modeler/vpl/compiler/agentWasm/compile';
 import { computeAgentWebGPULayout, type AgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/layout';
@@ -193,6 +194,11 @@ interface InitMsg {
    *  `agentTarget === 'wasm'`). Instantiated against the agent store's memory +
    *  the host math funcs; absent → the JS behaviour fn runs. */
   agentWasmBytes?: Uint8Array;
+  /** FULL-COVERAGE WASM agent port: the extra-region sizing the wasmBacked store
+   *  reserves (model attrs / indicators / lookup tables / cell fields / array
+   *  scratch) — the SAME extras the compiler built the module's layout from. The
+   *  worker copies the external regions in/out around the WASM behaviour call. */
+  agentLayoutExtras?: AgentLayoutExtras;
   /** PR7 G3-runtime: the compiled WebGPU agent shaders (only when
    *  `agentTarget === 'webgpu'`). The behaviour shader is the per-agent loop; the
    *  force shader is the standalone integrator. The worker builds a dedicated
@@ -242,7 +248,7 @@ interface PaintManualMsg {
 }
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -509,6 +515,10 @@ let agentTarget: 'js' | 'wasm' | 'webgpu' = 'js';
  *  the agent store's memory). Held so `initAgents` (which (re)allocates the
  *  store + its memory) can instantiate against the FRESH memory. */
 let pendingAgentWasmBytes: Uint8Array | null = null;
+/** FULL-COVERAGE: the agent layout extras the compiler built the WASM module's
+ *  memory layout from (model attrs / indicators / lookup tables / cell fields /
+ *  array scratch + the sync-attr write region). The store layout MUST match. */
+let pendingAgentLayoutExtras: AgentLayoutExtras | null = null;
 /** PR6b-2 — the instantiated WASM `behaviour(...)` export (null on the JS target /
  *  before instantiation / on a failed instantiate → JS fallback). Signature:
  *  `(highWater, hashValid, nBinsX, nBinsY, nBinsZ, binSizeX, binSizeY, binSizeZ,
@@ -609,7 +619,15 @@ function initAgents(): void {
         cbNum(centerBasedConfig, 'neighbourQueryRadius'),
       )
     : 0;
-  agentStore = createAgentStore(centerBasedConfig, buildAgentAttrSpecs(), { wasmBacked: wantWasmBacked, syncAttrs: wantSyncAttrs, maxHashBins: agentMaxHashBins });
+  // FULL-COVERAGE: the layout extras the WASM module compiled against (model attrs
+  // / indicators / lookup tables / cell fields / array scratch). MUST match the
+  // compiler's `buildAgentLayoutExtras(model)` — the worker's `fieldTotal` is
+  // re-derived here from the LIVE grid dims (= width*height*depth) so a resize is
+  // consistent. Only meaningful under wasmBacked.
+  const layoutExtras: AgentLayoutExtras | undefined = wantWasmBacked
+    ? { ...(pendingAgentLayoutExtras ?? {}), fieldTotal: width * height * depth, syncAttrs: wantSyncAttrs }
+    : undefined;
+  agentStore = createAgentStore(centerBasedConfig, buildAgentAttrSpecs(), { wasmBacked: wantWasmBacked, syncAttrs: wantSyncAttrs, maxHashBins: agentMaxHashBins, layoutExtras });
   // The agent world IS the grid coordinate frame (1:1, Decision D-FIELD): agent
   // (x,y) are in CELL units so they map onto the grid + the screen with the same
   // transform the cell blit uses. (worldWidth/Height in the config are reserved
@@ -996,6 +1014,65 @@ function swapPositions(s: AgentStore, is3d: boolean): void {
   if (is3d) { const tmpZ = s.z; s.z = s.zNext; s.zNext = tmpZ; }
 }
 
+/** FULL-COVERAGE WASM agent port: copy the EXTERNAL regions (model attributes /
+ *  indicators / lookup tables / cell field arrays) INTO the reserved in-memory
+ *  regions the WASM behaviour reads at baked offsets. The cell-field arrays
+ *  (`readAttrs[id]`, the closed-feedback source) are copied as f64 (the WASM module
+ *  loads them f64). No-op when the store carries no such regions. */
+function copyAgentExternalRegionsIn(s: AgentStore): void {
+  const L = s.layout; if (!L || !s.memory) return;
+  const buf = s.memory.buffer;
+  // model attributes (one f64 cell per key)
+  for (const key of Object.keys(L.modelAttrOffset)) {
+    const v = cachedModelAttrs[key];
+    new Float64Array(buf, L.modelAttrOffset[key]!, 1)[0] = typeof v === 'number' ? v : 0;
+  }
+  // indicators
+  if (L.indicatorCount > 0) {
+    new Float64Array(buf, L.indicatorsOffset, L.indicatorCount).set(cachedIndicators.subarray(0, L.indicatorCount));
+  }
+  // lookup tables (row-major f64)
+  for (const id of Object.keys(L.lookupTableOffset)) {
+    const tbl = cachedInteractionTables[id];
+    if (!tbl) continue;
+    new Float64Array(buf, L.lookupTableOffset[id]!, tbl.length).set(tbl);
+  }
+  // cell field arrays (readAttrs[id] → f64). The agent-accessible cell attrs.
+  if (L.fieldTotal > 0) {
+    for (const id of Object.keys(L.fieldOffset)) {
+      const src = readAttrs[id]; if (!src) continue;
+      const dst = new Float64Array(buf, L.fieldOffset[id]!, L.fieldTotal);
+      const n = Math.min(L.fieldTotal, src.length);
+      for (let i = 0; i < n; i++) dst[i] = src[i]!;
+    }
+  }
+}
+
+/** Copy the WRITABLE external regions back OUT of agent memory after the WASM
+ *  behaviour: the cell field deposit (→ `readAttrs[id]` so the cell CA step picks
+ *  it up — Decision D-FIELD) + the indicators (→ `cachedIndicators` for the stepped
+ *  message). Only the agent-ACCESSIBLE-readWrite fields are deposited back. */
+function copyAgentExternalRegionsOut(s: AgentStore): void {
+  const L = s.layout; if (!L || !s.memory) return;
+  const buf = s.memory.buffer;
+  // indicators back
+  if (L.indicatorCount > 0) {
+    const src = new Float64Array(buf, L.indicatorsOffset, L.indicatorCount);
+    for (let i = 0; i < L.indicatorCount; i++) cachedIndicators[i] = src[i]!;
+  }
+  // field deposit back (only the readWrite cell attrs — the deposit targets)
+  if (L.fieldTotal > 0) {
+    const writeIds = new Set(fieldSpecs.filter(a => a.agentAccess === 'readWrite').map(a => a.id));
+    for (const id of Object.keys(L.fieldOffset)) {
+      if (!writeIds.has(id)) continue;
+      const dst = readAttrs[id]; if (!dst) continue;
+      const src = new Float64Array(buf, L.fieldOffset[id]!, L.fieldTotal);
+      const n = Math.min(L.fieldTotal, dst.length);
+      for (let i = 0; i < n; i++) dst[i] = src[i]!;
+    }
+  }
+}
+
 /** One agent generation: density reductions → compiled behaviour → engine force
  *  integration (soft-sphere repulsion + bond springs, overdamped Euler with a
  *  synchronous position double-buffer) → world-bounds wrap/clamp → age, then the
@@ -1109,9 +1186,18 @@ function runAgentStep(): void {
           const used = hash.binStart[nBins]!;
           if (used > 0) new Int32Array(buf, L.hashBinAgentsOffset, used).set(hash.binAgents.subarray(0, used));
         }
+        // FULL-COVERAGE: copy the EXTERNAL regions (model attrs / indicators /
+        // lookup tables / cell fields) into the reserved in-memory regions the WASM
+        // module reads at baked offsets. The cell-field arrays (`readAttrs[id]`) are
+        // the closed-feedback source; the WASM behaviour reads + writes them, and we
+        // copy the deposit back out AFTER (Decision D-FIELD).
+        copyAgentExternalRegionsIn(s);
         agentBehaviourWasmFn(s.highWater, hashValid, nBinsX, nBinsY, nBinsZ, binSizeX, binSizeY, binSizeZ, W, H, D, torus ? 1 : 0);
         // (3) read the advanced RNG state back so the shared stream stays in lockstep.
         rngState[0] = new Uint32Array(buf, L.rngStateOffset, 1)[0]!;
+        // copy the field deposit + indicators back out (the cell CA step incorporates
+        // the deposit; the indicators surface in the stepped message).
+        copyAgentExternalRegionsOut(s);
         ranWasm = true;
         // W1 — the in-memory hash is now valid for the SAME step, so the WASM force
         // pass may reuse it. Stash the dims it needs (mirrors the behaviour's).
@@ -3933,6 +4019,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // shaders — a target missing its payload demotes to 'js'.
       agentTarget = resolveAgentTarget(msg.agentTarget, msg.agentWasmBytes, msg.agentWebgpuBehaviourShader, msg.agentWebgpuForceShader);
       pendingAgentWasmBytes = msg.agentWasmBytes ?? null;
+      pendingAgentLayoutExtras = msg.agentLayoutExtras ?? null;
       pendingAgentWebgpuBehaviour = msg.agentWebgpuBehaviourShader ?? null;
       pendingAgentWebgpuForce = msg.agentWebgpuForceShader ?? null;
       pendingAgentWebgpuMaxAgents = msg.agentWebgpuMaxAgents ?? 0;
@@ -4444,6 +4531,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // the backing — the GPU has its own buffers — so the population persists.)
         const newTarget = resolveAgentTarget(rc.agentTarget, rc.agentWasmBytes, rc.agentWebgpuBehaviourShader, rc.agentWebgpuForceShader);
         pendingAgentWasmBytes = rc.agentWasmBytes ?? null;
+        pendingAgentLayoutExtras = rc.agentLayoutExtras ?? null;
         pendingAgentWebgpuBehaviour = rc.agentWebgpuBehaviourShader ?? null;
         pendingAgentWebgpuForce = rc.agentWebgpuForceShader ?? null;
         pendingAgentWebgpuMaxAgents = rc.agentWebgpuMaxAgents ?? 0;
