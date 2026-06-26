@@ -12,7 +12,8 @@ import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { Gl3DRenderer, panCamera } from './render/gl3d';
 import { agentTargetOf } from '../model/centerBased';
-import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported } from '../modeler/vpl/compiler/agentWasm/compile';
+import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported, buildAgentLayoutExtras } from '../modeler/vpl/compiler/agentWasm/compile';
+import type { AgentLayoutExtras } from './engine/agentEngine';
 import { compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported } from '../modeler/vpl/compiler/agentWebgpu/compile';
 import type { AgentWebGPULayout } from '../modeler/vpl/compiler/agentWebgpu/layout';
 import { emitAgentForcePassWGSL } from '../modeler/vpl/compiler/agentWebgpu/forcePass';
@@ -1072,7 +1073,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
   // don't behave); PR-A3 wires the real compileAgentGraph over
   // model.agentGraphNodes (the behaviourStep loop + value-outs + force hooks).
-  const compileAgentModel = useCallback((stopIdxBase = 0): { behaviourCode?: string; initCode?: string; divisionCode?: string; stopMessages: string[]; colorViewer: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } } => {
+  const compileAgentModel = useCallback((stopIdxBase = 0): { behaviourCode?: string; initCode?: string; divisionCode?: string; stopMessages: string[]; colorViewer: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } } => {
     if (!model.topologyMode?.agents) return { colorViewer: '', agentTarget: 'js', stopMessages: [] };
     const firstViewer = model.mappings.find(mp => mp.isAttributeToColor);
     const colorViewer = firstViewer?.id ?? '';
@@ -1100,6 +1101,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     let agentWebgpuLayout: AgentWebGPULayout | undefined;
     let agentWebgpuUsesI32Write: boolean | undefined;
     let agentWebgpuUsage: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } | undefined;
+    let agentLayoutExtras: AgentLayoutExtras | undefined;
     if (agentTarget === 'wasm') {
       try {
         const r = compileAgentGraphWasmForModel(model);
@@ -1109,6 +1111,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           agentTarget = 'js';
         } else {
           agentWasmBytes = r.bytes;
+          // The FULL-COVERAGE layout extras (model attrs / indicators / lookup tables
+          // / cell fields / array scratch) — the worker builds the SAME-offset store
+          // layout with these (the baked-offset lockstep) + copies the external
+          // regions in/out around the WASM call.
+          agentLayoutExtras = { ...buildAgentLayoutExtras(model), syncAttrs: model.centerBased?.agentUpdateMode === 'sync' };
         }
       } catch (e) {
         // eslint-disable-next-line no-console
@@ -1147,7 +1154,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         agentTarget = 'js';
       }
     }
-    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, stopMessages: ag.stopMessages, colorViewer, agentTarget, agentWasmBytes, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentWebgpuUsesI32Write, agentWebgpuUsage };
+    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, stopMessages: ag.stopMessages, colorViewer, agentTarget, agentWasmBytes, agentLayoutExtras, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentWebgpuUsesI32Write, agentWebgpuUsage };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.agentAttributes, model.mappings, model.centerBased]);
 
@@ -2481,6 +2488,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // the JS behaviourCode above stays as the fallback.
       agentTarget: agentResult.agentTarget,
       agentWasmBytes: agentResult.agentWasmBytes,
+      agentLayoutExtras: agentResult.agentLayoutExtras,
       // PR7 G3-runtime: when the agent target resolves to 'webgpu', ship the two
       // compiled WGSL shaders + the GPU agent layout dims. The worker builds a
       // dedicated agent WebGPU runtime (its own device) + dispatches both passes
