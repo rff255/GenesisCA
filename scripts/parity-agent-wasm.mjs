@@ -64,7 +64,7 @@ function buildArgs(s, hash, ctx) {
 const modelsDir = join(ROOT, 'public', 'models');
 const files = readdirSync(modelsDir).filter(f => f.endsWith('.gcaproj'));
 const SEED = 0x9e3779b1 >>> 0;
-const STEPS = 30;
+const STEPS = Number(process.env.STEPS) || 30;
 let allPass = true;
 
 for (const f of files) {
