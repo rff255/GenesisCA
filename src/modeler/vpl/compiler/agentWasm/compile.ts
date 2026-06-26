@@ -69,10 +69,10 @@ import {
   OP_F64_ADD, OP_F64_SUB, OP_F64_MUL, OP_F64_DIV,
   OP_F64_ABS, OP_F64_NEG, OP_F64_SQRT, OP_F64_MIN, OP_F64_MAX, OP_F64_FLOOR, OP_F64_CEIL,
   OP_F64_EQ, OP_F64_NE, OP_F64_LT, OP_F64_GT, OP_F64_LE, OP_F64_GE,
-  OP_F64_CONVERT_I32_S, OP_F64_CONVERT_I32_U, OP_I32_TRUNC_F64_S, OP_SELECT,
+  OP_F64_CONVERT_I32_S, OP_F64_CONVERT_I32_U, OP_I32_TRUNC_F64_S, OP_I32_TRUNC_SAT_F64_S, OP_SELECT,
   opCall,
 } from '../wasm/encoder';
-import { WasmEmitter, pushValueAs, type ValueRef, type LocalRef } from '../wasm/emitter';
+import { WasmEmitter, isInline, type ValueRef, type LocalRef } from '../wasm/emitter';
 import { POW_FUNC_IDX, EXP_FUNC_IDX, LOG_FUNC_IDX, SIN_FUNC_IDX, COS_FUNC_IDX, TAN_FUNC_IDX, TANH_FUNC_IDX, NUM_IMPORTED_FUNCS } from '../wasm/compile';
 import { emitWasm } from '../expression/emitWasm';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
@@ -296,6 +296,25 @@ function pushF64ElemAddr(em: WasmEmitter, regionOffset: number, agentI32Local: n
 function pushF64Elem(em: WasmEmitter, regionOffset: number, agentI32Local: number): void {
   pushF64ElemAddr(em, regionOffset, agentI32Local);
   em.f64Load();
+}
+
+/** Push a value onto the stack (load from local, or push constant). */
+function pushValue(em: WasmEmitter, v: ValueRef): void {
+  if (isInline(v)) { if (v.valtype === I32) em.i32Const(v.value | 0); else em.f64Const(v.value); }
+  else em.localGet(v.localIdx);
+}
+
+/** Push a value as the requested valtype. The f64→i32 path uses SATURATING
+ *  truncation (NaN→0, ±Inf→saturate) so a NaN/Inf intermediate (an aggregate.max
+ *  over an empty array → -Inf, an expression with sin/sqrt) does NOT TRAP — unlike
+ *  the shared `pushValueAs`'s `i32.trunc_f64_s`. For finite in-range values it is
+ *  bit-identical to plain truncation (so the verified bit-parity is preserved). */
+function pushValueAs(em: WasmEmitter, v: ValueRef, want: typeof I32 | typeof F64): void {
+  pushValue(em, v);
+  if (v.valtype !== want) {
+    if (want === F64) em.op(OP_F64_CONVERT_I32_S);
+    else em.op(OP_I32_TRUNC_SAT_F64_S);
+  }
 }
 
 /** Push the byte address of an i32 element at `regionOffset + agentLocal*4`. */
