@@ -2253,6 +2253,64 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
 // Aggregate / GroupCounting / GroupOperator — neighbour-loop or scalar-fold
 // ---------------------------------------------------------------------------
 
+/** Materialise the `values` input(s) of an aggregate/groupOperator into a
+ *  per-thread f32 `var<function>` array — shared by the three ops that need a
+ *  random-access / sortable copy (median, uniform random, weightedRandom).
+ *  Covers the three source shapes:
+ *    1. a single array-producing source (filterNeighbors, getNeighborsAttrByIndexes…)
+ *    2. the neighbour-path (one getNeighborsAttribute) — with sub-attribute
+ *       parent-match FILTERING (non-matching neighbours are excluded, matching
+ *       the JS/WASM iteration semantics so the median/pick operate over the
+ *       filtered prefix only)
+ *    3. multi-source scalars (each compiled independently)
+ *  Returns null (after pushing an error) on a resolution failure. */
+function materialiseFoldInput(
+  ctx: CompileCtx,
+  op: string,
+  sources: Array<{ nodeId: string; portId: string }>,
+  isNbrPath: boolean,
+  firstSrcNode: GraphNode | undefined,
+): ArrayRef | null {
+  const firstSrc = sources[0]!;
+  if (sources.length === 1 && !isNbrPath && firstSrcNode && ctx.producesArray(firstSrcNode)) {
+    const ar = compileArrayNode(ctx, firstSrc.nodeId, firstSrc.portId);
+    if (!ar) { ctx.errors.push(`${op}: array source ${firstSrc.nodeId} did not materialise`); return null; }
+    return ar;
+  }
+  if (isNbrPath) {
+    const srcNode = firstSrcNode!;
+    const nbrId = srcNode.data.config.neighborhoodId as string;
+    const attrId = srcNode.data.config.attributeId as string;
+    const nbr = getNbr(ctx.layout, nbrId);
+    const attr = getAttr(ctx.layout, attrId);
+    if (!nbr || !attr) { ctx.errors.push(`${op}: unknown nbr/attr (${nbrId}/${attrId})`); return null; }
+    const tmp = allocArray(ctx, 'f32', 'fldNbr', nbr.size);
+    const k = fresh(ctx, 'fldNk');
+    ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${nbr.size}; ${k} = ${k} + 1) {`);
+    ctx.lines.push(`    let _nci_${k}: i32 = ${emitNbrCellIdx(nbr, k)};`);
+    // Sub-attribute: skip non-matching neighbours so the prefix holds only the
+    // values that "exist" on this sub-attr (matchCount = the running length).
+    const subMatch = subAttrIterMatchExpr(ctx, attrId, `u32(_nci_${k})`, false);
+    if (subMatch) ctx.lines.push(`    if (!${subMatch}) { continue; }`);
+    const elem = readAttr(attr, `u32(_nci_${k})`, false);
+    ctx.lines.push(`    ${tmp.name}[${tmp.lenName}] = f32(${elem.expr});`);
+    ctx.lines.push(`    ${tmp.lenName} = ${tmp.lenName} + 1;`);
+    ctx.lines.push(`  }`);
+    return tmp;
+  }
+  // Scalar-fold: materialise each scalar source independently.
+  const N = sources.length;
+  const tmp = allocArray(ctx, 'f32', 'fldSc', N);
+  for (let kk = 0; kk < N; kk++) {
+    const src = sources[kk]!;
+    const sref = compileValueNode(ctx, src.nodeId, src.portId);
+    if (!sref) { ctx.errors.push(`${op}: scalar source ${src.nodeId} did not produce a value`); return null; }
+    ctx.lines.push(`  ${tmp.name}[${kk}] = ${castTo(sref, 'f32')};`);
+  }
+  ctx.lines.push(`  ${tmp.lenName} = ${N};`);
+  return tmp;
+}
+
 function emitAggregateOrCount(
   c: NodeEmitContext, mode: 'aggregate' | 'count' | 'groupOperator',
 ): ValueRef | null {
@@ -2277,49 +2335,75 @@ function emitAggregateOrCount(
     if (op === 'mean') op = 'average';
   }
 
-  if (mode !== 'count' && (op === 'median' || op === 'random')) {
-    ctx.errors.push(`${mode}: WebGPU target does not yet support op "${op}". Use sum/product/min/max/average/and/or, or switch to JS/WASM target.`);
-    return null;
-  }
+  // median (aggregate) + uniform random (groupOperator) + weightedRandom
+  // (groupOperator) all need the input values MATERIALISED into a per-thread
+  // f32 scratch array first (median sorts it, random/weightedRandom index into
+  // it). Share one materialiser so the three ops stay in lockstep — it covers
+  // the single-array source, the multi-source scalar fold, and the neighbour-
+  // path (with sub-attribute parent-match filtering, matching JS/WASM).
+  if (mode !== 'count' && (op === 'median' || op === 'random' || op === 'weightedRandom')) {
+    const inArr = materialiseFoldInput(ctx, op, sources, isNbrPath, firstSrcNode);
+    if (!inArr) return null;
 
-  // groupOperator.weightedRandom: cumulative-sum sampling. Materialise the
-  // input(s) into an f32 array, then run two-pass cumsum + linear scan.
-  // Supports single-array source, multi-source scalars, and nbr-path source.
-  if (mode === 'groupOperator' && op === 'weightedRandom') {
-    let inArr: ArrayRef;
-    if (sources.length === 1 && !isNbrPath && firstSrcNode && ctx.producesArray(firstSrcNode)) {
-      const ar = compileArrayNode(ctx, firstSrc.nodeId, firstSrc.portId);
-      if (!ar) return null;
-      inArr = ar;
-    } else if (isNbrPath) {
-      const srcNode = firstSrcNode!;
-      const nbrId = srcNode.data.config.neighborhoodId as string;
-      const attrId = srcNode.data.config.attributeId as string;
-      const nbr = getNbr(ctx.layout, nbrId);
-      const attr = getAttr(ctx.layout, attrId);
-      if (!nbr || !attr) { ctx.errors.push(`weightedRandom: unknown nbr/attr (${nbrId}/${attrId})`); return null; }
-      const tmp = allocArray(ctx, 'f32', 'wrNbr', nbr.size);
-      const k = fresh(ctx, 'wrNk');
-      ctx.lines.push(`  for (var ${k}: i32 = 0; ${k} < ${nbr.size}; ${k} = ${k} + 1) {`);
-      ctx.lines.push(`    let _nci_${k}: i32 = ${emitNbrCellIdx(nbr, k)};`);
-      const elem = readAttr(attr, `u32(_nci_${k})`, false);
-      ctx.lines.push(`    ${tmp.name}[${k}] = f32(${elem.expr});`);
+    if (op === 'median') {
+      // Insertion-sort the materialised prefix, then median-pick.
+      // Empty → 0; even length → mean of the two middle; odd → middle element.
+      // Matches AggregateNode.compile's ascending-sort median semantics exactly.
+      const i = fresh(ctx, 'mdI');
+      const j = fresh(ctx, 'mdJ');
+      const key = fresh(ctx, 'mdKey');
+      ctx.lines.push(`  for (var ${i}: i32 = 1; ${i} < ${inArr.lenName}; ${i} = ${i} + 1) {`);
+      ctx.lines.push(`    let ${key}: f32 = ${arrLoad(inArr, i)};`);
+      ctx.lines.push(`    var ${j}: i32 = ${i} - 1;`);
+      ctx.lines.push(`    while (${j} >= 0 && ${arrLoad(inArr, j)} > ${key}) {`);
+      ctx.lines.push(`      ${inArr.name}[${j} + 1] = ${arrLoad(inArr, j)};`);
+      ctx.lines.push(`      ${j} = ${j} - 1;`);
+      ctx.lines.push(`    }`);
+      ctx.lines.push(`    ${inArr.name}[${j} + 1] = ${key};`);
       ctx.lines.push(`  }`);
-      ctx.lines.push(`  ${tmp.lenName} = ${nbr.size};`);
-      inArr = tmp;
-    } else {
-      // Scalar-fold: materialise each scalar source
-      const N = sources.length;
-      const tmp = allocArray(ctx, 'f32', 'wrSc', N);
-      for (let k = 0; k < N; k++) {
-        const src = sources[k]!;
-        const sref = compileValueNode(ctx, src.nodeId, src.portId);
-        if (!sref) { ctx.errors.push(`weightedRandom: scalar source ${src.nodeId} did not produce a value`); return null; }
-        ctx.lines.push(`  ${tmp.name}[${k}] = ${castTo(sref, 'f32')};`);
+      const medName = fresh(ctx, 'mdRes');
+      ctx.lines.push(`  var ${medName}: f32 = 0.0;`);
+      ctx.lines.push(`  if (${inArr.lenName} > 0) {`);
+      ctx.lines.push(`    if (${inArr.lenName} % 2 == 0) {`);
+      ctx.lines.push(`      ${medName} = (${arrLoad(inArr, `${inArr.lenName} / 2 - 1`)} + ${arrLoad(inArr, `${inArr.lenName} / 2`)}) * 0.5;`);
+      ctx.lines.push(`    } else {`);
+      ctx.lines.push(`      ${medName} = ${arrLoad(inArr, `(${inArr.lenName} - 1) / 2`)};`);
+      ctx.lines.push(`    }`);
+      ctx.lines.push(`  }`);
+      const medRef: ValueRef = { expr: medName, type: 'f32' };
+      // aggregate.median is a scalar (no index port); groupOperator.median (a
+      // hand-edited config, not UI-reachable) still gets result + a -1 index.
+      if (mode === 'groupOperator') {
+        setCachedPort(ctx, node.id, 'result', medRef);
+        setCachedPort(ctx, node.id, 'index', emitLet(ctx, 'i32', '-1', 'mdGi'));
       }
-      ctx.lines.push(`  ${tmp.lenName} = ${N};`);
-      inArr = tmp;
+      return medRef;
     }
+
+    if (op === 'random') {
+      // Uniform pick: advance the per-cell PCG once (always — matching the
+      // JS/WASM always-advance semantics), then index = floor(u*len). Empty
+      // input → index = -1, result = 0. (Cross-target the index DIFFERS — the
+      // GPU PCG is keyed per-cell, not the shared xorshift32 stream — same
+      // documented statistical-parity stance as getRandom.)
+      const rName = fresh(ctx, 'rrR');
+      ctx.lines.push(`  let ${rName}: f32 = rand_f32(idx);`);
+      const idxName = fresh(ctx, 'rrIdx');
+      const resName = fresh(ctx, 'rrRes');
+      ctx.lines.push(`  var ${idxName}: i32 = -1;`);
+      ctx.lines.push(`  var ${resName}: f32 = 0.0;`);
+      ctx.lines.push(`  if (${inArr.lenName} > 0) {`);
+      ctx.lines.push(`    ${idxName} = i32(${rName} * f32(${inArr.lenName}));`);
+      ctx.lines.push(`    if (${idxName} >= ${inArr.lenName}) { ${idxName} = ${inArr.lenName} - 1; }`);
+      ctx.lines.push(`    ${resName} = ${arrLoad(inArr, idxName)};`);
+      ctx.lines.push(`  }`);
+      const resRef: ValueRef = { expr: resName, type: 'f32' };
+      setCachedPort(ctx, node.id, 'index', { expr: idxName, type: 'i32' });
+      setCachedPort(ctx, node.id, 'result', resRef);
+      return resRef;
+    }
+
+    // weightedRandom: cumulative-sum sampling over the materialised weights.
     // Always-advance RNG (one draw per call, matches JS/WASM semantics).
     const rName = fresh(ctx, 'wrR');
     ctx.lines.push(`  let ${rName}: f32 = rand_f32(idx);`);
