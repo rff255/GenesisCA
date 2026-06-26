@@ -24,6 +24,7 @@ import { getGlyphTile } from './recording/glyphAtlas';
 import { IndicatorDisplay } from './IndicatorDisplay';
 import { BrushColorPopover } from './BrushColorPopover';
 import { ManualBrushPanel } from './ManualBrushPanel';
+import { ClipIntervalSlider } from './ClipIntervalSlider';
 import { NumberField } from '../modeler/vpl/widgets/InlineWidgets';
 import { designTimeSeriesKeys } from './indicatorChartSettings';
 import { InspectCellPopover, InspectHoverLink, type InspectPopoverState } from './InspectCellPopover';
@@ -6233,14 +6234,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                           onClick={() => setClip3d(c => ({ ...c, axis: ax, lo: -clipExtFor(ax), hi: 0 }))}>{ax === 'camera' ? 'View' : ax.toUpperCase()}</button>
                       ))}
                     </div>
-                    <div style={{ fontSize: '0.6rem', color: '#888' }}>From</div>
-                    <input type="range" min={-clipExt} max={clipExt} step={0.5} value={clip3d.lo}
-                      onChange={e => setClip3d(c => { const lo = Number(e.target.value); return { ...c, lo, hi: Math.max(lo, c.hi) }; })}
-                      style={{ width: '100%' }} title="Slab near bound" />
-                    <div style={{ fontSize: '0.6rem', color: '#888' }}>To</div>
-                    <input type="range" min={-clipExt} max={clipExt} step={0.5} value={clip3d.hi}
-                      onChange={e => setClip3d(c => { const hi = Number(e.target.value); return { ...c, hi, lo: Math.min(hi, c.lo) }; })}
-                      style={{ width: '100%' }} title="Slab far bound" />
+                    <ClipIntervalSlider
+                      lo={clip3d.lo} hi={clip3d.hi} min={-clipExt} max={clipExt} step={0.5}
+                      onChange={(lo, hi) => setClip3d(c => ({ ...c, lo, hi }))} />
                   </>
                 )}
 
