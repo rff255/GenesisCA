@@ -61,14 +61,82 @@ function buildArgs(s, hash, ctx) {
   return args;
 }
 
+// Synthetic 3D-field parity vehicle — exercises ALL FIVE field-bridge nodes in 3D:
+//   secreteToField (8-cell trilinear splat) + affectCellsUnder (r-sphere scatter)
+//   + fieldGradient.dx/dy/dz (trilinear central diffs) + sampleField (trilinear
+//   point read) + readCellsUnder (r-sphere mean). Apply Force is 2D for the graph
+//   force (fx/fy only — no fz port), so every field output routes into fx/fy so a
+//   wrong 3D read/write diverges the position. 32x32x16 torus.
+function build3DFieldModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const cN = [], cEd = [], aN = [], aEd = [];
+  const cn = (t, c) => { const n = { id: nid('n'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; cN.push(n); return n; };
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const ed = (arr) => (s, sp, tt, tp, cat) => arr.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const cE = ed(cEd), aE = ed(aEd);
+  const cV = (s, sp, tt, tp) => cE(s, sp, tt, tp, 'value'), cF = (s, sp, tt, tp) => cE(s, sp, tt, tp, 'flow');
+  const aV = (s, sp, tt, tp) => aE(s, sp, tt, tp, 'value'), aF = (s, sp, tt, tp) => aE(s, sp, tt, tp, 'flow');
+  // Moore-3D neighbourhood (diffuse both fields)
+  const mooreId = nid('nb'); const coords3d = [], coords = [];
+  for (let dl = -1; dl <= 1; dl++) for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) if (dl || dr || dc) { coords3d.push([dr, dc, dl]); coords.push([dr, dc]); }
+  const neighborhoods = [{ id: mooreId, name: 'Moore3D', coords, coords3d, includeCentralCell: false }];
+  const DIFFUSE = 0.2, DECAY = 0.98;
+  const step = cn('step', {});
+  const diffuse = (attr) => {
+    const g = cn('getCellAttribute', { attributeId: attr });
+    const nbr = cn('getNeighborsAttribute', { neighborhoodId: mooreId, attributeId: attr });
+    const avg = cn('aggregate', { operation: 'average' }); cV(nbr, 'values', avg, 'values');
+    const ex = cn('expression', { expression: `(a + ${DIFFUSE}*(b-a))*${DECAY}`, visibleCount: 2 }); cV(g, 'value', ex, 'a'); cV(avg, 'result', ex, 'b');
+    const set = cn('setAttribute', { attributeId: attr }); cV(ex, 'result', set, 'value'); return set;
+  };
+  const setA = diffuse('chemical'), setB = diffuse('chemical2');
+  const seq = cn('sequence', { thenCount: 2 }); cF(step, 'do', seq, 'do'); cF(seq, 'then_0', setA, 'do'); cF(seq, 'then_1', setB, 'do');
+  // agents
+  const bs = an('behaviourStep', {});
+  const sec = an('secreteToField', { attributeId: 'chemical', _port_rate: '1.0' }); aF(bs, 'do', sec, 'do');
+  const aff = an('affectCellsUnder', { attributeId: 'chemical2', op: 'add', _port_value: '0.5', _port_radius: '2' }); aF(sec, 'next', aff, 'do');
+  const fg = an('fieldGradient', { attributeId: 'chemical' });
+  const sf = an('sampleField', { attributeId: 'chemical' });
+  const rc = an('readCellsUnder', { attributeId: 'chemical2', reduce: 'mean', _port_radius: '2' });
+  const fxN = an('expression', { expression: 'a*24 + b*8 + c*4', visibleCount: 3 }); aV(fg, 'dx', fxN, 'a'); aV(fg, 'dz', fxN, 'b'); aV(sf, 'value', fxN, 'c');
+  const fyN = an('expression', { expression: 'a*24 + b*2', visibleCount: 2 }); aV(fg, 'dy', fyN, 'a'); aV(rc, 'value', fyN, 'b');
+  const af = an('applyForce', {}); aV(fxN, 'result', af, 'fx'); aV(fyN, 'result', af, 'fy'); aF(aff, 'next', af, 'do');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Field3D Parity Test', dimension: '3d', gridWidth: 32, gridHeight: 32, gridDepth: 16, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: true, useWebGPU: false },
+    topologyMode: { gridCells: true, agents: true },
+    centerBased: { enabled: true, maxAgents: 400, maxBonds: 2, worldWidth: 32, worldHeight: 32, worldDepth: 16, seedCount: 80, seedPattern: 'scatter', defaultRadius: 1.0, growthRate: 0, repulsionStiffness: 1.2, adhesionStiffness: 0, interactionRange: 1.4, drag: 1.0, timeStep: 0.25, momentum: 0.7, maxSpeed: 1.0, neighbourQueryRadius: 5, customForcesOnly: false, autoBond: false, bondStiffness: 0.4, bondRestLength: 2.0, formDistance: 1.2, breakDistance: 2.0, agentTarget: 'wasm', agentUpdateMode: 'async' },
+    attributes: [
+      { id: 'chemical', name: 'chemical', type: 'float', defaultValue: '0', agentAccess: 'readWrite' },
+      { id: 'chemical2', name: 'chemical2', type: 'float', defaultValue: '0', agentAccess: 'readWrite' },
+    ],
+    agentAttributes: [], modelAttributes: [], neighborhoods,
+    mappings: [{ id: nid('map'), name: 'Chemical', isAttributeToColor: true, linked: true, linkedAttributeId: 'chemical', linkedMin: 0, linkedMax: 6 }],
+    variables: [], agentVariables: [], indicators: [],
+    graphNodes: cN, graphEdges: cEd, agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
 const modelsDir = join(ROOT, 'public', 'models');
 const files = readdirSync(modelsDir).filter(f => f.endsWith('.gcaproj'));
 const SEED = 0x9e3779b1 >>> 0;
 const STEPS = Number(process.env.STEPS) || 30;
 let allPass = true;
 
+// Build the entry list: every shipped agent .gcaproj PLUS a synthetic 3D-field
+// model exercising ALL FIVE field-bridge nodes in 3D (trilinear sample/gradient/
+// splat + r-sphere read/affect). The 3D-field model is built in-memory (not
+// shipped — the existing samples don't cover 3D field; this keeps the regression
+// coverage permanent without adding a Models-Library card). See build3DFieldModel.
+const entries = [];
 for (const f of files) {
   let raw; try { raw = JSON.parse(readFileSync(join(modelsDir, f), 'utf8')); } catch { continue; }
+  entries.push({ name: f, raw });
+}
+entries.push({ name: '[synthetic] Field3D (all 5 field nodes, 3D)', raw: build3DFieldModel() });
+
+for (const { name: f, raw } of entries) {
   const model = migrateForHarness(raw);
   if (!model?.topologyMode?.agents) continue;
 
