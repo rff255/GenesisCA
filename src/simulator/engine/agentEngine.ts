@@ -87,6 +87,13 @@ export interface AgentMemoryLayout {
   i32: Record<string, number>;
   /** Per-agent Uint8 fields (length maxAgents, stride 1). */
   u8: Record<string, number>;
+  /** FULL-COVERAGE: in SYNC agent mode the WASM module needs a SEPARATE attr-write
+   *  region (the behaviour reads `attrOffset`/`attrRead`, writes `attrWriteOffset`;
+   *  the worker primes attrRead→attrWrite before + swaps after). Empty `{}` in async
+   *  mode (write aliases read = the `attrOffset` region). */
+  attrWriteOffset: Record<string, number>;
+  /** True when this layout reserved a distinct attr-write region (sync agent mode). */
+  syncAttrs: boolean;
   /** Ragged bond Int32 fields (length maxAgents*maxBonds). */
   bondI32: Record<string, number>;
   /** Ragged bond Float64 fields (length maxAgents*maxBonds). */
@@ -118,6 +125,60 @@ export interface AgentMemoryLayout {
    *  more `getNearbyAgents` nodes than slots fails the WASM gate → JS fallback. */
   nearbyScratchSlots: number;
   nearbyScratchOffset: number;
+  // --- FULL-COVERAGE WASM agent port (the whole-catalogue port) extra regions ---
+  // All appended AFTER the PR6b-2 regions so every existing offset is byte-stable
+  // (the W1 force-pass / drift-test / Boids path is unaffected — they pass 0 sizes
+  // here, so the regions collapse to nothing).
+  /** General per-agent bump-pointer array scratch (byte-granular) for the agent-
+   *  array tier (filterAgents/joinAgents/getAgentsAttribute/picks/group ops over
+   *  arrays + array Local Variables). One contiguous region; the compiler bumps a
+   *  top pointer per agent (reset at loop top). Reserved `scratchBytes` bytes. */
+  scratchOffset: number;
+  scratchBytes: number;
+  /** Model attributes — one f64 cell per scalar key (a color attr occupies 3 keys
+   *  `id_r`/`id_g`/`id_b`). The worker copies `cachedModelAttrs` in before the call.
+   *  `modelAttrOffset[key]` is the byte offset of that key's f64 cell. */
+  modelAttrOffset: Record<string, number>;
+  modelAttrBytes: number;
+  /** Indicators — `indicatorCount` f64 cells (the worker copies `cachedIndicators`
+   *  in and reads them back, mirroring the lattice grid). */
+  indicatorsOffset: number;
+  indicatorCount: number;
+  /** Lookup (interaction) tables — one f64 region per model lookupTable attr, sized
+   *  rows*cols. `lookupTableOffset[id]` is the byte offset + `lookupTableCols[id]`
+   *  the col stride; the worker copies `cachedInteractionTables[id]` in. */
+  lookupTableOffset: Record<string, number>;
+  lookupTableCols: Record<string, number>;
+  lookupTableBytes: number;
+  /** Cell field arrays (`_field_<id>`) — the closed agent↔grid morphogen feedback.
+   *  One f64 region per agent-accessible cell attr, sized `fieldTotal` (= W*H*D).
+   *  The worker copies `readAttrs[id]` (as f64) in before the call and copies the
+   *  readWrite ones back after (the deposit). `fieldOffset[id]` is the byte offset. */
+  fieldOffset: Record<string, number>;
+  fieldTotal: number;
+  fieldBytes: number;
+}
+
+/** Sizing inputs for the FULL-COVERAGE WASM agent layout regions — the compiler +
+ *  the worker derive these from the SAME model so the baked offsets match. All 0 by
+ *  default (the Boids/drift path), so the regions collapse to nothing. */
+export interface AgentLayoutExtras {
+  /** Per-agent array-scratch bytes (sum over array producers / array vars, worst-
+   *  case). The compiler computes a conservative bound; the worker mirrors it. */
+  scratchBytes?: number;
+  /** Ordered model-attribute keys (color attrs expanded to id_r/id_g/id_b). */
+  modelAttrKeys?: string[];
+  /** Number of indicator cells. */
+  indicatorCount?: number;
+  /** Lookup-table id → { rows, cols } (row-major, stride cols). */
+  lookupTables?: Record<string, { rows: number; cols: number }>;
+  /** Ordered agent-accessible cell-field attr ids. */
+  fieldIds?: string[];
+  /** Cell field length = W*H*D. */
+  fieldTotal?: number;
+  /** Sync agent mode — reserve a SEPARATE attr-write region per attr (the WASM
+   *  behaviour reads attrRead, writes attrWrite; the worker primes + swaps). */
+  syncAttrs?: boolean;
 }
 
 /** The number of `getNearbyAgents` scratch buffers the wasmBacked agent layout
@@ -187,6 +248,10 @@ export function computeAgentMemoryLayout(
    *  region offset is byte-identical — the drift-test (no hash) path is
    *  unaffected. 0 ⇒ no hash region (a behaviour that never queries the hash). */
   maxHashBins = 0,
+  /** FULL-COVERAGE region sizing (the whole-catalogue WASM agent port). Default
+   *  `{}` ⇒ all regions collapse to nothing (byte-identical to the Boids/drift
+   *  layout). The compiler + worker build this from the SAME model. */
+  extras: AgentLayoutExtras = {},
 ): AgentMemoryLayout {
   let off = 0;
   const f64: Record<string, number> = {};
@@ -262,13 +327,71 @@ export function computeAgentMemoryLayout(
   const nearbyScratchOffset = off;
   off += nearbyScratchSlots * maxAgents * 4;
 
+  // --- FULL-COVERAGE regions (appended last → all PR6b-2 offsets byte-stable). ---
+  // General per-agent array scratch (f64-aligned so any element type fits).
+  off = alignTo(off, 8);
+  const scratchOffset = off;
+  const scratchBytes = Math.max(0, Math.floor(extras.scratchBytes ?? 0));
+  off += scratchBytes;
+  // Model attributes — one f64 cell per key.
+  off = alignTo(off, 8);
+  const modelAttrOffset: Record<string, number> = {};
+  const modelAttrKeys = extras.modelAttrKeys ?? [];
+  for (const k of modelAttrKeys) { modelAttrOffset[k] = off; off += 8; }
+  const modelAttrBytes = modelAttrKeys.length * 8;
+  // Indicators — f64 cells.
+  off = alignTo(off, 8);
+  const indicatorsOffset = off;
+  const indicatorCount = Math.max(0, Math.floor(extras.indicatorCount ?? 0));
+  off += indicatorCount * 8;
+  // Lookup tables — one f64 region per table (rows*cols).
+  off = alignTo(off, 8);
+  const lookupTableOffset: Record<string, number> = {};
+  const lookupTableCols: Record<string, number> = {};
+  let lookupTableBytes = 0;
+  const lookupTables = extras.lookupTables ?? {};
+  for (const id of Object.keys(lookupTables)) {
+    const { rows, cols } = lookupTables[id]!;
+    off = alignTo(off, 8);
+    lookupTableOffset[id] = off;
+    lookupTableCols[id] = cols;
+    const n = Math.max(0, rows * cols);
+    off += n * 8;
+    lookupTableBytes += n * 8;
+  }
+  // Cell field arrays — one f64 region per agent-accessible cell attr (sized total).
+  off = alignTo(off, 8);
+  const fieldOffset: Record<string, number> = {};
+  const fieldIds = extras.fieldIds ?? [];
+  const fieldTotal = Math.max(0, Math.floor(extras.fieldTotal ?? 0));
+  for (const id of fieldIds) { off = alignTo(off, 8); fieldOffset[id] = off; off += fieldTotal * 8; }
+  const fieldBytes = fieldIds.length * fieldTotal * 8;
+
+  // Sync attr-write region — a SECOND copy of each user attr (sync agent mode only).
+  const attrWriteOffset: Record<string, number> = {};
+  const syncAttrs = !!extras.syncAttrs;
+  if (syncAttrs) {
+    for (const spec of attrSpecs) {
+      const ib = attrKindBytes(agentAttrKind(spec.type));
+      off = alignTo(off, ib);
+      attrWriteOffset[spec.id] = off;
+      off += maxAgents * ib;
+    }
+  }
+
   const totalBytes = alignTo(off, 8);
   const pages = Math.max(1, Math.ceil(totalBytes / 65536));
   return {
     totalBytes, pages, maxAgents, maxBonds, f64, i32, u8, bondI32, bondF64,
+    attrWriteOffset, syncAttrs,
     colorsOffset, freeListOffset, attrOffset,
     rngStateOffset, maxHashBins, hashBinStartOffset, hashBinAgentsOffset,
     nearbyScratchSlots, nearbyScratchOffset,
+    scratchOffset, scratchBytes,
+    modelAttrOffset, modelAttrBytes,
+    indicatorsOffset, indicatorCount,
+    lookupTableOffset, lookupTableCols, lookupTableBytes,
+    fieldOffset, fieldTotal, fieldBytes,
   };
 }
 
@@ -401,6 +524,11 @@ export interface CreateAgentStoreOpts {
    *  under `wasmBacked` (the WASM behaviour reads the in-memory hash). 0 (default)
    *  ⇒ no hash region (the minimal drift-test behaviour never queries it). */
   maxHashBins?: number;
+  /** FULL-COVERAGE WASM agent port: the extra-region sizing the wasmBacked layout
+   *  reserves (model attrs / indicators / lookup tables / cell fields / array
+   *  scratch). The compiler + worker build this from the SAME model. Only used
+   *  under `wasmBacked`; the sync-attr write region is driven by `syncAttrs`. */
+  layoutExtras?: AgentLayoutExtras;
 }
 
 /** Allocate the agent store once from the model's center-based config + agent
@@ -423,9 +551,10 @@ export function createAgentStore(
   for (const spec of attrSpecs) attrKind[spec.id] = agentAttrKind(spec.type);
 
   const wasmBacked = !!opts?.wasmBacked;
-  // Sync attrs only ever apply on the non-wasmBacked (JS) path (the WASM minimal
-  // emitter set writes no user attrs, so double-buffering would be dead memory).
-  const syncAttrs = !!opts?.syncAttrs && !wasmBacked;
+  // FULL-COVERAGE: sync attrs now apply on BOTH paths (the whole-catalogue WASM
+  // module writes user attrs, so sync mode needs a distinct attr-write region —
+  // reserved in the wasmBacked layout via `attrWriteOffset`).
+  const syncAttrs = !!opts?.syncAttrs;
   let memory: WebAssembly.Memory | undefined;
   let layout: AgentMemoryLayout | undefined;
 
@@ -440,7 +569,8 @@ export function createAgentStore(
   let attrArr: (id: string, kind: AgentAttrKind) => AgentTypedArray;
 
   if (wasmBacked) {
-    layout = computeAgentMemoryLayout(maxAgents, maxBonds, attrSpecs, Math.max(0, Math.floor(opts?.maxHashBins ?? 0)));
+    const extras: AgentLayoutExtras = { ...(opts?.layoutExtras ?? {}), syncAttrs };
+    layout = computeAgentMemoryLayout(maxAgents, maxBonds, attrSpecs, Math.max(0, Math.floor(opts?.maxHashBins ?? 0)), extras);
     memory = new WebAssembly.Memory({ initial: layout.pages });
     const buf = memory.buffer;
     f64 = (name) => new Float64Array(buf, layout!.f64[name]!, maxAgents);
@@ -482,7 +612,19 @@ export function createAgentStore(
     // the step's end. (Positions are snapshot-integrated in BOTH modes via the
     // engine-owned x/y ↔ xNext/yNext — that's separate from this attribute flag.)
     if (syncAttrs) {
-      const w = attrArr(spec.id, kind);
+      // SYNC: a distinct write buffer. Under wasmBacked it MUST be a view over the
+      // memory's reserved `attrWriteOffset` region (so the WASM module writes the
+      // SAME bytes); else a plain typed array.
+      let w: AgentTypedArray;
+      if (wasmBacked) {
+        const o = layout!.attrWriteOffset[spec.id]!;
+        const buf = memory!.buffer;
+        w = kind === 'uint8' ? new Uint8Array(buf, o, maxAgents)
+          : kind === 'int32' ? new Int32Array(buf, o, maxAgents)
+          : new Float64Array(buf, o, maxAgents);
+      } else {
+        w = attrArr(spec.id, kind);
+      }
       if (spec.defaultValue !== 0) w.fill(spec.defaultValue);
       attrWrite[spec.id] = w;
     } else {
@@ -562,13 +704,26 @@ export function primeAgentAttrWrite(store: AgentStore): void {
   }
 }
 
-/** Sync update mode — swap `attrRead ↔ attrWrite` for every user attribute, so the
- *  values the behaviour just wrote become the live (read) buffer for the structural
- *  phase, the render snapshot, and the next step. Call AFTER the behaviour. No-op
- *  when not double-buffered. (Plain reference swap — the buffers are distinct JS
- *  arrays, never wasmBacked views, so no copy-into discipline is needed.) */
+/** Sync update mode — make the values the behaviour just wrote (`attrWrite`) the
+ *  live (read) buffer for the structural phase, the render snapshot, and the next
+ *  step. Call AFTER the behaviour. No-op when not double-buffered.
+ *
+ *  Plain JS arrays: a reference swap. **wasmBacked (B10/AW-SWAP discipline):** the
+ *  attr arrays are VIEWS at the FIXED `attrOffset`/`attrWriteOffset`, and the WASM
+ *  module always reads `attrOffset` (attrRead) + writes `attrWriteOffset` next step
+ *  — a reference swap would orphan those baked offsets. So we COPY-INTO
+ *  `attrRead ← attrWrite` (attrRead is the canonical read region the WASM reads), so
+ *  the next step's WASM read sees the just-written values. Then `primeAgentAttrWrite`
+ *  re-clones attrRead→attrWrite at the top of the next step. */
 export function swapAgentAttrs(store: AgentStore): void {
   if (!store.syncAttrs) return;
+  if (store.wasmBacked) {
+    for (const spec of store.attrSpecs) {
+      const r = store.attrRead[spec.id]!, w = store.attrWrite[spec.id]!;
+      (r as unknown as { set(a: ArrayLike<number>): void }).set(w as unknown as ArrayLike<number>);
+    }
+    return;
+  }
   for (const spec of store.attrSpecs) {
     const r = store.attrRead[spec.id]!;
     store.attrRead[spec.id] = store.attrWrite[spec.id]!;
