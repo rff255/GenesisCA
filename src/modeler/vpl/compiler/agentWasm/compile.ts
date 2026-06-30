@@ -1945,9 +1945,14 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
   const type = node.data.nodeType;
   switch (type) {
     case 'applyForce': {
-      forceAdd(ctx, ctx.layout.f64['forceX']!, () => pushValueInputF64(ctx, node, 'fx', 0));
-      forceAdd(ctx, ctx.layout.f64['forceY']!, () => pushValueInputF64(ctx, node, 'fy', 0));
-      if (ctx.is3d) forceAdd(ctx, ctx.layout.f64['forceZ']!, () => pushValueInputF64(ctx, node, 'fz', 0));
+      // Vector-input mode reads a `vector` port (JS-only producer → graph clamps
+      // to JS), so on WASM it can only be reached with the vector UNwired → no
+      // force. Skip the component adds (don't read stale `fx/fy/fz` config).
+      if (!node.data.config?.vectorInput) {
+        forceAdd(ctx, ctx.layout.f64['forceX']!, () => pushValueInputF64(ctx, node, 'fx', 0));
+        forceAdd(ctx, ctx.layout.f64['forceY']!, () => pushValueInputF64(ctx, node, 'fy', 0));
+        if (ctx.is3d) forceAdd(ctx, ctx.layout.f64['forceZ']!, () => pushValueInputF64(ctx, node, 'fz', 0));
+      }
       compileFlowChain(ctx, node.id, 'next');
       break;
     }

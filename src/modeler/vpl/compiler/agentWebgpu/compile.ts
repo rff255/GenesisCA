@@ -1619,9 +1619,14 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
   const type = node.data.nodeType;
   switch (type) {
     case 'applyForce': {
-      ctx.lines.push(`  ${f32At(ctx, 'forceX', 'idx')} = ${f32At(ctx, 'forceX', 'idx')} + ${inF32(ctx, node, 'fx', 0)};`);
-      ctx.lines.push(`  ${f32At(ctx, 'forceY', 'idx')} = ${f32At(ctx, 'forceY', 'idx')} + ${inF32(ctx, node, 'fy', 0)};`);
-      if (ctx.is3d) ctx.lines.push(`  ${f32At(ctx, 'forceZ', 'idx')} = ${f32At(ctx, 'forceZ', 'idx')} + ${inF32(ctx, node, 'fz', 0)};`);
+      // Vector-input mode reads a `vector` port (JS-only producer → graph clamps
+      // to JS), so on WebGPU it can only be reached with the vector UNwired → no
+      // force. Skip the component adds (don't read stale `fx/fy/fz` config).
+      if (!node.data.config?.vectorInput) {
+        ctx.lines.push(`  ${f32At(ctx, 'forceX', 'idx')} = ${f32At(ctx, 'forceX', 'idx')} + ${inF32(ctx, node, 'fx', 0)};`);
+        ctx.lines.push(`  ${f32At(ctx, 'forceY', 'idx')} = ${f32At(ctx, 'forceY', 'idx')} + ${inF32(ctx, node, 'fy', 0)};`);
+        if (ctx.is3d) ctx.lines.push(`  ${f32At(ctx, 'forceZ', 'idx')} = ${f32At(ctx, 'forceZ', 'idx')} + ${inF32(ctx, node, 'fz', 0)};`);
+      }
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
