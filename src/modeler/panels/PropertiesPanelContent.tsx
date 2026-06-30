@@ -197,6 +197,10 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
       <div className={styles.section}>
         <div className={styles.sectionTitle}>Execution</div>
         <div className={styles.fieldGroup}>
+          {/* Cell-grid execution — the GRID's update mode + compile target. Hidden
+              for an agents-only model (no lattice to simulate); the agent layer's
+              own update mode + compile target live in the Bond-Graph Agents block. */}
+          {topo.gridCells && (<>
           <div className={styles.field}>
             <label className={styles.fieldLabel}>Update Mode</label>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 2 }}>
@@ -344,6 +348,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
               </span>
             </div>
           </div>
+          </>)}
 
           {/* Topology — which layer(s) the model uses. Grid Cells is the classic
               lattice CA; Bond-Graph Agents is the off-lattice agent rule graph
@@ -557,32 +562,6 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
             );
           })()}
 
-          {/* Variegated Cells — gates the per-cell orientation buffer + the
-              variegated node palette + a dedicated sidebar panel. Off by
-              default; flipping on doesn't break existing models (the field
-              is additive on CAModel). */}
-          <div style={{ marginTop: 14, borderTop: '1px solid #333', paddingTop: 10 }}>
-            <label
-              style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: is3d ? 'not-allowed' : 'pointer', fontSize: '0.72rem', opacity: is3d ? 0.55 : 1 }}
-              title={is3d ? 'Variegated Cells is 2D-only (the orientation/face geometry is square-lattice).' : undefined}
-            >
-              <input
-                type="checkbox"
-                checked={!is3d && !!model.variegatedCells?.enabled}
-                disabled={is3d}
-                onChange={e => updateVariegatedCells({ enabled: e.target.checked })}
-                style={{ marginTop: 2 }}
-              />
-              <span>
-                <strong>Use Variegated Cells (Directional Interactions){is3d ? ' — 2D only' : ''}</strong>
-                <br />
-                <span style={{ color: '#888', fontSize: '0.66rem' }}>
-                  Adds a per-cell orientation (0-3 = 90&deg; rotations) and face-pattern labels for directional rules (chemistry CA, micelle formation, chiral models). Configure face patterns in the dedicated <strong>Variegated Cells</strong> panel (V) on the left sidebar.{is3d ? ' Not available in 3D models.' : ''}
-                </span>
-              </span>
-            </label>
-          </div>
-
           {/* End Conditions — optional, collapsible */}
           <div style={{ marginTop: 14, borderTop: '1px solid #333', paddingTop: 10 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
@@ -780,6 +759,36 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
       </div>
 
       <IndicatorsPanelSection mode="list" selectedId={selIndId} onSelect={selectInd} />
+
+      {/* Variegated Cells — a specialised 2D-grid feature (directional per-cell
+          interactions). The most setup-specific option, so it sits LAST, after the
+          common Indicators / End Conditions. Only relevant with the CA grid on. */}
+      {topo.gridCells && (
+        <div className={styles.section}>
+          <div className={styles.sectionTitle}>Variegated Cells</div>
+          <div className={styles.fieldGroup}>
+            <label
+              style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: is3d ? 'not-allowed' : 'pointer', fontSize: '0.72rem', opacity: is3d ? 0.55 : 1 }}
+              title={is3d ? 'Variegated Cells is 2D-only (the orientation/face geometry is square-lattice).' : undefined}
+            >
+              <input
+                type="checkbox"
+                checked={!is3d && !!model.variegatedCells?.enabled}
+                disabled={is3d}
+                onChange={e => updateVariegatedCells({ enabled: e.target.checked })}
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                <strong>Use Variegated Cells (Directional Interactions){is3d ? ' — 2D only' : ''}</strong>
+                <br />
+                <span style={{ color: '#888', fontSize: '0.66rem' }}>
+                  Adds a per-cell orientation (0-3 = 90&deg; rotations) and face-pattern labels for directional rules (chemistry CA, micelle formation, chiral models). Configure face patterns in the dedicated <strong>Variegated Cells</strong> panel (V) on the left sidebar.{is3d ? ' Not available in 3D models.' : ''}
+                </span>
+              </span>
+            </label>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
