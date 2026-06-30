@@ -2,7 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, 
 import { useModel } from '../../model/ModelContext';
 import { getNodeDefsByCategory } from '../vpl/nodes/registry';
 import { isNodeAvailable } from '../vpl/nodes/nodeValidation';
-import { subscribeActiveGraphKind, getActiveGraphKind } from '../vpl/graphState';
+import { subscribeActiveGraphKind, getActiveGraphKind, displayNodeLabel, displayNodeDescription } from '../vpl/graphState';
 import type { NodeTypeDef } from '../vpl/types';
 import type { GraphNode } from '../../model/types';
 import { NodePreview, MacroPreview } from './NodePreview';
@@ -179,7 +179,7 @@ export const PalettePanelContent = forwardRef<PaletteHandle, PalettePanelContent
   const nodeSections = CATEGORY_ORDER.map(cat => {
     const defs = (byCategory.get(cat) || [])
       .filter(d => isNodeAvailable(d, model))
-      .filter(d => itemMatches(d.label, d.description));
+      .filter(d => itemMatches(displayNodeLabel(d), displayNodeDescription(d)));
     return { cat, defs };
   }).filter(s => s.defs.length > 0);
   const totalNodeMatches = nodeSections.reduce((n, s) => n + s.defs.length, 0);
@@ -217,7 +217,7 @@ export const PalettePanelContent = forwardRef<PaletteHandle, PalettePanelContent
   type FlatItem = { key: string; label: string; payload: PaletteDragPayload };
   const flatItems: FlatItem[] = [];
   for (const { defs } of nodeSections) {
-    for (const d of defs) flatItems.push({ key: `node:${d.type}`, label: d.label, payload: { kind: 'node', nodeType: d.type } });
+    for (const d of defs) flatItems.push({ key: `node:${d.type}`, label: displayNodeLabel(d), payload: { kind: 'node', nodeType: d.type } });
   }
   for (const m of defaultMacroMatches) {
     flatItems.push({ key: `dmacro:${m.key}`, label: m.name, payload: { kind: 'macro-default', macroKey: m.key, file: m.file } });
@@ -311,13 +311,13 @@ export const PalettePanelContent = forwardRef<PaletteHandle, PalettePanelContent
         draggable
         onDragStart={onDragStart}
         onMouseMove={selectOnMouseMove(key)}
-        title={def.description || def.label}
+        title={displayNodeDescription(def) || displayNodeLabel(def)}
       >
         <span className={styles.itemDot} style={{ background: def.color }} />
         <div className={styles.itemBody}>
-          <div className={styles.itemLabel}>{def.label}</div>
-          {def.description && (
-            <div className={styles.itemDescription}>{def.description}</div>
+          <div className={styles.itemLabel}>{displayNodeLabel(def)}</div>
+          {displayNodeDescription(def) && (
+            <div className={styles.itemDescription}>{displayNodeDescription(def)}</div>
           )}
         </div>
       </div>

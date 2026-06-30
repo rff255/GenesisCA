@@ -71,6 +71,21 @@ export function setActiveGraphKind(val: ActiveGraphKind): void {
   activeGraphKindListeners.forEach(fn => fn());
 }
 
+/** The label to DISPLAY for a node def, honouring `agentLabel` on the Agents
+ *  sub-tab. Universal nodes (e.g. Get Cell Attribute) read more naturally as
+ *  "Get Self Attribute" while editing the Agents graph. Display-only — the
+ *  node `type` / compile path are unchanged. */
+export function displayNodeLabel(def: { label: string; agentLabel?: string }): string {
+  return activeGraphKindGlobal === 'agents' && def.agentLabel ? def.agentLabel : def.label;
+}
+/** The description to DISPLAY for a node def, honouring `agentDescription` on
+ *  the Agents sub-tab (pairs with `displayNodeLabel`). */
+export function displayNodeDescription(
+  def: { description?: string; agentDescription?: string },
+): string | undefined {
+  return activeGraphKindGlobal === 'agents' && def.agentDescription ? def.agentDescription : def.description;
+}
+
 // ---------------------------------------------------------------------------
 // Canvas view settings (port labels / grid / snap) — persisted.
 // GraphEditor unmounts on every Modeler → Simulator tab switch, so its local

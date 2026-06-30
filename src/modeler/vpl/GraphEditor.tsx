@@ -63,7 +63,7 @@ let clipboard: { nodes: GraphNode[]; edges: GraphEdge[] } | null = null;
 // badge / fail to compile.
 let clipboardGraphKind: 'cells' | 'agents' = 'cells';
 
-import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag, setQuickAddApi, setActiveGraphKind, type ActiveGraphKind } from './graphState';
+import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag, setQuickAddApi, setActiveGraphKind, displayNodeLabel, displayNodeDescription, type ActiveGraphKind } from './graphState';
 import { modelerUiState } from '../modelerUiState';
 import type { QuickAddPayload } from './graphState';
 import { detectEdgeHazard, isNodeAvailable } from './nodes/nodeValidation';
@@ -3253,7 +3253,7 @@ export function GraphEditorInner() {
       if (d.type === 'initEvent' && hasInit) return false;
       if (!isNodeAvailable(d, model)) return false;
       if (origin && !nodeHasCompatiblePort(d, origin)) return false;
-      return textMatch(d.label, d.description);
+      return textMatch(displayNodeLabel(d), displayNodeDescription(d));
     });
     // Preserve the menu's visual order: registry order, grouped by category.
     const grouped = new Map<string, NodeTypeDef[]>();
@@ -3263,7 +3263,7 @@ export function GraphEditorInner() {
       grouped.set(d.category, list);
     }
     for (const [, defs] of grouped) {
-      for (const d of defs) items.push({ key: d.type, label: d.label, kind: 'node', def: d });
+      for (const d of defs) items.push({ key: d.type, label: displayNodeLabel(d), kind: 'node', def: d });
     }
     return items;
   }, [contextMenu, model, dropMenuSearch]);
@@ -4006,7 +4006,7 @@ export function GraphEditorInner() {
                         }}
                       >
                         <span className={styles.contextDot} style={{ background: def.color }} />
-                        {def.label}
+                        {displayNodeLabel(def)}
                       </button>
                     ))}
                   </div>

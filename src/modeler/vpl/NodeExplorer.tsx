@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback, useRef, useImperativeHandle, forwardRef } from 'react';
 import { useReactFlow, useStore } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
+import { displayNodeLabel } from './graphState';
 import styles from './NodeExplorer.module.css';
 
 export interface NodeExplorerHandle {
@@ -33,7 +34,7 @@ export const NodeExplorer = forwardRef<NodeExplorerHandle>(function NodeExplorer
         const nodeType = (nodeData.nodeType as string) || '';
         const userLabel = (nodeData.label as string) || '';
         const def = getNodeDef(nodeType);
-        const typeName = def?.label || nodeType;
+        const typeName = (def ? displayNodeLabel(def) : '') || nodeType;
         if (!q) return true;
         return typeName.toLowerCase().includes(q) || userLabel.toLowerCase().includes(q) || nodeType.toLowerCase().includes(q);
       })
@@ -44,7 +45,7 @@ export const NodeExplorer = forwardRef<NodeExplorerHandle>(function NodeExplorer
         const def = getNodeDef(nodeType);
         return {
           id: n.id,
-          typeLabel: def?.label || nodeType,
+          typeLabel: (def ? displayNodeLabel(def) : '') || nodeType,
           color: def?.color || '#2d4059',
           description: def?.description,
           userLabel,

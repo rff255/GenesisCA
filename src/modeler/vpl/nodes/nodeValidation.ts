@@ -568,6 +568,18 @@ export const LATTICE_ONLY_TYPES = new Set<string>([
   'setNeighborhoodAttribute', 'setNeighborAttributeByIndex', 'markCellUpdated',
   // cell position (agents use Get Self Position)
   'getCellPosition',
+  // move-into-neighbour (number-conserving lattice transfer) — agents have no
+  // lattice neighbourhood, they move by Apply Force / Set Velocity / Set Position.
+  'moveSelfToNeighbor',
+  // Variegated-cells orientation / facing nodes: they read the per-CELL
+  // orientation buffer + grid-fixed facing directions, which agents don't have.
+  // (They're `requirements.variegated`-gated, so without listing them here a
+  // 2D grid+agents model with variegation enabled would surface them on the
+  // Agents sub-tab.)
+  'getOrientation', 'setOrientation',
+  'getFacingOrientation', 'setFacingOrientation',
+  'getNeighborOrientationByIndex', 'setNeighborOrientationByIndex',
+  'getFacingLabels', 'getAllFacingLabels', 'interactionTableMap',
 ]);
 
 /** True when a node type can be added to / kept in the current model. Used to

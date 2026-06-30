@@ -114,10 +114,21 @@ export interface NodeRequirements {
 export interface NodeTypeDef {
   type: string;
   label: string;
+  /** Optional alternate display label shown when the node sits in the AGENTS
+   *  graph (active sub-tab `'agents'`). Lets a UNIVERSAL node read naturally in
+   *  both contexts — e.g. `getCellAttribute` shows "Get Cell Attribute" on the
+   *  Cells graph and "Get Self Attribute" on the Agents graph (it reads the
+   *  current agent's own attribute there). Display-only: the node `type` /
+   *  compile path are unchanged. Consumed by CaNode + the palette + the add-node
+   *  menu via `displayNodeLabel(def)`. */
+  agentLabel?: string;
   category: 'event' | 'data' | 'logic' | 'aggregation' | 'flow' | 'output' | 'color';
   color: string;
   /** Short one-sentence tooltip for the Add-Node menu and explorer. */
   description?: string;
+  /** Optional alternate `description` shown in the AGENTS graph (pairs with
+   *  `agentLabel`). Display-only. */
+  agentDescription?: string;
   /** Per-node capability gating (async-only, variegated-only, ...). See
    *  `NodeRequirements`. Undefined = available in any model. */
   requirements?: NodeRequirements;

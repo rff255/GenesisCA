@@ -28,6 +28,7 @@ import {
   subscribeCompatibleHandlesForDrag,
   handleKey,
   getActiveGraphKind,
+  displayNodeLabel,
 } from './graphState';
 
 /** Snapshot getter for useSyncExternalStore — must return a stable reference
@@ -679,10 +680,10 @@ function CaNodeComponent({ id, data }: NodeProps) {
       else collapsedLabel = cVal || '0';
     } else if (nodeData.nodeType === 'getCellAttribute') {
       const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
-      collapsedLabel = attr ? `Cell - ${attr.name}` : def.label;
+      collapsedLabel = attr ? `Cell - ${attr.name}` : displayNodeLabel(def);
     } else if (nodeData.nodeType === 'getModelAttribute') {
       const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
-      collapsedLabel = attr ? `Model - ${attr.name}` : def.label;
+      collapsedLabel = attr ? `Model - ${attr.name}` : displayNodeLabel(def);
     } else if (nodeData.nodeType === 'setAttribute') {
       const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
       if (attr) {
@@ -700,7 +701,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         } else {
           collapsedLabel = `Set - ${attr.name}`;
         }
-      } else { collapsedLabel = def.label; }
+      } else { collapsedLabel = displayNodeLabel(def); }
     } else if (nodeData.nodeType === 'updateAttribute') {
       const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
       const op = (nodeData.config.operation as string) || 'increment';
@@ -709,38 +710,38 @@ function CaNodeComponent({ id, data }: NodeProps) {
         toggle: 'Toggle', or: 'OR', and: 'AND',
         next: 'Next', previous: 'Prev',
       };
-      collapsedLabel = attr ? `${opLabels[op] ?? op} ${attr.name}` : def.label;
+      collapsedLabel = attr ? `${opLabels[op] ?? op} ${attr.name}` : displayNodeLabel(def);
     } else if (nodeData.nodeType === 'getNeighborsAttribute' || nodeData.nodeType === 'getNeighborAttributeByIndex' || nodeData.nodeType === 'getNeighborsAttrByIndexes') {
       const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
       const nbr = model.neighborhoods.find(n => n.id === nodeData.config.neighborhoodId);
-      collapsedLabel = attr && nbr ? `${nbr.name}[${attr.name}]` : def.label;
+      collapsedLabel = attr && nbr ? `${nbr.name}[${attr.name}]` : displayNodeLabel(def);
     } else if (nodeData.nodeType === 'setNeighborhoodAttribute' || nodeData.nodeType === 'setNeighborAttributeByIndex') {
       const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
       const nbr = model.neighborhoods.find(n => n.id === nodeData.config.neighborhoodId);
-      collapsedLabel = attr && nbr ? `Set ${nbr.name}[${attr.name}]` : def.label;
+      collapsedLabel = attr && nbr ? `Set ${nbr.name}[${attr.name}]` : displayNodeLabel(def);
     } else if (nodeData.nodeType === 'setCellLooks') {
       const glyphTag = nodeData.config.useGlyph ? ' + glyph' : '';
       if (nodeData.config.mappingId === CURRENT_VIEWER_SENTINEL) {
         collapsedLabel = `Looks - Current Selected${glyphTag}`;
       } else {
         const mapping = model.mappings.find(m => m.id === nodeData.config.mappingId);
-        collapsedLabel = mapping ? `Looks - ${mapping.name}${glyphTag}` : def.label;
+        collapsedLabel = mapping ? `Looks - ${mapping.name}${glyphTag}` : displayNodeLabel(def);
       }
     } else if (nodeData.nodeType === 'inputColor') {
       const mapping = model.mappings.find(m => m.id === nodeData.config.mappingId);
-      collapsedLabel = mapping ? `C\u2192A: ${mapping.name}` : def.label;
+      collapsedLabel = mapping ? `C\u2192A: ${mapping.name}` : displayNodeLabel(def);
     } else if (nodeData.nodeType === 'outputMapping') {
       const mapping = model.mappings.find(m => m.id === nodeData.config.mappingId);
-      collapsedLabel = mapping ? `A\u2192C: ${mapping.name}` : def.label;
+      collapsedLabel = mapping ? `A\u2192C: ${mapping.name}` : displayNodeLabel(def);
     } else if (nodeData.nodeType === 'getIndicator') {
       const ind = (model.indicators || []).find(i => i.id === nodeData.config.indicatorId);
-      collapsedLabel = ind ? `Ind - ${ind.name}` : def.label;
+      collapsedLabel = ind ? `Ind - ${ind.name}` : displayNodeLabel(def);
     } else if (nodeData.nodeType === 'setIndicator') {
       const ind = (model.indicators || []).find(i => i.id === nodeData.config.indicatorId);
-      collapsedLabel = ind ? `Set Ind - ${ind.name}` : def.label;
+      collapsedLabel = ind ? `Set Ind - ${ind.name}` : displayNodeLabel(def);
     } else if (nodeData.nodeType === 'updateIndicator') {
       const ind = (model.indicators || []).find(i => i.id === nodeData.config.indicatorId);
-      collapsedLabel = ind ? `Upd Ind - ${ind.name}` : def.label;
+      collapsedLabel = ind ? `Upd Ind - ${ind.name}` : displayNodeLabel(def);
     } else if (nodeData.nodeType === 'statement') {
       const op = (nodeData.config.operation as string) || '==';
       const cmpType = (nodeData.config.compareType as string) || 'numerical';
@@ -834,12 +835,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
         equals: '==', notEquals: '!=', greater: '>', lesser: '<',
         greaterEqual: '>=', lesserEqual: '<=',
       };
-      collapsedLabel = attr && nbr ? `Filter ${nbr.name}[${attr.name}] ${opSymbols[op] ?? op}` : def.label;
+      collapsedLabel = attr && nbr ? `Filter ${nbr.name}[${attr.name}] ${opSymbols[op] ?? op}` : displayNodeLabel(def);
     } else if (nodeData.nodeType === 'joinNeighbors') {
       const op = (nodeData.config.operation as string) || 'intersection';
       collapsedLabel = op === 'union' ? 'Join (OR)' : 'Join (AND)';
     } else {
-      collapsedLabel = def.label;
+      collapsedLabel = displayNodeLabel(def);
     }
 
     // Color swatch for collapsed color constant
@@ -1004,7 +1005,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             {linkCount}
           </span>
         )}
-        {def.label}
+        {displayNodeLabel(def)}
         {linkCount >= 2 && showLinkMenu && (
           <div className={`${styles.linkMenu} nodrag`} onMouseDown={stopDrag} onDoubleClick={stopAll}>
             <button
