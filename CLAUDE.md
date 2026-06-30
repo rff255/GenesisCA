@@ -1253,6 +1253,37 @@ Movable relay dots placed on a wire (Blender / Unreal blueprint style) so users 
 
 ---
 
+## Composite Value Types — Vector & Color + Get Self Handle
+
+Two new **bundled value port types** (the Unreal/Blender Make-Break pattern) so a graph passes a whole vector or colour on ONE wire instead of per-component scalars, plus a small agent node exposing the self id.
+
+### Data types ([types.ts](src/modeler/vpl/types.ts) `PortDataType`)
+- **`vector`** — a 2D/3D vector, compiled as a JS **`[x, y, z]` array** (z = 0 in a 2D model; the Z port is hidden via `hiddenPorts` keyed on `is3dModelLike`).
+- **`color`** — RGBA, compiled as a JS **`[r, g, b, a]` array** (0–255 channels, A defaults 255).
+- Both are plain scalar VARIABLES holding an array (NOT `isArray` ports — they don't trigger the neighbour-array machinery). The compiler emits `const _v<id> = [...]` and consumers component-access `_v<id>[0]` etc.
+
+### Nodes (6, JS compile target)
+- **Get Self Handle** ([GetSelfHandleNode.ts](src/modeler/vpl/nodes/GetSelfHandleNode.ts), `getSelfHandle`, agent/`bondGraph`): outputs the current agent's own id (`const _v<id> = idx`). Feed it to the by-id nodes (Get/Set Agent Attribute, Get Agent Position/Offset, Form/Break Bond). Emitted on **all three** agent targets (JS / WASM `localGet(idxLocal)` / WebGPU `f32(idx)`) + added to `AGENT_WASM_SUPPORTED_TYPES` + `AGENT_WEBGPU_SUPPORTED_TYPES`, so it stays on the fast targets.
+- **Make Vector** / **Break Vector** / **Vector Op** (Add/Subtract/Scale/Dot/Cross/Length/Normalize/Distance/Negate/Lerp) — Vector Op + Break Vector are multi-output (`vectorOp` `result`/`value`; `breakVector` x/y/z; in `MULTI_OUTPUT_TYPES`). Vector Op's `hiddenPorts` shows ports per op (B for binary ops, Scalar for scale, T for lerp, `value` for Dot/Length/Distance else `result`).
+- **Make Color** / **Break Color** (`makeColor`/`breakColor`; Break Color multi-output) over `[r, g, b, a]`.
+
+### JS-only gating (graceful clamp — NO per-target vector/color emit)
+The WASM/WebGPU compilers carry no array-valued vector/colour emit path, so a model using these nodes **clamps to the JS engine**:
+- **Grid:** `compileGraphWasm` early-bails with a clean error (a local JS_ONLY set) and `compileGraphWebGPU` rejects via `detectWebGPUIncompatibilities` → SimulatorView's try/catch around both → JS fallback. Badges via `JS_ONLY_NODE_TYPES` / `JS_ONLY_MESSAGE` in [nodeValidation.ts](src/modeler/vpl/nodes/nodeValidation.ts) (both `detectWasmIncompatibilities` + `detectWebGPUIncompatibilities`).
+- **Agents:** vector/color nodes are NOT in the agent allowlists, so `isAgentGraphWasmSupported` / `isAgentGraphWebGPUSupported` return false when a vector node is **behaviour-reachable** → the agent target clamps to JS. (Unreachable vector nodes don't clamp — the gate checks the reachable cone only.)
+- **No cross-target vector work needed** because every vector PRODUCER (Make Vector, Vector Op) is JS-only, so any vector wire forces JS upstream of WASM/WebGPU.
+
+### Port wiring + UX
+- `isValidConnection` ([GraphEditor.tsx](src/modeler/vpl/GraphEditor.tsx)) gains an exact-match guard for `vector`/`color` (mirrors the NeighborIndex guard) — a scalar can't be wired into a composite port (which would read `[..][0]` on a number). `portsCompatible` already handles it (`a === b`).
+- Distinct pin colours: vector = teal (`.handleVector`), color = pink (`.handleColor`) in [CaNode.module.css](src/modeler/vpl/CaNode.module.css) + `portHandleClass`. Vector Op op-dropdown UI in CaNode.
+- **Apply Force "Vector input" mode** (`config.vectorInput`, default off): an additive `force` vector port that, when on, replaces the X/Y/Z component ports (`hiddenPorts`). Component mode is byte-identical (stays on WASM/WebGPU). Vector mode reads the vector (JS-only → clamps); the WASM/WebGPU `applyForce` emitters skip the component adds in vector mode so an unwired vector + stale `fx/fy/fz` can't diverge from the JS no-op.
+- Catalogue: **113 selectable** node types (116 − 3 hidden macro), **40 agent** nodes.
+
+### Verified (JS compile + clamps)
+Vector length `[3,4,0]`→5 (loop-invariant-hoisted), add `[1,2,0]+[3,4,0]`→`[4,6,0]`, break→4; color `[10,20,30,255]`→r=10; 3D Make Vector emits `[1,2,7]`; agent Get Self Handle writes `w_myId[idx]=idx`; grid WASM/WebGPU + agent targets clamp to JS when a vector node is reachable, stay on the fast target for Get Self Handle; Apply Force vector mode emits `(__f)[0]` + clamps, component mode `+= 2` + supported. All 8 agent samples (+ synthetic 3D-field) still JS↔WASM bit-parity; tsc + build clean.
+
+---
+
 ## Bond-Graph Agents — Floating Cells (milestone, branch `agents_floating_cells`)
 
 A **second, co-resident engine** the sim worker owns alongside the lattice CA:
