@@ -80,6 +80,7 @@ import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/p
 import { is3dModel } from '../compile';
 import { expandMacros } from '../macroExpand';
 import { collapseReroutes } from '../rerouteCollapse';
+import { expandComposites } from '../expandComposites';
 import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { resolveKeyLabels } from '../variegation';
 import { readColorScaleStops, type ColorScaleStop } from '../../nodes/ColorScaleNode';
@@ -1945,14 +1946,11 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
   const type = node.data.nodeType;
   switch (type) {
     case 'applyForce': {
-      // Vector-input mode reads a `vector` port (JS-only producer → graph clamps
-      // to JS), so on WASM it can only be reached with the vector UNwired → no
-      // force. Skip the component adds (don't read stale `fx/fy/fz` config).
-      if (!node.data.config?.vectorInput) {
-        forceAdd(ctx, ctx.layout.f64['forceX']!, () => pushValueInputF64(ctx, node, 'fx', 0));
-        forceAdd(ctx, ctx.layout.f64['forceY']!, () => pushValueInputF64(ctx, node, 'fy', 0));
-        if (ctx.is3d) forceAdd(ctx, ctx.layout.f64['forceZ']!, () => pushValueInputF64(ctx, node, 'fz', 0));
-      }
+      // Always component mode here — `expandComposites` lowers a vector-input
+      // Apply Force to its fx/fy/fz components before the compiler sees it.
+      forceAdd(ctx, ctx.layout.f64['forceX']!, () => pushValueInputF64(ctx, node, 'fx', 0));
+      forceAdd(ctx, ctx.layout.f64['forceY']!, () => pushValueInputF64(ctx, node, 'fy', 0));
+      if (ctx.is3d) forceAdd(ctx, ctx.layout.f64['forceZ']!, () => pushValueInputF64(ctx, node, 'fz', 0));
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
@@ -3673,6 +3671,10 @@ function flattenAgentGraph(nodes: GraphNode[], edges: GraphEdge[], model: CAMode
   if (expanded.error) return { nodes, edges, error: expanded.error };
   let n = expanded.nodes, e = expanded.edges;
   ({ nodes: n, edges: e } = collapseReroutes(n, e));
+  // Composite-type lowering — vector / colour nodes become scalar nodes BEFORE
+  // the gate + emitter see the graph, so a vector agent model runs on WASM (the
+  // lowered arithmeticOperator/getConstant nodes are in the agent allowlist).
+  ({ nodes: n, edges: e } = expandComposites(n, e, model));
   e = canonicalizeAccessorEdges(n, e, model);
   return { nodes: n, edges: e };
 }

@@ -1301,12 +1301,14 @@ export function GraphEditorInner() {
         if (srcIsNI && targetPort && targetPort.dataType !== 'neighborIndex' && targetPort.dataType !== 'any') {
           return false;
         }
-        // Composite-type (vector / color) compatibility — must match exactly (or
-        // 'any'): a scalar wired into a vector/color port would read `[..][0]` on
-        // a number at runtime. Mirrors the NeighborIndex guard above.
+        // Composite-type (vector / color) compatibility — a composite port may
+        // ONLY connect to the SAME composite type, never to a scalar or 'any'
+        // port. A scalar into a vector (or a vector into a scalar/'any' sink) has
+        // no meaning, and `expandComposites` can only lower vector→vector /
+        // color→color wiring — so the editor must forbid the rest up front.
         for (const ct of ['vector', 'color'] as const) {
-          if (targetPort?.dataType === ct && sourcePort && sourcePort.dataType !== ct && sourcePort.dataType !== 'any') return false;
-          if (sourcePort?.dataType === ct && targetPort && targetPort.dataType !== ct && targetPort.dataType !== 'any') return false;
+          if (targetPort?.dataType === ct && sourcePort?.dataType !== ct) return false;
+          if (sourcePort?.dataType === ct && targetPort?.dataType !== ct) return false;
         }
       }
 

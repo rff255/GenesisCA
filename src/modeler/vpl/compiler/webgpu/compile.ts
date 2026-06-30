@@ -38,6 +38,7 @@ import { analyzeSinkScopes, CELL_TOP, type ScopeId, type SinkAnalysisResult } fr
 import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { injectLinkedOutputMappings } from '../linkedOutputMappings';
 import { collapseReroutes } from '../rerouteCollapse';
+import { expandComposites } from '../expandComposites';
 import { expandMacros } from '../macroExpand';
 import { computeVolatileHoist, computeVolatileValueClosure } from '../volatileHoist';
 import { makeProducesArray } from '../arrayRelay';
@@ -3825,11 +3826,14 @@ export function compileGraphWebGPU(
   // expandMacros so in-macro reroutes collapse too, and before linked-OM / CSE /
   // adjacency so nothing downstream sees a reroute. See rerouteCollapse.ts.
   const collapsed = collapseReroutes(expanded.nodes, expanded.edges);
+  // Composite-type lowering — vector / colour nodes become scalar nodes so the
+  // WGSL emitters compile them natively (no JS-only clamp). See expandComposites.ts.
+  const lowered = expandComposites(collapsed.nodes, collapsed.edges, model);
   // Linked Output Mappings — synthesize the auto color pass for `linked`
   // mappings (ephemeral; rebuilt from the live model each compile). MUST rebind
   // `nodes` so the output-mapping emission loop below sees the synthetic root —
   // otherwise WebGPU silently shows default colors while JS/WASM render the pass.
-  const injected = injectLinkedOutputMappings(collapsed.nodes, collapsed.edges, model);
+  const injected = injectLinkedOutputMappings(lowered.nodes, lowered.edges, model);
   const nodes = injected.nodes;
   // Accessor CSE — sync-mode only. Runs AFTER macro expansion so duplicate
   // accessors inside (or across) macro instances also get merged. No-op when
