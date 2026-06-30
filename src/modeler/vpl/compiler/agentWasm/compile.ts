@@ -3492,7 +3492,7 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
   // --- the 3×3(×3) hash stencil over the in-memory binStart/binAgents ---
   function emitForceStencil(): void {
     const binStartOff = L.hashBinStartOffset, binAgentsOff = L.hashBinAgentsOffset;
-    // bx = clamp((xi/binSizeX)|0, 0, nBinsX-1); same by[,bz]
+    // bx = clamp(((xi-originX)/binSizeX)|0, 0, nBinsX-1); same by[,bz]
     clampToBin(xi, P.originX, P.binSizeX, P.nBinsX, bx);
     clampToBin(yi, P.originY, P.binSizeY, P.nBinsY, by);
     if (is3d) clampToBin(zi, P.originZ, P.binSizeZ, P.nBinsZ, bz); else { em.i32Const(0); em.localSet(bz); }

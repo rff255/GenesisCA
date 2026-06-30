@@ -4,7 +4,8 @@ import { is3dModelLike } from '../compiler/niCodec';
 /** Create Agent — allocate a new agent at a position (Generic Agent Platform).
  *  Phase 1 of the two-phase spawn: returns a `handle` (the new agent's id, or -1
  *  on overflow) so you can set its attributes (Set Agent Attribute / Position /
- *  Radius / Type by the handle) BEFORE committing it with Add Agent To World.
+ *  Radius / your own agent attributes by the handle) BEFORE committing it with
+ *  Add Agent To World.
  *
  *  v1 is INIT-ONLY: place it inside the Agent Init Event's DO chain (typically a
  *  Loop). The compiler declares `const _v<id>_handle = _agentCreate(x, y, radius)`
