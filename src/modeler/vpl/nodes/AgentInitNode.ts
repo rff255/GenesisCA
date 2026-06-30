@@ -1,4 +1,5 @@
 import type { NodeTypeDef } from '../types';
+import { is3dModelLike } from '../compiler/niCodec';
 
 /** Agent Init Event — a once-per-Reset setup root for the Agents graph (Generic
  *  Agent Platform). Unlike the cell Init Event (which runs per lattice cell),
@@ -23,8 +24,11 @@ export const AgentInitNode: NodeTypeDef = {
     { id: 'do', label: 'DO', kind: 'output', category: 'flow' },
     { id: 'worldWidth', label: 'World Width', kind: 'output', category: 'value', dataType: 'float' },
     { id: 'worldHeight', label: 'World Height', kind: 'output', category: 'value', dataType: 'float' },
+    { id: 'worldDepth', label: 'World Depth', kind: 'output', category: 'value', dataType: 'float' },
     { id: 'seedIndexBase', label: 'Seed Index Base', kind: 'output', category: 'value', dataType: 'integer' },
   ],
+  // World Depth exists only in a 3D-agent model (hidden in 2D).
+  hiddenPorts: (_config, model) => (is3dModelLike(model) ? [] : ['worldDepth']),
   defaultConfig: {},
   compile: () => '',  // compiler emits the once-only setup function
 };

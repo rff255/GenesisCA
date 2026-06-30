@@ -2020,6 +2020,7 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
       emitGuardedAgentWrite(ctx, node, 'agentId', (aLocal) => {
         pushF64ElemAddr(em, ctx.layout.f64['x']!, aLocal); pushValueInputF64(ctx, node, 'x', 0); em.f64Store();
         pushF64ElemAddr(em, ctx.layout.f64['y']!, aLocal); pushValueInputF64(ctx, node, 'y', 0); em.f64Store();
+        if (ctx.is3d) { pushF64ElemAddr(em, ctx.layout.f64['z']!, aLocal); pushValueInputF64(ctx, node, 'z', 0); em.f64Store(); }
       });
       compileFlowChain(ctx, node.id, 'next');
       break;

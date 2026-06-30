@@ -1045,8 +1045,9 @@ function compileRoot(
         // Generic Agent Platform: Create Agent is a flow node with a VALUE output
         // (`handle`) consumed by sibling flow nodes (Add Agent To World, the by-id
         // setters) — like forEachBond's value-outs. Declare it at the flow position
-        // so it's in scope downstream: `const _v<id>_handle = _agentCreate(x,y,r,t)`.
+        // so it's in scope downstream: `const _v<id>_handle = _agentCreate(x,y,z,r)`.
         // `_agentCreate` is a host closure (init params); it allocs + stages a slot.
+        // z defaults to '0' (the inline default) in 2D, where the Z input is hidden.
         const inP = (pid: string, dflt: string): string => {
           const s = inputToSource.get(`${node.id}:${pid}`);
           if (s) { compileValueNode(s.nodeId); return varName(s.nodeId, s.portId); }
@@ -1054,7 +1055,7 @@ function compileRoot(
           const inline = port ? getInlineValue(port, node.data.config) : undefined;
           return inline ?? dflt;
         };
-        flowLines.push(`${indent}const _v${node.id}_handle = _agentCreate(${inP('x', '0')}, ${inP('y', '0')}, ${inP('radius', '1')});`);
+        flowLines.push(`${indent}const _v${node.id}_handle = _agentCreate(${inP('x', '0')}, ${inP('y', '0')}, ${inP('z', '0')}, ${inP('radius', '1')});`);
       } else if (node.data.nodeType === 'switch') {
         const switchMode = (node.data.config.mode as string) || 'conditions';
         const firstMatchOnly = node.data.config.firstMatchOnly !== false;
@@ -2362,6 +2363,9 @@ export function compileAgentGraph(
       // value-out preamble — world bounds + the seed index base (highWater pre-init).
       `  const _v${iId}_worldWidth = _fieldW;`,
       `  const _v${iId}_worldHeight = _fieldH;`,
+      // worldDepth (3D only) — derived from the threaded field dims (_fieldTotal =
+      // W*H*D), so no init-ABI change. 2D hides the port, so no emit there.
+      ...(is3d ? [`  const _v${iId}_worldDepth = (_fieldW > 0 && _fieldH > 0) ? Math.round(_fieldTotal / (_fieldW * _fieldH)) : 1;`] : []),
       `  const _v${iId}_seedIndexBase = _agentSeedBase;`,
       '  let _rs = _rngState[0] || 0x12345678;',
       ...iv.preLoopValueLines,

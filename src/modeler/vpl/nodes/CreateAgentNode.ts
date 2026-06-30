@@ -1,4 +1,5 @@
 import type { NodeTypeDef } from '../types';
+import { is3dModelLike } from '../compiler/niCodec';
 
 /** Create Agent — allocate a new agent at a position (Generic Agent Platform).
  *  Phase 1 of the two-phase spawn: returns a `handle` (the new agent's id, or -1
@@ -22,9 +23,12 @@ export const CreateAgentNode: NodeTypeDef = {
     { id: 'next', label: 'NEXT', kind: 'output', category: 'flow' },
     { id: 'x', label: 'X', kind: 'input', category: 'value', dataType: 'float', inlineWidget: 'number', defaultValue: '0' },
     { id: 'y', label: 'Y', kind: 'input', category: 'value', dataType: 'float', inlineWidget: 'number', defaultValue: '0' },
+    { id: 'z', label: 'Z', kind: 'input', category: 'value', dataType: 'float', inlineWidget: 'number', defaultValue: '0' },
     { id: 'radius', label: 'Radius', kind: 'input', category: 'value', dataType: 'float', inlineWidget: 'number', defaultValue: '1' },
     { id: 'handle', label: 'Handle', kind: 'output', category: 'value', dataType: 'integer' },
   ],
+  // The Z input exists only in a 3D-agent model (hidden in 2D).
+  hiddenPorts: (_config, model) => (is3dModelLike(model) ? [] : ['z']),
   defaultConfig: {},
   compile: () => '',  // the handle is declared in compileFlowChain (createAgent special-case)
 };

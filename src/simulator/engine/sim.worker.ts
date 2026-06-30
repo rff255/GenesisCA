@@ -811,7 +811,7 @@ function applyAgentSets(store: AgentStore, id: number, sets: Array<{ attrId: str
  *  attr buffers, the global/rng/field block, then `_agentSeedBase`. */
 function buildAgentInitArgs(
   s: AgentStore,
-  agentCreate: (x: number, y: number, radius: number) => number,
+  agentCreate: (x: number, y: number, z: number, radius: number) => number,
   agentAddToWorld: (id: number) => void,
   seedBase: number,
 ): unknown[] {
@@ -841,10 +841,10 @@ function runAgentInit(): void {
   const seedBase = s.highWater;   // the seedIndexBase value-out
   const created: number[] = [];
   let overflowed = false;
-  const agentCreate = (x: number, y: number, radius: number): number => {
+  const agentCreate = (x: number, y: number, z: number, radius: number): number => {
     const id = allocAgentSlot(s);
     if (id < 0) { overflowed = true; return -1; }
-    initAgentSlot(s, id, x, y, 0, radius || cbNum(centerBasedConfig!, 'defaultRadius'), id);
+    initAgentSlot(s, id, x, y, z || 0, radius || cbNum(centerBasedConfig!, 'defaultRadius'), id);
     s.alive[id] = 0; s.liveCount--;   // STAGE (un-commit the alloc until Add To World)
     created.push(id);
     return id;
