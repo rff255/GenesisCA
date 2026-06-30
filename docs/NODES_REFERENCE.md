@@ -4,12 +4,21 @@ This document catalogues every node in the GenesisCA Visual Programming Language
 describes the port type system, and flags redundancies or gaps. It is a working reference
 to inform future consolidation — it does **not** describe any committed refactoring.
 
-**Scope:** 107 node types across 7 categories (event, flow, data, logic, aggregation,
+**Scope:** 113 node types across 7 categories (event, flow, data, logic, aggregation,
 output, color), plus 2 hidden boundary nodes (`macroInput` / `macroOutput`). Indicator
 nodes live within the `data` (readers) and `output` (writers) categories rather than a
 category of their own. The variegated-cells, local-variable, and Bond-Graph-Agent nodes
-appear in the editor only when their respective model feature is enabled (the 39 agent
+appear in the editor only when their respective model feature is enabled (the 40 agent
 nodes — §3.8 — only in a Bond-Graph-Agents model, and only on its Agents sub-tab).
+
+**Composite value types (`vector` / `color`):** Make Vector / Break Vector / Vector
+Op and Make Color / Break Color (the Unreal/Blender Make-Break pattern) bundle X/Y/Z
+or R/G/B/A onto one wire — `vector` is carried as `[x, y, z]` (z = 0 / Z-port hidden
+in 2D), `color` as `[r, g, b, a]`. They are the **JS compile target only**: a model
+that uses them clamps to the Debug/Reference (JS) engine (grid + agents) — the grid
+WASM/WebGPU compilers return a clean error → SimulatorView's JS fallback, and the
+agent WASM/WebGPU allowlists auto-clamp. Apply Force has an optional "Vector input"
+mode that takes a force vector directly.
 
 On the **Agents** sub-tab the universal Get / Set / Update Attribute nodes display as
 **Get / Set / Update Self Attribute** (via `NodeTypeDef.agentLabel` / `displayNodeLabel`) —
@@ -179,6 +188,9 @@ exists purely to keep graphs readable without Sequence nodes. See
 | 41 | `logicOperator` | Logic | `AND OR XOR NOT` on binary values. | `I: A` `I: B` (hidden for NOT) / `O: Result` (bool) | |
 | 42 | `valueSwitch` | Value Switch | `condition ? ifValue : elseValue`. Pure value, no flow port. **Dual-mode:** scalar selector OR array relay. | `I: Condition` (any) `I: If` (any) `I: Else` (any) / `O: Result` (any) | All inputs optional (inline defaults: condition=false, if=1, else=0). Both branches always evaluate — for short-circuit use flow `conditional` instead. **Array relay:** when BOTH `If` and `Else` are wired to array producers (e.g. two `filterNeighbors`), `Result` is the selected array (feed it to `pickRandomNeighbor` / `arrayElement` / `aggregate` / …). All three targets — JS relays the reference, WASM selects the scratch offset/len (zero-copy), WebGPU copies the chosen branch. |
 | 43 | `lookupInteraction` | Table Lookup | Index a Lookup Table model attribute by a row + column index (from face labels or tag reads) → decimal. | `I: Row` `I: Col` (int, inline) / `O: Value` (float) | Works with or without Variegated Cells; loop-invariant when both indices are |
+| 109 | `makeVector` | Make Vector | Bundle X / Y / Z scalars into a single `vector` value (the Unreal Make Vector / Blender Combine XYZ). | `I: X` `I: Y` `I: Z` (float, inline) / `O: Vector` (vector) | `Z` hidden in 2D (z = 0). **JS compile target only** — using it clamps the model to JS |
+| 110 | `breakVector` | Break Vector | Split a `vector` back into its X / Y / Z scalar components (Unreal Break Vector / Blender Separate XYZ). | `I: Vector` (vector) / `O: X` `O: Y` `O: Z` (float) | Multi-output; `Z` hidden in 2D. JS only |
+| 111 | `vectorOp` | Vector Op | Vectorial math on `vector` values: Add / Subtract / Scale (×scalar) / Dot / Cross / Length / Normalize / Distance / Negate / Lerp. Operates on the bundled [x, y, z] so you never touch the components. | `I: A` `I: B` (vector) `I: Scalar` `I: T` (float) / `O: Vector` (vector) `O: Value` (float) | Multi-output; ports shown per op (`hiddenPorts`). Vector-returning ops → `Vector`; Dot / Length / Distance → `Value`. JS only |
 
 ### 3.5 Aggregation — `aggregation`
 
@@ -220,10 +232,12 @@ exists purely to keep graphs readable without Sequence nodes. See
 | 66 | `getColorConstant` | Color Constant | Emit a fixed RGB triple. | `O: R` `O: G` `O: B` (int) | |
 | 67 | `colorScale` | Color Scale | Map `T` to an RGB color via N colour stops with a selectable curve (linear / smoothstep / easeInQuad / easeOutQuad / exponential / logarithmic). One-click palette presets (Viridis, Magma, Plasma, Inferno, Rainbow, Heat, Cool→Warm, Cividis, Grayscale) load a full stop set. Replaces the legacy `colorInterpolation` node. | `I: T` (float) / `O: R` `O: G` `O: B` (int) | Min 2 stops; `t` outside the stop range clamps to nearest endpoint |
 | 68 | `categoricalColor` | Categorical Color | Map an integer `Index` to a flat RGB color from an N-entry palette (no blending). Index `i` selects entry `i`; out-of-range indices use the default color. | `I: Index` (int) / `O: R` `O: G` `O: B` (int) | Discrete lookup (cf. `colorScale` which interpolates). Used by Linked Output Mappings for tag attributes |
+| 112 | `makeColor` | Make Color | Bundle R / G / B / A channels into a single `color` value (the Unreal Make Color / Blender Combine Color). | `I: R` `I: G` `I: B` `I: A` (float, inline; A defaults 255) / `O: Color` (color) | **JS compile target only** — using it clamps the model to JS |
+| 113 | `breakColor` | Break Color | Split a `color` back into its R / G / B / A channels (Unreal Break Color / Blender Separate Color). | `I: Color` (color) / `O: R` `O: G` `O: B` `O: A` (float) | Multi-output. JS only |
 
 ### 3.8 Bond-Graph Agents — `agent` family
 
-> **Bond-Graph Agents note:** these 39 nodes form a second, off-lattice rule world.
+> **Bond-Graph Agents note:** these 40 nodes form a second, off-lattice rule world.
 > They carry `requirements: { bondGraph: true }`, so they appear in the editor **only** in
 > a model with the **Bond-Graph Agents** topology enabled, and **only on its Agents
 > sub-tab** (`isNodeAvailable` keys on the active graph kind). Conversely the lattice-bound
@@ -266,7 +280,7 @@ exists purely to keep graphs readable without Sequence nodes. See
 | 89 | `getAgentRadius` | Get Agent Radius | `data` | A specific agent's radius by id — for size-aware neighbour interactions. | `I: Agent` (int) / `O: Radius` (float) | — |
 | 90 | `getVelocity` | Get Velocity | `data` | An agent's velocity `(Vx, Vy)` — self if the Agent input is empty, else a neighbour's (average them for boids alignment). Meaningful when momentum > 0. | `I: Agent` (int, optional) / `O: Vx` `O: Vy` (float) | Multi-output |
 | 91 | `getCurvature` | Get Curvature | `data` | Local membrane curvature of a bonded agent: the magnitude of the mean unit-vector to its bonded partners, in [0, 1] (~0 = flat/interior, →1 = convex edge/tip; 0 for < 2 bonds). | `O: Curvature` (float) | Drives curvature-dependent behaviour (edge cells differentiating differently, tip growth) |
-| 92 | `applyForce` | Apply Force | `output` | Add a force vector to the agent this step — the GRAPH authors the physics. The engine integrates the sum of all Apply Force contributions plus its soft-sphere + bond springs (unless Custom forces only). Build flocking, chemotaxis, propulsion. | `I: DO` `I: Force X` `I: Force Y` (float, inline); 3D adds `I: Force Z` / `O: NEXT` (flow) | With momentum > 0 it changes velocity (inertia); with 0 it directly displaces (overdamped). NOT async-only. `Force Z` hidden in 2D |
+| 92 | `applyForce` | Apply Force | `output` | Add a force vector to the agent this step — the GRAPH authors the physics. The engine integrates the sum of all Apply Force contributions plus its soft-sphere + bond springs (unless Custom forces only). Build flocking, chemotaxis, propulsion. | `I: DO` `I: Force` (vector, in `vectorInput` mode) OR `I: Force X` `I: Force Y` (float, inline); 3D adds `I: Force Z` / `O: NEXT` (flow) | With momentum > 0 it changes velocity (inertia); with 0 it directly displaces (overdamped). NOT async-only. `Force Z` hidden in 2D. The optional **Vector input** mode takes a force vector straight from Vector Op (clamps the agent graph to JS — vectors are JS-only) |
 | 93 | `setAgentAttribute` | Set Agent Attribute | `output` | Write an attribute on ANOTHER agent by id (the agent analogue of Set Neighbor Attribute By Index) — signal a neighbour. | `I: DO` `I: Agent` (int) `I: Value` (float, inline) / `O: NEXT` (flow) | Requires `attributeId`. Immediate single-buffer (async-style) write — use commutative patterns when order matters; id range-guarded |
 | 95 | `getBondedAgents` | Get Bonded Agents | `data` | This agent's bonded partners as an id array — the data sibling of For Each Bond. Filter / join / aggregate them exactly like Get Nearby Agents. | `O: Agents` (int **array**) | Per-agent (never hoisted). Reads the ragged bond store, keeping live partners only |
 | 96 | `filterAgents` | Filter Agents | `aggregation` | Keep the agents in an id array whose AGENT attribute passes a comparison — the agent analogue of Filter Neighbors over plain ids (no NeighborIndex codec). | `I: Agents` (int **array**) `I: Compare` (any, inline) / `O: Filtered` (int **array**), `O: Count` (int) | Multi-output. Requires `attributeId` + `operation` (==, !=, >, <, >=, <=); reads the agent SoA at `r_<attr>[id]` |
@@ -281,6 +295,7 @@ exists purely to keep graphs readable without Sequence nodes. See
 | 105 | `addAgentToWorld` | Add Agent To World | `output` | Phase 2 of the two-phase spawn — commit a staged agent (from Create Agent's handle), marking it live (`alive=1`, liveCount++) so the simulation processes it. | `I: DO` `I: Handle` (int) / `O: NEXT` (flow) | Only meaningful inside the Agent Init Event. Calls the `_agentAddToWorld` host closure |
 | 106 | `setAgentPosition` | Set Agent Position | `output` | Set an agent's position by id — a spawn helper for a staged Create Agent handle (also works on a live agent). | `I: DO` `I: Agent` (int) `I: X` `I: Y` (float, inline); 3D adds `I: Z` / `O: NEXT` (flow) | In the Init Event the guard is range-only (a staged agent is `alive=0`); elsewhere it requires a live agent. `Z` hidden in 2D |
 | 107 | `setAgentRadius` | Set Agent Radius | `output` | Set an agent's radius (and growth target) by id — a spawn helper for a staged Create Agent handle (also works on a live agent). | `I: DO` `I: Agent` (int) `I: Radius` (float, inline) / `O: NEXT` (flow) | Writes both `_agentRadius` and `_agentTargetRadius` so the growth ramp doesn't drag it away |
+| 108 | `getSelfHandle` | Get Self Handle | `data` | The CURRENT agent's own handle (its id = the loop `idx`) — pass it to the by-id nodes (Get/Set Agent Attribute, Get Agent Position/Offset/Radius, Form/Break Bond) so a neighbour can reference back to me, or to compare a Get Nearby Agents id against self. | `O: Handle` (int) | Emits `idx`. Runs on all three agent targets (JS / WASM / WebGPU) |
 
 ### Hidden / auto-generated
 

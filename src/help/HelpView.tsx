@@ -766,6 +766,8 @@ export function HelpView() {
               <tr><td>Compare (Statement)</td><td>Comparison operators: ==, !=, &gt;, &lt;, &gt;=, &lt;=, <strong>Between</strong>, and <strong>Not Between</strong>. The between-family ops reveal a Y&#8322; input and two picklists for the lower (&gt;= or &gt;) and upper (&lt;= or &lt;) interval sides; <em>Not Between</em> fires when the value is outside the interval. A <strong>type selector</strong> (Numerical / Binary / Tag / Neighbor Index) swaps the inline operand widgets &mdash; pick <em>Tag</em> and a tag-attribute picker appears so you can compare against a tag option without a Get Constant node (non-numerical types are equality-only). Replaces the common Compare + Compare + AND chain.</td></tr>
               <tr><td>Logic Operator</td><td>AND, OR, XOR, NOT on binary values.</td></tr>
               <tr><td>Value Switch</td><td>Ternary value selector: outputs <em>If</em> when <em>Condition</em> is truthy, else <em>Else</em>. Pure value &mdash; no flow port, so it stays inline in the graph. Both inputs always evaluate; use a flow Conditional for short-circuit. Also works as a <em>conditional array selector</em>: wire two array producers (e.g. Filter Neighbors) into <em>If</em>/<em>Else</em> and the chosen array flows out of <em>Result</em> &mdash; handy for &ldquo;pick a random neighbour from set A or set B&rdquo;.</td></tr>
+              <tr><td>Make Vector / Break Vector</td><td>Bundle X / Y / Z scalars into a single <strong>vector</strong> value, and split one back into components (the Unreal/Blender Make &amp; Break pattern). Pass a whole 2D/3D vector on one wire &mdash; the Z component appears only in a 3D model. <em>JS engine only</em> (a model that uses them runs on the Debug/Reference target).</td></tr>
+              <tr><td>Vector Op</td><td>Vectorial math on vectors: <strong>Add, Subtract, Scale</strong> (&times; a scalar), <strong>Dot, Cross, Length, Normalize, Distance, Negate, Lerp</strong> &mdash; so you operate on whole vectors instead of touching each coordinate. <em>JS engine only.</em></td></tr>
             </tbody>
           </table>
 
@@ -808,6 +810,7 @@ export function HelpView() {
               <tr><td>Get Color Constant</td><td>Output fixed R, G, B values.</td></tr>
               <tr><td>Color Interpolate</td><td>Interpolate between two colors. Inputs: interpolation point T (0&ndash;1), From R/G/B, To R/G/B. Outputs: R, G, B. The <strong>curve</strong> dropdown controls the interpolation shape: Linear, Smoothstep, Ease-In Quadratic, Ease-Out Quadratic, Exponential, Logarithmic. Includes color picker widgets for &quot;Color From&quot; and &quot;Color To&quot; when the per-channel ports are not connected.</td></tr>
               <tr><td>Categorical Color</td><td>Map an integer <strong>Index</strong> to a flat RGB color from an editable N-entry palette &mdash; <em>discrete</em>, with no blending between entries (contrast Color Scale, which interpolates). Index <code>i</code> selects palette entry <code>i</code>; out-of-range indices use the default color. Outputs R, G, B. Used internally by Linked Output Mappings for tag attributes, and available as a node for hand-built graphs.</td></tr>
+              <tr><td>Make Color / Break Color</td><td>Bundle R / G / B / A channels into a single <strong>color</strong> value, and split one back into channels (the Unreal/Blender Make &amp; Break pattern) &mdash; pass a whole colour on one wire. A defaults to 255 (opaque). <em>JS engine only.</em></td></tr>
             </tbody>
           </table>
 
@@ -1222,6 +1225,10 @@ export function HelpView() {
             <li><strong>Get Self Position / Get Radius / Get Bond Degree / Neighbour Density</strong>
               &mdash; read the agent's geometry and its local crowding (how many other agents are
               within interaction range).</li>
+            <li><strong>Get Self Handle</strong> &mdash; the current agent's own id. Pass it to the
+              by-id nodes (Get/Set Agent Attribute, Get Agent Position, Form/Break Bond) so a
+              neighbour can reference back to you, or to compare a Get Nearby Agents id against
+              self.</li>
             <li><strong>Set Target Radius</strong> &mdash; set the size the agent grows toward;
               the engine ramps the actual radius each step. A grown agent is what divides.</li>
             <li><strong>Form Bond / Break Bond / For Each Bond</strong> &mdash; create or remove a
@@ -1263,7 +1270,9 @@ export function HelpView() {
               <strong> chemotaxis</strong> (force up a Field Gradient), or self-propulsion. With
               <strong> Momentum</strong> &gt; 0 the force changes velocity (flocking inertia). In a
               <strong> 3D</strong> model the position, force, and velocity nodes (Get/Set Agent
-              Position, Apply Force, Set Velocity, Get Self Position) expose a <code>Z</code> axis.</li>
+              Position, Apply Force, Set Velocity, Get Self Position) expose a <code>Z</code> axis.
+              Apply Force also has a <strong>Vector input</strong> toggle that takes a single force
+              vector (from Vector Op) instead of the X / Y / Z components.</li>
             <li><strong>Set Agent Attribute</strong> &mdash; write an attribute on another agent by
               id (signal a neighbour). And because Get Nearby Agents now supplies a target,
               <strong> Form Bond</strong> is fully graph-driven &mdash; bond to compatible
