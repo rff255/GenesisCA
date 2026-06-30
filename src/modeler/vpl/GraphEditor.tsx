@@ -1301,6 +1301,13 @@ export function GraphEditorInner() {
         if (srcIsNI && targetPort && targetPort.dataType !== 'neighborIndex' && targetPort.dataType !== 'any') {
           return false;
         }
+        // Composite-type (vector / color) compatibility — must match exactly (or
+        // 'any'): a scalar wired into a vector/color port would read `[..][0]` on
+        // a number at runtime. Mirrors the NeighborIndex guard above.
+        for (const ct of ['vector', 'color'] as const) {
+          if (targetPort?.dataType === ct && sourcePort && sourcePort.dataType !== ct && sourcePort.dataType !== 'any') return false;
+          if (sourcePort?.dataType === ct && targetPort && targetPort.dataType !== ct && targetPort.dataType !== 'any') return false;
+        }
       }
 
       // Prevent duplicate connections (same source+target+handles)

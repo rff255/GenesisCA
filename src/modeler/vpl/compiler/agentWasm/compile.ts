@@ -106,6 +106,7 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
   // self reads (SoA geometry + engine reductions)
   'getSelfPosition', 'getRadius', 'getBondDegree', 'neighbourDensity', 'getCurvature',
   // neighbour access
+  'getSelfHandle',
   'getNearbyAgents', 'forEachInArray', 'getAgentOffset', 'getVelocity',
   'getAgentPosition', 'getAgentRadius', 'getAgentAttribute',
   // agent-array tier
@@ -597,6 +598,11 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
     }
     case 'getBondDegree': {
       result = f64Result(() => { pushI32Elem(em, ctx.layout.i32['bondCount']!, ctx.idxLocal); em.i32ToF64(); });
+      break;
+    }
+    case 'getSelfHandle': {
+      // The current agent's own id = the loop index.
+      result = f64Result(() => { em.localGet(ctx.idxLocal); em.i32ToF64(); });
       break;
     }
     case 'neighbourDensity': {

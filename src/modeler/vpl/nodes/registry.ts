@@ -3,6 +3,7 @@ import { StepNode } from './StepNode';
 import { InitEventNode } from './InitEventNode';
 import { BehaviourStepNode } from './BehaviourStepNode';
 import { GetSelfPositionNode } from './GetSelfPositionNode';
+import { GetSelfHandleNode } from './GetSelfHandleNode';
 import { GetRadiusNode } from './GetRadiusNode';
 import { GetBondDegreeNode } from './GetBondDegreeNode';
 import { GetCurvatureNode } from './GetCurvatureNode';
@@ -58,6 +59,11 @@ import { GetModelAttributeNode } from './GetModelAttributeNode';
 import { GetRandomNode } from './GetRandomNode';
 import { GetColorConstantNode } from './GetColorConstantNode';
 import { ArithmeticOperatorNode } from './ArithmeticOperatorNode';
+import { MakeVectorNode } from './MakeVectorNode';
+import { BreakVectorNode } from './BreakVectorNode';
+import { VectorOpNode } from './VectorOpNode';
+import { MakeColorNode } from './MakeColorNode';
+import { BreakColorNode } from './BreakColorNode';
 import { ExpressionNode } from './ExpressionNode';
 import { GroupCountingNode } from './GroupCountingNode';
 import { GroupStatementNode } from './GroupStatementNode';
@@ -129,6 +135,7 @@ const ALL_NODES: NodeTypeDef[] = [
   SetAgentPositionNode,
   SetAgentRadiusNode,
   GetSelfPositionNode,
+  GetSelfHandleNode,
   GetRadiusNode,
   GetBondDegreeNode,
   GetCurvatureNode,
@@ -207,6 +214,9 @@ const ALL_NODES: NodeTypeDef[] = [
   StatementNode,
   LogicOperatorNode,
   ValueSwitchNode,
+  MakeVectorNode,
+  BreakVectorNode,
+  VectorOpNode,
   // Aggregation
   GroupCountingNode,
   GroupStatementNode,
@@ -233,6 +243,8 @@ const ALL_NODES: NodeTypeDef[] = [
   GetColorConstantNode,
   ColorScaleNode,
   CategoricalColorNode,
+  MakeColorNode,
+  BreakColorNode,
   // Indicators
   GetIndicatorNode,
   SetIndicatorNode,

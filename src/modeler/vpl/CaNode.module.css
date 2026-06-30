@@ -113,6 +113,24 @@
   transform-origin: center;
 }
 
+/* Vector value port — teal (the Make/Break Vector + Vector Op pin colour). */
+.handleVector {
+  width: 8px !important;
+  height: 8px !important;
+  background: #26c6da !important;
+  border: 2px solid #00838f !important;
+  transform-origin: center;
+}
+
+/* Color value port — pink (the Make/Break Color pin colour). */
+.handleColor {
+  width: 8px !important;
+  height: 8px !important;
+  background: #ec407a !important;
+  border: 2px solid #c2185b !important;
+  transform-origin: center;
+}
+
 /* Unconnected value ports: slightly darker than the node body so the
  * port reads as an 'empty hole'. */
 .handleUnconnected {
