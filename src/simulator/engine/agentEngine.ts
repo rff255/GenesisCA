@@ -194,6 +194,17 @@ export const AGENT_NEARBY_SCRATCH_SLOTS = 4;
  *  query radius. We reserve from that minimum edge (capped) so the runtime hash
  *  always fits; a degenerate config that still overflows hits the worker's
  *  fits-check + JS fallback. Pure — mirrors how the worker computes `binEdge`. */
+/** The maximum number of spatial-hash bins the engine will ever use in a single
+ *  step — a CONSTANT independent of the world size. `buildSpatialHash` coarsens
+ *  the bin edge so the per-step bin count never exceeds this, so the per-step
+ *  hash cost (the `binStart.fill` + the WASM copy-in) is bounded REGARDLESS of
+ *  how large the grid / agent world is. Filling/copying ~64K ints per step is a
+ *  fraction of a millisecond, so the agent loop cost tracks the AGENT COUNT (and
+ *  their spread), not the environment size — the property a sparse off-lattice
+ *  population should have. (Was an effectively-unbounded 1<<20 world-derived
+ *  reserve, which made a big grid silently slow the agents + reserve ~MBs.) */
+export const AGENT_HASH_BIN_CAP = 1 << 16; // 65,536 bins
+
 export function computeAgentMaxHashBins(
   worldWidth: number, worldHeight: number, worldDepth: number,
   interactionRange: number, defaultRadius: number, neighbourQueryRadius: number,
@@ -204,10 +215,11 @@ export function computeAgentMaxHashBins(
   const nx = Math.max(1, Math.floor(worldWidth / minEdge));
   const ny = Math.max(1, Math.floor(worldHeight / minEdge));
   const nz = is3d ? Math.max(1, Math.floor(worldDepth / minEdge)) : 1;
-  // Hard cap so a pathological config can't reserve gigabytes; the fits-check
-  // falls back to JS beyond it.
-  const HARD_CAP = 1 << 20; // 1,048,576 bins
-  return Math.min(HARD_CAP, nx * ny * nz);
+  // Reserve = min(world-bin-count, the constant cap). A small world reserves only
+  // what it needs; a huge world reserves the cap (and the per-step hash coarsens
+  // its bin edge to fit, see buildSpatialHash) — so the reserve never blows up
+  // with the world size (the "arbitrary limit scaling the volume up" report).
+  return Math.min(AGENT_HASH_BIN_CAP, nx * ny * nz);
 }
 
 const AGENT_F64_FIELDS = [
@@ -1341,6 +1353,13 @@ export interface SpatialHash {
   binSizeX: number; binSizeY: number;
   /** z bin edge (1 in 2D, unused). */
   binSizeZ: number;
+  /** World-coordinate ORIGIN of bin (0,0,0). For a BOUNDED world the grid is
+   *  anchored to the agents' bounding box (so the bin count + per-step cost scale
+   *  with the agents' spread, NOT the world size). For a TORUS world this is
+   *  (0,0,0) — the grid spans the whole world so the wrap-around stencil is
+   *  correct — which makes the bin math byte-identical to the pre-origin code. A
+   *  query computes its bin as `floor((pos - origin) / binSize)`. */
+  originX: number; originY: number; originZ: number;
   binStart: Int32Array;   // length nBins+1 (prefix sums)
   binAgents: Int32Array;  // length liveCount (agent ids grouped by bin)
 }
@@ -1349,19 +1368,74 @@ export interface SpatialHash {
 interface HashScratch { binStart: Int32Array; binAgents: Int32Array; cursor: Int32Array; }
 const hashScratchMap = new WeakMap<AgentStore, HashScratch>();
 
-export function buildSpatialHash(store: AgentStore, binSize: number, W: number, H: number, D: number): SpatialHash | null {
+export function buildSpatialHash(
+  store: AgentStore, binSize: number, W: number, H: number, D: number,
+  torus = false, maxBins = AGENT_HASH_BIN_CAP,
+): SpatialHash | null {
   const is3d = D > 1;
-  const nBinsX = Math.floor(W / binSize);
-  const nBinsY = Math.floor(H / binSize);
-  // 3D adds a z-axis bin requirement: a shallow volume (D < 3·binSize → nBinsZ<3)
-  // falls back to all-pairs even in a large W×H model (F1 — documented; PR7b
-  // inherits the same threshold). nBinsZ stays 1 in 2D (no z-axis binning).
-  const nBinsZ = is3d ? Math.floor(D / binSize) : 1;
-  if (nBinsX < 3 || nBinsY < 3 || (is3d && nBinsZ < 3)) return null; // tiny world → all-pairs fallback
-  const binSizeX = W / nBinsX, binSizeY = H / nBinsY; // exact tiling, ≥ binSize
-  const binSizeZ = is3d ? D / nBinsZ : 1;
-  const nBins = nBinsX * nBinsY * nBinsZ;
   const hw = store.highWater;
+  const x = store.x, y = store.y, z = store.z, alive = store.alive;
+
+  // --- choose the grid ORIGIN + per-axis EXTENT -----------------------------
+  // TORUS: the grid spans the whole world from origin (0,0,0) so the wrap-around
+  // stencil is correct (origin 0 → the bin math is byte-identical to the
+  // pre-origin code). BOUNDED: anchor the grid to the agents' bounding box, so
+  // the bin count (hence the per-step cost) tracks the agents' SPREAD, not the
+  // world size — a tissue clustered in a corner of a huge volume pays for its own
+  // extent, not the volume's.
+  let ox = 0, oy = 0, oz = 0;
+  let extX = W, extY = H, extZ = is3d ? D : 1;
+  if (!torus) {
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    let any = false;
+    for (let i = 0; i < hw; i++) {
+      if (!alive[i]) continue;
+      any = true;
+      const xi = x[i]!, yi = y[i]!;
+      if (xi < minX) minX = xi; if (xi > maxX) maxX = xi;
+      if (yi < minY) minY = yi; if (yi > maxY) maxY = yi;
+      if (is3d) { const zi = z[i]!; if (zi < minZ) minZ = zi; if (zi > maxZ) maxZ = zi; }
+    }
+    if (!any) return null; // no agents → all-pairs (a no-op anyway)
+    ox = minX; oy = minY; oz = is3d ? minZ : 0;
+    extX = Math.max(0, maxX - minX); extY = Math.max(0, maxY - minY);
+    extZ = is3d ? Math.max(0, maxZ - minZ) : 1;
+  }
+
+  // --- coarsen the bin edge so the total bin count fits `maxBins` ------------
+  // The natural edge is `binSize` (≥ the interaction cutoff, so the 3×3 stencil
+  // is sound). If that yields more bins than the reserve, grow the edge until it
+  // fits (a larger edge is still sound — the stencil only covers MORE area).
+  const dim = is3d ? 3 : 2;
+  let edge = Math.max(1e-3, binSize);
+  const binsAt = (e: number): number => {
+    const nx = torus ? Math.floor(W / e) : Math.floor(extX / e) + 1;
+    const ny = torus ? Math.floor(H / e) : Math.floor(extY / e) + 1;
+    const nz = is3d ? (torus ? Math.floor(D / e) : Math.floor(extZ / e) + 1) : 1;
+    return Math.max(1, nx) * Math.max(1, ny) * Math.max(1, nz);
+  };
+  for (let guard = 0; guard < 64 && binsAt(edge) > maxBins; guard++) {
+    const factor = Math.pow(binsAt(edge) / maxBins, 1 / dim);
+    edge *= Math.max(1.0625, factor); // grow at least a little so the loop terminates
+  }
+
+  // --- final bin dimensions -------------------------------------------------
+  // TORUS keeps the exact-tiling edge (binSizeX = W/nBinsX) so the wrap is seam-
+  // less; BOUNDED uses the (coarsened) edge directly + the bbox origin.
+  let nBinsX: number, nBinsY: number, nBinsZ: number;
+  let binSizeX: number, binSizeY: number, binSizeZ: number;
+  if (torus) {
+    nBinsX = Math.floor(W / edge); nBinsY = Math.floor(H / edge); nBinsZ = is3d ? Math.floor(D / edge) : 1;
+    if (nBinsX < 3 || nBinsY < 3 || (is3d && nBinsZ < 3)) return null; // tiny world → all-pairs
+    binSizeX = W / nBinsX; binSizeY = H / nBinsY; binSizeZ = is3d ? D / nBinsZ : 1;
+  } else {
+    nBinsX = Math.floor(extX / edge) + 1; nBinsY = Math.floor(extY / edge) + 1;
+    nBinsZ = is3d ? Math.floor(extZ / edge) + 1 : 1;
+    if (nBinsX < 3 || nBinsY < 3 || (is3d && nBinsZ < 3)) return null; // tiny spread → all-pairs (cheap)
+    binSizeX = edge; binSizeY = edge; binSizeZ = is3d ? edge : 1;
+  }
+  const nBins = nBinsX * nBinsY * nBinsZ;
 
   let sc = hashScratchMap.get(store);
   if (!sc || sc.binStart.length < nBins + 1 || sc.binAgents.length < store.maxAgents) {
@@ -1371,18 +1445,18 @@ export function buildSpatialHash(store: AgentStore, binSize: number, W: number, 
   const binStart = sc.binStart, binAgents = sc.binAgents, cursor = sc.cursor;
   binStart.fill(0, 0, nBins + 1);
 
-  const x = store.x, y = store.y, z = store.z, alive = store.alive;
-  // binOf — verbatim `by*nBinsX+bx` in 2D, z-major `(bz*nBinsY+by)*nBinsX+bx` in 3D.
+  // binOf — `floor((pos-origin)/binSize)` (origin 0 on a torus → byte-identical
+  // to the old `floor(pos/binSize)`). z-major `(bz*nBinsY+by)*nBinsX+bx` in 3D.
   const binOf = is3d
     ? (i: number): number => {
-        let bx = (x[i]! / binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
-        let by = (y[i]! / binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
-        let bz = (z[i]! / binSizeZ) | 0; if (bz < 0) bz = 0; else if (bz >= nBinsZ) bz = nBinsZ - 1;
+        let bx = ((x[i]! - ox) / binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
+        let by = ((y[i]! - oy) / binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
+        let bz = ((z[i]! - oz) / binSizeZ) | 0; if (bz < 0) bz = 0; else if (bz >= nBinsZ) bz = nBinsZ - 1;
         return (bz * nBinsY + by) * nBinsX + bx;
       }
     : (i: number): number => {
-        let bx = (x[i]! / binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
-        let by = (y[i]! / binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
+        let bx = ((x[i]! - ox) / binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
+        let by = ((y[i]! - oy) / binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
         return by * nBinsX + bx;
       };
   // count → prefix sum → fill
@@ -1390,7 +1464,7 @@ export function buildSpatialHash(store: AgentStore, binSize: number, W: number, 
   for (let b = 0; b < nBins; b++) { binStart[b + 1]! += binStart[b]!; cursor[b] = binStart[b]!; }
   for (let i = 0; i < hw; i++) { if (!alive[i]) continue; const b = binOf(i); binAgents[cursor[b]!++] = i; }
 
-  return { nBinsX, nBinsY, nBinsZ, binSizeX, binSizeY, binSizeZ, binStart, binAgents };
+  return { nBinsX, nBinsY, nBinsZ, binSizeX, binSizeY, binSizeZ, originX: ox, originY: oy, originZ: oz, binStart, binAgents };
 }
 
 export function snapshotAgentsForRender(store: AgentStore): AgentRenderSnapshot {

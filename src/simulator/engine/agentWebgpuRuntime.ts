@@ -62,6 +62,10 @@ export interface AgentForceDispatchParams {
   nBinsZ?: number;
   binSizeZ?: number;
   fieldD?: number;
+  /** The bbox-anchored hash grid origin (0 on a torus). */
+  originX?: number;
+  originY?: number;
+  originZ?: number;
 }
 
 interface PooledBuffer { buffer: GPUBuffer; size: number; inUse: boolean }
@@ -133,8 +137,11 @@ function colorsBytes(layout: AgentWebGPULayout): number { return Math.max(4, lay
 // Control: 8×u32 + 6×f32 = 56 → round to 16-byte alignment (64). ForceControl:
 // 6×u32 + 11×f32 = 68 → round to 80. WebGPU requires uniform-struct size be a
 // multiple of 16; over-allocating to the next 16 is safe.
-const CONTROL_BYTES = 64;
-const FORCE_CONTROL_BYTES = 80;
+// +16 bytes each for the bbox-anchored hash grid origin (originX/Y/Z + a pad,
+// 16-byte aligned). Control was 14 u32/f32 (→64) + origin block = 80; ForceControl
+// was 21 (→80, with WGSL's 16-byte round-up) + origin block = 96.
+const CONTROL_BYTES = 80;
+const FORCE_CONTROL_BYTES = 96;
 
 // ---------------------------------------------------------------------------
 // Create.
@@ -427,11 +434,13 @@ export function uploadAgentControl(
   rt: AgentWebGPURuntime,
   p: { highWater: number; hashValid: number; nBinsX: number; nBinsY: number;
        fieldTorus: number; binSizeX: number; binSizeY: number; fieldW: number; fieldH: number;
-       nBinsZ?: number; binSizeZ?: number; fieldD?: number },
+       nBinsZ?: number; binSizeZ?: number; fieldD?: number;
+       originX?: number; originY?: number; originZ?: number },
 ): void {
   // struct Control { highWater:u32, maxAgents:u32, hashValid:u32, nBinsX:u32,
   //   nBinsY:u32, fieldTorus:u32, binSizeX:f32, binSizeY:f32, fieldW:f32, fieldH:f32,
-  //   maxBonds:u32, nBinsZ:u32, binSizeZ:f32, fieldD:f32 }
+  //   maxBonds:u32, nBinsZ:u32, binSizeZ:f32, fieldD:f32, originX:f32, originY:f32,
+  //   originZ:f32, _pad:f32 }  (the bbox-anchored hash grid origin)
   const ab = new ArrayBuffer(CONTROL_BYTES);
   const u = new Uint32Array(ab), fl = new Float32Array(ab);
   u[0] = p.highWater >>> 0;
@@ -448,6 +457,9 @@ export function uploadAgentControl(
   u[11] = (p.nBinsZ ?? 1) >>> 0;
   fl[12] = p.binSizeZ ?? 1;
   fl[13] = p.fieldD ?? 1;
+  fl[14] = p.originX ?? 0;
+  fl[15] = p.originY ?? 0;
+  fl[16] = p.originZ ?? 0;
   rt.device.queue.writeBuffer(rt.controlBuf, 0, ab);
 }
 
@@ -577,6 +589,9 @@ export function uploadAgentForceControl(rt: AgentWebGPURuntime, highWater: numbe
   u[17] = (fp.nBinsZ ?? 1) >>> 0;
   fl[18] = fp.binSizeZ ?? 1;
   fl[19] = fp.fieldD ?? 1;
+  fl[20] = fp.originX ?? 0;
+  fl[21] = fp.originY ?? 0;
+  fl[22] = fp.originZ ?? 0;
   rt.device.queue.writeBuffer(rt.forceControlBuf, 0, ab);
 }
 

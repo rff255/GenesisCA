@@ -29,7 +29,7 @@ import {
   createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot, freeStagedSlot,
   snapshotAgentsForRender, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
   formBond, breakBond, hasBond, sweepStaleBonds, divideAgent,
-  primeAgentAttrWrite, swapAgentAttrs, computeAgentMaxHashBins,
+  primeAgentAttrWrite, swapAgentAttrs, computeAgentMaxHashBins, AGENT_HASH_BIN_CAP,
   type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec, type SpatialHash,
   type AgentLayoutExtras,
 } from './agentEngine';
@@ -171,6 +171,10 @@ interface InitMsg {
    *  co-resident agent SoA + bond store) from `centerBased`. The lattice grid
    *  is always allocated too (agents are additive on top — v1 requires a grid). */
   agents?: boolean;
+  /** CA-grid topology toggle. Absent → true. When false (an agents-only model)
+   *  the worker skips the cell step + the neighbour-index tables so a large grid
+   *  costs nothing (the agent loop is the only simulation). */
+  gridCells?: boolean;
   centerBased?: CenterBasedConfig;
   /** Compiled agent rule-graph functions (Bond-Graph Agents, JS-only v1).
    *  `behaviourFn` runs once per agent each generation; division/bond fns land
@@ -475,6 +479,9 @@ let orderArray: Int32Array | null = null;
 // --- Bond-Graph Agents (co-resident agent engine; JS-only v1) ---
 let agentStore: AgentStore | null = null;
 let agentsEnabled = false;
+/** CA-grid topology toggle (from the init message; absent → true). When false
+ *  the worker skips the cell step + neighbour-index build (agents-only model). */
+let gridCellsEnabled = true;
 /** Runtime per-layer "simulate" toggles (the simulator Layers panel; setSimLayers
  *  message). Default true → the generation loop runs both the cell step and the
  *  agent step exactly as before. The user can freeze either layer mid-run. */
@@ -492,6 +499,11 @@ let agentInitFn: Function | null = null;
 /** The current-step spatial hash, built BEFORE the behaviour fn so Get Nearby
  *  Agents can query it, then reused by the force pass. Null for a tiny world. */
 let currentAgentHash: SpatialHash | null = null;
+/** The per-step spatial-hash bin budget (= the baked reserve for the wasmBacked
+ *  store, so the per-step bin count never exceeds it → no fits-check fallback).
+ *  buildSpatialHash coarsens its bin edge to fit this, so the per-step hash cost
+ *  is bounded regardless of the world size. Set in initAgents from the LIVE dims. */
+let agentHashReserve = AGENT_HASH_BIN_CAP;
 const EMPTY_I32 = new Int32Array(0);
 /** Compiled Division Event function (single-agent; runs per daughter after a
  *  division). Null when the agent graph has no divisionEvent root. */
@@ -611,14 +623,17 @@ function initAgents(): void {
   // agent world) dims + the force config — the SAME formula the compiler uses
   // (agentMaxHashBinsForModel), so the worker's store layout matches the compiled
   // module's offsets. Only meaningful under wasmBacked; 0 otherwise.
-  const agentMaxHashBins = wantWasmBacked
-    ? computeAgentMaxHashBins(
-        width, height, depth,
-        cbNum(centerBasedConfig, 'interactionRange'),
-        cbNum(centerBasedConfig, 'defaultRadius'),
-        cbNum(centerBasedConfig, 'neighbourQueryRadius'),
-      )
-    : 0;
+  // The hash bin budget — derived from the LIVE dims (= the model dims; a resize
+  // reinits with new dims, recompiled the same way), so it equals the WASM-baked
+  // reserve. Computed for ALL targets (the JS path also caps its per-step bin
+  // count via buildSpatialHash, so a big grid never slows the JS agent loop).
+  agentHashReserve = computeAgentMaxHashBins(
+    width, height, depth,
+    cbNum(centerBasedConfig, 'interactionRange'),
+    cbNum(centerBasedConfig, 'defaultRadius'),
+    cbNum(centerBasedConfig, 'neighbourQueryRadius'),
+  );
+  const agentMaxHashBins = wantWasmBacked ? agentHashReserve : 0;
   // FULL-COVERAGE: the layout extras the WASM module compiled against (model attrs
   // / indicators / lookup tables / cell fields / array scratch). MUST match the
   // compiler's `buildAgentLayoutExtras(model)` — the worker's `fieldTotal` is
@@ -957,6 +972,7 @@ function buildAgentLoopArgs(s: AgentStore): unknown[] {
     hash ? 1 : 0,
     hash ? hash.binStart : EMPTY_I32, hash ? hash.binAgents : EMPTY_I32,
     hash ? hash.nBinsX : 0, hash ? hash.nBinsY : 0, hash ? hash.binSizeX : 1, hash ? hash.binSizeY : 1,
+    hash ? hash.originX : 0, hash ? hash.originY : 0,
     s.divideRequest, s.divideAxisX, s.divideAxisY, s.divideAsym, s.killRequest,
     s.bondPartner, s.bondPartnerEpoch, s.bondRestLength, s.bondStiffness, s.bondTypeLabel, s.maxBonds,
     s.bondFormReq, s.bondFormL, s.bondFormK, s.bondBreakReq,
@@ -975,7 +991,7 @@ function buildAgentLoopArgs(s: AgentStore): unknown[] {
   // `is3d` block (z, vz, forceZ, divideAxisZ, worldDepth, then the Z hash dims so
   // Get Nearby Agents can do a 3D query). When hash is null the 3D query is
   // unreachable (_hashValid 0 → all-pairs), so the 1-fallbacks are unused.
-  if (s.worldDepth > 1) args.push(s.z, s.vz, s.forceZ, s.divideAxisZ, s.worldDepth, hash ? hash.nBinsZ : 1, hash ? hash.binSizeZ : 1);
+  if (s.worldDepth > 1) args.push(s.z, s.vz, s.forceZ, s.divideAxisZ, s.worldDepth, hash ? hash.nBinsZ : 1, hash ? hash.binSizeZ : 1, hash ? hash.originZ : 0);
   return args;
 }
 
@@ -1125,7 +1141,7 @@ function runAgentStep(): void {
   let maxR = cbNum(cfg, 'defaultRadius');
   for (let i = 0; i < hw; i++) { if (alive[i] && rad[i]! > maxR) maxR = rad[i]!; }
   const binEdge = Math.max(range * 2 * maxR, cbNum(cfg, 'neighbourQueryRadius'));
-  const hash = buildSpatialHash(s, Math.max(1e-3, binEdge), W, H, D);
+  const hash = buildSpatialHash(s, Math.max(1e-3, binEdge), W, H, D, boundaryTreatment === 'torus', agentHashReserve);
   currentAgentHash = hash;
 
   // Compiled behaviour (reads positions + the PREVIOUS step's density — a
@@ -1156,6 +1172,7 @@ function runAgentStep(): void {
   // copied in + the store is wasmBacked). Captured in the success branch below.
   let forcePassReady = false;
   let fpHashValid = 0, fpNBinsX = 0, fpNBinsY = 0, fpNBinsZ = 0, fpBinSizeX = 1, fpBinSizeY = 1, fpBinSizeZ = 1;
+  let fpOriginX = 0, fpOriginY = 0, fpOriginZ = 0;
   if (agentBehaviourWasmFn && s.wasmBacked && s.memory && s.layout) {
     const fits = !hash || (hash.nBinsX * hash.nBinsY * hash.nBinsZ + 1) <= (s.layout.maxHashBins + 1);
     if (!fits) {
@@ -1175,10 +1192,12 @@ function runAgentStep(): void {
         // (2) copy the hash into the reserved views (only the live prefix). The
         // hash DIMS go as args (no per-step memory write for the scalars).
         let hashValid = 0, nBinsX = 0, nBinsY = 0, nBinsZ = 0, binSizeX = 1, binSizeY = 1, binSizeZ = 1;
+        let originX = 0, originY = 0, originZ = 0;
         if (hash) {
           hashValid = 1;
           nBinsX = hash.nBinsX; nBinsY = hash.nBinsY; nBinsZ = hash.nBinsZ;
           binSizeX = hash.binSizeX; binSizeY = hash.binSizeY; binSizeZ = hash.binSizeZ;
+          originX = hash.originX; originY = hash.originY; originZ = hash.originZ;
           const nBins = nBinsX * nBinsY * nBinsZ;
           const dstStart = new Int32Array(buf, L.hashBinStartOffset, nBins + 1);
           dstStart.set(hash.binStart.subarray(0, nBins + 1));
@@ -1192,7 +1211,7 @@ function runAgentStep(): void {
         // the closed-feedback source; the WASM behaviour reads + writes them, and we
         // copy the deposit back out AFTER (Decision D-FIELD).
         copyAgentExternalRegionsIn(s);
-        agentBehaviourWasmFn(s.highWater, hashValid, nBinsX, nBinsY, nBinsZ, binSizeX, binSizeY, binSizeZ, W, H, D, torus ? 1 : 0);
+        agentBehaviourWasmFn(s.highWater, hashValid, nBinsX, nBinsY, nBinsZ, binSizeX, binSizeY, binSizeZ, W, H, D, torus ? 1 : 0, originX, originY, originZ);
         // (3) read the advanced RNG state back so the shared stream stays in lockstep.
         rngState[0] = new Uint32Array(buf, L.rngStateOffset, 1)[0]!;
         // copy the field deposit + indicators back out (the cell CA step incorporates
@@ -1204,6 +1223,7 @@ function runAgentStep(): void {
         forcePassReady = true;
         fpHashValid = hashValid; fpNBinsX = nBinsX; fpNBinsY = nBinsY; fpNBinsZ = nBinsZ;
         fpBinSizeX = binSizeX; fpBinSizeY = binSizeY; fpBinSizeZ = binSizeZ;
+        fpOriginX = originX; fpOriginY = originY; fpOriginZ = originZ;
       } catch (e) {
         self.postMessage({ type: 'error', message: '[agents] WASM behaviour run failed, falling back to JS: ' + ((e as Error)?.message || e) });
         agentBehaviourWasmFn = null;
@@ -1241,6 +1261,7 @@ function runAgentStep(): void {
         fpBinSizeX, fpBinSizeY, fpBinSizeZ,
         dtOverEta, muR, muA, range, momentum, maxSpeed, growthRate,
         W, H, D, bonding ? 1 : 0, torus ? 1 : 0,
+        fpOriginX, fpOriginY, fpOriginZ,
       );
       ranForceWasm = true;
     } catch (e) {
@@ -1271,9 +1292,9 @@ function runAgentStep(): void {
       if (hash) {
         const nBinsX = hash.nBinsX, nBinsY = hash.nBinsY, nBinsZ = hash.nBinsZ;
         const binStart = hash.binStart, binAgents = hash.binAgents;
-        let bx = (xi / hash.binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
-        let by = (yi / hash.binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
-        let bz = (zi / hash.binSizeZ) | 0; if (bz < 0) bz = 0; else if (bz >= nBinsZ) bz = nBinsZ - 1;
+        let bx = ((xi - hash.originX) / hash.binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
+        let by = ((yi - hash.originY) / hash.binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
+        let bz = ((zi - hash.originZ) / hash.binSizeZ) | 0; if (bz < 0) bz = 0; else if (bz >= nBinsZ) bz = nBinsZ - 1;
         for (let ddz = -1; ddz <= 1; ddz++) {
           for (let ddy = -1; ddy <= 1; ddy++) {
             for (let ddx = -1; ddx <= 1; ddx++) {
@@ -1389,8 +1410,8 @@ function runAgentStep(): void {
       if (hash) {
         const nBinsX = hash.nBinsX, nBinsY = hash.nBinsY;
         const binStart = hash.binStart, binAgents = hash.binAgents;
-        let bx = (xi / hash.binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
-        let by = (yi / hash.binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
+        let bx = ((xi - hash.originX) / hash.binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
+        let by = ((yi - hash.originY) / hash.binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
         for (let ddy = -1; ddy <= 1; ddy++) {
           for (let ddx = -1; ddx <= 1; ddx++) {
             let nbx = bx + ddx, nby = by + ddy;
@@ -1536,7 +1557,7 @@ async function runAgentStepWebGPU(): Promise<boolean> {
   let maxR = cbNum(cfg, 'defaultRadius');
   for (let i = 0; i < hw; i++) { if (alive[i] && rad[i]! > maxR) maxR = rad[i]!; }
   const binEdge = Math.max(range * 2 * maxR, cbNum(cfg, 'neighbourQueryRadius'));
-  const hash = buildSpatialHash(s, Math.max(1e-3, binEdge), W, H, s.worldDepth);
+  const hash = buildSpatialHash(s, Math.max(1e-3, binEdge), W, H, s.worldDepth, boundaryTreatment === 'torus', agentHashReserve);
   currentAgentHash = hash;
 
   // Prime the sync attr write buffer (no-op in async agent mode). Keeps the CPU
@@ -1577,6 +1598,7 @@ async function runAgentStepWebGPU(): Promise<boolean> {
     binSizeX: hash ? hash.binSizeX : 1, binSizeY: hash ? hash.binSizeY : 1,
     fieldW: W, fieldH: H,
     nBinsZ: hash ? hash.nBinsZ : 1, binSizeZ: hash ? hash.binSizeZ : 1, fieldD: s.worldDepth,
+    originX: hash ? hash.originX : 0, originY: hash ? hash.originY : 0, originZ: hash ? hash.originZ : 0,
   });
   uploadAgentForceControl(rt, hw, {
     hashValid, nBinsX: hash ? hash.nBinsX : 0, nBinsY: hash ? hash.nBinsY : 0,
@@ -1584,6 +1606,7 @@ async function runAgentStepWebGPU(): Promise<boolean> {
     dtOverEta: dt / eta, muR, muA, range, momentum, maxSpeed, growthRate,
     fieldW: W, fieldH: H, bonding: bonding ? 1 : 0, torus: torus ? 1 : 0,
     nBinsZ: hash ? hash.nBinsZ : 1, binSizeZ: hash ? hash.binSizeZ : 1, fieldD: s.worldDepth,
+    originX: hash ? hash.originX : 0, originY: hash ? hash.originY : 0, originZ: hash ? hash.originZ : 0,
   });
 
   // G5 field bridge — upload the cell field snapshot + prime the atomic deposit
@@ -1722,7 +1745,7 @@ function runAgentStructuralPhase(): void {
     const z = s.z, halfD = D / 2;
     let maxR = cbNum(cfg, 'defaultRadius');
     for (let i = 0; i < hw; i++) { if (alive[i] && rad[i]! > maxR) maxR = rad[i]!; }
-    const hash = buildSpatialHash(s, Math.max(1e-3, bMul * 2 * maxR), W, H, D);
+    const hash = buildSpatialHash(s, Math.max(1e-3, bMul * 2 * maxR), W, H, D, boundaryTreatment === 'torus', agentHashReserve);
     const tryForm = (i: number, j: number) => {
       if (j <= i || !alive[j]) return;
       let dx = x[j]! - x[i]!, dy = y[j]! - y[i]!;
@@ -1743,14 +1766,14 @@ function runAgentStructuralPhase(): void {
       if (d < fMul * contact) formBond(s, i, j, contact, lambda);
     };
     if (hash) {
-      const { nBinsX, nBinsY, nBinsZ, binStart, binAgents, binSizeX, binSizeY, binSizeZ } = hash;
+      const { nBinsX, nBinsY, nBinsZ, binStart, binAgents, binSizeX, binSizeY, binSizeZ, originX, originY, originZ } = hash;
       if (nBinsZ > 1) {
         // 3D form pass — 3×3×3 stencil over the z-major hash, torus-wrapped.
         for (let i = 0; i < hw; i++) {
           if (!alive[i]) continue;
-          let bx = (x[i]! / binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
-          let by = (y[i]! / binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
-          let bz = (z[i]! / binSizeZ) | 0; if (bz < 0) bz = 0; else if (bz >= nBinsZ) bz = nBinsZ - 1;
+          let bx = ((x[i]! - originX) / binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
+          let by = ((y[i]! - originY) / binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
+          let bz = ((z[i]! - originZ) / binSizeZ) | 0; if (bz < 0) bz = 0; else if (bz >= nBinsZ) bz = nBinsZ - 1;
           for (let ddz = -1; ddz <= 1; ddz++) for (let ddy = -1; ddy <= 1; ddy++) for (let ddx = -1; ddx <= 1; ddx++) {
             let nbx = bx + ddx, nby = by + ddy, nbz = bz + ddz;
             if (torus) { nbx = ((nbx % nBinsX) + nBinsX) % nBinsX; nby = ((nby % nBinsY) + nBinsY) % nBinsY; nbz = ((nbz % nBinsZ) + nBinsZ) % nBinsZ; }
@@ -1762,8 +1785,8 @@ function runAgentStructuralPhase(): void {
       } else {
         for (let i = 0; i < hw; i++) {
           if (!alive[i]) continue;
-          let bx = (x[i]! / binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
-          let by = (y[i]! / binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
+          let bx = ((x[i]! - originX) / binSizeX) | 0; if (bx < 0) bx = 0; else if (bx >= nBinsX) bx = nBinsX - 1;
+          let by = ((y[i]! - originY) / binSizeY) | 0; if (by < 0) by = 0; else if (by >= nBinsY) by = nBinsY - 1;
           for (let ddy = -1; ddy <= 1; ddy++) for (let ddx = -1; ddx <= 1; ddx++) {
             let nbx = bx + ddx, nby = by + ddy;
             if (torus) { nbx = ((nbx % nBinsX) + nBinsX) % nBinsX; nby = ((nby % nBinsY) + nBinsY) % nBinsY; }
@@ -3993,8 +4016,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       hasGlyphs = !!(msg as InitMsg).hasGlyphs;
       // initGrid first because it allocates wasmMemory + computes layout that
       // initIndicators / buildNeighborIndices need to create their views over.
+      gridCellsEnabled = (msg as InitMsg).gridCells !== false;
       initGrid();
-      buildNeighborIndices();
+      // Skip the (potentially large) neighbour-index tables when the CA grid is
+      // off — no cell step queries them in an agents-only model.
+      if (gridCellsEnabled) buildNeighborIndices();
       initIndicators(msg.indicators || []);
       // After memory is allocated, sync model attrs + active viewer ID into it
       // so WASM emitters that read those regions see meaningful values.
@@ -4151,7 +4177,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
                 gpuOwnsAttrs = false;
               }
             }
-            if (simulateCells) runStepWebGPU();      // Layers panel: freeze the cell step
+            if (simulateCells && gridCellsEnabled) runStepWebGPU();      // Layers panel / agents-only: freeze the cell step
             const isLast = i === msg.count - 1;
             const shouldCheck = stopMessages.length > 0 && (k === 1 || isLast || (i % k) === (k - 1));
             if (shouldCheck) {
@@ -4200,7 +4226,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
               const ran = await runAgentStepWebGPU();
               if (!ran) runAgentStep();   // GPU bailed (hash overflow / failure) → JS this step
             }
-            if (stepFn && simulateCells) runStep();
+            if (stepFn && simulateCells && gridCellsEnabled) runStep();
             const rawStop = stopFlag[0] ?? 0;
             if (rawStop !== 0) {
               const idx = rawStop - 1;
@@ -4231,7 +4257,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // Layers panel (req 1): freeze either layer at runtime. Freezing agents
         // also stops their cell-field deposit (it lives inside runAgentStep).
         if (agentStore && simulateAgents) runAgentStep();
-        if (stepFn && simulateCells) runStep();
+        if (stepFn && simulateCells && gridCellsEnabled) runStep();
         const rawStop = stopFlag[0] ?? 0;
         if (rawStop !== 0) {
           const idx = rawStop - 1;
@@ -5230,8 +5256,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         for (let i = 0; i < olen; i++) orderArray[i] = srcOrder[i]!;
       }
 
-      // Rebuild neighbor indices for constant boundary sentinel
-      buildNeighborIndices();
+      // Rebuild neighbor indices for constant boundary sentinel (skip when the
+      // CA grid is off — no cell step uses them).
+      if (gridCellsEnabled) buildNeighborIndices();
 
       // Bond-Graph Agents: restore the agent SoA + bond store. Reject LOUDLY on
       // a structural mismatch (the holey/ragged store can't be silently

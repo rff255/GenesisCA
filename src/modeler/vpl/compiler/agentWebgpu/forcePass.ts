@@ -55,6 +55,10 @@ function emitForceControlStruct(): string {
   nBinsZ     : u32,
   binSizeZ   : f32,
   fieldD     : f32,
+  originX    : f32,
+  originY    : f32,
+  originZ    : f32,
+  _pad0      : f32,
 };`;
 }
 
@@ -112,9 +116,9 @@ export function emitAgentForcePassWGSL(layout: AgentWebGPULayout): string {
   // The hash stencil — 3×3 (2D) or 3×3×3 (3D); the 3D bin index is
   // (nbz·nBinsY + nby)·nBinsX + nbx.
   const stencil = is3d ? `
-    var bx: i32 = clamp(i32(xi / fc.binSizeX), 0, i32(fc.nBinsX) - 1);
-    var by: i32 = clamp(i32(yi / fc.binSizeY), 0, i32(fc.nBinsY) - 1);
-    var bz: i32 = clamp(i32(zi / fc.binSizeZ), 0, i32(fc.nBinsZ) - 1);
+    var bx: i32 = clamp(i32((xi - fc.originX) / fc.binSizeX), 0, i32(fc.nBinsX) - 1);
+    var by: i32 = clamp(i32((yi - fc.originY) / fc.binSizeY), 0, i32(fc.nBinsY) - 1);
+    var bz: i32 = clamp(i32((zi - fc.originZ) / fc.binSizeZ), 0, i32(fc.nBinsZ) - 1);
     for (var ez: i32 = -1; ez <= 1; ez = ez + 1) {
     for (var ey: i32 = -1; ey <= 1; ey = ey + 1) {
     for (var ex: i32 = -1; ex <= 1; ex = ex + 1) {
@@ -136,9 +140,9 @@ export function emitAgentForcePassWGSL(layout: AgentWebGPULayout): string {
         }
       }
     } } }` : `
-    var bx: i32 = i32(xi / fc.binSizeX);
+    var bx: i32 = i32((xi - fc.originX) / fc.binSizeX);
     bx = clamp(bx, 0, i32(fc.nBinsX) - 1);
-    var by: i32 = i32(yi / fc.binSizeY);
+    var by: i32 = i32((yi - fc.originY) / fc.binSizeY);
     by = clamp(by, 0, i32(fc.nBinsY) - 1);
     for (var ey: i32 = -1; ey <= 1; ey = ey + 1) {
     for (var ex: i32 = -1; ex <= 1; ex = ex + 1) {

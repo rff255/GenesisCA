@@ -2108,12 +2108,12 @@ function emitHashStencil(ctx: AgentWgpuCtx, test: (jExpr: string) => void, xi: s
   const binStartAt = (e: string) => bsBase === 0 ? `hashBins[${e}]` : `hashBins[${bsBase}u + ${e}]`;
   const binAgentsAt = (e: string) => baBase === 0 ? `hashBins[${e}]` : `hashBins[${baBase}u + ${e}]`;
   const bx = fresh(ctx, 'naBx'), by = fresh(ctx, 'naBy'), bz = fresh(ctx, 'naBz');
-  ctx.lines.push(`  var ${bx}: i32 = i32(${xi} / control.binSizeX);`);
+  ctx.lines.push(`  var ${bx}: i32 = i32((${xi} - control.originX) / control.binSizeX);`);
   ctx.lines.push(`  ${bx} = clamp(${bx}, 0, i32(control.nBinsX) - 1);`);
-  ctx.lines.push(`  var ${by}: i32 = i32(${yi} / control.binSizeY);`);
+  ctx.lines.push(`  var ${by}: i32 = i32((${yi} - control.originY) / control.binSizeY);`);
   ctx.lines.push(`  ${by} = clamp(${by}, 0, i32(control.nBinsY) - 1);`);
   if (is3d) {
-    ctx.lines.push(`  var ${bz}: i32 = i32(${zi} / control.binSizeZ);`);
+    ctx.lines.push(`  var ${bz}: i32 = i32((${zi} - control.originZ) / control.binSizeZ);`);
     ctx.lines.push(`  ${bz} = clamp(${bz}, 0, i32(control.nBinsZ) - 1);`);
   }
   const ez = fresh(ctx, 'naEz'), ey = fresh(ctx, 'naEy'), ex = fresh(ctx, 'naEx');
@@ -2667,6 +2667,10 @@ function emitControlStruct(): string {
   nBinsZ     : u32,
   binSizeZ   : f32,
   fieldD     : f32,
+  originX    : f32,
+  originY    : f32,
+  originZ    : f32,
+  _pad0      : f32,
 };`;
 }
 

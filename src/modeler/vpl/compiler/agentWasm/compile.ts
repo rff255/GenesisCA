@@ -275,6 +275,9 @@ interface AgentWasmCtx {
   highWaterLocal: number; hashValidLocal: number;
   nBinsXLocal: number; nBinsYLocal: number; nBinsZLocal: number;
   binSizeXLocal: number; binSizeYLocal: number; binSizeZLocal: number;
+  /** The bbox-anchored hash grid origin (0 on a torus) — a query bins as
+   *  floor((pos - origin) / binSize). */
+  originXLocal: number; originYLocal: number; originZLocal: number;
   fieldWLocal: number; fieldHLocal: number; fieldDLocal: number; fieldTorusLocal: number;
   /** Field total (W*H*D) as an i32 local (param). Used by field-bridge index math. */
   fieldTotalLocal: number;
@@ -2879,10 +2882,10 @@ function emitHashStencil(ctx: AgentWasmCtx, test: (jL: number) => void, xiL: num
   const em = ctx.em;
   const L = ctx.layout;
   const binStartOff = L.hashBinStartOffset, binAgentsOff = L.hashBinAgentsOffset;
-  // bx = clamp((xi/binSizeX)|0, 0, nBinsX-1); same for by[,bz].
-  const clampBin = (coordL: number, sizeL: number, nBinsL: number): number => {
+  // bx = clamp(((xi-originX)/binSizeX)|0, 0, nBinsX-1); same for by[,bz].
+  const clampBin = (coordL: number, originL: number, sizeL: number, nBinsL: number): number => {
     const b = em.allocLocal(I32);
-    em.localGet(coordL); em.localGet(sizeL); em.op(OP_F64_DIV); em.f64ToI32(); em.localSet(b);
+    em.localGet(coordL); em.localGet(originL); em.op(OP_F64_SUB); em.localGet(sizeL); em.op(OP_F64_DIV); em.f64ToI32(); em.localSet(b);
     // if (b < 0) b = 0
     em.localGet(b); em.i32Const(0); em.op(OP_I32_LT_S);
     em.ifThenElse(
@@ -2895,9 +2898,9 @@ function emitHashStencil(ctx: AgentWasmCtx, test: (jL: number) => void, xiL: num
     );
     return b;
   };
-  const bx = clampBin(xiL, ctx.binSizeXLocal, ctx.nBinsXLocal);
-  const by = clampBin(yiL, ctx.binSizeYLocal, ctx.nBinsYLocal);
-  const bz = ctx.is3d ? clampBin(ziL, ctx.binSizeZLocal, ctx.nBinsZLocal) : -1;
+  const bx = clampBin(xiL, ctx.originXLocal, ctx.binSizeXLocal, ctx.nBinsXLocal);
+  const by = clampBin(yiL, ctx.originYLocal, ctx.binSizeYLocal, ctx.nBinsYLocal);
+  const bz = ctx.is3d ? clampBin(ziL, ctx.originZLocal, ctx.binSizeZLocal, ctx.nBinsZLocal) : -1;
 
   // wrapped neighbour-bin coordinate: torus → ((nb % n) + n) % n; else range-check.
   // We loop ddz (3D) / ddy / ddx in [-1,1].
@@ -3196,13 +3199,14 @@ function preEmitAgentValues(ctx: AgentWasmCtx, rootId: string): void {
 // the growth ramp (JS passes `growthRate=0` when off, but the gate keeps it tidy).
 // ===========================================================================
 
-/** The 22 force-pass params (the worker mirrors this order exactly). */
+/** The force-pass params (the worker mirrors this order exactly). */
 const FORCE_PASS_PARAMS: ('i32' | 'f64')[] = [
   'i32', 'i32', 'i32', 'i32', 'i32',     // highWater, hashValid, nBinsX, nBinsY, nBinsZ
   'f64', 'f64', 'f64',                   // binSizeX, binSizeY, binSizeZ
   'f64', 'f64', 'f64', 'f64', 'f64', 'f64', 'f64', // dtOverEta, muR, muA, range, momentum, maxSpeed, growthRate
   'f64', 'f64', 'f64',                   // W, H, D
   'i32', 'i32',                          // bonding, torus
+  'f64', 'f64', 'f64',                   // originX, originY, originZ (the bbox-anchored hash grid origin)
 ];
 
 interface ForcePassParamIdx {
@@ -3212,6 +3216,7 @@ interface ForcePassParamIdx {
   momentum: number; maxSpeed: number; growthRate: number;
   W: number; H: number; D: number;
   bonding: number; torus: number;
+  originX: number; originY: number; originZ: number;
 }
 
 /** Emit the force-pass function body onto `em`. Reads the wasmBacked AgentStore at
@@ -3488,9 +3493,9 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
   function emitForceStencil(): void {
     const binStartOff = L.hashBinStartOffset, binAgentsOff = L.hashBinAgentsOffset;
     // bx = clamp((xi/binSizeX)|0, 0, nBinsX-1); same by[,bz]
-    clampToBin(xi, P.binSizeX, P.nBinsX, bx);
-    clampToBin(yi, P.binSizeY, P.nBinsY, by);
-    if (is3d) clampToBin(zi, P.binSizeZ, P.nBinsZ, bz); else { em.i32Const(0); em.localSet(bz); }
+    clampToBin(xi, P.originX, P.binSizeX, P.nBinsX, bx);
+    clampToBin(yi, P.originY, P.binSizeY, P.nBinsY, by);
+    if (is3d) clampToBin(zi, P.originZ, P.binSizeZ, P.nBinsZ, bz); else { em.i32Const(0); em.localSet(bz); }
 
     const innerBin = () => {
       // nbx = bx+ddx; nby = by+ddy; [nbz = bz+ddz]
@@ -3543,8 +3548,8 @@ function emitForcePass(em: WasmEmitter, layout: AgentMemoryLayout, is3d: boolean
   }
 
   // bIdx-out: store clamp((coord/size)|0, 0, n-1) into outLocal.
-  function clampToBin(coordL: number, sizeL: number, nL: number, outLocal: number): void {
-    em.localGet(coordL); em.localGet(sizeL); em.op(OP_F64_DIV); em.f64ToI32(); em.localSet(outLocal);
+  function clampToBin(coordL: number, originL: number, sizeL: number, nL: number, outLocal: number): void {
+    em.localGet(coordL); em.localGet(originL); em.op(OP_F64_SUB); em.localGet(sizeL); em.op(OP_F64_DIV); em.f64ToI32(); em.localSet(outLocal);
     em.localGet(outLocal); em.i32Const(0); em.op(OP_I32_LT_S);
     em.ifThenElse(
       () => { em.i32Const(0); em.localSet(outLocal); },
@@ -3792,14 +3797,16 @@ export function compileAgentGraphWasm(
   // Behaviour signature (the worker's call MIRRORS this — see runAgentStep):
   //   (highWater, hashValid, nBinsX, nBinsY, nBinsZ : i32,
   //    binSizeX, binSizeY, binSizeZ : f64,
-  //    fieldW, fieldH, fieldD : f64, fieldTorus : i32)
-  const PARAMS: ('i32' | 'f64')[] = ['i32', 'i32', 'i32', 'i32', 'i32', 'f64', 'f64', 'f64', 'f64', 'f64', 'f64', 'i32'];
+  //    fieldW, fieldH, fieldD : f64, fieldTorus : i32,
+  //    originX, originY, originZ : f64)  — the bbox-anchored hash grid origin.
+  const PARAMS: ('i32' | 'f64')[] = ['i32', 'i32', 'i32', 'i32', 'i32', 'f64', 'f64', 'f64', 'f64', 'f64', 'f64', 'i32', 'f64', 'f64', 'f64'];
   const em = new WasmEmitter(PARAMS.length);
 
   // Param indices.
   const P_highWater = 0, P_hashValid = 1, P_nBinsX = 2, P_nBinsY = 3, P_nBinsZ = 4;
   const P_binSizeX = 5, P_binSizeY = 6, P_binSizeZ = 7;
   const P_fieldW = 8, P_fieldH = 9, P_fieldD = 10, P_fieldTorus = 11;
+  const P_originX = 12, P_originY = 13, P_originZ = 14;
 
   const ctx: AgentWasmCtx = {
     adj, layout: agentLayout, model, is3d, em,
@@ -3818,6 +3825,7 @@ export function compileAgentGraphWasm(
     highWaterLocal: P_highWater, hashValidLocal: P_hashValid,
     nBinsXLocal: P_nBinsX, nBinsYLocal: P_nBinsY, nBinsZLocal: P_nBinsZ,
     binSizeXLocal: P_binSizeX, binSizeYLocal: P_binSizeY, binSizeZLocal: P_binSizeZ,
+    originXLocal: P_originX, originYLocal: P_originY, originZLocal: P_originZ,
   };
 
   // Assign getNearbyAgents scratch slots (reachable only).
@@ -3934,6 +3942,7 @@ export function compileAgentGraphWasm(
     binSizeX: 5, binSizeY: 6, binSizeZ: 7,
     dtOverEta: 8, muR: 9, muA: 10, range: 11, momentum: 12, maxSpeed: 13, growthRate: 14,
     W: 15, H: 16, D: 17, bonding: 18, torus: 19,
+    originX: 20, originY: 21, originZ: 22,
   };
   let forceBody: Uint8Array;
   try {

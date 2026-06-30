@@ -2155,6 +2155,9 @@ export function buildAgentLoopParams(model: CAModel): { params: string; agentAtt
     // the uniform spatial hash (Get Nearby Agents queries it); _fieldW/_fieldH/
     // _fieldBoundaryTorus (below) double as the agent world bounds (1:1)
     '_hashValid', '_hashBinStart', '_hashBinAgents', '_hashNBinsX', '_hashNBinsY', '_hashBinSizeX', '_hashBinSizeY',
+    // the hash grid ORIGIN (bbox-anchored on a bounded world, 0 on a torus) — a
+    // query bins as floor((pos - origin) / binSize). 0 on a torus → byte-identical.
+    '_hashOriginX', '_hashOriginY',
     // request buffers written by DivideAgent / KillAgent (Phase C)
     '_divideRequest', '_divideAxisX', '_divideAxisY', '_divideAsym', '_killRequest',
     // ragged bond store + stride (ForEachBond / the spring force)
@@ -2186,7 +2189,7 @@ export function buildAgentLoopParams(model: CAModel): { params: string; agentAtt
   // Nearby Agents can do a 3×3×3 stencil + the 3D bin index in 3D (the 2D hash
   // dims above are always present). ABI-mirrored at the END of buildAgentLoopArgs's
   // 3D block. 2D omits them (the node's 2D branch never references them).
-  if (is3d) parts.push('_agentZ', '_agentVZ', '_agentForceZ', '_divideAxisZ', '_fieldD', '_hashNBinsZ', '_hashBinSizeZ');
+  if (is3d) parts.push('_agentZ', '_agentVZ', '_agentForceZ', '_divideAxisZ', '_fieldD', '_hashNBinsZ', '_hashBinSizeZ', '_hashOriginZ');
   return { params: parts.join(', '), agentAttrs };
 }
 

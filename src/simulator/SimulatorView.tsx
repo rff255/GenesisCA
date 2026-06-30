@@ -2472,6 +2472,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // agents are additive on top of the always-present grid. The compiled
       // agent behaviour/init code is attached by the agent compile path (A3).
       agents: !!model.topologyMode?.agents,
+      // When the CA-grid topology is OFF (an agents-only model), skip the cell
+      // step + the neighbour-index tables entirely — no grid is simulated, so the
+      // worker pays nothing for the (possibly large) lattice. Absent → true (every
+      // existing grid model). Mutually with `agents` it can't be all-false (reducer).
+      gridCells: model.topologyMode?.gridCells !== false,
       centerBased: model.centerBased,
       agentBehaviourCode: agentResult.behaviourCode,
       agentInitCode: agentResult.initCode,
@@ -2701,6 +2706,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // store). Live force/bond params (handled via recompile / updateModelAttrs)
       // do NOT force a reinit.
       || !!prev.topologyMode?.agents !== !!model.topologyMode?.agents
+      // Toggling the CA-grid topology changes whether the worker builds the
+      // neighbour tables + runs the cell step — a structural reinit.
+      || (prev.topologyMode?.gridCells !== false) !== (model.topologyMode?.gridCells !== false)
       || (prev.centerBased?.maxAgents ?? 0) !== (model.centerBased?.maxAgents ?? 0)
       || (prev.centerBased?.maxBonds ?? 0) !== (model.centerBased?.maxBonds ?? 0)
       // PR5: the Agent Compile Target is independent of the grid target. Changing

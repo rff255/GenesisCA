@@ -47,6 +47,7 @@ function buildArgs(s, hash, ctx) {
     hash ? 1 : 0,
     hash ? hash.binStart : EMPTY_I32, hash ? hash.binAgents : EMPTY_I32,
     hash ? hash.nBinsX : 0, hash ? hash.nBinsY : 0, hash ? hash.binSizeX : 1, hash ? hash.binSizeY : 1,
+    hash ? hash.originX : 0, hash ? hash.originY : 0,
     s.divideRequest, s.divideAxisX, s.divideAxisY, s.divideAsym, s.killRequest,
     s.bondPartner, s.bondPartnerEpoch, s.bondRestLength, s.bondStiffness, s.bondTypeLabel, s.maxBonds,
     s.bondFormReq, s.bondFormL, s.bondFormK, s.bondBreakReq,
@@ -57,7 +58,7 @@ function buildArgs(s, hash, ctx) {
   if (ctx.hasLookupTables) args.push(ctx.cachedInteractionTables);
   args.push(ctx.width, ctx.height, ctx.total, ctx.torus ? 1 : 0);
   for (const spec of ctx.fieldSpecs) args.push(ctx.readAttrs[spec.id]);
-  if (s.worldDepth > 1) args.push(s.z, s.vz, s.forceZ, s.divideAxisZ, s.worldDepth, hash ? hash.nBinsZ : 1, hash ? hash.binSizeZ : 1);
+  if (s.worldDepth > 1) args.push(s.z, s.vz, s.forceZ, s.divideAxisZ, s.worldDepth, hash ? hash.nBinsZ : 1, hash ? hash.binSizeZ : 1, hash ? hash.originZ : 0);
   return args;
 }
 
@@ -242,7 +243,7 @@ for (const { name: f, raw } of entries) {
     // build the hash from A's positions (both stores share identical positions here).
     let maxR = r; for (let i = 0; i < A.highWater; i++) if (A.alive[i] && A.radius[i] > maxR) maxR = A.radius[i];
     const binEdge = Math.max(1e-3, cbNum(cfg, 'interactionRange', 1.5) * 2 * maxR, cbNum(cfg, 'neighbourQueryRadius', 5));
-    const hashA = buildSpatialHash(A, binEdge, W, H, D);
+    const hashA = buildSpatialHash(A, binEdge, W, H, D, torus, computeAgentMaxHashBins(W, H, D, cbNum(cfg, 'interactionRange', 1.5), cbNum(cfg, 'defaultRadius', 0.5), cbNum(cfg, 'neighbourQueryRadius', 5)));
     // sync prime
     if (syncAttrs) { for (const s of [A, B]) for (const spec of s.attrSpecs) { const rd = s.attrRead[spec.id], wr = s.attrWrite[spec.id]; if (rd !== wr) wr.set(rd); } }
 
@@ -254,9 +255,9 @@ for (const { name: f, raw } of entries) {
     const Bbuf = B.memory.buffer, BL = B.layout;
     new Uint32Array(Bbuf, BL.rngStateOffset, 1)[0] = SEED + step;
     // copy hash in
-    let hashValid = 0, nBinsX = 0, nBinsY = 0, nBinsZ = 0, bsx = 1, bsy = 1, bsz = 1;
+    let hashValid = 0, nBinsX = 0, nBinsY = 0, nBinsZ = 0, bsx = 1, bsy = 1, bsz = 1, ox = 0, oy = 0, oz = 0;
     if (hashA) {
-      hashValid = 1; nBinsX = hashA.nBinsX; nBinsY = hashA.nBinsY; nBinsZ = hashA.nBinsZ; bsx = hashA.binSizeX; bsy = hashA.binSizeY; bsz = hashA.binSizeZ;
+      hashValid = 1; nBinsX = hashA.nBinsX; nBinsY = hashA.nBinsY; nBinsZ = hashA.nBinsZ; bsx = hashA.binSizeX; bsy = hashA.binSizeY; bsz = hashA.binSizeZ; ox = hashA.originX; oy = hashA.originY; oz = hashA.originZ;
       const nBins = nBinsX * nBinsY * nBinsZ;
       new Int32Array(Bbuf, BL.hashBinStartOffset, nBins + 1).set(hashA.binStart.subarray(0, nBins + 1));
       const used = hashA.binStart[nBins];
@@ -267,7 +268,7 @@ for (const { name: f, raw } of entries) {
     if (BL.indicatorCount > 0) new Float64Array(Bbuf, BL.indicatorsOffset, BL.indicatorCount).set(cachedIndicatorsB.subarray(0, BL.indicatorCount));
     for (const id of Object.keys(BL.lookupTableOffset)) { const t = cachedInteractionTablesB[id]; if (t) new Float64Array(Bbuf, BL.lookupTableOffset[id], t.length).set(t); }
     if (BL.fieldTotal > 0) for (const id of Object.keys(BL.fieldOffset)) { const src = readAttrsB[id]; if (!src) continue; const dst = new Float64Array(Bbuf, BL.fieldOffset[id], BL.fieldTotal); const n2 = Math.min(BL.fieldTotal, src.length); for (let i = 0; i < n2; i++) dst[i] = src[i]; }
-    inst.behaviour(B.highWater, hashValid, nBinsX, nBinsY, nBinsZ, bsx, bsy, bsz, W, H, D, torus ? 1 : 0);
+    inst.behaviour(B.highWater, hashValid, nBinsX, nBinsY, nBinsZ, bsx, bsy, bsz, W, H, D, torus ? 1 : 0, ox, oy, oz);
     // copy field deposit + indicators back out (mirror the worker)
     if (BL.indicatorCount > 0) { const sb = new Float64Array(Bbuf, BL.indicatorsOffset, BL.indicatorCount); for (let i = 0; i < BL.indicatorCount; i++) cachedIndicatorsB[i] = sb[i]; }
     if (BL.fieldTotal > 0) { const wIds = new Set(fieldSpecs.filter(a => a.agentAccess === 'readWrite').map(a => a.id)); for (const id of Object.keys(BL.fieldOffset)) { if (!wIds.has(id)) continue; const dst = readAttrsB[id]; if (!dst) continue; const src = new Float64Array(Bbuf, BL.fieldOffset[id], BL.fieldTotal); const n2 = Math.min(BL.fieldTotal, dst.length); for (let i = 0; i < n2; i++) dst[i] = src[i]; } }
