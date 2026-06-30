@@ -176,6 +176,9 @@ type ModelAction =
   | { type: 'ADD_MAPPING'; isAttributeToColor: boolean }
   | { type: 'REMOVE_MAPPING'; id: string }
   | { type: 'UPDATE_MAPPING'; id: string; changes: Partial<Mapping> }
+  | { type: 'ADD_AGENT_MAPPING' }
+  | { type: 'REMOVE_AGENT_MAPPING'; id: string }
+  | { type: 'UPDATE_AGENT_MAPPING'; id: string; changes: Partial<Mapping> }
   | { type: 'SET_GRAPH'; nodes: GraphNode[]; edges: GraphEdge[] }
   | { type: 'SET_AGENT_GRAPH'; nodes: GraphNode[]; edges: GraphEdge[] }
   | { type: 'UPDATE_CENTER_BASED'; changes: Partial<CenterBasedConfig> }
@@ -557,7 +560,12 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
 
     case 'REMOVE_AGENT_ATTRIBUTE': {
       const filtered = (state.model.agentAttributes || []).filter(a => a.id !== action.id);
-      const modelAfter = { ...state.model, agentAttributes: filtered };
+      // Unlink any agent output mapping that pointed at the deleted attribute (the
+      // synthesis skips a stale link, but clearing it keeps the panel honest).
+      const agentMappings = (state.model.agentMappings ?? []).map(m =>
+        m.linkedAttributeId === action.id ? { ...m, linkedAttributeId: undefined, linked: false } : m,
+      );
+      const modelAfter = { ...state.model, agentAttributes: filtered, agentMappings };
       // Clear stale attributeId / tagAttributeId references (scans both graphs +
       // macros) so a removed agent attribute doesn't strand `_undef` in the
       // agent graph.
@@ -731,6 +739,39 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         },
       };
 
+    // Agent Output Mappings — the agent-layer A→C views (linked over agent attrs).
+    case 'ADD_AGENT_MAPPING': {
+      const firstAgentAttr = (state.model.agentAttributes ?? []).find(a => a.type !== 'color' && a.type !== 'lookupTable');
+      const newMap: Mapping = {
+        id: generateId('agent_view'),
+        name: 'Agent View',
+        description: '',
+        isAttributeToColor: true,
+        linked: true,
+        linkedAttributeId: firstAgentAttr?.id,
+        redDescription: '', greenDescription: '', blueDescription: '',
+      };
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, agentMappings: [...(state.model.agentMappings ?? []), newMap] },
+      };
+    }
+    case 'REMOVE_AGENT_MAPPING':
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, agentMappings: (state.model.agentMappings ?? []).filter(m => m.id !== action.id) },
+      };
+    case 'UPDATE_AGENT_MAPPING':
+      return {
+        ...state, isDirty: true,
+        model: {
+          ...state.model,
+          agentMappings: (state.model.agentMappings ?? []).map(m =>
+            m.id === action.id ? { ...m, ...action.changes } : m,
+          ),
+        },
+      };
+
     case 'SET_GRAPH':
       return {
         ...state,
@@ -871,6 +912,7 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // Agents topology is on (a non-agent file leaves it absent).
       if (!m.agentGraphNodes) m.agentGraphNodes = [];
       if (!m.agentGraphEdges) m.agentGraphEdges = [];
+      if (!m.agentMappings) m.agentMappings = [];
       // Generic Agent Platform: the agent attribute set (separate id-space).
       // Absent in every legacy file; the split migration below populates it for
       // legacy agent models that stored per-agent state in cell attributes.
@@ -1235,6 +1277,9 @@ export interface ModelContextValue {
   addMapping: (isAttributeToColor: boolean) => void;
   removeMapping: (id: string) => void;
   updateMapping: (id: string, changes: Partial<Mapping>) => void;
+  addAgentMapping: () => void;
+  removeAgentMapping: (id: string) => void;
+  updateAgentMapping: (id: string, changes: Partial<Mapping>) => void;
   setGraph: (nodes: GraphNode[], edges: GraphEdge[]) => void;
   /** Bond-Graph Agents: write-back for the agent rule graph (the second graph). */
   setAgentGraph: (nodes: GraphNode[], edges: GraphEdge[]) => void;
@@ -1370,6 +1415,12 @@ export function ModelProvider({ children }: { children: ReactNode }) {
   const updateMapping = useCallback(
     (id: string, changes: Partial<Mapping>) =>
       dispatch({ type: 'UPDATE_MAPPING', id, changes }),
+    [],
+  );
+  const addAgentMapping = useCallback(() => dispatch({ type: 'ADD_AGENT_MAPPING' }), []);
+  const removeAgentMapping = useCallback((id: string) => dispatch({ type: 'REMOVE_AGENT_MAPPING', id }), []);
+  const updateAgentMapping = useCallback(
+    (id: string, changes: Partial<Mapping>) => dispatch({ type: 'UPDATE_AGENT_MAPPING', id, changes }),
     [],
   );
   const setGraph = useCallback(
@@ -1538,6 +1589,9 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       addMapping,
       removeMapping,
       updateMapping,
+      addAgentMapping,
+      removeAgentMapping,
+      updateAgentMapping,
       setGraph,
       setAgentGraph,
       updateCenterBased,
@@ -1590,6 +1644,9 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       addMapping,
       removeMapping,
       updateMapping,
+      addAgentMapping,
+      removeAgentMapping,
+      updateAgentMapping,
       setGraph,
       setAgentGraph,
       updateCenterBased,

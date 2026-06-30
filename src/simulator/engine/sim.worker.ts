@@ -183,6 +183,9 @@ interface InitMsg {
   agentInitCode?: string;
   agentDivisionCode?: string;
   agentColorViewer?: string;
+  /** Agent Output Mappings: one per-agent colour-pass fn source per linked agent
+   *  mapping. `runAgentColorPass` runs the one matching `agentColorViewer`. */
+  agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>;
   /** PR5 (C-D1): true when the agent graph reads/writes the cell field
    *  (sampleField / fieldGradient / readCellsUnder / affectCellsUnder /
    *  secreteToField). Drives the WebGPU-grid field bridge: only a field model
@@ -252,7 +255,7 @@ interface PaintManualMsg {
 }
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -508,6 +511,11 @@ const EMPTY_I32 = new Int32Array(0);
 /** Compiled Division Event function (single-agent; runs per daughter after a
  *  division). Null when the agent graph has no divisionEvent root. */
 let agentDivisionFn: Function | null = null;
+/** Agent Output Mappings: one per-agent colour-pass fn per linked agent mapping.
+ *  `runAgentColorPass` runs the one whose mappingId matches `agentColorViewer`. */
+let agentOutputMappingFns: Array<{ mappingId: string; fn: Function }> = [];
+/** The active AGENT viewer (an agent mapping id). Selects which agent colour pass
+ *  paints. Independent of `activeViewer` (the active CELL viewer). */
 let agentColorViewer = '';
 
 /** AW-MEM (PR6a) — DEV-only override that forces the AgentStore onto a
@@ -798,14 +806,26 @@ function buildAgentWebGPUIfNeeded(): void {
   })();
 }
 
-/** Refresh per-agent colours after a mutation (seed / paint / kill) without
- *  advancing the simulation. Agent colours are written by the behaviourStep's
- *  Set Cell Looks during a step; between steps a freshly-seeded agent shows its
- *  default-palette colour (set on slot init) until the next step recolours it.
- *  So this is intentionally a no-op (running the behaviour fn here would advance
- *  the rule + force the position double-buffer). */
+/** Refresh per-agent colours from the active AGENT output mapping (without
+ *  advancing the simulation). When the model has agent mappings, the per-agent
+ *  colour pass for `agentColorViewer` reads each agent's linked attribute and
+ *  writes its colour — so switching the agent viewer, seeding, painting or
+ *  killing recolours immediately. When there are no agent mappings this is a
+ *  no-op: agents are coloured by the behaviourStep's Set Cell Looks during a
+ *  step (running the behaviour fn here would advance the rule). */
 function runAgentColorPass(): void {
-  void agentColorViewer;
+  const s = agentStore;
+  if (!s || agentOutputMappingFns.length === 0) return;
+  const om = agentOutputMappingFns.find(f => f.mappingId === agentColorViewer)
+    ?? agentOutputMappingFns[0];   // default to the first agent mapping
+  if (!om) return;
+  try {
+    // The colour pass guards setCellLooks with `activeViewer === <mappingId>`, so
+    // run it with activeViewer = this mapping's id (NOT the global cell viewer).
+    om.fn(...buildAgentLoopArgs(s, om.mappingId));
+  } catch (e) {
+    self.postMessage({ type: 'error', message: '[agents] colour pass failed: ' + ((e as Error)?.message || e) });
+  }
 }
 
 /** Write per-attribute values onto one agent (read + write buffers). Shared by
@@ -962,7 +982,7 @@ function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, ax
  *  s.divideAxisZ, s.worldDepth`) is pushed ONLY when `s.worldDepth > 1`, exactly
  *  when `buildAgentLoopParams` pushes its 3D params under `is3dModel(model)`.
  *  `is3dModel(model) ⟺ s.worldDepth > 1` — edit BOTH together. */
-function buildAgentLoopArgs(s: AgentStore): unknown[] {
+function buildAgentLoopArgs(s: AgentStore, viewerOverride?: string): unknown[] {
   const hash = currentAgentHash;
   const args: unknown[] = [
     s.alive, s.highWater,
@@ -979,7 +999,7 @@ function buildAgentLoopArgs(s: AgentStore): unknown[] {
   ];
   for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
   for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
-  args.push(cachedModelAttrs, s.colors, activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS);
+  args.push(cachedModelAttrs, s.colors, viewerOverride ?? activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS);
   // PR3 FIX 1 — Lookup Tables (pinned slot, mirrors buildAgentLoopParams).
   if (hasLookupTables) args.push(cachedInteractionTables);
   // Closed feedback (Phase D): the agent-accessible cell field arrays (readAttrs[id]
@@ -3363,11 +3383,19 @@ function compileFns(
  *  behaviour function runs once per LIVE agent each generation over `idx <
  *  highWater`. Absent code → null (agents seed + render but don't behave, the
  *  PR-A2 state). */
-function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode?: string): void {
+function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode?: string, outputMappingCodes?: Array<{ mappingId: string; code: string }>): void {
   try {
     // eslint-disable-next-line no-eval
     agentBehaviourFn = behaviourCode ? (eval(behaviourCode) as Function) : null;
   } catch (e) { agentBehaviourFn = null; self.postMessage({ type: 'error', message: '[agents] behaviour compile failed: ' + ((e as Error)?.message || e) }); }
+  // Agent Output Mappings — compile each linked agent mapping's per-agent colour pass.
+  agentOutputMappingFns = [];
+  for (const om of (outputMappingCodes || [])) {
+    try {
+      // eslint-disable-next-line no-eval
+      agentOutputMappingFns.push({ mappingId: om.mappingId, fn: eval(om.code) as Function });
+    } catch (e) { self.postMessage({ type: 'error', message: `[agents] output mapping '${om.mappingId}' compile failed: ` + ((e as Error)?.message || e) }); }
+  }
   try {
     // eslint-disable-next-line no-eval
     agentInitFn = initCode ? (eval(initCode) as Function) : null;
@@ -3915,6 +3943,10 @@ function sendColors(): void {
   let agentsPayload: ReturnType<typeof snapshotAgentsForRender> | undefined;
   const agentTransfers: ArrayBuffer[] = [];
   if (agentStore && agentStore.highWater > 0) {
+    // Agent Output Mappings: recolour from the active agent viewer before
+    // snapshotting (no-op when the model has no agent mappings — agents are then
+    // coloured by the behaviour's Set Cell Looks during the step).
+    runAgentColorPass();
     agentsPayload = snapshotAgentsForRender(agentStore);
     agentTransfers.push(
       agentsPayload.x.buffer, agentsPayload.y.buffer, agentsPayload.vx.buffer, agentsPayload.vy.buffer,
@@ -4054,7 +4086,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       pendingAgentWebgpuUsesI32Write = msg.agentWebgpuUsesI32Write ?? false;
       pendingAgentWebgpuUsage = msg.agentWebgpuUsage ?? {};
       initAgents();
-      compileAgentFns(msg.agentBehaviourCode, msg.agentInitCode, msg.agentDivisionCode);
+      compileAgentFns(msg.agentBehaviourCode, msg.agentInitCode, msg.agentDivisionCode, (msg as InitMsg).agentOutputMappingCodes);
       instantiateAgentWasmIfNeeded();
       buildAgentWebGPUIfNeeded();
       // Generic Agent Platform: run the Agent Init Event ONCE on this fresh store
@@ -4547,7 +4579,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         const rc = msg as RecompileMsg;
         if (rc.centerBased) centerBasedConfig = rc.centerBased;
         if (rc.agentUsesField !== undefined) agentUsesField = !!rc.agentUsesField;
-        compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode, rc.agentDivisionCode);
+        if (rc.agentColorViewer !== undefined) agentColorViewer = rc.agentColorViewer || '';
+        compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode, rc.agentDivisionCode, rc.agentOutputMappingCodes);
         // PR6b-1 / PR7: re-resolve the agent target + stash the per-target payload.
         // If the WASM backing requirement changes (JS/WebGPU ↔ WASM, since wasm
         // needs the store on a WebAssembly.Memory), re-init the store so its arrays
@@ -4933,6 +4966,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
 
     case 'colorPass': {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
+      // Agent Output Mappings: switch the active AGENT viewer too (independent of
+      // the cell viewer). sendColors() below recolours agents from it.
+      { const aav = (msg as { activeAgentViewer?: string }).activeAgentViewer; if (aav !== undefined) agentColorViewer = aav; }
       const webgpuCp = useWebGPU && webgpuRuntime?.stepReady;
       if (webgpuCp && webgpuRuntime) {
         uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);

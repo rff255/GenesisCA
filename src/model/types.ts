@@ -722,6 +722,17 @@ export interface CAModel {
    *  `model/attributeScope.ts`. The `_field_<id>` bridge stays keyed by the CELL
    *  attributes (`cellFieldAttrsOf`), so the two id-spaces never collide. */
   agentAttributes?: Attribute[];
+  /** Generic Agent Platform: the AGENT Attribute→Color output mappings — separate
+   *  "views" of the agent population, the agent analogue of `mappings` (which are
+   *  the CELL-grid mappings). Each is a `linked` A→C mapping over an AGENT attribute
+   *  (`linkedAttributeId` resolves against `agentAttributes`); the compiler
+   *  synthesizes a per-agent colour pass (getCellAttribute → colorScale/categorical
+   *  → setCellLooks) so the user picks an attribute → colour instead of hand-wiring
+   *  Set Cell Looks in the Behaviour Step. When BOTH `mappings` (cell) and
+   *  `agentMappings` (agent) are non-empty the simulator shows a two-layer viewer
+   *  selection. Absent/empty in every legacy file + non-agent model. Only A→C is
+   *  supported (agent input mappings are deferred). */
+  agentMappings?: Mapping[];
   macroDefs: MacroDef[];
   /** Local Variables — per-cell mutable storage referenced by getVariable /
    *  setVariable / setArrayElement nodes. Empty / absent → no variables in

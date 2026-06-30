@@ -447,6 +447,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const [unlimitedGens, setUnlimitedGens] = useState((saved.current.unlimitedGens as boolean) ?? false);
   const [compileError, setCompileError] = useState('');
   const [activeViewer, setActiveViewer] = useState((saved.current.activeViewer as string) ?? '');
+  // Agent Output Mappings: the active AGENT viewer (an agent mapping id),
+  // independent of the cell `activeViewer`. Empty when the model has no agent
+  // mappings. Drives the agent colour pass (the two-layer viewer selection).
+  const [activeAgentViewer, setActiveAgentViewer] = useState((saved.current.activeAgentViewer as string) ?? '');
+  const activeAgentViewerRef = useRef(activeAgentViewer); activeAgentViewerRef.current = activeAgentViewer;
   const [showCode, setShowCode] = useState(false);
   const [compiledCode, setCompiledCode] = useState('');
   const [actualFps, setActualFps] = useState(0);
@@ -1072,10 +1077,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
   // don't behave); PR-A3 wires the real compileAgentGraph over
   // model.agentGraphNodes (the behaviourStep loop + value-outs + force hooks).
-  const compileAgentModel = useCallback((stopIdxBase = 0): { behaviourCode?: string; initCode?: string; divisionCode?: string; stopMessages: string[]; colorViewer: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } } => {
+  const compileAgentModel = useCallback((stopIdxBase = 0): { behaviourCode?: string; initCode?: string; divisionCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; stopMessages: string[]; colorViewer: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } } => {
     if (!model.topologyMode?.agents) return { colorViewer: '', agentTarget: 'js', stopMessages: [] };
-    const firstViewer = model.mappings.find(mp => mp.isAttributeToColor);
-    const colorViewer = firstViewer?.id ?? '';
+    // The default AGENT viewer = the first agent A→C mapping (drives the agent
+    // colour pass). Empty when the model has no agent mappings (agents are then
+    // coloured by the behaviour's Set Cell Looks).
+    const firstAgentViewer = (model.agentMappings ?? []).find(mp => mp.isAttributeToColor);
+    const colorViewer = firstAgentViewer?.id ?? '';
     // FIX 4: offset the agent stop indices by the cell graph's stop count so the
     // shared worker stopMessages array `[...cell, ...agent]` aligns 1-based.
     const ag = compileAgentGraph(model.agentGraphNodes || [], model.agentGraphEdges || [], model, stopIdxBase);
@@ -1153,7 +1161,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         agentTarget = 'js';
       }
     }
-    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, stopMessages: ag.stopMessages, colorViewer, agentTarget, agentWasmBytes, agentLayoutExtras, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentWebgpuUsesI32Write, agentWebgpuUsage };
+    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, stopMessages: ag.stopMessages, colorViewer, agentTarget, agentWasmBytes, agentLayoutExtras, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentWebgpuUsesI32Write, agentWebgpuUsage };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.agentAttributes, model.mappings, model.centerBased]);
 
@@ -2481,7 +2489,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       agentBehaviourCode: agentResult.behaviourCode,
       agentInitCode: agentResult.initCode,
       agentDivisionCode: agentResult.divisionCode,
-      agentColorViewer: agentResult.colorViewer,
+      agentColorViewer: activeAgentViewerRef.current || agentResult.colorViewer,
+      agentOutputMappingCodes: agentResult.outputMappingCodes,
       // PR5 (C-D1): whether the agent graph reads/writes the cell field. Drives
       // the WebGPU-grid field bridge (a no-field model does 0 per-step
       // readbacks). Cheap boolean — leave the JS/WASM grid path untouched.
@@ -2878,6 +2887,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         agentBehaviourCode: agentResult.behaviourCode,
         agentInitCode: agentResult.initCode,
         agentDivisionCode: agentResult.divisionCode,
+        agentColorViewer: activeAgentViewerRef.current || agentResult.colorViewer,
+        agentOutputMappingCodes: agentResult.outputMappingCodes,
         centerBased: model.centerBased,
         // PR5 (C-D1): re-detect on a graph-only edit (field nodes added/removed).
         agentUsesField: agentUsesField(),
@@ -3587,6 +3598,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   useEffect(() => { if (brushShape !== 'line') { lineAnchorRef.current = null; line3dAnchorRef.current = null; } }, [brushShape]);
   useEffect(() => { lineAnchorRef.current = null; line3dAnchorRef.current = null; }, [brushMapping]);
   useEffect(() => { activeViewerRef.current = activeViewer; }, [activeViewer]);
+  // Default / repair the active AGENT viewer to a valid agent mapping (the first
+  // A→C agent mapping) when the agent-mapping set changes.
+  useEffect(() => {
+    const ags = (model.agentMappings ?? []).filter(m => m.isAttributeToColor);
+    if (ags.length === 0) { if (activeAgentViewer) setActiveAgentViewer(''); return; }
+    if (!ags.some(m => m.id === activeAgentViewer)) setActiveAgentViewer(ags[0]!.id);
+  }, [model.agentMappings, activeAgentViewer]);
   // When the user switches output-mapping tabs (e.g. while paused), fire one color pass so the
   // grid reflects the new mapping immediately instead of waiting for the next step/paint/reset.
   // Ref guard skips the initial mount — otherwise we'd fire before the worker has a step fn.
@@ -3597,8 +3615,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       return;
     }
     if (!workerRef.current) return;
-    workerRef.current.postMessage({ type: 'colorPass', activeViewer });
-  }, [activeViewer]);
+    // Carry BOTH viewers so switching either the cell or the agent view recolours
+    // immediately (the worker recolours agents from activeAgentViewer in sendColors).
+    workerRef.current.postMessage({ type: 'colorPass', activeViewer, activeAgentViewer });
+  }, [activeViewer, activeAgentViewer]);
   const showBrushCursorRef = useRef(true);
   useEffect(() => { showBrushCursorRef.current = showBrushCursor; }, [showBrushCursor]);
   const showGridlinesRef = useRef(false);
@@ -5646,6 +5666,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
   const modelAttrs = model.attributes.filter(a => a.isModelAttribute);
   const attrToColorMappings = model.mappings.filter(m => m.isAttributeToColor);
+  // Agent Output Mappings: the agent-layer A→C views (the two-layer viewer).
+  const agentColorMappings = (model.agentMappings ?? []).filter(m => m.isAttributeToColor);
   const colorToAttrMappings = model.mappings.filter(m => !m.isAttributeToColor);
 
   return (
@@ -6007,7 +6029,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             wrapped together so the ear reads as a separate widget adjacent to
             the bar, not as one of the bar's tabs. Chevrons are inline SVGs so
             the up/down pair is pixel-identical. */}
-        {attrToColorMappings.length > 0 && (
+        {(attrToColorMappings.length > 0 || agentColorMappings.length > 0) && (
           <div className={styles.viewerBarRow} data-sim-overlay>
             <button
               className={styles.barAttachedEar}
@@ -6015,18 +6037,35 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               title={topBarOpen ? 'Hide viewer bar' : 'Show viewer bar'}
             >{topBarOpen ? <ChevronUpIcon /> : <ChevronDownIcon />}</button>
             {topBarOpen && (
-              <div className={styles.viewerBar}>
-                <span className={styles.viewerBarLabel}>Output Mapping (A{'\u2192'}C):</span>
-                {attrToColorMappings.map(m => (
-                  <button
-                    key={m.id}
-                    className={`${styles.viewerTab} ${activeViewer === m.id ? styles.viewerTabActive : ''}`}
-                    onClick={() => setActiveViewer(m.id)}
-                    title={m.description || undefined}
-                  >
-                    {m.name}
-                  </button>
-                ))}
+              <div className={styles.viewerBar} style={{ flexWrap: 'wrap' }}>
+                {attrToColorMappings.length > 0 && (<>
+                  {/* When both layers have views, label this row "Cells" \u2014 the
+                      two-layer viewer selection. */}
+                  <span className={styles.viewerBarLabel}>{agentColorMappings.length > 0 ? `Cells (A${'\u2192'}C):` : `Output Mapping (A${'\u2192'}C):`}</span>
+                  {attrToColorMappings.map(m => (
+                    <button
+                      key={m.id}
+                      className={`${styles.viewerTab} ${activeViewer === m.id ? styles.viewerTabActive : ''}`}
+                      onClick={() => setActiveViewer(m.id)}
+                      title={m.description || undefined}
+                    >
+                      {m.name}
+                    </button>
+                  ))}
+                </>)}
+                {agentColorMappings.length > 0 && (<>
+                  <span className={styles.viewerBarLabel} style={{ marginLeft: attrToColorMappings.length > 0 ? 12 : 0 }}>Agents (A{'\u2192'}C):</span>
+                  {agentColorMappings.map(m => (
+                    <button
+                      key={m.id}
+                      className={`${styles.viewerTab} ${activeAgentViewer === m.id ? styles.viewerTabActive : ''}`}
+                      onClick={() => setActiveAgentViewer(m.id)}
+                      title={m.description || undefined}
+                    >
+                      {m.name}
+                    </button>
+                  ))}
+                </>)}
               </div>
             )}
           </div>

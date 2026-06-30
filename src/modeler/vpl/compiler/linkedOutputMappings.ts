@@ -113,8 +113,18 @@ export function injectLinkedOutputMappings(
 
 // --- synthetic node/edge builders -----------------------------------------
 
-function mkNode(id: string, nodeType: string, config: Config): GraphNode {
+export function mkLinkedNode(id: string, nodeType: string, config: Config): GraphNode {
   return { id, type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType, config } };
+}
+function mkNode(id: string, nodeType: string, config: Config): GraphNode {
+  return mkLinkedNode(id, nodeType, config);
+}
+
+export function linkedValEdge(id: string, source: string, sPort: string, target: string, tPort: string): GraphEdge {
+  return valEdge(id, source, sPort, target, tPort);
+}
+export function linkedFlowEdge(id: string, source: string, sPort: string, target: string, tPort: string): GraphEdge {
+  return flowEdge(id, source, sPort, target, tPort);
 }
 
 function valEdge(id: string, source: string, sPort: string, target: string, tPort: string): GraphEdge {
@@ -138,7 +148,7 @@ function flowEdge(id: string, source: string, sPort: string, target: string, tPo
 /** ColorScale config for bool / float / integer. The stored stop positions are
  *  in [0,1]; here they are mapped onto the value domain ([0,1] for bool, the
  *  user min/max for float/integer) and the raw attribute value is fed as `t`. */
-function buildColorScaleConfig(m: Mapping, attr: Attribute): Config {
+export function buildColorScaleConfig(m: Mapping, attr: Attribute): Config {
   const stops = buildGradientStops(m, attr);
   const { min, max } = attr.type === 'bool' ? { min: 0, max: 1 } : gradientDomain(m, attr);
   const span = max - min;
@@ -153,7 +163,7 @@ function buildColorScaleConfig(m: Mapping, attr: Attribute): Config {
 }
 
 /** CategoricalColor config for tag — one entry per LIVE tag option. */
-function buildCategoricalConfig(m: Mapping, attr: Attribute): Config {
+export function buildCategoricalConfig(m: Mapping, attr: Attribute): Config {
   const colors = buildTagColors(m, attr);
   const config: Config = { count: colors.length, default_r: '128', default_g: '128', default_b: '128' };
   colors.forEach((c, i) => {

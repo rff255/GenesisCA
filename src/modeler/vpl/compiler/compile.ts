@@ -1,4 +1,4 @@
-import type { GraphNode, GraphEdge, CAModel } from '../../../model/types';
+﻿import type { GraphNode, GraphEdge, CAModel } from '../../../model/types';
 import { agentAttrsOf, cellFieldAttrsOf } from '../../../model/attributeScope';
 import { getAllNodeDefs, getNodeDef } from '../nodes/registry';
 import { CURRENT_VIEWER_SENTINEL } from '../nodes/SetCellLooksNode';
@@ -11,6 +11,7 @@ import { INVALID_NI, packNI, packNI3, NI_ARRAY_PRODUCERS } from './niCodec';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId } from './sinkAnalysis';
 import { canonicalizeAccessorEdges } from './accessorCSE';
 import { injectLinkedOutputMappings } from './linkedOutputMappings';
+import { buildAgentColorPassGraphs } from './agentLinkedOutputMappings';
 import { collapseReroutes } from './rerouteCollapse';
 import { computeAsyncReadWriteHazards } from './asyncWriteHazard';
 import { expandMacros } from './macroExpand';
@@ -2046,6 +2047,11 @@ export interface AgentCompileResult {
    *  graph (indexed by `_stopIdx - 1`). Merged into the worker's `stopMessages`
    *  alongside the cell graph's so an agent Stop Event surfaces its message. */
   stopMessages: string[];
+  /** Agent Output Mappings: one per-agent colour-pass function source per linked
+   *  agent mapping (loop-wrapped, like behaviourCode). The worker runs the one
+   *  whose `mappingId` matches the active AGENT viewer after the agent step + on
+   *  mutations. Empty when the model has no agent mappings. */
+  outputMappingCodes: Array<{ mappingId: string; code: string }>;
   error?: string;
 }
 
@@ -2202,12 +2208,12 @@ export function compileAgentGraph(
    *  graph's stop-message count so `[...cellStops, ...agentStops]` aligns 1-based. */
   stopIdxBase = 0,
 ): AgentCompileResult {
-  if (!model) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], error: 'Model required.' };
+  if (!model) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], error: 'Model required.' };
 
   // Flatten macros, strip reroutes — same front-end pipeline the cell compiler runs.
   {
     const expanded = expandMacros(agentNodes, agentEdges, model);
-    if (expanded.error) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], error: expanded.error };
+    if (expanded.error) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], error: expanded.error };
     agentNodes = expanded.nodes;
     agentEdges = expanded.edges;
   }
@@ -2245,6 +2251,7 @@ export function compileAgentGraph(
   // the eval'd behaviour fn throws (worker dies → generation stuck at 0).
   const viewerIdsToHoist = new Set<string>();
   for (const m of model.mappings || []) viewerIdsToHoist.add(m.id);
+  for (const m of model.agentMappings || []) viewerIdsToHoist.add(m.id);
   for (const n of agentNodes) {
     if (n.data.nodeType === 'setCellLooks') {
       const mid = (n.data.config.mappingId as string) || 'default';
@@ -2257,7 +2264,7 @@ export function compileAgentGraph(
 
   const behaviourNode = agentNodes.find(n => n.data.nodeType === 'behaviourStep');
   if (!behaviourNode) {
-    return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages, error: 'No Behaviour Step node in the agent graph.' };
+    return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages, outputMappingCodes: [], error: 'No Behaviour Step node in the agent graph.' };
   }
 
   const { nodeMap, inputToSource, inputToSources, flowOutputToTargets } = buildAdjacency(agentNodes, agentEdges);
@@ -2380,7 +2387,46 @@ export function compileAgentGraph(
     ].join('\n');
   }
 
-  return { behaviourCode, initCode, divisionCode, stopMessages };
+  // --- Agent Output Mappings — one per-agent colour-pass fn per linked agent
+  // mapping. Each is a SELF-CONTAINED synthesized graph (getCellAttribute[agent
+  // attr] → colorScale/categorical → setCellLooks) rooted at an outputMapping node,
+  // compiled into the SAME per-agent loop the behaviour uses (idx → r_<attr>[idx],
+  // colorIdx = idx*4 → colors). The worker runs the one matching the active AGENT
+  // viewer (its setCellLooks is guarded by `activeViewer === <mappingId>`). ---
+  const outputMappingCodes: Array<{ mappingId: string; code: string }> = [];
+  if (model && (model.agentMappings || []).length > 0) {
+    const { params: omParams } = buildAgentLoopParams(model);
+    for (const g of buildAgentColorPassGraphs(model)) {
+      try {
+        const adj = buildAdjacency(g.nodes, g.edges);
+        const rootNode = g.nodes.find(n => n.id === g.rootId)!;
+        const li = classifyLoopInvariant(g.nodes, adj.inputToSource);
+        const fus = detectFusableConsumers(g.nodes, g.edges, adj.inputToSources, adj.inputToSource, model, new Set<string>());
+        const r = compileRoot(
+          rootNode, 'do', adj.nodeMap, adj.inputToSource, adj.inputToSources, adj.flowOutputToTargets,
+          li, fus, g.nodes, g.edges, model,
+        );
+        const omScratch = r.scratchNodes.map(s => buildScratchDecl(s, model));
+        const code = [
+          `(function(${omParams}) {`,
+          ...omScratch,
+          ...viewerHoistLines,
+          ...r.preLoopValueLines,
+          '  for (let idx = 0; idx < highWater; idx++) {',
+          '    if (!_alive[idx]) continue;',
+          '    const colorIdx = idx * 4;',
+          ...r.valueLines,
+          '',
+          ...r.flowLines,
+          '  }',
+          '})',
+        ].join('\n');
+        outputMappingCodes.push({ mappingId: g.mappingId, code });
+      } catch { /* a degenerate mapping just yields no colour pass */ }
+    }
+  }
+
+  return { behaviourCode, initCode, divisionCode, stopMessages, outputMappingCodes };
 }
 
 /**

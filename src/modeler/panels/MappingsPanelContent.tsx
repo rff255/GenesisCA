@@ -8,7 +8,7 @@ import { setCurrentModelElementDrag } from '../vpl/graphState';
 import { defaultGradientStops, defaultTagColor } from '../vpl/compiler/linkedOutputMappings';
 import { GradientStopsEditor, type GradStop } from '../vpl/widgets/GradientStopsEditor';
 import { INTERPOLATION_METHODS } from '../vpl/nodes/interpolationMethods';
-import type { Mapping, RGB, ColorStop } from '../../model/types';
+import type { Mapping, RGB, ColorStop, Attribute } from '../../model/types';
 import { typeDisplayName } from '../../model/typeLabels';
 import { NumberField } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
@@ -36,10 +36,13 @@ function ColorSwatch({ value, onChange }: { value: RGB; onChange: (c: RGB) => vo
 
 /** Linked-mode editor for an Attribute→Color mapping: attribute picker plus
  *  per-type palette controls (color pickers + min/max). */
-function LinkedOutputEditor({ selected }: { selected: Mapping }) {
-  const { model, updateMapping } = useModel();
-  const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
-  const attr = model.attributes.find(a => a.id === selected.linkedAttributeId && !a.isModelAttribute);
+function LinkedOutputEditor({ selected, attrs, update }: { selected: Mapping; attrs?: Attribute[]; update?: (id: string, changes: Partial<Mapping>) => void }) {
+  const { model, updateMapping: cellUpdate } = useModel();
+  // Defaults to the CELL attributes + updateMapping; the AGENT mappings pass the
+  // agent attribute set + updateAgentMapping so the SAME editor serves both layers.
+  const cellAttrs = attrs ?? model.attributes.filter(a => !a.isModelAttribute);
+  const updateMapping = update ?? cellUpdate;
+  const attr = cellAttrs.find(a => a.id === selected.linkedAttributeId);
 
   const rowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 };
   const lblStyle: React.CSSProperties = { fontSize: 12 };
@@ -48,7 +51,7 @@ function LinkedOutputEditor({ selected }: { selected: Mapping }) {
     updateMapping(selected.id, { linkedColors: { ...selected.linkedColors, gradient: next } });
 
   const handleAttrChange = (id: string) => {
-    const a = model.attributes.find(x => x.id === id);
+    const a = cellAttrs.find(x => x.id === id);
     const changes: Partial<Mapping> = { linkedAttributeId: id, linkedColors: undefined };
     if (a && (a.type === 'float' || a.type === 'integer')) {
       changes.linkedMin = a.min ?? 0;
@@ -177,8 +180,11 @@ function handleMappingDragEnd() {
 }
 
 export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) {
-  const { model, addMapping, removeMapping, updateMapping, reorderMappings } = useModel();
+  const { model, addMapping, removeMapping, updateMapping, reorderMappings, addAgentMapping, removeAgentMapping, updateAgentMapping } = useModel();
   const [selectedId, setSelectedId] = useDetailSelection('mappings');
+  const agentsOn = !!model.topologyMode?.agents;
+  const agentMappings = model.agentMappings ?? [];
+  const agentAttrs = (model.agentAttributes ?? []).filter(a => a.type !== 'color' && a.type !== 'lookupTable');
 
   const attrToColor = model.mappings.filter(m => m.isAttributeToColor);
   const colorToAttr = model.mappings.filter(m => !m.isAttributeToColor);
@@ -306,6 +312,54 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
           </button>
         </div>
       </div>
+
+      {/* Agent Output Mappings — the agent-layer A→C views (the two-layer viewer).
+          Inline-edited (pick an agent attribute → colour) so the user defines an
+          agent VIEW instead of hand-wiring Set Cell Looks in the Behaviour Step. */}
+      {agentsOn && (
+        <div className={styles.section}>
+          <div className={styles.sectionTitle}>Agent Output Mappings (A&rarr;C)</div>
+          <span style={{ color: '#888', fontSize: '0.66rem', display: 'block', margin: '0 0 6px' }}>
+            Each is a colour view of the agents, picking an agent attribute → colour.
+            Switch between them in the simulator&apos;s viewer bar (Agents row).
+          </span>
+          {agentMappings.length === 0 && (
+            <span style={{ color: '#888', fontSize: '0.68rem', fontStyle: 'italic' }}>No agent views yet.</span>
+          )}
+          {agentMappings.map(m => (
+            <div key={m.id} id={`mapping-${m.id}`} className={styles.fieldGroup} style={{ borderTop: '1px solid #333', paddingTop: 8, marginTop: 6 }}>
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>Name</label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input
+                    className={styles.textInput}
+                    style={{ flex: 1 }}
+                    value={m.name}
+                    onChange={e => updateAgentMapping(m.id, { name: e.target.value })}
+                  />
+                  <button
+                    className={styles.deleteButton}
+                    style={{ padding: '2px 8px' }}
+                    onClick={() => removeAgentMapping(m.id)}
+                    title="Remove agent view"
+                  >&times;</button>
+                </div>
+              </div>
+              <LinkedOutputEditor selected={{ ...m, linked: true }} attrs={agentAttrs} update={updateAgentMapping} />
+            </div>
+          ))}
+          <div className={styles.buttonRow}>
+            <button
+              className={styles.addButton}
+              onClick={() => addAgentMapping()}
+              disabled={agentAttrs.length === 0}
+              title={agentAttrs.length === 0 ? 'Add an agent attribute first (Attributes panel, Agents tab).' : undefined}
+            >
+              + Add Agent View
+            </button>
+          </div>
+        </div>
+      )}
 
       </>)}
 
