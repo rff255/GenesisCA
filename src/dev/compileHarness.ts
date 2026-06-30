@@ -17,6 +17,7 @@
 import type { CAModel } from '../model/types';
 import { migrateAgentAttributeSplit } from '../model/agentAttributeSplitMigration';
 import { migrateVariableScopeSplit } from '../model/variableScopeMigration';
+import { migrateAgentTypeRemoval } from '../model/agentTypeRemovalMigration';
 import { compileGraph, compileAgentGraph } from '../modeler/vpl/compiler/compile';
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
@@ -148,6 +149,7 @@ export function migrateForHarness(m: CAModel): CAModel {
   // attributes into agentAttributes[] (+ agentAccess on field attrs) and move
   // agent-referenced cell variables into the agent variable set. No-op for
   // non-agent / already-split models.
+  m = migrateAgentTypeRemoval(m);
   m = migrateAgentAttributeSplit(m);
   m = migrateVariableScopeSplit(m);
   return m;

@@ -41,7 +41,7 @@ const exX = node('expression', { expression: '(a % ' + W + ') + 0.5', visibleCou
 vE(gi, 'value', exX, 'a');
 const exY = node('expression', { expression: 'floor(a / ' + W + ') + 0.5', visibleCount: 1 }, 3, -1);
 vE(gi, 'value', exY, 'a');
-const ca = node('createAgent', { _port_radius: '0.45', _port_type: '0' }, 4, 0);
+const ca = node('createAgent', { _port_radius: '0.45' }, 4, 0);
 vE(exX, 'result', ca, 'x');
 vE(exY, 'result', ca, 'y');
 const rnd = node('getRandom', { randomType: 'bool', _port_probability: '0.30' }, 4, 1.5);

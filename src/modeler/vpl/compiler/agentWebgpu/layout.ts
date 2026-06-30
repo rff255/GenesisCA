@@ -81,7 +81,7 @@ export const AGENT_GPU_REQUEST_FIELDS = [
 
 /** Per-agent i32 fields (identity / reductions the behaviour reads). */
 export const AGENT_GPU_I32_FIELDS = [
-  'type', 'lineage', 'bondCount',
+  'lineage', 'bondCount',
 ] as const;
 
 export type AgentGpuF32Field = (typeof AGENT_GPU_F32_FIELDS)[number];

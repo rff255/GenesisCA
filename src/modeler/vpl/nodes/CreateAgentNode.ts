@@ -6,9 +6,9 @@ import type { NodeTypeDef } from '../types';
  *  Radius / Type by the handle) BEFORE committing it with Add Agent To World.
  *
  *  v1 is INIT-ONLY: place it inside the Agent Init Event's DO chain (typically a
- *  Loop). The compiler declares `const _v<id>_handle = _agentCreate(x, y, radius,
- *  type)` at the Create Agent's flow position (compileFlowChain special-case);
- *  the `_agentCreate` host closure allocs a slot, inits it (STAGED, alive=0), and
+ *  Loop). The compiler declares `const _v<id>_handle = _agentCreate(x, y, radius)`
+ *  at the Create Agent's flow position (compileFlowChain special-case); the
+ *  `_agentCreate` host closure allocs a slot, inits it (STAGED, alive=0), and
  *  returns the id. compile() returns '' (the handle is emitted in compileFlowChain). */
 export const CreateAgentNode: NodeTypeDef = {
   type: 'createAgent',
@@ -23,7 +23,6 @@ export const CreateAgentNode: NodeTypeDef = {
     { id: 'x', label: 'X', kind: 'input', category: 'value', dataType: 'float', inlineWidget: 'number', defaultValue: '0' },
     { id: 'y', label: 'Y', kind: 'input', category: 'value', dataType: 'float', inlineWidget: 'number', defaultValue: '0' },
     { id: 'radius', label: 'Radius', kind: 'input', category: 'value', dataType: 'float', inlineWidget: 'number', defaultValue: '1' },
-    { id: 'type', label: 'Type', kind: 'input', category: 'value', dataType: 'integer', inlineWidget: 'number', defaultValue: '0' },
     { id: 'handle', label: 'Handle', kind: 'output', category: 'value', dataType: 'integer' },
   ],
   defaultConfig: {},

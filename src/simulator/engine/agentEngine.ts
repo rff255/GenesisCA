@@ -218,7 +218,7 @@ const AGENT_F64_FIELDS = [
   'density',
 ] as const;
 const AGENT_I32_FIELDS = [
-  'type', 'lineage', 'epoch', 'bondCount',
+  'lineage', 'epoch', 'bondCount',
   'bondFormReq', 'bondBreakReq',
 ] as const;
 const AGENT_U8_FIELDS = ['alive', 'divideRequest', 'killRequest'] as const;
@@ -434,7 +434,7 @@ export interface AgentStore {
   age: Float64Array;
 
   // --- identity (Int32) ---
-  type: Int32Array; lineage: Int32Array;
+  lineage: Int32Array;
 
   // --- liveness ---
   alive: Uint8Array;
@@ -657,7 +657,6 @@ export function createAgentStore(
     radius: f64('radius'),
     targetRadius: f64('targetRadius'),
     age: f64('age'),
-    type: i32('type'),
     lineage: i32('lineage'),
     alive: u8('alive'),
     epoch: i32('epoch'),
@@ -732,15 +731,11 @@ export function swapAgentAttrs(store: AgentStore): void {
   }
 }
 
-/** A small, distinguishable default palette so agents of different `type` are
- *  visible before any colour pass runs (Reset / pre-A3). */
-const AGENT_PALETTE: Array<[number, number, number]> = [
-  [76, 201, 240], [240, 113, 103], [120, 224, 143], [240, 196, 84],
-  [197, 137, 232], [95, 209, 199], [240, 150, 196], [180, 180, 180],
-];
-export function defaultAgentColor(type: number): [number, number, number] {
-  return AGENT_PALETTE[((type % AGENT_PALETTE.length) + AGENT_PALETTE.length) % AGENT_PALETTE.length]!;
-}
+/** The neutral colour a freshly-seeded agent gets before any colour pass runs
+ *  (a Behaviour-Step Set Cell Looks, or an Agent Output Mapping). GenesisCA has
+ *  no built-in agent "type", so there is no per-type palette — every agent
+ *  starts the same recognisable cyan and the model colours it however it likes. */
+export const DEFAULT_AGENT_COLOR: readonly [number, number, number] = [76, 201, 240];
 
 /** Allocate one agent slot. Free-list first (recycle), else grow highWater.
  *  Returns the new slot id, or -1 when the maxAgents ceiling is hit (the caller
@@ -765,7 +760,7 @@ export function allocAgentSlot(store: AgentStore): number {
  *  job via freeAgentSlot on death). */
 export function initAgentSlot(
   store: AgentStore, id: number,
-  x: number, y: number, z: number, radius: number, type: number, lineage: number,
+  x: number, y: number, z: number, radius: number, lineage: number,
 ): void {
   store.x[id] = x; store.y[id] = y; store.z[id] = z;
   store.xNext[id] = x; store.yNext[id] = y; store.zNext[id] = z;
@@ -773,7 +768,7 @@ export function initAgentSlot(
   store.forceZ[id] = 0;
   store.radius[id] = radius; store.targetRadius[id] = radius;
   store.age[id] = 0;
-  store.type[id] = type; store.lineage[id] = lineage;
+  store.lineage[id] = lineage;
   store.bondCount[id] = 0;
   store.density[id] = 0;
   store.divideRequest[id] = 0; store.killRequest[id] = 0;
@@ -781,7 +776,7 @@ export function initAgentSlot(
     store.attrRead[spec.id]![id] = spec.defaultValue;
     store.attrWrite[spec.id]![id] = spec.defaultValue;
   }
-  const [r, g, b] = defaultAgentColor(type);
+  const [r, g, b] = DEFAULT_AGENT_COLOR;
   const c = id * 4;
   store.colors[c] = r; store.colors[c + 1] = g; store.colors[c + 2] = b; store.colors[c + 3] = 255;
 }
@@ -816,16 +811,16 @@ export function freeStagedSlot(store: AgentStore, id: number): void {
   if (store.freeTop < store.maxAgents) store.freeList[store.freeTop++] = id;
 }
 
-/** Seed N agents. Each spec gives a position (+ optional radius/type/lineage);
+/** Seed N agents. Each spec gives a position (+ optional radius/lineage);
  *  attributes initialise to their defaults. Returns the ids actually created
  *  (short of `specs.length` if the ceiling is hit — the worker surfaces that). */
-export interface AgentSeedSpec { x: number; y: number; z?: number; radius?: number; type?: number; lineage?: number }
+export interface AgentSeedSpec { x: number; y: number; z?: number; radius?: number; lineage?: number }
 export function seedAgents(store: AgentStore, specs: AgentSeedSpec[], defaultRadius: number): number[] {
   const ids: number[] = [];
   for (const s of specs) {
     const id = allocAgentSlot(store);
     if (id < 0) break; // ceiling
-    initAgentSlot(store, id, s.x, s.y, s.z ?? 0, s.radius ?? defaultRadius, s.type ?? 0, s.lineage ?? id);
+    initAgentSlot(store, id, s.x, s.y, s.z ?? 0, s.radius ?? defaultRadius, s.lineage ?? id);
     ids.push(id);
   }
   return ids;
@@ -864,7 +859,6 @@ export interface AgentRenderSnapshot {
   radius: Float64Array;
   alive: Uint8Array;
   colors: Uint8ClampedArray;
-  type: Int32Array;
   /** Flat [a, b, a, b, …] live bond index pairs (empty when no bonds). */
   bonds: Int32Array;
 }
@@ -1291,9 +1285,9 @@ export function divideAgent(
     if (is3d) { az = az < 0 ? 0 : az > D ? D : az; bz = bz < 0 ? 0 : bz > D ? D : bz; }
   }
 
-  // 5. daughter B (new slot) — inherit mother's type/lineage/attrs/colour. z = bz
+  // 5. daughter B (new slot) — inherit mother's lineage/attrs/colour. z = bz
   // (the mother's z in 2D, the −½·off·m̂ offset in 3D).
-  initAgentSlot(store, newId, bx, by, bz, rB, store.type[i]!, store.lineage[i]!);
+  initAgentSlot(store, newId, bx, by, bz, rB, store.lineage[i]!);
   for (const spec of store.attrSpecs) {
     store.attrRead[spec.id]![newId] = store.attrRead[spec.id]![i]!;
   }
@@ -1417,7 +1411,6 @@ export function snapshotAgentsForRender(store: AgentStore): AgentRenderSnapshot 
     radius: store.radius.slice(0, hw),
     alive: store.alive.slice(0, hw),
     colors: store.colors.slice(0, hw * 4),
-    type: store.type.slice(0, hw),
     bonds: snapshotBonds(store),
   };
 }
@@ -1442,7 +1435,7 @@ export interface AgentStatePayload {
    *  `if (p.z)` additive-load guard). `worldDepth` is NOT serialized (re-derived
    *  from `gridDepth` on load). */
   z?: ArrayBuffer; vz?: ArrayBuffer;
-  age: ArrayBuffer; type: ArrayBuffer; lineage: ArrayBuffer; alive: ArrayBuffer; epoch: ArrayBuffer;
+  age: ArrayBuffer; lineage: ArrayBuffer; alive: ArrayBuffer; epoch: ArrayBuffer;
   freeList: ArrayBuffer;
   bondCount: ArrayBuffer; bondPartner: ArrayBuffer; bondPartnerEpoch: ArrayBuffer;
   bondRestLength: ArrayBuffer; bondStiffness: ArrayBuffer; bondTypeLabel: ArrayBuffer;
@@ -1471,7 +1464,7 @@ export function serializeAgentStore(store: AgentStore, transfers: ArrayBuffer[])
     highWater: hw, liveCount: store.liveCount, freeTop: store.freeTop, maxBonds: store.maxBonds,
     x: sl(store.x, hw), y: sl(store.y, hw), radius: sl(store.radius, hw), targetRadius: sl(store.targetRadius, hw),
     ...(is3d ? { z: sl(store.z, hw), vz: sl(store.vz, hw) } : {}),
-    age: sl(store.age, hw), type: sl(store.type, hw), lineage: sl(store.lineage, hw),
+    age: sl(store.age, hw), lineage: sl(store.lineage, hw),
     alive: sl(store.alive, hw), epoch: sl(store.epoch, hw),
     freeList: freeListCopy.buffer,
     bondCount: sl(store.bondCount, hw),
@@ -1510,7 +1503,7 @@ export function deserializeAgentStore(store: AgentStore, p: AgentStatePayload): 
   if (p.vz) copyInto(store.vz, p.vz, Float64Array as never);
   copyInto(store.radius, p.radius, Float64Array as never); copyInto(store.targetRadius, p.targetRadius, Float64Array as never);
   copyInto(store.age, p.age, Float64Array as never);
-  copyInto(store.type, p.type, Int32Array as never); copyInto(store.lineage, p.lineage, Int32Array as never);
+  copyInto(store.lineage, p.lineage, Int32Array as never);
   copyInto(store.alive, p.alive, Uint8Array as never); copyInto(store.epoch, p.epoch, Int32Array as never);
   copyInto(store.bondCount, p.bondCount, Int32Array as never);
   copyInto(store.bondPartner, p.bondPartner, Int32Array as never);

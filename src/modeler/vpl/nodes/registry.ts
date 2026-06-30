@@ -26,7 +26,6 @@ import { CreateAgentNode } from './CreateAgentNode';
 import { AddAgentToWorldNode } from './AddAgentToWorldNode';
 import { SetAgentPositionNode } from './SetAgentPositionNode';
 import { SetAgentRadiusNode } from './SetAgentRadiusNode';
-import { SetAgentTypeNode } from './SetAgentTypeNode';
 import { FilterAgentsNode } from './FilterAgentsNode';
 import { JoinAgentsNode } from './JoinAgentsNode';
 import { PickRandomAgentNode } from './PickRandomAgentNode';
@@ -129,7 +128,6 @@ const ALL_NODES: NodeTypeDef[] = [
   AddAgentToWorldNode,
   SetAgentPositionNode,
   SetAgentRadiusNode,
-  SetAgentTypeNode,
   GetSelfPositionNode,
   GetRadiusNode,
   GetBondDegreeNode,

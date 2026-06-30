@@ -1054,7 +1054,7 @@ function compileRoot(
           const inline = port ? getInlineValue(port, node.data.config) : undefined;
           return inline ?? dflt;
         };
-        flowLines.push(`${indent}const _v${node.id}_handle = _agentCreate(${inP('x', '0')}, ${inP('y', '0')}, ${inP('radius', '1')}, ${inP('type', '0')});`);
+        flowLines.push(`${indent}const _v${node.id}_handle = _agentCreate(${inP('x', '0')}, ${inP('y', '0')}, ${inP('radius', '1')});`);
       } else if (node.data.nodeType === 'switch') {
         const switchMode = (node.data.config.mode as string) || 'conditions';
         const firstMatchOnly = node.data.config.firstMatchOnly !== false;
@@ -2076,7 +2076,7 @@ function buildDivisionParams(model: CAModel): string {
     // division-safe (C-T1). These MIRROR buildAgentLoopParams's positions.
     '_alive', 'highWater',
     '_agentX', '_agentY', '_agentRadius', '_agentTargetRadius', '_agentAge',
-    '_agentType', '_agentLineage', '_agentBondCount', '_agentDensity',
+    '_agentLineage', '_agentBondCount', '_agentDensity',
     '_agentVX', '_agentVY',
     '_bondPartner', 'maxBonds',
   ];
@@ -2122,7 +2122,7 @@ function buildAgentInitParams(model: CAModel): string {
   const fieldAttrs = cellFieldAttrsOf(model);
   const parts: string[] = [
     '_agentCreate', '_agentAddToWorld', '_agentMaxAgents',
-    '_agentX', '_agentY', '_agentRadius', '_agentTargetRadius', '_agentType', '_agentAge', '_agentLineage', '_agentVX', '_agentVY',
+    '_agentX', '_agentY', '_agentRadius', '_agentTargetRadius', '_agentAge', '_agentLineage', '_agentVX', '_agentVY',
   ];
   for (const a of agentAttrs) parts.push(`r_${a.id}`);
   for (const a of agentAttrs) parts.push(`w_${a.id}`);
@@ -2147,7 +2147,7 @@ export function buildAgentLoopParams(model: CAModel): { params: string; agentAtt
     // engine geometry / identity / reductions (read by behaviourStep preamble +
     // the agent read nodes)
     '_agentX', '_agentY', '_agentRadius', '_agentTargetRadius', '_agentAge',
-    '_agentType', '_agentLineage', '_agentBondCount', '_agentDensity',
+    '_agentLineage', '_agentBondCount', '_agentDensity',
     // velocity (read by Get Velocity) + the per-step force accumulator (Apply
     // Force adds in; the engine adds its soft-sphere + bond springs after)
     '_agentVX', '_agentVY', '_agentForceX', '_agentForceY',
@@ -2296,7 +2296,6 @@ export function compileAgentGraph(
     `    const _v${bsId}_myArea = Math.PI * _agentRadius[idx] * _agentRadius[idx];`,
     `    const _v${bsId}_myBondDegree = _agentBondCount[idx];`,
     `    const _v${bsId}_myAge = _agentAge[idx];`,
-    `    const _v${bsId}_myType = _agentType[idx];`,
     ...valueLines,
     '',
     ...flowLines,

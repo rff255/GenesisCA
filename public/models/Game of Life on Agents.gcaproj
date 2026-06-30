@@ -87,7 +87,7 @@
   "indicators": [],
   "graphNodes": [
     {
-      "id": "n1h35zq",
+      "id": "n1hglxm",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -102,7 +102,7 @@
   "graphEdges": [],
   "agentGraphNodes": [
     {
-      "id": "a0xis6",
+      "id": "a04e4t",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -114,7 +114,7 @@
       }
     },
     {
-      "id": "a1gjx5",
+      "id": "a122lu",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -128,7 +128,7 @@
       }
     },
     {
-      "id": "a3p1hs",
+      "id": "a3lnh1",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -142,7 +142,7 @@
       }
     },
     {
-      "id": "a4w27s",
+      "id": "a4uavi",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -157,7 +157,7 @@
       }
     },
     {
-      "id": "a6asx1",
+      "id": "a6bw9d",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -172,7 +172,7 @@
       }
     },
     {
-      "id": "a8zm3c",
+      "id": "a8oga2",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -181,13 +181,12 @@
       "data": {
         "nodeType": "createAgent",
         "config": {
-          "_port_radius": "0.45",
-          "_port_type": "0"
+          "_port_radius": "0.45"
         }
       }
     },
     {
-      "id": "ab7j2k",
+      "id": "abovtc",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -202,7 +201,7 @@
       }
     },
     {
-      "id": "ac9ty6",
+      "id": "acm3ug",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -216,7 +215,7 @@
       }
     },
     {
-      "id": "afbg5o",
+      "id": "afry5x",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -228,7 +227,7 @@
       }
     },
     {
-      "id": "ahxpz5",
+      "id": "ahp4b9",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -242,7 +241,7 @@
       }
     },
     {
-      "id": "ain6vt",
+      "id": "aivcvs",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -257,7 +256,7 @@
       }
     },
     {
-      "id": "aky6sz",
+      "id": "akvdpo",
       "type": "caNode",
       "position": {
         "x": 1540,
@@ -271,7 +270,7 @@
       }
     },
     {
-      "id": "aqqte9",
+      "id": "aqcpu7",
       "type": "caNode",
       "position": {
         "x": 0,
@@ -283,7 +282,7 @@
       }
     },
     {
-      "id": "ardrr1",
+      "id": "arvq2f",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -297,7 +296,7 @@
       }
     },
     {
-      "id": "asocyx",
+      "id": "as74t5",
       "type": "caNode",
       "position": {
         "x": 220,
@@ -311,7 +310,7 @@
       }
     },
     {
-      "id": "at88f6",
+      "id": "at5snv",
       "type": "caNode",
       "position": {
         "x": 440,
@@ -325,7 +324,7 @@
       }
     },
     {
-      "id": "avq8me",
+      "id": "avwyvy",
       "type": "caNode",
       "position": {
         "x": 660,
@@ -339,7 +338,7 @@
       }
     },
     {
-      "id": "axppj1",
+      "id": "axqato",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -355,7 +354,7 @@
       }
     },
     {
-      "id": "az9wbi",
+      "id": "aza3yy",
       "type": "caNode",
       "position": {
         "x": 880,
@@ -371,7 +370,7 @@
       }
     },
     {
-      "id": "a11pad4",
+      "id": "a11bbtc",
       "type": "caNode",
       "position": {
         "x": 1100,
@@ -385,7 +384,7 @@
       }
     },
     {
-      "id": "a14ux5g",
+      "id": "a1496b9",
       "type": "caNode",
       "position": {
         "x": 1320,
@@ -399,7 +398,7 @@
       }
     },
     {
-      "id": "a178wtv",
+      "id": "a17yo5z",
       "type": "caNode",
       "position": {
         "x": 1540,
@@ -413,7 +412,7 @@
       }
     },
     {
-      "id": "a196ps4",
+      "id": "a1945yw",
       "type": "caNode",
       "position": {
         "x": 1760,
@@ -436,7 +435,7 @@
       }
     },
     {
-      "id": "a1be62v",
+      "id": "a1bggt3",
       "type": "caNode",
       "position": {
         "x": 1980,
@@ -452,205 +451,205 @@
   ],
   "agentGraphEdges": [
     {
-      "id": "e22465",
-      "source": "a0xis6",
-      "target": "a1gjx5",
+      "id": "e21b40",
+      "source": "a04e4t",
+      "target": "a122lu",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "e520oq",
-      "source": "a3p1hs",
-      "target": "a4w27s",
+      "id": "e55nrs",
+      "source": "a3lnh1",
+      "target": "a4uavi",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "e75ite",
-      "source": "a3p1hs",
-      "target": "a6asx1",
+      "id": "e70rvp",
+      "source": "a3lnh1",
+      "target": "a6bw9d",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "e9hj76",
-      "source": "a4w27s",
-      "target": "a8zm3c",
+      "id": "e9qs4f",
+      "source": "a4uavi",
+      "target": "a8oga2",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "eaqfuw",
-      "source": "a6asx1",
-      "target": "a8zm3c",
+      "id": "eap4fz",
+      "source": "a6bw9d",
+      "target": "a8oga2",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_y"
     },
     {
-      "id": "edft9n",
-      "source": "a8zm3c",
-      "target": "ac9ty6",
+      "id": "edbqn8",
+      "source": "a8oga2",
+      "target": "acm3ug",
       "sourceHandle": "output_value_handle",
       "targetHandle": "input_value_agentId"
     },
     {
-      "id": "eejexz",
-      "source": "ab7j2k",
-      "target": "ac9ty6",
+      "id": "eefdav",
+      "source": "abovtc",
+      "target": "acm3ug",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "eguf9j",
-      "source": "a8zm3c",
-      "target": "afbg5o",
+      "id": "egs5ai",
+      "source": "a8oga2",
+      "target": "afry5x",
       "sourceHandle": "output_value_handle",
       "targetHandle": "input_value_handle"
     },
     {
-      "id": "ejmvlb",
-      "source": "ahxpz5",
-      "target": "ain6vt",
+      "id": "ejzk9z",
+      "source": "ahp4b9",
+      "target": "aivcvs",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "elmukg",
-      "source": "ain6vt",
-      "target": "aky6sz",
+      "id": "el1o4s",
+      "source": "aivcvs",
+      "target": "akvdpo",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "emod23",
-      "source": "a1gjx5",
-      "target": "a8zm3c",
+      "id": "emo1br",
+      "source": "a122lu",
+      "target": "a8oga2",
       "sourceHandle": "output_flow_body",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "ensn0t",
-      "source": "a8zm3c",
-      "target": "ac9ty6",
+      "id": "enlsb0",
+      "source": "a8oga2",
+      "target": "acm3ug",
       "sourceHandle": "output_flow_next",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "eogc6n",
-      "source": "ac9ty6",
-      "target": "afbg5o",
+      "id": "eo2m80",
+      "source": "acm3ug",
+      "target": "afry5x",
       "sourceHandle": "output_flow_next",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "epy4id",
-      "source": "afbg5o",
-      "target": "aky6sz",
+      "id": "ep5y0o",
+      "source": "afry5x",
+      "target": "akvdpo",
       "sourceHandle": "output_flow_next",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "eutoi7",
-      "source": "asocyx",
-      "target": "at88f6",
+      "id": "eu5gly",
+      "source": "as74t5",
+      "target": "at5snv",
       "sourceHandle": "output_value_agents",
       "targetHandle": "input_value_agents"
     },
     {
-      "id": "ew6zpo",
-      "source": "at88f6",
-      "target": "avq8me",
+      "id": "ewsb1d",
+      "source": "at5snv",
+      "target": "avwyvy",
       "sourceHandle": "output_value_values",
       "targetHandle": "input_value_values"
     },
     {
-      "id": "eympqg",
-      "source": "avq8me",
-      "target": "axppj1",
+      "id": "eybtbp",
+      "source": "avwyvy",
+      "target": "axqato",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "e10crlm",
-      "source": "avq8me",
-      "target": "az9wbi",
+      "id": "e105ewq",
+      "source": "avwyvy",
+      "target": "aza3yy",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_x"
     },
     {
-      "id": "e12s5l9",
-      "source": "az9wbi",
-      "target": "a11pad4",
+      "id": "e12w9fe",
+      "source": "aza3yy",
+      "target": "a11bbtc",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "e13nelq",
-      "source": "ardrr1",
-      "target": "a11pad4",
+      "id": "e13wo7j",
+      "source": "arvq2f",
+      "target": "a11bbtc",
       "sourceHandle": "output_value_value",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "e150ged",
-      "source": "axppj1",
-      "target": "a14ux5g",
+      "id": "e15zmh5",
+      "source": "axqato",
+      "target": "a1496b9",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_a"
     },
     {
-      "id": "e16zk1s",
-      "source": "a11pad4",
-      "target": "a14ux5g",
+      "id": "e16d5ud",
+      "source": "a11bbtc",
+      "target": "a1496b9",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "e184wk1",
-      "source": "a14ux5g",
-      "target": "a178wtv",
+      "id": "e18p0wa",
+      "source": "a1496b9",
+      "target": "a17yo5z",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_value"
     },
     {
-      "id": "e1ag4bj",
-      "source": "a14ux5g",
-      "target": "a196ps4",
+      "id": "e1aigc2",
+      "source": "a1496b9",
+      "target": "a1945yw",
       "sourceHandle": "output_value_result",
       "targetHandle": "input_value_index"
     },
     {
-      "id": "e1c6fxu",
-      "source": "a196ps4",
-      "target": "a1be62v",
+      "id": "e1cd4bs",
+      "source": "a1945yw",
+      "target": "a1bggt3",
       "sourceHandle": "output_value_r",
       "targetHandle": "input_value_r"
     },
     {
-      "id": "e1dvf17",
-      "source": "a196ps4",
-      "target": "a1be62v",
+      "id": "e1dsij7",
+      "source": "a1945yw",
+      "target": "a1bggt3",
       "sourceHandle": "output_value_g",
       "targetHandle": "input_value_g"
     },
     {
-      "id": "e1evqbo",
-      "source": "a196ps4",
-      "target": "a1be62v",
+      "id": "e1ekm9e",
+      "source": "a1945yw",
+      "target": "a1bggt3",
       "sourceHandle": "output_value_b",
       "targetHandle": "input_value_b"
     },
     {
-      "id": "e1fbnx8",
-      "source": "aqqte9",
-      "target": "a178wtv",
+      "id": "e1fpfg7",
+      "source": "aqcpu7",
+      "target": "a17yo5z",
       "sourceHandle": "output_flow_do",
       "targetHandle": "input_flow_do"
     },
     {
-      "id": "e1gfav1",
-      "source": "a178wtv",
-      "target": "a1be62v",
+      "id": "e1gr149",
+      "source": "a17yo5z",
+      "target": "a1bggt3",
       "sourceHandle": "output_flow_next",
       "targetHandle": "input_flow_do"
     }

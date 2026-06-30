@@ -364,8 +364,8 @@ export function uploadAgentSoA(rt: AgentWebGPURuntime, s: AgentStore): void {
   }
   rt.device.queue.writeBuffer(rt.agentF32Buf, 0, f.buffer, f.byteOffset, f.byteLength);
 
-  // i32 fields — type / lineage / bondCount.
-  const i32Src: Record<string, Int32Array> = { type: s.type, lineage: s.lineage, bondCount: s.bondCount };
+  // i32 fields — lineage / bondCount.
+  const i32Src: Record<string, Int32Array> = { lineage: s.lineage, bondCount: s.bondCount };
   for (const field of AGENT_GPU_I32_FIELDS) {
     const base = L.i32Base[field]!;
     const src = i32Src[field];
@@ -771,13 +771,10 @@ export async function readbackAgentStep(rt: AgentWebGPURuntime, s: AgentStore): 
     const isInt = s.attrKind[id] !== 'float64';
     for (let i = 0; i < hw; i++) { if (!s.alive[i]) continue; dst[i] = isInt ? Math.round(f[base + i]!) : f[base + i]!; }
   }
-  // i32 type (setAgentType) → the CPU store (the worker reads it next step).
-  if (pooledI) {
-    const ix = new Int32Array(pooledI.buffer.getMappedRange(0, i32ByteLen));
-    const typeB = L.i32Base['type']!;
-    for (let i = 0; i < hw; i++) { if (!s.alive[i]) continue; s.type[i] = ix[typeB + i]!; }
-    pooledI.buffer.unmap(); pooledI.inUse = false;
-  }
+  // (No i32 SoA readback: the agent i32 fields — lineage / bondCount — are
+  // CPU-owned + uploaded read-only. There is no built-in agent "type" any more,
+  // and no behaviour node writes the i32 SoA.)
+  if (pooledI) { pooledI.buffer.unmap(); pooledI.inUse = false; }
   stagingF.unmap(); stagingC.unmap();
   pooledF.inUse = false; pooledC.inUse = false;
 }

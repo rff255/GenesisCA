@@ -120,7 +120,7 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
   'arrayElement', 'arrayLength',
   // agent attributes (Get/Set/Update Attribute on the agent SoA)
   'getCellAttribute', 'setAttribute', 'updateAttribute', 'setAgentAttribute',
-  'setVelocity', 'setAgentPosition', 'setAgentRadius', 'setAgentType',
+  'setVelocity', 'setAgentPosition', 'setAgentRadius',
   // structural writes (the post-step CPU structural phase reads the requests)
   'divideAgent', 'formBond', 'breakBond', 'killAgent',
   // field bridge (the closed agent↔grid morphogen feedback)
@@ -525,7 +525,6 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
         }
         else if (portId === 'myAge') pushF64Elem(em, ctx.layout.f64['age']!, ctx.idxLocal);
         else if (portId === 'myBondDegree') { em.localGet(ctx.idxLocal); em.i32Const(4); em.op(OP_I32_MUL); em.i32Const(ctx.layout.i32['bondCount']!); em.op(OP_I32_ADD); em.i32Load(); em.i32ToF64(); }
-        else if (portId === 'myType') { em.localGet(ctx.idxLocal); em.i32Const(4); em.op(OP_I32_MUL); em.i32Const(ctx.layout.i32['type']!); em.op(OP_I32_ADD); em.i32Load(); em.i32ToF64(); }
         else em.f64Const(0);
       });
       break;
@@ -720,7 +719,7 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
       break;
     }
     case 'setVelocity': case 'setAgentAttribute': case 'setAgentPosition':
-    case 'setAgentRadius': case 'setAgentType': case 'setAgentsAttribute':
+    case 'setAgentRadius': case 'setAgentsAttribute':
       // These are FLOW nodes — should never reach here as a value source.
       throw new Error(`agentWasm: '${type}' is a flow node, not a value source`);
     default:
@@ -2030,15 +2029,6 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
         const rv = em.allocLocal(F64); pushValueInputF64(ctx, node, 'radius', 1); em.localSet(rv);
         pushF64ElemAddr(em, ctx.layout.f64['radius']!, aLocal); em.localGet(rv); em.f64Store();
         pushF64ElemAddr(em, ctx.layout.f64['targetRadius']!, aLocal); em.localGet(rv); em.f64Store();
-      });
-      compileFlowChain(ctx, node.id, 'next');
-      break;
-    }
-    case 'setAgentType': {
-      emitGuardedAgentWrite(ctx, node, 'agentId', (aLocal) => {
-        pushI32ElemAddr(em, ctx.layout.i32['type']!, aLocal);
-        pushValueAs(em, resolveValueInput(ctx, node, 'type', 0), I32);
-        em.i32Store();
       });
       compileFlowChain(ctx, node.id, 'next');
       break;

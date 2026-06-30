@@ -9,9 +9,8 @@ import { is3dModelLike } from '../compiler/niCodec';
  *  …) lands on the agent SoA with no node change.
  *
  *  Singleton (one per Agents graph, like Step). Value outputs expose the agent's
- *  own geometry/identity — `myX`/`myY`(/`myZ`)/`myRadius`/`myArea`/`myBondDegree`/
- *  `myAge`/`myType`. (`myZ` is hidden in 2D models via `hiddenPorts`, like the
- *  Init Event's `z`.)
+ *  own geometry — `myX`/`myY`(/`myZ`)/`myRadius`/`myArea`/`myBondDegree`/`myAge`.
+ *  (`myZ` is hidden in 2D models via `hiddenPorts`, like the Init Event's `z`.)
  *
  *  Requirements: `bondGraph` — available only in an Agents-topology model, on
  *  the Agents sub-tab.
@@ -35,7 +34,6 @@ export const BehaviourStepNode: NodeTypeDef = {
     { id: 'myArea', label: 'Area', kind: 'output', category: 'value', dataType: 'float' },
     { id: 'myBondDegree', label: 'Bond Degree', kind: 'output', category: 'value', dataType: 'integer' },
     { id: 'myAge', label: 'Age', kind: 'output', category: 'value', dataType: 'integer' },
-    { id: 'myType', label: 'Type', kind: 'output', category: 'value', dataType: 'integer' },
   ],
   // myZ only exists in a 3D-agent model. Hidden in 2D (the compiler emits no
   // _agentZ decode / `_v<id>_myZ` preamble there — that emit is compile-side in

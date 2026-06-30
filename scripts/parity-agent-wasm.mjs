@@ -42,7 +42,7 @@ function buildArgs(s, hash, ctx) {
   const EMPTY_I32 = new Int32Array(0);
   const args = [
     s.alive, s.highWater,
-    s.x, s.y, s.radius, s.targetRadius, s.age, s.type, s.lineage, s.bondCount, s.density,
+    s.x, s.y, s.radius, s.targetRadius, s.age, s.lineage, s.bondCount, s.density,
     s.vx, s.vy, s.forceX, s.forceY,
     hash ? 1 : 0,
     hash ? hash.binStart : EMPTY_I32, hash ? hash.binAgents : EMPTY_I32,
@@ -285,7 +285,6 @@ for (const { name: f, raw } of entries) {
     if (is3d) cmpArr('forceZ', A.forceZ, B.forceZ, hw);
     cmpArr('vx', A.vx, B.vx, hw); cmpArr('vy', A.vy, B.vy, hw);
     cmpArr('targetRadius', A.targetRadius, B.targetRadius, hw);
-    cmpArr('type', A.type, B.type, hw);
     cmpArr('divideRequest', A.divideRequest, B.divideRequest, hw);
     cmpArr('killRequest', A.killRequest, B.killRequest, hw);
     cmpArr('bondFormReq', A.bondFormReq, B.bondFormReq, hw);

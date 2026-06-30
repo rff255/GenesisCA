@@ -207,7 +207,7 @@ export interface AgentStateResponse {
   id: number;
   live: boolean;
   x?: number; y?: number; z?: number; vx?: number; vy?: number; vz?: number;
-  radius?: number; agentType?: number; lineage?: number; age?: number;
+  radius?: number; lineage?: number; age?: number;
   bondDegree?: number; density?: number;
   attrs?: Record<string, number>;
   bonds?: number[];
@@ -574,7 +574,6 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const [agentBrushRadius, setAgentBrushRadius] = useState<number>((saved.current.agentBrushRadius as number) ?? 8);
   const [agentSeedDensity, setAgentSeedDensity] = useState<number>((saved.current.agentSeedDensity as number) ?? 0.05);
   const [agentSeedSpacing, setAgentSeedSpacing] = useState<number>((saved.current.agentSeedSpacing as number) ?? 6);
-  const [agentSeedType, setAgentSeedType] = useState<number>((saved.current.agentSeedType as number) ?? 0);
   // Layer toggles (req 1 + 7): independently SHOW (render) and SIMULATE (run the
   // step) the CA grid + the agents. Show toggles are render-only (2D + 3D);
   // Simulate toggles gate runStep / runAgentStep in the worker (setSimLayers).
@@ -628,7 +627,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines,
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
           infinityCanvas, indicatorVizModes, recordFormat, brushSectionH,
-          agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentSeedType,
+          agentBrushRadius, agentSeedDensity, agentSeedSpacing,
           showCaGrid, showAgents, simulateCells, simulateAgents, brushTarget,
           indicatorHiddenCategories: Object.fromEntries(
             Object.entries(indicatorHiddenCategories)
@@ -641,7 +640,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentSeedType, showCaGrid, showAgents, simulateCells, simulateAgents, brushTarget, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentBrushRadius, agentSeedDensity, agentSeedSpacing, showCaGrid, showAgents, simulateCells, simulateAgents, brushTarget, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -842,7 +841,6 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const agentBrushRadiusRef = useRef(agentBrushRadius); agentBrushRadiusRef.current = agentBrushRadius;
   const agentSeedDensityRef = useRef(agentSeedDensity); agentSeedDensityRef.current = agentSeedDensity;
   const agentSeedSpacingRef = useRef(agentSeedSpacing); agentSeedSpacingRef.current = agentSeedSpacing;
-  const agentSeedTypeRef = useRef(agentSeedType); agentSeedTypeRef.current = agentSeedType;
   const [agentSeedConfigOpen, setAgentSeedConfigOpen] = useState(false);
   // Live cursor world position (for the agent brush ring) + the hovered agent
   // id (change-detected so we don't full-redraw on every raw mousemove).
@@ -3119,7 +3117,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       );
       if (pts.length === 0) return;
       const sets = agentSeedSetsRef.current();
-      seedAgentsAt(pts.map(p => ({ x: p.x, y: p.y, z: p.z, type: agentSeedTypeRef.current })), sets);
+      seedAgentsAt(pts.map(p => ({ x: p.x, y: p.y, z: p.z })), sets);
     };
     // Kill agents within the brush radius around the picked plane cell (3D
     // distance), collected from the snapshot → killAgents. Radius 0 → nearest.
@@ -4521,8 +4519,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             const sets = agentSeedSetsRef.current();
             const r = agentBrushRadiusRef.current;
             const pts = r > 0
-              ? agentSeedPoints({ x: wpt.x, y: wpt.y }, r, agentSeedDensityRef.current).map(p => ({ ...p, type: agentSeedTypeRef.current }))
-              : [{ x: wpt.x, y: wpt.y, type: agentSeedTypeRef.current }];
+              ? agentSeedPoints({ x: wpt.x, y: wpt.y }, r, agentSeedDensityRef.current)
+              : [{ x: wpt.x, y: wpt.y }];
             // Enqueue into the drag buffer (so a click that becomes a drag keeps
             // accumulating into the same batch) and arm the rAF flush.
             pendingSeedSets.current = sets;
@@ -4740,15 +4738,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 const steps = Math.floor(dist / spacing);
                 const r = agentBrushRadiusRef.current;
                 const density = agentSeedDensityRef.current;
-                const ty = agentSeedTypeRef.current;
                 let lastX = last.x, lastY = last.y;
                 for (let s = 1; s <= steps; s++) {
                   const t = (s * spacing) / dist;
                   let cx = last.x + dx * t, cy = last.y + dy * t;
                   if (torus && W > 0 && H > 0) { cx = ((cx % W) + W) % W; cy = ((cy % H) + H) % H; }
                   const cluster = r > 0
-                    ? agentSeedPoints({ x: cx, y: cy }, r, density).map(p => ({ ...p, type: ty }))
-                    : [{ x: cx, y: cy, type: ty }];
+                    ? agentSeedPoints({ x: cx, y: cy }, r, density)
+                    : [{ x: cx, y: cy }];
                   for (const p of cluster) pendingSeedPoints.current.push(p);
                   lastX = cx; lastY = cy;
                 }
@@ -5959,12 +5956,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 <div>pos ({agentState.x!.toFixed(2)}, {agentState.y!.toFixed(2)}{agentState.z !== undefined ? `, ${agentState.z.toFixed(2)}` : ''})</div>
                 <div>|v| {Math.hypot(agentState.vx ?? 0, agentState.vy ?? 0, agentState.vz ?? 0).toFixed(3)}</div>
                 <div>radius {agentState.radius!.toFixed(3)}</div>
-                <div>type {agentState.agentType}</div>
                 <div>bonds {agentState.bondDegree}</div>
                 <div>density {agentState.density!.toFixed(3)}</div>
                 {agentState.attrs && Object.keys(agentState.attrs).length > 0 && (
                   <div style={{ marginTop: 4, borderTop: '1px solid var(--color-border-muted)', paddingTop: 4 }}>
-                    {model.attributes.filter(a => !a.isModelAttribute && agentState!.attrs![a.id] !== undefined).map(a => (
+                    {(model.agentAttributes ?? []).filter(a => agentState!.attrs![a.id] !== undefined).map(a => (
                       <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                         <span style={{ color: 'var(--color-text-muted)' }} title={a.description || undefined}>{a.name}</span>
                         <span>{a.type === 'bool' ? (agentState!.attrs![a.id] ? 'true' : 'false')
@@ -6637,16 +6633,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                       <button
                         onClick={() => setAgentSeedConfigOpen(v => !v)}
                         style={{ alignSelf: 'flex-start', padding: '2px 6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
-                        title="Type + initial attribute values for seeded agents"
+                        title="Initial agent-attribute values for seeded agents"
                       >{agentSeedConfigOpen ? '▾' : '▸'} Seed config</button>
                       {agentSeedConfigOpen && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                          <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                            <span style={{ width: 32, color: 'var(--color-text-muted)' }}>Type</span>
-                            <NumberField value={agentSeedType} onNumber={v => setAgentSeedType(Math.max(0, Math.round(v)))} min={0} step={1} integer />
-                          </label>
                           <ManualBrushPanel
-                            cellAttributes={model.attributes.filter(a => !a.isModelAttribute && a.type !== 'color' && a.type !== 'lookupTable')}
+                            cellAttributes={(model.agentAttributes ?? []).filter(a => a.type !== 'color' && a.type !== 'lookupTable')}
                             neighborhoods={model.neighborhoods}
                             state={agentSeedAttrs}
                             onChange={setAgentSeedAttrs}

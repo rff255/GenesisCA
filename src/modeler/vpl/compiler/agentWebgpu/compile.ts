@@ -81,7 +81,7 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   'arrayElement', 'arrayLength',
   // agent attributes (Get/Set/Update Attribute on the agent SoA)
   'getCellAttribute', 'setAttribute', 'updateAttribute', 'setAgentAttribute',
-  'setVelocity', 'setAgentPosition', 'setAgentRadius', 'setAgentType',
+  'setVelocity', 'setAgentPosition', 'setAgentRadius',
   // field bridge (G5 — the closed agent↔grid morphogen feedback)
   'sampleField', 'fieldGradient', 'readCellsUnder',
   'affectCellsUnder', 'secreteToField',
@@ -579,7 +579,6 @@ function emitBehaviourStep(ctx: AgentWgpuCtx, portId: string): ValueRef {
     }
     case 'myAge': return emitLet(ctx, 'f32', f32At(ctx, 'age', 'idx'), 'myG');
     case 'myBondDegree': return emitLet(ctx, 'f32', `f32(${i32At(ctx, 'bondCount', 'idx')})`, 'myBd');
-    case 'myType': return emitLet(ctx, 'f32', `f32(${i32At(ctx, 'type', 'idx')})`, 'myT');
     default: return { expr: '0.0', type: 'f32' };
   }
 }
@@ -1743,17 +1742,6 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       const sr = fresh(ctx, 'sr'), rv = fresh(ctx, 'srV');
       ctx.lines.push(`  { let ${sr}: i32 = ${id}; let ${rv}: f32 = ${inF32(ctx, node, 'radius', 1)};`);
       ctx.lines.push(`    if (${sr} >= 0 && ${sr} < i32(control.highWater) && agentAlive[${sr}] != 0u) { ${f32At(ctx, 'radius', `u32(${sr})`)} = ${rv}; ${f32At(ctx, 'targetRadius', `u32(${sr})`)} = ${rv}; } }`);
-      compileFlowChain(ctx, node.id, 'next');
-      break;
-    }
-    case 'setAgentType': {
-      // type lives in agentI32 (binding 1 = read_write so this can write it; the
-      // worker reads it back from the i32 SoA after the dispatch).
-      const id = castTo(resolveValueInput(ctx, node, 'agentId', -1), 'i32');
-      const tv = castTo(resolveValueInput(ctx, node, 'type', 0), 'i32');
-      const st = fresh(ctx, 'st');
-      ctx.lines.push(`  { let ${st}: i32 = ${id}; if (${st} >= 0 && ${st} < i32(control.highWater) && agentAlive[${st}] != 0u) { ${i32At(ctx, 'type', `u32(${st})`)} = ${tv}; } }`);
-      ctx.usesI32Write = true;
       compileFlowChain(ctx, node.id, 'next');
       break;
     }

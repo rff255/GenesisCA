@@ -373,7 +373,7 @@ interface RefreshDisplayMsg { type: 'refreshDisplay' }
  *  in continuous WORLD coordinates. Overflow past maxAgents is reported back. */
 interface SeedAgentsMsg {
   type: 'seedAgents';
-  agents: Array<{ x: number; y: number; z?: number; radius?: number; type?: number; lineage?: number }>;
+  agents: Array<{ x: number; y: number; z?: number; radius?: number; lineage?: number }>;
   /** PR3 seed config: per-attribute initial values (pre-encoded via
    *  encodeAttrValue, like paintManual) applied to each newly-seeded agent. */
   sets?: Array<{ attrId: string; value: number }>;
@@ -393,7 +393,7 @@ interface FormBondBatchMsg { type: 'formBondBatch'; pairs: Array<[number, number
 /** Allocate a single agent (free-list first). REJECTS + surfaces on overflow. */
 interface CreateAgentMsg {
   type: 'createAgent';
-  x: number; y: number; radius?: number; agentType?: number;
+  x: number; y: number; radius?: number;
   activeViewer: string;
 }
 /** Kill the agents at the given ids (the kill brush). */
@@ -811,13 +811,13 @@ function applyAgentSets(store: AgentStore, id: number, sets: Array<{ attrId: str
  *  attr buffers, the global/rng/field block, then `_agentSeedBase`. */
 function buildAgentInitArgs(
   s: AgentStore,
-  agentCreate: (x: number, y: number, radius: number, type: number) => number,
+  agentCreate: (x: number, y: number, radius: number) => number,
   agentAddToWorld: (id: number) => void,
   seedBase: number,
 ): unknown[] {
   const args: unknown[] = [
     agentCreate, agentAddToWorld, s.maxAgents,
-    s.x, s.y, s.radius, s.targetRadius, s.type, s.age, s.lineage, s.vx, s.vy,
+    s.x, s.y, s.radius, s.targetRadius, s.age, s.lineage, s.vx, s.vy,
   ];
   for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
   for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
@@ -841,10 +841,10 @@ function runAgentInit(): void {
   const seedBase = s.highWater;   // the seedIndexBase value-out
   const created: number[] = [];
   let overflowed = false;
-  const agentCreate = (x: number, y: number, radius: number, type: number): number => {
+  const agentCreate = (x: number, y: number, radius: number): number => {
     const id = allocAgentSlot(s);
     if (id < 0) { overflowed = true; return -1; }
-    initAgentSlot(s, id, x, y, 0, radius || cbNum(centerBasedConfig!, 'defaultRadius'), (type | 0), id);
+    initAgentSlot(s, id, x, y, 0, radius || cbNum(centerBasedConfig!, 'defaultRadius'), id);
     s.alive[id] = 0; s.liveCount--;   // STAGE (un-commit the alloc until Add To World)
     created.push(id);
     return id;
@@ -918,7 +918,7 @@ function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, ax
     // MIRRORS buildDivisionParams — engine buffers agent-read nodes need to be
     // division-safe (C-T1): liveness + geometry + velocity + bond store + field.
     s.alive, s.highWater,
-    s.x, s.y, s.radius, s.targetRadius, s.age, s.type, s.lineage, s.bondCount, s.density,
+    s.x, s.y, s.radius, s.targetRadius, s.age, s.lineage, s.bondCount, s.density,
     s.vx, s.vy,
     s.bondPartner, s.maxBonds,
   ];
@@ -951,7 +951,7 @@ function buildAgentLoopArgs(s: AgentStore): unknown[] {
   const hash = currentAgentHash;
   const args: unknown[] = [
     s.alive, s.highWater,
-    s.x, s.y, s.radius, s.targetRadius, s.age, s.type, s.lineage, s.bondCount, s.density,
+    s.x, s.y, s.radius, s.targetRadius, s.age, s.lineage, s.bondCount, s.density,
     s.vx, s.vy, s.forceX, s.forceY,
     // spatial hash (null → _hashValid 0, the emit falls back to all-pairs)
     hash ? 1 : 0,
@@ -3896,7 +3896,7 @@ function sendColors(): void {
     agentTransfers.push(
       agentsPayload.x.buffer, agentsPayload.y.buffer, agentsPayload.vx.buffer, agentsPayload.vy.buffer,
       agentsPayload.radius.buffer,
-      agentsPayload.alive.buffer, agentsPayload.colors.buffer, agentsPayload.type.buffer,
+      agentsPayload.alive.buffer, agentsPayload.colors.buffer,
       agentsPayload.bonds.buffer,
     );
     // z/vz are length-0 placeholders in 2D (the A1 snapshot gate) — transfer them
@@ -3905,7 +3905,7 @@ function sendColors(): void {
     if (agentsPayload.z.length > 0) agentTransfers.push(agentsPayload.z.buffer, agentsPayload.vz.buffer);
   } else if (agentStore) {
     // Empty store — still tell the main thread so it clears any stale agents.
-    agentsPayload = { highWater: 0, liveCount: 0, x: new Float64Array(0), y: new Float64Array(0), z: new Float64Array(0), vx: new Float64Array(0), vy: new Float64Array(0), vz: new Float64Array(0), radius: new Float64Array(0), alive: new Uint8Array(0), colors: new Uint8ClampedArray(0), type: new Int32Array(0), bonds: new Int32Array(0) };
+    agentsPayload = { highWater: 0, liveCount: 0, x: new Float64Array(0), y: new Float64Array(0), z: new Float64Array(0), vx: new Float64Array(0), vy: new Float64Array(0), vz: new Float64Array(0), radius: new Float64Array(0), alive: new Uint8Array(0), colors: new Uint8ClampedArray(0), bonds: new Int32Array(0) };
   }
 
   // P7 — when WebGPU direct render is active, the OffscreenCanvas already
@@ -4941,7 +4941,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       if (agentStore) {
         const dr = cbNum(centerBasedConfig, 'defaultRadius');
-        const ids = seedAgents(agentStore, msg.agents.map(a => ({ x: a.x, y: a.y, z: a.z, radius: a.radius, type: a.type, lineage: a.lineage })), dr);
+        const ids = seedAgents(agentStore, msg.agents.map(a => ({ x: a.x, y: a.y, z: a.z, radius: a.radius, lineage: a.lineage })), dr);
         if (ids.length < msg.agents.length) {
           self.postMessage({ type: 'agentOverflow', message: `Agent capacity reached (maxAgents=${agentStore.maxAgents}). ${msg.agents.length - ids.length} agent(s) not created.` });
         }
@@ -4965,7 +4965,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         } else {
           // z=0 for now — the createAgent msg has no z (the 2D brush/seam); PR5's
           // 3D agent brush adds `msg.z` and threads it here.
-          initAgentSlot(agentStore, id, msg.x, msg.y, 0, msg.radius ?? cbNum(centerBasedConfig, 'defaultRadius'), msg.agentType ?? 0, id);
+          initAgentSlot(agentStore, id, msg.x, msg.y, 0, msg.radius ?? cbNum(centerBasedConfig, 'defaultRadius'), id);
           runAgentColorPass();
         }
       }
@@ -5044,7 +5044,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         type: 'agentState', id, live: true,
         x: s.x[id]!, y: s.y[id]!, z: s.worldDepth > 1 ? s.z[id]! : undefined,
         vx: s.vx[id]!, vy: s.vy[id]!, vz: s.worldDepth > 1 ? s.vz[id]! : undefined,
-        radius: s.radius[id]!, agentType: s.type[id]!, lineage: s.lineage[id]!,
+        radius: s.radius[id]!, lineage: s.lineage[id]!,
         age: s.age[id]!, bondDegree: s.bondCount[id]!, density: s.density[id]!,
         attrs, bonds,
       });

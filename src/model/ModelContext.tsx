@@ -37,6 +37,7 @@ import { migrateLookupTables } from './lookupTableMigration';
 import { migrateMoveSelfToNeighborNodes } from './moveSelfToNeighborMigration';
 import { migrateSetCellLooksNodes } from './setCellLooksMigration';
 import { migrateAgentAttributeSplit } from './agentAttributeSplitMigration';
+import { migrateAgentTypeRemoval } from './agentTypeRemovalMigration';
 import { migrateVariableScopeSplit } from './variableScopeMigration';
 import { clearAllSavedGraphViewports, setSavedCurrentScope } from '../modeler/vpl/graphState';
 
@@ -925,6 +926,10 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // variegatedCells.faceLabels→facePalettes[0] + default square key sources.
       // Idempotent. Model-level (attributes + variegatedCells), so no macro pass.
       m = migrateLookupTables(m);
+      // Drop the removed built-in agent `type`: setAgentType nodes, createAgent
+      // `type` input, behaviourStep `myType`-out edges (agent graph + macroDefs).
+      // Idempotent; no-op for non-agent + already-clean models.
+      m = migrateAgentTypeRemoval(m);
       // Generic Agent Platform: split legacy agent-state cell attributes into
       // the dedicated agentAttributes[] set + set agentAccess on cell attrs the
       // agent graph reads/writes as a field. No-op for non-agent + already-split

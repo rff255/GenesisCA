@@ -159,7 +159,7 @@ async function benchCount(N) {
 
   // seed N agents at the same pseudo-random positions in BOTH stores.
   let seed = 12345; const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
-  const specs = []; for (let i = 0; i < N; i++) specs.push({ x: rnd() * W, y: rnd() * H, radius: 0.5, type: 0 });
+  const specs = []; for (let i = 0; i < N; i++) specs.push({ x: rnd() * W, y: rnd() * H, radius: 0.5 });
   seedAgents(sJS, specs, 0.5); seedAgents(sW, specs, 0.5);
   for (let i = 0; i < N; i++) { sW.vx[i] = (rnd() - 0.5); sW.vy[i] = (rnd() - 0.5); sJS.vx[i] = sW.vx[i]; sJS.vy[i] = sW.vy[i]; }
 
