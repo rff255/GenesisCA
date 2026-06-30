@@ -1199,10 +1199,11 @@ export function HelpView() {
             Agents have their <strong>own state</strong>, distinct from the grid&rsquo;s. On the
             <strong> Agents</strong> tab the <strong>Attributes</strong> panel lists
             <strong> Agent Attributes</strong> (per-agent fields with their own +Add), and the
-            <strong> Local Variables</strong> there are agent-scoped. <code>Get / Set / Update
-            Attribute</code> on the Agents tab read and write the agent&rsquo;s own attributes;
-            <code> Get / Set Agent Attribute</code> read and write <em>another</em> agent&rsquo;s
-            attribute by id.
+            <strong> Local Variables</strong> there are agent-scoped. On the Agents tab the
+            universal <code>Get / Set / Update Attribute</code> nodes display as
+            <code> Get / Set / Update Self Attribute</code> &mdash; they read and write the
+            agent&rsquo;s own attributes; <code>Get / Set Agent Attribute</code> read and write
+            <em> another</em> agent&rsquo;s attribute by id.
           </p>
           <p className={styles.p}>
             Agents sit <strong>above</strong> the CA: they can read and write grid cells (the field
@@ -1214,9 +1215,10 @@ export function HelpView() {
           <h3 className={styles.h3}>Key Agent Nodes</h3>
           <ul className={styles.list}>
             <li><strong>Behaviour Step</strong> &mdash; the per-agent entry root (one per Agents
-              graph). Outputs the agent's own <code>X</code> / <code>Y</code> /
-              <code> Radius</code> / <code>Area</code> / <code>Bond Degree</code> /
-              <code> Age</code> / <code>Type</code>.</li>
+              graph). Outputs the agent's own <code>X</code> / <code>Y</code> (and
+              <code> Z</code> in a 3D model) / <code>Radius</code> / <code>Area</code> /
+              <code> Bond Degree</code> / <code>Age</code>. (Agents have <em>no built-in
+              type</em> &mdash; describe an agent with your own Agent Attributes.)</li>
             <li><strong>Get Self Position / Get Radius / Get Bond Degree / Neighbour Density</strong>
               &mdash; read the agent's geometry and its local crowding (how many other agents are
               within interaction range).</li>
@@ -1259,11 +1261,13 @@ export function HelpView() {
               soft-sphere repulsion + bond springs, unless <em>Custom forces only</em> is set). This
               is how you build <strong>boids</strong> (separation + alignment + cohesion),
               <strong> chemotaxis</strong> (force up a Field Gradient), or self-propulsion. With
-              <strong> Momentum</strong> &gt; 0 the force changes velocity (flocking inertia).</li>
+              <strong> Momentum</strong> &gt; 0 the force changes velocity (flocking inertia). In a
+              <strong> 3D</strong> model the position, force, and velocity nodes (Get/Set Agent
+              Position, Apply Force, Set Velocity, Get Self Position) expose a <code>Z</code> axis.</li>
             <li><strong>Set Agent Attribute</strong> &mdash; write an attribute on another agent by
               id (signal a neighbour). And because Get Nearby Agents now supplies a target,
               <strong> Form Bond</strong> is fully graph-driven &mdash; bond to compatible
-              neighbours by type/state.</li>
+              neighbours by their attributes/state.</li>
           </ul>
           <h3 className={styles.h3}>Working with Sets of Agents</h3>
           <p className={styles.p}>
@@ -1291,9 +1295,10 @@ export function HelpView() {
             <strong> from the graph</strong>. The <strong>Agent Init Event</strong> root runs
             <strong> once</strong> (on first load and on Reset, before the first behaviour step). Loop
             over its <code>DO</code> chain and, per iteration, build an agent with <strong>Create
-            Agent</strong> (position / radius / type &rarr; an agent <em>handle</em>), set its initial
-            attributes (<em>Set Agent Attribute</em> / <em>Set Agent Position / Radius / Type</em> on the
-            handle), then commit it with <strong>Add Agent To World</strong>. This is how you place an
+            Agent</strong> (position / radius &rarr; an agent <em>handle</em>; the position takes a
+            <em> Z</em> in a 3D model), set its initial attributes (<em>Set Agent Attribute</em> /
+            <em> Set Agent Position / Radius</em> on the handle), then commit it with
+            <strong> Add Agent To World</strong>. This is how you place an
             exact grid of agents, a procedural pattern, or a randomised population &mdash; running past
             <em> Max Agents</em> simply skips the extra Create (it never wraps).
           </p>
@@ -1319,6 +1324,19 @@ export function HelpView() {
             So agents secrete morphogens, the grid diffuses them, and agents respond &mdash; the
             basis of stigmergy, chemotaxis, and hypoxia-driven branching.
           </p>
+          <h3 className={styles.h3}>Colouring Agents (Agent Output Mappings)</h3>
+          <p className={styles.p}>
+            Agents have their <strong>own Attribute&rarr;Color output mappings</strong>, separate
+            from the grid&rsquo;s. Instead of hand-wiring <strong>Set Cell Looks</strong> in the
+            Behaviour Step, add an <strong>Agent Output Mapping</strong> in the
+            <strong> Mappings</strong> panel and just pick an agent attribute &rarr; a colour
+            (a colour scale for numeric attributes, one colour per option for tags). Each mapping
+            is a separate <em>view</em> of the population, so you can switch between e.g. colour-by-maturity
+            and colour-by-state at run time. In the Simulator the viewer bar shows a
+            <strong> Cells (A&rarr;C)</strong> row and an <strong>Agents (A&rarr;C)</strong> row when
+            both layers have mappings &mdash; pick one tab from each. (Set Cell Looks in the Behaviour
+            Step still works and overrides the mapping per agent.)
+          </p>
           <h3 className={styles.h3}>The Config Panel</h3>
           <p className={styles.p}>
             The <strong>Bond-Graph Agents</strong> block (Properties, shown when Agents is on)
@@ -1328,7 +1346,9 @@ export function HelpView() {
             <li><strong>Capacity</strong> &mdash; <strong>Max Agents</strong> and
               <strong> Max Bonds / Agent</strong>. These are over-allocated ceilings; running
               past them <strong>rejects</strong> the new agent/bond (it never wraps or corrupts).
-              Changing a ceiling re-initialises the engine.</li>
+              <strong> Max Bonds / Agent can be 0</strong> for a pure-force / charged-particle
+              model (no bonds at all); turning on Use bonding physics bumps it to a default if
+              it&rsquo;s still 0. Changing a ceiling re-initialises the engine.</li>
             <li><strong>Seeding</strong> &mdash; the <strong>Seed Count</strong> laid down on
               Reset (0 = seed by hand), the <strong>Default Radius</strong>, and the
               <strong> Seed Pattern</strong> (a compact centred blob for tissue, or scattered
@@ -1357,12 +1377,12 @@ export function HelpView() {
             modes
             <strong> Seed</strong> (paint a jittered disc of agents &mdash; set the
             <em> Radius</em>, <em>Density</em> and drag <em>Spacing</em>; the <em>Seed config</em>
-            section sets the new agents' type + initial attribute values), <strong>Kill</strong>
+            section sets the new agents' initial attribute values), <strong>Kill</strong>
             (cull everything in the radius), <strong>Move</strong> (drag an agent; right-click
             cancels), <strong>Glue</strong> / <strong>Cut</strong> (bond/unbond two clicked
             agents), <strong>Bond&nbsp;paint</strong> (auto-glue agents a stroke passes near),
             <strong> Inspect</strong> (<span className={styles.kbd}>Shift</span>+click an agent for
-            a popover of its position, velocity, type, bond degree and attribute values), and
+            a popover of its position, velocity, bond degree and attribute values), and
             <strong> Paint&nbsp;Field</strong> (the normal cell brush). <strong>Clear all
             agents</strong> empties the population. The library ships four samples: <strong>Morphogenesis &mdash; Growing Tissue</strong> (12 → ~1500 cells
             dividing along the tension axis), <strong>Morphogenesis &mdash; Differential
