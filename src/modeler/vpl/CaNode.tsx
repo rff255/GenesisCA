@@ -1877,6 +1877,23 @@ function CaNodeComponent({ id, data }: NodeProps) {
           </select>
         )}
 
+        {nodeData.nodeType === 'applyForce' && (
+          <label
+            className="nodrag"
+            style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, cursor: 'pointer', marginTop: 4 }}
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => e.stopPropagation()}
+            title="Feed a single force vector (from Vector Op / Make Vector) instead of the X / Y / Z components."
+          >
+            <input
+              type="checkbox"
+              checked={!!nodeData.config.vectorInput}
+              onChange={e => updateConfig('vectorInput', e.target.checked)}
+            />
+            Vector input
+          </label>
+        )}
+
         {nodeData.nodeType === 'expression' && (() => {
           const visibleCount = clampVisibleCount(nodeData.config.visibleCount);
           const formula = (nodeData.config.expression as string) ?? '';
