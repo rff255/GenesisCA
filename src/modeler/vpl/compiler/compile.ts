@@ -70,7 +70,9 @@ const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant
   // Generic Agent Platform spawn/init: the Agent Init Event's value-outs
   // (worldWidth/worldHeight/seedIndexBase) + Create Agent's `handle` resolve via
   // the `_v<id>_<port>` convention.
-  'agentInit', 'createAgent']);
+  'agentInit', 'createAgent',
+  // Composite-type Break nodes + Vector Op resolve via the `_v<id>_<port>` convention.
+  'breakVector', 'breakColor', 'vectorOp']);
 
 /** Check if a node's data uses multi-output variable naming */
 function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {

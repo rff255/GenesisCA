@@ -625,12 +625,24 @@ export function isNodeAvailable(def: NodeTypeDef, model: CAModel): boolean {
  *  are NOT listed here. They surface via `detectCapabilityRequirements` with
  *  "requires async mode", and the model-level `detectWebGPUModelIncompatibilities`
  *  surfaces the "WebGPU requires sync mode" half — together unambiguous. */
+/** Composite-type (vector / color) nodes are JS-compile-target only — the WASM /
+ *  WebGPU grid emitters carry no array-valued vector/colour path, so a model that
+ *  uses them on the grid clamps to the Debug/Reference (JS) engine (the grid
+ *  compile throws → SimulatorView catches → JS fallback). Reported by BOTH the
+ *  WASM and WebGPU detectors so the CaNode badge explains the clamp cleanly. */
+export const JS_ONLY_NODE_TYPES = new Set([
+  'makeVector', 'breakVector', 'vectorOp', 'makeColor', 'breakColor',
+]);
+
+const JS_ONLY_MESSAGE = 'Vector / Colour nodes run on the Debug / Reference (JS) engine — the simulator clamps this model to the JS target. Remove them to keep the WebAssembly / WebGPU grid path.';
+
 export function detectWebGPUIncompatibilities(
   nodeType: string,
   config: NodeConfig,
   _model: CAModel,
 ): string[] {
   const issues: string[] = [];
+  if (JS_ONLY_NODE_TYPES.has(nodeType)) issues.push(JS_ONLY_MESSAGE);
   switch (nodeType) {
     // Order-dependent indicator updates.
     case 'updateIndicator': {
@@ -671,10 +683,11 @@ export function detectWebGPUIncompatibilities(
  *  Caller pattern: `[...detectMissingConfig(...), ...detectWasmIncompatibilities(nodeType, config, model)]`
  *  when `model.properties.useWasm` is true and `useWebGPU` is false. */
 export function detectWasmIncompatibilities(
-  _nodeType: string,
+  nodeType: string,
   _config: NodeConfig,
   _model: CAModel,
 ): string[] {
+  if (JS_ONLY_NODE_TYPES.has(nodeType)) return [JS_ONLY_MESSAGE];
   return [];
 }
 

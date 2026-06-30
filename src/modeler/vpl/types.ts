@@ -6,7 +6,15 @@ import type { CAModel } from '../../model/types';
  *  an offset relative to the current cell, with 8-bit signed components. It is distinct
  *  from `integer` to prevent the silent index-kind hazards (cell-idx vs coord-idx vs
  *  list-position) that previously surfaced as wrong-cell lookups at runtime. */
-export type PortDataType = 'bool' | 'integer' | 'float' | 'neighborIndex' | 'any';
+/** `vector` is a 2D/3D vector value, carried as a JS `[x, y, z]` array (z = 0 in
+ *  a 2D model). `color` is an RGBA value carried as `[r, g, b, a]`. Both are
+ *  bundled composite types (the Unreal/Blender Make/Break pattern) so the graph
+ *  passes a whole vector/colour on one wire instead of per-component scalars.
+ *  Built with Make Vector / Make Color, taken apart with Break Vector / Break
+ *  Colour, and combined with Vector Op. JS compile target only — a model that
+ *  uses them on the grid clamps to the Debug/Reference (JS) engine (the agent
+ *  WASM/WebGPU targets clamp to JS too). */
+export type PortDataType = 'bool' | 'integer' | 'float' | 'neighborIndex' | 'vector' | 'color' | 'any';
 
 /** Port direction */
 export type PortKind = 'input' | 'output';

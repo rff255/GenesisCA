@@ -7155,6 +7155,16 @@ export function compileGraphWasm(
   graphNodes = expanded.nodes;
   graphEdges = expanded.edges;
 
+  // Composite-type (vector / color) nodes are JS-compile-target only — no WASM
+  // array-valued vector/colour emit path. Clamp cleanly to JS (SimulatorView's
+  // try/catch around this call would also catch the later "no emitter" throw,
+  // but an explicit early error keeps the fallback graceful).
+  const JS_ONLY = new Set(['makeVector', 'breakVector', 'vectorOp', 'makeColor', 'breakColor']);
+  const jsOnly = graphNodes.find(n => JS_ONLY.has(n.data.nodeType));
+  if (jsOnly) {
+    return { bytes: new Uint8Array(), minMemoryPages: 1, error: `Node "${jsOnly.data.nodeType}" runs on the JS target only`, viewerIds, exports: [] };
+  }
+
   // Reroute collapse — strip editor-only reroute relay nodes, rewiring each
   // consumer to the real source (chains resolved transitively). Runs AFTER
   // expandMacros so in-macro reroutes (now flattened to top-level prefixed

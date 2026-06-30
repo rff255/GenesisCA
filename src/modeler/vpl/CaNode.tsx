@@ -53,6 +53,8 @@ import { GradientStopsEditor, type GradStop } from './widgets/GradientStopsEdito
 function portHandleClass(port: PortDef): string {
   if (port.category === 'flow') return styles.handleFlow!;
   if (port.dataType === 'neighborIndex') return styles.handleNeighborIndex!;
+  if (port.dataType === 'vector') return styles.handleVector!;
+  if (port.dataType === 'color') return styles.handleColor!;
   return styles.handleValue!;
 }
 
@@ -1853,6 +1855,25 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <option value="cos">Cos</option>
             <option value="tan">Tan</option>
             <option value="tanh">Tanh</option>
+          </select>
+        )}
+
+        {nodeData.nodeType === 'vectorOp' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.op as string) || 'add'}
+            onChange={e => updateConfig('op', e.target.value)}
+          >
+            <option value="add">Add (A + B)</option>
+            <option value="subtract">Subtract (A − B)</option>
+            <option value="scale">Scale (A × Scalar)</option>
+            <option value="dot">Dot (A · B)</option>
+            <option value="cross">Cross (A × B)</option>
+            <option value="length">Length |A|</option>
+            <option value="normalize">Normalize (Â)</option>
+            <option value="distance">Distance |A − B|</option>
+            <option value="negate">Negate (−A)</option>
+            <option value="lerp">Lerp (A→B by T)</option>
           </select>
         )}
 
