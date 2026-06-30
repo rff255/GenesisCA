@@ -7,7 +7,7 @@ import { IndicatorsPanelSection } from './IndicatorsPanelSection';
 import { useDetailSelection, type PanelContentProps } from '../ModelerDetailContext';
 import { useListReorder } from './useListReorder';
 import { NumberField } from '../vpl/widgets/InlineWidgets';
-import { cbNum, usesBondingPhysics } from '../../model/centerBased';
+import { cbNum, usesBondingPhysics, CENTER_BASED_DEFAULTS } from '../../model/centerBased';
 import type { CenterBasedNumericKey } from '../../model/centerBased';
 import { isAgentGraphWasmSupported } from '../vpl/compiler/agentWasm/compile';
 import { isAgentGraphWebGPUSupported } from '../vpl/compiler/agentWebgpu/compile';
@@ -511,7 +511,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 </span>
                 <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '6px 0 4px' }}>Capacity</div>
                 {Row('Max Agents', NF('maxAgents', { min: 1, integer: true }), 'Over-allocated ceiling; overflow rejects (never wraps). Changing it re-inits the engine.')}
-                {Row('Max Bonds / Agent', NF('maxBonds', { min: 1, integer: true }))}
+                {Row('Max Bonds / Agent', NF('maxBonds', { min: 0, integer: true }), '0 = no bonds (pure-force / charged-particle models); the bond store is then not allocated.')}
                 <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '8px 0 4px' }}>Seeding</div>
                 {Row('Seed Count', NF('seedCount', { min: 0, integer: true }), 'Agents laid down on Reset (0 = seed via the brush).')}
                 {Row('Default Radius', NF('defaultRadius', { min: 0.01, step: 0.1 }))}
@@ -528,7 +528,14 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                     forces (agents move only by graph forces); the Forces + Bonds
                     rows below appear only when ON. */}
                 <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem', margin: '12px 0 4px' }}>
-                  <input type="checkbox" checked={bonding} onChange={e => updateCenterBased({ useBondingPhysics: e.target.checked })} style={{ marginTop: 2 }} />
+                  <input type="checkbox" checked={bonding} onChange={e => {
+                    const on = e.target.checked;
+                    // Enabling bonding with no bond capacity is a foot-gun (nothing
+                    // can bond). Bump maxBonds to the engine default when turning it
+                    // on and the store is still empty.
+                    const bumpBonds = on && (cb?.maxBonds ?? 0) <= 0;
+                    updateCenterBased(bumpBonds ? { useBondingPhysics: on, maxBonds: CENTER_BASED_DEFAULTS.maxBonds } : { useBondingPhysics: on });
+                  }} style={{ marginTop: 2 }} />
                   <span><strong>Use bonding physics</strong><br /><span style={{ color: '#888', fontSize: '0.66rem' }}>Engine soft-sphere repulsion / adhesion + bond springs + growth + auto-bond. Off = agents move only by graph-authored Apply Force / Set Velocity (the &quot;agents that have nothing to do with bonds&quot; case).</span></span>
                 </label>
                 {bonding && (<>

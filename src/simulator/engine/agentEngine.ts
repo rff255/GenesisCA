@@ -22,7 +22,7 @@
 // ===========================================================================
 
 import type { CenterBasedConfig } from '../../model/types';
-import { cbNum } from '../../model/centerBased';
+import { cbNum, resolveMaxBonds } from '../../model/centerBased';
 
 export type AgentAttrKind = 'uint8' | 'int32' | 'float64';
 export type AgentTypedArray = Uint8Array | Int32Array | Float64Array;
@@ -543,7 +543,8 @@ export function createAgentStore(
   opts?: CreateAgentStoreOpts,
 ): AgentStore {
   const maxAgents = Math.max(1, Math.floor(cbNum(config, 'maxAgents')));
-  const maxBonds = Math.max(1, Math.floor(cbNum(config, 'maxBonds')));
+  // maxBonds may be 0 — the pure-force / charged-particle case (no bond store).
+  const maxBonds = resolveMaxBonds(config);
   const worldWidth = cbNum(config, 'worldWidth');
   const worldHeight = cbNum(config, 'worldHeight');
 

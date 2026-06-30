@@ -49,7 +49,10 @@ export function defaultCenterBasedConfig(): CenterBasedConfig {
   return {
     enabled: true,
     maxAgents: CENTER_BASED_DEFAULTS.maxAgents,
-    maxBonds: CENTER_BASED_DEFAULTS.maxBonds,
+    // 0 by default: bonding physics is OFF for a freshly-enabled Agents topology,
+    // so the bond store isn't allocated. Enabling "Use bonding physics" in the
+    // Properties panel bumps this to the engine default if it's still 0.
+    maxBonds: 0,
     worldWidth: CENTER_BASED_DEFAULTS.worldWidth,
     worldHeight: CENTER_BASED_DEFAULTS.worldHeight,
     useBondingPhysics: false,
@@ -72,6 +75,17 @@ export function usesBondingPhysics(cfg: CenterBasedConfig | undefined | null): b
 export function cbNum(cfg: CenterBasedConfig | undefined | null, key: CenterBasedNumericKey): number {
   const v = cfg ? (cfg as unknown as Record<string, unknown>)[key] : undefined;
   return typeof v === 'number' && Number.isFinite(v) ? v : CENTER_BASED_DEFAULTS[key];
+}
+
+/** Resolve the per-agent bond-slot ceiling — the SINGLE source of truth for the
+ *  ragged bond store's stride, shared by the worker (`createAgentStore`), the
+ *  baked-offset memory layout (`computeAgentMemoryLayout`), and the WASM agent
+ *  compiler so all three agree byte-for-byte. **0 is allowed** (the pure-force /
+ *  charged-particle case — agents with no bonds): the bond regions then collapse
+ *  to zero bytes. Floors at 0, NOT 1, so a model that wants no bonds allocates
+ *  no bond store. (The WebGPU agent layout already floors at 0 independently.) */
+export function resolveMaxBonds(cfg: CenterBasedConfig | undefined | null): number {
+  return Math.max(0, Math.floor(cbNum(cfg, 'maxBonds')));
 }
 
 /** Resolve the agent-engine compile target, CLAMPED to what's actually

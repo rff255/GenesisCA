@@ -57,6 +57,7 @@
 
 import type { GraphNode, GraphEdge, CAModel } from '../../../../model/types';
 import { agentAttrsOf } from '../../../../model/attributeScope';
+import { resolveMaxBonds } from '../../../../model/centerBased';
 import {
   I32, F64,
   leb128u,
@@ -4082,7 +4083,9 @@ export function compileAgentGraphWasmForModel(model: CAModel): AgentWasmResult {
   const specs: AgentAttrSpec[] = agentAttrsOf(model)
     .map(a => ({ id: a.id, type: a.type, defaultValue: 0 }));
   const maxAgents = Math.max(1, Math.floor((cfg.maxAgents as number) ?? 2000));
-  const maxBonds = Math.max(1, Math.floor((cfg.maxBonds as number) ?? 8));
+  // maxBonds may be 0 (pure-force models) — shared resolver keeps this byte-for-byte
+  // in lockstep with the worker's createAgentStore + the WebGPU layout.
+  const maxBonds = resolveMaxBonds(cfg);
   const maxHashBins = agentMaxHashBinsForModel(model);
   const extras: AgentLayoutExtras = { ...buildAgentLayoutExtras(model), syncAttrs: model.centerBased?.agentUpdateMode === 'sync' };
   const layout = computeAgentMemoryLayout(maxAgents, maxBonds, specs, maxHashBins, extras);
