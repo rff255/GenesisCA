@@ -50,6 +50,7 @@ import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/p
 import { is3dModel } from '../compile';
 import { expandMacros } from '../macroExpand';
 import { collapseReroutes } from '../rerouteCollapse';
+import { expandComposites } from '../expandComposites';
 import { canonicalizeAccessorEdges } from '../accessorCSE';
 import { cellFieldAttrsOf, cellFieldWriteAttrsOf, agentAttrsOf } from '../../../../model/attributeScope';
 import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/CategoricalColorNode';
@@ -1619,14 +1620,11 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
   const type = node.data.nodeType;
   switch (type) {
     case 'applyForce': {
-      // Vector-input mode reads a `vector` port (JS-only producer → graph clamps
-      // to JS), so on WebGPU it can only be reached with the vector UNwired → no
-      // force. Skip the component adds (don't read stale `fx/fy/fz` config).
-      if (!node.data.config?.vectorInput) {
-        ctx.lines.push(`  ${f32At(ctx, 'forceX', 'idx')} = ${f32At(ctx, 'forceX', 'idx')} + ${inF32(ctx, node, 'fx', 0)};`);
-        ctx.lines.push(`  ${f32At(ctx, 'forceY', 'idx')} = ${f32At(ctx, 'forceY', 'idx')} + ${inF32(ctx, node, 'fy', 0)};`);
-        if (ctx.is3d) ctx.lines.push(`  ${f32At(ctx, 'forceZ', 'idx')} = ${f32At(ctx, 'forceZ', 'idx')} + ${inF32(ctx, node, 'fz', 0)};`);
-      }
+      // Always component mode here — `expandComposites` lowers a vector-input
+      // Apply Force to its fx/fy/fz components before the compiler sees it.
+      ctx.lines.push(`  ${f32At(ctx, 'forceX', 'idx')} = ${f32At(ctx, 'forceX', 'idx')} + ${inF32(ctx, node, 'fx', 0)};`);
+      ctx.lines.push(`  ${f32At(ctx, 'forceY', 'idx')} = ${f32At(ctx, 'forceY', 'idx')} + ${inF32(ctx, node, 'fy', 0)};`);
+      if (ctx.is3d) ctx.lines.push(`  ${f32At(ctx, 'forceZ', 'idx')} = ${f32At(ctx, 'forceZ', 'idx')} + ${inF32(ctx, node, 'fz', 0)};`);
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
@@ -2498,6 +2496,9 @@ function flattenAgentGraph(nodes: GraphNode[], edges: GraphEdge[], model: CAMode
   if (expanded.error) return { nodes, edges, error: expanded.error };
   let n = expanded.nodes, e = expanded.edges;
   ({ nodes: n, edges: e } = collapseReroutes(n, e));
+  // Composite-type lowering — vector / colour nodes become scalar nodes BEFORE
+  // the gate + emitter see the graph, so a vector agent model runs on WebGPU.
+  ({ nodes: n, edges: e } = expandComposites(n, e, model));
   e = canonicalizeAccessorEdges(n, e, model);
   return { nodes: n, edges: e };
 }

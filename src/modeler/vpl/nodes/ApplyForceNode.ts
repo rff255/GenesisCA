@@ -30,16 +30,14 @@ export const ApplyForceNode: NodeTypeDef = {
     { id: 'fz', label: 'Force Z', kind: 'input', category: 'value', dataType: 'float', inlineWidget: 'number', defaultValue: '0' },
   ],
   hiddenPorts: (config, model) => {
-    if (config.vectorInput) return is3dModelLike(model) ? ['fx', 'fy', 'fz'] : ['fx', 'fy', 'fz'];
+    // Vector mode shows the single `force` port; component mode shows fx/fy/fz.
+    // `expandComposites` lowers vector mode to the components before compile, so
+    // the emitters only ever see component mode (no per-target vector path).
+    if (config.vectorInput) return ['fx', 'fy', 'fz'];
     return is3dModelLike(model) ? ['force'] : ['force', 'fz'];
   },
   defaultConfig: {},
-  compile: (_nodeId, config, inputs, _boundary, ctx) => {
-    if (config.vectorInput) {
-      const f = inputs['force'] || '[0,0,0]';
-      const z = ctx?.is3d ? ` _agentForceZ[idx] += (__f)[2];` : '';
-      return `{ const __f = ${f}; _agentForceX[idx] += (__f)[0]; _agentForceY[idx] += (__f)[1];${z} }\n`;
-    }
+  compile: (_nodeId, _config, inputs, _boundary, ctx) => {
     const z = ctx?.is3d ? ` _agentForceZ[idx] += ${inputs['fz'] || '0'};` : '';
     return `_agentForceX[idx] += ${inputs['fx'] || '0'}; _agentForceY[idx] += ${inputs['fy'] || '0'};${z}\n`;
   },

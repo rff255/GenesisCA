@@ -13,6 +13,7 @@ import { canonicalizeAccessorEdges } from './accessorCSE';
 import { injectLinkedOutputMappings } from './linkedOutputMappings';
 import { buildAgentColorPassGraphs } from './agentLinkedOutputMappings';
 import { collapseReroutes } from './rerouteCollapse';
+import { expandComposites } from './expandComposites';
 import { computeAsyncReadWriteHazards } from './asyncWriteHazard';
 import { expandMacros } from './macroExpand';
 import { computeVolatileHoist } from './volatileHoist';
@@ -1418,6 +1419,11 @@ export function compileGraph(
   // emitter ever sees a reroute. `A → R → B` compiles byte-identically to `A → B`.
   ({ nodes: graphNodes, edges: graphEdges } = collapseReroutes(graphNodes, graphEdges));
 
+  // Composite-type lowering — rewrite vector / colour Make / Break / Vector-Op
+  // (+ Apply Force's vector mode) into plain scalar nodes so every target emits
+  // them via the verified scalar emitters (no JS-only clamp). See expandComposites.ts.
+  ({ nodes: graphNodes, edges: graphEdges } = expandComposites(graphNodes, graphEdges, model));
+
   // Linked Output Mappings — synthesize the auto color pass for any mapping
   // marked `linked` (ephemeral; rebuilt from the live model each compile). Done
   // BEFORE the empty-graph check so a model whose only graph is a linked color
@@ -2220,6 +2226,7 @@ export function compileAgentGraph(
     agentEdges = expanded.edges;
   }
   ({ nodes: agentNodes, edges: agentEdges } = collapseReroutes(agentNodes, agentEdges));
+  ({ nodes: agentNodes, edges: agentEdges } = expandComposites(agentNodes, agentEdges, model));
   // D-ASYNC-CSE: accessor-CSE is sound only in SYNC agent mode. The DEFAULT agent
   // update mode is 'async' (single-buffered agent attrs — a getCellAttribute /
   // getAgentAttribute read can change after an intervening Set*Attribute write
