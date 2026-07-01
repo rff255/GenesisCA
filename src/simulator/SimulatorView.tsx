@@ -18,6 +18,7 @@ import { compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported } from '..
 import type { AgentWebGPULayout } from '../modeler/vpl/compiler/agentWebgpu/layout';
 import { emitAgentForcePassWGSL } from '../modeler/vpl/compiler/agentWebgpu/forcePass';
 import type { AgentRenderSnapshot } from './engine/agentEngine';
+import { SpriteRegistry } from './spriteRegistry';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
 import { getGlyphTile } from './recording/glyphAtlas';
@@ -833,6 +834,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const isAgentModelRef = useRef(isAgentModel);
   isAgentModelRef.current = isAgentModel;
   const agentsRef = useRef<AgentRenderSnapshot | null>(null);
+  // --- Agent sprites (render side) ---
+  // The decoded-frame registry (keyed by sprite id) + the ordered slot→{id,scale,
+  // loop} meta so the per-agent 1-based slot maps to a sprite. PLAYBACK is driven
+  // by the agent's logic (Set Agent Sprite sets sprite/frame/speed; the engine
+  // advances the frame per step) — there is NO simulator transport here. The
+  // render just reads the per-agent frame from the snapshot.
+  const spriteRegistryRef = useRef<SpriteRegistry | null>(null);
+  const spriteMetaRef = useRef<Array<{ id: string; scale: number; loop: boolean }>>([]);
   // Agent brush: the LMB action on the canvas for an agent model. 'paint' falls
   // through to the normal cell brush (field painting). Glue/Cut stage a first
   // agent on the first click, then bond/unbond it to the second.
@@ -1048,14 +1057,19 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const compileModel = useCallback(() => {
     const m = withEffectiveNeighborhoods(model);
     const result = compileGraph(m.graphNodes, m.graphEdges, m);
+    // Agents-only model (Grid Cells disabled): there is no cell graph, so the cell
+    // compiler's "No nodes / No Step node" error is EXPECTED — suppress it (the
+    // worker skips the cell step via gridCells). Agent compile errors still surface
+    // via the worker `error` message.
+    const gridOn = model.topologyMode?.gridCells !== false;
     if (model.properties.useWebGPU) {
       try {
         const wgpu = compileGraphWebGPU(m.graphNodes, m.graphEdges, m);
         setCompiledCode(wgpu.shaderCode || '(no shader emitted)');
-        setCompileError(wgpu.error || result.error || '');
+        setCompileError(gridOn ? (wgpu.error || result.error || '') : '');
       } catch (e) {
         setCompiledCode('');
-        setCompileError(String((e as Error)?.message || e));
+        setCompileError(gridOn ? String((e as Error)?.message || e) : '');
       }
     } else if (model.properties.useWasm) {
       setCompiledCode(
@@ -1064,14 +1078,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         ' * Switch to "Debug / Reference (JS)" in Model Properties to inspect generated code.\n' +
         ' */'
       );
-      setCompileError(result.error ?? '');
+      setCompileError(gridOn ? (result.error ?? '') : '');
     } else {
       setCompiledCode(buildFullCode(result));
-      setCompileError(result.error ?? '');
+      setCompileError(gridOn ? (result.error ?? '') : '');
     }
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model.graphNodes, model.graphEdges, model.neighborhoods, model.indicators, model.properties.useWasm, model.properties.useWebGPU, buildFullCode]);
+  }, [model.graphNodes, model.graphEdges, model.neighborhoods, model.indicators, model.properties.useWasm, model.properties.useWebGPU, model.topologyMode?.gridCells, buildFullCode]);
 
   // Bond-Graph Agents: compile the agent rule graph (the second graph). JS-only
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
@@ -1416,6 +1430,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           for (let ty = tyMin; ty <= tyMax; ty++) for (let tx = txMin; tx <= txMax; tx++) drawBonds(ox + tx * scaledW, oy + ty * scaledH);
         } else { drawBonds(ox, oy); }
       }
+      // Sprites (optional exhibition layer): when the active agent OM pass wrote a
+      // per-agent sprite slot, draw the sprite's current frame instead of a circle.
+      // spriteIds is length-0 for non-sprite models (then everyone draws a circle).
+      const sids = snap.spriteIds, sfr = snap.spriteFrames;
+      const spriteMeta = spriteMetaRef.current;
+      const reg = spriteRegistryRef.current;
+      const spritesActive = !!reg && spriteMeta.length > 0 && sids.length === hw;
       const stamp = (tileOx: number, tileOy: number) => {
         for (let i = 0; i < hw; i++) {
           if (!aal[i]) continue;
@@ -1424,6 +1445,31 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           const rad = Math.max(1.2, ar[i]! * scale);
           if (cx + rad < 0 || cx - rad > parentW || cy + rad < 0 || cy - rad > parentH) continue;
           const c = i * 4;
+          // --- sprite branch ---
+          if (spritesActive) {
+            const slot = sids[i]!; // 1-based index into model.sprites (0 = none)
+            const meta = slot > 0 ? spriteMeta[slot - 1] : undefined;
+            const dec = meta ? reg!.get(meta.id) : undefined;
+            if (dec && dec.frames.length > 0) {
+              const fc = dec.frames.length;
+              // The per-agent frame is persistent + engine-advanced (Set Agent
+              // Sprite drove the speed). Floor + wrap (loop) or clamp (once).
+              const raw = Math.floor(sfr[i]!);
+              const frame = fc <= 1 ? 0
+                : meta!.loop ? (((raw % fc) + fc) % fc)
+                : (raw < 0 ? 0 : raw >= fc ? fc - 1 : raw);
+              const bmp = dec.frames[frame]!;
+              const target = rad * 2 * (meta!.scale || 1);
+              const aspect = bmp.width / Math.max(1, bmp.height);
+              let dw = target, dh = target;
+              if (aspect >= 1) dh = target / aspect; else dw = target * aspect;
+              ctx.globalAlpha = (acol[c + 3] ?? 255) / 255;
+              ctx.drawImage(bmp, cx - dw / 2, cy - dh / 2, dw, dh);
+              ctx.globalAlpha = 1;
+              continue; // sprite replaces the circle
+            }
+            // slot set but not yet decoded (or deleted) → fall through to the circle
+          }
           ctx.beginPath();
           ctx.arc(cx, cy, rad, 0, Math.PI * 2);
           ctx.fillStyle = `rgba(${acol[c]},${acol[c + 1]},${acol[c + 2]},${acol[c + 3]! / 255})`;
@@ -1710,6 +1756,35 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
     fpsFrames.current++;
   }, []);
+
+  // Latest draw() for callbacks/rAF that outlive a single render (sprite registry
+  // onReady + the sprite playback rAF).
+  const drawRef = useRef(draw);
+  drawRef.current = draw;
+
+  // --- Agent sprites: registry reconcile (main-thread render) ---
+  // Decode new/changed sprites + drop removed ones whenever `model.sprites`
+  // changes, and refresh the slot→{id,scale,loop} meta. PLAYBACK is logic-driven
+  // (the engine advances each agent's frame per simulation step from the speed the
+  // Set Agent Sprite node set), so there is NO simulator transport — the render
+  // reads the per-agent frame straight from the snapshot. Decoding is async
+  // (ImageDecoder); onReady redraws so a freshly-imported sprite appears.
+  useEffect(() => {
+    const sprites = model.sprites ?? [];
+    spriteMetaRef.current = sprites.map(s => ({ id: s.id, scale: s.scale ?? 1, loop: s.loop !== false }));
+    if (sprites.length === 0) {
+      spriteRegistryRef.current?.dispose();
+      spriteRegistryRef.current = null;
+      return;
+    }
+    if (!spriteRegistryRef.current) {
+      spriteRegistryRef.current = new SpriteRegistry(() => drawRef.current());
+    }
+    spriteRegistryRef.current.sync(sprites);
+  }, [model.sprites]);
+
+  // Dispose the registry (free decoded ImageBitmaps) on unmount.
+  useEffect(() => () => { spriteRegistryRef.current?.dispose(); spriteRegistryRef.current = null; }, []);
 
   // Track playing state in ref so worker message handler can access it
   const playingRef = useRef(false);
@@ -2249,7 +2324,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // color-input mappings, so the brush is immediately usable on empty
     // models or models that only define output mappings.
     setBrushMapping(firstInput?.id ?? MANUAL_BRUSH_MAPPING_ID);
-    if (result.error) setCompileError(result.error);
+    // Suppress the cell "No nodes / No Step" error for an agents-only model (no grid).
+    if (result.error && model.topologyMode?.gridCells !== false) setCompileError(result.error);
 
     // Only reset pan/zoom when the grid dimensions actually change. This
     // function ALSO fires on structural reinit at the same dims (e.g. the
@@ -2491,6 +2567,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       agentDivisionCode: agentResult.divisionCode,
       agentColorViewer: activeAgentViewerRef.current || agentResult.colorViewer,
       agentOutputMappingCodes: agentResult.outputMappingCodes,
+      agentHasSprites: (model.sprites?.length ?? 0) > 0,
       // PR5 (C-D1): whether the agent graph reads/writes the cell field. Drives
       // the WebGPU-grid field bridge (a no-field model does 0 per-step
       // readbacks). Cheap boolean — leave the JS/WASM grid path untouched.
@@ -2793,14 +2870,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // Bond-Graph Agents: recompile the agent graph too (graph-only edit path).
       const agentResult = compileAgentModel(result.stopMessages.length);
       // Show Code follows the selected target — same dispatch as compileModel().
+      // Agents-only model → suppress the expected cell "No nodes / No Step" error.
+      const gridOn = dimsModel.topologyMode?.gridCells !== false;
       if (dimsModel.properties.useWebGPU) {
         try {
           const wgpu = compileGraphWebGPU(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
           setCompiledCode(wgpu.shaderCode || '(no shader emitted)');
-          setCompileError(wgpu.error || result.error || '');
+          setCompileError(gridOn ? (wgpu.error || result.error || '') : '');
         } catch (e) {
           setCompiledCode('');
-          setCompileError(String((e as Error)?.message || e));
+          setCompileError(gridOn ? String((e as Error)?.message || e) : '');
         }
       } else if (dimsModel.properties.useWasm) {
         setCompiledCode(
@@ -2809,10 +2888,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           ' * Switch to "Debug / Reference (JS)" in Model Properties to inspect generated code.\n' +
           ' */'
         );
-        setCompileError(result.error ?? '');
+        setCompileError(gridOn ? (result.error ?? '') : '');
       } else {
         setCompiledCode(buildFullCode(result));
-        setCompileError(result.error ?? '');
+        setCompileError(gridOn ? (result.error ?? '') : '');
       }
       // Build viewerIds unconditionally — see init path above for rationale.
       const viewerIds = buildViewerIds(dimsModel);
@@ -2889,6 +2968,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         agentDivisionCode: agentResult.divisionCode,
         agentColorViewer: activeAgentViewerRef.current || agentResult.colorViewer,
         agentOutputMappingCodes: agentResult.outputMappingCodes,
+        agentHasSprites: (model.sprites?.length ?? 0) > 0,
         centerBased: model.centerBased,
         // PR5 (C-D1): re-detect on a graph-only edit (field nodes added/removed).
         agentUsesField: agentUsesField(),
@@ -3937,7 +4017,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   agentSeedSetsRef.current = () => {
     const brush = agentSeedAttrsRef.current;
     const sets: Array<{ attrId: string; value: number }> = [];
-    for (const attr of cellAttrsRef.current) {
+    // The seed-config panel edits the AGENT attribute set (a separate id-space from
+    // the cell attributes — see the ManualBrushPanel above), so the `sets` MUST be
+    // keyed by agent attr ids. Iterating cellAttrsRef here looked up the wrong ids
+    // and silently produced no sets (the seeded agents kept their defaults).
+    for (const attr of (model.agentAttributes ?? [])) {
       const entry = brush[attr.id];
       if (!entry || !entry.enabled) continue;
       sets.push({ attrId: attr.id, value: encodeAttrValue(attr, entry.value) });
@@ -6403,6 +6487,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                   ))}
                 </div>
               </div>
+              {/* No sprite transport here — sprite playback (which sprite, frame,
+                  speed) is driven by the agent's logic via the Set Agent Sprite
+                  node, advanced by the engine each simulation step. */}
             </div>
           )}
 

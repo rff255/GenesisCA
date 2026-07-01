@@ -504,6 +504,10 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
       break;
     }
     case 'getAgentPosition': {
+      if ((node.data.config?.['mode'] as string) === 'relative') {
+        result = compileAgentRelativePosition(ctx, node, portId);
+        break;
+      }
       const aName = emitAgentId(ctx, node, 'agentId');
       const field = portId === 'y' ? 'y' : portId === 'z' ? (ctx.is3d ? 'z' : 'y') : 'x';
       result = emitLet(ctx, 'f32', f32At(ctx, field, aName), 'gp');
@@ -785,6 +789,41 @@ function compileAgentOffset(ctx: AgentWgpuCtx, node: GraphNode, portId: string):
   };
   for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
   return refs[portId] ?? refs['dx']!;
+}
+
+/** Get Agent Position (relative mode) — torus-shortest (X, Y[, Z]) displacement
+ *  from a REFERENCE agent to the target: `target − reference`, folded to the
+ *  shortest path. Like compileAgentOffset minus the Distance output, with `ref` in
+ *  place of `idx`; the reference defaults to SELF (`idx`) when `refId` is unwired.
+ *  Multi-output: one emit pass into shared vars cached under x/y/z. */
+function compileAgentRelativePosition(ctx: AgentWgpuCtx, node: GraphNode, portId: string): ValueRef {
+  const is3d = ctx.is3d;
+  const cachedSibling = ctx.valueCache.get(`${node.id}:x`);
+  if (cachedSibling !== undefined) return ctx.valueCache.get(`${node.id}:${portId}`) ?? cachedSibling;
+  const aName = emitAgentId(ctx, node, 'agentId');
+  // self when refId is unwired (JS: `inputs.refId ? (...|0) : idx`).
+  const refSrc = ctx.adj.inputToSource.get(`${node.id}:refId`);
+  const refName = refSrc ? emitAgentId(ctx, node, 'refId') : 'idx';
+  const ox = fresh(ctx, 'rpx'), oy = fresh(ctx, 'rpy'), oz = fresh(ctx, 'rpz');
+  ctx.lines.push(`  var ${ox}: f32 = ${f32At(ctx, 'x', aName)} - ${f32At(ctx, 'x', refName)};`);
+  ctx.lines.push(`  var ${oy}: f32 = ${f32At(ctx, 'y', aName)} - ${f32At(ctx, 'y', refName)};`);
+  if (is3d) ctx.lines.push(`  var ${oz}: f32 = ${f32At(ctx, 'z', aName)} - ${f32At(ctx, 'z', refName)};`);
+  ctx.lines.push(`  if (control.fieldTorus != 0u) {`);
+  ctx.lines.push(`    let _hW = control.fieldW * 0.5; let _hH = control.fieldH * 0.5;`);
+  ctx.lines.push(`    if (${ox} > _hW) { ${ox} = ${ox} - control.fieldW; } else if (${ox} < -_hW) { ${ox} = ${ox} + control.fieldW; }`);
+  ctx.lines.push(`    if (${oy} > _hH) { ${oy} = ${oy} - control.fieldH; } else if (${oy} < -_hH) { ${oy} = ${oy} + control.fieldH; }`);
+  if (is3d) {
+    ctx.lines.push(`    let _hD = control.fieldD * 0.5;`);
+    ctx.lines.push(`    if (${oz} > _hD) { ${oz} = ${oz} - control.fieldD; } else if (${oz} < -_hD) { ${oz} = ${oz} + control.fieldD; }`);
+  }
+  ctx.lines.push(`  }`);
+  const refs: Record<string, ValueRef> = {
+    x: { expr: ox, type: 'f32' },
+    y: { expr: oy, type: 'f32' },
+    z: { expr: is3d ? oz : '0.0', type: 'f32' },
+  };
+  for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
+  return refs[portId] ?? refs['x']!;
 }
 
 // ---------------------------------------------------------------------------

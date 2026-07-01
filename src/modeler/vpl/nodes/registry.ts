@@ -15,6 +15,7 @@ import { ForEachBondNode } from './ForEachBondNode';
 import { DivideAgentNode } from './DivideAgentNode';
 import { KillAgentNode } from './KillAgentNode';
 import { DivisionEventNode } from './DivisionEventNode';
+import { AgentOutputMappingNode } from './AgentOutputMappingNode';
 import { SampleFieldNode } from './SampleFieldNode';
 import { FieldGradientNode } from './FieldGradientNode';
 import { ReadCellsUnderNode } from './ReadCellsUnderNode';
@@ -76,6 +77,7 @@ import { LoopNode } from './LoopNode';
 import { SetAttributeNode } from './SetAttributeNode';
 import { UpdateAttributeNode } from './UpdateAttributeNode';
 import { SetCellLooksNode } from './SetCellLooksNode';
+import { SetAgentSpriteNode } from './SetAgentSpriteNode';
 import { InputColorNode } from './InputColorNode';
 import { MacroNode } from './MacroNode';
 import { MacroInputNode } from './MacroInputNode';
@@ -127,6 +129,9 @@ const ALL_NODES: NodeTypeDef[] = [
   // (gated by requirements.bondGraph; visible only on the Agents sub-tab).
   BehaviourStepNode,
   DivisionEventNode,
+  // Agent Output Mapping (A→C) — the agent analogue of OutputMapping; roots a
+  // per-agent colour/exhibition pass (Standalone or the synthesized Linked one).
+  AgentOutputMappingNode,
   // Generic Agent Platform — the once-per-reset Agent Init Event + the two-phase
   // graph-authored spawn (Create → set by id → Add).
   AgentInitNode,
@@ -240,6 +245,7 @@ const ALL_NODES: NodeTypeDef[] = [
   MoveSelfToNeighborNode,
   // Color
   SetCellLooksNode,
+  SetAgentSpriteNode,
   GetColorConstantNode,
   ColorScaleNode,
   CategoricalColorNode,

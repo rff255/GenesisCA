@@ -1259,10 +1259,16 @@ export function HelpView() {
               <strong> For Each In Array</strong>, then read each with <strong>Get Agent Position /
               Offset / Attribute / Radius / Get Velocity</strong>, bond to it, or steer from it.</li>
             <li><strong>Get Agent Offset</strong> &mdash; the <em>torus-shortest</em> displacement
-              (dX, dY) and Distance from this agent to a neighbour. Use this &mdash; not raw
-              position subtraction (<em>Get Agent Position</em> minus your own) &mdash; for
-              cohesion, separation, and "steer toward a neighbour" so the vectors stay correct
-              across a wrapped (torus) boundary.</li>
+              (dX, dY) and Distance from this agent to a neighbour. Use this (or <em>Get Agent
+              Position</em> in its Relative mode) &mdash; not hand-subtracting two raw positions
+              &mdash; for cohesion, separation, and "steer toward a neighbour" so the vectors stay
+              correct across a wrapped (torus) boundary.</li>
+            <li><strong>Get Agent Position</strong> &mdash; a specific agent's <em>(X, Y[, Z])</em>
+              by id, with an <strong>Absolute / Relative</strong> mode. <em>Absolute</em> gives the
+              raw position; <em>Relative</em> gives the torus-shortest vector from a
+              <em> Reference</em> agent (which defaults to <em>self</em> when left unwired, or can be
+              any agent) &mdash; the wrap-correct way to read a vector to a neighbour, or between
+              two agents.</li>
             <li><strong>Apply Force</strong> &mdash; add a force vector to the agent; the engine
               integrates the sum of all your Apply Force contributions (plus its built-in
               soft-sphere repulsion + bond springs, unless <em>Custom forces only</em> is set). This
@@ -1333,19 +1339,46 @@ export function HelpView() {
             So agents secrete morphogens, the grid diffuses them, and agents respond &mdash; the
             basis of stigmergy, chemotaxis, and hypoxia-driven branching.
           </p>
-          <h3 className={styles.h3}>Colouring Agents (Agent Output Mappings)</h3>
+          <h3 className={styles.h3}>Colouring &amp; Exhibiting Agents (Agent Output Mappings)</h3>
           <p className={styles.p}>
-            Agents have their <strong>own Attribute&rarr;Color output mappings</strong>, separate
-            from the grid&rsquo;s. Instead of hand-wiring <strong>Set Cell Looks</strong> in the
-            Behaviour Step, add an <strong>Agent Output Mapping</strong> in the
-            <strong> Mappings</strong> panel and just pick an agent attribute &rarr; a colour
-            (a colour scale for numeric attributes, one colour per option for tags). Each mapping
-            is a separate <em>view</em> of the population, so you can switch between e.g. colour-by-maturity
-            and colour-by-state at run time. In the Simulator the viewer bar shows a
-            <strong> Cells (A&rarr;C)</strong> row and an <strong>Agents (A&rarr;C)</strong> row when
-            both layers have mappings &mdash; pick one tab from each. (Set Cell Looks in the Behaviour
-            Step still works and overrides the mapping per agent.)
+            Agents have their <strong>own Attribute&rarr;Color views</strong>, separate from the
+            grid&rsquo;s &mdash; each a different <em>view</em> of the population (colour-by-maturity,
+            colour-by-state, &hellip;), switchable at run time. In the Simulator the viewer bar shows a
+            <strong> Cells (A&rarr;C)</strong> row and an <strong>Agents (A&rarr;C)</strong> row when both
+            layers have mappings &mdash; pick one tab from each. Each Agent Output Mapping has a
+            <strong> Color pass</strong> setting (Mappings panel), exactly like the grid mappings:
           </p>
+          <ul className={styles.list}>
+            <li><strong>Linked</strong> &mdash; pick an agent attribute &rarr; a colour (a colour scale
+              for numeric attributes, one colour per option for tags); the colour pass is generated
+              for you.</li>
+            <li><strong>Standalone</strong> &mdash; build the view by hand on the <strong>Agents</strong>
+              graph: add an <strong>Agent Output Mapping (A&rarr;C)</strong> event node, pick the view,
+              and wire whatever exhibition you like (Set Cell Looks for colour, <strong>Set Agent
+              Sprite</strong> for an image, special-casing by Get Self Attribute / Get Velocity / &hellip;).
+              The graph runs <em>after</em> the Behaviour / Division step, so it can read the agent&rsquo;s
+              live state. (A Linked view with a Standalone graph runs the auto colour first as a
+              background, then your graph on top.)</li>
+          </ul>
+          <h3 className={styles.h3}>Agent Sprites</h3>
+          <p className={styles.p}>
+            An agent can be drawn as a <strong>static image or an animated GIF</strong> instead of a
+            circle. Import sprites in the <strong>Mappings</strong> panel&rsquo;s <strong>Sprites</strong>
+            section (PNG / JPEG / GIF / WebP; they travel inside the <code>.gcaproj</code>). Then, in an
+            Agent Output Mapping graph (or the Behaviour graph), use the <strong>Set Agent Sprite</strong>
+            node. Playback is <strong>driven by your logic</strong>, not a transport &mdash; the node has
+            independently-tickable options so you change only what you want:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Change sprite</strong> &mdash; switch which sprite the agent uses (e.g. on a state
+              change).</li>
+            <li><strong>Set frame</strong> &mdash; jump to / reset a frame (e.g. <code>0</code> to restart
+              the animation).</li>
+            <li><strong>Set speed</strong> &mdash; the playback speed in frames per simulation step.
+              <strong> Negative reverses</strong>; <code>0</code> holds. The engine advances the frame by
+              the speed each step, so the animation only progresses while the sim runs &mdash; e.g.
+              &ldquo;while moving, set speed&nbsp;=&nbsp;1 (walk plays); while idle, set speed&nbsp;=&nbsp;0&rdquo;.</li>
+          </ul>
           <h3 className={styles.h3}>The Config Panel</h3>
           <p className={styles.p}>
             The <strong>Bond-Graph Agents</strong> block (Properties, shown when Agents is on)

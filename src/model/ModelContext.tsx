@@ -22,6 +22,7 @@ import type {
   Preset,
   RGB,
   SimulationState,
+  SpriteAsset,
   Variable,
   VariegatedCellsConfig,
   TopologyMode,
@@ -179,6 +180,9 @@ type ModelAction =
   | { type: 'ADD_AGENT_MAPPING' }
   | { type: 'REMOVE_AGENT_MAPPING'; id: string }
   | { type: 'UPDATE_AGENT_MAPPING'; id: string; changes: Partial<Mapping> }
+  | { type: 'ADD_SPRITE'; sprite: SpriteAsset }
+  | { type: 'REMOVE_SPRITE'; id: string }
+  | { type: 'UPDATE_SPRITE'; id: string; changes: Partial<SpriteAsset> }
   | { type: 'SET_GRAPH'; nodes: GraphNode[]; edges: GraphEdge[] }
   | { type: 'SET_AGENT_GRAPH'; nodes: GraphNode[]; edges: GraphEdge[] }
   | { type: 'UPDATE_CENTER_BASED'; changes: Partial<CenterBasedConfig> }
@@ -772,6 +776,35 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         },
       };
 
+    case 'ADD_SPRITE':
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, sprites: [...(state.model.sprites ?? []), action.sprite] },
+      };
+    case 'REMOVE_SPRITE': {
+      // Cascade: clear `spriteId` on any Set Agent Sprite node referencing the
+      // deleted asset (so it shows a "Select a sprite" badge instead of a dangling ref).
+      const patched = clearDeletedId(state.model, 'spriteId', action.id);
+      return {
+        ...state, isDirty: true,
+        model: {
+          ...state.model,
+          sprites: (state.model.sprites ?? []).filter(s => s.id !== action.id),
+          ...patched,
+        },
+      };
+    }
+    case 'UPDATE_SPRITE':
+      return {
+        ...state, isDirty: true,
+        model: {
+          ...state.model,
+          sprites: (state.model.sprites ?? []).map(s =>
+            s.id === action.id ? { ...s, ...action.changes } : s,
+          ),
+        },
+      };
+
     case 'SET_GRAPH':
       return {
         ...state,
@@ -1280,6 +1313,9 @@ export interface ModelContextValue {
   addAgentMapping: () => void;
   removeAgentMapping: (id: string) => void;
   updateAgentMapping: (id: string, changes: Partial<Mapping>) => void;
+  addSprite: (sprite: SpriteAsset) => void;
+  removeSprite: (id: string) => void;
+  updateSprite: (id: string, changes: Partial<SpriteAsset>) => void;
   setGraph: (nodes: GraphNode[], edges: GraphEdge[]) => void;
   /** Bond-Graph Agents: write-back for the agent rule graph (the second graph). */
   setAgentGraph: (nodes: GraphNode[], edges: GraphEdge[]) => void;
@@ -1421,6 +1457,12 @@ export function ModelProvider({ children }: { children: ReactNode }) {
   const removeAgentMapping = useCallback((id: string) => dispatch({ type: 'REMOVE_AGENT_MAPPING', id }), []);
   const updateAgentMapping = useCallback(
     (id: string, changes: Partial<Mapping>) => dispatch({ type: 'UPDATE_AGENT_MAPPING', id, changes }),
+    [],
+  );
+  const addSprite = useCallback((sprite: SpriteAsset) => dispatch({ type: 'ADD_SPRITE', sprite }), []);
+  const removeSprite = useCallback((id: string) => dispatch({ type: 'REMOVE_SPRITE', id }), []);
+  const updateSprite = useCallback(
+    (id: string, changes: Partial<SpriteAsset>) => dispatch({ type: 'UPDATE_SPRITE', id, changes }),
     [],
   );
   const setGraph = useCallback(
@@ -1592,6 +1634,9 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       addAgentMapping,
       removeAgentMapping,
       updateAgentMapping,
+      addSprite,
+      removeSprite,
+      updateSprite,
       setGraph,
       setAgentGraph,
       updateCenterBased,
@@ -1647,6 +1692,9 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       addAgentMapping,
       removeAgentMapping,
       updateAgentMapping,
+      addSprite,
+      removeSprite,
+      updateSprite,
       setGraph,
       setAgentGraph,
       updateCenterBased,

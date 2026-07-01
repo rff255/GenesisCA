@@ -615,10 +615,23 @@ function CaNodeComponent({ id, data }: NodeProps) {
   // (see the collapsed render branch). Those positions change when an edge is
   // added/removed WITHOUT the node's size changing, so React Flow won't
   // re-measure handle bounds on its own — nudge it whenever the connected set
-  // or the collapse state flips. (Expanded nodes re-measure via size changes.)
+  // or the collapse state flips.
   useEffect(() => {
     if (isCollapsed) updateNodeInternals(id);
   }, [updateNodeInternals, id, isCollapsed, showExpanded, connectedInputHandles]);
+
+  // Re-measure handle bounds whenever the VISIBLE (post-hiddenPorts / dynamic)
+  // port set changes. A config that hides/shows or SWAPS ports — Vector Op's
+  // `op` dropdown (add[a,b] → scale[a,s], or add → dot swapping result→value),
+  // Get Agent Position's `mode`, Switch/Sequence dynamic ports, … — can keep the
+  // node HEIGHT unchanged, so React Flow's ResizeObserver never fires and a
+  // newly-shown handle keeps stale/absent bounds → it silently rejects
+  // connections until something else forces a remeasure. Keying on the port-id
+  // signature fixes that for every config-driven port change in one place.
+  const portIdSignature = inputPorts.map(p => p.id).join(',') + '|' + outputPorts.map(p => p.id).join(',');
+  useEffect(() => {
+    updateNodeInternals(id);
+  }, [updateNodeInternals, id, portIdSignature]);
 
   const isCompact = nodeData.nodeType === 'step'
     || nodeData.nodeType === 'conditional'
@@ -726,7 +739,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
       if (nodeData.config.mappingId === CURRENT_VIEWER_SENTINEL) {
         collapsedLabel = `Looks - Current Selected${glyphTag}`;
       } else {
-        const mapping = model.mappings.find(m => m.id === nodeData.config.mappingId);
+        // Cell OR agent mapping (Set Cell Looks is universal across both graphs).
+        const mapping = model.mappings.find(m => m.id === nodeData.config.mappingId)
+          ?? (model.agentMappings ?? []).find(m => m.id === nodeData.config.mappingId);
         collapsedLabel = mapping ? `Looks - ${mapping.name}${glyphTag}` : displayNodeLabel(def);
       }
     } else if (nodeData.nodeType === 'inputColor') {
@@ -735,6 +750,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
     } else if (nodeData.nodeType === 'outputMapping') {
       const mapping = model.mappings.find(m => m.id === nodeData.config.mappingId);
       collapsedLabel = mapping ? `A\u2192C: ${mapping.name}` : displayNodeLabel(def);
+    } else if (nodeData.nodeType === 'agentOutputMapping') {
+      const mapping = (model.agentMappings ?? []).find(m => m.id === nodeData.config.mappingId);
+      collapsedLabel = mapping ? `Agent A\u2192C: ${mapping.name}` : displayNodeLabel(def);
+    } else if (nodeData.nodeType === 'setAgentSprite') {
+      const sprite = (model.sprites ?? []).find(s => s.id === nodeData.config.spriteId);
+      collapsedLabel = sprite ? `Sprite - ${sprite.name}` : displayNodeLabel(def);
     } else if (nodeData.nodeType === 'getIndicator') {
       const ind = (model.indicators || []).find(i => i.id === nodeData.config.indicatorId);
       collapsedLabel = ind ? `Ind - ${ind.name}` : displayNodeLabel(def);
@@ -1082,6 +1103,20 @@ function CaNodeComponent({ id, data }: NodeProps) {
           >
             <option value="union">Union</option>
             <option value="intersection">Intersection</option>
+          </select>
+        )}
+
+        {/* Get Agent Position — Absolute (raw position by id) vs Relative
+            (torus-shortest vector from a Reference agent, default self). Relative
+            reveals the `Reference` input via hiddenPorts. */}
+        {nodeData.nodeType === 'getAgentPosition' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.mode as string) || 'absolute'}
+            onChange={e => updateConfig('mode', e.target.value)}
+          >
+            <option value="absolute">Absolute (position)</option>
+            <option value="relative">Relative (from reference)</option>
           </select>
         )}
 
@@ -1629,6 +1664,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
               {label}
             </label>
           );
+          // On the Agents graph this colours an AGENT for an agent viewer, so list
+          // the agent mappings; on the Cells graph list the cell mappings. The
+          // "Current Simulator Selected" sentinel works in both (writes whichever
+          // viewer is active — for an agent OM pass that's the mapping it runs for).
+          const looksMappings = getActiveGraphKind() === 'agents'
+            ? (model.agentMappings ?? []) : model.mappings;
           return (
             <>
               <select
@@ -1638,7 +1679,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               >
                 <option value="">Select Mapping...</option>
                 <option value={CURRENT_VIEWER_SENTINEL}>Current Simulator Selected</option>
-                {model.mappings
+                {looksMappings
                   .filter(m => m.isAttributeToColor)
                   .map(m => (
                     <option key={m.id} value={m.id}>{m.name}</option>
@@ -1721,6 +1762,57 @@ function CaNodeComponent({ id, data }: NodeProps) {
               ))}
           </select>
         )}
+
+        {nodeData.nodeType === 'agentOutputMapping' && (
+          <select
+            className={styles.select}
+            value={(nodeData.config.mappingId as string) || ''}
+            onChange={e => updateConfig('mappingId', e.target.value)}
+          >
+            <option value="">Select Agent View...</option>
+            {(model.agentMappings ?? [])
+              .filter(m => m.isAttributeToColor)
+              .map(m => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+          </select>
+        )}
+
+        {nodeData.nodeType === 'setAgentSprite' && (() => {
+          const setSprite = nodeData.config.setSprite !== false;
+          const cbx = (key: string, label: string, checked: boolean, title: string) => (
+            <label
+              className="nodrag"
+              style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, cursor: 'pointer', marginTop: 4 }}
+              onMouseDown={e => e.stopPropagation()}
+              onClick={e => e.stopPropagation()}
+              title={title}
+            >
+              <input type="checkbox" checked={checked} onChange={e => updateConfig(key, e.target.checked)} />
+              {label}
+            </label>
+          );
+          return (
+            <>
+              {cbx('setSprite', 'Change sprite', setSprite, 'Switch which sprite this agent is drawn as')}
+              {setSprite && (
+                <select
+                  className={styles.select}
+                  value={(nodeData.config.spriteId as string) || ''}
+                  onChange={e => updateConfig('spriteId', e.target.value)}
+                  title="The sprite to draw (manage sprites in the Mappings panel → Sprites)"
+                >
+                  <option value="">Select Sprite...</option>
+                  {(model.sprites ?? []).map(s => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              )}
+              {cbx('setFrame', 'Set frame', !!nodeData.config.setFrame, 'Jump to / reset the current frame (the Frame input)')}
+              {cbx('setSpeed', 'Set speed', !!nodeData.config.setSpeed, 'Set playback speed in frames per step — negative = reverse, 0 = hold (the Speed input)')}
+            </>
+          );
+        })()}
 
         {nodeData.nodeType === 'getModelAttribute' && (
           <select

@@ -23,6 +23,10 @@ function hexToRgb(hex: string): RGB {
   return { r: parseInt(m[1]!, 16), g: parseInt(m[2]!, 16), b: parseInt(m[3]!, 16) };
 }
 
+const SPRITE_MAX_BYTES = 4 * 1024 * 1024;
+const SPRITE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp';
+const genSpriteId = () => 's_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+
 function ColorSwatch({ value, onChange }: { value: RGB; onChange: (c: RGB) => void }) {
   return (
     <input
@@ -180,11 +184,30 @@ function handleMappingDragEnd() {
 }
 
 export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) {
-  const { model, addMapping, removeMapping, updateMapping, reorderMappings, addAgentMapping, removeAgentMapping, updateAgentMapping } = useModel();
+  const { model, addMapping, removeMapping, updateMapping, reorderMappings, addAgentMapping, removeAgentMapping, updateAgentMapping, addSprite, removeSprite, updateSprite } = useModel();
   const [selectedId, setSelectedId] = useDetailSelection('mappings');
   const agentsOn = !!model.topologyMode?.agents;
   const agentMappings = model.agentMappings ?? [];
   const agentAttrs = (model.agentAttributes ?? []).filter(a => a.type !== 'color' && a.type !== 'lookupTable');
+  const sprites = model.sprites ?? [];
+  const spriteInputRef = useRef<HTMLInputElement>(null);
+  const handleSpritePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-picking the same file
+    if (!file) return;
+    if (file.size > SPRITE_MAX_BYTES) {
+      window.alert(`Sprite "${file.name}" is ${(file.size / 1048576).toFixed(1)} MB — the limit is 4 MB. Use a smaller image / GIF.`);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      if (typeof dataUrl !== 'string') return;
+      const baseName = file.name.replace(/\.[^.]+$/, '') || 'sprite';
+      addSprite({ id: genSpriteId(), name: baseName, dataUrl, mimeType: file.type || 'image/png', scale: 1, loop: true });
+    };
+    reader.readAsDataURL(file);
+  };
 
   const attrToColor = model.mappings.filter(m => m.isAttributeToColor);
   const colorToAttr = model.mappings.filter(m => !m.isAttributeToColor);
@@ -345,7 +368,25 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                   >&times;</button>
                 </div>
               </div>
-              <LinkedOutputEditor selected={{ ...m, linked: true }} attrs={agentAttrs} update={updateAgentMapping} />
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>Color pass</label>
+                <select
+                  className={styles.textInput}
+                  value={m.linked === false ? 'standalone' : 'linked'}
+                  onChange={e => updateAgentMapping(m.id, { linked: e.target.value === 'linked' })}
+                >
+                  <option value="standalone">Standalone</option>
+                  <option value="linked">Linked</option>
+                </select>
+                <span style={{ color: '#888', fontSize: '0.66rem', marginTop: 3, display: 'block' }}>
+                  {m.linked === false
+                    ? 'You build this view by hand on the Agents graph (Agent Output Mapping → … → Set Cell Looks / Set Agent Sprite).'
+                    : 'Auto-generates the colour from a chosen agent attribute. If you also add an Agent Output Mapping node for this view, the auto pass runs first as a background and your graph overrides it (special colours, sprites).'}
+                </span>
+              </div>
+              {m.linked !== false && (
+                <LinkedOutputEditor selected={{ ...m, linked: true }} attrs={agentAttrs} update={updateAgentMapping} />
+              )}
             </div>
           ))}
           <div className={styles.buttonRow}>
@@ -356,6 +397,71 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
               title={agentAttrs.length === 0 ? 'Add an agent attribute first (Attributes panel, Agents tab).' : undefined}
             >
               + Add Agent View
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Sprite Library — imported images / animated GIFs used as the optional
+          agent exhibition layer (Set Agent Sprite node in an Agent Output Mapping
+          graph). Agents-only. Each sprite travels inside the .gcaproj as a data URL. */}
+      {agentsOn && (
+        <div className={styles.section}>
+          <div className={styles.sectionTitle}>Sprites</div>
+          <span style={{ color: '#888', fontSize: '0.66rem', display: 'block', margin: '0 0 6px' }}>
+            Images / animated GIFs an agent can be drawn as (via the <b>Set Agent Sprite</b> node in an
+            Agent Output Mapping graph). Playback (which sprite, frame, speed) is driven by the agent&apos;s
+            logic through that node — not a manual transport.
+          </span>
+          {sprites.length === 0 && (
+            <span style={{ color: '#888', fontSize: '0.68rem', fontStyle: 'italic' }}>No sprites yet.</span>
+          )}
+          {sprites.map(s => (
+            <div key={s.id} className={styles.fieldGroup} style={{ borderTop: '1px solid #333', paddingTop: 8, marginTop: 6 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <img
+                  src={s.dataUrl}
+                  alt={s.name}
+                  style={{ width: 40, height: 40, objectFit: 'contain', background: '#0a0b0e', borderRadius: 4, imageRendering: 'pixelated', flex: '0 0 auto' }}
+                />
+                <input
+                  className={styles.textInput}
+                  style={{ flex: 1 }}
+                  value={s.name}
+                  onChange={e => updateSprite(s.id, { name: e.target.value })}
+                />
+                <button
+                  className={styles.deleteButton}
+                  style={{ padding: '2px 8px' }}
+                  onClick={() => removeSprite(s.id)}
+                  title="Remove sprite"
+                >&times;</button>
+              </div>
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>Size × (relative to agent diameter)</label>
+                <NumberField className={styles.textInput} style={{ width: 80 }} value={s.scale ?? 1} step={0.1} min={0.1}
+                  onNumber={n => updateSprite(s.id, { scale: n })} />
+              </div>
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', marginTop: 4 }}
+                title="When the playback frame runs past the last frame: Loop wraps to the start; unticked holds on the last frame (play once)."
+              >
+                <input type="checkbox" checked={s.loop !== false}
+                  onChange={e => updateSprite(s.id, { loop: e.target.checked })} />
+                Loop frames
+              </label>
+            </div>
+          ))}
+          <input
+            ref={spriteInputRef}
+            type="file"
+            accept={SPRITE_ACCEPT}
+            style={{ display: 'none' }}
+            onChange={handleSpritePick}
+          />
+          <div className={styles.buttonRow}>
+            <button className={styles.addButton} onClick={() => spriteInputRef.current?.click()}>
+              + Import image / GIF
             </button>
           </div>
         </div>
