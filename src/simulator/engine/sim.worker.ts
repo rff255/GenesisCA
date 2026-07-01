@@ -1690,8 +1690,19 @@ async function runAgentStepWebGPU(): Promise<boolean> {
       await readbackAgentField(rt, writeArrays);
     }
   } catch (e) {
-    self.postMessage({ type: 'error', message: '[agents] WebGPU step failed, falling back to JS: ' + ((e as Error)?.message || e) });
-    destroyAgentWebGPURuntime(agentWebgpuRuntime); agentWebgpuRuntime = null;
+    // A concurrent reinit (initAgents / rebuild / recompile processed during one of
+    // the awaited readbacks) may have destroyed THIS runtime's buffers while our
+    // mapAsync was still pending → "Buffer was destroyed before mapping was
+    // resolved". That is EXPECTED during live editing, not a real GPU failure: fall
+    // back to JS for this step SILENTLY and leave the (possibly already-rebuilt)
+    // runtime alone. We detect it by the runtime reference no longer being current
+    // — which also fixes a latent bug where the old catch would destroy a FRESH
+    // runtime a reinit had just installed. Only a genuine failure of the runtime we
+    // actually ran on surfaces an error + tears it down.
+    if (agentWebgpuRuntime === rt) {
+      self.postMessage({ type: 'error', message: '[agents] WebGPU step failed, falling back to JS: ' + ((e as Error)?.message || e) });
+      destroyAgentWebGPURuntime(agentWebgpuRuntime); agentWebgpuRuntime = null;
+    }
     return false;
   }
 
