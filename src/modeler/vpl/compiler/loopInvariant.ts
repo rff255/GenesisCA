@@ -113,6 +113,13 @@ const NEVER_INVARIANT = new Set<string>([
   'divisionEvent',
   'bondContactEvent',
   'getSelfPosition',
+  // getSelfHandle emits the agent's own id = the bare loop variable `idx`. It has
+  // NO value inputs, so without this it is vacuously "invariant" and hoisted to the
+  // function preamble ABOVE the `for (let idx…)` decode → JS `idx is not defined`
+  // (and WASM would silently read idxLocal=0, always returning handle 0). Same
+  // reasoning as getCellPosition / getSelfPosition. Surfaces whenever Get Self
+  // Handle feeds a by-id node (e.g. Get Agent Position's Reference / Form Bond).
+  'getSelfHandle',
   'getRadius',
   'getBondDegree',
   'neighbourDensity',

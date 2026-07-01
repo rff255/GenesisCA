@@ -659,7 +659,15 @@ function compileRoot(
     const srcPort = srcDef?.ports.find(p => p.id === srcPortId);
     if (srcPort?.isArray) return true;
     if (srcNode.data.nodeType === 'getVariable') {
-      const v = (_model?.variables || []).find(x => x.id === srcNode.data.config.variableId);
+      // Look up in BOTH the cell (model.variables) and agent (model.agentVariables)
+      // scopes: a getVariable on the AGENT graph references an agentVariable, and
+      // variable ids are globally unique so the combined lookup is unambiguous.
+      // Without the agentVariables arm an agent Local-Variable ARRAY was treated as
+      // a scalar and wrapped as `[_v]`, so Get Array Element / Array Length could
+      // not index it (element 0 returned the whole array, element ≥1 returned 0).
+      const vid = srcNode.data.config.variableId;
+      const v = (_model?.variables || []).find(x => x.id === vid)
+        || (_model?.agentVariables || []).find(x => x.id === vid);
       return v?.kind === 'array';
     }
     if (srcNode.data.nodeType === 'valueSwitch') {
