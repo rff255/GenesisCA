@@ -485,6 +485,19 @@ export interface AgentStore {
   // --- per-agent RGBA appearance (written by the agent colour pass; PR-A3) ---
   colors: Uint8ClampedArray;
 
+  // --- agent sprites (DISPLAY) — PERSISTENT per-agent sprite state set by the Set
+  //     Agent Sprite node (in the JS agent colour / behaviour pass) and advanced by
+  //     the engine each step. Always plain arrays (never wasm/webgpu-backed — no
+  //     agent compiler touches them; the decoded image frames live on the main
+  //     thread). spriteIds: 0 = no sprite (draw the circle), >=1 = 1-based slot into
+  //     model.sprites. spriteFrames: current frame (fractional; the engine does
+  //     `frame += speed` each step; the render floors + wraps/clamps by the sprite's
+  //     loop flag). spriteSpeeds: playback speed in frames per step (negative =
+  //     reverse, 0 = hold). All reset to 0 on slot (re)allocation. ---
+  spriteIds: Int32Array;
+  spriteFrames: Float64Array;
+  spriteSpeeds: Float64Array;
+
   // --- user attributes (r_<id> / w_<id>, sized maxAgents; D-IDX) ---
   attrSpecs: AgentAttrSpec[];
   attrRead: Record<string, AgentTypedArray>;
@@ -690,6 +703,11 @@ export function createAgentStore(
     bondFormK: f64('bondFormK'),
     bondBreakReq: i32('bondBreakReq'),
     colors: colorsArr(),
+    // Persistent display sprite state — plain arrays regardless of backing (the JS
+    // node + engine advance are the only writers). All 0: no sprite, frame 0, hold.
+    spriteIds: new Int32Array(maxAgents),
+    spriteFrames: new Float64Array(maxAgents),
+    spriteSpeeds: new Float64Array(maxAgents),
     attrSpecs,
     attrRead, attrWrite, attrKind,
     highWater: 0,
@@ -791,6 +809,9 @@ export function initAgentSlot(
   const [r, g, b] = DEFAULT_AGENT_COLOR;
   const c = id * 4;
   store.colors[c] = r; store.colors[c + 1] = g; store.colors[c + 2] = b; store.colors[c + 3] = 255;
+  // Reset persistent sprite state so a recycled slot doesn't inherit a stale
+  // sprite / frame / speed (Set Agent Sprite re-sets it from the agent's logic).
+  store.spriteIds[id] = 0; store.spriteFrames[id] = 0; store.spriteSpeeds[id] = 0;
 }
 
 /** Free an agent slot: mark dead, bump its epoch (so any stale bond pointing at
@@ -873,6 +894,13 @@ export interface AgentRenderSnapshot {
   colors: Uint8ClampedArray;
   /** Flat [a, b, a, b, …] live bond index pairs (empty when no bonds). */
   bonds: Int32Array;
+  /** Per-agent sprite slot (0 = none) + current frame (fractional; the render
+   *  floors + wraps/clamps it by the sprite's loop flag). Sliced only when the
+   *  model has sprites (`includeSprites`); else length-0 placeholders so non-sprite
+   *  agent models pay no extra per-step alloc/transfer (the z/vz "A1" gate
+   *  pattern). The speed stays worker-side (only the resolved frame renders). */
+  spriteIds: Int32Array;
+  spriteFrames: Float64Array;
 }
 
 // ---------------------------------------------------------------------------
@@ -1467,7 +1495,7 @@ export function buildSpatialHash(
   return { nBinsX, nBinsY, nBinsZ, binSizeX, binSizeY, binSizeZ, originX: ox, originY: oy, originZ: oz, binStart, binAgents };
 }
 
-export function snapshotAgentsForRender(store: AgentStore): AgentRenderSnapshot {
+export function snapshotAgentsForRender(store: AgentStore, includeSprites = false): AgentRenderSnapshot {
   const hw = store.highWater;
   // A1: gate z/vz on worldDepth > 1 so 2D models pay NO extra per-step alloc/
   // transfer for the (always-zero) z arm. 2D → length-0 placeholders (renderer
@@ -1486,7 +1514,27 @@ export function snapshotAgentsForRender(store: AgentStore): AgentRenderSnapshot 
     alive: store.alive.slice(0, hw),
     colors: store.colors.slice(0, hw * 4),
     bonds: snapshotBonds(store),
+    // Sprites: only ship the per-agent buffers when the model has sprites; else
+    // length-0 so non-sprite agent models are byte-identical (no extra transfer).
+    spriteIds: includeSprites ? store.spriteIds.slice(0, hw) : new Int32Array(0),
+    spriteFrames: includeSprites ? store.spriteFrames.slice(0, hw) : new Float64Array(0),
   };
+}
+
+/** Advance every live agent's sprite frame by its per-agent speed (the engine
+ *  half of the logic-driven playback — the Set Agent Sprite node sets the speed;
+ *  this advances `frame += speed` once per simulation step). Unbounded by design
+ *  (the render floors + wraps/clamps by the sprite's frame count + loop flag) —
+ *  f64 keeps integer frames exact far past any realistic step count, and a reset
+ *  (Set Frame) re-centres it. No-op for agents with no sprite (`spriteIds[i] === 0`)
+ *  or zero speed. Called per step from the worker, gated on the model having
+ *  sprites. */
+export function advanceAgentSprites(store: AgentStore): void {
+  const hw = store.highWater;
+  const ids = store.spriteIds, frames = store.spriteFrames, speeds = store.spriteSpeeds, alive = store.alive;
+  for (let i = 0; i < hw; i++) {
+    if (alive[i] && ids[i]! > 0 && speeds[i] !== 0) frames[i]! += speeds[i]!;
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -181,6 +181,34 @@ export interface Mapping {
   linkedColors?: LinkedColorSet;
 }
 
+/** An imported sprite asset (static image or animated GIF/WebP) used as an
+ *  optional exhibition layer for AGENT output mappings. The original file is kept
+ *  as a base64 data URL so the `.gcaproj` stays self-contained; frames are decoded
+ *  on the MAIN THREAD (via WebCodecs `ImageDecoder`) into `ImageBitmap`s for fast
+ *  per-agent blitting — the worker never carries the pixels (it only holds a
+ *  per-agent sprite slot + current frame + speed in the agent SoA). Referenced by
+ *  `setAgentSprite` nodes via `id`. Absent/empty in every legacy file + non-sprite
+ *  model.
+ *
+ *  PLAYBACK is NOT a simulator transport — it is driven by the agent's LOGIC via
+ *  the Set Agent Sprite node (set sprite / set frame / set speed, speed in frames
+ *  per simulation step, negative = reverse). The per-agent frame is advanced each
+ *  step by the per-agent speed (in the engine). `loop` only decides how the
+ *  RENDER wraps an out-of-range frame: true (default) cycles, false clamps to the
+ *  last frame ("play once"). */
+export interface SpriteAsset {
+  id: string;
+  name: string;
+  /** Original image file as a `data:<mime>;base64,…` URL (PNG/JPEG/GIF/WebP). */
+  dataUrl: string;
+  mimeType: string;
+  /** Size multiplier vs the agent diameter when drawn (default 1). */
+  scale?: number;
+  /** Render wrap mode: true (default) loops the frame index, false clamps it to
+   *  the last frame so the animation holds at its end ("play once"). */
+  loop?: boolean;
+}
+
 export type BoundaryTreatment = 'constant' | 'torus';
 export type Topology = '2d-grid';
 /** Lattice dimensionality. `2d` (default/absent) is the classic W×H grid;
@@ -723,16 +751,24 @@ export interface CAModel {
    *  attributes (`cellFieldAttrsOf`), so the two id-spaces never collide. */
   agentAttributes?: Attribute[];
   /** Generic Agent Platform: the AGENT Attribute→Color output mappings — separate
-   *  "views" of the agent population, the agent analogue of `mappings` (which are
-   *  the CELL-grid mappings). Each is a `linked` A→C mapping over an AGENT attribute
-   *  (`linkedAttributeId` resolves against `agentAttributes`); the compiler
-   *  synthesizes a per-agent colour pass (getCellAttribute → colorScale/categorical
-   *  → setCellLooks) so the user picks an attribute → colour instead of hand-wiring
-   *  Set Cell Looks in the Behaviour Step. When BOTH `mappings` (cell) and
-   *  `agentMappings` (agent) are non-empty the simulator shows a two-layer viewer
-   *  selection. Absent/empty in every legacy file + non-agent model. Only A→C is
-   *  supported (agent input mappings are deferred). */
+   *  "views" of the agent population, the agent analogue of `mappings` (the CELL-grid
+   *  mappings). Each is an A→C view over the AGENT attribute set, **Standalone OR
+   *  Linked** (like the cell output mappings): `linked` ⇒ the compiler synthesizes a
+   *  per-agent colour pass (getCellAttribute[agentAttr] → colorScale/categorical →
+   *  setCellLooks) from `linkedAttributeId` (resolved against `agentAttributes`);
+   *  Standalone ⇒ the user wires an `agentOutputMapping` graph on the Agents tab
+   *  (→ Set Cell Looks / Set Agent Sprite). A Linked mapping that ALSO has a user
+   *  `agentOutputMapping` root runs the auto pass first as a background then the user
+   *  graph (override-after-background). When BOTH `mappings` (cell) and `agentMappings`
+   *  (agent) are non-empty the simulator shows a two-layer viewer selection.
+   *  Absent/empty in every legacy file + non-agent model. Only A→C (agent input
+   *  mappings are deferred). */
   agentMappings?: Mapping[];
+  /** Imported sprite assets (static images / animated GIFs) — the optional agent
+   *  exhibition layer. Referenced by `setAgentSprite` nodes in an agent output
+   *  mapping graph. Travels inside the `.gcaproj` (each a base64 data URL). Absent
+   *  / empty in every legacy file + non-sprite model. */
+  sprites?: SpriteAsset[];
   macroDefs: MacroDef[];
   /** Local Variables — per-cell mutable storage referenced by getVariable /
    *  setVariable / setArrayElement nodes. Empty / absent → no variables in

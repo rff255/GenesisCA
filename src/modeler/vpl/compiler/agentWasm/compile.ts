@@ -575,6 +575,10 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
       break;
     }
     case 'getAgentPosition': {
+      if ((node.data.config?.['mode'] as string) === 'relative') {
+        result = compileAgentRelativePosition(ctx, node, portId);
+        break;
+      }
       const aLocal = emitAgentIdLocal(ctx, node, 'agentId');
       const region = portId === 'y' ? ctx.layout.f64['y']! : portId === 'z' ? ctx.layout.f64['z']! : ctx.layout.f64['x']!;
       result = f64Result(() => pushF64Elem(em, region, aLocal));
@@ -952,6 +956,44 @@ function compileAgentOffset(ctx: AgentWasmCtx, node: GraphNode, portId: string):
   if (ctx.is3d && dzL >= 0) refs['dz'] = { localIdx: dzL, valtype: F64 };
   for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
   return refs[portId] ?? refs['dx']!;
+}
+
+/** Get Agent Position (relative mode) — torus-shortest (X, Y[, Z]) displacement
+ *  from a REFERENCE agent to the target by id: `target − reference`, folded to the
+ *  shortest path. Like compileAgentOffset minus the Distance output, with `ref` in
+ *  place of the hardcoded `idx`; the reference defaults to SELF (`idx`) when the
+ *  `refId` input is unwired (mirrors GetAgentPositionNode's JS relative emit).
+ *  Multi-output: one emit pass into shared locals cached under x/y/z. */
+function compileAgentRelativePosition(ctx: AgentWasmCtx, node: GraphNode, portId: string): ValueRef {
+  const em = ctx.em;
+  const L = ctx.layout;
+  const cachedSibling = ctx.valueCache.get(`${node.id}:x`);
+  if (cachedSibling !== undefined) return ctx.valueCache.get(`${node.id}:${portId}`) ?? cachedSibling;
+  const aLocal = emitAgentIdLocal(ctx, node, 'agentId');
+  // self when refId is unwired (JS: `inputs.refId ? (...|0) : idx`).
+  const refSrc = ctx.adj.inputToSource.get(`${node.id}:refId`);
+  const refLocal = refSrc ? emitAgentIdLocal(ctx, node, 'refId') : ctx.idxLocal;
+  const oxL = em.allocLocal(F64), oyL = em.allocLocal(F64);
+  let ozL = -1;
+  pushF64Elem(em, L.f64['x']!, aLocal); pushF64Elem(em, L.f64['x']!, refLocal); em.op(OP_F64_SUB); em.localSet(oxL);
+  pushF64Elem(em, L.f64['y']!, aLocal); pushF64Elem(em, L.f64['y']!, refLocal); em.op(OP_F64_SUB); em.localSet(oyL);
+  if (ctx.is3d) {
+    ozL = em.allocLocal(F64);
+    pushF64Elem(em, L.f64['z']!, aLocal); pushF64Elem(em, L.f64['z']!, refLocal); em.op(OP_F64_SUB); em.localSet(ozL);
+  }
+  em.localGet(ctx.fieldTorusLocal);
+  em.ifThen(() => {
+    foldTorus(em, oxL, ctx.fieldWLocal);
+    foldTorus(em, oyL, ctx.fieldHLocal);
+    if (ctx.is3d && ozL >= 0) foldTorus(em, ozL, ctx.fieldDLocal);
+  });
+  const refs: Record<string, ValueRef> = {
+    x: { localIdx: oxL, valtype: F64 },
+    y: { localIdx: oyL, valtype: F64 },
+  };
+  if (ctx.is3d && ozL >= 0) refs['z'] = { localIdx: ozL, valtype: F64 };
+  for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
+  return refs[portId] ?? refs['x']!;
 }
 
 /** Fold an f64 local `d` to the torus-shortest range given the world span in

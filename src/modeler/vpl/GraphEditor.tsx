@@ -516,8 +516,14 @@ export function GraphEditorInner() {
   // scheduleSync fork on this; the sub-tab strip sets it. The graphState global
   // mirror drives the palette / quick-add gating + the 'Agent Attributes' label.
   const agentsTopo = !!model.topologyMode?.agents;
-  const [activeGraph, setActiveGraphState] = useState<ActiveGraphKind>(() =>
-    (agentsTopo && modelerUiState.activeGraph === 'agents') ? 'agents' : 'cells');
+  const gridCellsTopo = model.topologyMode?.gridCells !== false;
+  const [activeGraph, setActiveGraphState] = useState<ActiveGraphKind>(() => {
+    // Agents-only model (Grid Cells disabled) → there is no Cells graph, so show
+    // the Agents graph (the Cells pill is elided; defaulting to 'cells' would show
+    // an empty CA-grid canvas + demand a Generation Step that the model can't use).
+    if (agentsTopo && !gridCellsTopo) return 'agents';
+    return (agentsTopo && modelerUiState.activeGraph === 'agents') ? 'agents' : 'cells';
+  });
   // Keep the module global + the persisted snapshot in lockstep with local state
   // (the palette + Attributes panel read the global without prop-drilling).
   useEffect(() => {
@@ -1146,12 +1152,15 @@ export function GraphEditorInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentScope, modelVersion, activeGraph]);
 
-  // Bond-Graph Agents: if the Agents topology is turned off while the Agents
-  // sub-tab is active, auto-switch back to the Cells graph (the pill elides; a
-  // hidden graph would strand the user). Mirrors the variegated V-tab auto-switch.
+  // Bond-Graph Agents: keep the active sub-tab on a graph that actually exists —
+  // if Agents is turned off while on the Agents tab → back to Cells; if Grid Cells
+  // is turned off (agents-only) while on the Cells tab → to Agents. The hidden pill
+  // would otherwise strand the user on an empty/irrelevant graph. Mirrors the
+  // variegated V-tab auto-switch.
   useEffect(() => {
     if (activeGraph === 'agents' && !model.topologyMode?.agents) setActiveGraph('cells');
-  }, [activeGraph, model.topologyMode?.agents, setActiveGraph]);
+    else if (activeGraph === 'cells' && model.topologyMode?.gridCells === false && model.topologyMode?.agents) setActiveGraph('agents');
+  }, [activeGraph, model.topologyMode?.agents, model.topologyMode?.gridCells, setActiveGraph]);
 
   // Capture-phase mousedown on the viewport: snapshot the current multi-node
   // selection BEFORE React Flow's internal handlers run, so onNodeContextMenu

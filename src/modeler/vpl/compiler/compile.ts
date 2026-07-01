@@ -11,7 +11,7 @@ import { INVALID_NI, packNI, packNI3, NI_ARRAY_PRODUCERS } from './niCodec';
 import { analyzeSinkScopes, CELL_TOP, type ScopeId } from './sinkAnalysis';
 import { canonicalizeAccessorEdges } from './accessorCSE';
 import { injectLinkedOutputMappings } from './linkedOutputMappings';
-import { buildAgentColorPassGraphs } from './agentLinkedOutputMappings';
+import { injectAgentLinkedOutputMappings } from './agentLinkedOutputMappings';
 import { collapseReroutes } from './rerouteCollapse';
 import { expandComposites } from './expandComposites';
 import { computeAsyncReadWriteHazards } from './asyncWriteHazard';
@@ -2098,6 +2098,13 @@ function buildDivisionParams(model: CAModel): string {
   for (const a of agentAttrs) parts.push(`r_${a.id}`);
   for (const a of agentAttrs) parts.push(`w_${a.id}`);
   parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
+  // Agent sprites — persistent per-agent display state written by Set Agent
+  // Sprite (0 = no sprite / >=1 = 1-based sprite slot; spriteFrames = current
+  // frame; spriteSpeeds = frames/step, negative = reverse). The engine advances
+  // spriteFrames += spriteSpeeds each step; the render blits the floored frame.
+  // Always threaded (the store always allocates them); ABI-mirrored in the
+  // worker's buildAgentLoopArgs / buildDivisionArgs / buildAgentInitArgs.
+  parts.push('spriteIds', 'spriteFrames', 'spriteSpeeds');
   // PR3 FIX 1 — Lookup Tables (pinned slot, mirrors buildAgentLoopParams).
   if (model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable')) parts.push('_lookupTables');
   // Closed feedback: the agent-accessible CELL field arrays + grid dims (same as
@@ -2142,6 +2149,13 @@ function buildAgentInitParams(model: CAModel): string {
   for (const a of agentAttrs) parts.push(`r_${a.id}`);
   for (const a of agentAttrs) parts.push(`w_${a.id}`);
   parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
+  // Agent sprites — persistent per-agent display state written by Set Agent
+  // Sprite (0 = no sprite / >=1 = 1-based sprite slot; spriteFrames = current
+  // frame; spriteSpeeds = frames/step, negative = reverse). The engine advances
+  // spriteFrames += spriteSpeeds each step; the render blits the floored frame.
+  // Always threaded (the store always allocates them); ABI-mirrored in the
+  // worker's buildAgentLoopArgs / buildDivisionArgs / buildAgentInitArgs.
+  parts.push('spriteIds', 'spriteFrames', 'spriteSpeeds');
   if (model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable')) parts.push('_lookupTables');
   parts.push('_fieldW', '_fieldH', '_fieldTotal', '_fieldBoundaryTorus');
   for (const a of fieldAttrs) parts.push(`_field_${a.id}`);
@@ -2182,6 +2196,13 @@ export function buildAgentLoopParams(model: CAModel): { params: string; agentAtt
   for (const a of agentAttrs) parts.push(`r_${a.id}`);
   for (const a of agentAttrs) parts.push(`w_${a.id}`);
   parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
+  // Agent sprites — persistent per-agent display state written by Set Agent
+  // Sprite (0 = no sprite / >=1 = 1-based sprite slot; spriteFrames = current
+  // frame; spriteSpeeds = frames/step, negative = reverse). The engine advances
+  // spriteFrames += spriteSpeeds each step; the render blits the floored frame.
+  // Always threaded (the store always allocates them); ABI-mirrored in the
+  // worker's buildAgentLoopArgs / buildDivisionArgs / buildAgentInitArgs.
+  parts.push('spriteIds', 'spriteFrames', 'spriteSpeeds');
   // PR3 FIX 1 — Lookup Tables in the agent loop (pinned slot: after glyphColors,
   // before the _field_ block), gated on the model having any lookupTable model
   // attr so a no-table model's signature is unchanged. ABI-mirrored in
@@ -2227,6 +2248,13 @@ export function compileAgentGraph(
   }
   ({ nodes: agentNodes, edges: agentEdges } = collapseReroutes(agentNodes, agentEdges));
   ({ nodes: agentNodes, edges: agentEdges } = expandComposites(agentNodes, agentEdges, model));
+  // Agent Output Mappings: synthesize the LINKED colour passes and sequence them
+  // with any user agentOutputMapping roots (the agent analogue of the cell
+  // injectLinkedOutputMappings). After this the augmented graph carries one
+  // agentOutputMapping root per agent mapping (user-placed or synthesized), which
+  // the OM compile loop below turns into per-agent colour-pass fns. Runs BEFORE
+  // CSE / adjacency so the synthesized nodes share every downstream analysis.
+  ({ nodes: agentNodes, edges: agentEdges } = injectAgentLinkedOutputMappings(agentNodes, agentEdges, model));
   // D-ASYNC-CSE: accessor-CSE is sound only in SYNC agent mode. The DEFAULT agent
   // update mode is 'async' (single-buffered agent attrs — a getCellAttribute /
   // getAgentAttribute read can change after an intervening Set*Attribute write
@@ -2244,6 +2272,18 @@ export function compileAgentGraph(
       if (t === 'getIndicator' || t === 'setIndicator' || t === 'updateIndicator') {
         const idx = indicatorIdxMap.get(node.data.config.indicatorId as string);
         node.data.config._indicatorIdx = idx !== undefined ? idx : -1;
+      }
+    }
+  }
+  // Agent sprites — resolve each Set Agent Sprite node's sprite asset id to a
+  // 1-based slot into `model.sprites` (0 = unresolved/deleted → the node emits no
+  // write). Mirrors the variegated/tag/indicator pre-resolves. The main-thread
+  // renderer maps slot k → model.sprites[k-1].
+  {
+    const spriteSlot = new Map((model.sprites ?? []).map((s, i) => [s.id, i + 1] as const));
+    for (const node of agentNodes) {
+      if (node.data.nodeType === 'setAgentSprite') {
+        node.data.config._spriteSlot = spriteSlot.get(node.data.config.spriteId as string) ?? 0;
       }
     }
   }
@@ -2396,41 +2436,44 @@ export function compileAgentGraph(
     ].join('\n');
   }
 
-  // --- Agent Output Mappings — one per-agent colour-pass fn per linked agent
-  // mapping. Each is a SELF-CONTAINED synthesized graph (getCellAttribute[agent
-  // attr] → colorScale/categorical → setCellLooks) rooted at an outputMapping node,
-  // compiled into the SAME per-agent loop the behaviour uses (idx → r_<attr>[idx],
-  // colorIdx = idx*4 → colors). The worker runs the one matching the active AGENT
+  // --- Agent Output Mappings — compile EVERY `agentOutputMapping` root in the
+  // augmented agent graph (user-placed for a STANDALONE mapping, or synthesized by
+  // injectAgentLinkedOutputMappings for a LINKED one) into a per-agent colour-pass
+  // fn. Shares the augmented graph's adjacency / loop-invariance / fusion. Each is
+  // the SAME per-agent loop the behaviour uses (idx → r_<attr>[idx], colorIdx =
+  // idx*4 → colors / spriteIds). The worker runs the one matching the active AGENT
   // viewer (its setCellLooks is guarded by `activeViewer === <mappingId>`). ---
   const outputMappingCodes: Array<{ mappingId: string; code: string }> = [];
-  if (model && (model.agentMappings || []).length > 0) {
+  {
     const { params: omParams } = buildAgentLoopParams(model);
-    for (const g of buildAgentColorPassGraphs(model)) {
+    for (const omNode of agentNodes.filter(n => n.data.nodeType === 'agentOutputMapping')) {
+      const mappingId = (omNode.data.config.mappingId as string) || '';
       try {
-        const adj = buildAdjacency(g.nodes, g.edges);
-        const rootNode = g.nodes.find(n => n.id === g.rootId)!;
-        const li = classifyLoopInvariant(g.nodes, adj.inputToSource);
-        const fus = detectFusableConsumers(g.nodes, g.edges, adj.inputToSources, adj.inputToSource, model, new Set<string>());
         const r = compileRoot(
-          rootNode, 'do', adj.nodeMap, adj.inputToSource, adj.inputToSources, adj.flowOutputToTargets,
-          li, fus, g.nodes, g.edges, model,
+          omNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets,
+          loopInvariant, fusion, agentNodes, agentEdges, model,
         );
         const omScratch = r.scratchNodes.map(s => buildScratchDecl(s, model));
+        const omVars = buildVariableJS(model.agentVariables || []);
         const code = [
           `(function(${omParams}) {`,
           ...omScratch,
           ...viewerHoistLines,
+          ...omVars.preLoop,
           ...r.preLoopValueLines,
+          '  let _rs = _rngState[0] || 0x12345678;',
           '  for (let idx = 0; idx < highWater; idx++) {',
           '    if (!_alive[idx]) continue;',
           '    const colorIdx = idx * 4;',
+          ...omVars.inLoopReset,
           ...r.valueLines,
           '',
           ...r.flowLines,
           '  }',
+          '  _rngState[0] = _rs;',
           '})',
         ].join('\n');
-        outputMappingCodes.push({ mappingId: g.mappingId, code });
+        outputMappingCodes.push({ mappingId, code });
       } catch { /* a degenerate mapping just yields no colour pass */ }
     }
   }

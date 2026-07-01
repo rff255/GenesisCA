@@ -27,7 +27,7 @@ import type { Attribute, CenterBasedConfig } from '../../model/types';
 import { cbNum, usesBondingPhysics } from '../../model/centerBased';
 import {
   createAgentStore, seedAgents, clearAgents, allocAgentSlot, initAgentSlot, freeAgentSlot, freeStagedSlot,
-  snapshotAgentsForRender, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
+  snapshotAgentsForRender, advanceAgentSprites, serializeAgentStore, deserializeAgentStore, buildSpatialHash,
   formBond, breakBond, hasBond, sweepStaleBonds, divideAgent,
   primeAgentAttrWrite, swapAgentAttrs, computeAgentMaxHashBins, AGENT_HASH_BIN_CAP,
   type AgentStore, type AgentSeedSpec, type AgentStatePayload, type AgentAttrSpec, type SpatialHash,
@@ -186,6 +186,10 @@ interface InitMsg {
   /** Agent Output Mappings: one per-agent colour-pass fn source per linked agent
    *  mapping. `runAgentColorPass` runs the one matching `agentColorViewer`. */
   agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>;
+  /** Agent sprites: true when the model has sprite assets. Gates the per-agent
+   *  sprite display buffers (reset before each colour pass + sliced into the
+   *  render snapshot) so non-sprite agent models pay no extra per-step transfer. */
+  agentHasSprites?: boolean;
   /** PR5 (C-D1): true when the agent graph reads/writes the cell field
    *  (sampleField / fieldGradient / readCellsUnder / affectCellsUnder /
    *  secreteToField). Drives the WebGPU-grid field bridge: only a field model
@@ -255,7 +259,7 @@ interface PaintManualMsg {
 }
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -517,6 +521,10 @@ let agentOutputMappingFns: Array<{ mappingId: string; fn: Function }> = [];
 /** The active AGENT viewer (an agent mapping id). Selects which agent colour pass
  *  paints. Independent of `activeViewer` (the active CELL viewer). */
 let agentColorViewer = '';
+/** True when the model has sprite assets — gates the per-agent sprite display
+ *  buffers (reset before each colour pass + sliced into the render snapshot).
+ *  Set from the init/recompile `agentHasSprites` flag. */
+let hasAgentSprites = false;
 
 /** AW-MEM (PR6a) — DEV-only override that forces the AgentStore onto a
  *  WebAssembly.Memory (views at baked offsets) even for the `js` target, so the
@@ -856,7 +864,7 @@ function buildAgentInitArgs(
   ];
   for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
   for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
-  args.push(cachedModelAttrs, s.colors, activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS);
+  args.push(cachedModelAttrs, s.colors, activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS, s.spriteIds, s.spriteFrames, s.spriteSpeeds);
   if (hasLookupTables) args.push(cachedInteractionTables);
   args.push(width, height, total, boundaryTreatment === 'torus' ? 1 : 0);
   for (const spec of fieldSpecs) args.push(readAttrs[spec.id]);
@@ -959,7 +967,7 @@ function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, ax
   ];
   for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
   for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
-  args.push(cachedModelAttrs, s.colors, activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS);
+  args.push(cachedModelAttrs, s.colors, activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS, s.spriteIds, s.spriteFrames, s.spriteSpeeds);
   // PR3 FIX 1 — Lookup Tables (pinned slot, mirrors buildDivisionParams).
   if (hasLookupTables) args.push(cachedInteractionTables);
   // Closed feedback: the agent-accessible CELL field arrays (readAttrs[id], the
@@ -999,7 +1007,7 @@ function buildAgentLoopArgs(s: AgentStore, viewerOverride?: string): unknown[] {
   ];
   for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
   for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
-  args.push(cachedModelAttrs, s.colors, viewerOverride ?? activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS);
+  args.push(cachedModelAttrs, s.colors, viewerOverride ?? activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS, s.spriteIds, s.spriteFrames, s.spriteSpeeds);
   // PR3 FIX 1 — Lookup Tables (pinned slot, mirrors buildAgentLoopParams).
   if (hasLookupTables) args.push(cachedInteractionTables);
   // Closed feedback (Phase D): the agent-accessible cell field arrays (readAttrs[id]
@@ -1530,6 +1538,12 @@ function runAgentStep(): void {
   // Post-step structural phase: bond form/break (Phase B), division + growth +
   // death (Phase C). Mutates the bond/agent topology on the SETTLED state.
   runAgentStructuralPhase();
+
+  // Sprite playback: advance each agent's sprite frame by its per-agent speed
+  // (logic-driven animation — Set Agent Sprite set the speed; the render floors +
+  // wraps the frame). Per simulation step, so the animation only progresses while
+  // the sim runs. Gated on the model having sprites.
+  if (hasAgentSprites) advanceAgentSprites(s);
 }
 
 /** PR7 G3-runtime — one agent generation on the WebGPU agent target. The GPU
@@ -3947,7 +3961,7 @@ function sendColors(): void {
     // snapshotting (no-op when the model has no agent mappings — agents are then
     // coloured by the behaviour's Set Cell Looks during the step).
     runAgentColorPass();
-    agentsPayload = snapshotAgentsForRender(agentStore);
+    agentsPayload = snapshotAgentsForRender(agentStore, hasAgentSprites);
     agentTransfers.push(
       agentsPayload.x.buffer, agentsPayload.y.buffer, agentsPayload.vx.buffer, agentsPayload.vy.buffer,
       agentsPayload.radius.buffer,
@@ -3958,9 +3972,11 @@ function sendColors(): void {
     // only when 3D populated them, else an empty buffer is harmlessly cheap but
     // we skip it for symmetry with the gate.
     if (agentsPayload.z.length > 0) agentTransfers.push(agentsPayload.z.buffer, agentsPayload.vz.buffer);
+    // Sprites: same gate — only ship the per-agent buffers when the model has sprites.
+    if (agentsPayload.spriteIds.length > 0) agentTransfers.push(agentsPayload.spriteIds.buffer, agentsPayload.spriteFrames.buffer);
   } else if (agentStore) {
     // Empty store — still tell the main thread so it clears any stale agents.
-    agentsPayload = { highWater: 0, liveCount: 0, x: new Float64Array(0), y: new Float64Array(0), z: new Float64Array(0), vx: new Float64Array(0), vy: new Float64Array(0), vz: new Float64Array(0), radius: new Float64Array(0), alive: new Uint8Array(0), colors: new Uint8ClampedArray(0), bonds: new Int32Array(0) };
+    agentsPayload = { highWater: 0, liveCount: 0, x: new Float64Array(0), y: new Float64Array(0), z: new Float64Array(0), vx: new Float64Array(0), vy: new Float64Array(0), vz: new Float64Array(0), radius: new Float64Array(0), alive: new Uint8Array(0), colors: new Uint8ClampedArray(0), bonds: new Int32Array(0), spriteIds: new Int32Array(0), spriteFrames: new Float64Array(0) };
   }
 
   // P7 — when WebGPU direct render is active, the OffscreenCanvas already
@@ -4071,6 +4087,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       agentUsesField = !!msg.agentUsesField;
       centerBasedConfig = msg.centerBased ?? null;
       agentColorViewer = msg.agentColorViewer || '';
+      hasAgentSprites = !!msg.agentHasSprites;
       // PR6b-1 / PR7: resolve the agent target + stash the per-target payload
       // BEFORE initAgents (which reads agentTarget to decide whether to back the
       // store on WebAssembly.Memory). 'wasm' needs bytes; 'webgpu' needs the two
@@ -4257,6 +4274,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             if (simulateAgents) {
               const ran = await runAgentStepWebGPU();
               if (!ran) runAgentStep();   // GPU bailed (hash overflow / failure) → JS this step
+              // runAgentStep advances sprites itself; the GPU path doesn't, so do it here.
+              else if (hasAgentSprites && agentStore) advanceAgentSprites(agentStore);
             }
             if (stepFn && simulateCells && gridCellsEnabled) runStep();
             const rawStop = stopFlag[0] ?? 0;
@@ -4580,6 +4599,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         if (rc.centerBased) centerBasedConfig = rc.centerBased;
         if (rc.agentUsesField !== undefined) agentUsesField = !!rc.agentUsesField;
         if (rc.agentColorViewer !== undefined) agentColorViewer = rc.agentColorViewer || '';
+        if (rc.agentHasSprites !== undefined) hasAgentSprites = !!rc.agentHasSprites;
         compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode, rc.agentDivisionCode, rc.agentOutputMappingCodes);
         // PR6b-1 / PR7: re-resolve the agent target + stash the per-target payload.
         // If the WASM backing requirement changes (JS/WebGPU ↔ WASM, since wasm

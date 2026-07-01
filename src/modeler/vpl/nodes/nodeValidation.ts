@@ -71,6 +71,12 @@ export function detectMissingConfig(
   const hasMapping = (id: unknown) =>
     typeof id === 'string' && id.length > 0 &&
     model.mappings.some(m => m.id === id);
+  // Generic Agent Platform: the AGENT Attribute→Color views (separate id-space
+  // from the cell mappings). Used by agentOutputMapping + by setCellLooks on the
+  // Agents graph (which colours an agent for an agent viewer).
+  const hasAgentMapping = (id: unknown) =>
+    typeof id === 'string' && id.length > 0 &&
+    (model.agentMappings ?? []).some(m => m.id === id);
   const hasIndicator = (id: unknown) =>
     typeof id === 'string' && id.length > 0 &&
     (model.indicators || []).some(i => i.id === id);
@@ -278,8 +284,10 @@ export function detectMissingConfig(
 
     case 'setCellLooks':
       // The "Current Simulator Selected" sentinel is always valid — it targets
-      // whichever viewer is active at runtime, not a model mapping.
-      if (config.mappingId !== CURRENT_VIEWER_SENTINEL && !hasMapping(config.mappingId)) {
+      // whichever viewer is active at runtime, not a model mapping. Accept a CELL
+      // mapping (Cells graph) OR an AGENT mapping (Agents graph — colours an agent).
+      if (config.mappingId !== CURRENT_VIEWER_SENTINEL
+        && !hasMapping(config.mappingId) && !hasAgentMapping(config.mappingId)) {
         issues.push('Select a mapping');
       }
       break;
@@ -287,6 +295,20 @@ export function detectMissingConfig(
     case 'inputColor':
     case 'outputMapping':
       if (!hasMapping(config.mappingId)) issues.push('Select a mapping');
+      break;
+
+    // Generic Agent Platform — the agent analogue of outputMapping. Roots a
+    // per-agent colour/exhibition pass over an AGENT mapping.
+    case 'agentOutputMapping':
+      if (!hasAgentMapping(config.mappingId)) issues.push('Select an agent view (mapping)');
+      break;
+
+    case 'setAgentSprite':
+      // Only the "Change sprite" facet needs a sprite asset; the frame/speed-only
+      // uses (untick Change sprite) need none.
+      if (config.setSprite !== false && !(model.sprites ?? []).some(s => s.id === config.spriteId)) {
+        issues.push('Select a sprite (or untick "Change sprite")');
+      }
       break;
 
     case 'getIndicator':
