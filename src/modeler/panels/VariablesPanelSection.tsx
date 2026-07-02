@@ -54,7 +54,16 @@ export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
   const reorder = useListReorder(variables, (newOrder: string[]) => reorderVariables(newOrder, target));
 
   const prevCount = useRef(variables.length);
+  const prevScope = useRef(agentMode);
   useEffect(() => {
+    // A Cells↔Agents tab swap switches WHICH list `variables` binds to — the
+    // length delta across lists is not an add, so reset the baseline instead of
+    // spuriously auto-selecting (and opening the detail editor for) the last item.
+    if (prevScope.current !== agentMode) {
+      prevScope.current = agentMode;
+      prevCount.current = variables.length;
+      return;
+    }
     if (variables.length > prevCount.current) {
       const newItem = variables[variables.length - 1];
       if (newItem) {
@@ -65,14 +74,18 @@ export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
       }
     }
     prevCount.current = variables.length;
-  }, [variables]);
+  }, [variables, agentMode]);
   const selected = variables.find(v => v.id === selectedId);
 
-  // Tag-type variables borrow a tag attribute's tag space. Both cell and
-  // model tag attrs are valid sources.
-  const tagAttrs = model.attributes.filter(a => a.type === 'tag');
+  // Tag-type variables borrow a tag attribute's tag space. Cell variables may
+  // bind any cell or model tag attribute; agent variables bind AGENT tag
+  // attributes plus the shared MODEL tag attributes (cell tag attrs are not
+  // visible to the agent loop).
+  const tagAttrs = agentMode
+    ? [...(model.agentAttributes ?? []), ...model.attributes.filter(a => a.isModelAttribute)].filter(a => a.type === 'tag')
+    : model.attributes.filter(a => a.type === 'tag');
   const selTagAttr = selected?.attributeId
-    ? model.attributes.find(a => a.id === selected.attributeId)
+    ? tagAttrs.find(a => a.id === selected.attributeId)
     : undefined;
 
   return (
@@ -81,10 +94,9 @@ export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
       <div className={styles.section}>
       <div className={styles.sectionTitle}>{agentMode ? 'Agent Variables' : 'Local Variables'}</div>
       <div className={styles.sectionHelp}>
-        Per-cell scratch storage referenced by Get / Set Variable nodes. Each
-        cell sees a fresh copy initialised to the variable's Initial Value at
-        the start of every step — not persisted between steps or shared across
-        cells.
+        {agentMode
+          ? "Per-agent scratch storage referenced by Get / Set Variable nodes. Each agent sees a fresh copy initialised to the variable's Initial Value at the start of every step — not persisted between steps or shared across agents."
+          : "Per-cell scratch storage referenced by Get / Set Variable nodes. Each cell sees a fresh copy initialised to the variable's Initial Value at the start of every step — not persisted between steps or shared across cells."}
       </div>
 
       <div className={styles.list} data-reorder-list>

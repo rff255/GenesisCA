@@ -185,7 +185,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   <strong>3D (W&times;H&times;D volume)</strong>
                   <br />
                   <span style={{ color: '#888', fontSize: '0.66rem' }}>
-                    Voxel grid with a layer (Z) axis, rendered with an orbit camera + clip plane. Direct neighbour-index nodes are gated off; use parametric / slice neighbourhoods.
+                    Voxel grid with a layer (Z) axis, rendered with an orbit camera + clip plane. Variegated Cells (directional interactions) are unavailable in 3D.
                   </span>
                 </span>
               </label>
@@ -392,7 +392,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   <strong>Bond-Graph Agents</strong>
                   <br />
                   <span style={{ color: '#888', fontSize: '0.66rem' }}>
-                    Off-lattice agents that float in continuous space, joined by bonds that grow and divide into shape (morphogenesis). Adds a second <strong>Agents</strong> rule graph (switch graphs from the tab strip above the canvas). Runs on the Debug / Reference (JS) engine this release.
+                    Off-lattice agents that float in continuous space, joined by bonds that grow and divide into shape (morphogenesis). Adds a second <strong>Agents</strong> rule graph (switch graphs from the tab strip above the canvas). Agents run on the selected Agent Compile Target below (JS / WebAssembly / WebGPU).
                   </span>
                 </span>
               </label>
@@ -520,6 +520,25 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '8px 0 4px' }}>Seeding</div>
                 {Row('Seed Count', NF('seedCount', { min: 0, integer: true }), 'Agents laid down on Reset (0 = seed via the brush).')}
                 {Row('Default Radius', NF('defaultRadius', { min: 0.01, step: 0.1 }))}
+                {/* Seed Pattern — how the Reset seed population is laid out. */}
+                <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '6px 0 4px' }}>Seed Pattern</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 2, marginBottom: 4 }}>
+                  {([
+                    ['compact', 'Compact', 'Centred packed blob — the morphogenesis / tissue start.'],
+                    ['scatter', 'Scatter', 'Uniformly random across the world — dispersed flocking / chemotaxis populations.'],
+                  ] as const).map(([val, title, hint]) => (
+                    <label key={val} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
+                      <input
+                        type="radio"
+                        name="agentSeedPattern"
+                        checked={(cb?.seedPattern ?? 'compact') === val}
+                        onChange={() => updateCenterBased({ seedPattern: val })}
+                        style={{ marginTop: 2 }}
+                      />
+                      <span><strong>{title}</strong><br /><span style={{ color: '#888', fontSize: '0.66rem' }}>{hint}</span></span>
+                    </label>
+                  ))}
+                </div>
                 {/* Motion — the velocity integrator; relevant to EVERY agent model
                     (a custom-force boids model lives entirely here), so always shown. */}
                 <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '8px 0 4px' }}>Motion</div>
@@ -555,6 +574,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                     <span><strong>Auto-bond by distance</strong><br /><span style={{ color: '#888', fontSize: '0.66rem' }}>Bond agents within the form distance; break past the break distance (hysteresis). The simplest path to a glued cluster.</span></span>
                   </label>
                   {Row('Bond Stiffness λ', NF('bondStiffness', { min: 0, step: 0.1 }))}
+                  {Row('Bond Rest Length', NF('bondRestLength', { min: 0, step: 0.1 }), 'Spring rest length L for new bonds — the spring force is λ(l − L).')}
                   {Row('Form Distance', NF('formDistance', { min: 1, step: 0.05 }), '× contact (auto-bond within).')}
                   {Row('Break Distance', NF('breakDistance', { min: 1, step: 0.05 }), '× contact (> form — hysteresis).')}
                 </>)}

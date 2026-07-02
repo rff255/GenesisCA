@@ -1,29 +1,36 @@
 // ===========================================================================
-// PR6b-2 — the SEPARATE WASM AGENT-LOOP compiler (widened to run Boids).
+// The SEPARATE WASM AGENT-LOOP compiler — FULL agent-node coverage.
 //
 // A self-contained agent-WASM compiler whose per-agent behaviour loop runs
 // directly against the wasmBacked AgentStore memory (PR6a — the AgentStore SoA
 // laid out on a single WebAssembly.Memory at the offsets `computeAgentMemoryLayout`
 // bakes). PR6b-1 proved the architecture on a deterministic drift/spring model;
-// PR6b-2 widens the emitter set so the **Boids — Flocking** sample runs on WASM
-// with JS bit-parity (Boids is deterministic given the same RNG stream — only
-// neighbour math + a deterministic jitter).
+// PR6b-2 widened it to Boids; the whole-target port took it to FULL coverage.
 //
-// SCOPE (PR6b-2 — the Boids node set + the PR6b-1 set):
-//   roots/reads/writes : behaviourStep, getSelfPosition, getRadius,
-//                        applyForce, setTargetRadius
-//   neighbour access   : getNearbyAgents (the hash stencil → an agent-id array),
-//                        forEachInArray (loop body + element/index),
-//                        getAgentOffset (torus-shortest dX/dY[/dZ] + Distance),
-//                        getVelocity (self/neighbour Vx/Vy[/Vz]),
-//                        getAgentPosition (X/Y[/Z]), getAgentRadius
-//   local variables    : getVariable / setVariable (SCALAR only — array variables
-//                        + setArrayElement stay OUT, PR6b-3)
-//   value/flow utility : getConstant, arithmeticOperator (Math), expression,
-//                        statement (Compare), logicOperator, getRandom,
-//                        conditional, sequence
-// Everything else FALLS BACK to JS — `isAgentGraphWasmSupported(model)` is the
-// honest central gate; PR6b-3 widens `AGENT_WASM_SUPPORTED_TYPES`.
+// SCOPE (full coverage — the WHOLE agent-graph catalogue runs on WASM with JS
+// BIT-PARITY, the f64 gold standard):
+//   field bridge       : sampleField / fieldGradient / readCellsUnder /
+//                        affectCellsUnder / secreteToField — 2D bilinear AND
+//                        3D trilinear / r-sphere, torus-folded, matching the
+//                        JS emitters bit-for-bit
+//   agent-array tier   : getNearbyAgents / getBondedAgents / getAgentsAttribute /
+//                        filterAgents / joinAgents / pickRandomAgent /
+//                        pickNRandomAgents + aggregate / groupOperator /
+//                        groupCounting / groupStatement over id arrays
+//   structural writes  : divideAgent / formBond / breakBond / killAgent
+//                        (request-flag stores; the CPU structural phase mutates)
+//   setters            : setVelocity / setAgentAttribute / setAgentsAttribute /
+//                        setAgentPosition / setAgentRadius
+//   universal nodes    : switch / loop / valueSwitch / indicators (ALL ops —
+//                        the agent loop is sequential) / lookup tables /
+//                        colour nodes / setCellLooks (plain) / …
+//   local variables    : scalar AND array (getVariable / setVariable /
+//                        setArrayElement)
+// The ONLY clamp to JS is the getNearbyAgents scratch-slot capacity budget
+// (> AGENT_NEARBY_SCRATCH_SLOTS simultaneous producers) — a capacity gate, not
+// a node ban; `isAgentGraphWasmSupported(model)` is the honest central gate.
+// The `divisionEvent` + `agentInit` roots stay JS-on-CPU (target-independent —
+// they run over the SAME wasmBacked memory, bit-exact).
 //
 // HARD CONSTRAINT: this compiler does NOT touch the lattice WASM compiler bytes.
 // It REUSES the pure binary ENCODER (../wasm/encoder.ts) + the stateful
@@ -39,12 +46,15 @@
 //   import "env" "pow"/"exp"/.../"tanh" = the 7 host math funcs (same funcIdx
 //                          convention as the lattice module: POW=0 .. TANH=6).
 //   export "behaviour"(highWater, hashValid, nBinsX, nBinsY, nBinsZ : i32,
-//                       binSizeX, binSizeY, binSizeZ : f64) -> ()
+//                       binSizeX, binSizeY, binSizeZ : f64,
+//                       fieldW, fieldH, fieldD : f64, fieldTorus : i32,
+//                       originX, originY, originZ : f64,
+//                       activeViewerIdx : i32) -> ()
 //     _rs = u32[rngStateOffset];                  // AW-RNG: read the shared stream
 //     for (idx = 0; idx < highWater; idx++) {
 //       if (alive[idx] == 0) continue;
-//       <reset scalar Local Variables>
-//       <per-agent value DAG + the linear flow chain over the supported nodes>
+//       <reset Local Variables>
+//       <per-agent value DAG + the linear flow chain>
 //     }
 //     u32[rngStateOffset] = _rs;                  // store back (JS↔WASM bit-parity)
 //
@@ -75,6 +85,14 @@ import {
 } from '../wasm/encoder';
 import { WasmEmitter, isInline, type ValueRef, type LocalRef } from '../wasm/emitter';
 import { POW_FUNC_IDX, EXP_FUNC_IDX, LOG_FUNC_IDX, SIN_FUNC_IDX, COS_FUNC_IDX, TAN_FUNC_IDX, TANH_FUNC_IDX, NUM_IMPORTED_FUNCS } from '../wasm/compile';
+import { computeAsyncReadWriteHazards } from '../asyncWriteHazard';
+import { computeVolatileHoist } from '../volatileHoist';
+import { getNodeDef } from '../../nodes/registry';
+
+/** `env.fmod = (a,b)=>a%b` — the 8th host import, ALWAYS present in the agent
+ *  module (appended after pow..tanh at funcIdx 7). Used by the force pass's
+ *  bit-exact torus wrap AND the Math node's `%` op. */
+const FMOD_FUNC_IDX = NUM_IMPORTED_FUNCS; // = 7
 import { emitWasm } from '../expression/emitWasm';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../expression/parser';
 import { is3dModel } from '../compile';
@@ -162,6 +180,11 @@ export interface AgentWasmResult {
   layout: AgentMemoryLayout;
   /** The node types the compiler actually emitted (for diagnostics + the gate). */
   supportedTypes: string[];
+  /** Ordered list of the non-sentinel setCellLooks mappingIds the behaviour
+   *  references. The worker passes `viewerGuardIds.indexOf(activeViewer)` as the
+   *  behaviour's trailing `activeViewerIdx` i32 arg so each guarded write fires
+   *  exactly when JS's `_isV_` guard would (bit-parity for multi-viewer models). */
+  viewerGuardIds: string[];
   error?: string;
 }
 
@@ -283,6 +306,16 @@ interface AgentWasmCtx {
   fieldWLocal: number; fieldHLocal: number; fieldDLocal: number; fieldTorusLocal: number;
   /** Field total (W*H*D) as an i32 local (param). Used by field-bridge index math. */
   fieldTotalLocal: number;
+  /** The trailing `activeViewerIdx` i32 param — index into `viewerGuardIds` of
+   *  the active viewer (-1 = none). setCellLooks' JS `_isV_` guard mirror. */
+  activeViewerIdxLocal: number;
+  /** Ordered non-sentinel setCellLooks mappingIds (the viewer-guard table). */
+  viewerGuardIds: string[];
+  /** Async read-after-write hazard cone (pure scalar chains only): NOT top-
+   *  hoisted; emitted ONCE immediately before the flow node in hazardEmitBefore
+   *  — the SAME LCA position JS's volatileHoist uses, keeping bit-parity. */
+  hazardPinned: Set<string>;
+  hazardEmitBefore: Map<string, string[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -581,20 +614,29 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
       }
       const aLocal = emitAgentIdLocal(ctx, node, 'agentId');
       const region = portId === 'y' ? ctx.layout.f64['y']! : portId === 'z' ? ctx.layout.f64['z']! : ctx.layout.f64['x']!;
-      result = f64Result(() => pushF64Elem(em, region, aLocal));
+      // Range-guarded (mirrors the JS emit): -1 / oob → 0.
+      const guard = emitAgentIdGuard(ctx, aLocal);
+      result = f64Result(() => pushGuardedF64(ctx, guard, safe => pushF64Elem(em, region, safe)));
       break;
     }
     case 'getAgentRadius': {
       const aLocal = emitAgentIdLocal(ctx, node, 'agentId');
-      result = f64Result(() => pushF64Elem(em, ctx.layout.f64['radius']!, aLocal));
+      const guard = emitAgentIdGuard(ctx, aLocal);
+      result = f64Result(() => pushGuardedF64(ctx, guard, safe => pushF64Elem(em, ctx.layout.f64['radius']!, safe)));
       break;
     }
     case 'getVelocity': {
-      // self when agentId is unwired (JS: `inputs.agentId ? (...|0) : idx`).
+      // self when agentId is unwired (JS: `inputs.agentId ? (...|0) : idx`) —
+      // self is always valid; a WIRED id is range-guarded like JS.
       const src = ctx.adj.inputToSource.get(`${node.id}:agentId`);
-      const aLocal = src ? emitAgentIdLocal(ctx, node, 'agentId') : ctx.idxLocal;
       const region = portId === 'vy' ? ctx.layout.f64['vy']! : portId === 'vz' ? ctx.layout.f64['vz']! : ctx.layout.f64['vx']!;
-      result = f64Result(() => pushF64Elem(em, region, aLocal));
+      if (!src) {
+        result = f64Result(() => pushF64Elem(em, region, ctx.idxLocal));
+        break;
+      }
+      const aLocal = emitAgentIdLocal(ctx, node, 'agentId');
+      const guard = emitAgentIdGuard(ctx, aLocal);
+      result = f64Result(() => pushGuardedF64(ctx, guard, safe => pushF64Elem(em, region, safe)));
       break;
     }
     case 'getAgentOffset': {
@@ -621,8 +663,9 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
     case 'getAgentAttribute': {
       const attrId = (node.data.config?.['attributeId'] as string) || '';
       const aLocal = emitAgentIdLocal(ctx, node, 'agentId');
-      // JS: `r_<attr>[(agentId|0)]` — NO range guard (matches GetAgentAttributeNode).
-      result = f64Result(() => pushAgentAttrReadF64(ctx, attrId, aLocal));
+      // Range-guarded (mirrors GetAgentAttributeNode's JS emit): -1 / oob → 0.
+      const guard = emitAgentIdGuard(ctx, aLocal);
+      result = f64Result(() => pushGuardedF64(ctx, guard, safe => pushAgentAttrReadF64(ctx, attrId, safe)));
       break;
     }
     case 'getCellAttribute': {
@@ -716,6 +759,19 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
       result = f64Result(() => emitPickRandomAgent(ctx, node));
       break;
     }
+    case 'filterAgents':
+    case 'joinAgents': {
+      // The multi-output array producers' scalar `count` port, consumed
+      // standalone (e.g. "count nearby matching agents → Compare") — the same
+      // dispatch shape as the lattice filterNeighbors/joinNeighbors value
+      // entries: materialise the array (memoised), then return the cached count.
+      // Without this, a count-only consumer hit "unsupported value node" and
+      // silently clamped the whole model to JS.
+      compileArrayNode(ctx, nodeId, 'result');
+      const cached = ctx.valueCache.get(`${nodeId}:count`);
+      result = cached ?? { inline: true, value: 0, valtype: I32 };
+      break;
+    }
     case 'sampleField': {
       const fieldId = (node.data.config?.['attributeId'] as string) || '';
       result = f64Result(() => emitSampleFieldAt(ctx, fieldId,
@@ -744,10 +800,11 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
   return result;
 }
 
-/** Resolve the `agentId` input of a neighbour-read node into a fresh i32 local. */
+/** Resolve the `agentId` input of a neighbour-read node into a fresh i32 local.
+ *  Unwired → -1 (the empty sentinel), mirroring the JS readers' `|| '-1'`. */
 function emitAgentIdLocal(ctx: AgentWasmCtx, node: GraphNode, portId: string): number {
   const em = ctx.em;
-  const ref = resolveValueInput(ctx, node, portId, 0);
+  const ref = resolveValueInput(ctx, node, portId, -1);
   // (id) | 0 — coerce to i32.
   pushValueAs(em, ref, I32);
   const l = em.allocLocal(I32);
@@ -755,7 +812,31 @@ function emitAgentIdLocal(ctx: AgentWasmCtx, node: GraphNode, portId: string): n
   return l;
 }
 
-/** Get Constant — numeric / bool only in the supported set. */
+/** Range-guard an agent id: `ok = id >= 0 && id < highWater`, `safe = ok ? id : 0`.
+ *  Mirrors the JS readers' guard (−1 sentinel / oob → 0 result, never an
+ *  adjacent-memory read — WASM select evaluates both arms, so loads use `safe`). */
+function emitAgentIdGuard(ctx: AgentWasmCtx, idLocal: number): { okLocal: number; safeLocal: number } {
+  const em = ctx.em;
+  const ok = em.allocLocal(I32);
+  em.localGet(idLocal); em.i32Const(0); em.op(OP_I32_GE_S);
+  em.localGet(idLocal); em.localGet(ctx.highWaterLocal); em.op(OP_I32_LT_S);
+  em.op(OP_I32_AND); em.localSet(ok);
+  const safe = em.allocLocal(I32);
+  em.localGet(idLocal); em.i32Const(0); em.localGet(ok); em.op(OP_SELECT); em.localSet(safe);
+  return { okLocal: ok, safeLocal: safe };
+}
+
+/** Push `ok ? <load via emitLoad(safe)> : 0.0` (f64). */
+function pushGuardedF64(ctx: AgentWasmCtx, guard: { okLocal: number; safeLocal: number }, emitLoad: (safeLocal: number) => void): void {
+  const em = ctx.em;
+  emitLoad(guard.safeLocal);
+  em.f64Const(0);
+  em.localGet(guard.okLocal);
+  em.op(OP_SELECT);
+}
+
+/** Get Constant — mirrors GetConstantNode's JS resolution for every constType
+ *  (bool / float / int+tag / orientation clamp / pre-resolved faceLabel). */
 function readConstantValue(node: GraphNode): number {
   const cfg = node.data.config as Record<string, unknown> | undefined;
   const ct = (cfg?.['constType'] as string) ?? 'integer';
@@ -763,6 +844,17 @@ function readConstantValue(node: GraphNode): number {
   const rawStr = typeof raw === 'string' ? raw : typeof raw === 'number' ? String(raw) : '0';
   if (ct === 'bool') return rawStr === 'true' ? 1 : 0;
   if (ct === 'float') { const n = parseFloat(rawStr); return Number.isFinite(n) ? n : 0; }
+  if (ct === 'orientation') {
+    // out-of-range → 0, matching the JS emit's clamp.
+    const n = parseInt(rawStr, 10);
+    return Number.isFinite(n) && n >= 0 && n <= 3 ? n : 0;
+  }
+  if (ct === 'faceLabel') {
+    // pre-resolved NAME→index by preResolveVariegatedNodes; unresolved → -1
+    // sentinel (JS parity — parsing the label name yielded NaN→0 before).
+    const idx = parseInt(String(cfg?.['_resolvedFaceLabelIndex'] ?? -1), 10);
+    return Number.isFinite(idx) ? idx : -1;
+  }
   const n = parseInt(rawStr, 10); return Number.isFinite(n) ? n : 0;
 }
 
@@ -790,6 +882,20 @@ function emitArithmetic(ctx: AgentWasmCtx, node: GraphNode): void {
     case 'cos': unary(COS_FUNC_IDX); break;
     case 'tan': unary(TAN_FUNC_IDX); break;
     case 'tanh': unary(TANH_FUNC_IDX); break;
+    case '%': {
+      // (y !== 0 ? x % y : 0) — mirrors the JS Math node. WASM has no f64 rem
+      // opcode; env.fmod (funcIdx FMOD_FUNC_IDX, already imported for the force
+      // pass) IS the JS `%`, bit-exact. Previously fell through to ADD.
+      const yL = em.allocLocal(F64), resL = em.allocLocal(F64);
+      pushValueInputF64(ctx, node, 'y', 0); em.localSet(yL);
+      em.localGet(yL); em.f64Const(0); em.op(OP_F64_NE);
+      em.ifThenElse(
+        () => { pushValueInputF64(ctx, node, 'x', 0); em.localGet(yL); em.emit(opCall(FMOD_FUNC_IDX)); em.localSet(resL); },
+        () => { em.f64Const(0); em.localSet(resL); },
+      );
+      em.localGet(resL);
+      break;
+    }
     default: pushValueInputF64(ctx, node, 'x', 0); pushValueInputF64(ctx, node, 'y', 0); em.op(OP_F64_ADD); break;
   }
 }
@@ -819,6 +925,21 @@ function emitCompare(ctx: AgentWasmCtx, node: GraphNode): void {
   // wrong key made every non-equality op fall through to `==` on the WASM agent
   // target (silent divergence from the JS agent path).
   const op = (cfg?.['operation'] as string) ?? '==';
+  if (op === 'between' || op === 'notBetween') {
+    // (x lowOp y) && (x highOp y2), inverted for notBetween — mirrors
+    // StatementNode's JS emit. Previously fell through to `==` (silent wrong
+    // range checks on the WASM agent target).
+    const xL = em.allocLocal(F64);
+    pushValueInputF64(ctx, node, 'x', 0); em.localSet(xL);
+    em.localGet(xL); pushValueInputF64(ctx, node, 'y', 0);
+    em.op(cfg?.['lowOp'] === '>' ? OP_F64_GT : OP_F64_GE);
+    em.localGet(xL); pushValueInputF64(ctx, node, 'y2', 0);
+    em.op(cfg?.['highOp'] === '<' ? OP_F64_LT : OP_F64_LE);
+    em.op(OP_I32_AND);
+    if (op === 'notBetween') em.op(OP_I32_EQZ);
+    em.op(OP_F64_CONVERT_I32_S);
+    return;
+  }
   pushValueInputF64(ctx, node, 'x', 0);
   pushValueInputF64(ctx, node, 'y', 0);
   switch (op) {
@@ -873,10 +994,10 @@ function compileExpression(ctx: AgentWasmCtx, node: GraphNode): ValueRef {
   return emitWasm(res.ast, ctx.em, inputs);
 }
 
-/** Get Random (the supported subset: float / integer / orientation / bool — NO
- *  options mode). Mirrors the lattice WASM getRandom xorshift32 + JS GetRandomNode
- *  exactly: the SAME constants (13/17/5) on the in-register `_rs` local (read once
- *  at function top, stored back at the end). Leaves an f64 on the stack. */
+/** Get Random — float / integer / orientation / bool / options. Mirrors the
+ *  lattice WASM getRandom xorshift32 + JS GetRandomNode exactly: the SAME
+ *  constants (13/17/5) on the in-register `_rs` local (read once at function
+ *  top, stored back at the end). Leaves an f64 on the stack. */
 function emitGetRandom(ctx: AgentWasmCtx, node: GraphNode): void {
   const em = ctx.em;
   const cfg = node.data.config as Record<string, unknown> | undefined;
@@ -886,18 +1007,54 @@ function emitGetRandom(ctx: AgentWasmCtx, node: GraphNode): void {
   const minN = typeof minRaw === 'number' ? minRaw : parseFloat(String(minRaw ?? '0')) || 0;
   const maxN = typeof maxRaw === 'number' ? maxRaw : parseFloat(String(maxRaw ?? '1')) || 1;
   const rs = ctx.rsLocal;
-  // Advance: _rs ^= _rs << 13; _rs ^= _rs >>> 17; _rs ^= _rs << 5 (in-register).
-  em.localGet(rs); em.localGet(rs); em.i32Const(13); em.op(OP_I32_SHL); em.op(OP_I32_XOR); em.localSet(rs);
-  em.localGet(rs); em.localGet(rs); em.i32Const(17); em.op(OP_I32_SHR_U); em.op(OP_I32_XOR); em.localSet(rs);
-  em.localGet(rs); em.localGet(rs); em.i32Const(5); em.op(OP_I32_SHL); em.op(OP_I32_XOR); em.localSet(rs);
+  const advance = (): void => {
+    // _rs ^= _rs << 13; _rs ^= _rs >>> 17; _rs ^= _rs << 5 (in-register).
+    em.localGet(rs); em.localGet(rs); em.i32Const(13); em.op(OP_I32_SHL); em.op(OP_I32_XOR); em.localSet(rs);
+    em.localGet(rs); em.localGet(rs); em.i32Const(17); em.op(OP_I32_SHR_U); em.op(OP_I32_XOR); em.localSet(rs);
+    em.localGet(rs); em.localGet(rs); em.i32Const(5); em.op(OP_I32_SHL); em.op(OP_I32_XOR); em.localSet(rs);
+  };
+  if (t === 'options') {
+    // One option picked uniformly from the wired Options array; Fallback when
+    // empty. Inputs (array + fallback) resolve BEFORE the advance — matching JS,
+    // where they're pre-emitted value deps — so any RNG-consuming source draws
+    // first. Always-advance (like JS: the advance precedes the length check).
+    // Previously this mode silently fell into the FLOAT branch on WASM.
+    const arr = resolveInputArray(ctx, node, 'options');
+    const fbL = em.allocLocal(F64);
+    pushValueAs(em, resolveValueInput(ctx, node, 'fallback', 0), F64); em.localSet(fbL);
+    advance();
+    const uL = em.allocLocal(F64);
+    em.localGet(rs); em.op(OP_F64_CONVERT_I32_U); em.f64Const(4294967296); em.op(OP_F64_DIV); em.localSet(uL);
+    const resL = em.allocLocal(F64);
+    if (!arr) {
+      em.localGet(fbL); em.localSet(resL);
+    } else {
+      em.localGet(arr.lenLocal); em.i32Const(0); em.op(OP_I32_GT_S);
+      em.ifThenElse(
+        () => {
+          // k = floor(u * len) — u < 1 ⇒ k ≤ len-1, exact like JS Math.floor.
+          const kL = em.allocLocal(I32);
+          em.localGet(uL);
+          em.localGet(arr.lenLocal); em.op(OP_F64_CONVERT_I32_S);
+          em.op(OP_F64_MUL); em.op(OP_F64_FLOOR); em.f64ToI32(); em.localSet(kL);
+          pushArrayElemF64(em, arr, kL); em.localSet(resL);
+        },
+        () => { em.localGet(fbL); em.localSet(resL); },
+      );
+    }
+    em.localGet(resL);
+    return;
+  }
+  advance();
   // uniform = (unsigned _rs) / 2^32
   em.localGet(rs); em.op(OP_F64_CONVERT_I32_U); em.f64Const(4294967296); em.op(OP_F64_DIV);
   if (t === 'bool') {
     const probRef = resolveValueInput(ctx, node, 'probability', 0.5);
     pushValueAs(em, probRef, F64);   // stack: [uniform, prob]
-    em.op(OP_F64_LT);                // uniform < prob ? 1 : 0
-    em.op(OP_F64_CONVERT_I32_S);
-    em.i32ToF64();
+    em.op(OP_F64_LT);                // uniform < prob ? 1 : 0  (i32 on stack)
+    em.op(OP_F64_CONVERT_I32_S);     // i32 → f64 (ONE conversion — a second
+                                     // convert here made the module fail WASM
+                                     // type validation → silent JS fallback)
   } else if (t === 'integer') {
     em.f64Const(maxN - minN + 1); em.op(OP_F64_MUL);
     em.op(OP_F64_FLOOR);
@@ -925,14 +1082,16 @@ function compileAgentOffset(ctx: AgentWasmCtx, node: GraphNode, portId: string):
   const cachedSibling = ctx.valueCache.get(`${node.id}:dx`);
   if (cachedSibling !== undefined) return ctx.valueCache.get(`${node.id}:${portId}`) ?? cachedSibling;
   const aLocal = emitAgentIdLocal(ctx, node, 'agentId');
+  // Range-guarded (mirrors the JS emit): -1 / oob → zero vector + zero distance.
+  const guard = emitAgentIdGuard(ctx, aLocal);
   const dxL = em.allocLocal(F64), dyL = em.allocLocal(F64), distL = em.allocLocal(F64);
   let dzL = -1;
-  // dx = ax[a]-ax[idx]; dy = ay[a]-ay[idx]
-  pushF64Elem(em, L.f64['x']!, aLocal); pushF64Elem(em, L.f64['x']!, ctx.idxLocal); em.op(OP_F64_SUB); em.localSet(dxL);
-  pushF64Elem(em, L.f64['y']!, aLocal); pushF64Elem(em, L.f64['y']!, ctx.idxLocal); em.op(OP_F64_SUB); em.localSet(dyL);
+  // dx = ax[a]-ax[idx]; dy = ay[a]-ay[idx]  (loads use the clamped safe id)
+  pushF64Elem(em, L.f64['x']!, guard.safeLocal); pushF64Elem(em, L.f64['x']!, ctx.idxLocal); em.op(OP_F64_SUB); em.localSet(dxL);
+  pushF64Elem(em, L.f64['y']!, guard.safeLocal); pushF64Elem(em, L.f64['y']!, ctx.idxLocal); em.op(OP_F64_SUB); em.localSet(dyL);
   if (ctx.is3d) {
     dzL = em.allocLocal(F64);
-    pushF64Elem(em, L.f64['z']!, aLocal); pushF64Elem(em, L.f64['z']!, ctx.idxLocal); em.op(OP_F64_SUB); em.localSet(dzL);
+    pushF64Elem(em, L.f64['z']!, guard.safeLocal); pushF64Elem(em, L.f64['z']!, ctx.idxLocal); em.op(OP_F64_SUB); em.localSet(dzL);
   }
   // if (_fieldBoundaryTorus) fold each axis to the shortest. The world bounds ride
   // the behaviour as the fieldW/fieldH/[fieldD] PARAMS (mirroring JS's _fieldW etc).
@@ -947,6 +1106,9 @@ function compileAgentOffset(ctx: AgentWasmCtx, node: GraphNode, portId: string):
   em.localGet(dyL); em.localGet(dyL); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
   if (ctx.is3d && dzL >= 0) { em.localGet(dzL); em.localGet(dzL); em.op(OP_F64_MUL); em.op(OP_F64_ADD); }
   em.op(OP_F64_SQRT); em.localSet(distL);
+  // zero every output when the id was invalid.
+  const zeroIfBad = (loc: number) => { em.localGet(loc); em.f64Const(0); em.localGet(guard.okLocal); em.op(OP_SELECT); em.localSet(loc); };
+  zeroIfBad(dxL); zeroIfBad(dyL); if (ctx.is3d && dzL >= 0) zeroIfBad(dzL); zeroIfBad(distL);
 
   const refs: Record<string, ValueRef> = {
     dx: { localIdx: dxL, valtype: F64 },
@@ -973,13 +1135,18 @@ function compileAgentRelativePosition(ctx: AgentWasmCtx, node: GraphNode, portId
   // self when refId is unwired (JS: `inputs.refId ? (...|0) : idx`).
   const refSrc = ctx.adj.inputToSource.get(`${node.id}:refId`);
   const refLocal = refSrc ? emitAgentIdLocal(ctx, node, 'refId') : ctx.idxLocal;
+  // Range-guard BOTH ids (mirrors the JS emit; self is trivially in range).
+  const gA = emitAgentIdGuard(ctx, aLocal);
+  const gR = emitAgentIdGuard(ctx, refLocal);
+  const okBoth = em.allocLocal(I32);
+  em.localGet(gA.okLocal); em.localGet(gR.okLocal); em.op(OP_I32_AND); em.localSet(okBoth);
   const oxL = em.allocLocal(F64), oyL = em.allocLocal(F64);
   let ozL = -1;
-  pushF64Elem(em, L.f64['x']!, aLocal); pushF64Elem(em, L.f64['x']!, refLocal); em.op(OP_F64_SUB); em.localSet(oxL);
-  pushF64Elem(em, L.f64['y']!, aLocal); pushF64Elem(em, L.f64['y']!, refLocal); em.op(OP_F64_SUB); em.localSet(oyL);
+  pushF64Elem(em, L.f64['x']!, gA.safeLocal); pushF64Elem(em, L.f64['x']!, gR.safeLocal); em.op(OP_F64_SUB); em.localSet(oxL);
+  pushF64Elem(em, L.f64['y']!, gA.safeLocal); pushF64Elem(em, L.f64['y']!, gR.safeLocal); em.op(OP_F64_SUB); em.localSet(oyL);
   if (ctx.is3d) {
     ozL = em.allocLocal(F64);
-    pushF64Elem(em, L.f64['z']!, aLocal); pushF64Elem(em, L.f64['z']!, refLocal); em.op(OP_F64_SUB); em.localSet(ozL);
+    pushF64Elem(em, L.f64['z']!, gA.safeLocal); pushF64Elem(em, L.f64['z']!, gR.safeLocal); em.op(OP_F64_SUB); em.localSet(ozL);
   }
   em.localGet(ctx.fieldTorusLocal);
   em.ifThen(() => {
@@ -987,6 +1154,8 @@ function compileAgentRelativePosition(ctx: AgentWasmCtx, node: GraphNode, portId
     foldTorus(em, oyL, ctx.fieldHLocal);
     if (ctx.is3d && ozL >= 0) foldTorus(em, ozL, ctx.fieldDLocal);
   });
+  const zeroIfBad = (loc: number) => { em.localGet(loc); em.f64Const(0); em.localGet(okBoth); em.op(OP_SELECT); em.localSet(loc); };
+  zeroIfBad(oxL); zeroIfBad(oyL); if (ctx.is3d && ozL >= 0) zeroIfBad(ozL);
   const refs: Record<string, ValueRef> = {
     x: { localIdx: oxL, valtype: F64 },
     y: { localIdx: oyL, valtype: F64 },
@@ -1626,11 +1795,13 @@ function emitCompareOp(em: WasmEmitter, op: string): void {
   }
 }
 
-/** Pick Random Agent — uniform pick from an id array (-1 when empty). */
+/** Pick Random Agent — uniform pick from an id array (-1 when empty). The input
+ *  array resolves BEFORE the RNG advance: a chained RNG-consuming producer
+ *  (e.g. pickNRandomAgents) must draw first, matching JS's value-dep order. */
 function emitPickRandomAgent(ctx: AgentWasmCtx, node: GraphNode): void {
   const em = ctx.em, rs = ctx.rsLocal;
-  emitRngAdvance(em, rs);
   const inArr = resolveInputArray(ctx, node, 'agents');
+  emitRngAdvance(em, rs);
   const res = em.allocLocal(F64); em.f64Const(-1); em.localSet(res);
   if (!inArr) { em.localGet(res); return; }
   em.localGet(inArr.lenLocal); em.i32Const(0); em.op(OP_I32_GT_S);
@@ -1981,7 +2152,26 @@ function compileFlowChain(ctx: AgentWasmCtx, nodeId: string, portId: string): vo
   for (const t of targets) compileFlowNode(ctx, t.nodeId);
 }
 
+/** Every output port of `nodeId` that some consumer actually reads. */
+function usedOutPortsOf(ctx: AgentWasmCtx, nodeId: string): string[] {
+  const ports = new Set<string>();
+  for (const [, src] of ctx.adj.inputToSource) if (src.nodeId === nodeId) ports.add(src.portId);
+  for (const [, srcs] of ctx.adj.inputToSources) for (const s of srcs) if (s.nodeId === nodeId) ports.add(s.portId);
+  return ports.size > 0 ? [...ports] : ['value'];
+}
+
 function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
+  // Hazard-pinned values scheduled immediately BEFORE this flow node (the LCA of
+  // their uses — the same position JS's volatileHoist emits them). Compiled once
+  // + cached; later uses read the cached local (dominates all uses, WASM locals
+  // are function-scoped).
+  const pinned = ctx.hazardEmitBefore.get(nodeId);
+  if (pinned) {
+    for (const vid of pinned) {
+      if (!ctx.adj.nodeMap.has(vid)) continue;
+      for (const p of usedOutPortsOf(ctx, vid)) compileValueNode(ctx, vid, p);
+    }
+  }
   const node = ctx.adj.nodeMap.get(nodeId);
   if (!node) return;
   const em = ctx.em;
@@ -2021,10 +2211,15 @@ function compileFlowNode(ctx: AgentWasmCtx, nodeId: string): void {
     case 'conditional': {
       const condRef = resolveValueInput(ctx, node, 'condition', 0);
       pushValueAs(em, condRef, F64); em.f64Const(0); em.op(OP_F64_NE);
+      // Volatile values (hazard-pinned reads, getVariable-derived) must re-emit
+      // INSIDE each branch: a value cached from branch A would leave branch B
+      // reading a local whose set instruction only exists in A's bytecode (a
+      // stale previous-iteration value at runtime).
       em.ifThenElse(
-        () => compileFlowChain(ctx, node.id, 'then'),
-        () => compileFlowChain(ctx, node.id, 'else'),
+        () => { clearVolatileCache(ctx); compileFlowChain(ctx, node.id, 'then'); },
+        () => { clearVolatileCache(ctx); compileFlowChain(ctx, node.id, 'else'); },
       );
+      clearVolatileCache(ctx);
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
@@ -2307,6 +2502,8 @@ function emitForEachBond(ctx: AgentWasmCtx, node: GraphNode): void {
   const xi = em.allocLocal(F64), yi = em.allocLocal(F64);
   pushF64Elem(em, L.f64['x']!, ctx.idxLocal); em.localSet(xi);
   pushF64Elem(em, L.f64['y']!, ctx.idxLocal); em.localSet(yi);
+  const zi = ctx.is3d ? em.allocLocal(F64) : -1;
+  if (ctx.is3d) { pushF64Elem(em, L.f64['z']!, ctx.idxLocal); em.localSet(zi); }
   em.block(() => { em.loop(() => {
     em.localGet(feb); em.localGet(bc); em.op(OP_I32_GE_S); em.brIf(1);
     const bb = em.allocLocal(I32); em.localGet(base); em.localGet(feb); em.op(OP_I32_ADD); em.localSet(bb);
@@ -2314,11 +2511,22 @@ function emitForEachBond(ctx: AgentWasmCtx, node: GraphNode): void {
     em.localGet(bb); em.i32Const(4); em.op(OP_I32_MUL); em.i32Const(bpOff); em.op(OP_I32_ADD); em.i32Load(); em.localSet(partnerL);
     // restLength = bondRestLength[bb]
     em.localGet(bb); em.i32Const(8); em.op(OP_I32_MUL); em.i32Const(brlOff); em.op(OP_I32_ADD); em.f64Load(); em.localSet(restL);
-    // currentLength = hypot(x[partner]-xi, y[partner]-yi)  (2D, no torus — short bonds, matches JS)
+    // currentLength — torus-SHORTEST displacement (matches the JS emit: a
+    // seam-straddling bond must not read ≈ W − actual) + the z arm in 3D.
     const dx = em.allocLocal(F64), dy = em.allocLocal(F64);
+    const dz = ctx.is3d ? em.allocLocal(F64) : -1;
     pushF64Elem(em, L.f64['x']!, partnerL); em.localGet(xi); em.op(OP_F64_SUB); em.localSet(dx);
     pushF64Elem(em, L.f64['y']!, partnerL); em.localGet(yi); em.op(OP_F64_SUB); em.localSet(dy);
-    em.localGet(dx); em.localGet(dx); em.op(OP_F64_MUL); em.localGet(dy); em.localGet(dy); em.op(OP_F64_MUL); em.op(OP_F64_ADD); em.op(OP_F64_SQRT); em.localSet(curL);
+    if (ctx.is3d) { pushF64Elem(em, L.f64['z']!, partnerL); em.localGet(zi); em.op(OP_F64_SUB); em.localSet(dz); }
+    em.localGet(ctx.fieldTorusLocal);
+    em.ifThen(() => {
+      foldTorus(em, dx, ctx.fieldWLocal);
+      foldTorus(em, dy, ctx.fieldHLocal);
+      if (ctx.is3d && dz >= 0) foldTorus(em, dz, ctx.fieldDLocal);
+    });
+    em.localGet(dx); em.localGet(dx); em.op(OP_F64_MUL); em.localGet(dy); em.localGet(dy); em.op(OP_F64_MUL); em.op(OP_F64_ADD);
+    if (ctx.is3d && dz >= 0) { em.localGet(dz); em.localGet(dz); em.op(OP_F64_MUL); em.op(OP_F64_ADD); }
+    em.op(OP_F64_SQRT); em.localSet(curL);
     // index = feb
     em.localGet(feb); em.localSet(idxL);
     clearVolatileCache(ctx);
@@ -2368,53 +2576,74 @@ function emitSwitch(ctx: AgentWasmCtx, node: GraphNode): void {
       caseConds.push({ localIdx: resLocal, valtype: I32 });
     }
   }
+  // Branch-entry volatile clears — same rationale as the conditional emit: a
+  // volatile value cached from one case would leave a sibling case reading a
+  // local whose set instruction lives only in the first case's bytecode.
   if (firstMatchOnly) {
     const open = (ci: number): void => {
-      if (ci >= caseCount) { if (hasDefault) compileFlowChain(ctx, node.id, 'default'); return; }
+      if (ci >= caseCount) { if (hasDefault) { clearVolatileCache(ctx); compileFlowChain(ctx, node.id, 'default'); } return; }
       pushValueAs(em, caseConds[ci]!, I32);
-      em.ifThenElse(() => compileFlowChain(ctx, node.id, `case_${ci}`), () => open(ci + 1));
+      em.ifThenElse(
+        () => { clearVolatileCache(ctx); compileFlowChain(ctx, node.id, `case_${ci}`); },
+        () => open(ci + 1),
+      );
     };
     open(0);
+    clearVolatileCache(ctx);
   } else {
     const matched = em.allocLocal(I32); em.i32Const(0); em.localSet(matched);
     for (let ci = 0; ci < caseCount; ci++) {
       pushValueAs(em, caseConds[ci]!, I32);
-      em.ifThen(() => { em.i32Const(1); em.localSet(matched); compileFlowChain(ctx, node.id, `case_${ci}`); });
+      em.ifThen(() => { em.i32Const(1); em.localSet(matched); clearVolatileCache(ctx); compileFlowChain(ctx, node.id, `case_${ci}`); });
     }
-    if (hasDefault) { em.localGet(matched); em.op(OP_I32_EQZ); em.ifThen(() => compileFlowChain(ctx, node.id, 'default')); }
+    if (hasDefault) { em.localGet(matched); em.op(OP_I32_EQZ); em.ifThen(() => { clearVolatileCache(ctx); compileFlowChain(ctx, node.id, 'default'); }); }
+    clearVolatileCache(ctx);
   }
 }
 
-/** Loop — run BODY `count` times. */
+/** Loop — run BODY `count` times. The volatile cache clears per iteration (a
+ *  hazard-pinned / getVariable-derived value must re-read each pass) and after
+ *  the construct. */
 function emitLoop(ctx: AgentWasmCtx, node: GraphNode): void {
   const em = ctx.em;
   const cnt = em.allocLocal(I32); pushValueAs(em, resolveValueInput(ctx, node, 'count', 1), I32); em.localSet(cnt);
   const li = em.allocLocal(I32); em.i32Const(0); em.localSet(li);
   em.block(() => { em.loop(() => {
     em.localGet(li); em.localGet(cnt); em.op(OP_I32_GE_S); em.brIf(1);
+    clearVolatileCache(ctx);
     compileFlowChain(ctx, node.id, 'body');
     em.localGet(li); em.i32Const(1); em.op(OP_I32_ADD); em.localSet(li); em.br(0);
   }); });
+  clearVolatileCache(ctx);
 }
 
 /** Set Cell Looks — agent appearance. Writes the agent colors buffer (s.colors at
- *  colorsOffset, idx*4). PLAIN mode only (glyph is rejected by the gate — no
- *  per-agent glyph buffers). Written unconditionally (the agent overlay is single-
- *  viewer; same decision as the WebGPU agent port). */
+ *  colorsOffset, idx*4). Glyph writes are a parity no-op (the agent overlay has no
+ *  glyph buffers on ANY target — JS writes the length-0 GLYPH_NOOP arrays). A
+ *  non-sentinel mappingId is viewer-GUARDED like JS's `_isV_` hoist: the write
+ *  fires only when the trailing `activeViewerIdx` param equals this mapping's
+ *  index in the compile-time viewerGuardIds table (`__current__` = unconditional). */
 function emitSetCellLooks(ctx: AgentWasmCtx, node: GraphNode): void {
   const em = ctx.em;
   const cfg = node.data.config as Record<string, unknown>;
   const useGlyph = !!cfg['useGlyph'];
   const setBg = cfg['setBackground'] !== false;
   if (!(!useGlyph || setBg)) return; // glyph-only with no background → nothing to write here
-  const colorByte = em.allocLocal(I32); em.localGet(ctx.idxLocal); em.i32Const(4); em.op(OP_I32_MUL); em.localSet(colorByte);
-  const off = ctx.layout.colorsOffset;
-  const writeChan = (port: string, def: number, lane: number) => {
-    em.localGet(colorByte); em.i32Const(off + lane); em.op(OP_I32_ADD);
-    pushValueAs(em, resolveValueInput(ctx, node, port, def), I32);
-    em.i32Store8();
+  const emitWrites = (): void => {
+    const colorByte = em.allocLocal(I32); em.localGet(ctx.idxLocal); em.i32Const(4); em.op(OP_I32_MUL); em.localSet(colorByte);
+    const off = ctx.layout.colorsOffset;
+    const writeChan = (port: string, def: number, lane: number) => {
+      em.localGet(colorByte); em.i32Const(off + lane); em.op(OP_I32_ADD);
+      pushValueAs(em, resolveValueInput(ctx, node, port, def), I32);
+      em.i32Store8();
+    };
+    writeChan('r', 0, 0); writeChan('g', 0, 1); writeChan('b', 0, 2); writeChan('a', 255, 3);
   };
-  writeChan('r', 0, 0); writeChan('g', 0, 1); writeChan('b', 0, 2); writeChan('a', 255, 3);
+  const mid = (cfg['mappingId'] as string) || '';
+  const guardIdx = mid && mid !== '__current__' ? ctx.viewerGuardIds.indexOf(mid) : -1;
+  if (guardIdx < 0) { emitWrites(); return; }   // sentinel / unset → unconditional
+  em.localGet(ctx.activeViewerIdxLocal); em.i32Const(guardIdx); em.op(OP_I32_EQ);
+  em.ifThen(emitWrites);
 }
 
 // --- field bridge writes (closed agent↔grid feedback) ---
@@ -3115,14 +3344,16 @@ function clearVolatileCache(ctx: AgentWasmCtx): void {
 // rationale for the supported set.
 // ---------------------------------------------------------------------------
 
-function computeVolatile(ctx: AgentWasmCtx): void {
+function computeVolatile(ctx: AgentWasmCtx, extraSeeds?: Set<string>): void {
   const { nodeMap, inputToSource, inputToSources } = ctx.adj;
-  // Seeds: forEachInArray / forEachBond (per-iteration element/index/partner) AND
-  // getVariable (mutable Local Variable storage). A node is volatile iff it
-  // transitively reads one of these — its cached value is dropped at each
-  // forEach/forEachBond iteration boundary so it re-emits with the current element,
-  // and a getVariable-reader is never cell-top-hoisted (the value mutates).
-  const volatileSet = new Set<string>();
+  // Seeds: forEachInArray / forEachBond (per-iteration element/index/partner),
+  // getVariable (mutable Local Variable storage), AND the async read-after-write
+  // hazard reads (`extraSeeds`, from the shared computeAsyncReadWriteHazards —
+  // attribute / engine-buffer reads that flow-follow a matching write must
+  // re-emit at use, mirroring the JS volatile pin). A node is volatile iff it
+  // transitively reads one of these — its cached value is dropped at every
+  // forEach/loop iteration + branch boundary so it re-emits fresh.
+  const volatileSet = new Set<string>(extraSeeds ?? []);
   for (const [, node] of nodeMap) {
     const t = node.data.nodeType;
     if (t === 'forEachInArray' || t === 'forEachBond' || t === 'getVariable') volatileSet.add(node.id);
@@ -3178,6 +3409,8 @@ function preEmitAgentValues(ctx: AgentWasmCtx, rootId: string): void {
     const node = nodeMap.get(id); if (!node) return false;
     if (AGENT_VALUE_NO_HOIST.has(node.data.nodeType)) { hoistable.set(id, false); return false; }
     if (ctx.volatileNodes.has(id)) { hoistable.set(id, false); return false; }
+    // Hazard-pinned reads emit at their LCA flow position, never at loop-top.
+    if (ctx.hazardPinned.has(id)) { hoistable.set(id, false); return false; }
     inProgress.add(id);
     let ok = true;
     for (const [key, src] of inputToSource) { if (!key.startsWith(`${id}:`)) continue; if (!isHoistable(src.nodeId)) { ok = false; break; } }
@@ -3806,7 +4039,7 @@ export function compileAgentGraphWasm(
   model: CAModel,
   agentLayout: AgentMemoryLayout,
 ): AgentWasmResult {
-  const empty = (error: string): AgentWasmResult => ({ bytes: new Uint8Array(), pages: agentLayout.pages, layout: agentLayout, supportedTypes: [], error });
+  const empty = (error: string): AgentWasmResult => ({ bytes: new Uint8Array(), pages: agentLayout.pages, layout: agentLayout, supportedTypes: [], viewerGuardIds: [], error });
   if (!model.topologyMode?.agents) return empty('Agents topology not enabled.');
 
   const flat = flattenAgentGraph(agentNodes, agentEdges, model);
@@ -3849,12 +4082,25 @@ export function compileAgentGraphWasm(
   }
   if (nearbyCount > agentLayout.nearbyScratchSlots) return empty(`agentWasm: too many getNearbyAgents (${nearbyCount} > ${agentLayout.nearbyScratchSlots} reserved slots).`);
 
+  // Viewer-guard table: the ordered non-sentinel setCellLooks mappingIds the
+  // behaviour references. JS guards each such write with `_isV_` (activeViewer ===
+  // mappingId); the WASM behaviour reproduces this via the trailing
+  // `activeViewerIdx` i32 param (= the index of the current viewer in THIS list,
+  // -1 = none). The `__current__` sentinel stays unconditional on both.
+  const viewerGuardIds: string[] = [];
+  for (const id of reachable) {
+    const n = adj.nodeMap.get(id); if (!n || n.data.nodeType !== 'setCellLooks') continue;
+    const mid = (n.data.config?.['mappingId'] as string) || '';
+    if (mid && mid !== '__current__' && !viewerGuardIds.includes(mid)) viewerGuardIds.push(mid);
+  }
+
   // Behaviour signature (the worker's call MIRRORS this — see runAgentStep):
   //   (highWater, hashValid, nBinsX, nBinsY, nBinsZ : i32,
   //    binSizeX, binSizeY, binSizeZ : f64,
   //    fieldW, fieldH, fieldD : f64, fieldTorus : i32,
-  //    originX, originY, originZ : f64)  — the bbox-anchored hash grid origin.
-  const PARAMS: ('i32' | 'f64')[] = ['i32', 'i32', 'i32', 'i32', 'i32', 'f64', 'f64', 'f64', 'f64', 'f64', 'f64', 'i32', 'f64', 'f64', 'f64'];
+  //    originX, originY, originZ : f64,   — the bbox-anchored hash grid origin
+  //    activeViewerIdx : i32)             — index into viewerGuardIds, -1 = none
+  const PARAMS: ('i32' | 'f64')[] = ['i32', 'i32', 'i32', 'i32', 'i32', 'f64', 'f64', 'f64', 'f64', 'f64', 'f64', 'i32', 'f64', 'f64', 'f64', 'i32'];
   const em = new WasmEmitter(PARAMS.length);
 
   // Param indices.
@@ -3862,6 +4108,7 @@ export function compileAgentGraphWasm(
   const P_binSizeX = 5, P_binSizeY = 6, P_binSizeZ = 7;
   const P_fieldW = 8, P_fieldH = 9, P_fieldD = 10, P_fieldTorus = 11;
   const P_originX = 12, P_originY = 13, P_originZ = 14;
+  const P_activeViewerIdx = 15;
 
   const ctx: AgentWasmCtx = {
     adj, layout: agentLayout, model, is3d, em,
@@ -3881,6 +4128,10 @@ export function compileAgentGraphWasm(
     nBinsXLocal: P_nBinsX, nBinsYLocal: P_nBinsY, nBinsZLocal: P_nBinsZ,
     binSizeXLocal: P_binSizeX, binSizeYLocal: P_binSizeY, binSizeZLocal: P_binSizeZ,
     originXLocal: P_originX, originYLocal: P_originY, originZLocal: P_originZ,
+    activeViewerIdxLocal: P_activeViewerIdx,
+    viewerGuardIds,
+    hazardPinned: new Set<string>(),
+    hazardEmitBefore: new Map<string, string[]>(),
   };
 
   // Assign getNearbyAgents scratch slots (reachable only).
@@ -3889,6 +4140,62 @@ export function compileAgentGraphWasm(
 
   // Volatility analysis (don't cache element/index/getVariable-derived values).
   computeVolatile(ctx);
+
+  // Async read-after-write hazards (SAME shared analyzer + eligibility as the
+  // JS compiler): reads that flow-follow a matching write must not TOP-hoist
+  // (they'd capture the stale pre-write value). They are emitted ONCE
+  // immediately before the flow node that is the LCA of their uses — the SAME
+  // position JS's volatileHoist emits them, so bit-parity holds even for
+  // multi-use reads with a write between two uses (re-emitting per use here
+  // DIVERGED: the Ant Necrophoresis pickup-then-drop shape). Nodes already
+  // covered by the volatile re-emit (getVariable/forEach-derived) or the
+  // NO_HOIST at-use set (array producers / reducers / RNG) keep their existing
+  // mechanisms — the cone below is the pure scalar chains only.
+  ctx.hazardPinned = new Set<string>();
+  ctx.hazardEmitBefore = new Map<string, string[]>();
+  {
+    const hazardSeeds = computeAsyncReadWriteHazards({
+      nodeMap: adj.nodeMap,
+      inputToSource: adj.inputToSource,
+      inputToSources: adj.inputToSources,
+      flowOutputToTargets: adj.flowOutputToTargets,
+      rootNodeId: behaviourNode.id,
+      rootFlowPortId: 'do',
+      isAsync: model.centerBased?.agentUpdateMode !== 'sync',
+    });
+    if (hazardSeeds.size > 0) {
+      // consumer closure of the seeds
+      const consumers = new Map<string, string[]>();
+      const addC = (src: string, tgt: string) => { const a = consumers.get(src); if (a) a.push(tgt); else consumers.set(src, [tgt]); };
+      for (const [k, src] of adj.inputToSource) { const t = k.split(':')[0]; if (t) addC(src.nodeId, t); }
+      for (const [k, srcs] of adj.inputToSources) { const t = k.split(':')[0]; if (t) for (const s of srcs) addC(s.nodeId, t); }
+      const cone = new Set<string>();
+      const stack = [...hazardSeeds];
+      while (stack.length) {
+        const id = stack.pop()!;
+        if (cone.has(id)) continue;
+        cone.add(id);
+        for (const c of consumers.get(id) ?? []) stack.push(c);
+      }
+      for (const id of [...cone]) {
+        const n = adj.nodeMap.get(id);
+        if (!n) { cone.delete(id); continue; }
+        if (ctx.volatileNodes.has(id) || AGENT_VALUE_NO_HOIST.has(n.data.nodeType)) { cone.delete(id); continue; }
+        const def = getNodeDef(n.data.nodeType);
+        if (!def || def.ports.some(p => p.category === 'flow')) cone.delete(id);
+      }
+      ctx.hazardPinned = cone;
+      ctx.hazardEmitBefore = computeVolatileHoist({
+        nodeMap: adj.nodeMap,
+        inputToSource: adj.inputToSource,
+        inputToSources: adj.inputToSources,
+        flowOutputToTargets: adj.flowOutputToTargets,
+        rootNodeId: behaviourNode.id,
+        rootFlowPortId: 'do',
+        volatile: cone,
+      }).emitBefore;
+    }
+  }
 
   // Patch compileValueNode to resolve forEach element/index ports (they're not
   // in the switch). We do this by overriding the resolver via a closure check.
@@ -3989,7 +4296,7 @@ export function compileAgentGraphWasm(
   // pow..tanh func indices (0..6) — which the behaviour body's opCall refers to —
   // are UNCHANGED. The two module-defined funcs then sit at funcIdx 8 (behaviour)
   // and 9 (forcePass).
-  const FMOD_FUNC_IDX = NUM_IMPORTED_FUNCS; // = 7
+  // FMOD_FUNC_IDX (module-scope const above) = NUM_IMPORTED_FUNCS = 7.
   const NUM_IMPORTED_FUNCS_FORCE = NUM_IMPORTED_FUNCS + 1; // 8 (incl. fmod)
   const fpEm = new WasmEmitter(FORCE_PASS_PARAMS.length);
   const FP: ForcePassParamIdx = {
@@ -4030,7 +4337,7 @@ export function compileAgentGraphWasm(
     code: [body, forceBody],
   });
 
-  return { bytes, pages: agentLayout.pages, layout: agentLayout, supportedTypes: [...seen] };
+  return { bytes, pages: agentLayout.pages, layout: agentLayout, supportedTypes: [...seen], viewerGuardIds };
 }
 
 /** Encode a scalar Variable's initialValue → f64. */
@@ -4130,7 +4437,7 @@ export function buildAgentLayoutExtras(model: CAModel): AgentLayoutExtras {
  *  builds the layout via `createAgentStore({ wasmBacked: true, layoutExtras })`. */
 export function compileAgentGraphWasmForModel(model: CAModel): AgentWasmResult {
   const cfg = model.centerBased;
-  if (!cfg) return { bytes: new Uint8Array(), pages: 1, layout: computeAgentMemoryLayout(1, 1, []), supportedTypes: [], error: 'No centerBased config.' };
+  if (!cfg) return { bytes: new Uint8Array(), pages: 1, layout: computeAgentMemoryLayout(1, 1, []), supportedTypes: [], viewerGuardIds: [], error: 'No centerBased config.' };
   // Generic Agent Platform: the agent SoA + the baked memory offsets are keyed by
   // the AGENT attribute set (agentAttrsOf), the SAME ordered list the worker's
   // buildAgentAttrSpecs uses — they MUST match byte-for-byte or the WASM behaviour

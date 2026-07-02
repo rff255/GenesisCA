@@ -1,45 +1,43 @@
 ﻿// ===========================================================================
-// PR7 / G1+G2 — the SEPARATE WebGPU AGENT-LOOP compiler.
+// The SEPARATE WebGPU AGENT-LOOP compiler — full-coverage behaviour shader.
 //
 // A self-contained agent-WebGPU compiler whose per-agent behaviour pass is a
 // WGSL compute shader over the GPU agent SoA (`agentWebgpu/layout.ts`). It is the
 // GPU sibling of `agentWasm/compile.ts`: the SAME front-end pipeline (macro-
-// expand → reroute-collapse → accessor-CSE), the SAME honest central gate
-// (`isAgentGraphWebGPUSupported`), and the SAME Boids node subset — but it emits
-// WGSL instead of WASM bytes.
+// expand → reroute-collapse → accessor-CSE) and the SAME honest central gate
+// pattern (`isAgentGraphWebGPUSupported`) — but it emits WGSL instead of WASM
+// bytes.
 //
-// G1 — the skeleton: one invocation per agent slot, `dispatchCells(maxAgents,64)`
-//      2-D tiling (the lattice grid pattern), `highWater` a CONTROL UNIFORM (not a
-//      baked literal — baking forces a per-gen recompile), the alive-skip + the
-//      `idx >= highWater` guard.
-// G2 — the behaviour shader: universal nodes (arithmetic / compare / logic /
-//      conditional / getConstant / getRandom / expression / Local Variables)
-//      routed through f32-string emit (reusing the lattice `emitWgsl`); the ~12
-//      agent-node WGSL emitters (getSelfPosition/getRadius/getNearbyAgents/
-//      getAgentOffset/getVelocity/getAgentPosition/getAgentRadius/applyForce/
-//      setTargetRadius/setVariable/forEachInArray). Per-agent PCG RNG keyed by
-//      `idx` (the lattice per-cell PCG — statistical parity, NOT bit-exact, the
-//      documented WebGPU target constraint).
+// The skeleton: one invocation per agent slot, `dispatchCells(maxAgents,64)`
+// 2-D tiling (the lattice grid pattern), `highWater` a CONTROL UNIFORM (not a
+// baked literal — baking forces a per-gen recompile), the alive-skip + the
+// `idx >= highWater` guard. Per-agent PCG RNG keyed by `idx` (the lattice
+// per-cell PCG — statistical parity, NOT bit-exact, the documented WebGPU
+// target constraint).
 //
 // HARD CONSTRAINT: this compiler touches NO lattice/grid WebGPU code and NO
 // existing agent JS/WASM path — it is wholly additive, so lattice + JS-agent +
 // WASM-agent byte-identity holds BY CONSTRUCTION.
 //
-// SCOPE (mirrors AGENT_WASM_SUPPORTED_TYPES — the Boids subset):
-//   roots/reads/writes : behaviourStep, getSelfPosition, getRadius,
-//                        applyForce, setTargetRadius
-//   neighbour access   : getNearbyAgents (the hash stencil → a per-thread id
-//                        array), forEachInArray, getAgentOffset, getVelocity,
-//                        getAgentPosition, getAgentRadius
-//   local variables    : getVariable / setVariable (SCALAR only)
-//   value/flow utility : getConstant, arithmeticOperator, expression, statement,
-//                        logicOperator, getRandom, conditional, sequence
-// Everything else FALLS BACK to JS via `isAgentGraphWebGPUSupported`.
+// SCOPE (full catalogue MINUS the documented fundamentals): 2D AND 3D agents,
+// the field bridge (2D bilinear / 3D trilinear + r-disk / r-sphere via the
+// fieldRead snapshot + the atomic fieldDeposit accumulator), the agent-array
+// tier (getNearbyAgents / getBondedAgents / getAgentsAttribute / filter / join /
+// pick + the array folds), the structural-write requests (divideAgent / formBond /
+// breakBond / killAgent — flag stores the CPU structural phase consumes), user
+// agent attributes, indicators (atomics), the bond store reads (forEachBond /
+// getCurvature / getBondDegree), lookup tables / model attrs (auxF32), and
+// array Local Variables. The REJECT set is only:
+//   - aggregate/groupOperator `median` + uniform `random` (no sort / per-thread
+//     pick path — same as the lattice WebGPU grid; `weightedRandom` IS supported);
+//   - updateIndicator toggle/next/previous (order-dependent under parallel writers);
+//   - > the array-producer scratch-slot budget (a capacity gate, not a node ban).
+// Everything else runs on the GPU; a rejected graph FALLS BACK to JS via
+// `isAgentGraphWebGPUSupported`.
 //
-// CONSTRAINTS (documented): agents are always SYNC (single-buffer) — no async
-// agent nodes exist, so no async gate. f32 + per-agent PCG → statistical parity,
-// not bit-exact (same as the lattice WebGPU grid). 2D-only (worldDepth>1 is the
-// 3D port; this compiler rejects 3D so a 3D-agent model clamps to JS).
+// CONSTRAINTS (documented): f32 + per-agent PCG → statistical parity, not
+// bit-exact (same as the lattice WebGPU grid). The divisionEvent + agentInit
+// roots stay JS-on-CPU (target-independent).
 // ===========================================================================
 
 import type { GraphNode, GraphEdge, CAModel } from '../../../../model/types';
@@ -52,6 +50,9 @@ import { expandMacros } from '../macroExpand';
 import { collapseReroutes } from '../rerouteCollapse';
 import { expandComposites } from '../expandComposites';
 import { canonicalizeAccessorEdges } from '../accessorCSE';
+import { computeAsyncReadWriteHazards } from '../asyncWriteHazard';
+import { computeVolatileHoist } from '../volatileHoist';
+import { getNodeDef } from '../../nodes/registry';
 import { cellFieldAttrsOf, cellFieldWriteAttrsOf, agentAttrsOf } from '../../../../model/attributeScope';
 import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/CategoricalColorNode';
 import { readColorScaleStops } from '../../nodes/ColorScaleNode';
@@ -218,6 +219,11 @@ interface AgentWgpuCtx {
   arrayCache: Map<string, AgentArrayRef>;
   /** Node ids whose cached value MUST NOT persist across a forEach iteration. */
   volatileNodes: Set<string>;
+  /** Async read-after-write hazard cone (pure scalar chains): excluded from the
+   *  function-top hoist; emitted ONCE before the flow node in hazardEmitBefore
+   *  (the JS volatileHoist's LCA position — cross-target emission lockstep). */
+  hazardPinned: Set<string>;
+  hazardEmitBefore: Map<string, string[]>;
   /** Array-producing node id → its assigned `var<function>` scratch slot index.
    *  Each `i32` (id arrays) or `f32` (value arrays) producer gets its own slot. */
   arrayScratchSlot: Map<string, { slot: number; elemType: WgslType }>;
@@ -508,32 +514,36 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
         result = compileAgentRelativePosition(ctx, node, portId);
         break;
       }
-      const aName = emitAgentId(ctx, node, 'agentId');
+      const g = emitAgentIdGuarded(ctx, node, 'agentId');
       const field = portId === 'y' ? 'y' : portId === 'z' ? (ctx.is3d ? 'z' : 'y') : 'x';
-      result = emitLet(ctx, 'f32', f32At(ctx, field, aName), 'gp');
+      result = emitLet(ctx, 'f32', `select(0.0, ${f32At(ctx, field, g.name)}, ${g.ok})`, 'gp');
       break;
     }
     case 'getAgentRadius': {
-      const aName = emitAgentId(ctx, node, 'agentId');
-      result = emitLet(ctx, 'f32', f32At(ctx, 'radius', aName), 'gr');
+      const g = emitAgentIdGuarded(ctx, node, 'agentId');
+      result = emitLet(ctx, 'f32', `select(0.0, ${f32At(ctx, 'radius', g.name)}, ${g.ok})`, 'gr');
       break;
     }
     case 'getVelocity': {
-      // self when agentId is unwired (JS: `inputs.agentId ? (...|0) : idx`).
+      // self when agentId is unwired (JS: `inputs.agentId ? (...|0) : idx`) —
+      // self is always valid; a WIRED id is range-guarded like JS/WASM.
       const src = ctx.adj.inputToSource.get(`${node.id}:agentId`);
-      const aName = src ? emitAgentId(ctx, node, 'agentId') : 'idx';
       const field = portId === 'vy' ? 'vy' : portId === 'vz' ? (ctx.is3d ? 'vz' : 'vy') : 'vx';
-      result = emitLet(ctx, 'f32', f32At(ctx, field, aName), 'gv');
+      if (!src) {
+        result = emitLet(ctx, 'f32', f32At(ctx, field, 'idx'), 'gv');
+        break;
+      }
+      const g = emitAgentIdGuarded(ctx, node, 'agentId');
+      result = emitLet(ctx, 'f32', `select(0.0, ${f32At(ctx, field, g.name)}, ${g.ok})`, 'gv');
       break;
     }
     case 'getAgentAttribute': {
       // Read a SPECIFIC agent's attribute by id → `agentF32[attrBase + id]`.
       const attr = (node.data.config?.['attributeId'] as string) || '_undef';
       const base = ctx.layout.agentAttrBase[attr];
-      const aName = emitAgentId(ctx, node, 'agentId');
-      result = base === undefined
-        ? { expr: '0.0', type: 'f32' }
-        : emitLet(ctx, 'f32', f32At(ctx, attr, aName), 'gaa1');
+      if (base === undefined) { result = { expr: '0.0', type: 'f32' }; break; }
+      const g = emitAgentIdGuarded(ctx, node, 'agentId');
+      result = emitLet(ctx, 'f32', `select(0.0, ${f32At(ctx, attr, g.name)}, ${g.ok})`, 'gaa1');
       break;
     }
     case 'aggregate': {
@@ -594,12 +604,16 @@ function emitBehaviourStep(ctx: AgentWgpuCtx, portId: string): ValueRef {
 }
 
 /** Resolve the `agentId` input → a fresh u32 index local (for SoA addressing). */
-function emitAgentId(ctx: AgentWgpuCtx, node: GraphNode, portId: string): string {
-  const ref = resolveValueInput(ctx, node, portId, 0);
-  // (id | 0) → i32 → clamp non-negative → u32 for indexing.
-  const iName = fresh(ctx, 'aid');
-  ctx.lines.push(`  let ${iName}: u32 = u32(max(0, ${castTo(ref, 'i32')}));`);
-  return iName;
+/** Range-guarded agent id (the READER nodes): unwired → -1 (the empty sentinel),
+ *  `ok = id in [0, highWater)`, index clamped for the eager load. Mirrors the
+ *  JS/WASM readers' guard — an invalid id yields 0, never agent 0's value. */
+function emitAgentIdGuarded(ctx: AgentWgpuCtx, node: GraphNode, portId: string): { name: string; ok: string } {
+  const ref = resolveValueInput(ctx, node, portId, -1);
+  const raw = fresh(ctx, 'aidRaw'); const ok = fresh(ctx, 'aidOk'); const nm = fresh(ctx, 'aid');
+  ctx.lines.push(`  let ${raw}: i32 = ${castTo(ref, 'i32')};`);
+  ctx.lines.push(`  let ${ok}: bool = (${raw} >= 0 && ${raw} < i32(control.highWater));`);
+  ctx.lines.push(`  let ${nm}: u32 = u32(select(0, ${raw}, ${ok}));`);
+  return { name: nm, ok };
 }
 
 /** Get Constant — numeric / bool only in the supported set. */
@@ -637,6 +651,12 @@ function emitArithmetic(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
     case 'cos': expr = `cos(${x()})`; break;
     case 'tan': expr = `tan(${x()})`; break;
     case 'tanh': expr = `tanh(${x()})`; break;
+    case '%': {
+      // (y != 0 ? x % y : 0) — WGSL's f32 % is the trunc-remainder like JS.
+      const yv = y();
+      expr = `select(0.0, (${x()} % ${yv}), (${yv} != 0.0))`;
+      break;
+    }
     default: expr = `(${x()} + ${y()})`; break;
   }
   return emitLet(ctx, 'f32', expr, 'ar');
@@ -652,6 +672,15 @@ function emitCompare(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   const op = (cfg?.['operation'] as string) ?? '==';
   const x = inF32(ctx, node, 'x', 0);
   const y = inF32(ctx, node, 'y', 0);
+  if (op === 'between' || op === 'notBetween') {
+    // (x lowOp y) && (x highOp y2), inverted for notBetween — mirrors
+    // StatementNode's JS emit (previously gate-rejected → JS clamp).
+    const y2 = inF32(ctx, node, 'y2', 0);
+    const lo = cfg?.['lowOp'] === '>' ? '>' : '>=';
+    const hi = cfg?.['highOp'] === '<' ? '<' : '<=';
+    const inside = `((${x} ${lo} ${y}) && (${x} ${hi} ${y2}))`;
+    return emitLet(ctx, 'f32', `select(0.0, 1.0, ${op === 'notBetween' ? `!${inside}` : inside})`, 'cmp');
+  }
   let cond: string;
   switch (op) {
     case '==': cond = `(${x} == ${y})`; break;
@@ -700,7 +729,7 @@ function compileExpression(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   return emitLet(ctx, 'f32', expr, 'ex');
 }
 
-/** Get Random — float / integer / orientation / bool (NO options mode). Per-agent
+/** Get Random — float / integer / orientation / bool / options. Per-agent
  *  PCG keyed by `idx` (the lattice grid model — statistical parity, NOT bit-exact
  *  vs JS/WASM's shared xorshift32 stream; the documented WebGPU constraint). */
 function emitGetRandom(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
@@ -710,6 +739,39 @@ function emitGetRandom(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   const minN = typeof minRaw === 'number' ? minRaw : parseFloat(String(minRaw ?? '0')) || 0;
   const maxN = typeof maxRaw === 'number' ? maxRaw : parseFloat(String(maxRaw ?? '1')) || 1;
   const r = 'rand_f32(idx)';
+  if (t === 'options') {
+    // One option picked uniformly; Fallback when empty (previously gate-rejected
+    // → JS clamp). Multi-source scalars pick via a compile-time if/else chain;
+    // a single array-producer source picks at its runtime length.
+    const fb = castTo(resolveValueInput(ctx, node, 'fallback', 0), 'f32');
+    const sources = ctx.adj.inputToSources.get(`${node.id}:options`) ?? [];
+    const singleProducer = sources.length === 1
+      && isAgentArrayProducer(ctx.adj.nodeMap.get(sources[0]!.nodeId)?.data.nodeType ?? '');
+    const res = fresh(ctx, 'ropt');
+    if (singleProducer || (sources.length === 0 && ctx.adj.inputToSource.get(`${node.id}:options`))) {
+      const arr = resolveInputArray(ctx, node, 'options');
+      ctx.lines.push(`  var ${res}: f32 = ${fb};`);
+      if (arr) {
+        const k = fresh(ctx, 'roptK');
+        const elem = arr.elemType === 'f32' ? arrLoad(arr, k) : `f32(${arrLoad(arr, k)})`;
+        ctx.lines.push(`  if (${arr.lenName} > 0) {`);
+        ctx.lines.push(`    let ${k}: i32 = clamp(i32(${r} * f32(${arr.lenName})), 0, ${arr.lenName} - 1);`);
+        ctx.lines.push(`    ${res} = ${elem};`);
+        ctx.lines.push(`  }`);
+      }
+      return { expr: res, type: 'f32' };
+    }
+    if (sources.length === 0) return emitLet(ctx, 'f32', fb, 'ropt');
+    // multi-source scalars — resolve each, draw once, pick by compile-time index.
+    const vals = sources.map(s => castTo(compileValueNode(ctx, s.nodeId, s.portId), 'f32'));
+    const k = fresh(ctx, 'roptK');
+    ctx.lines.push(`  let ${k}: i32 = i32(${r} * ${wgslFloatLit(vals.length)});`);
+    ctx.lines.push(`  var ${res}: f32 = ${vals[vals.length - 1]};`);
+    vals.slice(0, -1).forEach((v, i) => {
+      ctx.lines.push(`  if (${k} == ${i}) { ${res} = ${v}; }`);
+    });
+    return { expr: res, type: 'f32' };
+  }
   if (t === 'bool') {
     const probRef = resolveValueInput(ctx, node, 'probability', 0.5);
     return emitLet(ctx, 'f32', `select(0.0, 1.0, (${r} < ${castTo(probRef, 'f32')}))`, 'rb');
@@ -764,11 +826,13 @@ function compileAgentOffset(ctx: AgentWgpuCtx, node: GraphNode, portId: string):
   const is3d = ctx.is3d;
   const cachedSibling = ctx.valueCache.get(`${node.id}:dx`);
   if (cachedSibling !== undefined) return ctx.valueCache.get(`${node.id}:${portId}`) ?? cachedSibling;
-  const aName = emitAgentId(ctx, node, 'agentId');
+  // Range-guarded (mirrors JS/WASM): an invalid id yields a zero vector.
+  const g = emitAgentIdGuarded(ctx, node, 'agentId');
+  const aName = g.name;
   const dx = fresh(ctx, 'odx'), dy = fresh(ctx, 'ody'), dz = fresh(ctx, 'odz'), dist = fresh(ctx, 'odist');
-  ctx.lines.push(`  var ${dx}: f32 = ${f32At(ctx, 'x', aName)} - ${f32At(ctx, 'x', 'idx')};`);
-  ctx.lines.push(`  var ${dy}: f32 = ${f32At(ctx, 'y', aName)} - ${f32At(ctx, 'y', 'idx')};`);
-  if (is3d) ctx.lines.push(`  var ${dz}: f32 = ${f32At(ctx, 'z', aName)} - ${f32At(ctx, 'z', 'idx')};`);
+  ctx.lines.push(`  var ${dx}: f32 = select(0.0, ${f32At(ctx, 'x', aName)} - ${f32At(ctx, 'x', 'idx')}, ${g.ok});`);
+  ctx.lines.push(`  var ${dy}: f32 = select(0.0, ${f32At(ctx, 'y', aName)} - ${f32At(ctx, 'y', 'idx')}, ${g.ok});`);
+  if (is3d) ctx.lines.push(`  var ${dz}: f32 = select(0.0, ${f32At(ctx, 'z', aName)} - ${f32At(ctx, 'z', 'idx')}, ${g.ok});`);
   // torus fold over the world bounds (control.fieldW / fieldH / fieldD / fieldTorus).
   ctx.lines.push(`  if (control.fieldTorus != 0u) {`);
   ctx.lines.push(`    let _hW = control.fieldW * 0.5; let _hH = control.fieldH * 0.5;`);
@@ -800,14 +864,17 @@ function compileAgentRelativePosition(ctx: AgentWgpuCtx, node: GraphNode, portId
   const is3d = ctx.is3d;
   const cachedSibling = ctx.valueCache.get(`${node.id}:x`);
   if (cachedSibling !== undefined) return ctx.valueCache.get(`${node.id}:${portId}`) ?? cachedSibling;
-  const aName = emitAgentId(ctx, node, 'agentId');
-  // self when refId is unwired (JS: `inputs.refId ? (...|0) : idx`).
+  // Range-guarded BOTH ids (mirrors JS/WASM; self is trivially in range).
+  const gA = emitAgentIdGuarded(ctx, node, 'agentId');
+  const aName = gA.name;
   const refSrc = ctx.adj.inputToSource.get(`${node.id}:refId`);
-  const refName = refSrc ? emitAgentId(ctx, node, 'refId') : 'idx';
+  const gR = refSrc ? emitAgentIdGuarded(ctx, node, 'refId') : null;
+  const refName = gR ? gR.name : 'idx';
+  const okBoth = gR ? `(${gA.ok} && ${gR.ok})` : gA.ok;
   const ox = fresh(ctx, 'rpx'), oy = fresh(ctx, 'rpy'), oz = fresh(ctx, 'rpz');
-  ctx.lines.push(`  var ${ox}: f32 = ${f32At(ctx, 'x', aName)} - ${f32At(ctx, 'x', refName)};`);
-  ctx.lines.push(`  var ${oy}: f32 = ${f32At(ctx, 'y', aName)} - ${f32At(ctx, 'y', refName)};`);
-  if (is3d) ctx.lines.push(`  var ${oz}: f32 = ${f32At(ctx, 'z', aName)} - ${f32At(ctx, 'z', refName)};`);
+  ctx.lines.push(`  var ${ox}: f32 = select(0.0, ${f32At(ctx, 'x', aName)} - ${f32At(ctx, 'x', refName)}, ${okBoth});`);
+  ctx.lines.push(`  var ${oy}: f32 = select(0.0, ${f32At(ctx, 'y', aName)} - ${f32At(ctx, 'y', refName)}, ${okBoth});`);
+  if (is3d) ctx.lines.push(`  var ${oz}: f32 = select(0.0, ${f32At(ctx, 'z', aName)} - ${f32At(ctx, 'z', refName)}, ${okBoth});`);
   ctx.lines.push(`  if (control.fieldTorus != 0u) {`);
   ctx.lines.push(`    let _hW = control.fieldW * 0.5; let _hH = control.fieldH * 0.5;`);
   ctx.lines.push(`    if (${ox} > _hW) { ${ox} = ${ox} - control.fieldW; } else if (${ox} < -_hW) { ${ox} = ${ox} + control.fieldW; }`);
@@ -1653,7 +1720,26 @@ function compileFlowChain(ctx: AgentWgpuCtx, nodeId: string, portId: string): vo
   for (const t of targets) compileFlowNode(ctx, t.nodeId);
 }
 
+/** Every output port of `nodeId` that some consumer actually reads. */
+function usedOutPortsOf(ctx: AgentWgpuCtx, nodeId: string): string[] {
+  const ports = new Set<string>();
+  for (const [, src] of ctx.adj.inputToSource) if (src.nodeId === nodeId) ports.add(src.portId);
+  for (const [, srcs] of ctx.adj.inputToSources) for (const s of srcs) if (s.nodeId === nodeId) ports.add(s.portId);
+  return ports.size > 0 ? [...ports] : ['value'];
+}
+
 function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
+  // Hazard-pinned values scheduled immediately BEFORE this flow node (the LCA
+  // of their uses — the same position JS's volatileHoist emits them). Emitted
+  // once at this scope (which dominates every use, so the WGSL `let`s resolve
+  // from all consuming branches) + cached.
+  const pinned = ctx.hazardEmitBefore.get(nodeId);
+  if (pinned) {
+    for (const vid of pinned) {
+      if (!ctx.adj.nodeMap.has(vid)) continue;
+      for (const p of usedOutPortsOf(ctx, vid)) compileValueNode(ctx, vid, p);
+    }
+  }
   const node = ctx.adj.nodeMap.get(nodeId);
   if (!node) return;
   const type = node.data.nodeType;
@@ -1877,11 +1963,18 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
     }
     case 'conditional': {
       const cond = `(${inF32(ctx, node, 'condition', 0)} != 0.0)`;
+      // Volatile values (hazard-pinned reads, per-iteration refs) must re-emit
+      // INSIDE each branch — a value cached from `then` would leave `else`
+      // referencing a block-scoped `let` from the sibling branch (WGSL
+      // unresolved-name compile error).
       ctx.lines.push(`  if (${cond}) {`);
+      clearVolatileCache(ctx);
       compileFlowChain(ctx, node.id, 'then');
       ctx.lines.push(`  } else {`);
+      clearVolatileCache(ctx);
       compileFlowChain(ctx, node.id, 'else');
       ctx.lines.push(`  }`);
+      clearVolatileCache(ctx);
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
@@ -2267,12 +2360,24 @@ function emitForEachBond(ctx: AgentWgpuCtx, node: GraphNode): void {
   ctx.lines.push(`      if (${partner} >= 0 && ${partner} < i32(control.highWater)) {`);
   ctx.lines.push(`        var ${dx}: f32 = ${f32At(ctx, 'x', `u32(${partner})`)} - ${f32At(ctx, 'x', 'idx')};`);
   ctx.lines.push(`        var ${dy}: f32 = ${f32At(ctx, 'y', `u32(${partner})`)} - ${f32At(ctx, 'y', 'idx')};`);
-  ctx.lines.push(`        if (control.fieldTorus != 0u) {`);
-  ctx.lines.push(`          let _hw = control.fieldW * 0.5; let _hh = control.fieldH * 0.5;`);
-  ctx.lines.push(`          if (${dx} > _hw) { ${dx} = ${dx} - control.fieldW; } else if (${dx} < -_hw) { ${dx} = ${dx} + control.fieldW; }`);
-  ctx.lines.push(`          if (${dy} > _hh) { ${dy} = ${dy} - control.fieldH; } else if (${dy} < -_hh) { ${dy} = ${dy} + control.fieldH; }`);
-  ctx.lines.push(`        }`);
-  ctx.lines.push(`        ${cur} = sqrt(${dx} * ${dx} + ${dy} * ${dy});`);
+  if (ctx.is3d) {
+    const dz = fresh(ctx, 'febDz');
+    ctx.lines.push(`        var ${dz}: f32 = ${f32At(ctx, 'z', `u32(${partner})`)} - ${f32At(ctx, 'z', 'idx')};`);
+    ctx.lines.push(`        if (control.fieldTorus != 0u) {`);
+    ctx.lines.push(`          let _hw = control.fieldW * 0.5; let _hh = control.fieldH * 0.5; let _hd = control.fieldD * 0.5;`);
+    ctx.lines.push(`          if (${dx} > _hw) { ${dx} = ${dx} - control.fieldW; } else if (${dx} < -_hw) { ${dx} = ${dx} + control.fieldW; }`);
+    ctx.lines.push(`          if (${dy} > _hh) { ${dy} = ${dy} - control.fieldH; } else if (${dy} < -_hh) { ${dy} = ${dy} + control.fieldH; }`);
+    ctx.lines.push(`          if (${dz} > _hd) { ${dz} = ${dz} - control.fieldD; } else if (${dz} < -_hd) { ${dz} = ${dz} + control.fieldD; }`);
+    ctx.lines.push(`        }`);
+    ctx.lines.push(`        ${cur} = sqrt(${dx} * ${dx} + ${dy} * ${dy} + ${dz} * ${dz});`);
+  } else {
+    ctx.lines.push(`        if (control.fieldTorus != 0u) {`);
+    ctx.lines.push(`          let _hw = control.fieldW * 0.5; let _hh = control.fieldH * 0.5;`);
+    ctx.lines.push(`          if (${dx} > _hw) { ${dx} = ${dx} - control.fieldW; } else if (${dx} < -_hw) { ${dx} = ${dx} + control.fieldW; }`);
+    ctx.lines.push(`          if (${dy} > _hh) { ${dy} = ${dy} - control.fieldH; } else if (${dy} < -_hh) { ${dy} = ${dy} + control.fieldH; }`);
+    ctx.lines.push(`        }`);
+    ctx.lines.push(`        ${cur} = sqrt(${dx} * ${dx} + ${dy} * ${dy});`);
+  }
   ctx.lines.push(`      }`);
   ctx.forEachBondStack.push({ nodeId: node.id, partner, rest, cur, index: k });
   clearVolatileCache(ctx);
@@ -2319,23 +2424,30 @@ function emitSwitch(ctx: AgentWgpuCtx, node: GraphNode): void {
       caseConds.push(`(${castTo(valueRef!, wt)} ${op} ${castTo(caseVal, wt)})`);
     }
   }
+  // Branch-entry volatile clears — a volatile value cached from one case would
+  // leave a sibling case referencing a block-scoped `let` from the first case
+  // (WGSL unresolved-name compile error). Mirrors the conditional emit.
   if (firstMatchOnly) {
     const open = (ci: number): void => {
-      if (ci >= caseCount) { if (hasDefault) compileFlowChain(ctx, node.id, 'default'); return; }
+      if (ci >= caseCount) { if (hasDefault) { clearVolatileCache(ctx); compileFlowChain(ctx, node.id, 'default'); } return; }
       ctx.lines.push(`  if (${caseConds[ci]}) {`);
+      clearVolatileCache(ctx);
       compileFlowChain(ctx, node.id, `case_${ci}`);
       ctx.lines.push(`  } else {`);
       open(ci + 1);
       ctx.lines.push(`  }`);
     };
     open(0);
+    clearVolatileCache(ctx);
   } else {
     for (let ci = 0; ci < caseCount; ci++) {
       ctx.lines.push(`  if (${caseConds[ci]}) {`);
+      clearVolatileCache(ctx);
       compileFlowChain(ctx, node.id, `case_${ci}`);
       ctx.lines.push(`  }`);
     }
-    if (hasDefault) compileFlowChain(ctx, node.id, 'default');
+    if (hasDefault) { clearVolatileCache(ctx); compileFlowChain(ctx, node.id, 'default'); }
+    clearVolatileCache(ctx);
   }
 }
 
@@ -2436,6 +2548,8 @@ function preEmitAgentValues(ctx: AgentWgpuCtx, rootId: string): void {
     if (!node) return false;
     if (AGENT_VALUE_NO_HOIST.has(node.data.nodeType)) { hoistable.set(id, false); return false; }
     if (ctx.volatileNodes.has(id)) { hoistable.set(id, false); return false; }
+    // Hazard-pinned reads emit at their LCA flow position, never at function-top.
+    if (ctx.hazardPinned.has(id)) { hoistable.set(id, false); return false; }
     inProgress.add(id);
     let ok = true;
     for (const [key, src] of inputToSource) {
@@ -2507,9 +2621,12 @@ function preEmitAgentValues(ctx: AgentWgpuCtx, rootId: string): void {
   walk(rootId);
 }
 
-function computeVolatile(ctx: AgentWgpuCtx): void {
+function computeVolatile(ctx: AgentWgpuCtx, extraSeeds?: Set<string>): void {
   const { nodeMap, inputToSource } = ctx.adj;
-  const volatileSet = new Set<string>();
+  // extraSeeds = the async read-after-write hazard reads (shared analyzer) —
+  // pinned to re-emit at use so a "Set Attribute → read later in flow" shape
+  // reads post-write like JS/WASM instead of a hoisted stale snapshot.
+  const volatileSet = new Set<string>(extraSeeds ?? []);
   for (const [, node] of nodeMap) if (node.data.nodeType === 'forEachInArray' || node.data.nodeType === 'forEachBond') volatileSet.add(node.id);
   let changed = true;
   while (changed) {
@@ -2629,18 +2746,14 @@ export function isAgentGraphWebGPUSupported(model: CAModel | undefined | null): 
       if (op === 'toggle' || op === 'next' || op === 'previous') return false;
     }
     if (t === 'statement') {
-      // `operation`, not `operator` (matches emitCompare + StatementNode). The
-      // wrong key meant the between/notBetween reject never fired → a between
-      // Compare reached emitCompare (no between path) and emitted ==.
-      const op = cfg['operation'] as string | undefined;
-      if (op && /between/i.test(op)) return false;
+      // between/notBetween now EMIT (emitCompare's between path) — no reject.
+      // Non-numerical compareTypes (bool/tag compare small exact ints — fine in
+      // f32; neighborIndex has no agent sources) also emit via the same ==/!=.
       const compareType = cfg['compareType'] as string | undefined;
-      if (compareType && compareType !== 'numerical') return false;
+      if (compareType === 'neighborIndex') return false;   // lattice-only value type
     }
-    if (t === 'getRandom') {
-      const rt = (cfg['randomType'] as string) || (cfg['mode'] as string);
-      if (rt === 'options') return false;
-    }
+    // getRandom options mode now EMITS (multi-scalar if/else chain or a single
+    // array-producer pick) — no reject.
     // setCellLooks glyph mode: the AGENT render path (drawAgentsOverlay) draws
     // filled circles only — NO glyph overlay on ANY target. On JS/WASM a glyph
     // setCellLooks writes the per-AGENT glyph buffer, which for agents is the
@@ -2873,6 +2986,8 @@ export function compileAgentGraphWebGPU(
     valueCache: new Map<string, ValueRef>(),
     arrayCache: new Map<string, AgentArrayRef>(),
     volatileNodes: new Set<string>(),
+    hazardPinned: new Set<string>(),
+    hazardEmitBefore: new Map<string, string[]>(),
     arrayScratchSlot: new Map<string, { slot: number; elemType: WgslType }>(),
     forEachStack: [],
     forEachBondStack: [],
@@ -2898,6 +3013,55 @@ export function compileAgentGraphWebGPU(
   }
 
   computeVolatile(ctx);
+
+  // Async read-after-write hazards (shared analyzer, SAME eligibility as the
+  // JS/WASM agent compilers): the pure-scalar hazard cone is excluded from the
+  // function-top hoist and emitted ONCE immediately before the flow node that
+  // is the LCA of its uses (computeVolatileHoist — the same positions the JS
+  // volatileHoist uses). Nodes already covered by the volatile re-emit or the
+  // NO_HOIST at-use mechanisms keep those.
+  {
+    const hazardSeeds = computeAsyncReadWriteHazards({
+      nodeMap: adj.nodeMap,
+      inputToSource: adj.inputToSource,
+      inputToSources: adj.inputToSources,
+      flowOutputToTargets: adj.flowOutputToTargets,
+      rootNodeId: behaviourNode.id,
+      rootFlowPortId: 'do',
+      isAsync: model.centerBased?.agentUpdateMode !== 'sync',
+    });
+    if (hazardSeeds.size > 0) {
+      const consumers = new Map<string, string[]>();
+      const addC = (src: string, tgt: string) => { const a = consumers.get(src); if (a) a.push(tgt); else consumers.set(src, [tgt]); };
+      for (const [k, src] of adj.inputToSource) { const t = k.split(':')[0]; if (t) addC(src.nodeId, t); }
+      for (const [k, srcs] of adj.inputToSources) { const t = k.split(':')[0]; if (t) for (const s of srcs) addC(s.nodeId, t); }
+      const cone = new Set<string>();
+      const stack = [...hazardSeeds];
+      while (stack.length) {
+        const id = stack.pop()!;
+        if (cone.has(id)) continue;
+        cone.add(id);
+        for (const c of consumers.get(id) ?? []) stack.push(c);
+      }
+      for (const id of [...cone]) {
+        const n = adj.nodeMap.get(id);
+        if (!n) { cone.delete(id); continue; }
+        if (ctx.volatileNodes.has(id) || AGENT_VALUE_NO_HOIST.has(n.data.nodeType)) { cone.delete(id); continue; }
+        const def = getNodeDef(n.data.nodeType);
+        if (!def || def.ports.some(p => p.category === 'flow')) cone.delete(id);
+      }
+      ctx.hazardPinned = cone;
+      ctx.hazardEmitBefore = computeVolatileHoist({
+        nodeMap: adj.nodeMap,
+        inputToSource: adj.inputToSource,
+        inputToSources: adj.inputToSources,
+        flowOutputToTargets: adj.flowOutputToTargets,
+        rootNodeId: behaviourNode.id,
+        rootFlowPortId: 'do',
+        volatile: cone,
+      }).emitBefore;
+    }
+  }
 
   // --- emit the per-agent body ---
   try {

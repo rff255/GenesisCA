@@ -14,7 +14,7 @@ import type { NodeTypeDef } from '../types';
 export const FormBondNode: NodeTypeDef = {
   type: 'formBond',
   label: 'Form Bond',
-  description: 'Request a bond between this agent and a target agent (applied after the step).',
+  description: 'Request a bond between this agent and a target agent (applied after the step). One request per agent per step — a later call this step replaces an earlier one (use Auto-Bond for bulk bonding).',
   category: 'output',
   color: '#00838f',
   requirements: { bondGraph: true },

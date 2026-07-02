@@ -386,6 +386,44 @@ const ATTR_TYPE_MAP: Record<string, 'uint8' | 'int32' | 'float64'> = {
   neighborIndex: 'int32',
 };
 
+/** Bond-Graph Agents — base64-encode the worker's AgentStatePayload (a numbers +
+ *  ArrayBuffers bag) into the schema's SerializedAgentState. Field-name-generic:
+ *  every ArrayBuffer property lands in `buffers` under its payload name, so new
+ *  engine fields (velocity, sprites, z, …) round-trip without a schema change. */
+export function serializeAgentState(payload: Record<string, unknown>): import('./types').SerializedAgentState {
+  const buffers: Record<string, string> = {};
+  const attrs: Record<string, { kind: string; data: string }> = {};
+  for (const [k, v] of Object.entries(payload)) {
+    if (v instanceof ArrayBuffer) buffers[k] = arrayBufferToBase64(v);
+  }
+  const pAttrs = payload.attrs as Record<string, { kind: string; buffer: ArrayBuffer }> | undefined;
+  if (pAttrs) {
+    for (const [id, e] of Object.entries(pAttrs)) attrs[id] = { kind: e.kind, data: arrayBufferToBase64(e.buffer) };
+  }
+  return {
+    highWater: Number(payload.highWater) || 0,
+    liveCount: Number(payload.liveCount) || 0,
+    freeTop: Number(payload.freeTop) || 0,
+    maxBonds: Number(payload.maxBonds) || 0,
+    buffers,
+    attrs,
+  };
+}
+
+/** Decode a SerializedAgentState back into the ArrayBuffer-bag shape the worker's
+ *  `loadState` handler feeds to `deserializeAgentStore` (which validates the
+ *  maxBonds stride + capacity LOUDLY). */
+export function deserializeAgentState(s: import('./types').SerializedAgentState): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    highWater: s.highWater, liveCount: s.liveCount, freeTop: s.freeTop, maxBonds: s.maxBonds,
+  };
+  for (const [k, b64] of Object.entries(s.buffers ?? {})) out[k] = base64ToArrayBuffer(b64);
+  const attrs: Record<string, { kind: string; buffer: ArrayBuffer }> = {};
+  for (const [id, e] of Object.entries(s.attrs ?? {})) attrs[id] = { kind: e.kind, buffer: base64ToArrayBuffer(e.data) };
+  out.attrs = attrs;
+  return out;
+}
+
 export function serializeSimState(
   workerState: {
     generation: number;
@@ -399,9 +437,13 @@ export function serializeSimState(
     linkedAccumulators: Record<string, number | Record<string, number>>;
     colors: ArrayBuffer;
     orderArray?: ArrayBuffer;
+    /** Bond-Graph Agents: the worker's AgentStatePayload (present for agent models). */
+    agents?: Record<string, unknown>;
   },
   uiSettings: {
     activeViewer: string;
+    /** The active AGENT viewer (two-layer viewer bar). */
+    activeAgentViewer?: string;
     brushColor: string;
     brushW: number;
     brushH: number;
@@ -447,10 +489,17 @@ export function serializeSimState(
     if (workerState.orderArray) {
       serialized.orderArray = arrayBufferToBase64(workerState.orderArray);
     }
+    // Bond-Graph Agents: the agent population rides the grid block (it IS grid
+    // state — "the board" of an agent model). Previously silently dropped: a
+    // hand-seeded agent configuration vanished on save/load.
+    if (workerState.agents) {
+      serialized.agents = serializeAgentState(workerState.agents);
+    }
   }
   if (wantControls) {
     serialized.modelAttrs = workerState.modelAttrs;
     serialized.activeViewer = uiSettings.activeViewer;
+    if (uiSettings.activeAgentViewer !== undefined) serialized.activeAgentViewer = uiSettings.activeAgentViewer;
     serialized.brushColor = uiSettings.brushColor;
     serialized.brushW = uiSettings.brushW;
     serialized.brushH = uiSettings.brushH;

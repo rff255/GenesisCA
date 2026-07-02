@@ -402,7 +402,9 @@ export function NeighborhoodsPanelContent({ mode = 'list' }: PanelContentProps =
           </div>
 
           {is3d && (
-            <Neighborhood3DEditor selected={selected} updateNeighborhood={updateNeighborhood} />
+            /* key: the editor seeds its form state from `selected` at mount only —
+               remount on selection change so a stale form can't overwrite B with A's spec. */
+            <Neighborhood3DEditor key={selected.id} selected={selected} updateNeighborhood={updateNeighborhood} />
           )}
 
           {!is3d && (

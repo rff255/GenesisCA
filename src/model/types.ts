@@ -433,6 +433,21 @@ export interface SerializedTypedArray {
   data: string;
 }
 
+/** Bond-Graph Agents — the base64-serialized agent runtime state. Mirrors the
+ *  worker's AgentStatePayload structurally: `buffers` holds every ArrayBuffer
+ *  field keyed by its payload name (x, y, vx, vy, radius, …, freeList, the bond
+ *  store arrays, colors, sprite state; z/vz only for 3D saves), so new payload
+ *  fields round-trip without a schema change. */
+export interface SerializedAgentState {
+  highWater: number;
+  liveCount: number;
+  freeTop: number;
+  /** Bond stride at save time — the loader rejects a mismatch LOUDLY. */
+  maxBonds: number;
+  buffers: Record<string, string>;
+  attrs: Record<string, { kind: string; data: string }>;
+}
+
 /** Complete simulation state snapshot for .gcastate files.
  *  All fields are optional so the Save Project dialog can include just the grid
  *  state, just the simulator UI controls, both, or neither. */
@@ -453,9 +468,16 @@ export interface SimulationState {
   linkedAccumulators?: Record<string, number | Record<string, number>>;
   colors?: string;
   orderArray?: string;
+  /** Bond-Graph Agents: the agent population (positions / velocities / attrs /
+   *  bonds / sprites), base64-encoded from the worker's AgentStatePayload.
+   *  Absent on pre-agents saves and non-agent models — the loader then re-seeds
+   *  the agent layer to its starting configuration. */
+  agents?: SerializedAgentState;
   // Simulator controls (runtime model-attribute values + UI)
   modelAttrs?: Record<string, number>;
   activeViewer?: string;
+  /** The active AGENT viewer (the two-layer viewer bar's Agents row). */
+  activeAgentViewer?: string;
   brushColor?: string;
   brushW?: number;
   brushH?: number;

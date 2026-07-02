@@ -4,11 +4,12 @@ This document catalogues every node in the GenesisCA Visual Programming Language
 describes the port type system, and flags redundancies or gaps. It is a working reference
 to inform future consolidation — it does **not** describe any committed refactoring.
 
-**Scope:** 115 node types across 7 categories (event, flow, data, logic, aggregation,
-output, color), plus 2 hidden boundary nodes (`macroInput` / `macroOutput`). Indicator
+**Scope:** 118 registry node types across 7 categories (event, flow, data, logic, aggregation,
+output, color) — 3 hidden from the Add Node menu (`macro` / `macroInput` / `macroOutput`),
+leaving **115 selectable**. Indicator
 nodes live within the `data` (readers) and `output` (writers) categories rather than a
 category of their own. The variegated-cells, local-variable, and Bond-Graph-Agent nodes
-appear in the editor only when their respective model feature is enabled (the 40 agent
+appear in the editor only when their respective model feature is enabled (the 42 agent
 nodes — §3.8 — only in a Bond-Graph-Agents model, and only on its Agents sub-tab).
 
 **Composite value types (`vector` / `color`):** Make Vector / Break Vector / Vector
@@ -77,7 +78,7 @@ a type name (see `typeDisplayName` in `src/model/typeLabels.ts`).
 | `float` | Decimal | decimal (`Float64Array` for attrs) | yes | yes | `number` |
 | `tag` | Tag | index into a named-values list (`Int32Array`) | yes | yes | `tag` (dropdown) |
 | `neighborIndex` | NeighborIndex | slot index into a neighborhood (`Int32Array`); typed-distinct from `integer` to catch the silent index-kind hazards in §7 | yes | yes | `number` |
-| `color-r/g/b` | Color | 3 integer channels — emitted as separate ports (no single "color" type) | yes | — | `color` (on triples) |
+| `color-r/g/b` | Color | 3 integer channels — emitted as separate ports (a composite `color` port type also exists — see below) | yes | — | `color` (on triples) |
 | `any` | — | type-agnostic; most ports use this | yes | depends on `isArray` | varies |
 
 **Notable non-obvious rules**
@@ -95,8 +96,11 @@ a type name (see `typeDisplayName` in `src/model/typeLabels.ts`).
 - A port with `isArray: true` expects an array; some aggregation inputs (`aggregate.Values`)
   additionally accept **multiple simultaneous connections** on the same port, producing
   an array from the individual scalars upstream.
-- Colors are **not a first-class type**. Every "color" is always transported as three
-  separate `integer` ports (`r`, `g`, `b`). See §5 for discussion.
+- Per-channel color transport (three separate `integer` ports `r`, `g`, `b`) remains the
+  runtime norm, but composite **`vector` / `color` PORT types** now exist as editor sugar
+  (Make/Break Vector, Make/Break Color, Vector Op) — lowered to scalars by
+  `expandComposites` before any target compiles. See the composite-types note in §1 and
+  the nodes in §3.4 / §3.7.
 - Unconnected input ports fall back to an inline widget value when one is defined; if no
   inline widget is defined and the port is unconnected, the compiler uses a type-
   appropriate default (`0`, `false`, or an empty array).
@@ -246,11 +250,15 @@ exists purely to keep graphs readable without Sequence nodes. See
 > in `LATTICE_ONLY_TYPES` and hidden on the Agents tab.
 > Universal nodes (arithmetic, conditionals, `getCellAttribute`/`setAttribute` over the
 > shared attributes — displayed as **Get/Set/Update Self Attribute** on the Agents tab —
-> `getRandom`, `setCellLooks`, …) appear in **both** graphs. The agent
-> nodes are **JS-reference-only for v1** — a Bond-Graph-Agents model is force-restricted to
-> the JavaScript (Debug / Reference) compile target (no WASM/WebGPU agent emit yet), and is
-> 2D-only (the `Z` outputs on Behaviour Step / Get Self Position are hidden until 3D agents
-> ship). The agent loop variable is `idx` (Decision D-IDX), so attribute reads/writes land
+> `getRandom`, `setCellLooks`, …) appear in **both** graphs. The agent behaviour loop has its
+> own **Compile Target radio (JS / WebAssembly / WebGPU)**, independent of the grid's: the
+> **WASM** agent target covers the FULL agent catalogue with JS bit-parity (the only clamp is
+> a getNearbyAgents scratch-slot budget); the **WebGPU** agent target covers the full catalogue
+> minus the genuine fundamentals (`aggregate`/`groupOperator` median + uniform random,
+> `updateIndicator` toggle/next/previous, and an array-producer slot budget). **3D agents
+> simulate on all three targets** (the `Z` ports appear in a 3D model); 3D agent RENDERING is
+> instanced spheres + bond tubes in the WebGL viewport.
+> The agent loop variable is `idx` (Decision D-IDX), so attribute reads/writes land
 > on the agent Structure-of-Arrays with no node change. The category column below is the
 > node's real `category` (so it colour-codes like its lattice siblings).
 
@@ -280,7 +288,7 @@ exists purely to keep graphs readable without Sequence nodes. See
 | 89 | `getAgentRadius` | Get Agent Radius | `data` | A specific agent's radius by id — for size-aware neighbour interactions. | `I: Agent` (int) / `O: Radius` (float) | — |
 | 90 | `getVelocity` | Get Velocity | `data` | An agent's velocity `(Vx, Vy)` — self if the Agent input is empty, else a neighbour's (average them for boids alignment). Meaningful when momentum > 0. | `I: Agent` (int, optional) / `O: Vx` `O: Vy` (float) | Multi-output |
 | 91 | `getCurvature` | Get Curvature | `data` | Local membrane curvature of a bonded agent: the magnitude of the mean unit-vector to its bonded partners, in [0, 1] (~0 = flat/interior, →1 = convex edge/tip; 0 for < 2 bonds). | `O: Curvature` (float) | Drives curvature-dependent behaviour (edge cells differentiating differently, tip growth) |
-| 92 | `applyForce` | Apply Force | `output` | Add a force vector to the agent this step — the GRAPH authors the physics. The engine integrates the sum of all Apply Force contributions plus its soft-sphere + bond springs (unless Custom forces only). Build flocking, chemotaxis, propulsion. | `I: DO` `I: Force` (vector, in `vectorInput` mode) OR `I: Force X` `I: Force Y` (float, inline); 3D adds `I: Force Z` / `O: NEXT` (flow) | With momentum > 0 it changes velocity (inertia); with 0 it directly displaces (overdamped). NOT async-only. `Force Z` hidden in 2D. The optional **Vector input** mode takes a force vector straight from Vector Op (`expandComposites` lowers it to fx/fy/fz, so it runs on all agent targets) |
+| 92 | `applyForce` | Apply Force | `output` | Add a force vector to the agent this step — the GRAPH authors the physics. The engine integrates the sum of all Apply Force contributions plus its soft-sphere + bond springs (the engine soft-sphere applies only when the **Use bonding physics** toggle is ON). Build flocking, chemotaxis, propulsion. | `I: DO` `I: Force` (vector, in `vectorInput` mode) OR `I: Force X` `I: Force Y` (float, inline); 3D adds `I: Force Z` / `O: NEXT` (flow) | With momentum > 0 it changes velocity (inertia); with 0 it directly displaces (overdamped). NOT async-only. `Force Z` hidden in 2D. The optional **Vector input** mode takes a force vector straight from Vector Op (`expandComposites` lowers it to fx/fy/fz, so it runs on all agent targets) |
 | 93 | `setAgentAttribute` | Set Agent Attribute | `output` | Write an attribute on ANOTHER agent by id (the agent analogue of Set Neighbor Attribute By Index) — signal a neighbour. | `I: DO` `I: Agent` (int) `I: Value` (float, inline) / `O: NEXT` (flow) | Requires `attributeId`. Immediate single-buffer (async-style) write — use commutative patterns when order matters; id range-guarded |
 | 95 | `getBondedAgents` | Get Bonded Agents | `data` | This agent's bonded partners as an id array — the data sibling of For Each Bond. Filter / join / aggregate them exactly like Get Nearby Agents. | `O: Agents` (int **array**) | Per-agent (never hoisted). Reads the ragged bond store, keeping live partners only |
 | 96 | `filterAgents` | Filter Agents | `aggregation` | Keep the agents in an id array whose AGENT attribute passes a comparison — the agent analogue of Filter Neighbors over plain ids (no NeighborIndex codec). | `I: Agents` (int **array**) `I: Compare` (any, inline) / `O: Filtered` (int **array**), `O: Count` (int) | Multi-output. Requires `attributeId` + `operation` (==, !=, >, <, >=, <=); reads the agent SoA at `r_<attr>[id]` |
@@ -296,8 +304,8 @@ exists purely to keep graphs readable without Sequence nodes. See
 | 106 | `setAgentPosition` | Set Agent Position | `output` | Set an agent's position by id — a spawn helper for a staged Create Agent handle (also works on a live agent). | `I: DO` `I: Agent` (int) `I: X` `I: Y` (float, inline); 3D adds `I: Z` / `O: NEXT` (flow) | In the Init Event the guard is range-only (a staged agent is `alive=0`); elsewhere it requires a live agent. `Z` hidden in 2D |
 | 107 | `setAgentRadius` | Set Agent Radius | `output` | Set an agent's radius (and growth target) by id — a spawn helper for a staged Create Agent handle (also works on a live agent). | `I: DO` `I: Agent` (int) `I: Radius` (float, inline) / `O: NEXT` (flow) | Writes both `_agentRadius` and `_agentTargetRadius` so the growth ramp doesn't drag it away |
 | 108 | `getSelfHandle` | Get Self Handle | `data` | The CURRENT agent's own handle (its id = the loop `idx`) — pass it to the by-id nodes (Get/Set Agent Attribute, Get Agent Position/Offset/Radius, Form/Break Bond) so a neighbour can reference back to me, or to compare a Get Nearby Agents id against self. | `O: Handle` (int) | Emits `idx`. Runs on all three agent targets (JS / WASM / WebGPU) |
-| 109 | `agentOutputMapping` | Agent Output Mapping (A→C) | `event` | The agent analogue of `outputMapping` — roots a per-agent colour / exhibition pass over an entry in `model.agentMappings` (Standalone graph). Runs after behaviour/division for the active agent viewer; ends in Set Cell Looks (colour) and/or Set Agent Sprite. | `O: DO` (flow) | Requires an agent `mappingId`. A Linked agent mapping synthesizes one automatically; a user root for a Linked id runs after the auto background (override-after-background). The colour pass is JS on every agent target |
-| 110 | `setAgentSprite` | Set Agent Sprite | `color` | Control the agent's sprite exhibition: independently-tickable facets — **Change sprite** (`spriteId`), **Set frame** (the `Frame` input — jump/reset), **Set speed** (the `Speed` input — frames per step, **negative = reverse**, 0 = hold). Tick only what you want to change. The per-agent state is persistent; the engine advances `frame += speed` each step; the render floors + wraps (loop) / clamps (once). | `I: DO` `I: Frame` (int, when Set frame) `I: Speed` (float, when Set speed) / `O: NEXT` (flow) | Writes the JS-engine display buffers `spriteIds`/`spriteFrames`/`spriteSpeeds` → no WASM/WebGPU emit (in an Output Mapping graph it's all-target-clean; in the Behaviour graph it clamps that behaviour to JS). Manage sprites in the Mappings panel → Sprites. 2D-billboard render |
+| 114 | `agentOutputMapping` | Agent Output Mapping (A→C) | `event` | The agent analogue of `outputMapping` — roots a per-agent colour / exhibition pass over an entry in `model.agentMappings` (Standalone graph). Runs after behaviour/division for the active agent viewer; ends in Set Cell Looks (colour) and/or Set Agent Sprite. | `O: DO` (flow) | Requires an agent `mappingId`. A Linked agent mapping synthesizes one automatically; a user root for a Linked id runs after the auto background (override-after-background). The colour pass is JS on every agent target |
+| 115 | `setAgentSprite` | Set Agent Sprite | `color` | Control the agent's sprite exhibition: independently-tickable facets — **Change sprite** (`spriteId`), **Set frame** (the `Frame` input — jump/reset), **Set speed** (the `Speed` input — frames per step, **negative = reverse**, 0 = hold). Tick only what you want to change. The per-agent state is persistent; the engine advances `frame += speed` each step; the render floors + wraps (loop) / clamps (once). | `I: DO` `I: Frame` (int, when Set frame) `I: Speed` (float, when Set speed) / `O: NEXT` (flow) | Writes the JS-engine display buffers `spriteIds`/`spriteFrames`/`spriteSpeeds` → no WASM/WebGPU emit (in an Output Mapping graph it's all-target-clean; in the Behaviour graph it clamps that behaviour to JS). Manage sprites in the Mappings panel → Sprites. 2D-billboard render |
 
 ### Hidden / auto-generated
 
@@ -427,9 +435,10 @@ graph LR
 
 **Observations**
 
-- No first-class "color" port type. Every color transit requires three edges
-  (or three inline widget values). This makes simple flows like "paint cell the
-  brush color" verbose.
+- Per-channel color transit (three edges or three inline widget values) is still the
+  norm for the color-consuming nodes, though the composite `color` port type
+  (Make/Break Color — editor sugar lowered to scalars) now bundles R/G/B/A onto one
+  wire where wired through.
 - Color pickers are re-implemented in four nodes: `getColorConstant`, `colorScale`,
   `categoricalColor`, and `setCellLooks` (on its R/G/B inline widgets).
 - `getModelAttribute` becomes 3-port when the attribute is color-typed — a type-aware
@@ -517,9 +526,10 @@ These would reduce the palette's cognitive load:
   `operation ∈ {assign, +, -, max, min, toggle, next, prev}`. Replaces nodes 54-57
   (4 → 1). Async-only scopes would display a note in the node body when the model's
   `updateMode` is sync.
-- **First-class `color` port type**: add a `color` data type carried as a single value
-  (RGBA packed into an int, or an object). Adjust color-consuming nodes to take a single
-  `Color` input. Current R/G/B ports still available for fine control when needed.
+- **First-class `color` port type** — **DONE in composite-type form**: the `color`
+  port type shipped as editor sugar (Make Color / Break Color bundle R/G/B/A onto one
+  wire; `expandComposites` lowers it to scalars before any target compiles, so it runs
+  on all three targets). Current R/G/B ports remain available for fine control.
 - **Array namespace**: merge `groupCounting`, `groupStatement`, `groupOperator`,
   `aggregate`, `filterNeighbors`, `joinNeighbors` into a smaller `arrayReduce` +
   `arrayFilter` + `arraySetOp` trio. Each with an operation selector covering the
@@ -551,11 +561,13 @@ filtered or reordered (since the emitted `Index` output is a list-position, not 
 coord-idx).
 
 **The fix.** Wave A introduces `neighborIndex` as a distinct port type, and Wave A.6
-makes it neighborhood-agnostic. The runtime representation is **packed `(dr, dc)`
+makes it neighborhood-agnostic. The 2D runtime representation is **packed `(dr, dc)`
 i32**: dr in the upper 16 bits (sign-extended), dc in the lower 16 bits. So
 `pack(dr, dc) = ((dr & 0xFFFF) << 16) | (dc & 0xFFFF)`, and decode is
 `dr = ni >> 16; dc = (ni << 16) >> 16`. The "no neighbor" sentinel is
-`INVALID_NI = 0x80000000` (i32 min).
+`INVALID_NI = 0x80000000` (i32 min). In a **3D model** the codec instead packs three
+sign-extended **10-bit** fields `(dr, dc, dl)` (±511 per axis) — see the 3D Grid CA
+note at the top of §3.3.
 
 This means an NI carries its own offset inline — there is no shared "which neighborhood
 am I a slot of?" context to track. Wiring an NI from one source into a different

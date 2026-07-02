@@ -27,7 +27,7 @@ import type { PortDef, NodeTypeDef } from './types';
 import { MODEL_ELEMENT_DRAG_MIME, RELATED_NODES, payloadElementId, relatedEntriesForPayload, computeCompatibleHandlesForDrag, findNearestCompatibleHandle } from './modelElementDrag';
 import type { ModelElementDragPayload } from './modelElementDrag';
 import { getEffectivePorts } from './effectivePorts';
-import type { GraphNode, GraphEdge } from '../../model/types';
+import type { GraphNode, GraphEdge, CAModel } from '../../model/types';
 import type { MacroPort } from '../../model/types';
 import { computeAlignmentSnap, sameGuides } from './alignmentSnap';
 import type { AlignGuides, AlignTarget } from './alignmentSnap';
@@ -185,15 +185,30 @@ interface ResolvedDropCandidate {
   matchPort?: PortDef;
 }
 
+/** One-per-graph event roots. The compilers take the FIRST node of each of
+ *  these types (`nodes.find(...)`), so a duplicate would be silently dead —
+ *  block creating/pasting a second one. step/initEvent live on the Cells graph;
+ *  behaviourStep/divisionEvent/agentInit on the Agents graph — the sub-tab swap
+ *  means nodesRef only ever holds ONE graph, so a plain presence check is
+ *  correctly per-graph. */
+const SINGLETON_NODE_TYPES = new Set(['step', 'initEvent', 'behaviourStep', 'divisionEvent', 'agentInit']);
+
 function resolveDropCandidates(
   payload: ModelElementDragPayload,
   snap: ConnectionOrigin | undefined,
+  model?: CAModel,
 ): ResolvedDropCandidate[] {
   const entries = relatedEntriesForPayload(payload);
   const resolved: ResolvedDropCandidate[] = [];
   for (const entry of entries) {
     const def = getNodeDef(entry.nodeType);
     if (!def) continue;
+    // Same availability gate as the quick-add / connection-drop menus: don't
+    // offer lattice-only (or async-only, capability-gated) nodes the current
+    // model / active sub-tab can't run — e.g. dragging an agent attribute onto
+    // the Agents canvas must NOT offer Get Neighbors Attribute (a lattice node
+    // that badge-fails and breaks the agent compile).
+    if (model && !isNodeAvailable(def, model)) continue;
     if (snap) {
       const newCfg: Record<string, unknown> = {
         ...def.defaultConfig,
@@ -1842,19 +1857,13 @@ export function GraphEditorInner() {
     ): string | null => {
       const def = getNodeDef(nodeType);
       if (!def) return null;
-      // Singleton: only one Step node allowed
-      if (nodeType === 'step') {
-        const hasStep = nodesRef.current.some(
-          n => (n.data as Record<string, unknown>)?.nodeType === 'step',
+      // Singleton event roots — only one per graph (the compiler takes the first;
+      // a duplicate Behaviour Step would be silently dead).
+      if (SINGLETON_NODE_TYPES.has(nodeType)) {
+        const dup = nodesRef.current.some(
+          n => (n.data as Record<string, unknown>)?.nodeType === nodeType,
         );
-        if (hasStep) return null;
-      }
-      // Singleton: only one Init Event node allowed (mirrors Step semantics).
-      if (nodeType === 'initEvent') {
-        const hasInit = nodesRef.current.some(
-          n => (n.data as Record<string, unknown>)?.nodeType === 'initEvent',
-        );
-        if (hasInit) return null;
+        if (dup) return null;
       }
       pushCurrentSnapshot();
       const newId = generateNodeId(nodesRef.current);
@@ -1963,17 +1972,11 @@ export function GraphEditorInner() {
     ): string | null => {
       const def = getNodeDef(nodeType);
       if (!def) return null;
-      if (nodeType === 'step') {
-        const hasStep = nodesRef.current.some(
-          n => (n.data as Record<string, unknown>)?.nodeType === 'step',
+      if (SINGLETON_NODE_TYPES.has(nodeType)) {
+        const dup = nodesRef.current.some(
+          n => (n.data as Record<string, unknown>)?.nodeType === nodeType,
         );
-        if (hasStep) return null;
-      }
-      if (nodeType === 'initEvent') {
-        const hasInit = nodesRef.current.some(
-          n => (n.data as Record<string, unknown>)?.nodeType === 'initEvent',
-        );
-        if (hasInit) return null;
+        if (dup) return null;
       }
       // Resolved config drives effective ports for nodes whose port set depends
       // on config (e.g., GetModelAttribute r/g/b vs value via isColorAttr).
@@ -2347,7 +2350,7 @@ export function GraphEditorInner() {
       // one related-node candidate would survive the compatibility filter,
       // skip the menu entirely and create the node directly — the menu would
       // just be a single-button click anyway.
-      const resolved = resolveDropCandidates(payload, snapToPort);
+      const resolved = resolveDropCandidates(payload, snapToPort, model);
       if (snapToPort && resolved.length === 1) {
         const { entry, def, matchPort } = resolved[0]!;
         const cfg: Record<string, string | number | boolean> = {
@@ -2569,26 +2572,20 @@ export function GraphEditorInner() {
     // sets are disjoint, so a lattice node pasted into the Agents graph (or vice
     // versa) would carry a validation badge and fail to compile.
     if (clipboardGraphKind !== activeGraphRef.current) return;
-    // Singleton: filter out Step / Init Event nodes if one already exists in the graph
-    const hasStepInGraph = nodesRef.current.some(
-      n => (n.data as Record<string, unknown>)?.nodeType === 'step',
-    );
-    if (hasStepInGraph) {
-      clipboard = {
-        nodes: clipboard.nodes.filter(n => (n.data as Record<string, unknown>)?.nodeType !== 'step'),
-        edges: clipboard.edges,
-      };
-      if (clipboard.nodes.length === 0) return;
-    }
-    const hasInitInGraph = nodesRef.current.some(
-      n => (n.data as Record<string, unknown>)?.nodeType === 'initEvent',
-    );
-    if (hasInitInGraph) {
-      clipboard = {
-        nodes: clipboard.nodes.filter(n => (n.data as Record<string, unknown>)?.nodeType !== 'initEvent'),
-        edges: clipboard.edges,
-      };
-      if (clipboard.nodes.length === 0) return;
+    // Singleton event roots — drop any clipboard copy of one already present in
+    // the current graph (step/initEvent on Cells; behaviourStep/divisionEvent/
+    // agentInit on Agents).
+    for (const singleton of SINGLETON_NODE_TYPES) {
+      const present = nodesRef.current.some(
+        n => (n.data as Record<string, unknown>)?.nodeType === singleton,
+      );
+      if (present) {
+        clipboard = {
+          nodes: clipboard.nodes.filter(n => (n.data as Record<string, unknown>)?.nodeType !== singleton),
+          edges: clipboard.edges,
+        };
+        if (clipboard.nodes.length === 0) return;
+      }
     }
     pushCurrentSnapshot();
 
@@ -3263,12 +3260,14 @@ export function GraphEditorInner() {
     }
     // Same availability + singleton filter the Add-Node menu always used, plus
     // the text filter; the compatibility filter applies only with a wire origin.
-    const hasStep = nodesRef.current.some(n => (n.data as Record<string, unknown>)?.nodeType === 'step');
-    const hasInit = nodesRef.current.some(n => (n.data as Record<string, unknown>)?.nodeType === 'initEvent');
+    const placedSingletons = new Set<string>();
+    for (const n of nodesRef.current) {
+      const t = (n.data as Record<string, unknown>)?.nodeType as string | undefined;
+      if (t && SINGLETON_NODE_TYPES.has(t)) placedSingletons.add(t);
+    }
     const matches = getAllNodeDefs().filter(d => {
       if (HIDDEN_FROM_DROP_MENU.has(d.type)) return false;
-      if (d.type === 'step' && hasStep) return false;
-      if (d.type === 'initEvent' && hasInit) return false;
+      if (placedSingletons.has(d.type)) return false;
       if (!isNodeAvailable(d, model)) return false;
       if (origin && !nodeHasCompatiblePort(d, origin)) return false;
       return textMatch(displayNodeLabel(d), displayNodeDescription(d));
@@ -3952,7 +3951,7 @@ export function GraphEditorInner() {
             const snap = contextMenu.target.snapToPort;
             // Shared helper: same filter used by `onPaletteDrop` to decide
             // whether to skip the menu (single-option short-circuit).
-            const resolved = resolveDropCandidates(payload, snap);
+            const resolved = resolveDropCandidates(payload, snap, model);
             // Group by category
             const grouped = new Map<string, ResolvedDropCandidate[]>();
             for (const r of resolved) {
@@ -4037,7 +4036,15 @@ export function GraphEditorInner() {
           {contextMenu.target.type === 'pane' && (
             <>
               {clipboard && clipboard.nodes.length > 0 && (
-                <button className={styles.contextItem} onClick={e => { e.stopPropagation(); handlePaste(); setContextMenu(null); }}>Paste</button>
+                clipboardGraphKind === activeGraphRef.current ? (
+                  <button className={styles.contextItem} onClick={e => { e.stopPropagation(); handlePaste(); setContextMenu(null); }}>Paste</button>
+                ) : (
+                  // Cross-graph clipboard: show WHY paste is unavailable instead
+                  // of a silently no-op'ing item (handlePaste rejects it anyway).
+                  <button className={styles.contextItem} disabled title={`Copied from the ${clipboardGraphKind === 'cells' ? 'Cells' : 'Agents'} graph — the node sets are separate`}>
+                    Paste (from {clipboardGraphKind === 'cells' ? 'Cells' : 'Agents'} graph)
+                  </button>
+                )
               )}
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); addCommentNode(); }}>
                 Add Comment

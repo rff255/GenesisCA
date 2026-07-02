@@ -5,17 +5,16 @@
 // A SECOND compute entry (`forcePass`) over the SAME GPU agent SoA the behaviour
 // shader uses (agentWebgpu/layout.ts). It runs RIGHT AFTER the behaviour (same
 // step), reusing the CPU-built spatial hash already uploaded for getNearbyAgents:
-//   1. the 3×3 hash-stencil neighbour pass (soft-sphere repulsion/adhesion +
+//   1. the 3×3[×3] hash-stencil neighbour pass (soft-sphere repulsion/adhesion +
 //      density), torus-wrapped, with an all-pairs fallback;
 //   2. velocity Euler (momentum, maxSpeed, drag, dt);
-//   3. position wrap/clamp into xNext/yNext (the GPU double-buffer);
+//   3. position wrap/clamp into xNext/yNext[/zNext] (the GPU double-buffer);
 //   4. age + the growth ramp toward targetRadius.
-// The bond springs + structural phase + the hash BUILD stay CPU/JS (G4) — the GPU
-// agent SoA carries no bond store. A graph with live bonds therefore stays on the
-// JS/WASM agent target (the gate excludes bond/division/field nodes); for the
-// Boids headline (no bonds, no division, no growth) this force pass is exact.
+// The structural phase (bonds / division / death) + the hash BUILD stay CPU/JS
+// (target-independent — the worker round-trips the structural request flags and
+// runs runAgentStructuralPhase after the readback).
 //
-// 2D-ONLY (mirrors the behaviour shader's 2D Boids scope). f32 throughout —
+// 2D AND 3D aware (the z fields append when gridDepth > 1). f32 throughout —
 // statistical parity vs JS/WASM's f64, NOT bit-exact (the documented WebGPU
 // target constraint). The `bonding` flag (a control-uniform field) gates the
 // soft-sphere force + the growth ramp, exactly like the JS `engineForces` /

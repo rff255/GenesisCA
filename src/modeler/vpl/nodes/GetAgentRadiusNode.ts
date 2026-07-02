@@ -15,5 +15,8 @@ export const GetAgentRadiusNode: NodeTypeDef = {
     { id: 'value', label: 'Radius', kind: 'output', category: 'value', dataType: 'float' },
   ],
   defaultConfig: {},
-  compile: (nodeId, _config, inputs) => `const _v${nodeId} = _agentRadius[((${inputs['agentId'] || '0'}) | 0)];\n`,
+  // Range-guarded: -1 (the empty sentinel) / out-of-range → 0, not a NaN from
+  // `_agentRadius[-1]` (WASM would read adjacent memory).
+  compile: (nodeId, _config, inputs) =>
+    `const __gar${nodeId} = ((${inputs['agentId'] || '-1'}) | 0); const _v${nodeId} = (__gar${nodeId} >= 0 && __gar${nodeId} < highWater) ? _agentRadius[__gar${nodeId}] : 0;\n`,
 };

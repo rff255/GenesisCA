@@ -146,6 +146,16 @@ const NEVER_INVARIANT = new Set<string>([
   // vary per bond — any consumer must stay inside the bond loop (same reasoning
   // as forEachInArray).
   'forEachBond',
+  // Create Agent's `handle` is declared at its FLOW position (`const _v<id>_handle
+  // = _agentCreate(...)`). Its inputs are typically inline (unwired) → vacuously
+  // "invariant" → a pure consumer (e.g. Math over the handle) hoists to the
+  // function preamble ABOVE the declaration → TDZ ReferenceError in the Init
+  // Event ("Cannot access '_v…_handle' before initialization").
+  'createAgent',
+  // The remaining agent roots — same entry-point safety parity as step/initEvent
+  // (their value-outs are function params / preamble-decoded, never hoistable).
+  'agentInit',
+  'agentOutputMapping',
 ]);
 
 export function classifyLoopInvariant(

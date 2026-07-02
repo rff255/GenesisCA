@@ -42,6 +42,18 @@ import { getNodeDef } from '../nodes/registry';
  *  no `Attribute` object / config.attributeId). */
 const ORIENTATION_KEY = '__orientation__';
 
+/** Bond-Graph Agents — synthetic keys for the live engine buffers the behaviour
+ *  graph can mutate mid-agent (Set Velocity / Set Agent Position / Set Agent
+ *  Radius write vx / x / radius DIRECTLY, in BOTH agent update modes). A read of
+ *  the same buffer later in flow order must not be hoisted above the write.
+ *  Field reads (sampleField / fieldGradient / readCellsUnder) are deliberately
+ *  NOT hazard keys: all three targets snapshot the field at agent-loop top
+ *  (D-FIELD "sample before deposit"; WebGPU's fieldRead buffer is structurally a
+ *  step-start snapshot), so pinning them would diverge from the GPU. */
+const VELOCITY_KEY = '__agentVelocity__';
+const POSITION_KEY = '__agentPosition__';
+const RADIUS_KEY = '__agentRadius__';
+
 /** Sequence runs `first`/`then`/`then_N` at its OWN scope — identical to
  *  sinkAnalysis.ts:TRANSPARENT_FLOW_TYPES and volatileHoist.ts. Keep in sync. */
 const TRANSPARENT_FLOW_TYPES = new Set(['sequence']);
@@ -61,6 +73,19 @@ const DIRECT_READER_TYPES = new Set<string>([
   'getNeighborOrientationByIndex',
   'getFacingLabels',
   'getAllFacingLabels',
+  // Bond-Graph Agents (behaviour / division roots — these types never appear in
+  // a cell graph, so the lattice path is unaffected). getCellAttribute above
+  // doubles as the own-agent attribute read on the Agents graph.
+  'getAgentAttribute',
+  'getAgentsAttribute',
+  'getVelocity',
+  'getSelfPosition',
+  'getAgentPosition',
+  'getAgentOffset',
+  'getCurvature',
+  'getNearbyAgents',
+  'getRadius',
+  'getAgentRadius',
 ]);
 
 /** Attribute keys a direct-reader node reads. */
@@ -80,6 +105,23 @@ function attrKeysRead(node: GraphNode): string[] {
     case 'getFacingOrientation':
     case 'getNeighborOrientationByIndex':
       return [ORIENTATION_KEY];
+    // --- Bond-Graph Agents ---
+    case 'getAgentAttribute':
+    case 'getAgentsAttribute': {
+      const a = cfg.attributeId as string | undefined;
+      return a ? [a] : [];
+    }
+    case 'getVelocity':
+      return [VELOCITY_KEY];
+    case 'getSelfPosition':
+    case 'getAgentPosition':
+    case 'getAgentOffset':
+    case 'getCurvature':
+    case 'getNearbyAgents':
+      return [POSITION_KEY];
+    case 'getRadius':
+    case 'getAgentRadius':
+      return [RADIUS_KEY];
     case 'getFacingLabels':
     case 'getAllFacingLabels': {
       // Reads orientation + the variegation source ("species") attribute. The
@@ -110,6 +152,18 @@ function attrKeysWritten(node: GraphNode): string[] {
     case 'setFacingOrientation':
     case 'setNeighborOrientationByIndex':
       return [ORIENTATION_KEY];
+    // --- Bond-Graph Agents ---
+    case 'setAgentAttribute':
+    case 'setAgentsAttribute': {
+      const a = cfg.attributeId as string | undefined;
+      return a ? [a] : [];
+    }
+    case 'setVelocity':
+      return [VELOCITY_KEY];
+    case 'setAgentPosition':
+      return [POSITION_KEY];
+    case 'setAgentRadius':
+      return [RADIUS_KEY];
     case 'moveSelfToNeighbor': {
       const keys: string[] = [];
       const payloadCount = Math.max(1, Number(cfg.payloadCount) || 1);

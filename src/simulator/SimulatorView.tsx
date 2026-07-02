@@ -31,7 +31,7 @@ import { designTimeSeriesKeys } from './indicatorChartSettings';
 import { InspectCellPopover, InspectHoverLink, type InspectPopoverState } from './InspectCellPopover';
 import { PresetSaveDialog } from './PresetSaveDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
-import { serializeSimState, serializePreset, downloadStateFile, readStateFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2 } from '../model/fileOperations';
+import { serializeSimState, serializePreset, downloadStateFile, readStateFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2, deserializeAgentState } from '../model/fileOperations';
 import type { Attribute, CAModel, IndicatorChartSettings, Preset, SimulationState } from '../model/types';
 import { encodeAttrValue } from '../model/attrValueEncoding';
 import { cbNum } from '../model/centerBased';
@@ -658,6 +658,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     () => model.attributes.filter(a => !a.isModelAttribute).map(a => a.id + ':' + a.type).join('|'),
     [model.attributes],
   );
+  // AGENT attribute signature — the seed-config panel edits model.agentAttributes
+  // (a separate id-space), so its merge effect must key off THIS, not cellAttrSig.
+  const agentAttrSig = useMemo(
+    () => (model.agentAttributes ?? []).map(a => a.id + ':' + a.type).join('|'),
+    [model.agentAttributes],
+  );
 
   // Stable design-time series order per indicator — charts key their palette
   // indices off this so Track Categories filtering never recolors survivors.
@@ -696,9 +702,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // defaults unless the user explicitly opts a row in.
   useEffect(() => {
     const stored = loadAgentSeed(manualBrushModelKey) ?? {};
-    const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
+    // AGENT attributes (the seed panel edits model.agentAttributes) — iterating
+    // the CELL list here discarded every persisted agent-keyed entry on mount
+    // (seed config never survived a reload) and wiped in-session edits whenever
+    // a cell attribute changed.
+    const agentAttrs = model.agentAttributes ?? [];
     const next: ManualBrushModelState = {};
-    for (const a of cellAttrs) {
+    for (const a of agentAttrs) {
       if (a.type === 'color' || a.type === 'lookupTable') continue;
       const prev = stored[a.id];
       next[a.id] = prev
@@ -707,7 +717,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
     setAgentSeedAttrs(next);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [manualBrushModelKey, cellAttrSig]);
+  }, [manualBrushModelKey, agentAttrSig]);
   useEffect(() => {
     const t = setTimeout(() => saveAgentSeed(manualBrushModelKey, agentSeedAttrs), 300);
     return () => clearTimeout(t);
@@ -1091,7 +1101,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
   // don't behave); PR-A3 wires the real compileAgentGraph over
   // model.agentGraphNodes (the behaviourStep loop + value-outs + force hooks).
-  const compileAgentModel = useCallback((stopIdxBase = 0): { behaviourCode?: string; initCode?: string; divisionCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; stopMessages: string[]; colorViewer: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } } => {
+  const compileAgentModel = useCallback((stopIdxBase = 0): { behaviourCode?: string; initCode?: string; divisionCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; stopMessages: string[]; colorViewer: string; error?: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } } => {
     if (!model.topologyMode?.agents) return { colorViewer: '', agentTarget: 'js', stopMessages: [] };
     // The default AGENT viewer = the first agent A→C mapping (drives the agent
     // colour pass). Empty when the model has no agent mappings (agents are then
@@ -1123,6 +1133,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     let agentWebgpuUsesI32Write: boolean | undefined;
     let agentWebgpuUsage: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } | undefined;
     let agentLayoutExtras: AgentLayoutExtras | undefined;
+    let agentWasmViewerGuardIds: string[] | undefined;
     if (agentTarget === 'wasm') {
       try {
         const r = compileAgentGraphWasmForModel(model);
@@ -1132,6 +1143,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           agentTarget = 'js';
         } else {
           agentWasmBytes = r.bytes;
+          agentWasmViewerGuardIds = r.viewerGuardIds;
           // The FULL-COVERAGE layout extras (model attrs / indicators / lookup tables
           // / cell fields / array scratch) — the worker builds the SAME-offset store
           // layout with these (the baked-offset lockstep) + copies the external
@@ -1175,7 +1187,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         agentTarget = 'js';
       }
     }
-    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, stopMessages: ag.stopMessages, colorViewer, agentTarget, agentWasmBytes, agentLayoutExtras, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentWebgpuUsesI32Write, agentWebgpuUsage };
+    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, stopMessages: ag.stopMessages, colorViewer, error: ag.error || undefined, agentTarget, agentWasmBytes, agentWasmViewerGuardIds, agentLayoutExtras, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentWebgpuUsesI32Write, agentWebgpuUsage };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model.agentGraphNodes, model.agentGraphEdges, model.topologyMode?.agents, model.attributes, model.agentAttributes, model.mappings, model.centerBased]);
 
@@ -2326,6 +2338,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     setBrushMapping(firstInput?.id ?? MANUAL_BRUSH_MAPPING_ID);
     // Suppress the cell "No nodes / No Step" error for an agents-only model (no grid).
     if (result.error && model.topologyMode?.gridCells !== false) setCompileError(result.error);
+    // Surface the AGENT graph's compile error too (it was console.warn-only —
+    // "agents never move and nothing says why" was the observable symptom, e.g.
+    // "No Behaviour Step node in the agent graph.").
+    if (agentResult.error) {
+      setCompileError(prev => (prev ? `${prev}\n[agents] ${agentResult.error}` : `[agents] ${agentResult.error}`));
+    }
 
     // Only reset pan/zoom when the grid dimensions actually change. This
     // function ALSO fires on structural reinit at the same dims (e.g. the
@@ -2578,6 +2596,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // the JS behaviourCode above stays as the fallback.
       agentTarget: agentResult.agentTarget,
       agentWasmBytes: agentResult.agentWasmBytes,
+      agentWasmViewerGuardIds: agentResult.agentWasmViewerGuardIds,
       agentLayoutExtras: agentResult.agentLayoutExtras,
       // PR7 G3-runtime: when the agent target resolves to 'webgpu', ship the two
       // compiled WGSL shaders + the GPU agent layout dims. The worker builds a
@@ -2742,7 +2761,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       pendingStateSave.current = (workerState) => {
         const state = serializeSimState(
           workerState as Parameters<typeof serializeSimState>[0],
-          { activeViewer, brushColor, brushW, brushH, brushShape, brushRadius, brushRingWidth, brushLineWidth, brushMapping, targetFps, unlimitedFps, gensPerFrame, unlimitedGens, indicatorChartOverrides },
+          { activeViewer, activeAgentViewer: activeAgentViewerRef.current || undefined, brushColor, brushW, brushH, brushShape, brushRadius, brushRingWidth, brushLineWidth, brushMapping, targetFps, unlimitedFps, gensPerFrame, unlimitedGens, indicatorChartOverrides },
           { grid: wantGrid, controls: wantControls },
           { boundaryTreatment: model.properties.boundaryTreatment },
         );
@@ -2893,6 +2912,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         setCompiledCode(buildFullCode(result));
         setCompileError(gridOn ? (result.error ?? '') : '');
       }
+      // Surface the AGENT graph's compile error too (mirrors the init path).
+      if (agentResult.error) {
+        setCompileError(prev => (prev ? `${prev}\n[agents] ${agentResult.error}` : `[agents] ${agentResult.error}`));
+      }
       // Build viewerIds unconditionally — see init path above for rationale.
       const viewerIds = buildViewerIds(dimsModel);
       const wasmResult = (() => {
@@ -2975,11 +2998,22 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         // PR6b-1: re-resolve the agent target + ship the WASM bytes on recompile.
         agentTarget: agentResult.agentTarget,
         agentWasmBytes: agentResult.agentWasmBytes,
-        // PR7 G3-runtime: re-ship the WebGPU agent shaders on recompile.
+        agentWasmViewerGuardIds: agentResult.agentWasmViewerGuardIds,
+        // The layout extras MUST ride every recompile: the worker re-derives its
+        // pending extras from each message, and a live target flip to 'wasm'
+        // (backingChanged → initAgents) would otherwise rebuild the store WITHOUT
+        // the extras the module was compiled against — the baked-offset
+        // layout-mismatch corruption class.
+        agentLayoutExtras: agentResult.agentLayoutExtras,
+        // PR7 G3-runtime: re-ship the WebGPU agent shaders + FULL layout + usage
+        // flags on recompile (same lockstep argument as agentLayoutExtras).
         agentWebgpuBehaviourShader: agentResult.agentWebgpuBehaviourShader,
         agentWebgpuForceShader: agentResult.agentWebgpuForceShader,
         agentWebgpuMaxAgents: agentResult.agentWebgpuMaxAgents,
         agentWebgpuMaxHashBins: agentResult.agentWebgpuMaxHashBins,
+        agentWebgpuLayout: agentResult.agentWebgpuLayout,
+        agentWebgpuUsesI32Write: agentResult.agentWebgpuUsesI32Write,
+        agentWebgpuUsage: agentResult.agentWebgpuUsage,
       });
       // If user has the model toggle on, ensure useWasm is set (recompile doesn't carry useWasm by default).
       // PR5: the grid target now flows through for agent models too (the
@@ -3388,16 +3422,47 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       glc.setPointerCapture?.(e.pointerId);
       e.preventDefault();
     };
+    // rAF throttle state for the idle hovered-agent pick (see onMove).
+    let agentHoverPending: { x: number; y: number } | null = null;
+    let agentHoverRaf = 0;
     const onMove = (e: PointerEvent) => {
       // Track drag distance BEFORE the inspect-armed early-return, so onUp can
       // discard a Shift+LMB that turned into a drag (mirrors the 2D sweep
       // inspector's `!moved` discard) instead of pinning a popover at release.
       if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 3) moved = true;
       if (!active || active === 'inspect') {
+        // The listener is on `window` (drags must keep tracking off-canvas) —
+        // but IDLE moves over side panels / the transport bar must not drive
+        // phantom hover cursors or pick passes. Clear any lingering hover once
+        // and bail when the pointer is outside the GL canvas rect.
+        if (!active) {
+          const rect = glc.getBoundingClientRect();
+          const inside = e.clientX >= rect.left && e.clientX < rect.right
+            && e.clientY >= rect.top && e.clientY < rect.bottom;
+          if (!inside) {
+            let cleared = false;
+            if (hoverCells3dRef.current.length > 0) { hoverCells3dRef.current = []; cleared = true; }
+            if (hoverAgents3dRef.current.length > 0) { hoverAgents3dRef.current = EMPTY_AGENT_RINGS; cleared = true; }
+            if (cleared) draw();
+            return;
+          }
+        }
         // Idle / inspect-armed: update the footprint cursor (redraw on change).
         let changed = updateHover(e.clientX, e.clientY);
-        // Agent model: also update the hovered-agent ring (kill/glue/cut/move).
-        if (!active && isAgentModelRef.current) changed = updateAgentHover(e.clientX, e.clientY) || changed;
+        // Agent model: also update the hovered-agent ring (kill/glue/cut/move) —
+        // rAF-throttled: the sphere pick is a full render + FBO pass + a
+        // synchronous readPixels GPU stall, and raw pointermove fires far above
+        // frame rate (RR-G8/D4).
+        if (!active && isAgentModelRef.current) {
+          agentHoverPending = { x: e.clientX, y: e.clientY };
+          if (agentHoverRaf === 0) {
+            agentHoverRaf = requestAnimationFrame(() => {
+              agentHoverRaf = 0;
+              const p = agentHoverPending;
+              if (p && updateAgentHover(p.x, p.y)) draw();
+            });
+          }
+        }
         // Inspect-armed drag → sweep the front voxel under the cursor.
         if (active === 'inspect') { sweepPick3d(e.clientX, e.clientY, false); changed = true; }
         if (changed) draw();
@@ -3502,6 +3567,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     glc.addEventListener('contextmenu', onCtx);
     glc.addEventListener('pointerleave', onLeave);
     return () => {
+      if (agentHoverRaf !== 0) cancelAnimationFrame(agentHoverRaf);
       glc.removeEventListener('pointerdown', onDown);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
@@ -4744,6 +4810,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     };
 
     const handleMouseMove = (e: MouseEvent) => {
+      // 3D: the 2D screenToGrid mapping is meaningless (it reads the inert 2D
+      // zoom/pan over the hidden 2D canvas but "succeeds" because both canvases
+      // share the container) — driving cursorGrid / the hover-coords chip from
+      // it showed garbage cell coordinates and armed 2D-only interactions. The
+      // 3D pointer effect owns all hover state there.
+      if (is3dRef.current) {
+        if (cursorGrid.current !== null) {
+          cursorGrid.current = null;
+          setHoverCellInfo(prev => (prev === null ? prev : null));
+        }
+        return;
+      }
       // Autoscroll active: just track cursor + redraw to update the indicator's
       // direction line. The actual pan happens in tickAutoscroll's rAF loop so
       // we keep moving even when the cursor sits still.
@@ -5174,6 +5252,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const tag = (document.activeElement as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'v' || e.key === 'x')) {
+        // 3D: cell copy/paste is 2D-only for now — cursorGrid comes from the
+        // inert 2D fit-mapping there and readRegion/writeRegion are layer-0-only,
+        // so proceeding would silently corrupt layer-0 cells far from the brush
+        // plane the user is looking at. (A layer-aware region copy anchored on
+        // the brush plane is the follow-up.)
+        if (is3dRef.current) return;
         const cur = cursorGrid.current;
         if (!cur) return;
         if (e.key === 'c' || e.key === 'x') {
@@ -5364,6 +5448,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         workerState as Parameters<typeof serializeSimState>[0],
         {
           activeViewer,
+          activeAgentViewer: activeAgentViewerRef.current || undefined,
           brushColor,
           brushW,
           brushH,
@@ -5548,6 +5633,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // Restore UI controls (independent of grid)
     if (hasControls) {
       if (state.activeViewer != null) setActiveViewer(state.activeViewer);
+      if (state.activeAgentViewer != null) setActiveAgentViewer(state.activeAgentViewer);
       if (state.brushColor != null) setBrushColor(state.brushColor);
       if (state.brushW != null) setBrushW(state.brushW);
       if (state.brushH != null) setBrushH(state.brushH);
@@ -5660,6 +5746,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
     if (state.orderArray) {
       loadMsg.orderArray = base64ToArrayBuffer(state.orderArray);
+    }
+
+    // Bond-Graph Agents: restore the saved agent population. The worker's
+    // loadState validates the bond stride + capacity LOUDLY; when the state has
+    // NO agent payload (pre-agents save / non-agent model) the worker re-seeds
+    // the agent layer to its starting configuration instead of keeping the
+    // pre-load run's population.
+    if (state.agents) {
+      loadMsg.agents = deserializeAgentState(state.agents);
     }
 
     workerRef.current.postMessage(loadMsg);

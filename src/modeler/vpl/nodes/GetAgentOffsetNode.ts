@@ -26,23 +26,32 @@ export const GetAgentOffsetNode: NodeTypeDef = {
   hiddenPorts: (_config, model) => (is3dModelLike(model) ? [] : ['dz']),
   defaultConfig: {},
   compile: (nodeId, _config, inputs, _boundary, ctx) => {
-    const a = `((${inputs['agentId'] || '0'}) | 0)`;
+    // -1 = the empty sentinel; range-guarded → zero vector + zero distance
+    // instead of NaN offsets from `_agentX[-1]` (WASM: adjacent-memory reads).
+    const a = `((${inputs['agentId'] || '-1'}) | 0)`;
     const V = `_v${nodeId}`;
+    const ok = `__goOk${nodeId}`;
     if (ctx?.is3d) {
       // 3D: add the z arm with the depth torus-wrap (`_fieldD`); distance = hypot of all 3.
       return `const __go${nodeId}=${a};`
-        + `let __odx${nodeId}=_agentX[__go${nodeId}]-_agentX[idx],__ody${nodeId}=_agentY[__go${nodeId}]-_agentY[idx],__odz${nodeId}=_agentZ[__go${nodeId}]-_agentZ[idx];`
+        + `const ${ok}=__go${nodeId}>=0&&__go${nodeId}<highWater;`
+        + `let __odx${nodeId}=0,__ody${nodeId}=0,__odz${nodeId}=0;`
+        + `if(${ok}){`
+        + `__odx${nodeId}=_agentX[__go${nodeId}]-_agentX[idx];__ody${nodeId}=_agentY[__go${nodeId}]-_agentY[idx];__odz${nodeId}=_agentZ[__go${nodeId}]-_agentZ[idx];`
         + `if(_fieldBoundaryTorus){const __W=_fieldW,__H=_fieldH,__D=_fieldD,__hW=__W/2,__hH=__H/2,__hD=__D/2;`
         + `if(__odx${nodeId}>__hW)__odx${nodeId}-=__W;else if(__odx${nodeId}<-__hW)__odx${nodeId}+=__W;`
         + `if(__ody${nodeId}>__hH)__ody${nodeId}-=__H;else if(__ody${nodeId}<-__hH)__ody${nodeId}+=__H;`
-        + `if(__odz${nodeId}>__hD)__odz${nodeId}-=__D;else if(__odz${nodeId}<-__hD)__odz${nodeId}+=__D;}`
-        + `const ${V}_dx=__odx${nodeId},${V}_dy=__ody${nodeId},${V}_dz=__odz${nodeId},${V}_distance=Math.hypot(__odx${nodeId},__ody${nodeId},__odz${nodeId});\n`;
+        + `if(__odz${nodeId}>__hD)__odz${nodeId}-=__D;else if(__odz${nodeId}<-__hD)__odz${nodeId}+=__D;}}`
+        + `const ${V}_dx=__odx${nodeId},${V}_dy=__ody${nodeId},${V}_dz=__odz${nodeId},${V}_distance=${ok}?Math.hypot(__odx${nodeId},__ody${nodeId},__odz${nodeId}):0;\n`;
     }
     return `const __go${nodeId}=${a};`
-      + `let __odx${nodeId}=_agentX[__go${nodeId}]-_agentX[idx],__ody${nodeId}=_agentY[__go${nodeId}]-_agentY[idx];`
+      + `const ${ok}=__go${nodeId}>=0&&__go${nodeId}<highWater;`
+      + `let __odx${nodeId}=0,__ody${nodeId}=0;`
+      + `if(${ok}){`
+      + `__odx${nodeId}=_agentX[__go${nodeId}]-_agentX[idx];__ody${nodeId}=_agentY[__go${nodeId}]-_agentY[idx];`
       + `if(_fieldBoundaryTorus){const __W=_fieldW,__H=_fieldH,__hW=__W/2,__hH=__H/2;`
       + `if(__odx${nodeId}>__hW)__odx${nodeId}-=__W;else if(__odx${nodeId}<-__hW)__odx${nodeId}+=__W;`
-      + `if(__ody${nodeId}>__hH)__ody${nodeId}-=__H;else if(__ody${nodeId}<-__hH)__ody${nodeId}+=__H;}`
-      + `const ${V}_dx=__odx${nodeId},${V}_dy=__ody${nodeId},${V}_distance=Math.hypot(__odx${nodeId},__ody${nodeId});\n`;
+      + `if(__ody${nodeId}>__hH)__ody${nodeId}-=__H;else if(__ody${nodeId}<-__hH)__ody${nodeId}+=__H;}}`
+      + `const ${V}_dx=__odx${nodeId},${V}_dy=__ody${nodeId},${V}_distance=${ok}?Math.hypot(__odx${nodeId},__ody${nodeId}):0;\n`;
   },
 };

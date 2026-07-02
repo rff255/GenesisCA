@@ -89,7 +89,7 @@ function handleRowDragEnd() {
 export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}) {
   const {
     model, addAttribute, removeAttribute: removeAttributeRaw, updateAttribute: updateAttributeRaw, reorderAttributes,
-    addAgentAttribute, removeAgentAttribute, updateAgentAttribute,
+    addAgentAttribute, removeAgentAttribute, updateAgentAttribute, reorderAgentAttributes,
   } = useModel();
   // Generic Agent Platform: on the Agents sub-tab the primary list shows the
   // AGENT attribute set (model.agentAttributes — a separate id-space), with its
@@ -117,9 +117,14 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
   const modelAttrs = model.attributes.filter(a => a.isModelAttribute);
 
   // Independent reorder within each group — preserve the other group's order in the combined array.
-  // Agent attributes have no reorder reducer yet, so reorder is a no-op in agent mode.
   const cellReorder = useListReorder(cellAttrs, newOrder => {
-    if (agentMode) return;
+    if (agentMode) {
+      // Agent attributes are their own list — reorder it directly. NB the order
+      // is load-bearing for the agent store/ABI (agentAttrsOf), but a reorder
+      // forces a full worker reinit via the attrsStructurallyEqual signature.
+      reorderAgentAttributes(newOrder);
+      return;
+    }
     const map = new Map(cellAttrs.map(a => [a.id, a]));
     reorderAttributes([...newOrder.map(id => map.get(id)!).filter(Boolean), ...modelAttrs].map(a => a.id));
   });
@@ -320,7 +325,8 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 <option value="integer">Integer</option>
                 <option value="float">Decimal</option>
                 <option value="tag">Tag</option>
-                <option value="neighborIndex">Neighbor Index</option>
+                {/* A packed lattice-offset type is meaningless for an off-lattice agent. */}
+                {!selectedIsAgent && <option value="neighborIndex">Neighbor Index</option>}
                 {selected.isModelAttribute && <option value="color">Color</option>}
                 {selected.isModelAttribute && <option value="lookupTable">Lookup Table</option>}
               </select>

@@ -22,7 +22,15 @@ export const GetVelocityNode: NodeTypeDef = {
   hiddenPorts: (_config, model) => (is3dModelLike(model) ? [] : ['vz']),
   defaultConfig: {},
   compile: (nodeId, _config, inputs, _boundary, ctx) => {
-    const a = inputs['agentId'] ? `((${inputs['agentId']}) | 0)` : 'idx';
-    return `const __gv${nodeId}=${a}; const _v${nodeId}_vx = _agentVX[__gv${nodeId}]; const _v${nodeId}_vy = _agentVY[__gv${nodeId}];${ctx?.is3d ? ` const _v${nodeId}_vz = _agentVZ[__gv${nodeId}];` : ''}\n`;
+    // Unwired = SELF (always valid). A wired id is range-guarded: -1 (the empty
+    // sentinel) / out-of-range → 0-velocity, not NaN from `_agentVX[-1]`.
+    if (!inputs['agentId']) {
+      return `const __gv${nodeId}=idx; const _v${nodeId}_vx = _agentVX[__gv${nodeId}]; const _v${nodeId}_vy = _agentVY[__gv${nodeId}];${ctx?.is3d ? ` const _v${nodeId}_vz = _agentVZ[__gv${nodeId}];` : ''}\n`;
+    }
+    const a = `((${inputs['agentId']}) | 0)`;
+    const ok = `__gvOk${nodeId}`;
+    return `const __gv${nodeId}=${a}; const ${ok} = __gv${nodeId} >= 0 && __gv${nodeId} < highWater;`
+      + ` const _v${nodeId}_vx = ${ok} ? _agentVX[__gv${nodeId}] : 0; const _v${nodeId}_vy = ${ok} ? _agentVY[__gv${nodeId}] : 0;`
+      + `${ctx?.is3d ? ` const _v${nodeId}_vz = ${ok} ? _agentVZ[__gv${nodeId}] : 0;` : ''}\n`;
   },
 };

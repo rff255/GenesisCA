@@ -369,6 +369,15 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                 </div>
               </div>
               <div className={styles.field}>
+                <label className={styles.fieldLabel}>Description</label>
+                <textarea
+                  className={styles.textArea}
+                  rows={2}
+                  value={m.description}
+                  onChange={e => updateAgentMapping(m.id, { description: e.target.value })}
+                />
+              </div>
+              <div className={styles.field}>
                 <label className={styles.fieldLabel}>Color pass</label>
                 <select
                   className={styles.textInput}
@@ -393,8 +402,7 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
             <button
               className={styles.addButton}
               onClick={() => addAgentMapping()}
-              disabled={agentAttrs.length === 0}
-              title={agentAttrs.length === 0 ? 'Add an agent attribute first (Attributes panel, Agents tab).' : undefined}
+              title={agentAttrs.length === 0 ? 'No agent attributes yet — the new view is seeded Standalone (build it on the Agents graph).' : undefined}
             >
               + Add Agent View
             </button>
@@ -508,7 +516,7 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                 <span style={{ color: '#888', fontSize: '0.66rem', marginTop: 3, display: 'block' }}>
                   {selected.linked
                     ? 'Auto-generates the color pass from a chosen attribute. If you also add an Output Mapping node for this mapping, the auto pass runs first as a background and your graph overrides the cells it paints.'
-                    : 'You build the color pass by hand in the graph (Output Mapping → … → Set Color Viewer).'}
+                    : 'You build the color pass by hand in the graph (Output Mapping → … → Set Cell Looks).'}
                 </span>
               </div>
             )}
