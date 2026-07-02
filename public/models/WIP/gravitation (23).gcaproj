@@ -1,0 +1,1346 @@
+{
+  "schemaVersion": 2,
+  "properties": {
+    "name": "Gravitation",
+    "author": "",
+    "modelAuthor": "",
+    "description": "",
+    "topology": "2d-grid",
+    "boundaryTreatment": "constant",
+    "updateMode": "synchronous",
+    "asyncScheme": "random-order",
+    "gridWidth": 100,
+    "gridHeight": 100,
+    "gridDepth": 1,
+    "maxIterations": 1000,
+    "tags": [],
+    "useWasm": true,
+    "dimension": "2d"
+  },
+  "attributes": [
+    {
+      "id": "new_attribute_mr0ys150seb",
+      "name": "Earth Mass",
+      "type": "float",
+      "description": "",
+      "isModelAttribute": true,
+      "defaultValue": "100"
+    },
+    {
+      "id": "new_attribute_mr0yzknnmoo",
+      "name": "Small Mass",
+      "type": "float",
+      "description": "",
+      "isModelAttribute": true,
+      "defaultValue": "1"
+    },
+    {
+      "id": "new_attribute_mr0zn83mqab",
+      "name": "G",
+      "type": "float",
+      "description": "",
+      "isModelAttribute": true,
+      "defaultValue": "8"
+    }
+  ],
+  "neighborhoods": [],
+  "mappings": [],
+  "indicators": [],
+  "graphNodes": [
+    {
+      "id": "nmr0yg3c176p",
+      "type": "caNode",
+      "position": {
+        "x": 649.7297833174156,
+        "y": 144.8597285057862
+      },
+      "data": {
+        "nodeType": "step",
+        "config": {}
+      }
+    }
+  ],
+  "graphEdges": [],
+  "agentGraphNodes": [
+    {
+      "id": "nmr10t75dpcg",
+      "type": "groupNode",
+      "position": {
+        "x": 255.05872791528617,
+        "y": -724.9817129807061
+      },
+      "data": {
+        "label": "Initialization",
+        "width": 1193,
+        "height": 446,
+        "nodeType": "group",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmr0y8i2a00g",
+      "type": "caNode",
+      "position": {
+        "x": 276.82272971895924,
+        "y": 333.9887000809501
+      },
+      "data": {
+        "nodeType": "behaviourStep",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmr0yjf3w8c4",
+      "type": "caNode",
+      "position": {
+        "x": 295.05872791528617,
+        "y": -664.9817129807061
+      },
+      "data": {
+        "nodeType": "agentInit",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmr0yk0b1c6c",
+      "type": "caNode",
+      "position": {
+        "x": 701.6255224256327,
+        "y": -661.9233314178881
+      },
+      "data": {
+        "nodeType": "createAgent",
+        "config": {
+          "_port_x": "50",
+          "_port_y": "50",
+          "_port_z": "0",
+          "_port_radius": "10"
+        }
+      }
+    },
+    {
+      "id": "nmr0yk5t8h7f",
+      "type": "caNode",
+      "position": {
+        "x": 1247.227412078354,
+        "y": -657.9868766726191
+      },
+      "data": {
+        "nodeType": "addAgentToWorld",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmr0ymkh295h",
+      "type": "caNode",
+      "position": {
+        "x": 583.7435410763776,
+        "y": -643.704622524648
+      },
+      "data": {
+        "nodeType": "arithmeticOperator",
+        "config": {
+          "operation": "/",
+          "_port_x": "0",
+          "_port_y": "2"
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmr0ynm4w1mo",
+      "type": "caNode",
+      "position": {
+        "x": 1040.432528541386,
+        "y": -657.252486958291
+      },
+      "data": {
+        "nodeType": "setAgentAttribute",
+        "config": {
+          "attributeId": "agent_attribute_mr0yi1m26lz",
+          "_port_value": "0"
+        }
+      }
+    },
+    {
+      "id": "nmr0yss65iou",
+      "type": "caNode",
+      "position": {
+        "x": 877.3152728192981,
+        "y": -609.1491233983361
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "new_attribute_mr0ys150seb",
+          "isColorAttr": false
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmr0yv0jbabz",
+      "type": "rerouteNode",
+      "position": {
+        "x": 895.9648274894769,
+        "y": -546.1970948497071
+      },
+      "data": {
+        "nodeType": "reroute",
+        "portCategory": "value",
+        "dataType": "integer",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmr0yvhy8h8a",
+      "type": "rerouteNode",
+      "position": {
+        "x": 1198.3314130996514,
+        "y": -544.6056727502208
+      },
+      "data": {
+        "nodeType": "reroute",
+        "portCategory": "value",
+        "dataType": "integer",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmr0yyuwtj01",
+      "type": "caNode",
+      "position": {
+        "x": 705.2054602607008,
+        "y": -452.7263880383506
+      },
+      "data": {
+        "nodeType": "createAgent",
+        "config": {
+          "_port_x": "50",
+          "_port_y": "20",
+          "_port_z": "0",
+          "_port_radius": "1"
+        }
+      }
+    },
+    {
+      "id": "nmr0yyuwtrph",
+      "type": "caNode",
+      "position": {
+        "x": 1250.8073499134223,
+        "y": -448.78993329308156
+      },
+      "data": {
+        "nodeType": "addAgentToWorld",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmr0yyuwts48",
+      "type": "caNode",
+      "position": {
+        "x": 586.8234789114457,
+        "y": -438.05554357875343
+      },
+      "data": {
+        "nodeType": "arithmeticOperator",
+        "config": {
+          "operation": "/",
+          "_port_x": "0",
+          "_port_y": "2"
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmr0yyuwtrv2",
+      "type": "caNode",
+      "position": {
+        "x": 1044.0124663764543,
+        "y": -448.05554357875343
+      },
+      "data": {
+        "nodeType": "setAgentAttribute",
+        "config": {
+          "attributeId": "agent_attribute_mr0yi1m26lz",
+          "_port_value": "0"
+        }
+      }
+    },
+    {
+      "id": "nmr0yyuwtk3u",
+      "type": "rerouteNode",
+      "position": {
+        "x": 899.5447653245451,
+        "y": -337.0001514701695
+      },
+      "data": {
+        "nodeType": "reroute",
+        "portCategory": "value",
+        "dataType": "integer",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmr0yyuwtv5g",
+      "type": "rerouteNode",
+      "position": {
+        "x": 1201.9113509347196,
+        "y": -335.4087293706833
+      },
+      "data": {
+        "nodeType": "reroute",
+        "portCategory": "value",
+        "dataType": "integer",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmr0yz7r85rt",
+      "type": "caNode",
+      "position": {
+        "x": 586.8234789114457,
+        "y": -401.05554357875343
+      },
+      "data": {
+        "nodeType": "arithmeticOperator",
+        "config": {
+          "operation": "/",
+          "_port_x": "0",
+          "_port_y": "2"
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmr0yzvlph4v",
+      "type": "caNode",
+      "position": {
+        "x": 899.0492053139981,
+        "y": -402.99733812617114
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "new_attribute_mr0yzknnmoo",
+          "isColorAttr": false
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmr0z4zba6ps",
+      "type": "caNode",
+      "position": {
+        "x": 499.13945687632133,
+        "y": 192.31513994691508
+      },
+      "data": {
+        "nodeType": "getNearbyAgents",
+        "config": {
+          "_port_radius": "100"
+        }
+      }
+    },
+    {
+      "id": "nmr0zi59xfok",
+      "type": "caNode",
+      "position": {
+        "x": 897.8827854505677,
+        "y": 852.5593334874327
+      },
+      "data": {
+        "nodeType": "applyForce",
+        "config": {
+          "_port_fx": "0",
+          "_port_fy": "0",
+          "_port_fz": "0"
+        }
+      }
+    },
+    {
+      "id": "nmr0zk207nip",
+      "type": "caNode",
+      "position": {
+        "x": 1348.0708426063609,
+        "y": 240.4084167945272
+      },
+      "data": {
+        "nodeType": "makeVector",
+        "config": {
+          "_port_x": "0",
+          "_port_y": "0",
+          "_port_z": "0"
+        }
+      }
+    },
+    {
+      "id": "nmr0zkd5ls2f",
+      "type": "caNode",
+      "position": {
+        "x": 1542.4800092835635,
+        "y": 253.28972108531542
+      },
+      "data": {
+        "nodeType": "vectorOp",
+        "config": {
+          "op": "length",
+          "_port_s": "1",
+          "_port_t": "0.5"
+        },
+        "isCollapsed": false
+      }
+    },
+    {
+      "id": "nmr0zku4xplq",
+      "type": "caNode",
+      "position": {
+        "x": 1756.1280103389718,
+        "y": 254.33701520813605
+      },
+      "data": {
+        "nodeType": "arithmeticOperator",
+        "config": {
+          "operation": "pow",
+          "_port_x": "0",
+          "_port_y": "2"
+        }
+      }
+    },
+    {
+      "id": "nmr0zl4z4sy5",
+      "type": "caNode",
+      "position": {
+        "x": 1995.4505822050269,
+        "y": 324.99142775786873
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "(G*M*m)/r2",
+          "visibleCount": 4,
+          "_port_a": "0",
+          "_port_b": "0",
+          "_port_c": "0",
+          "_port_d": "0",
+          "_varName_a": "G",
+          "_varName_b": "M",
+          "_varName_c": "m",
+          "_varName_d": "r2"
+        }
+      }
+    },
+    {
+      "id": "nmr0zlflxftg",
+      "type": "caNode",
+      "position": {
+        "x": 1887.9615198448569,
+        "y": 367.7298875653595
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "agent_attribute_mr0yi1m26lz"
+        },
+        "isCollapsed": true,
+        "label": "Self Mass"
+      }
+    },
+    {
+      "id": "nmr108o6mn0x",
+      "type": "caNode",
+      "position": {
+        "x": 735.6746489182416,
+        "y": 333.5465275641895
+      },
+      "data": {
+        "nodeType": "forEachInArray",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmr109njz76v",
+      "type": "caNode",
+      "position": {
+        "x": 1168.5084022044402,
+        "y": 363.1903401011382
+      },
+      "data": {
+        "nodeType": "getAgentAttribute",
+        "config": {
+          "attributeId": "agent_attribute_mr0yi1m26lz"
+        }
+      }
+    },
+    {
+      "id": "nmr10a3qv8wx",
+      "type": "caNode",
+      "position": {
+        "x": 1886.729901652957,
+        "y": 334.8745766828122
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "new_attribute_mr0zn83mqab",
+          "isColorAttr": false
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmr10gugm0fk",
+      "type": "caNode",
+      "position": {
+        "x": 2210.8216558728946,
+        "y": 653.167718239601
+      },
+      "data": {
+        "nodeType": "vectorOp",
+        "config": {
+          "op": "scale",
+          "_port_s": "1",
+          "_port_t": "0.5"
+        },
+        "label": "F"
+      }
+    },
+    {
+      "id": "nmr10ug4y86f",
+      "type": "rerouteNode",
+      "position": {
+        "x": 1049.1665870875534,
+        "y": 631.6855096575315
+      },
+      "data": {
+        "nodeType": "reroute",
+        "portCategory": "flow",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmr10ve4j4p7",
+      "type": "caNode",
+      "position": {
+        "x": 2833.9487552052024,
+        "y": 620.6144127075665
+      },
+      "data": {
+        "nodeType": "setArrayElement",
+        "config": {
+          "variableId": "variable_mr10806tfie",
+          "_port_index": "0",
+          "_port_value": "0"
+        }
+      }
+    },
+    {
+      "id": "nmr10vpcbhh6",
+      "type": "caNode",
+      "position": {
+        "x": 2394.641831183295,
+        "y": 673.9475877296948
+      },
+      "data": {
+        "nodeType": "breakVector",
+        "config": {},
+        "isCollapsed": false
+      }
+    },
+    {
+      "id": "nmr10w6jgt5e",
+      "type": "caNode",
+      "position": {
+        "x": 2107.045255806059,
+        "y": 786.8945180088982
+      },
+      "data": {
+        "nodeType": "getVariable",
+        "config": {
+          "variableId": "variable_mr10806tfie"
+        }
+      }
+    },
+    {
+      "id": "nmr10wa1g1t9",
+      "type": "caNode",
+      "position": {
+        "x": 2359.6314393951584,
+        "y": 794.3939303347362
+      },
+      "data": {
+        "nodeType": "arrayElement",
+        "config": {
+          "_port_position": "0"
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmr10wc2c3mh",
+      "type": "caNode",
+      "position": {
+        "x": 2361.113989923098,
+        "y": 830.9748802129039
+      },
+      "data": {
+        "nodeType": "arrayElement",
+        "config": {
+          "_port_position": "1"
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmr10wtitrz2",
+      "type": "caNode",
+      "position": {
+        "x": 2586.5750643941883,
+        "y": 705.0690784784044
+      },
+      "data": {
+        "nodeType": "arithmeticOperator",
+        "config": {
+          "operation": "+",
+          "_port_x": "0",
+          "_port_y": "0"
+        }
+      }
+    },
+    {
+      "id": "nmr1bx82k83t",
+      "type": "caNode",
+      "position": {
+        "x": 2615.059347827678,
+        "y": 784.3298668899923
+      },
+      "data": {
+        "nodeType": "arithmeticOperator",
+        "config": {
+          "operation": "+",
+          "_port_x": "0",
+          "_port_y": "0"
+        }
+      }
+    },
+    {
+      "id": "nmr1bxk9was1",
+      "type": "caNode",
+      "position": {
+        "x": 2846.135398409768,
+        "y": 739.6811966847368
+      },
+      "data": {
+        "nodeType": "setArrayElement",
+        "config": {
+          "variableId": "variable_mr10806tfie",
+          "_port_index": "1",
+          "_port_value": "0"
+        }
+      }
+    },
+    {
+      "id": "nmr1byg5pmbx",
+      "type": "caNode",
+      "position": {
+        "x": 500.73458474393465,
+        "y": 334.43439757834506
+      },
+      "data": {
+        "nodeType": "sequence",
+        "config": {
+          "extraCount": 0
+        }
+      }
+    },
+    {
+      "id": "nmr1byqty0j6",
+      "type": "caNode",
+      "position": {
+        "x": 445.5869280729247,
+        "y": 860.5450554987856
+      },
+      "data": {
+        "nodeType": "getVariable",
+        "config": {
+          "variableId": "variable_mr10806tfie"
+        }
+      }
+    },
+    {
+      "id": "nmr1byqty8xy",
+      "type": "caNode",
+      "position": {
+        "x": 698.1731116620243,
+        "y": 868.0444678246236
+      },
+      "data": {
+        "nodeType": "arrayElement",
+        "config": {
+          "_port_position": "0"
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmr1byqtywzp",
+      "type": "caNode",
+      "position": {
+        "x": 699.6556621899639,
+        "y": 904.6254177027913
+      },
+      "data": {
+        "nodeType": "arrayElement",
+        "config": {
+          "_port_position": "1"
+        },
+        "isCollapsed": true
+      }
+    },
+    {
+      "id": "nmr1cexwrmw5",
+      "type": "caNode",
+      "position": {
+        "x": 856.5077006774635,
+        "y": 197.57793673777607
+      },
+      "data": {
+        "nodeType": "getSelfHandle",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmr1chrwmr9h",
+      "type": "caNode",
+      "position": {
+        "x": 1056.4398442883876,
+        "y": 236.5371443432358
+      },
+      "data": {
+        "nodeType": "getAgentPosition",
+        "config": {
+          "mode": "relative"
+        }
+      }
+    },
+    {
+      "id": "nmrnormgrav01",
+      "type": "caNode",
+      "position": {
+        "x": 1750,
+        "y": 500
+      },
+      "data": {
+        "nodeType": "vectorOp",
+        "config": {
+          "op": "normalize",
+          "_port_s": "1",
+          "_port_t": "0.5"
+        },
+        "label": "Normalize Dir"
+      }
+    },
+    {
+      "id": "norbit_cmpmass",
+      "type": "caNode",
+      "position": {
+        "x": 700,
+        "y": 1050
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "<",
+          "compareType": "numerical",
+          "lowOp": ">=",
+          "highOp": "<=",
+          "_port_x": "0",
+          "_port_y": "50",
+          "_port_y2": "0"
+        },
+        "label": "is small?"
+      }
+    },
+    {
+      "id": "norbit_condmass",
+      "type": "caNode",
+      "position": {
+        "x": 950,
+        "y": 1000
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {}
+      }
+    },
+    {
+      "id": "norbit_seqsmall",
+      "type": "caNode",
+      "position": {
+        "x": 1200,
+        "y": 1000
+      },
+      "data": {
+        "nodeType": "sequence",
+        "config": {
+          "extraCount": 0
+        }
+      }
+    },
+    {
+      "id": "norbit_cmpage",
+      "type": "caNode",
+      "position": {
+        "x": 1200,
+        "y": 1250
+      },
+      "data": {
+        "nodeType": "statement",
+        "config": {
+          "operation": "==",
+          "compareType": "numerical",
+          "lowOp": ">=",
+          "highOp": "<=",
+          "_port_x": "0",
+          "_port_y": "0",
+          "_port_y2": "0"
+        },
+        "label": "first step?"
+      }
+    },
+    {
+      "id": "norbit_condage",
+      "type": "caNode",
+      "position": {
+        "x": 1450,
+        "y": 1200
+      },
+      "data": {
+        "nodeType": "conditional",
+        "config": {}
+      }
+    },
+    {
+      "id": "norbit_setv",
+      "type": "caNode",
+      "position": {
+        "x": 1700,
+        "y": 1200
+      },
+      "data": {
+        "nodeType": "setVelocity",
+        "config": {
+          "_port_vx": "1.333",
+          "_port_vy": "0",
+          "_port_vz": "0"
+        },
+        "label": "Orbit kick"
+      }
+    }
+  ],
+  "agentGraphEdges": [
+    {
+      "id": "emr0ymkh2ojl",
+      "source": "nmr0yjf3w8c4",
+      "target": "nmr0ymkh295h",
+      "sourceHandle": "output_value_worldWidth",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "emr0ynm4wk8a",
+      "source": "nmr0yk0b1c6c",
+      "target": "nmr0ynm4w1mo",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmr0ynm4w1mooutput_flow_next-nmr0yk5t8h7finput_flow_do",
+      "source": "nmr0ynm4w1mo",
+      "target": "nmr0yk5t8h7f",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmr0yss65iououtput_value_value-nmr0ynm4w1moinput_value_value",
+      "source": "nmr0yss65iou",
+      "target": "nmr0ynm4w1mo",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "xy-edge__nmr0yk0b1c6coutput_value_handle-nmr0ynm4w1moinput_value_agentId",
+      "source": "nmr0yk0b1c6c",
+      "target": "nmr0ynm4w1mo",
+      "sourceHandle": "output_value_handle",
+      "targetHandle": "input_value_agentId"
+    },
+    {
+      "id": "emr0yv0jbofb",
+      "source": "nmr0yk0b1c6c",
+      "target": "nmr0yv0jbabz",
+      "sourceHandle": "output_value_handle",
+      "targetHandle": "input_value_in"
+    },
+    {
+      "id": "e_mr0yvhy8_ri_r7i",
+      "source": "nmr0yv0jbabz",
+      "target": "nmr0yvhy8h8a",
+      "sourceHandle": "output_value_out",
+      "targetHandle": "input_value_in"
+    },
+    {
+      "id": "e_mr0yvhy8_ro_n9f",
+      "source": "nmr0yvhy8h8a",
+      "target": "nmr0yk5t8h7f",
+      "sourceHandle": "output_value_out",
+      "targetHandle": "input_value_handle"
+    },
+    {
+      "id": "xy-edge__nmr0yjf3w8c4output_flow_do-nmr0yk0b1c6cinput_flow_do",
+      "source": "nmr0yjf3w8c4",
+      "target": "nmr0yk0b1c6c",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "e_mr0yyuwt_1_zeo",
+      "source": "nmr0yyuwtj01",
+      "target": "nmr0yyuwtrv2",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "e_mr0yyuwt_2_m8g",
+      "source": "nmr0yyuwtrv2",
+      "target": "nmr0yyuwtrph",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "e_mr0yyuwt_4_a6x",
+      "source": "nmr0yyuwtj01",
+      "target": "nmr0yyuwtrv2",
+      "sourceHandle": "output_value_handle",
+      "targetHandle": "input_value_agentId"
+    },
+    {
+      "id": "e_mr0yyuwt_5_o95",
+      "source": "nmr0yyuwtj01",
+      "target": "nmr0yyuwtk3u",
+      "sourceHandle": "output_value_handle",
+      "targetHandle": "input_value_in"
+    },
+    {
+      "id": "e_mr0yyuwt_6_e0h",
+      "source": "nmr0yyuwtk3u",
+      "target": "nmr0yyuwtv5g",
+      "sourceHandle": "output_value_out",
+      "targetHandle": "input_value_in"
+    },
+    {
+      "id": "e_mr0yyuwt_7_bhz",
+      "source": "nmr0yyuwtv5g",
+      "target": "nmr0yyuwtrph",
+      "sourceHandle": "output_value_out",
+      "targetHandle": "input_value_handle"
+    },
+    {
+      "id": "xy-edge__nmr0yjf3w8c4output_flow_do-nmr0yyuwtj01input_flow_do",
+      "source": "nmr0yjf3w8c4",
+      "target": "nmr0yyuwtj01",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmr0yjf3w8c4output_value_worldHeight-nmr0yz7r85rtinput_value_x",
+      "source": "nmr0yjf3w8c4",
+      "target": "nmr0yz7r85rt",
+      "sourceHandle": "output_value_worldHeight",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "xy-edge__nmr0yzvlph4voutput_value_value-nmr0yyuwtrv2input_value_value",
+      "source": "nmr0yzvlph4v",
+      "target": "nmr0yyuwtrv2",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "xy-edge__nmr0yjf3w8c4output_value_worldWidth-nmr0yyuwts48input_value_x",
+      "source": "nmr0yjf3w8c4",
+      "target": "nmr0yyuwts48",
+      "sourceHandle": "output_value_worldWidth",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "emr0zku4xg0p",
+      "source": "nmr0zkd5ls2f",
+      "target": "nmr0zku4xplq",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "xy-edge__nmr0z4zba6psoutput_value_agents-nmr108o6mn0xinput_value_array",
+      "source": "nmr0z4zba6ps",
+      "target": "nmr108o6mn0x",
+      "sourceHandle": "output_value_agents",
+      "targetHandle": "input_value_array"
+    },
+    {
+      "id": "xy-edge__nmr10a3qv8wxoutput_value_value-nmr0zl4z4sy5input_value_a",
+      "source": "nmr10a3qv8wx",
+      "target": "nmr0zl4z4sy5",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "xy-edge__nmr0zlflxftgoutput_value_value-nmr0zl4z4sy5input_value_b",
+      "source": "nmr0zlflxftg",
+      "target": "nmr0zl4z4sy5",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "xy-edge__nmr109njz76voutput_value_value-nmr0zl4z4sy5input_value_c",
+      "source": "nmr109njz76v",
+      "target": "nmr0zl4z4sy5",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_c"
+    },
+    {
+      "id": "xy-edge__nmr0zku4xplqoutput_value_result-nmr0zl4z4sy5input_value_d",
+      "source": "nmr0zku4xplq",
+      "target": "nmr0zl4z4sy5",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_d"
+    },
+    {
+      "id": "xy-edge__nmr0zl4z4sy5output_value_result-nmr10gugm0fkinput_value_s",
+      "source": "nmr0zl4z4sy5",
+      "target": "nmr10gugm0fk",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_s"
+    },
+    {
+      "id": "emr10ug4yxwc",
+      "source": "nmr108o6mn0x",
+      "target": "nmr10ug4y86f",
+      "sourceHandle": "output_flow_body",
+      "targetHandle": "input_flow_in"
+    },
+    {
+      "id": "emr10ve4jkvi",
+      "source": "nmr10ug4y86f",
+      "target": "nmr10ve4j4p7",
+      "sourceHandle": "output_flow_out",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmr10w6jgt5eoutput_value_value-nmr10wa1g1t9input_value_array",
+      "source": "nmr10w6jgt5e",
+      "target": "nmr10wa1g1t9",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_array"
+    },
+    {
+      "id": "xy-edge__nmr10w6jgt5eoutput_value_value-nmr10wc2c3mhinput_value_array",
+      "source": "nmr10w6jgt5e",
+      "target": "nmr10wc2c3mh",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_array"
+    },
+    {
+      "id": "xy-edge__nmr10gugm0fkoutput_value_result-nmr10vpcbhh6input_value_vector",
+      "source": "nmr10gugm0fk",
+      "target": "nmr10vpcbhh6",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_vector"
+    },
+    {
+      "id": "xy-edge__nmr10vpcbhh6output_value_x-nmr10wtitrz2input_value_x",
+      "source": "nmr10vpcbhh6",
+      "target": "nmr10wtitrz2",
+      "sourceHandle": "output_value_x",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "xy-edge__nmr10wa1g1t9output_value_value-nmr10wtitrz2input_value_y",
+      "source": "nmr10wa1g1t9",
+      "target": "nmr10wtitrz2",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "xy-edge__nmr10vpcbhh6output_value_y-nmr1bx82k83tinput_value_x",
+      "source": "nmr10vpcbhh6",
+      "target": "nmr1bx82k83t",
+      "sourceHandle": "output_value_y",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "xy-edge__nmr10wc2c3mhoutput_value_value-nmr1bx82k83tinput_value_y",
+      "source": "nmr10wc2c3mh",
+      "target": "nmr1bx82k83t",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "xy-edge__nmr10wtitrz2output_value_result-nmr10ve4j4p7input_value_value",
+      "source": "nmr10wtitrz2",
+      "target": "nmr10ve4j4p7",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "xy-edge__nmr10ve4j4p7output_flow_next-nmr1bxk9was1input_flow_do",
+      "source": "nmr10ve4j4p7",
+      "target": "nmr1bxk9was1",
+      "sourceHandle": "output_flow_next",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmr1bx82k83toutput_value_result-nmr1bxk9was1input_value_value",
+      "source": "nmr1bx82k83t",
+      "target": "nmr1bxk9was1",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "emr1byg5peyc",
+      "source": "nmr0y8i2a00g",
+      "target": "nmr1byg5pmbx",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "xy-edge__nmr1byg5pmbxoutput_flow_first-nmr108o6mn0xinput_flow_do",
+      "source": "nmr1byg5pmbx",
+      "target": "nmr108o6mn0x",
+      "sourceHandle": "output_flow_first",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "e_mr1byqty_0_mc1",
+      "source": "nmr1byqty0j6",
+      "target": "nmr1byqty8xy",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_array"
+    },
+    {
+      "id": "e_mr1byqty_1_ooy",
+      "source": "nmr1byqty0j6",
+      "target": "nmr1byqtywzp",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_array"
+    },
+    {
+      "id": "xy-edge__nmr1byqty8xyoutput_value_value-nmr0zi59xfokinput_value_fx",
+      "source": "nmr1byqty8xy",
+      "target": "nmr0zi59xfok",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_fx"
+    },
+    {
+      "id": "xy-edge__nmr1byqtywzpoutput_value_value-nmr0zi59xfokinput_value_fy",
+      "source": "nmr1byqtywzp",
+      "target": "nmr0zi59xfok",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_fy"
+    },
+    {
+      "id": "xy-edge__nmr108o6mn0xoutput_value_element-nmr109njz76vinput_value_agentId",
+      "source": "nmr108o6mn0x",
+      "target": "nmr109njz76v",
+      "sourceHandle": "output_value_element",
+      "targetHandle": "input_value_agentId"
+    },
+    {
+      "id": "emr1chrwmag0",
+      "source": "nmr108o6mn0x",
+      "target": "nmr1chrwmr9h",
+      "sourceHandle": "output_value_element",
+      "targetHandle": "input_value_agentId"
+    },
+    {
+      "id": "xy-edge__nmr1cexwrmw5output_value_handle-nmr1chrwmr9hinput_value_refId",
+      "source": "nmr1cexwrmw5",
+      "target": "nmr1chrwmr9h",
+      "sourceHandle": "output_value_handle",
+      "targetHandle": "input_value_refId"
+    },
+    {
+      "id": "xy-edge__nmr0zk207nipoutput_value_vector-nmr0zkd5ls2finput_value_a",
+      "source": "nmr0zk207nip",
+      "target": "nmr0zkd5ls2f",
+      "sourceHandle": "output_value_vector",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "xy-edge__nmr1chrwmr9houtput_value_x-nmr0zk207nipinput_value_x",
+      "source": "nmr1chrwmr9h",
+      "target": "nmr0zk207nip",
+      "sourceHandle": "output_value_x",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "xy-edge__nmr1chrwmr9houtput_value_y-nmr0zk207nipinput_value_y",
+      "source": "nmr1chrwmr9h",
+      "target": "nmr0zk207nip",
+      "sourceHandle": "output_value_y",
+      "targetHandle": "input_value_y"
+    },
+    {
+      "id": "xy-edge__nmrnormgrav01output_value_result-nmr10gugm0fkinput_value_a",
+      "source": "nmrnormgrav01",
+      "target": "nmr10gugm0fk",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "xy-edge__nmr0zk207nipoutput_value_vector-nmrnormgrav01input_value_a",
+      "source": "nmr0zk207nip",
+      "target": "nmrnormgrav01",
+      "sourceHandle": "output_value_vector",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "orbit_nmr1byg5pmbx_output_flow_then__norbit_condmass_input_flow_check",
+      "source": "nmr1byg5pmbx",
+      "sourceHandle": "output_flow_then",
+      "target": "norbit_condmass",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "orbit_nmr0zlflxftg_output_value_value__norbit_cmpmass_input_value_x",
+      "source": "nmr0zlflxftg",
+      "sourceHandle": "output_value_value",
+      "target": "norbit_cmpmass",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "orbit_norbit_cmpmass_output_value_result__norbit_condmass_input_value_condition",
+      "source": "norbit_cmpmass",
+      "sourceHandle": "output_value_result",
+      "target": "norbit_condmass",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "orbit_norbit_condmass_output_flow_then__norbit_seqsmall_input_flow_do",
+      "source": "norbit_condmass",
+      "sourceHandle": "output_flow_then",
+      "target": "norbit_seqsmall",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "orbit_norbit_seqsmall_output_flow_first__nmr0zi59xfok_input_flow_do",
+      "source": "norbit_seqsmall",
+      "sourceHandle": "output_flow_first",
+      "target": "nmr0zi59xfok",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "orbit_norbit_seqsmall_output_flow_then__norbit_condage_input_flow_check",
+      "source": "norbit_seqsmall",
+      "sourceHandle": "output_flow_then",
+      "target": "norbit_condage",
+      "targetHandle": "input_flow_check"
+    },
+    {
+      "id": "orbit_nmr0y8i2a00g_output_value_myAge__norbit_cmpage_input_value_x",
+      "source": "nmr0y8i2a00g",
+      "sourceHandle": "output_value_myAge",
+      "target": "norbit_cmpage",
+      "targetHandle": "input_value_x"
+    },
+    {
+      "id": "orbit_norbit_cmpage_output_value_result__norbit_condage_input_value_condition",
+      "source": "norbit_cmpage",
+      "sourceHandle": "output_value_result",
+      "target": "norbit_condage",
+      "targetHandle": "input_value_condition"
+    },
+    {
+      "id": "orbit_norbit_condage_output_flow_then__norbit_setv_input_flow_do",
+      "source": "norbit_condage",
+      "sourceHandle": "output_flow_then",
+      "target": "norbit_setv",
+      "targetHandle": "input_flow_do"
+    }
+  ],
+  "macroDefs": [],
+  "topologyMode": {
+    "gridCells": false,
+    "agents": true
+  },
+  "centerBased": {
+    "enabled": true,
+    "maxAgents": 2000,
+    "maxBonds": 0,
+    "worldWidth": 100,
+    "worldHeight": 100,
+    "useBondingPhysics": false,
+    "agentUpdateMode": "sync",
+    "drag": 1,
+    "defaultRadius": 1,
+    "neighbourQueryRadius": 5,
+    "timeStep": 1,
+    "momentum": 0.999
+  },
+  "variables": [],
+  "agentVariables": [
+    {
+      "id": "variable_mr10806tfie",
+      "name": "Acc Grav. Force",
+      "kind": "array",
+      "dataType": "float",
+      "initialValue": "0",
+      "length": 2
+    }
+  ],
+  "agentMappings": [
+    {
+      "id": "agent_view_mr0yi9uij5g",
+      "name": "Agent View",
+      "description": "",
+      "isAttributeToColor": true,
+      "linked": true,
+      "linkedAttributeId": "agent_attribute_mr0yi1m26lz",
+      "redDescription": "",
+      "greenDescription": "",
+      "blueDescription": "",
+      "linkedColors": {
+        "gradient": [
+          {
+            "position": 0,
+            "r": 0,
+            "g": 32,
+            "b": 76
+          },
+          {
+            "position": 0.5,
+            "r": 124,
+            "g": 123,
+            "b": 120
+          },
+          {
+            "position": 1,
+            "r": 255,
+            "g": 233,
+            "b": 69
+          }
+        ]
+      },
+      "linkedMax": 5.922e+22
+    }
+  ],
+  "agentAttributes": [
+    {
+      "id": "agent_attribute_mr0yi1m26lz",
+      "name": "Mass",
+      "type": "float",
+      "description": "",
+      "isModelAttribute": false,
+      "defaultValue": "1"
+    }
+  ]
+}
