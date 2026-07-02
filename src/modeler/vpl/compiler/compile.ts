@@ -475,8 +475,19 @@ function compileRoot(
   // for sync mode and for inputColor/outputMapping roots (no single-buffer step
   // hazard) → byte-identical there.
   const isAsyncRoot = model?.properties.updateMode === 'asynchronous';
-  const hazardEligible = !!isAsyncRoot
-    && (rootNode.data.nodeType === 'step' || rootNode.data.nodeType === 'initEvent');
+  // Bond-Graph Agents: the behaviour loop's own-attr reads alias the write
+  // buffer in ASYNC agent mode (the default), and the engine buffers (velocity /
+  // position / radius) are live in BOTH modes — so a behaviour read after a
+  // matching write must pin at its use site exactly like the lattice async
+  // hazard. The division event's w_ block aliases attrRead on every target
+  // (division is JS-on-CPU everywhere), so it is ALWAYS eligible. The agent
+  // WASM/WebGPU compilers seed the SAME analyzer into their volatile sets under
+  // the SAME eligibility, keeping cross-target emission in lockstep.
+  const agentAttrsAsync = model?.centerBased?.agentUpdateMode !== 'sync';
+  const hazardEligible = (!!isAsyncRoot
+    && (rootNode.data.nodeType === 'step' || rootNode.data.nodeType === 'initEvent'))
+    || (rootNode.data.nodeType === 'behaviourStep' && agentAttrsAsync)
+    || rootNode.data.nodeType === 'divisionEvent';
   const hazardReads = computeAsyncReadWriteHazards({
     nodeMap, inputToSource, inputToSources, flowOutputToTargets,
     rootNodeId: rootNode.id, rootFlowPortId: rootFlowPort, isAsync: hazardEligible,
@@ -512,7 +523,16 @@ function compileRoot(
       volatileEmitTarget.push(volatileEmitIndent + code.trimEnd());
       return;
     }
-    const scope = sinkAnalysis.emitScope.get(nodeId) ?? CELL_TOP;
+    let scope = sinkAnalysis.emitScope.get(nodeId) ?? CELL_TOP;
+    // Agent field reads are a STEP-START SNAPSHOT on every target (D-FIELD
+    // "sample before deposit"; the agent WASM hoist + WebGPU's fieldRead buffer
+    // both read pre-deposit). Branch-sinking one on JS would let it see a
+    // same-step deposit that flow-precedes the branch — a silent cross-target
+    // divergence — so pin them at agent-loop top.
+    if (ctx.agentRoot && scope !== CELL_TOP) {
+      const t = nodeMap.get(nodeId)?.data.nodeType;
+      if (t === 'sampleField' || t === 'fieldGradient' || t === 'readCellsUnder') scope = CELL_TOP;
+    }
     if (scope === CELL_TOP) {
       valueLines.push('      ' + code.trimEnd());
       return;
@@ -1026,16 +1046,32 @@ function compileRoot(
         // Bond-Graph Agents: iterate the current agent's ragged bond list. No
         // array input — the bonds come from the engine store via the agent loop
         // params. Per-iteration value-outs: partnerId / restLength / currentLength
-        // / index. (currentLength is the raw Euclidean distance — torus wrap is
-        // not applied; bonds are short-range so this is exact in practice.)
+        // / index. currentLength uses the torus-SHORTEST displacement (the "any
+        // node subtracting two agent positions routes through the offset wrap"
+        // invariant — a seam-straddling bond otherwise reads ≈ W − actual and
+        // "break over-strained bonds" severs every seam bond) + the z arm in 3D.
         const feb = `_feb${node.id}`;
         const base = `_bb${node.id}`;
         const pid = `_v${node.id}_partnerId`;
+        const dbx = `_dbx${node.id}`, dby = `_dby${node.id}`, dbz = `_dbz${node.id}`;
         flowLines.push(`${indent}for (let ${feb} = 0; ${feb} < _agentBondCount[idx]; ${feb}++) {`);
         flowLines.push(`${indent}  const ${base} = idx * maxBonds + ${feb};`);
         flowLines.push(`${indent}  const ${pid} = _bondPartner[${base}];`);
         flowLines.push(`${indent}  const _v${node.id}_restLength = _bondRestLength[${base}];`);
-        flowLines.push(`${indent}  const _v${node.id}_currentLength = Math.hypot(_agentX[${pid}] - _agentX[idx], _agentY[${pid}] - _agentY[idx]);`);
+        if (ctx.is3d) {
+          flowLines.push(`${indent}  let ${dbx} = _agentX[${pid}] - _agentX[idx], ${dby} = _agentY[${pid}] - _agentY[idx], ${dbz} = _agentZ[${pid}] - _agentZ[idx];`);
+          flowLines.push(`${indent}  if (_fieldBoundaryTorus) { const __hW = _fieldW/2, __hH = _fieldH/2, __hD = _fieldD/2;`
+            + ` if (${dbx} > __hW) ${dbx} -= _fieldW; else if (${dbx} < -__hW) ${dbx} += _fieldW;`
+            + ` if (${dby} > __hH) ${dby} -= _fieldH; else if (${dby} < -__hH) ${dby} += _fieldH;`
+            + ` if (${dbz} > __hD) ${dbz} -= _fieldD; else if (${dbz} < -__hD) ${dbz} += _fieldD; }`);
+          flowLines.push(`${indent}  const _v${node.id}_currentLength = Math.hypot(${dbx}, ${dby}, ${dbz});`);
+        } else {
+          flowLines.push(`${indent}  let ${dbx} = _agentX[${pid}] - _agentX[idx], ${dby} = _agentY[${pid}] - _agentY[idx];`);
+          flowLines.push(`${indent}  if (_fieldBoundaryTorus) { const __hW = _fieldW/2, __hH = _fieldH/2;`
+            + ` if (${dbx} > __hW) ${dbx} -= _fieldW; else if (${dbx} < -__hW) ${dbx} += _fieldW;`
+            + ` if (${dby} > __hH) ${dby} -= _fieldH; else if (${dby} < -__hH) ${dby} += _fieldH; }`);
+          flowLines.push(`${indent}  const _v${node.id}_currentLength = Math.hypot(${dbx}, ${dby});`);
+        }
         flowLines.push(`${indent}  const _v${node.id}_index = ${feb};`);
         flushBranchValues(`${node.id}:body`, flowLines, indent + '  ');
         const savedTarget = bodyTarget;
@@ -1490,7 +1526,16 @@ export function compileGraph(
   const niIs3d = is3dModel(model);
   const packCoord = (nbr: { coords: Array<[number, number]>; coords3d?: Array<[number, number, number]> } | undefined, slot: number): number => {
     if (!nbr || slot < 0) return INVALID_NI;
-    if (niIs3d) { const c = nbr.coords3d?.[slot]; return c ? packNI3(c[0], c[1], c[2]) : INVALID_NI; }
+    if (niIs3d) {
+      const c = nbr.coords3d?.[slot];
+      if (c) return packNI3(c[0], c[1], c[2]);
+      // A 2D-authored neighbourhood (no coords3d) in a 3D model: fall back to
+      // coords with dl=0 — the SAME fallback the worker's buildNeighborIndices
+      // uses. Without this, every slot packed INVALID_NI and NI-based rules
+      // silently no-op'd while neighbour-attribute rules kept working.
+      const c2 = nbr.coords[slot];
+      return c2 ? packNI3(c2[0], c2[1], 0) : INVALID_NI;
+    }
     const c = nbr.coords[slot]; return c ? packNI(c[0], c[1]) : INVALID_NI;
   };
   for (const node of graphNodes) {
@@ -1539,7 +1584,9 @@ export function compileGraph(
       // coords3d (3-axis); 2D from coords (2-axis, byte-identical).
       const nbrId = node.data.config.neighborhoodId as string;
       const nbr = model.neighborhoods.find(n => n.id === nbrId);
-      const len = nbr ? (niIs3d ? (nbr.coords3d?.length ?? 0) : nbr.coords.length) : 0;
+      // 3D: coords3d when present, else the 2D coords (dl=0 fallback — stride
+      // invariant keeps the lengths equal when coords3d exists).
+      const len = nbr ? (niIs3d ? (nbr.coords3d?.length ?? nbr.coords.length) : nbr.coords.length) : 0;
       const packed: number[] = [];
       for (let i = 0; i < len; i++) packed.push(packCoord(nbr, i));
       node.data.config._resolvedPackedAll = JSON.stringify(packed);
@@ -2101,9 +2148,14 @@ function buildDivisionParams(model: CAModel): string {
     '_agentX', '_agentY', '_agentRadius', '_agentTargetRadius', '_agentAge',
     '_agentLineage', '_agentBondCount', '_agentDensity',
     '_agentVX', '_agentVY',
-    '_bondPartner', 'maxBonds',
+    // bond store incl. rest lengths + epochs so For Each Bond is division-safe
+    // ("inspect the inherited bonds per daughter" is a natural division shape).
+    '_bondPartner', '_bondRestLength', '_bondPartnerEpoch', 'maxBonds',
   ];
   for (const a of agentAttrs) parts.push(`r_${a.id}`);
+  // NB the worker aliases the w_ block onto attrRead (buildDivisionArgs): the
+  // division event runs AFTER swapAgentAttrs, so sync-mode writes into the
+  // distinct attrWrite buffer would be clobbered by the next step's prime.
   for (const a of agentAttrs) parts.push(`w_${a.id}`);
   parts.push('modelAttrs', 'colors', 'activeViewer', '_indicators', '_rngState', '_stopFlag', 'glyphCodes', 'glyphColors');
   // Agent sprites — persistent per-agent display state written by Set Agent
@@ -2146,8 +2198,10 @@ function buildDivisionParams(model: CAModel): string {
  *  `_agentAddToWorld`) + `_agentMaxAgents` (the by-id setters' range guard), then
  *  the writable geometry buffers, the agent attr buffers, the global/rng/field
  *  block, and `_agentSeedBase` (highWater before the Init Event = the
- *  seedIndexBase value-out). 2D-only this milestone (agents are 2D). */
+ *  seedIndexBase value-out). A trailing `_agentZ` rides only in 3D (Set Agent
+ *  Position's z write) — MIRROR invariant with buildAgentInitArgs (B1/B2). */
 function buildAgentInitParams(model: CAModel): string {
+  const is3d = is3dModel(model);
   const agentAttrs = agentAttrsOf(model);
   const fieldAttrs = cellFieldAttrsOf(model);
   const parts: string[] = [
@@ -2168,6 +2222,10 @@ function buildAgentInitParams(model: CAModel): string {
   parts.push('_fieldW', '_fieldH', '_fieldTotal', '_fieldBoundaryTorus');
   for (const a of fieldAttrs) parts.push(`_field_${a.id}`);
   parts.push('_agentSeedBase');
+  // Trailing 3D block (B1) — Set Agent Position's z write targets `_agentZ`; the
+  // canonical spawn recipe (Create → Set Agent Position → Add To World) threw
+  // `_agentZ is not defined` in 3D without it. Mirrors buildAgentInitArgs.
+  if (is3d) parts.push('_agentZ');
   return parts.join(', ');
 }
 
@@ -2284,8 +2342,9 @@ export function compileAgentGraph(
     }
   }
   // Agent sprites — resolve each Set Agent Sprite node's sprite asset id to a
-  // 1-based slot into `model.sprites` (0 = unresolved/deleted → the node emits no
-  // write). Mirrors the variegated/tag/indicator pre-resolves. The main-thread
+  // 1-based slot into `model.sprites` (0 = unresolved/deleted → the node emits
+  // `spriteIds[idx] = 0`, clearing the agent's sprite back to the plain circle).
+  // Mirrors the variegated/tag/indicator pre-resolves. The main-thread
   // renderer maps slot k → model.sprites[k-1].
   {
     const spriteSlot = new Map((model.sprites ?? []).map((s, i) => [s.id, i + 1] as const));
@@ -2452,6 +2511,7 @@ export function compileAgentGraph(
   // idx*4 → colors / spriteIds). The worker runs the one matching the active AGENT
   // viewer (its setCellLooks is guarded by `activeViewer === <mappingId>`). ---
   const outputMappingCodes: Array<{ mappingId: string; code: string }> = [];
+  const omErrors: string[] = [];
   {
     const { params: omParams } = buildAgentLoopParams(model);
     for (const omNode of agentNodes.filter(n => n.data.nodeType === 'agentOutputMapping')) {
@@ -2482,11 +2542,18 @@ export function compileAgentGraph(
           '})',
         ].join('\n');
         outputMappingCodes.push({ mappingId, code });
-      } catch { /* a degenerate mapping just yields no colour pass */ }
+      } catch (e) {
+        // Surface instead of swallowing: a broken standalone agent OM graph used
+        // to silently produce NO colour pass ("my mapping does nothing").
+        omErrors.push(`agent output mapping "${mappingId || '(unset)'}": ${(e as Error)?.message || e}`);
+      }
     }
   }
 
-  return { behaviourCode, initCode, divisionCode, stopMessages, outputMappingCodes };
+  return {
+    behaviourCode, initCode, divisionCode, stopMessages, outputMappingCodes,
+    error: omErrors.length > 0 ? omErrors.join('\n') : undefined,
+  };
 }
 
 /**

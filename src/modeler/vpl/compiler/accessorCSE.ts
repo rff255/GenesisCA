@@ -104,11 +104,37 @@ const NEVER_PURE_TYPES = new Set<string>([
   'getBondedAgents',
   'pickRandomAgent',
   'pickNRandomAgents',
+  // Engine-buffer readers whose backing store the BEHAVIOUR graph can mutate
+  // mid-agent via the live setters (Set Velocity / Set Agent Position / Set
+  // Agent Radius write vx/x/radius DIRECTLY; the field deposits write _field_*
+  // in place). Two structurally-identical reads straddling such a write are NOT
+  // interchangeable — same rationale as getAgentAttribute above. The lost dedup
+  // is a few array reads; correctness wins.
+  'getVelocity',
+  'getSelfPosition',
+  'getAgentPosition',
+  'getAgentOffset',
+  'getAgentRadius',
+  'getRadius',
+  'getNearbyAgents',
+  'getCurvature',
+  'sampleField',
+  'fieldGradient',
+  'readCellsUnder',
+  // Create Agent allocates a NEW slot per call — two Create Agents with the same
+  // inline x/y/radius are two DIFFERENT agents; merging their handles retargets
+  // every consumer onto one agent and leak-sweeps the other (silent population
+  // loss in the Init Event).
+  'createAgent',
   // Entry-point nodes — their "outputs" are external function params.
   'step',
   'initEvent',
   'inputColor',
   'outputMapping',
+  'behaviourStep',
+  'divisionEvent',
+  'agentInit',
+  'agentOutputMapping',
   // Macro boundary / opaque container — v1 doesn't introspect macro internals.
   'macro',
   'macroInput',
@@ -127,6 +153,14 @@ function isPureType(node: GraphNode): boolean {
   if ((t === 'aggregate' || t === 'groupOperator') && IMPURE_OPS.has(String(node.data.config.operation))) {
     return false;
   }
+  // A node with ANY flow port is never a CSE source: its value outputs (a
+  // forEachBond/forEachInArray's per-iteration element/index, a Create Agent's
+  // handle) are declared block-scoped INSIDE its flow emit — canonicalizing two
+  // instances rewires the second's consumers onto an out-of-scope const
+  // (runtime ReferenceError). Zero-config flow nodes (two bare For Each Bonds)
+  // share identical purity keys, so this class collides unconditionally.
+  const def = getNodeDef(t);
+  if (def && def.ports.some(p => p.category === 'flow')) return false;
   return true;
 }
 

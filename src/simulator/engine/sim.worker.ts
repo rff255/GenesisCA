@@ -205,6 +205,10 @@ interface InitMsg {
    *  `agentTarget === 'wasm'`). Instantiated against the agent store's memory +
    *  the host math funcs; absent → the JS behaviour fn runs. */
   agentWasmBytes?: Uint8Array;
+  /** Ordered non-sentinel setCellLooks mappingIds the WASM behaviour references —
+   *  the worker passes `indexOf(activeViewer)` as the behaviour's trailing
+   *  `activeViewerIdx` arg (JS `_isV_` guard parity). */
+  agentWasmViewerGuardIds?: string[];
   /** FULL-COVERAGE WASM agent port: the extra-region sizing the wasmBacked store
    *  reserves (model attrs / indicators / lookup tables / cell fields / array
    *  scratch) — the SAME extras the compiler built the module's layout from. The
@@ -259,7 +263,7 @@ interface PaintManualMsg {
 }
 interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -404,7 +408,7 @@ interface FormBondBatchMsg { type: 'formBondBatch'; pairs: Array<[number, number
 /** Allocate a single agent (free-list first). REJECTS + surfaces on overflow. */
 interface CreateAgentMsg {
   type: 'createAgent';
-  x: number; y: number; radius?: number;
+  x: number; y: number; z?: number; radius?: number;   // z: 3D layer (absent → 0)
   activeViewer: string;
 }
 /** Kill the agents at the given ids (the kill brush). */
@@ -553,6 +557,8 @@ let pendingAgentLayoutExtras: AgentLayoutExtras | null = null;
  *  fieldW, fieldH, fieldD, fieldTorus)` — mirrors `compileAgentGraphWasm`'s
  *  behaviour params. */
 let agentBehaviourWasmFn: ((...args: number[]) => void) | null = null;
+/** Viewer-guard table for the WASM behaviour's trailing `activeViewerIdx` arg. */
+let agentWasmViewerGuardIds: string[] = [];
 /** W1 — the WASM force-pass export (soft-sphere + bond springs + integration). Set
  *  alongside agentBehaviourWasmFn; null on a behaviour-only module. When present
  *  (and the behaviour ran on WASM with the hash copied in this step), runAgentStep
@@ -615,6 +621,9 @@ function initAgents(): void {
   // Re-allocating the store invalidates any GPU agent runtime bound to the old
   // store/dims — drop it (buildAgentWebGPUIfNeeded rebuilds against the fresh one).
   if (agentWebgpuRuntime) { destroyAgentWebGPURuntime(agentWebgpuRuntime); agentWebgpuRuntime = null; }
+  // The per-step hash references the OLD store's scratch arrays — never hand it
+  // to a colour pass built over the fresh store (stale ids up to the old maxAgents).
+  currentAgentHash = null;
   if (!agentsEnabled || !centerBasedConfig) { agentStore = null; agentBehaviourWasmFn = null; agentForcePassWasmFn = null; return; }
   // AW-MEM (PR6a/PR6b-1): back the store on a WebAssembly.Memory (views at baked
   // offsets) when the agent target is 'wasm' (so the WASM behaviour loop reads/
@@ -832,7 +841,11 @@ function runAgentColorPass(): void {
     // run it with activeViewer = this mapping's id (NOT the global cell viewer).
     om.fn(...buildAgentLoopArgs(s, om.mappingId));
   } catch (e) {
-    self.postMessage({ type: 'error', message: '[agents] colour pass failed: ' + ((e as Error)?.message || e) });
+    // Drop the failing pass (mirrors the behaviour/division fns nulling
+    // themselves) — runAgentColorPass runs on every sendColors, so a throwing fn
+    // would otherwise spam one error post per step of play.
+    agentOutputMappingFns = agentOutputMappingFns.filter(f => f !== om);
+    self.postMessage({ type: 'error', message: `[agents] colour pass "${om.mappingId}" failed (disabled until recompile): ` + ((e as Error)?.message || e) });
   }
 }
 
@@ -869,6 +882,9 @@ function buildAgentInitArgs(
   args.push(width, height, total, boundaryTreatment === 'torus' ? 1 : 0);
   for (const spec of fieldSpecs) args.push(readAttrs[spec.id]);
   args.push(seedBase);
+  // Trailing 3D block (B1) — `_agentZ` for Set Agent Position's z write.
+  // MIRRORS buildAgentInitParams's `is3d` gate.
+  if (s.worldDepth > 1) args.push(s.z);
   return args;
 }
 
@@ -883,6 +899,7 @@ function runAgentInit(): void {
   const s = agentStore;
   const seedBase = s.highWater;   // the seedIndexBase value-out
   const created: number[] = [];
+  const createdSet = new Set<number>();
   let overflowed = false;
   const agentCreate = (x: number, y: number, z: number, radius: number): number => {
     const id = allocAgentSlot(s);
@@ -890,10 +907,15 @@ function runAgentInit(): void {
     initAgentSlot(s, id, x, y, z || 0, radius || cbNum(centerBasedConfig!, 'defaultRadius'), id);
     s.alive[id] = 0; s.liveCount--;   // STAGE (un-commit the alloc until Add To World)
     created.push(id);
+    createdSet.add(id);
     return id;
   };
   const agentAddToWorld = (id: number): void => {
-    if (id >= 0 && id < s.maxAgents && !s.alive[id]) { s.alive[id] = 1; s.liveCount++; }
+    // Only commit ids this Init Event actually staged via Create Agent. An
+    // arbitrary graph-wired id could otherwise mark a never-initialised slot (or
+    // a free-listed one) alive — a ghost agent + a permanently wrong liveCount,
+    // or a slot later double-allocated by allocAgentSlot.
+    if (createdSet.has(id) && !s.alive[id]) { s.alive[id] = 1; s.liveCount++; }
   };
   try {
     (agentInitFn as (...a: unknown[]) => void)(...buildAgentInitArgs(s, agentCreate, agentAddToWorld, seedBase));
@@ -904,7 +926,11 @@ function runAgentInit(): void {
   for (const id of created) if (!s.alive[id]) freeStagedSlot(s, id);
   // Sync xNext=x for live agents so a Set Agent Position override propagates
   // through the first integration step (initAgentSlot set xNext at Create time).
-  for (let i = 0; i < s.highWater; i++) { if (s.alive[i]) { s.xNext[i] = s.x[i]!; s.yNext[i] = s.y[i]!; } }
+  // zNext too in 3D — without it a z override is undone by the first swap.
+  const initIs3d = s.worldDepth > 1;
+  for (let i = 0; i < s.highWater; i++) {
+    if (s.alive[i]) { s.xNext[i] = s.x[i]!; s.yNext[i] = s.y[i]!; if (initIs3d) s.zNext[i] = s.z[i]!; }
+  }
   // Sync agent mode double-buffers the attributes: the Init Event's Set Attribute
   // / Set Agent Attribute wrote the WRITE buffer, but the first behaviour step (and
   // getState / the first colour pass) read the READ buffer. Copy write→read so the
@@ -963,10 +989,16 @@ function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, ax
     s.alive, s.highWater,
     s.x, s.y, s.radius, s.targetRadius, s.age, s.lineage, s.bondCount, s.density,
     s.vx, s.vy,
-    s.bondPartner, s.maxBonds,
+    s.bondPartner, s.bondRestLength, s.bondPartnerEpoch, s.maxBonds,
   ];
   for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
-  for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
+  // The w_ block ALIASES attrRead on purpose: the division event runs in the
+  // structural phase AFTER swapAgentAttrs, so a write into the distinct sync-mode
+  // attrWrite buffer would be clobbered by the next step's primeAgentAttrWrite
+  // (read→write clone) — daughter reassignments silently vanished. The division
+  // event is a sequential single-agent function, so immediate (aliased) writes
+  // are the correct semantics; in async mode attrWrite === attrRead anyway.
+  for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
   args.push(cachedModelAttrs, s.colors, activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS, s.spriteIds, s.spriteFrames, s.spriteSpeeds);
   // PR3 FIX 1 — Lookup Tables (pinned slot, mirrors buildDivisionParams).
   if (hasLookupTables) args.push(cachedInteractionTables);
@@ -1239,7 +1271,8 @@ function runAgentStep(): void {
         // the closed-feedback source; the WASM behaviour reads + writes them, and we
         // copy the deposit back out AFTER (Decision D-FIELD).
         copyAgentExternalRegionsIn(s);
-        agentBehaviourWasmFn(s.highWater, hashValid, nBinsX, nBinsY, nBinsZ, binSizeX, binSizeY, binSizeZ, W, H, D, torus ? 1 : 0, originX, originY, originZ);
+        agentBehaviourWasmFn(s.highWater, hashValid, nBinsX, nBinsY, nBinsZ, binSizeX, binSizeY, binSizeZ, W, H, D, torus ? 1 : 0, originX, originY, originZ,
+          agentWasmViewerGuardIds.indexOf(activeViewer));
         // (3) read the advanced RNG state back so the shared stream stays in lockstep.
         rngState[0] = new Uint32Array(buf, L.rngStateOffset, 1)[0]!;
         // copy the field deposit + indicators back out (the cell CA step incorporates
@@ -1564,7 +1597,37 @@ function agentWebgpuIndicatorIsInt(): boolean[] {
   return indicatorsList.map(ind => ind.kind === 'standalone' && (ind.dataType === 'integer' || ind.dataType === 'tag'));
 }
 
+/** Mutation messages that must NOT run while a GPU agent step's readback is in
+ *  flight: the async awaits yield to onmessage, so a move/seed/paint applied
+ *  mid-step would be clobbered when `readbackAgentStep` (agents) or
+ *  `readbackAgentField` (cell fields) overwrites the CPU arrays with
+ *  pre-mutation GPU values. Deferred + replayed right after the step settles. */
+const AGENT_GPU_DEFER_TYPES = new Set<string>([
+  'seedAgents', 'createAgent', 'killAgents', 'paintAgents', 'moveAgents',
+  'formBond', 'formBondBatch', 'breakBond', 'clearAgents',
+  'paint', 'paintManual', 'writeRegion', 'clearRegion',
+]);
+let agentGpuStepInFlight = false;
+let deferredDuringAgentGpuStep: WorkerMsg[] = [];
+
+function flushDeferredAgentGpuMsgs(): void {
+  if (deferredDuringAgentGpuStep.length === 0) return;
+  const q = deferredDuringAgentGpuStep;
+  deferredDuringAgentGpuStep = [];
+  for (const m of q) self.onmessage!.call(self as never, { data: m } as MessageEvent<WorkerMsg>);
+}
+
 async function runAgentStepWebGPU(): Promise<boolean> {
+  agentGpuStepInFlight = true;
+  try {
+    return await runAgentStepWebGPUInner();
+  } finally {
+    agentGpuStepInFlight = false;
+    flushDeferredAgentGpuMsgs();
+  }
+}
+
+async function runAgentStepWebGPUInner(): Promise<boolean> {
   const s = agentStore;
   const rt = agentWebgpuRuntime;
   if (!s || !rt || !rt.ready) return false;
@@ -1584,10 +1647,14 @@ async function runAgentStepWebGPU(): Promise<boolean> {
   const dt = s.dt;
 
   // Reset the per-step force accumulator (Apply Force adds into it on the GPU).
-  s.forceX.fill(0, 0, hw); s.forceY.fill(0, 0, hw);
+  // forceZ too: a JS fallback step (startup while the runtime builds, hash
+  // overflow) leaves the last JS behaviour's z-force in the CPU store, and
+  // uploadAgentSoA re-uploads it as the accumulator seed every GPU step — a
+  // permanent phantom z-force in 3D without this reset.
+  s.forceX.fill(0, 0, hw); s.forceY.fill(0, 0, hw); s.forceZ.fill(0, 0, hw);
 
   // Build the uniform spatial hash CPU-side (same as the JS path) — the GPU
-  // behaviour + force passes query it. 2D (the WebGPU agent gate rejects 3D).
+  // behaviour + force passes query it (2D and 3D; the shaders carry the Z dims).
   let maxR = cbNum(cfg, 'defaultRadius');
   for (let i = 0; i < hw; i++) { if (alive[i] && rad[i]! > maxR) maxR = rad[i]!; }
   const binEdge = Math.max(range * 2 * maxR, cbNum(cfg, 'neighbourQueryRadius'));
@@ -1791,6 +1858,12 @@ function runAgentStructuralPhase(): void {
     let maxR = cbNum(cfg, 'defaultRadius');
     for (let i = 0; i < hw; i++) { if (alive[i] && rad[i]! > maxR) maxR = rad[i]!; }
     const hash = buildSpatialHash(s, Math.max(1e-3, bMul * 2 * maxR), W, H, D, boundaryTreatment === 'torus', agentHashReserve);
+    // buildSpatialHash reuses the per-store scratch arrays, so this rebuild (at a
+    // DIFFERENT bin edge) just corrupted `currentAgentHash`'s contents while its
+    // dims still describe the step hash — invalidate so a later colour pass
+    // (Get Nearby Agents in an agent OM graph) falls back to all-pairs instead
+    // of querying a dims/content-mismatched hash.
+    currentAgentHash = null;
     const tryForm = (i: number, j: number) => {
       if (j <= i || !alive[j]) return;
       let dx = x[j]! - x[i]!, dy = y[j]! - y[i]!;
@@ -4029,6 +4102,13 @@ function sendColors(): void {
 self.onmessage = (e: MessageEvent<WorkerMsg>) => {
   const msg = e.data;
 
+  // A GPU agent step's awaited readback yields to this handler — defer mutation
+  // messages until the step settles so the readback can't clobber them.
+  if (agentGpuStepInFlight && AGENT_GPU_DEFER_TYPES.has(msg.type)) {
+    deferredDuringAgentGpuStep.push(msg);
+    return;
+  }
+
   switch (msg.type) {
     case 'init': {
       width = msg.width;
@@ -4105,6 +4185,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // shaders — a target missing its payload demotes to 'js'.
       agentTarget = resolveAgentTarget(msg.agentTarget, msg.agentWasmBytes, msg.agentWebgpuBehaviourShader, msg.agentWebgpuForceShader);
       pendingAgentWasmBytes = msg.agentWasmBytes ?? null;
+      agentWasmViewerGuardIds = msg.agentWasmViewerGuardIds ?? [];
       pendingAgentLayoutExtras = msg.agentLayoutExtras ?? null;
       pendingAgentWebgpuBehaviour = msg.agentWebgpuBehaviourShader ?? null;
       pendingAgentWebgpuForce = msg.agentWebgpuForceShader ?? null;
@@ -4117,12 +4198,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       compileAgentFns(msg.agentBehaviourCode, msg.agentInitCode, msg.agentDivisionCode, (msg as InitMsg).agentOutputMappingCodes);
       instantiateAgentWasmIfNeeded();
       buildAgentWebGPUIfNeeded();
-      // Generic Agent Platform: run the Agent Init Event ONCE on this fresh store
-      // (after the fns are compiled), so graph-authored seeding (Create Agent /
-      // Add Agent To World) lays down the initial population on first load too —
-      // not only on Reset. initAgents() above laid the seedCount baseline first.
-      // (The cell Init Event runs below, AFTER the compile target is resolved.)
-      if (agentsEnabled) runAgentInit();
+      // (The Agent Init Event runs BELOW, after the cell Init Event — a
+      // Create-Agent rule that reads the field must see the seeded substrate,
+      // Decision D-FIELD ordering.)
       stopMessages = msg.stopMessages || [];
       webgpuStopCheckInterval = Math.max(1, Math.floor(msg.webgpuStopCheckInterval ?? 1));
       // Mutual exclusion safety net: a saved file or hand-edited JSON could
@@ -4166,6 +4244,13 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // JS/WASM path; the WebGPU-ready handler uploads the seeded CPU attrs.)
       const loadHadInit = initFn !== null || (useWasm && wasmInitFn !== null);
       runInit();
+      // Generic Agent Platform: run the Agent Init Event ONCE on this fresh store
+      // (after the fns are compiled), so graph-authored seeding (Create Agent /
+      // Add Agent To World) lays down the initial population on first load too —
+      // not only on Reset. initAgents() above laid the seedCount baseline first.
+      // AFTER runInit() so an agent spawn rule that reads the cell field sees the
+      // cell-Init-Event-seeded substrate (D-FIELD ordering).
+      if (agentsEnabled) runAgentInit();
       // Recompute colors so the seeded state shows on load instead of the
       // defaults. Run ONLY the Output Mapping colour pass (never a step — that
       // would advance the generation on load) when the active viewer has one;
@@ -4551,8 +4636,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // Bond-Graph Agents — Reset re-seeds the agent population (clear + re-seed
       // the configured initial count + the agent Init Event, PR-A3). Re-allocates
       // the store from the live config so a config edit (maxAgents/seedCount/…)
-      // takes effect on Reset.
-      if (agentsEnabled) { initAgents(); instantiateAgentWasmIfNeeded(); buildAgentWebGPUIfNeeded(); runAgentInit(); runAgentColorPass(); }
+      // takes effect on Reset. The agent Init Event itself runs AFTER runInit()
+      // below — a Create-Agent rule that reads the field must see the cell Init
+      // Event's seeded substrate (D-FIELD ordering).
+      if (agentsEnabled) { initAgents(); instantiateAgentWasmIfNeeded(); buildAgentWebGPUIfNeeded(); }
       // Init Event runs once per cell on Reset only (not on Randomize, not on
       // Load State). When present, it modifies attrs in place AFTER defaults
       // have been applied and BEFORE the color pass / GPU upload.
@@ -4567,6 +4654,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         if (orientationReadView) uploadOrientation(webgpuRuntime, orientationReadView);
       }
       runInit();
+      // Agent Init Event + colour pass — after the cell Init Event (D-FIELD).
+      if (agentsEnabled) { runAgentInit(); runAgentColorPass(); }
       if (hadInit) {
         // Init wrote to attrs after resetGrid's color refresh — recompute
         // colors so the user sees the post-init state, not the defaults.
@@ -4621,6 +4710,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // the backing — the GPU has its own buffers — so the population persists.)
         const newTarget = resolveAgentTarget(rc.agentTarget, rc.agentWasmBytes, rc.agentWebgpuBehaviourShader, rc.agentWebgpuForceShader);
         pendingAgentWasmBytes = rc.agentWasmBytes ?? null;
+        agentWasmViewerGuardIds = rc.agentWasmViewerGuardIds ?? [];
         pendingAgentLayoutExtras = rc.agentLayoutExtras ?? null;
         pendingAgentWebgpuBehaviour = rc.agentWebgpuBehaviourShader ?? null;
         pendingAgentWebgpuForce = rc.agentWebgpuForceShader ?? null;
@@ -5056,9 +5146,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         if (id < 0) {
           self.postMessage({ type: 'agentOverflow', message: `Agent capacity reached (maxAgents=${agentStore.maxAgents}).` });
         } else {
-          // z=0 for now — the createAgent msg has no z (the 2D brush/seam); PR5's
-          // 3D agent brush adds `msg.z` and threads it here.
-          initAgentSlot(agentStore, id, msg.x, msg.y, 0, msg.radius ?? cbNum(centerBasedConfig, 'defaultRadius'), id);
+          initAgentSlot(agentStore, id, msg.x, msg.y, msg.z ?? 0, msg.radius ?? cbNum(centerBasedConfig, 'defaultRadius'), id);
           runAgentColorPass();
         }
       }
@@ -5337,6 +5425,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         } catch (e) {
           self.postMessage({ type: 'error', message: '[agents] load failed: ' + ((e as Error)?.message || e) });
         }
+      } else if (agentStore) {
+        // The state file carries no agent payload (pre-agents save, or saved from
+        // a non-agent model): re-seed the agent layer to its starting
+        // configuration instead of silently keeping the pre-load population —
+        // a loaded state is a starting configuration, and mixing the old run's
+        // agents with the restored grid is neither.
+        initAgents(); instantiateAgentWasmIfNeeded(); buildAgentWebGPUIfNeeded();
+        runAgentInit(); runAgentColorPass();
       }
 
       // Sync restored state to GPU when WebGPU is active.

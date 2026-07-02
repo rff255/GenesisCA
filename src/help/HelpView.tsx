@@ -698,7 +698,7 @@ export function HelpView() {
         <section id="help-nodes" className={styles.section}>
           <h2 className={styles.h2}>Node Types Reference</h2>
           <p className={styles.p}>
-            GenesisCA provides around 70 node types organized into the categories below.
+            GenesisCA provides around 115 selectable node types (42 of them agent nodes) organized into the categories below.
             The palette only shows the ones available for your model &mdash; async-only and
             Variegated-Cells nodes are hidden until you enable those features.
           </p>
@@ -711,7 +711,7 @@ export function HelpView() {
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
               <tr><td>Generation Step</td><td>Entry point for per-generation cell update logic. Connect &quot;DO&quot; to start the flow chain. Singleton.</td></tr>
-              <tr><td>Init Event</td><td>Runs once per cell on simulator <strong>Reset</strong> (after defaults, before the first color pass; not on Randomize or Load State). Outputs <code>x</code>, <code>y</code>, <code>maxX</code>, <code>maxY</code>. Singleton. Useful for procedural initial state (gradients, noise, random orientations).</td></tr>
+              <tr><td>Init Event</td><td>Runs once per cell on simulator <strong>Reset</strong> (after defaults, before the first color pass; not on Randomize or Load State). Outputs <code>x</code>, <code>y</code>, <code>maxX</code>, <code>maxY</code> (plus <code>z</code>, <code>maxZ</code> in 3D models). Singleton. Useful for procedural initial state (gradients, noise, random orientations).</td></tr>
               <tr><td>Input Mapping (C&rarr;A)</td><td>Entry point for Color-to-Attribute mapping (brush/image import). Outputs R, G, B values.</td></tr>
               <tr><td>Output Mapping (A&rarr;C)</td><td>Entry point for Attribute-to-Color visualization. Runs as a separate sequential pass after the Generation Step, ensuring colors reflect the final cell state. A mapping can instead be marked <strong>Linked</strong> in the Mappings panel (pick an attribute and the color pass is auto-generated &mdash; see &ldquo;Linked Output Mappings&rdquo; below); if you also add this node for a linked mapping, the auto pass runs first as a background and your graph overrides the cells it paints.</td></tr>
               <tr><td>Stop Event</td><td>Terminates the simulation run with a user-defined message when its DO flow input fires. Use for end conditions that need graph-level logic (complex spatial patterns, multi-attribute combinations). The text widget on the node body holds the message. First triggered stop in a step wins.</td></tr>
@@ -793,6 +793,7 @@ export function HelpView() {
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
               <tr><td>Set Attribute</td><td>Write a value to the current cell&apos;s attribute for the next generation.</td></tr>
+              <tr><td>Update Attribute</td><td>Modify the current cell&apos;s attribute in place: increment / decrement / max / min for numbers, toggle / or / and for binary, next / previous for tags. The unary operations (toggle, next, previous) need no Value input.</td></tr>
               <tr><td>Set Neighborhood Attribute</td><td><strong>(Async only)</strong> Set a cell attribute for ALL cells in a neighborhood to a given value.</td></tr>
               <tr><td>Set Neighbor Attr By Index</td><td><strong>(Async only)</strong> Set a cell attribute for ONE specific neighbor (by index 0..N&minus;1) to a given value.</td></tr>
               <tr><td>Mark Cell Updated</td><td><strong>(Async only)</strong> Mark a neighbor cell (by NeighborIndex) as already-updated for the rest of this generation, so the async scheduler skips it on subsequent visits. Accepts a single NI or an NI array (loops). Lets &quot;movement&quot; rules (gas particles, chemistry CA) guarantee a piece of state only moves once per step, even if it would otherwise land on a cell that comes later in the random update order.</td></tr>
@@ -808,7 +809,7 @@ export function HelpView() {
             <tbody>
               <tr><td>Set Cell Looks</td><td>Sets the current cell&apos;s appearance for an Attribute-to-Color visualization. <strong>Plain mode</strong>: write R/G/B for a flat cell color. <strong>Use glyph</strong>: overlay a Unicode character (with an inline glyph picker) in its own glyph color, plus an optional <strong>background color</strong> (shown at every zoom, behind the glyph) and an optional <strong>glyph color when zoomed out</strong> (paints each glyphed cell with its glyph color once cells are too small to draw the character &mdash; configurable via <code>genesisca_sim_settings.glyphMinPx</code>, default 6 px). Cells with glyph=0 render no character. Pick a specific mapping, or choose <strong>Current Simulator Selected</strong> to write to whichever viewer is active. (Merges the former Set Color Viewer + Set Cell Glyph.)</td></tr>
               <tr><td>Get Color Constant</td><td>Output fixed R, G, B values.</td></tr>
-              <tr><td>Color Interpolate</td><td>Interpolate between two colors. Inputs: interpolation point T (0&ndash;1), From R/G/B, To R/G/B. Outputs: R, G, B. The <strong>curve</strong> dropdown controls the interpolation shape: Linear, Smoothstep, Ease-In Quadratic, Ease-Out Quadratic, Exponential, Logarithmic. Includes color picker widgets for &quot;Color From&quot; and &quot;Color To&quot; when the per-channel ports are not connected.</td></tr>
+              <tr><td>Color Scale</td><td>Map an input <strong>T</strong> (0&ndash;1) to an RGB color via a multi-stop gradient. Edit the stops on a draggable gradient bar, or load a named palette preset (Viridis, Magma, Plasma, Inferno, Rainbow, Heat, Cool&rarr;Warm, Cividis, Grayscale). The <strong>curve</strong> dropdown controls the interpolation shape: Linear, Smoothstep, Ease-In Quadratic, Ease-Out Quadratic, Exponential, Logarithmic. Outputs R, G, B; T outside the stop range clamps to the nearest endpoint.</td></tr>
               <tr><td>Categorical Color</td><td>Map an integer <strong>Index</strong> to a flat RGB color from an editable N-entry palette &mdash; <em>discrete</em>, with no blending between entries (contrast Color Scale, which interpolates). Index <code>i</code> selects palette entry <code>i</code>; out-of-range indices use the default color. Outputs R, G, B. Used internally by Linked Output Mappings for tag attributes, and available as a node for hand-built graphs.</td></tr>
               <tr><td>Make Color / Break Color</td><td>Bundle R / G / B / A channels into a single <strong>color</strong> value, and split one back into channels (the Unreal/Blender Make &amp; Break pattern) &mdash; pass a whole colour on one wire. A defaults to 255 (opaque). Runs on all three targets.</td></tr>
             </tbody>
@@ -905,7 +906,9 @@ export function HelpView() {
 
           <h3 className={styles.h3}>Async-Only Nodes</h3>
           <p className={styles.p}>
-            Three node types are exclusive to asynchronous mode. Using them in synchronous
+            Three general-purpose node types are exclusive to asynchronous mode (plus three
+            more in Variegated Cells models: Set Facing Orientation, Set Neighbor Orientation
+            By Index, and Transfer Cell Attributes to Neighbor). Using them in synchronous
             mode will produce a compiler error.
           </p>
           <ul className={styles.ul}>
@@ -1060,9 +1063,10 @@ export function HelpView() {
           </ul>
           <p className={styles.p}>
             The direct <em>NeighborIndex</em> node family (Get/Set Neighbor Attribute By
-            Index, etc.) is hidden in 3D &mdash; its packed coordinate carries only two
-            axes. Use <strong>Get Neighbors Attribute</strong> or <strong>Get Neighbor
-            Attribute by Tag</strong> instead (both work in any dimension).
+            Index, Neighbor Index From Offset, etc.) works in 3D too &mdash; in a 3D model
+            the packed coordinate carries three axes (dr, dc, dl), and Neighbor Index From
+            Offset / Break Down Neighbor Index expose a third <code>dl</code> (layer) port
+            (see the NeighborIndex section above).
           </p>
           <h3 className={styles.h3}>The 3D Viewport</h3>
           <p className={styles.p}>
@@ -1159,8 +1163,9 @@ export function HelpView() {
             are set in <strong>Properties &rarr; Bond-Graph Agents</strong>, <em>independently of
             the grid&rsquo;s</em> &mdash; so you can run a synchronous grid rule with asynchronous
             agents, and vice versa. <strong>Compile Target:</strong> <strong>JavaScript</strong>
-            (full node coverage), <strong>WebAssembly</strong> (for the supported node subset;
-            falls back to JS otherwise), or <strong>WebGPU</strong> (the whole agent-node
+            (full node coverage), <strong>WebAssembly</strong> (covers the <em>whole</em> agent-node
+            catalogue with JS bit-parity &mdash; the only clamp is a Get Nearby Agents
+            scratch-slot budget), or <strong>WebGPU</strong> (the whole agent-node
             catalogue runs on the GPU &mdash; Boids 2D/3D, flocking, chemotaxis via the field
             bridge, growing/dividing tissue, even Game of Life on agents; only a few
             order-dependent or glyph operations fall back to JS, and statistical &mdash; not
@@ -1271,7 +1276,7 @@ export function HelpView() {
               two agents.</li>
             <li><strong>Apply Force</strong> &mdash; add a force vector to the agent; the engine
               integrates the sum of all your Apply Force contributions (plus its built-in
-              soft-sphere repulsion + bond springs, unless <em>Custom forces only</em> is set). This
+              soft-sphere repulsion + bond springs when <em>Use bonding physics</em> is on). This
               is how you build <strong>boids</strong> (separation + alignment + cohesion),
               <strong> chemotaxis</strong> (force up a Field Gradient), or self-propulsion. With
               <strong> Momentum</strong> &gt; 0 the force changes velocity (flocking inertia). In a
@@ -1426,13 +1431,24 @@ export function HelpView() {
             <strong> Inspect</strong> (<span className={styles.kbd}>Shift</span>+click an agent for
             a popover of its position, velocity, bond degree and attribute values), and
             <strong> Paint&nbsp;Field</strong> (the normal cell brush). <strong>Clear all
-            agents</strong> empties the population. The library ships four samples: <strong>Morphogenesis &mdash; Growing Tissue</strong> (12 → ~1500 cells
+            agents</strong> empties the population. The library ships eight agent samples: <strong>Morphogenesis &mdash; Growing Tissue</strong> (12 → ~1500 cells
             dividing along the tension axis), <strong>Morphogenesis &mdash; Differential
             Tissue</strong> (asymmetric division + a maturity gradient + contact inhibition = cell
-            <em> specialization</em>), <strong>Boids &mdash; Flocking</strong> (separation +
-            alignment + cohesion), and <strong>Chemotaxis &mdash; Aggregation</strong> (secrete a
-            chemical, the grid diffuses it, agents climb the gradient and aggregate) &mdash; load
-            any to see the pipeline at work.
+            <em> specialization</em>), <strong>Morphogenesis &mdash; 3D Tissue</strong> (the same
+            engine growing a connected tissue in a 3D volume), <strong>Boids &mdash; Flocking</strong> (separation +
+            alignment + cohesion), <strong>Chemotaxis &mdash; Aggregation</strong> (secrete a
+            chemical, the grid diffuses it, agents climb the gradient and aggregate),
+            <strong> Game of Life on Agents</strong> (Conway&apos;s rule on a grid of agents &mdash;
+            the genericity proof), <strong>Ant Necrophoresis</strong> (stigmergy: ants pile
+            corpses via the cell-field bridge), and the <strong>Agent WASM Drift Test</strong>
+            (a deterministic parity vehicle) &mdash; load any to see the pipeline at work.
+          </p>
+          <p className={styles.p}>
+            <strong>Saving agent state:</strong> agent positions, velocities, attributes,
+            bonds and sprites are included in <strong>Save State</strong> (.gcastate) and in
+            <strong> Save Project</strong> with the grid option enabled, and are restored on
+            load &mdash; so a grown tissue or an aggregated flock resumes exactly where you
+            left it.
           </p>
         </section>
 

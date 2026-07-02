@@ -200,6 +200,7 @@ type ModelAction =
   | { type: 'DELETE_PRESET'; id: string }
   | { type: 'UPDATE_PRESET'; id: string; patch: Partial<Omit<Preset, 'id'>> }
   | { type: 'REORDER_ATTRIBUTES'; newOrder: string[] }
+  | { type: 'REORDER_AGENT_ATTRIBUTES'; newOrder: string[] }
   | { type: 'REORDER_NEIGHBORHOODS'; newOrder: string[] }
   | { type: 'REORDER_MAPPINGS'; newOrder: string[] }
   | { type: 'REORDER_INDICATORS'; newOrder: string[] }
@@ -222,15 +223,29 @@ type ModelAction =
 
 function modelReducer(state: ModelState, action: ModelAction): ModelState {
   switch (action.type) {
-    case 'UPDATE_PROPERTIES':
+    case 'UPDATE_PROPERTIES': {
+      let neighborhoods = state.model.neighborhoods;
+      // Dimension flip to 3D: seed coords3d = coords with dl=0 on every
+      // 2D-authored neighbourhood. Without it the slice editor shows "0 cells"
+      // (and the first click clobbers the real coords) while the NI pre-pass /
+      // worker consumers disagree about the neighbourhood's contents.
+      if (action.changes.dimension === '3d') {
+        neighborhoods = neighborhoods.map(n =>
+          n.coords3d || n.coords.length === 0
+            ? n
+            : { ...n, coords3d: n.coords.map(([dr, dc]) => [dr, dc, 0] as [number, number, number]) },
+        );
+      }
       return {
         ...state,
         isDirty: true,
         model: {
           ...state.model,
+          neighborhoods,
           properties: { ...state.model.properties, ...action.changes },
         },
       };
+    }
 
     case 'ADD_ATTRIBUTE': {
       const newAttr: Attribute = {
@@ -565,11 +580,19 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
     case 'REMOVE_AGENT_ATTRIBUTE': {
       const filtered = (state.model.agentAttributes || []).filter(a => a.id !== action.id);
       // Unlink any agent output mapping that pointed at the deleted attribute (the
-      // synthesis skips a stale link, but clearing it keeps the panel honest).
+      // synthesis skips a stale link, but clearing it keeps the panel honest) —
+      // and drop its stale palette/range so a later re-link starts clean.
       const agentMappings = (state.model.agentMappings ?? []).map(m =>
-        m.linkedAttributeId === action.id ? { ...m, linkedAttributeId: undefined, linked: false } : m,
+        m.linkedAttributeId === action.id
+          ? { ...m, linkedAttributeId: undefined, linked: false, linkedColors: undefined, linkedMin: undefined, linkedMax: undefined }
+          : m,
       );
-      const modelAfter = { ...state.model, agentAttributes: filtered, agentMappings };
+      // Detach agent tag variables bound to the deleted attribute (mirrors the
+      // cell REMOVE_ATTRIBUTE demote-to-integer rule).
+      const agentVariables = (state.model.agentVariables ?? []).map(v =>
+        v.attributeId === action.id ? { ...v, dataType: 'integer' as const, attributeId: undefined } : v,
+      );
+      const modelAfter = { ...state.model, agentAttributes: filtered, agentMappings, agentVariables };
       // Clear stale attributeId / tagAttributeId references (scans both graphs +
       // macros) so a removed agent attribute doesn't strand `_undef` in the
       // agent graph.
@@ -587,15 +610,32 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
 
     case 'UPDATE_AGENT_ATTRIBUTE': {
       const oldAttr = (state.model.agentAttributes || []).find(a => a.id === action.id);
-      const updatedModel = {
+      let updatedModel = {
         ...state.model,
         agentAttributes: (state.model.agentAttributes || []).map(a =>
           a.id === action.id ? { ...a, ...action.changes } : a),
       };
+      // Type change: reset any LINKED agent mapping's palette/range (a stale tag
+      // palette can't describe the new type — mirrors the cell UPDATE_ATTRIBUTE
+      // cascade), and detach agent tag variables when the type leaves 'tag'.
+      if (oldAttr && action.changes.type && action.changes.type !== oldAttr.type) {
+        updatedModel = {
+          ...updatedModel,
+          agentMappings: (updatedModel.agentMappings ?? []).map(m =>
+            m.linkedAttributeId === action.id
+              ? { ...m, linkedColors: undefined, linkedMin: undefined, linkedMax: undefined }
+              : m,
+          ),
+          agentVariables: action.changes.type !== 'tag'
+            ? (updatedModel.agentVariables ?? []).map(v =>
+                v.attributeId === action.id ? { ...v, dataType: 'integer' as const, attributeId: undefined } : v)
+            : updatedModel.agentVariables,
+        };
+      }
       // Tag-options remap for agent-graph node configs (getConstant / switch /
-      // setAttribute|setAgentAttribute inline values). patchAllNodes scans both
-      // graphs; the cell graph never references an agent-attribute id, so only the
-      // agent graph is affected.
+      // Compare / setAttribute|setAgentAttribute inline values) + agent tag
+      // variables' initialValue. patchAllNodes scans both graphs; the cell graph
+      // never references an agent-attribute id, so only the agent graph is affected.
       if (oldAttr && action.changes.tagOptions && oldAttr.tagOptions) {
         const oldOpts = oldAttr.tagOptions, newOpts = action.changes.tagOptions;
         const indexMap = new Map<number, number>();
@@ -606,17 +646,30 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         const remap = (val: string | number | boolean | undefined): string =>
           String(indexMap.get(Number(val) || 0) ?? 0);
         const attrId = action.id;
+        updatedModel = {
+          ...updatedModel,
+          agentVariables: (updatedModel.agentVariables ?? []).map(v =>
+            v.attributeId === attrId && v.dataType === 'tag' ? { ...v, initialValue: remap(v.initialValue) } : v),
+        };
         const patched = patchAllNodes(
           updatedModel,
           (cfg, nt) =>
             (nt === 'getConstant' && cfg.constType === 'tag' && cfg.tagAttributeId === attrId) ||
             (nt === 'switch' && cfg.tagAttributeId === attrId && cfg.valueType === 'tag') ||
+            // Compare in tag mode stores its operands as tag indices in
+            // _port_x/_port_y/_port_y2 — the cell path remaps them; so must we.
+            (nt === 'statement' && cfg.compareType === 'tag' && cfg.tagAttributeId === attrId) ||
             ((nt === 'setAttribute' || nt === 'setAgentAttribute' || nt === 'setAgentsAttribute' || nt === 'updateAttribute') && cfg.attributeId === attrId),
           (cfg, nt) => {
             if (nt === 'getConstant') cfg.constValue = remap(cfg.constValue);
             if (nt === 'switch') {
               const cc = Number(cfg.caseCount) || 0;
               for (let i = 0; i < cc; i++) cfg[`case_${i}_value`] = remap(cfg[`case_${i}_value`]);
+            }
+            if (nt === 'statement') {
+              if (cfg._port_x !== undefined) cfg._port_x = remap(cfg._port_x);
+              if (cfg._port_y !== undefined) cfg._port_y = remap(cfg._port_y);
+              if (cfg._port_y2 !== undefined) cfg._port_y2 = remap(cfg._port_y2);
             }
             if ((nt === 'setAttribute' || nt === 'setAgentAttribute' || nt === 'setAgentsAttribute') && cfg._port_value !== undefined) {
               cfg._port_value = remap(cfg._port_value);
@@ -751,7 +804,9 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         name: 'Agent View',
         description: '',
         isAttributeToColor: true,
-        linked: true,
+        // No eligible agent attribute → seed as STANDALONE (a linked mapping with
+        // linkedAttributeId undefined would render a broken default view).
+        linked: !!firstAgentAttr,
         linkedAttributeId: firstAgentAttr?.id,
         redDescription: '', greenDescription: '', blueDescription: '',
       };
@@ -760,11 +815,21 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         model: { ...state.model, agentMappings: [...(state.model.agentMappings ?? []), newMap] },
       };
     }
-    case 'REMOVE_AGENT_MAPPING':
+    case 'REMOVE_AGENT_MAPPING': {
+      // Cascade like REMOVE_MAPPING: clear the deleted id from node configs
+      // (agentOutputMapping roots + setCellLooks on the Agents graph keep
+      // `config.mappingId`) — otherwise a standalone agent view leaves a dead
+      // compiled pass + a dangling picker value in the saved file.
+      const mAfterAgentMap = {
+        ...state.model,
+        agentMappings: (state.model.agentMappings ?? []).filter(m => m.id !== action.id),
+      };
+      const agentMapPatch = clearDeletedId(mAfterAgentMap, 'mappingId', action.id);
       return {
         ...state, isDirty: true,
-        model: { ...state.model, agentMappings: (state.model.agentMappings ?? []).filter(m => m.id !== action.id) },
+        model: { ...mAfterAgentMap, graphNodes: agentMapPatch.graphNodes, agentGraphNodes: agentMapPatch.agentGraphNodes, macroDefs: agentMapPatch.macroDefs },
       };
+    }
     case 'UPDATE_AGENT_MAPPING':
       return {
         ...state, isDirty: true,
@@ -1013,6 +1078,23 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       // Move agent-referenced cell variables into the agent variable set (so the
       // agent loop's Get/Set Variable resolve). No-op for non-agent + already-split.
       m = migrateVariableScopeSplit(m);
+      // 3D model with 2D-authored neighbourhoods (e.g. a file whose dimension was
+      // hand-edited, or saved mid-flip by an older build): seed coords3d = coords
+      // with dl=0 so the slice editor + the NI codec pre-pass see the same cells
+      // the worker's dl=0 fallback simulates.
+      if (m.properties.dimension === '3d') {
+        const needsSeed = m.neighborhoods.some(n => !n.coords3d && n.coords.length > 0);
+        if (needsSeed) {
+          m = {
+            ...m,
+            neighborhoods: m.neighborhoods.map(n =>
+              n.coords3d || n.coords.length === 0
+                ? n
+                : { ...n, coords3d: n.coords.map(([dr, dc]) => [dr, dc, 0] as [number, number, number]) },
+            ),
+          };
+        }
+      }
       return { model: m, isDirty: false, modelVersion: state.modelVersion + 1, loadedFileName: action.fileName ?? null };
     }
 
@@ -1062,6 +1144,13 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         ...state,
         isDirty: true,
         model: { ...state.model, attributes: reorderById(state.model.attributes, action.newOrder) },
+      };
+
+    case 'REORDER_AGENT_ATTRIBUTES':
+      return {
+        ...state,
+        isDirty: true,
+        model: { ...state.model, agentAttributes: reorderById(state.model.agentAttributes ?? [], action.newOrder) },
       };
 
     case 'REORDER_NEIGHBORHOODS':
@@ -1339,6 +1428,7 @@ export interface ModelContextValue {
   deletePreset: (id: string) => void;
   updatePreset: (id: string, patch: Partial<Omit<Preset, 'id'>>) => void;
   reorderAttributes: (newOrder: string[]) => void;
+  reorderAgentAttributes: (newOrder: string[]) => void;
   reorderNeighborhoods: (newOrder: string[]) => void;
   reorderMappings: (newOrder: string[]) => void;
   reorderIndicators: (newOrder: string[]) => void;
@@ -1558,6 +1648,10 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     (newOrder: string[]) => dispatch({ type: 'REORDER_ATTRIBUTES', newOrder }),
     [],
   );
+  const reorderAgentAttributes = useCallback(
+    (newOrder: string[]) => dispatch({ type: 'REORDER_AGENT_ATTRIBUTES', newOrder }),
+    [],
+  );
   const reorderNeighborhoods = useCallback(
     (newOrder: string[]) => dispatch({ type: 'REORDER_NEIGHBORHOODS', newOrder }),
     [],
@@ -1655,6 +1749,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       deletePreset,
       updatePreset,
       reorderAttributes,
+      reorderAgentAttributes,
       reorderNeighborhoods,
       reorderMappings,
       reorderIndicators,
@@ -1713,6 +1808,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       deletePreset,
       updatePreset,
       reorderAttributes,
+      reorderAgentAttributes,
       reorderNeighborhoods,
       reorderMappings,
       reorderIndicators,

@@ -18,7 +18,10 @@ export const GetAgentAttributeNode: NodeTypeDef = {
   defaultConfig: { attributeId: '' },
   compile: (nodeId, config, inputs) => {
     const attr = config.attributeId as string || '_undef';
-    const a = `((${inputs['agentId'] || '0'}) | 0)`;
-    return `const _v${nodeId} = r_${attr}[${a}];\n`;
+    // -1 = the empty sentinel (Pick Random Agent on an empty set, an unwired
+    // input). Range-guarded → 0 instead of `r_attr[-1]` = undefined → NaN
+    // silently poisoning downstream math (WASM would read adjacent memory).
+    const a = `((${inputs['agentId'] || '-1'}) | 0)`;
+    return `const __gaa${nodeId} = ${a}; const _v${nodeId} = (__gaa${nodeId} >= 0 && __gaa${nodeId} < highWater) ? r_${attr}[__gaa${nodeId}] : 0;\n`;
   },
 };

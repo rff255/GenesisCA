@@ -290,6 +290,12 @@ export function detectMissingConfig(
         && !hasMapping(config.mappingId) && !hasAgentMapping(config.mappingId)) {
         issues.push('Select a mapping');
       }
+      // The 3D voxel renderer consumes only the RGBA colors buffer — glyph
+      // output silently doesn't render there.
+      if (config.useGlyph === true
+        && model.properties.dimension === '3d' && (model.properties.gridDepth ?? 1) > 1) {
+        issues.push('Glyphs are not rendered in the 3D view (background color only)');
+      }
       break;
 
     case 'inputColor':

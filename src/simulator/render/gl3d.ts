@@ -4,7 +4,9 @@
 // SoA cell index in the vertex shader. Orbit camera, a clip/slice plane as the
 // PRIMARY see-inside (fragment discard — NOT depth-sorted blending), opt-in
 // per-cell alpha (back-to-front instance sort, Option A), and GPU colour-id
-// picking via a second FBO pass.
+// picking via a second FBO pass. Also owns the 3D AGENT overlay pipelines:
+// instanced sphere impostors for the agents + the bond-line pass (both clipped
+// by the same interval and drawn over the voxel pass).
 //
 // Pure WebGL2 + a tiny mat4 helper — no React, no app imports. SimulatorView
 // owns the lifecycle (create on entering 3D, dispose on leaving) and feeds it
@@ -500,6 +502,12 @@ export class Gl3DRenderer {
   private agentInstBuf: WebGLBuffer;     // [x,y,z,radius,r,g,b,a] × 8 floats / agent
   private agentInstCapacity = 0;         // floats allocated in agentInstBuf
   private agentInstData: Float32Array = new Float32Array(0);
+  /** Buffer position → ORIGINAL compacted instance index. Identity after
+   *  uploadAgents; composed by sortAgentsBackToFront. The pick shader encodes
+   *  gl_InstanceID (= the position in the possibly-SORTED buffer), so pickAgent
+   *  must map back through this or an alpha-blend pick returns the WRONG agent
+   *  (kill/move/inspect hit a different one after the sort reorders the buffer). */
+  private agentInstOrder: Int32Array = new Int32Array(0);
   private agentAlphaBlend = false;
   /** Bond endpoint line list (Z-up remapped), rebuilt each uploadAgents. */
   private bondVerts: Float32Array = new Float32Array(0);
@@ -698,6 +706,9 @@ export class Gl3DRenderer {
       n++;
     }
     this.agentInstanceCount = n;
+    // Fresh upload = compacted order → identity permutation.
+    if (this.agentInstOrder.length < n) this.agentInstOrder = new Int32Array(Math.max(n, 16));
+    for (let k = 0; k < n; k++) this.agentInstOrder[k] = k;
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.agentInstBuf);
     if (this.agentInstCapacity < n * 8) {
@@ -752,6 +763,10 @@ export class Gl3DRenderer {
     const sorted = new Float32Array(n * 8);
     for (let k = 0; k < n; k++) sorted.set(d.subarray(order[k]! * 8, order[k]! * 8 + 8), k * 8);
     d.set(sorted.subarray(0, n * 8));
+    // Compose the position→compacted-index permutation so pickAgent can undo
+    // the reorder (the pick shader encodes the SORTED buffer position).
+    const prevOrder = this.agentInstOrder.slice(0, n);
+    for (let k = 0; k < n; k++) this.agentInstOrder[k] = prevOrder[order[k]!]!;
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.agentInstBuf);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, sorted);
@@ -837,6 +852,9 @@ export class Gl3DRenderer {
    *  Returns the COMPACTED instance index (0-based), or -1 for the background.
    *  SimulatorView's instanceToSlot maps it back to the engine slot id. */
   pickAgent(px: number, py: number, cssW: number, cssH: number): number {
+    // Respect the Layers panel's Show toggle — a hidden agent must not be
+    // killable/movable/inspectable by an invisible pick.
+    if (!this.viz.agents) return -1;
     if (this.agentInstanceCount === 0) return -1;
     const gl = this.gl;
     const w = gl.canvas.width, h = gl.canvas.height;
@@ -858,7 +876,10 @@ export class Gl3DRenderer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     if (out[3] === 0) return -1;
     const id = out[0]! | (out[1]! << 8) | (out[2]! << 16);
-    return id - 1;  // shader encoded instanceID+1
+    const pos = id - 1;  // shader encoded instanceID+1 = the buffer POSITION
+    // Map back to the compacted instance index (identity unless the alpha-blend
+    // back-to-front sort reordered the buffer).
+    return pos >= 0 && pos < this.agentInstanceCount ? (this.agentInstOrder[pos] ?? pos) : pos;
   }
 
   private setCommonUniforms(gl: WebGL2RenderingContext, prog: WebGLProgram): void {
@@ -1257,6 +1278,9 @@ export class Gl3DRenderer {
   /** Colour-id pick. (px, py) are CSS pixels with origin TOP-left (DOM convention).
    *  Returns the flat cell index, or -1 for the background. */
   pick(px: number, py: number, cssW: number, cssH: number): number {
+    // Respect the Layers panel's Show toggle — never inspect/paint-target a
+    // voxel the user can't see.
+    if (!this.viz.voxels) return -1;
     const gl = this.gl;
     const w = gl.canvas.width, h = gl.canvas.height;
     this.ensurePickFbo(w, h);

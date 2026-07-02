@@ -1,5 +1,6 @@
 // ===========================================================================
-// Bond-Graph Agents — the co-resident agent engine (JS reference, v1).
+// Bond-Graph Agents — the co-resident agent engine (data structures + driver
+// support for ALL THREE agent targets).
 //
 // A SECOND engine the sim worker owns alongside the lattice CA. Agents are
 // floating, continuous-position "cells": a maxAgents-length Structure-of-Arrays
@@ -7,7 +8,11 @@
 // bond store, a per-step force-integration driver (PR-A3), and a post-step
 // structural phase (division/growth/death — PR-C). This module owns the data
 // structures + allocation + seeding + serialization; the worker drives it and
-// bridges it to the grid field (PR-D).
+// bridges it to the grid field (PR-D). The store is not JS-only: with
+// `wasmBacked` the SoA is typed-array VIEWS over a single WebAssembly.Memory at
+// the `computeAgentMemoryLayout` baked offsets (the WASM agent target reads/
+// writes the SAME bytes), and the worker mirrors it to/from the GPU agent SoA
+// (agentWebgpuRuntime upload/readback) for the WebGPU agent target.
 //
 // Engine-owned buffers use `_agent*`-style names (here plain SoA fields). USER
 // agent attributes ride parallel `r_<id>` / `w_<id>` typed arrays sized
@@ -1333,6 +1338,11 @@ export function divideAgent(
   }
   store.targetRadius[newId] = store.targetRadius[i]!;
   for (let c = 0; c < 4; c++) store.colors[newId * 4 + c] = store.colors[i * 4 + c]!;
+  // sprite state inherits verbatim like attrs/colours (initAgentSlot zeroed it) —
+  // otherwise a dividing sprited agent yields one sprited + one plain daughter.
+  store.spriteIds[newId] = store.spriteIds[i]!;
+  store.spriteFrames[newId] = store.spriteFrames[i]!;
+  store.spriteSpeeds[newId] = store.spriteSpeeds[i]!;
 
   // 6. daughter A — reuse mother slot i; shrink + relocate, reset age, clear request
   store.x[i] = ax; store.y[i] = ay; store.xNext[i] = ax; store.yNext[i] = ay;
@@ -1552,11 +1562,16 @@ export interface AgentStatePayload {
   freeTop: number;
   maxBonds: number;
   x: ArrayBuffer; y: ArrayBuffer; radius: ArrayBuffer; targetRadius: ArrayBuffer;
+  /** planar velocity — momentum models (flocking) lose their motion state
+   *  without it. Optional for legacy pre-velocity saves → zeroed on load. */
+  vx?: ArrayBuffer; vy?: ArrayBuffer;
   /** z / z-velocity (3D agents). Always written when the store is 3D; absent on
    *  a legacy pre-z 2D save → `deserializeAgentStore` leaves z/vz at 0 (the
    *  `if (p.z)` additive-load guard). `worldDepth` is NOT serialized (re-derived
    *  from `gridDepth` on load). */
   z?: ArrayBuffer; vz?: ArrayBuffer;
+  /** sprite display state (Set Agent Sprite). Optional; zeroed on load when absent. */
+  spriteIds?: ArrayBuffer; spriteFrames?: ArrayBuffer; spriteSpeeds?: ArrayBuffer;
   age: ArrayBuffer; lineage: ArrayBuffer; alive: ArrayBuffer; epoch: ArrayBuffer;
   freeList: ArrayBuffer;
   bondCount: ArrayBuffer; bondPartner: ArrayBuffer; bondPartnerEpoch: ArrayBuffer;
@@ -1585,7 +1600,9 @@ export function serializeAgentStore(store: AgentStore, transfers: ArrayBuffer[])
   return {
     highWater: hw, liveCount: store.liveCount, freeTop: store.freeTop, maxBonds: store.maxBonds,
     x: sl(store.x, hw), y: sl(store.y, hw), radius: sl(store.radius, hw), targetRadius: sl(store.targetRadius, hw),
+    vx: sl(store.vx, hw), vy: sl(store.vy, hw),
     ...(is3d ? { z: sl(store.z, hw), vz: sl(store.vz, hw) } : {}),
+    spriteIds: sl(store.spriteIds, hw), spriteFrames: sl(store.spriteFrames, hw), spriteSpeeds: sl(store.spriteSpeeds, hw),
     age: sl(store.age, hw), lineage: sl(store.lineage, hw),
     alive: sl(store.alive, hw), epoch: sl(store.epoch, hw),
     freeList: freeListCopy.buffer,
@@ -1618,6 +1635,16 @@ export function deserializeAgentStore(store: AgentStore, p: AgentStatePayload): 
   // clear the live region first so stale holes don't linger past hw
   store.alive.fill(0); store.bondPartner.fill(-1); store.bondCount.fill(0);
   copyInto(store.x, p.x, Float64Array as never); copyInto(store.y, p.y, Float64Array as never);
+  // velocity + sprite state: ALWAYS reset before the additive load — loading
+  // into a running session must not leave loaded agents inheriting the previous
+  // run's velocities/sprites at unrelated slot indices.
+  store.vx.fill(0); store.vy.fill(0);
+  store.spriteIds.fill(0); store.spriteFrames.fill(0); store.spriteSpeeds.fill(0);
+  if (p.vx) copyInto(store.vx, p.vx, Float64Array as never);
+  if (p.vy) copyInto(store.vy, p.vy, Float64Array as never);
+  if (p.spriteIds) copyInto(store.spriteIds, p.spriteIds, Int32Array as never);
+  if (p.spriteFrames) copyInto(store.spriteFrames, p.spriteFrames, Float64Array as never);
+  if (p.spriteSpeeds) copyInto(store.spriteSpeeds, p.spriteSpeeds, Float64Array as never);
   // z/vz: additive-load guard (the grid's `depth ?? 1` discipline). A legacy
   // pre-z 2D save omits them → leave the freshly-allocated store's z/vz at 0.
   store.z.fill(0); store.vz.fill(0);

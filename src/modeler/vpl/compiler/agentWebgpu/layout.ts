@@ -16,7 +16,7 @@
 //                                          + their element offsets live in
 //                                          `f32` below; a field's element k is at
 //                                          `agentF32[fieldBase + k]`.
-//   binding 1  agentI32   : array<i32>   — the i32 identity SoA (type/bondCount).
+//   binding 1  agentI32   : array<i32>   — the i32 identity SoA (lineage/bondCount).
 //   binding 2  agentU8AsU32: array<u32>  — `alive` as one u32 word per agent
 //                                          (GPU storage can't address bytes, so
 //                                          the worker expands the Uint8 `alive`
@@ -38,9 +38,9 @@
 // NOTE: this layout is for the GPU shader's *binding* model only. It is
 // SEPARATE from `AgentMemoryLayout` (the WASM byte layout) — the GPU never
 // shares memory with the JS engine; the worker uploads/reads back through these
-// strided buffers (G3/G4). 2D-only for now (the Boids scale target); the z
-// fields are listed so a 3D port (worldDepth>1) can append them without
-// reshuffling the 2D field offsets.
+// strided buffers (G3/G4). 2D AND 3D: the z fields (z/vz/forceZ/zNext/
+// divideAxisZ) are APPENDED only when gridDepth > 1, so a 2D model's field
+// offsets are byte-identical.
 // ===========================================================================
 
 /** Per-agent f32 fields, in SoA order. Each occupies a contiguous run of
@@ -118,8 +118,9 @@ export type AgentGpuI32Field = (typeof AGENT_GPU_I32_FIELDS)[number];
 //                                                  read buffer BEFORE the cell step.
 //
 // `fieldReadAttrs` / `fieldWriteAttrs` are the ordered id lists (the bridge ABI —
-// the worker uploads/reads back per-attr at `fieldBase[id]`). 2D only (the field
-// index is `row·W + col`); a 3D agent model clamps to JS at the gate.
+// the worker uploads/reads back per-attr at `fieldBase[id]`). 2D AND 3D: in a
+// 3D model `fieldTotal = W·H·D` and the shader indexes `(z·H + y)·W + x`
+// (trilinear sampling / r-sphere scans).
 // ===========================================================================
 
 export interface AgentWebGPULayout {
