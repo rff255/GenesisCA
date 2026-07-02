@@ -1924,7 +1924,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       return;
     }
     if (msg.type === 'stepped') {
-      colorsRef.current = msg.colors as Uint8ClampedArray;
+      // `colors` may be ABSENT: WebGPU direct render skips it, and agents-only
+      // models ship the (static) buffer only when it changed — keep the last one.
+      if (msg.colors !== undefined) colorsRef.current = msg.colors as Uint8ClampedArray;
       // Bond-Graph Agents: stash the latest agent render snapshot (positions /
       // radius / alive / colours) for drawAgents + nearest-agent picking. Sent
       // every frame for an agent model; absent for a lattice-only model.

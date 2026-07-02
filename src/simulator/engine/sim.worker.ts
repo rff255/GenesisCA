@@ -493,6 +493,12 @@ let agentsEnabled = false;
 /** CA-grid topology toggle (from the init message; absent → true). When false
  *  the worker skips the cell step + neighbour-index build (agents-only model). */
 let gridCellsEnabled = true;
+/** Agents-only optimisation: with the CA grid OFF the colours buffer is static
+ *  (no cell step / colour pass ever rewrites it), so `sendColors` ships it only
+ *  while dirty instead of copying+transferring W·H·D·4 bytes EVERY step (576 MB
+ *  per step at 600×600×400 — the "resize makes it crawl" cost). Set by anything
+ *  that rewrites `colors`; grid-ON models ship every step as before. */
+let colorsDirty = true;
 /** Runtime per-layer "simulate" toggles (the simulator Layers panel; setSimLayers
  *  message). Default true → the generation loop runs both the cell step and the
  *  agent step exactly as before. The user can freeze either layer mid-run. */
@@ -2424,8 +2430,14 @@ function initGrid(): void {
     rowCount: t.rowLabels.length || 1,
     colCount: t.colLabels.length || 1,
   }));
+  // Agents-only (CA Grid off): reserve NO neighbour-index tables — nothing
+  // queries them (buildNeighborIndices + the cell step are skipped), and at
+  // agent-world scales they dominate the layout catastrophically: a 600×600×400
+  // world with a Moore-3D neighbourhood would reserve total×26×4 ≈ 15 GB and
+  // blow the wasm32 4 GiB Memory limit — the "resize never completes" hang.
+  const layoutNeighborhoods = gridCellsEnabled ? neighborhoods : [];
   wasmLayout = computeMemoryLayout(
-    cellAttrs, modelAttrsList, neighborhoods, indicatorsList,
+    cellAttrs, modelAttrsList, layoutNeighborhoods, indicatorsList,
     total, isAsync, boundaryTreatment,
     variegatedInputs,
     hasGlyphs,
@@ -2433,6 +2445,7 @@ function initGrid(): void {
   );
   wasmMemory = new WebAssembly.Memory({ initial: wasmLayout.pages });
   const buf = wasmMemory.buffer;
+  colorsDirty = true;   // fresh grid → ship colours on the next sendColors
 
   // Constant boundary needs a sentinel cell at index `total` that neighbour
   // lookups for out-of-bounds positions point to. We always view total+1 cells
@@ -2755,6 +2768,7 @@ function applySubAttributeAsyncScrub(): void {
 }
 
 function runStep(): void {
+  colorsDirty = true;   // the step (or its colour writes) may rewrite `colors`
   // Wave 3: triple branch — WebGPU > WASM > JS. WebGPU only takes the
   // dispatch when the runtime has finished its async buffer + pipeline setup.
   if (useWebGPU && webgpuRuntime?.stepReady) {
@@ -3275,6 +3289,7 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
     const c = sliced[colorsRegion]!;
     const limit = Math.min(colors.length, c.length);
     for (let i = 0; i < limit; i++) colors[i] = c[i]!;
+    colorsDirty = true;
   }
   if (indicatorsRegion >= 0) {
     const bytes = sliced[indicatorsRegion]!;
@@ -3363,6 +3378,7 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
 
 
 function writeDefaultColors(): void {
+  colorsDirty = true;
   // 3D Grid CA: the default/fallback coloring is FULLY TRANSPARENT (alpha 0) so
   // the voxel renderer instances ZERO cells — a model with no explicit Output
   // Mapping (or before its first colour pass) doesn't pay to build a full opaque
@@ -3614,7 +3630,7 @@ function runColorPass(): void {
   // writes see a fresh canvas. "Codepoint 0" is the renderer's "skip this
   // cell" signal. Cheap memset — at 5000² this is ~3–6ms; for typical grids
   // negligible. Only allocated when the model uses setCellGlyph.
-  if (glyphCodes) glyphCodes.fill(0);
+  if (glyphCodes) { glyphCodes.fill(0); colorsDirty = true; }
   if (glyphColors) glyphColors.fill(0);
   const sanitised = sanitiseExportName(activeViewer);
   if (useWasm && wasmOutputMappingFns[sanitised]) {
@@ -3625,11 +3641,15 @@ function runColorPass(): void {
       readAttrs = attrsA;
       writeAttrs = attrsB;
     }
+    colorsDirty = true;
     wasmOutputMappingFns[sanitised]!(total);
     return;
   }
   const omFn = outputMappingFns.find(f => f.mappingId === activeViewer);
-  if (omFn) omFn.fn(...buildLoopArgs());
+  // Dirty only when a mapping fn actually rewrote `colors` — an OM-less model
+  // (or a mismatched viewer) leaves the buffer untouched, and the agents-only
+  // sendColors skip depends on that staying clean.
+  if (omFn) { colorsDirty = true; omFn.fn(...buildLoopArgs()); }
 }
 
 function initIndicators(defs: IndicatorDef[]): void {
@@ -4080,7 +4100,18 @@ function sendColors(): void {
     postInspectCellsData();
     return;
   }
+  // Agents-only (CA Grid off): the colours buffer is STATIC after init — no cell
+  // step / colour pass rewrites it — so copy+transfer it only while dirty (the
+  // main thread keeps its last colorsRef when `colors` is absent, exactly like
+  // the WebGPU direct-render branch above). At agent-world scales this is the
+  // difference between a usable sim and copying W·H·D·4 bytes every step.
+  if (!gridCellsEnabled && !colorsDirty) {
+    self.postMessage({ type: 'stepped', generation, indicators, agents: agentsPayload }, { transfer: agentTransfers });
+    postInspectCellsData();
+    return;
+  }
   const copy = new Uint8ClampedArray(colors);
+  colorsDirty = false;
   if (glyphsPayload) {
     self.postMessage(
       { type: 'stepped', generation, colors: copy, indicators, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload },
@@ -4156,7 +4187,21 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // initGrid first because it allocates wasmMemory + computes layout that
       // initIndicators / buildNeighborIndices need to create their views over.
       gridCellsEnabled = (msg as InitMsg).gridCells !== false;
-      initGrid();
+      try {
+        initGrid();
+      } catch (e) {
+        // Surface allocation failures LOUDLY (e.g. a grid so large the layout
+        // exceeds the wasm32 4 GiB Memory limit — dominated by the per-cell
+        // neighbour tables total×nSz×4 on big 3D grids). Without this the
+        // worker died silently mid-init and a resize appeared to "hang".
+        self.postMessage({
+          type: 'error',
+          message: `Grid allocation failed for ${width}×${height}×${depth} (${(width * height * depth).toLocaleString()} cells): `
+            + ((e as Error)?.message || e)
+            + '. Reduce the grid dimensions (per-cell storage scales with W×H×D; neighbour tables add ×neighbourhood-size when the CA grid is on).',
+        });
+        break;
+      }
       // Skip the (potentially large) neighbour-index tables when the CA grid is
       // off — no cell step queries them in an agents-only model.
       if (gridCellsEnabled) buildNeighborIndices();
@@ -4207,15 +4252,20 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // arrive with both flags true. The model-properties UI prevents this for
       // any live edit, but worker-side enforcement keeps legacy inputs sane.
       // WebGPU wins (it's the newer, opt-in target); WASM is silently demoted.
-      const wantWebGPU = !!msg.useWebGPU;
-      const wantWasm = !wantWebGPU && !!msg.useWasm;
+      // Agents-only (CA Grid off): never instantiate the LATTICE step targets —
+      // the cell step never runs, and the compiler-side layout (which still
+      // includes the model's neighbourhood tables) no longer matches the
+      // worker's no-nbr layout, so instantiation would fail with a confusing
+      // memory-size error.
+      const wantWebGPU = !!msg.useWebGPU && gridCellsEnabled;
+      const wantWasm = !wantWebGPU && !!msg.useWasm && gridCellsEnabled;
       if (msg.useWebGPU && msg.useWasm) {
         // eslint-disable-next-line no-console
         console.warn('[init] both useWebGPU and useWasm true — preferring WebGPU, ignoring WASM flag');
       }
       useWasm = wantWasm && !!msg.wasmStepBytes && !msg.wasmStepError;
       useWebGPU = wantWebGPU;
-      tryInstantiateWasmModule(msg.wasmStepBytes, msg.wasmExports);
+      if (gridCellsEnabled) tryInstantiateWasmModule(msg.wasmStepBytes, msg.wasmExports);
       if (msg.wasmStepError && wantWasm) {
         self.postMessage({ type: 'error', message: '[wasm] compile failed, falling back to JS: ' + msg.wasmStepError });
       }
@@ -4323,6 +4373,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
               }
             }
             if (simulateCells && gridCellsEnabled) runStepWebGPU();      // Layers panel / agents-only: freeze the cell step
+            // agents-only / frozen grid: the agent step IS the generation.
+            else if (agentStore && simulateAgents) generation++;
             const isLast = i === msg.count - 1;
             const shouldCheck = stopMessages.length > 0 && (k === 1 || isLast || (i % k) === (k - 1));
             if (shouldCheck) {
@@ -4374,6 +4426,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
               else if (hasAgentSprites && agentStore) advanceAgentSprites(agentStore);
             }
             if (stepFn && simulateCells && gridCellsEnabled) runStep();
+            // agents-only / frozen grid: the agent step IS the generation.
+            else if (simulateAgents) generation++;
             const rawStop = stopFlag[0] ?? 0;
             if (rawStop !== 0) {
               const idx = rawStop - 1;
@@ -4382,7 +4436,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
               break;
             }
           }
-          if (stepFn && !msg.skipColorPass) runColorPass();
+          if (stepFn && gridCellsEnabled && !msg.skipColorPass) runColorPass();
           sendColors();
           if (stoppedByEvent !== null) self.postMessage({ type: 'stopEvent', message: stoppedByEvent });
         })().catch(e => {
@@ -4405,6 +4459,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // also stops their cell-field deposit (it lives inside runAgentStep).
         if (agentStore && simulateAgents) runAgentStep();
         if (stepFn && simulateCells && gridCellsEnabled) runStep();
+        // generation++ lives inside the CELL step — when the cell step didn't
+        // run (agents-only model, or the Layers panel froze the grid) an agent
+        // step still IS a generation, or the counter sits at 0 forever.
+        else if (agentStore && simulateAgents) generation++;
         const rawStop = stopFlag[0] ?? 0;
         if (rawStop !== 0) {
           const idx = rawStop - 1;
@@ -4413,7 +4471,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           break;
         }
       }
-      if (stepFn && !msg.skipColorPass) runColorPass();
+      if (stepFn && gridCellsEnabled && !msg.skipColorPass) runColorPass();
       sendColors();
       if (stoppedByEvent !== null) {
         self.postMessage({ type: 'stopEvent', message: stoppedByEvent });
@@ -4741,8 +4799,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       if ((msg as RecompileMsg).webgpuStopCheckInterval !== undefined) {
         webgpuStopCheckInterval = Math.max(1, Math.floor((msg as RecompileMsg).webgpuStopCheckInterval!));
       }
-      tryInstantiateWasmModule((msg as RecompileMsg).wasmStepBytes, (msg as RecompileMsg).wasmExports);
-      if ((msg as RecompileMsg).wasmStepError) {
+      // Agents-only: skip the lattice WASM instantiate (see the init handler —
+      // the compiler layout carries nbr tables the worker layout omits).
+      if (gridCellsEnabled) tryInstantiateWasmModule((msg as RecompileMsg).wasmStepBytes, (msg as RecompileMsg).wasmExports);
+      if ((msg as RecompileMsg).wasmStepError && gridCellsEnabled) {
         self.postMessage({ type: 'error', message: '[wasm] recompile failed, falling back to JS: ' + (msg as RecompileMsg).wasmStepError });
       }
       // Wave 3: rebuild WebGPU runtime when the shader source arrives. Only
@@ -4766,7 +4826,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
 
     case 'setUseWasm': {
-      const enableWasm = !!msg.enabled;
+      // Agents-only: the lattice targets stay off (no cell step exists; the
+      // lattice WASM module was never instantiated against this layout).
+      const enableWasm = !!msg.enabled && gridCellsEnabled;
       // If the user just turned WASM on, drain GPU state to CPU before tearing
       // down the runtime — otherwise gpuOwnsAttrs CPU mirror is stale and the
       // first JS/WASM step runs against pre-Play data. Then enforce mutual
@@ -4794,7 +4856,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     }
 
     case 'setUseWebGPU': {
-      const enableWebGPU = !!msg.enabled;
+      // Agents-only: never bring up the lattice GPU runtime (its buffers would
+      // be sized for a grid the model doesn't simulate).
+      const enableWebGPU = !!msg.enabled && gridCellsEnabled;
       // Toggling WebGPU OFF: drain GPU → CPU AND mark the runtime's directRender
       // flag false so any subsequent sendColors falls through to the colors-
       // transfer path (otherwise sendColors keeps short-circuiting on the live
@@ -5374,6 +5438,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       const loadedColors = new Uint8ClampedArray(msg.colors);
       const colorLen = Math.min(colors.length, loadedColors.length);
       for (let i = 0; i < colorLen; i++) colors[i] = loadedColors[i]!;
+      colorsDirty = true;
 
       // Restore model attributes (these are parameter values, not run state,
       // so they ARE restored)
