@@ -418,9 +418,9 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
             // simultaneous Get-Nearby-Agents producers → JS). When false, picking
             // WASM is honest but the engine falls back to JS (agentTargetOf clamps).
             const agentWasmSupported = isAgentGraphWasmSupported(model);
-            // PR7: live WebGPU-target support for the CURRENT agent graph (the
-            // Boids node subset, 2D only). When false, picking WebGPU is honest
-            // but the engine falls back to JS (agentTargetOf clamps).
+            // Live WebGPU-target support for the CURRENT agent graph (full
+            // catalogue minus the documented fundamentals). When false, picking
+            // WebGPU is honest but the engine falls back to JS (agentTargetOf clamps).
             const agentWebgpuSupported = isAgentGraphWebGPUSupported(model);
             const num = (k: CenterBasedNumericKey) => cbNum(cb, k);
             const NF = (k: CenterBasedNumericKey, opts?: { min?: number; max?: number; step?: number; integer?: boolean }) => (
@@ -487,8 +487,8 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                       ? 'This agent graph runs on WebAssembly with JS bit-parity (the whole node catalogue is supported). Independent of the grid target; typically 2-5x faster than JS for heavy per-agent rules.'
                       : 'Selectable, but this graph has too many simultaneous Get-Nearby-Agents producers for the WASM scratch budget, so it falls back to JS.', false],
                     ['webgpu', 'WebGPU', agentWebgpuSupported
-                      ? 'This agent graph runs on WebGPU (the Boids node subset, 2D) — the behaviour + force passes dispatch on the GPU. Independent of the grid target; falls back to JS if WebGPU is unavailable.'
-                      : 'Selectable, but this graph uses nodes not yet ported to the WebGPU agent loop (or is 3D), so it falls back to JS (bonds / division / field stay CPU).', false],
+                      ? 'This agent graph runs on WebGPU — the behaviour + force passes dispatch on the GPU. NB: every step pays a CPU↔GPU upload/readback (agents + any cell fields), so below ~10k agents — and especially for field models — JS/WASM is usually FASTER; WebGPU only wins with very large populations or very heavy per-agent math. Falls back to JS if WebGPU is unavailable.'
+                      : 'Selectable, but this graph uses one of the few WebGPU-fundamental rejects (median / uniform-random aggregate, toggle/next/previous indicator ops, or too many array producers), so it falls back to JS.', false],
                   ] as const).map(([val, title, hint, disabled]) => (
                     <label
                       key={val}

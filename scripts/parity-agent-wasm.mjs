@@ -95,10 +95,15 @@ function build3DFieldModel() {
     const set = cn('setAttribute', { attributeId: attr }); cV(ex, 'result', set, 'value'); return set;
   };
   const setA = diffuse('chemical'), setB = diffuse('chemical2');
-  const seq = cn('sequence', { thenCount: 2 }); cF(step, 'do', seq, 'do'); cF(seq, 'then_0', setA, 'do'); cF(seq, 'then_1', setB, 'do');
-  // agents
+  // Sequence ports are `first`/`then` (+ `then_2`… via extraCount) — NOT then_0/then_1.
+  const seq = cn('sequence', { extraCount: 0 }); cF(step, 'do', seq, 'do'); cF(seq, 'first', setA, 'do'); cF(seq, 'then', setB, 'do');
+  // agents — the behaviour chain routes through a Sequence ON PURPOSE: the agent
+  // WASM/WebGPU sequence emitters once walked nonexistent then0/then1 ports and
+  // silently dropped the whole downstream chain (the gravitation bug); this keeps
+  // permanent regression coverage for agent-graph Sequence.
   const bs = an('behaviourStep', {});
-  const sec = an('secreteToField', { attributeId: 'chemical', _port_rate: '1.0' }); aF(bs, 'do', sec, 'do');
+  const aseq = an('sequence', { extraCount: 0 }); aF(bs, 'do', aseq, 'do');
+  const sec = an('secreteToField', { attributeId: 'chemical', _port_rate: '1.0' }); aF(aseq, 'first', sec, 'do');
   const aff = an('affectCellsUnder', { attributeId: 'chemical2', op: 'add', _port_value: '0.5', _port_radius: '2' }); aF(sec, 'next', aff, 'do');
   const fg = an('fieldGradient', { attributeId: 'chemical' });
   const sf = an('sampleField', { attributeId: 'chemical' });

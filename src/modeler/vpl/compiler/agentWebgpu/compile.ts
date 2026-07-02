@@ -1954,10 +1954,15 @@ function compileFlowNode(ctx: AgentWgpuCtx, nodeId: string): void {
       break;
     }
     case 'sequence': {
+      // Ports are `first`, `then`, then `then_2`…`then_(1+extraCount)` (see
+      // SequenceNode + CaNode's dynamic ports). The previous `then0`/`then1`
+      // (keyed on a nonexistent `sequenceCount`) matched NOTHING — every
+      // Sequence in an agent behaviour silently dropped its downstream chain.
       const cfg = node.data.config as Record<string, unknown> | undefined;
-      const count = Math.max(1, Number(cfg?.['sequenceCount']) || 1);
-      compileFlowChain(ctx, node.id, 'then0');
-      for (let i = 1; i < count; i++) compileFlowChain(ctx, node.id, `then${i}`);
+      const extra = Math.max(0, Number(cfg?.['extraCount']) || 0);
+      compileFlowChain(ctx, node.id, 'first');
+      compileFlowChain(ctx, node.id, 'then');
+      for (let i = 2; i < 2 + extra; i++) compileFlowChain(ctx, node.id, `then_${i}`);
       compileFlowChain(ctx, node.id, 'next');
       break;
     }
