@@ -2419,7 +2419,9 @@ function initGrid(): void {
   // source attribute's tagOptions count + the face-label palette length so the
   // regions are stable across live edits to the values themselves.
   let variegatedInputs: VariegatedLayoutInputs | undefined;
-  if (variegated) {
+  if (variegated && gridCellsEnabled) {
+    // Variegation is a cell-grid feature — with the grid off its per-cell
+    // orientation buffers would be dead weight at agent-world scales.
     const source = cellAttrs.find(a => a.id === variegated!.sourceAttributeId);
     variegatedInputs = { speciesCount: source?.tagOptions?.length ?? 0 };
   }
@@ -2442,10 +2444,11 @@ function initGrid(): void {
     variegatedInputs,
     hasGlyphs,
     lookupTables,
+    gridCellsEnabled,   // grid off ⇒ no colors/glyphs/order/skipped/attr-write regions
   );
   wasmMemory = new WebAssembly.Memory({ initial: wasmLayout.pages });
   const buf = wasmMemory.buffer;
-  colorsDirty = true;   // fresh grid → ship colours on the next sendColors
+  colorsDirty = gridCellsEnabled;   // fresh grid → ship colours on the next sendColors (never when the grid is off)
 
   // Constant boundary needs a sentinel cell at index `total` that neighbour
   // lookups for out-of-bounds positions point to. We always view total+1 cells
@@ -2515,7 +2518,9 @@ function initGrid(): void {
 
   // Order array — view over memory in BOTH modes (offset is reserved either way).
   // Async mode populates it (sequential then maybe shuffled); sync mode leaves it 0.
-  if (isAsync) {
+  // Grid off ⇒ the regions are 0-sized (no async cell loop) — a total-length view
+  // over them would throw RangeError.
+  if (isAsync && gridCellsEnabled) {
     orderArray = new Int32Array(buf, wasmLayout.orderOffset, total);
     for (let i = 0; i < total; i++) orderArray[i] = i;
     // For cyclic scheme, shuffle once at init and reuse
@@ -2768,6 +2773,10 @@ function applySubAttributeAsyncScrub(): void {
 }
 
 function runStep(): void {
+  // Agents-only defence: the batch loops already gate on gridCellsEnabled, but
+  // mutation-handler tails (`else if (stepFn) runStep()`) can still reach here —
+  // an empty cell step over a huge agent world would be a multi-second stall.
+  if (!gridCellsEnabled) return;
   colorsDirty = true;   // the step (or its colour writes) may rewrite `colors`
   // Wave 3: triple branch — WebGPU > WASM > JS. WebGPU only takes the
   // dispatch when the runtime has finished its async buffer + pipeline setup.
@@ -3378,6 +3387,9 @@ async function finalizeStepWebGPU(opts: { needAttrs?: boolean; needColors?: bool
 
 
 function writeDefaultColors(): void {
+  // Agents-only: no colors region exists (0 bytes) and nothing renders the
+  // grid — skip (also avoids a per-cell loop over a potentially huge total).
+  if (!gridCellsEnabled) return;
   colorsDirty = true;
   // 3D Grid CA: the default/fallback coloring is FULLY TRANSPARENT (alpha 0) so
   // the voxel renderer instances ZERO cells — a model with no explicit Output
@@ -3626,6 +3638,9 @@ function runInit(): void {
  *  same readAttrs->attrsA pre-step normalisation as runStep does, because the
  *  output mapping reads from the baked-in attrReadOffset. */
 function runColorPass(): void {
+  // Agents-only: no colors region + nothing renders the grid (agent views go
+  // through runAgentColorPass instead).
+  if (!gridCellsEnabled) return;
   // Glyph buffers: zero before every colour pass so per-cell setCellGlyph
   // writes see a fresh canvas. "Codepoint 0" is the renderer's "skip this
   // cell" signal. Cheap memset — at 5000² this is ~3–6ms; for typical grids
@@ -4105,7 +4120,7 @@ function sendColors(): void {
   // main thread keeps its last colorsRef when `colors` is absent, exactly like
   // the WebGPU direct-render branch above). At agent-world scales this is the
   // difference between a usable sim and copying W·H·D·4 bytes every step.
-  if (!gridCellsEnabled && !colorsDirty) {
+  if (!gridCellsEnabled && (!colorsDirty || colors.length === 0)) {
     self.postMessage({ type: 'stepped', generation, indicators, agents: agentsPayload }, { transfer: agentTransfers });
     postInspectCellsData();
     return;
@@ -4198,7 +4213,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           type: 'error',
           message: `Grid allocation failed for ${width}×${height}×${depth} (${(width * height * depth).toLocaleString()} cells): `
             + ((e as Error)?.message || e)
-            + '. Reduce the grid dimensions (per-cell storage scales with W×H×D; neighbour tables add ×neighbourhood-size when the CA grid is on).',
+            + '. The simulation memory is one WebAssembly.Memory backing store shared by ALL compile targets (hard cap 4 GiB). '
+            + (gridCellsEnabled
+              ? 'Per-cell storage scales with W×H×D: cell attributes + colours + engine buffers, and neighbour tables add ×neighbourhood-size.'
+              : 'With the CA grid off, per-cell storage is the CELL ATTRIBUTES only (agents read/deposit fields through them) — delete unused cell attributes or reduce the world dimensions.'),
         });
         break;
       }

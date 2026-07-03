@@ -197,8 +197,19 @@ export function computeMemoryLayout(
   variegated?: VariegatedLayoutInputs,
   hasGlyphs: boolean = false,
   lookupTables: LookupTableLayoutInput[] = [],
+  // Agents-only (CA Grid off): the per-cell ENGINE regions — colors, glyphs,
+  // async order/skipped arrays, and the sync attr WRITE buffers — exist only
+  // for the cell step + grid render, neither of which runs when the grid is
+  // off. Skipping them makes an agents-only world's memory scale with its
+  // CELL ATTRIBUTES only (kept: agents read/deposit fields via readAttrs), so
+  // a huge "container" world (e.g. 5000×500×500) with no cell attrs costs
+  // ~nothing instead of 9 bytes/cell (which blew the wasm32 4 GiB Memory cap).
+  // Callers that compile the lattice step never pass false (the lattice
+  // targets are gated off entirely when the grid is off).
+  gridCells: boolean = true,
 ): MemoryLayout {
   let off = 0;
+  const glyphsOn = hasGlyphs && gridCells;
 
   const attrReadOffset: Record<string, number> = {};
   const attrWriteOffset: Record<string, number> = {};
@@ -221,8 +232,9 @@ export function computeMemoryLayout(
     attrReadOffset[a.id] = off;
     off += cellsPerAttr * ib;
   }
-  // Cell attrs — write region (sync only)
-  if (!isAsync) {
+  // Cell attrs — write region (sync only; grid off ⇒ no cell step ever writes,
+  // so the write side aliases the read side like async mode)
+  if (!isAsync && gridCells) {
     for (const a of cellAttrs) {
       const ib = attrTypeBytes[a.id]!;
       off = alignTo(off, 8);
@@ -254,10 +266,11 @@ export function computeMemoryLayout(
     }
   }
 
-  // Colors region (RGBA Uint8 per cell)
+  // Colors region (RGBA Uint8 per cell; 0 bytes when the CA grid is off —
+  // nothing renders the grid, and at agent-world scales 4 B/cell dominates)
   off = alignTo(off, 8);
   const colorsOffset = off;
-  const colorsBytes = total * 4;
+  const colorsBytes = gridCells ? total * 4 : 0;
   off += colorsBytes;
 
   // Glyph regions (codes + packed RGB colours) — both u32 per cell, allocated
@@ -267,7 +280,7 @@ export function computeMemoryLayout(
   let glyphCodesBytes = 0;
   let glyphColorsOffset = 0;
   let glyphColorsBytes = 0;
-  if (hasGlyphs) {
+  if (glyphsOn) {
     glyphCodesBytes = total * 4;
     off = alignTo(off, 8);
     glyphCodesOffset = off;
@@ -321,10 +334,11 @@ export function computeMemoryLayout(
   const activeViewerOffset = off;
   off += 8;
 
-  // Order array (only meaningful in async mode, but reserve in both for layout stability)
+  // Order array (only meaningful in async mode, but reserve in both for layout
+  // stability; 0 bytes when the CA grid is off — the async cell loop never runs)
   off = alignTo(off, 8);
   const orderOffset = off;
-  off += total * 4;
+  off += gridCells ? total * 4 : 0;
 
   // Stop-event flag (single i32, padded to 8)
   off = alignTo(off, 8);
@@ -335,7 +349,7 @@ export function computeMemoryLayout(
   // but reserve in both modes for layout stability — matches orderOffset).
   off = alignTo(off, 8);
   const skippedOffset = off;
-  const skippedBytes = total;
+  const skippedBytes = gridCells ? total : 0;
   off += alignTo(skippedBytes, 8);
 
   // Variegated Cells — facePatternLookup. Uploaded by the worker on
@@ -384,7 +398,7 @@ export function computeMemoryLayout(
     totalBytes, pages, isAsync, total,
     attrReadOffset, attrWriteOffset, attrTypeBytes, attrType,
     colorsOffset, colorsBytes,
-    hasGlyphs,
+    hasGlyphs: glyphsOn,
     glyphCodesOffset, glyphCodesBytes,
     glyphColorsOffset, glyphColorsBytes,
     nbrIndexOffset, nbrSize,
