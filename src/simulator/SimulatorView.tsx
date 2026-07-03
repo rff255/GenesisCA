@@ -1234,7 +1234,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const glc = glCanvasRef.current;
       const colors3d = colorsRef.current;
       const w3 = gridWidth.current, h3 = gridHeight.current, d3 = gridDepth.current;
-      if (!glc || !colors3d || !w3 || !h3) return;
+      // NB: colors3d may legitimately be null forever in an agents-only model
+      // (the worker never ships a colors buffer when the CA grid is off) —
+      // agents/bonds/overlays must still render, so don't early-return on it.
+      if (!glc || !w3 || !h3) return;
       const cssW = glc.clientWidth || glc.parentElement?.clientWidth || 500;
       const cssH = glc.clientHeight || glc.parentElement?.clientHeight || 500;
       r.resize(cssW, cssH, window.devicePixelRatio || 1);
@@ -1255,9 +1258,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // 3D perf: only re-scan + re-upload the (potentially millions of) cells when
       // the colours actually changed (a new buffer from a `stepped` message).
       // Camera-only redraws reuse the existing GPU instance buffer.
-      if (colors3d !== lastUploadedColors3dRef.current) {
-        r.uploadColors(colors3d, w3 * h3 * d3);
-        lastUploadedColors3dRef.current = colors3d;
+      if (colors3d) {
+        if (colors3d !== lastUploadedColors3dRef.current) {
+          r.uploadColors(colors3d, w3 * h3 * d3);
+          lastUploadedColors3dRef.current = colors3d;
+        }
+      } else if (lastUploadedColors3dRef.current) {
+        // Colors went away (e.g. reinit into an agents-only world) — drop the
+        // stale voxel instances instead of drawing the previous grid forever.
+        r.instanceCount = 0;
+        lastUploadedColors3dRef.current = null;
       }
       // Bond-Graph Agents (PR5): overlay the agent spheres + bonds via the
       // instanced sphere-impostor pipeline. Only re-compact the SoA when the
@@ -1287,8 +1297,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (!canvas || !w || !h) return;
     // P7 direct render: srcCanvas is populated by the worker via WebGPU, so
     // we don't need a CPU `colors` buffer to draw. Without direct render, a
-    // missing colors buffer means we have nothing to display yet.
-    if (!colors && !directRenderActiveRef.current) return;
+    // missing colors buffer means we have nothing to display yet — EXCEPT for
+    // an agent model, where the worker may never ship colors at all (CA grid
+    // off) and the agents overlay must still draw.
+    if (!colors && !directRenderActiveRef.current && !isAgentModelRef.current) return;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -1309,7 +1321,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // moved ownership of the 2D context).
     if (directRenderActiveRef.current && srcCanvasRef.current) {
       // canvas dimensions are fixed at transfer time; nothing to do here.
-    } else if (colors) {
+    } else if (colors && colors.length >= w * h * 4) {
       if (!srcCanvasRef.current || srcCanvasRef.current.width !== w || srcCanvasRef.current.height !== h) {
         srcCanvasRef.current = document.createElement('canvas');
         srcCanvasRef.current.width = w;
@@ -1556,7 +1568,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // (cheaper than per-cell fills for dense glyph models); the per-tile glyph
     // overlay below stays skipped at this zoom.
     let blitSource = srcCanvasRef.current;
-    if (!directRenderActiveRef.current && colors && srcCanvasRef.current) {
+    if (!directRenderActiveRef.current && colors && colors.length >= w * h * 4 && srcCanvasRef.current) {
       const codes = glyphCodesRef.current;
       const gcols = glyphColorsRef.current;
       const fb = glyphFallbackRef.current;
