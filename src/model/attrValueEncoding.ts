@@ -45,3 +45,23 @@ export function encodeAttrValue(attr: AttrEncodingShape, raw?: string): number {
       return 0;
   }
 }
+
+/** Inverse of `encodeAttrValue`: a typed-array numeric back to the canonical
+ *  string encoding (matching `Attribute.defaultValue`). Used to prefill the
+ *  agent Edit brush from a live agent's numeric attribute values. bool → the
+ *  literal 'true'/'false' the InlineBoolSelect widget expects; tag/int/
+ *  neighborIndex → the integer index string; float → the decimal string. */
+export function decodeAttrValue(attr: AttrEncodingShape, value: number): string {
+  switch (attr.type) {
+    case 'bool':
+      return value ? 'true' : 'false';
+    case 'integer':
+    case 'tag':
+    case 'neighborIndex':
+      return String(Math.round(value));
+    case 'float':
+      return String(value);
+    default:
+      return '';
+  }
+}

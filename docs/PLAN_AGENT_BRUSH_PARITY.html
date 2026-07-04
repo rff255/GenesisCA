@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Brush Parity — Plan Mockup</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#15171c; --panel2:#1b1e25; --border:#2a2e37; --border2:#363b46;
+    --text:#e6e8ee; --muted:#9aa1ad; --faint:#6b7280;
+    --accent:#e8a13a; --accent-soft:#3a2c14; --accent-line:#e8a13a;
+    --add:#4caf50; --remove:#ef5350; --move:#42a5f5; --edit:#ab7bff; --bond:#26c6da;
+    --agent:#4cc9f0; --grid:#5c6470;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    padding:0 0 80px}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+  header{padding:34px 22px 20px;border-bottom:1px solid var(--border);
+    background:linear-gradient(180deg,#101216,#0c0d10)}
+  h1{margin:0 0 6px;font-size:26px;letter-spacing:.2px}
+  h1 .mark{color:var(--accent)}
+  .sub{color:var(--muted);font-size:14px}
+  h2{margin:38px 0 12px;font-size:19px;border-left:3px solid var(--accent);padding-left:10px}
+  h3{margin:22px 0 8px;font-size:15px;color:var(--text)}
+  p{color:#cfd3db}
+  code{background:#0f1115;border:1px solid var(--border);border-radius:5px;padding:1px 5px;
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:#e2c08d}
+  .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:700;
+    border:1px solid var(--border2)}
+  .decisions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
+  .dec{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px 13px;flex:1 1 260px}
+  .dec .k{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--faint)}
+  .dec .v{font-weight:700;margin-top:3px}
+  .dec .v .chip{color:var(--accent)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  /* fake right-panel */
+  .rp{background:var(--panel);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+  .rp .hd{padding:8px 12px;border-bottom:1px solid var(--border);font-size:11px;
+    text-transform:uppercase;letter-spacing:.07em;color:var(--muted);display:flex;justify-content:space-between}
+  .rp .bd{padding:11px 12px;display:flex;flex-direction:column;gap:9px}
+  .tag-old{color:var(--remove)}.tag-new{color:var(--add)}
+  .modes{display:flex;flex-wrap:wrap;gap:5px}
+  .mbtn{padding:3px 10px;border-radius:6px;border:1px solid var(--border2);background:#14161b;
+    font-size:12px;font-weight:600;color:var(--muted)}
+  .mbtn.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+  .mbtn.add.on{border-color:var(--add);background:#14260f;color:var(--add)}
+  .mbtn.remove.on{border-color:var(--remove);background:#2a1212;color:var(--remove)}
+  .mbtn.edit.on{border-color:var(--edit);background:#1e1630;color:var(--edit)}
+  .seg{display:flex;border:1px solid var(--border2);border-radius:7px;overflow:hidden;width:max-content}
+  .seg span{padding:3px 12px;font-size:12px;font-weight:600;color:var(--muted);background:#14161b}
+  .seg span.on{background:var(--accent-soft);color:var(--accent)}
+  .row{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted)}
+  .row .lab{width:54px;color:var(--faint);font-size:11px}
+  .fld{background:#0f1115;border:1px solid var(--border2);border-radius:5px;padding:2px 7px;
+    min-width:44px;text-align:center;color:var(--text);font-size:12px}
+  .lbl-row{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.05em;margin-bottom:-2px}
+  /* edit rows */
+  .erow{display:grid;grid-template-columns:16px 1fr 88px;align-items:center;gap:8px;
+    padding:3px 0;border-bottom:1px solid #1c1f26;font-size:12.5px}
+  .erow .nm{color:var(--text)}
+  .erow.geo .nm{color:var(--edit)}
+  .erow.dim{opacity:.42}
+  .ck{width:13px;height:13px;border:1px solid var(--border2);border-radius:3px;display:inline-block}
+  .ck.on{background:var(--accent);border-color:var(--accent)}
+  .divider{border-top:1px dashed var(--border2);margin:4px 0 2px;font-size:10.5px;color:var(--faint);
+    text-transform:uppercase;letter-spacing:.06em;padding-top:5px}
+  table{border-collapse:collapse;width:100%;margin-top:6px;font-size:13px}
+  th,td{border:1px solid var(--border);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#14161b;color:var(--muted);font-weight:600}
+  td .m{font-weight:700}
+  td.single{background:#101a10}
+  td.area{background:#101520}
+  .cap{color:var(--faint);font-size:12px;margin-top:6px}
+  .note{background:var(--panel2);border:1px solid var(--border);border-left:3px solid var(--accent);
+    border-radius:0 8px 8px 0;padding:10px 13px;margin:12px 0;color:#cfd3db;font-size:13px}
+  .flow{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:8px}
+  svg{display:block;width:100%;height:auto}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:8px}
+  .legend .d{display:inline-block;width:11px;height:11px;border-radius:3px;vertical-align:-1px;margin-right:5px}
+  ul{color:#cfd3db}
+  .foot{color:var(--faint);font-size:12px;margin-top:40px;border-top:1px solid var(--border);padding-top:14px}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1><span class="mark">Agent Brush</span> — full parity plan</h1>
+    <div class="sub">Same shapes as the CA-grid brush · Single/Area scope · Seed→Add / Kill→Remove · a new Edit mode · 2D + 3D</div>
+    <div class="decisions">
+      <div class="dec"><div class="k">Area move</div><div class="v"><span class="chip">Rigid group drag</span> — carry a cluster by the drag delta</div></div>
+      <div class="dec"><div class="k">Edit scope</div><div class="v"><span class="chip">Attributes + radius + velocity + position</span></div></div>
+      <div class="dec"><div class="k">Dimensions</div><div class="v"><span class="chip">2D &amp; 3D together</span></div></div>
+    </div>
+  </div>
+</header>
+<div class="wrap">
+
+<h2>1 · The panel — today vs. proposed</h2>
+<div class="grid2">
+  <div>
+    <div class="rp">
+      <div class="hd"><span>Agent Brush</span><span class="tag-old">today</span></div>
+      <div class="bd">
+        <div class="modes">
+          <span class="mbtn on">seed</span><span class="mbtn">kill</span><span class="mbtn">glue</span>
+          <span class="mbtn">cut</span><span class="mbtn">move</span><span class="mbtn">bond</span>
+        </div>
+        <div class="row"><span class="lab">Radius</span><span class="fld">6</span><span style="color:var(--faint)">(disc only)</span></div>
+        <div class="row" style="color:var(--faint)">▸ Seed config</div>
+      </div>
+    </div>
+    <div class="cap">Radius-only disc. No shape. No scope. Ctrl-drag secretly resizes the <em>hidden grid brush</em>.</div>
+  </div>
+  <div>
+    <div class="rp">
+      <div class="hd"><span>Agent Brush</span><span class="tag-new">proposed</span></div>
+      <div class="bd">
+        <div class="modes">
+          <span class="mbtn add on">Add</span><span class="mbtn remove">Remove</span>
+          <span class="mbtn">Move</span><span class="mbtn edit">Edit</span>
+          <span class="mbtn">Glue</span><span class="mbtn">Cut</span><span class="mbtn">Bond</span>
+        </div>
+        <div class="lbl-row">Shape</div>
+        <div class="modes">
+          <span class="mbtn">▭ Square</span><span class="mbtn on">◯ Circle</span>
+          <span class="mbtn">◎ Ring</span><span class="mbtn">╱ Line</span>
+        </div>
+        <div class="row"><span class="lab">Radius</span><span class="fld">6</span></div>
+        <div class="lbl-row">Scope</div>
+        <div class="seg"><span>Single</span><span class="on">Area</span></div>
+        <div class="row" style="color:var(--faint)">▸ Add config &nbsp;·&nbsp; Clear all</div>
+      </div>
+    </div>
+    <div class="cap">Shape selector + adaptive size row + Single/Area toggle. Ctrl-drag now resizes the <em>agent</em> shape.</div>
+  </div>
+</div>
+
+<h2>2 · Behavior matrix — mode × scope</h2>
+<table>
+  <tr><th style="width:90px">Mode</th><th>Single</th><th>Area (footprint)</th></tr>
+  <tr>
+    <td><span class="m" style="color:var(--add)">Add</span></td>
+    <td class="single">Place <b>one</b> agent at the cursor</td>
+    <td class="area">Scatter agents across the shape footprint (density-driven; today's seed, now shape-aware)</td>
+  </tr>
+  <tr>
+    <td><span class="m" style="color:var(--remove)">Remove</span></td>
+    <td class="single">Remove the <b>one</b> nearest agent</td>
+    <td class="area">Remove <b>all</b> agents whose cell ∈ footprint</td>
+  </tr>
+  <tr>
+    <td><span class="m" style="color:var(--move)">Move</span></td>
+    <td class="single">Drag the <b>one</b> picked agent</td>
+    <td class="area"><b>Rigid group drag</b> — translate every agent in the footprint by the drag delta</td>
+  </tr>
+  <tr>
+    <td><span class="m" style="color:var(--edit)">Edit</span></td>
+    <td class="single">Click an agent → prefill panel → <b>Apply</b> to that agent</td>
+    <td class="area">Stamp the checked overwrites onto <b>all</b> agents under the footprint (live)</td>
+  </tr>
+  <tr>
+    <td><span class="m" style="color:var(--bond)">Glue / Cut / Bond</span></td>
+    <td colspan="2" style="color:var(--muted)">Unchanged — inherently two-agent / area-scan; the Single/Area toggle is hidden for these.</td>
+  </tr>
+</table>
+<div class="note"><b>Line + Move</b>: a two-click line can't express a rigid drag, so with the Line shape, Move falls back to single-agent. Line + Add/Remove/Edit operate on the capsule region.</div>
+
+<h2>3 · Interaction gestures</h2>
+<div class="flow">
+<svg viewBox="0 0 1000 300" role="img" aria-label="Three gesture sequences">
+  <style>
+    .cell{fill:#161a20;stroke:#242a33}
+    .fp{fill:#e8a13a22;stroke:#e8a13a;stroke-width:1.4}
+    .ag{fill:#4cc9f0}
+    .agdim{fill:#4cc9f0;opacity:.35}
+    .agn{fill:#4caf50}
+    .lab{fill:#9aa1ad;font:12px sans-serif}
+    .ttl{fill:#e6e8ee;font:13px sans-serif;font-weight:700}
+    .arrow{stroke:#e8a13a;stroke-width:2;fill:none;marker-end:url(#ah)}
+    .ring{fill:none;stroke:#ab7bff;stroke-width:2}
+  </style>
+  <defs><marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+    <path d="M0,0 L7,3 L0,6 z" fill="#e8a13a"/></marker></defs>
+
+  <!-- Panel A: area add on a square footprint -->
+  <text x="20" y="24" class="ttl">Area · Add · Square</text>
+  <rect x="20" y="40" width="150" height="150" rx="6" class="cell"/>
+  <rect x="55" y="70" width="90" height="90" class="fp"/>
+  <g>
+    <circle cx="72" cy="88" r="5" class="agn"/><circle cx="104" cy="80" r="5" class="agn"/>
+    <circle cx="132" cy="98" r="5" class="agn"/><circle cx="80" cy="120" r="5" class="agn"/>
+    <circle cx="118" cy="130" r="5" class="agn"/><circle cx="100" cy="108" r="5" class="agn"/>
+    <circle cx="135" cy="140" r="5" class="agn"/><circle cx="62" cy="146" r="5" class="agn"/>
+  </g>
+  <text x="20" y="210" class="lab">scatter density × footprint cells</text>
+
+  <!-- Panel B: rigid group move -->
+  <text x="360" y="24" class="ttl">Area · Move · rigid group drag</text>
+  <rect x="360" y="40" width="150" height="150" rx="6" class="cell"/>
+  <circle cx="392" cy="80" r="5" class="agdim"/><circle cx="410" cy="98" r="5" class="agdim"/>
+  <circle cx="378" cy="104" r="5" class="agdim"/><circle cx="400" cy="118" r="5" class="agdim"/>
+  <circle cx="472" cy="140" r="5" class="ag"/><circle cx="490" cy="158" r="5" class="ag"/>
+  <circle cx="458" cy="164" r="5" class="ag"/><circle cx="480" cy="178" r="5" class="ag"/>
+  <path d="M405 100 L465 155" class="arrow"/>
+  <text x="360" y="210" class="lab">same Δ applied to the whole cluster</text>
+
+  <!-- Panel C: single edit flow -->
+  <text x="700" y="24" class="ttl">Single · Edit</text>
+  <rect x="700" y="40" width="150" height="150" rx="6" class="cell"/>
+  <circle cx="760" cy="110" r="8" class="ag"/>
+  <circle cx="760" cy="110" r="14" class="ring"/>
+  <text x="700" y="210" class="lab">click → prefill panel → Apply</text>
+  <path d="M782 104 C 850 90, 880 120, 905 130" class="arrow"/>
+  <rect x="900" y="120" width="86" height="70" rx="5" fill="#15171c" stroke="#363b46"/>
+  <rect x="908" y="130" width="9" height="9" rx="2" fill="#e8a13a"/>
+  <text x="922" y="138" class="lab">energy</text>
+  <rect x="908" y="146" width="9" height="9" rx="2" fill="#e8a13a"/>
+  <text x="922" y="154" style="fill:#ab7bff;font:11px sans-serif">radius</text>
+  <rect x="908" y="162" width="9" height="9" rx="2" fill="none" stroke="#363b46"/>
+  <text x="922" y="170" style="fill:#6b7280;font:11px sans-serif">vx,vy</text>
+  <text x="908" y="184" style="fill:#4caf50;font:11px sans-serif">▸ Apply</text>
+</svg>
+</div>
+<div class="legend">
+  <span><span class="d" style="background:#4caf50"></span>added agent</span>
+  <span><span class="d" style="background:#4cc9f0"></span>moved / picked agent</span>
+  <span><span class="d" style="background:#4cc9f0;opacity:.35"></span>pre-drag position</span>
+  <span><span class="d" style="background:#e8a13a44;border:1px solid #e8a13a"></span>footprint</span>
+  <span><span class="d" style="background:#ab7bff"></span>edit target ring</span>
+</div>
+
+<h2>4 · Edit config panel (reuses the Add/Seed UI style)</h2>
+<div class="grid2">
+  <div>
+    <div class="rp">
+      <div class="hd"><span>Edit config</span><span class="tag-new">Edit mode</span></div>
+      <div class="bd">
+        <div class="erow"><span class="ck on"></span><span class="nm">energy</span><span class="fld">7.5</span></div>
+        <div class="erow"><span class="ck on"></span><span class="nm">state <span style="color:var(--faint);font-size:10px">(tag)</span></span><span class="fld">alive</span></div>
+        <div class="erow dim"><span class="ck"></span><span class="nm">carrying</span><span class="fld">false</span></div>
+        <div class="divider">Geometry</div>
+        <div class="erow geo"><span class="ck on"></span><span class="nm">Radius</span><span class="fld">1.4</span></div>
+        <div class="erow geo dim"><span class="ck"></span><span class="nm">Velocity X / Y</span><span class="fld">0 · 0</span></div>
+        <div class="erow geo dim"><span class="ck"></span><span class="nm">Position X / Y</span><span class="fld">—</span></div>
+        <div class="row" style="margin-top:6px;color:var(--add);font-weight:700">▸ Apply to agent</div>
+      </div>
+    </div>
+  </div>
+  <div>
+    <p>The same <code>ManualBrushPanel</code> rows the Add config uses — a <b>Set checkbox</b> + type-appropriate widget per property, unchecked rows dimmed &amp; skipped. Geometry rows (<code>Radius</code>, <code>Velocity</code>, <code>Position</code>) are synthetic <code>Attribute</code>-shaped entries appended after the user's agent attributes.</p>
+    <ul>
+      <li><b>Single:</b> clicking an agent prefills every row from its live state (via <code>getAgentState</code> + a new <code>decodeAttrValue</code>), highlights it, and <b>Apply</b> writes the checked rows to that agent.</li>
+      <li><b>Area:</b> click/drag the footprint stamps the checked rows onto every agent under it (live, no prefill).</li>
+      <li><b>Position</b> defaults <em>off</em> — overwriting position in Area scope would stack agents; it's a Single-scope tool.</li>
+    </ul>
+  </div>
+</div>
+
+<h2>5 · Data flow &amp; the one worker change</h2>
+<div class="flow">
+<svg viewBox="0 0 1000 200" role="img" aria-label="data flow">
+  <style>
+    .box{fill:#15171c;stroke:#363b46;rx:8}
+    .bt{fill:#e6e8ee;font:12.5px sans-serif;font-weight:700}
+    .bs{fill:#9aa1ad;font:11px sans-serif}
+    .fa{stroke:#4cc9f0;stroke-width:2;fill:none;marker-end:url(#ah2)}
+    .worker{fill:#141b16;stroke:#4caf50}
+  </style>
+  <defs><marker id="ah2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+    <path d="M0,0 L7,3 L0,6 z" fill="#4cc9f0"/></marker></defs>
+  <rect x="12" y="60" width="170" height="72" rx="8" class="box"/>
+  <text x="26" y="90" class="bt">cursor world pos</text><text x="26" y="110" class="bs">+ shape + params</text>
+  <path d="M182 96 L214 96" class="fa"/>
+  <rect x="216" y="60" width="196" height="72" rx="8" class="box"/>
+  <text x="230" y="86" class="bt">brushShapeOffsets()</text><text x="230" y="104" class="bs">reused CA-grid fn</text>
+  <text x="230" y="122" class="bs">→ footprint cell Set (torus-fold)</text>
+  <path d="M412 96 L444 96" class="fa"/>
+  <rect x="446" y="60" width="184" height="72" rx="8" class="box"/>
+  <text x="460" y="86" class="bt">agentsInFootprint()</text><text x="460" y="104" class="bs">snapshot agents whose</text>
+  <text x="460" y="122" class="bs">floor(pos) ∈ Set → id[]</text>
+  <path d="M630 96 L662 96" class="fa"/>
+  <rect x="664" y="42" width="322" height="112" rx="8" class="worker"/>
+  <text x="680" y="66" class="bt" style="fill:#8fdca0">worker message (reused / +1 field)</text>
+  <text x="680" y="88" class="bs">Add → <tspan fill="#e2c08d">seedAgents</tspan> · Remove → <tspan fill="#e2c08d">killAgents</tspan></text>
+  <text x="680" y="106" class="bs">Move → <tspan fill="#e2c08d">moveAgents</tspan> (moves[]) — exists</text>
+  <text x="680" y="124" class="bs">Edit → <tspan fill="#e2c08d">paintAgents</tspan> + optional</text>
+  <text x="680" y="142" class="bs" style="fill:#8fdca0">geom{radius,vx/vy/vz,x/y/z} ← the only new field</text>
+</svg>
+</div>
+<div class="note">Only <b>one</b> worker-protocol change: extend the existing <code>paintAgents</code> handler with optional <code>geom</code> (radius → radius+targetRadius; velocity; position with the <code>moveAgents</code> x/xNext + torus discipline). Attributes still go through <code>applyAgentSets</code>. Works on JS / WASM / WebGPU-backed agents unchanged (baked-offset views — as <code>moveAgents</code> already proves) and <code>runAgentColorPass</code> runs after, so no per-target code.</div>
+
+<h2>6 · Fix carried in: Ctrl-drag resize</h2>
+<p>Today the Ctrl+LMB-drag resize is gated only on <code>e.ctrlKey</code> and reads/writes the <b>CA-grid</b> brush refs — so a Ctrl-drag while the brush targets agents silently resizes the <em>hidden cell brush</em>. The fix branches the onDown snapshot and onMove math on <code>brushTarget==='agents'</code> to read/write the agent shape state (identical per-shape math), in both the 2D and 3D handlers.</p>
+
+<h2>7 · 2D ↔ 3D parity</h2>
+<p>Every mode/shape/scope is wired in <b>both</b> pointer handlers. In 3D the footprint is projected onto the interaction plane via the existing <code>mapStampToPlane</code> (with volumetric ball/box Add via <code>agentSeedPoints3d</code>); single-pick goes through <code>pickAgent3d → agentInstOrder → instanceToSlot</code> (respecting the alpha-sort permutation); group-move drags on the plane; the cursor reuses gl3d's cell-highlight. Glue/Cut/Bond keep their current 3D behavior.</p>
+
+<h2>8 · Phases</h2>
+<table>
+  <tr><th style="width:60px">Phase</th><th>Work</th><th>Verify</th></tr>
+  <tr><td>P1</td><td>Rename modes seed→Add, kill→Remove + label map + tooltips</td><td>still seeds/kills; copy reads Add/Remove</td></tr>
+  <tr><td>P2</td><td>Agent shapes + size UI + footprint helper + silhouette cursor + <b>Ctrl-drag fix</b> (2D)</td><td>rect/ring/line seed &amp; erase; Ctrl-drag resizes the agent shape only</td></tr>
+  <tr><td>P3</td><td>Single/Area toggle + per-mode routing incl. rigid group move (2D)</td><td>single one-agent ops; area group-move carries a cluster</td></tr>
+  <tr><td>P4</td><td>Edit: decodeAttrValue, paintAgents geom, config panel, pick→prefill→Apply / area stamp</td><td>edit attrs+radius+velocity+position; area-edit a region</td></tr>
+  <tr><td>P5</td><td>3D parity for all of the above</td><td>same behaviors in the voxel view</td></tr>
+  <tr><td>P6</td><td>Persistence + docs + regression</td><td>8 agent samples unchanged; lattice byte-identical; tsc + build clean</td></tr>
+</table>
+
+<div class="foot">
+  Companion to <code>docs/PLAN_AGENT_BRUSH_PARITY.md</code>. Files touched: <code>SimulatorView.tsx</code> (bulk), <code>sim.worker.ts</code> (paintAgents geom), <code>attrValueEncoding.ts</code> (decodeAttrValue), plus doc sweep (CLAUDE.md · HelpView · README). No node-system / compiler changes.
+</div>
+</div>
+</body>
+</html>
