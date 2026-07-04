@@ -1436,8 +1436,9 @@ export function HelpView() {
             <strong> Bond&nbsp;paint</strong> (auto-glue agents a stroke passes near).
             <span className={styles.kbd}>Shift</span>+click an agent to <strong>inspect</strong> it
             (a popover of its position, velocity, bond degree and attribute values); the
-            <strong> CA&nbsp;Grid</strong> brush target paints cells with the normal brush. All of the
-            above work in the 3D voxel view too. <strong>Clear all agents</strong> empties the
+            <strong> CA&nbsp;Grid</strong> brush target paints cells with the normal brush. In Area
+            scope the agents the stroke will touch are <strong>highlighted</strong> (every mode
+            except Add). All of the above work in the 3D voxel view too. <strong>Clear all agents</strong> empties the
             population. The library ships eight agent samples: <strong>Morphogenesis &mdash; Growing Tissue</strong> (12 → ~1500 cells
             dividing along the tension axis), <strong>Morphogenesis &mdash; Differential
             Tissue</strong> (asymmetric division + a maturity gradient + contact inhibition = cell
