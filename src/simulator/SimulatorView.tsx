@@ -2010,6 +2010,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const unlimitedGensRef = useRef(false);
   const endConditionsRef = useRef(model.properties.endConditions);
   useEffect(() => { playingRef.current = playing; }, [playing]);
+  // Cursor-follow redraws are rAF-coalesced (≤1 per frame regardless of the mouse
+  // polling rate — a high-Hz mouse otherwise fires a full draw() per pointermove)
+  // AND skipped while playing: the step→draw pipeline already redraws at the sim
+  // FPS and the cursor overlay reads the live cursor refs, so idle cursor movement
+  // no longer steals main-thread time from a running simulation (the FPS-halving
+  // the user reported). Active gestures (pan / paint / resize) still draw eagerly.
+  const cursorDrawRaf = useRef<number | null>(null);
+  const scheduleCursorDraw = useCallback(() => {
+    if (playingRef.current) return;
+    if (cursorDrawRaf.current != null) return;
+    cursorDrawRaf.current = requestAnimationFrame(() => { cursorDrawRaf.current = null; draw(); });
+  }, [draw]);
   useEffect(() => { gensPerFrameRef.current = unlimitedGens ? 100 : gensPerFrame; }, [gensPerFrame, unlimitedGens]);
   useEffect(() => { targetFpsRef.current = unlimitedFps ? 999999 : targetFps; }, [targetFps, unlimitedFps]);
   useEffect(() => { unlimitedFpsRef.current = unlimitedFps; }, [unlimitedFps]);
@@ -5424,7 +5436,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } else {
         setHoverCellInfo(prev => (prev === null ? prev : null));
       }
-      if (!isPanning.current && !(e.buttons & 1) && !isResizingBrush.active) draw();
+      if (!isPanning.current && !(e.buttons & 1) && !isResizingBrush.active) scheduleCursorDraw();
 
       // Bond-Graph Agents — track the cursor world point + hovered agent for the
       // brush cursor (radius ring + agent highlight). Redraw ONLY when the
@@ -5458,8 +5470,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           let hover = agentHoverIdRef.current;
           if (!dragging) hover = wantHover ? pickAgentAt(e.clientX, e.clientY) : -1;
           agentHoverIdRef.current = hover;
-          if (hover !== prevHover) draw();
-          else if (!dragging && scope === 'area' && (mode === 'add' || mode === 'remove' || mode === 'edit' || mode === 'move')) draw();
+          if (hover !== prevHover) scheduleCursorDraw();
+          else if (!dragging && scope === 'area' && (mode === 'add' || mode === 'remove' || mode === 'edit' || mode === 'move')) scheduleCursorDraw();
         }
         // Drags while the agent brush is active (LMB held).
         if (dragging) {
@@ -5681,8 +5693,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
       autoscrollOriginRef.current = null;
       autoscrollCursorRef.current = null;
+      if (cursorDrawRaf.current != null) { cancelAnimationFrame(cursorDrawRaf.current); cursorDrawRaf.current = null; }
     };
-  }, [draw, paintAt, paintLine, screenToGrid, flushPaintBatch, commitInspectPopover, screenToWorld, pickAgentAt, seedAgentsAt, agentSeedPoints, flushSeedBatch, killAgentsInRadius, openAgentInspector, flushMoveBatch, scanBondPairsAt, flushBondBatch, agentsInShapeAt, agentSeedInShape, agentSeedInLine, agentLineMembers, applyAgentEditToIds]);
+  }, [draw, scheduleCursorDraw, paintAt, paintLine, screenToGrid, flushPaintBatch, commitInspectPopover, screenToWorld, pickAgentAt, seedAgentsAt, agentSeedPoints, flushSeedBatch, killAgentsInRadius, openAgentInspector, flushMoveBatch, scanBondPairsAt, flushBondBatch, agentsInShapeAt, agentSeedInShape, agentSeedInLine, agentLineMembers, applyAgentEditToIds]);
 
   // Play: kick-start the step pipeline (worker message handler chains subsequent steps)
   useEffect(() => {
