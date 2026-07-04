@@ -1675,8 +1675,8 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // touch (Remove/Move/Edit, Area scope), so the effect is visible before and
       // during the stroke. Add is excluded (it only spawns NEW agents, never
       // touching the ones already there). Colour-coded per mode.
-      if (brushTargetRef.current === 'agents' && aScope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit') && agentAreaHoverIdsRef.current.length) {
-        const rgb = mode === 'remove' ? '240, 90, 90' : mode === 'edit' ? '171, 123, 255' : '76, 201, 240';
+      if (brushTargetRef.current === 'agents' && ((aScope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit')) || mode === 'bond') && agentAreaHoverIdsRef.current.length) {
+        const rgb = mode === 'remove' ? '240, 90, 90' : mode === 'edit' ? '171, 123, 255' : mode === 'bond' ? '38, 198, 218' : '76, 201, 240';
         ctx.save();
         ctx.strokeStyle = `rgba(${rgb}, 0.95)`;
         ctx.fillStyle = `rgba(${rgb}, 0.22)`;
@@ -1727,6 +1727,27 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         if (infinity) {
           for (let ty = tyMin; ty <= tyMax; ty++) for (let tx = txMin; tx <= txMax; tx++) drawShape(ox + tx * scaledW, oy + ty * scaledH);
         } else { drawShape(ox, oy); }
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+      // Bond scan-radius cursor — a plain circle of the scan radius (Bond auto-bonds
+      // near agent pairs within it), drawn as the negative silhouette. The affected
+      // agents in range are ringed above (teal). Tiled in infinity.
+      if (brushTargetRef.current === 'agents' && mode === 'bond' && cursorW && agentBrushRadiusRef.current > 0) {
+        const rr = agentBrushRadiusRef.current * scale;
+        ctx.save();
+        ctx.globalCompositeOperation = 'difference';
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([2, 3]);
+        const drawRing = (tileOx: number, tileOy: number) => {
+          const cx = tileOx + cursorW.x * scale, cy = tileOy + cursorW.y * scale;
+          if (cx + rr < 0 || cx - rr > parentW || cy + rr < 0 || cy - rr > parentH) return;
+          ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.stroke();
+        };
+        if (infinity) {
+          for (let ty = tyMin; ty <= tyMax; ty++) for (let tx = txMin; tx <= txMax; tx++) drawRing(ox + tx * scaledW, oy + ty * scaledH);
+        } else { drawRing(ox, oy); }
         ctx.setLineDash([]);
         ctx.restore();
       }
@@ -4542,6 +4563,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
     return ids;
   }, [agentShapeMetrics, agentDelta]);
+  /** Live agent ids within a plain radius disc of (cx,cy) — the Bond brush's scan
+   *  region (Bond ignores the shape; its radius = how far apart two agents can be
+   *  and still get auto-bonded). Torus-aware. */
+  const agentsInRadiusAt = useCallback((cx: number, cy: number, radius: number): number[] => {
+    const snap = agentsRef.current;
+    if (!snap || snap.highWater === 0 || radius <= 0) return [];
+    const r2 = radius * radius;
+    const ids: number[] = [];
+    for (let i = 0; i < snap.highWater; i++) {
+      if (!snap.alive[i]) continue;
+      const [dx, dy] = agentDelta(snap.x[i]!, snap.y[i]!, cx, cy);
+      if (dx * dx + dy * dy <= r2) ids.push(i);
+    }
+    return ids;
+  }, [agentDelta]);
   /** Seed points scattered across the shape footprint (density · area). Circle
    *  keeps the even sunflower; rect/ring rejection-sample the bbox. Torus-wrap /
    *  bounded-clip each point. */
@@ -5461,6 +5497,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             agentAreaHoverIdsRef.current = (mode === 'move' && agentGroupMoveRef.current)
               ? agentGroupMoveRef.current.members.map(m => m.id)
               : (wpt ? agentsInShapeAt(wpt.x, wpt.y) : []);
+          } else if (mode === 'bond') {
+            // Bond scans a plain radius disc (not the shape) for near pairs.
+            agentAreaHoverIdsRef.current = wpt ? agentsInRadiusAt(wpt.x, wpt.y, agentBrushRadiusRef.current) : [];
           } else if (agentAreaHoverIdsRef.current.length) {
             agentAreaHoverIdsRef.current = [];
           }
@@ -5471,7 +5510,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           if (!dragging) hover = wantHover ? pickAgentAt(e.clientX, e.clientY) : -1;
           agentHoverIdRef.current = hover;
           if (hover !== prevHover) scheduleCursorDraw();
-          else if (!dragging && scope === 'area' && (mode === 'add' || mode === 'remove' || mode === 'edit' || mode === 'move')) scheduleCursorDraw();
+          else if (!dragging && (mode === 'bond' || (scope === 'area' && (mode === 'add' || mode === 'remove' || mode === 'edit' || mode === 'move')))) scheduleCursorDraw();
         }
         // Drags while the agent brush is active (LMB held).
         if (dragging) {
@@ -5695,7 +5734,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       autoscrollCursorRef.current = null;
       if (cursorDrawRaf.current != null) { cancelAnimationFrame(cursorDrawRaf.current); cursorDrawRaf.current = null; }
     };
-  }, [draw, scheduleCursorDraw, paintAt, paintLine, screenToGrid, flushPaintBatch, commitInspectPopover, screenToWorld, pickAgentAt, seedAgentsAt, agentSeedPoints, flushSeedBatch, killAgentsInRadius, openAgentInspector, flushMoveBatch, scanBondPairsAt, flushBondBatch, agentsInShapeAt, agentSeedInShape, agentSeedInLine, agentLineMembers, applyAgentEditToIds]);
+  }, [draw, scheduleCursorDraw, paintAt, paintLine, screenToGrid, flushPaintBatch, commitInspectPopover, screenToWorld, pickAgentAt, seedAgentsAt, agentSeedPoints, flushSeedBatch, killAgentsInRadius, openAgentInspector, flushMoveBatch, scanBondPairsAt, flushBondBatch, agentsInShapeAt, agentsInRadiusAt, agentSeedInShape, agentSeedInLine, agentLineMembers, applyAgentEditToIds]);
 
   // Play: kick-start the step pipeline (worker message handler chains subsequent steps)
   useEffect(() => {
@@ -7430,7 +7469,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                           m === 'edit' ? 'Edit agent properties — Single: click an agent, adjust, Apply; Area: stamp onto all in the footprint' :
                           m === 'glue' ? 'Click two agents to bond them' :
                           m === 'cut' ? 'Click two bonded agents to unbond them' :
-                          'Drag over near agents to auto-bond them'
+                          'Drag to bond agent pairs within the scan radius that are close enough to touch (needs Max Bonds ≥ 1 in Properties › Bond-Graph Agents)'
                         }
                         style={{
                           padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', textTransform: 'capitalize',
