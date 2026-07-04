@@ -976,7 +976,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const agentLineAnchorRef = useRef<{ x: number; y: number } | null>(null);
   // Rigid group move (Move, Area scope): the agents grabbed at pointer-down + the
   // world point they were grabbed at, so the drag translates them all by one delta.
-  const agentGroupMoveRef = useRef<{ members: Array<{ id: number; sx: number; sy: number }>; downX: number; downY: number } | null>(null);
+  // sz/downZ carry the 3D layer (0 in 2D).
+  const agentGroupMoveRef = useRef<{ members: Array<{ id: number; sx: number; sy: number; sz: number }>; downX: number; downY: number; downZ: number } | null>(null);
+  // 3D Line tool for the agent brush (Add/Remove/Edit, Area): staged plane anchor.
+  const agentLine3dAnchorRef = useRef<{ layer: number; row: number; col: number } | null>(null);
   const [agentSeedConfigOpen, setAgentSeedConfigOpen] = useState(false);
   // Live cursor world position (for the agent brush ring) + the hovered agent
   // id (change-detected so we don't full-redraw on every raw mousemove).
@@ -3334,12 +3337,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (!is3D) return;
     const glc = glCanvasRef.current;
     if (!glc) return;
-    let active: 'orbit' | 'pan' | 'brush' | 'inspect' | 'resize' | 'agentSeed' | 'agentKill' | 'agentMove' | null = null;
+    let active: 'orbit' | 'pan' | 'brush' | 'inspect' | 'resize' | 'agentSeed' | 'agentKill' | 'agentMove' | 'agentGroupMove' | 'agentEdit' | null = null;
     let lastX = 0, lastY = 0, downX = 0, downY = 0, moved = false;
     // PR5 3D agent move: the agent picked at drag-start (-1 = none).
     let agentDragId = -1;
     // Ctrl+LMB-drag brush resize (mirrors the 2D canvas): captured at drag start.
-    const resizeStart = { x: 0, y: 0, w: 0, h: 0, radius: 0, ringW: 0, lineW: 0 };
+    const resizeStart = { x: 0, y: 0, agent: false, w: 0, h: 0, radius: 0, ringW: 0, lineW: 0 };
     const maxDim = () => Math.max(gridWidth.current, gridHeight.current, gridDepth.current, 1);
     type Cell = { layer: number; row: number; col: number };
     const pickCell = (clientX: number, clientY: number): Cell | null => {
@@ -3393,6 +3396,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // Line always recomputes (the preview grows with the cursor).
     const updateHover = (clientX: number, clientY: number): boolean => {
       const hit = pickCell(clientX, clientY);
+      // The grid-brush footprint cursor is meaningless when the brush targets
+      // agents (the agent brush shows a hovered-agent ring instead) — clear it.
+      if (isAgentModelRef.current && brushTargetRef.current === 'agents') {
+        hover3dRef.current = hit;
+        if (hoverCells3dRef.current.length === 0) return false;
+        hoverCells3dRef.current = EMPTY_HOVER_CELLS; return true;
+      }
       const lineStaging = brushShapeRef.current === 'line' && !!line3dAnchorRef.current;
       if (!lineStaging && sameCell(hit, hover3dRef.current)) return false;
       hover3dRef.current = hit;
@@ -3411,50 +3421,25 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const inst = r.pickAgent(clientX - rect.left, clientY - rect.top, rect.width, rect.height);
       return instanceToSlot(snap, inst);
     };
-    // Seed agents on the brush plane: pick the plane cell, lay a ball (volumetric)
-    // / flat disc around it with per-point z, post seedAgents with the seed sets.
-    const seedAgents3d = (clientX: number, clientY: number) => {
+    // Scope-aware Add on the plane: Single = one agent at the plane cell; Area =
+    // the shape footprint (agentSeedInShape3dAt: ball / box / shell / disc).
+    const addAgents3d = (clientX: number, clientY: number, scope: 'single' | 'area') => {
       const hit = pickCell(clientX, clientY);
       if (!hit) return;
-      const pts = agentSeedPoints3d(
-        { x: hit.col, y: hit.row, z: hit.layer },
-        agentBrushRadiusRef.current,
-        agentSeedDensityRef.current,
-        brush3dVolumeRef.current,
-      );
-      if (pts.length === 0) return;
-      const sets = agentSeedSetsRef.current();
-      seedAgentsAt(pts.map(p => ({ x: p.x, y: p.y, z: p.z })), sets);
+      const pts = scope === 'single' ? [{ x: hit.col, y: hit.row, z: hit.layer }] : agentSeedInShape3dAt(hit);
+      if (pts.length) seedAgentsAt(pts, agentSeedSetsRef.current());
     };
-    // Kill agents within the brush radius around the picked plane cell (3D
-    // distance), collected from the snapshot → killAgents. Radius 0 → nearest.
-    const killAgents3d = (clientX: number, clientY: number) => {
-      const worker = workerRef.current, snap = agentsRef.current;
-      if (!worker || !snap || snap.highWater === 0) return;
-      const radius = agentBrushRadiusRef.current;
-      if (radius <= 0) {
-        const id = pickAgent3d(clientX, clientY);
-        if (id >= 0) worker.postMessage({ type: 'killAgents', ids: [id], activeViewer: activeViewerRef.current });
-        return;
-      }
-      const hit = pickCell(clientX, clientY);
-      if (!hit) return;
-      const W = gridWidth.current, H = gridHeight.current, Dd = gridDepth.current;
-      const torus = boundaryTreatmentRef.current === 'torus';
-      const hasZ = snap.z.length > 0;
-      const r2 = radius * radius;
-      const ids: number[] = [];
-      for (let i = 0; i < snap.highWater; i++) {
-        if (!snap.alive[i]) continue;
-        let dx = snap.x[i]! - hit.col, dy = snap.y[i]! - hit.row, dz = (hasZ ? snap.z[i]! : 0) - hit.layer;
-        if (torus) {
-          if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W;
-          if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H;
-          if (Dd > 1) { if (dz > Dd / 2) dz -= Dd; else if (dz < -Dd / 2) dz += Dd; }
-        }
-        if (dx * dx + dy * dy + dz * dz <= r2) ids.push(i);
-      }
-      if (ids.length > 0) worker.postMessage({ type: 'killAgents', ids, activeViewer: activeViewerRef.current });
+    // Scope-aware Remove: Single = nearest picked agent; Area = the volumetric shape.
+    const removeAgents3d = (clientX: number, clientY: number, scope: 'single' | 'area') => {
+      const worker = workerRef.current; if (!worker) return;
+      if (scope === 'single') { const id = pickAgent3d(clientX, clientY); if (id >= 0) worker.postMessage({ type: 'killAgents', ids: [id], activeViewer: activeViewerRef.current }); return; }
+      const hit = pickCell(clientX, clientY); if (!hit) return;
+      const ids = agentsInShape3dAt(hit); if (ids.length) worker.postMessage({ type: 'killAgents', ids, activeViewer: activeViewerRef.current });
+    };
+    // Area Edit: stamp the checked Edit-panel rows onto all agents in the footprint.
+    const editAgents3d = (clientX: number, clientY: number) => {
+      const hit = pickCell(clientX, clientY); if (!hit) return;
+      applyAgentEditToIds(agentsInShape3dAt(hit));
     };
     // Update the hovered-agent highlight ring (kill/glue/cut/move modes). Returns
     // true when the highlighted set changed (so the caller redraws on-change only,
@@ -3538,17 +3523,22 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const orbitBtn = e.button === 1 || (e.button === 0 && e.altKey);
       if (orbitBtn) active = e.shiftKey ? 'pan' : 'orbit';
       else if (e.button === 2) {
-        // RMB cancels a staged Line anchor; otherwise it pans (RMB is otherwise unused).
-        if (line3dAnchorRef.current) { line3dAnchorRef.current = null; active = null; updateHover(e.clientX, e.clientY); draw(); }
+        // RMB cancels a staged Line anchor (grid or agent); otherwise it pans.
+        if (line3dAnchorRef.current || agentLine3dAnchorRef.current) { line3dAnchorRef.current = null; agentLine3dAnchorRef.current = null; active = null; updateHover(e.clientX, e.clientY); draw(); }
         else active = 'pan';
       }
       else if (e.button === 0 && (e.ctrlKey || e.metaKey)) {
         // Ctrl/Cmd+LMB drag → resize the active brush shape (like the 2D canvas).
+        // Targets the AGENT shape when the brush affects agents, else the CA grid.
+        const rzAgent = isAgentModelRef.current && brushTargetRef.current === 'agents';
         active = 'resize';
+        resizeStart.agent = rzAgent;
         resizeStart.x = e.clientX; resizeStart.y = e.clientY;
-        resizeStart.w = brushWRef.current; resizeStart.h = brushHRef.current;
-        resizeStart.radius = brushRadiusRef.current; resizeStart.ringW = brushRingWidthRef.current;
-        resizeStart.lineW = brushLineWidthRef.current;
+        resizeStart.w = rzAgent ? agentBrushWRef.current : brushWRef.current;
+        resizeStart.h = rzAgent ? agentBrushHRef.current : brushHRef.current;
+        resizeStart.radius = rzAgent ? agentBrushRadiusRef.current : brushRadiusRef.current;
+        resizeStart.ringW = rzAgent ? agentBrushRingWidthRef.current : brushRingWidthRef.current;
+        resizeStart.lineW = rzAgent ? agentBrushLineWidthRef.current : brushLineWidthRef.current;
       }
       else if (e.button === 0 && e.shiftKey) {
         // Shift+LMB → inspect. In an agent model, pick the AGENT first; if none is
@@ -3568,17 +3558,55 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         active = 'inspect'; sweepPick3d(e.clientX, e.clientY, true); draw();
       } // Shift+LMB → sweep inspect (drag) / pin (click)
       else if (e.button === 0 && isAgentModelRef.current && brushTargetRef.current === 'agents') {
-        // Plain LMB with the brush targeting agents: the agent brush (seed/kill/
-        // move). Glue/Cut/Bond are 2D-only stop-gaps; in 3D they collapse to a
-        // single-pick move. (brushTarget==='grid' falls through to cell painting.)
+        // Plain LMB, brush targets agents. Add/Remove/Move/Edit honour the Single/
+        // Area scope + the shape (volumetric footprint on the plane); Glue/Cut/Bond
+        // stay 2D-only and collapse to Add. (brushTarget==='grid' paints cells.)
         const mode = agentBrushModeRef.current;
-        if (mode === 'remove') { active = 'agentKill'; killAgents3d(e.clientX, e.clientY); }
-        else if (mode === 'move') {
-          const id = pickAgent3d(e.clientX, e.clientY);
-          if (id >= 0) { active = 'agentMove'; agentDragId = id; }
-          else active = null;
-        }
-        else { active = 'agentSeed'; seedAgents3d(e.clientX, e.clientY); }  // add (default) + glue/cut/bond/edit fallback (P5 refines 3D)
+        const aShape = agentBrushShapeRef.current;
+        const aScope: 'single' | 'area' = (mode === 'move' && aShape === 'line') ? 'single' : agentBrushScopeRef.current;
+        const worker = workerRef.current;
+        if (aShape === 'line' && aScope === 'area' && (mode === 'add' || mode === 'remove' || mode === 'edit')) {
+          // Two-click 3D capsule region on the plane.
+          const hit = pickCell(e.clientX, e.clientY);
+          if (hit) {
+            if (!agentLine3dAnchorRef.current) { agentLine3dAnchorRef.current = hit; updateHover(e.clientX, e.clientY); draw(); }
+            else {
+              const a = agentLine3dAnchorRef.current; agentLine3dAnchorRef.current = null;
+              if (mode === 'add') seedAgentsAt(agentSeedInLine3d(a, hit), agentSeedSetsRef.current());
+              else if (mode === 'remove') { const ids = agentLineMembers3d(a, hit); if (ids.length && worker) worker.postMessage({ type: 'killAgents', ids, activeViewer: activeViewerRef.current }); }
+              else applyAgentEditToIds(agentLineMembers3d(a, hit));
+              draw();
+            }
+          }
+          active = null;
+        } else if (mode === 'remove') { active = 'agentKill'; removeAgents3d(e.clientX, e.clientY, aScope); }
+        else if (mode === 'add') { active = 'agentSeed'; addAgents3d(e.clientX, e.clientY, aScope); }
+        else if (mode === 'edit') {
+          if (aScope === 'single') {
+            const id = pickAgent3d(e.clientX, e.clientY);
+            if (id >= 0) {
+              editTargetIdRef.current = id; setEditTargetId(id); editPrefillIdRef.current = id;
+              worker?.postMessage({ type: 'getAgentState', id });
+              const snap = agentsRef.current;
+              if (snap) { const hasZ = snap.z.length > 0; inspectAgents3dRef.current = [{ x: snap.x[id]!, y: snap.y[id]!, z: hasZ ? snap.z[id]! : 0, radius: snap.radius[id]! }]; }
+              draw();
+            }
+            active = null;
+          } else { active = 'agentEdit'; editAgents3d(e.clientX, e.clientY); }
+        } else if (mode === 'move') {
+          if (aScope === 'area') {
+            const hit = pickCell(e.clientX, e.clientY);
+            const snap = agentsRef.current;
+            if (hit && snap) {
+              const ids = agentsInShape3dAt(hit); const hasZ = snap.z.length > 0;
+              if (ids.length) { agentGroupMoveRef.current = { members: ids.map(id => ({ id, sx: snap.x[id]!, sy: snap.y[id]!, sz: hasZ ? snap.z[id]! : 0 })), downX: hit.col, downY: hit.row, downZ: hit.layer }; active = 'agentGroupMove'; }
+              else active = null;
+            } else active = null;
+          } else {
+            const id = pickAgent3d(e.clientX, e.clientY);
+            if (id >= 0) { active = 'agentMove'; agentDragId = id; } else active = null;
+          }
+        } else { active = 'agentSeed'; addAgents3d(e.clientX, e.clientY, aScope); } // glue/cut/bond fallback → Add
       }
       else if (e.button === 0 && brushShapeRef.current === 'line') {
         // Line tool: two clicks. First stages a plane-cell anchor (no paint); the
@@ -3647,15 +3675,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         // canvas's Ctrl-drag resize, then the hover footprint follows on redraw.
         const totDx = e.clientX - resizeStart.x, totDy = e.clientY - resizeStart.y;
         const maxW = (gridWidth.current || simWidth) * 2, maxH = (gridHeight.current || simHeight) * 2;
-        const shape = brushShapeRef.current;
-        if (shape === 'circle') setBrushRadius(Math.max(0, Math.min(maxW, resizeStart.radius + Math.round(totDx / 5))));
+        const rzA = resizeStart.agent;
+        const shape = rzA ? agentBrushShapeRef.current : brushShapeRef.current;
+        const setRadius = rzA ? setAgentBrushRadius : setBrushRadius;
+        const setRingW = rzA ? setAgentBrushRingWidth : setBrushRingWidth;
+        const setLineW = rzA ? setAgentBrushLineWidth : setBrushLineWidth;
+        const setW = rzA ? setAgentBrushW : setBrushW;
+        const setH = rzA ? setAgentBrushH : setBrushH;
+        if (shape === 'circle') setRadius(Math.max(0, Math.min(maxW, resizeStart.radius + Math.round(totDx / 5))));
         else if (shape === 'ring') {
-          setBrushRadius(Math.max(0, Math.min(maxW, resizeStart.radius + Math.round(totDx / 5))));
-          setBrushRingWidth(Math.max(1, Math.min(maxH, resizeStart.ringW - Math.round(totDy / 5))));
-        } else if (shape === 'line') setBrushLineWidth(Math.max(1, Math.min(maxW, resizeStart.lineW + Math.round(totDx / 5))));
+          setRadius(Math.max(0, Math.min(maxW, resizeStart.radius + Math.round(totDx / 5))));
+          setRingW(Math.max(1, Math.min(maxH, resizeStart.ringW - Math.round(totDy / 5))));
+        } else if (shape === 'line') setLineW(Math.max(1, Math.min(maxW, resizeStart.lineW + Math.round(totDx / 5))));
         else {
-          setBrushW(Math.max(1, Math.min(maxW, resizeStart.w + Math.round(totDx / 5))));
-          setBrushH(Math.max(1, Math.min(maxH, resizeStart.h - Math.round(totDy / 5))));
+          setW(Math.max(1, Math.min(maxW, resizeStart.w + Math.round(totDx / 5))));
+          setH(Math.max(1, Math.min(maxH, resizeStart.h - Math.round(totDy / 5))));
         }
         updateHover(e.clientX, e.clientY);  // footprint cursor reflects the new size
         draw();
@@ -3663,8 +3697,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
       // Agent brush drags: seed / kill along the drag, or drag-move the picked
       // agent on the brush plane (plane-constrained — pickCell gives x/y/z).
-      if (active === 'agentSeed') { seedAgents3d(e.clientX, e.clientY); draw(); return; }
-      if (active === 'agentKill') { killAgents3d(e.clientX, e.clientY); updateAgentHover(e.clientX, e.clientY); draw(); return; }
+      if (active === 'agentSeed') { if (agentBrushScopeRef.current === 'area' && agentBrushShapeRef.current !== 'line') addAgents3d(e.clientX, e.clientY, 'area'); draw(); return; }
+      if (active === 'agentKill') { removeAgents3d(e.clientX, e.clientY, agentBrushScopeRef.current); updateAgentHover(e.clientX, e.clientY); draw(); return; }
+      if (active === 'agentEdit') { editAgents3d(e.clientX, e.clientY); draw(); return; }
+      if (active === 'agentGroupMove') {
+        const g = agentGroupMoveRef.current, hit = pickCell(e.clientX, e.clientY);
+        if (g && hit) {
+          const ddx = hit.col - g.downX, ddy = hit.row - g.downY, ddz = hit.layer - g.downZ;
+          workerRef.current?.postMessage({ type: 'moveAgents', moves: g.members.map(mm => ({ id: mm.id, x: mm.sx + ddx, y: mm.sy + ddy, z: mm.sz + ddz })), torus: boundaryTreatmentRef.current === 'torus', activeViewer: activeViewerRef.current });
+        }
+        draw(); return;
+      }
       if (active === 'agentMove') {
         const hit = pickCell(e.clientX, e.clientY);
         if (hit && agentDragId >= 0) {
@@ -3717,6 +3760,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // Agent move: clear the drag state + the inspect ring (the snapshot's new
       // position arrives on the next stepped frame).
       if (active === 'agentMove') { agentDragId = -1; inspectAgents3dRef.current = []; draw(); }
+      if (active === 'agentGroupMove') { agentGroupMoveRef.current = null; }
       active = null;
       last3dHitRef.current = null;
     };
@@ -4536,6 +4580,114 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     workerRef.current?.postMessage({ type: 'paintAgents', ids, sets, geom, torus: boundaryTreatmentRef.current === 'torus', activeViewer: activeViewerRef.current });
   }, [buildAgentEdit]);
 
+  // ------- 3D agent brush footprint (volumetric membership + seeding) -------
+  // Agents float in continuous 3D, so an Area footprint is a SOLID region around
+  // the plane-pick cell: circle→sphere, ring→spherical shell, rect→box, line→3D
+  // capsule (the "flat vs volumetric" toggle only affects Add placement).
+  type Cell3 = { layer: number; row: number; col: number };
+  /** Project agent (col=x,row=y,layer=z) into the plane's [freeU, freeV, fixedW]
+   *  frame relative to `hit`, torus-folded. */
+  const agentProj3d = useCallback((ax: number, ay: number, az: number, hit: Cell3): [number, number, number] => {
+    const W = gridWidth.current, H = gridHeight.current, D = gridDepth.current, torus = boundaryTreatmentRef.current === 'torus';
+    let dx = ax - hit.col, dy = ay - hit.row, dz = az - hit.layer;
+    if (torus) {
+      if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W;
+      if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H;
+      if (D > 1) { if (dz > D / 2) dz -= D; else if (dz < -D / 2) dz += D; }
+    }
+    const axis = plane3dRef.current.axis;
+    if (axis === 'z') return [dx, dy, dz];   // free col,row  · fixed layer
+    if (axis === 'y') return [dx, dz, dy];   // free col,layer · fixed row
+    return [dy, dz, dx];                      // x: free row,layer · fixed col
+  }, []);
+  /** Live agent ids inside the volumetric shape around a plane-pick cell. */
+  const agentsInShape3dAt = useCallback((hit: Cell3): number[] => {
+    const snap = agentsRef.current;
+    if (!snap || snap.highWater === 0) return [];
+    const m = agentShapeMetrics();
+    const hasZ = snap.z.length > 0;
+    const hd = Math.max(m.halfW, m.halfH);
+    const ids: number[] = [];
+    for (let i = 0; i < snap.highWater; i++) {
+      if (!snap.alive[i]) continue;
+      const [u, v, w] = agentProj3d(snap.x[i]!, snap.y[i]!, hasZ ? snap.z[i]! : 0, hit);
+      let inside: boolean;
+      if (m.shape === 'rect') inside = Math.abs(u) <= m.halfW && Math.abs(v) <= m.halfH && Math.abs(w) <= hd;
+      else { const d = Math.hypot(u, v, w); inside = m.shape === 'ring' ? Math.abs(d - m.radius) <= m.ringW / 2 : d <= m.radius; }
+      if (inside) ids.push(i);
+    }
+    return ids;
+  }, [agentShapeMetrics, agentProj3d]);
+  /** Seed points scattered in the 3D shape around a plane-pick cell. Circle reuses
+   *  agentSeedPoints3d (ball / flat disc). Others rejection-sample the plane frame;
+   *  the "volumetric" toggle extrudes along the fixed axis (else w=0 → on the plane). */
+  const agentSeedInShape3dAt = useCallback((hit: Cell3): Array<{ x: number; y: number; z: number }> => {
+    const shape = agentBrushShapeRef.current;
+    if (shape === 'circle') return agentSeedPoints3d({ x: hit.col, y: hit.row, z: hit.layer }, agentBrushRadiusRef.current, agentSeedDensityRef.current, brush3dVolumeRef.current);
+    const m = agentShapeMetrics();
+    const W = gridWidth.current, H = gridHeight.current, D = gridDepth.current, torus = boundaryTreatmentRef.current === 'torus';
+    const axis = plane3dRef.current.axis, volumetric = brush3dVolumeRef.current;
+    const hd = volumetric ? Math.max(m.halfW, m.halfH) : 0;
+    const vol = (m.shape === 'rect' ? (m.halfW * 2) * (m.halfH * 2) : m.area) * (volumetric ? (hd * 2 + 1) : 1);
+    const n = Math.max(1, Math.round(agentSeedDensityRef.current * vol));
+    const toWorld = (u: number, v: number, w: number): Cell3 =>
+      axis === 'z' ? { col: hit.col + u, row: hit.row + v, layer: hit.layer + w }
+        : axis === 'y' ? { col: hit.col + u, row: hit.row + w, layer: hit.layer + v }
+          : { col: hit.col + w, row: hit.row + u, layer: hit.layer + v };
+    const pts: Array<{ x: number; y: number; z: number }> = [];
+    let tries = 0; const maxTries = n * 30 + 50;
+    while (pts.length < n && tries++ < maxTries) {
+      const u = (Math.random() * 2 - 1) * m.boundW, v = (Math.random() * 2 - 1) * m.boundH, w = volumetric ? (Math.random() * 2 - 1) * hd : 0;
+      let inside: boolean;
+      if (m.shape === 'rect') inside = Math.abs(u) <= m.halfW && Math.abs(v) <= m.halfH;
+      else { const d = Math.hypot(u, v, w); inside = m.shape === 'ring' ? Math.abs(d - m.radius) <= m.ringW / 2 : d <= m.radius; }
+      if (!inside) continue;
+      let { col, row, layer } = toWorld(u, v, w);
+      if (torus) { col = ((col % W) + W) % W; row = ((row % H) + H) % H; if (D > 0) layer = ((layer % D) + D) % D; }
+      else if (col < 0 || col >= W || row < 0 || row >= H || layer < 0 || layer >= D) continue;
+      pts.push({ x: col, y: row, z: layer });
+    }
+    return pts;
+  }, [agentShapeMetrics, agentSeedPoints3d]);
+  /** 3D line capsule: live agent ids within width/2 of the segment a→b (world). */
+  const agentLineMembers3d = useCallback((a: Cell3, b: Cell3): number[] => {
+    const snap = agentsRef.current;
+    if (!snap || snap.highWater === 0) return [];
+    const hasZ = snap.z.length > 0;
+    const W = gridWidth.current, H = gridHeight.current, D = gridDepth.current, torus = boundaryTreatmentRef.current === 'torus';
+    const half = Math.max(0.5, agentBrushLineWidthRef.current / 2);
+    const vx = b.col - a.col, vy = b.row - a.row, vz = b.layer - a.layer, lenSq = vx * vx + vy * vy + vz * vz;
+    const ids: number[] = [];
+    for (let i = 0; i < snap.highWater; i++) {
+      if (!snap.alive[i]) continue;
+      let ox = snap.x[i]! - a.col, oy = snap.y[i]! - a.row, oz = (hasZ ? snap.z[i]! : 0) - a.layer;
+      if (torus) { if (ox > W / 2) ox -= W; else if (ox < -W / 2) ox += W; if (oy > H / 2) oy -= H; else if (oy < -H / 2) oy += H; if (D > 1) { if (oz > D / 2) oz -= D; else if (oz < -D / 2) oz += D; } }
+      let d: number;
+      if (lenSq === 0) d = Math.hypot(ox, oy, oz);
+      else { const t = Math.max(0, Math.min(1, (ox * vx + oy * vy + oz * vz) / lenSq)); d = Math.hypot(ox - t * vx, oy - t * vy, oz - t * vz); }
+      if (d <= half) ids.push(i);
+    }
+    return ids;
+  }, []);
+  /** 3D line capsule: seed points scattered along the segment a→b. */
+  const agentSeedInLine3d = useCallback((a: Cell3, b: Cell3): Array<{ x: number; y: number; z: number }> => {
+    const W = gridWidth.current, H = gridHeight.current, D = gridDepth.current, torus = boundaryTreatmentRef.current === 'torus';
+    const width = Math.max(1, agentBrushLineWidthRef.current), half = width / 2;
+    const vx = b.col - a.col, vy = b.row - a.row, vz = b.layer - a.layer, len = Math.hypot(vx, vy, vz);
+    const n = Math.max(1, Math.round(agentSeedDensityRef.current * (len + 1) * width));
+    const pts: Array<{ x: number; y: number; z: number }> = [];
+    for (let i = 0; i < n; i++) {
+      const t = Math.random();
+      // random offset within a ball of radius `half` (perpendicular jitter, cheap)
+      const ox = (Math.random() * 2 - 1) * half, oy = (Math.random() * 2 - 1) * half, oz = (Math.random() * 2 - 1) * half;
+      let col = a.col + vx * t + ox, row = a.row + vy * t + oy, layer = a.layer + vz * t + oz;
+      if (torus) { col = ((col % W) + W) % W; row = ((row % H) + H) % H; if (D > 0) layer = ((layer % D) + D) % D; }
+      else if (col < 0 || col >= W || row < 0 || row >= H || layer < 0 || layer >= D) continue;
+      pts.push({ x: col, y: row, z: layer });
+    }
+    return pts;
+  }, []);
+
   /** Parse hex color to RGB */
   const hexToRgb = (hex: string) => {
     const n = parseInt(hex.replace('#', ''), 16);
@@ -5061,7 +5213,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             if (wpt && snap) {
               const ids = agentsInShapeAt(wpt.x, wpt.y);
               if (ids.length) {
-                agentGroupMoveRef.current = { members: ids.map(id => ({ id, sx: snap.x[id]!, sy: snap.y[id]! })), downX: wpt.x, downY: wpt.y };
+                agentGroupMoveRef.current = { members: ids.map(id => ({ id, sx: snap.x[id]!, sy: snap.y[id]!, sz: 0 })), downX: wpt.x, downY: wpt.y, downZ: 0 };
                 canvasAgentBrushActive.current = true;
               }
             }
@@ -7208,7 +7360,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                     {(['add', 'remove', 'move', 'edit', 'glue', 'cut', 'bond'] as const).map(m => (
                       <button
                         key={m}
-                        onClick={() => { setAgentBrushMode(m); agentGlueAnchorRef.current = -1; agentLineAnchorRef.current = null; draw(); }}
+                        onClick={() => { setAgentBrushMode(m); agentGlueAnchorRef.current = -1; agentLineAnchorRef.current = null; agentLine3dAnchorRef.current = null; draw(); }}
                         title={
                           m === 'add' ? 'Add agents — Single: one at the cursor; Area: fill the shape footprint' :
                           m === 'remove' ? 'Remove agents — Single: the nearest; Area: all in the footprint' :
@@ -7239,7 +7391,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                         ['line', '╱', 'Line — two clicks define a capsule (Add / Remove / Edit, Area)'],
                       ] as Array<[BrushShape, string, string]>).map(([s, glyph, tip]) => (
                         <button key={s} className={`${styles.brushShapeBtn} ${agentBrushShape === s ? styles.brushShapeBtnActive : ''}`}
-                          onClick={() => { setAgentBrushShape(s); agentLineAnchorRef.current = null; draw(); }} title={tip}>{glyph}</button>
+                          onClick={() => { setAgentBrushShape(s); agentLineAnchorRef.current = null; agentLine3dAnchorRef.current = null; draw(); }} title={tip}>{glyph}</button>
                       ))}
                     </div>
                     {agentBrushShape === 'rect' && (
