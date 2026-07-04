@@ -980,6 +980,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const agentGroupMoveRef = useRef<{ members: Array<{ id: number; sx: number; sy: number; sz: number }>; downX: number; downY: number; downZ: number } | null>(null);
   // 3D Line tool for the agent brush (Add/Remove/Edit, Area): staged plane anchor.
   const agentLine3dAnchorRef = useRef<{ layer: number; row: number; col: number } | null>(null);
+  // The agent ids currently under an AREA footprint that WILL be affected (Remove/
+  // Move/Edit — NOT Add, which only adds). Drawn as highlight rings so the user
+  // sees exactly which agents the stroke touches. Empty when not applicable.
+  const agentAreaHoverIdsRef = useRef<number[]>([]);
   const [agentSeedConfigOpen, setAgentSeedConfigOpen] = useState(false);
   // Live cursor world position (for the agent brush ring) + the hovered agent
   // id (change-detected so we don't full-redraw on every raw mousemove).
@@ -1666,6 +1670,24 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         const rad = Math.max(2, ar[editTgt]! * scale) + 4;
         ctx.beginPath(); ctx.arc(cx, cy, rad, 0, Math.PI * 2);
         ctx.strokeStyle = 'rgba(171, 123, 255, 0.95)'; ctx.lineWidth = 2; ctx.setLineDash([3, 3]); ctx.stroke(); ctx.setLineDash([]);
+      }
+      // Area-affected agents — highlight every agent the current footprint would
+      // touch (Remove/Move/Edit, Area scope), so the effect is visible before and
+      // during the stroke. Add is excluded (it only spawns NEW agents, never
+      // touching the ones already there). Colour-coded per mode.
+      if (brushTargetRef.current === 'agents' && aScope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit') && agentAreaHoverIdsRef.current.length) {
+        const rgb = mode === 'remove' ? '240, 90, 90' : mode === 'edit' ? '171, 123, 255' : '76, 201, 240';
+        ctx.save();
+        ctx.strokeStyle = `rgba(${rgb}, 0.95)`;
+        ctx.fillStyle = `rgba(${rgb}, 0.22)`;
+        ctx.lineWidth = 1.5;
+        for (const id of agentAreaHoverIdsRef.current) {
+          if (id < 0 || id >= hw || !aal[id]) continue;
+          const cx = ox + ax[id]! * scale, cy = oy + ay[id]! * scale;
+          const rad = Math.max(2, ar[id]! * scale) + 2;
+          ctx.beginPath(); ctx.arc(cx, cy, rad, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        }
+        ctx.restore();
       }
       // Area footprint cursor — the shape outline at the cursor, drawn as the
       // negative silhouette ('difference' composite + white) so it's visible on
@@ -3447,15 +3469,28 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const updateAgentHover = (clientX: number, clientY: number): boolean => {
       const snap = agentsRef.current;
       const mode = agentBrushModeRef.current;
+      const aShape = agentBrushShapeRef.current;
+      const aScope = (mode === 'move' && aShape === 'line') ? 'single' : agentBrushScopeRef.current;
       const want = brushTargetRef.current === 'agents' && (mode === 'remove' || mode === 'glue' || mode === 'cut' || mode === 'move' || mode === 'edit');
       if (!want || !snap) {
         if (hoverAgents3dRef.current.length === 0) return false;
         hoverAgents3dRef.current = EMPTY_AGENT_RINGS; return true;
       }
+      const hasZ = snap.z.length > 0;
+      // Area (Remove/Move/Edit): highlight ALL agents under the footprint (the ones
+      // the stroke will touch), not just the single hovered one.
+      if (aScope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit')) {
+        const hit = pickCell(clientX, clientY);
+        const ids = hit ? agentsInShape3dAt(hit) : [];
+        const rings = ids.map(id => ({ x: snap.x[id]!, y: snap.y[id]!, z: hasZ ? snap.z[id]! : 0, radius: snap.radius[id]! }));
+        const prev = hoverAgents3dRef.current;
+        if (prev.length === rings.length && prev.every((p, i) => p.x === rings[i]!.x && p.y === rings[i]!.y && p.z === rings[i]!.z)) return false;
+        hoverAgents3dRef.current = rings.length ? rings : EMPTY_AGENT_RINGS;
+        return true;
+      }
       const id = pickAgent3d(clientX, clientY);
       const prev = hoverAgents3dRef.current;
       if (id < 0) { if (prev.length === 0) return false; hoverAgents3dRef.current = EMPTY_AGENT_RINGS; return true; }
-      const hasZ = snap.z.length > 0;
       const ring = { x: snap.x[id]!, y: snap.y[id]!, z: hasZ ? snap.z[id]! : 0, radius: snap.radius[id]! };
       if (prev.length === 1 && prev[0]!.x === ring.x && prev[0]!.y === ring.y && prev[0]!.z === ring.z) return false;
       hoverAgents3dRef.current = [ring];
@@ -5407,6 +5442,16 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         {
           const wpt = screenToWorld(e.clientX, e.clientY);
           agentCursorWorldRef.current = wpt ? { x: wpt.x, y: wpt.y } : null;
+          // Area-affected highlight — the agents the stroke WILL touch (Remove/Move/
+          // Edit; NOT Add, which only spawns new agents). During a group-move drag
+          // it's the grabbed group; otherwise the agents under the footprint.
+          if (scope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit')) {
+            agentAreaHoverIdsRef.current = (mode === 'move' && agentGroupMoveRef.current)
+              ? agentGroupMoveRef.current.members.map(m => m.id)
+              : (wpt ? agentsInShapeAt(wpt.x, wpt.y) : []);
+          } else if (agentAreaHoverIdsRef.current.length) {
+            agentAreaHoverIdsRef.current = [];
+          }
           const wantHover = mode === 'glue' || mode === 'cut'
             || (scope === 'single' && (mode === 'remove' || mode === 'move' || mode === 'edit'));
           const prevHover = agentHoverIdRef.current;
@@ -5598,6 +5643,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const handleMouseLeave = () => {
       cursorGrid.current = null;
       setHoverCellInfo(prev => (prev === null ? prev : null));
+      // Clear the agent-brush cursor/highlight state so nothing lingers off-canvas.
+      agentCursorWorldRef.current = null;
+      agentHoverIdRef.current = -1;
+      if (agentAreaHoverIdsRef.current.length) agentAreaHoverIdsRef.current = [];
       draw();
     };
 
@@ -7482,6 +7531,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                           ? (editTargetId >= 0 ? `Editing agent #${editTargetId} — check the rows to overwrite, then Apply.` : 'Click an agent to load its values, then Apply.')
                           : 'Click / drag the footprint to stamp the checked rows onto agents.'}
                       </div>
+                      {!Object.values(agentEditAttrs).some(e => e?.enabled) && (
+                        <div style={{ fontSize: '0.62rem', color: 'var(--color-accent)' }}>
+                          ⚠ Check a property below to choose what to overwrite.
+                        </div>
+                      )}
                       <ManualBrushPanel
                         cellAttributes={agentEditPanelAttrs}
                         neighborhoods={model.neighborhoods}
