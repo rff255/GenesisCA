@@ -418,7 +418,12 @@ interface KillAgentsMsg { type: 'killAgents'; ids: number[]; activeViewer: strin
 interface PaintAgentsMsg {
   type: 'paintAgents';
   ids: number[];
-  sets: Array<{ attrId: string; value: number }>;
+  sets?: Array<{ attrId: string; value: number }>;
+  /** Optional geometry overwrite (the Edit brush): radius / velocity / absolute
+   *  position. Position writes x AND xNext (the moveAgents discipline) and
+   *  wraps/clamps per `torus`. */
+  geom?: { radius?: number; vx?: number; vy?: number; vz?: number; x?: number; y?: number; z?: number };
+  torus?: boolean;
   activeViewer: string;
 }
 /** Remove ALL agents (Reset). */
@@ -5247,7 +5252,21 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     case 'paintAgents': {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       if (agentStore) {
-        for (const id of msg.ids) applyAgentSets(agentStore, id, msg.sets);
+        const s = agentStore, W = s.worldWidth, H = s.worldHeight, D = s.worldDepth, torus = !!msg.torus;
+        const g = msg.geom;
+        for (const id of msg.ids) {
+          if (id < 0 || id >= s.highWater || !s.alive[id]) continue;
+          if (msg.sets && msg.sets.length > 0) applyAgentSets(s, id, msg.sets);
+          if (g) {
+            if (g.radius !== undefined) { s.radius[id] = g.radius; s.targetRadius[id] = g.radius; }
+            if (g.vx !== undefined) s.vx[id] = g.vx;
+            if (g.vy !== undefined) s.vy[id] = g.vy;
+            if (g.vz !== undefined && D > 1) s.vz[id] = g.vz;
+            if (g.x !== undefined) { let x = g.x; x = torus ? ((x % W) + W) % W : Math.max(0, Math.min(W, x)); s.x[id] = x; s.xNext[id] = x; }
+            if (g.y !== undefined) { let y = g.y; y = torus ? ((y % H) + H) % H : Math.max(0, Math.min(H, y)); s.y[id] = y; s.yNext[id] = y; }
+            if (g.z !== undefined && D > 1) { let z = g.z; z = torus ? ((z % D) + D) % D : Math.max(0, Math.min(D, z)); s.z[id] = z; s.zNext[id] = z; }
+          }
+        }
         runAgentColorPass();
       }
       sendColors();

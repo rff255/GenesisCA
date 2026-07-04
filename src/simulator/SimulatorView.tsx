@@ -33,7 +33,7 @@ import { PresetSaveDialog } from './PresetSaveDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { serializeSimState, serializePreset, downloadStateFile, readStateFile, base64ToArrayBuffer, deserializeTypedArray, migrateSimulationStateV1toV2, deserializeAgentState } from '../model/fileOperations';
 import type { Attribute, CAModel, IndicatorChartSettings, Preset, SimulationState } from '../model/types';
-import { encodeAttrValue } from '../model/attrValueEncoding';
+import { encodeAttrValue, decodeAttrValue } from '../model/attrValueEncoding';
 import { cbNum } from '../model/centerBased';
 import styles from './SimulatorView.module.css';
 
@@ -257,6 +257,37 @@ function saveAgentSeed(modelName: string, state: ManualBrushModelState): void {
     localStorage.setItem(agentSeedStorageKey(modelName), JSON.stringify(state));
   } catch { /* localStorage full */ }
 }
+
+// Agent Edit brush — which agent properties (attributes + geometry) to overwrite
+// and to what value. Separate per-model localStorage entry (like the seed config).
+const AGENT_EDIT_KEY_PREFIX = 'genesisca_agent_edit_v1:';
+function agentEditStorageKey(modelName: string): string {
+  return AGENT_EDIT_KEY_PREFIX + (modelName.trim() || '__unnamed__');
+}
+function loadAgentEdit(modelName: string): ManualBrushModelState | null {
+  try {
+    const raw = localStorage.getItem(agentEditStorageKey(modelName));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as ManualBrushModelState;
+  } catch { /* ignore */ }
+  return null;
+}
+function saveAgentEdit(modelName: string, state: ManualBrushModelState): void {
+  try {
+    localStorage.setItem(agentEditStorageKey(modelName), JSON.stringify(state));
+  } catch { /* localStorage full */ }
+}
+// Synthetic "attribute" ids for the Edit brush's geometry rows (radius / velocity
+// / position). They render as float widgets in ManualBrushPanel and route to the
+// paintAgents `geom` payload (not `sets`) at flush time.
+const GEOM_RADIUS = '__geom_radius__', GEOM_VX = '__geom_vx__', GEOM_VY = '__geom_vy__', GEOM_VZ = '__geom_vz__';
+const GEOM_X = '__geom_x__', GEOM_Y = '__geom_y__', GEOM_Z = '__geom_z__';
+const AGENT_GEOM_ATTR_SPECS: Array<{ id: string; name: string }> = [
+  { id: GEOM_RADIUS, name: 'Radius' },
+  { id: GEOM_VX, name: 'Velocity X' }, { id: GEOM_VY, name: 'Velocity Y' }, { id: GEOM_VZ, name: 'Velocity Z' },
+  { id: GEOM_X, name: 'Position X' }, { id: GEOM_Y, name: 'Position Y' }, { id: GEOM_Z, name: 'Position Z' },
+];
 
 // "Include central cell" is a schema-level flag that is compiled away before
 // simulation: a neighborhood with the flag set gets [0,0] appended to its
@@ -496,6 +527,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const [agentSeedAttrs, setAgentSeedAttrs] = useState<ManualBrushModelState>({});
   const agentSeedAttrsRef = useRef<ManualBrushModelState>({});
   useEffect(() => { agentSeedAttrsRef.current = agentSeedAttrs; }, [agentSeedAttrs]);
+  // Edit brush — which agent properties (attributes + geometry) to overwrite, and
+  // the single-scope target agent (highlighted; -1 = none). The panel prefills
+  // from the picked agent's live state (getAgentState + decode).
+  const [agentEditAttrs, setAgentEditAttrs] = useState<ManualBrushModelState>({});
+  const agentEditAttrsRef = useRef<ManualBrushModelState>({});
+  useEffect(() => { agentEditAttrsRef.current = agentEditAttrs; }, [agentEditAttrs]);
+  const [editTargetId, setEditTargetId] = useState<number>(-1);
+  const editTargetIdRef = useRef<number>(-1); editTargetIdRef.current = editTargetId;
+  const editPrefillIdRef = useRef<number>(-1);
   const [showBrushCursor, setShowBrushCursor] = useState((saved.current.showBrushCursor as boolean) ?? true);
   const [showGridlines, setShowGridlines] = useState((saved.current.showGridlines as boolean) ?? false);
   // Infinity canvas: when the model uses torus boundary, the grid tiles into the
@@ -580,6 +620,24 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const [agentBrushRadius, setAgentBrushRadius] = useState<number>((saved.current.agentBrushRadius as number) ?? 8);
   const [agentSeedDensity, setAgentSeedDensity] = useState<number>((saved.current.agentSeedDensity as number) ?? 0.05);
   const [agentSeedSpacing, setAgentSeedSpacing] = useState<number>((saved.current.agentSeedSpacing as number) ?? 6);
+  // Agent brush SHAPE + per-shape params (mirror the CA-grid brush): rect W/H,
+  // circle radius (agentBrushRadius above), ring radius + width, line width. The
+  // agent world is continuous, so these are world-unit footprints tested
+  // geometrically (not the cell stamps the CA-grid brush uses).
+  const [agentBrushShape, setAgentBrushShape] = useState<BrushShape>(
+    (['rect', 'circle', 'ring', 'line'] as const).includes(saved.current.agentBrushShape as BrushShape)
+      ? (saved.current.agentBrushShape as BrushShape) : 'circle',
+  );
+  const [agentBrushW, setAgentBrushW] = useState<number>((saved.current.agentBrushW as number) ?? 10);
+  const [agentBrushH, setAgentBrushH] = useState<number>((saved.current.agentBrushH as number) ?? 10);
+  const [agentBrushRingWidth, setAgentBrushRingWidth] = useState<number>((saved.current.agentBrushRingWidth as number) ?? 3);
+  const [agentBrushLineWidth, setAgentBrushLineWidth] = useState<number>((saved.current.agentBrushLineWidth as number) ?? 3);
+  // Single = the action affects exactly ONE agent (add-one / remove-nearest /
+  // move-one / edit-clicked); Area = the whole shape footprint. Default Area
+  // (preserves the historical seed/kill feel).
+  const [agentBrushScope, setAgentBrushScope] = useState<'single' | 'area'>(
+    saved.current.agentBrushScope === 'single' ? 'single' : 'area',
+  );
   // Layer toggles (req 1 + 7): independently SHOW (render) and SIMULATE (run the
   // step) the CA grid + the agents. Show toggles are render-only (2D + 3D);
   // Simulate toggles gate runStep / runAgentStep in the worker (setSimLayers).
@@ -634,6 +692,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
           infinityCanvas, indicatorVizModes, recordFormat, brushSectionH,
           agentBrushRadius, agentSeedDensity, agentSeedSpacing,
+          agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, agentBrushScope,
           showCaGrid, showAgents, simulateCells, simulateAgents, brushTarget,
           indicatorHiddenCategories: Object.fromEntries(
             Object.entries(indicatorHiddenCategories)
@@ -646,7 +705,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentBrushRadius, agentSeedDensity, agentSeedSpacing, showCaGrid, showAgents, simulateCells, simulateAgents, brushTarget, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, agentBrushScope, showCaGrid, showAgents, simulateCells, simulateAgents, brushTarget, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -722,6 +781,35 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const t = setTimeout(() => saveAgentSeed(manualBrushModelKey, agentSeedAttrs), 300);
     return () => clearTimeout(t);
   }, [manualBrushModelKey, agentSeedAttrs]);
+
+  // Agent Edit brush — same signature-keyed merge + persistence as the seed config,
+  // over the agent attributes PLUS the synthetic geometry rows (radius / velocity /
+  // position). All rows default disabled (opt-in overwrite).
+  useEffect(() => {
+    const stored = loadAgentEdit(manualBrushModelKey) ?? {};
+    const dr = cbNum(model.centerBased, 'defaultRadius');
+    const next: ManualBrushModelState = {};
+    for (const a of (model.agentAttributes ?? [])) {
+      if (a.type === 'color' || a.type === 'lookupTable') continue;
+      const prev = stored[a.id];
+      next[a.id] = prev
+        ? { enabled: !!prev.enabled, value: typeof prev.value === 'string' ? prev.value : (a.defaultValue ?? '') }
+        : { enabled: false, value: a.defaultValue ?? '' };
+    }
+    for (const g of AGENT_GEOM_ATTR_SPECS) {
+      const def = g.id === GEOM_RADIUS ? String(dr) : '0';
+      const prev = stored[g.id];
+      next[g.id] = prev
+        ? { enabled: !!prev.enabled, value: typeof prev.value === 'string' ? prev.value : def }
+        : { enabled: false, value: def };
+    }
+    setAgentEditAttrs(next);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manualBrushModelKey, agentAttrSig]);
+  useEffect(() => {
+    const t = setTimeout(() => saveAgentEdit(manualBrushModelKey, agentEditAttrs), 300);
+    return () => clearTimeout(t);
+  }, [manualBrushModelKey, agentEditAttrs]);
 
   // Agent inspector — low-Hz live refresh while a popover is pinned (re-request
   // getAgentState at ~3 Hz, NOT per-stepped, so multiple-popover round-trips
@@ -836,6 +924,19 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const is3D = (model.properties.dimension ?? '2d') === '3d';
   const is3dRef = useRef(is3D);
   is3dRef.current = is3D;
+  // Edit brush panel rows = the agent attributes (widget-capable) + the synthetic
+  // geometry rows (Radius / Velocity / Position; Z rows only in 3D). Cast as
+  // Attribute so ManualBrushPanel renders each as a type-appropriate widget.
+  const agentEditPanelAttrs = useMemo<Attribute[]>(() => {
+    const dr = cbNum(model.centerBased, 'defaultRadius');
+    const geom = AGENT_GEOM_ATTR_SPECS
+      .filter(g => is3D || (g.id !== GEOM_VZ && g.id !== GEOM_Z))
+      .map(g => ({ id: g.id, name: g.name, type: 'float', description: '', defaultValue: g.id === GEOM_RADIUS ? String(dr) : '0' } as Attribute));
+    return [
+      ...(model.agentAttributes ?? []).filter(a => a.type !== 'color' && a.type !== 'lookupTable'),
+      ...geom,
+    ];
+  }, [model.agentAttributes, model.centerBased, is3D]);
   // Bond-Graph Agents: the live agent render snapshot (from the worker `stepped`
   // message), the per-render flag, and the seed/brush configuration. The agent
   // world is the grid coordinate frame (1:1), so agent (x,y) map to screen with
@@ -852,19 +953,30 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // render just reads the per-agent frame from the snapshot.
   const spriteRegistryRef = useRef<SpriteRegistry | null>(null);
   const spriteMetaRef = useRef<Array<{ id: string; scale: number; loop: boolean }>>([]);
-  // Agent brush: the LMB action on the canvas for an agent model. 'paint' falls
-  // through to the normal cell brush (field painting). Glue/Cut stage a first
-  // agent on the first click, then bond/unbond it to the second.
-  // The agent-brush sub-modes (only active when brushTarget === 'agents'). The old
-  // 'paint' mode is gone — painting the CA grid is now `brushTarget === 'grid'`.
-  type AgentBrushMode = 'seed' | 'kill' | 'glue' | 'cut' | 'move' | 'bond';
-  const [agentBrushMode, setAgentBrushMode] = useState<AgentBrushMode>('seed');
-  const agentBrushModeRef = useRef<AgentBrushMode>('seed');
+  // Agent brush: the LMB action on the canvas for an agent model (only active
+  // when brushTarget === 'agents'). Add/Remove/Move/Edit honour the Single/Area
+  // scope + the shape footprint; Glue/Cut stage a first agent then bond/unbond to
+  // the second; Bond auto-bonds near agents under the brush.
+  type AgentBrushMode = 'add' | 'remove' | 'move' | 'edit' | 'glue' | 'cut' | 'bond';
+  const [agentBrushMode, setAgentBrushMode] = useState<AgentBrushMode>('add');
+  const agentBrushModeRef = useRef<AgentBrushMode>('add');
   agentBrushModeRef.current = agentBrushMode;
   const agentGlueAnchorRef = useRef<number>(-1);
   const agentBrushRadiusRef = useRef(agentBrushRadius); agentBrushRadiusRef.current = agentBrushRadius;
   const agentSeedDensityRef = useRef(agentSeedDensity); agentSeedDensityRef.current = agentSeedDensity;
   const agentSeedSpacingRef = useRef(agentSeedSpacing); agentSeedSpacingRef.current = agentSeedSpacing;
+  const agentBrushShapeRef = useRef(agentBrushShape); agentBrushShapeRef.current = agentBrushShape;
+  const agentBrushWRef = useRef(agentBrushW); agentBrushWRef.current = agentBrushW;
+  const agentBrushHRef = useRef(agentBrushH); agentBrushHRef.current = agentBrushH;
+  const agentBrushRingWidthRef = useRef(agentBrushRingWidth); agentBrushRingWidthRef.current = agentBrushRingWidth;
+  const agentBrushLineWidthRef = useRef(agentBrushLineWidth); agentBrushLineWidthRef.current = agentBrushLineWidth;
+  const agentBrushScopeRef = useRef(agentBrushScope); agentBrushScopeRef.current = agentBrushScope;
+  // Line tool (Add/Remove/Edit, Area scope): first click stages a world anchor
+  // (no action); the second acts on the capsule between the two. null = none.
+  const agentLineAnchorRef = useRef<{ x: number; y: number } | null>(null);
+  // Rigid group move (Move, Area scope): the agents grabbed at pointer-down + the
+  // world point they were grabbed at, so the drag translates them all by one delta.
+  const agentGroupMoveRef = useRef<{ members: Array<{ id: number; sx: number; sy: number }>; downX: number; downY: number } | null>(null);
   const [agentSeedConfigOpen, setAgentSeedConfigOpen] = useState(false);
   // Live cursor world position (for the agent brush ring) + the hovered agent
   // id (change-detected so we don't full-redraw on every raw mousemove).
@@ -874,7 +986,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // pre-drag position (for the RMB-cancel revert). Own rAF token (C-B4).
   const draggingAgentRef = useRef<number>(-1);
   const draggingAgentStartRef = useRef<{ x: number; y: number } | null>(null);
-  const pendingMoveRef = useRef<{ id: number; x: number; y: number } | null>(null);
+  const pendingMovesRef = useRef<Array<{ id: number; x: number; y: number; z?: number }> | null>(null);
   const pendingMoveRaf = useRef<number | null>(null);
   // PR4 — Bond-paint: the set of pairs queued from the current stroke (dedup'd).
   const pendingBondPairs = useRef<Set<string>>(new Set());
@@ -885,6 +997,24 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const onAgentStateRef = useRef<(r: AgentStateResponse) => void>(() => {});
   onAgentStateRef.current = (r: AgentStateResponse) => {
     if (agentInspectRef.current && agentInspectRef.current.id === r.id) setAgentState(r);
+    // Edit brush (Single scope): prefill the panel VALUES from the picked agent's
+    // live state (keeping the user's per-row enabled toggles). Geometry rows read
+    // radius/velocity/position straight; attribute rows decode by type.
+    if (r.live && editPrefillIdRef.current === r.id) {
+      editPrefillIdRef.current = -1;
+      setAgentEditAttrs(prev => {
+        const next = { ...prev };
+        const put = (id: string, v: number | undefined, attr?: Attribute) => {
+          if (v === undefined) return;
+          const cur = next[id] ?? { enabled: false, value: '' };
+          next[id] = { enabled: cur.enabled, value: attr ? decodeAttrValue(attr, v) : String(v) };
+        };
+        for (const attr of (model.agentAttributes ?? [])) put(attr.id, r.attrs?.[attr.id], attr);
+        put(GEOM_RADIUS, r.radius); put(GEOM_VX, r.vx); put(GEOM_VY, r.vy); put(GEOM_VZ, r.vz);
+        put(GEOM_X, r.x); put(GEOM_Y, r.y); put(GEOM_Z, r.z);
+        return next;
+      });
+    }
   };
   const glCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const gl3dRef = useRef<import('./render/gl3d').Gl3DRenderer | null>(null);
@@ -1514,34 +1644,64 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       }
       const cursorW = agentCursorWorldRef.current;
       const mode = agentBrushModeRef.current;
-      // Hovered-agent highlight (kill = warm/red, glue/cut = accent). On-change
+      const aShape = agentBrushShapeRef.current;
+      const aScope = (mode === 'move' && aShape === 'line') ? 'single' : agentBrushScopeRef.current;
+      // Hovered-agent highlight (Remove = warm/red, else accent). On-change
       // redraws keep this cheap; the pick is the live cursor's nearest agent.
       const hover = agentHoverIdRef.current;
       if (brushTargetRef.current === 'agents' && hover >= 0 && hover < hw && aal[hover]) {
         const cx = ox + ax[hover]! * scale, cy = oy + ay[hover]! * scale;
         const rad = Math.max(2, ar[hover]! * scale) + 2;
         ctx.beginPath(); ctx.arc(cx, cy, rad, 0, Math.PI * 2);
-        ctx.strokeStyle = mode === 'kill' ? 'rgba(240, 90, 90, 0.95)' : 'rgba(76, 201, 240, 0.95)';
+        ctx.strokeStyle = mode === 'remove' ? 'rgba(240, 90, 90, 0.95)' : 'rgba(76, 201, 240, 0.95)';
         ctx.lineWidth = 2; ctx.stroke();
       }
-      // Brush radius ring at the cursor (seed / kill modes), drawn as the
-      // negative silhouette via the 'difference' composite + white so it's
-      // visible on any palette (the Windows-cursor trick). Tiled in infinity.
-      if (brushTargetRef.current === 'agents' && cursorW && (mode === 'seed' || mode === 'kill') && agentBrushRadiusRef.current > 0) {
-        const rr = agentBrushRadiusRef.current * scale;
-        const drawRing = (tileOx: number, tileOy: number) => {
+      // Edit target highlight (the single-scope agent picked for editing).
+      const editTgt = editTargetIdRef.current;
+      if (brushTargetRef.current === 'agents' && mode === 'edit' && aScope === 'single' && editTgt >= 0 && editTgt < hw && aal[editTgt]) {
+        const cx = ox + ax[editTgt]! * scale, cy = oy + ay[editTgt]! * scale;
+        const rad = Math.max(2, ar[editTgt]! * scale) + 4;
+        ctx.beginPath(); ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(171, 123, 255, 0.95)'; ctx.lineWidth = 2; ctx.setLineDash([3, 3]); ctx.stroke(); ctx.setLineDash([]);
+      }
+      // Area footprint cursor — the shape outline at the cursor, drawn as the
+      // negative silhouette ('difference' composite + white) so it's visible on
+      // any palette (the Windows-cursor trick). Tiled in infinity. Add/Remove/
+      // Edit/Move (area scope). Single scope shows only the hovered-agent ring above.
+      const footprintMode = mode === 'add' || mode === 'remove' || mode === 'edit' || mode === 'move';
+      if (brushTargetRef.current === 'agents' && cursorW && aScope === 'area' && footprintMode) {
+        const R = agentBrushRadiusRef.current, ringW = Math.max(1, agentBrushRingWidthRef.current);
+        const hW = agentBrushWRef.current / 2, hH = agentBrushHRef.current / 2;
+        const lineAnchor = agentLineAnchorRef.current;
+        const drawShape = (tileOx: number, tileOy: number) => {
           const cx = tileOx + cursorW.x * scale, cy = tileOy + cursorW.y * scale;
-          if (cx + rr < 0 || cx - rr > parentW || cy + rr < 0 || cy - rr > parentH) return;
-          ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.stroke();
+          if (aShape === 'rect') {
+            ctx.strokeRect(cx - hW * scale, cy - hH * scale, hW * 2 * scale, hH * 2 * scale);
+          } else if (aShape === 'line') {
+            if (lineAnchor) {
+              // Capsule preview from the staged anchor to the cursor.
+              const ax0 = tileOx + lineAnchor.x * scale, ay0 = tileOy + lineAnchor.y * scale;
+              ctx.save(); ctx.lineCap = 'round'; ctx.lineWidth = Math.max(1, agentBrushLineWidthRef.current * scale);
+              ctx.beginPath(); ctx.moveTo(ax0, ay0); ctx.lineTo(cx, cy); ctx.stroke(); ctx.restore();
+            } else {
+              const rr = Math.max(1, agentBrushLineWidthRef.current / 2) * scale;
+              ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.stroke();
+            }
+          } else if (aShape === 'ring') {
+            ctx.beginPath(); ctx.arc(cx, cy, Math.max(0, R + ringW / 2) * scale, 0, Math.PI * 2); ctx.stroke();
+            ctx.beginPath(); ctx.arc(cx, cy, Math.max(0, R - ringW / 2) * scale, 0, Math.PI * 2); ctx.stroke();
+          } else if (R > 0) { // circle
+            ctx.beginPath(); ctx.arc(cx, cy, R * scale, 0, Math.PI * 2); ctx.stroke();
+          }
         };
         ctx.save();
         ctx.globalCompositeOperation = 'difference';
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 1.5;
-        ctx.setLineDash(mode === 'kill' ? [5, 4] : []);
+        ctx.setLineDash(mode === 'remove' ? [5, 4] : []);
         if (infinity) {
-          for (let ty = tyMin; ty <= tyMax; ty++) for (let tx = txMin; tx <= txMax; tx++) drawRing(ox + tx * scaledW, oy + ty * scaledH);
-        } else { drawRing(ox, oy); }
+          for (let ty = tyMin; ty <= tyMax; ty++) for (let tx = txMin; tx <= txMax; tx++) drawShape(ox + tx * scaledW, oy + ty * scaledH);
+        } else { drawShape(ox, oy); }
         ctx.setLineDash([]);
         ctx.restore();
       }
@@ -3302,7 +3462,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     const updateAgentHover = (clientX: number, clientY: number): boolean => {
       const snap = agentsRef.current;
       const mode = agentBrushModeRef.current;
-      const want = brushTargetRef.current === 'agents' && (mode === 'kill' || mode === 'glue' || mode === 'cut' || mode === 'move');
+      const want = brushTargetRef.current === 'agents' && (mode === 'remove' || mode === 'glue' || mode === 'cut' || mode === 'move' || mode === 'edit');
       if (!want || !snap) {
         if (hoverAgents3dRef.current.length === 0) return false;
         hoverAgents3dRef.current = EMPTY_AGENT_RINGS; return true;
@@ -3412,13 +3572,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         // move). Glue/Cut/Bond are 2D-only stop-gaps; in 3D they collapse to a
         // single-pick move. (brushTarget==='grid' falls through to cell painting.)
         const mode = agentBrushModeRef.current;
-        if (mode === 'kill') { active = 'agentKill'; killAgents3d(e.clientX, e.clientY); }
+        if (mode === 'remove') { active = 'agentKill'; killAgents3d(e.clientX, e.clientY); }
         else if (mode === 'move') {
           const id = pickAgent3d(e.clientX, e.clientY);
           if (id >= 0) { active = 'agentMove'; agentDragId = id; }
           else active = null;
         }
-        else { active = 'agentSeed'; seedAgents3d(e.clientX, e.clientY); }  // seed (default) + glue/cut/bond fallback
+        else { active = 'agentSeed'; seedAgents3d(e.clientX, e.clientY); }  // add (default) + glue/cut/bond/edit fallback (P5 refines 3D)
       }
       else if (e.button === 0 && brushShapeRef.current === 'line') {
         // Line tool: two clicks. First stages a plane-cell anchor (no paint); the
@@ -4173,10 +4333,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // message (own rAF token, C-B4).
   const flushMoveBatch = useCallback(() => {
     if (pendingMoveRaf.current != null) { cancelAnimationFrame(pendingMoveRaf.current); pendingMoveRaf.current = null; }
-    const m = pendingMoveRef.current;
-    if (!m) return;
-    pendingMoveRef.current = null;
-    workerRef.current?.postMessage({ type: 'moveAgents', moves: [m], torus: boundaryTreatmentRef.current === 'torus', activeViewer: activeViewerRef.current });
+    const moves = pendingMovesRef.current;
+    if (!moves || moves.length === 0) return;
+    pendingMovesRef.current = null;
+    workerRef.current?.postMessage({ type: 'moveAgents', moves, torus: boundaryTreatmentRef.current === 'torus', activeViewer: activeViewerRef.current });
   }, []);
 
   // PR4 — Bond-paint: scan the agents within the brush radius of a screen point
@@ -4241,6 +4401,140 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     pendingBondPairs.current.clear();
     if (pairs.length > 0) workerRef.current?.postMessage({ type: 'formBondBatch', pairs, activeViewer: activeViewerRef.current });
   }, []);
+
+  // ------- Agent brush shapes (Add / Remove / Move / Edit footprint) -------
+  // The agent world is continuous, so the shape is a world-unit footprint tested
+  // GEOMETRICALLY (not the cell stamp the CA-grid brush uses). Same four shapes:
+  // rect (W×H, centred), circle (radius), ring (radius ± width/2), line (a
+  // two-click capsule of a given width). All torus-aware.
+  /** Torus-shortest offset from a footprint centre (cx,cy) to an agent — matches
+   *  the engine's wrap so a footprint straddling the seam still catches agents. */
+  const agentDelta = useCallback((ax: number, ay: number, cx: number, cy: number): [number, number] => {
+    const W = gridWidth.current, H = gridHeight.current;
+    let dx = ax - cx, dy = ay - cy;
+    if (boundaryTreatmentRef.current === 'torus' && W > 0 && H > 0) {
+      if (dx > W / 2) dx -= W; else if (dx < -W / 2) dx += W;
+      if (dy > H / 2) dy -= H; else if (dy < -H / 2) dy += H;
+    }
+    return [dx, dy];
+  }, []);
+  /** Current agent-shape metrics (bbox half-extents + area for density seeding). */
+  const agentShapeMetrics = useCallback(() => {
+    const shape = agentBrushShapeRef.current;
+    const radius = Math.max(0, agentBrushRadiusRef.current);
+    const ringW = Math.max(1, agentBrushRingWidthRef.current);
+    const halfW = agentBrushWRef.current / 2, halfH = agentBrushHRef.current / 2;
+    let boundW: number, boundH: number, area: number;
+    if (shape === 'rect') { boundW = halfW; boundH = halfH; area = agentBrushWRef.current * agentBrushHRef.current; }
+    else if (shape === 'ring') { const rout = radius + ringW / 2, rin = Math.max(0, radius - ringW / 2); boundW = boundH = rout; area = Math.PI * (rout * rout - rin * rin); }
+    else { boundW = boundH = radius; area = Math.PI * radius * radius; } // circle
+    return { shape, radius, ringW, halfW, halfH, boundW, boundH, area };
+  }, []);
+  type AgentShapeMetrics = ReturnType<typeof agentShapeMetrics>;
+  /** Is the offset (dx,dy) from the footprint centre inside the shape? */
+  const shapeContains = (m: AgentShapeMetrics, dx: number, dy: number): boolean => {
+    if (m.shape === 'rect') return Math.abs(dx) <= m.halfW && Math.abs(dy) <= m.halfH;
+    const d = Math.hypot(dx, dy);
+    if (m.shape === 'ring') return Math.abs(d - m.radius) <= m.ringW / 2;
+    return d <= m.radius; // circle
+  };
+  /** Live agent ids whose centre falls inside the shape footprint at (cx,cy). */
+  const agentsInShapeAt = useCallback((cx: number, cy: number): number[] => {
+    const snap = agentsRef.current;
+    if (!snap || snap.highWater === 0) return [];
+    const m = agentShapeMetrics();
+    const ids: number[] = [];
+    for (let i = 0; i < snap.highWater; i++) {
+      if (!snap.alive[i]) continue;
+      const [dx, dy] = agentDelta(snap.x[i]!, snap.y[i]!, cx, cy);
+      if (shapeContains(m, dx, dy)) ids.push(i);
+    }
+    return ids;
+  }, [agentShapeMetrics, agentDelta]);
+  /** Seed points scattered across the shape footprint (density · area). Circle
+   *  keeps the even sunflower; rect/ring rejection-sample the bbox. Torus-wrap /
+   *  bounded-clip each point. */
+  const agentSeedInShape = useCallback((cx: number, cy: number): Array<{ x: number; y: number }> => {
+    if (agentBrushShapeRef.current === 'circle') return agentSeedPoints({ x: cx, y: cy }, agentBrushRadiusRef.current, agentSeedDensityRef.current);
+    const m = agentShapeMetrics();
+    const W = gridWidth.current, H = gridHeight.current;
+    const torus = boundaryTreatmentRef.current === 'torus';
+    const n = Math.max(1, Math.round(agentSeedDensityRef.current * m.area));
+    const pts: Array<{ x: number; y: number }> = [];
+    let tries = 0; const maxTries = n * 30 + 50;
+    while (pts.length < n && tries++ < maxTries) {
+      const dx = (Math.random() * 2 - 1) * m.boundW;
+      const dy = (Math.random() * 2 - 1) * m.boundH;
+      if (!shapeContains(m, dx, dy)) continue;
+      let x = cx + dx, y = cy + dy;
+      if (torus && W > 0 && H > 0) { x = ((x % W) + W) % W; y = ((y % H) + H) % H; }
+      else if (x < 0 || x >= W || y < 0 || y >= H) continue;
+      pts.push({ x, y });
+    }
+    return pts;
+  }, [agentShapeMetrics, agentSeedPoints]);
+  /** Line footprint (Add/Remove/Edit, Area): live agent ids within width/2 of the
+   *  capsule between two world points (agent folded to the anchor's frame). */
+  const agentLineMembers = useCallback((a: { x: number; y: number }, b: { x: number; y: number }): number[] => {
+    const snap = agentsRef.current;
+    if (!snap || snap.highWater === 0) return [];
+    const half = Math.max(0.5, agentBrushLineWidthRef.current / 2);
+    const vx = b.x - a.x, vy = b.y - a.y, lenSq = vx * vx + vy * vy;
+    const ids: number[] = [];
+    for (let i = 0; i < snap.highWater; i++) {
+      if (!snap.alive[i]) continue;
+      const [dx, dy] = agentDelta(snap.x[i]!, snap.y[i]!, a.x, a.y);
+      let d: number;
+      if (lenSq === 0) d = Math.hypot(dx, dy);
+      else { const t = Math.max(0, Math.min(1, (dx * vx + dy * vy) / lenSq)); d = Math.hypot(dx - t * vx, dy - t * vy); }
+      if (d <= half) ids.push(i);
+    }
+    return ids;
+  }, [agentDelta]);
+  /** Line footprint (Add, Area): seed points scattered along the capsule. */
+  const agentSeedInLine = useCallback((a: { x: number; y: number }, b: { x: number; y: number }): Array<{ x: number; y: number }> => {
+    const W = gridWidth.current, H = gridHeight.current, torus = boundaryTreatmentRef.current === 'torus';
+    const width = Math.max(1, agentBrushLineWidthRef.current);
+    const vx = b.x - a.x, vy = b.y - a.y, len = Math.hypot(vx, vy);
+    const n = Math.max(1, Math.round(agentSeedDensityRef.current * (len + 1) * width));
+    const half = width / 2, nx = len > 0 ? -vy / len : 0, ny = len > 0 ? vx / len : 0;
+    const pts: Array<{ x: number; y: number }> = [];
+    for (let i = 0; i < n; i++) {
+      const t = Math.random(), p = Math.random() * width - half;
+      let x = a.x + vx * t + nx * p, y = a.y + vy * t + ny * p;
+      if (torus && W > 0 && H > 0) { x = ((x % W) + W) % W; y = ((y % H) + H) % H; }
+      else if (x < 0 || x >= W || y < 0 || y >= H) continue;
+      pts.push({ x, y });
+    }
+    return pts;
+  }, []);
+  // Build the paintAgents `sets` (attributes) + `geom` (radius / velocity /
+  // position) payload from the Edit panel's currently-enabled rows.
+  const buildAgentEdit = useCallback((): { sets: Array<{ attrId: string; value: number }>; geom?: { radius?: number; vx?: number; vy?: number; vz?: number; x?: number; y?: number; z?: number } } => {
+    const st = agentEditAttrsRef.current;
+    const sets: Array<{ attrId: string; value: number }> = [];
+    for (const attr of (model.agentAttributes ?? [])) {
+      const e = st[attr.id];
+      if (e?.enabled) sets.push({ attrId: attr.id, value: encodeAttrValue(attr, e.value) });
+    }
+    const geom: { radius?: number; vx?: number; vy?: number; vz?: number; x?: number; y?: number; z?: number } = {};
+    const num = (id: string): number | undefined => { const e = st[id]; if (!e?.enabled) return undefined; const n = parseFloat(e.value); return Number.isFinite(n) ? n : undefined; };
+    const radius = num(GEOM_RADIUS); if (radius !== undefined) geom.radius = radius;
+    const vx = num(GEOM_VX); if (vx !== undefined) geom.vx = vx;
+    const vy = num(GEOM_VY); if (vy !== undefined) geom.vy = vy;
+    const vz = num(GEOM_VZ); if (vz !== undefined) geom.vz = vz;
+    const gx = num(GEOM_X); if (gx !== undefined) geom.x = gx;
+    const gy = num(GEOM_Y); if (gy !== undefined) geom.y = gy;
+    const gz = num(GEOM_Z); if (gz !== undefined) geom.z = gz;
+    return { sets, geom: Object.keys(geom).length > 0 ? geom : undefined };
+  }, [model.agentAttributes]);
+  // Overwrite the chosen properties on the given agent ids (the Edit brush).
+  const applyAgentEditToIds = useCallback((ids: number[]) => {
+    if (ids.length === 0) return;
+    const { sets, geom } = buildAgentEdit();
+    if (sets.length === 0 && !geom) return;
+    workerRef.current?.postMessage({ type: 'paintAgents', ids, sets, geom, torus: boundaryTreatmentRef.current === 'torus', activeViewer: activeViewerRef.current });
+  }, [buildAgentEdit]);
 
   /** Parse hex color to RGB */
   const hexToRgb = (hex: string) => {
@@ -4591,7 +4885,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       draw();
     };
 
-    const isResizingBrush = { active: false, startX: 0, startY: 0, startW: 0, startH: 0, startRadius: 0, startRingW: 0, startLineW: 0 };
+    const isResizingBrush = { active: false, agent: false, startX: 0, startY: 0, startW: 0, startH: 0, startRadius: 0, startRingW: 0, startLineW: 0 };
     let canvasBrushActive = false; // true only when LMB started on canvas, not overlay
 
     // Middle-click autoscroll: rAF loop pans by (cursor - origin) each frame.
@@ -4695,35 +4989,59 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         return;
       }
 
-      // Bond-Graph Agents — the agent brush. Plain LMB on the canvas performs
-      // the selected mode (Seed / Kill / Glue / Cut) when the brush targets agents;
-      // brushTarget==='grid' falls through to the normal cell brush. Shift+LMB still
-      // inspects, Ctrl+LMB still resizes (those are checked below), so the agent
-      // brush only takes a plain, unmodified left click.
+      // Bond-Graph Agents — the agent brush. Plain LMB on the canvas performs the
+      // selected mode when the brush targets agents; brushTarget==='grid' falls
+      // through to the normal cell brush. Shift+LMB inspects, Ctrl+LMB resizes
+      // (checked below), so the agent brush takes a plain, unmodified left click.
       if (e.button === 0 && !e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey
           && isAgentModelRef.current && brushTargetRef.current === 'agents') {
         e.preventDefault();
         const worker = workerRef.current;
         const mode = agentBrushModeRef.current;
-        if (mode === 'seed') {
+        const shape = agentBrushShapeRef.current;
+        // Line + Move can't express a rigid drag → single-agent move regardless.
+        const scope = (mode === 'move' && shape === 'line') ? 'single' : agentBrushScopeRef.current;
+        // LINE shape (Area scope) is a two-click region tool for Add/Remove/Edit:
+        // first click stages the anchor (no action), second acts on the capsule.
+        if (shape === 'line' && scope === 'area' && (mode === 'add' || mode === 'remove' || mode === 'edit')) {
+          const wpt = screenToWorld(e.clientX, e.clientY);
+          if (!wpt) return;
+          if (!agentLineAnchorRef.current) { agentLineAnchorRef.current = { x: wpt.x, y: wpt.y }; draw(); return; }
+          const a = agentLineAnchorRef.current; agentLineAnchorRef.current = null;
+          const b = { x: wpt.x, y: wpt.y };
+          if (mode === 'add') seedAgentsAt(agentSeedInLine(a, b), agentSeedSetsRef.current());
+          else if (mode === 'remove') { const ids = agentLineMembers(a, b); if (ids.length && worker) worker.postMessage({ type: 'killAgents', ids, activeViewer: activeViewerRef.current }); }
+          else if (mode === 'edit') applyAgentEditToIds(agentLineMembers(a, b));
+          draw();
+          return;
+        }
+        if (mode === 'add') {
           const wpt = screenToWorld(e.clientX, e.clientY);
           if (wpt) {
-            const sets = agentSeedSetsRef.current();
-            const r = agentBrushRadiusRef.current;
-            const pts = r > 0
-              ? agentSeedPoints({ x: wpt.x, y: wpt.y }, r, agentSeedDensityRef.current)
-              : [{ x: wpt.x, y: wpt.y }];
+            const pts = scope === 'single' ? [{ x: wpt.x, y: wpt.y }] : agentSeedInShape(wpt.x, wpt.y);
             // Enqueue into the drag buffer (so a click that becomes a drag keeps
             // accumulating into the same batch) and arm the rAF flush.
-            pendingSeedSets.current = sets;
+            pendingSeedSets.current = agentSeedSetsRef.current();
             for (const p of pts) pendingSeedPoints.current.push(p);
             if (pendingSeedRaf.current == null) pendingSeedRaf.current = requestAnimationFrame(flushSeedBatch);
             canvasAgentBrushActive.current = true;
             lastSeedWorldRef.current = { x: wpt.x, y: wpt.y };
           }
-        } else if (mode === 'kill') {
-          killAgentsInRadius(e.clientX, e.clientY);
+        } else if (mode === 'remove') {
+          if (scope === 'single') { const id = pickAgentAt(e.clientX, e.clientY); if (id >= 0 && worker) worker.postMessage({ type: 'killAgents', ids: [id], activeViewer: activeViewerRef.current }); }
+          else { const wpt = screenToWorld(e.clientX, e.clientY); if (wpt) { const ids = agentsInShapeAt(wpt.x, wpt.y); if (ids.length && worker) worker.postMessage({ type: 'killAgents', ids, activeViewer: activeViewerRef.current }); } }
           canvasAgentBrushActive.current = true;
+        } else if (mode === 'edit') {
+          if (scope === 'single') {
+            // Pick the target agent, prefill the Edit panel from its live state
+            // (getAgentState → decode); the Apply button then writes to it.
+            const id = pickAgentAt(e.clientX, e.clientY);
+            if (id >= 0) { editTargetIdRef.current = id; setEditTargetId(id); editPrefillIdRef.current = id; worker?.postMessage({ type: 'getAgentState', id }); draw(); }
+          } else {
+            const wpt = screenToWorld(e.clientX, e.clientY);
+            if (wpt) applyAgentEditToIds(agentsInShapeAt(wpt.x, wpt.y));
+            canvasAgentBrushActive.current = true;
+          }
         } else if (mode === 'glue' || mode === 'cut') {
           const id = pickAgentAt(e.clientX, e.clientY);
           if (id < 0) { agentGlueAnchorRef.current = -1; draw(); return; }
@@ -4735,50 +5053,76 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           }
           draw();
         } else if (mode === 'move') {
-          // PR4 — pick an agent to drag. Snapshot its pre-drag pos for the
-          // RMB-cancel revert.
-          const id = pickAgentAt(e.clientX, e.clientY);
-          if (id >= 0) {
+          if (scope === 'area') {
+            // Rigid group drag: grab every agent in the footprint + the grab point,
+            // so the drag translates them all by one delta.
+            const wpt = screenToWorld(e.clientX, e.clientY);
             const snap = agentsRef.current;
-            draggingAgentRef.current = id;
-            draggingAgentStartRef.current = snap ? { x: snap.x[id]!, y: snap.y[id]! } : null;
-            canvasAgentBrushActive.current = true;
+            if (wpt && snap) {
+              const ids = agentsInShapeAt(wpt.x, wpt.y);
+              if (ids.length) {
+                agentGroupMoveRef.current = { members: ids.map(id => ({ id, sx: snap.x[id]!, sy: snap.y[id]! })), downX: wpt.x, downY: wpt.y };
+                canvasAgentBrushActive.current = true;
+              }
+            }
+          } else {
+            // Pick one agent to drag; snapshot its pre-drag pos for the RMB revert.
+            const id = pickAgentAt(e.clientX, e.clientY);
+            if (id >= 0) {
+              const snap = agentsRef.current;
+              draggingAgentRef.current = id;
+              draggingAgentStartRef.current = snap ? { x: snap.x[id]!, y: snap.y[id]! } : null;
+              canvasAgentBrushActive.current = true;
+            }
           }
         } else if (mode === 'bond') {
-          // PR4 — bond-paint: start a stroke; pairs are scanned + queued on drag,
-          // flushed on pointer-up.
+          // Bond-paint: start a stroke; pairs are scanned + queued on drag, flushed
+          // on pointer-up.
           pendingBondPairs.current.clear();
           canvasAgentBrushActive.current = true;
           scanBondPairsAt(e.clientX, e.clientY);
         }
         return;
       }
-      // RMB / Escape cancels a staged glue/cut anchor OR a Move drag (revert).
+      // RMB / Escape cancels a staged glue/cut or line anchor OR a Move drag (revert).
       if (isAgentModelRef.current && (e.button === 2)) {
-        if (draggingAgentRef.current >= 0) {
+        if (agentGroupMoveRef.current) {
           if (pendingMoveRaf.current != null) { cancelAnimationFrame(pendingMoveRaf.current); pendingMoveRaf.current = null; }
-          pendingMoveRef.current = null;
+          pendingMovesRef.current = null;
+          const g = agentGroupMoveRef.current; agentGroupMoveRef.current = null;
+          workerRef.current?.postMessage({ type: 'moveAgents', moves: g.members.map(mm => ({ id: mm.id, x: mm.sx, y: mm.sy })), torus: boundaryTreatmentRef.current === 'torus', activeViewer: activeViewerRef.current });
+          canvasAgentBrushActive.current = false;
+          e.preventDefault();
+        } else if (draggingAgentRef.current >= 0) {
+          if (pendingMoveRaf.current != null) { cancelAnimationFrame(pendingMoveRaf.current); pendingMoveRaf.current = null; }
+          pendingMovesRef.current = null;
           const id = draggingAgentRef.current, start = draggingAgentStartRef.current;
           if (start) workerRef.current?.postMessage({ type: 'moveAgents', moves: [{ id, x: start.x, y: start.y }], torus: boundaryTreatmentRef.current === 'torus', activeViewer: activeViewerRef.current });
           draggingAgentRef.current = -1; draggingAgentStartRef.current = null;
           canvasAgentBrushActive.current = false;
           e.preventDefault();
+        } else if (agentLineAnchorRef.current) {
+          agentLineAnchorRef.current = null; draw(); e.preventDefault();
         } else if (agentGlueAnchorRef.current >= 0) {
           agentGlueAnchorRef.current = -1; draw();
         }
       }
 
       if (e.button === 0 && e.ctrlKey) {
-        // Ctrl+LMB = resize brush
+        // Ctrl+LMB = resize brush. Targets the AGENT shape when the brush affects
+        // agents (else it silently resized the hidden CA-grid brush), the CA-grid
+        // shape otherwise. Same per-shape math, different source/target refs.
         e.preventDefault();
+        const rzAgent = isAgentModelRef.current && brushTargetRef.current === 'agents';
         isResizingBrush.active = true;
+        isResizingBrush.agent = rzAgent;
         isResizingBrush.startX = e.clientX;
         isResizingBrush.startY = e.clientY;
-        isResizingBrush.startW = brushWRef.current;
-        isResizingBrush.startH = brushHRef.current;
-        isResizingBrush.startRadius = brushRadiusRef.current;
-        isResizingBrush.startRingW = brushRingWidthRef.current;
-        isResizingBrush.startLineW = brushLineWidthRef.current;
+        isResizingBrush.startW = rzAgent ? agentBrushWRef.current : brushWRef.current;
+        isResizingBrush.startH = rzAgent ? agentBrushHRef.current : brushHRef.current;
+        isResizingBrush.startRadius = rzAgent ? agentBrushRadiusRef.current : brushRadiusRef.current;
+        isResizingBrush.startRingW = rzAgent ? agentBrushRingWidthRef.current : brushRingWidthRef.current;
+        isResizingBrush.startLineW = rzAgent ? agentBrushLineWidthRef.current : brushLineWidthRef.current;
         container.style.cursor = 'nwse-resize';
       } else if (e.button === 0 && brushShapeRef.current === 'line') {
         // Line tool: two clicks define the segment. First click stages the
@@ -4903,29 +5247,51 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // hovered AGENT changes so the highlight tracks.
       if (isAgentModelRef.current && brushTargetRef.current === 'agents') {
         const mode = agentBrushModeRef.current;
-        const radiusMode = mode === 'seed' || mode === 'kill' || mode === 'glue' || mode === 'cut';
-        if (radiusMode) {
+        const shape = agentBrushShapeRef.current;
+        const scope = (mode === 'move' && shape === 'line') ? 'single' : agentBrushScopeRef.current;
+        const dragging = canvasAgentBrushActive.current && (e.buttons & 1);
+        // Track the cursor world point (drives the footprint / radius cursor) and
+        // the hovered-agent highlight (single-scope Remove/Move/Edit + Glue/Cut).
+        {
           const wpt = screenToWorld(e.clientX, e.clientY);
           agentCursorWorldRef.current = wpt ? { x: wpt.x, y: wpt.y } : null;
+          const wantHover = mode === 'glue' || mode === 'cut'
+            || (scope === 'single' && (mode === 'remove' || mode === 'move' || mode === 'edit'));
           const prevHover = agentHoverIdRef.current;
-          const hover = (mode === 'kill' || mode === 'glue' || mode === 'cut') ? pickAgentAt(e.clientX, e.clientY) : -1;
+          let hover = agentHoverIdRef.current;
+          if (!dragging) hover = wantHover ? pickAgentAt(e.clientX, e.clientY) : -1;
           agentHoverIdRef.current = hover;
           if (hover !== prevHover) draw();
+          else if (!dragging && scope === 'area' && (mode === 'add' || mode === 'remove' || mode === 'edit' || mode === 'move')) draw();
         }
-        // Drag-to-seed / drag-kill / drag-move / drag-bond while the agent brush
-        // is active (LMB held).
-        if (canvasAgentBrushActive.current && (e.buttons & 1)) {
-          if (mode === 'kill') {
-            killAgentsInRadius(e.clientX, e.clientY);
+        // Drags while the agent brush is active (LMB held).
+        if (dragging) {
+          const worker = workerRef.current;
+          if (mode === 'remove') {
+            if (scope === 'single') { const id = pickAgentAt(e.clientX, e.clientY); if (id >= 0 && worker) worker.postMessage({ type: 'killAgents', ids: [id], activeViewer: activeViewerRef.current }); }
+            else { const wpt = screenToWorld(e.clientX, e.clientY); if (wpt) { const ids = agentsInShapeAt(wpt.x, wpt.y); if (ids.length && worker) worker.postMessage({ type: 'killAgents', ids, activeViewer: activeViewerRef.current }); } }
+          } else if (mode === 'edit' && scope === 'area') {
+            const wpt = screenToWorld(e.clientX, e.clientY);
+            if (wpt) applyAgentEditToIds(agentsInShapeAt(wpt.x, wpt.y));
+          } else if (mode === 'move' && scope === 'area' && agentGroupMoveRef.current) {
+            const wpt = screenToWorld(e.clientX, e.clientY);
+            const g = agentGroupMoveRef.current;
+            if (wpt) {
+              const W = gridWidth.current, H = gridHeight.current, torus = boundaryTreatmentRef.current === 'torus';
+              let ddx = wpt.x - g.downX, ddy = wpt.y - g.downY;
+              if (torus && W > 0 && H > 0) { if (ddx > W / 2) ddx -= W; else if (ddx < -W / 2) ddx += W; if (ddy > H / 2) ddy -= H; else if (ddy < -H / 2) ddy += H; }
+              pendingMovesRef.current = g.members.map(mm => ({ id: mm.id, x: mm.sx + ddx, y: mm.sy + ddy }));
+              if (pendingMoveRaf.current == null) pendingMoveRaf.current = requestAnimationFrame(flushMoveBatch);
+            }
           } else if (mode === 'move' && draggingAgentRef.current >= 0) {
             const wpt = screenToWorld(e.clientX, e.clientY);
             if (wpt) {
-              pendingMoveRef.current = { id: draggingAgentRef.current, x: wpt.x, y: wpt.y };
+              pendingMovesRef.current = [{ id: draggingAgentRef.current, x: wpt.x, y: wpt.y }];
               if (pendingMoveRaf.current == null) pendingMoveRaf.current = requestAnimationFrame(flushMoveBatch);
             }
           } else if (mode === 'bond') {
             scanBondPairsAt(e.clientX, e.clientY);
-          } else if (mode === 'seed') {
+          } else if (mode === 'add' && scope === 'area' && shape !== 'line') {
             const wpt = screenToWorld(e.clientX, e.clientY);
             const last = lastSeedWorldRef.current;
             if (wpt && last) {
@@ -4940,17 +5306,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               const spacing = Math.max(0.5, agentSeedSpacingRef.current);
               if (dist >= spacing) {
                 const steps = Math.floor(dist / spacing);
-                const r = agentBrushRadiusRef.current;
-                const density = agentSeedDensityRef.current;
                 let lastX = last.x, lastY = last.y;
                 for (let s = 1; s <= steps; s++) {
                   const t = (s * spacing) / dist;
                   let cx = last.x + dx * t, cy = last.y + dy * t;
                   if (torus && W > 0 && H > 0) { cx = ((cx % W) + W) % W; cy = ((cy % H) + H) % H; }
-                  const cluster = r > 0
-                    ? agentSeedPoints({ x: cx, y: cy }, r, density)
-                    : [{ x: cx, y: cy }];
-                  for (const p of cluster) pendingSeedPoints.current.push(p);
+                  for (const p of agentSeedInShape(cx, cy)) pendingSeedPoints.current.push(p);
                   lastX = cx; lastY = cy;
                 }
                 pendingSeedSets.current = agentSeedSetsRef.current();
@@ -4998,17 +5359,23 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         const dy = e.clientY - isResizingBrush.startY;
         const maxW = (gridWidth.current || simWidth) * 2;
         const maxH = (gridHeight.current || simHeight) * 2;
-        const shape = brushShapeRef.current;
+        const rz = isResizingBrush;
+        const shape = rz.agent ? agentBrushShapeRef.current : brushShapeRef.current;
+        const setRadius = rz.agent ? setAgentBrushRadius : setBrushRadius;
+        const setRingW = rz.agent ? setAgentBrushRingWidth : setBrushRingWidth;
+        const setLineW = rz.agent ? setAgentBrushLineWidth : setBrushLineWidth;
+        const setW = rz.agent ? setAgentBrushW : setBrushW;
+        const setH = rz.agent ? setAgentBrushH : setBrushH;
         if (shape === 'circle') {
-          setBrushRadius(Math.max(0, Math.min(maxW, isResizingBrush.startRadius + Math.round(dx / 5))));
+          setRadius(Math.max(0, Math.min(maxW, rz.startRadius + Math.round(dx / 5))));
         } else if (shape === 'ring') {
-          setBrushRadius(Math.max(0, Math.min(maxW, isResizingBrush.startRadius + Math.round(dx / 5))));
-          setBrushRingWidth(Math.max(1, Math.min(maxH, isResizingBrush.startRingW - Math.round(dy / 5))));
+          setRadius(Math.max(0, Math.min(maxW, rz.startRadius + Math.round(dx / 5))));
+          setRingW(Math.max(1, Math.min(maxH, rz.startRingW - Math.round(dy / 5))));
         } else if (shape === 'line') {
-          setBrushLineWidth(Math.max(1, Math.min(maxW, isResizingBrush.startLineW + Math.round(dx / 5))));
+          setLineW(Math.max(1, Math.min(maxW, rz.startLineW + Math.round(dx / 5))));
         } else {
-          setBrushW(Math.max(1, Math.min(maxW, isResizingBrush.startW + Math.round(dx / 5))));
-          setBrushH(Math.max(1, Math.min(maxH, isResizingBrush.startH - Math.round(dy / 5))));
+          setW(Math.max(1, Math.min(maxW, rz.startW + Math.round(dx / 5))));
+          setH(Math.max(1, Math.min(maxH, rz.startH - Math.round(dy / 5))));
         }
         draw();
         return;
@@ -5057,6 +5424,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         flushMoveBatch();
         flushBondBatch();
         if (draggingAgentRef.current >= 0) { draggingAgentRef.current = -1; draggingAgentStartRef.current = null; }
+        agentGroupMoveRef.current = null;
       }
       isPanning.current = false;
       isResizingBrush.active = false;
@@ -5113,7 +5481,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       autoscrollOriginRef.current = null;
       autoscrollCursorRef.current = null;
     };
-  }, [draw, paintAt, paintLine, screenToGrid, flushPaintBatch, commitInspectPopover, screenToWorld, pickAgentAt, seedAgentsAt, agentSeedPoints, flushSeedBatch, killAgentsInRadius, openAgentInspector, flushMoveBatch, scanBondPairsAt, flushBondBatch]);
+  }, [draw, paintAt, paintLine, screenToGrid, flushPaintBatch, commitInspectPopover, screenToWorld, pickAgentAt, seedAgentsAt, agentSeedPoints, flushSeedBatch, killAgentsInRadius, openAgentInspector, flushMoveBatch, scanBondPairsAt, flushBondBatch, agentsInShapeAt, agentSeedInShape, agentSeedInLine, agentLineMembers, applyAgentEditToIds]);
 
   // Play: kick-start the step pipeline (worker message handler chains subsequent steps)
   useEffect(() => {
@@ -6834,13 +7202,22 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               <div className={styles.panelHeader}>
                 <span className={styles.panelTitle}>Agent Brush</span>
               </div>
-              <div className={styles.rightPanelSectionBody} style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.66rem', maxHeight: 380, overflowY: 'auto' }}>
+              <div className={styles.rightPanelSectionBody} style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.66rem', maxHeight: 460, overflowY: 'auto' }}>
+                  {/* Mode row — labels come from the id via textTransform:capitalize. */}
                   <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-                    {(['seed', 'kill', 'glue', 'cut', 'move', 'bond'] as const).map(m => (
+                    {(['add', 'remove', 'move', 'edit', 'glue', 'cut', 'bond'] as const).map(m => (
                       <button
                         key={m}
-                        onClick={() => { setAgentBrushMode(m); agentGlueAnchorRef.current = -1; draw(); }}
-                        title={m === 'seed' ? 'Click/drag to seed a cluster of agents' : m === 'kill' ? 'Click/drag to remove agents within the radius' : m === 'glue' ? 'Click two agents to bond them' : m === 'cut' ? 'Click two bonded agents to unbond them' : m === 'move' ? 'Drag an agent to a new position (RMB cancels)' : 'Drag over near agents to auto-bond them'}
+                        onClick={() => { setAgentBrushMode(m); agentGlueAnchorRef.current = -1; agentLineAnchorRef.current = null; draw(); }}
+                        title={
+                          m === 'add' ? 'Add agents — Single: one at the cursor; Area: fill the shape footprint' :
+                          m === 'remove' ? 'Remove agents — Single: the nearest; Area: all in the footprint' :
+                          m === 'move' ? 'Move — Single: drag one agent; Area: rigid-drag a footprint of agents (RMB cancels)' :
+                          m === 'edit' ? 'Edit agent properties — Single: click an agent, adjust, Apply; Area: stamp onto all in the footprint' :
+                          m === 'glue' ? 'Click two agents to bond them' :
+                          m === 'cut' ? 'Click two bonded agents to unbond them' :
+                          'Drag over near agents to auto-bond them'
+                        }
                         style={{
                           padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', textTransform: 'capitalize',
                           border: '1px solid ' + (agentBrushMode === m ? 'var(--color-accent)' : 'var(--color-widget-border)'),
@@ -6851,33 +7228,80 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                       >{m}</button>
                     ))}
                   </div>
-                  {/* Radius / density / spacing — shown for the radius modes. */}
-                  {(agentBrushMode === 'seed' || agentBrushMode === 'kill' || agentBrushMode === 'bond') && (
+                  {/* Shape + size + scope — the footprint modes (Add/Remove/Move/Edit). */}
+                  {(agentBrushMode === 'add' || agentBrushMode === 'remove' || agentBrushMode === 'move' || agentBrushMode === 'edit') && (<>
+                    <div className={styles.fieldRow}>
+                      <span className={styles.statLabel}>Shape</span>
+                      {([
+                        ['rect', '▢', 'Square / rectangle footprint'],
+                        ['circle', '●', 'Circle footprint (filled disc)'],
+                        ['ring', '◌', 'Ring footprint (annulus)'],
+                        ['line', '╱', 'Line — two clicks define a capsule (Add / Remove / Edit, Area)'],
+                      ] as Array<[BrushShape, string, string]>).map(([s, glyph, tip]) => (
+                        <button key={s} className={`${styles.brushShapeBtn} ${agentBrushShape === s ? styles.brushShapeBtnActive : ''}`}
+                          onClick={() => { setAgentBrushShape(s); agentLineAnchorRef.current = null; draw(); }} title={tip}>{glyph}</button>
+                      ))}
+                    </div>
+                    {agentBrushShape === 'rect' && (
+                      <div className={styles.fieldRow}>
+                        <span className={styles.statLabel}>W</span>
+                        <NumberField className={styles.brushInput} min={1} max={(gridWidth.current || simWidth) * 2} integer value={agentBrushW} onNumber={setAgentBrushW} />
+                        <span className={styles.statLabel}>H</span>
+                        <NumberField className={styles.brushInput} min={1} max={(gridHeight.current || simHeight) * 2} integer value={agentBrushH} onNumber={setAgentBrushH} />
+                      </div>
+                    )}
+                    {agentBrushShape === 'circle' && (
+                      <div className={styles.fieldRow}>
+                        <span className={styles.statLabel}>Radius</span>
+                        <NumberField className={styles.brushInput} min={0} max={(gridWidth.current || simWidth) * 2} integer value={agentBrushRadius} onNumber={setAgentBrushRadius} />
+                      </div>
+                    )}
+                    {agentBrushShape === 'ring' && (
+                      <div className={styles.fieldRow}>
+                        <span className={styles.statLabel}>Radius</span>
+                        <NumberField className={styles.brushInput} min={0} max={(gridWidth.current || simWidth) * 2} integer value={agentBrushRadius} onNumber={setAgentBrushRadius} />
+                        <span className={styles.statLabel}>Width</span>
+                        <NumberField className={styles.brushInput} min={1} max={(gridWidth.current || simWidth) * 2} integer value={agentBrushRingWidth} onNumber={setAgentBrushRingWidth} />
+                      </div>
+                    )}
+                    {agentBrushShape === 'line' && (
+                      <div className={styles.fieldRow}>
+                        <span className={styles.statLabel}>Width</span>
+                        <NumberField className={styles.brushInput} min={1} max={(gridWidth.current || simWidth) * 2} integer value={agentBrushLineWidth} onNumber={setAgentBrushLineWidth} />
+                        <span className={styles.brushShapeHint}>{agentBrushMode === 'move' ? 'single-agent' : 'click 2 points'}</span>
+                      </div>
+                    )}
+                    <div className={styles.fieldRow}>
+                      <span className={styles.statLabel}>Scope</span>
+                      <div style={{ display: 'flex', border: '1px solid var(--color-widget-border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
+                        {(['single', 'area'] as const).map(sc => (
+                          <button key={sc} onClick={() => { setAgentBrushScope(sc); draw(); }}
+                            title={sc === 'single' ? 'Affect exactly one agent' : 'Affect all agents in the shape footprint'}
+                            style={{ padding: '3px 10px', cursor: 'pointer', border: 'none', borderRight: sc === 'single' ? '1px solid var(--color-widget-border)' : 'none', textTransform: 'capitalize', background: agentBrushScope === sc ? 'var(--color-accent-soft)' : 'transparent', color: agentBrushScope === sc ? 'var(--color-accent)' : 'var(--color-text-muted)', fontWeight: 600, fontSize: '0.62rem' }}>{sc}</button>
+                        ))}
+                      </div>
+                    </div>
+                  </>)}
+                  {/* Add: density + spacing (area scatter) + the initial-value config. */}
+                  {agentBrushMode === 'add' && agentBrushScope === 'area' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                       <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Radius</span>
-                        <NumberField value={agentBrushRadius} onNumber={v => setAgentBrushRadius(v)} min={0} step={1} />
+                        <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Density</span>
+                        <NumberField value={agentSeedDensity} onNumber={v => setAgentSeedDensity(Math.max(0, v))} min={0} step={0.01} />
                       </label>
-                      {agentBrushMode === 'seed' && (<>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Density</span>
-                          <NumberField value={agentSeedDensity} onNumber={v => setAgentSeedDensity(Math.max(0, v))} min={0} step={0.01} />
-                        </label>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Spacing</span>
-                          <NumberField value={agentSeedSpacing} onNumber={v => setAgentSeedSpacing(Math.max(0.5, v))} min={0.5} step={1} />
-                        </label>
-                      </>)}
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Spacing</span>
+                        <NumberField value={agentSeedSpacing} onNumber={v => setAgentSeedSpacing(Math.max(0.5, v))} min={0.5} step={1} />
+                      </label>
                     </div>
                   )}
-                  {/* Seed config (Type + per-attribute initial values). */}
-                  {agentBrushMode === 'seed' && (
+                  {agentBrushMode === 'add' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                       <button
                         onClick={() => setAgentSeedConfigOpen(v => !v)}
                         style={{ alignSelf: 'flex-start', padding: '2px 6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
-                        title="Initial agent-attribute values for seeded agents"
-                      >{agentSeedConfigOpen ? '▾' : '▸'} Seed config</button>
+                        title="Initial agent-attribute values for added agents"
+                      >{agentSeedConfigOpen ? '▾' : '▸'} Add config</button>
                       {agentSeedConfigOpen && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                           <ManualBrushPanel
@@ -6888,6 +7312,37 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                             is3d={is3D}
                           />
                         </div>
+                      )}
+                    </div>
+                  )}
+                  {/* Bond: the auto-bond scan radius. */}
+                  {agentBrushMode === 'bond' && (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span style={{ width: 54, color: 'var(--color-text-muted)' }}>Radius</span>
+                      <NumberField value={agentBrushRadius} onNumber={v => setAgentBrushRadius(v)} min={0} step={1} />
+                    </label>
+                  )}
+                  {/* Edit: which properties to overwrite + Apply (single scope). */}
+                  {agentBrushMode === 'edit' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div style={{ fontSize: '0.62rem', color: 'var(--color-text-muted)' }}>
+                        {agentBrushScope === 'single'
+                          ? (editTargetId >= 0 ? `Editing agent #${editTargetId} — check the rows to overwrite, then Apply.` : 'Click an agent to load its values, then Apply.')
+                          : 'Click / drag the footprint to stamp the checked rows onto agents.'}
+                      </div>
+                      <ManualBrushPanel
+                        cellAttributes={agentEditPanelAttrs}
+                        neighborhoods={model.neighborhoods}
+                        state={agentEditAttrs}
+                        onChange={setAgentEditAttrs}
+                        is3d={is3D}
+                      />
+                      {agentBrushScope === 'single' && (
+                        <button
+                          disabled={editTargetId < 0}
+                          onClick={() => { if (editTargetIdRef.current >= 0) applyAgentEditToIds([editTargetIdRef.current]); }}
+                          style={{ alignSelf: 'flex-start', padding: '3px 10px', borderRadius: 'var(--radius-sm)', cursor: editTargetId < 0 ? 'default' : 'pointer', border: '1px solid var(--color-accent)', background: editTargetId < 0 ? 'transparent' : 'var(--color-accent-soft)', color: editTargetId < 0 ? 'var(--color-text-muted)' : 'var(--color-accent)', opacity: editTargetId < 0 ? 0.5 : 1, fontWeight: 600, fontSize: '0.64rem' }}
+                        >Apply to agent</button>
                       )}
                     </div>
                   )}
