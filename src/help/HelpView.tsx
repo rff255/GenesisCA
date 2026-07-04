@@ -1420,18 +1420,25 @@ export function HelpView() {
             holds a <strong>Layers</strong> grid &mdash; independently <strong>Show</strong> (render)
             and <strong>Simulate</strong> (step) the <em>CA grid</em> and the <em>agents</em>, so you
             can freeze one layer and watch the other, or hide a layer to declutter (freezing agents
-            also stops their cell-field deposits) &mdash; and the <strong>Agent Brush</strong> with
-            modes
-            <strong> Seed</strong> (paint a jittered disc of agents &mdash; set the
-            <em> Radius</em>, <em>Density</em> and drag <em>Spacing</em>; the <em>Seed config</em>
-            section sets the new agents' initial attribute values), <strong>Kill</strong>
-            (cull everything in the radius), <strong>Move</strong> (drag an agent; right-click
-            cancels), <strong>Glue</strong> / <strong>Cut</strong> (bond/unbond two clicked
-            agents), <strong>Bond&nbsp;paint</strong> (auto-glue agents a stroke passes near),
-            <strong> Inspect</strong> (<span className={styles.kbd}>Shift</span>+click an agent for
-            a popover of its position, velocity, bond degree and attribute values), and
-            <strong> Paint&nbsp;Field</strong> (the normal cell brush). <strong>Clear all
-            agents</strong> empties the population. The library ships eight agent samples: <strong>Morphogenesis &mdash; Growing Tissue</strong> (12 → ~1500 cells
+            also stops their cell-field deposits) &mdash; and the <strong>Agent Brush</strong>,
+            which mirrors the CA-grid brush: a <em>shape</em> (square / circle / ring / line, with a
+            size row and <span className={styles.kbd}>Ctrl</span>+drag resize) and a
+            <strong> Single / Area</strong> scope (Single acts on exactly one agent; Area on the whole
+            shape footprint), across modes
+            <strong> Add</strong> (place agents &mdash; Single: one at the cursor; Area: fill the
+            shape, with <em>Density</em>/<em>Spacing</em> and an <em>Add config</em> section for the
+            new agents' initial attribute values), <strong>Remove</strong> (delete the nearest agent
+            or all in the footprint), <strong>Move</strong> (drag one agent, or rigid-drag a whole
+            footprint of agents; right-click cancels), <strong>Edit</strong> (overwrite chosen
+            properties &mdash; agent attributes plus radius / velocity / position &mdash; on the
+            clicked agent via <em>Apply</em>, or on every agent under the footprint),
+            <strong> Glue</strong> / <strong>Cut</strong> (bond/unbond two clicked agents), and
+            <strong> Bond&nbsp;paint</strong> (auto-glue agents a stroke passes near).
+            <span className={styles.kbd}>Shift</span>+click an agent to <strong>inspect</strong> it
+            (a popover of its position, velocity, bond degree and attribute values); the
+            <strong> CA&nbsp;Grid</strong> brush target paints cells with the normal brush. All of the
+            above work in the 3D voxel view too. <strong>Clear all agents</strong> empties the
+            population. The library ships eight agent samples: <strong>Morphogenesis &mdash; Growing Tissue</strong> (12 → ~1500 cells
             dividing along the tension axis), <strong>Morphogenesis &mdash; Differential
             Tissue</strong> (asymmetric division + a maturity gradient + contact inhibition = cell
             <em> specialization</em>), <strong>Morphogenesis &mdash; 3D Tissue</strong> (the same
