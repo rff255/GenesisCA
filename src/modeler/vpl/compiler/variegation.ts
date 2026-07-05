@@ -121,12 +121,36 @@ export function buildFacePatternLookupFromModel(model: CAModel): Int32Array {
   });
 }
 
+/** Make a list of axis labels UNIQUE — a lookup table's `tableValues` is keyed by
+ *  label NAME, so two columns with the same name would share one storage cell
+ *  (editing one edits both) and leave "ghost" empty columns after a rename. Later
+ *  duplicates get a ` (2)`/` (3)` suffix (first occurrence keeps its name); an
+ *  empty label becomes `label`. Deterministic, so re-resolving is stable. Used at
+ *  resolve time (defensive, for hand-edited files) AND by the custom-label editor
+ *  on commit (so duplicates never enter the model). No-op for already-unique lists. */
+export function dedupeCustomLabels(labels: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of labels) {
+    let name = raw === '' ? 'label' : raw;
+    if (seen.has(name)) {
+      let n = 2;
+      while (seen.has(`${name} (${n})`)) n++;
+      name = `${name} (${n})`;
+    }
+    seen.add(name);
+    out.push(name);
+  }
+  return out;
+}
+
 /** Resolve a Lookup Table axis key source to its ordered label list — the
  *  single source of truth for axis dimension + tableValues key names, shared by
  *  compilers, editor, and worker:
  *    - `facePalette` → `['none', ...palette.labels]` (implicit none at index 0).
  *    - `tagAttribute` → the tag attribute's `tagOptions` (no implicit none).
  *    - `single` → `['value']` (a one-element axis → 1-D map keyed by the other axis).
+ *    - `custom` → the user labels, deduplicated (unique keys).
  *  Returns `[]` when the source is unset or its referent is missing. */
 export function resolveKeyLabels(
   source: LookupKeySource | undefined,
@@ -134,7 +158,7 @@ export function resolveKeyLabels(
 ): string[] {
   if (!source) return [];
   if (source.kind === 'single') return ['value'];
-  if (source.kind === 'custom') return [...source.labels];
+  if (source.kind === 'custom') return dedupeCustomLabels(source.labels);
   if (source.kind === 'facePalette') {
     const pal = model.variegatedCells?.facePalettes.find(p => p.id === source.paletteId);
     return pal ? ['none', ...pal.labels] : [];
