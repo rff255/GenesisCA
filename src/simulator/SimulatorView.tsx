@@ -19,6 +19,7 @@ import type { AgentWebGPULayout } from '../modeler/vpl/compiler/agentWebgpu/layo
 import { emitAgentForcePassWGSL } from '../modeler/vpl/compiler/agentWebgpu/forcePass';
 import type { AgentRenderSnapshot } from './engine/agentEngine';
 import { SpriteRegistry } from './spriteRegistry';
+import { ImageMappingDialog, type ImageMappingConfig } from './ImageMappingDialog';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { encodeFramesToWebM, isWebMSupported } from './recording/webmEncoder';
 import { getGlyphTile } from './recording/glyphAtlas';
@@ -921,6 +922,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const pendingImageImport = useRef<Uint8ClampedArray | null>(null);
   const pendingImageMapping = useRef<string>('');
   const imageInputRef = useRef<HTMLInputElement>(null);
+  // "Mapping Cells" dialog — the loaded source image being mapped (null = closed).
+  const [imageMapImg, setImageMapImg] = useState<HTMLImageElement | null>(null);
+  // Resize-mode + manual mapping: paint these masked cells after the worker
+  // reinitialises to the new grid dims (mirrors pendingImageImport).
+  const pendingManualImport = useRef<{ cells: Array<{ row: number; col: number }>; sets: Array<{ attrId: string; value: number }> } | null>(null);
 
   // Save/Load state refs
   const pendingStateSave = useRef<((state: Record<string, unknown>) => void) | null>(null);
@@ -2536,6 +2542,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         },
         { transfer: [pixels.buffer] },
       );
+    }
+    // Mapping Cells (resize + manual input mapping): paint the masked cells once
+    // the worker has reinitialised to the new grid dimensions.
+    if (msg.type === 'stepped' && pendingManualImport.current) {
+      const pm = pendingManualImport.current;
+      pendingManualImport.current = null;
+      if (pm.sets.length > 0 && pm.cells.length > 0) {
+        workerRef.current?.postMessage({ type: 'paintManual', cells: pm.cells, sets: pm.sets, activeViewer: activeViewerRef.current });
+      }
     }
 
     // One-shot colors snapshot — used by handleScreenshot under direct render
@@ -6551,27 +6566,99 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   };
 
   // F6: Import image as starting point
+  const openImageForMapping = (img: HTMLImageElement) => {
+    if (is3dRef.current) {
+      // 3D: keep the classic 1px=1cell resize import (the Mapping Cells dialog is
+      // a 2D feature; the worker's per-cell importImage is 2D-linear).
+      const tmpCanvas = document.createElement('canvas');
+      tmpCanvas.width = img.width; tmpCanvas.height = img.height;
+      const ctx = tmpCanvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0);
+      const pixels = new Uint8ClampedArray(ctx.getImageData(0, 0, img.width, img.height).data);
+      pendingImageImport.current = pixels;
+      pendingImageMapping.current = brushMappingRef.current;
+      initWorkerWithDimensions(img.width, img.height);
+      return;
+    }
+    setImageMapImg(img); // 2D: open the Mapping Cells dialog
+  };
   const handleImageImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
     const img = new Image();
-    img.onload = () => {
-      const tmpCanvas = document.createElement('canvas');
-      tmpCanvas.width = img.width;
-      tmpCanvas.height = img.height;
-      const ctx = tmpCanvas.getContext('2d')!;
-      ctx.drawImage(img, 0, 0);
-      const imageData = ctx.getImageData(0, 0, img.width, img.height);
-      const pixels = new Uint8ClampedArray(imageData.data);
-      // Store pixels for after worker reinit
-      pendingImageImport.current = pixels;
-      pendingImageMapping.current = brushMappingRef.current;
-      // Reinit worker with image dimensions (1 pixel = 1 cell)
-      initWorkerWithDimensions(img.width, img.height);
-    };
+    img.onload = () => openImageForMapping(img);
     img.src = URL.createObjectURL(file);
   };
+
+  // Apply the "Mapping Cells" dialog result. Four combinations of
+  // (resize | center) × (colour mapping | manual input mapping).
+  const applyImageMapping = (cfg: ImageMappingConfig) => {
+    setImageMapImg(null);
+    const { cols, rows, pixels, mask, mode, useManual, mappingId, manualState } = cfg;
+    if (cols < 1 || rows < 1) return;
+    const buildSets = () => {
+      const sets: Array<{ attrId: string; value: number }> = [];
+      for (const attr of cellAttrsRef.current) {
+        const entry = manualState[attr.id];
+        if (entry?.enabled) sets.push({ attrId: attr.id, value: encodeAttrValue(attr, entry.value) });
+      }
+      return sets;
+    };
+    const maskCells = (offRow: number, offCol: number) => {
+      const cells: Array<{ row: number; col: number }> = [];
+      for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+        if (mask[r * cols + c]) cells.push({ row: offRow + r, col: offCol + c });
+      }
+      return cells;
+    };
+    if (mode === 'resize') {
+      if (useManual) {
+        pendingManualImport.current = { cells: maskCells(0, 0), sets: buildSets() };
+      } else {
+        pendingImageImport.current = pixels;
+        pendingImageMapping.current = mappingId;
+      }
+      initWorkerWithDimensions(cols, rows);
+    } else {
+      // Paste centered — keep the grid, write the region in its centre.
+      const offRow = Math.floor((gridHeight.current - rows) / 2);
+      const offCol = Math.floor((gridWidth.current - cols) / 2);
+      if (useManual) {
+        const sets = buildSets();
+        if (sets.length > 0) workerRef.current?.postMessage({ type: 'paintManual', cells: maskCells(offRow, offCol), sets, activeViewer: activeViewerRef.current });
+      } else {
+        workerRef.current?.postMessage({ type: 'importImage', pixels, mappingId, region: { row: offRow, col: offCol, w: cols, h: rows }, activeViewer: activeViewerRef.current }, { transfer: [pixels.buffer] });
+      }
+    }
+  };
+
+  // Ctrl+V a clipboard image onto the simulator → open the Mapping Cells dialog
+  // (same as the Open Image button). Latest-ref so the listener stays cheap.
+  const openImageForMappingRef = useRef(openImageForMapping);
+  openImageForMappingRef.current = openImageForMapping;
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      if (!visibleRef.current) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i]!;
+        if (it.type.startsWith('image/')) {
+          const file = it.getAsFile();
+          if (file) {
+            e.preventDefault();
+            const img = new Image();
+            img.onload = () => openImageForMappingRef.current(img);
+            img.src = URL.createObjectURL(file);
+            return;
+          }
+        }
+      }
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, []);
 
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
@@ -7904,6 +7991,19 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             handleCreatePreset(name, description, includeGrid);
           }}
           onCancel={() => setPresetDialogOpen(false)}
+        />
+      )}
+      {imageMapImg && (
+        <ImageMappingDialog
+          img={imageMapImg}
+          cellAttributes={model.attributes.filter(a => !a.isModelAttribute)}
+          neighborhoods={model.neighborhoods}
+          colorToAttrMappings={colorToAttrMappings}
+          is3d={model.properties.dimension === '3d' && (model.properties.gridDepth ?? 1) > 1}
+          gridWidth={gridWidth.current || simWidth}
+          gridHeight={gridHeight.current || simHeight}
+          onApply={applyImageMapping}
+          onCancel={() => setImageMapImg(null)}
         />
       )}
       {presetOverwriteTarget && (
