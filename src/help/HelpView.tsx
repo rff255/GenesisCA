@@ -424,14 +424,18 @@ export function HelpView() {
           </ul>
           <p className={styles.p}>
             The <strong>Lookup Table</strong> model-attribute type stores a (possibly
-            rectangular) matrix of decimal values. Each axis has an independent <em>key
-            source</em> &mdash; a face-label palette, a tag attribute, or{' '}
+            rectangular) matrix. Each axis has an independent <em>key
+            source</em> &mdash; <strong>Custom labels</strong> (an arbitrary set of
+            row/column names you add, remove, and rename right on the definition page),
+            a face-label palette, a tag attribute, or{' '}
             <strong>Single value (map)</strong> &mdash; so a table can be keyed by faces
-            (e.g. analyte&nbsp;&times;&nbsp;CD faces) or by cell type (e.g.
-            empty/water/amphi). Choosing <em>Single value</em> for one axis collapses the
-            table into a 1-D <strong>map</strong>: a single column (or row) of decimal values keyed
+            (e.g. analyte&nbsp;&times;&nbsp;CD faces), by cell type (e.g.
+            empty/water/amphi), or by your own labels. Choosing <em>Single value</em> for one axis collapses the
+            table into a 1-D <strong>map</strong>: a single column (or row) keyed
             only by the other axis&apos;s tag &mdash; no need to invent a throwaway
-            single-option tag attribute. A pure tag&times;tag table needs no faces, so it
+            single-option tag attribute. The cell <strong>value type</strong> is selectable
+            (Binary / Integer / Decimal / Tag &mdash; Decimal by default), with a
+            type-appropriate per-cell editor. A pure tag&times;tag table needs no faces, so it
             works even with Variegated Cells off. Live-tuneable in the simulator like any
             other model attribute (matrix shown directly under the attribute name).
           </p>
@@ -1367,9 +1371,18 @@ export function HelpView() {
           </ul>
           <h3 className={styles.h3}>Agent Sprites</h3>
           <p className={styles.p}>
-            An agent can be drawn as a <strong>static image or an animated GIF</strong> instead of a
-            circle. Import sprites in the <strong>Mappings</strong> panel&rsquo;s <strong>Sprites</strong>
-            section (PNG / JPEG / GIF / WebP; they travel inside the <code>.gcaproj</code>). Then, in an
+            An agent can be drawn as a <strong>static image, an animated GIF, an image
+            sequence, or a sliced sprite sheet</strong> instead of a circle. Import sprites in
+            the <strong>Mappings</strong> panel&rsquo;s <strong>Sprites</strong> section
+            (PNG / JPEG / GIF / WebP; they travel inside the <code>.gcaproj</code>) &mdash; a
+            single image/GIF, <strong>+&nbsp;Frame sequence</strong> (several images become one
+            animation, in filename order), or <strong>+&nbsp;Sprite sheet</strong> (one grid
+            image sliced row-major into frames; set columns / rows / count and any
+            margin / spacing). Each sprite can also <strong>rotate</strong> &mdash; set the
+            art&rsquo;s default facing on the compass dial and tick <strong>Orient to
+            velocity</strong> so it auto-points along the agent&rsquo;s heading (plus a fixed
+            offset) &mdash; and <strong>remove a background colour</strong> (chroma-key a
+            magenta / green screen to transparency, with a tolerance). Then, in an
             Agent Output Mapping graph (or the Behaviour graph), use the <strong>Set Agent Sprite</strong>
             node. Playback is <strong>driven by your logic</strong>, not a transport &mdash; the node has
             independently-tickable options so you change only what you want:
@@ -1529,8 +1542,17 @@ export function HelpView() {
             through the available Input Mappings; <strong>Shift + right-click</strong>{' '}
             opens an in-page color picker at the cursor (with R/G/B inputs plus a
             &quot;Full picker&quot; row for the native OS color dialog). Use{' '}
-            <strong>Open Image</strong> in the brush panel to import a PNG/BMP/JPG as
-            the starting grid state.
+            <strong>Open Image</strong> in the brush panel (or <strong>Ctrl+V</strong> a
+            clipboard image) to import a picture as the starting grid state. On a 2D grid
+            this opens a <strong>Map Image to Cells</strong> dialog: the source image on the
+            left (drag to set a region box, corner to resize) with a cell-grid overlay, and
+            a gridified preview on the right. Choose the sampling <em>cell size</em>,
+            average-vs-centre sampling, invert, binarize + threshold, the
+            Colour&rarr;Attribute input mapping, and whether to <strong>resize the grid to
+            fit</strong> or <strong>paste centered</strong> onto the current grid. Tick
+            <strong> use manual input mapping</strong> to instead paint the binarized-true
+            cells with chosen attribute values (like clicking the manual brush on each).
+            (A 3D model keeps the classic 1&nbsp;pixel&nbsp;=&nbsp;1&nbsp;cell import.)
           </p>
           <p className={styles.p}>
             <strong>Brush shapes.</strong> Pick a stamp shape in the brush panel:
@@ -1645,6 +1667,8 @@ export function HelpView() {
               grid data. If a grid-carrying preset's dimensions don't match the current
               grid, you'll see a dimension-mismatch error &mdash; resize first.</li>
             <li><strong>Delete</strong> (&times;) &mdash; Removes the preset from the model.</li>
+            <li><strong>Reorder</strong> &mdash; Drag the <code>&#x22EE;&#x22EE;</code> handle
+              to reorder presets; the order is saved with the project.</li>
           </ul>
           <p className={styles.p}>
             Presets are stored inside the <code>.gcaproj</code> file. The Save Project
