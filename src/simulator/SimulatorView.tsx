@@ -5231,6 +5231,18 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const target = e.target as HTMLElement;
       if (target.closest('[data-sim-overlay]')) { canvasBrushActive = false; canvasAgentBrushActive.current = false; return; }
 
+      // Clicking the main canvas area returns keyboard focus to the document so the
+      // transport shortcuts (Enter=play/pause, Space=step, Esc=reset, …) work after
+      // the user interacts with a right-panel widget. GENERAL BY DESIGN — it blurs
+      // WHATEVER form control is focused (NumberField / checkbox / colour / select),
+      // so any Agent-Brush / Layers / Background widget we add later is covered with
+      // no extra wiring. (The cell-paint path used to rely on the browser's natural
+      // blur-on-mousedown, but the agent-brush path e.preventDefault()s — which
+      // suppresses that blur — so this explicit blur is required; mirrors the 3D
+      // gl-canvas onDown.) Do NOT preventDefault here (that would re-suppress it).
+      const focused = document.activeElement as HTMLElement | null;
+      if (focused && (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA' || focused.tagName === 'SELECT' || focused.isContentEditable)) focused.blur();
+
       // Middle-click toggles autoscroll mode. Any other button while autoscroll
       // is active just exits and consumes the click — matches browser autoscroll
       // semantics (Firefox / Chromium).
