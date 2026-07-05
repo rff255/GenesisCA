@@ -692,6 +692,15 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const [recording, setRecording] = useState(false);
   const recordingRef = useRef(false);
   const recordedFrames = useRef<ImageData[]>([]);
+  // Dedicated CPU-backed scratch canvas for capturing recording frames. Capturing
+  // via getImageData DIRECTLY on the visible display canvas de-optimizes it out of
+  // GPU acceleration (the willReadFrequently penalty) — so drawing stays slow even
+  // AFTER recording stops. Instead we drawImage the display canvas onto this
+  // scratch (a texture read that does NOT de-optimize the source) and getImageData
+  // the scratch (cheap on a willReadFrequently canvas). Also downscales to bound
+  // memory (the display canvas is window-sized; dozens of full-res frames thrash
+  // GC). Reused across frames; resized only when the target size changes.
+  const recordScratchRef = useRef<HTMLCanvasElement | null>(null);
   const [recordFrameCount, setRecordFrameCount] = useState(0);
   // The displayed counter is throttled (~5 Hz); the captured-frames count is
   // tracked exactly via the ref. setState every step caused a SimulatorView
@@ -2426,12 +2435,29 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           if (isAgentModelRef.current && canvasRef.current && !directRenderActiveRef.current) {
             // Generic Agent Platform: agents are drawn as an overlay on the
             // DISPLAY canvas (drawAgentsOverlay, after the grid blit), so the
-            // grid-resolution srcCanvas would miss them. Capture the display
-            // canvas (display resolution) so GIF/WebM recordings include agents.
+            // grid-resolution srcCanvas would miss them. Capture the display via a
+            // CPU-backed scratch canvas (NOT getImageData on the display canvas —
+            // that de-optimizes it out of GPU acceleration and keeps drawing slow
+            // even after recording stops). drawImage(display → scratch) is a
+            // texture read that leaves the display canvas fast; then getImageData
+            // the willReadFrequently scratch (cheap). Downscaled to a bounded
+            // long-axis so dozens of window-sized frames don't thrash memory.
             const dc = canvasRef.current;
-            let dctx: CanvasRenderingContext2D | null = null;
-            try { dctx = dc.getContext('2d'); } catch { /* transferred / WebGL */ }
-            if (dctx && dc.width > 0 && dc.height > 0) frame = dctx.getImageData(0, 0, dc.width, dc.height);
+            if (dc.width > 0 && dc.height > 0) {
+              const RECORD_MAX = 960;
+              const s = Math.min(1, RECORD_MAX / Math.max(dc.width, dc.height));
+              const cw = Math.max(1, Math.round(dc.width * s)), ch = Math.max(1, Math.round(dc.height * s));
+              let rc = recordScratchRef.current;
+              if (!rc) { rc = document.createElement('canvas'); recordScratchRef.current = rc; }
+              if (rc.width !== cw || rc.height !== ch) { rc.width = cw; rc.height = ch; }
+              const rctx = rc.getContext('2d', { willReadFrequently: true });
+              if (rctx) {
+                rctx.imageSmoothingEnabled = true;
+                rctx.clearRect(0, 0, cw, ch);
+                rctx.drawImage(dc, 0, 0, cw, ch);
+                frame = rctx.getImageData(0, 0, cw, ch);
+              }
+            }
           } else if (directRenderActiveRef.current && stepColors && w && h && stepColors.length >= w * h * 4) {
             // stepColors is the freshly-readback'd Uint8ClampedArray from
             // worker (only present in stepped when recording is active).
