@@ -955,6 +955,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const isAgentModel = !!model.topologyMode?.agents;
   const isAgentModelRef = useRef(isAgentModel);
   isAgentModelRef.current = isAgentModel;
+  // Whether the CA-grid layer exists at all (topology). A non-agent model always
+  // has the grid; an agent model may be agents-only (gridCells off) → no CA grid.
+  const gridCellsOn = model.topologyMode?.gridCells !== false;
+  const gridCellsOnRef = useRef(gridCellsOn);
+  gridCellsOnRef.current = gridCellsOn;
+  // Agents-only model (no CA grid) → the brush can only act on agents; force the
+  // target off any stale/persisted 'grid' so the (hidden) Brush-affects toggle
+  // can't leave it pointing at a non-existent layer.
+  useEffect(() => {
+    if (isAgentModel && !gridCellsOn && brushTarget === 'grid') setBrushTarget('agents');
+  }, [isAgentModel, gridCellsOn, brushTarget]);
   const agentsRef = useRef<AgentRenderSnapshot | null>(null);
   // --- Agent sprites (render side) ---
   // The decoded-frame registry (keyed by sprite id) + the ordered slot→{id,scale,
@@ -1818,7 +1829,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     // blit (+ glyphs + gridlines below), leaving the cleared canvas so the agents
     // draw on a blank background. Forced visible for a non-agent model (the toggle
     // is global but only editable on an agent model).
-    const showGrid2d = !isAgentModelRef.current || showCaGridRef.current;
+    // The CA-grid layer renders only when it EXISTS (topology) AND is shown. An
+    // agents-only model (gridCells off) never draws the grid, so the environment
+    // background applies without the user unchecking "Show".
+    const showGrid2d = gridCellsOnRef.current && (!isAgentModelRef.current || showCaGridRef.current);
     if (showGrid2d && blitSource) {
       if (infinity) {
         // Snap each tile's left/top edges to integer pixels and derive width/height
@@ -4322,7 +4336,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     let x = (clientX - rect.left - ox) / scale;
     let y = (clientY - rect.top - oy) / scale;
     const infinity = infinityCanvasRef.current && boundaryTreatmentRef.current === 'torus';
-    if (infinity) { x = ((x % w) + w) % w; y = ((y % h) + h) % h; }
+    if (infinity) { x = ((x % w) + w) % w; y = ((y % h) + h) % h; return { x, y, scale }; }
+    // Outside the environment with infinity OFF: no action (mirrors screenToGrid).
+    // Without this the agent brush wrapped-modulo-applied to a cell inside the world
+    // and drew a cursor while the pointer was in the letterbox margin.
+    if (x < 0 || x >= w || y < 0 || y >= h) return null;
     return { x, y, scale };
   }, []);
 
@@ -7233,16 +7251,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                   <span />
                   <span style={{ color: 'var(--color-text-muted)', textAlign: 'center', fontSize: '0.6rem' }}>Show</span>
                   <span style={{ color: 'var(--color-text-muted)', textAlign: 'center', fontSize: '0.6rem' }}>Simulate</span>
-                  <span>CA grid</span>
-                  <span style={{ textAlign: 'center' }}><input type="checkbox" checked={showCaGrid} onChange={e => setShowCaGrid(e.target.checked)} title="Render the CA grid" /></span>
-                  <span style={{ textAlign: 'center' }}><input type="checkbox" checked={simulateCells} onChange={e => setSimulateCells(e.target.checked)} title="Run the cell step (freeze the grid when off)" /></span>
+                  {/* CA grid row — only when the model actually has a grid (gridCells). */}
+                  {gridCellsOn && (<>
+                    <span>CA grid</span>
+                    <span style={{ textAlign: 'center' }}><input type="checkbox" checked={showCaGrid} onChange={e => setShowCaGrid(e.target.checked)} title="Render the CA grid" /></span>
+                    <span style={{ textAlign: 'center' }}><input type="checkbox" checked={simulateCells} onChange={e => setSimulateCells(e.target.checked)} title="Run the cell step (freeze the grid when off)" /></span>
+                  </>)}
                   <span>Agents</span>
                   <span style={{ textAlign: 'center' }}><input type="checkbox" checked={showAgents} onChange={e => setShowAgents(e.target.checked)} title="Render the agents + bonds" /></span>
                   <span style={{ textAlign: 'center' }}><input type="checkbox" checked={simulateAgents} onChange={e => setSimulateAgents(e.target.checked)} title="Run the agent step (freeze agents — and their cell deposits — when off)" /></span>
                 </div>
               </div>
-              {/* Brush affects — which layer the LMB brush targets. The brush details
-                  below appear only for the selected target. */}
+              {/* Brush affects — which layer the LMB brush targets. Only meaningful
+                  when BOTH layers exist; for an agents-only model the brush always
+                  acts on agents (an effect forces brushTarget='agents'), so hide it. */}
+              {gridCellsOn && (
               <div>
                 <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Brush affects</div>
                 <div style={{ display: 'flex', border: '1px solid var(--color-widget-border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
@@ -7255,6 +7278,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                   ))}
                 </div>
               </div>
+              )}
               {/* Environment background — the fill behind agents when the CA Grid
                   layer is hidden (an agents-only view). No effect while the grid is
                   shown (its colours are the background). 2D only — the 3D view has
