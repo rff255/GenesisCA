@@ -54,10 +54,10 @@ function buildArgs(s, hash, ctx) {
   ];
   for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
   for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
-  // NB spriteIds/spriteFrames/spriteSpeeds are ALWAYS threaded (the sprites
+  // NB spriteIds/Frames/Speeds/Rotations/Scales are ALWAYS threaded (the sprites
   // milestone ABI) — omitting them shifts every trailing arg (_fieldW → height,
   // the field arrays → undefined) and silently corrupts the JS side.
-  args.push(ctx.cachedModelAttrs, s.colors, ctx.activeViewer, ctx.cachedIndicators, ctx.rngState, ctx.stopFlag, ctx.GLYPH_NOOP_CODES, ctx.GLYPH_NOOP_COLORS, s.spriteIds, s.spriteFrames, s.spriteSpeeds);
+  args.push(ctx.cachedModelAttrs, s.colors, ctx.activeViewer, ctx.cachedIndicators, ctx.rngState, ctx.stopFlag, ctx.GLYPH_NOOP_CODES, ctx.GLYPH_NOOP_COLORS, s.spriteIds, s.spriteFrames, s.spriteSpeeds, s.spriteRotations, s.spriteScales);
   if (ctx.hasLookupTables) args.push(ctx.cachedInteractionTables);
   args.push(ctx.width, ctx.height, ctx.total, ctx.torus ? 1 : 0);
   for (const spec of ctx.fieldSpecs) args.push(ctx.readAttrs[spec.id]);

@@ -502,6 +502,13 @@ export interface AgentStore {
   spriteIds: Int32Array;
   spriteFrames: Float64Array;
   spriteSpeeds: Float64Array;
+  // spriteRotations: per-agent facing angle in COMPASS degrees (0 = up/north,
+  // clockwise), set by the Set Agent Sprite node's rotation facet. The render
+  // aligns the sprite art's default direction to this (or to the velocity heading
+  // when the sprite's orientToVelocity is on). spriteScales: per-agent size
+  // multiplier override (0 = use the sprite asset's default scale, >0 = override).
+  spriteRotations: Float64Array;
+  spriteScales: Float64Array;
 
   // --- user attributes (r_<id> / w_<id>, sized maxAgents; D-IDX) ---
   attrSpecs: AgentAttrSpec[];
@@ -713,6 +720,8 @@ export function createAgentStore(
     spriteIds: new Int32Array(maxAgents),
     spriteFrames: new Float64Array(maxAgents),
     spriteSpeeds: new Float64Array(maxAgents),
+    spriteRotations: new Float64Array(maxAgents),
+    spriteScales: new Float64Array(maxAgents),
     attrSpecs,
     attrRead, attrWrite, attrKind,
     highWater: 0,
@@ -817,6 +826,7 @@ export function initAgentSlot(
   // Reset persistent sprite state so a recycled slot doesn't inherit a stale
   // sprite / frame / speed (Set Agent Sprite re-sets it from the agent's logic).
   store.spriteIds[id] = 0; store.spriteFrames[id] = 0; store.spriteSpeeds[id] = 0;
+  store.spriteRotations[id] = 0; store.spriteScales[id] = 0;
 }
 
 /** Free an agent slot: mark dead, bump its epoch (so any stale bond pointing at
@@ -906,6 +916,11 @@ export interface AgentRenderSnapshot {
    *  pattern). The speed stays worker-side (only the resolved frame renders). */
   spriteIds: Int32Array;
   spriteFrames: Float64Array;
+  /** Per-agent sprite facing angle (compass degrees) + size override (0 = use the
+   *  sprite's default scale). Shipped alongside spriteIds when the model has
+   *  sprites; length-0 otherwise. */
+  spriteRotations: Float64Array;
+  spriteScales: Float64Array;
 }
 
 // ---------------------------------------------------------------------------
@@ -1343,6 +1358,8 @@ export function divideAgent(
   store.spriteIds[newId] = store.spriteIds[i]!;
   store.spriteFrames[newId] = store.spriteFrames[i]!;
   store.spriteSpeeds[newId] = store.spriteSpeeds[i]!;
+  store.spriteRotations[newId] = store.spriteRotations[i]!;
+  store.spriteScales[newId] = store.spriteScales[i]!;
 
   // 6. daughter A — reuse mother slot i; shrink + relocate, reset age, clear request
   store.x[i] = ax; store.y[i] = ay; store.xNext[i] = ax; store.yNext[i] = ay;
@@ -1528,6 +1545,8 @@ export function snapshotAgentsForRender(store: AgentStore, includeSprites = fals
     // length-0 so non-sprite agent models are byte-identical (no extra transfer).
     spriteIds: includeSprites ? store.spriteIds.slice(0, hw) : new Int32Array(0),
     spriteFrames: includeSprites ? store.spriteFrames.slice(0, hw) : new Float64Array(0),
+    spriteRotations: includeSprites ? store.spriteRotations.slice(0, hw) : new Float64Array(0),
+    spriteScales: includeSprites ? store.spriteScales.slice(0, hw) : new Float64Array(0),
   };
 }
 
@@ -1572,6 +1591,8 @@ export interface AgentStatePayload {
   z?: ArrayBuffer; vz?: ArrayBuffer;
   /** sprite display state (Set Agent Sprite). Optional; zeroed on load when absent. */
   spriteIds?: ArrayBuffer; spriteFrames?: ArrayBuffer; spriteSpeeds?: ArrayBuffer;
+  /** per-agent sprite facing angle + size override. Optional (legacy → 0). */
+  spriteRotations?: ArrayBuffer; spriteScales?: ArrayBuffer;
   age: ArrayBuffer; lineage: ArrayBuffer; alive: ArrayBuffer; epoch: ArrayBuffer;
   freeList: ArrayBuffer;
   bondCount: ArrayBuffer; bondPartner: ArrayBuffer; bondPartnerEpoch: ArrayBuffer;
@@ -1603,6 +1624,7 @@ export function serializeAgentStore(store: AgentStore, transfers: ArrayBuffer[])
     vx: sl(store.vx, hw), vy: sl(store.vy, hw),
     ...(is3d ? { z: sl(store.z, hw), vz: sl(store.vz, hw) } : {}),
     spriteIds: sl(store.spriteIds, hw), spriteFrames: sl(store.spriteFrames, hw), spriteSpeeds: sl(store.spriteSpeeds, hw),
+    spriteRotations: sl(store.spriteRotations, hw), spriteScales: sl(store.spriteScales, hw),
     age: sl(store.age, hw), lineage: sl(store.lineage, hw),
     alive: sl(store.alive, hw), epoch: sl(store.epoch, hw),
     freeList: freeListCopy.buffer,
@@ -1640,11 +1662,14 @@ export function deserializeAgentStore(store: AgentStore, p: AgentStatePayload): 
   // run's velocities/sprites at unrelated slot indices.
   store.vx.fill(0); store.vy.fill(0);
   store.spriteIds.fill(0); store.spriteFrames.fill(0); store.spriteSpeeds.fill(0);
+  store.spriteRotations.fill(0); store.spriteScales.fill(0);
   if (p.vx) copyInto(store.vx, p.vx, Float64Array as never);
   if (p.vy) copyInto(store.vy, p.vy, Float64Array as never);
   if (p.spriteIds) copyInto(store.spriteIds, p.spriteIds, Int32Array as never);
   if (p.spriteFrames) copyInto(store.spriteFrames, p.spriteFrames, Float64Array as never);
   if (p.spriteSpeeds) copyInto(store.spriteSpeeds, p.spriteSpeeds, Float64Array as never);
+  if (p.spriteRotations) copyInto(store.spriteRotations, p.spriteRotations, Float64Array as never);
+  if (p.spriteScales) copyInto(store.spriteScales, p.spriteScales, Float64Array as never);
   // z/vz: additive-load guard (the grid's `depth ?? 1` discipline). A legacy
   // pre-z 2D save omits them → leave the freshly-allocated store's z/vz at 0.
   store.z.fill(0); store.vz.fill(0);

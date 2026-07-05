@@ -1810,6 +1810,19 @@ function CaNodeComponent({ id, data }: NodeProps) {
               )}
               {cbx('setFrame', 'Set frame', !!nodeData.config.setFrame, 'Jump to / reset the current frame (the Frame input)')}
               {cbx('setSpeed', 'Set speed', !!nodeData.config.setSpeed, 'Set playback speed in frames per step — negative = reverse, 0 = hold (the Speed input)')}
+              {cbx('setRotation', 'Set rotation', !!nodeData.config.setRotation, 'Set the sprite facing — an angle, or a direction vector the art aligns to')}
+              {nodeData.config.setRotation && (
+                <select
+                  className={styles.select}
+                  value={(nodeData.config.rotationMode as string) || 'angle'}
+                  onChange={e => updateConfig('rotationMode', e.target.value)}
+                  title="Angle: the Rotation° input (0 = up, clockwise). Vector: the Dir X/Y inputs the art aligns to (atan2) — a static agent can look at a target."
+                >
+                  <option value="angle">by angle (°)</option>
+                  <option value="vector">by direction vector</option>
+                </select>
+              )}
+              {cbx('setScale', 'Set scale', !!nodeData.config.setScale, 'Set the sprite size multiplier per agent (the Scale input)')}
             </>
           );
         })()}

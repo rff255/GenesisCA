@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useDetailSelection, type PanelContentProps } from '../ModelerDetailContext';
 import { useModel } from '../../model/ModelContext';
 import { useListReorder } from './useListReorder';
@@ -60,6 +60,45 @@ function CompassDial({ value, onChange }: { value: number; onChange: (deg: numbe
       <circle cx={nx} cy={ny} r={3} fill="#4cc9f0" />
       <circle cx={cx} cy={cy} r={1.6} fill="#7a8a9a" />
     </svg>
+  );
+}
+
+/** Renders a sprite's (first) frame on a small canvas; clicking a pixel reports
+ *  its colour. Lets the user pick the chroma-key background by clicking the image
+ *  directly instead of the native colour picker (which covers the sprite). */
+function SpriteBgPicker({ dataUrl, onPick }: { dataUrl: string; onPick: (hex: string) => void }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const img = new Image();
+    img.onload = () => {
+      const cv = canvasRef.current; if (!cv) return;
+      const s = Math.min(120 / img.naturalWidth, 120 / img.naturalHeight, 4) || 1;
+      cv.width = Math.max(1, Math.round(img.naturalWidth * s));
+      cv.height = Math.max(1, Math.round(img.naturalHeight * s));
+      const ctx = cv.getContext('2d'); if (!ctx) return;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(img, 0, 0, cv.width, cv.height);
+      setReady(true);
+    };
+    img.src = dataUrl;
+  }, [dataUrl]);
+  const pick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const cv = canvasRef.current; if (!cv) return;
+    const rect = cv.getBoundingClientRect();
+    const px = Math.max(0, Math.min(cv.width - 1, Math.floor((e.clientX - rect.left) / rect.width * cv.width)));
+    const py = Math.max(0, Math.min(cv.height - 1, Math.floor((e.clientY - rect.top) / rect.height * cv.height)));
+    const ctx = cv.getContext('2d'); if (!ctx) return;
+    const d = ctx.getImageData(px, py, 1, 1).data;
+    onPick('#' + [d[0]!, d[1]!, d[2]!].map(x => x.toString(16).padStart(2, '0')).join(''));
+  };
+  return (
+    <canvas
+      ref={canvasRef}
+      onClick={pick}
+      title="Click a pixel to pick it as the background colour to remove"
+      style={{ border: '1px solid #2a3a50', cursor: 'crosshair', imageRendering: 'pixelated', maxWidth: 120, display: ready ? 'block' : 'none', background: 'repeating-conic-gradient(#1a1c22 0% 25%, #24262e 0% 50%) 50% / 12px 12px' }}
+    />
   );
 }
 
@@ -594,13 +633,20 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                   Remove background color
                 </label>
                 {s.removeBgColor !== undefined && (
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 3 }}>
-                    <input type="color" value={/^#[0-9a-f]{6}$/i.test(s.removeBgColor) ? s.removeBgColor : '#ff00ff'}
-                      style={{ width: 32, height: 20, padding: 0, border: '1px solid #2a3a50', borderRadius: 3, background: 'none', cursor: 'pointer' }}
-                      onChange={e => updateSprite(s.id, { removeBgColor: e.target.value })} title="Background colour to remove" />
-                    <span style={{ color: '#7a8a9a', fontSize: '0.62rem' }}>tolerance</span>
-                    <NumberField className={styles.textInput} style={{ width: 56 }} integer min={0} max={255} value={s.removeBgTolerance ?? 24}
-                      onNumber={n => updateSprite(s.id, { removeBgTolerance: Math.max(0, Math.min(255, Math.round(n))) })} title="Per-channel tolerance (0–255)" />
+                  <div style={{ marginTop: 3 }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <input type="color" value={/^#[0-9a-f]{6}$/i.test(s.removeBgColor) ? s.removeBgColor : '#ff00ff'}
+                        style={{ width: 32, height: 20, padding: 0, border: '1px solid #2a3a50', borderRadius: 3, background: 'none', cursor: 'pointer' }}
+                        onChange={e => updateSprite(s.id, { removeBgColor: e.target.value })} title="Background colour to remove" />
+                      <span style={{ color: '#7a8a9a', fontSize: '0.62rem' }}>tolerance</span>
+                      <NumberField className={styles.textInput} style={{ width: 56 }} integer min={0} max={255} value={s.removeBgTolerance ?? 24}
+                        onNumber={n => updateSprite(s.id, { removeBgTolerance: Math.max(0, Math.min(255, Math.round(n))) })} title="Per-channel tolerance (0–255)" />
+                    </div>
+                    {/* Click the image directly to pick the background colour (the native
+                        colour picker otherwise covers the sprite). Uses the original
+                        image, so magenta/green shows even after keying. */}
+                    <div style={{ marginTop: 4, fontSize: '0.6rem', color: '#7a8a9a' }}>or click the image to pick it:</div>
+                    <SpriteBgPicker dataUrl={(s.frames && s.frames[0]) || s.dataUrl} onPick={hex => updateSprite(s.id, { removeBgColor: hex })} />
                   </div>
                 )}
               </div>
