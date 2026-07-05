@@ -1,9 +1,9 @@
-import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useModel } from '../../model/ModelContext';
 import { useDetailSelection, type PanelContentProps } from '../ModelerDetailContext';
 import type { Attribute, AttributeType, CAModel, LookupKeySource } from '../../model/types';
 import { LookupTableEditor } from './LookupTableEditor';
-import { resolveKeyLabels } from '../vpl/compiler/variegation';
+import { resolveKeyLabels, dedupeCustomLabels } from '../vpl/compiler/variegation';
 import { useListReorder } from './useListReorder';
 import { NeighborIndexDefaultEditor } from './NeighborIndexDefaultEditor';
 import { VariablesPanelSection } from './VariablesPanelSection';
@@ -27,6 +27,28 @@ function buildAttrDragPayload(attr: Attribute): ModelElementDragPayload {
   return { kind: 'cell-attribute', attributeId: attr.id, attrType: attr.type as 'bool' | 'integer' | 'float' | 'tag' | 'color' | 'neighborIndex' };
 }
 
+/** A single custom axis-label input. Holds a local DRAFT so typing isn't
+ *  disrupted by the on-commit de-duplication (which would otherwise fight the
+ *  user keystroke-by-keystroke); commits on blur / Enter. When the committed
+ *  value gets de-duplicated (a suffix added) the parent re-renders with the new
+ *  label and the effect syncs the draft, so the input shows the final unique name. */
+function CustomLabelInput({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => { setDraft(value); }, [value]);
+  const commit = () => { if (draft !== value) onCommit(draft); };
+  return (
+    <input
+      className={styles.textInput}
+      style={{ flex: 1, minWidth: 0, fontSize: '0.66rem' }}
+      value={draft}
+      onChange={e => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => { if (e.key === 'Enter') { commit(); (e.currentTarget as HTMLInputElement).blur(); } }}
+      title="Row/column label (must be unique — duplicates get a suffix)"
+    />
+  );
+}
+
 /** Row/column key-source picker for a Lookup Table attribute. Lists the model's
  *  face-label palettes (only when Variegated Cells is enabled) plus every tag
  *  attribute. An axis keyed by a tag attribute needs no faces at all. */
@@ -45,7 +67,9 @@ function KeySourceField({ label, value, model, onChange }: {
       : 'single'
     : '';
   const customLabels = value?.kind === 'custom' ? value.labels : null;
-  const setLabels = (labels: string[]) => onChange({ kind: 'custom', labels });
+  // De-duplicate on every commit so the stored labels are ALWAYS unique — a
+  // lookup table's tableValues is keyed by label name, so duplicates collide.
+  const setLabels = (labels: string[]) => onChange({ kind: 'custom', labels: dedupeCustomLabels(labels) });
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2, fontSize: '0.66rem' }}>
       <span style={{ color: '#7a8a9a' }}>{label}</span>
@@ -79,12 +103,9 @@ function KeySourceField({ label, value, model, onChange }: {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 2 }}>
           {customLabels.map((lbl, i) => (
             <div key={i} style={{ display: 'flex', gap: 2 }}>
-              <input
-                className={styles.textInput}
-                style={{ flex: 1, minWidth: 0, fontSize: '0.66rem' }}
+              <CustomLabelInput
                 value={lbl}
-                onChange={e => setLabels(customLabels.map((x, j) => (j === i ? e.target.value : x)))}
-                title="Row/column label"
+                onCommit={v => setLabels(customLabels.map((x, j) => (j === i ? v : x)))}
               />
               <button
                 className={styles.deleteButton}
