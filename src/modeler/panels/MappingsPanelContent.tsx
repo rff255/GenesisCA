@@ -27,6 +27,42 @@ const SPRITE_MAX_BYTES = 4 * 1024 * 1024;
 const SPRITE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp';
 const genSpriteId = () => 's_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
 
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => (typeof r.result === 'string' ? resolve(r.result) : reject(new Error('read')));
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
+}
+
+/** Compact draggable compass dial for a sprite's default facing direction.
+ *  Value is in compass degrees: 0 = up (12 o'clock), increasing clockwise. */
+function CompassDial({ value, onChange }: { value: number; onChange: (deg: number) => void }) {
+  const size = 46, cx = size / 2, cy = size / 2, rr = size / 2 - 5;
+  const nx = cx + rr * Math.sin((value * Math.PI) / 180);
+  const ny = cy - rr * Math.cos((value * Math.PI) / 180);
+  const pick = (clientX: number, clientY: number, el: SVGSVGElement) => {
+    const rect = el.getBoundingClientRect();
+    const dx = clientX - (rect.left + cx), dy = clientY - (rect.top + cy);
+    if (dx === 0 && dy === 0) return;
+    const deg = Math.round(((Math.atan2(dx, -dy) * 180) / Math.PI + 360) % 360);
+    onChange(deg);
+  };
+  return (
+    <svg
+      width={size} height={size} style={{ cursor: 'grab', flex: '0 0 auto' }}
+      onPointerDown={e => { (e.currentTarget as SVGSVGElement).setPointerCapture(e.pointerId); pick(e.clientX, e.clientY, e.currentTarget); }}
+      onPointerMove={e => { if (e.buttons & 1) pick(e.clientX, e.clientY, e.currentTarget); }}
+    >
+      <circle cx={cx} cy={cy} r={rr} fill="#0a0b0e" stroke="#33465e" strokeWidth={1} />
+      <line x1={cx} y1={cy} x2={nx} y2={ny} stroke="#4cc9f0" strokeWidth={2} />
+      <circle cx={nx} cy={ny} r={3} fill="#4cc9f0" />
+      <circle cx={cx} cy={cy} r={1.6} fill="#7a8a9a" />
+    </svg>
+  );
+}
+
 function ColorSwatch({ value, onChange }: { value: RGB; onChange: (c: RGB) => void }) {
   return (
     <input
@@ -207,6 +243,37 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
       addSprite({ id: genSpriteId(), name: baseName, dataUrl, mimeType: file.type || 'image/png', scale: 1, loop: true });
     };
     reader.readAsDataURL(file);
+  };
+
+  // Import an ORDERED SEQUENCE of images as one animated sprite (frames[]).
+  const sequenceInputRef = useRef<HTMLInputElement>(null);
+  const handleSequencePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    if (files.length === 0) return;
+    const total = files.reduce((s, f) => s + f.size, 0);
+    if (total > SPRITE_MAX_BYTES * 2) { window.alert(`Sequence is ${(total / 1048576).toFixed(1)} MB — too large. Use fewer / smaller frames.`); return; }
+    try {
+      // Files sort by name so frame_01, frame_02 … order correctly.
+      files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      const frames = await Promise.all(files.map(readFileAsDataUrl));
+      const baseName = (files[0]?.name.replace(/[-_ ]?\d+\.[^.]+$/, '').replace(/\.[^.]+$/, '')) || 'sequence';
+      addSprite({ id: genSpriteId(), name: baseName, dataUrl: frames[0]!, mimeType: files[0]?.type || 'image/png', scale: 1, loop: true, frames });
+    } catch { window.alert('Could not read one of the frame images.'); }
+  };
+
+  // Import a single SPRITE SHEET image (sliced into frames by cols/rows).
+  const sheetInputRef = useRef<HTMLInputElement>(null);
+  const handleSheetPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (file.size > SPRITE_MAX_BYTES) { window.alert(`Sheet "${file.name}" is ${(file.size / 1048576).toFixed(1)} MB — the limit is 4 MB.`); return; }
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      const baseName = file.name.replace(/\.[^.]+$/, '') || 'sheet';
+      addSprite({ id: genSpriteId(), name: baseName, dataUrl, mimeType: file.type || 'image/png', scale: 1, loop: true, sheet: { cols: 4, rows: 4 } });
+    } catch { window.alert('Could not read the sheet image.'); }
   };
 
   const attrToColor = model.mappings.filter(m => m.isAttributeToColor);
@@ -470,18 +537,87 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                   onChange={e => updateSprite(s.id, { loop: e.target.checked })} />
                 Loop frames
               </label>
+              {/* Sprite sheet slicing params (only for a sheet-sourced sprite). */}
+              {s.sheet && (
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Sheet grid (cols × rows, frames)</label>
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <NumberField className={styles.textInput} style={{ width: 52 }} integer min={1} value={s.sheet.cols}
+                      onNumber={n => updateSprite(s.id, { sheet: { ...s.sheet!, cols: Math.max(1, Math.round(n)) } })} title="Columns" />
+                    <span style={{ color: '#7a8a9a' }}>×</span>
+                    <NumberField className={styles.textInput} style={{ width: 52 }} integer min={1} value={s.sheet.rows}
+                      onNumber={n => updateSprite(s.id, { sheet: { ...s.sheet!, rows: Math.max(1, Math.round(n)) } })} title="Rows" />
+                    <NumberField className={styles.textInput} style={{ width: 60 }} integer min={1} value={s.sheet.count ?? s.sheet.cols * s.sheet.rows}
+                      onNumber={n => updateSprite(s.id, { sheet: { ...s.sheet!, count: Math.max(1, Math.round(n)) } })} title="Frame count (row-major)" />
+                  </div>
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center', marginTop: 3 }} title="Pixel margin to the first cell and spacing between cells">
+                    <span style={{ color: '#7a8a9a', fontSize: '0.62rem' }}>margin</span>
+                    <NumberField className={styles.textInput} style={{ width: 44 }} integer min={0} value={s.sheet.marginX ?? 0}
+                      onNumber={n => updateSprite(s.id, { sheet: { ...s.sheet!, marginX: Math.max(0, Math.round(n)) } })} title="Margin X" />
+                    <NumberField className={styles.textInput} style={{ width: 44 }} integer min={0} value={s.sheet.marginY ?? 0}
+                      onNumber={n => updateSprite(s.id, { sheet: { ...s.sheet!, marginY: Math.max(0, Math.round(n)) } })} title="Margin Y" />
+                    <span style={{ color: '#7a8a9a', fontSize: '0.62rem' }}>gap</span>
+                    <NumberField className={styles.textInput} style={{ width: 44 }} integer min={0} value={s.sheet.spacingX ?? 0}
+                      onNumber={n => updateSprite(s.id, { sheet: { ...s.sheet!, spacingX: Math.max(0, Math.round(n)) } })} title="Spacing X" />
+                    <NumberField className={styles.textInput} style={{ width: 44 }} integer min={0} value={s.sheet.spacingY ?? 0}
+                      onNumber={n => updateSprite(s.id, { sheet: { ...s.sheet!, spacingY: Math.max(0, Math.round(n)) } })} title="Spacing Y" />
+                  </div>
+                </div>
+              )}
+              {/* Rotation — default facing (clock), orient-to-velocity, fixed offset. */}
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>Rotation</label>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <CompassDial value={s.defaultDirection ?? 0} onChange={deg => updateSprite(s.id, { defaultDirection: deg })} />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1 }}>
+                    <span style={{ color: '#7a8a9a', fontSize: '0.62rem' }}>Art faces: {s.defaultDirection ?? 0}° (0 = up)</span>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, cursor: 'pointer' }}
+                      title="Auto-rotate each agent's sprite to point along its velocity (heading), aligning the art's default direction.">
+                      <input type="checkbox" checked={!!s.orientToVelocity}
+                        onChange={e => updateSprite(s.id, { orientToVelocity: e.target.checked })} />
+                      Orient to velocity
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12 }} title="Extra fixed rotation (degrees, clockwise)">
+                      <span style={{ color: '#7a8a9a' }}>Offset °</span>
+                      <NumberField className={styles.textInput} style={{ width: 60 }} value={s.rotationOffset ?? 0}
+                        onNumber={n => updateSprite(s.id, { rotationOffset: n })} onClear={() => updateSprite(s.id, { rotationOffset: 0 })} />
+                    </label>
+                  </div>
+                </div>
+              </div>
+              {/* Chroma key — remove a background colour (magenta / green screen). */}
+              <div className={styles.field}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}
+                  title="Make pixels matching a background colour transparent (for traditional sprites on a solid magenta/green background).">
+                  <input type="checkbox" checked={s.removeBgColor !== undefined}
+                    onChange={e => updateSprite(s.id, e.target.checked ? { removeBgColor: '#ff00ff', removeBgTolerance: s.removeBgTolerance ?? 24 } : { removeBgColor: undefined })} />
+                  Remove background color
+                </label>
+                {s.removeBgColor !== undefined && (
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 3 }}>
+                    <input type="color" value={/^#[0-9a-f]{6}$/i.test(s.removeBgColor) ? s.removeBgColor : '#ff00ff'}
+                      style={{ width: 32, height: 20, padding: 0, border: '1px solid #2a3a50', borderRadius: 3, background: 'none', cursor: 'pointer' }}
+                      onChange={e => updateSprite(s.id, { removeBgColor: e.target.value })} title="Background colour to remove" />
+                    <span style={{ color: '#7a8a9a', fontSize: '0.62rem' }}>tolerance</span>
+                    <NumberField className={styles.textInput} style={{ width: 56 }} integer min={0} max={255} value={s.removeBgTolerance ?? 24}
+                      onNumber={n => updateSprite(s.id, { removeBgTolerance: Math.max(0, Math.min(255, Math.round(n))) })} title="Per-channel tolerance (0–255)" />
+                  </div>
+                )}
+              </div>
             </div>
           ))}
-          <input
-            ref={spriteInputRef}
-            type="file"
-            accept={SPRITE_ACCEPT}
-            style={{ display: 'none' }}
-            onChange={handleSpritePick}
-          />
-          <div className={styles.buttonRow}>
-            <button className={styles.addButton} onClick={() => spriteInputRef.current?.click()}>
-              + Import image / GIF
+          <input ref={spriteInputRef} type="file" accept={SPRITE_ACCEPT} style={{ display: 'none' }} onChange={handleSpritePick} />
+          <input ref={sequenceInputRef} type="file" accept={SPRITE_ACCEPT} multiple style={{ display: 'none' }} onChange={handleSequencePick} />
+          <input ref={sheetInputRef} type="file" accept={SPRITE_ACCEPT} style={{ display: 'none' }} onChange={handleSheetPick} />
+          <div className={styles.buttonRow} style={{ flexWrap: 'wrap' }}>
+            <button className={styles.addButton} onClick={() => spriteInputRef.current?.click()} title="A single image or an animated GIF/WebP">
+              + Image / GIF
+            </button>
+            <button className={styles.addButton} onClick={() => sequenceInputRef.current?.click()} title="Several images → one animated sprite (frames in filename order)">
+              + Frame sequence
+            </button>
+            <button className={styles.addButton} onClick={() => sheetInputRef.current?.click()} title="One grid image sliced into frames (RPGMaker-style sprite sheet)">
+              + Sprite sheet
             </button>
           </div>
         </div>

@@ -1012,7 +1012,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // advances the frame per step) — there is NO simulator transport here. The
   // render just reads the per-agent frame from the snapshot.
   const spriteRegistryRef = useRef<SpriteRegistry | null>(null);
-  const spriteMetaRef = useRef<Array<{ id: string; scale: number; loop: boolean }>>([]);
+  const spriteMetaRef = useRef<Array<{ id: string; scale: number; loop: boolean; defaultDirection: number; orientToVelocity: boolean; rotationOffset: number }>>([]);
   // Agent brush: the LMB action on the canvas for an agent model (only active
   // when brushTarget === 'agents'). Add/Remove/Move/Edit honour the Single/Area
   // scope + the shape footprint; Glue/Cut stage a first agent then bond/unbond to
@@ -1636,7 +1636,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       if (!isAgentModelRef.current) return;
       const snap = agentsRef.current;
       if (!snap || snap.highWater === 0) return;
-      const { x: ax, y: ay, radius: ar, alive: aal, colors: acol, highWater: hw, bonds } = snap;
+      const { x: ax, y: ay, radius: ar, alive: aal, colors: acol, highWater: hw, bonds, vx: avx, vy: avy } = snap;
       // Bond layer — drawn UNDER the agent circles (one batched stroke path).
       if (bonds && bonds.length > 0) {
         const torusB = boundaryTreatmentRef.current === 'torus';
@@ -1695,8 +1695,27 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               const aspect = bmp.width / Math.max(1, bmp.height);
               let dw = target, dh = target;
               if (aspect >= 1) dh = target / aspect; else dw = target * aspect;
+              // Rotation: a fixed offset always, plus (orientToVelocity) auto-align
+              // the art's default direction to the agent's heading. Angles are
+              // compass degrees (0 = up, clockwise); ctx.rotate is clockwise in
+              // screen coords (y down).
+              let rotDeg = meta!.rotationOffset;
+              if (meta!.orientToVelocity) {
+                const vX = avx[i]!, vY = avy[i]!;
+                if (vX * vX + vY * vY > 1e-9) {
+                  rotDeg += (Math.atan2(vX, -vY) * 180 / Math.PI) - meta!.defaultDirection;
+                }
+              }
               ctx.globalAlpha = (acol[c + 3] ?? 255) / 255;
-              ctx.drawImage(bmp, cx - dw / 2, cy - dh / 2, dw, dh);
+              if (rotDeg !== 0) {
+                ctx.save();
+                ctx.translate(cx, cy);
+                ctx.rotate(rotDeg * Math.PI / 180);
+                ctx.drawImage(bmp, -dw / 2, -dh / 2, dw, dh);
+                ctx.restore();
+              } else {
+                ctx.drawImage(bmp, cx - dw / 2, cy - dh / 2, dw, dh);
+              }
               ctx.globalAlpha = 1;
               continue; // sprite replaces the circle
             }
@@ -2096,7 +2115,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // (ImageDecoder); onReady redraws so a freshly-imported sprite appears.
   useEffect(() => {
     const sprites = model.sprites ?? [];
-    spriteMetaRef.current = sprites.map(s => ({ id: s.id, scale: s.scale ?? 1, loop: s.loop !== false }));
+    spriteMetaRef.current = sprites.map(s => ({ id: s.id, scale: s.scale ?? 1, loop: s.loop !== false, defaultDirection: s.defaultDirection ?? 0, orientToVelocity: !!s.orientToVelocity, rotationOffset: s.rotationOffset ?? 0 }));
     if (sprites.length === 0) {
       spriteRegistryRef.current?.dispose();
       spriteRegistryRef.current = null;

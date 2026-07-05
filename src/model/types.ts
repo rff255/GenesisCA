@@ -226,6 +226,45 @@ export interface SpriteAsset {
   /** Render wrap mode: true (default) loops the frame index, false clamps it to
    *  the last frame so the animation holds at its end ("play once"). */
   loop?: boolean;
+  /** ROTATION — the direction the sprite art faces when unrotated, in degrees
+   *  where 0 = up (12 o'clock) and angles increase clockwise (a compass). Used to
+   *  align the art with the agent's heading when `orientToVelocity` is on. */
+  defaultDirection?: number;
+  /** ROTATION — auto-rotate each agent's sprite to point along its velocity
+   *  vector (heading), accounting for `defaultDirection`. Render-side (reads the
+   *  snapshot vx/vy), so it works on every agent compile target. */
+  orientToVelocity?: boolean;
+  /** ROTATION — a fixed extra rotation (degrees, clockwise) applied on top. */
+  rotationOffset?: number;
+  /** CHROMA KEY — when set, pixels within `removeBgTolerance` per channel of this
+   *  `#rrggbb` colour are made transparent at decode time (classic magenta /
+   *  green-screen background removal for traditional sprites). */
+  removeBgColor?: string;
+  /** Per-channel 0–255 tolerance for `removeBgColor` (default 24). */
+  removeBgTolerance?: number;
+  /** IMAGE SEQUENCE — an ordered list of frame data URLs. When present (length
+   *  ≥ 1) these ARE the animation frames (traditional multi-image animation);
+   *  `dataUrl` is the first frame (also the library thumbnail). */
+  frames?: string[];
+  /** SPRITE SHEET — slice the single grid image in `dataUrl` into frames
+   *  (row-major). Classic RPGMaker / pixel-art sheet import. */
+  sheet?: SpriteSheetSpec;
+}
+
+/** Grid layout of a sprite sheet — how to slice one image into animation frames
+ *  (row-major, left-to-right then top-to-bottom). */
+export interface SpriteSheetSpec {
+  /** Number of columns and rows of cells in the sheet. */
+  cols: number;
+  rows: number;
+  /** Number of frames to take (row-major). Absent → cols*rows (all cells). */
+  count?: number;
+  /** Pixel offset from the top-left of the image to the first cell. */
+  marginX?: number;
+  marginY?: number;
+  /** Pixel gap between adjacent cells. */
+  spacingX?: number;
+  spacingY?: number;
 }
 
 export type BoundaryTreatment = 'constant' | 'torus';
