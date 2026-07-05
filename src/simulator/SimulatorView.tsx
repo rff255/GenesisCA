@@ -1672,6 +1672,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // per-agent sprite slot, draw the sprite's current frame instead of a circle.
       // spriteIds is length-0 for non-sprite models (then everyone draws a circle).
       const sids = snap.spriteIds, sfr = snap.spriteFrames;
+      // Per-agent facing angle + size override (Set Agent Sprite). Length-0 on
+      // older snapshots / non-sprite models → treated as absent (default 0).
+      const srot = snap.spriteRotations, sscl = snap.spriteScales;
       const spriteMeta = spriteMetaRef.current;
       const reg = spriteRegistryRef.current;
       const spritesActive = !!reg && spriteMeta.length > 0 && sids.length === hw;
@@ -1697,21 +1700,24 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 : meta!.loop ? (((raw % fc) + fc) % fc)
                 : (raw < 0 ? 0 : raw >= fc ? fc - 1 : raw);
               const bmp = dec.frames[frame]!;
-              const target = rad * 2 * (meta!.scale || 1);
+              // Per-agent size override (Set Agent Sprite → Set scale) wins over
+              // the sprite asset's default scale; 0 = use the default.
+              const perAgentScale = sscl.length === hw && sscl[i]! > 0 ? sscl[i]! : (meta!.scale || 1);
+              const target = rad * 2 * perAgentScale;
               const aspect = bmp.width / Math.max(1, bmp.height);
               let dw = target, dh = target;
               if (aspect >= 1) dh = target / aspect; else dw = target * aspect;
-              // Rotation: a fixed offset always, plus (orientToVelocity) auto-align
-              // the art's default direction to the agent's heading. Angles are
-              // compass degrees (0 = up, clockwise); ctx.rotate is clockwise in
-              // screen coords (y down).
-              let rotDeg = meta!.rotationOffset;
+              // Facing angle (compass degrees, 0 = up, clockwise): the agent's
+              // velocity heading when orientToVelocity is on AND it's moving,
+              // otherwise the per-agent rotation the node set (default 0 = up).
+              // Aligned to the art's default direction + a fixed offset. ctx.rotate
+              // is clockwise in screen coords (y down).
+              let facingDeg = srot.length === hw ? srot[i]! : 0;
               if (meta!.orientToVelocity) {
                 const vX = avx[i]!, vY = avy[i]!;
-                if (vX * vX + vY * vY > 1e-9) {
-                  rotDeg += (Math.atan2(vX, -vY) * 180 / Math.PI) - meta!.defaultDirection;
-                }
+                if (vX * vX + vY * vY > 1e-9) facingDeg = Math.atan2(vX, -vY) * 180 / Math.PI;
               }
+              const rotDeg = (facingDeg - meta!.defaultDirection) + meta!.rotationOffset;
               ctx.globalAlpha = (acol[c + 3] ?? 255) / 255;
               if (rotDeg !== 0) {
                 ctx.save();

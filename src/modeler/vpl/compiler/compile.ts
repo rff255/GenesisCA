@@ -2164,7 +2164,7 @@ function buildDivisionParams(model: CAModel): string {
   // spriteFrames += spriteSpeeds each step; the render blits the floored frame.
   // Always threaded (the store always allocates them); ABI-mirrored in the
   // worker's buildAgentLoopArgs / buildDivisionArgs / buildAgentInitArgs.
-  parts.push('spriteIds', 'spriteFrames', 'spriteSpeeds');
+  parts.push('spriteIds', 'spriteFrames', 'spriteSpeeds', 'spriteRotations', 'spriteScales');
   // PR3 FIX 1 — Lookup Tables (pinned slot, mirrors buildAgentLoopParams).
   if (model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable')) parts.push('_lookupTables');
   // Closed feedback: the agent-accessible CELL field arrays + grid dims (same as
@@ -2217,7 +2217,7 @@ function buildAgentInitParams(model: CAModel): string {
   // spriteFrames += spriteSpeeds each step; the render blits the floored frame.
   // Always threaded (the store always allocates them); ABI-mirrored in the
   // worker's buildAgentLoopArgs / buildDivisionArgs / buildAgentInitArgs.
-  parts.push('spriteIds', 'spriteFrames', 'spriteSpeeds');
+  parts.push('spriteIds', 'spriteFrames', 'spriteSpeeds', 'spriteRotations', 'spriteScales');
   if (model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable')) parts.push('_lookupTables');
   parts.push('_fieldW', '_fieldH', '_fieldTotal', '_fieldBoundaryTorus');
   for (const a of fieldAttrs) parts.push(`_field_${a.id}`);
@@ -2268,7 +2268,7 @@ export function buildAgentLoopParams(model: CAModel): { params: string; agentAtt
   // spriteFrames += spriteSpeeds each step; the render blits the floored frame.
   // Always threaded (the store always allocates them); ABI-mirrored in the
   // worker's buildAgentLoopArgs / buildDivisionArgs / buildAgentInitArgs.
-  parts.push('spriteIds', 'spriteFrames', 'spriteSpeeds');
+  parts.push('spriteIds', 'spriteFrames', 'spriteSpeeds', 'spriteRotations', 'spriteScales');
   // PR3 FIX 1 — Lookup Tables in the agent loop (pinned slot: after glyphColors,
   // before the _field_ block), gated on the model having any lookupTable model
   // attr so a no-table model's signature is unchanged. ABI-mirrored in

@@ -1382,7 +1382,8 @@ export function HelpView() {
             art&rsquo;s default facing on the compass dial and tick <strong>Orient to
             velocity</strong> so it auto-points along the agent&rsquo;s heading (plus a fixed
             offset) &mdash; and <strong>remove a background colour</strong> (chroma-key a
-            magenta / green screen to transparency, with a tolerance). Then, in an
+            magenta / green screen to transparency, with a tolerance &mdash; pick the colour by
+            clicking the sprite image directly). Then, in an
             Agent Output Mapping graph (or the Behaviour graph), use the <strong>Set Agent Sprite</strong>
             node. Playback is <strong>driven by your logic</strong>, not a transport &mdash; the node has
             independently-tickable options so you change only what you want:
@@ -1396,7 +1397,23 @@ export function HelpView() {
               <strong> Negative reverses</strong>; <code>0</code> holds. The engine advances the frame by
               the speed each step, so the animation only progresses while the sim runs &mdash; e.g.
               &ldquo;while moving, set speed&nbsp;=&nbsp;1 (walk plays); while idle, set speed&nbsp;=&nbsp;0&rdquo;.</li>
+            <li><strong>Set rotation</strong> &mdash; the sprite&rsquo;s facing, either by an
+              <em>angle</em> (compass degrees, 0&nbsp;=&nbsp;up) or by a <em>direction vector</em>
+              (Dir&nbsp;X / Dir&nbsp;Y) the art aligns to. A vector lets even a <em>stationary</em>
+              agent &ldquo;look at&rdquo; a target (feed it the offset toward the target). This is
+              separate from the sprite&rsquo;s per-sprite <em>Orient to velocity</em> option.</li>
+            <li><strong>Set scale</strong> &mdash; a per-agent size multiplier (overrides the
+              sprite&rsquo;s default size &times;).</li>
           </ul>
+          <p className={styles.p}>
+            <strong>Which agent?</strong> Leave the node&rsquo;s <strong>Agent</strong> input
+            unwired to act on the current agent &mdash; the normal use in an Agent Output Mapping
+            or Behaviour graph (they run per-agent). Wire a <strong>Create Agent</strong> handle
+            to target a spawned agent inside the <strong>Agent Init Event</strong>. (An unwired
+            Set Agent Sprite placed directly in the Init Event does nothing &mdash; the Init Event
+            runs once, not per-agent; for seed-painted agents put the node in an Output Mapping
+            graph.)
+          </p>
           <h3 className={styles.h3}>The Config Panel</h3>
           <p className={styles.p}>
             The <strong>Bond-Graph Agents</strong> block (Properties, shown when Agents is on)

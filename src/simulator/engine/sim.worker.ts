@@ -892,7 +892,7 @@ function buildAgentInitArgs(
   ];
   for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
   for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
-  args.push(cachedModelAttrs, s.colors, activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS, s.spriteIds, s.spriteFrames, s.spriteSpeeds);
+  args.push(cachedModelAttrs, s.colors, activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS, s.spriteIds, s.spriteFrames, s.spriteSpeeds, s.spriteRotations, s.spriteScales);
   if (hasLookupTables) args.push(cachedInteractionTables);
   args.push(width, height, total, boundaryTreatment === 'torus' ? 1 : 0);
   for (const spec of fieldSpecs) args.push(readAttrs[spec.id]);
@@ -1014,7 +1014,7 @@ function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, ax
   // event is a sequential single-agent function, so immediate (aliased) writes
   // are the correct semantics; in async mode attrWrite === attrRead anyway.
   for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
-  args.push(cachedModelAttrs, s.colors, activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS, s.spriteIds, s.spriteFrames, s.spriteSpeeds);
+  args.push(cachedModelAttrs, s.colors, activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS, s.spriteIds, s.spriteFrames, s.spriteSpeeds, s.spriteRotations, s.spriteScales);
   // PR3 FIX 1 — Lookup Tables (pinned slot, mirrors buildDivisionParams).
   if (hasLookupTables) args.push(cachedInteractionTables);
   // Closed feedback: the agent-accessible CELL field arrays (readAttrs[id], the
@@ -1054,7 +1054,7 @@ function buildAgentLoopArgs(s: AgentStore, viewerOverride?: string): unknown[] {
   ];
   for (const spec of s.attrSpecs) args.push(s.attrRead[spec.id]);
   for (const spec of s.attrSpecs) args.push(s.attrWrite[spec.id]);
-  args.push(cachedModelAttrs, s.colors, viewerOverride ?? activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS, s.spriteIds, s.spriteFrames, s.spriteSpeeds);
+  args.push(cachedModelAttrs, s.colors, viewerOverride ?? activeViewer, cachedIndicators, rngState, stopFlag, GLYPH_NOOP_CODES, GLYPH_NOOP_COLORS, s.spriteIds, s.spriteFrames, s.spriteSpeeds, s.spriteRotations, s.spriteScales);
   // PR3 FIX 1 — Lookup Tables (pinned slot, mirrors buildAgentLoopParams).
   if (hasLookupTables) args.push(cachedInteractionTables);
   // Closed feedback (Phase D): the agent-accessible cell field arrays (readAttrs[id]
@@ -4101,10 +4101,10 @@ function sendColors(): void {
     // we skip it for symmetry with the gate.
     if (agentsPayload.z.length > 0) agentTransfers.push(agentsPayload.z.buffer, agentsPayload.vz.buffer);
     // Sprites: same gate — only ship the per-agent buffers when the model has sprites.
-    if (agentsPayload.spriteIds.length > 0) agentTransfers.push(agentsPayload.spriteIds.buffer, agentsPayload.spriteFrames.buffer);
+    if (agentsPayload.spriteIds.length > 0) agentTransfers.push(agentsPayload.spriteIds.buffer, agentsPayload.spriteFrames.buffer, agentsPayload.spriteRotations.buffer, agentsPayload.spriteScales.buffer);
   } else if (agentStore) {
     // Empty store — still tell the main thread so it clears any stale agents.
-    agentsPayload = { highWater: 0, liveCount: 0, x: new Float64Array(0), y: new Float64Array(0), z: new Float64Array(0), vx: new Float64Array(0), vy: new Float64Array(0), vz: new Float64Array(0), radius: new Float64Array(0), alive: new Uint8Array(0), colors: new Uint8ClampedArray(0), bonds: new Int32Array(0), spriteIds: new Int32Array(0), spriteFrames: new Float64Array(0) };
+    agentsPayload = { highWater: 0, liveCount: 0, x: new Float64Array(0), y: new Float64Array(0), z: new Float64Array(0), vx: new Float64Array(0), vy: new Float64Array(0), vz: new Float64Array(0), radius: new Float64Array(0), alive: new Uint8Array(0), colors: new Uint8ClampedArray(0), bonds: new Int32Array(0), spriteIds: new Int32Array(0), spriteFrames: new Float64Array(0), spriteRotations: new Float64Array(0), spriteScales: new Float64Array(0) };
   }
 
   // P7 — when WebGPU direct render is active, the OffscreenCanvas already
