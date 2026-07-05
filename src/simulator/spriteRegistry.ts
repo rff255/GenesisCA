@@ -173,8 +173,12 @@ export async function decodeSpriteAsset(spec: SpriteDecodeSpec): Promise<Decoded
     const tol = spec.removeBgTolerance ?? 24;
     const keyed: ImageBitmap[] = [];
     for (const f of frames) {
-      keyed.push(await applyChromaKey(f, spec.removeBgColor, tol));
-      f.close();
+      const k = await applyChromaKey(f, spec.removeBgColor, tol);
+      keyed.push(k);
+      // applyChromaKey returns the SAME bitmap when the colour didn't parse — do
+      // NOT close it then, or the frame in `keyed` becomes a detached bitmap and
+      // drawImage throws InvalidStateError (breaking the whole agent overlay).
+      if (k !== f) f.close();
     }
     frames = keyed;
   }

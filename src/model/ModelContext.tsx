@@ -15,6 +15,7 @@ import type {
   GraphNode,
   Indicator,
   IndicatorKind,
+  LookupKeySource,
   MacroDef,
   Mapping,
   ModelProperties,
@@ -364,10 +365,51 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
 
     case 'UPDATE_ATTRIBUTE': {
       const oldAttr = state.model.attributes.find(a => a.id === action.id);
+      // Lookup Table CUSTOM-axis rename: when this attribute's own row/col key
+      // source is a `custom`-labels axis whose labels changed (a rename), remap
+      // tableValues keys by the same index-paired name heuristic used for tag
+      // axes — otherwise renaming a custom label would orphan that row/column's
+      // values (they'd read back as 0 on every target). Added labels start empty;
+      // removed labels' values drop.
+      const remapCustomAxis = (oldSrc?: LookupKeySource, newSrc?: LookupKeySource): Map<string, string | null> | null => {
+        if (oldSrc?.kind !== 'custom' || newSrc?.kind !== 'custom') return null;
+        const oldL = oldSrc.labels, newL = newSrc.labels;
+        if (oldL.length === 0) return null;
+        const newSet = new Set(newL);
+        const map = new Map<string, string | null>();
+        for (let i = 0; i < oldL.length; i++) {
+          const on = oldL[i]!;
+          if (newSet.has(on)) map.set(on, on);
+          else if (newL[i] && !oldL.includes(newL[i]!)) map.set(on, newL[i]!); // rename at index i
+          else map.set(on, null); // deleted
+        }
+        return map;
+      };
+      const applyCustomAxisRemap = (attr: Attribute): Attribute => {
+        if (!oldAttr || oldAttr.type !== 'lookupTable' || !oldAttr.tableValues) return attr;
+        if (action.changes.rowKeySource === undefined && action.changes.colKeySource === undefined) return attr;
+        const rowMap = remapCustomAxis(oldAttr.rowKeySource, attr.rowKeySource);
+        const colMap = remapCustomAxis(oldAttr.colKeySource, attr.colKeySource);
+        if (!rowMap && !colMap) return attr;
+        const key = (m: Map<string, string | null> | null, k: string): string | null => (m ? (m.has(k) ? m.get(k)! : k) : k);
+        const nextTV: Record<string, Record<string, number>> = {};
+        for (const [rk, row] of Object.entries(oldAttr.tableValues)) {
+          const nrk = key(rowMap, rk);
+          if (nrk === null) continue;
+          const nextRow: Record<string, number> = {};
+          for (const [ck, val] of Object.entries(row)) {
+            const nck = key(colMap, ck);
+            if (nck === null) continue;
+            nextRow[nck] = val;
+          }
+          nextTV[nrk] = { ...(nextTV[nrk] || {}), ...nextRow };
+        }
+        return { ...attr, tableValues: nextTV };
+      };
       const updatedModel = {
         ...state.model,
         attributes: state.model.attributes.map(a =>
-          a.id === action.id ? { ...a, ...action.changes } : a,
+          a.id === action.id ? applyCustomAxisRemap({ ...a, ...action.changes }) : a,
         ),
       };
 
