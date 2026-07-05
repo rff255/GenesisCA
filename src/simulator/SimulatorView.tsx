@@ -6,7 +6,7 @@ import { CURRENT_VIEWER_SENTINEL } from '../modeler/vpl/nodes/SetCellLooksNode';
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
 import { unpackNI, unpackNI3, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
-import { resolveKeyLabels } from '../modeler/vpl/compiler/variegation';
+import { resolveKeyLabels, resolveValueTagOptions } from '../modeler/vpl/compiler/variegation';
 import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefaultEditor';
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
@@ -6975,6 +6975,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                             attribute={a}
                             rowLabels={rowLabels}
                             colLabels={colLabels}
+                            valueTagOptions={resolveValueTagOptions(a, model)}
                             compact
                             onChange={changes => handleInteractionTableEdit(a.id, changes.tableValues, changes.symmetric)}
                           />

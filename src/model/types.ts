@@ -113,8 +113,14 @@ export interface Attribute {
   valueType?: AttributeType;
   /** Lookup Table model attributes only, when `valueType === 'tag'`: the named
    *  values for the table's tag-typed cells (stored value = index into this
-   *  array, like `tagOptions`). */
+   *  array, like `tagOptions`). Used when `valueTagAttributeId` is unset (manual
+   *  value labels). */
   valueTagOptions?: string[];
+  /** Lookup Table model attributes only, when `valueType === 'tag'`: instead of
+   *  the manual `valueTagOptions`, draw the tag value space from an EXISTING tag
+   *  attribute's `tagOptions` (like a tag-attribute axis key source). Absent →
+   *  use `valueTagOptions`. */
+  valueTagAttributeId?: string;
 }
 
 /** 3D Grid CA: parametric named-shape spec for a 3D neighbourhood. Materialized

@@ -435,7 +435,9 @@ export function HelpView() {
             only by the other axis&apos;s tag &mdash; no need to invent a throwaway
             single-option tag attribute. The cell <strong>value type</strong> is selectable
             (Binary / Integer / Decimal / Tag &mdash; Decimal by default), with a
-            type-appropriate per-cell editor. A pure tag&times;tag table needs no faces, so it
+            type-appropriate per-cell editor (Binary cells are checkboxes). A Tag value
+            type takes its labels either from a manual list or from an existing tag
+            attribute (like an axis can). A pure tag&times;tag table needs no faces, so it
             works even with Variegated Cells off. Live-tuneable in the simulator like any
             other model attribute (matrix shown directly under the attribute name).
           </p>

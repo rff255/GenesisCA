@@ -3,7 +3,7 @@ import { useModel } from '../../model/ModelContext';
 import { useDetailSelection, type PanelContentProps } from '../ModelerDetailContext';
 import type { Attribute, AttributeType, CAModel, LookupKeySource } from '../../model/types';
 import { LookupTableEditor } from './LookupTableEditor';
-import { resolveKeyLabels, dedupeCustomLabels } from '../vpl/compiler/variegation';
+import { resolveKeyLabels, dedupeCustomLabels, resolveValueTagOptions } from '../vpl/compiler/variegation';
 import { useListReorder } from './useListReorder';
 import { NeighborIndexDefaultEditor } from './NeighborIndexDefaultEditor';
 import { VariablesPanelSection } from './VariablesPanelSection';
@@ -448,10 +448,32 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                     <option value="tag">{typeDisplayName('tag')}</option>
                   </select>
                   {selected.valueType === 'tag' && (
-                    <span style={{ color: '#7a8a9a' }}>values:</span>
+                    <select
+                      className={styles.selectInput}
+                      style={{ flex: '0 0 auto' }}
+                      value={selected.valueTagAttributeId ? `tag:${selected.valueTagAttributeId}` : 'custom'}
+                      onChange={e => {
+                        const v = e.target.value;
+                        if (v === 'custom') {
+                          const changes: Partial<Attribute> = { valueTagAttributeId: undefined };
+                          if ((selected.valueTagOptions ?? []).length === 0) changes.valueTagOptions = ['A', 'B'];
+                          updateAttribute(selected.id, changes);
+                        } else {
+                          updateAttribute(selected.id, { valueTagAttributeId: v.slice(4) });
+                        }
+                      }}
+                      title="Tag value labels: define them manually, or reuse an existing tag attribute's options"
+                    >
+                      <option value="custom">Custom values…</option>
+                      <optgroup label="From tag attribute">
+                        {model.attributes.filter(a => a.type === 'tag').map(a => (
+                          <option key={a.id} value={`tag:${a.id}`}>{a.name}</option>
+                        ))}
+                      </optgroup>
+                    </select>
                   )}
                 </div>
-                {selected.valueType === 'tag' && (() => {
+                {selected.valueType === 'tag' && !selected.valueTagAttributeId && (() => {
                   const opts = selected.valueTagOptions ?? [];
                   const setOpts = (o: string[]) => updateAttribute(selected.id, { valueTagOptions: o });
                   return (
@@ -478,6 +500,7 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   attribute={selected}
                   rowLabels={resolveKeyLabels(selected.rowKeySource, model)}
                   colLabels={resolveKeyLabels(selected.colKeySource, model)}
+                  valueTagOptions={resolveValueTagOptions(selected, model)}
                   onChange={changes => updateAttribute(selected.id, changes)}
                 />
               </div>

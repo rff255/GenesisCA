@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { Attribute } from '../../model/types';
-import { NumberField, InlineBoolSelect, InlineTagSelect } from '../vpl/widgets/InlineWidgets';
+import { NumberField, InlineTagSelect } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
 
 /** Compact matrix editor for a `lookupTable` model attribute. Used in BOTH the
@@ -24,6 +24,7 @@ export function LookupTableEditor({
   colLabels,
   onChange,
   compact = false,
+  valueTagOptions: resolvedValueTagOptions,
 }: {
   attribute: Attribute;
   rowLabels: string[];
@@ -31,6 +32,9 @@ export function LookupTableEditor({
   onChange: (changes: Partial<Attribute>) => void;
   /** Smaller cells / inputs for the Simulator right-panel. */
   compact?: boolean;
+  /** Resolved tag value labels (manual `valueTagOptions` OR the referenced tag
+   *  attribute's options) — the caller resolves via `resolveValueTagOptions`. */
+  valueTagOptions?: string[];
 }) {
   // Square iff the two label sets are identical (order included).
   const sameAxes = useMemo(
@@ -75,7 +79,7 @@ export function LookupTableEditor({
   // Value type of the table cells (Decimal by default). All supported types
   // (bool/integer/float/tag) store one number, so only the editor widget differs.
   const valueType = attribute.valueType ?? 'float';
-  const valueTagOptions = attribute.valueTagOptions ?? [];
+  const valueTagOptions = resolvedValueTagOptions ?? attribute.valueTagOptions ?? [];
 
   // Per-cell value editor, dispatched by the table's value type. The stored
   // value stays a number (bool → 0/1, tag → index) so the compiler/worker path
@@ -84,10 +88,13 @@ export function LookupTableEditor({
     const v = get(row, col);
     const cellStyle = { width: cellSize - 6, height: inputHeight, padding: '0 4px', fontSize: compact ? '0.62rem' : '0.66rem' } as const;
     if (valueType === 'bool') {
+      // A checkbox is more convenient than a true/false dropdown for on/off tables.
       return (
-        <InlineBoolSelect className={styles.selectInput} style={cellStyle}
-          value={v === 1 ? 'true' : 'false'}
-          onChange={b => set(row, col, b === 'true' ? '1' : '0')} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: inputHeight }}>
+          <input type="checkbox" checked={v === 1}
+            onChange={e => set(row, col, e.target.checked ? '1' : '0')}
+            title={v === 1 ? 'true' : 'false'} />
+        </div>
       );
     }
     if (valueType === 'tag') {
