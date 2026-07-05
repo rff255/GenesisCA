@@ -88,8 +88,8 @@ function handleRowDragEnd() {
 
 export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}) {
   const {
-    model, addAttribute, removeAttribute: removeAttributeRaw, updateAttribute: updateAttributeRaw, reorderAttributes,
-    addAgentAttribute, removeAgentAttribute, updateAgentAttribute, reorderAgentAttributes,
+    model, addAttribute, duplicateAttribute, removeAttribute: removeAttributeRaw, updateAttribute: updateAttributeRaw, reorderAttributes,
+    addAgentAttribute, duplicateAgentAttribute, removeAgentAttribute, updateAgentAttribute, reorderAgentAttributes,
   } = useModel();
   // Generic Agent Platform: on the Agents sub-tab the primary list shows the
   // AGENT attribute set (model.agentAttributes — a separate id-space), with its
@@ -182,6 +182,15 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
     }
   };
 
+  // Duplicate the selected attribute (routes to the agent set when the selected
+  // attr is an agent attribute). The list-grew auto-select effect selects the
+  // appended copy.
+  const handleDuplicate = () => {
+    if (!selAttrId) return;
+    if (selectedIsAgent) duplicateAgentAttribute(selAttrId);
+    else duplicateAttribute(selAttrId);
+  };
+
   return (
     <>
       {mode !== 'detail' && (<>
@@ -223,6 +232,9 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
             onClick={addPrimary}
           >
             {agentMode ? '+ Add Agent Attribute' : '+ Add Cell Attribute'}
+          </button>
+          <button className={styles.addButton} onClick={handleDuplicate} disabled={!selAttrId}>
+            Duplicate
           </button>
           <button className={styles.deleteButton} onClick={handleDelete}>
             Delete
@@ -280,6 +292,9 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
             onClick={() => addAttribute(true)}
           >
             + Add Model Attribute
+          </button>
+          <button className={styles.addButton} onClick={handleDuplicate} disabled={!selAttrId}>
+            Duplicate
           </button>
           <button className={styles.deleteButton} onClick={handleDelete}>
             Delete

@@ -905,3 +905,44 @@
   padding: var(--space-2) 0;
 }
 
+/* Reorderable list rows (Presets) — mirrors the modeler panels' reorder UX. */
+.dragHandle {
+  flex-shrink: 0;
+  margin-left: var(--space-1);
+  padding: 0 var(--space-1);
+  background: transparent;
+  border: none;
+  color: var(--color-border-muted);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  transition: color var(--duration-base);
+  width: 14px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dragHandle:hover {
+  color: var(--color-emphasis);
+}
+
+.dragHandle:active {
+  cursor: grabbing;
+}
+
+.dropIndicatorBefore {
+  box-shadow: 0 -2px 0 0 var(--color-accent) inset;
+}
+
+.dropIndicatorAfter {
+  box-shadow: 0 2px 0 0 var(--color-accent) inset;
+}
+
+.draggingRow {
+  opacity: 0.4;
+}
+

@@ -164,10 +164,12 @@ interface ModelState {
 type ModelAction =
   | { type: 'UPDATE_PROPERTIES'; changes: Partial<ModelProperties> }
   | { type: 'ADD_ATTRIBUTE'; isModelAttribute: boolean }
+  | { type: 'DUPLICATE_ATTRIBUTE'; sourceId: string }
   | { type: 'REMOVE_ATTRIBUTE'; id: string }
   | { type: 'UPDATE_ATTRIBUTE'; id: string; changes: Partial<Attribute> }
   // Generic Agent Platform: the AGENT attribute set (CAModel.agentAttributes).
   | { type: 'ADD_AGENT_ATTRIBUTE' }
+  | { type: 'DUPLICATE_AGENT_ATTRIBUTE'; sourceId: string }
   | { type: 'REMOVE_AGENT_ATTRIBUTE'; id: string }
   | { type: 'UPDATE_AGENT_ATTRIBUTE'; id: string; changes: Partial<Attribute> }
   | { type: 'ADD_NEIGHBORHOOD' }
@@ -175,9 +177,11 @@ type ModelAction =
   | { type: 'REMOVE_NEIGHBORHOOD'; id: string }
   | { type: 'UPDATE_NEIGHBORHOOD'; id: string; changes: Partial<Neighborhood> }
   | { type: 'ADD_MAPPING'; isAttributeToColor: boolean }
+  | { type: 'DUPLICATE_MAPPING'; sourceId: string }
   | { type: 'REMOVE_MAPPING'; id: string }
   | { type: 'UPDATE_MAPPING'; id: string; changes: Partial<Mapping> }
   | { type: 'ADD_AGENT_MAPPING' }
+  | { type: 'DUPLICATE_AGENT_MAPPING'; sourceId: string }
   | { type: 'REMOVE_AGENT_MAPPING'; id: string }
   | { type: 'UPDATE_AGENT_MAPPING'; id: string; changes: Partial<Mapping> }
   | { type: 'ADD_SPRITE'; sprite: SpriteAsset }
@@ -199,6 +203,7 @@ type ModelAction =
   | { type: 'ADD_PRESET'; preset: Preset }
   | { type: 'DELETE_PRESET'; id: string }
   | { type: 'UPDATE_PRESET'; id: string; patch: Partial<Omit<Preset, 'id'>> }
+  | { type: 'REORDER_PRESETS'; newOrder: string[] }
   | { type: 'REORDER_ATTRIBUTES'; newOrder: string[] }
   | { type: 'REORDER_AGENT_ATTRIBUTES'; newOrder: string[] }
   | { type: 'REORDER_NEIGHBORHOODS'; newOrder: string[] }
@@ -207,6 +212,7 @@ type ModelAction =
   | { type: 'REORDER_END_CONDITIONS'; newOrder: string[] }
   // Generic Agent Platform: variable actions carry a `target` (cell | agent).
   | { type: 'ADD_VARIABLE'; target?: 'cell' | 'agent' }
+  | { type: 'DUPLICATE_VARIABLE'; sourceId: string; target?: 'cell' | 'agent' }
   | { type: 'REMOVE_VARIABLE'; id: string; target?: 'cell' | 'agent' }
   | { type: 'UPDATE_VARIABLE'; id: string; changes: Partial<Variable>; target?: 'cell' | 'agent' }
   | { type: 'REORDER_VARIABLES'; newOrder: string[]; target?: 'cell' | 'agent' }
@@ -263,6 +269,22 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
           ...state.model,
           attributes: [...state.model.attributes, newAttr],
         },
+      };
+    }
+
+    case 'DUPLICATE_ATTRIBUTE': {
+      const source = state.model.attributes.find(a => a.id === action.sourceId);
+      if (!source) return state;
+      // Deep clone (JSON round-trip — the project convention, graphHistory.ts) so
+      // nested fields (tagOptions, parentValues, rowKeySource/colKeySource,
+      // tableValues, facePatternAssignments) don't share references. Fresh id +
+      // " (copy)" name; APPEND so the panel auto-select lands on the copy. A
+      // sub-attribute copy keeps its parentAttributeId (points at the same
+      // parent); a linked mapping/variable referencing this attr is unaffected.
+      const dup: Attribute = { ...(JSON.parse(JSON.stringify(source)) as Attribute), id: generateId(source.name + '_copy'), name: `${source.name} (copy)` };
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, attributes: [...state.model.attributes, dup] },
       };
     }
 
@@ -577,6 +599,17 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       };
     }
 
+    case 'DUPLICATE_AGENT_ATTRIBUTE': {
+      const list = state.model.agentAttributes || [];
+      const source = list.find(a => a.id === action.sourceId);
+      if (!source) return state;
+      const dup: Attribute = { ...(JSON.parse(JSON.stringify(source)) as Attribute), id: generateId(source.name + '_copy'), name: `${source.name} (copy)` };
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, agentAttributes: [...list, dup] },
+      };
+    }
+
     case 'REMOVE_AGENT_ATTRIBUTE': {
       const filtered = (state.model.agentAttributes || []).filter(a => a.id !== action.id);
       // Unlink any agent output mapping that pointed at the deleted attribute (the
@@ -772,6 +805,22 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       };
     }
 
+    case 'DUPLICATE_MAPPING': {
+      const source = state.model.mappings.find(m => m.id === action.sourceId);
+      if (!source) return state;
+      // Definition-level duplicate (fresh id + " (copy)" name). For a LINKED
+      // mapping the copy carries linked*/linkedColors → the linked-OM synthesis
+      // regenerates its colour pass immediately. For a STANDALONE mapping the
+      // hand-built graph nodes still reference the OLD id, so the copy renders a
+      // Standalone empty pass until the user wires it (documented; matches the
+      // "duplicate the definition" scope of the neighborhood duplicate).
+      const dup: Mapping = { ...(JSON.parse(JSON.stringify(source)) as Mapping), id: generateId(source.name + '_copy'), name: `${source.name} (copy)` };
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, mappings: [...state.model.mappings, dup] },
+      };
+    }
+
     case 'REMOVE_MAPPING': {
       const mAfterMap = {
         ...state.model,
@@ -813,6 +862,16 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       return {
         ...state, isDirty: true,
         model: { ...state.model, agentMappings: [...(state.model.agentMappings ?? []), newMap] },
+      };
+    }
+    case 'DUPLICATE_AGENT_MAPPING': {
+      const list = state.model.agentMappings ?? [];
+      const source = list.find(m => m.id === action.sourceId);
+      if (!source) return state;
+      const dup: Mapping = { ...(JSON.parse(JSON.stringify(source)) as Mapping), id: generateId(source.name + '_copy'), name: `${source.name} (copy)` };
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, agentMappings: [...list, dup] },
       };
     }
     case 'REMOVE_AGENT_MAPPING': {
@@ -1139,6 +1198,13 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
         },
       };
 
+    case 'REORDER_PRESETS':
+      return {
+        ...state,
+        isDirty: true,
+        model: { ...state.model, presets: reorderById(state.model.presets || [], action.newOrder) },
+      };
+
     case 'REORDER_ATTRIBUTES':
       return {
         ...state,
@@ -1207,6 +1273,18 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       return {
         ...state, isDirty: true,
         model: { ...state.model, [key]: [...current, newVar] },
+      };
+    }
+
+    case 'DUPLICATE_VARIABLE': {
+      const key = action.target === 'agent' ? 'agentVariables' : 'variables';
+      const current = state.model[key] || [];
+      const source = current.find(v => v.id === action.sourceId);
+      if (!source) return state;
+      const dup: Variable = { ...(JSON.parse(JSON.stringify(source)) as Variable), id: generateId('variable'), name: `${source.name}_copy` };
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, [key]: [...current, dup] },
       };
     }
 
@@ -1386,10 +1464,12 @@ export interface ModelContextValue {
   loadedFileName: string | null;
   updateProperties: (changes: Partial<ModelProperties>) => void;
   addAttribute: (isModelAttribute: boolean) => void;
+  duplicateAttribute: (sourceId: string) => void;
   removeAttribute: (id: string) => void;
   updateAttribute: (id: string, changes: Partial<Attribute>) => void;
   /** Generic Agent Platform: agent attribute set (CAModel.agentAttributes). */
   addAgentAttribute: () => void;
+  duplicateAgentAttribute: (sourceId: string) => void;
   removeAgentAttribute: (id: string) => void;
   updateAgentAttribute: (id: string, changes: Partial<Attribute>) => void;
   addNeighborhood: () => void;
@@ -1397,9 +1477,11 @@ export interface ModelContextValue {
   removeNeighborhood: (id: string) => void;
   updateNeighborhood: (id: string, changes: Partial<Neighborhood>) => void;
   addMapping: (isAttributeToColor: boolean) => void;
+  duplicateMapping: (sourceId: string) => void;
   removeMapping: (id: string) => void;
   updateMapping: (id: string, changes: Partial<Mapping>) => void;
   addAgentMapping: () => void;
+  duplicateAgentMapping: (sourceId: string) => void;
   removeAgentMapping: (id: string) => void;
   updateAgentMapping: (id: string, changes: Partial<Mapping>) => void;
   addSprite: (sprite: SpriteAsset) => void;
@@ -1427,6 +1509,7 @@ export interface ModelContextValue {
   addPreset: (preset: Preset) => void;
   deletePreset: (id: string) => void;
   updatePreset: (id: string, patch: Partial<Omit<Preset, 'id'>>) => void;
+  reorderPresets: (newOrder: string[]) => void;
   reorderAttributes: (newOrder: string[]) => void;
   reorderAgentAttributes: (newOrder: string[]) => void;
   reorderNeighborhoods: (newOrder: string[]) => void;
@@ -1443,6 +1526,7 @@ export interface ModelContextValue {
   updateFacePattern: (id: string, changes: Partial<FacePattern>) => void;
   /** Local Variables — per-cell scratch storage. */
   addVariable: (target?: 'cell' | 'agent') => void;
+  duplicateVariable: (sourceId: string, target?: 'cell' | 'agent') => void;
   removeVariable: (id: string, target?: 'cell' | 'agent') => void;
   updateVariable: (id: string, changes: Partial<Variable>, target?: 'cell' | 'agent') => void;
   reorderVariables: (newOrder: string[], target?: 'cell' | 'agent') => void;
@@ -1496,6 +1580,10 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'ADD_ATTRIBUTE', isModelAttribute }),
     [],
   );
+  const duplicateAttribute = useCallback(
+    (sourceId: string) => dispatch({ type: 'DUPLICATE_ATTRIBUTE', sourceId }),
+    [],
+  );
   const removeAttribute = useCallback(
     (id: string) => dispatch({ type: 'REMOVE_ATTRIBUTE', id }),
     [],
@@ -1506,6 +1594,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     [],
   );
   const addAgentAttribute = useCallback(() => dispatch({ type: 'ADD_AGENT_ATTRIBUTE' }), []);
+  const duplicateAgentAttribute = useCallback((sourceId: string) => dispatch({ type: 'DUPLICATE_AGENT_ATTRIBUTE', sourceId }), []);
   const removeAgentAttribute = useCallback((id: string) => dispatch({ type: 'REMOVE_AGENT_ATTRIBUTE', id }), []);
   const updateAgentAttribute = useCallback(
     (id: string, changes: Partial<Attribute>) =>
@@ -1534,6 +1623,10 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'ADD_MAPPING', isAttributeToColor }),
     [],
   );
+  const duplicateMapping = useCallback(
+    (sourceId: string) => dispatch({ type: 'DUPLICATE_MAPPING', sourceId }),
+    [],
+  );
   const removeMapping = useCallback(
     (id: string) => dispatch({ type: 'REMOVE_MAPPING', id }),
     [],
@@ -1544,6 +1637,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     [],
   );
   const addAgentMapping = useCallback(() => dispatch({ type: 'ADD_AGENT_MAPPING' }), []);
+  const duplicateAgentMapping = useCallback((sourceId: string) => dispatch({ type: 'DUPLICATE_AGENT_MAPPING', sourceId }), []);
   const removeAgentMapping = useCallback((id: string) => dispatch({ type: 'REMOVE_AGENT_MAPPING', id }), []);
   const updateAgentMapping = useCallback(
     (id: string, changes: Partial<Mapping>) => dispatch({ type: 'UPDATE_AGENT_MAPPING', id, changes }),
@@ -1644,6 +1738,10 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'UPDATE_PRESET', id, patch }),
     [],
   );
+  const reorderPresets = useCallback(
+    (newOrder: string[]) => dispatch({ type: 'REORDER_PRESETS', newOrder }),
+    [],
+  );
   const reorderAttributes = useCallback(
     (newOrder: string[]) => dispatch({ type: 'REORDER_ATTRIBUTES', newOrder }),
     [],
@@ -1691,6 +1789,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     [],
   );
   const addVariable = useCallback((target?: 'cell' | 'agent') => dispatch({ type: 'ADD_VARIABLE', target }), []);
+  const duplicateVariable = useCallback((sourceId: string, target?: 'cell' | 'agent') => dispatch({ type: 'DUPLICATE_VARIABLE', sourceId, target }), []);
   const removeVariable = useCallback(
     (id: string, target?: 'cell' | 'agent') => dispatch({ type: 'REMOVE_VARIABLE', id, target }), [],
   );
@@ -1713,9 +1812,11 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       loadedFileName: state.loadedFileName,
       updateProperties,
       addAttribute,
+      duplicateAttribute,
       removeAttribute,
       updateAttribute,
       addAgentAttribute,
+      duplicateAgentAttribute,
       removeAgentAttribute,
       updateAgentAttribute,
       addNeighborhood,
@@ -1723,9 +1824,11 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       removeNeighborhood,
       updateNeighborhood,
       addMapping,
+      duplicateMapping,
       removeMapping,
       updateMapping,
       addAgentMapping,
+      duplicateAgentMapping,
       removeAgentMapping,
       updateAgentMapping,
       addSprite,
@@ -1748,6 +1851,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       addPreset,
       deletePreset,
       updatePreset,
+      reorderPresets,
       reorderAttributes,
       reorderAgentAttributes,
       reorderNeighborhoods,
@@ -1760,6 +1864,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       removeFacePattern,
       updateFacePattern,
       addVariable,
+      duplicateVariable,
       removeVariable,
       updateVariable,
       reorderVariables,
@@ -1772,9 +1877,11 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       state.loadedFileName,
       updateProperties,
       addAttribute,
+      duplicateAttribute,
       removeAttribute,
       updateAttribute,
       addAgentAttribute,
+      duplicateAgentAttribute,
       removeAgentAttribute,
       updateAgentAttribute,
       addNeighborhood,
@@ -1782,9 +1889,11 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       removeNeighborhood,
       updateNeighborhood,
       addMapping,
+      duplicateMapping,
       removeMapping,
       updateMapping,
       addAgentMapping,
+      duplicateAgentMapping,
       removeAgentMapping,
       updateAgentMapping,
       addSprite,
@@ -1807,6 +1916,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       addPreset,
       deletePreset,
       updatePreset,
+      reorderPresets,
       reorderAttributes,
       reorderAgentAttributes,
       reorderNeighborhoods,
@@ -1819,6 +1929,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       removeFacePattern,
       updateFacePattern,
       addVariable,
+      duplicateVariable,
       removeVariable,
       updateVariable,
       reorderVariables,
