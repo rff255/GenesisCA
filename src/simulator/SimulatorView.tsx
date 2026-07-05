@@ -48,6 +48,19 @@ function loadSimSettings(): Record<string, unknown> {
   return {};
 }
 
+/** Force every pixel of a captured recording frame to full opacity (alpha=255),
+ *  in place. Both the 2D display canvas (agents-only, cleared to transparent
+ *  black) and the 3D WebGL buffer (transparent GL clear when no background is
+ *  set) leave alpha=0 where there is no content; the RGB there already equals
+ *  the straight-alpha composite over black (both use SRC_ALPHA blending / a
+ *  0,0,0,0 clear), so opacifying keeps the visible look while removing the
+ *  transparency that made GIF frame-disposal accumulate stale imagery (moving
+ *  agents / orbiting the 3D camera left permanent trails). A set environment
+ *  background is already baked opaque, so this is a no-op there. */
+function forceFrameOpaque(data: Uint8ClampedArray): void {
+  for (let i = 3; i < data.length; i += 4) data[i] = 255;
+}
+
 // --- Brush shapes ---
 // The brush stamp is no longer always a rectangle: circle (filled disc by
 // radius), ring (annulus: radius ± width/2), and line (two clicks on the
@@ -1433,7 +1446,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // DRAW (in render()), not the upload below, keeps the GPU buffers current.
       // Forced visible for a non-agent model (the toggles are global but only
       // editable on an agent model — else a stale `false` would blank the grid).
-      r.setViz({ ...viz3dRef.current, voxels: !isAgentModelRef.current || showCaGridRef.current, agents: !isAgentModelRef.current || showAgentsRef.current });
+      // Agents render ONLY for an agent model (topologyMode.agents). Using
+      // `!isAgentModelRef.current || …` (draw for non-agent models too) let stale
+      // agent instances from a PREVIOUSLY-loaded agent model keep rendering after
+      // loading a non-agent model (the gl3d agent buffer is only refreshed inside
+      // the `if (isAgentModelRef.current)` block below). Gate on the agent flag.
+      r.setViz({ ...viz3dRef.current, voxels: !isAgentModelRef.current || showCaGridRef.current, agents: isAgentModelRef.current && showAgentsRef.current });
       r.setBrushPlane(plane3dEnabledRef.current ? { axis: plane3dRef.current.axis, pos: plane3dRef.current.pos } : null);
       r.setHoverCells(plane3dEnabledRef.current ? hoverCells3dRef.current : EMPTY_HOVER_CELLS);
       r.setInspectCells(inspectHighlight3dRef.current);
@@ -1469,6 +1487,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         }
         r.setHoverAgents(hoverAgents3dRef.current);
         r.setInspectAgents(inspectAgents3dRef.current);
+      } else if (r.agentInstanceCount !== 0) {
+        // Non-agent model: drop any agent instances left over from a previously
+        // loaded agent model so they don't linger in the volume (the gl3d agent
+        // buffer is only refreshed by the branch above).
+        r.agentInstanceCount = 0;
+        lastUploadedAgentSnapRef.current = null;
       }
       r.render();
       fpsFrames.current++;
@@ -2350,6 +2374,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           const px = gl3dRef.current.readPixels();
           const expected = recordedFrames.current[0];
           if (!expected || (px.width === expected.width && px.height === expected.height)) {
+            forceFrameOpaque(px.data);
             recordedFrames.current.push(new ImageData(px.data, px.width, px.height));
             recordCountRef.current += 1;
           }
@@ -2391,6 +2416,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             }
           }
           if (frame && (!expected || (frame.width === expected.width && frame.height === expected.height))) {
+            // Opacify so transparent (agents-only / no-background) regions don't
+            // accumulate as GIF trails; harmless when the frame is already opaque.
+            forceFrameOpaque(frame.data);
             recordedFrames.current.push(frame);
             recordCountRef.current += 1;
           }
@@ -3143,6 +3171,13 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     if (needsFullInit) {
       workerRef.current?.terminate();
       workerRef.current = null;
+      // Drop the previous model's agent render snapshot so it doesn't linger in
+      // the view during the reinit gap (the new worker's first `stepped` will
+      // repopulate it for an agent model; a non-agent model leaves it null so no
+      // agents draw). Fixes stale agents from a previously-loaded model — seen
+      // in 3D (the gl3d agent buffer) but reset here for the 2D overlay too.
+      agentsRef.current = null;
+      lastUploadedAgentSnapRef.current = null;
       // When a freshly loaded model embeds a simulationState whose grid dims
       // differ from properties.gridWidth/Height (typical after an F5 Resize
       // before save — properties stay at the original size, the snapshot has
