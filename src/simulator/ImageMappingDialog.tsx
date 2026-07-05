@@ -392,7 +392,7 @@ export function ImageMappingDialog({
             <div style={{ fontSize: 11, color: '#8090a0', marginBottom: 4 }}>
               Binarize-true cells are painted with these attribute values (like clicking the manual brush on each):
             </div>
-            <ManualBrushPanel cellAttributes={cellAttributes} neighborhoods={neighborhoods} state={manualState} onChange={setManualState} is3d={is3d} />
+            <ManualBrushPanel cellAttributes={cellAttributes} neighborhoods={neighborhoods} state={manualState} onChange={setManualState} is3d={is3d} dense />
           </div>
         )}
 
