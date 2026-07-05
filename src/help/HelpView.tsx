@@ -1563,15 +1563,21 @@ export function HelpView() {
             &quot;Full picker&quot; row for the native OS color dialog). Use{' '}
             <strong>Open Image</strong> in the brush panel (or <strong>Ctrl+V</strong> a
             clipboard image) to import a picture as the starting grid state. On a 2D grid
-            this opens a <strong>Map Image to Cells</strong> dialog: the source image on the
-            left (drag to set a region box, corner to resize) with a cell-grid overlay, and
-            a gridified preview on the right. Choose the sampling <em>cell size</em>,
-            average-vs-centre sampling, invert, binarize + threshold, the
-            Colour&rarr;Attribute input mapping, and whether to <strong>resize the grid to
-            fit</strong> or <strong>paste centered</strong> onto the current grid. Tick
-            <strong> use manual input mapping</strong> to instead paint the binarized-true
-            cells with chosen attribute values (like clicking the manual brush on each).
-            (A 3D model keeps the classic 1&nbsp;pixel&nbsp;=&nbsp;1&nbsp;cell import.)
+            this opens a <strong>Map Image to Cells</strong> dialog: a pannable/zoomable
+            source viewport on the left (<em>wheel</em> to zoom, <em>middle/right-drag</em>
+            to pan, or the &minus;/+/Fit buttons) with two overlays &mdash; a <strong>blue
+            included-area box</strong> (drag to move, corner to resize, empty space to
+            redraw) and a small <strong>orange cell-reference square</strong> that sets both
+            the sampling <em>cell size</em> and how the grid <em>aligns</em> to the image
+            (drag it, corner to resize; &quot;Align to area&quot; snaps it to the area's
+            corner) &mdash; and a gridified preview on the right. Choose average-vs-centre
+            sampling, invert, binarize + threshold, the Colour&rarr;Attribute input mapping,
+            and whether to <strong>resize the grid to fit</strong> or <strong>paste
+            centered</strong> onto the current grid. Tick <strong>use manual input
+            mapping</strong> to instead paint the binarized-true cells with chosen attribute
+            values (like clicking the manual brush on each) &mdash; this path works even when
+            the model has no Colour&rarr;Attribute mapping. (A 3D model keeps the classic
+            1&nbsp;pixel&nbsp;=&nbsp;1&nbsp;cell import.)
           </p>
           <p className={styles.p}>
             <strong>Brush shapes.</strong> Pick a stamp shape in the brush panel:
