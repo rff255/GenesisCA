@@ -427,12 +427,13 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                     onChange={src => updateAttribute(selected.id, { colKeySource: src })} />
                 </div>
                 {/* Value type of the table cells (Decimal by default). bool/integer/
-                    float/tag are stored as one number → no compiler change. */}
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, fontSize: '0.66rem' }}>
-                  <span style={{ color: '#7a8a9a' }}>Value type</span>
+                    float/tag are stored as one number → no compiler change. Each
+                    dropdown gets its own stacked field (like the attribute Type
+                    dropdown) so it stays contained instead of spanning the panel. */}
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Value type</label>
                   <select
                     className={styles.selectInput}
-                    style={{ flex: '0 0 auto' }}
                     value={selected.valueType ?? 'float'}
                     onChange={e => {
                       const vt = e.target.value as Attribute['type'];
@@ -447,10 +448,12 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                     <option value="float">{typeDisplayName('float')}</option>
                     <option value="tag">{typeDisplayName('tag')}</option>
                   </select>
-                  {selected.valueType === 'tag' && (
+                </div>
+                {selected.valueType === 'tag' && (
+                  <div className={styles.field}>
+                    <label className={styles.fieldLabel}>Tag values from</label>
                     <select
                       className={styles.selectInput}
-                      style={{ flex: '0 0 auto' }}
                       value={selected.valueTagAttributeId ? `tag:${selected.valueTagAttributeId}` : 'custom'}
                       onChange={e => {
                         const v = e.target.value;
@@ -471,8 +474,8 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                         ))}
                       </optgroup>
                     </select>
-                  )}
-                </div>
+                  </div>
+                )}
                 {selected.valueType === 'tag' && !selected.valueTagAttributeId && (() => {
                   const opts = selected.valueTagOptions ?? [];
                   const setOpts = (o: string[]) => updateAttribute(selected.id, { valueTagOptions: o });
