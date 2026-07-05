@@ -657,6 +657,17 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // agents. Persisted; a ref drives the pointer/cursor hot paths.
   const [brushTarget, setBrushTarget] = useState<'grid' | 'agents'>((saved.current.brushTarget as 'grid' | 'agents') ?? 'agents');
   const brushTargetRef = useRef(brushTarget); brushTargetRef.current = brushTarget;
+  // 2D environment background — the fill behind the agents when the CA grid layer
+  // is hidden (an agents-only view within the W×H world). `enabled` off = the
+  // canvas stays transparent (page shows through). Persisted; a ref (hex or null)
+  // drives the draw() hot path.
+  const [bg2d, setBg2d] = useState<{ enabled: boolean; color: string }>(
+    (saved.current.bg2d && typeof saved.current.bg2d === 'object')
+      ? (saved.current.bg2d as { enabled: boolean; color: string })
+      : { enabled: false, color: '#0c0d10' },
+  );
+  const bg2dRef = useRef<string | null>(null);
+  useEffect(() => { bg2dRef.current = bg2d.enabled ? bg2d.color : null; }, [bg2d]);
   // PR3 — agent inspector: a single on-demand popover (one at a time).
   const [agentInspect, setAgentInspect] = useState<{ id: number; x: number; y: number } | null>(null);
   const [agentState, setAgentState] = useState<AgentStateResponse | null>(null);
@@ -693,7 +704,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           infinityCanvas, indicatorVizModes, recordFormat, brushSectionH,
           agentBrushRadius, agentSeedDensity, agentSeedSpacing,
           agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, agentBrushScope,
-          showCaGrid, showAgents, simulateCells, simulateAgents, brushTarget,
+          showCaGrid, showAgents, simulateCells, simulateAgents, brushTarget, bg2d,
           indicatorHiddenCategories: Object.fromEntries(
             Object.entries(indicatorHiddenCategories)
               .filter(([, s]) => s.size > 0)
@@ -705,7 +716,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, agentBrushScope, showCaGrid, showAgents, simulateCells, simulateAgents, brushTarget, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, brushSectionH, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, agentBrushScope, showCaGrid, showAgents, simulateCells, simulateAgents, brushTarget, bg2d, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -1655,8 +1666,9 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       const aScope = (mode === 'move' && aShape === 'line') ? 'single' : agentBrushScopeRef.current;
       // Hovered-agent highlight (Remove = warm/red, else accent). On-change
       // redraws keep this cheap; the pick is the live cursor's nearest agent.
+      const showAgentCursor = brushTargetRef.current === 'agents' && showBrushCursorRef.current;
       const hover = agentHoverIdRef.current;
-      if (brushTargetRef.current === 'agents' && hover >= 0 && hover < hw && aal[hover]) {
+      if (showAgentCursor && hover >= 0 && hover < hw && aal[hover]) {
         const cx = ox + ax[hover]! * scale, cy = oy + ay[hover]! * scale;
         const rad = Math.max(2, ar[hover]! * scale) + 2;
         ctx.beginPath(); ctx.arc(cx, cy, rad, 0, Math.PI * 2);
@@ -1675,7 +1687,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // touch (Remove/Move/Edit, Area scope), so the effect is visible before and
       // during the stroke. Add is excluded (it only spawns NEW agents, never
       // touching the ones already there). Colour-coded per mode.
-      if (brushTargetRef.current === 'agents' && ((aScope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit')) || mode === 'bond') && agentAreaHoverIdsRef.current.length) {
+      if (showAgentCursor && ((aScope === 'area' && (mode === 'remove' || mode === 'move' || mode === 'edit')) || mode === 'bond') && agentAreaHoverIdsRef.current.length) {
         const rgb = mode === 'remove' ? '240, 90, 90' : mode === 'edit' ? '171, 123, 255' : mode === 'bond' ? '38, 198, 218' : '76, 201, 240';
         ctx.save();
         ctx.strokeStyle = `rgba(${rgb}, 0.95)`;
@@ -1694,7 +1706,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // any palette (the Windows-cursor trick). Tiled in infinity. Add/Remove/
       // Edit/Move (area scope). Single scope shows only the hovered-agent ring above.
       const footprintMode = mode === 'add' || mode === 'remove' || mode === 'edit' || mode === 'move';
-      if (brushTargetRef.current === 'agents' && cursorW && aScope === 'area' && footprintMode) {
+      if (showAgentCursor && cursorW && aScope === 'area' && footprintMode) {
         const R = agentBrushRadiusRef.current, ringW = Math.max(1, agentBrushRingWidthRef.current);
         const hW = agentBrushWRef.current / 2, hH = agentBrushHRef.current / 2;
         const lineAnchor = agentLineAnchorRef.current;
@@ -1733,7 +1745,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // Bond scan-radius cursor — a plain circle of the scan radius (Bond auto-bonds
       // near agent pairs within it), drawn as the negative silhouette. The affected
       // agents in range are ringed above (teal). Tiled in infinity.
-      if (brushTargetRef.current === 'agents' && mode === 'bond' && cursorW && agentBrushRadiusRef.current > 0) {
+      if (showAgentCursor && mode === 'bond' && cursorW && agentBrushRadiusRef.current > 0) {
         const rr = agentBrushRadiusRef.current * scale;
         ctx.save();
         ctx.globalCompositeOperation = 'difference';
@@ -1865,6 +1877,26 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         }
       }
       ctx.stroke();
+    }
+
+    // Environment background — when the CA grid layer is hidden (agents-only view),
+    // the canvas is cleared/transparent; fill the W×H world rect with the user's
+    // chosen colour so agents sit on a solid backdrop instead of the page showing
+    // through. Tiled in infinity (matches the grid blit). No-op when the grid shows
+    // (its colours ARE the background) or when disabled (bg2dRef null).
+    if (!showGrid2d && bg2dRef.current) {
+      ctx.save();
+      ctx.fillStyle = bg2dRef.current;
+      if (infinity) {
+        for (let ty = tyMin; ty <= tyMax; ty++) {
+          const yTop = Math.round(oy + ty * scaledH), yBot = Math.round(oy + (ty + 1) * scaledH);
+          for (let tx = txMin; tx <= txMax; tx++) {
+            const xLeft = Math.round(ox + tx * scaledW), xRight = Math.round(ox + (tx + 1) * scaledW);
+            ctx.fillRect(xLeft, yTop, xRight - xLeft, yBot - yTop);
+          }
+        }
+      } else { ctx.fillRect(ox, oy, scaledW, scaledH); }
+      ctx.restore();
     }
 
     // Bond-Graph Agents — draw the agent circles on top of the grid + gridlines,
@@ -4052,7 +4084,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     workerRef.current.postMessage({ type: 'colorPass', activeViewer, activeAgentViewer });
   }, [activeViewer, activeAgentViewer]);
   const showBrushCursorRef = useRef(true);
-  useEffect(() => { showBrushCursorRef.current = showBrushCursor; }, [showBrushCursor]);
+  useEffect(() => { showBrushCursorRef.current = showBrushCursor; draw(); }, [showBrushCursor, draw]);
+  // Redraw when the environment background changes (the ref is updated in its own
+  // effect above; this one repaints so the change shows immediately even when paused).
+  useEffect(() => { draw(); }, [bg2d, draw]);
   const showGridlinesRef = useRef(false);
   useEffect(() => { showGridlinesRef.current = showGridlines; }, [showGridlines]);
   // Middle-click autoscroll — origin/cursor are canvas-local pixel coords.
@@ -5436,11 +5471,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         const overCanvas = e.clientX >= rect.left && e.clientX < rect.right
           && e.clientY >= rect.top && e.clientY < rect.bottom;
         if (!overCanvas) {
-          if (cursorGrid.current !== null) {
-            cursorGrid.current = null;
-            setHoverCellInfo(prev => (prev === null ? prev : null));
-            draw();
-          }
+          let changed = cursorGrid.current !== null;
+          if (cursorGrid.current !== null) { cursorGrid.current = null; setHoverCellInfo(prev => (prev === null ? prev : null)); }
+          // Also drop the agent-brush cursor/highlight so the contour stops drawing
+          // once the pointer leaves the canvas (mirrors the cell brush).
+          if (agentCursorWorldRef.current !== null) { agentCursorWorldRef.current = null; changed = true; }
+          if (agentHoverIdRef.current !== -1) { agentHoverIdRef.current = -1; changed = true; }
+          if (agentAreaHoverIdsRef.current.length) { agentAreaHoverIdsRef.current = []; changed = true; }
+          if (changed) draw();
           return;
         }
       }
@@ -7217,6 +7255,22 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                   ))}
                 </div>
               </div>
+              {/* Environment background — the fill behind agents when the CA Grid
+                  layer is hidden (an agents-only view). No effect while the grid is
+                  shown (its colours are the background). 2D only — the 3D view has
+                  its own background control in the 3D View panel. */}
+              {!is3D && (
+              <div>
+                <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Background</div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.66rem' }} title="Fill the environment behind the agents with this colour when the CA Grid layer is hidden.">
+                  <input type="checkbox" checked={bg2d.enabled} onChange={e => setBg2d(b => ({ ...b, enabled: e.target.checked }))} />
+                  <input type="color" value={bg2d.color} disabled={!bg2d.enabled}
+                    onChange={e => setBg2d(b => ({ ...b, color: e.target.value }))}
+                    style={{ width: 34, height: 20, padding: 0, border: 'none', background: 'none', opacity: bg2d.enabled ? 1 : 0.4, cursor: bg2d.enabled ? 'pointer' : 'default' }} />
+                  <span style={{ color: 'var(--color-text-muted)' }}>Agents-only backdrop</span>
+                </label>
+              </div>
+              )}
               {/* No sprite transport here — sprite playback (which sprite, frame,
                   speed) is driven by the agent's logic via the Set Agent Sprite
                   node, advanced by the engine each simulation step. */}
@@ -7604,6 +7658,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                       )}
                     </div>
                   )}
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.64rem', color: 'var(--color-text-muted)' }}>
+                    <input type="checkbox" checked={showBrushCursor} onChange={e => setShowBrushCursor(e.target.checked)} />
+                    Show brush cursor
+                  </label>
                   <button
                     onClick={() => workerRef.current?.postMessage({ type: 'clearAgents', activeViewer: activeViewerRef.current })}
                     style={{ alignSelf: 'flex-start', padding: '3px 8px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
