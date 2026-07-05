@@ -7667,8 +7667,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             <button
               className={styles.controlButton}
               onClick={() => imageInputRef.current?.click()}
-              disabled={brushMapping === MANUAL_BRUSH_MAPPING_ID}
-              title={brushMapping === MANUAL_BRUSH_MAPPING_ID ? 'Image import uses the active color mapping \u2014 select a non-Manual tab to enable.' : undefined}
+              title="Map an image onto the grid (the dialog offers a colour mapping or the manual brush)"
             >
               Open Image
             </button>
@@ -8041,6 +8040,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
           is3d={model.properties.dimension === '3d' && (model.properties.gridDepth ?? 1) > 1}
           gridWidth={gridWidth.current || simWidth}
           gridHeight={gridHeight.current || simHeight}
+          initialUseManual={brushMapping === MANUAL_BRUSH_MAPPING_ID}
           onApply={applyImageMapping}
           onCancel={() => setImageMapImg(null)}
         />

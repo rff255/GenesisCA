@@ -2,20 +2,26 @@
  * Image → grid sampling for the "Mapping Cells" dialog.
  *
  * Pure functions that turn a source image (as ImageData) into a grid of output
- * cells, honouring: a bounding region, a square sampling-cell size, average-vs-
- * centre sampling, invert, and binarize-with-threshold. The result is an RGBA
- * buffer with one pixel per output cell — the same shape the worker's
- * `importImage` handler consumes (it applies the model's Colour→Attribute
- * mapping per cell), plus a boolean mask (binarize-true cells) for the manual
- * input-mapping path.
+ * cells, honouring: a bounding region, a square sampling-cell size, an optional
+ * grid alignment anchor (the "cell reference" square — phases the lattice so a
+ * cell boundary passes through a chosen source point), average-vs-centre
+ * sampling, invert, and binarize-with-threshold. The result is an RGBA buffer
+ * with one pixel per output cell — the same shape the worker's `importImage`
+ * handler consumes (it applies the model's Colour→Attribute mapping per cell),
+ * plus a boolean mask (binarize-true cells) for the manual input-mapping path.
  */
 
 export interface ImageSampleOptions {
   /** Bounding region in SOURCE pixels (the area to map). */
   region: { x: number; y: number; w: number; h: number };
-  /** Size (px) of one square sampling cell; min 1. Cells tile from the region
-   *  origin; a trailing partial cell is dropped. */
+  /** Size (px) of one square sampling cell; min 1. */
   cellSize: number;
+  /** Grid alignment anchor in SOURCE px (the "cell reference" square's top-left).
+   *  The output lattice is phased so a cell boundary falls on this point; cells
+   *  then tile across the region from the first boundary inside it. Absent →
+   *  the region origin (backward-compatible: the grid tiles from region.x/y). */
+  cellOriginX?: number;
+  cellOriginY?: number;
   /** Average all pixels inside a cell (else sample the cell centre). */
   average: boolean;
   /** Invert colours (255 − channel). Applied before binarize. */
@@ -44,17 +50,46 @@ function clampi(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
-/** Compute the output grid dimensions for a region + cell size. */
-export function gridDims(region: { w: number; h: number }, cellSize: number): { cols: number; rows: number } {
+/**
+ * Effective output grid for a region + cell size + optional alignment anchor:
+ * the source-pixel origin of cell (0,0) (phased to the anchor lattice) and the
+ * whole-cell dimensions that fit inside the region. Leading/trailing partial
+ * cells (before the first anchored boundary / past the last full cell) are
+ * dropped, matching the classic "trailing partial cell is dropped" behaviour.
+ */
+export function gridLayout(
+  region: { x: number; y: number; w: number; h: number },
+  cellSize: number,
+  cellOriginX?: number,
+  cellOriginY?: number,
+): { gx: number; gy: number; cols: number; rows: number } {
   const cs = Math.max(1, Math.floor(cellSize));
-  return { cols: Math.max(0, Math.floor(region.w / cs)), rows: Math.max(0, Math.floor(region.h / cs)) };
+  const ax = cellOriginX ?? region.x;
+  const ay = cellOriginY ?? region.y;
+  // First lattice boundary (ax + k*cs) at or right of the region's left/top edge.
+  const gx = ax + Math.ceil((region.x - ax) / cs) * cs;
+  const gy = ay + Math.ceil((region.y - ay) / cs) * cs;
+  const cols = Math.max(0, Math.floor((region.x + region.w - gx) / cs));
+  const rows = Math.max(0, Math.floor((region.y + region.h - gy) / cs));
+  return { gx, gy, cols, rows };
+}
+
+/** Compute the output grid dimensions for a region + cell size (+ anchor). */
+export function gridDims(
+  region: { x: number; y: number; w: number; h: number },
+  cellSize: number,
+  cellOriginX?: number,
+  cellOriginY?: number,
+): { cols: number; rows: number } {
+  const { cols, rows } = gridLayout(region, cellSize, cellOriginX, cellOriginY);
+  return { cols, rows };
 }
 
 /** Sample a source image into an output grid per the options. */
 export function gridifyImage(src: ImageData, opts: ImageSampleOptions): GridifyResult {
   const cs = Math.max(1, Math.floor(opts.cellSize));
-  const rx = Math.floor(opts.region.x), ry = Math.floor(opts.region.y);
-  const { cols, rows } = gridDims(opts.region, cs);
+  const { gx, gy, cols, rows } = gridLayout(opts.region, cs, opts.cellOriginX, opts.cellOriginY);
+  const rx = Math.floor(gx), ry = Math.floor(gy);
   const pixels = new Uint8ClampedArray(cols * rows * 4);
   const mask = new Uint8Array(cols * rows);
   const sw = src.width, sh = src.height, sd = src.data;
