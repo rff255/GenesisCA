@@ -1438,8 +1438,11 @@ export function HelpView() {
             (a popover of its position, velocity, bond degree and attribute values); the
             <strong> CA&nbsp;Grid</strong> brush target paints cells with the normal brush. In Area
             scope the agents the stroke will touch are <strong>highlighted</strong> (every mode
-            except Add). All of the above work in the 3D voxel view too. <strong>Clear all agents</strong> empties the
-            population. The library ships eight agent samples: <strong>Morphogenesis &mdash; Growing Tissue</strong> (12 → ~1500 cells
+            except Add), a <strong>Show brush cursor</strong> checkbox toggles the brush overlay, and
+            the cursor clears when the pointer leaves the canvas. All of the above work in the 3D
+            voxel view too. When you <strong>hide the CA&nbsp;Grid</strong> layer (an agents-only
+            view), a <strong>Background</strong> colour can fill the environment behind the agents.
+            <strong> Clear all agents</strong> empties the population. The library ships eight agent samples: <strong>Morphogenesis &mdash; Growing Tissue</strong> (12 → ~1500 cells
             dividing along the tension axis), <strong>Morphogenesis &mdash; Differential
             Tissue</strong> (asymmetric division + a maturity gradient + contact inhibition = cell
             <em> specialization</em>), <strong>Morphogenesis &mdash; 3D Tissue</strong> (the same
