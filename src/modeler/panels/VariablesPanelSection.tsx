@@ -37,7 +37,7 @@ export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
   onSelect: (id: string | null) => void;
 }) {
   const {
-    model, addVariable: addVariableRaw, removeVariable: removeVariableRaw,
+    model, addVariable: addVariableRaw, duplicateVariable: duplicateVariableRaw, removeVariable: removeVariableRaw,
     updateVariable: updateVariableRaw, reorderVariables,
   } = useModel();
   // Generic Agent Platform: the Agents sub-tab edits the AGENT variable set
@@ -48,6 +48,7 @@ export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
   const agentMode = activeGraphKind === 'agents' && !!model.topologyMode?.agents;
   const target: 'cell' | 'agent' = agentMode ? 'agent' : 'cell';
   const addVariable = () => addVariableRaw(target);
+  const duplicateVariable = (id: string) => duplicateVariableRaw(id, target);
   const removeVariable = (id: string) => removeVariableRaw(id, target);
   const updateVariable = (id: string, changes: Parameters<typeof updateVariableRaw>[1]) => updateVariableRaw(id, changes, target);
   const variables = (agentMode ? model.agentVariables : model.variables) || [];
@@ -131,6 +132,7 @@ export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
 
       <div className={styles.buttonRow}>
         <button className={styles.addButton} onClick={addVariable}>+ Variable</button>
+        <button className={styles.addButton} onClick={() => selectedId && duplicateVariable(selectedId)} disabled={!selectedId}>Duplicate</button>
       </div>
       </div>
       )}

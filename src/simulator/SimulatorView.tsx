@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from 'react';
 import { useModel } from '../model/ModelContext';
 import { compileGraph, compileAgentGraph } from '../modeler/vpl/compiler/compile';
 import { hasGlyphsInModel } from '../modeler/vpl/compiler/glyphsUsage';
@@ -27,7 +27,7 @@ import { BrushColorPopover } from './BrushColorPopover';
 import { ManualBrushPanel } from './ManualBrushPanel';
 import { ClipIntervalSlider } from './ClipIntervalSlider';
 import { NumberField } from '../modeler/vpl/widgets/InlineWidgets';
-import { designTimeSeriesKeys } from './indicatorChartSettings';
+import { designTimeSeriesKeys, mergeChartSettings, historyWindow, INDICATOR_HISTORY_DEFAULT_CAP, INDICATOR_HISTORY_HARD_CAP } from './indicatorChartSettings';
 import { InspectCellPopover, InspectHoverLink, type InspectPopoverState } from './InspectCellPopover';
 import { PresetSaveDialog } from './PresetSaveDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -35,6 +35,7 @@ import { serializeSimState, serializePreset, downloadStateFile, readStateFile, b
 import type { Attribute, CAModel, IndicatorChartSettings, Preset, SimulationState } from '../model/types';
 import { encodeAttrValue, decodeAttrValue } from '../model/attrValueEncoding';
 import { cbNum } from '../model/centerBased';
+import { useListReorder } from '../modeler/panels/useListReorder';
 import styles from './SimulatorView.module.css';
 
 const SIM_SETTINGS_KEY = 'genesisca_sim_settings';
@@ -457,7 +458,8 @@ const ChevronDownIcon = () => (
 
 export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { model, modelVersion, updateIndicator, setSimulationState, addPreset, deletePreset, updatePreset, updateProperties, updateAttribute } = useModel();
+  const { model, modelVersion, updateIndicator, setSimulationState, addPreset, deletePreset, updatePreset, reorderPresets, updateProperties, updateAttribute } = useModel();
+  const presetReorder = useListReorder(model.presets || [], reorderPresets);
   const workerRef = useRef<Worker | null>(null);
   const pendingStep = useRef(false);
 
@@ -860,6 +862,29 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       return out;
     });
   }, []);
+
+  // Clear an indicator's accumulated time-series chart history so the user can
+  // start monitoring afresh. History lives in a ref (no auto re-render), so bump
+  // a dummy state to repaint the display with the now-empty history.
+  const [, bumpIndicatorRender] = useReducer((x: number) => x + 1, 0);
+  const clearIndicatorHistory = useCallback((id: string) => {
+    delete indicatorHistoryRef.current[id];
+    bumpIndicatorRender();
+  }, []);
+
+  // Adaptive stored-history cap: grows to the largest configured chart window so
+  // a window larger than the default 500 truly shows that many generations
+  // (bounded by INDICATOR_HISTORY_HARD_CAP). Recomputed when the indicator set or
+  // the simulator overrides change.
+  const indicatorHistoryCapRef = useRef(INDICATOR_HISTORY_DEFAULT_CAP);
+  useEffect(() => {
+    let cap = INDICATOR_HISTORY_DEFAULT_CAP;
+    for (const ind of model.indicators || []) {
+      const w = historyWindow(mergeChartSettings(ind.chartSettings, indicatorChartOverrides[ind.id]));
+      if (w !== undefined && w > cap) cap = Math.min(w, INDICATOR_HISTORY_HARD_CAP);
+    }
+    indicatorHistoryCapRef.current = cap;
+  }, [model.indicators, indicatorChartOverrides]);
 
   // F3: Runtime model attribute values
   const [runtimeModelAttrs, setRuntimeModelAttrs] = useState<Record<string, number>>({});
@@ -2229,7 +2254,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               let arr = hist[id];
               if (!arr || !Array.isArray(arr)) { arr = []; hist[id] = arr; }
               (arr as number[]).push(v);
-              if ((arr as number[]).length > 500) (arr as number[]).shift();
+              if ((arr as number[]).length > indicatorHistoryCapRef.current) (arr as number[]).shift();
             } else if (v && typeof v === 'object') {
               // Spatial indicators send Record<seriesKey, number[]> (per-position
               // bin) — a live snapshot, NOT a time-history. Skip history
@@ -2243,7 +2268,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 let series = (perCat as Record<string, number[]>)[cat];
                 if (!series) { series = []; (perCat as Record<string, number[]>)[cat] = series; }
                 series.push(count);
-                if (series.length > 500) series.shift();
+                if (series.length > indicatorHistoryCapRef.current) series.shift();
               }
             }
           }
@@ -6636,19 +6661,27 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
               No presets yet. Tune the model attributes below and save a snapshot.
             </div>
           )}
-          {(model.presets || []).map(p => {
+          <div data-reorder-list>
+          {(model.presets || []).map((p, i) => {
             const hasGrid = p.state.width != null;
+            const presetsArr = model.presets || [];
+            const isDragging = presetReorder.dragState?.id === p.id;
+            const srcIdx = presetReorder.dragState ? presetsArr.findIndex(x => x.id === presetReorder.dragState!.id) : -1;
+            const showBefore = presetReorder.dragState?.overIdx === i && srcIdx !== i && srcIdx !== i - 1;
+            const showAfter = presetReorder.dragState?.overIdx === presetsArr.length && i === presetsArr.length - 1 && srcIdx !== i;
             return (
-              <div key={p.id} className={styles.fieldRow} title={p.description || (hasGrid ? `Includes grid (${p.state.width}\u00D7${p.state.height})` : 'Parameters only')}>
+              <div key={p.id} data-reorder-row className={`${styles.fieldRow} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`} title={p.description || (hasGrid ? `Includes grid (${p.state.width}\u00D7${p.state.height})` : 'Parameters only')}>
                 <span className={styles.statLabel} style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {p.name}{hasGrid ? ' \u25C9' : ''}
                 </span>
                 <button className={styles.controlButton} style={{ padding: '2px 8px', flex: 'none' }} onClick={() => handleLoadPreset(p)}>Load</button>
                 <button className={styles.controlButton} style={{ padding: '2px 6px', flex: 'none' }} title="Overwrite preset with current state" onClick={() => handleOverwritePreset(p)}>&#x1F4BE;</button>
                 <button className={styles.controlButton} style={{ padding: '2px 6px', flex: 'none' }} title="Delete preset" onClick={() => handleDeletePreset(p)}>&times;</button>
+                <button className={styles.dragHandle} title="Drag to reorder" onPointerDown={presetReorder.startDrag(p.id)} onClick={e => e.stopPropagation()}>&#x22EE;&#x22EE;</button>
               </div>
             );
           })}
+          </div>
           <button className={styles.controlButton} onClick={() => setPresetDialogOpen(true)}>
             + Save Current as Preset&hellip;
           </button>
@@ -7530,6 +7563,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 onCycleVizMode={cycleIndicatorVizMode}
                 onToggleCategory={toggleIndicatorCategory}
                 onChangeChartOverrides={changeIndicatorChartOverrides}
+                onClearHistory={clearIndicatorHistory}
                 categoryOrders={indicatorCategoryOrders}
               />
               </div>

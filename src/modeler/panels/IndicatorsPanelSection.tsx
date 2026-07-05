@@ -403,20 +403,23 @@ function ChartDefaultsEditor({ indicator, model, onChange }: {
 
   const emit = (next: IndicatorChartSettings) => {
     const empty = next.yMin === undefined && next.yMax === undefined
-      && next.yTicks === undefined
+      && next.yTicks === undefined && next.window === undefined
       && (!next.seriesColors || Object.keys(next.seriesColors).length === 0);
     onChange(empty ? undefined : next);
   };
-  const setNum = (field: 'yMin' | 'yMax' | 'yTicks') => (n: number) => {
+  const setNum = (field: 'yMin' | 'yMax' | 'yTicks' | 'window') => (n: number) => {
     const next: IndicatorChartSettings = { ...cs, seriesColors: cs.seriesColors ? { ...cs.seriesColors } : undefined };
     next[field] = n;
     emit(next);
   };
-  const clearNum = (field: 'yMin' | 'yMax' | 'yTicks') => () => {
+  const clearNum = (field: 'yMin' | 'yMax' | 'yTicks' | 'window') => () => {
     const next: IndicatorChartSettings = { ...cs, seriesColors: cs.seriesColors ? { ...cs.seriesColors } : undefined };
     delete next[field];
     emit(next);
   };
+  // Spatial (position-binned) charts have no time-history → no window default.
+  const isSpatialInd = indicator.kind === 'linked'
+    && (indicator.xAxis === 'rows' || indicator.xAxis === 'columns' || indicator.xAxis === 'layers');
   const setSeriesColor = (cat: string, color: string | null) => {
     const colors = { ...(cs.seriesColors ?? {}) };
     if (color === null) delete colors[cat];
@@ -424,14 +427,14 @@ function ChartDefaultsEditor({ indicator, model, onChange }: {
     emit({ ...cs, seriesColors: Object.keys(colors).length > 0 ? colors : undefined });
   };
 
-  const numField = (label: string, field: 'yMin' | 'yMax' | 'yTicks', title: string, placeholder: string) => (
+  const numField = (label: string, field: 'yMin' | 'yMax' | 'yTicks' | 'window', title: string, placeholder: string) => (
     <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.7rem' }} title={title}>
       <span style={{ flex: '0 0 44px', color: '#8090a0' }}>{label}</span>
       <NumberField
         className={styles.numberInput}
         style={{ flex: 1, minWidth: 0 }}
-        integer={field === 'yTicks'}
-        min={field === 'yTicks' ? 2 : undefined}
+        integer={field === 'yTicks' || field === 'window'}
+        min={field === 'yTicks' ? 2 : field === 'window' ? 2 : undefined}
         max={field === 'yTicks' ? 11 : undefined}
         value={cs[field]}
         placeholder={placeholder}
@@ -448,6 +451,7 @@ function ChartDefaultsEditor({ indicator, model, onChange }: {
         {numField('Y min', 'yMin', 'Fixed Y-axis minimum — blank = dynamic (follows the data)', 'auto')}
         {numField('Y max', 'yMax', 'Fixed Y-axis maximum — blank = dynamic (follows the data)', 'auto')}
         {numField('Y ticks', 'yTicks', 'Number of Y-axis tick labels including min and max (2–11)', '2')}
+        {!isSpatialInd && numField('Window', 'window', 'Time-axis window — number of most-recent generations to show. Blank = all history.', 'all')}
         {categories.map((cat, ci) => {
           const overridden = cs.seriesColors?.[cat] !== undefined;
           return (

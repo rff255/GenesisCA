@@ -5,7 +5,7 @@ import { IndicatorSparkline } from './IndicatorSparkline';
 import { IndicatorMultiLineChart } from './IndicatorMultiLineChart';
 import { IndicatorStackedAreaChart } from './IndicatorStackedAreaChart';
 import { IndicatorSpatialChart, compareSeriesKeys } from './IndicatorSpatialChart';
-import { SCALAR_SERIES_KEY, mergeChartSettings } from './indicatorChartSettings';
+import { SCALAR_SERIES_KEY, mergeChartSettings, historyWindow, sliceWindow } from './indicatorChartSettings';
 import { NumberField } from '../modeler/vpl/widgets/InlineWidgets';
 import styles from './IndicatorDisplay.module.css';
 
@@ -37,6 +37,9 @@ interface Props {
   onToggleCategory: (id: string, category: string) => void;
   /** Replace one indicator's override entry (null clears it entirely). */
   onChangeChartOverrides: (id: string, next: IndicatorChartSettings | null) => void;
+  /** Wipe the accumulated time-series history for one indicator's chart so the
+   *  user can start monitoring afresh (e.g. after a reset). */
+  onClearHistory: (id: string) => void;
   /** Per-indicator design-time series-key order (designTimeSeriesKeys) —
    *  keeps palette indices stable under Track Categories filtering. */
   categoryOrders: Record<string, string[]>;
@@ -108,16 +111,16 @@ function ChartSettingsPopover({ ind, override, categories, palette, categoryOrde
   const ov: IndicatorChartSettings = override ?? {};
   const emit = (next: IndicatorChartSettings) => {
     const empty = next.yMin === undefined && next.yMax === undefined
-      && next.yTicks === undefined
+      && next.yTicks === undefined && next.window === undefined
       && (!next.seriesColors || Object.keys(next.seriesColors).length === 0);
     onChange(empty ? null : next);
   };
-  const setNum = (field: 'yMin' | 'yMax' | 'yTicks') => (n: number) => {
+  const setNum = (field: 'yMin' | 'yMax' | 'yTicks' | 'window') => (n: number) => {
     const next = { ...ov, seriesColors: ov.seriesColors ? { ...ov.seriesColors } : undefined };
     next[field] = n;
     emit(next);
   };
-  const clearNum = (field: 'yMin' | 'yMax' | 'yTicks') => () => {
+  const clearNum = (field: 'yMin' | 'yMax' | 'yTicks' | 'window') => () => {
     const next = { ...ov, seriesColors: ov.seriesColors ? { ...ov.seriesColors } : undefined };
     delete next[field];
     emit(next);
@@ -166,6 +169,18 @@ function ChartSettingsPopover({ ind, override, categories, palette, categoryOrde
           title="Number of Y-axis tick labels including min and max (2–11)"
         />
       </div>
+      {!(ind.kind === 'linked' && (ind.xAxis === 'rows' || ind.xAxis === 'columns' || ind.xAxis === 'layers')) && (
+        <div className={styles.settingsRow}>
+          <span className={styles.settingsLabel}>Window</span>
+          <NumberField
+            className={styles.settingsInput} min={2} integer
+            value={ov.window}
+            placeholder={defaults?.window !== undefined ? String(defaults.window) : 'all'}
+            onNumber={setNum('window')} onClear={clearNum('window')}
+            title="X-axis window — number of most-recent generations to show. Blank = all history."
+          />
+        </div>
+      )}
       {categories.length > 0 && (
         <>
           <div className={styles.settingsSection}>Series colors</div>
@@ -220,7 +235,7 @@ function formatValue(val: number, ind: Indicator): string {
   return String(val);
 }
 
-export function IndicatorDisplay({ indicators, values, history, generation, gridWidth, gridHeight, gridDepth = 1, vizModes, hiddenCategories, chartOverrides, onToggleWatch, onChartToggle, onCycleVizMode, onToggleCategory, onChangeChartOverrides, categoryOrders }: Props) {
+export function IndicatorDisplay({ indicators, values, history, generation, gridWidth, gridHeight, gridDepth = 1, vizModes, hiddenCategories, chartOverrides, onToggleWatch, onChartToggle, onCycleVizMode, onToggleCategory, onChangeChartOverrides, onClearHistory, categoryOrders }: Props) {
   // Track *collapsed* IDs — everything is expanded by default
   const [collapsedCharts, setCollapsedCharts] = useState<Set<string>>(new Set());
   // Per-indicator custom content height (drag-to-resize)
@@ -290,6 +305,8 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
         // Effective chart settings: model defaults ⊕ simulator overrides.
         const chartFx = mergeChartSettings(ind.chartSettings, chartOverrides[ind.id]);
         const hasAnyChartSetting = ind.chartSettings !== undefined || chartOverrides[ind.id] !== undefined;
+        // Time-series X-axis window (most-recent N generations); undefined = all.
+        const win = historyWindow(chartFx);
 
         return (
           <div key={ind.id} className={styles.indicator}>
@@ -330,9 +347,18 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
                 <button
                   className={`${styles.chartBtn} ${gearOpenId === ind.id || hasAnyChartSetting ? styles.chartBtnActive : ''}`}
                   onClick={() => setGearOpenId(g => (g === ind.id ? null : ind.id))}
-                  title="Chart settings (axis range, ticks, series colors)"
+                  title="Chart settings (axis range, ticks, window, series colors)"
                 >
                   {'\u2699'}
+                </button>
+              )}
+              {isWatched && isExpanded && (isScalar || isFreq) && (
+                <button
+                  className={styles.chartBtn}
+                  onClick={() => onClearHistory(ind.id)}
+                  title="Clear chart history \u2014 start monitoring this indicator afresh"
+                >
+                  {'\u232b'}
                 </button>
               )}
               <span className={styles.name}>{ind.name}</span>
@@ -364,7 +390,7 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
               return (
                 <div className={styles.sparklineWrap} style={{ height: h }}>
                   <IndicatorSparkline
-                    data={scalarHist}
+                    data={sliceWindow(scalarHist, win)}
                     generation={generation}
                     height={h}
                     settings={chartFx}
@@ -388,7 +414,10 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
               const mode = vizModes[ind.id] ?? 'bars';
               const h = heights[ind.id] ?? 160;
               const hist = history[ind.id];
-              const catHist = (hist && !Array.isArray(hist)) ? (hist as Record<string, number[]>) : {};
+              const rawCatHist = (hist && !Array.isArray(hist)) ? (hist as Record<string, number[]>) : {};
+              const catHist = win === undefined
+                ? rawCatHist
+                : Object.fromEntries(Object.entries(rawCatHist).map(([k, arr]) => [k, sliceWindow(arr, win)]));
 
               if (mode === 'multiline') {
                 return (

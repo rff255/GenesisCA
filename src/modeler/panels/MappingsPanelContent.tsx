@@ -184,7 +184,7 @@ function handleMappingDragEnd() {
 }
 
 export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) {
-  const { model, addMapping, removeMapping, updateMapping, reorderMappings, addAgentMapping, removeAgentMapping, updateAgentMapping, addSprite, removeSprite, updateSprite } = useModel();
+  const { model, addMapping, duplicateMapping, removeMapping, updateMapping, reorderMappings, addAgentMapping, duplicateAgentMapping, removeAgentMapping, updateAgentMapping, addSprite, removeSprite, updateSprite } = useModel();
   const [selectedId, setSelectedId] = useDetailSelection('mappings');
   const agentsOn = !!model.topologyMode?.agents;
   const agentMappings = model.agentMappings ?? [];
@@ -286,6 +286,9 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
           >
             + Add A&rarr;C Mapping
           </button>
+          <button className={styles.addButton} onClick={() => selectedId && duplicateMapping(selectedId)} disabled={!selectedId}>
+            Duplicate
+          </button>
           <button className={styles.deleteButton} onClick={handleDelete}>
             Delete
           </button>
@@ -330,6 +333,9 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
           >
             + Add C&rarr;A Mapping
           </button>
+          <button className={styles.addButton} onClick={() => selectedId && duplicateMapping(selectedId)} disabled={!selectedId}>
+            Duplicate
+          </button>
           <button className={styles.deleteButton} onClick={handleDelete}>
             Delete
           </button>
@@ -360,6 +366,12 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                     value={m.name}
                     onChange={e => updateAgentMapping(m.id, { name: e.target.value })}
                   />
+                  <button
+                    className={styles.addButton}
+                    style={{ padding: '2px 8px', flex: 'none' }}
+                    onClick={() => duplicateAgentMapping(m.id)}
+                    title="Duplicate agent view"
+                  >Duplicate</button>
                   <button
                     className={styles.deleteButton}
                     style={{ padding: '2px 8px' }}

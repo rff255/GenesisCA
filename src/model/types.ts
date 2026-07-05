@@ -377,6 +377,11 @@ export interface IndicatorChartSettings {
   yMax?: number;
   /** Number of Y-axis tick labels incl. min+max (2–11). Absent → 2. */
   yTicks?: number;
+  /** Time-series X-axis window = the number of most-recent generations to show
+   *  on the chart (scalar sparkline + frequency multi-line / stacked-area).
+   *  Absent → show the full stored history (default). Does NOT apply to spatial
+   *  (position-binned) charts or the current-gen "Bars" freq view. */
+  window?: number;
   /** Per-series color overrides keyed by category (bool → "true"/"false",
    *  tag → option name, freq buckets → value/bin key). Scalar charts use the
    *  single key "value". Absent entries fall back to the theme palette. */

@@ -34,8 +34,31 @@ export function mergeChartSettings(
     yMin: override?.yMin ?? base?.yMin,
     yMax: override?.yMax ?? base?.yMax,
     yTicks: override?.yTicks ?? base?.yTicks,
+    window: override?.window ?? base?.window,
     ...(Object.keys(seriesColors).length > 0 ? { seriesColors } : {}),
   };
+}
+
+/** Effective time-series X-axis window (number of most-recent generations to
+ *  show), clamped to a sane range. Absent/invalid → undefined (show all). */
+export function historyWindow(s?: IndicatorChartSettings): number | undefined {
+  const w = s?.window;
+  if (w === undefined || !Number.isFinite(w)) return undefined;
+  const n = Math.round(w);
+  return n >= 2 ? Math.min(n, INDICATOR_HISTORY_HARD_CAP) : undefined;
+}
+
+/** Hard ceiling for stored-history samples per series (bounds memory even when
+ *  a very large window is configured). Shared by the worker-message history
+ *  collection cap and historyWindow's clamp. */
+export const INDICATOR_HISTORY_HARD_CAP = 5000;
+
+/** Default stored-history cap when no larger window is configured. */
+export const INDICATOR_HISTORY_DEFAULT_CAP = 500;
+
+/** Slice a time-series array to the last `window` samples (undefined → full). */
+export function sliceWindow(data: number[], window?: number): number[] {
+  return window !== undefined && data.length > window ? data.slice(-window) : data;
 }
 
 /** Apply the fixed-axis overrides to a dynamically-computed [yMin, yMax]
