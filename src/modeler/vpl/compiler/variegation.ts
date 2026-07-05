@@ -144,6 +144,20 @@ export function dedupeCustomLabels(labels: readonly string[]): string[] {
   return out;
 }
 
+/** Resolve a `tag`-value-type Lookup Table's tag value labels: an existing tag
+ *  attribute's `tagOptions` when `valueTagAttributeId` is set, else the manual
+ *  `valueTagOptions`. Used by the table cell editor (the InlineTagSelect). */
+export function resolveValueTagOptions(
+  attr: { valueTagAttributeId?: string; valueTagOptions?: string[] },
+  model: CAModel,
+): string[] {
+  if (attr.valueTagAttributeId) {
+    const src = model.attributes.find(a => a.id === attr.valueTagAttributeId);
+    return src?.tagOptions ? [...src.tagOptions] : [];
+  }
+  return attr.valueTagOptions ? [...attr.valueTagOptions] : [];
+}
+
 /** Resolve a Lookup Table axis key source to its ordered label list — the
  *  single source of truth for axis dimension + tableValues key names, shared by
  *  compilers, editor, and worker:

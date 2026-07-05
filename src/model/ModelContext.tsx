@@ -313,6 +313,11 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
                 colKeySource: colDangling ? undefined : next.colKeySource,
               };
             }
+            // Tag-valued table sourcing its value labels from the removed tag
+            // attribute: detach → fall back to manual valueTagOptions.
+            if (next.valueTagAttributeId === action.id) {
+              next = { ...next, valueTagAttributeId: undefined };
+            }
           }
           return next;
         });
@@ -499,6 +504,18 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
                 nextTV[newRk] = { ...(nextTV[newRk] || {}), ...nextRow };
               }
               next = { ...next, tableValues: nextTV };
+            }
+            // Tag-VALUED table drawing its value labels from THIS tag attribute:
+            // the stored cell values are tag INDICES, so a reorder/removal shifts
+            // them (a rename is index-stable). Remap by the same indexMap.
+            if (next.valueType === 'tag' && next.valueTagAttributeId === attrId && next.tableValues) {
+              const remappedTV: Record<string, Record<string, number>> = {};
+              for (const [rk, row] of Object.entries(next.tableValues)) {
+                const nr: Record<string, number> = {};
+                for (const [ck, val] of Object.entries(row)) nr[ck] = Number(remap(val));
+                remappedTV[rk] = nr;
+              }
+              next = { ...next, tableValues: remappedTV };
             }
           }
           return next;
