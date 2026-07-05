@@ -5152,44 +5152,57 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           for (const attr of cellAttrs) readAttrs[attr.id]![idx] = writeAttrs[attr.id]![idx]!;
         }
       };
-      const regionIdxs: number[] = [];
-      if (msg.region) {
-        // Paste-centered: write only the sub-region; cells outside are preserved.
-        const { row, col, w: rw, h: rh } = msg.region;
-        for (let rr = 0; rr < rh; rr++) {
-          const gr = row + rr;
-          if (gr < 0 || gr >= height) continue;
-          for (let cc = 0; cc < rw; cc++) {
-            const gc = col + cc;
-            if (gc < 0 || gc >= width) continue;
-            const gi = gr * width + gc;
-            applyImageCell(gi, (rr * rw + cc) * 4);
-            regionIdxs.push(gi);
-          }
-        }
-      } else {
-        for (let idx = 0; idx < total; idx++) applyImageCell(idx, idx * 4);
-      }
-      // Update display.
       const webgpuImport = useWebGPU && webgpuRuntime?.stepReady;
-      if (webgpuImport && webgpuRuntime) {
+      const runApply = () => {
+        const regionIdxs: number[] = [];
         if (msg.region) {
-          // Patch ONLY the pasted cells so the evolved (GPU-resident) cells outside
-          // the region are preserved — a full uploadAttrs would clobber them with a
-          // stale CPU mirror after a Play (mirrors the paint / writeRegion handlers).
-          patchWebGPUCells(regionIdxs);
+          // Paste-centered: write only the sub-region; cells outside are preserved.
+          const { row, col, w: rw, h: rh } = msg.region;
+          for (let rr = 0; rr < rh; rr++) {
+            const gr = row + rr;
+            if (gr < 0 || gr >= height) continue;
+            for (let cc = 0; cc < rw; cc++) {
+              const gc = col + cc;
+              if (gc < 0 || gc >= width) continue;
+              const gi = gr * width + gc;
+              applyImageCell(gi, (rr * rw + cc) * 4);
+              regionIdxs.push(gi);
+            }
+          }
         } else {
-          uploadAttrs(webgpuRuntime, readAttrs);
-          gpuOwnsAttrs = false;
+          for (let idx = 0; idx < total; idx++) applyImageCell(idx, idx * 4);
         }
-        uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
-        refreshColorsAfterInputWebGPU();
-        finalizeStepWebGPU({ needColors: true }).then(() => sendColors())
-          .catch(e => self.postMessage({ type: 'error', message: '[webgpu] importImage colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
-        break;
+        // Update display.
+        if (webgpuImport && webgpuRuntime) {
+          if (msg.region) {
+            // Patch ONLY the pasted cells so the evolved (GPU-resident) cells outside
+            // the region are preserved — a full uploadAttrs would clobber them with a
+            // stale CPU mirror after a Play (mirrors the paint / writeRegion handlers).
+            patchWebGPUCells(regionIdxs);
+          } else {
+            uploadAttrs(webgpuRuntime, readAttrs);
+            gpuOwnsAttrs = false;
+          }
+          uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
+          refreshColorsAfterInputWebGPU();
+          finalizeStepWebGPU({ needColors: true }).then(() => sendColors())
+            .catch(e => self.postMessage({ type: 'error', message: '[webgpu] importImage colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
+          return;
+        }
+        refreshColorsAfterInputJS();
+        sendColors();
+      };
+      // Paste-centered under WebGPU after a Play: the CPU mirror is stale
+      // (gpuOwnsAttrs), so a Colour→Attribute mapping that READS an existing cell
+      // attribute would sample stale state. Read the GPU attrs back to CPU first
+      // (mirrors the paint / paintManual handlers), then apply. The full-grid
+      // import overwrites every cell so it never needs this.
+      if (msg.region && webgpuImport && webgpuRuntime && gpuOwnsAttrs && icEntry?.fn) {
+        readbackAttrs(webgpuRuntime, readAttrs).then(() => { gpuOwnsAttrs = false; runApply(); })
+          .catch(e => self.postMessage({ type: 'error', message: '[webgpu] importImage readback failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
+      } else {
+        runApply();
       }
-      refreshColorsAfterInputJS();
-      sendColors();
       break;
     }
 

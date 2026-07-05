@@ -106,7 +106,7 @@ export function IndicatorStackedAreaChart({ data, generation, height, hidden, on
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || width < 40 || categories.length === 0) return;
+    if (!canvas || width < 40) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
@@ -115,6 +115,9 @@ export function IndicatorStackedAreaChart({ data, generation, height, hidden, on
     canvas.height = plotHeight * dpr;
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, width, plotHeight);
+    // Cleared above so clearing the history (data → {}) while PAUSED erases the
+    // old bands instead of leaving stale pixels.
+    if (categories.length === 0) return;
 
     const plotLeft = LEFT_MARGIN;
     const plotRight = width - RIGHT_PAD;

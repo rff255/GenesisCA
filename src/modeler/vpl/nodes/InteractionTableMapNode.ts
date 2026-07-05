@@ -19,7 +19,7 @@ import type { NodeTypeDef } from '../types';
 export const InteractionTableMapNode: NodeTypeDef = {
   type: 'interactionTableMap',
   label: 'Table Map',
-  description: 'Vectorised Table Lookup: indexes a Lookup Table model attribute by two parallel index arrays (rows + cols), returns a decimal array of looked-up values.',
+  description: 'Vectorised Table Lookup: indexes a Lookup Table model attribute by two parallel index arrays (rows + cols), returns an array of the looked-up values (numbers matching the table’s value type).',
   category: 'data',
   color: '#1976d2',
   ports: [

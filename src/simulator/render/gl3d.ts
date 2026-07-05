@@ -674,6 +674,12 @@ export class Gl3DRenderer {
   // Bond-Graph Agents (PR5): sphere-impostor + bond-line upload / render / pick.
   // ------------------------------------------------------------------------
   setAgentAlphaBlend(on: boolean): void { this.agentAlphaBlend = on; }
+  /** Drop ALL agent geometry (spheres AND bond lines). Used when a non-agent /
+   *  freshly-loaded model must not keep the previous model's agents lingering —
+   *  zeroing agentInstanceCount alone leaves stale bondVerts drawing. */
+  clearAgents(): void { this.agentInstanceCount = 0; this.bondVerts = new Float32Array(0); }
+  /** True when the renderer holds any agent geometry (spheres OR bond lines). */
+  get hasAgentGeometry(): boolean { return this.agentInstanceCount > 0 || this.bondVerts.length > 0; }
   /** Highlight rings for the hovered / inspected agents (world geometry).
    *  Pass [] to clear. Drawn as wireframe rings with depth OFF (always visible). */
   setHoverAgents(agents: ReadonlyArray<{ x: number; y: number; z: number; radius: number }>): void { this.hoverAgents = agents; }

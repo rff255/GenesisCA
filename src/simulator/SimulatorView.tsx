@@ -1485,7 +1485,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         const snap = agentsRef.current;
         r.setAgentAlphaBlend(alpha3dRef.current);
         if (!snap || snap.highWater === 0) {
-          r.agentInstanceCount = 0;
+          r.clearAgents(); // spheres AND bond lines (a bare instanceCount=0 leaves stale bonds)
           lastUploadedAgentSnapRef.current = snap ?? null;
         } else if (snap !== lastUploadedAgentSnapRef.current) {
           r.uploadAgents(snap, boundaryTreatmentRef.current === 'torus');
@@ -1493,11 +1493,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
         }
         r.setHoverAgents(hoverAgents3dRef.current);
         r.setInspectAgents(inspectAgents3dRef.current);
-      } else if (r.agentInstanceCount !== 0) {
-        // Non-agent model: drop any agent instances left over from a previously
-        // loaded agent model so they don't linger in the volume (the gl3d agent
-        // buffer is only refreshed by the branch above).
-        r.agentInstanceCount = 0;
+      } else if (r.agentInstanceCount !== 0 || r.hasAgentGeometry) {
+        // Non-agent model: drop any agent spheres AND bond lines left over from a
+        // previously loaded agent model so they don't linger in the volume (the
+        // gl3d agent buffer is only refreshed by the branch above).
+        r.clearAgents();
         lastUploadedAgentSnapRef.current = null;
       }
       r.render();
@@ -2441,9 +2441,11 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             }
           }
           if (frame && (!expected || (frame.width === expected.width && frame.height === expected.height))) {
-            // Opacify so transparent (agents-only / no-background) regions don't
-            // accumulate as GIF trails; harmless when the frame is already opaque.
-            forceFrameOpaque(frame.data);
+            // Opacify ONLY the agent-overlay display capture — its transparent
+            // cleared background is the GIF-trail artifact. A plain grid frame
+            // (direct-render / srcCanvas) carries the colours buffer's authored
+            // alpha (setCellLooks.a), which must be preserved, so it is left as-is.
+            if (isAgentModelRef.current) forceFrameOpaque(frame.data);
             recordedFrames.current.push(frame);
             recordCountRef.current += 1;
           }
@@ -6640,6 +6642,10 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
       if (!visibleRef.current) return;
+      // Don't hijack a paste into a focused form control (matches the cell Ctrl+V
+      // keydown guard); let the field paste normally.
+      const ae = document.activeElement as HTMLElement | null;
+      if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable)) return;
       const items = e.clipboardData?.items;
       if (!items) return;
       for (let i = 0; i < items.length; i++) {

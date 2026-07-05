@@ -163,8 +163,13 @@ export function ImageMappingDialog({
       const nh = clamp(d.orig.h + (p.y - d.sy), ih - d.orig.y);
       setRegion({ ...d.orig, w: Math.max(1, nw), h: Math.max(1, nh) });
     } else {
-      const x0 = Math.min(d.sx, p.x), y0 = Math.min(d.sy, p.y);
-      setRegion({ x: clamp(x0, iw), y: clamp(y0, ih), w: Math.max(1, Math.abs(p.x - d.sx)), h: Math.max(1, Math.abs(p.y - d.sy)) });
+      // Draw-new: clamp the ORIGIN into the image and the EXTENT to the remaining
+      // width/height so a drag released off-canvas can't run the region past the
+      // image edge (which would smear the last column/row in gridifyImage).
+      const x0 = clamp(Math.min(d.sx, p.x), iw - 1), y0 = clamp(Math.min(d.sy, p.y), ih - 1);
+      const w = Math.max(1, Math.min(Math.abs(p.x - d.sx), iw - x0));
+      const h = Math.max(1, Math.min(Math.abs(p.y - d.sy), ih - y0));
+      setRegion({ x: x0, y: y0, w, h });
     }
   };
   const onUp = () => { dragRef.current = null; };

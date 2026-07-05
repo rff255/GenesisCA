@@ -95,7 +95,7 @@ export function IndicatorMultiLineChart({ data, generation, height, hidden, onTo
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || width < 40 || categories.length === 0) return;
+    if (!canvas || width < 40) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
@@ -104,6 +104,9 @@ export function IndicatorMultiLineChart({ data, generation, height, hidden, onTo
     canvas.height = plotHeight * dpr;
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, width, plotHeight);
+    // Cleared canvas above — so clearing the indicator history (data → {}) while
+    // PAUSED erases the old curves instead of leaving stale pixels on screen.
+    if (categories.length === 0) return;
 
     const plotLeft = LEFT_MARGIN;
     const plotRight = width - RIGHT_PAD;
