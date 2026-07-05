@@ -195,6 +195,7 @@ type ModelAction =
   | { type: 'UPDATE_MACRO'; id: string; changes: Partial<MacroDef> }
   | { type: 'REMOVE_MACRO'; id: string }
   | { type: 'ADD_INDICATOR'; kind: IndicatorKind }
+  | { type: 'DUPLICATE_INDICATOR'; sourceId: string }
   | { type: 'REMOVE_INDICATOR'; id: string }
   | { type: 'UPDATE_INDICATOR'; id: string; changes: Partial<Indicator> }
   | { type: 'NEW_MODEL' }
@@ -202,6 +203,7 @@ type ModelAction =
   | { type: 'MARK_SAVED'; fileName?: string }
   | { type: 'SET_SIMULATION_STATE'; state: SimulationState | undefined }
   | { type: 'ADD_PRESET'; preset: Preset }
+  | { type: 'DUPLICATE_PRESET'; sourceId: string }
   | { type: 'DELETE_PRESET'; id: string }
   | { type: 'UPDATE_PRESET'; id: string; patch: Partial<Omit<Preset, 'id'>> }
   | { type: 'REORDER_PRESETS'; newOrder: string[] }
@@ -1075,6 +1077,21 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
       };
     }
 
+    case 'DUPLICATE_INDICATOR': {
+      const source = (state.model.indicators || []).find(i => i.id === action.sourceId);
+      if (!source) return state;
+      // Definition-level duplicate (fresh id + " (copy)" name) — deep-clones every
+      // field (kind, dataType, linked*, trackedValues, chartSettings, …). A
+      // STANDALONE indicator's copy has a fresh id not referenced by any
+      // Set/Get/Update-Indicator node, so it starts unwired (mirrors the
+      // duplicate-mapping scope); a LINKED indicator's copy aggregates immediately.
+      const dup: Indicator = { ...(JSON.parse(JSON.stringify(source)) as Indicator), id: generateId(source.name + '_copy'), name: `${source.name} (copy)` };
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, indicators: [...(state.model.indicators || []), dup] },
+      };
+    }
+
     case 'REMOVE_INDICATOR': {
       const mAfterInd = {
         ...state.model,
@@ -1234,6 +1251,18 @@ function modelReducer(state: ModelState, action: ModelAction): ModelState {
           presets: [...(state.model.presets || []), action.preset],
         },
       };
+
+    case 'DUPLICATE_PRESET': {
+      const source = (state.model.presets || []).find(p => p.id === action.sourceId);
+      if (!source) return state;
+      // Deep-clone the whole preset (incl. the embedded SimulationState / grid
+      // snapshot) with a fresh id + " (copy)" name + a new createdAt.
+      const dup: Preset = { ...(JSON.parse(JSON.stringify(source)) as Preset), id: generateId('preset'), name: `${source.name} (copy)`, createdAt: Date.now() };
+      return {
+        ...state, isDirty: true,
+        model: { ...state.model, presets: [...(state.model.presets || []), dup] },
+      };
+    }
 
     case 'DELETE_PRESET':
       return {
@@ -1559,6 +1588,7 @@ export interface ModelContextValue {
   updateMacro: (id: string, changes: Partial<MacroDef>) => void;
   removeMacro: (id: string) => void;
   addIndicator: (kind: IndicatorKind) => void;
+  duplicateIndicator: (sourceId: string) => void;
   removeIndicator: (id: string) => void;
   updateIndicator: (id: string, changes: Partial<Indicator>) => void;
   newModel: () => void;
@@ -1566,6 +1596,7 @@ export interface ModelContextValue {
   markSaved: (fileName?: string) => void;
   setSimulationState: (state: SimulationState | undefined) => void;
   addPreset: (preset: Preset) => void;
+  duplicatePreset: (sourceId: string) => void;
   deletePreset: (id: string) => void;
   updatePreset: (id: string, patch: Partial<Omit<Preset, 'id'>>) => void;
   reorderPresets: (newOrder: string[]) => void;
@@ -1748,6 +1779,10 @@ export function ModelProvider({ children }: { children: ReactNode }) {
     (kind: IndicatorKind) => dispatch({ type: 'ADD_INDICATOR', kind }),
     [],
   );
+  const duplicateIndicator = useCallback(
+    (sourceId: string) => dispatch({ type: 'DUPLICATE_INDICATOR', sourceId }),
+    [],
+  );
   const removeIndicator = useCallback(
     (id: string) => dispatch({ type: 'REMOVE_INDICATOR', id }),
     [],
@@ -1786,6 +1821,10 @@ export function ModelProvider({ children }: { children: ReactNode }) {
   );
   const addPreset = useCallback(
     (preset: Preset) => dispatch({ type: 'ADD_PRESET', preset }),
+    [],
+  );
+  const duplicatePreset = useCallback(
+    (sourceId: string) => dispatch({ type: 'DUPLICATE_PRESET', sourceId }),
     [],
   );
   const deletePreset = useCallback(
@@ -1901,6 +1940,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       updateMacro,
       removeMacro,
       addIndicator,
+      duplicateIndicator,
       removeIndicator,
       updateIndicator,
       newModel,
@@ -1908,6 +1948,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       markSaved,
       setSimulationState,
       addPreset,
+      duplicatePreset,
       deletePreset,
       updatePreset,
       reorderPresets,
@@ -1966,6 +2007,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       updateMacro,
       removeMacro,
       addIndicator,
+      duplicateIndicator,
       removeIndicator,
       updateIndicator,
       newModel,
@@ -1973,6 +2015,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       markSaved,
       setSimulationState,
       addPreset,
+      duplicatePreset,
       deletePreset,
       updatePreset,
       reorderPresets,

@@ -5,7 +5,7 @@ import { IndicatorSparkline } from './IndicatorSparkline';
 import { IndicatorMultiLineChart } from './IndicatorMultiLineChart';
 import { IndicatorStackedAreaChart } from './IndicatorStackedAreaChart';
 import { IndicatorSpatialChart, compareSeriesKeys } from './IndicatorSpatialChart';
-import { SCALAR_SERIES_KEY, mergeChartSettings, historyWindow, sliceWindow } from './indicatorChartSettings';
+import { SCALAR_SERIES_KEY, mergeChartSettings, historyWindow, sliceWindow, INDICATOR_HISTORY_HARD_CAP } from './indicatorChartSettings';
 import { NumberField } from '../modeler/vpl/widgets/InlineWidgets';
 import styles from './IndicatorDisplay.module.css';
 
@@ -173,11 +173,11 @@ function ChartSettingsPopover({ ind, override, categories, palette, categoryOrde
         <div className={styles.settingsRow}>
           <span className={styles.settingsLabel}>Window</span>
           <NumberField
-            className={styles.settingsInput} min={2} integer
+            className={styles.settingsInput} min={2} max={INDICATOR_HISTORY_HARD_CAP} integer
             value={ov.window}
             placeholder={defaults?.window !== undefined ? String(defaults.window) : 'all'}
             onNumber={setNum('window')} onClear={clearNum('window')}
-            title="X-axis window — number of most-recent generations to show. Blank = all history."
+            title={`X-axis window — number of most-recent generations to show. Blank = show all stored history (always bounded: history is capped at ${INDICATOR_HISTORY_HARD_CAP} samples per series).`}
           />
         </div>
       )}

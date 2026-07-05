@@ -472,7 +472,7 @@ const ChevronDownIcon = () => (
 
 export function SimulatorView({ visible = true }: { visible?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { model, modelVersion, updateIndicator, setSimulationState, addPreset, deletePreset, updatePreset, reorderPresets, updateProperties, updateAttribute } = useModel();
+  const { model, modelVersion, updateIndicator, setSimulationState, addPreset, duplicatePreset, deletePreset, updatePreset, reorderPresets, updateProperties, updateAttribute } = useModel();
   const presetReorder = useListReorder(model.presets || [], reorderPresets);
   const workerRef = useRef<Worker | null>(null);
   const pendingStep = useRef(false);
@@ -6855,6 +6855,7 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
                 </span>
                 <button className={styles.controlButton} style={{ padding: '2px 8px', flex: 'none' }} onClick={() => handleLoadPreset(p)}>Load</button>
                 <button className={styles.controlButton} style={{ padding: '2px 6px', flex: 'none' }} title="Overwrite preset with current state" onClick={() => handleOverwritePreset(p)}>&#x1F4BE;</button>
+                <button className={styles.controlButton} style={{ padding: '2px 6px', flex: 'none' }} title="Duplicate preset" onClick={() => duplicatePreset(p.id)}>&#x29C9;</button>
                 <button className={styles.controlButton} style={{ padding: '2px 6px', flex: 'none' }} title="Delete preset" onClick={() => handleDeletePreset(p)}>&times;</button>
                 <button className={styles.dragHandle} title="Drag to reorder" onPointerDown={presetReorder.startDrag(p.id)} onClick={e => e.stopPropagation()}>&#x22EE;&#x22EE;</button>
               </div>
