@@ -7,7 +7,7 @@ import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag } from '../vpl/graphState';
 import { useThemeTokens } from '../../styles/useThemeTokens';
-import { designTimeSeriesKeys } from '../../simulator/indicatorChartSettings';
+import { designTimeSeriesKeys, INDICATOR_HISTORY_HARD_CAP } from '../../simulator/indicatorChartSettings';
 import { typeDisplayName } from '../../model/typeLabels';
 import { NumberField, InlineNumberInput } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
@@ -30,7 +30,7 @@ export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect }: 
   selectedId: string | null;
   onSelect: (id: string | null) => void;
 }) {
-  const { model, addIndicator, removeIndicator, updateIndicator, reorderIndicators } = useModel();
+  const { model, addIndicator, duplicateIndicator, removeIndicator, updateIndicator, reorderIndicators } = useModel();
   const indicators = model.indicators || [];
   const reorder = useListReorder(indicators, reorderIndicators);
 
@@ -107,6 +107,8 @@ export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect }: 
       <div className={styles.buttonRow}>
         <button className={styles.addButton} onClick={() => addIndicator('standalone')}>+ Standalone</button>
         <button className={styles.addButton} onClick={() => addIndicator('linked')}>+ Linked</button>
+        <button className={styles.addButton} disabled={!selected} title={selected ? `Duplicate '${selected.name}'` : 'Select an indicator to duplicate'}
+          onClick={() => { if (selected) duplicateIndicator(selected.id); }}>Duplicate</button>
       </div>
     </div>
     )}
@@ -435,7 +437,7 @@ function ChartDefaultsEditor({ indicator, model, onChange }: {
         style={{ flex: 1, minWidth: 0 }}
         integer={field === 'yTicks' || field === 'window'}
         min={field === 'yTicks' ? 2 : field === 'window' ? 2 : undefined}
-        max={field === 'yTicks' ? 11 : undefined}
+        max={field === 'yTicks' ? 11 : field === 'window' ? INDICATOR_HISTORY_HARD_CAP : undefined}
         value={cs[field]}
         placeholder={placeholder}
         onNumber={setNum(field)}
@@ -451,7 +453,7 @@ function ChartDefaultsEditor({ indicator, model, onChange }: {
         {numField('Y min', 'yMin', 'Fixed Y-axis minimum — blank = dynamic (follows the data)', 'auto')}
         {numField('Y max', 'yMax', 'Fixed Y-axis maximum — blank = dynamic (follows the data)', 'auto')}
         {numField('Y ticks', 'yTicks', 'Number of Y-axis tick labels including min and max (2–11)', '2')}
-        {!isSpatialInd && numField('Window', 'window', 'Time-axis window — number of most-recent generations to show. Blank = all history.', 'all')}
+        {!isSpatialInd && numField('Window', 'window', `Time-axis window — number of most-recent generations to show. Blank = show all stored history (always bounded: history is capped at ${INDICATOR_HISTORY_HARD_CAP} samples per series).`, 'all')}
         {categories.map((cat, ci) => {
           const overridden = cs.seriesColors?.[cat] !== undefined;
           return (

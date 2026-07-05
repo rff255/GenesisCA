@@ -315,7 +315,8 @@ export function HelpView() {
             feedback. They are defined in the <strong>Properties</strong> panel under the
             &quot;Indicators&quot; section &mdash; click an indicator in the list to edit it in a
             side panel (the same master-detail layout as Attributes, Neighborhoods, and Mappings).
-            Two kinds exist:
+            Select one and click <strong>Duplicate</strong> to clone it with a fresh id. Two kinds
+            exist:
           </p>
           <ul className={styles.list}>
             <li><strong>Standalone</strong> &mdash; Typed scalar values (binary, integer, decimal,
@@ -386,8 +387,12 @@ export function HelpView() {
             <strong> &#9881;</strong> button in its header opening a popover with: fixed{' '}
             <strong>Y min</strong> / <strong>Y max</strong> (leave blank for the default
             dynamic scale that follows the data &mdash; each bound is independent),{' '}
-            <strong>Y ticks</strong> (how many axis labels, 2&ndash;11), and a color picker
-            per series. With a fixed axis the chart stops re-scaling as values evolve, so
+            <strong>Y ticks</strong> (how many axis labels, 2&ndash;11), a{' '}
+            <strong>Window</strong> (how many most-recent generations to show on the time
+            axis &mdash; leave blank to show all stored history), and a color picker
+            per series. Stored history is always bounded (capped at 5000 samples per series),
+            so &quot;all&quot; can never grow without limit. With a fixed axis the chart stops
+            re-scaling as values evolve, so
             two runs are visually comparable; out-of-window samples are clipped. Changes made
             here are <em>simulator-side overrides</em>: they persist across sessions on your
             machine and are saved into the project only when you save with{' '}
