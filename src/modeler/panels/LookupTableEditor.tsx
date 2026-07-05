@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { Attribute } from '../../model/types';
-import { NumberField } from '../vpl/widgets/InlineWidgets';
+import { NumberField, InlineBoolSelect, InlineTagSelect } from '../vpl/widgets/InlineWidgets';
 import styles from './PanelContent.module.css';
 
 /** Compact matrix editor for a `lookupTable` model attribute. Used in BOTH the
@@ -72,11 +72,41 @@ export function LookupTableEditor({
 
   const cellSize = compact ? 56 : 72;
   const inputHeight = compact ? 18 : 22;
+  // Value type of the table cells (Decimal by default). All supported types
+  // (bool/integer/float/tag) store one number, so only the editor widget differs.
+  const valueType = attribute.valueType ?? 'float';
+  const valueTagOptions = attribute.valueTagOptions ?? [];
+
+  // Per-cell value editor, dispatched by the table's value type. The stored
+  // value stays a number (bool → 0/1, tag → index) so the compiler/worker path
+  // is unchanged.
+  const renderCell = (row: string, col: string) => {
+    const v = get(row, col);
+    const cellStyle = { width: cellSize - 6, height: inputHeight, padding: '0 4px', fontSize: compact ? '0.62rem' : '0.66rem' } as const;
+    if (valueType === 'bool') {
+      return (
+        <InlineBoolSelect className={styles.selectInput} style={cellStyle}
+          value={v === 1 ? 'true' : 'false'}
+          onChange={b => set(row, col, b === 'true' ? '1' : '0')} />
+      );
+    }
+    if (valueType === 'tag') {
+      return (
+        <InlineTagSelect className={styles.selectInput} style={cellStyle}
+          options={valueTagOptions} value={String(v)}
+          onChange={idx => set(row, col, idx)} />
+      );
+    }
+    return (
+      <NumberField className={styles.numberInput} value={v} integer={valueType === 'integer'}
+        onNumber={n => set(row, col, String(n))} style={cellStyle} />
+    );
+  };
 
   if (rowLabels.length === 0 || colLabels.length === 0) {
     return (
       <div style={{ padding: '6px 0', color: '#888', fontSize: '0.68rem' }}>
-        Choose a row and column key source (a face palette or a tag attribute) to populate the table.
+        Choose a row and column key source (custom labels, a face palette, a tag attribute, or a single-value map) to populate the table.
       </div>
     );
   }
@@ -122,12 +152,7 @@ export function LookupTableEditor({
                   }
                   return (
                     <td key={col} style={{ padding: 1 }}>
-                      <NumberField
-                        className={styles.numberInput}
-                        value={get(row, col)}
-                        onNumber={n => set(row, col, String(n))}
-                        style={{ width: cellSize - 6, height: inputHeight, padding: '0 4px', fontSize: compact ? '0.62rem' : '0.66rem' }}
-                      />
+                      {renderCell(row, col)}
                     </td>
                   );
                 })}

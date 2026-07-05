@@ -19,7 +19,11 @@ export type AttributeType = 'bool' | 'integer' | 'float' | 'tag' | 'color' | 'ne
 export type LookupKeySource =
   | { kind: 'facePalette'; paletteId: string }
   | { kind: 'tagAttribute'; attributeId: string }
-  | { kind: 'single' };
+  | { kind: 'single' }
+  /** An arbitrary user-defined ordered set of axis labels, edited directly on
+   *  the Lookup Table definition page — not tied to a tag attribute or face
+   *  palette. `labels` are the row/column names used as keys in `tableValues`. */
+  | { kind: 'custom'; labels: string[] };
 
 /** A single attribute definition (per-cell or global model attribute) */
 export interface Attribute {
@@ -92,10 +96,25 @@ export interface Attribute {
    *  storage (the worker holds a full rowDim×colDim Float64Array regardless). */
   symmetric?: boolean;
   /** Lookup Table model attributes only: sparse table values, keyed by
-   *  rowLabel string × colLabel string → float. Missing entries default to 0.
+   *  rowLabel string × colLabel string → number. Missing entries default to 0.
    *  A face-palette axis uses the literal `"none"` key at index 0; a
-   *  tag-attribute axis uses tag-option names (no implicit `none`). */
+   *  tag-attribute axis uses tag-option names (no implicit `none`); a custom
+   *  axis uses the user labels. Values are stored as numbers regardless of
+   *  `valueType` (bool → 0/1, tag → tag index, integer/float → the number), so
+   *  no compiler/worker change is needed — the value type only drives the
+   *  editor widget. */
   tableValues?: Record<string, Record<string, number>>;
+  /** Lookup Table model attributes only: the data TYPE of the table's cell
+   *  values. Absent → `'float'` (Decimal), the historical behaviour. Restricted
+   *  to the scalar-numeric types that fit one stored number exactly on all
+   *  targets: `bool` / `integer` / `float` / `tag`. (`color` would need a
+   *  multi-output read and `neighborIndex` exact-int f32 storage — not yet
+   *  offered.) */
+  valueType?: AttributeType;
+  /** Lookup Table model attributes only, when `valueType === 'tag'`: the named
+   *  values for the table's tag-typed cells (stored value = index into this
+   *  array, like `tagOptions`). */
+  valueTagOptions?: string[];
 }
 
 /** 3D Grid CA: parametric named-shape spec for a 3D neighbourhood. Materialized
