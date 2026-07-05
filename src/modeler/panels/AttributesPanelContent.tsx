@@ -41,10 +41,13 @@ function KeySourceField({ label, value, model, onChange }: {
   const current = value
     ? value.kind === 'facePalette' ? `palette:${value.paletteId}`
       : value.kind === 'tagAttribute' ? `tag:${value.attributeId}`
+      : value.kind === 'custom' ? 'custom'
       : 'single'
     : '';
+  const customLabels = value?.kind === 'custom' ? value.labels : null;
+  const setLabels = (labels: string[]) => onChange({ kind: 'custom', labels });
   return (
-    <label style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2, fontSize: '0.66rem' }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2, fontSize: '0.66rem' }}>
       <span style={{ color: '#7a8a9a' }}>{label}</span>
       <select
         className={styles.selectInput}
@@ -52,6 +55,7 @@ function KeySourceField({ label, value, model, onChange }: {
         onChange={e => {
           const v = e.target.value;
           if (v === 'single') { onChange({ kind: 'single' }); return; }
+          if (v === 'custom') { onChange({ kind: 'custom', labels: value?.kind === 'custom' ? value.labels : ['A', 'B'] }); return; }
           const ci = v.indexOf(':');
           if (ci < 0) { onChange(undefined); return; }
           const kind = v.slice(0, ci);
@@ -61,6 +65,7 @@ function KeySourceField({ label, value, model, onChange }: {
       >
         <option value="">— select —</option>
         <option value="single">Single value (map)</option>
+        <option value="custom">Custom labels…</option>
         {palettes.length > 0 && (
           <optgroup label="Face palettes">
             {palettes.map(p => <option key={p.id} value={`palette:${p.id}`}>{p.name}</option>)}
@@ -70,7 +75,34 @@ function KeySourceField({ label, value, model, onChange }: {
           {tagAttrs.map(a => <option key={a.id} value={`tag:${a.id}`}>{a.name}</option>)}
         </optgroup>
       </select>
-    </label>
+      {customLabels && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 2 }}>
+          {customLabels.map((lbl, i) => (
+            <div key={i} style={{ display: 'flex', gap: 2 }}>
+              <input
+                className={styles.textInput}
+                style={{ flex: 1, minWidth: 0, fontSize: '0.66rem' }}
+                value={lbl}
+                onChange={e => setLabels(customLabels.map((x, j) => (j === i ? e.target.value : x)))}
+                title="Row/column label"
+              />
+              <button
+                className={styles.deleteButton}
+                style={{ padding: '0 6px' }}
+                onClick={() => setLabels(customLabels.filter((_, j) => j !== i))}
+                disabled={customLabels.length <= 1}
+                title="Remove label"
+              >&times;</button>
+            </div>
+          ))}
+          <button
+            className={styles.addButton}
+            style={{ fontSize: '0.64rem', padding: '2px 6px' }}
+            onClick={() => setLabels([...customLabels, `L${customLabels.length + 1}`])}
+          >+ Label</button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -367,12 +399,60 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
             {selected.type === 'lookupTable' && (
               <div className={styles.field}>
                 <label className={styles.fieldLabel}>Lookup Table</label>
-                <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 6, alignItems: 'flex-start' }}>
                   <KeySourceField label="Rows" value={selected.rowKeySource} model={model}
                     onChange={src => updateAttribute(selected.id, { rowKeySource: src })} />
                   <KeySourceField label="Columns" value={selected.colKeySource} model={model}
                     onChange={src => updateAttribute(selected.id, { colKeySource: src })} />
                 </div>
+                {/* Value type of the table cells (Decimal by default). bool/integer/
+                    float/tag are stored as one number → no compiler change. */}
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, fontSize: '0.66rem' }}>
+                  <span style={{ color: '#7a8a9a' }}>Value type</span>
+                  <select
+                    className={styles.selectInput}
+                    style={{ flex: '0 0 auto' }}
+                    value={selected.valueType ?? 'float'}
+                    onChange={e => {
+                      const vt = e.target.value as Attribute['type'];
+                      const changes: Partial<Attribute> = { valueType: vt };
+                      if (vt === 'tag' && (selected.valueTagOptions ?? []).length === 0) changes.valueTagOptions = ['A', 'B'];
+                      updateAttribute(selected.id, changes);
+                    }}
+                    title="Data type of the table's cell values"
+                  >
+                    <option value="bool">{typeDisplayName('bool')}</option>
+                    <option value="integer">{typeDisplayName('integer')}</option>
+                    <option value="float">{typeDisplayName('float')}</option>
+                    <option value="tag">{typeDisplayName('tag')}</option>
+                  </select>
+                  {selected.valueType === 'tag' && (
+                    <span style={{ color: '#7a8a9a' }}>values:</span>
+                  )}
+                </div>
+                {selected.valueType === 'tag' && (() => {
+                  const opts = selected.valueTagOptions ?? [];
+                  const setOpts = (o: string[]) => updateAttribute(selected.id, { valueTagOptions: o });
+                  return (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+                      {opts.map((o, i) => (
+                        <div key={i} style={{ display: 'flex', gap: 2 }}>
+                          <input
+                            className={styles.textInput}
+                            style={{ width: 70, fontSize: '0.64rem' }}
+                            value={o}
+                            onChange={e => setOpts(opts.map((x, j) => (j === i ? e.target.value : x)))}
+                            title={`Tag value ${i}`}
+                          />
+                          <button className={styles.deleteButton} style={{ padding: '0 6px' }}
+                            onClick={() => setOpts(opts.filter((_, j) => j !== i))} disabled={opts.length <= 1}>&times;</button>
+                        </div>
+                      ))}
+                      <button className={styles.addButton} style={{ fontSize: '0.64rem', padding: '2px 6px' }}
+                        onClick={() => setOpts([...opts, `T${opts.length}`])}>+ Value</button>
+                    </div>
+                  );
+                })()}
                 <LookupTableEditor
                   attribute={selected}
                   rowLabels={resolveKeyLabels(selected.rowKeySource, model)}

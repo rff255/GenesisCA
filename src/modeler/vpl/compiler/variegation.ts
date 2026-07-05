@@ -134,6 +134,7 @@ export function resolveKeyLabels(
 ): string[] {
   if (!source) return [];
   if (source.kind === 'single') return ['value'];
+  if (source.kind === 'custom') return [...source.labels];
   if (source.kind === 'facePalette') {
     const pal = model.variegatedCells?.facePalettes.find(p => p.id === source.paletteId);
     return pal ? ['none', ...pal.labels] : [];
