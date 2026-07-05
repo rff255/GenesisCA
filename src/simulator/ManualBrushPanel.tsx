@@ -14,6 +14,9 @@ interface ManualBrushPanelProps {
   onChange: (next: ManualBrushModelState) => void;
   /** 3D Grid CA: neighborIndex attrs pack 3 axes — the picker adds a dl stepper. */
   is3d?: boolean;
+  /** Pack each row's name + value widget together on the left (instead of the
+   *  name-left / widget-far-right stretch). For wide hosts like the image dialog. */
+  dense?: boolean;
 }
 
 /** Format a parentValues entry for the sub-attribute hint. Tag parents map
@@ -34,7 +37,7 @@ function formatParentValue(parent: Attribute, raw: string): string {
 
 /** Renders one row per cell attribute: [Set checkbox] [name + sub-attr hint] [value widget].
  *  Sub-attribute hint reads as e.g. "writes only when cellType ∈ {Wire, Pulsar}". */
-export function ManualBrushPanel({ cellAttributes, neighborhoods, state, onChange, is3d = false }: ManualBrushPanelProps) {
+export function ManualBrushPanel({ cellAttributes, neighborhoods, state, onChange, is3d = false, dense = false }: ManualBrushPanelProps) {
   const model = useMemo(() => ({ attributes: cellAttributes }), [cellAttributes]);
   const setEntry = (attrId: string, patch: Partial<{ enabled: boolean; value: string }>): void => {
     const prev = state[attrId] ?? { enabled: true, value: '' };
@@ -51,8 +54,9 @@ export function ManualBrushPanel({ cellAttributes, neighborhoods, state, onChang
         const entry = state[attr.id] ?? { enabled: true, value: attr.defaultValue ?? '' };
         const info = subAttrInfo(attr, model);
         const widgetClass = `${styles.manualBrushWidget} ${entry.enabled ? '' : styles.dim}`;
+        const rowClass = `${styles.manualBrushRow} ${dense ? styles.manualBrushRowDense : ''}`;
         return (
-          <div key={attr.id} className={styles.manualBrushRow}>
+          <div key={attr.id} className={rowClass}>
             <input
               type="checkbox"
               className={styles.manualBrushCheckbox}

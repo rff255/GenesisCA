@@ -849,6 +849,24 @@
   font-size: var(--font-xs);
 }
 
+/* Dense variant (wide hosts, e.g. the image-mapping dialog): pack the name +
+   value widget together on the left instead of stretching them to the edges.
+   Flex so the label is sized to its content (capped + ellipsised), with the
+   widget immediately after and all the slack left on the right. */
+.manualBrushRowDense {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+}
+.manualBrushRowDense .manualBrushLabel {
+  flex: 0 1 auto;
+  max-width: 240px;
+}
+.manualBrushRowDense .manualBrushWidget {
+  flex: 0 0 auto;
+  width: 88px;
+}
+
 .manualBrushCheckbox {
   margin: 0;
   cursor: pointer;
