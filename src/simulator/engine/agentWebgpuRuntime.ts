@@ -809,5 +809,14 @@ export function destroyAgentWebGPURuntime(rt: AgentWebGPURuntime | null): void {
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
   for (const bucket of rt.stagingPool.values()) for (const e of bucket) { try { e.buffer.destroy(); } catch { /* non-fatal */ } }
   rt.stagingPool.clear();
+  // Release the GPUDevice too (mirrors the grid runtime's destroyWebGPURuntime,
+  // webgpuRuntime.ts). createAgentWebGPURuntime requests its OWN adapter+device
+  // per build, so every in-session rebuild (soft recompile / agent-target flip /
+  // reset) that tears down the prior runtime WITHOUT a worker.terminate() would
+  // otherwise leak a heavyweight GPUDevice, accumulating driver pressure for the
+  // rest of the worker's life. (A full model LOAD terminates the worker and
+  // reclaims devices regardless, so this is an in-session correctness fix.)
+  const dev = rt.device as GPUDevice & { destroy?: () => void };
+  if (typeof dev.destroy === 'function') { try { dev.destroy(); } catch { /* non-fatal */ } }
   rt.ready = false;
 }
