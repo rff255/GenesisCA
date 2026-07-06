@@ -6281,9 +6281,21 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     }
     // Generic Agent Platform: agent models composite the agent overlay onto the
     // DISPLAY canvas, so screenshot that (display resolution) to include agents.
+    // Copy the display onto a throwaway offscreen and toBlob THAT — never read the
+    // live display canvas directly (matches the 3D / direct-render branches above
+    // and the recording capture's scratch pattern). `toBlob` doesn't de-optimize a
+    // canvas the way `getImageData` does (measured), but the display canvas is the
+    // one DOM element that persists across every model load, so keeping ALL readbacks
+    // off it removes any risk + keeps the three screenshot branches consistent.
     if (isAgentModelRef.current && canvasRef.current && !directRenderActiveRef.current) {
       draw();
-      canvasRef.current.toBlob(blob => { if (blob) downloadBlob(blob); }, 'image/png');
+      const dc = canvasRef.current;
+      const off = document.createElement('canvas');
+      off.width = dc.width; off.height = dc.height;
+      const octx = off.getContext('2d');
+      if (!octx) return;
+      octx.drawImage(dc, 0, 0);
+      off.toBlob(blob => { if (blob) downloadBlob(blob); }, 'image/png');
       return;
     }
     const src = srcCanvasRef.current;
