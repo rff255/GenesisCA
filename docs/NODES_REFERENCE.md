@@ -4,13 +4,15 @@ This document catalogues every node in the GenesisCA Visual Programming Language
 describes the port type system, and flags redundancies or gaps. It is a working reference
 to inform future consolidation — it does **not** describe any committed refactoring.
 
-**Scope:** 118 registry node types across 7 categories (event, flow, data, logic, aggregation,
+**Scope:** 119 registry node types across 7 categories (event, flow, data, logic, aggregation,
 output, color) — 3 hidden from the Add Node menu (`macro` / `macroInput` / `macroOutput`),
-leaving **115 selectable**. Indicator
+leaving **116 selectable** (Agent Capability Profiles added **Get Age**, the Lifespan
+capability's palette node). Indicator
 nodes live within the `data` (readers) and `output` (writers) categories rather than a
 category of their own. The variegated-cells, local-variable, and Bond-Graph-Agent nodes
-appear in the editor only when their respective model feature is enabled (the 42 agent
-nodes — §3.8 — only in a Bond-Graph-Agents model, and only on its Agents sub-tab).
+appear in the editor only when their respective model feature is enabled (the 43 agent
+nodes — §3.8 — only in a Bond-Graph-Agents model, and only on its Agents sub-tab, and each
+further gated to its **Agent Capability** so a paradigm shows only its relevant nodes).
 
 **Composite value types (`vector` / `color`):** Make Vector / Break Vector / Vector
 Op and Make Color / Break Color (the Unreal/Blender Make-Break pattern) bundle X/Y/Z

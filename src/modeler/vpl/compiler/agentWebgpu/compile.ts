@@ -68,7 +68,7 @@ export const AGENT_WEBGPU_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>
   // event roots
   'behaviourStep',
   // self reads
-  'getSelfPosition', 'getSelfHandle', 'getRadius', 'getBondDegree', 'neighbourDensity', 'getCurvature',
+  'getSelfPosition', 'getSelfHandle', 'getRadius', 'getAge', 'getBondDegree', 'neighbourDensity', 'getCurvature',
   // neighbour access
   'getNearbyAgents', 'forEachInArray', 'getAgentOffset', 'getVelocity',
   'getAgentPosition', 'getAgentRadius', 'getAgentAttribute',
@@ -382,6 +382,10 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
     }
     case 'getRadius': {
       result = emitLet(ctx, 'f32', f32At(ctx, 'radius', 'idx'), 'rad');
+      break;
+    }
+    case 'getAge': {
+      result = emitLet(ctx, 'f32', f32At(ctx, 'age', 'idx'), 'age');
       break;
     }
     case 'getBondDegree': {

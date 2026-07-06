@@ -5,6 +5,7 @@ import { BehaviourStepNode } from './BehaviourStepNode';
 import { GetSelfPositionNode } from './GetSelfPositionNode';
 import { GetSelfHandleNode } from './GetSelfHandleNode';
 import { GetRadiusNode } from './GetRadiusNode';
+import { GetAgeNode } from './GetAgeNode';
 import { GetBondDegreeNode } from './GetBondDegreeNode';
 import { GetCurvatureNode } from './GetCurvatureNode';
 import { NeighbourDensityNode } from './NeighbourDensityNode';
@@ -142,6 +143,7 @@ const ALL_NODES: NodeTypeDef[] = [
   GetSelfPositionNode,
   GetSelfHandleNode,
   GetRadiusNode,
+  GetAgeNode,
   GetBondDegreeNode,
   GetCurvatureNode,
   NeighbourDensityNode,
