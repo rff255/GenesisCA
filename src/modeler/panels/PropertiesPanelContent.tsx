@@ -11,6 +11,7 @@ import { cbNum, usesBondingPhysics, CENTER_BASED_DEFAULTS } from '../../model/ce
 import type { CenterBasedNumericKey } from '../../model/centerBased';
 import { isAgentGraphWasmSupported } from '../vpl/compiler/agentWasm/compile';
 import { isAgentGraphWebGPUSupported } from '../vpl/compiler/agentWebgpu/compile';
+import { AgentCapabilitiesSection } from './AgentCapabilitiesSection';
 import styles from './PanelContent.module.css';
 
 function newCondId(): string {
@@ -445,6 +446,12 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
             return (
               <div style={{ marginTop: 14, borderTop: '1px solid #333', paddingTop: 10 }}>
                 <label className={styles.fieldLabel} style={{ marginBottom: 6, color: '#b58fd6' }}>Bond-Graph Agents</label>
+                {/* Agent Capability Profile — the preset picker + capability toggles
+                    + per-agent footprint. Placed first so the user chooses their
+                    paradigm before tuning the numeric force/bond params below; the
+                    editor surface (palette / ports / Edit-panel rows) filters to
+                    the enabled capabilities. */}
+                <AgentCapabilitiesSection model={model} updateCenterBased={updateCenterBased} />
                 {/* Agent Update Mode — INDEPENDENT of the grid's Update Mode radio
                     above. The user can run a synchronous grid rule with async
                     agents, and vice versa. Changing it re-allocates the attribute

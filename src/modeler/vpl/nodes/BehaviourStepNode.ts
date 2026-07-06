@@ -1,5 +1,6 @@
 import type { NodeTypeDef } from '../types';
 import { is3dModelLike } from '../compiler/niCodec';
+import { resolveAgentProfile } from '../../../model/agentCapabilities';
 
 /** Behaviour Step — the agent-world per-agent update entry point (Bond-Graph
  *  Agents). The agent analogue of the lattice `Generation Step`: the compiler
@@ -36,10 +37,23 @@ export const BehaviourStepNode: NodeTypeDef = {
     { id: 'myBondDegree', label: 'Bond Degree', kind: 'output', category: 'value', dataType: 'integer' },
     { id: 'myAge', label: 'Age', kind: 'output', category: 'value', dataType: 'integer' },
   ],
-  // myZ only exists in a 3D-agent model. Hidden in 2D (the compiler emits no
-  // _agentZ decode / `_v<id>_myZ` preamble there — that emit is compile-side in
-  // compileAgentGraph, since this node's compile is () => '').
-  hiddenPorts: (_config, model) => (is3dModelLike(model) ? [] : ['myZ']),
+  // Ports gate on the model's dimension AND its Agent Capability Profile:
+  //   - myZ exists only in a 3D-agent model (the compiler emits no _agentZ decode
+  //     / `_v<id>_myZ` preamble in 2D — that emit is compile-side).
+  //   - myRadius/myArea (Body), myBondDegree (Bonds), myAge (Lifespan) are hidden
+  //     when their capability is off (UI-only — the compiler still emits the
+  //     preamble, so an existing wire keeps working; the badge is informational).
+  hiddenPorts: (_config, model) => {
+    const hidden: string[] = [];
+    if (!is3dModelLike(model)) hidden.push('myZ');
+    if (model?.topologyMode?.agents) {
+      const p = resolveAgentProfile(model);
+      if (!p.body) hidden.push('myRadius', 'myArea');
+      if (p.bonds === 'off') hidden.push('myBondDegree');
+      if (!p.lifespan) hidden.push('myAge');
+    }
+    return hidden;
+  },
   defaultConfig: {},
   compile: () => '',  // Root — the agent compiler emits the per-agent loop specially.
 };

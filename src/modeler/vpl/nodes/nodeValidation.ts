@@ -2,6 +2,7 @@ import type { NodeConfig, NodeTypeDef } from '../types';
 import { parseHandleId } from '../types';
 import type { CAModel } from '../../../model/types';
 import { cellFieldAttrsOf } from '../../../model/attributeScope';
+import { agentNodeRequirement, nodeSatisfiesCapabilities, resolveAgentProfile, capReqLabel } from '../../../model/agentCapabilities';
 import { getNodeDef } from './registry';
 import { CURRENT_VIEWER_SENTINEL } from './SetCellLooksNode';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../compiler/expression/parser';
@@ -585,6 +586,16 @@ export function detectCapabilityRequirements(
   if (def.requirements.bondGraph && !model.topologyMode?.agents) {
     issues.push(`"${def.label}" requires the Bond-Graph Agents topology. Enable it in Model Properties > Execution > Topology.`);
   }
+  // Agent Capability Profiles: a bond-graph node whose capability is OFF in the
+  // resolved profile gets an INFORMATIONAL badge (STEP 1 is editor-surface-only —
+  // the compiler still emits unconditionally, so a placed violator keeps working;
+  // the badge guides the user to enable the capability or remove the node).
+  if (def.requirements.bondGraph && model.topologyMode?.agents) {
+    const key = agentNodeRequirement(nodeType);
+    if (key && !nodeSatisfiesCapabilities(nodeType, resolveAgentProfile(model))) {
+      issues.push(`"${def.label}" needs the ${capReqLabel(key)} capability, which is off in this model's Agent Capabilities. Enable it in Model Properties > Agent Capabilities, or remove the node.`);
+    }
+  }
   return issues;
 }
 
@@ -645,6 +656,11 @@ export function isNodeAvailable(def: NodeTypeDef, model: CAModel): boolean {
   if (def.requirements.bondGraph) {
     if (!model.topologyMode?.agents) return false;
     if (kind === 'cells') return false;
+    // Agent Capability Profiles: hide a node whose capability is off in the
+    // resolved profile from the palette / quick-add / connection-drop menus, so a
+    // paradigm shows only its relevant nodes. Only reached on the Agents graph
+    // with the topology on ⇒ the profile is explicit (O(1)).
+    if (!nodeSatisfiesCapabilities(def.type, resolveAgentProfile(model))) return false;
   }
   if (def.requirements.lattice && kind === 'agents') return false;
   return true;

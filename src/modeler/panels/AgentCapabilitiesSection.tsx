@@ -1,0 +1,142 @@
+import type { CSSProperties } from 'react';
+import type { CAModel, CenterBasedConfig, AgentCapabilities, CollisionMode, BondsMode, MotionMode } from '../../model/types';
+import {
+  AGENT_PRESETS, AGENT_PRESET_META, AGENT_CAPABILITY_ROWS,
+  resolveAgentProfile, matchAgentPreset, applyCapabilityEdit, estimateAgentFootprint,
+  type AgentPresetKey, type BoolCapKey,
+} from '../../model/agentCapabilities';
+
+/** Model Properties → "Agent Capabilities" section. The preset picker + the
+ *  progressive-disclosure capability toggles + the live per-agent footprint
+ *  readout. Drives `centerBased.agentCapabilities`; editor-surface only in v1
+ *  (palette / Behaviour-Step ports / Edit-panel rows filter to what's on). */
+export function AgentCapabilitiesSection({
+  model, updateCenterBased,
+}: {
+  model: CAModel;
+  updateCenterBased: (changes: Partial<CenterBasedConfig>) => void;
+}) {
+  const profile = resolveAgentProfile(model);
+  const activePreset = matchAgentPreset(profile);
+  const footprint = estimateAgentFootprint(profile, model);
+  const set = (next: AgentCapabilities) => updateCenterBased({ agentCapabilities: next });
+  const edit = <K extends keyof AgentCapabilities>(key: K, value: AgentCapabilities[K]) =>
+    set(applyCapabilityEdit(profile, key, value));
+
+  const selStyle: CSSProperties = { fontSize: '0.66rem', background: 'var(--color-bg-panel, #1a1a1a)', color: '#ddd', border: '1px solid var(--color-widget-border, #444)', borderRadius: 4, padding: '1px 4px' };
+
+  const presetDesc = activePreset === 'custom'
+    ? 'A custom mix — edit any toggle and the picker stays on Custom.'
+    : (AGENT_PRESET_META.find(m => m.key === activePreset)?.description ?? '');
+
+  const chip = (key: AgentPresetKey | 'custom', label: string, onClick?: () => void) => (
+    <button
+      key={key}
+      onClick={onClick}
+      disabled={key === 'custom'}
+      style={{
+        fontSize: '0.66rem', padding: '3px 8px', borderRadius: 999,
+        cursor: key === 'custom' ? 'default' : 'pointer',
+        border: `1px solid ${activePreset === key ? 'var(--color-accent)' : 'var(--color-widget-border, #444)'}`,
+        background: activePreset === key ? 'var(--color-accent-soft, rgba(232,161,58,0.15))' : 'transparent',
+        color: activePreset === key ? 'var(--color-accent)' : '#ccc',
+        opacity: key === 'custom' && activePreset !== 'custom' ? 0.4 : 1,
+      }}
+    >{label}</button>
+  );
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '2px 0 4px' }}>Agent Capabilities</div>
+      {/* Preset picker */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 4 }}>
+        {AGENT_PRESET_META.map(m => chip(m.key, m.label, () => set({ ...AGENT_PRESETS[m.key] })))}
+        {chip('custom', 'Custom')}
+      </div>
+      <span style={{ color: '#888', fontSize: '0.62rem', display: 'block', marginBottom: 8 }}>{presetDesc}</span>
+
+      {/* Motion — a segmented control (revealed for every agent model). */}
+      <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '4px 0 4px' }}>Motion</div>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+        {(['static', 'velocity', 'force'] as MotionMode[]).map(mode => (
+          <button
+            key={mode}
+            onClick={() => edit('motion', mode)}
+            style={{
+              flex: 1, fontSize: '0.66rem', padding: '3px 4px', borderRadius: 4, cursor: 'pointer',
+              textTransform: 'capitalize',
+              border: `1px solid ${profile.motion === mode ? 'var(--color-accent)' : 'var(--color-widget-border, #444)'}`,
+              background: profile.motion === mode ? 'var(--color-accent-soft, rgba(232,161,58,0.15))' : 'transparent',
+              color: profile.motion === mode ? 'var(--color-accent)' : '#ccc',
+            }}
+          >{mode}</button>
+        ))}
+      </div>
+      <span style={{ color: '#888', fontSize: '0.6rem', display: 'block', marginBottom: 8 }}>
+        Static = direct position writes · Velocity = pos += v·dt · Force = the integrator (Apply Force, momentum, drag).
+        <em style={{ color: '#777' }}> v1: the velocity/force fields are always allocated — this gates the palette + ports.</em>
+      </span>
+
+      {/* Capability rows — mode selects (Collision / Bonds) render a dropdown;
+          the rest are boolean checkboxes. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {AGENT_CAPABILITY_ROWS.map(row => {
+          const k = row.key;
+          const hint = <span style={{ color: '#888', fontSize: '0.6rem', display: 'block' }}>{row.description}{row.requires && <em style={{ color: '#777' }}> · requires {row.requires}</em>}</span>;
+          if (k === 'collision') {
+            return (
+              <div key={k}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <span style={{ fontSize: '0.72rem', color: '#ddd' }}>{row.label}</span>
+                  <select value={profile.collision} onChange={e => edit('collision', e.target.value as CollisionMode)} style={selStyle}>
+                    <option value="off">Off</option><option value="soft">Soft-sphere</option><option value="positional">Positional</option>
+                  </select>
+                </div>{hint}
+              </div>
+            );
+          }
+          if (k === 'bonds') {
+            return (
+              <div key={k}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <span style={{ fontSize: '0.72rem', color: '#ddd' }}>{row.label}</span>
+                  <select value={profile.bonds} onChange={e => edit('bonds', e.target.value as BondsMode)} style={selStyle}>
+                    <option value="off">Off</option><option value="data">Data (edges)</option><option value="physics">Physics (springs)</option>
+                  </select>
+                </div>{hint}
+              </div>
+            );
+          }
+          const bk = k as BoolCapKey;
+          return (
+            <label key={k} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer' }}>
+              <input type="checkbox" checked={!!profile[bk]} onChange={e => edit(bk, e.target.checked)} style={{ marginTop: 2 }} />
+              <span>
+                <span style={{ fontSize: '0.72rem', color: '#ddd' }}>{row.label}</span>
+                <br /><span style={{ color: '#888', fontSize: '0.6rem' }}>{row.description}{row.requires && <em style={{ color: '#777' }}> · requires {row.requires}</em>}</span>
+              </span>
+            </label>
+          );
+        })}
+      </div>
+
+      {/* Footprint readout — the cost of generality, bound to the profile. */}
+      <div style={{ marginTop: 10, padding: '6px 8px', borderRadius: 4, background: 'var(--color-overlay-row, rgba(255,255,255,0.03))', border: '1px solid var(--color-border-muted, #2a2a2a)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <span style={{ fontSize: '0.66rem', color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Per-agent footprint</span>
+          <span style={{ fontSize: '0.82rem', color: 'var(--color-accent)', fontWeight: 600 }}>≈ {footprint.bytesPerAgent} B</span>
+        </div>
+        <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {footprint.groups.map((g, i) => (
+            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem', color: g.core ? '#999' : '#bbb' }}>
+              <span>{g.label}</span><span>{g.bytes} B</span>
+            </div>
+          ))}
+        </div>
+        <span style={{ color: '#777', fontSize: '0.58rem', display: 'block', marginTop: 4, fontStyle: 'italic' }}>
+          v1 estimate — the engine still allocates the full struct; profile-driven allocation lands in a later phase.
+        </span>
+      </div>
+    </div>
+  );
+}

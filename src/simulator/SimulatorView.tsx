@@ -36,6 +36,7 @@ import { serializeSimState, serializePreset, downloadStateFile, readStateFile, b
 import type { Attribute, CAModel, IndicatorChartSettings, Preset, SimulationState } from '../model/types';
 import { encodeAttrValue, decodeAttrValue } from '../model/attrValueEncoding';
 import { cbNum } from '../model/centerBased';
+import { resolveAgentProfile } from '../model/agentCapabilities';
 import { useListReorder } from '../modeler/panels/useListReorder';
 import styles from './SimulatorView.module.css';
 
@@ -997,14 +998,32 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
   // Attribute so ManualBrushPanel renders each as a type-appropriate widget.
   const agentEditPanelAttrs = useMemo<Attribute[]>(() => {
     const dr = cbNum(model.centerBased, 'defaultRadius');
+    // Agent Capability Profiles: filter the synthetic geometry rows to the enabled
+    // capabilities — Radius only with Body, Velocity only with a moving Motion mode
+    // (Position is always shown). Position/velocity/radius are always ALLOCATED in
+    // v1, so this is a UI-clarity filter (matches the palette / port gating).
+    const prof = model.topologyMode?.agents ? resolveAgentProfile(model) : null;
+    const showRadius = !prof || prof.body;
+    const showVel = !prof || prof.motion !== 'static';
     const geom = AGENT_GEOM_ATTR_SPECS
       .filter(g => is3D || (g.id !== GEOM_VZ && g.id !== GEOM_Z))
+      .filter(g => {
+        if (g.id === GEOM_RADIUS) return showRadius;
+        if (g.id === GEOM_VX || g.id === GEOM_VY || g.id === GEOM_VZ) return showVel;
+        return true; // position rows always
+      })
       .map(g => ({ id: g.id, name: g.name, type: 'float', description: '', defaultValue: g.id === GEOM_RADIUS ? String(dr) : '0' } as Attribute));
     return [
       ...(model.agentAttributes ?? []).filter(a => a.type !== 'color' && a.type !== 'lookupTable'),
       ...geom,
     ];
-  }, [model.agentAttributes, model.centerBased, is3D]);
+  }, [model.agentAttributes, model.centerBased, model.topologyMode, is3D]);
+  // Resolved Agent Capability Profile (null for non-agent models) — used to gate
+  // the inspector-popover geometry rows to the enabled capabilities.
+  const agentCapProfile = useMemo(
+    () => (model.topologyMode?.agents ? resolveAgentProfile(model) : null),
+    [model.topologyMode, model.centerBased, model.agentGraphNodes, model.macroDefs],
+  );
   // Bond-Graph Agents: the live agent render snapshot (from the worker `stepped`
   // message), the per-render flag, and the seed/brush configuration. The agent
   // world is the grid coordinate frame (1:1), so agent (x,y) map to screen with
@@ -7105,10 +7124,12 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <div>pos ({agentState.x!.toFixed(2)}, {agentState.y!.toFixed(2)}{agentState.z !== undefined ? `, ${agentState.z.toFixed(2)}` : ''})</div>
-                <div>|v| {Math.hypot(agentState.vx ?? 0, agentState.vy ?? 0, agentState.vz ?? 0).toFixed(3)}</div>
-                <div>radius {agentState.radius!.toFixed(3)}</div>
-                <div>bonds {agentState.bondDegree}</div>
-                <div>density {agentState.density!.toFixed(3)}</div>
+                {/* Geometry rows gated by the Agent Capability Profile (fall open
+                    when no profile, e.g. a hand-edited file). */}
+                {(!agentCapProfile || agentCapProfile.motion !== 'static') && <div>|v| {Math.hypot(agentState.vx ?? 0, agentState.vy ?? 0, agentState.vz ?? 0).toFixed(3)}</div>}
+                {(!agentCapProfile || agentCapProfile.body) && <div>radius {agentState.radius!.toFixed(3)}</div>}
+                {(!agentCapProfile || agentCapProfile.bonds !== 'off') && <div>bonds {agentState.bondDegree}</div>}
+                {(!agentCapProfile || agentCapProfile.collision !== 'off' || agentCapProfile.sensing) && <div>density {agentState.density!.toFixed(3)}</div>}
                 {agentState.attrs && Object.keys(agentState.attrs).length > 0 && (
                   <div style={{ marginTop: 4, borderTop: '1px solid var(--color-border-muted)', paddingTop: 4 }}>
                     {(model.agentAttributes ?? []).filter(a => agentState!.attrs![a.id] !== undefined).map(a => (
