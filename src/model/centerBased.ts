@@ -85,6 +85,17 @@ export function cbNum(cfg: CenterBasedConfig | undefined | null, key: CenterBase
  *  to zero bytes. Floors at 0, NOT 1, so a model that wants no bonds allocates
  *  no bond store. (The WebGPU agent layout already floors at 0 independently.) */
 export function resolveMaxBonds(cfg: CenterBasedConfig | undefined | null): number {
+  // Agent Capability Profiles (STEP 3): the Bonds capability is AUTHORITATIVE for
+  // the ragged bond store. `bonds === 'off'` drops it to zero bytes regardless of
+  // the config's `maxBonds` ceiling — the memory gate, riding the already-tested
+  // maxBonds=0 code path (pure-force models). The profile is inferred + seeded on
+  // load (`migrateAgentCapabilities`), so every model has a consistent value; a
+  // config without a profile (mid-migration / hand-edited) keeps its full ceiling
+  // (a safe superset — the bond store is allocated but unused). Because the bond
+  // arrays are RAGGED (`maxAgents·maxBonds`), the compiled per-agent code loops
+  // `b < bondCount[idx]` (= 0 when no bonds form) and never indexes the 0-length
+  // store, so this is byte-identical output for any model that forms no bonds.
+  if (cfg?.agentCapabilities?.bonds === 'off') return 0;
   return Math.max(0, Math.floor(cbNum(cfg, 'maxBonds')));
 }
 

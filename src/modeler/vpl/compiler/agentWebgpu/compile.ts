@@ -58,6 +58,7 @@ import { readCategoricalEntries, readCategoricalDefault } from '../../nodes/Cate
 import { readColorScaleStops } from '../../nodes/ColorScaleNode';
 import { resolveKeyLabels } from '../variegation';
 import { computeAgentWebGPULayout, type AgentWebGPULayout } from './layout';
+import { resolveMaxBonds } from '../../../../model/centerBased';
 
 /** The node types this compiler can emit to WGSL. A model whose agent graph uses
  *  ONLY these (after macro-expansion / reroute-collapse / CSE) runs on the WebGPU
@@ -3229,7 +3230,11 @@ export function agentWebGPUExtrasOf(model: CAModel) {
     lookupTables.push({ id: a.id, rowCount, colCount });
   }
   const indicatorCount = (model.indicators ?? []).length;
-  const maxBonds = Math.max(0, Math.floor((model.centerBased?.maxBonds as number) ?? 0));
+  // STEP 3: use the PROFILE-AWARE resolver (Bonds=off ⇒ 0) so the GPU agent
+  // layout's bond stride matches the CPU store + the WASM layout (all via
+  // resolveMaxBonds). A direct `centerBased.maxBonds` read here would desync a
+  // Bonds=off model (store 0 vs GPU 2).
+  const maxBonds = resolveMaxBonds(model.centerBased);
   const gridDepth = is3dModel(model) ? Math.max(1, Math.floor((model.properties.gridDepth as number) || 1)) : 1;
   return { modelAttrKeys, lookupTables, indicatorCount, maxBonds, gridDepth };
 }

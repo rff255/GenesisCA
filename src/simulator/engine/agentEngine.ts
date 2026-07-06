@@ -1642,8 +1642,15 @@ export function serializeAgentStore(store: AgentStore, transfers: ArrayBuffer[])
  *  mismatch (maxBonds stride, overflow) so the loader can reject LOUDLY rather
  *  than silently mis-stride a ragged store. Returns nothing; mutates `store`. */
 export function deserializeAgentStore(store: AgentStore, p: AgentStatePayload): void {
-  if (p.maxBonds !== store.maxBonds) {
-    throw new Error(`agent bond stride mismatch: saved maxBonds=${p.maxBonds}, model maxBonds=${store.maxBonds}`);
+  // A stride mismatch mis-strides a RAGGED restore, so reject it LOUDLY — BUT only
+  // when the saved state actually HAS bonds. STEP 3 (Agent Capability Profiles): a
+  // Bonds=off model now has maxBonds=0, so a state saved before the profile
+  // tightened carries a larger stride but ZERO bonds; the ragged copyInto clamps to
+  // the 0-length store and the bond-free state loads cleanly (the versioned-payload
+  // compat, M1). `copyInto` uses min(dst,src) lengths, so an all-empty bond payload
+  // never mis-strides.
+  if (p.maxBonds !== store.maxBonds && new Int32Array(p.bondCount).some(c => c > 0)) {
+    throw new Error(`agent bond stride mismatch: saved maxBonds=${p.maxBonds} (with live bonds), model maxBonds=${store.maxBonds}`);
   }
   const hw = p.highWater;
   if (hw > store.maxAgents) {

@@ -1825,8 +1825,11 @@ function runAgentStructuralPhase(): void {
   // 2. Auto-bond by distance (opt-in, hysteresis): form a bond between any two
   //    unbonded agents within formDistance×contact; break bonds stretched past
   //    breakDistance×contact. Uses the spatial hash → O(N). Gated on bonding
-  //    physics (req 10) as well as its own autoBond flag.
-  if (usesBondingPhysics(cfg) && cfg?.autoBond) {
+  //    physics (req 10), its own autoBond flag, AND a non-empty bond store
+  //    (STEP 3 capability-gate: Bonds=off ⇒ s.maxBonds=0, so the scan is skipped
+  //    entirely rather than scanning + rejecting at the capacity check — the same
+  //    result, no bonds, minus the wasted O(N) work).
+  if (s.maxBonds > 0 && usesBondingPhysics(cfg) && cfg?.autoBond) {
     const fMul = cbNum(cfg, 'formDistance');
     const bMul = cbNum(cfg, 'breakDistance');
     // form pass — scan candidate pairs via the hash
