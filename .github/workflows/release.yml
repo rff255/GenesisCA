@@ -8,15 +8,24 @@ name: Release Windows exe
 # "../package.json"), so the online app and the latest exe always report the SAME
 # version.
 #
-# To cut a release:  bump the version, commit, then push a matching tag, e.g.
-#   git tag v1.20.0 && git push origin v1.20.0
+# The release BODY is built from CHANGELOG.md: the "## [X.Y.Z]" section matching
+# the tag becomes the notes. If that section is missing, an auto changelog is
+# generated from git history since the previous tag (so a release is never blank).
+# A modernized download/browser footer is always appended.
+#
+# To cut a release:
+#   1. /updateversion <major|minor|patch> commit   (bumps package.json etc. AND writes the
+#      "## [X.Y.Z]" CHANGELOG.md section from the commits since the last release, then
+#      commits it — review/tweak that section if you like)
+#   2. merge to master
+#   3. push a matching tag, e.g.  git tag v1.25.0 && git push origin v1.25.0
 on:
   push:
     tags: ['v*']
   workflow_dispatch:           # manual run: the tag must be given explicitly, or
     inputs:                    # the release would be named after the branch ref
       tag:
-        description: 'Release tag, e.g. v1.20.0'
+        description: 'Release tag, e.g. v1.25.0'
         required: true
 
 permissions:
@@ -27,6 +36,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0       # full history + tags — the changelog fallback and the
+                               # previous-tag diff need more than the default shallow clone.
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -55,6 +67,77 @@ jobs:
           if (-not $src) { throw "No exe found in src-tauri/target/release" }
           Copy-Item $src.FullName "GenesisCA-$tag.exe" -Force
           Write-Host "Staged GenesisCA-$tag.exe from $($src.Name)"
+
+      # Build release-notes.md: the curated CHANGELOG.md section for this version if
+      # present, else an auto changelog grouped by conventional-commit prefix, then a
+      # modernized download/browser footer. Passed to the release via body_path.
+      - name: Compose release notes
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $version = $tag.TrimStart('v')
+          $repo = "${{ github.repository }}"
+          $notes = ""
+
+          # 1. Curated section from CHANGELOG.md: "## [1.25.0] ..." up to the next "## ".
+          if (Test-Path CHANGELOG.md) {
+            $lines = Get-Content CHANGELOG.md
+            $start = -1
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match "^##\s*\[?$([regex]::Escape($version))\]?(\s|\]|$)") { $start = $i + 1; break }
+            }
+            if ($start -ge 0) {
+              $buf = @()
+              for ($i = $start; $i -lt $lines.Count; $i++) {
+                if ($lines[$i] -match '^##\s') { break }
+                $buf += $lines[$i]
+              }
+              $notes = ($buf -join "`n").Trim()
+            }
+          }
+
+          # 2. Fallback: grouped auto changelog since the previous tag.
+          if (-not $notes) {
+            Write-Host "No CHANGELOG.md section for $version — generating from git history."
+            $prev = (git describe --tags --abbrev=0 "$tag^" 2>$null)
+            if ($prev) { $prev = $prev.Trim() }
+            $range = if ($prev) { "$prev..$tag" } else { $tag }
+            $subjects = @(git log $range --no-merges --pretty=format:"%s" |
+                          Where-Object { $_ -notmatch '^chore: bump version' })
+            $buckets = [ordered]@{ 'Features' = '^feat'; 'Fixes' = '^fix'; 'Performance' = '^perf' }
+            $out = @()
+            $claimed = @()
+            foreach ($b in $buckets.Keys) {
+              $hits = @($subjects | Where-Object { $_ -match $buckets[$b] })
+              if ($hits.Count) {
+                $out += "### $b"
+                $out += ($hits | ForEach-Object { "- " + ($_ -replace '^\w+(\([^)]*\))?:\s*', '') })
+                $out += ""
+                $claimed += $hits
+              }
+            }
+            $rest = @($subjects | Where-Object { $claimed -notcontains $_ })
+            if ($rest.Count) { $out += "### Other"; $out += ($rest | ForEach-Object { "- $_" }); $out += "" }
+            $notes = ($out -join "`n").Trim()
+            if ($prev) { $notes += "`n`n**Full changelog:** https://github.com/$repo/compare/$prev...$tag" }
+          }
+
+          # 3. Modernized download / browser footer (always appended).
+          $footer = @"
+---
+
+### Download & run (Windows)
+Grab **``GenesisCA-$tag.exe``** from the Assets below and run it — no installer, no admin, runs from anywhere (even a USB stick). It's unsigned, so the first launch shows a Windows SmartScreen prompt: click **More info -> Run anyway**.
+
+### Or run it in your browser
+No download needed — open **https://genesisca.online** and (optionally) install it as an app from there via the **Install** button. Same version, always up to date.
+"@
+
+          $full = "$notes`n`n$footer"
+          $full | Out-File release-notes.md -Encoding utf8
+          Write-Host "----- release-notes.md -----"
+          Get-Content release-notes.md
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         env:
@@ -62,14 +145,7 @@ jobs:
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           name: 'GenesisCA ${{ github.event.inputs.tag || github.ref_name }}'
-          body: |
-            **Standalone portable Windows app** — download the `GenesisCA-*.exe`
-            below and run it directly. No installer; it runs from anywhere,
-            including a USB stick. First launch may show a Windows SmartScreen
-            prompt (the exe is unsigned) — click **More info → Run anyway**.
-
-            Prefer not to download? Use GenesisCA right in your browser — and
-            install it as an app from there — at https://rff255.github.io/GenesisCA/
+          body_path: release-notes.md
           files: GenesisCA-*.exe
           draft: false
           prerelease: false
