@@ -3,10 +3,8 @@ import type { NodeTypeDef } from '../types';
 /** Init Event — per-cell initialisation entry point.
  *
  *  Runs once per cell on simulator Reset, AFTER default attribute values have
- *  been applied and BEFORE the first color pass. Does NOT run on Randomize
- *  (Randomize uses the engine-level random-fill mechanism) and does NOT run
- *  when loading a saved state (the saved state already encodes post-init
- *  values).
+ *  been applied and BEFORE the first color pass. Does NOT run when loading a
+ *  saved state (the saved state already encodes post-init values).
  *
  *  Singleton (one per model, like Step). Value outputs are emitted by the
  *  compiler as part of the per-cell loop preamble — `x`/`y` are 0-based cell

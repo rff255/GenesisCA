@@ -261,7 +261,6 @@ interface PaintManualMsg {
   sets: Array<{ attrId: string; value: number }>;
   activeViewer: string;
 }
-interface RandomizeMsg { type: 'randomize'; activeViewer: string }
 interface ResetMsg { type: 'reset'; activeViewer: string }
 interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentHasSprites?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesIndicators?: boolean; usesAux?: boolean } }
 interface UpdateLookupTableMsg {
@@ -446,7 +445,7 @@ interface BreakBondMsg { type: 'breakBond'; a: number; b: number; activeViewer: 
  *  watch the other evolve. Both default true → byte-identical to no message. */
 interface SetSimLayersMsg { type: 'setSimLayers'; simulateCells: boolean; simulateAgents: boolean }
 
-type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | RandomizeMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg;
+type WorkerMsg = InitMsg | StepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | ClearAgentsMsg | FormBondMsg | BreakBondMsg | GetAgentStateMsg | MoveAgentsMsg | FormBondBatchMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg;
 
 // ---------------------------------------------------------------------------
 // State
@@ -2032,7 +2031,7 @@ let inputColorFns: Array<{ mappingId: string; fn: Function }> = [];
 let outputMappingFns: Array<{ mappingId: string; fn: Function }> = [];
 /** Optional per-cell init function compiled from the Init Event Node.
  *  Null when the graph contains no Init Event Node. Runs once per cell on
- *  Reset (NOT on Randomize, NOT on Load State), after default values are
+ *  Reset (NOT on Load State), after default values are
  *  applied and before the first color pass. */
 let initFn: Function | null = null;
 
@@ -2808,7 +2807,7 @@ function runStep(): void {
   const isSync = updateMode !== 'asynchronous';
 
   // Clear the stop-event flag before the step runs — otherwise a stop that
-  // fired during an internal runStep call (reset/randomize/paint visualisation)
+  // fired during an internal runStep call (reset/paint visualisation)
   // would persist and falsely pause the user's next Play.
   if (stopFlag) stopFlag[0] = 0;
 
@@ -3057,7 +3056,7 @@ function refreshColorsAfterInputWebGPU(): void {
 }
 
 /** JS / WASM analogue of refreshColorsAfterInputWebGPU. Same intent: after any
- *  CPU-side mutation (paint, paste, clear, randomize, reset, image import),
+ *  CPU-side mutation (paint, paste, clear, reset, image import),
  *  refresh the CPU `colors` mirror so the next sendColors ships up-to-date
  *  pixels. Prefer the active viewer's Output Mapping (no generation advance);
  *  fall back to one Step (advances gen by 1; required for viewers like MNCA
@@ -3158,7 +3157,7 @@ function isIntEncodedIndicator(id: string): boolean {
 }
 
 /** Push CPU indicator values (from cachedIndicators) into the GPU atomics
- *  buffer. Called at init, after reset/randomize, and before each step (to
+ *  buffer. Called at init, after reset, and before each step (to
  *  re-seed per-generation indicators). */
 function syncIndicatorsCpuToGpu(): void {
   if (!webgpuRuntime || !webgpuRuntime.stepReady) return;
@@ -3425,41 +3424,6 @@ function writeDefaultColors(): void {
   }
 }
 
-function randomizeGrid(): void {
-  for (const attr of cellAttrs) {
-    const arr = readAttrs[attr.id]!;
-    for (let i = 0; i < total; i++) {
-      if (attr.type === 'bool') arr[i] = Math.random() > 0.7 ? 1 : 0;
-      else if (attr.type === 'integer') arr[i] = Math.floor(Math.random() * 10);
-      else if (attr.type === 'float') arr[i] = Math.random();
-      else if (attr.type === 'tag') arr[i] = Math.floor(Math.random() * Math.max(1, attr.tagOptions?.length ?? 1));
-    }
-    const wArr = writeAttrs[attr.id]!;
-    (wArr as Uint8Array).set(arr as Uint8Array);
-  }
-  // Variegated Cells: randomize orientations too. The buffer is a view over
-  // wasmMemory, so writes through the JS view land in the same bytes WASM reads.
-  if (orientationReadView) {
-    for (let i = 0; i < total; i++) {
-      orientationReadView[i] = (Math.random() * 4) | 0;
-    }
-    if (orientationWriteView && orientationWriteView !== orientationReadView) {
-      orientationWriteView.set(orientationReadView);
-    }
-  }
-  resetIndicators();
-  generation = 0;
-  // Under WebGPU the message handler is solely responsible for the post-mutation
-  // visual update — uploadAttrs + runColorPassWebGPU. If we ran runStep() here,
-  // it would route to runStepWebGPU which dispatches the GPU step shader against
-  // the STALE GPU attrsRead (CPU mutation hasn't been uploaded yet) AND increments
-  // generation. Net effect: gen counter shows 1 after a Randomize, and
-  // SetColorViewer-in-step viewers (e.g. MNCA "Decorated Trace") display a
-  // step OF the pre-randomize state instead of the random state itself.
-  if (useWebGPU && webgpuRuntime?.stepReady) return;
-  refreshColorsAfterInputJS();
-}
-
 function resetGrid(): void {
   for (const attr of cellAttrs) {
     const dv = defaultValue(attr);
@@ -3478,8 +3442,10 @@ function resetGrid(): void {
   }
   resetIndicators();
   generation = 0;
-  // Same reasoning as randomizeGrid — under WebGPU defer the visual update to
-  // the message handler. See randomizeGrid comment above.
+  // Under WebGPU the message handler is solely responsible for the post-mutation
+  // visual update (uploadAttrs + runColorPassWebGPU). Refreshing colors here
+  // would read the STALE GPU attrsRead — the CPU mutation hasn't been uploaded
+  // yet — so defer the visual update to the message handler.
   if (useWebGPU && webgpuRuntime?.stepReady) return;
   refreshColorsAfterInputJS();
 }
@@ -4691,30 +4657,6 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       break;
     }
 
-    case 'randomize': {
-      activeViewer = msg.activeViewer; syncActiveViewerToMemory();
-      randomizeGrid();
-      const webgpuRandomize = useWebGPU && webgpuRuntime?.stepReady;
-      if (webgpuRandomize && webgpuRuntime) {
-        uploadAttrs(webgpuRuntime, readAttrs);
-        if (orientationReadView) uploadOrientation(webgpuRuntime, orientationReadView);
-        uploadActiveViewer(webgpuRuntime, viewerIdMap[activeViewer] ?? -1);
-        syncIndicatorsCpuToGpu();
-        gpuOwnsAttrs = false;
-        // refreshColorsAfterInputWebGPU dispatches the OM pipeline if the active
-        // viewer has one; falls back to a step shader (which writes colors via
-        // SetColorViewer-in-step) for viewers like MNCA's "Decorated Trace".
-        // Without this fallback, no-OM viewers wouldn't visually update on
-        // randomize/reset under WebGPU.
-        refreshColorsAfterInputWebGPU();
-        finalizeStepWebGPU({ needColors: true }).then(() => sendColors())
-          .catch(e => self.postMessage({ type: 'error', message: '[webgpu] randomize colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
-        break;
-      }
-      sendColors();
-      break;
-    }
-
     case 'reset': {
       activeViewer = msg.activeViewer; syncActiveViewerToMemory();
       resetGrid();
@@ -4725,8 +4667,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // below — a Create-Agent rule that reads the field must see the cell Init
       // Event's seeded substrate (D-FIELD ordering).
       if (agentsEnabled) { initAgents(); instantiateAgentWasmIfNeeded(); buildAgentWebGPUIfNeeded(); }
-      // Init Event runs once per cell on Reset only (not on Randomize, not on
-      // Load State). When present, it modifies attrs in place AFTER defaults
+      // Init Event runs once per cell on Reset only (not on Load State).
+      // When present, it modifies attrs in place AFTER defaults
       // have been applied and BEFORE the color pass / GPU upload.
       const webgpuReset = useWebGPU && webgpuRuntime?.stepReady;
       const useGPUInit = !!(webgpuReset && webgpuRuntime?.initPipeline);
@@ -5585,7 +5527,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // colors. Without this, direct-render WebGPU keeps showing the old
         // OffscreenCanvas contents (matches the user-reported "grid turns to
         // default state on load" symptom), and the readback path would ship
-        // stale GPU colors to main thread. Mirrors randomize / reset / paint.
+        // stale GPU colors to main thread. Mirrors reset / paint.
         refreshColorsAfterInputWebGPU();
         finalizeStepWebGPU({ needColors: true })
           .then(() => sendColors())

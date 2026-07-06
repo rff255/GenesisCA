@@ -25,7 +25,7 @@
     "useWebGPU": false
   },
   "topologyMode": {
-    "gridCells": true,
+    "gridCells": false,
     "agents": true
   },
   "centerBased": {

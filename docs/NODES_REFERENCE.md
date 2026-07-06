@@ -120,7 +120,7 @@ Grouped by category. `I` = input port, `O` = output port, `(arr)` = array port.
 | # | Type | Label | Description | Ports | Notes |
 |---|---|---|---|---|---|
 | 1 | `step` | Generation Step | Main per-cell update for each generation. | `O: DO` (flow) | Singleton — one per graph |
-| 2 | `initEvent` | Init Event | Runs once per cell on simulator **Reset** (after defaults are applied, before the first colour pass). | `O: DO` (flow), `O: x` `O: y` `O: maxX` `O: maxY` (int); 3D models also expose `O: z` `O: maxZ` (int) | Singleton. Useful for procedural initial state (gradients, deterministic noise, random orientations). Not triggered by Randomize or Load State. `z`/`maxZ` are hidden in 2D models |
+| 2 | `initEvent` | Init Event | Runs once per cell on simulator **Reset** (after defaults are applied, before the first colour pass). | `O: DO` (flow), `O: x` `O: y` `O: maxX` `O: maxY` (int); 3D models also expose `O: z` `O: maxZ` (int) | Singleton. Useful for procedural initial state (gradients, deterministic noise, random orientations). Not triggered by Load State. `z`/`maxZ` are hidden in 2D models |
 | 3 | `inputColor` | Input Mapping (C→A) | Triggered by painting on the simulator canvas. | `O: DO` (flow), `O: R` `O: G` `O: B` (int) | Requires `mappingId` |
 | 4 | `outputMapping` | Output Mapping (A→C) | Computes cell colour for a viewer. | `O: DO` (flow) | Requires `mappingId`; runs once/frame after all steps |
 | 5 | `stopEvent` | Stop Event | Terminates the simulation run with a user-defined message when its flow input fires. | `I: DO` (flow) | Text widget on body holds the message; first triggered stop in a step wins; WASM emitter mirrors the JS emit via `i32.store` at `layout.stopFlagOffset` |

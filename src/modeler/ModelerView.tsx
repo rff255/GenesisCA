@@ -92,6 +92,10 @@ const rightPanelTitles: Record<RightPanelId, string> = {
 export function ModelerView() {
   const { model } = useModel();
   const variegatedEnabled = !!model.variegatedCells?.enabled;
+  // Neighborhoods is a lattice-CA-only panel; the ActivityBar elides its tab for
+  // an agents-only model (Grid Cells off). Mirror the variegated auto-switch so
+  // the panel doesn't stay open with no tab to dismiss it.
+  const gridCellsOn = model.topologyMode?.gridCells !== false;
   // Generic Agent Platform: the Attributes panel shows AGENT attributes/variables
   // on the Agents sub-tab. The detail-panel resolution (selectedItemName) must
   // know this so an agent-attribute selection resolves (else its editor never
@@ -107,7 +111,8 @@ export function ModelerView() {
   // otherwise. Also re-aim `lastLeftPanel` if it pointed at variegated.
   useEffect(() => {
     if (!variegatedEnabled && activePanel === 'variegated') setActivePanel('properties');
-  }, [variegatedEnabled, activePanel]);
+    if (!gridCellsOn && activePanel === 'neighborhoods') setActivePanel('properties');
+  }, [variegatedEnabled, gridCellsOn, activePanel]);
   const [activeRightPanel, setActiveRightPanel] = useState<RightPanelId | null>(modelerUiState.activeRightPanel);
   // Remembered last-opened panels — used by the floating graph-area expand-ears
   // to reopen whatever the user had open before closing it.

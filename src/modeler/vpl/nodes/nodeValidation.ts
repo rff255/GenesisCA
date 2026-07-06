@@ -1,6 +1,7 @@
 import type { NodeConfig, NodeTypeDef } from '../types';
 import { parseHandleId } from '../types';
 import type { CAModel } from '../../../model/types';
+import { cellFieldAttrsOf } from '../../../model/attributeScope';
 import { getNodeDef } from './registry';
 import { CURRENT_VIEWER_SENTINEL } from './SetCellLooksNode';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../compiler/expression/parser';
@@ -62,9 +63,22 @@ export function detectMissingConfig(
   const hasModelAttr = (id: unknown) =>
     typeof id === 'string' && id.length > 0 &&
     model.attributes.some(a => a.id === id && a.isModelAttribute);
-  const hasAnyAttr = (id: unknown) =>
-    typeof id === 'string' && id.length > 0 &&
-    model.attributes.some(a => a.id === id);
+  // Tag-attribute pickers (Get Constant / Compare tag mode) reference a tag
+  // attribute for its OPTION NAMES. Graph-aware scope = every attribute whose
+  // discrete value the active graph can read/compare: Cells graph → model.attributes
+  // (cell + model); Agents graph → agent attributes + agent-accessible CELL FIELD
+  // attributes (agentAccess read|readWrite — an agent samples/deposits a discrete
+  // cell field and then compares it) + shared model attributes. Without this an
+  // agent (or cell field) tag attribute triggers a false "Select a tag attribute"
+  // badge on the Agents graph. Mirrors CaNode's tagAttrScope.
+  const tagAttrScope = () => getActiveGraphKind() === 'agents'
+    ? [...(model.agentAttributes ?? []), ...cellFieldAttrsOf(model), ...model.attributes.filter(a => a.isModelAttribute)]
+    : model.attributes;
+  const findTagAttr = (id: unknown) =>
+    typeof id === 'string' && id.length > 0
+      ? tagAttrScope().find(a => a.id === id)
+      : undefined;
+  const hasTagAttr = (id: unknown) => !!findTagAttr(id);
   const hasNeighborhood = (id: unknown) =>
     typeof id === 'string' && id.length > 0 &&
     model.neighborhoods.some(n => n.id === id);
@@ -325,10 +339,10 @@ export function detectMissingConfig(
 
     case 'getConstant':
       if (config.constType === 'tag') {
-        if (!hasAnyAttr(config.tagAttributeId)) {
+        if (!hasTagAttr(config.tagAttributeId)) {
           issues.push('Select a tag attribute');
         } else {
-          const attr = model.attributes.find(a => a.id === config.tagAttributeId);
+          const attr = findTagAttr(config.tagAttributeId);
           if (attr && attr.type !== 'tag') issues.push('Selected attribute is not a tag type');
         }
       } else if (config.constType === 'faceLabel') {
@@ -349,10 +363,10 @@ export function detectMissingConfig(
 
     case 'statement':
       if (config.compareType === 'tag') {
-        if (!hasAnyAttr(config.tagAttributeId)) {
+        if (!hasTagAttr(config.tagAttributeId)) {
           issues.push('Select a tag attribute');
         } else {
-          const attr = model.attributes.find(a => a.id === config.tagAttributeId);
+          const attr = findTagAttr(config.tagAttributeId);
           if (attr && attr.type !== 'tag') issues.push('Selected attribute is not a tag type');
         }
       }

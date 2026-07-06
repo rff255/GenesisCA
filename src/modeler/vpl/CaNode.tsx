@@ -14,6 +14,7 @@ import type { MacroPort } from '../../model/types';
 import { useModel } from '../../model/ModelContext';
 import { countMacroInstances } from '../../model/macroImport';
 import { typeDisplayName } from '../../model/typeLabels';
+import { cellFieldAttrsOf } from '../../model/attributeScope';
 import {
   isConnectingGlobal,
   showPortLabelsGlobal,
@@ -208,6 +209,21 @@ function CaNodeComponent({ id, data }: NodeProps) {
   const ownAttrList = getActiveGraphKind() === 'agents'
     ? (model.agentAttributes ?? [])
     : model.attributes.filter(a => !a.isModelAttribute);
+  // Tag-attribute pickers (Get Constant / Compare / Switch tag mode) reference a
+  // tag attribute purely for its OPTION NAMES. Scope = every attribute whose
+  // discrete value the active graph can meaningfully read/compare:
+  //  - Cells graph → model.attributes (cell + model) — byte-identical to the
+  //    historical behaviour.
+  //  - Agents graph → agent attributes + agent-accessible CELL FIELD attributes
+  //    (agentAccess read|readWrite, via cellFieldAttrsOf) + shared model attributes.
+  //    The cell-field arm matters when an agent samples/deposits a discrete cell
+  //    field (Sample Field / Read Cells Under / Affect Cells Under / Secrete To
+  //    Field) and then needs to compare or produce that CELL attribute's tag value
+  //    on the Agents graph. (ownAttrList — used by Get/Set/Update Attribute — stays
+  //    agent-only: those read/write the OWN agent via D-IDX, not the field.)
+  const tagAttrScope = getActiveGraphKind() === 'agents'
+    ? [...(model.agentAttributes ?? []), ...cellFieldAttrsOf(model), ...model.attributes.filter(a => a.isModelAttribute)]
+    : model.attributes;
   const { updateNodeData } = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
   // Subscribe to port-label toggle so memoized CaNodes re-render when it changes
@@ -380,7 +396,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
       if (valType === 'tag') {
         // Tag mode: value input uses tag inline widget, cases are tag option selects (no input port)
         const tagAttrId = nodeData.config.tagAttributeId as string;
-        const tagAttr = model.attributes.find(a => a.id === tagAttrId);
+        const tagAttr = tagAttrScope.find(a => a.id === tagAttrId);
         const tagOpts = tagAttr?.tagOptions || [];
         // Override the value port's inline widget to tag
         inputPorts = inputPorts.map(p => p.id === 'value'
@@ -688,19 +704,19 @@ function CaNodeComponent({ id, data }: NodeProps) {
       const cVal = nodeData.config.constValue as string;
       if (cType === 'bool') collapsedLabel = cVal === 'true' ? 'True' : 'False';
       else if (cType === 'tag') {
-        const tagAttr = model.attributes.find(a => a.id === nodeData.config.tagAttributeId);
+        const tagAttr = tagAttrScope.find(a => a.id === nodeData.config.tagAttributeId);
         const tagIdx = parseInt(cVal, 10) || 0;
         collapsedLabel = tagAttr?.tagOptions?.[tagIdx] ?? (cVal || '0');
       }
       else collapsedLabel = cVal || '0';
     } else if (nodeData.nodeType === 'getCellAttribute') {
-      const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
+      const attr = ownAttrList.find(a => a.id === nodeData.config.attributeId);
       collapsedLabel = attr ? `Cell - ${attr.name}` : displayNodeLabel(def);
     } else if (nodeData.nodeType === 'getModelAttribute') {
       const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
       collapsedLabel = attr ? `Model - ${attr.name}` : displayNodeLabel(def);
     } else if (nodeData.nodeType === 'setAttribute') {
-      const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
+      const attr = ownAttrList.find(a => a.id === nodeData.config.attributeId);
       if (attr) {
         const valConnected = connectedInputHandles.has(handleId({ id: 'value', kind: 'input', category: 'value' }));
         const inlineVal = nodeData.config._port_value as string | undefined;
@@ -718,7 +734,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         }
       } else { collapsedLabel = displayNodeLabel(def); }
     } else if (nodeData.nodeType === 'updateAttribute') {
-      const attr = model.attributes.find(a => a.id === nodeData.config.attributeId);
+      const attr = ownAttrList.find(a => a.id === nodeData.config.attributeId);
       const op = (nodeData.config.operation as string) || 'increment';
       const opLabels: Record<string, string> = {
         increment: '+', decrement: '-', max: 'Max', min: 'Min',
@@ -773,7 +789,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
       const fmtOperand = (raw: string): string => {
         if (cmpType === 'bool') return (raw === 'true' || raw === '1') ? 'True' : 'False';
         if (cmpType === 'tag') {
-          const tagAttr = model.attributes.find(a => a.id === nodeData.config.tagAttributeId);
+          const tagAttr = tagAttrScope.find(a => a.id === nodeData.config.tagAttributeId);
           const idx = parseInt(raw, 10) || 0;
           return tagAttr?.tagOptions?.[idx] ?? raw;
         }
@@ -1255,14 +1271,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
                     }}
                   >
                     <option value="">Tag attr...</option>
-                    {model.attributes
+                    {tagAttrScope
                       .filter(a => a.type === 'tag')
                       .map(a => (
                         <option key={a.id} value={a.id}>{a.name}</option>
                       ))}
                   </select>
                   {(() => {
-                    const tagAttr = model.attributes.find(a => a.id === nodeData.config.tagAttributeId);
+                    const tagAttr = tagAttrScope.find(a => a.id === nodeData.config.tagAttributeId);
                     const opts = tagAttr?.tagOptions || [];
                     return opts.length > 0 ? (
                       <select
@@ -1403,7 +1419,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   }}
                 >
                   <option value="">Tag attr...</option>
-                  {model.attributes
+                  {tagAttrScope
                     .filter(a => a.type === 'tag')
                     .map(a => (
                       <option key={a.id} value={a.id}>{a.name}{a.isModelAttribute ? ' (model)' : ''}</option>
@@ -2186,7 +2202,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
           const caseCount = Number(nodeData.config.caseCount) || 0;
           const firstMatch = nodeData.config.firstMatchOnly !== false;
           const tagAttrId = nodeData.config.tagAttributeId as string;
-          const tagAttr = model.attributes.find(a => a.id === tagAttrId);
+          const tagAttr = tagAttrScope.find(a => a.id === tagAttrId);
           const tagOpts = tagAttr?.tagOptions || [];
 
           const removeCase = (i: number) => {
@@ -2263,7 +2279,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   }}
                 >
                   <option value="">Tag attr...</option>
-                  {model.attributes
+                  {tagAttrScope
                     .filter(a => a.type === 'tag')
                     .map(a => (
                       <option key={a.id} value={a.id}>{a.name}{a.isModelAttribute ? ' (model)' : ''}</option>
@@ -2772,7 +2788,10 @@ function CaNodeComponent({ id, data }: NodeProps) {
         // Determine effective widget type (dynamic for attribute-dependent nodes)
         let effectiveWidget = portDef.inlineWidget;
         const setAttrId = nodeData.config.attributeId as string;
-        const setAttr = setAttrId ? model.attributes.find(a => a.id === setAttrId) : undefined;
+        // ownAttrList = the active graph's OWN attributes (agent attrs on the Agents
+        // graph). setNeighborhood*/setNeighbor* are lattice-only, so on the Cells
+        // graph ownAttrList (cell attrs) is correct for all four node types too.
+        const setAttr = setAttrId ? ownAttrList.find(a => a.id === setAttrId) : undefined;
         if (effectiveWidget && (nodeData.nodeType === 'setAttribute' || nodeData.nodeType === 'updateAttribute' || nodeData.nodeType === 'setNeighborhoodAttribute' || nodeData.nodeType === 'setNeighborAttributeByIndex') && port.id === 'value') {
           const attr = setAttr;
           if (!attr) {
@@ -2798,7 +2817,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             effectiveWidget = 'bool';
           } else if (cmpType === 'tag') {
             effectiveWidget = 'tag';
-            const tAttr = model.attributes.find(a => a.id === nodeData.config.tagAttributeId);
+            const tAttr = tagAttrScope.find(a => a.id === nodeData.config.tagAttributeId);
             statementTagOptions = tAttr?.tagOptions || [];
           } else if (cmpType === 'neighborIndex') {
             effectiveWidget = undefined;

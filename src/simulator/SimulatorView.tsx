@@ -5976,12 +5976,6 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
     workerRef.current?.postMessage({ type: 'reset', activeViewer });
   };
 
-  const handleRandomize = () => {
-    setPlaying(false);
-    pendingStep.current = true;
-    workerRef.current?.postMessage({ type: 'randomize', activeViewer });
-  };
-
   const handleRecompile = () => {
     setPlaying(false);
     workerRef.current?.terminate();
@@ -6833,7 +6827,6 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
 
           <div className={styles.panelBody}>
           <div className={styles.sectionTitle}>Actions</div>
-          <button className={styles.controlButton} onClick={handleRandomize}>Randomize</button>
           <button className={styles.controlButton} onClick={handleRecompile}>Recompile</button>
 
           <hr className={styles.divider} />

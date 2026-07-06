@@ -18,7 +18,8 @@ export const AgentInitNode: NodeTypeDef = {
   label: 'Agent Init Event',
   description: 'Runs once per Reset — loop here + Create Agent / Add Agent To World to seed the initial agent population.',
   category: 'event',
-  color: '#ad1457',
+  // Event roots are white (the CA-grid standard: Step / Init / Output Mapping).
+  color: '#ffffff',
   requirements: { bondGraph: true },
   ports: [
     { id: 'do', label: 'DO', kind: 'output', category: 'flow' },
