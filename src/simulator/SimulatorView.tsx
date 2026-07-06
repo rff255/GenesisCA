@@ -11,7 +11,7 @@ import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefault
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { Gl3DRenderer, panCamera } from './render/gl3d';
-import { agentTargetOf } from '../model/centerBased';
+import { agentTargetOf, resolveMaxBonds } from '../model/centerBased';
 import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported, buildAgentLayoutExtras } from '../modeler/vpl/compiler/agentWasm/compile';
 import type { AgentLayoutExtras } from './engine/agentEngine';
 import { compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported } from '../modeler/vpl/compiler/agentWebgpu/compile';
@@ -3253,7 +3253,14 @@ export function SimulatorView({ visible = true }: { visible?: boolean }) {
       // neighbour tables + runs the cell step — a structural reinit.
       || (prev.topologyMode?.gridCells !== false) !== (model.topologyMode?.gridCells !== false)
       || (prev.centerBased?.maxAgents ?? 0) !== (model.centerBased?.maxAgents ?? 0)
-      || (prev.centerBased?.maxBonds ?? 0) !== (model.centerBased?.maxBonds ?? 0)
+      // Compare the PROFILE-AWARE effective bond stride (STEP 3): the Bonds
+      // capability drops maxBonds to 0 WITHOUT changing `centerBased.maxBonds`, so
+      // toggling Bonds off must still force a full reinit — otherwise a soft
+      // recompile rebuilds the WASM agent module with the new (0) bond layout while
+      // the wasmBacked store keeps its old baked offsets → memory desync. Comparing
+      // `resolveMaxBonds` subsumes the old raw-maxBonds check (it captures both the
+      // config ceiling change AND the capability toggle).
+      || resolveMaxBonds(prev.centerBased) !== resolveMaxBonds(model.centerBased)
       // PR5: the Agent Compile Target is independent of the grid target. Changing
       // it switches the agent driver's memory residency (Phase F: JS↔WASM↔WebGPU),
       // so it needs a full reinit, not a soft recompile (mirrors useWasm/useWebGPU).
