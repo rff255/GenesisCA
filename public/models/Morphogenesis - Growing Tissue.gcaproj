@@ -43,7 +43,7 @@
     { "id": "e5", "source": "cond", "target": "div", "sourceHandle": "output_flow_then", "targetHandle": "input_flow_do" }
   ],
   "macroDefs": [],
-  "topologyMode": { "gridCells": true, "agents": true },
+  "topologyMode": { "gridCells": false, "agents": true },
   "centerBased": {
     "enabled": true,
     "maxAgents": 1500,

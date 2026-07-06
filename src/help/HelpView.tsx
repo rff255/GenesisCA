@@ -495,7 +495,7 @@ export function HelpView() {
           <h3 className={styles.h3}>Init Event Node</h3>
           <p className={styles.p}>
             New event entry-point that runs <em>once per cell on simulator Reset only</em>
-            (not on Randomize, not on Load State). Useful for procedural initial state:
+            (not on Load State). Useful for procedural initial state:
             gradients, deterministic noise, ID-encoded debug values. With Variegated Cells
             enabled, the typical pattern is to wire <code>GetRandom(int, 0, 3)</code> into
             <code>SetOrientation</code> so each cell starts with a random rotation.
@@ -722,7 +722,7 @@ export function HelpView() {
             <thead><tr><th>Node</th><th>Description</th></tr></thead>
             <tbody>
               <tr><td>Generation Step</td><td>Entry point for per-generation cell update logic. Connect &quot;DO&quot; to start the flow chain. Singleton.</td></tr>
-              <tr><td>Init Event</td><td>Runs once per cell on simulator <strong>Reset</strong> (after defaults, before the first color pass; not on Randomize or Load State). Outputs <code>x</code>, <code>y</code>, <code>maxX</code>, <code>maxY</code> (plus <code>z</code>, <code>maxZ</code> in 3D models). Singleton. Useful for procedural initial state (gradients, noise, random orientations).</td></tr>
+              <tr><td>Init Event</td><td>Runs once per cell on simulator <strong>Reset</strong> (after defaults, before the first color pass; not on Load State). Outputs <code>x</code>, <code>y</code>, <code>maxX</code>, <code>maxY</code> (plus <code>z</code>, <code>maxZ</code> in 3D models). Singleton. Useful for procedural initial state (gradients, noise, random orientations).</td></tr>
               <tr><td>Input Mapping (C&rarr;A)</td><td>Entry point for Color-to-Attribute mapping (brush/image import). Outputs R, G, B values.</td></tr>
               <tr><td>Output Mapping (A&rarr;C)</td><td>Entry point for Attribute-to-Color visualization. Runs as a separate sequential pass after the Generation Step, ensuring colors reflect the final cell state. A mapping can instead be marked <strong>Linked</strong> in the Mappings panel (pick an attribute and the color pass is auto-generated &mdash; see &ldquo;Linked Output Mappings&rdquo; below); if you also add this node for a linked mapping, the auto pass runs first as a background and your graph overrides the cells it paints.</td></tr>
               <tr><td>Stop Event</td><td>Terminates the simulation run with a user-defined message when its DO flow input fires. Use for end conditions that need graph-level logic (complex spatial patterns, multi-attribute combinations). The text widget on the node body holds the message. First triggered stop in a step wins.</td></tr>
@@ -1551,7 +1551,6 @@ export function HelpView() {
             <li><strong>Play / Pause</strong> &mdash; Start or stop continuous simulation.</li>
             <li><strong>Step</strong> &mdash; Advance one generation (also pauses if running).</li>
             <li><strong>Reset</strong> &mdash; Clear the grid back to initial state.</li>
-            <li><strong>Randomize</strong> &mdash; Fill the grid with random values.</li>
             <li><strong>Recompile</strong> &mdash; Recompile the graph after editing in the modeler.</li>
           </ul>
 
@@ -1702,8 +1701,9 @@ export function HelpView() {
           </ul>
           <p className={styles.p}>
             Presets are stored inside the <code>.gcaproj</code> file. The Save Project
-            dialog exposes an <strong>Include model presets</strong> checkbox (default on)
-            so you can omit them from a given save if needed.
+            dialog exposes an <strong>Include model presets</strong> checkbox &mdash; checked
+            by default whenever the loaded model already has presets &mdash; so you can omit
+            them from a given save if needed.
           </p>
 
           <p className={styles.p}>
@@ -1793,7 +1793,7 @@ export function HelpView() {
                 <li><em>Include simulator controls</em> &mdash; playback speed, brush size/color, selected input/output mapping, runtime model-attribute values.</li>
                 <li><em>Include board state</em> &mdash; full cell grid snapshot: attributes, generation counter, indicator values, colors.</li>
               </ul>
-              Both are checked by default. Unchecking both still saves a valid <code>.gcaproj</code> &mdash; it just contains only the model definition. Your last choices are remembered across sessions.
+              These two default to reflect the loaded model instead of following a program-wide last choice: when a model already carries an embedded snapshot they mirror it, and a fresh model (no embedded snapshot) defaults both on so evolving a board or tuning attributes and then saving still captures that work. Unchecking both still saves a valid <code>.gcaproj</code> &mdash; it just contains only the model definition.
             </li>
           </ul>
           <p className={styles.p}>

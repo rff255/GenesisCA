@@ -23,7 +23,8 @@ export const BehaviourStepNode: NodeTypeDef = {
   label: 'Behaviour Step',
   description: 'Agent entry point that runs once per agent each generation. Root of the Bond-Graph Agents update flow. Outputs the agent’s own geometry/identity.',
   category: 'event',
-  color: '#7e57c2',
+  // Event roots are white (the CA-grid standard: Step / Init / Output Mapping).
+  color: '#ffffff',
   requirements: { bondGraph: true },
   ports: [
     { id: 'do', label: 'DO', kind: 'output', category: 'flow' },

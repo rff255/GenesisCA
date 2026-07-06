@@ -1421,7 +1421,7 @@ export interface CompileResult {
   stepCode: string;
   /** Per-cell init function code, emitted when the graph contains an Init
    *  Event Node. Loop-wrapped; called once per cell on simulator Reset only
-   *  (not on Randomize, not on Load State). Empty string when no Init Event
+   *  (not on Load State). Empty string when no Init Event
    *  Node is present. */
   initCode: string;
   inputColorCodes: Array<{ mappingId: string; code: string }>;

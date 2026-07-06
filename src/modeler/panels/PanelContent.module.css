@@ -15,6 +15,24 @@
   border-bottom: 1px solid var(--color-border-muted);
 }
 
+/* Group heading — a more prominent divider than .sectionTitle, used to separate
+ * top-level layers of a panel (e.g. "CA Grid" vs "Agents" in the Mappings panel
+ * when a model has both topologies). */
+.groupTitle {
+  font-size: var(--font-sm);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-heading);
+  margin: var(--space-8) 0 var(--space-5);
+  padding-bottom: var(--space-3);
+  border-bottom: 2px solid var(--color-accent-strong);
+}
+
+.groupTitle:first-child {
+  margin-top: 0;
+}
+
 /* Short helper / description text under a section title. Used to explain
  * subtler concepts that aren't obvious from the title alone (e.g. Local
  * Variables semantics, drag-to-canvas behaviour). */

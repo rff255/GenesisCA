@@ -6,7 +6,7 @@ import {
   downloadJSON,
   readModelFile,
 } from '../model/fileOperations';
-import type { SimulationState } from '../model/types';
+import type { SimulationState, CAModel } from '../model/types';
 import { SaveProjectDialog, type SaveOptions } from './SaveProjectDialog';
 import { ConfirmDialog } from './ConfirmDialog';
 import styles from './FileMenu.module.css';
@@ -18,21 +18,32 @@ type PendingConfirm =
   | { title: string; message: string; confirmLabel: string; onConfirm: () => void }
   | null;
 
-const SAVE_OPTS_KEY = 'genesisca_save_options';
-
-function loadSaveOptions(): SaveOptions {
-  try {
-    const raw = localStorage.getItem(SAVE_OPTS_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      return {
-        includeControls: parsed.includeControls !== false,
-        includeGrid: parsed.includeGrid !== false,
-        includePresets: parsed.includePresets !== false,
-      };
-    }
-  } catch { /* ignore */ }
-  return { includeControls: true, includeGrid: true, includePresets: true };
+/** Default the Save-dialog checkboxes per-LOADED-MODEL instead of from the last
+ *  global choice the program made — which used to leak across models and
+ *  silently drop data (the reported bug: loading a model WITH presets, tweaking
+ *  its description, then saving with the presets box unchecked because a PRIOR
+ *  save of a different model had omitted them).
+ *
+ *  - Presets are a durable model property: check the box iff the model actually
+ *    HAS presets, so a save never drops the presets a loaded model carries (and
+ *    never offers "include presets" for a model that has none).
+ *  - Board state + simulator controls are LIVE-session captures. When the model
+ *    carries an embedded snapshot, reflect its composition — `serializeSimState`
+ *    writes `attributes` only in its grid branch and `modelAttrs` only in its
+ *    controls branch, so their presence records which layers were last saved for
+ *    THIS model (and respects a prior explicit omission). When there is NO
+ *    embedded snapshot (a fresh/from-scratch model, or one saved
+ *    definition-only) there is no per-model history to reflect, so default both
+ *    ON — matching the historical convenience default so that building a model
+ *    from scratch, evolving its board / tuning its attributes, and hitting Save
+ *    still captures that live work rather than silently discarding it. */
+function deriveSaveOptions(model: CAModel): SaveOptions {
+  const s = model.simulationState;
+  return {
+    includeGrid: s ? s.attributes !== undefined : true,
+    includeControls: s ? s.modelAttrs !== undefined : true,
+    includePresets: (model.presets?.length ?? 0) > 0,
+  };
 }
 
 export function FileMenu({ onNew, onLoaded }: {
@@ -97,9 +108,6 @@ export function FileMenu({ onNew, onLoaded }: {
 
   const doSave = async (opts: SaveOptions) => {
     setSaveDialogOpen(false);
-    try {
-      localStorage.setItem(SAVE_OPTS_KEY, JSON.stringify(opts));
-    } catch { /* ignore */ }
 
     // Ask simulator to capture the requested pieces into model context and wait.
     // The simulator passes the captured SimulationState back through the resolve
@@ -193,7 +201,7 @@ export function FileMenu({ onNew, onLoaded }: {
       />
       {saveDialogOpen && (
         <SaveProjectDialog
-          initial={loadSaveOptions()}
+          initial={deriveSaveOptions(model)}
           onConfirm={doSave}
           onCancel={() => setSaveDialogOpen(false)}
         />

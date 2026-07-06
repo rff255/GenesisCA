@@ -262,6 +262,12 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
   const { model, addMapping, duplicateMapping, removeMapping, updateMapping, reorderMappings, addAgentMapping, duplicateAgentMapping, removeAgentMapping, updateAgentMapping, addSprite, removeSprite, updateSprite } = useModel();
   const [selectedId, setSelectedId] = useDetailSelection('mappings');
   const agentsOn = !!model.topologyMode?.agents;
+  // The Attribute↔Color mappings below are the LATTICE CA's colour views. Hide
+  // them entirely for an agents-only model (no grid). When a model has BOTH
+  // topologies, prefix each layer with a group header so the two are clearly
+  // separated ("CA Grid" vs "Agents").
+  const gridCellsOn = model.topologyMode?.gridCells !== false;
+  const showGroupHeaders = gridCellsOn && agentsOn;
   const agentMappings = model.agentMappings ?? [];
   const agentAttrs = (model.agentAttributes ?? []).filter(a => a.type !== 'color' && a.type !== 'lookupTable');
   const sprites = model.sprites ?? [];
@@ -354,6 +360,8 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
   return (
     <>
       {mode !== 'detail' && (<>
+      {gridCellsOn && (<>
+      {showGroupHeaders && <div className={styles.groupTitle}>CA Grid</div>}
       <div className={styles.section}>
         <div className={styles.sectionTitle}>
           Attribute &rarr; Color (Output)
@@ -447,6 +455,9 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
           </button>
         </div>
       </div>
+      </>)}
+
+      {showGroupHeaders && <div className={styles.groupTitle}>Agents</div>}
 
       {/* Agent Output Mappings — the agent-layer A→C views (the two-layer viewer).
           Inline-edited (pick an agent attribute → colour) so the user defines an

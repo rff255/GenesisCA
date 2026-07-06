@@ -41,12 +41,18 @@ const BASE_PANELS: Array<{ id: PanelId; label: string }> = [
 
 export function ActivityBar({ activePanel, onTogglePanel }: ActivityBarProps) {
   const { model } = useModel();
-  // Variegated Cells tab is hidden entirely unless the feature is enabled in
-  // Properties. Auto-switching the active panel when the feature flips off
-  // is handled by ModelerView; here we just elide the button.
+  // Neighborhoods only apply to the lattice CA — hide the tab entirely for an
+  // agents-only model (Grid Cells topology off). Variegated Cells tab is hidden
+  // unless the feature is enabled (also grid-only). Auto-switching the active
+  // panel when either flips off is handled by ModelerView; here we just elide
+  // the buttons.
+  const gridCellsOn = model.topologyMode?.gridCells !== false;
+  const base = gridCellsOn
+    ? BASE_PANELS
+    : BASE_PANELS.filter(p => p.id !== 'neighborhoods');
   const panels = model.variegatedCells?.enabled
-    ? [...BASE_PANELS, { id: 'variegated' as PanelId, label: 'Variegated Cells' }]
-    : BASE_PANELS;
+    ? [...base, { id: 'variegated' as PanelId, label: 'Variegated Cells' }]
+    : base;
   return (
     <div className={styles.activityBar}>
       {panels.map(({ id, label }) => (

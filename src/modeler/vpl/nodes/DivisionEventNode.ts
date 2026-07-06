@@ -16,7 +16,8 @@ export const DivisionEventNode: NodeTypeDef = {
   label: 'Division Event',
   description: 'Runs once per daughter after a division, to assign daughter attributes (asymmetric inheritance).',
   category: 'event',
-  color: '#ad1457',
+  // Event roots are white (the CA-grid standard: Step / Init / Output Mapping).
+  color: '#ffffff',
   requirements: { bondGraph: true },
   ports: [
     { id: 'do', label: 'DO', kind: 'output', category: 'flow' },
